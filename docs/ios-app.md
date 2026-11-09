@@ -54,7 +54,10 @@ API plus a Server-Sent Events stream.
   (default `<HIVE_DATA_DIR>/repos`). `hive bind-repo <name|path> [--chat <id>]`
   binds the workspace (or one chat) to a checkout in
   `<HIVE_DATA_DIR>/repo-bindings.toml`. This is the device-local equivalent of
-  the desktop's workspace folder binding.
+  the desktop's workspace folder binding. The phone can do the same: list the
+  box's checkouts and the GitHub repos its `gh` login can see, clone one, switch
+  the chat it's in onto it, pull, and open a pull request (see "Repos" below).
+  Each turn's system prompt names the repo and branch the chat is bound to now.
 - **Notifications** go to ntfy: one when an agent reply finishes and one when
   a proposal is filed.
 
@@ -206,6 +209,49 @@ Field notes:
   `lab:electric_rate_usd_per_kwh`, and temps from `HIVE_LAB_TEMPS`
   (`Name=promql;…`).
 
+### Repos (`/v1/repos`, `/v1/chats/{id}/repo`, `/v1/chats/{id}/pr`)
+
+These act on the box's own device-local state: the checkouts under
+`HIVE_REPOS_DIR` and `repo-bindings.toml`. Nothing here is synced. GitHub
+access is the box's own `gh` login (`gh auth login` on the host). Hive never
+stores or sends a token. Writes need the bearer token (or the tunnel), a box
+that can write (not revoked or pending), and a roster role of at least
+Contributor, and answer 403 otherwise. No path on the box is ever returned:
+checkouts are named, and an absolute binding shows only its last component.
+
+| Method | Path | Response |
+|---|---|---|
+| GET | `/v1/repos?q=&owner=&page=&perPage=` | `{local: [Checkout], github: GitHub, workspaceDefault?, jobs: [Job]}`. `q` filters both lists (GitHub search when signed in); `owner` lists one account or org; `page` from 1, `perPage` 1-100 (default 30) |
+| POST | `/v1/repos/clone` `{repo}` | `{job}`. `repo` is `owner/name` or `https://github.com/owner/name[.git]`, nothing else (400). Clones to `<HIVE_REPOS_DIR>/<owner>__<name>`; an existing clone of the same repo is fetched instead (`action: "fetch"`), and one already in flight returns its job. At most 2 at once (429) |
+| GET | `/v1/repos/clone/{job}` | `{job}` |
+| GET | `/v1/chats/{id}/repo` | `Binding` |
+| PUT | `/v1/chats/{id}/repo` `{repo}` | `Binding`. `repo` is a checkout name (or `owner/name` of a clone); `null` drops the chat's own binding, so it falls back to the workspace default. 404 for a checkout that isn't there. A change posts a system note in the chat |
+| POST | `/v1/chats/{id}/repo/pull` | `Binding + {updated, before, after}`. Fetches `origin` and fast-forwards the checked-out base branch. 409 if the checkout is dirty, detached or diverged |
+| POST | `/v1/chats/{id}/pr` `{title, body?, draft?}` | `{url, existing, branch, base}`. Pushes `hive/chat/<id>` to `origin` (never forced) and runs `gh pr create` against the default branch, then posts the link as a system note. 412 when `gh` isn't signed in on the host; 409 when the chat branch is missing, has nothing new, or the push is refused |
+
+- `Checkout = {name, displayName, defaultBranch?, branch?, head?, dirty, remote: {host, owner, name, fullName}|null, isWorkspaceDefault, boundChats}`.
+  `displayName` is `owner/name` for a hosted remote, else the name. `dirty`
+  ignores Hive's own `.hive/` worktrees.
+- `GitHub = {available, reason?, login?, owners?: [string], repos?: [{fullName, owner, name, description, private, defaultBranch, updatedAt, url, cloned, checkout?}], page?, perPage?, hasMore?, error?}`.
+  Signed out it is `{available: false, reason: "Run gh auth login on the host"}`,
+  and public repos can still be cloned.
+- `Job = {id, repo, checkout, action: "clone"|"fetch", state: "running"|"done"|"error", phase, percent?, error?, startedAt, finishedAt?}`.
+  Progress also arrives on the event stream as `repo.clone`. A clone lands in
+  a hidden temp dir and is renamed into place when it succeeds, so a failed or
+  stopped clone leaves nothing behind. Limits: `HIVE_REPOS_CLONE_TIMEOUT_SECS`
+  (default 900) and `HIVE_REPOS_MAX_CLONE_MB` (default 2048). Git never
+  prompts (`GIT_TERMINAL_PROMPT=0`); with `gh` signed in, git uses
+  `gh auth git-credential` for github.com.
+- `Binding = {repo: (Checkout + {source: "chat"|"workspace", available, external})|null, workspaceDefault?, chatBranch, chatBranchExists?, ahead?, behind?}`.
+  `chatBranch` is `hive/chat/<id>`. Each repo has its own, so switching a chat
+  away and back resumes where it was. `ahead`/`behind` compare it with the
+  default branch. `GET /v1/chats/{id}/details` carries the same object as
+  `repo`.
+
+Approved proposals reach `hive/chat/<id>` only when the box applies them
+(`HIVE_SERVE_APPLY_ON_APPROVE=1`). Otherwise the chat branch has nothing to
+open a pull request for.
+
 ### Events (`GET /v1/events`)
 
 Each event has `id: <n>` (increasing), `event: <name>` and `data: <JSON>`. A
@@ -222,6 +268,7 @@ that falls further behind should refetch.
 | `proposal.created` | `{proposal}` |
 | `proposal.updated` | `{proposal}`, when a known proposal's status, votes, thread, revision link or dismissal changes (from this phone or any device) |
 | `turn.status` | `{chatId, agentId, state: "queued"\|"running"\|"done"\|"error", detail?}` |
+| `repo.clone` | `{job}`, a clone or fetch job's progress and its end (see "Repos") |
 
 ### Pairing and links
 

@@ -871,14 +871,13 @@ fn run_clone_job(
     // clone never shows up (or gets bound) as a checkout.
     let tmp = repos_dir.join(format!(".clone-{id}"));
     let mut c = quiet("git");
-    let watch_dir: PathBuf;
-    if action == "clone" {
+    let watch_dir: PathBuf = if action == "clone" {
         c.args(&auth).args(["clone", "--progress", "--no-recurse-submodules", "--", url]).arg(&tmp);
-        watch_dir = tmp.clone();
+        tmp.clone()
     } else {
         c.arg("-C").arg(dest).args(&auth).args(["fetch", "--prune", "--progress", "origin"]);
-        watch_dir = dest.to_path_buf();
-    }
+        dest.to_path_buf()
+    };
     let limit = max_clone_bytes();
     let start_size = if action == "fetch" { dir_size(&watch_dir) } else { 0 };
     let mut last_emit = Instant::now() - Duration::from_secs(1);

@@ -120,6 +120,7 @@ nav:
       - Building the dist: ops/build.md
       - Deploying for a small team: ops/deployment.md
       - Running hive serve as your own device: ops/serve-box.md
+      - Repos on the home host: ops/serve-repos.md
       - Pricing tiers: ops/pricing.md
       - Tiering (open-core model): ops/tiering.md
       - Managed service plan: ops/managed-service.md

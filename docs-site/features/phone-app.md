@@ -53,6 +53,13 @@ box act as you rather than as a separate member, see
 You can also move an existing agent to a different host from the phone.
 Creating agents and editing runtimes stay on the desktop.
 
+## Repos
+
+The repo chip in a chat's header shows which repository and branch the chat
+works in on your home host. Tap it to switch the chat to another checkout,
+clone a GitHub repo, pull the latest, or open a pull request from the chat's
+branch. See [Repos on the home host](../ops/serve-repos.md).
+
 ## Reviewing proposals
 
 Proposals (an agent's file changes, a command, a decision) appear on the

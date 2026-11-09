@@ -124,6 +124,8 @@ An approved diff is then committed to the chat's branch (`hive/chat/<id>`) in
 the checkout bound on the box (`hive bind-repo`), the way the desktop's
 Implement does. Only a proposal whose status is `approved` applies; one that
 was rejected by a qualifying reviewer, dismissed or superseded never does.
+To switch a chat's repo, clone, pull or open a pull request from the phone,
+see [Repos on the home host](serve-repos.md).
 
 ## v1.16: a relay room carries only its own workspace
 
