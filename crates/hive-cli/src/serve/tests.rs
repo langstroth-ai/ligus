@@ -1731,3 +1731,255 @@ async fn sync_once_pages_through_a_large_room() {
     let chat = svc.load(chat_id).unwrap().expect("chat synced");
     assert_eq!(chat.messages.len(), 60);
 }
+
+// ── Repos from the phone (`repos_api.rs`) ──────────────────────────────────
+
+/// GitHub stand-in: "repos" are bare repos under `remotes/<owner>/<name>.git`,
+/// pull requests are recorded instead of opened.
+struct FakeGitHub {
+    remotes: PathBuf,
+    available: bool,
+    prs: Mutex<Vec<super::repos_api::PrRequest>>,
+}
+
+impl super::repos_api::GitHub for FakeGitHub {
+    fn status(&self) -> super::repos_api::GhStatus {
+        if self.available {
+            super::repos_api::GhStatus { available: true, login: Some("acme".into()), reason: None }
+        } else {
+            super::repos_api::GhStatus { available: false, login: None, reason: Some("Run gh auth login on the host".into()) }
+        }
+    }
+    fn list(&self, q: &super::repos_api::RepoQuery, _login: &str) -> Result<Vec<super::repos_api::GhRepo>, String> {
+        let mut out = Vec::new();
+        for owner in std::fs::read_dir(&self.remotes).unwrap().flatten() {
+            for repo in std::fs::read_dir(owner.path()).unwrap().flatten() {
+                let name = repo.file_name().to_string_lossy().trim_end_matches(".git").to_string();
+                if q.q.as_deref().is_some_and(|t| !name.contains(t)) {
+                    continue;
+                }
+                out.push(super::repos_api::GhRepo {
+                    owner: owner.file_name().to_string_lossy().into_owned(),
+                    name,
+                    description: String::new(),
+                    private: false,
+                    default_branch: "main".into(),
+                    updated_at: String::new(),
+                    url: String::new(),
+                });
+            }
+        }
+        Ok(out)
+    }
+    fn owners(&self, login: &str) -> Result<Vec<String>, String> {
+        Ok(vec![login.to_string(), "acme-org".into()])
+    }
+    fn clone_url(&self, owner: &str, name: &str) -> String {
+        format!("file://{}/{owner}/{name}.git", self.remotes.display())
+    }
+    fn git_auth_args(&self) -> Vec<String> {
+        Vec::new()
+    }
+    fn repo_of_remote(&self, url: &str) -> Option<crate::repos::RemoteRef> {
+        url.starts_with("file://").then(|| crate::repos::parse_remote(url)).flatten()
+    }
+    fn create_pr(&self, _dir: &Path, pr: &super::repos_api::PrRequest) -> Result<(String, bool), String> {
+        self.prs.lock().unwrap().push(pr.clone());
+        Ok((format!("https://github.com/{}/pull/1", pr.repo), false))
+    }
+}
+
+/// A bare "GitHub" repo `owner/name` with one commit on `main`; returns a
+/// working clone to push more commits from.
+fn fake_remote(remotes: &Path, owner: &str, name: &str) -> PathBuf {
+    let bare = remotes.join(owner).join(format!("{name}.git"));
+    std::fs::create_dir_all(&bare).unwrap();
+    git(&bare, &["init", "-q", "--bare", "-b", "main"]);
+    let work = remotes.parent().unwrap().join(format!("work-{owner}-{name}"));
+    make_repo(&work, &[("README.md", "hello\n")]);
+    git(&work, &["branch", "-M", "main"]);
+    git(&work, &["remote", "add", "origin", bare.to_str().unwrap()]);
+    git(&work, &["push", "-q", "origin", "main"]);
+    work
+}
+
+async fn wait_job(h: &Harness, id: &str) -> Value {
+    for _ in 0..100 {
+        let j = h.get(&format!("/v1/repos/clone/{id}")).await["job"].clone();
+        if j["state"] != "running" {
+            return j;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("clone job {id} never finished");
+}
+
+/// The phone lists repos, clones one, switches a chat onto it (and back),
+/// pulls, and opens a PR from the chat's branch; the agent's turn is told
+/// which repo and branch it works in.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn repos_clone_switch_pull_and_pr() {
+    let (endpoint, model) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let remotes = h._tmp.path().join("remotes");
+    std::fs::create_dir_all(&remotes).unwrap();
+    let work = fake_remote(&remotes, "acme", "widget");
+    let fake = Arc::new(FakeGitHub { remotes: remotes.clone(), available: true, prs: Mutex::new(Vec::new()) });
+    h.handle.shared.repos.set_github(fake.clone());
+
+    // Listing: no local checkouts yet; GitHub lists the fake remote.
+    let v = h.get("/v1/repos").await;
+    assert_eq!(v["local"], json!([]));
+    assert_eq!(v["workspaceDefault"], "repo", "an absolute workspace binding shows only its last component");
+    assert!(!v.to_string().contains(h._tmp.path().to_str().unwrap()), "no host paths: {v}");
+    assert_eq!(v["github"]["available"], true);
+    assert_eq!(v["github"]["owners"], json!(["acme", "acme-org"]));
+    assert_eq!(v["github"]["repos"][0]["fullName"], "acme/widget");
+    assert_eq!(v["github"]["repos"][0]["cloned"], false);
+
+    // Strict input.
+    for bad in ["../etc", "a/b/c", "https://gitlab.com/a/b", "file:///etc", "git@github.com:a/b.git"] {
+        let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repo": bad }))).await;
+        assert_eq!(code, 400, "{bad}");
+    }
+
+    // Clone (a job), then again = fetch.
+    let job = h.send(reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repo": "https://github.com/acme/widget" }))).await;
+    assert_eq!(job["job"]["action"], "clone");
+    let done = wait_job(&h, job["job"]["id"].as_str().unwrap()).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let checkout = h.handle.shared.cfg.data_dir.join("repos").join("acme__widget");
+    assert!(checkout.join("README.md").exists());
+    let again = h.send(reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repo": "acme/widget" }))).await;
+    assert_eq!(again["job"]["action"], "fetch");
+    assert_eq!(wait_job(&h, again["job"]["id"].as_str().unwrap()).await["state"], "done");
+    let v = h.get("/v1/repos?q=widg").await;
+    assert_eq!(v["local"][0]["name"], "acme__widget");
+    assert_eq!(v["local"][0]["defaultBranch"], "main");
+    assert_eq!(v["local"][0]["dirty"], false);
+    assert_eq!(v["github"]["repos"][0]["cloned"], true);
+    assert_eq!(v["github"]["repos"][0]["checkout"], "acme__widget");
+
+    // Switch a chat onto it.
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "repo picker" }))).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    let r = h.get(&format!("/v1/chats/{chat_id}/repo")).await;
+    assert_eq!(r["repo"]["source"], "workspace");
+    for (bad, code) in [("../etc", 400), ("nope", 404), ("/abs", 400)] {
+        let (c, _) = status_of(&h, reqwest::Method::PUT, &format!("/v1/chats/{chat_id}/repo"), Some(json!({ "repo": bad }))).await;
+        assert_eq!(c, code, "{bad}");
+    }
+    let r = h.send(reqwest::Method::PUT, &format!("/v1/chats/{chat_id}/repo"), Some(json!({ "repo": "acme/widget" }))).await;
+    assert_eq!(r["repo"]["name"], "acme__widget");
+    assert_eq!(r["repo"]["source"], "chat");
+    assert_eq!(r["chatBranch"], format!("hive/chat/{chat_id}"));
+    let b = RepoBindings::load(&h.handle.shared.cfg.data_dir);
+    assert_eq!(b.chats.get(&chat_id).map(String::as_str), Some("acme__widget"));
+    let d = h.get(&format!("/v1/chats/{chat_id}/details")).await;
+    assert_eq!(d["repo"]["repo"]["name"], "acme__widget");
+    let msgs = h.get(&format!("/v1/chats/{chat_id}/messages")).await;
+    assert!(msgs.to_string().contains("now works in acme__widget"), "{msgs}");
+
+    // The agent's turn (hosted here) is told the repo and branch.
+    let host = this_host(&h).await;
+    h.send(reqwest::Method::PUT, &format!("/v1/agents/{}/host", h.agent_id), Some(json!({ "hostId": host }))).await;
+    h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "@coder hi" }))).await;
+    let mut system = String::new();
+    for _ in 0..300 {
+        if let Some(b) = model.bodies.lock().unwrap().first() {
+            system = b["messages"][0]["content"].as_str().unwrap_or("").to_string();
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(system.contains("`acme__widget`") && system.contains(&format!("hive/chat/{chat_id}")), "{system}");
+
+    // Pull fast-forwards a clean checkout.
+    std::fs::write(work.join("NEW.md"), "new\n").unwrap();
+    git(&work, &["add", "-A"]);
+    git(&work, &["commit", "-qm", "upstream"]);
+    git(&work, &["push", "-q", "origin", "main"]);
+    let p = h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/repo/pull"), None).await;
+    assert_eq!(p["updated"], true, "{p}");
+    assert!(checkout.join("NEW.md").exists());
+    std::fs::write(checkout.join("README.md"), "local edit\n").unwrap();
+    let (c, v) = status_of(&h, reqwest::Method::POST, &format!("/v1/chats/{chat_id}/repo/pull"), None).await;
+    assert_eq!(c, 409, "dirty checkout: {v}");
+    git(&checkout, &["checkout", "--", "README.md"]);
+
+    // PR: nothing on the chat branch yet → 409; then a commit there → pushed + PR.
+    let pr_path = format!("/v1/chats/{chat_id}/pr");
+    let (c, _) = status_of(&h, reqwest::Method::POST, &pr_path, Some(json!({ "title": "Add thing" }))).await;
+    assert_eq!(c, 409);
+    let wt = hive_runtime::git_worktree::chat_worktree(&checkout, &chat_id).unwrap();
+    std::fs::write(wt.join("THING.md"), "thing\n").unwrap();
+    git(&wt, &["add", "-A"]);
+    git(&wt, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "thing"]);
+    let r = h.get(&format!("/v1/chats/{chat_id}/repo")).await;
+    assert_eq!((r["chatBranchExists"].clone(), r["ahead"].clone()), (json!(true), json!(1)));
+    let (c, _) = status_of(&h, reqwest::Method::POST, &pr_path, Some(json!({ "title": "  " }))).await;
+    assert_eq!(c, 400);
+    let pr = h.send(reqwest::Method::POST, &pr_path, Some(json!({ "title": "Add thing", "body": "from the phone", "draft": true }))).await;
+    assert_eq!(pr["url"], "https://github.com/acme/widget/pull/1");
+    assert_eq!(pr["base"], "main");
+    let rec = fake.prs.lock().unwrap().clone();
+    assert_eq!(rec.len(), 1);
+    assert_eq!((rec[0].head.as_str(), rec[0].base.as_str(), rec[0].draft), (format!("hive/chat/{chat_id}").as_str(), "main", true));
+    let bare = remotes.join("acme").join("widget.git");
+    git(&bare, &["rev-parse", "--verify", &format!("refs/heads/hive/chat/{chat_id}")]);
+    let msgs = h.get(&format!("/v1/chats/{chat_id}/messages")).await;
+    assert!(msgs.to_string().contains("Opened pull request: https://github.com/acme/widget/pull/1"));
+
+    // Switch back to the workspace default; the chat branch in acme__widget stays.
+    let r = h.send(reqwest::Method::PUT, &format!("/v1/chats/{chat_id}/repo"), Some(json!({ "repo": null }))).await;
+    assert_eq!(r["repo"]["source"], "workspace");
+    git(&checkout, &["rev-parse", "--verify", &format!("refs/heads/hive/chat/{chat_id}")]);
+    let r = h.send(reqwest::Method::PUT, &format!("/v1/chats/{chat_id}/repo"), Some(json!({ "repo": "acme__widget" }))).await;
+    assert_eq!(r["ahead"], 1, "switching back resumes the chat's branch");
+
+    // Signed out: listing says so, PRs are refused clearly, public clones still work.
+    let signed_out = Arc::new(FakeGitHub { remotes: remotes.clone(), available: false, prs: Mutex::new(Vec::new()) });
+    h.handle.shared.repos.set_github(signed_out);
+    let v = h.get("/v1/repos").await;
+    assert_eq!(v["github"], json!({ "available": false, "reason": "Run gh auth login on the host" }));
+    let (c, v) = status_of(&h, reqwest::Method::POST, &pr_path, Some(json!({ "title": "x" }))).await;
+    assert_eq!(c, 412, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("gh auth login"));
+    fake_remote(&remotes, "pub", "lib");
+    let job = h.send(reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repo": "pub/lib" }))).await;
+    assert_eq!(wait_job(&h, job["job"]["id"].as_str().unwrap()).await["state"], "done");
+
+    // A clone that fails cleans up after itself.
+    let job = h.send(reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repo": "ghost/missing" }))).await;
+    let j = wait_job(&h, job["job"]["id"].as_str().unwrap()).await;
+    assert_eq!(j["state"], "error");
+    let leftovers: Vec<_> = std::fs::read_dir(h.handle.shared.cfg.data_dir.join("repos"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(leftovers.iter().all(|n| !n.starts_with(".clone-") && n != "ghost__missing"), "{leftovers:?}");
+}
+
+/// Repo writes follow the box's standing: a write-blocked box (revoked or
+/// pending) gets 403, reads still work.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn repo_writes_need_a_box_that_can_write() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "t" }))).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    h.handle.shared.lock().set_write_block(Some("this box was revoked".into()));
+    for (m, path, body) in [
+        (reqwest::Method::POST, "/v1/repos/clone".to_string(), Some(json!({ "repo": "a/b" }))),
+        (reqwest::Method::PUT, format!("/v1/chats/{chat_id}/repo"), Some(json!({ "repo": null }))),
+        (reqwest::Method::POST, format!("/v1/chats/{chat_id}/repo/pull"), None),
+        (reqwest::Method::POST, format!("/v1/chats/{chat_id}/pr"), Some(json!({ "title": "x" }))),
+    ] {
+        let (c, v) = status_of(&h, m, &path, body).await;
+        assert_eq!(c, 403, "{path}: {v}");
+    }
+    assert_eq!(h.get(&format!("/v1/chats/{chat_id}/repo")).await["repo"]["source"], "workspace");
+    let r = h.client.get(format!("{}/v1/repos", h.base)).send().await.unwrap();
+    assert_eq!(r.status(), 401, "bearer required");
+}

@@ -402,6 +402,8 @@ pub async fn chat_details(State(s): S, Path(id): Path<String>) -> ApiResult<Json
         "workflowRuns": runs,
         "skills": skills,
         "vaults": vaults,
+        // The checkout this chat works in on this host (`GET /v1/chats/:id/repo`).
+        "repo": super::repos_api::details_repo(&s, chat.id),
     });
     if let Some(c) = channel {
         out["channel"] = channel_dto(&c);

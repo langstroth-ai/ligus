@@ -43,6 +43,7 @@ pub mod notify;
 pub mod ntfy;
 pub mod pair;
 pub mod people;
+pub mod repos_api;
 pub mod tunnel;
 
 #[cfg(test)]
@@ -331,6 +332,8 @@ pub struct Shared {
     /// MCP servers for `source = "mcp"` dashboard panels (`HIVE_MCP_CONFIG`,
     /// read at start), or why there are none.
     pub dashboard_mcp: std::result::Result<hive_runtime::McpRegistry, String>,
+    /// Repos from the phone: the GitHub backend, clone jobs, checkout locks.
+    pub repos: repos_api::RepoState,
 }
 
 /// How long a dashboard snapshot of the workspace is reused.
@@ -901,6 +904,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         busy: Mutex::new(HashSet::new()),
         hive_snapshot: Mutex::new(None),
         dashboard_mcp: dashboard_mcp_registry(),
+        repos: repos_api::RepoState::default(),
         cfg,
         opts,
     });

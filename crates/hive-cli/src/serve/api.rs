@@ -42,7 +42,10 @@ impl ApiError {
     pub(super) fn not_found(what: &str) -> Self {
         Self(StatusCode::NOT_FOUND, format!("{what} not found"))
     }
-    fn bad_request(msg: impl Into<String>) -> Self {
+    pub(super) fn new(code: StatusCode, msg: impl Into<String>) -> Self {
+        Self(code, msg.into())
+    }
+    pub(super) fn bad_request(msg: impl Into<String>) -> Self {
         Self(StatusCode::BAD_REQUEST, msg.into())
     }
 }
@@ -351,6 +354,12 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/people", get(super::people::list_people))
         .route("/v1/channels", get(super::people::list_channels))
         .route("/v1/chats/:id/details", get(super::people::chat_details))
+        .route("/v1/repos", get(super::repos_api::list_repos))
+        .route("/v1/repos/clone", post(super::repos_api::clone_repo))
+        .route("/v1/repos/clone/:job", get(super::repos_api::clone_job))
+        .route("/v1/chats/:id/repo", get(super::repos_api::get_chat_repo).put(super::repos_api::put_chat_repo))
+        .route("/v1/chats/:id/repo/pull", post(super::repos_api::pull_chat_repo))
+        .route("/v1/chats/:id/pr", post(super::repos_api::open_pr))
         .route("/v1/proposals", get(list_proposals))
         .route("/v1/proposals/:id/approve", post(approve_proposal))
         .route("/v1/proposals/:id/reject", post(reject_proposal))
