@@ -364,6 +364,7 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/proposals/:id/approve", post(approve_proposal))
         .route("/v1/proposals/:id/reject", post(reject_proposal))
         .route("/v1/proposals/:id", get(get_proposal))
+        .route("/v1/proposals/:id/file", get(super::proposal_file::proposal_file))
         .route("/v1/proposals/:id/comments", get(list_comments).post(post_comment))
         .route("/v1/proposals/:id/request-changes", post(request_changes))
         .route("/v1/dashboard", get(dashboard_view))
@@ -641,7 +642,7 @@ async fn list_proposals(State(s): S, Query(f): Query<ProposalFilter>) -> ApiResu
 }
 
 /// Find a proposal's chat.
-fn find_proposal(s: &Shared, raw: &str) -> ApiResult<(ChatSession, ActionProposal)> {
+pub(super) fn find_proposal(s: &Shared, raw: &str) -> ApiResult<(ChatSession, ActionProposal)> {
     let pid = parse_id(raw, "proposal")?;
     for chat in s.workspace_chats()? {
         if let Some(p) = chat.proposals.iter().find(|p| p.id == pid).cloned() {

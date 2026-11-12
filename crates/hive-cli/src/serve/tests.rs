@@ -1983,3 +1983,95 @@ async fn repo_writes_need_a_box_that_can_write() {
     let r = h.client.get(format!("{}/v1/repos", h.base)).send().await.unwrap();
     assert_eq!(r.status(), 401, "bearer required");
 }
+
+/// `GET /v1/proposals/:id/file`: the whole file before or after a proposal,
+/// built from the chat's checkout without touching it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn proposal_file_serves_both_sides_from_the_bound_checkout() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let readme = "# Hive\n\nIntro.\n\n- one\n- two\n";
+    let h = harness(&endpoint, "m", &[("README.md", readme), ("gone.md", "bye\n")]).await;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    let ws = h.handle.shared.ws;
+    let diff = "diff --git a/README.md b/README.md\nindex 0000000..1111111 100644\n--- a/README.md\n+++ b/README.md\n\
+@@ -3,4 +3,5 @@\n Intro.\n \n - one\n-- two\n+- two, revised\n+- three\n\
+diff --git a/new.md b/new.md\nnew file mode 100644\n--- /dev/null\n+++ b/new.md\n@@ -0,0 +1,2 @@\n+# New\n+hi\n\
+diff --git a/gone.md b/gone.md\ndeleted file mode 100644\n--- a/gone.md\n+++ /dev/null\n@@ -1 +0,0 @@\n-bye\n";
+    let stale = "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1,2 +1,2 @@\n-# Not this\n+# Other\n \n";
+    let mk = |title: &str, d: &str| hive_core::ActionProposal::file_diff(title, "", d.into(), vec!["README.md".into()]);
+    let (good, bad) = (mk("docs", diff), mk("stale", stale));
+    let (pid, sid) = (good.id, bad.id);
+    {
+        let mut svc = h.handle.shared.lock();
+        svc.upsert_proposal(chat_id, ws, good).unwrap();
+        svc.upsert_proposal(chat_id, ws, bad).unwrap();
+    }
+    h.handle.shared.after_write();
+    let file = |id: Uuid, path: &str, side: &str| format!("/v1/proposals/{id}/file?path={path}&side={side}");
+    let new_readme = "# Hive\n\nIntro.\n\n- one\n- two, revised\n- three\n";
+
+    // Modified: both sides, the checkout untouched.
+    let (code, v) = status_of(&h, reqwest::Method::GET, &file(pid, "README.md", "new"), None).await;
+    assert_eq!(code, 200, "{v}");
+    assert_eq!(v["content"], new_readme);
+    assert_eq!(v["applied"], json!(false));
+    assert_eq!(v["side"], "new");
+    let (code, v) = status_of(&h, reqwest::Method::GET, &file(pid, "README.md", "old"), None).await;
+    assert_eq!((code, v["content"].as_str()), (200, Some(readme)), "{v}");
+    let repo = h._tmp.path().join("repo");
+    assert_eq!(std::fs::read_to_string(repo.join("README.md")).unwrap(), readme);
+    assert!(!repo.join("new.md").exists());
+    // `side` defaults to new.
+    let (code, v) = status_of(&h, reqwest::Method::GET, &format!("/v1/proposals/{pid}/file?path=README.md"), None).await;
+    assert_eq!((code, v["content"].as_str()), (200, Some(new_readme)));
+
+    // New file: a new side only.
+    let (code, v) = status_of(&h, reqwest::Method::GET, &file(pid, "new.md", "new"), None).await;
+    assert_eq!((code, v["content"].as_str()), (200, Some("# New\nhi\n")), "{v}");
+    assert_eq!(status_of(&h, reqwest::Method::GET, &file(pid, "new.md", "old"), None).await.0, 404);
+    // Deleted file: an old side only.
+    let (code, v) = status_of(&h, reqwest::Method::GET, &file(pid, "gone.md", "old"), None).await;
+    assert_eq!((code, v["content"].as_str()), (200, Some("bye\n")), "{v}");
+    assert_eq!(status_of(&h, reqwest::Method::GET, &file(pid, "gone.md", "new"), None).await.0, 404);
+
+    // Bad requests: not in the diff, traversal, absolute, .git, bad side.
+    for bad in [
+        file(pid, "other.md", "new"),
+        file(pid, "../README.md", "new"),
+        file(pid, "docs/../../README.md", "old"),
+        file(pid, "/etc/passwd", "new"),
+        file(pid, ".git/config", "new"),
+        file(pid, "README.md", "both"),
+        format!("/v1/proposals/{pid}/file"),
+    ] {
+        let (code, v) = status_of(&h, reqwest::Method::GET, &bad, None).await;
+        assert_eq!(code, 400, "{bad}: {v}");
+    }
+    // A diff that fits neither base: 409.
+    let (code, v) = status_of(&h, reqwest::Method::GET, &file(sid, "README.md", "new"), None).await;
+    assert_eq!(code, 409, "{v}");
+    assert_eq!(status_of(&h, reqwest::Method::GET, &file(Uuid::new_v4(), "README.md", "new"), None).await.0, 404);
+    // Unauthenticated: 401 like every other read.
+    let anon = h.client.get(format!("{}{}", h.base, file(pid, "README.md", "new"))).send().await.unwrap();
+    assert_eq!(anon.status().as_u16(), 401);
+
+    // Applied on the chat branch: the base carries the change, the old side
+    // comes from reversing it.
+    git(&repo, &["branch", &crate::repos::chat_branch(chat_id)]);
+    let wt = h._tmp.path().join("wt");
+    git(&repo, &["worktree", "add", "-q", wt.to_str().unwrap(), &crate::repos::chat_branch(chat_id)]);
+    std::fs::write(wt.join("README.md"), new_readme).unwrap();
+    git(&wt, &["commit", "-qam", "apply"]);
+    let (code, v) = status_of(&h, reqwest::Method::GET, &file(pid, "README.md", "old"), None).await;
+    assert_eq!((code, v["content"].as_str()), (200, Some(readme)), "{v}");
+    assert_eq!(v["applied"], json!(true));
+    assert_eq!(v["base"], crate::repos::chat_branch(chat_id));
+
+    // No checkout bound for the chat on this host: 404 with the reason.
+    RepoBindings::default().save(&h._tmp.path().join("serve")).unwrap();
+    let (code, v) = status_of(&h, reqwest::Method::GET, &file(pid, "README.md", "new"), None).await;
+    assert_eq!(code, 404, "{v}");
+    assert!(v.to_string().contains("no repository"), "{v}");
+    h.handle.shutdown();
+}

@@ -88,6 +88,7 @@ and public addresses unless `HIVE_SERVE_ALLOW_ANY_BIND=1`.
 | POST | `/v1/proposals/{id}/approve` | `{proposal}` |
 | POST | `/v1/proposals/{id}/reject` `{reason?}` | `{proposal}` |
 | GET | `/v1/proposals/{id}` | `{proposal}` |
+| GET | `/v1/proposals/{id}/file?path=&side=old\|new` | `{path, side, content, size, base, applied}`: one file of the proposal's diff, whole, before (`old`) or after (`new`, the default) the change. Read from the chat's bound checkout (branch `hive/chat/<id>`, else `HEAD`) with the file's patch applied in a scratch directory, never in the checkout; `applied` means the base already carries the change and `old` was recovered by reversing it. `400`: `path` isn't a plain relative path or isn't in the diff, or a bad `side`. `404`: no diff, no checkout bound here, or that side doesn't exist (a new file has no `old`, a deleted one no `new`). `409`: the diff applies to neither base. `413` over 512 KB, `415` not UTF-8. The app uses it to render a changed Markdown file |
 | GET | `/v1/proposals/{id}/comments` | `{comments: [Comment]}`, the refinement thread, oldest first |
 | POST | `/v1/proposals/{id}/comments` `{text, requestChanges?}` | `{comment, proposal}`. `requestChanges: true` marks it a change request |
 | POST | `/v1/proposals/{id}/request-changes` `{note?}` | `{proposal, message}`. The desktop's "Send to agent to revise"; `note` is added first as a change request |

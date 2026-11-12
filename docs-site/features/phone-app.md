@@ -79,6 +79,14 @@ phone with the same collaboration state as the desktop's Review card:
   instruction to the agent that produced the proposal. When that agent files
   its next version in the chat, the new version is linked to the old one and
   the old one leaves the open list.
+- **Rendered Markdown.** A changed `.md`/`.markdown`/`.mdx` file (or a
+  `README`) has a *Diff | Rendered* switch. *Rendered* shows the document as
+  formatted Markdown, with a rail beside the blocks the proposal changed, and
+  *Before | After* to compare. New and deleted files come from the diff
+  itself; for an edited file the phone asks the host for the whole file,
+  rebuilt from the chat's checkout without touching it. When the host can't
+  (no checkout bound, or the file has moved on), the phone renders only the
+  changed sections and says so.
 
 Approving a file-diff proposal from the phone doesn't apply it, unless the
 box is set to (see [`HIVE_SERVE_APPLY_ON_APPROVE`](../ops/serve-box.md#apply-on-approve)).

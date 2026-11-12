@@ -43,6 +43,7 @@ pub mod notify;
 pub mod ntfy;
 pub mod pair;
 pub mod people;
+pub mod proposal_file;
 pub mod repos_api;
 pub mod tunnel;
 
