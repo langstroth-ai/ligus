@@ -47,6 +47,7 @@ const report: RoutingReport = {
     { atMs: 1, sessionId: "s", taskClass: "refactor", mode: "shadow", chosen: "Ligus (primary)", wouldPick: "coder", preferred: "coder", explore: false, reason: "sampled", epsilon: 0.06 },
   ],
   stops: [],
+  exploration: { explored: 2, share: 0.12, meanEpsilon: 0.08, exploredWins: 2, exploredJudged: 3, incumbentRate: 0.5 },
 };
 
 describe("routing report", () => {
@@ -59,6 +60,8 @@ describe("routing report", () => {
     expect(screen.getByText("falling")).toBeInTheDocument();
     expect(screen.getByText("75%")).toBeInTheDocument();
     expect(screen.getByText(/would send to/)).toBeInTheDocument();
+    expect(screen.getByText(/12% of decisions went to an agent other than the top scorer/)).toBeInTheDocument();
+    expect(screen.getByText(/2 of 3 explored turns succeeded, against 50% for the top scorer/)).toBeInTheDocument();
   });
 });
 

@@ -33,11 +33,16 @@ pub(crate) struct FlowSettings {
     /// Route cool-down after a severe failure (or two failures within ten
     /// minutes); 0 turns route stops off.
     pub cooldown_minutes: f64,
+    /// Exploration share bounds: the router sends between these shares of
+    /// decisions to an agent other than the top scorer, more when the top
+    /// scorer is weak, unproven or falling.
+    pub epsilon_min: f64,
+    pub epsilon_max: f64,
 }
 
 impl Default for FlowSettings {
     fn default() -> Self {
-        Self { handoff_cards: true, route_mode: RouteMode::Shadow, half_life_days: 14.0, cooldown_minutes: 15.0 }
+        Self { handoff_cards: true, route_mode: RouteMode::Shadow, half_life_days: 14.0, cooldown_minutes: 15.0, epsilon_min: 0.05, epsilon_max: 0.30 }
     }
 }
 
@@ -47,7 +52,8 @@ impl FlowSettings {
     }
 
     pub(crate) fn route_policy(&self) -> flow::route::RoutePolicy {
-        flow::route::RoutePolicy::default()
+        let lo = self.epsilon_min.clamp(0.0, 0.5);
+        flow::route::RoutePolicy { epsilon_min: lo, epsilon_max: self.epsilon_max.clamp(lo, 0.5), ..Default::default() }
     }
 }
 
@@ -826,6 +832,75 @@ pub(crate) struct RoutingReport {
     pub recent: Vec<DecisionRow>,
     /// Routes in cool-down now.
     pub stops: Vec<StopRow>,
+    pub exploration: ExplorationRow,
+}
+
+/// Whether exploration pays: how often the router chose off the incumbent,
+/// and how those turns did against the incumbent's own turns.
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ExplorationRow {
+    pub explored: u32,
+    pub share: f64,
+    pub mean_epsilon: f64,
+    /// Explored turns with a measured success (accepted proposal or passing tests).
+    pub explored_wins: u32,
+    pub explored_judged: u32,
+    /// Success rate of the incumbent's turns in the same window.
+    pub incumbent_rate: Option<f64>,
+}
+
+/// A turn's measured success: an accepted proposal or passing tests (None =
+/// nothing judged yet).
+fn turn_success(sess: &ChatSession, t: &TurnTag) -> Option<bool> {
+    let mut judged = None;
+    for pid in &t.proposal_ids {
+        if let Some(p) = sess.proposals.iter().find(|p| p.id == *pid) {
+            match p.status {
+                hive_core::ProposalStatus::Approved | hive_core::ProposalStatus::Applied => return Some(true),
+                hive_core::ProposalStatus::Rejected => judged = Some(false),
+                _ if p.superseded_by.is_some() => judged = Some(false),
+                _ => {}
+            }
+        }
+    }
+    if t.error {
+        return Some(false);
+    }
+    t.tests_passed.or(judged)
+}
+
+fn exploration(view: &WorkspaceView, since: i64) -> ExplorationRow {
+    let mut row = ExplorationRow::default();
+    let (mut n, mut eps) = (0u32, 0.0);
+    let (mut inc_ok, mut inc_judged) = (0u32, 0u32);
+    for sess in view.sessions.iter() {
+        for d in sess.flow.route_decisions.values().filter(|d| d.at_ms >= since) {
+            n += 1;
+            eps += d.epsilon;
+            if d.explore {
+                row.explored += 1;
+            }
+            let Some(t) = sess.flow.turns.iter().find(|t| t.trigger_id == Some(d.trigger_id) && t.agent == d.shadow_choice) else { continue };
+            // Only live decisions ran the pick; shadow ones measure nothing here.
+            if d.mode != RouteMode::Live {
+                continue;
+            }
+            if let Some(ok) = turn_success(sess, t) {
+                if d.explore {
+                    row.explored_judged += 1;
+                    row.explored_wins += u32::from(ok);
+                } else if d.shadow_choice == d.preferred {
+                    inc_judged += 1;
+                    inc_ok += u32::from(ok);
+                }
+            }
+        }
+    }
+    row.share = if n == 0 { 0.0 } else { row.explored as f64 / n as f64 };
+    row.mean_epsilon = if n == 0 { 0.0 } else { eps / n as f64 };
+    row.incumbent_rate = (inc_judged > 0).then(|| inc_ok as f64 / inc_judged as f64);
+    row
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -951,6 +1026,7 @@ pub(crate) fn routing_report(state: &AppState, workspace_id: Uuid, days: u32) ->
         .collect();
     stops.sort_by_key(|st| st.until_ms);
     RoutingReport {
+        exploration: exploration(&view, since),
         stops,
         mode: s.route_mode,
         since_ms: since,
@@ -1041,6 +1117,58 @@ mod tests {
         assert_eq!(s.route_mode, RouteMode::Shadow);
         let live: FlowSettings = serde_json::from_str(r#"{"routeMode":"live"}"#).unwrap();
         assert_eq!(live.route_mode, RouteMode::Live);
+    }
+
+    #[test]
+    fn exploration_report_compares_explored_turns_with_the_incumbent() {
+        let mut s = session_with(&["a", "b"]);
+        let (a, b) = (flow::agent_key(Some(s.workspace_agents[0].id)), flow::agent_key(Some(s.workspace_agents[1].id)));
+        let mut add = |explore: bool, pick: &str, ok: bool| {
+            let trigger = Uuid::new_v4();
+            s.flow.apply(&FlowRecord::RouteDecision(hive_core::flow::RouteDecision {
+                trigger_id: trigger,
+                task_class: "refactor".into(),
+                chosen: pick.into(),
+                preferred: a.clone(),
+                explore,
+                mode: RouteMode::Live,
+                shadow_choice: pick.into(),
+                reason: flow::route::RouteReason::Sampled,
+                epsilon: 0.1,
+                scores: Default::default(),
+                excluded: vec![],
+                at_ms: 100,
+            }));
+            s.flow.apply(&FlowRecord::TurnTagged(TurnTag {
+                message_id: Uuid::new_v4(),
+                trigger_id: Some(trigger),
+                agent: pick.into(),
+                runtime_id: String::new(),
+                host_id: String::new(),
+                task_class: "refactor".into(),
+                role: "conversation".into(),
+                arm: "routed".into(),
+                upstream_arm: String::new(),
+                error: false,
+                error_kind: String::new(),
+                tests_passed: Some(ok),
+                tool_calls: 1,
+                duration_ms: 0,
+                cost_usd: 0.0,
+                proposal_ids: vec![],
+                handoff_parcel: false,
+                at_ms: 101,
+            }));
+        };
+        add(true, &b, true);
+        add(false, &a, true);
+        add(false, &a, false);
+        add(false, &a, true);
+        let view = WorkspaceView { sessions: Arc::new(vec![s]), config: Arc::new(FlowState::default()) };
+        let e = exploration(&view, 0);
+        assert_eq!((e.explored, e.explored_wins, e.explored_judged), (1, 1, 1));
+        assert!((e.share - 0.25).abs() < 1e-9);
+        assert!((e.incumbent_rate.unwrap() - 2.0 / 3.0).abs() < 1e-9);
     }
 
     fn session_with(agents: &[&str]) -> ChatSession {

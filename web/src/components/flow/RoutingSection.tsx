@@ -66,6 +66,16 @@ export function RoutingReportView({ report: r, onClearStop }: { report: RoutingR
         </Section>
       )}
 
+      <Section title="Exploration">
+        <Muted>
+          {pct(r.exploration.share)} of decisions went to an agent other than the top scorer (share in force averaged{" "}
+          {pct(r.exploration.meanEpsilon)}; it rises when the best known agent is weak, unproven or slipping).
+          {r.exploration.exploredJudged > 0 &&
+            ` ${r.exploration.exploredWins} of ${r.exploration.exploredJudged} explored turns succeeded` +
+              (r.exploration.incumbentRate != null ? `, against ${pct(r.exploration.incumbentRate)} for the top scorer.` : ".")}
+        </Muted>
+      </Section>
+
       <Section title="Outcomes by arm">
         {r.arms.length === 0 ? (
           <EmptyHint text="No tagged turns yet." />

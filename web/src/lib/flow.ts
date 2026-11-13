@@ -133,6 +133,16 @@ export interface RoutingReport {
   arms: ArmRow[];
   recent: DecisionRow[];
   stops: StopRow[];
+  exploration: ExplorationRow;
+}
+
+export interface ExplorationRow {
+  explored: number;
+  share: number;
+  meanEpsilon: number;
+  exploredWins: number;
+  exploredJudged: number;
+  incumbentRate: number | null;
 }
 
 export interface StopRow {

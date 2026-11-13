@@ -39,6 +39,16 @@ export function FlowSection() {
         >
           <NumberInput value={s.cooldownMinutes} min={0} max={1440} onChange={(v) => set({ cooldownMinutes: v })} label="Cool-down minutes" />
         </Field>
+        <Field
+          label="Exploration share (%)"
+          hint="Between these bounds, the router sends some decisions to an agent other than the top scorer so weaker agents can recover. Higher when the best known agent is weak or slipping."
+        >
+          <div className="flex items-center gap-2">
+            <NumberInput value={Math.round(s.epsilonMin * 100)} min={0} max={50} onChange={(v) => set({ epsilonMin: v / 100, epsilonMax: Math.max(s.epsilonMax, v / 100) })} label="Minimum exploration %" />
+            <span className="text-xs opacity-60">to</span>
+            <NumberInput value={Math.round(s.epsilonMax * 100)} min={0} max={50} onChange={(v) => set({ epsilonMax: v / 100, epsilonMin: Math.min(s.epsilonMin, v / 100) })} label="Maximum exploration %" />
+          </div>
+        </Field>
       </Section>
       <Section title="Hand-offs">
         <Row label="Hand-off cards and context parcels" hint="Record what an agent hands on, and give the receiver the sender's summary.">
