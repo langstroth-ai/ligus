@@ -186,8 +186,13 @@ pub struct WorkspaceMigration {
 /// re-registered with `git worktree repair` run in `root`, and verified. If
 /// any can't be repaired, `.hive` becomes a symlink to `.ligus` so the paths
 /// git recorded keep resolving (Unix; on Windows a warning is printed).
-/// A `.hive` that is already a symlink is left alone.
+/// A `.hive` that is already a symlink is left alone, and so is `$HOME/.hive`
+/// (that is the CLI's former data dir, see [`home_data_dir`], not workspace
+/// state).
 pub fn migrate_workspace_dir(root: &Path) -> io::Result<Option<WorkspaceMigration>> {
+    if is_home_dir(root) {
+        return Ok(None);
+    }
     let old = root.join(LEGACY_WORKSPACE_DIR);
     let new = root.join(WORKSPACE_DIR);
     let old_meta = match std::fs::symlink_metadata(&old) {
@@ -257,6 +262,12 @@ pub fn migrate_workspace_dir(root: &Path) -> io::Result<Option<WorkspaceMigratio
         }
     }
     Ok(Some(m))
+}
+
+/// Whether `dir` is the user's home directory.
+fn is_home_dir(dir: &Path) -> bool {
+    let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from) else { return false };
+    dir == home || matches!((dir.canonicalize(), home.canonicalize()), (Ok(a), Ok(b)) if a == b)
 }
 
 /// Linked worktrees directly under `dir` (each a dir holding a `.git` file).
@@ -390,15 +401,20 @@ pub const HOME_DATA_DIR: &str = ".ligus";
 /// The former name, renamed to [`HOME_DATA_DIR`] on first use.
 pub const LEGACY_HOME_DATA_DIR: &str = ".hive";
 
+/// Files that mark a dir as holding CLI data (a database or an identity).
+const CLI_DATA_MARKERS: [&str; 2] = ["hive.db", "identity.json"];
+
 /// The default CLI data dir under `home` when no data-dir env var is set:
-/// `~/.ligus`. If only `~/.hive` exists it is renamed to `~/.ligus` first
-/// (same filesystem, atomic) and a note is printed. A failed rename is an
-/// error rather than a silent fresh start, which would mint a new device
-/// identity.
+/// `~/.ligus`. If `~/.ligus` doesn't exist and `~/.hive` holds CLI data
+/// (`hive.db` or `identity.json`), `~/.hive` is renamed to `~/.ligus` first
+/// (same filesystem, atomic) and a note is printed; a `~/.hive` holding
+/// anything else is left alone. A failed rename is an error rather than a
+/// silent fresh start, which would mint a new device identity.
 pub fn home_data_dir(home: &Path) -> io::Result<PathBuf> {
     let new = home.join(HOME_DATA_DIR);
     let old = home.join(LEGACY_HOME_DATA_DIR);
-    if !new.exists() && std::fs::symlink_metadata(&old).is_ok_and(|m| m.is_dir()) {
+    let old_has_data = std::fs::symlink_metadata(&old).is_ok_and(|m| m.is_dir()) && CLI_DATA_MARKERS.iter().any(|m| old.join(m).exists());
+    if !new.exists() && old_has_data {
         std::fs::rename(&old, &new).map_err(|e| {
             io::Error::new(e.kind(), format!("could not move {} to {}: {e} (move it by hand or set LIGUS_DATA_DIR)", old.display(), new.display()))
         })?;
@@ -558,6 +574,13 @@ mod tests {
     }
 
     #[test]
+    fn home_dir_hive_is_not_workspace_state() {
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
+        // Never touches the real dir: it returns before looking at it.
+        assert_eq!(migrate_workspace_dir(&home).unwrap(), None);
+    }
+
+    #[test]
     fn workspace_dir_without_legacy_is_untouched() {
         let tmp = Tmp::new("wsnone");
         assert_eq!(migrate_workspace_dir(tmp.path()).unwrap(), None);
@@ -606,10 +629,17 @@ mod tests {
         let home = tmp.path();
         assert_eq!(home_data_dir(home).unwrap(), home.join(".ligus"));
         assert!(!home.join(".ligus").exists(), "nothing created eagerly");
+        // A ~/.hive without CLI data (some other tool's file) is left alone.
         std::fs::create_dir(home.join(".hive")).unwrap();
+        std::fs::write(home.join(".hive/issuer_ed25519.key"), "k").unwrap();
+        assert_eq!(home_data_dir(home).unwrap(), home.join(".ligus"));
+        assert!(home.join(".hive/issuer_ed25519.key").is_file());
+        assert!(!home.join(".ligus").exists());
+        // With CLI data it moves.
         std::fs::write(home.join(".hive/hive.db"), "db").unwrap();
         assert_eq!(home_data_dir(home).unwrap(), home.join(".ligus"));
         assert!(!home.join(".hive").exists());
+        assert!(home.join(".ligus/issuer_ed25519.key").is_file(), "the whole dir moves");
         assert_eq!(std::fs::read_to_string(home.join(".ligus/hive.db")).unwrap(), "db");
         // Both present: the new one is used, the old one untouched.
         std::fs::create_dir(home.join(".hive")).unwrap();
