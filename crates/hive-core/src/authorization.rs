@@ -109,7 +109,7 @@ pub fn requires_projection_authz(event: &SessionEvent) -> bool {
             | SessionEvent::ChannelArchived { .. }
             | SessionEvent::ChatChannelChanged { .. }
             | SessionEvent::DeviceRevoked { .. }
-    )
+    ) || matches!(event, SessionEvent::FlowRecorded { record } if record.is_config())
 }
 
 /// Whether a **non-seed** `SessionSnapshot` — one folded *after* the base seed,
@@ -167,6 +167,11 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         // Revoking a device cuts trust — governance, admin+ (unlike publishing your
         // own account key/cert, which is a self-validated bootstrap at a low floor).
         | SessionEvent::DeviceRevoked { .. } => WorkspaceRole::Admin,
+        // Path zones set the review bar; the beacon says where home is.
+        SessionEvent::FlowRecorded { record } if record.is_governance() => WorkspaceRole::Admin,
+        // Every other flow record is collaboration content (routing logs,
+        // hand-offs, marks, agent profiles).
+        SessionEvent::FlowRecorded { .. } => WorkspaceRole::Contributor,
         // content / collaboration
         SessionEvent::SessionSnapshot { .. }
         | SessionEvent::MessageAppended { .. }

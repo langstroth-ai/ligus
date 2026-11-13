@@ -1241,6 +1241,29 @@ impl ChatService {
         Ok(links)
     }
 
+    /// Append a flow record (see [`hive_core::flow`]). Config records go to
+    /// the workspace-config log whatever `session_id` says; the rest go to
+    /// the chat.
+    pub fn record_flow(
+        &mut self,
+        session_id: Uuid,
+        workspace_id: Uuid,
+        record: hive_core::flow::FlowRecord,
+    ) -> Result<()> {
+        let target = if record.is_config() { self.ensure_workspace_config(workspace_id)? } else { session_id };
+        self.append_signed(target, workspace_id, SessionEvent::FlowRecorded { record })?;
+        Ok(())
+    }
+
+    /// The workspace's flow configuration (marks, zones, route stops, agent
+    /// profiles, home beacon), folded from the config log.
+    pub fn flow_config(&self, workspace_id: Uuid) -> Result<hive_core::flow::FlowState> {
+        Ok(self
+            .load(workspace_config_session_id(workspace_id))?
+            .map(|s| s.flow)
+            .unwrap_or_default())
+    }
+
     /// Register (or replace by id) a host. The id is a machine's device id.
     pub fn register_host(&mut self, workspace_id: Uuid, mut host: WorkspaceHost) -> Result<()> {
         if host.owner_actor_id.is_empty() {
@@ -3598,5 +3621,53 @@ mod tests {
             assert!(verify_envelope(&env, &pk).is_ok());
             assert!(env.actor_stamp.is_some());
         }
+    }
+}
+
+#[cfg(test)]
+mod flow_tests {
+    use super::*;
+    use hive_core::flow::{FlowRecord, MarkKind, ProgressMark, WorkspaceMark};
+
+    fn service() -> ChatService {
+        let store = EventStore::open_in_memory().unwrap();
+        let kp = SigningKeypair::generate().unwrap();
+        let account_kp = SigningKeypair::generate().unwrap();
+        let author = ActorIdentity::new("u1", "Mara", hive_core::ActorKind::Human);
+        ChatService::new(store, Uuid::new_v4(), kp, account_kp, author)
+    }
+
+    #[test]
+    fn records_land_on_the_right_log() {
+        let mut svc = service();
+        let wid = Uuid::new_v4();
+        let chat = svc.create_chat("A", wid, "rt").unwrap();
+        let mark = WorkspaceMark {
+            id: Uuid::new_v4(),
+            kind: MarkKind::Claim,
+            path: "src/a.rs".into(),
+            lines: None,
+            task_id: String::new(),
+            note: String::new(),
+            agent: String::new(),
+            by: "Mara".into(),
+            session_id: Some(chat.id),
+            at_ms: 0,
+            expires_ms: None,
+        };
+        svc.record_flow(chat.id, wid, FlowRecord::Mark(mark.clone())).unwrap();
+        svc.record_flow(
+            chat.id,
+            wid,
+            FlowRecord::Progress(ProgressMark { message_id: Uuid::new_v4(), agent: "primary".into(), units: 1.0, kind: "tests_passing".into(), at_ms: 0 }),
+        )
+        .unwrap();
+        // The mark is workspace config; the progress stays in the chat.
+        assert_eq!(svc.flow_config(wid).unwrap().marks.len(), 1);
+        let s = svc.load(chat.id).unwrap().unwrap();
+        assert_eq!(s.flow.progress.len(), 1);
+        assert!(s.flow.marks.is_empty());
+        svc.record_flow(chat.id, wid, FlowRecord::MarkCleared { mark_id: mark.id }).unwrap();
+        assert!(svc.flow_config(wid).unwrap().marks.is_empty());
     }
 }

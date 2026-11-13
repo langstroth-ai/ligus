@@ -1,0 +1,552 @@
+//! Flow: how work moves through a workspace — who gets a task, how it is
+//! handed on, where it queues, and what agents leave in the workspace for each
+//! other. The ideas come from how a honeybee colony allocates labour (Ligus is
+//! short for *ligustica*, the Italian honeybee), but every mechanism here is
+//! plain engineering:
+//!
+//! - **Hand-off cards and context parcels** ([`handoff`]): what an agent hands
+//!   on, where it lives and how good it was, plus a compact summary so the
+//!   receiver starts primed.
+//! - **Outcome-weighted routing** ([`score`], [`route`]): a decayed score per
+//!   agent and task class computed only from measured outcomes (approvals,
+//!   revise loops, test runs, turns per success), sampled in proportion to the
+//!   score with an adaptive exploration share. Ships in shadow mode.
+//! - **Route cool-down** ([`route::RouteStop`]): a severe failure pulls a route
+//!   out of rotation at once instead of waiting for its average to drift.
+//! - **Backpressure** ([`tremble`]): queue length and waiting time at the human
+//!   gate, a note telling upstream agents to stop opening new work, and opt-in
+//!   recruiting of more reviewers or an idle host.
+//! - **Threshold task board** ([`board`]) and **careers** ([`career`]): open
+//!   work is picked up by the agent whose threshold it crosses first, with
+//!   per-agent threshold diversity and a reversible default career.
+//! - **Workspace marks and path zones** ([`marks`], [`zones`]): claims,
+//!   under-construction locks and needs-review markers that agents read on
+//!   their own schedule; "core" and "low-bar" path zones that set the review
+//!   bar from where a change lands.
+//!
+//! Everything is recorded as additive [`FlowRecord`]s on the existing event
+//! log (`SessionEvent::FlowRecorded`): an older build decodes the event as
+//! `Unknown` and ignores it. Nothing here performs IO.
+
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+pub mod board;
+pub mod career;
+pub mod directives;
+pub mod handoff;
+pub mod keys;
+pub mod marks;
+pub mod route;
+pub mod score;
+pub mod task_class;
+pub mod tremble;
+pub mod zones;
+
+pub use board::{BoardItem, BoardItemKind};
+pub use career::{AgentFlowProfile, Career};
+pub use handoff::{ContextParcel, HandoffCard, HandoffQuality};
+pub use marks::{MarkKind, WorkspaceMark};
+pub use route::{RouteDecision, RouteMode, RouteStop};
+pub use zones::{PathZone, ZoneKind};
+
+/// The key routing and scoring use for "who": an agent id, or [`PRIMARY`] for
+/// the chat's own runtime (the `@ligus` primary, which has no agent id).
+pub const PRIMARY: &str = "primary";
+
+/// [`PRIMARY`] for `None`, else the agent id as a string.
+pub fn agent_key(agent: Option<Uuid>) -> String {
+    agent.map(|a| a.to_string()).unwrap_or_else(|| PRIMARY.to_string())
+}
+
+/// The inverse of [`agent_key`]: `None` for the primary (or anything that
+/// isn't an id).
+pub fn agent_from_key(key: &str) -> Option<Uuid> {
+    Uuid::parse_str(key).ok()
+}
+
+/// Milliseconds since the Unix epoch for a [`crate::Timestamp`].
+pub fn ms(ts: &crate::Timestamp) -> i64 {
+    (ts.inner().unix_timestamp_nanos() / 1_000_000) as i64
+}
+
+/// Milliseconds since the Unix epoch, now.
+pub fn now_ms() -> i64 {
+    ms(&crate::Timestamp::now())
+}
+
+/// What role a turn played, for the role mix: proposing work, reviewing it,
+/// running tools, or a workflow stage. `conversation` is the default.
+pub mod roles {
+    pub const PROPOSER: &str = "proposer";
+    pub const REVIEWER: &str = "reviewer";
+    pub const TOOL_RUNNER: &str = "tool_runner";
+    pub const STAGE: &str = "stage";
+    pub const CONVERSATION: &str = "conversation";
+}
+
+/// Experiment arms a turn can be tagged with (shadow vs routed for routing;
+/// note vs control for the stop-upstream note).
+pub mod arms {
+    /// Routing is in shadow mode: the router only logged its pick.
+    pub const SHADOW: &str = "shadow";
+    /// The router picked who answered.
+    pub const ROUTED: &str = "routed";
+    /// Someone addressed the agent by name (or routing is off).
+    pub const DIRECT: &str = "direct";
+}
+
+/// One completed turn, tagged after it finishes: the measured facts routing
+/// and the reports read. Nothing here is the agent's own claim; `tests_passed`
+/// comes from the exit status of a test command the harness ran.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnTag {
+    /// The reply message the turn produced.
+    pub message_id: Uuid,
+    /// The message it answered, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_id: Option<Uuid>,
+    /// [`agent_key`] of the responder.
+    pub agent: String,
+    /// Runtime the turn ran on.
+    #[serde(default)]
+    pub runtime_id: String,
+    /// Host (device or worker id) the turn ran on.
+    #[serde(default)]
+    pub host_id: String,
+    pub task_class: String,
+    /// See [`roles`].
+    pub role: String,
+    /// See [`arms`]; empty when no experiment applies.
+    #[serde(default)]
+    pub arm: String,
+    /// Experiment arm of the stop-upstream note (`note` / `control`), if the
+    /// A/B split was on.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub upstream_arm: String,
+    /// The turn ended in an error (provider failure, timeout, refusal).
+    #[serde(default)]
+    pub error: bool,
+    /// Short error class when `error` (see [`route::FailureKind`]).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub error_kind: String,
+    /// Result of the last test command the turn ran, if it ran one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tests_passed: Option<bool>,
+    /// Tool calls the turn made.
+    #[serde(default)]
+    pub tool_calls: u32,
+    /// Wall-clock duration.
+    #[serde(default)]
+    pub duration_ms: i64,
+    /// Estimated cost in USD when the runtime has a configured price, else 0.
+    #[serde(default)]
+    pub cost_usd: f64,
+    /// Proposals the turn filed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proposal_ids: Vec<Uuid>,
+    /// The turn received a context parcel with its hand-off.
+    #[serde(default)]
+    pub handoff_parcel: bool,
+    pub at_ms: i64,
+}
+
+/// A unit of measured progress on a chat (e.g. a test run newly passing).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgressMark {
+    /// The turn that made the progress.
+    pub message_id: Uuid,
+    pub agent: String,
+    pub units: f64,
+    /// `tests_passing` or `diff_converged`.
+    pub kind: String,
+    pub at_ms: i64,
+}
+
+/// A file a turn changed, by opaque key only (see [`keys`]): recorded once per
+/// changed file when a proposal is applied, attributed to the producing turn.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceTouch {
+    /// The reply message of the producing turn, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<Uuid>,
+    pub proposal_id: Uuid,
+    pub agent: String,
+    /// Keyed hash of the workspace-relative path. Never the path.
+    pub file_key: String,
+    /// Keyed hash of the repository.
+    pub repo_key: String,
+    /// `edit`, `create` or `delete`.
+    pub kind: String,
+    pub at_ms: i64,
+}
+
+/// Measured waiting time at a hand-off point: a human gate (proposal created
+/// → decided), a workflow stage (prompt posted → picked up by its host) or an
+/// agent hand-off (card → the receiver's turn).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EdgeWait {
+    /// `gate`, `stage` or `handoff`.
+    pub edge: String,
+    /// Proposal id, `run:node`, or hand-off card id.
+    pub reference: String,
+    pub wait_ms: i64,
+    /// Host the work waited on (stages).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub host_id: String,
+    pub at_ms: i64,
+}
+
+/// A backpressure response that fired: more reviewers were asked, a stage was
+/// offered to an idle host, or upstream agents were told to stop opening work.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecruitNotice {
+    pub id: Uuid,
+    /// `approvers`, `idle_host` or `stop_upstream`.
+    pub action: String,
+    /// Proposals waiting at the gate when it fired.
+    #[serde(default)]
+    pub queue_len: u32,
+    /// Oldest wait at the gate.
+    #[serde(default)]
+    pub oldest_wait_ms: i64,
+    /// Members asked to review (`approvers`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub member_ids: Vec<String>,
+    /// Host the work was offered to, and the one it waited on (`idle_host`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub to_host: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub from_host: String,
+    /// `run:node` for a stage offer.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reference: String,
+    pub at_ms: i64,
+}
+
+/// The canonical "home" for a workspace — where a joining or reconnecting
+/// device should point. No secrets: never a token or passphrase.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HomeBeacon {
+    /// Relay base URL the workspace syncs through (empty = no relay).
+    #[serde(default)]
+    pub relay_url: String,
+    /// The branch chats are cut from (e.g. `main`).
+    #[serde(default)]
+    pub base_branch: String,
+    /// Host that coordinates the workspace (runs its workflows, serves the
+    /// phone), if any.
+    #[serde(default)]
+    pub coordinator_host_id: String,
+    /// Free-form note ("ask Ana for an invite").
+    #[serde(default)]
+    pub note: String,
+    #[serde(default)]
+    pub updated_by: String,
+    #[serde(default)]
+    pub at_ms: i64,
+}
+
+/// One flow record. Carried by `SessionEvent::FlowRecorded`. Records marked
+/// "config" ride the workspace-config log (workspace-scoped and authorized on
+/// ingest); the rest ride the chat they happened in.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum FlowRecord {
+    /// A routing decision for one un-addressed message (chat log).
+    RouteDecision(RouteDecision),
+    /// A finished turn's measured facts (chat log).
+    TurnTagged(TurnTag),
+    /// A hand-off card, with an optional context parcel (chat log).
+    Handoff(HandoffCard),
+    /// A file changed by an applied proposal, by opaque key (chat log).
+    Touch(WorkspaceTouch),
+    /// Measured progress (chat log).
+    Progress(ProgressMark),
+    /// Waiting time at a gate, stage or hand-off (chat log).
+    EdgeWait(EdgeWait),
+    /// A backpressure response fired (chat log).
+    Recruit(RecruitNotice),
+    /// A route pulled out of rotation until a time (config).
+    RouteStop(RouteStop),
+    /// A mark left in the workspace (config).
+    Mark(WorkspaceMark),
+    /// A mark removed (config).
+    MarkCleared { mark_id: Uuid },
+    /// A path zone set or replaced (config, admin).
+    Zone(PathZone),
+    /// A path zone removed (config, admin).
+    ZoneRemoved { zone_id: Uuid },
+    /// An agent's flow profile (career override, threshold bias) (config).
+    AgentProfile(AgentFlowProfile),
+    /// The workspace's home beacon (config, admin).
+    Beacon(HomeBeacon),
+    /// A record type from a newer build — kept in the log, inert here.
+    #[serde(other)]
+    Unknown,
+}
+
+impl FlowRecord {
+    /// Stable short name, for logs and the exporter.
+    pub fn type_str(&self) -> &'static str {
+        match self {
+            FlowRecord::RouteDecision(_) => "routeDecision",
+            FlowRecord::TurnTagged(_) => "turnTagged",
+            FlowRecord::Handoff(_) => "handoff",
+            FlowRecord::Touch(_) => "touch",
+            FlowRecord::Progress(_) => "progress",
+            FlowRecord::EdgeWait(_) => "edgeWait",
+            FlowRecord::Recruit(_) => "recruit",
+            FlowRecord::RouteStop(_) => "routeStop",
+            FlowRecord::Mark(_) => "mark",
+            FlowRecord::MarkCleared { .. } => "markCleared",
+            FlowRecord::Zone(_) => "zone",
+            FlowRecord::ZoneRemoved { .. } => "zoneRemoved",
+            FlowRecord::AgentProfile(_) => "agentProfile",
+            FlowRecord::Beacon(_) => "beacon",
+            FlowRecord::Unknown => "unknown",
+        }
+    }
+
+    /// Whether the record is workspace configuration: it rides the
+    /// workspace-config log, is workspace-scoped, and is re-authorized when a
+    /// peer's copy is folded.
+    pub fn is_config(&self) -> bool {
+        matches!(
+            self,
+            FlowRecord::RouteStop(_)
+                | FlowRecord::Mark(_)
+                | FlowRecord::MarkCleared { .. }
+                | FlowRecord::Zone(_)
+                | FlowRecord::ZoneRemoved { .. }
+                | FlowRecord::AgentProfile(_)
+                | FlowRecord::Beacon(_)
+        )
+    }
+
+    /// Whether only an admin may write it: path zones set the review bar and
+    /// the beacon tells devices where home is.
+    pub fn is_governance(&self) -> bool {
+        matches!(
+            self,
+            FlowRecord::Zone(_) | FlowRecord::ZoneRemoved { .. } | FlowRecord::Beacon(_) | FlowRecord::Unknown
+        )
+    }
+}
+
+/// How many of each high-volume record a session keeps in its projection.
+/// Older entries are dropped from the folded state (they stay in the log).
+pub const MAX_KEPT: usize = 2000;
+
+/// Flow state folded from a session's [`FlowRecord`]s.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlowState {
+    /// Routing decisions by trigger message id. First decision per trigger in
+    /// canonical order wins, so every device honours the same one.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub route_decisions: BTreeMap<Uuid, RouteDecision>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub turns: Vec<TurnTag>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub handoffs: Vec<HandoffCard>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub touches: Vec<WorkspaceTouch>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub progress: Vec<ProgressMark>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waits: Vec<EdgeWait>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recruits: Vec<RecruitNotice>,
+    /// Latest stop per route key (agent key or `runtime:<id>`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub route_stops: BTreeMap<String, RouteStop>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub marks: BTreeMap<Uuid, WorkspaceMark>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub zones: Vec<PathZone>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub profiles: BTreeMap<Uuid, AgentFlowProfile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub beacon: Option<HomeBeacon>,
+}
+
+fn push_capped<T>(v: &mut Vec<T>, item: T) {
+    v.push(item);
+    if v.len() > MAX_KEPT {
+        let drop = v.len() - MAX_KEPT;
+        v.drain(..drop);
+    }
+}
+
+impl FlowState {
+    /// Nothing recorded — keeps a session that never used flow byte-identical
+    /// when serialized (snapshots are signed over their serialized form).
+    pub fn is_empty(&self) -> bool {
+        *self == FlowState::default()
+    }
+
+    /// Fold one record. Deterministic in canonical order.
+    pub fn apply(&mut self, record: &FlowRecord) {
+        match record {
+            FlowRecord::RouteDecision(d) => {
+                self.route_decisions.entry(d.trigger_id).or_insert_with(|| d.clone());
+                if self.route_decisions.len() > MAX_KEPT {
+                    if let Some(oldest) = self
+                        .route_decisions
+                        .iter()
+                        .min_by_key(|(_, d)| d.at_ms)
+                        .map(|(k, _)| *k)
+                    {
+                        self.route_decisions.remove(&oldest);
+                    }
+                }
+            }
+            FlowRecord::TurnTagged(t) => {
+                if !self.turns.iter().any(|x| x.message_id == t.message_id) {
+                    push_capped(&mut self.turns, t.clone());
+                }
+            }
+            FlowRecord::Handoff(h) => {
+                if let Some(slot) = self.handoffs.iter_mut().find(|x| x.id == h.id) {
+                    *slot = h.clone();
+                } else {
+                    push_capped(&mut self.handoffs, h.clone());
+                }
+            }
+            FlowRecord::Touch(t) => push_capped(&mut self.touches, t.clone()),
+            FlowRecord::Progress(p) => push_capped(&mut self.progress, p.clone()),
+            FlowRecord::EdgeWait(w) => push_capped(&mut self.waits, w.clone()),
+            FlowRecord::Recruit(r) => {
+                if !self.recruits.iter().any(|x| x.id == r.id) {
+                    push_capped(&mut self.recruits, r.clone());
+                }
+            }
+            FlowRecord::RouteStop(s) => {
+                self.route_stops.insert(s.route.clone(), s.clone());
+            }
+            FlowRecord::Mark(m) => {
+                self.marks.insert(m.id, m.clone());
+            }
+            FlowRecord::MarkCleared { mark_id } => {
+                self.marks.remove(mark_id);
+            }
+            FlowRecord::Zone(z) => {
+                if let Some(slot) = self.zones.iter_mut().find(|x| x.id == z.id) {
+                    *slot = z.clone();
+                } else {
+                    self.zones.push(z.clone());
+                }
+            }
+            FlowRecord::ZoneRemoved { zone_id } => self.zones.retain(|z| &z.id != zone_id),
+            FlowRecord::AgentProfile(p) => {
+                self.profiles.insert(p.agent_id, p.clone());
+            }
+            FlowRecord::Beacon(b) => self.beacon = Some(b.clone()),
+            FlowRecord::Unknown => {}
+        }
+    }
+
+    /// The hand-off card that led to `responder`'s next turn in this chat:
+    /// the latest card addressed to it that no later turn of its own has
+    /// consumed yet.
+    pub fn pending_handoff_for(&self, agent: &str) -> Option<&HandoffCard> {
+        let card = self.handoffs.iter().rev().find(|h| h.to == agent)?;
+        let consumed = self.turns.iter().any(|t| t.agent == agent && t.at_ms > card.at_ms);
+        (!consumed).then_some(card)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_state_serializes_to_an_empty_object() {
+        assert_eq!(serde_json::to_string(&FlowState::default()).unwrap(), "{}");
+        assert!(FlowState::default().is_empty());
+    }
+
+    #[test]
+    fn unknown_record_type_decodes_as_unknown() {
+        let r: FlowRecord = serde_json::from_str(r#"{"type":"somethingNew","x":1}"#).unwrap();
+        assert_eq!(r, FlowRecord::Unknown);
+        let mut s = FlowState::default();
+        s.apply(&r);
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn first_route_decision_per_trigger_wins() {
+        let trigger = Uuid::new_v4();
+        let mut a = route::RouteDecision::shadow_example(trigger);
+        a.preferred = "a".into();
+        let mut b = a.clone();
+        b.preferred = "b".into();
+        let mut s = FlowState::default();
+        s.apply(&FlowRecord::RouteDecision(a));
+        s.apply(&FlowRecord::RouteDecision(b));
+        assert_eq!(s.route_decisions[&trigger].preferred, "a");
+    }
+
+    #[test]
+    fn config_and_governance_classes() {
+        assert!(FlowRecord::MarkCleared { mark_id: Uuid::nil() }.is_config());
+        assert!(!FlowRecord::MarkCleared { mark_id: Uuid::nil() }.is_governance());
+        assert!(FlowRecord::ZoneRemoved { zone_id: Uuid::nil() }.is_governance());
+        assert!(!FlowRecord::Progress(ProgressMark {
+            message_id: Uuid::nil(),
+            agent: PRIMARY.into(),
+            units: 1.0,
+            kind: "tests_passing".into(),
+            at_ms: 0
+        })
+        .is_config());
+    }
+
+    #[test]
+    fn agent_keys_round_trip() {
+        let id = Uuid::new_v4();
+        assert_eq!(agent_from_key(&agent_key(Some(id))), Some(id));
+        assert_eq!(agent_key(None), PRIMARY);
+        assert_eq!(agent_from_key(PRIMARY), None);
+    }
+
+    #[test]
+    fn pending_handoff_is_consumed_by_the_receivers_next_turn() {
+        let mut s = FlowState::default();
+        let card = handoff::HandoffCard::example("a", "b", 10);
+        s.apply(&FlowRecord::Handoff(card));
+        assert!(s.pending_handoff_for("b").is_some());
+        assert!(s.pending_handoff_for("a").is_none());
+        s.apply(&FlowRecord::TurnTagged(TurnTag {
+            message_id: Uuid::new_v4(),
+            trigger_id: None,
+            agent: "b".into(),
+            runtime_id: String::new(),
+            host_id: String::new(),
+            task_class: "general".into(),
+            role: roles::CONVERSATION.into(),
+            arm: String::new(),
+            upstream_arm: String::new(),
+            error: false,
+            error_kind: String::new(),
+            tests_passed: None,
+            tool_calls: 0,
+            duration_ms: 0,
+            cost_usd: 0.0,
+            proposal_ids: vec![],
+            handoff_parcel: true,
+            at_ms: 20,
+        }));
+        assert!(s.pending_handoff_for("b").is_none());
+    }
+}
