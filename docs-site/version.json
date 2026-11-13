@@ -1,6 +1,6 @@
 {
-  "tag": "v1.19.0",
-  "name": "Hive 1.19.0",
+  "tag": "v2.0.0",
+  "name": "Ligus 2.0.0",
   "url": "https://github.com/ligus-ai/ligus/releases/latest",
-  "notes": "Features: repos from the phone (list, clone, switch, pull, open a PR) with fork-aware pull requests opened upstream as drafts; whole-file proposal view so the phone renders Markdown changes; Kubernetes deployment design and a container image for the hive binary. Bridge to Ligus: LIGUS_* environment variables, .ligus/ and ligus.config.toml are read alongside the Hive names, ligus:// links are accepted, and the updater checks both the new and the original GitHub address. Hive is becoming Ligus, short for ligustica, in 2.0."
+  "notes": "Hive is now Ligus, short for ligustica. The CLI is ligus, settings are LIGUS_*, config is ligus.config.toml and workspace state lives in .ligus/; existing data (desktop data folder, .hive/, hive.config.toml, ~/.hive) moves over automatically on first use, and HIVE_* environment variables must be renamed. Features: repos from the phone with fork-aware pull requests opened upstream as drafts; whole-file proposal view so the phone renders Markdown changes; Kubernetes deployment design and a container image for the ligus binary."
 }
