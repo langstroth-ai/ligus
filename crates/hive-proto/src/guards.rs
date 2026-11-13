@@ -43,6 +43,55 @@ pub struct GuardSignalDto {
     pub attrs_json: String,
 }
 
+/// A member waiting for a second Admin's approval (dearth mode).
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct PendingJoinDto {
+    /// Member id or device id: what `approve_join` takes.
+    pub subject: String,
+    /// "member" | "device"
+    pub kind: String,
+    /// Display name (the member's, or the device owner's).
+    pub name: String,
+    /// Who added (member) or owns (device) it.
+    pub added_by: String,
+    /// Whether this person may approve it (an Admin who isn't the adder/owner).
+    pub can_approve: bool,
+}
+
+/// One way external content or traffic reaches an agent, and its state.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct EntranceDto {
+    pub name: String,
+    /// "mcp" | "web" | "shell" | "runtime"
+    pub kind: String,
+    /// "open" | "allowed" | "closed" | "refused"
+    pub state: String,
+}
+
+/// Dearth mode as the desktop shows it.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct DearthStateDto {
+    pub enabled: bool,
+    pub reason: String,
+    pub brood_paths: Vec<String>,
+    pub allowed_mcp_servers: Vec<String>,
+    pub set_by: String,
+    /// RFC 3339; empty when never set.
+    pub set_at: String,
+    /// Whether this person may switch it and approve joins (Admin+).
+    pub can_manage: bool,
+    pub default_brood_paths: Vec<String>,
+    pub pending: Vec<PendingJoinDto>,
+    /// The workspace's entrances and what dearth mode does to each.
+    pub entrances: Vec<EntranceDto>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -54,5 +103,8 @@ mod tests {
         let cfg = ts_rs::Config::new().with_out_dir(DIR);
         RunLeaseDto::export_all(&cfg).unwrap();
         GuardSignalDto::export_all(&cfg).unwrap();
+        PendingJoinDto::export_all(&cfg).unwrap();
+        EntranceDto::export_all(&cfg).unwrap();
+        DearthStateDto::export_all(&cfg).unwrap();
     }
 }

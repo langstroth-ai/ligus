@@ -77,6 +77,23 @@ an API model calling MCP tools:
 On Kubernetes the same envelope becomes the turn executor's pod spec and
 NetworkPolicy.
 
+## Dearth mode: a tighter entrance on demand
+
+An Admin can put the workspace in [dearth mode](../features/guards.md#dearth-mode)
+when it is under pressure. New members then need two different Admins, a
+newly certified device needs an Admin of another account to approve it before
+its certificate counts, agents keep only allow-listed MCP servers, and changes
+to protected paths need a human member's own approval. The switch, the join
+approvals and the votes that satisfy a human gate are all re-checked on
+ingest: a vote counts toward a human gate only when the voter it names is the
+person who signed it, and an approval carried inside a proposal snapshot never
+counts.
+
+Residual: in the default identity mode, events from a device with no
+certificate at all are still accepted (as before dearth mode); dearth mode
+withholds certificates, so it binds where certificates matter (owner-device
+enrollment, the `GithubSigningKeys` identity mode, impersonation checks).
+
 ## What this page does not cover
 
 Private key seeds live as files on disk, not in an OS keystore — see

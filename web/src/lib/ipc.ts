@@ -1333,6 +1333,25 @@ export const listGuardSignals = (afterRow?: number, kind?: string, limit?: numbe
     limit: limit ?? null,
   });
 
+// ── Workspace guards: dearth mode ──
+export type { DearthStateDto } from "@/bindings/DearthStateDto";
+export type { PendingJoinDto } from "@/bindings/PendingJoinDto";
+export type { EntranceDto } from "@/bindings/EntranceDto";
+
+export const getDearthState = () =>
+  invoke<import("@/bindings/DearthStateDto").DearthStateDto>("get_dearth_state");
+
+/// Switch dearth mode (Admin+). Lists are trimmed; empty entries dropped.
+export const setDearthMode = (
+  enabled: boolean,
+  reason: string,
+  broodPaths: string[],
+  allowedMcpServers: string[],
+) => invoke<void>("set_dearth_mode", { enabled, reason, broodPaths, allowedMcpServers });
+
+/// Approve a member or device waiting on dearth mode's second approval.
+export const approveJoin = (subject: string) => invoke<void>("approve_join", { subject });
+
 /// Fires whenever a workflow run's persisted state changes.
 export const onWorkflowRun = (
   cb: (e: WorkflowRunEvent) => void,

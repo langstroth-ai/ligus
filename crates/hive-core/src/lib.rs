@@ -20,6 +20,8 @@ pub mod identity;
 pub mod lease;
 #[cfg(test)]
 mod lease_projection_tests;
+#[cfg(test)]
+mod dearth_tests;
 pub mod model_profile;
 pub mod policy;
 pub mod process_util;

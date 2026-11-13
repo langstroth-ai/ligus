@@ -43,6 +43,8 @@ pub mod workflow_tool;
 
 #[cfg(test)]
 mod test_relay;
+#[cfg(test)]
+mod dearth_roster_tests;
 
 pub use builtin_tools::{BuiltinTools, Policy as BuiltinToolPolicy};
 pub use chat_service::{

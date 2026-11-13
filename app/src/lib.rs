@@ -5507,6 +5507,11 @@ async fn implement_proposal(
     if !proposal.ready_to_apply() {
         return Err("not approved yet — it needs quorum before it can be implemented".into());
     }
+    // Workspace guards: dearth mode (brood paths) and a chat lockdown require
+    // a human member's own signed approval, whatever the quorum says.
+    if let Some(reason) = hive_core::guard::human_gate_reason(&session, &proposal) {
+        return Err(format!("Not applied: {reason}."));
+    }
 
     // An agent-authored workflow: implementing it adds the definition. The
     // approving vote normally did this already; this covers a quorum reached
@@ -14298,6 +14303,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             guards::hand_over_workflow_run,
             guards::list_guard_signals,
+            guards::get_dearth_state,
+            guards::set_dearth_mode,
+            guards::approve_join,
             get_app_info,
             list_relay_users,
             create_relay_user,

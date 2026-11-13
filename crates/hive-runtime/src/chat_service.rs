@@ -1962,6 +1962,15 @@ impl ChatService {
                 // are governed workspace-wide). A per-session-only member (e.g. a
                 // pre-hoist `MemberAdded` or the `create_chat` creator seed) has no
                 // config counterpart, so it's preserved (union, don't drop).
+                // Dearth mode is workspace-wide: overlay it so a chat's envelope
+                // and human gates see it. While it is on, members only this chat
+                // knows about (never admitted on the config log) are dropped from
+                // its roster, except the chat's creator: the tight entrance.
+                session.guards.dearth = cfg.guards.dearth.clone();
+                if session.guards.dearth_on().is_some() {
+                    let creator = session.creator_actor_id.clone();
+                    session.members.retain(|m| m.id == creator || cfg.members.iter().any(|c| c.id == m.id));
+                }
                 for m in cfg.members {
                     if let Some(slot) = session.members.iter_mut().find(|x| x.id == m.id) {
                         *slot = m;

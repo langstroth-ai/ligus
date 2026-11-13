@@ -217,6 +217,13 @@ pub enum SessionEvent {
     /// The holder releases its lease, optionally naming a successor (planned
     /// handover). Must be signed by the holder.
     CoordinatorLeaseReleased { release: crate::lease::LeaseRelease },
+    /// Switch dearth mode (a workspace-wide tight entrance) on or off, with its
+    /// settings. Config log; Admin+, re-checked on ingest.
+    DearthModeChanged { dearth: crate::guard::DearthMode },
+    /// An Admin's approval of a pending join: `subject` is a member id (added
+    /// during dearth mode) or a device id (certified during dearth mode). A
+    /// second approval from another Admin admits it. Config log; Admin+.
+    JoinApproved { subject: String },
     /// Forward-compat catch-all: an event `kind` this build does not recognize
     /// (produced by a newer client). Serde deserializes an unknown tag here
     /// instead of failing the whole stream; it projects as a no-op. The raw
@@ -273,6 +280,8 @@ impl SessionEvent {
             SessionEvent::WorkspaceHostRemoved { .. } => "workspaceHostRemoved",
             SessionEvent::CoordinatorLeaseClaimed { .. } => "coordinatorLeaseClaimed",
             SessionEvent::CoordinatorLeaseReleased { .. } => "coordinatorLeaseReleased",
+            SessionEvent::DearthModeChanged { .. } => "dearthModeChanged",
+            SessionEvent::JoinApproved { .. } => "joinApproved",
             SessionEvent::Unknown => "unknown",
         }
     }
@@ -297,7 +306,9 @@ impl SessionEvent {
             | SessionEvent::WorkspaceRuntimeRemoved { .. }
             | SessionEvent::WorkspaceHostsUpdated { .. }
             | SessionEvent::WorkspaceHostUpserted { .. }
-            | SessionEvent::WorkspaceHostRemoved { .. } => EventScope::Workspace,
+            | SessionEvent::WorkspaceHostRemoved { .. }
+            | SessionEvent::DearthModeChanged { .. }
+            | SessionEvent::JoinApproved { .. } => EventScope::Workspace,
             SessionEvent::WorkflowRunUpserted { .. } => EventScope::Run,
             _ => EventScope::Session,
         }
@@ -602,6 +613,19 @@ impl ChatSession {
             SessionEvent::CoordinatorLeaseReleased { release } => {
                 crate::lease::fold_release(&mut self.guards.leases, release);
             }
+            SessionEvent::DearthModeChanged { dearth } => {
+                // Switching off returns to normal rules: pending joins land.
+                if !dearth.enabled {
+                    for p in std::mem::take(&mut self.guards.pending_members) {
+                        if !self.members.iter().any(|m| m.id == p.member.id) {
+                            self.members.push(p.member);
+                        }
+                    }
+                }
+                self.guards.dearth = Some(dearth.clone());
+            }
+            // Folded with its author in projection (`guard::fold_authored`).
+            SessionEvent::JoinApproved { .. } => {}
             // Unrecognized (newer-client) event — inert in this build.
             SessionEvent::Unknown => {}
         }
@@ -762,6 +786,13 @@ pub fn project_with_options(
             if !crate::authorization::evaluate(&env.payload, author, role, &session).allowed {
                 continue;
             }
+        }
+        // Guard folds that need the signed author (dearth-mode joins, verified
+        // votes). Deterministic over the canonical fold like everything above.
+        let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
+        if crate::guard::fold_authored(&mut session, &env.payload, author) {
+            session.updated_at = env.timestamp;
+            continue;
         }
         session.apply(&env.payload);
         session.updated_at = env.timestamp;

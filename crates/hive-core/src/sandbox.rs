@@ -142,8 +142,17 @@ impl SandboxEnvelope {
 
 /// The envelope a turn in `session` runs in, from the guard state the session
 /// carries (the workspace's settings are overlaid from the config log).
-pub fn envelope_for_session(_session: &crate::ChatSession) -> SandboxEnvelope {
-    SandboxEnvelope::workspace_default()
+pub fn envelope_for_session(session: &crate::ChatSession) -> SandboxEnvelope {
+    let mut env = SandboxEnvelope::workspace_default();
+    if let Some(d) = session.guards.dearth_on() {
+        // Dearth mode: agents keep only the allow-listed MCP servers.
+        env = env.tighten(
+            TightenedBy::Dearth,
+            EgressPolicy::AllowList { mcp_servers: d.allowed_mcp_servers.clone() },
+            false,
+        );
+    }
+    env
 }
 
 #[cfg(test)]

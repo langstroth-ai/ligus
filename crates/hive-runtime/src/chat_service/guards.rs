@@ -102,6 +102,53 @@ impl ChatService {
         masked
     }
 
+    /// The workspace's guard state, from its config log (dearth mode, pending
+    /// joins). Default when the config log doesn't exist yet.
+    pub fn workspace_guards(&self, workspace_id: Uuid) -> Result<hive_core::guard::GuardState> {
+        Ok(self
+            .load(hive_core::workspace_config_session_id(workspace_id))?
+            .map(|s| s.guards)
+            .unwrap_or_default())
+    }
+
+    /// Switch dearth mode. When switching on, every device trusted right now is
+    /// admitted; any other needs a second Admin approval. Admin+ (authorized
+    /// here and again on every device's ingest).
+    pub fn set_dearth_mode(&mut self, workspace_id: Uuid, mut dearth: hive_core::guard::DearthMode) -> Result<()> {
+        if dearth.enabled && dearth.admitted_devices.is_empty() {
+            let roster = build_roster(&self.store.trust_envelopes(workspace_id)?);
+            dearth.admitted_devices = roster.certified_devices();
+            // This device is always admitted by the Admin switching it on.
+            if !dearth.admitted_devices.contains(&self.device_id) {
+                dearth.admitted_devices.push(self.device_id);
+            }
+        }
+        dearth.set_by = self.author.id.clone();
+        dearth.set_at = Timestamp::now();
+        let config_id = self.ensure_workspace_config(workspace_id)?;
+        self.append_signed(config_id, workspace_id, SessionEvent::DearthModeChanged { dearth })?;
+        Ok(())
+    }
+
+    /// Approve a pending join (a member id or a device id) as this Admin.
+    pub fn approve_join(&mut self, workspace_id: Uuid, subject: &str) -> Result<()> {
+        let config_id = self.ensure_workspace_config(workspace_id)?;
+        self.append_signed(config_id, workspace_id, SessionEvent::JoinApproved { subject: subject.to_string() })?;
+        Ok(())
+    }
+
+    /// Devices certified during dearth mode still waiting for a second
+    /// approval, as `(device, account)`.
+    pub fn pending_devices(&self, workspace_id: Uuid) -> Result<Vec<(Uuid, Uuid)>> {
+        let roster = build_roster(&self.store.trust_envelopes(workspace_id)?);
+        Ok(roster
+            .pending_devices()
+            .iter()
+            .filter(|(ws, ..)| *ws == workspace_id)
+            .map(|(_, d, a)| (*d, *a))
+            .collect())
+    }
+
     /// Record a device-local guard signal (never synced).
     pub fn record_signal(&self, workspace_id: Uuid, session_id: Option<Uuid>, signal: &GuardSignal) -> Result<()> {
         self.store.record_signal(workspace_id, session_id, signal)?;
@@ -183,6 +230,32 @@ mod tests {
         let s = svc.load(chat.id).unwrap().unwrap();
         assert!(s.messages.iter().any(|m| m.body.contains("[redacted aws_access_key]")));
         assert_eq!(svc.list_signals(ws, 0, Some("hygiene"), 10).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn dearth_round_trip_admits_current_devices_and_gates_on_role() {
+        let mut svc = service();
+        let ws = Uuid::new_v4();
+        svc.ensure_workspace_config(ws).unwrap();
+        let d = hive_core::guard::DearthMode {
+            enabled: true,
+            reason: "untrusted repo".into(),
+            brood_paths: vec![".github/**".into()],
+            allowed_mcp_servers: vec![],
+            admitted_devices: vec![],
+            set_by: String::new(),
+            set_at: Timestamp::now(),
+        };
+        svc.set_dearth_mode(ws, d).unwrap();
+        let g = svc.workspace_guards(ws).unwrap();
+        let on = g.dearth_on().unwrap();
+        assert!(on.admitted_devices.contains(&svc.device_id()));
+        assert_eq!(on.set_by, svc.author().id);
+        // A chat in the workspace sees it (overlay) and gets the tighter envelope.
+        let chat = svc.create_chat("c", ws, "anthropic").unwrap();
+        let s = svc.load(chat.id).unwrap().unwrap();
+        assert!(s.guards.dearth_on().is_some());
+        assert!(!hive_core::sandbox::envelope_for_session(&s).egress.is_open());
     }
 
     #[test]

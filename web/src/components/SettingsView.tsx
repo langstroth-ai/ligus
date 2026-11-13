@@ -24,6 +24,7 @@ import { PermissionsSection } from "@/components/settings/PermissionsSection";
 import { UpdatesSection } from "@/components/settings/UpdatesSection";
 import { DiagnosticsSection } from "@/components/settings/DiagnosticsSection";
 import { DangerZoneSection } from "@/components/settings/DangerZoneSection";
+import { GuardsSection } from "@/components/guards/GuardsSection";
 
 // ── Grouped nav (§6.5) ──────────────────────────────────────────────────────
 // Settings is grouped by who a setting affects, not by a flat tab strip.
@@ -32,6 +33,7 @@ export type SettingsTab =
   | "appearance"
   | "folder-git"
   | "team-sync"
+  | "guards"
   | "schedules"
   | "models"
   | "tools"
@@ -59,6 +61,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: "folder-git", label: "Folder & Git", icon: <IconFile size={16} />, keywords: ["project", "folder", "directory", "path", "git", "branch", "repo"] },
       { id: "team-sync", label: "Team sync", icon: <IconUsers size={16} />, keywords: ["relay", "e2ee", "encryption", "sync", "token", "invite", "p2p", "peer", "collaborate"] },
+      { id: "guards", label: "Guards", icon: <IconLock size={16} />, keywords: ["dearth", "security", "lockdown", "entrance", "approval", "throttle", "lease", "sandbox", "egress"] },
       { id: "schedules", label: "Schedules", icon: <IconActivity size={16} />, keywords: ["cron", "recurring", "timer", "automation"] },
     ],
   },
@@ -104,6 +107,10 @@ export function parseSettingsTab(raw: string | undefined | null): SettingsTab {
     case "team-sync":
     case "team":
       return "team-sync";
+    case "guards":
+    case "security":
+    case "dearth":
+      return "guards";
     case "schedules":
       return "schedules";
     case "models":
@@ -229,6 +236,7 @@ export function SettingsView({
           )}
           {tab === "folder-git" && <FolderGitSection />}
           {tab === "team-sync" && <TeamSyncSection />}
+          {tab === "guards" && <GuardsSection />}
           {tab === "schedules" && <SchedulesSection />}
           {tab === "models" && <ModelsSection />}
           {tab === "tools" && <ToolsSection />}

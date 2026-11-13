@@ -111,6 +111,8 @@ pub fn requires_projection_authz(event: &SessionEvent) -> bool {
             | SessionEvent::DeviceRevoked { .. }
             | SessionEvent::CoordinatorLeaseClaimed { .. }
             | SessionEvent::CoordinatorLeaseReleased { .. }
+            | SessionEvent::DearthModeChanged { .. }
+            | SessionEvent::JoinApproved { .. }
     )
 }
 
@@ -199,7 +201,10 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         | SessionEvent::WorkspaceRuntimeRemoved { .. }
         // Revoking a device cuts trust — governance, admin+ (unlike publishing your
         // own account key/cert, which is a self-validated bootstrap at a low floor).
-        | SessionEvent::DeviceRevoked { .. } => WorkspaceRole::Admin,
+        | SessionEvent::DeviceRevoked { .. }
+        // Dearth mode and join approvals are governance (the entrance policy).
+        | SessionEvent::DearthModeChanged { .. }
+        | SessionEvent::JoinApproved { .. } => WorkspaceRole::Admin,
         // content / collaboration
         SessionEvent::SessionSnapshot { .. }
         | SessionEvent::MessageAppended { .. }
@@ -284,6 +289,12 @@ fn self_enroll_allowance(
     // First member of a brand-new workspace: the creator seeds themselves.
     if session.members.is_empty() {
         return Some(AuthzDecision::allow_reason(AuthzReason::SelfEnroll));
+    }
+    // Dearth mode suspends self-enrollment: a newcomer must be added by an
+    // Admin (and then approved by a second one). An idempotent re-add of an
+    // existing member at the same role is still fine.
+    if session.guards.dearth_on().is_some() && !session.members.iter().any(|m| m.id == actor_id) {
+        return None;
     }
     match session.members.iter().find(|m| m.id == actor_id) {
         // Already a member: allowed only if the role is unchanged (idempotent

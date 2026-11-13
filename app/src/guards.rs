@@ -642,6 +642,144 @@ pub(crate) fn record_egress_refusal(state: &AppState, workspace_id: Uuid, sessio
     );
 }
 
+// ---------------------------------------------------------------------------
+// Dearth mode
+// ---------------------------------------------------------------------------
+
+/// Dearth mode for the active workspace, with pending joins and what it does
+/// to each entrance.
+#[tauri::command]
+pub(crate) fn get_dearth_state(state: State<AppState>) -> Result<hive_proto::DearthStateDto, String> {
+    let ws = state.active_workspace_id();
+    let servers = state.combined_mcp_servers();
+    let runtimes = state.combined_runtimes();
+    let svc = state.service.lock().unwrap();
+    let me = svc.author().id.clone();
+    let config = svc.load(hive_core::workspace_config_session_id(ws)).map_err(map_err)?;
+    let guards = config.as_ref().map(|c| c.guards.clone()).unwrap_or_default();
+    let members = config.as_ref().map(|c| c.members.clone()).unwrap_or_default();
+    let my_role = config.as_ref().map(|c| c.role_of(&me)).unwrap_or(hive_core::WorkspaceRole::Owner);
+    let can_manage = my_role.rank() >= hive_core::WorkspaceRole::Admin.rank() || config.is_none();
+    let name_of = |id: &str| members.iter().find(|m| m.id == id).map(|m| m.actor.display_name.clone()).unwrap_or_else(|| id.to_string());
+    let mut pending: Vec<hive_proto::PendingJoinDto> = guards
+        .pending_members
+        .iter()
+        .map(|p| hive_proto::PendingJoinDto {
+            subject: p.member.id.clone(),
+            kind: "member".into(),
+            name: p.member.actor.display_name.clone(),
+            added_by: name_of(&p.added_by),
+            can_approve: can_manage && p.added_by != me,
+        })
+        .collect();
+    let my_account = svc.author().account_id;
+    for (device, account) in svc.pending_devices(ws).map_err(map_err)? {
+        let owner = members.iter().find(|m| m.actor.account_id == Some(account));
+        pending.push(hive_proto::PendingJoinDto {
+            subject: device.to_string(),
+            kind: "device".into(),
+            name: format!("Device {}", &device.to_string()[..8]),
+            added_by: owner.map(|m| m.actor.display_name.clone()).unwrap_or_default(),
+            can_approve: can_manage && my_account != Some(account),
+        });
+    }
+    let d = guards.dearth.clone();
+    let on = guards.dearth_on().is_some();
+    let egress = d
+        .as_ref()
+        .filter(|d| d.enabled)
+        .map(|d| hive_core::sandbox::EgressPolicy::AllowList { mcp_servers: d.allowed_mcp_servers.clone() })
+        .unwrap_or(hive_core::sandbox::EgressPolicy::Open);
+    let mut entrances: Vec<hive_proto::EntranceDto> = servers
+        .iter()
+        .filter(|s| s.enabled)
+        .map(|s| hive_proto::EntranceDto {
+            name: s.id.clone(),
+            kind: "mcp".into(),
+            state: if !on { "open" } else if egress.allows_mcp(&s.id) { "allowed" } else { "closed" }.into(),
+        })
+        .collect();
+    let closed = if on { "closed" } else { "open" };
+    entrances.push(hive_proto::EntranceDto { name: "Web fetch and search (Claude Code)".into(), kind: "web".into(), state: closed.into() });
+    entrances.push(hive_proto::EntranceDto { name: "Shell (Bash, run_command)".into(), kind: "shell".into(), state: closed.into() });
+    let mut seen = std::collections::HashSet::new();
+    for rt in runtimes.iter() {
+        if hive_runtime::sandbox::confinable(rt.provider_kind) || !seen.insert(rt.provider_kind) {
+            continue;
+        }
+        entrances.push(hive_proto::EntranceDto {
+            name: format!("{:?} agents", rt.provider_kind),
+            kind: "runtime".into(),
+            state: if on { "refused" } else { "open" }.into(),
+        });
+    }
+    Ok(hive_proto::DearthStateDto {
+        enabled: on,
+        reason: d.as_ref().map(|d| d.reason.clone()).unwrap_or_default(),
+        brood_paths: d
+            .as_ref()
+            .map(|d| d.brood_paths.clone())
+            .unwrap_or_else(|| hive_core::guard::DEFAULT_BROOD_PATHS.iter().map(|s| s.to_string()).collect()),
+        allowed_mcp_servers: d.as_ref().map(|d| d.allowed_mcp_servers.clone()).unwrap_or_default(),
+        set_by: d.as_ref().map(|d| name_of(&d.set_by)).unwrap_or_default(),
+        set_at: d.as_ref().map(|d| crate::rfc3339(d.set_at)).unwrap_or_default(),
+        can_manage,
+        default_brood_paths: hive_core::guard::DEFAULT_BROOD_PATHS.iter().map(|s| s.to_string()).collect(),
+        pending,
+        entrances,
+    })
+}
+
+/// Switch dearth mode on or off for the active workspace (Admin+).
+#[tauri::command]
+pub(crate) fn set_dearth_mode(
+    app: AppHandle,
+    state: State<AppState>,
+    enabled: bool,
+    reason: String,
+    brood_paths: Vec<String>,
+    allowed_mcp_servers: Vec<String>,
+) -> Result<(), String> {
+    let ws = state.active_workspace_id();
+    let clean = |v: Vec<String>| -> Vec<String> {
+        v.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+    };
+    let dearth = hive_core::guard::DearthMode {
+        enabled,
+        reason: reason.trim().chars().take(200).collect(),
+        brood_paths: clean(brood_paths),
+        allowed_mcp_servers: clean(allowed_mcp_servers),
+        admitted_devices: Vec::new(),
+        set_by: String::new(),
+        set_at: hive_core::Timestamp::now(),
+    };
+    state.service.lock().unwrap().set_dearth_mode(ws, dearth).map_err(map_err)?;
+    let _ = tauri::Emitter::emit(&app, "workspace://synced", 1);
+    Ok(())
+}
+
+/// Approve a member or device waiting on dearth mode's second approval.
+#[tauri::command]
+pub(crate) fn approve_join(app: AppHandle, state: State<AppState>, subject: String) -> Result<(), String> {
+    let ws = state.active_workspace_id();
+    let mut svc = state.service.lock().unwrap();
+    svc.approve_join(ws, subject.trim()).map_err(map_err)?;
+    let _ = svc.record_signal(
+        ws,
+        None,
+        &GuardSignal::GuardDecision {
+            gate: hive_core::signal::GuardGate::DeviceJoin,
+            verdict: hive_core::signal::GuardVerdict::Accept,
+            subject: hive_core::signal::GuardSubject::Unknown,
+            source: "approval".into(),
+            reason: "second_approval".into(),
+        },
+    );
+    drop(svc);
+    let _ = tauri::Emitter::emit(&app, "workspace://synced", 1);
+    Ok(())
+}
+
 /// Whether a run is in a state a coordinator drives.
 pub(crate) fn is_live_status(status: WorkflowRunStatus) -> bool {
     matches!(status, WorkflowRunStatus::Running | WorkflowRunStatus::AwaitingGate)
