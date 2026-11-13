@@ -14335,6 +14335,8 @@ pub fn run() {
             flow::flow_remove_zone,
             flow::flow_roster,
             flow::flow_set_agent_profile,
+            flow::flow_board,
+            flow::flow_pickup,
             workflows::remove_workflow,
             workflows::set_workflow_enabled,
             workflows::workflow_change_request,

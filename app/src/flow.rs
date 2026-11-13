@@ -12,7 +12,7 @@ use hive_core::flow::{self, FlowRecord, FlowState, HandoffCard, RouteDecision, R
 use hive_core::{ChatMessage, ChatSession, MessageRole};
 use hive_runtime::provider::ChatTurn;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
 use hive_runtime::chat_service::ChatService;
@@ -53,6 +53,9 @@ pub(crate) struct FlowSettings {
     /// Show active workspace marks in every agent turn's context, and teach
     /// agents the mark directives.
     pub marks_in_context: bool,
+    /// Opt-in: agents pick up task-board work on their own when an item's
+    /// stimulus crosses their threshold (otherwise the board only suggests).
+    pub board_auto_pickup: bool,
 }
 
 impl Default for FlowSettings {
@@ -70,6 +73,7 @@ impl Default for FlowSettings {
             recruit_approvers: false,
             offer_idle_host: false,
             marks_in_context: true,
+            board_auto_pickup: false,
         }
     }
 }
@@ -497,6 +501,177 @@ pub(crate) fn flow_set_agent_profile(
 }
 
 // ---------------------------------------------------------------------------
+// Threshold task board
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BoardRow {
+    #[serde(flatten)]
+    pub item: flow::BoardItem,
+    pub chat_title: String,
+    /// Who would pick it up now (threshold crossed by the most), if anyone.
+    pub suggested: Option<String>,
+    pub suggested_name: Option<String>,
+    /// Lowest threshold among free agents: the stimulus it still needs.
+    pub nearest_threshold: Option<f64>,
+}
+
+struct BoardAgent {
+    key: String,
+    name: String,
+    agent: Option<hive_core::WorkspaceAgent>,
+}
+
+fn board_agents(view: &WorkspaceView) -> Vec<BoardAgent> {
+    std::iter::once(BoardAgent { key: flow::PRIMARY.into(), name: "primary".into(), agent: None })
+        .chain(roster(view).into_iter().map(|a| BoardAgent { key: flow::agent_key(Some(a.id)), name: a.name.clone(), agent: Some(a) }))
+        .collect()
+}
+
+/// Agents with an unanswered mention, or in a route cool-down, are busy.
+fn busy_agents(view: &WorkspaceView, now: i64) -> std::collections::HashSet<String> {
+    let mut out: std::collections::HashSet<String> = view
+        .sessions
+        .iter()
+        .flat_map(|s| hive_runtime::pending_mentions(s).into_iter().map(|p| flow::agent_key(Some(p.agent_id))))
+        .collect();
+    for (k, st) in &view.config.route_stops {
+        if st.active(now) {
+            out.insert(k.clone());
+        }
+    }
+    out
+}
+
+/// The open items with who would pick each up.
+pub(crate) fn board(view: &WorkspaceView, now: i64) -> Vec<BoardRow> {
+    let marks: Vec<&flow::WorkspaceMark> = view.config.marks.values().collect();
+    let items = flow::board::open_items(&view.sessions, &marks, now);
+    let careers = careers(view);
+    let busy = busy_agents(view, now);
+    let agents = board_agents(view);
+    let pickers: Vec<flow::board::Picker<'_>> = agents
+        .iter()
+        .map(|a| flow::board::Picker {
+            agent: a.key.clone(),
+            name: a.name.clone(),
+            career: careers.get(&a.key).map(|c| c.0).unwrap_or(flow::Career::Proposer),
+            profile: a.agent.as_ref().and_then(|x| view.config.profiles.get(&x.id)),
+            busy: busy.contains(&a.key),
+        })
+        .collect();
+    items
+        .into_iter()
+        .map(|item| {
+            let core = flow::zones::review_bar(&view.config.zones, &item.files).is_some_and(|(_, _, k)| k == flow::ZoneKind::Core);
+            let author = item
+                .proposal_id
+                .and_then(|pid| view.sessions.iter().flat_map(|s| s.proposals.iter()).find(|p| p.id == pid))
+                .map(|p| p.producing_agent_id.map(|id| flow::agent_key(Some(id))).unwrap_or_else(|| p.author_actor_id.clone()));
+            let pick = if item.claimed_by.is_empty() { flow::board::pick(&item, &pickers, author.as_deref(), core) } else { None };
+            let nearest = pickers
+                .iter()
+                .filter(|p| !p.busy)
+                .map(|p| flow::board::threshold(&p.agent, p.career, item.kind, p.profile, core))
+                .filter(|t| t.is_finite())
+                .min_by(f64::total_cmp);
+            BoardRow {
+                chat_title: view.sessions.iter().find(|s| s.id == item.session_id).map(|s| s.title.clone()).unwrap_or_default(),
+                suggested: pick.map(|p| p.agent.clone()),
+                suggested_name: pick.map(|p| p.name.clone()),
+                nearest_threshold: nearest,
+                item,
+            }
+        })
+        .collect()
+}
+
+/// Open, unassigned work (Flow → Board).
+#[tauri::command]
+pub(crate) fn flow_board(state: State<'_, AppState>) -> Vec<BoardRow> {
+    let wid = state.active_workspace_id();
+    board(&workspace_view(&state, wid), flow::now_ms())
+}
+
+/// Hand a board item to an agent: claim it with a mark and post the task in
+/// the item's chat addressed to the agent, which runs through the normal
+/// dispatch on whichever device or host runs that agent.
+pub(crate) async fn pickup(app: &AppHandle, state: &State<'_, AppState>, item_id: &str, agent: Option<String>) -> Result<(), String> {
+    let wid = state.active_workspace_id();
+    let now = flow::now_ms();
+    let view = workspace_view(state, wid);
+    let rows = board(&view, now);
+    let row = rows.into_iter().find(|r| r.item.id == item_id).ok_or("that item is no longer open")?;
+    if !row.item.claimed_by.is_empty() {
+        return Err(format!("{} already took it", row.item.claimed_by));
+    }
+    let key = agent.or(row.suggested).ok_or("no agent's threshold is crossed yet — pick one")?;
+    let agents = board_agents(&view);
+    let who = agents.iter().find(|a| a.key == key).ok_or("unknown agent")?;
+    let sid = if row.item.session_id.is_nil() {
+        view.sessions.iter().filter(|s| !s.archived).max_by_key(|s| s.last_activity_at()).map(|s| s.id).ok_or("no chat to post in")?
+    } else {
+        row.item.session_id
+    };
+    let mark = flow::WorkspaceMark {
+        id: Uuid::new_v4(),
+        kind: flow::MarkKind::Claim,
+        path: String::new(),
+        lines: None,
+        task_id: row.item.id.clone(),
+        note: row.item.title.clone(),
+        agent: key.clone(),
+        by: who.name.clone(),
+        session_id: Some(sid),
+        at_ms: now,
+        expires_ms: flow::MarkKind::Claim.default_ttl_ms().map(|t| now + t),
+    };
+    let posted = {
+        let mut svc = state.service.lock().unwrap();
+        svc.record_flow(sid, wid, FlowRecord::Mark(mark)).map_err(map_err)?;
+        svc.post_user_message(sid, wid, &flow::board::pickup_message(&row.item, &who.name)).map_err(map_err)?
+    };
+    let _ = app.emit("workspace://synced", 1);
+    crate::respond_once(app, state, sid, Some(posted.id), true).await
+}
+
+#[tauri::command]
+pub(crate) async fn flow_pickup(app: AppHandle, state: State<'_, AppState>, item_id: String, agent: Option<String>) -> Result<(), String> {
+    pickup(&app, &state, &item_id, agent).await
+}
+
+/// Opt-in auto pickup: hand at most one crossed item per tick to its picker,
+/// when that agent runs on this device and the item's chat is free.
+async fn auto_pickup(app: &AppHandle, state: &State<'_, AppState>) {
+    if !settings(state).board_auto_pickup {
+        return;
+    }
+    let wid = state.active_workspace_id();
+    let view = workspace_view(state, wid);
+    let here = state.local_host_id();
+    let me = state.local_actor_id();
+    let local_only = state.is_local_only_ws(wid);
+    let busy_chats = state.responding.lock().unwrap().clone();
+    let agents = board_agents(&view);
+    let runs_here = |key: &str| {
+        agents.iter().find(|a| a.key == key).is_some_and(|a| match &a.agent {
+            None => true,
+            Some(x) => local_only || x.host_id == here || (x.host_id.is_empty() && (x.owner_actor_id.is_empty() || x.owner_actor_id == me)),
+        })
+    };
+    let Some(row) = board(&view, flow::now_ms())
+        .into_iter()
+        .find(|r| r.item.claimed_by.is_empty() && r.suggested.as_deref().is_some_and(runs_here) && !busy_chats.contains(&r.item.session_id))
+    else {
+        return;
+    };
+    if let Err(e) = pickup(app, state, &row.item.id, row.suggested.clone()).await {
+        tracing::info!(target: "flow", item = %row.item.id, "auto pickup skipped: {e}");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Reply directives: stripped in `finalize_reply`, applied after the turn.
 // ---------------------------------------------------------------------------
 
@@ -876,8 +1051,8 @@ fn unseen_recruits_for_me(state: &AppState, view: &WorkspaceView, now: i64) -> V
     out
 }
 
-/// Background flow tick (every 30 s): reviewer-recruit notifications for
-/// this device's user.
+/// Background flow tick (every 30 s): opt-in task-board pickup, and
+/// reviewer-recruit notifications for this device's user.
 pub(crate) async fn run_tick(app: AppHandle) {
     use tauri::Manager;
     use tauri_plugin_notification::NotificationExt;
@@ -887,6 +1062,7 @@ pub(crate) async fn run_tick(app: AppHandle) {
         let wid = state.active_workspace_id();
         let view = workspace_view(&state, wid);
         let now = flow::now_ms();
+        auto_pickup(&app, &state).await;
         for r in unseen_recruits_for_me(&state, &view, now) {
             let _ = app
                 .notification()
@@ -1899,6 +2075,26 @@ diff --git a/old.txt b/old.txt\ndeleted file mode 100644\n";
         assert_eq!(c[flow::PRIMARY].0, flow::Career::Proposer);
         assert_eq!(c[&vet].0, flow::Career::Proposer);
         assert_eq!(c[&new].0, flow::Career::Probation);
+    }
+
+    #[test]
+    fn board_suggests_the_agent_whose_threshold_is_crossed_most() {
+        let mut s = session_with(&["veteran", "newbie"]);
+        s.workspace_agents[1].created_at = hive_core::Timestamp::from_unix_seconds(CAREERS_SINCE_UNIX + 10);
+        let newbie = flow::agent_key(Some(s.workspace_agents[1].id));
+        let mut p = hive_core::ActionProposal::new("Rename parser", hive_core::ProposalKind::Decision, "veteran");
+        p.created_at = hive_core::Timestamp::from_unix_seconds(1_000);
+        s.proposals.push(p);
+        let view = WorkspaceView { sessions: Arc::new(vec![s]), config: Arc::new(FlowState::default()) };
+        let rows = board(&view, 1_000_000 + 8 * 3_600_000);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].item.kind, flow::BoardItemKind::UnreviewedProposal);
+        // The agent on probation takes review work first; the author never reviews its own.
+        assert_eq!(rows[0].suggested.as_deref(), Some(newbie.as_str()));
+        // A fresh item calls less strongly.
+        let fresh = board(&view, 1_000_000);
+        assert!(fresh[0].item.stimulus < rows[0].item.stimulus);
+        assert!(fresh[0].nearest_threshold.is_some());
     }
 
     #[test]

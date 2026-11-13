@@ -5,13 +5,15 @@ import { QueueSection } from "@/components/flow/QueueSection";
 import { MarksSection } from "@/components/flow/MarksSection";
 import { ZonesSection } from "@/components/flow/ZonesSection";
 import { RosterSection } from "@/components/flow/RosterSection";
+import { BoardSection } from "@/components/flow/BoardSection";
 
 /// The Flow pane: how work moves through the workspace — who the router
 /// would send un-addressed work to, and (as more of flow lands) the task
 /// board, workspace marks and the review queue.
-export type FlowTab = "queue" | "marks" | "routing" | "roster" | "zones";
+export type FlowTab = "board" | "queue" | "marks" | "routing" | "roster" | "zones";
 
 const TABS: { id: FlowTab; label: string }[] = [
+  { id: "board", label: "Board" },
   { id: "queue", label: "Queue" },
   { id: "marks", label: "Marks" },
   { id: "routing", label: "Routing" },
@@ -19,7 +21,7 @@ const TABS: { id: FlowTab; label: string }[] = [
   { id: "zones", label: "Zones" },
 ];
 
-export function FlowPane({ initialTab = "queue" }: { initialTab?: FlowTab }) {
+export function FlowPane({ initialTab = "board" }: { initialTab?: FlowTab }) {
   const [tab, setTab] = useState<FlowTab>(initialTab);
   return (
     <RailFrame title="Flow" subtitle="Who picks up work, where it waits, and what agents left for each other.">
@@ -30,6 +32,7 @@ export function FlowPane({ initialTab = "queue" }: { initialTab?: FlowTab }) {
           </TabButton>
         ))}
       </div>
+      {tab === "board" && <BoardSection />}
       {tab === "queue" && <QueueSection />}
       {tab === "marks" && <MarksSection />}
       {tab === "routing" && <RoutingSection />}

@@ -320,3 +320,31 @@ export const CAREER_LABEL: Record<Career, string> = {
   proposer: "Proposer (full range)",
   reviewer: "Reviewer duty",
 };
+
+export type BoardItemKind = "failingTests" | "unreviewedProposal" | "failedStage" | "needsReview";
+
+export interface BoardRow {
+  id: string;
+  kind: BoardItemKind;
+  title: string;
+  sessionId: string;
+  proposalId?: string;
+  files?: string[];
+  sinceMs: number;
+  stimulus: number;
+  claimedBy?: string;
+  chatTitle: string;
+  suggested: string | null;
+  suggestedName: string | null;
+  nearestThreshold: number | null;
+}
+
+export const listBoard = () => invoke<BoardRow[]>("flow_board");
+export const pickupItem = (itemId: string, agent?: string) => invoke<void>("flow_pickup", { itemId, agent: agent ?? null });
+
+export const BOARD_KIND_LABEL: Record<BoardItemKind, string> = {
+  failingTests: "Failing tests",
+  unreviewedProposal: "Unreviewed proposal",
+  failedStage: "Failed stage",
+  needsReview: "Needs review",
+};

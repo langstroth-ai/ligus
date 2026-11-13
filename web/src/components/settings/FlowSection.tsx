@@ -77,6 +77,14 @@ export function FlowSection() {
           <Switch on={s.offerIdleHost} onChange={(v) => set({ offerIdleHost: v })} label="Take queued stages when idle" />
         </Row>
       </Section>
+      <Section title="Task board">
+        <Row
+          label="Agents pick up work on their own"
+          hint="When an open item's stimulus crosses an agent's threshold, hand it over without asking (one at a time, only for agents that run on this device). Off: the board suggests and you hand items over."
+        >
+          <Switch on={s.boardAutoPickup} onChange={(v) => set({ boardAutoPickup: v })} label="Task board auto pickup" />
+        </Row>
+      </Section>
       <Section title="Workspace marks">
         <Row label="Marks in agent context" hint="Show active claims, locks and review markers to every agent turn, and teach agents to leave their own.">
           <Switch on={s.marksInContext} onChange={(v) => set({ marksInContext: v })} label="Marks in agent context" />
