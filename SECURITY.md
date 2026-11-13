@@ -1,6 +1,6 @@
 # Security Policy
 
-Hive handles end-to-end-encrypted workspaces, device keypairs, and a relay that
+Ligus handles end-to-end-encrypted workspaces, device keypairs, and a relay that
 forwards ciphertext. We take vulnerabilities seriously and appreciate coordinated
 disclosure.
 
@@ -25,7 +25,7 @@ In scope:
 - **`hive-core` crypto & signed envelopes** — Ed25519 identity, X25519 key
   agreement, ChaCha20-Poly1305, HPKE per-device sealing, envelope
   verification/quarantine.
-- **The relay** ([github.com/honeyhive-ai/relay](https://github.com/honeyhive-ai/relay))
+- **The relay** ([github.com/ligus-ai/relay](https://github.com/ligus-ai/relay))
   — entitlement gating, content-blind forwarding (it must never be able to read
   plaintext), the `hrt1` token format.
 - **Sync / P2P** — rendezvous, STUN/hole-punch, TURN fallback, workspace-key
@@ -39,7 +39,7 @@ choose to run; social-engineering; issues requiring a already-compromised device
 
 ## Supported versions
 
-Hive is pre-1.0 and moves fast — fixes land on `main`. Please test against the
+Ligus is pre-1.0 and moves fast — fixes land on `main`. Please test against the
 latest `main` (or the newest release) before reporting.
 
 ## Handling

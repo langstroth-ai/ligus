@@ -1,8 +1,8 @@
 # Collaborators, presence & DMs
 
-Beyond sharing a workspace, Hive lets you connect with people directly by their
+Beyond sharing a workspace, Ligus lets you connect with people directly by their
 **GitHub username** — see who's online, and message them one-to-one. It's the
-consumer-grade side of Hive's identity model; the workspace-level sharing flow is
+consumer-grade side of Ligus's identity model; the workspace-level sharing flow is
 covered in [Invites & joining](invites.md).
 
 ![Collaborators](../images/collaborators.png){ width="820" }
@@ -20,7 +20,7 @@ looking someone up only sends a signed request, stamped with your verified GitHu
 identity so it can't be spoofed.
 
 > **Username-only.** You can only reach someone by their exact GitHub handle (no
-> email/enumeration), and they must have signed into Hive at least once.
+> email/enumeration), and they must have signed into Ligus at least once.
 
 ## Presence
 
@@ -44,11 +44,11 @@ ever sees ciphertext. DMs live in the Friends section, not the workspace rail.
 ## How it syncs
 
 - **Identity** is your GitHub account (`github:<id>`), shared across your devices;
-  commits Hive makes on your behalf are attributed to you.
+  commits Ligus makes on your behalf are attributed to you.
 - **Requests, presence, and DM keys** flow through a relay you can
-  [self-host](../networking/self-host.md) (or Hive Cloud). Everything sensitive is
+  [self-host](../networking/self-host.md) (or Ligus Cloud). Everything sensitive is
   end-to-end encrypted.
-- Once two devices are connected, Hive will also try a **direct peer-to-peer**
+- Once two devices are connected, Ligus will also try a **direct peer-to-peer**
   link (see [Rendezvous](../networking/rendezvous.md) and
   [TURN fallback](../networking/turn.md)), falling back to relay forwarding.
 

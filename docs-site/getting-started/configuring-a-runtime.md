@@ -1,7 +1,7 @@
 # Configuring a runtime
 
 A *runtime* is whatever LLM (or CLI agent) actually generates the
-replies in a chat. Hive doesn't talk to a single hard-coded provider
+replies in a chat. Ligus doesn't talk to a single hard-coded provider
 — you configure as many runtimes as you want, and chats pick one per
 session.
 
@@ -28,9 +28,9 @@ Open **Settings → Models** to add or edit.
 | `custom`          | OpenAI-compatible HTTP endpoint                   | varies                    | varies |
 
 `claude-code`, `aider`, `pi`, `codex`, `antigravity`, `copilot` and
-`hermes` are the **subprocess** runtimes: Hive launches a local CLI, which
+`hermes` are the **subprocess** runtimes: Ligus launches a local CLI, which
 brings its own tools and its own login, so these runtimes need no API key
-in Hive. To point Hive at some other OpenAI-compatible server, use
+in Ligus. To point Ligus at some other OpenAI-compatible server, use
 `custom`.
 
 ## Provider presets
@@ -57,7 +57,7 @@ and API key as needed.
 
 ## Runtime config schema
 
-Each runtime is a `[[runtimes]]` block in `hive.config.toml`. The
+Each runtime is a `[[runtimes]]` block in `ligus.config.toml`. The
 Settings UI is a GUI over the same fields:
 
 ```toml
@@ -91,7 +91,7 @@ every field.
 
 ## API providers — environment variables
 
-For API providers, Hive can read the credential from an environment
+For API providers, Ligus can read the credential from an environment
 variable you control. Set it in your shell config before launching:
 
 ```bash
@@ -106,12 +106,12 @@ relaunching picks up new ones. Note that a key you paste into
 **Settings → Models** is **saved to disk** in `settings.json` under
 the app data dir (so it persists across launches); it is stored in
 plain text, protected only by your OS account and disk encryption. Use
-the env-var path if you'd rather the key never be written by Hive.
+the env-var path if you'd rather the key never be written by Ligus.
 
 ## Subprocess agents — installing the binary
 
 Aider and pi are user-supplied CLIs; install them yourself and point
-Hive at the binary:
+Ligus at the binary:
 
 === "Aider"
 
@@ -121,19 +121,19 @@ Hive at the binary:
     # → /usr/local/bin/aider
     ```
 
-    Then point Hive at `/usr/local/bin/aider`.
+    Then point Ligus at `/usr/local/bin/aider`.
 
 === "pi"
 
     Install the **pi** CLI (an OpenAI-compatible coding-agent backend),
-    then point Hive at its binary:
+    then point Ligus at its binary:
 
     ```bash
     which pi
     # → /usr/local/bin/pi
     ```
 
-    Hive bootstraps a temporary `models.json` and `PI_CODING_AGENT_DIR`
+    Ligus bootstraps a temporary `models.json` and `PI_CODING_AGENT_DIR`
     so `pi` can reach your configured OpenAI-compatible endpoint (see
     `crates/hive-runtime/src/provider/subprocess.rs`).
 
@@ -143,11 +143,11 @@ described under [Provider presets](#provider-presets).
 
 ## Subscription CLIs: Google Antigravity and GitHub Copilot
 
-If you pay for **Google AI Pro / Ultra** or **GitHub Copilot**, Hive can use
+If you pay for **Google AI Pro / Ultra** or **GitHub Copilot**, Ligus can use
 that subscription through the vendor's own CLI, the same way the
-`claude-code` runtime uses a Claude subscription. Hive runs the CLI headless
+`claude-code` runtime uses a Claude subscription. Ligus runs the CLI headless
 and streams its reply, including its tool steps. The sign-in stays in the
-CLI's own config or your OS keychain: Hive never reads, copies or syncs it.
+CLI's own config or your OS keychain: Ligus never reads, copies or syncs it.
 
 | | Google Antigravity | GitHub Copilot |
 |---|---|---|
@@ -158,7 +158,7 @@ CLI's own config or your OS keychain: Hive never reads, copies or syncs it.
 !!! note "Gemini CLI"
     Gemini CLI stopped serving Google AI Pro / Ultra and free personal
     sign-ins on 2026-06-18 (API-key and Code Assist Standard/Enterprise use
-    is unaffected). Hive shows an installed `gemini` binary only to point
+    is unaffected). Ligus shows an installed `gemini` binary only to point
     you at `agy`; it can't be added as a runtime.
 
 ### Detection in Settings → Models
@@ -187,10 +187,10 @@ lists each CLI it looks for:
 **Re-scan** checks again after you install or sign in. Detection never signs
 you in or out.
 
-Both CLIs follow Hive's permission setting for Claude Code (**Settings →
+Both CLIs follow Ligus's permission setting for Claude Code (**Settings →
 Permissions**), mapped to each CLI's own flags; the default is read-only.
-The exact flags, and how to set these runtimes up on a `hive serve` or
-`hive worker` host (`hive setup`), are in
+The exact flags, and how to set these runtimes up on a `ligus serve` or
+`ligus worker` host (`ligus setup`), are in
 [Bring-your-own agents](../addons/byo-agents.md#subscription-clis-google-antigravity-and-github-copilot).
 
 In TOML the providers are `antigravity` (or `agy`) and `copilot` (or
@@ -209,7 +209,7 @@ preferred_model = ""   # blank = the CLI's default model
 
 ## Picking which runtime a chat uses
 
-When you create a new chat, Hive picks the workspace's
+When you create a new chat, Ligus picks the workspace's
 `default_runtime`. Switch per chat from the **Primary runtime** select
 just above the composer — it lists every configured runtime; choosing
 one re-points that chat.

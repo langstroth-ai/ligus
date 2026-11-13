@@ -1,7 +1,7 @@
 # Collaborative editing
 
 When multiple peers share a workspace, edits to the same state need a merge
-strategy. Hive's implemented model is **event-level last-write-wins**, with a
+strategy. Ligus's implemented model is **event-level last-write-wins**, with a
 character-level CRDT for concurrent free-text editing tracked as a follow-up.
 
 ## Event-level convergence (implemented)

@@ -1,6 +1,6 @@
 # Mentions & notifications
 
-Hive tells you when you're wanted without making you scan every chat.
+Ligus tells you when you're wanted without making you scan every chat.
 An `@`-mention that names **you** raises a desktop notification and
 lights up the channel — and the chat — in the sidebar until you read it.
 
@@ -24,17 +24,17 @@ in the [Review pane](right-rail.md), not as a personal highlight.
 
 ## Desktop notification
 
-When a message you didn't write mentions you, Hive raises one system
+When a message you didn't write mentions you, Ligus raises one system
 notification — "*Name* mentioned you" — per message. Whether the app is
 focused or in the background, and whether the message was typed locally
 or arrived over sync, the trigger is the same.
 
 ## On your phone
 
-With a `hive serve` host set up for the phone app, a mention of you (and a
+With a `ligus serve` host set up for the phone app, a mention of you (and a
 workflow waiting at an approval gate) can also reach your phone as a push
 notification. Previews are plain text, cut to a short line, and each phone
-can turn previews off. See [Hive on your phone](phone-app.md).
+can turn previews off. See [Ligus on your phone](phone-app.md).
 
 ## Sidebar highlights
 

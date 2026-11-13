@@ -1,6 +1,6 @@
 # First launch
 
-Hive ships as an unsigned desktop app (macOS / Windows / Linux). On first launch
+Ligus ships as an unsigned desktop app (macOS / Windows / Linux). On first launch
 you'll see a guided onboarding wizard that captures your identity, picks a
 workspace folder, and configures a runtime.
 
@@ -11,8 +11,8 @@ workspace folder, and configures a runtime.
 Grab a bundle for your OS, or build from source:
 
 ```bash
-git clone https://github.com/honeyhive-ai/hive.git
-cd hive
+git clone https://github.com/ligus-ai/ligus.git
+cd ligus
 cargo tauri build        # bundles for the current OS → target/release/bundle/
 # or a fast dev loop without bundling:
 cargo tauri dev
@@ -21,9 +21,9 @@ cargo tauri dev
 See [Building the dist](../ops/build.md) for per-OS details and cross-builds.
 Because builds are unsigned, first launch needs a nudge:
 
-- **macOS:** right-click → **Open** (or `xattr -dr com.apple.quarantine /Applications/Hive.app`).
+- **macOS:** right-click → **Open** (or `xattr -dr com.apple.quarantine /Applications/Ligus.app`).
 - **Windows:** SmartScreen → **More info → Run anyway**.
-- **Linux:** `chmod +x Hive_*.AppImage && ./Hive_*.AppImage`.
+- **Linux:** `chmod +x Ligus_*.AppImage && ./Ligus_*.AppImage`.
 
 ## Wizard steps
 
@@ -31,16 +31,16 @@ The onboarding is **five quick steps** (the progress dots at the top count
 them off):
 
 1. **Identity** — enter a display name, **or sign in with GitHub** (see
-   below) for one identity across all your devices. Either way Hive
+   below) for one identity across all your devices. Either way Ligus
    auto-generates an Ed25519 device key behind the scenes; you never
    see it directly.
-2. **Project folder** — pick a folder on disk. Hive treats this as the
+2. **Project folder** — pick a folder on disk. Ligus treats this as the
    root; everything agents do (file edits, command runs, git
    operations) is scoped to this directory.
 3. **Runtime** — choose the agent that generates replies: **Claude
    Code**, an **OpenAI-compatible API** (OpenAI / OpenRouter / any
    local OpenAI-style server), an **Anthropic API key**, or **Ollama**
-   (offered only when a local Ollama daemon is detected). Hive defaults
+   (offered only when a local Ollama daemon is detected). Ligus defaults
    the selection to whatever it finds installed. A **"Let agents edit
    files in my project"** checkbox sets Claude Code's permission mode —
    checked lets agents write files (`acceptEdits`), unchecked is
@@ -65,13 +65,13 @@ button saves everything.
 
 After onboarding:
 
-- The app data dir `com.hive.desktop/` — your account + device
+- The app data dir `ai.ligus.desktop/` — your account + device
   records (public bits) as JSON, private key seeds under `keys/`, and
   `settings.json` (runtime/provider config, including any API keys you
   paste into Settings).
-- `<workspace>/hive.config.toml` — optional file-based runtime +
+- `<workspace>/ligus.config.toml` — optional file-based runtime +
   transport config.
-- `<workspace>/.hive/` — the workspace's event store (signed envelopes)
+- `<workspace>/.ligus/` — the workspace's event store (signed envelopes)
   and per-session state.
 
 Everything is local. Nothing leaves your machine unless you
@@ -80,18 +80,18 @@ toggle).
 
 ## Sign in with GitHub
 
-You can use Hive anonymously with just a local device identity, but
+You can use Ligus anonymously with just a local device identity, but
 **signing in with GitHub** (during onboarding or later in **Settings →
 Account**) gives you:
 
 - **One account identity across devices** — the same GitHub account on
   your laptop and desktop resolves to one member, two devices.
-- **Attributed commits** — git commits Hive makes on your behalf are
+- **Attributed commits** — git commits Ligus makes on your behalf are
   attributed to you.
 - **Reach teammates by `@handle`** — invite and add collaborators by
   their GitHub username.
 
-Sign-in uses GitHub's **device flow**: Hive shows a short code, you enter
+Sign-in uses GitHub's **device flow**: Ligus shows a short code, you enter
 it on github.com, and approve. Official builds ship with the OAuth App
 client id baked in; if you build a fork yourself, paste your own OAuth App
 client id in the sign-in panel.
@@ -103,17 +103,17 @@ See [Identity & devices](../concepts/identity.md) and
 
 To start completely over on a device, use **Settings → Account → Danger
 zone → "Reset local data"**. It wipes this device's chats, identity, keys,
-settings, and workspaces, then relaunches Hive fresh.
+settings, and workspaces, then relaunches Ligus fresh.
 
 This is the **supported way to start over** — uninstalling the app leaves
-your data behind on disk. If you ever need to clean up manually, Hive's
+your data behind on disk. If you ever need to clean up manually, Ligus's
 data directory is:
 
 | OS | Path |
 |---|---|
-| macOS | `~/Library/Application Support/com.hive.desktop` |
-| Windows | `%APPDATA%\com.hive.desktop` (plus `%LOCALAPPDATA%\com.hive.desktop` for the WebView2 cache) |
-| Linux | `~/.local/share/com.hive.desktop` |
+| macOS | `~/Library/Application Support/ai.ligus.desktop` |
+| Windows | `%APPDATA%\ai.ligus.desktop` (plus `%LOCALAPPDATA%\ai.ligus.desktop` for the WebView2 cache) |
+| Linux | `~/.local/share/ai.ligus.desktop` |
 
 !!! danger "Reset is irreversible"
     Reset local data cannot be undone. Anything not synced to a peer or

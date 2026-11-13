@@ -1,6 +1,6 @@
 # Identity & devices
 
-Hive distinguishes three layers of identity:
+Ligus distinguishes three layers of identity:
 
 | Layer    | Stable? | Where it lives                                            |
 |----------|---------|-----------------------------------------------------------|
@@ -8,8 +8,8 @@ Hive distinguishes three layers of identity:
 | Device   | yes per device | public in the device roster; private Ed25519 seed in `keys/` |
 | Workspace member | per workspace | the SQLite event store, as `memberAdded` events |
 
-The app data directory is `com.hive.desktop` (e.g. on macOS
-`~/Library/Application Support/com.hive.desktop/`).
+The app data directory is `ai.ligus.desktop` (e.g. on macOS
+`~/Library/Application Support/ai.ligus.desktop/`).
 
 ## Account
 
@@ -18,8 +18,8 @@ carries a display name, a handle (`@you`), and an Ed25519 *account*
 public key. The account key is the root of trust for every device
 you authorize.
 
-You get one account per Hive install on first launch. The
-generation is silent — Hive reads `$USER`/hostname for defaults you
+You get one account per Ligus install on first launch. The
+generation is silent — Ligus reads `$USER`/hostname for defaults you
 can edit in onboarding.
 
 ## Device
@@ -43,7 +43,7 @@ events from your devices verify against the rosters.
 
 ## What travels in invites
 
-A `WorkspaceInvitePayload` (the thing you paste into a peer's Hive
+A `WorkspaceInvitePayload` (the thing you paste into a peer's Ligus
 to grant access) contains:
 
 - The workspace UUID + display name.
@@ -65,8 +65,8 @@ through their own `deviceAdded` event.
 
 ## Key storage
 
-Hive stores private key seeds as files in the `keys/` subdirectory of
-its data directory (`com.hive.desktop`) — cross-platform and portable.
+Ligus stores private key seeds as files in the `keys/` subdirectory of
+its data directory (`ai.ligus.desktop`) — cross-platform and portable.
 Protect them with your OS account and disk encryption; anyone who can
 read these files can act as your device. An OS-keystore-backed vault
 (macOS Keychain / Windows Credential Manager / Secret Service) is a

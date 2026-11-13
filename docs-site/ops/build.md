@@ -1,6 +1,6 @@
 # Building the dist
 
-Hive is a **Tauri v2** app: a Rust backend (`crates/` + `app/`) with a
+Ligus is a **Tauri v2** app: a Rust backend (`crates/` + `app/`) with a
 React/TypeScript frontend (`web/`). The bundler is the Tauri CLI.
 
 ## Prerequisites
@@ -26,8 +26,8 @@ target):
 
 | Host | Bundles |
 |------|---------|
-| macOS | `macos/Hive.app`, `dmg/Hive_*.dmg` |
-| Windows | `nsis/Hive_*-setup.exe` (`.msi` needs the WiX toolset) |
+| macOS | `macos/Ligus.app`, `dmg/Ligus_*.dmg` |
+| Windows | `nsis/Ligus_*-setup.exe` (`.msi` needs the WiX toolset) |
 | Linux | `appimage/*.AppImage`, `deb/*.deb`, `rpm/*.rpm` |
 
 For a fast dev loop instead of a bundle: `cargo tauri dev`.
@@ -69,9 +69,9 @@ Builds are **unsigned** unless you supply signing credentials, so first launch
 needs a nudge:
 
 - **macOS:** right-click → **Open** (or `xattr -dr com.apple.quarantine
-  /Applications/Hive.app`).
+  /Applications/Ligus.app`).
 - **Windows:** SmartScreen → **More info → Run anyway**.
-- **Linux:** `chmod +x Hive_*.AppImage && ./Hive_*.AppImage` (add
+- **Linux:** `chmod +x Ligus_*.AppImage && ./Ligus_*.AppImage` (add
   `--appimage-extract-and-run` on hosts without FUSE).
 
 ## Signing & notarization
@@ -92,10 +92,10 @@ See `docs/packaging.md` in the repo for the full matrix.
 The relay lives in its own repository (Go):
 
 ```bash
-git clone https://github.com/honeyhive-ai/relay.git && cd relay
-go build -o hive-relay ./cmd/hive-relay
+git clone https://github.com/ligus-ai/relay.git && cd relay
+go build -o ligus-relay ./cmd/ligus-relay
 # or run it directly:
-go run ./cmd/hive-relay
+go run ./cmd/ligus-relay
 ```
 
 See [Self-hosting a relay](../networking/self-host.md).

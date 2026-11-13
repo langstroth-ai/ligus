@@ -28,12 +28,12 @@ proposal. Approving it adds the workflow to the chat's **Workflows** pane.
 
 Ask any agent in the chat, for example *"build me a workflow that triages
 new issues, drafts fixes, and holds them for my approval"*. The agent
-replies with a definition, and Hive:
+replies with a definition, and Ligus:
 
 1. **Checks it**: stage ids, dependencies (no cycles), template references
    that point upstream, agent names that exist in the chat's roster, gate
    rules. If something is wrong, the agent is told why. Local-model agents
-   using Hive's built-in tools get the error inside the same turn (through
+   using Ligus's built-in tools get the error inside the same turn (through
    the `propose_workflow` tool) and fix it before replying; other runtimes
    see the error as a note in the chat and fix it on their next turn.
 2. **Files it as a proposal** in the **Review** pane: *Add workflow "…"*,
@@ -49,7 +49,7 @@ presses **Run**. Agents get planning authority, never execution authority.
 
 Workflow proposals show up on the phone too (as a decision with the
 stages as its text), and approving one there adds the workflow the same
-way. See [Hive on your phone](phone-app.md).
+way. See [Ligus on your phone](phone-app.md).
 
 ## The Workflows pane
 
@@ -64,7 +64,7 @@ Open **Workflows** in the right rail. For each workflow you get:
 - **Pause / Resume**: a paused workflow stays listed but can't be started.
   Runs already going are unaffected;
 - **Delete**: removes the definition. Past runs stay in the history;
-- **Ask an agent to change this**: type what should change. Hive posts a
+- **Ask an agent to change this**: type what should change. Ligus posts a
   message to the chat with your request and the current definition, the
   agent answers with a revision, and the revision arrives in the Review
   pane as *Revise workflow "…"*. Approving it replaces the old definition
@@ -185,7 +185,7 @@ show approve/reject right on the card (they're also in the Review pane).
 Cancel stops a run between stages; **Resume** restarts a run that was
 interrupted (say, by an app restart); finished stages keep their outputs.
 Gate approvals also reach your phone as a push notification when a
-`hive serve` host is set up ([Hive on your phone](phone-app.md)).
+`ligus serve` host is set up ([Ligus on your phone](phone-app.md)).
 
 ## Current limits
 
@@ -195,7 +195,7 @@ Gate approvals also reach your phone as a push notification when a
 - Definitions belong to the chat they're created in.
 - Parallel stages share the chat transcript, so siblings can see each
   other's prompts in context.
-- In a workspace with devices on older Hive versions, an older desktop
+- In a workspace with devices on older Ligus versions, an older desktop
   shows a workflow proposal as a plain decision: approving it there
   doesn't add the workflow until a device on 1.18 or later applies it
   (its **Implement** button does).

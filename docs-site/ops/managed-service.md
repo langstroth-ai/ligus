@@ -1,4 +1,4 @@
-# Hive as a managed service (GitHub-account identity)
+# Ligus as a managed service (GitHub-account identity)
 
 Status: planning + P1 in progress. This captures the target and the staged path,
 including the **one account, many devices** model (e.g. the same person on a
@@ -6,7 +6,7 @@ MacBook *and* a Windows desktop).
 
 ## Why
 
-Today Hive is local-first: self-sovereign device keys + bring-your-own relay.
+Today Ligus is local-first: self-sovereign device keys + bring-your-own relay.
 That's powerful but the friction is real — every device must agree on a relay
 URL, the relay must be up and current, and you pair by codes. A managed service
 removes that:
@@ -40,7 +40,7 @@ The GitHub user is the **account**; each machine is a **device** under it.
 
 ## Phases
 
-- **P0 — Hosted relay (deploy).** Run the relay ([github.com/honeyhive-ai/relay](https://github.com/honeyhive-ai/relay))
+- **P0 — Hosted relay (deploy).** Run the relay ([github.com/ligus-ai/relay](https://github.com/ligus-ai/relay))
   somewhere always on — Docker/Fly per its README (`deploy/fly.toml`). For a
   tailnet, run it as a launchd/systemd service. Bake a default relay URL into the
   app so there's zero config. *(This alone makes sync reliable.)*
@@ -62,12 +62,12 @@ The GitHub user is the **account**; each machine is a **device** under it.
 The first slice of P4 — distinguishing a **paid/managed** relay from a **free
 self-hosted** one — is built (2026-06-15):
 
-- `hive-relay` has an `EntitlementPolicy` (`Open` | `Tokens`). `HIVE_RELAY_ACCESS_TOKENS`
+- `ligus-relay` has an `EntitlementPolicy` (`Open` | `Tokens`). `LIGUS_RELAY_ACCESS_TOKENS`
   unset ⇒ `Open` (self-host default, anyone may connect); set (comma-separated)
   ⇒ only requests bearing a listed bearer token are admitted. A `require_entitlement`
   middleware fronts every route except `/v1/health`.
 - The client carries a `relay_access_token` (Settings → Team sync, or
-  `HIVE_RELAY_ACCESS_TOKEN`); `RelayClient::with_auth` attaches it as
+  `LIGUS_RELAY_ACCESS_TOKEN`); `RelayClient::with_auth` attaches it as
   `Authorization: Bearer` on every call. The GitHub identity token moved to its
   own `X-Hive-Github-Token` header so the two never collide.
 
@@ -146,7 +146,7 @@ map to GitHub orgs.
 Cloud (Fly), once you have a Fly account:
 
 ```sh
-git clone https://github.com/honeyhive-ai/relay && cd relay
+git clone https://github.com/ligus-ai/relay && cd relay
 brew install flyctl            # or: curl -L https://fly.io/install.sh | sh
 fly auth login                 # interactive
 fly launch --copy-config --no-deploy   # first time, pick a name (uses deploy/fly.toml)
@@ -156,7 +156,7 @@ fly deploy
 ```
 
 Tailnet (persistent local relay on macOS) — build the relay from
-[its repo](https://github.com/honeyhive-ai/relay) and run it under launchd/tmux,
+[its repo](https://github.com/ligus-ai/relay) and run it under launchd/tmux,
 bound to `0.0.0.0:8443` so it's reachable at your Tailscale IP:8443.
 
 ## Signed entitlement tokens (built — claims + verification)
@@ -167,9 +167,9 @@ out of the token itself (implemented in the relay's `token.go`).
 
 **Asymmetric on purpose.** A billing/license backend holds an **Ed25519 private
 key** and mints tokens; the relay is configured with only the **public key**
-(`HIVE_RELAY_TOKEN_PUBKEY`, hex or base64) and can *verify but never mint*. This
+(`LIGUS_RELAY_TOKEN_PUBKEY`, hex or base64) and can *verify but never mint*. This
 is also exactly what an **on-prem enterprise relay** needs: it verifies a
-Hive-issued license offline, with no callback to Hive.
+Ligus-issued license offline, with no callback to Ligus.
 
 **Wire format** (compact, three `.`-separated parts):
 
@@ -191,9 +191,9 @@ without the key. **Claims:**
 | `caps` | RBAC capability strings (below); forward-compatible — the relay ignores ones it doesn't enforce yet |
 
 **Policy resolution** (`EntitlementPolicy::from_env`, most specific first):
-`HIVE_RELAY_TOKEN_PUBKEY` ⇒ verify signed tokens → `HIVE_RELAY_ACCESS_TOKENS`
+`LIGUS_RELAY_TOKEN_PUBKEY` ⇒ verify signed tokens → `LIGUS_RELAY_ACCESS_TOKENS`
 ⇒ static allowlist → otherwise **open**. The client sends the token as
-`Authorization: Bearer` (Settings → Team sync, or `HIVE_RELAY_ACCESS_TOKEN`).
+`Authorization: Bearer` (Settings → Team sync, or `LIGUS_RELAY_ACCESS_TOKEN`).
 
 **Enforcement points** (where each claim bites — `max_members`/`retention`
 require the server-side membership work, so they're staged):
@@ -225,13 +225,13 @@ resolved from the org directory at connect time.
 
 - **SSO / identity.** Reuse the existing GitHub device-flow sign-in, but scope to
   the customer's **GHEC org**: GHEC's SAML/OIDC is the IdP, so access follows the
-  org's existing SSO (Okta/Entra/Google) with no separate Hive login. GitHub
+  org's existing SSO (Okta/Entra/Google) with no separate Ligus login. GitHub
   Enterprise **Server** (self-hosted GitHub) is supported by pointing the OAuth
   app + API base URL at the GHES host.
-- **Org → team → workspace mapping.** A GHEC **org** maps to a Hive tenant; GHEC
-  **teams** map to Hive role bundles (e.g. `@org/eng` → `Contributor`,
+- **Org → team → workspace mapping.** A GHEC **org** maps to a Ligus tenant; GHEC
+  **teams** map to Ligus role bundles (e.g. `@org/eng` → `Contributor`,
   `@org/admins` → `Admin`); membership is derived from GitHub team membership,
-  so deprovisioning in GitHub deprovisions in Hive.
+  so deprovisioning in GitHub deprovisions in Ligus.
 - **Org admin vs workspace owner.** A GHEC **org admin** (distinct from a
   per-workspace owner) sets default policy, seat allocation, and SSO across all
   the org's workspaces.
@@ -245,11 +245,11 @@ resolved from the org directory at connect time.
 **relay/server** capabilities (the OSS client is unchanged). Custom-role and
 policy-template *editors* are runtime-entitlement client UI. See
 [`docs-site/ops/pricing.md`](pricing.md) for the tier shape and
-[`hive-issue-trackers.md`](https://github.com/honeyhive-ai/hive/blob/main/docs/hive-issue-trackers.md) for the per-workspace issue/PR
+[`hive-issue-trackers.md`](https://github.com/ligus-ai/ligus/blob/main/docs/hive-issue-trackers.md) for the per-workspace issue/PR
 integration (also capability-gated).
 
 ## GitHub OAuth app (needed for P1 sign-in)
 
 Create a GitHub OAuth App (Settings → Developer settings → OAuth Apps), enable
-**Device Flow**, and set its **client ID** as `HIVE_GITHUB_CLIENT_ID` (env) or in
+**Device Flow**, and set its **client ID** as `LIGUS_GITHUB_CLIENT_ID` (env) or in
 Settings. No client secret is needed for the device flow.

@@ -354,7 +354,7 @@ function markGroup({
 function buildMarkSvg({ size = 512, markMode = "color", id = "mark" } = {}) {
   const { defs, paths } = markGroup({ markMode, id });
   return `<svg width="${size}" height="${size}" viewBox="-46 -46 92 92" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <title>Hive Brand Mark</title>
+  <title>Ligus Brand Mark</title>
   <defs>${defs}</defs>
   <g>${paths}</g>
 </svg>
@@ -371,7 +371,7 @@ function buildIconSvg({ size = 1024, markMode = "color", id = "icon" } = {}) {
   const { defs, paths } = markGroup({ markMode, id });
 
   return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <title>Hive App Icon</title>
+  <title>Ligus App Icon</title>
   <defs>
     ${defs}
     <linearGradient id="tile-${id}" x1="0" y1="0" x2="0.5" y2="1">
@@ -397,7 +397,7 @@ function buildTraySvg({ size = 64 } = {}) {
     " " +
     hexPathString(cx, cy, size * TRAY_OUTER * TRAY_INNER_RATIO);
   return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <title>Hive Tray Template</title>
+  <title>Ligus Tray Template</title>
   <path d="${ring}" fill="#000000" fill-rule="evenodd"/>
 </svg>
 `;
@@ -406,7 +406,7 @@ function buildTraySvg({ size = 64 } = {}) {
 function buildLockupSvg({ id = "lockup" } = {}) {
   const mark = buildMarkSvg({ size: 120, id: `${id}-mark` });
   return `<svg width="720" height="220" viewBox="0 0 720 220" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <title>Hive Documentation Logo</title>
+  <title>Ligus Documentation Logo</title>
   <defs>
     <clipPath id="clip-${id}">
       <rect x="36" y="52" width="76" height="76" rx="0" ry="0"/>
@@ -415,7 +415,7 @@ function buildLockupSvg({ id = "lockup" } = {}) {
   <g transform="translate(36 52)">
     ${mark.replace("<svg width=\"120\" height=\"120\" viewBox=\"-46 -46 92 92\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">", "").replace("</svg>\n", "")}
   </g>
-  <text x="146" y="124" fill="${palette.studio.ink}" font-family="Inter, &quot;SF Pro Display&quot;, system-ui, sans-serif" font-size="84" font-weight="700" letter-spacing="-3">hive</text>
+  <text x="146" y="124" fill="${palette.studio.ink}" font-family="Inter, &quot;SF Pro Display&quot;, system-ui, sans-serif" font-size="84" font-weight="700" letter-spacing="-3">ligus</text>
 </svg>
 `;
 }

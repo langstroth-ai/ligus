@@ -1,13 +1,13 @@
 # Security & trust
 
-Hive is end-to-end encrypted and the relay is content-blind. This page states
+Ligus is end-to-end encrypted and the relay is content-blind. This page states
 the guarantees you can rely on when a workspace syncs through a relay. A
 local-only workspace (no relay) puts nothing on the wire and is unaffected by
 everything below.
 
 ## E2EE is mandatory for relay sync
 
-Hive **refuses to push plaintext to a relay**. A workspace configured for sync
+Ligus **refuses to push plaintext to a relay**. A workspace configured for sync
 but with no workspace key does not sync — the app surfaces a **Sync error**
 telling you to configure a key. The relay therefore only ever holds sealed
 (E2EE) bodies; there is no "encrypt later" mode that leaks cleartext in the

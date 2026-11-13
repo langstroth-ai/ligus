@@ -1,8 +1,38 @@
 # What's new
 
+**Hive is now Ligus (v2.0.0).** Ligus is short for *ligustica*, the Italian
+honeybee. Entries for 1.19 and earlier keep the name Hive.
+
 Changes since 1.15, newest first, with links to where each is documented.
 Full release notes are on the
-[GitHub releases page](https://github.com/honeyhive-ai/hive/releases).
+[GitHub releases page](https://github.com/ligus-ai/ligus/releases).
+
+## 2.0
+
+- **Hive is now Ligus.** The code, protocol and your data are unchanged:
+  workspaces, devices, relays and paired phones keep working, and the default
+  agent is still `@hive`.
+- **Desktop data moves over on first launch.** The app's identifier is now
+  `ai.ligus.desktop`. On first launch Ligus copies your data from the
+  `com.hive.desktop` folder into its new folder and leaves the old one
+  untouched; your device identity and keys come along, so nothing needs
+  re-pairing. Theme and pane layout reset once, and macOS asks again for
+  folder and notification access. An auto-updated app may still be at
+  `/Applications/Hive.app`; you can rename it to `Ligus.app`.
+- **`ligus` command.** The CLI is now `ligus`. The `hive` command still works
+  through v2.1 and prints a one-line reminder on stderr. Homebrew: formula
+  `ligus`, cask `ligus-app`, tap `ligus-ai/ligus`; existing `hive-cli` and
+  `hive` installs upgrade to them.
+- **`LIGUS_*` settings.** Environment variables are now `LIGUS_*`. The
+  `HIVE_*` names still work (each prints a one-time note) and lose to the
+  `LIGUS_*` name when both are set.
+- **New file names.** New workspace state goes in `.ligus/` and new config in
+  `ligus.config.toml`; the CLI's default data dir is `~/.ligus`. Existing
+  `.hive/`, `hive.config.toml` and `~/.hive` are still read and never moved.
+  See [Configuration](config-toml.md).
+- **New addresses.** The project lives at github.com/ligus-ai/ligus and the
+  docs at docs.ligus.ai. Old links redirect. Protocol identifiers that contain
+  `hive` keep their names; see [Wire protocols](wire-protocols.md#legacy-protocol-identifiers).
 
 ## 1.19
 

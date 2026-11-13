@@ -1,6 +1,6 @@
 # Managing context
 
-The model can only see so much at once — its **context window**. Hive
+The model can only see so much at once — its **context window**. Ligus
 manages that budget for you automatically, shows you where it stands at
 all times, and gives you explicit controls when you want them.
 
@@ -25,7 +25,7 @@ The full breakdown, updated live while replies stream:
 
 ## `/summarize` and `/compact`
 
-Long conversations eventually outgrow any window. Hive **auto-summarizes
+Long conversations eventually outgrow any window. Ligus **auto-summarizes
 overflow** — older messages are collapsed into a running summary that
 rides right after the system prompt, so a server's prompt cache keeps
 reusing the unchanged prefix (see
@@ -47,7 +47,7 @@ the chat, freeing context immediately. This is the explicit version of
 the automatic overflow handling.
 
 !!! warning "/compact removes messages"
-    Hive confirm-gates it. The earlier messages are gone from the active
+    Ligus confirm-gates it. The earlier messages are gone from the active
     conversation afterward — reach for `/summarize` if you want to keep
     the full history.
 
@@ -67,12 +67,12 @@ Changes apply immediately (persisted in `settings.json`); no restart.
 
 ## Sizing the window itself
 
-Hive infers the context window from the model name (Claude, GPT-4o, …).
+Ligus infers the context window from the model name (Claude, GPT-4o, …).
 For **Ollama / LM Studio / custom endpoints** it can't, so set it
 yourself:
 
 - **Settings → Models → Add runtime → "Context window in tokens"**, or
-- `context_window = 32768` on the runtime in `hive.config.toml`.
+- `context_window = 32768` on the runtime in `ligus.config.toml`.
 
 The planner budgets against your number — the pill and pane reflect it.
 

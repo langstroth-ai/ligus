@@ -1,6 +1,6 @@
 # Tiering: open-source core, paid, and enterprise
 
-How Hive's free / paid / enterprise features are drawn, **where each feature
+How Ligus's free / paid / enterprise features are drawn, **where each feature
 lives**, and how it ships. This is the engineering model; the user-facing tier
 summary is [`docs-site/ops/pricing.md`](pricing.md).
 
@@ -23,7 +23,7 @@ summary is [`docs-site/ops/pricing.md`](pricing.md).
 
 ```
 OSS client (1 build, MIT) ──connects to──▶ reference relay (OSS)      self-host, free
-                                           Hive Cloud relay (managed) free-tier / paid
+                                           Ligus Cloud relay (managed) free-tier / paid
                                            Enterprise relay (on-prem) licensed
         entitlement/license unlocks any client-side premium UI at runtime
 ```
@@ -31,8 +31,8 @@ OSS client (1 build, MIT) ──connects to──▶ reference relay (OSS)      
 | Tier | Who runs the relay | Client | What's added |
 |------|--------------------|--------|--------------|
 | **Self-host** | you | OSS | nothing — full core |
-| **Cloud (free)** | Hive | OSS | hosted relay, rate-limited, no SLA |
-| **Cloud (paid)** | Hive | OSS + entitlement | SLA, retention, org auth (SSO/SAML/OIDC), seats |
+| **Cloud (free)** | Ligus | OSS | hosted relay, rate-limited, no SLA |
+| **Cloud (paid)** | Ligus | OSS + entitlement | SLA, retention, org auth (SSO/SAML/OIDC), seats |
 | **Enterprise** | you (on-prem) | OSS + entitlement | enterprise relay: SSO, audit export, DLP hooks, data residency, support |
 
 ## Where a feature lives — the decision tree
@@ -58,11 +58,11 @@ For any new paid/enterprise feature, place it in the first bucket that fits:
 |---|---|---|
 | Managed hosting, SLA | server | Cloud relay (closed deploy) |
 | Retention / history beyond memory | server | relay storage backend |
-| Signed entitlement tokens (plan + caps) | server | `hive-relay` (built — `token.rs`) |
+| Signed entitlement tokens (plan + caps) | server | `ligus-relay` (built — `token.rs`) |
 | Server-enforced workspace membership/roles | server | private `hive-relay-enterprise` crate via the OSS `WriteGuard` seam (source absent from OSS) |
 | RBAC capabilities + custom roles | server (+ runtime UI) | gated/enterprise relay; editor in OSS client, gated |
 | GHEC SSO + org/team → role mapping | server (+ proprietary connectors) | enterprise relay, `--features enterprise` |
-| Add-collaborator by GitHub username + presence (hosted graph) | server | Cloud relay — free-capped / prosumer paid; see [`hive-social-graph-plan.md`](https://github.com/honeyhive-ai/hive/blob/main/docs/hive-social-graph-plan.md) |
+| Add-collaborator by GitHub username + presence (hosted graph) | server | Cloud relay — free-capped / prosumer paid; see [`hive-social-graph-plan.md`](https://github.com/ligus-ai/ligus/blob/main/docs/hive-social-graph-plan.md) |
 | SSO / SAML / OIDC | server (+ proprietary connectors) | enterprise relay, `--features enterprise` |
 | Audit-log export (S3/SIEM) | server | enterprise relay |
 | DLP scan on forwarded frames | server | enterprise relay hook |
@@ -72,28 +72,28 @@ For any new paid/enterprise feature, place it in the first bucket that fits:
 | Issue/PR tracker connectors (GitHub/Linear/Jira) | free core | OSS client (MCP) |
 | Governance over agent writes to a tracker (audit, policy) | server | gated/enterprise relay |
 | The desktop app, BYO runtimes, MCP | free core | OSS client |
-| Reference relay (forwarding + E2EE) | free core | `honeyhive-ai/relay` |
+| Reference relay (forwarding + E2EE) | free core | `ligus-ai/relay` |
 
 > **Enterprise = full RBAC + GHEC, on-prem.** The Enterprise tier is the
 > fully-RBAC profile: custom capability-based roles, GitHub Enterprise Cloud SSO
 > with org/team→role mapping, audit export, run on the customer's own
-> hardware. It verifies a Hive-signed license **offline** via the public-key
-> token scheme (`HIVE_RELAY_TOKEN_PUBKEY`) — no callback to Hive. Design detail
+> hardware. It verifies a Ligus-signed license **offline** via the public-key
+> token scheme (`LIGUS_RELAY_TOKEN_PUBKEY`) — no callback to Ligus. Design detail
 > in [`managed-service-plan.md`](managed-service.md).
 
 ## The relay entitlement gate (built)
 
-The **server-side** half of the wedge exists as of 2026-06-15. `hive-relay`'s
+The **server-side** half of the wedge exists as of 2026-06-15. `ligus-relay`'s
 `EntitlementPolicy` admits connections based on a bearer token, not a hidden URL:
 
-- `HIVE_RELAY_ACCESS_TOKENS` **unset/empty ⇒ `Open`** — the self-host default;
+- `LIGUS_RELAY_ACCESS_TOKENS` **unset/empty ⇒ `Open`** — the self-host default;
   anyone with the URL + room may connect (unchanged behavior).
-- `HIVE_RELAY_ACCESS_TOKENS=tokA,tokB ⇒ `Tokens`** — a `require_entitlement`
+- `LIGUS_RELAY_ACCESS_TOKENS=tokA,tokB ⇒ `Tokens`** — a `require_entitlement`
   middleware admits only requests whose `Authorization: Bearer` is in the set.
   `/v1/health` stays ungated.
 
 The client carries the token in **Settings → Team sync → Relay access token**
-(or `HIVE_RELAY_ACCESS_TOKEN`); `RelayClient::with_auth` attaches it to every
+(or `LIGUS_RELAY_ACCESS_TOKEN`); `RelayClient::with_auth` attaches it to every
 request. This is the seam a billing system drives: **Stripe issues/revokes
 tokens**, the relay just checks set membership. The token is a coarse on/off
 today; the next step is a *signed* token carrying the plan's limits (member cap,
@@ -126,10 +126,10 @@ check to function.
 **Not yet — and probably never for the client.** Recommendation:
 
 - **Keep the OSS client and the reference relay public.** (The relay has since
-  moved to its own public repo, `honeyhive-ai/relay`, as a Go service.)
+  moved to its own public repo, `ligus-ai/relay`, as a Go service.)
 - **When the first truly-proprietary code appears** (a vendor SSO/DLP SDK we
   can't open-source), put **only that** in a separate **private** repo — an
-  `hive-relay-enterprise` crate that depends on the OSS `hive-core`/`hive-relay`
+  `hive-relay-enterprise` crate that depends on the OSS `hive-core`/`ligus-relay`
   as published crates and adds the closed connectors behind `--features
   enterprise`. The OSS relay stays the default; the enterprise relay is a
   superset build.
@@ -144,7 +144,7 @@ tiering is entirely a runtime/deployment concern.
 ## What stays free forever
 
 - The desktop client (all OSes).
-- The reference relay (`honeyhive-ai/relay`, MIT) — forwarding + E2EE.
+- The reference relay (`ligus-ai/relay`, MIT) — forwarding + E2EE.
 - The protocol/wire specs.
 
 A team can run its own relay and never touch a paid tier.

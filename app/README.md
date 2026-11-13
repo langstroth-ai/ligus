@@ -1,4 +1,4 @@
-# `app` — Hive desktop shell
+# `app` — Ligus desktop shell
 
 The **[Tauri v2](https://tauri.app) desktop app**: a thin Rust shell that owns
 the [`hive-runtime`](../crates/hive-runtime/README.md) services and bundles the

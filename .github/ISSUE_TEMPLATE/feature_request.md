@@ -8,7 +8,7 @@ assignees: ""
 
 **Problem**
 
-What are you trying to do that Hive doesn't support (or makes harder than it
+What are you trying to do that Ligus doesn't support (or makes harder than it
 should be)?
 
 **Proposed solution**

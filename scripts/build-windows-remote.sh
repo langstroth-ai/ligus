@@ -28,7 +28,7 @@
 #                       it there from a remote both machines can reach)
 #     none            — assume the source is already in place; just build
 #
-# Output: ./dist-windows/Hive_*-setup.exe  (copied back to the Mac)
+# Output: ./dist-windows/Ligus_*-setup.exe  (copied back to the Mac)
 #
 set -euo pipefail
 
@@ -60,7 +60,7 @@ ps "Set-Location -LiteralPath '$WIN_REPO'; cargo tauri build"
 
 echo "==> [3/3] copying the installer back…"
 mkdir -p "$repo_root/dist-windows"
-scp "$WIN_HOST:$WIN_REPO/target/release/bundle/nsis/Hive_*-setup.exe" \
+scp "$WIN_HOST:$WIN_REPO/target/release/bundle/nsis/Ligus_*-setup.exe" \
     "$repo_root/dist-windows/"
 
 echo ""

@@ -1,7 +1,7 @@
 # Vaults & reference material
 
 A **vault** is a pointer to reference material — a style guide, an API
-spec, an architecture doc — that Hive injects into the model's context
+spec, an architecture doc — that Ligus injects into the model's context
 for every reply in the chat. Add the source once; every teammate in the
 workspace gets it automatically via the (end-to-end-encrypted) event
 log, and each peer fetches the content independently.
@@ -28,7 +28,7 @@ re-fetches the source, so it doubles as a refresh after upstream edits.
 - On each reply, the runtime assembles a `[Reference vaults]` section
   and appends it to the system prompt, after the roster and skills.
 - Content is fetched **once per app run** and cached in memory; use
-  **Preview** to re-fetch after upstream changes, or restart Hive.
+  **Preview** to re-fetch after upstream changes, or restart Ligus.
 - Caps keep vaults from crowding out conversation: the first
   **3 sources** are injected, **~6,000 characters each** (truncated
   with a marker beyond that). A failed fetch degrades to a labeled
@@ -72,7 +72,7 @@ for private sources are on the roadmap.
 
 Planned, not yet implemented:
 
-- **Private sources** — per-peer tokens (e.g. a `HIVE_GH_TOKEN` env
+- **Private sources** — per-peer tokens (e.g. a `LIGUS_GH_TOKEN` env
   var) so private repos work without sharing credentials.
 - **Local folders / Obsidian libraries** as per-peer vault kinds.
 - **On-disk caching + indexing** (semantic search over large vaults)

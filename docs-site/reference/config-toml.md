@@ -1,9 +1,17 @@
-# `hive.config.toml` reference
+# `ligus.config.toml` reference
 
-Hive reads one TOML file per workspace, at the workspace root, via
+Ligus reads one TOML file per workspace, at the workspace root, via
 `hive-core::config`. The Settings → **Models** and **Tools** sections write
 back to it through the encoder, so hand-edited and GUI-edited files
 round-trip cleanly.
+
+> **Former names.** A workspace set up before v2.0 may have `hive.config.toml`
+> and a `.hive/` state directory. Both are still read: `ligus.config.toml` wins
+> when both config files exist (with a warning), settings are saved back to
+> whichever file was read, and state files are read from `.ligus/` first, then
+> `.hive/`. Existing per-chat git worktrees under `.hive/worktrees/` stay where
+> git recorded them; new ones go under `.ligus/`. Agents can't write to either
+> directory or either config file.
 
 > **Note:** the encoder doesn't preserve comments. Hand-add commentary in a
 > sibling `README.md` if you need it documented next to the config.
@@ -17,8 +25,8 @@ round-trip cleanly.
 > **Managed in-app, not in this file.** Vaults, skills, and the
 > install-from-the-internet MCP catalog are managed through the right-rail
 > **Vaults**, **Skills**, and **Tools** panes and stored in the workspace
-> event log / `.hive/*.json` catalogs — there are no `[[vaults]]` or
-> `[[skills]]` blocks in `hive.config.toml`. Runtime pools and retrieval
+> event log / `.ligus/*.json` catalogs — there are no `[[vaults]]` or
+> `[[skills]]` blocks in `ligus.config.toml`. Runtime pools and retrieval
 > tuning are likewise not read from this file today.
 
 ## Full example
@@ -28,7 +36,7 @@ listed here is silently ignored.
 
 ```toml
 [app]
-name = "Hive"
+name = "Ligus"
 local_mode = false
 sync_mode = "workspace"          # local | workspace | account
 default_runtime = "anthropic"
@@ -39,7 +47,7 @@ kind = "relay"                   # local | relay | lan
 
 [transport.relay]
 endpoint = "wss://relay.hive.example/v1"
-account_token_env = "HIVE_RELAY_TOKEN"
+account_token_env = "LIGUS_RELAY_TOKEN"
 
 [sync]
 enabled = true
@@ -183,9 +191,9 @@ Model Context Protocol servers. See [MCP servers](../addons/mcp.md).
 |-------------|----------|--------------------------------------------------|
 | `id`        | string   | Workspace-unique identifier (required)           |
 | `transport` | string   | `stdio` (default) or `http`                      |
-| `command`   | string   | For stdio — the binary Hive spawns               |
+| `command`   | string   | For stdio — the binary Ligus spawns               |
 | `args`      | [string] | Arguments passed to `command`                    |
-| `url`       | string   | For http — the endpoint Hive talks to            |
+| `url`       | string   | For http — the endpoint Ligus talks to            |
 | `enabled`   | bool     | Inert until true; **default `false`**            |
 
 ### `[chat_defaults]`

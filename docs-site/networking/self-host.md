@@ -1,9 +1,9 @@
 # Self-hosting a relay
 
-Hive's relay is a small, content-blind service that forwards encrypted event
+Ligus's relay is a small, content-blind service that forwards encrypted event
 envelopes between the devices in a workspace — no database needed. You host
 **one** relay that your peers point at. It lives in its own repo,
-**[github.com/honeyhive-ai/relay](https://github.com/honeyhive-ai/relay)** (MIT),
+**[github.com/ligus-ai/relay](https://github.com/ligus-ai/relay)** (MIT),
 which carries the Docker image, `deploy/fly.toml`, and the full deploy README.
 
 **Fastest path:** follow that repo's README (Docker / Fly.io) and the
@@ -11,8 +11,8 @@ which carries the Docker image, `deploy/fly.toml`, and the full deploy README.
 test:
 
 ```bash
-docker build -t hive-relay https://github.com/honeyhive-ai/relay.git && \
-  docker run -p 8443:8443 hive-relay
+docker build -t ligus-relay https://github.com/ligus-ai/relay.git && \
+  docker run -p 8443:8443 ligus-relay
 ```
 
 Health check: `curl http://localhost:8443/v1/health` → `ok`.
@@ -30,32 +30,32 @@ You need:
 ## Step 1 — Build
 
 The relay is a small Go service in its own repository,
-[github.com/honeyhive-ai/relay](https://github.com/honeyhive-ai/relay)
+[github.com/ligus-ai/relay](https://github.com/ligus-ai/relay)
 (Go 1.22 or later):
 
 ```bash
-git clone https://github.com/honeyhive-ai/relay.git
+git clone https://github.com/ligus-ai/relay.git
 cd relay
-go build -o hive-relay ./cmd/hive-relay
+go build -o ligus-relay ./cmd/ligus-relay
 ```
 
-The `hive-relay` binary has no resource dependencies; copy it anywhere.
+The `ligus-relay` binary has no resource dependencies; copy it anywhere.
 (The Docker one-liner above builds the same thing.)
 
 ## Step 2 — Run
 
 ```bash
-./hive-relay
+./ligus-relay
 ```
 
 The bind address is chosen in this order:
 
 1. `$PORT` (set by Render / Cloud Run / Railway / Heroku) → `0.0.0.0:$PORT`
-2. `$HIVE_RELAY_ADDR` (full `host:port`)
+2. `$LIGUS_RELAY_ADDR` (full `host:port`)
 3. default `0.0.0.0:8443`
 
 ```bash
-HIVE_RELAY_ADDR=0.0.0.0:9000 ./hive-relay      # custom port
+LIGUS_RELAY_ADDR=0.0.0.0:9000 ./ligus-relay      # custom port
 ```
 
 ### Optional: gate the relay with access tokens
@@ -63,22 +63,22 @@ HIVE_RELAY_ADDR=0.0.0.0:9000 ./hive-relay      # custom port
 By default the relay is **open** — anyone with the URL + room may connect (this
 is the normal self-host mode; a workspace key keeps traffic private regardless).
 If you want to restrict *who can connect at all* (e.g. you're running a relay for
-a paid group), set `HIVE_RELAY_ACCESS_TOKENS` to a comma-separated allowlist:
+a paid group), set `LIGUS_RELAY_ACCESS_TOKENS` to a comma-separated allowlist:
 
 ```bash
-HIVE_RELAY_ACCESS_TOKENS="tok_alice,tok_bob" ./hive-relay
+LIGUS_RELAY_ACCESS_TOKENS="tok_alice,tok_bob" ./ligus-relay
 ```
 
 Now only requests bearing `Authorization: Bearer <one-of-those>` are admitted
 (`/v1/health` stays open). Each peer pastes their token into **Settings → Team
-sync → Relay access token** (or sets `HIVE_RELAY_ACCESS_TOKEN`). Unset/empty ⇒
+sync → Relay access token** (or sets `LIGUS_RELAY_ACCESS_TOKEN`). Unset/empty ⇒
 open, as before. This is a coarse on/off gate that requires a redeploy to
 change — for durable, no-redeploy management, use the admin API below.
 
 ## Managing relay access
 
-Beyond the static `HIVE_RELAY_ACCESS_TOKENS` allowlist, the relay has a durable
-**user + token store** with an admin API — the model behind Hive's
+Beyond the static `LIGUS_RELAY_ACCESS_TOKENS` allowlist, the relay has a durable
+**user + token store** with an admin API — the model behind Ligus's
 **Settings → Team → Team members** panel. Users and tokens persist (in Postgres
 when `DATABASE_URL` is set, else the snapshot volume), tokens are stored only as
 hashes, and revoking one is instant with no redeploy.
@@ -86,8 +86,8 @@ hashes, and revoking one is instant with no redeploy.
 Managing users requires an **admin authorizer**. The reference relay leaves the
 admin API disabled by default; a downstream build (such as the hosted enterprise
 relay) enables it and gates it on a GitHub-admin allowlist — set
-`HIVE_RELAY_ADMIN_LOGINS` to a comma-separated list of GitHub logins permitted
-to manage users. Those admins then manage members either from Hive's Team panel
+`LIGUS_RELAY_ADMIN_LOGINS` to a comma-separated list of GitHub logins permitted
+to manage users. Those admins then manage members either from Ligus's Team panel
 or directly over the API:
 
 ```bash
@@ -126,19 +126,19 @@ needed there.)
 
 ## Step 4 — Run as a service (Linux / systemd)
 
-`/etc/systemd/system/hive-relay.service`:
+`/etc/systemd/system/ligus-relay.service`:
 
 ```ini
 [Unit]
-Description=Hive Relay
+Description=Ligus Relay
 After=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/hive-relay
-Environment=HIVE_RELAY_ADDR=0.0.0.0:8443
+ExecStart=/usr/local/bin/ligus-relay
+Environment=LIGUS_RELAY_ADDR=0.0.0.0:8443
 Restart=always
-User=hive
-Group=hive
+User=ligus
+Group=ligus
 
 [Install]
 WantedBy=multi-user.target
@@ -146,20 +146,20 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now hive-relay
+sudo systemctl enable --now ligus-relay
 ```
 
-## Step 5 — Point Hive at it
+## Step 5 — Point Ligus at it
 
 In every peer's app: **Settings → Team sync** — set the **Relay URL**
 (`https://relay.example.com`), a shared **Room** id, and (strongly recommended) a
 shared **Workspace key**, then **Save**. If you gated the relay with
-`HIVE_RELAY_ACCESS_TOKENS` (above), also paste each peer's **Relay access token**;
+`LIGUS_RELAY_ACCESS_TOKENS` (above), also paste each peer's **Relay access token**;
 leave it blank for an open relay. Changes apply within a few seconds, no restart.
 Devices on the same relay URL + room converge.
 
-> Environment variables (`HIVE_RELAY_URL` / `HIVE_WORKSPACE` /
-> `HIVE_WORKSPACE_KEY` / `HIVE_RELAY_ACCESS_TOKEN`) still work as first-launch
+> Environment variables (`LIGUS_RELAY_URL` / `LIGUS_WORKSPACE` /
+> `LIGUS_WORKSPACE_KEY` / `LIGUS_RELAY_ACCESS_TOKEN`) still work as first-launch
 > seeds, but the in-app settings are the source of truth after that.
 
 ## Step 6 — Verify
@@ -180,14 +180,14 @@ see [Security & trust](../concepts/security.md) for the full model. Three things
 control access:
 
 - **The workspace key is required to sync.** E2EE is mandatory for relay sync:
-  Hive refuses to push plaintext, so a workspace with no key does not sync (the
+  Ligus refuses to push plaintext, so a workspace with no key does not sync (the
   app shows a Sync error until you set one). With a key, every envelope is sealed
   with ChaCha20-Poly1305 *before* it leaves the device; the relay only ever
   stores ciphertext, and the key never transits the relay. Settings shows
   `🔒 encrypted` when it's on.
 - **Use an unguessable room id.** To revoke read access, rotate the key and/or
   room.
-- **Optionally gate connections** with `HIVE_RELAY_ACCESS_TOKENS` (see above) if
+- **Optionally gate connections** with `LIGUS_RELAY_ACCESS_TOKENS` (see above) if
   you want to restrict who can reach the relay at all.
 
 > The access-token gate controls *connection*, not per-member roles. Workspace
@@ -210,9 +210,9 @@ offline. Three env vars bound it:
 
 | Env var | Default | Effect |
 |---------|---------|--------|
-| `HIVE_RELAY_MAX_ENVELOPES` | `50000` | Per-workspace retained-envelope cap — the primary memory bound. `0` = unbounded. |
-| `HIVE_RELAY_RETENTION_DAYS` | `0` (off) | Also prune envelopes older than N days. |
-| `HIVE_RELAY_MAX_BODY_BYTES` | `4194304` (4 MiB) | Max request body size. |
+| `LIGUS_RELAY_MAX_ENVELOPES` | `50000` | Per-workspace retained-envelope cap — the primary memory bound. `0` = unbounded. |
+| `LIGUS_RELAY_RETENTION_DAYS` | `0` (off) | Also prune envelopes older than N days. |
+| `LIGUS_RELAY_MAX_BODY_BYTES` | `4194304` (4 MiB) | Max request body size. |
 
 The relay is a **cache of recent E2EE traffic**, not a system of record. A device
 offline past the retention window re-syncs the gap from a peer that still has it,
@@ -233,7 +233,7 @@ Pairing-code redemption is **rate-limited** to blunt code enumeration.
 
 ## Where the source lives
 
-[github.com/honeyhive-ai/relay](https://github.com/honeyhive-ai/relay) (Go,
-MIT). It speaks the same `/v1` wire protocol the app and `hive` CLI use.
+[github.com/ligus-ai/relay](https://github.com/ligus-ai/relay) (Go,
+MIT). It speaks the same `/v1` wire protocol the app and `ligus` CLI use.
 For the phone's remote access (the relay tunnel) and push through your own
 relay, see [Remote access for your phone](remote-access.md#using-your-own-relay).

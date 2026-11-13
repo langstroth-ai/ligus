@@ -1,7 +1,7 @@
 # Offline setup with local models
 
-Hive can run fully offline against open-weight models on your own
-hardware. This page describes the setup we measured in Hive's lab: a
+Ligus can run fully offline against open-weight models on your own
+hardware. This page describes the setup we measured in Ligus's lab: a
 llama.cpp gateway on a ROCm GPU box, a CPU worker for quick jobs, and an
 MCP server for documents, web search and memory. It covers which model to
 use for which job and the settings that make a small local model a usable
@@ -14,7 +14,7 @@ numbers, but the comparisons should hold.
 ## The short version
 
 1. Serve models with **llama.cpp behind an OpenAI-compatible gateway**
-   and add it in Hive with the **Local gateway (llama.cpp,
+   and add it in Ligus with the **Local gateway (llama.cpp,
    OpenAI-compatible)** preset.
 2. Use **gpt-oss 20B** for agent loops, **gemma4 12B** for chat,
    **LFM2 8B-A1B** as the Quick tasks model, and **Qwen3.6 35B-A3B**
@@ -26,7 +26,7 @@ numbers, but the comparisons should hold.
 
 ## The gateway
 
-Ollama works with Hive (it has its own provider), but llama.cpp served
+Ollama works with Ligus (it has its own provider), but llama.cpp served
 directly was much faster in our runs:
 
 | Measured | llama.cpp (ROCm) vs Ollama |
@@ -43,10 +43,10 @@ Our gateway is a small OpenAI-compatible proxy in front of several
 `/v1/chat/completions`, `/v1/embeddings` and `/v1/rerank`. Each GPU worker
 runs:
 
-- **4 parallel slots of 32k tokens each.** Hive plans against the
+- **4 parallel slots of 32k tokens each.** Ligus plans against the
   per-slot window, not the model's trained maximum. Without an override,
-  Hive asks a `llama-server` for its per-slot window (`/props`). A gateway
-  without `/props` falls back to Hive's model table, which uses 32k for
+  Ligus asks a `llama-server` for its per-slot window (`/props`). A gateway
+  without `/props` falls back to Ligus's model table, which uses 32k for
   the local families below. Set **Context window** on the runtime if your
   slots are a different size.
 - **q8_0 KV cache.** This roughly halves KV memory compared with f16, so
@@ -68,7 +68,7 @@ llama-server -m gpt-oss-20b.gguf --jinja \
 `--jinja` uses the model's own chat template, which tool calling needs.
 
 !!! warning "Route by prefix when one model runs on several workers"
-    Hive keeps each chat's prompt byte-stable from turn to turn, so a
+    Ligus keeps each chat's prompt byte-stable from turn to turn, so a
     turn can reuse the server's cache of the turn before it. In our
     measurements, the second turn of a chat sent straight to one
     `llama-server` reused 97–98% of its prompt from cache. This held
@@ -80,7 +80,7 @@ llama-server -m gpt-oss-20b.gguf --jinja \
     worker, use a cache-aware (prefix) routing policy, or give each
     worker its own model name.
 
-### Adding it in Hive
+### Adding it in Ligus
 
 **Settings → Models → Add runtime → Preset… → Local gateway (llama.cpp,
 OpenAI-compatible)** fills in:
@@ -91,10 +91,10 @@ OpenAI-compatible)** fills in:
 - **Supports tools** on
 
 Add one runtime per model you want to use (each sends a different
-`model` name). When you type the model name, the form shows Hive's
+`model` name). When you type the model name, the form shows Ligus's
 **recommended role** for that model family.
 
-The equivalent `hive.config.toml` block:
+The equivalent `ligus.config.toml` block:
 
 ```toml
 [[runtimes]]
@@ -123,28 +123,28 @@ supports_tools = true
 Models to avoid for some jobs:
 
 - **LFM2.5** always reasons, so it's slow for quick jobs. It also lost
-  about a third of the facts when it wrote compaction summaries. Hive
+  about a third of the facts when it wrote compaction summaries. Ligus
   gives it no recommended role.
 - Don't use the quick-jobs model for summaries. Summaries need a strong
-  model; Hive writes them with the chat's own runtime.
+  model; Ligus writes them with the chat's own runtime.
 
 ### Reasoning
 
 Reasoning models spend output tokens thinking before they answer.
 
 - **Give them room.** With a 160-token answer budget, reasoning models
-  ran out mid-thought. They need **at least 1024 tokens**. Hive sends no
+  ran out mid-thought. They need **at least 1024 tokens**. Ligus sends no
   `max_tokens` on the OpenAI wire, so the server's slot is the only limit.
 - **gpt-oss always reasons.** When the runtime's thinking switch is off,
-  Hive sends `reasoning_effort: "low"` to keep the reasoning short.
-- **gemma4 and Qwen3** can turn thinking on and off. Hive sends
+  Ligus sends `reasoning_effort: "low"` to keep the reasoning short.
+- **gemma4 and Qwen3** can turn thinking on and off. Ligus sends
   `chat_template_kwargs: {"enable_thinking": false}` unless you turn on
   **Let the model think** for the runtime. Thinking is off by default.
-- **LFM2** doesn't reason, so Hive sends no thinking fields for it.
+- **LFM2** doesn't reason, so Ligus sends no thinking fields for it.
 
-Hive sends these fields only to `custom` and `hive-daemon` runtimes,
+Ligus sends these fields only to `custom` and `hive-daemon` runtimes,
 because hosted APIs reject fields they don't know. If a server rejects
-them anyway, Hive retries the request without them.
+them anyway, Ligus retries the request without them.
 
 ## Tools and MCP
 
@@ -152,10 +152,10 @@ Local models do much better with tools than without them. Turn on
 **Supports tools** for the runtime (the gateway preset already does).
 For an HTTP runtime this offers two kinds of tools:
 
-- **Hive's built-in file tools** (`read_file`, `list_dir`, `search`,
+- **Ligus's built-in file tools** (`read_file`, `list_dir`, `search`,
   `edit_file`, `write_file`, optionally `run_command`). In a git
   workspace, a turn reads the chat's folder until it first writes or
-  runs a command. At that point Hive creates a worktree for the turn,
+  runs a command. At that point Ligus creates a worktree for the turn,
   and the turn's edits come back as a proposal for you to review. A turn
   that only reads never creates a worktree. The switches are in
   **Settings → Permissions → Local model file tools**.
@@ -167,7 +167,7 @@ offered first; whatever doesn't fit is logged. See
 [MCP servers](../addons/mcp.md#local-models-at-most-16-tools-a-turn).
 
 The file tools send the contents of the files the model reads to the
-runtime's endpoint. Hive offers them only when the endpoint's host is on
+runtime's endpoint. Ligus offers them only when the endpoint's host is on
 this machine or a private network:
 
 - loopback, `localhost`, and `*.localhost`
@@ -179,20 +179,20 @@ this machine or a private network:
 Tailscale MagicDNS names (`*.ts.net`) and single-label names (`gpu-box`)
 don't count, because a `*.ts.net` name can be public through Tailscale
 Funnel and a single label can be a public domain. Use the machine's
-Tailscale or LAN IP address instead, or turn on the opt-in below. Hive
+Tailscale or LAN IP address instead, or turn on the opt-in below. Ligus
 reads the host the same way its HTTP client does, so an endpoint such as
 `http://example.com\@127.0.0.1/` counts as `example.com`.
 
 For any other endpoint, turn on **Allow workspace file tools for this
 endpoint** on the runtime. Without it, the model gets only your MCP tools.
 The switch is saved on this device only, for that endpoint: it is never
-read from or written to `hive.config.toml`, so a shared or cloned config
+read from or written to `ligus.config.toml`, so a shared or cloned config
 can't turn it on, and pointing the runtime at another endpoint turns it
 off.
 Hosted APIs (OpenAI, OpenRouter, Azure) never get the tool loop.
 
 Once a turn has read project files (with `read_file`, `search` or
-`run_command`), Hive refuses MCP calls for the rest of that turn. A
+`run_command`), Ligus refuses MCP calls for the rest of that turn. A
 file in the workspace, such as a cloned README, could tell the model to
 send what it read to a web address, and every MCP call's arguments
 leave this machine. MCP lookups made before the first read work as
@@ -200,22 +200,22 @@ normal.
 
 The tool loop allows 24 rounds by default (set **Max tool rounds** on
 the runtime). When the conversation gets close to the context window,
-Hive stops offering tools so the model has to answer.
+Ligus stops offering tools so the model has to answer.
 
 Small models sometimes repeat a call they have already made, such as
-reading the same file again. Hive doesn't run a repeated call again: it
+reading the same file again. Ligus doesn't run a repeated call again: it
 returns the earlier result and asks the model to move on. Anything that
 changes the workspace, like an edit or a command, counts as a change, so
 reading a file again after editing it works as normal. If the model
-repeats one call three times, Hive ends the loop and asks for an
+repeats one call three times, Ligus ends the loop and asks for an
 answer.
 
-On the last round, Hive tells the model the tool budget is used up and
+On the last round, Ligus tells the model the tool budget is used up and
 asks for an answer from what it has. With an OpenAI-compatible server,
 that round still lists the tools but sends `tool_choice: "none"`, so
 llama.cpp can reuse its cached prompt instead of processing the whole
 conversation again. For models that return their reasoning separately,
-like gpt-oss, Hive sends each round's reasoning back with that round's
+like gpt-oss, Ligus sends each round's reasoning back with that round's
 tool calls. In lab tests this helped gpt-oss keep track of ids across
 steps.
 
@@ -228,7 +228,7 @@ A useful MCP server for offline work offers:
 | `remember`, `recall` | Long-term memory across chats |
 | `index_document`, `list_collections` | Add documents to the index and list collections |
 
-Hive's lab uses a server of this shape (rdnamcp), served over
+Ligus's lab uses a server of this shape (rdnamcp), served over
 Streamable HTTP. Add it as an `http` MCP server; see
 [MCP servers](../addons/mcp.md).
 
@@ -243,11 +243,11 @@ Streamable HTTP. Add it as an `http` MCP server; see
 **Settings → Models → Quick tasks model** chooses the runtime used for
 chat titles. Point it at a small, fast model that doesn't reason (LFM2
 8B-A1B on CPU answered in 0.2–0.4 s). If that runtime fails or times
-out, Hive falls back to the chat's own runtime.
+out, Ligus falls back to the chat's own runtime.
 
 ## Compaction
 
-When a conversation outgrows the window, Hive folds the oldest messages
+When a conversation outgrows the window, Ligus folds the oldest messages
 into a summary. Two design choices come from our measurements:
 
 - **The summary goes after the system prompt, not inside it.** The
@@ -257,24 +257,24 @@ into a summary. Two design choices come from our measurements:
   prompt to include the summary gave **0% reuse and 5.6 s**. Stable
   prefixes made agent sessions **2.7× faster** overall.
 - **Compaction is rare and done in batches.** Each summary took **20–34
-  s** to generate. Hive compacts only after the kept history passes 85%
+  s** to generate. Ligus compacts only after the kept history passes 85%
   of the budget, then moves the boundary far enough that it fits in 50%.
   Turns between compactions reuse the same summary without another
   model call.
 
-Hive saves each chat's summary on this device, so after a restart it
+Ligus saves each chat's summary on this device, so after a restart it
 reuses the summary instead of writing a new one. The saved summary
 stays out of the synced chat log. If a message that the summary covers
-is edited or removed, Hive writes a new summary.
+is edited or removed, Ligus writes a new summary.
 
 If the summarizer fails, the turn still goes ahead. It uses the
-previous summary, or a note that earlier messages were left out. Hive
+previous summary, or a note that earlier messages were left out. Ligus
 then waits before it tries the summarizer again: after 2 more turns or 2
 minutes, whichever comes first. Each failure in a row doubles the wait,
 up to 16 turns or 30 minutes.
 
 Summaries are written by the chat's own runtime. Use a strong model for
-chats that run long, and check recall on your own chats: in Hive's eval,
+chats that run long, and check recall on your own chats: in Ligus's eval,
 gemma4 12B kept all five planted facts through compaction (3 of 3 runs),
 while gpt-oss 20B dropped one of the five in every run.
 
@@ -299,7 +299,7 @@ is `/v1/rerank` (`{model, query, documents, top_n}` in,
 
 ### Vault retrieval
 
-Hive can run the same pipeline over the vaults attached to a chat. Set
+Ligus can run the same pipeline over the vaults attached to a chat. Set
 it up in **Settings → Models → Vault retrieval**:
 
 | Field | Gateway value |
@@ -317,7 +317,7 @@ that message, under a "Retrieved from reference vaults" heading. The
 system prompt stays the same from turn to turn, so the server's prompt
 cache keeps working. Embeddings are cached in memory, so after the
 first message only the question is embedded. The cache is cleared when
-Hive restarts.
+Ligus restarts.
 
 With retrieval off, or when it fails or times out, vaults are pasted
 into the system prompt instead, capped at 3 sources of 6000 characters

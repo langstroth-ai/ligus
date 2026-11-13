@@ -12,7 +12,7 @@ style) without repeating the instructions in every message.
 ## Install from the internet
 
 In the right-rail **Skills** pane, **Install from the internet** fetches a
-`SKILL.md` and stores the skill in a per-workspace catalog (`.hive/skills.json`).
+`SKILL.md` and stores the skill in a per-workspace catalog (`.ligus/skills.json`).
 The same reference forms as MCP work:
 
 ```text
@@ -41,7 +41,7 @@ Use `pdftk` to fill forms. Always validate the output with
 - `name` → the skill's display name (falls back to the folder name).
 - Everything after the frontmatter is the **instructions** body.
 - Other frontmatter keys (`description`, `allowed-tools`) are advisory and
-  aren't stored on the skill — Hive keeps only the name and the instruction
+  aren't stored on the skill — Ligus keeps only the name and the instruction
   body (plus the source URL).
 
 No frontmatter is fine — the whole file becomes the instructions and the
@@ -84,7 +84,7 @@ full into the system prompt of whichever participants it targets.
 
 ## Where it lives
 
-Installed skills are workspace-level: stored in `.hive/skills.json`,
+Installed skills are workspace-level: stored in `.ligus/skills.json`,
 seeded into every chat in the workspace, and surviving relaunch. Remove a
 skill from the **Skills** pane to drop it from the catalog.
 

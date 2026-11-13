@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Cross-build the Hive desktop app for Windows (x86_64-pc-windows-msvc) from a
+# Cross-build the Ligus desktop app for Windows (x86_64-pc-windows-msvc) from a
 # macOS/Linux host, using Docker + cargo-xwin. Produces the NSIS installer.
 #
 # The frontend (web/dist) is built on the HOST first and reused inside the
@@ -8,7 +8,7 @@
 # Tauri's NSIS bundler runs on Linux but probes a few host GTK/appindicator
 # libs during bundling, so those -dev packages are installed too.
 #
-# Output: target/x86_64-pc-windows-msvc/release/bundle/nsis/Hive_*-setup.exe
+# Output: target/x86_64-pc-windows-msvc/release/bundle/nsis/Ligus_*-setup.exe
 #
 set -euo pipefail
 

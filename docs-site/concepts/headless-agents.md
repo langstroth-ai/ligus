@@ -1,11 +1,11 @@
 # Headless agents & setups
 
-Hive can run an agent **without the desktop app**, using the `hive` CLI — on a
+Ligus can run an agent **without the desktop app**, using the `ligus` CLI — on a
 cloud VM, a spare box, or as a background process on your own machine. This page
 covers the ways to wire that up and which one fits your situation.
 
 > The command reference for the CLI lives in
-> [`crates/hive-cli/README.md`](https://github.com/honeyhive-ai/hive/blob/main/crates/hive-cli/README.md).
+> [`crates/hive-cli/README.md`](https://github.com/ligus-ai/ligus/blob/main/crates/hive-cli/README.md).
 > This page is about **topology** — where the agent runs and how it reaches your
 > workspace.
 
@@ -15,28 +15,28 @@ macOS + Linux, Apple Silicon and x86_64. **Homebrew** (recommended — tracks
 releases with `brew upgrade`):
 
 ```sh
-brew install honeyhive-ai/hive/hive-cli
+brew install ligus-ai/ligus/ligus
 ```
 
 Or the one-line installer:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/honeyhive-ai/hive/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ligus-ai/ligus/main/install.sh | sh
 ```
 
-Both put the prebuilt `hive` binary on your `PATH` (the installer honors
-`HIVE_INSTALL_DIR` / `HIVE_VERSION`). Or build from source:
+Both put the prebuilt `ligus` binary on your `PATH` (the installer honors
+`LIGUS_INSTALL_DIR` / `LIGUS_VERSION`). Or build from source:
 `cargo install --path crates/hive-cli`.
 
 The CLI is the **same runtime as the desktop app, without the window** — so it
 can host agents, drive chats, and sync from a terminal or a background service.
 Even if you live in the GUI, installing it locally is worth it when you want
-agents to keep working while the app is closed, or to script Hive from cron / a
+agents to keep working while the app is closed, or to script Ligus from cron / a
 git hook / CI (setup 1 below).
 
 ## The one rule that decides your setup
 
-Hive state is a **per-device, end-to-end-encrypted event log** — a local
+Ligus state is a **per-device, end-to-end-encrypted event log** — a local
 `hive.db`. Anything participating in a workspace must either
 
 - **share that file** (same machine), or
@@ -54,19 +54,19 @@ infrastructure. Point the CLI at the app's own data dir so both read/write the
 same `hive.db`:
 
 ```sh
-# macOS app data dir shown; adjust per-OS. `hive agent` is a local, personal
+# macOS app data dir shown; adjust per-OS. `ligus agent` is a local, personal
 # responder — gated so it never runs unattended by accident.
-HIVE_ALLOW_PERSONAL_AGENT=1 \
-HIVE_DATA_DIR="$HOME/Library/Application Support/com.hive.desktop" \
-  hive agent bot
+LIGUS_ALLOW_PERSONAL_AGENT=1 \
+LIGUS_DATA_DIR="$HOME/Library/Application Support/ai.ligus.desktop" \
+  ligus agent bot
 ```
 
 Run it as a **background service** — launchd on macOS, systemd on Linux — and the
 agent stays responsive after you quit the app or shut the lid.
 
-The same data-dir trick lets you **script Hive** from a terminal, cron, a git
-hook, or CI without the GUI: `hive send @agent "…"`, `hive new`, `hive tail`,
-`hive queue`, `hive sync`.
+The same data-dir trick lets you **script Ligus** from a terminal, cron, a git
+hook, or CI without the GUI: `ligus send @agent "…"`, `ligus new`, `ligus tail`,
+`ligus queue`, `ligus sync`.
 
 Trade-offs: the agent **signs as you** (shared identity, not a distinct agent
 account); the app refreshes on window focus rather than instantly; and it's a
@@ -91,12 +91,12 @@ while your laptop is closed: the relay's **store-and-forward** holds the agent's
 events, and your app catches up when it next comes online.
 
 **The easy path — generate the whole command.** On the machine that holds the
-relay issuer key (where you ran `hive-relay keygen`), one command mints the
+relay issuer key (where you ran `ligus-relay keygen`), one command mints the
 agent's token, enrolls it in the workspace roster, and prints the exact line the
 developer pastes on the remote box:
 
 ```sh
-hive-relay bootstrap-agent --key "$(cat ~/.hive/issuer_ed25519.key)" \
+ligus-relay bootstrap-agent --key "$(cat ~/.ligus/issuer_ed25519.key)" \
   --relay https://your-relay --room acme --ws-key <e2ee-passphrase> \
   --sub github:<agent-id> --admin-sub github:<your-id> --label prod-box
 ```
@@ -105,9 +105,9 @@ It outputs a single copy-paste line — the developer runs it verbatim and the
 agent is live:
 
 ```sh
-brew install honeyhive-ai/hive/hive-cli && \
-  hive enroll "hivews1:…" --token "hrt1.…" && \
-  hive worker --label prod-box
+brew install ligus-ai/ligus/ligus && \
+  ligus enroll "hivews1:…" --token "hrt1.…" && \
+  ligus worker --label prod-box
 ```
 
 (The issuer private key never leaves your machine — only the minted agent token
@@ -122,11 +122,11 @@ same copy-paste command in a box — no terminal needed on the admin side. See
 
 **Manual path.** Or wire it by hand. Instead of hand-exporting four env vars,
 paste the workspace's `hivews1:` invite (the same one the app shares) —
-`hive enroll` decodes the relay URL, room, and E2EE key and saves them to
-`$HIVE_DATA_DIR/config.toml`:
+`ligus enroll` decodes the relay URL, room, and E2EE key and saves them to
+`$LIGUS_DATA_DIR/config.toml`:
 
 ```sh
-hive enroll "hivews1:…" --token <hrt1-access-token>   # --token only for a membership-enforcing relay
+ligus enroll "hivews1:…" --token <hrt1-access-token>   # --token only for a membership-enforcing relay
 ```
 
 Then provision the agent's model credential (the §12.5 rule — a detached agent
@@ -135,24 +135,24 @@ uses a **workspace-owned** runtime, never your personal key) and run the
 bound to it:
 
 ```sh
-export HIVE_WS_SECRET_acme=sk-…              # the secret the workspace runtime references
-hive register-worker --label prod-box        # → this box's host id
-hive add-agent reviewer ws-claude --host <host-id>
-hive sync
-hive worker --label prod-box                 # always-on; @reviewer is now answered here
+export LIGUS_WS_SECRET_acme=sk-…              # the secret the workspace runtime references
+ligus register-worker --label prod-box        # → this box's host id
+ligus add-agent reviewer ws-claude --host <host-id>
+ligus sync
+ligus worker --label prod-box                 # always-on; @reviewer is now answered here
 ```
 
-(You can still set `HIVE_RELAY_URL` / `HIVE_WORKSPACE` / `HIVE_WORKSPACE_KEY` /
-`HIVE_RELAY_ACCESS_TOKEN` directly — env always overrides the saved config.)
+(You can still set `LIGUS_RELAY_URL` / `LIGUS_WORKSPACE` / `LIGUS_WORKSPACE_KEY` /
+`LIGUS_RELAY_ACCESS_TOKEN` directly — env always overrides the saved config.)
 
 **On a membership-enforcing relay**, the box needs an *identified* token whose
 subject is enrolled in the workspace roster. Either an admin adds the agent's
-account + hands it a token minted with `hive-relay issue --sub github:<agent-id>`
+account + hands it a token minted with `ligus-relay issue --sub github:<agent-id>`
 (used as `--token` above), or — if they shared an **invite code** — the box
 self-enrolls:
 
 ```sh
-hive join <invite-code>    # redeems the code → enrolls this box at the invite's role
+ligus join <invite-code>    # redeems the code → enrolls this box at the invite's role
 ```
 
 On an open relay none of this is needed; unclaimed workspaces stay tokenless.
@@ -161,32 +161,32 @@ The worker *enforces* the §12.5 rule — a detached agent must use a workspace
 runtime, so it never falls back to a personal key. It also **drains queued work**:
 an unanswered `@mention` waits for its agent's host, and the worker answers every
 one bound to it — backlog included — so it catches up on mentions addressed while
-it was down. `hive queue` shows what's waiting and whether each agent's host is
-online; if a member's device host is offline, `hive set-agent-host <agent>
+it was down. `ligus queue` shows what's waiting and whether each agent's host is
+online; if a member's device host is offline, `ligus set-agent-host <agent>
 <worker>` reassigns the agent to a worker to drain it ("run on worker instead").
 See the
-[CLI README](https://github.com/honeyhive-ai/hive/blob/main/crates/hive-cli/README.md#the-worker-daemon-spec-124)
+[CLI README](https://github.com/ligus-ai/ligus/blob/main/crates/hive-cli/README.md#the-worker-daemon-spec-124)
 for the full daemon behaviour.
 
 The **desktop app** surfaces the same queue without the CLI: the **Review**
 pane lists every unanswered agent mention with its host's live status, and an
 offline or device-bound agent gets a **Run on worker** button that reassigns it
-to an online worker — the GUI equivalent of `hive set-agent-host`. See
+to an online worker — the GUI equivalent of `ligus set-agent-host`. See
 [Right Rail — Review](../features/right-rail.md).
 
-**Give the worker tools.** A worker (or `hive agent`) can reach external boards
-like **Linear** or **GitHub** through MCP tools: point `HIVE_MCP_CONFIG` at a TOML
+**Give the worker tools.** A worker (or `ligus agent`) can reach external boards
+like **Linear** or **GitHub** through MCP tools: point `LIGUS_MCP_CONFIG` at a TOML
 listing MCP servers and provision each server's token via the environment (never
 in the file). With no config it runs tool-free, exactly as before. See the
-[CLI README — MCP tools for headless agents](https://github.com/honeyhive-ai/hive/blob/main/crates/hive-cli/README.md#mcp-tools-for-headless-agents).
+[CLI README — MCP tools for headless agents](https://github.com/ligus-ai/ligus/blob/main/crates/hive-cli/README.md#mcp-tools-for-headless-agents).
 
 **Tools are gated on the requester's role.** A synced message only drives the
-worker's MCP tools if its author holds at least `HIVE_MCP_MIN_ROLE`
+worker's MCP tools if its author holds at least `LIGUS_MCP_MIN_ROLE`
 (`viewer`|`contributor`|`admin`|`owner`, default `contributor`). Below that bar
 the agent still replies — it just runs **tool-free**, so a Viewer can't provoke
 a write to Linear or GitHub through a headless agent. Raise the bar with
-`HIVE_MCP_MIN_ROLE=admin`. See the
-[CLI README — requester-role gate](https://github.com/honeyhive-ai/hive/blob/main/crates/hive-cli/README.md#requester-role-gate-hive_mcp_min_role).
+`LIGUS_MCP_MIN_ROLE=admin`. See the
+[CLI README — requester-role gate](https://github.com/ligus-ai/ligus/blob/main/crates/hive-cli/README.md#requester-role-gate-ligus_mcp_min_role).
 
 Do **not** try to substitute a network filesystem (SSHFS/NFS) for the relay —
 SQLite over a network mount is corruption-prone. Use the relay.
@@ -230,13 +230,13 @@ Define one, share it, provision its secret on the worker, then point the agent a
 it:
 
 ```sh
-hive add-runtime ws-claude "Team Claude" anthropic claude-sonnet-4-5 --secret-ref acme
-hive sync                                          # share it with the workspace
-HIVE_WS_SECRET_acme=sk-…  hive agent bot --runtime ws-claude
+ligus add-runtime ws-claude "Team Claude" anthropic claude-sonnet-4-5 --secret-ref acme
+ligus sync                                          # share it with the workspace
+LIGUS_WS_SECRET_acme=sk-…  ligus agent bot --runtime ws-claude
 ```
 
 - `--secret-ref <name>` keeps the key **off** the synced log — the worker holds
-  it in env `HIVE_WS_SECRET_<name>`. `hive runtimes` shows `✓` when it's present.
+  it in env `LIGUS_WS_SECRET_<name>`. `ligus runtimes` shows `✓` when it's present.
 - `--secret <value>` carries the key **E2EE on the log** (zero worker
   provisioning; use only for trusted workspaces).
 
@@ -255,15 +255,15 @@ once, and the work stays correct:
   **Implement** applies the patch to the workspace. Nothing lands silently.
   (Isolated turns start from the last commit, not the main tree's uncommitted
   WIP.)
-- **Worker pool for throughput.** Run **several `hive worker` processes** to
+- **Worker pool for throughput.** Run **several `ligus worker` processes** to
   drain the backlog in parallel — `claim_turn` de-dups so no two answer the same
   mention, and per-turn worktrees keep their file edits from colliding even on a
   shared checkout:
 
   ```bash
   # run workers from inside the repo checkout they should edit
-  HIVE_WORKER_PERMISSION_MODE=acceptEdits hive worker --label prod-1 &
-  HIVE_WORKER_PERMISSION_MODE=acceptEdits hive worker --label prod-2 &
+  LIGUS_WORKER_PERMISSION_MODE=acceptEdits ligus worker --label prod-1 &
+  LIGUS_WORKER_PERMISSION_MODE=acceptEdits ligus worker --label prod-2 &
   # each claims distinct mentions; each write turn isolates its own worktree
   ```
 
@@ -271,7 +271,7 @@ once, and the work stays correct:
 
   **Write access is opt-in.** A worker's claude, agy and copilot agents are
   **read-only by default** (they answer but don't edit). Set
-  `HIVE_WORKER_PERMISSION_MODE=acceptEdits` (write files) or `bypassPermissions`
+  `LIGUS_WORKER_PERMISSION_MODE=acceptEdits` (write files) or `bypassPermissions`
   (also run shell commands) to let them edit (`runCommands` — edits plus
   commands — applies to agy / copilot) — only then does a worker turn
   isolate a worktree and produce a review-gated proposal. Run the worker from

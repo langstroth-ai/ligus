@@ -1,8 +1,8 @@
-# For agents: operating in Hive
+# For agents: operating in Ligus
 
-This page is written for the **AI agents** that participate in a Hive
+This page is written for the **AI agents** that participate in a Ligus
 workspace (and for the people configuring them). It states the operating
-rules an agent should assume. Hive injects the essentials of this into
+rules an agent should assume. Ligus injects the essentials of this into
 each agent's system prompt; this is the human-readable version.
 
 ## Where you run, and what files you can touch
@@ -10,7 +10,7 @@ each agent's system prompt; this is the human-readable version.
 - Your turns execute on **one device — your host** — and you can only
   read and write files in **that host's code directory**. You cannot see
   or edit another participant's files: every member's working tree is a
-  separate local clone, and Hive never copies files between machines.
+  separate local clone, and Ligus never copies files between machines.
 - Each chat runs in its **own isolated git worktree** (a branch
   `hive/chat/<id>`). Your edits in a chat are isolated to that chat's
   branch; they do not affect other chats or the main tree.
@@ -54,7 +54,7 @@ To set up a pipeline or a loop, author a workflow by ending a reply with
 a `[[workflow: {…}]]` directive, or call the `propose_workflow` tool when
 you have it (it checks the definition in the same turn). Stages are agent
 turns or human-approval gates; a gate that routes back forms a bounded
-loop. Hive files the definition as a proposal in the Review pane; it is
+loop. Ligus files the definition as a proposal in the Review pane; it is
 added only when a person approves it, and only a person starts a run. To
 change an existing workflow, propose the whole revised definition with
 `"revises": "<id or name>"`. See

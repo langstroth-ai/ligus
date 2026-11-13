@@ -2,13 +2,13 @@
 
 !!! note "Roadmap — not in the current build"
     Direct peer-to-peer (STUN candidate exchange + UDP hole-punch) is a tracked
-    follow-up. Today the relay ([honeyhive-ai/relay](https://github.com/honeyhive-ai/relay)) **forwards encrypted event
+    follow-up. Today the relay ([ligus-ai/relay](https://github.com/ligus-ai/relay)) **forwards encrypted event
     envelopes** between peers instead of brokering a direct connection — see
     [Self-hosting a relay](self-host.md). This page documents the planned
     rendezvous design.
 
-The **rendezvous relay** is Hive's smallest possible coordination
-point for cross-network peers. Two Hive instances on different
+The **rendezvous relay** is Ligus's smallest possible coordination
+point for cross-network peers. Two Ligus instances on different
 networks each publish their STUN-discovered candidates to the
 relay; each looks the other up by `(workspaceID, deviceID)`; the
 relay drops out of the data path once they connect direct.
@@ -19,9 +19,9 @@ UUIDs, device public keys, and STUN IP+port pairs.
 ```mermaid
 sequenceDiagram
     autonumber
-    participant A as Alice's Hive
+    participant A as Alice's Ligus
     participant R as Rendezvous Relay
-    participant B as Bob's Hive
+    participant B as Bob's Ligus
 
     Note over A: workspace open, publishing on
     A->>R: POST /v1/rendezvous (signed)
@@ -43,7 +43,7 @@ sequenceDiagram
 ## The protocol
 
 Three endpoints. Full `/v1` spec in the relay repo,
-[github.com/honeyhive-ai/relay](https://github.com/honeyhive-ai/relay):
+[github.com/ligus-ai/relay](https://github.com/ligus-ai/relay):
 
 ### `POST /v1/rendezvous`
 
@@ -99,19 +99,19 @@ If you don't trust your relay, run your own —
 
 ## TTL & republishing
 
-Publications expire after `ttlSeconds`. Hive republishes every ~60
+Publications expire after `ttlSeconds`. Ligus republishes every ~60
 seconds while a workspace is active. This means:
 
 - A peer who joins finds you within 60s of you opening the
   workspace.
-- If you close Hive, your publication evicts within 90s and peers
+- If you close Ligus, your publication evicts within 90s and peers
   stop finding you.
 - Network address changes (Wi-Fi switch, router reboot) update
   within the next publish cycle.
 
 ## Failure modes
 
-- **STUN unreachable** — Hive publishes a `hostLocal` candidate
+- **STUN unreachable** — Ligus publishes a `hostLocal` candidate
   instead. Peers on the same LAN can still reach you; peers across
   NAT can't (the relay can fall back to TURN-style forwarding —
   see [TURN fallback](turn.md)).

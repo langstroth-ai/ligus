@@ -3,9 +3,9 @@
 ## Which version am I running?
 
 - **Desktop app**: **Settings → Updates & data** shows the version you're on.
-- **`hive` CLI** (on a `hive serve` or `hive worker` host):
+- **`ligus` CLI** (on a `ligus serve` or `ligus worker` host):
   ```bash
-  hive --version     # prints: hive <version>   (-V and `hive version` work too)
+  ligus --version     # prints: ligus <version>   (-V and `ligus version` work too)
   ```
 
 Include both when you report a problem.
@@ -17,10 +17,10 @@ Builds are unsigned, so the OS blocks the first launch:
 - **macOS** — "can't be opened because the developer cannot be verified":
   right-click → **Open**, or clear quarantine once:
   ```bash
-  xattr -dr com.apple.quarantine /Applications/Hive.app
+  xattr -dr com.apple.quarantine /Applications/Ligus.app
   ```
 - **Windows** — SmartScreen → **More info → Run anyway**.
-- **Linux** — `chmod +x Hive_*.AppImage` (and add `--appimage-extract-and-run`
+- **Linux** — `chmod +x Ligus_*.AppImage` (and add `--appimage-extract-and-run`
   on hosts without FUSE).
 
 ## Can't reach a local runtime (e.g. Ollama)
@@ -31,18 +31,18 @@ endpoint isn't reachable:
 
 - Confirm the service is running (`curl http://localhost:11434/api/tags`).
 - Check the URL/port in the runtime config.
-- For the `pi` agent → Ollama, set the **Ollama base URL** on the runtime (Hive
+- For the `pi` agent → Ollama, set the **Ollama base URL** on the runtime (Ligus
   bootstraps a provider config from it).
 
 ## A subprocess agent failed or hung
 
 - **`spawn claude: No such file or directory`** (or the same for `aider`, `pi`,
   `agy` or `copilot`)
-  — the CLI isn't visible to the app. Hive repairs the minimal `PATH` that
+  — the CLI isn't visible to the app. Ligus repairs the minimal `PATH` that
   Finder/Dock launches inherit by probing your login shell at startup and
   merging in common bin dirs (`~/.local/bin`, `/opt/homebrew/bin`, …). If a
   CLI still isn't found, make sure your shell profile (`.zprofile`/`.zshrc`)
-  exports its location, then relaunch Hive.
+  exports its location, then relaunch Ligus.
 - **`pi exited with status 1` / "No API key"** — `pi` isn't configured. Run
   `pi login` (or set its provider/model), or point it at a local Ollama via the
   runtime's Ollama base URL.
@@ -56,7 +56,7 @@ endpoint isn't reachable:
   subscription's quota or premium requests ran out. See
   [Configuring a runtime](../getting-started/configuring-a-runtime.md#subscription-clis-google-antigravity-and-github-copilot).
 - **The turn hangs** — subprocess agents are bounded by a wall-clock timeout;
-  raise or lower it with `HIVE_AGENT_TIMEOUT_SECS` (default 300).
+  raise or lower it with `LIGUS_AGENT_TIMEOUT_SECS` (default 300).
 - The error text now includes the tool's own stderr, so check the agent reply
   for the underlying message.
 
@@ -86,10 +86,10 @@ first. Then check, on **every** device:
 > "everything stopped" is unlikely; look for a **Sync error** on the pill and the
 > specific reason it names.
 
-## The phone can't reach the box (`hive remote status`)
+## The phone can't reach the box (`ligus remote status`)
 
-On the `hive serve` host, run `hive remote status` with the server's
-environment (the same `HIVE_DATA_DIR`), since it reads the status file the
+On the `ligus serve` host, run `ligus remote status` with the server's
+environment (the same `LIGUS_DATA_DIR`), since it reads the status file the
 running server keeps in its data directory:
 
 ```text
@@ -105,36 +105,36 @@ How to read the `serve:` line:
   running server last checked in (it refreshes every 30 seconds).
 - **`not connected (…, since …)`** — the server is running but has no relay
   link; a `last error:` at the end says why.
-- **`unknown: hive serve last reported … ago (…) — is it running?`** — the
+- **`unknown: ligus serve last reported … ago (…) — is it running?`** — the
   server stopped refreshing its status (no check-in for over 90 seconds), so
   it has most likely stopped or crashed. Check its service and logs and
   restart it.
 - `relay: not configured` means remote access was never enabled
-  (`hive remote enable --relay <url>`). No `serve:` line means `hive serve`
+  (`ligus remote enable --relay <url>`). No `serve:` line means `ligus serve`
   hasn't reported a relay status yet (for example, it hasn't been started
   since remote access was enabled).
 
 See [Remote access](../networking/remote-access.md) and
-[Running hive serve as your own device](serve-box.md).
+[Running ligus serve as your own device](serve-box.md).
 
 ## An MCP tool is never offered to a local model
 
 Ollama and `custom` (OpenAI-compatible) runtimes get **at most 16 tools a
-turn**. If you enable many MCP tools, some aren't offered, and Hive logs a
+turn**. If you enable many MCP tools, some aren't offered, and Ligus logs a
 warning naming them: `tool cap reached: these tools are NOT offered this
 turn`. Find it in the log file (**Settings → Diagnostics**) on the desktop,
-or in the log output of `hive serve` / `hive worker`. To have a tool offered,
+or in the log output of `ligus serve` / `ligus worker`. To have a tool offered,
 name it in the agent's instructions, a skill it uses, or your message, or
 disable servers the agent doesn't need. See
 [MCP servers](../addons/mcp.md#local-models-at-most-16-tools-a-turn).
 
 ## Agent says it did something but nothing happened
 
-The agent may have narrated an action it didn't broker through Hive:
+The agent may have narrated an action it didn't broker through Ligus:
 
-- The runtime may not support Hive's tool calls (e.g. plain Ollama).
+- The runtime may not support Ligus's tool calls (e.g. plain Ollama).
 - A subprocess agent (`claude` / `pi` / `aider`) can run tools through its **own**
-  mechanism — the side-effect happens, but Hive doesn't surface it as a tool
+  mechanism — the side-effect happens, but Ligus doesn't surface it as a tool
   block. Check the workspace folder directly: file edits are on disk, commits
   are in `git log`.
 

@@ -1,7 +1,7 @@
 # Screenshot Capture Guide
 
 A handoff doc for whoever (human or agent) captures the PNGs the docs site
-references. It reflects the **current 1.0 Rust + Tauri Hive UI** (rail + sidebar
+references. It reflects the **current 1.0 Rust + Tauri Ligus UI** (rail + sidebar
 + right-rail panes; tabbed Settings; **5-step** onboarding). Recipes run
 top-to-bottom in one ~15-minute session — later states build on earlier ones.
 
@@ -22,7 +22,7 @@ elements).
 
 1. **Build + install the app:**
    ```bash
-   ./scripts/build.sh mac           # produces target/release/bundle/dmg/Hive_*.dmg
+   ./scripts/build.sh mac           # produces target/release/bundle/dmg/Ligus_*.dmg
    ```
    Install the `.dmg`, or run a dev build with `cargo tauri dev` (the chrome is
    identical; a packaged build avoids the dev toolbar).
@@ -30,15 +30,15 @@ elements).
    Ollama (`ollama serve` + a pulled model) so captures don't burn API quota;
    an `ANTHROPIC_API_KEY` also works.
 3. **Start from a clean install** so onboarding runs and the roster is empty.
-   Quit Hive, then move its data aside (reversible):
+   Quit Ligus, then move its data aside (reversible):
    ```bash
-   mv ~/Library/Application\ Support/com.hive.desktop \
-      ~/Library/Application\ Support/com.hive.desktop.bak-$(date +%s)
+   mv ~/Library/Application\ Support/ai.ligus.desktop \
+      ~/Library/Application\ Support/ai.ligus.desktop.bak-$(date +%s)
    ```
 4. **Theme:** in onboarding (step 5) or **Settings → Appearance** later, pick the
    **Midnight** palette in **dark** mode so every shot is consistent.
 5. **Window size:** ~1440 × 900 logical. Drag to size, or try
-   `osascript -e 'tell app "Hive" to set bounds of window 1 to {0,0,1440,900}'`.
+   `osascript -e 'tell app "Ligus" to set bounds of window 1 to {0,0,1440,900}'`.
 6. **Capture:** `Cmd+Shift+4` then `Space` → click a window for a tight crop, or
    `Cmd+Shift+4` + drag for a region. PNGs land on the Desktop.
 7. **Output dir:** `docs-site/images/`. Rename + move each capture after taking it.
@@ -77,7 +77,7 @@ elements).
 > referenced only by the image gallery. Capture it for the README/gallery, but
 > it isn't required for the docs build.
 
-**State.** Hive open on a workspace with a few chats and one selected.
+**State.** Ligus open on a workspace with a few chats and one selected.
 
 **Recipe.**
 1. Finish onboarding into the demo workspace.
@@ -96,7 +96,7 @@ Agents/Workflows sections), the transcript (3+ turns), and the right rail.
 **State.** Onboarding **step 1** (identity), as first shown — before signing in
 or typing a name.
 
-**Recipe.** With a clean install (prereq 3), launch Hive. The onboarding card
+**Recipe.** With a clean install (prereq 3), launch Ligus. The onboarding card
 appears on step 1 ("Who are you?") with the **Sign in with GitHub** button and a
 display-name field. Capture the card before interacting.
 
@@ -291,8 +291,8 @@ incoming request, and connected friends with presence dots.
 as a relay admin so the management UI is shown (not the "needs an admin" hint).
 
 **Recipe.**
-1. Point Hive at a relay whose admin list includes your GitHub login
-   (`HIVE_RELAY_ADMIN_LOGINS`), and sign in with GitHub (Settings → Account).
+1. Point Ligus at a relay whose admin list includes your GitHub login
+   (`LIGUS_RELAY_ADMIN_LOGINS`), and sign in with GitHub (Settings → Account).
 2. Open **Settings → Team sync**, scroll to **Team members**.
 3. Add one member so the list has a row (and, optionally, capture the one-time
    token reveal callout in a second shot — but redact/blur the token).
@@ -336,10 +336,10 @@ each other with their avatars/handles.
 
 ### `headless-cli.png` — for `concepts/headless-agents.md`
 
-**Recipe.** A terminal running the CLI daemon, e.g. `hive worker` streaming
-claimed turns (or `hive --help`). This is a **terminal** shot, not the app.
+**Recipe.** A terminal running the CLI daemon, e.g. `ligus worker` streaming
+claimed turns (or `ligus --help`). This is a **terminal** shot, not the app.
 
-**Must be visible.** The `hive` command and a couple of lines of its output.
+**Must be visible.** The `ligus` command and a couple of lines of its output.
 
 ### `schedules.png` — for `features/scheduling.md`
 
@@ -396,7 +396,7 @@ Once the nine referenced shots exist, the docs build can return to strict mode
 
 ## Notes for an AI agent (e.g. Codex driving the desktop)
 
-- Hive is a **Tauri** app — one native window titled **`Hive`** wrapping a web
+- Ligus is a **Tauri** app — one native window titled **`Ligus`** wrapping a web
   view. Settings, Friends, and chats are **in-window
   views** (not separate OS windows/sheets), so navigate within the single
   window; don't hunt for a "Settings" child window.
@@ -409,5 +409,5 @@ Once the nine referenced shots exist, the docs build can return to strict mode
   "Open GitHub ↗" button that opens the browser; it resolves once you authorize.
 - Pause ~500 ms after each navigation before capturing (UI transitions settle).
 - `screencapture -l <window-id>` works given screen-recording permission; get the
-  id via `osascript -e 'tell app "System Events" to get id of window 1 of process "Hive"'`.
+  id via `osascript -e 'tell app "System Events" to get id of window 1 of process "Ligus"'`.
   Otherwise fall back to `Cmd+Shift+4 + Space + click`.

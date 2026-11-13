@@ -1,6 +1,6 @@
 # Onboarding
 
-Hive's first-launch wizard — "Four quick steps" — appears
+Ligus's first-launch wizard — "Four quick steps" — appears
 automatically the first time you open the app, before you've picked a
 name. It's gated on your identity, not on any config file: it shows
 whenever your display name is still unset (or the placeholder `You`)
@@ -28,7 +28,7 @@ edit files in my project"** checkbox maps to Claude Code's permission
 mode — checked is `acceptEdits`, unchecked is read-only `default`.
 
 The wizard persists your settings and identity into the app data dir
-(`com.hive.desktop/`): public account/device records as JSON, private
+(`ai.ligus.desktop/`): public account/device records as JSON, private
 key seeds under `keys/`, and `settings.json` (including any API key you
 paste). (Key seeds are files, not in the OS keystore — see
 [Identity & devices](../concepts/identity.md).)
@@ -39,20 +39,20 @@ Because the wizard is gated on your identity plus the `hive.onboarded`
 localStorage flag, it won't return just because you edit or delete a
 config file. The supported way to start over is **Settings → Account →
 Danger zone → "Reset local data"**, which wipes this device's chats,
-identity, keys, settings, and workspaces and relaunches Hive fresh into
+identity, keys, settings, and workspaces and relaunches Ligus fresh into
 the wizard.
 
 ## Headless / pre-seeded config
 
 You can pre-populate runtimes and transport by shipping a
-`hive.config.toml` in your workspace root; the Settings UI is a GUI
+`ligus.config.toml` in your workspace root; the Settings UI is a GUI
 over the same fields. Note this does **not** skip the wizard on its
 own — onboarding still runs until an identity (display name) exists.
 Minimum viable config:
 
 ```toml
 [app]
-name = "Hive"
+name = "Ligus"
 local_mode = true
 sync_mode = "local"
 default_runtime = "anthropic"

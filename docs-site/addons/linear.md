@@ -1,6 +1,6 @@
 # Linear & remote MCP servers (OAuth)
 
-Beyond stdio and plain-HTTP [MCP servers](mcp.md), Hive speaks the modern
+Beyond stdio and plain-HTTP [MCP servers](mcp.md), Ligus speaks the modern
 **Streamable-HTTP** MCP transport with **OAuth 2.1 + PKCE**. That lets
 agents talk to hosted MCP services that authenticate you in the browser —
 [Linear](https://linear.app) being the headline example.
@@ -11,11 +11,11 @@ Everything lives in **Settings → Tools**.
 
 Plain-HTTP MCP servers use a static bearer token from an env var. Hosted
 providers like Linear instead want a real OAuth handshake: you authorize
-Hive once in your browser, and Hive holds short-lived tokens that it
+Ligus once in your browser, and Ligus holds short-lived tokens that it
 **refreshes automatically**. No long-lived secret sits in your config.
 
 The flow uses a **loopback redirect** — `http://127.0.0.1:51736/callback`
-— so the browser hands the authorization code back to the Hive app
+— so the browser hands the authorization code back to the Ligus app
 running on your machine.
 
 ## Add Linear
@@ -44,12 +44,12 @@ credentials.
 1. **Add Linear (issues)** from Settings → Tools.
 2. **Enable** the server. As with every MCP server, install/add is inert —
    enabling is what wires it into chats. See the security note below.
-3. Click **Connect** on the server row. On the **first** Connect, Hive
+3. Click **Connect** on the server row. On the **first** Connect, Ligus
    prompts for the OAuth app's **Client ID** (and **Client secret**, since
    Linear is confidential). It then opens your browser for the OAuth
    consent screen.
 4. Approve in the browser. The code returns to the loopback redirect and
-   Hive stores the tokens, refreshing them as needed.
+   Ligus stores the tokens, refreshing them as needed.
 
 Once it's connected **and** enabled, your agents can **read, create, and
 update Linear issues** through the server's tools.

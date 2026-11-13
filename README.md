@@ -1,30 +1,37 @@
 <div align="center">
 
-<img src="assets/branding/hive-app-icon-1024.png" alt="Hive" width="112" height="112">
+<img src="assets/branding/hive-app-icon-1024.png" alt="Ligus" width="112" height="112">
 
-# Hive
+# Ligus
 
 **A collaborative, multi-agent workspace for developers.**
+
+Ligus (LEE-gus) is short for *ligustica*, as in *Apis mellifera ligustica*,
+the Italian honeybee. It was called Hive until v2.0.
 
 Chat with one or many coding agents, review their proposed changes, and sync the
 whole workspace across your devices and teammates — peer-to-peer or through a
 relay, end-to-end encrypted. Your code and keys stay on your machine.
 
-[![CI](https://github.com/honeyhive-ai/hive/actions/workflows/ci.yml/badge.svg)](https://github.com/honeyhive-ai/hive/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/honeyhive-ai/hive?include_prereleases&sort=semver&label=release)](https://github.com/honeyhive-ai/hive/releases/latest)
-[![Docs](https://img.shields.io/badge/docs-apiaryhq.ai-4c8bf5)](https://docs.apiaryhq.ai/)
+[![CI](https://github.com/ligus-ai/ligus/actions/workflows/ci.yml/badge.svg)](https://github.com/ligus-ai/ligus/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/ligus-ai/ligus?include_prereleases&sort=semver&label=release)](https://github.com/ligus-ai/ligus/releases/latest)
+[![Docs](https://img.shields.io/badge/docs-docs.ligus.ai-4c8bf5)](https://docs.ligus.ai/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
-[**Download**](#install) · [**Documentation**](https://docs.apiaryhq.ai/) · [**Build from source**](#build-from-source) · [**Contributing**](CONTRIBUTING.md)
+[**Download**](#install) · [**Documentation**](https://docs.ligus.ai/) · [**Build from source**](#build-from-source) · [**Contributing**](CONTRIBUTING.md)
 
 </div>
+
+> **Hive is now Ligus.** Same project, same protocol, new name. The `hive`
+> command and `HIVE_*` settings still work for now; see
+> [What's new](https://docs.ligus.ai/reference/whats-new/).
 
 ---
 
 ## Overview
 
-Hive is a small native desktop app built with **Rust + [Tauri v2](https://tauri.app) +
+Ligus is a small native desktop app built with **Rust + [Tauri v2](https://tauri.app) +
 React/TypeScript**, so one codebase ships on **macOS, Linux, and Windows**. It
 turns a coding session into a room: you, one or many AI coding agents, and — when
 you want them — your teammates, all sharing a single transcript and a single
@@ -37,7 +44,7 @@ account you have to create and no server you're forced to trust to get started �
 a workspace with no relay puts nothing on the wire at all.
 
 When you *do* want to collaborate — across your own laptop and desktop, or with
-other people — Hive syncs that event log **end-to-end encrypted**. It can go
+other people — Ligus syncs that event log **end-to-end encrypted**. It can go
 directly peer-to-peer ([iroh](https://iroh.computer)) or fall back to a **relay**,
 and the relay is deliberately **content-blind**: it stores and forwards sealed
 ciphertext and never holds the key, so it can't read your traffic. That relay is
@@ -45,7 +52,7 @@ a single small binary you can **self-host** yourself.
 
 That last part is the wedge. Plenty of tools let a team share AI coding sessions
 — but they tend to charge per seat for the cloud sync and team features, and the
-sync runs through *their* servers. Hive's collaboration layer is **free,
+sync runs through *their* servers. Ligus's collaboration layer is **free,
 open-source, and self-hostable**, and it's built so the party that relays your
 traffic mathematically can't see it. You keep your code, your keys, and your
 history; the network only ever sees noise.
@@ -56,14 +63,14 @@ without handing their source to a SaaS; and anyone who wants an always-on agent
 that keeps working while their laptop is closed — on infrastructure they control.
 
 <div align="center">
-<img src="docs-site/images/overview.png" alt="Hive — a shared LLM workspace" width="820">
+<img src="docs-site/images/overview.png" alt="Ligus — a shared LLM workspace" width="820">
 </div>
 
 ## Features
 
 ### Multi-agent chat & channels
 
-A Hive chat is multi-party from the start: the human(s), the chat's **Primary
+A Ligus chat is multi-party from the start: the human(s), the chat's **Primary
 Runtime**, and any number of **workspace agents** all post into one transcript.
 You route turns with `@mentions` — `@agent-name`, `@primary`, a teammate's
 handle, or a governance-role group like `@admins` — and agents can mention each
@@ -77,12 +84,12 @@ stay distinct, so several people can drive the shared agents at once.
 ### Bring your own agents & runtimes
 
 Model lists come from each runtime you connect, not a hardcoded set. Out of the
-box Hive drives:
+box Ligus drives:
 
 - **The `claude` CLI** — no API key required, uses your existing Claude auth.
 - **Anthropic**, **OpenAI**, **OpenRouter**, **Ollama** (local or over
   Tailscale — spoken natively, so the runtime's context window, `keep_alive`,
-  and `think` settings reach the server; set `HIVE_OLLAMA_WIRE=openai` to force
+  and `think` settings reach the server; set `LIGUS_OLLAMA_WIRE=openai` to force
   the OpenAI-compatible shim), and **any OpenAI-compatible endpoint**.
 - **Subprocess agents** — CLI coding agents run as child processes and
   participate as first-class agents: **aider**, **pi**, **Codex** (OpenAI's
@@ -122,7 +129,7 @@ their outputs).
 
 ### Headless agents & always-on workers
 
-Run an agent **without the desktop app** via the [`hive` CLI](crates/hive-cli/README.md)
+Run an agent **without the desktop app** via the [`ligus` CLI](crates/hive-cli/README.md)
 — on a cloud VM, a spare box, or as a background process. A **worker daemon**
 registers a machine as a host and runs every agent bound to it on a
 **workspace-owned credential** (never a personal key). Because it's always on, it
@@ -131,7 +138,7 @@ waits, and the worker answers the whole backlog when it comes up. The desktop ap
 surfaces the same queue and offers a **Run on worker** handoff for an offline
 agent. Run **several workers** to drain the backlog in parallel — each claims
 distinct turns, and per-turn worktrees keep their file edits from colliding. See
-[Headless agents & setups](https://docs.apiaryhq.ai/concepts/headless-agents/)
+[Headless agents & setups](https://docs.ligus.ai/concepts/headless-agents/)
 for the four topologies.
 
 ### Skills & vaults
@@ -149,7 +156,7 @@ Emoji **reactions** are a first-class, low-cost channel for people *and* agents
 (agents emit `[[react: 👍]]` / `[[vote: 👍 👎]]` directives), and they sync as
 commutative add/remove events so concurrent votes never clobber each other. When
 a mention names you — by handle, a role you hold, or a `@you` / `@all` broadcast —
-Hive raises a native notification and an in-app cue, **including on the addressed
+Ligus raises a native notification and an in-app cue, **including on the addressed
 member's own device** when the mention arrives over sync.
 
 ### Git integration & diffs
@@ -163,7 +170,7 @@ so they reason about the actual state of the repo.
 
 ### Event-sourced, per-device state
 
-A Hive workspace is an **append-only log of signed events** (`SessionEvent`s) in
+A Ligus workspace is an **append-only log of signed events** (`SessionEvent`s) in
 a local SQLite database (`hive.db`). Nothing is a mutable row you edit in place;
 every message, reaction, proposal, membership change, and config edit is an event
 appended to the log. The UI state you see is a **projection** — the log **folded**
@@ -189,7 +196,7 @@ everything after their cursor; it never sees plaintext and never holds a key.
 | [`crates/hive-core`](crates/hive-core/README.md) | Pure, IO-free domain core: the event-sourced projector, `ChatSession`, authorization, E2EE primitives, and the proposal / workflow / skill / vault / channel types. The source of truth folded into state. |
 | [`crates/hive-runtime`](crates/hive-runtime/README.md) | Orchestration over the core: SQLite event store, `ChatService`, sync engine + relay client, provider adapters, MCP, the tool loop, prompt building, vault fetcher. |
 | [`crates/hive-proto`](crates/hive-proto/README.md) | The `ts-rs` DTOs shared with the frontend; a test regenerates `web/src/bindings/` so the TS contract can't drift. |
-| [`crates/hive-cli`](crates/hive-cli/README.md) | The headless `hive` client and worker daemon — the same runtime, no Tauri. |
+| [`crates/hive-cli`](crates/hive-cli/README.md) | The headless `ligus` client and worker daemon — the same runtime, no Tauri. |
 | [`app/`](app/README.md) | The Tauri v2 desktop shell: IPC commands, `AppState`, and streaming events; bundles the web UI. |
 | [`web/`](web/README.md) | The React 18 + TypeScript frontend (Vite, TanStack Query, Tauri IPC). |
 | `addons/` | Optional agent shims (e.g. `aider-mcp`). |
@@ -198,15 +205,15 @@ everything after their cursor; it never sees plaintext and never holds a key.
 | `docs-site/` | Published user/admin docs (MkDocs). |
 
 The **production relay is a separate repo**,
-**[github.com/honeyhive-ai/relay](https://github.com/honeyhive-ai/relay)** (Go) —
+**[github.com/ligus-ai/relay](https://github.com/ligus-ai/relay)** (Go) —
 content-blind, hardened, and self-hostable. See
 [`docs/architecture.md`](docs/architecture.md) for the deeper design.
 
 ## Security & privacy
 
-Hive is local-first, and anything that leaves the device is end-to-end encrypted.
+Ligus is local-first, and anything that leaves the device is end-to-end encrypted.
 The full model is documented in
-[Security & trust](https://docs.apiaryhq.ai/concepts/security/).
+[Security & trust](https://docs.ligus.ai/concepts/security/).
 
 - **E2EE is mandatory for relay sync.** Every envelope is sealed with
   ChaCha20-Poly1305 before it leaves the device; the relay only ever holds sealed
@@ -238,34 +245,34 @@ The full model is documented in
 ### Install
 
 **Desktop app** — grab the installer for your platform from the
-[**latest release**](https://github.com/honeyhive-ai/hive/releases/latest):
+[**latest release**](https://github.com/ligus-ai/ligus/releases/latest):
 
 | Platform | Download |
 | --- | --- |
-| **macOS** (Apple Silicon) | `Hive_*_aarch64.dmg` |
-| **Linux** | `Hive_*_amd64.AppImage`, `.deb`, or `.rpm` |
-| **Windows** | `Hive_*_x64-setup.exe` or `.msi` |
+| **macOS** (Apple Silicon) | `Ligus_*_aarch64.dmg` |
+| **Linux** | `Ligus_*_amd64.AppImage`, `.deb`, or `.rpm` |
+| **Windows** | `Ligus_*_x64-setup.exe` or `.msi` |
 
 On first launch, a five-step onboarding sets up your identity, project folder,
 agent/runtime, team relay (optional), and appearance — no config files required.
 
-**CLI &amp; headless worker** (`hive`) — a one-line install for the terminal /
+**CLI &amp; headless worker** (`ligus`) — a one-line install for the terminal /
 server side (macOS + Linux, Apple Silicon and x86_64):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/honeyhive-ai/hive/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ligus-ai/ligus/main/install.sh | sh
 ```
 
-It fetches the prebuilt `hive` binary for your platform from the latest release.
-Override the target dir with `HIVE_INSTALL_DIR` or pin a tag with `HIVE_VERSION`.
+It fetches the prebuilt `ligus` binary for your platform from the latest release.
+Override the target dir with `LIGUS_INSTALL_DIR` or pin a tag with `LIGUS_VERSION`.
 Or build from source: `cargo install --path crates/hive-cli`.
 
-Use `hive worker` to run a **headless daemon** that answers `@mentions` for the
+Use `ligus worker` to run a **headless daemon** that answers `@mentions` for the
 agents it hosts — the production way to keep agents responsive when no desktop is
 open. It runs on **workspace-owned** credentials (never a personal key, §12.5);
 see [Configure a worker](#run-a-headless-worker) below.
 
-> **Status.** Hive is at its latest release (`1.1.1`). Installers are
+> **Status.** Ligus is at its latest release (`1.1.1`). Installers are
 > unsigned for now, so macOS/Windows may warn on first open. A Homebrew cask is
 > being prepared under [`deploy/homebrew`](deploy/homebrew).
 
@@ -273,7 +280,7 @@ see [Configure a worker](#run-a-headless-worker) below.
 
 1. **Launch and sign in.** Onboarding creates your local signing identity and
    picks the project folder agents will work in.
-2. **Configure a runtime and an agent.** Point Hive at a runtime — the `claude`
+2. **Configure a runtime and an agent.** Point Ligus at a runtime — the `claude`
    CLI (no key needed), an Anthropic/OpenAI/OpenRouter/Ollama endpoint, or a
    subprocess agent — and its models populate automatically. Add a workspace
    agent bound to that runtime.
@@ -283,66 +290,66 @@ see [Configure a worker](#run-a-headless-worker) below.
    `hivews1:` invite code **out-of-band** (paste it over a channel you trust) or
    by inviting a GitHub handle. The invite carries the workspace key; the relay
    never sees it. Both of you then sync the same encrypted log.
-5. **Go always-on (optional).** Run the [`hive` CLI](crates/hive-cli/README.md)
+5. **Go always-on (optional).** Run the [`ligus` CLI](crates/hive-cli/README.md)
    worker daemon on a spare box so an agent keeps answering while your laptop is
    closed.
 
 Full user and self-hosting docs live at
-**[docs.apiaryhq.ai](https://docs.apiaryhq.ai/)** (source in
+**[docs.ligus.ai](https://docs.ligus.ai/)** (source in
 [`docs-site/`](docs-site/)):
 
-- [First launch](https://docs.apiaryhq.ai/getting-started/first-launch/) ·
-  [Configuring a runtime](https://docs.apiaryhq.ai/getting-started/configuring-a-runtime/) ·
-  [First chat](https://docs.apiaryhq.ai/getting-started/first-chat/)
-- [Multi-agent](https://docs.apiaryhq.ai/features/multi-agent/) ·
-  [Workflows](https://docs.apiaryhq.ai/features/workflows/) ·
-  [Collaboration](https://docs.apiaryhq.ai/features/collaboration/)
+- [First launch](https://docs.ligus.ai/getting-started/first-launch/) ·
+  [Configuring a runtime](https://docs.ligus.ai/getting-started/configuring-a-runtime/) ·
+  [First chat](https://docs.ligus.ai/getting-started/first-chat/)
+- [Multi-agent](https://docs.ligus.ai/features/multi-agent/) ·
+  [Workflows](https://docs.ligus.ai/features/workflows/) ·
+  [Collaboration](https://docs.ligus.ai/features/collaboration/)
 
 ## Run a headless worker
 
-`hive worker` is the production daemon: it registers the box as a workspace host
+`ligus worker` is the production daemon: it registers the box as a workspace host
 and answers `@mentions` for the agents assigned to it, so agents stay responsive
 with no desktop open. It's configured entirely by environment variables:
 
 | Var | Purpose |
 | --- | --- |
-| `HIVE_DATA_DIR` | Local event-store directory. |
-| `HIVE_RELAY_URL` | Relay base URL (sync). |
-| `HIVE_RELAY_ACCESS_TOKEN` | Relay access token. |
-| `HIVE_WORKSPACE` | Workspace room id to serve. |
-| `HIVE_WORKSPACE_KEY` | The workspace E2EE key (so it can read/write the log). |
-| `HIVE_WS_SECRET_<ref>` | Secret for a workspace-owned runtime credential (§12.5). |
-| `HIVE_MCP_CONFIG` | Optional MCP server config for tool use. |
+| `LIGUS_DATA_DIR` | Local event-store directory. |
+| `LIGUS_RELAY_URL` | Relay base URL (sync). |
+| `LIGUS_RELAY_ACCESS_TOKEN` | Relay access token. |
+| `LIGUS_WORKSPACE` | Workspace room id to serve. |
+| `LIGUS_WORKSPACE_KEY` | The workspace E2EE key (so it can read/write the log). |
+| `LIGUS_WS_SECRET_<ref>` | Secret for a workspace-owned runtime credential (§12.5). |
+| `LIGUS_MCP_CONFIG` | Optional MCP server config for tool use. |
 
 ```sh
-HIVE_RELAY_URL=… HIVE_RELAY_ACCESS_TOKEN=… HIVE_WORKSPACE=… HIVE_WORKSPACE_KEY=… \
-  hive worker
+LIGUS_RELAY_URL=… LIGUS_RELAY_ACCESS_TOKEN=… LIGUS_WORKSPACE=… LIGUS_WORKSPACE_KEY=… \
+  ligus worker
 ```
 
-Assign agents to the worker from the desktop (or `hive set-agent-host`). The
+Assign agents to the worker from the desktop (or `ligus set-agent-host`). The
 worker uses **workspace-owned** runtime credentials — never a personal key — and
-gates MCP tool use on the triggering author's role (`HIVE_MCP_MIN_ROLE`, default
+gates MCP tool use on the triggering author's role (`LIGUS_MCP_MIN_ROLE`, default
 contributor). It claims each turn before answering, so a worker and a desktop
 that both own an agent never double-reply, and it recovers from transient relay
 outages with backoff. Multiple agents can carry on a conversation across worker
 and desktop without a human in the loop, up to a generous per-turn cascade
 ceiling (a loop backstop, not a conversation limit).
 
-> `hive agent` is a **local-dev-only** foreground responder that runs on a
-> personal credential; it refuses to start unless `HIVE_ALLOW_PERSONAL_AGENT=1`
-> is set. For anything unattended or shared, use `hive worker`.
+> `ligus agent` is a **local-dev-only** foreground responder that runs on a
+> personal credential; it refuses to start unless `LIGUS_ALLOW_PERSONAL_AGENT=1`
+> is set. For anything unattended or shared, use `ligus worker`.
 
 ## Self-hosting the relay
 
 Collaboration never requires *our* servers. The relay is a single small,
 content-blind binary in its own repo,
-**[github.com/honeyhive-ai/relay](https://github.com/honeyhive-ai/relay)** (Go,
+**[github.com/ligus-ai/relay](https://github.com/ligus-ai/relay)** (Go,
 MIT) — which carries the Docker image and deploy manifests. The shortest smoke
 test:
 
 ```bash
-docker build -t hive-relay https://github.com/honeyhive-ai/relay.git && \
-  docker run -p 8443:8443 hive-relay
+docker build -t ligus-relay https://github.com/ligus-ai/relay.git && \
+  docker run -p 8443:8443 ligus-relay
 curl http://localhost:8443/v1/health      # → ok
 ```
 
@@ -350,13 +357,13 @@ Bind address and bounds are env-driven:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `$PORT` / `HIVE_RELAY_ADDR` | `0.0.0.0:8443` | Bind address (`$PORT` for PaaS, or a full `host:port`). |
-| `HIVE_RELAY_RETENTION_DAYS` | `0` (off) | Prune envelopes older than N days. |
-| `HIVE_RELAY_MAX_BODY_BYTES` | `4194304` (4 MiB) | Max request body size. |
-| `HIVE_RELAY_ACCESS_TOKENS` | unset (open) | Optional comma-separated allowlist gating *who can connect*. |
+| `$PORT` / `LIGUS_RELAY_ADDR` | `0.0.0.0:8443` | Bind address (`$PORT` for PaaS, or a full `host:port`). |
+| `LIGUS_RELAY_RETENTION_DAYS` | `0` (off) | Prune envelopes older than N days. |
+| `LIGUS_RELAY_MAX_BODY_BYTES` | `4194304` (4 MiB) | Max request body size. |
+| `LIGUS_RELAY_ACCESS_TOKENS` | unset (open) | Optional comma-separated allowlist gating *who can connect*. |
 
 `/v1/health` round-trips the store, so it reports real liveness. See
-[Self-hosting a relay](https://docs.apiaryhq.ai/networking/self-host/) for a full
+[Self-hosting a relay](https://docs.ligus.ai/networking/self-host/) for a full
 VM/PaaS deploy, TLS, and access management.
 
 ## Build from source
@@ -372,7 +379,7 @@ cargo tauri dev                          # run the app (frontend + backend)
 ```
 
 > To exercise sync locally, run a relay from the standalone Go service —
-> [github.com/honeyhive-ai/relay](https://github.com/honeyhive-ai/relay) (see
+> [github.com/ligus-ai/relay](https://github.com/ligus-ai/relay) (see
 > [Self-hosting the relay](#self-hosting-the-relay) for the one-liner).
 
 Packaged installers are produced by [`scripts/build.sh`](scripts/build.sh) (e.g.
@@ -384,10 +391,13 @@ fit together.
 
 - **The app is config-free to start** — onboarding sets identity, project folder,
   runtime, and relay; there are no required config files.
-- **Repo settings** live in [`hive.config.toml`](hive.config.toml) at the root.
+- **Repo settings** live in [`ligus.config.toml`](ligus.config.toml) at the root
+  (a `hive.config.toml` from before v2.0 is still read; workspace state lives in
+  `.ligus/`, and an existing `.hive/` is still read).
 - **Headless clients** are entirely **environment-driven** so they drop into a
   container or secret mount — see the
-  [`hive` CLI README](crates/hive-cli/README.md) for every `HIVE_*` variable
+  [`ligus` CLI README](crates/hive-cli/README.md) for every `LIGUS_*` variable (the former `HIVE_*` names still work, with a
+  one-time note)
   (relay URL/token, workspace + key, provider/model, MCP config, role gate).
 - **IPC types** in [`hive-proto`](crates/hive-proto/README.md) generate the
   TypeScript bindings in `web/src/bindings/`; regenerate with
@@ -396,7 +406,7 @@ fit together.
 ## Editions
 
 The desktop app (this repo) and the production relay (the standalone
-[Go service](https://github.com/honeyhive-ai/relay)) are both open source and
+[Go service](https://github.com/ligus-ai/relay)) are both open source and
 self-hostable. A managed / enterprise tier adds server-side membership & RBAC,
 hosted relays, and org (GHEC) integration — those paid controls live outside this
 repo and attach via a small `WriteGuard` extension seam, so self-hosters keep a
@@ -409,6 +419,16 @@ Issues and PRs are welcome — start with [`CONTRIBUTING.md`](CONTRIBUTING.md) a
 our [Code of Conduct](CODE_OF_CONDUCT.md). Developer and architecture docs live
 in [`docs/`](docs/README.md). To report a vulnerability, follow
 [`SECURITY.md`](SECURITY.md) (please don't open a public issue for security bugs).
+
+## Why Ligus?
+
+Ligus is short for *ligustica*. *Apis mellifera ligustica* is the Italian
+honeybee, the bees our maintainer keeps, and *Ligus* is Latin for "a Ligurian,"
+the region the subspecies is named for. We were Hive, and we still like the
+image: a colony that does its work through many bees in one shared space, each
+one useful on its own and more useful together. The new name keeps the idea and
+points at the bees that inspired it. (Pronounced LEE-gus.) The default agent is
+still called `@hive`: you are talking to the hive.
 
 ## License
 

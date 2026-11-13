@@ -1,6 +1,6 @@
 # Your first chat
 
-After onboarding, Hive opens to an empty workspace. Click the `+` next
+After onboarding, Ligus opens to an empty workspace. Click the `+` next
 to **Chats** in the sidebar to start a new chat.
 
 ![Empty chat ready for input](../images/first-chat-empty.png){ width="800" }
@@ -35,7 +35,7 @@ Press Enter to send. **Shift+Enter** inserts a newline.
 
 ## Auto-renamed titles
 
-After the first assistant reply, Hive asks the same runtime for a
+After the first assistant reply, Ligus asks the same runtime for a
 3–6 word topic summary and renames the chat. You can override at any
 time by clicking the pencil glyph next to the title in the chat header.
 

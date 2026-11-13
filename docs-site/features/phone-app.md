@@ -1,21 +1,21 @@
-# Hive on your phone
+# Ligus on your phone
 
-The Hive iPhone app is a thin client for one person's workspace. The phone
-doesn't run Hive and holds no workspace keys. It talks to **`hive serve`**, a
-Hive device you run on an always-on box, over a small JSON + Server-Sent
+The Ligus iPhone app is a thin client for one person's workspace. The phone
+doesn't run Ligus and holds no workspace keys. It talks to **`ligus serve`**, a
+Ligus device you run on an always-on box, over a small JSON + Server-Sent
 Events API (`/v1/…`). The box keeps the end-to-end encryption keys, syncs with
 your relay and runs the agents you send to it; the phone reads and writes
 through it.
 
-> The app's source lives in its own repository. The `hive serve` side and the
+> The app's source lives in its own repository. The `ligus serve` side and the
 > API contract the app uses are in this repo
-> ([`docs/ios-app.md`](https://github.com/honeyhive-ai/hive/blob/main/docs/ios-app.md)),
+> ([`docs/ios-app.md`](https://github.com/ligus-ai/ligus/blob/main/docs/ios-app.md)),
 > so any client can implement them.
 
 To set up the box and pair a phone, see
 [Remote access for your phone](../networking/remote-access.md). To make the
 box act as you rather than as a separate member, see
-[Running hive serve as your own device](../ops/serve-box.md).
+[Running ligus serve as your own device](../ops/serve-box.md).
 
 ## Chats
 
@@ -25,7 +25,7 @@ box act as you rather than as a separate member, see
 - Start a chat or send a message from the phone. `@mentions` route exactly as
   on the desktop: `@agent` wakes that agent, `@hive` the chat's primary
   runtime. See [Multi-agent collaboration](multi-agent.md).
-- Replies stream live. A reply produced on the `hive serve` box streams token
+- Replies stream live. A reply produced on the `ligus serve` box streams token
   by token; one produced on another device (your desktop, a worker) appears
   once it syncs, a few seconds later.
 - Unread counts and read marks belong to the box, not to each device:
@@ -89,7 +89,7 @@ phone with the same collaboration state as the desktop's Review card:
   changed sections and says so.
 
 Approving a file-diff proposal from the phone doesn't apply it, unless the
-box is set to (see [`HIVE_SERVE_APPLY_ON_APPROVE`](../ops/serve-box.md#apply-on-approve)).
+box is set to (see [`LIGUS_SERVE_APPLY_ON_APPROVE`](../ops/serve-box.md#apply-on-approve)).
 As on the desktop, **Implement** applies it.
 
 ## Workflow approvals
@@ -103,7 +103,7 @@ the stages as its text. See [Workflows](workflows.md).
 ## Push notifications
 
 With [remote access through a relay](../networking/remote-access.md) set up,
-`hive serve` can wake the phone with a notification. The content is end-to-end
+`ligus serve` can wake the phone with a notification. The content is end-to-end
 encrypted between the box and the phone: the relay and Apple see only
 ciphertext.
 
@@ -129,7 +129,7 @@ Tapping a notification opens its chat.
   the live event stream, the box doesn't push to that phone.
 - **Only news.** Rapid bursts in one chat collapse into one notification per
   10 seconds, there are per-phone and host-wide rate limits, and history that
-  synced in late (older than 10 minutes when `hive serve` started) never
+  synced in late (older than 10 minutes when `ligus serve` started) never
   pushes.
 
 !!! warning "Push needs your own APNs key today"
@@ -150,7 +150,7 @@ answers a palette (`pollen`, `studio`, `harbor`, `slate`, `meadow` or
 
 The box decides each value on its own, in this order:
 
-1. its own settings, `HIVE_SERVE_PALETTE` and `HIVE_SERVE_APPEARANCE`;
+1. its own settings, `LIGUS_SERVE_PALETTE` and `LIGUS_SERVE_APPEARANCE`;
 2. the desktop app's saved theme, if the desktop app is installed on the same
    machine (read on every request, so a change on the desktop shows up the
    next time the phone asks);
@@ -158,8 +158,8 @@ The box decides each value on its own, in this order:
 
 ## Dashboard
 
-The box can also serve a dashboard for the phone: a built-in Hive section
+The box can also serve a dashboard for the phone: a built-in Ligus section
 (agents, proposals, workflow runs, turns, the host's status) plus panels you
 define in `dashboard.toml` on the box. The app hides its dashboard tab when
 the dashboard is empty. Format and examples:
-[`docs/dashboard.md`](https://github.com/honeyhive-ai/hive/blob/main/docs/dashboard.md).
+[`docs/dashboard.md`](https://github.com/ligus-ai/ligus/blob/main/docs/dashboard.md).

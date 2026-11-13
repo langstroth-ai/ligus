@@ -1,6 +1,6 @@
 # Agents (built-in vs BYO)
 
-Hive's agent model is intentionally thin. The app isn't an agent
+Ligus's agent model is intentionally thin. The app isn't an agent
 itself — it hosts agents you bring.
 
 ## WorkspaceAgent — the user-facing concept
@@ -25,16 +25,16 @@ Two reasons:
 
 1. **They would duplicate work that aider, pi, and Claude Code
    already do well.** Maintaining a curated set of agent prompts
-   and a multi-stage planning harness inside Hive would mean
+   and a multi-stage planning harness inside Ligus would mean
    keeping up with the state-of-the-art in agent design — which
    is the whole industry. Better to host the agents you bring.
 2. **The product story is "bring your own."** If your team uses
-   aider for code edits and Claude for reviews, point Hive at
-   those. Hive doesn't need its own Coder.
+   aider for code edits and Claude for reviews, point Ligus at
+   those. Ligus doesn't need its own Coder.
 
 ## Bring-your-own agent
 
-Any LLM (API or CLI) becomes a Hive agent via a runtime + a
+Any LLM (API or CLI) becomes a Ligus agent via a runtime + a
 WorkspaceAgent pointing at it.
 
 === "API agent (Anthropic)"
@@ -57,7 +57,7 @@ WorkspaceAgent pointing at it.
     you his API key. He configures `@bob-claude` with
     `ownerActorID = bob`. When you `@bob-claude` in chat:
 
-    1. Hive routes the message to Bob's device over the P2P link.
+    1. Ligus routes the message to Bob's device over the P2P link.
     2. Bob's instance runs Claude Code locally with his subscription.
     3. The reply flows back through the envelope log.
 
@@ -74,9 +74,9 @@ Different runtimes expose different capabilities:
 |---------------------|---------------------------------------------------------|
 | API providers       | Enabled MCP tools (whatever MCP servers you've turned on for the chat). |
 | Claude Code         | Claude Code's own tools, governed by its own permission mode. |
-| Google Antigravity (`agy`) / GitHub Copilot (`copilot`) | The CLI's own tools, with Hive's Claude Code permission setting mapped to the CLI's flags (read-only by default). Uses your Google AI Pro / Ultra or Copilot subscription; see [Subscription CLIs](../addons/byo-agents.md#subscription-clis-google-antigravity-and-github-copilot). |
-| aider / pi          | The agent's own internal tools. Hive captures stdout as the reply. |
-| Ollama / local OpenAI-compatible (`custom`) | Hive's built-in file tools (on a local or private endpoint) plus enabled MCP tools when the runtime's **Supports tools** switch is on (for Ollama, also when the model's capability probe reports tools); text only otherwise. At most 16 tools a turn, see [MCP servers](../addons/mcp.md#local-models-at-most-16-tools-a-turn). |
+| Google Antigravity (`agy`) / GitHub Copilot (`copilot`) | The CLI's own tools, with Ligus's Claude Code permission setting mapped to the CLI's flags (read-only by default). Uses your Google AI Pro / Ultra or Copilot subscription; see [Subscription CLIs](../addons/byo-agents.md#subscription-clis-google-antigravity-and-github-copilot). |
+| aider / pi          | The agent's own internal tools. Ligus captures stdout as the reply. |
+| Ollama / local OpenAI-compatible (`custom`) | Ligus's built-in file tools (on a local or private endpoint) plus enabled MCP tools when the runtime's **Supports tools** switch is on (for Ollama, also when the model's capability probe reports tools); text only otherwise. At most 16 tools a turn, see [MCP servers](../addons/mcp.md#local-models-at-most-16-tools-a-turn). |
 | hive-daemon         | Text only (no tool calls in either direction yet). |
 
 MCP servers are inert until you enable them, so an API runtime starts with no
@@ -87,9 +87,9 @@ tools until you turn some on in the Tools pane.
 When you send a message with no `@mention`, the message goes to the
 chat's primary runtime. When you `@agent`:
 
-1. Hive resolves the mention to a workspace agent.
-2. If the agent runs on this device, Hive calls the runtime locally.
-3. If the agent runs on a peer's device, Hive routes the message
+1. Ligus resolves the mention to a workspace agent.
+2. If the agent runs on this device, Ligus calls the runtime locally.
+3. If the agent runs on a peer's device, Ligus routes the message
    through the P2P link (relay-forwarded when no direct link exists).
 4. The reply comes back as a normal assistant message in the log.
 
@@ -108,13 +108,13 @@ See [Headless agents](headless-agents.md).
 
 ## Reviewing agent changes
 
-Hive has no inline per-tool consent prompt of its own. Trust is enforced at
+Ligus has no inline per-tool consent prompt of its own. Trust is enforced at
 three real seams instead:
 
 - **MCP tools are inert until enabled.** An API runtime can't call a tool you
   haven't turned on for the chat.
 - **Claude Code brings its own permission mode.** It gates its own file and
-  command actions; Hive doesn't second-guess it.
+  command actions; Ligus doesn't second-guess it.
 - **Changes land as proposals you review.** Edits an agent makes surface in
   the **Diff** tab and the **Review** pane, where peers approve (and reach
   quorum, if configured) before they're implemented.

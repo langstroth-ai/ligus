@@ -1,25 +1,29 @@
-# ![Hive](images/hive-lockup-light.svg#only-light){ .hero-lockup }![Hive](images/hive-lockup-dark.svg#only-dark){ .hero-lockup }
+# ![Ligus](images/hive-lockup-light.svg#only-light){ .hero-lockup }![Ligus](images/hive-lockup-dark.svg#only-dark){ .hero-lockup }
 
 **A shared LLM workspace for developers.** Bring your own subscription
 (Claude, OpenAI, OpenRouter, Ollama, aider, pi, or any local agent),
 collaborate with peers on real work — code, commits, reviews — and
 keep your data local-first.
 
-![The Hive workspace](images/overview.png){ width="900" }
+*Ligus* is short for *ligustica* (*Apis mellifera ligustica*, the Italian
+honeybee). The project was called Hive until v2.0; old links to
+docs.apiaryhq.ai redirect here.
+
+![The Ligus workspace](images/overview.png){ width="900" }
 
 ---
 
-## Why Hive
+## Why Ligus
 
 Most "AI for code" tools assume one developer, one model, one
-machine. Hive flips that:
+machine. Ligus flips that:
 
 - **Multiple peers, one workspace.** Alice's Claude subscription and
   Bob's Ollama instance can both participate in the same chat,
   reviewing each other's proposals.
 - **Bring your own agent.** Aider, pi, Claude Code, Codex, Google
   Antigravity, GitHub Copilot, or any CLI agent
-  you trust can act as a workspace participant. Hive doesn't recreate
+  you trust can act as a workspace participant. Ligus doesn't recreate
   agent logic — it hosts what you bring.
 - **Local-first, P2P sync.** Workspaces sync directly between peers
   over a tiny optional relay. No central server holds your content.
@@ -63,7 +67,7 @@ machine. Hive flips that:
 
 ## Built with
 
-Hive is a **Tauri v2** desktop app — a Rust backend (`crates/hive-core`,
+Ligus is a **Tauri v2** desktop app — a Rust backend (`crates/hive-core`,
 `hive-runtime`, `hive-cli`, plus `app/`) with a React + TypeScript
 frontend (`web/`). One codebase ships **macOS, Windows, and Linux**. State is an
 append-only event log in SQLite; replies stream from your chosen runtime (the
@@ -74,12 +78,12 @@ append-only event log in SQLite; replies stream from your chosen runtime (the
 Pre-release. The multi-runtime workspace + relay-forwarded multiuser sync are in
 place. Build from source with `cargo tauri build` (see
 [Building the dist](ops/build.md)); run a relay from
-[github.com/honeyhive-ai/relay](https://github.com/honeyhive-ai/relay).
+[github.com/ligus-ai/relay](https://github.com/ligus-ai/relay).
 Release builds are **unsigned** for now — run from source or click through your
 OS's first-launch prompt.
 
 The reference relay is MIT-licensed and lives in its own repository,
-[github.com/honeyhive-ai/relay](https://github.com/honeyhive-ai/relay) (a small
+[github.com/ligus-ai/relay](https://github.com/ligus-ai/relay) (a small
 Go service). Direct peer-to-peer sync is implemented with **iroh** (see the
 **Direct peers (P2P)** section in Settings) and falls back to relay forwarding
 when a direct connection can't be established. The collaborative-text CRDT is a

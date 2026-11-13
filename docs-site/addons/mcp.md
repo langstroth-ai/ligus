@@ -1,6 +1,6 @@
 # MCP servers
 
-Hive speaks **Model Context Protocol** — the spec for LLM tool
+Ligus speaks **Model Context Protocol** — the spec for LLM tool
 servers Anthropic standardized. Each MCP server is a separate
 process (or HTTP endpoint) that exposes named tools the agent can call.
 
@@ -9,7 +9,7 @@ Use MCP when you want to:
 - Surface a *new tool* to your agents (file-system, HTTP, database,
   proprietary internal API).
 - Share a tool set across many agents and workspaces.
-- Run a long-lived tool process separately from Hive.
+- Run a long-lived tool process separately from Ligus.
 
 ![Settings — Tools & MCP](../images/settings-tools-mcp.png){ width="820" }
 
@@ -43,15 +43,15 @@ enabled = false
 |-------|------|
 | `id` | Workspace-unique identifier |
 | `transport` | `stdio` or `http` |
-| `command` / `args` | For stdio — Hive spawns it |
-| `url` | For HTTP — the endpoint Hive talks to |
+| `command` / `args` | For stdio — Ligus spawns it |
+| `url` | For HTTP — the endpoint Ligus talks to |
 | `enabled` | Inert until true (default `false`); enabling launches/connects it |
 
 ## Install from the internet
 
 You don't have to hand-edit TOML. In the right-rail **Tools** pane,
 **Install from the internet** fetches a server's JSON manifest and adds it to a
-per-workspace catalog (`.hive/mcp-servers.json`). Accepted references:
+per-workspace catalog (`.ligus/mcp-servers.json`). Accepted references:
 
 ```text
 https://raw.githubusercontent.com/owner/repo/main/server.json
@@ -78,7 +78,7 @@ An `http` server uses `url` (or `endpoint`) instead of `command`:
 ### Install is inert — enabling launches it
 
 !!! warning "Installing never runs anything"
-    A freshly installed server is **disabled**. Hive does not touch its
+    A freshly installed server is **disabled**. Ligus does not touch its
     command or endpoint until you flip **Enable**. *Enabling* is the step
     that launches a stdio command or connects to an endpoint — only enable
     servers you trust.
@@ -94,13 +94,13 @@ tools you want available (or split a broad tool set across separate servers).
 Some HTTP MCP servers are protected by a fixed API token instead of OAuth.
 In **Settings → Tools**, open **Add HTTP server** and fill in **Name**,
 **URL** and **Bearer token (optional)**. For a server you already added,
-click **Set token** (or **Clear token**) on its row. Hive sends the token as
+click **Set token** (or **Clear token**) on its row. Ligus sends the token as
 `Authorization: Bearer <token>`.
 
 The token is a device-local secret, stored like provider API keys in this
 device's `settings.json`:
 
-- It is never written to `hive.config.toml`, `.hive/mcp-servers.json` or a
+- It is never written to `ligus.config.toml`, `.ligus/mcp-servers.json` or a
   config export, and never synced to the relay. Set it again on each device.
 - Settings shows only **token set**; the value is never shown again.
 
@@ -110,7 +110,7 @@ removes its saved token.
 
 ## Remote MCP servers (OAuth)
 
-Beyond `stdio` and static-token `http` servers, Hive speaks the modern
+Beyond `stdio` and static-token `http` servers, Ligus speaks the modern
 **Streamable-HTTP** transport with **OAuth 2.1 + PKCE** — for hosted MCP
 services that authenticate you in the browser and hand back short-lived,
 auto-refreshing tokens. There's a one-click **Add Linear (issues)** preset
@@ -123,13 +123,13 @@ composer command.
 
 ## Local models: at most 16 tools a turn
 
-Runtimes that use Hive's own tool loop (Ollama, and `custom` or
+Runtimes that use Ligus's own tool loop (Ollama, and `custom` or
 `hive-daemon` OpenAI-compatible endpoints with **Supports tools** on; see
 [Offline setup with local models](../getting-started/offline-local-models.md#tools-and-mcp))
 are offered **at most 16 tools per turn**. Small open models choose worse
 from a long list, and every tool definition costs prompt tokens on every
-round. When Hive's built-in file tools and your enabled MCP servers add up
-to more than that, Hive picks:
+round. When Ligus's built-in file tools and your enabled MCP servers add up
+to more than that, Ligus picks:
 
 1. **Built-in tools first, but up to 4 slots are held for MCP tools**
    whenever any MCP tool is enabled (never more than half the cap), so the
@@ -148,11 +148,11 @@ to more than that, Hive picks:
 On the desktop, a turn whose message asks for a workflow also offers
 `propose_workflow`, which takes one of the 16 slots.
 
-Nothing is dropped silently. When the cap leaves tools out, Hive logs a
+Nothing is dropped silently. When the cap leaves tools out, Ligus logs a
 warning (target `dispatch`) that reads `tool cap reached: these tools are
 NOT offered this turn`, with the names it dropped. On the desktop, open
-the log file from **Settings → Diagnostics**; on a `hive serve` or
-`hive worker` host, look at that process's log output. An MCP tool whose
+the log file from **Settings → Diagnostics**; on a `ligus serve` or
+`ligus worker` host, look at that process's log output. An MCP tool whose
 name collides with a built-in tool is dropped and logged too.
 
 To make sure a tool is offered:
@@ -168,7 +168,7 @@ own tools.
 
 ## When a tool call fails
 
-If an MCP server answers a call with an error, Hive passes on the server's
+If an MCP server answers a call with an error, Ligus passes on the server's
 own message (for example `unknown tool`) instead of waiting for a result
 that never comes. A stdio server is stopped when its call is abandoned, for
 example on a timeout.

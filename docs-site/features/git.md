@@ -1,6 +1,6 @@
 # Git integration
 
-Hive treats git as a workspace signal, surfaced in two places: a
+Ligus treats git as a workspace signal, surfaced in two places: a
 **Diff view** for reviewing uncommitted changes, and a compact
 **status line** in Settings.
 
@@ -16,7 +16,7 @@ to review every uncommitted change:
   unchanged regions folded. Toggle **Split | Inline** to switch between
   side-by-side and unified layouts. Binary files are flagged instead of
   rendered.
-- **Open in your editor** — Hive detects installed editors (VS Code,
+- **Open in your editor** — Ligus detects installed editors (VS Code,
   Cursor, Windsurf, Zed, Sublime — via their CLI shims, or the app
   bundle on macOS) and the **Open in…** button launches the selected
   file in the one you choose. Your last choice becomes the default.

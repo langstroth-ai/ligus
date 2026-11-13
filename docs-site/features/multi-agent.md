@@ -1,13 +1,13 @@
 # Multi-agent collaboration
 
-A Hive chat is multi-party: the human(s), the chat's **Primary Runtime**,
+A Ligus chat is multi-party: the human(s), the chat's **Primary Runtime**,
 and any number of **workspace agents** all post into one transcript.
 Mentions route turns between them, reactions are a shorthand channel, and
 proposals can require a vote.
 
 ## Mentions
 
-Address any participant with `@name`. Hive dispatches a turn to whoever
+Address any participant with `@name`. Ligus dispatches a turn to whoever
 you (or another participant) mention.
 
 | Mention | Who answers |
@@ -40,9 +40,9 @@ notification (the human broadcast never auto-runs a turn).
 
 **Autonomous multi-agent threads.** Two or more agents can carry on a
 conversation without a human in the loop: as long as each reply `@mentions`
-another agent, Hive keeps routing turns between them — and the chain continues
+another agent, Ligus keeps routing turns between them — and the chain continues
 even when the agents live on **different devices** or a headless
-[`hive worker`](https://github.com/honeyhive-ai/hive/blob/main/crates/hive-cli/README.md) (each device claims a turn
+[`ligus worker`](https://github.com/ligus-ai/ligus/blob/main/crates/hive-cli/README.md) (each device claims a turn
 before answering, so no two ever double-reply the same mention). An agent's
 reply hands off to **exactly one** agent: the first other agent it
 `@mentions`. To refer to an agent without handing off, use its plain name.
@@ -158,11 +158,11 @@ that lets the agent actually touch the workspace.
 ## Getting notified
 
 When a participant mentions you (`@you`, `@all`, your handle, or a role you
-hold), Hive raises a local notification and an in-app cue — including on
+hold), Ligus raises a local notification and an in-app cue — including on
 the addressed member's *own device* when the mention arrives over sync. The
 cue clears when you send your next message.
 
 !!! note "Long threads stay within the model's window"
-    Hive automatically condenses older turns when a conversation outgrows
+    Ligus automatically condenses older turns when a conversation outgrows
     the model's context window — you'll see a small marker at the top of
     the transcript when it does. Nothing for you to manage.

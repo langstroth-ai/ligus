@@ -1,6 +1,6 @@
-# Running hive serve as your own device
+# Running ligus serve as your own device
 
-`hive serve` is the always-on Hive device your [phone](../features/phone-app.md)
+`ligus serve` is the always-on Ligus device your [phone](../features/phone-app.md)
 talks to. Out of the box it joins the workspace as **its own member**. Since
 v1.16 you can instead enroll it as **one of your own devices**, so everything
 you do from the phone is authored as you.
@@ -12,9 +12,9 @@ workspace should know about. For reaching the box from the phone, see
 
 ## Its own member, or your device
 
-| | Its own member (default) | Your device (`HIVE_SERVE_OWNER`, approved) |
+| | Its own member (default) | Your device (`LIGUS_SERVE_OWNER`, approved) |
 |---|---|---|
-| Phone messages show as | `HIVE_SERVE_NAME` (for example "Phone") | you |
+| Phone messages show as | `LIGUS_SERVE_NAME` (for example "Phone") | you |
 | Votes and review notes | a second voter, at the box's role (Contributor when it enrolled itself) | yours: one person, one vote |
 | Chats the phone creates | owned by the box; nobody answers `@hive` in them | owned by you; your desktop answers `@hive` |
 | Who signs events | the box's own account | the box's device key, under a certificate from your account |
@@ -26,16 +26,16 @@ that certificate itself.
 ## Enroll the box
 
 1. **Name the owner.** In the box's environment (the service's env file), set
-   `HIVE_SERVE_OWNER` to your display name in the workspace, or your actor id
-   if the name isn't unique, and restart `hive serve`:
+   `LIGUS_SERVE_OWNER` to your display name in the workspace, or your actor id
+   if the name isn't unique, and restart `ligus serve`:
 
     ```sh
-    HIVE_SERVE_OWNER=alice
+    LIGUS_SERVE_OWNER=alice
     ```
 
-2. **Get the code.** On start, `hive serve` prints an enrollment code
+2. **Get the code.** On start, `ligus serve` prints an enrollment code
    (`hivedev1:…`) and a fingerprint. To print it again, run
-   `hive serve enroll` with the same environment.
+   `ligus serve enroll` with the same environment.
 3. **Approve it on your desktop.** **Settings → Account → My devices → Add a
    device**, paste the code, check that the fingerprint matches what the box
    printed, and approve.
@@ -45,7 +45,7 @@ The phone's `/v1/health` reports `identity.mode` `owner`. Approving also
 removes the box's separate member, if it had one.
 
 !!! info "Before approval"
-    Until you approve it, a box with `HIVE_SERVE_OWNER` set that isn't a
+    Until you approve it, a box with `LIGUS_SERVE_OWNER` set that isn't a
     member yet waits read-only (`pending`) instead of joining as one. A box
     that is already a member keeps working as that member meanwhile, and if
     it's an Admin, desktops already treat it as your device for answering
@@ -79,8 +79,8 @@ stop accepting the box's events, and the box goes read-only
 approve its new code:
 
 ```sh
-hive serve enroll --new-device
-# restart hive serve, then approve the new code on the desktop
+ligus serve enroll --new-device
+# restart ligus serve, then approve the new code on the desktop
 ```
 
 !!! warning "Upgrade every desktop"
@@ -90,9 +90,9 @@ hive serve enroll --new-device
 
 ## Host liveness
 
-Hosts (the `hive serve` box, `hive worker` boxes, desktops) show as online or
+Hosts (the `ligus serve` box, `ligus worker` boxes, desktops) show as online or
 offline in the phone's Hosts list, agent host badges, the desktop's Hosts
-list, `hive queue` and chat details. The same signal decides whether a desktop
+list, `ligus queue` and chat details. The same signal decides whether a desktop
 defers an agent's turn to its host.
 
 Since v1.16 this rides the relay's **presence channel**, not the event log.
@@ -117,11 +117,11 @@ and nothing else: applying it is the desktop's **Implement**. To apply on the
 box instead, set:
 
 ```sh
-HIVE_SERVE_APPLY_ON_APPROVE=1
+LIGUS_SERVE_APPLY_ON_APPROVE=1
 ```
 
 An approved diff is then committed to the chat's branch (`hive/chat/<id>`) in
-the checkout bound on the box (`hive bind-repo`), the way the desktop's
+the checkout bound on the box (`ligus bind-repo`), the way the desktop's
 Implement does. Only a proposal whose status is `approved` applies; one that
 was rejected by a qualifying reviewer, dismissed or superseded never does.
 To switch a chat's repo, clone, pull or open a pull request from the phone,
@@ -134,7 +134,7 @@ the workspaces on a device into whichever relay room it was connected to.
 Those events were sealed under that room's key, so other members of that room
 could read them.
 
-v1.16.0 fixes this on the desktop, `hive serve` and `hive worker`:
+v1.16.0 fixes this on the desktop, `ligus serve` and `ligus worker`:
 
 - A device pushes only the events of the room's own workspace.
 - Events of any other workspace that arrive from the relay (pushed by a device
@@ -148,7 +148,7 @@ v1.16.0 fixes this on the desktop, `hive serve` and `hive worker`:
 
 ### What to expect and do when upgrading from 1.15 or earlier
 
-- **Upgrade every device**, desktops, `hive serve` and `hive worker` boxes
+- **Upgrade every device**, desktops, `ligus serve` and `ligus worker` boxes
   alike. An older client keeps leaking its other workspaces into the room
   until it's upgraded; upgraded peers just drop what it sends.
 - **A cleanup message on first start.** If the cleanup removed anything, the

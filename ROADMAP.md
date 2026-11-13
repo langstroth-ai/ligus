@@ -1,6 +1,6 @@
-# Hive roadmap
+# Ligus roadmap
 
-Working notes on where Hive is heading. Not a promise — a prioritized sketch.
+Working notes on where Ligus is heading. Not a promise — a prioritized sketch.
 
 ## Now / near-term
 
@@ -35,7 +35,7 @@ Working notes on where Hive is heading. Not a promise — a prioritized sketch.
 ## Deliberately not chasing
 
 - Feature-parity with general team-chat platforms (mobile, voice huddles, git
-  hosting, server-side search). Hive is **dev-first and content-blind (E2EE)** —
+  hosting, server-side search). Ligus is **dev-first and content-blind (E2EE)** —
   the search/agent-over-history features that need a content-reading relay are a
   non-goal by design.
 

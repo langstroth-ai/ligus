@@ -14,7 +14,7 @@ are three ways to bring someone in.
 The common path is the **workspace rail's ＋ button**, which opens
 the **Add workspace** modal with two tabs:
 
-**Create** — name the workspace and Hive spins up a private,
+**Create** — name the workspace and Ligus spins up a private,
 end-to-end-encrypted team room (it generates the room id and the
 E2EE key). You become the owner and immediately get an **invite
 code** to share. Anyone who pastes it joins and syncs with you.
@@ -44,10 +44,10 @@ workspace from the *Your team workspaces* list.
 ## Invite by GitHub handle
 
 Open the **People** pane on the right rail and use **Invite by
-GitHub handle**. Enter someone's `@handle` and Hive:
+GitHub handle**. Enter someone's `@handle` and Ligus:
 
 1. Looks them up in the relay directory (they must have signed in to
-   Hive with GitHub at least once).
+   Ligus with GitHub at least once).
 2. Adds them to the roster keyed by their stable GitHub account id.
 3. **Seals the workspace key to every one of their devices** — so
    the key never travels in a pasteable code at all.
@@ -65,7 +65,7 @@ the **People** pane, use the **Import GitHub org** card:
 
 1. Sign in with GitHub with the **`read:org`** scope (Settings → Account).
 2. Enter the org **slug** (e.g. `acme-inc`).
-3. Hive pulls the org's Teams and adds their members to the roster.
+3. Ligus pulls the org's Teams and adds their members to the roster.
 
 Governance roles are mapped from each member's **team slug**:
 

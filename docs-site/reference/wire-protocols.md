@@ -1,6 +1,6 @@
 # Wire protocols
 
-Hive's state is an append-only log of **signed event envelopes**. The same
+Ligus's state is an append-only log of **signed event envelopes**. The same
 envelope is the unit of local storage, of relay sync, and (eventually) of
 direct peer transfer — so this one shape is the contract an independent
 implementation would need.
@@ -40,7 +40,7 @@ quarantined, not applied.
 
 ## 2. Relay sync (HTTP/JSON)
 
-The relay ([honeyhive-ai/relay](https://github.com/honeyhive-ai/relay)) is a per-workspace forwarding mailbox keyed by
+The relay ([ligus-ai/relay](https://github.com/ligus-ai/relay)) is a per-workspace forwarding mailbox keyed by
 a **room id**. Devices on the same relay URL + room converge.
 
 - `GET  /v1/health` → `ok`
@@ -61,10 +61,10 @@ that room's workspace id and drops any event stamped with another. When a
 
 ## 3. MCP (subprocess or HTTP)
 
-Standard [Model Context Protocol](https://modelcontextprotocol.io). Hive
+Standard [Model Context Protocol](https://modelcontextprotocol.io). Ligus
 implements `initialize`, `tools/list`, and `tools/call`, over two transports:
 
-- **stdio** — Hive spawns the binary; JSON-RPC over stdin/stdout.
+- **stdio** — Ligus spawns the binary; JSON-RPC over stdin/stdout.
 - **http** — JSON-RPC POSTs to the configured endpoint.
 
 An installed server stays inert until you enable it. Wire types and bridges
@@ -91,14 +91,17 @@ follow-ups and **not wired** in the current Rust build — relay forwarding
 - **LAN discovery** — zero-config local peer announcement.
 - **Collaborative-text CRDT** — concurrent editing of proposal bodies.
 
-## Frozen protocol identifiers
+## Legacy protocol identifiers
 
-The strings below contain the word `hive`. They are protocol and cryptographic
-constants, not branding: they never change with the product name, because
-renaming any of them would break mixed-version peers, paired phones, relays,
-invites, or (for the cryptographic ones) every existing signature and encrypted
-workspace. Tests pin their exact bytes. If one ever has to change, it ships as a
-new protocol version accepted alongside the old one.
+The strings below are legacy identifiers from the project's former name, Hive.
+They are protocol and cryptographic constants, not branding, so they keep the
+`hive` spelling: renaming any of them would break mixed-version peers, paired
+phones, relays, invites, or (for the cryptographic ones) every existing
+signature and encrypted workspace. Tests pin their exact bytes. If one ever has
+to change, it ships as a new protocol version accepted alongside the old one.
+The phone deep-link scheme is the exception that grows: phones accept both
+`ligus://` and `hive://`, and `ligus serve` keeps emitting `hive://` until
+every paired phone runs a build that registers `ligus://`.
 
 | Identifier | Kind | Where |
 |---|---|---|
@@ -116,7 +119,7 @@ new protocol version accepted alongside the old one.
 | `hivedev1:` | Device enrollment code prefix | `hive-runtime/src/device_enroll.rs` |
 | `hive_`, `hivepeer1:` | Peer code prefixes | `hive-runtime/src/peer.rs` |
 | `X-Hive-Github-Token`, `X-Hive-More`, `X-Hive-Next-After`, `X-Hive-Event-Id` | Relay HTTP headers | relay, clients |
-| `hive://` | Phone deep-link scheme (`hive://pair`, `hive://chat/<id>`) | `hive serve`, phone app |
+| `hive://` | Phone deep-link scheme (`hive://pair`, `hive://chat/<id>`) | `ligus serve`, phone app |
 
 ## Versioning
 

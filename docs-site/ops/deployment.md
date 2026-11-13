@@ -1,18 +1,18 @@
 # Deploying for a small team (free tier)
 
 This is the practical, end-to-end recipe for getting a handful of developers
-sharing Hive workspaces — on free or near-free hosting, in about 15 minutes.
+sharing Ligus workspaces — on free or near-free hosting, in about 15 minutes.
 
 ## What you're actually deploying
 
-Hive is a desktop app; there's no central server to run for the app itself.
+Ligus is a desktop app; there's no central server to run for the app itself.
 The **only** thing a team self-hosts is the **relay** — a tiny stateless
 service that forwards encrypted events between devices. One relay serves your
 whole team.
 
 ```
   ┌────────────┐         ┌──────────────┐         ┌────────────┐
-  │ Dev A (app)│ ──push─▶│  hive-relay  │◀─pull── │ Dev B (app)│
+  │ Dev A (app)│ ──push─▶│  ligus-relay  │◀─pull── │ Dev B (app)│
   │            │ ◀─pull──│ (you host 1) │ ──push─▶│            │
   └────────────┘         └──────────────┘         └────────────┘
         every device with the same relay URL + room id converges
@@ -20,7 +20,7 @@ whole team.
 
 What you do **not** pay for centrally:
 
-- **LLM inference.** Hive is bring-your-own: each developer uses their own
+- **LLM inference.** Ligus is bring-your-own: each developer uses their own
   Claude Code CLI subscription (the default runtime) or their own API key /
   local Ollama. There's no shared inference bill to provision.
 - **A database.** The relay keeps state in memory; each device keeps its own
@@ -46,13 +46,13 @@ but for a team that's online at different hours, prefer Fly.io's always-on
 single machine (its free allowance covers one `shared-cpu-1x` / 256 MB machine,
 which is all the relay needs).
 
-The relay lives in its own repo — **[github.com/honeyhive-ai/relay](https://github.com/honeyhive-ai/relay)**
+The relay lives in its own repo — **[github.com/ligus-ai/relay](https://github.com/ligus-ai/relay)**
 (MIT) — which ships the Dockerfile + `deploy/fly.toml`. Clone it, then:
 
 ### Fly.io
 
 ```bash
-git clone https://github.com/honeyhive-ai/relay && cd relay
+git clone https://github.com/ligus-ai/relay && cd relay
 fly auth signup                     # or: fly auth login
 fly launch --copy-config --no-deploy   # first time — pick a unique app name + region
 fly volumes create hive_data --size 1 --region <your-region>
@@ -63,12 +63,12 @@ fly status                          # → https://<your-app>.fly.dev
 ### Render / Railway / Cloud Run / a VPS
 
 Point the platform at the relay repo's Dockerfile (New → Web Service → Docker),
-attach a persistent disk at `/data`, set `HIVE_RELAY_DATA_DIR=/data`, and expose
+attach a persistent disk at `/data`, set `LIGUS_RELAY_DATA_DIR=/data`, and expose
 port 8443. Or build + run the image anywhere:
 
 ```bash
-docker build -t hive-relay https://github.com/honeyhive-ai/relay.git
-docker run -d -p 8443:8443 --restart unless-stopped hive-relay
+docker build -t ligus-relay https://github.com/ligus-ai/relay.git
+docker run -d -p 8443:8443 --restart unless-stopped ligus-relay
 # put Caddy/nginx in front for HTTPS, or use the platform's TLS
 ```
 
@@ -100,7 +100,7 @@ password and don't skip it.
 
 ## Step 4 — Each teammate connects (no restart, no env vars)
 
-In Hive: **Settings → Multiuser sync**, fill in the Relay URL, Room, and
+In Ligus: **Settings → Multiuser sync**, fill in the Relay URL, Room, and
 Workspace key, then **Save**. The background sync picks it up within a few
 seconds — no relaunch needed. The status pill should read **live** (it reports
 real connection state — **live / error / offline** — so a bad key or dead relay
@@ -113,8 +113,8 @@ live · relay https://acme-hive.fly.dev · room acme-backend · 🔒 encrypted
 Now create a chat on one machine; it shows up on the others within ~3 seconds.
 Replies, agents, proposals, reactions, and skills all propagate the same way.
 
-> Environment variables (`HIVE_RELAY_URL`, `HIVE_WORKSPACE`,
-> `HIVE_WORKSPACE_KEY`) still work, but they only **seed** the settings on first
+> Environment variables (`LIGUS_RELAY_URL`, `LIGUS_WORKSPACE`,
+> `LIGUS_WORKSPACE_KEY`) still work, but they only **seed** the settings on first
 > launch. After that the in-app Settings are the source of truth. Most teams
 > don't need the env vars at all.
 

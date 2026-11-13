@@ -1,8 +1,8 @@
-site_name: Hive
+site_name: Ligus
 site_description: Shared LLM workspace for devs — bring your own subscription, your own agents.
-site_url: https://docs.apiaryhq.ai/
-repo_url: https://github.com/honeyhive-ai/hive
-repo_name: honeyhive-ai/hive
+site_url: https://docs.ligus.ai/
+repo_url: https://github.com/ligus-ai/ligus
+repo_name: ligus-ai/ligus
 copyright: MIT-licensed
 docs_dir: docs-site
 site_dir: site
@@ -96,7 +96,7 @@ nav:
       - Multi-agent collaboration: features/multi-agent.md
       - Mentions & notifications: features/mentions-and-notifications.md
       - Agentic workflows: features/workflows.md
-      - Hive on your phone: features/phone-app.md
+      - Ligus on your phone: features/phone-app.md
       - Host dashboard: features/dashboard.md
       - Scheduled agents: features/scheduling.md
       - Managing context: features/voice-and-slash.md
@@ -119,7 +119,7 @@ nav:
   - Operations:
       - Building the dist: ops/build.md
       - Deploying for a small team: ops/deployment.md
-      - Running hive serve as your own device: ops/serve-box.md
+      - Running ligus serve as your own device: ops/serve-box.md
       - Repos on the home host: ops/serve-repos.md
       - Pricing tiers: ops/pricing.md
       - Tiering (open-core model): ops/tiering.md

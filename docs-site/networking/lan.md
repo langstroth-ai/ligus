@@ -6,7 +6,7 @@
 
 ## What it will do
 
-When two Hive instances are on the same network, they'll be able to find each
+When two Ligus instances are on the same network, they'll be able to find each
 other without any server — advertising a small, opt-in record that carries
 **identity material only** (workspace id/name + the inviter's account/device id,
 display name, and signing public key — never workspace content, member lists, or

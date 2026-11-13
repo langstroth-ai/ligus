@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build the Hive desktop app for x86_64 Linux (Ubuntu/Debian) via Docker,
+# Build the Ligus desktop app for x86_64 Linux (Ubuntu/Debian) via Docker,
 # producing a .deb. iroh builds fine on Linux (netlink, not the Windows `wmi`
 # crate), so this includes FULL direct-P2P (default features).
 #

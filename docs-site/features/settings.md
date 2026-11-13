@@ -1,6 +1,6 @@
 # Settings
 
-Hive's Settings view has a **grouped, searchable sidebar** so the page
+Ligus's Settings view has a **grouped, searchable sidebar** so the page
 isn't one overwhelming scroll — only the active section mounts. The
 groups are **You** (Account, Appearance), **This workspace** (Folder &
 Git, Team sync, Schedules), **Agents** (Models & runtimes, Tools & MCP,
@@ -11,7 +11,7 @@ name *and* by the controls a section contains — typing `api key`,
 
 Every section **applies its changes immediately** (no Save button).
 Workspace-scoped config (runtimes, MCP servers) is written back to
-`hive.config.toml`; connection settings persist to a `settings.json` in
+`ligus.config.toml`; connection settings persist to a `settings.json` in
 the app data dir; the theme is stored locally per device.
 
 ![Settings — Account tab](../images/settings-general.png){ width="900" }
@@ -19,7 +19,7 @@ the app data dir; the theme is stored locally per device.
 ## Account
 
 - **Identity** — your **display name** (part of the `(@handle, device)`
-  pair Hive signs envelopes with) and your **git email**. When you're
+  pair Ligus signs envelopes with) and your **git email**. When you're
   signed in to GitHub the git email is managed from the account (sign
   out to edit it by hand).
 - **GitHub** — sign in with GitHub (OAuth device flow) for a stable
@@ -29,9 +29,9 @@ the app data dir; the theme is stored locally per device.
   [Identity & devices](../concepts/identity.md). Official builds ship
   with the OAuth App client id baked in; forks can paste their own.
 - **My devices** — devices that act as you in this workspace. **Add a
-  device** takes the enrollment code a `hive serve` box prints, so what you
+  device** takes the enrollment code a `ligus serve` box prints, so what you
   do from your phone through that box is authored as you rather than as a
-  separate member. See [Running hive serve as your own device](../ops/serve-box.md).
+  separate member. See [Running ligus serve as your own device](../ops/serve-box.md).
 
 ## Appearance
 
@@ -77,7 +77,7 @@ relay configuration:
 - **Relay access token** — needed **only** for a gated/paid hosted
   relay; leave blank for a relay you host yourself (the open default).
   Sent as a bearer on every relay request; never echoed back. If your
-  token was issued as `name:token`, either form works — Hive sends just
+  token was issued as `name:token`, either form works — Ligus sends just
   the token part.
 - **Test connection** — actually hits the relay and reports
   **Connected**, **Unauthorized** (reached it, token rejected), or
@@ -107,10 +107,10 @@ On a relay that supports it, the Team sync tab also has a **Team
 members** panel for managing who may sync — durable, with no redeploy and
 instant revocation:
 
-- **Add member** — give a name (and optionally their GitHub login); Hive
+- **Add member** — give a name (and optionally their GitHub login); Ligus
   creates the user on the relay and shows a **one-time access token**.
   Copy it now — it's never shown again — and the teammate pastes it into
-  the **Relay access token** field of *their* Hive.
+  the **Relay access token** field of *their* Ligus.
 - **Add token** — issue an extra token for an existing member (e.g. a
   second device).
 - **Revoke** — kill one token immediately; the device using it stops
@@ -118,7 +118,7 @@ instant revocation:
 - **Disable / Enable** — turn a whole member off (revokes all their
   tokens at once) without deleting them.
 
-Tokens are stored on the relay only as hashes — Hive shows the raw value
+Tokens are stored on the relay only as hashes — Ligus shows the raw value
 once and never again. This panel appears only when you're an **admin**
 on a relay that supports user management (your GitHub login is in the
 relay's admin list); everyone else sees a short explanatory note
@@ -150,7 +150,7 @@ LLM access is organized as a hierarchy:
   no key.
 - **Models (runtimes)** — a model on a provider (id + capability flags).
   The add form includes an optional **Context window in tokens** — set
-  it for Ollama/custom models whose window Hive can't infer from the
+  it for Ollama/custom models whose window Ligus can't infer from the
   name; the [context planner](voice-and-slash.md) budgets against it.
   Ollama runtimes add **Keep alive** (how long the server keeps the
   model loaded) and **Let the model think** (reasoning models: the
@@ -202,9 +202,9 @@ that Gemini CLI no longer serves Google AI Pro / Ultra sign-ins. See
 
 ### Portable config
 
-**Export** dumps this machine's runtimes + MCP setup as a `hive.toml`
+**Export** dumps this machine's runtimes + MCP setup as a `ligus.toml`
 you can copy to another device or share with a teammate; **Import**
-stamps a pasted `hive.toml` onto this machine (**additive** — it adds
+stamps a pasted `ligus.toml` onto this machine (**additive** — it adds
 what's missing and never deletes what you already have). API keys travel
 with the export, so treat it like a secret.
 
@@ -221,7 +221,7 @@ overflowed history. See
 Install / enable / remove **Model Context Protocol (MCP) servers**. An
 installed server stays **inert until you enable it** — enabling is what
 launches the command or opens the connection, and only enabled servers
-expose their tools to agents. Two transports: `stdio` (Hive spawns the
+expose their tools to agents. Two transports: `stdio` (Ligus spawns the
 binary) and `http`. See [MCP servers](../addons/mcp.md).
 
 ## Permissions
@@ -259,13 +259,13 @@ type** (Claude Code is not the only agent that edits files):
 ## Diagnostics
 
 Open the **log file** (structured logs plus panics) — useful when
-something misbehaves silently. Set `HIVE_LOG=debug` in the environment
+something misbehaves silently. Set `LIGUS_LOG=debug` in the environment
 before launching for verbose output while you're chasing an issue.
 
 ## Danger zone
 
 **Reset local data** wipes this device's chats, identity, keys,
-settings, and workspaces, then relaunches Hive fresh. It's the supported
+settings, and workspaces, then relaunches Ligus fresh. It's the supported
 way to start over — uninstalling leaves data behind. See
 [Reset local data](../getting-started/first-launch.md#reset-local-data)
 for the per-OS data directories.
@@ -275,7 +275,7 @@ for the per-OS data directories.
 Not a Settings tab, but the counterpart to the **Relay issuer key**
 above: the right rail's **People** pane has a **Remote agents** section
 (shown once a relay is connected). Enroll a remote agent by handle and
-Hive **generates the exact command** — with the relay URL, room, a
+Ligus **generates the exact command** — with the relay URL, room, a
 minted agent token, and workspace credentials filled in — for a
 developer to copy and run on the agent's box. Detached agents run on
 **workspace credentials**, never a personal API key. See
@@ -295,6 +295,6 @@ developer to copy and run on the agent's box. Detached agents run on
   and both live in the ⌘K palette as "Toggle sidebar" / "Toggle tools
   rail".
 - Workspace config round-trips through the TOML encoder, so hand-edited
-  and GUI-edited `hive.config.toml` files stay compatible (comments
+  and GUI-edited `ligus.config.toml` files stay compatible (comments
   aren't preserved). See
-  [`hive.config.toml` reference](../reference/config-toml.md).
+  [`ligus.config.toml` reference](../reference/config-toml.md).

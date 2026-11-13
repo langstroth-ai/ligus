@@ -1,20 +1,20 @@
 # Host dashboard
 
-A `hive serve` host can serve a **dashboard** for the phone app: numbers,
+A `ligus serve` host can serve a **dashboard** for the phone app: numbers,
 rows, tables and charts about your workspace and anything else the host can
 reach. The phone shows it in its dashboard tab. The host builds every panel
 itself and answers `GET /v1/dashboard` (bearer auth, like every other `/v1`
 route); the phone never talks to Prometheus, a JSON URL or an MCP server
 directly. It only receives the results.
 
-Every host starts with a built-in **Hive** section about the workspace it
+Every host starts with a built-in **Ligus** section about the workspace it
 serves, so the tab is useful with no setup at all. Anything more is
 described in a `dashboard.toml` file on the host.
 
-See [Hive on your phone](phone-app.md) for the app, and
-[Running hive serve as your own device](../ops/serve-box.md) for setting up `hive serve`.
+See [Ligus on your phone](phone-app.md) for the app, and
+[Running ligus serve as your own device](../ops/serve-box.md) for setting up `ligus serve`.
 
-## The built-in Hive section
+## The built-in Ligus section
 
 Shown first on every dashboard unless `dashboard.toml` says otherwise:
 
@@ -24,8 +24,8 @@ Shown first on every dashboard unless `dashboard.toml` says otherwise:
 | **Awaiting your review** (amber from 1), **Open proposals** | Proposals you may vote on and haven't (your own excluded), and all open proposals |
 | **Turns today**, **Turns, 7 days** | Agent replies since local midnight, and over the last 7 days |
 | **Workflows running**, **Awaiting approval** (amber from 1), **Failed today** (red from 1) | Shown only once the workspace has a workflow |
-| **Phones paired** | Shown only when remote access is on (`hive remote`) |
-| **This host** | Hive serve, Relay sync (for example "Synced 4 s ago"), Remote access (when on), Push |
+| **Phones paired** | Shown only when remote access is on (`ligus remote`) |
+| **This host** | Ligus serve, Relay sync (for example "Synced 4 s ago"), Remote access (when on), Push |
 
 "Your review" means the identity the phone acts as: the host itself, or
 its owner once the host is enrolled as one of the owner's devices.
@@ -34,38 +34,38 @@ To move or hide the section, set `builtin` at the top of `dashboard.toml`,
 before any `[mcp]` table or `[[section]]`:
 
 ```toml
-builtin = false      # no Hive section
+builtin = false      # no Ligus section
 builtin = "bottom"   # below your own sections
 # builtin = true or "top": above them (the default)
 ```
 
 ## Where the file lives
 
-The host reads `dashboard.toml` from its data directory (`HIVE_DATA_DIR`,
-default `~/.hive`), next to `config.toml`. Set `HIVE_DASHBOARD_FILE` to use
+The host reads `dashboard.toml` from its data directory (`LIGUS_DATA_DIR`,
+default `~/.ligus`), next to `config.toml`. Set `LIGUS_DASHBOARD_FILE` to use
 another path. The file is read again on every request, so edits apply
-without restarting `hive serve`.
+without restarting `ligus serve`.
 
-With no `dashboard.toml`, the dashboard is the built-in Hive section. If
-`HIVE_PROMETHEUS_URL` is set, the host also adds a generated home-lab
+With no `dashboard.toml`, the dashboard is the built-in Ligus section. If
+`LIGUS_PROMETHEUS_URL` is set, the host also adds a generated home-lab
 dashboard below it (power, workers, temperatures and so on; sections with no
-data are left out). `hive dashboard default` prints that generated
+data are left out). `ligus dashboard default` prints that generated
 dashboard as TOML, a good starting point to edit.
 
 ## Commands
 
 ```sh
-hive dashboard check                   # validate the file, evaluate every panel once, print the results
-hive dashboard check --file other.toml # check another file
-hive dashboard metrics                 # list the hive metrics panels can show
-hive dashboard default                 # print the generated default dashboard as TOML
+ligus dashboard check                   # validate the file, evaluate every panel once, print the results
+ligus dashboard check --file other.toml # check another file
+ligus dashboard metrics                 # list the hive metrics panels can show
+ligus dashboard default                 # print the generated default dashboard as TOML
 ```
 
-Run `hive dashboard check` with the server's environment (for example its
-env file), so it uses the same `HIVE_DATA_DIR`, `HIVE_PROMETHEUS_URL` and
-`HIVE_MCP_CONFIG`. It exits non-zero when the file is invalid or any panel
+Run `ligus dashboard check` with the server's environment (for example its
+env file), so it uses the same `LIGUS_DATA_DIR`, `LIGUS_PROMETHEUS_URL` and
+`LIGUS_MCP_CONFIG`. It exits non-zero when the file is invalid or any panel
 has an error. `check` reads the workspace from the host's store but isn't
-the running server, so the live rows of the Hive section (relay sync, push)
+the running server, so the live rows of the Ligus section (relay sync, push)
 read as unknown. It also **calls every MCP tool the file uses, once**.
 
 ## An example
@@ -73,7 +73,7 @@ read as unknown. It also **calls every MCP tool the file uses, once**.
 ```toml
 title = "Team"        # tab title in the app (default "Dashboard")
 refresh = "30s"       # how long a panel's result is reused (default for every panel)
-builtin = true        # the built-in Hive section on top
+builtin = true        # the built-in Ligus section on top
 
 [mcp]
 allow = ["github/list_pull_requests"]   # every MCP tool a panel may call, by exact name
@@ -105,7 +105,7 @@ optional = true       # hide the section while none of its panels has data
 title = "Open pull requests"
 kind = "table"
 source = "mcp"
-server = "github"     # a server id in HIVE_MCP_CONFIG
+server = "github"     # a server id in LIGUS_MCP_CONFIG
 tool = "list_pull_requests"
 args = { owner = "acme", repo = "web", state = "open" }
 columns = [
@@ -127,7 +127,7 @@ path = "/status"
 ```
 
 More examples ship in the repository under
-[`deploy/hive-serve/`](https://github.com/honeyhive-ai/hive/tree/main/deploy/hive-serve):
+[`deploy/ligus-serve/`](https://github.com/ligus-ai/ligus/tree/main/deploy/ligus-serve):
 `dashboard-team.toml.example` (no home lab needed),
 `dashboard.toml.example` (a server and GPU workers from Prometheus) and
 `dashboard-solar.toml.example`.
@@ -155,9 +155,9 @@ by level. A `unit` starting with `$` reads as money (`unit = "$/h"` shows
 
 | `source` | Keys | Reads |
 |---|---|---|
-| `prometheus` (the default) | `query` | An instant query against `HIVE_PROMETHEUS_URL` (time series and sparklines use a range query) |
+| `prometheus` (the default) | `query` | An instant query against `LIGUS_PROMETHEUS_URL` (time series and sparklines use a range query) |
 | `http_json` (default when `url` is set) | `url`, `path` | `GET url` (http or https, from the host's network, at most 1 MiB) and the value at `path`, a JSON pointer such as `/data/0/temp`. No headers or credentials are sent |
-| `hive` (default when `metric` is set) | `metric` | A metric of the workspace this host serves (see [below](#hive-metrics)) |
+| `hive` (default when `metric` is set) | `metric` | A metric of the workspace this host serves (see [below](#ligus-metrics)) |
 | `mcp` (default when `tool` is set) | `server`, `tool`, `args`, `path` | A tool on one of the host's MCP servers, read like a JSON document (see [MCP tool panels](#mcp-tool-panels)) |
 
 ### Panel kinds
@@ -179,10 +179,10 @@ the table uses the keys of the first item (at most 8). `limit` sets the
 number of rows: default 20, at most 200. `limit` also caps the rows of
 `bar`, `list` and `status` panels.
 
-### Hive metrics
+### Ligus metrics
 
 `source = "hive"` with `metric = "…"` reads the workspace this host serves,
-from its synced event log. `hive dashboard metrics` prints this list.
+from its synced event log. `ligus dashboard metrics` prints this list.
 
 | Metric | Shape | What |
 |---|---|---|
@@ -204,7 +204,7 @@ from its synced event log. `hive dashboard metrics` prints this list.
 | `turns.today` | number | Agent replies since local midnight |
 | `turns.7d` | number | Agent replies in the last 7 days |
 | `turns.by_agent_7d` | rows | Agent replies in the last 7 days, per agent |
-| `host.status` | rows | This host: Hive serve, Relay sync, Remote access (when on), Push |
+| `host.status` | rows | This host: Ligus serve, Relay sync, Remote access (when on), Push |
 | `sync.age` | number | Seconds since the last successful relay sync |
 | `sync.last` | text | The last relay sync, for example "Synced 4 s ago" |
 | `phones.paired` | number | Phones paired for remote access |
@@ -212,13 +212,13 @@ from its synced event log. `hive dashboard metrics` prints this list.
 A number fits `stat`, `gauge` and `text`, or one row of a list
 (`rows = [{ label = "Open", metric = "proposals.open" }]`). Rows fit `bar`,
 `list` and `status`; tables fit `table`. "Today" starts at local midnight in
-the host's time zone, read when `hive serve` starts. Hive doesn't record
+the host's time zone, read when `ligus serve` starts. Ligus doesn't record
 token usage, so there are no token or cost metrics.
 
 ## MCP tool panels
 
 `source = "mcp"` calls a tool on one of the MCP servers in the host's
-`HIVE_MCP_CONFIG`, the same file that gives agents on this host their MCP
+`LIGUS_MCP_CONFIG`, the same file that gives agents on this host their MCP
 tools. Bearer tokens stay in the environment variables that file names.
 
 How the tool's result is read:
@@ -250,7 +250,7 @@ How the tool's result is read:
     - Each call has its own timeout (default `10s` for MCP panels, at most
       `30s`). A stdio server that doesn't answer in time is stopped.
     - `args` are sent exactly as written; there is no templating.
-    - `hive dashboard check` calls each tool once.
+    - `ligus dashboard check` calls each tool once.
 
     A stdio server is started for each call, so give stdio-backed panels a
     long `refresh`.
@@ -262,8 +262,8 @@ unreachable Prometheus, an empty result, a bad JSON pointer, an HTTP error,
 an invalid panel) becomes that panel's error and the rest of the dashboard
 is unaffected. A failed panel is retried after at most 5 seconds (an MCP
 panel after its `refresh`). A file that isn't valid TOML shows one error at
-the top of the dashboard, above the built-in Hive section.
+the top of the dashboard, above the built-in Ligus section.
 
 The full specification, including the JSON that `GET /v1/dashboard`
 returns, is in
-[`docs/dashboard.md`](https://github.com/honeyhive-ai/hive/blob/main/docs/dashboard.md).
+[`docs/dashboard.md`](https://github.com/ligus-ai/ligus/blob/main/docs/dashboard.md).

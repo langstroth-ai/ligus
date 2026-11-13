@@ -24,7 +24,7 @@ What you expected to happen instead.
 
 **Environment**
 
-- Hive version (or commit):
+- Ligus version (or commit):
 - OS: <!-- e.g. macOS 15.5 / Ubuntu 24.04 / Windows 11 -->
 - Affected area: <!-- app UI / agent runtime / MCP / sync-P2P / relay / other -->
 - Agent/runtime in use (if relevant): <!-- e.g. claude CLI, Ollama, aider -->

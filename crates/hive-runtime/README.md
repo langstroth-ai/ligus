@@ -3,7 +3,7 @@
 **Orchestration over [`hive-core`](../hive-core/README.md).** Everything that
 touches the outside world — disk, network, model providers, subprocesses — lives
 here. Where `hive-core` is pure domain logic, this is the layer the desktop
-[`app/`](../../app/README.md) and the [`hive` CLI](../hive-cli/README.md) drive.
+[`app/`](../../app/README.md) and the [`ligus` CLI](../hive-cli/README.md) drive.
 
 ## Key modules
 
@@ -26,5 +26,5 @@ here. Where `hive-core` is pure domain logic, this is the layer the desktop
 ## Notes
 
 - Depends on `hive-core`; the desktop app and CLI depend on this crate.
-- Uses [`hive-relay`](../hive-relay/README.md) as a **dev-dependency** in-process
+- Uses [`ligus-relay`](../ligus-relay/README.md) as a **dev-dependency** in-process
   fixture for sync tests — the production relay is the separate Go repo.

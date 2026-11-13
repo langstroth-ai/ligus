@@ -1,6 +1,6 @@
 # Workspaces & chats
 
-A **workspace** is a folder on disk Hive treats as the scope of all
+A **workspace** is a folder on disk Ligus treats as the scope of all
 its work. It carries a name, a permission policy, a set of vaults
 and skills, a list of members and devices, and an event log.
 
@@ -10,7 +10,7 @@ with one or more agents.
 ## The model
 
 ```
-Account ──── Device ──── Hive instance
+Account ──── Device ──── Ligus instance
                               │
                               └── Workspace (folder on disk)
                                      │
@@ -28,14 +28,14 @@ Account ──── Device ──── Hive instance
 - **Device** — a single machine (Alice's MacBook). Has its own Ed25519
   signing key, stored as a file seed in the app data dir (`keys/`) — see
   [Identity & devices](identity.md).
-- **Hive instance** — the running app + its config.
-- **Workspace** — a folder; one workspace per `hive.config.toml`.
+- **Ligus instance** — the running app + its config.
+- **Workspace** — a folder; one workspace per `ligus.config.toml`.
 - **Chat** — a conversation; many per workspace.
 
 ## The event log
 
 Every meaningful state change — chat title rename, member add, tool
-call, approval — becomes an event. Hive stores those events in an
+call, approval — becomes an event. Ligus stores those events in an
 **append-only SQLite database** (`hive.db` in the app's data
 directory). Each envelope's full JSON is stored verbatim, with indexed
 columns (`session_id`, `sequence`, `kind`, `scope`, `timestamp`) for
@@ -90,7 +90,7 @@ switches between them — the local "My workspace" and any team rooms
 you've joined; the ＋ at the bottom creates a new team room or joins one
 by invite code. The chat list is scoped to whichever workspace is active.
 
-Each team room carries **only its own workspace**. Hive pushes a room only
+Each team room carries **only its own workspace**. Ligus pushes a room only
 the events of the workspace that room belongs to, and ignores events of
 any other workspace that arrive through it, so your local "My workspace"
 and your other teams never reach a room they aren't part of.
@@ -99,7 +99,7 @@ and your other teams never reach a room they aren't part of.
 
 Each workspace links to a **folder on your device** — its code directory. The
 mapping is **local to each device and never synced**: teammates in the same
-workspace each point it at their own clone (paths differ per machine, and Hive
+workspace each point it at their own clone (paths differ per machine, and Ligus
 never puts a local path on the wire). Switching workspaces switches the folder
 the editor, terminal, Diff view, and agents operate on; a workspace you haven't
 linked on this device shows a *link-a-folder* prompt (you can still chat, review,
@@ -114,7 +114,7 @@ Non-git folders fall back to editing in place, exactly as before.
 
 ## Permissions & review
 
-Hive doesn't have an inline per-tool consent prompt of its own. Trust is
+Ligus doesn't have an inline per-tool consent prompt of its own. Trust is
 enforced where the real seams are:
 
 - **MCP servers are inert until enabled.** An API runtime has no tools until
@@ -125,7 +125,7 @@ enforced where the real seams are:
   the **Review** pane, where members approve (and reach quorum, if configured)
   before they're implemented.
 
-The `[permissions]` presets in `hive.config.toml` (read/write/run/vault/
+The `[permissions]` presets in `ligus.config.toml` (read/write/run/vault/
 network/remote-runtime capability flags) carry this policy as workspace data;
 review decisions are recorded as events and sync to peers.
 
@@ -139,4 +139,4 @@ review decisions are recorded as events and sync to peers.
   explanations").
 
 Both are managed in the right-rail **Vaults** and **Skills** panes (install,
-list, remove), **not** through `hive.config.toml` and **not** in Settings tabs.
+list, remove), **not** through `ligus.config.toml` and **not** in Settings tabs.

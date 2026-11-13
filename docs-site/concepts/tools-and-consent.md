@@ -1,8 +1,8 @@
 # Tools & permissions
 
-Agents in Hive reach the outside world through **MCP tools**, and the
+Agents in Ligus reach the outside world through **MCP tools**, and the
 authority they have over your files depends on the **runtime** they run
-on. There is no separate Hive-owned tool registry or inline consent
+on. There is no separate Ligus-owned tool registry or inline consent
 banner — file and command access is governed by the two mechanisms
 below, plus the human review gate on proposals.
 
@@ -11,14 +11,14 @@ below, plus the human review gate on proposals.
 Model Context Protocol servers are the way you give agents tools
 (filesystem, search, a ticketing system, anything with an MCP server).
 Add them in the **Tools** pane of the right rail (or in
-`hive.config.toml` under `[[mcp_servers]]`).
+`ligus.config.toml` under `[[mcp_servers]]`).
 
 Two properties make this safe by default:
 
 - **Inert until enabled.** A newly added MCP server is disabled; its
   tools are never offered to a model until you flip it on. Enabling is
   an explicit, per-server action.
-- **Only some runtimes drive them through Hive.** Hive runs the MCP tool
+- **Only some runtimes drive them through Ligus.** Ligus runs the MCP tool
   loop for runtimes on the Anthropic API, and for Ollama and local
   OpenAI-compatible (`custom`) runtimes with **Supports tools** on (those
   get at most 16 tools a turn; see
@@ -48,8 +48,8 @@ runtimes follow the same setting, mapped to each CLI's own permission
 flags; see
 [Bring-your-own agents](../addons/byo-agents.md#subscription-clis-google-antigravity-and-github-copilot).
 
-This is each CLI's own permission model, surfaced in Hive's settings —
-Hive does not intercept individual tool calls itself.
+This is each CLI's own permission model, surfaced in Ligus's settings —
+Ligus does not intercept individual tool calls itself.
 
 ## The human review gate (proposals)
 

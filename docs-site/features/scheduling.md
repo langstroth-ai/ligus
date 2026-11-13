@@ -1,6 +1,6 @@
 # Scheduled agents
 
-Hive can fire a prompt at an agent on a timer — every N minutes, or once
+Ligus can fire a prompt at an agent on a timer — every N minutes, or once
 a day at a set time. Each fire opens a **fresh chat**, posts your prompt,
 and the chat's runtime answers. Useful for a daily standup digest, a
 periodic dependency-audit run, or any recurring "go check this" task.
@@ -26,7 +26,7 @@ Each schedule captures:
 
 ## What happens on each fire
 
-When a schedule triggers, Hive:
+When a schedule triggers, Ligus:
 
 1. Opens a brand-new chat in the current workspace.
 2. Posts the schedule's prompt as the first message.
@@ -48,6 +48,6 @@ Each row in the list has an on/off toggle and a remove control:
 
 The scheduler runs on a **30-second tick**. An interval schedule fires
 once its interval has elapsed since the last run; a daily schedule fires
-on the first tick at or after its `HH:MM` (UTC) each day. Hive must be
+on the first tick at or after its `HH:MM` (UTC) each day. Ligus must be
 running for a schedule to fire — schedules don't wake the app or run while
 it's quit.

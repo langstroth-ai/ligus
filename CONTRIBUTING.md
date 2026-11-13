@@ -1,6 +1,6 @@
-# Contributing to Hive
+# Contributing to Ligus
 
-Hive is a **Tauri v2** app: a Rust backend with a React/TypeScript frontend, plus
+Ligus is a **Tauri v2** app: a Rust backend with a React/TypeScript frontend, plus
 a small relay. This is the quick orientation for contributors — deeper docs live
 in [`docs/`](docs/README.md).
 
@@ -11,7 +11,7 @@ crates/
   hive-core      pure domain: models, config, crypto, events/projector, authz
   hive-runtime   IO/orchestration: SQLite event store, providers, MCP, sync
   hive-proto     IPC DTOs shared with the frontend (ts-rs generates web/src/bindings)
-  hive-relay     the axum relay (envelope forwarding)
+  ligus-relay     the axum relay (envelope forwarding)
 app/       the Tauri shell: commands/events, app wiring
 web/             React + TypeScript frontend (Vite + Bun)
 docs/            developer/maintainer docs (this audience)
@@ -25,7 +25,7 @@ cargo test --workspace          # Rust crates + the Tauri app
 cd web && bun install           # first time
 cd web && bun run build         # frontend typecheck (tsc) + build
 cargo tauri dev                 # run the app (frontend + backend)
-cargo run -p hive-relay         # run the relay locally (:8443)
+cargo run -p ligus-relay         # run the relay locally (:8443)
 ```
 
 ## IPC type bindings (ts-rs)
