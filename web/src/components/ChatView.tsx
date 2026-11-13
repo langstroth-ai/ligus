@@ -691,6 +691,9 @@ export function ChatView({
       { id: "summarize", label: "Summarize conversation", hint: "Context", run: () => void runSummarize() },
       { id: "compact", label: "Compact conversation", hint: "Context", run: () => runCompact() },
       { id: "linear", label: "Insert Linear issues", hint: "Context", run: () => void pullLinearIssues() },
+      // Agents answer an options request with a proposal set (alternatives that
+      // scouts assess independently; you make the call in the Review pane).
+      { id: "explore", label: "Explore options", hint: "Proposals", run: () => insertText("Explore options for ") },
       { id: "export", label: "Export chat → Markdown", hint: "File", run: () => void exportChatToFile() },
       { id: "clear", label: "Clear input", hint: "Edit", run: () => setInput("") },
       ...loadTemplates().map((t) => ({
