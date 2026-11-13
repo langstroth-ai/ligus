@@ -55,4 +55,13 @@ supersededBy?: string | null,
  * An agent-authored workflow up for review: approving the proposal adds
  * it (or, when its id matches an existing workflow, replaces that one).
  */
-workflow?: WorkflowDefinitionDto | null, };
+workflow?: WorkflowDefinitionDto | null, 
+/**
+ * The proposal set this is an alternative in; the Review pane shows it
+ * inside the set instead of on its own.
+ */
+setId?: string | null, taskClass?: string | null, 
+/**
+ * An applied change that was later reverted.
+ */
+reverted?: boolean, };

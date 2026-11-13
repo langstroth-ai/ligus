@@ -22,6 +22,7 @@ use crate::workspace_host::WorkspaceHost;
 use crate::workspace_runtime::WorkspaceRuntime;
 use crate::crypto::DeviceCertificate;
 use crate::identity::{ActorStamp, WorkspaceMember, WorkspaceRole};
+use crate::proposal_sets::{PreflightReport, ProposalSet, ScoutAssessment, SetChange, StopReason};
 use crate::proposals::{ActionProposal, ProposalApproval, ProposalRefinement};
 use crate::session::ChatSession;
 use crate::skills::SkillProfile;
@@ -116,6 +117,77 @@ pub enum SessionEvent {
         proposal_id: Uuid,
         refinement: ProposalRefinement,
     },
+    /// Open a proposal set: one question, several alternative proposals (filed
+    /// first, as ordinary `ProposalUpserted`s carrying `set_id`). The fold
+    /// resets every folded field, so an opener can't seed scores or a decision.
+    /// See `proposal_sets` for the whole process.
+    ProposalSetOpened { set: Box<ProposalSet> },
+    /// Add an alternative to an open set — a revision of one (`revises`), or a
+    /// later agent's competing proposal for the same request.
+    ProposalSetAlternativeAdded {
+        set_id: Uuid,
+        proposal_id: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        revises: Option<Uuid>,
+    },
+    /// One scout agent's blind assessment of one alternative (a delta; the
+    /// latest per scout and alternative wins). The fold stamps its round.
+    ScoutAssessmentPosted { set_id: Uuid, assessment: ScoutAssessment },
+    /// New evidence arrived (a revision, a human comment, test results): the
+    /// set's evaluation round advances and agent support decays. Only
+    /// `round == current + 1` folds, so concurrent advances collapse.
+    ProposalSetRoundAdvanced {
+        set_id: Uuid,
+        round: u32,
+        #[serde(default)]
+        reason: String,
+    },
+    /// An alternative reached agent quorum ("piping"), or won the tie-break
+    /// after the scouting deadline (`tie_break`). Folds only if true at that
+    /// point; the first in canonical order wins.
+    ProposalSetQuorumReached {
+        set_id: Uuid,
+        proposal_id: Uuid,
+        #[serde(default)]
+        tie_break: bool,
+        at: Timestamp,
+    },
+    /// A stop signal: cross-inhibition from the front-runner (`stopped_by`), or
+    /// a withdrawal.
+    ProposalSetAlternativeStopped {
+        set_id: Uuid,
+        proposal_id: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stopped_by: Option<Uuid>,
+        reason: StopReason,
+    },
+    /// The "fast ↔ careful" dial: agent quorum `k`, human approvals and the
+    /// quality bar. Re-stamps every alternative's human gate.
+    ProposalSetTuned {
+        set_id: Uuid,
+        agent_quorum: u32,
+        required_approvals: u32,
+        quality_bar: u32,
+    },
+    /// Phase one of the two-phase commit: the pre-flight checks for an
+    /// alternative. A failing report returns the set to scouting.
+    ProposalSetPreflightRecorded {
+        set_id: Uuid,
+        proposal_id: Uuid,
+        report: PreflightReport,
+        at: Timestamp,
+    },
+    /// The human's final call: the winner that was applied, or `None` to close
+    /// the set without one. A winner folds only with human quorum on it and a
+    /// passing pre-flight in the current attempt.
+    ProposalSetDecided {
+        set_id: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        winner: Option<Uuid>,
+        at: Timestamp,
+    },
+    /// An applied proposal's change was reverted.
+    ProposalReverted { proposal_id: Uuid, at: Timestamp },
     /// Replace the session's vault source set.
     VaultSourcesUpdated { sources: Vec<MountedVault> },
     /// Replace the session's workflow definition set.
@@ -242,6 +314,16 @@ impl SessionEvent {
             SessionEvent::ProposalVoteCast { .. } => "proposalVoteCast",
             SessionEvent::ProposalDismissed { .. } => "proposalDismissed",
             SessionEvent::ProposalRefined { .. } => "proposalRefined",
+            SessionEvent::ProposalSetOpened { .. } => "proposalSetOpened",
+            SessionEvent::ProposalSetAlternativeAdded { .. } => "proposalSetAlternativeAdded",
+            SessionEvent::ScoutAssessmentPosted { .. } => "scoutAssessmentPosted",
+            SessionEvent::ProposalSetRoundAdvanced { .. } => "proposalSetRoundAdvanced",
+            SessionEvent::ProposalSetQuorumReached { .. } => "proposalSetQuorumReached",
+            SessionEvent::ProposalSetAlternativeStopped { .. } => "proposalSetAlternativeStopped",
+            SessionEvent::ProposalSetTuned { .. } => "proposalSetTuned",
+            SessionEvent::ProposalSetPreflightRecorded { .. } => "proposalSetPreflightRecorded",
+            SessionEvent::ProposalSetDecided { .. } => "proposalSetDecided",
+            SessionEvent::ProposalReverted { .. } => "proposalReverted",
             SessionEvent::VaultSourcesUpdated { .. } => "vaultSourcesUpdated",
             SessionEvent::WorkflowDefinitionsUpdated { .. } => "workflowDefinitionsUpdated",
             SessionEvent::WorkflowRunUpserted { .. } => "workflowRunUpserted",
@@ -449,6 +531,7 @@ impl ChatSession {
                 } else {
                     self.proposals.push(proposal.clone());
                 }
+                crate::proposal_sets::restamp(&self.proposal_sets, &mut self.proposals, proposal.id);
             }
             SessionEvent::ProposalVoteCast { proposal_id, approval } => {
                 if let Some(p) = self.proposals.iter_mut().find(|p| p.id == *proposal_id) {
@@ -467,6 +550,24 @@ impl ChatSession {
                     // Idempotent by note id (add_refinement dedups), so a re-folded
                     // event from sync doesn't duplicate the note.
                     p.add_refinement(refinement.clone());
+                }
+            }
+            SessionEvent::ProposalReverted { proposal_id, .. } => {
+                if let Some(p) = self.proposals.iter_mut().find(|p| p.id == *proposal_id) {
+                    p.reverted = p.status == crate::proposals::ProposalStatus::Applied;
+                }
+            }
+            SessionEvent::ProposalSetOpened { .. }
+            | SessionEvent::ProposalSetAlternativeAdded { .. }
+            | SessionEvent::ScoutAssessmentPosted { .. }
+            | SessionEvent::ProposalSetRoundAdvanced { .. }
+            | SessionEvent::ProposalSetQuorumReached { .. }
+            | SessionEvent::ProposalSetAlternativeStopped { .. }
+            | SessionEvent::ProposalSetTuned { .. }
+            | SessionEvent::ProposalSetPreflightRecorded { .. }
+            | SessionEvent::ProposalSetDecided { .. } => {
+                if let Some(change) = set_change(event) {
+                    crate::proposal_sets::apply(&mut self.proposal_sets, &mut self.proposals, change);
                 }
             }
             SessionEvent::VaultSourcesUpdated { sources } => {
@@ -579,6 +680,50 @@ impl ChatSession {
             SessionEvent::Unknown => {}
         }
     }
+}
+
+/// The proposal-set view of a `SessionEvent`, for [`crate::proposal_sets::apply`].
+fn set_change(event: &SessionEvent) -> Option<SetChange<'_>> {
+    Some(match event {
+        SessionEvent::ProposalSetOpened { set } => SetChange::Opened(set),
+        SessionEvent::ProposalSetAlternativeAdded { set_id, proposal_id, revises } => {
+            SetChange::AlternativeAdded { set_id: *set_id, proposal_id: *proposal_id, revises: *revises }
+        }
+        SessionEvent::ScoutAssessmentPosted { set_id, assessment } => {
+            SetChange::Assessed { set_id: *set_id, assessment }
+        }
+        SessionEvent::ProposalSetRoundAdvanced { set_id, round, .. } => {
+            SetChange::RoundAdvanced { set_id: *set_id, round: *round }
+        }
+        SessionEvent::ProposalSetQuorumReached { set_id, proposal_id, tie_break, at } => SetChange::QuorumReached {
+            set_id: *set_id,
+            proposal_id: *proposal_id,
+            tie_break: *tie_break,
+            at: *at,
+        },
+        SessionEvent::ProposalSetAlternativeStopped { set_id, proposal_id, stopped_by, reason } => SetChange::Stopped {
+            set_id: *set_id,
+            proposal_id: *proposal_id,
+            stopped_by: *stopped_by,
+            reason: *reason,
+        },
+        SessionEvent::ProposalSetTuned { set_id, agent_quorum, required_approvals, quality_bar } => SetChange::Tuned {
+            set_id: *set_id,
+            agent_quorum: *agent_quorum,
+            required_approvals: *required_approvals,
+            quality_bar: *quality_bar,
+        },
+        SessionEvent::ProposalSetPreflightRecorded { set_id, proposal_id, report, at } => SetChange::Preflight {
+            set_id: *set_id,
+            proposal_id: *proposal_id,
+            report,
+            at: *at,
+        },
+        SessionEvent::ProposalSetDecided { set_id, winner, at } => {
+            SetChange::Decided { set_id: *set_id, winner: *winner, at: *at }
+        }
+        _ => return None,
+    })
 }
 
 /// Fold an envelope set into the current session state.

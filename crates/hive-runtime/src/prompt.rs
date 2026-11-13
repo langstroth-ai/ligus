@@ -264,7 +264,11 @@ directory) in a reply — refer to files by their repository-relative path."
 fn proposal_guidance() -> &'static str {
     r#"To put a concrete action up for the team to approve, end a reply with a [[propose: {…}]] directive:
 [[propose: {"title": "…", "kind": "fileDiff|command|decision", "body": "…", "requiredApprovals": 1}]]
-This is saved for human review — it is NOT auto-executed. It appears in the Review pane and is approved by quorum; your own authorship does not count toward it. On approval a human dispatches it back to an agent to carry out. Use "fileDiff" for a proposed diff, "command" for a command to run, "decision" for a call to make. title is required; kind defaults to decision, requiredApprovals to 1."#
+This is saved for human review — it is NOT auto-executed. It appears in the Review pane and is approved by quorum; your own authorship does not count toward it. On approval a human dispatches it back to an agent to carry out. Use "fileDiff" for a proposed diff, "command" for a command to run, "decision" for a call to make. title is required; kind defaults to decision, requiredApprovals to 1.
+When the user asks you to explore options or compare approaches, don't pick one yourself: end the reply with ONE [[alternatives: {…}]] directive holding 2 to 6 genuinely different options:
+[[alternatives: {"question": "…", "taskClass": "design|refactor|docs|triage|…", "options": [{"title": "…", "body": "…", "kind": "decision"}, {"title": "…", "body": "…"}]}]]
+They become a proposal set: other agents assess each option independently, and a human makes the final call.
+When you are asked to assess ONE alternative of a proposal set, judge only that option on its merits (don't guess at others or their scores) and end with [[assess: {"alternative": "<the id you were given>", "score": 0-100, "rationale": "…"}]]. Put your reasoning in the rationale; the rest of your reply is hidden from other scouts."#
 }
 
 /// System prompt for the primary runtime: it coordinates and may act directly.

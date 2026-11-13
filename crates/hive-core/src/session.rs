@@ -13,6 +13,7 @@ use crate::channel::Channel;
 use crate::workspace_runtime::WorkspaceRuntime;
 use crate::chat::{ChatMessage, MessageRole};
 use crate::identity::{WorkspaceMember, WorkspaceRole};
+use crate::proposal_sets::ProposalSet;
 use crate::proposals::ActionProposal;
 use crate::skills::SkillProfile;
 use crate::time_util::Timestamp;
@@ -46,6 +47,10 @@ pub struct ChatSession {
     /// Action proposals awaiting review / quorum.
     #[serde(default)]
     pub proposals: Vec<ActionProposal>,
+    /// Proposal sets: competing alternatives scored by scouts (see
+    /// [`crate::proposal_sets`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proposal_sets: Vec<ProposalSet>,
     /// Reference-material vault sources mounted into the workspace.
     #[serde(default)]
     pub vault_sources: Vec<MountedVault>,
@@ -143,6 +148,7 @@ impl ChatSession {
             participant_agent_ids: Vec::new(),
             loaded_skills: Vec::new(),
             proposals: Vec::new(),
+            proposal_sets: Vec::new(),
             vault_sources: Vec::new(),
             workflow_definitions: Vec::new(),
             workflow_runs: Vec::new(),

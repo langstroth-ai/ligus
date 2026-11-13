@@ -123,6 +123,18 @@ pub struct ActionProposal {
     /// than a new kind so older peers still decode the event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<Box<WorkflowDefinition>>,
+    /// The proposal set this proposal is an alternative in, if any (see
+    /// [`crate::proposal_sets`]). The set's own list is the source of truth;
+    /// the fold re-stamps this after an older peer's upsert drops it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set_id: Option<Uuid>,
+    /// Short class of the proposed work (`refactor`, `docs`, `triage`…): a
+    /// grouping label, never a quality claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_class: Option<String>,
+    /// An applied change that was later reverted (`ProposalReverted`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reverted: bool,
 }
 
 fn default_floor() -> WorkspaceRole {
@@ -154,6 +166,9 @@ impl ActionProposal {
             superseded_by: None,
             producing_agent_id: None,
             workflow: None,
+            set_id: None,
+            task_class: None,
+            reverted: false,
         }
     }
 
@@ -192,6 +207,14 @@ impl ActionProposal {
     pub fn cast_vote(&mut self, vote: ProposalApproval) {
         self.approvals.retain(|a| a.actor_id != vote.actor_id);
         self.approvals.push(vote);
+        self.recompute_status();
+    }
+
+    /// Set the human gate (approvals needed + role floor) and recompute the
+    /// status — a proposal set applies its gate to every alternative.
+    pub fn set_human_gate(&mut self, required_approvals: u32, floor: WorkspaceRole) {
+        self.required_approvals = required_approvals;
+        self.approval_role_floor = floor;
         self.recompute_status();
     }
 

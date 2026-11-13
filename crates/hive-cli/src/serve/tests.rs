@@ -1146,6 +1146,35 @@ async fn apply_on_approve_never_overrides_a_rejection() {
     h.handle.shutdown();
 }
 
+/// An alternative in an open proposal set is never applied on approval: the
+/// desktop applies it only after the set's pre-flight. The phone sees which
+/// set it belongs to.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn apply_on_approve_skips_proposal_set_alternatives() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness_with(&endpoint, "m", &[("README.md", "x\n")], |o| o.apply_on_approve = true).await;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    let ws = h.handle.shared.ws;
+    let diff = "diff --git a/alt.txt b/alt.txt\nnew file mode 100644\n--- /dev/null\n+++ b/alt.txt\n@@ -0,0 +1 @@\n+hi\n";
+    let mut a = hive_core::ActionProposal::file_diff("alt A", "", diff.into(), vec!["alt.txt".into()]);
+    a.producing_agent_id = Some(h.agent_id);
+    let b = hive_core::ActionProposal::new("alt B", hive_core::ProposalKind::Decision, "planner");
+    let aid = a.id;
+    let set_id = {
+        let mut svc = h.handle.shared.lock();
+        let set = hive_core::ProposalSet::new("Which?", "planner", vec![]);
+        svc.open_proposal_set(chat_id, ws, set, vec![a, b]).unwrap().id
+    };
+    h.handle.shared.after_write();
+    let res = h.send(reqwest::Method::POST, &format!("/v1/proposals/{aid}/approve"), None).await;
+    assert_eq!(res["proposal"]["status"], "approved", "{res}");
+    assert_eq!(res["proposal"]["setId"], json!(set_id));
+    let wt = h._tmp.path().join("repo").join(".ligus").join("worktrees").join(format!("chat-{chat_id}"));
+    assert!(!wt.join("alt.txt").exists(), "a set alternative was applied without its pre-flight");
+    h.handle.shutdown();
+}
+
 /// A turn cut off by a restart (placeholder still streaming, stamped as the
 /// mention's reply) is finished as interrupted on the next start instead of
 /// staying "streaming" forever and never being answered.

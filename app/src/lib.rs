@@ -39,6 +39,7 @@ use tauri_plugin_notification::NotificationExt;
 use uuid::Uuid;
 
 mod workflows;
+mod proposal_sets;
 mod data_migration;
 /// In-app live test support (see `tests/app_live.rs`); not in release builds.
 #[cfg(feature = "e2e")]
@@ -2288,6 +2289,9 @@ fn proposal_dto(p: &ActionProposal, members: &[hive_core::identity::WorkspaceMem
         parent_id: p.parent_id.map(|id| id.to_string()),
         superseded_by: p.superseded_by.map(|id| id.to_string()),
         workflow: p.workflow.as_deref().map(workflows::definition_dto),
+        set_id: p.set_id.map(|id| id.to_string()),
+        task_class: p.task_class.clone(),
+        reverted: p.reverted,
     }
 }
 
@@ -5250,6 +5254,8 @@ fn refine_proposal(
     let updated = svc
         .refine_proposal(sid, state.active_workspace_id(), pid, actor.id, role, text.trim(), request_changes)
         .map_err(map_err)?;
+    // A person's note on a set alternative is new evidence: the round advances.
+    proposal_sets::on_alternative_feedback(&mut svc, sid, state.active_workspace_id(), pid);
     Ok(updated.as_ref().map(|p| proposal_dto(p, &members)))
 }
 
@@ -5277,6 +5283,7 @@ async fn request_proposal_changes(
             .find(|p| p.id == pid)
             .ok_or("unknown proposal")?
             .clone();
+        proposal_sets::ensure_not_frozen(&session, pid)?;
         // Prefer explicit change requests; fall back to all notes so a plain
         // comment thread can still drive a revision.
         let mut notes: Vec<&hive_core::proposals::ProposalRefinement> =
@@ -5364,6 +5371,10 @@ async fn request_proposal_changes(
                     child.parent_id = Some(pid);
                     let _ = svc.upsert_proposal(sid, workspace_id, child);
                 }
+            }
+            // A revised set alternative takes its parent's place in the set.
+            if let Some(first) = new_ids.first() {
+                proposal_sets::link_revision(&mut svc, sid, workspace_id, pid, *first);
             }
             // The original is superseded by the newest revision (first in fold order).
             if let Some(mut parent) = session.proposals.iter().find(|p| p.id == pid).cloned() {
@@ -5469,6 +5480,29 @@ fn commit_worktree(worktree: &str, message: &str) -> Result<(), String> {
 /// are dispatched to the responding agent as an instruction. Then marked Applied.
 #[tauri::command]
 async fn implement_proposal(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+    proposal_id: String,
+) -> Result<(), String> {
+    // An alternative in an open proposal set goes through the set's two-phase
+    // commit (pre-flight, then apply), not a plain Implement.
+    {
+        let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
+        let pid = Uuid::parse_str(&proposal_id).map_err(map_err)?;
+        let svc = state.service.lock().unwrap();
+        if let Some(s) = svc.load(sid).map_err(map_err)? {
+            if proposal_sets::guarded_by_open_set(&s, pid) {
+                return Err("this is an alternative in a proposal set: run its pre-flight and apply it from the set".into());
+            }
+        }
+    }
+    implement_proposal_inner(app, state, session_id, proposal_id).await
+}
+
+/// [`implement_proposal`] without the proposal-set guard; the set's apply
+/// step calls it after a passing pre-flight.
+async fn implement_proposal_inner(
     app: AppHandle,
     state: State<'_, AppState>,
     session_id: String,
@@ -7471,9 +7505,20 @@ fn finalize_reply(
 ) -> Result<String, String> {
     let parsed = hive_runtime::directives::parse_reply_directives(full);
     let mut cleaned = redact_workspace_path(&parsed.cleaned, workspace_root);
+    // A scout's assessment: recorded in its proposal set, and the visible
+    // reply replaced so the next scout assesses blind.
+    if let Some(note) =
+        proposal_sets::record_assessments(svc, session_id, workspace_id, author, agent_id, &parsed.assessments)
+    {
+        cleaned = note;
+    }
     // A turn that produced nothing at all — no text, no directive, no edits —
     // never posts an empty message: the chat says the model came back empty.
-    let did_nothing = parsed.emojis.is_empty() && parsed.workflows.is_empty() && parsed.proposals.is_empty() && !edits_in_review;
+    let did_nothing = parsed.emojis.is_empty()
+        && parsed.workflows.is_empty()
+        && parsed.proposals.is_empty()
+        && parsed.alternatives.is_empty()
+        && !edits_in_review;
     if cleaned.trim().is_empty() && did_nothing {
         tracing::warn!(target: "dispatch", %author, "the model returned an empty reply");
         cleaned = hive_runtime::empty_reply_notice(author);
@@ -7526,7 +7571,9 @@ fn finalize_reply(
         let mut proposal = hive_core::ActionProposal::new(&proposed.title, proposed.kind, author);
         proposal.body = proposed.body.clone();
         proposal.required_approvals = proposed.required_approvals;
+        let filed = proposal.id;
         svc.upsert_proposal(session_id, workspace_id, proposal).map_err(map_err)?;
+        proposal_sets::group_same_trigger(svc, session_id, workspace_id, filed);
         let _ = svc.post_system_note(
             session_id,
             workspace_id,
@@ -7535,6 +7582,15 @@ fn finalize_reply(
                 proposed.title
             ),
         );
+    }
+    // Agent-authored alternatives: a proposal set for scouts to assess.
+    if !parsed.alternatives.is_empty() {
+        let trigger = svc
+            .load(session_id)
+            .map_err(map_err)?
+            .and_then(|s| s.messages.iter().rev().find(|m| m.role == MessageRole::User).map(|m| m.id));
+        let base = proposal_sets::base_commit_for(workspace_root, session_id);
+        proposal_sets::file_alternatives(svc, session_id, workspace_id, author, agent_id, &parsed.alternatives, trigger, base)?;
     }
     Ok(cleaned)
 }
@@ -8038,7 +8094,10 @@ async fn run_prepared_turn(
                         prop.producing_agent_id = responder.agent_id;
                         {
                             let mut svc = state.service.lock().unwrap();
-                            let _ = svc.upsert_proposal(session_id, workspace_id, prop);
+                            let filed = prop.id;
+                            if svc.upsert_proposal(session_id, workspace_id, prop).is_ok() {
+                                proposal_sets::group_same_trigger(&mut svc, session_id, workspace_id, filed);
+                            }
                         }
                         // Nudge the Review pane to refetch so the change surfaces.
                         let _ = app.emit("workspace://synced", 1);
@@ -14300,6 +14359,15 @@ pub fn run() {
             request_proposal_changes,
             dismiss_proposals,
             implement_proposal,
+            proposal_sets::list_proposal_sets,
+            proposal_sets::send_scouts,
+            proposal_sets::tune_proposal_set,
+            proposal_sets::advance_proposal_set_round,
+            proposal_sets::withdraw_set_alternative,
+            proposal_sets::close_proposal_set,
+            proposal_sets::preflight_proposal_set,
+            proposal_sets::apply_proposal_set,
+            proposal_sets::revert_proposal,
             toggle_reaction,
             list_members,
             list_membership_audit,

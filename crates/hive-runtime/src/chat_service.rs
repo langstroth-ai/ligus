@@ -37,6 +37,9 @@ pub enum ChatError {
 
 pub type Result<T> = std::result::Result<T, ChatError>;
 
+mod proposal_sets;
+pub use proposal_sets::QuorumOutcome;
+
 /// Drives a single workspace's chat sessions over an [`EventStore`], signing
 /// every appended event with this device's key.
 pub struct ChatService {
