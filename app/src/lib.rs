@@ -631,7 +631,7 @@ fn decode_workspace_invite(invite: &str) -> Result<WorkspaceConn, String> {
     let body = invite
         .trim()
         .strip_prefix("hivews1:")
-        .ok_or_else(|| "not a Hive workspace invite (expected hivews1:…)".to_string())?;
+        .ok_or_else(|| "not a Ligus workspace invite (expected hivews1:…)".to_string())?;
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(body.trim().as_bytes())
         .map_err(|e| format!("invalid invite encoding: {e}"))?;
@@ -8388,7 +8388,7 @@ async fn send_message(
             let _ = app
                 .notification()
                 .builder()
-                .title("Hive")
+                .title("Ligus")
                 .body(format!("{} mentioned you", responder.author))
                 .show();
         }
@@ -8768,7 +8768,7 @@ fn notify_mentions(
             let _ = app
                 .notification()
                 .builder()
-                .title("Hive")
+                .title("Ligus")
                 .body(format!("{who} mentioned you"))
                 .show();
         }
@@ -11940,14 +11940,14 @@ fn claude_cached_model_options() -> Vec<ClaudeModelOption> {
 
 #[cfg(target_os = "macos")]
 fn build_tray_icon(app: &AppHandle) -> Result<TrayIcon<tauri::Wry>, Box<dyn std::error::Error>> {
-    let show_item = MenuItem::with_id(app, "tray-show", "Show Hive", true, None::<&str>)?;
+    let show_item = MenuItem::with_id(app, "tray-show", "Show Ligus", true, None::<&str>)?;
     let friends_item = MenuItem::with_id(app, "tray-friends", "Friends", true, None::<&str>)?;
     let team_item =
         MenuItem::with_id(app, "tray-team", "Team & Relay Sync…", true, None::<&str>)?;
     let settings_item = MenuItem::with_id(app, "tray-settings", "Settings…", true, None::<&str>)?;
     let sep_top = PredefinedMenuItem::separator(app)?;
     let sep_bottom = PredefinedMenuItem::separator(app)?;
-    let quit_item = PredefinedMenuItem::quit(app, Some("Quit Hive"))?;
+    let quit_item = PredefinedMenuItem::quit(app, Some("Quit Ligus"))?;
     let menu = Menu::with_items(
         app,
         &[
@@ -11976,7 +11976,7 @@ fn build_tray_icon(app: &AppHandle) -> Result<TrayIcon<tauri::Wry>, Box<dyn std:
         .icon(icon)
         .icon_as_template(as_template)
         .show_menu_on_left_click(false)
-        .tooltip("Hive")
+        .tooltip("Ligus")
         .menu(&menu)
         .on_menu_event(|app, event| {
             // Bring the single main window forward, then (optionally) tell the
@@ -12103,7 +12103,7 @@ fn p2p_list_contacts(state: State<AppState>) -> Vec<ContactDto> {
 #[tauri::command]
 fn p2p_add_contact(state: State<AppState>, code: String, label: String) -> Result<(), String> {
     let peer_id = hive_runtime::peer::PeerId::from_code(&code)
-        .ok_or_else(|| "Not a valid Hive friend code.".to_string())?;
+        .ok_or_else(|| "Not a valid Ligus friend code.".to_string())?;
     let mut contacts = load_contacts(&state.data_dir);
     if contacts.iter().any(|c| c.peer_id == peer_id) {
         return Err("That peer is already a contact.".to_string());
@@ -12315,7 +12315,7 @@ fn this_device_ka(state: &AppState) -> Option<(String, String)> {
 /// Best-effort: no-op (Ok) if not signed in or no relay. Callable directly with
 /// `&AppState` so sign-in can register immediately (not only the mount-time
 /// command) — otherwise a user who signs in *after* app launch never lands in
-/// the directory and can't be invited ("isn't on Hive yet").
+/// the directory and can't be invited ("isn't on Ligus yet").
 async fn register_directory(state: &AppState) -> Result<(), String> {
     let relay = match configured_relay(state) {
         Ok(r) => r,
@@ -12384,7 +12384,7 @@ async fn invite_by_handle(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| {
             format!(
-                "@{} isn't on Hive yet — they need to sign in once.",
+                "@{} isn't on Ligus yet — they need to sign in once.",
                 handle.trim().trim_start_matches('@')
             )
         })?;
@@ -12734,7 +12734,7 @@ async fn workspace_add_member(
         .directory_lookup(&handle)
         .await
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("@{} isn't on Hive yet.", handle.trim().trim_start_matches('@')))?;
+        .ok_or_else(|| format!("@{} isn't on Ligus yet.", handle.trim().trim_start_matches('@')))?;
     client
         .upsert_member(&room, &format!("github:{}", entry.github_id), &entry.login, &role)
         .await
@@ -13764,7 +13764,7 @@ async fn generate_agent_bootstrap(
         .directory_lookup(&handle)
         .await
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("@{} isn't on Hive yet.", handle.trim().trim_start_matches('@')))?;
+        .ok_or_else(|| format!("@{} isn't on Ligus yet.", handle.trim().trim_start_matches('@')))?;
     let sub = format!("github:{}", entry.github_id);
     let role = if role.trim().is_empty() { "contributor".to_string() } else { role };
 
@@ -14112,7 +14112,7 @@ fn init_logging(app: &tauri::App) {
         tracing::error!(target: "panic", "{info}");
         default_hook(info);
     }));
-    tracing::info!("Hive {} starting", env!("CARGO_PKG_VERSION"));
+    tracing::info!("Ligus {} starting", env!("CARGO_PKG_VERSION"));
 }
 
 /// Build and run the Tauri application.
@@ -14477,7 +14477,7 @@ pub fn run() {
             presence_list
         ])
         .run(app_context())
-        .expect("error while running Hive");
+        .expect("error while running Ligus");
 }
 
 /// The app's compiled Tauri context (config, assets, icons). One expansion of
@@ -15119,17 +15119,19 @@ mod model_profile_dto_tests {
 mod update_version_tests {
     use super::parse_release_version;
 
-    /// The bridge release checks the new repo's `latest.json` first, then the
-    /// original org's URL, with the signing key unchanged.
+    /// The updater checks the renamed repo's `latest.json` first, then the
+    /// original URL (GitHub redirects it), with the signing key unchanged.
     #[test]
     fn updater_checks_new_then_old_latest_json() {
         let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        // The identifier names the data dir the first-launch migration copies into.
+        assert_eq!(conf["identifier"], hive_core::compat::DESKTOP_APP_ID);
         let updater = &conf["plugins"]["updater"];
         let endpoints: Vec<&str> = updater["endpoints"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
         assert_eq!(
             endpoints,
             [
-                "https://github.com/ligus-ai/hive/releases/latest/download/latest.json",
+                "https://github.com/ligus-ai/ligus/releases/latest/download/latest.json",
                 "https://github.com/honeyhive-ai/hive/releases/latest/download/latest.json",
             ]
         );

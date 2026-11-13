@@ -7,6 +7,7 @@ import {
   ensureSelfMember,
   getAppSettings,
   listWorkspaces,
+  dataDirMigrated,
   getChat,
   listChats,
   getContextTelemetry,
@@ -206,6 +207,22 @@ export function App() {
   const [onboarded, setOnboarded] = useState(
     () => typeof window !== "undefined" && window.localStorage.getItem("hive.onboarded") === "1",
   );
+  // After the Hive -> Ligus data-dir migration the web storage starts empty, but
+  // this is an existing user: mark onboarding and the tour as done.
+  useEffect(() => {
+    let live = true;
+    dataDirMigrated()
+      .then((migrated) => {
+        if (!live || !migrated) return;
+        window.localStorage.setItem("hive.onboarded", "1");
+        window.localStorage.setItem("hive.tourSeen", "1");
+        setOnboarded(true);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
   // First-run gate: until the user has set a real display name (or explicitly
   // completed onboarding), block the shell with the onboarding flow.
   const needsOnboarding =

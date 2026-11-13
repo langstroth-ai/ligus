@@ -1155,6 +1155,10 @@ export const saveAppearance = (palette: string, mode: string) =>
 /// workspaces) and relaunch the app. The backend defers the actual deletion to
 /// the next launch (the DB file is open/locked) and restarts immediately.
 export const resetLocalData = () => invoke<void>("reset_local_data");
+/// True when this launch copied the data dir over from the app's former bundle
+/// id (Hive -> Ligus). localStorage does not carry over, so the UI uses it to
+/// skip onboarding and the tour for an existing user.
+export const dataDirMigrated = () => invoke<boolean>("data_dir_migrated");
 
 /// Scheduled / triggered agents (Settings → Schedules).
 export type ScheduleTrigger =

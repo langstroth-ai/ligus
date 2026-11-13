@@ -13,7 +13,7 @@ version = "1.19.0"
 edition = "2021"
 rust-version = "1.82"
 license = "MIT"
-authors = ["Hive"]
+authors = ["Ligus"]
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

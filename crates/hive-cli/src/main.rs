@@ -128,7 +128,7 @@ fn decode_hivews_invite(invite: &str) -> Result<(String, String, Option<String>)
     let body = invite
         .trim()
         .strip_prefix("hivews1:")
-        .ok_or_else(|| anyhow!("not a Hive workspace invite (expected hivews1:…)"))?;
+        .ok_or_else(|| anyhow!("not a Ligus workspace invite (expected hivews1:…)"))?;
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(body.trim().as_bytes())
         .context("invalid invite encoding")?;

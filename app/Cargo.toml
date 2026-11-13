@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Hive desktop shell (Tauri v2)"
+description = "Ligus desktop shell (Tauri v2)"
 
 [lib]
 name = "hive_app_lib"
