@@ -1,0 +1,3 @@
+# Fetched or vendored by `helm dependency build` / CI, never committed.
+charts/
+Chart.lock

@@ -1,0 +1,76 @@
+{{- if .Values.sandbox.enabled }}
+{{- $fullname := include "ligus.fullname" . -}}
+{{- $s := .Values.sandbox -}}
+{{- $prTest := eq $s.profile "pr-test" -}}
+# The hardened pod every executor backend renders (docs/design/kubernetes.md,
+# section 4.4), stored as a Job template for the controller to stamp out per
+# turn. Nothing in it holds the workspace key, device keys, git or relay
+# credentials, or a service account token.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-sandbox-template
+  labels:
+    {{- include "ligus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox
+data:
+  job.yaml: |
+    {{- include "ligus.sandboxJob" (dict "root" . "name" "turn-REPLACE" "command" (list "exec-turn" "--bundle" "/in/turn.json")) | nindent 4 }}
+---
+# Executors: no ingress at all; egress per profile.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-sandbox
+  labels:
+    {{- include "ligus.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      ligus.ai/role: executor
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  {{- if $prTest }}
+  # pr-test: no network, not even DNS.
+  egress: []
+  {{- else }}
+  egress:
+    - ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "ligus.selectorLabels" (dict "root" . "component" "serve") | nindent 14 }}
+      ports:
+        - port: 8787
+    {{- with $s.egress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+{{- if $s.smokeJob.enabled }}
+---
+{{- $script := list
+  "set -u"
+  "# CNIs apply NetworkPolicy to a new pod asynchronously; give it a moment."
+  "# (A real executor should not start untrusted code before that either.)"
+  "sleep 5"
+  "fail=0"
+  "check() { if eval \"$2\"; then echo \"ok   $1\"; else echo \"FAIL $1\"; fail=1; fi; }"
+  "check 'no service account token' '! test -e /var/run/secrets/kubernetes.io/serviceaccount/token'"
+  "check 'root filesystem is read-only' '! touch /probe 2>/dev/null'"
+  "check 'runs as non-root' 'test \"$(id -u)\" != 0'"
+  "check 'no workspace key in env' '! env | grep -q -e LIGUS_WORKSPACE_KEY -e HIVE_WORKSPACE_KEY'"
+  "check '/work is writable' 'touch /work/probe'"
+  (ternary "check 'no network (DNS blocked)' '! timeout 5 getent hosts kubernetes.default.svc.cluster.local >/dev/null'" "check 'DNS allowed' 'timeout 5 getent hosts kubernetes.default.svc.cluster.local >/dev/null'" $prTest)
+  "warn() { if eval \"$2\"; then echo \"ok   $1\"; else echo \"WARN $1 (some CNIs, kindnet among them, do not apply egress policy to the kubernetes Service VIP; the pod has no token, so only anonymous access is possible)\"; fi; }"
+  "warn 'no route to the API server' '! timeout 5 bash -c \"exec 3<>/dev/tcp/${KUBERNETES_SERVICE_HOST:-10.96.0.1}/443\" 2>/dev/null'"
+  "check 'no internet egress' '! timeout 5 bash -c \"exec 3<>/dev/tcp/1.1.1.1/443\" 2>/dev/null'"
+  "exit $fail"
+-}}
+{{- $job := include "ligus.sandboxJob" (dict "root" . "name" (printf "%s-sandbox-smoke" $fullname) "command" (list "/bin/bash" "-c" (join "\n" $script)) "entrypoint" true) | fromYaml }}
+{{- $_ := set $job.metadata "annotations" (dict "helm.sh/hook" "post-install,post-upgrade" "helm.sh/hook-delete-policy" "before-hook-creation") }}
+{{- toYaml $job }}
+{{- end }}
+{{- end }}

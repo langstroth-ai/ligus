@@ -1,0 +1,26 @@
+{{- $fullname := include "ligus.fullname" . -}}
+Ligus workspace release {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
+  Relay: {{ include "ligus.relayUrl" . }}
+{{- if .Values.serve.enabled }}
+  serve: statefulset/{{ $fullname }}-serve (1 replica, PVC data-{{ $fullname }}-serve-0)
+{{- end }}
+{{- if .Values.worker.enabled }}
+  workers: statefulset/{{ $fullname }}-worker ({{ .Values.worker.replicas }} host identities)
+{{- end }}
+{{- if .Values.workspace.generate }}
+
+TEST WORKSPACE: a throwaway room and key were generated into secret/{{ include "ligus.workspaceSecretName" . }}.
+Do not put real work in it.
+{{- end }}
+{{- if and .Values.sandbox.enabled (not .Values.sandbox.runtimeClassName) }}
+
+WARNING: sandbox.runtimeClassName is empty: executors run on the default runtime (runc), which is not a security boundary.
+{{- end }}
+
+Pair the phone or enroll the device from your own terminal (these print secrets; never run them as Jobs):
+  kubectl -n {{ .Release.Namespace }} exec -it {{ $fullname }}-serve-0 -- ligus serve enroll
+  kubectl -n {{ .Release.Namespace }} exec -it {{ $fullname }}-serve-0 -- ligus pair --relay-only
+
+Health:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ $fullname }}-serve 8787:{{ .Values.serve.service.port }}
+  curl -s http://127.0.0.1:8787/v1/health

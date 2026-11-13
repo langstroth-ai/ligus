@@ -1,0 +1,53 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ligus.fullname" . }}-controller
+  labels:
+    {{- include "ligus.labels" . | nindent 4 }}
+spec:
+  # serve and worker pods (they hold the workspace key and device keys).
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      ligus.ai/role: controller
+  policyTypes:
+    - Ingress
+    {{- if $np.restrictEgress }}
+    - Egress
+    {{- end }}
+  ingress:
+    - from:
+        {{- if $np.serveIngressFrom }}
+        {{- toYaml $np.serveIngressFrom | nindent 8 }}
+        {{- else }}
+        - podSelector: {}
+        {{- end }}
+      ports:
+        - port: 8787
+  {{- if $np.restrictEgress }}
+  egress:
+    - ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+    - to:
+        {{- if .Values.relay.enabled }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ligus-relay
+        {{- else }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ required "networkPolicy.relayNamespace is required with restrictEgress (or list the relay in extraEgress)" $np.relayNamespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ligus-relay
+        {{- end }}
+      ports:
+        - port: 8443
+    {{- with $np.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+{{- end }}

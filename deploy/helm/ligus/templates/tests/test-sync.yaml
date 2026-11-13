@@ -1,0 +1,59 @@
+{{- if .Values.serve.enabled }}
+{{- $fullname := include "ligus.fullname" . -}}
+# End-to-end check through the relay with two fresh client identities (each
+# its own data dir, standing in for desktops): the serve host is visible, and
+# a chat created by one client arrives at the other.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ $fullname }}-test-sync
+  labels:
+    {{- include "ligus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: test
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  {{- include "ligus.podSpecCommon" . | nindent 2 }}
+  containers:
+    - name: client
+      image: {{ default (include "ligus.image" .) .Values.tests.image }}
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      command: ["/bin/bash", "-c"]
+      args:
+        - |
+          set -euo pipefail
+          curl_health() { exec 3<>/dev/tcp/{{ $fullname }}-serve/{{ .Values.serve.service.port }}; printf 'GET /v1/health HTTP/1.0\r\nHost: x\r\n\r\n' >&3; head -1 <&3; }
+          echo "serve health: $(curl_health)"
+          curl_health | grep -q ' 200 '
+          marker="k8s-smoke-$(date +%s)-$RANDOM"
+          unset HIVE_DATA_DIR
+          mkdir -p /work/a /work/b
+          export LIGUS_DATA_DIR=/work/a
+          ligus sync
+          ligus new "$marker" >/work/chat-id
+          ligus sync
+          echo "hosts seen by client A:"
+          ligus hosts | tee /work/hosts
+          grep -q '{{ $fullname }}-serve-0\|serve' /work/hosts
+          export LIGUS_DATA_DIR=/work/b
+          for i in 1 2 3 4 5; do ligus sync >/dev/null; ligus chats | grep -q "$marker" && break; sleep 2; done
+          ligus chats | grep "$marker"
+          echo "sync OK: chat created by client A arrived at client B through the relay"
+      env:
+        {{- include "ligus.commonEnv" . | nindent 8 }}
+      securityContext:
+        {{- toYaml .Values.securityContext | nindent 8 }}
+      resources:
+        requests: { cpu: 50m, memory: 64Mi }
+        limits: { cpu: "1", memory: 512Mi }
+      volumeMounts:
+        - { name: work, mountPath: /work }
+        - { name: tmp, mountPath: /tmp }
+  volumes:
+    - name: work
+      emptyDir: {}
+    - name: tmp
+      emptyDir: {}
+{{- end }}

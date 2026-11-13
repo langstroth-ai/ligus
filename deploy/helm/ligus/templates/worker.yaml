@@ -1,0 +1,98 @@
+{{- if .Values.worker.enabled }}
+{{- $fullname := include "ligus.fullname" . -}}
+{{- $v := .Values.worker -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-worker
+  labels:
+    {{- include "ligus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  clusterIP: None
+  selector:
+    {{- include "ligus.selectorLabels" (dict "root" . "component" "worker") | nindent 4 }}
+---
+# Sharding, not autoscaling: each replica is its own host identity with its
+# own PVC. Scaling down strands the agents bound to the removed replicas.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}-worker
+  labels:
+    {{- include "ligus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  serviceName: {{ $fullname }}-worker
+  replicas: {{ $v.replicas }}
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      {{- include "ligus.selectorLabels" (dict "root" . "component" "worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ligus.selectorLabels" (dict "root" . "component" "worker") | nindent 8 }}
+        ligus.ai/role: controller
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      {{- include "ligus.podSpecCommon" . | nindent 6 }}
+      terminationGracePeriodSeconds: {{ $v.terminationGracePeriodSeconds }}
+      {{- if $v.runtimesToml }}
+      initContainers:
+        {{- include "ligus.runtimesInit" (dict "root" .) | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: worker
+          image: {{ include "ligus.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["worker", "--label", "$(POD_NAME)"]
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            {{- include "ligus.commonEnv" . | nindent 12 }}
+            {{- with $v.permissionMode }}
+            - name: LIGUS_WORKER_PERMISSION_MODE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $v.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with $v.secretEnv.existingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ . }}
+          {{- end }}
+          # No health endpoint on `ligus worker` yet (design doc, P0 item 4).
+          resources:
+            {{- toYaml $v.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/ligus
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        {{- if $v.runtimesToml }}
+        - name: runtimes
+          configMap:
+            name: {{ $fullname }}-worker
+        {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with $v.persistence.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $v.persistence.size }}
+{{- end }}

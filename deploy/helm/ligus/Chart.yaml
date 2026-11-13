@@ -1,0 +1,21 @@
+apiVersion: v2
+name: ligus
+description: Ligus on Kubernetes - an always-on serve device per workspace, optional sharded workers, MCP servers and a hardened sandbox Job template, with the relay as an optional dependency.
+type: application
+version: 0.1.0
+# The CLI image this chart is tested against (LIGUS_* settings need 1.19+).
+appVersion: "2.0.0"
+home: https://ligus.ai
+keywords:
+  - ligus
+  - agents
+  - e2ee
+kubeVersion: ">=1.27.0-0"
+dependencies:
+  # The relay chart lives in the relay repository and is published as an OCI
+  # chart. Most installs point at an existing relay (relayUrl) instead.
+  - name: ligus-relay
+    alias: relay
+    version: 0.1.0
+    repository: oci://ghcr.io/ligus-ai/charts
+    condition: relay.enabled

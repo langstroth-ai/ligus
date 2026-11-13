@@ -1,0 +1,216 @@
+{{- if .Values.serve.enabled }}
+{{- $fullname := include "ligus.fullname" . -}}
+{{- $v := .Values.serve -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-serve
+  labels:
+    {{- include "ligus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: serve
+spec:
+  type: {{ $v.service.type }}
+  ports:
+    - name: http
+      port: {{ $v.service.port }}
+      targetPort: http
+  selector:
+    {{- include "ligus.selectorLabels" (dict "root" . "component" "serve") | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-serve-headless
+  labels:
+    {{- include "ligus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: serve
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+    - name: http
+      port: {{ $v.service.port }}
+      targetPort: http
+  selector:
+    {{- include "ligus.selectorLabels" (dict "root" . "component" "serve") | nindent 4 }}
+---
+# One identity, one writer: replicas is fixed at 1 and the data dir is a
+# ReadWriteOnce PVC. Never scale this, never share the volume.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}-serve
+  labels:
+    {{- include "ligus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: serve
+spec:
+  serviceName: {{ $fullname }}-serve-headless
+  replicas: 1
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "ligus.selectorLabels" (dict "root" . "component" "serve") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ligus.selectorLabels" (dict "root" . "component" "serve") | nindent 8 }}
+        ligus.ai/role: controller
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- include "ligus.podSpecCommon" . | nindent 6 }}
+      terminationGracePeriodSeconds: {{ $v.terminationGracePeriodSeconds }}
+      {{- if $v.runtimesToml }}
+      initContainers:
+        {{- include "ligus.runtimesInit" (dict "root" .) | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: serve
+          image: {{ include "ligus.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["serve"]
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8787
+          env:
+            {{- include "ligus.commonEnv" . | nindent 12 }}
+            # The pod's network namespace is private; the Service and the
+            # NetworkPolicy decide who reaches the port (never hostNetwork).
+            - name: LIGUS_SERVE_LISTEN
+              value: "0.0.0.0:8787"
+            - name: LIGUS_SERVE_ALLOW_ANY_BIND
+              value: "1"
+            - name: LIGUS_SERVE_LABEL
+              value: {{ default "$(POD_NAME)" $v.label | quote }}
+            {{- with $v.name }}
+            - name: LIGUS_SERVE_NAME
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $v.owner }}
+            - name: LIGUS_SERVE_OWNER
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $v.defaultAgent }}
+            - name: LIGUS_SERVE_DEFAULT_AGENT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if $v.applyOnApprove }}
+            - name: LIGUS_SERVE_APPLY_ON_APPROVE
+              value: "1"
+            {{- end }}
+            {{- if $v.mcpToml }}
+            - name: LIGUS_MCP_CONFIG
+              value: /etc/ligus/config/mcp.toml
+            {{- end }}
+            {{- if $v.dashboardToml }}
+            - name: LIGUS_DASHBOARD_FILE
+              value: /etc/ligus/config/dashboard.toml
+            {{- end }}
+            {{- if and $v.ntfy.url $v.ntfy.topic }}
+            - name: LIGUS_NTFY_URL
+              value: {{ $v.ntfy.url | quote }}
+            - name: LIGUS_NTFY_TOPIC
+              value: {{ $v.ntfy.topic | quote }}
+            {{- if $v.ntfy.tokenSecret.name }}
+            - name: LIGUS_NTFY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $v.ntfy.tokenSecret.name }}
+                  key: {{ $v.ntfy.tokenSecret.key }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.remote.enabled }}
+            - name: LIGUS_REMOTE_RELAY
+              value: {{ include "ligus.remoteRelayUrl" . | quote }}
+            {{- if .Values.remote.insecureRelay }}
+            - name: LIGUS_REMOTE_INSECURE_RELAY
+              value: "1"
+            {{- end }}
+            {{- if .Values.remote.regTokenSecret.name }}
+            - name: LIGUS_REMOTE_REG_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.remote.regTokenSecret.name }}
+                  key: {{ .Values.remote.regTokenSecret.key }}
+            {{- end }}
+            {{- end }}
+            {{- with $v.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with $v.secretEnv.existingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ . }}
+          {{- end }}
+          startupProbe:
+            httpGet: { path: /v1/health, port: http }
+            periodSeconds: {{ $v.startupProbe.periodSeconds }}
+            failureThreshold: {{ $v.startupProbe.failureThreshold }}
+          readinessProbe:
+            httpGet: { path: /v1/health, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: { path: /v1/health, port: http }
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml $v.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/ligus
+            - name: tmp
+              mountPath: /tmp
+            {{- if or $v.mcpToml $v.dashboardToml }}
+            - name: config
+              mountPath: /etc/ligus/config
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        {{- if or $v.mcpToml $v.dashboardToml }}
+        - name: config
+          configMap:
+            name: {{ $fullname }}-serve
+            items:
+              {{- if $v.mcpToml }}
+              - { key: mcp.toml, path: mcp.toml }
+              {{- end }}
+              {{- if $v.dashboardToml }}
+              - { key: dashboard.toml, path: dashboard.toml }
+              {{- end }}
+        {{- end }}
+        {{- if $v.runtimesToml }}
+        - name: runtimes
+          configMap:
+            name: {{ $fullname }}-serve
+            items:
+              - { key: runtimes.toml, path: runtimes.toml }
+        {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "ligus.selectorLabels" (dict "root" . "component" "serve") | nindent 10 }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with $v.persistence.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $v.persistence.size }}
+{{- end }}

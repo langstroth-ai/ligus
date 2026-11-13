@@ -1,0 +1,34 @@
+{{- $fullname := include "ligus.fullname" . -}}
+{{- if or .Values.serve.runtimesToml .Values.serve.mcpToml .Values.serve.dashboardToml }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-serve
+  labels:
+    {{- include "ligus.labels" . | nindent 4 }}
+data:
+  {{- with .Values.serve.runtimesToml }}
+  runtimes.toml: |
+    {{- . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.serve.mcpToml }}
+  mcp.toml: |
+    {{- . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.serve.dashboardToml }}
+  dashboard.toml: |
+    {{- . | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- if and .Values.worker.enabled .Values.worker.runtimesToml }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-worker
+  labels:
+    {{- include "ligus.labels" . | nindent 4 }}
+data:
+  runtimes.toml: |
+    {{- .Values.worker.runtimesToml | nindent 4 }}
+{{- end }}

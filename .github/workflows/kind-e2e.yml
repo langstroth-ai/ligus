@@ -1,0 +1,151 @@
+name: kind-e2e
+
+# Builds the CLI container image and runs the Kubernetes Phase 1 acceptance
+# checks on kind (docs/design/kubernetes.md, section 14): the relay chart
+# (from the relay repository) with Postgres, one serve StatefulSet on a
+# throwaway workspace, sync between two client identities through the relay,
+# no plaintext in the relay database, restart on the same identity, Pod
+# Security "restricted", NetworkPolicy isolation and the sandbox hardening Job.
+# The chart sets LIGUS_* variables and the test pod runs `ligus`, so this
+# needs a tree at v1.19 or later (the Ligus rename).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "deploy/container/**"
+      - "deploy/helm/**"
+      - ".github/workflows/kind-e2e.yml"
+  pull_request:
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "deploy/container/**"
+      - "deploy/helm/**"
+      - ".github/workflows/kind-e2e.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kind-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Repository and ref holding the ligus-relay chart and image.
+  RELAY_REPO: ligus-ai/relay
+  RELAY_REF: main
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          repository: ${{ env.RELAY_REPO }}
+          ref: ${{ env.RELAY_REF }}
+          path: _relay
+      - uses: docker/setup-buildx-action@v3
+      - name: build CLI image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/container/Dockerfile
+          tags: ligus:dev
+          load: true
+          cache-from: type=gha,scope=ligus-cli
+          cache-to: type=gha,scope=ligus-cli,mode=max
+      - name: image checks
+        run: |
+          docker run --rm ligus:dev --version
+          test "$(docker inspect -f '{{.Config.User}}' ligus:dev)" = "65532:65532"
+      - name: build relay image
+        uses: docker/build-push-action@v6
+        with:
+          context: _relay
+          file: _relay/deploy/container/Dockerfile
+          tags: ligus-relay:dev
+          load: true
+          cache-from: type=gha,scope=ligus-relay
+          cache-to: type=gha,scope=ligus-relay,mode=max
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.19.0
+      - name: lint and render
+        run: |
+          set -e
+          mkdir -p deploy/helm/ligus/charts
+          helm package -d deploy/helm/ligus/charts _relay/deploy/helm/ligus-relay
+          helm lint --strict deploy/helm/ligus -f deploy/helm/ligus/ci/kind-values.yaml
+          helm template t deploy/helm/ligus --set workspace.generate=true --set relay.enabled=true \
+            --set relay.postgres.enabled=true --set remote.enabled=true --set remote.insecureRelay=true \
+            --set worker.enabled=true --set worker.replicas=2 >/dev/null
+          # Must refuse: PR tests on the default runtime, and no workspace.
+          ! helm template t deploy/helm/ligus --set relayUrl=x --set workspace.generate=true \
+              --set sandbox.enabled=true --set sandbox.profile=pr-test 2>/dev/null
+          ! helm template t deploy/helm/ligus --set relayUrl=x 2>/dev/null
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: ligus-e2e
+      - name: load images
+        run: kind load docker-image ligus:dev ligus-relay:dev --name ligus-e2e
+      - name: install relay
+        run: |
+          kubectl create namespace ligus-relay
+          kubectl label namespace ligus-relay pod-security.kubernetes.io/enforce=restricted
+          helm install ligus-relay _relay/deploy/helm/ligus-relay -n ligus-relay \
+            --set image.repository=ligus-relay --set image.tag=dev \
+            --set postgres.enabled=true --set postgres.persistence.size=256Mi --wait --timeout 5m
+          helm test ligus-relay -n ligus-relay --logs
+      - name: install workspace (throwaway)
+        run: |
+          kubectl create namespace ligus-ws-smoke
+          kubectl label namespace ligus-ws-smoke pod-security.kubernetes.io/enforce=restricted
+          helm install smoke deploy/helm/ligus -n ligus-ws-smoke \
+            -f deploy/helm/ligus/ci/kind-values.yaml --wait --timeout 5m
+          kubectl -n ligus-ws-smoke logs job/smoke-ligus-sandbox-smoke
+      - name: sync through the relay (helm test)
+        run: helm test smoke -n ligus-ws-smoke --logs | tee /tmp/test.log
+      - name: tunnel host connected
+        run: |
+          for i in $(seq 30); do
+            kubectl -n ligus-ws-smoke logs smoke-ligus-serve-0 | grep -q 'remote: connected to .*status active' && exit 0
+            sleep 2
+          done
+          exit 1
+      - name: no plaintext in the relay database
+        run: |
+          marker=$(grep -o 'k8s-smoke-[0-9]*-[0-9]*' /tmp/test.log | tail -1)
+          test -n "$marker"
+          ! kubectl -n ligus-relay exec ligus-relay-postgres-0 -- pg_dump -U relay -d relay --data-only | grep -q "$marker"
+      - name: restart keeps the identity
+        run: |
+          before=$(kubectl -n ligus-ws-smoke logs smoke-ligus-serve-0 | grep -o 'host [0-9a-f-]\{36\}' | head -1)
+          kubectl -n ligus-ws-smoke delete pod smoke-ligus-serve-0 --wait=true
+          kubectl -n ligus-ws-smoke wait --for=condition=Ready pod/smoke-ligus-serve-0 --timeout=180s
+          after=$(kubectl -n ligus-ws-smoke logs smoke-ligus-serve-0 | grep -o 'host [0-9a-f-]\{36\}' | head -1)
+          echo "$before / $after"; test -n "$before" && test "$before" = "$after"
+      - name: Pod Security and NetworkPolicy
+        run: |
+          ! kubectl -n ligus-ws-smoke run psa --image=busybox:1.37 --restart=Never --dry-run=server \
+              --overrides='{"spec":{"containers":[{"name":"p","image":"busybox:1.37","securityContext":{"privileged":true}}]}}'
+          kubectl create namespace np-probe
+          kubectl -n np-probe run probe --image=curlimages/curl:8.17.0 --restart=Never --command -- sleep 300
+          kubectl -n np-probe wait --for=condition=Ready pod/probe --timeout=120s
+          sleep 5
+          code=$(kubectl -n np-probe exec probe -- curl -s -m 5 -o /dev/null -w '%{http_code}' \
+            http://smoke-ligus-serve.ligus-ws-smoke.svc.cluster.local:8787/v1/health || true)
+          echo "serve from another namespace: $code"; test "$code" != 200
+      - name: diagnostics
+        if: failure()
+        run: |
+          kubectl get pods -A
+          for ns in ligus-relay ligus-ws-smoke; do
+            kubectl -n $ns describe pods
+            kubectl -n $ns logs --all-containers --prefix -l app.kubernetes.io/part-of=ligus --tail=200 || true
+          done
