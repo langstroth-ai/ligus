@@ -60,7 +60,7 @@ impl IdentityMode {
     /// Anything unset/unrecognized falls back to [`IdentityMode::Relay`] so the
     /// default deployment is byte-for-byte unchanged.
     pub fn from_env() -> Self {
-        match std::env::var("HIVE_IDENTITY_MODE").ok().as_deref() {
+        match hive_core::compat::var("HIVE_IDENTITY_MODE").ok().as_deref() {
             Some("github-signing-keys") | Some("github") | Some("option-c") => {
                 IdentityMode::GithubSigningKeys
             }

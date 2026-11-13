@@ -2785,7 +2785,7 @@ fn api_key_for(provider: ModelProviderKind) -> Option<String> {
         ModelProviderKind::Anthropic => "ANTHROPIC_API_KEY",
         ModelProviderKind::OpenAI => "OPENAI_API_KEY",
         ModelProviderKind::OpenRouter => "OPENROUTER_API_KEY",
-        _ => return std::env::var("HIVE_PROVIDER_API_KEY").ok(),
+        _ => return hive_core::compat::var("HIVE_PROVIDER_API_KEY").ok(),
     };
     std::env::var(var).ok()
 }
@@ -7593,7 +7593,7 @@ async fn run_turn_answering(
     // backstop — a margin above the stream's own timeout, so it never pre-empts
     // the finer-grained, better-messaged stream timeout on a legitimately long turn.
     let hard = std::time::Duration::from_secs(
-        std::env::var("HIVE_TURN_TIMEOUT_SECS")
+        hive_core::compat::var("HIVE_TURN_TIMEOUT_SECS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .filter(|&s| s > 0)
@@ -7898,7 +7898,7 @@ async fn run_prepared_turn(
     // agents (#100). One hour by default; override with HIVE_TURN_TIMEOUT_SECS.
     // Dropping the future on timeout kills any spawned CLI (kill_on_drop).
     let turn_timeout = std::time::Duration::from_secs(
-        std::env::var("HIVE_TURN_TIMEOUT_SECS")
+        hive_core::compat::var("HIVE_TURN_TIMEOUT_SECS")
             .ok()
             .and_then(|v| v.parse().ok())
             .filter(|&s| s > 0)
@@ -9154,7 +9154,7 @@ async fn ping_runtime(runtime: ResolvedRuntime, workspace_root: Option<String>) 
     let turns = vec![ChatTurn::user("Reply with exactly the token: PINGOK")];
     let system = "You are a connectivity probe. Reply with exactly PINGOK and nothing else.";
     let timeout = std::time::Duration::from_secs(
-        std::env::var("HIVE_RUNTIME_TEST_TIMEOUT_SECS")
+        hive_core::compat::var("HIVE_RUNTIME_TEST_TIMEOUT_SECS")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(45),
@@ -10420,27 +10420,27 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         load_workspace_catalogs(&workspace_root, &data_dir);
 
     let fallback_model =
-        std::env::var("HIVE_ANTHROPIC_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+        hive_core::compat::var("HIVE_ANTHROPIC_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
 
     // Connection settings: a persisted settings.json wins; on first launch we
     // seed it from env/config so existing `HIVE_*` workflows keep working. After
     // that the Settings UI edits the file live and the sync loop polls it.
     let env_seed = LiveSettings {
-        relay_url: std::env::var("HIVE_RELAY_URL")
+        relay_url: hive_core::compat::var("HIVE_RELAY_URL")
             .ok()
             .filter(|s| !s.is_empty())
             .or(config_relay_endpoint),
-        relay_access_token: std::env::var("HIVE_RELAY_ACCESS_TOKEN")
+        relay_access_token: hive_core::compat::var("HIVE_RELAY_ACCESS_TOKEN")
             .ok()
             .filter(|s| !s.is_empty()),
-        sync_room: std::env::var("HIVE_WORKSPACE")
+        sync_room: hive_core::compat::var("HIVE_WORKSPACE")
             .ok()
             .filter(|s| !s.is_empty())
             .unwrap_or_else(default_sync_room),
-        workspace_passphrase: std::env::var("HIVE_WORKSPACE_KEY")
+        workspace_passphrase: hive_core::compat::var("HIVE_WORKSPACE_KEY")
             .ok()
             .filter(|s| !s.is_empty()),
-        relay_issuer_key: std::env::var("HIVE_RELAY_ISSUER_KEY").ok().filter(|s| !s.is_empty()),
+        relay_issuer_key: hive_core::compat::var("HIVE_RELAY_ISSUER_KEY").ok().filter(|s| !s.is_empty()),
         api_key: std::env::var("ANTHROPIC_API_KEY").ok().filter(|s| !s.is_empty()),
         claude_permission_mode: default_permission_mode(),
             claude_code_model: String::new(),
@@ -12124,7 +12124,7 @@ fn configured_relay(state: &AppState) -> Result<String, String> {
 ///   3. a value baked at build time (compile with `HIVE_GITHUB_CLIENT_ID` set to
 ///      ship Hive's own OAuth App so users never create one).
 fn github_client_id(state: &AppState) -> Option<String> {
-    std::env::var("HIVE_GITHUB_CLIENT_ID")
+    hive_core::compat::var("HIVE_GITHUB_CLIENT_ID")
         .ok()
         .filter(|s| !s.trim().is_empty())
         .or_else(|| {
@@ -14053,7 +14053,7 @@ fn init_logging(app: &tauri::App) {
     // Keep the flush guard alive for the whole process.
     Box::leak(Box::new(guard));
 
-    let filter = tracing_subscriber::EnvFilter::try_from_env("HIVE_LOG")
+    let filter = hive_core::compat::var("HIVE_LOG").map_err(|_| ()).and_then(|v| tracing_subscriber::EnvFilter::try_new(v).map_err(|_| ()))
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     let _ = tracing_subscriber::registry()
         .with(filter)
@@ -14205,7 +14205,7 @@ pub fn run() {
             // Skippable via HIVE_DISABLE_P2P — a perf diagnostic, since iroh does
             // continuous network/interface probing (heavier on Windows via WMI).
             #[cfg(feature = "p2p")]
-            if std::env::var("HIVE_DISABLE_P2P").is_err() {
+            if hive_core::compat::var("HIVE_DISABLE_P2P").is_err() {
                 let (secret, data_dir, p2p_db) = p2p;
                 let h = app.handle().clone();
                 tauri::async_runtime::spawn(run_peer_sync_supervisor(h, data_dir, p2p_db, secret));
@@ -16523,7 +16523,7 @@ mod mcp_bearer_tests {
     #[tokio::test]
     async fn live_static_bearer_through_registry() {
         let (Ok(url), Ok(token_file)) =
-            (std::env::var("HIVE_MCP_LIVE_URL"), std::env::var("HIVE_MCP_LIVE_TOKEN_FILE"))
+            (hive_core::compat::var("HIVE_MCP_LIVE_URL"), hive_core::compat::var("HIVE_MCP_LIVE_TOKEN_FILE"))
         else {
             eprintln!("skipping: set HIVE_MCP_LIVE_URL + HIVE_MCP_LIVE_TOKEN_FILE");
             return;
@@ -16561,8 +16561,8 @@ mod mcp_bearer_tests {
         eprintln!("tools: {names:?}");
         assert!(!tools.is_empty());
 
-        let tool = std::env::var("HIVE_MCP_LIVE_TOOL").unwrap_or_else(|_| "search_docs".into());
-        let args: serde_json::Value = std::env::var("HIVE_MCP_LIVE_ARGS")
+        let tool = hive_core::compat::var("HIVE_MCP_LIVE_TOOL").unwrap_or_else(|_| "search_docs".into());
+        let args: serde_json::Value = hive_core::compat::var("HIVE_MCP_LIVE_ARGS")
             .ok()
             .and_then(|a| serde_json::from_str(&a).ok())
             .unwrap_or_else(|| serde_json::json!({ "query": "RDNA wave32 vs wave64" }));

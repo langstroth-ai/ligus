@@ -349,7 +349,7 @@ async fn tunnel_request_after_revocation_on_open_session_gets_401() {
 /// `HIVE_RELAY_TUNNEL=open`). Ignored unless `HIVE_TUNNEL_INTEROP_RELAY` is set.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn interop_against_a_real_relay() {
-    let Ok(relay) = std::env::var("HIVE_TUNNEL_INTEROP_RELAY") else {
+    let Ok(relay) = hive_core::compat::var("HIVE_TUNNEL_INTEROP_RELAY") else {
         eprintln!("skipped: set HIVE_TUNNEL_INTEROP_RELAY=http://127.0.0.1:<port>");
         return;
     };

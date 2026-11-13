@@ -1,15 +1,16 @@
 #!/bin/sh
 # Hive CLI installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/honeyhive-ai/hive/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/ligus-ai/hive/main/install.sh | sh
 #
 # Downloads the prebuilt `hive` binary for your platform from the latest GitHub
 # Release and installs it. Override with env vars:
-#   HIVE_VERSION      release tag to install (default: latest)
-#   HIVE_INSTALL_DIR  install directory (default: $HOME/.local/bin)
+#   LIGUS_VERSION      release tag to install (default: latest)
+#   LIGUS_INSTALL_DIR  install directory (default: $HOME/.local/bin)
+# The legacy names HIVE_VERSION / HIVE_INSTALL_DIR are still read as fallbacks.
 set -eu
 
-REPO="honeyhive-ai/hive"
+REPO="ligus-ai/hive"
 BIN="hive"
 
 os="$(uname -s)"
@@ -33,14 +34,14 @@ if [ -z "$target" ]; then
   exit 1
 fi
 
-version="${HIVE_VERSION:-latest}"
+version="${LIGUS_VERSION:-${HIVE_VERSION:-latest}}"
 if [ "$version" = "latest" ]; then
   url="https://github.com/$REPO/releases/latest/download/$BIN-$target"
 else
   url="https://github.com/$REPO/releases/download/$version/$BIN-$target"
 fi
 
-dir="${HIVE_INSTALL_DIR:-$HOME/.local/bin}"
+dir="${LIGUS_INSTALL_DIR:-${HIVE_INSTALL_DIR:-$HOME/.local/bin}}"
 mkdir -p "$dir"
 tmp="$(mktemp)"
 

@@ -58,7 +58,7 @@ fn default_true() -> bool {
 /// Load the MCP servers named by `HIVE_MCP_CONFIG`. Unset or empty → no servers
 /// (an empty vec), so the caller behaves exactly as it did before MCP wiring.
 pub fn load_from_env() -> Result<Vec<McpServerSpec>> {
-    let Some(path) = std::env::var(CONFIG_ENV).ok().filter(|s| !s.trim().is_empty()) else {
+    let Some(path) = hive_core::compat::var(CONFIG_ENV).ok().filter(|s| !s.trim().is_empty()) else {
         return Ok(Vec::new());
     };
     let text = std::fs::read_to_string(&path)

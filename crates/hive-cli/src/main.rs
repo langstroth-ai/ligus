@@ -55,8 +55,9 @@ struct Config {
     key: Option<String>,
 }
 
+/// Env lookup (blank = unset). `HIVE_X` names also accept `LIGUS_X` (see `hive_core::compat`).
 fn env_opt(k: &str) -> Option<String> {
-    std::env::var(k).ok().filter(|s| !s.trim().is_empty())
+    hive_core::compat::env_opt(k)
 }
 
 /// Persisted connection config (written by `hive enroll`), read as a fallback
@@ -688,7 +689,7 @@ fn cmd_runtimes(cfg: &Config) -> Result<()> {
     for r in rts {
         let cred = match &r.credential {
             WorkspaceCredential::SecretRef { secret_ref } => {
-                let have = std::env::var(WorkspaceCredential::env_var(secret_ref)).is_ok();
+                let have = hive_core::compat::var(&WorkspaceCredential::env_var(secret_ref)).is_ok();
                 format!("secretRef:{secret_ref}{}", if have { " ✓" } else { " (missing)" })
             }
             WorkspaceCredential::Inline { .. } => "inline".into(),
@@ -741,7 +742,7 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
     // local-dev convenience only — the production daemon is `hive worker`, which
     // requires a workspace-owned runtime. Refuse to run unattended in production
     // unless explicitly opted in for dev.
-    if std::env::var("HIVE_ALLOW_PERSONAL_AGENT").is_err() {
+    if hive_core::compat::var("HIVE_ALLOW_PERSONAL_AGENT").is_err() {
         bail!(
             "`hive agent` runs on a personal credential, which isn't workspace-owned (\u{a7}12.5) — \
              use `hive worker` for production. For local dev only, set HIVE_ALLOW_PERSONAL_AGENT=1."

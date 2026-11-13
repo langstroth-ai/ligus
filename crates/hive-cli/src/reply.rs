@@ -52,7 +52,7 @@ pub fn parse_min_role(v: Option<&str>) -> WorkspaceRole {
 
 /// The configured minimum author role, read from `HIVE_MCP_MIN_ROLE`.
 pub fn mcp_min_role() -> WorkspaceRole {
-    parse_min_role(std::env::var(MIN_ROLE_ENV).ok().as_deref())
+    parse_min_role(hive_core::compat::var(MIN_ROLE_ENV).ok().as_deref())
 }
 
 /// Whether the triggering message's author is privileged enough to have MCP
@@ -120,7 +120,7 @@ impl Default for ToolSettings {
 }
 
 pub fn env_flag(name: &str, default: bool) -> bool {
-    match std::env::var(name).ok().map(|v| v.trim().to_ascii_lowercase()) {
+    match hive_core::compat::var(name).ok().map(|v| v.trim().to_ascii_lowercase()) {
         Some(v) if matches!(v.as_str(), "1" | "true" | "on" | "yes") => true,
         Some(v) if matches!(v.as_str(), "0" | "false" | "off" | "no") => false,
         _ => default,

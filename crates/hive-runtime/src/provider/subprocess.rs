@@ -32,7 +32,7 @@ pub(crate) fn suppress_console_window(cmd: &mut Command) {
 const DEFAULT_AGENT_TIMEOUT_SECS: u64 = 300;
 
 fn agent_timeout() -> Duration {
-    let secs = std::env::var("HIVE_AGENT_TIMEOUT_SECS")
+    let secs = hive_core::compat::var("HIVE_AGENT_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())
         .filter(|&v| v > 0)

@@ -75,7 +75,7 @@ impl ToolExecutor for NoTools {
 /// shim instead of the native API (`HIVE_OLLAMA_WIRE=openai`). Escape hatch
 /// for a proxy that only speaks OpenAI; loses num_ctx/keep_alive/think.
 pub fn ollama_uses_openai_shim() -> bool {
-    std::env::var("HIVE_OLLAMA_WIRE")
+    hive_core::compat::var("HIVE_OLLAMA_WIRE")
         .map(|v| v.trim().eq_ignore_ascii_case("openai"))
         .unwrap_or(false)
 }
@@ -722,7 +722,7 @@ mod tests {
     fn openai_shim_is_opt_in_via_env() {
         // Default: native. (The env var is process-global; only assert the
         // default here rather than mutating it under parallel tests.)
-        if std::env::var("HIVE_OLLAMA_WIRE").is_err() {
+        if hive_core::compat::var("HIVE_OLLAMA_WIRE").is_err() {
             assert!(!ollama_uses_openai_shim());
         }
     }
@@ -930,7 +930,7 @@ mod live_cli {
     #[tokio::test]
     #[ignore]
     async fn live_cli_smoke() {
-        let provider = match std::env::var("HIVE_LIVE_CLI").as_deref() {
+        let provider = match hive_core::compat::var("HIVE_LIVE_CLI").as_deref() {
             Ok("antigravity") => ModelProviderKind::Antigravity,
             Ok("copilot") => ModelProviderKind::Copilot,
             _ => return,
@@ -941,7 +941,7 @@ mod live_cli {
         };
         let rt = ResolvedRuntime {
             provider,
-            model: std::env::var("HIVE_LIVE_MODEL").unwrap_or_default(),
+            model: hive_core::compat::var("HIVE_LIVE_MODEL").unwrap_or_default(),
             endpoint: String::new(),
             api_key: None,
             args,

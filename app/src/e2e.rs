@@ -71,7 +71,7 @@ struct Config {
 }
 
 fn env(name: &str) -> Option<String> {
-    std::env::var(name).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+    hive_core::compat::var(name).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
 }
 
 impl Config {
@@ -1067,7 +1067,7 @@ pub fn run_live() -> usize {
     };
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("HIVE_LOG")
+            hive_core::compat::var("HIVE_LOG").map_err(|_| ()).and_then(|v| tracing_subscriber::EnvFilter::try_new(v).map_err(|_| ()))
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn,dispatch=info,compaction=info,worktree=info")),
         )
         .with_writer(std::io::stderr)

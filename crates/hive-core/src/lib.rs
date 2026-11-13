@@ -6,6 +6,7 @@ pub mod agent;
 pub mod authorization;
 pub mod channel;
 pub mod chat;
+pub mod compat;
 pub mod config;
 pub mod context_budget;
 pub mod crypto;

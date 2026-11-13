@@ -1372,11 +1372,11 @@ fn serve_options_refuse_public_binds_and_need_both_ntfy_parts() {
 /// `HIVE_SERVE_LIVE_ENDPOINT` is set.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn live_gateway_turn_reads_a_file() {
-    let Some(endpoint) = std::env::var("HIVE_SERVE_LIVE_ENDPOINT").ok().filter(|s| !s.trim().is_empty()) else {
+    let Some(endpoint) = hive_core::compat::var("HIVE_SERVE_LIVE_ENDPOINT").ok().filter(|s| !s.trim().is_empty()) else {
         eprintln!("skipping: HIVE_SERVE_LIVE_ENDPOINT unset");
         return;
     };
-    let models = std::env::var("HIVE_SERVE_LIVE_MODELS").unwrap_or_else(|_| "gpt-oss:20b,gemma4:12b".into());
+    let models = hive_core::compat::var("HIVE_SERVE_LIVE_MODELS").unwrap_or_else(|_| "gpt-oss:20b,gemma4:12b".into());
     for model in models.split(',').map(str::trim).filter(|m| !m.is_empty()) {
         let word = format!("lantern{}", &Uuid::new_v4().simple().to_string()[..6]);
         let note = format!("The secret word is {word}.\n");

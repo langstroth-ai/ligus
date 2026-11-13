@@ -45,7 +45,7 @@ pub const IDLE_TIMEOUT_ENV: &str = "HIVE_TURN_IDLE_TIMEOUT_SECS";
 /// 300) governs both. (#100)
 pub fn turn_idle_timeout() -> Duration {
     Duration::from_secs(
-        std::env::var(IDLE_TIMEOUT_ENV)
+        hive_core::compat::var(IDLE_TIMEOUT_ENV)
             .ok()
             .and_then(|v| v.parse().ok())
             .filter(|&s| s > 0)
