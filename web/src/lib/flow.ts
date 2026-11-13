@@ -171,3 +171,56 @@ export const REASON_LABEL: Record<RouteReason, string> = {
   only: "only candidate",
   fallback: "all stopped → primary",
 };
+
+export interface GateQueue {
+  open: number;
+  oldestWaitMs: number;
+  medianWaitMs: number;
+  trembleShare: number;
+  openedLastHour: number;
+  decidedLastHour: number;
+  overLimit: boolean;
+}
+
+export interface EdgeStats {
+  edge: "gate" | "stage" | "handoff";
+  samples: number;
+  medianWaitMs: number;
+  trembleShare: number;
+}
+
+export interface RecruitNotice {
+  id: string;
+  action: "approvers" | "idle_host" | "stop_upstream" | string;
+  queueLen: number;
+  oldestWaitMs: number;
+  memberIds?: string[];
+  toHost?: string;
+  fromHost?: string;
+  reference?: string;
+  atMs: number;
+}
+
+export interface QueueReport {
+  gate: GateQueue;
+  edges: EdgeStats[];
+  alert: string | null;
+  queueLimit: number;
+  stopUpstream: StopUpstream;
+  recruits: RecruitNotice[];
+}
+
+export const queueReport = () => invoke<QueueReport>("flow_queue_report");
+
+export function duration(ms: number): string {
+  const m = Math.round(ms / 60_000);
+  if (m < 60) return `${m} min`;
+  const h = Math.round(m / 60);
+  return h < 48 ? `${h} h` : `${Math.round(h / 24)} d`;
+}
+
+export const RECRUIT_LABEL: Record<string, string> = {
+  approvers: "asked more reviewers",
+  idle_host: "an idle host took a queued stage",
+  stop_upstream: "told agents to stop opening new proposals",
+};

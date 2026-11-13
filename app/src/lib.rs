@@ -14290,6 +14290,7 @@ pub fn run() {
             // List this desktop as an online Device host in the synced room, so
             // the phone (via `ligus serve`) can tell whether @hive can answer now.
             tauri::async_runtime::spawn(run_device_host_loop(app.handle().clone()));
+            tauri::async_runtime::spawn(flow::run_tick(app.handle().clone()));
 
             // Scheduled/triggered agents: fires due schedules on a 30s tick.
             // Idle until the user adds a schedule (Settings → Schedules).
@@ -14323,6 +14324,7 @@ pub fn run() {
             flow::flow_handoffs,
             flow::flow_routing_report,
             flow::flow_clear_route_stop,
+            flow::flow_queue_report,
             workflows::remove_workflow,
             workflows::set_workflow_enabled,
             workflows::workflow_change_request,

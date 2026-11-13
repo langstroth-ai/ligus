@@ -38,17 +38,61 @@ pub(crate) struct FlowSettings {
     /// scorer is weak, unproven or falling.
     pub epsilon_min: f64,
     pub epsilon_max: f64,
+    /// Tell agents feeding a full review queue to stop opening new work:
+    /// `on`, `off`, or `ab` (half the chats, split by chat id, for comparing).
+    pub stop_upstream: String,
+    /// Open proposals at the review gate above which it is over its limit.
+    pub queue_limit: u32,
+    /// A wait longer than this counts as a long wait.
+    pub long_wait_minutes: f64,
+    /// Opt-in: when the gate backs up, notify members who could review.
+    pub recruit_approvers: bool,
+    /// Opt-in: let this device take a workflow stage queued on a busy or
+    /// offline host, when it can run that agent's runtime.
+    pub offer_idle_host: bool,
 }
 
 impl Default for FlowSettings {
     fn default() -> Self {
-        Self { handoff_cards: true, route_mode: RouteMode::Shadow, half_life_days: 14.0, cooldown_minutes: 15.0, epsilon_min: 0.05, epsilon_max: 0.30 }
+        Self {
+            handoff_cards: true,
+            route_mode: RouteMode::Shadow,
+            half_life_days: 14.0,
+            cooldown_minutes: 15.0,
+            epsilon_min: 0.05,
+            epsilon_max: 0.30,
+            stop_upstream: "on".into(),
+            queue_limit: 5,
+            long_wait_minutes: 120.0,
+            recruit_approvers: false,
+            offer_idle_host: false,
+        }
     }
 }
 
 impl FlowSettings {
     pub(crate) fn score_params(&self) -> flow::score::ScoreParams {
         flow::score::ScoreParams { half_life_days: self.half_life_days.clamp(0.5, 365.0), ..Default::default() }
+    }
+
+    pub(crate) fn tremble_policy(&self) -> flow::tremble::TremblePolicy {
+        flow::tremble::TremblePolicy {
+            queue_limit: self.queue_limit.max(1),
+            long_wait_ms: (self.long_wait_minutes.max(1.0) * 60_000.0) as i64,
+        }
+    }
+
+    /// Whether the stop-upstream note applies in `session_id`, and the A/B
+    /// arm to tag the turn with (empty when not splitting).
+    pub(crate) fn upstream_note(&self, session_id: Uuid) -> (bool, &'static str) {
+        match self.stop_upstream.as_str() {
+            "off" => (false, ""),
+            "ab" => {
+                let arm = flow::tremble::upstream_arm(session_id);
+                (arm == "note", arm)
+            }
+            _ => (true, ""),
+        }
     }
 
     pub(crate) fn route_policy(&self) -> flow::route::RoutePolicy {
@@ -372,6 +416,8 @@ const HANDOFF_GUIDANCE: &str = r#"When you hand work to another agent with an @m
 #[derive(Debug, Default, Clone)]
 pub(crate) struct Primed {
     pub parcel: bool,
+    /// The stop-upstream note was in the context.
+    pub upstream_note: bool,
 }
 
 /// Append the flow context block to the turn's last user message: the
@@ -405,6 +451,15 @@ pub(crate) fn prime_turns(
                     at_ms: flow::now_ms(),
                 }),
             );
+        }
+    }
+    let (note_on, _) = s.upstream_note(session.id);
+    if note_on {
+        let view = workspace_view(state, session.workspace_id);
+        let gate = flow::tremble::gate_queue(&view.sessions, &s.tremble_policy(), flow::now_ms());
+        if gate.over_limit {
+            blocks.push(flow::tremble::stop_upstream_note(&gate));
+            primed.upstream_note = true;
         }
     }
     if blocks.is_empty() {
@@ -560,7 +615,7 @@ pub(crate) fn after_turn(app: &AppHandle, state: &AppState, session_id: Uuid, wo
         task_class: class.clone(),
         role: role_of(&session, trigger, &class, &reply, filed.len(), act.calls).to_string(),
         arm: arm.to_string(),
-        upstream_arm: String::new(),
+        upstream_arm: settings(state).upstream_note(session_id).1.to_string(),
         error: facts.error.is_some(),
         error_kind: facts.error.map(|e| flow::route::classify_failure(e).as_str().to_string()).unwrap_or_default(),
         tests_passed,
@@ -588,11 +643,249 @@ pub(crate) fn after_turn(app: &AppHandle, state: &AppState, session_id: Uuid, wo
     if let Some(err) = facts.error {
         stop_route_after_failure(state, &session, responder, &me, err, now);
     }
+    if !filed.is_empty() {
+        backpressure_after_filing(state, &session, &reply.author, now);
+    }
 
     let directives = take_stashed(message_id);
     if settings(state).handoff_cards && facts.error.is_none() {
         record_handoff(state, &session, &reply, &me, &class, tests_passed, &filed, &directives);
     }
+}
+
+/// How often the same backpressure response may fire in a workspace.
+const RECRUIT_EVERY_MS: i64 = 3_600_000;
+
+fn recently_fired(view: &WorkspaceView, action: &str, now: i64) -> bool {
+    view.sessions
+        .iter()
+        .flat_map(|s| s.flow.recruits.iter())
+        .any(|r| r.action == action && now - r.at_ms < RECRUIT_EVERY_MS)
+}
+
+/// After a turn filed a proposal: if the review gate is backed up, post the
+/// stop-upstream note (once an hour) and, if opted in, ask more eligible
+/// reviewers. Both are recorded as recruit notices.
+fn backpressure_after_filing(state: &AppState, session: &ChatSession, author: &str, now: i64) {
+    let s = settings(state);
+    let view = workspace_view(state, session.workspace_id);
+    let policy = s.tremble_policy();
+    let gate = flow::tremble::gate_queue(&view.sessions, &policy, now);
+    let (note_on, _) = s.upstream_note(session.id);
+    if gate.over_limit && note_on && !recently_fired(&view, "stop_upstream", now) {
+        let _ = state.service.lock().unwrap().post_system_note(
+            session.id,
+            session.workspace_id,
+            format!("\u{1f6a6} {author} filed into a full review queue. {}", flow::tremble::stop_upstream_note(&gate)),
+        );
+        record(state, session.id, session.workspace_id, FlowRecord::Recruit(recruit("stop_upstream", &gate, now)));
+    }
+    let backed_up = gate.over_limit || gate.oldest_wait_ms > policy.long_wait_ms;
+    if s.recruit_approvers && backed_up && !recently_fired(&view, "approvers", now) {
+        let mut r = recruit("approvers", &gate, now);
+        r.member_ids = flow::tremble::eligible_approvers(&view.sessions);
+        if !r.member_ids.is_empty() {
+            record(state, session.id, session.workspace_id, FlowRecord::Recruit(r));
+        }
+    }
+}
+
+fn recruit(action: &str, gate: &flow::tremble::GateQueue, now: i64) -> flow::RecruitNotice {
+    flow::RecruitNotice {
+        id: Uuid::new_v4(),
+        action: action.into(),
+        queue_len: gate.open,
+        oldest_wait_ms: gate.oldest_wait_ms,
+        member_ids: vec![],
+        to_host: String::new(),
+        from_host: String::new(),
+        reference: String::new(),
+        at_ms: now,
+    }
+}
+
+/// Recruit notices naming this device's user that it hasn't shown yet.
+fn unseen_recruits_for_me(state: &AppState, view: &WorkspaceView, now: i64) -> Vec<flow::RecruitNotice> {
+    static SEEN: OnceLock<Mutex<std::collections::HashSet<Uuid>>> = OnceLock::new();
+    let me = state.local_actor_id();
+    let mut seen = SEEN.get_or_init(|| Mutex::new(Default::default())).lock().unwrap();
+    let mut out = Vec::new();
+    for sess in view.sessions.iter() {
+        let mine: Vec<&str> = sess
+            .members
+            .iter()
+            .filter(|m| m.id == me || m.actor.id == me)
+            .map(|m| m.id.as_str())
+            .collect();
+        for r in sess.flow.recruits.iter().filter(|r| r.action == "approvers" && now - r.at_ms < RECRUIT_EVERY_MS) {
+            if r.member_ids.iter().any(|id| mine.contains(&id.as_str()) || *id == me) && seen.insert(r.id) {
+                out.push(r.clone());
+            }
+        }
+    }
+    out
+}
+
+/// Background flow tick (every 30 s): reviewer-recruit notifications for
+/// this device's user.
+pub(crate) async fn run_tick(app: AppHandle) {
+    use tauri::Manager;
+    use tauri_plugin_notification::NotificationExt;
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        let state = app.state::<AppState>();
+        let wid = state.active_workspace_id();
+        let view = workspace_view(&state, wid);
+        let now = flow::now_ms();
+        for r in unseen_recruits_for_me(&state, &view, now) {
+            let _ = app
+                .notification()
+                .builder()
+                .title("Ligus")
+                .body(format!("The review queue needs you: {} proposal(s) waiting", r.queue_len))
+                .show();
+        }
+    }
+}
+
+/// How long a remote workflow stage may sit unclaimed before an idle device
+/// offers to take it.
+pub(crate) const IDLE_OFFER_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Whether this device can run `agent`'s runtime itself (configured here,
+/// not a fallback).
+fn can_run_here(state: &AppState, agent: &hive_core::WorkspaceAgent) -> bool {
+    let Some(rt) = state.combined_runtimes().into_iter().find(|r| r.id == agent.runtime_id) else { return false };
+    state.resolve_runtime(&agent.runtime_id).provider == rt.provider_kind
+}
+
+/// Opt-in: take a workflow stage that has waited [`IDLE_OFFER_AFTER`] for its
+/// host. Only when this device is idle (no other chat responding), can run
+/// the agent's runtime, and wins the stage prompt's turn claim — the host's
+/// worker claims the same prompt when it starts, so whoever claims first runs
+/// it and the other backs off. Returns whether it claimed the stage.
+pub(crate) fn offer_stage_here(state: &AppState, session_id: Uuid, prompt_id: Uuid, agent_name: &str) -> Option<crate::Responder> {
+    let s = settings(state);
+    if !s.offer_idle_host {
+        return None;
+    }
+    if state.responding.lock().unwrap().len() > 1 {
+        return None;
+    }
+    let mut svc = state.service.lock().unwrap();
+    let session = svc.load(session_id).ok().flatten()?;
+    if session.turn_claims.contains_key(&prompt_id) {
+        return None;
+    }
+    // The host already began answering (a placeholder replying to the prompt).
+    if session.messages.iter().any(|m| m.reply_to_message_id == Some(prompt_id)) {
+        return None;
+    }
+    let agent = session.workspace_agents.iter().find(|a| a.name == agent_name)?.clone();
+    if !can_run_here(state, &agent) {
+        return None;
+    }
+    let workspace_id = session.workspace_id;
+    if !svc.claim_turn(session_id, workspace_id, prompt_id).ok()? {
+        return None;
+    }
+    let from_host = agent.host_id.clone();
+    drop(svc);
+    let now = flow::now_ms();
+    let mut r = recruit("idle_host", &flow::tremble::GateQueue::default(), now);
+    r.from_host = from_host;
+    r.to_host = state.local_host_id();
+    r.reference = prompt_id.to_string();
+    record(state, session_id, workspace_id, FlowRecord::Recruit(r));
+    let mut responder = crate::responder_for(state, &session, Some(&agent));
+    // It runs here now.
+    responder.host_id = String::new();
+    Some(responder)
+}
+
+/// Record how long a workflow stage waited for its host: prompt posted →
+/// the host's reply began.
+pub(crate) fn record_stage_wait(state: &AppState, session_id: Uuid, prompt_id: Uuid, reply_id: Uuid, host_id: &str, run_node: String) {
+    let wait = {
+        let svc = state.service.lock().unwrap();
+        let Ok(Some(s)) = svc.load(session_id) else { return };
+        let at = |id: Uuid| s.messages.iter().find(|m| m.id == id).map(|m| flow::ms(&m.created_at));
+        match (at(prompt_id), at(reply_id)) {
+            (Some(a), Some(b)) => (b - a).max(0),
+            _ => return,
+        }
+    };
+    let wid = match state.service.lock().unwrap().load(session_id) {
+        Ok(Some(s)) => s.workspace_id,
+        _ => return,
+    };
+    record(
+        state,
+        session_id,
+        wid,
+        FlowRecord::EdgeWait(flow::EdgeWait { edge: "stage".into(), reference: run_node, wait_ms: wait, host_id: host_id.to_string(), at_ms: flow::now_ms() }),
+    );
+}
+
+/// Gate waits measured from the proposals themselves (created → decided).
+fn gate_waits(view: &WorkspaceView, since: i64) -> Vec<flow::EdgeWait> {
+    let mut out = Vec::new();
+    for sess in view.sessions.iter() {
+        for p in &sess.proposals {
+            if p.status == hive_core::ProposalStatus::Open {
+                continue;
+            }
+            let Some(decided) = p.approvals.iter().map(|a| flow::ms(&a.created_at)).max() else { continue };
+            if decided < since {
+                continue;
+            }
+            out.push(flow::EdgeWait {
+                edge: "gate".into(),
+                reference: p.id.to_string(),
+                wait_ms: (decided - flow::ms(&p.created_at)).max(0),
+                host_id: String::new(),
+                at_ms: decided,
+            });
+        }
+    }
+    out
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct QueueReport {
+    pub gate: flow::tremble::GateQueue,
+    pub edges: Vec<flow::tremble::EdgeStats>,
+    pub alert: Option<String>,
+    pub queue_limit: u32,
+    pub stop_upstream: String,
+    pub recruits: Vec<flow::RecruitNotice>,
+}
+
+pub(crate) fn queue_report(state: &AppState, workspace_id: Uuid) -> QueueReport {
+    let s = settings(state);
+    let policy = s.tremble_policy();
+    let now = flow::now_ms();
+    let since = now - 7 * 86_400_000;
+    let view = workspace_view(state, workspace_id);
+    let gate = flow::tremble::gate_queue(&view.sessions, &policy, now);
+    let gate_w = gate_waits(&view, since);
+    let mut waits: Vec<&flow::EdgeWait> = view.sessions.iter().flat_map(|s| s.flow.waits.iter()).collect();
+    waits.extend(gate_w.iter());
+    let edges = flow::tremble::edge_stats(&waits, &policy, since);
+    let alert = flow::tremble::bottleneck_alert(&gate, &edges, &policy);
+    let mut recruits: Vec<flow::RecruitNotice> =
+        view.sessions.iter().flat_map(|s| s.flow.recruits.iter().cloned()).filter(|r| r.at_ms >= since).collect();
+    recruits.sort_by_key(|r| std::cmp::Reverse(r.at_ms));
+    recruits.truncate(20);
+    QueueReport { gate, edges, alert, queue_limit: policy.queue_limit, stop_upstream: s.stop_upstream.clone(), recruits }
+}
+
+/// The review queue and hand-off waits for the active workspace (Flow → Queue).
+#[tauri::command]
+pub(crate) fn flow_queue_report(state: State<'_, AppState>) -> QueueReport {
+    let wid = state.active_workspace_id();
+    queue_report(&state, wid)
 }
 
 /// Window in which a second ordinary failure stops a route.
@@ -1169,6 +1462,40 @@ mod tests {
         assert_eq!((e.explored, e.explored_wins, e.explored_judged), (1, 1, 1));
         assert!((e.share - 0.25).abs() < 1e-9);
         assert!((e.incumbent_rate.unwrap() - 2.0 / 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn stop_upstream_modes() {
+        let mut s = FlowSettings::default();
+        let id = Uuid::new_v4();
+        assert_eq!(s.upstream_note(id), (true, ""));
+        s.stop_upstream = "off".into();
+        assert_eq!(s.upstream_note(id), (false, ""));
+        s.stop_upstream = "ab".into();
+        let (on, arm) = s.upstream_note(id);
+        assert_eq!(on, arm == "note");
+        assert!(arm == "note" || arm == "control");
+        assert_eq!(s.tremble_policy().queue_limit, 5);
+    }
+
+    #[test]
+    fn gate_waits_come_from_decided_proposals() {
+        let mut s = session_with(&[]);
+        let mut p = hive_core::ActionProposal::new("x", hive_core::ProposalKind::Decision, "coder");
+        p.created_at = hive_core::Timestamp::from_unix_seconds(1_000);
+        p.cast_vote(hive_core::ProposalApproval {
+            actor_id: "u".into(),
+            role: hive_core::WorkspaceRole::Owner,
+            approved: true,
+            created_at: hive_core::Timestamp::from_unix_seconds(4_600),
+        });
+        s.proposals.push(p);
+        s.proposals.push(hive_core::ActionProposal::new("open", hive_core::ProposalKind::Decision, "coder"));
+        let view = WorkspaceView { sessions: Arc::new(vec![s]), config: Arc::new(FlowState::default()) };
+        let w = gate_waits(&view, 0);
+        assert_eq!(w.len(), 1);
+        assert_eq!(w[0].wait_ms, 3_600_000);
+        assert!(gate_waits(&view, 5_000_000).is_empty());
     }
 
     fn session_with(agents: &[&str]) -> ChatSession {

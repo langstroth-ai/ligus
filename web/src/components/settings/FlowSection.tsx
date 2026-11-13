@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Field, Section, SelectField, Switch } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
-import { getFlowSettings, setFlowSettings, type FlowSettings, type RouteMode } from "@/lib/flow";
+import { getFlowSettings, setFlowSettings, type FlowSettings, type RouteMode, type StopUpstream } from "@/lib/flow";
 
 /// Settings → Flow: routing, hand-offs and backpressure. Device-local; a
 /// routing decision a device records carries its mode, so every device
@@ -49,6 +49,33 @@ export function FlowSection() {
             <NumberInput value={Math.round(s.epsilonMax * 100)} min={0} max={50} onChange={(v) => set({ epsilonMax: v / 100, epsilonMin: Math.min(s.epsilonMin, v / 100) })} label="Maximum exploration %" />
           </div>
         </Field>
+      </Section>
+      <Section title="Review queue">
+        <Field label="Queue limit" hint="Open proposals waiting for review above which the gate counts as full.">
+          <NumberInput value={s.queueLimit} min={1} max={100} onChange={(v) => set({ queueLimit: v })} label="Queue limit" />
+        </Field>
+        <Field label="Long wait (minutes)" hint="A proposal waiting longer than this counts as a long wait.">
+          <NumberInput value={s.longWaitMinutes} min={5} max={10080} onChange={(v) => set({ longWaitMinutes: v })} label="Long wait minutes" />
+        </Field>
+        <Field
+          label="Stop-upstream note"
+          hint="While the queue is full, agents are told to finish or refine open proposals before opening new ones. A/B applies it in half the chats so you can compare."
+        >
+          <SelectField value={s.stopUpstream} onChange={(v) => set({ stopUpstream: v as StopUpstream })} ariaLabel="Stop-upstream note">
+            <option value="on">On</option>
+            <option value="ab">A/B (half the chats)</option>
+            <option value="off">Off</option>
+          </SelectField>
+        </Field>
+        <Row label="Ask more reviewers" hint="When the queue backs up, notify members who could approve and haven't voted (at most hourly).">
+          <Switch on={s.recruitApprovers} onChange={(v) => set({ recruitApprovers: v })} label="Ask more reviewers" />
+        </Row>
+        <Row
+          label="Take queued stages when idle"
+          hint="A workflow stage waiting over a minute for a busy or offline host runs on this device instead, if it is idle and has the agent's runtime."
+        >
+          <Switch on={s.offerIdleHost} onChange={(v) => set({ offerIdleHost: v })} label="Take queued stages when idle" />
+        </Row>
       </Section>
       <Section title="Hand-offs">
         <Row label="Hand-off cards and context parcels" hint="Record what an agent hands on, and give the receiver the sender's summary.">
