@@ -1352,6 +1352,17 @@ export const setDearthMode = (
 /// Approve a member or device waiting on dearth mode's second approval.
 export const approveJoin = (subject: string) => invoke<void>("approve_join", { subject });
 
+// ── Workspace guards: chat lockdown (self-medication) ──
+export type { ChatLockdownDto } from "@/bindings/ChatLockdownDto";
+export type { LockdownSignalDto } from "@/bindings/LockdownSignalDto";
+
+export const getChatLockdown = (sessionId: string) =>
+  invoke<import("@/bindings/ChatLockdownDto").ChatLockdownDto>("get_chat_lockdown", { sessionId });
+/// Clear a chat's lockdown (a human member; re-checked on every device).
+export const clearChatLockdown = (sessionId: string) => invoke<void>("clear_chat_lockdown", { sessionId });
+/// Lock a chat down by hand.
+export const lockChat = (sessionId: string) => invoke<void>("lock_chat", { sessionId });
+
 /// Fires whenever a workflow run's persisted state changes.
 export const onWorkflowRun = (
   cb: (e: WorkflowRunEvent) => void,

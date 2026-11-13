@@ -515,6 +515,18 @@ async fn run_turn(
         Ok(reply) => {
             let worktree = eager.or(reply.worktree);
             let captured = worktree.as_ref().and_then(|wt| wt.diff().ok()).filter(|d| !d.trim().is_empty());
+            // Self-medication, as on the desktop: a credential in the diff or an
+            // unrequested CI change locks the chat down before review.
+            {
+                let changed = worktree.as_ref().and_then(|wt| wt.changed_files().ok()).unwrap_or_default();
+                let request = turns.iter().rev().find(|t| t.role == "user").map_or("", |t| t.content.as_str());
+                let findings = hive_runtime::guard_scan::assess_turn(&[], captured.as_deref(), &changed, request);
+                if !findings.is_empty() {
+                    if let Err(e) = lock(svc).self_medicate(s.workspace_id, s.id, &findings) {
+                        eprintln!("worker: lockdown failed: {e}");
+                    }
+                }
+            }
             // A model that produced nothing (and changed no files) never posts
             // an empty reply: the chat gets a notice saying so, as on the desktop.
             let empty = reply.text.trim().is_empty() && captured.is_none();

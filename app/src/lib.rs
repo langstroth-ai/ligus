@@ -7242,6 +7242,9 @@ impl MessagesApi for AnthropicMessages {
 /// Executes a tool call by routing the (sanitized) tool name back to its MCP
 /// server. Honors the registry's enable gate.
 struct McpToolExecutor {
+    /// Prompt-injection markers seen in this turn's MCP results (shared so the
+    /// turn can read them after the executor moved into a tool set).
+    injection_hits: crate::guards::InjectionHits,
     registry: McpRegistry,
     /// sanitized anthropic tool name → (server id, real tool name)
     names: HashMap<String, (String, String)>,
@@ -7251,7 +7254,10 @@ impl ToolExecutor for McpToolExecutor {
     async fn call(&self, name: &str, input: &Value) -> (String, bool) {
         match self.names.get(name) {
             Some((server, tool)) => match self.registry.call_tool(server, tool, input).await {
-                Ok(text) => (text, false),
+                Ok(text) => {
+                    self.injection_hits.scan(&text);
+                    (text, false)
+                }
                 Err(e) => (format!("tool error: {e}"), true),
             },
             None => (format!("unknown tool {name}"), true),
@@ -7309,7 +7315,7 @@ async fn mcp_tool_set(
         }));
         names.insert(tname, (server.clone(), tool.name.clone()));
     }
-    Some((tool_defs, McpToolExecutor { registry, names }))
+    Some((tool_defs, McpToolExecutor { injection_hits: Default::default(), registry, names }))
 }
 
 /// Whether an HTTP model turn gets Hive's built-in file tools: the runtime
@@ -7421,6 +7427,9 @@ async fn try_tool_loop(
     let initial = turns_to_messages(turns);
 
     let result = tool_loop::run_with_messages(&model, &executor, initial, tool_defs, hive_runtime::agent_tools::ANTHROPIC_TOOL_ROUNDS).await;
+    // Self-medication: an injection marker in what the tools returned locks
+    // this chat down.
+    crate::guards::self_medicate_after_turn(state, workspace_id, session_id, &executor.injection_hits.take(), None, &[], turns);
 
     let (phase, text) = match result {
         Ok(text) => {
@@ -7699,6 +7708,9 @@ async fn run_prepared_turn(
     } else {
         None
     };
+    // Injection markers seen in any tool result this turn (Ligus-run MCP tools
+    // and the runtime's own tools, via the activity stream).
+    let injection_hits = mcp_tools.as_ref().map(|(_, ex)| ex.injection_hits.clone()).unwrap_or_default();
     let (builtin_on, builtin_write_in_place, builtin_run_command) = {
         let s = state.settings.lock().unwrap();
         // `run_command` is a shell: off whenever the envelope closes egress.
@@ -7994,13 +8006,16 @@ async fn run_prepared_turn(
                     is_error: false,
                 },
                 dispatch::StreamActivity::ToolResult { call_id, is_error, content } => ChatActivityEvent {
+                    content: {
+                        injection_hits.scan(&content);
+                        content
+                    },
                     session_id: session_id.to_string(),
                     message_id: message_id.to_string(),
                     kind: "result".into(),
                     id: call_id,
                     name: String::new(),
                     input_json: String::new(),
-                    content,
                     is_error,
                 },
                 // `content` carries a reasoning model's chain-of-thought fragment
@@ -8051,6 +8066,21 @@ async fn run_prepared_turn(
                 .as_ref()
                 .and_then(|wt| wt.diff().ok())
                 .filter(|diff| !diff.trim().is_empty());
+            // Self-medication: an injection marker in a tool result, a
+            // credential in the diff, or an unrequested CI change locks the
+            // chat down before its proposal reaches anyone.
+            {
+                let changed = worktree.as_ref().and_then(|wt| wt.changed_files().ok()).unwrap_or_default();
+                crate::guards::self_medicate_after_turn(
+                    state,
+                    workspace_id,
+                    session_id,
+                    &injection_hits.take(),
+                    captured.as_deref(),
+                    &changed,
+                    &turns,
+                );
+            }
             let body = {
                 let root = state.workspace_root.lock().unwrap().clone();
                 let mut svc = state.service.lock().unwrap();
@@ -8104,6 +8134,7 @@ async fn run_prepared_turn(
             Ok(TurnOutcome { message_id, body })
         }
         Err(e) => {
+            crate::guards::self_medicate_after_turn(state, workspace_id, session_id, &injection_hits.take(), None, &[], &turns);
             // Discard the isolated worktree — a failed/aborted turn's partial
             // edits are not surfaced (no proposal), and the worktree is pruned.
             if let Some(wt) = worktree {
@@ -14306,6 +14337,9 @@ pub fn run() {
             guards::get_dearth_state,
             guards::set_dearth_mode,
             guards::approve_join,
+            guards::get_chat_lockdown,
+            guards::clear_chat_lockdown,
+            guards::lock_chat,
             get_app_info,
             list_relay_users,
             create_relay_user,

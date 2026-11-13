@@ -94,6 +94,16 @@ certificate at all are still accepted (as before dearth mode); dearth mode
 withholds certificates, so it binds where certificates matter (owner-device
 enrollment, the `GithubSigningKeys` identity mode, impersonation checks).
 
+## Self-medication: a chat that shows infection locks itself down
+
+When an agent turn reads a prompt-injection marker in a tool result, adds a
+credential to a diff, or changes CI configuration nobody asked about, Ligus
+[locks that chat down](../features/guards.md#chat-lockdown): no network or
+MCP access for its agents and a human approval on every proposal, until a
+human member clears it. The lock is an event on the workspace config log, so
+every device applies it; clearing it is re-checked on ingest (a non-member,
+Viewer or agent account can't).
+
 ## What this page does not cover
 
 Private key seeds live as files on disk, not in an OS keystore — see

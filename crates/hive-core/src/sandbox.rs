@@ -152,6 +152,10 @@ pub fn envelope_for_session(session: &crate::ChatSession) -> SandboxEnvelope {
             false,
         );
     }
+    if session.guards.lockdown_active() {
+        // Self-medication: no egress at all, and a human gate on every proposal.
+        env = env.tighten(TightenedBy::Lockdown, EgressPolicy::Closed, true);
+    }
     env
 }
 

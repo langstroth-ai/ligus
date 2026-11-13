@@ -149,6 +149,69 @@ impl ChatService {
             .collect())
     }
 
+    /// Self-medication: lock `chat_id` down for each finding (signal +
+    /// content-free detail). Posts one note in the chat so members see why,
+    /// and records hygiene signals. Returns how many lockdowns were raised.
+    pub fn self_medicate(
+        &mut self,
+        workspace_id: Uuid,
+        chat_id: Uuid,
+        findings: &[(hive_core::guard::LockdownSignal, String)],
+    ) -> Result<usize> {
+        use hive_core::guard::{ChatLockdown, LockdownSignal};
+        use hive_core::signal::HygieneKind;
+        if findings.is_empty() {
+            return Ok(0);
+        }
+        let config_id = self.ensure_workspace_config(workspace_id)?;
+        let mut notes = Vec::new();
+        for (signal, detail) in findings {
+            let lockdown = ChatLockdown {
+                id: Uuid::new_v4(),
+                signal: *signal,
+                detail: detail.chars().take(120).collect(),
+                raised_by: self.author.id.clone(),
+                raised_at: Timestamp::now(),
+            };
+            self.append_signed(config_id, workspace_id, SessionEvent::ChatLockdownRaised { chat_id, lockdown })?;
+            let (kind, text) = match signal {
+                LockdownSignal::InjectionDetected => (HygieneKind::InjectionDetected, format!("a prompt-injection marker in content an agent read ({detail})")),
+                LockdownSignal::SecretInDiff => (HygieneKind::SecretInDiff, format!("a credential in an agent's changes ({detail})")),
+                LockdownSignal::CiConfigChanged => (HygieneKind::CiConfigChanged, format!("an unrequested change to CI configuration ({detail})")),
+                LockdownSignal::Manual => (HygieneKind::EnvelopeTightened, "a member locked it".to_string()),
+            };
+            let _ = self.record_signal(workspace_id, Some(chat_id), &GuardSignal::Hygiene { hygiene_kind: kind, count: 1 });
+            notes.push(text);
+        }
+        let _ = self.record_signal(
+            workspace_id,
+            Some(chat_id),
+            &GuardSignal::Hygiene { hygiene_kind: hive_core::signal::HygieneKind::EnvelopeTightened, count: 1 },
+        );
+        if self.load(chat_id)?.is_some() {
+            self.post_system_note(
+                chat_id,
+                workspace_id,
+                format!(
+                    "This chat is locked down: {}. Agents here have no network or MCP access and every proposal needs a human member's approval until a member clears the lockdown.",
+                    notes.join("; ")
+                ),
+            )?;
+        }
+        Ok(findings.len())
+    }
+
+    /// Clear a chat's lockdown (a human member, Contributor+).
+    pub fn clear_lockdown(&mut self, workspace_id: Uuid, chat_id: Uuid) -> Result<()> {
+        let config_id = self.ensure_workspace_config(workspace_id)?;
+        self.append_signed(config_id, workspace_id, SessionEvent::ChatLockdownCleared { chat_id })?;
+        if self.load(chat_id)?.is_some() {
+            let who = self.author.display_name.clone();
+            self.post_system_note(chat_id, workspace_id, format!("{who} cleared this chat's lockdown."))?;
+        }
+        Ok(())
+    }
+
     /// Record a device-local guard signal (never synced).
     pub fn record_signal(&self, workspace_id: Uuid, session_id: Option<Uuid>, signal: &GuardSignal) -> Result<()> {
         self.store.record_signal(workspace_id, session_id, signal)?;
@@ -256,6 +319,29 @@ mod tests {
         let s = svc.load(chat.id).unwrap().unwrap();
         assert!(s.guards.dearth_on().is_some());
         assert!(!hive_core::sandbox::envelope_for_session(&s).egress.is_open());
+    }
+
+    #[test]
+    fn self_medication_locks_the_chat_until_a_member_clears_it() {
+        use hive_core::guard::LockdownSignal;
+        let mut svc = service();
+        let ws = Uuid::new_v4();
+        svc.ensure_workspace_config(ws).unwrap();
+        let chat = svc.create_chat("c", ws, "anthropic").unwrap();
+        let n = svc
+            .self_medicate(ws, chat.id, &[(LockdownSignal::SecretInDiff, "aws_access_key".into())])
+            .unwrap();
+        assert_eq!(n, 1);
+        let s = svc.load(chat.id).unwrap().unwrap();
+        assert!(s.guards.lockdown_active());
+        assert_eq!(hive_core::sandbox::envelope_for_session(&s).egress, hive_core::sandbox::EgressPolicy::Closed);
+        assert!(s.messages.iter().any(|m| m.body.contains("locked down")));
+        // Other chats are untouched.
+        let other = svc.create_chat("o", ws, "anthropic").unwrap();
+        assert!(!svc.load(other.id).unwrap().unwrap().guards.lockdown_active());
+        svc.clear_lockdown(ws, chat.id).unwrap();
+        assert!(!svc.load(chat.id).unwrap().unwrap().guards.lockdown_active());
+        assert!(!svc.list_signals(ws, 0, Some("hygiene"), 10).unwrap().is_empty());
     }
 
     #[test]

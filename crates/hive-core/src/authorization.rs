@@ -113,6 +113,7 @@ pub fn requires_projection_authz(event: &SessionEvent) -> bool {
             | SessionEvent::CoordinatorLeaseReleased { .. }
             | SessionEvent::DearthModeChanged { .. }
             | SessionEvent::JoinApproved { .. }
+            | SessionEvent::ChatLockdownCleared { .. }
     )
 }
 
@@ -254,7 +255,13 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         // as starting or driving a workflow. Also envelope-bound to the holder
         // device (see `lease_signer_ok`).
         | SessionEvent::CoordinatorLeaseClaimed { .. }
-        | SessionEvent::CoordinatorLeaseReleased { .. } => WorkspaceRole::Contributor,
+        | SessionEvent::CoordinatorLeaseReleased { .. }
+        // Clearing a lockdown loosens a chat's envelope: a member's call (and a
+        // human's, see `evaluate`).
+        | SessionEvent::ChatLockdownCleared { .. } => WorkspaceRole::Contributor,
+        // Raising one only tightens, so any keyholder (a worker host, a
+        // Viewer's device) may: the floor.
+        SessionEvent::ChatLockdownRaised { .. } => WorkspaceRole::Viewer,
         // A newer-client event this build can't author or interpret — require
         // the highest role so it can never be produced locally by accident.
         SessionEvent::Unknown => WorkspaceRole::Owner,
@@ -384,6 +391,13 @@ pub fn evaluate(
         _ => {}
     }
 
+    // Clearing a lockdown is a human decision: an agent or bot account can't
+    // talk its own chat out of quarantine.
+    if let SessionEvent::ChatLockdownCleared { .. } = event {
+        if !crate::guard::is_human_member(&session.members, actor_id) {
+            return AuthzDecision::deny(AuthzReason::InsufficientRole, "only a human member can clear a lockdown");
+        }
+    }
     if actor_role.rank() < min_role_for(event).rank() {
         return AuthzDecision::deny(
             AuthzReason::InsufficientRole,

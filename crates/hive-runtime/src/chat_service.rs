@@ -1967,6 +1967,14 @@ impl ChatService {
                 // knows about (never admitted on the config log) are dropped from
                 // its roster, except the chat's creator: the tight entrance.
                 session.guards.dearth = cfg.guards.dearth.clone();
+                // This chat's lockdown (self-medication) lives on the config log.
+                session.guards.chat_id = Some(session.id);
+                session.guards.lockdowns = cfg
+                    .guards
+                    .lockdowns
+                    .get(&session.id)
+                    .map(|l| std::iter::once((session.id, l.clone())).collect())
+                    .unwrap_or_default();
                 if session.guards.dearth_on().is_some() {
                     let creator = session.creator_actor_id.clone();
                     session.members.retain(|m| m.id == creator || cfg.members.iter().any(|c| c.id == m.id));

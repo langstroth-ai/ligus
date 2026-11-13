@@ -45,3 +45,31 @@ dropped everywhere.
 
 Switching dearth mode off returns to normal rules, and anyone still waiting
 for a second approval is admitted.
+
+## Chat lockdown
+
+A chat locks itself down when one of its agent turns shows a sign of
+infection, the way a colony fights a pathogen by sealing more of the nest:
+
+- a **prompt-injection marker** in something an agent read: a tool or MCP
+  result telling it to ignore its instructions, pretend to be a system
+  message, pipe a download into a shell, or send credentials somewhere;
+- a **credential in an agent's changes**: an API key, token or private key in
+  the lines a proposed diff adds;
+- an **unrequested CI change**: the agent edited CI configuration
+  (`.github/workflows`, `.gitlab-ci.yml`, `Jenkinsfile`, ...) when the request
+  didn't mention CI.
+
+A locked chat shows a red bar under its header and a note in the
+transcript saying what tripped it. Until a member clears it:
+
+- agents in that chat have **no network or MCP access** at all, and runtimes
+  Ligus can't confine are refused;
+- **every** proposal from that chat needs a human member's own approval before
+  it applies, whatever its quorum.
+
+Only a **human member** (Contributor or above) can clear a lockdown, with
+**Clear lockdown** on the bar. A non-member, a Viewer, or an agent's account
+clearing it is refused on every device. Anyone may lock a chat by hand.
+The detectors only record what kind of thing they found (a credential type, a
+marker name, a count), never the content.

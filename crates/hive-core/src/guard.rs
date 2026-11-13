@@ -58,6 +58,36 @@ pub struct PendingMember {
     pub added_by: String,
 }
 
+/// What made a chat lock itself down (self-medication).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LockdownSignal {
+    /// A prompt-injection marker in content an agent read (a tool result).
+    InjectionDetected,
+    /// A credential in the added lines of an agent's diff.
+    SecretInDiff,
+    /// An agent changed CI configuration nobody asked about.
+    CiConfigChanged,
+    /// A member locked it by hand.
+    Manual,
+}
+
+/// One infection signal that tightened a chat's envelope.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatLockdown {
+    pub id: Uuid,
+    pub signal: LockdownSignal,
+    /// Short, content-free code: a credential kind, a marker name, a count.
+    #[serde(default)]
+    pub detail: String,
+    /// Actor (or host) that raised it.
+    #[serde(default)]
+    pub raised_by: String,
+    #[serde(default)]
+    pub raised_at: Timestamp,
+}
+
 /// Guard state carried by a projected session.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -80,6 +110,14 @@ pub struct GuardState {
     /// snapshot are not here, so they can't satisfy a human gate.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub verified_approvals: BTreeMap<Uuid, BTreeSet<String>>,
+    /// Active chat lockdowns, by chat id (config log; a chat's own entry is
+    /// overlaid onto it by `ChatService::load`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub lockdowns: BTreeMap<Uuid, Vec<ChatLockdown>>,
+    /// Set on a chat session by the overlay: this chat's id, so
+    /// [`GuardState::lockdown_active`] can find its entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_id: Option<Uuid>,
 }
 
 impl GuardState {
@@ -88,10 +126,15 @@ impl GuardState {
         self.dearth.as_ref().filter(|d| d.enabled)
     }
 
-    /// Whether this chat is locked down (self-medication). Always false until
-    /// lockdowns exist on this build.
+    /// Whether this chat is locked down (self-medication). Only meaningful on
+    /// a chat session the config overlay has stamped with its `chat_id`.
     pub fn lockdown_active(&self) -> bool {
-        false
+        self.chat_id.is_some_and(|c| self.lockdowns.get(&c).is_some_and(|l| !l.is_empty()))
+    }
+
+    /// The active lockdown signals of a chat.
+    pub fn lockdowns_of(&self, chat_id: Uuid) -> &[ChatLockdown] {
+        self.lockdowns.get(&chat_id).map(Vec::as_slice).unwrap_or(&[])
     }
 }
 

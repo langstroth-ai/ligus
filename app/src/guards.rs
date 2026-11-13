@@ -780,6 +780,101 @@ pub(crate) fn approve_join(app: AppHandle, state: State<AppState>, subject: Stri
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Self-medication: chat lockdown
+// ---------------------------------------------------------------------------
+
+/// Prompt-injection markers seen in a turn's tool results. Cheap to clone
+/// (shared), so the executor and the turn see the same list.
+#[derive(Clone, Default)]
+pub(crate) struct InjectionHits(std::sync::Arc<Mutex<Vec<&'static str>>>);
+
+impl InjectionHits {
+    /// Scan an untrusted tool/MCP result.
+    pub(crate) fn scan(&self, text: &str) {
+        let found = hive_runtime::guard_scan::injection_markers(text);
+        if !found.is_empty() {
+            self.0.lock().unwrap().extend(found);
+        }
+    }
+    pub(crate) fn take(&self) -> Vec<&'static str> {
+        std::mem::take(&mut *self.0.lock().unwrap())
+    }
+}
+
+/// After a turn: lock its chat down for every infection signal it showed.
+pub(crate) fn self_medicate_after_turn(
+    state: &AppState,
+    workspace_id: Uuid,
+    session_id: Uuid,
+    tool_markers: &[&'static str],
+    diff: Option<&str>,
+    changed: &[String],
+    turns: &[hive_runtime::ChatTurn],
+) {
+    let request = turns.iter().rev().find(|t| t.role == "user").map_or("", |t| t.content.as_str());
+    let findings = hive_runtime::guard_scan::assess_turn(tool_markers, diff, changed, request);
+    if findings.is_empty() {
+        return;
+    }
+    let mut svc = state.service.lock().unwrap();
+    match svc.self_medicate(workspace_id, session_id, &findings) {
+        Ok(n) => tracing::warn!(target: "guards", chat = %session_id, signals = n, "chat locked down by self-medication"),
+        Err(e) => tracing::error!(target: "guards", "couldn't lock chat {session_id} down: {e}"),
+    }
+    drop(svc);
+    let _ = tauri::Emitter::emit(&state.app_handle, "workspace://synced", 1);
+}
+
+/// A chat's lockdown as the chat header shows it.
+#[tauri::command]
+pub(crate) fn get_chat_lockdown(state: State<AppState>, session_id: String) -> Result<hive_proto::ChatLockdownDto, String> {
+    let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
+    let svc = state.service.lock().unwrap();
+    let me = svc.author().id.clone();
+    let session = svc.load(sid).map_err(map_err)?.ok_or("unknown chat")?;
+    let signals = session
+        .guards
+        .lockdowns_of(sid)
+        .iter()
+        .map(|l| hive_proto::LockdownSignalDto {
+            signal: serde_json::to_value(l.signal).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default(),
+            detail: l.detail.clone(),
+            raised_at: crate::rfc3339(l.raised_at),
+        })
+        .collect::<Vec<_>>();
+    Ok(hive_proto::ChatLockdownDto {
+        active: !signals.is_empty(),
+        signals,
+        can_clear: hive_core::guard::is_human_member(&session.members, &me),
+    })
+}
+
+/// Clear this chat's lockdown (a human member, Contributor+; re-checked on
+/// every device's ingest).
+#[tauri::command]
+pub(crate) fn clear_chat_lockdown(app: AppHandle, state: State<AppState>, session_id: String) -> Result<(), String> {
+    let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
+    let mut svc = state.service.lock().unwrap();
+    let ws = svc.load(sid).map_err(map_err)?.ok_or("unknown chat")?.workspace_id;
+    svc.clear_lockdown(ws, sid).map_err(map_err)?;
+    drop(svc);
+    let _ = tauri::Emitter::emit(&app, "workspace://synced", 1);
+    Ok(())
+}
+
+/// Lock this chat down by hand (anyone may tighten).
+#[tauri::command]
+pub(crate) fn lock_chat(app: AppHandle, state: State<AppState>, session_id: String) -> Result<(), String> {
+    let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
+    let mut svc = state.service.lock().unwrap();
+    let ws = svc.load(sid).map_err(map_err)?.ok_or("unknown chat")?.workspace_id;
+    svc.self_medicate(ws, sid, &[(hive_core::guard::LockdownSignal::Manual, "manual".into())]).map_err(map_err)?;
+    drop(svc);
+    let _ = tauri::Emitter::emit(&app, "workspace://synced", 1);
+    Ok(())
+}
+
 /// Whether a run is in a state a coordinator drives.
 pub(crate) fn is_live_status(status: WorkflowRunStatus) -> bool {
     matches!(status, WorkflowRunStatus::Running | WorkflowRunStatus::AwaitingGate)

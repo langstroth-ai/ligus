@@ -582,7 +582,13 @@ async fn workspace_guards(State(s): S) -> ApiResult<Json<Value>> {
             "setAt": d.set_at,
         })
     });
-    Ok(Json(json!({ "dearth": dearth, "pendingMembers": g.pending_members.len() })))
+    let locked: Vec<Value> = g
+        .lockdowns
+        .iter()
+        .filter(|(_, l)| !l.is_empty())
+        .map(|(chat, l)| json!({ "chatId": chat, "signals": l.iter().map(|x| json!({ "signal": x.signal, "detail": x.detail })).collect::<Vec<_>>() }))
+        .collect();
+    Ok(Json(json!({ "dearth": dearth, "pendingMembers": g.pending_members.len(), "lockedChats": locked })))
 }
 
 async fn list_hosts(State(s): S) -> ApiResult<Json<Value>> {

@@ -92,6 +92,29 @@ pub struct DearthStateDto {
     pub entrances: Vec<EntranceDto>,
 }
 
+/// One infection signal that locked a chat down.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct LockdownSignalDto {
+    /// "injectionDetected" | "secretInDiff" | "ciConfigChanged" | "manual"
+    pub signal: String,
+    /// Content-free detail: a credential kind, a marker name, a file count.
+    pub detail: String,
+    pub raised_at: String,
+}
+
+/// A chat's lockdown state (self-medication).
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct ChatLockdownDto {
+    pub active: bool,
+    pub signals: Vec<LockdownSignalDto>,
+    /// Whether this person may clear it (a human member, Contributor+).
+    pub can_clear: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,5 +129,7 @@ mod tests {
         PendingJoinDto::export_all(&cfg).unwrap();
         EntranceDto::export_all(&cfg).unwrap();
         DearthStateDto::export_all(&cfg).unwrap();
+        LockdownSignalDto::export_all(&cfg).unwrap();
+        ChatLockdownDto::export_all(&cfg).unwrap();
     }
 }

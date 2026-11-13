@@ -224,6 +224,14 @@ pub enum SessionEvent {
     /// during dearth mode) or a device id (certified during dearth mode). A
     /// second approval from another Admin admits it. Config log; Admin+.
     JoinApproved { subject: String },
+    /// An infection signal locked a chat down (self-medication): its envelope
+    /// closes egress and every proposal needs a human approval until a member
+    /// clears it. Config log (so the workspace roster authorizes the clear);
+    /// any keyholder may raise one, since it only ever tightens.
+    ChatLockdownRaised { chat_id: Uuid, lockdown: crate::guard::ChatLockdown },
+    /// A human member (Contributor+) clears a chat's lockdown. Config log;
+    /// re-checked on ingest.
+    ChatLockdownCleared { chat_id: Uuid },
     /// Forward-compat catch-all: an event `kind` this build does not recognize
     /// (produced by a newer client). Serde deserializes an unknown tag here
     /// instead of failing the whole stream; it projects as a no-op. The raw
@@ -282,6 +290,8 @@ impl SessionEvent {
             SessionEvent::CoordinatorLeaseReleased { .. } => "coordinatorLeaseReleased",
             SessionEvent::DearthModeChanged { .. } => "dearthModeChanged",
             SessionEvent::JoinApproved { .. } => "joinApproved",
+            SessionEvent::ChatLockdownRaised { .. } => "chatLockdownRaised",
+            SessionEvent::ChatLockdownCleared { .. } => "chatLockdownCleared",
             SessionEvent::Unknown => "unknown",
         }
     }
@@ -308,7 +318,9 @@ impl SessionEvent {
             | SessionEvent::WorkspaceHostUpserted { .. }
             | SessionEvent::WorkspaceHostRemoved { .. }
             | SessionEvent::DearthModeChanged { .. }
-            | SessionEvent::JoinApproved { .. } => EventScope::Workspace,
+            | SessionEvent::JoinApproved { .. }
+            | SessionEvent::ChatLockdownRaised { .. }
+            | SessionEvent::ChatLockdownCleared { .. } => EventScope::Workspace,
             SessionEvent::WorkflowRunUpserted { .. } => EventScope::Run,
             _ => EventScope::Session,
         }
@@ -626,6 +638,15 @@ impl ChatSession {
             }
             // Folded with its author in projection (`guard::fold_authored`).
             SessionEvent::JoinApproved { .. } => {}
+            SessionEvent::ChatLockdownRaised { chat_id, lockdown } => {
+                let list = self.guards.lockdowns.entry(*chat_id).or_default();
+                if !list.iter().any(|l| l.id == lockdown.id) {
+                    list.push(lockdown.clone());
+                }
+            }
+            SessionEvent::ChatLockdownCleared { chat_id } => {
+                self.guards.lockdowns.remove(chat_id);
+            }
             // Unrecognized (newer-client) event — inert in this build.
             SessionEvent::Unknown => {}
         }
