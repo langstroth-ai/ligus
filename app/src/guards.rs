@@ -61,6 +61,10 @@ pub(crate) struct GuardRuntime {
     /// since launch. Until then another device's lease is never judged lapsed
     /// (we simply haven't heard from it yet).
     pub beats_fetched: AtomicBool,
+    /// The last hygiene sweep's results (in memory; a restart sweeps again).
+    pub hygiene: Mutex<hive_proto::HygieneReportDto>,
+    /// When the lease loop next runs the hygiene sweep.
+    pub last_sweep: Mutex<Option<std::time::Instant>>,
 }
 
 fn now_ms() -> i64 {
@@ -521,7 +525,159 @@ pub(crate) async fn run_lease_loop(app: AppHandle) {
             }
         }
         crate::recover_workflow_runs(&app);
+        // Hygiene: first a few minutes after launch, then every few hours.
+        let due = {
+            let now = std::time::Instant::now();
+            let mut next = state.guards.last_sweep.lock().unwrap();
+            let at = *next.get_or_insert(now + HYGIENE_FIRST_AFTER);
+            if now >= at {
+                *next = Some(now + HYGIENE_EVERY);
+                true
+            } else {
+                false
+            }
+        };
+        if due {
+            let app2 = app.clone();
+            let _ = tauri::async_runtime::spawn_blocking(move || {
+                let state = app2.state::<AppState>();
+                run_hygiene_sweep(&state);
+            })
+            .await;
+        }
     }
+}
+
+const HYGIENE_EVERY: Duration = Duration::from_secs(6 * 3600);
+const HYGIENE_FIRST_AFTER: Duration = Duration::from_secs(180);
+
+// ---------------------------------------------------------------------------
+// Hygienic removal
+// ---------------------------------------------------------------------------
+
+/// Sweep the active workspace's bound repository: remove crash-leftover turn
+/// worktrees (saving their edits), remove checkouts of gone or archived chats
+/// (keeping their branches), and mark open proposals whose diff no longer
+/// applies as stale (taking them out of the inbox).
+pub(crate) fn run_hygiene_sweep(state: &AppState) -> hive_proto::HygieneReportDto {
+    use hive_core::signal::{HygieneKind, WorktreeState};
+    use hive_runtime::hygiene::{self, ChatStatus, SweepAction};
+    let ws = state.active_workspace_id();
+    let repo = state.workspace_repo_root();
+    let mut report = hive_proto::HygieneReportDto { ran_at: crate::rfc3339(hive_core::Timestamp::now()), ..Default::default() };
+    let root = std::path::PathBuf::from(&repo);
+    if repo.trim().is_empty() || !hive_runtime::git_worktree::is_git_repo(&root) {
+        *state.guards.hygiene.lock().unwrap() = report.clone();
+        return report;
+    }
+    report.repo_bound = true;
+    // The workspace's chats, their streaming turns and open diff proposals.
+    let mut chats = std::collections::HashMap::new();
+    let mut live_turns = std::collections::HashSet::new();
+    let mut open_diffs: Vec<(Uuid, Uuid, String, String)> = Vec::new();
+    let device = {
+        let svc = state.service.lock().unwrap();
+        let config_id = hive_core::workspace_config_session_id(ws);
+        for id in svc.store().list_session_ids().unwrap_or_default() {
+            if id == config_id {
+                continue;
+            }
+            let Ok(Some(s)) = svc.load(id) else { continue };
+            if s.workspace_id != ws {
+                continue;
+            }
+            chats.insert(hygiene::slug(&id.to_string()), if s.archived { ChatStatus::Archived } else { ChatStatus::Live });
+            for m in s.messages.iter().filter(|m| m.is_streaming) {
+                live_turns.insert(hygiene::slug(&m.id.to_string()));
+            }
+            if s.archived {
+                continue;
+            }
+            for p in &s.proposals {
+                if p.status == hive_core::ProposalStatus::Open
+                    && !p.dismissed
+                    && p.superseded_by.is_none()
+                    && !s.guards.stale_proposals.contains(&p.id)
+                {
+                    if let Some(d) = &p.diff {
+                        open_diffs.push((id, p.id, p.title.clone(), d.clone()));
+                    }
+                }
+            }
+        }
+        svc.device_id()
+    };
+    let entries = hygiene::list_worktrees(&root);
+    let secret = device.as_bytes().to_vec();
+    let mut signals = Vec::new();
+    for action in hygiene::plan_sweep(&entries, &live_turns, &chats) {
+        if !hygiene::apply(&root, &action) {
+            continue;
+        }
+        match &action {
+            SweepAction::RemoveTurnWorktree { .. } => {
+                report.turn_worktrees_removed += 1;
+                signals.push(GuardSignal::WorktreeState { state: WorktreeState::Abandoned, repo_key: None });
+            }
+            SweepAction::RemoveChatCheckout { chat_slug, .. } => {
+                report.chat_checkouts_removed += 1;
+                signals.push(GuardSignal::WorktreeState {
+                    state: WorktreeState::Removed,
+                    repo_key: Some(hygiene::opaque_key(&secret, chat_slug)),
+                });
+            }
+        }
+    }
+    hygiene::prune(&root);
+    // Stale proposals: check each open diff against its chat's branch checkout
+    // (or the repository's HEAD when the chat has none).
+    let remaining = hygiene::list_worktrees(&root);
+    for (sid, pid, title, diff) in open_diffs {
+        let branch = format!("hive/chat/{}", hygiene::slug(&sid.to_string()));
+        let dir = remaining
+            .iter()
+            .find(|e| e.branch.as_deref() == Some(branch.as_str()))
+            .map(|e| e.path.clone())
+            .unwrap_or_else(|| root.clone());
+        if hygiene::patch_applies(&dir, &diff) {
+            continue;
+        }
+        let mut svc = state.service.lock().unwrap();
+        if svc.mark_proposal_stale(sid, ws, pid).is_ok() {
+            signals.push(GuardSignal::Hygiene { hygiene_kind: HygieneKind::ProposalStale, count: 1 });
+            report.stale_proposals.push(hive_proto::StaleProposalDto {
+                session_id: sid.to_string(),
+                proposal_id: pid.to_string(),
+                title,
+            });
+        }
+    }
+    {
+        let svc = state.service.lock().unwrap();
+        for sig in &signals {
+            let _ = svc.record_signal(ws, None, sig);
+        }
+    }
+    *state.guards.hygiene.lock().unwrap() = report.clone();
+    report
+}
+
+/// Run the hygiene sweep now (Settings → Guards).
+#[tauri::command]
+pub(crate) async fn run_hygiene_now(app: AppHandle) -> Result<hive_proto::HygieneReportDto, String> {
+    let report = tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        run_hygiene_sweep(&state)
+    })
+    .await
+    .map_err(map_err)?;
+    Ok(report)
+}
+
+/// The last hygiene sweep's results.
+#[tauri::command]
+pub(crate) fn get_hygiene_report(state: State<AppState>) -> hive_proto::HygieneReportDto {
+    state.guards.hygiene.lock().unwrap().clone()
 }
 
 /// Device-local guard signals for the active workspace (content-free: lease

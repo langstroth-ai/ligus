@@ -73,3 +73,20 @@ Only a **human member** (Contributor or above) can clear a lockdown, with
 clearing it is refused on every device. Anyone may lock a chat by hand.
 The detectors only record what kind of thing they found (a credential type, a
 marker name, a count), never the content.
+
+## Hygiene
+
+Agents leave things behind: a turn interrupted by a crash leaves its git
+worktree, a deleted chat leaves its checkout, a proposal waits for review
+while the branch moves on until its diff no longer applies. A few minutes
+after launch and then every six hours, Ligus sweeps the workspace's bound
+repository (**Sweep now** in Settings → Guards runs it at once):
+
+- a turn worktree with no turn running is removed; any unfinished edits are
+  saved first as a patch under `.ligus/stopped-turns/`;
+- the checkout of a deleted or archived chat is removed, but its
+  `hive/chat/...` branch is kept, since it may hold applied work nobody has
+  merged yet;
+- an open proposal whose diff no longer applies to its chat's branch is
+  marked **stale** and taken out of the Review inbox (you can still restore
+  it), instead of sitting there forever.

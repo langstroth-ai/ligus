@@ -212,6 +212,14 @@ impl ChatService {
         Ok(())
     }
 
+    /// Mark an open proposal stale (its diff no longer applies) and take it out
+    /// of the inbox; restoring it from the inbox un-dismisses it.
+    pub fn mark_proposal_stale(&mut self, session_id: Uuid, workspace_id: Uuid, proposal_id: Uuid) -> Result<()> {
+        self.append_signed(session_id, workspace_id, SessionEvent::ProposalMarkedStale { proposal_id })?;
+        self.set_proposals_dismissed(session_id, workspace_id, &[proposal_id], true)?;
+        Ok(())
+    }
+
     /// Record a device-local guard signal (never synced).
     pub fn record_signal(&self, workspace_id: Uuid, session_id: Option<Uuid>, signal: &GuardSignal) -> Result<()> {
         self.store.record_signal(workspace_id, session_id, signal)?;

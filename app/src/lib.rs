@@ -14340,6 +14340,8 @@ pub fn run() {
             guards::get_chat_lockdown,
             guards::clear_chat_lockdown,
             guards::lock_chat,
+            guards::run_hygiene_now,
+            guards::get_hygiene_report,
             get_app_info,
             list_relay_users,
             create_relay_user,

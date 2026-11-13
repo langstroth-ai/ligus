@@ -1,6 +1,14 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { approveJoin, getDearthState, setDearthMode, type DearthStateDto } from "@/lib/ipc";
+import {
+  approveJoin,
+  getDearthState,
+  getHygieneReport,
+  runHygieneNow,
+  setDearthMode,
+  type DearthStateDto,
+  type HygieneReportDto,
+} from "@/lib/ipc";
 import { toast, errMsg } from "@/components/Toast";
 import { Button, Section } from "@/components/ui";
 
@@ -26,6 +34,7 @@ export function GuardsSection() {
   return (
     <div>
       {d && <DearthPanel d={d} onChanged={() => qc.invalidateQueries({ queryKey: ["dearth-state"] })} />}
+      <HygienePanel />
     </div>
   );
 }
@@ -156,5 +165,58 @@ function DearthPanel({ d, onChanged }: { d: DearthStateDto; onChanged: () => voi
         </Section>
       )}
     </>
+  );
+}
+
+/// One-line summary of a sweep. Exported for tests.
+export function hygieneSummary(r: HygieneReportDto): string {
+  if (!r.ranAt) return "No sweep has run since Ligus started.";
+  if (!r.repoBound) return "No git repository is bound to this workspace on this device; nothing to sweep.";
+  const n = r.turnWorktreesRemoved + r.chatCheckoutsRemoved;
+  return `${n} leftover worktree${n === 1 ? "" : "s"} removed, ${r.staleProposals.length} stale proposal${r.staleProposals.length === 1 ? "" : "s"} set aside.`;
+}
+
+function HygienePanel() {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["hygiene-report"], queryFn: getHygieneReport });
+  const run = useMutation({
+    mutationFn: runHygieneNow,
+    onSuccess: (r) => {
+      qc.setQueryData(["hygiene-report"], r);
+      toast.success(hygieneSummary(r));
+    },
+    onError: (e) => toast.error(errMsg(e)),
+  });
+  const r = q.data;
+  return (
+    <Section
+      title="Hygiene"
+      action={
+        <Button disabled={run.isPending} onClick={() => run.mutate()}>
+          Sweep now
+        </Button>
+      }
+    >
+      <p className="mb-2 text-[13px] opacity-75">
+        Every few hours Ligus removes worktrees agents left behind (saving any unfinished edits as a patch), removes the
+        checkouts of deleted or archived chats (their branches are kept), and sets aside proposals whose changes no longer
+        apply to their chat&apos;s branch.
+      </p>
+      {r && (
+        <p className="text-[12px] opacity-70" data-testid="hygiene-summary">
+          {hygieneSummary(r)}
+          {r.ranAt ? ` Last sweep ${new Date(r.ranAt).toLocaleString()}.` : ""}
+        </p>
+      )}
+      {r && r.staleProposals.length > 0 && (
+        <ul className="mt-2 text-[13px]">
+          {r.staleProposals.map((p) => (
+            <li key={p.proposalId} className="opacity-80">
+              Stale: {p.title}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
   );
 }

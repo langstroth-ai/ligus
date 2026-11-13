@@ -114,6 +114,9 @@ pub struct GuardState {
     /// overlaid onto it by `ChatService::load`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub lockdowns: BTreeMap<Uuid, Vec<ChatLockdown>>,
+    /// Proposals the hygiene sweep found stale (their diff no longer applies).
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub stale_proposals: BTreeSet<Uuid>,
     /// Set on a chat session by the overlay: this chat's id, so
     /// [`GuardState::lockdown_active`] can find its entry.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -115,6 +115,30 @@ pub struct ChatLockdownDto {
     pub can_clear: bool,
 }
 
+/// A proposal the hygiene sweep marked stale.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct StaleProposalDto {
+    pub session_id: String,
+    pub proposal_id: String,
+    pub title: String,
+}
+
+/// The last hygiene sweep's results.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct HygieneReportDto {
+    /// RFC 3339; empty when no sweep ran yet.
+    pub ran_at: String,
+    /// False when the workspace has no git repository bound on this device.
+    pub repo_bound: bool,
+    pub turn_worktrees_removed: u32,
+    pub chat_checkouts_removed: u32,
+    pub stale_proposals: Vec<StaleProposalDto>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,5 +155,7 @@ mod tests {
         DearthStateDto::export_all(&cfg).unwrap();
         LockdownSignalDto::export_all(&cfg).unwrap();
         ChatLockdownDto::export_all(&cfg).unwrap();
+        StaleProposalDto::export_all(&cfg).unwrap();
+        HygieneReportDto::export_all(&cfg).unwrap();
     }
 }

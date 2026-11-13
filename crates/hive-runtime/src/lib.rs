@@ -20,6 +20,7 @@ pub mod git_worktree;
 pub mod github;
 pub mod guard_scan;
 pub mod host_presence;
+pub mod hygiene;
 pub mod identity_store;
 pub mod identity_verifier;
 pub mod lease_presence;

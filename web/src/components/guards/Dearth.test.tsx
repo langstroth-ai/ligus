@@ -8,6 +8,8 @@ const state: { d: DearthStateDto } = { d: null as unknown as DearthStateDto };
 const setDearthMode = vi.fn(async () => {});
 const approveJoin = vi.fn(async () => {});
 vi.mock("@/lib/ipc", () => ({
+  getHygieneReport: vi.fn(async () => ({ ranAt: "", repoBound: false, turnWorktreesRemoved: 0, chatCheckoutsRemoved: 0, staleProposals: [] })),
+  runHygieneNow: vi.fn(async () => ({ ranAt: "2026-11-13T00:00:00Z", repoBound: true, turnWorktreesRemoved: 2, chatCheckoutsRemoved: 0, staleProposals: [] })),
   getDearthState: vi.fn(async () => state.d),
   setDearthMode: (...a: unknown[]) => setDearthMode(...(a as [])),
   approveJoin: (...a: unknown[]) => approveJoin(...(a as [])),
@@ -15,7 +17,7 @@ vi.mock("@/lib/ipc", () => ({
 vi.mock("@/components/Toast", () => ({ toast: { success: vi.fn(), error: vi.fn() }, errMsg: (e: unknown) => String(e) }));
 
 import { DearthBanner, dearthSummary } from "./DearthBanner";
-import { GuardsSection } from "./GuardsSection";
+import { GuardsSection, hygieneSummary } from "./GuardsSection";
 
 const base: DearthStateDto = {
   enabled: false,
@@ -85,5 +87,21 @@ describe("guards settings", () => {
     expect(screen.queryByText("Switch off")).toBeNull();
     expect(screen.queryByText("Approve")).toBeNull();
     expect(screen.getByText("needs another Admin")).toBeInTheDocument();
+  });
+});
+
+describe("hygiene", () => {
+  it("summarizes a sweep", () => {
+    const r = { ranAt: "x", repoBound: true, turnWorktreesRemoved: 1, chatCheckoutsRemoved: 0, staleProposals: [] };
+    expect(hygieneSummary(r)).toBe("1 leftover worktree removed, 0 stale proposals set aside.");
+    expect(hygieneSummary({ ...r, repoBound: false })).toContain("No git repository");
+    expect(hygieneSummary({ ...r, ranAt: "" })).toContain("No sweep");
+  });
+
+  it("sweeps on demand", async () => {
+    state.d = base;
+    wrap(<GuardsSection />);
+    await userEvent.click(await screen.findByText("Sweep now"));
+    await waitFor(() => expect(screen.getByTestId("hygiene-summary").textContent).toContain("2 leftover worktrees removed"));
   });
 });

@@ -232,6 +232,10 @@ pub enum SessionEvent {
     /// A human member (Contributor+) clears a chat's lockdown. Config log;
     /// re-checked on ingest.
     ChatLockdownCleared { chat_id: Uuid },
+    /// The hygiene sweep found a proposal's diff no longer applies to its
+    /// chat's branch ("capped dead brood"): marked stale. Session-scoped
+    /// content, like a dismissal.
+    ProposalMarkedStale { proposal_id: Uuid },
     /// Forward-compat catch-all: an event `kind` this build does not recognize
     /// (produced by a newer client). Serde deserializes an unknown tag here
     /// instead of failing the whole stream; it projects as a no-op. The raw
@@ -292,6 +296,7 @@ impl SessionEvent {
             SessionEvent::JoinApproved { .. } => "joinApproved",
             SessionEvent::ChatLockdownRaised { .. } => "chatLockdownRaised",
             SessionEvent::ChatLockdownCleared { .. } => "chatLockdownCleared",
+            SessionEvent::ProposalMarkedStale { .. } => "proposalMarkedStale",
             SessionEvent::Unknown => "unknown",
         }
     }
@@ -646,6 +651,11 @@ impl ChatSession {
             }
             SessionEvent::ChatLockdownCleared { chat_id } => {
                 self.guards.lockdowns.remove(chat_id);
+            }
+            SessionEvent::ProposalMarkedStale { proposal_id } => {
+                if self.proposals.iter().any(|p| p.id == *proposal_id) {
+                    self.guards.stale_proposals.insert(*proposal_id);
+                }
             }
             // Unrecognized (newer-client) event — inert in this build.
             SessionEvent::Unknown => {}

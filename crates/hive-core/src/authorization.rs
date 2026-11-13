@@ -226,6 +226,7 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         // Dismiss only hides a proposal from the inbox; it destroys no record
         // and settles no vote, so it carries the same content-level floor.
         | SessionEvent::ProposalDismissed { .. }
+        | SessionEvent::ProposalMarkedStale { .. }
         // A refinement note is collaboration content (a comment/change request),
         // same content-level floor as posting a message or voting — so a
         // role-qualified agent can refine too.

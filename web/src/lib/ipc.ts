@@ -1363,6 +1363,14 @@ export const clearChatLockdown = (sessionId: string) => invoke<void>("clear_chat
 /// Lock a chat down by hand.
 export const lockChat = (sessionId: string) => invoke<void>("lock_chat", { sessionId });
 
+// ── Workspace guards: hygiene ──
+export type { HygieneReportDto } from "@/bindings/HygieneReportDto";
+export const getHygieneReport = () =>
+  invoke<import("@/bindings/HygieneReportDto").HygieneReportDto>("get_hygiene_report");
+/// Sweep leftover worktrees and stale proposals now.
+export const runHygieneNow = () =>
+  invoke<import("@/bindings/HygieneReportDto").HygieneReportDto>("run_hygiene_now");
+
 /// Fires whenever a workflow run's persisted state changes.
 export const onWorkflowRun = (
   cb: (e: WorkflowRunEvent) => void,
