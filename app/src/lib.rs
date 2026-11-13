@@ -10,7 +10,7 @@
 //! fires a native notification.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use hive_core::context_budget::token_estimator;
@@ -1031,14 +1031,14 @@ fn migrate_catalog_mcp_auth(settings: &mut LiveSettings, managed: &[McpServerSpe
     changed
 }
 
-fn ensure_workspace_hive_dir(workspace_root: &str) -> Result<PathBuf, String> {
-    let dir = PathBuf::from(workspace_root).join(".hive");
-    std::fs::create_dir_all(&dir).map_err(map_err)?;
-    Ok(dir)
-}
-
-fn workspace_config_path(workspace_root: &str) -> PathBuf {
-    PathBuf::from(workspace_root).join("hive.config.toml")
+/// A workspace state file (`.ligus/<name>`, else an existing `.hive/<name>`,
+/// see `hive_core::compat::workspace_state_path`), with its directory created.
+fn workspace_state_file(workspace_root: &str, name: &str) -> Result<PathBuf, String> {
+    let path = hive_core::compat::workspace_state_path(Path::new(workspace_root), name);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(map_err)?;
+    }
+    Ok(path)
 }
 
 fn workspace_index_path(data_dir: &PathBuf) -> PathBuf {
@@ -1113,7 +1113,7 @@ fn is_auto_adoptable_workspace(path: &str) -> bool {
     if is_shallow_or_system_dir(p) {
         return false;
     }
-    p.join(".git").exists() || p.join(".hive").exists()
+    p.join(".git").exists() || hive_core::compat::has_workspace_dir(p)
 }
 
 /// Choose the workspace root at launch. A still-valid persisted root the user
@@ -2006,16 +2006,10 @@ fn load_config_document_for_workspace(
     data_dir: &PathBuf,
     workspace_root: &str,
 ) -> Result<toml::Value, String> {
-    let workspace_path = workspace_config_path(workspace_root);
-    let source_path = if workspace_path.exists() {
-        workspace_path
-    } else {
-        let fallback = data_dir.join("hive.config.toml");
-        if fallback.exists() {
-            fallback
-        } else {
-            return Ok(toml::Value::Table(Default::default()));
-        }
+    let found = hive_core::compat::find_config_file(Path::new(workspace_root))
+        .or_else(|| hive_core::compat::find_config_file(data_dir));
+    let Some(source_path) = found else {
+        return Ok(toml::Value::Table(Default::default()));
     };
     let text = std::fs::read_to_string(source_path).map_err(map_err)?;
     toml::from_str(&text).map_err(map_err)
@@ -2026,15 +2020,15 @@ fn save_workspace_config_document(workspace_root: &str, doc: &toml::Value) -> Re
         return Err("workspace root is empty".to_string());
     }
     let text = toml::to_string_pretty(doc).map_err(map_err)?;
-    std::fs::write(workspace_config_path(workspace_root), text).map_err(map_err)
+    std::fs::write(hive_core::compat::config_file_for_write(Path::new(workspace_root)), text).map_err(map_err)
 }
 
 fn managed_runtime_catalog_path(workspace_root: &str) -> Result<PathBuf, String> {
-    Ok(ensure_workspace_hive_dir(workspace_root)?.join("runtimes.json"))
+    workspace_state_file(workspace_root, "runtimes.json")
 }
 
 fn managed_mcp_catalog_path(workspace_root: &str) -> Result<PathBuf, String> {
-    Ok(ensure_workspace_hive_dir(workspace_root)?.join("mcp-servers.json"))
+    workspace_state_file(workspace_root, "mcp-servers.json")
 }
 
 fn load_managed_runtimes(workspace_root: &str) -> Result<Vec<RuntimeTarget>, String> {
@@ -2082,10 +2076,7 @@ fn load_workspace_catalogs(
     let mut base_runtimes = Vec::new();
     let mut default_runtime_id = "anthropic".to_string();
     let mut base_mcp = Vec::new();
-    for candidate in [
-        PathBuf::from(workspace_root).join("hive.config.toml"),
-        data_dir.join("hive.config.toml"),
-    ] {
+    for candidate in hive_core::compat::config_candidates(&[Path::new(workspace_root), data_dir]) {
         if let Ok(text) = std::fs::read_to_string(&candidate) {
             if let Ok(cfg) = hive_core::config::load_from_str(&text) {
                 base_runtimes = cfg.runtimes;
@@ -10401,10 +10392,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
     let _ = remember_workspace(&data_dir, &workspace_root);
 
     let mut config_relay_endpoint: Option<String> = None;
-    for candidate in [
-        PathBuf::from(&workspace_root).join("hive.config.toml"),
-        data_dir.join("hive.config.toml"),
-    ] {
+    for candidate in hive_core::compat::config_candidates(&[Path::new(&workspace_root), &data_dir]) {
         if let Ok(text) = std::fs::read_to_string(&candidate) {
             if let Ok(cfg) = hive_core::config::load_from_str(&text) {
                 config_relay_endpoint = cfg

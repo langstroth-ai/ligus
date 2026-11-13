@@ -428,11 +428,13 @@ fn clip_bytes(s: &str, max: usize) -> &str {
 /// Directories a write may never land in, at any depth: git internals (hooks
 /// run code), Hive's own state (event logs), and agent/editor configs that
 /// run commands on their own (`.claude` hooks, `.vscode` folder-open tasks).
-const WRITE_PROTECTED_DIRS: &[&str] = &[".git", ".hive", ".claude", ".vscode"];
+/// Both workspace state dir names (`.ligus`, legacy `.hive`) stay protected
+/// permanently.
+const WRITE_PROTECTED_DIRS: &[&str] = &[".git", ".ligus", ".hive", ".claude", ".vscode"];
 /// Files at the root a write may never replace: Hive's workspace config
 /// (declares stdio MCP server commands and runtime endpoints, loaded on
 /// workspace open) and direnv's auto-sourced `.envrc`.
-const WRITE_PROTECTED_ROOT_FILES: &[&str] = &["hive.config.toml", ".envrc"];
+const WRITE_PROTECTED_ROOT_FILES: &[&str] = &["ligus.config.toml", "hive.config.toml", ".envrc"];
 
 /// Why a root-relative path may not be written, if it may not. Matched
 /// case-insensitively: macOS volumes usually are, so `.GIT/config` is
@@ -1189,7 +1191,7 @@ mod tests {
         assert_eq!(fs::read_to_string(root.join("hive.config.toml")).unwrap(), "# cfg\n");
         // Hive's event logs, and configs that run commands by themselves.
         fail(&t, EDIT_FILE, json!({"path": ".hive/events/s.ndjson", "old_string": "{}", "new_string": "x"})).await;
-        for p in [".hive/new.ndjson", ".claude/settings.json", ".vscode/tasks.json", ".envrc", "sub/.hive/x"] {
+        for p in [".hive/new.ndjson", ".claude/settings.json", ".vscode/tasks.json", ".envrc", "sub/.hive/x", ".ligus/x", "sub/.Ligus/x", "ligus.config.toml", "Ligus.Config.TOML"] {
             fail(&t, WRITE_FILE, json!({"path": p, "content": "x"})).await;
         }
         // Reading them is still fine, and so are look-alikes elsewhere.

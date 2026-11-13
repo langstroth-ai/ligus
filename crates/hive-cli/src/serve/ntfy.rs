@@ -38,7 +38,7 @@ impl Ntfy {
             .post(self.endpoint())
             .timeout(Duration::from_secs(5))
             .header("Title", header_text(&n.title))
-            .header("Click", format!("hive://chat/{}", n.chat_id))
+            .header("Click", hive_core::compat::deep_link(&format!("chat/{}", n.chat_id)))
             .header("Tags", n.tags)
             .body(n.body.clone());
         if let Some(t) = &self.token {

@@ -35,3 +35,6 @@ web/.vite/
 
 # Baked GitHub OAuth client id for official builds (build.rs reads it); not committed
 app/github_client_id
+
+# Local workspace runtime state (new name)
+.ligus/

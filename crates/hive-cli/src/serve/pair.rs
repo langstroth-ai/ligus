@@ -80,10 +80,12 @@ pub fn token_matches(expected: &str, given: &str) -> bool {
     a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-/// `hive://pair?url=<base64url(serverURL), no padding>&token=<token>`.
+/// `hive://pair?url=<base64url(serverURL), no padding>&token=<token>`. The
+/// scheme comes from `hive_core::compat::DEEP_LINK_SCHEME`; phones accept
+/// `ligus://` too.
 pub fn pairing_url(server_url: &str, token: &str) -> String {
     let url = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(server_url.trim_end_matches('/').as_bytes());
-    format!("hive://pair?url={url}&token={token}")
+    hive_core::compat::deep_link(&format!("pair?url={url}&token={token}"))
 }
 
 /// Whether `ip` is an address the API may listen on without an explicit
@@ -144,7 +146,10 @@ mod tests {
     #[test]
     fn pairing_url_has_the_contract_shape() {
         let link = pairing_url("http://100.101.102.104:8787/", "abc123");
-        let rest = link.strip_prefix("hive://pair?").expect("hive://pair? prefix");
+        assert!(link.starts_with("hive://pair?"), "{link}");
+        let rest = hive_core::compat::strip_deep_link_scheme(&link)
+            .and_then(|r| r.strip_prefix("pair?"))
+            .expect("pair link");
         let mut url = None;
         let mut token = None;
         for kv in rest.split('&') {

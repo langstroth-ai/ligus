@@ -60,6 +60,16 @@ fn env_opt(k: &str) -> Option<String> {
     hive_core::compat::env_opt(k)
 }
 
+/// `~/.ligus` if it exists, else `~/.hive` if it exists, else the default new
+/// dir (see `hive_core::compat::home_data_dir`). Nothing is moved.
+fn default_home_data_dir(home: &std::path::Path) -> PathBuf {
+    let (dir, legacy) = hive_core::compat::home_data_dir(home);
+    if legacy {
+        eprintln!("note: using legacy data dir {} (set LIGUS_DATA_DIR or rename it to ~/.ligus to silence this)", dir.display());
+    }
+    dir
+}
+
 /// Persisted connection config (written by `hive enroll`), read as a fallback
 /// under the env vars so a headless box needn't re-export them each run.
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -88,7 +98,7 @@ fn load_file_config(data_dir: &std::path::Path) -> FileConfig {
 fn config() -> Config {
     let data_dir = env_opt("HIVE_DATA_DIR")
         .map(PathBuf::from)
-        .or_else(|| env_opt("HOME").map(|h| PathBuf::from(h).join(".hive")))
+        .or_else(|| env_opt("HOME").map(|h| default_home_data_dir(std::path::Path::new(&h))))
         .unwrap_or_else(|| PathBuf::from("./hive-data"));
     // Env wins; the saved config.toml (from `hive enroll`) fills the rest.
     let f = load_file_config(&data_dir);

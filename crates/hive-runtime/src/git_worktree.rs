@@ -83,10 +83,9 @@ fn chat_branch(chat_id: &str) -> String {
 
 /// The checkout path of a chat's persistent worktree.
 fn chat_worktree_path(repo_root: &Path, chat_id: &str) -> PathBuf {
-    repo_root
-        .join(".hive")
-        .join("worktrees")
-        .join(format!("chat-{}", slug(chat_id)))
+    // An existing checkout keeps the path git recorded (`.hive/worktrees/…`);
+    // new ones go under the current workspace state dir.
+    hive_core::compat::workspace_state_path(repo_root, format!("worktrees/chat-{}", slug(chat_id)))
 }
 
 /// Ensure a chat's **persistent** base worktree exists and return its path.
@@ -164,7 +163,7 @@ impl Worktree {
     pub fn create_from(repo_root: &Path, turn_id: &str, base_ref: &str) -> io::Result<Worktree> {
         let slug = slug(turn_id);
         let branch = format!("hive/turn-{slug}");
-        let path = repo_root.join(".hive").join("worktrees").join(&slug);
+        let path = hive_core::compat::workspace_state_path(repo_root, Path::new("worktrees").join(&slug));
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -276,7 +275,7 @@ impl LazyTurnWorktree {
 
     /// Where a stopped turn's unfinished edits are saved (see `Drop`).
     pub fn stopped_patch_path(repo_root: &Path, turn_id: &str) -> PathBuf {
-        repo_root.join(".hive").join("stopped-turns").join(format!("{}.patch", slug(turn_id)))
+        hive_core::compat::workspace_state_path(repo_root, Path::new("stopped-turns").join(format!("{}.patch", slug(turn_id))))
     }
 
     /// The worktree cut so far, if any (without taking it).
