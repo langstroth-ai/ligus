@@ -91,6 +91,33 @@ follow-ups and **not wired** in the current Rust build — relay forwarding
 - **LAN discovery** — zero-config local peer announcement.
 - **Collaborative-text CRDT** — concurrent editing of proposal bodies.
 
+## Frozen protocol identifiers
+
+The strings below contain the word `hive`. They are protocol and cryptographic
+constants, not branding: they never change with the product name, because
+renaming any of them would break mixed-version peers, paired phones, relays,
+invites, or (for the cryptographic ones) every existing signature and encrypted
+workspace. Tests pin their exact bytes. If one ever has to change, it ships as a
+new protocol version accepted alongside the old one.
+
+| Identifier | Kind | Where |
+|---|---|---|
+| `hive-envelope-v3\0` | Signature context (event envelopes) | `hive-core/src/crypto.rs` |
+| `hive-device-cert-v1\0` | Signature context (device certificates) | `hive-core/src/crypto.rs` |
+| `hive-workspace-key-seal-v1` | HKDF info (sealing workspace keys to devices) | `hive-core/src/e2ee.rs` |
+| `hive-workspace-key-argon2id` | Argon2id salt (passphrase workspace keys) | `hive-core/src/e2ee.rs` |
+| `hive-device-enroll-v1\0` | Signature context (device enrollment codes) | `hive-runtime/src/device_enroll.rs` |
+| `hive-tunnel/1` | HKDF salt and `ctx` label (phone tunnel) | `hive-cli/src/serve/tunnel/mod.rs` |
+| `hive-tunnel.1` | WebSocket subprotocol (phone tunnel) | `hive-cli/src/serve/tunnel/mod.rs` |
+| `hive/sync/1` | iroh ALPN (peer sync) | `hive-runtime/src/peer_iroh.rs` |
+| `hrt1.` | Relay access-token format | relay, clients |
+| `hpc1.` | Phone credential format | `hive-cli/src/serve/tunnel/cred.rs` |
+| `hivews1:` | Workspace invite prefix | app, CLI |
+| `hivedev1:` | Device enrollment code prefix | `hive-runtime/src/device_enroll.rs` |
+| `hive_`, `hivepeer1:` | Peer code prefixes | `hive-runtime/src/peer.rs` |
+| `X-Hive-Github-Token`, `X-Hive-More`, `X-Hive-Next-After`, `X-Hive-Event-Id` | Relay HTTP headers | relay, clients |
+| `hive://` | Phone deep-link scheme (`hive://pair`, `hive://chat/<id>`) | `hive serve`, phone app |
+
 ## Versioning
 
 Protocols carry an explicit version: the relay namespaces its routes under

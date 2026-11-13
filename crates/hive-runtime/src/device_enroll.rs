@@ -46,6 +46,8 @@ use crate::envelope_verifier::{build_roster, DeviceKeyResolver};
 pub const CODE_PREFIX: &str = "hivedev1:";
 /// Longest label carried in a code, in bytes.
 pub const MAX_LABEL: usize = 64;
+// FROZEN signature context: never rename with the product (Hive -> Ligus); every
+// outstanding enrollment code is signed over it. Pinned in the tests below.
 const PREIMAGE_TAG: &[u8] = b"hive-device-enroll-v1\0";
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -332,6 +334,19 @@ pub fn accounts_certifying(trust: &[SessionEventEnvelope], device: Uuid, except:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pins the enrollment signature context and the wire prefix as hex so a
+    /// textual product rename cannot change them.
+    #[test]
+    fn enroll_constants_are_frozen() {
+        let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        // b"hive-device-enroll-v1\0"
+        assert_eq!(hex(PREIMAGE_TAG), "686976652d6465766963652d656e726f6c6c2d763100");
+        // "hivedev1:"
+        assert_eq!(hex(CODE_PREFIX.as_bytes()), "68697665646576313a");
+        let pre = preimage(Uuid::nil(), Uuid::nil(), &[5u8; 32], "box");
+        assert_eq!(hex(&pre[..PREIMAGE_TAG.len()]), hex(PREIMAGE_TAG));
+    }
 
     #[test]
     fn code_roundtrips_and_verifies() {

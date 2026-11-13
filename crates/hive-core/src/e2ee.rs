@@ -18,7 +18,14 @@ use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::crypto::CryptoError;
 
+// FROZEN cryptographic constant. Do NOT rename with the product (Hive -> Ligus):
+// changing the HKDF info breaks every sealed workspace key already on disk or on
+// a relay. Pinned by `crypto_constants_are_frozen` below.
 const HKDF_INFO: &[u8] = b"hive-workspace-key-seal-v1";
+// FROZEN: the Argon2id salt for passphrase-derived workspace keys. Changing it
+// re-derives every passphrase workspace key, so every existing encrypted
+// workspace becomes unreadable. Never rename it with the product.
+const ARGON2_SALT: &[u8] = b"hive-workspace-key-argon2id";
 
 /// An X25519 key-agreement keypair for receiving sealed workspace keys.
 pub struct KeyAgreementKeypair {
@@ -164,7 +171,7 @@ pub fn derive_workspace_key(passphrase: &str) -> [u8; 32] {
     let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut key = [0u8; 32];
     argon
-        .hash_password_into(passphrase.as_bytes(), b"hive-workspace-key-argon2id", &mut key)
+        .hash_password_into(passphrase.as_bytes(), ARGON2_SALT, &mut key)
         .expect("argon2 derive");
     key
 }
@@ -282,6 +289,27 @@ mod tests {
         let legacy = serde_json::json!({ "nonce": sealed.nonce, "ciphertext": sealed.ciphertext });
         let parsed: SealedEnvelope = serde_json::from_value(legacy).unwrap();
         assert_eq!(parsed.version, 0, "missing version defaults to base epoch");
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// Pins the exact bytes of the E2EE domain-separation constants, written as
+    /// hex so a textual find-and-replace of the product name cannot also
+    /// "update" the expectation, plus known-answer vectors for the derivations
+    /// that consume them. If this fails, a rename touched a frozen constant:
+    /// revert it. Changing these makes every existing workspace unreadable.
+    #[test]
+    fn crypto_constants_are_frozen() {
+        // b"hive-workspace-key-seal-v1"
+        assert_eq!(hex(HKDF_INFO), "686976652d776f726b73706163652d6b65792d7365616c2d7631");
+        // b"hive-workspace-key-argon2id"
+        assert_eq!(hex(ARGON2_SALT), "686976652d776f726b73706163652d6b65792d6172676f6e326964");
+        assert_eq!(hex(&derive_workspace_key("pinned passphrase")), "60cc65fc19c112e3699959d5a56a708fc6ac23f4362d761718dfd7d3067f3ec2");
+        let (key, nonce) = derive_key_nonce(&[7u8; 32], &[1u8; 32], &[2u8; 32]);
+        assert_eq!(hex(&key), "2362b77b54fa70c7b4e1c7db9cb7efdefacc3840aaeee8cd64fd4a0d8f52d58f");
+        assert_eq!(hex(&nonce), "642b977119bafd3df8edc1f0");
     }
 
     #[test]

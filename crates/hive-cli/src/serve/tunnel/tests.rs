@@ -14,6 +14,16 @@ use super::frame::{self, Frame, RequestHead, ResponseHead};
 use super::testkit::{self, HostInfo, PhoneConn, PhoneKeys};
 use super::*;
 
+/// The tunnel's crypto label (HKDF salt, every `ctx` string) and WebSocket
+/// subprotocol are frozen wire/crypto identifiers. Pinned as hex so a textual
+/// product rename can't change them.
+#[test]
+fn tunnel_identifiers_are_frozen() {
+    let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    assert_eq!(hex(LABEL.as_bytes()), "686976652d74756e6e656c2f31"); // hive-tunnel/1
+    assert_eq!(hex(SUBPROTOCOL.as_bytes()), "686976652d74756e6e656c2e31"); // hive-tunnel.1
+}
+
 fn vectors() -> Value {
     let p = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/relay-tunnel/vectors.json");
     serde_json::from_str(&std::fs::read_to_string(p).expect("vectors.json")).unwrap()

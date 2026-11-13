@@ -106,6 +106,8 @@ pub fn envelope_preimage(env: &SessionEventEnvelope) -> Vec<u8> {
     // never fail in practice) rather than emitting empty bytes, which would have
     // let two payloads share a preimage — and thus a signature. Breaking: v3
     // signatures differ from v2, so events signed under v2 no longer verify.
+    // FROZEN signature context: never rename with the product (see
+    // `signature_contexts_are_frozen`); every stored signature depends on it.
     out.extend_from_slice(b"hive-envelope-v3\0");
     out.extend_from_slice(env.workspace_id.as_bytes());
     out.extend_from_slice(env.session_id.as_bytes());
@@ -227,6 +229,7 @@ impl DeviceCertificate {
         issued_at: Timestamp,
     ) -> Vec<u8> {
         let mut out = Vec::with_capacity(96);
+        // FROZEN signature context: never rename with the product.
         out.extend_from_slice(b"hive-device-cert-v1\0");
         out.extend_from_slice(device_id.as_bytes());
         out.extend_from_slice(device_public_key);
@@ -307,6 +310,27 @@ mod tests {
         assert!(verify(&kp.public_key_bytes(), msg, &sig).is_ok());
         // tampered message fails
         assert!(verify(&kp.public_key_bytes(), b"a different message!", &sig).is_err());
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// Pins the signature domain-separation prefixes as hex so a textual rename
+    /// of the product cannot slip through: changing either invalidates every
+    /// envelope signature / device certificate ever issued.
+    #[test]
+    fn signature_contexts_are_frozen() {
+        // b"hive-envelope-v3\0"
+        let env = envelope_preimage(&sample_envelope());
+        assert_eq!(hex(&env[..17]), "686976652d656e76656c6f70652d763300");
+        // b"hive-device-cert-v1\0"
+        let ts: Timestamp = serde_json::from_value(serde_json::json!("2026-01-01T00:00:00Z")).unwrap();
+        let cert = DeviceCertificate::preimage(Uuid::nil(), &[9u8; 32], Uuid::nil(), ts);
+        assert_eq!(hex(&cert[..20]), "686976652d6465766963652d636572742d763100");
+        // Known-answer: a fixed seed signing the fixed cert preimage.
+        let kp = SigningKeypair::from_seed(&[3u8; 32]).unwrap();
+        assert_eq!(hex(&kp.sign(&cert)), "7c892c2e07d1cbac833c5e5575e03a557153fbe86371c8b2143dae1d21876621c208a3a4e15f71fc33af80b7dcf356c9afd9b810ad8cdf210a136d7632b8c504");
     }
 
     #[test]

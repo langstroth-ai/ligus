@@ -51,8 +51,11 @@ pub use keys::HostKeys;
 pub use phones::{PhoneRecord, Registry};
 
 /// The protocol label used in every `ctx` string and as the HKDF salt.
+/// FROZEN (crypto domain separation + wire protocol): a legacy identifier from
+/// the project's former name that must never be renamed with the product.
 pub const LABEL: &str = "hive-tunnel/1";
-/// The WebSocket subprotocol every tunnel endpoint requires.
+/// The WebSocket subprotocol every tunnel endpoint requires. FROZEN wire
+/// identifier (paired phones and relays negotiate it); never rename.
 pub const SUBPROTOCOL: &str = "hive-tunnel.1";
 /// Credential lifetime the host issues (§5).
 pub const CRED_LIFETIME_SECS: u64 = 90 * 86_400;

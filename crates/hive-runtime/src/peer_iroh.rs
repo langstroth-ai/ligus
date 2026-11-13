@@ -15,7 +15,8 @@ use tokio::sync::{mpsc, Mutex};
 
 use crate::peer::{PeerError, PeerId, PeerLink};
 
-/// ALPN identifying Hive's envelope-sync protocol.
+/// ALPN identifying Hive's envelope-sync protocol. FROZEN wire identifier
+/// (mixed-version peers negotiate it); never rename with the product.
 const ALPN: &[u8] = b"hive/sync/1";
 /// Max bytes accepted for a single message (one envelope), 16 MiB.
 const MAX_MSG: usize = 16 * 1024 * 1024;
@@ -134,5 +135,14 @@ impl PeerLink for IrohNode {
 
     fn local_id(&self) -> &PeerId {
         &self.local
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn alpn_is_frozen() {
+        let hex: String = super::ALPN.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(hex, "686976652f73796e632f31"); // hive/sync/1
     }
 }
