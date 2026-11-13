@@ -4,13 +4,13 @@
 //! The desktop app configures MCP servers through a UI that writes an
 //! `mcp_servers` table into `hive.config.toml` and gates each one behind an
 //! explicit *enable* toggle. A headless worker has no UI, so it reads the same
-//! table shape from a file named by `HIVE_MCP_CONFIG`. Presence in that file
+//! table shape from a file named by `LIGUS_MCP_CONFIG`. Presence in that file
 //! **is** the opt-in (an operator wrote and provisioned it), so servers default
 //! to `enabled = true` here — set `enabled = false` to keep one inert.
 //!
 //! Secrets never live in the TOML: an HTTP/SSE server's bearer token is named
 //! by `token_env` and resolved from the worker's environment (the same
-//! out-of-band convention as `HIVE_WS_SECRET_*`). A stdio server's child process
+//! out-of-band convention as `LIGUS_WS_SECRET_*`). A stdio server's child process
 //! inherits the worker's environment, so its provider token (e.g.
 //! `GITHUB_PERSONAL_ACCESS_TOKEN`) is provisioned there.
 
@@ -19,7 +19,7 @@ use hive_runtime::{McpServerSpec, McpTransport};
 use serde::Deserialize;
 
 /// The env var naming the headless MCP config TOML file.
-pub const CONFIG_ENV: &str = "HIVE_MCP_CONFIG";
+pub const CONFIG_ENV: &str = "LIGUS_MCP_CONFIG";
 
 #[derive(Debug, Default, Deserialize)]
 struct RawConfig {
@@ -55,7 +55,7 @@ fn default_true() -> bool {
     true
 }
 
-/// Load the MCP servers named by `HIVE_MCP_CONFIG`. Unset or empty → no servers
+/// Load the MCP servers named by `LIGUS_MCP_CONFIG`. Unset or empty → no servers
 /// (an empty vec), so the caller behaves exactly as it did before MCP wiring.
 pub fn load_from_env() -> Result<Vec<McpServerSpec>> {
     let Some(path) = hive_core::compat::var(CONFIG_ENV).ok().filter(|s| !s.trim().is_empty()) else {
@@ -114,7 +114,7 @@ mod tests {
 
     #[test]
     fn parses_stdio_and_http_servers() {
-        std::env::set_var("HIVE_MCP_TEST_TOKEN", "secret-abc");
+        std::env::set_var("LIGUS_MCP_TEST_TOKEN", "secret-abc");
         let toml = r#"
 [[mcp_servers]]
 id = "fs"
@@ -126,7 +126,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/data"]
 id = "linear"
 transport = "http"
 url = "https://mcp.linear.app/mcp"
-token_env = "HIVE_MCP_TEST_TOKEN"
+token_env = "LIGUS_MCP_TEST_TOKEN"
 "#;
         let specs = specs_from_str(toml).unwrap();
         assert_eq!(specs.len(), 2);
@@ -155,7 +155,7 @@ token_env = "HIVE_MCP_TEST_TOKEN"
         );
         assert_eq!(specs[1].auth.as_deref(), Some("secret-abc"));
 
-        std::env::remove_var("HIVE_MCP_TEST_TOKEN");
+        std::env::remove_var("LIGUS_MCP_TEST_TOKEN");
     }
 
     #[test]

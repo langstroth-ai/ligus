@@ -1,7 +1,7 @@
 //! Bearer token + pairing for `ligus serve`.
 //!
 //! The token is 32 random bytes, hex-encoded, kept in a 0600 file
-//! (`<HIVE_DATA_DIR>/serve.token` by default) and generated on first run. The
+//! (`<LIGUS_DATA_DIR>/serve.token` by default) and generated on first run. The
 //! phone gets it once, through the pairing link
 //! `hive://pair?url=<base64url(serverURL)>&token=<token>` shown as a terminal
 //! QR code by `ligus serve --pair`, and keeps it in the iOS Keychain.
@@ -64,7 +64,7 @@ pub fn load_existing_token(path: &Path) -> Result<String> {
     let t = std::fs::read_to_string(path).map(|s| s.trim().to_string()).unwrap_or_default();
     if t.is_empty() {
         bail!(
-            "no serve token at {}: start `ligus serve` first, or point HIVE_DATA_DIR / --token-file at the server's data dir",
+            "no serve token at {}: start `ligus serve` first, or point LIGUS_DATA_DIR / --token-file at the server's data dir",
             path.display()
         );
     }

@@ -1,9 +1,9 @@
 //! `GET /v1/dashboard` — a dashboard whose content the host defines.
 //!
 //! The owner describes sections of panels in `dashboard.toml` in the serve
-//! data dir (or `HIVE_DASHBOARD_FILE`); the format is in `docs/dashboard.md`.
+//! data dir (or `LIGUS_DASHBOARD_FILE`); the format is in `docs/dashboard.md`.
 //! The host evaluates every panel itself — Prometheus instant/range queries
-//! against `HIVE_PROMETHEUS_URL`, a GET of a JSON URL on the host's network
+//! against `LIGUS_PROMETHEUS_URL`, a GET of a JSON URL on the host's network
 //! plus a JSON pointer, a named metric of the workspace (`hive`, see
 //! `dashboard_hive.rs`), or a call of an MCP tool the file allow-lists — and
 //! serves the results, so the phone never talks to any of them.
@@ -16,7 +16,7 @@
 //! Every dashboard starts with the built-in "Hive" section unless the file
 //! says `builtin = false`. With no config file, that section is the whole
 //! dashboard, plus [`default_config`]'s lab sections (the old `/v1/lab/status`
-//! content, sections that have no data dropped) when `HIVE_PROMETHEUS_URL` is
+//! content, sections that have no data dropped) when `LIGUS_PROMETHEUS_URL` is
 //! set.
 
 use std::collections::{HashMap, HashSet};
@@ -183,7 +183,7 @@ pub enum SourceKind {
     HttpJson,
     /// A named metric of the workspace this host serves.
     Hive,
-    /// A tool on one of the host's MCP servers (`HIVE_MCP_CONFIG`).
+    /// A tool on one of the host's MCP servers (`LIGUS_MCP_CONFIG`).
     Mcp,
 }
 
@@ -290,7 +290,7 @@ pub struct PanelConfig {
     /// A named workspace metric (hive), e.g. "proposals.open".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metric: Option<String>,
-    /// MCP server id from `HIVE_MCP_CONFIG` (mcp).
+    /// MCP server id from `LIGUS_MCP_CONFIG` (mcp).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server: Option<String>,
     /// MCP tool name (mcp); `<server>/<tool>` must be in `[mcp] allow`.
@@ -418,9 +418,9 @@ pub fn parse(text: &str) -> Result<DashboardConfig> {
     Ok(toml::from_str(text)?)
 }
 
-/// Where the config lives: `HIVE_DASHBOARD_FILE`, else `<data dir>/dashboard.toml`.
+/// Where the config lives: `LIGUS_DASHBOARD_FILE`, else `<data dir>/dashboard.toml`.
 pub fn config_path(data_dir: &Path) -> PathBuf {
-    crate::env_opt("HIVE_DASHBOARD_FILE").map(PathBuf::from).unwrap_or_else(|| data_dir.join(FILE_NAME))
+    crate::env_opt("LIGUS_DASHBOARD_FILE").map(PathBuf::from).unwrap_or_else(|| data_dir.join(FILE_NAME))
 }
 
 /// What the host serves from.
@@ -564,7 +564,7 @@ pub fn validate_panel(p: &PanelConfig, defaults: &DashboardConfig) -> Result<()>
     match src {
         SourceKind::Hive => return validate_hive(p),
         SourceKind::Mcp => {
-            need(&p.server, "a server (an id from HIVE_MCP_CONFIG)")?;
+            need(&p.server, "a server (an id from LIGUS_MCP_CONFIG)")?;
             need(&p.tool, "a tool")?;
             let (server, tool) = (p.server.as_deref().unwrap_or_default(), p.tool.as_deref().unwrap_or_default());
             if !defaults.mcp.as_ref().is_some_and(|m| m.allows(server, tool)) {
@@ -777,7 +777,7 @@ pub struct Sources<'a> {
     pub prometheus_url: &'a str,
     /// `None`: no workspace to read (no built-in section, hive panels fail).
     pub hive: Option<&'a dyn HiveProvider>,
-    /// The host's MCP servers (`HIVE_MCP_CONFIG`), or why there are none.
+    /// The host's MCP servers (`LIGUS_MCP_CONFIG`), or why there are none.
     pub mcp: std::result::Result<&'a hive_runtime::McpRegistry, &'a str>,
 }
 
@@ -785,7 +785,7 @@ impl<'a> Sources<'a> {
     /// Prometheus and HTTP only.
     #[cfg(test)]
     pub fn new(http: &'a reqwest::Client, prometheus_url: &'a str) -> Self {
-        Self { http, prometheus_url, hive: None, mcp: Err("no MCP servers are configured on this host (HIVE_MCP_CONFIG)") }
+        Self { http, prometheus_url, hive: None, mcp: Err("no MCP servers are configured on this host (LIGUS_MCP_CONFIG)") }
     }
 }
 
@@ -922,9 +922,9 @@ async fn call_mcp(p: &PanelConfig, src: &Sources<'_>) -> Result<McpDoc> {
     match registry.servers.iter().find(|s| s.id == server) {
         None => {
             let known: Vec<&str> = registry.servers.iter().map(|s| s.id.as_str()).collect();
-            bail!("no MCP server '{server}' in HIVE_MCP_CONFIG (it has: {})", if known.is_empty() { "none".into() } else { known.join(", ") });
+            bail!("no MCP server '{server}' in LIGUS_MCP_CONFIG (it has: {})", if known.is_empty() { "none".into() } else { known.join(", ") });
         }
-        Some(s) if !s.enabled => bail!("MCP server '{server}' is disabled in HIVE_MCP_CONFIG"),
+        Some(s) if !s.enabled => bail!("MCP server '{server}' is disabled in LIGUS_MCP_CONFIG"),
         Some(_) => {}
     }
     let args = Value::Object(p.args.clone().unwrap_or_default());
@@ -1664,7 +1664,7 @@ fn rounded(mut p: PanelConfig, places: u32) -> PanelConfig {
 }
 
 /// What `/v1/lab/status` showed, as a dashboard: power and cost, gateway
-/// workers, temperatures (`HIVE_LAB_TEMPS`), and the solar offset when an
+/// workers, temperatures (`LIGUS_LAB_TEMPS`), and the solar offset when an
 /// Enphase exporter reports in. Every section is optional, so a host without
 /// those metrics shows only what it has.
 pub fn default_config(temps: Vec<(String, String)>) -> DashboardConfig {
@@ -1809,7 +1809,7 @@ fn store_hive(cfg: &crate::Config) -> Option<StoreHive> {
     let snap = (|| -> Result<HiveSnapshot> {
         let svc = crate::open_service(cfg)?;
         let host_id = svc.device_id().to_string();
-        let label = crate::env_opt("HIVE_SERVE_LABEL").unwrap_or_else(|| "this host".into());
+        let label = crate::env_opt("LIGUS_SERVE_LABEL").unwrap_or_else(|| "this host".into());
         let host = hive::HostState { serving: false, relay_configured: cfg.relay_url.is_some(), ..Default::default() };
         let ws = crate::uuid_of_room(&cfg.room);
         super::hive_snapshot(&svc, ws, &host_id, &label, &hive_runtime::HostPresence::new(), &HashSet::new(), host)
@@ -1823,7 +1823,7 @@ fn store_hive(cfg: &crate::Config) -> Option<StoreHive> {
 /// Fails when the config is invalid or any panel has an error.
 pub fn cmd_check(config: &crate::Config, file: Option<String>) -> Result<()> {
     let path = file.map(PathBuf::from).unwrap_or_else(|| config_path(&config.data_dir));
-    let prometheus_url = crate::env_opt("HIVE_PROMETHEUS_URL");
+    let prometheus_url = crate::env_opt("LIGUS_PROMETHEUS_URL");
     let loaded = load(&path, prometheus_url.is_some());
     let cfg = match &loaded {
         Loaded::Config(c) => {
@@ -1832,7 +1832,7 @@ pub fn cmd_check(config: &crate::Config, file: Option<String>) -> Result<()> {
         }
         Loaded::Default(c) => {
             if prometheus_url.is_some() {
-                println!("no {}: the built-in Hive section and the generated lab default (HIVE_PROMETHEUS_URL is set):", path.display());
+                println!("no {}: the built-in Hive section and the generated lab default (LIGUS_PROMETHEUS_URL is set):", path.display());
             } else {
                 println!("no {}: the built-in Hive section only:", path.display());
             }
@@ -2658,7 +2658,7 @@ mod tests {
         assert!(err(&evaluate(&one("count", "nope", ""), &src, None).await).contains("no MCP server 'nope'"));
         assert!(err(&evaluate(&one("slow", "gh", "timeout = \"300ms\""), &src, None).await).contains("timed out"));
         let unconfigured = Sources::new(&http, "http://127.0.0.1:9");
-        assert!(err(&evaluate(&one("count", "gh", ""), &unconfigured, None).await).contains("HIVE_MCP_CONFIG"));
+        assert!(err(&evaluate(&one("count", "gh", ""), &unconfigured, None).await).contains("LIGUS_MCP_CONFIG"));
 
         // Cached for its refresh, errors included, and concurrent requests
         // for a stale panel share one call.

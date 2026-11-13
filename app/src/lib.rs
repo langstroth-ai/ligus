@@ -340,7 +340,7 @@ struct LiveSettings {
     /// GitHub access token (device-flow), for authenticated directory calls.
     #[serde(default)]
     github_token: Option<String>,
-    /// OAuth App client id for the device flow (env HIVE_GITHUB_CLIENT_ID wins).
+    /// OAuth App client id for the device flow (env LIGUS_GITHUB_CLIENT_ID wins).
     #[serde(default)]
     github_client_id: Option<String>,
     /// Per-provider API keys, keyed by provider name (see `provider_config_name`):
@@ -2777,7 +2777,7 @@ fn api_key_for(provider: ModelProviderKind) -> Option<String> {
         ModelProviderKind::Anthropic => "ANTHROPIC_API_KEY",
         ModelProviderKind::OpenAI => "OPENAI_API_KEY",
         ModelProviderKind::OpenRouter => "OPENROUTER_API_KEY",
-        _ => return hive_core::compat::var("HIVE_PROVIDER_API_KEY").ok(),
+        _ => return hive_core::compat::var("LIGUS_PROVIDER_API_KEY").ok(),
     };
     std::env::var(var).ok()
 }
@@ -4159,7 +4159,7 @@ struct MyDeviceDto {
 }
 
 /// A host that names you as its owner but isn't certified as your device
-/// (a `ligus serve` box with `HIVE_SERVE_OWNER` set, waiting for approval).
+/// (a `ligus serve` box with `LIGUS_SERVE_OWNER` set, waiting for approval).
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DeviceRequestDto {
@@ -7585,7 +7585,7 @@ async fn run_turn_answering(
     // backstop — a margin above the stream's own timeout, so it never pre-empts
     // the finer-grained, better-messaged stream timeout on a legitimately long turn.
     let hard = std::time::Duration::from_secs(
-        hive_core::compat::var("HIVE_TURN_TIMEOUT_SECS")
+        hive_core::compat::var("LIGUS_TURN_TIMEOUT_SECS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .filter(|&s| s > 0)
@@ -7882,15 +7882,15 @@ async fn run_prepared_turn(
     let mut pending = String::new();
     let mut last_flush = std::time::Instant::now();
     // Total wall-clock BACKSTOP only — the real "wedged?" gate is the provider's
-    // per-line IDLE timeout (HIVE_TURN_IDLE_TIMEOUT_SECS), which resets on any
+    // per-line IDLE timeout (LIGUS_TURN_IDLE_TIMEOUT_SECS), which resets on any
     // activity and so doesn't kill a long-but-working turn. This cap just stops a
     // runaway that streams forever; it must sit well above a real turn's cost — a
     // cold build + `cargo test` here can exceed ten minutes, so the old 600s
     // default was below the floor for the repo's own turns and killed working
-    // agents (#100). One hour by default; override with HIVE_TURN_TIMEOUT_SECS.
+    // agents (#100). One hour by default; override with LIGUS_TURN_TIMEOUT_SECS.
     // Dropping the future on timeout kills any spawned CLI (kill_on_drop).
     let turn_timeout = std::time::Duration::from_secs(
-        hive_core::compat::var("HIVE_TURN_TIMEOUT_SECS")
+        hive_core::compat::var("LIGUS_TURN_TIMEOUT_SECS")
             .ok()
             .and_then(|v| v.parse().ok())
             .filter(|&s| s > 0)
@@ -7984,7 +7984,7 @@ async fn run_prepared_turn(
         r = tokio::time::timeout(turn_timeout, stream_fut) => match r {
             Ok(r) => r,
             Err(_) => Err(ProviderError::Subprocess(format!(
-                "runtime timed out after {}s with no completion — the agent may be waiting on login/auth, input, or a blocked tool. Verify it with Settings \u{2192} Models \u{2192} Test, or raise HIVE_TURN_TIMEOUT_SECS.",
+                "runtime timed out after {}s with no completion — the agent may be waiting on login/auth, input, or a blocked tool. Verify it with Settings \u{2192} Models \u{2192} Test, or raise LIGUS_TURN_TIMEOUT_SECS.",
                 turn_timeout.as_secs()
             ))),
         },
@@ -9125,7 +9125,7 @@ struct RuntimeTestDto {
 /// green result means a real turn will run too. A hung CLI (missing login/auth,
 /// wrong executable path, or a blocked MCP/hook in the project) surfaces as a
 /// timeout error instead of an indefinite stall. Timeout is 45s (override with
-/// HIVE_RUNTIME_TEST_TIMEOUT_SECS).
+/// LIGUS_RUNTIME_TEST_TIMEOUT_SECS).
 #[tauri::command]
 async fn test_runtime(
     state: State<'_, AppState>,
@@ -9146,7 +9146,7 @@ async fn ping_runtime(runtime: ResolvedRuntime, workspace_root: Option<String>) 
     let turns = vec![ChatTurn::user("Reply with exactly the token: PINGOK")];
     let system = "You are a connectivity probe. Reply with exactly PINGOK and nothing else.";
     let timeout = std::time::Duration::from_secs(
-        hive_core::compat::var("HIVE_RUNTIME_TEST_TIMEOUT_SECS")
+        hive_core::compat::var("LIGUS_RUNTIME_TEST_TIMEOUT_SECS")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(45),
@@ -10120,7 +10120,7 @@ async fn fetch_update_manifest(client: &reqwest::Client, urls: &[&str]) -> Optio
 /// The release tag this build was cut from (baked by build.rs). `dev` for local
 /// builds, which never prompt to update.
 fn baked_release_tag() -> &'static str {
-    option_env!("HIVE_RELEASE_TAG").unwrap_or("dev")
+    option_env!("LIGUS_RELEASE_TAG").unwrap_or("dev")
 }
 
 /// What the update banner needs: the latest tag + a human label, where to get
@@ -10459,27 +10459,27 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         load_workspace_catalogs(&workspace_root, &data_dir);
 
     let fallback_model =
-        hive_core::compat::var("HIVE_ANTHROPIC_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+        hive_core::compat::var("LIGUS_ANTHROPIC_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
 
     // Connection settings: a persisted settings.json wins; on first launch we
     // seed it from env/config so existing `HIVE_*` workflows keep working. After
     // that the Settings UI edits the file live and the sync loop polls it.
     let env_seed = LiveSettings {
-        relay_url: hive_core::compat::var("HIVE_RELAY_URL")
+        relay_url: hive_core::compat::var("LIGUS_RELAY_URL")
             .ok()
             .filter(|s| !s.is_empty())
             .or(config_relay_endpoint),
-        relay_access_token: hive_core::compat::var("HIVE_RELAY_ACCESS_TOKEN")
+        relay_access_token: hive_core::compat::var("LIGUS_RELAY_ACCESS_TOKEN")
             .ok()
             .filter(|s| !s.is_empty()),
-        sync_room: hive_core::compat::var("HIVE_WORKSPACE")
+        sync_room: hive_core::compat::var("LIGUS_WORKSPACE")
             .ok()
             .filter(|s| !s.is_empty())
             .unwrap_or_else(default_sync_room),
-        workspace_passphrase: hive_core::compat::var("HIVE_WORKSPACE_KEY")
+        workspace_passphrase: hive_core::compat::var("LIGUS_WORKSPACE_KEY")
             .ok()
             .filter(|s| !s.is_empty()),
-        relay_issuer_key: hive_core::compat::var("HIVE_RELAY_ISSUER_KEY").ok().filter(|s| !s.is_empty()),
+        relay_issuer_key: hive_core::compat::var("LIGUS_RELAY_ISSUER_KEY").ok().filter(|s| !s.is_empty()),
         api_key: std::env::var("ANTHROPIC_API_KEY").ok().filter(|s| !s.is_empty()),
         claude_permission_mode: default_permission_mode(),
             claude_code_model: String::new(),
@@ -12158,12 +12158,12 @@ fn configured_relay(state: &AppState) -> Result<String, String> {
 // ---------------------------------------------------------------------------
 
 /// Resolve the OAuth App client id, in priority order:
-///   1. runtime env `HIVE_GITHUB_CLIENT_ID`
+///   1. runtime env `LIGUS_GITHUB_CLIENT_ID`
 ///   2. the per-device setting (pasted in the UI)
-///   3. a value baked at build time (compile with `HIVE_GITHUB_CLIENT_ID` set to
+///   3. a value baked at build time (compile with `LIGUS_GITHUB_CLIENT_ID` set to
 ///      ship Hive's own OAuth App so users never create one).
 fn github_client_id(state: &AppState) -> Option<String> {
-    hive_core::compat::var("HIVE_GITHUB_CLIENT_ID")
+    hive_core::compat::var("LIGUS_GITHUB_CLIENT_ID")
         .ok()
         .filter(|s| !s.trim().is_empty())
         .or_else(|| {
@@ -12177,7 +12177,7 @@ fn github_client_id(state: &AppState) -> Option<String> {
         })
         // Baked at compile time by build.rs from env or the gitignored
         // `app/github_client_id` file (empty in forks without it).
-        .or_else(|| option_env!("HIVE_GITHUB_CLIENT_ID").map(str::to_string).filter(|s| !s.is_empty()))
+        .or_else(|| option_env!("LIGUS_GITHUB_CLIENT_ID").map(str::to_string).filter(|s| !s.is_empty()))
 }
 
 #[tauri::command]
@@ -14076,7 +14076,7 @@ fn current_log_file() -> Option<PathBuf> {
 
 /// Set up structured logging: a daily rolling file in the OS log dir plus stderr.
 /// Background errors (sync/scheduler/workflow) and panics land here instead of
-/// vanishing to a stderr no one reads in a GUI launch. Level via `HIVE_LOG`
+/// vanishing to a stderr no one reads in a GUI launch. Level via `LIGUS_LOG`
 /// (default `info`).
 fn init_logging(app: &tauri::App) {
     use tracing_subscriber::layer::SubscriberExt;
@@ -14092,7 +14092,7 @@ fn init_logging(app: &tauri::App) {
     // Keep the flush guard alive for the whole process.
     Box::leak(Box::new(guard));
 
-    let filter = hive_core::compat::var("HIVE_LOG").map_err(|_| ()).and_then(|v| tracing_subscriber::EnvFilter::try_new(v).map_err(|_| ()))
+    let filter = hive_core::compat::var("LIGUS_LOG").map_err(|_| ()).and_then(|v| tracing_subscriber::EnvFilter::try_new(v).map_err(|_| ()))
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     let _ = tracing_subscriber::registry()
         .with(filter)
@@ -14241,10 +14241,10 @@ pub fn run() {
             }
 
             // Direct P2P sync (iroh): syncs with added contacts device-to-device.
-            // Skippable via HIVE_DISABLE_P2P — a perf diagnostic, since iroh does
+            // Skippable via LIGUS_DISABLE_P2P — a perf diagnostic, since iroh does
             // continuous network/interface probing (heavier on Windows via WMI).
             #[cfg(feature = "p2p")]
-            if hive_core::compat::var("HIVE_DISABLE_P2P").is_err() {
+            if hive_core::compat::var("LIGUS_DISABLE_P2P").is_err() {
                 let (secret, data_dir, p2p_db) = p2p;
                 let h = app.handle().clone();
                 tauri::async_runtime::spawn(run_peer_sync_supervisor(h, data_dir, p2p_db, secret));
@@ -16628,16 +16628,16 @@ mod mcp_bearer_tests {
     /// LIVE: resolve a stored static token through the same path the app uses
     /// (settings.json → `apply_mcp_auth` → `McpRegistry`), then list tools and
     /// call one on a real token-protected server. Skipped unless
-    /// `HIVE_MCP_LIVE_URL` and `HIVE_MCP_LIVE_TOKEN_FILE` (a file holding the
-    /// token) are set. Optional: `HIVE_MCP_LIVE_TOOL` (default `search_docs`)
-    /// and `HIVE_MCP_LIVE_ARGS` (JSON arguments; for the rdnamcp lab server use
+    /// `LIGUS_MCP_LIVE_URL` and `LIGUS_MCP_LIVE_TOKEN_FILE` (a file holding the
+    /// token) are set. Optional: `LIGUS_MCP_LIVE_TOOL` (default `search_docs`)
+    /// and `LIGUS_MCP_LIVE_ARGS` (JSON arguments; for the rdnamcp lab server use
     /// `{"query":"…","collection":"rdna-docs"}`). The token is never printed.
     #[tokio::test]
     async fn live_static_bearer_through_registry() {
         let (Ok(url), Ok(token_file)) =
-            (hive_core::compat::var("HIVE_MCP_LIVE_URL"), hive_core::compat::var("HIVE_MCP_LIVE_TOKEN_FILE"))
+            (hive_core::compat::var("LIGUS_MCP_LIVE_URL"), hive_core::compat::var("LIGUS_MCP_LIVE_TOKEN_FILE"))
         else {
-            eprintln!("skipping: set HIVE_MCP_LIVE_URL + HIVE_MCP_LIVE_TOKEN_FILE");
+            eprintln!("skipping: set LIGUS_MCP_LIVE_URL + LIGUS_MCP_LIVE_TOKEN_FILE");
             return;
         };
         let raw = std::fs::read_to_string(&token_file).expect("read token file");
@@ -16673,8 +16673,8 @@ mod mcp_bearer_tests {
         eprintln!("tools: {names:?}");
         assert!(!tools.is_empty());
 
-        let tool = hive_core::compat::var("HIVE_MCP_LIVE_TOOL").unwrap_or_else(|_| "search_docs".into());
-        let args: serde_json::Value = hive_core::compat::var("HIVE_MCP_LIVE_ARGS")
+        let tool = hive_core::compat::var("LIGUS_MCP_LIVE_TOOL").unwrap_or_else(|_| "search_docs".into());
+        let args: serde_json::Value = hive_core::compat::var("LIGUS_MCP_LIVE_ARGS")
             .ok()
             .and_then(|a| serde_json::from_str(&a).ok())
             .unwrap_or_else(|| serde_json::json!({ "query": "RDNA wave32 vs wave64" }));

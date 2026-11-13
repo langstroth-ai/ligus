@@ -882,7 +882,7 @@ impl Shared {
     }
 }
 
-/// Opt-in (`HIVE_SERVE_APPLY_ON_APPROVE=1`): carry out an approved file-diff
+/// Opt-in (`LIGUS_SERVE_APPLY_ON_APPROVE=1`): carry out an approved file-diff
 /// proposal on this box, as the desktop's Implement does — apply it into the
 /// chat's base worktree of the bound checkout, commit (advancing
 /// `hive/chat/<id>`), and mark it Applied. `Ok(None)` when there is nothing to

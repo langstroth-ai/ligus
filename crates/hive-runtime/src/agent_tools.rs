@@ -318,7 +318,7 @@ impl<M: ToolExecutor> CompositeTools<M> {
 /// that already read a file — the model is told why and answers with what it
 /// has; asking again in a fresh turn (or calling the MCP tool before reading)
 /// works. The desktop never opts out; `hive serve` / the worker opt out with
-/// `HIVE_MCP_AFTER_READS=1`.
+/// `LIGUS_MCP_AFTER_READS=1`.
 impl<M: ToolExecutor> ToolExecutor for CompositeTools<M> {
     async fn call(&self, name: &str, input: &Value) -> (String, bool) {
         let route = self.routes.get(name).copied().or_else(|| {

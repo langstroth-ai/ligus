@@ -8,12 +8,12 @@
 //! connect → sync → read → post.
 //!
 //! Config (all via env; a persistent data dir keeps a stable identity):
-//!   HIVE_DATA_DIR            where identity + hive.db live (default: $HOME/.hive)
-//!   HIVE_RELAY_URL           relay base URL (needed for `sync`/`send --push`)
-//!   HIVE_RELAY_ACCESS_TOKEN  relay entitlement token (hrt1/hex), provisioned out-of-band
-//!   HIVE_RELAY_GITHUB_TOKEN  optional, only on membership-enforcing relays
-//!   HIVE_WORKSPACE           relay room / workspace (default: "default")
-//!   HIVE_WORKSPACE_KEY       E2EE passphrase; omit for a plaintext relay
+//!   LIGUS_DATA_DIR            where identity + hive.db live (default: $HOME/.hive)
+//!   LIGUS_RELAY_URL           relay base URL (needed for `sync`/`send --push`)
+//!   LIGUS_RELAY_ACCESS_TOKEN  relay entitlement token (hrt1/hex), provisioned out-of-band
+//!   LIGUS_RELAY_GITHUB_TOKEN  optional, only on membership-enforcing relays
+//!   LIGUS_WORKSPACE           relay room / workspace (default: "default")
+//!   LIGUS_WORKSPACE_KEY       E2EE passphrase; omit for a plaintext relay
 //!
 //! Commands:
 //!   ligus whoami              print this client's identity (account/device ids)
@@ -55,7 +55,7 @@ struct Config {
     key: Option<String>,
 }
 
-/// Env lookup (blank = unset). `HIVE_X` names also accept `LIGUS_X` (see `hive_core::compat`).
+/// Env lookup (blank = unset). `LIGUS_X` names also accept the legacy `HIVE_X` (see `hive_core::compat`).
 fn env_opt(k: &str) -> Option<String> {
     hive_core::compat::env_opt(k)
 }
@@ -96,7 +96,7 @@ fn load_file_config(data_dir: &std::path::Path) -> FileConfig {
 }
 
 fn config() -> Config {
-    let data_dir = env_opt("HIVE_DATA_DIR")
+    let data_dir = env_opt("LIGUS_DATA_DIR")
         .map(PathBuf::from)
         .or_else(|| env_opt("HOME").map(|h| default_home_data_dir(std::path::Path::new(&h))))
         .unwrap_or_else(|| PathBuf::from("./hive-data"));
@@ -104,11 +104,11 @@ fn config() -> Config {
     let f = load_file_config(&data_dir);
     Config {
         data_dir,
-        relay_url: env_opt("HIVE_RELAY_URL").or(f.relay_url),
-        token: env_opt("HIVE_RELAY_ACCESS_TOKEN").or(f.token),
-        github_token: env_opt("HIVE_RELAY_GITHUB_TOKEN"),
-        room: env_opt("HIVE_WORKSPACE").or(f.room).unwrap_or_else(|| "default".into()),
-        key: env_opt("HIVE_WORKSPACE_KEY").or(f.key),
+        relay_url: env_opt("LIGUS_RELAY_URL").or(f.relay_url),
+        token: env_opt("LIGUS_RELAY_ACCESS_TOKEN").or(f.token),
+        github_token: env_opt("LIGUS_RELAY_GITHUB_TOKEN"),
+        room: env_opt("LIGUS_WORKSPACE").or(f.room).unwrap_or_else(|| "default".into()),
+        key: env_opt("LIGUS_WORKSPACE_KEY").or(f.key),
     }
 }
 
@@ -157,7 +157,7 @@ fn cmd_enroll(cfg: &Config, invite: &str, token: Option<String>) -> Result<()> {
     println!("Saved to {}.", config_path(&cfg.data_dir).display());
     if f.token.is_none() {
         println!("No access token set — for a membership-enforcing relay, add one:");
-        println!("  ligus enroll <invite> --token <hrt1-token>   (or export HIVE_RELAY_ACCESS_TOKEN)");
+        println!("  ligus enroll <invite> --token <hrt1-token>   (or export LIGUS_RELAY_ACCESS_TOKEN)");
     }
     println!("Next: `ligus sync` then `ligus worker` to bring the agent online.");
     Ok(())
@@ -169,7 +169,7 @@ async fn cmd_join(cfg: &Config, code: &str) -> Result<()> {
     let relay_url = cfg
         .relay_url
         .clone()
-        .ok_or_else(|| anyhow!("no relay — run `ligus enroll <invite>` or set HIVE_RELAY_URL first"))?;
+        .ok_or_else(|| anyhow!("no relay — run `ligus enroll <invite>` or set LIGUS_RELAY_URL first"))?;
     let relay = RelayClient::new(&relay_url)
         .with_auth(cfg.token.clone())
         .with_github_token(cfg.github_token.clone());
@@ -259,7 +259,7 @@ fn relay_client(cfg: &Config) -> Result<RelayClient> {
     let relay_url = cfg
         .relay_url
         .clone()
-        .ok_or_else(|| anyhow!("set HIVE_RELAY_URL to sync"))?;
+        .ok_or_else(|| anyhow!("set LIGUS_RELAY_URL to sync"))?;
     Ok(RelayClient::new(&relay_url)
         .with_auth(cfg.token.clone())
         .with_github_token(cfg.github_token.clone()))
@@ -453,12 +453,12 @@ fn cmd_new(cfg: &Config, title: String) -> Result<()> {
     Ok(())
 }
 
-/// Build a runtime target from env (HIVE_PROVIDER / HIVE_MODEL / a key). This is
+/// Build a runtime target from env (LIGUS_PROVIDER / LIGUS_MODEL / a key). This is
 /// a PERSONAL credential today — spec §12.5's workspace-owned credential for a
 /// detached worker doesn't exist yet.
 fn resolve_runtime_from_env() -> Result<(ResolvedRuntime, String)> {
-    let provider_str = env_opt("HIVE_PROVIDER").unwrap_or_else(|| "anthropic".into());
-    let model = env_opt("HIVE_MODEL").unwrap_or_else(|| "claude-sonnet-4-5".into());
+    let provider_str = env_opt("LIGUS_PROVIDER").unwrap_or_else(|| "anthropic".into());
+    let model = env_opt("LIGUS_MODEL").unwrap_or_else(|| "claude-sonnet-4-5".into());
     let (provider, endpoint, key_env): (ModelProviderKind, String, &str) =
         match provider_str.to_lowercase().as_str() {
             "anthropic" => (ModelProviderKind::Anthropic, String::new(), "ANTHROPIC_API_KEY"),
@@ -474,13 +474,13 @@ fn resolve_runtime_from_env() -> Result<(ResolvedRuntime, String)> {
             ),
             "ollama" => (
                 ModelProviderKind::Ollama,
-                env_opt("HIVE_MODEL_BASE_URL")
+                env_opt("LIGUS_MODEL_BASE_URL")
                     .unwrap_or_else(|| "http://localhost:11434/v1/chat/completions".into()),
                 "",
             ),
-            other => bail!("unsupported HIVE_PROVIDER '{other}' (anthropic|openai|openrouter|ollama)"),
+            other => bail!("unsupported LIGUS_PROVIDER '{other}' (anthropic|openai|openrouter|ollama)"),
         };
-    let api_key = env_opt("HIVE_PROVIDER_API_KEY")
+    let api_key = env_opt("LIGUS_PROVIDER_API_KEY")
         .or_else(|| (!key_env.is_empty()).then(|| env_opt(key_env)).flatten());
     let rt = ResolvedRuntime {
         provider,
@@ -519,7 +519,7 @@ fn provider_kind(s: &str) -> Result<ModelProviderKind> {
 }
 
 /// Define (or replace by id) a workspace-owned runtime. `--secret-ref <name>`
-/// keeps the key off the synced log (worker env `HIVE_WS_SECRET_<name>`);
+/// keeps the key off the synced log (worker env `LIGUS_WS_SECRET_<name>`);
 /// `--secret <value>` carries it E2EE on the config log; neither = keyless.
 #[allow(clippy::too_many_arguments)]
 fn cmd_add_runtime(
@@ -587,7 +587,7 @@ fn cmd_setup(cfg: &Config, apply: bool) -> Result<()> {
         if std::env::var(env_var).map(|v| !v.is_empty()).unwrap_or(false) {
             println!("  ✓ {env_var} present (key-backed)");
             println!(
-                "      → ligus add-runtime {provider} \"{provider}\" {provider} {model} --secret-ref {provider}   (worker sets HIVE_WS_SECRET_{provider})"
+                "      → ligus add-runtime {provider} \"{provider}\" {provider} {model} --secret-ref {provider}   (worker sets LIGUS_WS_SECRET_{provider})"
             );
         }
     }
@@ -658,7 +658,7 @@ struct WorkspaceRuntimesToml {
 
 /// `ligus config export` — print the workspace runtimes as portable TOML. Inline
 /// secrets are NEVER exported: they're downgraded to a secretRef the importer
-/// resolves from HIVE_WS_SECRET_<ref>.
+/// resolves from LIGUS_WS_SECRET_<ref>.
 fn cmd_config_export(cfg: &Config) -> Result<()> {
     let svc = open_service(cfg)?;
     let mut runtimes = svc.list_workspace_runtimes(uuid_of_room(&cfg.room))?;
@@ -752,10 +752,10 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
     // local-dev convenience only — the production daemon is `ligus worker`, which
     // requires a workspace-owned runtime. Refuse to run unattended in production
     // unless explicitly opted in for dev.
-    if hive_core::compat::var("HIVE_ALLOW_PERSONAL_AGENT").is_err() {
+    if hive_core::compat::var("LIGUS_ALLOW_PERSONAL_AGENT").is_err() {
         bail!(
             "`ligus agent` runs on a personal credential, which isn't workspace-owned (\u{a7}12.5) — \
-             use `ligus worker` for production. For local dev only, set HIVE_ALLOW_PERSONAL_AGENT=1."
+             use `ligus worker` for production. For local dev only, set LIGUS_ALLOW_PERSONAL_AGENT=1."
         );
     }
     // Pull config first so a `--runtime` workspace runtime is available.
@@ -764,7 +764,7 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
     }
     let (rt, rt_label) = resolve_agent_runtime(cfg, runtime_id.as_deref())?;
     if rt.api_key.is_none() && rt.provider != ModelProviderKind::Ollama {
-        bail!("runtime '{rt_label}' has no resolvable key (set a provider key, or provision HIVE_WS_SECRET_… for a workspace runtime)");
+        bail!("runtime '{rt_label}' has no resolvable key (set a provider key, or provision LIGUS_WS_SECRET_… for a workspace runtime)");
     }
     // Seed "seen" with existing messages so we don't reply to history.
     let mut seen: HashSet<Uuid> = HashSet::new();
@@ -819,7 +819,7 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
                 materialize_turns(cfg, &mut turns).await;
                 print!("↳ @{name} replying in {} … ", s.id);
                 // H1 gate: only execute MCP tools when the triggering author holds
-                // ≥ HIVE_MCP_MIN_ROLE (default Contributor). Unresolved author →
+                // ≥ LIGUS_MCP_MIN_ROLE (default Contributor). Unresolved author →
                 // fail closed. Under-privileged requesters still get a tool-free
                 // reply, but cannot drive tools on this worker's key.
                 let author_role = last.actor_identity.as_ref().map(|a| s.role_of(&a.id));
@@ -831,7 +831,7 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
                         last.id, author_role, min_role
                     );
                 }
-                // MCP tools when HIVE_MCP_CONFIG provisions them and the gate allows,
+                // MCP tools when LIGUS_MCP_CONFIG provisions them and the gate allows,
                 // else a plain stream.
                 let reply = reply::generate_reply(&rt, &system, &turns, allow_mcp, None).await?;
                 let mid = svc.begin_assistant_message(s.id, s.workspace_id, name.clone(), rt_label.clone(), None, Some(last.id))?;
@@ -1140,7 +1140,7 @@ fn usage() -> ! {
          ligus queue                     show queued work (unanswered mentions + host status)\n  \
          ligus serve [--listen ADDR] [--pair] [--token-file PATH] [--label NAME]\n                                       \
          run the home host for the iOS app (sync + worker + HTTP/SSE API);\n                                       \
-         --remote-relay URL / HIVE_REMOTE_RELAY also serves it through a relay\n  \
+         --remote-relay URL / LIGUS_REMOTE_RELAY also serves it through a relay\n  \
          ligus serve enroll [--new-device]   print the code that makes this box your own device\n                                       \
          (approve it on your desktop; --new-device after a revocation)\n  \
          ligus bind-repo <name|path> [--chat <id>] | --clear   bind a checkout for agent file tools\n  \
@@ -1158,7 +1158,7 @@ fn usage() -> ! {
          ligus setup [--apply]           detect providers; --apply defines keyless runtimes\n  \
          ligus config <export|import <file>>   round-trip the workspace runtime set\n\n\
          Config via env (override the saved config.toml from `enroll`):\n  \
-         HIVE_DATA_DIR, HIVE_RELAY_URL, HIVE_RELAY_ACCESS_TOKEN, HIVE_WORKSPACE, HIVE_WORKSPACE_KEY."
+         LIGUS_DATA_DIR, LIGUS_RELAY_URL, LIGUS_RELAY_ACCESS_TOKEN, LIGUS_WORKSPACE, LIGUS_WORKSPACE_KEY."
     );
     std::process::exit(2);
 }
@@ -1422,7 +1422,7 @@ fn run() -> Result<()> {
                 Some("list") | None => cli::phones_list(&cfg.data_dir),
                 Some("revoke") => {
                     let token_file = flag_val("--token-file")
-                        .or_else(|| env_opt("HIVE_SERVE_TOKEN_FILE"))
+                        .or_else(|| env_opt("LIGUS_SERVE_TOKEN_FILE"))
                         .map(PathBuf::from)
                         .unwrap_or_else(|| cfg.data_dir.join("serve.token"));
                     cli::phones_revoke(&cfg.data_dir, positional.get(1).map(|s| s.as_str()), &token_file, has("--keep-token"))
@@ -1451,7 +1451,7 @@ fn run() -> Result<()> {
         "repos" => repos::cmd_repos(&cfg.data_dir),
         "agent" => {
             let name = positional.first().map(|s| s.as_str()).unwrap_or("assistant").to_string();
-            let runtime_id = flag_val("--runtime").or_else(|| env_opt("HIVE_RUNTIME"));
+            let runtime_id = flag_val("--runtime").or_else(|| env_opt("LIGUS_RUNTIME"));
             rt()?.block_on(cmd_agent(&cfg, name, runtime_id))
         }
         _ => usage(),

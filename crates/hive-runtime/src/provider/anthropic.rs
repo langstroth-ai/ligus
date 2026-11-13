@@ -41,7 +41,7 @@ pub enum ProviderError {
     /// The endpoint accepted the request but produced no bytes for the idle
     /// window (headers or stream). Distinct from a wall-clock cap: a slow but
     /// steadily streaming model never hits this.
-    #[error("{provider} at {host} produced no output for {secs}s — the server may still be loading the model, be wedged, or the link may have dropped; if it's just slow, raise HIVE_TURN_IDLE_TIMEOUT_SECS")]
+    #[error("{provider} at {host} produced no output for {secs}s — the server may still be loading the model, be wedged, or the link may have dropped; if it's just slow, raise LIGUS_TURN_IDLE_TIMEOUT_SECS")]
     Idle {
         provider: &'static str,
         host: String,

@@ -554,7 +554,7 @@ impl OpenAiClient {
         self
     }
 
-    /// Override the idle timeout (default: `HIVE_TURN_IDLE_TIMEOUT_SECS`, 300s).
+    /// Override the idle timeout (default: `LIGUS_TURN_IDLE_TIMEOUT_SECS`, 300s).
     pub fn with_idle_timeout(mut self, idle: Duration) -> Self {
         self.idle_timeout = idle;
         self
@@ -1275,7 +1275,7 @@ mod wire {
         assert!(matches!(err, ProviderError::Idle { .. }), "{msg}");
         assert!(msg.contains("ollama"), "{msg}");
         assert!(msg.contains(&client.host()), "{msg}");
-        assert!(msg.contains("HIVE_TURN_IDLE_TIMEOUT_SECS"), "{msg}");
+        assert!(msg.contains("LIGUS_TURN_IDLE_TIMEOUT_SECS"), "{msg}");
     }
 
     #[tokio::test]

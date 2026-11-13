@@ -21,17 +21,17 @@ fn main() {
 
 /// Bake the release tag (e.g. `v0.1.0-beta.10`) so the app can tell whether a
 /// newer published version exists (see `check_for_app_update`). CI sets
-/// `HIVE_RELEASE_TAG` (or `LIGUS_RELEASE_TAG`); local/dev builds get `dev` and never show the update
+/// `LIGUS_RELEASE_TAG` (or the legacy `HIVE_RELEASE_TAG`); local/dev builds get `dev` and never show the update
 /// banner (avoids false "update available" prompts during development).
 fn bake_release_tag() {
     let tag = build_env("RELEASE_TAG").unwrap_or_else(|| "dev".to_string());
-    println!("cargo:rustc-env=HIVE_RELEASE_TAG={tag}");
+    println!("cargo:rustc-env=LIGUS_RELEASE_TAG={tag}");
 }
 
 /// Inject the GitHub OAuth App client id at compile time so `option_env!` /
-/// `env!("HIVE_GITHUB_CLIENT_ID")` resolves in the app, *without* committing the
+/// `env!("LIGUS_GITHUB_CLIENT_ID")` resolves in the app, *without* committing the
 /// id to source. Resolution order:
-///   1. env `LIGUS_GITHUB_CLIENT_ID`, then `HIVE_GITHUB_CLIENT_ID` (CI / one-off builds)
+///   1. env `LIGUS_GITHUB_CLIENT_ID`, then the legacy `HIVE_GITHUB_CLIENT_ID` (CI / one-off builds)
 ///   2. a gitignored `app/github_client_id` file (official local builds)
 /// Forks without either build with no default (users paste their own in-app).
 fn bake_github_client_id() {
@@ -44,5 +44,5 @@ fn bake_github_client_id() {
         .filter(|s| !s.is_empty())
         .unwrap_or_default();
 
-    println!("cargo:rustc-env=HIVE_GITHUB_CLIENT_ID={id}");
+    println!("cargo:rustc-env=LIGUS_GITHUB_CLIENT_ID={id}");
 }

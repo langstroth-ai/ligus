@@ -32,7 +32,7 @@ pub enum GithubError {
     Http(String),
     #[error("github error: {0}")]
     Api(String),
-    #[error("no GitHub client id configured (set HIVE_GITHUB_CLIENT_ID or Settings)")]
+    #[error("no GitHub client id configured (set LIGUS_GITHUB_CLIENT_ID or Settings)")]
     NoClientId,
 }
 

@@ -22,7 +22,7 @@ use crate::time_util::Timestamp;
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum WorkspaceCredential {
     /// Resolve from a named secret the worker holds out-of-band — env
-    /// `HIVE_WS_SECRET_<secretRef>`. The raw key never rides the synced log.
+    /// `LIGUS_WS_SECRET_<secretRef>`. The raw key never rides the synced log.
     SecretRef { secret_ref: String },
     /// The secret, carried E2EE on the config log. Shared with members; no
     /// worker provisioning needed (the workspace key unlocks it).
@@ -38,9 +38,9 @@ impl Default for WorkspaceCredential {
 }
 
 impl WorkspaceCredential {
-    /// The env var name a `SecretRef` resolves from (`HIVE_WS_SECRET_<ref>`).
+    /// The env var name a `SecretRef` resolves from (`LIGUS_WS_SECRET_<ref>`).
     pub fn env_var(secret_ref: &str) -> String {
-        format!("HIVE_WS_SECRET_{secret_ref}")
+        format!("LIGUS_WS_SECRET_{secret_ref}")
     }
     /// True when the raw secret is NOT carried on the synced log.
     pub fn is_off_log(&self) -> bool {

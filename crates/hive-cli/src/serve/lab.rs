@@ -1,11 +1,11 @@
 //! `GET /v1/lab/status` (deprecated: use `/v1/dashboard`, `dashboard.rs`) — a
-//! best-effort snapshot of the home lab from Prometheus (`HIVE_PROMETHEUS_URL`, default `http://127.0.0.1:9090`).
+//! best-effort snapshot of the home lab from Prometheus (`LIGUS_PROMETHEUS_URL`, default `http://127.0.0.1:9090`).
 //!
 //! Every query runs concurrently with a short timeout; a query that fails or
 //! comes back empty just leaves its field out. The `solar` object (Enphase
 //! gateway via the lab's `envoy_*` metrics and `lab:solar_*` rules) is only
 //! present when the gateway exporter reports in. Temperatures come from
-//! `HIVE_LAB_TEMPS` (`Name=promql;Name=promql…`), defaulting to the hottest
+//! `LIGUS_LAB_TEMPS` (`Name=promql;Name=promql…`), defaulting to the hottest
 //! sensor per exporter family.
 
 use std::time::Duration;
@@ -24,7 +24,7 @@ const DEFAULT_TEMPS: &[(&str, &str)] = &[
 
 /// The configured temperature series.
 pub fn temp_queries() -> Vec<(String, String)> {
-    match crate::env_opt("HIVE_LAB_TEMPS") {
+    match crate::env_opt("LIGUS_LAB_TEMPS") {
         Some(spec) => parse_temp_spec(&spec),
         None => DEFAULT_TEMPS.iter().map(|(n, q)| (n.to_string(), q.to_string())).collect(),
     }

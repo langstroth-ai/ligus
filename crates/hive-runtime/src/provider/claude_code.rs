@@ -239,7 +239,7 @@ pub async fn stream_reply(
     // ANY stream-json line (a text delta OR a tool_use/tool_result/system event)
     // resets it, so a long-but-active turn — e.g. a multi-minute `cargo test` tool
     // run that emits no text — won't trip it, while a truly silent CLI still does.
-    // Override with HIVE_TURN_IDLE_TIMEOUT_SECS (shared with the HTTP
+    // Override with LIGUS_TURN_IDLE_TIMEOUT_SECS (shared with the HTTP
     // providers via `provider::turn_idle_timeout`). (#100)
     let idle = super::turn_idle_timeout();
     let mut assembled = String::new();
@@ -253,7 +253,7 @@ pub async fn stream_reply(
                 // No output at all for the idle window — dropping the future kills
                 // the CLI (kill_on_drop) once we return.
                 return Err(ProviderError::Subprocess(format!(
-                    "claude produced no output for {}s — it may be waiting on login/auth, input, or a blocked tool. Any activity (text or a tool call) resets this; a long but active build won't trip it. Verify with Settings \u{2192} Models \u{2192} Test, or raise HIVE_TURN_IDLE_TIMEOUT_SECS.",
+                    "claude produced no output for {}s — it may be waiting on login/auth, input, or a blocked tool. Any activity (text or a tool call) resets this; a long but active build won't trip it. Verify with Settings \u{2192} Models \u{2192} Test, or raise LIGUS_TURN_IDLE_TIMEOUT_SECS.",
                     idle.as_secs()
                 )));
             }

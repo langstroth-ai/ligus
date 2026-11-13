@@ -72,10 +72,10 @@ impl ToolExecutor for NoTools {
 }
 
 /// Env override forcing Ollama runtimes through the OpenAI-compatible `/v1`
-/// shim instead of the native API (`HIVE_OLLAMA_WIRE=openai`). Escape hatch
+/// shim instead of the native API (`LIGUS_OLLAMA_WIRE=openai`). Escape hatch
 /// for a proxy that only speaks OpenAI; loses num_ctx/keep_alive/think.
 pub fn ollama_uses_openai_shim() -> bool {
-    hive_core::compat::var("HIVE_OLLAMA_WIRE")
+    hive_core::compat::var("LIGUS_OLLAMA_WIRE")
         .map(|v| v.trim().eq_ignore_ascii_case("openai"))
         .unwrap_or(false)
 }
@@ -722,7 +722,7 @@ mod tests {
     fn openai_shim_is_opt_in_via_env() {
         // Default: native. (The env var is process-global; only assert the
         // default here rather than mutating it under parallel tests.)
-        if hive_core::compat::var("HIVE_OLLAMA_WIRE").is_err() {
+        if hive_core::compat::var("LIGUS_OLLAMA_WIRE").is_err() {
             assert!(!ollama_uses_openai_shim());
         }
     }
@@ -922,7 +922,7 @@ mod tests {
 /// Live smoke test for the subscription CLIs: one tiny prompt through the real
 /// `agy` / `copilot` on this machine. Ignored by default (needs the CLI
 /// installed and signed in, and spends a little quota):
-/// `HIVE_LIVE_CLI=antigravity HIVE_LIVE_MODEL=<id> cargo test -p hive-runtime --lib live_cli_smoke -- --ignored --nocapture`
+/// `LIGUS_LIVE_CLI=antigravity LIGUS_LIVE_MODEL=<id> cargo test -p hive-runtime --lib live_cli_smoke -- --ignored --nocapture`
 #[cfg(test)]
 mod live_cli {
     use super::*;
@@ -930,7 +930,7 @@ mod live_cli {
     #[tokio::test]
     #[ignore]
     async fn live_cli_smoke() {
-        let provider = match hive_core::compat::var("HIVE_LIVE_CLI").as_deref() {
+        let provider = match hive_core::compat::var("LIGUS_LIVE_CLI").as_deref() {
             Ok("antigravity") => ModelProviderKind::Antigravity,
             Ok("copilot") => ModelProviderKind::Copilot,
             _ => return,
@@ -941,7 +941,7 @@ mod live_cli {
         };
         let rt = ResolvedRuntime {
             provider,
-            model: hive_core::compat::var("HIVE_LIVE_MODEL").unwrap_or_default(),
+            model: hive_core::compat::var("LIGUS_LIVE_MODEL").unwrap_or_default(),
             endpoint: String::new(),
             api_key: None,
             args,

@@ -4,7 +4,7 @@
 //! opens the chat on tap) and `Tags`. The body is a short, fixed-shape line —
 //! who did what, in which chat — never message contents, so a reply carrying a
 //! secret never leaves the tailnet through a notification. An optional access
-//! token (`HIVE_NTFY_TOKEN`) is sent as a bearer token.
+//! token (`LIGUS_NTFY_TOKEN`) is sent as a bearer token.
 
 use std::time::Duration;
 

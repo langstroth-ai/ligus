@@ -36,12 +36,12 @@ pub use openai::{endpoint_host, OpenAiClient};
 pub const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Env var overriding the per-turn *idle* timeout (seconds).
-pub const IDLE_TIMEOUT_ENV: &str = "HIVE_TURN_IDLE_TIMEOUT_SECS";
+pub const IDLE_TIMEOUT_ENV: &str = "LIGUS_TURN_IDLE_TIMEOUT_SECS";
 
 /// Idle timeout for a turn: how long a provider may produce *nothing* before
 /// the turn is declared wedged. Any activity (a byte, a tool event) resets it,
 /// so a long-but-active turn never trips it. Shared by the Claude Code bridge
-/// and the HTTP providers so one knob (`HIVE_TURN_IDLE_TIMEOUT_SECS`, default
+/// and the HTTP providers so one knob (`LIGUS_TURN_IDLE_TIMEOUT_SECS`, default
 /// 300) governs both. (#100)
 pub fn turn_idle_timeout() -> Duration {
     Duration::from_secs(

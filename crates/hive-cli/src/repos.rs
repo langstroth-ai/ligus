@@ -4,12 +4,12 @@
 //!
 //! An agent turn on this box that may edit files needs a git checkout to cut
 //! its per-turn worktree from. Checkouts live under one directory
-//! (`HIVE_REPOS_DIR`, default `<HIVE_DATA_DIR>/repos`), and a small TOML file
-//! (`<HIVE_DATA_DIR>/repo-bindings.toml`) maps the workspace — and optionally
+//! (`LIGUS_REPOS_DIR`, default `<LIGUS_DATA_DIR>/repos`), and a small TOML file
+//! (`<LIGUS_DATA_DIR>/repo-bindings.toml`) maps the workspace — and optionally
 //! single chats — to one of them:
 //!
 //! ```toml
-//! workspace = "hive"              # a name under HIVE_REPOS_DIR, or an absolute path
+//! workspace = "hive"              # a name under LIGUS_REPOS_DIR, or an absolute path
 //! [chats]
 //! "6f1c…-chat-uuid" = "rdna-gateway"
 //! ```
@@ -39,9 +39,9 @@ pub struct RepoBindings {
     pub chats: BTreeMap<String, String>,
 }
 
-/// Where checkouts live: `HIVE_REPOS_DIR`, else `<data_dir>/repos`.
+/// Where checkouts live: `LIGUS_REPOS_DIR`, else `<data_dir>/repos`.
 pub fn repos_dir(data_dir: &Path) -> PathBuf {
-    crate::env_opt("HIVE_REPOS_DIR")
+    crate::env_opt("LIGUS_REPOS_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| data_dir.join("repos"))
 }

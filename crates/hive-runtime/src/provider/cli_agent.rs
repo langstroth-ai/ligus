@@ -235,7 +235,7 @@ pub(crate) async fn run_cli<P: CliStreamParser>(
             Ok(Err(e)) => return Err(ProviderError::Subprocess(format!("read stdout: {e}"))),
             Err(_) => {
                 return Err(ProviderError::Subprocess(format!(
-                    "{} produced no output for {}s — it may be waiting on sign-in or a blocked tool. {} Raise HIVE_TURN_IDLE_TIMEOUT_SECS for long silent steps.",
+                    "{} produced no output for {}s — it may be waiting on sign-in or a blocked tool. {} Raise LIGUS_TURN_IDLE_TIMEOUT_SECS for long silent steps.",
                     kind.display(),
                     idle.as_secs(),
                     kind.login_hint()

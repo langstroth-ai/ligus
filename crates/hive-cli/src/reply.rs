@@ -1,7 +1,7 @@
 //! Generating an agent's reply — with MCP tools when configured.
 //!
 //! Both `ligus agent` and `ligus worker` turn a chat transcript into one reply.
-//! When `HIVE_MCP_CONFIG` names one or more enabled MCP servers *and* the
+//! When `LIGUS_MCP_CONFIG` names one or more enabled MCP servers *and* the
 //! runtime is Anthropic with a key, the reply is produced by the agentic tool
 //! loop (model ↔ tool_use ↔ tool_result), so the agent can reach external
 //! boards (Linear/GitHub) via MCP tools. Otherwise it falls back to a single
@@ -35,9 +35,9 @@ const MAX_TOOL_ITERS: usize = 6;
 
 /// Env var that raises (or lowers) the minimum author role required before a
 /// headless reply is allowed to execute MCP tools. See [`parse_min_role`].
-pub const MIN_ROLE_ENV: &str = "HIVE_MCP_MIN_ROLE";
+pub const MIN_ROLE_ENV: &str = "LIGUS_MCP_MIN_ROLE";
 
-/// Parse `HIVE_MCP_MIN_ROLE` (viewer|contributor|admin|owner, case-insensitive)
+/// Parse `LIGUS_MCP_MIN_ROLE` (viewer|contributor|admin|owner, case-insensitive)
 /// into the minimum author role that unlocks the MCP tool loop. Unknown or
 /// absent → `Contributor` (the safe default: a Viewer can never drive tools).
 pub fn parse_min_role(v: Option<&str>) -> WorkspaceRole {
@@ -50,7 +50,7 @@ pub fn parse_min_role(v: Option<&str>) -> WorkspaceRole {
     }
 }
 
-/// The configured minimum author role, read from `HIVE_MCP_MIN_ROLE`.
+/// The configured minimum author role, read from `LIGUS_MCP_MIN_ROLE`.
 pub fn mcp_min_role() -> WorkspaceRole {
     parse_min_role(hive_core::compat::var(MIN_ROLE_ENV).ok().as_deref())
 }
@@ -68,7 +68,7 @@ pub fn mcp_allowed_for(author_role: Option<WorkspaceRole>, min_role: WorkspaceRo
 }
 
 /// Produce one reply for `turns` under `system`. Runs the MCP tool loop when an
-/// Anthropic runtime has a key, `HIVE_MCP_CONFIG` yields ≥1 enabled tool, **and**
+/// Anthropic runtime has a key, `LIGUS_MCP_CONFIG` yields ≥1 enabled tool, **and**
 /// `allow_mcp_tools` is set (the triggering author cleared the role gate);
 /// otherwise streams a single completion (the original, tool-free behavior).
 pub async fn generate_reply(
@@ -95,15 +95,15 @@ pub async fn generate_reply(
 /// What a headless turn's tools may do — the CLI's equivalent of the app's
 /// tool settings, read from the environment with the app's defaults:
 ///
-/// - `HIVE_BUILTIN_TOOLS` (default on): offer Hive's built-in file tools to
+/// - `LIGUS_BUILTIN_TOOLS` (default on): offer Hive's built-in file tools to
 ///   runtimes that run the agent tool loop (Custom / HiveDaemon / Ollama with
 ///   tools on).
-/// - `HIVE_BUILTIN_RUN_COMMAND` (default off): also offer `run_command`
+/// - `LIGUS_BUILTIN_RUN_COMMAND` (default off): also offer `run_command`
 ///   (only ever inside the turn's isolated worktree).
-/// - `HIVE_ALLOW_REMOTE_FILE_TOOLS` (default off): offer the file tools even
+/// - `LIGUS_ALLOW_REMOTE_FILE_TOOLS` (default off): offer the file tools even
 ///   when the model endpoint isn't on this machine / a private network /
 ///   the tailnet — they send file contents to it.
-/// - `HIVE_MCP_AFTER_READS` (default off): turn off the exfiltration guard
+/// - `LIGUS_MCP_AFTER_READS` (default off): turn off the exfiltration guard
 ///   (MCP calls refused once a turn has read project files).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolSettings {
@@ -131,10 +131,10 @@ impl ToolSettings {
     pub fn from_env() -> Self {
         let d = Self::default();
         Self {
-            builtin_tools: env_flag("HIVE_BUILTIN_TOOLS", d.builtin_tools),
-            run_command: env_flag("HIVE_BUILTIN_RUN_COMMAND", d.run_command),
-            allow_remote_file_tools: env_flag("HIVE_ALLOW_REMOTE_FILE_TOOLS", d.allow_remote_file_tools),
-            mcp_after_reads: env_flag("HIVE_MCP_AFTER_READS", d.mcp_after_reads),
+            builtin_tools: env_flag("LIGUS_BUILTIN_TOOLS", d.builtin_tools),
+            run_command: env_flag("LIGUS_BUILTIN_RUN_COMMAND", d.run_command),
+            allow_remote_file_tools: env_flag("LIGUS_ALLOW_REMOTE_FILE_TOOLS", d.allow_remote_file_tools),
+            mcp_after_reads: env_flag("LIGUS_MCP_AFTER_READS", d.mcp_after_reads),
         }
     }
 }
@@ -142,10 +142,10 @@ impl ToolSettings {
 /// Whether a headless HTTP model runtime gets the agent tool loop at all.
 /// Workspace runtimes carry no "Supports tools" switch (it is device-local in
 /// the app), so a worker opts its local-capable runtimes in unless
-/// `HIVE_WORKER_TOOLS=0`. Hosted APIs never get it (see
+/// `LIGUS_WORKER_TOOLS=0`. Hosted APIs never get it (see
 /// [`ResolvedRuntime::runs_agent_tools`]).
 pub fn worker_tools_enabled() -> bool {
-    env_flag("HIVE_WORKER_TOOLS", true)
+    env_flag("LIGUS_WORKER_TOOLS", true)
 }
 
 /// Where a tool-using turn may read and write files.
@@ -300,7 +300,7 @@ async fn tool_loop_turn(
     }
 }
 
-/// The enabled MCP servers' tools (from `HIVE_MCP_CONFIG`), as neutral defs
+/// The enabled MCP servers' tools (from `LIGUS_MCP_CONFIG`), as neutral defs
 /// plus the executor that routes a call back to its server. `None` when no
 /// server is configured or none lists a tool.
 async fn mcp_tool_set() -> Result<Option<(Vec<Value>, McpToolExecutor)>> {

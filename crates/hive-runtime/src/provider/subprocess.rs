@@ -27,12 +27,12 @@ pub(crate) fn suppress_console_window(cmd: &mut Command) {
 }
 
 /// Default wall-clock budget for a single subprocess agent turn. Overridable
-/// via `HIVE_AGENT_TIMEOUT_SECS` (a slow local model may want more; a flaky
+/// via `LIGUS_AGENT_TIMEOUT_SECS` (a slow local model may want more; a flaky
 /// backend may want less).
 const DEFAULT_AGENT_TIMEOUT_SECS: u64 = 300;
 
 fn agent_timeout() -> Duration {
-    let secs = hive_core::compat::var("HIVE_AGENT_TIMEOUT_SECS")
+    let secs = hive_core::compat::var("LIGUS_AGENT_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())
         .filter(|&v| v > 0)
@@ -164,7 +164,7 @@ pub async fn run_with(
             let _ = child.start_kill();
             let _ = child.wait().await;
             return Err(ProviderError::Subprocess(format!(
-                "{program} timed out after {}s (set HIVE_AGENT_TIMEOUT_SECS to adjust)",
+                "{program} timed out after {}s (set LIGUS_AGENT_TIMEOUT_SECS to adjust)",
                 timeout.as_secs()
             )));
         }
@@ -285,11 +285,11 @@ mod tests {
 
     #[tokio::test]
     async fn slow_command_times_out_and_is_killed() {
-        std::env::set_var("HIVE_AGENT_TIMEOUT_SECS", "1");
+        std::env::set_var("LIGUS_AGENT_TIMEOUT_SECS", "1");
         let err = run("sh", &["-c".into(), "sleep 30".into()], None, "", |_| {})
             .await
             .unwrap_err();
-        std::env::remove_var("HIVE_AGENT_TIMEOUT_SECS");
+        std::env::remove_var("LIGUS_AGENT_TIMEOUT_SECS");
         assert!(format!("{err}").contains("timed out"), "{err}");
     }
 

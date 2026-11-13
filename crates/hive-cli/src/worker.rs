@@ -78,22 +78,22 @@ fn lock(svc: &Mutex<ChatService>) -> MutexGuard<'_, ChatService> {
 /// Claude Code permission args for a headless worker. **Read-only by default** —
 /// a worker that can write files (and, with bypass, run shell commands) is
 /// powerful, so write access is opt-in via
-/// `HIVE_WORKER_PERMISSION_MODE=acceptEdits|bypassPermissions`. Only then does a
+/// `LIGUS_WORKER_PERMISSION_MODE=acceptEdits|bypassPermissions`. Only then does a
 /// worker's claude turn actually edit files (and get worktree-isolated + turned
 /// into a review-gated proposal).
 fn worker_claude_args() -> Vec<String> {
-    match hive_core::compat::var("HIVE_WORKER_PERMISSION_MODE").as_deref() {
+    match hive_core::compat::var("LIGUS_WORKER_PERMISSION_MODE").as_deref() {
         Ok("acceptEdits") => vec!["--permission-mode".into(), "acceptEdits".into()],
         Ok("bypassPermissions") => vec!["--permission-mode".into(), "bypassPermissions".into()],
         _ => Vec::new(),
     }
 }
 
-/// The worker's permission tier (`HIVE_WORKER_PERMISSION_MODE`), read-only
+/// The worker's permission tier (`LIGUS_WORKER_PERMISSION_MODE`), read-only
 /// (`default`) unless raised. Also accepts `runCommands` for the
 /// subscription CLIs.
 fn worker_permission_mode() -> String {
-    match hive_core::compat::var("HIVE_WORKER_PERMISSION_MODE").as_deref() {
+    match hive_core::compat::var("LIGUS_WORKER_PERMISSION_MODE").as_deref() {
         Ok(m @ ("acceptEdits" | "runCommands" | "bypassPermissions")) => m.to_string(),
         _ => "default".to_string(),
     }
@@ -180,7 +180,7 @@ pub fn agent_workspace_runtime(
     })?;
     let api_key = resolve_workspace_credential(&wr.credential);
     if api_key.is_none() && !keyless_ok(wr) {
-        bail!("workspace runtime '{}' has no secret on this box (provision HIVE_WS_SECRET_…)", wr.name);
+        bail!("workspace runtime '{}' has no secret on this box (provision LIGUS_WS_SECRET_…)", wr.name);
     }
     // claude-code / agy / copilot take the worker's permission tier; other
     // providers ignore args here.
@@ -329,10 +329,10 @@ pub fn recover_interrupted_turns(svc: &mut ChatService) -> Result<Vec<(Uuid, Uui
 }
 
 /// Total wall-clock backstop for one turn (the provider's idle timeout is the
-/// real "wedged" gate), as in the app: `HIVE_TURN_TIMEOUT_SECS`, default 1 h.
+/// real "wedged" gate), as in the app: `LIGUS_TURN_TIMEOUT_SECS`, default 1 h.
 fn turn_timeout() -> Duration {
     Duration::from_secs(
-        hive_core::compat::var("HIVE_TURN_TIMEOUT_SECS")
+        hive_core::compat::var("LIGUS_TURN_TIMEOUT_SECS")
             .ok()
             .and_then(|v| v.parse().ok())
             .filter(|&s| s > 0)
@@ -386,7 +386,7 @@ async fn run_turn(
     );
     // H1 gate: resolve the triggering message's author + role and only offer
     // tools (MCP and the built-in file tools) when they clear
-    // HIVE_MCP_MIN_ROLE (default Contributor). Unresolved author → fail closed.
+    // LIGUS_MCP_MIN_ROLE (default Contributor). Unresolved author → fail closed.
     let author_role = s
         .messages
         .iter()

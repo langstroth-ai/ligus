@@ -8,7 +8,7 @@
 //! HTTP and SSE API over a small stream mux ([`frame`]), dispatching every request
 //! into the axum router in process. The relay only forwards ciphertext.
 //!
-//! State lives in `<HIVE_DATA_DIR>/tunnel/` (directory 0700, files 0600):
+//! State lives in `<LIGUS_DATA_DIR>/tunnel/` (directory 0700, files 0600):
 //! `keys.json` (host signing + Noise static keys), `phones.json` (paired
 //! phones), `relay.json` (`ligus remote enable`), `status.json` (live status for
 //! `ligus remote status`) and `pending/` (enrollment windows and revocations
@@ -183,7 +183,7 @@ pub fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Option<T>>
 // ── Settings ─────────────────────────────────────────────────────────────────
 
 /// Where and how to reach the relay. Off unless `ligus remote enable` wrote
-/// `relay.json` or `--remote-relay` / `HIVE_REMOTE_RELAY` is set.
+/// `relay.json` or `--remote-relay` / `LIGUS_REMOTE_RELAY` is set.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RelaySettings {
@@ -220,7 +220,7 @@ impl RelaySettings {
             if self.insecure_relay {
                 return Ok(());
             }
-            bail!("relay URL {} is not https (pass --insecure-relay / HIVE_REMOTE_INSECURE_RELAY=1 to allow it)", self.relay);
+            bail!("relay URL {} is not https (pass --insecure-relay / LIGUS_REMOTE_INSECURE_RELAY=1 to allow it)", self.relay);
         }
         bail!("relay URL must start with https:// (got '{}')", self.relay)
     }
@@ -246,14 +246,14 @@ impl RelaySettings {
         Ok(read_json::<Self>(&Self::file(dir))?.filter(|s| s.enabled))
     }
 
-    /// Flags/env first (`--remote-relay` / `HIVE_REMOTE_RELAY`,
-    /// `--reg-token` / `HIVE_REMOTE_REG_TOKEN`, `--insecure-relay` /
-    /// `HIVE_REMOTE_INSECURE_RELAY`), then `relay.json`. `HIVE_REMOTE_RELAY=off`
+    /// Flags/env first (`--remote-relay` / `LIGUS_REMOTE_RELAY`,
+    /// `--reg-token` / `LIGUS_REMOTE_REG_TOKEN`, `--insecure-relay` /
+    /// `LIGUS_REMOTE_INSECURE_RELAY`), then `relay.json`. `LIGUS_REMOTE_RELAY=off`
     /// turns remote access off even when `relay.json` enables it.
     pub fn resolve(data_dir: &Path, relay: Option<String>, reg_token: Option<String>, insecure: bool) -> Result<Option<Self>> {
-        let insecure = insecure || crate::reply::env_flag("HIVE_REMOTE_INSECURE_RELAY", false);
-        let reg_token = reg_token.or_else(|| crate::env_opt("HIVE_REMOTE_REG_TOKEN"));
-        match relay.or_else(|| crate::env_opt("HIVE_REMOTE_RELAY")) {
+        let insecure = insecure || crate::reply::env_flag("LIGUS_REMOTE_INSECURE_RELAY", false);
+        let reg_token = reg_token.or_else(|| crate::env_opt("LIGUS_REMOTE_REG_TOKEN"));
+        match relay.or_else(|| crate::env_opt("LIGUS_REMOTE_RELAY")) {
             Some(r) if r.eq_ignore_ascii_case("off") => Ok(None),
             Some(r) => Ok(Some(Self::new(&r, reg_token, insecure)?)),
             None => match Self::load(&tunnel_dir(data_dir))? {

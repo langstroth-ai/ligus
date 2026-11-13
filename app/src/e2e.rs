@@ -19,20 +19,20 @@
 //! requests). The proxy forwards byte-for-byte and streams responses back.
 //!
 //! ```text
-//! HIVE_APP_LIVE_ENDPOINT=http://100.100.10.20:8080 \
-//! HIVE_APP_LIVE_MCP_URL=http://100.100.10.30:8090/mcp \
-//! HIVE_APP_LIVE_MCP_TOKEN_FILE=/path/to/0600-token-file \
+//! LIGUS_APP_LIVE_ENDPOINT=http://host:8080 \
+//! LIGUS_APP_LIVE_MCP_URL=http://mcp-host:8090/mcp \
+//! LIGUS_APP_LIVE_MCP_TOKEN_FILE=/path/to/0600-token-file \
 //!   cargo test -p Hive --features e2e --test app_live -- --nocapture
 //! ```
 //!
-//! Optional: `HIVE_APP_LIVE_SCENARIOS` (default `a,b,c,d,e,f`),
-//! `HIVE_APP_LIVE_MODEL` (default `gemma4:12b`), `HIVE_APP_LIVE_MODEL_B`
-//! (`gpt-oss:20b`), `HIVE_APP_LIVE_QUICK_MODEL` (`lfm2:8b`),
-//! `HIVE_APP_LIVE_EMBED_MODEL` (`embeddinggemma-300m`),
-//! `HIVE_APP_LIVE_RERANK_MODEL` (`bge-reranker-v2-m3`),
-//! `HIVE_APP_LIVE_KEEP=1` (keep the temp dirs).
+//! Optional: `LIGUS_APP_LIVE_SCENARIOS` (default `a,b,c,d,e,f`),
+//! `LIGUS_APP_LIVE_MODEL` (default `gemma4:12b`), `LIGUS_APP_LIVE_MODEL_B`
+//! (`gpt-oss:20b`), `LIGUS_APP_LIVE_QUICK_MODEL` (`lfm2:8b`),
+//! `LIGUS_APP_LIVE_EMBED_MODEL` (`embeddinggemma-300m`),
+//! `LIGUS_APP_LIVE_RERANK_MODEL` (`bge-reranker-v2-m3`),
+//! `LIGUS_APP_LIVE_KEEP=1` (keep the temp dirs).
 //!
-//! Without `HIVE_APP_LIVE_ENDPOINT` only the offline checks run (no network):
+//! Without `LIGUS_APP_LIVE_ENDPOINT` only the offline checks run (no network):
 //! the context meter's first poll on a fresh chat, which once deadlocked the
 //! app on the `service` mutex.
 //!
@@ -76,7 +76,7 @@ fn env(name: &str) -> Option<String> {
 
 impl Config {
     fn from_env() -> Option<Self> {
-        let raw = env("HIVE_APP_LIVE_ENDPOINT")?;
+        let raw = env("LIGUS_APP_LIVE_ENDPOINT")?;
         // The proxy forwards paths as is, so the upstream is the server root.
         let mut upstream = raw.trim_end_matches('/').to_string();
         for suffix in ["/chat/completions", "/v1"] {
@@ -86,14 +86,14 @@ impl Config {
         }
         Some(Self {
             upstream,
-            model: env("HIVE_APP_LIVE_MODEL").unwrap_or_else(|| "gemma4:12b".into()),
-            model_b: env("HIVE_APP_LIVE_MODEL_B").unwrap_or_else(|| "gpt-oss:20b".into()),
-            quick_model: env("HIVE_APP_LIVE_QUICK_MODEL").unwrap_or_else(|| "lfm2:8b".into()),
-            embed_model: env("HIVE_APP_LIVE_EMBED_MODEL").unwrap_or_else(|| "embeddinggemma-300m".into()),
-            rerank_model: env("HIVE_APP_LIVE_RERANK_MODEL").unwrap_or_else(|| "bge-reranker-v2-m3".into()),
-            mcp_url: env("HIVE_APP_LIVE_MCP_URL"),
-            mcp_token_file: env("HIVE_APP_LIVE_MCP_TOKEN_FILE").map(PathBuf::from),
-            scenarios: env("HIVE_APP_LIVE_SCENARIOS")
+            model: env("LIGUS_APP_LIVE_MODEL").unwrap_or_else(|| "gemma4:12b".into()),
+            model_b: env("LIGUS_APP_LIVE_MODEL_B").unwrap_or_else(|| "gpt-oss:20b".into()),
+            quick_model: env("LIGUS_APP_LIVE_QUICK_MODEL").unwrap_or_else(|| "lfm2:8b".into()),
+            embed_model: env("LIGUS_APP_LIVE_EMBED_MODEL").unwrap_or_else(|| "embeddinggemma-300m".into()),
+            rerank_model: env("LIGUS_APP_LIVE_RERANK_MODEL").unwrap_or_else(|| "bge-reranker-v2-m3".into()),
+            mcp_url: env("LIGUS_APP_LIVE_MCP_URL"),
+            mcp_token_file: env("LIGUS_APP_LIVE_MCP_TOKEN_FILE").map(PathBuf::from),
+            scenarios: env("LIGUS_APP_LIVE_SCENARIOS")
                 .unwrap_or_else(|| "a,b,c,d,e,f".into())
                 .split(',')
                 .map(|s| s.trim().to_ascii_lowercase())
@@ -654,7 +654,7 @@ Find the bug and fix it in the code (do not change the test). Keep the fix minim
 async fn scenario_mcp(ctx: &Ctx) -> Checks {
     let mut c = Checks::new();
     let (Some(url), Some(token_file)) = (ctx.cfg.mcp_url.clone(), ctx.cfg.mcp_token_file.clone()) else {
-        c.check(false, "HIVE_APP_LIVE_MCP_URL / HIVE_APP_LIVE_MCP_TOKEN_FILE unset");
+        c.check(false, "LIGUS_APP_LIVE_MCP_URL / LIGUS_APP_LIVE_MCP_TOKEN_FILE unset");
         return c;
     };
     let token = std::fs::read_to_string(&token_file).map(|t| t.trim().to_string()).unwrap_or_default();
@@ -1057,17 +1057,17 @@ fn run_offline() -> usize {
 }
 
 /// Run the offline checks, then the live scenarios. Returns the number of
-/// failures; the live part is skipped without `HIVE_APP_LIVE_ENDPOINT`.
+/// failures; the live part is skipped without `LIGUS_APP_LIVE_ENDPOINT`.
 /// Must be called on the main thread.
 pub fn run_live() -> usize {
     let offline_failed = run_offline();
     let Some(cfg) = Config::from_env() else {
-        eprintln!("HIVE_APP_LIVE_ENDPOINT unset; skipping the in-app live scenarios");
+        eprintln!("LIGUS_APP_LIVE_ENDPOINT unset; skipping the in-app live scenarios");
         return offline_failed;
     };
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
-            hive_core::compat::var("HIVE_LOG").map_err(|_| ()).and_then(|v| tracing_subscriber::EnvFilter::try_new(v).map_err(|_| ()))
+            hive_core::compat::var("LIGUS_LOG").map_err(|_| ()).and_then(|v| tracing_subscriber::EnvFilter::try_new(v).map_err(|_| ()))
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn,dispatch=info,compaction=info,worktree=info")),
         )
         .with_writer(std::io::stderr)
@@ -1193,5 +1193,5 @@ pub fn run_live() -> usize {
 }
 
 fn cfg_keep() -> bool {
-    env("HIVE_APP_LIVE_KEEP").as_deref() == Some("1")
+    env("LIGUS_APP_LIVE_KEEP").as_deref() == Some("1")
 }

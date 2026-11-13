@@ -8,7 +8,7 @@
 //!
 //! **The signal is backward compatible**: no new field or event. The box
 //! registers its host (`WorkspaceHost`, keyed by its device id) with
-//! `owner_actor_id` set to the account it belongs to (`HIVE_SERVE_OWNER`).
+//! `owner_actor_id` set to the account it belongs to (`LIGUS_SERVE_OWNER`).
 //! Older clients see an ordinary host record and keep today's behavior.
 //!
 //! **Enrolled devices (the real fix).** Once the owner approves the box on a

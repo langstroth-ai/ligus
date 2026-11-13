@@ -5,8 +5,8 @@
 //! The env-gated live test runs the same flow against the lab gateway:
 //!
 //! ```text
-//! HIVE_SERVE_LIVE_ENDPOINT=http://100.101.102.103:8080/v1/chat/completions \
-//! HIVE_SERVE_LIVE_MODELS=gpt-oss:20b,gemma4:12b \
+//! LIGUS_SERVE_LIVE_ENDPOINT=http://host:8080/v1/chat/completions \
+//! LIGUS_SERVE_LIVE_MODELS=gpt-oss:20b,gemma4:12b \
 //!   cargo test -p hive-cli serve::tests::live -- --nocapture
 //! ```
 
@@ -528,7 +528,7 @@ async fn auth_is_required_except_for_bare_health() {
     let r = h.client.get(format!("{}/v1/lab/status", h.base)).bearer_auth(&h.token).send().await.unwrap();
     assert_eq!(r.headers()["deprecation"], "true", "lab status is deprecated");
 
-    // No dashboard.toml and no HIVE_PROMETHEUS_URL: the built-in Hive
+    // No dashboard.toml and no LIGUS_PROMETHEUS_URL: the built-in Hive
     // section alone.
     let d = h.get("/v1/dashboard").await;
     let titles: Vec<&str> = d["sections"].as_array().unwrap().iter().map(|s| s["title"].as_str().unwrap()).collect();
@@ -1369,14 +1369,14 @@ fn serve_options_refuse_public_binds_and_need_both_ntfy_parts() {
 
 /// Live: one agent turn end to end against the lab gateway with a built-in
 /// tool call (`read_file` of a planted note). Skipped unless
-/// `HIVE_SERVE_LIVE_ENDPOINT` is set.
+/// `LIGUS_SERVE_LIVE_ENDPOINT` is set.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn live_gateway_turn_reads_a_file() {
-    let Some(endpoint) = hive_core::compat::var("HIVE_SERVE_LIVE_ENDPOINT").ok().filter(|s| !s.trim().is_empty()) else {
-        eprintln!("skipping: HIVE_SERVE_LIVE_ENDPOINT unset");
+    let Some(endpoint) = hive_core::compat::var("LIGUS_SERVE_LIVE_ENDPOINT").ok().filter(|s| !s.trim().is_empty()) else {
+        eprintln!("skipping: LIGUS_SERVE_LIVE_ENDPOINT unset");
         return;
     };
-    let models = hive_core::compat::var("HIVE_SERVE_LIVE_MODELS").unwrap_or_else(|_| "gpt-oss:20b,gemma4:12b".into());
+    let models = hive_core::compat::var("LIGUS_SERVE_LIVE_MODELS").unwrap_or_else(|_| "gpt-oss:20b,gemma4:12b".into());
     for model in models.split(',').map(str::trim).filter(|m| !m.is_empty()) {
         let word = format!("lantern{}", &Uuid::new_v4().simple().to_string()[..6]);
         let note = format!("The secret word is {word}.\n");
@@ -1433,7 +1433,7 @@ async fn approve_on_desktop(desktop: &Config, code: &str) {
     sync_once(desktop).await.unwrap();
 }
 
-/// `HIVE_SERVE_OWNER` + the owner's approval make this box one of the owner's
+/// `LIGUS_SERVE_OWNER` + the owner's approval make this box one of the owner's
 /// own devices: everything the phone does is authored as the owner and accepted
 /// by the owner's desktop; one person, one vote; `@hive` in a chat the phone
 /// creates belongs to the owner's desktop; revoking the box stops it, and a new
@@ -1579,7 +1579,7 @@ async fn phone_box_enrolled_as_the_owners_device() {
     h2.handle.shutdown();
 }
 
-/// A box that was its own member before `HIVE_SERVE_OWNER` keeps the dispatch
+/// A box that was its own member before `LIGUS_SERVE_OWNER` keeps the dispatch
 /// stopgap until its owner approves it: the owner's desktop answers `@hive` in
 /// chats the phone creates once the box is an Admin, and details say whether
 /// that desktop is online (`available` / `availableVia`) from its heartbeat.

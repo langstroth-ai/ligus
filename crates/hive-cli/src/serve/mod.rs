@@ -74,14 +74,14 @@ pub struct ServeOptions {
     pub name: Option<String>,
     pub pair: bool,
     pub prometheus_url: String,
-    /// Whether `HIVE_PROMETHEUS_URL` was set: with no `dashboard.toml`, only
+    /// Whether `LIGUS_PROMETHEUS_URL` was set: with no `dashboard.toml`, only
     /// then is the default (lab) dashboard generated.
     pub prometheus_configured: bool,
-    /// `dashboard.toml` (`HIVE_DASHBOARD_FILE`, default in the data dir).
+    /// `dashboard.toml` (`LIGUS_DASHBOARD_FILE`, default in the data dir).
     pub dashboard_file: PathBuf,
     /// `@mention` added to a phone message that names no agent.
     pub default_agent: Option<String>,
-    /// The member this box belongs to (`HIVE_SERVE_OWNER`: an actor id or a
+    /// The member this box belongs to (`LIGUS_SERVE_OWNER`: an actor id or a
     /// display name). Set, the box registers its host as theirs, so desktops
     /// treat it as one of that person's own devices: it doesn't count as a
     /// second human, and the owner's desktop answers `@hive` in chats the phone
@@ -98,7 +98,7 @@ pub struct ServeOptions {
 }
 
 impl ServeOptions {
-    /// Flags first, then `HIVE_SERVE_*` / `HIVE_NTFY_*` env, then defaults.
+    /// Flags first, then `LIGUS_SERVE_*` / `LIGUS_NTFY_*` env, then defaults.
     #[allow(clippy::too_many_arguments)]
     pub fn from_flags(
         cfg: &Config,
@@ -111,41 +111,41 @@ impl ServeOptions {
         name: Option<String>,
         pair: bool,
     ) -> Result<Self> {
-        let listen_raw = listen.or_else(|| env_opt("HIVE_SERVE_LISTEN")).unwrap_or_else(|| DEFAULT_LISTEN.into());
+        let listen_raw = listen.or_else(|| env_opt("LIGUS_SERVE_LISTEN")).unwrap_or_else(|| DEFAULT_LISTEN.into());
         let listen: SocketAddr = listen_raw
             .parse()
             .with_context(|| format!("--listen must be IP:PORT (got '{listen_raw}')"))?;
-        if !pair::bind_allowed(listen.ip()) && !env_flag("HIVE_SERVE_ALLOW_ANY_BIND", false) {
+        if !pair::bind_allowed(listen.ip()) && !env_flag("LIGUS_SERVE_ALLOW_ANY_BIND", false) {
             bail!(
                 "refusing to listen on {listen}: bind to loopback, a private LAN address or the box's Tailscale IP \
-                 (set HIVE_SERVE_ALLOW_ANY_BIND=1 to override)"
+                 (set LIGUS_SERVE_ALLOW_ANY_BIND=1 to override)"
             );
         }
-        let ntfy = match (ntfy_url.or_else(|| env_opt("HIVE_NTFY_URL")), ntfy_topic.or_else(|| env_opt("HIVE_NTFY_TOPIC"))) {
-            (Some(url), Some(topic)) => Some(ntfy::Ntfy { url, topic, token: env_opt("HIVE_NTFY_TOKEN") }),
+        let ntfy = match (ntfy_url.or_else(|| env_opt("LIGUS_NTFY_URL")), ntfy_topic.or_else(|| env_opt("LIGUS_NTFY_TOPIC"))) {
+            (Some(url), Some(topic)) => Some(ntfy::Ntfy { url, topic, token: env_opt("LIGUS_NTFY_TOKEN") }),
             (Some(_), None) | (None, Some(_)) => bail!("ntfy needs both a URL and a topic (--ntfy-url / --ntfy-topic)"),
             (None, None) => None,
         };
         Ok(Self {
             listen,
             token_file: token_file
-                .or_else(|| env_opt("HIVE_SERVE_TOKEN_FILE"))
+                .or_else(|| env_opt("LIGUS_SERVE_TOKEN_FILE"))
                 .map(PathBuf::from)
                 .unwrap_or_else(|| cfg.data_dir.join("serve.token")),
             ntfy,
-            public_url: public_url.or_else(|| env_opt("HIVE_SERVE_PUBLIC_URL")),
+            public_url: public_url.or_else(|| env_opt("LIGUS_SERVE_PUBLIC_URL")),
             label: label
-                .or_else(|| env_opt("HIVE_SERVE_LABEL"))
+                .or_else(|| env_opt("LIGUS_SERVE_LABEL"))
                 .or_else(|| env_opt("HOSTNAME"))
                 .unwrap_or_else(|| "home host".into()),
-            name: name.or_else(|| env_opt("HIVE_SERVE_NAME")),
+            name: name.or_else(|| env_opt("LIGUS_SERVE_NAME")),
             pair,
-            prometheus_url: env_opt("HIVE_PROMETHEUS_URL").unwrap_or_else(|| "http://127.0.0.1:9090".into()),
-            prometheus_configured: env_opt("HIVE_PROMETHEUS_URL").is_some(),
+            prometheus_url: env_opt("LIGUS_PROMETHEUS_URL").unwrap_or_else(|| "http://127.0.0.1:9090".into()),
+            prometheus_configured: env_opt("LIGUS_PROMETHEUS_URL").is_some(),
             dashboard_file: dashboard::config_path(&cfg.data_dir),
-            default_agent: env_opt("HIVE_SERVE_DEFAULT_AGENT").map(|a| a.trim().trim_start_matches('@').to_string()),
-            owner: env_opt("HIVE_SERVE_OWNER").map(|o| o.trim().trim_start_matches('@').to_string()),
-            apply_on_approve: env_flag("HIVE_SERVE_APPLY_ON_APPROVE", false),
+            default_agent: env_opt("LIGUS_SERVE_DEFAULT_AGENT").map(|a| a.trim().trim_start_matches('@').to_string()),
+            owner: env_opt("LIGUS_SERVE_OWNER").map(|o| o.trim().trim_start_matches('@').to_string()),
+            apply_on_approve: env_flag("LIGUS_SERVE_APPLY_ON_APPROVE", false),
             sync_every: Duration::from_secs(3),
             remote: None,
             appearance: appearance::AppearanceConfig::from_env(),
@@ -158,7 +158,7 @@ impl ServeOptions {
     }
 }
 
-/// Resolve `HIVE_SERVE_OWNER` against the workspace roster: a human member other
+/// Resolve `LIGUS_SERVE_OWNER` against the workspace roster: a human member other
 /// than this box, by actor id or (unique, case-insensitive) display name.
 /// Returns their actor id and whether this box is already an Admin or Owner.
 fn resolve_owner(svc: &ChatService, ws: Uuid, wanted: &str) -> Result<(String, bool)> {
@@ -191,7 +191,7 @@ fn resolve_owner(svc: &ChatService, ws: Uuid, wanted: &str) -> Result<(String, b
 }
 
 /// Pre-enrollment start: this box acts as its own identity. Without
-/// `HIVE_SERVE_OWNER`, it joins the roster as its own member (the original
+/// `LIGUS_SERVE_OWNER`, it joins the roster as its own member (the original
 /// model). With it, it asks to be enrolled as the owner's device (the code the
 /// owner approves on their desktop) and keeps today's behavior meanwhile: an
 /// existing member registers its host as the owner's (the dispatch stopgap); a
@@ -223,19 +223,19 @@ fn register_own(svc: &mut ChatService, ws: Uuid, host_id: &str, opts: &ServeOpti
         Ok((owner, admin)) => {
             if !admin {
                 eprintln!(
-                    "serve: HIVE_SERVE_OWNER: until you approve this box as your device, desktops treat it as {wanted}'s \
+                    "serve: LIGUS_SERVE_OWNER: until you approve this box as your device, desktops treat it as {wanted}'s \
                      only once it is an Admin"
                 );
             }
             host.owner_actor_id = owner;
         }
-        Err(e) => eprintln!("serve: HIVE_SERVE_OWNER ignored: {e}"),
+        Err(e) => eprintln!("serve: LIGUS_SERVE_OWNER ignored: {e}"),
     }
     svc.ensure_host(ws, host).map(|_| ()).context("registering this box as a workspace host")
 }
 
 /// Print the enrollment code the owner approves on their desktop. `owner` is
-/// `HIVE_SERVE_OWNER` (an actor id or display name), shown by name.
+/// `LIGUS_SERVE_OWNER` (an actor id or display name), shown by name.
 pub fn print_enrollment(svc: &ChatService, ws: Uuid, label: &str, owner: Option<&str>) {
     let request = svc.enrollment_request(ws, label);
     let name = owner.map(|o| {
@@ -330,7 +330,7 @@ pub struct Shared {
     busy: Mutex<HashSet<(Uuid, Uuid)>>,
     /// The dashboard's workspace snapshot, reused for a few seconds.
     hive_snapshot: Mutex<Option<(std::time::Instant, Arc<dashboard_hive::HiveSnapshot>)>>,
-    /// MCP servers for `source = "mcp"` dashboard panels (`HIVE_MCP_CONFIG`,
+    /// MCP servers for `source = "mcp"` dashboard panels (`LIGUS_MCP_CONFIG`,
     /// read at start), or why there are none.
     pub dashboard_mcp: std::result::Result<hive_runtime::McpRegistry, String>,
     /// Repos from the phone: the GitHub backend, clone jobs, checkout locks.
@@ -338,7 +338,7 @@ pub struct Shared {
 }
 
 /// How long a dashboard snapshot of the workspace is reused.
-const HIVE_SNAPSHOT_TTL: Duration = Duration::from_secs(3);
+const LIGUS_SNAPSHOT_TTL: Duration = Duration::from_secs(3);
 
 /// The live chats of workspace `ws` (config log and archived chats excluded).
 pub fn chats_of(svc: &ChatService, ws: Uuid) -> Result<Vec<ChatSession>> {
@@ -403,7 +403,7 @@ impl dashboard::HiveProvider for Shared {
     fn snapshot(&self) -> Result<Arc<dashboard_hive::HiveSnapshot>> {
         let mut cached = self.hive_snapshot.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((at, snap)) = cached.as_ref() {
-            if at.elapsed() < HIVE_SNAPSHOT_TTL {
+            if at.elapsed() < LIGUS_SNAPSHOT_TTL {
                 return Ok(snap.clone());
             }
         }
@@ -459,9 +459,9 @@ impl Shared {
 /// The MCP servers dashboard panels may use (see [`Shared::dashboard_mcp`]).
 pub fn dashboard_mcp_registry() -> std::result::Result<hive_runtime::McpRegistry, String> {
     match crate::mcp_config::load_from_env() {
-        Ok(specs) if specs.is_empty() => Err("no MCP servers are configured on this host (HIVE_MCP_CONFIG)".into()),
+        Ok(specs) if specs.is_empty() => Err("no MCP servers are configured on this host (LIGUS_MCP_CONFIG)".into()),
         Ok(specs) => Ok(hive_runtime::McpRegistry::new(specs)),
-        Err(e) => Err(format!("HIVE_MCP_CONFIG: {e:#}")),
+        Err(e) => Err(format!("LIGUS_MCP_CONFIG: {e:#}")),
     }
 }
 
@@ -514,7 +514,7 @@ impl Shared {
     ///
     /// `mode`: `owner` (enrolled as the owner's device: the phone acts as the
     /// owner), `member` (its own workspace member, the pre-enrollment model),
-    /// `pending` (`HIVE_SERVE_OWNER` set, waiting for the owner's approval) or
+    /// `pending` (`LIGUS_SERVE_OWNER` set, waiting for the owner's approval) or
     /// `revoked` (read-only until re-enrolled).
     pub fn identity_json(&self) -> serde_json::Value {
         let (actor, fingerprint) = {
@@ -1213,7 +1213,7 @@ pub fn cmd_pair(data_dir: &std::path::Path, opts: &ServeOptions, relay_only: boo
     if pair::is_loopback_url(&url) {
         anyhow::bail!(
             "the pairing link would point the phone at {url}, which on the phone is the phone itself. \
-             Run with the server's settings (HIVE_SERVE_LISTEN / HIVE_DATA_DIR, e.g. from its env file), \
+             Run with the server's settings (LIGUS_SERVE_LISTEN / LIGUS_DATA_DIR, e.g. from its env file), \
              or pass --listen <tailnet-ip:port> or --public-url <url>"
         );
     }

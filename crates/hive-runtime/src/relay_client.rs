@@ -74,7 +74,7 @@ pub enum RelayProbe {
 
 /// Accept either a bare relay token or the issued `name:token` form and return
 /// just the value the relay expects as the Bearer. The `name:` prefix is only a
-/// server-side lookup key (e.g. `HIVE_RELAY_USER_TOKENS`); sending it verbatim
+/// server-side lookup key (e.g. `LIGUS_RELAY_USER_TOKENS`); sending it verbatim
 /// 401s. Relay tokens are colon-free (hex, or `hrt1.<b64>.<b64>`), so a leading
 /// `identifier:` can be dropped safely; anything that doesn't look like that is
 /// returned unchanged.

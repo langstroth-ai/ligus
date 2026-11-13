@@ -56,11 +56,11 @@ pub enum IdentityMode {
 }
 
 impl IdentityMode {
-    /// Read the mode from `HIVE_IDENTITY_MODE` (`relay` | `github-signing-keys`).
+    /// Read the mode from `LIGUS_IDENTITY_MODE` (`relay` | `github-signing-keys`).
     /// Anything unset/unrecognized falls back to [`IdentityMode::Relay`] so the
     /// default deployment is byte-for-byte unchanged.
     pub fn from_env() -> Self {
-        match hive_core::compat::var("HIVE_IDENTITY_MODE").ok().as_deref() {
+        match hive_core::compat::var("LIGUS_IDENTITY_MODE").ok().as_deref() {
             Some("github-signing-keys") | Some("github") | Some("option-c") => {
                 IdentityMode::GithubSigningKeys
             }

@@ -6,10 +6,10 @@
 //! they change (the `save_appearance` command in `app/src/lib.rs`). `hive
 //! serve` reads, in order:
 //!
-//! 1. its own config: `HIVE_SERVE_PALETTE` and `HIVE_SERVE_APPEARANCE`, for a
+//! 1. its own config: `LIGUS_SERVE_PALETTE` and `LIGUS_SERVE_APPEARANCE`, for a
 //!    headless home host with no desktop app;
 //! 2. the desktop app's `appearance.json` on this machine
-//!    (`HIVE_DESKTOP_DATA_DIR`, else the OS app-data dir for `ai.ligus.desktop`,
+//!    (`LIGUS_DESKTOP_DATA_DIR`, else the OS app-data dir for `ai.ligus.desktop`,
 //!    falling back to the original `com.hive.desktop`).
 //!
 //! Each field resolves on its own, so a box can pin the palette in config and
@@ -34,9 +34,9 @@ pub const FILE_NAME: &str = "appearance.json";
 /// Where `ligus serve` looks for the host's theme.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AppearanceConfig {
-    /// Palette from serve config (`HIVE_SERVE_PALETTE`), already validated.
+    /// Palette from serve config (`LIGUS_SERVE_PALETTE`), already validated.
     pub palette: Option<String>,
-    /// Mode from serve config (`HIVE_SERVE_APPEARANCE`), already validated.
+    /// Mode from serve config (`LIGUS_SERVE_APPEARANCE`), already validated.
     pub mode: Option<String>,
     /// The desktop app's data dir on this machine, if there is one.
     pub desktop_dir: Option<PathBuf>,
@@ -46,21 +46,21 @@ impl AppearanceConfig {
     /// From the environment. An unknown palette or mode is ignored (with a
     /// warning) rather than refusing to start: it only themes the phone.
     pub fn from_env() -> Self {
-        let palette = env_opt("HIVE_SERVE_PALETTE").and_then(|p| {
+        let palette = env_opt("LIGUS_SERVE_PALETTE").and_then(|p| {
             let v = normalize_palette(&p);
             if v.is_none() {
-                eprintln!("ligus serve: ignoring HIVE_SERVE_PALETTE={p:?} (one of {})", PALETTES.join(", "));
+                eprintln!("ligus serve: ignoring LIGUS_SERVE_PALETTE={p:?} (one of {})", PALETTES.join(", "));
             }
             v
         });
-        let mode = env_opt("HIVE_SERVE_APPEARANCE").and_then(|m| {
+        let mode = env_opt("LIGUS_SERVE_APPEARANCE").and_then(|m| {
             let v = normalize_mode(&m);
             if v.is_none() {
-                eprintln!("ligus serve: ignoring HIVE_SERVE_APPEARANCE={m:?} (one of {})", MODES.join(", "));
+                eprintln!("ligus serve: ignoring LIGUS_SERVE_APPEARANCE={m:?} (one of {})", MODES.join(", "));
             }
             v
         });
-        let desktop_dir = env_opt("HIVE_DESKTOP_DATA_DIR").map(PathBuf::from).or_else(default_desktop_dir);
+        let desktop_dir = env_opt("LIGUS_DESKTOP_DATA_DIR").map(PathBuf::from).or_else(default_desktop_dir);
         Self { palette, mode, desktop_dir }
     }
 }

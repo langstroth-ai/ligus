@@ -28,7 +28,7 @@ export function DiagnosticsSection() {
     <Section title="Diagnostics">
       <p className="text-xs opacity-50">
         Recent internal log output — background errors from sync, agents, scheduling, and workflows,
-        plus panics. Useful when something misbehaves silently. Set <code>HIVE_LOG=debug</code> for
+        plus panics. Useful when something misbehaves silently. Set <code>LIGUS_LOG=debug</code> for
         more detail. Newest lines are at the bottom.
       </p>
       <div className="flex items-center gap-2">

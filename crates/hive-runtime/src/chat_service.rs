@@ -2103,7 +2103,7 @@ pub fn cascade_target<'a>(session: &'a ChatSession, reply: &ChatMessage) -> Opti
 /// Resolve a workspace runtime's credential to a usable secret — where a
 /// headless worker turns a **workspace-owned** runtime into an actual key (spec
 /// §12.5), never a personal one. `SecretRef` reads the worker's out-of-band env
-/// (`HIVE_WS_SECRET_<ref>`); `Inline` returns the secret carried E2EE on the
+/// (`LIGUS_WS_SECRET_<ref>`); `Inline` returns the secret carried E2EE on the
 /// config log; `None` is keyless.
 pub fn resolve_workspace_credential(cred: &WorkspaceCredential) -> Option<String> {
     match cred {
@@ -2462,9 +2462,9 @@ mod tests {
 
         // SecretRef resolves from the worker's env; Inline returns the carried secret.
         assert_eq!(resolve_workspace_credential(&rt.credential), None);
-        std::env::set_var("HIVE_WS_SECRET_acme", "sk-workspace-123");
+        std::env::set_var("LIGUS_WS_SECRET_acme", "sk-workspace-123");
         assert_eq!(resolve_workspace_credential(&rt.credential).as_deref(), Some("sk-workspace-123"));
-        std::env::remove_var("HIVE_WS_SECRET_acme");
+        std::env::remove_var("LIGUS_WS_SECRET_acme");
         assert_eq!(
             resolve_workspace_credential(&WorkspaceCredential::Inline { secret: "sk-inline".into() }).as_deref(),
             Some("sk-inline")

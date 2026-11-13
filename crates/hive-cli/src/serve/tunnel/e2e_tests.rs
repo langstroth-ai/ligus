@@ -3,9 +3,9 @@
 //! the tunnel, renewal, and revocation (included from `serve/tests.rs` for
 //! its harness).
 //!
-//! Set `HIVE_TUNNEL_INTEROP_RELAY=http://127.0.0.1:<port>` to run
+//! Set `LIGUS_TUNNEL_INTEROP_RELAY=http://127.0.0.1:<port>` to run
 //! `interop_against_a_real_relay` against a real relay binary started with
-//! `HIVE_RELAY_TUNNEL=open`.
+//! `LIGUS_RELAY_TUNNEL=open`.
 
 use std::time::Duration;
 
@@ -346,11 +346,11 @@ async fn tunnel_request_after_revocation_on_open_session_gets_401() {
 }
 
 /// Interop with a real relay (the Go `honeyhive-ai/relay` with
-/// `HIVE_RELAY_TUNNEL=open`). Ignored unless `HIVE_TUNNEL_INTEROP_RELAY` is set.
+/// `LIGUS_RELAY_TUNNEL=open`). Ignored unless `LIGUS_TUNNEL_INTEROP_RELAY` is set.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn interop_against_a_real_relay() {
-    let Ok(relay) = hive_core::compat::var("HIVE_TUNNEL_INTEROP_RELAY") else {
-        eprintln!("skipped: set HIVE_TUNNEL_INTEROP_RELAY=http://127.0.0.1:<port>");
+    let Ok(relay) = hive_core::compat::var("LIGUS_TUNNEL_INTEROP_RELAY") else {
+        eprintln!("skipped: set LIGUS_TUNNEL_INTEROP_RELAY=http://127.0.0.1:<port>");
         return;
     };
     let h = serve_with_relay(&relay).await;
