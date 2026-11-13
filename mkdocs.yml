@@ -96,6 +96,7 @@ nav:
       - Multi-agent collaboration: features/multi-agent.md
       - Mentions & notifications: features/mentions-and-notifications.md
       - Agentic workflows: features/workflows.md
+      - Flow (routing, hand-offs, task board): features/flow.md
       - Ligus on your phone: features/phone-app.md
       - Host dashboard: features/dashboard.md
       - Scheduled agents: features/scheduling.md

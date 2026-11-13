@@ -247,6 +247,23 @@ type** (Claude Code is not the only agent that edits files):
   **enabled** on the Tools & MCP tab — an installed-but-disabled server
   is inert, so nothing runs until you turn it on.
 
+## Flow
+
+Per-device settings for [Flow](flow.md):
+
+- **Routing**: route un-addressed messages **Off**, in **Shadow** (the
+  default: log what the router would pick, the primary still answers) or
+  **Live**; the outcome half-life; the cool-down after a failure (15 min,
+  0 = never); the exploration share bounds (5–30 %).
+- **Review queue**: the queue limit (5) and long-wait threshold (2 h); the
+  stop-upstream note (**On**, **A/B** in half the chats, or **Off**); **Ask
+  more reviewers** and **Take queued stages when idle** (both off by
+  default).
+- **Task board**: let agents pick up work on their own (off by default).
+- **Workspace marks**: show marks in agent context (on).
+- **Worktrees**: reuse turn worktrees (on).
+- **Hand-offs**: hand-off cards and context parcels (on).
+
 ## Updates & data
 
 - **Check for updates** — reports the version you're on and checks

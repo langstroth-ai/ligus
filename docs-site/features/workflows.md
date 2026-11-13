@@ -187,6 +187,12 @@ interrupted (say, by an app restart); finished stages keep their outputs.
 Gate approvals also reach your phone as a push notification when a
 `ligus serve` host is set up ([Ligus on your phone](phone-app.md)).
 
+A stage that feeds the next records a hand-off card, and the wait of each
+stage sent to another host is measured. With **Take queued stages when idle**
+on (Settings → Flow), a stage that waits over a minute for a busy or offline
+host can run on an idle device that has the agent's runtime. See
+[Flow](flow.md#backpressure-the-review-queue).
+
 ## Current limits
 
 - Only a person starts a run; there is no schedule or event trigger for

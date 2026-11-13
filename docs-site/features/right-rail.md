@@ -1,7 +1,7 @@
 # Right Rail
 
 The right side of the window is a single utility pane with a
-vertical icon strip you click to switch contents. Eight sections:
+vertical icon strip you click to switch contents. Nine sections:
 
 | Pane      | What's in it                                                    |
 |-----------|-----------------------------------------------------------------|
@@ -12,6 +12,7 @@ vertical icon strip you click to switch contents. Eight sections:
 | Vaults    | Reference-material sources mounted into the session             |
 | Skills    | Instruction bundles injected into participants' prompts         |
 | Workflows | Agent-written pipelines: read-only definitions (run, pause, delete, ask an agent to change), live runs, gates. See [Agentic workflows](workflows.md) |
+| Flow      | The task board, review queue and hand-off waits, workspace marks, routing, careers, path zones and the home beacon. See [Flow](flow.md) |
 | Activity  | Streaming runtime activity for the workspace                    |
 
 ![Right rail with the Tools pane active](../images/right-rail.png){ width="800" }
@@ -48,6 +49,11 @@ pane header to close the rail entirely.
   relay issuer key (Settings → Team sync) — a **Remote agents** section that
   enrolls a headless agent and generates the one copy-paste command to run on its
   box. See [Headless agents](../concepts/headless-agents.md).
+
+- **Flow**: when work is piling up or nobody picked something up. The
+  Board lists unassigned work and who would take it; Queue shows the
+  review gate and where work waits; Marks, Routing, Roster, Zones and Home
+  cover the rest. See [Flow](flow.md).
 
 ## Why a single rail
 
