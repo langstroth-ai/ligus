@@ -14337,6 +14337,8 @@ pub fn run() {
             flow::flow_set_agent_profile,
             flow::flow_board,
             flow::flow_pickup,
+            flow::flow_home,
+            flow::flow_publish_beacon,
             workflows::remove_workflow,
             workflows::set_workflow_enabled,
             workflows::workflow_change_request,

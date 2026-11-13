@@ -704,6 +704,126 @@ pub(crate) fn release_worktree(state: &AppState, wt: hive_runtime::git_worktree:
 }
 
 // ---------------------------------------------------------------------------
+// Home beacon
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HomeReport {
+    pub beacon: Option<flow::HomeBeacon>,
+    /// This device's view, to compare against the beacon.
+    pub local_relay_url: String,
+    pub local_base_branch: String,
+    pub local_host_id: String,
+    pub coordinator_label: String,
+    pub coordinator_online: Option<bool>,
+    /// Where this device differs from home.
+    pub mismatches: Vec<String>,
+}
+
+fn local_base_branch(state: &AppState) -> String {
+    let root = state.workspace_repo_root();
+    if root.trim().is_empty() || !hive_runtime::git_worktree::is_git_repo(std::path::Path::new(&root)) {
+        return String::new();
+    }
+    let base = hive_runtime::git_worktree::chat_base(std::path::Path::new(&root));
+    if base != "HEAD" {
+        return base;
+    }
+    hive_core::process_util::command("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
+}
+
+fn local_relay(state: &AppState) -> String {
+    state.settings.lock().unwrap().relay_url.clone().unwrap_or_default().trim().trim_end_matches('/').to_string()
+}
+
+/// Differences between a device's settings and the beacon.
+pub(crate) fn beacon_mismatches(beacon: &flow::HomeBeacon, relay: &str, base: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let home_relay = beacon.relay_url.trim().trim_end_matches('/');
+    if home_relay != relay {
+        out.push(if relay.is_empty() {
+            format!("This device has no relay; home syncs through {home_relay}.")
+        } else if home_relay.is_empty() {
+            "Home has no relay, but this device syncs through one.".to_string()
+        } else {
+            format!("This device syncs through {relay}; home is {home_relay}.")
+        });
+    }
+    if !beacon.base_branch.is_empty() && !base.is_empty() && beacon.base_branch != base {
+        out.push(format!("Chats here start from {base}; home starts them from {}.", beacon.base_branch));
+    }
+    out
+}
+
+pub(crate) fn home_report(state: &AppState, workspace_id: Uuid) -> HomeReport {
+    let (beacon, hosts) = {
+        let svc = state.service.lock().unwrap();
+        (svc.flow_config(workspace_id).unwrap_or_default().beacon, svc.list_hosts(workspace_id).unwrap_or_default())
+    };
+    let relay = local_relay(state);
+    let base = local_base_branch(state);
+    let now = hive_core::Timestamp::now();
+    let (coordinator_label, coordinator_online) = match beacon.as_ref().filter(|b| !b.coordinator_host_id.is_empty()) {
+        Some(b) => match hosts.iter().find(|h| h.id == b.coordinator_host_id) {
+            Some(h) => (h.label.clone(), Some(state.host_presence.is_online(h, &now))),
+            None => (b.coordinator_host_id.chars().take(8).collect(), None),
+        },
+        None => (String::new(), None),
+    };
+    HomeReport {
+        mismatches: beacon.as_ref().map(|b| beacon_mismatches(b, &relay, &base)).unwrap_or_default(),
+        beacon,
+        local_relay_url: relay,
+        local_base_branch: base,
+        local_host_id: state.local_host_id(),
+        coordinator_label,
+        coordinator_online,
+    }
+}
+
+/// The workspace's home record and how this device compares (Flow → Home).
+#[tauri::command]
+pub(crate) fn flow_home(state: State<'_, AppState>) -> HomeReport {
+    let wid = state.active_workspace_id();
+    home_report(&state, wid)
+}
+
+/// Publish this device's relay, base branch and host as the workspace's home
+/// (admins only). Never carries a token or passphrase.
+#[tauri::command]
+pub(crate) fn flow_publish_beacon(state: State<'_, AppState>, note: String, coordinator: bool) -> Result<(), String> {
+    let wid = state.active_workspace_id();
+    let previous = state.service.lock().unwrap().flow_config(wid).map_err(map_err)?.beacon;
+    let beacon = flow::HomeBeacon {
+        relay_url: local_relay(&state),
+        base_branch: local_base_branch(&state),
+        coordinator_host_id: if coordinator {
+            state.local_host_id()
+        } else {
+            previous.map(|b| b.coordinator_host_id).unwrap_or_default()
+        },
+        note: note.trim().chars().take(200).collect(),
+        updated_by: state.service.lock().unwrap().author().display_name.clone(),
+        at_ms: flow::now_ms(),
+    };
+    state
+        .service
+        .lock()
+        .unwrap()
+        .record_flow(hive_core::workspace_config_session_id(wid), wid, FlowRecord::Beacon(beacon))
+        .map_err(map_err)
+}
+
+// ---------------------------------------------------------------------------
 // Reply directives: stripped in `finalize_reply`, applied after the turn.
 // ---------------------------------------------------------------------------
 
@@ -2127,6 +2247,18 @@ diff --git a/old.txt b/old.txt\ndeleted file mode 100644\n";
         let fresh = board(&view, 1_000_000);
         assert!(fresh[0].item.stimulus < rows[0].item.stimulus);
         assert!(fresh[0].nearest_threshold.is_some());
+    }
+
+    #[test]
+    fn beacon_mismatches_name_the_difference() {
+        let b = hive_core::flow::HomeBeacon { relay_url: "https://relay.example/".into(), base_branch: "main".into(), ..Default::default() };
+        assert!(beacon_mismatches(&b, "https://relay.example", "main").is_empty());
+        let m = beacon_mismatches(&b, "", "develop");
+        assert_eq!(m.len(), 2);
+        assert!(m[0].contains("no relay"));
+        assert!(m[1].contains("start from develop"));
+        // An unknown local base branch is not a mismatch.
+        assert!(beacon_mismatches(&b, "https://relay.example", "").is_empty());
     }
 
     #[test]

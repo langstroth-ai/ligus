@@ -348,3 +348,25 @@ export const BOARD_KIND_LABEL: Record<BoardItemKind, string> = {
   failedStage: "Failed stage",
   needsReview: "Needs review",
 };
+
+export interface HomeBeacon {
+  relayUrl: string;
+  baseBranch: string;
+  coordinatorHostId: string;
+  note: string;
+  updatedBy: string;
+  atMs: number;
+}
+
+export interface HomeReport {
+  beacon: HomeBeacon | null;
+  localRelayUrl: string;
+  localBaseBranch: string;
+  localHostId: string;
+  coordinatorLabel: string;
+  coordinatorOnline: boolean | null;
+  mismatches: string[];
+}
+
+export const homeReport = () => invoke<HomeReport>("flow_home");
+export const publishBeacon = (note: string, coordinator: boolean) => invoke<void>("flow_publish_beacon", { note, coordinator });

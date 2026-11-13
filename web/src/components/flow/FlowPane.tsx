@@ -6,11 +6,12 @@ import { MarksSection } from "@/components/flow/MarksSection";
 import { ZonesSection } from "@/components/flow/ZonesSection";
 import { RosterSection } from "@/components/flow/RosterSection";
 import { BoardSection } from "@/components/flow/BoardSection";
+import { HomeSection } from "@/components/flow/HomeSection";
 
-/// The Flow pane: how work moves through the workspace — who the router
-/// would send un-addressed work to, and (as more of flow lands) the task
-/// board, workspace marks and the review queue.
-export type FlowTab = "board" | "queue" | "marks" | "routing" | "roster" | "zones";
+/// The Flow pane: how work moves through the workspace — the task board,
+/// the review queue and hand-off waits, workspace marks, routing, careers,
+/// path zones and the home beacon.
+export type FlowTab = "board" | "queue" | "marks" | "routing" | "roster" | "zones" | "home";
 
 const TABS: { id: FlowTab; label: string }[] = [
   { id: "board", label: "Board" },
@@ -19,6 +20,7 @@ const TABS: { id: FlowTab; label: string }[] = [
   { id: "routing", label: "Routing" },
   { id: "roster", label: "Roster" },
   { id: "zones", label: "Zones" },
+  { id: "home", label: "Home" },
 ];
 
 export function FlowPane({ initialTab = "board" }: { initialTab?: FlowTab }) {
@@ -38,6 +40,7 @@ export function FlowPane({ initialTab = "board" }: { initialTab?: FlowTab }) {
       {tab === "routing" && <RoutingSection />}
       {tab === "roster" && <RosterSection />}
       {tab === "zones" && <ZonesSection />}
+      {tab === "home" && <HomeSection />}
     </RailFrame>
   );
 }
