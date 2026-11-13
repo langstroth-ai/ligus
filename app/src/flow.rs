@@ -6,16 +6,18 @@
 //! delays a turn.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
-use hive_core::flow::{self, FlowRecord, HandoffCard, TurnTag};
+use hive_core::flow::{self, FlowRecord, FlowState, HandoffCard, RouteDecision, RouteMode, TurnTag};
 use hive_core::{ChatMessage, ChatSession, MessageRole};
 use hive_runtime::provider::ChatTurn;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use uuid::Uuid;
 
-use crate::{map_err, AppState, Responder};
+use hive_runtime::chat_service::ChatService;
+
+use crate::{map_err, AppState, DispatchTarget, Responder};
 
 /// Device-local flow settings (Settings → Flow). Persisted in settings.json.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -23,11 +25,26 @@ use crate::{map_err, AppState, Responder};
 pub(crate) struct FlowSettings {
     /// Record hand-off cards and give receivers their context parcels.
     pub handoff_cards: bool,
+    /// Outcome-weighted routing of un-addressed messages: `off`, `shadow`
+    /// (log what it would pick; the primary answers) or `live`.
+    pub route_mode: RouteMode,
+    /// Half-life of an outcome in the routing score.
+    pub half_life_days: f64,
 }
 
 impl Default for FlowSettings {
     fn default() -> Self {
-        Self { handoff_cards: true }
+        Self { handoff_cards: true, route_mode: RouteMode::Shadow, half_life_days: 14.0 }
+    }
+}
+
+impl FlowSettings {
+    pub(crate) fn score_params(&self) -> flow::score::ScoreParams {
+        flow::score::ScoreParams { half_life_days: self.half_life_days.clamp(0.5, 365.0), ..Default::default() }
+    }
+
+    pub(crate) fn route_policy(&self) -> flow::route::RoutePolicy {
+        flow::route::RoutePolicy::default()
     }
 }
 
@@ -35,11 +52,258 @@ pub(crate) fn settings(state: &AppState) -> FlowSettings {
     state.settings.lock().unwrap().flow.clone()
 }
 
+// ---------------------------------------------------------------------------
+// Workspace view: every chat of a workspace plus its flow config, cached until
+// the event log grows.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+pub(crate) struct WorkspaceView {
+    pub sessions: Arc<Vec<ChatSession>>,
+    pub config: Arc<FlowState>,
+}
+
+type ViewCache = HashMap<Uuid, (i64, WorkspaceView)>;
+
+fn view_cache() -> &'static Mutex<ViewCache> {
+    static CACHE: OnceLock<Mutex<ViewCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// All chats of `workspace_id` (not the config log) and the workspace's flow
+/// configuration.
+pub(crate) fn workspace_view(state: &AppState, workspace_id: Uuid) -> WorkspaceView {
+    let svc = state.service.lock().unwrap();
+    view_with(&svc, workspace_id)
+}
+
+/// [`workspace_view`] for a caller already holding the service lock.
+pub(crate) fn view_with(svc: &ChatService, workspace_id: Uuid) -> WorkspaceView {
+    let row = svc.store().max_row_id().unwrap_or(0);
+    if let Some((at, view)) = view_cache().lock().unwrap().get(&workspace_id) {
+        if *at == row {
+            return view.clone();
+        }
+    }
+    let config_id = hive_core::workspace_config_session_id(workspace_id);
+    let mut sessions = Vec::new();
+    for id in svc.store().list_session_ids().unwrap_or_default() {
+        if id == config_id {
+            continue;
+        }
+        if let Ok(Some(s)) = svc.load(id) {
+            if s.workspace_id == workspace_id {
+                sessions.push(s);
+            }
+        }
+    }
+    let config = svc.flow_config(workspace_id).unwrap_or_default();
+    let view = WorkspaceView { sessions: Arc::new(sessions), config: Arc::new(config) };
+    view_cache().lock().unwrap().insert(workspace_id, (row, view.clone()));
+    view
+}
+
 /// Append a flow record, logging (not returning) a failure.
 pub(crate) fn record(state: &AppState, session_id: Uuid, workspace_id: Uuid, record: FlowRecord) {
     let kind = record.type_str();
     if let Err(e) = state.service.lock().unwrap().record_flow(session_id, workspace_id, record) {
         tracing::warn!(target: "flow", kind, "couldn't record a flow record: {e}");
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// Routing (un-addressed messages)
+// ---------------------------------------------------------------------------
+
+/// How long a routed thread stays with its agent (thread memory).
+const THREAD_MEMORY_MS: i64 = 2 * 3_600_000;
+/// How far back an approved change to a named file counts as file memory.
+const FILE_MEMORY_MS: i64 = 30 * 86_400_000;
+
+/// Whether a message names its responder (an `@agent` or `@primary`). An
+/// explicit choice always wins: the router never sees it.
+fn addressed(body: &str, session: &ChatSession) -> bool {
+    let m = hive_runtime::mentions::parse_mentions(body, session);
+    m.primary || !m.agents.is_empty()
+}
+
+/// The workspace secret flow keys are made under.
+pub(crate) fn key_secret(state: &AppState, workspace_id: Uuid) -> Vec<u8> {
+    let key = {
+        let s = state.settings.lock().unwrap();
+        // Only the active room's passphrase is known here; a workspace without
+        // one (relay-less) keys under its id.
+        s.workspace_passphrase.as_deref().filter(|p| !p.is_empty()).map(hive_core::derive_workspace_key)
+    };
+    flow::keys::workspace_secret(key, workspace_id)
+}
+
+fn key_secret_cache(state: &AppState, workspace_id: Uuid) -> Vec<u8> {
+    static CACHE: OnceLock<Mutex<HashMap<Uuid, (Option<String>, Vec<u8>)>>> = OnceLock::new();
+    let pass = state.settings.lock().unwrap().workspace_passphrase.clone();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some((p, k)) = cache.lock().unwrap().get(&workspace_id) {
+        if *p == pass {
+            return k.clone();
+        }
+    }
+    let k = key_secret(state, workspace_id);
+    cache.lock().unwrap().insert(workspace_id, (pass, k.clone()));
+    k
+}
+
+/// The candidates the router may pick from: the primary plus the chat's agents
+/// (its participants, or the whole roster when none are picked). An agent
+/// sent to a host that is offline (by presence) is left out.
+fn candidates(state: &AppState, svc: &ChatService, session: &ChatSession) -> Vec<flow::route::Candidate> {
+    let now = hive_core::Timestamp::now();
+    let hosts = svc.list_hosts(session.workspace_id).unwrap_or_default();
+    let here = svc.device_id().to_string();
+    let host_live = |id: &str| id.is_empty() || id == here || hosts.iter().any(|h| h.id == id && state.host_presence.is_online(h, &now));
+    let mut out = vec![flow::route::Candidate { agent: flow::PRIMARY.into(), runtime_id: session.runtime_id.clone(), low_risk_only: false }];
+    for a in &session.workspace_agents {
+        if !session.participant_agent_ids.is_empty() && !session.participant_agent_ids.contains(&a.id) {
+            continue;
+        }
+        if !host_live(&a.host_id) {
+            continue;
+        }
+        out.push(flow::route::Candidate { agent: flow::agent_key(Some(a.id)), runtime_id: a.runtime_id.clone(), low_risk_only: false });
+    }
+    out
+}
+
+/// The agent already carrying this chat's routed thread: the router's last
+/// pick here, if recent and its last turn here didn't fail.
+fn thread_memory(session: &ChatSession, now_ms: i64) -> Option<String> {
+    let last = session.flow.route_decisions.values().max_by_key(|d| d.at_ms)?;
+    if now_ms - last.at_ms > THREAD_MEMORY_MS || last.shadow_choice == flow::PRIMARY {
+        return None;
+    }
+    let failed = session
+        .flow
+        .turns
+        .iter()
+        .rev()
+        .find(|t| t.agent == last.shadow_choice)
+        .is_some_and(|t| t.error);
+    (!failed).then(|| last.shadow_choice.clone())
+}
+
+/// The agent with the most recent approved change to a file the message
+/// names (matched by opaque key).
+fn file_memory(view: &WorkspaceView, secret: &[u8], body: &str, now_ms: i64) -> Option<String> {
+    let keys: Vec<String> = flow::route::named_paths(body).iter().map(|p| flow::keys::file_key(secret, p)).collect();
+    if keys.is_empty() {
+        return None;
+    }
+    view.sessions
+        .iter()
+        .flat_map(|s| s.flow.touches.iter())
+        .filter(|t| keys.contains(&t.file_key) && now_ms - t.at_ms <= FILE_MEMORY_MS)
+        .max_by_key(|t| t.at_ms)
+        .map(|t| t.agent.clone())
+}
+
+/// The outcome scores for a workspace.
+pub(crate) fn score_book(view: &WorkspaceView, s: &FlowSettings, now_ms: i64) -> flow::score::ScoreBook {
+    let samples = flow::score::outcomes(&view.sessions);
+    let turns = flow::score::turns_spent(&view.sessions);
+    flow::score::ScoreBook::new(&samples, &turns, s.score_params(), now_ms)
+}
+
+/// Decide who answers an un-addressed message. Returns the dispatch target
+/// and, when this call made a new decision, the decision to record.
+///
+/// Every dispatch gate (`send_message`, the sync path's `plan_response`, the
+/// deferred-claim fallback) goes through here, so they agree: a decision
+/// already in the log for this message is honoured; otherwise the same
+/// deterministic draw (seeded by the message id) is made.
+pub(crate) fn route_target(
+    state: &AppState,
+    svc: &ChatService,
+    session: &ChatSession,
+    trigger_id: Uuid,
+    body: &str,
+    base: Option<DispatchTarget>,
+) -> (Option<DispatchTarget>, Option<RouteDecision>) {
+    if !matches!(base, Some(DispatchTarget::Primary)) || addressed(body, session) {
+        return (base, None);
+    }
+    if let Some(d) = session.flow.route_decisions.get(&trigger_id) {
+        return (target_of(d, session).or(base), None);
+    }
+    let s = settings(state);
+    if s.route_mode == RouteMode::Off {
+        return (base, None);
+    }
+    let now = flow::now_ms();
+    let view = view_with(svc, session.workspace_id);
+    let book = score_book(&view, &s, now);
+    let cands = candidates(state, svc, session);
+    let config_stops = view.config.route_stops.clone();
+    let thread = thread_memory(session, now);
+    let secret = key_secret_cache(state, session.workspace_id);
+    let file = file_memory(&view, &secret, body, now);
+    let input = flow::route::RouteInput {
+        trigger_id,
+        text: body,
+        candidates: &cands,
+        scores: &book,
+        stops: &config_stops,
+        thread_memory: thread.as_deref(),
+        file_memory: file.as_deref(),
+        mode: s.route_mode,
+        policy: s.route_policy(),
+        now_ms: now,
+    };
+    match flow::route::decide(&input) {
+        Some(d) => (target_of(&d, session).or(base), Some(d)),
+        None => (base, None),
+    }
+}
+
+/// The dispatch target a recorded decision names (live mode only).
+fn target_of(d: &RouteDecision, session: &ChatSession) -> Option<DispatchTarget> {
+    if d.mode != RouteMode::Live || d.chosen == flow::PRIMARY {
+        return Some(DispatchTarget::Primary);
+    }
+    let id = flow::agent_from_key(&d.chosen)?;
+    session.workspace_agents.iter().any(|a| a.id == id).then_some(DispatchTarget::Agent(id))
+}
+
+/// [`crate::dispatch_target`] with routing applied — what every gate calls.
+pub(crate) fn routed_target(
+    state: &AppState,
+    svc: &ChatService,
+    session: &ChatSession,
+    trigger_id: Uuid,
+    body: &str,
+    local_only: bool,
+    links: &hive_core::DeviceLinks,
+) -> (Option<DispatchTarget>, Option<RouteDecision>) {
+    let base = crate::dispatch_target(body, session, local_only, links);
+    route_target(state, svc, session, trigger_id, body, base)
+}
+
+/// Record a routing decision for `trigger_id` if the log doesn't have one
+/// yet (the device that answers records it, so phone- and serve-posted
+/// messages are logged too).
+pub(crate) fn record_route_if_missing(state: &AppState, session_id: Uuid, trigger_id: Uuid) {
+    let decision = {
+        let svc = state.service.lock().unwrap();
+        let Ok(Some(session)) = svc.load(session_id) else { return };
+        if session.flow.route_decisions.contains_key(&trigger_id) {
+            return;
+        }
+        let Some(m) = session.messages.iter().find(|m| m.id == trigger_id && m.role == MessageRole::User) else { return };
+        let local_only = state.is_local_only_ws(session.workspace_id);
+        let links = crate::device_links_of(&svc, session.workspace_id);
+        routed_target(state, &svc, &session, trigger_id, &m.body.clone(), local_only, &links).1.map(|d| (session.workspace_id, d))
+    };
+    if let Some((wid, d)) = decision {
+        record(state, session_id, wid, FlowRecord::RouteDecision(d));
     }
 }
 
@@ -448,6 +712,196 @@ pub(crate) fn flow_handoffs(state: State<'_, AppState>, session_id: String) -> R
     Ok(svc.load(sid).map_err(map_err)?.map(|s| s.flow.handoffs).unwrap_or_default())
 }
 
+
+/// Display names for agent keys across a workspace.
+fn agent_names(view: &WorkspaceView) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    out.insert(flow::PRIMARY.to_string(), "Ligus (primary)".to_string());
+    for s in view.sessions.iter() {
+        for a in &s.workspace_agents {
+            out.insert(flow::agent_key(Some(a.id)), a.name.clone());
+        }
+    }
+    out
+}
+
+fn name_of(names: &HashMap<String, String>, key: &str) -> String {
+    names.get(key).cloned().unwrap_or_else(|| key.chars().take(8).collect())
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ScoreRow {
+    pub agent: String,
+    pub agent_name: String,
+    pub task_class: String,
+    pub score: f64,
+    pub recent: f64,
+    pub weight: f64,
+    pub outcomes: u32,
+    pub successes: u32,
+    pub turns_per_success: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DecisionRow {
+    pub at_ms: i64,
+    pub session_id: Uuid,
+    pub task_class: String,
+    pub mode: RouteMode,
+    pub chosen: String,
+    pub would_pick: String,
+    pub preferred: String,
+    pub explore: bool,
+    pub reason: flow::route::RouteReason,
+    pub epsilon: f64,
+}
+
+/// Outcomes per experiment arm (shadow vs routed): E2's comparison.
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ArmRow {
+    pub arm: String,
+    pub turns: u32,
+    pub proposals: u32,
+    pub accepted: u32,
+    pub judged: u32,
+    pub acceptance_rate: Option<f64>,
+    pub turns_per_accepted: Option<f64>,
+    pub cost_usd: f64,
+    pub cost_per_accepted: Option<f64>,
+    /// Share of the arm's turns that ran on a local model.
+    pub local_share: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RoutingReport {
+    pub mode: RouteMode,
+    pub since_ms: i64,
+    pub decisions: u32,
+    /// Share of decisions where the router would have sent the work away from
+    /// the primary (shadow) or did (live).
+    pub off_primary_share: f64,
+    pub scores: Vec<ScoreRow>,
+    pub arms: Vec<ArmRow>,
+    pub recent: Vec<DecisionRow>,
+}
+
+/// Whether a runtime id runs on a local model (a local server or Ollama).
+pub(crate) fn is_local_runtime(state: &AppState, runtime_id: &str) -> bool {
+    state.combined_runtimes().iter().find(|r| r.id == runtime_id).is_some_and(|r| {
+        r.provider_kind == hive_core::ModelProviderKind::Ollama || hive_core::endpoint::endpoint_is_local_server(&r.endpoint)
+    })
+}
+
+pub(crate) fn routing_report(state: &AppState, workspace_id: Uuid, days: u32) -> RoutingReport {
+    let s = settings(state);
+    let now = flow::now_ms();
+    let since = now - i64::from(days.max(1)) * 86_400_000;
+    let view = workspace_view(state, workspace_id);
+    let names = agent_names(&view);
+    let book = score_book(&view, &s, now);
+    let mut scores: Vec<ScoreRow> = book
+        .all()
+        .map(|d| ScoreRow {
+            agent_name: name_of(&names, &d.agent),
+            agent: d.agent.clone(),
+            task_class: d.task_class.clone(),
+            score: d.score,
+            recent: d.recent,
+            weight: d.weight,
+            outcomes: d.outcomes,
+            successes: d.successes,
+            turns_per_success: d.turns_per_success,
+        })
+        .collect();
+    scores.sort_by(|a, b| a.task_class.cmp(&b.task_class).then(b.score.total_cmp(&a.score)));
+
+    let mut recent: Vec<DecisionRow> = view
+        .sessions
+        .iter()
+        .flat_map(|sess| sess.flow.route_decisions.values().map(move |d| (sess.id, d)))
+        .filter(|(_, d)| d.at_ms >= since)
+        .map(|(sid, d)| DecisionRow {
+            at_ms: d.at_ms,
+            session_id: sid,
+            task_class: d.task_class.clone(),
+            mode: d.mode,
+            chosen: name_of(&names, &d.chosen),
+            would_pick: name_of(&names, &d.shadow_choice),
+            preferred: name_of(&names, &d.preferred),
+            explore: d.explore,
+            reason: d.reason,
+            epsilon: d.epsilon,
+        })
+        .collect();
+    recent.sort_by_key(|r| std::cmp::Reverse(r.at_ms));
+    let decisions = recent.len() as u32;
+    let off_primary = view
+        .sessions
+        .iter()
+        .flat_map(|sess| sess.flow.route_decisions.values())
+        .filter(|d| d.at_ms >= since && d.shadow_choice != flow::PRIMARY)
+        .count();
+
+    // Per-arm outcomes from tagged turns and the proposals they filed.
+    let mut arms: HashMap<String, ArmRow> = HashMap::new();
+    let mut local_turns: HashMap<String, u32> = HashMap::new();
+    for sess in view.sessions.iter() {
+        for t in sess.flow.turns.iter().filter(|t| t.at_ms >= since && !t.arm.is_empty()) {
+            let row = arms.entry(t.arm.clone()).or_insert_with(|| ArmRow { arm: t.arm.clone(), ..Default::default() });
+            row.turns += 1;
+            row.cost_usd += t.cost_usd;
+            if is_local_runtime(state, &t.runtime_id) {
+                *local_turns.entry(t.arm.clone()).or_default() += 1;
+            }
+            for pid in &t.proposal_ids {
+                let Some(p) = sess.proposals.iter().find(|p| p.id == *pid) else { continue };
+                row.proposals += 1;
+                match p.status {
+                    hive_core::ProposalStatus::Approved | hive_core::ProposalStatus::Applied => {
+                        row.accepted += 1;
+                        row.judged += 1;
+                    }
+                    hive_core::ProposalStatus::Rejected => row.judged += 1,
+                    hive_core::ProposalStatus::Open if p.superseded_by.is_some() => row.judged += 1,
+                    hive_core::ProposalStatus::Open => {}
+                }
+            }
+        }
+    }
+    let mut arms: Vec<ArmRow> = arms
+        .into_values()
+        .map(|mut r| {
+            r.acceptance_rate = (r.judged > 0).then(|| r.accepted as f64 / r.judged as f64);
+            r.turns_per_accepted = (r.accepted > 0).then(|| r.turns as f64 / r.accepted as f64);
+            r.cost_per_accepted = (r.accepted > 0 && r.cost_usd > 0.0).then(|| r.cost_usd / r.accepted as f64);
+            r.local_share = local_turns.get(&r.arm).copied().unwrap_or(0) as f64 / r.turns.max(1) as f64;
+            r
+        })
+        .collect();
+    arms.sort_by(|a, b| a.arm.cmp(&b.arm));
+    recent.truncate(50);
+    RoutingReport {
+        mode: s.route_mode,
+        since_ms: since,
+        decisions,
+        off_primary_share: if decisions == 0 { 0.0 } else { off_primary as f64 / decisions as f64 },
+        scores,
+        arms,
+        recent,
+    }
+}
+
+/// The routing report for the active workspace (Flow pane → Routing).
+#[tauri::command]
+pub(crate) fn flow_routing_report(state: State<'_, AppState>, days: Option<u32>) -> RoutingReport {
+    let wid = state.active_workspace_id();
+    routing_report(&state, wid, days.unwrap_or(14))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -499,5 +953,102 @@ mod tests {
         let s: FlowSettings = serde_json::from_str("{}").unwrap();
         assert_eq!(s, FlowSettings::default());
         assert!(s.handoff_cards);
+        // Routing ships in shadow mode.
+        assert_eq!(s.route_mode, RouteMode::Shadow);
+        let live: FlowSettings = serde_json::from_str(r#"{"routeMode":"live"}"#).unwrap();
+        assert_eq!(live.route_mode, RouteMode::Live);
+    }
+
+    fn session_with(agents: &[&str]) -> ChatSession {
+        let mut s = ChatSession::new("t", Uuid::new_v4(), "rt");
+        for a in agents {
+            s.workspace_agents.push(hive_core::WorkspaceAgent::new(*a, "rt2"));
+        }
+        s
+    }
+
+    #[test]
+    fn addressed_messages_never_route() {
+        let s = session_with(&["coder"]);
+        assert!(addressed("@coder fix it", &s));
+        assert!(addressed("@primary fix it", &s));
+        assert!(!addressed("fix it", &s));
+    }
+
+    #[test]
+    fn recorded_decisions_name_the_target_only_in_live_mode() {
+        let s = session_with(&["coder"]);
+        let id = s.workspace_agents[0].id;
+        let mut d = hive_core::flow::RouteDecision {
+            trigger_id: Uuid::new_v4(),
+            task_class: "refactor".into(),
+            chosen: flow::agent_key(Some(id)),
+            preferred: flow::agent_key(Some(id)),
+            explore: false,
+            mode: RouteMode::Live,
+            shadow_choice: flow::agent_key(Some(id)),
+            reason: flow::route::RouteReason::Sampled,
+            epsilon: 0.05,
+            scores: Default::default(),
+            excluded: vec![],
+            at_ms: 0,
+        };
+        assert!(matches!(target_of(&d, &s), Some(DispatchTarget::Agent(a)) if a == id));
+        d.mode = RouteMode::Shadow;
+        assert!(matches!(target_of(&d, &s), Some(DispatchTarget::Primary)));
+        // An agent that left the roster: fall back to the base target.
+        d.mode = RouteMode::Live;
+        d.chosen = flow::agent_key(Some(Uuid::new_v4()));
+        assert!(target_of(&d, &s).is_none());
+    }
+
+    #[test]
+    fn thread_memory_keeps_a_recent_pick_unless_it_failed() {
+        let mut s = session_with(&["coder"]);
+        let key = flow::agent_key(Some(s.workspace_agents[0].id));
+        let now = 10 * 3_600_000;
+        let d = hive_core::flow::RouteDecision {
+            trigger_id: Uuid::new_v4(),
+            task_class: "refactor".into(),
+            chosen: key.clone(),
+            preferred: key.clone(),
+            explore: false,
+            mode: RouteMode::Live,
+            shadow_choice: key.clone(),
+            reason: flow::route::RouteReason::Sampled,
+            epsilon: 0.05,
+            scores: Default::default(),
+            excluded: vec![],
+            at_ms: now - 60_000,
+        };
+        s.flow.apply(&FlowRecord::RouteDecision(d.clone()));
+        assert_eq!(thread_memory(&s, now), Some(key.clone()));
+        assert_eq!(thread_memory(&s, now + 3 * 3_600_000), None, "stale");
+        let mut tag = TurnTag {
+            message_id: Uuid::new_v4(),
+            trigger_id: None,
+            agent: key.clone(),
+            runtime_id: String::new(),
+            host_id: String::new(),
+            task_class: "refactor".into(),
+            role: "conversation".into(),
+            arm: "routed".into(),
+            upstream_arm: String::new(),
+            error: true,
+            error_kind: "timeout".into(),
+            tests_passed: None,
+            tool_calls: 0,
+            duration_ms: 0,
+            cost_usd: 0.0,
+            proposal_ids: vec![],
+            handoff_parcel: false,
+            at_ms: now,
+        };
+        s.flow.apply(&FlowRecord::TurnTagged(tag.clone()));
+        assert_eq!(thread_memory(&s, now), None, "its last turn failed");
+        tag.message_id = Uuid::new_v4();
+        tag.error = false;
+        s.flow.apply(&FlowRecord::TurnTagged(tag));
+        assert_eq!(thread_memory(&s, now), Some(key));
     }
 }

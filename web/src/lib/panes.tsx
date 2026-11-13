@@ -9,6 +9,7 @@ import {
   IconUsers,
   IconWrench,
 } from "@/lib/icons";
+import { IconComb } from "@/components/flow/icon";
 
 /// The utility-pane identities — ONE ordered source of truth shared by the
 /// right-pane icon rail AND the sidebar's Workspace nav rows, so the two can
@@ -23,6 +24,7 @@ export type UtilityPane =
   | "skills"
   | "vaults"
   | "workflows"
+  | "flow"
   | "activity";
 
 export interface PaneDef {
@@ -40,5 +42,6 @@ export const PANES: PaneDef[] = [
   { id: "skills", label: "Skills", icon: (s) => <IconSparkle size={s} /> },
   { id: "vaults", label: "Vaults", icon: (s) => <IconBook size={s} /> },
   { id: "workflows", label: "Workflows", icon: (s) => <IconFlow size={s} /> },
+  { id: "flow", label: "Flow", icon: (s) => <IconComb size={s} /> },
   { id: "activity", label: "Activity", icon: (s) => <IconActivity size={s} /> },
 ];

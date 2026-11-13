@@ -90,6 +90,7 @@ import {
 } from "@/lib/icons";
 import { PANES, type UtilityPane } from "@/lib/panes";
 import { WorkflowsPane, WorkflowStages } from "@/components/WorkflowsPane";
+import { FlowPane } from "@/components/flow/FlowPane";
 
 // Re-exported from the shared pane source so existing
 // `import type { UtilityPane } from "@/components/RightRail"` keeps working.
@@ -201,6 +202,7 @@ export function RightRail({
         {pane === "vaults" && <VaultsPane sessionId={sessionId} />}
         {pane === "skills" && <SkillsPane sessionId={sessionId} />}
         {pane === "workflows" && <WorkflowsPane sessionId={sessionId} />}
+        {pane === "flow" && <FlowPane />}
         {pane === "context" && <ContextPane sessionId={sessionId} activeRuntimeId={activeRuntimeId} />}
         {pane === "activity" && <ActivityPane />}
       </div>

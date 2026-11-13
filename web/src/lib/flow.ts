@@ -83,3 +83,66 @@ export function qualityLine(q: HandoffQuality): string {
   if (q.turns > 0) parts.push(`${q.turns} turn${q.turns === 1 ? "" : "s"} so far`);
   return parts.join(" · ");
 }
+
+export type RouteReason = "sampled" | "explore" | "threadMemory" | "fileMemory" | "only" | "fallback";
+
+export interface ScoreRow {
+  agent: string;
+  agentName: string;
+  taskClass: string;
+  score: number;
+  recent: number;
+  weight: number;
+  outcomes: number;
+  successes: number;
+  turnsPerSuccess: number | null;
+}
+
+export interface DecisionRow {
+  atMs: number;
+  sessionId: string;
+  taskClass: string;
+  mode: RouteMode;
+  chosen: string;
+  wouldPick: string;
+  preferred: string;
+  explore: boolean;
+  reason: RouteReason;
+  epsilon: number;
+}
+
+export interface ArmRow {
+  arm: string;
+  turns: number;
+  proposals: number;
+  accepted: number;
+  judged: number;
+  acceptanceRate: number | null;
+  turnsPerAccepted: number | null;
+  costUsd: number;
+  costPerAccepted: number | null;
+  localShare: number;
+}
+
+export interface RoutingReport {
+  mode: RouteMode;
+  sinceMs: number;
+  decisions: number;
+  offPrimaryShare: number;
+  scores: ScoreRow[];
+  arms: ArmRow[];
+  recent: DecisionRow[];
+}
+
+export const routingReport = (days?: number) => invoke<RoutingReport>("flow_routing_report", { days: days ?? null });
+
+export const pct = (x: number | null | undefined) => (x == null ? "—" : `${Math.round(x * 100)}%`);
+
+export const REASON_LABEL: Record<RouteReason, string> = {
+  sampled: "sampled by score",
+  explore: "exploring",
+  threadMemory: "kept the thread",
+  fileMemory: "knows the file",
+  only: "only candidate",
+  fallback: "all stopped → primary",
+};

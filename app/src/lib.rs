@@ -8265,7 +8265,7 @@ async fn run_deferred_claim_fallback(
             return Ok(());
         };
         let links = device_links_of(&svc, session.workspace_id);
-        match dispatch_target(&trigger.body, &session, local_only, &links) {
+        match flow::routed_target(&state, &svc, &session, trigger_id, &trigger.body, local_only, &links).0 {
             Some(DispatchTarget::Agent(id)) => session
                 .workspace_agents
                 .iter()
@@ -8337,7 +8337,12 @@ async fn send_message(
         // global mutex and bricks every future `service.lock()` this process.
         let Some(session) = svc.load(sid).map_err(map_err)? else { return Ok(()) };
         let links = device_links_of(&svc, workspace_id);
-        (workspace_id, posted.id, dispatch_target(&body, &session, local_only, &links))
+        // Un-addressed messages may be routed (shadow mode logs the pick only).
+        let (target, decision) = flow::routed_target(&state, &svc, &session, posted.id, &body, local_only, &links);
+        if let Some(d) = decision {
+            let _ = svc.record_flow(sid, workspace_id, hive_core::flow::FlowRecord::RouteDecision(d));
+        }
+        (workspace_id, posted.id, target)
     };
 
     // Turn loop: a reply that mentions another (distinct) agent cascades a
@@ -8633,7 +8638,8 @@ fn plan_response(state: &AppState, sid: Uuid, trigger: Option<Uuid>) -> Result<O
         runs_here_linked(local_only, &links, &session, &local_actor_id, &responder.owner_actor_id, binding)
     };
     Ok(match m.role {
-        MessageRole::User => match dispatch_target(&m.body, &session, local_only, &links) {
+        // Same routing as `send_message` (see `flow::route_target`).
+        MessageRole::User => match flow::routed_target(state, &svc, &session, m.id, &m.body, local_only, &links).0 {
             Some(target) => {
                 let agent = match target {
                     DispatchTarget::Agent(id) => session.workspace_agents.iter().find(|a| a.id == id).cloned(),
@@ -8719,6 +8725,7 @@ async fn respond_once(
         }
     }
     tracing::info!(target: "dispatch", session = %sid, ms = started.elapsed().as_millis() as u64, "claimed turn");
+    flow::record_route_if_missing(state, sid, trigger_id);
     run_turn_answering(app, state, sid, workspace_id, &responder, Some(trigger_id)).await.map(|_| ())
 }
 
@@ -14314,6 +14321,7 @@ pub fn run() {
             flow::flow_get_settings,
             flow::flow_set_settings,
             flow::flow_handoffs,
+            flow::flow_routing_report,
             workflows::remove_workflow,
             workflows::set_workflow_enabled,
             workflows::workflow_change_request,
