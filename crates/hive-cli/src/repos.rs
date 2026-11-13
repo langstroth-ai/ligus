@@ -226,13 +226,203 @@ pub struct CheckoutInfo {
     pub branch: Option<String>,
     /// Short commit id of `HEAD` (`None` for an empty repo).
     pub sha: Option<String>,
-    /// The base a new chat branch is cut from: `origin`'s default branch,
-    /// else `main` / `master`, else the current branch.
+    /// The base a new chat branch is cut from: upstream's default branch in a
+    /// fork, else `origin`'s default branch, else `main` / `master`, else the
+    /// current branch.
     pub default_branch: Option<String>,
     pub remote: Option<RemoteRef>,
     /// Uncommitted changes to tracked or untracked files (Hive's own
     /// `.hive/` worktrees excluded).
     pub dirty: bool,
+    /// Set when this checkout is a fork with an `upstream` remote: chat
+    /// branches start from upstream's default branch and PRs open upstream.
+    pub fork: Option<ForkLayout>,
+}
+
+/// The name of the remote a fork checkout fetches the parent project from.
+pub const UPSTREAM_REMOTE: &str = "upstream";
+
+/// A fork checkout: `origin` is the owner's fork (pushes go there), and
+/// `upstream` is the parent project (fetch-only).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForkLayout {
+    /// The parent project `upstream` fetches from.
+    pub upstream: RemoteRef,
+    /// Upstream's default branch: the base for chat branches and PRs.
+    pub base_branch: String,
+    /// `upstream`'s push URL doesn't point at the parent project (a dummy
+    /// such as `DISABLED`), so a stray `git push upstream` can't land.
+    pub push_disabled: bool,
+}
+
+impl ForkLayout {
+    /// The remote-tracking ref of the base: `refs/remotes/upstream/<base>`.
+    pub fn base_ref(&self) -> String {
+        format!("refs/remotes/{UPSTREAM_REMOTE}/{}", self.base_branch)
+    }
+}
+
+/// The fork layout of a checkout, if it has an `upstream` remote that points
+/// at a different repository than `origin`. The base branch is
+/// `upstream/HEAD`'s target, else whichever of `main` / `master` upstream has,
+/// else the local branch tracking upstream.
+pub fn fork_layout(dir: &Path) -> Option<ForkLayout> {
+    let upstream = parse_remote(&git_out(dir, &["remote", "get-url", UPSTREAM_REMOTE])?)?;
+    let origin = git_out(dir, &["remote", "get-url", "origin"]).and_then(|u| parse_remote(&u));
+    if origin.as_ref().is_some_and(|o| same_repo(o, &upstream)) {
+        return None;
+    }
+    let prefix = format!("{UPSTREAM_REMOTE}/");
+    let base_branch = git_out(dir, &["symbolic-ref", "--quiet", "--short", &format!("refs/remotes/{UPSTREAM_REMOTE}/HEAD")])
+        .and_then(|r| r.strip_prefix(&prefix).map(str::to_string))
+        .or_else(|| {
+            ["main", "master"]
+                .into_iter()
+                .find(|b| ref_exists(dir, &format!("refs/remotes/{UPSTREAM_REMOTE}/{b}")))
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            // A local branch configured to track upstream (e.g. master → upstream/master).
+            git_out(dir, &["for-each-ref", "--format=%(refname:short) %(upstream:short)", "refs/heads"])?
+                .lines()
+                .find_map(|l| l.split_once(' ').and_then(|(_, up)| up.strip_prefix(&prefix)).map(str::to_string))
+        })?;
+    let push_disabled = !upstream_push_enabled(dir);
+    Some(ForkLayout { upstream, base_branch, push_disabled })
+}
+
+/// `upstream`'s push URL points at the upstream repository itself (pushes
+/// would land there).
+pub fn upstream_push_enabled(dir: &Path) -> bool {
+    let fetch = git_out(dir, &["remote", "get-url", UPSTREAM_REMOTE]).and_then(|u| parse_remote(&u));
+    let push = git_out(dir, &["remote", "get-url", "--push", UPSTREAM_REMOTE]).and_then(|u| parse_remote(&u));
+    matches!((fetch, push), (Some(f), Some(p)) if same_repo(&f, &p))
+}
+
+/// Same repository (case-insensitive owner/name; hosts compared when both
+/// are known).
+pub fn same_repo(a: &RemoteRef, b: &RemoteRef) -> bool {
+    a.owner.eq_ignore_ascii_case(&b.owner)
+        && a.name.eq_ignore_ascii_case(&b.name)
+        && (a.host.is_empty() || b.host.is_empty() || a.host == b.host)
+}
+
+pub fn ref_exists(dir: &Path, r: &str) -> bool {
+    git_out(dir, &["rev-parse", "--verify", "--quiet", r]).is_some()
+}
+
+/// Refuse a push whose destination is the parent project of a fork: the
+/// remote's push URL must not resolve to `upstream`'s repository (or to
+/// `forbidden`, e.g. the parent GitHub reports). `Ok` names the repo pushed to.
+pub fn check_push_target(dir: &Path, remote: &str, forbidden: Option<&RemoteRef>) -> std::result::Result<RemoteRef, String> {
+    let url = git_out(dir, &["remote", "get-url", "--push", remote]).ok_or_else(|| format!("no remote named {remote}"))?;
+    let target = parse_remote(&url).ok_or_else(|| format!("can't tell where {remote} pushes to"))?;
+    let upstream = git_out(dir, &["remote", "get-url", UPSTREAM_REMOTE]).and_then(|u| parse_remote(&u));
+    for no in upstream.iter().chain(forbidden) {
+        if same_repo(&target, no) {
+            return Err(format!(
+                "refusing to push: {remote} points at {}, the upstream project; this host pushes only to your fork",
+                no.full_name()
+            ));
+        }
+    }
+    Ok(target)
+}
+
+/// Keep `hive.chatBase` (where fresh chat branches start, see
+/// `hive_runtime::git_worktree::chat_base`) at upstream's default branch in a
+/// fork checkout, and drop a stale upstream base when the layout is gone.
+pub fn ensure_chat_base(dir: &Path) {
+    use hive_runtime::git_worktree::CHAT_BASE_CONFIG;
+    let current = git_out(dir, &["config", "--get", CHAT_BASE_CONFIG]).filter(|v| !v.is_empty());
+    match fork_layout(dir) {
+        Some(f) => {
+            let want = f.base_ref();
+            if current.as_deref() != Some(want.as_str()) && ref_exists(dir, &want) {
+                let _ = git_out(dir, &["config", CHAT_BASE_CONFIG, &want]);
+            }
+        }
+        None => {
+            if current.is_some_and(|c| c.starts_with(&format!("refs/remotes/{UPSTREAM_REMOTE}/"))) {
+                let _ = git_out(dir, &["config", "--unset", CHAT_BASE_CONFIG]);
+            }
+        }
+    }
+}
+
+/// (behind, ahead) of `a` relative to `b` (`git rev-list --left-right --count b...a`).
+pub fn behind_ahead(dir: &Path, b: &str, a: &str) -> Option<(u64, u64)> {
+    let out = git_out(dir, &["rev-list", "--left-right", "--count", &format!("{b}...{a}")])?;
+    let mut it = out.split_whitespace().map(|n| n.parse::<u64>().ok());
+    Some((it.next()??, it.next()??))
+}
+
+// ── Readable PR branch names on a fork ─────────────────────────────────────
+
+/// The file mapping (checkout, chat) → the branch its PRs were pushed as.
+pub const PR_BRANCHES_FILE: &str = "pr-branches.toml";
+
+/// Branch names a chat's PR was pushed under on a fork, so a later push
+/// updates the same branch (and the same PR) even if the chat is renamed.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PrBranches {
+    /// checkout name → chat id → remote branch.
+    #[serde(default)]
+    pub checkouts: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+impl PrBranches {
+    pub fn load(data_dir: &Path) -> Self {
+        std::fs::read_to_string(data_dir.join(PR_BRANCHES_FILE))
+            .ok()
+            .and_then(|t| toml::from_str(&t).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self, data_dir: &Path) -> Result<()> {
+        std::fs::create_dir_all(data_dir)?;
+        let tmp = data_dir.join(format!(".{PR_BRANCHES_FILE}.{}.tmp", Uuid::new_v4().simple()));
+        std::fs::write(&tmp, toml::to_string_pretty(self)?)?;
+        std::fs::rename(&tmp, data_dir.join(PR_BRANCHES_FILE)).inspect_err(|_| {
+            let _ = std::fs::remove_file(&tmp);
+        })?;
+        Ok(())
+    }
+
+    pub fn get(&self, checkout: &str, chat: Uuid) -> Option<&str> {
+        self.checkouts.get(checkout)?.get(&chat.to_string()).map(String::as_str)
+    }
+
+    /// The branch for (checkout, chat): the recorded one, else a new readable
+    /// name (recorded; the caller saves).
+    pub fn get_or_assign(&mut self, checkout: &str, chat: Uuid, title: &str) -> String {
+        if let Some(b) = self.get(checkout, chat) {
+            return b.to_string();
+        }
+        let b = pr_branch_name(title, chat);
+        self.checkouts.entry(checkout.to_string()).or_default().insert(chat.to_string(), b.clone());
+        b
+    }
+}
+
+/// `hive/<short-title-slug>-<first 8 of the chat id>`: lowercase ASCII
+/// letters, digits and single hyphens, the slug at most 40 characters.
+pub fn pr_branch_name(title: &str, chat: Uuid) -> String {
+    let mut slug = String::new();
+    for c in title.chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c.to_ascii_lowercase());
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+        if slug.len() >= 40 {
+            break;
+        }
+    }
+    let slug = slug.trim_end_matches('-');
+    let slug = if slug.is_empty() { "chat" } else { slug };
+    let id = chat.simple().to_string();
+    format!("hive/{slug}-{}", &id[..8])
 }
 
 pub fn inspect(dir: &Path) -> CheckoutInfo {
@@ -249,7 +439,10 @@ pub fn inspect(dir: &Path) -> CheckoutInfo {
         })
         .or_else(|| branch.clone());
     let dirty = git_out(dir, &["status", "--porcelain", "--", ".", ":(exclude).hive"]).is_some_and(|s| !s.is_empty());
-    CheckoutInfo { branch, sha, default_branch, remote, dirty }
+    let fork = fork_layout(dir);
+    // A fork's base is upstream's default branch, not origin's.
+    let default_branch = fork.as_ref().map(|f| f.base_branch.clone()).or(default_branch);
+    CheckoutInfo { branch, sha, default_branch, remote, dirty, fork }
 }
 
 /// The chat's persistent branch in every repo (`hive/chat/<id>`, see
@@ -278,6 +471,20 @@ pub fn turn_context(data_dir: &Path, chat: Uuid) -> String {
         Some(r) if !r.host.is_empty() => format!("`{}` ({} checkout `{label}`)", r.full_name(), r.host),
         _ => format!("the local checkout `{label}`"),
     };
+    if let Some(f) = &info.fork {
+        return format!(
+            "Repository: this chat currently works in {what}, a fork of `{up}`, on this host. Base branch: \
+             `{up_remote}/{base}` (the upstream project's `{base}`); the chat's own branch is `{}`, and file changes \
+             you make come back as a reviewable proposal applied there. Pull requests from this chat are pushed to \
+             the fork and opened against `{up}` as drafts by the owner, never by you. The owner can switch this chat \
+             to another repository between turns, so earlier messages may refer to a different repository; the files \
+             you can see now are this one's.",
+            chat_branch(chat),
+            up = f.upstream.full_name(),
+            up_remote = UPSTREAM_REMOTE,
+            base = f.base_branch,
+        );
+    }
     let base = info.branch.or(info.default_branch).unwrap_or_else(|| "HEAD".into());
     format!(
         "Repository: this chat currently works in {what} on this host. Base branch: `{base}`; the chat's own branch is \
@@ -332,6 +539,17 @@ pub fn cmd_repos(data_dir: &Path) -> Result<()> {
     }
     for (chat, target) in &b.chats {
         println!("chat {chat} : {target} -> {}", resolve_path(&dir, target).display());
+    }
+    for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        if let Some(f) = fork_layout(&e.path()) {
+            println!(
+                "fork      : {} -> upstream {} (base {}; upstream push {})",
+                e.file_name().to_string_lossy(),
+                f.upstream.full_name(),
+                f.base_branch,
+                if f.push_disabled { "disabled" } else { "ENABLED: set a dummy push URL" }
+            );
+        }
     }
     Ok(())
 }
@@ -426,6 +644,54 @@ mod tests {
         assert_eq!(b.raw_for(chat), Some(("w", false)));
         b.chats.insert(chat.to_string(), "c".into());
         assert_eq!(b.raw_for(chat), Some(("c", true)));
+    }
+
+    #[test]
+    fn pr_branch_names_are_readable_and_stable() {
+        let chat = Uuid::parse_str("6f1c2d3e-0000-4000-8000-000000000000").unwrap();
+        assert_eq!(pr_branch_name("Fix: the v2 compiler (again)!", chat), "hive/fix-the-v2-compiler-again-6f1c2d3e");
+        assert_eq!(pr_branch_name("  ", chat), "hive/chat-6f1c2d3e");
+        assert_eq!(pr_branch_name("Ünïcode ✨ only", chat), "hive/n-code-only-6f1c2d3e");
+        let long = pr_branch_name(&"word ".repeat(40), chat);
+        assert!(long.len() <= "hive/".len() + 40 + 9 && !long.contains("--"), "{long}");
+        let mut m = PrBranches::default();
+        let first = m.get_or_assign("o__n", chat, "First title");
+        assert_eq!(m.get_or_assign("o__n", chat, "Renamed later"), first);
+        assert_ne!(m.get_or_assign("other", chat, "Renamed later"), first);
+    }
+
+    #[test]
+    fn fork_layout_and_push_guard() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let run = |args: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(dir).args(args).status().unwrap().success());
+        run(&["init", "-q"]);
+        run(&["remote", "add", "origin", "https://github.com/me/pipelines.git"]);
+        assert_eq!(fork_layout(dir), None, "no upstream remote");
+        run(&["remote", "add", "upstream", "https://github.com/kubeflow/pipelines.git"]);
+        assert_eq!(fork_layout(dir), None, "upstream has no branches fetched yet");
+        run(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"]);
+        run(&["update-ref", "refs/remotes/upstream/master", "HEAD"]);
+        let f = fork_layout(dir).unwrap();
+        assert_eq!((f.upstream.full_name().as_str(), f.base_branch.as_str(), f.push_disabled), ("kubeflow/pipelines", "master", false));
+        assert_eq!(f.base_ref(), "refs/remotes/upstream/master");
+        assert_eq!(inspect(dir).default_branch.as_deref(), Some("master"));
+        // Pushing to origin is fine; to upstream (or anything resolving to it) is not.
+        assert_eq!(check_push_target(dir, "origin", None).unwrap().full_name(), "me/pipelines");
+        assert!(check_push_target(dir, "upstream", None).unwrap_err().contains("refusing"));
+        run(&["remote", "set-url", "--push", "origin", "git@github.com:KubeFlow/Pipelines.git"]);
+        assert!(check_push_target(dir, "origin", None).is_err());
+        run(&["remote", "set-url", "--push", "origin", "https://github.com/me/pipelines.git"]);
+        let parent = RemoteRef { host: "github.com".into(), owner: "me".into(), name: "pipelines".into() };
+        assert!(check_push_target(dir, "origin", Some(&parent)).is_err(), "a forbidden parent from GitHub");
+        run(&["remote", "set-url", "--push", "upstream", "DISABLED"]);
+        assert!(fork_layout(dir).unwrap().push_disabled);
+        // hive.chatBase follows the layout.
+        ensure_chat_base(dir);
+        assert_eq!(git_out(dir, &["config", "hive.chatBase"]).as_deref(), Some("refs/remotes/upstream/master"));
+        run(&["remote", "remove", "upstream"]);
+        ensure_chat_base(dir);
+        assert_eq!(git_out(dir, &["config", "hive.chatBase"]), None);
     }
 
     #[test]

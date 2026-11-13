@@ -1740,6 +1740,14 @@ struct FakeGitHub {
     remotes: PathBuf,
     available: bool,
     prs: Mutex<Vec<super::repos_api::PrRequest>>,
+    /// "owner/name" of a fork → its parent (owner, name, default branch).
+    parents: std::collections::HashMap<String, (String, String, String)>,
+}
+
+impl FakeGitHub {
+    fn new(remotes: &Path, available: bool) -> Self {
+        Self { remotes: remotes.to_path_buf(), available, prs: Mutex::new(Vec::new()), parents: Default::default() }
+    }
 }
 
 impl super::repos_api::GitHub for FakeGitHub {
@@ -1766,6 +1774,7 @@ impl super::repos_api::GitHub for FakeGitHub {
                     default_branch: "main".into(),
                     updated_at: String::new(),
                     url: String::new(),
+                    fork: false,
                 });
             }
         }
@@ -1784,8 +1793,21 @@ impl super::repos_api::GitHub for FakeGitHub {
         url.starts_with("file://").then(|| crate::repos::parse_remote(url)).flatten()
     }
     fn create_pr(&self, _dir: &Path, pr: &super::repos_api::PrRequest) -> Result<(String, bool), String> {
-        self.prs.lock().unwrap().push(pr.clone());
-        Ok((format!("https://github.com/{}/pull/1", pr.repo), false))
+        let mut prs = self.prs.lock().unwrap();
+        let existing = prs.iter().any(|p| p.repo == pr.repo && p.head == pr.head);
+        prs.push(pr.clone());
+        Ok((format!("https://github.com/{}/pull/1", pr.repo), existing))
+    }
+    fn repo_meta(&self, owner: &str, name: &str) -> Result<Option<super::repos_api::RepoMeta>, String> {
+        if !self.remotes.join(owner).join(format!("{name}.git")).exists() {
+            return Ok(None);
+        }
+        Ok(Some(super::repos_api::RepoMeta {
+            owner: owner.into(),
+            name: name.into(),
+            default_branch: "main".into(),
+            parent: self.parents.get(&format!("{owner}/{name}")).cloned(),
+        }))
     }
 }
 
@@ -1824,7 +1846,7 @@ async fn repos_clone_switch_pull_and_pr() {
     let remotes = h._tmp.path().join("remotes");
     std::fs::create_dir_all(&remotes).unwrap();
     let work = fake_remote(&remotes, "acme", "widget");
-    let fake = Arc::new(FakeGitHub { remotes: remotes.clone(), available: true, prs: Mutex::new(Vec::new()) });
+    let fake = Arc::new(FakeGitHub::new(&remotes, true));
     h.handle.shared.repos.set_github(fake.clone());
 
     // Listing: no local checkouts yet; GitHub lists the fake remote.
@@ -1938,7 +1960,7 @@ async fn repos_clone_switch_pull_and_pr() {
     assert_eq!(r["ahead"], 1, "switching back resumes the chat's branch");
 
     // Signed out: listing says so, PRs are refused clearly, public clones still work.
-    let signed_out = Arc::new(FakeGitHub { remotes: remotes.clone(), available: false, prs: Mutex::new(Vec::new()) });
+    let signed_out = Arc::new(FakeGitHub::new(&remotes, false));
     h.handle.shared.repos.set_github(signed_out);
     let v = h.get("/v1/repos").await;
     assert_eq!(v["github"], json!({ "available": false, "reason": "Run gh auth login on the host" }));
@@ -1959,6 +1981,180 @@ async fn repos_clone_switch_pull_and_pr() {
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
     assert!(leftovers.iter().all(|n| !n.starts_with(".clone-") && n != "ghost__missing"), "{leftovers:?}");
+}
+
+fn rev(dir: &Path, r: &str) -> String {
+    let out = hive_core::process_util::command("git").arg("-C").arg(dir).args(["rev-parse", r]).output().unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+fn git_ok(dir: &Path, args: &[&str]) -> bool {
+    hive_core::process_util::command("git").arg("-C").arg(dir).args(args).output().unwrap().status.success()
+}
+
+/// A fork, end to end with bare repos: clone the parent "via my fork" (gets
+/// `upstream`, fetch-only, base tracking upstream), chat branches start from
+/// upstream, pull fast-forwards from upstream, and a PR pushes a readable
+/// branch to the fork (same branch on later pushes, never forced) and opens
+/// upstream as a draft. Nothing is ever pushed to the upstream repo.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fork_checkouts_base_on_upstream_and_open_prs_there() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let remotes = h._tmp.path().join("remotes");
+    std::fs::create_dir_all(&remotes).unwrap();
+    // Upstream project, and the owner's fork of it (a copy that then falls behind).
+    let up_work = fake_remote(&remotes, "kubeflow", "pipelines");
+    fake_remote(&remotes, "kubeflow", "other");
+    let fork_bare = remotes.join("acme").join("pipelines.git");
+    std::fs::create_dir_all(fork_bare.parent().unwrap()).unwrap();
+    git(h._tmp.path(), &["clone", "-q", "--bare", remotes.join("kubeflow/pipelines.git").to_str().unwrap(), fork_bare.to_str().unwrap()]);
+    let commit = |work: &Path, file: &str| {
+        std::fs::write(work.join(file), format!("{file}\n")).unwrap();
+        git(work, &["add", "-A"]);
+        git(work, &["commit", "-qm", file]);
+        git(work, &["push", "-q", "origin", "main"]);
+    };
+    commit(&up_work, "UPSTREAM1.md");
+    let up_bare = remotes.join("kubeflow/pipelines.git");
+    let mut fake = FakeGitHub::new(&remotes, true);
+    fake.parents.insert("acme/pipelines".into(), ("kubeflow".into(), "pipelines".into(), "main".into()));
+    let fake = Arc::new(fake);
+    h.handle.shared.repos.set_github(fake.clone());
+
+    // Does the account have a fork? Yes for pipelines, no for other.
+    let f = h.get("/v1/repos/fork?repo=kubeflow/pipelines").await;
+    assert_eq!(f["fork"]["fullName"], "acme/pipelines", "{f}");
+    assert_eq!(f["fork"]["cloned"], false);
+    assert_eq!(h.get("/v1/repos/fork?repo=kubeflow/other").await["fork"], Value::Null);
+    // viaFork without a fork: 404, and nothing is created.
+    let (c, v) = status_of(&h, reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repo": "kubeflow/other", "viaFork": true }))).await;
+    assert_eq!(c, 404, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("doesn't create forks"), "{v}");
+    assert!(!remotes.join("acme/other.git").exists());
+
+    // Clone the parent via the fork.
+    let job = h.send(reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repo": "kubeflow/pipelines", "viaFork": true }))).await;
+    assert_eq!(job["job"]["checkout"], "acme__pipelines");
+    let done = wait_job(&h, job["job"]["id"].as_str().unwrap()).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let co = h.handle.shared.cfg.data_dir.join("repos").join("acme__pipelines");
+    assert!(co.join("UPSTREAM1.md").exists(), "base follows upstream, not the stale fork");
+    assert_eq!(rev(&co, "main"), rev(&up_bare, "main"));
+    let out = |args: &[&str]| {
+        let o = hive_core::process_util::command("git").arg("-C").arg(&co).args(args).output().unwrap();
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    assert_eq!(out(&["rev-parse", "--abbrev-ref", "main@{upstream}"]), "upstream/main");
+    assert_eq!(out(&["remote", "get-url", "--push", "upstream"]), "DISABLED-push-to-fork-only");
+    assert_eq!(out(&["config", "hive.chatBase"]), "refs/remotes/upstream/main");
+
+    // Listing shows the fork layout; the parent's GitHub row points at it.
+    let v = h.get("/v1/repos").await;
+    let local = v["local"].as_array().unwrap().iter().find(|r| r["name"] == "acme__pipelines").unwrap().clone();
+    assert_eq!(local["fork"]["upstream"], "kubeflow/pipelines", "{local}");
+    assert_eq!(local["fork"]["baseBranch"], "main");
+    assert_eq!(local["fork"]["upstreamPushDisabled"], true);
+    assert_eq!((local["fork"]["behind"].clone(), local["fork"]["ahead"].clone()), (json!(0), json!(0)));
+    assert_eq!(local["defaultBranch"], "main");
+    let parent_row = v["github"]["repos"].as_array().unwrap().iter().find(|r| r["fullName"] == "kubeflow/pipelines").unwrap().clone();
+    assert_eq!(parent_row["viaForkCheckout"], "acme__pipelines", "{parent_row}");
+    assert_eq!(h.get("/v1/repos/fork?repo=kubeflow/pipelines").await["fork"]["cloned"], true);
+
+    // A chat bound to it: its branch starts from upstream.
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Fix: the v2 compiler (again)!" }))).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    let r = h.send(reqwest::Method::PUT, &format!("/v1/chats/{chat_id}/repo"), Some(json!({ "repo": "acme__pipelines" }))).await;
+    assert_eq!(r["repo"]["fork"]["upstream"], "kubeflow/pipelines", "{r}");
+    let ctx = crate::repos::turn_context(&h.handle.shared.cfg.data_dir, Uuid::parse_str(&chat_id).unwrap());
+    assert!(ctx.contains("a fork of `kubeflow/pipelines`") && ctx.contains("`upstream/main`"), "{ctx}");
+
+    // Upstream moves; pull fast-forwards the base from upstream.
+    commit(&up_work, "UPSTREAM2.md");
+    let p = h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/repo/pull"), None).await;
+    assert_eq!(p["updated"], true, "{p}");
+    assert_eq!(rev(&co, "main"), rev(&up_bare, "main"));
+    let wt = hive_runtime::git_worktree::chat_worktree(&co, &chat_id).unwrap();
+    assert_eq!(rev(&wt, "HEAD"), rev(&up_bare, "main"), "the chat branch starts from upstream's tip");
+
+    // PR: readable branch on the fork, a draft upstream.
+    std::fs::write(wt.join("FIX.md"), "fix\n").unwrap();
+    git(&wt, &["add", "-A"]);
+    git(&wt, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "fix"]);
+    let pr_path = format!("/v1/chats/{chat_id}/pr");
+    let pr = h.send(reqwest::Method::POST, &pr_path, Some(json!({ "title": "Fix the compiler" }))).await;
+    let want = format!("hive/fix-the-v2-compiler-again-{}", &chat_id.replace('-', "")[..8]);
+    assert_eq!(pr["pushedBranch"], want.as_str(), "{pr}");
+    assert_eq!((pr["repo"].clone(), pr["base"].clone(), pr["draft"].clone()), (json!("kubeflow/pipelines"), json!("main"), json!(true)));
+    let rec = fake.prs.lock().unwrap().last().cloned().unwrap();
+    assert_eq!((rec.repo.as_str(), rec.head.as_str(), rec.base.as_str(), rec.draft), ("kubeflow/pipelines", format!("acme:{want}").as_str(), "main", true));
+    assert_eq!(rev(&fork_bare, &format!("refs/heads/{want}")), rev(&wt, "HEAD"));
+    assert!(!git_ok(&up_bare, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{want}")]), "never pushed upstream");
+    assert_eq!(h.get(&format!("/v1/chats/{chat_id}/repo")).await["prBranch"], want.as_str());
+
+    // A later push updates the same branch (from the recorded mapping).
+    let map = crate::repos::PrBranches::load(&h.handle.shared.cfg.data_dir);
+    assert_eq!(map.get("acme__pipelines", Uuid::parse_str(&chat_id).unwrap()), Some(want.as_str()));
+    std::fs::write(wt.join("FIX2.md"), "more\n").unwrap();
+    git(&wt, &["add", "-A"]);
+    git(&wt, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "more"]);
+    let pr = h.send(reqwest::Method::POST, &pr_path, Some(json!({ "title": "Fix the compiler", "draft": false }))).await;
+    assert_eq!((pr["pushedBranch"].as_str(), pr["existing"].clone()), (Some(want.as_str()), json!(true)), "{pr}");
+    assert_eq!(rev(&fork_bare, &format!("refs/heads/{want}")), rev(&wt, "HEAD"));
+
+    // Never forced: a branch that moved on the fork is refused.
+    let other = h._tmp.path().join("other-clone");
+    git(h._tmp.path(), &["clone", "-q", fork_bare.to_str().unwrap(), other.to_str().unwrap()]);
+    git(&other, &["checkout", "-q", &want]);
+    std::fs::write(other.join("THEIRS.md"), "x\n").unwrap();
+    git(&other, &["add", "-A"]);
+    git(&other, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "theirs"]);
+    git(&other, &["push", "-q", "origin", &want]);
+    std::fs::write(wt.join("FIX3.md"), "x\n").unwrap();
+    git(&wt, &["add", "-A"]);
+    git(&wt, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "mine"]);
+    let (c, v) = status_of(&h, reqwest::Method::POST, &pr_path, Some(json!({ "title": "x" }))).await;
+    assert_eq!(c, 409, "{v}");
+    assert_eq!(rev(&fork_bare, &format!("refs/heads/{want}")), rev(&other, "HEAD"), "the fork's branch was not overwritten");
+
+    // An origin whose push URL resolves to upstream is refused outright.
+    git(&co, &["remote", "set-url", "--push", "origin", up_bare.to_str().unwrap()]);
+    let (c, v) = status_of(&h, reqwest::Method::POST, &pr_path, Some(json!({ "title": "x" }))).await;
+    assert_eq!(c, 409, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("refusing to push"), "{v}");
+    let heads = hive_core::process_util::command("git").arg("-C").arg(&up_bare).args(["for-each-ref", "refs/heads"]).output().unwrap();
+    assert!(!String::from_utf8_lossy(&heads.stdout).contains("hive/"), "upstream got no hive branches");
+}
+
+/// A plain fetch of an existing fork checkout without `upstream` adds it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fetching_a_fork_checkout_adds_upstream() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let remotes = h._tmp.path().join("remotes");
+    std::fs::create_dir_all(&remotes).unwrap();
+    fake_remote(&remotes, "kubeflow", "pipelines");
+    let fork_bare = remotes.join("acme").join("pipelines.git");
+    std::fs::create_dir_all(fork_bare.parent().unwrap()).unwrap();
+    git(h._tmp.path(), &["clone", "-q", "--bare", remotes.join("kubeflow/pipelines.git").to_str().unwrap(), fork_bare.to_str().unwrap()]);
+    // Plain clone first (GitHub signed out: no fork info).
+    h.handle.shared.repos.set_github(Arc::new(FakeGitHub::new(&remotes, false)));
+    let job = h.send(reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repo": "acme/pipelines" }))).await;
+    assert_eq!(wait_job(&h, job["job"]["id"].as_str().unwrap()).await["state"], "done");
+    let co = h.handle.shared.cfg.data_dir.join("repos").join("acme__pipelines");
+    assert!(!git_ok(&co, &["remote", "get-url", "upstream"]));
+    let local = h.get("/v1/repos").await["local"][0].clone();
+    assert!(local.get("fork").is_none(), "{local}");
+    // Signed in: a fetch notices it's a fork and sets up upstream.
+    let mut fake = FakeGitHub::new(&remotes, true);
+    fake.parents.insert("acme/pipelines".into(), ("kubeflow".into(), "pipelines".into(), "main".into()));
+    h.handle.shared.repos.set_github(Arc::new(fake));
+    let job = h.send(reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repo": "acme/pipelines" }))).await;
+    assert_eq!(job["job"]["action"], "fetch");
+    assert_eq!(wait_job(&h, job["job"]["id"].as_str().unwrap()).await["state"], "done");
+    let local = h.get("/v1/repos").await["local"][0].clone();
+    assert_eq!(local["fork"]["upstream"], "kubeflow/pipelines", "{local}");
+    assert_eq!(local["fork"]["upstreamPushDisabled"], true);
 }
 
 /// Repo writes follow the box's standing: a write-blocked box (revoked or

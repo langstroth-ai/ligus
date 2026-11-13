@@ -223,17 +223,27 @@ checkouts are named, and an absolute binding shows only its last component.
 | Method | Path | Response |
 |---|---|---|
 | GET | `/v1/repos?q=&owner=&page=&perPage=` | `{local: [Checkout], github: GitHub, workspaceDefault?, jobs: [Job]}`. `q` filters both lists (GitHub search when signed in); `owner` lists one account or org; `page` from 1, `perPage` 1-100 (default 30) |
-| POST | `/v1/repos/clone` `{repo}` | `{job}`. `repo` is `owner/name` or `https://github.com/owner/name[.git]`, nothing else (400). Clones to `<HIVE_REPOS_DIR>/<owner>__<name>`; an existing clone of the same repo is fetched instead (`action: "fetch"`), and one already in flight returns its job. At most 2 at once (429) |
+| GET | `/v1/repos/fork?repo=owner/name` | `{repo, login, fork: {fullName, checkout, cloned}|null}`: the signed-in account's fork of `repo` (same name under the login, reported by GitHub as a fork of exactly `repo`). The phone calls this before cloning a repo the user doesn't own, to offer "Clone via my fork". 412 when `gh` isn't signed in |
+| POST | `/v1/repos/clone` `{repo, viaFork?}` | `{job}`. `repo` is `owner/name` or `https://github.com/owner/name[.git]`, nothing else (400). Clones to `<HIVE_REPOS_DIR>/<owner>__<name>`; an existing clone of the same repo is fetched instead (`action: "fetch"`), and one already in flight returns its job. At most 2 at once (429). `viaFork: true` clones the account's fork of `repo` instead (`checkout` is `<login>__<name>`); with no fork it answers 404 and creates nothing. Whenever GitHub reports the cloned or fetched repo as a fork, the job adds an `upstream` remote for the parent (fetch-only: its push URL is set to `DISABLED-push-to-fork-only`), fetches it, and, on a fresh clone, makes the local base branch track `upstream/<parent default>` |
 | GET | `/v1/repos/clone/{job}` | `{job}` |
 | GET | `/v1/chats/{id}/repo` | `Binding` |
 | PUT | `/v1/chats/{id}/repo` `{repo}` | `Binding`. `repo` is a checkout name (or `owner/name` of a clone); `null` drops the chat's own binding, so it falls back to the workspace default. 404 for a checkout that isn't there. A change posts a system note in the chat |
-| POST | `/v1/chats/{id}/repo/pull` | `Binding + {updated, before, after}`. Fetches `origin` and fast-forwards the checked-out base branch. 409 if the checkout is dirty, detached or diverged |
-| POST | `/v1/chats/{id}/pr` `{title, body?, draft?}` | `{url, existing, branch, base}`. Pushes `hive/chat/<id>` to `origin` (never forced) and runs `gh pr create` against the default branch, then posts the link as a system note. 412 when `gh` isn't signed in on the host; 409 when the chat branch is missing, has nothing new, or the push is refused |
+| POST | `/v1/chats/{id}/repo/pull` | `Binding + {updated, before, after}`. Fetches `origin` and fast-forwards the checked-out base branch. In a fork it also fetches `upstream` and fast-forwards the base branch (`fork.baseBranch`) from `upstream`, whether or not it's checked out. 409 if the checkout is dirty, detached or diverged |
+| POST | `/v1/chats/{id}/pr` `{title, body?, draft?}` | `{url, existing, branch, pushedBranch, repo, base, draft}`. Not a fork: pushes `hive/chat/<id>` to `origin` (never forced) and runs `gh pr create` against the default branch (`draft` defaults to false). A fork: pushes the chat branch to `origin` (the fork) as `hive/<title-slug>-<chat-id-8>` (the name is recorded in `pr-branches.toml`, so later pushes update the same branch and PR), then `gh pr create --repo <upstream> --base <upstream default> --head <forkOwner>:<branch>`, a draft unless `draft: false`. Any push whose remote resolves to the upstream repository is refused (409). A fork checkout with no `upstream` remote yet answers 409 (fetch it from the picker first). The link is posted as a system note. 412 when `gh` isn't signed in on the host; 409 when the chat branch is missing, has nothing new, or the push is refused |
 
-- `Checkout = {name, displayName, defaultBranch?, branch?, head?, dirty, remote: {host, owner, name, fullName}|null, isWorkspaceDefault, boundChats}`.
+- `Checkout = {name, displayName, defaultBranch?, branch?, head?, dirty, remote: {host, owner, name, fullName}|null, fork?: Fork, isWorkspaceDefault, boundChats}`.
   `displayName` is `owner/name` for a hosted remote, else the name. `dirty`
-  ignores Hive's own `.hive/` worktrees.
-- `GitHub = {available, reason?, login?, owners?: [string], repos?: [{fullName, owner, name, description, private, defaultBranch, updatedAt, url, cloned, checkout?}], page?, perPage?, hasMore?, error?}`.
+  ignores Hive's own `.hive/` worktrees. In a fork, `defaultBranch` is
+  upstream's default branch.
+- `Fork = {upstream: "kubeflow/pipelines", upstreamRemote: "upstream", baseBranch, upstreamPushDisabled, prTarget: "upstream", behind?, ahead?}`,
+  present when the checkout has an `upstream` remote pointing at another
+  repository. `behind`/`ahead` compare the local base branch with
+  `upstream/<baseBranch>` as of the last fetch. The phone shows it as
+  "fork of kubeflow/pipelines · PRs open upstream". New chat branches in a
+  fork start from `upstream/<baseBranch>` (the box keeps the checkout's
+  `hive.chatBase` git config pointing there).
+- `GitHub = {available, reason?, login?, owners?: [string], repos?: [{fullName, owner, name, description, private, defaultBranch, updatedAt, url, fork, cloned, checkout?, viaForkCheckout?}], page?, perPage?, hasMore?, error?}`.
+  `viaForkCheckout` names a local fork checkout of that repository.
   Signed out it is `{available: false, reason: "Run gh auth login on the host"}`,
   and public repos can still be cloned.
 - `Job = {id, repo, checkout, action: "clone"|"fetch", state: "running"|"done"|"error", phase, percent?, error?, startedAt, finishedAt?}`.
@@ -243,10 +253,11 @@ checkouts are named, and an absolute binding shows only its last component.
   (default 900) and `HIVE_REPOS_MAX_CLONE_MB` (default 2048). Git never
   prompts (`GIT_TERMINAL_PROMPT=0`); with `gh` signed in, git uses
   `gh auth git-credential` for github.com.
-- `Binding = {repo: (Checkout + {source: "chat"|"workspace", available, external})|null, workspaceDefault?, chatBranch, chatBranchExists?, ahead?, behind?}`.
+- `Binding = {repo: (Checkout + {source: "chat"|"workspace", available, external})|null, workspaceDefault?, chatBranch, chatBranchExists?, ahead?, behind?, prBranch?}`.
   `chatBranch` is `hive/chat/<id>`. Each repo has its own, so switching a chat
   away and back resumes where it was. `ahead`/`behind` compare it with the
-  default branch. `GET /v1/chats/{id}/details` carries the same object as
+  default branch (`upstream/<baseBranch>` in a fork). `prBranch` is the
+  branch a fork PR from this chat was pushed as. `GET /v1/chats/{id}/details` carries the same object as
   `repo`.
 
 Approved proposals reach `hive/chat/<id>` only when the box applies them

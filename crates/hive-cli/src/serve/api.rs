@@ -355,6 +355,7 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/channels", get(super::people::list_channels))
         .route("/v1/chats/:id/details", get(super::people::chat_details))
         .route("/v1/repos", get(super::repos_api::list_repos))
+        .route("/v1/repos/fork", get(super::repos_api::fork_of))
         .route("/v1/repos/clone", post(super::repos_api::clone_repo))
         .route("/v1/repos/clone/:job", get(super::repos_api::clone_job))
         .route("/v1/chats/:id/repo", get(super::repos_api::get_chat_repo).put(super::repos_api::put_chat_repo))
@@ -897,6 +898,7 @@ fn apply_on_this_host(s: &Shared, chat: &ChatSession, p: &ActionProposal) -> Api
     if !hive_runtime::git_worktree::is_git_repo(&repo) {
         return Ok(None);
     }
+    crate::repos::ensure_chat_base(&repo);
     let wt = hive_runtime::git_worktree::chat_worktree(&repo, &chat.id.to_string())
         .map_err(|e| ApiError(StatusCode::CONFLICT, format!("chat worktree unavailable: {e}")))?;
     git_apply(&wt, diff).map_err(|e| ApiError(StatusCode::CONFLICT, e))?;

@@ -125,10 +125,34 @@ pub fn chat_worktree(repo_root: &Path, chat_id: &str) -> io::Result<PathBuf> {
         // Branch survives; re-attach a checkout for it without moving its tip.
         git(repo_root, &["worktree", "add", &path_str, &branch])?;
     } else {
-        // Fresh chat: cut the base branch off HEAD.
-        git(repo_root, &["worktree", "add", "-b", &branch, &path_str, "HEAD"])?;
+        // Fresh chat: cut the base branch off the configured base, else HEAD.
+        let base = chat_base(repo_root);
+        git(repo_root, &["worktree", "add", "-b", &branch, &path_str, &base])?;
     }
     Ok(path)
+}
+
+/// The git config key naming the ref a fresh chat branch is cut from (e.g.
+/// `refs/remotes/upstream/master` in a fork checkout, so chats start from the
+/// upstream project rather than the fork's possibly stale copy).
+pub const CHAT_BASE_CONFIG: &str = "hive.chatBase";
+
+/// Where a fresh chat branch starts: `hive.chatBase` when it's set and names a
+/// commit, else `HEAD`.
+pub fn chat_base(repo_root: &Path) -> String {
+    let configured = command("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(["config", "--get", CHAT_BASE_CONFIG])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|b| !b.is_empty() && !b.starts_with('-'));
+    match configured {
+        Some(b) if git(repo_root, &["rev-parse", "--verify", "--quiet", &format!("{b}^{{commit}}")]).is_ok() => b,
+        _ => "HEAD".to_string(),
+    }
 }
 
 /// Best-effort teardown of a chat's persistent worktree and its base branch.
@@ -477,6 +501,33 @@ mod tests {
         // And its diff is empty until it edits (i.e. base is the chat tip).
         assert!(wt.diff().unwrap().trim().is_empty(), "no diff vs chat tip yet");
         wt.remove().unwrap();
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn chat_branch_starts_from_the_configured_base() {
+        let repo = temp_repo();
+        let head = git(&repo, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+        // A second line of history, as an upstream remote-tracking ref.
+        git(&repo, &["checkout", "-q", "-b", "side"]).unwrap();
+        std::fs::write(repo.join("side.txt"), "s\n").unwrap();
+        git(&repo, &["add", "-A"]).unwrap();
+        git(&repo, &["commit", "-qm", "side"]).unwrap();
+        let side = git(&repo, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+        git(&repo, &["update-ref", "refs/remotes/upstream/main", &side]).unwrap();
+        git(&repo, &["checkout", "-q", "-"]).unwrap();
+        git(&repo, &["branch", "-D", "side"]).unwrap();
+        // Unset or unresolvable: HEAD.
+        assert_eq!(chat_base(&repo), "HEAD");
+        git(&repo, &["config", CHAT_BASE_CONFIG, "refs/remotes/upstream/nope"]).unwrap();
+        assert_eq!(chat_base(&repo), "HEAD");
+        let a = chat_worktree(&repo, "chatBaseA").unwrap();
+        assert_eq!(git(&a, &["rev-parse", "HEAD"]).unwrap().trim(), head);
+        // Set: fresh chats start there; existing chat branches don't move.
+        git(&repo, &["config", CHAT_BASE_CONFIG, "refs/remotes/upstream/main"]).unwrap();
+        let b = chat_worktree(&repo, "chatBaseB").unwrap();
+        assert_eq!(git(&b, &["rev-parse", "HEAD"]).unwrap().trim(), side);
+        assert_eq!(git(&chat_worktree(&repo, "chatBaseA").unwrap(), &["rev-parse", "HEAD"]).unwrap().trim(), head);
         let _ = std::fs::remove_dir_all(&repo);
     }
 

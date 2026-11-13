@@ -404,6 +404,10 @@ async fn run_turn(
 
     // The checkout this chat is bound to on this box (see `repos.rs`).
     let repo_root = RepoBindings::load(&ctx.cfg.data_dir).resolve(&repos_dir(&ctx.cfg.data_dir), s.id);
+    // A fork checkout's chat branches start from upstream's default branch.
+    if let Some(r) = repo_root.as_deref().filter(|r| hive_runtime::git_worktree::is_git_repo(r)) {
+        crate::repos::ensure_chat_base(r);
+    }
 
     let mid = lock(svc).begin_assistant_message(
         s.id,

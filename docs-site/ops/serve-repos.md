@@ -45,10 +45,50 @@ repo and branch, then:
   branch it's working in.
 - **Clone** a GitHub repo. The clone runs on the box with progress, and once
   it finishes you can switch to it.
-- **Pull latest** fast-forwards the checkout's base branch from `origin`. A
-  checkout with local changes, or one that has diverged, is left alone.
+- **Pull latest** fast-forwards the checkout's base branch from `origin`
+  (from `upstream` in a fork). A checkout with local changes, or one that has
+  diverged, is left alone.
 - **Open pull request** pushes the chat's branch and opens a PR against the
-  default branch. The link is posted in the chat.
+  default branch (upstream's, as a draft, in a fork). The link is posted in
+  the chat.
+
+## Forks: contributing upstream
+
+If you contribute to a project through your own fork (you push to
+`you/project`, and pull requests go to `org/project`), the box handles the
+fork layout for you:
+
+- **Clone via my fork.** When you pick a repository you don't own, the phone
+  asks the box whether your account has a fork of it. If it does, it offers to
+  clone the fork instead. The box never creates a fork; if you don't have one,
+  fork it on GitHub first.
+- **`upstream` is set up for you.** Whenever a cloned or fetched repository
+  is a fork on GitHub, the box adds an `upstream` remote for the parent. The
+  remote is fetch-only: its push URL is a dummy, so nothing can be pushed to
+  the parent. The checkout's base branch tracks `upstream`'s default branch,
+  for example `master` tracks `upstream/master`.
+- **Chats start from upstream.** New chat branches are cut from
+  `upstream/<default>`, not your fork's possibly stale copy.
+- **Pull latest** fetches `upstream` and fast-forwards the base branch from
+  it.
+- **Open pull request** pushes the chat's branch to your fork with a readable
+  name, `hive/<chat-title>-<chat-id-prefix>`, and opens a draft pull request
+  against the parent's default branch. Later pushes from the same chat update
+  the same branch and pull request, and they are never forced. A push whose
+  remote points at the parent project is refused.
+
+The phone shows a fork as "fork of org/project · PRs open upstream". On the
+box, `hive repos` lists each fork checkout and whether its `upstream` push is
+disabled.
+
+To set up an existing checkout by hand:
+
+```sh
+git remote add upstream https://github.com/org/project.git
+git remote set-url --push upstream DISABLED-push-to-fork-only
+git fetch upstream
+git branch -u upstream/master master
+```
 
 ## Branches: one per chat, per repo
 

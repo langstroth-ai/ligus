@@ -11,10 +11,17 @@
 //!
 //! Routes (contract in `docs/ios-app.md`):
 //! - `GET  /v1/repos?q=&owner=&page=&perPage=`
-//! - `POST /v1/repos/clone {repo}` → a job; `GET /v1/repos/clone/:job`
+//! - `GET  /v1/repos/fork?repo=owner/name` → the signed-in account's fork of it
+//! - `POST /v1/repos/clone {repo, viaFork?}` → a job; `GET /v1/repos/clone/:job`
 //! - `GET|PUT /v1/chats/:id/repo {repo}`
 //! - `POST /v1/chats/:id/repo/pull`
 //! - `POST /v1/chats/:id/pr {title, body?, draft?}`
+//!
+//! Forks: a checkout whose `origin` is the owner's fork and whose `upstream`
+//! remote is the parent project (see [`repos::fork_layout`]) bases chat
+//! branches on upstream's default branch, pulls from upstream, and opens PRs
+//! upstream from a readable branch pushed to the fork. Nothing here ever
+//! pushes to the parent project or creates a fork.
 
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
@@ -34,7 +41,7 @@ use uuid::Uuid;
 
 use super::api::{iso, load_chat, ApiError, ApiResult};
 use super::Shared;
-use crate::repos::{self, CheckoutInfo, RemoteRef, RepoBindings};
+use crate::repos::{self, CheckoutInfo, PrBranches, RemoteRef, RepoBindings, UPSTREAM_REMOTE};
 
 type S = State<Arc<Shared>>;
 
@@ -215,6 +222,18 @@ pub struct GhRepo {
     pub default_branch: String,
     pub updated_at: String,
     pub url: String,
+    /// A fork of another repository.
+    pub fork: bool,
+}
+
+/// One repository's fork relationship, from GitHub.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoMeta {
+    pub owner: String,
+    pub name: String,
+    pub default_branch: String,
+    /// The repository this one is a fork of: (owner, name, default branch).
+    pub parent: Option<(String, String, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -248,6 +267,10 @@ pub trait GitHub: Send + Sync {
     }
     /// Open a pull request; `Ok((url, already_existed))`.
     fn create_pr(&self, dir: &FsPath, pr: &PrRequest) -> Result<(String, bool), String>;
+    /// `owner/name`'s fork relationship; `Ok(None)` when there's no such repo.
+    fn repo_meta(&self, _owner: &str, _name: &str) -> Result<Option<RepoMeta>, String> {
+        Ok(None)
+    }
 }
 
 /// The `gh` CLI on this box.
@@ -310,6 +333,23 @@ fn gh_repo(v: &Value) -> Option<GhRepo> {
         default_branch: v["default_branch"].as_str().unwrap_or("").to_string(),
         updated_at: v["pushed_at"].as_str().or(v["updated_at"].as_str()).unwrap_or("").to_string(),
         url: v["html_url"].as_str().unwrap_or("").to_string(),
+        fork: v["fork"].as_bool().unwrap_or(false),
+    })
+}
+
+fn repo_meta_of(v: &Value) -> Option<RepoMeta> {
+    let parent = v["parent"].as_object().and_then(|p| {
+        Some((
+            p.get("owner")?.get("login")?.as_str()?.to_string(),
+            p.get("name")?.as_str()?.to_string(),
+            p.get("default_branch").and_then(Value::as_str).unwrap_or("").to_string(),
+        ))
+    });
+    Some(RepoMeta {
+        owner: v["owner"]["login"].as_str()?.to_string(),
+        name: v["name"].as_str()?.to_string(),
+        default_branch: v["default_branch"].as_str().unwrap_or("").to_string(),
+        parent: parent.filter(|_| v["fork"].as_bool().unwrap_or(false)),
     })
 }
 
@@ -391,6 +431,14 @@ impl GitHub for GhCli {
             }
         }
         Err(format!("gh pr create: {}", last_lines(&out.stderr)))
+    }
+
+    fn repo_meta(&self, owner: &str, name: &str) -> Result<Option<RepoMeta>, String> {
+        match self.api(&format!("repos/{owner}/{name}"), &[]) {
+            Ok(v) => Ok(repo_meta_of(&v)),
+            Err(e) if e.contains("Not Found") || e.contains("404") => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -548,6 +596,34 @@ fn checkout_dto(name: &str, info: &CheckoutInfo) -> Value {
     v
 }
 
+/// The phone's view of a fork checkout: the parent project, the base branch,
+/// and how the local base compares with upstream's (as of the last fetch).
+fn fork_dto(dir: &FsPath, f: &repos::ForkLayout) -> Value {
+    let mut v = json!({
+        "upstream": f.upstream.full_name(),
+        "upstreamRemote": UPSTREAM_REMOTE,
+        "baseBranch": f.base_branch,
+        "upstreamPushDisabled": f.push_disabled,
+        "prTarget": "upstream",
+    });
+    let local = format!("refs/heads/{}", f.base_branch);
+    if repos::ref_exists(dir, &local) && repos::ref_exists(dir, &f.base_ref()) {
+        if let Some((behind, ahead)) = repos::behind_ahead(dir, &f.base_ref(), &local) {
+            v["behind"] = json!(behind);
+            v["ahead"] = json!(ahead);
+        }
+    }
+    v
+}
+
+fn checkout_dto_at(dir: &FsPath, name: &str, info: &CheckoutInfo) -> Value {
+    let mut v = checkout_dto(name, info);
+    if let Some(f) = &info.fork {
+        v["fork"] = fork_dto(dir, f);
+    }
+    v
+}
+
 /// The checkouts directly under the repos dir (hidden and in-progress clones
 /// skipped), by name.
 fn local_checkouts(repos_dir: &FsPath) -> Vec<(String, PathBuf)> {
@@ -596,7 +672,7 @@ fn chat_binding(data_dir: &FsPath, chat: Uuid) -> (Option<PathBuf>, Value) {
         return (None, v);
     }
     let info = repos::inspect(&dir);
-    let mut repo = checkout_dto(&name, &info);
+    let mut repo = checkout_dto_at(&dir, &name, &info);
     repo["source"] = json!(if own { "chat" } else { "workspace" });
     repo["available"] = json!(true);
     repo["external"] = json!(external);
@@ -604,23 +680,27 @@ fn chat_binding(data_dir: &FsPath, chat: Uuid) -> (Option<PathBuf>, Value) {
     let mut out = json!({ "repo": repo, "workspaceDefault": workspace_default, "chatBranch": branch, "chatBranchExists": exists });
     if exists {
         if let Some(base) = info.default_branch.as_deref() {
-            if let Some((behind, ahead)) = ahead_behind(&dir, base, &branch) {
+            if let Some((behind, ahead)) = ahead_behind(&dir, base, &branch, info.fork.is_some()) {
                 out["ahead"] = json!(ahead);
                 out["behind"] = json!(behind);
             }
         }
     }
+    if let Some(b) = PrBranches::load(data_dir).get(&name, chat) {
+        out["prBranch"] = json!(b);
+    }
     (Some(dir), out)
 }
 
-/// (behind, ahead) of `branch` relative to `base` (local, else origin's).
-fn ahead_behind(dir: &FsPath, base: &str, branch: &str) -> Option<(u64, u64)> {
-    let base_ref = [format!("refs/heads/{base}"), format!("refs/remotes/origin/{base}")]
+/// (behind, ahead) of `branch` relative to `base`: upstream's in a fork, else
+/// the local branch, else origin's.
+fn ahead_behind(dir: &FsPath, base: &str, branch: &str, fork: bool) -> Option<(u64, u64)> {
+    let upstream = fork.then(|| format!("refs/remotes/{UPSTREAM_REMOTE}/{base}"));
+    let base_ref = upstream
         .into_iter()
-        .find(|r| repos::git_out(dir, &["rev-parse", "--verify", "--quiet", r]).is_some())?;
-    let out = repos::git_out(dir, &["rev-list", "--left-right", "--count", &format!("{base_ref}...refs/heads/{branch}")])?;
-    let mut it = out.split_whitespace().map(|n| n.parse::<u64>().ok());
-    Some((it.next()??, it.next()??))
+        .chain([format!("refs/heads/{base}"), format!("refs/remotes/origin/{base}")])
+        .find(|r| repos::ref_exists(dir, r))?;
+    repos::behind_ahead(dir, &base_ref, &format!("refs/heads/{branch}"))
 }
 
 /// `repo` for `GET /v1/chats/:id/details`.
@@ -658,6 +738,8 @@ pub async fn list_repos(State(s): S, Query(lq): Query<ListQuery>) -> ApiResult<J
         let ws_default = b.workspace.as_deref().map(|w| binding_name(w).0);
         let needle = query.q.as_deref().map(str::to_ascii_lowercase);
         let mut cloned: HashMap<String, String> = HashMap::new();
+        // upstream full name → the local fork checkout of it.
+        let mut via_fork: HashMap<String, String> = HashMap::new();
         let local: Vec<Value> = local_checkouts(&repos_dir)
             .into_iter()
             .filter_map(|(name, path)| {
@@ -665,7 +747,10 @@ pub async fn list_repos(State(s): S, Query(lq): Query<ListQuery>) -> ApiResult<J
                 if let Some(r) = info.remote.as_ref() {
                     cloned.entry(r.full_name().to_ascii_lowercase()).or_insert_with(|| name.clone());
                 }
-                let mut v = checkout_dto(&name, &info);
+                if let Some(f) = info.fork.as_ref() {
+                    via_fork.entry(f.upstream.full_name().to_ascii_lowercase()).or_insert_with(|| name.clone());
+                }
+                let mut v = checkout_dto_at(&path, &name, &info);
                 if let Some(n) = needle.as_deref() {
                     let hay = format!("{} {}", name, v["displayName"].as_str().unwrap_or("")).to_ascii_lowercase();
                     if !hay.contains(n) {
@@ -704,7 +789,11 @@ pub async fn list_repos(State(s): S, Query(lq): Query<ListQuery>) -> ApiResult<J
                                 "defaultBranch": r.default_branch,
                                 "updatedAt": r.updated_at,
                                 "url": r.url,
+                                "fork": r.fork,
                             });
+                            if let Some(local) = via_fork.get(&full.to_ascii_lowercase()) {
+                                v["viaForkCheckout"] = json!(local);
+                            }
                             match cloned.get(&full.to_ascii_lowercase()) {
                                 Some(local) => {
                                     v["cloned"] = json!(true);
@@ -734,8 +823,70 @@ pub async fn list_repos(State(s): S, Query(lq): Query<ListQuery>) -> ApiResult<J
 // ── Clone / fetch jobs ─────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CloneReq {
     repo: String,
+    /// Clone the signed-in account's fork of `repo` instead, with `repo` as
+    /// its `upstream`. Never creates a fork: no fork → 404.
+    #[serde(default)]
+    via_fork: bool,
+}
+
+/// How a clone/fetch job sets up `upstream` for a fork.
+#[derive(Debug, Clone)]
+pub struct ForkPlan {
+    pub upstream: String,
+    pub url: String,
+    pub base: String,
+}
+
+/// The signed-in account's fork of `owner/name`, if it has one (same name
+/// under the login; GitHub must report it as a fork of exactly that repo).
+fn find_own_fork(gh: &dyn GitHub, login: &str, owner: &str, name: &str) -> Result<Option<RepoMeta>, String> {
+    if login.eq_ignore_ascii_case(owner) {
+        return Ok(None);
+    }
+    Ok(gh.repo_meta(login, name)?.filter(|m| {
+        m.parent.as_ref().is_some_and(|(po, pn, _)| po.eq_ignore_ascii_case(owner) && pn.eq_ignore_ascii_case(name))
+    }))
+}
+
+/// The upstream setup for cloning `owner/name`: its parent when GitHub says
+/// it's a fork (nothing when signed out or GitHub can't tell).
+fn fork_plan(gh: &dyn GitHub, owner: &str, name: &str) -> Option<ForkPlan> {
+    if !gh.status().available {
+        return None;
+    }
+    let (po, pn, base) = gh.repo_meta(owner, name).ok()??.parent?;
+    Some(ForkPlan { upstream: format!("{po}/{pn}"), url: gh.clone_url(&po, &pn), base })
+}
+
+#[derive(Deserialize)]
+pub struct ForkQuery {
+    repo: String,
+}
+
+/// `GET /v1/repos/fork?repo=owner/name`: whether the signed-in account has a
+/// fork of `owner/name` (so the phone can offer "clone via my fork").
+pub async fn fork_of(State(s): S, Query(q): Query<ForkQuery>) -> ApiResult<Json<Value>> {
+    let (owner, name) = repos::parse_repo_spec(&q.repo).map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let gh = s.repos.github();
+    let repos_dir = repos::repos_dir(&s.cfg.data_dir);
+    let v = blocking(move || -> ApiResult<Value> {
+        let st = gh.status();
+        let Some(login) = st.login.filter(|_| st.available) else {
+            return Err(err(StatusCode::PRECONDITION_FAILED, "GitHub isn't signed in on this host: run gh auth login on the host"));
+        };
+        let fork = find_own_fork(gh.as_ref(), &login, &owner, &name).map_err(|e| err(StatusCode::BAD_GATEWAY, e))?;
+        let fork = fork.map(|m| {
+            let checkout = repos::checkout_name(&m.owner, &m.name);
+            let local = repos_dir.join(&checkout).join(".git").exists();
+            json!({ "fullName": format!("{}/{}", m.owner, m.name), "checkout": checkout, "cloned": local })
+        });
+        Ok(json!({ "repo": format!("{owner}/{name}"), "login": login, "fork": fork }))
+    })
+    .await??;
+    Ok(Json(v))
 }
 
 /// git's progress line → (phase, percent): `Receiving objects:  45% (…)`.
@@ -766,12 +917,31 @@ fn dir_size(p: &FsPath) -> u64 {
 
 pub async fn clone_repo(State(s): S, Json(req): Json<CloneReq>) -> ApiResult<Json<Value>> {
     ensure_can_write(&s, None)?;
-    let (owner, name) = repos::parse_repo_spec(&req.repo).map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let (mut owner, mut name) = repos::parse_repo_spec(&req.repo).map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let gh = s.repos.github();
+    // "Clone the parent via my fork": swap in the account's fork, or report
+    // that there isn't one (this host never creates forks).
+    if req.via_fork {
+        let (g, o, n) = (gh.clone(), owner.clone(), name.clone());
+        let found = blocking(move || -> ApiResult<Option<RepoMeta>> {
+            let st = g.status();
+            let Some(login) = st.login.filter(|_| st.available) else {
+                return Err(err(StatusCode::PRECONDITION_FAILED, "cloning via your fork needs GitHub: run gh auth login on the host"));
+            };
+            find_own_fork(g.as_ref(), &login, &o, &n).map_err(|e| err(StatusCode::BAD_GATEWAY, e))
+        })
+        .await??;
+        let Some(f) = found else {
+            return Err(ApiError::not_found(&format!(
+                "a fork of {owner}/{name} under your account (this host doesn't create forks; fork it on GitHub, or clone {owner}/{name} directly)"
+            )));
+        };
+        (owner, name) = (f.owner, f.name);
+    }
     let full = format!("{owner}/{name}");
     let checkout = repos::checkout_name(&owner, &name);
     let repos_dir = repos::repos_dir(&s.cfg.data_dir);
     let dest = repos_dir.join(&checkout);
-    let gh = s.repos.github();
 
     // Idempotent: the same repo already in flight returns that job.
     {
@@ -834,7 +1004,9 @@ pub async fn clone_repo(State(s): S, Json(req): Json<CloneReq>) -> ApiResult<Jso
     let id = job.id;
     let url = gh.clone_url(&owner, &name);
     std::thread::spawn(move || {
-        let result = run_clone_job(&shared, id, action, &url, &repos_dir, &dest, gh.git_auth_args());
+        let plan = fork_plan(gh.as_ref(), &owner, &name);
+        let result = run_clone_job(&shared, id, action, &url, &repos_dir, &dest, gh.git_auth_args())
+            .and_then(|()| setup_fork(&shared, id, &dest, plan.as_ref(), action == "clone", &gh.git_auth_args()));
         shared.repos.busy.lock().unwrap_or_else(|e| e.into_inner()).remove(&guard_name);
         let finished = shared.repos.update_job(id, |j| {
             j.finished_at = Some(Timestamp::now());
@@ -928,6 +1100,55 @@ fn run_clone_job(
         }
         std::fs::rename(&tmp, dest).map_err(|e| format!("moving the clone into place: {e}"))?;
     }
+    Ok(())
+}
+
+/// After a clone or fetch: make a fork checkout fork-aware. Adds `upstream`
+/// (fetch-only: its push URL is a dummy) when GitHub says the repo is a fork
+/// and it isn't there yet, fetches it, records upstream's default branch, and
+/// on a fresh clone points the local base branch at upstream's.
+fn setup_fork(s: &Shared, id: Uuid, dest: &FsPath, plan: Option<&ForkPlan>, fresh: bool, auth: &[String]) -> Result<(), String> {
+    let has_upstream = repos::git_out(dest, &["remote", "get-url", UPSTREAM_REMOTE]).is_some();
+    if !has_upstream {
+        let Some(p) = plan else { return Ok(()) };
+        git(dest, &[], &["remote", "add", UPSTREAM_REMOTE, &p.url], GIT_TIMEOUT).map_err(|e| format!("adding upstream: {e}"))?;
+    }
+    // Fetch-only, whatever was there before.
+    if !has_upstream || repos::upstream_push_enabled(dest) {
+        git(dest, &[], &["remote", "set-url", "--push", UPSTREAM_REMOTE, "DISABLED-push-to-fork-only"], GIT_TIMEOUT)
+            .map_err(|e| format!("disabling pushes to upstream: {e}"))?;
+    }
+    if let Some(j) = s.repos.update_job(id, |j| {
+        j.phase = format!("Fetching {}", plan.map(|p| p.upstream.as_str()).unwrap_or(UPSTREAM_REMOTE));
+        j.percent = None;
+    }) {
+        s.hub.emit("repo.clone", json!({ "job": j.dto() }));
+    }
+    git(dest, auth, &["fetch", "--prune", "--no-tags", UPSTREAM_REMOTE], clone_timeout()).map_err(|e| format!("git fetch upstream: {e}"))?;
+    let base = plan
+        .map(|p| p.base.clone())
+        .filter(|b| !b.is_empty() && repos::ref_exists(dest, &format!("refs/remotes/{UPSTREAM_REMOTE}/{b}")));
+    let base = match base {
+        Some(b) => {
+            let _ = git(dest, &[], &["remote", "set-head", UPSTREAM_REMOTE, &b], GIT_TIMEOUT);
+            b
+        }
+        None => {
+            let _ = git(dest, &[], &["remote", "set-head", UPSTREAM_REMOTE, "--auto"], GIT_TIMEOUT);
+            match repos::fork_layout(dest) {
+                Some(f) => f.base_branch,
+                None => return Ok(()),
+            }
+        }
+    };
+    let up = format!("{UPSTREAM_REMOTE}/{base}");
+    if fresh {
+        // Nothing local yet: the base branch simply follows upstream.
+        git(dest, &[], &["checkout", "-q", "-B", &base, "--track", &up], GIT_TIMEOUT).map_err(|e| format!("tracking {up}: {e}"))?;
+    } else if repos::ref_exists(dest, &format!("refs/heads/{base}")) {
+        let _ = git(dest, &[], &["branch", "--set-upstream-to", &up, &base], GIT_TIMEOUT);
+    }
+    repos::ensure_chat_base(dest);
     Ok(())
 }
 
@@ -1042,6 +1263,27 @@ pub async fn pull_chat_repo(State(s): S, Path(id): Path<String>) -> ApiResult<Js
         let branch = info.branch.ok_or_else(|| conflict("the checkout isn't on a branch".into()))?;
         let before = info.sha.unwrap_or_default();
         git(&d, &auth, &["fetch", "--prune", "origin"], GIT_TIMEOUT).map_err(|e| (StatusCode::BAD_GATEWAY, format!("git fetch: {e}")))?;
+        if let Some(f) = info.fork {
+            // A fork: fast-forward the base from the upstream project.
+            git(&d, &auth, &["fetch", "--prune", "--no-tags", UPSTREAM_REMOTE], GIT_TIMEOUT)
+                .map_err(|e| (StatusCode::BAD_GATEWAY, format!("git fetch upstream: {e}")))?;
+            let up = f.base_ref();
+            let local_base = format!("refs/heads/{}", f.base_branch);
+            let before = repos::git_out(&d, &["rev-parse", "--short", &local_base]).unwrap_or_default();
+            if !repos::ref_exists(&d, &up) {
+                return Err(conflict(format!("upstream has no branch {}", f.base_branch)));
+            }
+            let diverged = || conflict(format!("can't fast-forward {}: it has diverged from {}", f.base_branch, f.upstream.full_name()));
+            if branch == f.base_branch {
+                git(&d, &[], &["merge", "--ff-only", &up], GIT_TIMEOUT).map_err(|_| diverged())?;
+            } else {
+                // Not checked out: a fast-forward-only ref update (no `+`).
+                git(&d, &[], &["fetch", ".", &format!("{up}:refs/heads/{}", f.base_branch)], GIT_TIMEOUT).map_err(|_| diverged())?;
+            }
+            repos::ensure_chat_base(&d);
+            let after = repos::git_out(&d, &["rev-parse", "--short", &local_base]).unwrap_or_default();
+            return Ok((before, after));
+        }
         let upstream = format!("refs/remotes/origin/{branch}");
         if repos::git_out(&d, &["rev-parse", "--verify", "--quiet", &upstream]).is_none() {
             return Err(conflict(format!("origin has no branch {branch}")));
@@ -1069,8 +1311,9 @@ pub struct PrReq {
     title: String,
     #[serde(default)]
     body: Option<String>,
+    /// Default: a draft when the PR opens upstream from a fork, else not.
     #[serde(default)]
-    draft: bool,
+    draft: Option<bool>,
 }
 
 pub async fn open_pr(State(s): S, Path(id): Path<String>, Json(req): Json<PrReq>) -> ApiResult<Json<Value>> {
@@ -1080,7 +1323,7 @@ pub async fn open_pr(State(s): S, Path(id): Path<String>, Json(req): Json<PrReq>
     if title.is_empty() || title.chars().count() > 256 {
         return Err(ApiError::bad_request("a pull request needs a title (up to 256 characters)"));
     }
-    let body = req.body.unwrap_or_default();
+    let body = req.body.clone().unwrap_or_default();
     if body.len() > 60_000 {
         return Err(ApiError::bad_request("the pull request body is too long"));
     }
@@ -1088,8 +1331,9 @@ pub async fn open_pr(State(s): S, Path(id): Path<String>, Json(req): Json<PrReq>
     let gh = s.repos.github();
     let _busy = claim(&s.repos, &name)?;
     let branch = repos::chat_branch(chat.id);
-    let draft = req.draft;
-    let res = blocking(move || -> Result<(String, bool, String), (StatusCode, String)> {
+    let shared: Arc<Shared> = s.clone();
+    let (chat_id, chat_title) = (chat.id, chat.title.clone());
+    let res = blocking(move || -> Result<PrDone, (StatusCode, String)> {
         let conflict = |m: String| (StatusCode::CONFLICT, m);
         let origin = repos::git_out(&dir, &["remote", "get-url", "origin"]).unwrap_or_default();
         let remote = gh
@@ -1102,39 +1346,107 @@ pub async fn open_pr(State(s): S, Path(id): Path<String>, Json(req): Json<PrReq>
                 format!("GitHub isn't signed in on this host: {}", st.reason.unwrap_or_else(|| "run gh auth login on the host".into())),
             ));
         }
-        if repos::git_out(&dir, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_none() {
+        if !repos::ref_exists(&dir, &format!("refs/heads/{branch}")) {
             return Err(conflict(format!(
                 "this chat has no commits on {branch} yet: approve a proposal first (the host commits approved changes \
                  when HIVE_SERVE_APPLY_ON_APPROVE=1)"
             )));
         }
-        let base = repos::inspect(&dir).default_branch.ok_or_else(|| conflict("can't tell the default branch".into()))?;
+        let info = repos::inspect(&dir);
         let auth = gh.git_auth_args();
-        git(&dir, &auth, &["fetch", "origin", &base], GIT_TIMEOUT).map_err(|e| (StatusCode::BAD_GATEWAY, format!("git fetch: {e}")))?;
-        let ahead = repos::git_out(&dir, &["rev-list", "--count", &format!("refs/remotes/origin/{base}..refs/heads/{branch}")])
+        let Some(fork) = info.fork else {
+            // A fork without an `upstream` remote would open the PR against the fork itself.
+            if let Ok(Some(RepoMeta { parent: Some((po, pn, _)), .. })) = gh.repo_meta(&remote.owner, &remote.name) {
+                return Err(conflict(format!(
+                    "{} is a fork of {po}/{pn} but this checkout has no upstream remote: fetch it from the repo \
+                     picker (that adds upstream), then open the PR",
+                    remote.full_name()
+                )));
+            }
+            repos::check_push_target(&dir, "origin", None).map_err(conflict)?;
+            let base = info.default_branch.ok_or_else(|| conflict("can't tell the default branch".into()))?;
+            git(&dir, &auth, &["fetch", "origin", &base], GIT_TIMEOUT).map_err(|e| (StatusCode::BAD_GATEWAY, format!("git fetch: {e}")))?;
+            let ahead = repos::git_out(&dir, &["rev-list", "--count", &format!("refs/remotes/origin/{base}..refs/heads/{branch}")])
+                .and_then(|n| n.parse::<u64>().ok())
+                .unwrap_or(0);
+            if ahead == 0 {
+                return Err(conflict(format!("{branch} has nothing that {base} doesn't already have")));
+            }
+            // Never a force push: no `+`, no --force; a diverged remote branch is refused.
+            let spec = format!("refs/heads/{branch}:refs/heads/{branch}");
+            git(&dir, &auth, &["push", "origin", &spec], GIT_TIMEOUT).map_err(|e| conflict(format!("git push: {e}")))?;
+            let pr = PrRequest { repo: remote.full_name(), head: branch.clone(), base: base.clone(), title, body, draft: req.draft.unwrap_or(false) };
+            let (url, existing) = gh.create_pr(&dir, &pr).map_err(|e| (StatusCode::BAD_GATEWAY, e))?;
+            return Ok(PrDone { url, existing, base, pushed: branch, repo: pr.repo, draft: pr.draft });
+        };
+        // A fork: push to origin (never upstream) under a readable branch,
+        // then open the PR on the upstream project.
+        let target = repos::check_push_target(&dir, "origin", Some(&fork.upstream)).map_err(conflict)?;
+        if !repos::same_repo(&target, &remote) {
+            return Err(conflict(format!("origin pushes to {}, not the fork {}: fix the remote first", target.full_name(), remote.full_name())));
+        }
+        let base = fork.base_branch.clone();
+        git(&dir, &auth, &["fetch", "--no-tags", UPSTREAM_REMOTE, &base], GIT_TIMEOUT)
+            .map_err(|e| (StatusCode::BAD_GATEWAY, format!("git fetch upstream: {e}")))?;
+        let ahead = repos::git_out(&dir, &["rev-list", "--count", &format!("{}..refs/heads/{branch}", fork.base_ref())])
             .and_then(|n| n.parse::<u64>().ok())
             .unwrap_or(0);
         if ahead == 0 {
-            return Err(conflict(format!("{branch} has nothing that {base} doesn't already have")));
+            return Err(conflict(format!("{branch} has nothing that {} {base} doesn't already have", fork.upstream.full_name())));
         }
-        // Never a force push: no `+`, no --force; a diverged remote branch is refused.
-        let spec = format!("refs/heads/{branch}:refs/heads/{branch}");
-        git(&dir, &auth, &["push", "origin", &spec], GIT_TIMEOUT).map_err(|e| conflict(format!("git push: {e}")))?;
-        let pr = PrRequest { repo: remote.full_name(), head: branch.clone(), base: base.clone(), title, body, draft };
+        let pushed = {
+            let _g = shared.repos.bindings.lock().unwrap_or_else(|e| e.into_inner());
+            let mut map = PrBranches::load(&shared.cfg.data_dir);
+            let b = map.get_or_assign(&name, chat_id, &chat_title);
+            map.save(&shared.cfg.data_dir).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            b
+        };
+        // Never a force push: a branch that moved on the fork is refused.
+        let spec = format!("refs/heads/{branch}:refs/heads/{pushed}");
+        git(&dir, &auth, &["push", "origin", &spec], GIT_TIMEOUT).map_err(|e| conflict(format!("git push to your fork: {e}")))?;
+        let pr = PrRequest {
+            repo: fork.upstream.full_name(),
+            head: format!("{}:{pushed}", remote.owner),
+            base: base.clone(),
+            title,
+            body,
+            draft: req.draft.unwrap_or(true),
+        };
         let (url, existing) = gh.create_pr(&dir, &pr).map_err(|e| (StatusCode::BAD_GATEWAY, e))?;
-        Ok((url, existing, base))
+        Ok(PrDone { url, existing, base, pushed, repo: pr.repo, draft: pr.draft })
     })
     .await?
     .map_err(|(c, m)| err(c, m))?;
-    let (url, existing, base) = res;
+    let PrDone { url, existing, base, pushed, repo, draft } = res;
     let note = if existing {
         format!("Pull request (already open, branch updated): {url}")
+    } else if draft {
+        format!("Opened pull request: {url} (draft, on {repo})")
     } else {
         format!("Opened pull request: {url}")
     };
     s.lock().post_system_note(chat.id, chat.workspace_id, note)?;
     s.after_write();
-    Ok(Json(json!({ "url": url, "existing": existing, "branch": repos::chat_branch(chat.id), "base": base })))
+    Ok(Json(json!({
+        "url": url,
+        "existing": existing,
+        "branch": repos::chat_branch(chat.id),
+        "pushedBranch": pushed,
+        "repo": repo,
+        "base": base,
+        "draft": draft,
+    })))
+}
+
+struct PrDone {
+    url: String,
+    existing: bool,
+    base: String,
+    /// The branch name on the remote the PR's head was pushed as.
+    pushed: String,
+    /// The repository the PR is on.
+    repo: String,
+    draft: bool,
 }
 
 #[cfg(test)]
