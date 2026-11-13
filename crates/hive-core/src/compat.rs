@@ -9,8 +9,7 @@
 //!
 //! When both names are set to different values a one-time warning goes to
 //! stderr (the `LIGUS_` value is used). Falling back to a `HIVE_` name warns
-//! once per variable only when [`WARN_ON_LEGACY_ENV`] is on (from the release
-//! that makes `LIGUS_*` the documented spelling).
+//! once per variable when [`WARN_ON_LEGACY_ENV`] is on.
 
 use std::collections::HashSet;
 use std::env::VarError;
@@ -24,8 +23,8 @@ pub const ENV_PREFIX: &str = "LIGUS_";
 pub const LEGACY_ENV_PREFIX: &str = "HIVE_";
 
 /// Whether reading a value from a legacy `HIVE_` name prints a deprecation
-/// note. Off while `HIVE_*` is still the documented spelling.
-pub const WARN_ON_LEGACY_ENV: bool = false;
+/// note (once per variable, on stderr).
+pub const WARN_ON_LEGACY_ENV: bool = true;
 
 /// Where a resolved value came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,15 +187,15 @@ pub fn strip_deep_link_scheme(link: &str) -> Option<&str> {
 /// Both are write-protected from agents and both mark a workspace root.
 pub const WORKSPACE_DIRS: [&str; 2] = [".ligus", ".hive"];
 /// Where new workspace state is created when no existing file is found.
-pub const WORKSPACE_DIR_FOR_WRITES: &str = ".hive";
+pub const WORKSPACE_DIR_FOR_WRITES: &str = ".ligus";
 /// Workspace / data-dir config file names, in read order (canonical first).
 pub const CONFIG_FILES: [&str; 2] = ["ligus.config.toml", "hive.config.toml"];
 /// Config file name used when neither exists yet.
-pub const CONFIG_FILE_FOR_WRITES: &str = "hive.config.toml";
+pub const CONFIG_FILE_FOR_WRITES: &str = "ligus.config.toml";
 /// CLI data directory names under `$HOME`, in read order.
 pub const HOME_DATA_DIRS: [&str; 2] = [".ligus", ".hive"];
 /// CLI data directory created under `$HOME` when neither exists yet.
-pub const HOME_DATA_DIR_FOR_WRITES: &str = ".hive";
+pub const HOME_DATA_DIR_FOR_WRITES: &str = ".ligus";
 
 /// The path of workspace state `rel` (e.g. `mcp-servers.json` or
 /// `worktrees/chat-<id>`) under `root`: the first that already exists among
@@ -410,7 +409,7 @@ mod tests {
         let home = tmp.path();
         assert_eq!(home_data_dir(home).0, home.join(HOME_DATA_DIR_FOR_WRITES));
         std::fs::create_dir(home.join(".hive")).unwrap();
-        assert_eq!(home_data_dir(home).0, home.join(".hive"));
+        assert_eq!(home_data_dir(home), (home.join(".hive"), true), "legacy dir reused, flagged");
         std::fs::create_dir(home.join(".ligus")).unwrap();
         assert_eq!(home_data_dir(home), (home.join(".ligus"), false));
     }

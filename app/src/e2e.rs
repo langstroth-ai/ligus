@@ -644,7 +644,7 @@ Find the bug and fix it in the code (do not change the test). Keep the fix minim
         before.is_empty() && after.is_empty(),
         format!("no turn worktree or branch left behind (before {before:?}, after {after:?})"),
     );
-    let chat_dir = ctx.repo.join(".hive/worktrees").join(format!("chat-{sid}"));
+    let chat_dir = ctx.repo.join(".ligus/worktrees").join(format!("chat-{sid}"));
     c.note(format!("chat base checkout (persistent by design) present: {}", chat_dir.exists()));
     c
 }

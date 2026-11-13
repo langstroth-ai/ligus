@@ -2517,7 +2517,7 @@ fn upsert_runtime_in_config(
     let mut doc = load_config_document_for_workspace(data_dir, workspace_root)?;
     let root = doc
         .as_table_mut()
-        .ok_or_else(|| "root hive.config.toml must be a TOML table".to_string())?;
+        .ok_or_else(|| "root ligus.config.toml must be a TOML table".to_string())?;
     let should_set_default = {
         let app = table_mut(root, "app")?;
         app.get("default_runtime")
@@ -2557,7 +2557,7 @@ fn remove_runtime_from_config(
     let mut doc = load_config_document_for_workspace(data_dir, workspace_root)?;
     let root = doc
         .as_table_mut()
-        .ok_or_else(|| "root hive.config.toml must be a TOML table".to_string())?;
+        .ok_or_else(|| "root ligus.config.toml must be a TOML table".to_string())?;
     let next_default = {
         let Some(runtimes) = root.get_mut("runtimes").and_then(toml::Value::as_array_mut) else {
             return Ok(false);
@@ -2629,7 +2629,7 @@ fn upsert_mcp_server_in_config(
     let mut doc = load_config_document_for_workspace(data_dir, workspace_root)?;
     let root = doc
         .as_table_mut()
-        .ok_or_else(|| "root hive.config.toml must be a TOML table".to_string())?;
+        .ok_or_else(|| "root ligus.config.toml must be a TOML table".to_string())?;
     let servers = array_mut(root, "mcp_servers")?;
     let replacement = mcp_spec_to_toml(server);
     if let Some(existing) = servers.iter_mut().find(|entry| {
@@ -2655,7 +2655,7 @@ fn set_mcp_enabled_in_config(
     let mut doc = load_config_document_for_workspace(data_dir, workspace_root)?;
     let root = doc
         .as_table_mut()
-        .ok_or_else(|| "root hive.config.toml must be a TOML table".to_string())?;
+        .ok_or_else(|| "root ligus.config.toml must be a TOML table".to_string())?;
     let Some(servers) = root.get_mut("mcp_servers").and_then(toml::Value::as_array_mut) else {
         return Ok(false);
     };
@@ -2688,7 +2688,7 @@ fn remove_mcp_server_from_config(
     let mut doc = load_config_document_for_workspace(data_dir, workspace_root)?;
     let root = doc
         .as_table_mut()
-        .ok_or_else(|| "root hive.config.toml must be a TOML table".to_string())?;
+        .ok_or_else(|| "root ligus.config.toml must be a TOML table".to_string())?;
     let Some(servers) = root.get_mut("mcp_servers").and_then(toml::Value::as_array_mut) else {
         return Ok(false);
     };
@@ -16507,7 +16507,7 @@ mod mcp_bearer_tests {
         let root = tmp("catalog");
         save_managed_mcp(root.to_str().unwrap(), &servers).unwrap();
         let catalog =
-            std::fs::read_to_string(root.join(".hive").join("mcp-servers.json")).unwrap();
+            std::fs::read_to_string(root.join(".ligus").join("mcp-servers.json")).unwrap();
         let _ = std::fs::remove_dir_all(&root);
         assert!(!catalog.contains(SECRET), "{catalog}");
         assert!(catalog.contains("rdna"));

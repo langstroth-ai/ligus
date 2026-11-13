@@ -1,4 +1,4 @@
-//! `hive.config.toml` loading — ported from `HiveConfig.swift`.
+//! `ligus.config.toml` (legacy `hive.config.toml`) loading — ported from `HiveConfig.swift`.
 //!
 //! Swift hand-rolled a ~1,100-line TOML parser (no TOML dependency was
 //! available). Rust uses the `toml` crate, so this is a thin serde layer: a
@@ -14,7 +14,7 @@ use crate::runtime::{ModelProviderKind, RuntimeCapabilities, RuntimeLocation, Ru
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
-    #[error("failed to parse hive.config.toml: {0}")]
+    #[error("failed to parse ligus.config.toml: {0}")]
     Parse(#[from] toml::de::Error),
     #[error("unknown provider: {0}")]
     InvalidProvider(String),
@@ -488,7 +488,7 @@ impl RawRuntime {
 mod tests {
     use super::*;
 
-    const SAMPLE: &str = include_str!("../../../hive.config.toml");
+    const SAMPLE: &str = include_str!("../../../ligus.config.toml");
 
     #[test]
     fn parses_the_repo_sample_config() {

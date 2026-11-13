@@ -1129,7 +1129,7 @@ async fn apply_on_approve_never_overrides_a_rejection() {
 
     let res = h.send(reqwest::Method::POST, &format!("/v1/proposals/{rid}/approve"), None).await;
     assert_eq!(res["proposal"]["status"], "rejected", "{res}");
-    let wt = h._tmp.path().join("repo").join(".hive").join("worktrees").join(format!("chat-{chat_id}"));
+    let wt = h._tmp.path().join("repo").join(".ligus").join("worktrees").join(format!("chat-{chat_id}"));
     assert!(!wt.join("rejected.txt").exists(), "a rejected proposal was applied");
     {
         let svc = h.handle.shared.lock();
