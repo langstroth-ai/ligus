@@ -1,0 +1,9 @@
+# Build context exclusions for deploy/container/Dockerfile (BuildKit reads
+# <Dockerfile>.dockerignore next to the Dockerfile).
+**/target
+**/node_modules
+.git
+.claude
+web/dist
+docs-site
+*.dmg
