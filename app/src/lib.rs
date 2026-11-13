@@ -40,6 +40,7 @@ use uuid::Uuid;
 
 mod workflows;
 mod data_migration;
+mod flow;
 /// In-app live test support (see `tests/app_live.rs`); not in release builds.
 #[cfg(feature = "e2e")]
 #[doc(hidden)]
@@ -303,6 +304,9 @@ struct LiveSettings {
     /// Nearest chunks handed to the reranker.
     #[serde(default = "default_retrieval_candidates")]
     retrieval_candidates: usize,
+    /// Flow settings (routing, hand-offs, backpressure, task board).
+    #[serde(default)]
+    flow: crate::flow::FlowSettings,
     /// Model id for the synthesized "Primary Runtime" (the default when no
     /// runtime is configured). `None` = fall back to env/DEFAULT_MODEL.
     #[serde(default)]
@@ -526,6 +530,7 @@ impl Default for LiveSettings {
             retrieval_rerank_model: String::new(),
             retrieval_top_k: default_retrieval_top_k(),
             retrieval_candidates: default_retrieval_candidates(),
+            flow: crate::flow::FlowSettings::default(),
             default_model: None,
             default_runtime_id: None,
             local_workspace_id: None,
@@ -7469,6 +7474,8 @@ fn finalize_reply(
     full: &str,
     edits_in_review: bool,
 ) -> Result<String, String> {
+    // Flow directives (hand-off parcels, workspace marks) are kept for after the turn.
+    let full = &crate::flow::take_directives(message_id, full);
     let parsed = hive_runtime::directives::parse_reply_directives(full);
     let mut cleaned = redact_workspace_path(&parsed.cleaned, workspace_root);
     // A turn that produced nothing at all — no text, no directive, no edits —
@@ -7627,8 +7634,52 @@ async fn run_turn_answering(
 /// The workflow engine uses this directly: each parallel stage must snapshot
 /// its context *after* its own prompt is posted but *before* a sibling
 /// stage's prompt lands, so context assembly and execution are split.
+/// Run one prepared turn, with the flow hooks around it: the turn's context
+/// is primed (hand-off card, marks, queue notes) and the finished turn is
+/// tagged with its measured facts (see [`flow`]).
 #[allow(clippy::too_many_arguments)]
 async fn run_prepared_turn(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    session_id: Uuid,
+    workspace_id: Uuid,
+    responder: &Responder,
+    session: &ChatSession,
+    system: String,
+    mut turns: Vec<ChatTurn>,
+) -> Result<TurnOutcome, String> {
+    let started_ms = hive_core::flow::now_ms();
+    let primed = flow::prime_turns(state, session, responder, &mut turns);
+    let system = flow::with_guidance(state, system);
+    let before = {
+        let svc = state.service.lock().unwrap();
+        svc.load(session_id).ok().flatten().map(|s| s.messages.len()).unwrap_or(0)
+    };
+    let result = run_prepared_turn_inner(app, state, session_id, workspace_id, responder, session, system, turns).await;
+    // The reply this turn produced: from the outcome, else (an error) the
+    // placeholder it appended.
+    let message_id = match &result {
+        Ok(o) => Some(o.message_id),
+        Err(_) => {
+            let svc = state.service.lock().unwrap();
+            svc.load(session_id).ok().flatten().and_then(|s| {
+                s.messages.iter().skip(before).rev().find(|m| m.author == responder.author && m.role != MessageRole::User).map(|m| m.id)
+            })
+        }
+    };
+    let facts = flow::TurnFacts {
+        responder,
+        message_id,
+        started_ms,
+        error: result.as_ref().err().map(String::as_str).filter(|e| !e.contains("stopped by user")),
+        primed,
+    };
+    flow::after_turn(app, state, session_id, workspace_id, facts);
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_prepared_turn_inner(
     app: &AppHandle,
     state: &State<'_, AppState>,
     session_id: Uuid,
@@ -7937,6 +7988,7 @@ async fn run_prepared_turn(
         // their results, and thinking. Pushed as a separate Tauri event and shown
         // under the generating bubble; ephemeral (never persisted to the log).
         |act| {
+            crate::flow::observe_activity(message_id, &act);
             let ev = match act {
                 dispatch::StreamActivity::Tool { id, name, input_json } => ChatActivityEvent {
                     session_id: session_id.to_string(),
@@ -10494,6 +10546,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
             retrieval_rerank_model: String::new(),
             retrieval_top_k: default_retrieval_top_k(),
             retrieval_candidates: default_retrieval_candidates(),
+            flow: crate::flow::FlowSettings::default(),
             default_model: None,
             default_runtime_id: None,
         local_workspace_id: None,
@@ -14258,6 +14311,9 @@ pub fn run() {
             revoke_relay_token,
             set_relay_user_disabled,
             workflows::list_workflows,
+            flow::flow_get_settings,
+            flow::flow_set_settings,
+            flow::flow_handoffs,
             workflows::remove_workflow,
             workflows::set_workflow_enabled,
             workflows::workflow_change_request,

@@ -1,5 +1,7 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { HandoffCardView } from "@/components/flow/HandoffCardView";
+import { handoffsByMessage, listHandoffs } from "@/lib/flow";
 import {
   exportChat,
   getAppSettings,
@@ -191,6 +193,13 @@ export function ChatView({
     queryKey: ["chat", sessionId],
     queryFn: () => getChat(sessionId),
   });
+  // Hand-off cards recorded in this chat, refetched whenever the chat does.
+  const handoffs = useQuery({
+    queryKey: ["handoffs", sessionId, chat.dataUpdatedAt],
+    queryFn: () => listHandoffs(sessionId),
+    placeholderData: (prev) => prev,
+  });
+  const handoffIndex = useMemo(() => handoffsByMessage(handoffs.data ?? []), [handoffs.data]);
 
   // The local user's display name — the same author the backend stamps on a
   // persisted message. Used to label the optimistic bubble so it doesn't flip
@@ -1077,6 +1086,7 @@ export function ChatView({
                     ]);
                   }}
                   />
+                  {handoffIndex.get(m.id)?.map((card) => <HandoffCardView key={card.id} card={card} />)}
                 </Fragment>
               );
             })}

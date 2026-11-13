@@ -74,21 +74,13 @@ fn outcomes_of(s: &ChatSession, out: &mut Vec<OutcomeSample>) {
     let agent_names: BTreeMap<&str, uuid::Uuid> =
         s.workspace_agents.iter().map(|a| (a.name.as_str(), a.id)).collect();
     for p in &s.proposals {
-        let producer = match p.producing_agent_id {
-            Some(id) => Some(agent_key(Some(id))),
-            None => {
-                let author = p.author_actor_id.as_str();
-                if author.is_empty() {
-                    None
-                } else if let Some(id) = agent_names.get(author) {
-                    Some(agent_key(Some(*id)))
-                } else if s.flow.turns.iter().any(|t| t.proposal_ids.contains(&p.id)) {
-                    s.flow.turns.iter().find(|t| t.proposal_ids.contains(&p.id)).map(|t| t.agent.clone())
-                } else {
-                    None
-                }
-            }
-        };
+        // Producer: the recorded producing agent, else the turn that filed it
+        // (an authorless diff from the primary), else an agent author by name.
+        let producer = p
+            .producing_agent_id
+            .map(|id| agent_key(Some(id)))
+            .or_else(|| s.flow.turns.iter().find(|t| t.proposal_ids.contains(&p.id)).map(|t| t.agent.clone()))
+            .or_else(|| agent_names.get(p.author_actor_id.as_str()).map(|id| agent_key(Some(*id))));
         let Some(agent) = producer else { continue };
         let class = proposal_class(s, p);
         let decided_at = p
@@ -450,12 +442,36 @@ mod tests {
         let open = ActionProposal::new("Pending", ProposalKind::Decision, "coder");
         let mut gate = ActionProposal::new("Gate", ProposalKind::Decision, "");
         gate.status = ProposalStatus::Approved;
-        s.proposals = vec![approved, revised, rejected, open, gate];
+        // An authorless diff from the primary, known through its turn tag.
+        let mut primary_diff = ActionProposal::file_diff("Docs", "", "d".into(), vec!["README.md".into()]);
+        primary_diff.status = ProposalStatus::Applied;
+        s.flow.turns.push(TurnTag {
+            message_id: uuid::Uuid::new_v4(),
+            trigger_id: None,
+            agent: crate::flow::PRIMARY.into(),
+            runtime_id: String::new(),
+            host_id: String::new(),
+            task_class: "docs".into(),
+            role: "proposer".into(),
+            arm: String::new(),
+            upstream_arm: String::new(),
+            error: false,
+            error_kind: String::new(),
+            tests_passed: None,
+            tool_calls: 0,
+            duration_ms: 0,
+            cost_usd: 0.0,
+            proposal_ids: vec![primary_diff.id],
+            handoff_parcel: false,
+            at_ms: 0,
+        });
+        s.proposals = vec![approved, revised, rejected, open, gate, primary_diff];
 
         let out = outcomes(&[s]);
         let key = agent_key(Some(agent.id));
-        assert_eq!(out.len(), 3, "{out:?}");
-        assert!(out.iter().all(|o| o.agent == key));
+        assert_eq!(out.len(), 4, "{out:?}");
+        assert_eq!(out.iter().filter(|o| o.agent == key).count(), 3);
+        assert!(out.iter().any(|o| o.agent == crate::flow::PRIMARY && o.task_class == "docs" && o.success));
         assert!(out.iter().any(|o| o.source == OutcomeSource::Revision));
         assert!(out.iter().any(|o| o.source == OutcomeSource::Proposal && o.quality == 1.0 && o.task_class == "refactor"));
         assert!(out.iter().any(|o| o.source == OutcomeSource::Proposal && o.quality == 0.0));

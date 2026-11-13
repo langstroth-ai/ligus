@@ -426,6 +426,7 @@ async fn prepare_stage(
     let rendered = wf::render_template(prompt_template, &run.input, &outputs);
     let agent = resolve_stage_agent(&before, agent_id, &node.name)?;
     let responder = responder_for(state, &before, agent.as_ref());
+    crate::flow::record_stage_handoff(state, &before, run, node, agent.as_ref());
     let local_actor_id = state.local_actor_id();
     // A relay-less (local) or solo workspace has no other device to defer a stage
     // to, so this device always runs it — even when the responder's recorded owner
