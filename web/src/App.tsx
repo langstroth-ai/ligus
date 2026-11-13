@@ -260,7 +260,7 @@ export function App() {
   // changes, and re-resolve live when the OS appearance flips (mode = auto).
   useEffect(() => {
     applyTheme(resolvePalette(palette, appearanceMode));
-    // Best-effort copy for `hive serve` (a phone set to "Match host").
+    // Best-effort copy for `ligus serve` (a phone set to "Match host").
     void saveAppearance(palette, appearanceMode).catch(() => {});
     return watchSystemScheme(() => applyTheme(resolvePalette(palette, appearanceMode)));
   }, [appearanceMode, palette]);

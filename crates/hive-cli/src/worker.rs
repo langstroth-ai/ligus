@@ -1,6 +1,6 @@
 //! The agent worker: drain queued `@mentions` for the agents hosted on this
-//! box and answer them. Shared by `hive worker` (headless daemon) and
-//! `hive serve` (the home host for the iOS app), which also listens for the
+//! box and answer them. Shared by `ligus worker` (headless daemon) and
+//! `ligus serve` (the home host for the iOS app), which also listens for the
 //! live events a turn produces through a [`TurnSink`].
 //!
 //! A turn runs on the agent's workspace runtime (spec §12.5 — never a personal
@@ -58,7 +58,7 @@ pub trait TurnSink: Send + Sync {
     fn changed(&self) {}
 }
 
-/// The silent sink `hive worker` uses.
+/// The silent sink `ligus worker` uses.
 pub struct NoSink;
 impl TurnSink for NoSink {}
 
@@ -133,7 +133,7 @@ struct LocalRuntimesToml {
     runtimes: Vec<WorkspaceRuntime>,
 }
 
-/// This box's own runtimes (`<data>/runtimes.toml`, the `hive config export`
+/// This box's own runtimes (`<data>/runtimes.toml`, the `ligus config export`
 /// shape: `[[runtime]] id, name, provider, model, endpoint, credential`).
 ///
 /// The desktop binds an agent to one of its *device-local* runtimes, whose id
@@ -228,7 +228,7 @@ pub async fn drain_tick(
             return Ok(());
         }
         // Liveness is published to the relay's presence channel by the caller
-        // (`hive serve`'s presence loop, `hive worker`'s loop), not the log.
+        // (`ligus serve`'s presence loop, `ligus worker`'s loop), not the log.
         let hosted: HashSet<Uuid> = svc
             .load(workspace_config_session_id(ctx.ws))?
             .map(|s| s.workspace_agents)
@@ -433,7 +433,7 @@ async fn run_turn(
         _ => false,
     };
     // Subprocess agents fall back to the process's cwd when nothing is bound
-    // (the pre-binding behavior of `hive worker`); a writing one must still get
+    // (the pre-binding behavior of `ligus worker`); a writing one must still get
     // a worktree there (checked below).
     let subprocess_root = repo_root.clone().or_else(|| std::env::current_dir().ok());
     let eager = match subprocess_root.as_deref() {
@@ -454,7 +454,7 @@ async fn run_turn(
     if write_capable && eager.is_none() {
         let e = anyhow!(
             "@{} can edit files, so it only runs in an isolated worktree of a repository bound on this host \
-             (`hive bind-repo`), and none could be cut for this chat",
+             (`ligus bind-repo`), and none could be cut for this chat",
             agent.name
         );
         let _ = lock(svc).complete_assistant_message(s.id, s.workspace_id, mid, format!("[error] {e}"));

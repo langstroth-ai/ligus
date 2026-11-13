@@ -746,7 +746,7 @@ fn pending_hand_off_picks_up_windows_and_revocations() {
     write_json(&pending_dir(&host.dir).join("enroll-old.json"), &WindowFile { ps: b64u([1u8; 32]), exp: 1 }).unwrap();
     host.poll_pending();
     assert!(!pending_dir(&host.dir).join("enroll-old.json").exists());
-    // `hive phones revoke` from another process.
+    // `ligus phones revoke` from another process.
     let phone = PhoneKeys::generate();
     host.registry.activate(record("abc", &phone)).unwrap();
     let token = tmp.path().join("serve.token");

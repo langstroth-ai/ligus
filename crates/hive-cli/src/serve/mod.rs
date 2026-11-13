@@ -1,4 +1,4 @@
-//! `hive serve` — the home host for the iOS app.
+//! `ligus serve` — the home host for the iOS app.
 //!
 //! One process on an always-on box (the lab's SFF) that is a normal Hive
 //! device in the user's workspace — its E2EE keys never leave the box — and:
@@ -50,7 +50,7 @@ pub mod tunnel;
 #[cfg(test)]
 mod tests;
 
-/// How long `hive serve` waits for a turn in flight on SIGTERM / Ctrl-C.
+/// How long `ligus serve` waits for a turn in flight on SIGTERM / Ctrl-C.
 const STOP_GRACE: Duration = Duration::from_secs(15);
 
 /// Replies and proposals created this long before serve started don't push.
@@ -60,7 +60,7 @@ const NOTIFY_HISTORY_MINUTES: i64 = 10;
 /// passes the box's Tailscale IP.
 pub const DEFAULT_LISTEN: &str = "127.0.0.1:8787";
 
-/// Everything `hive serve` is configured with besides the workspace [`Config`].
+/// Everything `ligus serve` is configured with besides the workspace [`Config`].
 #[derive(Debug, Clone)]
 pub struct ServeOptions {
     pub listen: SocketAddr,
@@ -211,7 +211,7 @@ fn register_own(svc: &mut ChatService, ws: Uuid, host_id: &str, opts: &ServeOpti
     };
     print_enrollment(svc, ws, &opts.label, Some(wanted));
     if !is_member {
-        println!("hive serve: waiting for approval; the phone can read the workspace but not write until then.");
+        println!("ligus serve: waiting for approval; the phone can read the workspace but not write until then.");
         svc.set_write_block(Some(PENDING.into()));
         return Ok(());
     }
@@ -257,7 +257,7 @@ pub fn print_enrollment(svc: &ChatService, ws: Uuid, label: &str, owner: Option<
     );
 }
 
-/// `hive serve enroll [--new-device]`: print this box's enrollment code. With
+/// `ligus serve enroll [--new-device]`: print this box's enrollment code. With
 /// `--new-device` (needed after a revocation: a revoked device id stays
 /// revoked), first replace the box's device key with a fresh one.
 pub fn cmd_enroll(cfg: &Config, opts: &ServeOptions, new_device: bool) -> Result<()> {
@@ -266,14 +266,14 @@ pub fn cmd_enroll(cfg: &Config, opts: &ServeOptions, new_device: bool) -> Result
     let standing = svc.device_standing(ws, opts.owner.as_deref())?;
     let svc = match (&standing, new_device) {
         (Standing::Revoked, false) => bail!(
-            "this box's device was revoked; run `hive serve enroll --new-device` to make a new device key, then approve its code"
+            "this box's device was revoked; run `ligus serve enroll --new-device` to make a new device key, then approve its code"
         ),
         (_, true) => {
             drop(svc);
             let ids = hive_runtime::IdentityStore::new(&cfg.data_dir, hive_runtime::FileKeyVault::new(&cfg.data_dir));
             let rotated = ids.rotate_device()?;
             println!(
-                "This box has a new device key ({}). Restart hive serve so it uses it (e.g. systemctl --user restart hive-serve).",
+                "This box has a new device key ({}). Restart ligus serve so it uses it (e.g. systemctl --user restart hive-serve).",
                 rotated.device.id
             );
             open_service(cfg)?
@@ -466,10 +466,10 @@ pub fn dashboard_mcp_registry() -> std::result::Result<hive_runtime::McpRegistry
 }
 
 /// Why a revoked box refuses writes.
-const REVOKED: &str = "this box's device was revoked by its owner; run `hive serve enroll --new-device` on it and approve the new code on your desktop";
+const REVOKED: &str = "this box's device was revoked by its owner; run `ligus serve enroll --new-device` on it and approve the new code on your desktop";
 
 /// Why a box waiting for enrollment (and not a member) refuses writes.
-const PENDING: &str = "this box is waiting for its owner to approve it as their device (the code is in hive serve's log, or run `hive serve enroll`)";
+const PENDING: &str = "this box is waiting for its owner to approve it as their device (the code is in ligus serve's log, or run `ligus serve enroll`)";
 
 /// The device-local serve state file (read marks).
 fn state_path(cfg: &Config) -> PathBuf {
@@ -481,7 +481,7 @@ impl Shared {
         self.svc.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// The current direct-path bearer token (`hive phones revoke` rotates it).
+    /// The current direct-path bearer token (`ligus phones revoke` rotates it).
     pub fn token(&self) -> String {
         self.token.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
@@ -492,7 +492,7 @@ impl Shared {
         let t = t.trim();
         if t.len() >= 32 && *self.token.read().unwrap_or_else(|e| e.into_inner()) != t {
             *self.token.write().unwrap_or_else(|e| e.into_inner()) = t.to_string();
-            println!("hive serve: the bearer token changed on disk; using the new one.");
+            println!("ligus serve: the bearer token changed on disk; using the new one.");
         }
     }
 
@@ -549,14 +549,14 @@ impl Shared {
             match (&prev, &next) {
                 (_, Standing::Revoked) => {
                     svc.set_write_block(Some(REVOKED.into()));
-                    eprintln!("hive serve: {REVOKED}.");
+                    eprintln!("ligus serve: {REVOKED}.");
                 }
                 (_, Standing::OwnerDevice(owner)) => {
                     let first = !matches!(prev, Standing::OwnerDevice(_));
                     svc.act_as_owner_device(owner.clone());
                     svc.set_write_block(None);
                     if first {
-                        println!("hive serve: approved as {}'s device; the phone now acts as {0}.", owner.display_name);
+                        println!("ligus serve: approved as {}'s device; the phone now acts as {0}.", owner.display_name);
                         let host = WorkspaceHost::new(self.host_id.clone(), HostKind::Worker, self.opts.label.clone());
                         if let Err(e) = svc.ensure_host(self.ws, host) {
                             eprintln!("serve: re-registering this host as the owner's failed: {e}");
@@ -566,8 +566,8 @@ impl Shared {
                 (Standing::OwnerDevice(_), Standing::Own) => {
                     // The owner's certificate no longer counts (the owner left the
                     // workspace): don't keep writing as them.
-                    svc.set_write_block(Some("this box is no longer enrolled as its owner's device; restart hive serve".into()));
-                    eprintln!("hive serve: no longer enrolled as the owner's device; writes are paused until a restart.");
+                    svc.set_write_block(Some("this box is no longer enrolled as its owner's device; restart ligus serve".into()));
+                    eprintln!("ligus serve: no longer enrolled as the owner's device; writes are paused until a restart.");
                 }
                 _ => {}
             }
@@ -847,11 +847,11 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
     match &standing {
         Standing::OwnerDevice(owner) => {
             svc.act_as_owner_device(owner.clone());
-            println!("hive serve: enrolled as {}'s device; the phone acts as {0}.", owner.display_name);
+            println!("ligus serve: enrolled as {}'s device; the phone acts as {0}.", owner.display_name);
         }
         Standing::Revoked => {
             svc.set_write_block(Some(REVOKED.into()));
-            eprintln!("hive serve: {REVOKED}.");
+            eprintln!("ligus serve: {REVOKED}.");
         }
         Standing::Own => {
             if let Some(name) = &opts.name {
@@ -951,7 +951,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
     Ok(ServeHandle { addr, shared, shutdown, worker: Mutex::new(Some(worker)) })
 }
 
-/// Pick up a token rotated by `hive phones revoke` (§13.2 step 4).
+/// Pick up a token rotated by `ligus phones revoke` (§13.2 step 4).
 async fn token_watch(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
     loop {
         tokio::select! {
@@ -1127,7 +1127,7 @@ fn spawn_worker(shared: Arc<Shared>) -> Result<std::thread::JoinHandle<()>> {
 
 /// Print the pairing QR code and link. With remote access enabled the link is
 /// v2 (§4): it also opens a one-time enrollment window (10 min) that a
-/// running `hive serve` announces to the relay. `direct` = `None` prints a
+/// running `ligus serve` announces to the relay. `direct` = `None` prints a
 /// relay-only link (no `url`/`token`).
 pub fn print_pairing(data_dir: &std::path::Path, direct: Option<(&str, &str)>, remote: Option<&tunnel::RelaySettings>) -> Result<()> {
     let link = match remote {
@@ -1136,7 +1136,7 @@ pub fn print_pairing(data_dir: &std::path::Path, direct: Option<(&str, &str)>, r
             let dir = tunnel::tunnel_dir(data_dir);
             let Some(keys) = tunnel::HostKeys::load(&dir)? else {
                 bail!(
-                    "remote access is enabled but there are no host keys in {}: run `hive remote enable` or start `hive serve` first",
+                    "remote access is enabled but there are no host keys in {}: run `ligus remote enable` or start `ligus serve` first",
                     dir.display()
                 );
             };
@@ -1155,12 +1155,12 @@ pub fn print_pairing(data_dir: &std::path::Path, direct: Option<(&str, &str)>, r
         println!("This link carries the API token: share it only with your own phone.");
     }
     if remote.is_some() {
-        println!("The remote pairing secret in it works once, for 10 minutes, while `hive serve` is running.");
+        println!("The remote pairing secret in it works once, for 10 minutes, while `ligus serve` is running.");
     }
     Ok(())
 }
 
-/// `hive serve` — run until SIGTERM / Ctrl-C.
+/// `ligus serve` — run until SIGTERM / Ctrl-C.
 pub fn cmd_serve(cfg: Config, opts: ServeOptions) -> Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     rt.block_on(async move {
@@ -1168,32 +1168,32 @@ pub fn cmd_serve(cfg: Config, opts: ServeOptions) -> Result<()> {
         let pair_now = opts.pair;
         let handle = start(cfg, opts).await?;
         println!(
-            "hive serve: listening on http://{} — workspace '{}', host {} ('{}'). Ctrl-C to stop.",
+            "ligus serve: listening on http://{} — workspace '{}', host {} ('{}'). Ctrl-C to stop.",
             handle.addr, handle.shared.cfg.room, handle.shared.host_id, handle.shared.opts.label
         );
         if let Some(t) = &handle.shared.tunnel {
-            println!("hive serve: remote access through {} (host id {}).", t.settings.relay, t.host_id());
+            println!("ligus serve: remote access through {} (host id {}).", t.settings.relay, t.host_id());
         }
         if pair_now {
             let token = handle.shared.token();
             let direct = (!pair::is_loopback_url(&server_url) || handle.shared.tunnel.is_none()).then_some((server_url.as_str(), token.as_str()));
             print_pairing(&handle.shared.cfg.data_dir, direct, handle.shared.opts.remote.as_ref())?;
         } else {
-            println!("Run `hive pair` to show the phone pairing code.");
+            println!("Run `ligus pair` to show the phone pairing code.");
         }
         crate::shutdown_signal().await;
-        println!("hive serve: stopping.");
+        println!("ligus serve: stopping.");
         // Under the unit's TimeoutStopSec (20 s): let a turn in flight finish
         // if it can; a longer one is finished as interrupted on the next start.
         if !handle.stop(STOP_GRACE).await {
-            eprintln!("hive serve: a turn was still running; it will be marked interrupted on the next start.");
+            eprintln!("ligus serve: a turn was still running; it will be marked interrupted on the next start.");
         }
         Ok(())
     })
 }
 
-/// `hive pair` — show the pairing code for a configured (possibly already
-/// running) `hive serve`, without starting one.
+/// `ligus pair` — show the pairing code for a configured (possibly already
+/// running) `ligus serve`, without starting one.
 pub fn cmd_pair(data_dir: &std::path::Path, opts: &ServeOptions, relay_only: bool) -> Result<()> {
     let url = opts.server_url();
     if let Some(remote) = &opts.remote {
@@ -1208,7 +1208,7 @@ pub fn cmd_pair(data_dir: &std::path::Path, opts: &ServeOptions, relay_only: boo
         return print_pairing(data_dir, Some((&url, &token)), Some(remote));
     }
     if relay_only {
-        bail!("--relay-only needs remote access: `hive remote enable --relay <url>` first");
+        bail!("--relay-only needs remote access: `ligus remote enable --relay <url>` first");
     }
     if pair::is_loopback_url(&url) {
         anyhow::bail!(

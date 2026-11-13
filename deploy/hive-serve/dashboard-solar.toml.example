@@ -1,4 +1,4 @@
-# Optional solar section for the hive serve dashboard: append it to your
+# Optional solar section for the ligus serve dashboard: append it to your
 # dashboard.toml. It mirrors what the old /v1/lab/status solar pane showed.
 #
 # It assumes:

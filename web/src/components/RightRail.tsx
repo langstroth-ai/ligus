@@ -934,10 +934,10 @@ function RuntimeCard({
 
 // ─── Queued work (spec §12.5) ────────────────────────────────────────────────
 // Unanswered agent mentions in the workspace, tagged with each agent's host
-// status. The desktop counterpart of the CLI's `hive queue`: an agent bound to
+// status. The desktop counterpart of the CLI's `ligus queue`: an agent bound to
 // an offline host (or a member's device) has its mentions *queued* until the
 // host returns — so we surface a one-click "run on worker" handoff
-// (`hive set-agent-host`) to move it to an always-on worker instead.
+// (`ligus set-agent-host`) to move it to an always-on worker instead.
 
 /// Status pill for a queued item's host: online = success, offline = warn
 /// ("OFFLINE → queued"), device/unknown = neutral. All tints route through

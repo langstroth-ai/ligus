@@ -1,6 +1,6 @@
-# hive serve dashboard: copy to dashboard.toml in the serve data dir
+# ligus serve dashboard: copy to dashboard.toml in the serve data dir
 # (HIVE_DATA_DIR, or set HIVE_DASHBOARD_FILE), then run
-#   hive dashboard check
+#   ligus dashboard check
 # The phone shows these sections in its dashboard tab; the host runs every
 # query itself, so Prometheus and the URLs below never face the phone.
 # Format reference: docs/dashboard.md.

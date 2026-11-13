@@ -1,8 +1,8 @@
 //! The paired-phone registry, `tunnel/phones.json` (0600).
 //!
-//! `hive serve` holds it in memory and writes it through on every change;
-//! `hive phones list|revoke` read and edit the file from another process (a
-//! revocation also goes through `pending/`, so `hive serve` re-applies it even
+//! `ligus serve` holds it in memory and writes it through on every change;
+//! `ligus phones list|revoke` read and edit the file from another process (a
+//! revocation also goes through `pending/`, so `ligus serve` re-applies it even
 //! if one of its own writes raced the CLI's).
 
 use std::path::{Path, PathBuf};

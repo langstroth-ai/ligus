@@ -61,7 +61,7 @@ const fn m(name: &'static str, shape: Shape, about: &'static str) -> MetricInfo 
     MetricInfo { name, shape, about }
 }
 
-/// Every metric the `hive` source knows (`hive dashboard metrics` prints it).
+/// Every metric the `hive` source knows (`ligus dashboard metrics` prints it).
 pub const METRICS: &[MetricInfo] = &[
     m("agents.total", Shape::Number, "agents in the workspace"),
     m("agents.online", Shape::Number, "agents whose host is online (an agent on its owner's device counts while one of that person's devices is online)"),
@@ -84,7 +84,7 @@ pub const METRICS: &[MetricInfo] = &[
     m("host.status", Shape::Rows, "this host: serving, relay sync, remote access, push"),
     m("sync.age", Shape::Number, "seconds since the last successful relay sync"),
     m("sync.last", Shape::Text, "the last relay sync, e.g. \"Synced 4 s ago\""),
-    m("phones.paired", Shape::Number, "phones paired for remote access (hive remote)"),
+    m("phones.paired", Shape::Number, "phones paired for remote access (ligus remote)"),
 ];
 
 pub fn metric_info(name: &str) -> Option<&'static MetricInfo> {
@@ -127,14 +127,14 @@ pub fn age(secs: i64) -> String {
 /// The serve process's own state, which the event log doesn't hold.
 #[derive(Debug, Clone, Default)]
 pub struct HostState {
-    /// False under `hive dashboard check`, which reads the store without
+    /// False under `ligus dashboard check`, which reads the store without
     /// serving: the live rows read "unknown".
     pub serving: bool,
     pub relay_configured: bool,
     pub last_sync_ok: Option<OffsetDateTime>,
     /// The latest sync failure since the last success.
     pub sync_error: Option<String>,
-    /// Remote access (`hive remote`), when enabled.
+    /// Remote access (`ligus remote`), when enabled.
     pub remote: Option<RemoteState>,
     /// Pushes through a self-hosted ntfy.
     pub ntfy: bool,
@@ -356,7 +356,7 @@ impl HiveSnapshot {
 
     fn sync_row(&self) -> MetricRow {
         if !self.host.serving {
-            return MetricRow::status("Relay sync", false, "Unknown (hive serve isn't running here)");
+            return MetricRow::status("Relay sync", false, "Unknown (ligus serve isn't running here)");
         }
         match (self.sync_age(), &self.host.sync_error) {
             (_, Some(e)) => MetricRow::status("Relay sync", false, &format!("Failing: {}", clip(e, 80))),
@@ -475,9 +475,9 @@ impl HiveSnapshot {
             }
             "phones.paired" => match &self.host.remote {
                 Some(r) => n(r.phones),
-                None => bail!("remote access is off (hive remote enable); phones on the direct path aren't counted"),
+                None => bail!("remote access is off (ligus remote enable); phones on the direct path aren't counted"),
             },
-            other => bail!("unknown hive metric '{other}' (hive dashboard metrics lists them)"),
+            other => bail!("unknown hive metric '{other}' (ligus dashboard metrics lists them)"),
         }
     }
 }

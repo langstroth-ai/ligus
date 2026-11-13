@@ -1,10 +1,10 @@
-//! Bearer token + pairing for `hive serve`.
+//! Bearer token + pairing for `ligus serve`.
 //!
 //! The token is 32 random bytes, hex-encoded, kept in a 0600 file
 //! (`<HIVE_DATA_DIR>/serve.token` by default) and generated on first run. The
 //! phone gets it once, through the pairing link
 //! `hive://pair?url=<base64url(serverURL)>&token=<token>` shown as a terminal
-//! QR code by `hive serve --pair`, and keeps it in the iOS Keychain.
+//! QR code by `ligus serve --pair`, and keeps it in the iOS Keychain.
 
 use std::io::Write;
 use std::net::{IpAddr, SocketAddr};
@@ -49,22 +49,22 @@ pub fn load_or_create_token(path: &Path) -> Result<String> {
     Ok(token)
 }
 
-/// Replace the token at `path` with a fresh one (0600). `hive phones revoke`
+/// Replace the token at `path` with a fresh one (0600). `ligus phones revoke`
 /// does this by default, because a stolen phone holds the token too; a
-/// running `hive serve` picks the new one up within seconds.
+/// running `ligus serve` picks the new one up within seconds.
 pub fn rotate_token(path: &Path) -> Result<String> {
     std::fs::write(path, b"").with_context(|| format!("clearing {}", path.display()))?;
     load_or_create_token(path)
 }
 
-/// Read the token `hive serve` already created at `path`. `hive pair` must
+/// Read the token `ligus serve` already created at `path`. `ligus pair` must
 /// not mint one: a fresh token in the wrong data dir pairs the phone with a
 /// token the running server has never seen.
 pub fn load_existing_token(path: &Path) -> Result<String> {
     let t = std::fs::read_to_string(path).map(|s| s.trim().to_string()).unwrap_or_default();
     if t.is_empty() {
         bail!(
-            "no serve token at {}: start `hive serve` first, or point HIVE_DATA_DIR / --token-file at the server's data dir",
+            "no serve token at {}: start `ligus serve` first, or point HIVE_DATA_DIR / --token-file at the server's data dir",
             path.display()
         );
     }

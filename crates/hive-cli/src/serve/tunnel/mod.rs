@@ -2,7 +2,7 @@
 //! (spec: `docs/relay-tunnel.md`).
 //!
 //! The phone reaches this box through a relay without a VPN or an inbound
-//! port. `hive serve` keeps one outbound control WebSocket to the relay
+//! port. `ligus serve` keeps one outbound control WebSocket to the relay
 //! ([`control`]); for each admitted phone it dials an accept WebSocket, runs
 //! the Noise responder ([`noise`], [`session`]) and carries the existing
 //! HTTP and SSE API over a small stream mux ([`frame`]), dispatching every request
@@ -10,9 +10,9 @@
 //!
 //! State lives in `<HIVE_DATA_DIR>/tunnel/` (directory 0700, files 0600):
 //! `keys.json` (host signing + Noise static keys), `phones.json` (paired
-//! phones), `relay.json` (`hive remote enable`), `status.json` (live status for
-//! `hive remote status`) and `pending/` (enrollment windows and revocations
-//! handed over by `hive pair` / `hive phones revoke`, picked up within 2 s).
+//! phones), `relay.json` (`ligus remote enable`), `status.json` (live status for
+//! `ligus remote status`) and `pending/` (enrollment windows and revocations
+//! handed over by `ligus pair` / `ligus phones revoke`, picked up within 2 s).
 
 // Protocol-complete helpers (credential verification, phone-side frames) are
 // used by the tests' fake relay and phone, not by the host binary itself.
@@ -61,7 +61,7 @@ pub const SUBPROTOCOL: &str = "hive-tunnel.1";
 pub const CRED_LIFETIME_SECS: u64 = 90 * 86_400;
 /// Default lifetime of a pairing secret (§4).
 pub const PAIR_WINDOW_SECS: u64 = 600;
-/// How often `hive serve` looks at `pending/` (§16: "within 2 s").
+/// How often `ligus serve` looks at `pending/` (§16: "within 2 s").
 pub const PENDING_POLL: Duration = Duration::from_secs(2);
 /// Allowed clock skew wherever a time is compared (§2).
 pub const SKEW_SECS: u64 = 300;
@@ -182,7 +182,7 @@ pub fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Option<T>>
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 
-/// Where and how to reach the relay. Off unless `hive remote enable` wrote
+/// Where and how to reach the relay. Off unless `ligus remote enable` wrote
 /// `relay.json` or `--remote-relay` / `HIVE_REMOTE_RELAY` is set.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -271,7 +271,7 @@ impl RelaySettings {
     }
 }
 
-/// Live status `hive serve` writes for `hive remote status`.
+/// Live status `ligus serve` writes for `ligus remote status`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LiveStatus {
@@ -288,19 +288,19 @@ pub struct LiveStatus {
     /// When the current relay connection came up (`None` while down).
     #[serde(default)]
     pub connected_since: Option<u64>,
-    /// When `hive serve` last rewrote this file, at least every
+    /// When `ligus serve` last rewrote this file, at least every
     /// [`STATUS_HEARTBEAT`] while it runs: a connected file with an old
-    /// heartbeat was left by a `hive serve` that stopped without saying so.
+    /// heartbeat was left by a `ligus serve` that stopped without saying so.
     #[serde(default)]
     pub heartbeat: u64,
 }
 
-/// How often a running `hive serve` refreshes `status.json`'s heartbeat.
+/// How often a running `ligus serve` refreshes `status.json`'s heartbeat.
 pub const STATUS_HEARTBEAT: Duration = Duration::from_secs(30);
 
 // ── Enrollment windows + pending hand-off ────────────────────────────────────
 
-/// `pending/enroll-<eid>.json`, written by `hive pair`.
+/// `pending/enroll-<eid>.json`, written by `ligus pair`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowFile {
     /// b64u(pairing secret).
@@ -308,7 +308,7 @@ pub struct WindowFile {
     pub exp: u64,
 }
 
-/// `pending/revoke-<pid>.json`, written by `hive phones revoke`; deleted once
+/// `pending/revoke-<pid>.json`, written by `ligus phones revoke`; deleted once
 /// the relay acks the revocation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RevokeFile {
@@ -341,7 +341,7 @@ impl PairingSecret {
     }
 }
 
-/// An open enrollment window in `hive serve`.
+/// An open enrollment window in `ligus serve`.
 pub struct Window {
     pub secret: PairingSecret,
     pub exp: u64,
@@ -355,7 +355,7 @@ pub struct Window {
 
 pub const MAX_WINDOW_ATTEMPTS: u32 = 5;
 
-/// Write a new enrollment window for `hive serve` to pick up and return it.
+/// Write a new enrollment window for `ligus serve` to pick up and return it.
 pub fn create_window(dir: &Path, lifetime: u64) -> Result<(PairingSecret, u64)> {
     let secret = PairingSecret::generate();
     let exp = now() + lifetime.min(900);
@@ -671,7 +671,7 @@ impl TunnelHost {
         Self::lock(&self.revocations).keys().cloned().collect()
     }
 
-    /// Pick up what `hive pair` / `hive phones revoke` left in `pending/`, and
+    /// Pick up what `ligus pair` / `ligus phones revoke` left in `pending/`, and
     /// expire stale windows. Called every [`PENDING_POLL`].
     pub fn poll_pending(&self) {
         self.status_heartbeat();
@@ -926,7 +926,7 @@ pub async fn stopped(stop: &mut tokio::sync::watch::Receiver<bool>) {
     let _ = stop.wait_for(|s| *s).await;
 }
 
-/// Background loop: poll `pending/` while `hive serve` runs.
+/// Background loop: poll `pending/` while `ligus serve` runs.
 pub async fn pending_loop(host: Arc<TunnelHost>, mut stop: tokio::sync::watch::Receiver<bool>) {
     loop {
         host.poll_pending();

@@ -16,7 +16,7 @@
 //!
 //! Resolution for a turn: the chat's binding, else the workspace binding,
 //! else none (the turn gets no file tools; MCP tools still apply). Written by
-//! `hive bind-repo`; the binding is device-local and never synced, exactly
+//! `ligus bind-repo`; the binding is device-local and never synced, exactly
 //! like the desktop's.
 
 use std::collections::BTreeMap;
@@ -458,7 +458,7 @@ pub fn turn_context(data_dir: &Path, chat: Uuid) -> String {
     let b = RepoBindings::load(data_dir);
     let Some((raw, _)) = b.raw_for(chat) else {
         return "Repository: none is bound to this chat on this host, so there are no repository files to read or \
-                edit in this turn. The owner can pick one from the phone (the repo chip) or with `hive bind-repo`."
+                edit in this turn. The owner can pick one from the phone (the repo chip) or with `ligus bind-repo`."
             .into();
     };
     let dir = resolve_path(&repos_dir(data_dir), raw);
@@ -495,7 +495,7 @@ pub fn turn_context(data_dir: &Path, chat: Uuid) -> String {
     )
 }
 
-/// `hive bind-repo <name|path> [--chat <id>]` / `hive bind-repo --clear [--chat <id>]`.
+/// `ligus bind-repo <name|path> [--chat <id>]` / `ligus bind-repo --clear [--chat <id>]`.
 pub fn cmd_bind_repo(data_dir: &Path, target: Option<&str>, chat: Option<&str>, clear: bool) -> Result<()> {
     let mut b = RepoBindings::load(data_dir);
     let chat = chat.map(|c| Uuid::parse_str(c.trim()).context("--chat must be a chat id")).transpose()?;
@@ -511,7 +511,7 @@ pub fn cmd_bind_repo(data_dir: &Path, target: Option<&str>, chat: Option<&str>, 
         return Ok(());
     }
     let Some(target) = target.map(str::trim).filter(|t| !t.is_empty()) else {
-        bail!("usage: hive bind-repo <name-under-repos-dir | /absolute/path> [--chat <chat-id>]  (or --clear)");
+        bail!("usage: ligus bind-repo <name-under-repos-dir | /absolute/path> [--chat <chat-id>]  (or --clear)");
     };
     let dir = resolve_path(&repos_dir(data_dir), target);
     if !hive_runtime::git_worktree::is_git_repo(&dir) {
@@ -528,7 +528,7 @@ pub fn cmd_bind_repo(data_dir: &Path, target: Option<&str>, chat: Option<&str>, 
     Ok(())
 }
 
-/// `hive repos` — show the repos dir and the bindings.
+/// `ligus repos` — show the repos dir and the bindings.
 pub fn cmd_repos(data_dir: &Path) -> Result<()> {
     let dir = repos_dir(data_dir);
     let b = RepoBindings::load(data_dir);

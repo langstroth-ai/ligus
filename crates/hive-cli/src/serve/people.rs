@@ -48,7 +48,7 @@ fn non_empty(s: Option<&String>) -> Option<&String> {
 // ── Agents: avatar + where it runs ─────────────────────────────────────────
 
 /// Where an agent runs, as the desktop's host badge says it: `ownerDevice`
-/// (no host: its owner's own machine), `thisHost` (this `hive serve` box),
+/// (no host: its owner's own machine), `thisHost` (this `ligus serve` box),
 /// `worker` or `device` (another registered host).
 fn host_kind(s: &Shared, a: &WorkspaceAgent, hosts: &[WorkspaceHost]) -> (&'static str, Option<bool>) {
     if a.host_id.is_empty() {
@@ -235,7 +235,7 @@ fn default_responder(
     known: &[WorkspaceRuntime],
     hosts: &[WorkspaceHost],
 ) -> Value {
-    // `hive serve --default-agent` routes an un-addressed phone message to that
+    // `ligus serve --default-agent` routes an un-addressed phone message to that
     // agent; otherwise the chat's `@hive` answers it, as on the desktop.
     if let Some(name) = &s.opts.default_agent {
         if let Some(a) = agents.iter().find(|a| a["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(name))) {

@@ -1,6 +1,6 @@
 //! Generating an agent's reply — with MCP tools when configured.
 //!
-//! Both `hive agent` and `hive worker` turn a chat transcript into one reply.
+//! Both `ligus agent` and `ligus worker` turn a chat transcript into one reply.
 //! When `HIVE_MCP_CONFIG` names one or more enabled MCP servers *and* the
 //! runtime is Anthropic with a key, the reply is produced by the agentic tool
 //! loop (model ↔ tool_use ↔ tool_result), so the agent can reach external
@@ -8,7 +8,7 @@
 //! streamed completion — identical to the pre-MCP behavior — so nothing
 //! regresses when no MCP config is present.
 //!
-//! `hive worker` / `hive serve` use [`generate_reply_streaming`], which adds the
+//! `ligus worker` / `ligus serve` use [`generate_reply_streaming`], which adds the
 //! offline harness's loop for local model runtimes (OpenAI wire / Ollama):
 //! built-in file tools + MCP tools behind `CompositeTools`, under the same
 //! policy as the desktop (writes only in a per-turn worktree, `run_command`

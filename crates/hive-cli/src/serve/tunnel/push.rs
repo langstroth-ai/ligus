@@ -1,7 +1,7 @@
 //! Host-side push gating (§14, `docs/push-notifications.md`): which pushes
 //! actually go to the relay.
 //!
-//! On top of the relay's own limits, `hive serve` drops a push to a phone
+//! On top of the relay's own limits, `ligus serve` drops a push to a phone
 //! when:
 //!
 //! - the app is in the foreground on that phone: it holds an open

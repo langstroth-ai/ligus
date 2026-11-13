@@ -78,7 +78,7 @@ pub async fn run(host: Arc<TunnelHost>, router: Router, mut stop: watch::Receive
             End::Code(4001, why) => {
                 eprintln!(
                     "remote: the relay rejected this host's credentials (4001 {why}); remote access is stopped. \
-                     Check `hive remote status`, or run `hive remote reset` if the host key changed."
+                     Check `ligus remote status`, or run `ligus remote reset` if the host key changed."
                 );
                 host.update_status(|s| s.last_error = Some(format!("4001 {why}")));
                 return;
@@ -86,7 +86,7 @@ pub async fn run(host: Arc<TunnelHost>, router: Router, mut stop: watch::Receive
             End::Code(4009, _) => {
                 eprintln!(
                     "remote: SUPERSEDED (4009): another process connected to the relay with this host's key. \
-                     Two `hive serve`s share one data dir? Waiting 60 s."
+                     Two `ligus serve`s share one data dir? Waiting 60 s."
                 );
                 host.update_status(|s| s.last_error = Some("4009 superseded".into()));
                 jitter(MAX_BACKOFF).max(MAX_BACKOFF)

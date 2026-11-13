@@ -916,12 +916,12 @@ export interface RevokeResultDto {
 export const removeAndRevoke = (sessionId: string, memberId: string) =>
   invoke<RevokeResultDto>("remove_and_revoke", { sessionId, memberId });
 
-// ── My devices (a `hive serve` box enrolled as one of your devices) ─────────
+// ── My devices (a `ligus serve` box enrolled as one of your devices) ─────────
 
 export interface DeviceCodeDto {
   deviceId: string;
   label: string;
-  /** Compare with the box's terminal (`hive serve enroll` prints it). */
+  /** Compare with the box's terminal (`ligus serve enroll` prints it). */
   fingerprint: string;
   knownWorkspace: boolean;
   alreadyMine: boolean;
@@ -1146,7 +1146,7 @@ export const onTrayNavigate = (cb: (route: string) => void): Promise<UnlistenFn>
 export const setTitlebarColor = (r: number, g: number, b: number, dark: boolean) =>
   invoke<void>("set_titlebar_color", { r, g, b, dark });
 
-/// Mirror the theme to the app data dir so `hive serve` on this machine can
+/// Mirror the theme to the app data dir so `ligus serve` on this machine can
 /// tell a paired phone which theme to follow ("Match host").
 export const saveAppearance = (palette: string, mode: string) =>
   invoke<void>("save_appearance", { palette, mode });

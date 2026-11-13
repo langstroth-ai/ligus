@@ -685,7 +685,7 @@ fn validate_hive(p: &PanelConfig) -> Result<()> {
             match hive::metric_info(m) {
                 Some(i) if i.shape == Shape::Number => {}
                 Some(_) => bail!("row '{}': metric {m} isn't a number", r.label),
-                None => bail!("row '{}': needs a number metric (hive dashboard metrics lists them)", r.label),
+                None => bail!("row '{}': needs a number metric (ligus dashboard metrics lists them)", r.label),
             }
         }
         return Ok(());
@@ -693,10 +693,10 @@ fn validate_hive(p: &PanelConfig) -> Result<()> {
     if p.kind == Kind::Text && p.text.is_some() {
         return Ok(());
     }
-    need(&p.metric, "a metric (hive dashboard metrics lists them)")?;
+    need(&p.metric, "a metric (ligus dashboard metrics lists them)")?;
     let m = p.metric.as_deref().unwrap_or_default();
     let Some(info) = hive::metric_info(m) else {
-        bail!("unknown hive metric '{m}' (hive dashboard metrics lists them)");
+        bail!("unknown hive metric '{m}' (ligus dashboard metrics lists them)");
     };
     if !info.shape.fits(p.kind) {
         bail!("metric {m} fits {} panels, not {}", info.shape.kinds(), p.kind.as_str());
@@ -1773,7 +1773,7 @@ pub fn default_toml() -> Result<String> {
     ))
 }
 
-/// `hive dashboard metrics`: the `hive` source's metrics.
+/// `ligus dashboard metrics`: the `hive` source's metrics.
 pub fn metrics_help() -> String {
     let mut out = String::from("Metrics for panels with source = \"hive\" (metric = \"…\"):\n\n");
     for (shape, head) in [
@@ -1792,7 +1792,7 @@ pub fn metrics_help() -> String {
     out
 }
 
-/// A dashboard snapshot read straight from the store, for `hive dashboard
+/// A dashboard snapshot read straight from the store, for `ligus dashboard
 /// check` (not serving: live host state reads unknown).
 struct StoreHive(Result<std::sync::Arc<HiveSnapshot>, String>);
 
@@ -1817,9 +1817,9 @@ fn store_hive(cfg: &crate::Config) -> Option<StoreHive> {
     Some(StoreHive(snap.map(std::sync::Arc::new).map_err(|e| format!("{e:#}"))))
 }
 
-// ── `hive dashboard` ───────────────────────────────────────────────────────
+// ── `ligus dashboard` ───────────────────────────────────────────────────────
 
-/// `hive dashboard check [--file PATH]`: validate, evaluate once, print.
+/// `ligus dashboard check [--file PATH]`: validate, evaluate once, print.
 /// Fails when the config is invalid or any panel has an error.
 pub fn cmd_check(config: &crate::Config, file: Option<String>) -> Result<()> {
     let path = file.map(PathBuf::from).unwrap_or_else(|| config_path(&config.data_dir));

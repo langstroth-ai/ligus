@@ -1,4 +1,4 @@
-//! End to end: a real `hive serve` with remote access on, a minimal fake
+//! End to end: a real `ligus serve` with remote access on, a minimal fake
 //! relay, and a fake phone (snow initiator) pairing, then GET + SSE through
 //! the tunnel, renewal, and revocation (included from `serve/tests.rs` for
 //! its harness).
@@ -38,7 +38,7 @@ fn parse_link(link: &str) -> (String, String, [u8; 32], PairingSecret) {
     (relay, param("hid"), tun::b64u_fixed(&param("hs")).unwrap(), PairingSecret::from_bytes(tun::b64u_fixed(&param("ps")).unwrap()))
 }
 
-/// A v2 link the way `hive pair` makes one: window file + link.
+/// A v2 link the way `ligus pair` makes one: window file + link.
 fn pair_link(h: &Harness) -> String {
     let t = h.handle.shared.tunnel.as_ref().unwrap();
     let (secret, exp) = tun::create_window(&t.dir, tun::PAIR_WINDOW_SECS).unwrap();
@@ -52,7 +52,7 @@ async fn tunnel_end_to_end_pair_get_sse_renew_revoke() {
     relay.wait_connected(Duration::from_secs(10)).await.unwrap();
     let t = h.handle.shared.tunnel.clone().unwrap();
 
-    // Pair: `hive pair` leaves a window in pending/, serve announces it.
+    // Pair: `ligus pair` leaves a window in pending/, serve announces it.
     let link = pair_link(&h);
     let (relay_url, hid, hs, ps) = parse_link(&link);
     assert_eq!((relay_url.as_str(), hid.as_str(), hs), (relay.url.as_str(), t.host_id(), *t.keys.static_pub()));
@@ -161,7 +161,7 @@ async fn tunnel_end_to_end_pair_get_sse_renew_revoke() {
     let direct = h.client.post(format!("{}/v1/tunnel/credential", h.base)).bearer_auth(&h.token).send().await.unwrap();
     assert_eq!(direct.status(), 404);
 
-    // Revocation from another process (`hive phones revoke`): the live SSE
+    // Revocation from another process (`ligus phones revoke`): the live SSE
     // session gets GOAWAY revoked within ~1 s of serve noticing (≤ 2 s poll).
     let sse = c.open("GET", "/v1/events", &[], None, true).await.unwrap();
     let _ = c.recv_timeout(Duration::from_secs(5)).await.unwrap();

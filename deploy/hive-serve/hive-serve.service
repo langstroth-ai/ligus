@@ -1,4 +1,4 @@
-# systemd *user* unit for `hive serve` — the home host the Hive iOS app talks to.
+# systemd *user* unit for `ligus serve` — the home host the Hive iOS app talks to.
 #
 # Install (see README.md in this directory):
 #   install -Dm644 hive-serve.service ~/.config/systemd/user/hive-serve.service
@@ -12,7 +12,7 @@
 # Restart=always retries until the address exists.
 
 [Unit]
-Description=Hive home host (hive serve) for the iOS app
+Description=Hive home host (ligus serve) for the iOS app
 Wants=network-online.target
 After=network-online.target
 

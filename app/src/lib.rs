@@ -3526,7 +3526,7 @@ fn get_chat(state: State<AppState>, session_id: String) -> Result<Option<ChatSes
 }
 
 /// Show messages a person's other identity wrote — the separate member their
-/// `hive serve` box used before it was enrolled as their device — as theirs:
+/// `ligus serve` box used before it was enrolled as their device — as theirs:
 /// "Alex via sff". Display only; the log is unchanged.
 fn attribute_linked_devices(session: &mut ChatSession, links: &hive_core::DeviceLinks) {
     if links.is_empty() {
@@ -3711,7 +3711,7 @@ fn remove_agent(state: State<AppState>, session_id: String, agent_id: String) ->
 
 // ---------------------------------------------------------------------------
 // Commands — queued work (unanswered agent mentions + host status; spec §12.5).
-// The desktop counterpart of the CLI's `hive queue` + `hive set-agent-host`.
+// The desktop counterpart of the CLI's `ligus queue` + `ligus set-agent-host`.
 // ---------------------------------------------------------------------------
 
 /// Every unanswered agent mention in the active workspace, tagged with the host
@@ -3947,7 +3947,7 @@ fn list_members(state: State<AppState>, session_id: String) -> Result<Vec<Worksp
         return Ok(Vec::new());
     };
     let local = !known_rooms.contains(&s.workspace_id);
-    // A retired alias — the separate member a `hive serve` box used before it
+    // A retired alias — the separate member a `ligus serve` box used before it
     // was enrolled as its owner's device — lingers as the creator seed of the
     // chats it made. It's the owner now: don't list it as another person.
     let links = device_links_of(&svc, s.workspace_id);
@@ -4114,8 +4114,8 @@ fn remove_member(state: State<AppState>, session_id: String, member_id: String) 
     svc.remove_member(id, state.active_workspace_id(), member_id).map_err(map_err)
 }
 
-// ── My devices: enroll a `hive serve` box as one of your own devices ─────────
-// The box prints an enrollment code (`hive serve enroll`); approving it here
+// ── My devices: enroll a `ligus serve` box as one of your own devices ─────────
+// The box prints an enrollment code (`ligus serve enroll`); approving it here
 // signs a certificate for its device key with this desktop's account key, so
 // everything the box (and the phone behind it) does is authored as you. See
 // `hive_runtime::device_enroll`.
@@ -4126,7 +4126,7 @@ fn remove_member(state: State<AppState>, session_id: String, member_id: String) 
 struct DeviceCodeDto {
     device_id: String,
     label: String,
-    /// Check against the box's terminal (`hive serve enroll` prints it).
+    /// Check against the box's terminal (`ligus serve enroll` prints it).
     fingerprint: String,
     /// The workspace the code is for is one this desktop has.
     known_workspace: bool,
@@ -4159,7 +4159,7 @@ struct MyDeviceDto {
 }
 
 /// A host that names you as its owner but isn't certified as your device
-/// (a `hive serve` box with `HIVE_SERVE_OWNER` set, waiting for approval).
+/// (a `ligus serve` box with `HIVE_SERVE_OWNER` set, waiting for approval).
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DeviceRequestDto {
@@ -4230,7 +4230,7 @@ fn approve_device(state: State<AppState>, code: String, retire_member: bool) -> 
         return Err("This code is for a workspace this desktop doesn't have.".into());
     }
     if svc.own_devices(ws).unwrap_or_default().iter().any(|d| d.device_id == req.device_id && d.revoked) {
-        return Err("This device was revoked. On the box, run `hive serve enroll --new-device` and use its new code.".into());
+        return Err("This device was revoked. On the box, run `ligus serve enroll --new-device` and use its new code.".into());
     }
     svc.certify_device(&req).map_err(map_err)?;
     tracing::info!(target: "identity", device = %req.device_id, label = %req.label, "approved a device as this account's");
@@ -6202,7 +6202,7 @@ fn owns_responder(local_actor_id: &str, responder: &Responder) -> bool {
 /// Only a real, synced, multi-human room falls back to the ownership check.
 ///
 /// An agent sent to a host (`binding`) runs on that host only — the worker
-/// there answers every mention for it (`hive worker` / `hive serve`). Deciding
+/// there answers every mention for it (`ligus worker` / `ligus serve`). Deciding
 /// on ownership alone answered it here too: a solo user's desktop always runs
 /// its own agents, so an agent sent to the home host was answered twice.
 fn turn_runs_here(local_only: bool, solo: bool, local: &str, owner: &str, binding: HostBinding) -> bool {
@@ -6352,7 +6352,7 @@ enum DispatchTarget {
 }
 
 /// Distinct *people* among the chat's human members. A member's own devices (a
-/// `hive serve` box linked to its owner, see [`hive_core::DeviceLinks`]) count
+/// `ligus serve` box linked to its owner, see [`hive_core::DeviceLinks`]) count
 /// once with them, so you plus your phone's home box is still a solo room.
 fn human_member_count(session: &ChatSession, links: &hive_core::DeviceLinks) -> usize {
     links.human_count(session)
@@ -6366,7 +6366,7 @@ fn device_links_of(svc: &ChatService, workspace_id: Uuid) -> hive_core::DeviceLi
 
 /// [`turn_runs_here`] with device links applied: solo counts people, not
 /// member records, and a responder owned by a linked device (the chat a phone
-/// created through its owner's `hive serve` box) is owned by that device's
+/// created through its owner's `ligus serve` box) is owned by that device's
 /// account — so the owner's desktop answers it. The single-answer claim still
 /// arbitrates between the owner's devices.
 fn runs_here_linked(
@@ -8522,7 +8522,7 @@ fn user_turn_answered(session: &ChatSession, trigger: Uuid) -> bool {
 /// not claimed by another device. Ownership, addressing and the claim are
 /// checked per trigger when it runs ([`respond_once`]).
 ///
-/// Two posts a few ms apart ("@hive …" then "@coder …" through `hive serve`)
+/// Two posts a few ms apart ("@hive …" then "@coder …" through `ligus serve`)
 /// land in one pull. Looking only at the chat's last message answered the
 /// second and silently dropped the first.
 fn synced_user_triggers(session: &ChatSession, arrived: &[Uuid], my_device: Uuid) -> Vec<Uuid> {
@@ -10297,7 +10297,7 @@ fn set_titlebar_color(
 
 /// Mirror the UI theme (palette family + appearance mode) to
 /// `<app data dir>/appearance.json`. The web view keeps the real setting in
-/// localStorage; this copy lets `hive serve` on the same machine tell a paired
+/// localStorage; this copy lets `ligus serve` on the same machine tell a paired
 /// phone which theme to follow ("Match host", `GET /v1/appearance`). The
 /// frontend calls it on launch and on every theme change; best-effort.
 #[tauri::command]
@@ -10804,7 +10804,7 @@ fn set_schedule_enabled(state: State<AppState>, id: String, enabled: bool) -> Re
 
 /// How often the desktop checks its Device-host registration and refreshes
 /// host presence. Its own beat goes out every `HOST_BEAT_EVERY_SECS` (30 s);
-/// peers (and `hive serve`) count a host online for 90 s.
+/// peers (and `ligus serve`) count a host online for 90 s.
 const DEVICE_HOST_TICK: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// The name this computer shows other members (macOS "Computer Name", else the
@@ -10823,7 +10823,7 @@ fn computer_name() -> Option<String> {
 
 /// Keep this desktop registered as a `Device` host in the synced room's
 /// workspace (spec §12.4: a member's machine, online while its app runs) and
-/// beating on the room's relay presence channel. The phone's `hive serve`
+/// beating on the room's relay presence channel. The phone's `ligus serve`
 /// reads the beat to say whether `@hive` — which only a desktop can run — will
 /// answer now or once the desktop is open.
 ///
@@ -13778,12 +13778,12 @@ async fn generate_agent_bootstrap(
     let mut block = String::new();
     block.push_str("# Run on the remote agent box:\n");
     block.push_str("brew install honeyhive-ai/hive/hive-cli && \\\n");
-    block.push_str(&format!("  hive enroll \"{invite}\" --token \"{token}\" && \\\n"));
-    block.push_str(&format!("  hive worker --label {label}\n"));
+    block.push_str(&format!("  ligus enroll \"{invite}\" --token \"{token}\" && \\\n"));
+    block.push_str(&format!("  ligus worker --label {label}\n"));
     if !enrolled {
         block.push_str(&format!(
             "\n# NOTE: couldn't auto-enroll {sub} in the roster (are you the workspace owner/admin \
-             and has it been claimed?). Add @{} in People, or the agent can `hive join <code>`.\n",
+             and has it been claimed?). Add @{} in People, or the agent can `ligus join <code>`.\n",
             entry.login
         ));
     }
@@ -14229,7 +14229,7 @@ pub fn run() {
             tauri::async_runtime::spawn(run_sync_loop(handle, settings.clone(), db_path));
 
             // List this desktop as an online Device host in the synced room, so
-            // the phone (via `hive serve`) can tell whether @hive can answer now.
+            // the phone (via `ligus serve`) can tell whether @hive can answer now.
             tauri::async_runtime::spawn(run_device_host_loop(app.handle().clone()));
 
             // Scheduled/triggered agents: fires due schedules on a 30s tick.
@@ -14876,7 +14876,7 @@ mod dispatch_target_tests {
         ));
     }
 
-    /// The owner (desktop) plus their phone's `hive serve` box, which created
+    /// The owner (desktop) plus their phone's `ligus serve` box, which created
     /// the chat. The box's host names the owner, and its device carries a cert
     /// for the box's account; `admin` sets the box's role.
     fn phone_box_world(admin: bool) -> (ChatSession, hive_core::DeviceLinks) {
@@ -16700,7 +16700,7 @@ mod synced_dispatch_tests {
     }
 
     /// The field bug: "@hive …" and "@coder …" posted ~20 ms apart through
-    /// `hive serve` arrive in one pull, the box's @coder claims and answers
+    /// `ligus serve` arrive in one pull, the box's @coder claims and answers
     /// the second. The first must still be dispatched here.
     #[test]
     fn two_posts_in_one_pull_both_get_considered() {

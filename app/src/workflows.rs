@@ -530,7 +530,7 @@ pub(crate) fn stage_owner_runs_here(local_actor_id: &str, owner_actor_id: &str) 
 /// Deferred (documented limitations of correlating by author-name over the
 /// existing dispatch, which carries no per-request id):
 ///   1. Multiple remote stages ready *simultaneously* are reliably serviced only
-///      by a `hive worker` (it drains the whole mention backlog). A desktop peer
+///      by a `ligus worker` (it drains the whole mention backlog). A desktop peer
 ///      answering via `maybe_respond` only sees the trailing message, so the
 ///      earlier siblings wait until a worker picks them up (or time out).
 ///   2. Two concurrently-ready remote stages bound to the *same* agent aren't

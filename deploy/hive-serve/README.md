@@ -1,6 +1,6 @@
-# hive serve: the home host for the iOS app
+# ligus serve: the home host for the iOS app
 
-`hive serve` runs on an always-on Linux box on your tailnet. It is an ordinary
+`ligus serve` runs on an always-on Linux box on your tailnet. It is an ordinary
 Hive device in your workspace: it syncs the E2EE event log through the relay
 like the desktop app, runs agents you send to it on your own model gateway, and
 gives the iPhone app a small HTTP + Server-Sent Events API on the box's
@@ -61,23 +61,23 @@ carries the workspace's E2EE key.
 2. On the box:
 
    ```sh
-   hive enroll 'hivews1:…'                  # add --token <hrt1…> if your relay needs an access token
-   hive join <invite-code>                  # only on relays that enforce membership
-   hive sync                                # pull the workspace
-   hive whoami                              # this box's account/device ids
+   ligus enroll 'hivews1:…'                  # add --token <hrt1…> if your relay needs an access token
+   ligus join <invite-code>                  # only on relays that enforce membership
+   ligus sync                                # pull the workspace
+   ligus whoami                              # this box's account/device ids
    ```
 
 `enroll` writes the connection, including the key, to
 `$HIVE_DATA_DIR/config.toml`. Keep that directory private (the unit sets
 `UMask=0077`).
 
-On first start, `hive serve` adds itself to the roster at the **Contributor**
+On first start, `ligus serve` adds itself to the roster at the **Contributor**
 role. That is enough to chat, vote on proposals and move agents between hosts.
 It also registers itself as a host, so it appears in the desktop's host list
 under `HIVE_SERVE_LABEL`. A proposal whose `approvalRoleFloor` sits above
 Contributor needs an Owner/Admin to promote this member in the desktop's
 People pane before the phone's vote counts. Defining workspace runtimes
-(`hive add-runtime`) needs Admin.
+(`ligus add-runtime`) needs Admin.
 
 ## 4. Models, repos and tools
 
@@ -90,9 +90,9 @@ People pane before the phone's vote counts. Defining workspace runtimes
 
   ```sh
   git clone <url> "$HIVE_REPOS_DIR/hive"
-  hive bind-repo hive                  # the workspace's checkout
-  hive bind-repo other --chat <id>     # one chat on a different checkout
-  hive repos                           # show bindings
+  ligus bind-repo hive                  # the workspace's checkout
+  ligus bind-repo other --chat <id>     # one chat on a different checkout
+  ligus repos                           # show bindings
   ```
 
   The binding stays on this box and never syncs, the same as the desktop's
@@ -120,28 +120,28 @@ Health check from any tailnet device: `curl http://<tailscale-ip>:8787/v1/health
 ## 6. Pair the phone
 
 ```sh
-# Load the unit's settings first: without them `hive pair` has no listen
+# Load the unit's settings first: without them `ligus pair` has no listen
 # address or data dir, and refuses rather than print a loopback link.
 set -a; . ~/.config/hive-serve/hive-serve.env; set +a
-hive pair        # prints a QR code and a hive://pair?... link for the configured address
+ligus pair        # prints a QR code and a hive://pair?... link for the configured address
 ```
 
 Scan the QR code with the iPhone camera, or paste the link into the app. The
-link contains the API token, so run `hive pair` in your own terminal. Don't run
+link contains the API token, so run `ligus pair` in your own terminal. Don't run
 it in the unit, because the journal would keep the token. To revoke the phone,
 delete `$HIVE_DATA_DIR/serve.token` and restart. A new token is generated, and
 you pair again.
 
-Optional, remote access without Tailscale: `hive remote enable --relay
+Optional, remote access without Tailscale: `ligus remote enable --relay
 https://<relay>` (with the unit's env loaded), restart the unit, then `hive
 pair` prints a v2 link that also pairs over the relay. Phones paired that way
-are listed by `hive phones list` and revoked with `hive phones revoke <name>`.
+are listed by `ligus phones list` and revoked with `ligus phones revoke <name>`.
 See [`docs/ios-app.md`](../../docs/ios-app.md#remote-access-through-a-relay-optional-off-by-default).
 
 ## Sending agents here
 
 From the phone, open **Agents**, pick an agent and choose this host
 (`PUT /v1/agents/{id}/host`). From a terminal, run
-`hive set-agent-host <agent> <host-id>`. After that, any `@agent` mention in
+`ligus set-agent-host <agent> <host-id>`. After that, any `@agent` mention in
 the workspace runs on this box. The desktop shows the agent's host as this
 box's label.

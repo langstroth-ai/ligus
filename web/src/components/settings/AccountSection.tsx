@@ -319,7 +319,7 @@ function GithubSection() {
   );
 }
 
-/// Your devices in the active workspace. A `hive serve` box (the home host your
+/// Your devices in the active workspace. A `ligus serve` box (the home host your
 /// phone talks through) becomes one of them when you approve its enrollment
 /// code here; from then on everything it does is authored as you. Revoking a
 /// device makes every member stop accepting its events.
@@ -373,7 +373,7 @@ export function DevicesSection() {
 
   async function revoke(deviceId: string, label: string) {
     const ok = await confirmDialog(
-      `Revoke ${label}? Every member stops accepting its events right away. To use it again, run \`hive serve enroll --new-device\` on it and approve the new code.`,
+      `Revoke ${label}? Every member stops accepting its events right away. To use it again, run \`ligus serve enroll --new-device\` on it and approve the new code.`,
       { danger: true },
     );
     if (!ok) return;
@@ -401,7 +401,7 @@ export function DevicesSection() {
       }
     >
       <p className="text-xs opacity-60">
-        Devices that act as you in this workspace. Add your phone's home host (<code>hive serve</code>) here
+        Devices that act as you in this workspace. Add your phone's home host (<code>ligus serve</code>) here
         so what you do from your phone is yours, not a separate member's.
       </p>
       {pending.map((r) => (
@@ -410,7 +410,7 @@ export function DevicesSection() {
           className="rounded-xl border px-3 py-2.5 text-xs"
           style={{ borderColor: "var(--hive-accent-cool)" }}
         >
-          <strong>{r.label}</strong> says it's your device. On it, run <code>hive serve enroll</code> (or look in
+          <strong>{r.label}</strong> says it's your device. On it, run <code>ligus serve enroll</code> (or look in
           its log) and paste the code with <em>Add a device</em>.
         </div>
       ))}
@@ -440,7 +440,7 @@ export function DevicesSection() {
               )}
               {preview.revoked && (
                 <div style={{ color: "var(--hive-danger)" }}>
-                  This device was revoked. Run <code>hive serve enroll --new-device</code> on it for a new code.
+                  This device was revoked. Run <code>ligus serve enroll --new-device</code> on it for a new code.
                 </div>
               )}
               {preview.alreadyMine && <div className="opacity-70">Already your device.</div>}

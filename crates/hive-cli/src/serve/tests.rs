@@ -1,4 +1,4 @@
-//! Integration tests for `hive serve`: a real server against the in-process
+//! Integration tests for `ligus serve`: a real server against the in-process
 //! test relay (`hive-runtime/src/test_relay.rs`), a fake OpenAI-compatible
 //! model server and a fake ntfy, driven over HTTP + SSE like the phone.
 //!
@@ -1456,7 +1456,7 @@ async fn phone_box_enrolled_as_the_owners_device() {
     let roster = open_service(&h.desktop).unwrap().load(cfg_id).unwrap().unwrap().members;
     assert!(!roster.iter().any(|m| m.actor.id == box_actor), "a pending box doesn't join as its own member");
 
-    // The owner approves the code `hive serve` printed; the box switches live.
+    // The owner approves the code `ligus serve` printed; the box switches live.
     let code = h.handle.shared.lock().enrollment_request(ws, "sff").encode();
     approve_on_desktop(&h.desktop, &code).await;
     let id = wait_identity(&h, "owner").await;
@@ -1699,7 +1699,7 @@ fn retired_box_messages_read_as_the_owner_via_the_box() {
     assert!(v.get("via").is_none());
 }
 
-/// `sync_once` (a daemon's first sync, `hive sync`, a worker tick) pages
+/// `sync_once` (a daemon's first sync, `ligus sync`, a worker tick) pages
 /// through a room bigger than one relay page until it is caught up, instead
 /// of stopping after the first page.
 #[tokio::test]

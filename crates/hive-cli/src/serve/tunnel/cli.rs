@@ -1,5 +1,5 @@
-//! `hive remote …` and `hive phones …`: separate processes that hand work to a
-//! running `hive serve` through files in `tunnel/` (§16).
+//! `ligus remote …` and `ligus phones …`: separate processes that hand work to a
+//! running `ligus serve` through files in `tunnel/` (§16).
 
 use std::path::Path;
 
@@ -10,39 +10,39 @@ use super::{
     RevokeFile,
 };
 
-/// `hive remote enable --relay <url> [--reg-token T] [--insecure-relay]`.
+/// `ligus remote enable --relay <url> [--reg-token T] [--insecure-relay]`.
 pub fn remote_enable(data_dir: &Path, relay: Option<String>, reg_token: Option<String>, insecure: bool) -> Result<()> {
-    let Some(relay) = relay else { bail!("usage: hive remote enable --relay <https://relay.example.com> [--reg-token T]") };
+    let Some(relay) = relay else { bail!("usage: ligus remote enable --relay <https://relay.example.com> [--reg-token T]") };
     let settings = RelaySettings::new(&relay, reg_token, insecure)?;
     let dir = tunnel_dir(data_dir);
     ensure_private_dir(&dir)?;
     let keys = HostKeys::load_or_create(&dir)?;
     write_json(&RelaySettings::file(&dir), &settings)?;
     println!("Remote access enabled through {} (host id {}).", settings.relay, keys.host_id());
-    println!("Restart `hive serve` to connect, then run `hive pair` to pair a phone.");
+    println!("Restart `ligus serve` to connect, then run `ligus pair` to pair a phone.");
     Ok(())
 }
 
-/// `hive remote disable`: keeps keys and phones, so enabling again needs no re-pairing.
+/// `ligus remote disable`: keeps keys and phones, so enabling again needs no re-pairing.
 pub fn remote_disable(data_dir: &Path) -> Result<()> {
     let dir = tunnel_dir(data_dir);
     match read_json::<RelaySettings>(&RelaySettings::file(&dir))? {
         Some(mut s) => {
             s.enabled = false;
             write_json(&RelaySettings::file(&dir), &s)?;
-            println!("Remote access disabled. Restart `hive serve` to drop the relay connection.");
+            println!("Remote access disabled. Restart `ligus serve` to drop the relay connection.");
         }
         None => println!("Remote access is not enabled."),
     }
     Ok(())
 }
 
-/// `hive remote status`.
+/// `ligus remote status`.
 pub fn remote_status(data_dir: &Path) -> Result<()> {
     let dir = tunnel_dir(data_dir);
     match read_json::<RelaySettings>(&RelaySettings::file(&dir))? {
         Some(s) => println!("relay:     {} ({})", s.relay, if s.enabled { "enabled" } else { "disabled" }),
-        None => println!("relay:     not configured (hive remote enable --relay <url>)"),
+        None => println!("relay:     not configured (ligus remote enable --relay <url>)"),
     }
     match HostKeys::load(&dir)? {
         Some(k) => println!("host id:   {}", k.host_id()),
@@ -66,10 +66,10 @@ fn short_age(secs: u64) -> String {
     }
 }
 
-/// The `serve:` line of `hive remote status`. Connected shows how long the
+/// The `serve:` line of `ligus remote status`. Connected shows how long the
 /// relay link has been up, not when the file last changed (a link that stays
 /// up never changes it, so "updated 6h ago" read like a stale file). A file
-/// whose heartbeat stopped was left by a `hive serve` that isn't running.
+/// whose heartbeat stopped was left by a `ligus serve` that isn't running.
 pub(crate) fn describe_status(st: &LiveStatus, now: u64) -> String {
     let detail = format!(
         "status {}, push {}",
@@ -80,7 +80,7 @@ pub(crate) fn describe_status(st: &LiveStatus, now: u64) -> String {
     let beat = (st.heartbeat > 0).then(|| now.saturating_sub(st.heartbeat));
     if let Some(b) = beat.filter(|b| *b > 3 * super::STATUS_HEARTBEAT.as_secs()) {
         let was = if st.connected { "connected" } else { "not connected" };
-        return format!("unknown: hive serve last reported {} ago ({was}, {detail}) — is it running?{error}", short_age(b));
+        return format!("unknown: ligus serve last reported {} ago ({was}, {detail}) — is it running?{error}", short_age(b));
     }
     if st.connected {
         match (st.connected_since, beat) {
@@ -95,7 +95,7 @@ pub(crate) fn describe_status(st: &LiveStatus, now: u64) -> String {
     }
 }
 
-/// `hive remote reset`: new host keys (new host id); every phone must re-pair.
+/// `ligus remote reset`: new host keys (new host id); every phone must re-pair.
 pub fn remote_reset(data_dir: &Path) -> Result<()> {
     let dir = tunnel_dir(data_dir);
     ensure_private_dir(&dir)?;
@@ -105,15 +105,15 @@ pub fn remote_reset(data_dir: &Path) -> Result<()> {
         let _ = std::fs::remove_file(f);
     }
     let _ = std::fs::remove_dir_all(pending_dir(&dir));
-    println!("New host keys: host id {}. Every phone must pair again; restart `hive serve`.", keys.host_id());
+    println!("New host keys: host id {}. Every phone must pair again; restart `ligus serve`.", keys.host_id());
     Ok(())
 }
 
-/// `hive phones list`.
+/// `ligus phones list`.
 pub fn phones_list(data_dir: &Path) -> Result<()> {
     let phones = Registry::load(&tunnel_dir(data_dir))?.list();
     if phones.is_empty() {
-        println!("No paired phones. Run `hive pair` with remote access enabled.");
+        println!("No paired phones. Run `ligus pair` with remote access enabled.");
         return Ok(());
     }
     println!("{:<24} {:<24} {:<10} {:<12} last seen", "PID", "NAME", "STATE", "PAIRED");
@@ -133,24 +133,24 @@ pub fn phones_list(data_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// `hive phones revoke <pid|name> [--keep-token]` (§13.2). Marks the phone
+/// `ligus phones revoke <pid|name> [--keep-token]` (§13.2). Marks the phone
 /// revoked in `phones.json` and leaves `pending/revoke-<pid>.json` for
-/// `hive serve` (end live sessions, tell the relay until it acks). Unless
+/// `ligus serve` (end live sessions, tell the relay until it acks). Unless
 /// `--keep-token`, it also rotates the direct-path bearer token.
 pub fn phones_revoke(data_dir: &Path, who: Option<&str>, token_file: &Path, keep_token: bool) -> Result<()> {
-    let Some(who) = who else { bail!("usage: hive phones revoke <pid|name> [--keep-token]") };
+    let Some(who) = who else { bail!("usage: ligus phones revoke <pid|name> [--keep-token]") };
     let dir = tunnel_dir(data_dir);
     let reg = Registry::load(&dir)?;
-    let Some(rec) = reg.resolve(who) else { bail!("no phone '{who}' (see `hive phones list`; names must be unique)") };
+    let Some(rec) = reg.resolve(who) else { bail!("no phone '{who}' (see `ligus phones list`; names must be unique)") };
     let exp = reg.revoke(&rec.pid)?.unwrap_or(rec.cred_exp);
     write_json(&pending_dir(&dir).join(format!("revoke-{}.json", rec.pid)), &RevokeFile { pid: rec.pid.clone(), exp })?;
-    println!("Revoked {} ({}). A running `hive serve` ends its sessions and tells the relay within seconds.", rec.name, rec.pid);
+    println!("Revoked {} ({}). A running `ligus serve` ends its sessions and tells the relay within seconds.", rec.name, rec.pid);
     if keep_token {
         println!("The direct-path bearer token was kept (--keep-token).");
     } else if token_file.exists() {
         crate::serve::pair::rotate_token(token_file)?;
         println!(
-            "Rotated the direct-path bearer token ({}): phones using the direct path must pair again (`hive pair`).",
+            "Rotated the direct-path bearer token ({}): phones using the direct path must pair again (`ligus pair`).",
             token_file.display()
         );
     }
@@ -183,7 +183,7 @@ mod status_tests {
         s.connected_since = Some(now - 7200);
         s.heartbeat = now - 300;
         let line = describe_status(&s, now);
-        assert!(line.starts_with("unknown: hive serve last reported 5m ago (connected,"), "{line}");
+        assert!(line.starts_with("unknown: ligus serve last reported 5m ago (connected,"), "{line}");
         assert!(line.contains("is it running?"));
     }
 
@@ -199,7 +199,7 @@ mod status_tests {
             describe_status(&down, now),
             "not connected (status active, push unavailable, since 45s ago), last error: relay unreachable"
         );
-        // Written by an older hive serve: no heartbeat, no connection time.
+        // Written by an older ligus serve: no heartbeat, no connection time.
         let mut legacy = st(true);
         legacy.at = now - 90_000;
         assert_eq!(describe_status(&legacy, now), "connected (status active, push available, last change 1d 1h ago)");

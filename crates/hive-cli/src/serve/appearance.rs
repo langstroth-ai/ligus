@@ -31,7 +31,7 @@ pub const MODES: [&str; 3] = ["auto", "light", "dark"];
 /// The file the desktop app writes into its data dir.
 pub const FILE_NAME: &str = "appearance.json";
 
-/// Where `hive serve` looks for the host's theme.
+/// Where `ligus serve` looks for the host's theme.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AppearanceConfig {
     /// Palette from serve config (`HIVE_SERVE_PALETTE`), already validated.
@@ -49,14 +49,14 @@ impl AppearanceConfig {
         let palette = env_opt("HIVE_SERVE_PALETTE").and_then(|p| {
             let v = normalize_palette(&p);
             if v.is_none() {
-                eprintln!("hive serve: ignoring HIVE_SERVE_PALETTE={p:?} (one of {})", PALETTES.join(", "));
+                eprintln!("ligus serve: ignoring HIVE_SERVE_PALETTE={p:?} (one of {})", PALETTES.join(", "));
             }
             v
         });
         let mode = env_opt("HIVE_SERVE_APPEARANCE").and_then(|m| {
             let v = normalize_mode(&m);
             if v.is_none() {
-                eprintln!("hive serve: ignoring HIVE_SERVE_APPEARANCE={m:?} (one of {})", MODES.join(", "));
+                eprintln!("ligus serve: ignoring HIVE_SERVE_APPEARANCE={m:?} (one of {})", MODES.join(", "));
             }
             v
         });
