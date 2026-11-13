@@ -11,6 +11,7 @@ import {
   startWorkflowRun,
   cancelWorkflowRun,
   resumeWorkflowRun,
+  handOverWorkflowRun,
   voteProposal,
   onWorkflowRun,
   onChatStream,
@@ -24,6 +25,7 @@ import { toast, errMsg } from "@/components/Toast";
 import { confirmThen } from "@/lib/confirm";
 import { Button, Section, ErrorState } from "@/components/ui";
 import { RailFrame, Stack, EmptyHint, panelStyle, fieldStyle } from "@/components/RightRail";
+import { RunLeaseLine } from "@/components/guards/RunLeaseLine";
 
 /// Visual tone for a node/run status chip. Exported for tests.
 export function statusTone(status: string): { color: string; background: string } {
@@ -401,6 +403,18 @@ function RunCard({ sessionId, run }: { sessionId: string; run: WorkflowRunDto })
             </button>
           </div>
         ))}
+
+      {live && run.lease && (
+        <RunLeaseLine
+          lease={run.lease}
+          onHandOver={() =>
+            act(async () => {
+              await handOverWorkflowRun(sessionId, run.id);
+              toast.success("Handed over; the other device picks it up on its next heartbeat");
+            })
+          }
+        />
+      )}
 
       {run.nodes.some((n) => n.error) && (
         <div className="mt-2 text-xs" style={{ color: "var(--hive-danger)" }}>

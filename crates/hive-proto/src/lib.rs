@@ -13,6 +13,9 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+pub mod guards;
+pub use guards::*;
+
 /// Backend build/version info — the Phase 0 smoke-test round-trip.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -583,6 +586,11 @@ pub struct WorkflowRunDto {
     /// an app restart until crash-recovery re-spawns the driver; gates the
     /// frontend's Resume affordance.
     pub driver_alive: bool,
+    /// The run's coordinator lease (which device drives it, and whether that
+    /// device is still beating). Absent for runs started before leases.
+    #[serde(default)]
+    #[ts(optional)]
+    pub lease: Option<RunLeaseDto>,
 }
 
 /// Pushed as a Tauri event whenever a run's persisted state changes.

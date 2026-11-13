@@ -21,6 +21,7 @@ pub mod github;
 pub mod host_presence;
 pub mod identity_store;
 pub mod identity_verifier;
+pub mod lease_presence;
 pub mod mcp;
 pub mod mcp_oauth;
 pub mod mentions;

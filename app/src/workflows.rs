@@ -105,6 +105,7 @@ impl Drop for DriverRegistration {
         state.run_wakers.lock().unwrap().remove(&self.run_id);
         state.gate_runs.lock().unwrap().retain(|_, r| *r != self.run_id);
         state.canceled_runs.lock().unwrap().remove(&self.run_id);
+        crate::guards::forget_run(&state, self.run_id);
     }
 }
 
@@ -137,6 +138,11 @@ pub(crate) async fn drive_run(
     guard: SessionBusyGuard,
 ) {
     let _guard = guard;
+    // Drive only under the run's coordinator lease (claimed here, or reused
+    // after our own restart, or taken over from a lapsed holder).
+    if !crate::guards::lease_before_driving(&app, session_id, workspace_id, run_id).await {
+        return;
+    }
     let _registration = DriverRegistration { app: app.clone(), run_id };
     let waker = Arc::new(Notify::new());
     {
@@ -159,6 +165,12 @@ async fn drive_run_inner(
 ) -> Result<(), String> {
     let state = app.state::<AppState>();
     loop {
+        // Fenced: another device holds a newer epoch (split brain), or we
+        // handed the run over. Stop without writing; our writes would be
+        // dropped by every projection anyway.
+        if !crate::guards::still_holds(&state, session_id, run_id) {
+            return Ok(());
+        }
         let (mut run, session) = load_run(&state, session_id, run_id)?;
 
         // Bail if the run was settled elsewhere (e.g. another device of this
@@ -645,6 +657,8 @@ fn persist_run(
     run: &mut wf::WorkflowRun,
 ) -> Result<(), String> {
     run.updated_at = Timestamp::now();
+    // The fencing token: the epoch of the lease this device drives under.
+    run.lease_epoch = crate::guards::epoch_for(state, run.id);
     {
         let mut svc = state.service.lock().unwrap();
         svc.upsert_workflow_run(session_id, workspace_id, run.clone()).map_err(map_err)?;
@@ -1075,6 +1089,7 @@ pub(crate) fn definition_dto(def: &wf::WorkflowDefinition) -> WorkflowDefinition
 pub(crate) fn run_dto(run: &wf::WorkflowRun, driver_alive: bool) -> WorkflowRunDto {
     WorkflowRunDto {
         driver_alive,
+        lease: None,
         id: run.id.to_string(),
         definition_id: run.definition_id.to_string(),
         definition_name: run.definition.name.clone(),
@@ -1201,7 +1216,11 @@ pub(crate) fn list_workflow_runs(
             s.workflow_runs
                 .iter()
                 .rev()
-                .map(|r| run_dto(r, live.contains_key(&r.id)))
+                .map(|r| {
+                    let mut dto = run_dto(r, live.contains_key(&r.id));
+                    dto.lease = crate::guards::run_lease_dto(&state, &s, r.id, svc.device_id());
+                    dto
+                })
                 .collect()
         })
         .unwrap_or_default())
@@ -1244,6 +1263,7 @@ pub(crate) fn start_workflow_run(
         let mut svc = state.service.lock().unwrap();
         svc.upsert_workflow_run(sid, workspace_id, run).map_err(map_err)?;
     }
+    crate::guards::acquire_run_lease(&state, sid, workspace_id, run_id)?;
     let _ = app.emit(
         WorkflowRunEvent::EVENT,
         WorkflowRunEvent {
@@ -1324,6 +1344,8 @@ pub(crate) fn resume_workflow_run(
         }
     }
     let guard = SessionBusyGuard::acquire(&app, sid)?;
+    // Refuse up front if another device still drives it (its lease is live).
+    crate::guards::acquire_run_lease(&state, sid, workspace_id, rid)?;
     persist_run(&app, &state, sid, workspace_id, &mut run)?;
     tauri::async_runtime::spawn(drive_run(app.clone(), sid, workspace_id, rid, guard));
     Ok(())

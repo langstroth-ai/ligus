@@ -179,6 +179,12 @@ pub struct WorkflowRun {
     pub started_at: Timestamp,
     #[serde(default)]
     pub updated_at: Timestamp,
+    /// Lease epoch the driving device held when it wrote this snapshot (the
+    /// fencing token, see `lease`). `None` for writes outside a lease (a
+    /// cancel from another device, or a build without leases); those are
+    /// never fenced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease_epoch: Option<u64>,
 }
 
 impl WorkflowRun {
@@ -206,6 +212,7 @@ pub fn new_run(
         initiator_actor_id: initiator_actor_id.into(),
         started_at: Timestamp::now(),
         updated_at: Timestamp::now(),
+        lease_epoch: None,
     }
 }
 

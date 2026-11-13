@@ -187,6 +187,34 @@ interrupted (say, by an app restart); finished stages keep their outputs.
 Gate approvals also reach your phone as a push notification when a
 `ligus serve` host is set up ([Ligus on your phone](phone-app.md)).
 
+### Which device drives a run
+
+Exactly one device drives a run at a time, and it holds the run's
+**coordinator lease** to do so. Starting a run claims the lease; while the
+run is going, that device renews it with a signed heartbeat every 15
+seconds on the relay's presence channel (end-to-end encrypted, never part of
+the chat log). The run card shows who drives it: *Driven by this device*,
+or the other device's name and how long ago its last heartbeat arrived.
+
+- **Crash recovery.** If the driving device quits or crashes, its heartbeat
+  stops. After one lease (60 seconds) with no heartbeat, a device of the
+  person who started the run picks it up; any other member's device waits
+  for a second lease first, so usually only one device steps in. A device
+  that restarts resumes its own runs straight away.
+- **Hand over.** The driving device can pass a run on purpose with **Hand
+  over** on the run card (say, before closing a laptop). The run goes to
+  another online device of the workspace, which takes it within one
+  heartbeat; nobody else can grab it in between.
+- **Two drivers at once.** Each lease carries an *epoch* number that only
+  goes up. If two devices both decide to take over at the same moment,
+  every device agrees on one winner, and anything the other writes under
+  the older epoch is ignored everywhere. The card shows *competing claims
+  fenced* when that happened. **Resume** refuses while another device's
+  heartbeat is still arriving.
+- A heartbeat is signed with the driving device's key, so another member
+  can't keep a dead device's lease alive and block recovery. In a
+  workspace without account keys the card marks the holder *unverified*.
+
 ## Current limits
 
 - Only a person starts a run; there is no schedule or event trigger for

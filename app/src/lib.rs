@@ -39,6 +39,7 @@ use tauri_plugin_notification::NotificationExt;
 use uuid::Uuid;
 
 mod workflows;
+mod guards;
 mod data_migration;
 /// In-app live test support (see `tests/app_live.rs`); not in release builds.
 #[cfg(feature = "e2e")]
@@ -94,6 +95,8 @@ struct AppState {
     /// Host liveness from the connected room's relay presence channel (see
     /// `hive_runtime::host_presence`), refreshed by `run_device_host_loop`.
     host_presence: hive_runtime::HostPresence,
+    /// Workspace guards kept in memory (leases held, heartbeats seen).
+    guards: crate::guards::GuardRuntime,
     identity: IdentityStore<FileKeyVault>,
     data_dir: PathBuf,
     base_runtimes: Mutex<Vec<RuntimeTarget>>,
@@ -6122,12 +6125,13 @@ fn session_in_workspace(
 /// `start_workflow_run` uses. Idempotent: the pure selector skips any run
 /// already in `run_wakers`, and `SessionBusyGuard::acquire` fails closed if the
 /// session's slot is already held (so we never double-drive a session).
-fn recover_workflow_runs(app: &AppHandle) {
+pub(crate) fn recover_workflow_runs(app: &AppHandle) {
     let state = app.state::<AppState>();
     let active = state.active_workspace_id();
     let me = state.local_actor_id();
     let known_rooms = state.known_room_ids();
     let config_id = hive_core::workspace_config_session_id(active);
+    let beats_known = crate::guards::beats_known(&state);
 
     // (session_id, workspace_id, run_id, status) for every run in the workspace.
     let mut candidates: Vec<(Uuid, Uuid, Uuid, hive_core::workflow::WorkflowRunStatus)> = Vec::new();
@@ -6143,6 +6147,13 @@ fn recover_workflow_runs(app: &AppHandle) {
                 continue;
             }
             for run in &s.workflow_runs {
+                // Lease-aware: a run another device is still driving (its
+                // heartbeat is live) is left alone; see `guards::recovery_allowed`.
+                if crate::guards::is_live_status(run.status)
+                    && !crate::guards::recovery_allowed(&state, &s, run.id, svc.device_id(), &me, beats_known)
+                {
+                    continue;
+                }
                 candidates.push((id, s.workspace_id, run.id, run.status));
             }
         }
@@ -10644,6 +10655,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
     Ok(AppState {
         service: Mutex::new(service),
         host_presence: hive_runtime::HostPresence::new(),
+        guards: Default::default(),
         identity,
         data_dir,
         base_runtimes: Mutex::new(base_runtimes),
@@ -14231,6 +14243,10 @@ pub fn run() {
             // the phone (via `ligus serve`) can tell whether @hive can answer now.
             tauri::async_runtime::spawn(run_device_host_loop(app.handle().clone()));
 
+            // Coordinator leases: publish our heartbeats, read others', and
+            // succeed a lapsed holder's workflow runs.
+            tauri::async_runtime::spawn(crate::guards::run_lease_loop(app.handle().clone()));
+
             // Scheduled/triggered agents: fires due schedules on a 30s tick.
             // Idle until the user adds a schedule (Settings → Schedules).
             {
@@ -14251,6 +14267,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            guards::hand_over_workflow_run,
+            guards::list_guard_signals,
             get_app_info,
             list_relay_users,
             create_relay_user,

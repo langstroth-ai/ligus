@@ -208,6 +208,15 @@ pub enum SessionEvent {
     WorkspaceHostUpserted { host: WorkspaceHost },
     /// Remove a single workspace host by id (delta). Idempotent.
     WorkspaceHostRemoved { host_id: String },
+    /// A device claims the coordinator lease for a scope (a workflow run on its
+    /// chat log, or the workspace on the config log) at `lease.epoch`. Folded by
+    /// `lease::fold_claim`: strictly increasing epochs, first claim per epoch in
+    /// canonical order wins (split-brain fencing). Projection also requires the
+    /// envelope to be signed by the device it names as holder.
+    CoordinatorLeaseClaimed { lease: crate::lease::CoordinatorLease },
+    /// The holder releases its lease, optionally naming a successor (planned
+    /// handover). Must be signed by the holder.
+    CoordinatorLeaseReleased { release: crate::lease::LeaseRelease },
     /// Forward-compat catch-all: an event `kind` this build does not recognize
     /// (produced by a newer client). Serde deserializes an unknown tag here
     /// instead of failing the whole stream; it projects as a no-op. The raw
@@ -262,6 +271,8 @@ impl SessionEvent {
             SessionEvent::WorkspaceHostsUpdated { .. } => "workspaceHostsUpdated",
             SessionEvent::WorkspaceHostUpserted { .. } => "workspaceHostUpserted",
             SessionEvent::WorkspaceHostRemoved { .. } => "workspaceHostRemoved",
+            SessionEvent::CoordinatorLeaseClaimed { .. } => "coordinatorLeaseClaimed",
+            SessionEvent::CoordinatorLeaseReleased { .. } => "coordinatorLeaseReleased",
             SessionEvent::Unknown => "unknown",
         }
     }
@@ -476,6 +487,16 @@ impl ChatSession {
                 self.workflow_definitions = definitions.clone();
             }
             SessionEvent::WorkflowRunUpserted { run } => {
+                // A coordinator write under an epoch a newer claim has superseded
+                // is fenced (the laying-worker case: two devices both driving).
+                if !crate::lease::write_is_current(
+                    &self.guards.leases,
+                    crate::lease::LeaseScope::WorkflowRun,
+                    &run.id.to_string(),
+                    run.lease_epoch,
+                ) {
+                    return;
+                }
                 if let Some(slot) = self.workflow_runs.iter_mut().find(|r| r.id == run.id) {
                     *slot = (**run).clone();
                 } else {
@@ -575,6 +596,12 @@ impl ChatSession {
             | SessionEvent::AccountKeyRotated { .. }
             | SessionEvent::DeviceCertificateAdded { .. }
             | SessionEvent::DeviceRevoked { .. } => {}
+            SessionEvent::CoordinatorLeaseClaimed { lease } => {
+                crate::lease::fold_claim(&mut self.guards.leases, lease);
+            }
+            SessionEvent::CoordinatorLeaseReleased { release } => {
+                crate::lease::fold_release(&mut self.guards.leases, release);
+            }
             // Unrecognized (newer-client) event — inert in this build.
             SessionEvent::Unknown => {}
         }
@@ -716,6 +743,12 @@ pub fn project_with_options(
             if !crate::authorization::nonseed_snapshot_authorized(snap, author, &session) {
                 continue;
             }
+        } else if !crate::authorization::lease_signer_ok(env, &session) {
+            // Lease claims/releases and epoch-stamped coordinator writes must be
+            // signed by the device that holds (or claims) the lease. A forged
+            // claim naming someone else's device, or a write under an epoch whose
+            // holder is another device, is dropped on every device alike.
+            continue;
         } else if crate::authorization::requires_projection_authz(&env.payload)
             && trusted_workspace != Some(env.workspace_id)
         {

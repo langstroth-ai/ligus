@@ -1317,6 +1317,22 @@ export const cancelWorkflowRun = (sessionId: string, runId: string) =>
 export const resumeWorkflowRun = (sessionId: string, runId: string) =>
   invoke<void>("resume_workflow_run", { sessionId, runId });
 
+/// Hand a run this device drives to another online device (planned handover).
+/// Resolves to the successor's device id.
+export const handOverWorkflowRun = (sessionId: string, runId: string, successor?: string) =>
+  invoke<string>("hand_over_workflow_run", { sessionId, runId, successor: successor ?? null });
+
+export type { GuardSignalDto } from "@/bindings/GuardSignalDto";
+export type { RunLeaseDto } from "@/bindings/RunLeaseDto";
+
+/// Device-local guard signals (never synced; content-free), oldest first.
+export const listGuardSignals = (afterRow?: number, kind?: string, limit?: number) =>
+  invoke<import("@/bindings/GuardSignalDto").GuardSignalDto[]>("list_guard_signals", {
+    afterRow: afterRow ?? null,
+    kind: kind ?? null,
+    limit: limit ?? null,
+  });
+
 /// Fires whenever a workflow run's persisted state changes.
 export const onWorkflowRun = (
   cb: (e: WorkflowRunEvent) => void,

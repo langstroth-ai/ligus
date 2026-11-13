@@ -25,6 +25,8 @@ use hive_core::authorization::{evaluate as authorize, requires_authz};
 use crate::event_store::{EventStore, EventStoreError};
 use crate::provider::ChatTurn;
 
+mod guards;
+
 #[derive(Debug, thiserror::Error)]
 pub enum ChatError {
     #[error(transparent)]

@@ -63,6 +63,9 @@ type ProjectionKey = (Uuid, Option<String>, Option<Uuid>);
 /// (envelope rows are never updated in place).
 type RowsSig = (i64, i64);
 
+/// Guard signals kept per device (all workspaces); older rows are pruned.
+pub const GUARD_SIGNALS_KEEP: i64 = 20_000;
+
 /// Cached projections kept at most; past this the cache starts over.
 const PROJECTION_CACHE_MAX: usize = 256;
 
@@ -139,6 +142,20 @@ impl EventStore {
                 summary      TEXT NOT NULL,
                 PRIMARY KEY (session_id, runtime_id)
             );
+
+            -- Device-local guard signals, never synced (see hive_core::signal):
+            -- content-free records of lease heartbeats, boundary decisions,
+            -- hygiene catches and throttles. Bounded by `record_signal`.
+            CREATE TABLE IF NOT EXISTS guard_signals (
+                row_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                workspace_id TEXT NOT NULL,
+                session_id   TEXT,
+                at_ms        INTEGER NOT NULL,
+                kind         TEXT NOT NULL,
+                signal_json  TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_guard_signals_ws
+                ON guard_signals (workspace_id, row_id);
             "#,
         )?;
         Ok(Self { conn, projections: Mutex::new(HashMap::new()) })
@@ -608,6 +625,78 @@ impl EventStore {
                 .execute("DELETE FROM compaction_state WHERE session_id = ?1", [session_id.to_string()])?,
         };
         Ok(())
+    }
+
+    // --- Device-local guard signals (`guard_signals`). Never synced or
+    // projected; bounded to the newest [`GUARD_SIGNALS_KEEP`] rows. ---
+
+    /// Record a guard signal. Prunes the oldest rows past the bound.
+    pub fn record_signal(
+        &self,
+        workspace_id: Uuid,
+        session_id: Option<Uuid>,
+        signal: &hive_core::signal::GuardSignal,
+    ) -> Result<i64> {
+        let at_ms = (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64;
+        self.conn.execute(
+            "INSERT INTO guard_signals (workspace_id, session_id, at_ms, kind, signal_json) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                workspace_id.to_string(),
+                session_id.map(|s| s.to_string()),
+                at_ms,
+                signal.kind_str(),
+                serde_json::to_string(signal)?,
+            ],
+        )?;
+        let row = self.conn.last_insert_rowid();
+        if row % 256 == 0 {
+            self.conn.execute(
+                "DELETE FROM guard_signals WHERE row_id <= ?1",
+                [row - GUARD_SIGNALS_KEEP],
+            )?;
+        }
+        Ok(row)
+    }
+
+    /// Signals for a workspace after `after_row` (oldest first), at most `limit`.
+    /// `kind` filters by the signal's kind string.
+    pub fn list_signals(
+        &self,
+        workspace_id: Uuid,
+        after_row: i64,
+        kind: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<hive_core::signal::GuardSignalRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT row_id, workspace_id, session_id, at_ms, signal_json FROM guard_signals \
+             WHERE workspace_id = ?1 AND row_id > ?2 AND (?3 IS NULL OR kind = ?3) \
+             ORDER BY row_id ASC LIMIT ?4",
+        )?;
+        let rows = stmt.query_map(
+            rusqlite::params![workspace_id.to_string(), after_row, kind, limit as i64],
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, String>(4)?,
+                ))
+            },
+        )?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (row_id, ws, sid, at_ms, json) = row?;
+            let Ok(signal) = serde_json::from_str(&json) else { continue };
+            out.push(hive_core::signal::GuardSignalRecord {
+                row_id,
+                workspace_id: Uuid::parse_str(&ws).unwrap_or_default(),
+                session_id: sid.and_then(|s| Uuid::parse_str(&s).ok()),
+                at_ms,
+                signal,
+            });
+        }
+        Ok(out)
     }
 
     /// Distinct session ids known to the store, in first-seen order.

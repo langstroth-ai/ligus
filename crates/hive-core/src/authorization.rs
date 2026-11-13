@@ -109,7 +109,40 @@ pub fn requires_projection_authz(event: &SessionEvent) -> bool {
             | SessionEvent::ChannelArchived { .. }
             | SessionEvent::ChatChannelChanged { .. }
             | SessionEvent::DeviceRevoked { .. }
+            | SessionEvent::CoordinatorLeaseClaimed { .. }
+            | SessionEvent::CoordinatorLeaseReleased { .. }
     )
+}
+
+/// Envelope-bound check for coordinator leases, run during projection where the
+/// envelope (and so its `signer_device_id`) is at hand:
+///   * a `CoordinatorLeaseClaimed` must be signed by the device it names as
+///     holder (no claiming on another device's behalf);
+///   * a `CoordinatorLeaseReleased` must be signed by the holder it names
+///     (`lease::fold_release` then checks that is the current holder);
+///   * a `WorkflowRunUpserted` stamped with a lease epoch must match the
+///     current epoch of that run's lease *and* be signed by its holder. A stamp
+///     with no lease, or from a future epoch nobody claimed, is a forgery;
+///     a stamp from an older epoch is left to the fold, which fences it.
+///
+/// Everything else passes. Deterministic over the fold-so-far `session`.
+pub fn lease_signer_ok(env: &crate::events::SessionEventEnvelope, session: &ChatSession) -> bool {
+    let signer = env.signer_device_id;
+    match &env.payload {
+        SessionEvent::CoordinatorLeaseClaimed { lease } => signer == Some(lease.holder),
+        SessionEvent::CoordinatorLeaseReleased { release } => signer == Some(release.holder),
+        SessionEvent::WorkflowRunUpserted { run } => {
+            let Some(epoch) = run.lease_epoch else { return true };
+            let key = crate::lease::lease_key(crate::lease::LeaseScope::WorkflowRun, &run.id.to_string());
+            match session.guards.leases.get(&key) {
+                None => false,
+                Some(state) if epoch > state.current.epoch => false,
+                Some(state) if epoch == state.current.epoch => signer == Some(state.current.holder),
+                Some(_) => true,
+            }
+        }
+        _ => true,
+    }
 }
 
 /// Whether a **non-seed** `SessionSnapshot` — one folded *after* the base seed,
@@ -211,7 +244,12 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         | SessionEvent::ChatChannelChanged { .. }
         | SessionEvent::WorkspaceHostsUpdated { .. }
         | SessionEvent::WorkspaceHostUpserted { .. }
-        | SessionEvent::WorkspaceHostRemoved { .. } => WorkspaceRole::Contributor,
+        | SessionEvent::WorkspaceHostRemoved { .. }
+        // Coordinating a run or the workspace is member work: the same floor
+        // as starting or driving a workflow. Also envelope-bound to the holder
+        // device (see `lease_signer_ok`).
+        | SessionEvent::CoordinatorLeaseClaimed { .. }
+        | SessionEvent::CoordinatorLeaseReleased { .. } => WorkspaceRole::Contributor,
         // A newer-client event this build can't author or interpret — require
         // the highest role so it can never be produced locally by accident.
         SessionEvent::Unknown => WorkspaceRole::Owner,
