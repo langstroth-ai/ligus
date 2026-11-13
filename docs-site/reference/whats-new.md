@@ -4,7 +4,31 @@ Changes since 1.15, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/honeyhive-ai/hive/releases).
 
-## 1.18 (upcoming)
+## 1.19
+
+- **Hive is becoming Ligus.** The next major release, 2.0, renames Hive to
+  **Ligus**, short for *ligustica* (*Apis mellifera ligustica*, the Italian
+  honeybee). 1.19 is the bridge: it already accepts `LIGUS_*` environment
+  variables (ahead of the `HIVE_*` names), reads `.ligus/` and
+  `ligus.config.toml` alongside `.hive/` and `hive.config.toml`, accepts
+  `ligus://` phone links, and checks for updates at both the new and the
+  original GitHub address. Nothing to change on your side yet.
+- **Repos from the phone.** `hive serve` lists the host's checkouts and your
+  GitHub repos, clones on demand, switches a chat's repo, pulls, and opens a
+  pull request from the chat branch. See
+  [Repos on the home host](../ops/serve-repos.md).
+- **Fork-aware pull requests.** For a fork with an `upstream` remote, chat
+  branches start from upstream's default branch, pulls come from upstream,
+  and PRs are pushed to your fork under a readable branch and opened upstream
+  as drafts. Pushes that would land on upstream are refused.
+- **Whole files for rendered diffs.** `GET /v1/proposals/{id}/file` returns
+  one file of a proposal whole (old or new side), so the phone app can render
+  Markdown changes instead of showing raw diff lines.
+- **Kubernetes design and a container image.** A design for running the relay,
+  `hive serve` and sandboxed turn executors on Kubernetes, and a Dockerfile for
+  the `hive` binary (`deploy/container`).
+
+## 1.18
 
 - **Agent-authored workflows.** The visual workflow editor and its presets
   are gone. Agents write workflows: a definition (or a revision of one)

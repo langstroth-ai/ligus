@@ -1,6 +1,6 @@
 {
-  "tag": "v1.18.0",
-  "name": "Hive 1.18.0",
+  "tag": "v1.19.0",
+  "name": "Hive 1.19.0",
   "url": "https://github.com/ligus-ai/hive/releases/latest",
-  "notes": "Features: subscription CLI runtimes for Antigravity CLI (Google AI Pro/Ultra) and GitHub Copilot CLI, detected in Settings with one-click Add runtime; agent-authored workflows filed as reviewable proposals, with a read-only Workflows pane; new docs pages for the phone app, remote access, the serve box, the dashboard and what's new. Changes: the visual workflow editor is removed. Fixes: hive worker accepts keyless Claude Code and Codex runtimes."
+  "notes": "Features: repos from the phone (list, clone, switch, pull, open a PR) with fork-aware pull requests opened upstream as drafts; whole-file proposal view so the phone renders Markdown changes; Kubernetes deployment design and a container image for the hive binary. Bridge to Ligus: LIGUS_* environment variables, .ligus/ and ligus.config.toml are read alongside the Hive names, ligus:// links are accepted, and the updater checks both the new and the original GitHub address. Hive is becoming Ligus, short for ligustica, in 2.0."
 }
