@@ -46,7 +46,7 @@ export function UpdatesSection() {
     } catch (e) {
       setPct(null);
       toast.error(`Couldn't install in place (${errMsg(e)}); opening the release page.`);
-      void openExternal("https://github.com/ligus-ai/hive/releases/latest").catch(() => {});
+      void openExternal("https://github.com/ligus-ai/ligus/releases/latest").catch(() => {});
     }
   }
 
@@ -57,9 +57,14 @@ export function UpdatesSection() {
   return (
     <Section title="Updates">
       <div className="text-sm">
-        You're on <b>Hive v{info.data?.coreVersion ?? "…"}</b>
+        You're on <b>Ligus v{info.data?.coreVersion ?? "…"}</b>
         {info.data?.buildProfile === "debug" && <span className="opacity-50"> · debug build</span>}
       </div>
+      <p className="text-sm opacity-60">
+        A shared workspace for you, your teammates and your coding agents. Ligus is short for{" "}
+        <i>ligustica</i> (<i>Apis mellifera ligustica</i>, the Italian honeybee). Open source under the MIT
+        license. Formerly Hive.
+      </p>
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm opacity-60">Check whether a newer signed build is available, and install it.</p>
         <Button

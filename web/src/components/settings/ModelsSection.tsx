@@ -1080,7 +1080,7 @@ function RuntimesSection() {
                 </div>
                 <p className="text-xs" style={{ color: "var(--hive-warn)" }}>
                   This endpoint isn't on this machine or a private network (LAN, Tailscale). With this
-                  on, Hive's file tools send the contents of files the model reads from your workspace
+                  on, Ligus's file tools send the contents of files the model reads from your workspace
                   to it. Off: the model here only gets your MCP tools.
                 </p>
               </div>
@@ -1092,14 +1092,14 @@ function RuntimesSection() {
           <span>
             {httpProviders.includes(runtimeProvider) && !agentToolProviders.includes(runtimeProvider) ? (
               <>
-                Supports tools (not used for hosted APIs: Hive's MCP and file tools only run against
+                Supports tools (not used for hosted APIs: Ligus's MCP and file tools only run against
                 local or self-hosted servers — Ollama, Custom, Hive daemon — so workspace files never
                 go to a third-party cloud)
               </>
             ) : (
               <>
                 Supports tools (offer your enabled MCP tools
-                {agentToolProviders.includes(runtimeProvider) ? " and Hive's built-in file tools" : ""} to this model
+                {agentToolProviders.includes(runtimeProvider) ? " and Ligus's built-in file tools" : ""} to this model
                 {runtimeProvider === "ollama"
                   ? " when the server's probe says it can call them"
                   : ["custom", "hive-daemon"].includes(runtimeProvider)
@@ -1414,7 +1414,7 @@ function OllamaModelsPanel({
         </Button>
       </form>
       <p className="text-xs opacity-50">
-        Pulls run on the server and continue while you use Hive; a cancelled pull keeps what it downloaded and resumes on
+        Pulls run on the server and continue while you use Ligus; a cancelled pull keeps what it downloaded and resumes on
         the next attempt.
       </p>
     </div>

@@ -259,7 +259,7 @@ export function WorkspaceRail({
         <button
           data-tour="help"
           onClick={onOpenHelp}
-          title="Take the tour — a quick walk through Hive"
+          title="Take the tour — a quick walk through Ligus"
           aria-label="Take the tour"
           className={`flex h-10 w-10 items-center justify-center rounded-2xl transition-all hover:brightness-110 ${onOpenFriends || onToggleSidebar ? "" : "mt-auto"}`}
           style={{ background: "var(--hive-panel)", color: "var(--hive-ink)", border: "1px solid var(--hive-line)", opacity: 0.85 }}

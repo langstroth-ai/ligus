@@ -616,9 +616,9 @@ export function App() {
     // to the project-folder basename only when it has none.
     if (activeWorkspaceName) return activeWorkspaceName;
     const trimmed = workspaceFolder.replace(/[\\/]+$/, "");
-    if (!trimmed) return "Hive Workspace";
+    if (!trimmed) return "Ligus Workspace";
     const parts = trimmed.split(/[\\/]/);
-    return parts[parts.length - 1] || "Hive Workspace";
+    return parts[parts.length - 1] || "Ligus Workspace";
   }, [activeWorkspaceName, workspaceFolder]);
 
   const runtimeItems = runtimes.data ?? [];
@@ -727,7 +727,7 @@ export function App() {
             Couldn't load your settings
           </h1>
           <p className="mt-2 text-sm opacity-70">
-            Hive couldn't read this workspace's configuration. Nothing has been lost — retry the
+            Ligus couldn't read this workspace's configuration. Nothing has been lost — retry the
             load, or reload the app.
           </p>
           <div className="mt-4 flex items-center justify-center gap-2">
@@ -779,7 +779,7 @@ export function App() {
 
   const tourSteps: TourStep[] = [
     {
-      title: "Welcome to Hive",
+      title: "Welcome to Ligus",
       body: "A 30-second tour of the workspace. Skip anytime — you can reopen this from the ⓘ button in the left rail, or ⌘K → “Take the tour.”",
     },
     {

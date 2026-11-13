@@ -43,7 +43,7 @@ function HiveRosette({
 export function HiveBrandIcon({
   size = 40,
   className,
-  title = "Hive",
+  title = "Ligus",
 }: {
   size?: number;
   className?: string;
@@ -70,7 +70,7 @@ export function HiveBrandIcon({
 export function HiveBrandMark({
   size = 40,
   className,
-  title = "Hive",
+  title = "Ligus",
 }: {
   size?: number;
   className?: string;

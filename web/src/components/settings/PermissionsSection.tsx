@@ -115,14 +115,14 @@ export function PermissionsSection() {
           <div className="text-sm font-medium">macOS file access</div>
           <p className="text-xs opacity-60">
             Agents run local CLIs (Claude Code, Codex) that read your workspace files. macOS
-            attributes that access to Hive and may put up a folder-permission modal a turn silently
-            waits on. Grant Hive <strong>Full Disk Access</strong> so agent turns don't stall on a
+            attributes that access to Ligus and may put up a folder-permission modal a turn silently
+            waits on. Grant Ligus <strong>Full Disk Access</strong> so agent turns don't stall on a
             hidden prompt.
           </p>
           {health.data?.translocated && (
             <p className="text-xs" style={{ color: "var(--hive-danger)" }}>
-              Hive is running from a temporary location (App Translocation), so permission grants
-              won't stick. Move Hive to <code>/Applications</code> and reopen it — or install via{" "}
+              Ligus is running from a temporary location (App Translocation), so permission grants
+              won't stick. Move Ligus to <code>/Applications</code> and reopen it — or install via{" "}
               <code>brew install --cask ligus-ai/ligus/ligus-app</code>.
             </p>
           )}
@@ -174,7 +174,7 @@ export function PermissionsSection() {
         <p className="text-xs opacity-60">
           Local or self-hosted model runtimes (Ollama, or a Custom / Hive daemon endpoint such as a
           llama.cpp server — never hosted APIs like OpenAI or OpenRouter) with{" "}
-          <strong>Supports tools</strong> on get Hive's built-in tools: <code>read_file</code>,{" "}
+          <strong>Supports tools</strong> on get Ligus's built-in tools: <code>read_file</code>,{" "}
           <code>list_dir</code> and <code>search</code>, plus <code>edit_file</code> and{" "}
           <code>write_file</code> when the turn runs in the chat's isolated git worktree — their
           changes come back as a proposal in the Review pane, never straight into your folder.

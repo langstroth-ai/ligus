@@ -47,7 +47,7 @@ type RuntimeChoice = "claudeCode" | "codex" | "openai" | "anthropic" | "ollama";
 
 // Onboarding's appearance step. Order + labels for the accent-family picker.
 const THEME_CHOICES: { name: ThemeName; label: string; blurb: string }[] = [
-  { name: "pollen", label: "Pollen", blurb: "Warm honey — the Hive default" },
+  { name: "pollen", label: "Pollen", blurb: "Warm honey — the Ligus default" },
   { name: "obsidian", label: "Obsidian", blurb: "True dark — monochrome near-black glass, silver accent" },
   { name: "slate", label: "Slate", blurb: "Cool blue-grey" },
   { name: "studio", label: "Studio", blurb: "Neutral graphite" },
@@ -495,7 +495,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
       <div className="w-full max-w-md rounded-3xl border p-8" style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)" }}>
         <div className="mb-1 flex items-center gap-3">
           <HiveBrandIcon size={40} />
-          <div className="text-xl font-semibold">Welcome to Hive</div>
+          <div className="text-xl font-semibold">Welcome to Ligus</div>
         </div>
         <div className="mb-4 text-sm opacity-60">
           A local-first workspace where you and your AI agents build side by side — bring your own

@@ -66,8 +66,8 @@ export function CliRuntimesPanel() {
         </div>
       </div>
       <p className="mt-0.5 text-xs opacity-55">
-        Use a Google AI Pro / Ultra or GitHub Copilot subscription through its official CLI. Hive runs the CLI
-        headless with your permission setting; the login stays in the CLI — Hive never sees it.
+        Use a Google AI Pro / Ultra or GitHub Copilot subscription through its official CLI. Ligus runs the CLI
+        headless with your permission setting; the login stays in the CLI — Ligus never sees it.
       </p>
       {clis.isError && <p className="mt-2 text-xs opacity-70">{errMsg(clis.error)}</p>}
       <div className="mt-2 space-y-2">

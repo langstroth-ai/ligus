@@ -36,7 +36,7 @@ export function requestOutcomeMessage(outcome: string, login: string): { ok: boo
     case "capReached":
       return { ok: false, msg: "Free plan limit reached (5 collaborators). Upgrade for more." };
     case "userNotFound":
-      return { ok: false, msg: `@${login} hasn't joined Hive yet.` };
+      return { ok: false, msg: `@${login} hasn't joined Ligus yet.` };
     default:
       return { ok: false, msg: "Couldn't send that request." };
   }

@@ -273,7 +273,7 @@ export function DiffView({
                 ))}
               </div>
 
-              {/* Open the selected file in Hive's own editor (the code canvas),
+              {/* Open the selected file in Ligus's own editor (the code canvas),
                   distinct from the external-editor escape hatch below. Routes
                   through editorStore; App's subscription flips to the code view. */}
               <Button

@@ -1998,7 +1998,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
           <Card className="space-y-2 p-3">
             <p className="text-[11.5px]" style={{ color: "var(--hive-ink-soft)" }}>
               Adds the person and seals the workspace key to all their devices. They must have signed
-              in to Hive with GitHub once. Needs a relay + your GitHub sign-in.
+              in to Ligus with GitHub once. Needs a relay + your GitHub sign-in.
             </p>
             <input
               value={handle}

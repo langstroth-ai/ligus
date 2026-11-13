@@ -66,7 +66,7 @@ export function UpdateBanner() {
       await installUpdate(); // relaunches on success; never returns
     } catch {
       setPct(null);
-      void openExternal(info?.url || "https://github.com/ligus-ai/hive/releases/latest").catch(
+      void openExternal(info?.url || "https://github.com/ligus-ai/ligus/releases/latest").catch(
         () => {},
       );
     }

@@ -222,7 +222,7 @@ function SyncSection() {
 
       {/* How teams work now */}
       <p className="text-xs opacity-60">
-        Teams live in the left rail — hit <strong>＋</strong> to create or join one. Hive
+        Teams live in the left rail — hit <strong>＋</strong> to create or join one. Ligus
         generates the room, encryption key, and a shareable code for you. The relay below just
         brokers sync, short pairing codes, and member revocation; messages stay end-to-end
         encrypted and the relay only ever sees ciphertext.
@@ -414,7 +414,7 @@ function RelayUsersSection() {
     <Section title="Team members">
       <p className="text-xs opacity-60">
         Give a teammate their own relay access token — no redeploy, and revoking is instant.
-        The token is shown once; paste it into their Hive under Settings → Team sync.
+        The token is shown once; paste it into their Ligus under Settings → Team sync.
       </p>
 
       {/* One-time token reveal */}

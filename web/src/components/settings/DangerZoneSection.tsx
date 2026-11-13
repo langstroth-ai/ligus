@@ -34,7 +34,7 @@ export function DangerZoneSection() {
         <div className="font-medium">Reset local data</div>
         <p className="mt-1 text-sm opacity-60">
           Permanently deletes this device's chats, identity, keys, settings, and workspaces, then
-          restarts Hive fresh. Anything synced to teammates or a relay is unaffected. This can't be
+          restarts Ligus fresh. Anything synced to teammates or a relay is unaffected. This can't be
           undone.
         </p>
         <Button
@@ -43,7 +43,7 @@ export function DangerZoneSection() {
           className="mt-3"
           onClick={() =>
             confirmThen(
-              "Reset all local data? This deletes your chats, identity, and settings on this device and restarts Hive. This cannot be undone.",
+              "Reset all local data? This deletes your chats, identity, and settings on this device and restarts Ligus. This cannot be undone.",
               () => void reset(),
             )
           }

@@ -84,7 +84,7 @@ export class ErrorBoundary extends Component<Props, State> {
             Something went wrong
           </h1>
           <p className="mt-2 text-sm opacity-70">
-            Hive hit an unexpected error and couldn't finish rendering. Your data is safe on disk —
+            Ligus hit an unexpected error and couldn't finish rendering. Your data is safe on disk —
             reloading usually clears it.
           </p>
           <button
