@@ -1,5 +1,7 @@
-//! Desktop side of the workspace guards. This commit: coordinator leases for
-//! workflow runs (the first user of `hive_core::lease`).
+//! Desktop side of the workspace guards: coordinator leases for workflow runs
+//! and the sandbox envelope every agent turn runs in.
+//!
+//! ## Coordinator leases
 //!
 //! * A device drives a run only while it holds the run's lease. Starting a run
 //!   claims epoch 1; resuming or recovering reuses this device's epoch, or
@@ -547,6 +549,97 @@ pub(crate) fn list_guard_signals(
             attrs_json: serde_json::to_string(&r.signal).unwrap_or_default(),
         })
         .collect())
+}
+
+// ---------------------------------------------------------------------------
+// Sandbox envelope
+// ---------------------------------------------------------------------------
+
+/// The envelope a turn in `session` runs in. The session carries the
+/// workspace's guard state (overlaid from the config log by `ChatService::load`).
+pub(crate) fn turn_envelope(session: &hive_core::ChatSession) -> hive_core::sandbox::SandboxEnvelope {
+    hive_core::sandbox::envelope_for_session(session)
+}
+
+/// The configured MCP servers the envelope's egress policy lets a turn reach.
+/// Each refused (enabled) server is recorded as a content-free egress decision.
+pub(crate) fn filter_mcp_servers(
+    state: &AppState,
+    servers: Vec<hive_runtime::McpServerSpec>,
+    egress: &hive_core::sandbox::EgressPolicy,
+) -> Vec<hive_runtime::McpServerSpec> {
+    if egress.is_open() {
+        return servers;
+    }
+    let ws = state.active_workspace_id();
+    servers
+        .into_iter()
+        .filter(|s| {
+            let ok = egress.allows_mcp(&s.id);
+            if !ok && s.enabled {
+                if let Ok(svc) = state.service.try_lock() {
+                    let _ = svc.record_signal(ws, None, &egress_decision(&s.id, "envelope_egress"));
+                }
+            }
+            ok
+        })
+        .collect()
+}
+
+fn egress_decision(source: &str, reason: &str) -> GuardSignal {
+    GuardSignal::GuardDecision {
+        gate: hive_core::signal::GuardGate::Egress,
+        verdict: hive_core::signal::GuardVerdict::Reject,
+        subject: hive_core::signal::GuardSubject::Nestmate,
+        source: source.to_string(),
+        reason: reason.to_string(),
+    }
+}
+
+/// Claude Code `mcpServers` entries for the servers the envelope allows.
+/// Authenticated HTTP servers are left out: their token would have to ride
+/// the command line, where any local process can read it.
+fn claude_mcp_entries(state: &AppState, egress: &hive_core::sandbox::EgressPolicy) -> Vec<(String, serde_json::Value)> {
+    if !matches!(egress, hive_core::sandbox::EgressPolicy::AllowList { .. }) {
+        return Vec::new();
+    }
+    filter_mcp_servers(state, state.combined_mcp_servers(), egress)
+        .into_iter()
+        .filter(|s| s.enabled && s.auth.is_none())
+        .map(|s| {
+            let v = match &s.transport {
+                hive_runtime::McpTransport::Stdio { command, args } => serde_json::json!({ "command": command, "args": args }),
+                hive_runtime::McpTransport::Http { url } => serde_json::json!({ "type": "http", "url": url }),
+            };
+            (s.id.clone(), v)
+        })
+        .collect()
+}
+
+/// How the turn's runtime honors the envelope (extra flags, or a refusal).
+pub(crate) fn enforcement_for(
+    state: &AppState,
+    provider: hive_core::ModelProviderKind,
+    envelope: &hive_core::sandbox::SandboxEnvelope,
+) -> hive_runtime::sandbox::Enforcement {
+    let entries = if provider == hive_core::ModelProviderKind::ClaudeCode {
+        claude_mcp_entries(state, &envelope.egress)
+    } else {
+        Vec::new()
+    };
+    hive_runtime::sandbox::enforce(provider, envelope, &entries)
+}
+
+/// A turn refused because its runtime can't be confined: tell the chat (so
+/// every member sees why nobody answered) and record the decision.
+pub(crate) fn record_egress_refusal(state: &AppState, workspace_id: Uuid, session_id: Uuid, provider: hive_core::ModelProviderKind) {
+    let mut svc = state.service.lock().unwrap();
+    let _ = svc.record_signal(workspace_id, Some(session_id), &egress_decision(&format!("{provider:?}"), "runtime_unconfinable"));
+    let _ = svc.post_system_note(
+        session_id,
+        workspace_id,
+        format!("A {provider:?} turn was not run: this chat's sandbox has network egress restricted and {provider:?} can't be confined to it. Claude Code, Codex and API models can."),
+    );
 }
 
 /// Whether a run is in a state a coordinator drives.

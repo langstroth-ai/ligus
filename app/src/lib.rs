@@ -7277,11 +7277,15 @@ fn turns_to_messages(turns: &[ChatTurn]) -> Vec<Value> {
 /// none of them lists a tool, so the caller streams a plain turn instead.
 /// Shared by the Anthropic loop and the HTTP-model loops (native Ollama and
 /// the OpenAI wire).
-async fn mcp_tool_set(state: &State<'_, AppState>) -> Option<(Vec<Value>, McpToolExecutor)> {
+async fn mcp_tool_set(
+    state: &State<'_, AppState>,
+    egress: &hive_core::sandbox::EgressPolicy,
+) -> Option<(Vec<Value>, McpToolExecutor)> {
     // Renew any near-expiry remote-server tokens before we build the registry.
     state.ensure_fresh_mcp_tokens().await;
-    // Snapshot the registry so we don't hold locks across awaits.
-    let registry = McpRegistry::new(state.combined_mcp_servers());
+    // Snapshot the registry so we don't hold locks across awaits. The turn's
+    // sandbox envelope decides which servers it may reach at all.
+    let registry = McpRegistry::new(crate::guards::filter_mcp_servers(state, state.combined_mcp_servers(), egress));
     registry.enabled().next()?;
 
     let tagged = registry.list_all_tools().await;
@@ -7388,11 +7392,12 @@ async fn try_tool_loop(
     system: &str,
     turns: &[ChatTurn],
     reply_to: Option<Uuid>,
+    egress: &hive_core::sandbox::EgressPolicy,
 ) -> Result<Option<TurnOutcome>, String> {
     let Some(api_key) = responder.runtime.api_key.clone() else {
         return Ok(None);
     };
-    let Some((tool_defs, executor)) = mcp_tool_set(state).await else {
+    let Some((tool_defs, executor)) = mcp_tool_set(state, egress).await else {
         return Ok(None);
     };
 
@@ -7655,12 +7660,21 @@ async fn run_prepared_turn(
     // (see ChatMessage::reply_to_message_id / pending_mentions).
     let reply_to = session.messages.iter().rev().find(|m| !m.is_streaming).map(|m| m.id);
 
+    // The workspace's sandbox envelope for this turn (isolation, egress,
+    // redaction, human gate), enforced below for whatever runtime answers.
+    let envelope = crate::guards::turn_envelope(session);
+    let enforcement = crate::guards::enforcement_for(state, responder.runtime.provider, &envelope);
+    if let Some(reason) = &enforcement.refuse {
+        crate::guards::record_egress_refusal(state, workspace_id, session_id, responder.runtime.provider);
+        return Err(reason.clone());
+    }
+
     // If MCP tools are enabled and the responder runs on Anthropic, take the
     // (non-streaming) agentic tool loop instead of plain streaming. On any MCP
     // failure we fall through to streaming.
     if responder.runtime.provider == ModelProviderKind::Anthropic {
         if let Some(outcome) =
-            try_tool_loop(app, state, session_id, workspace_id, responder, &system, &turns, reply_to)
+            try_tool_loop(app, state, session_id, workspace_id, responder, &system, &turns, reply_to, &envelope.egress)
                 .await?
         {
             return Ok(outcome);
@@ -7676,13 +7690,14 @@ async fn run_prepared_turn(
     // the dispatcher; an OpenAI-wire server that rejects tools falls back to
     // plain chat there.
     let mcp_tools = if responder.runtime.runs_agent_tools() {
-        mcp_tool_set(state).await
+        mcp_tool_set(state, &envelope.egress).await
     } else {
         None
     };
     let (builtin_on, builtin_write_in_place, builtin_run_command) = {
         let s = state.settings.lock().unwrap();
-        (s.builtin_tools, s.builtin_write_in_place, s.builtin_run_command)
+        // `run_command` is a shell: off whenever the envelope closes egress.
+        (s.builtin_tools, s.builtin_write_in_place, s.builtin_run_command && enforcement.allow_run_command)
     };
     let builtin_wanted = wants_builtin_tools(&responder.runtime, builtin_on);
 
@@ -7807,6 +7822,13 @@ async fn run_prepared_turn(
             "API turn has MCP tools enabled and runs in place — its file writes are NOT worktree-isolated or diff-gated (unlike subprocess agents). See P2-5."
         );
     }
+    // A tightened envelope never lets a write-capable agent run in place.
+    if envelope.isolate_writes && git_subprocess && write_capable && worktree.is_none() {
+        let mut svc = state.service.lock().unwrap();
+        let note = "This chat's sandbox requires an isolated git worktree for agents that edit files, and one couldn't be made here (no git repository bound, or the worktree failed).";
+        let _ = svc.complete_assistant_message(session_id, workspace_id, message_id, note);
+        return Err(note.into());
+    }
     let effective_root = worktree
         .as_ref()
         .map(|w| w.path.to_string_lossy().into_owned())
@@ -7915,8 +7937,15 @@ async fn run_prepared_turn(
     // outer select, which still wins there, so its clean break path is unchanged.
     let stop = state.turn_stops.lock().unwrap().entry(session_id).or_default().clone();
     let mut stopped = false;
+    // The runtime with the envelope's own flags (no web tools, no foreign MCP,
+    // network off) appended for subprocess agents.
+    let enforced_runtime = {
+        let mut rt = responder.runtime.clone();
+        rt.args.extend(enforcement.extra_args.iter().cloned());
+        rt
+    };
     let stream_fut = dispatch::stream_with_tools(
-        &responder.runtime,
+        &enforced_runtime,
         Some(&system),
         &turns,
         working_dir,

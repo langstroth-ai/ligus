@@ -512,6 +512,25 @@ controller over the authenticated callback, which also avoids writing
 plaintext to etcd at all. That is the default; the Secret path is a fallback
 for tiny turns.
 
+### 4.5 The workspace sandbox envelope on Kubernetes
+
+Ligus 2.1 makes the envelope a workspace property
+(`hive_core::sandbox::SandboxEnvelope`, enforced per runtime by
+`hive_runtime::sandbox`). The executor should render it, not invent its own:
+
+| Envelope field | Desktop / worker today | Executor pod |
+|---|---|---|
+| `isolate_writes` | per-turn git worktree; refuse if none | the `/work` emptyDir cloned from the git bundle; the controller turns the patch into a proposal |
+| `protected_dirs` | built-in tools refuse writes; proposals never apply into them | same, plus `readOnlyRootFilesystem` |
+| `egress: open` | runtime's own permission tier | NetworkPolicy: DNS, controller callback, model endpoint, granted MCP Services |
+| `egress: allowList` | MCP filtered; Claude Code `--strict-mcp-config`, no web or shell tools; unconfinable runtimes refused | NetworkPolicy egress to the model endpoint and the allow-listed MCP Services only; no egress proxy route |
+| `egress: closed` | no MCP, no web or shell tools | model endpoint only |
+| `redact_secrets` | replies masked before they enter the log | same code path (the controller writes the log) |
+| `human_gate` | every proposal needs a human approval to apply | same, enforced by the controller |
+
+The bundle (§12, item 13) should carry the envelope verbatim so the
+executor and the controller agree on it.
+
 ## 5. Ecosystem notes (as of November 2026)
 
 Versions move fast; pin what the chart is tested against.

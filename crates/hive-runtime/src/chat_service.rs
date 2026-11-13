@@ -661,12 +661,15 @@ impl ChatService {
         message_id: Uuid,
         chunk: impl Into<String>,
     ) -> Result<()> {
+        // Envelope: mask credentials before they reach the synced log. A chunk
+        // boundary can split one; the completed body is redacted whole below.
+        let chunk = self.redact_for_log(workspace_id, session_id, chunk.into());
         self.append_signed(
             session_id,
             workspace_id,
             SessionEvent::MessageChunkReceived {
                 message_id,
-                chunk: chunk.into(),
+                chunk,
             },
         )?;
         Ok(())
@@ -679,12 +682,13 @@ impl ChatService {
         message_id: Uuid,
         body: impl Into<String>,
     ) -> Result<()> {
+        let body = self.redact_for_log(workspace_id, session_id, body.into());
         self.append_signed(
             session_id,
             workspace_id,
             SessionEvent::MessageCompleted {
                 message_id,
-                body: body.into(),
+                body,
             },
         )?;
         // A completed reply is a natural checkpoint — snapshot periodically so

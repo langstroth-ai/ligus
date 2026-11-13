@@ -402,6 +402,23 @@ async fn run_turn(
         );
     }
 
+    // The workspace's sandbox envelope (dearth mode, a chat lockdown): enforce
+    // it for this runtime or refuse the turn, exactly as the desktop does.
+    let envelope = hive_core::sandbox::envelope_for_session(&s);
+    let enforcement = hive_runtime::sandbox::enforce(rt.provider, &envelope, &Vec::new());
+    if let Some(reason) = enforcement.refuse {
+        let _ = lock(svc).post_system_note(s.id, s.workspace_id, format!("@{} did not run: {reason}", agent.name));
+        sink.changed();
+        // An error puts the mention in the failed set, so it isn't retried
+        // (and the note re-posted) every tick.
+        return Err(anyhow!("refused by the workspace sandbox"));
+    }
+    let mut rt = rt;
+    rt.args.extend(enforcement.extra_args);
+    let mut tool_settings = ctx.settings.clone();
+    tool_settings.run_command &= enforcement.allow_run_command;
+    tool_settings.mcp_egress = envelope.egress.clone();
+
     // The checkout this chat is bound to on this box (see `repos.rs`).
     let repo_root = RepoBindings::load(&ctx.cfg.data_dir).resolve(&repos_dir(&ctx.cfg.data_dir), s.id);
     // A fork checkout's chat branches start from upstream's default branch.
@@ -486,7 +503,7 @@ async fn run_turn(
         allow_tools,
         work_dir.as_deref(),
         Some(&files),
-        &ctx.settings,
+        &tool_settings,
         on_delta,
     );
     let result = match tokio::time::timeout(turn_timeout(), fut).await {

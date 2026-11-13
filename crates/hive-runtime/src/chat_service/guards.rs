@@ -86,6 +86,22 @@ impl ChatService {
         Ok(roster.public_key(device).map(<[u8]>::to_vec))
     }
 
+    /// The envelope's secret redaction, applied to agent output on its way into
+    /// the log: credentials are masked, and the catch is recorded as a
+    /// content-free hygiene signal.
+    pub(super) fn redact_for_log(&self, workspace_id: Uuid, session_id: Uuid, text: String) -> String {
+        let (masked, n) = crate::guard_scan::redact_secrets(&text);
+        if n == 0 {
+            return text;
+        }
+        let _ = self.record_signal(
+            workspace_id,
+            Some(session_id),
+            &GuardSignal::Hygiene { hygiene_kind: hive_core::signal::HygieneKind::Redaction, count: n },
+        );
+        masked
+    }
+
     /// Record a device-local guard signal (never synced).
     pub fn record_signal(&self, workspace_id: Uuid, session_id: Option<Uuid>, signal: &GuardSignal) -> Result<()> {
         self.store.record_signal(workspace_id, session_id, signal)?;
@@ -146,6 +162,27 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(st.current.epoch, 1);
+    }
+
+    #[test]
+    fn agent_output_is_redacted_before_it_reaches_the_log() {
+        let mut svc = service();
+        let ws = Uuid::new_v4();
+        let chat = svc.create_chat("c", ws, "anthropic").unwrap();
+        let mid = svc.begin_assistant_message(chat.id, ws, "Agent", "anthropic", None, None).unwrap();
+        svc.append_chunk(chat.id, ws, mid, "key AKIAIOSFODNN7EXAMPLE ").unwrap();
+        svc.complete_assistant_message(chat.id, ws, mid, "final AKIAIOSFODNN7EXAMPLE").unwrap();
+        let raw: String = svc
+            .store()
+            .list(chat.id)
+            .unwrap()
+            .iter()
+            .map(|e| serde_json::to_string(e).unwrap())
+            .collect();
+        assert!(!raw.contains("AKIAIOSFODNN7EXAMPLE"), "no credential in any stored (and so synced) event");
+        let s = svc.load(chat.id).unwrap().unwrap();
+        assert!(s.messages.iter().any(|m| m.body.contains("[redacted aws_access_key]")));
+        assert_eq!(svc.list_signals(ws, 0, Some("hygiene"), 10).unwrap().len(), 2);
     }
 
     #[test]
