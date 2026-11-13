@@ -33,6 +33,15 @@ keys:
 `agentRosterUpdated`, `proposalUpserted`, `messageReactionAdded`. The projector
 folds them in order; a `sessionSnapshot` seeds/bounds replay.
 
+[Proposal sets](../features/proposal-sets.md) (2.1) add `proposalSetOpened`,
+`proposalSetAlternativeAdded`, `scoutAssessmentPosted`,
+`proposalSetRoundAdvanced`, `proposalSetQuorumReached`,
+`proposalSetAlternativeStopped`, `proposalSetTuned`,
+`proposalSetPreflightRecorded`, `proposalSetDecided` and `proposalReverted`.
+Proposals in a set carry optional `setId` and `taskClass` fields. A peer
+that doesn't know a kind folds it as a no-op and keeps the event, so new kinds
+are backward compatible.
+
 The signature is **Ed25519** over a canonical preimage (sorted-key JSON,
 ISO8601 dates) of the envelope's identifying fields + payload. See
 `crates/hive-core/src/{crypto,events}.rs`. Envelopes that fail verification are

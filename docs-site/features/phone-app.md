@@ -88,6 +88,10 @@ phone with the same collaboration state as the desktop's Review card:
   (no checkout bound, or the file has moved on), the phone renders only the
   changed sections and says so.
 
+A proposal that is an alternative in a [proposal set](proposal-sets.md)
+carries its `setId`. You can vote on it from the phone, but it is applied only
+from the desktop's set view, after a pre-flight, and never on approval.
+
 Approving a file-diff proposal from the phone doesn't apply it, unless the
 box is set to (see [`LIGUS_SERVE_APPLY_ON_APPROVE`](../ops/serve-box.md#apply-on-approve)).
 As on the desktop, **Implement** applies it.

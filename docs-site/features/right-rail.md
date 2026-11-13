@@ -36,6 +36,9 @@ pane header to close the rail entirely.
   approve / disposition — approval counts at the voter's real role and an
   author can't approve their own — then **Implement** once quorum is met.
   See [agent-authored proposals](multi-agent.md#agent-authored-proposals).
+  **Proposal sets** (competing alternatives with scout scores, the quorum
+  dial, and pre-flight then apply) sit at the top of the pane; see
+  [Exploring options](proposal-sets.md).
   It also shows
   **Queued work** — every unanswered `@agent` mention with its host's
   live status (online / offline / owner-device). If an agent's host is

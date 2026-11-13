@@ -94,6 +94,7 @@ nav:
       - Settings: features/settings.md
       - Right Rail: features/right-rail.md
       - Multi-agent collaboration: features/multi-agent.md
+      - Exploring options (proposal sets): features/proposal-sets.md
       - Mentions & notifications: features/mentions-and-notifications.md
       - Agentic workflows: features/workflows.md
       - Ligus on your phone: features/phone-app.md

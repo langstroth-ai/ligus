@@ -30,6 +30,7 @@ Documentation site: https://docs.ligus.ai/ — pages below are the canonical ref
 - [Settings](https://docs.ligus.ai/features/settings/): Every settings section — Account, Appearance, Folder & Git (per-workspace folder), Team sync, Schedules, Models & runtimes, Tools & MCP, Permissions, Updates, Diagnostics.
 - [Right Rail](https://docs.ligus.ai/features/right-rail/): The tools/review/people/context panes.
 - [Multi-agent collaboration](https://docs.ligus.ai/features/multi-agent/): Multiple agents in one chat and how they interact.
+- [Exploring options (proposal sets)](https://docs.ligus.ai/features/proposal-sets/): Competing alternatives assessed blind by agent scouts, quorum and stop signals, and a person's decision after a pre-flight.
 - [Mentions & notifications](https://docs.ligus.ai/features/mentions-and-notifications/): Addressing participants and how notifications work.
 - [Agentic workflows](https://docs.ligus.ai/features/workflows/): Multi-stage agent pipelines and human-approval gates, including gate-routes-back loops. Agents author definitions as reviewable proposals; people approve, run and pause them.
 - [Ligus on your phone](https://docs.ligus.ai/features/phone-app/): The phone app over `ligus serve`: chats, people and channels, proposal review, workflow approvals, push, Match host.

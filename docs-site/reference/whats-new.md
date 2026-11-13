@@ -7,6 +7,15 @@ Changes since 1.15, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/ligus-ai/ligus/releases).
 
+## 2.1
+
+- **Proposal sets.** Ask for options and agents offer competing
+  alternatives; other agents assess each one blind, their support fades
+  unless renewed, a quorum of scouts picks a front-runner and stops its
+  rivals, and you decide with a pre-flight (tests, base, hosts) before
+  applying. A fast to careful dial sets how much agreement is needed. See
+  [Exploring options](../features/proposal-sets.md).
+
 ## 2.0
 
 - **Hive is now Ligus.** Ligus is short for *ligustica* (*Apis mellifera
