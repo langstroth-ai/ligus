@@ -46,7 +46,7 @@ export function UpdatesSection() {
     } catch (e) {
       setPct(null);
       toast.error(`Couldn't install in place (${errMsg(e)}); opening the release page.`);
-      void openExternal("https://github.com/honeyhive-ai/hive/releases/latest").catch(() => {});
+      void openExternal("https://github.com/ligus-ai/hive/releases/latest").catch(() => {});
     }
   }
 

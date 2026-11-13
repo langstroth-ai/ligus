@@ -38,6 +38,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
+        "https://github.com/ligus-ai/hive/releases/latest/download/latest.json",
         "https://github.com/honeyhive-ai/hive/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhFQjA3RDUyRjVBRUM3QjQKUldTMHg2NzFVbjJ3anI3elhQQTlLcGUrWnJSdEtyY0tHejRZdGpoNnZQQzB4ZXlEQ2g1QkR6QTkK"

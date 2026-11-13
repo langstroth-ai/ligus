@@ -1,6 +1,6 @@
 {
   "tag": "v1.18.0",
   "name": "Hive 1.18.0",
-  "url": "https://github.com/honeyhive-ai/hive/releases/latest",
+  "url": "https://github.com/ligus-ai/hive/releases/latest",
   "notes": "Features: subscription CLI runtimes for Antigravity CLI (Google AI Pro/Ultra) and GitHub Copilot CLI, detected in Settings with one-click Add runtime; agent-authored workflows filed as reviewable proposals, with a read-only Workflows pane; new docs pages for the phone app, remote access, the serve box, the dashboard and what's new. Changes: the visual workflow editor is removed. Fixes: hive worker accepts keyless Claude Code and Codex runtimes."
 }

@@ -10098,8 +10098,24 @@ fn open_file_access_settings() -> Result<(), String> {
 
 /// Public version manifest — a small JSON the docs site serves, holding the
 /// latest published release. Fetched in Rust (no webview CORS); maintained
-/// alongside each release.
-const VERSION_MANIFEST_URL: &str = "https://docs.apiaryhq.ai/version.json";
+/// alongside each release. Tried in order: the docs site's new host first,
+/// then its previous host (which redirects), so a DNS change on either side
+/// never strands a client.
+const VERSION_MANIFEST_URLS: [&str; 2] = ["https://docs.ligus.ai/version.json", "https://docs.apiaryhq.ai/version.json"];
+
+/// The first manifest among `urls` that answers 2xx with a parseable body.
+async fn fetch_update_manifest(client: &reqwest::Client, urls: &[&str]) -> Option<UpdateInfo> {
+    for url in urls {
+        let Ok(resp) = client.get(*url).send().await else { continue };
+        if !resp.status().is_success() {
+            continue;
+        }
+        if let Ok(info) = resp.json::<UpdateInfo>().await {
+            return Some(info);
+        }
+    }
+    None
+}
 
 /// The release tag this build was cut from (baked by build.rs). `dev` for local
 /// builds, which never prompt to update.
@@ -10136,14 +10152,7 @@ async fn check_for_app_update() -> Option<UpdateInfo> {
         .timeout(std::time::Duration::from_secs(8))
         .build()
         .ok()?;
-    let info: UpdateInfo = client
-        .get(VERSION_MANIFEST_URL)
-        .send()
-        .await
-        .ok()?
-        .json()
-        .await
-        .ok()?;
+    let info = fetch_update_manifest(&client, &VERSION_MANIFEST_URLS).await?;
     // Only offer an update when the manifest is a *strictly newer* release than
     // this build. Comparing tags for mere inequality (the old behavior) would
     // prompt a "downgrade" whenever the manifest lagged the installed build —
@@ -15109,6 +15118,76 @@ mod model_profile_dto_tests {
 #[cfg(test)]
 mod update_version_tests {
     use super::parse_release_version;
+
+    /// The bridge release checks the new repo's `latest.json` first, then the
+    /// original org's URL, with the signing key unchanged.
+    #[test]
+    fn updater_checks_new_then_old_latest_json() {
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let updater = &conf["plugins"]["updater"];
+        let endpoints: Vec<&str> = updater["endpoints"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+        assert_eq!(
+            endpoints,
+            [
+                "https://github.com/ligus-ai/hive/releases/latest/download/latest.json",
+                "https://github.com/honeyhive-ai/hive/releases/latest/download/latest.json",
+            ]
+        );
+        // Same minisign key across the rename: never rotate it.
+        assert!(updater["pubkey"].as_str().unwrap().starts_with("dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhFQjA3RDUyRjVBRUM3QjQK"));
+        assert_eq!(super::VERSION_MANIFEST_URLS, ["https://docs.ligus.ai/version.json", "https://docs.apiaryhq.ai/version.json"]);
+    }
+
+    /// Serve `routes` (path -> (status, body)) over plain HTTP on localhost.
+    fn serve(routes: Vec<(&'static str, u16, &'static str)>) -> String {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                let _ = reader.read_line(&mut line);
+                let path = line.split_whitespace().nth(1).unwrap_or("/").to_string();
+                loop {
+                    let mut h = String::new();
+                    if reader.read_line(&mut h).unwrap_or(0) == 0 || h == "\r\n" {
+                        break;
+                    }
+                }
+                let (status, body) = routes.iter().find(|r| r.0 == path).map(|r| (r.1, r.2)).unwrap_or((404, "nope"));
+                let mut stream = stream;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn manifest_falls_back_to_the_old_url_and_prefers_the_new_one() {
+        let client = reqwest::Client::new();
+        let base = serve(vec![
+            ("/old.json", 200, r#"{"tag":"v1.19.0","url":"old"}"#),
+            ("/new.json", 200, r#"{"tag":"v2.0.0","url":"new"}"#),
+            ("/garbage.json", 200, "not json"),
+        ]);
+        let u = |p: &str| format!("{base}{p}");
+        // New host not live yet (404) or serving junk: the old one answers.
+        let (missing, garbage, old, new) = (u("/missing.json"), u("/garbage.json"), u("/old.json"), u("/new.json"));
+        let got = super::fetch_update_manifest(&client, &[&missing, &old]).await.unwrap();
+        assert_eq!(got.tag, "v1.19.0");
+        let got = super::fetch_update_manifest(&client, &[&garbage, &old]).await.unwrap();
+        assert_eq!(got.tag, "v1.19.0");
+        // Both up: the new one wins.
+        let got = super::fetch_update_manifest(&client, &[&new, &old]).await.unwrap();
+        assert_eq!(got.tag, "v2.0.0");
+        // Nothing answers: quiet None. (Port 9 on localhost is closed.)
+        assert!(super::fetch_update_manifest(&client, &[&missing, "http://127.0.0.1:9/x.json"]).await.is_none());
+    }
 
     #[test]
     fn parses_tags_with_and_without_v_prefix() {
