@@ -46,6 +46,7 @@ const report: RoutingReport = {
   recent: [
     { atMs: 1, sessionId: "s", taskClass: "refactor", mode: "shadow", chosen: "Ligus (primary)", wouldPick: "coder", preferred: "coder", explore: false, reason: "sampled", epsilon: 0.06 },
   ],
+  stops: [],
 };
 
 describe("routing report", () => {
@@ -58,6 +59,23 @@ describe("routing report", () => {
     expect(screen.getByText("falling")).toBeInTheDocument();
     expect(screen.getByText("75%")).toBeInTheDocument();
     expect(screen.getByText(/would send to/)).toBeInTheDocument();
+  });
+});
+
+describe("route cool-downs", () => {
+  it("lists stopped routes and clears one", () => {
+    const cleared: string[] = [];
+    const untilMs = Date.now() + 10 * 60_000;
+    render(
+      <RoutingReportView
+        report={{ ...report, stops: [{ route: "runtime:cc", name: "every agent on cc", reason: "rate_limited", untilMs, failures: 1 }] }}
+        onClearStop={(r) => cleared.push(r)}
+      />,
+    );
+    expect(screen.getByText("every agent on cc")).toBeInTheDocument();
+    expect(screen.getByText(/rate limited · 10 min left/)).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Clear"));
+    expect(cleared).toEqual(["runtime:cc"]);
   });
 });
 

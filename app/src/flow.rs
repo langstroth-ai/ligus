@@ -30,11 +30,14 @@ pub(crate) struct FlowSettings {
     pub route_mode: RouteMode,
     /// Half-life of an outcome in the routing score.
     pub half_life_days: f64,
+    /// Route cool-down after a severe failure (or two failures within ten
+    /// minutes); 0 turns route stops off.
+    pub cooldown_minutes: f64,
 }
 
 impl Default for FlowSettings {
     fn default() -> Self {
-        Self { handoff_cards: true, route_mode: RouteMode::Shadow, half_life_days: 14.0 }
+        Self { handoff_cards: true, route_mode: RouteMode::Shadow, half_life_days: 14.0, cooldown_minutes: 15.0 }
     }
 }
 
@@ -140,7 +143,8 @@ pub(crate) fn key_secret(state: &AppState, workspace_id: Uuid) -> Vec<u8> {
 }
 
 fn key_secret_cache(state: &AppState, workspace_id: Uuid) -> Vec<u8> {
-    static CACHE: OnceLock<Mutex<HashMap<Uuid, (Option<String>, Vec<u8>)>>> = OnceLock::new();
+    type SecretCache = Mutex<HashMap<Uuid, (Option<String>, Vec<u8>)>>;
+    static CACHE: OnceLock<SecretCache> = OnceLock::new();
     let pass = state.settings.lock().unwrap().workspace_passphrase.clone();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some((p, k)) = cache.lock().unwrap().get(&workspace_id) {
@@ -575,10 +579,43 @@ pub(crate) fn after_turn(app: &AppHandle, state: &AppState, session_id: Uuid, wo
         );
     }
 
+    if let Some(err) = facts.error {
+        stop_route_after_failure(state, &session, responder, &me, err, now);
+    }
+
     let directives = take_stashed(message_id);
     if settings(state).handoff_cards && facts.error.is_none() {
         record_handoff(state, &session, &reply, &me, &class, tests_passed, &filed, &directives);
     }
+}
+
+/// Window in which a second ordinary failure stops a route.
+const FAILURE_WINDOW_MS: i64 = 10 * 60_000;
+
+/// A failed turn may pull its route out of rotation at once (a rate limit,
+/// an exhausted plan window, a provider outage, an unreachable local server)
+/// or after a repeat, instead of waiting for the score to drift down. A
+/// provider-wide failure stops every agent on that runtime.
+fn stop_route_after_failure(state: &AppState, session: &ChatSession, responder: &Responder, me: &str, err: &str, now: i64) {
+    let cooldown = (settings(state).cooldown_minutes * 60_000.0) as i64;
+    let kind = flow::route::classify_failure(err);
+    let last = session
+        .flow
+        .turns
+        .iter()
+        .rev()
+        .filter(|t| t.agent == me && t.at_ms < now)
+        .find(|t| t.error)
+        .map(|t| t.at_ms);
+    let Some(mut stop) = flow::route::stop_after_failure(me, kind, now, last, cooldown, FAILURE_WINDOW_MS) else { return };
+    stop.host_id = state.local_host_id();
+    tracing::info!(target: "flow", route = %me, reason = kind.as_str(), "route stopped for a cool-down");
+    if kind.is_runtime_wide() {
+        let mut wide = stop.clone();
+        wide.route = flow::route::runtime_route(&responder.runtime_id);
+        record(state, session.id, session.workspace_id, FlowRecord::RouteStop(wide));
+    }
+    record(state, session.id, session.workspace_id, FlowRecord::RouteStop(stop));
 }
 
 /// Record a hand-off card when the reply hands work to another agent.
@@ -787,6 +824,18 @@ pub(crate) struct RoutingReport {
     pub scores: Vec<ScoreRow>,
     pub arms: Vec<ArmRow>,
     pub recent: Vec<DecisionRow>,
+    /// Routes in cool-down now.
+    pub stops: Vec<StopRow>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct StopRow {
+    pub route: String,
+    pub name: String,
+    pub reason: String,
+    pub until_ms: i64,
+    pub failures: u32,
 }
 
 /// Whether a runtime id runs on a local model (a local server or Ollama).
@@ -884,7 +933,25 @@ pub(crate) fn routing_report(state: &AppState, workspace_id: Uuid, days: u32) ->
         .collect();
     arms.sort_by(|a, b| a.arm.cmp(&b.arm));
     recent.truncate(50);
+    let mut stops: Vec<StopRow> = view
+        .config
+        .route_stops
+        .values()
+        .filter(|st| st.active(now))
+        .map(|st| StopRow {
+            name: match st.route.strip_prefix("runtime:") {
+                Some(rt) => format!("every agent on {rt}"),
+                None => name_of(&names, &st.route),
+            },
+            route: st.route.clone(),
+            reason: st.reason.as_str().to_string(),
+            until_ms: st.until_ms,
+            failures: st.failures,
+        })
+        .collect();
+    stops.sort_by_key(|st| st.until_ms);
     RoutingReport {
+        stops,
         mode: s.route_mode,
         since_ms: since,
         decisions,
@@ -893,6 +960,23 @@ pub(crate) fn routing_report(state: &AppState, workspace_id: Uuid, days: u32) ->
         arms,
         recent,
     }
+}
+
+/// Put a stopped route back into rotation now.
+#[tauri::command]
+pub(crate) fn flow_clear_route_stop(state: State<'_, AppState>, route: String) -> Result<(), String> {
+    let wid = state.active_workspace_id();
+    let now = flow::now_ms();
+    let current = workspace_view(&state, wid).config.route_stops.get(&route).cloned();
+    let Some(mut stop) = current else { return Ok(()) };
+    stop.until_ms = now;
+    stop.at_ms = now;
+    state
+        .service
+        .lock()
+        .unwrap()
+        .record_flow(hive_core::workspace_config_session_id(wid), wid, FlowRecord::RouteStop(stop))
+        .map_err(map_err)
 }
 
 /// The routing report for the active workspace (Flow pane → Routing).

@@ -14322,6 +14322,7 @@ pub fn run() {
             flow::flow_set_settings,
             flow::flow_handoffs,
             flow::flow_routing_report,
+            flow::flow_clear_route_stop,
             workflows::remove_workflow,
             workflows::set_workflow_enabled,
             workflows::workflow_change_request,

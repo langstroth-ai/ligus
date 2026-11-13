@@ -132,6 +132,21 @@ export interface RoutingReport {
   scores: ScoreRow[];
   arms: ArmRow[];
   recent: DecisionRow[];
+  stops: StopRow[];
+}
+
+export interface StopRow {
+  route: string;
+  name: string;
+  reason: string;
+  untilMs: number;
+  failures: number;
+}
+
+export const clearRouteStop = (route: string) => invoke<void>("flow_clear_route_stop", { route });
+
+export function minutesLeft(untilMs: number, now = Date.now()): number {
+  return Math.max(0, Math.ceil((untilMs - now) / 60_000));
 }
 
 export const routingReport = (days?: number) => invoke<RoutingReport>("flow_routing_report", { days: days ?? null });

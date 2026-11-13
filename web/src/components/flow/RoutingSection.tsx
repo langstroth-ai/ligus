@@ -1,6 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { ErrorState, EmptyHint, Section } from "@/components/ui";
-import { REASON_LABEL, pct, routingReport, type RoutingReport } from "@/lib/flow";
+import { REASON_LABEL, clearRouteStop, minutesLeft, pct, routingReport, type RoutingReport } from "@/lib/flow";
+import { Button } from "@/components/ui";
+import { toast, errMsg } from "@/components/Toast";
 import { Muted, Stat } from "@/components/flow/FlowPane";
 import { onWorkspaceSynced } from "@/lib/ipc";
 import { useEffect } from "react";
@@ -18,10 +20,14 @@ export function RoutingSection() {
   if (report.isError) return <ErrorState text="Couldn't load the routing report." onRetry={() => void report.refetch()} />;
   const r = report.data;
   if (!r) return null;
-  return <RoutingReportView report={r} />;
+  const clear = (route: string) =>
+    clearRouteStop(route)
+      .then(() => report.refetch())
+      .catch((e) => toast.error(`Couldn't clear the stop: ${errMsg(e)}`));
+  return <RoutingReportView report={r} onClearStop={clear} />;
 }
 
-export function RoutingReportView({ report: r }: { report: RoutingReport }) {
+export function RoutingReportView({ report: r, onClearStop }: { report: RoutingReport; onClearStop?: (route: string) => void }) {
   const modeText =
     r.mode === "shadow"
       ? "Shadow mode: un-addressed messages still go to the primary; the router only logs its pick."
@@ -39,6 +45,26 @@ export function RoutingReportView({ report: r }: { report: RoutingReport }) {
           hint="Share of decisions whose pick was not the primary"
         />
       </div>
+
+      {r.stops.length > 0 && (
+        <Section title="In cool-down">
+          <Muted>A severe failure (rate limit, exhausted plan window, provider outage, unreachable server) takes a route out of rotation at once.</Muted>
+          <ul className="space-y-1.5 text-xs">
+            {r.stops.map((st) => (
+              <li key={st.route} className="flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5" style={{ borderColor: "var(--hive-line)" }}>
+                <span>
+                  <span className="font-medium">{st.name}</span> · {st.reason.replace(/_/g, " ")} · {minutesLeft(st.untilMs)} min left
+                </span>
+                {onClearStop && (
+                  <Button size="sm" onClick={() => onClearStop(st.route)}>
+                    Clear
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
 
       <Section title="Outcomes by arm">
         {r.arms.length === 0 ? (

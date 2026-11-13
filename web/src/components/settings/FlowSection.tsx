@@ -33,6 +33,12 @@ export function FlowSection() {
         <Field label="Outcome half-life (days)" hint="How fast old outcomes stop counting in an agent's score.">
           <NumberInput value={s.halfLifeDays} min={1} max={180} onChange={(v) => set({ halfLifeDays: v })} label="Outcome half-life" />
         </Field>
+        <Field
+          label="Cool-down after a failure (minutes)"
+          hint="A rate limit, an exhausted plan window, a provider outage or an unreachable server takes the route out of rotation at once; other errors after a repeat. 0 = never."
+        >
+          <NumberInput value={s.cooldownMinutes} min={0} max={1440} onChange={(v) => set({ cooldownMinutes: v })} label="Cool-down minutes" />
+        </Field>
       </Section>
       <Section title="Hand-offs">
         <Row label="Hand-off cards and context parcels" hint="Record what an agent hands on, and give the receiver the sender's summary.">
