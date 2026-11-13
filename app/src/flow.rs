@@ -50,6 +50,9 @@ pub(crate) struct FlowSettings {
     /// Opt-in: let this device take a workflow stage queued on a busy or
     /// offline host, when it can run that agent's runtime.
     pub offer_idle_host: bool,
+    /// Show active workspace marks in every agent turn's context, and teach
+    /// agents the mark directives.
+    pub marks_in_context: bool,
 }
 
 impl Default for FlowSettings {
@@ -66,6 +69,7 @@ impl Default for FlowSettings {
             long_wait_minutes: 120.0,
             recruit_approvers: false,
             offer_idle_host: false,
+            marks_in_context: true,
         }
     }
 }
@@ -403,6 +407,9 @@ pub(crate) fn with_guidance(state: &AppState, system: String) -> String {
     if s.handoff_cards {
         parts.push(HANDOFF_GUIDANCE);
     }
+    if s.marks_in_context {
+        parts.push(MARK_GUIDANCE);
+    }
     if parts.is_empty() {
         system
     } else {
@@ -411,6 +418,11 @@ pub(crate) fn with_guidance(state: &AppState, system: String) -> String {
 }
 
 const HANDOFF_GUIDANCE: &str = r#"When you hand work to another agent with an @mention, give it a compact context parcel so it starts primed instead of rereading the chat: end the reply with [[handoff: {"keyFiles": ["path", …], "decisions": ["…"], "ruledOut": ["…"], "notes": "…"}]]. Keep it short; it is stripped from the visible reply. If you receive a hand-off, its card and parcel appear under "[Ligus flow context]" in the latest message."#;
+
+const MARK_GUIDANCE: &str = r#"Coordinate through workspace marks rather than mentions when you only need to signal: before working on a file, claim it with [[mark: {"kind": "claim", "path": "src/x.rs", "note": "…"}]]; lock a file or range you are mid-way through with [[mark: {"kind": "lock", "path": "src/x.rs", "lines": [10, 40]}]]; flag something for a reviewer with [[mark: {"kind": "review", "path": "…", "note": "…"}]]; clear yours with [[unmark: {"path": "src/x.rs"}]]. Respect other agents' locks and don't redo claimed work. Active marks appear under "[Ligus flow context]"."#;
+
+/// The most marks shown in an agent's context.
+const MARKS_IN_CONTEXT: usize = 15;
 
 /// What [`prime_turns`] added.
 #[derive(Debug, Default, Clone)]
@@ -451,6 +463,12 @@ pub(crate) fn prime_turns(
                     at_ms: flow::now_ms(),
                 }),
             );
+        }
+    }
+    if s.marks_in_context {
+        let config = state.service.lock().unwrap().flow_config(session.workspace_id).unwrap_or_default();
+        if let Some(block) = flow::marks::context_block(config.marks.values(), flow::now_ms(), MARKS_IN_CONTEXT) {
+            blocks.push(block);
         }
     }
     let (note_on, _) = s.upstream_note(session.id);
@@ -648,6 +666,7 @@ pub(crate) fn after_turn(app: &AppHandle, state: &AppState, session_id: Uuid, wo
     }
 
     let directives = take_stashed(message_id);
+    apply_mark_directives(state, &session, &reply.author, &me, &directives, now);
     if settings(state).handoff_cards && facts.error.is_none() {
         record_handoff(state, &session, &reply, &me, &class, tests_passed, &filed, &directives);
     }
@@ -886,6 +905,209 @@ pub(crate) fn queue_report(state: &AppState, workspace_id: Uuid) -> QueueReport 
 pub(crate) fn flow_queue_report(state: State<'_, AppState>) -> QueueReport {
     let wid = state.active_workspace_id();
     queue_report(&state, wid)
+}
+
+/// Leave and clear the marks a reply's directives asked for. An agent only
+/// clears its own marks.
+fn apply_mark_directives(
+    state: &AppState,
+    session: &ChatSession,
+    by: &str,
+    me: &str,
+    d: &flow::directives::FlowDirectives,
+    now: i64,
+) {
+    for m in &d.marks {
+        let mark = flow::WorkspaceMark {
+            id: Uuid::new_v4(),
+            kind: m.kind,
+            path: m.path.clone(),
+            lines: m.lines,
+            task_id: String::new(),
+            note: m.note.clone(),
+            agent: me.to_string(),
+            by: by.to_string(),
+            session_id: Some(session.id),
+            at_ms: now,
+            expires_ms: m.kind.default_ttl_ms().map(|t| now + t),
+        };
+        record(state, session.id, session.workspace_id, FlowRecord::Mark(mark));
+    }
+    if d.unmarks.is_empty() {
+        return;
+    }
+    let config = state.service.lock().unwrap().flow_config(session.workspace_id).unwrap_or_default();
+    for u in &d.unmarks {
+        for m in config.marks.values().filter(|m| m.agent == me) {
+            let hit = u.id == Some(m.id)
+                || (u.path.as_deref().is_some_and(|p| m.covers(p, None)) && u.kind.is_none_or(|k| k == m.kind))
+                || (u.id.is_none() && u.path.is_none() && u.kind == Some(m.kind));
+            if hit {
+                record(state, session.id, session.workspace_id, FlowRecord::MarkCleared { mark_id: m.id });
+            }
+        }
+    }
+}
+
+/// Before a turn's diff is filed for review: flag other agents' locks and
+/// claims on the files it touches (the proposal still goes up; a person
+/// decides).
+pub(crate) fn before_file_proposal(state: &AppState, session_id: Uuid, workspace_id: Uuid, agent: Option<Uuid>, proposal: &mut hive_core::ActionProposal) {
+    let config = state.service.lock().unwrap().flow_config(workspace_id).unwrap_or_default();
+    let me = flow::agent_key(agent);
+    let hits = flow::marks::conflicts(config.marks.values(), &proposal.changed_files, &me, flow::now_ms());
+    if hits.is_empty() {
+        return;
+    }
+    let lines: Vec<String> = hits.iter().map(|m| format!("- {}", m.describe())).collect();
+    proposal.body.push_str(&format!("\n\n**Touches files others marked:**\n{}", lines.join("\n")));
+    let _ = state.service.lock().unwrap().post_system_note(
+        session_id,
+        workspace_id,
+        format!("\u{26a0}\u{fe0f} “{}” touches files others have marked:\n{}", proposal.title, lines.join("\n")),
+    );
+}
+
+/// The files a unified diff changes, with how (`create`, `delete`, `edit`).
+pub(crate) fn diff_touches(diff: &str) -> Vec<(String, &'static str)> {
+    let mut out: Vec<(String, &'static str)> = Vec::new();
+    for line in diff.lines() {
+        if let Some(rest) = line.strip_prefix("diff --git ") {
+            let path = rest.rsplit_once(" b/").map(|(_, b)| b).unwrap_or(rest).to_string();
+            out.push((path, "edit"));
+        } else if line.starts_with("new file mode") {
+            if let Some(last) = out.last_mut() {
+                last.1 = "create";
+            }
+        } else if line.starts_with("deleted file mode") {
+            if let Some(last) = out.last_mut() {
+                last.1 = "delete";
+            }
+        }
+    }
+    out
+}
+
+/// After a file-diff proposal is applied: record a workspace touch per
+/// changed file (opaque keys only), attributed to the turn that produced it,
+/// and clear the producer's own claims and locks on those files.
+pub(crate) fn after_apply(state: &AppState, session_id: Uuid, workspace_id: Uuid, proposal: &hive_core::ActionProposal, repo_root: &str) {
+    let Some(diff) = proposal.diff.as_deref() else { return };
+    let session = match state.service.lock().unwrap().load(session_id) {
+        Ok(Some(s)) => s,
+        _ => return,
+    };
+    let tag = session.flow.turns.iter().find(|t| t.proposal_ids.contains(&proposal.id));
+    let agent = proposal
+        .producing_agent_id
+        .map(|id| flow::agent_key(Some(id)))
+        .or_else(|| tag.map(|t| t.agent.clone()))
+        .unwrap_or_else(|| flow::PRIMARY.to_string());
+    let secret = key_secret_cache(state, workspace_id);
+    let repo = std::path::Path::new(repo_root).file_name().and_then(|n| n.to_str()).unwrap_or("workspace");
+    let repo_key = flow::keys::repo_key(&secret, repo);
+    let now = flow::now_ms();
+    let touches = diff_touches(diff);
+    for (path, kind) in &touches {
+        record(
+            state,
+            session_id,
+            workspace_id,
+            FlowRecord::Touch(flow::WorkspaceTouch {
+                message_id: tag.map(|t| t.message_id),
+                proposal_id: proposal.id,
+                agent: agent.clone(),
+                file_key: flow::keys::file_key(&secret, path),
+                repo_key: repo_key.clone(),
+                kind: (*kind).to_string(),
+                at_ms: now,
+            }),
+        );
+    }
+    let config = state.service.lock().unwrap().flow_config(workspace_id).unwrap_or_default();
+    for m in config.marks.values() {
+        let mine = m.agent == agent && matches!(m.kind, flow::MarkKind::Claim | flow::MarkKind::UnderConstruction);
+        if mine && touches.iter().any(|(p, _)| m.covers(p, None)) {
+            record(state, session_id, workspace_id, FlowRecord::MarkCleared { mark_id: m.id });
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MarkRow {
+    #[serde(flatten)]
+    pub mark: flow::WorkspaceMark,
+    pub chat_title: String,
+}
+
+/// Active workspace marks (Flow → Marks).
+#[tauri::command]
+pub(crate) fn flow_marks(state: State<'_, AppState>) -> Vec<MarkRow> {
+    let wid = state.active_workspace_id();
+    let view = workspace_view(&state, wid);
+    let now = flow::now_ms();
+    flow::marks::active(view.config.marks.values(), now)
+        .into_iter()
+        .map(|m| MarkRow {
+            chat_title: m
+                .session_id
+                .and_then(|sid| view.sessions.iter().find(|s| s.id == sid))
+                .map(|s| s.title.clone())
+                .unwrap_or_default(),
+            mark: m.clone(),
+        })
+        .collect()
+}
+
+/// Leave a mark as the local user.
+#[tauri::command]
+pub(crate) fn flow_add_mark(
+    state: State<'_, AppState>,
+    kind: String,
+    path: String,
+    note: String,
+    session_id: Option<String>,
+) -> Result<(), String> {
+    let kind = flow::MarkKind::parse(&kind).ok_or("unknown mark kind")?;
+    let path = flow::keys::normalize_path(path.trim());
+    if path.is_empty() || path.contains("..") {
+        return Err("give a workspace-relative path".into());
+    }
+    let wid = state.active_workspace_id();
+    let now = flow::now_ms();
+    let by = state.service.lock().unwrap().author().display_name.clone();
+    let mark = flow::WorkspaceMark {
+        id: Uuid::new_v4(),
+        kind,
+        path,
+        lines: None,
+        task_id: String::new(),
+        note: note.trim().chars().take(200).collect(),
+        agent: String::new(),
+        by,
+        session_id: session_id.and_then(|s| Uuid::parse_str(&s).ok()),
+        at_ms: now,
+        expires_ms: kind.default_ttl_ms().map(|t| now + t),
+    };
+    state
+        .service
+        .lock()
+        .unwrap()
+        .record_flow(hive_core::workspace_config_session_id(wid), wid, FlowRecord::Mark(mark))
+        .map_err(map_err)
+}
+
+#[tauri::command]
+pub(crate) fn flow_clear_mark(state: State<'_, AppState>, mark_id: String) -> Result<(), String> {
+    let id = Uuid::parse_str(&mark_id).map_err(map_err)?;
+    let wid = state.active_workspace_id();
+    state
+        .service
+        .lock()
+        .unwrap()
+        .record_flow(hive_core::workspace_config_session_id(wid), wid, FlowRecord::MarkCleared { mark_id: id })
+        .map_err(map_err)
 }
 
 /// Window in which a second ordinary failure stops a route.
@@ -1462,6 +1684,15 @@ mod tests {
         assert_eq!((e.explored, e.explored_wins, e.explored_judged), (1, 1, 1));
         assert!((e.share - 0.25).abs() < 1e-9);
         assert!((e.incumbent_rate.unwrap() - 2.0 / 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn diff_touches_classify_files() {
+        let diff = "diff --git a/src/a.rs b/src/a.rs\nindex 1..2 100644\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n-x\n+y\n\
+diff --git a/new.md b/new.md\nnew file mode 100644\n--- /dev/null\n+++ b/new.md\n\
+diff --git a/old.txt b/old.txt\ndeleted file mode 100644\n";
+        assert_eq!(diff_touches(diff), vec![("src/a.rs".to_string(), "edit"), ("new.md".to_string(), "create"), ("old.txt".to_string(), "delete")]);
+        assert!(diff_touches("").is_empty());
     }
 
     #[test]

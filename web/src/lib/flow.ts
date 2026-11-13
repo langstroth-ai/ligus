@@ -224,3 +224,31 @@ export const RECRUIT_LABEL: Record<string, string> = {
   idle_host: "an idle host took a queued stage",
   stop_upstream: "told agents to stop opening new proposals",
 };
+
+export type MarkKind = "claim" | "underConstruction" | "needsReview";
+
+export interface MarkRow {
+  id: string;
+  kind: MarkKind;
+  path?: string;
+  lines?: [number, number];
+  taskId?: string;
+  note: string;
+  agent: string;
+  by: string;
+  sessionId?: string;
+  atMs: number;
+  expiresMs?: number;
+  chatTitle: string;
+}
+
+export const listMarks = () => invoke<MarkRow[]>("flow_marks");
+export const addMark = (kind: "claim" | "lock" | "review", path: string, note: string, sessionId?: string) =>
+  invoke<void>("flow_add_mark", { kind, path, note, sessionId: sessionId ?? null });
+export const clearMark = (markId: string) => invoke<void>("flow_clear_mark", { markId });
+
+export const MARK_LABEL: Record<MarkKind, string> = {
+  claim: "Claim",
+  underConstruction: "Under construction",
+  needsReview: "Needs review",
+};

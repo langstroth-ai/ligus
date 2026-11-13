@@ -77,6 +77,11 @@ export function FlowSection() {
           <Switch on={s.offerIdleHost} onChange={(v) => set({ offerIdleHost: v })} label="Take queued stages when idle" />
         </Row>
       </Section>
+      <Section title="Workspace marks">
+        <Row label="Marks in agent context" hint="Show active claims, locks and review markers to every agent turn, and teach agents to leave their own.">
+          <Switch on={s.marksInContext} onChange={(v) => set({ marksInContext: v })} label="Marks in agent context" />
+        </Row>
+      </Section>
       <Section title="Hand-offs">
         <Row label="Hand-off cards and context parcels" hint="Record what an agent hands on, and give the receiver the sender's summary.">
           <Switch on={s.handoffCards} onChange={(v) => set({ handoffCards: v })} label="Hand-off cards" />

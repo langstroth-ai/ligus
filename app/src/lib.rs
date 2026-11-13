@@ -5566,10 +5566,11 @@ async fn implement_proposal(
             }
             {
                 let mut svc = state.service.lock().unwrap();
-                let mut applied = proposal;
+                let mut applied = proposal.clone();
                 applied.status = ProposalStatus::Applied;
                 svc.upsert_proposal(sid, workspace_id, applied).map_err(map_err)?;
             }
+            flow::after_apply(&state, sid, workspace_id, &proposal, &repo_root);
             let _ = app.emit("workspace://synced", 1);
             return Ok(());
         }
@@ -8088,6 +8089,7 @@ async fn run_prepared_turn_inner(
                         // Record which agent produced it so "Send to agent to
                         // revise" re-dispatches the right one (None = primary @hive).
                         prop.producing_agent_id = responder.agent_id;
+                        flow::before_file_proposal(state, session_id, workspace_id, responder.agent_id, &mut prop);
                         {
                             let mut svc = state.service.lock().unwrap();
                             let _ = svc.upsert_proposal(session_id, workspace_id, prop);
@@ -14325,6 +14327,9 @@ pub fn run() {
             flow::flow_routing_report,
             flow::flow_clear_route_stop,
             flow::flow_queue_report,
+            flow::flow_marks,
+            flow::flow_add_mark,
+            flow::flow_clear_mark,
             workflows::remove_workflow,
             workflows::set_workflow_enabled,
             workflows::workflow_change_request,
