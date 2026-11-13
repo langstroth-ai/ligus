@@ -39,6 +39,7 @@ use tauri_plugin_notification::NotificationExt;
 use uuid::Uuid;
 
 mod workflows;
+mod data_migration;
 /// In-app live test support (see `tests/app_live.rs`); not in release builds.
 #[cfg(feature = "e2e")]
 #[doc(hidden)]
@@ -10335,7 +10336,48 @@ const RESET_SENTINEL: &str = ".reset-pending";
 
 fn build_state(app: &AppHandle) -> Result<AppState, String> {
     let data_dir: PathBuf = app.path().app_data_dir().map_err(map_err)?;
+    migrate_legacy_data_dir(&data_dir)?;
     build_state_in(app, data_dir)
+}
+
+/// Set when this launch copied the data dir over from the legacy bundle id.
+static DATA_MIGRATED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Before anything opens the DB: if the bundle identifier changed, copy the
+/// legacy app-data dir into the new one (see `data_migration`). A no-op while
+/// the identifier is unchanged. On failure, show a blocking error and refuse to
+/// start rather than open an empty DB and mint a new device identity.
+fn migrate_legacy_data_dir(data_dir: &Path) -> Result<(), String> {
+    let Some(legacy) = data_migration::legacy_sibling(data_dir) else { return Ok(()) };
+    match data_migration::migrate(data_dir, &legacy) {
+        Ok(data_migration::Outcome::Migrated { from }) => {
+            tracing::info!(from = %from.display(), to = %data_dir.display(), "copied the legacy data dir");
+            DATA_MIGRATED.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+        Ok(_) => Ok(()),
+        Err(e) => {
+            let msg = format!(
+                "Your existing data in\n{}\ncould not be copied to\n{}\n\n{e}\n\nNothing was changed or deleted. Free some disk space or fix the folder permissions, then open the app again.",
+                legacy.display(),
+                data_dir.display()
+            );
+            rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Error)
+                .set_title("Could not move your data")
+                .set_description(msg)
+                .set_buttons(rfd::MessageButtons::Ok)
+                .show();
+            Err(format!("data-dir migration failed: {e}"))
+        }
+    }
+}
+
+/// Whether this launch migrated the data dir from the legacy bundle id. The
+/// web UI uses it to skip onboarding (localStorage does not carry over).
+#[tauri::command]
+fn data_dir_migrated() -> bool {
+    DATA_MIGRATED.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 /// [`build_state`] against an explicit data dir. The app uses the OS app-data
@@ -14316,6 +14358,7 @@ pub fn run() {
             set_titlebar_color,
             save_appearance,
             reset_local_data,
+            data_dir_migrated,
             check_for_update,
             install_update,
             check_for_app_update,

@@ -9,7 +9,8 @@
 //! 1. its own config: `HIVE_SERVE_PALETTE` and `HIVE_SERVE_APPEARANCE`, for a
 //!    headless home host with no desktop app;
 //! 2. the desktop app's `appearance.json` on this machine
-//!    (`HIVE_DESKTOP_DATA_DIR`, else the OS app-data dir for `com.hive.desktop`).
+//!    (`HIVE_DESKTOP_DATA_DIR`, else the OS app-data dir for `ai.ligus.desktop`,
+//!    falling back to the original `com.hive.desktop`).
 //!
 //! Each field resolves on its own, so a box can pin the palette in config and
 //! still follow the desktop's mode. The file is read per request (it is tiny),
@@ -27,9 +28,6 @@ pub const PALETTES: [&str; 6] = ["pollen", "studio", "harbor", "slate", "meadow"
 /// The desktop's appearance modes (`AppearanceMode` in `theme.ts`).
 pub const MODES: [&str; 3] = ["auto", "light", "dark"];
 
-/// The desktop app's bundle identifier (`app/tauri.conf.json`), which names its
-/// app-data directory.
-const DESKTOP_APP_ID: &str = "com.hive.desktop";
 /// The file the desktop app writes into its data dir.
 pub const FILE_NAME: &str = "appearance.json";
 
@@ -82,21 +80,35 @@ pub fn normalize_mode(raw: &str) -> Option<String> {
     MODES.contains(&m.as_str()).then_some(m)
 }
 
-/// The OS app-data dir Tauri gives the desktop app (`app_data_dir()`):
-/// `~/Library/Application Support/<id>` on macOS, `$XDG_DATA_HOME/<id>` (or
-/// `~/.local/share/<id>`) on Linux, `%APPDATA%\<id>` on Windows.
-fn default_desktop_dir() -> Option<PathBuf> {
+/// The OS app-data base Tauri puts the desktop app's dir under
+/// (`app_data_dir()` = `<base>/<bundle id>`): `~/Library/Application Support`
+/// on macOS, `$XDG_DATA_HOME` (or `~/.local/share`) on Linux, `%APPDATA%` on
+/// Windows.
+fn app_data_base() -> Option<PathBuf> {
     if cfg!(target_os = "windows") {
-        return env_opt("APPDATA").map(|d| PathBuf::from(d).join(DESKTOP_APP_ID));
+        return env_opt("APPDATA").map(PathBuf::from);
     }
     let home = env_opt("HOME").map(PathBuf::from);
     if cfg!(target_os = "macos") {
-        return home.map(|h| h.join("Library/Application Support").join(DESKTOP_APP_ID));
+        return home.map(|h| h.join("Library/Application Support"));
     }
-    env_opt("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .or_else(|| home.map(|h| h.join(".local/share")))
-        .map(|d| d.join(DESKTOP_APP_ID))
+    env_opt("XDG_DATA_HOME").map(PathBuf::from).or_else(|| home.map(|h| h.join(".local/share")))
+}
+
+fn default_desktop_dir() -> Option<PathBuf> {
+    app_data_base().map(|b| pick_desktop_dir(&b))
+}
+
+/// The desktop data dir under `base`: the first bundle id (new, then
+/// original) whose dir has an `appearance.json`, else the first that exists,
+/// else the new id's path.
+pub fn pick_desktop_dir(base: &Path) -> PathBuf {
+    let ids = hive_core::compat::DESKTOP_APP_IDS;
+    ids.iter()
+        .map(|id| base.join(id))
+        .find(|d| d.join(FILE_NAME).is_file())
+        .or_else(|| ids.iter().map(|id| base.join(id)).find(|d| d.is_dir()))
+        .unwrap_or_else(|| base.join(ids[0]))
 }
 
 #[derive(Deserialize, Default)]
@@ -192,5 +204,19 @@ mod tests {
 
         write(&dir, &format!(r#"{{"palette":"pollen","pad":"{}"}}"#, "x".repeat(5000)));
         assert_eq!(resolve(&cfg)["palette"], Value::Null, "oversized files are ignored");
+    }
+
+    #[test]
+    fn desktop_dir_probes_new_bundle_id_then_original() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        assert_eq!(pick_desktop_dir(base), base.join("ai.ligus.desktop"));
+        write(&base.join("com.hive.desktop"), r#"{"palette":"harbor"}"#);
+        assert_eq!(pick_desktop_dir(base), base.join("com.hive.desktop"));
+        // The new dir exists (first launch, nothing saved yet): the old file still wins.
+        std::fs::create_dir_all(base.join("ai.ligus.desktop")).unwrap();
+        assert_eq!(pick_desktop_dir(base), base.join("com.hive.desktop"));
+        write(&base.join("ai.ligus.desktop"), r#"{"palette":"meadow"}"#);
+        assert_eq!(pick_desktop_dir(base), base.join("ai.ligus.desktop"));
     }
 }
