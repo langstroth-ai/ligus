@@ -1,11 +1,11 @@
 # Hive on iPhone: thin client + home host
 
 > The iPhone app's source now lives in a separate repository. This document
-> stays here as the design and **API contract of `hive serve`**, which any
+> stays here as the design and **API contract of `ligus serve`**, which any
 > client can implement.
 
 A single-user iOS app for one person's Hive workspace. The
-phone doesn't run Hive. It's a thin client over Tailscale to **`hive serve`**,
+phone doesn't run Hive. It's a thin client over Tailscale to **`ligus serve`**,
 a home-host process on an always-on box in the lab. The home host is a normal
 Hive device in the workspace: it keeps the E2EE keys, syncs with the relay,
 and runs agent turns on the lab's model gateway. The phone gets a small JSON
@@ -26,11 +26,11 @@ API plus a Server-Sent Events stream.
 
 ## Components
 
-- **`hive serve`** (`crates/hive-cli/src/serve/`) runs in one process:
-  - the relay sync loop (the same push/fetch/verify as `hive sync`, every 3 s
+- **`ligus serve`** (`crates/hive-cli/src/serve/`) runs in one process:
+  - the relay sync loop (the same push/fetch/verify as `ligus sync`, every 3 s
     and immediately after a local write, with exponential backoff on errors);
   - the agent worker, on its own thread (`worker.rs`, shared with
-    `hive worker`). It answers `@mentions` for the agents whose host is this
+    `ligus worker`). It answers `@mentions` for the agents whose host is this
     box: it claims the turn, streams the reply, checkpoints it, and files the
     turn's file changes as a review proposal;
   - the HTTP API and the SSE stream (`api.rs`, axum);
@@ -43,17 +43,17 @@ API plus a Server-Sent Events stream.
     worker.
 - **Agent turns** run the offline harness's loop for local model runtimes:
   `dispatch::stream_with_tools` with `CompositeTools` (Hive's built-in file
-  tools plus the MCP tools from `HIVE_MCP_CONFIG`), under the same policy as
+  tools plus the MCP tools from `LIGUS_MCP_CONFIG`), under the same policy as
   the desktop. See "Tool policy" below.
 - **Runtimes.** An agent runs on its workspace runtime (config log). Failing
   that, it runs on this host's own `runtimes.toml` entry for its runtime id, or
   on the catch-all `id = "*"` entry, which is typically the lab's keyless
   llama.cpp gateway. Desktop agents are bound to the desktop's device-local
   runtime ids, so this mapping is what lets you send them here.
-- **Repos.** Agents work on checkouts under `HIVE_REPOS_DIR`
-  (default `<HIVE_DATA_DIR>/repos`). `hive bind-repo <name|path> [--chat <id>]`
+- **Repos.** Agents work on checkouts under `LIGUS_REPOS_DIR`
+  (default `<LIGUS_DATA_DIR>/repos`). `ligus bind-repo <name|path> [--chat <id>]`
   binds the workspace (or one chat) to a checkout in
-  `<HIVE_DATA_DIR>/repo-bindings.toml`. This is the device-local equivalent of
+  `<LIGUS_DATA_DIR>/repo-bindings.toml`. This is the device-local equivalent of
   the desktop's workspace folder binding. The phone can do the same: list the
   box's checkouts and the GitHub repos its `gh` login can see, clone one, switch
   the chat it's in onto it, pull, and open a pull request (see "Repos" below).
@@ -69,7 +69,7 @@ A missing or bad token gets `401 {"error": …}`. Errors are
 `{"error": "<message>"}` with 400, 401, 403 (roster role too low), 404 or 409
 (apply conflict). The server binds to its configured address: default
 `127.0.0.1:8787`, and on the home host its Tailscale IP. It refuses `0.0.0.0`
-and public addresses unless `HIVE_SERVE_ALLOW_ANY_BIND=1`.
+and public addresses unless `LIGUS_SERVE_ALLOW_ANY_BIND=1`.
 
 | Method | Path | Response |
 |---|---|---|
@@ -138,7 +138,7 @@ Field notes:
   When that agent files its next proposal in the chat, this box links it
   (`parentId`) and marks the original `supersededBy`, and the original leaves
   the open list. `409` if the proposal is already revised or applied, or if it
-  came from the chat's primary runtime and no `HIVE_SERVE_DEFAULT_AGENT` names
+  came from the chat's primary runtime and no `LIGUS_SERVE_DEFAULT_AGENT` names
   an agent to send it to.
 - An agent with no host runs on its owner's device. It has no `hostId`, and its
   `hostLabel` is "Owner's device". For an agent on this box, `hostLabel` is
@@ -166,7 +166,7 @@ Field notes:
   `inChat` is true for whoever spoke there (or an agent added to the chat).
   `defaultResponder = {kind: "primary"|"agent", name, via: "untagged"|"serveDefault", runtimeLabel?, model?, agentId?, hostLabel?, hostKind?}`
   is who answers an untagged message: the chat's `@hive` on its runtime, or the
-  agent named by `hive serve --default-agent`.
+  agent named by `ligus serve --default-agent`.
   For the primary it also carries `available?: bool`, `availableVia?: string`
   and `unavailableReason?: "desktopOffline"|"noDesktop"`.
   Only a desktop runs `@hive`: its owner's (the chat's creator; once this box
@@ -192,28 +192,28 @@ Field notes:
   timeout and cache; a failing panel carries `error` and the rest still
   render. With no file, a host serves the Hive section, plus a generated lab
   dashboard (the old `/v1/lab/status` content) below it when
-  `HIVE_PROMETHEUS_URL` is set. Only `builtin = false` with no sections of
+  `LIGUS_PROMETHEUS_URL` is set. Only `builtin = false` with no sections of
   its own (or a host older than the built-in section) gives an empty one
   (`sections: []`). The app hides its dashboard tab when the dashboard is
   empty, and falls back to `/v1/lab/status` only when `/v1/dashboard` is 404
   (an older host).
 - `/v1/appearance` resolves each field on its own: serve config first
-  (`HIVE_SERVE_PALETTE`, `HIVE_SERVE_APPEARANCE`), then the desktop app's
-  `appearance.json` on the same machine (`HIVE_DESKTOP_DATA_DIR`, default the
+  (`LIGUS_SERVE_PALETTE`, `LIGUS_SERVE_APPEARANCE`), then the desktop app's
+  `appearance.json` on the same machine (`LIGUS_DESKTOP_DATA_DIR`, default the
   OS app-data dir of `com.hive.desktop`), which the desktop rewrites whenever
   its theme changes. The file is read per request. A client treats `null` (or a
   404 from an older server) as "use the default palette".
-- `/v1/lab/status` (deprecated) is best-effort. Prometheus (`HIVE_PROMETHEUS_URL`, default
+- `/v1/lab/status` (deprecated) is best-effort. Prometheus (`LIGUS_PROMETHEUS_URL`, default
   `http://127.0.0.1:9090`) gets each query with a 2 s timeout. A field whose
   query fails is left out. `workers` comes from `rdnagw_worker_up{worker}`,
   power and cost from `lab:power_watts:sum`, `lab:cost_usd_per_hour` and
-  `lab:electric_rate_usd_per_kwh`, and temps from `HIVE_LAB_TEMPS`
+  `lab:electric_rate_usd_per_kwh`, and temps from `LIGUS_LAB_TEMPS`
   (`Name=promql;…`).
 
 ### Repos (`/v1/repos`, `/v1/chats/{id}/repo`, `/v1/chats/{id}/pr`)
 
 These act on the box's own device-local state: the checkouts under
-`HIVE_REPOS_DIR` and `repo-bindings.toml`. Nothing here is synced. GitHub
+`LIGUS_REPOS_DIR` and `repo-bindings.toml`. Nothing here is synced. GitHub
 access is the box's own `gh` login (`gh auth login` on the host). Hive never
 stores or sends a token. Writes need the bearer token (or the tunnel), a box
 that can write (not revoked or pending), and a roster role of at least
@@ -224,7 +224,7 @@ checkouts are named, and an absolute binding shows only its last component.
 |---|---|---|
 | GET | `/v1/repos?q=&owner=&page=&perPage=` | `{local: [Checkout], github: GitHub, workspaceDefault?, jobs: [Job]}`. `q` filters both lists (GitHub search when signed in); `owner` lists one account or org; `page` from 1, `perPage` 1-100 (default 30) |
 | GET | `/v1/repos/fork?repo=owner/name` | `{repo, login, fork: {fullName, checkout, cloned}|null}`: the signed-in account's fork of `repo` (same name under the login, reported by GitHub as a fork of exactly `repo`). The phone calls this before cloning a repo the user doesn't own, to offer "Clone via my fork". 412 when `gh` isn't signed in |
-| POST | `/v1/repos/clone` `{repo, viaFork?}` | `{job}`. `repo` is `owner/name` or `https://github.com/owner/name[.git]`, nothing else (400). Clones to `<HIVE_REPOS_DIR>/<owner>__<name>`; an existing clone of the same repo is fetched instead (`action: "fetch"`), and one already in flight returns its job. At most 2 at once (429). `viaFork: true` clones the account's fork of `repo` instead (`checkout` is `<login>__<name>`); with no fork it answers 404 and creates nothing. Whenever GitHub reports the cloned or fetched repo as a fork, the job adds an `upstream` remote for the parent (fetch-only: its push URL is set to `DISABLED-push-to-fork-only`), fetches it, and, on a fresh clone, makes the local base branch track `upstream/<parent default>` |
+| POST | `/v1/repos/clone` `{repo, viaFork?}` | `{job}`. `repo` is `owner/name` or `https://github.com/owner/name[.git]`, nothing else (400). Clones to `<LIGUS_REPOS_DIR>/<owner>__<name>`; an existing clone of the same repo is fetched instead (`action: "fetch"`), and one already in flight returns its job. At most 2 at once (429). `viaFork: true` clones the account's fork of `repo` instead (`checkout` is `<login>__<name>`); with no fork it answers 404 and creates nothing. Whenever GitHub reports the cloned or fetched repo as a fork, the job adds an `upstream` remote for the parent (fetch-only: its push URL is set to `DISABLED-push-to-fork-only`), fetches it, and, on a fresh clone, makes the local base branch track `upstream/<parent default>` |
 | GET | `/v1/repos/clone/{job}` | `{job}` |
 | GET | `/v1/chats/{id}/repo` | `Binding` |
 | PUT | `/v1/chats/{id}/repo` `{repo}` | `Binding`. `repo` is a checkout name (or `owner/name` of a clone); `null` drops the chat's own binding, so it falls back to the workspace default. 404 for a checkout that isn't there. A change posts a system note in the chat |
@@ -233,7 +233,7 @@ checkouts are named, and an absolute binding shows only its last component.
 
 - `Checkout = {name, displayName, defaultBranch?, branch?, head?, dirty, remote: {host, owner, name, fullName}|null, fork?: Fork, isWorkspaceDefault, boundChats}`.
   `displayName` is `owner/name` for a hosted remote, else the name. `dirty`
-  ignores Hive's own `.hive/` worktrees. In a fork, `defaultBranch` is
+  ignores the app's own `.ligus/` (and any pre-2.0 `.hive/`) state. In a fork, `defaultBranch` is
   upstream's default branch.
 - `Fork = {upstream: "kubeflow/pipelines", upstreamRemote: "upstream", baseBranch, upstreamPushDisabled, prTarget: "upstream", behind?, ahead?}`,
   present when the checkout has an `upstream` remote pointing at another
@@ -249,8 +249,8 @@ checkouts are named, and an absolute binding shows only its last component.
 - `Job = {id, repo, checkout, action: "clone"|"fetch", state: "running"|"done"|"error", phase, percent?, error?, startedAt, finishedAt?}`.
   Progress also arrives on the event stream as `repo.clone`. A clone lands in
   a hidden temp dir and is renamed into place when it succeeds, so a failed or
-  stopped clone leaves nothing behind. Limits: `HIVE_REPOS_CLONE_TIMEOUT_SECS`
-  (default 900) and `HIVE_REPOS_MAX_CLONE_MB` (default 2048). Git never
+  stopped clone leaves nothing behind. Limits: `LIGUS_REPOS_CLONE_TIMEOUT_SECS`
+  (default 900) and `LIGUS_REPOS_MAX_CLONE_MB` (default 2048). Git never
   prompts (`GIT_TERMINAL_PROMPT=0`); with `gh` signed in, git uses
   `gh auth git-credential` for github.com.
 - `Binding = {repo: (Checkout + {source: "chat"|"workspace", available, external})|null, workspaceDefault?, chatBranch, chatBranchExists?, ahead?, behind?, prBranch?}`.
@@ -261,7 +261,7 @@ checkouts are named, and an absolute binding shows only its last component.
   `repo`.
 
 Approved proposals reach `hive/chat/<id>` only when the box applies them
-(`HIVE_SERVE_APPLY_ON_APPROVE=1`). Otherwise the chat branch has nothing to
+(`LIGUS_SERVE_APPLY_ON_APPROVE=1`). Otherwise the chat branch has nothing to
 open a pull request for.
 
 ### Events (`GET /v1/events`)
@@ -284,20 +284,20 @@ that falls further behind should refetch.
 
 ### Pairing and links
 
-`hive serve --pair` prints a terminal QR code and the text link when it
+`ligus serve --pair` prints a terminal QR code and the text link when it
 starts. `hive pair` does the same without starting a server, which is handy
 while the systemd unit runs. Run it with the server's settings
-(`HIVE_SERVE_LISTEN` or `HIVE_SERVE_PUBLIC_URL`, and `HIVE_DATA_DIR`): it
+(`LIGUS_SERVE_LISTEN` or `LIGUS_SERVE_PUBLIC_URL`, and `LIGUS_DATA_DIR`): it
 refuses to print a link to a loopback address, and it never creates a token of
 its own, so it can't hand the phone one the server doesn't accept. The link is
 `hive://pair?url=<base64url(serverURL), unpadded>&token=<token>`, where
-`serverURL` is `HIVE_SERVE_PUBLIC_URL` or `http://<listen>`. The app's URL
+`serverURL` is `LIGUS_SERVE_PUBLIC_URL` or `http://<listen>`. The app's URL
 scheme is `hive`: `hive://pair?…` and `hive://chat/<id>`. ntfy notifications
 carry `Click: hive://chat/<chatId>`.
 
 ### Remote access through a relay (optional, off by default)
 
-`hive serve` can also be reached without Tailscale, through a relay, over an
+`ligus serve` can also be reached without Tailscale, through a relay, over an
 end-to-end encrypted and mutually authenticated tunnel (protocol:
 [`relay-tunnel.md`](relay-tunnel.md), `hive-tunnel/1`). The host keeps one
 outbound WebSocket to the relay and opens no inbound port. Each phone request
@@ -306,8 +306,8 @@ contract above is unchanged. The relay sees only ciphertext.
 
 ```sh
 hive remote enable --relay https://relay.example.com [--reg-token T]
-#   or per run: hive serve --remote-relay URL   (env HIVE_REMOTE_RELAY;
-#   HIVE_REMOTE_RELAY=off overrides relay.json; HIVE_REMOTE_REG_TOKEN)
+#   or per run: hive serve --remote-relay URL   (env LIGUS_REMOTE_RELAY;
+#   LIGUS_REMOTE_RELAY=off overrides relay.json; LIGUS_REMOTE_REG_TOKEN)
 hive pair                  # v2 link: url/token plus v=2&hid&hs&relay&ps&exp
 hive pair --relay-only     # no url/token (also automatic when the direct URL is loopback)
 hive remote status         # relay, host id, live connection, phone count
@@ -316,12 +316,12 @@ hive phones revoke <pid|name> [--keep-token]
 hive remote disable | reset   # reset = new host keys: every phone re-pairs
 ```
 
-- State is in `<HIVE_DATA_DIR>/tunnel/` (directory 0700, files 0600):
+- State is in `<LIGUS_DATA_DIR>/tunnel/` (directory 0700, files 0600):
   `keys.json` (Ed25519 signing key and X25519 Noise static), `phones.json`,
   `relay.json`, `status.json`, and `pending/` for the hand-off from `hive pair`
   and `hive phones revoke` to the running server (picked up within 2 s).
 - The relay URL must be `https`; `--insecure-relay` /
-  `HIVE_REMOTE_INSECURE_RELAY=1` allows `http` (tests, a loopback relay).
+  `LIGUS_REMOTE_INSECURE_RELAY=1` allows `http` (tests, a loopback relay).
 - Each v2 link opens a one-time pairing window of 10 minutes. The phone gets a
   per-phone credential (`hpc1`, 90 days) and renews it daily through
   `POST /v1/tunnel/credential`. That route and `PUT /v1/tunnel/push
@@ -347,20 +347,20 @@ hive remote disable | reset   # reset = new host keys: every phone re-pairs
   transport is plain HTTP inside WireGuard: the tailnet supplies confidentiality
   and peer authentication, and the bearer token supplies authorization.
 - **Bearer token.** 32 random bytes, hex-encoded, in
-  `<HIVE_DATA_DIR>/serve.token` (created with mode 0600 on first run). It's
+  `<LIGUS_DATA_DIR>/serve.token` (created with mode 0600 on first run). It's
   compared in constant time. The phone receives it once, through the pairing
   link, and keeps it in the iOS Keychain
   (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, not synced to iCloud).
   To revoke it, delete the file and restart, then pair again. The token grants
   what this box's workspace member can do, and nothing more.
 - **Keys never leave the box.** The workspace E2EE key (from the
-  `hivews1:` invite, used with `hive enroll`) and the device and account
-  signing keys stay in `HIVE_DATA_DIR`. The relay sees only ciphertext. The
+  `hivews1:` invite, used with `ligus enroll`) and the device and account
+  signing keys stay in `LIGUS_DATA_DIR`. The relay sees only ciphertext. The
   phone sees only plaintext API responses over the tailnet, and nothing it
   holds can decrypt the relay's log or sign workspace events.
 - **The box is its own member.** It joins the roster as **Contributor** (self
   enrollment) and signs every event it writes, including the phone's messages,
-  which appear under `HIVE_SERVE_NAME`, and the phone's votes. Peers verify
+  which appear under `LIGUS_SERVE_NAME`, and the phone's votes. Peers verify
   those events on ingest like any other device's. Approve and reject cast the
   same `ProposalVoteCast` delta the desktop's Review pane does, at this
   member's real roster role. Quorum, the role floor and the no-self-approval
@@ -371,19 +371,19 @@ hive remote disable | reset   # reset = new host keys: every phone re-pairs
   - Built-in file tools are offered only to runtimes that may front a local
     server (Custom, HiveDaemon, Ollama) and only when the endpoint is on this
     machine, a private network or the tailnet, unless
-    `HIVE_ALLOW_REMOTE_FILE_TOOLS=1`. Hosted APIs never get the tool loop.
+    `LIGUS_ALLOW_REMOTE_FILE_TOOLS=1`. Hosted APIs never get the tool loop.
   - Reads come from the chat's base worktree. **Writes only go to a per-turn
     git worktree**, cut on the first write, and its diff becomes a
     review-gated `fileDiff` proposal. The checkout is never written in place.
     Without a bound checkout a turn gets no file tools.
-  - `run_command` is off unless `HIVE_BUILTIN_RUN_COMMAND=1`, and even then
+  - `run_command` is off unless `LIGUS_BUILTIN_RUN_COMMAND=1`, and even then
     it runs only inside the turn's worktree.
   - **Exfiltration guard.** Once a turn has read project files, MCP calls are
-    refused for the rest of the turn. Only `HIVE_MCP_AFTER_READS=1` turns
+    refused for the rest of the turn. Only `LIGUS_MCP_AFTER_READS=1` turns
     this off. MCP results are labelled as untrusted data.
   - **Role gate.** Tools of either kind run only when the triggering
-    message's author has at least `HIVE_MCP_MIN_ROLE` (default Contributor).
-  - Optional: `HIVE_SERVE_APPLY_ON_APPROVE=1` applies an approved diff to the
+    message's author has at least `LIGUS_MCP_MIN_ROLE` (default Contributor).
+  - Optional: `LIGUS_SERVE_APPLY_ON_APPROVE=1` applies an approved diff to the
     chat's branch (`hive/chat/<id>`) in the bound checkout, the way the
     desktop's Implement does. Only a proposal whose status is `approved`
     applies: one a qualifying reviewer rejected, or that was dismissed or
@@ -393,7 +393,7 @@ hive remote disable | reset   # reset = new host keys: every phone re-pairs
     Without one the turn fails instead of writing in place.
 - **Notifications carry no content.** An ntfy push says who replied in which
   chat, or that a change is ready for review, plus the deep link. It never
-  includes message bodies, diffs or secrets. `HIVE_NTFY_TOKEN` (optional) is
+  includes message bodies, diffs or secrets. `LIGUS_NTFY_TOKEN` (optional) is
   sent as a bearer token.
 - **Secrets on the box** sit in the systemd `EnvironmentFile` (0600) and
   `config.toml`. Nothing is committed, and the pairing link is printed only on
@@ -401,12 +401,12 @@ hive remote disable | reset   # reset = new host keys: every phone re-pairs
 
 ## Limits
 
-- Single user, single workspace per `hive serve` process, and one phone per
+- Single user, single workspace per `ligus serve` process, and one phone per
   token (the token isn't per-device). Phones paired over the relay are
   per-device and can be revoked one by one.
-- **Your own device.** With `HIVE_SERVE_OWNER` set, the box asks to become one
+- **Your own device.** With `LIGUS_SERVE_OWNER` set, the box asks to become one
   of the owner's devices: it prints an enrollment code (`hivedev1:…`, also
-  `hive serve enroll`), and the owner approves it on their desktop (Settings >
+  `ligus serve enroll`), and the owner approves it on their desktop (Settings >
   Account > My devices > Add a device), checking the fingerprint. The desktop
   signs a certificate for the box's device key with the owner's account key,
   which never leaves the desktop. From then on the box authors everything as the
@@ -417,13 +417,13 @@ hive remote disable | reset   # reset = new host keys: every phone re-pairs
   impersonation. Approving also removes the box's separate member (if it had
   one); its past messages show on the desktop as "<owner> via <box>".
   Revoking it (My devices > Revoke) stops every updated desktop accepting its
-  events and makes the box read-only (`revoked`); `hive serve enroll
+  events and makes the box read-only (`revoked`); `ligus serve enroll
   --new-device` makes a new device key to approve again. No new event type:
   older desktops accept the enrolled box's events as the owner's too, but only
   updated desktops keep honoring a revocation after the sync batch it arrived in.
-- Before enrollment (no `HIVE_SERVE_OWNER`, or not approved yet) the box is a
+- Before enrollment (no `LIGUS_SERVE_OWNER`, or not approved yet) the box is a
   separate member identity: the desktop shows the phone's messages under
-  `HIVE_SERVE_NAME`. A box that is already a member with `HIVE_SERVE_OWNER` set
+  `LIGUS_SERVE_NAME`. A box that is already a member with `LIGUS_SERVE_OWNER` set
   (and an Admin) keeps the earlier stopgap meanwhile: desktops count it as one
   of the owner's devices for dispatch only. A box that isn't a member waits
   read-only (`pending`) instead of joining as one.
@@ -451,7 +451,7 @@ hive remote disable | reset   # reset = new host keys: every phone re-pairs
   restarts before the revision arrives, the new version isn't linked to the
   old one (both stay listed).
 - Approving doesn't apply a diff by default; the desktop's Implement does that.
-  Set `HIVE_SERVE_APPLY_ON_APPROVE=1` to apply on the home host.
+  Set `LIGUS_SERVE_APPLY_ON_APPROVE=1` to apply on the home host.
 
 ## Running and testing
 
@@ -459,14 +459,14 @@ hive remote disable | reset   # reset = new host keys: every phone re-pairs
 hive serve --listen 100.x.y.z:8787 --label sff --pair
 hive pair                                     # show the pairing QR code again
 cargo test -p hive-cli                        # unit + integration (test relay, fake model, fake ntfy)
-HIVE_TUNNEL_INTEROP_RELAY=http://127.0.0.1:8443 \
-  cargo test -p hive-cli interop_against_a_real_relay   # tunnel against a relay run with HIVE_RELAY_TUNNEL=open
-HIVE_SERVE_LIVE_ENDPOINT=http://<gateway>:8080/v1/chat/completions \
-HIVE_SERVE_LIVE_MODELS=gpt-oss:20b,gemma4:12b \
+LIGUS_TUNNEL_INTEROP_RELAY=http://127.0.0.1:8443 \
+  cargo test -p hive-cli interop_against_a_real_relay   # tunnel against a relay run with LIGUS_RELAY_TUNNEL=open
+LIGUS_SERVE_LIVE_ENDPOINT=http://<gateway>:8080/v1/chat/completions \
+LIGUS_SERVE_LIVE_MODELS=gpt-oss:20b,gemma4:12b \
   cargo test -p hive-cli serve::tests::live -- --nocapture
 ```
 
-The integration tests start a real `hive serve` against the in-process test
+The integration tests start a real `ligus serve` against the in-process test
 relay (`crates/hive-runtime/src/test_relay.rs`), with a desktop identity that
 owns the workspace. They cover auth (401s), host assignment, a phone message
 that reaches a hosted agent, the streamed `message.delta` and `message.done`,

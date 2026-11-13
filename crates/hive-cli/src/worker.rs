@@ -377,7 +377,7 @@ async fn run_turn(
     let mut turns = turns_for(&through_trigger(&s, pm.message_id), Some(agent.id), &agent.name);
     crate::materialize_turns(ctx.cfg, &mut turns).await;
     let system = format!(
-        "You are @{}, an agent in a Hive workspace chat. Reply to the latest message concisely and helpfully.\n\n{}\n\n{}",
+        "You are @{}, an agent in a Ligus workspace chat. Reply to the latest message concisely and helpfully.\n\n{}\n\n{}",
         agent.name,
         hive_runtime::prompt::runtime_identity_block(&rt, &format!("worker {}", ctx.host_label)),
         // Which checkout (and branch) this turn's files come from, re-read

@@ -12,7 +12,7 @@ kind = "local"
 
 [transport.relay]
 endpoint = "wss://relay.hive.example/v1"
-account_token_env = "HIVE_RELAY_TOKEN"
+account_token_env = "LIGUS_RELAY_TOKEN"
 
 [sync]
 enabled = true
@@ -66,7 +66,7 @@ provider = "hive-daemon"
 endpoint = "https://home-lab.your-tailnet.ts.net:9443"
 network = "tailnet"
 device_id = "runtime-home-lab"
-auth_token_env = "HIVE_DAEMON_TOKEN"
+auth_token_env = "LIGUS_DAEMON_TOKEN"
 models = ["deepseek-coder", "llama3.3-70b"]
 supports_embeddings = true
 supports_tools = true

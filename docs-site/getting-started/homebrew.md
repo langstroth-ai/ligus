@@ -39,7 +39,7 @@ The headless client + agent daemon ships as its own formula (works on macOS
 **and** Linux, Apple Silicon and x86_64):
 
 ```sh
-brew install ligus-ai/ligus/ligus   # installs `ligus`, plus a `hive` alias through v2.1
+brew install ligus-ai/ligus/ligus   # installs `ligus`
 brew upgrade ligus                  # track releases
 ```
 

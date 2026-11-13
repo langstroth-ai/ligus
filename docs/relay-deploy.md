@@ -14,12 +14,12 @@ Quick start:
 
 ```bash
 docker build -t hive-relay https://github.com/honeyhive-ai/relay.git
-docker run -d -p 8443:8443 -v hive-data:/data -e HIVE_RELAY_DATA_DIR=/data hive-relay
+docker run -d -p 8443:8443 -v hive-data:/data -e LIGUS_RELAY_DATA_DIR=/data hive-relay
 curl http://localhost:8443/v1/health   # → ok
 ```
 
 Then point each device at the resulting HTTPS URL (Settings → **Multiuser sync**,
-or `HIVE_RELAY_URL`). Always set a shared `HIVE_WORKSPACE_KEY` so traffic is
+or `LIGUS_RELAY_URL`). Always set a shared `LIGUS_WORKSPACE_KEY` so traffic is
 end-to-end encrypted (the relay only ever sees ciphertext).
 
 > This monorepo keeps a Rust reference relay (`crates/hive-relay`) used only as an

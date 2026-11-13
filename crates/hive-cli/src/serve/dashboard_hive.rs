@@ -1,6 +1,6 @@
 //! The `hive` dashboard source: named metrics about the workspace this host
 //! serves (agents, proposals, workflow runs, turns, this host's own status),
-//! and the built-in "Hive" section made of them.
+//! and the built-in "Ligus" section made of them.
 //!
 //! A [`HiveSnapshot`] is computed from the event log's folded state once per
 //! evaluation (the serve side caches it for a few seconds) and answers every
@@ -435,9 +435,9 @@ impl HiveSnapshot {
             }
             "host.status" => {
                 let mut rows = vec![if self.host.serving {
-                    MetricRow::status("Hive serve", true, "Online")
+                    MetricRow::status("Ligus serve", true, "Online")
                 } else {
-                    MetricRow::status("Hive serve", false, "Not running here")
+                    MetricRow::status("Ligus serve", false, "Not running here")
                 }];
                 if self.host.relay_configured {
                     rows.push(self.sync_row());
@@ -535,7 +535,7 @@ pub enum MetricValue {
 
 /// Panel ids of the built-in section start with this.
 pub const BUILTIN_ID_PREFIX: &str = "hive-";
-pub const BUILTIN_TITLE: &str = "Hive";
+pub const BUILTIN_TITLE: &str = "Ligus";
 
 fn hive_panel(id: &str, title: &str, kind: Kind, metric: &str) -> PanelConfig {
     PanelConfig {
@@ -861,7 +861,7 @@ pub(crate) mod tests {
         let quiet = snapshot_of(&f, HostState { serving: true, ..HostState::default() });
         let r = rows(&quiet, "host.status");
         let labels: Vec<&str> = r.iter().map(|r| r.label.as_str()).collect();
-        assert_eq!(labels, ["Hive serve", "Push"], "no relay, no remote access: no rows for them");
+        assert_eq!(labels, ["Ligus serve", "Push"], "no relay, no remote access: no rows for them");
         assert_eq!(r[1].text.as_deref(), Some("Off"));
         assert!(quiet.metric("sync.age").is_err());
         assert_eq!(quiet.metric("sync.last").unwrap(), MetricValue::Text("No relay configured".into()));
@@ -883,7 +883,7 @@ pub(crate) mod tests {
         assert_eq!(
             shown,
             [
-                ("Hive serve", Some(true), Some("Online")),
+                ("Ligus serve", Some(true), Some("Online")),
                 ("Relay sync", Some(true), Some("Synced 4 s ago")),
                 ("Remote access", Some(true), Some("Connected")),
                 ("Push", Some(true), Some("On, 1 phone")),

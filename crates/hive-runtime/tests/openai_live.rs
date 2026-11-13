@@ -1,15 +1,15 @@
 //! Live smoke test against a real OpenAI-compatible server (a llama.cpp
 //! gateway, `llama-server`, LM Studio, …). Skipped unless
-//! `HIVE_OPENAI_LIVE_ENDPOINT` is set, so CI never touches the network:
+//! `LIGUS_OPENAI_LIVE_ENDPOINT` is set, so CI never touches the network:
 //!
 //! ```text
-//! HIVE_OPENAI_LIVE_ENDPOINT=http://host:8080/v1/chat/completions HIVE_OPENAI_LIVE_MODEL=gemma4:12b \
+//! LIGUS_OPENAI_LIVE_ENDPOINT=http://host:8080/v1/chat/completions LIGUS_OPENAI_LIVE_MODEL=gemma4:12b \
 //!   cargo test -p hive-runtime --test openai_live -- --nocapture
 //! ```
 //!
 //! The endpoint may be the full chat-completions URL or the server root
-//! (`/v1/chat/completions` is appended). `HIVE_OPENAI_LIVE_API_KEY` is sent as
-//! a bearer token when set. `HIVE_OPENAI_LIVE_PROPS_ENDPOINT` points the
+//! (`/v1/chat/completions` is appended). `LIGUS_OPENAI_LIVE_API_KEY` is sent as
+//! a bearer token when set. `LIGUS_OPENAI_LIVE_PROPS_ENDPOINT` points the
 //! `/props` probe at a `llama-server` that has the route (a gateway may not).
 
 use hive_runtime::provider::openai::{cached_context_window, OpenAiClient};
@@ -26,7 +26,7 @@ struct Live {
 }
 
 fn live() -> Option<Live> {
-    let raw = std::env::var("HIVE_OPENAI_LIVE_ENDPOINT").ok()?;
+    let raw = std::env::var("LIGUS_OPENAI_LIVE_ENDPOINT").ok()?;
     let raw = raw.trim().trim_end_matches('/');
     let endpoint = if raw.ends_with("/chat/completions") {
         raw.to_string()
@@ -35,8 +35,8 @@ fn live() -> Option<Live> {
     } else {
         format!("{raw}/v1/chat/completions")
     };
-    let model = std::env::var("HIVE_OPENAI_LIVE_MODEL").unwrap_or_else(|_| "gemma4:12b".into());
-    let api_key = std::env::var("HIVE_OPENAI_LIVE_API_KEY").ok().filter(|k| !k.is_empty());
+    let model = std::env::var("LIGUS_OPENAI_LIVE_MODEL").unwrap_or_else(|_| "gemma4:12b".into());
+    let api_key = std::env::var("LIGUS_OPENAI_LIVE_API_KEY").ok().filter(|k| !k.is_empty());
     Some(Live { endpoint, model, api_key })
 }
 
@@ -70,7 +70,7 @@ fn secret_tool() -> Vec<Value> {
 #[tokio::test]
 async fn plain_chat_streams() {
     let Some(l) = live() else {
-        eprintln!("HIVE_OPENAI_LIVE_ENDPOINT unset; skipping live OpenAI-wire test");
+        eprintln!("LIGUS_OPENAI_LIVE_ENDPOINT unset; skipping live OpenAI-wire test");
         return;
     };
     let client = OpenAiClient::new(&l.endpoint).with_provider_label("endpoint").with_idle_timeout(Duration::from_secs(120));
@@ -95,7 +95,7 @@ async fn plain_chat_streams() {
 #[tokio::test]
 async fn one_tool_round_trip() {
     let Some(l) = live() else {
-        eprintln!("HIVE_OPENAI_LIVE_ENDPOINT unset; skipping live OpenAI-wire test");
+        eprintln!("LIGUS_OPENAI_LIVE_ENDPOINT unset; skipping live OpenAI-wire test");
         return;
     };
     let client = OpenAiClient::new(&l.endpoint).with_provider_label("endpoint").with_idle_timeout(Duration::from_secs(180));
@@ -149,7 +149,7 @@ async fn one_tool_round_trip() {
 #[tokio::test]
 async fn props_probe_is_quiet_or_reports_a_window() {
     let Some(l) = live() else {
-        eprintln!("HIVE_OPENAI_LIVE_ENDPOINT unset; skipping live OpenAI-wire test");
+        eprintln!("LIGUS_OPENAI_LIVE_ENDPOINT unset; skipping live OpenAI-wire test");
         return;
     };
     // The gateway itself: a window, or quietly nothing (no /props route).
@@ -159,7 +159,7 @@ async fn props_probe_is_quiet_or_reports_a_window() {
     assert!(start.elapsed() < Duration::from_secs(10), "a probe never holds up a turn for long");
     assert_eq!(cached_context_window(&l.endpoint, &l.model), n);
 
-    if let Ok(direct) = std::env::var("HIVE_OPENAI_LIVE_PROPS_ENDPOINT") {
+    if let Ok(direct) = std::env::var("LIGUS_OPENAI_LIVE_PROPS_ENDPOINT") {
         let n = OpenAiClient::new(direct.trim()).probe_context_window(None, &l.model).await;
         eprintln!("llama-server /props at {direct}: n_ctx={n:?}");
         assert!(n.is_some_and(|n| n >= 1024), "a llama-server reports its per-slot window");
@@ -247,7 +247,7 @@ fn digits(s: &str) -> String {
 /// Reasoning echo, A/B: the same dependent ~8-call task with each round's
 /// reasoning echoed back on its assistant message (`reasoning_content`, the
 /// default) and without. Scores are printed, not asserted. Runs per arm:
-/// `HIVE_OPENAI_LIVE_ECHO_RUNS` (default 3). Meant for a model that reasons
+/// `LIGUS_OPENAI_LIVE_ECHO_RUNS` (default 3). Meant for a model that reasons
 /// in a separate field (gpt-oss); for one that doesn't, there's nothing to
 /// echo and the arms match.
 ///
@@ -267,10 +267,10 @@ fn digits(s: &str) -> String {
 #[tokio::test]
 async fn reasoning_echo_ab_on_a_multi_step_task() {
     let Some(l) = live() else {
-        eprintln!("HIVE_OPENAI_LIVE_ENDPOINT unset; skipping live OpenAI-wire test");
+        eprintln!("LIGUS_OPENAI_LIVE_ENDPOINT unset; skipping live OpenAI-wire test");
         return;
     };
-    let runs: u64 = std::env::var("HIVE_OPENAI_LIVE_ECHO_RUNS").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
+    let runs: u64 = std::env::var("LIGUS_OPENAI_LIVE_ECHO_RUNS").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
     let mut extra = serde_json::Map::new();
     if l.model.contains("gpt-oss") {
         extra.insert("reasoning_effort".into(), json!("low"));

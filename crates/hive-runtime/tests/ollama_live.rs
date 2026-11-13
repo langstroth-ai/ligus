@@ -1,8 +1,8 @@
 //! Live smoke test against a real Ollama server. Skipped unless
-//! `HIVE_OLLAMA_LIVE_ENDPOINT` is set, so CI never touches the network:
+//! `LIGUS_OLLAMA_LIVE_ENDPOINT` is set, so CI never touches the network:
 //!
 //! ```text
-//! HIVE_OLLAMA_LIVE_ENDPOINT=http://host:11434 HIVE_OLLAMA_LIVE_MODEL=qwen3.5:latest \
+//! LIGUS_OLLAMA_LIVE_ENDPOINT=http://host:11434 LIGUS_OLLAMA_LIVE_MODEL=qwen3.5:latest \
 //!   cargo test -p hive-runtime --test ollama_live -- --nocapture
 //! ```
 
@@ -14,8 +14,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 fn live() -> Option<(String, String)> {
-    let endpoint = std::env::var("HIVE_OLLAMA_LIVE_ENDPOINT").ok()?;
-    let model = std::env::var("HIVE_OLLAMA_LIVE_MODEL").unwrap_or_else(|_| "qwen3.5:latest".into());
+    let endpoint = std::env::var("LIGUS_OLLAMA_LIVE_ENDPOINT").ok()?;
+    let model = std::env::var("LIGUS_OLLAMA_LIVE_MODEL").unwrap_or_else(|_| "qwen3.5:latest".into());
     Some((endpoint, model))
 }
 
@@ -36,7 +36,7 @@ async fn loaded_context_length(client: &OllamaClient, model: &str) -> Option<u64
 #[tokio::test]
 async fn lists_installed_models() {
     let Some((endpoint, model)) = live() else {
-        eprintln!("HIVE_OLLAMA_LIVE_ENDPOINT unset; skipping live Ollama test");
+        eprintln!("LIGUS_OLLAMA_LIVE_ENDPOINT unset; skipping live Ollama test");
         return;
     };
     let client = OllamaClient::new(&endpoint).with_idle_timeout(Duration::from_secs(60));
@@ -52,7 +52,7 @@ async fn lists_installed_models() {
 #[tokio::test]
 async fn probe_then_chat_with_and_without_thinking() {
     let Some((endpoint, model)) = live() else {
-        eprintln!("HIVE_OLLAMA_LIVE_ENDPOINT unset; skipping live Ollama test");
+        eprintln!("LIGUS_OLLAMA_LIVE_ENDPOINT unset; skipping live Ollama test");
         return;
     };
     let client = OllamaClient::new(&endpoint).with_idle_timeout(Duration::from_secs(120));
@@ -115,7 +115,7 @@ async fn probe_then_chat_with_and_without_thinking() {
 /// writes to the server, so it has its own gate on top of the endpoint:
 ///
 /// ```text
-/// HIVE_OLLAMA_LIVE_ENDPOINT=http://host:11434 HIVE_OLLAMA_LIVE_PULL_MODEL=all-minilm:22m \
+/// LIGUS_OLLAMA_LIVE_ENDPOINT=http://host:11434 LIGUS_OLLAMA_LIVE_PULL_MODEL=all-minilm:22m \
 ///   cargo test -p hive-runtime --test ollama_live pull_update_and_remove -- --nocapture
 /// ```
 ///
@@ -124,11 +124,11 @@ async fn probe_then_chat_with_and_without_thinking() {
 #[tokio::test]
 async fn pull_update_and_remove_a_small_model() {
     let Some((endpoint, _)) = live() else {
-        eprintln!("HIVE_OLLAMA_LIVE_ENDPOINT unset; skipping live Ollama test");
+        eprintln!("LIGUS_OLLAMA_LIVE_ENDPOINT unset; skipping live Ollama test");
         return;
     };
-    let Ok(model) = std::env::var("HIVE_OLLAMA_LIVE_PULL_MODEL") else {
-        eprintln!("HIVE_OLLAMA_LIVE_PULL_MODEL unset; skipping live pull test");
+    let Ok(model) = std::env::var("LIGUS_OLLAMA_LIVE_PULL_MODEL") else {
+        eprintln!("LIGUS_OLLAMA_LIVE_PULL_MODEL unset; skipping live pull test");
         return;
     };
     let client = OllamaClient::new(&endpoint).with_idle_timeout(Duration::from_secs(60));
@@ -210,7 +210,7 @@ impl ToolExecutor for Weather {
 #[tokio::test]
 async fn tool_call_round_trip_with_the_live_model() {
     let Some((endpoint, model)) = live() else {
-        eprintln!("HIVE_OLLAMA_LIVE_ENDPOINT unset; skipping live Ollama test");
+        eprintln!("LIGUS_OLLAMA_LIVE_ENDPOINT unset; skipping live Ollama test");
         return;
     };
     let client = OllamaClient::new(&endpoint).with_idle_timeout(Duration::from_secs(120));

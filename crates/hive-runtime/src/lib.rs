@@ -80,7 +80,7 @@ use hive_proto::AppInfo;
 /// Assemble the [`AppInfo`] payload returned by the `get_app_info` IPC command.
 pub fn app_info() -> AppInfo {
     AppInfo {
-        name: "Hive".to_string(),
+        name: "Ligus".to_string(),
         core_version: hive_core::VERSION.to_string(),
         build_profile: if cfg!(debug_assertions) { "debug" } else { "release" }.to_string(),
     }
@@ -93,7 +93,7 @@ mod tests {
     #[test]
     fn app_info_reports_core_version() {
         let info = app_info();
-        assert_eq!(info.name, "Hive");
+        assert_eq!(info.name, "Ligus");
         assert_eq!(info.core_version, hive_core::VERSION);
     }
 }

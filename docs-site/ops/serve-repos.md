@@ -1,15 +1,15 @@
 # Repos on the home host
 
-The agents on your `hive serve` box work on git checkouts on that box. From
+The agents on your `ligus serve` box work on git checkouts on that box. From
 the [phone](../features/phone-app.md) you can pick which repository a chat
 works in, clone a new one from GitHub, pull the latest, and open a pull
 request, all without leaving the chat.
 
 ## Where checkouts live
 
-Checkouts live under `HIVE_REPOS_DIR` (default `<HIVE_DATA_DIR>/repos`). The
+Checkouts live under `LIGUS_REPOS_DIR` (default `<LIGUS_DATA_DIR>/repos`). The
 workspace has a default checkout, and any chat can override it. Both are kept
-in `<HIVE_DATA_DIR>/repo-bindings.toml` on the box and are never synced:
+in `<LIGUS_DATA_DIR>/repo-bindings.toml` on the box and are never synced:
 
 ```toml
 workspace = "sandbox"
@@ -18,13 +18,13 @@ workspace = "sandbox"
 ```
 
 You can set the default from the box's shell with
-`hive bind-repo <name>`. A repo cloned from the phone is named
+`ligus bind-repo <name>`. A repo cloned from the phone is named
 `<owner>__<name>`.
 
 ## Sign the box in to GitHub (once)
 
 Listing your GitHub repos, cloning private ones, and opening pull requests use
-the box's own GitHub CLI login. Hive never stores a GitHub token. On the box:
+the box's own GitHub CLI login. Ligus never stores a GitHub token. On the box:
 
 ```sh
 gh auth login -h github.com -p https -s repo,read:org --web
@@ -40,7 +40,7 @@ host**, still lists the box's checkouts, and can still clone public repos.
 Tap the repo chip in a chat's header (or its details sheet) to see the bound
 repo and branch, then:
 
-- **Switch** the chat to another checkout. The chat stays the same. Hive posts
+- **Switch** the chat to another checkout. The chat stays the same. Ligus posts
   a note in the chat, and the agent's next turn is told which repository and
   branch it's working in.
 - **Clone** a GitHub repo. The clone runs on the box with progress, and once
@@ -78,7 +78,7 @@ fork layout for you:
   remote points at the parent project is refused.
 
 The phone shows a fork as "fork of org/project · PRs open upstream". On the
-box, `hive repos` lists each fork checkout and whether its `upstream` push is
+box, `ligus repos` lists each fork checkout and whether its `upstream` push is
 disabled.
 
 To set up an existing checkout by hand:
@@ -94,12 +94,12 @@ git branch -u upstream/master master
 
 Every chat has its own branch, `hive/chat/<chat-id>`, in each repo it works
 in. An agent's edits come back as a proposal. When you approve it, the box
-commits it to that branch, as long as `HIVE_SERVE_APPLY_ON_APPROVE=1` is set
-(see [Running hive serve as your own device](serve-box.md)). Because the
+commits it to that branch, as long as `LIGUS_SERVE_APPLY_ON_APPROVE=1` is set
+(see [Running ligus serve as your own device](serve-box.md)). Because the
 branch is per repo, moving a chat to another repo and back resumes where it
 left off.
 
-Pull requests are opened from that branch. Hive never force-pushes. If the
+Pull requests are opened from that branch. Ligus never force-pushes. If the
 remote branch has moved, the push is refused and the phone says so.
 
 ## Limits and safety
@@ -107,11 +107,11 @@ remote branch has moved, the push is refused and the phone says so.
 - Only `github.com` repositories, given as `owner/name` or
   `https://github.com/owner/name`, can be cloned. Other hosts, paths and URL
   forms are refused.
-- A clone stops after `HIVE_REPOS_CLONE_TIMEOUT_SECS` (default 900) or once
-  it passes `HIVE_REPOS_MAX_CLONE_MB` (default 2048), and leaves nothing
+- A clone stops after `LIGUS_REPOS_CLONE_TIMEOUT_SECS` (default 900) or once
+  it passes `LIGUS_REPOS_MAX_CLONE_MB` (default 2048), and leaves nothing
   behind. Two clones can run at a time.
 - Changing repos needs the phone's pairing, a box that can write, and at
   least the Contributor role in the workspace.
 - The phone never sees paths on the box, only checkout names.
 
-The API is documented in `docs/ios-app.md` in the Hive repository.
+The API is documented in `docs/ios-app.md` in the Ligus repository.

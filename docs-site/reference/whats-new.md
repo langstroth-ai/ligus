@@ -1,7 +1,7 @@
 # What's new
 
 **Hive is now Ligus (v2.0.0).** Ligus is short for *ligustica*, the Italian
-honeybee. Entries for 1.19 and earlier keep the name Hive.
+honeybee. Entries for 1.18 and earlier keep the name Hive.
 
 Changes since 1.15, newest first, with links to where each is documented.
 Full release notes are on the
@@ -9,41 +9,33 @@ Full release notes are on the
 
 ## 2.0
 
-- **Hive is now Ligus.** The code, protocol and your data are unchanged:
+- **Hive is now Ligus.** Ligus is short for *ligustica* (*Apis mellifera
+  ligustica*, the Italian honeybee). The protocol and your data are unchanged:
   workspaces, devices, relays and paired phones keep working, and the default
   agent is still `@hive`.
-- **Desktop data moves over on first launch.** The app's identifier is now
-  `ai.ligus.desktop`. On first launch Ligus copies your data from the
-  `com.hive.desktop` folder into its new folder and leaves the old one
-  untouched; your device identity and keys come along, so nothing needs
-  re-pairing. Theme and pane layout reset once, and macOS asks again for
-  folder and notification access. An auto-updated app may still be at
-  `/Applications/Hive.app`; you can rename it to `Ligus.app`.
-- **`ligus` command.** The CLI is now `ligus`. The `hive` command still works
-  through v2.1 and prints a one-line reminder on stderr. Homebrew: formula
-  `ligus`, cask `ligus-app`, tap `ligus-ai/ligus`; existing `hive-cli` and
-  `hive` installs upgrade to them.
-- **`LIGUS_*` settings.** Environment variables are now `LIGUS_*`. The
-  `HIVE_*` names still work (each prints a one-time note) and lose to the
-  `LIGUS_*` name when both are set.
-- **New file names.** New workspace state goes in `.ligus/` and new config in
-  `ligus.config.toml`; the CLI's default data dir is `~/.ligus`. Existing
-  `.hive/`, `hive.config.toml` and `~/.hive` are still read and never moved.
-  See [Configuration](config-toml.md).
-- **New addresses.** The project lives at github.com/ligus-ai/ligus and the
-  docs at docs.ligus.ai. Old links redirect. Protocol identifiers that contain
-  `hive` keep their names; see [Wire protocols](wire-protocols.md#legacy-protocol-identifiers).
+- **v2.0 removes the old names; data moves over automatically.** The CLI is
+  `ligus` only (no `hive` command), settings are `LIGUS_*` only, the config
+  file is `ligus.config.toml` and workspace state lives in `.ligus/`. Existing
+  data is migrated once, the first time it is used:
 
-## 1.19
+    - the desktop copies its `com.hive.desktop` data folder into
+      `ai.ligus.desktop` and leaves the old one untouched; your device identity
+      and keys come along, so nothing needs re-pairing;
+    - a workspace's `.hive/` becomes `.ligus/` (per-chat git worktrees are
+      re-registered with `git worktree repair`), and `hive.config.toml` becomes
+      `ligus.config.toml`;
+    - the CLI's `~/.hive` becomes `~/.ligus`.
 
-- **Hive is becoming Ligus.** The next major release, 2.0, renames Hive to
-  **Ligus**, short for *ligustica* (*Apis mellifera ligustica*, the Italian
-  honeybee). 1.19 is the bridge: it already accepts `LIGUS_*` environment
-  variables (ahead of the `HIVE_*` names), reads `.ligus/` and
-  `ligus.config.toml` alongside `.hive/` and `hive.config.toml`, accepts
-  `ligus://` phone links, and checks for updates at both the new and the
-  original GitHub address. Nothing to change on your side yet.
-- **Repos from the phone.** `hive serve` lists the host's checkouts and your
+    Environment variables can't be migrated for you: rename `HIVE_*` to
+    `LIGUS_*` in your shell profile, env files and CI. A `HIVE_*` variable that
+    is still set is ignored, with a one-time warning naming the new spelling.
+    See [Configuration](config-toml.md).
+- **Desktop.** The app is `Ligus.app`. Theme and pane layout reset once, and
+  macOS asks again for folder and notification access. An auto-updated app
+  may still be at `/Applications/Hive.app`; you can rename it to `Ligus.app`.
+- **Homebrew.** Formula `ligus`, cask `ligus-app`, tap `ligus-ai/ligus`;
+  existing `hive-cli` and `hive` installs upgrade to them.
+- **Repos from the phone.** `ligus serve` lists the host's checkouts and your
   GitHub repos, clones on demand, switches a chat's repo, pulls, and opens a
   pull request from the chat branch. See
   [Repos on the home host](../ops/serve-repos.md).
@@ -51,12 +43,15 @@ Full release notes are on the
   branches start from upstream's default branch, pulls come from upstream,
   and PRs are pushed to your fork under a readable branch and opened upstream
   as drafts. Pushes that would land on upstream are refused.
-- **Whole files for rendered diffs.** `GET /v1/proposals/{id}/file` returns
-  one file of a proposal whole (old or new side), so the phone app can render
-  Markdown changes instead of showing raw diff lines.
+- **Rendered Markdown diffs.** `GET /v1/proposals/{id}/file` returns one file
+  of a proposal whole (old or new side), so the phone app can render Markdown
+  changes instead of showing raw diff lines.
 - **Kubernetes design and a container image.** A design for running the relay,
-  `hive serve` and sandboxed turn executors on Kubernetes, and a Dockerfile for
-  the `hive` binary (`deploy/container`).
+  `ligus serve` and sandboxed turn executors on Kubernetes, and a Dockerfile
+  for the `ligus` binary (`deploy/container`).
+- **New addresses.** The project lives at github.com/ligus-ai/ligus and the
+  docs at docs.ligus.ai. Old links redirect. Protocol identifiers that contain
+  `hive` keep their names; see [Wire protocols](wire-protocols.md#legacy-protocol-identifiers).
 
 ## 1.18
 

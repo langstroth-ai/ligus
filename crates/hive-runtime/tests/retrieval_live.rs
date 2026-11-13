@@ -1,11 +1,11 @@
 //! Live vault-retrieval check against a real OpenAI-compatible embedder and
 //! reranker (e.g. a llama.cpp gateway). Skipped unless
-//! `HIVE_RETRIEVAL_LIVE_URL` is set, so CI never touches the network:
+//! `LIGUS_RETRIEVAL_LIVE_URL` is set, so CI never touches the network:
 //!
 //! ```text
-//! HIVE_RETRIEVAL_LIVE_URL=http://host:8080/v1 \
-//! HIVE_RETRIEVAL_LIVE_EMBED_MODEL=embeddinggemma-300m \
-//! HIVE_RETRIEVAL_LIVE_RERANK_MODEL=bge-reranker-v2-m3 \
+//! LIGUS_RETRIEVAL_LIVE_URL=http://host:8080/v1 \
+//! LIGUS_RETRIEVAL_LIVE_EMBED_MODEL=embeddinggemma-300m \
+//! LIGUS_RETRIEVAL_LIVE_RERANK_MODEL=bge-reranker-v2-m3 \
 //!   cargo test -p hive-runtime --test retrieval_live -- --nocapture
 //! ```
 
@@ -13,9 +13,9 @@ use hive_runtime::retrieval::{RetrievalConfig, Retriever};
 use std::time::Instant;
 
 fn live() -> Option<RetrievalConfig> {
-    let url = std::env::var("HIVE_RETRIEVAL_LIVE_URL").ok()?;
-    let embed = std::env::var("HIVE_RETRIEVAL_LIVE_EMBED_MODEL").unwrap_or_else(|_| "embeddinggemma-300m".into());
-    let rerank = std::env::var("HIVE_RETRIEVAL_LIVE_RERANK_MODEL").unwrap_or_else(|_| "bge-reranker-v2-m3".into());
+    let url = std::env::var("LIGUS_RETRIEVAL_LIVE_URL").ok()?;
+    let embed = std::env::var("LIGUS_RETRIEVAL_LIVE_EMBED_MODEL").unwrap_or_else(|_| "embeddinggemma-300m".into());
+    let rerank = std::env::var("LIGUS_RETRIEVAL_LIVE_RERANK_MODEL").unwrap_or_else(|_| "bge-reranker-v2-m3".into());
     Some(RetrievalConfig {
         embed_url: url.clone(),
         embed_model: embed,
@@ -56,7 +56,7 @@ fn corpus() -> Vec<(String, String)> {
 #[tokio::test]
 async fn right_passage_ranks_first() {
     let Some(cfg) = live() else {
-        eprintln!("HIVE_RETRIEVAL_LIVE_URL unset; skipping live retrieval test");
+        eprintln!("LIGUS_RETRIEVAL_LIVE_URL unset; skipping live retrieval test");
         return;
     };
     let r = Retriever::new();

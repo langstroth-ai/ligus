@@ -6,12 +6,12 @@ back to it through the encoder, so hand-edited and GUI-edited files
 round-trip cleanly.
 
 > **Former names.** A workspace set up before v2.0 may have `hive.config.toml`
-> and a `.hive/` state directory. Both are still read: `ligus.config.toml` wins
-> when both config files exist (with a warning), settings are saved back to
-> whichever file was read, and state files are read from `.ligus/` first, then
-> `.hive/`. Existing per-chat git worktrees under `.hive/worktrees/` stay where
-> git recorded them; new ones go under `.ligus/`. Agents can't write to either
-> directory or either config file.
+> and a `.hive/` state directory. They are renamed the first time Ligus opens
+> the workspace: `hive.config.toml` becomes `ligus.config.toml` (if both exist,
+> `hive.config.toml` is left alone and ignored, with a warning), and `.hive/`
+> becomes `.ligus/`, with per-chat git worktrees re-registered through
+> `git worktree repair`. Agents can't write to either directory or either
+> config file.
 
 > **Note:** the encoder doesn't preserve comments. Hand-add commentary in a
 > sibling `README.md` if you need it documented next to the config.

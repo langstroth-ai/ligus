@@ -946,7 +946,7 @@ fn git_commit(dir: &std::path::Path, message: &str) -> Result<(), String> {
         return Err(format!("git add: {}", String::from_utf8_lossy(&add.stderr).trim()));
     }
     // A headless box may have no git identity configured; give the commit one.
-    let out = run(&["-c", "user.name=Hive", "-c", "user.email=hive@localhost", "commit", "-m", message])?;
+    let out = run(&["-c", "user.name=Ligus", "-c", "user.email=ligus@localhost", "commit", "-m", message])?;
     if !out.status.success() {
         let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
         if text.contains("nothing to commit") {

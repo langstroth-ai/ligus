@@ -1,10 +1,10 @@
 //! In-app live test: the real turn path (`send_message` → `run_turn` →
 //! `run_prepared_turn`) over a real `AppState`, with no window. See
 //! `app/src/e2e.rs` for the scenarios and environment. Skipped unless built
-//! with `--features e2e` and `HIVE_APP_LIVE_ENDPOINT` is set:
+//! with `--features e2e` and `LIGUS_APP_LIVE_ENDPOINT` is set:
 //!
 //! ```text
-//! HIVE_APP_LIVE_ENDPOINT=http://host:8080 \
+//! LIGUS_APP_LIVE_ENDPOINT=http://host:8080 \
 //!   cargo test -p Hive --features e2e --test app_live -- --nocapture
 //! ```
 //!

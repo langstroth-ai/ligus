@@ -23,8 +23,9 @@ relay, end-to-end encrypted. Your code and keys stay on your machine.
 
 </div>
 
-> **Hive is now Ligus.** Same project, same protocol, new name. The `hive`
-> command and `HIVE_*` settings still work for now; see
+> **Hive is now Ligus**, short for *ligustica*. Same project, same protocol,
+> new name. The command is `ligus` and settings are `LIGUS_*`; existing data
+> moves over automatically. See
 > [What's new](https://docs.ligus.ai/reference/whats-new/).
 
 ---
@@ -392,12 +393,11 @@ fit together.
 - **The app is config-free to start** — onboarding sets identity, project folder,
   runtime, and relay; there are no required config files.
 - **Repo settings** live in [`ligus.config.toml`](ligus.config.toml) at the root
-  (a `hive.config.toml` from before v2.0 is still read; workspace state lives in
-  `.ligus/`, and an existing `.hive/` is still read).
+  (workspace state lives in `.ligus/`; a `hive.config.toml` or `.hive/` from
+  before v2.0 is renamed on first open).
 - **Headless clients** are entirely **environment-driven** so they drop into a
   container or secret mount — see the
-  [`ligus` CLI README](crates/hive-cli/README.md) for every `LIGUS_*` variable (the former `HIVE_*` names still work, with a
-  one-time note)
+  [`ligus` CLI README](crates/hive-cli/README.md) for every `LIGUS_*` variable
   (relay URL/token, workspace + key, provider/model, MCP config, role gate).
 - **IPC types** in [`hive-proto`](crates/hive-proto/README.md) generate the
   TypeScript bindings in `web/src/bindings/`; regenerate with

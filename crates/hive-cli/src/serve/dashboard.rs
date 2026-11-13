@@ -13,7 +13,7 @@
 //! that doesn't parse yields a dashboard with a top-level `error` (and the
 //! built-in section).
 //!
-//! Every dashboard starts with the built-in "Hive" section unless the file
+//! Every dashboard starts with the built-in "Ligus" section unless the file
 //! says `builtin = false`. With no config file, that section is the whole
 //! dashboard, plus [`default_config`]'s lab sections (the old `/v1/lab/status`
 //! content, sections that have no data dropped) when `LIGUS_PROMETHEUS_URL` is
@@ -66,7 +66,7 @@ pub struct DashboardConfig {
     /// Default per-panel timeout, e.g. "3s".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout: Option<String>,
-    /// The built-in "Hive" section: shown above the file's sections unless
+    /// The built-in "Ligus" section: shown above the file's sections unless
     /// `false`; `"bottom"` shows it below them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub builtin: Option<Builtin>,
@@ -1767,7 +1767,7 @@ pub fn default_config(temps: Vec<(String, String)>) -> DashboardConfig {
 /// The default config as TOML (a starting point for `dashboard.toml`).
 pub fn default_toml() -> Result<String> {
     Ok(format!(
-        "# The built-in \"Hive\" section shows above these sections; `builtin = false`\n\
+        "# The built-in \"Ligus\" section shows above these sections; `builtin = false`\n\
          # turns it off, `builtin = \"bottom\"` moves it below them.\n{}",
         toml::to_string(&default_config(lab::temp_queries()))?
     ))
@@ -1832,9 +1832,9 @@ pub fn cmd_check(config: &crate::Config, file: Option<String>) -> Result<()> {
         }
         Loaded::Default(c) => {
             if prometheus_url.is_some() {
-                println!("no {}: the built-in Hive section and the generated lab default (LIGUS_PROMETHEUS_URL is set):", path.display());
+                println!("no {}: the built-in Ligus section and the generated lab default (LIGUS_PROMETHEUS_URL is set):", path.display());
             } else {
-                println!("no {}: the built-in Hive section only:", path.display());
+                println!("no {}: the built-in Ligus section only:", path.display());
             }
             c.clone()
         }
@@ -1849,7 +1849,7 @@ pub fn cmd_check(config: &crate::Config, file: Option<String>) -> Result<()> {
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     let hive_src = store_hive(config);
     if hive_src.is_none() && cfg.builtin_position().is_some() {
-        println!("(no workspace in {}: the built-in Hive section is left out)", config.data_dir.display());
+        println!("(no workspace in {}: the built-in Ligus section is left out)", config.data_dir.display());
     }
     let mcp = super::dashboard_mcp_registry();
     let src = Sources {
@@ -2393,7 +2393,7 @@ mod tests {
         let mine = "title = \"Home\"\n[[section]]\ntitle = \"Power\"\n[[section.panel]]\ntitle = \"Power\"\nquery = \"power\"\n";
 
         let v = evaluate(&parse(mine).unwrap(), &src, None).await;
-        assert_eq!(titles(&v), ["Hive", "Power"], "an existing config (no builtin key) gets the Hive section on top");
+        assert_eq!(titles(&v), ["Ligus", "Power"], "an existing config (no builtin key) gets the Ligus section on top");
         assert_eq!(v["title"], "Home");
         let hive_panels = v["sections"][0]["panels"].as_array().unwrap();
         assert!(hive_panels.iter().all(|p| p.get("error").is_none()), "{v}");
@@ -2402,27 +2402,27 @@ mod tests {
         assert_eq!(panel_by_id(&v, "hive-workflows-failed")["level"], "critical");
         let host = panel_by_id(&v, "hive-host");
         assert_eq!(host["kind"], "status");
-        assert_eq!(host["rows"][0], json!({"label": "Hive serve", "up": true, "text": "Online"}));
+        assert_eq!(host["rows"][0], json!({"label": "Ligus serve", "up": true, "text": "Online"}));
         assert_eq!(host["rows"][1]["text"], "Synced 0 s ago");
 
         let bottom = evaluate(&parse(&format!("builtin = \"bottom\"\n{mine}")).unwrap(), &src, None).await;
-        assert_eq!(titles(&bottom), ["Power", "Hive"]);
+        assert_eq!(titles(&bottom), ["Power", "Ligus"]);
         let on = evaluate(&parse(&format!("builtin = true\n{mine}")).unwrap(), &src, None).await;
-        assert_eq!(titles(&on), ["Hive", "Power"]);
+        assert_eq!(titles(&on), ["Ligus", "Power"]);
         let off = evaluate(&parse(&format!("builtin = false\n{mine}")).unwrap(), &src, None).await;
         assert_eq!(titles(&off), ["Power"]);
         assert!(parse(&format!("builtin = \"middle\"\n{mine}")).is_err());
 
         // No file and no Prometheus: just the Hive section.
         let v = render(&Loaded::Default(DashboardConfig::default()), &src, None).await;
-        assert_eq!((titles(&v), v["title"].clone(), v["source"].clone()), (vec!["Hive".to_string()], json!("Dashboard"), json!("default")));
+        assert_eq!((titles(&v), v["title"].clone(), v["source"].clone()), (vec!["Ligus".to_string()], json!("Dashboard"), json!("default")));
         // A file that doesn't parse: the error, and still the Hive section.
         let v = render(&Loaded::Invalid("dashboard.toml: bad".into()), &src, None).await;
-        assert_eq!(titles(&v), ["Hive"]);
+        assert_eq!(titles(&v), ["Ligus"]);
         assert_eq!(v["error"], "dashboard.toml: bad");
         // No file, Prometheus set: Hive, then the lab sections that have data.
         let v = render(&Loaded::Default(default_config(vec![("Server".into(), "temp_a".into())])), &src, None).await;
-        assert_eq!(titles(&v), ["Hive", "Temperatures"]);
+        assert_eq!(titles(&v), ["Ligus", "Temperatures"]);
     }
 
     #[tokio::test]

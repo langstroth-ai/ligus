@@ -121,12 +121,12 @@ What it would take on the `hive serve` side:
   but never start it. The job reuses the clone-job machinery in
   `repos_api.rs` (`run_watched`, timeouts, progress events on the hub as
   `repo.prtest`, at most one at a time per host).
-- **Config**: `HIVE_PR_SANDBOX=docker|podman|off` (default off), recipes in
+- **Config**: `LIGUS_PR_SANDBOX=docker|podman|off` (default off), recipes in
   `<data dir>/pr-test-recipes.toml` (name, image by digest, command, limits,
   network: none|deps-proxy), and an allowlist of upstream repos it may run
   for.
 - **Pre-flight refusals**: Docker missing or rootful-without-gVisor when
-  `HIVE_PR_SANDBOX_REQUIRE_GVISOR=1`; the image not pinned by digest; the PR
+  `LIGUS_PR_SANDBOX_REQUIRE_GVISOR=1`; the image not pinned by digest; the PR
   not on an allowed upstream; a recipe not in the file.
 - **Result**: system note with pass/fail and a link to the full log on the
   host (`GET /v1/pr-tests/{job}/log`), plus a structured result an agent can

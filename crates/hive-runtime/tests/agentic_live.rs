@@ -2,24 +2,24 @@
 //! dispatcher (`stream_with_tools`, provider Custom → an OpenAI-compatible
 //! gateway) with the composite executor (built-in file tools + MCP tools),
 //! the same pieces a chat turn wires together. Skipped unless
-//! `HIVE_AGENTIC_LIVE_ENDPOINT` is set, so CI never touches the network:
+//! `LIGUS_AGENTIC_LIVE_ENDPOINT` is set, so CI never touches the network:
 //!
 //! ```text
-//! HIVE_AGENTIC_LIVE_ENDPOINT=http://host:8080/v1/chat/completions \
-//! HIVE_AGENTIC_LIVE_MODEL=gemma4:12b HIVE_AGENTIC_LIVE_WINDOW=32768 \
+//! LIGUS_AGENTIC_LIVE_ENDPOINT=http://host:8080/v1/chat/completions \
+//! LIGUS_AGENTIC_LIVE_MODEL=gemma4:12b LIGUS_AGENTIC_LIVE_WINDOW=32768 \
 //!   cargo test -p hive-runtime --test agentic_live -- --nocapture --test-threads=1
 //! ```
 //!
 //! - `fixes_a_planted_bug_with_builtin_tools`: a temp repo with a wrong
 //!   discount formula and a one-line test; the model must find, read, edit
 //!   and fix it in an isolated worktree within the round budget. Set
-//!   `HIVE_AGENTIC_LIVE_COMMANDS=1` to also offer `run_command`.
+//!   `LIGUS_AGENTIC_LIVE_COMMANDS=1` to also offer `run_command`.
 //! - `calls_an_mcp_tool_through_the_same_loop`: needs
-//!   `HIVE_AGENTIC_LIVE_MCP_URL` (Streamable HTTP) and
-//!   `HIVE_AGENTIC_LIVE_MCP_TOKEN` (bearer; never printed) or
-//!   `HIVE_AGENTIC_LIVE_MCP_TOKEN_FILE` (a file holding it), plus optionally
-//!   `HIVE_AGENTIC_LIVE_MCP_TOOL` (default `search_docs`) and
-//!   `HIVE_AGENTIC_LIVE_MCP_COLLECTION` (default `rdna-docs`).
+//!   `LIGUS_AGENTIC_LIVE_MCP_URL` (Streamable HTTP) and
+//!   `LIGUS_AGENTIC_LIVE_MCP_TOKEN` (bearer; never printed) or
+//!   `LIGUS_AGENTIC_LIVE_MCP_TOKEN_FILE` (a file holding it), plus optionally
+//!   `LIGUS_AGENTIC_LIVE_MCP_TOOL` (default `search_docs`) and
+//!   `LIGUS_AGENTIC_LIVE_MCP_COLLECTION` (default `rdna-docs`).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -36,7 +36,7 @@ use hive_runtime::{BuiltinTools, McpRegistry, McpServerSpec, McpTransport};
 use serde_json::{json, Value};
 
 fn live_rt() -> Option<ResolvedRuntime> {
-    let raw = std::env::var("HIVE_AGENTIC_LIVE_ENDPOINT").ok()?;
+    let raw = std::env::var("LIGUS_AGENTIC_LIVE_ENDPOINT").ok()?;
     let raw = raw.trim().trim_end_matches('/');
     let endpoint = if raw.ends_with("/chat/completions") {
         raw.to_string()
@@ -47,13 +47,13 @@ fn live_rt() -> Option<ResolvedRuntime> {
     };
     Some(ResolvedRuntime {
         provider: ModelProviderKind::Custom,
-        model: std::env::var("HIVE_AGENTIC_LIVE_MODEL").unwrap_or_else(|_| "gemma4:12b".into()),
+        model: std::env::var("LIGUS_AGENTIC_LIVE_MODEL").unwrap_or_else(|_| "gemma4:12b".into()),
         endpoint,
-        api_key: std::env::var("HIVE_AGENTIC_LIVE_API_KEY").ok().filter(|k| !k.is_empty()),
+        api_key: std::env::var("LIGUS_AGENTIC_LIVE_API_KEY").ok().filter(|k| !k.is_empty()),
         args: vec![],
         model_provider_id: None,
         model_base_url: None,
-        context_window_tokens: std::env::var("HIVE_AGENTIC_LIVE_WINDOW").ok().and_then(|v| v.parse().ok()),
+        context_window_tokens: std::env::var("LIGUS_AGENTIC_LIVE_WINDOW").ok().and_then(|v| v.parse().ok()),
         keep_alive: None,
         think: None,
         tools: true,
@@ -118,10 +118,10 @@ impl ToolExecutor for McpExec {
 }
 
 async fn live_mcp() -> Option<(Vec<Value>, McpExec)> {
-    let url = std::env::var("HIVE_AGENTIC_LIVE_MCP_URL").ok()?;
-    let token = std::env::var("HIVE_AGENTIC_LIVE_MCP_TOKEN")
+    let url = std::env::var("LIGUS_AGENTIC_LIVE_MCP_URL").ok()?;
+    let token = std::env::var("LIGUS_AGENTIC_LIVE_MCP_TOKEN")
         .ok()
-        .or_else(|| std::fs::read_to_string(std::env::var("HIVE_AGENTIC_LIVE_MCP_TOKEN_FILE").ok()?).ok())
+        .or_else(|| std::fs::read_to_string(std::env::var("LIGUS_AGENTIC_LIVE_MCP_TOKEN_FILE").ok()?).ok())
         .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty());
     let registry = McpRegistry::new(vec![McpServerSpec {
@@ -194,10 +194,10 @@ async fn drive<M: ToolExecutor>(rt: &ResolvedRuntime, tools: &CompositeTools<M>,
 #[tokio::test]
 async fn fixes_a_planted_bug_with_builtin_tools() {
     let Some(rt) = live_rt() else {
-        eprintln!("HIVE_AGENTIC_LIVE_ENDPOINT unset; skipping live agentic test");
+        eprintln!("LIGUS_AGENTIC_LIVE_ENDPOINT unset; skipping live agentic test");
         return;
     };
-    let commands = std::env::var("HIVE_AGENTIC_LIVE_COMMANDS").map(|v| v == "1").unwrap_or(false);
+    let commands = std::env::var("LIGUS_AGENTIC_LIVE_COMMANDS").map(|v| v == "1").unwrap_or(false);
     let repo = planted_repo();
     let chat = "live-chat";
     chat_worktree(&repo, chat).unwrap();
@@ -246,16 +246,16 @@ async fn fixes_a_planted_bug_with_builtin_tools() {
 #[tokio::test]
 async fn calls_an_mcp_tool_through_the_same_loop() {
     let Some(rt) = live_rt() else {
-        eprintln!("HIVE_AGENTIC_LIVE_ENDPOINT unset; skipping live agentic MCP test");
+        eprintln!("LIGUS_AGENTIC_LIVE_ENDPOINT unset; skipping live agentic MCP test");
         return;
     };
     let Some((mcp_defs, mcp)) = live_mcp().await else {
-        eprintln!("HIVE_AGENTIC_LIVE_MCP_URL unset; skipping live agentic MCP test");
+        eprintln!("LIGUS_AGENTIC_LIVE_MCP_URL unset; skipping live agentic MCP test");
         return;
     };
     assert!(!mcp_defs.is_empty(), "the MCP server listed no tools (auth?)");
-    let tool = std::env::var("HIVE_AGENTIC_LIVE_MCP_TOOL").unwrap_or_else(|_| "search_docs".into());
-    let collection = std::env::var("HIVE_AGENTIC_LIVE_MCP_COLLECTION").unwrap_or_else(|_| "rdna-docs".into());
+    let tool = std::env::var("LIGUS_AGENTIC_LIVE_MCP_TOOL").unwrap_or_else(|_| "search_docs".into());
+    let collection = std::env::var("LIGUS_AGENTIC_LIVE_MCP_COLLECTION").unwrap_or_else(|_| "rdna-docs".into());
     let want = format!("rdnamcp__{tool}");
     // Read-only built-ins alongside the MCP tools, as an in-place turn gets.
     let dir = std::env::temp_dir().join(format!("hive-agentic-live-mcp-{}", std::process::id()));

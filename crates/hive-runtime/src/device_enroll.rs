@@ -52,7 +52,7 @@ const PREIMAGE_TAG: &[u8] = b"hive-device-enroll-v1\0";
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum EnrollError {
-    #[error("not a Hive device enrollment code (expected {CODE_PREFIX}...)")]
+    #[error("not a Ligus device enrollment code (expected {CODE_PREFIX}...)")]
     NotACode,
     #[error("the enrollment code is damaged or incomplete")]
     Malformed,

@@ -1,8 +1,6 @@
 # Builds the `ligus` CLI/daemon binary for macOS + Linux and attaches it to the
 # GitHub Release for the tag as `ligus-<target>` (what install.sh and the tap
-# fetch) and, through v2.1, the same bytes as `hive-<target>` for anything that
-# still downloads the former name. The desktop app is built separately by
-# release.yml.
+# fetch). The desktop app is built separately by release.yml.
 name: release-cli
 
 on:
@@ -55,9 +53,6 @@ jobs:
       - name: Stage asset
         run: |
           install -m 0755 "target/${{ matrix.target }}/release/ligus" "ligus-${{ matrix.target }}"
-          # Former asset name, same bytes (removed in v2.2). Run as `hive`, the
-          # binary prints a one-line reminder on stderr.
-          cp "ligus-${{ matrix.target }}" "hive-${{ matrix.target }}"
 
       - name: Attach to release
         uses: softprops/action-gh-release@v2
@@ -65,13 +60,12 @@ jobs:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: |
             ligus-${{ matrix.target }}
-            hive-${{ matrix.target }}
           fail_on_unmatched_files: true
 
   # Publish/update the Homebrew CLI formula on the tap once the per-arch binaries
   # are uploaded, so `brew install ligus-ai/ligus/ligus` tracks releases. The
   # formula is `ligus` (the desktop cask is `ligus-app`, so the names don't
-  # collide) and also links the former command name `hive`. Never write the old
+  # collide). Never write the old
   # Formula/hive-cli.rb: the tap's formula_renames.json maps it to ligus. Needs
   # HOMEBREW_TAP_TOKEN (fine-grained PAT, Contents:write on
   # ligus-ai/homebrew-ligus); skips cleanly when absent.
@@ -133,13 +127,10 @@ jobs:
 
             def install
               bin.install Dir["ligus-*"].first => "ligus"
-              # Former command name, kept through v2.1; it prints a one-line reminder on stderr.
-              bin.install_symlink "ligus" => "hive"
             end
 
             test do
               assert_path_exists bin/"ligus"
-              assert_path_exists bin/"hive"
             end
           end
           RUBY

@@ -6,8 +6,7 @@ license.workspace = true
 
 # A headless Ligus client — connect to a relay, sync a workspace's E2EE event
 # log, read/write signed events. The `ligus` binary a cloud-hosted agent runs
-# instead of the desktop app (releases also ship it as `hive`, the former name,
-# through v2.1). Composes hive-core + hive-runtime; no Tauri.
+# instead of the desktop app. Composes hive-core + hive-runtime; no Tauri.
 [[bin]]
 name = "ligus"
 path = "src/main.rs"

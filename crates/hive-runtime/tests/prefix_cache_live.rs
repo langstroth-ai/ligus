@@ -7,11 +7,11 @@
 //! last streamed chunk. The second turn's first request should reuse nearly
 //! all of the first turn's prompt from the server's cache.
 //!
-//! Skipped unless `HIVE_PREFIX_LIVE_ENDPOINT` is set (a llama.cpp server or
+//! Skipped unless `LIGUS_PREFIX_LIVE_ENDPOINT` is set (a llama.cpp server or
 //! gateway: base URL, `/v1`, or the full chat-completions URL):
 //!
 //! ```text
-//! HIVE_PREFIX_LIVE_ENDPOINT=http://host:8080/v1 HIVE_PREFIX_LIVE_MODEL=gemma4:12b \
+//! LIGUS_PREFIX_LIVE_ENDPOINT=http://host:8080/v1 LIGUS_PREFIX_LIVE_MODEL=gemma4:12b \
 //!   cargo test -p hive-runtime --test prefix_cache_live -- --nocapture --test-threads=1
 //! ```
 //!
@@ -236,11 +236,11 @@ fn messages(e: &Exchange) -> Vec<Value> {
 
 #[tokio::test]
 async fn second_turn_reuses_the_cached_prefix() {
-    let Ok(raw) = std::env::var("HIVE_PREFIX_LIVE_ENDPOINT") else {
-        eprintln!("HIVE_PREFIX_LIVE_ENDPOINT unset; skipping live prefix-cache test");
+    let Ok(raw) = std::env::var("LIGUS_PREFIX_LIVE_ENDPOINT") else {
+        eprintln!("LIGUS_PREFIX_LIVE_ENDPOINT unset; skipping live prefix-cache test");
         return;
     };
-    let model = std::env::var("HIVE_PREFIX_LIVE_MODEL").unwrap_or_else(|_| "gemma4:12b".into());
+    let model = std::env::var("LIGUS_PREFIX_LIVE_MODEL").unwrap_or_else(|_| "gemma4:12b".into());
     let (proxy_url, seen) = start_proxy(chat_url(&raw)).await;
     let rt = runtime(proxy_url, model.clone());
     let session = session();
@@ -337,7 +337,7 @@ impl hive_runtime::tool_loop::ToolExecutor for Weather {
 /// server reuses round 1's whole prompt from its cache; dropping the tools
 /// re-renders the prompt from where the template put them. Either way the
 /// last tool result carries the final-round nudge, and the reply must be text
-/// (no tool call, no raw call markup). `HIVE_PREFIX_LIVE_RUNS` (default 2)
+/// (no tool call, no raw call markup). `LIGUS_PREFIX_LIVE_RUNS` (default 2)
 /// repeats both variants.
 ///
 /// Results on the lab gateway (2026-10-19, llama.cpp; round 2 of each turn):
@@ -361,11 +361,11 @@ impl hive_runtime::tool_loop::ToolExecutor for Weather {
 #[tokio::test]
 async fn final_round_keeps_the_tool_prefix_cached() {
     use hive_runtime::provider::openai::OpenAiClient;
-    let Ok(raw) = std::env::var("HIVE_PREFIX_LIVE_ENDPOINT") else {
-        eprintln!("HIVE_PREFIX_LIVE_ENDPOINT unset; skipping live final-round test");
+    let Ok(raw) = std::env::var("LIGUS_PREFIX_LIVE_ENDPOINT") else {
+        eprintln!("LIGUS_PREFIX_LIVE_ENDPOINT unset; skipping live final-round test");
         return;
     };
-    let model = std::env::var("HIVE_PREFIX_LIVE_MODEL").unwrap_or_else(|_| "gemma4:12b".into());
+    let model = std::env::var("LIGUS_PREFIX_LIVE_MODEL").unwrap_or_else(|_| "gemma4:12b".into());
     let (proxy_url, seen) = start_proxy(chat_url(&raw)).await;
     let rt = runtime(proxy_url.clone(), model.clone());
     let session = session();
@@ -378,7 +378,7 @@ async fn final_round_keeps_the_tool_prefix_cached() {
         &format!("{}\n\n{}", prompt::primary_system_prompt(&session), prompt::runtime_identity_block(&rt, "Lab Mac (this device)")),
         &tools,
     );
-    let runs: usize = std::env::var("HIVE_PREFIX_LIVE_RUNS").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
+    let runs: usize = std::env::var("LIGUS_PREFIX_LIVE_RUNS").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
     for run in 0..runs {
         for variant in ["tool_choice_none", "drop_tools"] {
             let mut hist = vec![ChatMessage::new(MessageRole::User, "Mara", format!("Session tag: {variant}-{}", Uuid::new_v4()))];

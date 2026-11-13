@@ -122,9 +122,7 @@ jobs:
           # sign-in (device flow) works in release builds. The id is public (not
           # a secret) but lives in a repo var/secret so it's not committed.
           # Without it, sign-in errors "needs a github oauth client id".
-          # build.rs reads LIGUS_* first, then the legacy HIVE_* name. The repo
-          # secret may still be named HIVE_GITHUB_CLIENT_ID.
-          LIGUS_GITHUB_CLIENT_ID: ${{ secrets.LIGUS_GITHUB_CLIENT_ID || secrets.HIVE_GITHUB_CLIENT_ID }}
+          LIGUS_GITHUB_CLIENT_ID: ${{ secrets.LIGUS_GITHUB_CLIENT_ID }}
           # Bake the release tag so the app can detect a newer published version
           # (the "update available" banner). Local/dev builds get "dev" and never
           # prompt. Bump docs-site/version.json to this tag when publishing.

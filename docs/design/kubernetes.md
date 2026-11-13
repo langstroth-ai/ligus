@@ -28,8 +28,8 @@ same chart should work on a laptop (kind or k3d) and on a managed cluster.
 Four properties of today's code decide most of the shapes below.
 
 1. **A headless process is a device.** `hive serve` and `hive worker` bootstrap
-   an identity (account and device keys) in `HIVE_DATA_DIR` on first run and
-   keep their event log in `HIVE_DATA_DIR/hive.db` (SQLite). The host id other
+   an identity (account and device keys) in `LIGUS_DATA_DIR` on first run and
+   keep their event log in `LIGUS_DATA_DIR/hive.db` (SQLite). The host id other
    members see is that device id (`cmd_register_worker` publishes
    `svc.device_id()`). Two pods sharing a data dir would be one device writing
    from two places; two pods with fresh data dirs are two different hosts.
@@ -90,12 +90,12 @@ The relay is the one component that is already cloud-shaped: a static Go
 binary, configured by environment variables, content-blind, with a health
 endpoint that round-trips the store (`GET /v1/health`, `503` if the backend is
 down) and a Prometheus-style `/metrics` endpoint (optionally gated by
-`HIVE_RELAY_METRICS_TOKEN`). It lives in its own repository
+`LIGUS_RELAY_METRICS_TOKEN`). It lives in its own repository
 (`honeyhive-ai/relay`), and its chart should live there too and be pulled into
 the Hive umbrella chart as a dependency.
 
 **Store.** Always Postgres on Kubernetes (`DATABASE_URL` from a Secret, plus
-`HIVE_RELAY_REQUIRE_DB=1` so a misconfigured pod fails instead of silently
+`LIGUS_RELAY_REQUIRE_DB=1` so a misconfigured pod fails instead of silently
 using the in-memory store). Either an external managed database (Cloud SQL,
 RDS, Azure Database for PostgreSQL) or an in-cluster operator such as
 CloudNativePG. The memory+snapshot store with a PVC is acceptable only for
@@ -105,8 +105,8 @@ kind/k3d.
 
 | Deployment | Replicas | Routes | Settings |
 |---|---|---|---|
-| `relay-sync` | 1 to N (HPA on CPU or requests) | everything except `/v1/tunnel/*` | `HIVE_RELAY_TUNNEL=off` |
-| `relay-tunnel` | **exactly 1**, `strategy: Recreate` | `/v1/tunnel/*` | `HIVE_RELAY_TUNNEL=open` or `allowlist`, APNs settings |
+| `relay-sync` | 1 to N (HPA on CPU or requests) | everything except `/v1/tunnel/*` | `LIGUS_RELAY_TUNNEL=off` |
+| `relay-tunnel` | **exactly 1**, `strategy: Recreate` | `/v1/tunnel/*` | `LIGUS_RELAY_TUNNEL=open` or `allowlist`, APNs settings |
 
 Both point at the same database, so host registrations, revoked phones and
 push tokens (stored through `TunnelStore`) are shared. `Recreate` matters: with
@@ -114,8 +114,8 @@ a rolling update, the old pod still holds a host's control socket while a
 phone's `/v1/tunnel/connect` lands on the new pod and fails. On shutdown the
 relay closes tunnel sockets with `4011 shutting_down` and hosts reconnect, so a
 `Recreate` rollout costs a few seconds of tunnel downtime and nothing else.
-The APNs key (`HIVE_RELAY_APNS_KEY` or a mounted `.p8` via
-`HIVE_RELAY_APNS_KEY_FILE`) is only needed on `relay-tunnel` *(verify which
+The APNs key (`LIGUS_RELAY_APNS_KEY` or a mounted `.p8` via
+`LIGUS_RELAY_APNS_KEY_FILE`) is only needed on `relay-tunnel` *(verify which
 instance sends pushes before splitting; the push path starts on the host's
 control connection, so it should be the tunnel instance)*.
 
@@ -157,7 +157,7 @@ worker, the phone API and SSE stream, ntfy notifications, the relay tunnel
 host and the dashboard. It supports one workspace per process today.
 
 **Shape.** A StatefulSet with `replicas: 1`, a `volumeClaimTemplate` mounted
-at `HIVE_DATA_DIR` (`/var/lib/hive`), `podManagementPolicy: OrderedReady`,
+at `LIGUS_DATA_DIR` (`/var/lib/hive`), `podManagementPolicy: OrderedReady`,
 and `terminationGracePeriodSeconds` above serve's 15 s turn grace (30 s). One
 StatefulSet per workspace, in that workspace's namespace. A StatefulSet, not a
 Deployment, because a Deployment's rolling update can briefly run two pods on
@@ -176,22 +176,22 @@ environment variable, so no config file has to be written by hand:
 
 | Setting | Source |
 |---|---|
-| `HIVE_RELAY_URL`, `HIVE_WORKSPACE` | ConfigMap or Secret |
-| `HIVE_WORKSPACE_KEY`, `HIVE_RELAY_ACCESS_TOKEN` | Secret (`secretKeyRef`) |
-| `HIVE_WS_SECRET_<ref>` (workspace runtime keys) | Secret |
+| `LIGUS_RELAY_URL`, `LIGUS_WORKSPACE` | ConfigMap or Secret |
+| `LIGUS_WORKSPACE_KEY`, `LIGUS_RELAY_ACCESS_TOKEN` | Secret (`secretKeyRef`) |
+| `LIGUS_WS_SECRET_<ref>` (workspace runtime keys) | Secret |
 | MCP tokens named by `token_env` in `mcp.toml` | Secret |
-| `HIVE_MCP_CONFIG`, `runtimes.toml`, `dashboard.toml` | ConfigMap mounted read-only; `runtimes.toml` must currently sit in the data dir, so copy it in with an init container or add a `HIVE_RUNTIMES_FILE` setting (see [Section 12](#12-code-changes-prioritized)) |
-| `HIVE_NTFY_URL`, `HIVE_NTFY_TOPIC`, `HIVE_NTFY_TOKEN` | ConfigMap and Secret |
-| `HIVE_SERVE_LABEL`, `HIVE_SERVE_NAME`, `HIVE_SERVE_OWNER` | values |
+| `LIGUS_MCP_CONFIG`, `runtimes.toml`, `dashboard.toml` | ConfigMap mounted read-only; `runtimes.toml` must currently sit in the data dir, so copy it in with an init container or add a `LIGUS_RUNTIMES_FILE` setting (see [Section 12](#12-code-changes-prioritized)) |
+| `LIGUS_NTFY_URL`, `LIGUS_NTFY_TOPIC`, `LIGUS_NTFY_TOKEN` | ConfigMap and Secret |
+| `LIGUS_SERVE_LABEL`, `LIGUS_SERVE_NAME`, `LIGUS_SERVE_OWNER` | values |
 
 `hive enroll` is not needed: env overrides `config.toml`. APNs keys do **not**
 belong here; push is signed on the relay (see the relay section).
 
 **Listening address.** `hive serve` refuses unspecified and public binds
-unless `HIVE_SERVE_ALLOW_ANY_BIND=1`. That check protects a host whose
+unless `LIGUS_SERVE_ALLOW_ANY_BIND=1`. That check protects a host whose
 interfaces face a LAN or the internet. A pod's network namespace is private to
 the pod, so on Kubernetes binding `0.0.0.0:8787` inside the pod with
-`HIVE_SERVE_ALLOW_ANY_BIND=1` is the right setting, as long as the pod does
+`LIGUS_SERVE_ALLOW_ANY_BIND=1` is the right setting, as long as the pod does
 not use `hostNetwork` (the chart must forbid it). Binding the pod IP from the
 downward API also passes the check without the override, but breaks
 `kubectl port-forward` (which connects to loopback). Who reaches the port is
@@ -220,7 +220,7 @@ kubectl -n hive-ws-acme exec -it hive-serve-0 -- hive serve enroll     # approve
 kubectl -n hive-ws-acme exec -it hive-serve-0 -- hive pair --relay-only
 ```
 
-Owner enrollment (`HIVE_SERVE_OWNER`) works unchanged: the desktop signs a
+Owner enrollment (`LIGUS_SERVE_OWNER`) works unchanged: the desktop signs a
 certificate for the pod's device key; the pod never sees the owner's account
 key.
 
@@ -246,7 +246,7 @@ moves to it until an agent is bound to it. Removing a replica leaves its
 agents bound to an offline host (the desktop then offers "Run on worker").
 Use it for a few long-lived agents with different credentials, images or
 node needs (a GPU-attached worker for a CLI agent, a worker with
-`HIVE_WORKER_PERMISSION_MODE=acceptEdits` in a stricter namespace).
+`LIGUS_WORKER_PERMISSION_MODE=acceptEdits` in a stricter namespace).
 
 KEDA or an HPA on this StatefulSet would be wrong: scaling it up adds idle
 hosts, and scaling it down strands agents.
@@ -293,7 +293,7 @@ callback.
 
 | Option | How | Fits |
 |---|---|---|
-| **PVC per workspace** (today's model) | Checkouts under `HIVE_REPOS_DIR` on the serve/worker PVC; per-chat worktrees and `hive/chat/<id>` branches persist there; `HIVE_SERVE_APPLY_ON_APPROVE=1` commits approved diffs to the chat branch | Phase 1; the controller in Phase 3 |
+| **PVC per workspace** (today's model) | Checkouts under `LIGUS_REPOS_DIR` on the serve/worker PVC; per-chat worktrees and `hive/chat/<id>` branches persist there; `LIGUS_SERVE_APPLY_ON_APPROVE=1` commits approved diffs to the chat branch | Phase 1; the controller in Phase 3 |
 | **Git bundle per turn** (recommended for executors) | Controller runs `git bundle create` for the chat's base commit (full or `--since` a shallow point), passes it in the turn bundle; executor clones from the bundle with no remote | Phase 3; executor needs no git credentials and no network to a forge |
 | **Ephemeral clone per turn** | Executor clones from the forge (partial clone, `--filter=blob:none`) with a short-lived read-only token | Very large repos where a bundle is too big; executor then needs forge egress and a credential |
 
@@ -313,7 +313,7 @@ token, collect the log and JUnit output as untrusted data (Section 4.4).
 
 ### 3.5 MCP servers
 
-Hive reads MCP servers from `HIVE_MCP_CONFIG` (`stdio` with `command`/`args`,
+Hive reads MCP servers from `LIGUS_MCP_CONFIG` (`stdio` with `command`/`args`,
 or `http`/`sse` with `url` and a `token_env`). On Kubernetes:
 
 - **HTTP MCP servers** run as their own Deployment and ClusterIP Service per
@@ -336,7 +336,7 @@ or `http`/`sse` with `url` and a `token_env`). On Kubernetes:
   versions.
 
 Hive's own MCP policy stays in Hive: the requester-role gate
-(`HIVE_MCP_MIN_ROLE`) and the exfiltration guard (MCP calls refused after a
+(`LIGUS_MCP_MIN_ROLE`) and the exfiltration guard (MCP calls refused after a
 turn reads project files) run in the controller or executor before any call
 leaves the pod. NetworkPolicies add a second layer: an executor may reach only
 the MCP Services its turn was granted.
@@ -378,7 +378,7 @@ Serving options, from simplest to most capable:
 
 All three are runtimes from Hive's point of view. GPU scheduling and
 autoscaling belong to the model namespace, not to Hive pods (Section 8). A
-hosted provider key (`HIVE_WS_SECRET_<ref>`) remains the other choice, with
+hosted provider key (`LIGUS_WS_SECRET_<ref>`) remains the other choice, with
 egress to that provider only.
 
 ## 4. Sandboxed execution
@@ -605,7 +605,7 @@ minimal: the executor image is attack surface the agent controls.
 Agents are the component most likely to be talked into exfiltrating data.
 Layers, from Hive outward:
 
-1. Hive's own policy: tools only for requesters at `HIVE_MCP_MIN_ROLE` or
+1. Hive's own policy: tools only for requesters at `LIGUS_MCP_MIN_ROLE` or
    above, MCP refused after file reads, built-in file tools only on local
    model endpoints, `run_command` off by default.
 2. The executor holds nothing worth stealing beyond the turn's own inputs.
@@ -728,21 +728,21 @@ operator would mostly duplicate Helm.
   in the turn bundle. Attributes carry ids, runtime and model names, token
   counts and durations, never prompts, replies, file paths from the user's
   repo or tool arguments. The relay can emit HTTP server spans the same way.
-- **Logs.** JSON logs on stdout behind `HIVE_LOG_FORMAT=json`, with the same
+- **Logs.** JSON logs on stdout behind `LIGUS_LOG_FORMAT=json`, with the same
   content rule. `hive pair` output never goes to a log.
 
 ## 12. Code changes, prioritized
 
 **P0: needed for a correct Phase 1 install.**
 
-1. **Explicit in-pod bind.** Accept `HIVE_SERVE_LISTEN=0.0.0.0:8787` when
+1. **Explicit in-pod bind.** Accept `LIGUS_SERVE_LISTEN=0.0.0.0:8787` when
    running in a pod (`KUBERNETES_SERVICE_HOST` set) with a startup log line,
-   or document `HIVE_SERVE_ALLOW_ANY_BIND=1`; and make `hive pair` refuse a
+   or document `LIGUS_SERVE_ALLOW_ANY_BIND=1`; and make `hive pair` refuse a
    pairing URL built from an unspecified address (today it only catches
    loopback), pointing at `--public-url` or `--relay-only`.
-2. **`HIVE_RUNTIMES_FILE`** (and the same for `repo-bindings.toml` if needed)
+2. **`LIGUS_RUNTIMES_FILE`** (and the same for `repo-bindings.toml` if needed)
    so ConfigMaps can be mounted read-only instead of copied into the PVC.
-3. **Configurable stop grace.** `HIVE_STOP_GRACE_SECS` (default 15) so
+3. **Configurable stop grace.** `LIGUS_STOP_GRACE_SECS` (default 15) so
    `terminationGracePeriodSeconds` and the turn grace agree; log what was
    interrupted. `hive worker` needs the same treatment: it checks for a
    signal only between ticks, and it installs its SIGTERM handler on the first
@@ -753,21 +753,21 @@ operator would mostly duplicate Helm.
 4. **Worker health endpoint.** `hive worker --health-listen 0.0.0.0:9090`
    serving `/healthz`, `/readyz` (first sync done) and, with P1-6, `/metrics`.
 5. **Cluster-internal model endpoints.** Treat `*.svc`, `*.svc.<cluster
-   domain>` and names from `HIVE_PRIVATE_HOST_SUFFIXES` as local in
+   domain>` and names from `LIGUS_PRIVATE_HOST_SUFFIXES` as local in
    `endpoint_is_local_server`, so short Service names and custom cluster
    domains work for keyless runtimes and file tools.
 
 **P1: production quality.**
 
 6. Prometheus `/metrics` on serve and worker; OpenTelemetry OTLP export
-   (Section 11); `HIVE_LOG_FORMAT=json`.
+   (Section 11); `LIGUS_LOG_FORMAT=json`.
 7. Readiness that reflects sync state; liveness from a loop heartbeat.
 8. **Relay (other repo):** pairing codes in the store so `relay-sync` can
    scale; Postgres `LISTEN/NOTIFY` for SSE fan-out; a non-root image without
    the `chown` entrypoint; confirm and document client-IP handling behind a
    proxy.
-9. Secrets from files as well as env (`HIVE_WORKSPACE_KEY_FILE`,
-   `HIVE_RELAY_ACCESS_TOKEN_FILE`, `HIVE_WS_SECRET_DIR`), so Secrets can be
+9. Secrets from files as well as env (`LIGUS_WORKSPACE_KEY_FILE`,
+   `LIGUS_RELAY_ACCESS_TOKEN_FILE`, `LIGUS_WS_SECRET_DIR`), so Secrets can be
    mounted as files and rotated without exposing them in the process
    environment.
 10. GitHub App authentication for clone, fetch, push and pull requests, as an
@@ -816,7 +816,7 @@ tunnel is likewise pinned to one replica by its Deployment.
 2. Build and load the image: `docker build -f deploy/container/Dockerfile -t
    hive:dev .` then `kind load docker-image hive:dev`.
 3. Install the relay with the memory store and a PVC (Postgres optional),
-   `HIVE_RELAY_TUNNEL=open`.
+   `LIGUS_RELAY_TUNNEL=open`.
 4. Create the workspace Secret from a desktop invite (relay URL, room, key),
    install the serve StatefulSet, and point it at the in-cluster relay.
    For the desktop to reach the same relay, `kubectl port-forward
@@ -888,7 +888,7 @@ Acceptance:
 1. Ten mentions to one agent in one workspace run as ten executor Jobs,
    admitted up to the `LocalQueue` quota, and all ten replies and proposals
    arrive; no turn is answered twice.
-2. Inside an executor: no `HIVE_WORKSPACE_KEY`, no device key files, no
+2. Inside an executor: no `LIGUS_WORKSPACE_KEY`, no device key files, no
    service account token (`/var/run/secrets/kubernetes.io` absent), no git
    credentials; `getent hosts github.com` fails unless the turn was granted
    forge egress; the root filesystem is read-only.

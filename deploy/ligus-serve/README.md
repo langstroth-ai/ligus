@@ -97,7 +97,7 @@ People pane before the phone's vote counts. Defining workspace runtimes
 
   The binding stays on this box and never syncs, the same as the desktop's
   workspace folder. A turn reads the chat's base worktree
-  (`.ligus/worktrees/chat-<id>`; checkouts made before v2.0 stay under `.hive/`). Its first write cuts a per-turn worktree, and
+  (`.ligus/worktrees/chat-<id>`). Its first write cuts a per-turn worktree, and
   the diff comes back as a review proposal. Nothing is written to the checkout
   itself. Turns in a chat with no bound checkout get no file tools.
 - **MCP.** `LIGUS_MCP_CONFIG` names a TOML file of MCP servers (see
@@ -148,9 +148,18 @@ box's label.
 
 ## Upgrading a box set up before v2.0
 
-Nothing has to change: the `HIVE_*` names in an existing env file still work
-(each prints a one-time note on stderr), and a `hive` binary or symlink keeps
-running as an alias through v2.1. To move over, install `ligus`, rename the
-keys in the env file from `HIVE_` to `LIGUS_`, point the unit's `ExecStart` at
-`ligus serve`, and keep `LIGUS_DATA_DIR` pointing at the existing data dir (no
-data moves).
+v2.0 reads only `LIGUS_*` names and ships only the `ligus` binary, so a box
+set up before v2.0 needs its env file and unit updated in the same step as the
+binary:
+
+1. Install `ligus` (the old `hive` binary is not replaced by it).
+2. In the env file, rename every key from `HIVE_` to `LIGUS_`
+   (`sed -i 's/^HIVE_/LIGUS_/' ~/.config/hive-serve/hive-serve.env`). A
+   `HIVE_` key left behind is ignored, with a one-time warning on stderr.
+3. Point the unit's `ExecStart` at `ligus serve`, then
+   `systemctl --user daemon-reload` and restart it.
+
+Keep `LIGUS_DATA_DIR` pointing at the existing data dir (for example
+`~/.hive-serve`); nothing in it is renamed. A checkout's `.hive/` state is
+moved to `.ligus/` the first time `ligus serve` touches it, and its chat
+worktrees are re-registered with `git worktree repair`.

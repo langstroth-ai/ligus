@@ -80,14 +80,14 @@ So S1's "device-key distribution" is largely **extend what already ships**: add 
 
 The directory binding **trusts the relay** to assert "this key belongs to @alice." That is exactly the tension with the review's *"authorization must not depend on trusting the relay."* Three binding options span the trade-off:
 
-- **Option A — relay-attested (lowest friction, relay semi-trusted).** Reuse the directory: the relay verified the GitHub token at registration, so it vouches `github_id → keys`. Almost no new user friction; **but a malicious relay could substitute a key.** Fine for a **relay you run / enterprise** (the enterprise relay already gates on GitHub via `HIVE_RELAY_ADMIN_LOGINS`); not fine for a hostile relay.
+- **Option A — relay-attested (lowest friction, relay semi-trusted).** Reuse the directory: the relay verified the GitHub token at registration, so it vouches `github_id → keys`. Almost no new user friction; **but a malicious relay could substitute a key.** Fine for a **relay you run / enterprise** (the enterprise relay already gates on GitHub via `LIGUS_RELAY_ADMIN_LOGINS`); not fine for a hostile relay.
 - **Option B — GitHub-hosted proof (relay untrusted, more friction).** The user posts a signed `@alice ↔ key K` statement to a GitHub-controlled location (gist/repo/signed commit); verifiers fetch it straight from `github.com` and check it's hosted under `@alice` **and** signed by K. GitHub becomes the CA; the relay is bypassed for identity. Keybase-style.
 - **Option C — GitHub's native signing-key directory (relay untrusted, moderate friction).** Register the account public key as one of the user's GitHub **SSH signing keys**; verifiers fetch `api.github.com/users/<login>/ssh_signing_keys`. Reuses a first-class GitHub feature (also makes signed commits show "Verified"); one-time key-add friction.
 
 **Recommended split:** Option **A** for trusted/enterprise relays (reuse the shipped directory), Options **B/C** as the relay-untrusted path for self-hosters who need identity to survive a hostile relay. In all cases **authorization** (who is a member, in what role) stays in Hive events (S2), and **device→account** stays the existing `DeviceCertificate` — GitHub only answers *identity*.
 
 > **Status — Option C implemented in `hive-runtime` (default OFF).** A
-> `HIVE_IDENTITY_MODE` toggle (`relay` = Option A, the default & byte-for-byte
+> `LIGUS_IDENTITY_MODE` toggle (`relay` = Option A, the default & byte-for-byte
 > current behavior | `github-signing-keys` = Option C) selects the mode
 > ([`identity_verifier::IdentityMode`]). Option C fetches
 > `api.github.com/users/<login>/ssh_signing_keys`, parses each `ssh-ed25519`

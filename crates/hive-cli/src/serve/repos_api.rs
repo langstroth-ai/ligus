@@ -4,8 +4,8 @@
 //! from the chat's branch.
 //!
 //! Everything here acts on this box's own device-local state
-//! (`<HIVE_DATA_DIR>/repo-bindings.toml` and the checkouts under
-//! `HIVE_REPOS_DIR`, see `crate::repos`); nothing is synced. GitHub access goes
+//! (`<LIGUS_DATA_DIR>/repo-bindings.toml` and the checkouts under
+//! `LIGUS_REPOS_DIR`, see `crate::repos`); nothing is synced. GitHub access goes
 //! through the box's own `gh` login (never a token Hive holds), behind the
 //! [`GitHub`] trait so tests run without the network.
 //!
@@ -58,11 +58,11 @@ fn env_secs(name: &str, default: u64) -> Duration {
 }
 
 fn clone_timeout() -> Duration {
-    env_secs("HIVE_REPOS_CLONE_TIMEOUT_SECS", 900)
+    env_secs("LIGUS_REPOS_CLONE_TIMEOUT_SECS", 900)
 }
 
 fn max_clone_bytes() -> u64 {
-    crate::env_opt("HIVE_REPOS_MAX_CLONE_MB").and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(2048) * 1024 * 1024
+    crate::env_opt("LIGUS_REPOS_MAX_CLONE_MB").and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(2048) * 1024 * 1024
 }
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -1072,7 +1072,7 @@ fn run_clone_job(
         },
         || {
             (dir_size(&watch_dir).saturating_sub(start_size) > limit)
-                .then(|| format!("stopped: the repository is larger than {} MB (HIVE_REPOS_MAX_CLONE_MB)", limit / 1024 / 1024))
+                .then(|| format!("stopped: the repository is larger than {} MB (LIGUS_REPOS_MAX_CLONE_MB)", limit / 1024 / 1024))
         },
     );
     let fail = |e: String| {
@@ -1349,7 +1349,7 @@ pub async fn open_pr(State(s): S, Path(id): Path<String>, Json(req): Json<PrReq>
         if !repos::ref_exists(&dir, &format!("refs/heads/{branch}")) {
             return Err(conflict(format!(
                 "this chat has no commits on {branch} yet: approve a proposal first (the host commits approved changes \
-                 when HIVE_SERVE_APPLY_ON_APPROVE=1)"
+                 when LIGUS_SERVE_APPLY_ON_APPROVE=1)"
             )));
         }
         let info = repos::inspect(&dir);

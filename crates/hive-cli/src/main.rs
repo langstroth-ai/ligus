@@ -1,4 +1,4 @@
-//! `hive` — a headless Hive client.
+//! `ligus` — a headless Ligus client.
 //!
 //! Runs the same runtime the desktop app does (`hive-core` + `hive-runtime`),
 //! wired to flags/env instead of a GUI, so a cloud-hosted agent (or a script)
@@ -55,19 +55,22 @@ struct Config {
     key: Option<String>,
 }
 
-/// Env lookup (blank = unset). `LIGUS_X` names also accept the legacy `HIVE_X` (see `hive_core::compat`).
+/// Env lookup (blank = unset; `LIGUS_*` names only, see `hive_core::compat`).
 fn env_opt(k: &str) -> Option<String> {
     hive_core::compat::env_opt(k)
 }
 
-/// `~/.ligus` if it exists, else `~/.hive` if it exists, else the default new
-/// dir (see `hive_core::compat::home_data_dir`). Nothing is moved.
+/// `~/.ligus`, after moving a former `~/.hive` there once (see
+/// `hive_core::compat::home_data_dir`). Exits if that move fails, rather than
+/// starting fresh with a new device identity.
 fn default_home_data_dir(home: &std::path::Path) -> PathBuf {
-    let (dir, legacy) = hive_core::compat::home_data_dir(home);
-    if legacy {
-        eprintln!("note: using legacy data dir {} (set LIGUS_DATA_DIR or rename it to ~/.ligus to silence this)", dir.display());
+    match hive_core::compat::home_data_dir(home) {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
     }
-    dir
 }
 
 /// Persisted connection config (written by `ligus enroll`), read as a fallback
@@ -779,7 +782,7 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
     println!("agent @{name} online ({rt_label}); replying to @primary / un-mentioned turns. Ctrl-C to stop.");
     let host_label = env_opt("HOSTNAME").unwrap_or_else(|| "this worker".into());
     let system = format!(
-        "You are @{name}, an agent in a Hive workspace chat. Reply to the latest message concisely and helpfully.\n\n{}",
+        "You are @{name}, an agent in a Ligus workspace chat. Reply to the latest message concisely and helpfully.\n\n{}",
         hive_runtime::prompt::runtime_identity_block(&rt, &host_label)
     );
     loop {
@@ -1121,7 +1124,7 @@ fn truncate(s: &str, n: usize) -> String {
 
 fn usage() -> ! {
     eprintln!(
-        "hive — headless Hive client\n\n\
+        "ligus — headless Ligus client\n\n\
          USAGE:\n  \
          ligus --version\n  \
          ligus whoami\n  \
@@ -1170,20 +1173,7 @@ fn wants_help(args: &[String]) -> bool {
         || args.iter().take_while(|a| *a != "--").any(|a| a == "--help" || a == "-h")
 }
 
-/// The stderr note printed when the binary runs under its former name
-/// (`hive`, via the release alias or a symlink). `None` for any other name.
-/// Never stdout: scripts parse it.
-fn legacy_command_note(argv0: &str) -> Option<&'static str> {
-    let file = argv0.rsplit(['/', '\\']).next()?;
-    let stem = file.strip_suffix(".exe").or_else(|| file.strip_suffix(".EXE")).unwrap_or(file);
-    stem.eq_ignore_ascii_case("hive")
-        .then_some("hive: this command is now 'ligus'; 'hive' will stop working in v2.2")
-}
-
 fn main() {
-    if let Some(note) = std::env::args().next().as_deref().and_then(legacy_command_note) {
-        eprintln!("{note}");
-    }
     if let Err(e) = run() {
         eprintln!("error: {e:#}");
         std::process::exit(1);
@@ -1461,16 +1451,6 @@ fn run() -> Result<()> {
 #[cfg(test)]
 mod cli_tests {
     use super::*;
-
-    #[test]
-    fn legacy_command_name_gets_a_note() {
-        for name in ["hive", "/usr/local/bin/hive", "C:\\bin\\hive.exe", "HIVE"] {
-            assert!(legacy_command_note(name).is_some_and(|n| n.contains("now 'ligus'")), "{name}");
-        }
-        for name in ["ligus", "/opt/homebrew/bin/ligus", "ligus.exe", "hive-github-mcp", "hived"] {
-            assert_eq!(legacy_command_note(name), None, "{name}");
-        }
-    }
 
     fn argv(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| s.to_string()).collect()

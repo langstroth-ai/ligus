@@ -19,7 +19,7 @@ fn provider_display(provider: ModelProviderKind) -> &'static str {
         ModelProviderKind::Ollama => "Ollama",
         ModelProviderKind::Azure => "Azure OpenAI",
         ModelProviderKind::Custom => "custom OpenAI-compatible endpoint",
-        ModelProviderKind::HiveDaemon => "Hive daemon (OpenAI-compatible endpoint)",
+        ModelProviderKind::HiveDaemon => "Ligus daemon (OpenAI-compatible endpoint)",
         ModelProviderKind::ClaudeCode => "Claude Code CLI",
         ModelProviderKind::Codex => "OpenAI Codex CLI",
         ModelProviderKind::Aider => "aider CLI",

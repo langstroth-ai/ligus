@@ -254,7 +254,7 @@ pub(crate) fn clip_tool_result(s: String) -> String {
         return s;
     }
     let mut out: String = s.chars().take(TOOL_RESULT_MAX_CHARS).collect();
-    out.push_str("\n…[tool result truncated by Hive: too long for a local model's context window]");
+    out.push_str("\n…[tool result truncated by Ligus: too long for a local model's context window]");
     out
 }
 

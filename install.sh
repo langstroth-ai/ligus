@@ -4,11 +4,9 @@
 #   curl -fsSL https://raw.githubusercontent.com/ligus-ai/ligus/main/install.sh | sh
 #
 # Downloads the prebuilt `ligus` binary for your platform from the latest GitHub
-# Release and installs it, plus a `hive` symlink (the former command name, kept
-# through v2.1). Override with env vars:
+# Release and installs it. Override with env vars:
 #   LIGUS_VERSION      release tag to install (default: latest)
 #   LIGUS_INSTALL_DIR  install directory (default: $HOME/.local/bin)
-# The legacy names HIVE_VERSION / HIVE_INSTALL_DIR are still read as fallbacks.
 set -eu
 
 REPO="ligus-ai/ligus"
@@ -35,14 +33,14 @@ if [ -z "$target" ]; then
   exit 1
 fi
 
-version="${LIGUS_VERSION:-${HIVE_VERSION:-latest}}"
+version="${LIGUS_VERSION:-latest}"
 if [ "$version" = "latest" ]; then
   url="https://github.com/$REPO/releases/latest/download/$BIN-$target"
 else
   url="https://github.com/$REPO/releases/download/$version/$BIN-$target"
 fi
 
-dir="${LIGUS_INSTALL_DIR:-${HIVE_INSTALL_DIR:-$HOME/.local/bin}}"
+dir="${LIGUS_INSTALL_DIR:-$HOME/.local/bin}"
 mkdir -p "$dir"
 tmp="$(mktemp)"
 
@@ -54,10 +52,6 @@ if ! curl -fSL --proto '=https' --tlsv1.2 "$url" -o "$tmp"; then
 fi
 chmod +x "$tmp"
 mv "$tmp" "$dir/$BIN"
-# Former command name: a symlink, unless something else already lives there.
-if [ ! -e "$dir/hive" ] || [ -L "$dir/hive" ]; then
-  ln -sf "$BIN" "$dir/hive"
-fi
 
 echo "ligus: installed to $dir/$BIN"
 case ":$PATH:" in

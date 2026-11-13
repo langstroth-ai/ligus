@@ -1148,7 +1148,7 @@ pub fn print_pairing(data_dir: &std::path::Path, direct: Option<(&str, &str)>, r
             pair::pairing_url(url, token)
         }
     };
-    println!("\nScan with the iPhone camera (or the Hive app) to pair:\n");
+    println!("\nScan with the iPhone camera (or the Ligus app) to pair:\n");
     print!("{}", pair::render_qr(&link)?);
     println!("\n{link}\n");
     if direct.is_some() {

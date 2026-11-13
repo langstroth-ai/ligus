@@ -8,7 +8,7 @@ The tap has two entries:
 
 | Name | Kind | Installs |
 |---|---|---|
-| `ligus` | formula | the `ligus` CLI, plus a `hive` symlink (former name, through v2.1) |
+| `ligus` | formula | the `ligus` CLI |
 | `ligus-app` | cask | `Ligus.app`, the desktop app |
 
 The cask is `ligus-app` rather than `ligus` because a formula and a cask with the

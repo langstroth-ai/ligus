@@ -107,7 +107,7 @@ On top of the relay's limits (§11), `hive serve` drops a push to a phone when:
 | Host-wide | 1 per second sustained, burst of 5 (the relay's "pushes ≤ 1/s") |
 
 A dropped push doesn't count against any limit. Drops are logged at debug
-level only: set `HIVE_PUSH_DEBUG=1` to print each drop and relay refusal on
+level only: set `LIGUS_PUSH_DEBUG=1` to print each drop and relay refusal on
 stderr.
 
 The relay acks each push. On `ok:false` the host:
@@ -152,12 +152,12 @@ Use the open relay ([honeyhive-ai/relay](https://github.com/honeyhive-ai/relay),
 `cmd/hive-relay`) with tunnels on and the APNs settings:
 
 ```sh
-HIVE_RELAY_TUNNEL=open                      # or allowlist + HIVE_RELAY_TUNNEL_HOSTS=<host id>
-HIVE_RELAY_APNS_KEY_FILE=/path/to/AuthKey_KEYID.p8   # or HIVE_RELAY_APNS_KEY=<inline PEM>
-HIVE_RELAY_APNS_KEY_ID=<Key ID>
-HIVE_RELAY_APNS_TEAM_ID=<Team ID>
-HIVE_RELAY_APNS_TOPIC=<the app's bundle id>
-HIVE_RELAY_APNS_ENV=auto                    # optional: auto | sandbox | production
+LIGUS_RELAY_TUNNEL=open                      # or allowlist + LIGUS_RELAY_TUNNEL_HOSTS=<host id>
+LIGUS_RELAY_APNS_KEY_FILE=/path/to/AuthKey_KEYID.p8   # or LIGUS_RELAY_APNS_KEY=<inline PEM>
+LIGUS_RELAY_APNS_KEY_ID=<Key ID>
+LIGUS_RELAY_APNS_TEAM_ID=<Team ID>
+LIGUS_RELAY_APNS_TOPIC=<the app's bundle id>
+LIGUS_RELAY_APNS_ENV=auto                    # optional: auto | sandbox | production
 ```
 
 `auto` uses the environment each phone reports: `development` for Xcode
@@ -180,7 +180,7 @@ hive remote status          # "push available" once connected to a relay with a 
 In the iOS app's repository (`hive-ios`), set in `Config/Local.xcconfig`:
 
 ```
-HIVE_PUSH_NOTIFICATIONS = YES
+LIGUS_PUSH_NOTIFICATIONS = YES
 ```
 
 plus your own team and bundle id overrides (see `Config/Local.xcconfig.example`).
@@ -193,17 +193,17 @@ host. **Settings → Notifications** in the app toggles previews.
 - `GET /v1/tunnel/info` says `"push": false`: the relay has no APNs key
   configured, or failed to load it (check its log). The host then turns push
   off and falls back to ntfy if configured.
-- **`DeviceTokenNotForTopic`** in the relay log: `HIVE_RELAY_APNS_TOPIC` isn't
+- **`DeviceTokenNotForTopic`** in the relay log: `LIGUS_RELAY_APNS_TOPIC` isn't
   the bundle id of the build on the phone. The relay forgets that token; fix
   the topic, then open the app so it registers again.
 - **`BadDeviceToken`**: sandbox vs production mismatch, e.g. an Xcode build
-  sent to the production endpoint. Use `HIVE_RELAY_APNS_ENV=auto`, or match it
+  sent to the production endpoint. Use `LIGUS_RELAY_APNS_ENV=auto`, or match it
   to the build.
 - Nothing arrives while the app is open: expected, the foreground stream
   suppresses pushes. Background the app and try again.
 - Nothing arrives at all: check that the phone is paired and active
   (`hive phones list`), that notifications are allowed for the app in iOS
-  Settings, and run `hive serve` with `HIVE_PUSH_DEBUG=1` to see dropped pushes
+  Settings, and run `hive serve` with `LIGUS_PUSH_DEBUG=1` to see dropped pushes
   and relay refusals.
 
 ## Limitation: other people's setups

@@ -18,7 +18,7 @@ kind = "relay"
 
 [transport.relay]
 endpoint = "wss://relay.hive.example/v1"
-account_token_env = "HIVE_RELAY_TOKEN"
+account_token_env = "LIGUS_RELAY_TOKEN"
 ```
 
 `RelayTransport` talks to the relay over **REST** at `https://.../v1`. The
@@ -38,7 +38,7 @@ X-Hive-Github-Token: <github-oauth-token>        # identity: who am I (directory
 ### Entitlement (`Authorization: Bearer`)
 
 Controls *whether a client may use the relay at all*. The server's policy comes
-from the `HIVE_RELAY_ACCESS_TOKENS` env var:
+from the `LIGUS_RELAY_ACCESS_TOKENS` env var:
 
 - **unset / empty ⇒ `Open`** — every request is admitted (self-host default).
 - **comma-separated list ⇒ `Tokens`** — only requests whose bearer is in the set
@@ -46,14 +46,14 @@ from the `HIVE_RELAY_ACCESS_TOKENS` env var:
   `require_entitlement` middleware that returns `401`/`403` otherwise.
 
 The desktop client sends this from `relay_access_token` (Settings → Team sync, or
-`HIVE_RELAY_ACCESS_TOKEN`); `RelayClient::with_auth(token)` attaches it to every
+`LIGUS_RELAY_ACCESS_TOKEN`); `RelayClient::with_auth(token)` attaches it to every
 request. It is intentionally transport-agnostic — a billing system issues/revokes
 tokens without changing the relay surface.
 
 The relay's `EntitlementPolicy` resolves from the environment, most specific
 first:
 
-1. **`HIVE_RELAY_TOKEN_PUBKEY`** (hex/base64 Ed25519 public key) ⇒ **signed
+1. **`LIGUS_RELAY_TOKEN_PUBKEY`** (hex/base64 Ed25519 public key) ⇒ **signed
    tokens**. The bearer is a compact `hrt1.<b64url(claims)>.<b64url(sig)>` minted
    by a billing/license backend holding the matching private key; the relay
    *verifies but never mints*. Claims carry `sub`, `plan`, `exp`, `max_members`,
@@ -61,7 +61,7 @@ first:
    request extensions for handlers to enforce per-plan limits. See
    `crates/hive-relay/src/token.rs` and
    [`managed-service`](../docs-site/ops/managed-service.md).
-2. **`HIVE_RELAY_ACCESS_TOKENS`** (comma-separated) ⇒ a static **allowlist**
+2. **`LIGUS_RELAY_ACCESS_TOKENS`** (comma-separated) ⇒ a static **allowlist**
    (coarse on/off).
 3. otherwise ⇒ **open** (self-host default).
 

@@ -99,16 +99,10 @@ fn default_desktop_dir() -> Option<PathBuf> {
     app_data_base().map(|b| pick_desktop_dir(&b))
 }
 
-/// The desktop data dir under `base`: the first bundle id (new, then
-/// original) whose dir has an `appearance.json`, else the first that exists,
-/// else the new id's path.
+/// The desktop data dir under `base` (the app copies its former
+/// `com.hive.desktop` dir here on first launch).
 pub fn pick_desktop_dir(base: &Path) -> PathBuf {
-    let ids = hive_core::compat::DESKTOP_APP_IDS;
-    ids.iter()
-        .map(|id| base.join(id))
-        .find(|d| d.join(FILE_NAME).is_file())
-        .or_else(|| ids.iter().map(|id| base.join(id)).find(|d| d.is_dir()))
-        .unwrap_or_else(|| base.join(ids[0]))
+    base.join(hive_core::compat::DESKTOP_APP_ID)
 }
 
 #[derive(Deserialize, Default)]
@@ -207,16 +201,10 @@ mod tests {
     }
 
     #[test]
-    fn desktop_dir_probes_new_bundle_id_then_original() {
+    fn desktop_dir_is_the_ligus_bundle_id() {
         let tmp = tempfile::tempdir().unwrap();
         let base = tmp.path();
-        assert_eq!(pick_desktop_dir(base), base.join("ai.ligus.desktop"));
         write(&base.join("com.hive.desktop"), r#"{"palette":"harbor"}"#);
-        assert_eq!(pick_desktop_dir(base), base.join("com.hive.desktop"));
-        // The new dir exists (first launch, nothing saved yet): the old file still wins.
-        std::fs::create_dir_all(base.join("ai.ligus.desktop")).unwrap();
-        assert_eq!(pick_desktop_dir(base), base.join("com.hive.desktop"));
-        write(&base.join("ai.ligus.desktop"), r#"{"palette":"meadow"}"#);
-        assert_eq!(pick_desktop_dir(base), base.join("ai.ligus.desktop"));
+        assert_eq!(pick_desktop_dir(base), base.join("ai.ligus.desktop"), "the former dir is not read");
     }
 }

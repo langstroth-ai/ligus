@@ -10098,10 +10098,9 @@ fn open_file_access_settings() -> Result<(), String> {
 
 /// Public version manifest — a small JSON the docs site serves, holding the
 /// latest published release. Fetched in Rust (no webview CORS); maintained
-/// alongside each release. Tried in order: the docs site's new host first,
-/// then its previous host (which redirects), so a DNS change on either side
-/// never strands a client.
-const VERSION_MANIFEST_URLS: [&str; 2] = ["https://docs.ligus.ai/version.json", "https://docs.apiaryhq.ai/version.json"];
+/// alongside each release. A list, tried in order, so a host move can ship
+/// the new and old URLs side by side.
+const VERSION_MANIFEST_URLS: [&str; 1] = ["https://docs.ligus.ai/version.json"];
 
 /// The first manifest among `urls` that answers 2xx with a parseable body.
 async fn fetch_update_manifest(client: &reqwest::Client, urls: &[&str]) -> Option<UpdateInfo> {
@@ -10462,7 +10461,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         hive_core::compat::var("LIGUS_ANTHROPIC_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
 
     // Connection settings: a persisted settings.json wins; on first launch we
-    // seed it from env/config so existing `HIVE_*` workflows keep working. After
+    // seed it from env/config so existing `LIGUS_*` environments keep working. After
     // that the Settings UI edits the file live and the sync loop polls it.
     let env_seed = LiveSettings {
         relay_url: hive_core::compat::var("LIGUS_RELAY_URL")
@@ -15119,10 +15118,10 @@ mod model_profile_dto_tests {
 mod update_version_tests {
     use super::parse_release_version;
 
-    /// The updater checks the renamed repo's `latest.json` first, then the
-    /// original URL (GitHub redirects it), with the signing key unchanged.
+    /// The updater checks the ligus-ai repo's `latest.json` (1.19 clients
+    /// found this release through the same URL), with the signing key unchanged.
     #[test]
-    fn updater_checks_new_then_old_latest_json() {
+    fn updater_checks_the_ligus_latest_json() {
         let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         // The identifier names the data dir the first-launch migration copies into.
         assert_eq!(conf["identifier"], hive_core::compat::DESKTOP_APP_ID);
@@ -15130,14 +15129,11 @@ mod update_version_tests {
         let endpoints: Vec<&str> = updater["endpoints"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
         assert_eq!(
             endpoints,
-            [
-                "https://github.com/ligus-ai/ligus/releases/latest/download/latest.json",
-                "https://github.com/honeyhive-ai/hive/releases/latest/download/latest.json",
-            ]
+            ["https://github.com/ligus-ai/ligus/releases/latest/download/latest.json"]
         );
         // Same minisign key across the rename: never rotate it.
         assert!(updater["pubkey"].as_str().unwrap().starts_with("dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhFQjA3RDUyRjVBRUM3QjQK"));
-        assert_eq!(super::VERSION_MANIFEST_URLS, ["https://docs.ligus.ai/version.json", "https://docs.apiaryhq.ai/version.json"]);
+        assert_eq!(super::VERSION_MANIFEST_URLS, ["https://docs.ligus.ai/version.json"]);
     }
 
     /// Serve `routes` (path -> (status, body)) over plain HTTP on localhost.

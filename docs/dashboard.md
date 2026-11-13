@@ -16,7 +16,7 @@ file allow-lists by name. The file itself never runs a command.
 With no `dashboard.toml`:
 
 - the dashboard is the built-in Hive section;
-- if `HIVE_PROMETHEUS_URL` is set, the host adds the lab sections that
+- if `LIGUS_PROMETHEUS_URL` is set, the host adds the lab sections that
   `/v1/lab/status` used to show (power and cost, gateway workers,
   temperatures, and solar when an Enphase exporter reports) below it.
   Sections with no data are left out. `hive dashboard default` prints them as
@@ -52,8 +52,8 @@ gets the Hive section above its own sections.
 
 ## Where the file lives
 
-`<data dir>/dashboard.toml`: `HIVE_DATA_DIR`, the same directory as
-`config.toml` and `serve.token`. Set `HIVE_DASHBOARD_FILE` to use another
+`<data dir>/dashboard.toml`: `LIGUS_DATA_DIR`, the same directory as
+`config.toml` and `serve.token`. Set `LIGUS_DASHBOARD_FILE` to use another
 path. The host re-reads it on every request, so edits apply without a
 restart.
 
@@ -65,7 +65,7 @@ hive dashboard metrics               # list the hive metrics
 ```
 
 Run `check` with the server's environment (for example from its env file) so
-it uses the same `HIVE_PROMETHEUS_URL`, `HIVE_MCP_CONFIG` and data dir. It
+it uses the same `LIGUS_PROMETHEUS_URL`, `LIGUS_MCP_CONFIG` and data dir. It
 exits non-zero when the file is invalid or any panel has an error. It reads
 the workspace from the store but isn't the running server, so the Hive
 section's live rows (relay sync, push) read as unknown. Note that `check`
@@ -109,7 +109,7 @@ Unknown keys are errors, so a typo doesn't fail silently.
 
 | `source` | Set | What it does |
 |---|---|---|
-| `prometheus` (default) | `query` | An instant query against `HIVE_PROMETHEUS_URL` (timeseries and sparklines use a range query) |
+| `prometheus` (default) | `query` | An instant query against `LIGUS_PROMETHEUS_URL` (timeseries and sparklines use a range query) |
 | `http_json` (default when `url` is set) | `url`, `path` | `GET url` (http or https, on the host's network; at most 1 MiB) and read the value at `path`, a JSON pointer such as `/data/0/temp`. No headers or credentials are sent |
 | `hive` (default when `metric` is set) | `metric` | A metric of the workspace this host serves, see [Hive metrics](#hive-metrics) |
 | `mcp` (default when `tool` is set) | `server`, `tool`, `args`, `path` | Call a tool on one of the host's MCP servers and read its result like a JSON document, see [MCP tools](#mcp-tools) |
@@ -199,7 +199,7 @@ metric = "turns.by_agent_7d"
 
 ### MCP tools
 
-`source = "mcp"` calls a tool on an MCP server from `HIVE_MCP_CONFIG`, the
+`source = "mcp"` calls a tool on an MCP server from `LIGUS_MCP_CONFIG`, the
 same file that gives agents on this host their MCP tools (see
 [`deploy/ligus-serve/mcp.toml.example`](../deploy/ligus-serve/mcp.toml.example)).
 Bearer tokens stay in the environment variables that file names.
@@ -215,7 +215,7 @@ title = "Code"
 title = "Open pull requests"
 kind = "table"
 source = "mcp"
-server = "github"                 # an id in HIVE_MCP_CONFIG
+server = "github"                 # an id in LIGUS_MCP_CONFIG
 tool = "list_pull_requests"
 args = { owner = "acme", repo = "web", state = "open" }
 columns = [
@@ -335,6 +335,6 @@ builds that predate the dashboard. Newer apps ask for `/v1/dashboard` and use
 dashboard, start from the generated default:
 
 ```sh
-hive dashboard default > "$HIVE_DATA_DIR/dashboard.toml"
+hive dashboard default > "$LIGUS_DATA_DIR/dashboard.toml"
 hive dashboard check
 ```

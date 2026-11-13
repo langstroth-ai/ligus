@@ -49,4 +49,4 @@ plaintext) via `monaco-editor/esm` feature imports or a Vite `manualChunks` spli
 The relay deploys independently of the desktop app and lives in its own repo,
 [github.com/honeyhive-ai/relay](https://github.com/honeyhive-ai/relay)
 (`docker build -t hive-relay https://github.com/honeyhive-ai/relay.git`), bind via
-`HIVE_RELAY_ADDR`. See that repo's README + `deploy/fly.toml` for hosting.
+`LIGUS_RELAY_ADDR`. See that repo's README + `deploy/fly.toml` for hosting.

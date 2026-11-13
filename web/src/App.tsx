@@ -552,7 +552,7 @@ export function App() {
   // The workspace's linked folder (the repo) — independent of the active chat's
   // worktree that the backend swaps into the effective `workspaceRoot`. Use this
   // for workspace display (crumb, label) and link-state gating so a chat's worktree
-  // path (`…/.hive/worktrees/chat-<id>`) never shows as "the folder".
+  // path (`…/.ligus/worktrees/chat-<id>`) never shows as "the folder".
   const workspaceFolder = settings.data?.workspaceFolder ?? "";
   const activeWorkspace = workspaceList.data?.find((w) => w.active);
   const activeWorkspaceId = activeWorkspace?.id ?? "";

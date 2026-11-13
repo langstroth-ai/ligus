@@ -112,7 +112,7 @@ There are two layers:
 | pairing secret `ps` | 32 bytes | QR code | one-time enrollment secret (§4, §7.2) |
 | push key | 32 bytes | host + phone | `HKDF(h_enroll, "push-key", 32)` (§14) |
 
-- The host keeps its keys in `<HIVE_DATA_DIR>/tunnel/keys.json` (mode 0600).
+- The host keeps its keys in `<LIGUS_DATA_DIR>/tunnel/keys.json` (mode 0600).
   The phone keeps its keys in the Keychain (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`,
   not synced). The push key also goes to a Keychain access group shared with
   the Notification Service Extension.
@@ -219,7 +219,7 @@ whether `not_entitled` (4006) should lead to the in-app subscription
 (`appstore`) or to an "ask the relay operator" message (`none`).
 
 Only the hosted build (§15.3) reports `"billing":"appstore"`. The open build
-always reports `"none"`, so a self-hosted relay with `HIVE_RELAY_TUNNEL=open`
+always reports `"none"`, so a self-hosted relay with `LIGUS_RELAY_TUNNEL=open`
 offers the same tunnel for free and the app shows no paywall for it.
 
 ### 6.1 Host keys and registration
@@ -232,7 +232,7 @@ The relay:
 2. verifies the challenge signature;
 3. asks the policy `Register(hostId, hostPub, reg)` (§15.1), where `reg` is the
    optional registration token from `hello`. The open default admits per
-   `HIVE_RELAY_TUNNEL`. A hosted deployment may require a token or register
+   `LIGUS_RELAY_TUNNEL`. A hosted deployment may require a token or register
    the host as `pending`;
 4. stores `{hostId, hostPub, createdAt, lastSeen}` durably. The store is
    included in the relay's backup; it's relay-only state.
@@ -761,7 +761,7 @@ the hosted service that accepts the same `{hid, pid, token, env, ct, prio,
 collapse}` from a registered self-hosted relay and forwards it to APNs. It
 would see only ciphertext, as the hosted relay does today.
 
-An open relay configured with an APNs key of its own (`HIVE_RELAY_APNS_*`)
+An open relay configured with an APNs key of its own (`LIGUS_RELAY_APNS_*`)
 does push, but only to builds of the app signed by the same Apple team as
 that key: someone self-hosting builds and signs the app themselves
 ([`push-notifications.md`](push-notifications.md#turning-push-on-for-yourself)).
@@ -796,11 +796,11 @@ are included in the backup:
 
 | Var | Meaning |
 |---|---|
-| `HIVE_RELAY_TUNNEL` | `off` (**default**: `/v1/tunnel/*` → 404), `open` (any host may register and is `active`), `allowlist` (only `HIVE_RELAY_TUNNEL_HOSTS`) |
-| `HIVE_RELAY_TUNNEL_HOSTS` | comma-separated `host_id`s for `allowlist` |
+| `LIGUS_RELAY_TUNNEL` | `off` (**default**: `/v1/tunnel/*` → 404), `open` (any host may register and is `active`), `allowlist` (only `LIGUS_RELAY_TUNNEL_HOSTS`) |
+| `LIGUS_RELAY_TUNNEL_HOSTS` | comma-separated `host_id`s for `allowlist` |
 
 When the relay's existing entitlement gate is configured
-(`HIVE_RELAY_TOKEN_PUBKEY` / `HIVE_RELAY_ACCESS_TOKENS`), `Register` also
+(`LIGUS_RELAY_TOKEN_PUBKEY` / `LIGUS_RELAY_ACCESS_TOKENS`), `Register` also
 requires `regToken` to pass that `EntitlementVerifier`. This reuses `hrt1`
 operator tokens.
 
@@ -855,7 +855,7 @@ calls it right after binding or unbinding a subscription.
 
 - New module `crates/hive-cli/src/serve/tunnel/`: keys, phones, the control
   client (tokio-tungstenite + rustls), sessions (snow), mux and connector.
-- State lives in `<HIVE_DATA_DIR>/tunnel/`, all files 0600: `keys.json`,
+- State lives in `<LIGUS_DATA_DIR>/tunnel/`, all files 0600: `keys.json`,
   `phones.json`, `relay.json`, and `pending/` for enrollment windows and
   revocations.
 - **CLI:**
@@ -1026,7 +1026,7 @@ They use the real Go relay binary, built from a pinned commit in CI.
 
 1. ~~Who offers the tunnel?~~ Decided: the hosted service offers it as the
    paid add-on (on the shared public relay app); any self-hosted relay can
-   offer it for free with `HIVE_RELAY_TUNNEL=open` (`billing:"none"`).
+   offer it for free with `LIGUS_RELAY_TUNNEL=open` (`billing:"none"`).
 2. Multi-instance routing (§15.4): accept single-instance for the hosted v1,
    or build `fly-replay` routing before launch?
 3. Should the phone auth key move to a Secure Enclave P-256 key

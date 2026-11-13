@@ -3,10 +3,10 @@
 //! harness gives them, through the same pieces a chat turn uses — the
 //! dispatcher (`stream_with_tools`), the composite executor (built-in file
 //! tools + MCP), the hysteresis compaction planner and the summary turn.
-//! Skipped unless `HIVE_EVAL_ENDPOINT` is set, so CI never touches the lab:
+//! Skipped unless `LIGUS_EVAL_ENDPOINT` is set, so CI never touches the lab:
 //!
 //! ```text
-//! HIVE_EVAL_ENDPOINT=http://host:8080/v1 HIVE_EVAL_MODELS=gemma4:12b,lfm2:8b \
+//! LIGUS_EVAL_ENDPOINT=http://host:8080/v1 LIGUS_EVAL_MODELS=gemma4:12b,lfm2:8b \
 //!   cargo test -p hive-runtime --test local_harness_eval -- --nocapture --test-threads=1
 //! ```
 //!
@@ -26,26 +26,26 @@
 //!   summary with the app's default instruction, and then answers from the
 //!   summary turn + kept history. Passes on 5/5 facts; reports what the summary
 //!   kept as well as what the answer recalled.
-//! - `web_search` (optional): with `HIVE_EVAL_MCP_URL` + `HIVE_EVAL_MCP_TOKEN`
-//!   (or `HIVE_EVAL_MCP_TOKEN_FILE`; never printed), the MCP tools are offered
+//! - `web_search` (optional): with `LIGUS_EVAL_MCP_URL` + `LIGUS_EVAL_MCP_TOKEN`
+//!   (or `LIGUS_EVAL_MCP_TOKEN_FILE`; never printed), the MCP tools are offered
 //!   and the model is asked for the current stable Rust version; ground truth
 //!   comes from static.rust-lang.org.
 //!
-//! Optional knobs: `HIVE_EVAL_RUNS` (default 1), `HIVE_EVAL_SCENARIOS` (comma
-//! filter), `HIVE_EVAL_WINDOW` (default 32768), `HIVE_EVAL_HISTORY_BUDGET`
-//! (compaction history budget, default 3000 tokens), `HIVE_EVAL_COMMANDS=1`
-//! (offer `run_command` in `bug_fix`), `HIVE_EVAL_TIMEOUT_SECS` (per scenario,
-//! default 600), `HIVE_EVAL_API_KEY`.
+//! Optional knobs: `LIGUS_EVAL_RUNS` (default 1), `LIGUS_EVAL_SCENARIOS` (comma
+//! filter), `LIGUS_EVAL_WINDOW` (default 32768), `LIGUS_EVAL_HISTORY_BUDGET`
+//! (compaction history budget, default 3000 tokens), `LIGUS_EVAL_COMMANDS=1`
+//! (offer `run_command` in `bug_fix`), `LIGUS_EVAL_TIMEOUT_SECS` (per scenario,
+//! default 600), `LIGUS_EVAL_API_KEY`.
 //!
 //! `pi_smoke_fixes_a_planted_bug` is a separate smoke test of Hive's Pi
-//! runtime against the same endpoint (`HIVE_EVAL_PI=1`, or a path to the `pi`
-//! binary; model `HIVE_EVAL_PI_MODEL`, else the first of `HIVE_EVAL_MODELS`).
+//! runtime against the same endpoint (`LIGUS_EVAL_PI=1`, or a path to the `pi`
+//! binary; model `LIGUS_EVAL_PI_MODEL`, else the first of `LIGUS_EVAL_MODELS`).
 //! It goes through `dispatch::stream` with provider Pi, which writes a
 //! temporary `models.json` and points `PI_CODING_AGENT_DIR` at it, so the
 //! user's own pi config is never read or changed.
 //!
 //! Results on the lab gateway (llama.cpp, 2026-10-19; gemma4:12b on GPU with a
-//! 32k slot, lfm2:8b on CPU; `HIVE_EVAL_RUNS=3`, rdnamcp for web_search):
+//! 32k slot, lfm2:8b on CPU; `LIGUS_EVAL_RUNS=3`, rdnamcp for web_search):
 //!
 //! ```text
 //! scenario            gemma4:12b                 lfm2:8b
@@ -73,7 +73,7 @@
 //!
 //! Loop robustness (repeat guard, `tool_choice: "none"` + nudge on the final
 //! round, reasoning echo, "trust tool results" prompt line), same gateway,
-//! later on 2026-10-19, `HIVE_EVAL_RUNS=3`, run_command off. "Before" is the
+//! later on 2026-10-19, `LIGUS_EVAL_RUNS=3`, run_command off. "Before" is the
 //! harness without those changes, measured the same afternoon:
 //!
 //! ```text
@@ -145,7 +145,7 @@ fn chat_url(raw: &str) -> String {
 }
 
 fn models() -> Vec<String> {
-    env("HIVE_EVAL_MODELS")
+    env("LIGUS_EVAL_MODELS")
         .unwrap_or_else(|| "gemma4:12b".into())
         .split(',')
         .map(|m| m.trim().to_string())
@@ -158,11 +158,11 @@ fn runtime(endpoint: &str, model: &str) -> ResolvedRuntime {
         provider: ModelProviderKind::Custom,
         model: model.to_string(),
         endpoint: endpoint.to_string(),
-        api_key: env("HIVE_EVAL_API_KEY"),
+        api_key: env("LIGUS_EVAL_API_KEY"),
         args: vec![],
         model_provider_id: None,
         model_base_url: None,
-        context_window_tokens: Some(env_num("HIVE_EVAL_WINDOW", 32_768)),
+        context_window_tokens: Some(env_num("LIGUS_EVAL_WINDOW", 32_768)),
         keep_alive: None,
         think: None,
         tools: true,
@@ -172,7 +172,7 @@ fn runtime(endpoint: &str, model: &str) -> ResolvedRuntime {
 }
 
 fn wants(scenario: &str) -> bool {
-    match env("HIVE_EVAL_SCENARIOS") {
+    match env("LIGUS_EVAL_SCENARIOS") {
         Some(list) => list.split(',').any(|s| s.trim() == scenario),
         None => true,
     }
@@ -437,7 +437,7 @@ fn check_passes(dir: &Path) -> (bool, String) {
 }
 
 async fn scenario_bug_fix(rt: &ResolvedRuntime, run: usize) -> Outcome {
-    let commands = env("HIVE_EVAL_COMMANDS").as_deref() == Some("1");
+    let commands = env("LIGUS_EVAL_COMMANDS").as_deref() == Some("1");
     let repo = planted_repo(&format!("bug-{}-{run}", rt.model.replace([':', '/'], "_")));
     let chat = "eval-chat";
     chat_worktree(&repo, chat).unwrap();
@@ -543,7 +543,7 @@ fn recalled(text: &str) -> Vec<bool> {
 
 async fn scenario_compaction_recall(rt: &ResolvedRuntime) -> Outcome {
     let (history, fact_ids) = synthetic_history();
-    let budget: i64 = env_num("HIVE_EVAL_HISTORY_BUDGET", 3000);
+    let budget: i64 = env_num("LIGUS_EVAL_HISTORY_BUDGET", 3000);
     let plan = plan_with_hysteresis(&history, budget, None, DEFAULT_HIGH_WATERMARK, DEFAULT_LOW_WATERMARK);
     assert!(plan.moved, "the synthetic history must overflow the budget");
     assert!(
@@ -617,9 +617,9 @@ impl ToolExecutor for McpExec {
 }
 
 async fn live_mcp() -> Option<(Vec<Value>, McpExec)> {
-    let url = env("HIVE_EVAL_MCP_URL")?;
-    let token = env("HIVE_EVAL_MCP_TOKEN")
-        .or_else(|| std::fs::read_to_string(env("HIVE_EVAL_MCP_TOKEN_FILE")?).ok())
+    let url = env("LIGUS_EVAL_MCP_URL")?;
+    let token = env("LIGUS_EVAL_MCP_TOKEN")
+        .or_else(|| std::fs::read_to_string(env("LIGUS_EVAL_MCP_TOKEN_FILE")?).ok())
         .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty());
     let registry = McpRegistry::new(vec![McpServerSpec {
@@ -698,15 +698,15 @@ async fn scenario_web_search(rt: &ResolvedRuntime, mcp: &(Vec<Value>, McpExec), 
 
 #[tokio::test]
 async fn local_harness_eval() {
-    let Some(endpoint) = env("HIVE_EVAL_ENDPOINT").map(|e| chat_url(&e)) else {
-        eprintln!("HIVE_EVAL_ENDPOINT unset; skipping the local-harness eval");
+    let Some(endpoint) = env("LIGUS_EVAL_ENDPOINT").map(|e| chat_url(&e)) else {
+        eprintln!("LIGUS_EVAL_ENDPOINT unset; skipping the local-harness eval");
         return;
     };
-    let runs: usize = env_num("HIVE_EVAL_RUNS", 1usize).max(1);
-    let timeout = Duration::from_secs(env_num("HIVE_EVAL_TIMEOUT_SECS", 600u64));
+    let runs: usize = env_num("LIGUS_EVAL_RUNS", 1usize).max(1);
+    let timeout = Duration::from_secs(env_num("LIGUS_EVAL_TIMEOUT_SECS", 600u64));
     let mcp = if wants("web_search") { live_mcp().await } else { None };
     if wants("web_search") && mcp.is_none() {
-        eprintln!("HIVE_EVAL_MCP_URL unset or no tools listed; skipping web_search");
+        eprintln!("LIGUS_EVAL_MCP_URL unset or no tools listed; skipping web_search");
     }
     let truth = if mcp.is_some() { rust_stable_version().await } else { None };
 
@@ -775,12 +775,12 @@ async fn local_harness_eval() {
 /// planted bug through an OpenAI-compatible gateway? See the module docs.
 #[tokio::test]
 async fn pi_smoke_fixes_a_planted_bug() {
-    let (Some(endpoint), Some(pi)) = (env("HIVE_EVAL_ENDPOINT"), env("HIVE_EVAL_PI")) else {
-        eprintln!("HIVE_EVAL_ENDPOINT or HIVE_EVAL_PI unset; skipping the pi smoke test");
+    let (Some(endpoint), Some(pi)) = (env("LIGUS_EVAL_ENDPOINT"), env("LIGUS_EVAL_PI")) else {
+        eprintln!("LIGUS_EVAL_ENDPOINT or LIGUS_EVAL_PI unset; skipping the pi smoke test");
         return;
     };
     let base_url = chat_url(&endpoint).trim_end_matches("/chat/completions").to_string();
-    let model = env("HIVE_EVAL_PI_MODEL").unwrap_or_else(|| models().remove(0));
+    let model = env("LIGUS_EVAL_PI_MODEL").unwrap_or_else(|| models().remove(0));
     let program = if pi == "1" { "pi".to_string() } else { pi };
     let rt = ResolvedRuntime {
         provider: ModelProviderKind::Pi,

@@ -277,4 +277,101 @@ mod tests {
         std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o600)).unwrap();
         assert!(legacy.join("hive.db").exists());
     }
+
+    /// What a data dir holds, as the app would load it: event counts, the
+    /// device identity (with its keys), and the remembered workspaces.
+    #[derive(Debug, PartialEq, Eq)]
+    struct Loaded {
+        sessions: usize,
+        events: usize,
+        max_row_id: i64,
+        account: uuid::Uuid,
+        device: uuid::Uuid,
+        device_pubkey: Vec<u8>,
+        recent_workspaces: String,
+    }
+
+    fn load(dir: &Path) -> Loaded {
+        let store = hive_runtime::EventStore::open(dir.join("hive.db")).unwrap();
+        let ids = store.list_session_ids().unwrap();
+        let events = ids.iter().map(|id| store.list(*id).unwrap().len()).sum();
+        let identity = hive_runtime::IdentityStore::new(dir, hive_runtime::FileKeyVault::new(dir));
+        let stored = identity.load().unwrap().expect("an identity");
+        let device_kp = identity.device_keypair(stored.device.id).expect("device key loads");
+        identity.account_keypair(stored.account.id).expect("account key loads");
+        Loaded {
+            sessions: ids.len(),
+            events,
+            max_row_id: store.max_row_id().unwrap(),
+            account: stored.account.id,
+            device: stored.device.id,
+            device_pubkey: device_kp.public_key_bytes().to_vec(),
+            recent_workspaces: std::fs::read_to_string(dir.join("recent-workspaces.json")).unwrap_or_default(),
+        }
+    }
+
+    /// Size + content hash of every file under `dir`, for "untouched" checks.
+    fn fingerprint(dir: &Path) -> Vec<(PathBuf, u64, u64)> {
+        use std::hash::{Hash, Hasher};
+        let mut out = Vec::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else {
+                    let bytes = std::fs::read(&p).unwrap();
+                    let mut h = std::collections::hash_map::DefaultHasher::new();
+                    bytes.hash(&mut h);
+                    out.push((p.strip_prefix(dir).unwrap().to_path_buf(), bytes.len() as u64, h.finish()));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// Dry run on a COPY of real data. Opt-in: set
+    /// `LIGUS_MIGRATION_DRYRUN_BASE` to a scratch dir holding a copy of
+    /// `com.hive.desktop` (never the real app-data dir), then
+    /// `cargo test -p Hive --lib dry_run_on_a_copy -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn dry_run_on_a_copy_of_real_data() {
+        let Some(base) = std::env::var_os("LIGUS_MIGRATION_DRYRUN_BASE").map(PathBuf::from) else {
+            eprintln!("LIGUS_MIGRATION_DRYRUN_BASE unset; skipping");
+            return;
+        };
+        assert!(!base.to_string_lossy().contains("Library/Application Support"), "point this at a copy, not the real dir");
+        let legacy = base.join(hive_core::compat::LEGACY_DESKTOP_APP_ID);
+        let new_dir = base.join(hive_core::compat::DESKTOP_APP_ID);
+        assert!(!new_dir.exists(), "start from a copy with no {} dir", new_dir.display());
+
+        let before = load(&legacy);
+        let legacy_print = fingerprint(&legacy);
+        let t = std::time::Instant::now();
+        let out = migrate(&new_dir, &legacy).unwrap();
+        let took = t.elapsed();
+        assert_eq!(out, Outcome::Migrated { from: legacy.clone() });
+        assert_eq!(fingerprint(&legacy), legacy_print, "legacy dir untouched");
+        assert!(new_dir.join(MIGRATED_FROM_FILE).is_file());
+
+        // Hide the legacy dir so nothing in the new one can lean on it.
+        let hidden = base.join("legacy-hidden");
+        std::fs::rename(&legacy, &hidden).unwrap();
+        let after = load(&new_dir);
+        std::fs::rename(&hidden, &legacy).unwrap();
+        assert_eq!(after, before, "the migrated dir loads the same data and identity");
+        assert_eq!(migrate(&new_dir, &legacy).unwrap(), Outcome::AlreadyPresent, "second launch is a no-op");
+        eprintln!(
+            "dry run OK in {took:?}: {} sessions, {} events, max row {}, account {}, device {}, recent workspaces {}",
+            after.sessions,
+            after.events,
+            after.max_row_id,
+            after.account,
+            after.device,
+            after.recent_workspaces.trim()
+        );
+    }
 }

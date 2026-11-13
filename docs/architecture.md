@@ -169,7 +169,7 @@ sequenceDiagram
   participant R as hive-relay
   participant B as Device B (SyncEngine)
 
-  Note over A,B: same HIVE_RELAY_URL + HIVE_WORKSPACE (room); optional HIVE_WORKSPACE_KEY
+  Note over A,B: same LIGUS_RELAY_URL + LIGUS_WORKSPACE (room); optional LIGUS_WORKSPACE_KEY
   A->>A: take_unpushed (local events not yet sent)
   A->>A: seal each w/ workspace key (ChaCha20-Poly1305) [if key set]
   A->>R: POST /v1/workspaces/{room}/envelopes (ciphertext)
@@ -206,7 +206,7 @@ flowchart TD
 
 - **Signing** (live): every event is signed by the writing device; `EnvelopeVerifier`
   verifies on read and quarantines bad signatures.
-- **Sealing on the wire** (live, opt-in): shared `HIVE_WORKSPACE_KEY` → symmetric
+- **Sealing on the wire** (live, opt-in): shared `LIGUS_WORKSPACE_KEY` → symmetric
   seal so the relay sees only ciphertext.
 - **Per-device HPKE + rotation** (built + tested): the path for distributing the
   workspace key without a shared secret; wiring to membership exchange is a
