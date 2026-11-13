@@ -954,6 +954,17 @@ fn apply_mark_directives(
 /// decides).
 pub(crate) fn before_file_proposal(state: &AppState, session_id: Uuid, workspace_id: Uuid, agent: Option<Uuid>, proposal: &mut hive_core::ActionProposal) {
     let config = state.service.lock().unwrap().flow_config(workspace_id).unwrap_or_default();
+    // Path zones: the review bar comes from where the change lands.
+    if let Some(kind) = flow::zones::apply_review_bar(proposal, &config.zones) {
+        let why = match kind {
+            flow::ZoneKind::Core => "it touches core paths",
+            flow::ZoneKind::LowBar => "every file is in a low-bar path",
+        };
+        proposal.body.push_str(&format!(
+            "\n\n_Review bar: {} approval(s) from {:?} or above, because {why}._",
+            proposal.required_approvals, proposal.approval_role_floor
+        ));
+    }
     let me = flow::agent_key(agent);
     let hits = flow::marks::conflicts(config.marks.values(), &proposal.changed_files, &me, flow::now_ms());
     if hits.is_empty() {
@@ -1107,6 +1118,57 @@ pub(crate) fn flow_clear_mark(state: State<'_, AppState>, mark_id: String) -> Re
         .lock()
         .unwrap()
         .record_flow(hive_core::workspace_config_session_id(wid), wid, FlowRecord::MarkCleared { mark_id: id })
+        .map_err(map_err)
+}
+
+/// Path zones (Flow → Zones).
+#[tauri::command]
+pub(crate) fn flow_zones(state: State<'_, AppState>) -> Result<Vec<flow::PathZone>, String> {
+    let wid = state.active_workspace_id();
+    Ok(state.service.lock().unwrap().flow_config(wid).map_err(map_err)?.zones)
+}
+
+/// Add a path zone (admins only — it sets the review bar).
+#[tauri::command]
+pub(crate) fn flow_set_zone(
+    state: State<'_, AppState>,
+    pattern: String,
+    kind: flow::ZoneKind,
+    approval_floor: Option<hive_core::WorkspaceRole>,
+    required_approvals: Option<u32>,
+    note: String,
+) -> Result<(), String> {
+    let pattern = pattern.trim().to_string();
+    if pattern.is_empty() || pattern.contains("..") {
+        return Err("give a workspace-relative path or pattern".into());
+    }
+    let wid = state.active_workspace_id();
+    let zone = flow::PathZone {
+        id: Uuid::new_v4(),
+        pattern,
+        kind,
+        approval_floor,
+        required_approvals,
+        note: note.trim().chars().take(200).collect(),
+        at_ms: flow::now_ms(),
+    };
+    state
+        .service
+        .lock()
+        .unwrap()
+        .record_flow(hive_core::workspace_config_session_id(wid), wid, FlowRecord::Zone(zone))
+        .map_err(map_err)
+}
+
+#[tauri::command]
+pub(crate) fn flow_remove_zone(state: State<'_, AppState>, zone_id: String) -> Result<(), String> {
+    let id = Uuid::parse_str(&zone_id).map_err(map_err)?;
+    let wid = state.active_workspace_id();
+    state
+        .service
+        .lock()
+        .unwrap()
+        .record_flow(hive_core::workspace_config_session_id(wid), wid, FlowRecord::ZoneRemoved { zone_id: id })
         .map_err(map_err)
 }
 

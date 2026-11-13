@@ -3,16 +3,18 @@ import { RailFrame } from "@/components/RightRail";
 import { RoutingSection } from "@/components/flow/RoutingSection";
 import { QueueSection } from "@/components/flow/QueueSection";
 import { MarksSection } from "@/components/flow/MarksSection";
+import { ZonesSection } from "@/components/flow/ZonesSection";
 
 /// The Flow pane: how work moves through the workspace — who the router
 /// would send un-addressed work to, and (as more of flow lands) the task
 /// board, workspace marks and the review queue.
-export type FlowTab = "queue" | "marks" | "routing";
+export type FlowTab = "queue" | "marks" | "routing" | "zones";
 
 const TABS: { id: FlowTab; label: string }[] = [
   { id: "queue", label: "Queue" },
   { id: "marks", label: "Marks" },
   { id: "routing", label: "Routing" },
+  { id: "zones", label: "Zones" },
 ];
 
 export function FlowPane({ initialTab = "queue" }: { initialTab?: FlowTab }) {
@@ -29,6 +31,7 @@ export function FlowPane({ initialTab = "queue" }: { initialTab?: FlowTab }) {
       {tab === "queue" && <QueueSection />}
       {tab === "marks" && <MarksSection />}
       {tab === "routing" && <RoutingSection />}
+      {tab === "zones" && <ZonesSection />}
     </RailFrame>
   );
 }

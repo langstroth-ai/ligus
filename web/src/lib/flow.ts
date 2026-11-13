@@ -252,3 +252,27 @@ export const MARK_LABEL: Record<MarkKind, string> = {
   underConstruction: "Under construction",
   needsReview: "Needs review",
 };
+
+export type ZoneKind = "core" | "lowBar";
+export type Role = "owner" | "admin" | "contributor" | "viewer";
+
+export interface PathZone {
+  id: string;
+  pattern: string;
+  kind: ZoneKind;
+  approvalFloor?: Role;
+  requiredApprovals?: number;
+  note: string;
+  atMs: number;
+}
+
+export const listZones = () => invoke<PathZone[]>("flow_zones");
+export const setZone = (z: { pattern: string; kind: ZoneKind; approvalFloor?: Role; requiredApprovals?: number; note: string }) =>
+  invoke<void>("flow_set_zone", {
+    pattern: z.pattern,
+    kind: z.kind,
+    approvalFloor: z.approvalFloor ?? null,
+    requiredApprovals: z.requiredApprovals ?? null,
+    note: z.note,
+  });
+export const removeZone = (zoneId: string) => invoke<void>("flow_remove_zone", { zoneId });
