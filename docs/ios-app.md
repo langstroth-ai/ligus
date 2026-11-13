@@ -479,4 +479,4 @@ and a fake phone. The live test runs one turn
 per model against the real gateway, in which the agent has to `read_file` a
 planted note to answer.
 
-Deployment: [`deploy/hive-serve/README.md`](../deploy/hive-serve/README.md).
+Deployment: [`deploy/ligus-serve/README.md`](../deploy/ligus-serve/README.md).

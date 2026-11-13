@@ -337,7 +337,7 @@ async fn register_client(
 ) -> Result<String, OAuthError> {
     let endpoint = meta.registration_endpoint.as_ref().ok_or(OAuthError::NeedsClientId)?;
     let body = serde_json::json!({
-        "client_name": "Hive",
+        "client_name": "Ligus",
         "redirect_uris": [redirect_uri],
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],

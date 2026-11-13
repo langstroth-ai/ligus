@@ -1,17 +1,18 @@
 #!/bin/sh
-# Hive CLI installer.
+# Ligus CLI installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/ligus-ai/hive/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/ligus-ai/ligus/main/install.sh | sh
 #
-# Downloads the prebuilt `hive` binary for your platform from the latest GitHub
-# Release and installs it. Override with env vars:
+# Downloads the prebuilt `ligus` binary for your platform from the latest GitHub
+# Release and installs it, plus a `hive` symlink (the former command name, kept
+# through v2.1). Override with env vars:
 #   LIGUS_VERSION      release tag to install (default: latest)
 #   LIGUS_INSTALL_DIR  install directory (default: $HOME/.local/bin)
 # The legacy names HIVE_VERSION / HIVE_INSTALL_DIR are still read as fallbacks.
 set -eu
 
-REPO="ligus-ai/hive"
-BIN="hive"
+REPO="ligus-ai/ligus"
+BIN="ligus"
 
 os="$(uname -s)"
 arch="$(uname -m)"
@@ -30,7 +31,7 @@ case "$os" in
 esac
 
 if [ -z "$target" ]; then
-  echo "hive: unsupported platform $os/$arch — build from source: cargo install --path crates/hive-cli" >&2
+  echo "ligus: unsupported platform $os/$arch — build from source: cargo install --path crates/hive-cli" >&2
   exit 1
 fi
 
@@ -45,18 +46,22 @@ dir="${LIGUS_INSTALL_DIR:-${HIVE_INSTALL_DIR:-$HOME/.local/bin}}"
 mkdir -p "$dir"
 tmp="$(mktemp)"
 
-echo "hive: downloading $BIN ($target, $version)…"
+echo "ligus: downloading $BIN ($target, $version)…"
 if ! curl -fSL --proto '=https' --tlsv1.2 "$url" -o "$tmp"; then
-  echo "hive: download failed from $url" >&2
+  echo "ligus: download failed from $url" >&2
   rm -f "$tmp"
   exit 1
 fi
 chmod +x "$tmp"
 mv "$tmp" "$dir/$BIN"
+# Former command name: a symlink, unless something else already lives there.
+if [ ! -e "$dir/hive" ] || [ -L "$dir/hive" ]; then
+  ln -sf "$BIN" "$dir/hive"
+fi
 
-echo "hive: installed to $dir/$BIN"
+echo "ligus: installed to $dir/$BIN"
 case ":$PATH:" in
   *":$dir:"*) ;;
-  *) echo "hive: add it to your PATH — export PATH=\"$dir:\$PATH\"" ;;
+  *) echo "ligus: add it to your PATH — export PATH=\"$dir:\$PATH\"" ;;
 esac
-echo "hive: run '$BIN --help' to get started."
+echo "ligus: run '$BIN --help' to get started."

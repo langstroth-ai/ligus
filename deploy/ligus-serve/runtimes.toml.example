@@ -1,4 +1,4 @@
-# This host's own runtimes ($HIVE_DATA_DIR/runtimes.toml). Never synced.
+# This host's own runtimes ($LIGUS_DATA_DIR/runtimes.toml). Never synced.
 #
 # An agent created in the desktop app is bound to one of the desktop's
 # device-local runtimes; its id means nothing here. When such an agent is sent

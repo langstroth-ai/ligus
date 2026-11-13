@@ -38,7 +38,7 @@ use uuid::Uuid;
 
 use crate::envelope_verifier::{QuarantineReason, Verdict};
 
-const USER_AGENT: &str = "hive-app";
+const USER_AGENT: &str = "ligus-app";
 /// How long a fetched GitHub verdict is trusted before a re-fetch. Keeps the
 /// hot ingest path off the network while still noticing key changes eventually.
 pub const DEFAULT_TTL: Duration = Duration::from_secs(10 * 60);

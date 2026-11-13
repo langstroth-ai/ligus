@@ -2344,9 +2344,9 @@ mod tests {
     #[test]
     fn shipped_examples_are_valid() {
         for (name, text) in [
-            ("dashboard.toml.example", include_str!("../../../../deploy/hive-serve/dashboard.toml.example")),
-            ("dashboard-solar.toml.example", include_str!("../../../../deploy/hive-serve/dashboard-solar.toml.example")),
-            ("dashboard-team.toml.example", include_str!("../../../../deploy/hive-serve/dashboard-team.toml.example")),
+            ("dashboard.toml.example", include_str!("../../../../deploy/ligus-serve/dashboard.toml.example")),
+            ("dashboard-solar.toml.example", include_str!("../../../../deploy/ligus-serve/dashboard-solar.toml.example")),
+            ("dashboard-team.toml.example", include_str!("../../../../deploy/ligus-serve/dashboard-team.toml.example")),
         ] {
             let cfg = parse(text).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert_eq!(validate(&cfg), Vec::<String>::new(), "{name}");
@@ -2728,8 +2728,8 @@ mod tests {
         // parses to the same thing and validates; none of them sets builtin,
         // so the built-in section shows on top.
         for (name, text) in [
-            ("dashboard.toml.example", include_str!("../../../../deploy/hive-serve/dashboard.toml.example")),
-            ("dashboard-solar.toml.example", include_str!("../../../../deploy/hive-serve/dashboard-solar.toml.example")),
+            ("dashboard.toml.example", include_str!("../../../../deploy/ligus-serve/dashboard.toml.example")),
+            ("dashboard-solar.toml.example", include_str!("../../../../deploy/ligus-serve/dashboard-solar.toml.example")),
         ] {
             let cfg = parse(text).unwrap();
             assert_eq!(cfg.builtin, None, "{name}");

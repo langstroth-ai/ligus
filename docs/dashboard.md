@@ -201,7 +201,7 @@ metric = "turns.by_agent_7d"
 
 `source = "mcp"` calls a tool on an MCP server from `HIVE_MCP_CONFIG`, the
 same file that gives agents on this host their MCP tools (see
-[`deploy/hive-serve/mcp.toml.example`](../deploy/hive-serve/mcp.toml.example)).
+[`deploy/ligus-serve/mcp.toml.example`](../deploy/ligus-serve/mcp.toml.example)).
 Bearer tokens stay in the environment variables that file names.
 
 ```toml
@@ -315,15 +315,15 @@ text. A client should ignore kinds and keys it doesn't know.
 ## Examples
 
 - No home lab: no file at all gives the Hive section.
-  [`deploy/hive-serve/dashboard-team.toml.example`](../deploy/hive-serve/dashboard-team.toml.example)
+  [`deploy/ligus-serve/dashboard-team.toml.example`](../deploy/ligus-serve/dashboard-team.toml.example)
   adds a review queue from `hive` metrics, open pull requests from an MCP
   tool, and a health check.
 
-- [`deploy/hive-serve/dashboard.toml.example`](../deploy/hive-serve/dashboard.toml.example):
+- [`deploy/ligus-serve/dashboard.toml.example`](../deploy/ligus-serve/dashboard.toml.example):
   this box (CPU, memory, load, disks, network from node_exporter) and GPU /
   LLM workers (scrape targets, GPU busy and temperature, llama.cpp generation
   speed, an HTTP health check).
-- [`deploy/hive-serve/dashboard-solar.toml.example`](../deploy/hive-serve/dashboard-solar.toml.example):
+- [`deploy/ligus-serve/dashboard-solar.toml.example`](../deploy/ligus-serve/dashboard-solar.toml.example):
   an optional solar section (production, house, grid, the share of a load
   covered by solar, energy over 24 h) from an Enphase Envoy exporter.
 

@@ -1,6 +1,6 @@
 name: Release (desktop app)
 
-# Builds the Hive desktop app for macOS, Linux, and Windows on GitHub runners
+# Builds the Ligus desktop app for macOS, Linux, and Windows on GitHub runners
 # and attaches the installers to a GitHub Release. Artifacts live as release
 # assets — never committed to source control. The (private) hive-site Netlify
 # build pulls the latest assets at deploy time (see that repo's
@@ -118,15 +118,17 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Hive's GitHub OAuth App client id, baked in by build.rs so GitHub
+          # The GitHub OAuth App client id, baked in by build.rs so GitHub
           # sign-in (device flow) works in release builds. The id is public (not
           # a secret) but lives in a repo var/secret so it's not committed.
           # Without it, sign-in errors "needs a github oauth client id".
-          HIVE_GITHUB_CLIENT_ID: ${{ secrets.HIVE_GITHUB_CLIENT_ID }}
+          # build.rs reads LIGUS_* first, then the legacy HIVE_* name. The repo
+          # secret may still be named HIVE_GITHUB_CLIENT_ID.
+          LIGUS_GITHUB_CLIENT_ID: ${{ secrets.LIGUS_GITHUB_CLIENT_ID || secrets.HIVE_GITHUB_CLIENT_ID }}
           # Bake the release tag so the app can detect a newer published version
           # (the "update available" banner). Local/dev builds get "dev" and never
           # prompt. Bump docs-site/version.json to this tag when publishing.
-          HIVE_RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          LIGUS_RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
           # APPLE_* (when present) come from the "Configure macOS signing" step
           # via $GITHUB_ENV. tauri-action signs + notarizes + staples on macOS.
           # Auto-updater signing (scaffolded, #144): inert until these secrets
@@ -138,16 +140,16 @@ jobs:
         with:
           # cargo tauri build discovers app/tauri.conf.json from the repo root.
           tagName: ${{ github.event.inputs.tag || github.ref_name }}
-          releaseName: "Hive ${{ github.event.inputs.tag || github.ref_name }}"
+          releaseName: "Ligus ${{ github.event.inputs.tag || github.ref_name }}"
           releaseBody: "Installers attached below."
           releaseDraft: true
           prerelease: true
 
   # Auto-bump the Homebrew cask on the tap once the DMG is built + uploaded, so
-  # `brew upgrade --cask hive` tracks releases with no manual edits. Runs in the
+  # `brew upgrade --cask ligus-app` tracks releases with no manual edits. Runs in the
   # tag's context (no cross-workflow tag ambiguity) after `build` uploads assets.
   # Needs HOMEBREW_TAP_TOKEN — a fine-grained PAT with Contents:write on
-  # honeyhive-ai/homebrew-hive (the default GITHUB_TOKEN can't push cross-repo).
+  # ligus-ai/homebrew-ligus (the default GITHUB_TOKEN can't push cross-repo).
   # Skips cleanly when the secret is absent. NOTE: kept here rather than in a
   # `release: published` workflow because releases created by GITHUB_TOKEN do not
   # fire the `release` event (GitHub's recursion guard), so that trigger never ran.
@@ -168,23 +170,26 @@ jobs:
             exit 0
           fi
           VERSION="${TAG#v}"
-          DMG="Hive_${VERSION}_aarch64.dmg"
+          DMG="Ligus_${VERSION}_aarch64.dmg"
           echo "Downloading ${DMG} from release ${TAG}"
           for i in 1 2 3 4 5; do
-            if gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --pattern "${DMG}" --output hive.dmg --clobber; then
+            if gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --pattern "${DMG}" --output ligus.dmg --clobber; then
               break
             fi
             echo "asset not ready yet (attempt ${i}) - retrying"; sleep 15
           done
-          SHA=$(shasum -a 256 hive.dmg | awk '{print $1}')
+          SHA=$(shasum -a 256 ligus.dmg | awk '{print $1}')
           echo "sha256=$SHA"
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/honeyhive-ai/homebrew-hive.git" tap
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/ligus-ai/homebrew-ligus.git" tap
           cd tap
-          sed -i '' -E "s/version \"[^\"]*\"/version \"${VERSION}\"/" Casks/hive.rb
-          sed -i '' -E "s/sha256 \"[^\"]*\"/sha256 \"${SHA}\"/" Casks/hive.rb
-          git config user.name "hive-release-bot"
-          git config user.email "release@apiaryhq.ai"
-          if git commit -am "hive ${VERSION}"; then
+          # The desktop cask is ligus-app. Never recreate the old Casks/hive.rb:
+          # the tap's cask_renames.json maps hive to ligus-app.
+          test -f Casks/ligus-app.rb || { echo "::error::Casks/ligus-app.rb missing on the tap"; exit 1; }
+          sed -i '' -E "s/version \"[^\"]*\"/version \"${VERSION}\"/" Casks/ligus-app.rb
+          sed -i '' -E "s/sha256 \"[^\"]*\"/sha256 \"${SHA}\"/" Casks/ligus-app.rb
+          git config user.name "ligus-release-bot"
+          git config user.email "release@ligus.ai"
+          if git commit -am "ligus-app ${VERSION}"; then
             git push origin HEAD
             echo "Cask bumped to ${VERSION}."
           else

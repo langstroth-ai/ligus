@@ -1,4 +1,4 @@
-# MCP servers offered to agent turns on the home host (HIVE_MCP_CONFIG).
+# MCP servers offered to agent turns on the home host (LIGUS_MCP_CONFIG).
 # Presence here is the opt-in. Bearer tokens are never written to this file:
 # `token_env` names the environment variable holding one.
 

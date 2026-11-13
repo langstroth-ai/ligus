@@ -1,11 +1,11 @@
 # ligus serve dashboard: copy to dashboard.toml in the serve data dir
-# (HIVE_DATA_DIR, or set HIVE_DASHBOARD_FILE), then run
+# (LIGUS_DATA_DIR, or set LIGUS_DASHBOARD_FILE), then run
 #   ligus dashboard check
 # The phone shows these sections in its dashboard tab; the host runs every
 # query itself, so Prometheus and the URLs below never face the phone.
 # Format reference: docs/dashboard.md.
 #
-# The built-in Hive section (agents, proposals, workflows, turns, this host)
+# The built-in Ligus section (agents, proposals, workflows, turns, this host)
 # shows above these sections; add `builtin = false` (or "bottom") next to
 # `title` to hide or move it. No home lab? See dashboard-team.toml.example.
 #

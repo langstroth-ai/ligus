@@ -1,6 +1,8 @@
-# Builds the `hive` CLI/daemon binary for macOS + Linux and attaches it to the
-# GitHub Release for the tag, named `hive-<target>` so install.sh can fetch the
-# right one. The desktop app is built separately by release.yml.
+# Builds the `ligus` CLI/daemon binary for macOS + Linux and attaches it to the
+# GitHub Release for the tag as `ligus-<target>` (what install.sh and the tap
+# fetch) and, through v2.1, the same bytes as `hive-<target>` for anything that
+# still downloads the former name. The desktop app is built separately by
+# release.yml.
 name: release-cli
 
 on:
@@ -47,25 +49,32 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Build hive CLI
+      - name: Build ligus CLI
         run: cargo build --release --locked -p hive-cli --target ${{ matrix.target }}
 
       - name: Stage asset
         run: |
-          install -m 0755 "target/${{ matrix.target }}/release/hive" "hive-${{ matrix.target }}"
+          install -m 0755 "target/${{ matrix.target }}/release/ligus" "ligus-${{ matrix.target }}"
+          # Former asset name, same bytes (removed in v2.2). Run as `hive`, the
+          # binary prints a one-line reminder on stderr.
+          cp "ligus-${{ matrix.target }}" "hive-${{ matrix.target }}"
 
       - name: Attach to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: hive-${{ matrix.target }}
+          files: |
+            ligus-${{ matrix.target }}
+            hive-${{ matrix.target }}
           fail_on_unmatched_files: true
 
   # Publish/update the Homebrew CLI formula on the tap once the per-arch binaries
-  # are uploaded, so `brew install honeyhive-ai/hive/hive-cli` tracks releases.
-  # Named `hive-cli` to avoid colliding with the desktop `hive` cask in the same
-  # tap. Needs HOMEBREW_TAP_TOKEN (fine-grained PAT, Contents:write on
-  # honeyhive-ai/homebrew-hive); skips cleanly when absent.
+  # are uploaded, so `brew install ligus-ai/ligus/ligus` tracks releases. The
+  # formula is `ligus` (the desktop cask is `ligus-app`, so the names don't
+  # collide) and also links the former command name `hive`. Never write the old
+  # Formula/hive-cli.rb: the tap's formula_renames.json maps it to ligus. Needs
+  # HOMEBREW_TAP_TOKEN (fine-grained PAT, Contents:write on
+  # ligus-ai/homebrew-ligus); skips cleanly when absent.
   formula:
     needs: build
     if: ${{ !cancelled() && needs.build.result == 'success' }}
@@ -87,57 +96,59 @@ jobs:
           declare -A sha
           for t in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-musl x86_64-unknown-linux-musl; do
             for i in 1 2 3 4 5; do
-              if gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --pattern "hive-${t}" --output "hive-${t}" --clobber; then break; fi
-              echo "hive-${t} not ready (attempt ${i}) - retrying"; sleep 15
+              if gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --pattern "ligus-${t}" --output "ligus-${t}" --clobber; then break; fi
+              echo "ligus-${t} not ready (attempt ${i}) - retrying"; sleep 15
             done
-            sha[$t]=$(sha256sum "hive-${t}" | awk '{print $1}')
+            sha[$t]=$(sha256sum "ligus-${t}" | awk '{print $1}')
           done
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/honeyhive-ai/homebrew-hive.git" tap
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/ligus-ai/homebrew-ligus.git" tap
           mkdir -p tap/Formula
-          cat > tap/Formula/hive-cli.rb <<RUBY
-          class HiveCli < Formula
-            desc "Headless Hive client + agent daemon — connect a workspace, sync E2EE events, run agents"
-            homepage "https://github.com/honeyhive-ai/hive"
-            version "${VERSION}"
+          cat > tap/Formula/ligus.rb <<RUBY
+          class Ligus < Formula
+            desc "Headless Ligus client + agent daemon (formerly hive-cli)"
+            homepage "https://github.com/ligus-ai/ligus"
             license "MIT"
 
             on_macos do
               on_arm do
-                url "${base}/hive-aarch64-apple-darwin"
+                url "${base}/ligus-aarch64-apple-darwin"
                 sha256 "${sha[aarch64-apple-darwin]}"
               end
               on_intel do
-                url "${base}/hive-x86_64-apple-darwin"
+                url "${base}/ligus-x86_64-apple-darwin"
                 sha256 "${sha[x86_64-apple-darwin]}"
               end
             end
 
             on_linux do
               on_arm do
-                url "${base}/hive-aarch64-unknown-linux-musl"
+                url "${base}/ligus-aarch64-unknown-linux-musl"
                 sha256 "${sha[aarch64-unknown-linux-musl]}"
               end
               on_intel do
-                url "${base}/hive-x86_64-unknown-linux-musl"
+                url "${base}/ligus-x86_64-unknown-linux-musl"
                 sha256 "${sha[x86_64-unknown-linux-musl]}"
               end
             end
 
             def install
-              bin.install Dir["hive-*"].first => "hive"
+              bin.install Dir["ligus-*"].first => "ligus"
+              # Former command name, kept through v2.1; it prints a one-line reminder on stderr.
+              bin.install_symlink "ligus" => "hive"
             end
 
             test do
+              assert_path_exists bin/"ligus"
               assert_path_exists bin/"hive"
             end
           end
           RUBY
           cd tap
-          git config user.name "hive-release-bot"
-          git config user.email "release@apiaryhq.ai"
-          if git add Formula/hive-cli.rb && git commit -m "hive-cli ${VERSION}"; then
+          git config user.name "ligus-release-bot"
+          git config user.email "release@ligus.ai"
+          if git add Formula/ligus.rb && git commit -m "ligus ${VERSION}"; then
             git push origin HEAD
-            echo "Formula hive-cli bumped to ${VERSION}."
+            echo "Formula ligus bumped to ${VERSION}."
           else
             echo "Formula already at ${VERSION} — nothing to do."
           fi

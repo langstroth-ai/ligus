@@ -13777,7 +13777,7 @@ async fn generate_agent_bootstrap(
 
     let mut block = String::new();
     block.push_str("# Run on the remote agent box:\n");
-    block.push_str("brew install honeyhive-ai/hive/hive-cli && \\\n");
+    block.push_str("brew install ligus-ai/ligus/ligus && \\\n");
     block.push_str(&format!("  ligus enroll \"{invite}\" --token \"{token}\" && \\\n"));
     block.push_str(&format!("  ligus worker --label {label}\n"));
     if !enrolled {

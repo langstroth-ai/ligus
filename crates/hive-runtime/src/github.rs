@@ -15,7 +15,7 @@ const TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const USER_URL: &str = "https://api.github.com/user";
 const EMAILS_URL: &str = "https://api.github.com/user/emails";
 const SCOPE: &str = "read:user user:email";
-const USER_AGENT: &str = "hive-app";
+const USER_AGENT: &str = "ligus-app";
 
 /// Namespace for deriving a Hive account id from a GitHub user id (UUID v5).
 const ACCOUNT_NS: Uuid = Uuid::from_u128(0x6869_7665_6769_7468_6163_636f_756e_7401);

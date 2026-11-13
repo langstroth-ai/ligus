@@ -1,5 +1,5 @@
 # Manual fallback to bump the Homebrew cask on the tap repo
-# (honeyhive-ai/homebrew-hive) to a given tag's version + DMG sha256.
+# (ligus-ai/homebrew-ligus) to a given tag's version + DMG sha256.
 #
 # The automatic bump on every release lives in release.yml's `cask` job (it runs
 # in the tag's context after the DMG is uploaded). A `release: published` trigger
@@ -8,7 +8,7 @@
 # this workflow is dispatch-only — use it to re-bump a past release by hand.
 #
 # Needs HOMEBREW_TAP_TOKEN: a fine-grained PAT with Contents:write on
-# honeyhive-ai/homebrew-hive (the default GITHUB_TOKEN can't push cross-repo).
+# ligus-ai/homebrew-ligus (the default GITHUB_TOKEN can't push cross-repo).
 name: Update Homebrew cask (manual)
 
 on:
@@ -33,20 +33,23 @@ jobs:
             exit 0
           fi
           VERSION="${TAG#v}"
-          DMG="Hive_${VERSION}_aarch64.dmg"
+          DMG="Ligus_${VERSION}_aarch64.dmg"
           echo "Fetching $DMG to hash it…"
-          curl -fsSL --retry 5 --retry-delay 10 -o hive.dmg \
-            "https://github.com/honeyhive-ai/hive/releases/download/${TAG}/${DMG}"
-          SHA=$(shasum -a 256 hive.dmg | awk '{print $1}')
+          curl -fsSL --retry 5 --retry-delay 10 -o ligus.dmg \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${DMG}"
+          SHA=$(shasum -a 256 ligus.dmg | awk '{print $1}')
           echo "sha256=$SHA"
 
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/honeyhive-ai/homebrew-hive.git" tap
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/ligus-ai/homebrew-ligus.git" tap
           cd tap
-          sed -i '' -E "s/version \"[^\"]*\"/version \"${VERSION}\"/" Casks/hive.rb
-          sed -i '' -E "s/sha256 \"[^\"]*\"/sha256 \"${SHA}\"/" Casks/hive.rb
-          git config user.name "hive-release-bot"
-          git config user.email "release@apiaryhq.ai"
-          if git commit -am "hive ${VERSION}"; then
+          # The desktop cask is ligus-app. Never recreate the old Casks/hive.rb:
+          # the tap's cask_renames.json maps hive to ligus-app.
+          test -f Casks/ligus-app.rb || { echo "::error::Casks/ligus-app.rb missing on the tap"; exit 1; }
+          sed -i '' -E "s/version \"[^\"]*\"/version \"${VERSION}\"/" Casks/ligus-app.rb
+          sed -i '' -E "s/sha256 \"[^\"]*\"/sha256 \"${SHA}\"/" Casks/ligus-app.rb
+          git config user.name "ligus-release-bot"
+          git config user.email "release@ligus.ai"
+          if git commit -am "ligus-app ${VERSION}"; then
             git push origin HEAD
             echo "Cask bumped to ${VERSION}."
           else

@@ -1,7 +1,7 @@
 # ligus serve: the home host for the iOS app
 
 `ligus serve` runs on an always-on Linux box on your tailnet. It is an ordinary
-Hive device in your workspace: it syncs the E2EE event log through the relay
+Ligus device in your workspace: it syncs the E2EE event log through the relay
 like the desktop app, runs agents you send to it on your own model gateway, and
 gives the iPhone app a small HTTP + Server-Sent Events API on the box's
 Tailscale address. The phone holds only a bearer token. The workspace key and
@@ -11,13 +11,13 @@ Files here:
 
 | File | Goes to |
 |---|---|
-| `hive-serve.service` | `~/.config/systemd/user/hive-serve.service` |
-| `hive-serve.env.example` | `~/.config/hive-serve/hive-serve.env` (mode 0600, then edit) |
-| `runtimes.toml.example` | `$HIVE_DATA_DIR/runtimes.toml` |
-| `mcp.toml.example` | `~/.config/hive-serve/mcp.toml` (optional) |
-| `dashboard.toml.example` | `$HIVE_DATA_DIR/dashboard.toml` (optional: the app's dashboard tab, [`docs/dashboard.md`](../../docs/dashboard.md)) |
+| `ligus-serve.service` | `~/.config/systemd/user/ligus-serve.service` |
+| `ligus-serve.env.example` | `~/.config/ligus-serve/ligus-serve.env` (mode 0600, then edit) |
+| `runtimes.toml.example` | `$LIGUS_DATA_DIR/runtimes.toml` |
+| `mcp.toml.example` | `~/.config/ligus-serve/mcp.toml` (optional) |
+| `dashboard.toml.example` | `$LIGUS_DATA_DIR/dashboard.toml` (optional: the app's dashboard tab, [`docs/dashboard.md`](../../docs/dashboard.md)) |
 | `dashboard-solar.toml.example` | append to `dashboard.toml` (optional solar section) |
-| `dashboard-team.toml.example` | `$HIVE_DATA_DIR/dashboard.toml` (optional: a dashboard without a home lab: workspace metrics, an MCP-backed table, a health check) |
+| `dashboard-team.toml.example` | `$LIGUS_DATA_DIR/dashboard.toml` (optional: a dashboard without a home lab: workspace metrics, an MCP-backed table, a health check) |
 
 ## 1. Build on the box
 
@@ -27,27 +27,27 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profil
 . "$HOME/.cargo/env"
 sudo apt-get install -y build-essential pkg-config git   # C toolchain for bundled SQLite
 
-git clone https://github.com/honeyhive-ai/hive.git ~/src/hive   # or pull your branch
-cd ~/src/hive
+git clone https://github.com/ligus-ai/ligus.git ~/src/ligus   # or pull your branch
+cd ~/src/ligus
 cargo build --release -p hive-cli
-install -Dm755 target/release/hive ~/.local/bin/hive
+install -Dm755 target/release/ligus ~/.local/bin/ligus
 ```
 
-Only the `hive-cli` crate builds. The Tauri app and its web UI aren't needed on
+Only the `hive-cli` crate (it builds the `ligus` binary) builds. The Tauri app and its web UI aren't needed on
 the box.
 
 ## 2. Configure
 
 ```sh
-install -Dm600 deploy/hive-serve/hive-serve.env.example ~/.config/hive-serve/hive-serve.env
-$EDITOR ~/.config/hive-serve/hive-serve.env        # HIVE_DATA_DIR, HIVE_SERVE_LISTEN, ntfy, ...
-tailscale ip -4                                     # the address for HIVE_SERVE_LISTEN
+install -Dm600 deploy/ligus-serve/ligus-serve.env.example ~/.config/ligus-serve/ligus-serve.env
+$EDITOR ~/.config/ligus-serve/ligus-serve.env        # LIGUS_DATA_DIR, LIGUS_SERVE_LISTEN, ntfy, ...
+tailscale ip -4                                     # the address for LIGUS_SERVE_LISTEN
 ```
 
 For the CLI commands below, load the same environment into your shell:
 
 ```sh
-set -a; . ~/.config/hive-serve/hive-serve.env; set +a
+set -a; . ~/.config/ligus-serve/ligus-serve.env; set +a
 ```
 
 ## 3. Join the workspace
@@ -68,28 +68,28 @@ carries the workspace's E2EE key.
    ```
 
 `enroll` writes the connection, including the key, to
-`$HIVE_DATA_DIR/config.toml`. Keep that directory private (the unit sets
+`$LIGUS_DATA_DIR/config.toml`. Keep that directory private (the unit sets
 `UMask=0077`).
 
 On first start, `ligus serve` adds itself to the roster at the **Contributor**
 role. That is enough to chat, vote on proposals and move agents between hosts.
 It also registers itself as a host, so it appears in the desktop's host list
-under `HIVE_SERVE_LABEL`. A proposal whose `approvalRoleFloor` sits above
+under `LIGUS_SERVE_LABEL`. A proposal whose `approvalRoleFloor` sits above
 Contributor needs an Owner/Admin to promote this member in the desktop's
 People pane before the phone's vote counts. Defining workspace runtimes
 (`ligus add-runtime`) needs Admin.
 
 ## 4. Models, repos and tools
 
-- **Runtimes.** Copy `runtimes.toml.example` to `$HIVE_DATA_DIR/runtimes.toml`
+- **Runtimes.** Copy `runtimes.toml.example` to `$LIGUS_DATA_DIR/runtimes.toml`
   and point it at your gateway. Agents you send to this host use the runtime
   listed there (the `*` entry catches all), unless a workspace runtime with the
   agent's runtime id exists.
-- **Repos.** Clone the checkouts agents should work on under `HIVE_REPOS_DIR`
+- **Repos.** Clone the checkouts agents should work on under `LIGUS_REPOS_DIR`
   and bind one:
 
   ```sh
-  git clone <url> "$HIVE_REPOS_DIR/hive"
+  git clone <url> "$LIGUS_REPOS_DIR/hive"
   ligus bind-repo hive                  # the workspace's checkout
   ligus bind-repo other --chat <id>     # one chat on a different checkout
   ligus repos                           # show bindings
@@ -97,22 +97,22 @@ People pane before the phone's vote counts. Defining workspace runtimes
 
   The binding stays on this box and never syncs, the same as the desktop's
   workspace folder. A turn reads the chat's base worktree
-  (`.hive/worktrees/chat-<id>`). Its first write cuts a per-turn worktree, and
+  (`.ligus/worktrees/chat-<id>`; checkouts made before v2.0 stay under `.hive/`). Its first write cuts a per-turn worktree, and
   the diff comes back as a review proposal. Nothing is written to the checkout
   itself. Turns in a chat with no bound checkout get no file tools.
-- **MCP.** `HIVE_MCP_CONFIG` names a TOML file of MCP servers (see
+- **MCP.** `LIGUS_MCP_CONFIG` names a TOML file of MCP servers (see
   `mcp.toml.example`). Bearer tokens come from the environment variables it
   names.
-- `run_command` is off unless `HIVE_BUILTIN_RUN_COMMAND=1`.
+- `run_command` is off unless `LIGUS_BUILTIN_RUN_COMMAND=1`.
 
 ## 5. Run
 
 ```sh
-install -Dm644 deploy/hive-serve/hive-serve.service ~/.config/systemd/user/hive-serve.service
+install -Dm644 deploy/ligus-serve/ligus-serve.service ~/.config/systemd/user/ligus-serve.service
 systemctl --user daemon-reload
-systemctl --user enable --now hive-serve
+systemctl --user enable --now ligus-serve
 sudo loginctl enable-linger "$USER"     # start at boot, keep running after logout
-journalctl --user -u hive-serve -f
+journalctl --user -u ligus-serve -f
 ```
 
 Health check from any tailnet device: `curl http://<tailscale-ip>:8787/v1/health`.
@@ -122,18 +122,18 @@ Health check from any tailnet device: `curl http://<tailscale-ip>:8787/v1/health
 ```sh
 # Load the unit's settings first: without them `ligus pair` has no listen
 # address or data dir, and refuses rather than print a loopback link.
-set -a; . ~/.config/hive-serve/hive-serve.env; set +a
+set -a; . ~/.config/ligus-serve/ligus-serve.env; set +a
 ligus pair        # prints a QR code and a hive://pair?... link for the configured address
 ```
 
 Scan the QR code with the iPhone camera, or paste the link into the app. The
 link contains the API token, so run `ligus pair` in your own terminal. Don't run
 it in the unit, because the journal would keep the token. To revoke the phone,
-delete `$HIVE_DATA_DIR/serve.token` and restart. A new token is generated, and
+delete `$LIGUS_DATA_DIR/serve.token` and restart. A new token is generated, and
 you pair again.
 
 Optional, remote access without Tailscale: `ligus remote enable --relay
-https://<relay>` (with the unit's env loaded), restart the unit, then `hive
+https://<relay>` (with the unit's env loaded), restart the unit, then `ligus
 pair` prints a v2 link that also pairs over the relay. Phones paired that way
 are listed by `ligus phones list` and revoked with `ligus phones revoke <name>`.
 See [`docs/ios-app.md`](../../docs/ios-app.md#remote-access-through-a-relay-optional-off-by-default).
@@ -145,3 +145,12 @@ From the phone, open **Agents**, pick an agent and choose this host
 `ligus set-agent-host <agent> <host-id>`. After that, any `@agent` mention in
 the workspace runs on this box. The desktop shows the agent's host as this
 box's label.
+
+## Upgrading a box set up before v2.0
+
+Nothing has to change: the `HIVE_*` names in an existing env file still work
+(each prints a one-time note on stderr), and a `hive` binary or symlink keeps
+running as an alias through v2.1. To move over, install `ligus`, rename the
+keys in the env file from `HIVE_` to `LIGUS_`, point the unit's `ExecStart` at
+`ligus serve`, and keep `LIGUS_DATA_DIR` pointing at the existing data dir (no
+data moves).

@@ -1,18 +1,18 @@
-# systemd *user* unit for `ligus serve` — the home host the Hive iOS app talks to.
+# systemd *user* unit for `ligus serve` — the home host the Ligus iOS app talks to.
 #
 # Install (see README.md in this directory):
-#   install -Dm644 hive-serve.service ~/.config/systemd/user/hive-serve.service
-#   install -Dm600 hive-serve.env.example ~/.config/hive-serve/hive-serve.env   # then edit it
+#   install -Dm644 ligus-serve.service ~/.config/systemd/user/ligus-serve.service
+#   install -Dm600 ligus-serve.env.example ~/.config/ligus-serve/ligus-serve.env   # then edit it
 #   systemctl --user daemon-reload
-#   systemctl --user enable --now hive-serve
+#   systemctl --user enable --now ligus-serve
 #   sudo loginctl enable-linger "$USER"     # keep it running without a login session
 #
-# The API binds to the address in HIVE_SERVE_LISTEN (the box's Tailscale IP),
+# The API binds to the address in LIGUS_SERVE_LISTEN (the box's Tailscale IP),
 # never 0.0.0.0. If tailscaled isn't up yet at boot, the bind fails and
 # Restart=always retries until the address exists.
 
 [Unit]
-Description=Hive home host (ligus serve) for the iOS app
+Description=Ligus home host (ligus serve) for the iOS app
 Wants=network-online.target
 After=network-online.target
 
@@ -20,8 +20,8 @@ After=network-online.target
 Type=simple
 # Secrets (workspace key, relay token, ntfy token, MCP tokens) live only here,
 # mode 0600, never in the unit or the repo.
-EnvironmentFile=%h/.config/hive-serve/hive-serve.env
-ExecStart=%h/.local/bin/hive serve
+EnvironmentFile=%h/.config/ligus-serve/ligus-serve.env
+ExecStart=%h/.local/bin/ligus serve
 Restart=always
 RestartSec=5
 # Files it creates (token, state, worktrees) are private to the user.
