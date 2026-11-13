@@ -14333,6 +14333,8 @@ pub fn run() {
             flow::flow_zones,
             flow::flow_set_zone,
             flow::flow_remove_zone,
+            flow::flow_roster,
+            flow::flow_set_agent_profile,
             workflows::remove_workflow,
             workflows::set_workflow_enabled,
             workflows::workflow_change_request,

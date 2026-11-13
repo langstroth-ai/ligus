@@ -276,3 +276,47 @@ export const setZone = (z: { pattern: string; kind: ZoneKind; approvalFloor?: Ro
     note: z.note,
   });
 export const removeZone = (zoneId: string) => invoke<void>("flow_remove_zone", { zoneId });
+
+export type Career = "probation" | "proposer" | "reviewer";
+
+export interface AgentFlowProfile {
+  agentId: string;
+  career?: Career;
+  thresholdBias: number;
+  boardOptOut: boolean;
+  atMs: number;
+}
+
+export interface RosterRow {
+  agentId: string | null;
+  name: string;
+  runtimeId: string;
+  career: Career;
+  why: string;
+  judged: number;
+  approved: number;
+  profile: AgentFlowProfile | null;
+}
+
+export interface Diversity {
+  agents: number;
+  runtimes: number;
+  providers: number;
+  monoculture: boolean;
+  advice: string;
+}
+
+export interface RosterReport {
+  agents: RosterRow[];
+  diversity: Diversity;
+}
+
+export const rosterReport = () => invoke<RosterReport>("flow_roster");
+export const setAgentProfile = (agentId: string, career: Career | null, thresholdBias: number, boardOptOut: boolean) =>
+  invoke<void>("flow_set_agent_profile", { agentId, career, thresholdBias, boardOptOut });
+
+export const CAREER_LABEL: Record<Career, string> = {
+  probation: "Probation (low-risk work)",
+  proposer: "Proposer (full range)",
+  reviewer: "Reviewer duty",
+};

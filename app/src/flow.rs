@@ -214,7 +214,8 @@ fn key_secret_cache(state: &AppState, workspace_id: Uuid) -> Vec<u8> {
 /// The candidates the router may pick from: the primary plus the chat's agents
 /// (its participants, or the whole roster when none are picked). An agent
 /// sent to a host that is offline (by presence) is left out.
-fn candidates(state: &AppState, svc: &ChatService, session: &ChatSession) -> Vec<flow::route::Candidate> {
+fn candidates(state: &AppState, svc: &ChatService, session: &ChatSession, view: &WorkspaceView) -> Vec<flow::route::Candidate> {
+    let careers = careers(view);
     let now = hive_core::Timestamp::now();
     let hosts = svc.list_hosts(session.workspace_id).unwrap_or_default();
     let here = svc.device_id().to_string();
@@ -227,7 +228,10 @@ fn candidates(state: &AppState, svc: &ChatService, session: &ChatSession) -> Vec
         if !host_live(&a.host_id) {
             continue;
         }
-        out.push(flow::route::Candidate { agent: flow::agent_key(Some(a.id)), runtime_id: a.runtime_id.clone(), low_risk_only: false });
+        let key = flow::agent_key(Some(a.id));
+        // A new agent on probation only takes low-risk classes until it has a record.
+        let low_risk_only = careers.get(&key).is_some_and(|(c, _)| *c == flow::Career::Probation);
+        out.push(flow::route::Candidate { agent: key, runtime_id: a.runtime_id.clone(), low_risk_only });
     }
     out
 }
@@ -299,7 +303,7 @@ pub(crate) fn route_target(
     let now = flow::now_ms();
     let view = view_with(svc, session.workspace_id);
     let book = score_book(&view, &s, now);
-    let cands = candidates(state, svc, session);
+    let cands = candidates(state, svc, session, &view);
     let config_stops = view.config.route_stops.clone();
     let thread = thread_memory(session, now);
     let secret = key_secret_cache(state, session.workspace_id);
@@ -363,6 +367,133 @@ pub(crate) fn record_route_if_missing(state: &AppState, session_id: Uuid, trigge
     if let Some((wid, d)) = decision {
         record(state, session_id, wid, FlowRecord::RouteDecision(d));
     }
+}
+
+// ---------------------------------------------------------------------------
+// Careers and roster diversity
+// ---------------------------------------------------------------------------
+
+/// Agents created before careers existed start graduated, so upgrading
+/// doesn't put an established roster on probation. Fixed, so every device
+/// agrees.
+const CAREERS_SINCE_UNIX: i64 = 1_794_614_400; // 2026-11-14 00:00 UTC
+
+/// Every agent on the workspace roster (union across chats).
+fn roster(view: &WorkspaceView) -> Vec<hive_core::WorkspaceAgent> {
+    let mut out: Vec<hive_core::WorkspaceAgent> = Vec::new();
+    for s in view.sessions.iter() {
+        for a in &s.workspace_agents {
+            if !out.iter().any(|x| x.id == a.id) {
+                out.push(a.clone());
+            }
+        }
+    }
+    out
+}
+
+/// Career per agent key (the primary is always a proposer).
+pub(crate) fn careers(view: &WorkspaceView) -> HashMap<String, (flow::Career, &'static str)> {
+    let samples = flow::score::outcomes(&view.sessions);
+    let agents = roster(view);
+    let inputs: Vec<flow::career::CareerInput<'_>> = std::iter::once(flow::career::CareerInput {
+        agent: flow::PRIMARY.into(),
+        profile: None,
+        grandfathered: true,
+    })
+    .chain(agents.iter().map(|a| flow::career::CareerInput {
+        agent: flow::agent_key(Some(a.id)),
+        profile: view.config.profiles.get(&a.id),
+        grandfathered: a.created_at.inner().unix_timestamp() < CAREERS_SINCE_UNIX,
+    }))
+    .collect();
+    let queue = flow::tremble::gate_queue(&view.sessions, &Default::default(), flow::now_ms()).open as usize;
+    flow::career::careers(&inputs, &samples, queue, &Default::default())
+        .into_iter()
+        .map(|(k, c, why)| (k, (c, why)))
+        .collect()
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RosterRow {
+    pub agent_id: Option<Uuid>,
+    pub name: String,
+    pub runtime_id: String,
+    pub career: flow::Career,
+    pub why: String,
+    pub judged: u32,
+    pub approved: u32,
+    pub profile: Option<flow::AgentFlowProfile>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RosterReport {
+    pub agents: Vec<RosterRow>,
+    pub diversity: flow::career::Diversity,
+}
+
+pub(crate) fn roster_report(state: &AppState, workspace_id: Uuid) -> RosterReport {
+    let view = workspace_view(state, workspace_id);
+    let samples = flow::score::outcomes(&view.sessions);
+    let careers = careers(&view);
+    let runtimes = state.combined_runtimes();
+    let provider = |rt: &str| {
+        runtimes.iter().find(|r| r.id == rt).map(|r| format!("{:?}", r.provider_kind)).unwrap_or_else(|| rt.to_string())
+    };
+    let agents = roster(&view);
+    let mut rows = Vec::new();
+    for a in &agents {
+        let key = flow::agent_key(Some(a.id));
+        let (c, why) = careers.get(&key).copied().unwrap_or((flow::Career::Proposer, "track record"));
+        let (judged, approved) = flow::career::track_record(&samples, &key);
+        rows.push(RosterRow {
+            agent_id: Some(a.id),
+            name: a.name.clone(),
+            runtime_id: a.runtime_id.clone(),
+            career: c,
+            why: why.to_string(),
+            judged,
+            approved,
+            profile: view.config.profiles.get(&a.id).cloned(),
+        });
+    }
+    let pairs: Vec<(String, String)> = agents.iter().map(|a| (a.runtime_id.clone(), provider(&a.runtime_id))).collect();
+    RosterReport { agents: rows, diversity: flow::career::diversity(&pairs) }
+}
+
+/// Careers, track records and roster diversity (Flow → Roster).
+#[tauri::command]
+pub(crate) fn flow_roster(state: State<'_, AppState>) -> RosterReport {
+    let wid = state.active_workspace_id();
+    roster_report(&state, wid)
+}
+
+/// Pin an agent's career stage (or `None` for automatic), and set its
+/// task-board threshold bias and opt-out.
+#[tauri::command]
+pub(crate) fn flow_set_agent_profile(
+    state: State<'_, AppState>,
+    agent_id: String,
+    career: Option<flow::Career>,
+    threshold_bias: f64,
+    board_opt_out: bool,
+) -> Result<(), String> {
+    let id = Uuid::parse_str(&agent_id).map_err(map_err)?;
+    let wid = state.active_workspace_id();
+    let profile = flow::AgentFlowProfile {
+        agent_id: id,
+        career,
+        threshold_bias: threshold_bias.clamp(-3.0, 3.0),
+        board_opt_out,
+        at_ms: flow::now_ms(),
+    };
+    state
+        .service
+        .lock()
+        .unwrap()
+        .record_flow(hive_core::workspace_config_session_id(wid), wid, FlowRecord::AgentProfile(profile))
+        .map_err(map_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1755,6 +1886,19 @@ diff --git a/new.md b/new.md\nnew file mode 100644\n--- /dev/null\n+++ b/new.md\
 diff --git a/old.txt b/old.txt\ndeleted file mode 100644\n";
         assert_eq!(diff_touches(diff), vec![("src/a.rs".to_string(), "edit"), ("new.md".to_string(), "create"), ("old.txt".to_string(), "delete")]);
         assert!(diff_touches("").is_empty());
+    }
+
+    #[test]
+    fn new_agents_start_on_probation_and_older_ones_are_grandfathered() {
+        let mut s = session_with(&["veteran", "newbie"]);
+        s.workspace_agents[0].created_at = hive_core::Timestamp::from_unix_seconds(CAREERS_SINCE_UNIX - 10);
+        s.workspace_agents[1].created_at = hive_core::Timestamp::from_unix_seconds(CAREERS_SINCE_UNIX + 10);
+        let (vet, new) = (flow::agent_key(Some(s.workspace_agents[0].id)), flow::agent_key(Some(s.workspace_agents[1].id)));
+        let view = WorkspaceView { sessions: Arc::new(vec![s]), config: Arc::new(FlowState::default()) };
+        let c = careers(&view);
+        assert_eq!(c[flow::PRIMARY].0, flow::Career::Proposer);
+        assert_eq!(c[&vet].0, flow::Career::Proposer);
+        assert_eq!(c[&new].0, flow::Career::Probation);
     }
 
     #[test]
