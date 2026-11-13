@@ -164,6 +164,10 @@ pub fn remove_chat_worktree(repo_root: &Path, chat_id: &str) -> io::Result<()> {
     let path_str = path.to_string_lossy().into_owned();
     let _ = git(repo_root, &["worktree", "remove", "--force", &path_str]);
     let _ = git(repo_root, &["branch", "-D", &branch]);
+    // And any turn worktrees parked for reuse.
+    for parked in pooled(repo_root, chat_id) {
+        let _ = git(repo_root, &["worktree", "remove", "--force", &parked.to_string_lossy()]);
+    }
     Ok(())
 }
 
@@ -277,6 +281,8 @@ pub struct LazyTurnWorktree {
     chat_id: String,
     turn_id: String,
     state: std::sync::Mutex<LazyTurnState>,
+    /// Take a parked worktree of the chat when cutting (see [`Worktree::park`]).
+    reuse: bool,
 }
 
 #[derive(Debug)]
@@ -294,7 +300,14 @@ impl LazyTurnWorktree {
             chat_id: chat_id.into(),
             turn_id: turn_id.into(),
             state: std::sync::Mutex::new(LazyTurnState { worktree: None, closed: false }),
+            reuse: false,
         }
+    }
+
+    /// Reuse a parked worktree of the chat when the turn first writes.
+    pub fn with_reuse(mut self, reuse: bool) -> Self {
+        self.reuse = reuse;
+        self
     }
 
     /// Where a stopped turn's unfinished edits are saved (see `Drop`).
@@ -326,8 +339,8 @@ impl crate::builtin_tools::WriteRoot for LazyTurnWorktree {
         if st.closed {
             return Err("the turn has ended".into());
         }
-        let wt = cut_turn_worktree(&self.repo_root, &self.chat_id, &self.turn_id)
-            .map_err(|e| format!("isolation unavailable: {e}"))?;
+        let cut = if self.reuse { cut_turn_worktree_reusing } else { cut_turn_worktree };
+        let wt = cut(&self.repo_root, &self.chat_id, &self.turn_id).map_err(|e| format!("isolation unavailable: {e}"))?;
         tracing::info!(target: "worktree", path = %wt.path.display(), "turn wrote: cut its worktree");
         let path = wt.path.clone();
         st.worktree = Some(wt);
@@ -361,6 +374,174 @@ impl Drop for LazyTurnWorktree {
         if let Err(e) = wt.remove() {
             tracing::warn!(target: "worktree", path = %path.display(), "could not remove a stopped turn's worktree: {e}");
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Worktree reuse: a finished turn's worktree is parked (reset to clean, with
+// its ignored build artefacts and dependency caches kept) and the chat's next
+// turn checks out its new branch there instead of building a fresh tree.
+// ---------------------------------------------------------------------------
+
+/// Parked worktrees kept per chat.
+pub const POOL_PER_CHAT: usize = 2;
+
+fn pool_dir(repo_root: &Path) -> PathBuf {
+    hive_core::compat::workspace_state_path(repo_root, Path::new("worktrees"))
+}
+
+fn pool_prefix(chat_id: &str) -> String {
+    format!("pool-{}-", slug(chat_id))
+}
+
+/// Parked worktrees for a chat, oldest name first.
+fn pooled(repo_root: &Path, chat_id: &str) -> Vec<PathBuf> {
+    let prefix = pool_prefix(chat_id);
+    let mut v: Vec<PathBuf> = std::fs::read_dir(pool_dir(repo_root))
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter(|e| e.file_name().to_string_lossy().starts_with(&prefix))
+                .map(|e| e.path())
+                .collect()
+        })
+        .unwrap_or_default();
+    v.sort();
+    v
+}
+
+impl Worktree {
+    /// Park this worktree for the chat's next turn instead of removing it:
+    /// detach, drop the turn branch, discard tracked changes and untracked
+    /// files (ignored files — build output, dependency caches — stay), and
+    /// move it into the chat's pool. Over [`POOL_PER_CHAT`] parked trees, or
+    /// on any failure, it is removed as before.
+    pub fn park(self, chat_id: &str) -> io::Result<()> {
+        if pooled(&self.repo_root, chat_id).len() >= POOL_PER_CHAT {
+            return self.remove();
+        }
+        let parked = (|| -> io::Result<()> {
+            git(&self.path, &["checkout", "-q", "--detach"])?;
+            git(&self.path, &["reset", "-q", "--hard"])?;
+            git(&self.path, &["clean", "-q", "-fd"])?;
+            let _ = git(&self.repo_root, &["branch", "-D", &self.branch]);
+            let dest = pool_dir(&self.repo_root).join(format!("{}{}", pool_prefix(chat_id), slug(&uuid_like_suffix(&self.path))));
+            git(&self.repo_root, &["worktree", "move", &self.path.to_string_lossy(), &dest.to_string_lossy()])?;
+            Ok(())
+        })();
+        if parked.is_err() {
+            return self.remove();
+        }
+        Ok(())
+    }
+}
+
+fn uuid_like_suffix(path: &Path) -> String {
+    path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+/// Like [`cut_turn_worktree`], but reuse a parked worktree of the same chat
+/// when there is one (warm caches, built artefacts): it is moved to the
+/// turn's path and its new turn branch is checked out at the chat branch tip.
+/// Falls back to a fresh worktree on any failure.
+pub fn cut_turn_worktree_reusing(repo_root: &Path, chat_id: &str, turn_id: &str) -> io::Result<Worktree> {
+    for parked in pooled(repo_root, chat_id) {
+        let slug_id = slug(turn_id);
+        let branch = format!("hive/turn-{slug_id}");
+        let path = hive_core::compat::workspace_state_path(repo_root, Path::new("worktrees").join(&slug_id));
+        // Moving it out of the pool claims it; a concurrent turn that loses
+        // the race gets an error and tries the next one.
+        if git(repo_root, &["worktree", "move", &parked.to_string_lossy(), &path.to_string_lossy()]).is_err() {
+            continue;
+        }
+        let base = match chat_worktree(repo_root, chat_id) {
+            Ok(_) => format!("hive/chat/{chat_id}"),
+            Err(_) => "HEAD".to_string(),
+        };
+        let ready = git(&path, &["checkout", "-q", "-B", &branch, &base])
+            .and_then(|_| git(&path, &["reset", "-q", "--hard"]))
+            .and_then(|_| git(&path, &["clean", "-q", "-fd"]));
+        let wt = Worktree { path, branch, repo_root: repo_root.to_path_buf() };
+        match ready {
+            Ok(_) => {
+                tracing::info!(target: "worktree", path = %wt.path.display(), "reused a parked turn worktree");
+                return Ok(wt);
+            }
+            Err(e) => {
+                tracing::warn!(target: "worktree", "couldn't reuse a parked worktree, cutting fresh: {e}");
+                let _ = wt.remove();
+            }
+        }
+    }
+    cut_turn_worktree(repo_root, chat_id, turn_id)
+}
+
+#[cfg(test)]
+mod reuse_tests {
+    use super::*;
+
+    fn run(dir: &Path, args: &[&str]) {
+        let ok = command("git").arg("-C").arg(dir).args(args).output().unwrap().status.success();
+        assert!(ok, "git {args:?} failed");
+    }
+
+    fn repo() -> PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static N: AtomicU32 = AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!("ligus-pool-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        run(&dir, &["init", "-q"]);
+        run(&dir, &["config", "user.email", "t@t"]);
+        run(&dir, &["config", "user.name", "t"]);
+        run(&dir, &["config", "core.autocrlf", "false"]);
+        std::fs::write(dir.join("a.txt"), "hello\n").unwrap();
+        std::fs::write(dir.join(".gitignore"), "target/\n.ligus/\n.hive/\n").unwrap();
+        run(&dir, &["add", "-A"]);
+        run(&dir, &["commit", "-qm", "init"]);
+        dir
+    }
+
+    #[test]
+    fn parked_worktree_is_reused_with_ignored_files_and_a_clean_tree() {
+        let root = repo();
+        let wt = cut_turn_worktree_reusing(&root, "chat1", "turn-1").unwrap();
+        std::fs::create_dir_all(wt.path.join("target")).unwrap();
+        std::fs::write(wt.path.join("target/cache.bin"), "warm").unwrap();
+        std::fs::write(wt.path.join("a.txt"), "edited\n").unwrap();
+        std::fs::write(wt.path.join("scratch.txt"), "junk").unwrap();
+        let first = wt.path.clone();
+        wt.park("chat1").unwrap();
+        assert!(!first.exists());
+        assert_eq!(pooled(&root, "chat1").len(), 1);
+
+        let wt2 = cut_turn_worktree_reusing(&root, "chat1", "turn-2").unwrap();
+        assert_eq!(wt2.branch, "hive/turn-turn-2");
+        assert!(pooled(&root, "chat1").is_empty(), "claimed out of the pool");
+        // The ignored cache survived; tracked edits and untracked junk did not.
+        assert_eq!(std::fs::read_to_string(wt2.path.join("target/cache.bin")).unwrap(), "warm");
+        assert_eq!(std::fs::read_to_string(wt2.path.join("a.txt")).unwrap(), "hello\n");
+        assert!(!wt2.path.join("scratch.txt").exists());
+        assert!(wt2.diff().unwrap().trim().is_empty());
+        // Another chat never takes this chat's parked trees.
+        wt2.park("chat1").unwrap();
+        let other = cut_turn_worktree_reusing(&root, "chat2", "turn-3").unwrap();
+        assert!(!other.path.join("target/cache.bin").exists());
+        other.remove().unwrap();
+        // Deleting the chat drops its parked trees.
+        remove_chat_worktree(&root, "chat1").unwrap();
+        assert!(pooled(&root, "chat1").is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn pool_is_capped() {
+        let root = repo();
+        let trees: Vec<Worktree> = (0..POOL_PER_CHAT + 1).map(|i| cut_turn_worktree(&root, "c", &format!("t{i}")).unwrap()).collect();
+        for t in trees {
+            t.park("c").unwrap();
+        }
+        assert_eq!(pooled(&root, "c").len(), POOL_PER_CHAT);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
 

@@ -56,6 +56,9 @@ pub(crate) struct FlowSettings {
     /// Opt-in: agents pick up task-board work on their own when an item's
     /// stimulus crosses their threshold (otherwise the board only suggests).
     pub board_auto_pickup: bool,
+    /// Keep a finished turn's worktree (with its build output and dependency
+    /// caches) for the chat's next turn instead of building a fresh one.
+    pub reuse_worktrees: bool,
 }
 
 impl Default for FlowSettings {
@@ -74,6 +77,7 @@ impl Default for FlowSettings {
             offer_idle_host: false,
             marks_in_context: true,
             board_auto_pickup: false,
+            reuse_worktrees: true,
         }
     }
 }
@@ -630,7 +634,7 @@ pub(crate) async fn pickup(app: &AppHandle, state: &State<'_, AppState>, item_id
     let posted = {
         let mut svc = state.service.lock().unwrap();
         svc.record_flow(sid, wid, FlowRecord::Mark(mark)).map_err(map_err)?;
-        svc.post_user_message(sid, wid, &flow::board::pickup_message(&row.item, &who.name)).map_err(map_err)?
+        svc.post_user_message(sid, wid, flow::board::pickup_message(&row.item, &who.name)).map_err(map_err)?
     };
     let _ = app.emit("workspace://synced", 1);
     crate::respond_once(app, state, sid, Some(posted.id), true).await
@@ -668,6 +672,34 @@ async fn auto_pickup(app: &AppHandle, state: &State<'_, AppState>) {
     };
     if let Err(e) = pickup(app, state, &row.item.id, row.suggested.clone()).await {
         tracing::info!(target: "flow", item = %row.item.id, "auto pickup skipped: {e}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Worktree reuse
+// ---------------------------------------------------------------------------
+
+/// Cut a turn's isolated worktree, reusing a parked one of the same chat when
+/// the setting is on.
+pub(crate) fn cut_turn_worktree(
+    state: &AppState,
+    repo_root: &std::path::Path,
+    chat_id: &str,
+    turn_id: &str,
+) -> std::io::Result<hive_runtime::git_worktree::Worktree> {
+    if settings(state).reuse_worktrees {
+        hive_runtime::git_worktree::cut_turn_worktree_reusing(repo_root, chat_id, turn_id)
+    } else {
+        hive_runtime::git_worktree::cut_turn_worktree(repo_root, chat_id, turn_id)
+    }
+}
+
+/// Done with a turn's worktree (its diff is captured): park it for the chat's
+/// next turn, or remove it.
+pub(crate) fn release_worktree(state: &AppState, wt: hive_runtime::git_worktree::Worktree, session_id: Uuid) {
+    let result = if settings(state).reuse_worktrees { wt.park(&session_id.to_string()) } else { wt.remove() };
+    if let Err(e) = result {
+        tracing::warn!(target: "worktree", "couldn't release a turn worktree: {e}");
     }
 }
 

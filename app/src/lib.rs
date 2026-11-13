@@ -7788,7 +7788,8 @@ async fn run_prepared_turn_inner(
         // Phase 2a: cut the ephemeral turn worktree from the chat's persistent
         // base branch `hive/chat/<sessionid>` (falling back to HEAD); if that
         // also fails, run in place.
-        match hive_runtime::git_worktree::cut_turn_worktree(
+        match flow::cut_turn_worktree(
+            state,
             std::path::Path::new(&repo_root),
             &session_id.to_string(),
             &turn_key,
@@ -7807,11 +7808,10 @@ async fn run_prepared_turn_inner(
     // `LazyTurnWorktree`), so plain Q&A never creates one. Its diff is
     // captured below exactly like an eagerly isolated turn's.
     let lazy_worktree = isolates_on_write(builtin_wanted, in_repo).then(|| {
-        std::sync::Arc::new(hive_runtime::git_worktree::LazyTurnWorktree::new(
-            &repo_root,
-            session_id.to_string(),
-            turn_key.clone(),
-        ))
+        std::sync::Arc::new(
+            hive_runtime::git_worktree::LazyTurnWorktree::new(&repo_root, session_id.to_string(), turn_key.clone())
+                .with_reuse(flow::settings(state).reuse_worktrees),
+        )
     });
     // Until it writes, a lazily isolated turn reads its OWN chat's base
     // worktree — the tree its worktree will be cut from — not the active
@@ -8098,7 +8098,7 @@ async fn run_prepared_turn_inner(
                         let _ = app.emit("workspace://synced", 1);
                     }
                 }
-                let _ = wt.remove();
+                flow::release_worktree(state, wt, session_id);
             }
             let body = body?;
             let _ = app.emit(
@@ -8116,7 +8116,7 @@ async fn run_prepared_turn_inner(
             // Discard the isolated worktree — a failed/aborted turn's partial
             // edits are not surfaced (no proposal), and the worktree is pruned.
             if let Some(wt) = worktree {
-                let _ = wt.remove();
+                flow::release_worktree(state, wt, session_id);
             }
             let msg = e.to_string();
             if stopped {

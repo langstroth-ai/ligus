@@ -90,6 +90,14 @@ export function FlowSection() {
           <Switch on={s.marksInContext} onChange={(v) => set({ marksInContext: v })} label="Marks in agent context" />
         </Row>
       </Section>
+      <Section title="Worktrees">
+        <Row
+          label="Reuse turn worktrees"
+          hint="Keep a finished turn's isolated worktree, with its build output and dependency caches, for the chat's next turn (up to two per chat). Tracked changes and stray files are cleared first."
+        >
+          <Switch on={s.reuseWorktrees} onChange={(v) => set({ reuseWorktrees: v })} label="Reuse turn worktrees" />
+        </Row>
+      </Section>
       <Section title="Hand-offs">
         <Row label="Hand-off cards and context parcels" hint="Record what an agent hands on, and give the receiver the sender's summary.">
           <Switch on={s.handoffCards} onChange={(v) => set({ handoffCards: v })} label="Hand-off cards" />
