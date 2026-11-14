@@ -41,6 +41,11 @@ pub const DEFAULT_LEASE_MS: u64 = 60_000;
 pub const DEFAULT_BEAT_EVERY_MS: u64 = 15_000;
 /// Bound on the fenced-claim history kept per scope (diagnostics only).
 const MAX_FENCED_HISTORY: usize = 8;
+/// Furthest a claim may jump ahead of the current epoch (or of zero, for the
+/// first claim). Honest devices claim `current + 1`; a rogue claim of
+/// `u64::MAX` would otherwise freeze the scope forever, since nothing can be
+/// strictly greater, and overflow every successor's `epoch + 1`.
+pub const MAX_EPOCH_STEP: u64 = 1024;
 
 /// What a lease coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -170,6 +175,9 @@ pub fn fold_claim(table: &mut LeaseTable, claim: &CoordinatorLease) -> LeaseVerd
     }
     let key = lease_key(claim.scope, &claim.scope_id);
     let Some(state) = table.get_mut(&key) else {
+        if claim.epoch > MAX_EPOCH_STEP {
+            return LeaseVerdict::Invalid;
+        }
         table.insert(
             key,
             LeaseState { current: claim.clone(), released: false, handover_to: None, fenced: Vec::new() },
@@ -179,6 +187,10 @@ pub fn fold_claim(table: &mut LeaseTable, claim: &CoordinatorLease) -> LeaseVerd
     if claim.epoch <= state.current.epoch {
         record_fenced(state, claim, LeaseVerdict::StaleEpoch);
         return LeaseVerdict::StaleEpoch;
+    }
+    if claim.epoch - state.current.epoch > MAX_EPOCH_STEP {
+        record_fenced(state, claim, LeaseVerdict::Invalid);
+        return LeaseVerdict::Invalid;
     }
     if let Some(successor) = state.handover_to {
         if claim.epoch == state.current.epoch + 1 && claim.holder != successor {

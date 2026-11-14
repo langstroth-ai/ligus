@@ -175,3 +175,48 @@ fn verified_approval_does_not_survive_a_changed_patch() {
         "the approval of the benign patch was reused for a different patch"
     );
 }
+
+// ---- coordinator leases ----
+
+fn lease_claim(run: Uuid, holder: Uuid, epoch: u64) -> SessionEvent {
+    SessionEvent::CoordinatorLeaseClaimed {
+        lease: crate::lease::CoordinatorLease {
+            scope: crate::lease::LeaseScope::WorkflowRun,
+            scope_id: run.to_string(),
+            holder,
+            epoch,
+            lease_ms: crate::lease::DEFAULT_LEASE_MS,
+            reason: crate::lease::LeaseClaimReason::Lapsed,
+            claimed_at: Timestamp::epoch(),
+        },
+    }
+}
+
+/// One device claiming an absurd epoch (u64::MAX) must not freeze the lease
+/// forever: every honest successor claims `current + 1`, which can never be
+/// strictly greater than u64::MAX (and `epoch + 1` overflows in the serve
+/// coordinator). Property: whatever epoch a rogue device claims, an honest
+/// device that later claims `current + 1` of the honest history wins.
+#[test]
+fn a_rogue_epoch_jump_cannot_freeze_a_lease() {
+    let s = base();
+    let run = Uuid::new_v4();
+    let (honest_a, rogue, honest_b) = (Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3));
+    let mut rng = Rng::new(9);
+    for _ in 0..64 {
+        let jump = match rng.next() % 3 {
+            0 => u64::MAX,
+            1 => u64::MAX - (rng.next() % 1000),
+            _ => 1_000_000 + rng.next() % (u64::MAX / 2),
+        };
+        let envs = vec![
+            seed(&s),
+            ev(&s, 1, "alice", Some(honest_a), lease_claim(run, honest_a, 1)),
+            ev(&s, 2, "victor", Some(rogue), lease_claim(run, rogue, jump)),
+            ev(&s, 3, "alice", Some(honest_b), lease_claim(run, honest_b, 2)),
+        ];
+        let p = crate::events::project(&envs).unwrap();
+        let st = &p.guards.leases[&crate::lease::lease_key(crate::lease::LeaseScope::WorkflowRun, &run.to_string())];
+        assert_eq!(st.current.holder, honest_b, "a claim at epoch {jump} froze the lease");
+    }
+}
