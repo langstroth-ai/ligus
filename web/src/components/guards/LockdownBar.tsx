@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { clearChatLockdown, getChatLockdown, type LockdownSignalDto } from "@/lib/ipc";
 import { toast, errMsg } from "@/components/Toast";
 import { IconAlertTriangle } from "@/lib/icons";
+import { Banner, LinkButton } from "@/components/ui";
 
 /// Human wording for a lockdown signal. Exported for tests.
 export function signalLabel(s: LockdownSignalDto): string {
@@ -17,8 +18,26 @@ export function signalLabel(s: LockdownSignalDto): string {
   }
 }
 
+/// Scroll the transcript to the tool call that tripped the lockdown (matched by
+/// tool name from the signal detail, e.g. "fetch_url result"), open it, and
+/// flash it. Falls back to the newest tool call. Returns false if none is shown.
+export function revealLockdownCause(detail: string): boolean {
+  const name = detail.split(/\s+/)[0] ?? "";
+  const cards = Array.from(document.querySelectorAll<HTMLDetailsElement>("details.tcall"));
+  const match =
+    [...cards].reverse().find((c) => c.querySelector(".tcall-n")?.textContent?.trim() === name) ?? cards[cards.length - 1];
+  if (!match) return false;
+  match.open = true;
+  match.scrollIntoView({ block: "center", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  match.classList.remove("hive-flash");
+  void match.offsetWidth;
+  match.classList.add("hive-flash");
+  (match.querySelector("summary") as HTMLElement | null)?.focus({ preventScroll: true });
+  return true;
+}
+
 /// Shown under the chat header while the chat is locked down: why, what it
-/// restricts, and Clear for a human member.
+/// restricts, a jump to the cause, and Clear for a human member.
 export function LockdownBar({ sessionId }: { sessionId: string }) {
   const qc = useQueryClient();
   const q = useQuery({
@@ -36,36 +55,42 @@ export function LockdownBar({ sessionId }: { sessionId: string }) {
   });
   const d = q.data;
   if (!d?.active) return null;
+  const why = d.signals.map(signalLabel).join("; ");
+  const cause = d.signals.find((s) => s.signal !== "manual" && s.detail);
   return (
-    <div
+    <Banner
+      tone="danger"
       role="alert"
-      data-testid="lockdown-bar"
-      className="flex shrink-0 flex-wrap items-center gap-2 border-b px-4 py-1.5 text-[12px]"
-      style={{
-        borderColor: "var(--hive-line)",
-        background: "color-mix(in srgb, var(--hive-danger) 12%, var(--hive-panel))",
-        color: "var(--hive-ink)",
-      }}
-    >
-      <span style={{ color: "var(--hive-danger-ink)" }}>
-        <IconAlertTriangle size={14} />
-      </span>
-      <span className="font-semibold">Locked down</span>
-      <span className="min-w-0 truncate opacity-80">{d.signals.map(signalLabel).join("; ")}</span>
-      <span className="opacity-60">· no network for agents · every proposal needs a human</span>
-      <span className="flex-1" />
-      {d.canClear ? (
-        <button
-          type="button"
-          className="font-medium underline-offset-2 hover:underline"
-          disabled={clear.isPending}
-          onClick={() => clear.mutate()}
-        >
-          Clear lockdown
-        </button>
-      ) : (
-        <span className="opacity-60">a member can clear it</span>
-      )}
-    </div>
+      testId="lockdown-bar"
+      icon={<IconAlertTriangle size={14} />}
+      title="Locked down"
+      detail={
+        <span title={`${why}. No network for agents; every proposal needs a human.`}>
+          {why}
+          <span className="text-ink-soft"> · no network for agents · every proposal needs a human</span>
+        </span>
+      }
+      actions={
+        <>
+          {cause && (
+            <LinkButton
+              tone="ink"
+              onClick={() => {
+                if (!revealLockdownCause(cause.detail)) toast.info("The cause isn't in the loaded part of this chat.");
+              }}
+            >
+              Show cause
+            </LinkButton>
+          )}
+          {d.canClear ? (
+            <LinkButton disabled={clear.isPending} onClick={() => clear.mutate()}>
+              Clear lockdown
+            </LinkButton>
+          ) : (
+            <span className="text-xs text-ink-soft">a member can clear it</span>
+          )}
+        </>
+      }
+    />
   );
 }
