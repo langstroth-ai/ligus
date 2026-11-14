@@ -1192,9 +1192,11 @@ fn fold(
             let payload = match &env.payload {
                 SessionEvent::ProposalUpserted { proposal } if checked && !trusted => {
                     let existing = session.proposals.iter().find(|p| p.id == proposal.id);
-                    rewritten = SessionEvent::ProposalUpserted {
-                        proposal: authz::votes::normalize_upsert(existing, proposal),
-                    };
+                    let mut p = authz::votes::normalize_upsert(existing, proposal);
+                    if let WorkspaceAuthz::Timeline(t) = workspace {
+                        authz::votes::hold_to_core_bar(&mut p, &t.current().zones);
+                    }
+                    rewritten = SessionEvent::ProposalUpserted { proposal: p };
                     &rewritten
                 }
                 SessionEvent::ProposalVoteCast { proposal_id, approval } if checked && !trusted => {

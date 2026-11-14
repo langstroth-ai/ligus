@@ -57,3 +57,28 @@ pub fn normalize_upsert(existing: Option<&ActionProposal>, incoming: &ActionProp
     p.rederive_status();
     p
 }
+
+/// Hold a proposal to the core path zones' review bar (raise only): the
+/// strictest core zone among every path it may write (its diff included, not
+/// just the declared files). Authoring applies the full bar (low-bar zones may
+/// lower it there); the fold only makes sure nobody filed below a core bar.
+pub fn hold_to_core_bar(p: &mut ActionProposal, zones: &[crate::flow::PathZone]) {
+    let touched = crate::guard::touched_paths(p);
+    let Some((floor, approvals, crate::flow::ZoneKind::Core)) = crate::flow::zones::review_bar(zones, &touched) else {
+        return;
+    };
+    let floor = floor.unwrap_or(crate::flow::zones::CORE_DEFAULT_FLOOR);
+    let approvals = approvals.unwrap_or(crate::flow::zones::CORE_DEFAULT_APPROVALS);
+    let mut raised = false;
+    if floor.rank() > p.approval_role_floor.rank() {
+        p.approval_role_floor = floor;
+        raised = true;
+    }
+    if approvals > p.required_approvals {
+        p.required_approvals = approvals;
+        raised = true;
+    }
+    if raised {
+        p.rederive_status();
+    }
+}

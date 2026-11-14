@@ -80,6 +80,8 @@ pub struct RosterState {
     pub dearth: bool,
     /// The workspace rules version in force (1 when never set).
     pub rules: u32,
+    /// The path zones (Admin-set review bars) in force.
+    pub zones: Vec<crate::flow::PathZone>,
 }
 
 impl RosterState {
@@ -244,6 +246,7 @@ impl RosterTracker {
             .map(|a| (a.id, AgentState { host_id: a.host_id.clone(), runtime_id: a.runtime_id.clone(), owner: a.owner_actor_id.clone() }))
             .collect();
         self.state.dearth = fold.guards.dearth_on().is_some();
+        self.state.zones = fold.flow.zones.clone();
         self.rebuild_devices(fold);
     }
 
@@ -285,6 +288,11 @@ fn touches_roster(e: &SessionEvent) -> bool {
             | SessionEvent::DearthModeChanged { .. }
             | SessionEvent::JoinApproved { .. }
             | SessionEvent::SessionSnapshot { .. }
+    ) || matches!(
+        e,
+        SessionEvent::FlowRecorded {
+            record: crate::flow::FlowRecord::Zone(_) | crate::flow::FlowRecord::ZoneRemoved { .. }
+        }
     )
 }
 

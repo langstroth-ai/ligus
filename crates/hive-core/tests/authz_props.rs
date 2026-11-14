@@ -1254,3 +1254,29 @@ fn a_backdated_vote_cannot_predate_the_content_it_judges() {
     assert_eq!(w.verdicts()[&admin], Verdict::Allowed);
     assert_ne!(w.state().proposals.into_iter().find(|x| x.id == pid).unwrap().status, ProposalStatus::Open);
 }
+
+/// Hardening A-5 (containment of "a Contributor lowers required_approvals"):
+/// an Admin's core path zone sets the review bar, but it was applied only by
+/// honest authoring code, over the declared file list. A proposal that
+/// touches a core path (by its diff, whatever it declares) is held to the
+/// zone's bar by the fold; it can only be raised, never lowered.
+#[test]
+fn core_zone_bar_holds_in_the_fold() {
+    let mut w = World::new();
+    w.cfg_push("owner", SessionEvent::FlowRecorded { record: zone(0x20, "src/") });
+    let pid = Uuid::from_u128(0xA5);
+    let mut p = ActionProposal::file_diff("p", "mara", "diff --git a/src/core.rs b/src/core.rs\n+x\n".into(), vec!["docs/a.md".into()]);
+    p.id = pid;
+    p.created_at = Timestamp::epoch();
+    p.required_approvals = 1;
+    p.approval_role_floor = WorkspaceRole::Viewer;
+    w.chat_push("mara", SessionEvent::ProposalUpserted { proposal: p.clone() });
+    let digest = Some(diff_digest(&p));
+    w.chat_push("val", vote("val", pid, WorkspaceRole::Viewer, true, digest.clone()));
+    w.chat_push("owner", vote("owner", pid, WorkspaceRole::Owner, true, digest.clone()));
+    let got = w.state().proposals.into_iter().find(|x| x.id == pid).unwrap();
+    assert_eq!((got.required_approvals, got.approval_role_floor), (2, WorkspaceRole::Admin));
+    assert_eq!(got.status, ProposalStatus::Open, "a core change passed on a lowered bar");
+    w.chat_push("ada", vote("ada", pid, WorkspaceRole::Admin, true, digest));
+    assert_eq!(w.state().proposals.into_iter().find(|x| x.id == pid).unwrap().status, ProposalStatus::Approved);
+}
