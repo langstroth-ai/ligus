@@ -772,8 +772,7 @@ mod tests {
                 key_agreement_public: None,
                 avatar_url: None,
             },
-            recorded_at: Timestamp::epoch(),
-        });
+            recorded_at: Timestamp::epoch(), cfg_frontier: None });
         hive_core::sign_envelope(&mut e, signer_device, signer_kp);
         e
     }
@@ -926,8 +925,7 @@ mod tests {
                 key_agreement_public: None,
                 avatar_url: None,
             },
-            recorded_at: Timestamp::epoch(),
-        });
+            recorded_at: Timestamp::epoch(), cfg_frontier: None });
         assert!(forged.signer_device_id.is_none(), "PoC envelope must be unsigned");
 
         // The verdict must be Quarantine, and Relay-mode ingest must DROP it.

@@ -1211,8 +1211,7 @@ mod tests {
                     key_agreement_public: None,
                     avatar_url: None,
                 },
-                recorded_at: Timestamp::epoch(),
-            });
+                recorded_at: Timestamp::epoch(), cfg_frontier: None });
             hive_core::sign_envelope(&mut e, device_id, &device);
             e
         };
@@ -1561,8 +1560,7 @@ mod tests {
                 key_agreement_public: None,
                 avatar_url: None,
             },
-            recorded_at: Timestamp::epoch(),
-        });
+            recorded_at: Timestamp::epoch(), cfg_frontier: None });
         hive_core::sign_envelope(&mut e, p.device_id, &p.device_kp);
         e
     }

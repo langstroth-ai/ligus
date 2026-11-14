@@ -185,6 +185,11 @@ pub struct WorkflowRun {
     /// never fenced.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease_epoch: Option<u64>,
+    /// The device that created the run (S4). A write without a lease epoch is
+    /// accepted only from this device. Fixed by the run's first write; stamped
+    /// by `ChatService::upsert_workflow_run`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creator_device_id: Option<uuid::Uuid>,
 }
 
 impl WorkflowRun {
@@ -213,6 +218,7 @@ pub fn new_run(
         started_at: Timestamp::now(),
         updated_at: Timestamp::now(),
         lease_epoch: None,
+        creator_device_id: None,
     }
 }
 

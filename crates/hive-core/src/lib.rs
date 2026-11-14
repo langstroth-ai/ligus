@@ -4,6 +4,7 @@
 
 pub mod agent;
 pub mod authorization;
+pub mod authz;
 pub mod channel;
 pub mod chat;
 pub mod compat;
@@ -65,12 +66,12 @@ pub use e2ee::{
     seal_symmetric, KeyAgreementKeypair, SealedBlob, SealedEnvelope, WorkspaceKeyRotation,
 };
 pub use events::{
-    project, project_with_founder, project_with_hoist, project_with_options, EventScope, MemberRoleChange, SessionEvent,
+    project, project_authorized, project_config, project_with_founder, project_with_options, WorkspaceAuthz, EventScope, MemberRoleChange, SessionEvent,
     SessionEventEnvelope,
 };
 pub use git_context::{GitContextReader, GitFileChange, GitFileDiff, GitSnapshot};
 pub use identity::{
-    ActorIdentity, ActorKind, ActorStamp, HiveUserProfile, WorkspaceMember, WorkspaceRole,
+    ActorIdentity, ActorKind, ActorStamp, CfgFrontier, HiveUserProfile, WorkspaceMember, WorkspaceRole,
 };
 pub use policy::{PermissionPolicy, PermissionScope, Workspace};
 pub use proposal_sets::{ProposalSet, ScoutAssessment, SetPhase};

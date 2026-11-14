@@ -4,11 +4,12 @@
 //! roster (plain `project`) the same forgeries take effect, which is what the
 //! check closes.
 
-use hive_core::authorization::HoistedRoster;
+use hive_core::authz::ConfigTimeline;
 use hive_core::proposal_sets::{CheckOutcome, PreflightReport, ProposalSet, ScoutAssessment, SetPhase};
 use hive_core::{
-    project, project_with_hoist, ActionProposal, ActorIdentity, ActorKind, ActorStamp, ChatSession,
-    ProposalApproval, ProposalKind, SessionEvent, SessionEventEnvelope, Timestamp, WorkspaceMember, WorkspaceRole,
+    project, project_authorized, project_config, workspace_config_session_id, ActionProposal, ActorIdentity, ActorKind,
+    ActorStamp, CfgFrontier, ChatSession, MemberRoleChange, ProposalApproval, ProposalKind, SessionEvent,
+    SessionEventEnvelope, Timestamp, WorkspaceAuthz, WorkspaceMember, WorkspaceRole,
 };
 use uuid::Uuid;
 
@@ -23,16 +24,50 @@ fn member(id: &str, role: WorkspaceRole) -> WorkspaceMember {
     }
 }
 
-/// The workspace roster on the config log: `owner` founded it, `mara` is a
-/// Contributor, `ada` an Admin and `val` a Viewer. `eve` holds a device key
-/// but was never added.
-fn workspace_roster() -> Vec<WorkspaceMember> {
-    vec![
-        member("owner", WorkspaceRole::Owner),
-        member("mara", WorkspaceRole::Contributor),
-        member("ada", WorkspaceRole::Admin),
-        member("val", WorkspaceRole::Viewer),
-    ]
+fn stamp(by: &str, frontier: Option<CfgFrontier>) -> Option<ActorStamp> {
+    Some(ActorStamp { actor: ActorIdentity::new(by, by, ActorKind::Human), recorded_at: Timestamp::epoch(), cfg_frontier: frontier })
+}
+
+/// The workspace-config log: `owner` founded it, then added `mara` as a
+/// Contributor, `ada` as an Admin and `val` as a Viewer. `eve` holds a device
+/// key but was never added.
+struct Config {
+    wid: Uuid,
+    lamport: u64,
+    envs: Vec<SessionEventEnvelope>,
+}
+
+impl Config {
+    fn new(wid: Uuid) -> Self {
+        let sid = workspace_config_session_id(wid);
+        let mut seed = ChatSession::new("", wid, "");
+        seed.id = sid;
+        seed.creator_actor_id = "owner".into();
+        seed.members = vec![member("owner", WorkspaceRole::Owner)];
+        let mut c = Self { wid, lamport: 0, envs: Vec::new() };
+        c.push("owner", SessionEvent::SessionSnapshot { session: Box::new(seed) });
+        for (id, role) in [("mara", WorkspaceRole::Contributor), ("ada", WorkspaceRole::Admin), ("val", WorkspaceRole::Viewer)] {
+            c.push("owner", SessionEvent::MemberAdded { member: member(id, role) });
+        }
+        c
+    }
+    fn push(&mut self, by: &str, e: SessionEvent) {
+        self.lamport += 1;
+        let frontier = self.head();
+        let mut env = SessionEventEnvelope::new(workspace_config_session_id(self.wid), self.wid, self.lamport as i64, e);
+        env.lamport = self.lamport;
+        env.actor_stamp = stamp(by, frontier);
+        self.envs.push(env);
+    }
+    fn set_role(&mut self, id: &str, old_role: WorkspaceRole, new_role: WorkspaceRole) {
+        self.push("owner", SessionEvent::MemberRoleChanged { change: MemberRoleChange { member_id: id.into(), old_role, new_role } });
+    }
+    fn head(&self) -> Option<CfgFrontier> {
+        self.envs.last().map(|e| CfgFrontier { lamport: e.lamport, event_id: e.event_id })
+    }
+    fn timeline(&self) -> ConfigTimeline {
+        project_config(&self.envs, None, None).1
+    }
 }
 
 struct Log {
@@ -40,6 +75,7 @@ struct Log {
     wid: Uuid,
     lamport: u64,
     envs: Vec<SessionEventEnvelope>,
+    cfg: Config,
 }
 
 impl Log {
@@ -50,20 +86,21 @@ impl Log {
         base.creator_actor_id = "owner".into();
         base.members = vec![member("owner", WorkspaceRole::Owner)];
         let (sid, wid) = (base.id, base.workspace_id);
-        let mut log = Self { sid, wid, lamport: 0, envs: Vec::new() };
+        let mut log = Self { sid, wid, lamport: 0, envs: Vec::new(), cfg: Config::new(wid) };
         log.push("owner", SessionEvent::SessionSnapshot { session: Box::new(base) });
         log
     }
+    /// An honest author stamps the config head it has folded.
     fn push(&mut self, by: &str, e: SessionEvent) {
         self.lamport += 1;
         let mut env = SessionEventEnvelope::new(self.sid, self.wid, self.lamport as i64, e);
         env.lamport = self.lamport;
-        env.actor_stamp =
-            Some(ActorStamp { actor: ActorIdentity::new(by, by, ActorKind::Human), recorded_at: Timestamp::epoch() });
+        env.actor_stamp = stamp(by, self.cfg.head());
         self.envs.push(env);
     }
-    fn hoisted(&self, roster: &[WorkspaceMember], dearth_on: bool) -> ChatSession {
-        project_with_hoist(&self.envs, None, None, Some(HoistedRoster { members: roster, dearth_on })).unwrap()
+    fn hoisted(&self) -> ChatSession {
+        let t = self.cfg.timeline();
+        project_authorized(&self.envs, None, None, WorkspaceAuthz::Timeline(&t)).unwrap()
     }
     fn unchecked(&self) -> ChatSession {
         project(&self.envs).unwrap()
@@ -122,6 +159,7 @@ fn piping_set(log: &mut Log, floor: WorkspaceRole) -> (Uuid, Uuid, Uuid) {
                     role: if who == "ada" { WorkspaceRole::Admin } else { WorkspaceRole::Contributor },
                     approved: true,
                     created_at: Timestamp::epoch(),
+                    diff_digest: None,
                 },
             },
         );
@@ -133,7 +171,7 @@ fn piping_set(log: &mut Log, floor: WorkspaceRole) -> (Uuid, Uuid, Uuid) {
 fn a_contributor_known_only_to_the_config_log_drives_a_set() {
     let mut log = Log::new();
     let (set_id, a, _) = piping_set(&mut log, WorkspaceRole::Contributor);
-    let s = log.hoisted(&workspace_roster(), false);
+    let s = log.hoisted();
     let set = s.proposal_sets.iter().find(|x| x.id == set_id).expect("mara's set folds");
     assert_eq!(set.phase, SetPhase::Piping);
     assert_eq!(set.front_runner, Some(a));
@@ -166,7 +204,7 @@ fn forged_preflight_tune_and_decide_from_a_viewer_or_stranger_are_dropped() {
     assert_ne!(raw_set.agent_quorum, 1, "precondition: eve's tune folds unchecked");
 
     // Against the hoisted roster none of them fold.
-    let s = log.hoisted(&workspace_roster(), false);
+    let s = log.hoisted();
     let set = s.proposal_sets.iter().find(|x| x.id == set_id).unwrap();
     assert_eq!(set.phase, SetPhase::Piping, "the set is still heading for its decision");
     assert_eq!(set.front_runner, Some(a));
@@ -177,7 +215,7 @@ fn forged_preflight_tune_and_decide_from_a_viewer_or_stranger_are_dropped() {
     // The real members finish it: owner records a passing pre-flight and decides.
     log.push("owner", SessionEvent::ProposalSetPreflightRecorded { set_id, proposal_id: a, report: report(true), at: Timestamp::epoch() });
     log.push("owner", SessionEvent::ProposalSetDecided { set_id, winner: Some(a), at: Timestamp::epoch() });
-    let s = log.hoisted(&workspace_roster(), false);
+    let s = log.hoisted();
     let set = s.proposal_sets.iter().find(|x| x.id == set_id).unwrap();
     assert_eq!((set.phase, set.winner), (SetPhase::Decided, Some(a)));
 }
@@ -190,31 +228,34 @@ fn a_member_below_the_sets_decision_floor_cannot_decide_or_tune() {
     // mara is a Contributor: below this set's Admin floor.
     log.push("mara", SessionEvent::ProposalSetTuned { set_id, agent_quorum: 1, required_approvals: 1, quality_bar: 10 });
     log.push("mara", SessionEvent::ProposalSetDecided { set_id, winner: Some(a), at: Timestamp::epoch() });
-    let s = log.hoisted(&workspace_roster(), false);
+    let s = log.hoisted();
     let set = s.proposal_sets.iter().find(|x| x.id == set_id).unwrap();
     assert_ne!(set.phase, SetPhase::Decided);
     assert_ne!(set.quality_bar, 10);
     // ada is an Admin: her decision folds.
     log.push("ada", SessionEvent::ProposalSetDecided { set_id, winner: Some(a), at: Timestamp::epoch() });
-    let s = log.hoisted(&workspace_roster(), false);
+    let s = log.hoisted();
     assert_eq!(s.proposal_sets.iter().find(|x| x.id == set_id).unwrap().winner, Some(a));
 }
 
 #[test]
 fn a_demotion_on_the_config_log_is_what_counts_not_the_chats_stale_roster() {
     // The chat's own roster still lists mara as a Contributor (a pre-hoist
-    // add); the workspace has since demoted her to Viewer.
+    // add); the workspace demoted her to Viewer before she acted.
     let mut log = Log::new();
     log.push("owner", SessionEvent::MemberAdded { member: member("mara", WorkspaceRole::Contributor) });
+    log.cfg.set_role("mara", WorkspaceRole::Contributor, WorkspaceRole::Viewer);
     let (set_id, _, _) = piping_set(&mut log, WorkspaceRole::Contributor);
-    let mut roster = workspace_roster();
-    roster.iter_mut().find(|m| m.id == "mara").unwrap().role = WorkspaceRole::Viewer;
-    let s = log.hoisted(&roster, false);
+    let s = log.hoisted();
     assert!(s.proposal_sets.iter().all(|x| x.id != set_id), "a Viewer can't open a set");
 }
 
+/// Only the workspace roster grants a workspace role: a member added to one
+/// chat's own roster (never admitted on the config log) counts for nothing,
+/// in or out of dearth mode. (Before Phase 0 such a member counted outside
+/// dearth mode; 2.0 starts every workspace on the config roster.)
 #[test]
-fn during_dearth_a_chat_only_member_counts_for_nothing() {
+fn a_chat_only_member_counts_for_nothing() {
     let mut log = Log::new();
     // "temp" was added to this chat only, never admitted on the config log.
     log.push("owner", SessionEvent::MemberAdded { member: member("temp", WorkspaceRole::Contributor) });
@@ -223,20 +264,20 @@ fn during_dearth_a_chat_only_member_counts_for_nothing() {
     let set_id = set.id;
     log.push("temp", SessionEvent::ProposalUpserted { proposal: p });
     log.push("temp", SessionEvent::ProposalSetOpened { set: Box::new(set) });
-    let open = log.hoisted(&workspace_roster(), false);
-    assert!(open.proposal_sets.iter().any(|x| x.id == set_id), "outside dearth the chat's own member counts");
-    let tight = log.hoisted(&workspace_roster(), true);
-    assert!(tight.proposal_sets.iter().all(|x| x.id != set_id), "dearth mode: only config-log members count");
+    let open = log.hoisted();
+    assert!(open.proposal_sets.iter().all(|x| x.id != set_id), "a chat-only member can't open a set");
+    assert!(log.unchecked().proposal_sets.iter().any(|x| x.id == set_id), "control: it folds unchecked");
 }
+
+// ---- security review (2.0): R1 and R2, fixed by the Phase 0 authz engine ----
 
 // ---- security review (2.0): proven, not yet fixed; see the review report ----
 
 /// A set's human gate is "`required_approvals` from members at or above the
-/// role floor". The vote's role is the voter's own claim, though, and the
-/// hoisted fold doesn't check it: a Viewer declaring Admin satisfies an
-/// Admin-floor set alone, and an Admin then decides it.
+/// role floor". The role in a vote payload is the voter's own claim: the fold
+/// ignores it and counts the signer's real role at the vote's position, so a
+/// Viewer declaring Admin can't satisfy an Admin-floor set (R1).
 #[test]
-#[ignore = "security review: vote roles are self-declared (required revision R1)"]
 fn a_viewers_self_declared_admin_vote_does_not_meet_an_admin_floor() {
     let mut log = Log::new();
     let set_id = Uuid::new_v4();
@@ -254,32 +295,52 @@ fn a_viewers_self_declared_admin_vote_does_not_meet_an_admin_floor() {
         "val",
         SessionEvent::ProposalVoteCast {
             proposal_id: a,
-            approval: ProposalApproval { actor_id: "val".into(), role: WorkspaceRole::Admin, approved: true, created_at: Timestamp::epoch() },
+            approval: ProposalApproval { actor_id: "val".into(), role: WorkspaceRole::Admin, approved: true, created_at: Timestamp::epoch(), diff_digest: None },
         },
     );
     log.push("ada", SessionEvent::ProposalSetPreflightRecorded { set_id, proposal_id: a, report: report(true), at: Timestamp::epoch() });
     log.push("ada", SessionEvent::ProposalSetDecided { set_id, winner: Some(a), at: Timestamp::epoch() });
-    let s = log.hoisted(&workspace_roster(), false);
+    let raw = log.unchecked();
+    assert_eq!(raw.proposal_sets.iter().find(|x| x.id == set_id).unwrap().winner, Some(a), "precondition: the claimed role counts unchecked");
+    let s = log.hoisted();
     let set = s.proposal_sets.iter().find(|x| x.id == set_id).unwrap();
     assert_ne!(set.winner, Some(a), "a Viewer's vote, claiming Admin, met the Admin-floor human gate");
+    // An Admin's own vote does meet it.
+    log.push(
+        "ada",
+        SessionEvent::ProposalVoteCast {
+            proposal_id: a,
+            approval: ProposalApproval { actor_id: "ada".into(), role: WorkspaceRole::Viewer, approved: true, created_at: Timestamp::epoch(), diff_digest: None },
+        },
+    );
+    log.push("ada", SessionEvent::ProposalSetDecided { set_id, winner: Some(a), at: Timestamp::epoch() });
+    let s = log.hoisted();
+    assert_eq!(s.proposal_sets.iter().find(|x| x.id == set_id).unwrap().winner, Some(a), "the signer's real Admin role counts, whatever the payload says");
 }
 
-/// Hoisted authorization judges every event against the roster as it is
-/// now, not as it was when the event was signed: a decision a Viewer signed
-/// (dropped at the time) folds once the Viewer is later promoted, and an
-/// Admin's decision is undone if she is later demoted.
+/// Hoisted authorization judges every event against the roster at the config
+/// frontier its author had folded, not the roster as it is now: a decision a
+/// Viewer signed stays refused after she is promoted, and an Admin's decision
+/// stands after she is demoted (R2).
 #[test]
-#[ignore = "security review: hoisted checks use the current roster (required revision R2)"]
 fn hoisted_authorization_is_not_retroactive() {
     let mut log = Log::new();
     let (set_id, a, _) = piping_set(&mut log, WorkspaceRole::Contributor);
     log.push("owner", SessionEvent::ProposalSetPreflightRecorded { set_id, proposal_id: a, report: report(true), at: Timestamp::epoch() });
     log.push("val", SessionEvent::ProposalSetDecided { set_id, winner: None, at: Timestamp::epoch() });
-    let before = log.hoisted(&workspace_roster(), false);
+    let before = log.hoisted();
     assert_eq!(before.proposal_sets.iter().find(|x| x.id == set_id).unwrap().phase, SetPhase::Piping, "control");
     // Later, val is promoted. Her old, refused close must stay refused.
-    let mut promoted = workspace_roster();
-    promoted.iter_mut().find(|m| m.id == "val").unwrap().role = WorkspaceRole::Admin;
-    let after = log.hoisted(&promoted, false);
+    log.cfg.set_role("val", WorkspaceRole::Viewer, WorkspaceRole::Admin);
+    let after = log.hoisted();
     assert_eq!(after.proposal_sets.iter().find(|x| x.id == set_id).unwrap().phase, SetPhase::Piping, "a refused close became valid retroactively");
+
+    // And the converse: ada decides while an Admin, then is demoted. The
+    // decision stands.
+    log.push("ada", SessionEvent::ProposalSetDecided { set_id, winner: Some(a), at: Timestamp::epoch() });
+    assert_eq!(log.hoisted().proposal_sets.iter().find(|x| x.id == set_id).unwrap().winner, Some(a));
+    log.cfg.set_role("ada", WorkspaceRole::Admin, WorkspaceRole::Viewer);
+    let demoted = log.hoisted();
+    let set = demoted.proposal_sets.iter().find(|x| x.id == set_id).unwrap();
+    assert_eq!((set.phase, set.winner), (SetPhase::Decided, Some(a)), "a later demotion undid a decision");
 }

@@ -268,7 +268,7 @@ mod tests {
         let mut s = ChatSession::new("chat", Uuid::nil(), "rt");
         s.proposals.push(ActionProposal::new("Unreviewed", ProposalKind::Decision, "coder"));
         let mut voted = ActionProposal::new("Voted", ProposalKind::Decision, "coder");
-        voted.cast_vote(crate::proposals::ProposalApproval { actor_id: "u".into(), role: crate::identity::WorkspaceRole::Owner, approved: false, created_at: crate::Timestamp::now() });
+        voted.cast_vote(crate::proposals::ProposalApproval { actor_id: "u".into(), role: crate::identity::WorkspaceRole::Owner, approved: false, created_at: crate::Timestamp::now(), diff_digest: None });
         s.proposals.push(voted);
         s.proposals.push(ActionProposal::new("Gate", ProposalKind::Decision, ""));
         let items = open_items(&[s], &[], super::super::now_ms());

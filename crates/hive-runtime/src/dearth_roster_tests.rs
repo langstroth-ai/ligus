@@ -37,7 +37,7 @@ impl Log {
         self.lamport += 1;
         let mut e = SessionEventEnvelope::new(workspace_config_session_id(self.ws), self.ws, self.lamport as i64, payload);
         e.lamport = self.lamport;
-        e.actor_stamp = Some(ActorStamp { actor: actor(by), recorded_at: Timestamp::epoch() });
+        e.actor_stamp = Some(ActorStamp { actor: actor(by), recorded_at: Timestamp::epoch(), cfg_frontier: None });
         self.envs.push(e);
     }
     fn cert(&mut self, owner: &Who, device: Uuid) -> SigningKeypair {
@@ -141,7 +141,7 @@ fn a_pending_device_is_not_accepted_in_relay_mode() {
     // The pending device signs a chat message as the owner's account.
     let mut e = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 99, SessionEvent::SessionTitleChanged { title: "x".into() });
     e.lamport = 99;
-    e.actor_stamp = Some(ActorStamp { actor: actor(&owner), recorded_at: Timestamp::epoch() });
+    e.actor_stamp = Some(ActorStamp { actor: actor(&owner), recorded_at: Timestamp::epoch(), cfg_frontier: None });
     hive_core::sign_envelope(&mut e, new_box, &dk);
     let mut envs = log.envs.clone();
     envs.push(e.clone());
@@ -211,7 +211,7 @@ fn a_removed_member_cannot_reenter_the_roster_with_a_fresh_device() {
     let roster = build_roster(&log.envs);
     let mut e = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 99, SessionEvent::SessionTitleChanged { title: "x".into() });
     e.lamport = 99;
-    e.actor_stamp = Some(ActorStamp { actor: actor(&alice), recorded_at: Timestamp::epoch() });
+    e.actor_stamp = Some(ActorStamp { actor: actor(&alice), recorded_at: Timestamp::epoch(), cfg_frontier: None });
     hive_core::sign_envelope(&mut e, fresh, &fk);
     assert_ne!(verdict_for(&roster, &e), Verdict::Valid, "the removed member's fresh device is trusted again");
 }
@@ -241,7 +241,7 @@ fn an_unauthorized_removal_does_not_revoke_the_victims_devices() {
     assert!(!crate::envelope_verifier::DeviceKeyResolver::is_revoked(&roster, laptop), "the owner's laptop was revoked by an unauthorized removal");
     let mut e = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 99, SessionEvent::SessionTitleChanged { title: "x".into() });
     e.lamport = 99;
-    e.actor_stamp = Some(ActorStamp { actor: actor(&owner), recorded_at: Timestamp::epoch() });
+    e.actor_stamp = Some(ActorStamp { actor: actor(&owner), recorded_at: Timestamp::epoch(), cfg_frontier: None });
     hive_core::sign_envelope(&mut e, owner_dk.0, &owner_dk.1);
     assert_eq!(verdict_for(&roster, &e), Verdict::Valid);
 }

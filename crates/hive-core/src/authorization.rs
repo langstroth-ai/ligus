@@ -112,47 +112,14 @@ pub fn requires_projection_authz(event: &SessionEvent) -> bool {
             | SessionEvent::DearthModeChanged { .. }
             | SessionEvent::JoinApproved { .. }
             | SessionEvent::ChatLockdownCleared { .. }
+            | SessionEvent::WorkspaceRulesSet { .. }
     ) || matches!(event, SessionEvent::FlowRecorded { record } if record.is_config())
 }
 
 /// Coordinator leases are deliberately **not** role-gated in projection: a run's
-/// lease rides its chat log, whose own roster holds only the chat's creator
-/// (membership is hoisted from the config log only after projection), so a
-/// role check there would drop every other member's claim. They are gated by
-/// role at authoring (against the hoisted roster) and, in projection, bound to
-/// the signing device below — the same footing as the run writes they fence.
-///
-/// Envelope-bound check for coordinator leases, run during projection where the
-/// envelope (and so its `signer_device_id`) is at hand:
-///   * a `CoordinatorLeaseClaimed` must be signed by the device it names as
-///     holder (no claiming on another device's behalf);
-///   * a `CoordinatorLeaseReleased` must be signed by the holder it names
-///     (`lease::fold_release` then checks that is the current holder);
-///   * a `WorkflowRunUpserted` stamped with a lease epoch must match the
-///     current epoch of that run's lease *and* be signed by its holder. A stamp
-///     with no lease, or from a future epoch nobody claimed, is a forgery;
-///     a stamp from an older epoch is left to the fold, which fences it.
-///
-/// Everything else passes. Deterministic over the fold-so-far `session`.
-pub fn lease_signer_ok(env: &crate::events::SessionEventEnvelope, session: &ChatSession) -> bool {
-    let signer = env.signer_device_id;
-    match &env.payload {
-        SessionEvent::CoordinatorLeaseClaimed { lease } => signer == Some(lease.holder),
-        SessionEvent::CoordinatorLeaseReleased { release } => signer == Some(release.holder),
-        SessionEvent::WorkflowRunUpserted { run } => {
-            let Some(epoch) = run.lease_epoch else { return true };
-            let key = crate::lease::lease_key(crate::lease::LeaseScope::WorkflowRun, &run.id.to_string());
-            match session.guards.leases.get(&key) {
-                None => false,
-                Some(state) if epoch > state.current.epoch => false,
-                Some(state) if epoch == state.current.epoch => signer == Some(state.current.holder),
-                Some(_) => true,
-            }
-        }
-        _ => true,
-    }
-}
-
+/// lease rides its chat log, whose own roster holds only the chat's creator.
+/// They are gated by role at authoring and, in projection, bound to the signing
+/// device (`authz::lease_signer_ok`).
 /// Proposal-set events that are **re-authorized while a chat log is folded**,
 /// against the workspace roster hoisted from the config log (see
 /// [`HoistedRoster`]). They ride the chat's own log, whose roster holds only
@@ -177,55 +144,6 @@ pub fn requires_hoisted_authz(event: &SessionEvent) -> bool {
             | SessionEvent::ProposalSetDecided { .. }
             | SessionEvent::ProposalReverted { .. }
     )
-}
-
-/// The workspace roster as a chat log's fold sees it: the members on the
-/// workspace-config log, and whether dearth mode is on there. The same union
-/// `ChatService::load` overlays after projection: a config-log entry wins; a
-/// member only the chat knows (a pre-hoist add, the creator seed) keeps its
-/// chat role, except that during dearth mode only the chat's creator does.
-#[derive(Debug, Clone, Copy)]
-pub struct HoistedRoster<'a> {
-    pub members: &'a [WorkspaceMember],
-    pub dearth_on: bool,
-}
-
-impl HoistedRoster<'_> {
-    /// The role `actor_id` holds for the chat whose fold-so-far is `session`,
-    /// or `None` when they aren't a member.
-    pub fn role_of(&self, actor_id: &str, session: &ChatSession) -> Option<WorkspaceRole> {
-        if actor_id.is_empty() {
-            return None;
-        }
-        if let Some(m) = self.members.iter().find(|m| m.id == actor_id) {
-            return Some(m.role);
-        }
-        if self.dearth_on && actor_id != session.creator_actor_id {
-            return None;
-        }
-        session.members.iter().find(|m| m.id == actor_id).map(|m| m.role)
-    }
-
-    /// Whether `event`, authored by `actor_id`, may fold into `session`.
-    pub fn allows(&self, event: &SessionEvent, actor_id: &str, session: &ChatSession) -> bool {
-        match self.role_of(actor_id, session) {
-            Some(role) => evaluate(event, actor_id, role, session).allowed,
-            None => false,
-        }
-    }
-
-    /// A stable fingerprint of what this roster decides (member ids, roles and
-    /// the dearth flag), for keying cached projections.
-    pub fn fingerprint(&self) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut ids: Vec<(&str, u8)> = self.members.iter().map(|m| (m.id.as_str(), m.role.rank())).collect();
-        ids.sort_unstable();
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        ids.hash(&mut h);
-        self.dearth_on.hash(&mut h);
-        // Never 0, which keys an un-hoisted projection.
-        h.finish().max(1)
-    }
 }
 
 /// Whether a **non-seed** `SessionSnapshot` — one folded *after* the base seed,
@@ -360,6 +278,10 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         // Raising one only tightens, so any keyholder (a worker host, a
         // Viewer's device) may: the floor.
         SessionEvent::ChatLockdownRaised { .. } => WorkspaceRole::Viewer,
+        // Changing the rules everyone folds by is the owner's call.
+        SessionEvent::WorkspaceRulesSet { .. } => WorkspaceRole::Owner,
+        // Applying is a member's act (and a human's, see `authz::authorize`).
+        SessionEvent::ProposalApplied { .. } => WorkspaceRole::Contributor,
         // A newer-client event this build can't author or interpret — require
         // the highest role so it can never be produced locally by accident.
         SessionEvent::Unknown => WorkspaceRole::Owner,

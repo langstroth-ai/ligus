@@ -111,7 +111,7 @@ fn proposal_touching(files: &[&str]) -> ActionProposal {
 fn vote(pid: Uuid, voter: &str) -> SessionEvent {
     SessionEvent::ProposalVoteCast {
         proposal_id: pid,
-        approval: ProposalApproval { actor_id: voter.into(), role: WorkspaceRole::Owner, approved: true, created_at: Timestamp::epoch() },
+        approval: ProposalApproval { actor_id: voter.into(), role: WorkspaceRole::Owner, approved: true, created_at: Timestamp::epoch(), diff_digest: None },
     }
 }
 
@@ -146,7 +146,7 @@ fn brood_changes_need_a_signed_human_vote() {
     envs.push(ev(&s, 5, "bot", None, vote(bp, "bot")));
     // A proposal snapshot carrying a fake approval doesn't count.
     let mut forged = brood.clone();
-    forged.approvals.push(ProposalApproval { actor_id: "owner".into(), role: WorkspaceRole::Owner, approved: true, created_at: Timestamp::epoch() });
+    forged.approvals.push(ProposalApproval { actor_id: "owner".into(), role: WorkspaceRole::Owner, approved: true, created_at: Timestamp::epoch(), diff_digest: None });
     envs.push(ev(&s, 6, "alice", None, SessionEvent::ProposalUpserted { proposal: forged }));
     let p = project(&envs).unwrap();
     assert!(human_gate_reason(&p, &get(&p, bp)).is_some());

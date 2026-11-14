@@ -530,7 +530,7 @@ mod flow_tests {
         assert_eq!(owner.id, alex.id);
         sff.svc.act_as_owner_device(owner);
         sff.svc.post_user_message(chat, ws, "from the phone").unwrap();
-        sff.svc.vote_on_proposal(chat, ws, pid, sff.id(), WorkspaceRole::Owner, true).unwrap();
+        sff.svc.vote_on_proposal(chat, ws, pid, true).unwrap();
         sff.svc.refine_proposal(chat, ws, pid, sff.id(), WorkspaceRole::Owner, "looks good", false).unwrap();
         let mut host = WorkspaceHost::new(sff.svc.device_id().to_string(), hive_core::HostKind::Worker, "sff");
         host.owner_actor_id = alex.id.clone();
@@ -554,7 +554,7 @@ mod flow_tests {
         }
 
         // One person, one vote: Alex votes again on the desktop; still one vote.
-        mac.svc.vote_on_proposal(chat, ws, pid, alex.id.clone(), WorkspaceRole::Owner, false).unwrap();
+        mac.svc.vote_on_proposal(chat, ws, pid, false).unwrap();
         mac.sync().await;
         sff.sync().await;
         for dev in [&mac, &sff] {

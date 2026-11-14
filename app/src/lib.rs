@@ -5235,18 +5235,12 @@ fn vote_proposal(
 ) -> Result<Option<ProposalDto>, String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let pid = Uuid::parse_str(&proposal_id).map_err(map_err)?;
-    let actor = local_actor(&state);
     let mut svc = state.service.lock().unwrap();
-    // Cast the voter's real workspace role (from the projected roster) so the
-    // proposal's `approval_role_floor` is actually enforced; non-members fall to
-    // the Viewer floor via `role_of`.
-    let (role, members) = svc
-        .load(sid)
-        .map_err(map_err)?
-        .map(|s| (s.role_of(&actor.id), s.members.clone()))
-        .unwrap_or((WorkspaceRole::Viewer, Vec::new()));
+    // The vote is this device's author's; every device counts it at their real
+    // workspace role (the fold ignores any role in the payload).
+    let members = svc.load(sid).map_err(map_err)?.map(|s| s.members.clone()).unwrap_or_default();
     let updated = svc
-        .vote_on_proposal(sid, state.active_workspace_id(), pid, actor.id, role, approved)
+        .vote_on_proposal(sid, state.active_workspace_id(), pid, approved)
         .map_err(map_err)?;
     drop(svc);
     // A settled vote may be a workflow gate — wake that run's driver so it
@@ -5578,6 +5572,11 @@ async fn implement_proposal_inner(
     if let Some(reason) = hive_core::guard::human_gate_reason(&session, &proposal) {
         return Err(format!("Not applied: {reason}."));
     }
+    // A vote or decision this device can't judge yet (its config frontier
+    // hasn't synced): no side effect until it is decided.
+    if session.authz.blocks(pid, proposal.set_id) {
+        return Err("Not applied: a vote or decision on this proposal is still waiting to sync.".into());
+    }
 
     // An agent-authored workflow: implementing it adds the definition. The
     // approving vote normally did this already; this covers a quorum reached
@@ -5635,9 +5634,7 @@ async fn implement_proposal_inner(
             }
             {
                 let mut svc = state.service.lock().unwrap();
-                let mut applied = proposal.clone();
-                applied.status = ProposalStatus::Applied;
-                svc.upsert_proposal(sid, workspace_id, applied).map_err(map_err)?;
+                svc.mark_proposal_applied(sid, workspace_id, pid, None).map_err(map_err)?;
             }
             flow::after_apply(&state, sid, workspace_id, &proposal, &repo_root);
             let _ = app.emit("workspace://synced", 1);
@@ -5667,9 +5664,7 @@ async fn implement_proposal_inner(
     // Mark it applied (gate satisfied + dispatched).
     {
         let mut svc = state.service.lock().unwrap();
-        let mut applied = proposal;
-        applied.status = ProposalStatus::Applied;
-        svc.upsert_proposal(sid, workspace_id, applied).map_err(map_err)?;
+        svc.mark_proposal_applied(sid, workspace_id, pid, None).map_err(map_err)?;
     }
     let _ = app.emit("workspace://synced", 1);
     Ok(())
@@ -16035,6 +16030,7 @@ mod finalize_proposal_tests {
         let mut svc = service();
         let wid = Uuid::new_v4();
         let chat = svc.create_chat("A", wid, "anthropic").unwrap();
+        svc.ensure_workspace_config(wid).unwrap();
         svc.add_agent(chat.id, wid, WorkspaceAgent::new("Scout", "ws-claude")).unwrap();
         let mid = svc.begin_assistant_message(chat.id, wid, "Scout", "ws-claude", None, None).unwrap();
 
@@ -16090,6 +16086,7 @@ mod finalize_proposal_tests {
         let mut svc = service();
         let wid = Uuid::new_v4();
         let chat = svc.create_chat("A", wid, "anthropic").unwrap();
+        svc.ensure_workspace_config(wid).unwrap();
         let scout = WorkspaceAgent::new("Scout", "ws-claude");
         let scout_id = scout.id;
         svc.add_agent(chat.id, wid, scout).unwrap();
@@ -16110,7 +16107,7 @@ mod finalize_proposal_tests {
 
         let pid = p.id;
         let r = svc
-            .vote_on_proposal(chat.id, wid, pid, "u1", hive_core::WorkspaceRole::Owner, true)
+            .vote_on_proposal(chat.id, wid, pid, true)
             .unwrap()
             .unwrap();
         assert_eq!(r.status, ProposalStatus::Applied);
@@ -16122,6 +16119,7 @@ mod finalize_proposal_tests {
         let mut svc = service();
         let wid = Uuid::new_v4();
         let chat = svc.create_chat("A", wid, "anthropic").unwrap();
+        svc.ensure_workspace_config(wid).unwrap();
         let existing = hive_core::workflow::preset_review_gate();
         svc.save_workflow_definition(chat.id, wid, existing.clone()).unwrap();
 
@@ -16132,7 +16130,7 @@ mod finalize_proposal_tests {
         let p = &s.proposals[0];
         assert!(p.title.starts_with("Revise workflow"), "{}", p.title);
         assert_eq!(p.workflow.as_ref().unwrap().id, existing.id);
-        svc.vote_on_proposal(chat.id, wid, p.id, "u1", hive_core::WorkspaceRole::Owner, true).unwrap();
+        svc.vote_on_proposal(chat.id, wid, p.id, true).unwrap();
         let defs = svc.load(chat.id).unwrap().unwrap().workflow_definitions;
         assert_eq!(defs.len(), 1);
         assert_eq!(defs[0].name, "Review gate v2");
@@ -16153,6 +16151,7 @@ mod finalize_proposal_tests {
         let mut svc = service();
         let wid = Uuid::new_v4();
         let chat = svc.create_chat("A", wid, "anthropic").unwrap();
+        svc.ensure_workspace_config(wid).unwrap();
         let agy = WorkspaceAgent::new("Gemini", "antigravity");
         let cop = WorkspaceAgent::new("Pilot", "copilot");
         let (agy_id, cop_id) = (agy.id, cop.id);

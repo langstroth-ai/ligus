@@ -2371,8 +2371,7 @@ diff --git a/old.txt b/old.txt\ndeleted file mode 100644\n";
             actor_id: "u".into(),
             role: hive_core::WorkspaceRole::Owner,
             approved: true,
-            created_at: hive_core::Timestamp::from_unix_seconds(4_600),
-        });
+            created_at: hive_core::Timestamp::from_unix_seconds(4_600), diff_digest: None });
         s.proposals.push(p);
         s.proposals.push(hive_core::ActionProposal::new("open", hive_core::ProposalKind::Decision, "coder"));
         let view = WorkspaceView { sessions: Arc::new(vec![s]), config: Arc::new(FlowState::default()) };

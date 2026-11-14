@@ -451,13 +451,69 @@ impl ChatService {
         // never sorts before the message it answers. `new` seeded lamport from the
         // local sequence; override it with the causal value before signing.
         env.lamport = self.store.max_lamport(session_id)?.saturating_add(1);
+        // The config frontier this device has folded: chat events that need the
+        // workspace roster are judged at it, on every device (Phase 0 A2).
+        let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
         env.actor_stamp = Some(ActorStamp {
             actor: self.author.clone(),
             recorded_at: Timestamp::now(),
+            cfg_frontier: timeline.head(),
         });
+        // Judged as signed by this device (`sign_envelope` sets the same id).
+        env.signer_device_id = Some(self.device_id);
+        if !is_local {
+            self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
+        }
         sign_envelope(&mut env, self.device_id, &self.keypair);
         self.store.append_envelope(&env)?;
         Ok(env)
+    }
+
+    /// Judge a drafted envelope exactly as every device's fold will
+    /// (`hive_core::authz::authorize`), so authoring and folding agree: an
+    /// event the fold would drop or hold is refused here instead.
+    fn authorize_as_fold(
+        &self,
+        env: &SessionEventEnvelope,
+        config: Option<&ChatSession>,
+        timeline: &hive_core::authz::ConfigTimeline,
+    ) -> Result<()> {
+        use hive_core::authz::{self, Decision};
+        let config_id = workspace_config_session_id(env.workspace_id);
+        if config.is_some_and(|c| c.authz.read_only()) {
+            return Err(ChatError::Unauthorized(format!(
+                "this workspace uses rules version {}; update Ligus to make changes here",
+                config.map(|c| c.authz.rules).unwrap_or_default()
+            )));
+        }
+        let fold = if env.session_id == config_id {
+            config.cloned()
+        } else {
+            let ws = match config {
+                Some(_) => hive_core::WorkspaceAuthz::Timeline(timeline),
+                None => hive_core::WorkspaceAuthz::NoConfigLog,
+            };
+            self.store.load_session_authorized(env.session_id, self.trusted_founder.as_deref(), self.local_workspace_id, ws)?
+        };
+        // A brand-new log (its seed) has nothing to judge against yet.
+        let Some(fold) = fold else { return Ok(()) };
+        let is_chat = env.session_id != config_id;
+        let needs_ws = is_chat && authz::needs_workspace_authz(&env.payload);
+        if needs_ws && config.is_none() {
+            return Err(ChatError::Unauthorized("the workspace configuration hasn't synced to this device yet".into()));
+        }
+        let ctx = authz::Ctx {
+            fold: &fold,
+            running: timeline.current(),
+            workspace: needs_ws.then(|| timeline.current()),
+            trusted: false,
+            checked: is_chat && config.is_some(),
+        };
+        match authz::authorize(env, &ctx) {
+            Decision::Allow => Ok(()),
+            Decision::Deny(why) => Err(ChatError::Unauthorized(why.0)),
+            Decision::Hold(h) => Err(ChatError::Unauthorized(format!("not yet decidable on this device ({h:?})"))),
+        }
     }
 
     /// Create a chat by seeding a `SessionSnapshot`.
@@ -1532,10 +1588,38 @@ impl ChatService {
             workspace_id,
             SessionEvent::WorkflowDefinitionsUpdated { definitions },
         )?;
-        let mut applied = proposal.clone();
-        applied.status = hive_core::ProposalStatus::Applied;
-        self.upsert_proposal(session_id, workspace_id, applied.clone())?;
-        Ok(Some(applied))
+        self.mark_proposal_applied(session_id, workspace_id, proposal_id, None)
+    }
+
+    /// Record that a proposal's approved change was carried out: a
+    /// `ProposalApplied` naming the digest of the content that was approved.
+    /// Every device folds it only from a human member, for that exact content,
+    /// on a proposal that is approved with its human gate met. Returns the
+    /// locally projected proposal, or `None` if it isn't (or no longer)
+    /// applicable.
+    pub fn mark_proposal_applied(
+        &mut self,
+        session_id: Uuid,
+        workspace_id: Uuid,
+        proposal_id: Uuid,
+        commit: Option<String>,
+    ) -> Result<Option<ActionProposal>> {
+        let Some(session) = self.load(session_id)? else {
+            return Ok(None);
+        };
+        let Some(proposal) = session.proposals.iter().find(|p| p.id == proposal_id) else {
+            return Ok(None);
+        };
+        if session.authz.blocks(proposal_id, proposal.set_id) {
+            return Err(ChatError::Unauthorized("a vote or decision on this proposal is still waiting to sync".into()));
+        }
+        let diff_digest = hive_core::authz::votes::diff_digest(proposal);
+        self.append_signed(
+            session_id,
+            workspace_id,
+            SessionEvent::ProposalApplied { proposal_id, diff_digest, commit, at: Timestamp::now() },
+        )?;
+        Ok(self.load(session_id)?.and_then(|s| s.proposals.into_iter().find(|p| p.id == proposal_id)))
     }
 
     /// Persist a workflow run snapshot (create or update by id).
@@ -1543,8 +1627,13 @@ impl ChatService {
         &mut self,
         session_id: Uuid,
         workspace_id: Uuid,
-        run: WorkflowRun,
+        mut run: WorkflowRun,
     ) -> Result<()> {
+        // S4: the device that creates a run is the one whose epoch-less writes
+        // count; the fold fixes it at the run's first write.
+        if run.creator_device_id.is_none() {
+            run.creator_device_id = Some(self.device_id);
+        }
         self.append_signed(
             session_id,
             workspace_id,
@@ -1774,28 +1863,30 @@ impl ChatService {
         Ok(())
     }
 
-    /// Cast a vote on a proposal (latest vote per actor wins; status recomputes
-    /// against the quorum), then persist the updated proposal.
+    /// Cast this device's author's vote on a proposal (latest vote per actor
+    /// wins; status recomputes against the quorum). The vote names its signer
+    /// and the digest of the content it approves; every device counts it at the
+    /// signer's real workspace role, so the payload's role is informational.
     pub fn vote_on_proposal(
         &mut self,
         session_id: Uuid,
         workspace_id: Uuid,
         proposal_id: Uuid,
-        actor_id: impl Into<String>,
-        role: WorkspaceRole,
         approved: bool,
     ) -> Result<Option<ActionProposal>> {
         let Some(session) = self.load(session_id)? else {
             return Ok(None);
         };
+        let role = session.role_of(&self.author.id);
         let Some(mut proposal) = session.proposals.into_iter().find(|p| p.id == proposal_id) else {
             return Ok(None);
         };
         let approval = ProposalApproval {
-            actor_id: actor_id.into(),
+            actor_id: self.author.id.clone(),
             role,
             approved,
             created_at: Timestamp::now(),
+            diff_digest: Some(hive_core::authz::votes::diff_digest(&proposal)),
         };
         // Emit the vote as a delta, not a full-proposal snapshot: concurrent
         // votes from other devices then merge (per-actor LWW + quorum recompute)
@@ -1976,24 +2067,26 @@ impl ChatService {
         // stay fully gated). This is what lets the churned local self's own governance
         // events (reconcile / archive channel) fold instead of being dropped.
         let local = self.local_workspace_id;
-        let Some(mut session) = self.store.load_session_with_founder(session_id, founder, local)? else {
+        let Some(workspace_id) = self.store.workspace_of(session_id)? else {
             return Ok(None);
         };
-        let config_id = workspace_config_session_id(session.workspace_id);
-        if session_id != config_id {
-            if let Some(cfg) = self.store.load_session_with_founder(config_id, founder, local)? {
-                // Proposal-set events are role-checked against the workspace
-                // roster, which only the config log holds: re-fold a chat that
-                // has any (cached per roster, so this costs one fold per change).
-                if !session.proposal_sets.is_empty() || session.proposals.iter().any(|p| p.reverted) {
-                    let hoist = hive_core::authorization::HoistedRoster {
-                        members: &cfg.members,
-                        dearth_on: cfg.guards.dearth_on().is_some(),
-                    };
-                    if let Some(checked) = self.store.load_session_hoisted(session_id, founder, local, Some(hoist))? {
-                        session = checked;
-                    }
-                }
+        let config_id = workspace_config_session_id(workspace_id);
+        let (cfg, timeline) = self.store.load_config(workspace_id, founder, local)?;
+        if session_id == config_id {
+            return Ok(cfg);
+        }
+        // A chat is folded against the config log's roster history (A2): its
+        // workspace-authorized events are judged at their own frontier, and
+        // held while the config log hasn't synced.
+        let ws = match cfg {
+            Some(_) => hive_core::WorkspaceAuthz::Timeline(&timeline),
+            None => hive_core::WorkspaceAuthz::NoConfigLog,
+        };
+        let Some(mut session) = self.store.load_session_authorized(session_id, founder, local, ws)? else {
+            return Ok(None);
+        };
+        {
+            if let Some(cfg) = cfg {
                 // Members hoist onto the config log so the roster is workspace-wide.
                 // Dedup by member id; the config-log entry is the source of truth,
                 // so it *replaces* any same-id per-session member (role/title/index
@@ -3539,21 +3632,25 @@ mod tests {
         let chat = svc.create_chat("Demo", Uuid::nil(), "anthropic").unwrap();
         let (sid, wid) = (chat.id, chat.workspace_id);
         let def = hive_core::workflow::preset_review_gate();
+        svc.ensure_workspace_config(wid).unwrap();
+        // A proposal's own author can't approve it.
+        let own = workflow_proposal("u1", hive_core::workflow::preset_fan_out_vote());
+        let own_id = own.id;
+        svc.upsert_proposal(sid, wid, own).unwrap();
+        let r = svc.vote_on_proposal(sid, wid, own_id, true).unwrap().unwrap();
+        assert_eq!(r.status, hive_core::ProposalStatus::Open);
+        assert!(svc.load(sid).unwrap().unwrap().workflow_definitions.is_empty());
+
         let p = workflow_proposal("agent-scout", def.clone());
         let pid = p.id;
         svc.upsert_proposal(sid, wid, p).unwrap();
         assert!(svc.load(sid).unwrap().unwrap().workflow_definitions.is_empty(), "filing alone adds nothing");
 
-        // The authoring agent's own vote can't approve it.
-        let r = svc.vote_on_proposal(sid, wid, pid, "agent-scout", WorkspaceRole::Owner, true).unwrap().unwrap();
-        assert_eq!(r.status, hive_core::ProposalStatus::Open);
-        assert!(svc.load(sid).unwrap().unwrap().workflow_definitions.is_empty());
-
-        let r = svc.vote_on_proposal(sid, wid, pid, "human", WorkspaceRole::Owner, true).unwrap().unwrap();
+        let r = svc.vote_on_proposal(sid, wid, pid, true).unwrap().unwrap();
         assert_eq!(r.status, hive_core::ProposalStatus::Applied);
         let s = svc.load(sid).unwrap().unwrap();
         assert_eq!(s.workflow_definitions, vec![def.clone()]);
-        assert_eq!(s.proposals[0].status, hive_core::ProposalStatus::Applied);
+        assert_eq!(s.proposals.iter().find(|p| p.id == pid).unwrap().status, hive_core::ProposalStatus::Applied);
 
         // Applying again (another device's Implement) changes nothing.
         assert!(svc.apply_workflow_proposal(sid, wid, pid).unwrap().is_none());
@@ -3564,11 +3661,12 @@ mod tests {
     fn rejecting_a_workflow_proposal_leaves_definitions_alone() {
         let (mut svc, _) = service();
         let chat = svc.create_chat("Demo", Uuid::nil(), "anthropic").unwrap();
+        svc.ensure_workspace_config(chat.workspace_id).unwrap();
         let (sid, wid) = (chat.id, chat.workspace_id);
         let p = workflow_proposal("agent", hive_core::workflow::preset_review_gate());
         let pid = p.id;
         svc.upsert_proposal(sid, wid, p).unwrap();
-        let r = svc.vote_on_proposal(sid, wid, pid, "human", WorkspaceRole::Owner, false).unwrap().unwrap();
+        let r = svc.vote_on_proposal(sid, wid, pid, false).unwrap().unwrap();
         assert_eq!(r.status, hive_core::ProposalStatus::Rejected);
         assert!(svc.apply_workflow_proposal(sid, wid, pid).unwrap().is_none());
         assert!(svc.load(sid).unwrap().unwrap().workflow_definitions.is_empty());
@@ -3578,6 +3676,7 @@ mod tests {
     fn an_approved_revision_replaces_an_existing_definition_in_place() {
         let (mut svc, _) = service();
         let chat = svc.create_chat("Demo", Uuid::nil(), "anthropic").unwrap();
+        svc.ensure_workspace_config(chat.workspace_id).unwrap();
         let (sid, wid) = (chat.id, chat.workspace_id);
         // Definitions saved before this change (by the old editor or an old
         // directive) stay in place and can be revised.
@@ -3591,7 +3690,7 @@ mod tests {
         let p = workflow_proposal("agent", revised.clone());
         let pid = p.id;
         svc.upsert_proposal(sid, wid, p).unwrap();
-        svc.vote_on_proposal(sid, wid, pid, "human", WorkspaceRole::Owner, true).unwrap();
+        svc.vote_on_proposal(sid, wid, pid, true).unwrap();
         let defs = svc.load(sid).unwrap().unwrap().workflow_definitions;
         assert_eq!(defs.len(), 2);
         assert_eq!(defs[0], revised, "same slot, same id");
@@ -3602,11 +3701,12 @@ mod tests {
     fn a_plain_decision_vote_never_touches_definitions() {
         let (mut svc, _) = service();
         let chat = svc.create_chat("Demo", Uuid::nil(), "anthropic").unwrap();
+        svc.ensure_workspace_config(chat.workspace_id).unwrap();
         let (sid, wid) = (chat.id, chat.workspace_id);
         let p = ActionProposal::new("Ship it", hive_core::ProposalKind::Decision, "agent");
         let pid = p.id;
         svc.upsert_proposal(sid, wid, p).unwrap();
-        let r = svc.vote_on_proposal(sid, wid, pid, "human", WorkspaceRole::Owner, true).unwrap().unwrap();
+        let r = svc.vote_on_proposal(sid, wid, pid, true).unwrap().unwrap();
         assert_eq!(r.status, hive_core::ProposalStatus::Approved, "not auto-applied");
         assert!(svc.apply_workflow_proposal(sid, wid, pid).unwrap().is_none());
     }

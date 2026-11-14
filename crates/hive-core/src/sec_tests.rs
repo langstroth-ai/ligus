@@ -137,8 +137,7 @@ fn signed_vote(pid: Uuid, voter: &str) -> SessionEvent {
             actor_id: voter.into(),
             role: crate::identity::WorkspaceRole::Owner,
             approved: true,
-            created_at: Timestamp::epoch(),
-        },
+            created_at: Timestamp::epoch(), diff_digest: None },
     }
 }
 

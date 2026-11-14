@@ -447,8 +447,7 @@ mod tests {
         let mut spoofed = env.clone();
         spoofed.actor_stamp = Some(crate::identity::ActorStamp {
             actor: crate::identity::ActorIdentity::new("mallory", "Mallory", crate::identity::ActorKind::Human),
-            recorded_at: crate::time_util::Timestamp::epoch(),
-        });
+            recorded_at: crate::time_util::Timestamp::epoch(), cfg_frontier: None });
         assert!(verify_envelope(&spoofed, &kp.public_key_bytes()).is_err());
 
         // wrong key -> fails

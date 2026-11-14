@@ -313,8 +313,7 @@ pub fn proposal_dto_as(s: &ChatSession, p: &ActionProposal, me: &str) -> Value {
             actor_id: me.to_string(),
             role,
             approved: true,
-            created_at: Timestamp::now(),
-        },
+            created_at: Timestamp::now(), diff_digest: None },
     });
     v["canVote"] = json!(role.rank() >= floor.rank());
     v["isMine"] = json!(!p.author_actor_id.is_empty() && p.author_actor_id == me);
@@ -762,9 +761,7 @@ pub(super) fn find_proposal(s: &Shared, raw: &str) -> ApiResult<(ChatSession, Ac
 /// quorum and role floor apply unchanged.
 fn vote(s: &Shared, chat: &ChatSession, pid: Uuid, approved: bool) -> ApiResult<ActionProposal> {
     let mut svc = s.lock();
-    let actor = svc.author().id.clone();
-    let role = chat.role_of(&actor);
-    svc.vote_on_proposal(chat.id, chat.workspace_id, pid, actor, role, approved)?
+    svc.vote_on_proposal(chat.id, chat.workspace_id, pid, approved)?
         .ok_or_else(|| ApiError::not_found("proposal"))
 }
 
@@ -1006,6 +1003,11 @@ fn apply_on_this_host(s: &Shared, chat: &ChatSession, p: &ActionProposal) -> Api
             eprintln!("serve: not applying proposal {}: {reason}", p.id);
             return Ok(None);
         }
+        // A held vote or decision (its config frontier hasn't synced): wait.
+        if fresh.authz.blocks(p.id, p.set_id) {
+            eprintln!("serve: not applying proposal {}: a vote on it is still waiting to sync", p.id);
+            return Ok(None);
+        }
     }
     let repos = crate::repos::repos_dir(&s.cfg.data_dir);
     let Some(repo) = crate::repos::RepoBindings::load(&s.cfg.data_dir).resolve(&repos, chat.id) else {
@@ -1019,10 +1021,7 @@ fn apply_on_this_host(s: &Shared, chat: &ChatSession, p: &ActionProposal) -> Api
         .map_err(|e| ApiError(StatusCode::CONFLICT, format!("chat worktree unavailable: {e}")))?;
     git_apply(&wt, diff).map_err(|e| ApiError(StatusCode::CONFLICT, e))?;
     git_commit(&wt, &format!("Apply proposal: {}", p.title)).map_err(|e| ApiError(StatusCode::CONFLICT, e))?;
-    let mut applied = p.clone();
-    applied.status = ProposalStatus::Applied;
-    s.lock().upsert_proposal(chat.id, chat.workspace_id, applied.clone())?;
-    Ok(Some(applied))
+    Ok(s.lock().mark_proposal_applied(chat.id, chat.workspace_id, p.id, None)?)
 }
 
 fn git_apply(dir: &std::path::Path, diff: &str) -> Result<(), String> {

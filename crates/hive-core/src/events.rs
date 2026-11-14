@@ -312,6 +312,25 @@ pub enum SessionEvent {
     /// [`crate::flow::FlowRecord`]). Additive: an older build decodes it as
     /// `Unknown`. Config records ride the workspace-config log.
     FlowRecorded { record: crate::flow::FlowRecord },
+    /// Set the workspace rules version (config log; Owner only). The fold picks
+    /// rules by config position; a version this build doesn't enforce makes
+    /// the workspace read-only here (see [`crate::authz::RULES_SUPPORTED`]).
+    WorkspaceRulesSet { version: u32 },
+    /// A proposal's change was carried out. The only way a proposal becomes
+    /// `Applied`: a human member (Contributor+) applies exactly the content
+    /// that was approved (`diff_digest`, see [`crate::authz::votes::diff_digest`]).
+    ProposalApplied {
+        proposal_id: Uuid,
+        diff_digest: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        commit: Option<String>,
+        at: Timestamp,
+    },
+    // Phase 0 slots, uncommented by their PRs in merge-queue order:
+    // AgentKeyCertified { cert: AgentKeyCertificate },            // A3
+    // WorkspaceKeyRotated { .. },                                  // B1
+    // DeviceKeyAgreementPublished { .. },                          // B1
+    // PasskeyRegistered { .. }, PasskeyRemoved { .. },             // B3
     /// Forward-compat catch-all: an event `kind` this build does not recognize
     /// (produced by a newer client). Serde deserializes an unknown tag here
     /// instead of failing the whole stream; it projects as a no-op. The raw
@@ -384,6 +403,8 @@ impl SessionEvent {
             SessionEvent::ChatLockdownCleared { .. } => "chatLockdownCleared",
             SessionEvent::ProposalMarkedStale { .. } => "proposalMarkedStale",
             SessionEvent::FlowRecorded { .. } => "flowRecorded",
+            SessionEvent::WorkspaceRulesSet { .. } => "workspaceRulesSet",
+            SessionEvent::ProposalApplied { .. } => "proposalApplied",
             SessionEvent::Unknown => "unknown",
         }
     }
@@ -412,7 +433,8 @@ impl SessionEvent {
             | SessionEvent::DearthModeChanged { .. }
             | SessionEvent::JoinApproved { .. }
             | SessionEvent::ChatLockdownRaised { .. }
-            | SessionEvent::ChatLockdownCleared { .. } => EventScope::Workspace,
+            | SessionEvent::ChatLockdownCleared { .. }
+            | SessionEvent::WorkspaceRulesSet { .. } => EventScope::Workspace,
             SessionEvent::FlowRecorded { record } if record.is_config() => EventScope::Workspace,
             SessionEvent::WorkflowRunUpserted { .. } => EventScope::Run,
             _ => EventScope::Session,
@@ -632,6 +654,15 @@ impl ChatSession {
                     p.add_refinement(refinement.clone());
                 }
             }
+            SessionEvent::ProposalApplied { proposal_id, diff_digest, .. } => {
+                if let Some(p) = self.proposals.iter_mut().find(|p| p.id == *proposal_id) {
+                    if p.ready_to_apply() && crate::authz::votes::diff_digest(p) == *diff_digest {
+                        p.status = crate::proposals::ProposalStatus::Applied;
+                    }
+                }
+            }
+            // Read by the roster tracker (authz::timeline), not the session.
+            SessionEvent::WorkspaceRulesSet { .. } => {}
             SessionEvent::ProposalReverted { proposal_id, .. } => {
                 if let Some(p) = self.proposals.iter_mut().find(|p| p.id == *proposal_id) {
                     p.reverted = p.status == crate::proposals::ProposalStatus::Applied;
@@ -668,7 +699,11 @@ impl ChatSession {
                     return;
                 }
                 if let Some(slot) = self.workflow_runs.iter_mut().find(|r| r.id == run.id) {
+                    // Who created the run is fixed by its first write (S4).
+                    let (creator, initiator) = (slot.creator_device_id, slot.initiator_actor_id.clone());
                     *slot = (**run).clone();
+                    slot.creator_device_id = creator;
+                    slot.initiator_actor_id = initiator;
                 } else {
                     self.workflow_runs.push((**run).clone());
                 }
@@ -949,27 +984,62 @@ pub fn project_with_founder(
 /// the projection drop the sole user's own governance events (leaving them a
 /// stranded Contributor in their own Home). Convergence is unaffected: a local
 /// workspace lives on one device, so there is no second projector to disagree.
+///
+/// This fold has no workspace roster: use it for a workspace-config log (which
+/// is its own roster) and in tests. A chat log is folded with
+/// [`project_authorized`].
 pub fn project_with_options(
     envelopes: &[SessionEventEnvelope],
     trusted_founder: Option<&str>,
     trusted_workspace: Option<Uuid>,
 ) -> Option<ChatSession> {
-    project_with_hoist(envelopes, trusted_founder, trusted_workspace, None)
+    fold(envelopes, trusted_founder, trusted_workspace, WorkspaceAuthz::Unchecked, None)
 }
 
-/// [`project_with_options`] for a **chat** log, with the workspace roster
-/// hoisted from the config log: proposal-set events
-/// ([`crate::authorization::requires_hoisted_authz`]) are folded only when
-/// their signed author holds the role for them in that roster. `None` skips
-/// the check (the config log itself, or no config log synced yet).
-/// Deterministic over the event set and the roster, so devices that hold the
-/// same config log drop the same events.
-pub fn project_with_hoist(
+/// How a chat log's workspace-authorized events are judged.
+#[derive(Debug, Clone, Copy)]
+pub enum WorkspaceAuthz<'a> {
+    /// No workspace roster (the config log itself, tests): legacy semantics.
+    Unchecked,
+    /// Against the workspace config log's roster history.
+    Timeline(&'a crate::authz::ConfigTimeline),
+    /// The workspace's config log hasn't synced: such events are held.
+    NoConfigLog,
+}
+
+/// Fold a **chat** log, judging every event that needs the workspace roster
+/// against the config-log roster at the event's frontier (see
+/// [`crate::authz`]). Deterministic over the chat's event set and the config
+/// log's, so devices holding the same events project the same chat.
+pub fn project_authorized(
     envelopes: &[SessionEventEnvelope],
     trusted_founder: Option<&str>,
     trusted_workspace: Option<Uuid>,
-    hoist: Option<crate::authorization::HoistedRoster<'_>>,
+    workspace: WorkspaceAuthz<'_>,
 ) -> Option<ChatSession> {
+    fold(envelopes, trusted_founder, trusted_workspace, workspace, None)
+}
+
+/// Fold a **workspace-config** log and record its roster at every position.
+pub fn project_config(
+    envelopes: &[SessionEventEnvelope],
+    trusted_founder: Option<&str>,
+    trusted_workspace: Option<Uuid>,
+) -> (Option<ChatSession>, crate::authz::ConfigTimeline) {
+    let mut timeline = crate::authz::ConfigTimeline::default();
+    let session = fold(envelopes, trusted_founder, trusted_workspace, WorkspaceAuthz::Unchecked, Some(&mut timeline));
+    (session, timeline.finish_if_begun())
+}
+
+fn fold(
+    envelopes: &[SessionEventEnvelope],
+    trusted_founder: Option<&str>,
+    trusted_workspace: Option<Uuid>,
+    workspace: WorkspaceAuthz<'_>,
+    mut timeline: Option<&mut crate::authz::ConfigTimeline>,
+) -> Option<ChatSession> {
+    use crate::authz::{self, Decision, HeldEvent, HoldReason};
+
     let mut ordered: Vec<&SessionEventEnvelope> = envelopes.iter().collect();
     ordered.sort_by_key(|e| e.canonical_key());
 
@@ -993,58 +1063,109 @@ pub fn project_with_hoist(
         _ => unreachable!("position matched a snapshot"),
     };
     session.updated_at = ordered[base].timestamp;
-    for env in &ordered[base + 1..] {
-        if let SessionEvent::SessionSnapshot { session: snap } = &env.payload {
-            // A non-seed snapshot is a full-state overwrite folded mid-stream (a
-            // compaction checkpoint). Gate it like governance: its author must be
-            // an Owner and it must not re-found the workspace or elevate anyone
-            // (see authorization::nonseed_snapshot_authorized). `apply` folds a
-            // non-seed snapshot as a no-op today, so this is defense-in-depth for
-            // if compaction ever gains subsuming semantics — but it is a pure,
-            // deterministic function of the fold-so-far, so it stays convergent.
-            let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
-            if !crate::authorization::nonseed_snapshot_authorized(snap, author, &session) {
-                continue;
-            }
-        } else if !crate::authorization::lease_signer_ok(env, &session) {
-            // Lease claims/releases and epoch-stamped coordinator writes must be
-            // signed by the device that holds (or claims) the lease. A forged
-            // claim naming someone else's device, or a write under an epoch whose
-            // holder is another device, is dropped on every device alike.
-            continue;
-        } else if crate::authorization::requires_projection_authz(&env.payload)
-            && trusted_workspace != Some(env.workspace_id)
-        {
-            // Ingest-time authorization (spec: defense against a malicious member).
-            // A governance/config event is dropped unless its author held the role
-            // in the roster projected *so far*. Deterministic over the canonical
-            // fold ⇒ every device drops the same events ⇒ convergence preserved.
-            // Skipped for the trusted (device-local) workspace — see project_with_options.
-            let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
-            let role = session.role_of(author);
-            if !crate::authorization::evaluate(&env.payload, author, role, &session).allowed {
-                continue;
-            }
-        } else if let Some(roster) = hoist.as_ref().filter(|_| {
-            trusted_workspace != Some(env.workspace_id) && crate::authorization::requires_hoisted_authz(&env.payload)
-        }) {
-            // Proposal-set events: the author's role comes from the workspace
-            // roster (hoisted from the config log), not this chat's own.
-            let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
-            if !roster.allows(&env.payload, author, &session) {
-                continue;
-            }
+    session.authz = Default::default();
+    let mut tracker = authz::RosterTracker::seeded(&session);
+    if let Some(t) = timeline.as_deref_mut() {
+        *t = authz::ConfigTimeline::begin(tracker.state.clone());
+        for e in &ordered {
+            t.note_held(e.event_id, e.lamport);
         }
-        // Guard folds that need the signed author (dearth-mode joins, verified
-        // votes). Deterministic over the canonical fold like everything above.
-        let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
-        if crate::guard::fold_authored(&mut session, &env.payload, author) {
-            session.updated_at = env.timestamp;
-            continue;
-        }
-        session.apply(&env.payload);
-        session.updated_at = env.timestamp;
+        // The seed is a position too (a log with only its seed has a head).
+        t.push(ordered[base].canonical_key(), &tracker.state, false);
     }
+    let checked = !matches!(workspace, WorkspaceAuthz::Unchecked);
+    for env in &ordered[base + 1..] {
+        let trusted = trusted_workspace == Some(env.workspace_id);
+        let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
+        let mut allowed = false;
+        'judge: {
+            if let SessionEvent::SessionSnapshot { session: snap } = &env.payload {
+                // A non-seed snapshot is a full-state overwrite folded mid-stream (a
+                // compaction checkpoint). Gate it like governance: its author must be
+                // an Owner and it must not re-found the workspace or elevate anyone
+                // (see authorization::nonseed_snapshot_authorized). `apply` folds a
+                // non-seed snapshot as a no-op today, so this is defense-in-depth.
+                if crate::authorization::nonseed_snapshot_authorized(snap, author, &session) {
+                    session.updated_at = env.timestamp;
+                    allowed = true;
+                }
+                break 'judge;
+            }
+            // The workspace position of a chat event that needs the roster.
+            let mut at = None;
+            if checked && !trusted && authz::needs_workspace_authz(&env.payload) {
+                let hold = match workspace {
+                    WorkspaceAuthz::NoConfigLog => Some(HoldReason::NoConfigLog),
+                    WorkspaceAuthz::Timeline(t) => {
+                        // Every 2.0 author stamps the frontier; one without it
+                        // can't be placed and is refused.
+                        let Some(f) = env.actor_stamp.as_ref().and_then(|s| s.cfg_frontier) else {
+                            break 'judge;
+                        };
+                        match t.at(f) {
+                            Ok(r) => {
+                                at = Some(r);
+                                None
+                            }
+                            Err(Some(h)) => Some(h),
+                            // A frontier naming a held event under the wrong
+                            // lamport is forged.
+                            Err(None) => break 'judge,
+                        }
+                    }
+                    WorkspaceAuthz::Unchecked => None,
+                };
+                if let Some(reason) = hold {
+                    let (proposal_id, set_id) = authz::subject_of(&env.payload);
+                    session.authz.held.push(HeldEvent { event_id: env.event_id, reason, proposal_id, set_id });
+                    break 'judge;
+                }
+            }
+            let ctx = authz::Ctx { fold: &session, running: &tracker.state, workspace: at, trusted, checked };
+            if authz::authorize(env, &ctx) != Decision::Allow {
+                break 'judge;
+            }
+            allowed = true;
+            // Checked-fold rewrites: votes carry the signer's real role, and an
+            // upsert never asserts votes or status.
+            let rewritten;
+            let payload = match &env.payload {
+                SessionEvent::ProposalUpserted { proposal } if checked && !trusted => {
+                    let existing = session.proposals.iter().find(|p| p.id == proposal.id);
+                    rewritten = SessionEvent::ProposalUpserted {
+                        proposal: authz::votes::normalize_upsert(existing, proposal),
+                    };
+                    &rewritten
+                }
+                SessionEvent::ProposalVoteCast { proposal_id, approval } if checked && !trusted => {
+                    let mut approval = approval.clone();
+                    if let Some(role) = at.and_then(|r| authz::counted_role(r, author)) {
+                        approval.role = role;
+                    }
+                    rewritten = SessionEvent::ProposalVoteCast { proposal_id: *proposal_id, approval };
+                    &rewritten
+                }
+                other => other,
+            };
+            if let SessionEvent::ChatLockdownRaised { lockdown, .. } = payload {
+                session.authz.lockdown_raisers.insert(lockdown.id, author.to_string());
+            }
+            // Guard folds that need the signed author (dearth-mode joins, verified
+            // votes). Deterministic over the canonical fold like everything above.
+            if !crate::guard::fold_authored(&mut session, payload, author) {
+                session.apply(payload);
+            }
+            session.updated_at = env.timestamp;
+        }
+        let changed = tracker.observe(env, allowed, &session);
+        if let Some(t) = timeline.as_deref_mut() {
+            t.push(env.canonical_key(), &tracker.state, changed);
+        }
+    }
+    session.authz.rules = match workspace {
+        WorkspaceAuthz::Timeline(t) => t.current().rules,
+        _ => tracker.state.rules,
+    };
     Some(session)
 }
 
@@ -1404,8 +1525,7 @@ mod tests {
     fn by(author: &str, mut e: SessionEventEnvelope) -> SessionEventEnvelope {
         e.actor_stamp = Some(ActorStamp {
             actor: ActorIdentity::new(author, author, ActorKind::Human),
-            recorded_at: Timestamp::epoch(),
-        });
+            recorded_at: Timestamp::epoch(), cfg_frontier: None });
         e
     }
 
@@ -1650,8 +1770,7 @@ mod tests {
             actor_id: actor.into(),
             role: WorkspaceRole::Contributor,
             approved,
-            created_at: Timestamp::epoch(),
-        };
+            created_at: Timestamp::epoch(), diff_digest: None };
 
         let events = vec![
             env(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(base) }),
@@ -1698,8 +1817,7 @@ mod tests {
                         actor_id: "u1".into(),
                         role: WorkspaceRole::Contributor,
                         approved: true,
-                        created_at: Timestamp::epoch(),
-                    },
+                        created_at: Timestamp::epoch(), diff_digest: None },
                 },
             ),
             env(sid, wid, 4, SessionEvent::ProposalDismissed { proposal_id: pid, dismissed: true }),
@@ -1989,6 +2107,17 @@ mod tests {
             SessionEvent::WorkflowRunUpserted { run: Box::new(run) },
         ));
 
+        // S4: a write without a lease epoch is accepted from the run's creator
+        // (here, a run without a creator device: its stamped initiator).
+        let unstamped = project(&envs).unwrap();
+        assert!(unstamped.workflow_runs.is_empty(), "an unattributed run write is refused");
+        for e in &mut envs[2..] {
+            e.actor_stamp = Some(ActorStamp {
+                actor: ActorIdentity::new("u1", "U", ActorKind::Human),
+                recorded_at: Timestamp::epoch(),
+                cfg_frontier: None,
+            });
+        }
         let s = project(&envs).unwrap();
         assert_eq!(s.workflow_definitions.len(), 1);
         assert_eq!(s.workflow_definitions[0].name, "Review gate");

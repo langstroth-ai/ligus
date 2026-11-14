@@ -849,7 +849,7 @@ mod tests {
 
     fn vote(fx: &mut Fx, pid: Uuid, actor: &str, role: WorkspaceRole, approved: bool) {
         let p = fx.props.iter_mut().find(|p| p.id == pid).unwrap();
-        p.cast_vote(ProposalApproval { actor_id: actor.into(), role, approved, created_at: Timestamp::epoch() });
+        p.cast_vote(ProposalApproval { actor_id: actor.into(), role, approved, created_at: Timestamp::epoch(), diff_digest: None });
     }
 
     fn passing() -> PreflightReport {

@@ -123,6 +123,29 @@ pub struct ActorStamp {
     pub actor: ActorIdentity,
     #[serde(default)]
     pub recorded_at: Timestamp,
+    /// The newest workspace-config event the author had folded when signing
+    /// (Phase 0, A2). Chat events that need workspace authorization are judged
+    /// against the roster at this position, so a later promotion or demotion
+    /// never re-judges them. Signed (the stamp is inside the v3 preimage);
+    /// left out of the JSON when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cfg_frontier: Option<CfgFrontier>,
+}
+
+/// A position on a workspace-config log: the canonical key `(lamport,
+/// event_id)` of one config event. Serialized as `{"l":…,"e":…}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct CfgFrontier {
+    #[serde(rename = "l")]
+    pub lamport: u64,
+    #[serde(rename = "e")]
+    pub event_id: Uuid,
+}
+
+impl CfgFrontier {
+    pub fn key(&self) -> (u64, Uuid) {
+        (self.lamport, self.event_id)
+    }
 }
 
 #[cfg(test)]
