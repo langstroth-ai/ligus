@@ -336,9 +336,15 @@ fn seg_match(p: &[u8], s: &[u8]) -> bool {
     }
 }
 
-/// Whether any of `paths` falls under one of `patterns`.
+/// Whether any of `paths` falls under one of `patterns`. Case-insensitive:
+/// macOS and Windows volumes usually are, so `.GitHub/workflows/x.yml` lands
+/// in `.github/` and must be guarded like it (as the runtime's write guard
+/// already matches).
 pub fn touches_any(patterns: &[String], paths: &[String]) -> bool {
-    paths.iter().any(|f| patterns.iter().any(|p| glob_match(p, f)))
+    paths.iter().any(|f| {
+        let f = f.to_lowercase();
+        patterns.iter().any(|p| glob_match(&p.to_lowercase(), &f))
+    })
 }
 
 /// Whether `actor_id` is a human member at Contributor or above in `members`.

@@ -101,3 +101,31 @@ fn brood_gate_reads_the_diff_not_the_declared_file_list() {
     let prop = p.proposals.iter().find(|x| x.id == pid).unwrap();
     assert!(human_gate_reason(&p, prop).is_some(), "a CI change hidden behind a false file list skipped the human gate");
 }
+
+/// macOS and Windows volumes are case-insensitive by default, so
+/// `.GitHub/workflows/ci.yml` lands in `.github/`. The brood gate must match
+/// the way the file system resolves the path (the write guard in
+/// hive-runtime's builtin tools already does).
+#[test]
+fn brood_gate_is_case_insensitive() {
+    let s = base();
+    let mut rng = Rng::new(42);
+    for path in [".github/workflows/ci.yml", "deploy/prod.yaml", "infra/main.tf", "Jenkinsfile", ".circleci/config.yml"] {
+        // A random case-flip of the protected path.
+        let flipped: String = path
+            .chars()
+            .map(|c| if rng.next() % 2 == 0 { c.to_ascii_uppercase() } else { c.to_ascii_lowercase() })
+            .collect();
+        let flipped = if flipped == path { path.to_ascii_uppercase() } else { flipped };
+        let prop = ActionProposal::file_diff("p", "", diff_for(&flipped), vec![flipped.clone()]);
+        let pid = prop.id;
+        let p = crate::events::project(&[
+            seed(&s),
+            ev(&s, 1, "owner", None, dearth_on()),
+            ev(&s, 2, "alice", None, SessionEvent::ProposalUpserted { proposal: prop }),
+        ])
+        .unwrap();
+        let prop = p.proposals.iter().find(|x| x.id == pid).unwrap();
+        assert!(human_gate_reason(&p, prop).is_some(), "{flipped} slipped past the brood gate");
+    }
+}
