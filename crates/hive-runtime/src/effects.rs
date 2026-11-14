@@ -164,7 +164,8 @@ pub fn open_alternatives(
     set.trigger_message_id = trigger_message_id;
     set.base_commit = base_commit;
     if let Some(k) = alts.agent_quorum {
-        set.agent_quorum = k;
+        // Raises the default only (never lowers it), like requiredApprovals.
+        set.agent_quorum = k.max(set.agent_quorum);
     }
     let n = proposals.len();
     let set = svc.as_agent(ctx.agent_id, |svc| svc.open_proposal_set(ctx.session_id, ctx.workspace_id, set, proposals)).map_err(err)?;

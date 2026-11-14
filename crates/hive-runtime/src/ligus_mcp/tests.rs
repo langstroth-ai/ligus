@@ -649,3 +649,21 @@ async fn read_chat_never_reads_a_locked_down_chat_from_open_egress() {
     let r = turn.call("ligus_read_chat", &json!({})).await;
     assert!(!r.is_error, "{}", r.text);
 }
+
+/// Like `requiredApprovals`, an agent's `agentQuorum` can only raise the
+/// set's bar: an agent opening its own set must not lower how many
+/// independent scouts it takes to pick the front-runner.
+#[tokio::test]
+async fn agent_quorum_can_only_raise_the_bar() {
+    let w = world();
+    let turn = w.mcp.begin_turn(spec(&w, Budgets::default()));
+    let default = hive_core::proposal_sets::ProposalSet::new("q", "a", vec![]).agent_quorum;
+    let r = turn
+        .call("ligus_open_alternatives", &json!({"question": "Which?", "body": "", "agentQuorum": 1, "options": [{"title": "A", "body": ""}, {"title": "B", "body": ""}]}))
+        .await;
+    assert!(!r.is_error, "{}", r.text);
+    let set: Uuid = body(&r)["setId"].as_str().unwrap().parse().unwrap();
+    let s = w.host.svc.lock().unwrap().load(w.chat).unwrap().unwrap();
+    let got = s.proposal_sets.iter().find(|x| x.id == set).unwrap().agent_quorum;
+    assert!(got >= default, "an agent lowered the agent quorum from {default} to {got}");
+}
