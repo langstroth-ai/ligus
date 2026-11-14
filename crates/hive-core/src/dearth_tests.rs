@@ -27,7 +27,7 @@ fn dearth(on: bool) -> SessionEvent {
 }
 
 fn add(id: &str) -> SessionEvent {
-    SessionEvent::MemberAdded { member: member(id, WorkspaceRole::Contributor) }
+    SessionEvent::MemberAdded { invite: None, member: member(id, WorkspaceRole::Contributor) }
 }
 
 fn with_admin2() -> crate::ChatSession {
@@ -57,8 +57,14 @@ fn self_enrollment_is_suspended() {
     let p = project(&envs).unwrap();
     assert!(!p.members.iter().any(|m| m.id == "eve"));
     assert!(p.guards.pending_members.is_empty());
-    // Without dearth mode the same self-enroll lands (control).
+    // Without dearth mode the same self-enroll lands when an Admin issued
+    // the invite it redeems (control); key possession alone never does.
     let envs = vec![seed(&s), ev(&s, 2, "eve", None, add("eve"))];
+    assert!(!project(&envs).unwrap().members.iter().any(|m| m.id == "eve"));
+    let invite = uuid::Uuid::new_v4();
+    let issue = SessionEvent::JoinApproved { subject: crate::authorization::invite_subject(invite) };
+    let redeem = SessionEvent::MemberAdded { invite: Some(invite), member: member("eve", WorkspaceRole::Contributor) };
+    let envs = vec![seed(&s), ev(&s, 1, "owner", None, issue), ev(&s, 2, "eve", None, redeem)];
     assert!(project(&envs).unwrap().members.iter().any(|m| m.id == "eve"));
 }
 
@@ -111,7 +117,7 @@ fn proposal_touching(files: &[&str]) -> ActionProposal {
 fn vote(pid: Uuid, voter: &str) -> SessionEvent {
     SessionEvent::ProposalVoteCast {
         proposal_id: pid,
-        approval: ProposalApproval { actor_id: voter.into(), role: WorkspaceRole::Owner, approved: true, created_at: Timestamp::epoch() },
+        approval: ProposalApproval { actor_id: voter.into(), role: WorkspaceRole::Owner, approved: true, created_at: Timestamp::epoch(), diff_digest: None },
     }
 }
 
@@ -146,7 +152,7 @@ fn brood_changes_need_a_signed_human_vote() {
     envs.push(ev(&s, 5, "bot", None, vote(bp, "bot")));
     // A proposal snapshot carrying a fake approval doesn't count.
     let mut forged = brood.clone();
-    forged.approvals.push(ProposalApproval { actor_id: "owner".into(), role: WorkspaceRole::Owner, approved: true, created_at: Timestamp::epoch() });
+    forged.approvals.push(ProposalApproval { actor_id: "owner".into(), role: WorkspaceRole::Owner, approved: true, created_at: Timestamp::epoch(), diff_digest: None });
     envs.push(ev(&s, 6, "alice", None, SessionEvent::ProposalUpserted { proposal: forged }));
     let p = project(&envs).unwrap();
     assert!(human_gate_reason(&p, &get(&p, bp)).is_some());

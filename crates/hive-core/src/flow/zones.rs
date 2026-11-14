@@ -42,52 +42,85 @@ pub struct PathZone {
 
 /// Glob match on `/`-separated paths: `*` matches within a segment, `**`
 /// matches any number of segments. A pattern ending in `/` is a prefix.
+///
+/// Non-backtracking: a dynamic program over (pattern segment, path segment)
+/// with each segment pair matched by a linear-space DP over characters, so the
+/// work is bounded by `len(pattern) · len(path)` whatever the pattern (S6).
 pub fn glob_match(pattern: &str, path: &str) -> bool {
+    glob_match_counted(pattern, path).0
+}
+
+/// [`glob_match`] plus the number of inner steps it took (for the bound test).
+pub fn glob_match_counted(pattern: &str, path: &str) -> (bool, u64) {
     let pattern = normalize_path(pattern);
     let path = normalize_path(path);
     if pattern.is_empty() {
-        return false;
+        return (false, 0);
     }
     if pattern.ends_with('/') {
-        return path.starts_with(&pattern);
+        return (path.starts_with(&pattern), pattern.len() as u64);
     }
     if !pattern.contains('*') {
-        return path == pattern || path.starts_with(&format!("{pattern}/"));
+        return (path == pattern || path.starts_with(&format!("{pattern}/")), pattern.len() as u64);
     }
     let p: Vec<&str> = pattern.split('/').collect();
     let s: Vec<&str> = path.split('/').collect();
-    match_segments(&p, &s)
-}
-
-fn match_segments(p: &[&str], s: &[&str]) -> bool {
-    match p.first() {
-        None => s.is_empty(),
-        Some(&"**") => (0..=s.len()).any(|i| match_segments(&p[1..], &s[i..])),
-        Some(seg) => !s.is_empty() && match_one(seg, s[0]) && match_segments(&p[1..], &s[1..]),
-    }
-}
-
-fn match_one(pat: &str, s: &str) -> bool {
-    let parts: Vec<&str> = pat.split('*').collect();
-    if parts.len() == 1 {
-        return pat == s;
-    }
-    let mut rest = s;
-    for (i, part) in parts.iter().enumerate() {
-        if i == 0 {
-            if !rest.starts_with(part) {
-                return false;
+    let mut steps = 0u64;
+    // dp[j] = pattern[..i] matches path[..j]; rolled over i.
+    let mut dp = vec![false; s.len() + 1];
+    dp[0] = true;
+    for seg in &p {
+        let mut next = vec![false; s.len() + 1];
+        if *seg == "**" {
+            // `**` matches zero or more whole segments: a running OR.
+            let mut any = false;
+            for j in 0..=s.len() {
+                steps += 1;
+                any |= dp[j];
+                next[j] = any;
             }
-            rest = &rest[part.len()..];
-        } else if i == parts.len() - 1 {
-            return rest.ends_with(part);
-        } else if let Some(at) = rest.find(part) {
-            rest = &rest[at + part.len()..];
         } else {
-            return false;
+            for j in 1..=s.len() {
+                if dp[j - 1] {
+                    let (ok, n) = match_one(seg, s[j - 1]);
+                    steps += n;
+                    next[j] = ok;
+                }
+            }
         }
+        dp = next;
     }
-    true
+    (dp[s.len()], steps)
+}
+
+/// `*` within one segment, by a linear-space DP over characters.
+fn match_one(pat: &str, s: &str) -> (bool, u64) {
+    if !pat.contains('*') {
+        return (pat == s, pat.len().max(1) as u64);
+    }
+    let p: Vec<char> = pat.chars().collect();
+    let t: Vec<char> = s.chars().collect();
+    let mut steps = 0u64;
+    let mut dp = vec![false; t.len() + 1];
+    dp[0] = true;
+    for &pc in &p {
+        let mut next = vec![false; t.len() + 1];
+        if pc == '*' {
+            let mut any = false;
+            for j in 0..=t.len() {
+                steps += 1;
+                any |= dp[j];
+                next[j] = any;
+            }
+        } else {
+            for j in 1..=t.len() {
+                steps += 1;
+                next[j] = dp[j - 1] && t[j - 1] == pc;
+            }
+        }
+        dp = next;
+    }
+    (dp[t.len()], steps.max(1))
 }
 
 /// The zone a path falls in: the longest matching pattern wins; core beats

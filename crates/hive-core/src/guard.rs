@@ -132,6 +132,10 @@ pub struct GuardState {
     /// refuses never revokes anyone.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub revoked_devices: BTreeSet<Uuid>,
+    /// Invites (see `authorization::invite_subject`) already redeemed by a
+    /// self-enrollment: each admits one member.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub used_invites: BTreeSet<Uuid>,
     /// Set on a chat session by the overlay: this chat's id, so
     /// [`GuardState::lockdown_active`] can find its entry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -182,7 +186,7 @@ pub fn fold_authored(session: &mut crate::ChatSession, event: &crate::SessionEve
     use crate::SessionEvent;
     match event {
         // Dearth mode: a new member added by an Admin waits for a second Admin.
-        SessionEvent::MemberAdded { member } => {
+        SessionEvent::MemberAdded { member, .. } => {
             if session.guards.dearth_on().is_none()
                 || session.members.iter().any(|m| m.id == member.id)
                 || session.members.is_empty()

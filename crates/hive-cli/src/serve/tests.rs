@@ -169,11 +169,18 @@ async fn harness_with(
         agent.owner_actor_id = svc.author().id.clone();
         let id = agent.id;
         svc.add_agent(ws, ws, agent).unwrap();
-        id
+        (id, svc.issue_invite(ws).unwrap())
     };
+    let (agent_id, invite) = agent_id;
     sync_once(&desktop).await.unwrap();
 
     let serve_dir = tmp.path().join("serve");
+    // The box joins with the founder's invite (redeemed by its self-enrollment).
+    std::fs::create_dir_all(&serve_dir).unwrap();
+    hive_runtime::event_store::EventStore::open(serve_dir.join("hive.db"))
+        .unwrap()
+        .set_join_invite(ws, invite)
+        .unwrap();
     let serve_cfg = config(&serve_dir, &relay, &room);
     let repo = tmp.path().join("repo");
     make_repo(&repo, repo_files);
@@ -286,6 +293,36 @@ async fn this_host(h: &Harness) -> String {
     assert_eq!(me["label"], "sff");
     assert_eq!(me["online"], json!(true));
     me["id"].as_str().unwrap().to_string()
+}
+
+/// Binding an agent to a host is an Admin action (S2): the desktop founder
+/// promotes this box's identity to Admin, and the box syncs the change.
+async fn make_serve_admin(h: &Harness) {
+    let ws = h.handle.shared.ws;
+    let serve_actor = h.handle.shared.lock().author().id.clone();
+    {
+        let mut desk = open_service(&h.desktop).unwrap();
+        // The box's join must have reached the desktop first.
+        for _ in 0..100 {
+            sync_once(&h.desktop).await.unwrap();
+            let cfg = desk.load(workspace_config_session_id(ws)).unwrap().unwrap();
+            if cfg.members.iter().any(|m| m.id == serve_actor) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            desk = open_service(&h.desktop).unwrap();
+        }
+        desk.set_member_role(ws, ws, serve_actor.clone(), hive_core::WorkspaceRole::Admin).unwrap();
+    }
+    sync_once(&h.desktop).await.unwrap();
+    for _ in 0..200 {
+        let cfg = h.handle.shared.lock().load(workspace_config_session_id(ws)).unwrap();
+        if cfg.is_some_and(|c| c.role_of(&serve_actor) == hive_core::WorkspaceRole::Admin) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the box never saw its promotion");
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -427,6 +464,7 @@ async fn people_channels_and_chat_details() {
     assert_eq!(coder["avatarColorHex"], "#336699");
     assert_eq!(coder["hostKind"], "ownerDevice");
     let host = this_host(&h).await;
+    make_serve_admin(&h).await;
     let moved = h
         .send(reqwest::Method::PUT, &format!("/v1/agents/{}/host", h.agent_id), Some(json!({ "hostId": host })))
         .await;
@@ -644,6 +682,7 @@ async fn phone_message_to_hosted_agent_streams_reply_and_files_a_proposal() {
     assert!(coder.get("hostId").is_none());
 
     let host = this_host(&h).await;
+    make_serve_admin(&h).await;
     let moved = h
         .send(reqwest::Method::PUT, &format!("/v1/agents/{}/host", h.agent_id), Some(json!({ "hostId": host })))
         .await;
@@ -1122,10 +1161,25 @@ async fn apply_on_approve_never_overrides_a_rejection() {
         let mut svc = h.handle.shared.lock();
         svc.upsert_proposal(chat_id, ws, rejected).unwrap();
         svc.upsert_proposal(chat_id, ws, control).unwrap();
-        // An Admin rejected it on the desktop (synced in).
-        svc.vote_on_proposal(chat_id, ws, rid, "desktop-admin", hive_core::WorkspaceRole::Admin, false).unwrap();
     }
     h.handle.shared.after_write();
+    // The desktop founder (Owner) rejected it, and that vote synced in.
+    for _ in 0..100 {
+        sync_once(&h.desktop).await.unwrap();
+        if open_service(&h.desktop).unwrap().load(chat_id).unwrap().is_some_and(|c| c.proposals.iter().any(|p| p.id == rid)) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    open_service(&h.desktop).unwrap().vote_on_proposal(chat_id, ws, rid, false).unwrap().expect("desktop sees the proposal");
+    sync_once(&h.desktop).await.unwrap();
+    for _ in 0..200 {
+        let seen = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+        if seen.proposals.iter().find(|p| p.id == rid).is_some_and(|p| p.status == hive_core::ProposalStatus::Rejected) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 
     let res = h.send(reqwest::Method::POST, &format!("/v1/proposals/{rid}/approve"), None).await;
     assert_eq!(res["proposal"]["status"], "rejected", "{res}");
@@ -1253,6 +1307,7 @@ async fn a_greeting_listing_agents_wakes_one_and_an_empty_model_posts_a_notice()
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
+    make_serve_admin(&h).await;
     for id in [h.agent_id, chat_agent] {
         h.send(reqwest::Method::PUT, &format!("/v1/agents/{id}/host"), Some(json!({ "hostId": host }))).await;
     }
@@ -1411,6 +1466,7 @@ async fn live_gateway_turn_reads_a_file() {
         let note = format!("The secret word is {word}.\n");
         let h = harness(&endpoint, model, &[("NOTE.txt", note.as_str()), ("README.md", "# notes\n")]).await;
         let host = this_host(&h).await;
+        make_serve_admin(&h).await;
         h.send(reqwest::Method::PUT, &format!("/v1/agents/{}/host", h.agent_id), Some(json!({ "hostId": host }))).await;
         let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "live" }))).await;
         let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
@@ -1533,7 +1589,7 @@ async fn phone_box_enrolled_as_the_owners_device() {
     assert_eq!(p.refinements.last().unwrap().actor_id, desktop_actor);
     drop(svc);
     // One person, one vote: the desktop's vote replaces the phone's.
-    open_service(&h.desktop).unwrap().vote_on_proposal(cid, ws, pid, desktop_actor.clone(), hive_core::WorkspaceRole::Owner, false).unwrap();
+    open_service(&h.desktop).unwrap().vote_on_proposal(cid, ws, pid, false).unwrap();
     sync_once(&h.desktop).await.unwrap();
     let mut votes = Value::Null;
     for _ in 0..50 {
@@ -1933,6 +1989,7 @@ async fn repos_clone_switch_pull_and_pr() {
 
     // The agent's turn (hosted here) is told the repo and branch.
     let host = this_host(&h).await;
+    make_serve_admin(&h).await;
     h.send(reqwest::Method::PUT, &format!("/v1/agents/{}/host", h.agent_id), Some(json!({ "hostId": host }))).await;
     h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "@coder hi" }))).await;
     let mut system = String::new();

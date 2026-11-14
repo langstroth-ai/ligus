@@ -92,8 +92,7 @@ fn full_cycle_scouting_quorum_stop_preflight_decide() {
             actor_id: "mara".into(),
             role: WorkspaceRole::Contributor,
             approved: true,
-            created_at: Timestamp::now(),
-        },
+            created_at: Timestamp::now(), diff_digest: None },
     });
     log.push(SessionEvent::ProposalSetPreflightRecorded {
         set_id,
@@ -152,8 +151,7 @@ fn an_agent_cannot_decide_without_human_quorum() {
             actor_id: "planner".into(),
             role: WorkspaceRole::Owner,
             approved: true,
-            created_at: Timestamp::now(),
-        },
+            created_at: Timestamp::now(), diff_digest: None },
     });
     log.push(SessionEvent::ProposalSetDecided { set_id, winner: Some(a), at: Timestamp::now() });
     assert_eq!(log.state().proposal_sets[0].phase, SetPhase::Scouting);

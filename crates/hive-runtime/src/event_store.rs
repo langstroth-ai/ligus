@@ -16,7 +16,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Mutex;
 
-use hive_core::{project_with_hoist, ChatSession, SessionEvent, SessionEventEnvelope};
+use std::sync::Arc;
+
+use hive_core::authz::ConfigTimeline;
+use hive_core::{project_authorized, project_config, ChatSession, SessionEvent, SessionEventEnvelope, WorkspaceAuthz};
 use rusqlite::{Connection, OptionalExtension};
 use thiserror::Error;
 use uuid::Uuid;
@@ -51,12 +54,21 @@ pub struct EventStore {
     /// workspace-config log (host heartbeats) runs to tens of thousands of
     /// events, and every chat load projects it again, so without this one
     /// dispatch or UI refresh spent seconds re-folding the same log.
-    projections: Mutex<HashMap<ProjectionKey, (RowsSig, Option<ChatSession>)>>,
+    projections: Mutex<HashMap<ProjectionKey, ProjectionEntry>>,
+    /// Folded config logs with their roster timelines (see [`EventStore::load_config`]).
+    configs: Mutex<HashMap<ConfigKey, ConfigEntry>>,
 }
 
-/// (session, trusted founder, trusted workspace, hoisted-roster fingerprint):
+/// A cached chat projection: its rows, the config events held when it was
+/// folded, and the session.
+type ProjectionEntry = (RowsSig, usize, Option<ChatSession>);
+/// (config session, trusted founder, trusted workspace).
+type ConfigKey = (Uuid, Option<String>, Option<Uuid>);
+type ConfigEntry = (RowsSig, Option<ChatSession>, Arc<ConfigTimeline>);
+
+/// (session, trusted founder, trusted workspace, config-timeline fingerprint):
 /// what a projection depends on besides the session's rows. The fingerprint
-/// is 0 for a projection without a hoisted roster.
+/// is 0 for an unchecked projection and 1 for one without a config log.
 type ProjectionKey = (Uuid, Option<String>, Option<Uuid>, u64);
 
 /// (row count, max row id) of a session. Any append raises the max row id and
@@ -119,6 +131,23 @@ impl EventStore {
             -- sequence durably applied; `pushed` is the set of event_ids already
             -- on the relay (we pushed them, or ingested them from there) so a
             -- restart never re-sends them.
+            -- Device-local, never synced: each workspace's founder as its
+            -- invite pinned it (account id, and `fk` = hex of the first 16
+            -- bytes of SHA-256 of the founder's account signing key). The
+            -- trust roster disputes a founder registration under another key.
+            CREATE TABLE IF NOT EXISTS workspace_pins (
+                workspace_id TEXT PRIMARY KEY,
+                founder      TEXT NOT NULL,
+                fk           TEXT NOT NULL
+            );
+
+            -- Device-local: the Admin-issued invite this device redeems when it
+            -- enrolls itself in a workspace (from the hivews1: invite).
+            CREATE TABLE IF NOT EXISTS join_invites (
+                workspace_id TEXT PRIMARY KEY,
+                invite_id    TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS sync_cursor (
                 workspace        TEXT PRIMARY KEY,
                 last_fetched_seq INTEGER NOT NULL
@@ -159,7 +188,7 @@ impl EventStore {
                 ON guard_signals (workspace_id, row_id);
             "#,
         )?;
-        Ok(Self { conn, projections: Mutex::new(HashMap::new()) })
+        Ok(Self { conn, projections: Mutex::new(HashMap::new()), configs: Mutex::new(HashMap::new()) })
     }
 
     /// Highest sequence recorded for a session, if any.
@@ -280,7 +309,8 @@ impl EventStore {
         self.query_envelopes(
             "SELECT envelope_json FROM events \
              WHERE kind IN ('accountKeyRegistered','accountKeyRotated','deviceCertificateAdded','deviceRevoked',\
-             'memberAdded','memberRemoved','sessionSnapshot','memberRoleChanged','dearthModeChanged','joinApproved') \
+             'memberAdded','memberRemoved','sessionSnapshot','memberRoleChanged','dearthModeChanged','joinApproved',\
+             'agentKeyCertified','agentUpserted','agentRosterUpdated','agentRemoved') \
              ORDER BY row_id ASC",
             [],
         )
@@ -293,7 +323,8 @@ impl EventStore {
         self.query_envelopes(
             "SELECT envelope_json FROM events WHERE workspace_id = ?1 \
              AND kind IN ('accountKeyRegistered','accountKeyRotated','deviceCertificateAdded','deviceRevoked',\
-             'memberAdded','memberRemoved','sessionSnapshot','memberRoleChanged','dearthModeChanged','joinApproved') \
+             'memberAdded','memberRemoved','sessionSnapshot','memberRoleChanged','dearthModeChanged','joinApproved',\
+             'agentKeyCertified','agentUpserted','agentRosterUpdated','agentRemoved') \
              ORDER BY row_id ASC",
             [workspace_id.to_string()],
         )
@@ -735,35 +766,38 @@ impl EventStore {
         // skip ingest-time authz (private, single-device; see project_with_options).
         trusted_workspace: Option<Uuid>,
     ) -> Result<Option<ChatSession>> {
-        self.load_session_hoisted(session_id, trusted_founder, trusted_workspace, None)
+        self.load_session_authorized(session_id, trusted_founder, trusted_workspace, WorkspaceAuthz::Unchecked)
     }
 
-    /// [`load_session_with_founder`] for a chat log, folded against the
-    /// workspace roster hoisted from its config log so proposal-set events are
-    /// role-checked (see `hive_core::project_with_hoist`).
-    pub fn load_session_hoisted(
+    /// [`load_session_with_founder`] for a chat log, folded against its
+    /// workspace's config-log roster history (`hive_core::project_authorized`).
+    /// `ws` is the workspace authorization mode; for a timeline, cached per
+    /// timeline fingerprint, and refolded while any event is held and the
+    /// config log has grown since.
+    pub fn load_session_authorized(
         &self,
         session_id: Uuid,
         trusted_founder: Option<&str>,
         trusted_workspace: Option<Uuid>,
-        hoist: Option<hive_core::authorization::HoistedRoster<'_>>,
+        ws: WorkspaceAuthz<'_>,
     ) -> Result<Option<ChatSession>> {
-        // Project the full stream. `project_with_founder` folds in canonical
-        // (lamport, event_id) order and selects the base by a deterministic rule
-        // (+ the fixed founder string), so the result is independent of *this
-        // device's* ingestion order. A row_id slice from the latest snapshot would
-        // feed a different subset when a snapshot is ingested after its own deltas
-        // — reintroducing cross-device divergence. Bounded-cost compaction
-        // (canonical lamport-ordered slicing) is a follow-up; correctness first.
+        // Project the full stream: the fold orders canonically and picks its
+        // base deterministically, so the result is independent of this
+        // device's ingestion order.
         let sig: RowsSig = self.conn.query_row(
             "SELECT COUNT(*), COALESCE(MAX(row_id), 0) FROM events WHERE session_id = ?1",
             [session_id.to_string()],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
-        let key: ProjectionKey =
-            (session_id, trusted_founder.map(str::to_string), trusted_workspace, hoist.map_or(0, |h| h.fingerprint()));
-        if let Some((cached, session)) = self.projections.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
-            if *cached == sig {
+        let (fingerprint, config_events) = match ws {
+            WorkspaceAuthz::Unchecked => (0, 0),
+            WorkspaceAuthz::NoConfigLog => (1, 0),
+            WorkspaceAuthz::Timeline(t) => (t.fingerprint(), t.events_held()),
+        };
+        let key: ProjectionKey = (session_id, trusted_founder.map(str::to_string), trusted_workspace, fingerprint);
+        if let Some((cached, cfg_seen, session)) = self.projections.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+            let still_held = session.as_ref().is_some_and(|s| !s.authz.held.is_empty());
+            if *cached == sig && (!still_held || *cfg_seen == config_events) {
                 return Ok(session.clone());
             }
         }
@@ -771,13 +805,102 @@ impl EventStore {
             "SELECT envelope_json FROM events WHERE session_id = ?1 ORDER BY row_id ASC",
             [session_id.to_string()],
         )?;
-        let session = project_with_hoist(&envelopes, trusted_founder, trusted_workspace, hoist);
+        let session = project_authorized(&envelopes, trusted_founder, trusted_workspace, ws);
         let mut cache = self.projections.lock().unwrap_or_else(|e| e.into_inner());
         if cache.len() >= PROJECTION_CACHE_MAX && !cache.contains_key(&key) {
             cache.clear();
         }
-        cache.insert(key, (sig, session.clone()));
+        cache.insert(key, (sig, config_events, session.clone()));
         Ok(session)
+    }
+
+    /// A workspace's config log folded, with its roster at every position
+    /// (`hive_core::project_config`). Cached per config-log rows.
+    pub fn load_config(
+        &self,
+        workspace_id: Uuid,
+        trusted_founder: Option<&str>,
+        trusted_workspace: Option<Uuid>,
+    ) -> Result<(Option<ChatSession>, Arc<ConfigTimeline>)> {
+        let config_id = hive_core::workspace_config_session_id(workspace_id);
+        let sig: RowsSig = self.conn.query_row(
+            "SELECT COUNT(*), COALESCE(MAX(row_id), 0) FROM events WHERE session_id = ?1",
+            [config_id.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let key = (config_id, trusted_founder.map(str::to_string), trusted_workspace);
+        if let Some((cached, session, timeline)) = self.configs.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+            if *cached == sig {
+                return Ok((session.clone(), Arc::clone(timeline)));
+            }
+        }
+        let envelopes = self.query_envelopes(
+            "SELECT envelope_json FROM events WHERE session_id = ?1 ORDER BY row_id ASC",
+            [config_id.to_string()],
+        )?;
+        let (session, timeline) = project_config(&envelopes, trusted_founder, trusted_workspace);
+        let timeline = Arc::new(timeline);
+        let mut cache = self.configs.lock().unwrap_or_else(|e| e.into_inner());
+        if cache.len() >= PROJECTION_CACHE_MAX && !cache.contains_key(&key) {
+            cache.clear();
+        }
+        cache.insert(key, (sig, session.clone(), Arc::clone(&timeline)));
+        Ok((session, timeline))
+    }
+
+    /// Pin a workspace's founder (first pin wins: a later invite can't move it).
+    pub fn set_workspace_pin(&self, workspace_id: Uuid, founder: &str, fk: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO workspace_pins (workspace_id, founder, fk) VALUES (?1, ?2, ?3)",
+            rusqlite::params![workspace_id.to_string(), founder, fk],
+        )?;
+        Ok(())
+    }
+
+    /// The founder pin of a workspace, if this device recorded one.
+    pub fn workspace_pin(&self, workspace_id: Uuid) -> Result<Option<crate::envelope_verifier::FounderPin>> {
+        let row: Option<(String, String)> = self
+            .conn
+            .query_row(
+                "SELECT founder, fk FROM workspace_pins WHERE workspace_id = ?1",
+                [workspace_id.to_string()],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        Ok(row.and_then(|(f, k)| crate::envelope_verifier::FounderPin::parse(&f, &k)))
+    }
+
+    /// Remember the invite this device redeems to join `workspace_id` (the
+    /// latest one wins: a fresh invite replaces a used one).
+    pub fn set_join_invite(&self, workspace_id: Uuid, invite_id: Uuid) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO join_invites (workspace_id, invite_id) VALUES (?1, ?2) \
+             ON CONFLICT(workspace_id) DO UPDATE SET invite_id = excluded.invite_id",
+            rusqlite::params![workspace_id.to_string(), invite_id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// The invite this device redeems to join `workspace_id`, if it has one.
+    pub fn join_invite(&self, workspace_id: Uuid) -> Result<Option<Uuid>> {
+        let v: Option<String> = self
+            .conn
+            .query_row("SELECT invite_id FROM join_invites WHERE workspace_id = ?1", [workspace_id.to_string()], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        Ok(v.and_then(|s| Uuid::parse_str(&s).ok()))
+    }
+
+    /// The workspace a stored session belongs to, if any of its rows exist.
+    pub fn workspace_of(&self, session_id: Uuid) -> Result<Option<Uuid>> {
+        let ws: Option<String> = self
+            .conn
+            .query_row("SELECT workspace_id FROM events WHERE session_id = ?1 LIMIT 1", [session_id.to_string()], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        Ok(ws.and_then(|w| Uuid::parse_str(&w).ok()))
     }
 
     /// Row id of the latest `sessionSnapshot` for a session, if any.
@@ -889,6 +1012,7 @@ impl EventStore {
         }
         tx.commit()?;
         self.projections.lock().unwrap_or_else(|p| p.into_inner()).clear();
+        self.configs.lock().unwrap_or_else(|p| p.into_inner()).clear();
         Ok(doomed)
     }
 
@@ -1043,7 +1167,7 @@ mod tests {
         let events = vec![
             SessionEventEnvelope::new(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(base) }),
             SessionEventEnvelope::new(sid, wid, 2, SessionEvent::SessionTitleChanged { title: "First".into() }),
-            SessionEventEnvelope::new(sid, wid, 3, SessionEvent::MemberAdded { member }),
+            SessionEventEnvelope::new(sid, wid, 3, SessionEvent::MemberAdded { member, invite: None }),
             SessionEventEnvelope::new(sid, wid, 4, SessionEvent::SessionTitleChanged { title: "Second".into() }),
             SessionEventEnvelope::new(sid, wid, 5, SessionEvent::MemberRemoved { member_id: "m1".into() }),
         ];
@@ -1155,6 +1279,49 @@ mod tests {
             },
         );
         assert!(store.append_envelope(&dup).is_err());
+    }
+
+    /// A newer build's envelope (an unknown top-level key, an unknown kind with
+    /// nested data) is stored exactly as received and listed back exactly so,
+    /// which is what lets it be re-sent to peers and refolded after an upgrade.
+    #[test]
+    fn ingest_stores_the_received_bytes() {
+        let mut store = EventStore::open_in_memory().unwrap();
+        let sid = Uuid::new_v4();
+        let base = SessionEventEnvelope::new(sid, Uuid::nil(), 1, SessionEvent::MessageRemoved { message_id: Uuid::nil() });
+        let mut v = serde_json::to_value(&base).unwrap();
+        v["payload"] = serde_json::json!({"kind": "zzNewKind", "deep": {"x": [1.5, "✓"]}, "order": "kept"});
+        v["zzTop"] = serde_json::json!({"b": 1, "a": 2});
+        let wire = v.to_string().replace("\"zzTop\"", " \"zzTop\" ");
+        let env: SessionEventEnvelope = serde_json::from_str(&wire).unwrap();
+        assert_eq!(env.payload, SessionEvent::Unknown);
+        assert!(store.ingest(&env).unwrap());
+        let stored: String = store
+            .conn
+            .query_row("SELECT envelope_json FROM events WHERE event_id = ?1", [env.event_id.to_string()], |r| r.get(0))
+            .unwrap();
+        assert_eq!(stored, wire);
+        let listed = store.list(sid).unwrap();
+        assert_eq!(serde_json::to_string(&listed[0]).unwrap(), wire);
+    }
+
+    #[test]
+    fn workspace_pins_persist_and_the_first_pin_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hive.db");
+        let ws = Uuid::new_v4();
+        let founder = Uuid::new_v4().to_string();
+        let fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&[7u8; 32]);
+        {
+            let store = EventStore::open(&path).unwrap();
+            assert!(store.workspace_pin(ws).unwrap().is_none());
+            store.set_workspace_pin(ws, &founder, &fk).unwrap();
+            // A later invite can't move the pin.
+            store.set_workspace_pin(ws, &Uuid::new_v4().to_string(), &"ab".repeat(16)).unwrap();
+        }
+        let pin = EventStore::open(&path).unwrap().workspace_pin(ws).unwrap().unwrap();
+        assert_eq!(pin.founder_account.to_string(), founder);
+        assert_eq!(pin.fk, crate::envelope_verifier::FounderPin::fingerprint(&[7u8; 32]));
     }
 
     #[test]

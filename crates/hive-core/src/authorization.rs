@@ -112,50 +112,19 @@ pub fn requires_projection_authz(event: &SessionEvent) -> bool {
             | SessionEvent::DearthModeChanged { .. }
             | SessionEvent::JoinApproved { .. }
             | SessionEvent::ChatLockdownCleared { .. }
+            | SessionEvent::WorkspaceRulesSet { .. }
+            | SessionEvent::AgentKeyCertified { .. }
     ) || matches!(event, SessionEvent::FlowRecorded { record } if record.is_config())
 }
 
-/// Coordinator leases are deliberately **not** role-gated in projection: a run's
-/// lease rides its chat log, whose own roster holds only the chat's creator
-/// (membership is hoisted from the config log only after projection), so a
-/// role check there would drop every other member's claim. They are gated by
-/// role at authoring (against the hoisted roster) and, in projection, bound to
-/// the signing device below — the same footing as the run writes they fence.
-///
-/// Envelope-bound check for coordinator leases, run during projection where the
-/// envelope (and so its `signer_device_id`) is at hand:
-///   * a `CoordinatorLeaseClaimed` must be signed by the device it names as
-///     holder (no claiming on another device's behalf);
-///   * a `CoordinatorLeaseReleased` must be signed by the holder it names
-///     (`lease::fold_release` then checks that is the current holder);
-///   * a `WorkflowRunUpserted` stamped with a lease epoch must match the
-///     current epoch of that run's lease *and* be signed by its holder. A stamp
-///     with no lease, or from a future epoch nobody claimed, is a forgery;
-///     a stamp from an older epoch is left to the fold, which fences it.
-///
-/// Everything else passes. Deterministic over the fold-so-far `session`.
-pub fn lease_signer_ok(env: &crate::events::SessionEventEnvelope, session: &ChatSession) -> bool {
-    let signer = env.signer_device_id;
-    match &env.payload {
-        SessionEvent::CoordinatorLeaseClaimed { lease } => signer == Some(lease.holder),
-        SessionEvent::CoordinatorLeaseReleased { release } => signer == Some(release.holder),
-        SessionEvent::WorkflowRunUpserted { run } => {
-            let Some(epoch) = run.lease_epoch else { return true };
-            let key = crate::lease::lease_key(crate::lease::LeaseScope::WorkflowRun, &run.id.to_string());
-            match session.guards.leases.get(&key) {
-                None => false,
-                Some(state) if epoch > state.current.epoch => false,
-                Some(state) if epoch == state.current.epoch => signer == Some(state.current.holder),
-                Some(_) => true,
-            }
-        }
-        _ => true,
-    }
-}
+// Coordinator leases are deliberately **not** role-gated in projection: a run's
+// lease rides its chat log, whose own roster holds only the chat's creator.
+// They are gated by role at authoring and, in projection, bound to the signing
+// device (`authz::lease_signer_ok`).
 
 /// Proposal-set events that are **re-authorized while a chat log is folded**,
-/// against the workspace roster hoisted from the config log (see
-/// [`HoistedRoster`]). They ride the chat's own log, whose roster holds only
+/// against the workspace roster on the config log at the event's frontier
+/// (see [`crate::authz`]). They ride the chat's own log, whose roster holds only
 /// the chat's creator, so the generic projection check
 /// ([`requires_projection_authz`]) can't judge them; without this a member
 /// below Contributor, or a keyholder who isn't a member at all, could sign a
@@ -177,55 +146,6 @@ pub fn requires_hoisted_authz(event: &SessionEvent) -> bool {
             | SessionEvent::ProposalSetDecided { .. }
             | SessionEvent::ProposalReverted { .. }
     )
-}
-
-/// The workspace roster as a chat log's fold sees it: the members on the
-/// workspace-config log, and whether dearth mode is on there. The same union
-/// `ChatService::load` overlays after projection: a config-log entry wins; a
-/// member only the chat knows (a pre-hoist add, the creator seed) keeps its
-/// chat role, except that during dearth mode only the chat's creator does.
-#[derive(Debug, Clone, Copy)]
-pub struct HoistedRoster<'a> {
-    pub members: &'a [WorkspaceMember],
-    pub dearth_on: bool,
-}
-
-impl HoistedRoster<'_> {
-    /// The role `actor_id` holds for the chat whose fold-so-far is `session`,
-    /// or `None` when they aren't a member.
-    pub fn role_of(&self, actor_id: &str, session: &ChatSession) -> Option<WorkspaceRole> {
-        if actor_id.is_empty() {
-            return None;
-        }
-        if let Some(m) = self.members.iter().find(|m| m.id == actor_id) {
-            return Some(m.role);
-        }
-        if self.dearth_on && actor_id != session.creator_actor_id {
-            return None;
-        }
-        session.members.iter().find(|m| m.id == actor_id).map(|m| m.role)
-    }
-
-    /// Whether `event`, authored by `actor_id`, may fold into `session`.
-    pub fn allows(&self, event: &SessionEvent, actor_id: &str, session: &ChatSession) -> bool {
-        match self.role_of(actor_id, session) {
-            Some(role) => evaluate(event, actor_id, role, session).allowed,
-            None => false,
-        }
-    }
-
-    /// A stable fingerprint of what this roster decides (member ids, roles and
-    /// the dearth flag), for keying cached projections.
-    pub fn fingerprint(&self) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut ids: Vec<(&str, u8)> = self.members.iter().map(|m| (m.id.as_str(), m.role.rank())).collect();
-        ids.sort_unstable();
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        ids.hash(&mut h);
-        self.dearth_on.hash(&mut h);
-        // Never 0, which keys an un-hoisted projection.
-        h.finish().max(1)
-    }
 }
 
 /// Whether a **non-seed** `SessionSnapshot` — one folded *after* the base seed,
@@ -360,6 +280,13 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         // Raising one only tightens, so any keyholder (a worker host, a
         // Viewer's device) may: the floor.
         SessionEvent::ChatLockdownRaised { .. } => WorkspaceRole::Viewer,
+        // Changing the rules everyone folds by is the owner's call.
+        SessionEvent::WorkspaceRulesSet { .. } => WorkspaceRole::Owner,
+        // Applying is a member's act (and a human's, see `authz::authorize`).
+        SessionEvent::ProposalApplied { .. } => WorkspaceRole::Contributor,
+        // A host certifying an agent key: a member's act, plus the
+        // certificate's own checks (`authz::authorize`).
+        SessionEvent::AgentKeyCertified { .. } => WorkspaceRole::Contributor,
         // A newer-client event this build can't author or interpret — require
         // the highest role so it can never be produced locally by accident.
         SessionEvent::Unknown => WorkspaceRole::Owner,
@@ -384,6 +311,7 @@ fn owner_count(session: &ChatSession) -> usize {
 /// by the role gate.
 fn self_enroll_allowance(
     member: &WorkspaceMember,
+    invite: Option<uuid::Uuid>,
     actor_id: &str,
     session: &ChatSession,
 ) -> Option<AuthzDecision> {
@@ -412,12 +340,27 @@ fn self_enroll_allowance(
         // so fall through to the role gate.
         Some(existing) => (existing.role == member.role)
             .then(|| AuthzDecision::allow_reason(AuthzReason::SelfEnroll)),
-        // Not yet a member, joining a non-empty workspace: pure self-enroll is
-        // allowed only at a *non-governance* floor (Viewer/Contributor). Granting
-        // yourself Admin/Owner falls through to the role gate → denied.
-        None => (member.role.rank() < WorkspaceRole::Admin.rank())
-            .then(|| AuthzDecision::allow_reason(AuthzReason::SelfEnroll)),
+        // Not yet a member, joining a non-empty workspace: self-enroll needs an
+        // unused invite an Admin issued (holding the workspace key is not
+        // enough: an ex-member keeps old keys), and only at a *non-governance*
+        // floor (Viewer/Contributor). Granting yourself Admin/Owner falls
+        // through to the role gate → denied.
+        None => (member.role.rank() < WorkspaceRole::Admin.rank()
+            && invite.is_some_and(|id| invite_redeemable(session, id)))
+        .then(|| AuthzDecision::allow_reason(AuthzReason::SelfEnroll)),
     }
+}
+
+/// The `JoinApproved` subject that issues invite `id`.
+pub fn invite_subject(id: uuid::Uuid) -> String {
+    format!("invite:{id}")
+}
+
+/// Whether invite `id` was issued (an Admin's `JoinApproved` of its subject,
+/// which the fold only keeps from an Admin+) and not yet redeemed.
+pub fn invite_redeemable(session: &ChatSession, id: uuid::Uuid) -> bool {
+    !session.guards.used_invites.contains(&id)
+        && session.guards.join_approvals.get(&invite_subject(id)).is_some_and(|by| !by.is_empty())
 }
 
 /// The hosts that differ between the current roster (`old`) and a proposed one
@@ -460,8 +403,8 @@ pub fn evaluate(
     // Bootstrap seam: a self-scoped `MemberAdded` can be permitted for an actor
     // who isn't (yet) Admin+ — but *only* the narrow self-enroll cases below.
     // Everything else (adding others, removing/demoting anyone) is role-gated.
-    if let SessionEvent::MemberAdded { member } = event {
-        if let Some(decision) = self_enroll_allowance(member, actor_id, session) {
+    if let SessionEvent::MemberAdded { member, invite } = event {
+        if let Some(decision) = self_enroll_allowance(member, *invite, actor_id, session) {
             return decision;
         }
     }
@@ -579,7 +522,7 @@ mod tests {
         add_member_role("new", WorkspaceRole::Contributor)
     }
     fn add_member_role(id: &str, role: WorkspaceRole) -> SessionEvent {
-        SessionEvent::MemberAdded {
+        SessionEvent::MemberAdded { invite: None,
             member: WorkspaceMember {
                 id: id.into(),
                 actor: ActorIdentity::new(id, id, ActorKind::Human),
@@ -697,13 +640,24 @@ mod tests {
     }
 
     #[test]
-    fn non_member_may_self_enroll_at_non_governance_role() {
-        // A device joining a non-empty workspace: Viewer/Contributor self-enroll ok.
-        let s = session_with_members(vec![("owner", WorkspaceRole::Owner)]);
+    fn a_non_member_self_enrolls_only_with_an_unused_admin_invite() {
+        // A device joining a non-empty workspace: holding the workspace key is
+        // not enough; it needs an invite an Admin issued, used once.
+        let mut s = session_with_members(vec![("owner", WorkspaceRole::Owner)]);
         let join = add_member_role("newbie", WorkspaceRole::Contributor);
-        let d = evaluate(&join, "newbie", WorkspaceRole::Viewer, &s);
+        assert!(!evaluate(&join, "newbie", WorkspaceRole::Viewer, &s).allowed, "key possession alone");
+        let id = Uuid::new_v4();
+        let with = |invite| match add_member_role("newbie", WorkspaceRole::Contributor) {
+            SessionEvent::MemberAdded { member, .. } => SessionEvent::MemberAdded { member, invite: Some(invite) },
+            _ => unreachable!(),
+        };
+        assert!(!evaluate(&with(id), "newbie", WorkspaceRole::Viewer, &s).allowed, "an invite nobody issued");
+        s.guards.join_approvals.entry(invite_subject(id)).or_default().insert("owner".into());
+        let d = evaluate(&with(id), "newbie", WorkspaceRole::Viewer, &s);
         assert!(d.allowed);
         assert_eq!(d.reason, AuthzReason::SelfEnroll);
+        s.guards.used_invites.insert(id);
+        assert!(!evaluate(&with(id), "newbie", WorkspaceRole::Viewer, &s).allowed, "an invite admits one member");
     }
 
     #[test]

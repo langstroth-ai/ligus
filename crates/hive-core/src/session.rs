@@ -105,6 +105,10 @@ pub struct ChatSession {
     pub created_at: Timestamp,
     #[serde(default)]
     pub updated_at: Timestamp,
+    /// Device-local authorization facts of this projection (held events, the
+    /// rules version). Never serialized: snapshots don't carry it.
+    #[serde(skip)]
+    pub authz: crate::authz::AuthzState,
 }
 
 /// Safety ceiling on agent replies since the last human turn — a runaway/loop
@@ -174,6 +178,7 @@ impl ChatSession {
             flow: crate::flow::FlowState::default(),
             created_at: now,
             updated_at: now,
+            authz: Default::default(),
         }
     }
 

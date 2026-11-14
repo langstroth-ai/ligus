@@ -38,6 +38,12 @@ pub struct ProposalApproval {
     pub approved: bool,
     #[serde(default)]
     pub created_at: Timestamp,
+    /// Lowercase hex SHA-256 of the content voted on
+    /// ([`crate::authz::votes::diff_digest`]). A vote counts only for the
+    /// content it names, so swapping the patch under a vote never carries
+    /// the vote over.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_digest: Option<String>,
 }
 
 /// One note on a proposal's refinement thread — a comment or an explicit request
@@ -286,6 +292,11 @@ impl ActionProposal {
             .any(|a| !a.approved && a.role.rank() >= floor)
     }
 
+    /// Recompute the status from the votes on record (never leaves `Applied`).
+    pub fn rederive_status(&mut self) {
+        self.recompute_status();
+    }
+
     fn recompute_status(&mut self) {
         // Don't override a terminal "applied" state.
         if self.status == ProposalStatus::Applied {
@@ -310,8 +321,7 @@ mod tests {
             actor_id: actor.into(),
             role,
             approved,
-            created_at: Timestamp::epoch(),
-        }
+            created_at: Timestamp::epoch(), diff_digest: None }
     }
 
     #[test]

@@ -44,28 +44,31 @@ const USER_AGENT: &str = "ligus-app";
 pub const DEFAULT_TTL: Duration = Duration::from_secs(10 * 60);
 
 /// How a member's account signing key is bound to their real identity.
+///
+/// Phase 0 (P0.8): nothing that decides which events fold may read the
+/// environment, so the mode is no longer chosen by `LIGUS_IDENTITY_MODE`:
+/// every build ingests with [`IdentityMode::Relay`]. Option C stays as tested
+/// code only; a future version would bring it back as a workspace rules
+/// policy on the config log, so every device folds alike.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum IdentityMode {
-    /// Option A (default): trust the roster's account keys as-is — the relay's
-    /// GitHub-gated directory vouched them. **Current, unchanged behavior.**
+    /// Option A: trust the roster's account keys as-is — the relay's
+    /// GitHub-gated directory vouched them.
     #[default]
     Relay,
     /// Option C: verify each account key against the login's GitHub
-    /// `ssh_signing_keys`. Survives a hostile relay.
+    /// `ssh_signing_keys`. Test-only (see above).
+    #[cfg(test)]
     GithubSigningKeys,
 }
 
-impl IdentityMode {
-    /// Read the mode from `LIGUS_IDENTITY_MODE` (`relay` | `github-signing-keys`).
-    /// Anything unset/unrecognized falls back to [`IdentityMode::Relay`] so the
-    /// default deployment is byte-for-byte unchanged.
-    pub fn from_env() -> Self {
-        match hive_core::compat::var("LIGUS_IDENTITY_MODE").ok().as_deref() {
-            Some("github-signing-keys") | Some("github") | Some("option-c") => {
-                IdentityMode::GithubSigningKeys
-            }
-            _ => IdentityMode::Relay,
-        }
+/// Log once if `LIGUS_IDENTITY_MODE` is set: it no longer has any effect.
+pub fn warn_if_identity_mode_set() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    if hive_core::compat::var("LIGUS_IDENTITY_MODE").is_ok() {
+        ONCE.call_once(|| {
+            tracing::warn!("LIGUS_IDENTITY_MODE is ignored: identity verification no longer depends on the environment");
+        });
     }
 }
 
@@ -181,6 +184,8 @@ pub fn gate_ingest(
     account_key: Option<&[u8]>,
     cache: &IdentityCache,
 ) -> IngestAction {
+    // Only Option C (test-only) reads these.
+    let _ = (signer_account, account_key, cache);
     match mode {
         // Option A: exactly the pre-existing policy (drop only provably-bad).
         IdentityMode::Relay => match base {
@@ -189,9 +194,15 @@ pub fn gate_ingest(
             Verdict::Unverifiable(QuarantineReason::PendingApproval) => {
                 IngestAction::Hold("device awaits a second approval (dearth mode)")
             }
+            // A known member's account on a device nobody certified: hold
+            // until the certificate arrives (or forever, for a forgery).
+            Verdict::Unverifiable(QuarantineReason::UncertifiedDevice) => {
+                IngestAction::Hold("device not certified for the member it claims")
+            }
             Verdict::Valid | Verdict::Unverifiable(_) => IngestAction::Accept,
             Verdict::Quarantine(r) => IngestAction::Quarantine(r),
         },
+        #[cfg(test)]
         IdentityMode::GithubSigningKeys => match base {
             // Provably bad by signature/roster — drop regardless of identity.
             Verdict::Quarantine(r) => IngestAction::Quarantine(r),

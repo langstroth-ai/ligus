@@ -983,6 +983,7 @@ mod tests {
     fn an_alternatives_directive_opens_a_set_and_assessments_are_blind_and_settle_quorum() {
         let mut svc = service();
         let wid = Uuid::new_v4();
+        svc.ensure_workspace_config(wid).unwrap();
         let chat = svc.create_chat("A", wid, "anthropic").unwrap();
         let sid = chat.id;
         let planner = WorkspaceAgent::new("planner", "claude-code");
@@ -1028,6 +1029,7 @@ mod tests {
     fn competing_proposals_for_an_options_request_are_grouped() {
         let mut svc = service();
         let wid = Uuid::new_v4();
+        svc.ensure_workspace_config(wid).unwrap();
         let sid = svc.create_chat("A", wid, "anthropic").unwrap().id;
         let (a1, a2) = (Uuid::new_v4(), Uuid::new_v4());
         svc.post_user_message(sid, wid, "@coder @local explore options for the retry logic").unwrap();
@@ -1087,6 +1089,7 @@ mod tests {
     fn a_lockdown_or_dearth_brood_path_blocks_set_alternatives_until_a_human_approves() {
         let mut svc = service();
         let wid = Uuid::new_v4();
+        svc.ensure_workspace_config(wid).unwrap();
         let sid = svc.create_chat("A", wid, "anthropic").unwrap().id;
         let mut alt = ActionProposal::file_diff("A", "", "diff".into(), vec!["crates/hive-core/src/crypto.rs".into()]);
         let agent = Uuid::new_v4();
@@ -1135,6 +1138,7 @@ mod tests {
     fn frozen_alternatives_refuse_agent_work_and_open_sets_guard_implement() {
         let mut svc = service();
         let wid = Uuid::new_v4();
+        svc.ensure_workspace_config(wid).unwrap();
         let sid = svc.create_chat("A", wid, "anthropic").unwrap().id;
         let alts: Vec<ActionProposal> =
             ["A", "B"].iter().map(|t| ActionProposal::new(*t, ProposalKind::Decision, "planner")).collect();

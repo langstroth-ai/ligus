@@ -344,6 +344,7 @@ mod tests {
     fn signed_round_trip_through_quorum_stop_preflight_and_decision() {
         let mut svc = service();
         let chat = svc.create_chat("Demo", Uuid::nil(), "anthropic").unwrap();
+        svc.ensure_workspace_config(chat.workspace_id).unwrap();
         let (sid, wid) = (chat.id, chat.workspace_id);
         let alts: Vec<ActionProposal> = ["A", "B", "C"]
             .iter()
@@ -368,7 +369,7 @@ mod tests {
 
         // Decision needs a human approval and a pre-flight.
         assert!(svc.decide_proposal_set(sid, wid, set_id, Some(b)).is_err());
-        let r = svc.vote_on_proposal(sid, wid, b, "human", WorkspaceRole::Contributor, true).unwrap().unwrap();
+        let r = svc.vote_on_proposal(sid, wid, b, true).unwrap().unwrap();
         assert_eq!(r.status, ProposalStatus::Approved);
         assert!(svc.decide_proposal_set(sid, wid, set_id, Some(b)).is_err(), "no pre-flight yet");
         svc.record_set_preflight(sid, wid, set_id, b, passing()).unwrap();
@@ -381,6 +382,7 @@ mod tests {
     fn failed_preflight_returns_to_scouting_and_revisions_advance_the_round() {
         let mut svc = service();
         let chat = svc.create_chat("Demo", Uuid::nil(), "anthropic").unwrap();
+        svc.ensure_workspace_config(chat.workspace_id).unwrap();
         let (sid, wid) = (chat.id, chat.workspace_id);
         let alts: Vec<ActionProposal> =
             ["A", "B"].iter().map(|t| ActionProposal::new(*t, ProposalKind::Decision, "planner")).collect();
@@ -411,6 +413,7 @@ mod tests {
     fn forged_set_events_synced_in_from_a_viewer_or_stranger_are_dropped_on_load() {
         let mut svc = service();
         let chat = svc.create_chat("Demo", Uuid::nil(), "anthropic").unwrap();
+        svc.ensure_workspace_config(chat.workspace_id).unwrap();
         let (sid, wid) = (chat.id, chat.workspace_id);
         let val = ActorIdentity::new("val", "Val", hive_core::ActorKind::Human);
         svc.add_member(
@@ -436,7 +439,7 @@ mod tests {
         let forged = |by: &ActorIdentity, seq: i64, payload: SessionEvent| {
             let mut env = hive_core::SessionEventEnvelope::new(sid, wid, seq, payload);
             env.lamport = 1_000 + seq as u64;
-            env.actor_stamp = Some(hive_core::ActorStamp { actor: by.clone(), recorded_at: Timestamp::now() });
+            env.actor_stamp = Some(hive_core::ActorStamp { actor: by.clone(), recorded_at: Timestamp::now(), cfg_frontier: None });
             env
         };
         let eve = ActorIdentity::new("eve", "Eve", hive_core::ActorKind::Human);
@@ -467,6 +470,7 @@ mod tests {
     fn a_viewer_cannot_decide_or_tune() {
         let mut svc = service();
         let chat = svc.create_chat("Demo", Uuid::nil(), "anthropic").unwrap();
+        svc.ensure_workspace_config(chat.workspace_id).unwrap();
         let (sid, wid) = (chat.id, chat.workspace_id);
         let alts: Vec<ActionProposal> =
             ["A", "B"].iter().map(|t| ActionProposal::new(*t, ProposalKind::Decision, "planner")).collect();

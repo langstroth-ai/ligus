@@ -445,6 +445,15 @@ mod flow_tests {
             self.svc.author().id.clone()
         }
 
+        /// Join with an invite `admin` issues (and syncs) for this device.
+        async fn join_via(&mut self, admin: &mut Dev, ws: Uuid) {
+            let invite = admin.svc.issue_invite(ws).unwrap();
+            admin.sync().await;
+            self.sync().await;
+            self.svc.store().set_join_invite(ws, invite).unwrap();
+            self.svc.ensure_self_member(workspace_config_session_id(ws), ws).unwrap();
+        }
+
         fn bodies(&self, chat: Uuid) -> Vec<(String, String)> {
             self.svc
                 .load(chat)
@@ -456,6 +465,36 @@ mod flow_tests {
                 .map(|m| (m.body.clone(), m.actor_identity.as_ref().map(|a| a.id.clone()).unwrap_or_default()))
                 .collect()
         }
+    }
+
+    /// R5: revoking a device your own account certified is self-service at
+    /// any role; anyone else's device needs an Admin.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_contributor_revokes_their_own_device_but_not_anothers() {
+        let relay = spawn_relay().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = Uuid::new_v4();
+        let cfg = workspace_config_session_id(ws);
+        let mut mac = Dev::open(&tmp.path().join("mac"), "Alex", &relay, ws);
+        mac.svc.ensure_self_member(cfg, ws).unwrap();
+        mac.sync().await;
+        let mut taylor = Dev::open(&tmp.path().join("taylor"), "Taylor", &relay, ws);
+        taylor.join_via(&mut mac, ws).await;
+        taylor.sync().await;
+        // Taylor (a Contributor) certifies a second device of hers.
+        let spare = Dev::open(&tmp.path().join("spare"), "Spare", &relay, ws);
+        let request = DeviceEnrollment::decode(&spare.svc.enrollment_request(ws, "spare").encode()).unwrap();
+        taylor.svc.certify_device(&request).unwrap();
+        let spare_id = spare.svc.device_id();
+        // She can't revoke Alex's desktop...
+        assert!(taylor.svc.revoke_device(cfg, ws, mac.svc.device_id()).is_err());
+        // ...but can revoke her own spare.
+        taylor.svc.revoke_device(cfg, ws, spare_id).unwrap();
+        taylor.sync().await;
+        mac.sync().await;
+        let config = mac.svc.load(cfg).unwrap().unwrap();
+        assert!(config.guards.revoked_devices.contains(&spare_id));
+        assert!(!config.guards.revoked_devices.contains(&mac.svc.device_id()));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -476,14 +515,12 @@ mod flow_tests {
 
         // A teammate joins.
         let mut taylor = Dev::open(&tmp.path().join("taylor"), "Taylor", &relay, ws);
-        taylor.sync().await;
-        taylor.svc.ensure_self_member(cfg, ws).unwrap();
+        taylor.join_via(&mut mac, ws).await;
         taylor.sync().await;
 
         // The box joins the old way: its own member.
         let mut sff = Dev::open(&tmp.path().join("sff"), "hive-cli", &relay, ws);
-        sff.sync().await;
-        sff.svc.ensure_self_member(cfg, ws).unwrap();
+        sff.join_via(&mut mac, ws).await;
         let box_actor = sff.id();
         sff.svc.post_user_message(chat, ws, "before enrollment").unwrap();
         sff.sync().await;
@@ -530,7 +567,7 @@ mod flow_tests {
         assert_eq!(owner.id, alex.id);
         sff.svc.act_as_owner_device(owner);
         sff.svc.post_user_message(chat, ws, "from the phone").unwrap();
-        sff.svc.vote_on_proposal(chat, ws, pid, sff.id(), WorkspaceRole::Owner, true).unwrap();
+        sff.svc.vote_on_proposal(chat, ws, pid, true).unwrap();
         sff.svc.refine_proposal(chat, ws, pid, sff.id(), WorkspaceRole::Owner, "looks good", false).unwrap();
         let mut host = WorkspaceHost::new(sff.svc.device_id().to_string(), hive_core::HostKind::Worker, "sff");
         host.owner_actor_id = alex.id.clone();
@@ -554,7 +591,7 @@ mod flow_tests {
         }
 
         // One person, one vote: Alex votes again on the desktop; still one vote.
-        mac.svc.vote_on_proposal(chat, ws, pid, alex.id.clone(), WorkspaceRole::Owner, false).unwrap();
+        mac.svc.vote_on_proposal(chat, ws, pid, false).unwrap();
         mac.sync().await;
         sff.sync().await;
         for dev in [&mac, &sff] {

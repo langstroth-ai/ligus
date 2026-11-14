@@ -77,6 +77,11 @@ pub struct ChatService {
     delegated: bool,
     /// When set, every append is refused with this reason (a revoked device).
     write_block: Option<String>,
+    /// Where this host keeps the signing keys of agents bound to it (A3). When
+    /// unset, the host signs its agents' output itself (the transition).
+    agent_vault: Option<Box<dyn crate::identity_store::KeyVault + Send>>,
+    /// Assistant messages this host is writing as an agent: message → agent.
+    agent_messages: std::collections::HashMap<Uuid, Uuid>,
 }
 
 impl ChatService {
@@ -97,7 +102,98 @@ impl ChatService {
             local_workspace_id: None,
             delegated: false,
             write_block: None,
+            agent_vault: None,
+            agent_messages: std::collections::HashMap::new(),
         }
+    }
+
+    /// Keep agent signing keys in `vault` (A3): agents bound to this device
+    /// (or unbound and owned by its account) then sign their own output with a
+    /// key this device certifies on the config log.
+    pub fn set_agent_vault(&mut self, vault: Box<dyn crate::identity_store::KeyVault + Send>) {
+        self.agent_vault = Some(vault);
+    }
+
+    /// This device's signing key for `agent_id`, certified on the config log
+    /// (certifying it first if needed), when the agent may run here and an
+    /// agent vault is set. `None` otherwise: the host then signs as itself.
+    pub fn ensure_agent_key(&mut self, workspace_id: Uuid, agent_id: Uuid) -> Result<Option<(Uuid, SigningKeypair)>> {
+        let Some(vault) = self.agent_vault.as_ref() else { return Ok(None) };
+        let (config, timeline) =
+            self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        if config.is_none() || !timeline.current().agent_bound_to(agent_id, self.device_id) {
+            return Ok(None);
+        }
+        let name = format!("agent:{agent_id}:{}", self.device_id);
+        let seed = match vault.load_seed(&name).map_err(|e| ChatError::Unauthorized(e.to_string()))? {
+            Some(seed) => seed,
+            None => {
+                let kp = SigningKeypair::generate().map_err(|e| ChatError::Unauthorized(e.to_string()))?;
+                vault.store_seed(&name, &kp.seed_bytes()).map_err(|e| ChatError::Unauthorized(e.to_string()))?;
+                kp.seed_bytes()
+            }
+        };
+        let kp = SigningKeypair::from_seed(&seed).map_err(|e| ChatError::Unauthorized(e.to_string()))?;
+        let key_id = hive_core::AgentKeyCertificate::key_id_for(agent_id, &kp.public_key_bytes());
+        if timeline.current().valid_agent_key(key_id).is_none() {
+            let cert = hive_core::AgentKeyCertificate::issue(
+                &self.keypair,
+                self.device_id,
+                agent_id,
+                &kp.public_key_bytes(),
+                Timestamp::now(),
+            );
+            let config_id = workspace_config_session_id(workspace_id);
+            self.append_signed(config_id, workspace_id, SessionEvent::AgentKeyCertified { cert })?;
+        }
+        Ok(Some((key_id, kp)))
+    }
+
+    /// Append `payload` signed by `agent_id`'s own key (A3), when this host
+    /// holds one; `Ok(None)` means it doesn't and the caller signs as the host.
+    pub fn append_signed_as_agent(
+        &mut self,
+        session_id: Uuid,
+        workspace_id: Uuid,
+        agent_id: Uuid,
+        payload: SessionEvent,
+    ) -> Result<Option<SessionEventEnvelope>> {
+        if let Some(reason) = &self.write_block {
+            return Err(ChatError::Unauthorized(reason.clone()));
+        }
+        if self.local_workspace_id == Some(workspace_id) {
+            return Ok(None);
+        }
+        let Some((key_id, kp)) = self.ensure_agent_key(workspace_id, agent_id)? else { return Ok(None) };
+        let (config, timeline) =
+            self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let name = config
+            .as_ref()
+            .and_then(|c| c.workspace_agents.iter().find(|a| a.id == agent_id).map(|a| a.name.clone()))
+            .unwrap_or_default();
+        let next_seq = self.store.max_sequence(session_id)?.unwrap_or(0) + 1;
+        let mut env = SessionEventEnvelope::new(session_id, workspace_id, next_seq, payload);
+        env.lamport = self.store.max_lamport(session_id)?.saturating_add(1);
+        let mut actor = ActorIdentity::new(agent_id.to_string(), name, hive_core::ActorKind::Agent);
+        actor.device_id = Some(key_id);
+        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::now(), cfg_frontier: timeline.head() });
+        env.signer_device_id = Some(key_id);
+        self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
+        sign_envelope(&mut env, key_id, &kp);
+        self.store.append_envelope(&env)?;
+        Ok(Some(env))
+    }
+
+    /// Append for an assistant message: as its agent when this host writes
+    /// that message with the agent's own key, else as the host.
+    fn append_for_message(&mut self, session_id: Uuid, workspace_id: Uuid, message_id: Uuid, payload: SessionEvent) -> Result<()> {
+        if let Some(agent) = self.agent_messages.get(&message_id).copied() {
+            if self.append_signed_as_agent(session_id, workspace_id, agent, payload.clone())?.is_some() {
+                return Ok(());
+            }
+        }
+        self.append_signed(session_id, workspace_id, payload)?;
+        Ok(())
     }
 
     /// Act as `owner` — this device is enrolled as one of their devices (a
@@ -125,6 +221,12 @@ impl ChatService {
     /// The reason writes are refused, if they are.
     pub fn write_block(&self) -> Option<&str> {
         self.write_block.as_deref()
+    }
+
+    /// The account signing key's public half (its fingerprint is the
+    /// founder pin an invite carries).
+    pub fn account_public_key(&self) -> [u8; 32] {
+        self.account_keypair.public_key_bytes()
     }
 
     /// This device's id and its signing keypair's public key.
@@ -429,7 +531,10 @@ impl ChatService {
         // churn would otherwise deny the sole user routine actions in their own
         // workspace (the "unauthorized in your own Home" bug).
         let is_local = self.local_workspace_id == Some(workspace_id);
-        if !is_local && requires_authz(&payload) {
+        // A device revocation is judged only by the fold's rule below (R5: your
+        // own certified device is self-service, anyone else's needs Admin).
+        let fold_only = matches!(payload, SessionEvent::DeviceRevoked { .. });
+        if !is_local && !fold_only && requires_authz(&payload) {
             // Authorize against the *projected* session — i.e. the workspace-wide
             // roster after the member hoist (§11) unions the config-log members on
             // (config-wins). For a config-log write this loads raw, so it gates on
@@ -451,13 +556,68 @@ impl ChatService {
         // never sorts before the message it answers. `new` seeded lamport from the
         // local sequence; override it with the causal value before signing.
         env.lamport = self.store.max_lamport(session_id)?.saturating_add(1);
+        // The config frontier this device has folded: chat events that need the
+        // workspace roster are judged at it, on every device (Phase 0 A2).
+        let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
         env.actor_stamp = Some(ActorStamp {
             actor: self.author.clone(),
             recorded_at: Timestamp::now(),
+            cfg_frontier: timeline.head(),
         });
+        // Judged as signed by this device (`sign_envelope` sets the same id).
+        env.signer_device_id = Some(self.device_id);
+        if !is_local {
+            self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
+        }
         sign_envelope(&mut env, self.device_id, &self.keypair);
         self.store.append_envelope(&env)?;
         Ok(env)
+    }
+
+    /// Judge a drafted envelope exactly as every device's fold will
+    /// (`hive_core::authz::authorize`), so authoring and folding agree: an
+    /// event the fold would drop or hold is refused here instead.
+    fn authorize_as_fold(
+        &self,
+        env: &SessionEventEnvelope,
+        config: Option<&ChatSession>,
+        timeline: &hive_core::authz::ConfigTimeline,
+    ) -> Result<()> {
+        use hive_core::authz::{self, Decision};
+        let config_id = workspace_config_session_id(env.workspace_id);
+        if config.is_some_and(|c| c.authz.read_only()) {
+            return Err(ChatError::Unauthorized(format!(
+                "this workspace uses rules version {}; update Ligus to make changes here",
+                config.map(|c| c.authz.rules).unwrap_or_default()
+            )));
+        }
+        let fold = if env.session_id == config_id {
+            config.cloned()
+        } else {
+            let ws = match config {
+                Some(_) => hive_core::WorkspaceAuthz::Timeline(timeline),
+                None => hive_core::WorkspaceAuthz::NoConfigLog,
+            };
+            self.store.load_session_authorized(env.session_id, self.trusted_founder.as_deref(), self.local_workspace_id, ws)?
+        };
+        // A brand-new log (its seed) has nothing to judge against yet.
+        let Some(fold) = fold else { return Ok(()) };
+        let is_chat = env.session_id != config_id;
+        if is_chat && config.is_none() {
+            return Err(ChatError::Unauthorized("the workspace configuration hasn't synced to this device yet".into()));
+        }
+        let ctx = authz::Ctx {
+            fold: &fold,
+            running: timeline.current(),
+            workspace: is_chat.then(|| timeline.current()),
+            trusted: false,
+            checked: is_chat,
+        };
+        match authz::authorize(env, &ctx) {
+            Decision::Allow => Ok(()),
+            Decision::Deny(why) => Err(ChatError::Unauthorized(why.0)),
+            Decision::Hold(h) => Err(ChatError::Unauthorized(format!("not yet decidable on this device ({h:?})"))),
+        }
     }
 
     /// Create a chat by seeding a `SessionSnapshot`.
@@ -467,6 +627,11 @@ impl ChatService {
         workspace_id: Uuid,
         runtime_id: impl Into<String>,
     ) -> Result<ChatSession> {
+        // A chat's events are judged against its workspace's config roster, so
+        // the config log must exist (created and seeded on first use).
+        if self.local_workspace_id != Some(workspace_id) {
+            self.ensure_workspace_config(workspace_id)?;
+        }
         let mut session = ChatSession::new(title, workspace_id, runtime_id);
         // The creator owns the primary runtime (cross-device dispatch) and is the
         // first workspace member.
@@ -649,6 +814,14 @@ impl ChatService {
         // (named agents keep their roster avatar/name).
         message.actor_identity = Some(self.author.clone());
         let id = message.id;
+        // An agent with its own key on this host signs its own reply (A3).
+        if let Some(agent) = responder_id {
+            let payload = SessionEvent::MessageAppended { message: message.clone() };
+            if self.append_signed_as_agent(session_id, workspace_id, agent, payload)?.is_some() {
+                self.agent_messages.insert(id, agent);
+                return Ok(id);
+            }
+        }
         self.append_signed(
             session_id,
             workspace_id,
@@ -667,15 +840,7 @@ impl ChatService {
         // Envelope: mask credentials before they reach the synced log. A chunk
         // boundary can split one; the completed body is redacted whole below.
         let chunk = self.redact_for_log(workspace_id, session_id, chunk.into());
-        self.append_signed(
-            session_id,
-            workspace_id,
-            SessionEvent::MessageChunkReceived {
-                message_id,
-                chunk,
-            },
-        )?;
-        Ok(())
+        self.append_for_message(session_id, workspace_id, message_id, SessionEvent::MessageChunkReceived { message_id, chunk })
     }
 
     pub fn complete_assistant_message(
@@ -686,14 +851,8 @@ impl ChatService {
         body: impl Into<String>,
     ) -> Result<()> {
         let body = self.redact_for_log(workspace_id, session_id, body.into());
-        self.append_signed(
-            session_id,
-            workspace_id,
-            SessionEvent::MessageCompleted {
-                message_id,
-                body,
-            },
-        )?;
+        self.append_for_message(session_id, workspace_id, message_id, SessionEvent::MessageCompleted { message_id, body })?;
+        self.agent_messages.remove(&message_id);
         // A completed reply is a natural checkpoint — snapshot periodically so
         // reopening a long chat replays only recent events (#3).
         self.maybe_snapshot(session_id, workspace_id)?;
@@ -924,6 +1083,12 @@ impl ChatService {
         // register self there (not on this chat) so we're visible in every chat.
         // `ensure_workspace_config` seeds the very first toucher as Owner, so a
         // fresh workspace creator is found by the check below (no self-demote).
+        // A joiner (holding an invite) waits for the workspace's own config log
+        // instead of founding a competing one; this runs again after a sync.
+        let config_id = workspace_config_session_id(workspace_id);
+        if self.load(config_id)?.is_none() && self.store.join_invite(workspace_id)?.is_some() {
+            return Ok(false);
+        }
         let config_id = self.ensure_workspace_config(workspace_id)?;
         let config = self.load(config_id)?.expect("config log exists after ensure");
         // Already present? Match by actor id, or by the same GitHub account — so
@@ -944,7 +1109,12 @@ impl ChatService {
                 index: next_index,
                 joined_at: Timestamp::now(),
             };
-            self.add_member(session_id, workspace_id, member)?;
+            // Joining needs the invite an Admin issued (from the hivews1:
+            // invite, kept in this device's store); key possession alone
+            // never admits anyone.
+            let invite = self.store.join_invite(workspace_id)?;
+            let config_id = self.ensure_workspace_config(workspace_id)?;
+            self.append_signed(config_id, workspace_id, SessionEvent::MemberAdded { member, invite })?;
             true
         };
         // Publish this device's identity so peers can verify our events. Runs
@@ -1013,6 +1183,13 @@ impl ChatService {
     pub fn ensure_workspace_config(&mut self, workspace_id: Uuid) -> Result<Uuid> {
         let config_id = workspace_config_session_id(workspace_id);
         if self.load(config_id)?.is_none() {
+            // A device that joins with an invite never founds the workspace:
+            // it waits for the founder's config log to sync.
+            if self.store.join_invite(workspace_id)?.is_some() {
+                return Err(ChatError::Unauthorized(
+                    "the workspace configuration hasn't synced to this device yet".into(),
+                ));
+            }
             let mut session = ChatSession::new("", workspace_id, "");
             session.id = config_id;
             session.creator_actor_id = self.author.id.clone();
@@ -1532,10 +1709,38 @@ impl ChatService {
             workspace_id,
             SessionEvent::WorkflowDefinitionsUpdated { definitions },
         )?;
-        let mut applied = proposal.clone();
-        applied.status = hive_core::ProposalStatus::Applied;
-        self.upsert_proposal(session_id, workspace_id, applied.clone())?;
-        Ok(Some(applied))
+        self.mark_proposal_applied(session_id, workspace_id, proposal_id, None)
+    }
+
+    /// Record that a proposal's approved change was carried out: a
+    /// `ProposalApplied` naming the digest of the content that was approved.
+    /// Every device folds it only from a human member, for that exact content,
+    /// on a proposal that is approved with its human gate met. Returns the
+    /// locally projected proposal, or `None` if it isn't (or no longer)
+    /// applicable.
+    pub fn mark_proposal_applied(
+        &mut self,
+        session_id: Uuid,
+        workspace_id: Uuid,
+        proposal_id: Uuid,
+        commit: Option<String>,
+    ) -> Result<Option<ActionProposal>> {
+        let Some(session) = self.load(session_id)? else {
+            return Ok(None);
+        };
+        let Some(proposal) = session.proposals.iter().find(|p| p.id == proposal_id) else {
+            return Ok(None);
+        };
+        if session.authz.blocks(proposal_id, proposal.set_id) {
+            return Err(ChatError::Unauthorized("a vote or decision on this proposal is still waiting to sync".into()));
+        }
+        let diff_digest = hive_core::authz::votes::diff_digest(proposal);
+        self.append_signed(
+            session_id,
+            workspace_id,
+            SessionEvent::ProposalApplied { proposal_id, diff_digest, commit, at: Timestamp::now() },
+        )?;
+        Ok(self.load(session_id)?.and_then(|s| s.proposals.into_iter().find(|p| p.id == proposal_id)))
     }
 
     /// Persist a workflow run snapshot (create or update by id).
@@ -1543,8 +1748,13 @@ impl ChatService {
         &mut self,
         session_id: Uuid,
         workspace_id: Uuid,
-        run: WorkflowRun,
+        mut run: WorkflowRun,
     ) -> Result<()> {
+        // S4: the device that creates a run is the one whose epoch-less writes
+        // count; the fold fixes it at the run's first write.
+        if run.creator_device_id.is_none() {
+            run.creator_device_id = Some(self.device_id);
+        }
         self.append_signed(
             session_id,
             workspace_id,
@@ -1565,7 +1775,7 @@ impl ChatService {
         // chat (closes the self-member staleness gap). The passed-in session is
         // shadowed by the config-log id.
         let session_id = self.ensure_workspace_config(workspace_id)?;
-        self.append_signed(session_id, workspace_id, SessionEvent::MemberAdded { member })?;
+        self.append_signed(session_id, workspace_id, SessionEvent::MemberAdded { member, invite: None })?;
         Ok(())
     }
 
@@ -1589,8 +1799,27 @@ impl ChatService {
         Ok(())
     }
 
+    /// Issue a single-use invite to `workspace_id` (Admin+): a
+    /// `JoinApproved` of `invite:<id>` on the config log. A newcomer's
+    /// self-enrollment must redeem one; the id travels in the hivews1: invite.
+    pub fn issue_invite(&mut self, workspace_id: Uuid) -> Result<Uuid> {
+        self.issue_invite_as(workspace_id, Uuid::new_v4())
+    }
+
+    /// [`issue_invite`](Self::issue_invite) with a chosen id (a DM derives it
+    /// from its room so both sides know it).
+    pub fn issue_invite_as(&mut self, workspace_id: Uuid, id: Uuid) -> Result<Uuid> {
+        let config_id = self.ensure_workspace_config(workspace_id)?;
+        self.append_signed(
+            config_id,
+            workspace_id,
+            SessionEvent::JoinApproved { subject: hive_core::authorization::invite_subject(id) },
+        )?;
+        Ok(id)
+    }
+
     /// Revoke a single device (lost/compromised) without removing its account
-    /// (authz: admin+). Folds into the roster's revoked set so the device can no
+    /// (authz: one your own account certified, or anyone's as Admin+). Folds into the roster's revoked set so the device can no
     /// longer sign events. Pair with a `WorkspaceKeyRotation` excluding the device
     /// to also cut its read access. Rides the workspace-config log (workspace-wide).
     pub fn revoke_device(
@@ -1774,28 +2003,30 @@ impl ChatService {
         Ok(())
     }
 
-    /// Cast a vote on a proposal (latest vote per actor wins; status recomputes
-    /// against the quorum), then persist the updated proposal.
+    /// Cast this device's author's vote on a proposal (latest vote per actor
+    /// wins; status recomputes against the quorum). The vote names its signer
+    /// and the digest of the content it approves; every device counts it at the
+    /// signer's real workspace role, so the payload's role is informational.
     pub fn vote_on_proposal(
         &mut self,
         session_id: Uuid,
         workspace_id: Uuid,
         proposal_id: Uuid,
-        actor_id: impl Into<String>,
-        role: WorkspaceRole,
         approved: bool,
     ) -> Result<Option<ActionProposal>> {
         let Some(session) = self.load(session_id)? else {
             return Ok(None);
         };
+        let role = session.role_of(&self.author.id);
         let Some(mut proposal) = session.proposals.into_iter().find(|p| p.id == proposal_id) else {
             return Ok(None);
         };
         let approval = ProposalApproval {
-            actor_id: actor_id.into(),
+            actor_id: self.author.id.clone(),
             role,
             approved,
             created_at: Timestamp::now(),
+            diff_digest: Some(hive_core::authz::votes::diff_digest(&proposal)),
         };
         // Emit the vote as a delta, not a full-proposal snapshot: concurrent
         // votes from other devices then merge (per-actor LWW + quorum recompute)
@@ -1976,24 +2207,26 @@ impl ChatService {
         // stay fully gated). This is what lets the churned local self's own governance
         // events (reconcile / archive channel) fold instead of being dropped.
         let local = self.local_workspace_id;
-        let Some(mut session) = self.store.load_session_with_founder(session_id, founder, local)? else {
+        let Some(workspace_id) = self.store.workspace_of(session_id)? else {
             return Ok(None);
         };
-        let config_id = workspace_config_session_id(session.workspace_id);
-        if session_id != config_id {
-            if let Some(cfg) = self.store.load_session_with_founder(config_id, founder, local)? {
-                // Proposal-set events are role-checked against the workspace
-                // roster, which only the config log holds: re-fold a chat that
-                // has any (cached per roster, so this costs one fold per change).
-                if !session.proposal_sets.is_empty() || session.proposals.iter().any(|p| p.reverted) {
-                    let hoist = hive_core::authorization::HoistedRoster {
-                        members: &cfg.members,
-                        dearth_on: cfg.guards.dearth_on().is_some(),
-                    };
-                    if let Some(checked) = self.store.load_session_hoisted(session_id, founder, local, Some(hoist))? {
-                        session = checked;
-                    }
-                }
+        let config_id = workspace_config_session_id(workspace_id);
+        let (cfg, timeline) = self.store.load_config(workspace_id, founder, local)?;
+        if session_id == config_id {
+            return Ok(cfg);
+        }
+        // A chat is folded against the config log's roster history (A2): its
+        // workspace-authorized events are judged at their own frontier, and
+        // held while the config log hasn't synced.
+        let ws = match cfg {
+            Some(_) => hive_core::WorkspaceAuthz::Timeline(&timeline),
+            None => hive_core::WorkspaceAuthz::NoConfigLog,
+        };
+        let Some(mut session) = self.store.load_session_authorized(session_id, founder, local, ws)? else {
+            return Ok(None);
+        };
+        {
+            if let Some(cfg) = cfg {
                 // Members hoist onto the config log so the roster is workspace-wide.
                 // Dedup by member id; the config-log entry is the source of truth,
                 // so it *replaces* any same-id per-session member (role/title/index
@@ -2713,6 +2946,55 @@ mod tests {
         ChatService::new(store, Uuid::new_v4(), kp, account_kp, author)
     }
 
+    /// A3: with an agent vault, an agent bound to this device signs its own
+    /// reply with a key this device certified; peers verify it as the agent.
+    /// Rebinding the agent elsewhere retires the key.
+    #[test]
+    fn a_bound_agent_signs_its_own_reply_and_rebinding_retires_the_key() {
+        use crate::envelope_verifier::{build_roster, verdict_for, QuarantineReason, Verdict};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hive.db");
+        let wid = Uuid::new_v4();
+        let mut svc = svc_on(&path, "x", "Alex");
+        let account = Uuid::new_v4().to_string();
+        svc.set_author_account(account.clone(), "Alex", None);
+        let chat = svc.create_chat("A", wid, "rt").unwrap();
+        svc.set_agent_vault(Box::new(crate::identity_store::FileKeyVault::new(dir.path())));
+        let mut agent = WorkspaceAgent::new("coder", "rt");
+        agent.owner_actor_id = account.clone();
+        let agent_id = agent.id;
+        svc.add_agent(chat.id, wid, agent).unwrap();
+        svc.set_agent_host(wid, agent_id, &svc.device_id().to_string()).unwrap();
+
+        let mid = svc.begin_assistant_message(chat.id, wid, "coder", "rt", Some(agent_id), None).unwrap();
+        svc.append_chunk(chat.id, wid, mid, "hel").unwrap();
+        svc.complete_assistant_message(chat.id, wid, mid, "hello").unwrap();
+        let envs = svc.store().list(chat.id).unwrap();
+        let reply: Vec<_> = envs
+            .iter()
+            .filter(|e| e.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == hive_core::ActorKind::Agent))
+            .collect();
+        assert_eq!(reply.len(), 3, "appended, chunk and completion are all agent-signed");
+        let key_id = reply[0].signer_device_id.unwrap();
+        assert_ne!(key_id, svc.device_id());
+        let roster = build_roster(&svc.store().trust_envelopes(wid).unwrap());
+        for e in &reply {
+            assert_eq!(verdict_for(&roster, e), Verdict::Valid);
+        }
+        let s = svc.load(chat.id).unwrap().unwrap();
+        assert_eq!(s.messages.iter().find(|m| m.id == mid).unwrap().body, "hello");
+
+        // Rebinding to another host (Owner = Admin+) retires this device's key.
+        svc.set_agent_host(wid, agent_id, "worker-9").unwrap();
+        let roster = build_roster(&svc.store().trust_envelopes(wid).unwrap());
+        assert_eq!(verdict_for(&roster, reply[0]), Verdict::Quarantine(QuarantineReason::RevokedDevice));
+        // And this host no longer writes as the agent: it falls back to itself.
+        let mid2 = svc.begin_assistant_message(chat.id, wid, "coder", "rt", Some(agent_id), None).unwrap();
+        let last = svc.store().list(chat.id).unwrap().into_iter().last().unwrap();
+        assert_eq!(last.signer_device_id, Some(svc.device_id()));
+        let _ = mid2;
+    }
+
     #[test]
     fn adopt_account_identity_migrates_provisional_self_without_duplicate() {
         // The churn root cure: a provisional pre-sign-in self (Owner, no account_id)
@@ -2824,6 +3106,8 @@ mod tests {
         owner.set_author_account(owner_id.clone(), "Alex", None);
         owner.create_chat("general", wid, "rt").unwrap();
         owner.ensure_workspace_config(wid).unwrap();
+        let invite = owner.issue_invite(wid).unwrap();
+        owner.store().set_join_invite(wid, invite).unwrap();
         let mut boxed = svc_on(&path, "y", "Phone");
         boxed.set_author_account(box_id.clone(), "Phone", None);
         boxed.ensure_self_member(cfg, wid).unwrap();
@@ -2860,20 +3144,26 @@ mod tests {
     }
 
     #[test]
-    fn non_member_worker_manages_its_own_host_but_not_governance() {
-        // The self-host carve-out: a worker box (not a workspace member, so
-        // Viewer-floored) may register + heartbeat the host it owns, yet still
-        // can't perform governance. Proves the #61-hardening worker regression
-        // is closed without enrolling the worker as a member.
+    fn a_worker_manages_its_own_host_only_once_it_is_a_member() {
+        // Every author must be a workspace member (2.0): a worker box holding
+        // the workspace key but not on the roster can't even register its own
+        // host. Once it joined with an Admin's invite (as a Contributor) it
+        // manages its own host, yet still can't perform governance.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hive.db");
         let wid = Uuid::new_v4();
-        {
+        let invite = {
             let mut owner = svc_on(&path, "owner", "Owner");
             owner.create_chat("A", wid, "anthropic").unwrap();
             owner.ensure_workspace_config(wid).unwrap();
-        }
+            owner.issue_invite(wid).unwrap()
+        };
         let mut worker = svc_on(&path, "worker", "Worker");
+        assert!(worker
+            .register_host(wid, hive_core::WorkspaceHost::new("box1", hive_core::HostKind::Worker, "prod"))
+            .is_err());
+        worker.store().set_join_invite(wid, invite).unwrap();
+        worker.ensure_self_member(workspace_config_session_id(wid), wid).unwrap();
         // register_host stamps owner_actor_id = self → allowed via the carve-out.
         worker
             .register_host(wid, hive_core::WorkspaceHost::new("box1", hive_core::HostKind::Worker, "prod"))
@@ -2955,8 +3245,10 @@ mod tests {
             let mut a = svc_on(&path, "u1", "Ana");
             let ca = a.create_chat("A", wid, "anthropic").unwrap();
             let cb = a.create_chat("B", wid, "anthropic").unwrap();
-            // Seed the config log with u1 as Owner (first toucher).
+            // Seed the config log with u1 as Owner (first toucher), who invites u2.
             a.ensure_workspace_config(wid).unwrap();
+            let invite = a.issue_invite(wid).unwrap();
+            a.store().set_join_invite(wid, invite).unwrap();
             (ca.id, cb.id)
         };
 
@@ -3049,9 +3341,9 @@ mod tests {
         let (mut svc, _) = service();
         let wid = Uuid::new_v4();
         let chat = svc.create_chat("A", wid, "anthropic").unwrap();
-        let cfg = svc.load(workspace_config_session_id(wid));
-        // (config log is seeded lazily; first governance call seeds it)
-        assert!(cfg.unwrap().is_none());
+        // Creating a chat seeds the config log (its roster judges the chat).
+        let cfg = svc.load(workspace_config_session_id(wid)).unwrap().unwrap();
+        assert_eq!(cfg.role_of("u1"), WorkspaceRole::Owner);
         svc.add_member(chat.id, wid, test_member("u2", "Bo", WorkspaceRole::Contributor))
             .unwrap();
         let cfg = svc.load(workspace_config_session_id(wid)).unwrap().unwrap();
@@ -3128,6 +3420,8 @@ mod tests {
             let mut a = svc_on(&path, "u1", "Ana");
             let chat = a.create_chat("A", wid, "anthropic").unwrap();
             a.ensure_workspace_config(wid).unwrap();
+            let invite = a.issue_invite(wid).unwrap();
+            a.store().set_join_invite(wid, invite).unwrap();
             chat.id
         };
         let mut eve = svc_on(&path, "eve", "Eve");
@@ -3156,7 +3450,7 @@ mod tests {
         svc.append_signed(
             chat.id,
             wid,
-            SessionEvent::MemberAdded { member: test_member("u2", "Bo", WorkspaceRole::Viewer) },
+            SessionEvent::MemberAdded { invite: None, member: test_member("u2", "Bo", WorkspaceRole::Viewer) },
         )
         .unwrap();
         // The authoritative config-log entry gives u2 a higher role.
@@ -3539,36 +3833,87 @@ mod tests {
         let chat = svc.create_chat("Demo", Uuid::nil(), "anthropic").unwrap();
         let (sid, wid) = (chat.id, chat.workspace_id);
         let def = hive_core::workflow::preset_review_gate();
+        svc.ensure_workspace_config(wid).unwrap();
+        // A proposal's own author can't approve it.
+        let own = workflow_proposal("u1", hive_core::workflow::preset_fan_out_vote());
+        let own_id = own.id;
+        svc.upsert_proposal(sid, wid, own).unwrap();
+        let r = svc.vote_on_proposal(sid, wid, own_id, true).unwrap().unwrap();
+        assert_eq!(r.status, hive_core::ProposalStatus::Open);
+        assert!(svc.load(sid).unwrap().unwrap().workflow_definitions.is_empty());
+
         let p = workflow_proposal("agent-scout", def.clone());
         let pid = p.id;
         svc.upsert_proposal(sid, wid, p).unwrap();
         assert!(svc.load(sid).unwrap().unwrap().workflow_definitions.is_empty(), "filing alone adds nothing");
 
-        // The authoring agent's own vote can't approve it.
-        let r = svc.vote_on_proposal(sid, wid, pid, "agent-scout", WorkspaceRole::Owner, true).unwrap().unwrap();
-        assert_eq!(r.status, hive_core::ProposalStatus::Open);
-        assert!(svc.load(sid).unwrap().unwrap().workflow_definitions.is_empty());
-
-        let r = svc.vote_on_proposal(sid, wid, pid, "human", WorkspaceRole::Owner, true).unwrap().unwrap();
+        let r = svc.vote_on_proposal(sid, wid, pid, true).unwrap().unwrap();
         assert_eq!(r.status, hive_core::ProposalStatus::Applied);
         let s = svc.load(sid).unwrap().unwrap();
         assert_eq!(s.workflow_definitions, vec![def.clone()]);
-        assert_eq!(s.proposals[0].status, hive_core::ProposalStatus::Applied);
+        assert_eq!(s.proposals.iter().find(|p| p.id == pid).unwrap().status, hive_core::ProposalStatus::Applied);
 
         // Applying again (another device's Implement) changes nothing.
         assert!(svc.apply_workflow_proposal(sid, wid, pid).unwrap().is_none());
         assert_eq!(svc.load(sid).unwrap().unwrap().workflow_definitions.len(), 1);
     }
 
+    /// A rules version this build doesn't enforce makes the workspace
+    /// read-only here: every write is refused with an "update" message.
+    #[test]
+    fn unknown_rules_version_refuses_writes_on_this_device() {
+        let (mut svc, _) = service();
+        let chat = svc.create_chat("Demo", Uuid::new_v4(), "anthropic").unwrap();
+        let (sid, wid) = (chat.id, chat.workspace_id);
+        let cfg = svc.ensure_workspace_config(wid).unwrap();
+        svc.post_user_message(sid, wid, "before").unwrap();
+        svc.append_signed(cfg, wid, SessionEvent::WorkspaceRulesSet { version: hive_core::authz::RULES_SUPPORTED + 1 })
+            .unwrap();
+        let err = svc.post_user_message(sid, wid, "after").unwrap_err().to_string();
+        assert!(err.contains("update Ligus"), "{err}");
+        assert!(svc.load(cfg).unwrap().unwrap().authz.read_only());
+    }
+
+    /// A vote this device can't place yet (its config frontier hasn't
+    /// synced) holds, and Implement refuses while it does.
+    #[test]
+    fn a_held_vote_blocks_marking_the_proposal_applied() {
+        let (mut svc, _) = service();
+        let chat = svc.create_chat("Demo", Uuid::new_v4(), "anthropic").unwrap();
+        let (sid, wid) = (chat.id, chat.workspace_id);
+        svc.ensure_workspace_config(wid).unwrap();
+        let p = ActionProposal::new("Ship it", hive_core::ProposalKind::Decision, "agent");
+        let pid = p.id;
+        svc.upsert_proposal(sid, wid, p).unwrap();
+        svc.vote_on_proposal(sid, wid, pid, true).unwrap();
+        // A peer's vote naming a config event this device doesn't hold.
+        let mut peer = SessionEventEnvelope::new(sid, wid, 99, SessionEvent::ProposalDismissed { proposal_id: pid, dismissed: false });
+        peer.payload = SessionEvent::ProposalVoteCast {
+            proposal_id: pid,
+            approval: ProposalApproval { actor_id: "u1".into(), role: WorkspaceRole::Owner, approved: false, created_at: Timestamp::now(), diff_digest: None },
+        };
+        peer.lamport = 1_000;
+        peer.actor_stamp = Some(ActorStamp {
+            actor: svc.author().clone(),
+            recorded_at: Timestamp::now(),
+            cfg_frontier: Some(hive_core::CfgFrontier { lamport: 7_777, event_id: Uuid::new_v4() }),
+        });
+        svc.store().append_envelope(&peer).unwrap();
+        let s = svc.load(sid).unwrap().unwrap();
+        assert!(s.authz.blocks(pid, None));
+        assert!(svc.mark_proposal_applied(sid, wid, pid, None).is_err());
+    }
+
     #[test]
     fn rejecting_a_workflow_proposal_leaves_definitions_alone() {
         let (mut svc, _) = service();
         let chat = svc.create_chat("Demo", Uuid::nil(), "anthropic").unwrap();
+        svc.ensure_workspace_config(chat.workspace_id).unwrap();
         let (sid, wid) = (chat.id, chat.workspace_id);
         let p = workflow_proposal("agent", hive_core::workflow::preset_review_gate());
         let pid = p.id;
         svc.upsert_proposal(sid, wid, p).unwrap();
-        let r = svc.vote_on_proposal(sid, wid, pid, "human", WorkspaceRole::Owner, false).unwrap().unwrap();
+        let r = svc.vote_on_proposal(sid, wid, pid, false).unwrap().unwrap();
         assert_eq!(r.status, hive_core::ProposalStatus::Rejected);
         assert!(svc.apply_workflow_proposal(sid, wid, pid).unwrap().is_none());
         assert!(svc.load(sid).unwrap().unwrap().workflow_definitions.is_empty());
@@ -3578,6 +3923,7 @@ mod tests {
     fn an_approved_revision_replaces_an_existing_definition_in_place() {
         let (mut svc, _) = service();
         let chat = svc.create_chat("Demo", Uuid::nil(), "anthropic").unwrap();
+        svc.ensure_workspace_config(chat.workspace_id).unwrap();
         let (sid, wid) = (chat.id, chat.workspace_id);
         // Definitions saved before this change (by the old editor or an old
         // directive) stay in place and can be revised.
@@ -3591,7 +3937,7 @@ mod tests {
         let p = workflow_proposal("agent", revised.clone());
         let pid = p.id;
         svc.upsert_proposal(sid, wid, p).unwrap();
-        svc.vote_on_proposal(sid, wid, pid, "human", WorkspaceRole::Owner, true).unwrap();
+        svc.vote_on_proposal(sid, wid, pid, true).unwrap();
         let defs = svc.load(sid).unwrap().unwrap().workflow_definitions;
         assert_eq!(defs.len(), 2);
         assert_eq!(defs[0], revised, "same slot, same id");
@@ -3602,11 +3948,12 @@ mod tests {
     fn a_plain_decision_vote_never_touches_definitions() {
         let (mut svc, _) = service();
         let chat = svc.create_chat("Demo", Uuid::nil(), "anthropic").unwrap();
+        svc.ensure_workspace_config(chat.workspace_id).unwrap();
         let (sid, wid) = (chat.id, chat.workspace_id);
         let p = ActionProposal::new("Ship it", hive_core::ProposalKind::Decision, "agent");
         let pid = p.id;
         svc.upsert_proposal(sid, wid, p).unwrap();
-        let r = svc.vote_on_proposal(sid, wid, pid, "human", WorkspaceRole::Owner, true).unwrap().unwrap();
+        let r = svc.vote_on_proposal(sid, wid, pid, true).unwrap().unwrap();
         assert_eq!(r.status, hive_core::ProposalStatus::Approved, "not auto-applied");
         assert!(svc.apply_workflow_proposal(sid, wid, pid).unwrap().is_none());
     }

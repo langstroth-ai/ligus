@@ -271,8 +271,7 @@ impl HiveSnapshot {
                         actor_id: i.me.to_string(),
                         role,
                         approved: true,
-                        created_at: hive_core::Timestamp::now(),
-                    },
+                        created_at: hive_core::Timestamp::now(), diff_digest: None },
                 });
                 let mine = !p.author_actor_id.is_empty() && p.author_actor_id == i.me;
                 let voted = p.approvals.iter().any(|a| a.actor_id == i.me);
@@ -670,7 +669,7 @@ pub(crate) mod tests {
             p
         };
         let mut voted = open("Voted", "other-id", 3);
-        voted.approvals.push(ProposalApproval { actor_id: ME.into(), role: WorkspaceRole::Contributor, approved: true, created_at: Timestamp::now() });
+        voted.approvals.push(ProposalApproval { actor_id: ME.into(), role: WorkspaceRole::Contributor, approved: true, created_at: Timestamp::now(), diff_digest: None });
         let mut dismissed = open("Dismissed", "other-id", 4);
         dismissed.dismissed = true;
         let mut applied = open("Applied", "other-id", 5);
@@ -799,7 +798,7 @@ pub(crate) mod tests {
         let s = snapshot_of(&f, HostState::default());
         let floor = hive_core::authorization::min_role_for(&hive_core::SessionEvent::ProposalVoteCast {
             proposal_id: Uuid::nil(),
-            approval: ProposalApproval { actor_id: ME.into(), role: WorkspaceRole::Viewer, approved: true, created_at: Timestamp::now() },
+            approval: ProposalApproval { actor_id: ME.into(), role: WorkspaceRole::Viewer, approved: true, created_at: Timestamp::now(), diff_digest: None },
         });
         let expected = if floor == WorkspaceRole::Viewer { 2.0 } else { 0.0 };
         assert_eq!(num(&s, "proposals.awaiting_me"), expected);

@@ -137,8 +137,7 @@ fn signed_vote(pid: Uuid, voter: &str) -> SessionEvent {
             actor_id: voter.into(),
             role: crate::identity::WorkspaceRole::Owner,
             approved: true,
-            created_at: Timestamp::epoch(),
-        },
+            created_at: Timestamp::epoch(), diff_digest: None },
     }
 }
 
@@ -234,7 +233,7 @@ fn a_removed_member_cannot_self_enroll_back() {
     use crate::lease_projection_tests::member;
     let s = base();
     let removed = SessionEvent::MemberRemoved { member_id: "alice".into() };
-    let rejoin = SessionEvent::MemberAdded { member: member("alice", WorkspaceRole::Contributor) };
+    let rejoin = SessionEvent::MemberAdded { invite: None, member: member("alice", WorkspaceRole::Contributor) };
     let noise = |n: u64| SessionEvent::SessionTitleChanged { title: format!("t{n}") };
     let mut rng = Rng::new(77);
     for _ in 0..32 {

@@ -20,3 +20,7 @@ hkdf = "0.12"
 sha2 = "0.10"
 argon2 = "0.5"
 url = "2"
+
+[dev-dependencies]
+# Property tests (Phase 0): default 256 cases; nightly sets PROPTEST_CASES=4096.
+proptest = { version = "1", default-features = false, features = ["std"] }

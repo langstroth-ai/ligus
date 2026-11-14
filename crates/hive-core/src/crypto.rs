@@ -98,6 +98,45 @@ pub fn verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> Result<(),
 /// the canonical order. JSON encodings are stable because serde serializes
 /// struct fields and tagged enums in declaration order.
 pub fn envelope_preimage(env: &SessionEventEnvelope) -> Vec<u8> {
+    // Received envelopes are verified over the bytes that arrived (P0.1), so a
+    // field or kind this build doesn't know is still covered and still
+    // verifies. A key absent on the wire keeps the old behaviour: the
+    // serialization of the value it decoded to (legacy events without
+    // `timestamp`/`scope` were signed over that).
+    let raw = env.raw();
+    let scope = match raw.and_then(|r| r.scope()) {
+        Some(s) => s.as_bytes().to_vec(),
+        None => serde_json::to_vec(&env.scope).expect("serialize scope"),
+    };
+    let timestamp = match raw.and_then(|r| r.timestamp()) {
+        Some(s) => s.as_bytes().to_vec(),
+        None => serde_json::to_vec(&env.timestamp).expect("serialize timestamp"),
+    };
+    let actor_stamp = match raw.and_then(|r| r.actor_stamp()) {
+        Some(s) => s.as_bytes().to_vec(),
+        None => serde_json::to_vec(&env.actor_stamp).expect("serialize actor_stamp"),
+    };
+    let payload = match raw {
+        Some(r) => r.payload().as_bytes().to_vec(),
+        None => serde_json::to_vec(&env.payload).expect("serialize payload"),
+    };
+    preimage_of(env, [scope, timestamp, actor_stamp, payload])
+}
+
+/// The preimage over the typed fields re-serialized (ignoring received bytes).
+fn typed_preimage(env: &SessionEventEnvelope) -> Vec<u8> {
+    preimage_of(
+        env,
+        [
+            serde_json::to_vec(&env.scope).expect("serialize scope"),
+            serde_json::to_vec(&env.timestamp).expect("serialize timestamp"),
+            serde_json::to_vec(&env.actor_stamp).expect("serialize actor_stamp"),
+            serde_json::to_vec(&env.payload).expect("serialize payload"),
+        ],
+    )
+}
+
+fn preimage_of(env: &SessionEventEnvelope, signed_json: [Vec<u8>; 4]) -> Vec<u8> {
     let mut out = Vec::with_capacity(192);
     // v3: LENGTH-PREFIX every variable-length JSON field so the concatenation is
     // injective — two distinct envelopes can't collide to the same preimage by
@@ -114,16 +153,32 @@ pub fn envelope_preimage(env: &SessionEventEnvelope) -> Vec<u8> {
     out.extend_from_slice(&env.sequence.to_le_bytes());
     out.extend_from_slice(&env.lamport.to_le_bytes());
     out.extend_from_slice(env.event_id.as_bytes());
-    for json in [
-        serde_json::to_vec(&env.scope).expect("serialize scope"),
-        serde_json::to_vec(&env.timestamp).expect("serialize timestamp"),
-        serde_json::to_vec(&env.actor_stamp).expect("serialize actor_stamp"),
-        serde_json::to_vec(&env.payload).expect("serialize payload"),
-    ] {
+    for json in signed_json {
         out.extend_from_slice(&(json.len() as u32).to_le_bytes());
         out.extend_from_slice(&json);
     }
     out
+}
+
+/// Whether every received signed field means exactly what its typed value
+/// re-serializes to (same JSON value; only key order, spacing or number
+/// spelling may differ). True for bytes that went through a `serde_json::Value`
+/// on the way in, false when they carry anything this build would drop.
+fn received_matches_typed(env: &SessionEventEnvelope) -> bool {
+    let Some(raw) = env.raw() else { return true };
+    fn same<T: Serialize>(raw: Option<&str>, typed: &T) -> bool {
+        match raw {
+            None => true,
+            Some(r) => match (serde_json::from_str::<serde_json::Value>(r), serde_json::to_value(typed)) {
+                (Ok(a), Ok(b)) => a == b,
+                _ => false,
+            },
+        }
+    }
+    same(raw.scope(), &env.scope)
+        && same(raw.timestamp(), &env.timestamp)
+        && same(raw.actor_stamp(), &env.actor_stamp)
+        && same(Some(raw.payload()), &env.payload)
 }
 
 /// Sign an envelope in place with the writing device's keypair, stamping the
@@ -135,9 +190,25 @@ pub fn sign_envelope(env: &mut SessionEventEnvelope, device_id: Uuid, keypair: &
 }
 
 /// Verify an envelope's signature against the writing device's public key.
+///
+/// The check runs over the received bytes. One fallback: when those bytes were
+/// re-encoded on the way in (through a `serde_json::Value`, which reorders
+/// keys) but mean exactly the typed value, the typed preimage is accepted.
+/// Bytes that carry anything the typed value drops never take the fallback,
+/// so nothing unsigned can ride along.
 pub fn verify_envelope(env: &SessionEventEnvelope, device_public_key: &[u8]) -> Result<(), CryptoError> {
     let signature = env.signature.as_ref().ok_or(CryptoError::Unsigned)?;
-    verify(device_public_key, &envelope_preimage(env), signature)
+    match verify(device_public_key, &envelope_preimage(env), signature) {
+        Ok(()) => Ok(()),
+        Err(e) if env.raw().is_none() => Err(e),
+        Err(e) => {
+            if received_matches_typed(env) {
+                verify(device_public_key, &typed_preimage(env), signature)
+            } else {
+                Err(e)
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -274,6 +345,59 @@ impl DeviceCertificate {
     }
 }
 
+/// An agent's own signing key, certified by the host device that holds it
+/// (Phase 0, A3). Agent-signed events carry `key_id` as their
+/// `signer_device_id`. Valid at a config position only while the host device
+/// is certified and the agent is bound to that host (or, unbound, owned by an
+/// account that certified the host); see `authz::RosterState::valid_agent_key`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentKeyCertificate {
+    pub agent_id: Uuid,
+    pub key_id: Uuid,
+    pub signing_public_key: Vec<u8>,
+    pub host_device_id: Uuid,
+    pub issued_at: Timestamp,
+    pub signature: Vec<u8>,
+}
+
+impl AgentKeyCertificate {
+    fn preimage(agent_id: Uuid, key_id: Uuid, pk: &[u8], host: Uuid, issued_at: Timestamp) -> Vec<u8> {
+        let mut out = Vec::with_capacity(128);
+        // Phase 0 domain tag (section 0.1).
+        out.extend_from_slice(b"ligus-agent-cert-v1\0");
+        out.extend_from_slice(agent_id.as_bytes());
+        out.extend_from_slice(key_id.as_bytes());
+        out.extend_from_slice(pk);
+        out.extend_from_slice(host.as_bytes());
+        let millis = (issued_at.inner().unix_timestamp_nanos() / 1_000_000) as i64;
+        out.extend_from_slice(&millis.to_le_bytes());
+        out
+    }
+
+    /// The `key_id` of an agent key: derived from the agent and the key, so a
+    /// host re-certifying the same key names it the same way.
+    pub fn key_id_for(agent_id: Uuid, signing_public_key: &[u8]) -> Uuid {
+        Uuid::new_v5(&agent_id, signing_public_key)
+    }
+
+    /// Certify `agent_key` for `agent_id`, signed by the host device's key.
+    pub fn issue(host: &SigningKeypair, host_device_id: Uuid, agent_id: Uuid, agent_key: &[u8], issued_at: Timestamp) -> Self {
+        let key_id = Self::key_id_for(agent_id, agent_key);
+        let signature = host.sign(&Self::preimage(agent_id, key_id, agent_key, host_device_id, issued_at)).to_vec();
+        Self { agent_id, key_id, signing_public_key: agent_key.to_vec(), host_device_id, issued_at, signature }
+    }
+
+    /// Verify against the host device's public key.
+    pub fn verify(&self, host_public_key: &[u8]) -> Result<(), CryptoError> {
+        if self.signing_public_key.len() != KEY_LEN || self.key_id != Self::key_id_for(self.agent_id, &self.signing_public_key) {
+            return Err(CryptoError::BadKey);
+        }
+        let pre = Self::preimage(self.agent_id, self.key_id, &self.signing_public_key, self.host_device_id, self.issued_at);
+        verify(host_public_key, &pre, &self.signature)
+    }
+}
+
 /// Public record of one device belonging to an account.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -376,8 +500,7 @@ mod tests {
         let mut spoofed = env.clone();
         spoofed.actor_stamp = Some(crate::identity::ActorStamp {
             actor: crate::identity::ActorIdentity::new("mallory", "Mallory", crate::identity::ActorKind::Human),
-            recorded_at: crate::time_util::Timestamp::epoch(),
-        });
+            recorded_at: crate::time_util::Timestamp::epoch(), cfg_frontier: None });
         assert!(verify_envelope(&spoofed, &kp.public_key_bytes()).is_err());
 
         // wrong key -> fails

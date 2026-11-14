@@ -40,6 +40,11 @@ pub enum QuarantineReason {
     /// second Admin's approval. Held (never accepted, never dropped) in every
     /// identity mode, so the approval binds in Relay mode too.
     PendingApproval,
+    /// Signed by a device no certificate vouches for yet, while its stamp
+    /// claims an account the workspace already knows. Held (retried), never
+    /// accepted: otherwise anyone with the workspace key could stamp events as
+    /// a known member from a fresh device id.
+    UncertifiedDevice,
 }
 
 /// Resolves device public keys + revocation status for verification.
@@ -166,6 +171,13 @@ pub struct WorkspaceRoster {
     /// contested binding. Events stamped as one of these are quarantined (fail
     /// closed), so a forged registration under a victim's account can't hijack it.
     disputed: HashSet<Uuid>,
+    /// Every device whose certificate verifies against its account's pinned
+    /// key, member or not (for the batch fixpoint's self-validating events).
+    chained: HashMap<Uuid, (Vec<u8>, HashSet<Uuid>)>,
+    /// Accounts an authorized removal took out (and no Admin re-added).
+    removed_accounts: HashSet<Uuid>,
+    /// Agent signing keys valid at the config head: key_id → (key, agent).
+    agent_keys: HashMap<Uuid, (Vec<u8>, Uuid)>,
 }
 
 impl WorkspaceRoster {
@@ -306,6 +318,51 @@ impl DeviceKeyResolver for WorkspaceRoster {
 /// directory / GitHub proof — Options A/B/C in the plan). A removed account's
 /// devices become revoked.
 pub fn build_roster(envelopes: &[SessionEventEnvelope]) -> WorkspaceRoster {
+    build_roster_pinned(envelopes, None)
+}
+
+/// A workspace's founder, pinned out of band by its invite (B2): the founder's
+/// account and the first 16 bytes of SHA-256 of its signing key (`fk`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FounderPin {
+    pub founder_account: Uuid,
+    pub fk: [u8; 16],
+}
+
+impl FounderPin {
+    /// Parse a pin from the invite's founder id and hex `fk`.
+    pub fn parse(founder: &str, fk_hex: &str) -> Option<Self> {
+        let founder_account = Uuid::parse_str(founder.trim()).ok()?;
+        let fk_hex = fk_hex.trim();
+        if fk_hex.len() != 32 {
+            return None;
+        }
+        let mut fk = [0u8; 16];
+        for (i, b) in fk.iter_mut().enumerate() {
+            *b = u8::from_str_radix(fk_hex.get(2 * i..2 * i + 2)?, 16).ok()?;
+        }
+        Some(Self { founder_account, fk })
+    }
+
+    /// The `fk` of an account signing key.
+    pub fn fingerprint(signing_public_key: &[u8]) -> [u8; 16] {
+        use sha2::{Digest, Sha256};
+        let d = Sha256::digest(signing_public_key);
+        let mut out = [0u8; 16];
+        out.copy_from_slice(&d[..16]);
+        out
+    }
+
+    /// Lowercase hex of [`FounderPin::fingerprint`], as the invite carries it.
+    pub fn fingerprint_hex(signing_public_key: &[u8]) -> String {
+        Self::fingerprint(signing_public_key).iter().map(|b| format!("{b:02x}")).collect()
+    }
+}
+
+/// One workspace's roster from that workspace's own trust events (P0.4). With
+/// a founder pin, a registration of the founder's account under a key that
+/// doesn't match the pin is rejected.
+pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&FounderPin>) -> WorkspaceRoster {
     let mut ordered: Vec<&SessionEventEnvelope> = envelopes.iter().collect();
     ordered.sort_by_key(|e| e.canonical_key());
 
@@ -331,6 +388,15 @@ pub fn build_roster(envelopes: &[SessionEventEnvelope]) -> WorkspaceRoster {
     for env in &ordered {
         match &env.payload {
             SessionEvent::AccountKeyRegistered { account_id, signing_public_key } => {
+                // With the founder pinned out of band we know which key is
+                // genuine: a registration of the founder's account under any
+                // other key is rejected (not merely contested, which would
+                // lock the real founder out too).
+                if let Some(pin) = pin.filter(|p| p.founder_account == *account_id) {
+                    if FounderPin::fingerprint(signing_public_key) != pin.fk {
+                        continue;
+                    }
+                }
                 match account_keys.get(account_id) {
                     // A different key than the one already pinned for this account:
                     // a contested binding. Mark disputed (fail closed in verdict_for)
@@ -384,7 +450,7 @@ pub fn build_roster(envelopes: &[SessionEventEnvelope]) -> WorkspaceRoster {
                     note_member(&mut members, &mut member_account, m);
                 }
             }
-            SessionEvent::MemberAdded { member } => {
+            SessionEvent::MemberAdded { member, .. } => {
                 note_member(&mut members, &mut member_account, member);
             }
             SessionEvent::MemberRemoved { member_id } => {
@@ -416,6 +482,7 @@ pub fn build_roster(envelopes: &[SessionEventEnvelope]) -> WorkspaceRoster {
     // projection stays a member, unless an authorized removal elsewhere took
     // the account out (removal wins, as the roster is shared by workspaces).
     let removed_by_ws = removed_on_config(&ordered);
+    let mut agent_keys: HashMap<Uuid, (Vec<u8>, Uuid)> = HashMap::new();
     let mut current_accounts: HashSet<Uuid> = HashSet::new();
     let mut sticky_removed: HashSet<Uuid> = HashSet::new();
     let config_ws = config_workspaces(&ordered);
@@ -433,7 +500,17 @@ pub fn build_roster(envelopes: &[SessionEventEnvelope]) -> WorkspaceRoster {
             .filter(|e| e.workspace_id == ws && e.session_id == hive_core::workspace_config_session_id(ws))
             .map(|e| (*e).clone())
             .collect();
-        let projected = hive_core::project(&cfg_envs);
+        let (projected, timeline) = hive_core::project_config(&cfg_envs, None, None);
+        // A3: agent keys valid at the config head (certified, still bound).
+        let head = timeline.current();
+        for (key_id, k) in &head.agent_keys {
+            if head.valid_agent_key(*key_id).is_some() {
+                agent_keys.insert(*key_id, (k.signing_public_key.clone(), k.agent_id));
+            } else {
+                // Rebound since (or its host revoked): its events are refused.
+                explicit_revoked.insert(*key_id);
+            }
+        }
         explicit_revoked.extend(projected.iter().flat_map(|c| c.guards.revoked_devices.iter().copied()));
         let current: Vec<hive_core::WorkspaceMember> = projected.map(|c| c.members).unwrap_or_default();
         current_accounts.extend(current.iter().filter_map(|m| m.actor.account_id));
@@ -451,7 +528,9 @@ pub fn build_roster(envelopes: &[SessionEventEnvelope]) -> WorkspaceRoster {
     }
 
     let mut roster = WorkspaceRoster::default();
+    roster.agent_keys = agent_keys;
     roster.disputed = disputed;
+    roster.removed_accounts = sticky_removed.clone();
     // Explicitly-revoked devices (a `DeviceRevoked` event) are never trusted, even
     // if they still hold a valid member cert — verdict_for checks is_revoked first.
     roster.revoked.extend(explicit_revoked);
@@ -469,6 +548,14 @@ pub fn build_roster(envelopes: &[SessionEventEnvelope]) -> WorkspaceRoster {
         let Some(account_key) = account_keys.get(&cert.account_id) else { continue };
         if cert.verify(account_key).is_err() {
             continue; // cert must chain to its account's key
+        }
+        if !roster.disputed.contains(&cert.account_id) {
+            roster
+                .chained
+                .entry(cert.device_id)
+                .or_insert_with(|| (cert.device_public_key.clone(), HashSet::new()))
+                .1
+                .insert(cert.account_id);
         }
         // Dearth mode: a device that wasn't trusted when the entrance closed
         // needs a second approval before its certificate counts.
@@ -502,6 +589,132 @@ pub fn build_roster(envelopes: &[SessionEventEnvelope]) -> WorkspaceRoster {
         }
     }
     roster
+}
+
+/// One roster per workspace, each folded from that workspace's events only
+/// (P0.4): removing an account in one workspace never touches its devices in
+/// another.
+pub fn build_rosters(
+    envelopes: &[SessionEventEnvelope],
+    pins: &HashMap<Uuid, FounderPin>,
+) -> HashMap<Uuid, WorkspaceRoster> {
+    let mut by_ws: HashMap<Uuid, Vec<SessionEventEnvelope>> = HashMap::new();
+    for e in envelopes {
+        by_ws.entry(e.workspace_id).or_default().push(e.clone());
+    }
+    by_ws.into_iter().map(|(ws, envs)| (ws, build_roster_pinned(&envs, pins.get(&ws)))).collect()
+}
+
+/// Kinds that feed the trust roster (the same set `EventStore::trust_envelopes`
+/// returns).
+fn is_trust_kind(e: &SessionEvent) -> bool {
+    matches!(
+        e,
+        SessionEvent::AccountKeyRegistered { .. }
+            | SessionEvent::AccountKeyRotated { .. }
+            | SessionEvent::DeviceCertificateAdded { .. }
+            | SessionEvent::DeviceRevoked { .. }
+            | SessionEvent::MemberAdded { .. }
+            | SessionEvent::MemberRemoved { .. }
+            | SessionEvent::SessionSnapshot { .. }
+            | SessionEvent::MemberRoleChanged { .. }
+            | SessionEvent::DearthModeChanged { .. }
+            | SessionEvent::JoinApproved { .. }
+            | SessionEvent::AgentKeyCertified { .. }
+            | SessionEvent::AgentUpserted { .. }
+            | SessionEvent::AgentRosterUpdated { .. }
+            | SessionEvent::AgentRemoved { .. }
+    )
+}
+
+/// The roster for judging an incoming batch of one workspace (P0.4): the
+/// stored trust events, plus the batch's own trust events **only once they
+/// verify**. Account keys and device certificates are self-validating (a cert
+/// is signed by its account key; registration is first-wins plus dispute), so
+/// they join at once; membership and other trust events join in canonical
+/// order once their verdict is `Valid` against the roster so far, repeated
+/// until nothing changes (at most once per event). An unverified
+/// `MemberAdded` in a batch therefore never certifies anyone.
+pub fn roster_with_batch(
+    mut stored: Vec<SessionEventEnvelope>,
+    batch: &[&SessionEventEnvelope],
+    pin: Option<&FounderPin>,
+) -> WorkspaceRoster {
+    let mut pending: Vec<&SessionEventEnvelope> = batch.iter().copied().filter(|e| is_trust_kind(&e.payload)).collect();
+    pending.sort_by_key(|e| e.canonical_key());
+    let (boot, mut pending): (Vec<_>, Vec<_>) = pending.into_iter().partition(|e| is_trust_bootstrap(e));
+    stored.extend(boot.into_iter().cloned());
+    let mut roster = build_roster_pinned(&stored, pin);
+    while !pending.is_empty() {
+        let (ok, rest): (Vec<_>, Vec<_>) = pending
+            .into_iter()
+            .partition(|e| verdict_for(&roster, e) == Verdict::Valid || self_validating(&roster, e, pin));
+        pending = rest;
+        if ok.is_empty() {
+            break;
+        }
+        stored.extend(ok.into_iter().cloned());
+        roster = build_roster_pinned(&stored, pin);
+    }
+    roster
+}
+
+/// Whether `env` is signed by a device whose certificate chains to `account`.
+fn signed_as(roster: &WorkspaceRoster, env: &SessionEventEnvelope, account: Uuid) -> bool {
+    let Some(device) = env.signer_device_id else { return false };
+    let Some((key, accounts)) = roster.chained.get(&device) else { return false };
+    // Not `is_revoked`: before its account is a member, the roster lists such
+    // a device as revoked (non-member certs are). A removed member's own
+    // re-enrollment is refused by the config projection, and their removal
+    // stays sticky in the roster.
+    accounts.contains(&account) && verify_envelope(env, key).is_ok()
+}
+
+/// Membership events that verify without already being a member: the config
+/// log's founding seed (the self-consistent seed, signed by a device of the
+/// founder's account; the pinned founder's, when pinned) and a self-enrollment
+/// below Admin signed by a device of the joining account.
+fn self_validating(roster: &WorkspaceRoster, env: &SessionEventEnvelope, pin: Option<&FounderPin>) -> bool {
+    let Some(account) = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) else { return false };
+    let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
+    match &env.payload {
+        SessionEvent::SessionSnapshot { session }
+            if env.session_id == hive_core::workspace_config_session_id(env.workspace_id) =>
+        {
+            let owners: Vec<_> =
+                session.members.iter().filter(|m| m.role == hive_core::WorkspaceRole::Owner).collect();
+            session.creator_actor_id == author
+                && owners.len() == 1
+                && owners[0].id == author
+                && pin.is_none_or(|p| p.founder_account == account)
+                && signed_as(roster, env, account)
+        }
+        SessionEvent::MemberAdded { member, .. } => {
+            member.id == author
+                && member.actor.account_id == Some(account)
+                && member.role.rank() < hive_core::WorkspaceRole::Admin.rank()
+                && signed_as(roster, env, account)
+        }
+        _ => false,
+    }
+}
+
+/// One roster per workspace in `batch`, each from that workspace's stored
+/// trust events, its founder pin, and the batch's verified trust events.
+pub fn rosters_for_batch(
+    store: &crate::event_store::EventStore,
+    batch: &[&SessionEventEnvelope],
+) -> crate::event_store::Result<HashMap<Uuid, WorkspaceRoster>> {
+    let mut by_ws: HashMap<Uuid, Vec<&SessionEventEnvelope>> = HashMap::new();
+    for e in batch {
+        by_ws.entry(e.workspace_id).or_default().push(e);
+    }
+    let mut out = HashMap::new();
+    for (ws, envs) in by_ws {
+        let pin = store.workspace_pin(ws)?;
+        out.insert(ws, roster_with_batch(store.trust_envelopes(ws)?, &envs, pin.as_ref()));
+    }
+    Ok(out)
 }
 
 /// The verification outcome for a single envelope, split so a caller can apply a
@@ -556,6 +769,16 @@ pub fn verdict_for(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verd
             Verdict::Unverifiable(QuarantineReason::Unsigned)
         };
     };
+    // A3: an agent's own key (certified by its host, still bound to it).
+    if let Some((agent_key, agent_id)) = roster.agent_keys.get(&device_id) {
+        if verify_envelope(env, agent_key).is_err() {
+            return Verdict::Quarantine(QuarantineReason::BadSignature);
+        }
+        let speaks_as_agent = env.actor_stamp.as_ref().is_some_and(|s| {
+            s.actor.kind == hive_core::ActorKind::Agent && s.actor.id == agent_id.to_string() && s.actor.account_id.is_none()
+        });
+        return if speaks_as_agent { Verdict::Valid } else { Verdict::Quarantine(QuarantineReason::Impersonation) };
+    }
     if roster.is_revoked(device_id) {
         return Verdict::Quarantine(QuarantineReason::RevokedDevice);
     }
@@ -565,6 +788,18 @@ pub fn verdict_for(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verd
         }
         if entrance_closed(roster, env) {
             return Verdict::Unverifiable(QuarantineReason::PendingApproval);
+        }
+        // A fresh device id stamping itself as a member the workspace knows:
+        // wait for that member's certificate of it, never accept on the stamp.
+        let claims_known = env
+            .actor_stamp
+            .as_ref()
+            .and_then(|s| s.actor.account_id)
+            .is_some_and(|a| {
+                roster.account_signing_key(a).is_some() || roster.is_disputed(a) || roster.removed_accounts.contains(&a)
+            });
+        if claims_known && !is_trust_bootstrap(env) {
+            return Verdict::Unverifiable(QuarantineReason::UncertifiedDevice);
         }
         return Verdict::Unverifiable(QuarantineReason::UnknownDevice);
     };
@@ -733,7 +968,7 @@ mod tests {
             joined_at: Timestamp::epoch(),
         };
         vec![
-            env(lamport_base, SessionEvent::MemberAdded { member }),
+            env(lamport_base, SessionEvent::MemberAdded { member, invite: None }),
             env(
                 lamport_base + 1,
                 SessionEvent::AccountKeyRegistered {
@@ -772,8 +1007,7 @@ mod tests {
                 key_agreement_public: None,
                 avatar_url: None,
             },
-            recorded_at: Timestamp::epoch(),
-        });
+            recorded_at: Timestamp::epoch(), cfg_frontier: None });
         hive_core::sign_envelope(&mut e, signer_device, signer_kp);
         e
     }
@@ -926,8 +1160,7 @@ mod tests {
                 key_agreement_public: None,
                 avatar_url: None,
             },
-            recorded_at: Timestamp::epoch(),
-        });
+            recorded_at: Timestamp::epoch(), cfg_frontier: None });
         assert!(forged.signer_device_id.is_none(), "PoC envelope must be unsigned");
 
         // The verdict must be Quarantine, and Relay-mode ingest must DROP it.
@@ -1018,8 +1251,8 @@ mod tests {
             joined_at: Timestamp::epoch(),
         };
         let events = vec![
-            env(1, SessionEvent::MemberAdded { member: mk_member(old_account) }),
-            env(2, SessionEvent::MemberAdded { member: mk_member(new_account) }),
+            env(1, SessionEvent::MemberAdded { invite: None, member: mk_member(old_account) }),
+            env(2, SessionEvent::MemberAdded { invite: None, member: mk_member(new_account) }),
             env(3, SessionEvent::AccountKeyRegistered {
                 account_id: old_account,
                 signing_public_key: p.account_kp.public_key_bytes().to_vec(),

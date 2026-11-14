@@ -4,6 +4,7 @@
 
 pub mod agent;
 pub mod authorization;
+pub mod authz;
 pub mod channel;
 pub mod chat;
 pub mod compat;
@@ -13,6 +14,7 @@ pub mod crypto;
 pub mod device_link;
 pub mod e2ee;
 pub mod endpoint;
+pub mod envelope_wire;
 pub mod events;
 pub mod flow;
 pub mod git_context;
@@ -56,7 +58,7 @@ pub use chat::{
     ChatMessage, ChatToolCall, ChatToolResult, MessageReaction, MessageRole, TranscriptEventKind,
 };
 pub use crypto::{
-    sign_envelope, verify, verify_envelope, CryptoError, DeviceCertificate, DeviceIdentity,
+    sign_envelope, verify, verify_envelope, AgentKeyCertificate, CryptoError, DeviceCertificate, DeviceIdentity,
     HumanAccount, Platform, SigningKeypair,
 };
 pub use e2ee::{
@@ -64,12 +66,12 @@ pub use e2ee::{
     seal_symmetric, KeyAgreementKeypair, SealedBlob, SealedEnvelope, WorkspaceKeyRotation,
 };
 pub use events::{
-    project, project_with_founder, project_with_hoist, project_with_options, EventScope, MemberRoleChange, SessionEvent,
+    fold_decisions, project, project_authorized, project_config, Verdict, project_with_founder, project_with_options, WorkspaceAuthz, EventScope, MemberRoleChange, SessionEvent,
     SessionEventEnvelope,
 };
 pub use git_context::{GitContextReader, GitFileChange, GitFileDiff, GitSnapshot};
 pub use identity::{
-    ActorIdentity, ActorKind, ActorStamp, HiveUserProfile, WorkspaceMember, WorkspaceRole,
+    ActorIdentity, ActorKind, ActorStamp, CfgFrontier, HiveUserProfile, WorkspaceMember, WorkspaceRole,
 };
 pub use policy::{PermissionPolicy, PermissionScope, Workspace};
 pub use proposal_sets::{ProposalSet, ScoutAssessment, SetPhase};

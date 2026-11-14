@@ -375,8 +375,7 @@ mod tests {
             actor_id: "a".into(),
             role: hive_core::WorkspaceRole::Contributor,
             approved: true,
-            created_at: hive_core::Timestamp::now(),
-        });
+            created_at: hive_core::Timestamp::now(), diff_digest: None });
         assert_eq!(
             d.diff(std::slice::from_ref(&s)),
             vec![Change::ProposalUpdated { chat: s.id, proposal: pid }, Change::ChatUpdated { chat: s.id }]

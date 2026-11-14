@@ -16,7 +16,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::event_store::EventStore;
-use crate::envelope_verifier::{build_roster, verdict_for};
+use crate::envelope_verifier::verdict_for;
 use crate::identity_verifier::{gate_ingest, shared_cache, IdentityMode, IngestAction, SharedIdentityCache};
 use crate::relay_client::{RelayClient, RelayError, ENVELOPE_PAGE_LIMIT};
 
@@ -104,6 +104,7 @@ pub struct SyncEngine {
     /// default) trusts the roster's account keys as-is — **current behavior**.
     /// `GithubSigningKeys` (Option C) additionally requires each account key to
     /// be verified against GitHub `ssh_signing_keys` before its events project.
+    #[cfg(test)]
     identity_mode: IdentityMode,
     /// GitHub-identity verdict cache (Option C). Populated out-of-band by an async
     /// task that hits GitHub; read synchronously on ingest. Unused in `Relay` mode.
@@ -128,6 +129,7 @@ enum Decoded {
 impl SyncEngine {
     pub fn new(relay: RelayClient, workspace: impl Into<String>) -> Self {
         let workspace = workspace.into();
+        crate::identity_verifier::warn_if_identity_mode_set();
         let scope = HashSet::from([hive_core::room_workspace_id(&workspace)]);
         Self {
             relay,
@@ -145,9 +147,18 @@ impl SyncEngine {
             loaded: false,
             pending: Vec::new(),
             keyring: BTreeMap::new(),
-            identity_mode: IdentityMode::from_env(),
+            #[cfg(test)]
+            identity_mode: IdentityMode::Relay,
             identity_cache: shared_cache(),
         }
+    }
+
+    /// The ingest identity mode: always `Relay` outside tests (P0.8).
+    fn identity_mode(&self) -> IdentityMode {
+        #[cfg(test)]
+        return self.identity_mode;
+        #[cfg(not(test))]
+        IdentityMode::Relay
     }
 
     /// Scope this room to `workspace_id` instead of the id derived from the room
@@ -177,8 +188,9 @@ impl SyncEngine {
         e
     }
 
-    /// Override the identity-verification mode (default: [`IdentityMode::from_env`]).
-    /// Mainly for tests and explicit opt-in wiring.
+    /// Override the identity-verification mode (tests only; production is
+    /// always [`IdentityMode::Relay`], P0.8).
+    #[cfg(test)]
     pub fn with_identity_mode(mut self, mode: IdentityMode) -> Self {
         self.identity_mode = mode;
         self
@@ -568,9 +580,11 @@ impl SyncEngine {
         // Only a *provably-bad* identity (GitHub fetched, key not listed) is
         // quarantined. `Relay` mode (Option A, default) never holds on identity —
         // it is byte-for-byte the pre-existing policy.
-        let mut roster_src = store.roster_envelopes()?;
-        roster_src.extend(decoded.iter().map(|(_, e)| e.clone()));
-        let roster = build_roster(&roster_src);
+        // P0.4: one roster per workspace, from its own stored trust events plus
+        // this batch's trust events only once they verify (batch fixpoint).
+        let batch: Vec<&SessionEventEnvelope> = decoded.iter().map(|(_, e)| e).collect();
+        let rosters = crate::envelope_verifier::rosters_for_batch(store, &batch)?;
+        let empty = crate::envelope_verifier::WorkspaceRoster::default();
         // Recover from a poisoned lock instead of panicking the sync task: the
         // identity cache holds only best-effort verification results (rebuilt/
         // re-fetched), so a panic in a prior holder shouldn't crash every future
@@ -585,7 +599,8 @@ impl SyncEngine {
         // accept per signing device per batch.
         let mut accepted_from: std::collections::HashSet<(Uuid, Option<Uuid>)> = std::collections::HashSet::new();
         for (seq, env) in &decoded {
-            let base = verdict_for(&roster, env);
+            let roster = rosters.get(&env.workspace_id).unwrap_or(&empty);
+            let base = verdict_for(roster, env);
             // The account this event is authored as — `verdict_for` has already
             // confirmed the signing device is cert-verified for it (else it's
             // quarantined as impersonation), so it's the right account to run the
@@ -597,10 +612,10 @@ impl SyncEngine {
                 .and_then(|s| s.actor.account_id)
                 .or_else(|| env.signer_device_id.and_then(|d| roster.account_of(d)));
             let account_key = signer_account.and_then(|a| roster.account_signing_key(a));
-            match gate_ingest(self.identity_mode, base, signer_account, account_key, &identity) {
+            match gate_ingest(self.identity_mode(), base, signer_account, account_key, &identity) {
                 IngestAction::Quarantine(reason) => {
                     tracing::warn!(?reason, event_id = %env.event_id, "quarantined a fetched event");
-                    let _ = store.record_signal(env.workspace_id, None, &sync_decision(&roster, env, false, &format!("{reason:?}")));
+                    let _ = store.record_signal(env.workspace_id, None, &sync_decision(roster, env, false, &format!("{reason:?}")));
                     // Provably bad and stable — advance past it (re-fetching won't help).
                     resolved.push(*seq);
                 }
@@ -614,7 +629,7 @@ impl SyncEngine {
                 }
                 IngestAction::Accept => {
                     if accepted_from.insert((env.workspace_id, env.signer_device_id)) {
-                        let _ = store.record_signal(env.workspace_id, None, &sync_decision(&roster, env, true, "accepted"));
+                        let _ = store.record_signal(env.workspace_id, None, &sync_decision(roster, env, true, "accepted"));
                     }
                     self.seen.insert(env.event_id);
                     // This event is now on the relay (we received it from there): queue
@@ -1062,6 +1077,37 @@ mod tests {
         assert_eq!(eng.cursor(), 2, "skipped for good, not retried");
     }
 
+    /// A 2.0 build receives a signed envelope a newer "2.1 encoder" made (an
+    /// extra top-level field, a new event kind with nested data): it verifies,
+    /// is stored byte for byte, and goes back out byte for byte on re-push.
+    #[test]
+    fn a_newer_builds_envelope_is_stored_and_re_pushed_byte_identically() {
+        let kp = hive_core::SigningKeypair::from_seed(&[11u8; 32]).unwrap();
+        let (sid, wid) = (Uuid::new_v4(), Uuid::new_v4());
+        let base = SessionEventEnvelope::new(sid, wid, 1, SessionEvent::MessageRemoved { message_id: Uuid::nil() });
+        let mut v = serde_json::to_value(&base).unwrap();
+        v["payload"] = serde_json::json!({"kind": "zz21Kind", "nested": {"b": [1, 2.5, "✓"], "a": null}});
+        v["zz21Field"] = serde_json::json!({"z": 1, "y": "two"});
+        let mut env: SessionEventEnvelope = serde_json::from_str(&v.to_string()).unwrap();
+        hive_core::sign_envelope(&mut env, Uuid::from_u128(3), &kp);
+        // The 2.1 encoder's exact bytes, with its own spacing.
+        let wire = serde_json::to_string(&env).unwrap().replacen("\"zz21Field\":", "\"zz21Field\" : ", 1);
+
+        let key = hive_core::derive_workspace_key("newer build");
+        let sealed = hive_core::seal_symmetric(&key, 0, wire.as_bytes()).unwrap();
+        let mut store = EventStore::open_in_memory().unwrap();
+        let mut eng = SyncEngine::unscoped(RelayClient::new("http://127.0.0.1:0"), Uuid::new_v4().to_string()).with_key(key);
+        assert_eq!(eng.apply_fetched(&mut store, &[(1, serde_json::to_value(&sealed).unwrap())]).unwrap(), 1);
+
+        let stored = store.list(sid).unwrap().remove(0);
+        assert_eq!(stored.payload, SessionEvent::Unknown, "this build doesn't know the kind");
+        assert!(hive_core::verify_envelope(&stored, &kp.public_key_bytes()).is_ok());
+        assert_eq!(serde_json::to_string(&stored).unwrap(), wire, "stored byte for byte");
+        // Re-push: what the relay gets opens to the very same bytes.
+        let out: hive_core::SealedEnvelope = serde_json::from_value(eng.encode(&stored).unwrap()).unwrap();
+        assert_eq!(hive_core::open_symmetric(&key, &out).unwrap(), wire.as_bytes());
+    }
+
     #[test]
     fn malformed_body_is_skipped_and_cursor_advances_past_it() {
         // A garbage `{"ciphertext":1}` (hostile or corrupt) sitting between two
@@ -1157,6 +1203,30 @@ mod tests {
         assert_eq!(eng.cursor(), 2);
     }
 
+    /// The config log's founding seed naming `member` as its sole Owner,
+    /// signed and stamped by the member's device (how a workspace begins).
+    fn founding_seed(
+        member: &hive_core::WorkspaceMember,
+        device_id: Uuid,
+        device: &hive_core::crypto::SigningKeypair,
+        lamport: i64,
+    ) -> SessionEventEnvelope {
+        let ws = Uuid::nil();
+        let mut seed = hive_core::ChatSession::new("", ws, "");
+        seed.id = hive_core::workspace_config_session_id(ws);
+        seed.creator_actor_id = member.id.clone();
+        seed.members = vec![member.clone()];
+        let mut e = SessionEventEnvelope::new(seed.id, ws, lamport, SessionEvent::SessionSnapshot { session: Box::new(seed) });
+        e.lamport = lamport as u64;
+        e.actor_stamp = Some(hive_core::ActorStamp {
+            actor: member.actor.clone(),
+            recorded_at: hive_core::Timestamp::epoch(),
+            cfg_frontier: None,
+        });
+        hive_core::sign_envelope(&mut e, device_id, device);
+        e
+    }
+
     #[test]
     fn apply_fetched_rejects_provably_bad_keeps_good() {
         use hive_core::crypto::{DeviceCertificate, SigningKeypair};
@@ -1211,8 +1281,7 @@ mod tests {
                     key_agreement_public: None,
                     avatar_url: None,
                 },
-                recorded_at: Timestamp::epoch(),
-            });
+                recorded_at: Timestamp::epoch(), cfg_frontier: None });
             hive_core::sign_envelope(&mut e, device_id, &device);
             e
         };
@@ -1226,7 +1295,7 @@ mod tests {
             SessionEventEnvelope::new(Uuid::nil(), Uuid::nil(), lamport, payload)
         };
         let all: Vec<SessionEventEnvelope> = vec![
-            plain(1, SessionEvent::MemberAdded { member }),
+            founding_seed(&member, device_id, &device, 4),
             plain(2, SessionEvent::AccountKeyRegistered {
                 account_id,
                 signing_public_key: account.public_key_bytes().to_vec(),
@@ -1522,7 +1591,7 @@ mod tests {
             e
         };
         let trust = vec![
-            signed(1, SessionEvent::MemberAdded { member }),
+            founding_seed(&member, device_id, &device, 4),
             signed(
                 2,
                 SessionEvent::AccountKeyRegistered {
@@ -1561,8 +1630,7 @@ mod tests {
                 key_agreement_public: None,
                 avatar_url: None,
             },
-            recorded_at: Timestamp::epoch(),
-        });
+            recorded_at: Timestamp::epoch(), cfg_frontier: None });
         hive_core::sign_envelope(&mut e, p.device_id, &p.device_kp);
         e
     }

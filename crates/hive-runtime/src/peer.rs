@@ -19,7 +19,7 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::envelope_verifier::{build_roster, verdict_for};
+use crate::envelope_verifier::verdict_for;
 use crate::event_store::EventStore;
 
 #[derive(Debug, Error)]
@@ -170,6 +170,7 @@ pub struct PeerSync {
     workspaces: HashSet<Uuid>,
     /// Same identity policy as the relay path, so P2P isn't a weaker door: under
     /// Option C a not-yet-GitHub-verified event is held, not silently accepted.
+    #[cfg(test)]
     identity_mode: IdentityMode,
     identity_cache: IdentityCache,
 }
@@ -180,7 +181,8 @@ impl PeerSync {
         Self {
             seen: HashSet::new(),
             workspaces: workspaces.into_iter().collect(),
-            identity_mode: IdentityMode::from_env(),
+            #[cfg(test)]
+            identity_mode: IdentityMode::Relay,
             identity_cache: IdentityCache::new(),
         }
     }
@@ -191,7 +193,8 @@ impl PeerSync {
         self.workspaces = workspaces.into_iter().collect();
     }
 
-    /// Override the identity-verification mode (mirrors `SyncEngine`).
+    /// Override the identity-verification mode (tests only, mirrors `SyncEngine`).
+    #[cfg(test)]
     pub fn with_identity_mode(mut self, mode: IdentityMode) -> Self {
         self.identity_mode = mode;
         self
@@ -246,11 +249,12 @@ impl PeerSync {
         }
         self.seen.insert(env.event_id);
 
-        let mut roster_src = store
-            .roster_envelopes()
-            .map_err(|e| PeerError::Store(e.to_string()))?;
-        roster_src.push(env.clone());
-        let roster = build_roster(&roster_src);
+        // P0.4: the workspace's own roster; this envelope's trust content
+        // counts only once it verifies (see rosters_for_batch).
+        let roster = crate::envelope_verifier::rosters_for_batch(store, &[&env])
+            .map_err(|e| PeerError::Store(e.to_string()))?
+            .remove(&env.workspace_id)
+            .unwrap_or_default();
         // Run the SAME gate as the relay path (not just verdict_for): so the
         // Option-C GitHub-identity check applies on P2P too, instead of silently
         // accepting anything not provably-bad. Mirrors sync_engine::apply_fetched.
@@ -262,7 +266,13 @@ impl PeerSync {
             .or_else(|| env.signer_device_id.and_then(|d| roster.account_of(d)));
         let account_key = signer_account.and_then(|a| roster.account_signing_key(a));
         match gate_ingest(
-            self.identity_mode,
+            {
+                #[cfg(test)]
+                let mode = self.identity_mode;
+                #[cfg(not(test))]
+                let mode = IdentityMode::Relay;
+                mode
+            },
             base,
             signer_account,
             account_key,
@@ -432,7 +442,7 @@ mod tests {
         };
         let mut store = EventStore::open_in_memory().unwrap();
         for e in [
-            plain(1, SessionEvent::MemberAdded { member }),
+            plain(1, SessionEvent::MemberAdded { member, invite: None }),
             plain(
                 2,
                 SessionEvent::AccountKeyRegistered {
@@ -464,8 +474,7 @@ mod tests {
                     key_agreement_public: None,
                     avatar_url: None,
                 },
-                recorded_at: Timestamp::epoch(),
-            });
+                recorded_at: Timestamp::epoch(), cfg_frontier: None });
             hive_core::sign_envelope(&mut e, device_id, &device);
             e
         };

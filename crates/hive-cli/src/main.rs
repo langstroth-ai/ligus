@@ -117,7 +117,7 @@ fn config() -> Config {
 
 /// Decode a `hivews1:` workspace invite → (relay_url, room, key). Mirrors the
 /// app's encoder (base64url(json) of the connection; snake_case fields).
-fn decode_hivews_invite(invite: &str) -> Result<(String, String, Option<String>)> {
+fn decode_hivews_invite(invite: &str) -> Result<(String, String, Option<String>, Option<Uuid>)> {
     use base64::Engine;
     #[derive(serde::Deserialize)]
     struct Conn {
@@ -127,6 +127,9 @@ fn decode_hivews_invite(invite: &str) -> Result<(String, String, Option<String>)
         room: String,
         #[serde(default)]
         key: Option<String>,
+        /// The single-use invite an Admin issued with this code.
+        #[serde(default)]
+        inv: Option<String>,
     }
     let body = invite
         .trim()
@@ -139,14 +142,14 @@ fn decode_hivews_invite(invite: &str) -> Result<(String, String, Option<String>)
     if c.room.trim().is_empty() {
         bail!("invite is missing a room");
     }
-    Ok((c.relay_url, c.room, c.key))
+    Ok((c.relay_url, c.room, c.key, c.inv.and_then(|i| Uuid::parse_str(i.trim()).ok())))
 }
 
 /// `ligus enroll <hivews1:…> [--token <access-token>]` — one-command bootstrap:
 /// decode the invite, persist the connection to config.toml, and (with --token)
 /// wire the relay identity. After this a headless box just runs `ligus worker`.
 fn cmd_enroll(cfg: &Config, invite: &str, token: Option<String>) -> Result<()> {
-    let (relay_url, room, key) = decode_hivews_invite(invite)?;
+    let (relay_url, room, key, inv) = decode_hivews_invite(invite)?;
     std::fs::create_dir_all(&cfg.data_dir)?;
     let mut f = load_file_config(&cfg.data_dir);
     f.relay_url = Some(relay_url.clone());
@@ -157,6 +160,11 @@ fn cmd_enroll(cfg: &Config, invite: &str, token: Option<String>) -> Result<()> {
     }
     // It holds the workspace E2EE key and the relay token: owner-only.
     serve::tunnel::write_private(&config_path(&cfg.data_dir), toml::to_string_pretty(&f)?.as_bytes())?;
+    // Keep the invite this box redeems when it enrolls itself (device-local).
+    if let Some(inv) = inv {
+        let store = EventStore::open(cfg.data_dir.join("hive.db"))?;
+        store.set_join_invite(uuid_of_room(&room), inv)?;
+    }
     println!("Enrolled workspace '{room}' at {relay_url}.");
     println!("Saved to {}.", config_path(&cfg.data_dir).display());
     if f.token.is_none() {
