@@ -51,6 +51,7 @@ pub mod retrieval;
 pub mod review;
 pub mod safe_fs;
 pub mod sandbox;
+pub mod spend;
 pub mod secret_redact;
 pub mod secret_store;
 pub mod sse;

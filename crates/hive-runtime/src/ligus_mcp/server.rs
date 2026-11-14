@@ -33,8 +33,8 @@ pub struct Budgets {
     pub max_handoffs: u32,
     pub max_asks: u32,
     pub max_read_messages: u32,
-    /// Enforced only where usage is reported (ACP `usage_update`, API
-    /// runtimes).
+    /// Charged from ACP `usage_update` reports and from the API runtimes'
+    /// reported token usage ([`crate::spend`]); reaching it cancels the turn.
     pub max_spend_usd: Option<f64>,
 }
 
@@ -122,7 +122,7 @@ pub(crate) struct TurnState {
     pub(crate) effects: Mutex<McpEffectsLog>,
     pub(crate) paused: Arc<AtomicUsize>,
     revoked: AtomicBool,
-    spend: Mutex<f64>,
+    spend: Arc<crate::agent_turn::SpendMeter>,
     report: Mutex<Option<SelfReport>>,
 }
 
@@ -206,13 +206,14 @@ impl LigusMcp {
         let expires = cred::now_unix() + spec.ttl.as_secs().max(1);
         let binding = TurnBinding { turn_id: spec.message_id, chat_id: spec.chat_id, agent_id: agent_cred_id(spec.agent_id), expires_unix: expires };
         let credential = cred::mint(&self.key, &binding);
+        let spend = crate::agent_turn::SpendMeter::new(spec.budgets.max_spend_usd);
         let state = Arc::new(TurnState {
             spec,
             counters: Mutex::new(Counters::default()),
             effects: Mutex::new(McpEffectsLog::default()),
             paused: Arc::new(AtomicUsize::new(0)),
             revoked: AtomicBool::new(false),
-            spend: Mutex::new(0.0),
+            spend,
             report: Mutex::new(None),
         });
         self.turns.lock().unwrap_or_else(|e| e.into_inner()).insert(binding.turn_id, state.clone());
@@ -329,10 +330,8 @@ impl LigusMcp {
         if c.total >= b.max_tool_calls {
             return Err(exhausted("maxToolCalls"));
         }
-        if let Some(max) = b.max_spend_usd {
-            if *st.spend.lock().unwrap_or_else(|e| e.into_inner()) >= max {
-                return Err(exhausted("maxSpendUsd"));
-            }
+        if st.spend.exhausted() {
+            return Err(exhausted("maxSpendUsd"));
         }
         let (counter, max, name): (Option<&mut u32>, u32, &str) = match tool {
             "ligus_propose_diff" | "ligus_propose_decision" | "ligus_propose_command" | "ligus_propose_workflow" | "ligus_open_alternatives" => {
@@ -898,11 +897,10 @@ impl TurnHandle {
     /// The agent turn scope for adapters: the MCP attach (when a socket is
     /// serving), the pause counter, and the spend sink.
     pub fn scope(&self) -> crate::agent_turn::AgentTurnScope {
-        let st = self.state.clone();
         crate::agent_turn::AgentTurnScope {
             mcp: self.socket.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|s| s.attach(&self.cred)),
             paused: self.state.paused.clone(),
-            spend: Some(Arc::new(move |usd| *st.spend.lock().unwrap_or_else(|e| e.into_inner()) += usd)),
+            spend: Some(self.state.spend.clone()),
             ..Default::default()
         }
     }

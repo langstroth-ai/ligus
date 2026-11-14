@@ -483,6 +483,8 @@ struct Handler<'a, D: FnMut(String), A: FnMut(StreamActivity)> {
     writes_allowed: bool,
     egress_open: bool,
     last_cost: f64,
+    /// Why the host ended the turn itself (the spend budget).
+    stopped: Option<String>,
     session_id: Option<String>,
     agent_label: &'a str,
 }
@@ -504,7 +506,9 @@ impl<D: FnMut(String), A: FnMut(StreamActivity)> Handler<'_, D, A> {
         (self.on_delta)(text.to_string());
     }
 
-    fn update(&mut self, u: &Value) {
+    /// One `session/update`. `Err` ends the turn (the spend budget is used
+    /// up, or a usage report can't be counted against it).
+    fn update(&mut self, u: &Value) -> Result<(), String> {
         let kind = u.get("sessionUpdate").and_then(Value::as_str).unwrap_or("");
         let content_text = |v: &Value| -> String {
             match v.get("content") {
@@ -546,23 +550,24 @@ impl<D: FnMut(String), A: FnMut(StreamActivity)> Handler<'_, D, A> {
                 input_json: u.get("entries").map(Value::to_string).unwrap_or_else(|| "[]".into()),
             }),
             "usage_update" => {
-                let cost = u.get("cost");
-                let usd = cost
-                    .filter(|c| c.get("currency").and_then(Value::as_str).is_none_or(|c| c.eq_ignore_ascii_case("usd")))
-                    .and_then(|c| c.get("amount").and_then(Value::as_f64));
-                if let Some(total) = usd {
-                    // Cumulative for the session: report the delta.
-                    let delta = (total - self.last_cost).max(0.0);
-                    self.last_cost = total.max(self.last_cost);
-                    if delta > 0.0 {
-                        if let Some(spend) = self.scope.as_ref().and_then(|s| s.spend.clone()) {
-                            spend(delta);
-                        }
+                let Some(meter) = self.scope.as_ref().and_then(|s| s.spend.clone()) else { return Ok(()) };
+                let Some(cost) = u.get("cost").filter(|c| !c.is_null()) else { return Ok(()) };
+                match usage_delta(cost, self.last_cost) {
+                    Ok((total, delta)) => {
+                        self.last_cost = total;
+                        meter.charge(delta).map_err(|e| e.to_string())?;
                     }
+                    // Without a budget a bad report is only noted; with one,
+                    // spend it can't count can't be held to the budget.
+                    Err(why) if meter.max().is_some() => {
+                        return Err(crate::agent_turn::SpendError::Invalid(format!("{} {why}", self.agent_label)).to_string());
+                    }
+                    Err(why) => crate::agent_turn::note(format!("acp_usage_ignored:{why}")),
                 }
             }
             _ => {}
         }
+        Ok(())
     }
 
     /// Answer an agent → client request. `Ok(result)` or `Err((code, msg))`.
@@ -617,6 +622,25 @@ impl<D: FnMut(String), A: FnMut(StreamActivity)> Handler<'_, D, A> {
     }
 }
 
+/// Check an ACP `usage_update` `cost` (`{amount, currency}`, cumulative for
+/// the session) against the last total: `Ok((total, delta))`, or why it
+/// can't be counted. The currency must be named and be USD; the amount
+/// must be a finite, non-negative number that never goes down.
+pub fn usage_delta(cost: &Value, last_total: f64) -> Result<(f64, f64), String> {
+    let currency = cost.get("currency").and_then(Value::as_str).map(str::trim).unwrap_or("");
+    if !currency.eq_ignore_ascii_case("usd") {
+        return Err(if currency.is_empty() { "reported a cost without a currency".into() } else { format!("reported a cost in {currency:.8}, not USD") });
+    }
+    let amount = cost.get("amount").and_then(Value::as_f64).ok_or_else(|| "reported a cost without an amount".to_string())?;
+    if !amount.is_finite() || amount < 0.0 {
+        return Err("reported a negative cost".into());
+    }
+    if amount < last_total {
+        return Err("reported a cost lower than it had already reported".into());
+    }
+    Ok((amount, amount - last_total))
+}
+
 /// How long a permission escalation waits for a person.
 pub fn ask_timeout() -> std::time::Duration {
     std::time::Duration::from_secs(
@@ -666,7 +690,10 @@ async fn call<D: FnMut(String), A: FnMut(StreamActivity)>(
             (Some(m), None) => {
                 if m == "session/update" {
                     if let Some(u) = msg.get("params").and_then(|p| p.get("update")) {
-                        h.update(u);
+                        if let Err(e) = h.update(u) {
+                            h.stopped = Some(e.clone());
+                            return Err(e);
+                        }
                     }
                 }
             }
@@ -747,6 +774,7 @@ pub async fn stream_reply(
         writes_allowed: gate_writes,
         egress_open,
         last_cost: 0.0,
+        stopped: None,
         session_id: None,
         agent_label: label,
     };
@@ -840,6 +868,10 @@ pub async fn stream_reply(
             let cancel = json!({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": session_id}});
             let _ = tokio::time::timeout(std::time::Duration::from_secs(2), conn.send(&cancel)).await;
             let _ = child.start_kill();
+            if let Some(why) = h.stopped.take() {
+                // Ligus ended it (the spend budget): say so as is.
+                return Err(AcpFailure::Turn(ProviderError::Subprocess(format!("{label}: {why}"))));
+            }
             let err = stderr_of(stderr_task).await;
             return Err(turn_err(format!("{e} {}", err.trim()).trim().to_string()));
         }
@@ -888,6 +920,17 @@ mod tests {
         // Unknown kinds go to a person.
         assert_eq!(judge_permission("switch_mode", "bypassPermissions", true, true), Escalate);
         assert_eq!(judge_permission("other", "default", true, true), Escalate);
+    }
+
+    #[test]
+    fn usage_reports_must_be_usd_and_never_go_down() {
+        assert_eq!(usage_delta(&json!({"amount": 0.5, "currency": "USD"}), 0.25), Ok((0.5, 0.25)));
+        assert_eq!(usage_delta(&json!({"amount": 0.5, "currency": "usd"}), 0.0), Ok((0.5, 0.5)));
+        assert!(usage_delta(&json!({"amount": 0.5, "currency": "EUR"}), 0.0).unwrap_err().contains("EUR"));
+        assert!(usage_delta(&json!({"amount": 0.5}), 0.0).is_err(), "no currency");
+        assert!(usage_delta(&json!({"amount": -1.0, "currency": "USD"}), 0.0).is_err(), "negative");
+        assert!(usage_delta(&json!({"amount": 0.1, "currency": "USD"}), 0.25).is_err(), "decreasing");
+        assert!(usage_delta(&json!({"currency": "USD"}), 0.0).is_err(), "no amount");
     }
 
     #[test]

@@ -102,11 +102,38 @@ Per turn, and set per device:
 | Hand-offs | 2 | `LIGUS_MCP_MAX_HANDOFFS` |
 | Questions | 3 | `LIGUS_MCP_MAX_ASKS` |
 | Messages and proposals read | 500 | `LIGUS_MCP_MAX_READ_MESSAGES` |
-| Spend (USD) | unset | `LIGUS_MCP_MAX_SPEND_USD`, counted where the runtime reports cost (ACP `usage_update`) |
+| Spend (USD) | unset | `LIGUS_MCP_MAX_SPEND_USD`; see [Spend budget](#spend) |
 
 When a budget runs out, the call returns
 `{"error":"budget_exhausted","budget":"…"}` along with the note that tells
 the model to finish its answer.
+
+### Spend budget {#spend}
+
+`LIGUS_MCP_MAX_SPEND_USD` caps what one turn may cost. When the turn
+reaches it, Ligus **ends the turn** (an ACP agent gets `session/cancel` and
+is stopped; an API request's stream is closed) with an error that says
+so, and any further Ligus tool call is refused. The budget holds on turns
+without the Ligus tools too.
+
+What is counted:
+
+- **ACP agents:** the cost in their `usage_update` reports. A report must
+  name its currency as USD and never go down; a negative, decreasing,
+  non-USD or currency-less report ends a budgeted turn (without a budget it
+  is ignored). An agent that reports nothing, or reports less than it
+  spent, isn't held by the budget: this counts what the agent says.
+- **Anthropic, OpenAI, OpenRouter and Azure runtimes:** the token usage
+  the API reports, priced by Ligus. Anthropic models use the list prices
+  (cache reads at 0.1x, cache writes at 1.25x input); a model Ligus doesn't
+  know, including every OpenAI model, is priced at the highest rate
+  ($15/$75 per million tokens), so it can only end a turn early. Set
+  `LIGUS_MODEL_PRICES` (`prefix=in/out,…`, USD per million tokens, for
+  example `gpt-4o=2.5/10`) on the device to price yours.
+- Legacy CLI adapters (`claude -p`, `codex exec`, …), aider, pi, Hermes,
+  Ollama and custom endpoints report no cost and aren't counted.
+
+The budget is per turn. A hand-off starts a new turn with its own budget.
 
 ## Audit {#audit}
 

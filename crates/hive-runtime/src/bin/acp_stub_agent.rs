@@ -13,6 +13,8 @@
 //! - `broken`: exits without answering `initialize` (an old CLI without ACP).
 //! - `slow`: never answers the prompt (idle timeout).
 //! - `flood`: answers the prompt after writing one 100 MiB line.
+//! - `spend`: reports a cost of $0.25, then $0.50, then answers.
+//! - `eur`: reports a cost in EUR, then answers.
 //!
 //! Std-only; exits when stdin closes.
 
@@ -98,6 +100,14 @@ fn main() {
                 }
                 let sid = params.get("sessionId").cloned().unwrap_or(Value::Null);
                 let update = |u: Value| json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":sid,"update":u}});
+                if mode == "spend" || mode == "eur" {
+                    let cur = if mode == "eur" { "EUR" } else { "USD" };
+                    send(update(json!({"sessionUpdate":"usage_update","used":10,"size":100,"cost":{"amount":0.25,"currency":cur}})));
+                    send(update(json!({"sessionUpdate":"usage_update","used":20,"size":100,"cost":{"amount":0.50,"currency":cur}})));
+                    send(update(json!({"sessionUpdate":"agent_message_chunk","messageId":"m1","content":{"type":"text","text":"kept going"}})));
+                    send(json!({"jsonrpc":"2.0","id":id,"result":{"stopReason":"end_turn"}}));
+                    continue;
+                }
                 send(update(json!({"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"thinking"}})));
                 send(update(json!({"sessionUpdate":"tool_call","toolCallId":"t1","title":"Edit notes.txt","kind":"edit","status":"pending","rawInput":{"path":"notes.txt"}})));
                 // Ask permission for the edit.

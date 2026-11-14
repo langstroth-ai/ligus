@@ -306,7 +306,7 @@ async fn budgets_enforced() {
     let r = turn.call("ligus_read_chat", &json!({})).await;
     assert_eq!(body(&r)["budget"], "maxReadMessages");
     // Spend: reported cost over the cap stops every further call.
-    (turn.scope().spend.unwrap())(1.5);
+    let _ = turn.scope().spend.unwrap().charge(1.5);
     let r = turn.call("ligus_read_board", &json!({})).await;
     assert_eq!(body(&r)["budget"], "maxSpendUsd");
     let summary = turn.finish();

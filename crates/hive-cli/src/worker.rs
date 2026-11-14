@@ -597,7 +597,11 @@ async fn run_turn(
     };
     let scope = match &ligus {
         Some(t) => hive_runtime::agent_turn::AgentTurnScope { ligus: (!cli).then(|| t.clone()), ..t.agent_scope() },
-        None => Default::default(),
+        // No Ligus tools this turn: the spend budget still holds.
+        None => hive_runtime::agent_turn::AgentTurnScope {
+            spend: Some(hive_runtime::agent_turn::SpendMeter::new(hive_runtime::ligus_mcp::Budgets::from_env().max_spend_usd)),
+            ..Default::default()
+        },
     };
     // Every child of this turn runs in this host's OS sandbox under the
     // turn's envelope and gate.

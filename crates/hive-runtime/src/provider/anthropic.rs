@@ -47,6 +47,61 @@ pub enum ProviderError {
         host: String,
         secs: u64,
     },
+    /// Ligus ended the turn: its `maxSpendUsd` budget is used up, or its
+    /// spend can't be counted.
+    #[error("{0}")]
+    Budget(String),
+}
+
+impl From<crate::agent_turn::SpendError> for ProviderError {
+    fn from(e: crate::agent_turn::SpendError) -> Self {
+        ProviderError::Budget(e.to_string())
+    }
+}
+
+/// The token usage in an Anthropic `usage` object.
+pub fn usage_of(u: &Value) -> crate::spend::Usage {
+    let n = |k: &str| u.get(k).and_then(Value::as_u64).unwrap_or(0);
+    crate::spend::Usage { input: n("input_tokens"), output: n("output_tokens"), cache_write: n("cache_creation_input_tokens"), cache_read: n("cache_read_input_tokens") }
+}
+
+/// Charges a streamed message's usage as it is reported: `message_start`
+/// carries the input (and cache) tokens, each `message_delta` the output
+/// so far (cumulative). Only the growth since the last charge is charged.
+#[derive(Debug, Default)]
+pub struct StreamSpend {
+    seen: crate::spend::Usage,
+}
+
+impl StreamSpend {
+    /// Fold one SSE line; `Err` = the turn's budget is used up.
+    pub fn line(&mut self, model: &str, line: &str) -> Result<(), ProviderError> {
+        let Some(data) = line.strip_prefix("data:").map(str::trim) else { return Ok(()) };
+        let Ok(v) = serde_json::from_str::<Value>(data) else { return Ok(()) };
+        let usage = match v.get("type").and_then(Value::as_str) {
+            Some("message_start") => v.get("message").and_then(|m| m.get("usage")),
+            Some("message_delta") => v.get("usage"),
+            _ => None,
+        };
+        let Some(u) = usage else { return Ok(()) };
+        let now = usage_of(u);
+        let max = |a: u64, b: u64| a.max(b);
+        let merged = crate::spend::Usage {
+            input: max(self.seen.input, now.input),
+            output: max(self.seen.output, now.output),
+            cache_write: max(self.seen.cache_write, now.cache_write),
+            cache_read: max(self.seen.cache_read, now.cache_read),
+        };
+        let grow = crate::spend::Usage {
+            input: merged.input - self.seen.input,
+            output: merged.output - self.seen.output,
+            cache_write: merged.cache_write - self.seen.cache_write,
+            cache_read: merged.cache_read - self.seen.cache_read,
+        };
+        self.seen = merged;
+        crate::spend::charge(model, grow)?;
+        Ok(())
+    }
 }
 
 /// One conversation turn in provider wire shape.
@@ -214,6 +269,7 @@ impl AnthropicClient {
 
         let mut assembled = String::new();
         let mut buffer = String::new();
+        let mut spend = StreamSpend::default();
         let mut stream = resp.bytes_stream();
         while let Some(chunk) = stream.next().await {
             let bytes = chunk?;
@@ -223,6 +279,9 @@ impl AnthropicClient {
             while let Some(idx) = buffer.find('\n') {
                 let line = buffer[..idx].trim_end_matches('\r').to_string();
                 buffer.drain(..=idx);
+                // Reaching maxSpendUsd ends the turn here: dropping the
+                // stream closes the connection and stops generation.
+                spend.line(model, &line)?;
                 if let Some(text) = extract_text_delta(&line) {
                     assembled.push_str(&text);
                     on_delta(text);
@@ -304,6 +363,9 @@ impl AnthropicClient {
             return Err(ProviderError::Api { provider: "anthropic", status, body });
         }
         let value: Value = resp.json().await.map_err(ProviderError::Http)?;
+        if let Some(u) = value.get("usage") {
+            crate::spend::charge(model, usage_of(u))?;
+        }
         Ok(parse_messages_response(&value))
     }
 }
@@ -371,6 +433,53 @@ pub fn extract_text_delta(line: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An Anthropic turn charges the usage the stream reports
+    /// (`message_start` input, `message_delta` output) to the turn's spend
+    /// meter, and reaching `maxSpendUsd` stops the stream there.
+    #[tokio::test]
+    async fn api_spend_budget_cancels_the_turn() {
+        use crate::agent_turn::{with_agent_turn, AgentTurnScope, SpendMeter};
+        let body = [
+            r#"data: {"type":"message_start","message":{"usage":{"input_tokens":500000,"output_tokens":1}}}"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}"#,
+            r#"data: {"type":"message_delta","usage":{"output_tokens":100000}}"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" more"}}"#,
+        ]
+        .join("\n")
+            + "\n";
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            while let Ok((mut s, _)) = listener.accept().await {
+                let body = body.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 65536];
+                    let _ = s.read(&mut buf).await;
+                    let head = format!("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", body.len());
+                    let _ = s.write_all(head.as_bytes()).await;
+                    let _ = s.write_all(body.as_bytes()).await;
+                });
+            }
+        });
+        let client = AnthropicClient::new().with_endpoint(format!("http://{addr}/v1/messages"));
+        let turns = [ChatTurn::user("x")];
+        // claude-opus-5-5: $4 in, $20 out per million. Input $2, then output
+        // $2 more: past a $3 budget at the message_delta.
+        let meter = SpendMeter::new(Some(3.0));
+        let mut seen = String::new();
+        let scope = AgentTurnScope { spend: Some(meter.clone()), ..Default::default() };
+        let r = with_agent_turn(scope, client.stream_reply("k", "claude-opus-5-5", None, &turns, 64, |d| seen.push_str(&d))).await;
+        assert!(matches!(r, Err(ProviderError::Budget(_))), "{r:?}");
+        assert_eq!(seen, "hello", "the stream stopped at the budget");
+        assert!((meter.total() - 4.0).abs() < 1e-6, "{}", meter.total());
+        // Under budget it streams to the end.
+        let meter = SpendMeter::new(Some(10.0));
+        let scope = AgentTurnScope { spend: Some(meter.clone()), ..Default::default() };
+        let r = with_agent_turn(scope, client.stream_reply("k", "claude-opus-5-5", None, &turns, 64, |_| {})).await;
+        assert_eq!(r.unwrap(), "hello more");
+    }
 
     #[test]
     fn extracts_text_from_content_block_delta() {

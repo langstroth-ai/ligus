@@ -88,6 +88,9 @@ pub struct OpenAiClient {
     /// Echo a round's streamed reasoning on the assistant message that carries
     /// its tool calls (default `true`).
     echo_reasoning: bool,
+    /// Charge the rounds' reported token usage to the turn's spend meter
+    /// (hosted APIs: OpenAI, OpenRouter, Azure).
+    metered: bool,
 }
 
 /// The assembled result of a chat with tools on offer.
@@ -288,11 +291,13 @@ struct RoundAssembly {
     round: Round,
     filter: ThinkFilter,
     calls: ToolCallAssembler,
+    /// Usage already charged for this round.
+    charged: crate::spend::Usage,
 }
 
 impl RoundAssembly {
     fn new() -> Self {
-        Self { round: Round::default(), filter: ThinkFilter::new(), calls: ToolCallAssembler::default() }
+        Self { round: Round::default(), filter: ThinkFilter::new(), calls: ToolCallAssembler::default(), charged: Default::default() }
     }
 
     fn absorb(
@@ -511,7 +516,20 @@ impl OpenAiClient {
             context_window: 0,
             final_tool_choice: true,
             echo_reasoning: true,
+            metered: false,
         }
+    }
+
+    /// Charge each round's reported `usage` (prompt and completion tokens,
+    /// priced by [`crate::spend`]) to the turn's spend meter; reaching the
+    /// turn's `maxSpendUsd` ends it. Also asks for usage on streamed rounds
+    /// (`stream_options.include_usage`, dropped if the server refuses it).
+    pub fn with_spend_metering(mut self, yes: bool) -> Self {
+        self.metered = yes;
+        if yes {
+            self.extra_body.insert("stream_options".into(), json!({"include_usage": true}));
+        }
+        self
     }
 
     /// `false`: the tool loop's final round drops the tools field instead of
@@ -864,6 +882,7 @@ impl OpenAiClient {
             };
             let v: Value = serde_json::from_slice(&bytes)
                 .map_err(|e| ProviderError::Decode(format!("completion: {e}")))?;
+            self.charge_usage(model, &v, &mut asm)?;
             asm.absorb(parse_chunk(&v, self.provider_label)?, &mut on_delta, &mut on_thinking);
             return Ok(asm.finish(&mut on_delta, &mut on_thinking));
         }
@@ -880,7 +899,7 @@ impl OpenAiClient {
             while let Some(idx) = buffer.find('\n') {
                 let line = buffer[..idx].trim_end_matches('\r').to_string();
                 buffer.drain(..=idx);
-                self.absorb_line(&line, &mut asm, &mut on_delta, &mut on_thinking)?;
+                self.absorb_line(model, &line, &mut asm, &mut on_delta, &mut on_thinking)?;
             }
             // Cut a looping call short: dropping the stream closes the
             // connection, which stops the server generating. The truncated
@@ -902,7 +921,7 @@ impl OpenAiClient {
         // A final line without a trailing newline.
         let rest = buffer.trim().to_string();
         if !rest.is_empty() {
-            self.absorb_line(&rest, &mut asm, &mut on_delta, &mut on_thinking)?;
+            self.absorb_line(model, &rest, &mut asm, &mut on_delta, &mut on_thinking)?;
         }
         Ok(asm.finish(&mut on_delta, &mut on_thinking))
     }
@@ -911,6 +930,7 @@ impl OpenAiClient {
     /// unparseable payloads are skipped; an error object fails the turn.
     fn absorb_line(
         &self,
+        model: &str,
         line: &str,
         asm: &mut RoundAssembly,
         on_delta: &mut impl FnMut(String),
@@ -925,7 +945,25 @@ impl OpenAiClient {
         let Ok(v) = serde_json::from_str::<Value>(data) else {
             return Ok(());
         };
+        self.charge_usage(model, &v, asm)?;
         asm.absorb(parse_chunk(&v, self.provider_label)?, on_delta, on_thinking);
+        Ok(())
+    }
+
+    /// Charge a chunk's `usage` (cumulative for the round) to the turn's
+    /// spend meter. Cached prompt tokens are charged at the full input
+    /// price. `Err` = the budget is used up; the round stops here.
+    fn charge_usage(&self, model: &str, v: &Value, asm: &mut RoundAssembly) -> Result<(), ProviderError> {
+        if !self.metered {
+            return Ok(());
+        }
+        let Some(u) = v.get("usage").filter(|u| u.is_object()) else { return Ok(()) };
+        let n = |k: &str| u.get(k).and_then(Value::as_u64).unwrap_or(0);
+        let (input, output) = (n("prompt_tokens").max(asm.charged.input), n("completion_tokens").max(asm.charged.output));
+        let grow = crate::spend::Usage { input: input - asm.charged.input, output: output - asm.charged.output, ..Default::default() };
+        asm.charged.input = input;
+        asm.charged.output = output;
+        crate::spend::charge(model, grow)?;
         Ok(())
     }
 
@@ -1176,6 +1214,30 @@ mod wire {
             axum::serve(listener, app).await.unwrap();
         });
         (format!("http://{addr}/v1/chat/completions"), seen)
+    }
+
+    /// A hosted OpenAI-wire turn charges the usage the API reports to the
+    /// turn's spend meter (asking for it with `stream_options`), and
+    /// reaching `maxSpendUsd` ends the turn.
+    #[tokio::test]
+    async fn api_spend_budget_cancels_the_turn() {
+        use crate::agent_turn::{with_agent_turn, AgentTurnScope, SpendMeter};
+        let usage = r#"data: {"choices":[],"usage":{"prompt_tokens":2000000,"completion_tokens":10}}"#.to_string();
+        let (url, seen) = serve(vec![sse("Hi"), usage.clone()], false).await;
+        let meter = SpendMeter::new(Some(1.0));
+        let scope = AgentTurnScope { spend: Some(meter.clone()), ..Default::default() };
+        let client = OpenAiClient::new(&url).with_spend_metering(true);
+        let r = with_agent_turn(scope, client.stream_reply(Some("sk-test"), "unknown-model", None, &[ChatTurn::user("x")], |_| {})).await;
+        assert!(matches!(r, Err(ProviderError::Budget(_))), "{r:?}");
+        assert!(meter.total() >= 30.0, "2M prompt tokens at the fallback price: {}", meter.total());
+        assert_eq!(seen.lock().unwrap().bodies[0]["stream_options"]["include_usage"], true);
+        // Unmetered (a local server): usage is ignored.
+        let (url, _) = serve(vec![sse("Hi"), usage], false).await;
+        let meter = SpendMeter::new(Some(1.0));
+        let scope = AgentTurnScope { spend: Some(meter.clone()), ..Default::default() };
+        let r = with_agent_turn(scope, OpenAiClient::new(&url).stream_reply(None, "m", None, &[ChatTurn::user("x")], |_| {})).await;
+        assert_eq!(r.unwrap(), "Hi");
+        assert_eq!(meter.total(), 0.0);
     }
 
     #[tokio::test]
