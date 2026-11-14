@@ -36,7 +36,7 @@ fn helper_command(id: &ForgeId, data_dir: &Path) -> Option<String> {
 }
 
 fn credentials(c: &Connection, data_dir: &Path) -> Arc<dyn CredentialSource> {
-    c.credentials_with_helper(store(data_dir), helper_command(&c.id, data_dir))
+    c.credentials_with_helper(store(data_dir), helper_command(&c.id, data_dir), Some(data_dir))
 }
 
 fn forge(c: &Connection, data_dir: &Path) -> Arc<dyn Forge> {
@@ -72,7 +72,7 @@ fn run_helper(id: &str, dir: &Path, action: &str) -> Result<(), String> {
     if !matches!(c.auth, AuthSource::Token | AuthSource::Oauth) {
         return Ok(());
     }
-    let creds = c.credentials(store(dir), None);
+    let creds = c.credentials(store(dir), None, Some(dir));
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
     let token = rt.block_on(creds.token(Purpose::Write)).ok().flatten();
     let user = hive_forge::tokens::git_username(c.kind, c.auth, c.login.as_deref());
@@ -86,22 +86,9 @@ fn run_helper(id: &str, dir: &Path, action: &str) -> Result<(), String> {
 /// folder's `origin` on one of this device's connections (and `upstream`
 /// when it is a fork checkout).
 pub(crate) fn binding_for_dir(data_dir: &Path, dir: &Path) -> Option<hive_runtime::ligus_mcp::forge_tools::ForgeBinding> {
-    let out = |args: &[&str]| -> Option<String> {
-        let o = hive_core::process_util::git().arg("-C").arg(dir).args(args).output().ok()?;
-        o.status.success().then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
-    };
-    let origin = out(&["remote", "get-url", "origin"])?;
-    let all = Connections::load(data_dir);
-    for c in &all.forges {
-        let f = forge(c, data_dir);
-        if let Some(repo) = f.repo_of_remote(&origin) {
-            let upstream = out(&["remote", "get-url", "upstream"])
-                .and_then(|u| f.repo_of_remote(&u))
-                .filter(|u| !u.same(&repo));
-            return Some(hive_runtime::ligus_mcp::forge_tools::ForgeBinding { reader: Arc::new(hive_forge::ReadOnly(f)), repo, upstream });
-        }
-    }
-    None
+    // The configured remote URLs, never git's insteadOf rewrites of them.
+    let forges: Vec<Arc<dyn Forge>> = Connections::load(data_dir).forges.iter().map(|c| forge(c, data_dir)).collect();
+    hive_runtime::ligus_mcp::forge_tools::binding_for_checkout(dir, &forges)
 }
 
 // ── Commands ───────────────────────────────────────────────────────────────
@@ -126,6 +113,7 @@ async fn dto(c: &Connection, data_dir: &Path, check: bool) -> Value {
         "deviceFlow": f.capabilities().device_flow && hive_forge::device::endpoints(c).is_ok(),
         "openLabel": c.kind.open_label(),
         "holder": "this device",
+        "internal": c.internal,
     });
     if check {
         match tokio::time::timeout(Duration::from_secs(20), f.whoami()).await {
@@ -163,7 +151,14 @@ pub async fn forges_list(state: State<'_, AppState>, check: Option<bool>) -> Res
 
 /// Add a connection: `kind` is github, gitlab, forgejo, gitea or codeberg.
 #[tauri::command]
-pub async fn forges_add(state: State<'_, AppState>, kind: String, base_url: String, auth: Option<String>, client_id: Option<String>) -> Result<Value, String> {
+pub async fn forges_add(
+    state: State<'_, AppState>,
+    kind: String,
+    base_url: String,
+    auth: Option<String>,
+    client_id: Option<String>,
+    internal: Option<bool>,
+) -> Result<Value, String> {
     let lower = kind.trim().to_ascii_lowercase();
     let k = ForgeKind::parse(&lower).ok_or_else(|| format!("unknown code host kind '{kind}'"))?;
     let auth = match auth.as_deref() {
@@ -176,6 +171,9 @@ pub async fn forges_add(state: State<'_, AppState>, kind: String, base_url: Stri
         c.flavor = Some(lower);
     }
     c.client_id = client_id.map(|x| x.trim().to_string()).filter(|x| !x.is_empty());
+    // A loopback, private or link-local address only when marked internal.
+    c.internal = internal.unwrap_or(false);
+    hive_forge::conn::check_address(&c).await.map_err(err)?;
     let dir = state.data_dir.clone();
     let mut all = Connections::load(&dir);
     if all.get(&c.id).is_some() {
@@ -190,6 +188,13 @@ pub async fn forges_add(state: State<'_, AppState>, kind: String, base_url: Stri
 #[tauri::command]
 pub async fn forges_remove(state: State<'_, AppState>, id: String) -> Result<(), String> {
     let id = ForgeId::parse(&id).map_err(err)?;
+    // End a device sign-in for it first: its poll then stores nothing.
+    {
+        let mut d = DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+        if d.as_ref().is_some_and(|p| p.id == id) {
+            *d = None;
+        }
+    }
     let dir = state.data_dir.clone();
     let mut all = Connections::load(&dir);
     all.remove(&id);
@@ -245,6 +250,13 @@ struct DevicePending {
     user_code: String,
     verification_uri: String,
     expires: Instant,
+    /// Which sign-in this is: its poll saves tokens only while it is still
+    /// the pending one (a removal or a newer sign-in ends it).
+    nonce: u64,
+}
+
+fn new_nonce() -> u64 {
+    uuid::Uuid::new_v4().as_u64_pair().0
 }
 
 static DEVICE: LazyLock<Mutex<Option<DevicePending>>> = LazyLock::new(|| Mutex::new(None));
@@ -258,7 +270,9 @@ pub async fn forges_device_start(state: State<'_, AppState>, id: String) -> Resu
     let c = Connections::load(&dir).get(&id).ok_or("no such connection")?.clone();
     let ep = hive_forge::device::endpoints(&c).map_err(err)?;
     let start = hive_forge::device::start(&ep).await.map_err(err)?;
+    let nonce = new_nonce();
     *DEVICE.lock().unwrap_or_else(|e| e.into_inner()) = Some(DevicePending {
+        nonce,
         id: id.clone(),
         state: "pending",
         error: None,
@@ -269,7 +283,7 @@ pub async fn forges_device_start(state: State<'_, AppState>, id: String) -> Resu
     let out = json!({ "userCode": start.user_code, "verificationUri": start.verification_uri, "expiresIn": start.expires_in });
     tauri::async_runtime::spawn(async move {
         let set = |st: &'static str, e: Option<String>| {
-            if let Some(p) = DEVICE.lock().unwrap_or_else(|e| e.into_inner()).as_mut().filter(|p| p.id == id) {
+            if let Some(p) = DEVICE.lock().unwrap_or_else(|e| e.into_inner()).as_mut().filter(|p| p.id == id && p.nonce == nonce) {
                 p.state = st;
                 p.error = e;
             }
@@ -277,7 +291,7 @@ pub async fn forges_device_start(state: State<'_, AppState>, id: String) -> Resu
         let mut interval = start.interval;
         loop {
             tokio::time::sleep(Duration::from_secs(interval)).await;
-            let expired = DEVICE.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_none_or(|p| p.id != id || Instant::now() > p.expires);
+            let expired = DEVICE.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_none_or(|p| p.id != id || p.nonce != nonce || Instant::now() > p.expires);
             if expired {
                 return set("expired", None);
             }
@@ -287,19 +301,19 @@ pub async fn forges_device_start(state: State<'_, AppState>, id: String) -> Resu
                 Ok(hive_forge::device::Poll::Denied) => return set("denied", None),
                 Ok(hive_forge::device::Poll::Expired) => return set("expired", None),
                 Ok(hive_forge::device::Poll::Done(t)) => {
-                    let s = store(&dir);
-                    let mut r = s.put(&id, Purpose::Write, &t.access).map_err(err);
-                    if let (Ok(()), Some(rt)) = (&r, &t.refresh) {
-                        r = s.put(&id, Purpose::Refresh, rt).map_err(err);
-                    }
-                    let mut all = Connections::load(&dir);
-                    if let Some(c) = all.get_mut(&id) {
-                        c.auth = AuthSource::Oauth;
-                        c.token_expires_at = t.expires_in.map(|x| hive_forge::device::now_unix() + x);
-                    }
-                    let r = r.and_then(|()| all.save(&dir).map_err(err));
+                    // Stored only while this sign-in is still the pending
+                    // one and the connection still exists.
+                    let (d, pid) = (dir.clone(), id.clone());
+                    let r = tokio::task::spawn_blocking(move || {
+                        let current = || DEVICE.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|p| p.id == pid && p.nonce == nonce);
+                        hive_forge::conn::save_device_sign_in(&d, store(&d).as_ref(), &pid, &t, current).map_err(err)
+                    })
+                    .await
+                    .map_err(err)
+                    .and_then(|r| r);
                     return match r {
-                        Ok(()) => set("done", None),
+                        Ok(true) => set("done", None),
+                        Ok(false) => {}
                         Err(e) => set("error", Some(e)),
                     };
                 }

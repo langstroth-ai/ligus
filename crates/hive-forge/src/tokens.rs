@@ -187,6 +187,8 @@ pub struct RefreshConfig {
     /// `https://github.com/login/oauth/access_token`, `{base}/oauth/token`.
     pub token_url: String,
     pub client_id: String,
+    /// The connection is marked internal on this device.
+    pub internal: bool,
 }
 
 /// Tokens in the OS secret store.
@@ -200,26 +202,66 @@ pub struct StoreCredentials {
     /// Unix seconds the stored OAuth access token expires (device sign-in).
     pub expires_at: Mutex<Option<u64>>,
     pub refresh: Option<RefreshConfig>,
-    /// Told the new expiry after a refresh (the host saves it).
+    /// Told the new expiry after a refresh, once, while the refresh still
+    /// holds the data dir's lock (the host saves it to `forges.toml`).
     pub on_refresh: Option<Arc<dyn Fn(Option<u64>) + Send + Sync>>,
+    /// The data dir whose `forges.toml` holds this connection: refreshes
+    /// take its [`crate::conn::ForgesLock`] and re-read the saved expiry
+    /// first, so only one process ever spends a (rotating) refresh token.
+    pub data_dir: Option<std::path::PathBuf>,
+    /// One refresh at a time within this instance.
+    refreshing: tokio::sync::Mutex<()>,
 }
 
 impl StoreCredentials {
     pub fn new(store: Arc<dyn TokenStore>, forge: ForgeId, source: AuthSource, helper: Option<String>) -> Self {
-        Self { store, forge, source, helper, expires_at: Mutex::new(None), refresh: None, on_refresh: None }
+        Self {
+            store,
+            forge,
+            source,
+            helper,
+            expires_at: Mutex::new(None),
+            refresh: None,
+            on_refresh: None,
+            data_dir: None,
+            refreshing: tokio::sync::Mutex::new(()),
+        }
+    }
+
+    fn fresh(exp: Option<u64>, now: u64) -> bool {
+        exp.is_none_or(|e| e > now + 60)
     }
 
     async fn refresh_if_expired(&self) -> Result<()> {
         let Some(cfg) = &self.refresh else { return Ok(()) };
-        let exp = *self.expires_at.lock().unwrap_or_else(|e| e.into_inner());
+        let exp = || *self.expires_at.lock().unwrap_or_else(|e| e.into_inner());
         let now = crate::device::now_unix();
-        if exp.is_none_or(|e| e > now + 60) {
+        if Self::fresh(exp(), now) {
             return Ok(());
+        }
+        // GitLab rotates refresh tokens: a second refresh with the one just
+        // spent fails and signs the device out. So one refresh at a time,
+        // here and across every process using this data dir, and whoever
+        // comes second takes the expiry the first one saved.
+        let _here = self.refreshing.lock().await;
+        if Self::fresh(exp(), now) {
+            return Ok(());
+        }
+        let _lock = match &self.data_dir {
+            Some(d) => Some(crate::conn::ForgesLock::acquire_async(d).await?),
+            None => None,
+        };
+        if let Some(d) = &self.data_dir {
+            let saved = crate::conn::Connections::load(d).get(&self.forge).and_then(|c| c.token_expires_at);
+            if saved.is_some_and(|e| e > now + 60) {
+                *self.expires_at.lock().unwrap_or_else(|e| e.into_inner()) = saved;
+                return Ok(());
+            }
         }
         let Some(rt) = self.store.get(&self.forge, Purpose::Refresh)? else {
             return Err(ForgeError::NotSignedIn("the device sign-in for this code host expired: sign in again".into()));
         };
-        let set = crate::device::refresh(&cfg.token_url, &cfg.client_id, &rt).await?;
+        let set = crate::device::refresh(&cfg.token_url, &cfg.client_id, &rt, cfg.internal).await?;
         self.store.put(&self.forge, Purpose::Write, &set.access)?;
         if let Some(r) = &set.refresh {
             self.store.put(&self.forge, Purpose::Refresh, r)?;

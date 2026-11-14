@@ -2013,6 +2013,48 @@ async fn wait_job(h: &Harness, id: &str) -> Value {
     panic!("clone job {id} never finished");
 }
 
+/// A plain (non-fork) checkout opens its PR on origin's repository, so the
+/// push must land there too: a pushurl or a pushInsteadOf rewrite that
+/// sends it to another repository is refused, and nothing is pushed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn non_fork_push_target_must_equal_origin_fetch_repo() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let remotes = h._tmp.path().join("remotes");
+    std::fs::create_dir_all(&remotes).unwrap();
+    fake_remote(&remotes, "acme", "widget");
+    fake_remote(&remotes, "mallory", "widget");
+    let fake = Arc::new(FakeGitHub::new(&remotes, true));
+    use_fake(&h, fake.clone());
+    let job = h.send(reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repo": "acme/widget" }))).await;
+    assert_eq!(wait_job(&h, job["job"]["id"].as_str().unwrap()).await["state"], "done");
+    let checkout = h.handle.shared.cfg.data_dir.join("repos").join("acme__widget");
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "push target" }))).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    h.send(reqwest::Method::PUT, &format!("/v1/chats/{chat_id}/repo"), Some(json!({ "repo": "acme/widget" }))).await;
+    let wt = hive_runtime::git_worktree::chat_worktree(&checkout, &chat_id).unwrap();
+    std::fs::write(wt.join("THING.md"), "thing\n").unwrap();
+    git(&wt, &["add", "-A"]);
+    git(&wt, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "thing"]);
+    let mallory = format!("file://{}/mallory/widget.git", remotes.display());
+    let mallory_bare = remotes.join("mallory").join("widget.git");
+    let pr_path = format!("/v1/chats/{chat_id}/pr");
+    for (key, value) in [
+        ("remote.origin.pushurl".to_string(), mallory.clone()),
+        (format!("url.file://{}/mallory/.pushInsteadOf", remotes.display()), format!("file://{}/acme/", remotes.display())),
+    ] {
+        git(&checkout, &["config", &key, &value]);
+        let (c, v) = status_of(&h, reqwest::Method::POST, &pr_path, Some(json!({ "title": "Add thing" }))).await;
+        assert_eq!(c, 409, "{key}: {v}");
+        let o = std::process::Command::new("git").arg("-C").arg(&mallory_bare).args(["rev-parse", "--verify", "--quiet", &format!("refs/heads/hive/chat/{chat_id}")]).output().unwrap();
+        assert!(!o.status.success(), "{key}: the chat branch was pushed to mallory/widget");
+        git(&checkout, &["config", "--unset-all", &key]);
+    }
+    assert!(fake.prs.lock().unwrap().is_empty(), "no PR opened");
+    let pr = h.send(reqwest::Method::POST, &pr_path, Some(json!({ "title": "Add thing" }))).await;
+    assert_eq!(pr["url"], "https://github.com/acme/widget/pull/1", "{pr}");
+}
+
 /// The phone lists repos, clones one, switches a chat onto it (and back),
 /// pulls, and opens a PR from the chat's branch; the agent's turn is told
 /// which repo and branch it works in.
@@ -3429,12 +3471,105 @@ async fn device_user_code_never_over_plain_http() {
             expires_at: std::time::Instant::now() + Duration::from_secs(300),
             state: "pending",
             error: None,
+            nonce: 1,
         },
     );
     let (c, v) = status_of(&h, reqwest::Method::GET, "/v1/forges/gitlab:gitlab.com/auth/device", None).await;
     assert!(!v.to_string().contains("WDJB-MJHT"), "the user code went out over plain HTTP: {c} {v}");
     let (c, _) = status_of(&h, reqwest::Method::POST, "/v1/forges/gitlab:gitlab.com/auth/device", None).await;
     assert_eq!(c, 403, "starting one is refused there too");
+}
+
+/// A device sign-in polls in the background. If the connection is removed
+/// meanwhile (or removed and added again), the poll's answer must not land
+/// in the secret store: no orphaned token, and none attached to a later
+/// connection the person never signed in on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn device_poll_after_remove_stores_nothing() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let approved = Arc::new(AtomicBool::new(false));
+    let a = approved.clone();
+    let app = Router::new()
+        .route(
+            "/oauth/authorize_device",
+            post(|| async {
+                axum::Json(json!({"device_code": "DEV", "user_code": "ABCD-1234", "verification_uri": "http://127.0.0.1/oauth/device", "expires_in": 300, "interval": 1}))
+            }),
+        )
+        .route(
+            "/oauth/token",
+            post(move || {
+                let a = a.clone();
+                async move {
+                    if a.load(Ordering::SeqCst) {
+                        axum::Json(json!({"access_token": "STRAY-ACCESS", "refresh_token": "STRAY-REFRESH", "expires_in": 7200}))
+                    } else {
+                        axum::Json(json!({"error": "authorization_pending"}))
+                    }
+                }
+            }),
+        );
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", l.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    h.handle.shared.repos.offline.store(false, std::sync::atomic::Ordering::SeqCst);
+    let add = json!({"kind": "gitlab", "baseUrl": base, "auth": "token", "clientId": "app-123", "internal": true});
+    let added = h.send(reqwest::Method::POST, "/v1/forges", Some(add.clone())).await;
+    let id_str = added["forge"]["id"].as_str().unwrap().to_string();
+    let id = hive_forge::ForgeId::parse(&id_str).unwrap();
+    let store = crate::forge_cmd::token_store(&h.handle.shared.cfg.data_dir);
+    for re_add in [false, true] {
+        let st = h.send(reqwest::Method::POST, &format!("/v1/forges/{id_str}/auth/device"), None).await;
+        assert_eq!(st["state"], "pending", "{st}");
+        h.send(reqwest::Method::DELETE, &format!("/v1/forges/{id_str}"), None).await;
+        if re_add {
+            h.send(reqwest::Method::POST, "/v1/forges", Some(add.clone())).await;
+        }
+        approved.store(true, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert!(store.present(&id).is_empty(), "re-added {re_add}: the removed connection's sign-in stored a token");
+        let saved = hive_forge::Connections::load(&h.handle.shared.cfg.data_dir);
+        assert!(saved.get(&id).is_none_or(|c| c.auth == hive_forge::AuthSource::Token && c.token_expires_at.is_none()), "re-added {re_add}: {saved:?}");
+        approved.store(false, Ordering::SeqCst);
+        if !re_add {
+            h.send(reqwest::Method::POST, "/v1/forges", Some(add.clone())).await;
+        }
+    }
+}
+
+/// S7: a code-host URL on an internal address is refused unless marked
+/// internal on this box; `/test` is gated like the other writes; and what a
+/// host answers (which may not be a code host at all) is never echoed back,
+/// by `/test` or by the listing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forge_test_is_gated_internal_marked_and_status_only() {
+    let app = Router::new().fallback(|| async { (axum::http::StatusCode::INTERNAL_SERVER_ERROR, axum::Json(json!({"message": "INTERNAL-SERVICE-SECRET-BODY"}))) });
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", l.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    h.handle.shared.repos.offline.store(false, std::sync::atomic::Ordering::SeqCst);
+    for bad in [base.clone(), "https://169.254.169.254".into(), "https://10.0.0.7".into()] {
+        let (c, v) = status_of(&h, reqwest::Method::POST, "/v1/forges", Some(json!({"kind": "gitea", "baseUrl": bad, "auth": "token"}))).await;
+        assert_eq!(c, 400, "{bad}: {v}");
+        assert!(v.to_string().contains("internal"), "{v}");
+    }
+    let added = h.send(reqwest::Method::POST, "/v1/forges", Some(json!({"kind": "gitea", "baseUrl": base, "auth": "token", "internal": true}))).await;
+    assert_eq!(added["forge"]["internal"], true, "{added}");
+    let id = added["forge"]["id"].as_str().unwrap().to_string();
+    h.send(reqwest::Method::PUT, &format!("/v1/forges/{id}/token"), Some(json!({"purpose": "write", "token": "tok-0123456789"}))).await;
+    let t = h.send(reqwest::Method::POST, &format!("/v1/forges/{id}/test"), None).await;
+    assert_eq!(t["ok"], false, "{t}");
+    assert!(!t.to_string().contains("INTERNAL-SERVICE-SECRET-BODY"), "/test echoed the body: {t}");
+    let list = h.get("/v1/forges").await;
+    assert!(!list.to_string().contains("INTERNAL-SERVICE-SECRET-BODY"), "the listing echoed the body: {list}");
+    h.handle.shared.lock().set_write_block(Some("this box was revoked".into()));
+    let (c, v) = status_of(&h, reqwest::Method::POST, &format!("/v1/forges/{id}/test"), None).await;
+    assert_eq!(c, 403, "/test needs a box that can write: {v}");
 }
 
 /// The gh login is the default only for github.com itself: a look-alike host

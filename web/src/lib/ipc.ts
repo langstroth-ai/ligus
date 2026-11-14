@@ -1829,6 +1829,8 @@ export type ForgeConnection = {
   holder: string;
   available?: boolean;
   reason?: string | null;
+  /** Marked internal on this device: a loopback, private or link-local address is allowed. */
+  internal?: boolean;
 };
 
 export type ForgeRepo = {
@@ -1845,8 +1847,8 @@ export type ForgeDeviceStart = { userCode: string; verificationUri: string; expi
 export type ForgeDeviceStatus = { id: string; state: "pending" | "done" | "denied" | "expired" | "error"; error?: string | null };
 
 export const forgesList = (check = false) => invoke<ForgeConnection[]>("forges_list", { check });
-export const forgesAdd = (kind: string, baseUrl: string, auth?: string, clientId?: string) =>
-  invoke<ForgeConnection>("forges_add", { kind, baseUrl, auth, clientId });
+export const forgesAdd = (kind: string, baseUrl: string, auth?: string, clientId?: string, internal?: boolean) =>
+  invoke<ForgeConnection>("forges_add", { kind, baseUrl, auth, clientId, internal });
 export const forgesRemove = (id: string) => invoke<void>("forges_remove", { id });
 export const forgesSetToken = (id: string, purpose: "read" | "write", token: string) =>
   invoke<ForgeConnection>("forges_set_token", { id, purpose, token });

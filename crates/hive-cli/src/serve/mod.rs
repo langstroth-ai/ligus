@@ -1287,10 +1287,9 @@ impl worker::ServiceSource for Shared {
     /// hosts (and `upstream` for a fork), read-only.
     fn forge_for(&self, chat: Uuid) -> Option<hive_runtime::ligus_mcp::forge_tools::ForgeBinding> {
         let dir = crate::repos::RepoBindings::load(&self.cfg.data_dir).resolve(&crate::repos::repos_dir(&self.cfg.data_dir), chat)?;
-        let origin = crate::repos::git_out(&dir, &["remote", "get-url", "origin"])?;
-        let (h, repo) = self.repos.forge_of_remote(&self.cfg.data_dir, &origin)?;
-        let upstream = crate::repos::fork_layout(&dir).map(|f| hive_forge::RepoRef::new(f.upstream.owner, f.upstream.name));
-        Some(hive_runtime::ligus_mcp::forge_tools::ForgeBinding { reader: std::sync::Arc::new(hive_forge::ReadOnly(h.forge)), repo, upstream })
+        // The configured remote URLs, never git's insteadOf rewrites of them.
+        let forges: Vec<_> = self.repos.forges(&self.cfg.data_dir).into_iter().map(|h| h.forge).collect();
+        hive_runtime::ligus_mcp::forge_tools::binding_for_checkout(&dir, &forges)
     }
 }
 

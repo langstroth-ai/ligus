@@ -42,7 +42,7 @@ impl GitLab {
         Self {
             id: conn.id.clone(),
             web: conn.base_url.trim_end_matches('/').to_string(),
-            api: Api { client: crate::http::client(), base: conn.api_base(), style: AuthStyle::Bearer, creds, headers: vec![("Accept", "application/json")] },
+            api: Api { client: crate::http::client_for(conn.internal), internal: conn.internal, base: conn.api_base(), style: AuthStyle::Bearer, creds, headers: vec![("Accept", "application/json")] },
         }
     }
 

@@ -33,7 +33,7 @@ async fn tests_never_reach_real_code_hosts_or_gh() {
     let empty = tempfile::tempdir().unwrap();
     let implicit = Connections::load(empty.path()).forges.remove(0);
     assert_eq!(implicit.auth, AuthSource::Gh);
-    let creds = implicit.credentials(Arc::new(MemoryTokens::default()), None);
+    let creds = implicit.credentials(Arc::new(MemoryTokens::default()), None, None);
     assert!(creds.token(Purpose::Read).await.unwrap().is_none());
     assert!(!marker.exists(), "a test build ran gh through the implicit connection");
 
@@ -51,6 +51,7 @@ async fn tests_never_reach_real_code_hosts_or_gh() {
         token_url: "https://github.com/login/oauth/access_token".into(),
         client_id: "x".into(),
         scope: None,
+        internal: false,
     };
     let err = device::start(&ep).await.unwrap_err().to_string();
     assert!(err.contains("test builds never reach a real code host"), "{err}");
