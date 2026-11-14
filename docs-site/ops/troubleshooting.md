@@ -71,7 +71,7 @@ Notes:
 |---|---|---|
 | desktop: `sync paused: the relay rejected this device's access token` | the relay is gated and this device has no token, or a wrong, expired or revoked one | paste a valid token in **Settings → Team sync → Relay access token** |
 | CLI: an unauthorized (401) error from the relay | same, for `ligus` | `ligus enroll <invite> --token <hrt1…>` or `LIGUS_RELAY_ACCESS_TOKEN` |
-| 401 only on directory, friends or invite routes | the relay wants a GitHub token too | sign in with GitHub (desktop) or set `LIGUS_RELAY_GITHUB_TOKEN` (CLI) |
+| People says "your relay doesn't support contacts yet" | the relay is older than v0.3 (or contacts are turned off) | nothing breaks: send invite links instead, or upgrade the relay |
 | writes or reads refused on a membership relay | the workspace is claimed and you're not on its relay roster | an Admin adds you, or redeem an invite code with `ligus join` |
 
 Check a token directly:

@@ -21,8 +21,9 @@ trust boundaries.
 A relay operator (or anyone who compromises the relay) **can**:
 
 - see metadata: workspace ids, envelope counts, sizes and timing, IP
-  addresses, device public keys and labels, GitHub logins that use the
-  directory, which tunnel hosts exist and when phones connect;
+  addresses, device public keys and labels, contact ids and the timing and
+  size of drops into contact boxes, which tunnel hosts exist and when phones
+  connect;
 - drop, delay or replay ciphertext, or refuse service;
 - with membership mode on, see the roster and invite metadata.
 
@@ -33,16 +34,17 @@ sealed only to keys devices published there. It can't inject a key: keyring
 rows on the relay are used only to read, never to seal. It can't pin a
 device's sync with a body under an unknown key either (such bodies are
 parked), and a flood of such bodies can't push out the ones waiting for an
-authorized rotation (junk is evicted first). An invite by GitHub handle or a
-new DM is sealed only to the invitee's directory keys that their account
-signed on a workspace you share; when none is, the desktop warns
-**Unverified recipient** and seals only if you confirm, because then the
-relay alone vouches for those keys and could read what you seal. It can't inject plaintext: a device that holds a workspace key skips
+authorized rotation (junk is evicted first). An invite to a co-member or a
+new DM is sealed only to keys their devices published, signed, on a
+workspace you share: the relay supplies no keys, so it can't substitute its
+own. It can withhold, delay or replay contact records and drops, but a record
+is checked against the safety code you got out of band and an older record
+than one already seen is refused, and a drop is sealed. It can't compute
+whether two people have a DM: rooms and invite ids are random. It never sees
+a forge (GitHub, GitLab, ...) token: the client can't send one. It can't inject plaintext: a device that holds a workspace key skips
 any body from the relay that isn't sealed. In the tunnel it can't read or
 alter phone traffic (Noise, with the box's key pinned from the QR code). A
-ligus-auth token goes only to the relay the session was signed in for. One
-gap remains (see [Known limitations](#known-limitations)): the GitHub-backed
-routes see the GitHub tokens clients send them.
+ligus-auth token goes only to the relay the session was signed in for.
 
 Each invite carries a fingerprint of the founder's account key, and a device
 pins it when it joins, so a hostile relay can't substitute the founder's key.
@@ -185,27 +187,26 @@ each stays on this list until a release fixes it.
    signs for the agent itself; under rules version 2 that output, and every
    effect of the chat's primary runtime (stamped `runtime_effect`), is judged
    at the Agent tier too. Under rules v1 it is judged by its host's role.
-5. **Invites carry every key, and the directory is trusted only after a
-   warning.** Chat events, attachment blobs, host liveness beats and
+5. **Invites carry every key, and first contact is trust on first use.** Chat events, attachment blobs, host liveness beats and
    workflow and coordinator lease beats follow signed key rotations on every
    host (readers take beats only at the newest authorized key). An invite
    code carries the passphrase and every authorized epoch key: anyone who
    sees a code reads the workspace's history up to that point, whether or
    not its single-use invite was redeemed; rotate after a code leaks. An
-   invite by handle and a new DM seal the code to directory keys: verified
-   ones (published, signed, by a device certified for that account on a
-   workspace you share) when there are any, otherwise only after you confirm
-   the **Unverified recipient** warning. Verification is as strong as that
-   shared workspace's binding of the account key (first registration wins
-   there), and the relay still maps the handle to a GitHub account id; the
-   desktop shows the login it resolved. Signed directory records anchored
-   outside the relay need a relay change and are not in 2.0.
+   invite to a co-member and a new DM are sealed only to keys published,
+   signed, by devices certified for that account on a workspace you share.
+   That is as strong as that shared workspace's binding of the account key
+   (first registration wins there); two workspaces that disagree block
+   sealing. Someone you share no workspace with is anchored only by the
+   safety code you compare out of band: skip the comparison and the first
+   contact is trust on first use. Display names are not identity; an invite
+   that names a co-member but carries another key is refused.
 6. **Signed rotations rely on what a device folds.** A rotation counts only
    when an Admin's certified device signed it at the next version on the
    config log, and a device seals only under such a rotation; junk or
    unsigned keyring rows on the relay are never used. A device that has no
-   founder pin for a workspace (joined without a pinned invite, such as a DM's
-   second side) adopts no rotation and keeps sealing under the passphrase
+   founder pin for a workspace (joined without a pinned invite) adopts no
+   rotation and keeps sealing under the passphrase
    key. A device that isn't a recipient of the newest rotation doesn't write
    until the next rotation includes it.
 7. **Presence needs rules v2, and a passkey on every workspace.** Under
@@ -271,9 +272,8 @@ each stays on this list until a release fixes it.
     the URL can store ciphertext on it and read ciphertext of workspaces whose
     ids they know. On an open relay that keeps state in memory, set
     `LIGUS_RELAY_MAX_STORE_BYTES` so writes can't exhaust its memory.
-15. **The relay sees metadata** (above), and the GitHub tokens clients send
-    to its directory, account and friends routes (it has to present them to
-    GitHub). Use those routes only with a relay you trust. The relay's admin
+15. **The relay sees metadata** (above), including which contact ids get
+    drops and when. The relay's admin
     API isn't in the open-source build, so per-person relay tokens need signed
     tokens (short-lived ones from [ligus-auth](../deploy/ligus-auth.md), for
     example) or a restart to change an allowlist.

@@ -19,11 +19,11 @@ The body is a `WorkspaceConn` serialized to JSON and base64url-encoded
 | Field | Notes |
 |-------|-------|
 | `relay_url` | The relay peers converge on (e.g. `wss://relay.example/v1`). |
-| `room` | The room id; its hash is the stable workspace id. |
+| `room` | The room id; its hash is the stable workspace id. Random for every room Ligus makes (a DM's is `dm-` and 128 random bits): never derived from an account id, a forge id, an email or a name. |
 | `key` | The E2EE passphrase that derives the workspace key. `null` = a keyless room, which **cannot sync through a relay** — E2EE is mandatory for relay sync, so a keyless workspace is local-only. |
 | `name` | Friendly display label (defaults to the room name). |
-| `dm_account` | Set only for a 1:1 direct-message workspace; otherwise absent. |
-| `founder_actor_id` | The founding identity. Projection accepts only this founder's seed as the base snapshot, so a keyholder can't fork the workspace with a forged base. |
+| `dm_account` | Set only for a direct message: the account id (a random UUID) the DM is addressed to. The recipient accepts it only if it names them and the founder's `fk` matches the key their shared workspaces register for the founder. Otherwise absent. |
+| `founder_actor_id` | The founding account id (for a DM, whoever opened it). Projection accepts only this founder's seed as the base snapshot, so a keyholder can't fork the workspace with a forged base. |
 | `fk` | Hex of the first 16 bytes of SHA-256 of the founder's account key. The joining device pins (`founder_actor_id`, `fk`), first pin wins, and its trust roster refuses the founder's account under any other key. Absent when unknown. |
 | `inv` | A single-use invite id an Admin issued for this code. The joiner's self-enrollment redeems it once; without an unused invite, joining a non-empty workspace is refused on every device. Absent on older codes. |
 
@@ -35,9 +35,10 @@ local rail decoration and could be a large `data:` URL.
     clear inside the base64. Anyone who has the code can read the
     workspace. There is **no passcode and no expiry** on a raw
     `hivews1:` code — treat it like a secret and share it over a
-    channel you trust. For a copy-paste-free alternative, use
-    [invite by GitHub handle](../features/invites.md#invite-by-github-handle),
-    which seals the key to the invitee's devices instead of embedding it.
+    channel you trust. For a copy-paste-free alternative,
+    [invite a co-member](../features/invites.md#invite-someone-you-already-share-a-workspace-with):
+    the code is sealed to their verified devices and dropped into their
+    contact box.
 
 ## The key is exchanged out-of-band
 
@@ -49,9 +50,9 @@ handoff of the key.
 The old relay-brokered "short code" — a brief token (e.g. `K7P2QX`) that
 published the full `hivews1:` invite, key and all, to the relay's pairing store —
 has been **removed**, precisely because it put the key on the relay. For a
-copy-paste-free path that keeps the key off the relay, use
-[invite by GitHub handle](../features/invites.md#invite-by-github-handle), which
-seals the key to the invitee's devices instead of brokering it.
+copy-paste-free path that keeps the key off the relay,
+[invite a co-member](../features/invites.md#invite-someone-you-already-share-a-workspace-with),
+which seals the code to their devices instead of brokering it in the clear.
 
 ## Redemption
 
@@ -59,9 +60,13 @@ seals the key to the invitee's devices instead of brokering it.
 
 1. Strips the `hivews1:` prefix and base64url-decodes the body.
 2. Rejects a code whose `room` is empty or whose encoding is invalid.
-3. Pins the founder (`founder_actor_id`, `fk`) and stores the invite
+3. For a direct message, applies the accept rule (`dm_account` names this
+   account; the founder's `fk` matches what shared workspaces register, or
+   the person compared safety codes) and records the founder as the other
+   person.
+4. Pins the founder (`founder_actor_id`, `fk`) and stores the invite
    id (`inv`) on this device.
-4. Adds the workspace to the rail (refreshing relay/key if the room
+5. Adds the workspace to the rail (refreshing relay/key if the room
    is already known) and switches to it. The joiner's first membership
    event redeems the invite.
 

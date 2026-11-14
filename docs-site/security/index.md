@@ -19,7 +19,7 @@ described in
 
 | Component | Secrets it holds | Data it holds | Talks to |
 |---|---|---|---|
-| **Desktop app** | in the OS secret store: account and device key seeds, an X25519 key-agreement seed for receiving rotated keys, every workspace passphrase and delivered epoch key, API keys and MCP tokens you paste, GitHub token, relay access tokens, the relay issuer key if you set one | `hive.db`: every event of every workspace it belongs to, in clear | relay, peers (P2P), model providers, MCP servers, GitHub |
+| **Desktop app** | in the OS secret store: account and device key seeds, an X25519 key-agreement seed for receiving rotated keys, every workspace passphrase and delivered epoch key, API keys and MCP tokens you paste, forge tokens of a code host this device connects (read and write kept apart; never synced, never sent to a relay), the contact write key, relay access tokens, the relay issuer key if you set one | `hive.db`: every event of every workspace it belongs to, in clear | relay, peers (P2P), model providers, MCP servers, GitHub |
 | **`ligus serve`** | in the OS secret store: its device and key-agreement keys, the workspace passphrase and epoch keys, the relay token; on disk: `serve.token`, tunnel host keys, per-phone push keys, `LIGUS_WS_SECRET_*` and MCP tokens from its environment, the host's `gh` login | `hive.db`, checkouts under `LIGUS_REPOS_DIR` | relay, phones, model providers, MCP servers, GitHub |
 | **`ligus worker`** | in the OS secret store: its device and key-agreement keys, the workspace passphrase and epoch keys; `LIGUS_WS_SECRET_*` and MCP tokens | `hive.db`, bound checkouts | relay, model providers, MCP servers |
 | **Relay** | token-issuer **public** key, hashed access tokens, APNs key (if push), DB password | ciphertext envelopes, keyring blobs, metadata (see [Self-hosting a relay](../networking/self-host.md#what-the-relay-holds)) | every device, Apple (APNs), GitHub API |
@@ -117,8 +117,9 @@ turn-scoped inputs. See [Keys off the cluster](../deploy/keys-off-cluster.md).
 
 ## Identity, devices and roles {#roles}
 
-- An **account** (one per person; GitHub sign-in links devices to one
-  account) certifies **device** keys. A `ligus serve` box can be certified as
+- An **account** (one per person: a key and a random id made on the first
+  device, never derived from a provider id; more devices join through an
+  enrollment code) certifies **device** keys. A `ligus serve` box can be certified as
   one of your devices; it can't certify itself.
 - Membership is workspace-wide, kept on the workspace config log. Roles:
 
