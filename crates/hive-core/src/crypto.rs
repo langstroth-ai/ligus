@@ -98,6 +98,45 @@ pub fn verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> Result<(),
 /// the canonical order. JSON encodings are stable because serde serializes
 /// struct fields and tagged enums in declaration order.
 pub fn envelope_preimage(env: &SessionEventEnvelope) -> Vec<u8> {
+    // Received envelopes are verified over the bytes that arrived (P0.1), so a
+    // field or kind this build doesn't know is still covered and still
+    // verifies. A key absent on the wire keeps the old behaviour: the
+    // serialization of the value it decoded to (legacy events without
+    // `timestamp`/`scope` were signed over that).
+    let raw = env.raw();
+    let scope = match raw.and_then(|r| r.scope()) {
+        Some(s) => s.as_bytes().to_vec(),
+        None => serde_json::to_vec(&env.scope).expect("serialize scope"),
+    };
+    let timestamp = match raw.and_then(|r| r.timestamp()) {
+        Some(s) => s.as_bytes().to_vec(),
+        None => serde_json::to_vec(&env.timestamp).expect("serialize timestamp"),
+    };
+    let actor_stamp = match raw.and_then(|r| r.actor_stamp()) {
+        Some(s) => s.as_bytes().to_vec(),
+        None => serde_json::to_vec(&env.actor_stamp).expect("serialize actor_stamp"),
+    };
+    let payload = match raw {
+        Some(r) => r.payload().as_bytes().to_vec(),
+        None => serde_json::to_vec(&env.payload).expect("serialize payload"),
+    };
+    preimage_of(env, [scope, timestamp, actor_stamp, payload])
+}
+
+/// The preimage over the typed fields re-serialized (ignoring received bytes).
+fn typed_preimage(env: &SessionEventEnvelope) -> Vec<u8> {
+    preimage_of(
+        env,
+        [
+            serde_json::to_vec(&env.scope).expect("serialize scope"),
+            serde_json::to_vec(&env.timestamp).expect("serialize timestamp"),
+            serde_json::to_vec(&env.actor_stamp).expect("serialize actor_stamp"),
+            serde_json::to_vec(&env.payload).expect("serialize payload"),
+        ],
+    )
+}
+
+fn preimage_of(env: &SessionEventEnvelope, signed_json: [Vec<u8>; 4]) -> Vec<u8> {
     let mut out = Vec::with_capacity(192);
     // v3: LENGTH-PREFIX every variable-length JSON field so the concatenation is
     // injective — two distinct envelopes can't collide to the same preimage by
@@ -114,16 +153,32 @@ pub fn envelope_preimage(env: &SessionEventEnvelope) -> Vec<u8> {
     out.extend_from_slice(&env.sequence.to_le_bytes());
     out.extend_from_slice(&env.lamport.to_le_bytes());
     out.extend_from_slice(env.event_id.as_bytes());
-    for json in [
-        serde_json::to_vec(&env.scope).expect("serialize scope"),
-        serde_json::to_vec(&env.timestamp).expect("serialize timestamp"),
-        serde_json::to_vec(&env.actor_stamp).expect("serialize actor_stamp"),
-        serde_json::to_vec(&env.payload).expect("serialize payload"),
-    ] {
+    for json in signed_json {
         out.extend_from_slice(&(json.len() as u32).to_le_bytes());
         out.extend_from_slice(&json);
     }
     out
+}
+
+/// Whether every received signed field means exactly what its typed value
+/// re-serializes to (same JSON value; only key order, spacing or number
+/// spelling may differ). True for bytes that went through a `serde_json::Value`
+/// on the way in, false when they carry anything this build would drop.
+fn received_matches_typed(env: &SessionEventEnvelope) -> bool {
+    let Some(raw) = env.raw() else { return true };
+    fn same<T: Serialize>(raw: Option<&str>, typed: &T) -> bool {
+        match raw {
+            None => true,
+            Some(r) => match (serde_json::from_str::<serde_json::Value>(r), serde_json::to_value(typed)) {
+                (Ok(a), Ok(b)) => a == b,
+                _ => false,
+            },
+        }
+    }
+    same(raw.scope(), &env.scope)
+        && same(raw.timestamp(), &env.timestamp)
+        && same(raw.actor_stamp(), &env.actor_stamp)
+        && same(Some(raw.payload()), &env.payload)
 }
 
 /// Sign an envelope in place with the writing device's keypair, stamping the
@@ -135,9 +190,25 @@ pub fn sign_envelope(env: &mut SessionEventEnvelope, device_id: Uuid, keypair: &
 }
 
 /// Verify an envelope's signature against the writing device's public key.
+///
+/// The check runs over the received bytes. One fallback: when those bytes were
+/// re-encoded on the way in (through a `serde_json::Value`, which reorders
+/// keys) but mean exactly the typed value, the typed preimage is accepted.
+/// Bytes that carry anything the typed value drops never take the fallback,
+/// so nothing unsigned can ride along.
 pub fn verify_envelope(env: &SessionEventEnvelope, device_public_key: &[u8]) -> Result<(), CryptoError> {
     let signature = env.signature.as_ref().ok_or(CryptoError::Unsigned)?;
-    verify(device_public_key, &envelope_preimage(env), signature)
+    match verify(device_public_key, &envelope_preimage(env), signature) {
+        Ok(()) => Ok(()),
+        Err(e) if env.raw().is_none() => Err(e),
+        Err(e) => {
+            if received_matches_typed(env) {
+                verify(device_public_key, &typed_preimage(env), signature)
+            } else {
+                Err(e)
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

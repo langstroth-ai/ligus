@@ -422,8 +422,12 @@ impl SessionEvent {
 
 /// A sequenced, optionally-signed event on a workspace log. Signing
 /// (`signer_device_id` / `signature`) is populated in Phase 2.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+///
+/// Serde is hand-written in [`crate::envelope_wire`]: a received envelope keeps
+/// the bytes it arrived as (`raw`), its signature is checked over them, and it
+/// is stored and re-sent byte for byte, unknown fields and kinds included. The
+/// JSON shape is the camelCase form of the fields below, in this order.
+#[derive(Debug, Clone)]
 pub struct SessionEventEnvelope {
     pub id: Uuid,
     pub event_id: Uuid,
@@ -436,23 +440,36 @@ pub struct SessionEventEnvelope {
     /// so projection converges regardless of arrival/insertion order. Absent on
     /// legacy events (`#[serde(default)]` → 0, so they sort first, tie-broken by
     /// `event_id`).
-    #[serde(default)]
     pub lamport: u64,
-    #[serde(default)]
+    /// Absent on the wire for legacy events: decoded as the default.
     pub timestamp: Timestamp,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_stamp: Option<ActorStamp>,
     pub payload: SessionEvent,
-    #[serde(default = "default_scope")]
+    /// Absent on the wire for legacy events: decoded as `Session`.
     pub scope: EventScope,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signer_device_id: Option<Uuid>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature: Option<Vec<u8>>,
+    /// The bytes this envelope was received as (`None` for one authored here
+    /// and not yet round-tripped). Never a key of its own on the wire.
+    pub(crate) raw: Option<crate::envelope_wire::RawSigned>,
 }
 
-fn default_scope() -> EventScope {
-    EventScope::Session
+/// Equality is over the typed fields; the received bytes are not compared.
+impl PartialEq for SessionEventEnvelope {
+    fn eq(&self, o: &Self) -> bool {
+        self.id == o.id
+            && self.event_id == o.event_id
+            && self.session_id == o.session_id
+            && self.workspace_id == o.workspace_id
+            && self.sequence == o.sequence
+            && self.lamport == o.lamport
+            && self.timestamp == o.timestamp
+            && self.actor_stamp == o.actor_stamp
+            && self.payload == o.payload
+            && self.scope == o.scope
+            && self.signer_device_id == o.signer_device_id
+            && self.signature == o.signature
+    }
 }
 
 impl SessionEventEnvelope {
@@ -480,6 +497,7 @@ impl SessionEventEnvelope {
             scope,
             signer_device_id: None,
             signature: None,
+            raw: None,
         }
     }
 

@@ -1157,6 +1157,30 @@ mod tests {
         assert!(store.append_envelope(&dup).is_err());
     }
 
+    /// A newer build's envelope (an unknown top-level key, an unknown kind with
+    /// nested data) is stored exactly as received and listed back exactly so,
+    /// which is what lets it be re-sent to peers and refolded after an upgrade.
+    #[test]
+    fn ingest_stores_the_received_bytes() {
+        let mut store = EventStore::open_in_memory().unwrap();
+        let sid = Uuid::new_v4();
+        let base = SessionEventEnvelope::new(sid, Uuid::nil(), 1, SessionEvent::MessageRemoved { message_id: Uuid::nil() });
+        let mut v = serde_json::to_value(&base).unwrap();
+        v["payload"] = serde_json::json!({"kind": "zzNewKind", "deep": {"x": [1.5, "✓"]}, "order": "kept"});
+        v["zzTop"] = serde_json::json!({"b": 1, "a": 2});
+        let wire = v.to_string().replace("\"zzTop\"", " \"zzTop\" ");
+        let env: SessionEventEnvelope = serde_json::from_str(&wire).unwrap();
+        assert_eq!(env.payload, SessionEvent::Unknown);
+        assert!(store.ingest(&env).unwrap());
+        let stored: String = store
+            .conn
+            .query_row("SELECT envelope_json FROM events WHERE event_id = ?1", [env.event_id.to_string()], |r| r.get(0))
+            .unwrap();
+        assert_eq!(stored, wire);
+        let listed = store.list(sid).unwrap();
+        assert_eq!(serde_json::to_string(&listed[0]).unwrap(), wire);
+    }
+
     #[test]
     fn persists_across_reopen() {
         let dir = tempfile::tempdir().unwrap();

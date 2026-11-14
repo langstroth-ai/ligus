@@ -13,6 +13,7 @@ pub mod crypto;
 pub mod device_link;
 pub mod e2ee;
 pub mod endpoint;
+pub mod envelope_wire;
 pub mod events;
 pub mod flow;
 pub mod git_context;

@@ -19,7 +19,9 @@ authors = ["Ligus"]
 serde = { version = "1", features = ["derive"] }
 # float_roundtrip: signatures cover re-serialized payloads, so floats must
 # parse back to the exact bits they were written from (see hive-core sec_tests).
-serde_json = { version = "1", features = ["float_roundtrip"] }
+# raw_value: envelopes keep the bytes they were signed over (hive-core
+# envelope_wire), so unknown fields survive verification, storage and re-sync.
+serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
 thiserror = "2"
 anyhow = "1"
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
