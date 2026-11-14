@@ -56,6 +56,7 @@ const FOLD_ENV_DENYLIST: &[(&str, &str, &str)] = &[
     ("k", "LIGUS_MCP_MAX_CASCADE_PROPOSALS", "per-cascade Ligus tool budget (device-local host policy)"),
     ("k", "LIGUS_MCP_MAX_CASCADE_HANDOFFS", "per-cascade Ligus tool budget (device-local host policy)"),
     ("k", "LIGUS_MCP_MAX_CASCADE_ASKS", "per-cascade Ligus tool budget (device-local host policy)"),
+    ("\"LIGUS_SANDBOX_UNIX_SOCKETS\"", "LIGUS_SANDBOX_UNIX_SOCKETS", "whether sandboxed children may create unix sockets (C-10)"),
     ("\"LIGUS_MODEL_PRICES\"", "LIGUS_MODEL_PRICES", "token prices for a turn's spend budget (device-local host policy)"),
     ("name", "LIGUS_AGENT_MAX_LINE_BYTES", "cap on one line of an agent's output"),
     ("name", "LIGUS_AGENT_MAX_OUTPUT_BYTES", "cap on an agent turn's output"),

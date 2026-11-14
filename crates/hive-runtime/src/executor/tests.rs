@@ -537,6 +537,41 @@ fn sandbox_linux_seccomp_and_landlock() {
     }
 }
 
+/// Linux (C-10): an agent can't reach the host's unix sockets
+/// (`docker.sock`, an ssh-agent, a desktop service): bwrap's read-only `/`
+/// still lets a process `connect()` to any socket file it can see. Seccomp
+/// refuses new `AF_UNIX` sockets inside the sandbox, so no socket path is
+/// reachable, while the turn's Ligus MCP server stays reachable through
+/// the helper's loopback forwarder (`mcp_bridge_reachable_inside_seatbelt_and_bwrap`).
+///
+/// Linux only: run it on a host with bubblewrap and user namespaces (the
+/// owner's SFF box, or Linux CI); it can't run on macOS.
+#[cfg(target_os = "linux")]
+#[test]
+fn sandbox_denies_unix_socket_connect() {
+    let Some(e) = real_executor() else { return };
+    let f = Fixture::new();
+    // A socket the agent's mount namespace can see, as docker.sock would be.
+    let path = f.outside.join("host-service.sock");
+    let _ = std::fs::remove_file(&path);
+    let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    if !which("python3") {
+        eprintln!("skipped: python3 is needed for the connect probe");
+        return;
+    }
+    let probe = format!(
+        "python3 -c 'import socket,sys\ns=socket.socket(socket.AF_UNIX)\ns.connect(sys.argv[1])\nprint(\"CONNECTED\")' '{}'",
+        path.display()
+    );
+    let (ok, out) = run_sh(&*e, &f, &probe, isolated());
+    assert!(!ok && !out.contains("CONNECTED"), "an agent reached a host unix socket: {out}");
+    assert!(listener.accept().is_err(), "the host socket saw a connection");
+    // socketpair (local IPC between the agent's own processes) still works.
+    let (ok, out) = run_sh(&*e, &f, "python3 -c 'import socket; a,b=socket.socketpair(); a.send(b\"x\"); print(b.recv(1))'", isolated());
+    assert!(ok && out.contains("x"), "{out}");
+}
+
 /// macOS: a confined agent must not escape through LaunchServices. Writing
 /// an app bundle into a writable dir and `open`ing it hands the launch to
 /// launchd, so the app would run outside the profile (reading the data dir,

@@ -19,8 +19,21 @@
 //!    `pivot_root`, `bpf`, `perf_event_open`, `keyctl`, `add_key`,
 //!    `request_key`, `kexec_*`, `init_module`, `finit_module` fail with
 //!    EPERM, and so do `unshare`/`clone` with `CLONE_NEWUSER`; `clone3`
-//!    fails with ENOSYS so libc falls back to `clone`;
+//!    fails with ENOSYS so libc falls back to `clone`; and (C-10) for every
+//!    child with a network namespace, `socket(AF_UNIX, …)` fails with EPERM,
+//!    so no host unix socket (`docker.sock`, an ssh-agent, a desktop
+//!    service) is reachable through bwrap's read-only `/`. `socketpair`
+//!    still works. The turn's Ligus MCP server is reached through a
+//!    loopback forwarder the helper runs on [`SANDBOX_TCP_PORT`] inside the
+//!    namespace, and the egress proxy through the forwarders above (both
+//!    started before the filter, which binds only the command's thread);
 //! 4. runs the command.
+//!
+//! Known host sockets (`docker.sock`, `podman.sock`, `containerd.sock`,
+//! `$SSH_AUTH_SOCK`) are also masked with `/dev/null`, a second layer that
+//! still holds where the unix-socket filter is turned off
+//! (`LIGUS_SANDBOX_UNIX_SOCKETS=allow`, device-local, for an agent whose
+//! tools need their own unix sockets).
 //!
 //! Deviation from the spec: the network is always a fresh namespace (not
 //! Landlock's TCP port filter on ABI ≥ 4), so UDP and every other protocol
@@ -32,6 +45,20 @@ use std::path::{Path, PathBuf};
 
 use super::{canonical, host_paths, plan_env, EgressPlan, EnforcementPlan, ExecutorKind, TurnExecutor};
 use crate::egress::EgressProxy;
+use crate::ligus_mcp::bridge::SANDBOX_TCP_PORT;
+
+/// Whether this device lets confined children create unix sockets
+/// (`LIGUS_SANDBOX_UNIX_SOCKETS=allow`; off by default, C-10).
+fn unix_sockets_allowed() -> bool {
+    hive_core::compat::var("LIGUS_SANDBOX_UNIX_SOCKETS").is_ok_and(|v| v.trim().eq_ignore_ascii_case("allow"))
+}
+
+/// Host sockets an agent must never reach, masked by path as a second layer.
+fn known_host_sockets() -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = ["/var/run/docker.sock", "/run/docker.sock", "/run/podman/podman.sock", "/run/containerd/containerd.sock"].iter().map(PathBuf::from).collect();
+    v.extend(std::env::var_os("SSH_AUTH_SOCK").map(PathBuf::from));
+    v
+}
 
 /// The hidden first argument that turns a Ligus binary into the helper.
 pub const HELPER_ARG: &str = "__ligus-sandbox-exec-linux";
@@ -108,6 +135,22 @@ pub fn bwrap_args(plan: &EnforcementPlan, cwd: &Path) -> Vec<OsString> {
             Err(_) => {}
         }
     }
+    // C-10: known host sockets read as /dev/null (a second layer to the
+    // seccomp unix-socket filter). Ones under a denied dir are gone already.
+    {
+        use std::os::unix::fs::FileTypeExt;
+        let mut masked: Vec<PathBuf> = Vec::new();
+        for sock in known_host_sockets() {
+            let c = canonical(&sock);
+            if masked.contains(&c) || denied.iter().any(|d| c.starts_with(d)) {
+                continue;
+            }
+            if std::fs::metadata(&c).is_ok_and(|m| m.file_type().is_socket()) {
+                push(&["--ro-bind".as_ref(), "/dev/null".as_ref(), c.as_os_str()]);
+                masked.push(c);
+            }
+        }
+    }
     for r in &plan.allow_read {
         let r = canonical(r);
         if r.exists() && denied.iter().any(|d| r.starts_with(d)) && r != canonical(&plan.worktree) {
@@ -177,6 +220,16 @@ pub fn helper_args(plan: &EnforcementPlan, proxy: Option<&EgressProxy>) -> Vec<O
         a.push("--rw".into());
         a.push(p.into_os_string());
     }
+    // C-10: children with a network namespace (everything but a user's
+    // open-egress MCP server) get no unix sockets; the Ligus MCP server is
+    // reached through the helper's forwarder.
+    let netns = !matches!(plan.egress, EgressPlan::Open);
+    if netns && !unix_sockets_allowed() {
+        a.push("--deny-unix".into());
+    }
+    if let Some(sock) = plan.ligus_mcp_socket.as_ref().filter(|_| netns) {
+        a.extend(["--mcp-sock".into(), canonical(sock).into_os_string()]);
+    }
     if let (Some(p), EgressPlan::Proxy { allow }) = (proxy, &plan.egress) {
         if let Some(sock) = p.unix_socket() {
             a.extend(["--proxy-sock".into(), sock.as_os_str().to_os_string()]);
@@ -243,6 +296,10 @@ pub fn maybe_run_helper() {
 
 struct HelperOpts {
     rw: Vec<PathBuf>,
+    /// The turn's Ligus MCP socket, forwarded from 127.0.0.1:SANDBOX_TCP_PORT.
+    mcp_sock: Option<PathBuf>,
+    /// Refuse new AF_UNIX sockets (C-10).
+    deny_unix: bool,
     proxy_sock: Option<PathBuf>,
     proxy_port: Option<u16>,
     token: String,
@@ -251,7 +308,7 @@ struct HelperOpts {
 }
 
 fn parse_helper(args: Vec<OsString>) -> io::Result<HelperOpts> {
-    let mut o = HelperOpts { rw: Vec::new(), proxy_sock: None, proxy_port: None, token: String::new(), loop_ports: Vec::new(), cmd: Vec::new() };
+    let mut o = HelperOpts { rw: Vec::new(), mcp_sock: None, deny_unix: false, proxy_sock: None, proxy_port: None, token: String::new(), loop_ports: Vec::new(), cmd: Vec::new() };
     let mut it = args.into_iter();
     let bad = |m: &str| io::Error::new(io::ErrorKind::InvalidInput, m.to_string());
     while let Some(a) = it.next() {
@@ -260,6 +317,8 @@ fn parse_helper(args: Vec<OsString>) -> io::Result<HelperOpts> {
         match s.as_str() {
             "--rw" => o.rw.push(PathBuf::from(val()?)),
             "--proxy-sock" => o.proxy_sock = Some(PathBuf::from(val()?)),
+            "--mcp-sock" => o.mcp_sock = Some(PathBuf::from(val()?)),
+            "--deny-unix" => o.deny_unix = true,
             "--proxy-port" => o.proxy_port = Some(val()?.to_string_lossy().parse().map_err(|_| bad("port"))?),
             "--loop-port" => o.loop_ports.push(val()?.to_string_lossy().parse().map_err(|_| bad("port"))?),
             "--" => {
@@ -300,9 +359,30 @@ fn splice(a: std::os::unix::net::UnixStream, b: std::net::TcpStream) {
     let _ = b.shutdown(std::net::Shutdown::Write);
 }
 
+/// The Ligus MCP forwarder: 127.0.0.1:SANDBOX_TCP_PORT (in the turn's
+/// network namespace) to the turn's MCP socket. Its threads start before
+/// the seccomp filter, which applies only to the thread that installs it
+/// (and so to the command), so they can still open unix sockets.
+fn start_mcp_forwarder(o: &HelperOpts) -> io::Result<bool> {
+    let Some(sock) = o.mcp_sock.clone() else { return Ok(false) };
+    let l = std::net::TcpListener::bind(("127.0.0.1", SANDBOX_TCP_PORT))?;
+    std::thread::spawn(move || {
+        for c in l.incoming().flatten() {
+            let sock = sock.clone();
+            std::thread::spawn(move || {
+                if let Ok(u) = std::os::unix::net::UnixStream::connect(&sock) {
+                    splice(u, c);
+                }
+            });
+        }
+    });
+    Ok(true)
+}
+
 fn start_forwarders(o: &HelperOpts) -> io::Result<bool> {
     use std::io::{Read, Write};
-    let (Some(sock), Some(port)) = (o.proxy_sock.clone(), o.proxy_port) else { return Ok(false) };
+    let mcp = start_mcp_forwarder(o)?;
+    let (Some(sock), Some(port)) = (o.proxy_sock.clone(), o.proxy_port) else { return Ok(mcp) };
     let l = std::net::TcpListener::bind(("127.0.0.1", port))?;
     let s2 = sock.clone();
     std::thread::spawn(move || {
@@ -317,7 +397,7 @@ fn start_forwarders(o: &HelperOpts) -> io::Result<bool> {
     });
     for lp in &o.loop_ports {
         let lp = *lp;
-        if lp == port {
+        if lp == port || lp == SANDBOX_TCP_PORT {
             continue;
         }
         let l = std::net::TcpListener::bind(("127.0.0.1", lp))?;
@@ -375,7 +455,7 @@ fn apply_landlock(rw: &[PathBuf]) -> io::Result<()> {
     Ok(())
 }
 
-fn apply_seccomp() -> io::Result<()> {
+fn apply_seccomp(deny_unix: bool) -> io::Result<()> {
     use seccompiler::{BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter, SeccompRule, TargetArch};
     use std::collections::BTreeMap;
     let arch: TargetArch = std::env::consts::ARCH.try_into().map_err(|e: seccompiler::BackendError| io::Error::other(e.to_string()))?;
@@ -407,6 +487,11 @@ fn apply_seccomp() -> io::Result<()> {
     };
     deny.insert(libc::SYS_unshare, vec![flag_rule(0)?]);
     deny.insert(libc::SYS_clone, vec![flag_rule(0)?]);
+    if deny_unix {
+        // C-10: socket(AF_UNIX, …). socketpair (local IPC) stays allowed.
+        let unix = SeccompRule::new(vec![SeccompCondition::new(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, libc::AF_UNIX as u64).map_err(be)?]).map_err(be)?;
+        deny.insert(libc::SYS_socket, vec![unix]);
+    }
     let f1 = SeccompFilter::new(deny, SeccompAction::Allow, SeccompAction::Errno(libc::EPERM as u32), arch).map_err(be)?;
     let mut enosys: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
     enosys.insert(libc::SYS_clone3, vec![]);
@@ -423,7 +508,7 @@ fn run_helper(args: Vec<OsString>) -> io::Result<i32> {
     let o = parse_helper(args)?;
     let forwarding = start_forwarders(&o)?;
     apply_landlock(&o.rw)?;
-    apply_seccomp()?;
+    apply_seccomp(o.deny_unix)?;
     let mut cmd = std::process::Command::new(&o.cmd[0]);
     cmd.args(&o.cmd[1..]);
     if !forwarding {
@@ -484,5 +569,22 @@ mod tests {
         assert!(std::env::var_os(PROXY_TOKEN_ENV).is_none(), "the command would inherit the token");
         // The old argument is gone.
         assert!(parse_helper(vec!["--token".into(), "x".into(), "--".into(), "true".into()]).is_err());
+    }
+
+    /// C-10: a child with a network namespace gets the unix-socket filter
+    /// and the MCP forwarder; a user's open-egress MCP server gets neither.
+    #[test]
+    fn helper_denies_unix_sockets_and_forwards_mcp() {
+        let t = tempfile::tempdir().unwrap();
+        let mut p = plan(t.path());
+        p.ligus_mcp_socket = Some(t.path().join("mcp/s"));
+        let a: Vec<String> = helper_args(&p, None).iter().map(|x| x.to_string_lossy().into_owned()).collect();
+        assert!(a.contains(&"--deny-unix".to_string()), "{a:?}");
+        assert!(a.windows(2).any(|w| w[0] == "--mcp-sock" && w[1].ends_with("mcp/s")), "{a:?}");
+        let o = parse_helper(helper_args(&p, None).into_iter().chain(["--".into(), "true".into()]).collect()).unwrap();
+        assert!(o.deny_unix && o.mcp_sock.is_some());
+        p.egress = EgressPlan::Open;
+        let a: Vec<String> = helper_args(&p, None).iter().map(|x| x.to_string_lossy().into_owned()).collect();
+        assert!(!a.contains(&"--deny-unix".to_string()) && !a.contains(&"--mcp-sock".to_string()), "{a:?}");
     }
 }
