@@ -109,14 +109,19 @@ pub fn requires_projection_authz(event: &SessionEvent) -> bool {
             | SessionEvent::ChannelArchived { .. }
             | SessionEvent::ChatChannelChanged { .. }
             | SessionEvent::DeviceRevoked { .. }
-            | SessionEvent::CoordinatorLeaseClaimed { .. }
-            | SessionEvent::CoordinatorLeaseReleased { .. }
             | SessionEvent::DearthModeChanged { .. }
             | SessionEvent::JoinApproved { .. }
             | SessionEvent::ChatLockdownCleared { .. }
     )
 }
 
+/// Coordinator leases are deliberately **not** role-gated in projection: a run's
+/// lease rides its chat log, whose own roster holds only the chat's creator
+/// (membership is hoisted from the config log only after projection), so a
+/// role check there would drop every other member's claim. They are gated by
+/// role at authoring (against the hoisted roster) and, in projection, bound to
+/// the signing device below — the same footing as the run writes they fence.
+///
 /// Envelope-bound check for coordinator leases, run during projection where the
 /// envelope (and so its `signer_device_id`) is at hand:
 ///   * a `CoordinatorLeaseClaimed` must be signed by the device it names as

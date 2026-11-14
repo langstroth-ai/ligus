@@ -352,6 +352,87 @@ mod tests {
         assert!(!svc.list_signals(ws, 0, Some("hygiene"), 10).unwrap().is_empty());
     }
 
+    fn named(name: &str) -> ChatService {
+        let store = crate::event_store::EventStore::open_in_memory().unwrap();
+        let author = hive_core::ActorIdentity::new(name, name, hive_core::ActorKind::Human);
+        ChatService::new(
+            store,
+            Uuid::new_v4(),
+            hive_core::SigningKeypair::generate().unwrap(),
+            hive_core::SigningKeypair::generate().unwrap(),
+            author,
+        )
+    }
+
+    /// Deliver every event `from` has that `to` lacks (both directions = a sync).
+    fn deliver(from: &ChatService, to: &mut ChatService) {
+        for sid in from.store.list_session_ids().unwrap() {
+            for env in from.store.list(sid).unwrap() {
+                to.store.ingest(&env).unwrap();
+            }
+        }
+    }
+
+    fn run_write(svc: &mut ChatService, chat: Uuid, ws: Uuid, run_id: Uuid, input: &str, epoch: u64) {
+        let def = hive_core::WorkflowDefinition {
+            id: Uuid::nil(),
+            name: "wf".into(),
+            description: String::new(),
+            input_label: None,
+            nodes: Vec::new(),
+            created_at: Timestamp::now(),
+            disabled: false,
+        };
+        let mut run = hive_core::workflow::new_run(&def, input, "a");
+        run.id = run_id;
+        run.lease_epoch = Some(epoch);
+        svc.upsert_workflow_run(chat, ws, run).unwrap();
+    }
+
+    #[test]
+    fn two_devices_racing_for_the_same_epoch_converge_and_the_loser_is_fenced() {
+        let (mut a, mut b) = (named("ada"), named("bea"));
+        let ws = Uuid::new_v4();
+        a.ensure_workspace_config(ws).unwrap();
+        let chat = a.create_chat("c", ws, "anthropic").unwrap().id;
+        let bea = hive_core::WorkspaceMember {
+            id: "bea".into(),
+            actor: b.author().clone(),
+            role: hive_core::WorkspaceRole::Contributor,
+            title: String::new(),
+            index: 2,
+            joined_at: Timestamp::now(),
+        };
+        a.add_member(chat, ws, bea).unwrap();
+        let run = Uuid::new_v4().to_string();
+        let run_id = Uuid::parse_str(&run).unwrap();
+        a.claim_lease(chat, ws, LeaseScope::WorkflowRun, &run, 1, DEFAULT_LEASE_MS, LeaseClaimReason::Initial).unwrap();
+        deliver(&a, &mut b);
+        // Partition: both believe the lease lapsed and claim epoch 2, then write.
+        let mine_b = b.claim_lease(chat, ws, LeaseScope::WorkflowRun, &run, 2, DEFAULT_LEASE_MS, LeaseClaimReason::Lapsed).unwrap().unwrap();
+        assert_eq!(mine_b.current.holder, b.device_id(), "locally, each thinks it won");
+        run_write(&mut b, chat, ws, run_id, "from-b", 2);
+        let mine_a = a.claim_lease(chat, ws, LeaseScope::WorkflowRun, &run, 2, DEFAULT_LEASE_MS, LeaseClaimReason::Lapsed).unwrap().unwrap();
+        // a still held epoch 1, so its own replay at 2 also folds locally.
+        assert_eq!(mine_a.current.epoch, 2);
+        run_write(&mut a, chat, ws, run_id, "from-a", 2);
+        // Heal the partition.
+        deliver(&a, &mut b);
+        deliver(&b, &mut a);
+        let la = a.lease(chat, LeaseScope::WorkflowRun, &run).unwrap().unwrap();
+        let lb = b.lease(chat, LeaseScope::WorkflowRun, &run).unwrap().unwrap();
+        assert_eq!((la.current.holder, la.current.epoch), (lb.current.holder, lb.current.epoch), "both devices agree");
+        let winner_is_a = la.current.holder == a.device_id();
+        let expected = if winner_is_a { "from-a" } else { "from-b" };
+        for svc in [&a, &b] {
+            let s = svc.load(chat).unwrap().unwrap();
+            let r = s.workflow_runs.iter().find(|r| r.id == run_id).unwrap();
+            assert_eq!(r.input, expected, "only the winner's write survives on every device");
+        }
+        // The loser can see it was fenced (its claim is recorded).
+        assert!(!la.fenced.is_empty());
+    }
+
     #[test]
     fn signals_are_local_bounded_and_filterable() {
         let svc = service();

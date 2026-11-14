@@ -95,11 +95,20 @@ fn a_claim_signed_by_another_device_is_dropped() {
 }
 
 #[test]
-fn a_viewer_cannot_claim_a_lease() {
+fn a_viewer_cannot_author_a_claim_and_a_member_outside_the_chat_roster_can_project_one() {
     let s = base();
+    // Authoring: a Viewer is refused (checked against the hoisted roster).
     let (run, v) = (Uuid::new_v4(), Uuid::new_v4());
-    let envs = vec![seed(&s), ev(&s, 1, "victor", Some(v), claim(run, v, 1))];
-    assert_eq!(holder(&project(&envs).unwrap(), run), None);
+    let d = crate::authorization::evaluate(&claim(run, v, 1), "victor", WorkspaceRole::Viewer, &s);
+    assert!(!d.allowed);
+    // Projection: a claim by a workspace member who isn't on this chat's own
+    // roster (members live on the config log) still folds when it's signed by
+    // the device it names. Without this, only a chat's creator could drive runs.
+    let mut chat = base();
+    chat.members.retain(|m| m.id == "owner");
+    let dev = Uuid::new_v4();
+    let envs = vec![seed(&chat), ev(&chat, 1, "alice", Some(dev), claim(run, dev, 1))];
+    assert_eq!(holder(&project(&envs).unwrap(), run), Some((dev, 1)));
 }
 
 #[test]
