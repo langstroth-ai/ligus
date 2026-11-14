@@ -13,14 +13,28 @@ version = 2
 yanked = "deny"
 unmaintained = "workspace"
 # quick-xml DoS advisories (quadratic attribute scan; unbounded namespace
-# allocation). Reached ONLY transitively via `plist` (Tauri config + netdev
-# reading local system property lists) — not from parsing attacker-controlled
-# network XML, so exposure is local-input only. No fix exists in the semver range
-# our deps pin; revisit (and drop these) once plist/tauri bump quick-xml to the
-# patched line.
+# allocation), patched in quick-xml >= 0.41. Reached ONLY transitively: 0.39
+# via `plist` (Tauri config + netdev reading local system property lists) and
+# 0.37 via `tauri-winrt-notification` (Windows toast XML that Ligus builds
+# itself). Neither parses attacker-controlled network XML, so exposure is
+# local-input only, and no release of plist/notify-rust in our semver range
+# moves to the patched line yet.
+# Review by 2027-02-15: drop these as soon as `cargo update` reaches quick-xml
+# >= 0.41 through both paths (cargo-deny then warns advisory-not-detected).
+#
+# RUSTSEC-2026-0387 (crypto-bigint 0.5 constant-time gaps): crypto-bigint 0.5.5
+# is reached ONLY via ssh-key 0.6 -> p256/p384/p521 0.13 (identity links,
+# crates/hive-runtime/src/identity_links.rs), which Ligus uses to VERIFY
+# SSHSIG signatures: public key, public message, public signature, so there
+# is no secret integer for a timing side channel to leak. Ligus's own P-256
+# code (hive-core presence) is on p256 0.14 / crypto-bigint 0.7.11, which is
+# patched. The fix for the ssh-key path is ssh-key 0.7 (RustCrypto 0.14 line),
+# which is still a release candidate. Review by 2027-02-15, or as soon as
+# ssh-key 0.7.0 ships; never extend this to code that signs with these curves.
 ignore = [
-    "RUSTSEC-2026-0194",
-    "RUSTSEC-2026-0195",
+    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5 only via ssh-key 0.6 SSHSIG verification (public inputs); fixed in ssh-key 0.7 (rc only); review by 2027-02-15" },
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml via plist/tauri-winrt-notification; local input only; review by 2027-02-15" },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml via plist/tauri-winrt-notification; local input only; review by 2027-02-15" },
 ]
 
 [licenses]

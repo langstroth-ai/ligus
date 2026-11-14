@@ -5,7 +5,7 @@ name: security-audit
 # (so a newly-disclosed advisory against an unchanged tree is still caught).
 on:
   push:
-    branches: [main]
+    branches: [main, "release/**"]
     paths:
       - "**/Cargo.toml"
       - "Cargo.lock"
@@ -20,24 +20,29 @@ on:
       - "deny.toml"
       - "web/package.json"
       - "web/bun.lock"
+      - ".github/workflows/security-audit.yml"
   schedule:
     - cron: "0 7 * * 1" # Mondays 07:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   cargo-deny:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: cargo-deny (advisories, licenses, bans, sources)
-        uses: EmbarkStudios/cargo-deny-action@v2
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check advisories licenses bans sources
 
   web-audit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: latest
       - name: Frontend dependency audit

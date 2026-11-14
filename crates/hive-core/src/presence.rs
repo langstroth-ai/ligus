@@ -572,7 +572,7 @@ pub mod soft {
             let _ = getrandom::getrandom(&mut id);
             Self {
                 credential_id: id.to_vec(),
-                key: Key::Es256(p256::ecdsa::SigningKey::random(&mut OsRng)),
+                key: Key::Es256(random_es256_key()),
                 rp_id: RP_ID.into(),
                 origin: DEFAULT_ORIGINS[0].into(),
                 flags: FLAG_UP | FLAG_UV,
@@ -589,7 +589,7 @@ pub mod soft {
         }
         pub fn public_key(&self) -> Vec<u8> {
             match &self.key {
-                Key::Es256(k) => k.verifying_key().to_encoded_point(false).as_bytes().to_vec(),
+                Key::Es256(k) => k.verifying_key().to_sec1_point(false).as_bytes().to_vec(),
                 Key::Ed25519(k) => k.public_key_bytes().to_vec(),
             }
         }
@@ -619,7 +619,7 @@ pub mod soft {
         fn cose_key(&self) -> Vec<u8> {
             match &self.key {
                 Key::Es256(k) => {
-                    let p = k.verifying_key().to_encoded_point(false);
+                    let p = k.verifying_key().to_sec1_point(false);
                     let mut v = vec![0xa5, 0x01, 0x02, 0x03, 0x26, 0x20, 0x01, 0x21, 0x58, 0x20];
                     v.extend_from_slice(p.x().unwrap());
                     v.extend_from_slice(&[0x22, 0x58, 0x20]);
@@ -694,27 +694,18 @@ pub mod soft {
         }
     }
 
-    struct OsRng;
-    impl p256::elliptic_curve::rand_core::RngCore for OsRng {
-        fn next_u32(&mut self) -> u32 {
-            let mut b = [0u8; 4];
-            self.fill_bytes(&mut b);
-            u32::from_le_bytes(b)
-        }
-        fn next_u64(&mut self) -> u64 {
-            let mut b = [0u8; 8];
-            self.fill_bytes(&mut b);
-            u64::from_le_bytes(b)
-        }
-        fn fill_bytes(&mut self, dest: &mut [u8]) {
-            getrandom::getrandom(dest).expect("random");
-        }
-        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), p256::elliptic_curve::rand_core::Error> {
-            self.fill_bytes(dest);
-            Ok(())
+    /// A random P-256 signing key from OS randomness (rejection-sampled: a
+    /// 32-byte draw is a valid scalar unless it is zero or at least the
+    /// group order, which almost never happens).
+    fn random_es256_key() -> p256::ecdsa::SigningKey {
+        loop {
+            let mut b = [0u8; 32];
+            getrandom::getrandom(&mut b).expect("random");
+            if let Ok(k) = p256::ecdsa::SigningKey::from_slice(&b) {
+                return k;
+            }
         }
     }
-    impl p256::elliptic_curve::rand_core::CryptoRng for OsRng {}
 }
 
 #[cfg(test)]

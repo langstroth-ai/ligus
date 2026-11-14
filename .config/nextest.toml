@@ -1,0 +1,11 @@
+# cargo-nextest settings (https://nexte.st). CI runs `--profile ci`; the
+# default profile is what `cargo nextest run` uses locally. Doctests aren't
+# run by nextest: CI runs `cargo test --doc` separately.
+
+[profile.ci]
+# Report every failure, not just the first.
+fail-fast = false
+# Print a failing test's output where it fails and again in the summary.
+failure-output = "immediate-final"
+# Flag (but don't kill) tests that run past a minute, so slow tests show up.
+slow-timeout = { period = "60s" }
