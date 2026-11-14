@@ -39,6 +39,12 @@ impl LigusHost for AppHost {
         // The open chat refetches and shows the question with its answer buttons.
         let _ = self.app.emit("workspace://synced", 1);
     }
+
+    fn forge_for(&self, _chat_id: Uuid) -> Option<hive_runtime::ligus_mcp::forge_tools::ForgeBinding> {
+        let state = self.app.state::<AppState>();
+        let root = state.workspace_root.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        (!root.trim().is_empty()).then(|| crate::forges::binding_for_dir(&state.data_dir, std::path::Path::new(&root))).flatten()
+    }
 }
 
 /// This app's Ligus MCP server (one per process; its host key never leaves

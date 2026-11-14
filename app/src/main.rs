@@ -7,5 +7,7 @@ fn main() {
     hive_runtime::executor::linux::maybe_run_helper();
     // Inside an agent's sandbox this process may be the Ligus MCP bridge.
     hive_runtime::ligus_mcp::bridge::maybe_run_bridge();
+    // When git runs this binary as the credential helper for a code host.
+    hive_app_lib::maybe_run_git_credential();
     hive_app_lib::run();
 }

@@ -131,11 +131,16 @@ impl Connection {
 
     /// The credential source for this connection.
     pub fn credentials(&self, store: Arc<dyn TokenStore>, helper_program: Option<&Path>) -> Arc<dyn CredentialSource> {
+        self.credentials_with_helper(store, helper_program.map(|p| crate::tokens::store_helper_command(p, &self.id)))
+    }
+
+    /// [`Connection::credentials`] with a ready-made helper command (the
+    /// part after `!`), for hosts whose helper takes extra arguments.
+    pub fn credentials_with_helper(&self, store: Arc<dyn TokenStore>, helper: Option<String>) -> Arc<dyn CredentialSource> {
         match self.auth {
             AuthSource::Gh => Arc::new(GhCredentials::new(self.host())),
             AuthSource::None => Arc::new(Anonymous),
             AuthSource::Token | AuthSource::Oauth => {
-                let helper = helper_program.map(|p| crate::tokens::store_helper_command(p, &self.id));
                 let mut c = StoreCredentials::new(store, self.id.clone(), self.auth, helper);
                 if self.auth == AuthSource::Oauth {
                     *c.expires_at.get_mut().unwrap_or_else(|e| e.into_inner()) = self.token_expires_at;

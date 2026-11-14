@@ -11,6 +11,7 @@ dependencies = [
  "ed25519-dalek 2.2.0",
  "futures",
  "hive-core",
+ "hive-forge",
  "hive-proto",
  "hive-runtime",
  "notify",
