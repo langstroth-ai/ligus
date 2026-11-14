@@ -572,6 +572,17 @@ impl ChatSession {
             }
             SessionEvent::ProposalUpserted { proposal } => {
                 if let Some(slot) = self.proposals.iter_mut().find(|p| p.id == proposal.id) {
+                    // A verified human approval is for the change that was
+                    // reviewed: a re-upsert that swaps what would be applied
+                    // (patch, files, kind, workflow) drops it, so the human
+                    // gate re-arms for the new content.
+                    if slot.diff != proposal.diff
+                        || slot.changed_files != proposal.changed_files
+                        || slot.kind != proposal.kind
+                        || slot.workflow != proposal.workflow
+                    {
+                        self.guards.verified_approvals.remove(&proposal.id);
+                    }
                     *slot = proposal.clone();
                 } else {
                     self.proposals.push(proposal.clone());
