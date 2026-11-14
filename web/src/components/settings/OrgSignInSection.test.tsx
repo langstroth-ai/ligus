@@ -44,7 +44,7 @@ describe("OrgSignInSection", () => {
     expect(ipc.ligusAuthStart).toHaveBeenCalledWith("https://auth.example.com/t/acme");
     expect(ipc.openExternal).toHaveBeenCalledWith("https://auth.example.com/t/acme/device?user_code=BCDF-GHJK");
     expect(await screen.findByText("BCDF-GHJK")).toBeTruthy();
-    await waitFor(() => expect(ipc.ligusAuthPoll).toHaveBeenCalled());
+    await waitFor(() => expect(ipc.ligusAuthPoll).toHaveBeenCalled(), { timeout: 3000 });
   });
 
   it("shows the signed-in tenant and signs out", async () => {

@@ -108,19 +108,21 @@ pub fn for_message(s: &ChatSession, m: &ChatMessage, done: bool, me: &Me) -> Opt
         return None;
     }
     let failed = reply && m.body.starts_with("[error]");
+    // A name in a notification is shown like anywhere else (S3).
+    let author = hive_proto::names::clean_display_name(&m.author);
     if !failed && me.mentioned_in(&m.body, s) {
-        let notice = ntfy::mention_notice(&m.author, &s.title, s.id);
+        let notice = ntfy::mention_notice(&author, &s.title, s.id);
         let mut push = base("mention", s, notice.title.clone());
-        push.sender = Some(m.author.clone());
+        push.sender = Some(author.clone());
         push.preview = Some(m.body.clone());
         return Some((notice, push));
     }
     if !reply {
         return None;
     }
-    let notice = ntfy::reply_notice(&m.author, &s.title, s.id, failed);
+    let notice = ntfy::reply_notice(&author, &s.title, s.id, failed);
     let mut push = base("message.done", s, notice.title.clone());
-    push.sender = Some(m.author.clone());
+    push.sender = Some(author);
     push.preview = Some(m.body.clone());
     Some((notice, push))
 }

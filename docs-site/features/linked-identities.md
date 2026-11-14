@@ -58,8 +58,11 @@ a link, and a link signature never passes as one of those.
 
 Accepted keys: `ssh-ed25519`, `sk-ssh-ed25519@openssh.com`,
 `ecdsa-sha2-nistp256`, `sk-ecdsa-sha2-nistp256@openssh.com` (a security key's
-signature must carry user presence) and RSA of at least 3072 bits
-(`rsa-sha2-512`).
+signature must carry user presence) and RSA of 3072 to 16384 bits, signed
+with `rsa-sha2-512` (`ssh-keygen`'s default for RSA; `rsa-sha2-256` and SHA-1
+`ssh-rsa` signatures are refused). RSA signatures are checked with the
+RustCrypto `rsa` 0.10 crate, which is not affected by the Marvin timing
+advisory (RUSTSEC-2023-0071), so no advisory exception is needed.
 
 ### The signing-key fallback (GitHub and GitLab)
 

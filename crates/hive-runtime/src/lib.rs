@@ -35,6 +35,7 @@ pub mod hygiene;
 pub mod identity_links;
 pub mod identity_store;
 pub mod identity_verifier;
+pub mod invite_sig;
 pub mod keyring;
 pub mod lease_presence;
 pub mod ligus_auth;

@@ -55,15 +55,20 @@ founder's account key, see [Identity & devices](../concepts/identity.md#safety-c
 When you paste one into **People → Join with an invite**, Ligus shows it and
 compares it with what you know:
 
-- **Matches**: the founder is someone you share a workspace with, and the
-  code is theirs.
+- **From <name>**: the founder is someone you share a workspace with, the
+  code is theirs, and their device signed the invite.
+- **Says it's from <name>**: the invite names someone you know and their
+  code, but their device didn't sign it (someone else can copy a name and a
+  code). It may still be genuine, for example an invite another Admin made;
+  join only if you expected it. A direct message invite like this is refused.
 - **Doesn't match**: the invite claims to be from someone you know but
   carries another key. Ligus won't join it.
 - **Unknown**: you share no workspace with the founder. Compare the code with
   them out of band before you join. For a direct message, Ligus asks you to
   confirm you did.
 
-A name on an invite proves nothing; the code does.
+A name on an invite proves nothing, and nor does a code on its own: the
+founder's signature ties the two to the invite.
 
 ## Invite someone you already share a workspace with
 

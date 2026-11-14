@@ -74,6 +74,9 @@ pub enum ContactsError {
     Unauthorized,
     #[error("relay returned HTTP {0}")]
     Status(u16),
+    /// The relay's answer was larger than any honest one.
+    #[error("the relay's answer is too large")]
+    TooLarge,
     #[error("{0}")]
     Transport(String),
 }
@@ -132,6 +135,30 @@ struct PutBody<'a> {
     write_key: Option<&'a str>,
 }
 
+/// The largest record read accepted (a record is a few certificates, key
+/// publications and at most a handful of links: a few KiB).
+pub const MAX_RECORD_BODY: usize = 256 * 1024;
+/// The largest drop-box page accepted.
+pub const MAX_DROP_PAGE_BODY: usize = 4 * 1024 * 1024;
+/// The largest answer to a write or delete.
+const MAX_SMALL_BODY: usize = 64 * 1024;
+
+/// Read a response body up to `cap` bytes and parse it as JSON; a longer
+/// body is refused without being read to the end.
+async fn json_capped<T: serde::de::DeserializeOwned>(mut resp: reqwest::Response, cap: usize) -> Result<T, ContactsError> {
+    if resp.content_length().is_some_and(|n| n as usize > cap) {
+        return Err(ContactsError::TooLarge);
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = resp.chunk().await? {
+        if body.len() + chunk.len() > cap {
+            return Err(ContactsError::TooLarge);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&body).map_err(|e| ContactsError::Transport(format!("malformed answer: {e}")))
+}
+
 fn status_err(code: u16, unsupported_on_404: bool) -> ContactsError {
     match code {
         404 | 405 if unsupported_on_404 => ContactsError::Unsupported,
@@ -167,7 +194,7 @@ impl RelayClient {
         if !resp.status().is_success() {
             return Err(status_err(code, true));
         }
-        Ok(resp.json().await?)
+        json_capped(resp, MAX_SMALL_BODY).await
     }
 
     /// Read someone's record. `Ok(None)` when there is none (or the relay
@@ -176,7 +203,7 @@ impl RelayClient {
         let url = self.contact_url(cid, "")?;
         let resp = self.authed(self.http_client().get(url)).send().await?;
         match resp.status().as_u16() {
-            200..=299 => Ok(Some(resp.json().await?)),
+            200..=299 => Ok(Some(json_capped(resp, MAX_RECORD_BODY).await?)),
             404 => Ok(None),
             c => Err(status_err(c, false)),
         }
@@ -213,7 +240,7 @@ impl RelayClient {
         if !resp.status().is_success() {
             return Err(status_err(resp.status().as_u16(), false));
         }
-        Ok(resp.json().await?)
+        json_capped(resp, MAX_DROP_PAGE_BODY).await
     }
 
     /// Read this account's whole box, page by page (at most 64 pages; a
@@ -421,6 +448,43 @@ pub fn verify_record(
         }
     }
     Ok(VerifiedContact { account_id: rec.account.account_id, fingerprint, devices, issued_at: rec.issued_at, anchored, links })
+}
+
+/// Read and check the record at `cid` (§3.2) the way every production read
+/// does: [`RelayClient::contact_get`] (capped), [`verify_record`] against the
+/// newest record this device has seen for the cid (kept in hive.db, so a
+/// relay can't roll it back across restarts), then without the devices
+/// `revoked` names (revoked on a log this device holds). The newest-seen
+/// time is recorded on success. `Ok(None)`: no record there.
+pub async fn fetch_verified_contact(
+    client: &RelayClient,
+    store: &crate::EventStore,
+    cid: &str,
+    expected_fk: Option<&str>,
+    revoked: &dyn Fn(uuid::Uuid) -> bool,
+) -> Result<Option<VerifiedContact>, String> {
+    let Some(resp) = client.contact_get(cid).await.map_err(|e| e.to_string())? else { return Ok(None) };
+    accept_contact_record(store, cid, &resp.record, expected_fk, revoked).map(Some)
+}
+
+/// The checks of [`fetch_verified_contact`] on a record already read (for
+/// callers that can't hold the store across the read).
+pub fn accept_contact_record(
+    store: &crate::EventStore,
+    cid: &str,
+    record: &serde_json::Value,
+    expected_fk: Option<&str>,
+    revoked: &dyn Fn(uuid::Uuid) -> bool,
+) -> Result<VerifiedContact, String> {
+    let newest = store.contact_newest_seen(cid).map_err(|e| e.to_string())?;
+    let mut v = verify_record(record, cid, expected_fk, newest, hive_core::Timestamp::now())?;
+    let before = v.devices.len();
+    v.devices.retain(|d| uuid::Uuid::parse_str(&d.device_id).map(|id| !revoked(id)).unwrap_or(false));
+    if before > 0 && v.devices.is_empty() {
+        return Err("every device in the contact record was revoked".into());
+    }
+    store.note_contact_seen(cid, v.issued_at).map_err(|e| e.to_string())?;
+    Ok(v)
 }
 
 // ── Drops: an invite sealed to the recipient's devices ─────────────────────
@@ -666,6 +730,12 @@ mod tests {
 
     /// A record as a device would publish it, plus the account and device keys.
     fn record(cid: &str) -> (serde_json::Value, String, [u8; 32]) {
+        let (rec, fk, ka, _, _) = record_at(cid, now());
+        (rec, fk, ka)
+    }
+
+    /// [`record`] issued at `at`, also returning its account and device ids.
+    fn record_at(cid: &str, at: hive_core::Timestamp) -> (serde_json::Value, String, [u8; 32], uuid::Uuid, uuid::Uuid) {
         use hive_core::crypto::DeviceCertificate;
         use hive_core::e2ee::KeyAgreementKeypair;
         use hive_core::SigningKeypair;
@@ -683,9 +753,73 @@ mod tests {
             hive_core::SessionEvent::DeviceKeyAgreementPublished { device_id, ka_public: ka.to_vec() },
         );
         hive_core::crypto::sign_envelope(&mut env, device_id, &device);
-        let rec = build_record(cid, account_id, &account.public_key_bytes(), vec![RecordDevice { certificate: cert, ka_publication: env }], now());
+        let rec = build_record(cid, account_id, &account.public_key_bytes(), vec![RecordDevice { certificate: cert, ka_publication: env }], at);
         let fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&account.public_key_bytes());
-        (serde_json::to_value(rec).unwrap(), fk, ka)
+        (serde_json::to_value(rec).unwrap(), fk, ka, account_id, device_id)
+    }
+
+    fn fake_relay(s: S) -> Router {
+        Router::new()
+            .route("/v1/contacts/{cid}", put(put_rec).get(get_rec))
+            .route("/v1/contacts/{cid}/drop", get(list_drops).post(post_drop))
+            .with_state(s)
+    }
+
+    /// S4: the newest record seen for a cid is kept in hive.db, so a relay
+    /// that later serves an older one (a rollback to a key or device the
+    /// account dropped) is refused, across restarts.
+    #[tokio::test]
+    async fn contact_newest_seen_persists_for_anti_rollback() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("h.db");
+        let s: S = Arc::default();
+        let base = spawn(fake_relay(s.clone())).await;
+        let client = RelayClient::new(&base);
+        let cid = new_cid();
+        let (newer, fk, _, account, _) = record_at(&cid, now());
+        s.lock().unwrap().records.insert(cid.clone(), ("k".into(), newer));
+        {
+            let store = crate::EventStore::open(&db).unwrap();
+            let v = fetch_verified_contact(&client, &store, &cid, Some(&fk), &|_| false).await.unwrap().unwrap();
+            assert_eq!(v.account_id, account);
+        }
+        let older = record_at(&cid, hive_core::Timestamp(now().0 - time::Duration::hours(1))).0;
+        s.lock().unwrap().records.insert(cid.clone(), ("k".into(), older));
+        let store = crate::EventStore::open(&db).unwrap();
+        let err = fetch_verified_contact(&client, &store, &cid, None, &|_| false).await.unwrap_err();
+        assert!(err.contains("rollback"), "{err}");
+    }
+
+    /// S4: a record's device that a shared log revoked is not used; a record
+    /// with only revoked devices is refused.
+    #[tokio::test]
+    async fn contact_record_revoked_device_refused() {
+        let s: S = Arc::default();
+        let base = spawn(fake_relay(s.clone())).await;
+        let client = RelayClient::new(&base);
+        let store = crate::EventStore::open_in_memory().unwrap();
+        let cid = new_cid();
+        let (rec, fk, _, _, device) = record_at(&cid, now());
+        s.lock().unwrap().records.insert(cid.clone(), ("k".into(), rec));
+        let err = fetch_verified_contact(&client, &store, &cid, Some(&fk), &|d| d == device).await.unwrap_err();
+        assert!(err.contains("revoked"), "{err}");
+    }
+
+    /// S4: a relay answering a record read (or a drop page) with an endless
+    /// body is cut off at the cap instead of filling memory.
+    #[tokio::test]
+    async fn contact_response_body_capped() {
+        async fn huge() -> String {
+            format!("{{\"record\":\"{}\"}}", "x".repeat(MAX_RECORD_BODY + 1))
+        }
+        async fn huge_page() -> String {
+            format!("{{\"items\":[],\"pad\":\"{}\"}}", "x".repeat(MAX_DROP_PAGE_BODY + 1))
+        }
+        let base = spawn(Router::new().route("/v1/contacts/{cid}", get(huge)).route("/v1/contacts/{cid}/drop", get(huge_page))).await;
+        let client = RelayClient::new(&base);
+        let cid = new_cid();
+        assert!(matches!(client.contact_get(&cid).await, Err(ContactsError::TooLarge)));
+        assert!(matches!(client.contact_drops(&cid, &new_write_key(), 0).await, Err(ContactsError::TooLarge)));
     }
 
     /// Opt-in identity links ride a record as signed envelopes: one signed

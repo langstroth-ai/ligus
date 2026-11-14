@@ -148,10 +148,44 @@ pub fn render_statement(link: &IdentityLink, workspace_id: Uuid, account_key: &[
     )
 }
 
+/// `s` without Unicode bidi controls and zero-width characters, for showing
+/// a name a forge (or a DID document) supplied.
+pub fn strip_bidi_controls(s: &str) -> String {
+    s.chars().filter(|c| !c.is_control() && !is_invisible_format(*c)).collect()
+}
+
+/// Bidi embeddings, overrides, isolates and marks, zero-width and other
+/// invisible format characters (and the fillers that render as nothing):
+/// none belongs in a handle or an id, and each can make one name look like
+/// another or reorder the text after it.
+pub fn is_invisible_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{034F}'
+            | '\u{061C}'
+            | '\u{115F}'
+            | '\u{1160}'
+            | '\u{17B4}'
+            | '\u{17B5}'
+            | '\u{180B}'..='\u{180F}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{206F}'
+            | '\u{3164}'
+            | '\u{FE00}'..='\u{FE0F}'
+            | '\u{FEFF}'
+            | '\u{FFA0}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0000}'..='\u{E0FFF}'
+    )
+}
+
 fn token_ok(s: &str, max: usize, allow_space: bool) -> bool {
     !s.is_empty()
         && s.len() <= max
-        && s.chars().all(|c| !c.is_control() && (allow_space || !c.is_whitespace()))
+        && s.chars().all(|c| !c.is_control() && !is_invisible_format(c) && (allow_space || !c.is_whitespace()))
         && s.trim() == s
 }
 
@@ -311,6 +345,25 @@ mod tests {
         assert!(check_shape(&kp).is_ok());
         kp.provider = "forgejo".into();
         assert!(check_shape(&kp).is_err(), "published key would grant push on Forgejo");
+    }
+
+    /// Bidi overrides, isolates and zero-width characters (Unicode format
+    /// characters) can't hide in the fields a chip shows: "alice\u{200B}"
+    /// would render as "alice", and "\u{202E}" can reorder what follows.
+    #[test]
+    fn shape_rejects_bidi_and_zero_width_in_handles() {
+        for bad in ["alice\u{200B}", "\u{202E}ecila", "al\u{2066}ice\u{2069}", "alice\u{FEFF}", "a\u{200D}b", "a\u{061C}b"] {
+            let mut l = sample();
+            l.statement = "x".into();
+            l.handle_at_link = bad.into();
+            assert!(check_shape(&l).is_err(), "handle {bad:?}");
+            let mut l = sample();
+            l.statement = "x".into();
+            l.subject_id = bad.into();
+            assert!(check_shape(&l).is_err(), "subject {bad:?}");
+        }
+        assert_eq!(strip_bidi_controls("\u{202E}al\u{200B}ice\u{2069}"), "alice");
+        assert_eq!(strip_bidi_controls("erin.example.com"), "erin.example.com");
     }
 
     #[test]

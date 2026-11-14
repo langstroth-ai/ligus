@@ -88,6 +88,8 @@ async fn serve(f: Fake) -> String {
 fn conn(kind: ForgeKind, base: &str, api: &str, store: &Arc<MemoryTokens>, read: Option<&str>, write: Option<&str>) -> Arc<dyn Forge> {
     let mut c = Connection::new(kind, base, AuthSource::Token).unwrap();
     c.api_url = Some(api.to_string());
+    // The fake listens on loopback.
+    c.internal = true;
     if let Some(r) = read {
         store.put(&c.id, Purpose::Read, &Secret::new(r)).unwrap();
     }
@@ -433,6 +435,7 @@ async fn verification_uri_must_be_on_the_forge_host() {
         f.on(Method::POST, "/oauth/authorize_device", 200, json!({"device_code": "DEV", "user_code": "ABCD-1234", "verification_uri": uri}));
         let base = serve(f.clone()).await;
         let mut c = Connection::new(ForgeKind::GitLab, &base, AuthSource::Oauth).unwrap();
+        c.internal = true;
         c.client_id = Some("app-123".into());
         let ep = hive_forge::device::endpoints(&c).unwrap();
         assert_eq!(hive_forge::device::start(&ep).await.is_ok(), ok, "{uri}");
@@ -446,6 +449,7 @@ async fn device_flow_starts_polls_and_refreshes_without_a_client_secret() {
         .on(Method::POST, "/oauth/token", 400, json!({"error": "authorization_pending"}));
     let base = serve(f.clone()).await;
     let mut c = Connection::new(ForgeKind::GitLab, &base, AuthSource::Oauth).unwrap();
+    c.internal = true;
     assert!(hive_forge::device::endpoints(&c).is_err(), "self-managed GitLab needs its own application id");
     c.client_id = Some("app-123".into());
     let ep = hive_forge::device::endpoints(&c).unwrap();
@@ -459,7 +463,7 @@ async fn device_flow_starts_polls_and_refreshes_without_a_client_secret() {
     f.on(Method::POST, "/oauth/token", 200, json!({"access_token": "AT", "refresh_token": "RT", "expires_in": 7200}));
     let hive_forge::device::Poll::Done(t) = hive_forge::device::poll(&ep, &st.device_code).await.unwrap() else { panic!("not done") };
     assert_eq!((t.access.expose(), t.refresh.as_ref().map(|r| r.expose().to_string()), t.expires_in), ("AT", Some("RT".into()), Some(7200)));
-    let r = hive_forge::device::refresh(&ep.token_url, &ep.client_id, &Secret::new("RT")).await.unwrap();
+    let r = hive_forge::device::refresh(&ep.token_url, &ep.client_id, &Secret::new("RT"), ep.internal).await.unwrap();
     assert_eq!(r.access.expose(), "AT");
     for s in f.seen() {
         assert!(s.body.is_null(), "form posts only");
@@ -477,12 +481,13 @@ async fn an_expired_oauth_token_is_refreshed_from_the_store_before_use() {
         .on(Method::GET, "/api/v3/user", 200, json!({"id": 1, "login": "me"}));
     let base = serve(f.clone()).await;
     let mut c = Connection::new(ForgeKind::GitHub, &base, AuthSource::Oauth).unwrap();
+    c.internal = true;
     c.client_id = Some("Iv1.app".into());
     c.token_expires_at = Some(1);
     let store = Arc::new(MemoryTokens::default());
     store.put(&c.id, Purpose::Write, &Secret::new("OLD")).unwrap();
     store.put(&c.id, Purpose::Refresh, &Secret::new("RT")).unwrap();
-    let gh = c.build(c.credentials(store.clone(), None));
+    let gh = c.build(c.credentials(store.clone(), None, None));
     assert_eq!(gh.whoami().await.unwrap().unwrap().login, "me");
     assert_eq!(f.find("GET", "/api/v3/user").auth.as_deref(), Some("Bearer NEW"));
     assert_eq!(store.get(&c.id, Purpose::Refresh).unwrap().unwrap().expose(), "RT2");
@@ -525,8 +530,87 @@ async fn device_answers_are_read_with_a_cap() {
         token_url: format!("http://{addr}/login/oauth/access_token"),
         client_id: "x".into(),
         scope: None,
+        internal: true,
     };
     let r = tokio::time::timeout(std::time::Duration::from_secs(5), hive_forge::device::start(&ep)).await;
     let err = r.expect("the read stops at the cap instead of draining an endless body").unwrap_err();
     assert!(err.to_string().contains("too large"), "{err}");
+}
+
+/// GitLab rotates refresh tokens: a refresh token works once. `ligus serve`,
+/// an agent's read tools and the git credential helper each build their own
+/// credentials from `forges.toml`. Only one of them may refresh, the new
+/// expiry must land in `forges.toml` (so the next process doesn't refresh
+/// again with a spent refresh token), and it is written once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn refreshed_expiry_is_persisted_once() {
+    let f = Fake::default();
+    f.on(Method::POST, "/oauth/token", 200, json!({"access_token": "NEW", "refresh_token": "RT2", "expires_in": 7200}));
+    let base = serve(f.clone()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut c = Connection::new(ForgeKind::GitLab, &base, AuthSource::Oauth).unwrap();
+    c.internal = true;
+    c.client_id = Some("app-123".into());
+    c.token_expires_at = Some(1);
+    let mut all = Connections::default();
+    all.upsert(c.clone());
+    all.save(dir.path()).unwrap();
+    let store = Arc::new(MemoryTokens::default());
+    store.put(&c.id, Purpose::Write, &Secret::new("OLD")).unwrap();
+    store.put(&c.id, Purpose::Refresh, &Secret::new("RT")).unwrap();
+    let mut tasks = Vec::new();
+    for _ in 0..3 {
+        let conn = Connections::load(dir.path()).get(&c.id).cloned().unwrap();
+        let creds = conn.credentials(store.clone(), None, Some(dir.path()));
+        tasks.push(tokio::spawn(async move { creds.token(Purpose::Write).await.unwrap().unwrap().expose().to_string() }));
+    }
+    for t in tasks {
+        assert_eq!(t.await.unwrap(), "NEW");
+    }
+    let refreshes = || f.seen().iter().filter(|s| s.method == "POST" && s.path == "/oauth/token").count();
+    assert_eq!(refreshes(), 1, "one refresh across processes: a second one would spend the rotated refresh token");
+    let saved = Connections::load(dir.path()).get(&c.id).and_then(|c| c.token_expires_at).unwrap_or(0);
+    assert!(saved > hive_forge::device::now_unix() + 7000, "the refreshed expiry is in forges.toml: {saved}");
+    // The next process reads the fresh expiry and doesn't refresh again.
+    let conn = Connections::load(dir.path()).get(&c.id).cloned().unwrap();
+    let late = conn.credentials(store.clone(), None, Some(dir.path()));
+    assert_eq!(late.token(Purpose::Write).await.unwrap().unwrap().expose(), "NEW");
+    assert_eq!(refreshes(), 1);
+}
+
+/// SSRF: a connection whose base URL is, or resolves to, a loopback,
+/// private, link-local or otherwise internal address gets no request (and so
+/// no token) unless the person marked it internal on this device. Checked
+/// at add time and again on every request (DNS can change in between).
+#[tokio::test]
+async fn internal_addresses_need_the_internal_mark() {
+    let f = Fake::default();
+    f.on(Method::GET, "/api/v1/user", 200, json!({"id": 1, "login": "me"}));
+    let api = serve(f.clone()).await;
+    let store = Arc::new(MemoryTokens::default());
+    for base in [api.clone(), api.replace("127.0.0.1", "localhost")] {
+        let mut c = Connection::new(ForgeKind::Gitea, &base, AuthSource::Token).unwrap();
+        store.put(&c.id, Purpose::Write, &Secret::new("tok-internal")).unwrap();
+        let g = c.build(c.credentials(store.clone(), None, None));
+        assert!(g.whoami().await.is_err(), "{base}: an internal address without the mark");
+        assert!(f.seen().is_empty(), "{base}: a request reached it: {:?}", f.seen());
+        assert!(hive_forge::conn::check_address(&c).await.is_err(), "{base}");
+        c.internal = true;
+        hive_forge::conn::check_address(&c).await.unwrap();
+        let g = c.build(c.credentials(store.clone(), None, None));
+        assert_eq!(g.whoami().await.unwrap().unwrap().login, "me", "{base}: marked internal");
+        f.seen.lock().unwrap().clear();
+    }
+    for base in ["https://169.254.169.254", "https://10.1.2.3", "https://192.168.0.10:8443", "https://100.64.0.1", "https://0.0.0.0"] {
+        let mut c = Connection::new(ForgeKind::GitLab, base, AuthSource::Token).unwrap();
+        assert!(hive_forge::conn::check_address(&c).await.is_err(), "{base}");
+        c.internal = true;
+        hive_forge::conn::check_address(&c).await.unwrap();
+    }
+    for ip in ["127.0.0.1", "10.0.0.1", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "224.0.0.1", "255.255.255.255", "::1", "fd00::1", "fe80::1", "::ffff:127.0.0.1", "::ffff:10.0.0.1", "64:ff9b::a00:1", "::"] {
+        assert!(!hive_forge::http::is_public_ip(ip.parse().unwrap()), "{ip}");
+    }
+    for ip in ["8.8.8.8", "140.82.112.3", "2606:4700::1111"] {
+        assert!(hive_forge::http::is_public_ip(ip.parse().unwrap()), "{ip}");
+    }
 }

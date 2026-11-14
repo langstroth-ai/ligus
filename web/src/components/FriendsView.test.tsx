@@ -16,6 +16,9 @@ describe("trustNote", () => {
     // warning, not a match (impersonation by display name).
     expect(trustNote("mismatch", "Ada")).toMatch(/doesn't match/);
     expect(trustNote("known", "Ada")).toMatch(/matches/);
+    // Named and fingerprinted but not signed by their device: only a claim.
+    expect(trustNote("claimed", "Ada")).toMatch(/^Says it's from Ada/);
+    expect(trustNote("claimed", "Ada")).not.toMatch(/matches/);
     expect(trustNote("unknown", null)).toMatch(/Compare their safety code/);
     expect(trustNote("none", null)).toMatch(/nothing confirms/);
   });

@@ -47,7 +47,6 @@ jobs:
           bun-version: latest
       - name: Frontend dependency audit
         working-directory: web
-        # `bun audit` reports known vulns in the resolved tree. Advisory (non-
-        # blocking) for now so a transitive advisory doesn't wedge the pipeline;
-        # tighten to failing once the tree is clean.
-        run: bun audit || true
+        # `bun audit` reports known vulns in the resolved tree. The tree is clean
+        # as of the 2.0 dependency upgrade, so a new advisory now fails the job.
+        run: bun audit

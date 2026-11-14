@@ -152,6 +152,14 @@ impl EventStore {
                 invite_id    TEXT NOT NULL
             );
 
+            -- Device-local: the issue time (unix ms) of the newest contact
+            -- record seen per contact id, so a relay can't serve an older one
+            -- (anti-rollback, IDENTITY-AND-FORGES S6/S4).
+            CREATE TABLE IF NOT EXISTS contact_seen (
+                cid       TEXT PRIMARY KEY,
+                issued_ms INTEGER NOT NULL
+            );
+
             -- Device-local (A-13): relay bodies sealed under a key this
             -- device doesn't hold, parked so they never pin the fetch cursor;
             -- retried whenever the keyring changes. Bounded per room.
@@ -1122,9 +1130,22 @@ impl EventStore {
         Ok(row.and_then(|(f, k)| crate::envelope_verifier::FounderPin::parse(&f, &k)))
     }
 
-    /// Every workspace this device pinned a founder for.
+    /// This device left `workspace_id`: drop its founder pin and the invite
+    /// it redeemed. Its log then vouches for no one (co-members, verified
+    /// keys, contact ids and links all come from pinned logs only); a rejoin
+    /// pins again from the new invite.
+    pub fn forget_workspace(&self, workspace_id: Uuid) -> Result<()> {
+        let id = workspace_id.to_string();
+        self.conn.execute("DELETE FROM workspace_pins WHERE workspace_id = ?1", [&id])?;
+        self.conn.execute("DELETE FROM join_invites WHERE workspace_id = ?1", [&id])?;
+        Ok(())
+    }
+
+    /// Every workspace this device pinned a founder for, in the order it
+    /// pinned them (first joined first: the co-member directory trusts the
+    /// earliest-pinned registration of an account's key).
     pub fn pinned_workspaces(&self) -> Result<Vec<Uuid>> {
-        let mut stmt = self.conn.prepare("SELECT workspace_id FROM workspace_pins")?;
+        let mut stmt = self.conn.prepare("SELECT workspace_id FROM workspace_pins ORDER BY rowid ASC")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         let mut out = Vec::new();
         for row in rows {
@@ -1148,18 +1169,49 @@ impl EventStore {
     }
 
     /// The contact id (relay v0.3 drop box) `account` most recently stamped
-    /// on an event in `workspace_id`, if any. A delivery address only: what
-    /// is dropped there is sealed to keys verified on the config log.
-    pub fn latest_contact_of(&self, workspace_id: Uuid, account: Uuid) -> Result<Option<String>> {
+    /// on an event in `workspace_id`, if any, counting only events signed by
+    /// a device `signer_key` returns a key for (the caller's certified,
+    /// non-revoked devices of `account`): anyone else can stamp any account
+    /// on what they sign. A delivery address only: what is dropped there is
+    /// sealed to keys verified on the config log.
+    pub fn latest_contact_of(
+        &self,
+        workspace_id: Uuid,
+        account: Uuid,
+        signer_key: &dyn Fn(Uuid) -> Option<Vec<u8>>,
+    ) -> Result<Option<String>> {
         let envs = self.query_envelopes(
             "SELECT envelope_json FROM events WHERE workspace_id = ?1 AND envelope_json LIKE '%\"contact\":\"%' \
              ORDER BY row_id DESC LIMIT 200",
             [workspace_id.to_string()],
         )?;
         Ok(envs.into_iter().find_map(|e| {
+            let key = e.signer_device_id.and_then(signer_key)?;
+            hive_core::crypto::verify_envelope(&e, &key).ok()?;
             let a = e.actor_stamp?.actor;
             (a.account_id == Some(account)).then_some(a.contact).flatten()
         }))
+    }
+
+    /// The issue time of the newest contact record seen for `cid`.
+    pub fn contact_newest_seen(&self, cid: &str) -> Result<Option<hive_core::Timestamp>> {
+        let ms: Option<i64> = self
+            .conn
+            .query_row("SELECT issued_ms FROM contact_seen WHERE cid = ?1", [cid], |r| r.get(0))
+            .optional()?;
+        Ok(ms.and_then(|ms| time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(ms) * 1_000_000).ok()).map(hive_core::Timestamp))
+    }
+
+    /// Record that a record issued at `issued` was seen for `cid` (only ever
+    /// moves forward).
+    pub fn note_contact_seen(&self, cid: &str, issued: hive_core::Timestamp) -> Result<()> {
+        let ms = (issued.0.unix_timestamp_nanos() / 1_000_000) as i64;
+        self.conn.execute(
+            "INSERT INTO contact_seen (cid, issued_ms) VALUES (?1, ?2) \
+             ON CONFLICT(cid) DO UPDATE SET issued_ms = MAX(issued_ms, excluded.issued_ms)",
+            rusqlite::params![cid, ms],
+        )?;
+        Ok(())
     }
 
     /// Remember the invite this device redeems to join `workspace_id` (the

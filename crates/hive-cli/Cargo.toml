@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 hive-core = { path = "../hive-core" }
+hive-proto = { path = "../hive-proto" }
 hive-runtime = { path = "../hive-runtime" }
 hive-forge = { path = "../hive-forge" }
 anyhow.workspace = true

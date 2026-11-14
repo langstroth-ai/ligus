@@ -7,4 +7,8 @@ license.workspace = true
 
 [dependencies]
 serde.workspace = true
-ts-rs.workspace = true
+# serialize_with on display names (S3) is serde-only; ts-rs needn't parse it.
+ts-rs = { workspace = true, features = ["no-serde-warnings"] }
+
+[dev-dependencies]
+serde_json.workspace = true

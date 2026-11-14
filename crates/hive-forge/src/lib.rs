@@ -32,7 +32,7 @@ pub mod device;
 pub mod gitea;
 pub mod github;
 pub mod gitlab;
-mod http;
+pub mod http;
 pub mod spec;
 pub mod tokens;
 
@@ -84,6 +84,31 @@ pub enum ForgeError {
     Transport(String),
     #[error("secret store: {0}")]
     Store(String),
+}
+
+impl ForgeError {
+    /// A message that never carries what the remote host answered (its
+    /// body, headers or a URL it sent back): for answers to API callers. A
+    /// connection's URL could point at something that isn't a code host,
+    /// and its answer must not be relayed. Ligus's own messages (signed
+    /// out, unsupported, invalid input, refused addresses) pass through.
+    pub fn summary(&self) -> String {
+        match self {
+            ForgeError::NotSignedIn(m) | ForgeError::Unsupported(m) | ForgeError::Invalid(m) => self_message(self, m),
+            ForgeError::Unauthorized(_) => "the code host refused the credentials".into(),
+            ForgeError::NotFound(_) => "not found on the code host".into(),
+            ForgeError::Rejected(_) => "the code host refused the request".into(),
+            ForgeError::Transport(_) => "couldn't reach the code host, or it answered with an error".into(),
+            ForgeError::Store(_) => "this device's secret store failed".into(),
+        }
+    }
+}
+
+fn self_message(e: &ForgeError, m: &str) -> String {
+    match e {
+        ForgeError::Invalid(_) => format!("invalid input: {m}"),
+        _ => m.to_string(),
+    }
 }
 
 pub type Result<T> = std::result::Result<T, ForgeError>;

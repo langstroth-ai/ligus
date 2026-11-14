@@ -39,8 +39,11 @@ walkdir = "2"
 zeroize = "1"
 # Identity links (IDENTITY-AND-FORGES §2.5): SSHSIG verification for
 # ssh-ed25519, sk-ssh-ed25519, ecdsa-sha2-nistp256, sk-ecdsa-sha2-nistp256 and
-# rsa-sha2-512. Verification only (public-key operations).
-ssh-key = { version = "0.6", default-features = false, features = ["alloc", "std", "ecdsa", "ed25519", "p256", "rsa"] }
+# rsa-sha2-512. Verification only (public-key operations). ssh-key's own "rsa"
+# feature is off: it pulls rsa 0.9 (RUSTSEC-2023-0071). RSA SSHSIG signatures
+# are verified in `identity_links` with rsa 0.10 (PKCS#1 v1.5, SHA-512).
+ssh-key = { version = "0.6", default-features = false, features = ["alloc", "std", "ecdsa", "ed25519", "p256"] }
+rsa = { version = "0.10.0", default-features = false, features = ["std", "pkcs1v15"] }
 iroh = { version = "1.4.1", optional = true }
 
 # B2: Ligus's own keychain file on macOS (already in the tree via rustls).

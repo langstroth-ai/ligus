@@ -23,6 +23,9 @@ zeroize = "1"
 toml = "1.2"
 uuid.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 axum = "0.8"
 tempfile = "3"

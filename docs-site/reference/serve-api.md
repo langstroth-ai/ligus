@@ -107,13 +107,13 @@ No answer ever carries a token.
 | Method + path | Request | Notes |
 |---|---|---|
 | `GET /v1/forges` | | `{forges: [{id, kind, flavor, displayName, baseUrl, authSource, user, available, reason, hasRead, hasWrite, deviceFlow, openLabel, changeRequestKind, holder}], tokenEntry}`. `tokenEntry` says whether this channel may carry a token |
-| `POST /v1/forges` | `{kind, baseUrl, auth?, clientId?}` | Contributor and presence. `kind` is `github`, `gitlab`, `forgejo`, `gitea` or `codeberg`; `baseUrl` must be `https`. 409 if already connected |
+| `POST /v1/forges` | `{kind, baseUrl, auth?, clientId?, internal?}` | Contributor and presence. `kind` is `github`, `gitlab`, `forgejo`, `gitea` or `codeberg`; `baseUrl` must be `https`. A non-public address needs `internal: true` (kept on this box only). 409 if already connected |
 | `DELETE /v1/forges/:id` | | Contributor and presence. Removes the connection and its tokens |
-| `POST /v1/forges/:id/test` | | signs in; `{ok, user?, error?}` |
+| `POST /v1/forges/:id/test` | | Contributor and presence. Signs in; `{ok, user?, userId?}` or `{ok: false, error}` with a fixed message, never the host's reply |
 | `PUT /v1/forges/:id/token` | `{purpose: read\|write, token}` | Contributor and presence, **through the tunnel or on a loopback bind only** (403 otherwise). Stored in the box's secret store |
 | `DELETE /v1/forges/:id/token` | `?purpose=read\|write` | Contributor and presence |
 | `POST /v1/forges/:id/auth/device` | | Contributor and presence, tunnel or loopback only. `{userCode, verificationUri, expiresIn}`; the box polls |
-| `GET /v1/forges/:id/auth/device` | | `{state: pending\|done\|denied\|expired\|error, userCode, verificationUri, expiresIn}` |
+| `GET /v1/forges/:id/auth/device` | | Tunnel or loopback only. `{state: pending\|done\|denied\|expired\|error, userCode, verificationUri, expiresIn}` |
 
 Connection ids are `<kind>:<host>`, for example `github:github.com`,
 `gitlab:gitlab.example.com` or `gitea:codeberg.org`; `github.com` alone also

@@ -52,6 +52,10 @@ export function PendingInvitesBanner() {
         const dismissing = dismiss.isPending && dismiss.variables?.seq === inv.seq && dismiss.variables?.relay === inv.relay;
         const busy = joining || dismissing;
         const bad = inv.trust === "mismatch";
+        // Only a signed invite from a co-member is "from" them; anything else
+        // just says it is. An unsigned DM invite can't be accepted.
+        const proven = inv.trust === "known";
+        const refused = bad || (inv.isDm && inv.trust === "claimed");
         return (
           <div
             key={key}
@@ -67,12 +71,22 @@ export function PendingInvitesBanner() {
                 <div className="mt-0.5 text-sm text-ink-soft">
                   {inv.isDm ? (
                     <>
-                      <b>{inv.founderName || "Someone"}</b> wants to message you
+                      {proven ? (
+                        <>
+                          <b>{inv.founderName || "Someone"}</b> wants to message you
+                        </>
+                      ) : (
+                        <>
+                          A message invite that says it's from <b>{inv.founderName || "someone"}</b>
+                        </>
+                      )}
                     </>
                   ) : (
                     <>
                       Join <b>{inv.workspaceName}</b>
-                      {inv.founderName ? <> (founded by {inv.founderName})</> : null}
+                      {inv.founderName ? (
+                        proven ? <> (founded by {inv.founderName})</> : <> (says it's from {inv.founderName})</>
+                      ) : null}
                     </>
                   )}
                 </div>
@@ -85,7 +99,7 @@ export function PendingInvitesBanner() {
                   </code>
                 )}
                 <div className="mt-3 flex items-center gap-2">
-                  {!bad && (
+                  {!refused && (
                     <button
                       onClick={() => accept.mutate(inv)}
                       disabled={busy}

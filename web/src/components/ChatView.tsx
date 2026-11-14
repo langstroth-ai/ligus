@@ -28,6 +28,7 @@ import {
   linearIssuesContext,
   setChatRuntime,
   syncStatus,
+  founderStatus,
   toggleReaction,
   type ChatMessageDto,
   type RuntimeSummaryDto,
@@ -101,6 +102,17 @@ function runtimePickerLabel(runtime: RuntimeSummaryDto) {
 // ChatView remounts that Diff/Code cause) for the life of the window.
 const chatDrafts = new Map<string, string>();
 const chatScroll = new Map<string, { top: number; pinned: boolean }>();
+
+/// The backend's refusal while a workspace waits for its founder's signed
+/// founding (`hive_runtime::chat_service::WAITING_FOR_FOUNDER`).
+export function isWaitingForFounder(message: string): boolean {
+  return message.includes("waiting for the workspace's founder");
+}
+
+/// The heading of the waiting state.
+export function founderWaitTitle(founderName: string | null): string {
+  return founderName ? `Waiting for ${founderName}'s founding to sync` : "Waiting for the workspace's founder";
+}
 
 export function ChatView({
   sessionId,
@@ -220,6 +232,15 @@ export function ChatView({
   // — but only when a relay is configured. Solo/relay-less workspaces skip the
   // poll entirely so the IPC bridge isn't churned (Windows responsiveness).
   const sync = useQuery({ queryKey: ["sync-status"], queryFn: syncStatus });
+  // Joined from an invite whose founder's signed founding hasn't synced yet:
+  // nothing is sent until it does. Shown as a waiting state, polled briskly
+  // until it clears.
+  const founder = useQuery({
+    queryKey: ["founder-status", sessionId],
+    queryFn: () => founderStatus(sessionId),
+    refetchInterval: (q) => (q.state.data?.waiting ? 4000 : 60000),
+  });
+  const waitingForFounder = Boolean(founder.data?.waiting);
   const relayConfigured = Boolean(sync.data?.relayConfigured);
   const presence = useQuery({
     queryKey: ["presence", sessionId],
@@ -761,6 +782,12 @@ export function ChatView({
       setOptimisticUser(null);
       setInput((cur) => cur || body);
       setAttachments((cur) => (cur.length ? cur : sentAttachments));
+      if (isWaitingForFounder(errMsg(e))) {
+        // Not a failure: the workspace's founding hasn't synced yet.
+        void founder.refetch();
+        toast.info("Waiting for the workspace's founder. Your draft is kept; send it once their founding syncs.");
+        return;
+      }
       toast.error(`Couldn't send: ${errMsg(e)}`, { label: "Retry", run: () => void sendBody(body, sentAttachments) });
     } finally {
       qc.invalidateQueries({ queryKey: ["chat", sessionId] });
@@ -1203,6 +1230,21 @@ export function ChatView({
             </div>
           )}
           {typingNames.length > 0 && <TypingDots label={typingLabel(typingNames)} />}
+          {waitingForFounder && (
+            <div className="tt-note" role="status" aria-live="polite">
+              <span aria-hidden className="shrink-0" style={{ flex: "0 0 auto" }}>
+                <IconInfo size={14} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div style={{ fontWeight: 650 }}>{founderWaitTitle(founder.data?.founderName ?? null)}</div>
+                <div className="mt-0.5 break-words opacity-80">
+                  The invite names who founded this workspace, but their signed founding hasn't reached this device yet.
+                  Until it does, nothing you write is sent, so it can't land in a room someone else set up. This clears on
+                  its own once they're online and it syncs.
+                </div>
+              </div>
+            </div>
+          )}
           {streamError && (
             <div className="tt-note bad" role="alert">
               <span aria-hidden className="shrink-0" style={{ flex: "0 0 auto" }}>
@@ -1590,10 +1632,16 @@ export function ChatView({
                 )}
                 <button
                   onClick={handleSend}
-                  disabled={!input.trim() && attachments.length === 0}
+                  disabled={waitingForFounder || (!input.trim() && attachments.length === 0)}
                   className="send"
-                  aria-label={busy ? "Queue as next turn" : "Send message"}
-                  title={busy ? "Queue as next turn (Enter)" : "Send (Enter)"}
+                  aria-label={waitingForFounder ? "Waiting for the workspace's founder" : busy ? "Queue as next turn" : "Send message"}
+                  title={
+                    waitingForFounder
+                      ? "Waiting for the workspace's founder to sync"
+                      : busy
+                        ? "Queue as next turn (Enter)"
+                        : "Send (Enter)"
+                  }
                 >
                   <IconSend size={15} />
                 </button>

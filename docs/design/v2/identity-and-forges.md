@@ -282,7 +282,7 @@ It can be produced by:
    - `statement` equals `render(link)`, byte for byte;
    - `account-key` equals the account key in force *at the event's position* (`RosterState`);
    - `expires_at > now` and `expires_at - issued_at` is at most 2 years.
-2. **Signature check** (offline): the SSHSIG verifies over the statement with the namespace above. Allowed algorithms are `ssh-ed25519`, `sk-ssh-ed25519@openssh.com`, `ecdsa-sha2-nistp256` and `rsa-sha2-512` with at least 3072 bits. **[I]** The RustCrypto `ssh-key` crate covers SshSig verification for these. Confirm sk-key support before choosing it; it is a new dependency for `deny.toml`.
+2. **Signature check** (offline): the SSHSIG verifies over the statement with the namespace above. Allowed algorithms are `ssh-ed25519`, `sk-ssh-ed25519@openssh.com`, `ecdsa-sha2-nistp256` and `rsa-sha2-512` with 3072 to 16384 bits (see 2.8 for how RSA is verified). **[I]** The RustCrypto `ssh-key` crate covers SshSig verification for these. Confirm sk-key support before choosing it; it is a new dependency for `deny.toml`.
 3. **Forge check** (online, direct to the forge, never through the relay):
    1. Resolve `subject_id` to the current handle (GitHub `/user/{id}`, GitLab `/users/{id}`, Forgejo `users/search?uid=`, DID document).
    2. Fetch the key list, by id wherever the API allows: GitLab, and atproto by DID.
@@ -317,7 +317,21 @@ It can be produced by:
 - Every member of a workspace, including Viewers, can see its links. **[I]** Agents can see them too, through config reads (`ligus_read_*`), so say so in the UI.
 - **Forge lookups reveal the viewer to the forge** (IP, timing). Hence the setting above and the 24 h cache.
 - Avatars from forges are **copied** into the profile's `data:` URL at link time, only if the user chooses. Ligus never hot-links forge avatar URLs: they act as tracking pixels and reveal views.
-- Contact records (Section 3) carry links only if the user also ticks "discoverable by this identity".
+- Contact records (Section 3) carry links only if the user also ticks "discoverable by this identity". The record is signed but not encrypted: the relays holding it and anyone with the contact id can read those links, and the opt-in says so.
+
+### 2.8 Hardening from the linked-identities review (2026-11-14)
+
+The adversarial review of the merged linked identities (decision: approve with risks, after the fixes below) tightened these points:
+
+- **Agreed account key.** A device shows a person's links only from workspaces whose log registers the account key it agrees on: its own key for its own account, and the co-member directory's trusted key for anyone else (Section 7, S1 of the identity review). Links are merged by the identity they name (link id, forge, subject, method and signing key), so a reused link id can't replace a genuine link.
+- **Handles.** A verified chip shows only a handle the forge confirmed; for atproto, only when `https://<handle>/.well-known/atproto-did` names the DID back. Otherwise it shows the stable id, with the claim in the tooltip. Handles and subject ids may not contain bidi controls or zero-width or other invisible format characters (the fold refuses them); forge-supplied names are stripped, and chips isolate the handle (`<bdi>`).
+- **Who gets contacted.** Automatic checks never contact a host the link's owner chose: a PDS other than `bsky.social` or `*.bsky.network`, a `did:web` host, or a handle domain. Those are asked only on an explicit check (linking your own account, or **Check now** on a co-member).
+- **Address guard.** The public-address guard also refuses NAT64, 6to4, IPv4-compatible, Teredo, site-local and discard addresses that carry or reach internal hosts.
+- **Cache.** The 24-hour cache is keyed by the link, the workspace and the account key. A cached status is shown only after the offline checks pass, only while forge checks are on, and only within the TTL.
+- **GitLab published keys** need usage type **Signing**, not GitLab's default **Authentication & Signing** (which grants push).
+- **Removal.** Only the account itself, from a non-delegated device, removes its own links (an Admin may still moderate); a delegated host can't remove its owner's links.
+- **RSA without the Marvin advisory.** `ssh-key` 0.6's `rsa` feature pulls `rsa` 0.9 (RUSTSEC-2023-0071). The feature is off: `ssh-key` still parses RSA keys and SSHSIG blobs, and Ligus verifies RSA itself with `rsa` 0.10. It rebuilds the PROTOCOL.sshsig signed data the way OpenSSH does (magic, namespace, empty reserved field, `sha512`, SHA-512 of the statement) and checks a PKCS#1 v1.5 SHA-512 signature exactly as long as the modulus. Accepted: `rsa-sha2-512` only (not `rsa-sha2-256` or SHA-1 `ssh-rsa`), moduli of 3072 to 16384 bits, an odd public exponent of at least 3 and at most 2^33 - 1, and an empty reserved field. Other key types still use `ssh-key`'s verifier. No advisory ignore is needed in `deny.toml`.
+- **One form per proof.** `ssh-key` 0.6 accepts a length prefix larger than the field it frames, and the SSHSIG version isn't signed, so one signature had many byte forms. Every key type's proof must now be exactly framed (the public key in its canonical encoding) and version 1.
 
 ---
 
@@ -366,10 +380,13 @@ A contact has a **contact id `cid`**: 16 random bytes, base64url, chosen by the 
   1. The account key fingerprint equals the `fk` the user got out of band (invite or QR), **or** the account is already pinned from a shared workspace.
   2. Each certificate verifies under the account key.
   3. Each envelope verifies under a certified device's key.
-  4. The record has not expired, and its `issuedAt` is not older than the newest one seen for that `cid` (anti-rollback; kept locally).
-  5. A link verifies only by Section 2.5.
+  4. The record has not expired, and its `issuedAt` is not older than the newest one seen for that `cid` (anti-rollback). The newest-seen time is kept per `cid` in `hive.db` (`contact_seen`), so it survives restarts.
+  5. No device the record lists was revoked on a log this device holds; revoked devices are dropped, and a record with only revoked devices is refused.
+  6. A link verifies only by Section 2.5.
 
   A record that fails (1) is shown as **unverified**, and sealing to it goes through the existing `withUnverifiedRecipientConfirm`.
+- **Where records are read (2.0).** Before an invite is dropped into a co-member's box, the desktop reads the record at that `cid` (`contacts::accept_contact_record`, the same checks as `fetch_verified_contact`) and drops only when it verifies, is anchored to the account key the shared logs trust for that person, and names their account. A `cid` that holds someone else's record, a stale record, or none gets nothing; the inviter shares the link instead. The invite is still sealed to the keys from the config logs, never to the record's.
+- **Size caps on reads.** A record read is capped at 256 KiB, a drop-box page at 4 MiB and a write or delete answer at 64 KiB; a longer body is refused without being read to the end.
 
 ### 3.3 Relay changes (relay v0.3, additive)
 
@@ -383,6 +400,11 @@ A contact has a **contact id `cid`**: 16 random bytes, base64url, chosen by the 
 | POST | `/v1/contacts/{cid}/drop` | gate only; rate-limited per IP and per `cid` (reuse `TestInviteRateLimit` limits) | `{blob}` (≤ 64 KiB, sealed client-side to KA keys with `hive-workspace-key-seal-v1`) |
 | GET | `/v1/contacts/{cid}/drop?after=<seq>` | contact key | `{items:[{seq, blob, createdAt}]}`; same row cap as `relay_inbox` (`TestInboxRowCapEvictsOldest`) |
 
+- **Write keys are per relay.** The device keeps one master write key and never sends it. Each relay gets `HKDF-SHA256(master, info = "ligus-contact-write-key-v1\0" + lowercased base URL)`, so a relay that sees its key in clear can't read, acknowledge or overwrite the same contact on another relay. One relay refusing the key doesn't make the device drop its `cid` everywhere: the device replaces the `cid` only when no relay holds the record any more.
+- **Reclaim hold.** When a record expires, the relay keeps only its write-key hash and seq counter for 180 days (`HIVE_RELAY_CONTACT_RECLAIM_HOLD_DAYS`). During the hold only the old key can re-create the `cid`, so a lapsed contact id can't be taken over while co-members still deliver to it.
+- **Seqs are monotonic.** A drop box's seqs never go backwards, also across expiry and re-creation: a re-created box starts after a time-based base, so each device's `after=` cursor and acknowledgements stay valid. The owner reads every page of the box.
+- **Bodies are UTF-8.** The relay stores records and blobs byte-exact and answers `400` to a record or blob that isn't valid UTF-8 (the snapshot would otherwise rewrite it).
+- **Flood eviction (R6).** When a box is over its row or byte cap, the relay evicts first the drops it has already served to the owner (returned by an owner-keyed read), oldest first, then the unread drops of the heaviest sender in that box (most bytes, then most rows; on a tie an unverified sender before a verified one). A sender is the relay-token subject when the request has one (counted as verified), otherwise the client address (IPv6 /64 or IPv4), kept only as a salted hash. A flood from a few addresses that know the `cid` evicts its own drops rather than an invite nobody has read yet. Relay test: `TestContactDropFloodKeepsUnreadInvites`.
 - **The relay does no cryptography** on these routes. It cannot verify the record and doesn't need to: `cid` is random and unguessable, so squatting someone else's `cid` needs knowing it first, and clients verify everything.
 - **Storage:** `relay_contacts(cid PK, write_key_hash, record, updated_at)` and `relay_contact_drop(cid, seq, blob, created_at)`, in the memory, Postgres and snapshot stores.
 - **2.0 without v0.3.** A 2.0 desktop against a relay without contacts gets a 404 on `/v1/contacts/`. It then falls back to links and QR only, and says so: "this relay doesn't support contacts".
@@ -422,12 +444,15 @@ A contact has a **contact id `cid`**: 16 random bytes, base64url, chosen by the 
 - **Delivery.** The `hivews1:` invite, with `dm_account = <peer account_id>` (the field keeps its name; its content becomes a UUID string), is sealed to the peer's verified KA keys and either:
   - posted to the peer's contact drop box (3.3); or
   - shown as a link or QR.
-- **Accepting.** The peer accepts only if the invite's founder account and `fk` match the account they know for that contact. This replaces trusting the relay-stamped `from_login` (M4).
+- **The founder signs the invite (R1).** An invite's founder account and `fk` are public, so on their own they prove nothing about who sent it. The founder's device signs the invite's name, relay, room, `dm_account`, founder, `fk` and invite id, plus SHA-256 of the workspace key and of the delivered epoch keys and the signing time, under `ligus-invite-v1\0` ([PHASE0](phase0-specs.md) 0.1). The invite carries the signature as `sig`, with the device certificate and the account key. A reader checks that the key's fingerprint is `fk`, the certificate names the founder and verifies under that key, the device isn't revoked on its logs, and the signature verifies. Only then is the invite labelled "from <name>: signed by their device, and their safety code matches" (`known`). An invite that names a co-member and their `fk` without that signature is labelled "says it's from <name>" (`claimed`), from the drop box or pasted alike. Only the founder's device signs: an invite another Admin issues is `claimed`.
+- **Accepting.** The peer accepts a DM only if the invite is signed by the founder's device and its founder account and `fk` match the account they know for that contact (or, for someone they share nothing with, after comparing the safety code). An unsigned DM invite is refused. This replaces trusting the relay-stamped `from_login` (M4).
+- **A DM invite for a room already joined is refused,** even from a known co-member: a DM is always a fresh room, and accepting would rewrite that workspace's relay and key.
+- **Writes wait for the verified founder.** A joiner pins the founder from the invite but writes nothing into the workspace until the config log holds a seed by the pinned founder, signed by a device certified under the pinned key. The desktop shows this as "Waiting for <name>'s founding to sync", with Send disabled, not as a send failure; it clears on its own.
 - **Simultaneous opens.** If both sides open a DM at once, there are two DM workspaces for one pair. The rule is deterministic:
-  - keep the one whose `(created_at, room)` is smaller;
+  - keep the one whose `(created_at, room)` is smaller, where `created_at` is the timestamp of the pinned founder's signed seed (no later event, skewed clock or forged DM can move it; a forged DM has none);
   - the other is archived, read-only, and linked from the kept one.
 
-  Both sides compute the same answer. **[Owner D12]**
+  Both sides compute the same answer. The kept DM is recomputed every time rather than accumulated, so a resolution that changes as logs sync never leaves both archived. **[Owner D12]**
 - **Removed.** `dm_room_for` and its tests are deleted from new code paths. Keep the function only if a 1.x DM must be opened; 2.0 starts from scratch, so it is deleted.
 - **Rule.** No room, workspace, chat or invite id may be derived from a public identifier: account id, account key, forge id, handle or email. Enforce it with a test that greps for `new_v5(` call sites against an allow-list. The config-log namespace (`channel.rs:16-20`) is allowed, because its input is the workspace id.
 
@@ -617,6 +642,11 @@ pub trait Forge: Send + Sync {
   - **Kubernetes:** a mounted Secret.
 - **Never** in `settings.json`, `hive.db`, synced events, invites, contact records, logs or the relay. Test: `no_forge_token_leaves_device` (Section 7).
 - **Ownership.** The device or box that does git work for a repo binding (the hosts and bindings model) holds that forge's tokens. A phone never holds a forge token. It drives the box (5.7).
+- **Refreshes are serialized.** OAuth refreshes are serialized per data dir by an exclusive lock on `.forges.lock`, across serve, the agents' forge tools and the git credential helper. The refresher re-reads the saved expiry first, and the new expiry is saved once while the lock is held, so a rotating GitLab refresh token is never spent twice and nobody is signed out (test `refreshed_expiry_is_persisted_once`).
+- **Device sign-in after removal.** Each device sign-in carries a random id; removing the connection ends it. Tokens are saved only while the connection exists and that sign-in is still the pending one (test `device_poll_after_remove_stores_nothing`).
+- **Internal hosts.** A connection may be marked `internal` on one device (stored in `forges.toml`, never synced; `POST /v1/forges {internal}`, the Settings > Code hosts checkbox, or `ligus forge add --internal`). Without the mark, a base URL that is or resolves to a loopback, private, link-local (cloud metadata), CGNAT or other non-public address is refused when added, and every request uses a resolver that only returns public addresses (DNS rebinding finds nothing). Caveats: behind `HTTP(S)_PROXY` or `ALL_PROXY` the proxy resolves the target, and git's own pushes look the host up themselves.
+- **Agents never read the forge CLIs' logins.** The sandbox denies `~/.config/gh` (except for the Copilot CLI, which may sign in through it), `glab-cli`, `tea` and `hub` alongside `~/.ssh`, `~/.netrc` and `~/.git-credentials`.
+- **Tests never reach a real forge.** `hive-forge` refuses real hosts in test builds and whenever `LIGUS_FORGE_DENY_REAL=1`; tests use loopback fakes only.
 - **Git transport:**
   - HTTPS uses `-c credential.<base>.helper=` (reset) plus `-c credential.<base>.helper=!ligus forge git-credential <forge-id>`. That reads the write token from the store at push time. It generalises `repos_api.rs:405-414`.
   - SSH uses the user's agent.
@@ -635,7 +665,7 @@ pub trait Forge: Send + Sync {
   - `ligus_forge_read_issue`
   - `ligus_forge_ci_status {ref}`
 
-  `repo` defaults to the chat's bound repo. The token never enters the sandbox, and results are size-capped like the other D.3 reads. The tool-loop runtimes fold them into `ligus_read {what: "forge.pr" …}` to stay within the 16-tool cap (D.3.3).
+  `repo` defaults to the chat's bound repo. The binding reads `remote.<name>.url` from git config; `insteadOf` and `pushInsteadOf` rewrites are never followed, so a rewrite can't point the agents' tools at another repo (test `binding_ignores_rewritten_remote`). The token never enters the sandbox, and results are size-capped like the other D.3 reads. The tool-loop runtimes fold them into `ligus_read {what: "forge.pr" …}` to stay within the 16-tool cap (D.3.3).
 - **Optional community servers.** These stay as user config, through the existing `mcp_config.rs` path. Recommend running them read-only:
   - **GitHub:** `github/github-mcp-server` with `--read-only` ([repo](https://github.com/github/github-mcp-server)) **[V]**. For remote, the `X-MCP-Readonly` header or `/readonly`. `X-MCP-Lockdown` "is not a security boundary" **[V]**.
   - **GitLab:** the built-in `{base}/api/v4/mcp` (GA in 19.5; Free tier from 19.2; an admin enables it; OAuth DCR or a fine-grained PAT; legacy PATs rejected) **[V]** ([docs](https://docs.gitlab.com/user/gitlab_duo/model_context_protocol/mcp_server/)). It has no read-only flag, so use a read-only fine-grained PAT **[I]**.
@@ -663,12 +693,14 @@ These are additive. The existing `/v1/repos*` and `/v1/chats/:id/pr` shapes stay
 | POST | `/v1/forges/{id}/auth/device` | Start the device flow (GitHub, GitLab). Returns `{userCode, verificationUri, expiresIn}`. The phone opens the URI and the box polls. |
 | GET | `/v1/forges/{id}/auth/device` | Poll status |
 | PUT | `/v1/forges/{id}/token` | Paste a PAT `{purpose: read\|write, token}`. It travels phone → host over the tunnel, which is host-authenticated and opaque to the relay **[I: confirm that `hive-tunnel/1` payloads are E2E between phone and host]**. Stored in the box's `SecretStore`. |
-| DELETE | `/v1/forges/{id}` | Removes the connection and its tokens |
+| DELETE | `/v1/forges/{id}` | Removes the connection and its tokens, and ends a pending device sign-in |
+| POST | `/v1/forges/{id}/test` | Needs write standing and presence like the other writes. Answers `{ok, user, userId}` or `{ok:false, error}` with a fixed message per error kind, never the host's response body. |
 | GET | `/v1/repos?forge=<id>&owner=…` | Multi-forge listing. Without `forge`, today's response plus `forges:[…]` |
 | POST | `/v1/repos/clone` | Gains `forge` (default `github.com`) |
-| POST | `/v1/chats/:id/pr` | Unchanged route. The response gains `kind` (PR, MR, pull or patchset) and `prepared` for SourceHut. |
+| POST | `/v1/chats/:id/pr` | Unchanged route. The response gains `kind` (PR, MR, pull or patchset) and `prepared` for SourceHut. A plain checkout's push (after `pushurl` and `pushInsteadOf`) must go to origin's own repository and host, or the answer is 409 and nothing is pushed (test `non_fork_push_target_must_equal_origin_fetch_repo`). |
 
-Under rules v2, `PUT token` and `POST /v1/forges` need presence ([PHASE0](phase0-specs.md) B.4 serve flow): they hand a box write access to code.
+- **Presence.** Add, remove, test, token and device routes hand a box write access to code. They need presence ([PHASE0](phase0-specs.md) B.4 serve flow) on a box acting for its owner (delegated) and on any workspace running rules v2. Until the serve passkey flow lands, the accepted proof is a request through the tunnel from a phone the owner marked as theirs; anything else gets 403 `presence_required`. The local `ligus forge` CLI doesn't go through HTTP.
+- **Device sign-in status.** Starting a device sign-in, and reading a pending sign-in's user code back (`GET .../auth/device`), work only through the tunnel or on loopback, never on a plain-HTTP network bind: anyone who saw the code could approve it with their own forge account first. **Caveat:** a reverse proxy on the same machine makes every request look like loopback, so don't front `serve` with a local proxy that is reachable from the network.
 
 ---
 
@@ -766,8 +798,34 @@ Under rules v2, `PUT token` and `POST /v1/forges` need presence ([PHASE0](phase0
 | S14 | **Fold divergence from network state.** | Verification status is device-local and never folded. | Extend `fold_ignores_env` to stub the forge fetcher with differing answers, and assert identical projections. |
 | S15 | **Downgrade:** a 2.0 client against a v0.2 relay. | No contacts, so links and QR only. No GitHub header. | `client_degrades_without_contacts_routes` |
 
+**Identity security review, 2026-11-14 (residuals fixed for 2.0).** These come from the review of the identity core, forges and linked identities (numbered R and S there, distinct from the table above).
+
+| # | Attack | Outcome | Test |
+|---|---|---|---|
+| R1 | A drop or pasted invite names a co-member as founder and copies their public `fk`. | Labelled `known` only with the founder's device signature (Section 4); otherwise "says it's from". An unsigned DM invite is refused. | `forged_drop_not_labelled_known`, `invite_signature_survives_encoding_and_binds_fields` |
+| R6 | ~6 IPs that know a `cid` flood its drop box to evict real invites. | Served drops go first, then the heaviest sender's unread drops (3.3). | relay `TestContactDropFloodKeepsUnreadInvites` |
+| S1 | An Admin of a workspace they founded registers their own key (and device) under a co-member's account id. | The key trusted for an account is the founder pin of a workspace it founded, else the earliest-pinned log that registers it undisputed. A log registering another key contributes nothing for that account (listed as disputed there); only all logs disputing it is a conflict. | `co_member_key_conflict_from_attacker_founded_log` |
+| S2 | A left workspace keeps vouching; a co-member stamps someone else's account with their own drop box. | Leaving drops the founder pin and the redeemed invite. A stamped contact id counts only from an event that verifies under a certified, non-revoked device of that account. | `left_workspace_stops_contributing_co_members`, `forged_stamp_cannot_set_contact` |
+| S3 | Bidi overrides, zero-width or control characters make a name read as someone else's. | Stripped wherever a name is shown (desktop DTOs, co-members, invites, guard approvals, serve API, notifications); look-alike names among co-members are flagged. Signed events keep their bytes. | `display_name_bidi_controls_stripped`, `look_alike_co_members_flagged_and_names_cleaned`, `name_and_handle_sanitizers_agree` |
+| S4 | Contact records read unchecked; rollback across restarts; revoked devices; unbounded bodies. | 3.2: verified reads before every drop, persisted newest-seen, revoked devices dropped, capped bodies. | `contact_newest_seen_persists_for_anti_rollback`, `contact_record_revoked_device_refused`, `contact_response_body_capped` |
+
+Forge residuals from the same review:
+
+| # | Attack | Outcome | Test |
+|---|---|---|---|
+| S5 | GitLab rotates the refresh token on use; serve, the agents' tools and the git helper refresh at once and one of them signs everyone out. | One refresh at a time per data dir under a file lock; the new expiry is saved once (5.4). | `refreshed_expiry_is_persisted_once` |
+| S6 | An `insteadOf` rewrite in a checkout's git config points the agents' forge binding at another repo. | The binding reads raw `remote.<name>.url` (5.5). | `binding_ignores_rewritten_remote` |
+| S7 | A base URL at an internal or metadata address turns the box into an SSRF probe; `/test` echoes the host's body; `/test` and other writes skip presence on some hosts. | Non-public addresses need a device-local `internal` mark and requests resolve to public addresses only; `/test` answers a status and is gated like the other writes; presence on delegated and rules-v2 hosts (5.4, 5.7). | `internal_addresses_need_the_internal_mark`, `forge_test_is_gated_internal_marked_and_status_only`, `forge_changes_need_presence_on_delegated_and_rules_v2_hosts` |
+| S8 | A plain checkout's `pushurl` or `pushInsteadOf` sends the PR push (with the write token) to another repo or host. | `check_push_target` on the non-fork path too (5.7). | `non_fork_push_target_must_equal_origin_fetch_repo` |
+| S9 | A device sign-in completes after its connection was removed and stores a token nobody sees. | Tokens are saved only while the connection and that sign-in exist (5.4). | `device_poll_after_remove_stores_nothing` |
+
 **Residual risks:**
 - A forge, PDS host or PLC operator can lie about keys (S5).
+- git looks up a forge host itself, so a hostname re-pointed to an internal address after it was added could still receive the write token through the credential helper. Behind a proxy, the proxy resolves forge hosts.
+- Presence on forge routes is the owner's phone through the tunnel, not yet a passkey assertion.
+- The co-member key rule is trust on first pin. If the only workspace you share with someone was founded by an attacker who registered a key under their account id, or the attacker's workspace was pinned before any honest one, you see the attacker's key and safety code for them. Comparing the safety code out of band is the check; a founder pin from a signed invite outranks it.
+- An invite from an Admin who isn't the founder is always "says it's from".
+- An Admin writes a member's roster entry, including its contact id; a stamped contact from the account's own device takes precedence, but until one exists the roster's is used (delivery to a wrong `cid` is caught by the record check in 3.2).
 - First contact without an out-of-band `fk` is trust-on-first-use.
 - The relay sees metadata (cids, drop timing, sizes).
 - SourceHut links are name-bound.

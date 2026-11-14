@@ -73,6 +73,13 @@ only over `https` (or to a server on the same machine). On a self-managed
 GitLab, device sign-in needs an OAuth application on that server: see
 [GitLab](../forges/gitlab.md#self-managed).
 
+A server on a private, loopback or link-local address (or a name that
+resolves to one) is refused unless you tick **Internal server on this device's network** when adding
+it (`ligus forge add --internal` on a box). The mark stays on that device and
+is never synced; it stops a code-host address from being used to reach
+other machines on your network, such as a cloud metadata service. Behind an
+HTTP proxy, the proxy resolves the address instead.
+
 ## On the desktop
 
 **Settings → Code hosts** lists each connection: its address, how it signs in,
@@ -82,7 +89,8 @@ there you can:
 - **Add** a code host (pick the kind, adjust the address for your own server).
 - **Paste** a read or write token.
 - **Sign in** with a device code where the code host supports it.
-- **Test** the connection.
+- **Test** the connection. It reports only whether signing in worked, never
+  the server's reply.
 - **Remove** it, which also deletes its tokens from the secret store.
 
 Under **Repositories**, pick a connection, search, and **Clone…** a

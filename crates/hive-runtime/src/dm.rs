@@ -12,7 +12,8 @@
 //!   fingerprint, pinned by the peer on join like any founder pin.
 //! - The invite's `dm_account` names the peer's account id, so it can't be
 //!   replayed to someone else.
-//! - The peer accepts only when the founder's account and `fk` match what
+//! - The founder's device signs the invite ([`crate::invite_sig`]); the peer
+//!   accepts only a signed invite whose founder account and `fk` match what
 //!   the config logs they share register for that account
 //!   ([`accept_dm_invite`]); a stranger needs the safety code compared first.
 //! - Two people who open a DM at the same moment get two; both sides keep the
@@ -43,8 +44,12 @@ pub fn new_invite_id() -> Uuid {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FounderTrust {
     /// A co-member whose account key, on the logs this device holds, has the
-    /// invite's fingerprint.
+    /// invite's fingerprint, and whose certified device signed the invite.
     KnownMatch,
+    /// The invite names a co-member and their fingerprint, but nothing
+    /// proves it is from them (no valid signature from their device): it
+    /// only says it's from them.
+    Claimed,
     /// A co-member whose account key is a different one (or disputed): the
     /// invite is not from them.
     Mismatch,
@@ -64,8 +69,15 @@ pub fn known_fingerprints(co_members: &[CoMember]) -> BTreeMap<Uuid, Option<Stri
 }
 
 /// Check an invite's founder account and `fk` against what this device
-/// knows.
-pub fn check_founder(founder: Option<&str>, fk: Option<&str>, known: &BTreeMap<Uuid, Option<String>>) -> FounderTrust {
+/// knows. `signed_by` is the founder account the invite's signature proves
+/// ([`crate::invite_sig::verify`]), if it verified: without it a co-member's
+/// name and fingerprint are only a claim.
+pub fn check_founder(
+    founder: Option<&str>,
+    fk: Option<&str>,
+    known: &BTreeMap<Uuid, Option<String>>,
+    signed_by: Option<Uuid>,
+) -> FounderTrust {
     let (Some(founder), Some(fk)) = (founder.and_then(|f| Uuid::parse_str(f.trim()).ok()), fk) else {
         return FounderTrust::NoFingerprint;
     };
@@ -74,7 +86,8 @@ pub fn check_founder(founder: Option<&str>, fk: Option<&str>, known: &BTreeMap<U
         return FounderTrust::NoFingerprint;
     }
     match known.get(&founder) {
-        Some(Some(k)) if *k == fk => FounderTrust::KnownMatch,
+        Some(Some(k)) if *k == fk && signed_by == Some(founder) => FounderTrust::KnownMatch,
+        Some(Some(k)) if *k == fk => FounderTrust::Claimed,
         Some(_) => FounderTrust::Mismatch,
         None => FounderTrust::Unknown,
     }
@@ -85,7 +98,8 @@ pub fn check_founder(founder: Option<&str>, fk: Option<&str>, known: &BTreeMap<U
 ///
 /// - `dm_account` must name `me`: an invite addressed to someone else is
 ///   refused.
-/// - The founder must be someone else, named by account id, with an `fk`.
+/// - The founder must be someone else, named by account id, with an `fk`,
+///   and their certified device must have signed the invite (`signed_by`).
 /// - A co-member must match the key the shared logs register for them.
 /// - An account this device shares nothing with is accepted only once the
 ///   person confirmed the safety code (`safety_code_confirmed`).
@@ -93,12 +107,14 @@ pub fn check_founder(founder: Option<&str>, fk: Option<&str>, known: &BTreeMap<U
 ///   always a fresh room, and accepting would rewrite that workspace's relay
 ///   and key to the invite's (a co-member who knows a workspace's room could
 ///   otherwise turn it into a "DM" synced through a relay of their choosing).
+#[allow(clippy::too_many_arguments)]
 pub fn accept_dm_invite(
     dm_account: Option<&str>,
     founder: Option<&str>,
     fk: Option<&str>,
     me: Uuid,
     known: &BTreeMap<Uuid, Option<String>>,
+    signed_by: Option<Uuid>,
     safety_code_confirmed: bool,
     room_already_joined: bool,
 ) -> Result<Uuid, String> {
@@ -113,8 +129,13 @@ pub fn accept_dm_invite(
     if peer == me {
         return Err("that's your own invite".into());
     }
-    match check_founder(founder, fk, known) {
+    let trust = check_founder(founder, fk, known, signed_by);
+    if signed_by != Some(peer) && matches!(trust, FounderTrust::Claimed | FounderTrust::Unknown) {
+        return Err("the invite isn't signed by the sender's device, so nothing shows who sent it".into());
+    }
+    match trust {
         FounderTrust::KnownMatch => Ok(peer),
+        FounderTrust::Claimed => Err("the invite isn't signed by the sender's device".into()),
         FounderTrust::Unknown if safety_code_confirmed => Ok(peer),
         FounderTrust::Unknown => Err("unknown sender: compare their safety code before accepting".into()),
         FounderTrust::Mismatch => {
@@ -233,22 +254,29 @@ mod tests {
         let mut known = BTreeMap::new();
         known.insert(peer, Some(fk.to_string()));
         let (me_s, peer_s) = (me.to_string(), peer.to_string());
-        assert_eq!(accept_dm_invite(Some(&me_s), Some(&peer_s), Some(fk), me, &known, false, false), Ok(peer));
+        assert_eq!(accept_dm_invite(Some(&me_s), Some(&peer_s), Some(fk), me, &known, Some(peer), false, false), Ok(peer));
         // Addressed to someone else (a replayed invite).
-        assert!(accept_dm_invite(Some(&Uuid::new_v4().to_string()), Some(&peer_s), Some(fk), me, &known, true, false).is_err());
+        assert!(accept_dm_invite(Some(&Uuid::new_v4().to_string()), Some(&peer_s), Some(fk), me, &known, Some(peer), true, false).is_err());
         // The co-member's name with another key: refused even when "confirmed".
-        assert!(accept_dm_invite(Some(&me_s), Some(&peer_s), Some(other), me, &known, true, false).is_err());
+        assert!(accept_dm_invite(Some(&me_s), Some(&peer_s), Some(other), me, &known, Some(peer), true, false).is_err());
         // No fingerprint at all.
-        assert!(accept_dm_invite(Some(&me_s), Some(&peer_s), None, me, &known, true, false).is_err());
+        assert!(accept_dm_invite(Some(&me_s), Some(&peer_s), None, me, &known, Some(peer), true, false).is_err());
         // A stranger: only after the safety code was compared.
-        let stranger = Uuid::new_v4().to_string();
-        assert!(accept_dm_invite(Some(&me_s), Some(&stranger), Some(fk), me, &known, false, false).is_err());
-        assert!(accept_dm_invite(Some(&me_s), Some(&stranger), Some(fk), me, &known, true, false).is_ok());
+        let stranger_id = Uuid::new_v4();
+        let stranger = stranger_id.to_string();
+        let signed = Some(stranger_id);
+        assert!(accept_dm_invite(Some(&me_s), Some(&stranger), Some(fk), me, &known, signed, false, false).is_err());
+        assert!(accept_dm_invite(Some(&me_s), Some(&stranger), Some(fk), me, &known, signed, true, false).is_ok());
+        // Unsigned: refused even after a safety-code comparison (the code is
+        // public; only the signature shows the invite came from its holder).
+        assert!(accept_dm_invite(Some(&me_s), Some(&stranger), Some(fk), me, &known, None, true, false).is_err());
+        // A co-member's invite without their device's signature.
+        assert!(accept_dm_invite(Some(&me_s), Some(&peer_s), Some(fk), me, &known, None, true, false).is_err());
         // A co-member whose key the logs dispute is a mismatch.
         known.insert(peer, None);
-        assert_eq!(check_founder(Some(&peer_s), Some(fk), &known), FounderTrust::Mismatch);
+        assert_eq!(check_founder(Some(&peer_s), Some(fk), &known, Some(peer)), FounderTrust::Mismatch);
         // A legacy `github:<id>` founder is no account id.
-        assert_eq!(check_founder(Some("github:42"), Some(fk), &known), FounderTrust::NoFingerprint);
+        assert_eq!(check_founder(Some("github:42"), Some(fk), &known, None), FounderTrust::NoFingerprint);
     }
 
     /// D12 over time: Alice first sees DM A as the older one and archives B;
@@ -276,7 +304,38 @@ mod tests {
         let fk = "00112233445566778899aabbccddeeff";
         let known = BTreeMap::from([(peer, Some(fk.to_string()))]);
         let (me_s, peer_s) = (me.to_string(), peer.to_string());
-        assert!(accept_dm_invite(Some(&me_s), Some(&peer_s), Some(fk), me, &known, true, true).is_err());
-        assert_eq!(accept_dm_invite(Some(&me_s), Some(&peer_s), Some(fk), me, &known, false, false), Ok(peer));
+        assert!(accept_dm_invite(Some(&me_s), Some(&peer_s), Some(fk), me, &known, Some(peer), true, true).is_err());
+        assert_eq!(accept_dm_invite(Some(&me_s), Some(&peer_s), Some(fk), me, &known, Some(peer), false, false), Ok(peer));
+    }
+
+    /// R1: an invite (from the drop box or pasted) that names a co-member as
+    /// its founder and copies their public fingerprint is not labelled as
+    /// coming from them: anyone can write those two fields.
+    #[test]
+    fn forged_drop_not_labelled_known() {
+        let peer = Uuid::new_v4();
+        let fk = "00112233445566778899aabbccddeeff";
+        let known = BTreeMap::from([(peer, Some(fk.to_string()))]);
+        let trust = check_founder(Some(&peer.to_string()), Some(fk), &known, None);
+        assert_ne!(trust, FounderTrust::KnownMatch, "an unsigned claim is not proof of the sender");
+        assert_eq!(trust, FounderTrust::Claimed);
+        // Signed by someone else's device (a valid signature of another
+        // account, relabelled): still only a claim.
+        assert_eq!(check_founder(Some(&peer.to_string()), Some(fk), &known, Some(Uuid::new_v4())), FounderTrust::Claimed);
+        assert_eq!(check_founder(Some(&peer.to_string()), Some(fk), &known, Some(peer)), FounderTrust::KnownMatch);
+    }
+
+    /// The display-name cleaner (S3) and the identity-link handle check (L5)
+    /// hide exactly the same characters.
+    #[test]
+    fn name_and_handle_sanitizers_agree() {
+        for c in (0u32..=0xE0FFF).filter_map(char::from_u32) {
+            assert_eq!(
+                hive_proto::names::is_hidden_name_char(c),
+                c.is_control() || hive_core::identity_link::is_invisible_format(c),
+                "U+{:04X}",
+                c as u32
+            );
+        }
     }
 }

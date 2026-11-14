@@ -9,16 +9,23 @@ link. Open **People** from the button on the left workspace rail.
 People lists every member of every workspace you share with them, once per
 account, with:
 
-- their name and picture (names aren't unique and identify nobody);
+- their name and picture (names aren't unique and identify nobody). Names
+  are shown without the invisible and text-direction characters that can
+  make one name read as another, and a **Look-alike name** tag marks two
+  people whose names look the same: tell them apart by safety code;
 - their **safety code**, the fingerprint of their account key (see
   [Identity & devices](../concepts/identity.md#safety-code));
 - the workspaces you share.
 
 Their devices' encryption keys come from those workspaces' signed logs, not
 from a server, so Ligus can seal things to them without asking anyone who
-they are. If two of your workspaces disagree about someone's account key,
-People shows a warning and Ligus won't send them anything until it is
-resolved.
+they are. Whoever founds a workspace can add any account there with a key of
+their own, so one workspace never overrides the others: Ligus trusts the key
+from a workspace that person founded, else from the workspace you joined
+first that registers one, and ignores a workspace that says otherwise about
+them. Only when every workspace that registers a key for someone disputes it
+does People show a warning, and Ligus sends them nothing until it is
+resolved. When you leave a workspace, it stops vouching for anyone.
 
 From a person's row you can:
 
@@ -36,13 +43,17 @@ only ever sees ciphertext.
 - **Its room and invite are random.** Nothing about a DM is derived from
   either person's account id, a forge id, an email or a name, so nobody (the
   relay included) can work out whether two people have a DM.
-- **You found it.** The DM's invite names your account and carries your
-  safety code, and it is addressed to the other person's account: it can't be
-  used by anyone else.
-- **They accept only if it checks out.** Their Ligus compares your safety
-  code with the one your shared workspaces register for you. A mismatch is
-  refused. From someone you share no workspace with, Ligus asks them to
-  compare safety codes with you first.
+- **You found it.** The DM's invite names your account, carries your safety
+  code and is signed by your device, and it is addressed to the other
+  person's account: it can't be used by anyone else.
+- **They accept only if it checks out.** Their Ligus checks your device's
+  signature and compares your safety code with the one your shared
+  workspaces register for you. An unsigned invite or a mismatch is refused.
+  From someone you share no workspace with, Ligus asks them to compare safety
+  codes with you first.
+- **Nothing is sent until your founding arrives.** Until the DM's signed
+  founding reaches their device, they see **Waiting for <your name>'s
+  founding to sync** and Send is off. It clears on its own once it syncs.
 - **Opening at the same time.** If you both open a DM at the same moment,
   you get two. Both sides keep the older one (the earlier founding time,
   then the smaller room id) and archive the other; the archived one stays
@@ -58,9 +69,16 @@ co-members can deliver to it.
 
 - An invite to you is sealed to your verified devices before it is dropped.
   The relay can't read it, and garbage that doesn't open is discarded.
-- New invites show as a banner with the founder's safety code and whether
-  it matches what you know. **Accept** joins; **Dismiss** deletes it from the
-  relay.
+- Before dropping an invite, Ligus reads the person's contact record and
+  checks it is theirs (signed by their account key, not older than one seen
+  before, from a device that wasn't revoked). Otherwise you get the link to
+  send yourself.
+- New invites show as a banner with the founder's safety code. It says the
+  invite is **from** someone only when their device signed it and the code
+  matches what you know; otherwise it only **says it's from** them.
+  **Accept** joins; **Dismiss** deletes it from the relay.
+- A flood of junk into your box from a few addresses evicts its own drops
+  first, not invites you haven't read.
 - Only the device that owns a box reads it, and deletes what it handled.
 
 A relay without the contact routes (v0.2) answers "not found". Ligus then

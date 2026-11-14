@@ -29,7 +29,7 @@ mod facts;
 mod guards;
 mod keys;
 mod links;
-pub use links::{LinkDraft, WorkspaceLinks};
+pub use links::{links_for_account, LinkDraft, ShownLink, WorkspaceLinks};
 mod presence;
 pub use keys::RotationIssued;
 pub use presence::{PresenceDraft, PresenceProvider, PresenceRequest};
@@ -48,6 +48,12 @@ pub type Result<T> = std::result::Result<T, ChatError>;
 
 mod proposal_sets;
 pub use proposal_sets::QuorumOutcome;
+
+/// The start of the error a write gets while [`ChatService::waiting_for_founder`]
+/// holds; the desktop shows it as a waiting state, not a send failure.
+pub const WAITING_FOR_FOUNDER: &str =
+    "waiting for the workspace's founder: their signed founding hasn't reached this device, so nothing is sent yet";
+
 
 /// Drives a single workspace's chat sessions over an [`EventStore`], signing
 /// every appended event with this device's key.
@@ -443,20 +449,25 @@ impl ChatService {
     /// is readable by them. The founder's own device is exempt (it writes the
     /// seed).
     fn require_verified_founder(&self, workspace_id: Uuid) -> Result<()> {
+        if self.waiting_for_founder(workspace_id)?.is_none() {
+            return Ok(());
+        }
+        Err(ChatError::Unauthorized(WAITING_FOR_FOUNDER.into()))
+    }
+
+    /// Whether writes into `workspace_id` wait for its pinned founder's signed
+    /// founding (see [`Self::founder_verified`]): `Some(founder account)`
+    /// while they do, `None` when this device may write. A state to show,
+    /// not a failure: it clears once the founding syncs.
+    pub fn waiting_for_founder(&self, workspace_id: Uuid) -> Result<Option<Uuid>> {
         if self.local_workspace_id == Some(workspace_id) {
-            return Ok(());
+            return Ok(None);
         }
-        let Some(pin) = self.store.workspace_pin(workspace_id)? else { return Ok(()) };
-        if self.author.account_id == Some(pin.founder_account) {
-            return Ok(());
+        let Some(pin) = self.store.workspace_pin(workspace_id)? else { return Ok(None) };
+        if self.author.account_id == Some(pin.founder_account) || self.founder_verified(workspace_id)? {
+            return Ok(None);
         }
-        if self.founder_verified(workspace_id)? {
-            return Ok(());
-        }
-        Err(ChatError::Unauthorized(
-            "waiting for the workspace's founder: their signed founding hasn't reached this device, so nothing is sent yet"
-                .into(),
-        ))
+        Ok(Some(pin.founder_account))
     }
 
     /// The currently-pinned trusted founder, if any.
@@ -524,6 +535,31 @@ impl ChatService {
         );
         hive_core::crypto::sign_envelope(&mut env, self.device_id, &self.keypair);
         env
+    }
+
+    /// Sign an invite's fields as its founder (R1; [`crate::invite_sig`]).
+    /// `None` unless this device holds its account's key, `cert` is this
+    /// device's certificate for that account, and the invite names this
+    /// account and its key fingerprint as founder.
+    pub fn sign_invite(
+        &self,
+        claims: &crate::invite_sig::InviteClaims<'_>,
+        cert: &hive_core::crypto::DeviceCertificate,
+    ) -> Option<crate::invite_sig::InviteSignature> {
+        let me = self.author.account_id?;
+        let account_pk = self.account_public_key();
+        let fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&account_pk);
+        let names_me = claims.founder.and_then(|f| Uuid::parse_str(f.trim()).ok()) == Some(me)
+            && claims.fk.is_some_and(|k| k.trim().eq_ignore_ascii_case(&fk));
+        let mine = cert.account_id == me
+            && cert.device_id == self.device_id
+            && cert.device_public_key == self.keypair.public_key_bytes()
+            && cert.verify(&account_pk).is_ok();
+        if self.delegated || !names_me || !mine {
+            return None;
+        }
+        let at = time::OffsetDateTime::now_utc().unix_timestamp();
+        Some(crate::invite_sig::sign(claims, at, &self.keypair, cert, &account_pk))
     }
 
     /// Set the git email carried on this user's identity (for commit

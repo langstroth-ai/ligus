@@ -25,7 +25,11 @@ import { LinkChips } from "@/components/LinkChips";
 /// A co-member's linked accounts. Opening People checks them with their
 /// forges (this device's 24-hour cache answers first, so it is at most one
 /// request per link a day); until then the cached status shows.
+/// A link whose server its owner chose (a self-run PDS) is only asked when
+/// you click "Check now": an automatic check would tell that server who
+/// looked.
 function PersonLinks({ p }: { p: CoMemberDto }) {
+  const qc = useQueryClient();
   const has = (p.links?.length ?? 0) > 0;
   const checked = useQuery({
     queryKey: ["links-of", p.accountId],
@@ -34,7 +38,25 @@ function PersonLinks({ p }: { p: CoMemberDto }) {
     staleTime: 10 * 60_000,
   });
   if (!has) return null;
-  return <LinkChips links={checked.data ?? p.links} />;
+  const shown = checked.data ?? p.links;
+  const unchecked = (shown ?? []).some((l) => l.status?.state === "notChecked");
+  const checkNow = async () => {
+    try {
+      qc.setQueryData(["links-of", p.accountId], await identityLinkStatuses(p.accountId, true));
+    } catch (e) {
+      toast.error(errMsg(e));
+    }
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      <LinkChips links={shown} />
+      {unchecked && (
+        <button type="button" className="text-[11px] underline opacity-70" onClick={() => void checkNow()}>
+          Check now
+        </button>
+      )}
+    </div>
+  );
 }
 
 /// What the contacts status means for delivery. Exported for unit testing.
@@ -221,7 +243,7 @@ export function FriendsView({
             <button
               className="mt-2 rounded-lg px-3 py-1.5 text-xs font-medium disabled:opacity-40"
               style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
-              disabled={info.alreadyJoined || info.trust === "mismatch" || (info.isDm && !info.addressedToMe)}
+              disabled={info.alreadyJoined || info.trust === "mismatch" || (info.isDm && (!info.addressedToMe || info.trust === "claimed"))}
               onClick={() => void join()}
             >
               {info.alreadyJoined ? "Already joined" : "Join"}
@@ -271,6 +293,15 @@ export function FriendsView({
                 <span className="flex min-w-0 items-center gap-2 text-sm">
                   <Avatar name={p.displayName} url={p.avatarUrl} kind="human" size={24} />
                   <span className="truncate font-medium">{p.displayName || "Unnamed"}</span>
+                  {p.lookAlike && (
+                    <span
+                      className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium"
+                      style={{ color: "var(--hive-danger-ink)", border: "1px solid var(--hive-danger-ink)" }}
+                      title="Another person here has a name that looks like this one. Compare safety codes to tell them apart."
+                    >
+                      Look-alike name
+                    </span>
+                  )}
                 </span>
                 <button
                   onClick={() => (p.dmWorkspaceId ? void openExistingDm(p.dmWorkspaceId) : void message(p))}

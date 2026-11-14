@@ -728,6 +728,9 @@ export interface CoMemberDto {
   /// The shared workspaces disagree about their account key: nothing is
   /// sealed to them.
   keyConflict: boolean;
+  /// Another co-member's name looks like this one (case, look-alike letters
+  /// from other scripts): tell them apart by safety code.
+  lookAlike?: boolean;
   /// Devices whose keys are verified on a shared workspace.
   devices: number;
   workspaces: { id: string; name: string }[];
@@ -857,7 +860,7 @@ export const coMemberInvite = (workspaceId: string, accountId: string) =>
 /// `known`: a co-member and the key matches. `mismatch`: a co-member with a
 /// different key (not from them). `unknown`: compare the safety code out of
 /// band. `none`: the invite carries no safety code.
-export type InviteTrust = "known" | "mismatch" | "unknown" | "none";
+export type InviteTrust = "known" | "claimed" | "mismatch" | "unknown" | "none";
 
 export interface InviteInfoDto {
   workspaceName: string;
@@ -1101,6 +1104,14 @@ export interface SyncStatusDto {
 }
 
 export const syncStatus = () => invoke<SyncStatusDto>("sync_status");
+
+/// Whether sending in a chat waits for its workspace's founder (their signed
+/// founding hasn't synced to this device yet). A state, not a failure.
+export interface FounderStatusDto {
+  waiting: boolean;
+  founderName: string | null;
+}
+export const founderStatus = (sessionId: string) => invoke<FounderStatusDto>("founder_status", { sessionId });
 
 export type RelayProbeStatus =
   | "ok"
@@ -1818,6 +1829,8 @@ export type ForgeConnection = {
   holder: string;
   available?: boolean;
   reason?: string | null;
+  /** Marked internal on this device: a loopback, private or link-local address is allowed. */
+  internal?: boolean;
 };
 
 export type ForgeRepo = {
@@ -1834,8 +1847,8 @@ export type ForgeDeviceStart = { userCode: string; verificationUri: string; expi
 export type ForgeDeviceStatus = { id: string; state: "pending" | "done" | "denied" | "expired" | "error"; error?: string | null };
 
 export const forgesList = (check = false) => invoke<ForgeConnection[]>("forges_list", { check });
-export const forgesAdd = (kind: string, baseUrl: string, auth?: string, clientId?: string) =>
-  invoke<ForgeConnection>("forges_add", { kind, baseUrl, auth, clientId });
+export const forgesAdd = (kind: string, baseUrl: string, auth?: string, clientId?: string, internal?: boolean) =>
+  invoke<ForgeConnection>("forges_add", { kind, baseUrl, auth, clientId, internal });
 export const forgesRemove = (id: string) => invoke<void>("forges_remove", { id });
 export const forgesSetToken = (id: string, purpose: "read" | "write", token: string) =>
   invoke<ForgeConnection>("forges_set_token", { id, purpose, token });
