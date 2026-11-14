@@ -1189,16 +1189,17 @@ function DiffFileBlock({
             }
             const num = isDel || isMeta || isHunk ? "" : String(newLine++);
             const color = isAdd
-              ? "var(--hive-success)"
+              ? "var(--hive-success-ink)"
               : isDel
-                ? "var(--hive-danger)"
+                ? "var(--hive-danger-ink)"
                 : isHunk
-                  ? "var(--hive-accent-cool)"
+                  ? "var(--hive-accent-ink)"
                   : isMeta
-                    ? "var(--hive-ink-faint)"
-                    : "var(--hive-ink-soft)";
+                    ? "var(--hive-ink-soft)"
+                    : "var(--hive-ink)";
+            const rowBg = isAdd ? "var(--hive-success-tint)" : isDel ? "var(--hive-danger-tint)" : isHunk ? "var(--hive-info-tint)" : undefined;
             return (
-              <div key={i} className="flex" style={{ whiteSpace: "pre" }}>
+              <div key={i} className="flex" style={{ whiteSpace: "pre", background: rowBg }}>
                 <span
                   className="select-none pr-2 pl-2 text-right"
                   style={{ minWidth: "3ch", color: "var(--hive-ink-faint)" }}
@@ -2775,7 +2776,10 @@ function ContextPane({
               style={{ width: `${budgetPct}%`, background: budgetColor }}
             />
           </div>
-          <div className="mt-1.5 text-right text-[11px] font-medium" style={{ color: budgetColor }}>
+          <div
+            className="mt-1.5 text-right text-[11px] font-medium"
+            style={{ color: budgetPct >= 90 ? "var(--hive-danger-ink)" : budgetPct >= 70 ? "var(--hive-warm-ink)" : "var(--hive-ink-soft)" }}
+          >
             {budgetPct}%
           </div>
           {data && (

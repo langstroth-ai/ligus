@@ -99,9 +99,9 @@ export function CliRuntimesPanel() {
                   style={{
                     color:
                       c.login === "loggedIn"
-                        ? "var(--hive-accent-cool)"
+                        ? "var(--hive-success-ink)"
                         : c.login === "notLoggedIn"
-                          ? "var(--hive-danger)"
+                          ? "var(--hive-danger-ink)"
                           : undefined,
                   }}
                 >
