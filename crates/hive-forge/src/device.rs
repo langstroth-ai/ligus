@@ -138,11 +138,15 @@ async fn post_form(url: &str, form: &[(&str, &str)]) -> Result<(reqwest::StatusC
         .await
         .map_err(|e| ForgeError::Transport(format!("couldn't reach the code host: {}", e.without_url())))?;
     let status = resp.status();
-    let text = resp.text().await.map_err(|e| ForgeError::Transport(e.without_url().to_string()))?;
-    if text.len() > 64 * 1024 {
-        return Err(ForgeError::Transport("the code host's answer was too large".into()));
+    let mut resp = resp;
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(|e| ForgeError::Transport(e.without_url().to_string()))? {
+        if buf.len() + chunk.len() > 64 * 1024 {
+            return Err(ForgeError::Transport("the code host's answer was too large".into()));
+        }
+        buf.extend_from_slice(&chunk);
     }
-    Ok((status, serde_json::from_str(&text).unwrap_or(Value::Null)))
+    Ok((status, serde_json::from_slice(&buf).unwrap_or(Value::Null)))
 }
 
 fn token_set(v: &Value) -> Option<TokenSet> {
