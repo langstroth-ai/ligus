@@ -59,6 +59,20 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
+/// Characters that render as nothing, or change the direction of the text
+/// after them: shown as `\uXXXX` so the preview reads exactly as it runs.
+const HIDDEN = /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g;
+
+/// One argv element as shown: quoted when it has spaces, quotes or shell
+/// characters, with hidden and direction-changing characters escaped.
+export function showArg(a: string): string {
+  const hidden = HIDDEN.test(a);
+  HIDDEN.lastIndex = 0;
+  if (!hidden && !/[\s"'$`\\]/.test(a)) return a;
+  const quoted = JSON.stringify(a);
+  return quoted.replace(HIDDEN, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
+}
+
 export function PlanBody({
   plan,
   target,
@@ -73,7 +87,7 @@ export function PlanBody({
       {plan.kind === "argv" && (
         <Row label="Runs exactly">
           <pre className="whitespace-pre-wrap break-all rounded-lg px-2 py-1.5 font-mono text-xs" style={{ background: "var(--hive-overlay)" }} data-testid="plan-argv">
-            {(plan.argv ?? []).map((a) => (/[\s"'$`\\]/.test(a) ? JSON.stringify(a) : a)).join(" ")}
+            {(plan.argv ?? []).map(showArg).join(" ")}
           </pre>
           <div className="mt-1 text-xs text-ink-soft">
             In the chat's worktree{plan.cwd ? ` (${plan.cwd})` : ""}, sandboxed, with no network. No model is involved.
