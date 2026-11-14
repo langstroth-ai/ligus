@@ -390,6 +390,50 @@ mod tests {
         assert!(!env.contains("sk-ant-parent-env-key"), "the parent's provider key reached claude");
     }
 
+    /// End to end through the real provider path and this host's sandbox: a
+    /// stub `claude` that tries to read Ligus's keys, settings and serve
+    /// token, write outside its worktree and reach the network gets none of
+    /// it, while it still writes its own worktree.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn claude_turn_cannot_read_ligus_data_or_escape() {
+        use std::os::unix::fs::PermissionsExt;
+        if crate::executor::default_executor().kind() == crate::executor::ExecutorKind::Unconfined {
+            eprintln!("skipped: no agent sandbox on this host");
+            return;
+        }
+        let root = crate::executor::canonical(&tempfile::tempdir().unwrap().keep());
+        let data = root.join("data");
+        std::fs::create_dir_all(data.join("keys")).unwrap();
+        std::fs::write(data.join("keys/device.seed"), "SEED-SECRET").unwrap();
+        std::fs::write(data.join("settings.json"), "SETTINGS-SECRET").unwrap();
+        std::fs::write(data.join("serve.token"), "SERVE-TOKEN-SECRET").unwrap();
+        crate::executor::configure_host(&data, &[data.join("serve.token")], &[]);
+        let wt = root.join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        let fake = root.join("claude");
+        let script = format!(
+            "#!/bin/sh\n\
+             cat '{d}/keys/device.seed' '{d}/settings.json' '{d}/serve.token' > report.txt 2>&1\n\
+             echo escaped > '{r}/escape.txt' 2>> report.txt\n\
+             (curl -s -m 3 --noproxy '*' https://example.com || echo no-network) >> report.txt 2>&1\n\
+             echo done >> report.txt\n",
+            d = data.display(),
+            r = root.display()
+        );
+        std::fs::write(&fake, script).unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let args = ["--permission-mode".to_string(), "acceptEdits".to_string()];
+        let _ = stream_reply(fake.to_str().unwrap(), &args, wt.to_str(), &[], None, &[], |_| {}, |_| {}).await;
+        let report = std::fs::read_to_string(wt.join("report.txt")).expect("the stub ran and wrote its worktree");
+        assert!(report.contains("done"), "{report}");
+        for secret in ["SEED-SECRET", "SETTINGS-SECRET", "SERVE-TOKEN-SECRET"] {
+            assert!(!report.contains(secret), "{secret} reached the agent: {report}");
+        }
+        assert!(!root.join("escape.txt").exists(), "wrote outside its worktree");
+        assert!(!report.contains("<html"), "reached the network directly: {report}");
+    }
+
     #[test]
     fn parses_partial_message_text_delta() {
         let line = r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hel"}},"session_id":"x"}"#;

@@ -63,11 +63,22 @@ impl Bwrap {
     }
 }
 
+/// The binary that runs the helper: an explicit one, else a
+/// `ligus-sandbox-helper` installed next to this executable (or one level
+/// up, where cargo puts bins beside test harnesses), else this executable
+/// (the `ligus` CLI and the desktop app both carry it).
 fn helper_exe() -> io::Result<PathBuf> {
-    match host_paths().helper_exe {
-        Some(p) => Ok(p),
-        None => std::env::current_exe(),
+    if let Some(p) = host_paths().helper_exe {
+        return Ok(p);
     }
+    let me = std::env::current_exe()?;
+    for dir in [me.parent(), me.parent().and_then(Path::parent)].into_iter().flatten() {
+        let sibling = dir.join("ligus-sandbox-helper");
+        if sibling.is_file() {
+            return Ok(sibling);
+        }
+    }
+    Ok(me)
 }
 
 /// The bwrap arguments for `plan` (everything before the helper).
