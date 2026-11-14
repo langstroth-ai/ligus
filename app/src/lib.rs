@@ -8003,10 +8003,10 @@ async fn run_prepared_turn_inner(
         let trigger = reply_to.and_then(|id| session.messages.iter().find(|m| m.id == id));
         let author_role = {
             let svc = state.service.lock().unwrap();
-            let me = svc.author().id.clone();
+            // This device's own user is recognized from the signed envelopes,
+            // never from the payload's self-asserted `actor_identity`.
             match trigger {
-                Some(m) if m.actor_identity.as_ref().is_some_and(|a| a.id == me) => Some(hive_core::WorkspaceRole::Owner),
-                Some(m) => svc.author_role_at(session_id, m.id).ok().flatten(),
+                Some(m) => svc.trigger_author_role(session_id, m.id).ok().flatten(),
                 None => None,
             }
         };

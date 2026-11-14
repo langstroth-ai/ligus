@@ -28,7 +28,11 @@ pub fn tier_allows(event: &SessionEvent, agent_id: Uuid, host_device: Uuid, fold
         SessionEvent::MessageReactionAdded { reaction, .. } => reaction.actor_id == me,
         SessionEvent::MessageReactionRemoved { actor_id, .. } => *actor_id == me,
         SessionEvent::ProposalUpserted { proposal } => {
-            (proposal.author_actor_id == me || proposal.producing_agent_id == Some(agent_id))
+            // As itself, or authorless naming itself as producer; never
+            // under someone else's name or for another agent.
+            (proposal.author_actor_id == me
+                || (proposal.author_actor_id.is_empty() && proposal.producing_agent_id == Some(agent_id)))
+                && proposal.producing_agent_id.is_none_or(|p| p == agent_id)
                 && proposal.status == ProposalStatus::Open
                 && proposal.approvals.is_empty()
                 && fold.proposals.iter().find(|p| p.id == proposal.id).is_none_or(|p| {

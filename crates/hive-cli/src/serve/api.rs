@@ -84,8 +84,8 @@ const PRESENCE_HINT: &str = "approve on your laptop, or confirm with a passkey a
 /// P0.6 interim: while this box acts for the owner (`act_as_owner_device`),
 /// anything it signs is signed as the owner, so a phone's or a bearer
 /// caller's vote would pass for the owner's own. Until passkey presence
-/// lands, such a host refuses votes (approve, reject), lockdown clears and
-/// applies from the API, except from a phone the owner marked as theirs
+/// lands, such a host refuses votes (approve, reject), lockdown clears,
+/// agent host rebinds and applies from the API, except from a phone the owner marked as theirs
 /// (`owner_phone`), whose action is recorded as delegated. Every decision is
 /// one content-free fact naming the phone (`pid`) or `bearer`.
 pub(super) fn presence_gate(s: &Shared, peer: Option<&TunnelPeer>, action: &str) -> ApiResult<()> {
@@ -747,8 +747,16 @@ struct HostReq {
     host_id: String,
 }
 
-async fn set_agent_host(State(s): S, Path(id): Path<String>, Json(req): Json<HostReq>) -> ApiResult<Json<Value>> {
+async fn set_agent_host(
+    State(s): S,
+    peer: Option<axum::Extension<TunnelPeer>>,
+    Path(id): Path<String>,
+    Json(req): Json<HostReq>,
+) -> ApiResult<Json<Value>> {
     let agent_id = parse_id(&id, "agent")?;
+    // S2: a host rebind is an Admin action; signed as the owner from here,
+    // so it needs the same presence as a vote.
+    presence_gate(&s, peer.as_deref(), "agent_host")?;
     let host_id = req.host_id.trim().to_string();
     let v = {
         let (hosts, config) = hosts_and_agents(&s)?;

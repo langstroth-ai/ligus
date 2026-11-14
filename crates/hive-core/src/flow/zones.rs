@@ -11,7 +11,7 @@ use super::keys::normalize_path;
 use crate::identity::WorkspaceRole;
 use crate::proposals::ActionProposal;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ZoneKind {
     /// Core / sensitive: high review bar.
@@ -20,7 +20,7 @@ pub enum ZoneKind {
     LowBar,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PathZone {
     pub id: Uuid,
@@ -166,7 +166,9 @@ pub fn review_bar(zones: &[PathZone], files: &[String]) -> Option<(Option<Worksp
 /// brood paths, a chat lockdown; see `guard::guards_protect`). Then the
 /// strictest bar wins and a low-bar zone can't lower anything.
 pub fn apply_review_bar(proposal: &mut ActionProposal, zones: &[PathZone], protected: bool) -> Option<ZoneKind> {
-    let (floor, approvals, kind) = review_bar(zones, &proposal.changed_files)?;
+    // Every path it may write, its diff included: the declared list alone
+    // could put a core change under a low bar.
+    let (floor, approvals, kind) = review_bar(zones, &crate::guard::touched_paths(proposal))?;
     if protected && kind == ZoneKind::LowBar {
         return None;
     }

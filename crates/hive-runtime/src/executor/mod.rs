@@ -488,8 +488,29 @@ impl TurnExecutor for Unconfined {
     fn confine(&self, program: &OsStr, args: &[OsString], cwd: &Path, plan: &EnforcementPlan, proxy: Option<&EgressProxy>) -> io::Result<std::process::Command> {
         let mut c = hive_core::process_util::command(program);
         c.args(args).current_dir(cwd).env_clear().envs(plan_env(plan, proxy));
+        new_session(&mut c);
         Ok(c)
     }
+}
+
+/// Start the child in a session of its own (`setsid`), so it has no
+/// controlling terminal: otherwise it could open `/dev/tty` and inject
+/// keystrokes (`TIOCSTI`) into the user's shell, which would run them
+/// outside any sandbox. bubblewrap does the same with `--new-session`.
+pub fn new_session(c: &mut std::process::Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: `setsid` is async-signal-safe and touches no Rust state.
+        unsafe {
+            c.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = c;
 }
 
 /// The plan's env plus the proxy variables.

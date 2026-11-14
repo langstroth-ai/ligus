@@ -217,6 +217,37 @@ impl Drop for EgressProxy {
     }
 }
 
+/// Addresses a non-loopback allow-list name must never resolve to: this
+/// machine, link-local (cloud metadata at 169.254.169.254), unspecified and
+/// multicast. A name that resolves there (DNS rebinding, or a numeric form
+/// such as `127.1`) would turn the allow-list into a tunnel to local
+/// services. Private LAN ranges stay reachable (a self-hosted MCP server).
+fn ip_forbidden(ip: IpAddr) -> bool {
+    let ip = match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(IpAddr::V6(v6)),
+        v4 => v4,
+    };
+    match ip {
+        IpAddr::V4(a) => a.is_loopback() || a.is_link_local() || a.is_unspecified() || a.is_multicast() || a.is_broadcast() || a.octets()[0] == 0,
+        IpAddr::V6(a) => a.is_loopback() || a.is_unspecified() || a.is_multicast() || (a.segments()[0] & 0xffc0) == 0xfe80,
+    }
+}
+
+/// Connect to an allow-listed endpoint. A loopback entry goes to this
+/// machine; any other is resolved here and refused when an address it
+/// resolves to is [`ip_forbidden`] (the vetted address is the one dialed,
+/// so a second lookup can't rebind it).
+async fn connect_upstream(hp: &HostPort) -> std::io::Result<tokio::net::TcpStream> {
+    if hp.is_loopback() {
+        return tokio::net::TcpStream::connect((hp.host.as_str(), hp.port)).await;
+    }
+    let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((hp.host.as_str(), hp.port)).await?.collect();
+    if addrs.is_empty() || addrs.iter().any(|a| ip_forbidden(a.ip())) {
+        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "endpoint resolves to a local address"));
+    }
+    tokio::net::TcpStream::connect(&addrs[..]).await
+}
+
 struct Shared {
     allow: Vec<HostPort>,
     token: String,
@@ -325,7 +356,13 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(mut client: S, sh: &Shared) -
                 return Ok(());
             }
         }
-        let mut upstream = tokio::net::TcpStream::connect((hp.host.as_str(), hp.port)).await?;
+        let mut upstream = match connect_upstream(&hp).await {
+            Ok(u) => u,
+            Err(e) => {
+                sh.deny(hp);
+                return Err(e);
+            }
+        };
         upstream.write_all(&first_bytes).await?;
         let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
         return Ok(());
@@ -340,7 +377,14 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(mut client: S, sh: &Shared) -
         respond(&mut client, "403 Forbidden").await;
         return Ok(());
     }
-    let mut upstream = tokio::net::TcpStream::connect((hp.host.as_str(), hp.port)).await?;
+    let mut upstream = match connect_upstream(&hp).await {
+        Ok(u) => u,
+        Err(e) => {
+            sh.deny(hp);
+            respond(&mut client, "403 Forbidden").await;
+            return Err(e);
+        }
+    };
     // Forward the head without the proxy credential.
     let mut out = String::new();
     for (i, l) in head_str.split("\r\n").enumerate() {
@@ -573,6 +617,35 @@ pub(crate) mod tests {
         assert_eq!(p.denials(), vec![HostPort::new("example.com", 443)]);
     }
 
+    /// DNS rebinding: an allow-listed *name* (an MCP server's host) that
+    /// resolves to this machine or a link-local address (cloud metadata) must
+    /// not become a tunnel to local services. "127.1" stands in for such a
+    /// name: it isn't a loopback literal, yet resolves to 127.0.0.1.
+    #[tokio::test]
+    async fn proxy_refuses_names_that_resolve_to_loopback_or_link_local() {
+        let up = echo_server().await;
+        let name = "127.1";
+        let p = EgressProxy::start(vec![HostPort::new(name, up)], None).unwrap();
+        let (mut s, resp) = connect_through(&p, &format!("{name}:{up}"), true).await;
+        if resp.starts_with("HTTP/1.1 200") {
+            let hello = client_hello(Some(name));
+            s.write_all(&hello).await.unwrap();
+            let mut b = vec![0u8; hello.len()];
+            let got = tokio::time::timeout(std::time::Duration::from_secs(5), s.read_exact(&mut b)).await;
+            assert!(!matches!(got, Ok(Ok(_))), "the proxy spliced an allow-listed name through to a loopback service");
+        }
+        // Plain HTTP (absolute form) the same.
+        let mut c = tokio::net::TcpStream::connect(("127.0.0.1", p.port())).await.unwrap();
+        let cred = { use base64::Engine; base64::engine::general_purpose::STANDARD.encode(format!("ligus:{}", p.token())) };
+        c.write_all(format!("GET http://{name}:{up}/ HTTP/1.1\r\nHost: {name}:{up}\r\nProxy-Authorization: Basic {cred}\r\n\r\n").as_bytes()).await.unwrap();
+        let mut b = vec![0u8; 64];
+        let n = tokio::time::timeout(std::time::Duration::from_secs(5), c.read(&mut b)).await.unwrap().unwrap_or(0);
+        let text = String::from_utf8_lossy(&b[..n]);
+        assert!(!text.starts_with("GET "), "plain HTTP reached the loopback service: {text}");
+        assert!(ip_forbidden("169.254.169.254".parse().unwrap()) && ip_forbidden("::ffff:127.0.0.1".parse().unwrap()));
+        assert!(!ip_forbidden("192.168.1.10".parse().unwrap()) && !ip_forbidden("1.1.1.1".parse().unwrap()));
+    }
+
     /// C.4.6 `proxy_rejects_sni_mismatch`: an allow-listed CONNECT host with
     /// a ClientHello naming another server is cut, and a matching one passes.
     #[tokio::test]
@@ -596,12 +669,15 @@ pub(crate) mod tests {
         let n = tokio::time::timeout(std::time::Duration::from_secs(5), s.read(&mut b)).await.unwrap().unwrap_or(0);
         assert_eq!(n, 0);
         if resolves {
+            // A matching SNI passes the pin, but this name resolves to this
+            // machine, so the connection is still refused (no rebinding to
+            // local services; `proxy_refuses_names_that_resolve_to_loopback_or_link_local`).
             let (mut s, _) = connect_through(&p, &format!("{name}:{up}"), true).await;
             let hello = client_hello(Some(name));
             s.write_all(&hello).await.unwrap();
             let mut echoed = vec![0u8; hello.len()];
-            s.read_exact(&mut echoed).await.unwrap();
-            assert_eq!(echoed, hello, "a matching SNI is spliced through untouched");
+            let got = tokio::time::timeout(std::time::Duration::from_secs(5), s.read_exact(&mut echoed)).await;
+            assert!(!matches!(got, Ok(Ok(_))), "a name resolving to loopback is not spliced");
         }
     }
 }

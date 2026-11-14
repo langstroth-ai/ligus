@@ -45,7 +45,7 @@ pub use timeline::{AgentKeyState, AgentState, ConfigTimeline, DeviceState, Membe
 use crate::agent::WorkspaceAgent;
 use crate::authorization::{evaluate, requires_projection_authz};
 use crate::events::{SessionEvent, SessionEventEnvelope};
-use crate::identity::{ActorKind, WorkspaceRole};
+use crate::identity::{ActorKind, CfgFrontier, WorkspaceRole};
 use crate::session::ChatSession;
 
 /// The workspace rules version: 1 = the 2.0 base rules. Track B's human
@@ -128,6 +128,16 @@ pub struct AuthzState {
     pub rules: u32,
     /// Signed raiser of each active lockdown (S5 accounting).
     pub lockdown_raisers: BTreeMap<Uuid, String>,
+    /// The config frontier each proposal's current content was filed at. A
+    /// vote or apply naming an older frontier is refused, so a stale role
+    /// (a demoted Admin who keeps naming a pre-demotion frontier) never
+    /// weighs on content filed after the demotion reached its author.
+    pub content_frontier: BTreeMap<Uuid, CfgFrontier>,
+    /// The config frontier each proposal set was opened at (same rule).
+    pub set_frontier: BTreeMap<Uuid, CfgFrontier>,
+    /// The signed author who first appended each message: only they continue
+    /// or rewrite it (and only they or an Admin remove it).
+    pub message_authors: BTreeMap<Uuid, String>,
 }
 
 impl AuthzState {
@@ -219,6 +229,14 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             if !bounds::flow_within_bounds(fold, record) {
                 return Decision::deny("flow state bound reached");
             }
+            // A daily outcome summary speaks for the device that signed it:
+            // the fold keys summaries by (agent, host, day), so another
+            // member's device must not replace or invent a host's numbers.
+            if let crate::flow::FlowRecord::AgentOutcomeSummary(sum) = record {
+                if env.signer_device_id.map(|d| d.to_string()).as_deref() != Some(sum.host_id.as_str()) {
+                    return Decision::deny("an outcome summary is signed by its own host");
+                }
+            }
         }
         _ => {}
     }
@@ -233,6 +251,26 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
     let on_config = env.session_id == crate::channel::workspace_config_session_id(env.workspace_id);
     // Agent-signed events (A3): judged by the Agent tier, capped by the
     // agent's owner's role, with the key valid at this position.
+    // A message is its author's (checked chat folds).
+    if ctx.checked && !on_config {
+        let target = match &env.payload {
+            SessionEvent::MessageAppended { message } => Some((message.id, false)),
+            SessionEvent::MessageChunkReceived { message_id, .. } | SessionEvent::MessageCompleted { message_id, .. } => {
+                Some((*message_id, false))
+            }
+            SessionEvent::MessageRemoved { message_id } => Some((*message_id, true)),
+            _ => None,
+        };
+        if let Some((id, removal)) = target {
+            if fold.authz.message_authors.get(&id).is_some_and(|orig| orig != author) {
+                let moderator = removal
+                    && ctx.workspace.and_then(|w| w.role_of(author)).is_some_and(|r| r.rank() >= WorkspaceRole::Admin.rank());
+                if !moderator {
+                    return Decision::deny("only its author continues, rewrites or removes a message");
+                }
+            }
+        }
+    }
     let roster_here = if ctx.checked { ctx.workspace } else if on_config { Some(ctx.running) } else { None };
     if let Some(roster) = roster_here {
         if env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == ActorKind::Agent) {
@@ -254,7 +292,16 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
     }
 
     if requires_projection_authz(&env.payload) {
-        let role = fold.role_of(author);
+        let mut role = fold.role_of(author);
+        // A chat's own roster (its creator is its Owner) never grants a
+        // workspace role: on a chat log, governance and workspace-config kinds
+        // are capped by the author's workspace role at this position.
+        if ctx.checked && !on_config && caps_by_workspace_role(&env.payload) {
+            let ws_role = ctx.workspace.and_then(|at| at.role_of(author)).unwrap_or(WorkspaceRole::Viewer);
+            if ws_role.rank() < role.rank() {
+                role = ws_role;
+            }
+        }
         // R5: revoking a device your own account certified is self-service.
         if let SessionEvent::DeviceRevoked { device_id } = &env.payload {
             let account = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id);
@@ -271,7 +318,8 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             }
         }
         // S2: binding an agent to a host or runtime is an Admin action.
-        if let Some(floor) = agent_change_floor(&env.payload, author, fold) {
+        let ws_agents = if ctx.checked && !on_config { ctx.workspace } else { None };
+        if let Some(floor) = agent_change_floor(&env.payload, author, fold, ws_agents) {
             if role.rank() < floor.rank() {
                 return Decision::deny(format!("role {role:?} cannot change this agent's host, runtime or owner"));
             }
@@ -290,6 +338,17 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         let Some(role) = at.role_of(author).filter(|_| !author.is_empty()) else {
             return Decision::deny("not a workspace member at this position");
         };
+        // No judging content from a position older than the one it was filed
+        // at (contains the backdated-frontier residual).
+        if let Some(f) = env.actor_stamp.as_ref().and_then(|s| s.cfg_frontier) {
+            let (pid, sid) = subject_of(&env.payload);
+            let filed_at = pid
+                .and_then(|p| fold.authz.content_frontier.get(&p))
+                .max(sid.and_then(|s| fold.authz.set_frontier.get(&s)));
+            if filed_at.is_some_and(|min| f < *min) {
+                return Decision::deny("names a config position older than the content it judges");
+            }
+        }
         // Rules v2 (A3 transition): a host-signed event that speaks for an
         // agent is judged with the Agent tier. Folds use the highest rules
         // this build knows.
@@ -372,6 +431,28 @@ fn authorize_agent(env: &SessionEventEnvelope, ctx: &Ctx<'_>, roster: &RosterSta
     if let Err(why) = agent::tier_allows(&env.payload, key.agent_id, key.host_device_id, ctx.fold) {
         return Decision::deny(why);
     }
+    // Agent output only: never a user turn (a prompt other agents answer),
+    // and never under a human's identity other than its own host's user
+    // (whose host generated it) or its owner.
+    if let SessionEvent::MessageAppended { message } = &env.payload {
+        if message.role != crate::chat::MessageRole::Assistant {
+            return Decision::deny("an agent appends only its own replies");
+        }
+        if let Some(id) = &message.actor_identity {
+            let ok = match id.kind {
+                ActorKind::Agent => id.id == author,
+                _ => {
+                    id.id == owner
+                        || id.account_id.is_some_and(|acct| {
+                            roster.devices.get(&key.host_device_id).is_some_and(|d| d.accounts.contains(&acct))
+                        })
+                }
+            };
+            if !ok {
+                return Decision::deny("an agent reply names someone else");
+            }
+        }
+    }
     let d = evaluate(&env.payload, author, cap, ctx.fold);
     if !d.allowed {
         return Decision::deny(d.summary);
@@ -399,6 +480,13 @@ fn agent_cert_ok(
     Ok(())
 }
 
+/// Kinds whose chat-log role is capped by the workspace role: everything that
+/// needs projection authz except archiving a chat (a chat-level act its
+/// creator keeps).
+fn caps_by_workspace_role(e: &SessionEvent) -> bool {
+    !matches!(e, SessionEvent::SessionArchivedChanged { .. })
+}
+
 /// Account keys and device certificates: self-validating (the roster checks
 /// the chain), published by members and joiners alike.
 fn is_trust_publication(e: &SessionEvent) -> bool {
@@ -417,13 +505,36 @@ pub fn counted_role(at: &RosterState, author: &str) -> Option<WorkspaceRole> {
 }
 
 /// S2: the role an agent change needs, when it touches agents. A new agent
-/// bound to a host, or any change of an agent's host, runtime or owner, is
+/// bound to a host or owned by someone else, or any change of an agent's
+/// host, runtime or owner, is
 /// Admin; editing an agent you don't own (name, role text, avatar) is Admin
 /// unless it is unowned; everything else is the usual Contributor floor.
-fn agent_change_floor(event: &SessionEvent, author: &str, fold: &ChatSession) -> Option<WorkspaceRole> {
+///
+/// On a chat log (`workspace` = the config roster at the event's position), an
+/// agent the chat doesn't define yet is judged against the workspace's agent
+/// of that id: a chat-level copy shadows it in that chat.
+fn agent_change_floor(
+    event: &SessionEvent,
+    author: &str,
+    fold: &ChatSession,
+    workspace: Option<&RosterState>,
+) -> Option<WorkspaceRole> {
     let one = |new: &WorkspaceAgent| -> WorkspaceRole {
-        match fold.workspace_agents.iter().find(|a| a.id == new.id) {
+        let in_chat = fold.workspace_agents.iter().find(|a| a.id == new.id);
+        if let (None, Some(ws)) = (in_chat, workspace.and_then(|w| w.agents.get(&new.id))) {
+            return if ws.host_id != new.host_id || ws.runtime_id != new.runtime_id || ws.owner != new.owner_actor_id {
+                WorkspaceRole::Admin
+            } else if ws.owner.is_empty() || ws.owner == author {
+                WorkspaceRole::Contributor
+            } else {
+                WorkspaceRole::Admin
+            };
+        }
+        match in_chat {
             None if !new.host_id.is_empty() => WorkspaceRole::Admin,
+            // An unbound agent runs on its owner's device: naming someone else
+            // as the owner binds it to their device (and runtimes, and keys).
+            None if !new.owner_actor_id.is_empty() && new.owner_actor_id != author => WorkspaceRole::Admin,
             None => WorkspaceRole::Contributor,
             Some(old) if old == new => WorkspaceRole::Contributor,
             Some(old)
