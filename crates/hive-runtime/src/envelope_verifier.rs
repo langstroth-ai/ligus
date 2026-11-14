@@ -251,19 +251,6 @@ fn config_workspaces(ordered: &[&SessionEventEnvelope]) -> HashSet<Uuid> {
         .collect()
 }
 
-/// Per workspace, the member ids a `MemberRemoved` on its config log named.
-fn removed_on_config(ordered: &[&SessionEventEnvelope]) -> HashMap<Uuid, HashSet<String>> {
-    let mut out: HashMap<Uuid, HashSet<String>> = HashMap::new();
-    for env in ordered {
-        if let SessionEvent::MemberRemoved { member_id } = &env.payload {
-            if env.session_id == hive_core::workspace_config_session_id(env.workspace_id) {
-                out.entry(env.workspace_id).or_default().insert(member_id.clone());
-            }
-        }
-    }
-    out
-}
-
 /// Per workspace, the active dearth policy from its config log, projected with
 /// the usual ingest authorization (so only an Admin's switch or approval counts).
 fn dearth_policies(ordered: &[&SessionEventEnvelope]) -> HashMap<Uuid, DearthPolicy> {
@@ -453,7 +440,11 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
             SessionEvent::MemberAdded { member, .. } => {
                 note_member(&mut members, &mut member_account, member);
             }
-            SessionEvent::MemberRemoved { member_id } => {
+            // On a config log, only a removal its projection accepted counts
+            // (applied below, sticky); a raw one could come from anyone.
+            SessionEvent::MemberRemoved { member_id }
+                if env.session_id != hive_core::workspace_config_session_id(env.workspace_id) =>
+            {
                 if let Some(aid) = member_account.get(member_id) {
                     members.remove(aid);
                 }
@@ -481,7 +472,7 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
     // must not revoke anyone. Every member of an authorization-checked config
     // projection stays a member, unless an authorized removal elsewhere took
     // the account out (removal wins, as the roster is shared by workspaces).
-    let removed_by_ws = removed_on_config(&ordered);
+    let mut removed_by_ws: HashMap<Uuid, HashSet<String>> = HashMap::new();
     let mut agent_keys: HashMap<Uuid, (Vec<u8>, Uuid)> = HashMap::new();
     let mut current_accounts: HashSet<Uuid> = HashSet::new();
     let mut sticky_removed: HashSet<Uuid> = HashSet::new();
@@ -500,7 +491,21 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
             .filter(|e| e.workspace_id == ws && e.session_id == hive_core::workspace_config_session_id(ws))
             .map(|e| (*e).clone())
             .collect();
-        let (projected, timeline) = hive_core::project_config(&cfg_envs, None, None);
+        // The founder pin picks the base seed: a lower-lamport seed from a
+        // keyholder who merely verifies (a self-enrolled joiner) must not
+        // become this projection's founder.
+        let founder = pin.map(|p| p.founder_account.to_string());
+        let (projected, timeline) = hive_core::project_config(&cfg_envs, founder.as_deref(), None);
+        // Only removals this projection accepted are sticky; a raw one it
+        // refused (anyone "removing" the founder) removes no one.
+        let decisions = hive_core::fold_decisions(&cfg_envs, founder.as_deref(), None, hive_core::WorkspaceAuthz::Unchecked);
+        for e in &cfg_envs {
+            if let SessionEvent::MemberRemoved { member_id } = &e.payload {
+                if decisions.get(&e.event_id) == Some(&hive_core::Verdict::Allowed) {
+                    removed_by_ws.entry(ws).or_default().insert(member_id.clone());
+                }
+            }
+        }
         // A3: agent keys valid at the config head (certified, still bound).
         let head = timeline.current();
         for (key_id, k) in &head.agent_keys {

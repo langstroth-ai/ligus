@@ -320,3 +320,49 @@ fn only_an_account_registers_its_own_key() {
     let own = mara.sign(ws, 130, SessionEvent::AccountKeyRegistered { account_id: mara.account_id, signing_public_key: mara.account.public_key_bytes().to_vec() });
     assert_eq!(verdict_for(&roster, &own), Verdict::Valid);
 }
+
+/// Hardening A-10: the trust roster's own projection of the config log must
+/// use the founder pin, and only a removal that projection accepted is
+/// sticky. A self-enrolled joiner (below Admin; key possession is enough to
+/// verify) signs a second, lower-lamport founding seed naming herself the
+/// lone Owner (optionally listing the founder as a Viewer), then removes the
+/// founder or revokes their device. Unpinned, her seed was the projection's
+/// base and a raw removal was sticky, so the founder was locked out on every
+/// device, pinned ones included.
+#[test]
+fn a_forged_low_lamport_seed_cannot_lock_out_the_founder() {
+    for list_founder in [false, true] {
+        let (owner, eve) = (Principal::new("owner"), Principal::new("eve"));
+        let ws = Uuid::new_v4();
+        let stored = workspace(ws, &owner, &[]);
+        let fk = FounderPin::fingerprint_hex(&owner.account.public_key_bytes());
+        let pin = FounderPin::parse(&owner.account_id.to_string(), &fk).unwrap();
+        let mut held = stored.clone();
+        held.extend(eve.trust(ws, 100));
+        held.push(eve.sign(ws, 102, SessionEvent::MemberAdded { invite: None, member: eve.member(WorkspaceRole::Contributor) }));
+        let mut seed = ChatSession::new("", ws, "");
+        seed.id = workspace_config_session_id(ws);
+        seed.creator_actor_id = eve.account_id.to_string();
+        seed.members = vec![eve.member(WorkspaceRole::Owner)];
+        if list_founder {
+            seed.members.push(owner.member(WorkspaceRole::Viewer));
+        }
+        let forged = eve.sign(ws, 0, SessionEvent::SessionSnapshot { session: Box::new(seed) });
+        let attack = vec![
+            forged,
+            eve.sign(ws, 103, SessionEvent::DeviceRevoked { device_id: owner.device_id }),
+            eve.sign(ws, 104, SessionEvent::MemberRemoved { member_id: owner.account_id.to_string() }),
+        ];
+        let refs: Vec<&SessionEventEnvelope> = attack.iter().collect();
+        let roster = roster_with_batch(held.clone(), &refs, Some(&pin));
+        let mut after = held;
+        after.extend(attack.iter().filter(|e| !matches!(verdict_for(&roster, e), Verdict::Quarantine(_))).cloned());
+        let pins: HashMap<Uuid, FounderPin> = [(ws, pin)].into_iter().collect();
+        let r = &build_rosters(&after, &pins)[&ws];
+        assert_eq!(verdict_for(r, &owner.content(ws, 200)), Verdict::Valid, "the founder was locked out ({list_founder})");
+        // Without a pin, a raw removal the projection refused isn't sticky.
+        if !list_founder {
+            assert_eq!(verdict_for(&build_roster(&after), &owner.content(ws, 201)), Verdict::Valid, "unpinned lockout");
+        }
+    }
+}
