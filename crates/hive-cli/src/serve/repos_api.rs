@@ -264,7 +264,8 @@ async fn forge_status(st: &RepoState, h: &ForgeHandle) -> GhStatus {
     let s = match tokio::time::timeout(GH_TIMEOUT, h.forge.whoami()).await {
         Ok(Ok(Some(u))) => GhStatus { available: true, login: Some(u.login), reason: None },
         Ok(Ok(None)) => GhStatus { available: false, login: None, reason: h.forge.signed_out_reason() },
-        Ok(Err(e)) => GhStatus { available: false, login: None, reason: Some(format!("{} didn't answer with this box's login: {e}", h.conn.display())) },
+        // Never what the host answered: its URL may not be a code host.
+        Ok(Err(e)) => GhStatus { available: false, login: None, reason: Some(format!("{} didn't answer with this box's login: {}", h.conn.display(), e.summary())) },
         Err(_) => GhStatus { available: false, login: None, reason: Some(format!("{} didn't answer in time", h.conn.display())) },
     };
     st.status.lock().unwrap_or_else(|e| e.into_inner()).insert(h.id().clone(), (Instant::now(), s.clone()));
@@ -292,6 +293,7 @@ pub fn forge_dto(h: &ForgeHandle, status: Option<&GhStatus>) -> Value {
         "deviceFlow": caps.device_flow && hive_forge::device::endpoints(&h.conn).is_ok(),
         "capabilities": caps,
         "holder": "this box",
+        "internal": h.conn.internal,
     });
     if let Some(s) = status {
         v["available"] = json!(s.available);

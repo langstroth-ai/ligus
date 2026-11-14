@@ -95,6 +95,13 @@ pub(super) fn presence_gate(s: &Shared, peer: Option<&TunnelPeer>, action: &str)
     if !s.lock().is_delegated() {
         return Ok(());
     }
+    presence_gate_always(s, peer, action)
+}
+
+/// The decision of [`presence_gate`] for a host where presence applies:
+/// accept a request from a phone the owner marked as theirs (recorded as
+/// delegated), refuse anything else with `presence_required`.
+pub(super) fn presence_gate_always(s: &Shared, peer: Option<&TunnelPeer>, action: &str) -> ApiResult<()> {
     let owner_phone = peer
         .and_then(|p| s.tunnel.as_ref().and_then(|t| t.registry.get(&p.pid)))
         .is_some_and(|r| r.is_active() && r.owner_phone);

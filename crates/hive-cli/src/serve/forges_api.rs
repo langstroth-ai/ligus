@@ -13,8 +13,15 @@
 //! - `POST   /v1/forges/:id/auth/device` → `{userCode, verificationUri, expiresIn}`
 //! - `GET    /v1/forges/:id/auth/device` → `{state, …}`
 //!
-//! Adding, removing and anything that hands the box a credential need the
-//! box's write standing and presence (they give it write access to code).
+//! Adding, removing, testing and anything that hands the box a credential
+//! need the box's write standing and presence (they give it write access to
+//! code). Presence applies on a box that acts for its owner and on any box
+//! whose workspace runs rules v2 ([`forge_presence_applies`]).
+//!
+//! A base URL on a loopback, private or link-local address (or a name that
+//! resolves to one) is refused unless the request marks the connection
+//! `internal` (device-local). Sign-in checks answer with a status, never with
+//! what the host sent back.
 //! A token, and a device sign-in's user code, travel **only** through the
 //! end-to-end encrypted tunnel (`hive-tunnel/1`: Noise between the phone
 //! and this box, the relay forwards ciphertext) or on a loopback bind (this
@@ -31,7 +38,7 @@ use hive_forge::{Connection, Connections, ForgeId};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use super::api::{presence_gate, ApiError, ApiResult};
+use super::api::{ApiError, ApiResult};
 use super::repos_api::{ensure_can_write, forge_dto, DeviceSession, ForgeHandle};
 use super::tunnel::TunnelPeer;
 use super::Shared;
@@ -63,6 +70,31 @@ fn require_secure(s: &Shared, peer: Option<&TunnelPeer>) -> ApiResult<()> {
     } else {
         Err(ApiError::new(StatusCode::FORBIDDEN, PLAINTEXT_REFUSED))
     }
+}
+
+/// Whether the forges API needs presence on this box: it acts for its owner
+/// (it signs as the owner, so a bearer's request would pass for the owner's),
+/// or the workspace runs rules v2 (IDENTITY-AND-FORGES 5.7: adding a code
+/// host or handing it a credential gives the box write access to code).
+pub fn forge_presence_applies(delegated: bool, rules: u32) -> bool {
+    delegated || rules.min(hive_core::authz::RULES_SUPPORTED) >= 2
+}
+
+/// [`super::api::presence_gate`] for the forges API: on every host where presence
+/// applies, not only a delegated one. Until passkey presence covers these
+/// requests, the accepted proof is a request from a phone the owner marked
+/// as theirs, through the tunnel (recorded as delegated); anything else is
+/// refused with `presence_required`.
+fn forge_gate(s: &Shared, peer: Option<&TunnelPeer>, action: &str) -> ApiResult<()> {
+    let (delegated, rules) = {
+        let svc = s.lock();
+        let rules = svc.load(hive_core::workspace_config_session_id(s.ws)).ok().flatten().map(|c| c.authz.rules).unwrap_or(1);
+        (svc.is_delegated(), rules)
+    };
+    if !forge_presence_applies(delegated, rules) {
+        return Ok(());
+    }
+    super::api::presence_gate_always(s, peer, action)
 }
 
 fn parse_id(raw: &str) -> ApiResult<ForgeId> {
@@ -127,12 +159,15 @@ pub struct AddReq {
     auth: Option<String>,
     #[serde(default)]
     client_id: Option<String>,
+    /// Allow a loopback, private or link-local address (this device only).
+    #[serde(default)]
+    internal: Option<bool>,
 }
 
 /// `POST /v1/forges`
 pub async fn add(State(s): S, peer: Option<Extension<TunnelPeer>>, Json(req): Json<AddReq>) -> ApiResult<Json<Value>> {
     ensure_can_write(&s, None)?;
-    presence_gate(&s, peer.as_deref(), "forge_add")?;
+    forge_gate(&s, peer.as_deref(), "forge_add")?;
     let (kind, flavor) = forge_cmd::parse_kind(&req.kind).map_err(|e| ApiError::bad_request(e.to_string()))?;
     let auth = match req.auth.as_deref().map(str::trim) {
         None | Some("") => {
@@ -152,6 +187,8 @@ pub async fn add(State(s): S, peer: Option<Extension<TunnelPeer>>, Json(req): Js
         c.flavor = flavor;
     }
     c.client_id = req.client_id.map(|x| x.trim().to_string()).filter(|x| !x.is_empty() && x.len() <= 200 && x.chars().all(|ch| ch.is_ascii_graphic()));
+    c.internal = req.internal.unwrap_or(false);
+    hive_forge::conn::check_address(&c).await.map_err(forge_err)?;
     let id = c.id.clone();
     edit_connections(&s, |all| {
         if all.get(&id).is_some() {
@@ -168,7 +205,7 @@ pub async fn add(State(s): S, peer: Option<Extension<TunnelPeer>>, Json(req): Js
 /// `DELETE /v1/forges/:id`
 pub async fn remove(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     ensure_can_write(&s, None)?;
-    presence_gate(&s, peer.as_deref(), "forge_remove")?;
+    forge_gate(&s, peer.as_deref(), "forge_remove")?;
     let id = parse_id(&id)?;
     // First end any device sign-in for it: its poll then stores nothing.
     s.repos.device.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
@@ -180,8 +217,12 @@ pub async fn remove(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): 
     Ok(Json(json!({ "removed": id.as_str() })))
 }
 
-/// `POST /v1/forges/:id/test`: sign in and remember who as.
-pub async fn test(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+/// `POST /v1/forges/:id/test`: sign in and remember who as. Gated like the
+/// other writes (it sends the box's token and saves the login); the answer
+/// is the status only, never what the host sent back.
+pub async fn test(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    ensure_can_write(&s, None)?;
+    forge_gate(&s, peer.as_deref(), "forge_test")?;
     let id = parse_id(&id)?;
     let h = handle(&s, &id)?;
     if !s.repos.online() {
@@ -202,7 +243,7 @@ pub async fn test(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>>
             json!({ "ok": true, "user": u.login, "userId": u.id })
         }
         Ok(None) => json!({ "ok": false, "error": h.forge.signed_out_reason().unwrap_or_else(|| "no credentials".into()) }),
-        Err(e) => json!({ "ok": false, "error": e.to_string() }),
+        Err(e) => json!({ "ok": false, "error": e.summary() }),
     };
     Ok(Json(v))
 }
@@ -217,7 +258,7 @@ pub struct TokenReq {
 pub async fn put_token(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>, Json(req): Json<TokenReq>) -> ApiResult<Json<Value>> {
     require_secure(&s, peer.as_deref())?;
     ensure_can_write(&s, None)?;
-    presence_gate(&s, peer.as_deref(), "forge_token")?;
+    forge_gate(&s, peer.as_deref(), "forge_token")?;
     let id = parse_id(&id)?;
     let h = handle(&s, &id)?;
     if h.conn.auth == AuthSource::Gh {
@@ -248,7 +289,7 @@ pub struct PurposeQuery {
 /// `DELETE /v1/forges/:id/token?purpose=`
 pub async fn delete_token(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>, Query(q): Query<PurposeQuery>) -> ApiResult<Json<Value>> {
     ensure_can_write(&s, None)?;
-    presence_gate(&s, peer.as_deref(), "forge_token")?;
+    forge_gate(&s, peer.as_deref(), "forge_token")?;
     let id = parse_id(&id)?;
     let purpose = Purpose::parse(&q.purpose).ok_or_else(|| ApiError::bad_request("purpose is read or write"))?;
     forge_cmd::token_store(&s.cfg.data_dir).delete(&id, purpose).map_err(forge_err)?;
@@ -261,7 +302,7 @@ pub async fn delete_token(State(s): S, peer: Option<Extension<TunnelPeer>>, Path
 pub async fn device_start(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     require_secure(&s, peer.as_deref())?;
     ensure_can_write(&s, None)?;
-    presence_gate(&s, peer.as_deref(), "forge_token")?;
+    forge_gate(&s, peer.as_deref(), "forge_token")?;
     let id = parse_id(&id)?;
     let h = handle(&s, &id)?;
     if h.conn.auth == AuthSource::Gh {
@@ -366,5 +407,17 @@ mod tests {
         }
         assert!(super::token_channel_ok("127.0.0.1:8787".parse().unwrap(), false));
         assert!(super::token_channel_ok("[::1]:8787".parse().unwrap(), false));
+    }
+
+    /// 5.7: presence applies to the forges API on a box acting for its
+    /// owner and on any box whose workspace runs rules v2 (or later), not
+    /// only on a delegated one.
+    #[test]
+    fn forge_changes_need_presence_on_delegated_and_rules_v2_hosts() {
+        assert!(!super::forge_presence_applies(false, 1));
+        assert!(!super::forge_presence_applies(false, 0));
+        assert!(super::forge_presence_applies(true, 1));
+        assert!(super::forge_presence_applies(false, 2));
+        assert!(super::forge_presence_applies(false, hive_core::authz::RULES_SUPPORTED + 1));
     }
 }

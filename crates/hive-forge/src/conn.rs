@@ -90,6 +90,13 @@ pub struct Connection {
     /// When the stored OAuth access token expires (unix seconds).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_expires_at: Option<u64>,
+    /// The person marked this connection internal on this device: its host
+    /// may be (or resolve to) a loopback, private or link-local address.
+    /// Without the mark such addresses are refused (when added, and on every
+    /// request), so a code-host URL can't be used to reach this device's own
+    /// network. Device-local, like the rest of this file.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub internal: bool,
 }
 
 /// A base URL Ligus will send a token to: `https://host[:port][/prefix]`, or
@@ -153,6 +160,34 @@ pub fn save_device_sign_in(data_dir: &Path, store: &dyn TokenStore, id: &ForgeId
     Ok(true)
 }
 
+/// Refuse a connection whose host is, or resolves to, an internal address
+/// (see [`crate::http::is_public_ip`]) unless it is marked internal. Test
+/// builds resolve no names but `localhost` (the request-time resolver still
+/// applies); a name that doesn't resolve here is left to that resolver.
+pub async fn check_address(c: &Connection) -> Result<()> {
+    if c.internal {
+        return Ok(());
+    }
+    for raw in std::iter::once(c.base_url.as_str()).chain(c.api_url.as_deref()) {
+        crate::http::check_url_address(raw, false)?;
+        let Ok(u) = url::Url::parse(raw) else { continue };
+        let Some(url::Host::Domain(host)) = u.host() else { continue };
+        let host = host.to_ascii_lowercase();
+        if crate::http::real_hosts_denied() && host != "localhost" {
+            continue;
+        }
+        let port = u.port_or_known_default().unwrap_or(443);
+        let lookup = tokio::time::timeout(std::time::Duration::from_secs(5), tokio::net::lookup_host((host.as_str(), port))).await;
+        if let Ok(Ok(addrs)) = lookup {
+            let addrs: Vec<_> = addrs.collect();
+            if !addrs.is_empty() && addrs.iter().all(|a| !crate::http::is_public_ip(a.ip())) {
+                return Err(crate::http::internal_refused(&host));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The forge a well-known host runs.
 pub fn known_kind(host: &str) -> Option<(ForgeKind, Option<&'static str>)> {
     match host.trim().to_ascii_lowercase().as_str() {
@@ -173,7 +208,7 @@ impl Connection {
             return Err(ForgeError::Invalid("the gh login works only for GitHub".into()));
         }
         let flavor = known_kind(&host).and_then(|(_, f)| f).map(str::to_string).or_else(|| (kind == ForgeKind::GitHub && host != "github.com").then(|| "ghes".into()));
-        Ok(Self { id: ForgeId::new(kind, &host), kind, base_url, api_url: None, flavor, auth, client_id: None, login: None, user_id: None, token_expires_at: None })
+        Ok(Self { id: ForgeId::new(kind, &host), kind, base_url, api_url: None, flavor, auth, client_id: None, login: None, user_id: None, token_expires_at: None, internal: false })
     }
 
     /// The default connection: github.com through the host's `gh` login.
@@ -233,7 +268,7 @@ impl Connection {
                 if self.auth == AuthSource::Oauth {
                     *c.expires_at.get_mut().unwrap_or_else(|e| e.into_inner()) = self.token_expires_at;
                     if let Ok(ep) = crate::device::endpoints(self) {
-                        c.refresh = Some(RefreshConfig { token_url: ep.token_url, client_id: ep.client_id });
+                        c.refresh = Some(RefreshConfig { token_url: ep.token_url, client_id: ep.client_id, internal: self.internal });
                     }
                     if let Some(dir) = data_dir {
                         c.data_dir = Some(dir.to_path_buf());

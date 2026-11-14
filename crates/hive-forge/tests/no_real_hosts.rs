@@ -51,6 +51,7 @@ async fn tests_never_reach_real_code_hosts_or_gh() {
         token_url: "https://github.com/login/oauth/access_token".into(),
         client_id: "x".into(),
         scope: None,
+        internal: false,
     };
     let err = device::start(&ep).await.unwrap_err().to_string();
     assert!(err.contains("test builds never reach a real code host"), "{err}");

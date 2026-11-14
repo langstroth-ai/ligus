@@ -24,6 +24,9 @@ pub(crate) const MAX_BODY: usize = 8 * 1024 * 1024;
 
 pub(crate) struct Api {
     pub client: reqwest::Client,
+    /// The connection is marked internal on this device: loopback, private
+    /// and link-local addresses are allowed.
+    pub internal: bool,
     pub base: String,
     pub style: AuthStyle,
     pub creds: Arc<dyn CredentialSource>,
@@ -63,7 +66,117 @@ pub(crate) fn guard_url(raw: &str) -> Result<()> {
     }
 }
 
-pub(crate) fn client() -> reqwest::Client {
+/// Whether `ip` is an ordinary public unicast address. Loopback, private
+/// (RFC 1918, unique local), link-local (cloud metadata lives there), shared
+/// CGNAT and tailnet space, unspecified, multicast, broadcast, documentation,
+/// benchmarking and reserved ranges are not, and neither are IPv4-mapped,
+/// IPv4-compatible or NAT64 forms of those.
+pub fn is_public_ip(ip: std::net::IpAddr) -> bool {
+    use std::net::{IpAddr, Ipv4Addr};
+    fn v4(a: Ipv4Addr) -> bool {
+        let o = a.octets();
+        !(a.is_unspecified()
+            || a.is_loopback()
+            || a.is_private()
+            || a.is_link_local()
+            || a.is_broadcast()
+            || a.is_multicast()
+            || a.is_documentation()
+            || o[0] == 0
+            || (o[0] == 100 && (o[1] & 0xc0) == 64)
+            || (o[0] == 192 && o[1] == 0 && o[2] == 0)
+            || (o[0] == 198 && (o[1] & 0xfe) == 18)
+            || o[0] >= 240)
+    }
+    match ip {
+        IpAddr::V4(a) => v4(a),
+        IpAddr::V6(a) => {
+            if let Some(m) = a.to_ipv4_mapped() {
+                return v4(m);
+            }
+            let s = a.segments();
+            if s[0] == 0x64 && s[1] == 0xff9b && s[2..6] == [0, 0, 0, 0] {
+                return v4(Ipv4Addr::new((s[6] >> 8) as u8, s[6] as u8, (s[7] >> 8) as u8, s[7] as u8));
+            }
+            !(s[0..6] == [0, 0, 0, 0, 0, 0]
+                || a.is_multicast()
+                || (s[0] & 0xfe00) == 0xfc00
+                || (s[0] & 0xffc0) == 0xfe80
+                || (s[0] & 0xffc0) == 0xfec0
+                || (s[0] == 0x2001 && s[1] == 0x0db8))
+        }
+    }
+}
+
+/// Why a connection may not reach an address.
+pub(crate) fn internal_refused(what: &str) -> ForgeError {
+    ForgeError::Invalid(format!(
+        "{what} is an internal address (loopback, private or link-local): mark the connection internal on this device to use it"
+    ))
+}
+
+/// Refuse a URL whose host is an internal IP literal (literals never go
+/// through the resolver).
+pub(crate) fn check_url_address(raw: &str, internal: bool) -> Result<()> {
+    if internal {
+        return Ok(());
+    }
+    let ip = match url::Url::parse(raw).ok().and_then(|u| u.host().map(|h| h.to_owned())) {
+        Some(url::Host::Ipv4(ip)) => std::net::IpAddr::V4(ip),
+        Some(url::Host::Ipv6(ip)) => std::net::IpAddr::V6(ip),
+        _ => return Ok(()),
+    };
+    if is_public_ip(ip) {
+        Ok(())
+    } else {
+        Err(internal_refused(&ip.to_string()))
+    }
+}
+
+/// The hosts of the proxies in the environment: the resolver answers for
+/// them as is (a local proxy is the person's own setup; through a proxy the
+/// target is resolved by the proxy, see the docs' caveat).
+fn proxy_hosts() -> Vec<String> {
+    ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]
+        .iter()
+        .filter_map(|k| std::env::var(k).ok())
+        .filter_map(|v| {
+            let v = if v.contains("://") { v } else { format!("http://{v}") };
+            url::Url::parse(&v).ok().and_then(|u| u.host_str().map(|h| h.trim_matches(['[', ']']).to_ascii_lowercase()))
+        })
+        .collect()
+}
+
+/// A resolver that answers with public addresses only, so a name that
+/// resolves (or is rebound) to an internal address is never connected to.
+struct PublicOnly {
+    proxies: Vec<String>,
+}
+
+impl reqwest::dns::Resolve for PublicOnly {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let host = name.as_str().to_ascii_lowercase();
+        let proxy = self.proxies.iter().any(|p| *p == host);
+        Box::pin(async move {
+            let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host.as_str(), 0)).await?.collect();
+            let ok: Vec<std::net::SocketAddr> = addrs.into_iter().filter(|a| proxy || is_public_ip(a.ip())).collect();
+            if ok.is_empty() {
+                return Err(Box::new(internal_refused(&host)) as Box<dyn std::error::Error + Send + Sync>);
+            }
+            Ok(Box::new(ok.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
+/// The client for a connection: [`client`], resolving to public addresses
+/// only unless the connection is marked internal on this device.
+pub(crate) fn client_for(internal: bool) -> reqwest::Client {
+    let b = builder();
+    let b = if internal { b } else { b.dns_resolver(std::sync::Arc::new(PublicOnly { proxies: proxy_hosts() })) };
+    b.build().unwrap_or_default()
+}
+
+fn builder() -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         .user_agent(concat!("ligus/", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(30))
@@ -77,8 +190,6 @@ pub(crate) fn client() -> reqwest::Client {
                 _ => a.stop(),
             }
         }))
-        .build()
-        .unwrap_or_default()
 }
 
 /// A forge's error message from its JSON body (`message`, `error`,
@@ -122,6 +233,7 @@ impl Api {
             return Err(ForgeError::NotSignedIn("this needs a write token for the code host on this device".into()));
         }
         guard_url(&self.url(path))?;
+        check_url_address(&self.url(path), self.internal)?;
         let mut req = self.client.request(method, self.url(path)).query(query);
         for (k, v) in &self.headers {
             if accept.is_some() && k.eq_ignore_ascii_case("accept") {

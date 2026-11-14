@@ -3516,7 +3516,7 @@ async fn device_poll_after_remove_stores_nothing() {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
     let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
     h.handle.shared.repos.offline.store(false, std::sync::atomic::Ordering::SeqCst);
-    let add = json!({"kind": "gitlab", "baseUrl": base, "auth": "token", "clientId": "app-123"});
+    let add = json!({"kind": "gitlab", "baseUrl": base, "auth": "token", "clientId": "app-123", "internal": true});
     let added = h.send(reqwest::Method::POST, "/v1/forges", Some(add.clone())).await;
     let id_str = added["forge"]["id"].as_str().unwrap().to_string();
     let id = hive_forge::ForgeId::parse(&id_str).unwrap();
@@ -3538,6 +3538,38 @@ async fn device_poll_after_remove_stores_nothing() {
             h.send(reqwest::Method::POST, "/v1/forges", Some(add.clone())).await;
         }
     }
+}
+
+/// S7: a code-host URL on an internal address is refused unless marked
+/// internal on this box; `/test` is gated like the other writes; and what a
+/// host answers (which may not be a code host at all) is never echoed back,
+/// by `/test` or by the listing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forge_test_is_gated_internal_marked_and_status_only() {
+    let app = Router::new().fallback(|| async { (axum::http::StatusCode::INTERNAL_SERVER_ERROR, axum::Json(json!({"message": "INTERNAL-SERVICE-SECRET-BODY"}))) });
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", l.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    h.handle.shared.repos.offline.store(false, std::sync::atomic::Ordering::SeqCst);
+    for bad in [base.clone(), "https://169.254.169.254".into(), "https://10.0.0.7".into()] {
+        let (c, v) = status_of(&h, reqwest::Method::POST, "/v1/forges", Some(json!({"kind": "gitea", "baseUrl": bad, "auth": "token"}))).await;
+        assert_eq!(c, 400, "{bad}: {v}");
+        assert!(v.to_string().contains("internal"), "{v}");
+    }
+    let added = h.send(reqwest::Method::POST, "/v1/forges", Some(json!({"kind": "gitea", "baseUrl": base, "auth": "token", "internal": true}))).await;
+    assert_eq!(added["forge"]["internal"], true, "{added}");
+    let id = added["forge"]["id"].as_str().unwrap().to_string();
+    h.send(reqwest::Method::PUT, &format!("/v1/forges/{id}/token"), Some(json!({"purpose": "write", "token": "tok-0123456789"}))).await;
+    let t = h.send(reqwest::Method::POST, &format!("/v1/forges/{id}/test"), None).await;
+    assert_eq!(t["ok"], false, "{t}");
+    assert!(!t.to_string().contains("INTERNAL-SERVICE-SECRET-BODY"), "/test echoed the body: {t}");
+    let list = h.get("/v1/forges").await;
+    assert!(!list.to_string().contains("INTERNAL-SERVICE-SECRET-BODY"), "the listing echoed the body: {list}");
+    h.handle.shared.lock().set_write_block(Some("this box was revoked".into()));
+    let (c, v) = status_of(&h, reqwest::Method::POST, &format!("/v1/forges/{id}/test"), None).await;
+    assert_eq!(c, 403, "/test needs a box that can write: {v}");
 }
 
 /// The gh login is the default only for github.com itself: a look-alike host

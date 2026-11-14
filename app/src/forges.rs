@@ -113,6 +113,7 @@ async fn dto(c: &Connection, data_dir: &Path, check: bool) -> Value {
         "deviceFlow": f.capabilities().device_flow && hive_forge::device::endpoints(c).is_ok(),
         "openLabel": c.kind.open_label(),
         "holder": "this device",
+        "internal": c.internal,
     });
     if check {
         match tokio::time::timeout(Duration::from_secs(20), f.whoami()).await {
@@ -150,7 +151,14 @@ pub async fn forges_list(state: State<'_, AppState>, check: Option<bool>) -> Res
 
 /// Add a connection: `kind` is github, gitlab, forgejo, gitea or codeberg.
 #[tauri::command]
-pub async fn forges_add(state: State<'_, AppState>, kind: String, base_url: String, auth: Option<String>, client_id: Option<String>) -> Result<Value, String> {
+pub async fn forges_add(
+    state: State<'_, AppState>,
+    kind: String,
+    base_url: String,
+    auth: Option<String>,
+    client_id: Option<String>,
+    internal: Option<bool>,
+) -> Result<Value, String> {
     let lower = kind.trim().to_ascii_lowercase();
     let k = ForgeKind::parse(&lower).ok_or_else(|| format!("unknown code host kind '{kind}'"))?;
     let auth = match auth.as_deref() {
@@ -163,6 +171,9 @@ pub async fn forges_add(state: State<'_, AppState>, kind: String, base_url: Stri
         c.flavor = Some(lower);
     }
     c.client_id = client_id.map(|x| x.trim().to_string()).filter(|x| !x.is_empty());
+    // A loopback, private or link-local address only when marked internal.
+    c.internal = internal.unwrap_or(false);
+    hive_forge::conn::check_address(&c).await.map_err(err)?;
     let dir = state.data_dir.clone();
     let mut all = Connections::load(&dir);
     if all.get(&c.id).is_some() {

@@ -2,7 +2,9 @@
 //! credential helper that hands git a token from the OS secret store.
 //!
 //! - `ligus forge list`
-//! - `ligus forge add <github|gitlab|forgejo|gitea|codeberg> <https://base> [--auth token|oauth|gh|none] [--client-id ID]`
+//! - `ligus forge add <github|gitlab|forgejo|gitea|codeberg> <https://base> [--auth token|oauth|gh|none] [--client-id ID] [--internal]`
+//!   (`--internal`: the server is on this device's network; a loopback,
+//!   private or link-local address is refused without it)
 //! - `ligus forge token <id> <read|write>`: reads the token from **stdin**
 //!   (never argv, where `ps` and shell history would see it)
 //! - `ligus forge login <id>`: device sign-in (GitHub App, GitLab app)
@@ -48,7 +50,7 @@ pub fn clean_token(raw: &str) -> Result<Secret> {
     Ok(Secret::new(t))
 }
 
-pub fn cmd(data_dir: &Path, args: &[&str], auth: Option<String>, client_id: Option<String>) -> Result<()> {
+pub fn cmd(data_dir: &Path, args: &[&str], auth: Option<String>, client_id: Option<String>, internal: bool) -> Result<()> {
     match args.first().copied() {
         Some("git-credential") => {
             let id = ForgeId::parse(args.get(1).copied().unwrap_or("")).map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -74,7 +76,7 @@ pub fn cmd(data_dir: &Path, args: &[&str], auth: Option<String>, client_id: Opti
         }
         Some("add") => {
             let (Some(kind), Some(base)) = (args.get(1), args.get(2)) else {
-                bail!("usage: ligus forge add <github|gitlab|forgejo|gitea|codeberg> <https://base-url> [--auth token|oauth|gh|none] [--client-id ID]");
+                bail!("usage: ligus forge add <github|gitlab|forgejo|gitea|codeberg> <https://base-url> [--auth token|oauth|gh|none] [--client-id ID] [--internal]");
             };
             let (kind, flavor) = parse_kind(kind)?;
             let auth = match auth.as_deref() {
@@ -96,9 +98,14 @@ pub fn cmd(data_dir: &Path, args: &[&str], auth: Option<String>, client_id: Opti
                 c.flavor = flavor;
             }
             c.client_id = client_id.filter(|s| !s.trim().is_empty());
-            let mut all = Connections::load(data_dir);
-            all.upsert(c.clone());
-            all.save(data_dir).map_err(|e| anyhow::anyhow!("{e}"))?;
+            c.internal = internal;
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+            rt.block_on(hive_forge::conn::check_address(&c)).map_err(|e| anyhow::anyhow!("{e} (--internal)"))?;
+            hive_forge::Connections::update(data_dir, |all| {
+                all.upsert(c.clone());
+                Ok(())
+            })
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
             println!("added {} ({}).", c.id, c.display());
             if auth == AuthSource::Token {
                 println!("now: ligus forge token {} write   (paste the token on stdin)", c.id);

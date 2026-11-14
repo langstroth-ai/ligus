@@ -187,6 +187,8 @@ pub struct RefreshConfig {
     /// `https://github.com/login/oauth/access_token`, `{base}/oauth/token`.
     pub token_url: String,
     pub client_id: String,
+    /// The connection is marked internal on this device.
+    pub internal: bool,
 }
 
 /// Tokens in the OS secret store.
@@ -259,7 +261,7 @@ impl StoreCredentials {
         let Some(rt) = self.store.get(&self.forge, Purpose::Refresh)? else {
             return Err(ForgeError::NotSignedIn("the device sign-in for this code host expired: sign in again".into()));
         };
-        let set = crate::device::refresh(&cfg.token_url, &cfg.client_id, &rt).await?;
+        let set = crate::device::refresh(&cfg.token_url, &cfg.client_id, &rt, cfg.internal).await?;
         self.store.put(&self.forge, Purpose::Write, &set.access)?;
         if let Some(r) = &set.refresh {
             self.store.put(&self.forge, Purpose::Refresh, r)?;
