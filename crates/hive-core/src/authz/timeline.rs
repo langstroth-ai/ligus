@@ -95,6 +95,13 @@ pub struct RosterState {
     /// them as a new member, or re-granting their role after their
     /// credentials were removed.
     pub passkey_grants: BTreeSet<Uuid>,
+    /// Each account's signing key as this log registers it, undisputed only.
+    /// A link statement names the key in force at its position.
+    pub account_keys: BTreeMap<Uuid, Vec<u8>>,
+    /// Each account's live identity links, by link id (IDENTITY-AND-FORGES
+    /// §2.2). Claims only: they grant nothing here, and whether one verifies
+    /// is device-local.
+    pub links: BTreeMap<Uuid, BTreeMap<Uuid, crate::identity_link::IdentityLink>>,
 }
 
 impl RosterState {
@@ -289,6 +296,19 @@ impl RosterTracker {
                     }
                 }
             }
+            SessionEvent::IdentityLinkPublished { link } if allowed => {
+                let m = self.state.links.entry(link.account_id).or_default();
+                m.retain(|_, l| l.subject_key() != link.subject_key());
+                m.insert(link.link_id, link.clone());
+            }
+            SessionEvent::IdentityLinkRemoved { account_id, link_id } if allowed => {
+                if let Some(m) = self.state.links.get_mut(account_id) {
+                    m.remove(link_id);
+                    if m.is_empty() {
+                        self.state.links.remove(account_id);
+                    }
+                }
+            }
             e if allowed && touches_roster(e) => self.refresh(fold),
             _ => {}
         }
@@ -348,6 +368,8 @@ impl RosterTracker {
             devices.entry(*d).or_default().revoked = true;
         }
         self.state.devices = devices;
+        self.state.account_keys =
+            self.account_keys.iter().filter(|(a, _)| !self.disputed.contains(a)).map(|(a, k)| (*a, k.clone())).collect();
     }
 }
 

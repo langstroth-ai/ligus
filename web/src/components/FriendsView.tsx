@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  identityLinkStatuses,
   listCoMembers,
   listDms,
   listPendingInvites,
@@ -19,6 +20,22 @@ import { toast, errMsg } from "@/components/Toast";
 import { Avatar } from "@/components/Avatar";
 import { IconUsers } from "@/lib/icons";
 import { confirmSafetyCode, trustNote } from "@/lib/people";
+import { LinkChips } from "@/components/LinkChips";
+
+/// A co-member's linked accounts. Opening People checks them with their
+/// forges (this device's 24-hour cache answers first, so it is at most one
+/// request per link a day); until then the cached status shows.
+function PersonLinks({ p }: { p: CoMemberDto }) {
+  const has = (p.links?.length ?? 0) > 0;
+  const checked = useQuery({
+    queryKey: ["links-of", p.accountId],
+    queryFn: () => identityLinkStatuses(p.accountId, false),
+    enabled: has,
+    staleTime: 10 * 60_000,
+  });
+  if (!has) return null;
+  return <LinkChips links={checked.data ?? p.links} />;
+}
 
 /// What the contacts status means for delivery. Exported for unit testing.
 export function contactsNote(status: string | undefined): string | null {
@@ -264,6 +281,7 @@ export function FriendsView({
                   Message
                 </button>
               </div>
+              <PersonLinks p={p} />
               <div className="font-mono text-[11px] text-ink-soft" title="Their safety code">
                 {p.keyConflict
                   ? "Your shared workspaces disagree about this person's key: nothing is sent to them."

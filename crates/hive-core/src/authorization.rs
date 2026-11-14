@@ -297,6 +297,9 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         // removing someone else's is an Admin's.
         SessionEvent::PasskeyRegistered { .. } => WorkspaceRole::Viewer,
         SessionEvent::PasskeyRemoved { .. } => WorkspaceRole::Viewer,
+        // Linked identities: an account's own (see `authz::links`); removing
+        // someone else's is an Admin's.
+        SessionEvent::IdentityLinkPublished { .. } | SessionEvent::IdentityLinkRemoved { .. } => WorkspaceRole::Viewer,
         // A newer-client event this build can't author or interpret — require
         // the highest role so it can never be produced locally by accident.
         SessionEvent::Unknown => WorkspaceRole::Owner,

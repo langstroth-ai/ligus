@@ -81,11 +81,11 @@ pub(crate) fn my_profile(state: State<AppState>) -> Result<ProfileDto, String> {
     })
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SharedWorkspaceDto {
-    id: String,
-    name: String,
+    pub(crate) id: String,
+    pub(crate) name: String,
 }
 
 #[derive(serde::Serialize)]
@@ -103,6 +103,10 @@ pub(crate) struct CoMemberDto {
     workspaces: Vec<SharedWorkspaceDto>,
     /// The open (kept) DM with them, if any.
     dm_workspace_id: Option<String>,
+    /// Their linked accounts in the workspaces you share (opt-in claims;
+    /// the status is this device's cached forge check, never synced).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    links: Vec<crate::links_ui::LinkChipDto>,
 }
 
 /// Everyone you share a workspace with, keyed by account id. Two people may
@@ -110,6 +114,9 @@ pub(crate) struct CoMemberDto {
 #[tauri::command]
 pub(crate) fn list_co_members(state: State<AppState>) -> Vec<CoMemberDto> {
     let list = co_members_of(&state);
+    let chips: BTreeMap<Uuid, Vec<crate::links_ui::LinkChipDto>> =
+        list.iter().map(|c| (c.account_id, crate::links_ui::chips_for(&state, c.account_id))).collect();
+    let mut chips = chips;
     let s = state.settings.lock().unwrap();
     let name_of = |id: Uuid| s.workspaces.iter().find(|w| w.id() == id).map(|w| w.display_name()).unwrap_or_default();
     list.into_iter()
@@ -132,6 +139,7 @@ pub(crate) fn list_co_members(state: State<AppState>) -> Vec<CoMemberDto> {
                 .iter()
                 .find(|w| w.dm_account.as_deref() == Some(c.account_id.to_string().as_str()) && !s.archived_dms.contains(&w.room))
                 .map(|w| w.id().to_string()),
+            links: chips.remove(&c.account_id).unwrap_or_default(),
         })
         .collect()
 }
@@ -524,7 +532,9 @@ fn own_record(state: &AppState, cid: &str) -> Option<serde_json::Value> {
     }
     let env = svc.signed_ka_publication(contacts::contact_workspace_id(cid), ka.public_key_bytes().to_vec());
     let device = contacts::RecordDevice { certificate: stored.device.certificate.clone(), ka_publication: env };
-    let rec = contacts::build_record(cid, account_id, &svc.account_public_key(), vec![device], Timestamp::now());
+    let mut rec = contacts::build_record(cid, account_id, &svc.account_public_key(), vec![device], Timestamp::now());
+    drop(svc);
+    rec.links = crate::links_ui::contact_link_envelopes(state, cid);
     serde_json::to_value(rec).ok()
 }
 

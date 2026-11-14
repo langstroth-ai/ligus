@@ -18,6 +18,7 @@ import { Button, Section, fieldStyle } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
 import { Avatar } from "@/components/Avatar";
 import { fileToAvatarDataUrl } from "@/lib/avatar";
+import { LinkedAccountsSection } from "@/components/settings/LinkedAccountsSection";
 
 /// Profile page: your name, picture, safety code and commit email, and the
 /// devices that act as you. Your account is a key made on this device; no
@@ -27,6 +28,7 @@ export function AccountSection() {
     <>
       <IdentitySection />
       <SafetyCodeSection />
+      <LinkedAccountsSection />
       <DevicesSection />
     </>
   );

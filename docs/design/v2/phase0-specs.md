@@ -1,0 +1,1708 @@
+# Ligus 2.0 Phase 0: implementation specs
+
+Ligus is short for *ligustica*, the Italian honeybee. The product was formerly called Hive.
+
+**Inputs:**
+- [`architecture-review.md`](architecture-review.md) (decision: Revise; gate items 1-6);
+- the security reviews' open items, which the owner summarized: R1-R4, K1, S7, host S1-S3, P0.5, P0.6, and the review UI;
+- the owner's binding decisions (ACP, the runtime matrix, sandbox, passkeys, the Ligus MCP server, ligus-auth, no patch releases).
+
+**Code read (read-only), 2026-11-13:**
+
+| Repo | Location | Branch / commit |
+|---|---|---|
+| Core, app and CLI | this repo | `release/v2.0.0` @ `534c8d0b`. sec/core-, host- and chart-hardening are merged (a79ac18e, 45c84abe, 7548ec42). The UI and phone-endpoint merges are in progress. |
+| Relay | relay repo (`ligus-ai/relay`) | `release/v0.2.0` @ `3c22559` |
+| iOS | iOS app repo (private) | `feat/ligus-2.0` @ `aaa679c` |
+
+Unless a path says otherwise, citations are relative to the root of this repo. Relay paths are prefixed `relay/` and refer to the relay repo. Line numbers are as of `534c8d0b`. Re-anchor them when you rebase, because the in-flight merges will shift lines in `app/src/lib.rs`.
+
+
+**Contents:** 0 ground rules and the added wire ids. Tracks A-E (one section each, each implementable in its own worktree). 7 dependency order and merge queue. 8 in 2.0 vs can follow. 9 migration and rollback for the owner's data. 10 proof-test ledger.
+
+---
+
+## 0. Ground rules for every track
+
+1. **Frozen wire.** Never change these:
+   - `hive-envelope-v3`, `hive-device-cert-v1`, `hive-device-enroll-v1`, `hive-workspace-key-seal-v1`, `hive-workspace-key-argon2id`;
+   - `hrt1`, `hpc1`, `hive-tunnel/1`, `hive/sync/1`, `X-Hive-*`;
+   - the relay `/v1` paths and bodies;
+   - the config-log UUIDv5 namespace (`crates/hive-core/src/channel.rs:16-20`).
+
+   The test `signature_contexts_are_frozen` (`crates/hive-core/src/crypto.rs:323`) stays green.
+2. **New strings.** New domain-separation strings use the `ligus-` spelling and end in `\0`. Section 0.1 lists every one Phase 0 adds; nothing else may be added without amending this document.
+3. **New serialized fields** are `#[serde(default, skip_serializing_if = …)]`. New `SessionEvent` kinds get a camelCase tag and must fold as a no-op on an older decoder (`SessionEvent::Unknown`, `events.rs:321-322`).
+4. **No env-dependent fold.** Nothing that changes which events fold, or how, may read an env var or a device-local setting (review RC-8).
+5. **Public code never names the private observability product.** Use "external observability tools".
+6. **One release.** There are no patch releases for shipped versions, and everything here lands in 2.0 unless it is marked **[2.0.x-follow]** or **[2.x]**. Track E is marked separately.
+7. **Tests.** Every property test runs with `proptest` as a dev-dependency (add it to `deny.toml` if needed). If the owner objects to the dependency, use the deterministic `Rng` already in `crates/hive-core/src/sec_tests.rs:11-24`. Default case count is 256; nightly runs 4096.
+8. **Release gate.** Every Phase 0 PR runs the replay harness (A.7) against the owner's real `hive.db` before merge.
+
+### 0.1 Domain strings and wire ids ADDED by Phase 0 (complete list)
+
+| String | Track | Purpose |
+|---|---|---|
+| `ligus-presence-v1\0` | B | WebAuthn challenge = SHA-256 over this tag and the event digest fields (B.4.3) |
+| `ligus-proposal-digest-v1\0` | A | `diff_digest`: the apply-content digest that votes bind to (A.2.2, rule 5) |
+| `ligus-workspace-key-commit-v1\0` | B | Key commitment carried in `WorkspaceKeyRotated` and in `SealedEnvelope.kid` (B.1.2) |
+| `ligus-agent-cert-v1\0` | A | Host device certifies an agent signing key (A.3.2) |
+| `ligus-recovery-v1\0` | B | Offline recovery-key signature over the presence challenge (B.4.6) |
+| `ligus-mcp-turn-cred-v1\0` | D | HMAC tag of the per-turn MCP credential (device-local, never synced) |
+| `ligus.facts.v1` | C | Facts schema id (device-local export) |
+| `ligus-auth-device-proof-v1\0` | E | Device proof on every ligus-auth token request: Ed25519 over this tag and tenant, grant type, nonce, device id and SHA-256(credential), NUL-separated. Added 2026-11-13 when the owner moved Track E into 2.0 |
+| `ligus-identity-link-v1@ligus.ai` (SSHSIG namespace; no `\0` by format: SSHSIG carries the namespace as a length-prefixed string passed on the `ssh-keygen -Y sign -n` command line) | F | Forge-key SSHSIG over an identity-link statement ([identity-and-forges](identity-and-forges.md) §2.4). Added 2026-11-14 (owner decision D1) |
+
+New `SessionEvent` kinds (tags):
+
+`workspaceRulesSet`, `workspaceKeyRotated`, `deviceKeyAgreementPublished`, `passkeyRegistered`, `passkeyRemoved`, `agentKeyCertified`, `proposalApplied`, `identityLinkPublished`, `identityLinkRemoved` (the last two added 2026-11-14, owner decision D2; [identity-and-forges](identity-and-forges.md) §2.2).
+
+New `FlowRecord` kinds:
+
+`humanAsk`, `humanAnswered`, `turnToolSummary`, `agentOutcomeSummary`.
+
+---
+
+## Track A: protocol and authorization
+
+**Size:** L in total, split into three PRs: A1 = P0.1 (M), A2 = P0.2 + P0.4 + P0.8 + S2 (L), A3 = agent identities (M).
+**Owner of:** `crates/hive-core`, plus the verify/ingest/roster parts of `crates/hive-runtime`.
+**Must land first.** Every other track rebases on A1, and B depends on A2.
+
+### A.1 Goal
+
+1. Verification is computed over the bytes that were received. Unknown fields and unknown kinds survive storage and re-sync, and refold after an upgrade.
+2. One pure `AuthzEngine` answers "was this event allowed when it happened", at the event's causal position:
+   - votes are bound to the signer and to a diff digest;
+   - status is derived, never asserted;
+   - rules are versioned;
+   - self-revoke is allowed;
+   - S4, S5 and S6 hold as fold rules.
+3. Trust rosters are per workspace, built only from verified events, with the founder pinned.
+4. No env var influences the fold.
+5. Agents get their own signing identity and a capped tier.
+6. Rebinding an agent to a host or runtime is an Admin action (S2).
+
+### A.2 Scope
+
+#### A.2.1 P0.1: signatures over received bytes (A1)
+
+Today's facts:
+- `envelope_preimage` re-serializes the typed `scope`, `timestamp`, `actor_stamp` and `payload` (`crypto.rs:100-127`).
+- Ingest parses into typed structs (`sync_engine.rs:246`, `serde_json::from_slice(&plain)`).
+- `EventStore::ingest` stores `serde_json::to_string(env)`, which is a re-serialization, not the received bytes (`event_store.rs:391-410`; the same at `:200` and `:246`).
+
+So the review's open question (residual 8) is answered: `envelope_json` holds a re-serialization, and P0.1 is a real M.
+
+Change:
+
+```rust
+// crates/hive-core/src/events.rs
+pub struct SessionEventEnvelope {
+    // ... all existing fields unchanged (events.rs:427-452) ...
+    /// Exact bytes of the signed JSON fields as received (None for envelopes
+    /// authored on this device before first serialization). Never serialized
+    /// as its own key: the custom Serialize writes these bytes back in place
+    /// of the typed field.
+    #[serde(skip)]
+    pub raw: Option<RawSigned>,
+    /// Top-level envelope keys this build does not know (e.g. a 2.x field).
+    /// Preserved and re-emitted verbatim.
+    #[serde(skip)]
+    pub extra: BTreeMap<String, Box<RawValue>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RawSigned {
+    pub scope: Option<Box<RawValue>>,       // None = key absent on the wire
+    pub timestamp: Option<Box<RawValue>>,
+    pub actor_stamp: Option<Box<RawValue>>,
+    pub payload: Box<RawValue>,
+}
+```
+
+- **Deserialize.** A hand-written `Deserialize` reads a `WireEnvelope` with the four signed fields as `Box<RawValue>` and `#[serde(flatten)] extra: BTreeMap<String, Box<RawValue>>`.
+  - It then parses the typed values from the raw ones.
+  - An unparseable known kind becomes `SessionEvent::Unknown`; this already happens for unknown tags.
+  - Enable the `raw_value` feature on `serde_json` in the workspace `Cargo.toml:22`, next to `float_roundtrip`.
+- **Serialize** writes the raw bytes when `raw` is `Some`, otherwise the typed value, and re-emits `extra`.
+  - `serde_json::to_string(env)` is therefore byte-preserving for received envelopes, and `envelope_json` holds the received bytes from now on.
+- **`envelope_preimage`** (`crypto.rs:100`) uses `raw.*` when present.
+  - An absent key keeps today's behaviour, the serialization of the defaulted value. This is required, because legacy envelopes without `timestamp` were signed over the default.
+  - The tag, the field order and the length prefixes are unchanged.
+- **Verified unknowns are retained.** `verdict_for` (`envelope_verifier.rs:540`) runs on the raw preimage. A verified envelope whose payload is `Unknown`, or that carries unknown fields, is ingested and stored.
+  - The fold treats `Unknown` as a no-op (`events.rs:791`).
+  - After an upgrade, `EventStore` re-parses the stored raw JSON, so the event folds with its real meaning (`upgrade_refold_recovers_unknown_events`).
+- **No `HashMap` in signed types.** Add a lint test, `crates/hive-core/tests/no_hashmap_in_signed.rs`, that scans `crates/hive-core/src/**/*.rs` for `HashMap<`/`HashSet<` inside items deriving `Serialize`.
+  - Today's offender is `device_link.rs:42` `DeviceLinks(HashMap<…>)`. Confirm that it is never inside a `SessionEvent`; if it is, switch it to `BTreeMap`.
+- **Golden vectors.** Before changing any code, generate `crates/hive-core/tests/golden/envelopes_v3.jsonl` from `534c8d0b`: 24 signed envelopes covering every `SessionEvent` kind that has a payload, plus legacy shapes (missing `timestamp`, missing `scope`, `lamport` 0, a float-bearing flow record). Commit the vectors in the first commit of A1.
+
+#### A.2.2 P0.2: AuthzEngine (A2)
+
+**Today the checks are scattered:**
+
+| Check | Location |
+|---|---|
+| Projection authz on the chat roster | `events.rs:996-1008` |
+| Hoisted check against the **current** config roster | `events.rs:1010-1018`; built at `chat_service.rs:1989-1992` |
+| Skipped when `hoist: None` | `events.rs:943-948` |
+| Lease checks | `authorization.rs:137-155` |
+| Vote verification | `guard.rs:220-233` |
+| Authoring floor | `chat_service.rs:439-447` |
+
+**Target.** A new module `crates/hive-core/src/authz/`, containing `mod.rs`, `timeline.rs`, `rules.rs`, `votes.rs`, `bounds.rs` and `agent.rs`:
+
+```rust
+pub struct RulesVersion(pub u32);            // 1 = 2.0 base, 2 = 2.0 + human presence (Track B)
+pub const RULES_SUPPORTED: u32 = 2;
+
+pub enum Decision { Allow, Deny(DenyReason), Hold(HoldReason) }
+pub enum HoldReason { ConfigFrontierAhead, NoConfigLog, SignerUnknownYet }
+
+/// Folded once per config log; one entry per config event in canonical order.
+pub struct ConfigTimeline { /* Vec<(CanonicalKey, Arc<RosterState>)> */ }
+pub struct RosterState {
+    pub members: BTreeMap<String, MemberState>,        // id -> role, account_id, kind
+    pub agents: BTreeMap<Uuid, AgentState>,            // binding (host_id, runtime_id), owner, agent keys
+    pub devices: BTreeMap<Uuid, DeviceState>,          // device -> account, revoked, ka_public
+    pub passkeys: BTreeMap<Uuid, Vec<PasskeyCredential>>, // account -> credentials (Track B)
+    pub dearth: bool,
+    pub rules: RulesVersion,
+    pub keys: KeyEpochs,                               // authorized epochs (Track B)
+}
+impl ConfigTimeline {
+    pub fn at(&self, frontier: Option<CfgFrontier>, legacy_lamport: u64) -> Result<&RosterState, HoldReason>;
+}
+
+/// The only fold-time authorization entry point.
+pub fn authorize(env: &SessionEventEnvelope, signer: &Signer, at: &RosterState,
+                 fold_so_far: &ChatSession) -> Decision;
+pub enum Signer { HumanDevice { device: Uuid, account: Uuid }, Agent { agent_id: Uuid, key_id: Uuid }, Unsigned }
+```
+
+**Rules:**
+
+1. **Causal position.** `ActorStamp` gains a frontier field. `ActorStamp` (`identity.rs:122-126`) is inside the v3 preimage, so the field is signed.
+
+    ```rust
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cfg_frontier: Option<CfgFrontier>,   // {"l": u64 lamport, "e": Uuid event_id} of the newest config event the author had folded
+    ```
+
+   - `ChatService::append_signed` (`chat_service.rs:418-470`) stamps it on every event it authors.
+   - It is set on chat-log and config-log events alike. On the config log it equals the previous config head, which gives the config log a causal chain too.
+   - Evaluation uses the roster at `min(frontier, config head held)`.
+   - A frontier beyond what the device holds gives `Hold(ConfigFrontierAhead)`.
+   - A chat event that needs workspace authz, on a device without that workspace's config log, gives `Hold(NoConfigLog)`. This replaces "`hoist: None` skips" (`events.rs:943-948`).
+   - The device-local workspace (`trusted_workspace`, `events.rs:926-939`) keeps its exemption.
+2. **Legacy events (no frontier).** Evaluate against the roster at the config event with the greatest lamport ≤ the event's lamport. Lamports are per-log (`chat_service.rs:459`), so this is deterministic but approximate; that is review residual 2.
+   - The replay harness (A.7) must show zero changed decisions on the owner's real data for legacy events.
+   - If it shows any, they are listed and accepted by the owner before merge.
+3. **Hold is not drop.** The fold leaves held events out of the projected state, and records `session.authz.held: Vec<(Uuid, HoldReason)>`. That field is device-local and never serialized into events.
+   - Any side effect is refused for a proposal or set that has a held dependency: Implement, pre-flight, apply-on-approve, workflow stage start.
+   - The next refold re-decides. The store already retains the event, and `ChatService::load` refolds from the whole set (`chat_service.rs:1965`).
+4. **Votes are bound to the signer.**
+   - `ProposalApproval.role` (`proposals.rs:34-41`) is **ignored** by the fold. The counted role is the signer's role in `RosterState` at the vote's position, capped by the hoisted roster.
+   - The vote counts only if `approval.actor_id == signed author`. Today that check exists only for `verified_approvals` (`guard.rs:220-233`); extend it to quorum.
+   - This flips `a_viewers_self_declared_admin_vote_does_not_meet_an_admin_floor` (`crates/hive-core/tests/proposal_sets_hoisted_authz.rs:239`).
+5. **Diff digest.**
+
+    ```rust
+    // ProposalApproval (proposals.rs:34)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_digest: Option<String>,   // lowercase hex SHA-256
+    ```
+
+   - `diff_digest = SHA-256("ligus-proposal-digest-v1\0" || u32le(len) || kind_tag || u32le(len) || diff || u32le(len) || changed_files_json || u32le(len) || workflow_json || u32le(len) || command_json)`. Here `command_json` is the new structured command field from Track D (empty when absent).
+   - A vote counts only for the proposal content whose digest it names.
+   - A legacy vote without a digest counts for the content in force at the vote's canonical position. A later `ProposalUpserted` that changes the content clears the counted approvals for the new content; this extends `events.rs:579-592`, which today clears only `verified_approvals`.
+6. **Derived status.**
+   - `ProposalUpserted.status` is ignored except `Open`. Approved and Rejected are recomputed from counted votes (`proposals.rs:221-266`).
+   - `Applied` comes only from the new event below. Under rules v1, a legacy upsert with `status: Applied` counts as `ProposalApplied` only if its author was a human Contributor+ and the proposal was derived-Approved at that position.
+
+    ```rust
+    ProposalApplied { proposal_id: Uuid, diff_digest: String,
+                      #[serde(default, skip_serializing_if = "Option::is_none")] commit: Option<String>,
+                      at: Timestamp }
+    ```
+
+   - The authz floor is a human Contributor+ (never the Agent tier); the digest must match; the proposal must be derived-Approved with its human gate satisfied.
+   - Callers write `ProposalApplied` instead of setting `status: Applied` on an upsert: `implement_proposal_inner` (`app/src/lib.rs:5540-5662`), `proposal_sets.rs:851`, and `serve/api.rs:997`.
+7. **Rules version.**
+   - New event on the config log: `WorkspaceRulesSet { version: u32 }`. It is Owner-only; under v2 it also needs presence (Track B).
+   - The fold selects rules by config position.
+   - A version greater than `RULES_SUPPORTED` makes the workspace read-only on that device, with a UI banner "update Ligus". The device keeps folding with its highest known rules (review residual 6).
+   - Workspaces with no `WorkspaceRulesSet` are v1.
+8. **R5 self-revoke.** `DeviceRevoked { device_id }` is allowed when the signer's account certified that device: the cert in `RosterState.devices` names that account. Otherwise it needs Admin (`authorization.rs:285`). Align the UI so it offers self-revoke only for the person's own devices.
+9. **S4.**
+   - `WorkflowRun` gains `#[serde(default, skip_serializing_if="Option::is_none")] creator_device_id: Option<Uuid>`, set in `new_run` (`workflow.rs:200`).
+   - `lease_signer_ok` (`authorization.rs:142-151`): an upsert without a `lease_epoch` is accepted only when it is signed by `creator_device_id`. A legacy run without the field is accepted only when the signer's stamped actor equals `initiator_actor_id`.
+   - This replaces `let Some(epoch) = run.lease_epoch else { return true };`.
+10. **S5 lockdown bounds.** At most 3 *active* lockdowns per raiser per chat, and 16 active per chat; excess `ChatLockdownRaised` folds as a no-op. Today the field is an unbounded `BTreeMap<Uuid, Vec<ChatLockdown>>` (`guard.rs:121`).
+11. **S6 flow bounds.**
+
+    | Item | Bound |
+    |---|---|
+    | Zones per workspace | ≤ 256 |
+    | Marks per chat (active) | ≤ 512 |
+    | Agent profiles | ≤ 256 |
+    | Recruit per proposal | ≤ 16 |
+    | Zone pattern | length ≤ 256 bytes, ≤ 16 segments, ≤ 4 `**` |
+
+    - `glob_match` (`flow/zones.rs:45`) is rewritten as a non-backtracking segment matcher with an O(len(pattern)·len(path)) DP, plus a property test bounding work.
+    - The existing `MAX_KEPT = 2000` (`flow/mod.rs:347`) stays for high-volume records.
+12. **One call site.** `project_with_hoist` (`events.rs:949-1031`) becomes `project_authorized(envelopes, &ConfigTimeline, trusted_founder, trusted_workspace)`.
+    - It calls `authz::authorize` for every event except the base seed.
+    - `requires_projection_authz`, `requires_hoisted_authz`, `HoistedRoster` and `lease_signer_ok` move into `authz/` as private helpers.
+    - Authoring (`chat_service.rs:439-447`) calls the same `authorize`, with the device's current head as the frontier, so authoring and folding cannot disagree.
+    - Delete `vote_on_proposal`'s `role` parameter (`chat_service.rs:1779-1786`) and its callers' role arguments (`serve/api.rs:763`, desktop vote commands).
+13. **Hoisted authz is no longer retroactive.** Chat events are judged against `ConfigTimeline::at(frontier)`, not `cfg.members`. This flips `hoisted_authorization_is_not_retroactive` (`proposal_sets_hoisted_authz.rs:272`).
+
+#### A.2.3 P0.4: per-workspace trust roster with founder pin (A2)
+
+Today:
+- `build_roster` folds every workspace's trust events into one roster (`envelope_verifier.rs:308-505`). Removal "wins, as the roster is shared by workspaces" (`:420-422`).
+- It is built from the store **plus the unverified incoming batch** (`sync_engine.rs:575-577`).
+- `Unverifiable` events are accepted (`envelope_verifier.rs:511-525`).
+
+Change:
+- `build_rosters(store) -> BTreeMap<Uuid, WorkspaceRoster>`, keyed by `workspace_id`. Each roster is built only from that workspace's config-log trust events (`EventStore::trust_envelopes(ws)`, `event_store.rs:292`).
+  - `verdict_for(rosters.get(env.workspace_id), env)`.
+  - Membership removal in W1 has no effect in W2. Test: `prop_removal_scoped_to_workspace`.
+- **Batch fixpoint.** Trust events in an incoming batch are admitted to the roster only after their own verdict is `Valid` against the roster-so-far:
+  1. iterate in canonical order;
+  2. repeat until no change, bounded by the batch length;
+  3. the rest are classified against the final roster.
+  - An `AccountKeyRegistered` or `DeviceCertificateAdded` from the batch is self-validating by construction: the cert is signed by the account key, and registration is first-wins plus dispute.
+  - Membership events from the batch count only once they verify.
+- **Founder pin (B2).**
+  - The invite gains `fk`: hex of the first 16 bytes of SHA-256 of the founder's account signing key. Skip it when empty. Today the invite carries `founder_actor_id` (`app/src/lib.rs:706-770`).
+  - On join the device stores `(workspace_id, founder_actor_id, fk)` in a new device-local table `workspace_pins` in `hive.db`.
+  - In `build_rosters`, an `AccountKeyRegistered` for the founder account whose key does not match `fk` is `Disputed` for that workspace.
+  - Workspaces joined before 2.0 get their pin from the first verified founder registration, recorded on upgrade (TOFU, documented).
+- **Agent-signed events** are verified against `AgentKeyCertified` (A.5) in the same roster.
+
+#### A.2.4 P0.8: no env-dependent fold (A2)
+
+- Delete `IdentityMode::from_env` (`crates/hive-runtime/src/identity_verifier.rs:62-69`) and the `identity_mode` default on `SyncEngine::new` (`sync_engine.rs:148`).
+  - `gate_ingest` always uses `Relay` semantics.
+  - Keep the `GithubSigningKeys` code only behind `#[cfg(test)]`, or delete it; no app code populates the identity cache (review RC-8).
+  - If `LIGUS_IDENTITY_MODE` is set, log one warning and ignore it.
+  - **[2.x]** Reintroduce it, if wanted, as a `rules_version` policy on the config log.
+- Add a test, `fold_ignores_env`, that runs the fold with every `LIGUS_*` variable the code reads set to non-default values. It asserts identical projections.
+  - It enumerates `compat::var` call sites in hive-core and hive-runtime, through a `const FOLD_ENV_DENYLIST` reviewed by hand.
+
+#### A.2.5 S2: agent host and runtime binding is Admin (A2)
+
+- Today `AgentUpserted` and `AgentRosterUpdated` are Contributor (`authorization.rs:303-305`), so any Contributor can point an agent at a worker box (`WorkspaceAgent.host_id`, `agent.rs:31-34`) or change its `runtime_id`.
+- New rule: an `AgentUpserted` that creates an agent with a non-empty `host_id`, or that changes `host_id` or `runtime_id`, needs Admin. Under rules v2 it also needs presence.
+  - Name, role text and avatar edits stay Contributor, and only by the agent's `owner_actor_id` or Admin.
+  - The whole-list `AgentRosterUpdated` is judged as a diff against the current list, mirroring `hosts_changed` (`authorization.rs:430-440`).
+- The `WorkspaceRuntime*` events are already Admin (`authorization.rs:280-282`). Unchanged.
+
+### A.3 Agent identities (A3)
+
+#### A.3.1 Today
+
+Agent turns are stamped and signed as the host's author:
+- `begin_assistant_message` stamps `self.author` (`chat_service.rs:627-650`);
+- `ActorKind::Agent` exists (`identity.rs:14-19`) but is used only for directive reactions (`app/src/lib.rs:7595`);
+- there is no agent key.
+
+#### A.3.2 Model
+
+1. Each agent has a signing key: Ed25519, held in the **host's** key vault (B.3) under `agent:<agent_id>:<host_device_id>`.
+2. The host device certifies it with a new config-log event:
+
+    ```rust
+    AgentKeyCertified { cert: AgentKeyCertificate }
+    pub struct AgentKeyCertificate {
+        pub agent_id: Uuid,
+        pub key_id: Uuid,                    // used as envelope.signer_device_id for agent-signed events
+        pub signing_public_key: Vec<u8>,     // 32 bytes
+        pub host_device_id: Uuid,
+        pub issued_at: Timestamp,
+        pub signature: Vec<u8>,              // host device key over "ligus-agent-cert-v1\0" || agent_id || key_id || pk || host_device_id || issued_at(i64 le millis)
+    }
+    ```
+
+   The certificate is valid at a position iff:
+   - the host device is certified and not revoked;
+   - the agent's current binding (`host_id`) is that host's id;
+   - for an unbound agent (`host_id` empty), the host device belongs to the agent's `owner_actor_id`.
+
+   A binding change invalidates the old key from that position on. Agent keys need no presence, because the binding change that scopes them already required Admin and presence.
+3. **Agent-signed events.**
+   - `actor_stamp.actor = ActorIdentity { id: agent_id.to_string(), kind: Agent, account_id: None, device_id: Some(key_id) … }`.
+   - `signer_device_id = key_id`.
+   - `verdict_for` resolves `key_id` through the agent certs.
+4. **Agent tier** (`authz/agent.rs`). This is a capability allow-list, not a `WorkspaceRole` variant. That keeps `WorkspaceRole` (`identity.rs:81-86`) and its Swift mirror unchanged. It is capped by the owner's role: an agent of a Viewer can do only what a Viewer can.
+
+   | Allowed (Agent tier) | Always denied |
+   |---|---|
+   | `MessageAppended/ChunkReceived/Completed` (own message only), `MessageReactionAdded/Removed`, `ProposalUpserted` (author = self, status `Open`, no `approvals`), `ProposalRefined`, `ProposalSetOpened`, `ProposalSetAlternativeAdded`, `ScoutAssessmentPosted`, `FlowRecorded{Mark, MarkCleared, Handoff, AgentProfile (self), Recruit, RouteDecision, HumanAsk, TurnToolSummary}`, `ChatLockdownRaised`, `TurnClaimed` (own host only) | Every admin or governance kind (A.2.2 list, B.4.4 list), `ProposalVoteCast` on any proposal with a human gate or a human-floor set, `ProposalApplied`, `ProposalSetDecided/Tuned/QuorumReached/PreflightRecorded`, `ChatLockdownCleared`, `WorkflowDefinitionsUpdated`, `WorkspaceKeyRotated`, `HumanAnswered` |
+
+5. **Transition.** Until a host has certified a key for an agent, the host keeps signing agent output as today: host author, `actor.kind = Agent` in the message only.
+   - Under rules v2, events from a human device whose payload is agent-authored are judged with the Agent tier. These are messages whose `author` is an agent, and proposals with `producing_agent_id`.
+   - This closes the "agents assert as the host" gap without waiting for every host to upgrade.
+
+### A.4 Data model and wire summary (Track A)
+
+| Change | Shape | Skip rule |
+|---|---|---|
+| `ActorStamp.cfg_frontier` | `{"l":u64,"e":"uuid"}` | `Option::is_none` |
+| `ProposalApproval.diff_digest` | hex string | `Option::is_none` |
+| `WorkflowRun.creator_device_id` | uuid | `Option::is_none` |
+| `SessionEvent::WorkspaceRulesSet` | `{"kind":"workspaceRulesSet","version":2}` | new kind |
+| `SessionEvent::ProposalApplied` | `{"kind":"proposalApplied","proposalId":…,"diffDigest":…,"commit"?:…,"at":…}` | new kind |
+| `SessionEvent::AgentKeyCertified` | `{"kind":"agentKeyCertified","cert":{…}}` | new kind |
+| Invite `fk` | hex(16 bytes) | empty |
+| Envelope `raw` / `extra` | not serialized as keys; they preserve bytes | n/a |
+
+`min_role_for` (`authorization.rs:272-366`) gets entries for the new kinds:
+- `WorkspaceRulesSet`: Owner;
+- `AgentKeyCertified`: Contributor plus a self-validated cert check;
+- `ProposalApplied`: Contributor, human.
+
+### A.5 Files touched
+
+- `crates/hive-core/src/`:
+  - `crypto.rs:100-141`;
+  - `events.rs:55-322` (new kinds), `:427-470` (envelope serde), `:579-602` (proposal fold), `:913-1040` (projection);
+  - `authorization.rs`: moved into `authz/`; keep a re-export shim for one release cycle inside 2.0 only;
+  - `identity.rs:122-126`;
+  - `proposals.rs:31-41, 221-266`;
+  - `proposal_sets.rs:750-775`;
+  - `guard.rs:200-235`;
+  - `lease.rs`;
+  - `workflow.rs:169-210`;
+  - `flow/mod.rs:337-405`;
+  - `flow/zones.rs:45-100`;
+  - `agent.rs`;
+  - new `authz/*`;
+  - `sec_tests.rs`.
+- `crates/hive-core/tests/`: `proposal_sets_hoisted_authz.rs:232-290` (remove `#[ignore]`), and new `authz_props.rs`, `raw_bytes.rs`, `no_hashmap_in_signed.rs`, `golden/`.
+- `crates/hive-runtime/src/`:
+  - `sync_engine.rs:129-150, 232-262, 553-640`;
+  - `event_store.rs:100-120` (schema: add `workspace_pins`), `:200, 246, 391-410`;
+  - `envelope_verifier.rs:149-505, 540-600`;
+  - `identity_verifier.rs:62-69`;
+  - `chat_service.rs:418-470, 627-650, 1779-1800, 1965-2010`;
+  - `device_enroll.rs:157-245`: standing by workspace.
+- `crates/hive-cli/src/serve/api.rs:763` (vote role argument removed).
+- `app/src/lib.rs`: vote and implement call sites, `:5540-5662`, `:706-770` (invite `fk`).
+- `app/src/proposal_sets.rs:851`.
+
+### A.6 Migration of the owner's data
+
+- No data rewrite.
+- Existing `envelope_json` rows are re-serializations that were already verified at ingest under 2.0-rc code. They keep `raw = None` semantics on load, which is equivalent because they were produced by the same typed serializer.
+- New ingests store raw bytes.
+- `workspace_pins` is seeded on first launch from the current founder pin plus the founder's registered key.
+- Rules stay v1 until Track B's migration step sets v2.
+
+### A.7 Replay harness (shared by all tracks)
+
+- `crates/hive-core/tests/replay_owner_db.rs` (`#[ignore]`, env `LIGUS_REPLAY_DB=/path/to/hive.db`).
+- `ligus doctor refold --db <path> --json` folds every session twice:
+  - once with the `534c8d0b` engine, vendored as `legacy_fold` behind `cfg(feature = "replay")` and copied verbatim;
+  - once with the new engine.
+- It prints per-session differences: events newly denied, admitted or held; proposal status changes; set phase or winner changes; roster role changes; revoked devices.
+- Exit code 0 only if every difference is in an `--accept` file that the owner reviews.
+
+### A.8 Required tests
+
+Unit and property tests in `crates/hive-core/tests/authz_props.rs` and `raw_bytes.rs`.
+
+**Flip from ignored to passing:**
+- `a_viewers_self_declared_admin_vote_does_not_meet_an_admin_floor` (`proposal_sets_hoisted_authz.rs:239`), R1;
+- `hoisted_authorization_is_not_retroactive` (`proposal_sets_hoisted_authz.rs:272`), R2.
+
+**Property tests (review §4.2, §4.3, §4.5):**
+- `prop_verify_roundtrip_with_unknown_fields`: inject random extra fields at every JSON depth, plus unknown kinds; sign; a decoder without them verifies OK, retains the event and folds it as a no-op.
+- `upgrade_refold_recovers_unknown_events`.
+- `golden_envelopes_verify_byte_for_byte` (all 24 vectors).
+- `prop_authz_is_prefix_stable`: for any L and suffix S, `authorized(L) == authorized(L·S) ∩ L`.
+- `prop_fold_order_independent`: random delivery permutations give an identical projection.
+- `prop_vote_role_capped`: random self-declared roles never change outcomes.
+- `prop_status_derived`: under rules v2, removing every `status` from upserts leaves the fold unchanged.
+- `prop_vote_binds_digest`: a vote for digest d never counts for content d′ ≠ d (covers S1's lower-lamport forged upsert).
+- `held_until_config_frontier_arrives`; `held_when_no_config_log` (and no side effect is allowed while held).
+- `self_revoke_allowed_other_revoke_needs_admin`.
+- `prop_removal_scoped_to_workspace`.
+- `roster_ignores_unverified_batch_membership`.
+- `founder_pin_disputes_forged_founder_key`.
+- `fold_ignores_env`.
+- `lockdown_bounds_s5`; `flow_bounds_s6`; `prop_glob_linear_time` (pattern and path ≤ 4 KiB complete within a step budget).
+- `workflow_run_without_epoch_only_from_creator_device` (S4).
+- `contributor_cannot_rebind_agent_host_or_runtime` (S2).
+- `agent_tier_never_votes_on_human_gate`; `agent_tier_never_applies`; `agent_tier_cannot_emit_admin_events`; `agent_cert_invalid_after_rebind`; `agent_of_viewer_capped_at_viewer`.
+- `unknown_rules_version_makes_workspace_read_only`.
+- Keep green: every existing `sec_tests.rs` test (`:31, 91, 110, 149, 201, 232`), `proposal_sets_fold.rs`, and `signature_contexts_are_frozen`.
+
+### A.9 Acceptance criteria
+
+- The two ignored proof tests pass with `#[ignore]` removed.
+- All the property tests above pass at 4096 cases.
+- The replay harness on the owner's `hive.db` shows only owner-accepted differences.
+- `grep -n "hoist: None\|IdentityMode::from_env" crates` is empty.
+- A 2.0 build ingests an envelope produced by a test "2.1 encoder" (extra field and new kind), stores it byte-identically, and re-emits it byte-identically on re-push.
+
+### A.10 Risks
+
+- **Semantic regressions in the fold.** Mitigated by prefix-stability, order-independence and the replay diff.
+- **The legacy no-frontier rule is approximate** (review residual 2).
+- **Performance.** `ConfigTimeline` is O(config events); cache it keyed by config head (the existing `HoistedRoster::fingerprint` pattern, `authorization.rs:219`).
+- **Raw-bytes serde is hand-written.** Fuzz it with `cargo fuzz` (target `envelope_roundtrip`) for one hour before merge.
+
+---
+## Track B: keys and human presence
+
+**Size:** L in total, in three PRs: B1 = signed rotations and KeyringEngine (M), B2 = OS secret store (M), B3 = passkeys (L, with iOS and site work).
+**Depends on:** A1, and A2's `ConfigTimeline` and `RosterState.keys`. B2 can start right after A1.
+
+### B.1 P0.3: signed `WorkspaceKeyRotated` and one KeyringEngine (B1)
+
+#### B.1.1 Today
+
+- **Unsigned rotations.** `WorkspaceKeyRotation { version, sealed }` is unsigned (`crates/hive-core/src/e2ee.rs:140-146`) and sealed by anonymous ECDH (`e2ee.rs:87-128`).
+- **Version races.** It is published to the relay keyring (`relay_client.rs:641-660`; relay `server.go:731-763`) with `version = relay max + 1`, at four sites in `app/src/lib.rs`:
+
+  | Function | Line |
+  |---|---|
+  | `remove_and_revoke` | `:4592-4606` |
+  | `invite_by_handle` | `:12695-12740` |
+  | `workspace_remove_member` | `:13076-13090` |
+  | `friend_open_dm` | `:13340-13345` |
+
+- **Accept anything openable.** The desktop accepts every rotation it can open (`build_keyring`, `lib.rs:10971-10995`, used at `:11407-11452`).
+- **Epoch 0 only on CLI hosts.** Every CLI host uses epoch 0 only (`crates/hive-cli/src/main.rs:274-280`; `serve/mod.rs:988`), which is R4 and K4.
+- **K3 is now refusal, not eviction.** Relay v0.2.0 refuses rotations past its caps (relay repo 79886f7; `memory.go:435-462`, 507 `ErrKeyringFull`). It still accepts any well-sized body from any entitled writer, so junk can **fill** the caps (2000 rows/ws, `hardening.go:46-52`) and block real publishes.
+
+#### B.1.2 Wire
+
+```rust
+// config-log event, signed, Admin (+ presence under rules v2)
+WorkspaceKeyRotated { rotation: SignedRotation }
+pub struct SignedRotation {
+    pub version: u32,                 // must equal prev_version + 1
+    pub prev_version: u32,
+    pub sealed: BTreeMap<String, SealedBlob>,   // device_id -> blob (same as today)
+    pub key_commitment: String,       // hex SHA-256("ligus-workspace-key-commit-v1\0" || workspace_id || u32le(version) || key)
+}
+// config-log event, self-signed by the device it names (signer_device_id == device_id)
+DeviceKeyAgreementPublished { device_id: Uuid, ka_public: Vec<u8> }
+
+// e2ee.rs SealedEnvelope (relay body) gains:
+#[serde(default, skip_serializing_if = "Option::is_none")]
+pub kid: Option<String>,   // first 8 bytes (16 hex) of key_commitment
+```
+
+#### B.1.3 Rules
+
+- **Valid rotation.** A rotation is valid at its config position iff:
+  - the signer is Admin+ there (A2);
+  - presence is attached, under rules v2;
+  - `version == authorized_head.version + 1`;
+  - `prev_version == authorized_head.version`.
+- **Ties.** Two valid-looking rotations with the same `prev_version`: the lower canonical key wins, and the loser is ignored. The loser's issuer sees `lost_rotation` and re-rotates automatically.
+  - Events already sealed under the loser's key stay readable: readers keep every **openable** key by `(version, kid)`, and `decode` picks the key by `kid`.
+  - This closes K2, where today the AEAD failure is classified `Malformed` and skipped forever (`sync_engine.rs:250-256`).
+- **Recipients** are every non-revoked certified device of every current member with a `DeviceKeyAgreementPublished`, plus every host device (serve or worker) bound in the roster.
+  - Recipients are no longer looked up in the relay directory `ka_public`, which was the K1 outsider vector (review §7.9).
+  - `DeviceKeyAgreementPublished` is emitted once per device on first 2.0 launch, and by `ligus serve enroll` and `ligus worker` on startup. CLI hosts get their own X25519 keypair in the vault (B.2).
+- **Sealing epoch.** Sealing uses `seal_epoch = highest authorized version`. If there is none, sealing falls back as follows:
+  1. the pinned legacy epoch (B.1.5);
+  2. then epoch 0 (passphrase).
+  Sealing never uses an epoch that is merely openable.
+- **Read ring.** It contains every openable key from:
+  - (a) authorized rotations;
+  - (b) signed-rotation envelopes fetched from the relay keyring route (newcomer bootstrap; see below);
+  - (c) legacy unsigned relay rows.
+
+  Reading with an unauthorized key is harmless: you can only read what that key's holder sealed, and every event inside is still signature- and authz-checked.
+- **Newcomer bootstrap.** The issuer also POSTs the whole signed `WorkspaceKeyRotated` *envelope*, in plaintext, to the relay keyring route. That body contains only sealed blobs and public data, and it is the same `/v1` route and body type: opaque JSON. A joining device then:
+  1. opens it provisionally;
+  2. decrypts the config log;
+  3. re-validates.
+
+  A key whose rotation turns out to be unauthorized is removed from the read ring. Events decrypted only through it are re-classified on the next fold; their signatures and authz still apply.
+- **Old-epoch policy (S2 / R3).**
+  - *Reads:* old epochs stay readable forever, by design.
+  - *Writes:* an event sealed at epoch `e` is accepted only if `e ≥ seal_epoch(at the event's cfg_frontier)`. An author who had seen a rotation must have used it.
+  - *Removed members:* events from a removed member's devices are refused by authz at any epoch.
+  - The sealed epoch is recorded device-locally at ingest, in a new column `events.sealed_epoch`. It is not signed. A re-seal by an old-key holder only produces a duplicate `event_id`, and the first one wins.
+
+#### B.1.4 KeyringEngine
+
+`crates/hive-runtime/src/keyring.rs` (new):
+
+```rust
+pub struct KeyringEngine { /* read: BTreeMap<(u32, kid), [u8;32]>, seal: (u32, kid, [u8;32]) */ }
+impl KeyringEngine {
+    pub fn build(cfg: &ConfigTimeline, ka: Option<&KeyAgreementKeypair>, passphrase: Option<[u8;32]>,
+                 relay_rows: &[serde_json::Value], legacy_pins: &[LegacyPin]) -> Self;
+    pub async fn rotate(&self, svc: &mut ChatService, relay: &RelayClient, presence: Option<PresenceAssertion>) -> Result<u32>;
+}
+```
+
+- `SyncEngine::with_keyring` (`sync_engine.rs:207`) takes `KeyringEngine`; `with_key` (`:201`) stays only for the passphrase-only solo case.
+- `encode` (`:217-229`) uses `seal`; `decode` (`:232-262`) looks up `(version, kid)`, falling back to every candidate for `version` when `kid` is absent.
+- The four desktop rotation sites call `KeyringEngine::rotate`, and the `max+1` logic is deleted. `build_keyring` and `latest_openable_key` (`lib.rs:10944-10995`) are deleted.
+- `run_sync_loop` (`lib.rs:11333-11452`), `hive-cli/src/main.rs:274-280` (`sync_engine`), `serve/mod.rs:988` and the worker all build the engine the same way. That is the single keyring engine.
+
+#### B.1.5 Legacy epoch pin (migration)
+
+- On first 2.0 launch, before any sync, each device writes the legacy relay epochs it can currently open into device-local `legacy_epochs(workspace_id, version, kid)`. These become seal-eligible only until the first authorized rotation exists.
+- Rows that appear later are never pinned, so junk injected after the upgrade is never sealed under.
+- The owner's migration (Section 9) performs one signed rotation right away, which supersedes the pin.
+
+#### B.1.6 Tests
+
+- `prop_keyring_only_from_authorized_rotations`: random logs plus unsigned, foreign or Contributor-signed rotations; `seal == fold(authorized)`.
+- `prop_concurrent_rotations_converge`: any delivery order gives the same `seal` and read ring on every device, and the loser's events stay readable (K2).
+- `removed_member_cannot_inject_epoch` (K1): the relay accepts the POST; clients never seal under it.
+- `outsider_with_directory_ka_cannot_inject_epoch` (review §7.9).
+- `junk_relay_rotations_never_seal` (K3).
+- `stale_epoch_write_refused_after_frontier` (S2 / R3).
+- `legacy_pin_only_pre_upgrade_rows`.
+- Integration `cli_host_reads_and_seals_after_rotation`: serve and worker over `test_relay.rs`; rotate on the desktop, post on the desktop, read on serve; post from serve, read on the desktop at the new epoch (R4 / K4).
+- `host_parity_keyring`: the desktop engine and the serve engine over the same inputs give byte-identical rings.
+
+#### B.1.7 Relay (relay repo, release/v0.2.x line, optional but recommended)
+
+- **No `/v1` change.** Add a server-side dedupe of identical keyring bodies, and document that strict workspace scope (`scope.go:10-46`) should be on wherever the relay is shared.
+- **The K3 cap-filling DoS** is reduced to "newcomers can't bootstrap via relay". Mitigation: the invite and pairing flow can carry the current rotation envelope as a `sealed1:` pairing payload (`pairing_policy.go:35-59`), which needs no relay change.
+
+### B.2 OS secret store (B2)
+
+#### B.2.1 Today
+
+- **Seeds** are files in a 0700 `keys/` dir, mode 0600 (`crates/hive-runtime/src/identity_store.rs:38-95`; `FileKeyVault::new` at `:48`; callers `app/src/lib.rs:10669`, `hive-cli/src/main.rs:193, 217, 319`, `serve/mod.rs:275`).
+- **`settings.json`** holds every secret in the clear (`app/src/lib.rs:239-450`) and is written with plain `std::fs::write` (`:866-870`), so its mode follows the umask, usually 0644. The secrets are: `relay_access_token`, `workspace_passphrase`, `relay_issuer_key`, `api_key`, `p2p_secret`, `ka_secret`, `github_token`, `provider_keys`, `mcp_oauth`, `mcp_bearer_tokens`, and the OAuth `refresh_token`/`client_secret`.
+- **`serve.token`** is 0600 (`serve/pair.rs:39-47`).
+- Agents running as the same OS user can read all of it.
+
+#### B.2.2 Design
+
+`crates/hive-runtime/src/secret_store.rs`:
+
+```rust
+pub trait SecretStore: Send + Sync {
+    fn get(&self, id: &SecretId) -> Result<Option<Zeroizing<Vec<u8>>>>;
+    fn put(&self, id: &SecretId, value: &[u8]) -> Result<()>;
+    fn delete(&self, id: &SecretId) -> Result<()>;
+}
+pub struct SecretId { pub scope: &'static str /* "seed"|"settings"|"serve" */, pub name: String }
+```
+
+`KeyVault` (`identity_store.rs:38`) becomes a thin adapter over `SecretStore`. Implementations:
+
+| Backend | Where | Notes |
+|---|---|---|
+| `MacKeychain` | macOS desktop and CLI | `security-framework` generic password, service `ai.ligus.secrets`, account `<scope>:<name>`, `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. The item ACL trusts only the Ligus binary, so other binaries (agent CLIs) trigger a system prompt. Track C's Seatbelt profile additionally denies `file-read*` of the data dir. |
+| `SecretService` | Linux desktop | `secret-service` crate (D-Bus, the collection unlocked at login). Track C's bwrap profile does not bind the session bus, so sandboxed agents cannot reach it. |
+| `SystemdCreds` | headless Linux (serve and worker) | `systemd-creds encrypt --with-key=auto` (TPM2 when present, else the host key), files under `$CREDENTIALS_DIRECTORY` or the data dir with mode 0600. |
+| `K8sSecretFile` | chart | Read-only mounted Secret files; `put` is unsupported, and the operator provisions secrets. |
+| `File0600` | fallback | Today's behaviour, with a warning banner and `ligus doctor`. |
+| Windows Credential Manager | [2.x] | Behind the same trait. |
+
+Backend selection is a device-local setting (`secret_backend`) with OS-appropriate defaults. It never affects the fold.
+
+#### B.2.3 Settings secrets
+
+- `LiveSettings` secret fields become `SecretRef` and serialize as `{"set": true}`; they never hold the value.
+- `save_settings` writes atomically with mode 0600: temp file, `fsync`, rename. That fixes the umask issue even for non-secret settings.
+
+#### B.2.4 Migration
+
+1. On first 2.0 launch: read `settings.json`, `put` each secret, read it back, then rewrite `settings.json` without it.
+2. Move `keys/*.seed` into the store and securely delete the files after read-back.
+3. Keep no plaintext backup. The owner's manual backup (Section 9) covers rollback.
+
+#### B.2.5 Tests
+
+- `settings_file_is_0600`;
+- `no_secret_values_in_settings_json` (a property test over random secret values);
+- `vault_roundtrip_each_backend` (CI: File0600 and SystemdCreds in a container; the macOS Keychain runs on the macOS runner);
+- `migration_moves_and_verifies` (with induced read-back failure: nothing is deleted).
+
+### B.3 Workspace rules v2
+
+Rules v2 is the switch that turns on presence. Its migration step is in Section 9.
+
+### B.4 Passkeys: human presence for admin events (B3)
+
+#### B.4.1 Decision recap
+
+- Credentials are WebAuthn passkeys under RP ID `ligus.ai`. Any authenticator works: iCloud Keychain on Mac and iPhone, Windows Hello, Android/Google Password Manager, YubiKey or other FIDO2 keys, and hybrid (QR) passkeys.
+- Supported algorithms: ES256 (COSE -7) and EdDSA (COSE -8).
+- Secure Enclave-only keys are **not** required.
+- Verification is offline on every peer, inside the fold.
+
+#### B.4.2 Wire
+
+```rust
+// config log
+PasskeyRegistered { credential: PasskeyCredential }
+PasskeyRemoved { account_id: Uuid, credential_id: String }
+
+pub struct PasskeyCredential {
+    pub account_id: Uuid,
+    pub credential_id: String,       // base64url, ≤ 1023 bytes decoded
+    pub alg: i32,                    // -7 or -8
+    pub public_key: Vec<u8>,         // ES256: SEC1 uncompressed 65 bytes; EdDSA: 32 bytes (extracted from COSE at registration)
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,               // "MacBook Touch ID", "YubiKey 5C" (≤ 64 chars)
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub recovery: bool,              // an offline recovery key (B.4.6), alg -8, no WebAuthn wrapper
+    pub registered_at: Timestamp,
+}
+
+// ActorStamp gains (inside the v3 preimage, so covered by the device signature):
+#[serde(default, skip_serializing_if = "Option::is_none")]
+pub presence: Option<PresenceAssertion>,
+
+pub struct PresenceAssertion {
+    pub credential_id: String,        // base64url
+    pub authenticator_data: String,   // base64url
+    pub client_data_json: String,     // base64url (absent semantics for recovery keys: empty string)
+    pub signature: String,            // base64url (ES256: DER; EdDSA: 64 bytes)
+}
+```
+
+Size cap: the serialized `presence` is ≤ 4 KiB, or the event is denied.
+
+#### B.4.3 Challenge (the event digest)
+
+```
+challenge = SHA-256( "ligus-presence-v1\0"
+                     || workspace_id(16) || session_id(16) || event_id(16)
+                     || u64le(lamport)
+                     || u32le(len) || payload_bytes        // the exact payload JSON (raw bytes per A1)
+                     || u32le(len) || cfg_frontier_json    // "" when absent
+                     || signer_account_id(16) )
+```
+
+- The digest excludes `actor_stamp`, which is what lets the assertion live inside the stamp without circularity.
+- The stamp, and therefore the assertion, is covered by the device signature. A keyholder cannot strip or move it without breaking the signature.
+
+**Verification** (`crates/hive-core/src/presence.rs`, pure; uses `p256` (RustCrypto, ECDSA verify) and `ed25519-dalek`, which is already a dependency). Accept iff every check holds:
+
+1. `credential_id` is registered to the stamped `account_id` in `RosterState.passkeys` at the event's position.
+2. `authenticator_data[0..32] == SHA-256("ligus.ai")`.
+3. Flags: UP (0x01) **and** UV (0x04) are set.
+4. `client_data_json` parses with:
+   - `type == "webauthn.get"` (`"webauthn.create"` only on the registration event);
+   - `challenge == base64url(challenge)`;
+   - `origin ∈ RulesState.presence_origins`. The default is `["https://ligus.ai"]`; Android app origins (`android:apk-key-hash:…`) are added by a `WorkspaceRulesSet` extension field when an Android app ships.
+5. The signature verifies over `authenticator_data || SHA-256(client_data_json)`.
+
+`signCount` is **not** enforced: synced passkeys report 0, so a monotonic counter would brick them. Document this.
+
+#### B.4.4 Events that require presence (rules v2; enforced by `authz::authorize`)
+
+| Category | `SessionEvent` / record |
+|---|---|
+| Membership and roles | `MemberAdded` (except the bootstrap self-enroll, `authorization.rs:395-420`), `MemberRemoved`, `MemberRoleChanged`, `JoinApproved` |
+| Devices | `DeviceRevoked` (self-revoke included; any passkey of that account) |
+| Keys | `WorkspaceKeyRotated`, `PasskeyRegistered` (any after the account's first), `PasskeyRemoved`, `AccountKeyRotated` |
+| Guards | `DearthModeChanged`, `ChatLockdownCleared` |
+| Zones | `FlowRecorded{Zone, ZoneRemoved, Beacon}` (the governance set, `flow/mod.rs:337-342`) |
+| Workflows | `WorkflowDefinitionsUpdated`; an approval vote on a proposal that carries `workflow` |
+| Agents and runtimes | `AgentUpserted`/`AgentRosterUpdated` that change `host_id` or `runtime_id` (A.2.5); `AgentRemoved`; `WorkspaceRuntimesUpdated/Upserted/Removed`; `WorkspaceHost*` that touch a host owned by someone else |
+| Gates and quorum | `ProposalSetTuned`; `ProposalUpserted` that **lowers** `required_approvals` or `approval_role_floor` relative to the in-force content; `WorkspaceRulesSet` |
+| Human-gated decisions | `ProposalVoteCast` on any proposal where `human_gate_reason` (`guard.rs:254`) applies, or whose set floor is human; `ProposalSetDecided` by a human; `ProposalApplied` of a human-gated proposal |
+
+The table is code, a single `fn requires_presence(&SessionEvent, &RosterState, &ChatSession) -> bool` in `authz/rules.rs`, with a table test that enumerates every `SessionEvent` variant through an exhaustive `match`.
+
+- **Missing presence.** An event that requires presence and lacks a valid assertion is **denied**. It is not held, because it can never become valid.
+- **Agents** can never satisfy presence: the Agent tier is denied first.
+
+#### B.4.5 Registration and UX
+
+**First passkey.**
+- `PasskeyRegistered` signed by the member's certified device.
+- `client_data_json.type == "webauthn.create"`; the challenge is the B.4.3 digest of the registration event itself.
+- The verifier parses `attestationObject` with `fmt: none` and checks the COSE key.
+- The first registration for an account needs no prior presence (TOFU, bound to the device signature). Every later one needs presence from an existing credential of the same account.
+
+**Desktop: browser hand-off (all OSes, one code path).**
+1. The desktop starts a loopback listener on `127.0.0.1:<random>` with a one-time nonce.
+2. It opens `https://ligus.ai/presence#c=<challenge>&p=<port>&n=<nonce>&op=get|create&cred=<allowCredentials>`.
+3. The static page (served from the ligus.ai site repo, strict CSP, no third-party script) calls `navigator.credentials.get/create` with `rpId: "ligus.ai"` and `userVerification: "required"`.
+4. It POSTs the result to the loopback.
+5. The desktop checks that the returned challenge equals its own before attaching the assertion.
+
+This works on Windows (Hello), Linux (security keys and hybrid) and macOS.
+
+**macOS native [2.0 if time allows, else 2.0.x-follow].** `ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: "ligus.ai")` through `objc2` from Tauri. This needs:
+- the entitlement `com.apple.developer.associated-domains = ["webcredentials:ligus.ai"]` on `ai.ligus.desktop` (`app/tauri.conf.json:6`);
+- the app signed with the team id.
+
+**iPhone.** `ASAuthorizationPlatformPublicKeyCredentialProvider` with `ASAuthorizationSecurityKeyPublicKeyCredentialProvider` for YubiKey NFC or Lightning.
+- iOS builds `clientDataJSON` itself with origin `https://ligus.ai`.
+- New: a presence authorizer in the iOS app, plus entitlement `webcredentials:ligus.ai` on `<ios-bundle-id>` and `<ios-lab-bundle-id>` (today no iOS entitlement file has associated domains).
+
+**Site.** `https://ligus.ai/.well-known/apple-app-site-association`:
+
+```json
+{"webcredentials":{"apps":["<TEAM>.<ios-bundle-id>","<TEAM>.<ios-lab-bundle-id>","<TEAM>.ai.ligus.desktop"]}}
+```
+
+- The site also serves `/presence`.
+- `/.well-known/assetlinks.json` is [2.x], with the Android app.
+- **The relay needs nothing.** It has no `.well-known` routes today and should not gain them.
+
+**Serve and phone flow.** This is also the real fix for P0.6; C.7 is the interim. New serve endpoints:
+- `POST v1/presence/prepare {action, target}` → `{prepare_id, challenge, preview}`. The preview is content for the human: kind, chat title, proposal title, `diff_digest`, config-impact badges.
+- `POST v1/presence/commit {prepare_id, assertion}`. serve builds the envelope with the digest fields frozen at prepare time, attaches the assertion inside the stamp, signs with its device key and appends.
+
+The counted human is the **account that owns the credential**, which must equal the vote's `actor_id`. The vote's signing device is serve (delegated). So a phone vote counts as Ana's only if Ana's passkey signed it, even though serve signs the envelope.
+
+**UI.**
+- A "Confirm with passkey" sheet shows exactly what is being authorized: kind, target, and digest short id. One gesture per event.
+- Batched governance (for example, removing a member plus rotating the key) shows one sheet per event, combined into a single browser hand-off page that runs sequential `get()` calls.
+- The page offers "register another passkey" until the account has at least two.
+
+#### B.4.6 Recovery
+
+- **Several credentials per account.** The UI requires at least 2 before an account can hold Admin under rules v2; it warns, it does not block the fold.
+- **Recovery key.** An offline Ed25519 key, shown once as 24 BIP-39 words and registered as `PasskeyCredential { recovery: true, alg: -8 }`.
+  - A recovery assertion has an empty `authenticator_data` and `client_data_json`, and `signature = Ed25519(sk, "ligus-recovery-v1\0" || challenge)`.
+  - It is accepted wherever presence is.
+- **Lost all credentials.** Another Owner or Admin with presence can `PasskeyRemoved` and authorize a new first registration for that account, through a `MemberRoleChanged` re-grant.
+- **Sole Owner who lost everything.** Restore from the recovery key. Without it, presence-gated governance is impossible by design. Document this prominently, and require the recovery key at the moment rules v2 is enabled.
+
+#### B.4.7 Tests
+
+- `presence_vectors_es256` and `presence_vectors_eddsa`: golden assertions captured from Safari, Chrome and a YubiKey, stored under `crates/hive-core/tests/golden/presence/`.
+- `prop_presence_bound_to_event`: changing any digest input invalidates the assertion.
+- Reject paths: `presence_rejects_wrong_rpid`, `presence_requires_uv`, `presence_rejects_unregistered_credential`, `presence_rejects_other_accounts_credential`.
+- `requires_presence_exhaustive` (table test over every variant).
+- `rules_v1_needs_no_presence_v2_does` (prefix-stable across the `WorkspaceRulesSet`).
+- `phone_presence_vote_counts_as_credential_owner_not_serve`.
+- `recovery_key_assertion_accepted`.
+- `second_passkey_needs_existing_presence`.
+- iOS: `PresenceAuthorizerTests` (challenge encoding, origin), plus a UI test on the demo host.
+
+#### B.4.8 Risks
+
+- **Compromised `ligus.ai/presence` page.** It cannot mint device signatures, but it could trick a user into signing a different challenge during a legitimate gesture. Mitigations:
+  - the desktop compares challenges;
+  - the static page has SRI, CSP and a published hash;
+  - native macOS and iOS paths bypass the page.
+- **Lockout** for a sole Owner without a recovery key.
+- **Platform quirks.** WebAuthn in Tauri webviews is unreliable, which is why the browser hand-off exists. Hybrid flows need Bluetooth.
+- **Apple review** for associated domains; it needs the domain live first.
+- **Policy timing.** Turning rules v2 on is an owner action. Nothing forces it on existing workspaces; new workspaces default to v2 when the founder registers a passkey during creation.
+
+---
+## Track C: host, sandbox and agents
+
+**Size:** L in total, in four PRs: C1 = quick fixes (S), C2 = TurnExecutor seam plus the process sandboxes and egress proxy (L), C3 = telemetry split P0.5 (S-M), C4 = optional executors [2.0.x-follow].
+**Depends on:** C1 and C3 can start immediately after A1. C2 is independent of A and B. C.7's final form uses B.4.
+
+### C.1 Goal
+
+No agent process can:
+- read Ligus keys, settings, `serve.token` or the data dir;
+- write outside its worktree;
+- reach the network except through a per-chat allow-list;
+- get a provider key it was not explicitly given.
+
+On top of that:
+- the same enforcement holds on the desktop, serve and the worker;
+- repo-supplied commands never run without a device-local trust decision;
+- phone and serve approvals count as human only when a human proved presence;
+- telemetry leaves the signed log.
+
+The sandbox is one control among several. The others are authz (A), presence (B), the MCP role gate and the human gate.
+
+### C.2 C1: quick fixes (land first; each is one small commit)
+
+1. **`settings.json` 0600, written atomically.** `app/src/lib.rs:866-870` uses plain `fs::write`. B2 also touches this; land it here first and B2 rebases on it.
+2. **cwd and HOME.**
+   - The worker falls back to `current_dir()` when a turn has no worktree (`crates/hive-cli/src/worker.rs` ~`:500`). It must use a fresh per-turn scratch dir under `$TMPDIR/ligus-turn-<id>`, never the data dir or `$HOME`.
+   - The desktop already uses the worktree or root (`lib.rs:7987-7993`). Assert that `cwd ∉ {data_dir, $HOME, /}` at every spawn site and refuse otherwise.
+3. **Env allow-list instead of scrub.**
+   - Today `scrub_ligus_secrets` removes only `LIGUS_*`/`HIVE_*` secret-named vars (`crates/hive-core/src/process_util.rs:55-77`). Spawn sites: `claude_code.rs:239-256`, `cli_agent.rs:189-202`, `codex.rs:70-83`, `subprocess.rs:91-105`, `mcp.rs:410, 461`, `proposal_preflight.rs:171`.
+   - Provider keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, …) still pass.
+   - Replace this with `process_util::child_env(runtime, plan) -> Vec<(OsString, OsString)>` and `env_clear()` at every site. `builtin_tools.rs:913-915` is already the model.
+
+   | Env var | When it passes |
+   |---|---|
+   | `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TERM`, `TMPDIR` | Always |
+   | `SSL_CERT_FILE`, `SSL_CERT_DIR`, `NODE_EXTRA_CA_CERTS` | Always |
+   | `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` | Linux |
+   | `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_*` config dirs | If set by the user |
+   | `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | Set by Ligus to the egress proxy |
+   | `GIT_AUTHOR_*`, `GIT_COMMITTER_*` | `lib.rs:7872` |
+   | `LIGUS_TURN_CRED`, `LIGUS_MCP_SOCKET` | Track D |
+   | The **one** provider key the runtime needs | Only when the user configured that runtime with an API key in Ligus. It is never inherited from the parent env. |
+
+   - `api_key_for` (`lib.rs:2811`) stops reading the parent env for spawned children.
+   - The parent env is still honored for Ligus's *own* in-process API calls.
+4. **Redact Ligus secrets.** Turn transcripts, tool outputs, proposal bodies and facts pass through `redact_ligus_secrets(text, &SecretStore)`. It replaces exact matches of every value in the secret store with `[ligus-secret]`, using Aho-Corasick over the values, which are loaded once. This is in addition to the existing `redact_secrets` heuristics (`hive-core/src/sandbox.rs:94`).
+5. **H1 author gate for CLI runtimes everywhere.**
+   - Today the author-role gate exists in the worker (`worker.rs:411-441`, `gate_subprocess_tools` `:118-130`).
+   - `ligus agent` gates only the tool loop and runs CLI runtimes with unchanged args (`crates/hive-cli/src/main.rs:825-838`, `reply.rs:81-90`).
+   - The desktop has no author gate at all.
+   - Move the gate into `crates/hive-runtime/src/author_gate.rs`: `fn gate(runtime, author_role_at_position, min_role) -> GatePlan {Full, ReadOnly, Refuse}`.
+     - The author role is the role **as of the triggering message's position** (A2 `ConfigTimeline`).
+     - Call it from `run_prepared_turn_inner` (`lib.rs:7798`), `worker.rs:411`, `main.rs:825` and serve.
+     - The plan feeds `sandbox::enforce` (`hive-runtime/src/sandbox.rs:40`).
+6. **S3: default floor.**
+   - `parse_min_role` defaults to Contributor (`crates/hive-cli/src/reply.rs:43-50`).
+   - New default: **Admin** when the worker's permission tier is write-capable (`LIGUS_WORKER_PERMISSION_MODE` ∈ {acceptEdits, runCommands, bypassPermissions}, `worker.rs:84-110`), and Contributor for read-only.
+   - An explicit `LIGUS_MCP_MIN_ROLE` lower than the default logs a warning at startup.
+7. **`protected_dirs` enforced.**
+   - Delete the duplicate `WRITE_PROTECTED_DIRS` (`builtin_tools.rs:433-437`) and read `envelope.protected_dirs` (`hive-core/src/sandbox.rs:91, 103`). Root files `ligus.config.toml`, `hive.config.toml` and `.envrc` stay protected.
+   - The sandbox profiles (C.4) mount these read-only inside the worktree.
+   - Add `prop_every_envelope_field_consumed`: an exhaustive destructure of `SandboxEnvelope` in `EnvelopeEnforcer`, so a new field fails to compile until it is handled.
+8. **Fix `clear_lockdown`.** `my_standing` (`crates/hive-cli/src/serve/api.rs:646`) checks only `is_human_member`, but its doc says Contributor+. Check the role too.
+
+### C.3 S1: trust this workspace
+
+**Today:**
+- `load_workspace_catalogs` (`app/src/lib.rs:2106-2145`) loads `runtimes` and stdio `mcp_servers{command,args}` from the repo's `ligus.config.toml`, `.ligus/runtimes.json` and `.ligus/mcp-servers.json`.
+- It runs on every workspace open or bind (`:2904`, callers `:4744, 4748, 4845, 4859, 4927, 6078, 6124`).
+- Stdio MCP commands spawn on use (`:2851`).
+- The pre-flight command comes from the env or `git config ligus.preflightTest`, which can be set in the repo's `.git/config` (`crates/hive-runtime/src/proposal_preflight.rs:26-51`), and runs `sh -c` (`:151-167`).
+- There is no trust prompt.
+
+**Design:**
+- A device-local table `workspace_trust(root_id TEXT, item_kind TEXT, item_digest TEXT, enabled_at, enabled_by_device)` in the data-dir database. It is never synced and never in the repo.
+  - `root_id = SHA-256(canonical root path || repo first-commit id)`.
+  - `item_digest = SHA-256(kind || command || args_json || env_names_json || url)`.
+- The repo catalog is loaded **inert**. An item is usable only if its digest is enabled on this device.
+  - A changed command means a new digest, which means it is disabled again.
+- The pre-flight command is read only from Ligus settings or env, **never** from repo git config. Remove the `git config ligus.preflightTest` source, or treat it as a repo item that needs trust.
+- **UI.** Banner: "This workspace wants to run N commands (MCP servers, runtimes). Review". The sheet lists each exact command line and its source file. Enable is per item, and "Trust this workspace" enables all current items.
+- **Headless.** `ligus trust list|enable <digest>|enable-all` (serve and worker).
+
+**Tests:**
+- `untrusted_repo_mcp_never_spawns`;
+- `changed_command_requires_retrust`;
+- `preflight_ignores_repo_git_config`.
+
+### C.4 C2: TurnExecutor seam and process sandboxes
+
+#### C.4.1 Seam (minimal 2.0 form)
+
+Review §3.3 slimmed to what 2.0 needs; the full `TurnBundle` executor is P3 in 2.x.
+
+```rust
+// crates/hive-runtime/src/executor/mod.rs
+pub struct EnforcementPlan {            // a pure function of (SandboxEnvelope, runtime kind, author GatePlan)
+    pub worktree: PathBuf, pub read_only: Vec<PathBuf>, pub deny_read: Vec<PathBuf>,
+    pub write_extra: Vec<PathBuf>,      // runtime state dirs: ~/.claude, ~/.codex, ~/.copilot, antigravity dir; /tmp scratch
+    pub egress: EgressPlan,             // Proxy { allow: Vec<HostPort> } | Closed
+    pub env: Vec<(OsString, OsString)>, pub args: Vec<String>, pub mcp: Vec<McpServerSpec>,
+}
+pub trait TurnExecutor: Send + Sync {
+    fn spawn(&self, cmd: std::process::Command, plan: &EnforcementPlan) -> io::Result<tokio::process::Child>;
+    fn kind(&self) -> ExecutorKind;   // Unconfined | Seatbelt | Bwrap | Gvisor | AppleContainer | K8sJob
+}
+pub fn default_executor() -> Arc<dyn TurnExecutor>;   // macOS: Seatbelt; Linux: Bwrap (falls back to Unconfined + loud banner + refuse write tiers)
+```
+
+- `EnvelopeEnforcer::plan(envelope, runtime, gate)` replaces the two compositions in `app/src/guards.rs:789` and `worker.rs:447-465`.
+- **Every** child goes through `executor.spawn`: CLI agents, stdio MCP servers, `run_command`/`run_shell` (`builtin_tools.rs:899-947`), and pre-flight.
+- `deny_read` always includes:
+  - the Ligus data dir (Tauri `app_data_dir`, `lib.rs:10560`, and `~/.ligus`, `compat.rs:400-413`);
+  - `serve.token`;
+  - the secret-store file backends;
+  - `~/.ssh`, `~/.gnupg` and `~/.aws`, unless the user allows them per runtime.
+
+#### C.4.2 macOS: Seatbelt (default)
+
+- `sandbox-exec -f <generated profile>`. The profile is generated per turn into the 0700 data tmp dir and is never in the repo.
+- Profile skeleton:
+
+  ```scheme
+  (version 1)(allow default)
+  (deny file-write*)
+  (allow file-write* (subpath "<worktree>") (subpath "<turn tmp>") <runtime state dirs…>)
+  (deny file-read* (subpath "<data dir>") (subpath "~/.ssh") …)
+  (deny file-write* (subpath "<worktree>/.git") <protected dirs…>)
+  (deny network*)
+  (allow network-outbound (remote ip "localhost:<proxy port>"))
+  (allow network-outbound (remote unix-socket (path-literal "<mcp socket>")))
+  ```
+
+- `sandbox-exec` is deprecated but still shipped, and Claude Code and Codex use the same mechanism. Pin the behaviour with an integration test on the macOS runner.
+- **Keychain.** Agent CLIs keep Keychain mach access, because Claude Code's subscription token lives there. Ligus's own items are protected by item ACL (B2), not by the profile. Documented.
+
+#### C.4.3 Linux: bubblewrap + Landlock + seccomp (default)
+
+- `bwrap`:
+
+  ```
+  --ro-bind / / --dev /dev --proc /proc
+  --tmpfs <data dir> --tmpfs ~/.ssh …
+  --bind <worktree> <worktree> --ro-bind <worktree>/.git …
+  --bind <turn tmp> /tmp
+  --bind <runtime state dirs>
+  --unshare-pid --unshare-ipc --unshare-uts --die-with-parent --new-session
+  ```
+
+  The D-Bus session bus is not bound (`$XDG_RUNTIME_DIR/bus` is under a tmpfs), so Secret Service is unreachable.
+- **Landlock**, applied by a tiny pre-exec helper `ligus sandbox-exec-linux` (same binary, subcommand):
+  - fs write rights only on the worktree, tmp and the state dirs;
+  - ABI ≥ 4: TCP connect only to the proxy port.
+  - If ABI < 4, add `--unshare-net`, bind-mount a unix socket, and run an in-namespace TCP→unix forwarder in the helper.
+- **seccomp** (via `seccompiler`): deny `ptrace`, `process_vm_*`, `mount`, `umount2`, `pivot_root`, `bpf`, `perf_event_open`, `keyctl`, `add_key`, `request_key`, `kexec_*`, `init_module`, `finit_module`, and `unshare`/`clone` with `CLONE_NEWUSER`.
+- **Unavailable sandbox.** If `bwrap` is missing or user namespaces are disabled, the executor is `Unconfined`, write-capable tiers are refused (as with `record_egress_refusal`, `app/src/guards.rs:804`), and the UI shows a persistent banner.
+
+#### C.4.4 Egress proxy
+
+- An in-host `ligus-egress` task: an HTTP CONNECT proxy on `127.0.0.1:<random>`, one listener per running turn. Its auth is the port, plus a random `Proxy-Authorization` token in the child env.
+- **Allow-list per chat.** It is derived from the plan: the runtime's provider endpoints, from a built-in table per runtime, plus the hosts of every MCP server allowed for that chat.
+
+  | Runtime | Endpoints |
+  |---|---|
+  | Claude Code | `api.anthropic.com`, `console.anthropic.com`, `claude.ai` (OAuth refresh) |
+  | Codex | `api.openai.com`, `chatgpt.com`, `auth.openai.com` |
+  | Copilot | `api.githubcopilot.com`, `github.com`, `api.github.com` |
+  | Antigravity | Google endpoints from `agy` docs (verify) |
+  | API runtimes | The configured base URL |
+
+- **Matching.** Exact host and port (443 by default). The CONNECT target and the TLS SNI peeked from the ClientHello must both match. No TLS interception.
+- **Denials** emit a content-free fact and a system note: the existing `record_egress_refusal` path.
+- **Envelope mapping.** Dearth gives `AllowList`, which maps to the proxy allow-list. Lockdown gives `Closed`, which means no proxy and no network (`hive-core/src/sandbox.rs:145-160`).
+- **Runtimes that ignore `HTTPS_PROXY` fail closed.** The network is denied at the OS layer anyway. Verify for each of the four CLIs in the D.3 matrix.
+
+#### C.4.5 Optional executors [2.0.x-follow; behind settings]
+
+- `Gvisor` (Linux strong mode): `runsc --network=none do …` with the same mounts and the proxy socket bound in.
+- `AppleContainer` (macOS 26+ local VM): Apple's `container` CLI, with the worktree bind-mounted and the proxy over vsock or a published port.
+- `K8sJob`: the existing chart template `deploy/helm/ligus/templates/sandbox.yaml:1-18` and `_helpers.tpl:220-262` (gVisor or Kata `runtimeClassName`, agent-sandbox). This needs `exec-turn` and `TurnBundle` (review P3/P7) and stays [2.x].
+
+#### C.4.6 Tests
+
+- `prop_enforcement_plan_host_independent`: desktop, worker and serve adapters give the same plan.
+- `prop_every_envelope_field_consumed`.
+- Integration, per OS runner. Each test spawns `sh -c` under the plan and asserts the operation fails:
+  - `sandbox_denies_data_dir_read`;
+  - `sandbox_denies_write_outside_worktree`;
+  - `sandbox_denies_git_dir_write`;
+  - `sandbox_denies_direct_egress`;
+  - `sandbox_allows_proxy_allowlisted_host`;
+  - `proxy_rejects_sni_mismatch`;
+  - `child_env_has_no_parent_provider_keys`;
+  - `serve_token_unreadable_by_agent`.
+- `unconfined_refuses_write_tiers`.
+
+### C.5 Serve-box-specific closure
+
+**Problem.** On a serve box, agents ran as the same user and could read `serve.token`, then call `v1/proposals/{id}/approve` and vote as the owner (`serve/api.rs:336-346, 763-796`).
+
+**Closure has three layers:**
+1. The sandbox denies the data dir, including `serve.token` (C.4).
+2. serve rejects loopback-originated phone API calls from agent process trees. The API binds a separate listener, or requires the tunnel or bearer token *plus* a non-agent peer: on Linux, `SO_PEERCRED` uid check against the agent sandbox uid where distinct.
+3. P0.6 (C.7): bearer-token approvals don't count as human without presence.
+
+### C.6 C3: P0.5 telemetry split
+
+**Facts:**
+- `FlowRecord` variants are at `crates/hive-core/src/flow/mod.rs:263-294`.
+- Emitters:
+
+  | Record | Emitted at |
+  |---|---|
+  | RouteDecision | `lib.rs:8523`; `flow.rs:410` |
+  | TurnTagged | `flow.rs:1141` |
+  | Progress | `flow.rs:1151` |
+  | EdgeWait | `flow.rs:950, 1340` |
+  | Touch | `flow.rs:1533` |
+  | RouteStop | `flow.rs:1705, 1707, 2156` |
+
+- **RouteDecision must stay synced.** Other devices follow the first decision per trigger (`flow/mod.rs:353`, `flow.rs:338`). That resolves review residual 8.
+- **TurnTagged is read by scoring** (`flow/score.rs:82, 154, 183`; `board.rs:91`).
+
+**Design:**
+- Stay in the log: `Zone`, `ZoneRemoved`, `Mark`, `MarkCleared`, `Handoff`, `Beacon`, `AgentProfile`, `Recruit`, `RouteDecision`, and the new `HumanAsk`, `HumanAnswered`, `TurnToolSummary` (Track D).
+- Stop emitting to the log: `TurnTagged`, `Touch`, `Progress`, `EdgeWait`, `RouteStop`.
+  - These become **facts**, device-local rows in the existing `guard_signals` table (`event_store.rs:150-159, 635-660`). The table is renamed internally to `facts`; add a SQL view `guard_signals` for compatibility.
+  - Existing logged records keep folding (no-op safe), so history still shows.
+- **Cross-device scoring** uses a new synced, bounded `FlowRecord::AgentOutcomeSummary { agent_key, window_start: Timestamp (UTC day), turns: u32, accepted: u32, reverted: u32, rejected: u32, task_class_counts: BTreeMap<String,u32> (≤ 16 keys) }`.
+  - It is emitted at most once per agent, per UTC day, per host device. `score.rs` reads the summaries and local facts.
+  - The fold caps it at 400 per agent.
+- **Export.** The schema is `ligus.facts.v1`: ids, enums, numbers and timestamps only. OTel GenAI attribute names are given in review §4.7. `ligus facts export --jsonl [--since]`. OTLP export is [2.x] (review P8).
+
+**Tests:**
+- `facts_are_content_free`: a property test where random turns with secret-looking content never put content bytes in facts.
+- `facts_schema_golden`.
+- `measurement_records_not_emitted_to_log`.
+- `scores_equal_from_summaries_and_from_legacy_tagged` on a fixture.
+- `route_decision_still_synced`.
+
+### C.7 P0.6: phone and serve approvals (interim, then final)
+
+**Facts:**
+- `vote()` signs as `svc.author()`, which is the owner after `act_as_owner_device` (`serve/api.rs:763`; `chat_service.rs:108-113`; called at `serve/mod.rs:558, 859`).
+- `PhoneRecord` has no owner flag (`serve/tunnel/phones.rs:18`).
+- iOS approves with plain bearer calls (the iOS app's API client).
+
+**Interim (C1, lands before B3):**
+- When `svc.is_delegated()`, serve **refuses** these from a phone peer or bearer: `approve`, `reject`, set votes, `lockdown/clear`, and `apply_on_this_host` (`api.rs:997`). The 403 body says `{"error":"presence_required","hint":"approve on your laptop, or confirm with a passkey after updating"}`.
+- One fact with `pid` per refusal.
+- `PhoneRecord` gains `owner_phone: bool` (skip if false), settable only from the desktop owner over a signed pairing confirmation. Owner phones are allowed during the interim, and their votes are stamped `delegated` in a fact.
+- Because the vote is still signed as the owner, the review's rule applies: votes from a delegated host's own identity never count toward a **human gate** unless presence is attached (B.4). Encoded in A2 as `delegated_host_vote_not_counted_for_human_gate`.
+
+**Final (B3):** the phone sends `presence/prepare` and `presence/commit` (B.4.5), and a vote counts as the credential owner's.
+
+**iOS work (iOS app repo):**
+- `APIClient` adds `presencePrepare` and `presenceCommit`.
+- Review and lockdown "Approve" or "Clear" call `PresenceAuthorizer` first.
+- A 403 `presence_required` shows "Update Ligus on your host" for old hosts.
+
+**Tests:**
+- `phone_vote_refused_on_delegated_host_without_presence`;
+- `phone_vote_attribution` (serve integration);
+- `delegated_host_vote_not_counted_for_human_gate` (fold property);
+- `lockdown_clear_requires_contributor_human`.
+
+### C.8 Files touched (Track C)
+
+- `crates/hive-core/src/process_util.rs:24-90`; `crates/hive-core/src/sandbox.rs`.
+- `crates/hive-runtime/src/`:
+  - `sandbox.rs:40-100`;
+  - `provider/{claude_code.rs:212-260, codex.rs:41-83, cli_agent.rs:179-202, subprocess.rs:69-105, antigravity.rs:40, copilot.rs:42}`;
+  - `mcp.rs:400-470`;
+  - `builtin_tools.rs:430-450, 899-947`;
+  - `proposal_preflight.rs:20-170`;
+  - new `executor/`, `egress.rs`, `author_gate.rs`.
+- `crates/hive-cli/src/`:
+  - `worker.rs:84-130, 411-500`;
+  - `reply.rs:38-90`;
+  - `main.rs:825-838`;
+  - `serve/api.rs:336-383, 646-800, 997`;
+  - `serve/tunnel/phones.rs:18`;
+  - new `trust` subcommand.
+- `app/src/`:
+  - `lib.rs:866, 2106-2145, 2811, 2851, 7798-8110, 10560`;
+  - `guards.rs:729-810`;
+  - `flow.rs` (emitters above).
+- `crates/hive-core/src/flow/{mod.rs, score.rs, board.rs}`.
+- `crates/hive-runtime/src/event_store.rs:150, 635`.
+- iOS: the app's API client and Flow model.
+
+### C.9 Acceptance criteria
+
+- All C tests pass on macOS and Linux runners.
+- On the owner's Mac, from a Claude Code turn, every one of these fails:
+  - `cat ~/Library/Application\ Support/ai.ligus.desktop/settings.json`;
+  - `curl https://example.com`;
+  - `echo x > ~/x`.
+- The same turn still answers using the subscription login.
+- On a Linux serve box, the same checks pass under bwrap.
+
+### C.10 Risks
+
+- **CLI breakage under the sandbox** (state dirs, node caches, update checks). Mitigated by per-runtime `write_extra` and the D.3 live matrix.
+- **`sandbox-exec` deprecation.**
+- **Landlock ABI spread** across distros.
+- **Proxy-unaware binaries.**
+- **Same-uid limits.** The sandbox is not a boundary against kernel bugs. gVisor or VM executors are the strong mode.
+
+---
+## Track D: agent interface
+
+**Size:** L in total, in four PRs: D1 = ACP driver + verification (M), D2 = Ligus MCP server + per-turn credential + budgets (L), D3 = hand-off auto-start, ask-the-human, shared `finalize_reply`, directive fallback (M), D4 = review UI badges and the exact Implement instruction (M).
+**Depends on:**
+- D1 needs nothing.
+- D2 can start on the host identity behind an `AgentSigner` trait and switch to agent keys when A3 lands.
+- D2 and D3 need C2's executor for the socket relay.
+- D4 needs A2's `ProposalApplied` and the digest.
+
+### D.1 Goal
+
+1. Drive Copilot CLI, Antigravity, Claude Code and Codex through ACP, keeping the current adapters as fallback.
+2. Give every agent typed Ligus tools over MCP instead of `[[…]]` directives:
+   - signed with the agent's own identity;
+   - capped;
+   - budgeted;
+   - audited;
+   - "ask the human" pauses the turn;
+   - hand-offs start the receiver immediately.
+3. Make Review show what each proposal is and exactly what Implement will run.
+
+### D.2 D1: ACP driver
+
+#### D.2.1 Facts
+
+There is no ACP code today (a whole-word grep for "acp" finds nothing). The current adapters are:
+
+| Runtime | Invocation | Location |
+|---|---|---|
+| Claude Code | `claude -p --output-format stream-json …` | `crates/hive-runtime/src/provider/claude_code.rs:212-260` |
+| Codex | `codex exec --json --sandbox workspace-write …` | `codex.rs:41-75` |
+| Copilot | `copilot --output-format json --stream on --no-ask-user -p …` | `copilot.rs:42-60` |
+| Antigravity | `agy --output-format stream-json --print …` | `antigravity.rs:40-55` |
+
+Routing is `dispatch.rs:303-581`. Every CLI runs non-interactively; there is no permission round-trip.
+
+#### D.2.2 Design
+
+`crates/hive-runtime/src/provider/acp.rs` is a JSON-RPC 2.0 client over the child's stdio, spawned through C2's `TurnExecutor`.
+
+**Client to agent:**
+- `initialize { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: false } }`;
+- `authenticate` (only if the agent's `authMethods` require it and a method is non-interactive);
+- `session/new { cwd: <worktree>, mcpServers: [<Ligus MCP>, …allowed servers] }`;
+- `session/prompt { sessionId, prompt: [{type:"text", text}] }`;
+- `session/cancel`.
+
+**Agent to client:**
+
+| Message | Handling |
+|---|---|
+| `session/update` `agent_message_chunk` | Text delta (`MessageChunkReceived`) |
+| `session/update` `tool_call` / `tool_call_update` | Activity (the same channel as `claude_code.rs:151` `extract_activity`) |
+| `session/update` `plan` | Activity |
+| `session/request_permission` | Mapped by the permission tier: auto-allow, auto-deny, or **escalate to ask-the-human** (D.4.2) |
+| `fs/read_text_file`, `fs/write_text_file` | Served by Ligus with worktree-only and protected-dir checks, from the same plan as C.4 |
+
+**Commands.** Pin versions in a built-in table and detect them in `cli_detect.rs:252`.
+
+| Runtime | ACP command | Notes |
+|---|---|---|
+| Copilot CLI | `copilot --acp` (verify flag name against the installed version) | native |
+| Antigravity | `agy acp` (requires ≥ 1.5.0; `cli_detect.rs:219` parses models; add version parse) | native |
+| Claude Code | `npx -y @agentclientprotocol/claude-agent-acp@<pinned>` (confirm the package name against the agentclientprotocol GitHub org; the older name is `@zed-industries/claude-code-acp`) | Claude Agent SDK |
+| Codex | `codex-acp` (pinned release binary) | Codex App Server |
+
+**Runtime config.**
+- `RuntimeTarget` and `WorkspaceRuntime` gain `#[serde(default, skip_serializing_if = "is_auto")] driver: Driver { Auto, Acp, Legacy }`.
+- `Auto` means ACP when detected and `initialize` succeeds, otherwise Legacy. A per-turn ACP init failure falls back to Legacy once and records a fact.
+- `ModelProviderKind` (`crates/hive-core/src/runtime.rs:9-37`) is unchanged.
+
+**Restricted envelopes.**
+- Under dearth or lockdown, Legacy Claude passes `--setting-sources user` plus `disableAllHooks` (`hive-runtime/src/sandbox.rs:47-65`).
+- For ACP, the Claude adapter must get the equivalent: SDK `settingSources: []`/`["user"]`, hooks disabled, and `strictMcpConfig`. If the adapter cannot be configured that way (verify `_meta` or env support), restricted turns use Legacy.
+
+#### D.2.3 Subscription-auth verification (required before ACP is the default for Claude Code)
+
+Official docs as of 2026-11: the Agent SDK uses the CLI's credential precedence:
+1. cloud-provider env;
+2. `ANTHROPIC_AUTH_TOKEN`;
+3. `ANTHROPIC_API_KEY`;
+4. `apiKeyHelper`;
+5. `CLAUDE_CODE_OAUTH_TOKEN`;
+6. profile;
+7. `/login` subscription OAuth, from the Keychain on macOS and `~/.claude/.credentials.json` elsewhere.
+
+**The policy question is the blocker.** The Agent SDK overview says: *"Unless previously approved, Anthropic does not allow third party developers to offer claude.ai login or rate limits for their products, including agents built on the Claude Agent SDK."* The docs do not say whether driving the user's *own* locally installed `claude` login through the SDK-based adapter counts as "offering" it.
+
+**Verification steps** (owner-run, recorded in `docs/runtimes/claude-acp-verification.md`):
+
+- **V1 (technical).** In a clean shell with all auth env vars unset, and only `claude /login` (Pro or Max) done:
+  1. start the adapter through Ligus;
+  2. `initialize` reports its auth methods;
+  3. `session/prompt` returns text;
+  4. the turn's result or usage metadata shows subscription use (the rate-limit event `extract_rate_limit` at `claude_code.rs:101`, or the SDK's equivalent), not an API key.
+  5. Repeat with `ANTHROPIC_API_KEY` set, and confirm that precedence switches to the key. Ligus's C.2.3 env allow-list must not pass it unless configured.
+- **V2 (policy).** Obtain written confirmation from Anthropic that an open-source client launching the user's own Claude Code login through `claude-agent-acp` is permitted.
+  - Until V2 is confirmed, `Driver::Auto` for Claude Code resolves to **ACP only when an API key or cloud provider is configured in Ligus**. Subscription users stay on Legacy (`claude -p`), which runs Claude Code itself.
+  - Do not name the product "Claude Code …" (SDK naming rule).
+- **V3 (sandbox).** Both V1 and V2 pass under C.4's Seatbelt and bwrap profiles: Keychain access works and the proxy allow-list includes the OAuth refresh host.
+- Codex (ChatGPT login), Copilot (GitHub login) and Antigravity (Google login) get the same V1 and V3 steps. Their terms are the owner's call; record a link to each vendor's terms in the same doc.
+
+#### D.2.4 Runtime matrix (first-class, tested every release)
+
+| Runtime | Path | Test |
+|---|---|---|
+| Claude Code | ACP (+ Legacy) | live smoke, both drivers |
+| Codex | ACP (codex-acp) + Legacy | live smoke |
+| Copilot CLI | ACP + Legacy | live smoke |
+| Antigravity | ACP (`agy acp`) + Legacy | live smoke |
+| Anthropic API | `provider/anthropic.rs` | live |
+| OpenAI API | `provider/openai.rs` | live |
+| Gemini API | **new preset**: OpenAI-compatible `https://generativelanguage.googleapis.com/v1beta/openai/` through `Custom`. No new `ModelProviderKind`, so no wire change. Add a native provider [2.x] only if needed. | live |
+| llama.cpp | `openai.rs` against `llama-server` | local job |
+| Ollama | `ollama.rs` | local job (`tests/ollama_live.rs`) |
+| MLX | **new preset**: `mlx_lm.server` (OpenAI-compatible) | local job on Apple Silicon |
+
+- Extend `live_cli_smoke` (`dispatch.rs:924-969`, env `LIGUS_LIVE_CLI`) to all four CLIs × {acp, legacy}.
+- Add `scripts/release-matrix.sh`, which runs every row and writes a signed-off table into the release notes. **It is a release checklist gate.**
+
+### D.3 D2: Ligus MCP server
+
+#### D.3.1 Facts
+
+- No Ligus MCP server exists (the only binary is the test fixture `crates/hive-runtime/src/bin/mcp_stdio_fixture.rs`).
+- Directives are parsed only on the desktop:
+  - `finalize_reply` at `app/src/lib.rs:7559-7660`;
+  - `parse_reply_directives` at `crates/hive-runtime/src/directives.rs:106-214`;
+  - flow directives at `crates/hive-core/src/flow/directives.rs:129-261`.
+- The worker never parses them (`worker.rs:581`).
+- `propose_workflow` is already a typed tool that turns into a directive (`crates/hive-runtime/src/workflow_tool.rs:18-111`).
+- Tool caps: `MAX_OFFERED_TOOLS = 16` and `MCP_RESERVED_SLOTS = 4` (`agent_tools.rs:32, 102`).
+
+#### D.3.2 Transport and credential
+
+- **The server runs inside the host process** (`crates/hive-runtime/src/ligus_mcp/`). It listens on a per-turn unix socket in the turn's 0700 tmp dir.
+- **Inside the sandbox**, the agent's MCP config gets one stdio server: `ligus mcp-bridge` (same binary). It connects to `$LIGUS_MCP_SOCKET` and pipes MCP JSON-RPC. The socket is the only extra path C.4 allows.
+  - For in-process tool loops (API and local runtimes) the server is called directly, with no socket.
+  - k8s executors get a relayed socket [2.x].
+- **Per-turn credential.**
+  - `LIGUS_TURN_CRED = base64url(turn_id(16) || chat_id(16) || agent_id(16) || u64le(expires_unix) || HMAC-SHA256(k_host, "ligus-mcp-turn-cred-v1\0" || turn_id || chat_id || agent_id || expires))`.
+  - `k_host` is random per host process and never leaves memory.
+  - It expires at turn end. The server also revokes the turn id on completion, cancel or timeout (`LIGUS_TURN_TIMEOUT_SECS`, `lib.rs:7709-7714`).
+  - Every call must present it in the first message (`initialize` `_meta.ligusTurnCred`); the bridge adds it.
+  - The credential is device-local and never synced.
+- **Signing.** Effects are signed with the **agent's own key** (A3 `AgentKeyCertified`, held by the host), never the host user's.
+  - Until the host certifies a key, effects are signed by the host with the agent stamp, and the A3 transition rule applies the Agent tier.
+- **Hard limits, enforced in the server and again by authz:**
+  - no admin or governance events;
+  - no votes on human-gated items;
+  - no `ProposalApplied`;
+  - no apply, git or filesystem writes;
+  - proposals only.
+
+#### D.3.3 Tools (JSON Schemas live in `ligus_mcp/schema/*.json` and are frozen per release)
+
+| Tool | Input (camelCase) | Effect | Replaces |
+|---|---|---|---|
+| `ligus_propose_diff` | `{title, body, taskClass?}` | Host captures the worktree diff and files a `FileDiff` proposal (`producing_agent_id`, digest) | worktree capture + `[[propose]]` |
+| `ligus_propose_decision` | `{title, body, requiredApprovals?}` | `Decision` proposal. `requiredApprovals` can only raise the default. | `[[propose]]` |
+| `ligus_propose_command` | `{title, body, argv: [string], cwd?: "worktree-relative"}` | `Command` proposal with the structured `command` field (D.5) | `[[propose]]` kind command |
+| `ligus_propose_workflow` | `{definition}` | Workflow proposal (`workflows.rs:1019`) | `[[workflow]]`, `propose_workflow` |
+| `ligus_open_alternatives` | `{question, body, taskClass?, agentQuorum?, options:[{title, body}]≥2}` | Proposal set | `[[alternatives]]` |
+| `ligus_assess` | `{setId, alternative, score 0-100, rationale}` | `ScoutAssessmentPosted` | `[[assess]]` |
+| `ligus_handoff` | `{to, keyFiles?, decisions?, ruledOut?, notes?}` (parcel bounds `flow/handoff.rs:16-17`) | `FlowRecord::Handoff` **and starts the receiver's turn** (D.4.1) | `[[handoff]]` |
+| `ligus_mark` / `ligus_unmark` | `{kind: claim\|lock\|review, path, lines?, note?}` / `{id?\|path?\|kind?}` | Mark records | `[[mark]]`, `[[unmark]]` |
+| `ligus_react` | `{messageId?, emoji}` | `MessageReactionAdded` by the agent | `[[react]]` |
+| `ligus_list_chats` | `{channel?, limit≤50}` | Read | n/a |
+| `ligus_read_chat` | `{chatId?, sinceMessageId?, limit≤100}` | Read **any chat in the workspace** (owner decision) | n/a |
+| `ligus_read_proposals` | `{chatId?, status?, setId?}` | Read | n/a |
+| `ligus_read_board` | `{}` | Read the Flow board | n/a |
+| `ligus_ask_human` | `{question, options?: [string]≤6, timeoutSecs? ≤ 3600}` | Pauses the turn (D.4.2) | n/a |
+| `ligus_report` | `{status: done\|blocked\|needsReview, summary ≤ 400 chars, filesTouched?: [string]≤32, confidence?: low\|medium\|high}` | Structured self-report shown on the turn. **Never** read by scoring (`flow/score.rs:4-6`). | n/a |
+
+**Tool-loop runtimes** (API and local) have a 16-tool cap. They get the same capabilities folded into 4 tools that fit the reserved budget: `ligus_propose {kind,…}`, `ligus_flow {op,…}`, `ligus_read {what,…}` and `ligus_ask`.
+
+**One reserved MCP slot.** The Ligus server always occupies one of `MCP_RESERVED_SLOTS`, and it is always present in the MCP allow-list. That holds even under `EgressPolicy::AllowList` and `Closed`, because the server is local and needs no network. The other slots go to user servers as today.
+
+#### D.3.4 Budgets (per turn; workspace setting, device default)
+
+| Budget | Default |
+|---|---|
+| `maxToolCalls` (all Ligus tools) | 64 |
+| `maxProposals` | 8 |
+| `maxHandoffs` | 2 |
+| `maxAsks` | 3 |
+| `maxReadMessages` | 500 |
+| `maxSpendUsd` | unset; enforced only where usage is reported (API runtimes, CLIs that emit usage), using the model price table in `model_profile.rs` |
+
+- An exhausted budget returns a tool error, `{"error":"budget_exhausted","budget":"maxProposals"}`, and adds the `FINAL_ROUND_NUDGE` (`tool_loop.rs:33`).
+- Budgets are device-local host policy, not a fold rule.
+
+#### D.3.5 Audit
+
+- **Per call:** a device-local fact (C.6) `{ts, turnId, chatId, agentKey, tool, outcome: ok|denied|budget|error, latencyMs, readChatId?}`. Content-free.
+- **Per turn:** one synced, signed `FlowRecord::TurnToolSummary { turn_id, agent_key, calls: BTreeMap<String,u32> (≤ 16 keys), denied: u32, budget_exhausted: bool }`, Agent tier. Teammates see what an agent did without content.
+- The owner asked for an "audit event per call". The per-call record is device-local to keep the signed log bounded (P0.5). If the owner wants per-call **synced** events, add a `FlowRecord::ToolCallAudited` bounded at `maxToolCalls` per turn. This is a decision point for the owner, and the default stated here is the per-turn summary.
+
+#### D.3.6 Tests
+
+- `mcp_cred_bound_to_chat_agent_turn` (wrong chat, agent or turn is refused);
+- `mcp_cred_expires_at_turn_end`;
+- `mcp_never_emits_admin_or_vote_or_applied` (a property test over random tool sequences);
+- `mcp_effects_signed_by_agent_key`;
+- `budgets_enforced`;
+- `read_other_chat_allowed_and_audited`;
+- `mcp_bridge_reachable_inside_seatbelt_and_bwrap`;
+- `ligus_server_present_under_closed_egress`;
+- `tool_schemas_golden`.
+
+### D.4 D3: turn control
+
+#### D.4.1 Hand-off auto-start
+
+- Today the desktop cascades on @mentions (`app/src/lib.rs:8494-8653`, `cascade_target` `chat_service.rs:2147`, depth ≤ 24 at `session.rs:118`).
+- Today the `[[handoff]]` card itself starts nothing (`flow.rs:1712-1765`).
+- **New rule:** a `Handoff` record whose `to` resolves to an agent queues that agent's turn immediately, through the same `Dispatcher` path as mentions:
+  - `pending_mentions`, `chat_service.rs:2112-2125`, generalized to `pending_turns`;
+  - so the worker and serve hosts pick it up too.
+- The receiver's prompt includes the parcel (`flow/handoff.rs`).
+- Depth counts against `MAX_CASCADE_DEPTH`.
+- A hand-off to a human only notifies.
+
+#### D.4.2 Ask the human
+
+- `ligus_ask_human` writes a synced `FlowRecord::HumanAsk { ask_id, turn_id, agent_key, question (≤ 2000 chars), options (≤ 6) }`.
+- The turn **pauses**:
+  - for ACP runtimes, the pending `tools/call`, or the `session/request_permission` that escalated, stays open;
+  - for tool loops, the loop awaits;
+  - the idle timer (`provider/mod.rs:39-54`) is suspended while waiting, and only `timeoutSecs` applies.
+- Any human member answers from desktop or phone with `FlowRecord::HumanAnswered { ask_id, answer, option_index? }`.
+  - Agents are denied this kind (A3), and the answerer must be human.
+  - It needs no presence: answering does not authorize anything by itself.
+- The first answer in canonical order wins, and the tool returns it.
+- On timeout, the tool returns `{"error":"no_answer"}`.
+- If the host restarts, the turn is cancelled and the ask is marked expired. No resumption in 2.0.
+- **Phone:** push `ask.pending` and a new serve endpoint `POST v1/asks/{id}/answer`.
+
+#### D.4.3 One `finalize_reply` for every host
+
+- Move `finalize_reply` (`lib.rs:7559-7660`) and the flow `take_directives` (`flow.rs:864-885`) into `crates/hive-runtime/src/finalize.rs`.
+- The worker (`worker.rs:581`) and serve call it, which closes the headless directive gap.
+
+#### D.4.4 Directive fallback
+
+- Runtimes without tool use (aider, pi, hermes, and any runtime where MCP is unavailable) keep `[[…]]`.
+- The prompt teaches directives only when the Ligus MCP server is **not** offered (`prompt.rs:230-272`; `flow.rs:896-914`).
+- If both appear in one turn, MCP effects win and duplicate directives are dropped (dedupe by kind + title, or by path for marks).
+
+**Tests:**
+- `handoff_starts_receiver_on_every_host`;
+- `ask_pauses_and_resumes_with_answer`;
+- `ask_times_out`;
+- `agent_cannot_answer_ask`;
+- `worker_applies_directives`;
+- `directives_only_taught_without_mcp`.
+
+### D.5 D4: review UI and the exact Implement instruction
+
+**Facts:**
+- `ProposalCard` (`web/src/components/RightRail.tsx:1223-1340`) shows title, status and time only. The DTO already has `authorActorId` and `kind` (`web/src/bindings/ProposalDto.ts`).
+- Implement for Command/Decision posts a user message and runs the **primary** responder, not the producing agent (`app/src/lib.rs:5647-5662`, `responder_for(…, None)` at `:5660`), with this prompt:
+  `"An approved proposal ({kind}) is ready to implement. Carry it out now using your tools, then briefly confirm what you did.\n\n## {title}\n\n{body}"`.
+- Approve-to-execute: an approved Command is executed through free-text interpretation by whichever agent answers.
+
+**Design:**
+
+1. **`ActionProposal` gains a structured command:**
+
+    ```rust
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<ProposedCommand>,      // { argv: Vec<String>, cwd: Option<String> /* worktree-relative */ }
+    ```
+
+   - It is included in `diff_digest` (A.2.2).
+   - Implement on a Command proposal **with** `command` runs exactly that argv through C2's executor in the chat worktree, under the turn's plan, and records `ProposalApplied`. No LLM is involved.
+   - A Command without `command` (legacy) falls back to the prompt path, with a warning badge.
+2. **Implement preview sheet (desktop and phone).** Before running, show:
+   - the exact instruction text, or the exact argv;
+   - the target agent: the **producing agent** (`producing_agent_id`) by default, replacing `responder_for(…, None)`, with a picker;
+   - the runtime and driver (ACP or Legacy), the permission tier, the executor kind (Seatbelt, bwrap, Unconfined), and the egress allow-list;
+   - whether presence is required.
+
+   The text shown is the same string that is sent: one function, `implement_instruction(&proposal) -> ImplementPlan`, in `hive-runtime`, used by both the UI DTO and the runner. A snapshot test asserts that the two are equal.
+3. **Badges on every proposal card and set alternative:**
+   - **Kind:** FileDiff, Command, Decision, Workflow.
+   - **Author:** human name, or agent name + host + "agent-signed" vs "host-signed (legacy)".
+   - **Config impact:** set when the touched paths (`touched_paths`, `guard.rs:271`) or the argv touch any of: `ligus.config.toml`, `hive.config.toml`, `.ligus/`, `.hive/`, `.github/workflows/`, `.gitlab-ci.yml`, `package.json` scripts, `Makefile`, `.envrc`, the protected dirs (`hive-core/src/sandbox.rs:103`), git hooks or MCP config.
+   - **Human gate:** shown when one applies.
+   - **Presence required:** shown under rules v2.
+
+   Badges use the shared `Badge` component (e477701c) with icon and text, never color alone.
+   - iOS mirrors these in Review (the iOS app's Review views).
+   - Serve's proposal DTOs gain `configImpact: bool`, `authorKind`, `signedBy` and `implementPlan`.
+
+**Tests:**
+- `implement_preview_equals_executed_instruction`;
+- `command_proposal_runs_exact_argv_in_sandbox`;
+- `implement_targets_producing_agent`;
+- `config_impact_badge_paths` (table test);
+- web component tests for the badges, and iOS snapshot tests.
+
+### D.6 Files touched (Track D)
+
+- `crates/hive-runtime/src/`:
+  - new `provider/acp.rs`, `ligus_mcp/`, `finalize.rs`;
+  - `provider/dispatch.rs:303-581, 924-969`;
+  - `cli_detect.rs:176-330`;
+  - `agent_tools.rs:32-110, 273, 420`;
+  - `tool_loop.rs:23-33, 198`;
+  - `workflow_tool.rs`;
+  - `directives.rs`;
+  - `prompt.rs:219-290`;
+  - `chat_service.rs:2112-2150`.
+- `crates/hive-core/src/`:
+  - `proposals.rs` (command field);
+  - `runtime.rs` (Driver);
+  - `flow/mod.rs` (HumanAsk, HumanAnswered, TurnToolSummary);
+  - `flow/directives.rs`.
+- `crates/hive-cli/src/`: `worker.rs:400-600`, the `mcp-bridge` subcommand in `main.rs`, and `serve/api.rs` (asks, implement plan DTOs).
+- `app/src/`: `lib.rs:5517-5662, 7559-7660, 8494-8660`; `flow.rs:864-914, 1088-1170, 1712-1765`; `workflows.rs:913-1040`.
+- `web/src/components/RightRail.tsx:1223-1500`, `ProposalSets.tsx`, the new `ImplementPreview.tsx`, and `web/src/lib/ipc.ts:1212`.
+- iOS Review views and API client.
+- `scripts/release-matrix.sh`, `docs/runtimes/*`.
+
+### D.7 Acceptance criteria
+
+- The four CLIs run a turn over ACP on the owner's Mac (V1 and V3 recorded). Legacy still works when the ACP binary is absent.
+- An agent files a diff proposal, hands off (the receiver starts), and asks a question answered from the phone, all through MCP, with effects agent-signed.
+- No directive text appears in MCP-capable turns.
+- The Implement preview equals what runs.
+- The release-matrix script passes every row.
+
+### D.8 Risks
+
+- **The Claude policy question** (V2).
+- **ACP spec churn.** Pin the protocol version and adapter versions.
+- **Adapter config surface** for restricted mode.
+- **Paused turns** hold resources; bound them with `timeoutSecs` and the cancel UI.
+- **Reading other chats** widens prompt-injection reach. Read results are wrapped with `UNTRUSTED_RESULT_HEADER` (`agent_tools.rs:80`), and the exfiltration guard (`agent_tools.rs:84-90`) applies.
+
+---
+
+## Track E: identity service (ligus-auth) — **can follow 2.0 (target 2.1); nothing in 2.0 depends on it**
+
+**Size:** M-L.
+**Lives in:** a new repo `github.com/ligus-ai/auth`, in Go to match the relay, or as `cmd/ligus-auth` in the relay repo if the owner prefers one module. It is never inside the relay process.
+
+### E.1 Goal
+
+Any OIDC provider can sign people in to relay access, with automated provisioning and deprovisioning, without the IdP ever granting workspace membership. The signed config log stays authoritative for membership (layer 1).
+
+### E.2 Facts
+
+- Relay v0.2.0 only **verifies** `hrt1`:
+  - format `hrt1.<b64url claims>.<b64url ed25519 sig>` (`relay/token.go:13-19`);
+  - claims `sub, plan, exp, max_members, retention_days, turn, caps, workspaces` (`token.go:24-37`), where `workspaces` is new and omitempty;
+  - scope modes `off`, `claims` and `strict` (`scope.go:10-64`).
+- There is no tenant claim, and no OIDC, SCIM or `.well-known` code.
+- The desktop can mint `hrt1` locally from an issuer seed (`app/src/lib.rs:13915` `mint_hrt1_token`).
+
+### E.3 Scope
+
+- **OIDC relying party.**
+  - Discovery, authorization code + PKCE (desktop: loopback redirect; phone: `ASWebAuthenticationSession`), and the device authorization grant for `ligus serve` and worker.
+  - Works with any compliant provider. Configure `issuer`, `client_id`, `client_secret?`, `scopes`, `claim_map {user: "sub", email: "email", groups: "groups"}`.
+- **Token minting.** `POST /token` mints `hrt1` with the issuer Ed25519 key. The relay is configured with `LIGUS_RELAY_TOKEN_PUBKEY`, as today.
+  - **Existing claims:** `sub` = `<tenant>:<user>`, `exp` (≤ 1 h), `caps`, `workspaces` (from SCIM group → workspace grants).
+  - **Additive claims, all omitempty:** `tid` (tenant), `uid` (IdP subject hash), `did` (device id from the client's device key, proven by a signature over the token request nonce).
+  - The relay ignores unknown claims today: Go `encoding/json` ignores unknown fields, and the signature covers the raw claims. Enforcing `tid` confinement is relay work [2.x] (review P6).
+  - Refresh tokens are opaque, rotated, and bound to `did`.
+- **SCIM 2.0** at `/scim/v2`:
+  - `Users` (create, patch, `active:false`) and `Groups`;
+  - bearer-authenticated by a per-tenant SCIM token;
+  - deprovisioning revokes refresh tokens immediately, and access tokens expire within an hour;
+  - group → workspace-id grants are kept in ligus-auth's store (SQLite or Postgres).
+- **Never grants membership.** A SCIM group grants relay *reachability* for a workspace id. Membership still requires an Admin's signed `MemberAdded`, with presence under rules v2.
+  - The UI can *suggest* adds ("3 people in group X have relay access but are not members").
+- **Hosted multi-tenant** [roadmap]: one ligus-auth per tenant, or `tid`-partitioned stores. Out of scope here.
+
+### E.4 Reference docs (in `docs-site`)
+
+- **Pocket ID** (personal or home lab): passkey-only OIDC. Covers the redirect URI, client registration and a compose snippet next to the relay. This fits the passkey model; the same passkeys can be used, but there is no coupling in code.
+- **Dex** (federation, Kubeflow): static client, connectors (GitHub, LDAP, SAML), `groups` claim mapping, and a Helm values example next to the ligus-relay chart. Kubeflow users reuse their existing Dex.
+
+### E.5 Tests
+
+- OIDC conformance against Pocket ID and Dex containers in CI.
+- `TestMintedTokenVerifiesOnRelay`: the relay v0.2.0 verifier, with frozen vectors.
+- `TestWorkspacesClaimScopesStrict`.
+- `TestScimDeactivateRevokesRefresh`.
+- `TestIdPCannotGrantMembership`: an end-to-end test where a token with `workspaces:[W]` but no `MemberAdded` gets relay access, but every event the user posts is refused by authz.
+
+### E.6 Risks
+
+- Token lifetime vs offline phones.
+- Claim drift between the issuer and the relay; mitigated by frozen vectors.
+- Operators may assume SSO means membership. The docs must state the layering.
+
+---
+## 7. Dependency order and merge-queue plan
+
+```mermaid
+flowchart LR
+  R0((R0: release/v2.0.0 after UI + phone merges)) --> A1[A1 raw-bytes verify]
+  R0 --> C1[C1 quick fixes + S1 trust + P0.6 interim]
+  R0 --> D1[D1 ACP driver + V1/V3]
+  A1 --> A2[A2 AuthzEngine + per-ws roster + env-free fold + S2]
+  A1 --> C3[C3 telemetry split]
+  A1 --> B2[B2 OS secret store]
+  C1 --> B2
+  R0 --> C2[C2 TurnExecutor + Seatbelt/bwrap + egress proxy]
+  A2 --> A3[A3 agent identities]
+  A2 --> B1[B1 signed rotations + KeyringEngine]
+  B1 --> B3[B3 passkeys + rules v2 + phone presence]
+  C2 --> D2[D2 Ligus MCP server]
+  A3 --> D2
+  D2 --> D3[D3 hand-off, ask-human, finalize, fallback]
+  A2 --> D4[D4 review badges + Implement plan]
+  C2 --> D4
+  B3 --> CUT((2.0 cut))
+  D3 --> CUT
+  D4 --> CUT
+  C3 --> CUT
+  E[Track E ligus-auth] -.-> R21((2.1))
+```
+
+### 7.1 Worktrees
+
+- One worktree per PR, all branched from R0:
+  `git worktree add ../ligus-p0-<id> -b p0/<id> release/v2.0.0`
+- There are six parallel lanes from day one:
+  - A1;
+  - C1;
+  - C2;
+  - D1;
+  - B2 (starts its backend work now and rebases on A1 and C1 before merge);
+  - E (separate repo, any time).
+
+### 7.2 Merge queue
+
+Only one semantic PR merges at a time, in this order. Every merge runs the full test suite, the property tests at 4096 cases, and the replay harness (A.7).
+
+| # | Merge | Rebase point after it | Who must rebase |
+|---|---|---|---|
+| 1 | **A1** | R1 | everything open |
+| 2 | **C1** | R1′ | B2, C2 |
+| 3 | **C3** | none (touches only flow and event_store) | D3 (flow records) |
+| 4 | **D1** | none | D2 |
+| 5 | **A2** | **R2: the big one** | B1, A3, D4, C2 (author gate uses `ConfigTimeline`) |
+| 6 | **B2** | none | B1 (vault for CLI KA keys) |
+| 7 | **C2** | R3 | D2, D4 |
+| 8 | **B1** | R4 | B3 |
+| 9 | **A3** | none | D2 |
+| 10 | **D2** | none | D3 |
+| 11 | **B3** (+ iOS PR + site PR) | R5 | D4 (presence badge) |
+| 12 | **D3** | none | n/a |
+| 13 | **D4** (+ iOS PR) | none | n/a |
+| 14 | Release-matrix run + owner migration (§9) on the real data | n/a | n/a |
+| 15 | **2.0 cut** | n/a | n/a |
+
+### 7.3 Conflict hot spots
+
+| File | Touched by | Rule |
+|---|---|---|
+| `app/src/lib.rs` | B1 (sync loop, rotation sites), C1/C2 (spawn, catalogs), D3/D4 (finalize, implement) | Each PR keeps its edits as calls into new hive-runtime modules. Line moves are not an excuse to refactor neighbouring code. |
+| `crates/hive-core/src/events.rs` | A1, A2, A3, B1, B3, C3, D2 (new kinds) | All new kinds go into **one** PR-ordered list. A1 reserves the enum slots by adding commented placeholders, so later PRs only uncomment. |
+| `crates/hive-runtime/src/sync_engine.rs` | A1, A2, B1 | n/a |
+| `crates/hive-cli/src/serve/api.rs` | A2 (vote), C1/C7 (refusals), B3 (presence), D3 (asks), D4 (DTOs) | n/a |
+
+The other agent's in-flight UI and phone-endpoint merges are **R0**. No Phase 0 branch is cut before they land on `release/v2.0.0`.
+
+## 8. In 2.0 vs can follow
+
+| Item | 2.0 | Can follow |
+|---|---|---|
+| A1, A2, A3; B1, B2 (macOS Keychain, Secret Service, systemd-creds, File0600) | yes | Windows Credential Manager [2.x] |
+| B3 passkeys: browser hand-off, iOS native, rules v2, recovery key | yes | macOS native ASAuthorization (if not done), Android app origins |
+| C1, C2 (Seatbelt, bwrap+Landlock+seccomp, egress proxy), C3, C7 interim + final | yes | gVisor, Apple `container`, K8s executors (C.4.5; [2.0.x-follow] for gVisor and container, [2.x] for K8s), OTLP export |
+| D1 ACP for all four CLIs | yes; Claude-over-ACP default only for API-key auth until V2 is confirmed | Claude subscription over ACP after V2 |
+| D2 (incl. agent-signed effects, budgets, audit), D3, D4 | yes | Per-call synced audit (owner decision); resumable asks |
+| Gemini and MLX presets, release matrix | yes | Native Gemini provider |
+| E ligus-auth | no | 2.1 (relay tenant enforcement is review P6, 2.x) |
+| Review P1/P2 host extraction, P4/P5 phone device keys, P6 relay split, P8 facts OTLP | no | 2.x. Passkey presence (B3) removes the urgency of P5 for votes, but not for authorship of posts. |
+
+> **"No patch releases" vs "follow" (needs the owner's reading).** "Can follow" items ship in a later *minor* release (2.1, 2.2). "No patch releases" means 2.0.0 is not followed by 2.0.x fixes of 2.0 scope, so everything marked yes above must be done before the cut.
+
+## 9. Migration and rollback for the owner's real data
+
+At the time of writing the owner was the only user. The data lives on:
+- the Mac desktop: Tauri `app_data_dir` for `ai.ligus.desktop`, `app/src/lib.rs:10560`;
+- the serve box: `~/.ligus` or `LIGUS_DATA_DIR`;
+- any worker boxes;
+- the iPhone (only pairing credentials and Keychain; no log).
+
+### 9.1 Before upgrading (once)
+
+1. **Tag the current RC.**
+   `git tag v2.0.0-rc.pre-phase0 <R0 sha>`, and build installable artifacts from it for rollback.
+2. **Stop the sync writers.** Quit the desktop, `systemctl --user stop hive-serve` (or the unit name in use), and stop the workers.
+3. **Back up every host.**
+   - `sqlite3 <dir>/hive.db ".backup '<backup>/hive.db'"`;
+   - tar the whole data dir, including `keys/`, `settings.json`, `config.toml`, `serve.token` and `tunnel/`, into an archive with mode 0600 on an offline or encrypted volume;
+   - record `sha256sum`.
+   - The archive contains plaintext secrets. Treat it as a key backup.
+4. **Export the relay keyring** for the workspace: `GET /v1/workspaces/{ws}/keyring` saved next to the backup. This is evidence for B.1.5 and a rollback aid.
+
+### 9.2 Refold diff (gates the upgrade)
+
+1. Build the Phase 0 candidate, then run `ligus doctor refold --db <backup copy>/hive.db --json > refold.json` for each host's database (A.7).
+2. The owner reviews every difference: newly held, denied or admitted events; status changes; roster changes.
+   - The expected categories are:
+     - self-declared vote roles no longer counting (R1);
+     - retroactive hoist reversals (R2);
+     - workflow upserts without an epoch from non-creator devices (S4);
+     - excess lockdowns (S5);
+     - nothing else.
+   - Anything unexpected blocks the upgrade and goes back to Track A.
+3. Run `ligus doctor keyring --db … --relay-dump keyring.json` to print the legacy epochs that will be pinned (B.1.5).
+
+### 9.3 Upgrade sequence
+
+1. **Desktop first.** On first launch it:
+   - migrates secrets to the Keychain (B2);
+   - pins legacy epochs (B.1.5);
+   - seeds `workspace_pins` (A.6);
+   - publishes `DeviceKeyAgreementPublished`.
+2. **Serve box and workers.** On start they:
+   - migrate secrets (systemd-creds);
+   - generate their own X25519 key;
+   - publish `DeviceKeyAgreementPublished`.
+
+   They read with the legacy ring meanwhile, which works because they share the pinned epochs or the passphrase epoch 0.
+3. **Register passkeys** (desktop: Settings → Security):
+   - Mac Touch ID (iCloud Keychain, which syncs to the iPhone);
+   - a YubiKey;
+   - write down the recovery key (B.4.6).
+4. **One signed rotation**, from the desktop, with presence: `KeyringEngine::rotate`.
+   - The version is `max(legacy) + 1`, sealed to every device, including serve and the workers.
+   - Verify on serve: `ligus doctor keyring` shows `seal = <new version> (authorized)`.
+   - Post from the phone through serve, then read it on the desktop at the new epoch. This is the R4/K4 check.
+5. **Enable rules v2:** `WorkspaceRulesSet { version: 2 }` with presence. Do this per workspace, starting with Home or the local workspace, then the shared ones.
+6. **Phone.**
+   - Install the 2.0 iOS build. Pairing (`hpc1`) is unchanged, so no re-pair is expected.
+   - Confirm a vote with Face ID passkey works (`presence/prepare` and `presence/commit`).
+   - **Re-pair only if** serve's device key was regenerated, which happens only if the serve box was re-enrolled. Then run `ligus serve pair` and scan again.
+7. **Post-checks.**
+   - The refold diff on the live database equals the reviewed one.
+   - `ligus doctor` is all green: sandbox available, no settings secrets, settings 0600, trust table present.
+   - Run the release matrix once on the owner's machines.
+
+### 9.4 Rollback
+
+- **Before step 9.3.4 (rotation):**
+  1. stop everything;
+  2. restore each host's backup archive;
+  3. reinstall the `v2.0.0-rc.pre-phase0` build.
+
+  No log divergence exists, because the new event kinds were only device-key publishes, which old builds fold as `Unknown`.
+- **After the signed rotation:** old builds cannot see the signed epoch, because they only read relay rows, so they cannot read anything sealed at it. Either:
+  - (a) restore the backups and accept the loss of post-rotation events; this is fine during a supervised migration window; or
+  - (b) run `ligus doctor export-legacy-rotation --version N`. It publishes the same sealed blobs as an unsigned legacy relay row, so old builds can open epoch N. This is a deliberate, owner-run downgrade aid, and it re-opens K1 only for the duration of the rollback.
+- **After rules v2:** old builds ignore `WorkspaceRulesSet` (`Unknown`) and fold with old rules. A rollback is safe but loses presence enforcement. Re-upgrading restores it, because enforcement is positional.
+- **Secrets:** the 2.0 build moved them to the Keychain or systemd-creds. A rolled-back build needs `settings.json` and `keys/` from the backup archive (step 9.1.3). Do not try to export them back from the Keychain.
+- **Phone:** the old iOS build keeps working against an old serve. Against a 2.0 serve it gets `presence_required` 403s for votes, which is safe.
+
+### 9.5 Owner data at risk, and checks
+
+| Risk | Check |
+|---|---|
+| A historic vote or set decision flips under A2 | Refold diff, accepted line by line |
+| Legacy events signed by "agents" (host-signed agent output) become Agent tier under rules v2 | Rules v2 applies by position only to *new* history, so old history is untouched |
+| Serve box missing from rotation recipients | Step 9.3.4 verification on serve, before rules v2 |
+| Sole-owner lockout | The recovery key is required before rules v2 is enabled (UI gate) |
+
+---
+
+## 10. Cross-track proof-test ledger (what must be green at the cut)
+
+| Origin | Test | Track |
+|---|---|---|
+| sec-core R1 (ignored today) | `a_viewers_self_declared_admin_vote_does_not_meet_an_admin_floor` (`crates/hive-core/tests/proposal_sets_hoisted_authz.rs:239`) | A2 |
+| sec-core R2 (ignored today) | `hoisted_authorization_is_not_retroactive` (`:272`) | A2 |
+| Review §4.1 (K1-K4) | `prop_keyring_only_from_authorized_rotations`, `prop_concurrent_rotations_converge`, `removed_member_cannot_inject_epoch`, `cli_host_reads_and_seals_after_rotation`, `outsider_with_directory_ka_cannot_inject_epoch`, `junk_relay_rotations_never_seal` | B1 |
+| Review §4.2 (S7) | `prop_verify_roundtrip_with_unknown_fields`, `upgrade_refold_recovers_unknown_events`, `golden_envelopes_verify_byte_for_byte` | A1 |
+| Review §4.3 (R1, R2, S1, S5) | `prop_authz_is_prefix_stable`, `prop_fold_order_independent`, `prop_vote_role_capped`, `prop_status_derived`, `prop_vote_binds_digest`, `held_until_config_frontier_arrives`, `self_revoke_allowed_other_revoke_needs_admin` | A2 |
+| Review §4.4 | `host_parity_keyring` (the full `host_parity` waits for review P1, 2.x) | B1 |
+| Review §4.5 (R3, B2) | `prop_removal_scoped_to_workspace`, `roster_ignores_unverified_batch_membership`, `founder_pin_disputes_forged_founder_key` | A2 |
+| Review §4.6 (P0.6) | `phone_vote_attribution`, `delegated_host_vote_not_counted_for_human_gate`, `phone_presence_vote_counts_as_credential_owner_not_serve` | C1, B3 |
+| Review §4.7 (P0.5) | `facts_are_content_free`, `facts_schema_golden` | C3 |
+| Review §4.8 | `prop_enforcement_plan_host_independent`, `prop_every_envelope_field_consumed` | C2 |
+| RC-8 / P0.8 | `fold_ignores_env` | A2 |
+| Host S1 / S2 / S3 | `untrusted_repo_mcp_never_spawns`, `contributor_cannot_rebind_agent_host_or_runtime`, worker default-floor test | C1, A2 |
+| Host: agents read keys and serve.token, provider-key leak | `sandbox_denies_data_dir_read`, `serve_token_unreadable_by_agent`, `child_env_has_no_parent_provider_keys` | C2, C1 |
+| H1 for CLIs | `author_gate_applies_to_cli_runtimes_on_desktop_worker_agent` | C1 |
+| Review UI | `implement_preview_equals_executed_instruction`, `config_impact_badge_paths` | D4 |
+| Existing (keep green) | `sec_tests.rs` (all), `signature_contexts_are_frozen`, `proposal_sets_fold.rs`, relay frozen `hrt1` vectors | all |
+| Relay (Go, optional) | `TestGitHubRoutesNeverForwardAuthorization` and the pairing-policy tests are already in v0.2.0 (4fb8933, c9782f1). Add `TestKeyringIdenticalBodyDedupe`. | B.1.7 |

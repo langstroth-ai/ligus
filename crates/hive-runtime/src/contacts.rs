@@ -237,8 +237,11 @@ pub struct RecordAccount {
     pub signing_public_key: String,
 }
 
-/// A contact record (`v: 1`). `profile` and `links` are left out until a
-/// signed profile event and identity links exist; readers ignore them.
+/// A contact record (`v: 1`). `profile` is left out until a signed profile
+/// event exists; readers ignore it. `links` carries the identity links the
+/// account chose to make discoverable by this contact (opt-in per link):
+/// `IdentityLinkPublished` envelopes signed by one of the record's devices in
+/// the contact's workspace.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContactRecord {
@@ -246,6 +249,8 @@ pub struct ContactRecord {
     pub cid: String,
     pub account: RecordAccount,
     pub devices: Vec<RecordDevice>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<hive_core::SessionEventEnvelope>,
     pub issued_at: hive_core::Timestamp,
     pub expires_at: hive_core::Timestamp,
 }
@@ -274,10 +279,14 @@ pub fn build_record(
         cid: cid.to_string(),
         account: RecordAccount { account_id, signing_public_key: b64(account_public_key) },
         devices,
+        links: Vec::new(),
         issued_at: now,
         expires_at: expires,
     }
 }
+
+/// The most identity links a record carries.
+pub const RECORD_MAX_LINKS: usize = hive_core::identity_link::MAX_LIVE_LINKS;
 
 /// A record that passed every check.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -292,6 +301,11 @@ pub struct VerifiedContact {
     /// account already pinned from a shared workspace). Otherwise sealing to
     /// it needs the person's confirmation.
     pub anchored: bool,
+    /// The identity links the record carries that passed the offline
+    /// envelope checks (signed by one of its devices, for its account, bound
+    /// to the contact's workspace and key). Whether each verifies is still
+    /// for `identity_links::check_link`; a link never anchors the contact.
+    pub links: Vec<hive_core::identity_link::IdentityLink>,
 }
 
 /// Check a record fetched for `cid` (§3.2): every certificate verifies under
@@ -356,7 +370,22 @@ pub fn verify_record(
     }
     let fingerprint = crate::envelope_verifier::FounderPin::fingerprint_hex(&key);
     let anchored = expected_fk.is_some_and(|f| f.trim().eq_ignore_ascii_case(&fingerprint));
-    Ok(VerifiedContact { account_id: rec.account.account_id, fingerprint, devices, issued_at: rec.issued_at, anchored })
+    // Links: a bad one is dropped, never the contact.
+    let mut links = Vec::new();
+    for env in rec.links.iter().take(RECORD_MAX_LINKS) {
+        let hive_core::SessionEvent::IdentityLinkPublished { link } = &env.payload else { continue };
+        let Some(device) = rec.devices.iter().find(|d| Some(d.certificate.device_id) == env.signer_device_id) else { continue };
+        let ok = env.workspace_id == workspace
+            && link.account_id == rec.account.account_id
+            && env.actor_stamp.as_ref().is_some_and(|s| s.actor.account_id == Some(link.account_id) && s.actor.kind == hive_core::ActorKind::Human)
+            && hive_core::crypto::verify_envelope(env, &device.certificate.device_public_key).is_ok()
+            && hive_core::identity_link::check_shape(link).is_ok()
+            && hive_core::identity_link::check_statement(link, workspace, Some(&key)).is_ok();
+        if ok && !links.iter().any(|l: &hive_core::identity_link::IdentityLink| l.subject_key() == link.subject_key()) {
+            links.push(link.clone());
+        }
+    }
+    Ok(VerifiedContact { account_id: rec.account.account_id, fingerprint, devices, issued_at: rec.issued_at, anchored, links })
 }
 
 // ── Drops: an invite sealed to the recipient's devices ─────────────────────
@@ -543,6 +572,65 @@ mod tests {
         let rec = build_record(cid, account_id, &account.public_key_bytes(), vec![RecordDevice { certificate: cert, ka_publication: env }], now());
         let fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&account.public_key_bytes());
         (serde_json::to_value(rec).unwrap(), fk, ka)
+    }
+
+    /// Opt-in identity links ride a record as signed envelopes: one signed
+    /// by the record's device for its account in the contact's workspace
+    /// passes; a forged one, another account's, or one bound to another
+    /// workspace is dropped (the contact still verifies). Records without
+    /// links serialize exactly as before (skip-empty).
+    #[test]
+    fn record_links_are_opt_in_and_checked() {
+        use hive_core::crypto::DeviceCertificate;
+        use hive_core::identity_link::{render_statement, IdentityLink, LinkMethod};
+        use hive_core::{ActorIdentity, ActorKind, ActorStamp, SessionEvent, SessionEventEnvelope, SigningKeypair};
+        let cid = new_cid();
+        let ws = contact_workspace_id(&cid);
+        let account = SigningKeypair::generate().unwrap();
+        let account_id = uuid::Uuid::new_v4();
+        let device = SigningKeypair::generate().unwrap();
+        let device_id = uuid::Uuid::new_v4();
+        let cert = DeviceCertificate::issue(&account, account_id, device_id, &device.public_key_bytes(), now());
+        let mut ka = SessionEventEnvelope::new(ws, ws, 1, SessionEvent::DeviceKeyAgreementPublished { device_id, ka_public: vec![1; 32] });
+        hive_core::crypto::sign_envelope(&mut ka, device_id, &device);
+        let mut rec = build_record(&cid, account_id, &account.public_key_bytes(), vec![RecordDevice { certificate: cert, ka_publication: ka }], now());
+        assert!(!serde_json::to_string(&rec).unwrap().contains("\"links\""), "skip-empty");
+        let link = |subject: &str, in_ws: uuid::Uuid| {
+            let t = hive_core::Timestamp::from_unix_seconds(1_800_000_000);
+            let mut l = IdentityLink {
+                link_id: uuid::Uuid::new_v4(),
+                account_id,
+                provider: "github".into(),
+                host: "github.com".into(),
+                subject_id: subject.into(),
+                handle_at_link: "ana".into(),
+                method: LinkMethod::SshSig,
+                statement: String::new(),
+                proof: "sig".into(),
+                key_fingerprint: "SHA256:x".into(),
+                nonce: "AAECAwQFBgcICQoLDA0ODw".into(),
+                issued_at: t,
+                expires_at: hive_core::Timestamp::from_unix_seconds(1_800_000_000 + 86_400),
+            };
+            l.statement = render_statement(&l, in_ws, &account.public_key_bytes());
+            l
+        };
+        let env = |l: IdentityLink, key: &SigningKeypair| {
+            let mut e = SessionEventEnvelope::new(ws, ws, 1, SessionEvent::IdentityLinkPublished { link: l });
+            let mut actor = ActorIdentity::new(account_id.to_string(), "Ana", ActorKind::Human);
+            actor.account_id = Some(account_id);
+            e.actor_stamp = Some(ActorStamp { actor, recorded_at: now(), cfg_frontier: None, presence: None, runtime_effect: false });
+            hive_core::crypto::sign_envelope(&mut e, device_id, key);
+            e
+        };
+        rec.links = vec![
+            env(link("1", ws), &device),
+            env(link("2", ws), &SigningKeypair::generate().unwrap()),
+            env(link("3", uuid::Uuid::new_v4()), &device),
+        ];
+        let fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&account.public_key_bytes());
+        let v = verify_record(&serde_json::to_value(&rec).unwrap(), &cid, Some(&fk), None, now()).unwrap();
+        assert_eq!(v.links.iter().map(|l| l.subject_id.as_str()).collect::<Vec<_>>(), vec!["1"]);
     }
 
     #[test]

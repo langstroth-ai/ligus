@@ -20,6 +20,7 @@ pub mod flow;
 pub mod git_context;
 pub mod guard;
 pub mod identity;
+pub mod identity_link;
 pub mod keys;
 pub mod lease;
 #[cfg(test)]

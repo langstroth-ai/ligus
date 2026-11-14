@@ -732,8 +732,92 @@ export interface CoMemberDto {
   devices: number;
   workspaces: { id: string; name: string }[];
   dmWorkspaceId: string | null;
+  /// Their linked accounts in the workspaces you share (opt-in claims).
+  /// The status is this device's cached forge check; absent when none.
+  links?: LinkChipDto[];
 }
 export const listCoMembers = () => invoke<CoMemberDto[]>("list_co_members");
+
+// ── Linked accounts (identity links; IDENTITY-AND-FORGES §2) ───────────────
+
+/// A link's status on this device. Never synced: every device asks the forge
+/// itself (no token, never through the relay), at most once a day per link.
+export type LinkStatus =
+  | { state: "verified"; checkedAt: string; handle: string | null; nameBound: boolean }
+  | { state: "signatureOnly" }
+  | { state: "stale"; checkedAt: string; reason: string }
+  | { state: "unreachable"; lastVerifiedAt: string | null; reason: string }
+  | { state: "expired" }
+  | { state: "invalid"; reason: string }
+  | { state: "selfAsserted" }
+  | { state: "notChecked"; reason: string };
+
+export type LinkMethod = "sshSig" | "keyPublished";
+
+export interface LinkChipDto {
+  provider: string;
+  host: string;
+  handle: string;
+  subjectId: string;
+  status: LinkStatus | null;
+}
+
+export interface LinkDto extends LinkChipDto {
+  linkId: string;
+  method: LinkMethod | string;
+  issuedAt: string;
+  expiresAt: string;
+  workspaces: { id: string; name: string }[];
+  /// Also on this device's contact card ("discoverable by this identity").
+  discoverable: boolean;
+}
+
+export interface LinkDraftDto {
+  linkId: string;
+  provider: string;
+  host: string;
+  subjectId: string;
+  handle: string;
+  method: LinkMethod;
+  /// One statement per workspace (and one for the contact card if chosen).
+  statements: { workspaceId: string; workspaceName: string; statement: string }[];
+  signCommand: string;
+  namespace: string;
+  /// Keys the forge lists for you that this machine's ssh-agent holds.
+  agentKeys: string[];
+  /// The `ssh-ed25519 …` line to add as a signing key (published-key method).
+  accountKeyOpenssh: string | null;
+}
+
+export interface SelfHostedForge {
+  provider: string;
+  host: string;
+  baseUrl: string;
+}
+export interface LinkSettingsDto {
+  checkForges: boolean;
+  forges: SelfHostedForge[];
+}
+
+export const identityLinkPrepare = (args: {
+  provider: string;
+  host: string;
+  handle: string;
+  workspaceIds: string[];
+  method: LinkMethod;
+  discoverable: boolean;
+}) => invoke<LinkDraftDto>("identity_link_prepare", args);
+export const identityLinkSignWithAgent = (linkId: string, publicKey: string) =>
+  invoke<Record<string, string>>("identity_link_sign_with_agent", { linkId, publicKey });
+export const identityLinkPublish = (linkId: string, signatures: Record<string, string>) =>
+  invoke<{ published: string[]; status: LinkStatus }>("identity_link_publish", { linkId, signatures });
+export const myIdentityLinks = () => invoke<LinkDto[]>("my_identity_links");
+export const identityLinkStatuses = (accountId: string, force: boolean) =>
+  invoke<LinkDto[]>("identity_link_statuses", { accountId, force });
+export const identityLinkRemove = (linkId: string) => invoke<number>("identity_link_remove", { linkId });
+export const identityLinkSettings = () => invoke<LinkSettingsDto>("identity_link_settings");
+export const setIdentityLinkSettings = (settings: LinkSettingsDto) =>
+  invoke<void>("set_identity_link_settings", { settings });
 
 export interface DmDto {
   workspaceId: string;

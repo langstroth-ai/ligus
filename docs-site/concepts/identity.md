@@ -52,6 +52,19 @@ with someone. When two people share a name, the safety code tells them apart;
 when an invite claims to come from someone you know but carries another
 code, Ligus says so and won't join it.
 
+## Linked accounts
+
+You can optionally show the members of a workspace that you are also someone
+on a code forge (GitHub, GitLab, Codeberg, Forgejo, Gitea, SourceHut,
+Tangled). You prove it by signing a statement with an SSH key the forge
+already lists for you, under the SSHSIG namespace
+`ligus-identity-link-v1@ligus.ai`; the statement names your account, your
+account key, the workspace and the forge's **stable id** for you (not your
+handle, which can change hands). Every device checks the link with the forge
+itself, never through the relay, and keeps the result to itself. A link
+never grants membership, a role or trust for sealing keys. See
+[Linked accounts](../features/linked-identities.md).
+
 ## Device
 
 A `DeviceIdentity` represents one machine. It has:

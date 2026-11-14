@@ -24,6 +24,11 @@ the app data dir; the theme is stored locally per device.
 - **Safety code** — the fingerprint of your account key, as eight groups of
   four hex characters, to compare out of band with people you invite. See
   [Identity & devices](../concepts/identity.md#safety-code).
+- **Linked accounts** — optionally show the members of chosen workspaces
+  that you are also someone on GitHub, GitLab, Codeberg, Forgejo, Gitea,
+  SourceHut or Tangled, proven with an SSH key the forge lists for you. Also
+  here: **Contact forges to check linked identities** (on by default) and the
+  self-managed forges this device may ask. See [Linked accounts](linked-identities.md).
 - **My devices** — devices that act as you in this workspace. **Add a
   device** takes the enrollment code a `ligus serve` box prints, so what you
   do from your phone through that box is authored as you rather than as a

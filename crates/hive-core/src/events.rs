@@ -356,6 +356,15 @@ pub enum SessionEvent {
     /// Remove one of an account's credentials (the account itself, or an
     /// Admin; presence under rules v2).
     PasskeyRemoved { account_id: Uuid, credential_id: String },
+    /// A linked identity for one account (IDENTITY-AND-FORGES §2.2; config
+    /// log). Published by a certified, non-delegated device of that account;
+    /// a newer link with the same `(provider, host, subject)` supersedes an
+    /// older one. Grants nothing: whether it verifies against its forge is
+    /// device-local, never fold state. Read by the roster tracker.
+    IdentityLinkPublished { link: crate::identity_link::IdentityLink },
+    /// Remove a linked identity (the account itself, or an Admin for
+    /// moderation).
+    IdentityLinkRemoved { account_id: Uuid, link_id: Uuid },
     /// Forward-compat catch-all: an event `kind` this build does not recognize
     /// (produced by a newer client). Serde deserializes an unknown tag here
     /// instead of failing the whole stream; it projects as a no-op. The raw
@@ -435,6 +444,8 @@ impl SessionEvent {
             SessionEvent::DeviceKeyAgreementPublished { .. } => "deviceKeyAgreementPublished",
             SessionEvent::PasskeyRegistered { .. } => "passkeyRegistered",
             SessionEvent::PasskeyRemoved { .. } => "passkeyRemoved",
+            SessionEvent::IdentityLinkPublished { .. } => "identityLinkPublished",
+            SessionEvent::IdentityLinkRemoved { .. } => "identityLinkRemoved",
             SessionEvent::Unknown => "unknown",
         }
     }
@@ -469,7 +480,9 @@ impl SessionEvent {
             | SessionEvent::WorkspaceKeyRotated { .. }
             | SessionEvent::DeviceKeyAgreementPublished { .. }
             | SessionEvent::PasskeyRegistered { .. }
-            | SessionEvent::PasskeyRemoved { .. } => EventScope::Workspace,
+            | SessionEvent::PasskeyRemoved { .. }
+            | SessionEvent::IdentityLinkPublished { .. }
+            | SessionEvent::IdentityLinkRemoved { .. } => EventScope::Workspace,
             SessionEvent::FlowRecorded { record } if record.is_config() => EventScope::Workspace,
             SessionEvent::WorkflowRunUpserted { .. } => EventScope::Run,
             _ => EventScope::Session,
@@ -709,7 +722,9 @@ impl ChatSession {
             | SessionEvent::WorkspaceKeyRotated { .. }
             | SessionEvent::DeviceKeyAgreementPublished { .. }
             | SessionEvent::PasskeyRegistered { .. }
-            | SessionEvent::PasskeyRemoved { .. } => {}
+            | SessionEvent::PasskeyRemoved { .. }
+            | SessionEvent::IdentityLinkPublished { .. }
+            | SessionEvent::IdentityLinkRemoved { .. } => {}
             SessionEvent::ProposalReverted { proposal_id, .. } => {
                 if let Some(p) = self.proposals.iter_mut().find(|p| p.id == *proposal_id) {
                     p.reverted = p.status == crate::proposals::ProposalStatus::Applied;
