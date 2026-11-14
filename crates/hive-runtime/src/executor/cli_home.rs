@@ -157,25 +157,9 @@ pub fn env(kind: ModelProviderKind, home: &Path) -> Vec<(OsString, OsString)> {
 /// would otherwise be read through).
 fn read_turn_file(home: &Path, rel: &str) -> Option<Vec<u8>> {
     use std::io::Read;
-    if std::fs::symlink_metadata(home).ok()?.file_type().is_symlink() {
-        return None;
-    }
-    let mut cur = home.to_path_buf();
-    for part in Path::new(rel).components() {
-        let std::path::Component::Normal(name) = part else { return None };
-        cur.push(name);
-        if std::fs::symlink_metadata(&cur).ok()?.file_type().is_symlink() {
-            return None;
-        }
-    }
-    let mut opts = std::fs::OpenOptions::new();
-    opts.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.custom_flags(libc::O_NOFOLLOW);
-    }
-    let f = opts.open(&cur).ok()?;
+    // One `openat` per component, none followed if it is a symlink: a
+    // directory the agent swaps for a link mid-read can't redirect it.
+    let f = crate::safe_fs::open_beneath(home, Path::new(rel), crate::safe_fs::Mode::Read).ok()?;
     let meta = f.metadata().ok()?;
     if !meta.is_file() || meta.len() > MAX_COPY_BYTES {
         return None;

@@ -302,16 +302,12 @@ impl FsPolicy {
     pub fn read(&self, path: &str, line: Option<u64>, limit: Option<u64>) -> Result<String, String> {
         let c = self.inside(path)?;
         use std::io::Read;
-        let mut opts = std::fs::OpenOptions::new();
-        opts.read(true);
-        // Never block the host on a FIFO the agent made (the type check
-        // below then refuses it).
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.custom_flags(libc::O_NONBLOCK);
-        }
-        let f = opts.open(&c).map_err(|e| e.to_string())?;
+        let rel = c.strip_prefix(&self.root).map_err(|_| "outside the turn's directory".to_string())?;
+        // Opened beneath the root one component at a time, never following
+        // a symlink (a directory swapped after the check above can't
+        // redirect it), non-blocking (a FIFO is refused below, not waited on).
+        crate::safe_fs::race_point(&c);
+        let f = crate::safe_fs::open_beneath(&self.root, rel, crate::safe_fs::Mode::Read).map_err(|e| e.to_string())?;
         let meta = f.metadata().map_err(|e| e.to_string())?;
         if !meta.is_file() || meta.len() > MAX_FS_READ_BYTES {
             return Err(format!("not a regular file of at most {} MiB", MAX_FS_READ_BYTES / (1024 * 1024)));
@@ -363,29 +359,12 @@ impl FsPolicy {
         if std::fs::symlink_metadata(&c).is_ok_and(|m| m.file_type().is_symlink()) {
             return Err("that path is a symbolic link".into());
         }
-        let name = c.file_name().ok_or("no file name")?.to_owned();
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        // Re-check where the directory really is now that it exists.
-        let real_parent = std::fs::canonicalize(parent).map_err(|e| e.to_string())?;
-        if !real_parent.starts_with(&self.root) {
-            return Err("outside the turn's directory".into());
-        }
-        let target = real_parent.join(name);
-        if self.protected(&target) {
-            return Err("that path is protected".into());
-        }
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-        }
-        let mut f = opts.open(&target).map_err(|e| e.to_string())?;
-        if !f.metadata().map_err(|e| e.to_string())?.is_file() {
-            return Err("not a regular file".into());
-        }
-        std::io::Write::write_all(&mut f, content.as_bytes()).map_err(|e| e.to_string())
+        let rel = c.strip_prefix(&self.root).map_err(|_| "outside the turn's directory".to_string())?;
+        // Missing directories are made and every component is opened
+        // beneath the root without following a symlink, so a directory the
+        // agent swaps for a link after these checks can't redirect the
+        // write; only a regular file is written (O_NOFOLLOW, non-blocking).
+        crate::safe_fs::write_beneath(&self.root, rel, content.as_bytes()).map_err(|e| e.to_string())
     }
 }
 
@@ -1070,6 +1049,37 @@ mod tests {
         // The root inside a denied dir: the root's own files stay readable.
         let inner = FsPolicy { root: root.join("data"), writable: false, read_only: vec![], deny_read: vec![root.clone()] };
         assert_eq!(inner.read(root.join("data/serve.token").to_str().unwrap(), None, None).unwrap(), "secret");
+    }
+
+    /// The host serves fs/* in its own process: a directory on the way that
+    /// the agent swaps for a symlink after the path was checked must not
+    /// redirect the open outside the worktree.
+    #[cfg(unix)]
+    #[test]
+    fn fs_requests_survive_a_parent_swapped_for_a_symlink() {
+        let wt = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = crate::executor::canonical(wt.path());
+        let out = crate::executor::canonical(outside.path());
+        std::fs::write(out.join("secret.txt"), "OUTSIDE").unwrap();
+        let fs = FsPolicy { root: root.clone(), writable: true, read_only: vec![], deny_read: vec![] };
+        let swap = |root: std::path::PathBuf, out: std::path::PathBuf| {
+            move || {
+                std::fs::rename(root.join("sub"), root.join("sub.real")).unwrap();
+                std::os::unix::fs::symlink(&out, root.join("sub")).unwrap();
+            }
+        };
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        crate::safe_fs::set_race_hook(&root, swap(root.clone(), out.clone()));
+        let _ = fs.write(root.join("sub/planted.txt").to_str().unwrap(), "x");
+        assert!(!out.join("planted.txt").exists(), "wrote outside the worktree through a swapped parent");
+        std::fs::remove_file(root.join("sub")).unwrap();
+        std::fs::remove_dir_all(root.join("sub.real")).unwrap();
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/secret.txt"), "inside").unwrap();
+        crate::safe_fs::set_race_hook(&root, swap(root.clone(), out.clone()));
+        let r = fs.read(root.join("sub/secret.txt").to_str().unwrap(), None, None);
+        assert!(r.as_deref() != Ok("OUTSIDE"), "read outside the worktree through a swapped parent");
     }
 
     /// Protected paths are compared by name, case-insensitively and at any

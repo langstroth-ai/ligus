@@ -618,7 +618,10 @@ impl Inner {
         if meta.len() > MAX_FILE_BYTES {
             return Err(format!("{raw} is too large ({} bytes); use search to find the relevant lines", meta.len()));
         }
-        let bytes = std::fs::read(&r.abs).map_err(|e| format!("cannot read {raw}: {e}"))?;
+        // Opened beneath the root without following a symlink on the way
+        // (the path was resolved above; a directory swapped since can't
+        // redirect the read).
+        let bytes = crate::safe_fs::read_beneath(&self.root, &r.rel, MAX_FILE_BYTES).map_err(|e| format!("cannot read {raw}: {e}"))?;
         if is_binary(&bytes) {
             return Err(format!("{raw} is a binary file"));
         }
@@ -809,11 +812,10 @@ impl Inner {
         if r.rel.as_os_str().is_empty() || r.abs.is_dir() {
             return Err(format!("{raw} is a directory"));
         }
-        if let Some(parent) = r.abs.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("cannot create folder for {raw}: {e}"))?;
-        }
         let existed = r.abs.exists();
-        std::fs::write(&r.abs, content).map_err(|e| format!("cannot write {raw}: {e}"))?;
+        // Missing folders are made and the file opened beneath the root
+        // without following a symlink on the way.
+        crate::safe_fs::write_beneath(&self.root, &r.rel, content.as_bytes()).map_err(|e| format!("cannot write {raw}: {e}"))?;
         Ok(format!(
             "{} {} ({} bytes).",
             if existed { "Overwrote" } else { "Created" },
@@ -853,7 +855,7 @@ impl Inner {
             ));
         }
         let updated = if replace_all { text.replace(old, new) } else { text.replacen(old, new, 1) };
-        std::fs::write(&r.abs, updated).map_err(|e| format!("cannot write {raw}: {e}"))?;
+        crate::safe_fs::write_beneath(&self.root, &r.rel, updated.as_bytes()).map_err(|e| format!("cannot write {raw}: {e}"))?;
         Ok(format!(
             "Edited {}: replaced {count} occurrence{}.",
             display_rel(&r.rel),
@@ -1124,6 +1126,37 @@ mod tests {
         // An absolute path inside the root works, as given or canonical.
         ok(&t, READ_FILE, json!({"path": root.join("README.md")})).await;
         ok(&t, READ_FILE, json!({"path": t.root().join("README.md")})).await;
+    }
+
+    /// A directory swapped for a symlink between the path checks and the
+    /// open (a background process the model started can do it) must not
+    /// redirect a read or a write out of the root.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn file_tools_survive_a_parent_swapped_for_a_symlink() {
+        let (tmp, root) = setup();
+        let outside = tmp.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("secret.txt"), "OUTSIDE").unwrap();
+        let root = std::fs::canonicalize(&root).unwrap();
+        let swap = |root: PathBuf, out: PathBuf| {
+            move || {
+                std::fs::rename(root.join("sub"), root.join("sub.real")).unwrap();
+                std::os::unix::fs::symlink(&out, root.join("sub")).unwrap();
+            }
+        };
+        let t = tools(&root, |p| p.allow_write = true);
+        fs::create_dir_all(root.join("sub")).unwrap();
+        crate::safe_fs::set_race_hook(&root, swap(root.clone(), outside.clone()));
+        let _ = t.call(WRITE_FILE, &json!({"path": "sub/planted.txt", "content": "x"})).await;
+        assert!(!outside.join("planted.txt").exists(), "write_file went outside the root");
+        fs::remove_file(root.join("sub")).unwrap();
+        fs::remove_dir_all(root.join("sub.real")).unwrap();
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::write(root.join("sub/secret.txt"), "inside").unwrap();
+        crate::safe_fs::set_race_hook(&root, swap(root.clone(), outside.clone()));
+        let (text, _) = t.call(READ_FILE, &json!({"path": "sub/secret.txt"})).await;
+        assert!(!text.contains("OUTSIDE"), "read_file went outside the root: {text}");
     }
 
     #[cfg(unix)]
