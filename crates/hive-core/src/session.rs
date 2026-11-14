@@ -94,6 +94,11 @@ pub struct ChatSession {
     /// settings when this is (or is overlaid from) the config log.
     #[serde(default)]
     pub guards: crate::guard::GuardState,
+    /// Flow records (routing, hand-offs, marks, …) folded from this log; see
+    /// [`crate::flow`]. Skipped when empty so a session that never used flow
+    /// serializes exactly as before (snapshots are signed over that form).
+    #[serde(default, skip_serializing_if = "crate::flow::FlowState::is_empty")]
+    pub flow: crate::flow::FlowState,
     #[serde(default)]
     pub created_at: Timestamp,
     #[serde(default)]
@@ -164,6 +169,7 @@ impl ChatSession {
             workspace_runtimes: Vec::new(),
             workspace_hosts: Vec::new(),
             guards: Default::default(),
+            flow: crate::flow::FlowState::default(),
             created_at: now,
             updated_at: now,
         }

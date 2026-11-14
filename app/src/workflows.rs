@@ -367,14 +367,17 @@ async fn drive_run_inner(
                             }
                         }
                     }
-                    PreparedStage::Remote { agent_author, prompt_message_id } => {
+                    PreparedStage::Remote { agent_author, prompt_message_id, host_id } => {
+                        let wait = RemoteWait { host_id: &host_id, reference: format!("{run_id}:{node_id}") };
                         await_remote_stage(
+                            app,
                             state,
                             session_id,
                             run_id,
                             waker,
                             prompt_message_id,
                             &agent_author,
+                            wait,
                         )
                         .await
                     }
@@ -426,7 +429,16 @@ enum PreparedStage {
         agent_author: String,
         /// The stage's posted prompt; the reply must appear *after* it.
         prompt_message_id: Uuid,
+        /// The host the stage was sent to (empty: the owner's device).
+        host_id: String,
     },
+}
+
+/// What the flow layer needs about a remote stage's wait.
+struct RemoteWait<'a> {
+    host_id: &'a str,
+    /// `run:node`, for the stage edge-wait record.
+    reference: String,
 }
 
 async fn prepare_stage(
@@ -454,6 +466,7 @@ async fn prepare_stage(
     let rendered = wf::render_template(prompt_template, &run.input, &outputs);
     let agent = resolve_stage_agent(&before, agent_id, &node.name)?;
     let responder = responder_for(state, &before, agent.as_ref());
+    crate::flow::record_stage_handoff(state, &before, run, node, agent.as_ref());
     let local_actor_id = state.local_actor_id();
     // A relay-less (local) or solo workspace has no other device to defer a stage
     // to, so this device always runs it — even when the responder's recorded owner
@@ -484,6 +497,7 @@ async fn prepare_stage(
         return Ok(PreparedStage::Remote {
             agent_author: responder.author.clone(),
             prompt_message_id: posted.id,
+            host_id: responder.host_id.clone(),
         });
     }
 
@@ -565,15 +579,20 @@ pub(crate) fn stage_owner_runs_here(local_actor_id: &str, owner_actor_id: &str) 
 ///      disambiguated — the worker's per-agent latest-mention dedup collapses
 ///      them, so both would match the one reply. A sequential DAG (the common
 ///      shape, and every single-remote-stage ready-set) is unaffected.
+#[allow(clippy::too_many_arguments)]
 async fn await_remote_stage(
+    app: &AppHandle,
     state: &State<'_, AppState>,
     session_id: Uuid,
     run_id: Uuid,
     waker: &Notify,
     prompt_message_id: Uuid,
     agent_author: &str,
+    wait: RemoteWait<'_>,
 ) -> Result<TurnOutcome, String> {
-    let deadline = Instant::now() + REMOTE_STAGE_TIMEOUT;
+    let started = Instant::now();
+    let deadline = started + REMOTE_STAGE_TIMEOUT;
+    let mut offered = false;
     loop {
         // Observe (don't consume) cancellation — the top-of-loop handler still
         // needs to see it to settle the run.
@@ -587,7 +606,24 @@ async fn await_remote_stage(
         if let Some((message_id, body)) =
             match_stage_reply(&messages, prompt_message_id, agent_author)
         {
+            crate::flow::record_stage_wait(state, session_id, prompt_message_id, message_id, wait.host_id, wait.reference.clone());
             return Ok(TurnOutcome { message_id, body });
+        }
+        // Opt-in backpressure: a stage queued on a busy or offline host may
+        // be taken by this device when it is idle and can run the agent.
+        if !offered && started.elapsed() >= crate::flow::IDLE_OFFER_AFTER {
+            offered = true;
+            if let Some(responder) = crate::flow::offer_stage_here(state, session_id, prompt_message_id, agent_author) {
+                let workspace_id = state
+                    .service
+                    .lock()
+                    .unwrap()
+                    .load(session_id)
+                    .map_err(map_err)?
+                    .ok_or("unknown session")?
+                    .workspace_id;
+                return crate::run_turn_answering(app, state, session_id, workspace_id, &responder, Some(prompt_message_id)).await;
+            }
         }
         if Instant::now() >= deadline {
             return Err(format!(

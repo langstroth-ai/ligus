@@ -25,6 +25,8 @@ import { UpdatesSection } from "@/components/settings/UpdatesSection";
 import { DiagnosticsSection } from "@/components/settings/DiagnosticsSection";
 import { DangerZoneSection } from "@/components/settings/DangerZoneSection";
 import { GuardsSection } from "@/components/guards/GuardsSection";
+import { FlowSection } from "@/components/settings/FlowSection";
+import { IconComb } from "@/components/flow/icon";
 
 // ── Grouped nav (§6.5) ──────────────────────────────────────────────────────
 // Settings is grouped by who a setting affects, not by a flat tab strip.
@@ -38,6 +40,7 @@ export type SettingsTab =
   | "models"
   | "tools"
   | "permissions"
+  | "flow"
   | "updates"
   | "diagnostics"
   | "danger";
@@ -71,6 +74,7 @@ const NAV_GROUPS: NavGroup[] = [
       { id: "models", label: "Models & runtimes", icon: <IconHexagon size={16} />, keywords: ["api key", "provider", "anthropic", "openai", "openrouter", "ollama", "claude", "model", "runtime", "endpoint", "agent", "prompt"] },
       { id: "tools", label: "Tools & MCP", icon: <IconWrench size={16} />, keywords: ["mcp", "server", "linear", "github", "tool", "integration"] },
       { id: "permissions", label: "Permissions", icon: <IconLock size={16} />, keywords: ["permission", "bypass", "shell", "edits", "file access", "safety", "sandbox"] },
+      { id: "flow", label: "Flow", icon: <IconComb size={16} />, keywords: ["routing", "route", "shadow", "hand-off", "handoff", "queue", "review queue", "task board", "marks", "worktree"] },
     ],
   },
   {
@@ -241,6 +245,7 @@ export function SettingsView({
           {tab === "models" && <ModelsSection />}
           {tab === "tools" && <ToolsSection />}
           {tab === "permissions" && <PermissionsSection />}
+          {tab === "flow" && <FlowSection />}
           {tab === "updates" && <UpdatesSection />}
           {tab === "diagnostics" && <DiagnosticsSection />}
           {tab === "danger" && <DangerZoneSection />}

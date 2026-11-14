@@ -215,6 +215,12 @@ or the other device's name and how long ago its last heartbeat arrived.
   can't keep a dead device's lease alive and block recovery. In a
   workspace without account keys the card marks the holder *unverified*.
 
+A stage that feeds the next records a hand-off card, and the wait of each
+stage sent to another host is measured. With **Take queued stages when idle**
+on (Settings → Flow), a stage that waits over a minute for a busy or offline
+host can run on an idle device that has the agent's runtime. See
+[Flow](flow.md#backpressure-the-review-queue).
+
 ## Current limits
 
 - Only a person starts a run; there is no schedule or event trigger for

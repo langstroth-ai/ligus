@@ -112,7 +112,7 @@ pub fn requires_projection_authz(event: &SessionEvent) -> bool {
             | SessionEvent::DearthModeChanged { .. }
             | SessionEvent::JoinApproved { .. }
             | SessionEvent::ChatLockdownCleared { .. }
-    )
+    ) || matches!(event, SessionEvent::FlowRecorded { record } if record.is_config())
 }
 
 /// Coordinator leases are deliberately **not** role-gated in projection: a run's
@@ -211,6 +211,11 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         // Dearth mode and join approvals are governance (the entrance policy).
         | SessionEvent::DearthModeChanged { .. }
         | SessionEvent::JoinApproved { .. } => WorkspaceRole::Admin,
+        // Path zones set the review bar; the beacon says where home is.
+        SessionEvent::FlowRecorded { record } if record.is_governance() => WorkspaceRole::Admin,
+        // Every other flow record is collaboration content (routing logs,
+        // hand-offs, marks, agent profiles).
+        SessionEvent::FlowRecorded { .. } => WorkspaceRole::Contributor,
         // content / collaboration
         SessionEvent::SessionSnapshot { .. }
         | SessionEvent::MessageAppended { .. }

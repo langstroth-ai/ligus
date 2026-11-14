@@ -42,6 +42,7 @@ mod workflows;
 mod guards;
 mod proposal_sets;
 mod data_migration;
+mod flow;
 /// In-app live test support (see `tests/app_live.rs`); not in release builds.
 #[cfg(feature = "e2e")]
 #[doc(hidden)]
@@ -307,6 +308,9 @@ struct LiveSettings {
     /// Nearest chunks handed to the reranker.
     #[serde(default = "default_retrieval_candidates")]
     retrieval_candidates: usize,
+    /// Flow settings (routing, hand-offs, backpressure, task board).
+    #[serde(default)]
+    flow: crate::flow::FlowSettings,
     /// Model id for the synthesized "Primary Runtime" (the default when no
     /// runtime is configured). `None` = fall back to env/DEFAULT_MODEL.
     #[serde(default)]
@@ -530,6 +534,7 @@ impl Default for LiveSettings {
             retrieval_rerank_model: String::new(),
             retrieval_top_k: default_retrieval_top_k(),
             retrieval_candidates: default_retrieval_candidates(),
+            flow: crate::flow::FlowSettings::default(),
             default_model: None,
             default_runtime_id: None,
             local_workspace_id: None,
@@ -5603,10 +5608,11 @@ async fn implement_proposal_inner(
             }
             {
                 let mut svc = state.service.lock().unwrap();
-                let mut applied = proposal;
+                let mut applied = proposal.clone();
                 applied.status = ProposalStatus::Applied;
                 svc.upsert_proposal(sid, workspace_id, applied).map_err(map_err)?;
             }
+            flow::after_apply(&state, sid, workspace_id, &proposal, &repo_root);
             let _ = app.emit("workspace://synced", 1);
             return Ok(());
         }
@@ -7533,6 +7539,8 @@ fn finalize_reply(
     full: &str,
     edits_in_review: bool,
 ) -> Result<String, String> {
+    // Flow directives (hand-off parcels, workspace marks) are kept for after the turn.
+    let full = &crate::flow::take_directives(message_id, full);
     let parsed = hive_runtime::directives::parse_reply_directives(full);
     let mut cleaned = redact_workspace_path(&parsed.cleaned, workspace_root);
     // A scout's assessment: recorded in its proposal set, and the visible
@@ -7713,8 +7721,53 @@ async fn run_turn_answering(
 /// The workflow engine uses this directly: each parallel stage must snapshot
 /// its context *after* its own prompt is posted but *before* a sibling
 /// stage's prompt lands, so context assembly and execution are split.
+///
+/// Run one prepared turn, with the flow hooks around it: the turn's context
+/// is primed (hand-off card, marks, queue notes) and the finished turn is
+/// tagged with its measured facts (see [`flow`]).
 #[allow(clippy::too_many_arguments)]
 async fn run_prepared_turn(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    session_id: Uuid,
+    workspace_id: Uuid,
+    responder: &Responder,
+    session: &ChatSession,
+    system: String,
+    mut turns: Vec<ChatTurn>,
+) -> Result<TurnOutcome, String> {
+    let started_ms = hive_core::flow::now_ms();
+    let primed = flow::prime_turns(state, session, responder, &mut turns);
+    let system = flow::with_guidance(state, system);
+    let before = {
+        let svc = state.service.lock().unwrap();
+        svc.load(session_id).ok().flatten().map(|s| s.messages.len()).unwrap_or(0)
+    };
+    let result = run_prepared_turn_inner(app, state, session_id, workspace_id, responder, session, system, turns).await;
+    // The reply this turn produced: from the outcome, else (an error) the
+    // placeholder it appended.
+    let message_id = match &result {
+        Ok(o) => Some(o.message_id),
+        Err(_) => {
+            let svc = state.service.lock().unwrap();
+            svc.load(session_id).ok().flatten().and_then(|s| {
+                s.messages.iter().skip(before).rev().find(|m| m.author == responder.author && m.role != MessageRole::User).map(|m| m.id)
+            })
+        }
+    };
+    let facts = flow::TurnFacts {
+        responder,
+        message_id,
+        started_ms,
+        error: result.as_ref().err().map(String::as_str).filter(|e| !e.contains("stopped by user")),
+        primed,
+    };
+    flow::after_turn(app, state, session_id, workspace_id, facts);
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_prepared_turn_inner(
     app: &AppHandle,
     state: &State<'_, AppState>,
     session_id: Uuid,
@@ -7835,7 +7888,8 @@ async fn run_prepared_turn(
         // Phase 2a: cut the ephemeral turn worktree from the chat's persistent
         // base branch `hive/chat/<sessionid>` (falling back to HEAD); if that
         // also fails, run in place.
-        match hive_runtime::git_worktree::cut_turn_worktree(
+        match flow::cut_turn_worktree(
+            state,
             std::path::Path::new(&repo_root),
             &session_id.to_string(),
             &turn_key,
@@ -7854,11 +7908,10 @@ async fn run_prepared_turn(
     // `LazyTurnWorktree`), so plain Q&A never creates one. Its diff is
     // captured below exactly like an eagerly isolated turn's.
     let lazy_worktree = isolates_on_write(builtin_wanted, in_repo).then(|| {
-        std::sync::Arc::new(hive_runtime::git_worktree::LazyTurnWorktree::new(
-            &repo_root,
-            session_id.to_string(),
-            turn_key.clone(),
-        ))
+        std::sync::Arc::new(
+            hive_runtime::git_worktree::LazyTurnWorktree::new(&repo_root, session_id.to_string(), turn_key.clone())
+                .with_reuse(flow::settings(state).reuse_worktrees),
+        )
     });
     // Until it writes, a lazily isolated turn reads its OWN chat's base
     // worktree — the tree its worktree will be cut from — not the active
@@ -8053,6 +8106,7 @@ async fn run_prepared_turn(
         // their results, and thinking. Pushed as a separate Tauri event and shown
         // under the generating bubble; ephemeral (never persisted to the log).
         |act| {
+            crate::flow::observe_activity(message_id, &act);
             let ev = match act {
                 dispatch::StreamActivity::Tool { id, name, input_json } => ChatActivityEvent {
                     session_id: session_id.to_string(),
@@ -8179,6 +8233,7 @@ async fn run_prepared_turn(
                         // Record which agent produced it so "Send to agent to
                         // revise" re-dispatches the right one (None = primary @hive).
                         prop.producing_agent_id = responder.agent_id;
+                        flow::before_file_proposal(state, session_id, workspace_id, responder.agent_id, &mut prop);
                         {
                             let mut svc = state.service.lock().unwrap();
                             let filed = prop.id;
@@ -8190,7 +8245,7 @@ async fn run_prepared_turn(
                         let _ = app.emit("workspace://synced", 1);
                     }
                 }
-                let _ = wt.remove();
+                flow::release_worktree(state, wt, session_id);
             }
             let body = body?;
             let _ = app.emit(
@@ -8209,7 +8264,7 @@ async fn run_prepared_turn(
             // Discard the isolated worktree — a failed/aborted turn's partial
             // edits are not surfaced (no proposal), and the worktree is pruned.
             if let Some(wt) = worktree {
-                let _ = wt.remove();
+                flow::release_worktree(state, wt, session_id);
             }
             let msg = e.to_string();
             if stopped {
@@ -8361,7 +8416,7 @@ async fn run_deferred_claim_fallback(
             return Ok(());
         };
         let links = device_links_of(&svc, session.workspace_id);
-        match dispatch_target(&trigger.body, &session, local_only, &links) {
+        match flow::routed_target(&state, &svc, &session, trigger_id, &trigger.body, local_only, &links).0 {
             Some(DispatchTarget::Agent(id)) => session
                 .workspace_agents
                 .iter()
@@ -8433,7 +8488,12 @@ async fn send_message(
         // global mutex and bricks every future `service.lock()` this process.
         let Some(session) = svc.load(sid).map_err(map_err)? else { return Ok(()) };
         let links = device_links_of(&svc, workspace_id);
-        (workspace_id, posted.id, dispatch_target(&body, &session, local_only, &links))
+        // Un-addressed messages may be routed (shadow mode logs the pick only).
+        let (target, decision) = flow::routed_target(&state, &svc, &session, posted.id, &body, local_only, &links);
+        if let Some(d) = decision {
+            let _ = svc.record_flow(sid, workspace_id, hive_core::flow::FlowRecord::RouteDecision(d));
+        }
+        (workspace_id, posted.id, target)
     };
 
     // Turn loop: a reply that mentions another (distinct) agent cascades a
@@ -8741,7 +8801,8 @@ fn plan_response(state: &AppState, sid: Uuid, trigger: Option<Uuid>) -> Result<O
         runs_here_linked(local_only, &links, &session, &local_actor_id, &responder.owner_actor_id, binding)
     };
     Ok(match m.role {
-        MessageRole::User => match dispatch_target(&m.body, &session, local_only, &links) {
+        // Same routing as `send_message` (see `flow::route_target`).
+        MessageRole::User => match flow::routed_target(state, &svc, &session, m.id, &m.body, local_only, &links).0 {
             Some(target) => {
                 let agent = match target {
                     DispatchTarget::Agent(id) => session.workspace_agents.iter().find(|a| a.id == id).cloned(),
@@ -8827,6 +8888,7 @@ async fn respond_once(
         }
     }
     tracing::info!(target: "dispatch", session = %sid, ms = started.elapsed().as_millis() as u64, "claimed turn");
+    flow::record_route_if_missing(state, sid, trigger_id);
     run_turn_answering(app, state, sid, workspace_id, &responder, Some(trigger_id)).await.map(|_| ())
 }
 
@@ -10654,6 +10716,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
             retrieval_rerank_model: String::new(),
             retrieval_top_k: default_retrieval_top_k(),
             retrieval_candidates: default_retrieval_candidates(),
+            flow: crate::flow::FlowSettings::default(),
             default_model: None,
             default_runtime_id: None,
         local_workspace_id: None,
@@ -14396,6 +14459,7 @@ pub fn run() {
             // List this desktop as an online Device host in the synced room, so
             // the phone (via `ligus serve`) can tell whether @hive can answer now.
             tauri::async_runtime::spawn(run_device_host_loop(app.handle().clone()));
+            tauri::async_runtime::spawn(flow::run_tick(app.handle().clone()));
 
             // Coordinator leases: publish our heartbeats, read others', and
             // succeed a lapsed holder's workflow runs.
@@ -14440,6 +14504,24 @@ pub fn run() {
             revoke_relay_token,
             set_relay_user_disabled,
             workflows::list_workflows,
+            flow::flow_get_settings,
+            flow::flow_set_settings,
+            flow::flow_handoffs,
+            flow::flow_routing_report,
+            flow::flow_clear_route_stop,
+            flow::flow_queue_report,
+            flow::flow_marks,
+            flow::flow_add_mark,
+            flow::flow_clear_mark,
+            flow::flow_zones,
+            flow::flow_set_zone,
+            flow::flow_remove_zone,
+            flow::flow_roster,
+            flow::flow_set_agent_profile,
+            flow::flow_board,
+            flow::flow_pickup,
+            flow::flow_home,
+            flow::flow_publish_beacon,
             workflows::remove_workflow,
             workflows::set_workflow_enabled,
             workflows::workflow_change_request,

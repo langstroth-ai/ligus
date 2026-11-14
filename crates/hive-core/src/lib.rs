@@ -14,6 +14,7 @@ pub mod device_link;
 pub mod e2ee;
 pub mod endpoint;
 pub mod events;
+pub mod flow;
 pub mod git_context;
 pub mod guard;
 pub mod identity;

@@ -98,6 +98,7 @@ nav:
       - Mentions & notifications: features/mentions-and-notifications.md
       - Agentic workflows: features/workflows.md
       - Workspace guards: features/guards.md
+      - Flow (routing, hand-offs, task board): features/flow.md
       - Ligus on your phone: features/phone-app.md
       - Host dashboard: features/dashboard.md
       - Scheduled agents: features/scheduling.md

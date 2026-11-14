@@ -33,6 +33,7 @@ Documentation site: https://docs.ligus.ai/ — pages below are the canonical ref
 - [Exploring options (proposal sets)](https://docs.ligus.ai/features/proposal-sets/): Competing alternatives assessed blind by agent scouts, quorum and stop signals, and a person's decision after a pre-flight.
 - [Mentions & notifications](https://docs.ligus.ai/features/mentions-and-notifications/): Addressing participants and how notifications work.
 - [Agentic workflows](https://docs.ligus.ai/features/workflows/): Multi-stage agent pipelines and human-approval gates, including gate-routes-back loops. Agents author definitions as reviewable proposals; people approve, run and pause them.
+- [Flow](https://docs.ligus.ai/features/flow/): Hand-off cards and context parcels, outcome-weighted routing of un-addressed work (shadow mode first) with adaptive exploration and cool-downs, review-queue backpressure, the threshold task board, careers, workspace marks, path zones, worktree reuse and the home beacon.
 - [Ligus on your phone](https://docs.ligus.ai/features/phone-app/): The phone app over `ligus serve`: chats, people and channels, proposal review, workflow approvals, push, Match host.
 - [Host dashboard](https://docs.ligus.ai/features/dashboard/): The dashboard `ligus serve` shows on the phone: built-in Ligus section, dashboard.toml panels, MCP tool panels, tables.
 - [Scheduled agents](https://docs.ligus.ai/features/scheduling/): Recurring, cron-like agent runs.

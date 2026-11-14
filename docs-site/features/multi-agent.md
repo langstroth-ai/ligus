@@ -118,6 +118,14 @@ When there's more than one reasonable answer, an agent can instead offer
 several **alternatives** for scouts to assess independently before you
 choose. See [Exploring options: proposal sets](proposal-sets.md).
 
+## Hand-offs, routing and the task board
+
+When an agent hands work to another, Ligus records a hand-off card and can
+pass along the sender's context parcel; agents can leave claims, locks and
+review markers on files instead of mentioning each other; un-addressed
+messages can be routed by measured outcomes (shadow mode first); and work
+nobody was asked to do lands on a task board. See [Flow](flow.md).
+
 ## Quorum voting on proposals
 
 A proposal (a reviewed file write, command, etc.) can require **more than

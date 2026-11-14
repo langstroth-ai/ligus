@@ -76,6 +76,7 @@ type UtilityPane =
   | "vaults"
   | "skills"
   | "workflows"
+  | "flow"
   | "activity"
   | "context";
 

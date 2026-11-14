@@ -308,6 +308,10 @@ pub enum SessionEvent {
     /// chat's branch ("capped dead brood"): marked stale. Session-scoped
     /// content, like a dismissal.
     ProposalMarkedStale { proposal_id: Uuid },
+    /// A flow record (routing decision, hand-off card, workspace mark, …; see
+    /// [`crate::flow::FlowRecord`]). Additive: an older build decodes it as
+    /// `Unknown`. Config records ride the workspace-config log.
+    FlowRecorded { record: crate::flow::FlowRecord },
     /// Forward-compat catch-all: an event `kind` this build does not recognize
     /// (produced by a newer client). Serde deserializes an unknown tag here
     /// instead of failing the whole stream; it projects as a no-op. The raw
@@ -379,6 +383,7 @@ impl SessionEvent {
             SessionEvent::ChatLockdownRaised { .. } => "chatLockdownRaised",
             SessionEvent::ChatLockdownCleared { .. } => "chatLockdownCleared",
             SessionEvent::ProposalMarkedStale { .. } => "proposalMarkedStale",
+            SessionEvent::FlowRecorded { .. } => "flowRecorded",
             SessionEvent::Unknown => "unknown",
         }
     }
@@ -408,6 +413,7 @@ impl SessionEvent {
             | SessionEvent::JoinApproved { .. }
             | SessionEvent::ChatLockdownRaised { .. }
             | SessionEvent::ChatLockdownCleared { .. } => EventScope::Workspace,
+            SessionEvent::FlowRecorded { record } if record.is_config() => EventScope::Workspace,
             SessionEvent::WorkflowRunUpserted { .. } => EventScope::Run,
             _ => EventScope::Session,
         }
@@ -719,6 +725,7 @@ impl ChatSession {
             SessionEvent::WorkspaceHostRemoved { host_id } => {
                 self.workspace_hosts.retain(|h| &h.id != host_id);
             }
+            SessionEvent::FlowRecorded { record } => self.flow.apply(record),
             // Trust metadata — inert in the session projection; consumed only by
             // the device-roster builder (see hive-runtime::envelope_verifier).
             SessionEvent::AccountKeyRegistered { .. }
@@ -1132,6 +1139,39 @@ mod tests {
         b.members.push(member("owner", "owner", WorkspaceRole::Owner));
         b.members.push(member("mallory", "mallory", WorkspaceRole::Viewer));
         b
+    }
+
+    #[test]
+    fn flow_records_fold_and_config_records_are_authorized_on_ingest() {
+        use crate::flow::{FlowRecord, PathZone, ZoneKind};
+        let base = owner_and_viewer_base();
+        let (sid, wid) = (base.id, base.workspace_id);
+        let zone = |pattern: &str| PathZone {
+            id: Uuid::new_v4(),
+            pattern: pattern.into(),
+            kind: ZoneKind::Core,
+            approval_floor: None,
+            required_approvals: None,
+            note: String::new(),
+            at_ms: 0,
+        };
+        let rec = |r: FlowRecord| SessionEvent::FlowRecorded { record: r };
+        let envs = vec![
+            snapshot_env(base, 1),
+            // A Viewer can't set the review bar (governance flow record).
+            by("mallory", env(sid, wid, 2, rec(FlowRecord::Zone(zone("evil/"))))),
+            by("owner", env(sid, wid, 3, rec(FlowRecord::Zone(zone("crates/core/"))))),
+        ];
+        let s = project(&envs).unwrap();
+        assert_eq!(s.flow.zones.len(), 1);
+        assert_eq!(s.flow.zones[0].pattern, "crates/core/");
+        assert_eq!(rec(FlowRecord::Zone(zone("x"))).scope(), EventScope::Workspace);
+        assert_eq!(rec(FlowRecord::Unknown).kind_str(), "flowRecorded");
+        // An unknown flow record type from a newer build decodes and is inert.
+        let json = r#"{"kind":"flowRecorded","record":{"type":"futureThing","x":1}}"#;
+        let ev: SessionEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(ev, rec(FlowRecord::Unknown));
+        assert_eq!(crate::authorization::min_role_for(&ev), WorkspaceRole::Admin);
     }
 
     #[test]

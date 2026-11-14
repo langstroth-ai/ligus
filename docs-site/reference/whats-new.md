@@ -46,6 +46,12 @@ Full release notes are on the
   rivals, and you decide with a pre-flight (tests, base, hosts) before
   applying. A fast to careful dial sets how much agreement is needed. See
   [Exploring options](../features/proposal-sets.md).
+- **Flow.** Hand-off cards and context parcels when one agent passes work to
+  another; un-addressed work routed by measured outcomes (in shadow mode
+  first) with cool-downs after failures; backpressure at the review queue; a
+  task board for work nobody was asked to do; workspace marks (claims, locks,
+  review markers); path zones that raise the review bar where a change lands;
+  reused turn worktrees; and a home beacon. See [Flow](../features/flow.md).
 
 ## 2.0
 
