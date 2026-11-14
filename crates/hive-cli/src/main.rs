@@ -1199,6 +1199,9 @@ fn run() -> Result<()> {
         return Ok(());
     }
     let cfg = config();
+    // Ligus's own secret env values are masked wherever agent output is
+    // logged (relay tokens, the workspace key, provider keys passed in).
+    hive_runtime::secret_redact::register_env_secrets();
     let cmd = args.first().map(String::as_str).unwrap_or("");
     let rest = &args[args.len().min(1)..];
     // `hive <cmd> --help` prints usage instead of running the command (a bare

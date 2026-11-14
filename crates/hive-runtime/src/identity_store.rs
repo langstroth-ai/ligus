@@ -61,6 +61,7 @@ impl FileKeyVault {
 
 impl KeyVault for FileKeyVault {
     fn store_seed(&self, key_id: &str, seed: &[u8; 32]) -> Result<(), IdentityError> {
+        crate::secret_redact::register_bytes(seed);
         std::fs::create_dir_all(&self.dir)?;
         let path = self.path_for(key_id);
         #[cfg(unix)]
@@ -93,6 +94,7 @@ impl KeyVault for FileKeyVault {
                     .as_slice()
                     .try_into()
                     .map_err(|_| IdentityError::MissingSeed(key_id.to_string()))?;
+                crate::secret_redact::register_bytes(&seed);
                 Ok(Some(seed))
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),

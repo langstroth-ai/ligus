@@ -1764,8 +1764,14 @@ impl ChatService {
         &mut self,
         session_id: Uuid,
         workspace_id: Uuid,
-        proposal: ActionProposal,
+        mut proposal: ActionProposal,
     ) -> Result<()> {
+        // Never let one of this device's own secrets ride a synced proposal.
+        proposal.title = crate::secret_redact::redacted(&proposal.title);
+        proposal.body = crate::secret_redact::redacted(&proposal.body);
+        if let Some(d) = proposal.diff.as_mut() {
+            *d = crate::secret_redact::redacted(d);
+        }
         self.append_signed(
             session_id,
             workspace_id,

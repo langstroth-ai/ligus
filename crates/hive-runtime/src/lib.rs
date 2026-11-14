@@ -40,6 +40,7 @@ pub mod relay_client;
 pub mod remote_manifest;
 pub mod retrieval;
 pub mod sandbox;
+pub mod secret_redact;
 pub mod sse;
 pub mod sync_engine;
 pub mod tool_loop;

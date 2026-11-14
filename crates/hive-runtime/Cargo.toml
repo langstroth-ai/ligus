@@ -26,6 +26,8 @@ sha2 = "0.10"
 getrandom = "0.2"
 # Built-in coding tools (search). Both already in the lockfile.
 regex = "1"
+# Exact-match redaction of Ligus's own secrets (already in the tree via regex).
+aho-corasick = "1"
 walkdir = "2"
 iroh = { version = "1.0.0-rc.1", optional = true }
 

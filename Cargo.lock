@@ -2526,6 +2526,7 @@ dependencies = [
 name = "hive-runtime"
 version = "2.0.0"
 dependencies = [
+ "aho-corasick",
  "anyhow",
  "axum",
  "base64 0.22.1",

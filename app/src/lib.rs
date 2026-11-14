@@ -866,6 +866,9 @@ fn settings_file(data_dir: &std::path::Path) -> PathBuf {
 /// `settings.json` holds provider keys and OAuth tokens: owner-only (0600)
 /// and written atomically, so a crash never leaves it truncated.
 fn save_settings(data_dir: &std::path::Path, settings: &LiveSettings) {
+    if let Ok(v) = serde_json::to_value(settings) {
+        hive_runtime::secret_redact::register_json_secrets(&v);
+    }
     if let Ok(bytes) = serde_json::to_vec_pretty(settings) {
         if let Err(e) = hive_runtime::private_file::write_private_atomic(&settings_file(data_dir), &bytes) {
             tracing::warn!(target: "settings", "couldn't save settings: {e}");
@@ -875,8 +878,14 @@ fn save_settings(data_dir: &std::path::Path, settings: &LiveSettings) {
 
 /// Load persisted settings, or seed the file from `env_seed` on first launch.
 fn load_or_seed_settings(data_dir: &std::path::Path, env_seed: LiveSettings) -> LiveSettings {
+    hive_runtime::secret_redact::register_env_secrets();
     match std::fs::read_to_string(settings_file(data_dir)) {
-        Ok(text) => serde_json::from_str(&text).unwrap_or(env_seed),
+        Ok(text) => {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                hive_runtime::secret_redact::register_json_secrets(&v);
+            }
+            serde_json::from_str(&text).unwrap_or(env_seed)
+        }
         Err(_) => {
             save_settings(data_dir, &env_seed);
             env_seed
