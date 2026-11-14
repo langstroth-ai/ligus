@@ -14,7 +14,9 @@
 //!   in the plan's `write_extra`); a write there fails in the sandbox.
 //! - Sign-in tokens a CLI refreshes during the turn are copied back after it
 //!   (only the credential files in [`credential_files`], only when they
-//!   still parse as a JSON object), so a rotated refresh token isn't lost.
+//!   still parse as a JSON object with the same keys and name the same
+//!   account, [`same_sign_in`]), so a rotated refresh token isn't lost and
+//!   an agent can't sign the user's CLI into another account.
 //! - macOS: the login keychain is reached through symlinks to the real
 //!   `~/Library/Keychains` and the security preferences (the keychain is a
 //!   service, not a file the agent can write through the profile).
@@ -176,6 +178,99 @@ fn read_turn_file(home: &Path, rel: &str) -> Option<Vec<u8>> {
     Some(buf)
 }
 
+/// The claims of a JWT (`header.payload.signature`), unverified: only used
+/// to compare who a refreshed token names with who the old one named.
+fn jwt_claims(token: &str) -> Option<serde_json::Value> {
+    use base64::Engine;
+    let payload = token.split('.').nth(1)?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload.trim_end_matches('=')).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// The fields of a credential file that say whose sign-in it is, by CLI
+/// and file: account ids, emails, user names, orgs, and the identity claims
+/// of an embedded `id_token`. Each is (where, value); a field the file
+/// doesn't have is left out.
+fn identity_fields(v: &serde_json::Value) -> Vec<(String, serde_json::Value)> {
+    use serde_json::Value;
+    const KEYS: [&str; 16] = [
+        // Claude Code's file names no account; its plan is the closest
+        // thing to one.
+        "subscriptionType",
+        // A key that replaces the sign-in sends the work to its owner.
+        "OPENAI_API_KEY",
+        "apiKey",
+        "api_key",
+        "account_id",
+        "accountId",
+        "accountUuid",
+        "email",
+        "emailAddress",
+        "user",
+        "login",
+        "organizationUuid",
+        "org_id",
+        "orgId",
+        "active",
+        "sub",
+    ];
+    const CLAIMS: [&str; 4] = ["email", "sub", "org_id", "https://api.openai.com/auth"];
+    fn walk(v: &Value, path: &str, out: &mut Vec<(String, Value)>) {
+        let Value::Object(m) = v else { return };
+        for (k, x) in m {
+            let p = format!("{path}/{k}");
+            if KEYS.contains(&k.as_str()) && !x.is_object() {
+                out.push((p.clone(), x.clone()));
+            }
+            if k == "id_token" {
+                if let Some(c) = x.as_str().and_then(jwt_claims) {
+                    for claim in CLAIMS {
+                        if let Some(val) = c.get(claim) {
+                            out.push((format!("{p}#{claim}"), val.clone()));
+                        }
+                    }
+                }
+            }
+            walk(x, &p, out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(v, "", &mut out);
+    out
+}
+
+/// Whether `new` is a refresh of the sign-in in `old`: the same top-level
+/// keys (and the same keys one level down, so a file can't grow an
+/// `apiKeyHelper` or a second host), and every identity field the old file
+/// had present with the same value.
+pub fn same_sign_in(old: &serde_json::Value, new: &serde_json::Value) -> Result<(), &'static str> {
+    use serde_json::Value;
+    let keys = |v: &Value| -> Option<Vec<(String, Vec<String>)>> {
+        let m = v.as_object()?;
+        let mut ks: Vec<(String, Vec<String>)> = m
+            .iter()
+            .map(|(k, x)| {
+                let mut inner: Vec<String> = x.as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default();
+                inner.sort();
+                (k.clone(), inner)
+            })
+            .collect();
+        ks.sort();
+        Some(ks)
+    };
+    match (keys(old), keys(new)) {
+        (Some(a), Some(b)) if a == b => {}
+        _ => return Err("its keys changed"),
+    }
+    let now = identity_fields(new);
+    for (path, val) in identity_fields(old) {
+        if !now.iter().any(|(p, v)| *p == path && *v == val) {
+            return Err("it names a different account");
+        }
+    }
+    Ok(())
+}
+
 /// After the turn: copy refreshed sign-in files back to their real place
 /// (only valid JSON objects, only the files in [`credential_files`]).
 pub fn copy_back(kind: ModelProviderKind, real_home: &Path, home: &Path) {
@@ -185,13 +280,18 @@ pub fn copy_back(kind: ModelProviderKind, real_home: &Path, home: &Path) {
         if old.as_deref() == Some(new.as_slice()) || new.len() as u64 > MAX_COPY_BYTES {
             continue;
         }
-        if !serde_json::from_slice::<serde_json::Value>(&new).is_ok_and(|v| v.is_object()) {
+        let Some(new_v) = serde_json::from_slice::<serde_json::Value>(&new).ok().filter(|v| v.is_object()) else { continue };
+        // Only a file the user already had (a sign-in this turn didn't make),
+        // and only a refresh of that same sign-in: an agent can write a valid
+        // sign-in for another account into its turn home, and copying it
+        // back would sign the user's CLI into that account.
+        let Some(old) = old else { continue };
+        let old_v = serde_json::from_slice::<serde_json::Value>(&old).unwrap_or(serde_json::Value::Null);
+        if let Err(why) = same_sign_in(&old_v, &new_v) {
+            tracing::warn!(target: "sandbox", cli = ?kind, file = %f, "not copying back a changed CLI sign-in: {why}");
             continue;
         }
-        // Only a file the user already had (a sign-in this turn didn't make).
-        if old.is_some() {
-            let _ = crate::private_file::write_private_atomic(&real, &new);
-        }
+        let _ = crate::private_file::write_private_atomic(&real, &new);
     }
 }
 
@@ -214,6 +314,105 @@ mod tests {
         assert!(!home.join(".claude/hooks").exists());
         let e = env(ModelProviderKind::ClaudeCode, &home);
         assert!(e.iter().any(|(k, v)| k == "HOME" && *v == home.as_os_str()));
+    }
+
+    fn jwt(claims: serde_json::Value) -> String {
+        use base64::Engine;
+        let e = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        format!("{}.{}.sig", e.encode(b"{\"alg\":\"none\"}"), e.encode(claims.to_string()))
+    }
+
+    /// Per first-class CLI: (credential file, the user's sign-in, a refresh
+    /// of it, the same shape signed in as someone else, a shape with keys
+    /// added or removed).
+    fn shapes(kind: ModelProviderKind) -> (&'static str, serde_json::Value, serde_json::Value, serde_json::Value, serde_json::Value) {
+        use serde_json::json;
+        match kind {
+            // No identity field in the file: the key sets must match.
+            ModelProviderKind::ClaudeCode => (
+                ".claude/.credentials.json",
+                json!({"claudeAiOauth": {"accessToken": "a1", "refreshToken": "r1", "expiresAt": 1, "scopes": ["user:inference"], "subscriptionType": "max"}}),
+                json!({"claudeAiOauth": {"accessToken": "a2", "refreshToken": "r2", "expiresAt": 2, "scopes": ["user:inference"], "subscriptionType": "max"}}),
+                json!({"claudeAiOauth": {"accessToken": "a3", "refreshToken": "r3", "expiresAt": 3, "scopes": ["user:inference"], "subscriptionType": "pro"}}),
+                json!({"claudeAiOauth": {"accessToken": "a3", "refreshToken": "r3"}, "apiKeyHelper": "sh -c evil"}),
+            ),
+            ModelProviderKind::Codex => (
+                ".codex/auth.json",
+                json!({"OPENAI_API_KEY": null, "tokens": {"id_token": jwt(json!({"email": "me@example.com"})), "access_token": "a1", "refresh_token": "r1", "account_id": "acct-me"}, "last_refresh": "t1"}),
+                json!({"OPENAI_API_KEY": null, "tokens": {"id_token": jwt(json!({"email": "me@example.com"})), "access_token": "a2", "refresh_token": "r2", "account_id": "acct-me"}, "last_refresh": "t2"}),
+                json!({"OPENAI_API_KEY": null, "tokens": {"id_token": jwt(json!({"email": "attacker@example.com"})), "access_token": "a3", "refresh_token": "r3", "account_id": "acct-attacker"}, "last_refresh": "t3"}),
+                json!({"OPENAI_API_KEY": "sk-attacker", "tokens": {"access_token": "a3"}}),
+            ),
+            ModelProviderKind::Copilot => (
+                ".config/github-copilot/hosts.json",
+                json!({"github.com": {"user": "me", "oauth_token": "gho_1"}}),
+                json!({"github.com": {"user": "me", "oauth_token": "gho_2"}}),
+                json!({"github.com": {"user": "attacker", "oauth_token": "gho_3"}}),
+                json!({"github.com": {"user": "me", "oauth_token": "gho_3"}, "ghe.attacker.example": {"user": "x", "oauth_token": "y"}}),
+            ),
+            ModelProviderKind::Antigravity => (
+                ".gemini/google_accounts.json",
+                json!({"active": "me@example.com", "old": []}),
+                json!({"active": "me@example.com", "old": ["prev@example.com"]}),
+                json!({"active": "attacker@example.com", "old": []}),
+                json!({"active": "me@example.com"}),
+            ),
+            _ => unreachable!(),
+        }
+    }
+
+    /// An agent can write a valid sign-in for a different account into its
+    /// turn home; copying that back would sign the user's CLI into the
+    /// attacker's account (the next session's work, prompts and code go
+    /// there). Only a refresh of the same identity, with the same keys, is
+    /// copied back.
+    #[test]
+    fn copy_back_rejects_account_swap() {
+        let oauth = |sub: &str| {
+            serde_json::json!({"access_token": "a", "refresh_token": "r", "scope": "s", "token_type": "Bearer", "id_token": jwt(serde_json::json!({"email": sub, "sub": sub})), "expiry_date": 1})
+        };
+        let mut cases: Vec<(ModelProviderKind, &str, serde_json::Value, serde_json::Value, serde_json::Value, serde_json::Value)> =
+            [ModelProviderKind::ClaudeCode, ModelProviderKind::Codex, ModelProviderKind::Copilot, ModelProviderKind::Antigravity]
+                .into_iter()
+                .map(|k| {
+                    let (f, a, b, c, d) = shapes(k);
+                    (k, f, a, b, c, d)
+                })
+                .collect();
+        cases.push((
+            ModelProviderKind::Antigravity,
+            ".gemini/oauth_creds.json",
+            oauth("me@example.com"),
+            serde_json::json!({"access_token": "a2", "refresh_token": "r2", "scope": "s", "token_type": "Bearer", "id_token": jwt(serde_json::json!({"email": "me@example.com", "sub": "me@example.com"})), "expiry_date": 2}),
+            oauth("attacker@example.com"),
+            serde_json::json!({"access_token": "a2", "refresh_token": "r2"}),
+        ));
+        cases.push((
+            ModelProviderKind::Copilot,
+            ".config/github-copilot/apps.json",
+            serde_json::json!({"github.com:Iv1.abc": {"user": "me", "oauth_token": "gho_1", "githubAppId": "Iv1.abc"}}),
+            serde_json::json!({"github.com:Iv1.abc": {"user": "me", "oauth_token": "gho_2", "githubAppId": "Iv1.abc"}}),
+            serde_json::json!({"github.com:Iv1.abc": {"user": "attacker", "oauth_token": "gho_3", "githubAppId": "Iv1.abc"}}),
+            serde_json::json!({"github.com:Iv1.xyz": {"user": "me", "oauth_token": "gho_3", "githubAppId": "Iv1.xyz"}}),
+        ));
+        for (kind, file, mine, refreshed, swapped, reshaped) in cases {
+            let real = tempfile::tempdir().unwrap();
+            let turn = tempfile::tempdir().unwrap();
+            let real_file = real.path().join(file);
+            std::fs::create_dir_all(real_file.parent().unwrap()).unwrap();
+            std::fs::write(&real_file, mine.to_string()).unwrap();
+            let home = turn.path().join("home");
+            populate(kind, real.path(), &home).unwrap();
+            let read = || serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&real_file).unwrap()).unwrap();
+            for bad in [&swapped, &reshaped] {
+                std::fs::write(home.join(file), bad.to_string()).unwrap();
+                copy_back(kind, real.path(), &home);
+                assert_eq!(read(), mine, "{kind:?} {file}: copied back {bad}");
+            }
+            std::fs::write(home.join(file), refreshed.to_string()).unwrap();
+            copy_back(kind, real.path(), &home);
+            assert_eq!(read(), refreshed, "{kind:?} {file}: a same-account refresh is kept");
+        }
     }
 
     #[test]
