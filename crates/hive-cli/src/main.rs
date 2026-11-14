@@ -8,7 +8,7 @@
 //! connect → sync → read → post.
 //!
 //! Config (all via env; a persistent data dir keeps a stable identity):
-//!   LIGUS_DATA_DIR            where identity + hive.db live (default: $HOME/.hive)
+//!   LIGUS_DATA_DIR            where identity + hive.db live (default: $HOME/.ligus)
 //!   LIGUS_RELAY_URL           relay base URL (needed for `sync`/`send --push`)
 //!   LIGUS_RELAY_ACCESS_TOKEN  relay entitlement token (hrt1/hex), provisioned out-of-band
 //!   LIGUS_RELAY_GITHUB_TOKEN  optional, only on membership-enforcing relays
@@ -1135,6 +1135,10 @@ fn usage() -> ! {
          ligus send <chat-id> <message…> [--push]\n  \
          ligus sync [--watch]\n  \
          ligus runtimes                  list workspace-owned runtimes (spec §12.5)\n  \
+         ligus add-runtime <id> <name> <provider> <model> [--endpoint <url>] [--secret-ref <name> | --secret <value>]\n                                       define a workspace-owned runtime\n  \
+         ligus rm-runtime <id>           remove a workspace-owned runtime\n  \
+         ligus agents                    list the workspace's agents\n  \
+         ligus add-agent <name> <runtime-id> [--host <id>] [--role <role>]   add a workspace agent\n  \
          ligus agent [name] [--runtime <id>]   reply as the primary agent; --runtime uses a\n                                       workspace-owned credential (else a personal env key)\n  \
          ligus hosts                     list workspace hosts (devices + workers)\n  \
          ligus register-worker [--label <name>]   register this box as a worker host\n  \

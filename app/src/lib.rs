@@ -4344,7 +4344,7 @@ fn relay_url_or_err(state: &AppState) -> Result<String, String> {
         .relay_url
         .clone()
         .filter(|u| !u.trim().is_empty())
-        .ok_or_else(|| "set a relay URL in Settings → Team first".into())
+        .ok_or_else(|| "set a relay URL in Settings → Team sync first".into())
 }
 
 fn relay_token_dto(t: &hive_runtime::RelayTokenEntry) -> RelayTokenDto {
@@ -11283,7 +11283,7 @@ async fn sync_pull_once(
             let msg = match &e {
                 hive_runtime::SyncError::Relay(hive_runtime::RelayError::Unauthorized) => {
                     "sync paused: the relay rejected this device's access token \
-                     — add yourself in Settings → Team (or clear the relay URL \
+                     — add yourself in Settings → Team sync (or clear the relay URL \
                      to work local-only)"
                         .to_string()
                 }
@@ -11396,7 +11396,7 @@ async fn run_sync_loop(app: AppHandle, settings: Arc<Mutex<LiveSettings>>, db_pa
                     engine = None;
                     let msg = "sync paused: this workspace is configured for a relay but \
                                has no end-to-end-encryption key — set a workspace passphrase \
-                               (Settings → Team) to sync encrypted, or clear the relay URL to \
+                               (Settings → Team sync) to sync encrypted, or clear the relay URL to \
                                work local-only. Refusing to send plaintext to the relay."
                         .to_string();
                     if last_sync_err.as_deref() != Some(msg.as_str()) {
