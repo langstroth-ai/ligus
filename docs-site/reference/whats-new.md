@@ -9,6 +9,13 @@ Full release notes are on the
 
 ## 2.0
 
+- **Egress presets.** Opt-in sets of hosts for a chat's egress allow-list,
+  off by default: `package-registries` (npm, crates.io, PyPI, GitHub) and
+  `claude-connectors` (your claude.ai connectors, Claude Code only).
+  Switch them per workspace or per chat in **Settings → Guards → Network
+  presets**, or with `LIGUS_SANDBOX_EGRESS_PRESETS`; a lockdown or dearth
+  mode overrides them. See [Egress presets](../concepts/security.md#egress-presets)
+  and the [Sandbox defaults](../concepts/security.md#sandbox-defaults).
 - **Passkeys for admin changes.** Under workspace rules v2, membership and
   role changes, device revocation, key rotation, guards, zones, workflow
   definitions, agent hosts and human-gated approvals need a passkey (Touch

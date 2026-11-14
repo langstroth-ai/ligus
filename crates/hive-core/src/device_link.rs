@@ -144,6 +144,7 @@ mod tests {
                 git_email: None,
                 key_agreement_public: None,
                 avatar_url: None,
+                contact: None,
             },
             role,
             title: String::new(),

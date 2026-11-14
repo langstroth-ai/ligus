@@ -81,6 +81,24 @@ function handle(cmd: string, args: Args): unknown {
       return { root: "/mock/repo", items: [] };
     case "get_dearth_state":
       return fx.dearth(flags.dearth);
+    case "get_egress_presets":
+      return {
+        available: [
+          {
+            name: "package-registries",
+            label: "Package registries",
+            hosts: ["registry.npmjs.org", "crates.io", "static.crates.io", "index.crates.io", "pypi.org", "files.pythonhosted.org", "github.com", "api.github.com", "codeload.github.com", "objects.githubusercontent.com", "raw.githubusercontent.com"],
+          },
+          { name: "claude-connectors", label: "Claude connectors", hosts: ["mcp-proxy.anthropic.com"] },
+        ],
+        workspace: [],
+        chat: null,
+        host: [],
+        restrictedBy: flags.lockdown ? "lockdown" : flags.dearth ? "dearth" : "",
+      };
+    case "set_workspace_egress_presets":
+    case "set_chat_egress_presets":
+      return null;
     case "get_chat_lockdown":
       return fx.lockdown(flags.lockdown);
     case "list_guard_signals":
@@ -134,16 +152,17 @@ function handle(cmd: string, args: Args): unknown {
       return { claudeCode: true, codex: false, ollama: true, anthropicEnv: false, openaiEnv: false, gitName: "Zaz", gitEmail: "zaz@example.com" };
     case "list_agent_templates":
       return [];
-    case "github_account":
-      return { id: 1, login: "zazulam", name: "Zaz", email: null, avatarUrl: null };
-    case "github_client_configured":
-      return true;
-    case "friends_overview":
-      return { enabled: true, friends: [{ accountId: "github:2", login: "maya", presence: "online" }, { accountId: "github:3", login: "theo", presence: "offline" }], incoming: [] };
+    case "my_profile":
+      return { accountId: "6f1c2d3e-8a7b-4c1d-9e0f-112233445566", displayName: "Zaz", avatarUrl: null, safetyCode: "3f2a 91c0 77de 0b14 c2e8 5a6f 9d31 e047", gitEmail: "zaz@example.com" };
+    case "list_co_members":
+      return [
+        { accountId: "a1b2c3d4-0000-4000-8000-000000000002", displayName: "Maya", avatarUrl: null, safetyCode: "b7e1 04aa 3c9f 6d20 18ee 7f45 a0c3 5b92", keyConflict: false, devices: 2, workspaces: [{ id: "w-bees", name: "Bees" }], dmWorkspaceId: null },
+        { accountId: "a1b2c3d4-0000-4000-8000-000000000003", displayName: "Theo", avatarUrl: null, safetyCode: "0c4d 8e21 f9a7 3b56 e102 4d8c 77a9 1f30", keyConflict: false, devices: 1, workspaces: [{ id: "w-bees", name: "Bees" }], dmWorkspaceId: null },
+      ];
     case "list_dms":
       return [];
     case "list_pending_invites":
-      return [];
+      return { contacts: "on", invites: [] };
     case "list_schedules":
       return fx.schedules;
     case "list_claude_code_models":

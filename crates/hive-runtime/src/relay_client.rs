@@ -93,27 +93,6 @@ fn normalize_access_token(raw: &str) -> String {
     t.to_string()
 }
 
-/// A device's key-agreement public key as listed in the directory.
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DirectoryDevice {
-    pub device_id: String,
-    /// Hex-encoded X25519 public key.
-    pub ka_public: String,
-}
-
-/// A directory entry: a GitHub account + its devices' key-agreement keys.
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DirectoryEntry {
-    pub github_id: u64,
-    pub login: String,
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub devices: Vec<DirectoryDevice>,
-}
-
 /// A workspace member as returned by a membership-enforcing relay.
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -202,81 +181,6 @@ pub struct IssuedRelayToken {
     pub raw: String,
 }
 
-/// This account's identity as confirmed by the relay on device registration.
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AccountIdentity {
-    /// The account key every device of this account shares (`github:<id>`).
-    pub account_id: String,
-    pub github_id: u64,
-    pub login: String,
-}
-
-/// One of an account's registered devices (social registry).
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AccountDevice {
-    pub device_id: String,
-    #[serde(default)]
-    pub node_id: Option<String>,
-    #[serde(default)]
-    pub label: Option<String>,
-    #[serde(default)]
-    pub last_seen: u64,
-}
-
-/// One event from the account inbox (the account channel). `body` is an opaque
-/// JSON payload whose `kind` later phases interpret (friend request, etc.).
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct InboxEvent {
-    pub seq: u64,
-    pub body: serde_json::Value,
-}
-
-/// An accepted friend.
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Friend {
-    pub account_id: String,
-    pub login: String,
-}
-
-/// An incoming (pending) friend request addressed to this account.
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct IncomingFriendRequest {
-    pub request_id: String,
-    pub from_account: String,
-    pub from_login: String,
-    #[serde(default)]
-    pub created_at: u64,
-}
-
-/// A friend with their current presence (`online` | `away` | `offline`).
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FriendPresence {
-    pub account_id: String,
-    pub login: String,
-    pub presence: String,
-}
-
-/// Result of attempting to send a friend request — distinguishes the cases the
-/// UI surfaces differently (cap reached → upgrade prompt, unknown user, etc.).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FriendRequestOutcome {
-    /// Delivered; carries the request id.
-    Sent(String),
-    /// You're already friends.
-    AlreadyFriends,
-    /// The free-tier collaborator cap is reached (HTTP 402).
-    CapReached,
-    /// No Hive account for that username (they haven't signed in).
-    UserNotFound,
-    /// Bad request (e.g. befriending yourself).
-    Invalid,
-}
-
 /// One envelope as returned by the relay, with its server sequence.
 #[derive(Debug, Clone)]
 pub struct FetchedEnvelope {
@@ -292,10 +196,6 @@ pub struct RelayClient {
     /// Relay access token (entitlement). Attached as `Authorization: Bearer` to
     /// every request; `None` for open/self-hosted relays.
     auth: Option<String>,
-    /// GitHub identity token. Attached as `X-Hive-Github-Token` to every request
-    /// so a membership-enforcing relay can authenticate the caller; `None` when
-    /// not signed in (open relays ignore it).
-    github_token: Option<String>,
     /// A ligus-auth access token kept fresh in the background. When it holds
     /// a value it is sent instead of `auth` (see `with_auth_cell`).
     auth_cell: Option<crate::ligus_auth::TokenCell>,
@@ -322,7 +222,6 @@ impl RelayClient {
             http,
             base: base.into().trim_end_matches('/').to_string(),
             auth: None,
-            github_token: None,
             auth_cell: None,
         }
     }
@@ -343,24 +242,25 @@ impl RelayClient {
         self
     }
 
-    /// Set the caller's GitHub identity token (for membership-enforcing relays).
-    /// Empty = none. Attached as `X-Hive-Github-Token` on every request.
-    pub fn with_github_token(mut self, token: Option<String>) -> Self {
-        self.github_token = token.filter(|t| !t.trim().is_empty());
-        self
+    /// The relay base URL (no trailing slash).
+    pub(crate) fn base_url(&self) -> &str {
+        &self.base
     }
 
-    /// Attach the entitlement bearer + GitHub identity (if any) to a request.
+    pub(crate) fn http_client(&self) -> &reqwest::Client {
+        &self.http
+    }
+
+    /// Attach the entitlement bearer (if any) to a request. Nothing else: no
+    /// forge (GitHub, GitLab, ...) token ever reaches a relay. Forge tokens
+    /// live only in the OS secret store of the device doing git work and are
+    /// used only between that device and the forge.
     pub(crate) fn authed(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         // A ligus-auth token goes only to the relay its session is bound to
         // (E-5); any other relay gets the static token, if one is configured.
         let fresh = self.auth_cell.as_ref().and_then(|c| c.get_for(&self.base)).filter(|t| !t.is_empty());
-        let rb = match fresh.as_ref().or(self.auth.as_ref()) {
+        match fresh.as_ref().or(self.auth.as_ref()) {
             Some(t) => rb.bearer_auth(t),
-            None => rb,
-        };
-        match &self.github_token {
-            Some(t) => rb.header("X-Hive-Github-Token", t),
             None => rb,
         }
     }
@@ -536,7 +436,7 @@ impl RelayClient {
 
     /// Open the relay's live push stream for a workspace:
     /// `GET /v1/workspaces/{id}/events` as `text/event-stream`, authed with the
-    /// same bearer + GitHub identity as every other read. The relay sends a
+    /// same bearer as every other read. The relay sends a
     /// `data: {"seq":N}` nudge whenever a new envelope is appended; each nudge is
     /// forwarded over the returned [`SseStream`] so the sync loop can trigger an
     /// immediate pull instead of waiting for its poll. The stream is a wake-up
@@ -698,30 +598,6 @@ impl RelayClient {
             .collect())
     }
 
-    /// Register (or refresh) one of this account's devices in the directory.
-    /// Identity comes from the client's GitHub token (see [`with_github_token`]).
-    pub async fn directory_register(
-        &self,
-        device_id: &str,
-        ka_public_hex: &str,
-    ) -> Result<(), RelayError> {
-        let url = format!("{}/v1/directory/register", self.base);
-        let body = serde_json::json!({ "device_id": device_id, "ka_public": ka_public_hex });
-        self.authed(self.http.post(url)).json(&body).send().await?;
-        Ok(())
-    }
-
-    /// Resolve a GitHub handle to its account + every device's key-agreement
-    /// public key. `Ok(None)` if unknown. Identity: the client's GitHub token.
-    pub async fn directory_lookup(&self, handle: &str) -> Result<Option<DirectoryEntry>, RelayError> {
-        let url = format!("{}/v1/directory/{}", self.base, handle.trim().trim_start_matches('@'));
-        let resp = self.authed(self.http.get(url)).send().await?;
-        if !resp.status().is_success() {
-            return Ok(None);
-        }
-        Ok(Some(resp.json().await?))
-    }
-
     /// Claim an unmanaged workspace, making the caller `Owner` and turning on
     /// server-side membership enforcement. `Ok(false)` if the relay doesn't
     /// support membership (open/self-host → 404) or it's already claimed.
@@ -825,9 +701,9 @@ impl RelayClient {
     }
 
     // ── Relay access user/token administration (enterprise relay) ──────────
-    // Gated server-side by the relay's admin authorizer (a GitHub-admin
-    // allowlist), authenticated by this client's GitHub token. `Ok(None)` when
-    // the relay has no admin API (open/OSS) or the caller isn't an admin.
+    // Gated server-side by the relay's admin authorizer, authenticated by the
+    // relay bearer. `Ok(None)` when the relay has no admin API (open/OSS) or
+    // the caller isn't an admin.
 
     /// List relay access users + their tokens. `Ok(None)` if the admin API is
     /// unavailable or the caller isn't authorized.
@@ -894,176 +770,6 @@ impl RelayClient {
         let map = self.authed(self.http.get(url)).send().await?.json().await?;
         Ok(map)
     }
-
-    // ── Social graph (account registry + account channel) ──────────────────
-
-    /// Register (or refresh) this device under the signed-in GitHub account.
-    /// Identity comes from the GitHub token (see [`with_github_token`]).
-    /// `Ok(None)` if the relay rejected the call (e.g. not signed in).
-    pub async fn account_register(
-        &self,
-        device_id: &str,
-        node_id: Option<&str>,
-        label: Option<&str>,
-    ) -> Result<Option<AccountIdentity>, RelayError> {
-        let url = format!("{}/v1/account/register", self.base);
-        let body = serde_json::json!({
-            "deviceId": device_id,
-            "nodeId": node_id,
-            "label": label,
-        });
-        let resp = self.authed(self.http.post(url)).json(&body).send().await?;
-        if !resp.status().is_success() {
-            return Ok(None);
-        }
-        Ok(Some(resp.json().await?))
-    }
-
-    /// Refresh this device's `last_seen` (presence). `Ok(true)` if the relay
-    /// recognised the device; `Ok(false)` if it should re-register first.
-    pub async fn account_heartbeat(&self, device_id: &str) -> Result<bool, RelayError> {
-        let url = format!("{}/v1/account/heartbeat", self.base);
-        let body = serde_json::json!({ "deviceId": device_id });
-        let resp = self.authed(self.http.post(url)).json(&body).send().await?;
-        if !resp.status().is_success() {
-            return Ok(false);
-        }
-        let v: serde_json::Value = resp.json().await?;
-        Ok(v.get("ok").and_then(serde_json::Value::as_bool).unwrap_or(false))
-    }
-
-    /// Poll this account's inbox (the account channel) for events with
-    /// `seq > after`. The same stream is delivered to every device of the
-    /// account, so accepting/dismissing on one device propagates to the rest.
-    pub async fn account_inbox(&self, after: u64) -> Result<Vec<InboxEvent>, RelayError> {
-        let url = format!("{}/v1/account/inbox?after={}", self.base, after);
-        let resp = self.authed(self.http.get(url)).send().await?;
-        if !resp.status().is_success() {
-            return Ok(Vec::new());
-        }
-        Ok(resp.json().await?)
-    }
-
-    /// Deliver a client-sealed workspace invite to `to_login`'s account inbox.
-    /// `invite` is opaque to the relay (the `hivews1:` code sealed to the
-    /// recipient's key-agreement key), so the workspace key never reaches the
-    /// relay — it only routes the envelope, like a friend request.
-    pub async fn post_workspace_invite(
-        &self,
-        to_login: &str,
-        invite: &serde_json::Value,
-    ) -> Result<(), RelayError> {
-        let url = format!("{}/v1/account/invites", self.base);
-        let body = serde_json::json!({ "toLogin": to_login, "invite": invite });
-        self.authed(self.http.post(url)).json(&body).send().await?;
-        Ok(())
-    }
-
-    /// List this account's registered devices (presence + P2P bootstrap).
-    pub async fn account_devices(&self) -> Result<Vec<AccountDevice>, RelayError> {
-        let url = format!("{}/v1/account/devices", self.base);
-        let resp = self.authed(self.http.get(url)).send().await?;
-        if !resp.status().is_success() {
-            return Ok(Vec::new());
-        }
-        Ok(resp.json().await?)
-    }
-
-    // ── Friend graph (P2) ──────────────────────────────────────────────────
-
-    /// Send a friend request to a GitHub `@username`. The relay delivers it to
-    /// every device of the target. The outcome distinguishes cap-reached /
-    /// unknown-user / already-friends so the UI can respond appropriately.
-    pub async fn friend_request(&self, to_login: &str) -> Result<FriendRequestOutcome, RelayError> {
-        let url = format!("{}/v1/friends/requests", self.base);
-        let body = serde_json::json!({ "toLogin": to_login });
-        let resp = self.authed(self.http.post(url)).json(&body).send().await?;
-        use reqwest::StatusCode;
-        Ok(match resp.status() {
-            s if s.is_success() => {
-                let v: serde_json::Value = resp.json().await?;
-                FriendRequestOutcome::Sent(
-                    v.get("requestId").and_then(|x| x.as_str()).unwrap_or_default().to_string(),
-                )
-            }
-            StatusCode::PAYMENT_REQUIRED => FriendRequestOutcome::CapReached,
-            StatusCode::NOT_FOUND => FriendRequestOutcome::UserNotFound,
-            StatusCode::CONFLICT => FriendRequestOutcome::AlreadyFriends,
-            _ => FriendRequestOutcome::Invalid,
-        })
-    }
-
-    /// Accept a pending friend request by id. `Ok(true)` on success.
-    pub async fn friend_accept(&self, request_id: &str) -> Result<bool, RelayError> {
-        let url = format!("{}/v1/friends/requests/{}/accept", self.base, request_id);
-        Ok(self.authed(self.http.post(url)).send().await?.status().is_success())
-    }
-
-    /// Reject (recipient) or cancel (sender) a pending request by id.
-    pub async fn friend_reject(&self, request_id: &str) -> Result<bool, RelayError> {
-        let url = format!("{}/v1/friends/requests/{}/reject", self.base, request_id);
-        Ok(self.authed(self.http.post(url)).send().await?.status().is_success())
-    }
-
-    /// List the caller's accepted friends.
-    pub async fn friends(&self) -> Result<Vec<Friend>, RelayError> {
-        let url = format!("{}/v1/friends", self.base);
-        let resp = self.authed(self.http.get(url)).send().await?;
-        if !resp.status().is_success() {
-            return Ok(Vec::new());
-        }
-        Ok(resp.json().await?)
-    }
-
-    /// List the caller's incoming (pending) friend requests.
-    pub async fn incoming_friend_requests(&self) -> Result<Vec<IncomingFriendRequest>, RelayError> {
-        let url = format!("{}/v1/friends/requests", self.base);
-        let resp = self.authed(self.http.get(url)).send().await?;
-        if !resp.status().is_success() {
-            return Ok(Vec::new());
-        }
-        Ok(resp.json().await?)
-    }
-
-    /// Each accepted friend with their current presence.
-    pub async fn friend_presence(&self) -> Result<Vec<FriendPresence>, RelayError> {
-        let url = format!("{}/v1/friends/presence", self.base);
-        let resp = self.authed(self.http.get(url)).send().await?;
-        if !resp.status().is_success() {
-            return Ok(Vec::new());
-        }
-        Ok(resp.json().await?)
-    }
-
-    /// A friend's registered devices (dialable node ids) for the P2P peer-link
-    /// bootstrap. Empty if not friends (the relay returns 403) or none have a
-    /// node id yet.
-    pub async fn friend_devices(&self, account_id: &str) -> Result<Vec<AccountDevice>, RelayError> {
-        let url = format!("{}/v1/friends/{}/devices", self.base, account_id);
-        let resp = self.authed(self.http.get(url)).send().await?;
-        if !resp.status().is_success() {
-            return Ok(Vec::new());
-        }
-        Ok(resp.json().await?)
-    }
-
-    /// Set this account's "appear offline" visibility. `Ok(true)` on success.
-    pub async fn set_visibility(&self, appear_offline: bool) -> Result<bool, RelayError> {
-        let url = format!("{}/v1/account/visibility", self.base);
-        let body = serde_json::json!({ "appearOffline": appear_offline });
-        Ok(self.authed(self.http.post(url)).json(&body).send().await?.status().is_success())
-    }
-
-    /// Remove an accepted friend by their account key. `Ok(true)` if removed.
-    pub async fn friend_remove(&self, account_id: &str) -> Result<bool, RelayError> {
-        let url = format!("{}/v1/friends/{}", self.base, account_id);
-        let resp = self.authed(self.http.delete(url)).send().await?;
-        if !resp.status().is_success() {
-            return Ok(false);
-        }
-        let v: serde_json::Value = resp.json().await?;
-        Ok(v.get("ok").and_then(serde_json::Value::as_bool).unwrap_or(false))
-    }
 }
 
 #[cfg(test)]
@@ -1096,6 +802,85 @@ mod tests {
             axum::serve(listener, crate::test_relay::router()).await.unwrap();
         });
         format!("http://{addr}")
+    }
+
+    /// S7 (`relay_client_never_sends_forge_headers`): every relay call is
+    /// recorded and none carries a forge token header, and the only
+    /// `Authorization` the relay ever sees is the relay bearer.
+    #[tokio::test]
+    async fn relay_client_never_sends_forge_headers() {
+        use std::sync::{Arc, Mutex};
+        type Seen = Arc<Mutex<Vec<(String, Vec<(String, String)>)>>>;
+        let seen: Seen = Arc::default();
+        let rec = seen.clone();
+        let router = axum::Router::new().fallback(move |req: axum::extract::Request| {
+            let rec = rec.clone();
+            async move {
+                let headers = req
+                    .headers()
+                    .iter()
+                    .map(|(k, v)| (k.as_str().to_ascii_lowercase(), v.to_str().unwrap_or("").to_string()))
+                    .collect();
+                rec.lock().unwrap().push((format!("{} {}", req.method(), req.uri().path()), headers));
+                axum::Json(serde_json::json!([]))
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let c = RelayClient::new(format!("http://{addr}")).with_auth(Some("relay-bearer-1".into()));
+        let ws = Uuid::new_v4().to_string();
+        let env = SessionEventEnvelope::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            1,
+            SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "A", "hi") },
+        );
+        let _ = c.push(&ws, &env).await;
+        let _ = c.fetch_page(&ws, 0, 10).await;
+        let _ = c.fetch_values(&ws, 0).await;
+        let _ = c.fetch(&ws, 0).await;
+        let _ = c.probe(&ws).await;
+        let _ = c.put_blob(&ws, "b", vec![1, 2]).await;
+        let _ = c.get_blob(&ws, "b").await;
+        let _ = c.publish_presence(&ws, "d", &serde_json::json!({})).await;
+        let _ = c.list_presence(&ws).await;
+        let _ = c.publish_pairing("x", None).await;
+        let _ = c.resolve_pairing("ABC").await;
+        let _ = c.publish_keyring_row(&ws, &serde_json::json!({})).await;
+        let _ = c.fetch_keyring_rows(&ws).await;
+        let _ = c.claim_membership(&ws).await;
+        let _ = c.list_members(&ws).await;
+        let _ = c.upsert_member(&ws, "ligus:a", "A", "viewer").await;
+        let _ = c.remove_member(&ws, "ligus:a").await;
+        let _ = c.create_invite(&ws, "viewer", 60, 1).await;
+        let _ = c.list_invites(&ws).await;
+        let _ = c.revoke_invite(&ws, "i").await;
+        let _ = c.join_via_invite(&ws, "code", "").await;
+        let _ = c.admin_list_users().await;
+        let _ = c.admin_revoke_token("t").await;
+        let _ = c.open_event_stream(&ws).await;
+        let cid = crate::contacts::new_cid();
+        let key = crate::contacts::new_write_key();
+        let _ = c.contact_put(&cid, &key, &serde_json::json!({}), true).await;
+        let _ = c.contact_get(&cid).await;
+        let _ = c.contact_drop(&cid, &serde_json::json!({})).await;
+        let _ = c.contact_drops(&cid, &key, 0).await;
+        let _ = c.contact_drops_ack(&cid, &key, 1).await;
+        let _ = c.contact_delete(&cid, &key).await;
+        let seen = seen.lock().unwrap();
+        assert!(seen.len() >= 29, "every call reached the recorder ({})", seen.len());
+        for (route, headers) in seen.iter() {
+            for (name, value) in headers {
+                assert!(
+                    !["github", "gitlab", "gitea", "forgejo", "forge-token", "codeberg", "srht"].iter().any(|f| name.contains(f)),
+                    "{route} sent a forge header {name}"
+                );
+                if name == "authorization" {
+                    assert_eq!(value, "Bearer relay-bearer-1", "{route}: only the relay bearer");
+                }
+            }
+        }
     }
 
     #[tokio::test]

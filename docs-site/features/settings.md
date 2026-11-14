@@ -14,20 +14,16 @@ Workspace-scoped config (runtimes, MCP servers) is written back to
 `ligus.config.toml`; connection settings persist to a `settings.json` in
 the app data dir; the theme is stored locally per device.
 
-![Settings — Account tab](../images/settings-general.png){ width="900" }
+![Settings — Profile tab](../images/settings-general.png){ width="900" }
 
-## Account
+## Profile
 
-- **Identity** — your **display name** (part of the `(@handle, device)`
-  pair Ligus signs envelopes with) and your **git email**. When you're
-  signed in to GitHub the git email is managed from the account (sign
-  out to edit it by hand).
-- **GitHub** — sign in with GitHub (OAuth device flow) for a stable
-  identity across all your devices and to invite teammates by
-  `@handle`. The same GitHub account on your laptop and desktop resolves
-  to **one member, two devices**. See
-  [Identity & devices](../concepts/identity.md). Official builds ship
-  with the OAuth App client id baked in; forks can paste their own.
+- **Profile** — your **display name**, an optional **picture** and your
+  **git email** (the commit author for work an agent does on your behalf;
+  members of your workspaces can see it). No provider signs you in.
+- **Safety code** — the fingerprint of your account key, as eight groups of
+  four hex characters, to compare out of band with people you invite. See
+  [Identity & devices](../concepts/identity.md#safety-code).
 - **My devices** — devices that act as you in this workspace. **Add a
   device** takes the enrollment code a `ligus serve` box prints, so what you
   do from your phone through that box is authored as you rather than as a
@@ -107,7 +103,7 @@ On a relay that supports it, the Team sync tab also has a **Team
 members** panel for managing who may sync — durable, with no redeploy and
 instant revocation:
 
-- **Add member** — give a name (and optionally their GitHub login); Ligus
+- **Add member** — give a name (and optionally a login the relay shows); Ligus
   creates the user on the relay and shows a **one-time access token**.
   Copy it now — it's never shown again — and the teammate pastes it into
   the **Relay access token** field of *their* Ligus.
@@ -120,10 +116,8 @@ instant revocation:
 
 Tokens are stored on the relay only as hashes — Ligus shows the raw value
 once and never again. This panel appears only when you're an **admin**
-on a relay that supports user management (your GitHub login is in the
-relay's admin list); everyone else sees a short explanatory note
-instead. Managing members needs you signed in to GitHub
-(Settings → Account). See
+on a relay that supports user management (the relay operator made you an
+admin); everyone else sees a short explanatory note instead. See
 [The user and token admin API](../networking/self-host.md#the-user-and-token-admin-api).
 The open-source relay build doesn't include that API, so the panel only
 appears against a relay that adds it.

@@ -2,8 +2,9 @@
 
 Workspaces are private by default. To let a peer in you share an
 **invite** — an opaque code that carries everything they need to
-sync: the relay, the room, and the end-to-end-encryption key. There
-are three ways to bring someone in.
+sync: the relay, the room, and the end-to-end-encryption key. No provider
+or directory is involved: you hand over a link, or invite someone you
+already share a workspace with.
 
 ![Invite controls in the People pane](../images/invite-pane.png){ width="800" }
 
@@ -40,56 +41,47 @@ The relay-brokered **short code** — a brief token (e.g. `K7P2QX`) that
 published the full invite to the relay so a peer could redeem it — has
 been **removed**: it put the workspace key on the relay, which E2EE now
 forbids (see [Security & trust](../concepts/security.md)). Share the
-full `hivews1:` code out-of-band instead, or use
-[invite by GitHub handle](#invite-by-github-handle) for a paste-free
-path that keeps the key off the relay.
+full `hivews1:` code out-of-band instead, or
+[invite a co-member](#invite-someone-you-already-share-a-workspace-with)
+for a paste-free path that keeps the key off the relay.
 
 You can **Copy invite** (the full `hivews1:` code) or **Leave** a
 workspace from the *Your team workspaces* list.
 
-## Invite by GitHub handle
+## Check who sent an invite
 
-Open the **People** pane on the right rail and use **Invite by
-GitHub handle**. Enter someone's `@handle` and Ligus:
+Every invite carries its founder's **safety code** (the fingerprint of the
+founder's account key, see [Identity & devices](../concepts/identity.md#safety-code)).
+When you paste one into **People → Join with an invite**, Ligus shows it and
+compares it with what you know:
 
-1. Looks them up in the relay directory (they must have signed in to
-   Ligus with GitHub at least once).
-2. Checks their devices' keys against what their account signed on a
-   workspace you already share. If none matches (you share no workspace
-   yet), it shows an **Unverified recipient** warning: only the relay
-   vouches for those keys, so a compromised relay could read the workspace.
-   Invite anyway only if you trust the relay, or send a `hivews1:` code over
-   a channel you trust instead.
-3. Adds them to the roster keyed by their stable GitHub account id.
-4. **Seals the workspace key to their devices** (only the verified ones when
-   there are any), so the key never travels in a pasteable code at all.
+- **Matches**: the founder is someone you share a workspace with, and the
+  code is theirs.
+- **Doesn't match**: the invite claims to be from someone you know but
+  carries another key. Ligus won't join it.
+- **Unknown**: you share no workspace with the founder. Compare the code with
+  them out of band before you join. For a direct message, Ligus asks you to
+  confirm you did.
 
-This is the most secure path: nothing sensitive is copy-pasted, and
-the invitee's laptop and desktop both come online as one member with
-multiple devices. It needs a relay and your own GitHub sign-in
-(Settings → Account).
+A name on an invite proves nothing; the code does.
 
-## Import a roster from a GitHub org (enterprise)
+## Invite someone you already share a workspace with
 
-For larger teams, seed the workspace roster from a **GitHub
-organization's Teams** instead of inviting people one at a time. In
-the **People** pane, use the **Import GitHub org** card:
+In **People** (left rail), pick the person and **Invite to…** a workspace you
+administer. Ligus:
 
-1. Sign in with GitHub with the **`read:org`** scope (Settings → Account).
-2. Enter the org **slug** (e.g. `acme-inc`).
-3. Ligus pulls the org's Teams and adds their members to the roster.
+1. Takes their devices' encryption keys from the signed logs of a workspace
+   you share (never from a server), and refuses if your workspaces disagree
+   about their account key.
+2. Issues a single-use invite on the target workspace's log.
+3. **Seals it to their devices** and drops it into their contact box on the
+   relay (relay v0.3). It shows up for them as a banner they accept or dismiss.
 
-Governance roles are mapped from each member's **team slug**:
+If they have no contact yet, or the relay doesn't support contacts, you get the
+single-use link to send them yourself.
 
-| Team slug contains | Role assigned |
-|---|---|
-| `admin`, `owner`, `lead`, `maintain` | Admin |
-| `read`, `viewer`, `guest`, `audit` | Viewer |
-| anything else | Contributor |
-
-A member who appears on several teams gets the **highest** role they
-qualify for. You still control the roster afterward — imported members
-can be promoted, demoted, or removed like any other.
+There is no invite by username and no import of a forge organization: Ligus
+has no directory to look anyone up in.
 
 ## Nearby on LAN (roadmap)
 

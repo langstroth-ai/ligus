@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import {
   setDisplayName,
+  setAvatar,
+  myProfile,
   setGitEmail,
   pickWorkspaceFolder,
   addWorkspaceToList,
@@ -12,11 +14,6 @@ import {
   updateConnectionSettings,
   getConnectionSettings,
   detectEnvironment,
-  githubAccount,
-  githubClientConfigured,
-  setGithubClientId,
-  githubLoginStart,
-  githubLoginPoll,
   openExternal,
   joinWorkspace,
   redeemShortCode,
@@ -28,10 +25,11 @@ import {
   type EnvDetectDto,
   type ClaudeModelOption,
   type ClaudePermissionMode,
-  type DeviceStartDto,
   type RelayProbeDto,
 } from "@/lib/ipc";
 import { HiveBrandIcon } from "@/components/HiveBrand";
+import { Avatar } from "@/components/Avatar";
+import { fileToAvatarDataUrl } from "@/lib/avatar";
 import {
   applyTheme,
   loadMode,
@@ -95,12 +93,8 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
 
   // Step 1 — identity
   const [name, setName] = useState("");
-  const [gh, setGh] = useState<{ login: string; name?: string | null } | null>(null);
-  const [ghFlow, setGhFlow] = useState<DeviceStartDto | null>(null);
-  const [codeCopied, setCodeCopied] = useState(false);
-  const [ghConfigured, setGhConfigured] = useState(false);
-  const [showClientId, setShowClientId] = useState(false);
-  const [clientId, setClientId] = useState("");
+  const [picture, setPicture] = useState<string | null>(null);
+  const [safetyCode, setSafetyCode] = useState<string | null>(null);
 
   // Step 2 — project
   const [folder, setFolder] = useState<string | null>(null);
@@ -199,13 +193,9 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
         /* detection is best-effort */
       }
       try {
-        const acct = await githubAccount();
-        if (acct) setGh({ login: acct.login, name: acct.name });
-      } catch {
-        /* ignore */
-      }
-      try {
-        setGhConfigured(await githubClientConfigured());
+        // The account key and this device's certificate were made silently
+        // on first launch; show the safety code that fingerprints them.
+        setSafetyCode((await myProfile()).safetyCode);
       } catch {
         /* ignore */
       }
@@ -223,70 +213,13 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
     })();
   }, []);
 
-  // GitHub device-flow poll (optional sign-in in step 1).
-  useEffect(() => {
-    if (!ghFlow) return;
-    let alive = true;
-    let interval = Math.max(ghFlow.interval, 1) * 1000;
-    let timer: ReturnType<typeof setTimeout>;
-    const tick = async () => {
-      if (!alive) return;
-      try {
-        const r = await githubLoginPoll(ghFlow.deviceCode);
-        if (!alive) return;
-        if (r.status === "success") {
-          setGhFlow(null);
-          if (r.account) setGh({ login: r.account.login, name: r.account.name });
-          return;
-        }
-        if (r.status === "denied" || r.status === "expired") {
-          setGhFlow(null);
-          return;
-        }
-        if (r.status === "slowDown") interval += 5000;
-      } catch {
-        /* keep polling */
-      }
-      if (alive) timer = setTimeout(tick, interval);
-    };
-    timer = setTimeout(tick, interval);
-    return () => {
-      alive = false;
-      clearTimeout(timer);
-    };
-  }, [ghFlow]);
-
-  async function startGithub() {
+  async function pickPicture(file: File | undefined) {
+    if (!file) return;
     try {
-      const s = await githubLoginStart();
-      setGhFlow(s);
-      // Don't auto-open the browser — that yanks focus away while the code
-      // is still back here, forcing a switch-back-to-copy. Instead pre-copy
-      // the code so it's ready to paste, and let the user open GitHub when
-      // they're ready (the button below copies + opens in one click).
-      void navigator.clipboard?.writeText(s.userCode).then(
-        () => setCodeCopied(true),
-        () => {},
-      );
+      setPicture(await fileToAvatarDataUrl(file));
     } catch (e) {
       setError(String(e));
     }
-  }
-
-  async function copyCode(code: string) {
-    try {
-      await navigator.clipboard?.writeText(code);
-      setCodeCopied(true);
-    } catch {
-      /* clipboard may be unavailable; the code is still shown to type */
-    }
-  }
-
-  /// Copy the device code and open GitHub in one action, so the code is on the
-  /// clipboard the moment the browser lands on the verification page.
-  async function copyCodeAndOpenGithub(code: string, uri: string) {
-    await copyCode(code);
-    void openExternal(uri).catch(() => {});
   }
 
   async function pickFolder() {
@@ -309,7 +242,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
   };
 
   const canNext =
-    (step === 1 && (gh != null || name.trim().length > 0)) ||
+    (step === 1 && name.trim().length > 0) ||
     (step === 2) ||
     (step === 3 && (choice === "claudeCode" || choice === "codex" || choice === "ollama" || apiKey.trim().length > 0)) ||
     // Step 4: local is always fine; join/host must have a verified connection.
@@ -322,10 +255,11 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
     setBusy(true);
     try {
       if (step === 1) {
-        if (!gh && name.trim()) {
+        if (name.trim()) {
           await setDisplayName(name.trim());
           if (env?.gitEmail) await setGitEmail(env.gitEmail);
         }
+        if (picture) await setAvatar(picture);
         setStep(2);
       } else if (step === 2) {
         setStep(3);
@@ -451,9 +385,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
         relayAccessToken: null,
         permissionMode: permMode,
       });
-      const login = gh?.login ?? "";
-      const display = gh?.name ?? name.trim() ?? login;
-      const issued = await createRelayUser(display || login || "me", login);
+      const issued = await createRelayUser(name.trim() || "me", "");
       setAccessToken(issued.raw);
       setProbe(await probeRelayAt(relayUrl.trim(), issued.raw));
     } catch (e) {
@@ -510,95 +442,36 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
         {step === 1 && (
           <div className="space-y-3">
             <div className="text-sm font-medium">Who are you?</div>
-            {gh ? (
-              <div className="rounded-xl border px-3 py-2.5 text-sm" style={inputStyle}>
-                ✓ Signed in as <strong>@{gh.login}</strong>
-                {gh.name ? ` (${gh.name})` : ""} — one identity across all your devices.
+            <div className="flex items-center gap-3">
+              <label className="relative cursor-pointer" title="Add a picture (optional)">
+                <Avatar name={name || "You"} url={picture} kind="human" size={48} />
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    e.target.value = "";
+                    void pickPicture(f);
+                  }}
+                />
+              </label>
+              <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" className={field} style={inputStyle} />
+            </div>
+            <div className="text-xs text-ink-soft">
+              How teammates see you. The picture is optional and stays small; it is cropped on this device.
+            </div>
+            <div className="rounded-xl border px-3 py-2.5 text-xs" style={inputStyle}>
+              <div className="mb-1 font-medium">Your account on this device</div>
+              <div className="text-ink-soft">
+                Ligus made an account key on this device. No provider signs you in. Your safety code, which people
+                can compare with the code they see for you:
               </div>
-            ) : ghFlow ? (
-              <div className="space-y-3 rounded-xl border px-3 py-3 text-sm" style={{ borderColor: "var(--hive-accent-cool)" }}>
-                <div className="text-xs text-ink-soft">Your one-time code — enter it on GitHub:</div>
-                {/* The code, big + monospace, with an inline copy affordance. */}
-                <button
-                  type="button"
-                  onClick={() => void copyCode(ghFlow!.userCode)}
-                  className="flex w-full items-center justify-between rounded-lg border px-3 py-2"
-                  style={inputStyle}
-                  title="Copy code"
-                >
-                  <code className="text-lg font-bold tracking-[0.3em]">{ghFlow.userCode}</code>
-                  <span className="text-xs text-ink-soft">{codeCopied ? "Copied ✓" : "Copy"}</span>
-                </button>
-                <button
-                  type="button"
-                  className="w-full rounded-lg px-3 py-2 text-xs font-semibold hover:brightness-110"
-                  style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
-                  onClick={() => void copyCodeAndOpenGithub(ghFlow.userCode, ghFlow.verificationUri)}
-                >
-                  Copy code &amp; open GitHub ↗
-                </button>
-                <div className="text-xs text-ink-soft">
-                  The code is copied to your clipboard — paste it at{" "}
-                  <button
-                    type="button"
-                    className="underline hover:opacity-80"
-                    style={{ color: "var(--hive-accent-ink)" }}
-                    onClick={() => void openExternal(ghFlow.verificationUri).catch(() => {})}
-                  >
-                    {ghFlow.verificationUri}
-                  </button>
-                  . Waiting for you to authorize…
-                </div>
+              <code className="mt-1 block font-mono text-sm font-bold tracking-wider">{safetyCode ?? "…"}</code>
+              <div className="mt-1 text-ink-soft">
+                Already use Ligus on another device? Enroll this one later from Settings → Profile → My devices.
               </div>
-            ) : (
-              <>
-                {ghConfigured && (
-                  <>
-                    <button
-                      className="flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold"
-                      style={{ background: "#24292f" }}
-                      onClick={startGithub}
-                    >
-                      <GithubGlyph /> Sign in with GitHub
-                    </button>
-                    <div className="text-center text-xs text-ink-soft">One identity across all your devices · attributes your commits</div>
-                    <div className="flex items-center gap-2 text-xs text-ink-soft">
-                      <div className="h-px flex-1" style={{ background: "var(--hive-line)" }} /> or <div className="h-px flex-1" style={{ background: "var(--hive-line)" }} />
-                    </div>
-                  </>
-                )}
-                <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Continue with a name" className={field} style={inputStyle} />
-                <div className="text-xs text-ink-soft">How teammates see you, and how commits are attributed.</div>
-                {!ghConfigured &&
-                  (showClientId ? (
-                    <div className="space-y-2 rounded-xl border p-3" style={inputStyle}>
-                      <div className="text-xs text-ink-soft">
-                        Paste a GitHub OAuth App client ID (Developer settings → OAuth Apps, enable
-                        Device Flow). No secret needed.
-                      </div>
-                      <div className="flex gap-2">
-                        <input value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="Iv1.…" className={field + " font-mono text-xs"} style={inputStyle} />
-                        <button
-                          className="shrink-0 rounded-lg px-3 text-sm font-semibold disabled:opacity-40"
-                          style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
-                          disabled={!clientId.trim()}
-                          onClick={async () => {
-                            await setGithubClientId(clientId.trim());
-                            setGhConfigured(true);
-                            setShowClientId(false);
-                          }}
-                        >
-                          Save
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <button className="text-xs underline opacity-60 hover:opacity-100" onClick={() => setShowClientId(true)}>
-                      Set up GitHub sign-in
-                    </button>
-                  ))}
-              </>
-            )}
+            </div>
           </div>
         )}
 
@@ -820,8 +693,8 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
               </div>
             )}
 
-            {/* Host + unauthorized + you're signed in: offer to mint your own token. */}
-            {teamMode === "host" && probe?.status === "unauthorized" && gh && (
+            {/* Host + unauthorized: an admin of this relay can mint their own token. */}
+            {teamMode === "host" && probe?.status === "unauthorized" && (
               <button
                 onClick={issueMyToken}
                 disabled={issuing}
@@ -907,14 +780,6 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
         </div>
       </div>
     </div>
-  );
-}
-
-function GithubGlyph() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
-      <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z" />
-    </svg>
   );
 }
 

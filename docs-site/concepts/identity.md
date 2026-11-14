@@ -13,21 +13,51 @@ The app data directory is `ai.ligus.desktop` (e.g. on macOS
 
 ## Account
 
-An `HumanAccount` represents you-the-person across machines. It
-carries a display name, a handle (`@you`), and an Ed25519 *account*
-public key. The account key is the root of trust for every device
-you authorize.
+An `HumanAccount` represents you-the-person across machines. It is an
+Ed25519 *account* key and an **account id**: a random UUID made with the key
+on first launch. The account key is the root of trust for every device you
+authorize.
 
-You get one account per Ligus install on first launch. The
-generation is silent — Ligus reads `$USER`/hostname for defaults you
-can edit in onboarding.
+No provider signs you in. The account id is never derived from anything
+public (not a GitHub or other forge id, not an email, not a handle), and it
+never changes after first launch. More devices join your account through an
+enrollment code (`hivedev1:`, Settings → Profile → **My devices**), never by
+signing in somewhere.
+
+## Profile
+
+Your profile is a **display name** and an optional **picture** (a small
+`data:` image cropped on your device). Both ride on your identity to every
+member of your workspaces. A name is not unique and is never used to look
+anyone up: two people can both call themselves "Ada". Ligus has no global
+handle namespace, because no Ligus server could own one.
+
+Your **commit email** (`git_email`) is a profile setting too: it credits you
+as the author of commits an agent makes on your behalf. Members of your
+workspaces can see it.
+
+## Safety code
+
+Your **safety code** is the fingerprint of your account key: the first 16
+bytes of SHA-256 of the key, shown as eight groups of four hex characters
+(for example `3f2a 91c0 77de 0b14 c2e8 5a6f 9d31 e047`). It is the same value
+an invite carries as `fk`, so:
+
+- Settings → **Profile** shows yours.
+- **People** shows each co-member's, next to their name.
+- An invite shows its founder's before you join.
+
+Compare codes out of band (in person, on a call) the first time you connect
+with someone. When two people share a name, the safety code tells them apart;
+when an invite claims to come from someone you know but carries another
+code, Ligus says so and won't join it.
 
 ## Device
 
 A `DeviceIdentity` represents one machine. It has:
 
-- A device-specific Ed25519 keypair (private seed on disk in the
-  data dir's `keys/`, public in the workspace device roster).
+- A device-specific Ed25519 keypair (private seed in the OS secret store,
+  public in the workspace device roster).
 - A `DeviceCertificate` signed by the account key, asserting "this
   device belongs to this account."
 
@@ -41,22 +71,40 @@ When you join a workspace, an `memberAdded` event lands in the log
 with your `ActorIdentity` (id + display name + kind). Subsequent
 events from your devices verify against the rosters.
 
+## Who you can reach
+
+You reach people in two ways, and neither involves a directory:
+
+- **An invite link or QR code** you hand over yourself.
+- **Co-members**: anyone you share a workspace with. Their devices'
+  key-agreement keys are signed on that workspace's log, so Ligus can seal
+  an invite to them, or open a direct message, without asking any server
+  who they are. See [People, contacts & DMs](../features/collaborators.md).
+
 ## What travels in invites
 
 A workspace invite code (`hivews1:…`) is base64url-encoded JSON of the
 workspace connection: its display name, the relay URL, the room, **the
-workspace key (the E2EE passphrase)**, and, for the founder check, the
-founding identity (and a DM's account, for direct messages). See the
-[invite code reference](../reference/invite-payload.md).
+workspace key (the E2EE passphrase)**, the founder's account id and safety
+code (`fk`), a single-use invite id and, for a direct message, the account
+it is addressed to. See the [invite code reference](../reference/invite-payload.md).
 
 So an invite code **is** a secret: anyone holding it can sync and read the
-workspace. Share it only over a channel you trust. Inviting by GitHub handle
-avoids pasting it: the key is sealed to the invitee's devices instead. See
-[Invites & joining](../features/invites.md).
+workspace. Share it only over a channel you trust. An invite to a co-member
+avoids pasting it: it is sealed to their verified devices and dropped into
+their contact box on the relay. See [Invites & joining](../features/invites.md).
 
 It doesn't contain private signing keys, API credentials or workspace
 content. The joiner's devices publish their own keys and certificates
 through their own events.
+
+## Forge tokens stay on the device that uses them
+
+A token for GitHub, GitLab, Forgejo, Gitea or Codeberg is for repository
+work, not identity. It lives only in the OS secret store of the device or box
+that does the git work (scope `forge`, a separate secret for read and for
+write), and it is never synced, never put in an invite, a contact record or a
+log, and never sent to a relay: the relay client has no way to carry one.
 
 ## Key storage
 
@@ -87,7 +135,7 @@ that keep login-keychain access, and the session bus never reaches an agent.
 
 ## Direct peer-to-peer links
 
-Desktops that are contacts of each other can also sync directly, device to
+Desktops that share a workspace can also sync directly, device to
 device, over [iroh](https://www.iroh.computer/) (QUIC), falling back to the
 relay when no direct connection can be made (**Settings → Team sync →
 Direct peers**). Events on a direct link are the same signed events as on

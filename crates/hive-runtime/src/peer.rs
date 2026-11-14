@@ -429,6 +429,7 @@ mod tests {
                 git_email: None,
                 key_agreement_public: None,
                 avatar_url: None,
+                contact: None,
             },
             role: WorkspaceRole::Owner,
             title: String::new(),
@@ -473,6 +474,7 @@ mod tests {
                     git_email: None,
                     key_agreement_public: None,
                     avatar_url: None,
+                    contact: None,
                 },
                 recorded_at: Timestamp::epoch(), cfg_frontier: None,
                 presence: None, runtime_effect: false, });

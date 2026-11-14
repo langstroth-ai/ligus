@@ -19,7 +19,7 @@ described in
 
 | Component | Secrets it holds | Data it holds | Talks to |
 |---|---|---|---|
-| **Desktop app** | in the OS secret store: account and device key seeds, an X25519 key-agreement seed for receiving rotated keys, every workspace passphrase and delivered epoch key, API keys and MCP tokens you paste, GitHub token, relay access tokens, the relay issuer key if you set one | `hive.db`: every event of every workspace it belongs to, in clear | relay, peers (P2P), model providers, MCP servers, GitHub |
+| **Desktop app** | in the OS secret store: account and device key seeds, an X25519 key-agreement seed for receiving rotated keys, every workspace passphrase and delivered epoch key, API keys and MCP tokens you paste, forge tokens of a code host this device connects (read and write kept apart; never synced, never sent to a relay), the contact write key, relay access tokens, the relay issuer key if you set one | `hive.db`: every event of every workspace it belongs to, in clear | relay, peers (P2P), model providers, MCP servers, GitHub |
 | **`ligus serve`** | in the OS secret store: its device and key-agreement keys, the workspace passphrase and epoch keys, the relay token; on disk: `serve.token`, tunnel host keys, per-phone push keys, `LIGUS_WS_SECRET_*` and MCP tokens from its environment, the host's `gh` login | `hive.db`, checkouts under `LIGUS_REPOS_DIR` | relay, phones, model providers, MCP servers, GitHub |
 | **`ligus worker`** | in the OS secret store: its device and key-agreement keys, the workspace passphrase and epoch keys; `LIGUS_WS_SECRET_*` and MCP tokens | `hive.db`, bound checkouts | relay, model providers, MCP servers |
 | **Relay** | token-issuer **public** key, hashed access tokens, APNs key (if push), DB password | ciphertext envelopes, keyring blobs, metadata (see [Self-hosting a relay](../networking/self-host.md#what-the-relay-holds)) | every device, Apple (APNs), GitHub API |
@@ -117,8 +117,9 @@ turn-scoped inputs. See [Keys off the cluster](../deploy/keys-off-cluster.md).
 
 ## Identity, devices and roles {#roles}
 
-- An **account** (one per person; GitHub sign-in links devices to one
-  account) certifies **device** keys. A `ligus serve` box can be certified as
+- An **account** (one per person: a key and a random id made on the first
+  device, never derived from a provider id; more devices join through an
+  enrollment code) certifies **device** keys. A `ligus serve` box can be certified as
   one of your devices; it can't certify itself.
 - Membership is workspace-wide, kept on the workspace config log. Roles:
 
@@ -216,7 +217,7 @@ that change who can do what need a **passkey** assertion over the event:
 | Guard | What it does | Who can switch it | Details |
 |---|---|---|---|
 | **Sandbox envelope** | per turn: isolated worktree, protected dirs (`.git`, `.ligus`, `.hive`, `.claude`, `.vscode`, config files), egress policy, secret redaction in logged replies; only ever tightens | automatic | [The sandbox envelope](../concepts/security.md#the-sandbox-envelope-around-every-agent-turn) |
-| **OS sandbox** | every agent process: Seatbelt (macOS) or bubblewrap + Landlock + seccomp (Linux); no reads of Ligus's data, keys or `serve.token`; writes only in the worktree; network only through the turn's egress proxy; write-capable turns refused where no sandbox exists | automatic | [The OS sandbox](../concepts/security.md#os-sandbox) |
+| **OS sandbox** | every agent process: Seatbelt (macOS) or bubblewrap + Landlock + seccomp (Linux); no reads of Ligus's data, keys or `serve.token`; writes only in the worktree; network only through the turn's egress proxy (plus opt-in [egress presets](../concepts/security.md#egress-presets), off by default); agents can't commit; write-capable turns refused where no sandbox exists | automatic | [The OS sandbox](../concepts/security.md#os-sandbox), [Sandbox defaults](../concepts/security.md#sandbox-defaults) |
 | **Workspace trust** | repo-supplied runtimes and MCP servers stay inert until enabled on this device, per exact command | you, per device | [Trust this workspace](../concepts/security.md#workspace-trust) |
 | **Dearth mode** | two Admins for new members; cross-account approval for new devices; agents limited to allow-listed MCP servers; human approval for protected (brood) paths | Admin | [Dearth mode](../features/guards.md#dearth-mode) |
 | **Chat lockdown** | on an injection marker, a credential in a diff or an unrequested CI change: no network or MCP for that chat's agents, human approval on every proposal | raised by anyone (or automatically); cleared by a human Contributor+ | [Chat lockdown](../features/guards.md#chat-lockdown) |

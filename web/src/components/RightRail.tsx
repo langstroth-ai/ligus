@@ -5,14 +5,13 @@ import {
   addAgent,
   listAgentTemplates,
   listMembershipAudit,
-  importGithubTeams,
-  inviteByHandle,
+  workspaceInvite,
+  listWorkspaces,
   removeMember,
   removeAndRevoke,
   setMemberRole,
   passkeyRegrant,
   workspaceMembers,
-  workspaceAddMember,
   workspaceRemoveMember,
   workspaceClaimMembership,
   workspaceListInvites,
@@ -67,7 +66,7 @@ import { Avatar } from "@/components/Avatar";
 import { fileToAvatarDataUrl } from "@/lib/avatar";
 import { PRIMARY_NAME, PRIMARY_HANDLE } from "@/lib/agent";
 import { toast, errMsg } from "@/components/Toast";
-import { confirmThen, withUnverifiedRecipientConfirm } from "@/lib/confirm";
+import { confirmThen } from "@/lib/confirm";
 import {
   Button,
   IconButton,
@@ -1813,13 +1812,13 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
     nameCounts.set(m.displayName, (nameCounts.get(m.displayName) ?? 0) + 1);
   }
 
-  const [handle, setHandle] = useState("");
   const [error, setError] = useState<string | null>(null);
-  // Invite-by-handle is the one correct way to add a person (seals the key +
-  // registers server-side membership), so it's the primary, open-by-default path.
+  // An invite link is how a person joins: single-use, issued by an Admin on
+  // the config log, carrying your safety code. Open by default.
   const [showInvite, setShowInvite] = useState(true);
-  const [showImport, setShowImport] = useState(false);
-  const [showSrvAdd, setShowSrvAdd] = useState(false);
+  const [inviteLink, setInviteLink] = useState<string | null>(null);
+  const workspacesQ = useQuery({ queryKey: ["workspaces"], queryFn: listWorkspaces });
+  const activeRoom = (workspacesQ.data ?? []).find((w) => w.active && w.kind === "room");
   const refresh = () => qc.invalidateQueries({ queryKey: ["members", sessionId] });
 
   const setRoleMutation = useMutation({
@@ -1864,37 +1863,17 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
     onError: (e) => toast.error(`Couldn't revoke: ${errMsg(e)}`),
   });
   const inviteMutation = useMutation({
-    // Track B: when only the relay vouches for their device keys, ask before
-    // sealing the workspace key to them.
-    mutationFn: () =>
-      withUnverifiedRecipientConfirm(`@${handle.trim().replace(/^@/, "")}`, (confirm) =>
-        inviteByHandle(sessionId, handle.trim(), confirm),
-      ),
-    onSuccess: (r) => {
-      if (!r) return; // cancelled at the unverified-recipient warning
-      setHandle("");
+    mutationFn: () => {
+      if (!activeRoom) throw new Error("Invites are for team workspaces; switch to one first.");
+      return workspaceInvite(activeRoom.id);
+    },
+    onSuccess: (code) => {
       setError(null);
-      setShowInvite(false);
-      refresh();
-      toast.success(
-        r.sealed
-          ? `Invited @${r.login} — workspace key sealed to ${r.devices} ${r.verified ? "verified " : "unverified "}device${r.devices === 1 ? "" : "s"}.`
-          : `Invited @${r.login}.`,
-      );
+      setInviteLink(code);
+      void navigator.clipboard.writeText(code).catch(() => {});
+      toast.success("Invite link copied. It works once.");
     },
-    onError: (e) => toast.error(`Couldn't invite: ${errMsg(e)}`),
-  });
-  const [org, setOrg] = useState("");
-  const importTeams = useMutation({
-    mutationFn: () => importGithubTeams(sessionId, org.trim()),
-    onSuccess: (n) => {
-      const imported = org.trim();
-      setOrg("");
-      setShowImport(false);
-      refresh();
-      toast.success(`Imported ${n} member${n === 1 ? "" : "s"} from @${imported}.`);
-    },
-    onError: (e) => toast.error(`Import failed: ${errMsg(e)}`),
+    onError: (e) => toast.error(`Couldn't create an invite: ${errMsg(e)}`),
   });
 
   // Server-side membership (enforced by paid/enterprise relays). Distinct from
@@ -1907,8 +1886,6 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
   });
   const audit = useQuery({ queryKey: ["membership-audit", sessionId], queryFn: listMembershipAudit });
   const [showAudit, setShowAudit] = useState(false);
-  const [srvHandle, setSrvHandle] = useState("");
-  const [srvRole, setSrvRole] = useState("contributor");
   const refreshSrv = () => qc.invalidateQueries({ queryKey: ["server-members"] });
   const claimMutation = useMutation({
     mutationFn: workspaceClaimMembership,
@@ -1921,16 +1898,6 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
       );
     },
     onError: (e) => toast.error(`Couldn't claim: ${errMsg(e)}`),
-  });
-  const srvAddMutation = useMutation({
-    mutationFn: () => workspaceAddMember(srvHandle.trim(), srvRole),
-    onSuccess: () => {
-      setSrvHandle("");
-      setShowSrvAdd(false);
-      refreshSrv();
-      toast.success("Member updated on the relay.");
-    },
-    onError: (e) => toast.error(`Couldn't add member: ${errMsg(e)}`),
   });
   const srvRemoveMutation = useMutation({
     mutationFn: (account: string) => workspaceRemoveMember(account),
@@ -1992,13 +1959,12 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
 
   // Remote-agent bootstrap generator (relay admins with an issuer key).
   const issuerKey = useQuery({ queryKey: ["has-issuer-key"], queryFn: hasIssuerKey, enabled: relayOn });
-  const [agentHandle, setAgentHandle] = useState("");
   const [agentRole, setAgentRole] = useState("contributor");
   const [agentLabel, setAgentLabel] = useState("");
   const [agentBlock, setAgentBlock] = useState<string | null>(null);
   const bootstrapMutation = useMutation({
     mutationFn: () =>
-      generateAgentBootstrap(agentHandle.trim().replace(/^@/, ""), agentRole, agentLabel.trim(), 365),
+      generateAgentBootstrap(agentRole, agentLabel.trim(), 365),
     onSuccess: (block) => {
       setAgentBlock(block);
       refreshSrv();
@@ -2109,42 +2075,25 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
           <EmptyHint text="No extra members have been added yet." />
         )}
 
-        <FormDisclosure label="Invite by GitHub handle" open={showInvite} onToggle={() => setShowInvite((v) => !v)}>
+        <FormDisclosure label="Invite someone" open={showInvite} onToggle={() => setShowInvite((v) => !v)}>
           <Card className="space-y-2 p-3">
             <p className="text-[11.5px]" style={{ color: "var(--hive-ink-soft)" }}>
-              Adds the person and seals the workspace key to all their devices. They must have signed
-              in to Ligus with GitHub once. Needs a relay + your GitHub sign-in.
+              Make a single-use invite link and send it over a channel you trust. It carries your safety code so they
+              can check it came from you. To invite someone you already share another workspace with, use People.
             </p>
-            <input
-              value={handle}
-              onChange={(e) => setHandle(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handle.trim() && inviteMutation.mutate()}
-              placeholder="@github-handle"
-              className="w-full rounded-xl border px-3 py-2 font-mono text-sm"
-              style={fieldStyle}
-            />
-            <Button variant="primary" disabled={!handle.trim() || inviteMutation.isPending} onClick={() => inviteMutation.mutate()}>
-              {inviteMutation.isPending ? "…" : "Invite"}
+            <Button variant="primary" disabled={!activeRoom || inviteMutation.isPending} onClick={() => inviteMutation.mutate()}>
+              {inviteMutation.isPending ? "…" : "Create invite link"}
             </Button>
-          </Card>
-        </FormDisclosure>
-
-        <FormDisclosure label="Import GitHub org" open={showImport} onToggle={() => setShowImport((v) => !v)}>
-          <Card className="space-y-2 p-3">
-            <p className="text-[11.5px]" style={{ color: "var(--hive-ink-soft)" }}>
-              Pull an org's Teams into the roster, mapping team membership to roles (highest wins).
-              Needs GitHub sign-in with read:org.
-            </p>
-            <input
-              value={org}
-              onChange={(e) => setOrg(e.target.value)}
-              placeholder="github-org-slug"
-              className="w-full rounded-xl border px-3 py-2 font-mono text-sm"
-              style={fieldStyle}
-            />
-            <Button variant="primary" disabled={!org.trim() || importTeams.isPending} onClick={() => importTeams.mutate()}>
-              {importTeams.isPending ? "Importing…" : "Import"}
-            </Button>
+            {inviteLink && (
+              <textarea
+                readOnly
+                value={inviteLink}
+                rows={3}
+                className="w-full rounded-xl border px-3 py-2 font-mono text-[11px]"
+                style={fieldStyle}
+                aria-label="Invite link"
+              />
+            )}
           </Card>
         </FormDisclosure>
 
@@ -2218,31 +2167,6 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                 </Button>
               </Card>
             )}
-            <FormDisclosure label="Add or set member by handle" open={showSrvAdd} onToggle={() => setShowSrvAdd((v) => !v)}>
-              <Card className="space-y-2 p-3">
-                <p className="text-[11.5px]" style={{ color: "var(--hive-ink-soft)" }}>
-                  Admin+ only. Looks the handle up in the directory and sets their role on the relay.
-                </p>
-                <input
-                  value={srvHandle}
-                  onChange={(e) => setSrvHandle(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && srvHandle.trim() && srvAddMutation.mutate()}
-                  placeholder="@github-handle"
-                  className="w-full rounded-xl border px-3 py-2 font-mono text-sm"
-                  style={fieldStyle}
-                />
-                <SubtleSelectField label="Role" value={srvRole} onChange={setSrvRole}>
-                  {MEMBER_ROLES.map((r) => (
-                    <option key={r} value={r}>
-                      {r}
-                    </option>
-                  ))}
-                </SubtleSelectField>
-                <Button variant="primary" disabled={!srvHandle.trim() || srvAddMutation.isPending} onClick={() => srvAddMutation.mutate()}>
-                  {srvAddMutation.isPending ? "…" : "Set"}
-                </Button>
-              </Card>
-            </FormDisclosure>
           </>
         )}
       </Section>
@@ -2341,13 +2265,6 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
               installs the CLI, connects to this workspace, and starts the worker.
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-2">
-              <input
-                value={agentHandle}
-                onChange={(e) => setAgentHandle(e.target.value)}
-                placeholder="agent GitHub handle"
-                className="flex-1 rounded-lg border px-2.5 py-1.5 text-sm"
-                style={fieldStyle}
-              />
               <select
                 value={agentRole}
                 onChange={(e) => setAgentRole(e.target.value)}
@@ -2361,13 +2278,13 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
               <input
                 value={agentLabel}
                 onChange={(e) => setAgentLabel(e.target.value)}
-                placeholder="label (optional)"
+                placeholder="box label (optional)"
                 className="w-28 rounded-lg border px-2.5 py-1.5 text-sm"
                 style={fieldStyle}
               />
               <Button
                 variant="primary"
-                disabled={!agentHandle.trim() || bootstrapMutation.isPending}
+                disabled={bootstrapMutation.isPending}
                 onClick={() => bootstrapMutation.mutate()}
               >
                 Generate

@@ -18,6 +18,9 @@ vi.mock("@/lib/ipc", () => ({
   getHygieneReport: vi.fn(async () => ({ ranAt: "", repoBound: false, turnWorktreesRemoved: 0, chatCheckoutsRemoved: 0, parkedWorktreesRemoved: 0, staleProposals: [] })),
   runHygieneNow: vi.fn(async () => ({ ranAt: "2026-11-13T00:00:00Z", repoBound: true, turnWorktreesRemoved: 2, chatCheckoutsRemoved: 0, parkedWorktreesRemoved: 0, staleProposals: [] })),
   getDearthState: vi.fn(async () => state.d),
+  getEgressPresets: vi.fn(async () => ({ available: [], workspace: [], chat: null, host: [], restrictedBy: "" })),
+  setWorkspaceEgressPresets: vi.fn(async () => {}),
+  setChatEgressPresets: vi.fn(async () => {}),
   setDearthMode: (...a: unknown[]) => setDearthMode(...(a as [])),
   approveJoin: (...a: unknown[]) => approveJoin(...(a as [])),
 }));

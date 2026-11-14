@@ -77,8 +77,9 @@ Expected result: the sync pill reads **live** and encrypted.
 Each teammate installs the app and pastes **their own** relay token in
 **Settings → Team sync**. Then either:
 
-- **Invite by GitHub handle** (both signed in with GitHub): the workspace key
-  is sealed to their devices; nothing secret is copy-pasted. Preferred.
+- **Invite a co-member** (someone you already share a workspace with, from
+  **People**): the invite is sealed to their verified devices and dropped
+  into their contact box; nothing secret is copy-pasted. Preferred.
 - **Invite code**: send the `hivews1:…` code over a trusted channel (it
   contains the workspace key); they use **＋ → Add workspace → Join**.
 
@@ -134,7 +135,7 @@ See
 - [ ] TLS in front of the relay; `LIGUS_RELAY_TOKEN_PUBKEY` set and verified with a `401`
 - [ ] issuer private key off the relay, in a password manager
 - [ ] tokens issued with an expiry, one per person and box
-- [ ] invites by GitHub handle where possible; invite codes only over trusted channels
+- [ ] co-member invites where possible; invite links only over trusted channels; compare safety codes on first contact
 - [ ] roles set; few Admins
 - [ ] workspace runtimes use `--secret-ref`, not inline secrets
 - [ ] everyone's sync pill reads **live**, encrypted

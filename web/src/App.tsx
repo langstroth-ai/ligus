@@ -3,7 +3,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addWorkspaceToList,
   createChat,
-  directoryRegister,
   ensureSelfMember,
   getAppSettings,
   listWorkspaces,
@@ -297,11 +296,6 @@ export function App() {
     return watchSystemScheme(() => applyTheme(resolvePalette(palette, appearanceMode)));
   }, [appearanceMode, palette]);
 
-  // Best-effort: announce this device in the directory (no-op unless signed in
-  // to GitHub + a relay is set), so teammates can invite this account by handle.
-  useEffect(() => {
-    void directoryRegister().catch(() => {});
-  }, []);
 
   const setPalette = (next: ThemeName) => {
     savePalette(next);
@@ -1271,6 +1265,7 @@ export function App() {
           appearanceMode={appearanceMode}
           onAppearanceModeChange={setAppearanceMode}
           onClose={() => setSettingsOpen(false)}
+          activeChat={selectedId ? { id: selectedId, title: activeChat.data?.title ?? "" } : null}
         />
       )}
     </div>

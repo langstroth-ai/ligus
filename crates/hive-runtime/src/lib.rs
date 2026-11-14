@@ -15,6 +15,8 @@ pub mod cli_detect;
 pub mod context;
 pub mod device_enroll;
 pub mod directory_trust;
+pub mod dm;
+pub mod contacts;
 pub mod directives;
 pub mod effects;
 pub mod egress;
@@ -26,7 +28,7 @@ pub mod event_store;
 pub mod executor;
 pub mod git_attribution;
 pub mod git_worktree;
-pub mod github;
+pub mod frozen_ns;
 pub mod guard_scan;
 pub mod host_presence;
 pub mod hygiene;
@@ -86,9 +88,8 @@ pub use mcp::{
 };
 pub use mentions::{parse_mentions, MentionTargets};
 pub use relay_client::{
-    AccountDevice, AccountIdentity, EnvelopePage, FetchedEnvelope, Friend, FriendPresence, FriendRequestOutcome,
-    IncomingFriendRequest, InboxEvent, InviteEntry, IssuedInvite, IssuedRelayToken, MemberEntry,
-    RelayClient, RelayError, RelayProbe, RelayTokenEntry, RelayUserEntry, ENVELOPE_PAGE_LIMIT,
+    EnvelopePage, FetchedEnvelope, InviteEntry, IssuedInvite, IssuedRelayToken, MemberEntry, RelayClient,
+    RelayError, RelayProbe, RelayTokenEntry, RelayUserEntry, ENVELOPE_PAGE_LIMIT,
 };
 pub use remote_manifest::resolve_manifest_url;
 pub use sse::{next_backoff, parse_seq, SseConnectError, SseDecoder, SseStream};

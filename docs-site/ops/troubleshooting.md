@@ -71,7 +71,7 @@ Notes:
 |---|---|---|
 | desktop: `sync paused: the relay rejected this device's access token` | the relay is gated and this device has no token, or a wrong, expired or revoked one | paste a valid token in **Settings → Team sync → Relay access token** |
 | CLI: an unauthorized (401) error from the relay | same, for `ligus` | `ligus enroll <invite> --token <hrt1…>` or `LIGUS_RELAY_ACCESS_TOKEN` |
-| 401 only on directory, friends or invite routes | the relay wants a GitHub token too | sign in with GitHub (desktop) or set `LIGUS_RELAY_GITHUB_TOKEN` (CLI) |
+| People says "your relay doesn't support contacts yet" | the relay is older than v0.3 (or contacts are turned off) | nothing breaks: send invite links instead, or upgrade the relay |
 | writes or reads refused on a membership relay | the workspace is claimed and you're not on its relay roster | an Admin adds you, or redeem an invite code with `ligus join` |
 
 Check a token directly:
@@ -150,7 +150,8 @@ relay refusal.
    `LIGUS_WORKER_PERMISSION_MODE` raises it, and a write tier needs the
    agent sandbox (bubblewrap on Linux): without it the turn is refused.
    A tool call that fails with a network error may have hit the egress
-   allow-list: the chat shows a note; add hosts with
+   allow-list: the chat shows a note. For dependency installs set
+   `LIGUS_SANDBOX_EGRESS_PRESETS=package-registries`; for other hosts use
    `LIGUS_SANDBOX_EGRESS_ALLOW`.
 7. **Is it syncing at all?** Look for `sync: … retrying` lines in the log.
 8. **Egress restricted?** In dearth mode or a locked chat, runtimes Ligus

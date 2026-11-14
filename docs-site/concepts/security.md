@@ -24,9 +24,9 @@ The key is exchanged **out-of-band**:
 - The `hivews1:` invite code carries the key *inside the code itself*, so share
   the code over a channel you trust — paste it directly to the joiner. See the
   [invite code format](../reference/invite-payload.md).
-- [Invite by GitHub handle](../features/invites.md#invite-by-github-handle)
-  seals the key to the invitee's devices instead, so nothing sensitive is
-  copy-pasted — the key still never touches the relay.
+- [Inviting a co-member](../features/invites.md#invite-someone-you-already-share-a-workspace-with)
+  seals the code to their verified devices instead, so nothing sensitive is
+  copy-pasted; the relay only stores the sealed drop.
 
 The old relay-brokered "short code" that published the key to the relay's
 pairing store has been **removed**; the relay is never a party to key exchange.
@@ -156,7 +156,13 @@ desktop, `ligus serve`, `ligus worker` and `ligus agent`.
 
 - **cwd and HOME.** An agent never runs in your home directory, in `/` or in
   Ligus's data dir; a turn without a worktree gets a fresh scratch dir
-  (`$TMPDIR/ligus-turn-…`).
+  (`$TMPDIR/ligus-turn-…`, mode 0700). Claude Code's own scratch
+  (`CLAUDE_CODE_TMPDIR`) points there too, because it can't write
+  `/tmp/claude-<uid>` inside the sandbox. The dir is removed when the turn
+  ends or is cancelled; one a killed turn or a killed host left behind is
+  swept at startup and every ten minutes, once no running process owns it
+  and it is older than the longest turn (`LIGUS_TURN_TIMEOUT_SECS` plus ten
+  minutes).
 - **Egress proxy.** Each turn gets its own HTTP `CONNECT` proxy on
   `127.0.0.1`, with a random credential in the child's `HTTPS_PROXY`. It
   allows exactly the runtime's model endpoints (Claude Code:
@@ -170,7 +176,8 @@ desktop, `ligus serve`, `ligus worker` and `ligus agent`.
   there is no TLS interception. A refused endpoint shows as a system note in
   the chat and a content-free decision. A tool that ignores `HTTPS_PROXY`
   simply has no network. To let agents reach more hosts on your device under
-  the normal envelope, set `LIGUS_SANDBOX_EGRESS_ALLOW`.
+  the normal envelope, switch on an [egress preset](#egress-presets) or set
+  `LIGUS_SANDBOX_EGRESS_ALLOW`.
 - **Keychain (macOS).** Subscription CLIs (Claude Code, Codex, Copilot,
   Antigravity) keep access to the login keychain, because their logins live
   there; every other agent process can't read the keychain files. Ligus's own
@@ -201,6 +208,76 @@ desktop, `ligus serve`, `ligus worker` and `ligus agent`.
 - **One control among several.** The sandbox does not replace the author
   gate, the MCP role gate, review of proposals or the human gate, and it is
   not a boundary against kernel bugs.
+
+### Egress presets {#egress-presets}
+
+A preset is a named, opt-in set of hosts added to a chat's egress
+allow-list. Every preset is **off by default**.
+
+| Preset | Adds (port 443 only) | For |
+|---|---|---|
+| `package-registries` | npm: `registry.npmjs.org`; crates.io: `crates.io`, `static.crates.io`, `index.crates.io`; PyPI: `pypi.org`, `files.pythonhosted.org`; GitHub: `github.com`, `api.github.com`, `codeload.github.com`, `objects.githubusercontent.com`, `raw.githubusercontent.com` | agents, `run_command` and pre-flight tests that install dependencies (`npm install`, `cargo build`, `pip install`, git dependencies) |
+| `claude-connectors` | `mcp-proxy.anthropic.com` | Claude Code turns only. Lets Claude Code use your claude.ai MCP connectors inside Ligus turns. **This lets the agent reach every service you connected there** (Google Drive, Gmail, and so on) with your access, so switch it on only for chats where you want that. Claude Code's telemetry hosts stay blocked |
+
+Where to switch them on:
+
+- **Per workspace:** **Settings → Guards → Network presets**, the
+  *This workspace* switch. Stored on this device as
+  `egress_presets_by_workspace` in `settings.json`.
+- **Per chat:** in the same panel, with that chat open behind Settings:
+  *Workspace setting*, *On for this chat* or *Off for this chat*. A chat's
+  own choice wins over the workspace's. Stored as `egress_presets_by_chat`.
+- **For every turn on a host** (desktop, `ligus serve`, `ligus worker`,
+  `ligus agent`): `LIGUS_SANDBOX_EGRESS_PRESETS=package-registries` (comma-
+  separated names). This is how a headless worker or serve box opts in.
+
+Presets are **device-local**: they change where agents on this device may
+connect, so they are never synced, and neither a teammate nor a committed
+config file can switch one on for you. Turns that run on another device
+follow that device's settings.
+
+A preset never loosens a guard. It applies only while the chat's egress is
+open: under [dearth mode](#dearth-mode-a-tighter-entrance-on-demand) the
+chat keeps only its allow-listed MCP servers, and under a chat
+[lockdown](#self-medication-a-chat-that-shows-infection-locks-itself-down)
+only the model endpoints. **Settings → Guards** shows *ignored* on the chat
+while that is the case. Preset hosts go through the same proxy as
+everything else: exact host and port match, and the TLS server name must
+equal the `CONNECT` host.
+
+## Sandbox defaults {#sandbox-defaults}
+
+These defaults are deliberate and stay on in 2.0.
+
+**Agents can't commit inside a turn.** `.git` is read-only to every agent
+process, at every tier and on every host. An agent edits files in its
+worktree; Ligus captures the diff as a proposal, and the commit happens
+when the proposal is applied.
+*Why:* a commit is history a reviewer didn't approve, and write access to
+`.git` would also let an agent plant hooks or rewrite config that runs
+later, outside the sandbox. Keeping every change as a reviewable diff is
+what makes the review gate and the human gate mean something.
+
+**No OS sandbox, no writing agents.** Where Ligus can't confine an agent
+process (`LIGUS_SANDBOX=off`, Windows, Linux without bubblewrap or user
+namespaces), write-capable agent turns are refused before they start, with
+a note in the chat. Read-only turns still run.
+*Why:* without the sandbox nothing stops a write-capable CLI from editing
+files outside its worktree, reading Ligus's keys or reaching the network
+directly. Refusing is safer than running the agent with your full user
+rights and hoping its own permission prompts hold.
+
+**On workers, always-writing CLIs need an Admin author.** Codex, aider, pi
+and Hermes have no read-only tier, so on a worker (and on every other host)
+they run only for a message whose author was an Admin or Owner when they
+posted it; for anyone below, the turn is refused with a note
+([the author gate](#author-gate)). `LIGUS_MCP_MIN_ROLE` can lower the floor;
+Ligus warns at startup when it does.
+*Why:* a worker runs turns on its owner's keys, subscriptions and machine
+for whoever writes in the chat. A Contributor's message shouldn't be able
+to drive a tool that always edits files and runs commands there; Claude
+Code, Copilot and Antigravity drop to read-only instead, but these CLIs
+can't.
 
 ## Who can drive a turn: the author gate {#author-gate}
 

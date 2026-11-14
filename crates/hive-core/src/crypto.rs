@@ -276,6 +276,7 @@ impl HumanAccount {
             git_email: None,
             key_agreement_public: None,
             avatar_url: self.avatar_url.clone(),
+            contact: None,
         }
     }
 }

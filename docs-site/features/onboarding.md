@@ -9,7 +9,7 @@ whenever your display name is still unset (or the placeholder `You`)
 
 | Step           | Captures                                             |
 |----------------|------------------------------------------------------|
-| Identity       | Display name **or** sign in with GitHub              |
+| Identity       | Display name, optional picture; shows your safety code |
 | Project folder | The workspace folder agents work in                  |
 | Runtime        | One agent (Claude Code / OpenAI-compatible / Anthropic API key / Ollama) + "let agents edit files" |
 | Team           | Optional relay URL + team name for sync              |

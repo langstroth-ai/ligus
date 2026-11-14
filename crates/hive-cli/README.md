@@ -28,7 +28,6 @@ Everything is env-driven so it drops into a container or a secret mount. A
 | `LIGUS_DATA_DIR` | Where identity + `hive.db` live. Default: `$HOME/.ligus` (or an existing `$HOME/.hive`). **Must persist** for a stable identity. |
 | `LIGUS_RELAY_URL` | Relay base URL. Required for `sync`, `send --push`, `agent`. |
 | `LIGUS_RELAY_ACCESS_TOKEN` | Relay entitlement token (`hrt1…`/hex). **Provision out-of-band** — there is no headless self-service. |
-| `LIGUS_RELAY_GITHUB_TOKEN` | Only on membership-enforcing relays. |
 | `LIGUS_WORKSPACE` | Relay room / workspace name. Default: `default`. |
 | `LIGUS_WORKSPACE_KEY` | E2EE passphrase. Omit only if the relay is plaintext. **Provision out-of-band.** |
 | `LIGUS_PROVIDER` | For `agent`: `anthropic` (default) \| `openai` \| `openrouter` \| `ollama`. |

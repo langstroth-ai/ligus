@@ -505,35 +505,17 @@ export const launchHealth = () => invoke<LaunchHealth>("launch_health");
 export const openFileAccessSettings = () =>
   invoke<void>("open_file_access_settings");
 
-/// GitHub sign-in (device flow). The GitHub user is the Hive account; the same
-/// account works across all your devices.
-export interface GithubAccountDto {
-  id: number;
-  login: string;
-  name?: string | null;
-  email?: string | null;
-  avatarUrl?: string | null;
+/// Your profile: the random account id made on first launch (never a
+/// provider id), name, picture, safety code (eight groups of four hex
+/// characters people compare out of band) and commit email.
+export interface ProfileDto {
+  accountId: string;
+  displayName: string;
+  avatarUrl: string | null;
+  safetyCode: string | null;
+  gitEmail: string;
 }
-export interface DeviceStartDto {
-  deviceCode: string;
-  userCode: string;
-  verificationUri: string;
-  interval: number;
-  expiresIn: number;
-}
-export interface GithubPollDto {
-  /** "pending" | "slowDown" | "success" | "denied" | "expired" */
-  status: string;
-  account: GithubAccountDto | null;
-}
-export const githubAccount = () => invoke<GithubAccountDto | null>("github_account");
-export const githubClientConfigured = () => invoke<boolean>("github_client_configured");
-export const setGithubClientId = (clientId: string) =>
-  invoke<void>("set_github_client_id", { clientId });
-export const githubLoginStart = () => invoke<DeviceStartDto>("github_login_start");
-export const githubLoginPoll = (deviceCode: string) =>
-  invoke<GithubPollDto>("github_login_poll", { deviceCode });
-export const githubLogout = () => invoke<void>("github_logout");
+export const myProfile = () => invoke<ProfileDto>("my_profile");
 
 /// Organization sign-in through ligus-auth (device code). The session's
 /// short-lived relay token replaces the static relay access token while it is
@@ -675,25 +657,9 @@ export const addAgentTemplate = (
 export const removeAgentTemplate = (id: string) =>
   invoke<void>("remove_agent_template", { id });
 
-/// Register this device under the signed-in GitHub account (directory).
-export const directoryRegister = () => invoke<void>("directory_register");
-
-export interface InviteResultDto {
-  login: string;
-  devices: number;
-  sealed: boolean;
-  /// The devices' keys are ones the invitee's account signed (false: only the
-  /// relay vouched for them and you confirmed).
-  verified: boolean;
-}
-/// Invite a GitHub user by handle to this chat's workspace (seals the key to
-/// all their devices via the directory).
-export const inviteByHandle = (sessionId: string, handle: string, confirmUnverified = false) =>
-  invoke<InviteResultDto>("invite_by_handle", { sessionId, handle, confirmUnverified });
-
 /// A server-side workspace member (membership-enforcing / paid relays only).
 export interface MemberEntry {
-  account: string; // "github:<id>"
+  account: string; // the relay subject: "ligus:<account id>" or "<tenant>:<user>"
   login: string;
   role: "owner" | "admin" | "contributor" | "viewer";
   addedBy: string;
@@ -705,10 +671,7 @@ export const workspaceClaimMembership = () =>
   invoke<boolean>("workspace_claim_membership");
 /// Server-side members of the active workspace (empty on open relays).
 export const workspaceMembers = () => invoke<MemberEntry[]>("workspace_members");
-/// Add a member by GitHub handle / set their role (caller must be Admin+).
-export const workspaceAddMember = (handle: string, role: string) =>
-  invoke<void>("workspace_add_member", { handle, role });
-/// Remove a member by account id ("github:<id>"); caller must be Admin+.
+/// Remove a member by relay subject; caller must be Admin+.
 export const workspaceRemoveMember = (account: string) =>
   invoke<void>("workspace_remove_member", { account });
 
@@ -745,73 +708,89 @@ export const workspaceJoinViaInvite = (code: string) =>
 
 /// Remote-agent bootstrap (relay admins with an issuer key). `hasIssuerKey`
 /// gates the UI; `setRelayIssuerKey` stores the local Ed25519 seed;
-/// `generateAgentBootstrap` enrolls the agent + returns the copy-paste command.
+/// `generateAgentBootstrap` mints the box a random relay identity
+/// (`ligus:<id>`), enrolls it, and returns the copy-paste command.
 export const hasIssuerKey = () => invoke<boolean>("has_issuer_key");
 export const setRelayIssuerKey = (key: string) =>
   invoke<void>("set_relay_issuer_key", { key });
-export const generateAgentBootstrap = (
-  handle: string,
-  role: string,
-  label: string,
-  expDays: number,
-) => invoke<string>("generate_agent_bootstrap", { handle, role, label, expDays });
+export const generateAgentBootstrap = (role: string, label: string, expDays: number) =>
+  invoke<string>("generate_agent_bootstrap", { role, label, expDays });
 
-// ── Social graph: friends + presence ───────────────────────────────────────
+// ── People: co-members, DMs, invites (no directory, no handles) ───────────
 
-export type Presence = "online" | "away" | "offline";
-
-export interface FriendDto {
+/// Someone you share a workspace with, keyed by their random account id.
+/// Names aren't unique: the safety code tells two people apart.
+export interface CoMemberDto {
   accountId: string;
-  login: string;
-  presence: Presence;
+  displayName: string;
+  avatarUrl: string | null;
+  safetyCode: string | null;
+  /// The shared workspaces disagree about their account key: nothing is
+  /// sealed to them.
+  keyConflict: boolean;
+  /// Devices whose keys are verified on a shared workspace.
+  devices: number;
+  workspaces: { id: string; name: string }[];
+  dmWorkspaceId: string | null;
 }
-export interface IncomingRequestDto {
-  requestId: string;
-  fromAccount: string;
-  fromLogin: string;
-  createdAt: number;
-}
-export interface FriendsOverviewDto {
-  /** True once signed in + a relay is configured. */
-  enabled: boolean;
-  friends: FriendDto[];
-  incoming: IncomingRequestDto[];
-}
-export interface FriendRequestResultDto {
-  /** "sent" | "alreadyFriends" | "capReached" | "userNotFound" | "invalid" */
-  outcome: string;
-  requestId?: string | null;
-}
-
-/// Heartbeat this device + fetch friends (with presence) and incoming requests.
-export const friendsOverview = () => invoke<FriendsOverviewDto>("friends_overview");
-/// Send a friend request to a GitHub @username.
-export const friendSendRequest = (login: string) =>
-  invoke<FriendRequestResultDto>("friend_send_request", { login });
-/// Accept a pending friend request by id.
-export const friendAccept = (requestId: string) =>
-  invoke<void>("friend_accept", { requestId });
-/// Reject (recipient) or cancel (sender) a pending request by id.
-export const friendReject = (requestId: string) =>
-  invoke<void>("friend_reject", { requestId });
-/// Remove an accepted friend by account id ("github:<id>").
-export const friendRemove = (accountId: string) =>
-  invoke<void>("friend_remove", { accountId });
-/// Toggle "appear offline" for this account.
-export const friendSetVisibility = (appearOffline: boolean) =>
-  invoke<void>("friend_set_visibility", { appearOffline });
+export const listCoMembers = () => invoke<CoMemberDto[]>("list_co_members");
 
 export interface DmDto {
   workspaceId: string;
+  /// The other person's account id.
   account: string;
-  login: string;
+  name: string;
+  avatarUrl: string | null;
+  safetyCode: string | null;
+  /// Earlier DMs with the same person, archived (read-only) because both of
+  /// you opened one at the same time.
+  archived: string[];
 }
-/// Open (provisioning on first use) the 1:1 DM workspace with a friend and
-/// switch the chat list to it. Returns the DM workspace id.
-export const friendOpenDm = (accountId: string, login: string, confirmUnverified = false) =>
-  invoke<string>("friend_open_dm", { accountId, login, confirmUnverified });
-/// The provisioned DM workspaces (Friends section).
 export const listDms = () => invoke<DmDto[]>("list_dms");
+
+export interface OpenDmDto {
+  workspaceId: string;
+  /// The DM invite, on creation. Hand it over yourself unless `delivered`.
+  invite: string | null;
+  delivered: boolean;
+  safetyCode: string | null;
+}
+/// Open (creating on first use) the DM with a co-member and switch to it.
+export const openDm = (accountId: string) => invoke<OpenDmDto>("open_dm", { accountId });
+
+export interface CoMemberInviteDto {
+  invite: string;
+  name: string;
+  safetyCode: string | null;
+  devices: number;
+  /// Delivered to their drop box, sealed to their verified devices.
+  delivered: boolean;
+}
+/// Invite a co-member to another workspace you administer.
+export const coMemberInvite = (workspaceId: string, accountId: string) =>
+  invoke<CoMemberInviteDto>("co_member_invite", { workspaceId, accountId });
+
+/// `known`: a co-member and the key matches. `mismatch`: a co-member with a
+/// different key (not from them). `unknown`: compare the safety code out of
+/// band. `none`: the invite carries no safety code.
+export type InviteTrust = "known" | "mismatch" | "unknown" | "none";
+
+export interface InviteInfoDto {
+  workspaceName: string;
+  isDm: boolean;
+  addressedToMe: boolean;
+  founderAccount: string | null;
+  founderName: string | null;
+  safetyCode: string | null;
+  trust: InviteTrust;
+  alreadyJoined: boolean;
+}
+/// What an invite says about who sent it, before joining.
+export const inspectInvite = (code: string) => invoke<InviteInfoDto>("inspect_invite", { code });
+/// Join a DM from its invite; `confirmSafetyCode` after comparing codes with
+/// someone you share no workspace with.
+export const joinDm = (code: string, confirmSafetyCode: boolean) =>
+  invoke<WorkspaceInfoDto>("join_dm", { code, confirmSafetyCode });
 
 export const listAgents = (sessionId: string) =>
   invoke<WorkspaceAgentDto[]>("list_agents", { sessionId });
@@ -1097,24 +1076,42 @@ export const joinWorkspace = (invite: string) =>
 export const workspaceInvite = (workspaceId: string) =>
   invoke<string>("workspace_invite", { workspaceId });
 
+/// An invite delivered to this device's contact drop box (sealed to it,
+/// opened locally).
 export type PendingInvite = {
+  relay: string;
   seq: number;
-  fromLogin: string;
+  isDm: boolean;
   workspaceName: string;
-  room: string;
+  founderAccount: string | null;
+  founderName: string | null;
+  safetyCode: string | null;
+  trust: InviteTrust;
   code: string;
 };
+export type PendingInvites = {
+  /// "on" | "unsupported" (the relay has no contact routes: invites come as
+  /// links and QR codes only) | "noRelay".
+  contacts: string;
+  invites: PendingInvite[];
+};
 
-/// Pending workspace invites delivered to this account's inbox (sealed to this
-/// device, decrypted locally). Excludes already-joined and dismissed ones.
-export const listPendingInvites = () => invoke<PendingInvite[]>("list_pending_invites");
+/// Refresh this device's contact and read its drop boxes.
+export const listPendingInvites = () => invoke<PendingInvites>("list_pending_invites");
 
-/// Accept a pending invite — joins the workspace from its code.
-export const acceptInvite = (code: string) =>
-  invoke<WorkspaceInfoDto>("accept_invite", { code });
+/// Accept a delivered invite (a DM from someone you share no workspace with
+/// needs `confirmSafetyCode` after comparing codes).
+export const acceptPendingInvite = (invite: PendingInvite, confirmSafetyCode = false) =>
+  invoke<WorkspaceInfoDto>("accept_pending_invite", {
+    relay: invite.relay,
+    seq: invite.seq,
+    code: invite.code,
+    confirmSafetyCode,
+  });
 
-/// Dismiss a pending invite by its inbox seq (stays hidden).
-export const dismissInvite = (seq: number) => invoke<void>("dismiss_invite", { seq });
+/// Dismiss a delivered invite (deleted on the relay at the next read).
+export const dismissPendingInvite = (invite: PendingInvite) =>
+  invoke<void>("dismiss_pending_invite", { relay: invite.relay, seq: invite.seq });
 
 /// Leave a team workspace (removes it from the rail).
 export const removeWorkspace = (workspaceId: string) =>
@@ -1406,6 +1403,24 @@ export const setDearthMode = (
 
 /// Approve a member or device waiting on dearth mode's second approval.
 export const approveJoin = (subject: string) => invoke<void>("approve_join", { subject });
+
+// ── Egress presets (device-local, off by default) ──
+export type { EgressPresetsDto } from "@/bindings/EgressPresetsDto";
+export type { EgressPresetDto } from "@/bindings/EgressPresetDto";
+
+/// Presets that exist, what the active workspace (and `sessionId`'s chat)
+/// has on, and whether a guard overrides them for that chat.
+export const getEgressPresets = (sessionId?: string | null) =>
+  invoke<import("@/bindings/EgressPresetsDto").EgressPresetsDto>("get_egress_presets", { sessionId: sessionId ?? null });
+
+/// Turn presets on for the active workspace on this device (`[]` = off).
+export const setWorkspaceEgressPresets = (presets: string[]) =>
+  invoke<void>("set_workspace_egress_presets", { presets });
+
+/// Override the workspace for one chat: `null` = follow the workspace,
+/// `[]` = off for this chat.
+export const setChatEgressPresets = (sessionId: string, presets: string[] | null) =>
+  invoke<void>("set_chat_egress_presets", { sessionId, presets });
 
 // ── Workspace guards: chat lockdown (self-medication) ──
 export type { ChatLockdownDto } from "@/bindings/ChatLockdownDto";

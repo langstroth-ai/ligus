@@ -59,7 +59,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     cap: "You",
     items: [
-      { id: "account", label: "Account", icon: <IconUsers size={16} />, keywords: ["github", "sign in", "login", "identity", "profile", "name"] },
+      { id: "account", label: "Profile", icon: <IconUsers size={16} />, keywords: ["profile", "identity", "name", "avatar", "safety code", "fingerprint", "devices", "git email"] },
       { id: "appearance", label: "Appearance", icon: <IconSparkle size={16} />, keywords: ["theme", "dark mode", "light", "color", "font"] },
     ],
   },
@@ -70,7 +70,7 @@ const NAV_GROUPS: NavGroup[] = [
       { id: "code-hosts", label: "Code hosts", icon: <IconFile size={16} />, keywords: ["forge", "github", "gitlab", "codeberg", "forgejo", "gitea", "token", "clone", "repository", "pull request", "merge request"] },
       { id: "team-sync", label: "Team sync", icon: <IconUsers size={16} />, keywords: ["relay", "e2ee", "encryption", "sync", "token", "invite", "p2p", "peer", "collaborate"] },
       { id: "passkeys", label: "Passkeys & keys", icon: <IconLock size={16} />, keywords: ["passkey", "webauthn", "touch id", "recovery", "rules v2", "presence", "rotate", "workspace key", "keychain"] },
-      { id: "guards", label: "Guards", icon: <IconLock size={16} />, keywords: ["dearth", "security", "lockdown", "entrance", "approval", "throttle", "lease", "sandbox", "egress"] },
+      { id: "guards", label: "Guards", icon: <IconLock size={16} />, keywords: ["dearth", "security", "lockdown", "entrance", "approval", "throttle", "lease", "sandbox", "egress", "network", "preset", "registries", "npm", "connectors"] },
       { id: "schedules", label: "Schedules", icon: <IconActivity size={16} />, keywords: ["cron", "recurring", "timer", "automation"] },
     ],
   },
@@ -165,6 +165,7 @@ export function SettingsView({
   onAppearanceModeChange,
   initialTab,
   onClose,
+  activeChat,
 }: {
   palette: ThemeName;
   onPaletteChange: (t: ThemeName) => void;
@@ -174,6 +175,8 @@ export function SettingsView({
   /// straight to e.g. "Team sync".
   initialTab?: SettingsTab;
   onClose: () => void;
+  /// The chat open behind Settings, for chat-level settings (network presets).
+  activeChat?: { id: string; title: string } | null;
 }) {
   const [tab, setTabState] = useState<SettingsTab>(initialTab ?? rememberedTab);
   const setTab = (t: SettingsTab) => {
@@ -272,7 +275,7 @@ export function SettingsView({
           {tab === "folder-git" && <FolderGitSection />}
           {tab === "code-hosts" && <CodeHostsSection />}
           {tab === "team-sync" && <TeamSyncSection />}
-          {tab === "guards" && <GuardsSection />}
+          {tab === "guards" && <GuardsSection chat={activeChat} />}
           {tab === "passkeys" && <SecuritySection />}
           {tab === "schedules" && <SchedulesSection />}
           {tab === "models" && <ModelsSection />}
