@@ -1191,6 +1191,9 @@ fn main() {
 }
 
 fn run() -> Result<()> {
+    // Inside the Linux agent sandbox this process is only the pre-exec helper.
+    #[cfg(target_os = "linux")]
+    hive_runtime::executor::linux::maybe_run_helper();
     // Before any thread starts: the only time Linux lets us read it.
     serve::dashboard_hive::init_local_offset();
     let args: Vec<String> = std::env::args().skip(1).collect();

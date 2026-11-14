@@ -33,33 +33,11 @@ use crate::mcp_config;
 const MAX_TOKENS: u32 = 1024;
 const MAX_TOOL_ITERS: usize = 6;
 
-/// Env var that raises (or lowers) the minimum author role required before a
-/// headless turn may use tools. See [`hive_runtime::author_gate`].
-pub const MIN_ROLE_ENV: &str = hive_runtime::author_gate::MIN_ROLE_ENV;
-
-/// The floor from `LIGUS_MCP_MIN_ROLE`'s value (viewer|contributor|admin|
-/// owner, any case), or the default for the turn's tier when unset or
-/// unknown: **Admin** for a write-capable turn, Contributor for a read-only
-/// one (S3).
-pub fn parse_min_role(v: Option<&str>, write_capable: bool) -> WorkspaceRole {
-    hive_runtime::author_gate::min_role_from(v, write_capable)
-}
-
-/// The configured minimum author role for a turn of this tier.
+/// The configured minimum author role for a turn of this tier
+/// (`LIGUS_MCP_MIN_ROLE`, else Admin when write-capable and Contributor when
+/// read-only; see [`hive_runtime::author_gate`]).
 pub fn mcp_min_role(write_capable: bool) -> WorkspaceRole {
     hive_runtime::author_gate::min_role(write_capable)
-}
-
-/// Whether the triggering message's author is privileged enough to have MCP
-/// tools executed on their behalf. `None` = author could not be resolved (no
-/// `actor_identity`) → fail closed (denied). This is the H1 gate: a low-
-/// privilege member must not be able to drive the worker's tools on the
-/// victim's key.
-pub fn mcp_allowed_for(author_role: Option<WorkspaceRole>, min_role: WorkspaceRole) -> bool {
-    match author_role {
-        Some(role) => role.rank() >= min_role.rank(),
-        None => false,
-    }
 }
 
 /// Produce one reply for `turns` under `system`. Runs the MCP tool loop when an
@@ -440,8 +418,14 @@ fn turns_to_messages(turns: &[ChatTurn]) -> Vec<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use hive_core::WorkspaceRole::*;
+    use hive_core::WorkspaceRole::{self, *};
+
+    fn parse_min_role(v: Option<&str>, write_capable: bool) -> WorkspaceRole {
+        hive_runtime::author_gate::min_role_from(v, write_capable)
+    }
+    fn mcp_allowed_for(author_role: Option<WorkspaceRole>, min_role: WorkspaceRole) -> bool {
+        hive_runtime::author_gate::gate(hive_core::ModelProviderKind::Ollama, author_role, min_role).allows_tools()
+    }
 
     #[test]
     fn viewer_denied_at_default() {
