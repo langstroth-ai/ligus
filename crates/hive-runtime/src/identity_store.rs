@@ -62,13 +62,33 @@ impl FileKeyVault {
 impl KeyVault for FileKeyVault {
     fn store_seed(&self, key_id: &str, seed: &[u8; 32]) -> Result<(), IdentityError> {
         std::fs::create_dir_all(&self.dir)?;
-        std::fs::write(self.path_for(key_id), seed)?;
+        let path = self.path_for(key_id);
+        #[cfg(unix)]
+        {
+            // Owner-only, whatever the umask: these are private signing keys.
+            use std::io::Write;
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+            std::fs::set_permissions(&self.dir, std::fs::Permissions::from_mode(0o700))?;
+            let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&path)?;
+            // `mode` applies only on create: tighten a file left by an older build.
+            f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+            f.write_all(seed)?;
+            f.sync_all()?;
+        }
+        #[cfg(not(unix))]
+        std::fs::write(&path, seed)?;
         Ok(())
     }
 
     fn load_seed(&self, key_id: &str) -> Result<Option<[u8; 32]>, IdentityError> {
         match std::fs::read(self.path_for(key_id)) {
             Ok(bytes) => {
+                // Best effort: tighten a seed an older build left world-readable.
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(self.path_for(key_id), std::fs::Permissions::from_mode(0o600));
+                }
                 let seed: [u8; 32] = bytes
                     .as_slice()
                     .try_into()
@@ -267,6 +287,31 @@ mod tests {
 
     fn store(dir: &Path) -> IdentityStore<FileKeyVault> {
         IdentityStore::new(dir, FileKeyVault::new(dir))
+    }
+
+    /// Private key seeds must be readable by the owner only, whatever the
+    /// process umask (often 022, which made them 0644), and the key dir too.
+    #[cfg(unix)]
+    #[test]
+    fn key_seeds_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let vault = FileKeyVault::new(dir.path());
+        vault.store_seed("device:x", &[1u8; 32]).unwrap();
+        let mode = std::fs::metadata(vault.path_for("device:x")).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "seed file mode {mode:o}");
+        let dmode = std::fs::metadata(&vault.dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(dmode & 0o077, 0, "key dir mode {dmode:o}");
+        // Re-storing over an existing, too-open file tightens it.
+        std::fs::set_permissions(vault.path_for("device:x"), std::fs::Permissions::from_mode(0o644)).unwrap();
+        vault.store_seed("device:x", &[2u8; 32]).unwrap();
+        let mode = std::fs::metadata(vault.path_for("device:x")).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        assert_eq!(vault.load_seed("device:x").unwrap(), Some([2u8; 32]));
+        // Loading a seed an older build left at 0644 tightens it too.
+        std::fs::set_permissions(vault.path_for("device:x"), std::fs::Permissions::from_mode(0o644)).unwrap();
+        vault.load_seed("device:x").unwrap();
+        assert_eq!(std::fs::metadata(vault.path_for("device:x")).unwrap().permissions().mode() & 0o777, 0o600);
     }
 
     #[test]
