@@ -41,6 +41,7 @@ use hive_runtime::secret_store::StoreKeyVault;
 use uuid::Uuid;
 
 mod auth;
+mod forge_cmd;
 mod mcp_config;
 mod reply;
 mod repos;
@@ -1341,6 +1342,7 @@ fn usage() -> ! {
          ligus serve enroll [--new-device]   print the code that makes this box your own device\n                                       \
          (approve it on your desktop; --new-device after a revocation)\n  \
          ligus bind-repo <name|path> [--chat <id>] | --clear   bind a checkout for agent file tools\n  \
+         ligus forge list|add <kind> <https://base> [--auth token|oauth|gh|none] [--client-id ID]|token <id> <read|write>|login <id>|test <id>|remove <id>\n                                       code-host connections (tokens on stdin, kept in the OS secret store)\n  \
          ligus repos                     show the repos dir and bindings\n  \
          ligus pair [--listen ADDR] [--public-url URL] [--relay-only]   show the phone pairing QR code\n  \
          ligus remote enable --relay URL [--reg-token T] | status | disable | reset\n                                       \
@@ -1436,6 +1438,8 @@ fn run() -> Result<()> {
         "--file",
         "--repo",
         "--since",
+        "--auth",
+        "--client-id",
     ];
     let mut positional: Vec<&String> = Vec::new();
     let mut skip = false;
@@ -1672,6 +1676,10 @@ fn run() -> Result<()> {
             has("--clear"),
         ),
         "repos" => repos::cmd_repos(&cfg.data_dir),
+        "forge" => {
+            let pos: Vec<&str> = positional.iter().map(|s| s.as_str()).collect();
+            forge_cmd::cmd(&cfg.data_dir, &pos, flag_val("--auth"), flag_val("--client-id"))
+        }
         "agent" => {
             let name = positional.first().map(|s| s.as_str()).unwrap_or("assistant").to_string();
             let runtime_id = flag_val("--runtime").or_else(|| env_opt("LIGUS_RUNTIME"));

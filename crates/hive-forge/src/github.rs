@@ -15,7 +15,7 @@ use reqwest::{Method, StatusCode};
 use serde_json::{json, Value};
 
 use crate::http::{id_str, s, Api, AuthStyle};
-use crate::tokens::{AuthSource, CredentialSource};
+use crate::tokens::CredentialSource;
 use crate::*;
 
 pub struct GitHub {
@@ -242,8 +242,8 @@ impl Forge for GitHub {
     fn capabilities(&self) -> ForgeCaps {
         ForgeCaps { draft_cr: true, fork_api: true, ci_status: true, review_threads: true, issues: true, api_open_cr: true, device_flow: true }
     }
-    fn auth_source(&self) -> AuthSource {
-        self.api.creds.source()
+    fn creds(&self) -> &Arc<dyn CredentialSource> {
+        &self.api.creds
     }
 
     async fn whoami(&self) -> Result<Option<ForgeUser>> {

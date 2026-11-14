@@ -2575,6 +2575,7 @@ name = "hive-cli"
 version = "2.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "base64 0.21.7",
  "chacha20poly1305",
@@ -2583,6 +2584,7 @@ dependencies = [
  "getrandom 0.2.17",
  "hex",
  "hive-core",
+ "hive-forge",
  "hive-runtime",
  "hkdf",
  "hmac",

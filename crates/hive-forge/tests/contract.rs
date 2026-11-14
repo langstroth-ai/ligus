@@ -464,3 +464,17 @@ async fn an_expired_oauth_token_is_refreshed_from_the_store_before_use() {
     assert_eq!(f.find("GET", "/api/v3/user").auth.as_deref(), Some("Bearer NEW"));
     assert_eq!(store.get(&c.id, Purpose::Refresh).unwrap().unwrap().expose(), "RT2");
 }
+
+/// Gitea and Forgejo echo a bad token in their error body ("access token
+/// does not exist [sha: …]"): the error Ligus builds never carries it.
+#[tokio::test]
+async fn a_token_the_forge_echoes_back_is_redacted() {
+    let f = Fake::default();
+    f.on(Method::GET, "/user", 401, json!({"message": "token is malformed: access token does not exist [sha: cb-ECHOED-0123456789]"}));
+    let api = serve(f.clone()).await;
+    let store = Arc::new(MemoryTokens::default());
+    let g = conn(ForgeKind::Gitea, "https://codeberg.org", &api, &store, Some("cb-ECHOED-0123456789"), None);
+    let e = g.whoami().await.unwrap_err();
+    assert!(!e.to_string().contains("cb-ECHOED"), "{e}");
+    assert!(e.to_string().contains("***"));
+}

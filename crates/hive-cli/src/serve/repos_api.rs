@@ -1,18 +1,20 @@
 //! Repos on the home host, from the phone: list the box's checkouts and the
-//! GitHub repos its credentials can see, clone one on demand, switch which
-//! checkout a chat works in, pull the base branch, and open a pull request
-//! from the chat's branch.
+//! repos its code-host connections can see (GitHub, GitLab, Forgejo, Gitea,
+//! Codeberg), clone one on demand, switch which checkout a chat works in,
+//! pull the base branch, and open a pull or merge request from the chat's
+//! branch.
 //!
 //! Everything here acts on this box's own device-local state
 //! (`<LIGUS_DATA_DIR>/repo-bindings.toml` and the checkouts under
-//! `LIGUS_REPOS_DIR`, see `crate::repos`); nothing is synced. GitHub access goes
-//! through the box's own `gh` login (never a token Hive holds), behind the
-//! [`GitHub`] trait so tests run without the network.
+//! `LIGUS_REPOS_DIR`, see `crate::repos`); nothing is synced. Code-host
+//! access goes through the box's connections (`<data dir>/forges.toml`, see
+//! `hive_forge::conn`): the box's own `gh` login for GitHub by default, or
+//! tokens in the box's OS secret store. Tests swap in fake forges.
 //!
 //! Routes (contract in `docs/ios-app.md`):
-//! - `GET  /v1/repos?q=&owner=&page=&perPage=`
-//! - `GET  /v1/repos/fork?repo=owner/name` → the signed-in account's fork of it
-//! - `POST /v1/repos/clone {repo, viaFork?}` → a job; `GET /v1/repos/clone/:job`
+//! - `GET  /v1/repos?q=&owner=&page=&perPage=[&forge=id]`
+//! - `GET  /v1/repos/fork?repo=owner/name[&forge=id]` → the signed-in account's fork of it
+//! - `POST /v1/repos/clone {repo, viaFork?, forge?}` → a job; `GET /v1/repos/clone/:job`
 //! - `GET|PUT /v1/chats/:id/repo {repo}`
 //! - `POST /v1/chats/:id/repo/pull`
 //! - `POST /v1/chats/:id/pr {title, body?, draft?}`
@@ -27,6 +29,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path as FsPath, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -35,6 +38,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use hive_core::{ChatSession, Timestamp, WorkspaceRole};
+use hive_forge::{ChangeRequestDraft, ChangeRequestOutcome, Connection, Connections, Forge, ForgeId, ForgeKind, RepoQuery, RepoRef, Transport};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -197,8 +201,9 @@ fn last_lines(s: &str) -> String {
     lines[lines.len().saturating_sub(3)..].join(" ")
 }
 
-// ── GitHub (the box's own gh login) ────────────────────────────────────────
+// ── Code hosts (the box's forge connections) ───────────────────────────────
 
+/// Whether a connection can be used, and as whom.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GhStatus {
     pub available: bool,
@@ -206,244 +211,112 @@ pub struct GhStatus {
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct RepoQuery {
-    pub q: Option<String>,
-    pub owner: Option<String>,
-    pub page: u32,
-    pub per_page: u32,
+/// One code-host connection on this box and its forge.
+#[derive(Clone)]
+pub struct ForgeHandle {
+    pub conn: Connection,
+    pub forge: Arc<dyn Forge>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct GhRepo {
-    pub owner: String,
-    pub name: String,
-    pub description: String,
-    pub private: bool,
-    pub default_branch: String,
-    pub updated_at: String,
-    pub url: String,
-    /// A fork of another repository.
-    pub fork: bool,
-}
-
-/// One repository's fork relationship, from GitHub.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RepoMeta {
-    pub owner: String,
-    pub name: String,
-    pub default_branch: String,
-    /// The repository this one is a fork of: (owner, name, default branch).
-    pub parent: Option<(String, String, String)>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PrRequest {
-    pub repo: String,
-    pub head: String,
-    pub base: String,
-    pub title: String,
-    pub body: String,
-    pub draft: bool,
-}
-
-/// What the box can do on GitHub. The real one shells out to `gh`; tests
-/// substitute local bare repos.
-pub trait GitHub: Send + Sync {
-    fn status(&self) -> GhStatus;
-    /// One page of repositories (`q` searches; `owner` narrows to an account
-    /// or org). Only called when [`GitHub::status`] is available.
-    fn list(&self, q: &RepoQuery, login: &str) -> Result<Vec<GhRepo>, String>;
-    /// The signed-in account and its orgs.
-    fn owners(&self, login: &str) -> Result<Vec<String>, String>;
-    /// Where `owner/name` clones from.
-    fn clone_url(&self, owner: &str, name: &str) -> String {
-        format!("https://github.com/{owner}/{name}.git")
+impl ForgeHandle {
+    pub fn id(&self) -> &ForgeId {
+        &self.conn.id
     }
-    /// `git -c …` args that let git use the box's login (none when signed out).
-    fn git_auth_args(&self) -> Vec<String>;
-    /// The GitHub repository a checkout's `origin` URL points at.
-    fn repo_of_remote(&self, url: &str) -> Option<RemoteRef> {
-        repos::parse_remote(url).filter(|r| r.host == "github.com")
-    }
-    /// Open a pull request; `Ok((url, already_existed))`.
-    fn create_pr(&self, dir: &FsPath, pr: &PrRequest) -> Result<(String, bool), String>;
-    /// `owner/name`'s fork relationship; `Ok(None)` when there's no such repo.
-    fn repo_meta(&self, _owner: &str, _name: &str) -> Result<Option<RepoMeta>, String> {
-        Ok(None)
+    pub fn is_github_com(&self) -> bool {
+        self.conn.kind == ForgeKind::GitHub && self.conn.host() == "github.com"
     }
 }
 
-/// The `gh` CLI on this box.
-#[derive(Default)]
-pub struct GhCli {
-    cache: Mutex<Option<(Instant, GhStatus)>>,
-}
-
-impl GhCli {
-    fn gh(&self, args: &[&str]) -> Result<String, String> {
-        let mut c = quiet("gh");
-        c.args(args);
-        let out = run(c, GH_TIMEOUT).map_err(|e| format!("gh: {e}"))?;
-        if !out.ok {
-            return Err(format!("gh: {}", last_lines(&out.stderr)));
-        }
-        Ok(out.stdout)
-    }
-
-    fn api(&self, path: &str, params: &[(&str, String)]) -> Result<Value, String> {
-        let mut args: Vec<String> = vec!["api".into(), "-X".into(), "GET".into(), path.into()];
-        for (k, v) in params {
-            args.push("-f".into());
-            args.push(format!("{k}={v}"));
-        }
-        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        serde_json::from_str(&self.gh(&refs)?).map_err(|e| format!("gh api: {e}"))
-    }
-
-    fn probe(&self) -> GhStatus {
-        let mut c = quiet("gh");
-        c.args(["auth", "status", "--hostname", "github.com"]);
-        match run(c, GH_TIMEOUT) {
-            Err(_) => GhStatus {
-                available: false,
-                login: None,
-                reason: Some("Install the GitHub CLI (gh) on the host, then run gh auth login on the host".into()),
-            },
-            Ok(o) if !o.ok => {
-                GhStatus { available: false, login: None, reason: Some("Run gh auth login on the host".into()) }
-            }
-            Ok(_) => match self.gh(&["api", "user", "--jq", ".login"]) {
-                Ok(l) if !l.trim().is_empty() => GhStatus { available: true, login: Some(l.trim().to_string()), reason: None },
-                _ => GhStatus {
-                    available: false,
-                    login: None,
-                    reason: Some("GitHub didn't answer with the host's login; run gh auth login on the host".into()),
-                },
-            },
-        }
-    }
-}
-
-fn gh_repo(v: &Value) -> Option<GhRepo> {
-    Some(GhRepo {
-        owner: v["owner"]["login"].as_str()?.to_string(),
-        name: v["name"].as_str()?.to_string(),
-        description: v["description"].as_str().unwrap_or("").to_string(),
-        private: v["private"].as_bool().unwrap_or(false),
-        default_branch: v["default_branch"].as_str().unwrap_or("").to_string(),
-        updated_at: v["pushed_at"].as_str().or(v["updated_at"].as_str()).unwrap_or("").to_string(),
-        url: v["html_url"].as_str().unwrap_or("").to_string(),
-        fork: v["fork"].as_bool().unwrap_or(false),
-    })
-}
-
-fn repo_meta_of(v: &Value) -> Option<RepoMeta> {
-    let parent = v["parent"].as_object().and_then(|p| {
-        Some((
-            p.get("owner")?.get("login")?.as_str()?.to_string(),
-            p.get("name")?.as_str()?.to_string(),
-            p.get("default_branch").and_then(Value::as_str).unwrap_or("").to_string(),
-        ))
-    });
-    Some(RepoMeta {
-        owner: v["owner"]["login"].as_str()?.to_string(),
-        name: v["name"].as_str()?.to_string(),
-        default_branch: v["default_branch"].as_str().unwrap_or("").to_string(),
-        parent: parent.filter(|_| v["fork"].as_bool().unwrap_or(false)),
-    })
-}
-
-impl GitHub for GhCli {
-    fn status(&self) -> GhStatus {
-        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((at, st)) = cache.as_ref() {
-            if at.elapsed() < Duration::from_secs(60) {
-                return st.clone();
-            }
-        }
-        let st = self.probe();
-        *cache = Some((Instant::now(), st.clone()));
-        st
-    }
-
-    fn list(&self, q: &RepoQuery, login: &str) -> Result<Vec<GhRepo>, String> {
-        let page = [("per_page", q.per_page.to_string()), ("page", q.page.to_string())];
-        let items: Vec<Value> = if let Some(text) = q.q.as_deref() {
-            let scope = q.owner.as_deref().unwrap_or(login);
-            let mut p = page.to_vec();
-            p.push(("q", format!("{text} user:{scope} fork:true")));
-            p.push(("sort", "updated".into()));
-            let v = self.api("search/repositories", &p)?;
-            v["items"].as_array().cloned().unwrap_or_default()
-        } else {
-            let mut p = page.to_vec();
-            p.push(("sort", "updated".into()));
-            let v = match q.owner.as_deref() {
-                None => {
-                    p.push(("affiliation", "owner,collaborator,organization_member".into()));
-                    self.api("user/repos", &p)?
-                }
-                Some(o) if o.eq_ignore_ascii_case(login) => {
-                    p.push(("affiliation", "owner".into()));
-                    self.api("user/repos", &p)?
-                }
-                Some(o) => self.api(&format!("orgs/{o}/repos"), &p).or_else(|_| self.api(&format!("users/{o}/repos"), &p))?,
+/// The connections of `data_dir`, built with the box's secret store and
+/// this binary as the git credential helper.
+pub fn load_forges(data_dir: &FsPath, offline: bool) -> Vec<ForgeHandle> {
+    let store = crate::forge_cmd::token_store(data_dir);
+    let helper = crate::forge_cmd::helper_program();
+    Connections::load(data_dir)
+        .forges
+        .into_iter()
+        .map(|conn| {
+            // Offline (tests): never the host's gh login.
+            let creds: Arc<dyn hive_forge::CredentialSource> = if offline && conn.auth == hive_forge::AuthSource::Gh {
+                Arc::new(hive_forge::tokens::Anonymous)
+            } else {
+                conn.credentials(store.clone(), helper.as_deref())
             };
-            v.as_array().cloned().unwrap_or_default()
-        };
-        Ok(items.iter().filter_map(gh_repo).collect())
-    }
-
-    fn owners(&self, login: &str) -> Result<Vec<String>, String> {
-        let orgs = self.api("user/orgs", &[("per_page", "100".into())])?;
-        let mut out = vec![login.to_string()];
-        out.extend(orgs.as_array().into_iter().flatten().filter_map(|o| o["login"].as_str().map(str::to_string)));
-        Ok(out)
-    }
-
-    fn git_auth_args(&self) -> Vec<String> {
-        if !self.status().available {
-            return Vec::new();
-        }
-        // Reset any inherited helper for github.com, then use gh's.
-        ["-c", "credential.https://github.com.helper=", "-c", "credential.https://github.com.helper=!gh auth git-credential"]
-            .into_iter()
-            .map(str::to_string)
-            .collect()
-    }
-
-    fn create_pr(&self, dir: &FsPath, pr: &PrRequest) -> Result<(String, bool), String> {
-        let mut c = quiet("gh");
-        c.current_dir(dir).args([
-            "pr", "create", "--repo", &pr.repo, "--head", &pr.head, "--base", &pr.base, "--title", &pr.title, "--body", &pr.body,
-        ]);
-        if pr.draft {
-            c.arg("--draft");
-        }
-        let out = run(c, Duration::from_secs(60))?;
-        let url_in = |s: &str| s.split_whitespace().find(|w| w.starts_with("https://github.com/")).map(str::to_string);
-        if out.ok {
-            return url_in(&out.stdout).map(|u| (u, false)).ok_or_else(|| "gh pr create printed no URL".into());
-        }
-        if out.stderr.contains("already exists") {
-            if let Some(u) = url_in(&out.stderr) {
-                return Ok((u, true));
-            }
-        }
-        Err(format!("gh pr create: {}", last_lines(&out.stderr)))
-    }
-
-    fn repo_meta(&self, owner: &str, name: &str) -> Result<Option<RepoMeta>, String> {
-        match self.api(&format!("repos/{owner}/{name}"), &[]) {
-            Ok(v) => Ok(repo_meta_of(&v)),
-            Err(e) if e.contains("Not Found") || e.contains("404") => Ok(None),
-            Err(e) => Err(e),
-        }
-    }
+            let forge = conn.build(creds);
+            ForgeHandle { conn, forge }
+        })
+        .collect()
 }
 
-// ── Shared state: GitHub, clone jobs, per-checkout locks ───────────────────
+/// Why an offline box (the test build) reports every connection signed out.
+pub const OFFLINE: &str = "offline: this build never contacts code hosts";
+
+/// A connection's status: signed in as whom, or why not (cached a minute).
+async fn forge_status(st: &RepoState, h: &ForgeHandle) -> GhStatus {
+    if let Some((at, s)) = st.status.lock().unwrap_or_else(|e| e.into_inner()).get(h.id()) {
+        if at.elapsed() < Duration::from_secs(60) {
+            return s.clone();
+        }
+    }
+    if st.offline.load(Ordering::SeqCst) && !st.pinned.load(Ordering::SeqCst) {
+        return GhStatus { available: false, login: None, reason: Some(OFFLINE.into()) };
+    }
+    let s = match tokio::time::timeout(GH_TIMEOUT, h.forge.whoami()).await {
+        Ok(Ok(Some(u))) => GhStatus { available: true, login: Some(u.login), reason: None },
+        Ok(Ok(None)) => GhStatus { available: false, login: None, reason: h.forge.signed_out_reason() },
+        Ok(Err(e)) => GhStatus { available: false, login: None, reason: Some(format!("{} didn't answer with this box's login: {e}", h.conn.display())) },
+        Err(_) => GhStatus { available: false, login: None, reason: Some(format!("{} didn't answer in time", h.conn.display())) },
+    };
+    st.status.lock().unwrap_or_else(|e| e.into_inner()).insert(h.id().clone(), (Instant::now(), s.clone()));
+    s
+}
+
+/// [`forge_status`] for the forges API.
+pub(super) async fn forge_status_pub(st: &RepoState, h: &ForgeHandle) -> GhStatus {
+    forge_status(st, h).await
+}
+
+/// One forge connection as the phone sees it (never a token).
+pub fn forge_dto(h: &ForgeHandle, status: Option<&GhStatus>) -> Value {
+    let caps = h.forge.capabilities();
+    let mut v = json!({
+        "id": h.conn.id.as_str(),
+        "kind": h.conn.kind.as_str(),
+        "flavor": h.conn.flavor,
+        "displayName": h.conn.display(),
+        "baseUrl": h.conn.base_url,
+        "authSource": h.conn.auth.as_str(),
+        "hasWrite": h.forge.has_write(),
+        "changeRequestKind": h.conn.kind.change_request_kind().as_str(),
+        "openLabel": h.conn.kind.open_label(),
+        "deviceFlow": caps.device_flow && hive_forge::device::endpoints(&h.conn).is_ok(),
+        "capabilities": caps,
+        "holder": "this box",
+    });
+    if let Some(s) = status {
+        v["available"] = json!(s.available);
+        if let Some(l) = &s.login {
+            v["user"] = json!(l);
+        }
+        if let Some(r) = &s.reason {
+            v["reason"] = json!(r);
+        }
+    }
+    v
+}
+
+// ── Shared state: forges, clone jobs, per-checkout locks ───────────────────
+
+/// A device sign-in the box is polling for.
+#[derive(Debug, Clone)]
+pub struct DeviceSession {
+    pub user_code: String,
+    pub verification_uri: String,
+    pub expires_at: Instant,
+    /// `pending`, `done`, `denied`, `expired` or `error`.
+    pub state: &'static str,
+    pub error: Option<String>,
+}
 
 #[derive(Debug, Clone)]
 pub struct CloneJob {
@@ -486,18 +359,31 @@ impl CloneJob {
 }
 
 pub struct RepoState {
-    github: RwLock<Arc<dyn GitHub>>,
+    /// The box's connections (`None` = load from `forges.toml` on next use).
+    forges: RwLock<Option<Vec<ForgeHandle>>>,
+    /// Set by tests: keep the injected forges, never reload from disk.
+    pinned: AtomicBool,
+    /// Never contact a code host, and never ask the host's `gh` (on in
+    /// test builds, so no test reaches a real forge or the developer's own
+    /// login; injected fakes still answer).
+    pub(super) offline: AtomicBool,
+    status: Mutex<HashMap<ForgeId, (Instant, GhStatus)>>,
+    pub(super) device: Mutex<HashMap<ForgeId, DeviceSession>>,
     jobs: Mutex<Vec<CloneJob>>,
     /// Checkout names with a git operation in flight.
     busy: Mutex<HashSet<String>>,
-    /// Serializes read-modify-write of the bindings file.
-    bindings: Mutex<()>,
+    /// Serializes read-modify-write of the bindings file (and forges.toml).
+    pub(super) bindings: Mutex<()>,
 }
 
 impl Default for RepoState {
     fn default() -> Self {
         Self {
-            github: RwLock::new(Arc::new(GhCli::default())),
+            forges: RwLock::new(None),
+            pinned: AtomicBool::new(false),
+            offline: AtomicBool::new(cfg!(test)),
+            status: Mutex::new(HashMap::new()),
+            device: Mutex::new(HashMap::new()),
             jobs: Mutex::new(Vec::new()),
             busy: Mutex::new(HashSet::new()),
             bindings: Mutex::new(()),
@@ -506,14 +392,51 @@ impl Default for RepoState {
 }
 
 impl RepoState {
-    pub fn github(&self) -> Arc<dyn GitHub> {
-        self.github.read().unwrap_or_else(|e| e.into_inner()).clone()
+    /// The box's connections.
+    pub fn forges(&self, data_dir: &FsPath) -> Vec<ForgeHandle> {
+        if let Some(f) = self.forges.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            return f.clone();
+        }
+        let loaded = load_forges(data_dir, self.offline.load(Ordering::SeqCst));
+        *self.forges.write().unwrap_or_else(|e| e.into_inner()) = Some(loaded.clone());
+        loaded
     }
 
-    /// Swap the GitHub backend (tests).
+    /// Reload connections from disk on next use (after an edit).
+    pub fn invalidate(&self) {
+        if !self.pinned.load(Ordering::SeqCst) {
+            *self.forges.write().unwrap_or_else(|e| e.into_inner()) = None;
+        }
+        self.status.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+
+    /// The connection with this id (`github.com` is the GitHub alias).
+    /// Whether code hosts may be contacted (false in test builds).
+    pub fn online(&self) -> bool {
+        !self.offline.load(Ordering::SeqCst) || self.pinned.load(Ordering::SeqCst)
+    }
+
+    pub fn forge(&self, data_dir: &FsPath, id: &ForgeId) -> Option<ForgeHandle> {
+        self.forges(data_dir).into_iter().find(|h| h.id() == id)
+    }
+
+    /// The GitHub connection the legacy `github` listing key shows.
+    pub fn github(&self, data_dir: &FsPath) -> Option<ForgeHandle> {
+        let all = self.forges(data_dir);
+        all.iter().find(|h| h.is_github_com()).or_else(|| all.iter().find(|h| h.conn.kind == ForgeKind::GitHub)).cloned()
+    }
+
+    /// The connection a remote URL is on.
+    pub fn forge_of_remote(&self, data_dir: &FsPath, url: &str) -> Option<(ForgeHandle, RepoRef)> {
+        self.forges(data_dir).into_iter().find_map(|h| h.forge.repo_of_remote(url).map(|r| (h, r)))
+    }
+
+    /// Swap the forges (tests).
     #[cfg(test)]
-    pub fn set_github(&self, gh: Arc<dyn GitHub>) {
-        *self.github.write().unwrap_or_else(|e| e.into_inner()) = gh;
+    pub fn set_forges(&self, forges: Vec<ForgeHandle>) {
+        self.pinned.store(true, Ordering::SeqCst);
+        *self.forges.write().unwrap_or_else(|e| e.into_inner()) = Some(forges);
+        self.status.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
 
     fn job(&self, id: Uuid) -> Option<CloneJob> {
@@ -553,7 +476,7 @@ fn claim<'a>(st: &'a RepoState, name: &str) -> ApiResult<BusyGuard<'a>> {
 /// The phone may change repo state only while this box can write at all
 /// (not revoked or pending) and its identity holds at least
 /// [`WRITE_FLOOR`] in the workspace (the chat's roster when one is given).
-fn ensure_can_write(s: &Shared, chat: Option<&ChatSession>) -> ApiResult<()> {
+pub(super) fn ensure_can_write(s: &Shared, chat: Option<&ChatSession>) -> ApiResult<()> {
     let me = s.my_actor_id();
     if let Some(reason) = s.lock().write_block() {
         return Err(err(StatusCode::FORBIDDEN, reason.to_string()));
@@ -718,6 +641,72 @@ pub struct ListQuery {
     owner: Option<String>,
     page: Option<u32>,
     per_page: Option<u32>,
+    /// A connection id (`gitlab:gitlab.example.com`); absent = the legacy
+    /// shape, with `github` and the list of `forges`.
+    forge: Option<String>,
+}
+
+/// An owner, org or group name (GitLab groups nest: `grp/sub`).
+fn valid_owner_any(o: &str) -> bool {
+    o.len() <= 255 && o.split('/').all(hive_forge::spec::valid_segment)
+}
+
+/// The listing of one connection, in the shape the phone knows from the
+/// `github` key.
+async fn forge_listing(st: &RepoState, h: &ForgeHandle, query: &RepoQuery, cloned: &HashMap<String, String>, via_fork: &HashMap<String, String>) -> Value {
+    let status = forge_status(st, h).await;
+    let mut out = json!({ "available": status.available });
+    if let Some(r) = &status.reason {
+        out["reason"] = json!(r);
+    }
+    let (true, Some(login)) = (status.available, status.login.as_deref()) else { return out };
+    out["login"] = json!(login);
+    out["owners"] = match h.forge.owners(login).await {
+        Ok(o) => json!(o),
+        Err(_) => json!([login]),
+    };
+    match h.forge.list_repos(query, login).await {
+        Ok(list) => {
+            let has_more = list.len() as u32 >= query.per_page;
+            out["repos"] = json!(list
+                .iter()
+                .map(|r| {
+                    let full = r.repo.full_name();
+                    let key = full.to_ascii_lowercase();
+                    let mut v = json!({
+                        "fullName": full,
+                        "owner": r.repo.owner,
+                        "name": r.repo.name,
+                        "description": r.description,
+                        "private": r.private,
+                        "defaultBranch": r.default_branch,
+                        "updatedAt": r.updated_at,
+                        "url": r.web_url,
+                        "fork": r.fork,
+                    });
+                    if let Some(local) = via_fork.get(&key) {
+                        v["viaForkCheckout"] = json!(local);
+                    }
+                    match cloned.get(&key) {
+                        Some(local) => {
+                            v["cloned"] = json!(true);
+                            v["checkout"] = json!(local);
+                        }
+                        None => v["cloned"] = json!(false),
+                    }
+                    v
+                })
+                .collect::<Vec<_>>());
+            out["page"] = json!(query.page);
+            out["perPage"] = json!(query.per_page);
+            out["hasMore"] = json!(has_more);
+        }
+        Err(e) => {
+            out["repos"] = json!([]);
+            out["error"] = json!(e.to_string());
+        }
+    }
+    out
 }
 
 pub async fn list_repos(State(s): S, Query(lq): Query<ListQuery>) -> ApiResult<Json<Value>> {
@@ -726,18 +715,24 @@ pub async fn list_repos(State(s): S, Query(lq): Query<ListQuery>) -> ApiResult<J
         return Err(ApiError::bad_request("search text is too long"));
     }
     let owner = lq.owner.map(|o| o.trim().to_string()).filter(|o| !o.is_empty());
-    if owner.as_deref().is_some_and(|o| !repos::valid_owner(o)) {
-        return Err(ApiError::bad_request("owner must be a GitHub account or org name"));
+    if owner.as_deref().is_some_and(|o| !valid_owner_any(o)) {
+        return Err(ApiError::bad_request("owner must be an account, org or group name"));
     }
+    let selected = match lq.forge.as_deref().map(str::trim).filter(|f| !f.is_empty()) {
+        None => None,
+        Some(raw) => {
+            let id = ForgeId::parse(raw).map_err(|e| ApiError::bad_request(e.to_string()))?;
+            Some(s.repos.forge(&s.cfg.data_dir, &id).ok_or_else(|| ApiError::not_found("code host connection"))?)
+        }
+    };
     let query = RepoQuery { q, owner, page: lq.page.unwrap_or(1).clamp(1, 100), per_page: lq.per_page.unwrap_or(30).clamp(1, 100) };
     let data_dir = s.cfg.data_dir.clone();
-    let gh = s.repos.github();
     let jobs: Vec<Value> = s.repos.running_jobs().iter().map(CloneJob::dto).collect();
-    let v = blocking(move || {
+    let needle = query.q.as_deref().map(str::to_ascii_lowercase);
+    let (local, cloned, via_fork, ws_default) = blocking(move || {
         let repos_dir = repos::repos_dir(&data_dir);
         let b = RepoBindings::load(&data_dir);
         let ws_default = b.workspace.as_deref().map(|w| binding_name(w).0);
-        let needle = query.q.as_deref().map(str::to_ascii_lowercase);
         let mut cloned: HashMap<String, String> = HashMap::new();
         // upstream full name → the local fork checkout of it.
         let mut via_fork: HashMap<String, String> = HashMap::new();
@@ -763,62 +758,25 @@ pub async fn list_repos(State(s): S, Query(lq): Query<ListQuery>) -> ApiResult<J
                 Some(v)
             })
             .collect();
-        let st = gh.status();
-        let mut github = json!({ "available": st.available });
-        if let Some(r) = &st.reason {
-            github["reason"] = json!(r);
-        }
-        if let (true, Some(login)) = (st.available, st.login.as_deref()) {
-            github["login"] = json!(login);
-            match gh.owners(login) {
-                Ok(o) => github["owners"] = json!(o),
-                Err(_) => github["owners"] = json!([login]),
-            }
-            match gh.list(&query, login) {
-                Ok(list) => {
-                    let has_more = list.len() as u32 >= query.per_page;
-                    github["repos"] = json!(list
-                        .iter()
-                        .map(|r| {
-                            let full = format!("{}/{}", r.owner, r.name);
-                            let mut v = json!({
-                                "fullName": full,
-                                "owner": r.owner,
-                                "name": r.name,
-                                "description": r.description,
-                                "private": r.private,
-                                "defaultBranch": r.default_branch,
-                                "updatedAt": r.updated_at,
-                                "url": r.url,
-                                "fork": r.fork,
-                            });
-                            if let Some(local) = via_fork.get(&full.to_ascii_lowercase()) {
-                                v["viaForkCheckout"] = json!(local);
-                            }
-                            match cloned.get(&full.to_ascii_lowercase()) {
-                                Some(local) => {
-                                    v["cloned"] = json!(true);
-                                    v["checkout"] = json!(local);
-                                }
-                                None => v["cloned"] = json!(false),
-                            }
-                            v
-                        })
-                        .collect::<Vec<_>>());
-                    github["page"] = json!(query.page);
-                    github["perPage"] = json!(query.per_page);
-                    github["hasMore"] = json!(has_more);
-                }
-                Err(e) => {
-                    github["repos"] = json!([]);
-                    github["error"] = json!(e);
-                }
-            }
-        }
-        json!({ "local": local, "github": github, "workspaceDefault": ws_default, "jobs": jobs })
+        (local, cloned, via_fork, ws_default)
     })
     .await?;
-    Ok(Json(v))
+    if let Some(h) = selected {
+        let forge = forge_listing(&s.repos, &h, &query, &cloned, &via_fork).await;
+        let mut v = json!({ "local": local, "forge": forge, "workspaceDefault": ws_default, "jobs": jobs });
+        v["forge"]["id"] = json!(h.id().as_str());
+        return Ok(Json(v));
+    }
+    let github = match s.repos.github(&s.cfg.data_dir) {
+        Some(h) => forge_listing(&s.repos, &h, &query, &cloned, &via_fork).await,
+        None => json!({ "available": false, "reason": "no GitHub connection on this host" }),
+    };
+    let mut forges = Vec::new();
+    for h in s.repos.forges(&s.cfg.data_dir) {
+        let st = forge_status(&s.repos, &h).await;
+        forges.push(forge_dto(&h, Some(&st)));
+    }
+    Ok(Json(json!({ "local": local, "github": github, "workspaceDefault": ws_default, "jobs": jobs, "forges": forges })))
 }
 
 // ── Clone / fetch jobs ─────────────────────────────────────────────────────
@@ -831,6 +789,9 @@ pub struct CloneReq {
     /// its `upstream`. Never creates a fork: no fork → 404.
     #[serde(default)]
     via_fork: bool,
+    /// The connection (default: the URL's host, else github.com).
+    #[serde(default)]
+    forge: Option<String>,
 }
 
 /// How a clone/fetch job sets up `upstream` for a fork.
@@ -841,53 +802,79 @@ pub struct ForkPlan {
     pub base: String,
 }
 
-/// The signed-in account's fork of `owner/name`, if it has one (same name
-/// under the login; GitHub must report it as a fork of exactly that repo).
-fn find_own_fork(gh: &dyn GitHub, login: &str, owner: &str, name: &str) -> Result<Option<RepoMeta>, String> {
-    if login.eq_ignore_ascii_case(owner) {
-        return Ok(None);
+/// The connection and repository a spec names: a URL's host picks the
+/// connection; a bare `owner/name` uses `forge` (default github.com).
+fn resolve_spec(s: &Shared, raw: &str, forge: Option<&str>) -> ApiResult<(ForgeHandle, RepoRef)> {
+    let spec = hive_forge::spec::parse_repo_spec(raw, true).map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let h = match (spec.host.as_deref(), forge.map(str::trim).filter(|f| !f.is_empty())) {
+        (Some(host), _) => s
+            .repos
+            .forges(&s.cfg.data_dir)
+            .into_iter()
+            .find(|h| hive_forge::spec::same_host(&h.conn.host(), host))
+            .ok_or_else(|| ApiError::bad_request(format!("{host} isn't a code host connected to this box: add it under Code hosts first")))?,
+        (None, Some(id)) => {
+            let id = ForgeId::parse(id).map_err(|e| ApiError::bad_request(e.to_string()))?;
+            s.repos.forge(&s.cfg.data_dir, &id).ok_or_else(|| ApiError::not_found("code host connection"))?
+        }
+        (None, None) => s.repos.github(&s.cfg.data_dir).ok_or_else(|| ApiError::bad_request("no GitHub connection on this host: name a forge"))?,
+    };
+    if h.conn.kind != ForgeKind::GitLab && spec.repo.owner.contains('/') {
+        return Err(ApiError::bad_request("give a repository as owner/name"));
     }
-    Ok(gh.repo_meta(login, name)?.filter(|m| {
-        m.parent.as_ref().is_some_and(|(po, pn, _)| po.eq_ignore_ascii_case(owner) && pn.eq_ignore_ascii_case(name))
-    }))
+    if h.is_github_com() && (!repos::valid_owner(&spec.repo.owner) || !repos::valid_repo_name(&spec.repo.name)) {
+        return Err(ApiError::bad_request(format!("'{}' isn't a valid GitHub repository name", spec.repo.full_name())));
+    }
+    Ok((h, spec.repo))
 }
 
-/// The upstream setup for cloning `owner/name`: its parent when GitHub says
-/// it's a fork (nothing when signed out or GitHub can't tell).
-fn fork_plan(gh: &dyn GitHub, owner: &str, name: &str) -> Option<ForkPlan> {
-    if !gh.status().available {
+/// Where a repository clones to under the repos dir: `owner__name` on
+/// github.com (as before forges), `<host>__<owner>__<name>` elsewhere
+/// (GitLab subgroups joined with `__`).
+pub fn checkout_for(h: &ForgeHandle, r: &RepoRef) -> String {
+    if h.is_github_com() {
+        return repos::checkout_name(&r.owner, &r.name);
+    }
+    let host = h.conn.host().replace(':', "-");
+    format!("{host}__{}__{}", r.owner.replace('/', "__"), r.name)
+}
+
+/// The upstream setup for cloning `r`: its parent when the forge says it's
+/// a fork (nothing when signed out or the forge can't tell).
+async fn fork_plan(st: &RepoState, h: &ForgeHandle, r: &RepoRef) -> Option<ForkPlan> {
+    if !forge_status(st, h).await.available {
         return None;
     }
-    let (po, pn, base) = gh.repo_meta(owner, name).ok()??.parent?;
-    Some(ForkPlan { upstream: format!("{po}/{pn}"), url: gh.clone_url(&po, &pn), base })
+    let (p, base) = h.forge.repo(r).await.ok()??.parent?;
+    Some(ForkPlan { upstream: p.full_name(), url: h.forge.clone_url(&p, Transport::Https), base })
 }
 
 #[derive(Deserialize)]
 pub struct ForkQuery {
     repo: String,
+    #[serde(default)]
+    forge: Option<String>,
 }
 
-/// `GET /v1/repos/fork?repo=owner/name`: whether the signed-in account has a
-/// fork of `owner/name` (so the phone can offer "clone via my fork").
+/// `GET /v1/repos/fork?repo=owner/name[&forge=id]`: whether the signed-in
+/// account has a fork of it (so the phone can offer "clone via my fork").
 pub async fn fork_of(State(s): S, Query(q): Query<ForkQuery>) -> ApiResult<Json<Value>> {
-    let (owner, name) = repos::parse_repo_spec(&q.repo).map_err(|e| ApiError::bad_request(e.to_string()))?;
-    let gh = s.repos.github();
+    let (h, repo) = resolve_spec(&s, &q.repo, q.forge.as_deref())?;
+    let st = forge_status(&s.repos, &h).await;
+    let Some(login) = st.login.filter(|_| st.available) else {
+        return Err(err(
+            StatusCode::PRECONDITION_FAILED,
+            format!("{} isn't signed in on this host: {}", h.conn.display(), st.reason.unwrap_or_else(|| "run gh auth login on the host".into())),
+        ));
+    };
+    let fork = h.forge.find_own_fork(&login, &repo).await.map_err(|e| err(StatusCode::BAD_GATEWAY, e.to_string()))?;
     let repos_dir = repos::repos_dir(&s.cfg.data_dir);
-    let v = blocking(move || -> ApiResult<Value> {
-        let st = gh.status();
-        let Some(login) = st.login.filter(|_| st.available) else {
-            return Err(err(StatusCode::PRECONDITION_FAILED, "GitHub isn't signed in on this host: run gh auth login on the host"));
-        };
-        let fork = find_own_fork(gh.as_ref(), &login, &owner, &name).map_err(|e| err(StatusCode::BAD_GATEWAY, e))?;
-        let fork = fork.map(|m| {
-            let checkout = repos::checkout_name(&m.owner, &m.name);
-            let local = repos_dir.join(&checkout).join(".git").exists();
-            json!({ "fullName": format!("{}/{}", m.owner, m.name), "checkout": checkout, "cloned": local })
-        });
-        Ok(json!({ "repo": format!("{owner}/{name}"), "login": login, "fork": fork }))
-    })
-    .await??;
-    Ok(Json(v))
+    let fork = fork.map(|m| {
+        let checkout = checkout_for(&h, &m.repo);
+        let local = repos_dir.join(&checkout).join(".git").exists();
+        json!({ "fullName": m.repo.full_name(), "checkout": checkout, "cloned": local })
+    });
+    Ok(Json(json!({ "repo": repo.full_name(), "login": login, "fork": fork, "forge": h.id().as_str() })))
 }
 
 /// git's progress line → (phase, percent): `Receiving objects:  45% (…)`.
@@ -918,29 +905,25 @@ fn dir_size(p: &FsPath) -> u64 {
 
 pub async fn clone_repo(State(s): S, Json(req): Json<CloneReq>) -> ApiResult<Json<Value>> {
     ensure_can_write(&s, None)?;
-    let (mut owner, mut name) = repos::parse_repo_spec(&req.repo).map_err(|e| ApiError::bad_request(e.to_string()))?;
-    let gh = s.repos.github();
+    let (h, mut repo) = resolve_spec(&s, &req.repo, req.forge.as_deref())?;
     // "Clone the parent via my fork": swap in the account's fork, or report
     // that there isn't one (this host never creates forks).
     if req.via_fork {
-        let (g, o, n) = (gh.clone(), owner.clone(), name.clone());
-        let found = blocking(move || -> ApiResult<Option<RepoMeta>> {
-            let st = g.status();
-            let Some(login) = st.login.filter(|_| st.available) else {
-                return Err(err(StatusCode::PRECONDITION_FAILED, "cloning via your fork needs GitHub: run gh auth login on the host"));
-            };
-            find_own_fork(g.as_ref(), &login, &o, &n).map_err(|e| err(StatusCode::BAD_GATEWAY, e))
-        })
-        .await??;
+        let st = forge_status(&s.repos, &h).await;
+        let Some(login) = st.login.filter(|_| st.available) else {
+            return Err(err(StatusCode::PRECONDITION_FAILED, format!("cloning via your fork needs {}: {}", h.conn.display(), st.reason.unwrap_or_else(|| "run gh auth login on the host".into()))));
+        };
+        let found = h.forge.find_own_fork(&login, &repo).await.map_err(|e| err(StatusCode::BAD_GATEWAY, e.to_string()))?;
         let Some(f) = found else {
             return Err(ApiError::not_found(&format!(
-                "a fork of {owner}/{name} under your account (this host doesn't create forks; fork it on GitHub, or clone {owner}/{name} directly)"
+                "a fork of {repo} under your account (this host doesn't create forks; fork it on {}, or clone {repo} directly)",
+                h.conn.display()
             )));
         };
-        (owner, name) = (f.owner, f.name);
+        repo = f.repo;
     }
-    let full = format!("{owner}/{name}");
-    let checkout = repos::checkout_name(&owner, &name);
+    let full = repo.full_name();
+    let checkout = checkout_for(&h, &repo);
     let repos_dir = repos::repos_dir(&s.cfg.data_dir);
     let dest = repos_dir.join(&checkout);
 
@@ -957,10 +940,10 @@ pub async fn clone_repo(State(s): S, Json(req): Json<CloneReq>) -> ApiResult<Jso
     let action = if dest.exists() {
         let d = dest.clone();
         let origin = blocking(move || repos::git_out(&d, &["remote", "get-url", "origin"])).await?;
-        let same = origin
-            .as_deref()
-            .and_then(repos::parse_remote)
-            .is_some_and(|r| r.owner.eq_ignore_ascii_case(&owner) && r.name.eq_ignore_ascii_case(&name));
+        let same = origin.as_deref().is_some_and(|o| {
+            hive_forge::spec::parse_remote(o).is_some_and(|(_, r)| r.same(&repo))
+                || repos::parse_remote(o).is_some_and(|r| r.owner.eq_ignore_ascii_case(&repo.owner) && r.name.eq_ignore_ascii_case(&repo.name))
+        });
         if !same {
             return Err(err(StatusCode::CONFLICT, format!("{checkout} already exists on this host and isn't a clone of {full}")));
         }
@@ -1003,11 +986,13 @@ pub async fn clone_repo(State(s): S, Json(req): Json<CloneReq>) -> ApiResult<Jso
     s.hub.emit("repo.clone", json!({ "job": job.dto() }));
     let shared: Arc<Shared> = s.clone();
     let id = job.id;
-    let url = gh.clone_url(&owner, &name);
+    let url = h.forge.clone_url(&repo, Transport::Https);
+    let rt = tokio::runtime::Handle::current();
     std::thread::spawn(move || {
-        let plan = fork_plan(gh.as_ref(), &owner, &name);
-        let result = run_clone_job(&shared, id, action, &url, &repos_dir, &dest, gh.git_auth_args())
-            .and_then(|()| setup_fork(&shared, id, &dest, plan.as_ref(), action == "clone", &gh.git_auth_args()));
+        let plan = rt.block_on(fork_plan(&shared.repos, &h, &repo));
+        let auth = h.forge.git_auth_args();
+        let result = run_clone_job(&shared, id, action, &url, &repos_dir, &dest, auth.clone())
+            .and_then(|()| setup_fork(&shared, id, &dest, plan.as_ref(), action == "clone", &auth));
         shared.repos.busy.lock().unwrap_or_else(|e| e.into_inner()).remove(&guard_name);
         let finished = shared.repos.update_job(id, |j| {
             j.finished_at = Some(Timestamp::now());
@@ -1088,7 +1073,7 @@ fn run_clone_job(
         Ok(o) if !o.ok => {
             let msg = last_lines(&o.stderr);
             let hint = if msg.contains("could not read Username") || msg.contains("Authentication failed") || msg.contains("not found") {
-                " (a private repository needs gh auth login on the host)"
+                 " (a private repository needs a signed-in code host on the host: gh auth login, or a token under Code hosts)"
             } else {
                 ""
             };
@@ -1254,7 +1239,9 @@ pub async fn pull_chat_repo(State(s): S, Path(id): Path<String>) -> ApiResult<Js
     ensure_can_write(&s, Some(&chat))?;
     let (dir, name) = bound_dir(&s, chat.id)?;
     let _busy = claim(&s.repos, &name)?;
-    let auth = s.repos.github().git_auth_args();
+    let d = dir.clone();
+    let origin = blocking(move || repos::git_out(&d, &["remote", "get-url", "origin"])).await?.unwrap_or_default();
+    let auth = s.repos.forge_of_remote(&s.cfg.data_dir, &origin).map(|(h, _)| h.forge.git_auth_args()).unwrap_or_default();
     let d = dir.clone();
     let res = blocking(move || -> Result<(String, String), (StatusCode, String)> {
         let info = repos::inspect(&d);
@@ -1330,24 +1317,35 @@ pub async fn open_pr(State(s): S, Path(id): Path<String>, Json(req): Json<PrReq>
         return Err(ApiError::bad_request("the pull request body is too long"));
     }
     let (dir, name) = bound_dir(&s, chat.id)?;
-    let gh = s.repos.github();
     let _busy = claim(&s.repos, &name)?;
     let branch = repos::chat_branch(chat.id);
+    let conflict = |m: String| err(StatusCode::CONFLICT, m);
+    let d = dir.clone();
+    let origin = blocking(move || repos::git_out(&d, &["remote", "get-url", "origin"])).await?.unwrap_or_default();
+    let (h, remote) = s
+        .repos
+        .forge_of_remote(&s.cfg.data_dir, &origin)
+        .ok_or_else(|| conflict("this checkout's origin isn't on a code host connected to this box".into()))?;
+    let st = forge_status(&s.repos, &h).await;
+    if !st.available {
+        return Err(err(
+            StatusCode::PRECONDITION_FAILED,
+            format!("{} isn't signed in on this host: {}", h.conn.display(), st.reason.unwrap_or_else(|| "run gh auth login on the host".into())),
+        ));
+    }
+    // What the forge says about origin (a fork without `upstream` would open
+    // the PR against the fork itself).
+    let origin_meta = h.forge.repo(&remote).await.ok().flatten();
     let shared: Arc<Shared> = s.clone();
     let (chat_id, chat_title) = (chat.id, chat.title.clone());
-    let res = blocking(move || -> Result<PrDone, (StatusCode, String)> {
+    let auth = h.forge.git_auth_args();
+    let b = branch.clone();
+    let remote_c = remote.clone();
+    // Git work (checks, fetch, push) on a blocking thread; nothing is pushed
+    // to the upstream project, and nothing is ever forced.
+    let pushed = blocking(move || -> Result<Pushed, (StatusCode, String)> {
+        let branch = b;
         let conflict = |m: String| (StatusCode::CONFLICT, m);
-        let origin = repos::git_out(&dir, &["remote", "get-url", "origin"]).unwrap_or_default();
-        let remote = gh
-            .repo_of_remote(&origin)
-            .ok_or_else(|| conflict("this checkout's origin isn't a GitHub repository".into()))?;
-        let st = gh.status();
-        if !st.available {
-            return Err((
-                StatusCode::PRECONDITION_FAILED,
-                format!("GitHub isn't signed in on this host: {}", st.reason.unwrap_or_else(|| "run gh auth login on the host".into())),
-            ));
-        }
         if !repos::ref_exists(&dir, &format!("refs/heads/{branch}")) {
             return Err(conflict(format!(
                 "this chat has no commits on {branch} yet: approve a proposal first (the host commits approved changes \
@@ -1355,14 +1353,12 @@ pub async fn open_pr(State(s): S, Path(id): Path<String>, Json(req): Json<PrReq>
             )));
         }
         let info = repos::inspect(&dir);
-        let auth = gh.git_auth_args();
         let Some(fork) = info.fork else {
-            // A fork without an `upstream` remote would open the PR against the fork itself.
-            if let Ok(Some(RepoMeta { parent: Some((po, pn, _)), .. })) = gh.repo_meta(&remote.owner, &remote.name) {
+            if let Some((p, _)) = origin_meta.as_ref().and_then(|m| m.parent.clone()) {
                 return Err(conflict(format!(
-                    "{} is a fork of {po}/{pn} but this checkout has no upstream remote: fetch it from the repo \
+                    "{} is a fork of {p} but this checkout has no upstream remote: fetch it from the repo \
                      picker (that adds upstream), then open the PR",
-                    remote.full_name()
+                    remote_c.full_name()
                 )));
             }
             repos::check_push_target(&dir, "origin", None).map_err(conflict)?;
@@ -1377,16 +1373,16 @@ pub async fn open_pr(State(s): S, Path(id): Path<String>, Json(req): Json<PrReq>
             // Never a force push: no `+`, no --force; a diverged remote branch is refused.
             let spec = format!("refs/heads/{branch}:refs/heads/{branch}");
             git(&dir, &auth, &["push", "origin", &spec], GIT_TIMEOUT).map_err(|e| conflict(format!("git push: {e}")))?;
-            let pr = PrRequest { repo: remote.full_name(), head: branch.clone(), base: base.clone(), title, body, draft: req.draft.unwrap_or(false) };
-            let (url, existing) = gh.create_pr(&dir, &pr).map_err(|e| (StatusCode::BAD_GATEWAY, e))?;
-            return Ok(PrDone { url, existing, base, pushed: branch, repo: pr.repo, draft: pr.draft });
+            return Ok(Pushed { base_repo: remote_c.clone(), base, pushed: branch, fork: false });
         };
         // A fork: push to origin (never upstream) under a readable branch,
         // then open the PR on the upstream project.
         let target = repos::check_push_target(&dir, "origin", Some(&fork.upstream)).map_err(conflict)?;
-        if !repos::same_repo(&target, &remote) {
-            return Err(conflict(format!("origin pushes to {}, not the fork {}: fix the remote first", target.full_name(), remote.full_name())));
+        if !(target.owner.eq_ignore_ascii_case(&remote_c.owner) && target.name.eq_ignore_ascii_case(&remote_c.name)) {
+            return Err(conflict(format!("origin pushes to {}, not the fork {}: fix the remote first", target.full_name(), remote_c.full_name())));
         }
+        let layout = hive_forge::RepoLayout { origin: remote_c.clone(), upstream: Some(RepoRef::new(fork.upstream.owner.clone(), fork.upstream.name.clone())) };
+        hive_forge::push_remote(&layout).map_err(|e| conflict(e.to_string()))?;
         let base = fork.base_branch.clone();
         git(&dir, &auth, &["fetch", "--no-tags", UPSTREAM_REMOTE, &base], GIT_TIMEOUT)
             .map_err(|e| (StatusCode::BAD_GATEWAY, format!("git fetch upstream: {e}")))?;
@@ -1406,26 +1402,30 @@ pub async fn open_pr(State(s): S, Path(id): Path<String>, Json(req): Json<PrReq>
         // Never a force push: a branch that moved on the fork is refused.
         let spec = format!("refs/heads/{branch}:refs/heads/{pushed}");
         git(&dir, &auth, &["push", "origin", &spec], GIT_TIMEOUT).map_err(|e| conflict(format!("git push to your fork: {e}")))?;
-        let pr = PrRequest {
-            repo: fork.upstream.full_name(),
-            head: format!("{}:{pushed}", remote.owner),
-            base: base.clone(),
-            title,
-            body,
-            draft: req.draft.unwrap_or(true),
-        };
-        let (url, existing) = gh.create_pr(&dir, &pr).map_err(|e| (StatusCode::BAD_GATEWAY, e))?;
-        Ok(PrDone { url, existing, base, pushed, repo: pr.repo, draft: pr.draft })
+        Ok(Pushed { base_repo: layout.upstream.expect("set"), base, pushed, fork: true })
     })
     .await?
     .map_err(|(c, m)| err(c, m))?;
-    let PrDone { url, existing, base, pushed, repo, draft } = res;
+    let draft = req.draft.unwrap_or(pushed.fork);
+    let d = ChangeRequestDraft {
+        base: pushed.base_repo.clone(),
+        base_branch: pushed.base.clone(),
+        head: remote.clone(),
+        head_branch: pushed.pushed.clone(),
+        title,
+        body,
+        draft,
+    };
+    let ChangeRequestOutcome::Opened { url, existing, .. } = h.forge.open_change_request(&d).await.map_err(|e| err(StatusCode::BAD_GATEWAY, e.to_string()))?;
+    let repo = pushed.base_repo.full_name();
+    let kind = h.conn.kind.change_request_kind();
+    let noun = if kind == hive_forge::ChangeRequestKind::MergeRequest { "merge request" } else { "pull request" };
     let note = if existing {
-        format!("Pull request (already open, branch updated): {url}")
+        format!("{} (already open, branch updated): {url}", capitalize(noun))
     } else if draft {
-        format!("Opened pull request: {url} (draft, on {repo})")
+        format!("Opened {noun}: {url} (draft, on {repo})")
     } else {
-        format!("Opened pull request: {url}")
+        format!("Opened {noun}: {url}")
     };
     s.lock().post_system_note(chat.id, chat.workspace_id, note)?;
     s.after_write();
@@ -1433,22 +1433,28 @@ pub async fn open_pr(State(s): S, Path(id): Path<String>, Json(req): Json<PrReq>
         "url": url,
         "existing": existing,
         "branch": repos::chat_branch(chat.id),
-        "pushedBranch": pushed,
+        "pushedBranch": pushed.pushed,
         "repo": repo,
-        "base": base,
+        "base": pushed.base,
         "draft": draft,
+        "kind": kind.as_str(),
+        "forge": h.id().as_str(),
     })))
 }
 
-struct PrDone {
-    url: String,
-    existing: bool,
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+}
+
+/// What the git half of opening a PR did.
+struct Pushed {
+    /// The repository the PR opens on (upstream for a fork).
+    base_repo: RepoRef,
     base: String,
     /// The branch name on the remote the PR's head was pushed as.
     pushed: String,
-    /// The repository the PR is on.
-    repo: String,
-    draft: bool,
+    fork: bool,
 }
 
 #[cfg(test)]
@@ -1479,6 +1485,23 @@ mod tests {
         c.arg("5");
         let e = run_watched(c, Duration::from_secs(10), |_| {}, || Some("too big".into())).unwrap_err();
         assert_eq!(e, "too big");
+    }
+
+    /// Test builds never reach a real code host or the developer's own
+    /// `gh` login: the default github.com connection is anonymous offline,
+    /// and statuses never go to the network.
+    #[tokio::test]
+    async fn test_builds_never_contact_code_hosts() {
+        let st = RepoState::default();
+        assert!(!st.online());
+        let dir = tempfile::tempdir().unwrap();
+        let all = st.forges(dir.path());
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].forge.auth_source(), hive_forge::AuthSource::None, "not the gh login");
+        assert!(!all[0].forge.has_write());
+        let s = forge_status(&st, &all[0]).await;
+        assert_eq!(s.reason.as_deref(), Some(OFFLINE));
+        assert_eq!(checkout_for(&all[0], &RepoRef::new("o", "n")), "o__n", "github.com keeps owner__name");
     }
 
     #[test]

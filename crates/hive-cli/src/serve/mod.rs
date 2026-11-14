@@ -38,6 +38,7 @@ pub mod appearance;
 pub mod dashboard;
 pub mod dashboard_hive;
 pub mod flow_api;
+pub mod forges_api;
 pub mod hub;
 pub mod lab;
 pub mod notify;

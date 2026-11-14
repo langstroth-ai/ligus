@@ -537,7 +537,18 @@ pub trait Forge: ForgeReader {
     /// The web base (`https://github.com`, `https://gitlab.example.com`).
     fn web_base(&self) -> &str;
     fn capabilities(&self) -> ForgeCaps;
-    fn auth_source(&self) -> AuthSource;
+    fn creds(&self) -> &std::sync::Arc<dyn CredentialSource>;
+    fn auth_source(&self) -> AuthSource {
+        self.creds().source()
+    }
+    /// Why there is nothing to sign in with (for the UI), if so.
+    fn signed_out_reason(&self) -> Option<String> {
+        self.creds().signed_out_reason()
+    }
+    /// A write token (or the `gh` login) is there.
+    fn has_write(&self) -> bool {
+        self.creds().has_write()
+    }
 
     /// The signed-in account (`None` = anonymous).
     async fn whoami(&self) -> Result<Option<ForgeUser>>;

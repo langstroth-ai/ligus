@@ -118,7 +118,15 @@ impl Api {
             }
             buf.extend_from_slice(&chunk);
         }
-        let text = String::from_utf8_lossy(&buf).into_owned();
+        let mut text = String::from_utf8_lossy(&buf).into_owned();
+        // Some forges echo the presented token in their error bodies
+        // (Gitea/Forgejo: "access token does not exist [sha: …]"): never
+        // carry it into a message.
+        if let Some(t) = token.as_ref().filter(|t| !status.is_success() && !t.is_empty()) {
+            if text.contains(t.expose()) {
+                text = text.replace(t.expose(), "***");
+            }
+        }
         if status.is_success() || status == StatusCode::CONFLICT || status == StatusCode::UNPROCESSABLE_ENTITY {
             return Ok((status, text));
         }
