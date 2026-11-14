@@ -44,8 +44,11 @@ pub struct DeviceState {
     pub public_key: Vec<u8>,
     /// Accounts this device acts for without holding their key: each one's
     /// certificate for it was only ever published by another device (the
-    /// owner's desktop approving `hive serve enroll`). A device that holds an
-    /// account key publishes its own certificate for that account. A vote it
+    /// owner's desktop approving `hive serve enroll`), or that a certified,
+    /// non-delegated device of the account published for it (sticky: the
+    /// device re-publishing the certificate it was handed doesn't undo it). A
+    /// device that holds an account key publishes its own certificate for
+    /// that account. A vote it
     /// signs for one of these accounts doesn't count toward a human gate (see
     /// `authz::authorize`).
     pub delegated_for: BTreeSet<Uuid>,
@@ -77,6 +80,8 @@ pub struct RosterState {
     pub dearth: bool,
     /// The workspace rules version in force (1 when never set).
     pub rules: u32,
+    /// The path zones (Admin-set review bars) in force.
+    pub zones: Vec<crate::flow::PathZone>,
 }
 
 impl RosterState {
@@ -139,6 +144,11 @@ pub struct RosterTracker {
     /// (device, account) certificates the device published itself (the
     /// envelope's signer is the certified device).
     self_published: BTreeSet<(Uuid, Uuid)>,
+    /// (device, account) certificates that a *different*, certified and
+    /// non-delegated device of that account published (an enrollment). Sticky:
+    /// the enrolled device re-publishing its certificate later doesn't undo it
+    /// (it only ever holds certificates it was handed).
+    enrolled_by_other: BTreeSet<(Uuid, Uuid)>,
 }
 
 impl RosterTracker {
@@ -186,8 +196,22 @@ impl RosterTracker {
             }
             SessionEvent::DeviceCertificateAdded { certificate } => {
                 self.certs.push(certificate.clone());
-                if env.signer_device_id == Some(certificate.device_id) {
-                    self.self_published.insert((certificate.device_id, certificate.account_id));
+                let key = (certificate.device_id, certificate.account_id);
+                match env.signer_device_id {
+                    Some(s) if s == certificate.device_id => {
+                        self.self_published.insert(key);
+                    }
+                    // Only a publisher that itself holds the account (certified,
+                    // not revoked, not delegated, at this position) enrolls:
+                    // anyone else re-publishing a cert can't mark it delegated.
+                    Some(s)
+                        if self.state.devices.get(&s).is_some_and(|d| {
+                            !d.revoked && d.accounts.contains(&certificate.account_id) && !d.delegated_for(certificate.account_id)
+                        }) =>
+                    {
+                        self.enrolled_by_other.insert(key);
+                    }
+                    _ => {}
                 }
                 self.rebuild_devices(fold);
             }
@@ -222,6 +246,7 @@ impl RosterTracker {
             .map(|a| (a.id, AgentState { host_id: a.host_id.clone(), runtime_id: a.runtime_id.clone(), owner: a.owner_actor_id.clone() }))
             .collect();
         self.state.dearth = fold.guards.dearth_on().is_some();
+        self.state.zones = fold.flow.zones.clone();
         self.rebuild_devices(fold);
     }
 
@@ -236,7 +261,8 @@ impl RosterTracker {
                 let d = devices.entry(cert.device_id).or_default();
                 d.accounts.insert(cert.account_id);
                 d.public_key = cert.device_public_key.clone();
-                if !self.self_published.contains(&(cert.device_id, cert.account_id)) {
+                let key = (cert.device_id, cert.account_id);
+                if !self.self_published.contains(&key) || self.enrolled_by_other.contains(&key) {
                     d.delegated_for.insert(cert.account_id);
                 }
             }
@@ -262,6 +288,11 @@ fn touches_roster(e: &SessionEvent) -> bool {
             | SessionEvent::DearthModeChanged { .. }
             | SessionEvent::JoinApproved { .. }
             | SessionEvent::SessionSnapshot { .. }
+    ) || matches!(
+        e,
+        SessionEvent::FlowRecorded {
+            record: crate::flow::FlowRecord::Zone(_) | crate::flow::FlowRecord::ZoneRemoved { .. }
+        }
     )
 }
 

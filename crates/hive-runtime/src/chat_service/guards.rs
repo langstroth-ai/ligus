@@ -117,7 +117,18 @@ impl ChatService {
     pub fn set_dearth_mode(&mut self, workspace_id: Uuid, mut dearth: hive_core::guard::DearthMode) -> Result<()> {
         if dearth.enabled && dearth.admitted_devices.is_empty() {
             let roster = build_roster(&self.store.trust_envelopes(workspace_id)?);
-            dearth.admitted_devices = roster.certified_devices();
+            // Only devices of current members (the authorization-checked
+            // config roster): the verification roster also certifies a
+            // keyholder whose self-enrollment the projection refused.
+            let members: Vec<Uuid> = self
+                .load(hive_core::workspace_config_session_id(workspace_id))?
+                .map(|c| c.members.iter().filter_map(|m| m.actor.account_id).collect())
+                .unwrap_or_default();
+            dearth.admitted_devices = roster
+                .certified_devices()
+                .into_iter()
+                .filter(|d| members.iter().any(|a| roster.device_signs_for(*d, *a)))
+                .collect();
             // This device is always admitted by the Admin switching it on.
             if !dearth.admitted_devices.contains(&self.device_id) {
                 dearth.admitted_devices.push(self.device_id);
@@ -331,6 +342,59 @@ mod tests {
         let s = svc.load(chat.id).unwrap().unwrap();
         assert!(s.guards.dearth_on().is_some());
         assert!(!hive_core::sandbox::envelope_for_session(&s).egress.is_open());
+    }
+
+    /// Hardening A-7: switching dearth mode on admits the devices trusted
+    /// now. An outsider's uninvited self-enrollment (refused by the config
+    /// projection, but certifying their device in the verification roster)
+    /// must not ride into the admitted set.
+    #[test]
+    fn dearth_does_not_admit_an_uninvited_self_enrollment() {
+        let mut svc = service();
+        let ws = Uuid::new_v4();
+        let cfg = svc.ensure_workspace_config(ws).unwrap();
+        let (eve_acct, eve_dev) = (Uuid::new_v4(), Uuid::new_v4());
+        let (acct_kp, dev_kp) = (hive_core::SigningKeypair::generate().unwrap(), hive_core::SigningKeypair::generate().unwrap());
+        let mut actor = hive_core::ActorIdentity::new(eve_acct.to_string(), "eve", hive_core::ActorKind::Human);
+        actor.account_id = Some(eve_acct);
+        let cert = hive_core::DeviceCertificate::issue(&acct_kp, eve_acct, eve_dev, &dev_kp.public_key_bytes(), Timestamp::now());
+        let member = hive_core::WorkspaceMember {
+            id: eve_acct.to_string(),
+            actor: actor.clone(),
+            role: hive_core::WorkspaceRole::Contributor,
+            title: String::new(),
+            index: 0,
+            joined_at: Timestamp::now(),
+        };
+        for (i, e) in [
+            SessionEvent::AccountKeyRegistered { account_id: eve_acct, signing_public_key: acct_kp.public_key_bytes().to_vec() },
+            SessionEvent::DeviceCertificateAdded { certificate: cert },
+            SessionEvent::MemberAdded { member, invite: None },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut env = hive_core::SessionEventEnvelope::new(cfg, ws, 100 + i as i64, e);
+            env.lamport = 100 + i as u64;
+            env.actor_stamp = Some(hive_core::ActorStamp { actor: actor.clone(), recorded_at: Timestamp::now(), cfg_frontier: None });
+            hive_core::sign_envelope(&mut env, eve_dev, &dev_kp);
+            svc.store.ingest(&env).unwrap();
+        }
+        assert!(!svc.load(cfg).unwrap().unwrap().members.iter().any(|m| m.id == eve_acct.to_string()), "precondition");
+        let d = hive_core::guard::DearthMode {
+            enabled: true,
+            reason: "lock".into(),
+            brood_paths: vec![],
+            allowed_mcp_servers: vec![],
+            admitted_devices: vec![],
+            set_by: String::new(),
+            set_at: Timestamp::now(),
+        };
+        svc.set_dearth_mode(ws, d).unwrap();
+        let g = svc.workspace_guards(ws).unwrap();
+        let on = g.dearth_on().unwrap();
+        assert!(on.admitted_devices.contains(&svc.device_id()));
+        assert!(!on.admitted_devices.contains(&eve_dev), "a non-member's device was admitted");
     }
 
     #[test]

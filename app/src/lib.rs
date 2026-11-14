@@ -8127,10 +8127,10 @@ async fn run_prepared_turn_inner(
         let trigger = reply_to.and_then(|id| session.messages.iter().find(|m| m.id == id));
         let author_role = {
             let svc = state.service.lock().unwrap();
-            let me = svc.author().id.clone();
+            // This device's own user is recognized from the signed envelopes,
+            // never from the payload's self-asserted `actor_identity`.
             match trigger {
-                Some(m) if m.actor_identity.as_ref().is_some_and(|a| a.id == me) => Some(hive_core::WorkspaceRole::Owner),
-                Some(m) => svc.author_role_at(session_id, m.id).ok().flatten(),
+                Some(m) => svc.trigger_author_role(session_id, m.id).ok().flatten(),
                 None => None,
             }
         };
@@ -16578,7 +16578,7 @@ mod finalize_proposal_tests {
         let p = &s.proposals[0];
         assert_eq!(p.title, "Add workflow \u{201c}Triage\u{201d}");
         assert_eq!(p.kind, ProposalKind::Decision);
-        assert_eq!(p.author_actor_id, "Scout");
+        assert_eq!(p.author_actor_id, scout_id.to_string(), "an agent files as itself (A-6)");
         assert_eq!(p.producing_agent_id, Some(scout_id));
         assert!(p.body.contains("@Scout"), "{}", p.body);
         let def = p.workflow.as_deref().unwrap().clone();

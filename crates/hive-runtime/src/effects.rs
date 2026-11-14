@@ -52,6 +52,13 @@ impl EffectCtx {
     pub fn agent_key(&self) -> String {
         flow::agent_key(self.agent_id)
     }
+
+    /// The author id an agent's proposals carry: the agent's own id when the
+    /// responder is an agent (an agent files as itself, never under a
+    /// person's name: A-6), else the responder's label (the primary).
+    pub fn author_id(&self) -> String {
+        self.agent_id.map(|a| a.to_string()).unwrap_or_else(|| self.author.clone())
+    }
 }
 
 fn err(e: impl std::fmt::Display) -> String {
@@ -85,7 +92,7 @@ pub fn propose(svc: &mut ChatService, ctx: &EffectCtx, np: NewProposal) -> Resul
             return Err("argv belongs on a command proposal".into());
         }
     }
-    let mut p = ActionProposal::new(title, kind, ctx.author.as_str());
+    let mut p = ActionProposal::new(title, kind, ctx.author_id());
     p.body = np.body;
     let default = p.required_approvals;
     p.required_approvals = np.required_approvals.map_or(default, |r| r.max(default));
@@ -119,7 +126,7 @@ pub fn file_workflow(svc: &mut ChatService, ctx: &EffectCtx, json: &str) -> Resu
     let def = crate::workflow_directive::definition_from_directive(json, &session)?;
     let name = def.name.clone();
     svc.as_agent(ctx.agent_id, |svc| {
-        crate::workflow_directive::file_workflow_proposal(svc, &session, ctx.workspace_id, def, &ctx.author, ctx.agent_id)
+        crate::workflow_directive::file_workflow_proposal(svc, &session, ctx.workspace_id, def, &ctx.author_id(), ctx.agent_id)
     })?;
     let _ = svc.post_system_note(
         ctx.session_id,
@@ -144,7 +151,7 @@ pub fn open_alternatives(
     let proposals: Vec<ActionProposal> = options
         .iter()
         .map(|o| {
-            let mut p = ActionProposal::new(o.title.trim(), o.kind.unwrap_or(ProposalKind::Decision), ctx.author.as_str());
+            let mut p = ActionProposal::new(o.title.trim(), o.kind.unwrap_or(ProposalKind::Decision), ctx.author_id());
             p.body = o.body.clone();
             p.producing_agent_id = ctx.agent_id;
             p

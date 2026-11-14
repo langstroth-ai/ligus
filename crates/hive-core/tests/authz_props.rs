@@ -1028,6 +1028,7 @@ fn agent_of_viewer_capped_at_viewer() {
     // val is a Viewer: her agent may raise a lockdown (Viewer floor) but not
     // file a proposal (Contributor floor), which a Contributor's agent may.
     let mut p = proposal(Uuid::from_u128(0x81), 1, ProposalStatus::Open);
+    p.author_actor_id = String::new(); // agent output is filed authorless
     p.producing_agent_id = Some(a.agent_id);
     let filed = w.agent_push(&a, SessionEvent::ProposalUpserted { proposal: p.clone() });
     assert_eq!(w.verdicts()[&filed], Verdict::Denied);
@@ -1050,6 +1051,7 @@ fn rules_v2_tier_applies_to_host_signed_agent_output() {
     use hive_core::authz::agent::{agent_authored, tier_allows};
     let agent = Uuid::new_v4();
     let mut p = proposal(Uuid::from_u128(0x91), 1, ProposalStatus::Open);
+    p.author_actor_id = String::new(); // agent output is filed authorless
     p.producing_agent_id = Some(agent);
     let upsert = SessionEvent::ProposalUpserted { proposal: p.clone() };
     assert_eq!(agent_authored(&upsert), Some(agent));
@@ -1118,4 +1120,283 @@ fn delegated_host_vote_not_counted_for_human_gate() {
     assert_eq!(p.approvals.len(), 1);
     assert_eq!(p.status, ProposalStatus::Approved);
     assert_eq!(w.verdicts()[&from_desk], Verdict::Allowed);
+}
+
+/// Hardening A-1: a delegated host can't shed its delegation by publishing
+/// its owner's certificate for itself again (any device can re-publish a cert
+/// it was handed). Delegation is decided by the first certified publication of
+/// the (device, account) certificate, and stays.
+#[test]
+fn delegated_host_republishing_its_cert_stays_delegated() {
+    use hive_core::crypto::{DeviceCertificate, SigningKeypair};
+    let mut w = World::new();
+    let owner_acct = account("owner");
+    let owner_key = SigningKeypair::generate().unwrap();
+    let (desk_key, box_key) = (SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap());
+    let (desk, bx) = (Uuid::new_v4(), Uuid::new_v4());
+    let box_cert = DeviceCertificate::issue(&owner_key, owner_acct, bx, &box_key.public_key_bytes(), Timestamp::epoch());
+    let signed = |w: &mut World, e: SessionEvent, signer: Uuid| {
+        w.cfg_push("owner", e);
+        w.cfg.last_mut().unwrap().signer_device_id = Some(signer);
+    };
+    signed(&mut w, SessionEvent::AccountKeyRegistered {
+        account_id: owner_acct,
+        signing_public_key: owner_key.public_key_bytes().to_vec(),
+    }, desk);
+    signed(&mut w, SessionEvent::DeviceCertificateAdded {
+        certificate: DeviceCertificate::issue(&owner_key, owner_acct, desk, &desk_key.public_key_bytes(), Timestamp::epoch()),
+    }, desk);
+    // The desktop enrolls the box...
+    signed(&mut w, SessionEvent::DeviceCertificateAdded { certificate: box_cert.clone() }, desk);
+    assert!(w.timeline().current().devices[&bx].delegated_for(owner_acct));
+    // ...and the box re-publishes the very certificate it was handed.
+    signed(&mut w, SessionEvent::DeviceCertificateAdded { certificate: box_cert }, bx);
+    assert!(w.timeline().current().devices[&bx].delegated_for(owner_acct), "the box shed its delegation");
+
+    let pid = Uuid::from_u128(0xD7);
+    w.chat_push("owner", SessionEvent::ProposalUpserted { proposal: proposal(pid, 1, ProposalStatus::Open) });
+    let digest = Some(diff_digest(&proposal(pid, 1, ProposalStatus::Open)));
+    w.chat_push("owner", vote("owner", pid, WorkspaceRole::Owner, true, digest));
+    w.chat.last_mut().unwrap().signer_device_id = Some(bx);
+    let p = w.state().proposals.into_iter().find(|p| p.id == pid).unwrap();
+    assert!(p.approvals.is_empty(), "the delegated host's vote counted: {:?}", p.approvals);
+
+    // And nobody can make the desktop delegated by re-publishing its cert
+    // from another device (the desktop's own publication came first).
+    let desk_cert = DeviceCertificate::issue(&owner_key, owner_acct, desk, &desk_key.public_key_bytes(), Timestamp::epoch());
+    signed(&mut w, SessionEvent::DeviceCertificateAdded { certificate: desk_cert }, bx);
+    assert!(!w.timeline().current().devices[&desk].delegated_for(owner_acct));
+}
+
+/// Hardening A-2: an unbound agent runs on its owner's device, so its owner
+/// is its host binding. A Contributor can't create an agent owned by someone
+/// else (it would run on their device, with their runtimes and keys).
+#[test]
+fn contributor_cannot_create_an_agent_owned_by_someone_else() {
+    let mut w = World::new();
+    let mut theirs = hive_core::WorkspaceAgent::new("helper", "claude-code");
+    theirs.owner_actor_id = "owner".into();
+    let one = w.cfg_push("mara", SessionEvent::AgentUpserted { agent: theirs.clone() });
+    let mut also = hive_core::WorkspaceAgent::new("helper2", "claude-code");
+    also.owner_actor_id = "ada".into();
+    let list = w.cfg_push("mara", SessionEvent::AgentRosterUpdated { agents: vec![also] });
+    // Her own agent: fine. An Admin may create one for someone else.
+    let mut mine = hive_core::WorkspaceAgent::new("mine", "claude-code");
+    mine.owner_actor_id = "mara".into();
+    let own = w.cfg_push("mara", SessionEvent::AgentUpserted { agent: mine });
+    let mut for_val = hive_core::WorkspaceAgent::new("vals", "claude-code");
+    for_val.owner_actor_id = "val".into();
+    let admin = w.cfg_push("ada", SessionEvent::AgentUpserted { agent: for_val });
+    let v = w.verdicts();
+    assert_eq!((v[&one], v[&list]), (Verdict::Denied, Verdict::Denied));
+    assert_eq!((v[&own], v[&admin]), (Verdict::Allowed, Verdict::Allowed));
+}
+/// Hardening A-3: a chat's creator is Owner of the chat's own roster, but that
+/// never grants a workspace role. Workspace-config kinds on a chat log (agent
+/// bindings, runtimes) are capped by the author's workspace role at the
+/// event's position, so a Contributor can't re-bind a workspace agent inside
+/// a chat they created (the chat's agents shadow the config log's).
+#[test]
+fn chat_creator_cannot_rebind_a_workspace_agent_in_their_chat() {
+    let mut w = World::new();
+    let mut agent = hive_core::WorkspaceAgent::new("coder", "gw");
+    agent.owner_actor_id = "owner".into();
+    agent.host_id = "sff".into();
+    w.cfg_push("owner", SessionEvent::AgentUpserted { agent: agent.clone() });
+    // mara (Contributor) founds a chat of her own.
+    let mut seed = ChatSession::new("mara's", w.wid, "anthropic");
+    seed.creator_actor_id = "mara".into();
+    seed.members = vec![member("mara", WorkspaceRole::Owner)];
+    let mut m = World { chat: Vec::new(), sid: seed.id, ..w.clone() };
+    m.chat_push("mara", SessionEvent::SessionSnapshot { session: Box::new(seed) });
+    let mut moved = agent.clone();
+    moved.host_id = String::new();
+    moved.owner_actor_id = "mara".into();
+    moved.runtime_id = "other".into();
+    let rebind = m.chat_push("mara", SessionEvent::AgentUpserted { agent: moved });
+    let rt = hive_core::WorkspaceRuntime::new("gw", "gw", hive_core::ModelProviderKind::Anthropic, "m");
+    let runtime = m.chat_push("mara", SessionEvent::WorkspaceRuntimeUpserted { runtime: rt });
+    let v = m.verdicts();
+    assert_eq!(v[&rebind], Verdict::Denied, "a chat-level rebind of a workspace agent folded");
+    assert_eq!(v[&runtime], Verdict::Denied, "a Contributor defined a runtime in her chat");
+    let s = m.state();
+    assert!(s.workspace_agents.is_empty() && s.workspace_runtimes.is_empty());
+}
+
+/// Hardening A-4 (containment of the backdated-frontier residual): a demoted
+/// Admin keeps naming a config frontier from before the demotion. A vote (or
+/// an apply) can't name a frontier older than the one the content it judges
+/// was filed at, so the old role never weighs on a proposal filed after the
+/// demotion reached its author.
+#[test]
+fn a_backdated_vote_cannot_predate_the_content_it_judges() {
+    let mut w = World::new();
+    let before = w.head();
+    w.cfg_push("owner", SessionEvent::MemberRoleChanged {
+        change: MemberRoleChange { member_id: "ada".into(), old_role: WorkspaceRole::Admin, new_role: WorkspaceRole::Viewer },
+    });
+    let pid = Uuid::from_u128(0xA4);
+    let mut p = proposal(pid, 1, ProposalStatus::Open);
+    p.approval_role_floor = WorkspaceRole::Admin;
+    w.chat_push("mara", SessionEvent::ProposalUpserted { proposal: p.clone() });
+    let digest = Some(diff_digest(&p));
+    let stale = w.chat_at("ada", vote("ada", pid, WorkspaceRole::Admin, true, digest.clone()), before);
+    let v = w.verdicts();
+    assert_eq!(v[&stale], Verdict::Denied, "a vote backdated before its proposal counted");
+    let got = w.state().proposals.into_iter().find(|x| x.id == pid).unwrap();
+    assert_eq!(got.status, ProposalStatus::Open, "approved by a demoted Admin: {:?}", got.approvals);
+    // At the current head she is judged at her real role (a Viewer can't vote).
+    let honest = w.chat_push("ada", vote("ada", pid, WorkspaceRole::Admin, true, digest.clone()));
+    assert_eq!(w.verdicts()[&honest], Verdict::Denied);
+    // A real Admin's vote at the head counts.
+    w.cfg_push("owner", SessionEvent::MemberRoleChanged {
+        change: MemberRoleChange { member_id: "val".into(), old_role: WorkspaceRole::Viewer, new_role: WorkspaceRole::Admin },
+    });
+    let admin = w.chat_push("val", vote("val", pid, WorkspaceRole::Admin, true, digest));
+    assert_eq!(w.verdicts()[&admin], Verdict::Allowed);
+    assert_ne!(w.state().proposals.into_iter().find(|x| x.id == pid).unwrap().status, ProposalStatus::Open);
+}
+
+/// Hardening A-5 (containment of "a Contributor lowers required_approvals"):
+/// an Admin's core path zone sets the review bar, but it was applied only by
+/// honest authoring code, over the declared file list. A proposal that
+/// touches a core path (by its diff, whatever it declares) is held to the
+/// zone's bar by the fold; it can only be raised, never lowered.
+#[test]
+fn core_zone_bar_holds_in_the_fold() {
+    let mut w = World::new();
+    w.cfg_push("owner", SessionEvent::FlowRecorded { record: zone(0x20, "src/") });
+    let pid = Uuid::from_u128(0xA5);
+    let mut p = ActionProposal::file_diff("p", "mara", "diff --git a/src/core.rs b/src/core.rs\n+x\n".into(), vec!["docs/a.md".into()]);
+    p.id = pid;
+    p.created_at = Timestamp::epoch();
+    p.required_approvals = 1;
+    p.approval_role_floor = WorkspaceRole::Viewer;
+    w.chat_push("mara", SessionEvent::ProposalUpserted { proposal: p.clone() });
+    let digest = Some(diff_digest(&p));
+    w.chat_push("val", vote("val", pid, WorkspaceRole::Viewer, true, digest.clone()));
+    w.chat_push("owner", vote("owner", pid, WorkspaceRole::Owner, true, digest.clone()));
+    let got = w.state().proposals.into_iter().find(|x| x.id == pid).unwrap();
+    assert_eq!((got.required_approvals, got.approval_role_floor), (2, WorkspaceRole::Admin));
+    assert_eq!(got.status, ProposalStatus::Open, "a core change passed on a lowered bar");
+    w.chat_push("ada", vote("ada", pid, WorkspaceRole::Admin, true, digest));
+    assert_eq!(w.state().proposals.into_iter().find(|x| x.id == pid).unwrap().status, ProposalStatus::Approved);
+}
+
+/// Hardening A-6: an agent files proposals as itself (or authorless, naming
+/// itself as producer), never under a human's name: that name is what the
+/// self-approval guard and the reviewers read.
+#[test]
+fn agent_cannot_file_a_proposal_under_a_humans_name() {
+    let (mut w, a) = agent_world("mara");
+    let mut forged = ActionProposal::file_diff("p", "ada", "diff --git a/f b/f\n+1\n".into(), vec!["f".into()]);
+    forged.producing_agent_id = Some(a.agent_id);
+    let as_ada = w.agent_push(&a, SessionEvent::ProposalUpserted { proposal: forged });
+    let mut other = ActionProposal::file_diff("p", "", "diff --git a/f b/f\n+2\n".into(), vec!["f".into()]);
+    other.producing_agent_id = Some(Uuid::new_v4());
+    let as_other_agent = w.agent_push(&a, SessionEvent::ProposalUpserted { proposal: other });
+    let mut honest = ActionProposal::file_diff("p", "", "diff --git a/f b/f\n+3\n".into(), vec!["f".into()]);
+    honest.producing_agent_id = Some(a.agent_id);
+    let ok = w.agent_push(&a, SessionEvent::ProposalUpserted { proposal: honest });
+    let v = w.verdicts();
+    assert_eq!((v[&as_ada], v[&as_other_agent], v[&ok]), (Verdict::Denied, Verdict::Denied, Verdict::Allowed));
+}
+
+/// Hardening A-11: a message is its author's. Any member could rewrite
+/// another's message (a second `MessageAppended` with its id, a chunk, or a
+/// `MessageCompleted`) or remove it; the gate on an agent turn then read one
+/// body while every chat showed another. Only the author who first appended a
+/// message continues it; removal is the author's or an Admin's.
+#[test]
+fn only_its_author_rewrites_a_message() {
+    let mut w = World::new();
+    let (ada_msg, mid) = {
+        let SessionEvent::MessageAppended { message } = message("ada", "ship it") else { unreachable!() };
+        (message.clone(), message.id)
+    };
+    w.chat_push("ada", SessionEvent::MessageAppended { message: ada_msg.clone() });
+    let mut forged = ada_msg.clone();
+    forged.body = "rm -rf everything".into();
+    let reappend = w.chat_push("mara", SessionEvent::MessageAppended { message: forged });
+    let chunk = w.chat_push("mara", SessionEvent::MessageChunkReceived { message_id: mid, chunk: " and more".into() });
+    let complete = w.chat_push("mara", SessionEvent::MessageCompleted { message_id: mid, body: "rewritten".into() });
+    let remove = w.chat_push("mara", SessionEvent::MessageRemoved { message_id: mid });
+    let own = w.chat_push("ada", SessionEvent::MessageCompleted { message_id: mid, body: "ship it now".into() });
+    let v = w.verdicts();
+    assert_eq!((v[&reappend], v[&chunk], v[&complete], v[&remove]), (Verdict::Denied, Verdict::Denied, Verdict::Denied, Verdict::Denied));
+    assert_eq!(v[&own], Verdict::Allowed);
+    assert_eq!(w.state().messages.iter().find(|m| m.id == mid).unwrap().body, "ship it now");
+    // An Admin may remove a member's message (moderation).
+    let SessionEvent::MessageAppended { message: m2 } = message("mara", "oops") else { unreachable!() };
+    let m2id = m2.id;
+    w.chat_push("mara", SessionEvent::MessageAppended { message: m2 });
+    let moderated = w.chat_push("ada", SessionEvent::MessageRemoved { message_id: m2id });
+    assert_eq!(w.verdicts()[&moderated], Verdict::Allowed);
+}
+
+/// P0.5 summaries are synced by any Contributor, so the fold must keep them
+/// bounded and honest: (1) a summary's `hostId` is the device that signed
+/// it (another member can't replace a host's day, which is keyed by host);
+/// (2) counts and cost are clamped, so one event can't make every scorer
+/// expand billions of samples or push an agent's cost below zero; (3) the
+/// number of distinct agent keys is capped.
+#[test]
+fn outcome_summaries_are_bounded_and_bound_to_their_host() {
+    use hive_core::flow::score::{summary_outcomes, summary_turns_spent};
+    use hive_core::flow::{MAX_SUMMARY_AGENTS, MAX_SUMMARY_COUNT};
+    let mut w = World::new();
+    let push_signed = |w: &mut World, by: &str, signer: Uuid, v: serde_json::Value| {
+        let rec: FlowRecord = serde_json::from_value(v).unwrap();
+        w.cfg_push(by, SessionEvent::FlowRecorded { record: rec });
+        w.cfg.last_mut().unwrap().signer_device_id = Some(signer);
+    };
+    let host = Uuid::new_v4();
+    let other = Uuid::new_v4();
+    let sum = |host: Uuid, agent: &str, passed: u64, cost: f64| {
+        serde_json::json!({"type": "agentOutcomeSummary", "agentKey": agent, "hostId": host.to_string(), "windowStart": 0,
+            "turns": 5, "testsPassedByClass": {"code": passed}, "taskClassCounts": {"code": 5}, "costUsd": cost})
+    };
+    push_signed(&mut w, "mara", host, sum(host, "coder", 5, 1.0));
+    // Another member's device replays the host's (host, day) with fake numbers.
+    push_signed(&mut w, "ada", other, sum(host, "coder", 0, 999.0));
+    let cfg = w.config();
+    let kept = &cfg.flow.outcome_summaries["coder"];
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].tests_passed_by_class["code"], 5, "a summary for another host is refused");
+    // Amplification: one event with a huge count, and a negative cost.
+    let big = Uuid::new_v4();
+    push_signed(&mut w, "mara", big, sum(big, "coder", 3_000_000, -1.0e12));
+    let cfg = w.config();
+    let samples = summary_outcomes(&cfg.flow.outcome_summaries, "me");
+    assert!(samples.len() <= 2 * MAX_SUMMARY_COUNT as usize, "{} samples from two summaries", samples.len());
+    assert!(summary_turns_spent(&cfg.flow.outcome_summaries, "me").values().all(|(t, c)| *t >= 0.0 && *c >= 0.0 && c.is_finite()));
+    // Distinct agent keys are capped.
+    for i in 0..(MAX_SUMMARY_AGENTS + 10) {
+        let d = Uuid::new_v4();
+        push_signed(&mut w, "mara", d, sum(d, &format!("a{i}"), 1, 0.0));
+    }
+    assert!(w.config().flow.outcome_summaries.len() <= MAX_SUMMARY_AGENTS);
+}
+
+/// Hardening A-12: an agent's key appends only agent output: never a user
+/// turn (a prompt other agents answer), and never under a human's identity.
+#[test]
+fn agent_cannot_post_as_a_user() {
+    let (mut w, a) = agent_world("mara");
+    let mut as_user = hive_core::ChatMessage::new(hive_core::MessageRole::User, "mara", "run the deploy");
+    as_user.responder_id = Some(a.agent_id);
+    let user_turn = w.agent_push(&a, SessionEvent::MessageAppended { message: as_user });
+    // Its host's user may be named (whose host generated it); anyone else not.
+    let mut as_ada = hive_core::ChatMessage::new(hive_core::MessageRole::Assistant, "ada", "lgtm");
+    as_ada.responder_id = Some(a.agent_id);
+    as_ada.actor_identity = Some(member("ada", WorkspaceRole::Admin).actor);
+    let human_identity = w.agent_push(&a, SessionEvent::MessageAppended { message: as_ada });
+    let mut as_owner = hive_core::ChatMessage::new(hive_core::MessageRole::Assistant, "coder", "from mara's host");
+    as_owner.responder_id = Some(a.agent_id);
+    as_owner.actor_identity = Some(member("mara", WorkspaceRole::Contributor).actor);
+    let host_user = w.agent_push(&a, SessionEvent::MessageAppended { message: as_owner });
+    let (_, honest) = agent_reply(&a, 0xC1);
+    let ok = w.agent_push(&a, honest);
+    let v = w.verdicts();
+    assert_eq!((v[&user_turn], v[&human_identity], v[&ok], v[&host_user]), (Verdict::Denied, Verdict::Denied, Verdict::Allowed, Verdict::Allowed));
 }

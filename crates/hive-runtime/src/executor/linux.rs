@@ -205,6 +205,9 @@ impl TurnExecutor for Bwrap {
             .current_dir(cwd)
             .env_clear()
             .envs(plan_env(plan, proxy));
+        // bwrap itself leads a new session/process group too (the inner
+        // command gets `--new-session`), so callers can kill the group.
+        super::new_session(&mut c);
         Ok(c)
     }
 }

@@ -1192,9 +1192,11 @@ fn fold(
             let payload = match &env.payload {
                 SessionEvent::ProposalUpserted { proposal } if checked && !trusted => {
                     let existing = session.proposals.iter().find(|p| p.id == proposal.id);
-                    rewritten = SessionEvent::ProposalUpserted {
-                        proposal: authz::votes::normalize_upsert(existing, proposal),
-                    };
+                    let mut p = authz::votes::normalize_upsert(existing, proposal);
+                    if let WorkspaceAuthz::Timeline(t) = workspace {
+                        authz::votes::hold_to_core_bar(&mut p, &t.current().zones);
+                    }
+                    rewritten = SessionEvent::ProposalUpserted { proposal: p };
                     &rewritten
                 }
                 SessionEvent::ProposalVoteCast { proposal_id, approval } if checked && !trusted => {
@@ -1209,6 +1211,30 @@ fn fold(
             };
             if let SessionEvent::ChatLockdownRaised { lockdown, .. } = payload {
                 session.authz.lockdown_raisers.insert(lockdown.id, author.to_string());
+            }
+            if checked && !trusted {
+                if let SessionEvent::MessageAppended { message } = payload {
+                    session.authz.message_authors.entry(message.id).or_insert_with(|| author.to_string());
+                }
+            }
+            // Where content was filed (see `AuthzState::content_frontier`).
+            if checked && !trusted {
+                if let Some(f) = env.actor_stamp.as_ref().and_then(|s| s.cfg_frontier) {
+                    match payload {
+                        SessionEvent::ProposalUpserted { proposal } => {
+                            let changed = session.proposals.iter().find(|p| p.id == proposal.id).is_none_or(|old| {
+                                authz::votes::diff_digest(old) != authz::votes::diff_digest(proposal)
+                            });
+                            if changed {
+                                session.authz.content_frontier.insert(proposal.id, f);
+                            }
+                        }
+                        SessionEvent::ProposalSetOpened { set } => {
+                            session.authz.set_frontier.entry(set.id).or_insert(f);
+                        }
+                        _ => {}
+                    }
+                }
             }
             // Guard folds that need the signed author (dearth-mode joins, verified
             // votes). Deterministic over the canonical fold like everything above.

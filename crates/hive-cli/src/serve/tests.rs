@@ -1246,7 +1246,9 @@ async fn restart_finishes_a_reply_cut_off_mid_stream() {
         let mid = svc
             .begin_assistant_message(chat_id, ws, "coder".to_string(), "gw".to_string(), Some(h.agent_id), Some(mention))
             .unwrap();
-        svc.append_chunk(chat_id, ws, mid, "partial answer".to_string()).unwrap();
+        // Trailing space: a trailing token is held back from the log until
+        // text follows it (a split secret is never streamed in halves).
+        svc.append_chunk(chat_id, ws, mid, "partial answer ".to_string()).unwrap();
         mid
     };
     assert!(h.handle.stop(Duration::from_secs(5)).await, "an idle worker stops at once");
@@ -2952,6 +2954,25 @@ async fn phone_vote_refused_on_delegated_host_without_presence() {
     assert_eq!(refusals.len(), 3, "{refusals:?}");
     assert!(refusals.iter().all(|(v, src, _)| *v == hive_core::signal::GuardVerdict::Reject && src == "bearer"));
     assert!(refusals.iter().any(|(_, _, r)| r == "presence_required_lockdown_clear"));
+    h.handle.shutdown();
+}
+
+/// P0.6 / S2: rebinding an agent's host is an Admin action (presence under
+/// rules v2). A box acting for the owner would sign a phone's or a bearer
+/// caller's rebind as the owner, so it is refused like a vote.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn agent_rebind_refused_on_delegated_host_without_presence() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let host = this_host(&h).await;
+    let owner = open_service(&h.desktop).unwrap().author().clone();
+    h.handle.shared.lock().act_as_owner_device(owner);
+    let (code, body) =
+        status_of(&h, reqwest::Method::PUT, &format!("/v1/agents/{}/host", h.agent_id), Some(json!({ "hostId": host }))).await;
+    assert_eq!((code, body["error"].clone()), (403, json!("presence_required")), "{body}");
+    let agents = h.get("/v1/agents").await;
+    let a = agents["agents"].as_array().unwrap().iter().find(|a| a["id"] == json!(h.agent_id.to_string())).unwrap().clone();
+    assert_ne!(a["hostKind"], "thisHost", "the binding is unchanged: {a}");
     h.handle.shutdown();
 }
 

@@ -123,6 +123,9 @@ const KNOWN: [&str; 12] = [
     "signature",
 ];
 
+/// Most top-level keys an envelope may carry (known and unknown).
+pub const MAX_TOP_LEVEL_KEYS: usize = 64;
+
 /// Top-level keys of one envelope object, borrowed from its text.
 struct Fields<'a>(Vec<(&'a str, &'a RawValue)>);
 
@@ -137,6 +140,12 @@ impl<'de: 'a, 'a> Deserialize<'de> for Fields<'a> {
             fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
                 let mut out: Vec<(&'a str, &'a RawValue)> = Vec::new();
                 while let Some(key) = map.next_key::<&'de str>()? {
+                    // Bounded: twelve known keys plus room for future ones. A
+                    // key-stuffed envelope would otherwise cost quadratic time
+                    // here on every load of its log.
+                    if out.len() >= MAX_TOP_LEVEL_KEYS {
+                        return Err(de::Error::custom("too many envelope keys"));
+                    }
                     if out.iter().any(|(k, _)| *k == key) {
                         // Two values for one key would let the verifier and the
                         // fold read different ones.
@@ -340,6 +349,25 @@ mod tests {
         let json = serde_json::to_string(&env).unwrap();
         let dup = json.replacen("{", "{\"payload\":{\"kind\":\"unknown\"},", 1);
         assert!(serde_json::from_str::<SessionEventEnvelope>(&dup).is_err());
+    }
+
+    /// Hardening A-8: an envelope stuffed with unknown top-level keys (a few
+    /// hundred KB from any relay poster) must not cost quadratic time to
+    /// parse; past a small bound of keys it is refused outright.
+    #[test]
+    fn many_top_level_keys_are_refused_fast() {
+        let env = SessionEventEnvelope::new(Uuid::nil(), Uuid::nil(), 1, SessionEvent::MessageRemoved { message_id: Uuid::nil() });
+        let json = serde_json::to_string(&env).unwrap();
+        let mut pad = String::from("{");
+        for i in 0..60_000 {
+            pad.push_str(&format!("\"k{i}\":0,"));
+        }
+        let stuffed = json.replacen("{", &pad, 1);
+        let t = std::time::Instant::now();
+        let r = serde_json::from_str::<SessionEventEnvelope>(&stuffed);
+        let took = t.elapsed();
+        assert!(r.is_err(), "an envelope with 60k unknown keys was accepted");
+        assert!(took < std::time::Duration::from_millis(500), "parsing took {took:?}");
     }
 
     #[test]

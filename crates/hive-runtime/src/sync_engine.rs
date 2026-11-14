@@ -1296,10 +1296,17 @@ mod tests {
         };
         let all: Vec<SessionEventEnvelope> = vec![
             founding_seed(&member, device_id, &device, 4),
-            plain(2, SessionEvent::AccountKeyRegistered {
-                account_id,
-                signing_public_key: account.public_key_bytes().to_vec(),
-            }),
+            {
+                // Signed and stamped by the account's own device, as
+                // `publish_identity` does.
+                let mut e = plain(2, SessionEvent::AccountKeyRegistered {
+                    account_id,
+                    signing_public_key: account.public_key_bytes().to_vec(),
+                });
+                e.actor_stamp = Some(ActorStamp { actor: member.actor.clone(), recorded_at: Timestamp::epoch(), cfg_frontier: None });
+                hive_core::sign_envelope(&mut e, device_id, &device);
+                e
+            },
             plain(3, SessionEvent::DeviceCertificateAdded { certificate: cert }),
             good.clone(),
             tampered.clone(),
@@ -1587,6 +1594,11 @@ mod tests {
         // under Option C they follow the same verified/held path as content.
         let signed = |lamport: i64, payload: SessionEvent| {
             let mut e = SessionEventEnvelope::new(Uuid::nil(), Uuid::nil(), lamport, payload);
+            e.actor_stamp = Some(hive_core::identity::ActorStamp {
+                actor: member.actor.clone(),
+                recorded_at: Timestamp::epoch(),
+                cfg_frontier: None,
+            });
             hive_core::sign_envelope(&mut e, device_id, &device);
             e
         };

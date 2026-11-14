@@ -14,6 +14,7 @@
 //! (deny file-write* (subpath "<worktree>/.git") <protected dirs and files>)
 //! (deny file-read* file-write* (subpath "<data dir>") (subpath "~/.ssh") (literal "<serve.token>") …)
 //! (allow file-read* (subpath "<worktree>") <readable dirs inside a denied one>)
+//! (deny mach-lookup (global-name-prefix "com.apple.coreservices."))   ; no LaunchServices launches
 //! (deny network*)
 //! (allow network-outbound (remote ip "localhost:<proxy port>"))
 //! (allow network-outbound (remote unix-socket (path-literal "<ligus mcp socket>")))
@@ -95,6 +96,11 @@ pub fn profile(plan: &EnforcementPlan, proxy_port: Option<u16>) -> String {
             }
         }
     }
+    // No launches through LaunchServices: `open`/`LSOpen*` hand the launch to
+    // launchd, and the launched app runs outside this profile (an agent could
+    // write an app bundle into its worktree and `open` it to read the data
+    // dir; `sandbox_denies_launchservices_escape`).
+    p.push_str("(deny mach-lookup (global-name-prefix \"com.apple.coreservices.\"))\n");
     match (&plan.egress, proxy_port) {
         (EgressPlan::Open, _) => {}
         (EgressPlan::Proxy { .. }, Some(port)) => {
@@ -128,6 +134,7 @@ impl TurnExecutor for Seatbelt {
         crate::private_file::write_private_atomic(&path, prof.as_bytes())?;
         let mut c = hive_core::process_util::command(SANDBOX_EXEC);
         c.arg("-f").arg(&path).arg("--").arg(program).args(args).current_dir(cwd).env_clear().envs(plan_env(plan, proxy));
+        super::new_session(&mut c);
         Ok(c)
     }
 }
