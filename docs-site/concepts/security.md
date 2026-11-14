@@ -67,7 +67,7 @@ an API model calling MCP tools:
   worktree, and its changes come back as a proposal for review. While the
   envelope is tightened (dearth mode, a chat lockdown), a turn that can't get
   a worktree is refused instead of running in place.
-- **Filesystem allow-list.** Agents never write into `.git`, `.ligus`,
+- **Filesystem allow-list.** Agents never write into `.git`, `.ligus`, `.hive`,
   `.claude`, `.vscode` or the workspace config files.
 - **Egress policy.** Normally open (each runtime's own permission tier
   applies). Tightened, it is either *allow-listed MCP servers only* or
@@ -111,6 +111,10 @@ every device applies it; clearing it is re-checked on ingest (a non-member,
 Viewer or agent account can't).
 
 ## What this page does not cover
+
+The full [security model](../security/index.md), the
+[threat model and known limitations](../security/threat-model.md), and the
+[incident runbooks](../security/runbooks.md) have their own section.
 
 Private key seeds live as files on disk, not in an OS keystore — see
 [Identity & devices](identity.md#key-storage) for what protects them and

@@ -1,10 +1,11 @@
 # TURN-style fallback
 
 !!! note "Roadmap — not in the current build"
-    TURN-style frame forwarding belongs to the direct-P2P stack, which is a
-    tracked follow-up. Today multiuser runs entirely through the relay's
-    envelope-forwarding endpoint (see [Self-hosting a relay](self-host.md)); this
-    page documents the planned fallback.
+    The TURN-style fallback described here is not built. Today devices sync
+    through the relay's envelope endpoint (see
+    [Self-hosting a relay](self-host.md)), and desktops that are contacts also
+    sync directly over iroh, which falls back to the relay on its own when no
+    direct path exists. This page documents the planned fallback.
 
 About 20% of real-world NAT pairs defeat UDP hole-punching even
 with STUN. Symmetric NATs on both ends, restrictive corporate

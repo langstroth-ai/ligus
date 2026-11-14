@@ -43,68 +43,38 @@ events from your devices verify against the rosters.
 
 ## What travels in invites
 
-A `WorkspaceInvitePayload` (the thing you paste into a peer's Ligus
-to grant access) contains:
+A workspace invite code (`hivews1:…`) is base64url-encoded JSON of the
+workspace connection: its display name, the relay URL, the room, **the
+workspace key (the E2EE passphrase)**, and, for the founder check, the
+founding identity (and a DM's account, for direct messages). See the
+[invite code reference](../reference/invite-payload.md).
 
-- The workspace UUID + display name.
-- The inviter's `accountID` + `deviceID` + `displayName`.
-- The inviter's device Ed25519 public key (the recipient uses it to
-  verify the first envelopes from the workspace).
-- Optional relay endpoint + token env var hint.
-- Optional expiry timestamp and passcode.
+So an invite code **is** a secret: anyone holding it can sync and read the
+workspace. Share it only over a channel you trust. Inviting by GitHub handle
+avoids pasting it: the key is sealed to the invitee's devices instead. See
+[Invites & joining](../features/invites.md).
 
-What it does *not* contain:
-
-- Any private key material.
-- The inviter's API credentials.
-- Workspace content.
-
-The recipient adds the inviter as a member, fetches the workspace
-roster, and starts syncing. Their device key joins the device roster
-through their own `deviceAdded` event.
+It doesn't contain private signing keys, API credentials or workspace
+content. The joiner's devices publish their own keys and certificates
+through their own events.
 
 ## Key storage
 
-Ligus stores private key seeds as files in the `keys/` subdirectory of
-its data directory (`ai.ligus.desktop`) — cross-platform and portable.
+Ligus stores private key seeds as raw files in the `keys/` subdirectory of
+its data directory (`ai.ligus.desktop` for the desktop, `LIGUS_DATA_DIR` for
+the CLI), written with the process's default file mode (on many Linux
+systems that is readable by other local users; keep the data dir `0700`).
 Protect them with your OS account and disk encryption; anyone who can
 read these files can act as your device. An OS-keystore-backed vault
 (macOS Keychain / Windows Credential Manager / Secret Service) is a
 planned drop-in behind the same interface but is **not** what ships
 today, so don't assume OS-keystore protection.
 
-## Trust handshake (cross-network)
+## Direct peer-to-peer links
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant A as Alice (inviter)
-    participant R as Relay
-    participant B as Bob (recipient)
-
-    A->>R: publish signed RendezvousRecord
-    A->>B: invite payload (any channel)
-    B->>R: lookup workspace+device
-    R-->>B: signed publication
-    B-->>B: verify sig against invite's pubkey
-    B->>A: UDP hole-punch — PeerLinkHello (signed nonce)
-    A->>B: PeerLinkHelloAck (signed nonce)
-    Note over A,B: each side proved possession of its device key
-    A-->A: emit memberAdded event for Bob
-    B-->B: emit deviceAdded event for self
-```
-
-When two devices on different networks join the same workspace:
-
-1. Inviter publishes their STUN candidates to the rendezvous relay,
-   signed with their device key.
-2. Recipient pastes the invite, looks up the inviter's candidates
-   via the relay (verifies signature), opens a UDP link.
-3. Both sides exchange a signed `PeerLinkHello` over the link.
-   The hello carries the workspace UUID + a fresh nonce; both sides
-   sign `(workspaceID || nonce)` with their device key.
-4. Each side verifies the other's hello signature against the public
-   key the rendezvous publication / invite carried.
-
-No central party brokers trust. The relay only routes signed
-publications it can't forge.
+Desktops that are contacts of each other can also sync directly, device to
+device, over [iroh](https://www.iroh.computer/) (QUIC), falling back to the
+relay when no direct connection can be made (**Settings → Team sync →
+Direct peers**). Events on a direct link are the same signed events as on
+the relay, verified the same way; set `LIGUS_DISABLE_P2P` to turn direct
+sync off. See [Security model](../security/index.md#encryption).

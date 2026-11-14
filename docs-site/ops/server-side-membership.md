@@ -107,8 +107,8 @@ table — see [`managed-service-plan.md`](managed-service.md).
    IPC + UI already exist client-side — point them at the relay endpoints).
 2. **Enforce `max_members`** from the entitlement token against the membership
    table.
-3. **Durable membership** — persist alongside the (planned) durable event store;
-   today it's in-memory like the rest of the reference relay.
+3. **Durable membership** — done: rosters and invites persist in the relay's
+   store (Postgres, or the JSON snapshot), like the rest of its state.
 4. **Session pruning** + optional `/v1/session` warm endpoint that returns the
    caller's `account_id` to the client.
 5. **Capability gating** — once `caps` ship, gate privileged ops on them rather

@@ -1,6 +1,6 @@
 # Ligus
 
-> Ligus is a local-first, end-to-end-encrypted desktop app for collaborating with AI agents. Workspaces and chats sync over an E2EE relay (or peer-to-peer); each device holds its own copy of the data and its own local code folder. Agents run on a host (your device or a headless worker), edit an isolated per-chat git worktree, and surface changes as reviewable proposals.
+> Ligus is a local-first, end-to-end-encrypted desktop app for collaborating with AI agents. Workspaces and chats sync over an E2EE relay (or peer-to-peer); each device holds its own copy of the data and its own local code folder. Agents run on a host (your device or a headless worker), edit an isolated per-chat git worktree, and surface changes as reviewable proposals. The name is short for *ligustica* (Apis mellifera ligustica, the Italian honeybee); the project was called Hive until 2.0.
 
 Documentation site: https://docs.ligus.ai/ — pages below are the canonical reference.
 
@@ -14,6 +14,23 @@ Documentation site: https://docs.ligus.ai/ — pages below are the canonical ref
 - [First launch](https://docs.ligus.ai/getting-started/first-launch/): First run, data directories, and resetting local data.
 - [Configuring a runtime](https://docs.ligus.ai/getting-started/configuring-a-runtime/): Setting up LLM providers and CLI coding agents (claude, aider, pi, codex, Google Antigravity, GitHub Copilot).
 - [Your first chat](https://docs.ligus.ai/getting-started/first-chat/): Sending a message and getting a first agent reply.
+
+## Deploy
+
+- [Choose a deployment](https://docs.ligus.ai/deploy/): The five deployment shapes (solo, personal fleet, team on a relay, Kubernetes preview, keys-off-cluster design) with architecture diagrams.
+- [Solo laptop](https://docs.ligus.ai/deploy/solo/): The desktop app alone, no relay.
+- [Personal fleet](https://docs.ligus.ai/deploy/personal-fleet/): Laptop plus an always-on `ligus serve` home server and the phone, directly over Tailscale or through the relay tunnel.
+- [Team on a relay](https://docs.ligus.ai/ops/deployment/): Deploying and gating a relay, creating a workspace, inviting teammates, a shared worker, and a security checklist.
+- [Kubernetes (preview)](https://docs.ligus.ai/deploy/kubernetes/): The relay and ligus Helm charts (preview, unpublished), what each pod holds, and known limits.
+- [Keys off the cluster (design)](https://docs.ligus.ai/deploy/keys-off-cluster/): A cluster that runs only the relay and executors; not shipped.
+- [Multi-tenant (design)](https://docs.ligus.ai/deploy/multi-tenant/): Three authorization layers for hosting many organisations; not implemented.
+- [Upgrading from Hive 1.x](https://docs.ligus.ai/deploy/upgrade-from-hive/): Env var rename, data migration per component, and rollback.
+
+## Security
+
+- [Security model](https://docs.ligus.ai/security/): What each component holds, trust boundaries per deployment shape, encryption, roles, and the 2.0 guards.
+- [Threat model](https://docs.ligus.ai/security/threat-model/): Attackers, what they can and can't do, and known limitations.
+- [Runbooks](https://docs.ligus.ai/security/runbooks/): Device revocation, lost phone, compromised device, offboarding, key and token rotation.
 
 ## Concepts
 
@@ -34,7 +51,7 @@ Documentation site: https://docs.ligus.ai/ — pages below are the canonical ref
 - [Mentions & notifications](https://docs.ligus.ai/features/mentions-and-notifications/): Addressing participants and how notifications work.
 - [Agentic workflows](https://docs.ligus.ai/features/workflows/): Multi-stage agent pipelines and human-approval gates, including gate-routes-back loops. Agents author definitions as reviewable proposals; people approve, run and pause them.
 - [Flow](https://docs.ligus.ai/features/flow/): Hand-off cards and context parcels, outcome-weighted routing of un-addressed work (shadow mode first) with adaptive exploration and cool-downs, review-queue backpressure, the threshold task board, careers, workspace marks, path zones, worktree reuse and the home beacon.
-- [Ligus on your phone](https://docs.ligus.ai/features/phone-app/): The phone app over `ligus serve`: chats, people and channels, proposal review, workflow approvals, push, Match host.
+- [Ligus on your phone](https://docs.ligus.ai/features/phone-app/): The phone app over `ligus serve`: pairing direct or through the relay, host path policy, Face ID lock, demo mode, chats, proposal review, workflow approvals, push (off in standard builds), Match host, and what stays desktop-only.
 - [Host dashboard](https://docs.ligus.ai/features/dashboard/): The dashboard `ligus serve` shows on the phone: built-in Ligus section, dashboard.toml panels, MCP tool panels, tables.
 - [Scheduled agents](https://docs.ligus.ai/features/scheduling/): Recurring, cron-like agent runs.
 - [Managing context](https://docs.ligus.ai/features/voice-and-slash/): /summarize, /compact, and the context planner.
@@ -55,23 +72,27 @@ Documentation site: https://docs.ligus.ai/ — pages below are the canonical ref
 
 - [LAN discovery](https://docs.ligus.ai/networking/lan/): Peer discovery on a local network.
 - [Rendezvous relay](https://docs.ligus.ai/networking/rendezvous/): How peers find each other over the internet.
-- [Self-hosting a relay](https://docs.ligus.ai/networking/self-host/): Running your own relay, and managing relay access.
+- [Self-hosting a relay](https://docs.ligus.ai/networking/self-host/): Building and running the relay, storage (Postgres or snapshot), TLS, token modes, membership, tunnel and APNs push, rate limits, monitoring, backups and upgrades.
 - [TURN fallback](https://docs.ligus.ai/networking/turn/): Relayed connectivity when P2P fails.
 - [Remote access for your phone](https://docs.ligus.ai/networking/remote-access/): The relay tunnel, `ligus pair`, `ligus phones`, `ligus remote`, self-hosted relays and push.
 
 ## Operations
 
 - [Building the dist](https://docs.ligus.ai/ops/build/): Building the desktop app.
-- [Deploying for a small team](https://docs.ligus.ai/ops/deployment/): Standing up Ligus for a team.
+- [Operations](https://docs.ligus.ai/ops/operations/): Health endpoints, logs, backups and restore of data dirs, upgrades.
 - [Running ligus serve as your own device](https://docs.ligus.ai/ops/serve-box/): `ligus serve enroll`, host liveness, apply-on-approve, and the 1.16 sync privacy upgrade note.
 - [Pricing tiers](https://docs.ligus.ai/ops/pricing/) and [Tiering (open-core)](https://docs.ligus.ai/ops/tiering/): The open-core model.
 - [Managed service plan](https://docs.ligus.ai/ops/managed-service/): The hosted option.
 - [Server-side membership](https://docs.ligus.ai/ops/server-side-membership/): Relay-managed team membership.
-- [Troubleshooting](https://docs.ligus.ai/ops/troubleshooting/): Common problems and fixes.
+- [Troubleshooting](https://docs.ligus.ai/ops/troubleshooting/): Problems by symptom: sync stuck, relay 401s, phone can't connect, worker not picking up turns, plan windows, hygiene sweep.
 
 ## Reference
 
 - [What's new](https://docs.ligus.ai/reference/whats-new/): Changes since 1.15 with links.
+- [CLI](https://docs.ligus.ai/reference/cli/): Every `ligus` command and flag.
+- [Environment variables](https://docs.ligus.ai/reference/env-vars/): Every `LIGUS_*` variable, its default and who reads it.
+- [Serve HTTP API](https://docs.ligus.ai/reference/serve-api/): Every `ligus serve` route, auth, limits and the SSE stream.
+- [Settings](https://docs.ligus.ai/reference/settings/): `settings.json` keys, CLI `config.toml`, and what the workspace config log carries.
 - [Configuration (TOML)](https://docs.ligus.ai/reference/config-toml/): The `ligus.config.toml` reference.
 - [Invite payload format](https://docs.ligus.ai/reference/invite-payload/): The invite/enroll payload structure.
 - [Wire protocols](https://docs.ligus.ai/reference/wire-protocols/): The `/v1` relay wire contract and token format.

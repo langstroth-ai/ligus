@@ -1,177 +1,153 @@
-# Deploying for a small team (free tier)
+# Team on a relay
 
-This is the practical, end-to-end recipe for getting a handful of developers
-sharing Ligus workspaces — on free or near-free hosting, in about 15 minutes.
+A team shares workspaces through one relay. Each member runs the desktop
+app with their own runtime (their own Claude subscription, API key or local
+model); optionally, shared worker boxes host agents that should stay online.
+The relay stores and forwards only end-to-end encrypted events.
 
-## What you're actually deploying
-
-Ligus is a desktop app; there's no central server to run for the app itself.
-The **only** thing a team self-hosts is the **relay** — a tiny stateless
-service that forwards encrypted events between devices. One relay serves your
-whole team.
-
-```
-  ┌────────────┐         ┌──────────────┐         ┌────────────┐
-  │ Dev A (app)│ ──push─▶│  ligus-relay  │◀─pull── │ Dev B (app)│
-  │            │ ◀─pull──│ (you host 1) │ ──push─▶│            │
-  └────────────┘         └──────────────┘         └────────────┘
-        every device with the same relay URL + room id converges
+```mermaid
+flowchart LR
+  A["Alice: desktop (Owner)"] <-->|"E2EE"| R["ligus-relay"]
+  B["Bob: desktop (Contributor)"] <-->|"E2EE"| R
+  W["shared worker: ligus worker"] <-->|"E2EE"| R
 ```
 
-What you do **not** pay for centrally:
+Time: about 20 minutes for the relay, 2 minutes per teammate.
 
-- **LLM inference.** Ligus is bring-your-own: each developer uses their own
-  Claude Code CLI subscription (the default runtime) or their own API key /
-  local Ollama. There's no shared inference bill to provision.
-- **A database.** The relay keeps state in memory; each device keeps its own
-  SQLite event log. Nothing to back up on the relay.
+## What you decide up front
 
-So "deployment" for a small team is really just **"host one small relay and
-share three values with your teammates."**
-
-## Step 1 — Host one relay (free tier)
-
-Pick a host. For a small team, two good free-ish options:
-
-| | Fly.io *(recommended)* | Render |
+| Decision | Options | Recommendation |
 |---|---|---|
-| Stays always-on | yes (keep 1 machine) | **no** — free instances sleep when idle |
-| First-request after idle | instant | slow (cold start), and **queued events are lost on sleep** |
-| Setup | one CLI command | click through a Blueprint |
-| TLS / HTTPS URL | automatic | automatic |
+| Where the relay runs | Fly.io, a VM with Docker, Kubernetes (preview) | a small always-on machine with a volume or Postgres |
+| Relay storage | Postgres, JSON snapshot on a volume, memory | snapshot for a small team; Postgres for more |
+| Who may use the relay | open, static token list, signed tokens | signed tokens (`hrt1`) for anything on the internet |
+| Relay-side membership | off, `LIGUS_RELAY_MEMBERSHIP=1` | off to start; see [Server-side membership](server-side-membership.md) |
 
-Because the relay holds queued events **in memory**, a host that sleeps will
-drop anything a peer hasn't pulled yet. That's fine for an evening of pairing,
-but for a team that's online at different hours, prefer Fly.io's always-on
-single machine (its free allowance covers one `shared-cpu-1x` / 256 MB machine,
-which is all the relay needs).
+## 1. Deploy the relay
 
-The relay lives in its own repo — **[github.com/ligus-ai/relay](https://github.com/ligus-ai/relay)**
-(MIT) — which ships the Dockerfile + `deploy/fly.toml`. Clone it, then:
+Follow [Self-hosting a relay](../networking/self-host.md). The short
+version on Fly.io:
 
-### Fly.io
-
-```bash
+```sh
 git clone https://github.com/ligus-ai/relay && cd relay
-fly auth signup                     # or: fly auth login
-fly launch --copy-config --no-deploy   # first time — pick a unique app name + region
-fly volumes create hive_data --size 1 --region <your-region>
-fly deploy                          # this + later deploys
-fly status                          # → https://<your-app>.fly.dev
+fly launch --config deploy/fly.toml --copy-config --no-deploy
+fly volumes create hive_data --size 1 --region <region>
+fly deploy . --config deploy/fly.toml
+curl -s https://<app>.fly.dev/v1/health
+# ok
 ```
 
-### Render / Railway / Cloud Run / a VPS
+## 2. Gate it with signed tokens
 
-Point the platform at the relay repo's Dockerfile (New → Web Service → Docker),
-attach a persistent disk at `/data`, set `LIGUS_RELAY_DATA_DIR=/data`, and expose
-port 8443. Or build + run the image anywhere:
+On your own machine (not the relay), with the relay binary built
+(`go build -o ligus-relay ./cmd/ligus-relay`):
 
-```bash
-docker build -t ligus-relay https://github.com/ligus-ai/relay.git
-docker run -d -p 8443:8443 --restart unless-stopped ligus-relay
-# put Caddy/nginx in front for HTTPS, or use the platform's TLS
+```sh
+./ligus-relay keygen
+# private_key=…   # SECRET — keep on the issuer only (never on the relay)
+# public_key=…
+fly secrets set LIGUS_RELAY_TOKEN_PUBKEY=<public_key>
+curl -s -o /dev/null -w '%{http_code}\n' https://<app>.fly.dev/v1/workspaces/x/envelopes
+# 401
 ```
 
-The full deploy reference (env, TLS, token gating, Postgres/HA) lives in the
-relay repo's README. For the from-scratch / control build, see
-[Self-hosting a relay](../networking/self-host.md).
+Mint one token per person (and per worker box):
 
-## Step 2 — Verify it's up
-
-```bash
-curl https://<your-relay-url>/v1/health      # → ok
+```sh
+./ligus-relay issue --key <private_key> --sub github:alice --exp-days 180
+# hrt1.…
 ```
 
-If you get `ok`, the relay is ready. There's nothing else to configure on it.
+Store the private key in your password manager. Signed tokens can't be
+revoked one at a time on the open-source relay, so give them an expiry; see
+[Relay token compromised](../security/runbooks.md#relay-token).
 
-## Step 3 — Agree on three values
+## 3. Create the workspace (first Admin)
 
-Decide these once and share them with the team over a trusted channel (your
-password manager, a DM — **not** a public channel):
+1. Install the desktop app ([Solo laptop](../deploy/solo.md#1-install)).
+2. **Settings → Team sync**: **Relay URL** `https://<app>.fly.dev` and your
+   **Relay access token**. Save.
+3. Workspace rail **＋ → Add workspace → Create**. Ligus generates a random
+   room id and workspace key; you are the Owner.
 
-| Value | What it is | Example |
-|---|---|---|
-| **Relay URL** | the URL from Step 1 | `https://acme-hive.fly.dev` |
-| **Room** | any shared string; same room = same workspace | `acme-backend` |
-| **Workspace key** | shared secret → end-to-end encryption | a long passphrase |
+Expected result: the sync pill reads **live** and encrypted.
 
-The **workspace key is your security model** (see Step 5) — treat it like a
-password and don't skip it.
+## 4. Bring teammates in
 
-## Step 4 — Each teammate connects (no restart, no env vars)
+Each teammate installs the app and pastes **their own** relay token in
+**Settings → Team sync**. Then either:
 
-In Ligus: **Settings → Multiuser sync**, fill in the Relay URL, Room, and
-Workspace key, then **Save**. The background sync picks it up within a few
-seconds — no relaunch needed. The status pill should read **live** (it reports
-real connection state — **live / error / offline** — so a bad key or dead relay
-shows as a **Sync error**, not a false "Live"):
+- **Invite by GitHub handle** (both signed in with GitHub): the workspace key
+  is sealed to their devices; nothing secret is copy-pasted. Preferred.
+- **Invite code**: send the `hivews1:…` code over a trusted channel (it
+  contains the workspace key); they use **＋ → Add workspace → Join**.
 
-```
-live · relay https://acme-hive.fly.dev · room acme-backend · 🔒 encrypted
-```
+See [Invites & joining](../features/invites.md). Then set roles in the
+**People** pane: Owner, Admin, Contributor or Viewer. Roles limit what a
+member can change, not what they can read. Keep Admins few.
 
-Now create a chat on one machine; it shows up on the others within ~3 seconds.
-Replies, agents, proposals, reactions, and skills all propagate the same way.
-
-> Environment variables (`LIGUS_RELAY_URL`, `LIGUS_WORKSPACE`,
-> `LIGUS_WORKSPACE_KEY`) still work, but they only **seed** the settings on first
-> launch. After that the in-app Settings are the source of truth. Most teams
-> don't need the env vars at all.
-
-Each developer also points their own runtime at their own credentials — the
-default `claude` CLI needs nothing beyond being logged in (`claude`); an
-Anthropic/OpenAI key or a local Ollama goes in the same Settings panel. See
+Each teammate configures their own runtime; see
 [Configuring a runtime](../getting-started/configuring-a-runtime.md).
 
-## Step 5 — Security for a small team
+## 5. Optional: a shared worker
 
-The relay has **no built-in login** — anyone with the URL **and** the room id
-can join that room. Two things make that safe:
+A worker hosts agents for everyone, using **workspace** runtimes whose keys
+live only on the worker:
 
-1. **Always set a workspace key.** With it, every event is sealed with
-   ChaCha20-Poly1305 *before* it leaves the device; the relay only ever stores
-   ciphertext, and a peer with the wrong key can't read anything. Settings shows
-   `🔒 encrypted` when it's on, `⚠ plaintext` when it isn't.
-2. **Use an unguessable room id.** Not `team` or `dev` — something no one would
-   stumble onto.
+```sh
+brew install ligus-ai/ligus/ligus
+ligus enroll 'hivews1:…' --token 'hrt1.…'
+ligus sync
+ligus register-worker --label team-worker      # prints the host id
+```
 
-To remove someone's access, **rotate**: pick a new workspace key (and/or room),
-and re-share it with everyone who should stay. The old key can no longer decrypt
-new traffic.
+Workspace runtimes carry credentials, so defining one needs **Admin**: every
+device drops a runtime defined by a lower role. Either give the worker's
+member Admin in the **People** pane for the setup and lower it afterwards, or
+define the runtime and agent from an Admin's device. On the worker:
 
-If a teammate enables a higher Claude permission mode (Settings → Multiuser
-sync → *Claude permissions*: `acceptEdits` / `bypassPermissions`), that lets the
-`claude` agent edit files / run commands on **their** machine without asking —
-it's local and off by default. Leave it on the safe default unless the
-workspace is trusted.
+```sh
+ligus add-runtime anthropic "Anthropic" anthropic claude-sonnet-4-6 --secret-ref anthropic
+ligus add-agent reviewer anthropic
+ligus set-agent-host reviewer <host id>
+ligus sync
+export LIGUS_WS_SECRET_anthropic=sk-ant-…       # matches --secret-ref; stays on this box
+ligus worker --label team-worker
+```
 
-## Free-tier expectations & when to upgrade
+Run it under systemd (see `deploy/ligus-serve/` for a unit to adapt) and
+consider:
 
-For a team of a few developers, the relay's load is negligible — events are
-small and infrequent, memory is ~1 KB per queued item, CPU is trivial. A single
-free `shared-cpu-1x` machine is plenty.
+- `LIGUS_MCP_MIN_ROLE` (default `contributor`): who can make the worker use
+  tools;
+- `LIGUS_WORKER_PERMISSION_MODE`: off (read-only) unless you want worker
+  turns to propose edits;
+- whoever administers the worker box can read the workspace.
 
-Move up when you hit one of these:
+See
+[Headless agents](../concepts/headless-agents.md).
 
-| Symptom | Why | Fix |
-|---|---|---|
-| Peers miss events after quiet periods | free host slept and dropped the in-memory queue | always-on machine (Fly.io min 1) |
-| You want events to survive a relay restart | state is in-memory only today | keep the machine up; durable storage is a tracked follow-up |
-| You need real accounts / SSO / audit | relay has no auth by design | a managed/enterprise relay — see [Pricing tiers](pricing.md) |
+## 6. Security checklist
 
-## Caveats (today's relay)
+- [ ] TLS in front of the relay; `LIGUS_RELAY_TOKEN_PUBKEY` set and verified with a `401`
+- [ ] issuer private key off the relay, in a password manager
+- [ ] tokens issued with an expiry, one per person and box
+- [ ] invites by GitHub handle where possible; invite codes only over trusted channels
+- [ ] roles set; few Admins
+- [ ] workspace runtimes use `--secret-ref`, not inline secrets
+- [ ] everyone's sync pill reads **live**, encrypted
+- [ ] relay backups scheduled ([Operations](operations.md))
 
-- **Single instance.** State is in memory — run exactly one machine, don't scale
-  out, and know that a restart drops anything peers haven't pulled yet.
-- **No authentication.** Security comes from the workspace key + an unguessable
-  room id (Step 5), not from the relay.
-- **Direct P2P / TURN** are tracked follow-ups; relay forwarding is the path that
-  works today and is all a small team needs.
+## Offboarding and incidents
 
-## Checklist
+Use **People → Remove & revoke** (Admin) to remove someone and rotate the
+workspace key for the remaining desktops; then revoke their relay token.
+Workspaces with headless workers need more; follow
+[Offboarding](../security/runbooks.md#offboarding).
 
-- [ ] One relay deployed, `/v1/health` returns `ok`
-- [ ] Relay URL + room + workspace key shared over a trusted channel
-- [ ] Every teammate's Settings → Multiuser sync pill reads `live · 🔒 encrypted`
-- [ ] Each developer has their own runtime credentials (claude login / API key / Ollama)
-- [ ] Room id is unguessable; everyone has the workspace key
+## Costs
+
+There's no shared inference bill: each member uses their own runtime, and
+workers use the keys you give them. The relay is small: a `shared-cpu-1x`
+machine with 256 to 512 MB handles a small team. See
+[Pricing tiers](pricing.md) for hosted options.

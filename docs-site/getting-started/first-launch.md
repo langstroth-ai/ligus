@@ -1,6 +1,6 @@
 # First launch
 
-Ligus ships as an unsigned desktop app (macOS / Windows / Linux). On first launch
+Ligus is a desktop app for macOS, Windows and Linux. On first launch
 you'll see a guided onboarding wizard that captures your identity, picks a
 workspace folder, and configures a runtime.
 
@@ -19,7 +19,9 @@ cargo tauri dev
 ```
 
 See [Building the dist](../ops/build.md) for per-OS details and cross-builds.
-Because builds are unsigned, first launch needs a nudge:
+Release DMGs for macOS (and the Homebrew cask) are signed and notarized, so
+they open normally. Windows and Linux release builds, and anything you build
+from source, are unsigned, so first launch needs a nudge:
 
 - **macOS:** right-click → **Open** (or `xattr -dr com.apple.quarantine /Applications/Ligus.app`).
 - **Windows:** SmartScreen → **More info → Run anyway**.
@@ -38,7 +40,7 @@ them off):
    root; everything agents do (file edits, command runs, git
    operations) is scoped to this directory.
 3. **Runtime** — choose the agent that generates replies: **Claude
-   Code**, an **OpenAI-compatible API** (OpenAI / OpenRouter / any
+   Code**, **Codex**, an **OpenAI-compatible API** (OpenAI / OpenRouter / any
    local OpenAI-style server), an **Anthropic API key**, or **Ollama**
    (offered only when a local Ollama daemon is detected). Ligus defaults
    the selection to whatever it finds installed. A **"Let agents edit
@@ -49,8 +51,8 @@ them off):
 4. **Team** — optional. If you have a relay endpoint, paste it here
    (and optionally name a team) so cross-network peers can sync. Skip
    to stay solo/local; you can add a relay later from Settings.
-5. **Appearance** — pick a theme (Pollen, Midnight, Studio, Harbor, or
-   Meadow) and light / dark / auto. It applies live as you choose, and
+5. **Appearance** — pick a theme (Pollen, Obsidian, Slate, Studio,
+   Harbor or Meadow) and light / dark / auto. It applies live as you choose, and
    you can change it anytime from **Settings → Appearance**.
 
 ![Onboarding runtime step](../images/onboarding-runtime.png){ width="720" }
@@ -65,14 +67,16 @@ button saves everything.
 
 After onboarding:
 
-- The app data dir `ai.ligus.desktop/` — your account + device
-  records (public bits) as JSON, private key seeds under `keys/`, and
-  `settings.json` (runtime/provider config, including any API keys you
-  paste into Settings).
+- The app data dir `ai.ligus.desktop/` — the event store `hive.db`
+  (every workspace's signed events), your account + device records
+  (public bits) in `identity.json`, private key seeds under `keys/`, and
+  `settings.json` (runtime/provider config, including any API keys and the
+  workspace keys you paste into Settings).
 - `<workspace>/ligus.config.toml` — optional file-based runtime +
   transport config.
-- `<workspace>/.ligus/` — the workspace's event store (signed envelopes)
-  and per-session state.
+- `<workspace>/.ligus/` — per-chat git worktrees (`worktrees/`), saved
+  patches of interrupted turns (`stopped-turns/`) and the workspace's
+  `runtimes.json` / `mcp-servers.json`.
 
 Everything is local. Nothing leaves your machine unless you
 explicitly configure a transport (relay endpoint or LAN discovery
@@ -101,8 +105,8 @@ See [Identity & devices](../concepts/identity.md) and
 
 ## Reset local data
 
-To start completely over on a device, use **Settings → Account → Danger
-zone → "Reset local data"**. It wipes this device's chats, identity, keys,
+To start completely over on a device, use **Settings → Danger zone →
+"Reset local data"**. It wipes this device's chats, identity, keys,
 settings, and workspaces, then relaunches Ligus fresh.
 
 This is the **supported way to start over** — uninstalling the app leaves

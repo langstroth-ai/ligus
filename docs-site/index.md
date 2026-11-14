@@ -43,6 +43,18 @@ machine. Ligus flips that:
 
     [:octicons-arrow-right-24: Start here](getting-started/first-launch.md)
 
+-   :material-server-network:{ .lg } **Deploy**
+
+    Solo, personal fleet with a phone, a team on a relay, Kubernetes.
+
+    [:octicons-arrow-right-24: Choose a deployment](deploy/index.md)
+
+-   :material-shield-lock:{ .lg } **Security**
+
+    What each component holds, the threat model, incident runbooks.
+
+    [:octicons-arrow-right-24: Security model](security/index.md)
+
 -   :material-graph:{ .lg } **Concepts**
 
     Workspaces, agents, MCP tools, permissions, identity.
@@ -75,16 +87,15 @@ append-only event log in SQLite; replies stream from your chosen runtime (the
 
 ## Project status
 
-Pre-release. The multi-runtime workspace + relay-forwarded multiuser sync are in
-place. Build from source with `cargo tauri build` (see
-[Building the dist](ops/build.md)); run a relay from
-[github.com/ligus-ai/relay](https://github.com/ligus-ai/relay).
-Release builds are **unsigned** for now — run from source or click through your
-OS's first-launch prompt.
+Ligus 2.0 is the current release (it was called Hive until 1.18; see
+[Upgrading from Hive 1.x](deploy/upgrade-from-hive.md)). The macOS app is
+signed and notarized and updates itself; Windows and Linux builds are
+unsigned. The headless `ligus` CLI ships for macOS and Linux through
+Homebrew. See [What's new](reference/whats-new.md).
 
 The reference relay is MIT-licensed and lives in its own repository,
-[github.com/ligus-ai/relay](https://github.com/ligus-ai/relay) (a small
-Go service). Direct peer-to-peer sync is implemented with **iroh** (see the
-**Direct peers (P2P)** section in Settings) and falls back to relay forwarding
-when a direct connection can't be established. The collaborative-text CRDT is a
-tracked follow-up.
+[github.com/ligus-ai/relay](https://github.com/ligus-ai/relay) (a small Go
+service); see [Self-hosting a relay](networking/self-host.md). Desktops that
+are contacts also sync directly peer to peer over **iroh**, falling back to
+the relay. Kubernetes support is in preview
+([Kubernetes](deploy/kubernetes.md)).

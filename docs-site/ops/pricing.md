@@ -2,7 +2,7 @@
 
 Ligus's tiers are distinguished by **which relay you connect to**, not by which
 app you run. The client is the same OSS binary everywhere; moving between tiers
-is a connection change in **Settings → Multiuser sync** (and, for paid tiers, an
+is a connection change in **Settings → Team sync** (and, for paid tiers, an
 entitlement on your org).
 
 | Tier | Who runs the relay | Cost | Notes |

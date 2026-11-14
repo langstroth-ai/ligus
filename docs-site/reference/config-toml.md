@@ -18,7 +18,7 @@ round-trip cleanly.
 
 > **Connection settings live elsewhere.** The relay URL, room, workspace key,
 > API key, and Claude permission mode are edited at runtime in
-> Settings → Team and persist to a `settings.json` in the app data
+> Settings → Team sync and persist to a `settings.json` in the app data
 > dir (not this file); the `[transport]` keys below only *seed* them on first
 > launch. The theme is stored per-device. See [Settings](../features/settings.md).
 
@@ -135,7 +135,7 @@ Routes the full envelope log through a relay.
 | `account_token_env` | string | Env var holding the relay access token to seed |
 
 Only `endpoint` and `account_token_env` are read from this block; the live
-relay URL, room, and workspace key are edited in Settings → Team.
+relay URL, room, and workspace key are edited in Settings → Team sync.
 
 ### `[sync]`
 
@@ -173,6 +173,8 @@ One block per LLM or CLI agent. See
 | `model_provider_id`             | string   | Optional sub-provider id (e.g. for `pi`)          |
 | `model_base_url`                | string   | Optional OpenAI-compatible base URL               |
 | `keep_alive`                    | string   | Optional keep-alive hint                          |
+| `think`                         | bool     | Optional thinking switch (Ollama)                 |
+| `max_tool_rounds`               | int      | Tool-loop rounds per turn (default 24, max 100)   |
 | `supports_embeddings`           | bool     | Whether the runtime can embed                     |
 | `supports_tools`                | bool     | Whether the runtime accepts tool calls            |
 | `context_window`                | int      | Optional context-window size                      |
