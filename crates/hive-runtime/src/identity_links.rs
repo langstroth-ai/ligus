@@ -381,12 +381,29 @@ pub fn is_public_ip(ip: IpAddr) -> bool {
                 return is_public_ip(IpAddr::V4(v4));
             }
             let s = v6.segments();
+            let v4_at = |hi: u16, lo: u16| std::net::Ipv4Addr::from(((hi as u32) << 16) | lo as u32);
+            // NAT64 (well-known prefix), the IPv4-compatible form and 6to4
+            // reach the IPv4 address they carry.
+            if s[0] == 0x64 && s[1] == 0xff9b && s[2..6] == [0, 0, 0, 0] {
+                return is_public_ip(IpAddr::V4(v4_at(s[6], s[7])));
+            }
+            if s[0..6] == [0, 0, 0, 0, 0, 0] && !v6.is_loopback() && !v6.is_unspecified() {
+                return is_public_ip(IpAddr::V4(v4_at(s[6], s[7])));
+            }
+            if s[0] == 0x2002 {
+                return is_public_ip(IpAddr::V4(v4_at(s[1], s[2])));
+            }
             !(v6.is_loopback()
                 || v6.is_unspecified()
                 || v6.is_multicast()
                 || (s[0] & 0xfe00) == 0xfc00
                 || (s[0] & 0xffc0) == 0xfe80
-                || (s[0] == 0x2001 && s[1] == 0x0db8))
+                || (s[0] == 0x2001 && s[1] == 0x0db8)
+                // Teredo, local-use NAT64, site-local, discard-only.
+                || (s[0] == 0x2001 && s[1] == 0)
+                || (s[0] == 0x64 && s[1] == 0xff9b)
+                || (s[0] & 0xffc0) == 0xfec0
+                || (s[0] == 0x100 && s[1..4] == [0, 0, 0]))
         }
     }
 }

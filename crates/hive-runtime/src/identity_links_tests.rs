@@ -755,3 +755,27 @@ async fn tangled_handle_shown_only_when_its_domain_names_the_did() {
     let s = check_link(&l, ctx(), &f, now(), None).await;
     assert!(matches!(&s, LinkStatus::Verified { handle: Some(h), .. } if h == "famous.example.com"), "{s:?}");
 }
+
+/// SSRF: IPv6 forms that carry an IPv4 address (NAT64, 6to4, the old
+/// IPv4-compatible form, Teredo) and the deprecated site-local range reach
+/// the same internal hosts as the IPv4 address itself.
+#[test]
+fn embedded_private_ipv4_in_ipv6_is_not_public() {
+    for bad in [
+        "64:ff9b::a9fe:a9fe",
+        "64:ff9b::7f00:1",
+        "64:ff9b:1::a00:1",
+        "2002:7f00:1::",
+        "2002:a9fe:a9fe::1",
+        "::7f00:1",
+        "::a9fe:a9fe",
+        "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+        "fec0::1",
+        "100::1",
+    ] {
+        assert!(!is_public_ip(bad.parse().unwrap()), "{bad}");
+    }
+    for good in ["64:ff9b::8c52:7003", "2002:8c52:7003::1", "2606:4700::1111"] {
+        assert!(is_public_ip(good.parse().unwrap()), "{good}");
+    }
+}
