@@ -507,3 +507,17 @@ fn an_admin_cannot_remove_an_owners_passkey() {
     assert!(r.is_err(), "an Admin removed the Owner's passkey: {r:?}");
     assert_eq!(ana.passkeys_of(wid, ana_account).unwrap().len(), 1);
 }
+
+/// The digest short id a person compares between the app and the passkey
+/// page must not be grindable: 32 bits are (an attacker who can draft events
+/// varies the event id until a different event shows the same short id).
+/// 64 bits, and it is the prefix of the very challenge signed.
+#[test]
+fn digest_short_id_is_64_bits_of_the_challenge() {
+    let (mut svc, wid, _key, _rec) = on_rules_v2();
+    let cfg = workspace_config_session_id(wid);
+    svc.capture_presence(true);
+    assert!(svc.add_member(cfg, wid, member("gus", WorkspaceRole::Viewer)).is_err());
+    let draft = svc.take_presence_draft().unwrap();
+    assert_eq!(draft.request.digest_short, hive_core::keys::hex(&draft.request.challenge[..8]));
+}

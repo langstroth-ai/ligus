@@ -56,6 +56,9 @@ pub struct PresencePrompt {
     pub op: String,
 }
 
+/// (The page shows the digest short id it computes from `c` itself, never
+/// one from the link, so it is not passed.)
+///
 /// The browser's result, as the page submits it.
 #[derive(Debug, Default)]
 struct HandOff {
@@ -194,11 +197,10 @@ fn returned_challenge(client_data_b64: &str) -> Option<Vec<u8>> {
 /// `navigator.credentials.get` over `challenge` in the browser.
 pub fn browser_get(app: &AppHandle, req: &PresenceRequest) -> Result<PresenceAssertion, String> {
     let fragment = format!(
-        "op=get&c={}&cred={}&k={}&d={}&s={}",
+        "op=get&c={}&cred={}&k={}&s={}",
         b64url(&req.challenge),
         urlencode(&req.credential_ids.join(",")),
         urlencode(&req.kind),
-        urlencode(&req.digest_short),
         urlencode(&req.summary),
     );
     let prompt = PresencePrompt { kind: req.kind.clone(), summary: req.summary.clone(), digest_short: req.digest_short.clone(), op: "get".into() };
@@ -222,12 +224,11 @@ pub fn browser_get(app: &AppHandle, req: &PresenceRequest) -> Result<PresenceAss
 /// its proof (the attestation object rides in `authenticator_data`).
 fn browser_create(app: &AppHandle, req: &PresenceRequest, user_name: &str) -> Result<PresenceAssertion, String> {
     let fragment = format!(
-        "op=create&c={}&u={}&un={}&x={}&d={}",
+        "op=create&c={}&u={}&un={}&x={}",
         b64url(&req.challenge),
         b64url(req.account_id.as_bytes()),
         urlencode(user_name),
         urlencode(&req.credential_ids.join(",")),
-        urlencode(&req.digest_short),
     );
     let prompt = PresencePrompt {
         kind: "passkeyRegistered".into(),
@@ -324,7 +325,7 @@ pub async fn passkey_register(app: AppHandle, label: String) -> Result<(), Strin
             kind: "passkeyRegistered".into(),
             account_id: account,
             credential_ids: existing.clone(),
-            digest_short: hive_core::keys::hex(&challenge[..4]),
+            digest_short: hive_core::keys::hex(&challenge[..8]),
             summary: "Create a Ligus passkey".into(),
         };
         let att = browser_create(&app, &create_req, &name)?;
