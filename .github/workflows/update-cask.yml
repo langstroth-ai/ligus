@@ -18,6 +18,10 @@ on:
         description: "Release tag (e.g. v1.2.2)"
         required: true
 
+# The job only reads a public release asset and pushes with TAP_TOKEN.
+permissions:
+  contents: read
+
 jobs:
   bump:
     runs-on: macos-latest
