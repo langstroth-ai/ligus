@@ -13,7 +13,8 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use hive_runtime::ligus_auth::{self, DeviceKey, DeviceSigner, Poll, TokenCell};
-use hive_runtime::{FileKeyVault, IdentityStore};
+use hive_runtime::secret_store::StoreKeyVault;
+use hive_runtime::IdentityStore;
 
 static CELL: OnceLock<TokenCell> = OnceLock::new();
 
@@ -24,7 +25,7 @@ pub fn cell() -> Option<TokenCell> {
 
 fn signer(data_dir: &Path) -> Result<Arc<dyn DeviceSigner>> {
     std::fs::create_dir_all(data_dir)?;
-    let identity = IdentityStore::new(data_dir, FileKeyVault::new(data_dir));
+    let identity = IdentityStore::new(data_dir, StoreKeyVault::for_data_dir(data_dir));
     let stored = identity.bootstrap("hive-cli", "hive-cli", "hive-cli")?;
     let kp = identity.device_keypair(stored.device.id)?;
     Ok(Arc::new(DeviceKey::new(stored.device.id, kp)))

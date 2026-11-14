@@ -51,6 +51,7 @@ pub mod retrieval;
 pub mod review;
 pub mod sandbox;
 pub mod secret_redact;
+pub mod secret_store;
 pub mod sse;
 pub mod sync_engine;
 pub mod tool_loop;

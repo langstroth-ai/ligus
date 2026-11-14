@@ -2549,6 +2549,7 @@ dependencies = [
  "reqwest 0.12.28",
  "rusqlite",
  "seccompiler",
+ "security-framework",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -2560,6 +2561,7 @@ dependencies = [
  "url",
  "uuid",
  "walkdir",
+ "zeroize",
 ]
 
 [[package]]

@@ -50,6 +50,8 @@ const FOLD_ENV_DENYLIST: &[(&str, &str, &str)] = &[
     ("k", "LIGUS_MCP_MAX_ASKS", "per-turn Ligus tool budget (device-local host policy)"),
     ("k", "LIGUS_MCP_MAX_READ_MESSAGES", "per-turn Ligus tool budget (device-local host policy)"),
     ("\"LIGUS_MCP_MAX_SPEND_USD\"", "LIGUS_MCP_MAX_SPEND_USD", "per-turn Ligus spend budget (device-local host policy)"),
+    ("\"LIGUS_SECRET_BACKEND\"", "LIGUS_SECRET_BACKEND", "which OS secret store keeps this device's secrets (B2)"),
+    ("\"LIGUS_SECRETS_DIR\"", "LIGUS_SECRETS_DIR", "where a chart mounts its Secret files (B2)"),
 ];
 
 fn rs_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {

@@ -29,7 +29,7 @@ use hive_proto::{
 use hive_runtime::provider::anthropic::AnthropicResponse;
 use hive_runtime::tool_loop::{self, MessagesApi, ToolExecutor};
 use hive_runtime::{
-    chat_service::ChatService, dispatch, identity_store::FileKeyVault, mcp::McpTransport, mentions::parse_mentions,
+    chat_service::ChatService, dispatch, mcp::McpTransport, secret_store::StoreKeyVault, mentions::parse_mentions,
     pending_mentions, prompt, resolve_manifest_url, turns_with_summary, vault_fetcher, AnthropicClient, ChatTurn,
     EventStore, IdentityStore, McpRegistry, McpServerSpec, ProviderError, ResolvedRuntime,
 };
@@ -101,7 +101,7 @@ struct AppState {
     host_presence: hive_runtime::HostPresence,
     /// Workspace guards kept in memory (leases held, heartbeats seen).
     guards: crate::guards::GuardRuntime,
-    identity: IdentityStore<FileKeyVault>,
+    identity: IdentityStore<StoreKeyVault>,
     data_dir: PathBuf,
     base_runtimes: Mutex<Vec<RuntimeTarget>>,
     managed_runtimes: Mutex<Vec<RuntimeTarget>>,
@@ -435,6 +435,7 @@ struct LiveSettings {
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct McpOAuthEntry {
+    #[serde(default)]
     access_token: String,
     #[serde(default)]
     refresh_token: Option<String>,
@@ -902,31 +903,51 @@ fn settings_file(data_dir: &std::path::Path) -> PathBuf {
 
 /// `settings.json` holds provider keys and OAuth tokens: owner-only (0600)
 /// and written atomically, so a crash never leaves it truncated.
+/// Where `LiveSettings` keeps secrets (B2): these go to the OS secret store,
+/// and `settings.json` holds `{"set": true}` in their place.
+const SETTINGS_SECRETS: hive_runtime::secret_store::SecretPaths = &[
+    "relay_access_token",
+    "workspace_passphrase",
+    "relay_issuer_key",
+    "api_key",
+    "p2p_secret",
+    "ka_secret",
+    "github_token",
+    "provider_keys/*",
+    "mcp_oauth/*/accessToken",
+    "mcp_oauth/*/refreshToken",
+    "mcp_oauth/*/clientSecret",
+    "mcp_bearer_tokens/*",
+    "workspaces[room]/key",
+    "workspaces[room]/ek",
+];
+
 fn save_settings(data_dir: &std::path::Path, settings: &LiveSettings) {
-    if let Ok(v) = serde_json::to_value(settings) {
-        hive_runtime::secret_redact::register_json_secrets(&v);
-    }
-    if let Ok(bytes) = serde_json::to_vec_pretty(settings) {
-        if let Err(e) = hive_runtime::private_file::write_private_atomic(&settings_file(data_dir), &bytes) {
-            tracing::warn!(target: "settings", "couldn't save settings: {e}");
-        }
+    let Ok(v) = serde_json::to_value(settings) else { return };
+    hive_runtime::secret_redact::register_json_secrets(&v);
+    let store = hive_runtime::secret_store::for_data_dir(data_dir);
+    if let Err(e) =
+        hive_runtime::secret_store::save_settings_json(&settings_file(data_dir), &*store, "settings", v, SETTINGS_SECRETS)
+    {
+        tracing::warn!(target: "settings", "couldn't save settings: {e}");
     }
 }
 
-/// Load persisted settings, or seed the file from `env_seed` on first launch.
+/// Load persisted settings (secrets from the OS secret store), or seed the
+/// file from `env_seed` on first launch.
 fn load_or_seed_settings(data_dir: &std::path::Path, env_seed: LiveSettings) -> LiveSettings {
     hive_runtime::secret_redact::register_env_secrets();
-    match std::fs::read_to_string(settings_file(data_dir)) {
-        Ok(text) => {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                hive_runtime::secret_redact::register_json_secrets(&v);
-            }
-            serde_json::from_str(&text).unwrap_or(env_seed)
+    if !settings_file(data_dir).exists() {
+        save_settings(data_dir, &env_seed);
+        return env_seed;
+    }
+    let store = hive_runtime::secret_store::for_data_dir(data_dir);
+    match hive_runtime::secret_store::load_settings_json(&settings_file(data_dir), &*store, "settings", SETTINGS_SECRETS) {
+        Some(v) => {
+            hive_runtime::secret_redact::register_json_secrets(&v);
+            serde_json::from_value(v).unwrap_or(env_seed)
         }
-        Err(_) => {
-            save_settings(data_dir, &env_seed);
-            env_seed
-        }
+        None => env_seed,
     }
 }
 
@@ -11055,7 +11076,11 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         let _ = std::fs::remove_file(&reset_marker);
     }
 
-    let identity = IdentityStore::new(&data_dir, FileKeyVault::new(&data_dir));
+    // B2: Ligus's own secrets (identity seeds, settings secrets) live in the OS
+    // secret store from here on: a dedicated keychain on macOS, the Secret
+    // Service on Linux, owner-only files elsewhere (with a warning).
+    hive_runtime::secret_store::init_for_data_dir(&data_dir, None);
+    let identity = IdentityStore::new(&data_dir, StoreKeyVault::for_data_dir(&data_dir));
     let stored = identity.bootstrap("You", "you", "This device").map_err(map_err)?;
     let device_kp = identity.device_keypair(stored.device.id).map_err(map_err)?;
     let account_kp = identity.account_keypair(stored.account.id).map_err(map_err)?;
@@ -11068,7 +11093,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
     let mut service = ChatService::new(store, stored.device.id, device_kp, account_kp, stored.account.actor());
     // Agents bound to this device sign their own output with keys it
     // certifies (A3), kept with this device's other keys.
-    service.set_agent_vault(Box::new(FileKeyVault::new(&data_dir)));
+    service.set_agent_vault(Box::new(StoreKeyVault::for_data_dir(&data_dir)));
 
     // Restore the folder the user last chose (persisted by `set_workspace_root`);
     // failing that, adopt the process cwd ONLY when it's clearly a project we were
@@ -17426,5 +17451,91 @@ mod synced_dispatch_tests {
         assert!(user_turn_answered(&s, a_id));
         // A deleted trigger has nothing left to answer.
         assert!(user_turn_answered(&s, Uuid::new_v4()));
+    }
+}
+
+#[cfg(test)]
+mod settings_secret_tests {
+    use super::*;
+
+    /// B2: every secret `LiveSettings` holds goes to the secret store;
+    /// `settings.json` keeps `{"set": true}`, and the file is owner-only.
+    #[test]
+    fn no_secret_values_in_settings_json() {
+        let dir = std::env::temp_dir().join(format!("ligus-settings-secrets-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let secret = |n: &str| format!("secret-value-{n}-{}", Uuid::new_v4().simple());
+        let mut s = LiveSettings {
+            relay_access_token: Some(secret("relay")),
+            workspace_passphrase: Some(secret("pass")),
+            relay_issuer_key: Some(secret("issuer")),
+            api_key: Some(secret("api")),
+            p2p_secret: Some(secret("p2p")),
+            ka_secret: Some(secret("ka")),
+            github_token: Some(secret("gh")),
+            ..LiveSettings::default()
+        };
+        s.provider_keys.insert("anthropic".into(), secret("anthropic"));
+        s.mcp_bearer_tokens.insert("rdna".into(), secret("bearer"));
+        s.mcp_oauth.insert(
+            "linear".into(),
+            McpOAuthEntry {
+                access_token: secret("oauth-access"),
+                refresh_token: Some(secret("oauth-refresh")),
+                client_secret: Some(secret("oauth-client")),
+                client_id: Some("public-client".into()),
+                ..Default::default()
+            },
+        );
+        s.workspaces.push(WorkspaceConn {
+            name: "Home".into(),
+            relay_url: "https://relay.example".into(),
+            room: "home".into(),
+            key: Some(secret("ws-key")),
+            icon: None,
+            dm_account: None,
+            founder_actor_id: None,
+            fk: None,
+            inv: None,
+            ek: vec![hive_runtime::keyring::DeliveredKey::new(1, &[0x5a; 32])],
+        });
+        save_settings(&dir, &s);
+        let text = std::fs::read_to_string(settings_file(&dir)).unwrap();
+        for v in [
+            s.relay_access_token.clone(),
+            s.workspace_passphrase.clone(),
+            s.relay_issuer_key.clone(),
+            s.api_key.clone(),
+            s.p2p_secret.clone(),
+            s.ka_secret.clone(),
+            s.github_token.clone(),
+            s.provider_keys.get("anthropic").cloned(),
+            s.mcp_bearer_tokens.get("rdna").cloned(),
+            Some(s.mcp_oauth["linear"].access_token.clone()),
+            s.mcp_oauth["linear"].refresh_token.clone(),
+            s.mcp_oauth["linear"].client_secret.clone(),
+            s.workspaces[0].key.clone(),
+            Some(s.workspaces[0].ek[0].k.clone()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            assert!(!text.contains(&v), "a secret reached settings.json");
+        }
+        assert!(text.contains("public-client"), "non-secrets stay in the file");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(settings_file(&dir)).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        let back = load_or_seed_settings(&dir, LiveSettings::default());
+        assert_eq!(back.relay_access_token, s.relay_access_token);
+        assert_eq!(back.ka_secret, s.ka_secret);
+        assert_eq!(back.provider_keys, s.provider_keys);
+        assert_eq!(back.mcp_oauth["linear"].refresh_token, s.mcp_oauth["linear"].refresh_token);
+        assert_eq!(back.workspaces[0].key, s.workspaces[0].key);
+        assert_eq!(back.workspaces[0].ek, s.workspaces[0].ek);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

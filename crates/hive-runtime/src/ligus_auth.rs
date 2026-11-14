@@ -199,9 +199,17 @@ pub fn session_path(dir: &Path) -> PathBuf {
     dir.join(SESSION_FILE)
 }
 
+/// Where a session keeps its tokens (B2): the OS secret store (scope
+/// `auth`); the session file holds `{"set": true}` in their place.
+const SESSION_SECRETS: crate::secret_store::SecretPaths = &["refresh_token", "access_token"];
+
 pub fn load_session(dir: &Path) -> Option<Session> {
-    let raw = std::fs::read(session_path(dir)).ok()?;
-    let s: Session = serde_json::from_slice(&raw).ok()?;
+    let store = crate::secret_store::for_data_dir(dir);
+    let v = crate::secret_store::load_settings_json(&session_path(dir), &*store, "auth", SESSION_SECRETS)?;
+    let s: Session = serde_json::from_value(v).ok()?;
+    if s.refresh_token.is_empty() {
+        return None;
+    }
     register_secrets(&s);
     Some(s)
 }
@@ -212,30 +220,20 @@ fn register_secrets(s: &Session) {
     crate::secret_redact::register(&s.refresh_token);
 }
 
-/// Write the session atomically with owner-only permissions.
+/// Write the session: its tokens to the OS secret store, the rest to the
+/// session file (atomic, owner-only).
 pub fn save_session(dir: &Path, s: &Session) -> Result<(), AuthError> {
     register_secrets(s);
     std::fs::create_dir_all(dir).map_err(|e| AuthError::Io(e.to_string()))?;
-    let tmp = dir.join(format!(".{SESSION_FILE}.{}", std::process::id()));
-    let body = serde_json::to_vec_pretty(s).map_err(|e| AuthError::Io(e.to_string()))?;
-    {
-        use std::io::Write;
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        let mut f = opts.open(&tmp).map_err(|e| AuthError::Io(e.to_string()))?;
-        f.write_all(&body)
-            .map_err(|e| AuthError::Io(e.to_string()))?;
-        f.sync_all().map_err(|e| AuthError::Io(e.to_string()))?;
-    }
-    std::fs::rename(&tmp, session_path(dir)).map_err(|e| AuthError::Io(e.to_string()))
+    let store = crate::secret_store::for_data_dir(dir);
+    let v = serde_json::to_value(s).map_err(|e| AuthError::Io(e.to_string()))?;
+    crate::secret_store::save_settings_json(&session_path(dir), &*store, "auth", v, SESSION_SECRETS)
+        .map_err(|e| AuthError::Io(e.to_string()))
 }
 
 pub fn delete_session(dir: &Path) {
+    let store = crate::secret_store::for_data_dir(dir);
+    let _ = crate::secret_store::persist(&*store, "auth", &Default::default());
     let _ = std::fs::remove_file(session_path(dir));
 }
 

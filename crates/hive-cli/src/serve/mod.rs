@@ -272,7 +272,7 @@ pub fn cmd_enroll(cfg: &Config, opts: &ServeOptions, new_device: bool) -> Result
         ),
         (_, true) => {
             drop(svc);
-            let ids = hive_runtime::IdentityStore::new(&cfg.data_dir, hive_runtime::FileKeyVault::new(&cfg.data_dir));
+            let ids = hive_runtime::IdentityStore::new(&cfg.data_dir, hive_runtime::secret_store::StoreKeyVault::for_data_dir(&cfg.data_dir));
             let rotated = ids.rotate_device()?;
             println!(
                 "This box has a new device key ({}). Restart ligus serve so it uses it (e.g. systemctl --user restart hive-serve).",
