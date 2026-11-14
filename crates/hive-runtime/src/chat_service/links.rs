@@ -149,6 +149,43 @@ impl WorkspaceLinks {
     }
 }
 
+/// One identity link as this device shows it: the link, every workspace it
+/// is published in, and the account key it is checked under (the first
+/// workspace's).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShownLink {
+    pub link: IdentityLink,
+    pub workspaces: Vec<Uuid>,
+    pub account_key: Vec<u8>,
+}
+
+/// The links `account` shows across the workspaces this device holds, only
+/// from workspaces whose log registers the account key `accept_key` agrees
+/// with (this device's own key for its account; the key the co-member
+/// directory agrees on for anyone else). A workspace founded by someone
+/// else can register any key under any account id, and links checked under
+/// that key would show the founder's forge accounts as the account's.
+/// Links are merged across workspaces by the identity they name (the link
+/// id, forge, subject, method and signing key), never by the link id alone,
+/// which the publisher chooses.
+pub fn links_for_account(per_ws: &[(Uuid, WorkspaceLinks)], account: Uuid, accept_key: impl Fn(&[u8]) -> bool) -> Vec<ShownLink> {
+    let same = |a: &IdentityLink, b: &IdentityLink| {
+        a.link_id == b.link_id && a.subject_key() == b.subject_key() && a.method == b.method && a.key_fingerprint == b.key_fingerprint
+    };
+    let mut out: Vec<ShownLink> = Vec::new();
+    for (ws, wl) in per_ws {
+        let Some(key) = wl.account_keys.get(&account).filter(|k| accept_key(k)).cloned() else { continue };
+        for l in wl.of(account) {
+            match out.iter_mut().find(|s| same(&s.link, l)) {
+                Some(s) if !s.workspaces.contains(ws) => s.workspaces.push(*ws),
+                Some(_) => {}
+                None => out.push(ShownLink { link: l.clone(), workspaces: vec![*ws], account_key: key.clone() }),
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use hive_core::{ActorIdentity, ActorKind, SigningKeypair};
@@ -211,6 +248,54 @@ mod tests {
         assert!(svc.publish_identity_link(wid, l).is_err());
         let d = LinkDraft::new("github", "github.com", "1", "a", LinkMethod::SshSig);
         assert!(svc.draft_identity_link(wid, &d).is_err());
+    }
+
+    /// A workspace whose log registers another key for an account (an
+    /// attacker-founded workspace can register any key under any account
+    /// id) must not put links on that account's People entry: they would be
+    /// checked under the attacker's key and could show the attacker's forge
+    /// account as the victim's, verified. Links are also merged by the
+    /// identity they name, not by the publisher-chosen link id.
+    #[test]
+    fn links_from_a_workspace_with_another_account_key_are_not_shown() {
+        let victim = Uuid::new_v4();
+        let (good, evil) = (vec![1u8; 32], vec![2u8; 32]);
+        let link = |id: u128, subject: &str| {
+            let d = LinkDraft::new("github", "github.com", subject, subject, LinkMethod::SshSig);
+            IdentityLink {
+                link_id: Uuid::from_u128(id),
+                account_id: victim,
+                provider: d.provider,
+                host: d.host,
+                subject_id: d.subject_id,
+                handle_at_link: d.handle,
+                method: d.method,
+                statement: String::new(),
+                proof: String::new(),
+                key_fingerprint: String::new(),
+                nonce: String::new(),
+                issued_at: d.issued_at,
+                expires_at: d.expires_at,
+            }
+        };
+        let wl = |key: &Vec<u8>, links: Vec<IdentityLink>| WorkspaceLinks {
+            links: BTreeMap::from([(victim, links.into_iter().map(|l| (l.link_id, l)).collect())]),
+            account_keys: BTreeMap::from([(victim, key.clone())]),
+        };
+        let (w1, w2, w3, w4) = (Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3), Uuid::from_u128(4));
+        let per_ws = vec![
+            // The attacker's workspace first: its links must not win the merge.
+            (w2, wl(&evil, vec![link(9, "666"), link(10, "667")])),
+            (w1, wl(&good, vec![link(9, "100")])),
+            (w3, wl(&good, vec![link(9, "100")])),
+            // Same link id, another identity: shown on its own.
+            (w4, wl(&good, vec![link(9, "200")])),
+        ];
+        let shown = links_for_account(&per_ws, victim, |k| k == good.as_slice());
+        let got: Vec<(&str, Vec<Uuid>)> = shown.iter().map(|s| (s.link.subject_id.as_str(), s.workspaces.clone())).collect();
+        assert_eq!(got, vec![("100", vec![w1, w3]), ("200", vec![w4])]);
+        assert!(shown.iter().all(|s| s.account_key == good));
+        assert!(links_for_account(&per_ws, victim, |_| false).is_empty(), "no agreed key: no links");
     }
 
     #[test]

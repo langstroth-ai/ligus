@@ -318,7 +318,9 @@ pub(crate) struct LinkDto {
 }
 
 /// The links of `account` across the workspaces this device holds, merged
-/// by link id, each with its cached status for the first workspace.
+/// by the identity they name, each with its cached status for the first
+/// workspace. Only workspaces whose log registers the account's agreed key
+/// count (`chat_service::links_for_account`).
 /// A link as shown, the workspace its status is checked in, the link, and
 /// the account key there.
 type ShownLink = (LinkDto, Uuid, IdentityLink, Option<Vec<u8>>);
@@ -330,36 +332,61 @@ fn links_of(state: &AppState, account: Uuid) -> Vec<ShownLink> {
     };
     let contact_links = state.settings.lock().unwrap().identity_links.contact_links.clone();
     let svc = state.service.lock().unwrap();
-    let mut by_id: BTreeMap<Uuid, ShownLink> = BTreeMap::new();
-    for (ws, name) in conns {
-        let Ok(wl) = svc.identity_links(ws) else { continue };
-        for l in wl.of(account) {
-            let e = by_id.entry(l.link_id).or_insert_with(|| {
-                let key = wl.account_keys.get(&account).cloned();
-                let status = svc.store().get_check(&identity_links::cache_key(l, ws, &key.clone().unwrap_or_default())).map(|c| c.status);
-                (
-                    LinkDto {
-                        link_id: l.link_id.to_string(),
-                        provider: l.provider.clone(),
-                        host: l.host.clone(),
-                        subject_id: l.subject_id.clone(),
-                        handle: l.handle_at_link.clone(),
-                        method: l.method,
-                        issued_at: l.issued_at,
-                        expires_at: l.expires_at,
-                        workspaces: Vec::new(),
-                        status,
-                        discoverable: contact_links.iter().any(|c| c.subject_key() == l.subject_key()),
-                    },
-                    ws,
-                    l.clone(),
-                    key,
-                )
-            });
-            e.0.workspaces.push(crate::people::SharedWorkspaceDto { id: ws.to_string(), name: name.clone() });
+    let per_ws: Vec<(Uuid, hive_runtime::chat_service::WorkspaceLinks)> =
+        conns.iter().filter_map(|(ws, _)| svc.identity_links(*ws).ok().map(|wl| (*ws, wl))).collect();
+    let me = svc.author().account_id;
+    // The key this account's links must be checked under: this device's own
+    // for its account; the one the co-member directory agrees on (no
+    // conflict) for anyone else; on a delegated device, the one every
+    // workspace agrees on.
+    let agreed: Option<Vec<u8>> = if me == Some(account) && !svc.is_delegated() {
+        Some(svc.account_public_key().to_vec())
+    } else {
+        let keys: std::collections::BTreeSet<Vec<u8>> =
+            per_ws.iter().filter_map(|(_, wl)| wl.account_keys.get(&account).cloned()).collect();
+        let fp = (me != Some(account))
+            .then(|| {
+                hive_runtime::directory_trust::co_members(svc.store(), me.unwrap_or_default())
+                    .into_iter()
+                    .find(|c| c.account_id == account)
+                    .filter(|c| !c.key_conflict)
+                    .and_then(|c| c.fingerprint)
+            })
+            .flatten();
+        match fp {
+            Some(fp) => keys.into_iter().find(|k| hive_runtime::envelope_verifier::FounderPin::fingerprint_hex(k).eq_ignore_ascii_case(&fp)),
+            None if me == Some(account) && keys.len() == 1 => keys.into_iter().next(),
+            None => None,
         }
-    }
-    by_id.into_values().collect()
+    };
+    let Some(agreed) = agreed else { return Vec::new() };
+    let names: BTreeMap<Uuid, String> = conns.into_iter().collect();
+    hive_runtime::chat_service::links_for_account(&per_ws, account, |k| k == agreed.as_slice())
+        .into_iter()
+        .map(|shown| {
+            let l = shown.link;
+            let ws = shown.workspaces[0];
+            let status = svc.store().get_check(&identity_links::cache_key(&l, ws, &shown.account_key)).map(|c| c.status);
+            let dto = LinkDto {
+                link_id: l.link_id.to_string(),
+                provider: l.provider.clone(),
+                host: l.host.clone(),
+                subject_id: l.subject_id.clone(),
+                handle: l.handle_at_link.clone(),
+                method: l.method,
+                issued_at: l.issued_at,
+                expires_at: l.expires_at,
+                workspaces: shown
+                    .workspaces
+                    .iter()
+                    .map(|w| crate::people::SharedWorkspaceDto { id: w.to_string(), name: names.get(w).cloned().unwrap_or_default() })
+                    .collect(),
+                status,
+                discoverable: contact_links.iter().any(|c| c.subject_key() == l.subject_key()),
+            };
+            (dto, ws, l, Some(shown.account_key))
+        })
+        .collect()
 }
 
 /// Your linked accounts, with the cached status of each.
