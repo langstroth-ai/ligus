@@ -89,6 +89,9 @@ pub async fn run_with(
     mut on_delta: impl FnMut(String),
 ) -> Result<String, ProviderError> {
     let mut cmd = Command::new(program);
+    for k in hive_core::process_util::ligus_secret_env_names() {
+        cmd.env_remove(k);
+    }
     cmd.args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -275,6 +278,23 @@ mod tests {
         assert!(out.contains("hello"));
         assert!(out.contains("world"));
         assert!(!deltas.is_empty());
+    }
+
+    /// Ligus's own secrets (workspace E2EE key, relay/ntfy/registration
+    /// tokens, workspace runtime secrets) must never reach an agent CLI: any
+    /// member who can prompt it could have it print its environment.
+    #[tokio::test]
+    async fn agent_children_never_inherit_ligus_secrets() {
+        std::env::set_var("LIGUS_WS_SECRET_SCRUBTEST", "ws-secret-value");
+        std::env::set_var("HIVE_SCRUBTEST_ACCESS_TOKEN", "relay-token-value");
+        std::env::set_var("LIGUS_SCRUBTEST_PLAIN", "kept");
+        let out = run("sh", &["-c".into(), "env".into()], None, "", |_| {}).await.unwrap();
+        std::env::remove_var("LIGUS_WS_SECRET_SCRUBTEST");
+        std::env::remove_var("HIVE_SCRUBTEST_ACCESS_TOKEN");
+        std::env::remove_var("LIGUS_SCRUBTEST_PLAIN");
+        assert!(!out.contains("ws-secret-value"), "workspace secret reached the agent");
+        assert!(!out.contains("relay-token-value"), "token reached the agent");
+        assert!(out.contains("LIGUS_SCRUBTEST_PLAIN=kept"), "non-secret settings still pass");
     }
 
     #[tokio::test]

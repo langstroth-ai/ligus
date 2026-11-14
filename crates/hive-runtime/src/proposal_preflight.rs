@@ -166,7 +166,10 @@ fn shell(cmdline: &str) -> std::process::Command {
 /// Run `cmdline` in `dir`, bounded by `timeout`. Ok(true) = exit 0.
 fn run_bounded(dir: &Path, cmdline: &str, timeout: Duration) -> Result<bool, String> {
     use std::process::Stdio;
-    let mut child = shell(cmdline)
+    let mut sh = shell(cmdline);
+    // It runs the alternative's code (teammate or agent content).
+    hive_core::process_util::scrub_ligus_secrets(&mut sh);
+    let mut child = sh
         .current_dir(dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())

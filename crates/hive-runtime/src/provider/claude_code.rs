@@ -237,6 +237,9 @@ pub async fn stream_reply(
     args.extend(extra_args.iter().cloned());
 
     let mut cmd = Command::new(program);
+    for k in hive_core::process_util::ligus_secret_env_names() {
+        cmd.env_remove(k);
+    }
     cmd.args(&args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -369,6 +372,22 @@ pub async fn stream_reply(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn claude_code_child_never_inherits_ligus_secrets() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("env.txt");
+        let fake = dir.path().join("claude");
+        std::fs::write(&fake, format!("#!/bin/sh\nenv > '{}'\n", out.display())).unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::env::set_var("LIGUS_SCRUBTEST_WORKSPACE_KEY", "e2ee-passphrase-value");
+        let _ = stream_reply(fake.to_str().unwrap(), &[], None, &[], None, &[], |_| {}, |_| {}).await;
+        std::env::remove_var("LIGUS_SCRUBTEST_WORKSPACE_KEY");
+        let env = std::fs::read_to_string(&out).unwrap();
+        assert!(!env.contains("e2ee-passphrase-value"), "workspace key reached claude");
+    }
 
     #[test]
     fn parses_partial_message_text_delta() {

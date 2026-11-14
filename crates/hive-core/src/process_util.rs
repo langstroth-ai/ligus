@@ -45,6 +45,31 @@ pub fn no_console_window(cmd: &mut Command) {
     let _ = cmd;
 }
 
+/// Names of the variables in this process's environment that hold Ligus's
+/// own secrets: any `LIGUS_*`/`HIVE_*` variable whose name says key, token,
+/// secret or password (the workspace E2EE key, relay access/GitHub/issuer
+/// tokens, the tunnel registration token, ntfy, `LIGUS_WS_SECRET_*`
+/// workspace-runtime secrets, `LIGUS_PROVIDER_API_KEY`). Agent CLIs, MCP
+/// servers, pre-flight tests and git never need them; a key a runtime does
+/// need is passed to it explicitly.
+pub fn ligus_secret_env_names() -> Vec<std::ffi::OsString> {
+    std::env::vars_os()
+        .map(|(k, _)| k)
+        .filter(|k| {
+            let n = k.to_string_lossy().to_ascii_uppercase();
+            (n.starts_with("LIGUS_") || n.starts_with("HIVE_"))
+                && ["KEY", "TOKEN", "SECRET", "PASSWORD", "PASSPHRASE"].iter().any(|w| n.contains(w))
+        })
+        .collect()
+}
+
+/// Remove [`ligus_secret_env_names`] from a child's environment.
+pub fn scrub_ligus_secrets(cmd: &mut Command) {
+    for k in ligus_secret_env_names() {
+        cmd.env_remove(k);
+    }
+}
+
 /// `git` for Hive's own operations on repositories whose content (and, in an
 /// agent's turn tree, whose files) may be attacker-written. Repo hooks and
 /// fsmonitor never run: a husky-style `core.hooksPath` points into the work
@@ -54,6 +79,7 @@ pub fn no_console_window(cmd: &mut Command) {
 pub fn git() -> Command {
     let mut cmd = command("git");
     harden_git(&mut cmd);
+    scrub_ligus_secrets(&mut cmd);
     cmd
 }
 

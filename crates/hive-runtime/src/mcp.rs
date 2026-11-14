@@ -407,6 +407,9 @@ async fn call_tool_stdio(
     use tokio::process::Command;
 
     let mut cmd = Command::new(command);
+    for k in hive_core::process_util::ligus_secret_env_names() {
+        cmd.env_remove(k);
+    }
     // A caller that gives up (a timeout drops this future) must not leave the
     // server process running.
     cmd.args(args)
@@ -455,6 +458,9 @@ async fn list_tools_stdio(command: &str, args: &[String]) -> Result<Vec<McpTool>
     use tokio::process::Command;
 
     let mut cmd = Command::new(command);
+    for k in hive_core::process_util::ligus_secret_env_names() {
+        cmd.env_remove(k);
+    }
     // A caller that gives up (a timeout drops this future) must not leave the
     // server process running.
     cmd.args(args)
