@@ -248,8 +248,18 @@ policy-template *editors* are runtime-entitlement client UI. See
 [`hive-issue-trackers.md`](https://github.com/ligus-ai/ligus/blob/main/docs/hive-issue-trackers.md) for the per-workspace issue/PR
 integration (also capability-gated).
 
-## GitHub OAuth app (needed for P1 sign-in)
+## Code-host device sign-in (optional)
 
-Create a GitHub OAuth App (Settings → Developer settings → OAuth Apps), enable
-**Device Flow**, and set its **client ID** as `LIGUS_GITHUB_CLIENT_ID` (env) or in
-Settings. No client secret is needed for the device flow.
+Ligus accounts don't sign in with GitHub: there is no GitHub OAuth app for
+sign-in. A device sign-in to a code host (Settings > Code hosts, or the phone)
+needs the code host to know the Ligus app:
+
+- **github.com:** register a GitHub App with **Device Flow** enabled and set its
+  client id as `LIGUS_GITHUB_APP_CLIENT_ID` (run time, or at build time to bake
+  it in).
+- **gitlab.com:** register an OAuth application and set `LIGUS_GITLAB_CLIENT_ID`.
+- **GitHub Enterprise Server or self-managed GitLab:** the instance's admin
+  registers the app there and the client id is set on the connection.
+
+No client secret is needed for the device flow. Without a client id, people
+paste a token or reuse the `gh` / `glab` login instead.

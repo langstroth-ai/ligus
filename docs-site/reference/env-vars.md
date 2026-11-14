@@ -131,6 +131,6 @@ first time it is created; after that, Settings is the source of truth.
 | Variable | Effect |
 |---|---|
 | `LIGUS_RELEASE_TAG` | baked into release builds for the update check (`dev` otherwise) |
-| `LIGUS_GITHUB_CLIENT_ID` | also baked in at build time as the default OAuth App |
+| `LIGUS_GITHUB_APP_CLIENT_ID` / `LIGUS_GITLAB_CLIENT_ID` | also read at build time, as the default client ids for code-host device sign-in (see Runtime above); no secret |
 | `LIGUS_APPLE_TEAM_ID` | the Apple team id of a signed macOS release (from the `APPLE_TEAM_ID` release secret): the app trusts the keychain's unlock item only to code that satisfies Ligus's designated requirement for that team |
 | `LIGUS_TEST_KEYCHAIN` | `1` runs the macOS keychain tests (`cargo test`), against throwaway keychain files only; never the login keychain |
