@@ -219,15 +219,45 @@ fn key_secret_cache(state: &AppState, workspace_id: Uuid) -> Vec<u8> {
     k
 }
 
+/// Why the router must not send work to an agent on `provider`, if it can't:
+/// the chat's sandbox envelope refuses that runtime (egress restricted under
+/// dearth mode or a lockdown, and it can't be confined), or the runtime's plan
+/// window is past this agent's hand-off threshold (routed work is a hand-off,
+/// so it backs off before a person's own requests do). The primary is never
+/// filtered: it answers when no one else may.
+pub(crate) fn route_block(
+    provider: hive_core::ModelProviderKind,
+    envelope: &hive_core::sandbox::SandboxEnvelope,
+    window: Option<&hive_core::throttle::PlanWindow>,
+    agent_key: &str,
+    now_secs: i64,
+) -> Option<&'static str> {
+    if hive_runtime::sandbox::enforce(provider, envelope, &Vec::new()).refuse.is_some() {
+        return Some("envelope");
+    }
+    let d = hive_core::throttle::ThrottlePolicy::default().decide(
+        hive_core::throttle::TurnPriority::Workflow,
+        agent_key,
+        window,
+        now_secs,
+    );
+    matches!(d, hive_core::throttle::ThrottleDecision::Defer { .. }).then_some("throttled")
+}
+
 /// The candidates the router may pick from: the primary plus the chat's agents
 /// (its participants, or the whole roster when none are picked). An agent
-/// sent to a host that is offline (by presence) is left out.
+/// sent to a host that is offline (by presence), on a runtime the chat's
+/// sandbox envelope refuses, or on a throttled runtime is left out (see
+/// [`route_block`]).
 fn candidates(state: &AppState, svc: &ChatService, session: &ChatSession, view: &WorkspaceView) -> Vec<flow::route::Candidate> {
     let careers = careers(view);
     let now = hive_core::Timestamp::now();
     let hosts = svc.list_hosts(session.workspace_id).unwrap_or_default();
     let here = svc.device_id().to_string();
     let host_live = |id: &str| id.is_empty() || id == here || hosts.iter().any(|h| h.id == id && state.host_presence.is_online(h, &now));
+    let envelope = crate::guards::turn_envelope(session);
+    let windows = state.guards.plan_windows.lock().unwrap().clone();
+    let now_secs = flow::now_ms() / 1000;
     let mut out = vec![flow::route::Candidate { agent: flow::PRIMARY.into(), runtime_id: session.runtime_id.clone(), low_risk_only: false }];
     for a in &session.workspace_agents {
         if !session.participant_agent_ids.is_empty() && !session.participant_agent_ids.contains(&a.id) {
@@ -237,6 +267,10 @@ fn candidates(state: &AppState, svc: &ChatService, session: &ChatSession, view: 
             continue;
         }
         let key = flow::agent_key(Some(a.id));
+        let provider = state.resolve_runtime(&a.runtime_id).provider;
+        if route_block(provider, &envelope, windows.get(&provider), &key, now_secs).is_some() {
+            continue;
+        }
         // A new agent on probation only takes low-risk classes until it has a record.
         let low_risk_only = careers.get(&key).is_some_and(|(c, _)| *c == flow::Career::Probation);
         out.push(flow::route::Candidate { agent: key, runtime_id: a.runtime_id.clone(), low_risk_only });
@@ -2115,6 +2149,28 @@ pub(crate) fn flow_routing_report(state: State<'_, AppState>, days: Option<u32>)
 mod tests {
     use super::*;
     use hive_core::{ChatToolCall, ChatToolResult};
+
+    #[test]
+    fn routing_skips_runtimes_the_envelope_refuses_or_the_plan_window_throttles() {
+        use hive_core::sandbox::{EgressPolicy, SandboxEnvelope};
+        use hive_core::throttle::{PlanWindow, WindowStatus};
+        use hive_core::ModelProviderKind as P;
+        let open = SandboxEnvelope::default();
+        let mut closed = SandboxEnvelope::default();
+        closed.egress = EgressPolicy::Closed;
+        assert!(open.egress.is_open() && !closed.egress.is_open());
+        // Egress restricted: an unconfinable CLI is left out, a confinable one stays.
+        assert_eq!(route_block(P::Aider, &open, None, "a", 0), None);
+        assert_eq!(route_block(P::Aider, &closed, None, "a", 0), Some("envelope"));
+        assert_eq!(route_block(P::ClaudeCode, &closed, None, "a", 0), None);
+        assert_eq!(route_block(P::Anthropic, &closed, None, "a", 0), None);
+        // A rejected plan window: no routed hand-offs to it until it resets.
+        let hot = PlanWindow { status: WindowStatus::Rejected, utilization_pct: Some(100), resets_at: Some(1_000), window: None, observed_at: 0 };
+        assert_eq!(route_block(P::ClaudeCode, &open, Some(&hot), "a", 10), Some("throttled"));
+        assert_eq!(route_block(P::ClaudeCode, &open, Some(&hot), "a", 1_000), None, "reset since");
+        let cool = PlanWindow { status: WindowStatus::Allowed, utilization_pct: Some(10), resets_at: Some(1_000), window: None, observed_at: 0 };
+        assert_eq!(route_block(P::ClaudeCode, &open, Some(&cool), "a", 10), None);
+    }
 
     #[test]
     fn reads_the_last_test_run_from_tool_results() {

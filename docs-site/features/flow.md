@@ -58,6 +58,11 @@ primary. With routing on, Ligus picks among the chat's agents instead:
   the message names gets it.
 - An agent sent to a host that is offline is not a candidate, and an agent on
   [probation](#careers) only gets low-risk work.
+- Neither is an agent on a runtime the chat's
+  [sandbox envelope](../concepts/security.md#the-sandbox-envelope-around-every-agent-turn)
+  refuses while egress is restricted, or on a runtime whose
+  [plan window](guards.md#plan-windows-staggered-throttles) is past the
+  hand-off threshold. The primary always remains.
 
 Routing ships in **shadow mode**: the primary still answers, and Ligus logs
 what the router *would* have picked. **Flow → Routing** shows those
