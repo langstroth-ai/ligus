@@ -1517,10 +1517,12 @@ mod tests {
     async fn lazy_run_command_also_cuts_the_write_root_and_runs_there() {
         let (tmp, root) = setup();
         let (t, provider) = lazy_tools(&tmp, &root, false, false);
-        let out = ok(&t, RUN_COMMAND, json!({"command": "pwd; touch made"})).await;
+        // In a subdirectory: the Linux Landlock tier can't add entries to
+        // the worktree's top level (any right there would reach `.git`).
+        let out = ok(&t, RUN_COMMAND, json!({"command": "pwd; touch src/made"})).await;
         let wt = fs::canonicalize(tmp.path().join("turn-wt")).unwrap();
         assert!(out.contains(&wt.display().to_string()), "{out}");
-        assert!(wt.join("made").exists() && !root.join("made").exists());
+        assert!(wt.join("src/made").exists() && !root.join("src/made").exists());
         assert_eq!(provider.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 

@@ -54,7 +54,12 @@ writable paths, the same egress allow-list. They differ in how.
   kernels before 6.12 (Landlock ABI below 6).
 - **No terminals.** `/dev/pts` belongs to your real sessions, so the agent
   gets none (bubblewrap gives it a private one).
-- **The worktree's top level is fixed** (see Writes above).
+- **The worktree's top level is fixed** (see Writes above). This is the
+  limit agents notice most: a build or install that creates a new top-level
+  directory (`cargo build` without `target/`, `npm install` without
+  `node_modules/`) or a new top-level file fails with `Permission denied`.
+  Create those directories before the turn, or install the AppArmor
+  profile below to get the bubblewrap tier.
 - **The Ligus MCP server listens on a loopback TCP port** for the turn
   (there's no namespace to hide a forwarder in). Every connection must
   still present the turn's credential.
