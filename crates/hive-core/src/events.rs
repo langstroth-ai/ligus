@@ -348,8 +348,9 @@ pub enum SessionEvent {
     DeviceKeyAgreementPublished { device_id: Uuid, ka_public: Vec<u8> },
     /// A passkey (or recovery key) for one account (Phase 0, B3; config log).
     /// Signed by a certified, non-delegated device of that account. The
-    /// account's first carries its own proof (a `webauthn.create` over this
-    /// event, or the recovery key's signature); every later one needs
+    /// account's first carries its own proof (an assertion by the new
+    /// credential over this event, or the recovery key's signature); every
+    /// later one needs
     /// presence from a credential the account already has.
     PasskeyRegistered { credential: crate::presence::PasskeyCredential },
     /// Remove one of an account's credentials (the account itself, or an
@@ -1655,7 +1656,7 @@ mod tests {
         e.actor_stamp = Some(ActorStamp {
             actor: ActorIdentity::new(author, author, ActorKind::Human),
             recorded_at: Timestamp::epoch(), cfg_frontier: None,
-            presence: None, });
+            presence: None, runtime_effect: false, });
         e
     }
 
@@ -2246,7 +2247,7 @@ mod tests {
                 actor: ActorIdentity::new("u1", "U", ActorKind::Human),
                 recorded_at: Timestamp::epoch(),
                 cfg_frontier: None,
-                presence: None,
+                presence: None, runtime_effect: false,
             });
         }
         let s = project(&envs).unwrap();

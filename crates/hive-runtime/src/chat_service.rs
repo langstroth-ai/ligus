@@ -85,6 +85,8 @@ pub struct ChatService {
     /// Where this host keeps the signing keys of agents bound to it (A3). When
     /// unset, the host signs its agents' output itself (the transition).
     agent_vault: Option<Box<dyn crate::identity_store::KeyVault + Send>>,
+    /// Appends are effects of the chat's primary runtime (B3).
+    runtime_effect: bool,
     /// Asks a person for a passkey assertion (the desktop, B3).
     presence_provider: Option<std::sync::Arc<dyn PresenceProvider>>,
     /// Capture presence-needing drafts instead of refusing (serve, B3).
@@ -127,6 +129,7 @@ impl ChatService {
             delegated: false,
             write_block: None,
             agent_vault: None,
+            runtime_effect: false,
             presence_provider: None,
             capture_presence: false,
             presence_draft: None,
@@ -215,7 +218,7 @@ impl ChatService {
         env.lamport = self.store.max_lamport(session_id)?.saturating_add(1);
         let mut actor = ActorIdentity::new(agent_id.to_string(), name, hive_core::ActorKind::Agent);
         actor.device_id = Some(key_id);
-        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::now(), cfg_frontier: timeline.head(), presence: None });
+        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::now(), cfg_frontier: timeline.head(), presence: None, runtime_effect: false });
         sign_envelope(&mut env, key_id, &kp);
         self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
         self.store.append_envelope(&env)?;
@@ -228,10 +231,16 @@ impl ChatService {
     /// fold, and is signed with the agent's own key when this host holds one
     /// (A3), else by the host (the A3 transition). `None` runs `f` as the
     /// host.
+    ///
+    /// With `None` (the chat's primary runtime, which has no agent identity)
+    /// every event is stamped `runtime_effect` (B3): under rules v2 every
+    /// fold judges it at the Agent tier.
     pub fn as_agent<R>(&mut self, agent: Option<Uuid>, f: impl FnOnce(&mut Self) -> R) -> R {
         let prev = std::mem::replace(&mut self.acting_agent, agent);
+        let prev_rt = std::mem::replace(&mut self.runtime_effect, agent.is_none());
         let r = f(self);
         self.acting_agent = prev;
+        self.runtime_effect = prev_rt;
         r
     }
 
@@ -674,7 +683,7 @@ impl ChatService {
             actor: self.author.clone(),
             recorded_at: Timestamp::now(),
             cfg_frontier: timeline.head(),
-            presence: None,
+            presence: None, runtime_effect: self.runtime_effect,
         });
         // Signed first, so the fold's own signature checks (key events)
         // judge exactly what peers will receive.
@@ -3762,7 +3771,7 @@ mod tests {
             let seq = con.store.max_sequence(chat_id).unwrap().unwrap_or(0) + 1;
             let mut env = SessionEventEnvelope::new(chat_id, wid, seq, payload);
             env.lamport = con.store.max_lamport(chat_id).unwrap() + 1;
-            env.actor_stamp = Some(ActorStamp { actor: con.author.clone(), recorded_at: Timestamp::now(), cfg_frontier: frontier, presence: None });
+            env.actor_stamp = Some(ActorStamp { actor: con.author.clone(), recorded_at: Timestamp::now(), cfg_frontier: frontier, presence: None, runtime_effect: false });
             con.store.ingest(&env).unwrap();
         };
         inject(&mut con, rewrite);
@@ -4360,7 +4369,7 @@ mod tests {
             actor: svc.author().clone(),
             recorded_at: Timestamp::now(),
             cfg_frontier: Some(hive_core::CfgFrontier { lamport: 500, event_id: Uuid::new_v4() }),
-            presence: None,
+            presence: None, runtime_effect: false,
         });
         svc.store().append_envelope(&peer).unwrap();
         let s = svc.load(sid).unwrap().unwrap();

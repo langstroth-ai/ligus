@@ -67,7 +67,7 @@ impl World {
     fn stamp(by: &str, frontier: Option<CfgFrontier>) -> Option<ActorStamp> {
         let mut actor = ActorIdentity::new(by, by, ActorKind::Human);
         actor.account_id = Some(account(by));
-        Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: frontier, presence: None })
+        Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: frontier, presence: None, runtime_effect: false })
     }
 
     fn head(&self) -> Option<CfgFrontier> {
@@ -923,7 +923,7 @@ impl World {
         let mut actor = ActorIdentity::new(a.agent_id.to_string(), "coder", ActorKind::Agent);
         actor.device_id = Some(a.key_id);
         let f = env.actor_stamp.as_ref().unwrap().cfg_frontier;
-        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: f, presence: None });
+        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: f, presence: None, runtime_effect: false });
         env.signer_device_id = Some(a.key_id);
         id
     }
@@ -1020,7 +1020,7 @@ fn agent_tier_cannot_emit_admin_events() {
         let env = w.cfg.iter_mut().find(|x| x.event_id == id).unwrap();
         let mut actor = ActorIdentity::new(a.agent_id.to_string(), "coder", ActorKind::Agent);
         actor.device_id = Some(a.key_id);
-        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None });
+        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false });
         env.signer_device_id = Some(a.key_id);
         assert_eq!(w.verdicts()[&id], Verdict::Denied);
     }
@@ -1029,7 +1029,7 @@ fn agent_tier_cannot_emit_admin_events() {
     let env = w.cfg.iter_mut().find(|x| x.event_id == id).unwrap();
     let mut actor = ActorIdentity::new(a.agent_id.to_string(), "coder", ActorKind::Agent);
     actor.device_id = Some(a.key_id);
-    env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None });
+    env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false });
     env.signer_device_id = Some(a.key_id);
     assert_eq!(w.verdicts()[&id], Verdict::Allowed);
 }

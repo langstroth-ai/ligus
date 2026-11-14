@@ -32,9 +32,10 @@ pub fn verify_stamped(env: &SessionEventEnvelope, roster: &RosterState) -> Resul
 
 /// `PasskeyRegistered`: on the config log, for the signer's own account,
 /// from a certified device that holds the account key (not a delegated
-/// host), well formed, new; the account's first credential proves itself (a
-/// `webauthn.create` over this event, or the recovery key's own signature),
-/// every later one needs presence from a credential the account has.
+/// host), well formed, new; the account's first credential proves itself (an
+/// assertion by the new passkey, or the recovery key's own signature, over
+/// this event's digest), every later one needs presence from a credential the
+/// account already has.
 pub fn registration_ok(
     env: &SessionEventEnvelope,
     c: &PasskeyCredential,
@@ -70,12 +71,14 @@ pub fn registration_ok(
             }
             presence::verify_recovery(a, &PasskeyKey::from(c), &challenge).map_err(|e| format!("recovery proof: {}", e.0))
         }
+        // The account's first passkey proves possession: an assertion by the
+        // new credential itself over this registration's digest (a
+        // `webauthn.create` can't sign it: its key is part of the digest).
         None => {
-            let (id, alg, pk) = presence::verify_create(a, &challenge, &Policy::ligus()).map_err(|e| format!("registration proof: {}", e.0))?;
-            if presence::unb64url(&c.credential_id).ok() != Some(id) || alg != c.alg || pk != c.public_key {
-                return Err("the registration proof attests another credential".into());
+            if a.credential_id != c.credential_id {
+                return Err("the first passkey proves itself".into());
             }
-            Ok(())
+            presence::verify_get(a, &PasskeyKey::from(c), &challenge, &Policy::ligus()).map_err(|e| format!("registration proof: {}", e.0))
         }
     }
 }

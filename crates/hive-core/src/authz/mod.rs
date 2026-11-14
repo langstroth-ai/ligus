@@ -313,6 +313,15 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             }
         }
     }
+    // Rules v2: an effect of the chat's primary runtime (host-signed, no
+    // agent identity) is judged at the Agent tier too.
+    if env.actor_stamp.as_ref().is_some_and(|s| s.runtime_effect)
+        && roster_here.is_some_and(|r| r.rules.min(RULES_SUPPORTED) >= 2)
+    {
+        if let Err(why) = agent::runtime_tier_allows(&env.payload) {
+            return Decision::deny(why);
+        }
+    }
     let exempt = is_trust_publication(&env.payload) || matches!(env.payload, SessionEvent::MemberAdded { .. });
     if !exempt {
         let member = if ctx.checked {

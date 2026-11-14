@@ -77,3 +77,43 @@ pub fn agent_authored(event: &SessionEvent) -> Option<Uuid> {
         _ => None,
     }
 }
+
+/// The Agent tier for the chat's primary runtime (no agent identity of its
+/// own): a host-signed effect its tool loop wrote (`ActorStamp::runtime_effect`).
+/// Same capability list as an agent's, with the ownership checks on what it
+/// files: open, unapproved proposals, its messages and reactions, marks and
+/// hand-offs; never a vote, a governance or admin event, an apply.
+pub fn runtime_tier_allows(event: &SessionEvent) -> Result<(), String> {
+    let ok = match event {
+        SessionEvent::MessageAppended { .. }
+        | SessionEvent::MessageChunkReceived { .. }
+        | SessionEvent::MessageCompleted { .. }
+        | SessionEvent::MessageReactionAdded { .. }
+        | SessionEvent::MessageReactionRemoved { .. }
+        | SessionEvent::ProposalRefined { .. }
+        | SessionEvent::ProposalSetOpened { .. }
+        | SessionEvent::ProposalSetAlternativeAdded { .. }
+        | SessionEvent::ScoutAssessmentPosted { .. }
+        | SessionEvent::ChatLockdownRaised { .. }
+        | SessionEvent::TurnClaimed { .. } => true,
+        SessionEvent::ProposalUpserted { proposal } => {
+            proposal.status == ProposalStatus::Open && proposal.approvals.is_empty()
+        }
+        SessionEvent::FlowRecorded { record } => matches!(
+            record,
+            FlowRecord::Mark(_)
+                | FlowRecord::MarkCleared { .. }
+                | FlowRecord::Handoff(_)
+                | FlowRecord::Recruit(_)
+                | FlowRecord::RouteDecision(_)
+                | FlowRecord::HumanAsk(_)
+                | FlowRecord::TurnToolSummary(_)
+        ),
+        _ => false,
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("the chat's runtime can't sign {}", event.kind_str()))
+    }
+}

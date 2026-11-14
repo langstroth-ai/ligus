@@ -165,11 +165,10 @@ impl ChatService {
         Ok(env)
     }
 
-    /// Register a passkey for this device's account. The account's first
-    /// credential is proved by `proof` (`webauthn.create` over the
-    /// registration event's digest, or the recovery key's own signature);
-    /// `prove` receives that digest. A later one needs presence from an
-    /// existing credential, which `prove` returns as a `get` assertion.
+    /// Register a passkey for this device's account. `prove` receives the
+    /// registration event's digest and returns a `get` assertion over it: by
+    /// the new credential itself for the account's first (or the recovery
+    /// key's own signature), by an existing credential for every later one.
     pub fn register_passkey(
         &mut self,
         workspace_id: Uuid,

@@ -44,7 +44,7 @@ pub(crate) fn ev(s: &ChatSession, lamport: u64, author: &str, device: Option<Uui
 }
 
 fn stamp(mut e: SessionEventEnvelope, author: &str, device: Option<Uuid>) -> SessionEventEnvelope {
-    e.actor_stamp = Some(ActorStamp { actor: ActorIdentity::new(author, author, ActorKind::Human), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None });
+    e.actor_stamp = Some(ActorStamp { actor: ActorIdentity::new(author, author, ActorKind::Human), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false });
     e.signer_device_id = device;
     e
 }

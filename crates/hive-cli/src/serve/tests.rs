@@ -3110,7 +3110,7 @@ async fn phone_confirms_a_vote_with_a_passkey() {
     let owner = {
         let mut d = open_service(&h.desktop).unwrap();
         let account = d.author().account_id.unwrap();
-        d.register_passkey(ws, key.credential(account, "phone"), &|req| Ok(key.create(&req.challenge))).unwrap();
+        d.register_passkey(ws, key.credential(account, "phone"), &|req| Ok(key.get(&req.challenge))).unwrap();
         d.author().clone()
     };
     sync_once(&h.desktop).await.unwrap();

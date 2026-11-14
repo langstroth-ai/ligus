@@ -51,7 +51,7 @@ fn account(svc: &ChatService) -> Uuid {
 fn register(svc: &mut ChatService, wid: Uuid, auth: &SoftAuthenticator, existing: Option<&SoftAuthenticator>) -> crate::chat_service::Result<SessionEventEnvelope> {
     let cred = auth.credential(account(svc), "test key");
     svc.register_passkey(wid, cred, &|req| Ok(match existing {
-        None => auth.create(&req.challenge),
+        None => auth.get(&req.challenge),
         Some(e) => e.get(&req.challenge),
     }))
 }
@@ -106,12 +106,12 @@ fn first_passkey_with_a_forged_proof_is_refused() {
     let key = SoftAuthenticator::es256();
     let other = SoftAuthenticator::es256();
     let cred = key.credential(account(&svc), "k");
-    // A create proof by another authenticator (attests another key).
-    assert!(svc.register_passkey(wid, cred.clone(), &|req| Ok(other.create(&req.challenge))).is_err());
-    // A get assertion where a create is needed.
-    assert!(svc.register_passkey(wid, cred.clone(), &|req| Ok(key.get(&req.challenge))).is_err());
-    // A create over another challenge.
-    assert!(svc.register_passkey(wid, cred, &|_| Ok(key.create(&[0u8; 32]))).is_err());
+    // An assertion by another authenticator (no proof of the new key).
+    assert!(svc.register_passkey(wid, cred.clone(), &|req| Ok(other.get(&req.challenge))).is_err());
+    // A create isn't an assertion over the registration.
+    assert!(svc.register_passkey(wid, cred.clone(), &|req| Ok(key.create(&req.challenge))).is_err());
+    // An assertion over another challenge.
+    assert!(svc.register_passkey(wid, cred, &|_| Ok(key.get(&[0u8; 32]))).is_err());
 }
 
 #[test]
@@ -404,4 +404,42 @@ fn phone_presence_vote_counts_as_credential_owner_not_serve() {
     let p = s.proposals.iter().find(|p| p.id == pid).unwrap();
     assert_eq!(p.approvals.len(), 1);
     assert_eq!(p.approvals[0].actor_id, account.to_string(), "counted as the credential's account");
+}
+
+/// Rules v2: the chat's primary runtime has no agent identity; its tool
+/// effects are host-signed and stamped `runtime_effect`, and every fold
+/// judges them at the Agent tier (no votes, no governance), while the same
+/// host's own actions are unaffected.
+#[test]
+fn primary_runtime_effects_judged_at_agent_tier() {
+    let (mut svc, wid, key, _rec) = on_rules_v2();
+    let chat = svc.create_chat("c", wid, "anthropic").unwrap().id;
+    let p = ActionProposal::new("Ship", hive_core::ProposalKind::Decision, "runtime");
+    let pid = p.id;
+    let filed = svc.as_agent(None, |s| s.upsert_proposal(chat, wid, p));
+    assert!(filed.is_ok(), "the runtime files an open proposal: {filed:?}");
+    let last = svc.store().list(chat).unwrap().into_iter().last().unwrap();
+    assert!(last.actor_stamp.as_ref().unwrap().runtime_effect, "stamped as a runtime effect");
+    // A vote from the runtime's tool loop is refused, even with a passkey at hand.
+    svc.set_presence_provider(Some(Arc::new(Soft(key))));
+    let vote = svc.as_agent(None, |s| s.vote_on_proposal(chat, wid, pid, true));
+    assert!(vote.is_err(), "the runtime can't vote");
+    let cfg = workspace_config_session_id(wid);
+    let gov = svc.as_agent(None, |s| s.add_member(cfg, wid, member("zed", WorkspaceRole::Admin)));
+    assert!(gov.unwrap_err().to_string().contains("runtime"), "the runtime can't govern");
+    // The person's own vote, outside the runtime's effects, still counts.
+    svc.vote_on_proposal(chat, wid, pid, true).unwrap();
+    // And a runtime-effect vote crafted by hand is refused by the fold.
+    let mut forged = svc.store().list(chat).unwrap().into_iter().last().unwrap();
+    forged.clear_raw();
+    forged.event_id = Uuid::new_v4();
+    forged.actor_stamp.as_mut().unwrap().runtime_effect = true;
+    forged.signature = None;
+    svc.sign_for_test(&mut forged);
+    let mut log = svc.store().list(chat).unwrap();
+    log.push(forged.clone());
+    let pin = svc.store().workspace_pin(wid).unwrap().unwrap().founder_account.to_string();
+    let (_, t) = svc.store().load_config(wid, Some(&pin), None).unwrap();
+    let v = fold_decisions(&log, None, None, WorkspaceAuthz::Timeline(&t));
+    assert_eq!(v[&forged.event_id], Verdict::Denied);
 }
