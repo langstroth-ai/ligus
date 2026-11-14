@@ -1122,9 +1122,11 @@ impl EventStore {
         Ok(row.and_then(|(f, k)| crate::envelope_verifier::FounderPin::parse(&f, &k)))
     }
 
-    /// Every workspace this device pinned a founder for.
+    /// Every workspace this device pinned a founder for, in the order it
+    /// pinned them (first joined first: the co-member directory trusts the
+    /// earliest-pinned registration of an account's key).
     pub fn pinned_workspaces(&self) -> Result<Vec<Uuid>> {
-        let mut stmt = self.conn.prepare("SELECT workspace_id FROM workspace_pins")?;
+        let mut stmt = self.conn.prepare("SELECT workspace_id FROM workspace_pins ORDER BY rowid ASC")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         let mut out = Vec::new();
         for row in rows {

@@ -69,8 +69,16 @@ fn member(name: &str, p: &Person, role: WorkspaceRole) -> WorkspaceMember {
 
 impl World {
     fn new() -> Self {
+        Self::new_with(|_| {})
+    }
+
+    /// A world whose people `edit` adjusts before anything is written (for
+    /// example, an attacker's log that registers its own key under someone
+    /// else's account id).
+    fn new_with(edit: impl FnOnce(&mut BTreeMap<&'static str, Person>)) -> Self {
         let wid = Uuid::new_v4();
-        let people: BTreeMap<&'static str, Person> = NAMES.iter().map(|n| (*n, Person::new())).collect();
+        let mut people: BTreeMap<&'static str, Person> = NAMES.iter().map(|n| (*n, Person::new())).collect();
+        edit(&mut people);
         let mut w = Self { wid, clock: 0, cfg: Vec::new(), people };
         let mut seed = ChatSession::new("", wid, "");
         seed.id = workspace_config_session_id(wid);
@@ -1144,6 +1152,68 @@ async fn forged_dm_founder_never_gets_writes() {
     let me = alice.author().account_id.unwrap();
     let listed = crate::directory_trust::co_members(alice.store(), me);
     assert!(listed.iter().all(|c| !c.workspaces.contains(&wid)), "a forged log fed the co-member directory: {listed:?}");
+}
+
+/// S1: Mallory founds a workspace, adds Ada's account id and registers her
+/// own key (and device) under it there. Alice shares an honest workspace with
+/// Ada, pinned earlier. Mallory's log alone must neither mark Ada conflicted
+/// (a denial of service on every invite and DM to her) nor give Alice
+/// Mallory's key or device as Ada's.
+#[test]
+fn co_member_key_conflict_from_attacker_founded_log() {
+    let honest = World::new();
+    let ada = honest.people["ada"].account_id;
+    let ada_fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&honest.people["ada"].account.public_key_bytes());
+    let ada_ka = honest.people["ada"].ka().public_key_bytes();
+    let attacker = World::new_with(|p| p.get_mut("ada").unwrap().account_id = ada);
+    let fake_ka = attacker.people["ada"].ka().public_key_bytes();
+    let me = honest.people["mara"].account_id;
+
+    let pin = |store: &crate::EventStore, w: &World| {
+        let f = &w.people["owner"];
+        let fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&f.account.public_key_bytes());
+        store.set_workspace_pin(w.wid, &f.account_id.to_string(), &fk).unwrap();
+    };
+    let mut store = crate::EventStore::open_in_memory().unwrap();
+    for env in honest.cfg.iter().chain(attacker.cfg.iter()) {
+        store.ingest(env).unwrap();
+    }
+    pin(&store, &honest);
+    pin(&store, &attacker);
+    let listed = crate::directory_trust::co_members(&store, me);
+    let entry = listed.iter().find(|c| c.account_id == ada).unwrap();
+    assert!(!entry.key_conflict, "one attacker-founded log marked Ada conflicted");
+    assert_eq!(entry.fingerprint.as_deref(), Some(ada_fk.as_str()), "the earliest pinned registration decides");
+    let kas: Vec<[u8; 32]> = entry.devices.iter().map(|r| r.ka_public).collect();
+    assert!(kas.contains(&ada_ka));
+    assert!(!kas.contains(&fake_ka), "the attacker's device was offered as Ada's");
+    assert!(entry.seal_plan().is_ok());
+    assert!(!crate::directory_trust::signed_ka_keys(&store, ada).contains(&fake_ka), "the attacker's key verified for Ada");
+    assert_eq!(entry.key_disputed_in, vec![attacker.wid], "the attacker's log is flagged, not trusted");
+    assert_eq!(entry.workspaces, vec![honest.wid]);
+    let _ = &mut store;
+
+    // Joined Mallory's log first, but Ada founded a workspace Alice joined
+    // later: the founder pin (from Ada's signed invite) outranks the earlier
+    // log's registration.
+    let ada_p = &honest.people["ada"];
+    let ada_founded = World::new_with(|p| {
+        let o = p.get_mut("owner").unwrap();
+        o.account_id = ada;
+        o.account = SigningKeypair::from_seed(&ada_p.account.seed_bytes()).unwrap();
+    });
+    let mut store = crate::EventStore::open_in_memory().unwrap();
+    for env in attacker.cfg.iter().chain(ada_founded.cfg.iter()) {
+        store.ingest(env).unwrap();
+    }
+    pin(&store, &attacker);
+    pin(&store, &ada_founded);
+    let listed = crate::directory_trust::co_members(&store, me);
+    let entry = listed.iter().find(|c| c.account_id == ada).unwrap();
+    assert!(!entry.key_conflict);
+    assert_eq!(entry.fingerprint.as_deref(), Some(ada_fk.as_str()), "the founder pin decides");
+    assert!(!entry.devices.iter().any(|r| r.ka_public == fake_ka));
+    let _ = &mut store;
 }
 
 /// The control: the real founder's seed verifies under the pinned key, and the
