@@ -858,10 +858,8 @@ pub(crate) fn accept_pending_invite(
     let mut conn = decode_workspace_invite(&code)?;
     if conn.dm_account.is_some() {
         admit_dm_invite(&state, &mut conn, confirm_safety_code)?;
-    } else {
-        if invite_trust(&conn, &co_members_of(&state)) == dm::FounderTrust::Mismatch {
-            return Err("the invite's founder key doesn't match the one your shared workspaces have for that person".into());
-        }
+    } else if invite_trust(&conn, &co_members_of(&state)) == dm::FounderTrust::Mismatch {
+        return Err("the invite's founder key doesn't match the one your shared workspaces have for that person".into());
     }
     let joined = join_workspace_conn(state.clone(), conn)?;
     mark_handled(&state, &relay, seq);

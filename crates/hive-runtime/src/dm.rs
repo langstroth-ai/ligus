@@ -107,6 +107,7 @@ pub fn check_founder(
 ///   always a fresh room, and accepting would rewrite that workspace's relay
 ///   and key to the invite's (a co-member who knows a workspace's room could
 ///   otherwise turn it into a "DM" synced through a relay of their choosing).
+#[allow(clippy::too_many_arguments)]
 pub fn accept_dm_invite(
     dm_account: Option<&str>,
     founder: Option<&str>,
