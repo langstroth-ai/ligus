@@ -579,7 +579,6 @@ async fn agent_cannot_answer_ask() {
 /// host's own person (or the agent's owner) can.
 #[tokio::test]
 async fn permission_escalation_needs_the_hosts_own_person() {
-    use crate::agent_turn::HumanAsker;
     for (answerer, expect_allowed) in [("bob", false), ("host", true)] {
         let w = world();
         let turn = w.mcp.begin_turn(spec(&w, Budgets::default()));

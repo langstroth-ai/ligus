@@ -196,7 +196,6 @@ fn read_turn_file(home: &Path, rel: &str) -> Option<Vec<u8>> {
 /// (only valid JSON objects, only the files in [`credential_files`]).
 pub fn copy_back(kind: ModelProviderKind, real_home: &Path, home: &Path) {
     for f in credential_files(kind) {
-        let turn = home.join(f);
         let real = real_path(kind, real_home, f);
         let (Some(new), old) = (read_turn_file(home, f), std::fs::read(&real).ok()) else { continue };
         if old.as_deref() == Some(new.as_slice()) || new.len() as u64 > MAX_COPY_BYTES {
