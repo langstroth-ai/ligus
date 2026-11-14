@@ -416,10 +416,33 @@ fn push_remote_is_the_fork_never_upstream() {
 
 // ── Device sign-in ─────────────────────────────────────────────────────────
 
+/// The verification address the desktop opens and the phone shows must be on
+/// the code host itself, over https (plain http only to a real loopback
+/// host): `http://localhost.evil.example` and `http://127.0.0.1.nip.io` are
+/// not loopback, and a page elsewhere is a phishing page.
+#[tokio::test]
+async fn verification_uri_must_be_on_the_forge_host() {
+    for (uri, ok) in [
+        ("http://localhost.evil.example/device", false),
+        ("http://127.0.0.1.nip.io/device", false),
+        ("https://evil.example/device", false),
+        ("javascript:alert(1)", false),
+        ("http://127.0.0.1/oauth/device", true),
+    ] {
+        let f = Fake::default();
+        f.on(Method::POST, "/oauth/authorize_device", 200, json!({"device_code": "DEV", "user_code": "ABCD-1234", "verification_uri": uri}));
+        let base = serve(f.clone()).await;
+        let mut c = Connection::new(ForgeKind::GitLab, &base, AuthSource::Oauth).unwrap();
+        c.client_id = Some("app-123".into());
+        let ep = hive_forge::device::endpoints(&c).unwrap();
+        assert_eq!(hive_forge::device::start(&ep).await.is_ok(), ok, "{uri}");
+    }
+}
+
 #[tokio::test]
 async fn device_flow_starts_polls_and_refreshes_without_a_client_secret() {
     let f = Fake::default();
-    f.on(Method::POST, "/oauth/authorize_device", 200, json!({"device_code": "DEV", "user_code": "ABCD-1234", "verification_uri": "https://gitlab.example.com/oauth/device", "expires_in": 300, "interval": 5}))
+    f.on(Method::POST, "/oauth/authorize_device", 200, json!({"device_code": "DEV", "user_code": "ABCD-1234", "verification_uri": "http://127.0.0.1/oauth/device", "expires_in": 300, "interval": 5}))
         .on(Method::POST, "/oauth/token", 400, json!({"error": "authorization_pending"}));
     let base = serve(f.clone()).await;
     let mut c = Connection::new(ForgeKind::GitLab, &base, AuthSource::Oauth).unwrap();

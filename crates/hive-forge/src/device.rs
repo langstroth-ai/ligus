@@ -155,6 +155,24 @@ fn token_set(v: &Value) -> Option<TokenSet> {
     })
 }
 
+/// A verification address is https on the code host's own host (that of the
+/// device endpoint), or plain http only when that host is a real loopback
+/// host. Parsed, never matched by prefix.
+fn verification_uri_ok(uri: &str, device_url: &str) -> bool {
+    let (Ok(u), Ok(d)) = (url::Url::parse(uri), url::Url::parse(device_url)) else { return false };
+    let (Some(host), Some(forge_host)) = (u.host_str(), d.host_str()) else { return false };
+    if !u.username().is_empty() || u.password().is_some() || !crate::spec::same_host(host, forge_host) {
+        return false;
+    }
+    let loopback = match u.host() {
+        Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    };
+    u.scheme() == "https" || (u.scheme() == "http" && loopback)
+}
+
 /// Start a device flow (only ever on the person's own request).
 pub async fn start(ep: &DeviceEndpoints) -> Result<DeviceStart> {
     let mut form = vec![("client_id", ep.client_id.as_str())];
@@ -168,8 +186,8 @@ pub async fn start(ep: &DeviceEndpoints) -> Result<DeviceStart> {
         return Err(ForgeError::Rejected(format!("the code host refused to start a device sign-in: {why}")));
     };
     let uri = v["verification_uri"].as_str().or(v["verification_url"].as_str()).unwrap_or("").to_string();
-    if !uri.starts_with("https://") && !uri.starts_with("http://127.0.0.1") && !uri.starts_with("http://localhost") {
-        return Err(ForgeError::Rejected("the code host gave a verification address that isn't https".into()));
+    if !verification_uri_ok(&uri, &ep.device_url) {
+        return Err(ForgeError::Rejected("the code host gave a verification address that isn't https on the code host itself".into()));
     }
     Ok(DeviceStart {
         device_code: Secret::new(code),
