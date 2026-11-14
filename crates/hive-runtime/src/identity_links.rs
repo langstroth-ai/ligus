@@ -902,6 +902,27 @@ pub fn fresh(c: &CachedCheck, now: Timestamp) -> bool {
     c.status.definitive() && now.0 - c.checked_at.0 < time::Duration::try_from(CHECK_TTL).unwrap_or(time::Duration::DAY)
 }
 
+/// What a chip may show from the cache alone, without asking the forge: the
+/// offline outcome when the link fails it (expired, invalid, the account
+/// key changed), "signature valid" when forge checks are off, and otherwise
+/// the cached result only while it is fresh ([`CHECK_TTL`]). `None` means
+/// not checked yet.
+pub fn cached_status(
+    cached: Option<&CachedCheck>,
+    link: &IdentityLink,
+    ctx: LinkContext<'_>,
+    now: Timestamp,
+    check_forges: bool,
+) -> Option<LinkStatus> {
+    if let Err(status) = offline_check(link, ctx, now) {
+        return Some(status);
+    }
+    if !check_forges {
+        return Some(LinkStatus::SignatureOnly);
+    }
+    cached.filter(|c| fresh(c, now)).map(|c| c.status.clone())
+}
+
 /// [`check_link`] behind the cache: reuse a fresh result unless `force`;
 /// otherwise ask and record. Offline outcomes (invalid, expired) are never
 /// served from the cache.

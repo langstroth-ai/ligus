@@ -330,7 +330,10 @@ fn links_of(state: &AppState, account: Uuid) -> Vec<ShownLink> {
         let s = state.settings.lock().unwrap();
         s.workspaces.iter().filter(|w| w.dm_account.is_none()).map(|w| (w.id(), w.display_name())).collect()
     };
-    let contact_links = state.settings.lock().unwrap().identity_links.contact_links.clone();
+    let (contact_links, checks_on) = {
+        let s = state.settings.lock().unwrap();
+        (s.identity_links.contact_links.clone(), s.identity_links.checks_on())
+    };
     let svc = state.service.lock().unwrap();
     let per_ws: Vec<(Uuid, hive_runtime::chat_service::WorkspaceLinks)> =
         conns.iter().filter_map(|(ws, _)| svc.identity_links(*ws).ok().map(|wl| (*ws, wl))).collect();
@@ -360,13 +363,16 @@ fn links_of(state: &AppState, account: Uuid) -> Vec<ShownLink> {
         }
     };
     let Some(agreed) = agreed else { return Vec::new() };
+    let now = Timestamp::now();
     let names: BTreeMap<Uuid, String> = conns.into_iter().collect();
     hive_runtime::chat_service::links_for_account(&per_ws, account, |k| k == agreed.as_slice())
         .into_iter()
         .map(|shown| {
             let l = shown.link;
             let ws = shown.workspaces[0];
-            let status = svc.store().get_check(&identity_links::cache_key(&l, ws, &shown.account_key)).map(|c| c.status);
+            let cached = svc.store().get_check(&identity_links::cache_key(&l, ws, &shown.account_key));
+            let ctx = LinkContext { workspace_id: ws, account_key: Some(&shown.account_key) };
+            let status = identity_links::cached_status(cached.as_ref(), &l, ctx, now, checks_on);
             let dto = LinkDto {
                 link_id: l.link_id.to_string(),
                 provider: l.provider.clone(),

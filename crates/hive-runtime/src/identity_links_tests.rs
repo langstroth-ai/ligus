@@ -823,3 +823,28 @@ async fn gitlab_key_published_needs_a_signing_only_key() {
     gl.set("/users/77/keys", 200, serde_json::json!([{"id": 2, "key": mine, "usage_type": "signing"}]).to_string());
     assert!(check_link(&kp, ctx(), &f, now(), None).await.is_verified());
 }
+
+/// People shows chips from the cache without asking the forge. A cached
+/// "verified" must not outlive the link (expiry), the 24-hour TTL, the
+/// account key it was made under, or forge checks being turned off.
+#[test]
+fn cached_chip_status_is_only_shown_while_it_holds() {
+    let k = key(1);
+    let l = signed("github", "github.com", "1234567", "alice", &k);
+    let t0 = now();
+    let verified = CachedCheck {
+        status: LinkStatus::Verified { checked_at: t0, handle: Some("alice".into()), name_bound: false },
+        checked_at: t0,
+        last_verified_at: Some(t0),
+    };
+    let soon = Timestamp(t0.0 + time::Duration::hours(1));
+    assert!(cached_status(Some(&verified), &l, ctx(), soon, true).is_some_and(|s| s.is_verified()));
+    let day_later = Timestamp(t0.0 + time::Duration::hours(30));
+    assert_eq!(cached_status(Some(&verified), &l, ctx(), day_later, true), None, "past the TTL: not checked");
+    assert_eq!(cached_status(Some(&verified), &l, ctx(), ts("2027-11-15T00:00:00Z"), true), Some(LinkStatus::Expired));
+    assert_eq!(cached_status(Some(&verified), &l, ctx(), soon, false), Some(LinkStatus::SignatureOnly), "checks off");
+    let other = [9u8; 32];
+    let rotated = LinkContext { workspace_id: ws(), account_key: Some(&other) };
+    assert!(!cached_status(Some(&verified), &l, rotated, soon, true).is_some_and(|s| s.is_verified()));
+    assert_eq!(cached_status(None, &l, ctx(), soon, true), None);
+}
