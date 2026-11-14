@@ -1119,3 +1119,49 @@ fn delegated_host_vote_not_counted_for_human_gate() {
     assert_eq!(p.status, ProposalStatus::Approved);
     assert_eq!(w.verdicts()[&from_desk], Verdict::Allowed);
 }
+
+/// Hardening A-1: a delegated host can't shed its delegation by publishing
+/// its owner's certificate for itself again (any device can re-publish a cert
+/// it was handed). Delegation is decided by the first certified publication of
+/// the (device, account) certificate, and stays.
+#[test]
+fn delegated_host_republishing_its_cert_stays_delegated() {
+    use hive_core::crypto::{DeviceCertificate, SigningKeypair};
+    let mut w = World::new();
+    let owner_acct = account("owner");
+    let owner_key = SigningKeypair::generate().unwrap();
+    let (desk_key, box_key) = (SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap());
+    let (desk, bx) = (Uuid::new_v4(), Uuid::new_v4());
+    let box_cert = DeviceCertificate::issue(&owner_key, owner_acct, bx, &box_key.public_key_bytes(), Timestamp::epoch());
+    let signed = |w: &mut World, e: SessionEvent, signer: Uuid| {
+        w.cfg_push("owner", e);
+        w.cfg.last_mut().unwrap().signer_device_id = Some(signer);
+    };
+    signed(&mut w, SessionEvent::AccountKeyRegistered {
+        account_id: owner_acct,
+        signing_public_key: owner_key.public_key_bytes().to_vec(),
+    }, desk);
+    signed(&mut w, SessionEvent::DeviceCertificateAdded {
+        certificate: DeviceCertificate::issue(&owner_key, owner_acct, desk, &desk_key.public_key_bytes(), Timestamp::epoch()),
+    }, desk);
+    // The desktop enrolls the box...
+    signed(&mut w, SessionEvent::DeviceCertificateAdded { certificate: box_cert.clone() }, desk);
+    assert!(w.timeline().current().devices[&bx].delegated_for(owner_acct));
+    // ...and the box re-publishes the very certificate it was handed.
+    signed(&mut w, SessionEvent::DeviceCertificateAdded { certificate: box_cert }, bx);
+    assert!(w.timeline().current().devices[&bx].delegated_for(owner_acct), "the box shed its delegation");
+
+    let pid = Uuid::from_u128(0xD7);
+    w.chat_push("owner", SessionEvent::ProposalUpserted { proposal: proposal(pid, 1, ProposalStatus::Open) });
+    let digest = Some(diff_digest(&proposal(pid, 1, ProposalStatus::Open)));
+    w.chat_push("owner", vote("owner", pid, WorkspaceRole::Owner, true, digest));
+    w.chat.last_mut().unwrap().signer_device_id = Some(bx);
+    let p = w.state().proposals.into_iter().find(|p| p.id == pid).unwrap();
+    assert!(p.approvals.is_empty(), "the delegated host's vote counted: {:?}", p.approvals);
+
+    // And nobody can make the desktop delegated by re-publishing its cert
+    // from another device (the desktop's own publication came first).
+    let desk_cert = DeviceCertificate::issue(&owner_key, owner_acct, desk, &desk_key.public_key_bytes(), Timestamp::epoch());
+    signed(&mut w, SessionEvent::DeviceCertificateAdded { certificate: desk_cert }, bx);
+    assert!(!w.timeline().current().devices[&desk].delegated_for(owner_acct));
+}
