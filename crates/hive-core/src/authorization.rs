@@ -109,7 +109,48 @@ pub fn requires_projection_authz(event: &SessionEvent) -> bool {
             | SessionEvent::ChannelArchived { .. }
             | SessionEvent::ChatChannelChanged { .. }
             | SessionEvent::DeviceRevoked { .. }
+            | SessionEvent::DearthModeChanged { .. }
+            | SessionEvent::JoinApproved { .. }
+            | SessionEvent::ChatLockdownCleared { .. }
     )
+}
+
+/// Coordinator leases are deliberately **not** role-gated in projection: a run's
+/// lease rides its chat log, whose own roster holds only the chat's creator
+/// (membership is hoisted from the config log only after projection), so a
+/// role check there would drop every other member's claim. They are gated by
+/// role at authoring (against the hoisted roster) and, in projection, bound to
+/// the signing device below — the same footing as the run writes they fence.
+///
+/// Envelope-bound check for coordinator leases, run during projection where the
+/// envelope (and so its `signer_device_id`) is at hand:
+///   * a `CoordinatorLeaseClaimed` must be signed by the device it names as
+///     holder (no claiming on another device's behalf);
+///   * a `CoordinatorLeaseReleased` must be signed by the holder it names
+///     (`lease::fold_release` then checks that is the current holder);
+///   * a `WorkflowRunUpserted` stamped with a lease epoch must match the
+///     current epoch of that run's lease *and* be signed by its holder. A stamp
+///     with no lease, or from a future epoch nobody claimed, is a forgery;
+///     a stamp from an older epoch is left to the fold, which fences it.
+///
+/// Everything else passes. Deterministic over the fold-so-far `session`.
+pub fn lease_signer_ok(env: &crate::events::SessionEventEnvelope, session: &ChatSession) -> bool {
+    let signer = env.signer_device_id;
+    match &env.payload {
+        SessionEvent::CoordinatorLeaseClaimed { lease } => signer == Some(lease.holder),
+        SessionEvent::CoordinatorLeaseReleased { release } => signer == Some(release.holder),
+        SessionEvent::WorkflowRunUpserted { run } => {
+            let Some(epoch) = run.lease_epoch else { return true };
+            let key = crate::lease::lease_key(crate::lease::LeaseScope::WorkflowRun, &run.id.to_string());
+            match session.guards.leases.get(&key) {
+                None => false,
+                Some(state) if epoch > state.current.epoch => false,
+                Some(state) if epoch == state.current.epoch => signer == Some(state.current.holder),
+                Some(_) => true,
+            }
+        }
+        _ => true,
+    }
 }
 
 /// Whether a **non-seed** `SessionSnapshot` — one folded *after* the base seed,
@@ -166,7 +207,10 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         | SessionEvent::WorkspaceRuntimeRemoved { .. }
         // Revoking a device cuts trust — governance, admin+ (unlike publishing your
         // own account key/cert, which is a self-validated bootstrap at a low floor).
-        | SessionEvent::DeviceRevoked { .. } => WorkspaceRole::Admin,
+        | SessionEvent::DeviceRevoked { .. }
+        // Dearth mode and join approvals are governance (the entrance policy).
+        | SessionEvent::DearthModeChanged { .. }
+        | SessionEvent::JoinApproved { .. } => WorkspaceRole::Admin,
         // content / collaboration
         SessionEvent::SessionSnapshot { .. }
         | SessionEvent::MessageAppended { .. }
@@ -187,6 +231,7 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         // Dismiss only hides a proposal from the inbox; it destroys no record
         // and settles no vote, so it carries the same content-level floor.
         | SessionEvent::ProposalDismissed { .. }
+        | SessionEvent::ProposalMarkedStale { .. }
         // A refinement note is collaboration content (a comment/change request),
         // same content-level floor as posting a message or voting — so a
         // role-qualified agent can refine too.
@@ -211,7 +256,18 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         | SessionEvent::ChatChannelChanged { .. }
         | SessionEvent::WorkspaceHostsUpdated { .. }
         | SessionEvent::WorkspaceHostUpserted { .. }
-        | SessionEvent::WorkspaceHostRemoved { .. } => WorkspaceRole::Contributor,
+        | SessionEvent::WorkspaceHostRemoved { .. }
+        // Coordinating a run or the workspace is member work: the same floor
+        // as starting or driving a workflow. Also envelope-bound to the holder
+        // device (see `lease_signer_ok`).
+        | SessionEvent::CoordinatorLeaseClaimed { .. }
+        | SessionEvent::CoordinatorLeaseReleased { .. }
+        // Clearing a lockdown loosens a chat's envelope: a member's call (and a
+        // human's, see `evaluate`).
+        | SessionEvent::ChatLockdownCleared { .. } => WorkspaceRole::Contributor,
+        // Raising one only tightens, so any keyholder (a worker host, a
+        // Viewer's device) may: the floor.
+        SessionEvent::ChatLockdownRaised { .. } => WorkspaceRole::Viewer,
         // A newer-client event this build can't author or interpret — require
         // the highest role so it can never be produced locally by accident.
         SessionEvent::Unknown => WorkspaceRole::Owner,
@@ -246,6 +302,12 @@ fn self_enroll_allowance(
     // First member of a brand-new workspace: the creator seeds themselves.
     if session.members.is_empty() {
         return Some(AuthzDecision::allow_reason(AuthzReason::SelfEnroll));
+    }
+    // Dearth mode suspends self-enrollment: a newcomer must be added by an
+    // Admin (and then approved by a second one). An idempotent re-add of an
+    // existing member at the same role is still fine.
+    if session.guards.dearth_on().is_some() && !session.members.iter().any(|m| m.id == actor_id) {
+        return None;
     }
     match session.members.iter().find(|m| m.id == actor_id) {
         // Already a member: allowed only if the role is unchanged (idempotent
@@ -335,6 +397,13 @@ pub fn evaluate(
         _ => {}
     }
 
+    // Clearing a lockdown is a human decision: an agent or bot account can't
+    // talk its own chat out of quarantine.
+    if let SessionEvent::ChatLockdownCleared { .. } = event {
+        if !crate::guard::is_human_member(&session.members, actor_id) {
+            return AuthzDecision::deny(AuthzReason::InsufficientRole, "only a human member can clear a lockdown");
+        }
+    }
     if actor_role.rank() < min_role_for(event).rank() {
         return AuthzDecision::deny(
             AuthzReason::InsufficientRole,

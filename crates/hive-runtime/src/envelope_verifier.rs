@@ -150,6 +150,10 @@ pub struct WorkspaceRoster {
     /// identity gate can check this exact key against the account's GitHub
     /// `ssh_signing_keys`. Not used by Option A (relay-trusted) verification.
     account_keys: HashMap<Uuid, Vec<u8>>,
+    /// Device certificates withheld because they were issued while their
+    /// workspace was in dearth mode and lack a second approval:
+    /// `(workspace, device, account)`.
+    pending: Vec<(Uuid, Uuid, Uuid)>,
     /// Accounts for which two *different* signing keys were registered — a
     /// contested binding. Events stamped as one of these are quarantined (fail
     /// closed), so a forged registration under a victim's account can't hijack it.
@@ -185,6 +189,72 @@ impl WorkspaceRoster {
     pub fn is_empty(&self) -> bool {
         self.devices.is_empty() && self.revoked.is_empty()
     }
+    /// Certificates waiting for a dearth-mode second approval, as
+    /// `(workspace, device, account)`.
+    pub fn pending_devices(&self) -> &[(Uuid, Uuid, Uuid)] {
+        &self.pending
+    }
+    /// Every trusted (cert-verified, non-revoked) device id.
+    pub fn certified_devices(&self) -> Vec<Uuid> {
+        let mut v: Vec<Uuid> = self.devices.keys().copied().collect();
+        v.sort();
+        v
+    }
+}
+
+/// Dearth mode as the roster needs it: which devices are admitted without a
+/// second approval, and the accounts of the Admins who approved each subject.
+struct DearthPolicy {
+    admitted: HashSet<Uuid>,
+    approvers: HashMap<String, Vec<Uuid>>,
+}
+
+impl DearthPolicy {
+    /// A certificate counts if its device was trusted when dearth mode began,
+    /// or an Admin of a *different* account approved it (the owner's own
+    /// certificate is the first approval).
+    fn admits(&self, cert: &hive_core::crypto::DeviceCertificate) -> bool {
+        self.admitted.contains(&cert.device_id)
+            || self
+                .approvers
+                .get(&cert.device_id.to_string())
+                .is_some_and(|accts| accts.iter().any(|a| *a != cert.account_id))
+    }
+}
+
+/// Per workspace, the active dearth policy from its config log, projected with
+/// the usual ingest authorization (so only an Admin's switch or approval counts).
+fn dearth_policies(ordered: &[&SessionEventEnvelope]) -> HashMap<Uuid, DearthPolicy> {
+    let mut logs: HashMap<Uuid, Vec<SessionEventEnvelope>> = HashMap::new();
+    for env in ordered {
+        if env.session_id == hive_core::workspace_config_session_id(env.workspace_id) {
+            logs.entry(env.workspace_id).or_default().push((*env).clone());
+        }
+    }
+    let mut out = HashMap::new();
+    for (ws, envs) in logs {
+        if !envs.iter().any(|e| matches!(e.payload, SessionEvent::DearthModeChanged { .. })) {
+            continue;
+        }
+        let Some(cfg) = hive_core::project(&envs) else { continue };
+        let Some(d) = cfg.guards.dearth_on() else { continue };
+        let approvers = cfg
+            .guards
+            .join_approvals
+            .iter()
+            .map(|(subject, ids)| {
+                let accts = ids
+                    .iter()
+                    .filter_map(|id| cfg.members.iter().find(|m| &m.id == id))
+                    .filter(|m| m.role.rank() >= hive_core::WorkspaceRole::Admin.rank())
+                    .filter_map(|m| m.actor.account_id)
+                    .collect();
+                (subject.clone(), accts)
+            })
+            .collect();
+        out.insert(ws, DearthPolicy { admitted: d.admitted_devices.iter().copied().collect(), approvers });
+    }
+    out
 }
 
 impl DeviceKeyResolver for WorkspaceRoster {
@@ -215,6 +285,8 @@ pub fn build_roster(envelopes: &[SessionEventEnvelope]) -> WorkspaceRoster {
     let mut members: HashSet<Uuid> = HashSet::new();
     let mut member_account: HashMap<String, Uuid> = HashMap::new();
     let mut certs: Vec<hive_core::crypto::DeviceCertificate> = Vec::new();
+    // The workspace each certificate was published in (parallel to `certs`).
+    let mut cert_ws: Vec<Uuid> = Vec::new();
 
     let note_member = |members: &mut HashSet<Uuid>,
                            member_account: &mut HashMap<String, Uuid>,
@@ -291,6 +363,7 @@ pub fn build_roster(envelopes: &[SessionEventEnvelope]) -> WorkspaceRoster {
             }
             SessionEvent::DeviceCertificateAdded { certificate } => {
                 certs.push(certificate.clone());
+                cert_ws.push(env.workspace_id);
             }
             SessionEvent::DeviceRevoked { device_id } => {
                 explicit_revoked.insert(*device_id);
@@ -312,10 +385,19 @@ pub fn build_roster(envelopes: &[SessionEventEnvelope]) -> WorkspaceRoster {
             roster.account_keys.insert(*account_id, key.clone());
         }
     }
-    for cert in &certs {
+    let dearth = dearth_policies(&ordered);
+    for (cert, ws) in certs.iter().zip(&cert_ws) {
         let Some(account_key) = account_keys.get(&cert.account_id) else { continue };
         if cert.verify(account_key).is_err() {
             continue; // cert must chain to its account's key
+        }
+        // Dearth mode: a device that wasn't trusted when the entrance closed
+        // needs a second approval before its certificate counts.
+        if let Some(policy) = dearth.get(ws) {
+            if members.contains(&cert.account_id) && !policy.admits(cert) {
+                roster.pending.push((*ws, cert.device_id, cert.account_id));
+                continue;
+            }
         }
         if members.contains(&cert.account_id) {
             // Accumulate every member account this device is certified to (a

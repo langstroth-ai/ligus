@@ -18,12 +18,16 @@ pub mod event_store;
 pub mod git_attribution;
 pub mod git_worktree;
 pub mod github;
+pub mod guard_scan;
 pub mod host_presence;
+pub mod hygiene;
 pub mod identity_store;
 pub mod identity_verifier;
+pub mod lease_presence;
 pub mod mcp;
 pub mod mcp_oauth;
 pub mod mentions;
+pub mod patch_leaving;
 pub mod peer;
 #[cfg(feature = "p2p")]
 pub mod peer_iroh;
@@ -32,6 +36,7 @@ pub mod provider;
 pub mod relay_client;
 pub mod remote_manifest;
 pub mod retrieval;
+pub mod sandbox;
 pub mod sse;
 pub mod sync_engine;
 pub mod tool_loop;
@@ -40,6 +45,8 @@ pub mod workflow_tool;
 
 #[cfg(test)]
 mod test_relay;
+#[cfg(test)]
+mod dearth_roster_tests;
 
 pub use builtin_tools::{BuiltinTools, Policy as BuiltinToolPolicy};
 pub use chat_service::{

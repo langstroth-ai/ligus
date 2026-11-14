@@ -1317,6 +1317,70 @@ export const cancelWorkflowRun = (sessionId: string, runId: string) =>
 export const resumeWorkflowRun = (sessionId: string, runId: string) =>
   invoke<void>("resume_workflow_run", { sessionId, runId });
 
+/// Hand a run this device drives to another online device (planned handover).
+/// Resolves to the successor's device id.
+export const handOverWorkflowRun = (sessionId: string, runId: string, successor?: string) =>
+  invoke<string>("hand_over_workflow_run", { sessionId, runId, successor: successor ?? null });
+
+export type { GuardSignalDto } from "@/bindings/GuardSignalDto";
+export type { RunLeaseDto } from "@/bindings/RunLeaseDto";
+
+/// Device-local guard signals (never synced; content-free), oldest first.
+export const listGuardSignals = (afterRow?: number, kind?: string, limit?: number) =>
+  invoke<import("@/bindings/GuardSignalDto").GuardSignalDto[]>("list_guard_signals", {
+    afterRow: afterRow ?? null,
+    kind: kind ?? null,
+    limit: limit ?? null,
+  });
+
+// ── Workspace guards: dearth mode ──
+export type { DearthStateDto } from "@/bindings/DearthStateDto";
+export type { PendingJoinDto } from "@/bindings/PendingJoinDto";
+export type { EntranceDto } from "@/bindings/EntranceDto";
+
+export const getDearthState = () =>
+  invoke<import("@/bindings/DearthStateDto").DearthStateDto>("get_dearth_state");
+
+/// Switch dearth mode (Admin+). Lists are trimmed; empty entries dropped.
+export const setDearthMode = (
+  enabled: boolean,
+  reason: string,
+  broodPaths: string[],
+  allowedMcpServers: string[],
+) => invoke<void>("set_dearth_mode", { enabled, reason, broodPaths, allowedMcpServers });
+
+/// Approve a member or device waiting on dearth mode's second approval.
+export const approveJoin = (subject: string) => invoke<void>("approve_join", { subject });
+
+// ── Workspace guards: chat lockdown (self-medication) ──
+export type { ChatLockdownDto } from "@/bindings/ChatLockdownDto";
+export type { LockdownSignalDto } from "@/bindings/LockdownSignalDto";
+
+export const getChatLockdown = (sessionId: string) =>
+  invoke<import("@/bindings/ChatLockdownDto").ChatLockdownDto>("get_chat_lockdown", { sessionId });
+/// Clear a chat's lockdown (a human member; re-checked on every device).
+export const clearChatLockdown = (sessionId: string) => invoke<void>("clear_chat_lockdown", { sessionId });
+/// Lock a chat down by hand.
+export const lockChat = (sessionId: string) => invoke<void>("lock_chat", { sessionId });
+
+// ── Workspace guards: hygiene ──
+export type { HygieneReportDto } from "@/bindings/HygieneReportDto";
+export const getHygieneReport = () =>
+  invoke<import("@/bindings/HygieneReportDto").HygieneReportDto>("get_hygiene_report");
+/// Sweep leftover worktrees and stale proposals now.
+export const runHygieneNow = () =>
+  invoke<import("@/bindings/HygieneReportDto").HygieneReportDto>("run_hygiene_now");
+
+// ── Workspace guards: staggered throttles ──
+export type { ThrottleStateDto } from "@/bindings/ThrottleStateDto";
+export const getThrottleState = () =>
+  invoke<import("@/bindings/ThrottleStateDto").ThrottleStateDto>("get_throttle_state");
+
+// ── Nuc workspaces: growth suggestions from occupancy ──
+export type { GrowthSuggestionDto } from "@/bindings/GrowthSuggestionDto";
+export const growthSuggestions = () =>
+  invoke<import("@/bindings/GrowthSuggestionDto").GrowthSuggestionDto[]>("growth_suggestions");
+
 /// Fires whenever a workflow run's persisted state changes.
 export const onWorkflowRun = (
   cb: (e: WorkflowRunEvent) => void,

@@ -351,6 +351,7 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/agents", get(list_agents))
         .route("/v1/agents/:id/host", put(set_agent_host))
         .route("/v1/hosts", get(list_hosts))
+        .route("/v1/guards", get(workspace_guards))
         .route("/v1/people", get(super::people::list_people))
         .route("/v1/channels", get(super::people::list_channels))
         .route("/v1/chats/:id/details", get(super::people::chat_details))
@@ -565,6 +566,34 @@ async fn list_agents(State(s): S) -> ApiResult<Json<Value>> {
     let (hosts, config) = hosts_and_agents(&s)?;
     let list: Vec<Value> = config.workspace_agents.iter().map(|a| agent_dto(&s, a, &config, &hosts)).collect();
     Ok(Json(json!({ "agents": list })))
+}
+
+/// The workspace's guard state for a client to show (read-only): whether dearth
+/// mode is on, why, and what it restricts. Content-free beyond the reason an
+/// Admin typed.
+async fn workspace_guards(State(s): S) -> ApiResult<Json<Value>> {
+    let g = s.lock().workspace_guards(s.ws)?;
+    let dearth = g.dearth_on().map(|d| {
+        json!({
+            "reason": d.reason,
+            "broodPaths": d.brood_paths,
+            "allowedMcpServers": d.allowed_mcp_servers,
+            "setBy": d.set_by,
+            "setAt": d.set_at,
+        })
+    });
+    let locked: Vec<Value> = g
+        .lockdowns
+        .iter()
+        .filter(|(_, l)| !l.is_empty())
+        .map(|(chat, l)| json!({ "chatId": chat, "signals": l.iter().map(|x| json!({ "signal": x.signal, "detail": x.detail })).collect::<Vec<_>>() }))
+        .collect();
+    // The workspace coordinator lease (held by a serve box), if any.
+    let coordinator = g
+        .leases
+        .get(&hive_core::lease::lease_key(hive_core::lease::LeaseScope::Workspace, &s.ws.to_string()))
+        .map(|l| json!({ "holder": l.current.holder, "epoch": l.current.epoch, "leaseMs": l.current.lease_ms, "released": l.released, "isThis": l.current.holder.to_string() == s.host_id }));
+    Ok(Json(json!({ "dearth": dearth, "pendingMembers": g.pending_members.len(), "lockedChats": locked, "coordinator": coordinator })))
 }
 
 async fn list_hosts(State(s): S) -> ApiResult<Json<Value>> {
@@ -891,6 +920,15 @@ fn apply_on_this_host(s: &Shared, chat: &ChatSession, p: &ActionProposal) -> Api
     let (ProposalKind::FileDiff, Some(diff)) = (p.kind, p.diff.as_deref()) else {
         return Ok(None);
     };
+    // Workspace guards (dearth-mode brood paths, a chat lockdown): never apply
+    // automatically without a human member's own signed approval. Re-read the
+    // chat so the vote just cast is folded in.
+    if let Some(fresh) = s.lock().load(chat.id)? {
+        if let Some(reason) = hive_core::guard::human_gate_reason(&fresh, p) {
+            eprintln!("serve: not applying proposal {}: {reason}", p.id);
+            return Ok(None);
+        }
+    }
     let repos = crate::repos::repos_dir(&s.cfg.data_dir);
     let Some(repo) = crate::repos::RepoBindings::load(&s.cfg.data_dir).resolve(&repos, chat.id) else {
         return Ok(None);

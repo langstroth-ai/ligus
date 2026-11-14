@@ -110,6 +110,17 @@ log. The durable host record is now written only when something real changes
     no longer refresh. They show upgraded hosts as offline. Nothing breaks,
     but upgrade every device to see the right status.
 
+### The workspace coordinator
+
+Since 2.1 the box also holds the workspace's **coordinator lease**: a signed
+claim on the workspace config log, renewed by a heartbeat signed with the
+box's device key on the same presence channel. If a second `ligus serve` box
+serves the same workspace, it leaves the role to the first while that one
+beats, and takes it over (with a higher lease epoch) only after the holder has
+been silent for two lease periods (three minutes). `GET /v1/guards` reports
+the current holder and epoch, along with dearth mode and locked chats. See
+[Workspace guards](../features/guards.md).
+
 ## Apply on approve
 
 By default, approving a file-diff proposal from the phone records the vote
@@ -124,6 +135,8 @@ An approved diff is then committed to the chat's branch (`hive/chat/<id>`) in
 the checkout bound on the box (`ligus bind-repo`), the way the desktop's
 Implement does. Only a proposal whose status is `approved` applies; one that
 was rejected by a qualifying reviewer, dismissed or superseded never does.
+In dearth mode a change to a protected path, and in a locked-down chat any
+change, applies only once a human member has approved it themself.
 To switch a chat's repo, clone, pull or open a pull request from the phone,
 see [Repos on the home host](serve-repos.md).
 

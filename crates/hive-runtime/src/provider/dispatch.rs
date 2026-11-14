@@ -271,6 +271,9 @@ pub enum StreamActivity {
     /// the provider streams it (OpenAI-wire `reasoning` deltas / `<think>`
     /// blocks); empty for providers that only signal a marker (Claude Code).
     Thinking { text: String },
+    /// The runtime reported its subscription plan window (Claude Code's
+    /// rate-limit events). Feeds the staggered throttles.
+    RateLimit { window: hive_core::throttle::PlanWindow },
 }
 
 /// Error-message label for an OpenAI-wire provider kind.

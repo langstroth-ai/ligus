@@ -25,6 +25,8 @@ use hive_core::authorization::{evaluate as authorize, requires_authz};
 use crate::event_store::{EventStore, EventStoreError};
 use crate::provider::ChatTurn;
 
+mod guards;
+
 #[derive(Debug, thiserror::Error)]
 pub enum ChatError {
     #[error(transparent)]
@@ -659,12 +661,15 @@ impl ChatService {
         message_id: Uuid,
         chunk: impl Into<String>,
     ) -> Result<()> {
+        // Envelope: mask credentials before they reach the synced log. A chunk
+        // boundary can split one; the completed body is redacted whole below.
+        let chunk = self.redact_for_log(workspace_id, session_id, chunk.into());
         self.append_signed(
             session_id,
             workspace_id,
             SessionEvent::MessageChunkReceived {
                 message_id,
-                chunk: chunk.into(),
+                chunk,
             },
         )?;
         Ok(())
@@ -677,12 +682,13 @@ impl ChatService {
         message_id: Uuid,
         body: impl Into<String>,
     ) -> Result<()> {
+        let body = self.redact_for_log(workspace_id, session_id, body.into());
         self.append_signed(
             session_id,
             workspace_id,
             SessionEvent::MessageCompleted {
                 message_id,
-                body: body.into(),
+                body,
             },
         )?;
         // A completed reply is a natural checkpoint — snapshot periodically so
@@ -1956,6 +1962,23 @@ impl ChatService {
                 // are governed workspace-wide). A per-session-only member (e.g. a
                 // pre-hoist `MemberAdded` or the `create_chat` creator seed) has no
                 // config counterpart, so it's preserved (union, don't drop).
+                // Dearth mode is workspace-wide: overlay it so a chat's envelope
+                // and human gates see it. While it is on, members only this chat
+                // knows about (never admitted on the config log) are dropped from
+                // its roster, except the chat's creator: the tight entrance.
+                session.guards.dearth = cfg.guards.dearth.clone();
+                // This chat's lockdown (self-medication) lives on the config log.
+                session.guards.chat_id = Some(session.id);
+                session.guards.lockdowns = cfg
+                    .guards
+                    .lockdowns
+                    .get(&session.id)
+                    .map(|l| std::iter::once((session.id, l.clone())).collect())
+                    .unwrap_or_default();
+                if session.guards.dearth_on().is_some() {
+                    let creator = session.creator_actor_id.clone();
+                    session.members.retain(|m| m.id == creator || cfg.members.iter().any(|c| c.id == m.id));
+                }
                 for m in cfg.members {
                     if let Some(slot) = session.members.iter_mut().find(|x| x.id == m.id) {
                         *slot = m;

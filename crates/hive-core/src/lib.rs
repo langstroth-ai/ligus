@@ -15,15 +15,26 @@ pub mod e2ee;
 pub mod endpoint;
 pub mod events;
 pub mod git_context;
+pub mod guard;
 pub mod identity;
+pub mod lease;
+#[cfg(test)]
+mod lease_projection_tests;
+#[cfg(test)]
+mod dearth_tests;
+#[cfg(test)]
+mod lockdown_tests;
 pub mod model_profile;
 pub mod policy;
 pub mod process_util;
 pub mod proposals;
 pub mod runtime;
+pub mod sandbox;
 pub mod schedule;
 pub mod session;
+pub mod signal;
 pub mod skills;
+pub mod throttle;
 pub mod time_util;
 pub mod vault;
 pub mod workflow;

@@ -85,6 +85,10 @@ pub struct ChatSession {
     /// Workspace hosts (spec §12.4) — devices + workers agents run on.
     #[serde(default)]
     pub workspace_hosts: Vec<WorkspaceHost>,
+    /// Guard state: coordinator leases on this log, plus the workspace's guard
+    /// settings when this is (or is overlaid from) the config log.
+    #[serde(default)]
+    pub guards: crate::guard::GuardState,
     #[serde(default)]
     pub created_at: Timestamp,
     #[serde(default)]
@@ -153,6 +157,7 @@ impl ChatSession {
             channel_id: String::new(),
             workspace_runtimes: Vec::new(),
             workspace_hosts: Vec::new(),
+            guards: Default::default(),
             created_at: now,
             updated_at: now,
         }

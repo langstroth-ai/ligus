@@ -79,7 +79,7 @@ pub async fn generate_reply(
     working_dir: Option<&str>,
 ) -> Result<String> {
     if allow_mcp_tools {
-        if let Some(text) = try_tool_loop(rt, system, turns).await? {
+        if let Some(text) = try_tool_loop(rt, system, turns, &hive_core::sandbox::EgressPolicy::Open).await? {
             return Ok(text);
         }
     }
@@ -111,11 +111,20 @@ pub struct ToolSettings {
     pub run_command: bool,
     pub allow_remote_file_tools: bool,
     pub mcp_after_reads: bool,
+    /// The turn's sandbox-envelope egress policy: which MCP servers it may
+    /// reach (open by default; narrowed per turn by dearth mode or a lockdown).
+    pub mcp_egress: hive_core::sandbox::EgressPolicy,
 }
 
 impl Default for ToolSettings {
     fn default() -> Self {
-        Self { builtin_tools: true, run_command: false, allow_remote_file_tools: false, mcp_after_reads: false }
+        Self {
+            builtin_tools: true,
+            run_command: false,
+            allow_remote_file_tools: false,
+            mcp_after_reads: false,
+            mcp_egress: hive_core::sandbox::EgressPolicy::Open,
+        }
     }
 }
 
@@ -135,6 +144,7 @@ impl ToolSettings {
             run_command: env_flag("LIGUS_BUILTIN_RUN_COMMAND", d.run_command),
             allow_remote_file_tools: env_flag("LIGUS_ALLOW_REMOTE_FILE_TOOLS", d.allow_remote_file_tools),
             mcp_after_reads: env_flag("LIGUS_MCP_AFTER_READS", d.mcp_after_reads),
+            mcp_egress: d.mcp_egress,
         }
     }
 }
@@ -213,7 +223,7 @@ pub async fn generate_reply_streaming(
     mut on_delta: impl FnMut(String),
 ) -> Result<TurnReply> {
     if allow_tools && rt.provider == ModelProviderKind::Anthropic {
-        if let Some(text) = try_tool_loop(rt, system, turns).await? {
+        if let Some(text) = try_tool_loop(rt, system, turns, &settings.mcp_egress).await? {
             on_delta(text.clone());
             return Ok(TurnReply { text, worktree: None });
         }
@@ -239,7 +249,7 @@ async fn tool_loop_turn(
     use hive_runtime::git_worktree::{chat_worktree, is_git_repo, LazyTurnWorktree};
     use std::sync::Arc;
 
-    let mcp = mcp_tool_set().await?;
+    let mcp = mcp_tool_set(&settings.mcp_egress).await?;
     let repo = files
         .and_then(|f| f.repo_root.as_deref().map(|r| (f, r)))
         .filter(|(_, r)| is_git_repo(r));
@@ -303,8 +313,10 @@ async fn tool_loop_turn(
 /// The enabled MCP servers' tools (from `LIGUS_MCP_CONFIG`), as neutral defs
 /// plus the executor that routes a call back to its server. `None` when no
 /// server is configured or none lists a tool.
-async fn mcp_tool_set() -> Result<Option<(Vec<Value>, McpToolExecutor)>> {
-    let registry = McpRegistry::new(mcp_config::load_from_env()?);
+async fn mcp_tool_set(egress: &hive_core::sandbox::EgressPolicy) -> Result<Option<(Vec<Value>, McpToolExecutor)>> {
+    // The sandbox envelope decides which servers this turn may reach at all.
+    let specs: Vec<_> = mcp_config::load_from_env()?.into_iter().filter(|s| egress.allows_mcp(&s.id)).collect();
+    let registry = McpRegistry::new(specs);
     if registry.enabled().next().is_none() {
         return Ok(None);
     }
@@ -324,7 +336,12 @@ async fn mcp_tool_set() -> Result<Option<(Vec<Value>, McpToolExecutor)>> {
 
 /// Attempt the MCP tool loop. `Ok(None)` = no tools / unsupported runtime →
 /// caller falls back to streaming. Mirrors the app's `try_tool_loop`.
-async fn try_tool_loop(rt: &ResolvedRuntime, system: &str, turns: &[ChatTurn]) -> Result<Option<String>> {
+async fn try_tool_loop(
+    rt: &ResolvedRuntime,
+    system: &str,
+    turns: &[ChatTurn],
+    egress: &hive_core::sandbox::EgressPolicy,
+) -> Result<Option<String>> {
     // The tool-loop adapter is Anthropic-only (as in the app), and needs a key.
     if rt.provider != ModelProviderKind::Anthropic {
         return Ok(None);
@@ -333,7 +350,9 @@ async fn try_tool_loop(rt: &ResolvedRuntime, system: &str, turns: &[ChatTurn]) -
         return Ok(None);
     };
     // No config / no enabled servers → empty registry → fall back to streaming.
-    let registry = McpRegistry::new(mcp_config::load_from_env()?);
+    // Servers outside the envelope's egress policy are never offered.
+    let specs: Vec<_> = mcp_config::load_from_env()?.into_iter().filter(|s| egress.allows_mcp(&s.id)).collect();
+    let registry = McpRegistry::new(specs);
     if registry.enabled().next().is_none() {
         return Ok(None);
     }

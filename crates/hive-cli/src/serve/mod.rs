@@ -1071,6 +1071,7 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
     };
     let key = hive_core::derive_workspace_key(&pass);
     let room = shared.cfg.room.clone();
+    let mut coordinator = WorkspaceLease::default();
     loop {
         shared.presence.record(&shared.host_id, Timestamp::now().inner().unix_timestamp());
         // A box that can't write (revoked, awaiting approval) isn't serving work.
@@ -1079,6 +1080,7 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
             if let Err(e) = publish_host_beat(&relay, &room, &key, &shared.host_id).await {
                 eprintln!("presence: publishing this host's beat failed: {e}");
             }
+            coordinator.tick(&shared, &relay, &room, &key).await;
         }
         if let Ok(beats) = fetch_host_beats(&relay, &room, &key).await {
             shared.presence.merge(beats);
@@ -1087,6 +1089,103 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
             _ = tokio::time::sleep(Duration::from_secs(HOST_BEAT_EVERY_SECS as u64)) => {}
             _ = stop.wait_for(|s| *s) => return,
         }
+    }
+}
+
+/// This box as the workspace's coordinator: it holds the workspace-scope
+/// coordinator lease on the config log and renews it with signed heartbeats on
+/// the presence channel. A second serve box on the same workspace leaves it
+/// alone while the holder beats, and takes over (next epoch) only after the
+/// holder's heartbeat has lapsed for two leases.
+#[derive(Default)]
+struct WorkspaceLease {
+    epoch: Option<u64>,
+    beat: u64,
+}
+
+/// Workspace leases renew on the host beat cadence, so the lease spans three.
+const WORKSPACE_LEASE_MS: u64 = 3 * hive_runtime::host_presence::HOST_BEAT_EVERY_SECS as u64 * 1000;
+
+impl WorkspaceLease {
+    async fn tick(&mut self, shared: &Arc<Shared>, relay: &hive_runtime::RelayClient, room: &str, key: &[u8; 32]) {
+        use hive_core::lease::{lease_health, LeaseClaimReason, LeaseHealth, LeaseScope};
+        use hive_runtime::lease_presence::{open_lease_beats, publish_lease_beat, LeaseBeat};
+        let ws = shared.ws;
+        let scope_id = ws.to_string();
+        let config_id = hive_core::workspace_config_session_id(ws);
+        let now_ms = (Timestamp::now().inner().unix_timestamp_nanos() / 1_000_000) as i64;
+        let (me, lease) = {
+            let svc = shared.lock();
+            (svc.device_id(), svc.lease(config_id, LeaseScope::Workspace, &scope_id).ok().flatten())
+        };
+        // The holder's newest verified beat, from the presence channel.
+        let last = match relay.list_presence(room).await {
+            Ok(blobs) => {
+                let roster = {
+                    let svc = shared.lock();
+                    hive_runtime::envelope_verifier::build_roster(&svc.store().trust_envelopes(ws).unwrap_or_default())
+                };
+                use hive_runtime::envelope_verifier::DeviceKeyResolver;
+                open_lease_beats(&blobs, key, now_ms, |d| roster.public_key(d).map(<[u8]>::to_vec))
+                    .into_iter()
+                    .filter(|(b, _)| b.scope == LeaseScope::Workspace && b.scope_id == scope_id)
+                    .map(|(b, _)| (b.holder, b.epoch, b.at_ms))
+                    .next()
+            }
+            Err(_) => None,
+        };
+        let want = match &lease {
+            None => Some((1, LeaseClaimReason::Initial)),
+            Some(l) if l.current.holder == me && !l.released => {
+                self.epoch = Some(l.current.epoch);
+                None
+            }
+            Some(l) => match lease_health(l, last, now_ms) {
+                LeaseHealth::Released => Some((l.current.epoch + 1, LeaseClaimReason::Released)),
+                LeaseHealth::Lapsed if last.is_none_or(|(_, _, at)| now_ms - at > 2 * l.current.lease_ms as i64) => {
+                    Some((l.current.epoch + 1, LeaseClaimReason::Lapsed))
+                }
+                _ => {
+                    self.epoch = None;
+                    None
+                }
+            },
+        };
+        if let Some((epoch, reason)) = want {
+            let mut svc = shared.lock();
+            match svc.claim_lease(config_id, ws, LeaseScope::Workspace, &scope_id, epoch, WORKSPACE_LEASE_MS, reason) {
+                Ok(Some(l)) if l.current.holder == me && l.current.epoch == epoch => self.epoch = Some(epoch),
+                _ => self.epoch = None,
+            }
+        }
+        let Some(epoch) = self.epoch else { return };
+        self.beat += 1;
+        let beat = shared.lock().sign_lease_beat(LeaseBeat {
+            scope: LeaseScope::Workspace,
+            scope_id: scope_id.clone(),
+            holder: me,
+            epoch,
+            beat: self.beat,
+            lease_ms: WORKSPACE_LEASE_MS,
+            at_ms: now_ms,
+            signature: Vec::new(),
+        });
+        if let Err(e) = publish_lease_beat(relay, room, key, &beat).await {
+            eprintln!("presence: publishing the coordinator heartbeat failed: {e}");
+            return;
+        }
+        let _ = shared.lock().record_signal(
+            ws,
+            None,
+            &hive_core::signal::GuardSignal::CoordinatorHeartbeat {
+                scope: LeaseScope::Workspace,
+                scope_id,
+                holder: me,
+                lease_ms: WORKSPACE_LEASE_MS,
+                epoch,
+                beat: self.beat,
+            },
+        );
     }
 }
 

@@ -400,7 +400,40 @@ async fn run_turn(
             "withholding tools for message {} — author role {:?} below minimum {:?}",
             pm.message_id, author_role, min_role
         );
+        // Guard signal (device-local, content-free): the worker MCP role gate.
+        let subject = match author_role {
+            Some(_) => hive_core::signal::GuardSubject::Nestmate,
+            None => hive_core::signal::GuardSubject::Unknown,
+        };
+        let _ = lock(svc).record_signal(
+            s.workspace_id,
+            Some(s.id),
+            &hive_core::signal::GuardSignal::GuardDecision {
+                gate: hive_core::signal::GuardGate::ToolCall,
+                verdict: hive_core::signal::GuardVerdict::Reject,
+                subject,
+                source: "worker".into(),
+                reason: "role_floor".into(),
+            },
+        );
     }
+
+    // The workspace's sandbox envelope (dearth mode, a chat lockdown): enforce
+    // it for this runtime or refuse the turn, exactly as the desktop does.
+    let envelope = hive_core::sandbox::envelope_for_session(&s);
+    let enforcement = hive_runtime::sandbox::enforce(rt.provider, &envelope, &Vec::new());
+    if let Some(reason) = enforcement.refuse {
+        let _ = lock(svc).post_system_note(s.id, s.workspace_id, format!("@{} did not run: {reason}", agent.name));
+        sink.changed();
+        // An error puts the mention in the failed set, so it isn't retried
+        // (and the note re-posted) every tick.
+        return Err(anyhow!("refused by the workspace sandbox"));
+    }
+    let mut rt = rt;
+    rt.args.extend(enforcement.extra_args);
+    let mut tool_settings = ctx.settings.clone();
+    tool_settings.run_command &= enforcement.allow_run_command;
+    tool_settings.mcp_egress = envelope.egress.clone();
 
     // The checkout this chat is bound to on this box (see `repos.rs`).
     let repo_root = RepoBindings::load(&ctx.cfg.data_dir).resolve(&repos_dir(&ctx.cfg.data_dir), s.id);
@@ -486,7 +519,7 @@ async fn run_turn(
         allow_tools,
         work_dir.as_deref(),
         Some(&files),
-        &ctx.settings,
+        &tool_settings,
         on_delta,
     );
     let result = match tokio::time::timeout(turn_timeout(), fut).await {
@@ -498,6 +531,18 @@ async fn run_turn(
         Ok(reply) => {
             let worktree = eager.or(reply.worktree);
             let captured = worktree.as_ref().and_then(|wt| wt.diff().ok()).filter(|d| !d.trim().is_empty());
+            // Self-medication, as on the desktop: a credential in the diff or an
+            // unrequested CI change locks the chat down before review.
+            {
+                let changed = worktree.as_ref().and_then(|wt| wt.changed_files().ok()).unwrap_or_default();
+                let request = turns.iter().rev().find(|t| t.role == "user").map_or("", |t| t.content.as_str());
+                let findings = hive_runtime::guard_scan::assess_turn(&[], captured.as_deref(), &changed, request);
+                if !findings.is_empty() {
+                    if let Err(e) = lock(svc).self_medicate(s.workspace_id, s.id, &findings) {
+                        eprintln!("worker: lockdown failed: {e}");
+                    }
+                }
+            }
             // A model that produced nothing (and changed no files) never posts
             // an empty reply: the chat gets a notice saying so, as on the desktop.
             let empty = reply.text.trim().is_empty() && captured.is_none();

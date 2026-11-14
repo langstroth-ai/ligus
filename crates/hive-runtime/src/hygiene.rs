@@ -1,0 +1,241 @@
+//! Hygienic removal: clean up what agents leave behind, on a schedule, before
+//! it piles up (the colony removes dead brood early, before disease spreads).
+//!
+//! * **Turn worktrees** (`hive/turn-*`) are ephemeral: a turn's diff is
+//!   captured as a proposal and the worktree removed. One still on disk with no
+//!   turn streaming is a crash leftover: its edits are saved as a patch under
+//!   `stopped-turns/` and the worktree and branch removed.
+//! * **Chat worktrees** (`hive/chat/<id>`) belong to a chat. When the chat is
+//!   gone or archived, the *checkout* is removed but the branch is kept, since
+//!   it may hold applied work nobody has merged.
+//! * **Stale proposals**: an open diff that no longer applies to its chat's
+//!   branch is "capped dead brood": marked stale and taken out of the inbox
+//!   (restorable) instead of being kept open forever.
+//!
+//! Planning is pure ([`plan_sweep`]) so it can be tested without git.
+
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+
+use hive_core::process_util::command;
+
+/// One `git worktree list` entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeEntry {
+    pub path: PathBuf,
+    pub branch: Option<String>,
+}
+
+/// List a repository's worktrees (`git worktree list --porcelain`).
+pub fn list_worktrees(repo_root: &Path) -> Vec<WorktreeEntry> {
+    let Ok(out) = command("git").arg("-C").arg(repo_root).args(["worktree", "list", "--porcelain"]).output() else {
+        return Vec::new();
+    };
+    parse_porcelain(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn parse_porcelain(text: &str) -> Vec<WorktreeEntry> {
+    let mut out = Vec::new();
+    let mut cur: Option<WorktreeEntry> = None;
+    for line in text.lines() {
+        if let Some(p) = line.strip_prefix("worktree ") {
+            if let Some(e) = cur.take() {
+                out.push(e);
+            }
+            cur = Some(WorktreeEntry { path: PathBuf::from(p), branch: None });
+        } else if let Some(b) = line.strip_prefix("branch refs/heads/") {
+            if let Some(e) = cur.as_mut() {
+                e.branch = Some(b.to_string());
+            }
+        }
+    }
+    if let Some(e) = cur {
+        out.push(e);
+    }
+    out
+}
+
+/// What the sweep knows about a chat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatStatus {
+    Live,
+    Archived,
+}
+
+/// A cleanup step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SweepAction {
+    /// A crash-leftover turn worktree: save its edits, remove it and its branch.
+    RemoveTurnWorktree { path: PathBuf, branch: String },
+    /// A gone or archived chat's checkout (the branch is kept).
+    RemoveChatCheckout { path: PathBuf, chat_slug: String },
+}
+
+/// Decide what to clean. `live_turn_slugs`: turns still streaming (by the
+/// slug of their message id); `chats`: the workspace's chats by slug.
+pub fn plan_sweep(
+    entries: &[WorktreeEntry],
+    live_turn_slugs: &HashSet<String>,
+    chats: &HashMap<String, ChatStatus>,
+) -> Vec<SweepAction> {
+    let mut out = Vec::new();
+    for e in entries {
+        let Some(branch) = &e.branch else { continue };
+        if let Some(turn) = branch.strip_prefix("hive/turn-") {
+            if !live_turn_slugs.contains(turn) {
+                out.push(SweepAction::RemoveTurnWorktree { path: e.path.clone(), branch: branch.clone() });
+            }
+        } else if let Some(chat) = branch.strip_prefix("hive/chat/") {
+            match chats.get(chat) {
+                Some(ChatStatus::Live) => {}
+                // Archived, or a chat this workspace no longer has.
+                _ => out.push(SweepAction::RemoveChatCheckout { path: e.path.clone(), chat_slug: chat.to_string() }),
+            }
+        }
+    }
+    out
+}
+
+/// The slug git branch names use for an id (matches `git_worktree`).
+pub fn slug(id: &str) -> String {
+    id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' }).collect()
+}
+
+/// Carry out one step. Returns whether something was removed. Never deletes a
+/// chat branch, and saves a turn worktree's uncommitted edits first.
+pub fn apply(repo_root: &Path, action: &SweepAction) -> bool {
+    let git = |dir: &Path, args: &[&str]| command("git").arg("-C").arg(dir).args(args).output().map(|o| (o.status.success(), o.stdout));
+    match action {
+        SweepAction::RemoveTurnWorktree { path, branch } => {
+            if path.exists() {
+                let _ = git(path, &["add", "-A"]);
+                if let Ok((true, diff)) = git(path, &["diff", "--cached", "HEAD"]) {
+                    if !diff.is_empty() {
+                        let turn = branch.trim_start_matches("hive/turn-");
+                        let dest = crate::git_worktree::LazyTurnWorktree::stopped_patch_path(repo_root, turn);
+                        if let Some(parent) = dest.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        if std::fs::write(&dest, &diff).is_err() {
+                            // Couldn't save the edits: leave the worktree alone.
+                            return false;
+                        }
+                    }
+                }
+            }
+            let p = path.to_string_lossy().into_owned();
+            let removed = git(repo_root, &["worktree", "remove", "--force", &p]).map(|r| r.0).unwrap_or(false);
+            let _ = git(repo_root, &["branch", "-D", branch]);
+            removed || !path.exists()
+        }
+        SweepAction::RemoveChatCheckout { path, .. } => {
+            let p = path.to_string_lossy().into_owned();
+            git(repo_root, &["worktree", "remove", "--force", &p]).map(|r| r.0).unwrap_or(false)
+        }
+    }
+}
+
+/// Prune worktree records whose directory is gone.
+pub fn prune(repo_root: &Path) {
+    let _ = command("git").arg("-C").arg(repo_root).args(["worktree", "prune"]).output();
+}
+
+/// Whether `diff` still applies cleanly in `dir` (`git apply --check`).
+pub fn patch_applies(dir: &Path, diff: &str) -> bool {
+    use std::io::Write;
+    use std::process::Stdio;
+    let Ok(mut child) = command("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["apply", "--check", "--whitespace=nowarn"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return true; // can't tell: never mark stale on a tooling failure
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(diff.as_bytes());
+    }
+    child.wait().map(|s| s.success()).unwrap_or(true)
+}
+
+/// An opaque, content-free key for a chat's worktree in signals: a hash of a
+/// device-local secret and the chat id, never a path or repository name.
+pub fn opaque_key(device_secret: &[u8], chat_slug: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(b"ligus-worktree-key\0");
+    h.update(device_secret);
+    h.update(chat_slug.as_bytes());
+    h.finalize().iter().take(12).map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn porcelain_parses() {
+        let text = "worktree /r\nHEAD abc\nbranch refs/heads/main\n\nworktree /r/.ligus/worktrees/t1\nHEAD def\nbranch refs/heads/hive/turn-t1\n\nworktree /r/.ligus/worktrees/x\nHEAD 0\ndetached\n";
+        let e = parse_porcelain(text);
+        assert_eq!(e.len(), 3);
+        assert_eq!(e[1].branch.as_deref(), Some("hive/turn-t1"));
+        assert_eq!(e[2].branch, None);
+    }
+
+    #[test]
+    fn plan_removes_leftovers_and_keeps_live_work() {
+        let wt = |b: &str| WorktreeEntry { path: PathBuf::from(format!("/r/{b}")), branch: Some(b.into()) };
+        let entries = vec![wt("main"), wt("hive/turn-live"), wt("hive/turn-dead"), wt("hive/chat/a"), wt("hive/chat/b"), wt("hive/chat/gone")];
+        let live: HashSet<String> = ["live".to_string()].into();
+        let chats: HashMap<String, ChatStatus> = [("a".to_string(), ChatStatus::Live), ("b".to_string(), ChatStatus::Archived)].into();
+        let plan = plan_sweep(&entries, &live, &chats);
+        assert_eq!(
+            plan,
+            vec![
+                SweepAction::RemoveTurnWorktree { path: "/r/hive/turn-dead".into(), branch: "hive/turn-dead".into() },
+                SweepAction::RemoveChatCheckout { path: "/r/hive/chat/b".into(), chat_slug: "b".into() },
+                SweepAction::RemoveChatCheckout { path: "/r/hive/chat/gone".into(), chat_slug: "gone".into() },
+            ]
+        );
+    }
+
+    #[test]
+    fn opaque_keys_hide_the_chat() {
+        let k = opaque_key(b"secret", "chat-1");
+        assert_eq!(k.len(), 24);
+        assert!(!k.contains("chat"));
+        assert_ne!(k, opaque_key(b"other", "chat-1"));
+    }
+
+    #[test]
+    fn sweep_end_to_end_saves_edits_and_keeps_chat_branches() {
+        let dir = std::env::temp_dir().join(format!("ligus-hygiene-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = |args: &[&str]| {
+            let o = command("git").arg("-C").arg(&dir).args(args).output().unwrap();
+            assert!(o.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+        };
+        run(&["init", "-q", "-b", "main"]);
+        run(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"]);
+        let chat = crate::git_worktree::chat_worktree(&dir, "gone-chat").unwrap();
+        let turn = crate::git_worktree::Worktree::create(&dir, "dead-turn").unwrap();
+        std::fs::write(turn.path.join("work.txt"), "unsaved").unwrap();
+
+        let plan = plan_sweep(&list_worktrees(&dir), &HashSet::new(), &HashMap::new());
+        assert_eq!(plan.len(), 2);
+        for a in &plan {
+            assert!(apply(&dir, a), "{a:?}");
+        }
+        prune(&dir);
+        assert!(!turn.path.exists() && !chat.exists());
+        // The turn's edits were saved, the chat branch kept.
+        let saved = crate::git_worktree::LazyTurnWorktree::stopped_patch_path(&dir, "dead-turn");
+        assert!(std::fs::read_to_string(saved).unwrap().contains("unsaved"));
+        let o = command("git").arg("-C").arg(&dir).args(["branch", "--list", "hive/chat/gone-chat"]).output().unwrap();
+        assert!(String::from_utf8_lossy(&o.stdout).contains("hive/chat/gone-chat"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

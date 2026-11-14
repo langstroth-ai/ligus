@@ -183,6 +183,7 @@ async fn drive<M: ToolExecutor>(rt: &ResolvedRuntime, tools: &CompositeTools<M>,
                     t.errors += usize::from(is_error);
                 }
                 StreamActivity::Thinking { text } => t.thinking_chars += text.len(),
+                StreamActivity::RateLimit { .. } => {}
             }
         },
     )

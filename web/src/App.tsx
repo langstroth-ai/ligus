@@ -43,6 +43,9 @@ import { Onboarding } from "@/components/Onboarding";
 import { Tour, type TourStep } from "@/components/Tour";
 import { ToastHost, toast, errMsg } from "@/components/Toast";
 import { UpdateBanner } from "@/components/UpdateBanner";
+import { DearthBanner } from "@/components/guards/DearthBanner";
+import { LockdownBar } from "@/components/guards/LockdownBar";
+import { GrowthSuggestions } from "@/components/guards/GrowthSuggestions";
 import { PendingInvitesBanner } from "@/components/PendingInvitesBanner";
 import { DialogHost, promptDialog } from "@/components/Dialog";
 import { IconPencil, IconHexagon } from "@/lib/icons";
@@ -410,6 +413,8 @@ export function App() {
     const unlisten = onWorkspaceSynced(() => {
       // A sync succeeded: refresh the health pill (flips back to Live on recovery).
       qc.invalidateQueries({ queryKey: ["sync-status"] });
+      qc.invalidateQueries({ queryKey: ["dearth-state"] });
+      qc.invalidateQueries({ queryKey: ["chat-lockdown"] });
       qc.invalidateQueries({ queryKey: ["chats"] });
       qc.invalidateQueries({ queryKey: ["chat"] });
       // Channels + skills also ride the synced log (config hoist / §11): refresh
@@ -969,6 +974,8 @@ export function App() {
       )}
 
       <main data-tour="canvas" className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <DearthBanner onManage={() => openSettings("guards")} />
+        <GrowthSuggestions onOpen={(kind) => openSettings(kind === "agent" ? "models" : "team-sync")} />
         {view === "friends" ? (
           <PaneErrorBoundary label="Friends">
             <FriendsView
@@ -1084,6 +1091,7 @@ export function App() {
                 }
               }}
             />
+            {selectedId && <LockdownBar sessionId={selectedId} />}
 
             <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
               <div className="min-w-0 flex-1">

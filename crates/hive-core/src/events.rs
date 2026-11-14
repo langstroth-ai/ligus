@@ -208,6 +208,34 @@ pub enum SessionEvent {
     WorkspaceHostUpserted { host: WorkspaceHost },
     /// Remove a single workspace host by id (delta). Idempotent.
     WorkspaceHostRemoved { host_id: String },
+    /// A device claims the coordinator lease for a scope (a workflow run on its
+    /// chat log, or the workspace on the config log) at `lease.epoch`. Folded by
+    /// `lease::fold_claim`: strictly increasing epochs, first claim per epoch in
+    /// canonical order wins (split-brain fencing). Projection also requires the
+    /// envelope to be signed by the device it names as holder.
+    CoordinatorLeaseClaimed { lease: crate::lease::CoordinatorLease },
+    /// The holder releases its lease, optionally naming a successor (planned
+    /// handover). Must be signed by the holder.
+    CoordinatorLeaseReleased { release: crate::lease::LeaseRelease },
+    /// Switch dearth mode (a workspace-wide tight entrance) on or off, with its
+    /// settings. Config log; Admin+, re-checked on ingest.
+    DearthModeChanged { dearth: crate::guard::DearthMode },
+    /// An Admin's approval of a pending join: `subject` is a member id (added
+    /// during dearth mode) or a device id (certified during dearth mode). A
+    /// second approval from another Admin admits it. Config log; Admin+.
+    JoinApproved { subject: String },
+    /// An infection signal locked a chat down (self-medication): its envelope
+    /// closes egress and every proposal needs a human approval until a member
+    /// clears it. Config log (so the workspace roster authorizes the clear);
+    /// any keyholder may raise one, since it only ever tightens.
+    ChatLockdownRaised { chat_id: Uuid, lockdown: crate::guard::ChatLockdown },
+    /// A human member (Contributor+) clears a chat's lockdown. Config log;
+    /// re-checked on ingest.
+    ChatLockdownCleared { chat_id: Uuid },
+    /// The hygiene sweep found a proposal's diff no longer applies to its
+    /// chat's branch ("capped dead brood"): marked stale. Session-scoped
+    /// content, like a dismissal.
+    ProposalMarkedStale { proposal_id: Uuid },
     /// Forward-compat catch-all: an event `kind` this build does not recognize
     /// (produced by a newer client). Serde deserializes an unknown tag here
     /// instead of failing the whole stream; it projects as a no-op. The raw
@@ -262,6 +290,13 @@ impl SessionEvent {
             SessionEvent::WorkspaceHostsUpdated { .. } => "workspaceHostsUpdated",
             SessionEvent::WorkspaceHostUpserted { .. } => "workspaceHostUpserted",
             SessionEvent::WorkspaceHostRemoved { .. } => "workspaceHostRemoved",
+            SessionEvent::CoordinatorLeaseClaimed { .. } => "coordinatorLeaseClaimed",
+            SessionEvent::CoordinatorLeaseReleased { .. } => "coordinatorLeaseReleased",
+            SessionEvent::DearthModeChanged { .. } => "dearthModeChanged",
+            SessionEvent::JoinApproved { .. } => "joinApproved",
+            SessionEvent::ChatLockdownRaised { .. } => "chatLockdownRaised",
+            SessionEvent::ChatLockdownCleared { .. } => "chatLockdownCleared",
+            SessionEvent::ProposalMarkedStale { .. } => "proposalMarkedStale",
             SessionEvent::Unknown => "unknown",
         }
     }
@@ -286,7 +321,11 @@ impl SessionEvent {
             | SessionEvent::WorkspaceRuntimeRemoved { .. }
             | SessionEvent::WorkspaceHostsUpdated { .. }
             | SessionEvent::WorkspaceHostUpserted { .. }
-            | SessionEvent::WorkspaceHostRemoved { .. } => EventScope::Workspace,
+            | SessionEvent::WorkspaceHostRemoved { .. }
+            | SessionEvent::DearthModeChanged { .. }
+            | SessionEvent::JoinApproved { .. }
+            | SessionEvent::ChatLockdownRaised { .. }
+            | SessionEvent::ChatLockdownCleared { .. } => EventScope::Workspace,
             SessionEvent::WorkflowRunUpserted { .. } => EventScope::Run,
             _ => EventScope::Session,
         }
@@ -476,6 +515,16 @@ impl ChatSession {
                 self.workflow_definitions = definitions.clone();
             }
             SessionEvent::WorkflowRunUpserted { run } => {
+                // A coordinator write under an epoch a newer claim has superseded
+                // is fenced (the laying-worker case: two devices both driving).
+                if !crate::lease::write_is_current(
+                    &self.guards.leases,
+                    crate::lease::LeaseScope::WorkflowRun,
+                    &run.id.to_string(),
+                    run.lease_epoch,
+                ) {
+                    return;
+                }
                 if let Some(slot) = self.workflow_runs.iter_mut().find(|r| r.id == run.id) {
                     *slot = (**run).clone();
                 } else {
@@ -575,6 +624,39 @@ impl ChatSession {
             | SessionEvent::AccountKeyRotated { .. }
             | SessionEvent::DeviceCertificateAdded { .. }
             | SessionEvent::DeviceRevoked { .. } => {}
+            SessionEvent::CoordinatorLeaseClaimed { lease } => {
+                crate::lease::fold_claim(&mut self.guards.leases, lease);
+            }
+            SessionEvent::CoordinatorLeaseReleased { release } => {
+                crate::lease::fold_release(&mut self.guards.leases, release);
+            }
+            SessionEvent::DearthModeChanged { dearth } => {
+                // Switching off returns to normal rules: pending joins land.
+                if !dearth.enabled {
+                    for p in std::mem::take(&mut self.guards.pending_members) {
+                        if !self.members.iter().any(|m| m.id == p.member.id) {
+                            self.members.push(p.member);
+                        }
+                    }
+                }
+                self.guards.dearth = Some(dearth.clone());
+            }
+            // Folded with its author in projection (`guard::fold_authored`).
+            SessionEvent::JoinApproved { .. } => {}
+            SessionEvent::ChatLockdownRaised { chat_id, lockdown } => {
+                let list = self.guards.lockdowns.entry(*chat_id).or_default();
+                if !list.iter().any(|l| l.id == lockdown.id) {
+                    list.push(lockdown.clone());
+                }
+            }
+            SessionEvent::ChatLockdownCleared { chat_id } => {
+                self.guards.lockdowns.remove(chat_id);
+            }
+            SessionEvent::ProposalMarkedStale { proposal_id } => {
+                if self.proposals.iter().any(|p| p.id == *proposal_id) {
+                    self.guards.stale_proposals.insert(*proposal_id);
+                }
+            }
             // Unrecognized (newer-client) event — inert in this build.
             SessionEvent::Unknown => {}
         }
@@ -716,6 +798,12 @@ pub fn project_with_options(
             if !crate::authorization::nonseed_snapshot_authorized(snap, author, &session) {
                 continue;
             }
+        } else if !crate::authorization::lease_signer_ok(env, &session) {
+            // Lease claims/releases and epoch-stamped coordinator writes must be
+            // signed by the device that holds (or claims) the lease. A forged
+            // claim naming someone else's device, or a write under an epoch whose
+            // holder is another device, is dropped on every device alike.
+            continue;
         } else if crate::authorization::requires_projection_authz(&env.payload)
             && trusted_workspace != Some(env.workspace_id)
         {
@@ -729,6 +817,13 @@ pub fn project_with_options(
             if !crate::authorization::evaluate(&env.payload, author, role, &session).allowed {
                 continue;
             }
+        }
+        // Guard folds that need the signed author (dearth-mode joins, verified
+        // votes). Deterministic over the canonical fold like everything above.
+        let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
+        if crate::guard::fold_authored(&mut session, &env.payload, author) {
+            session.updated_at = env.timestamp;
+            continue;
         }
         session.apply(&env.payload);
         session.updated_at = env.timestamp;

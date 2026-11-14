@@ -39,6 +39,7 @@ use tauri_plugin_notification::NotificationExt;
 use uuid::Uuid;
 
 mod workflows;
+mod guards;
 mod data_migration;
 /// In-app live test support (see `tests/app_live.rs`); not in release builds.
 #[cfg(feature = "e2e")]
@@ -94,6 +95,8 @@ struct AppState {
     /// Host liveness from the connected room's relay presence channel (see
     /// `hive_runtime::host_presence`), refreshed by `run_device_host_loop`.
     host_presence: hive_runtime::HostPresence,
+    /// Workspace guards kept in memory (leases held, heartbeats seen).
+    guards: crate::guards::GuardRuntime,
     identity: IdentityStore<FileKeyVault>,
     data_dir: PathBuf,
     base_runtimes: Mutex<Vec<RuntimeTarget>>,
@@ -5504,6 +5507,11 @@ async fn implement_proposal(
     if !proposal.ready_to_apply() {
         return Err("not approved yet — it needs quorum before it can be implemented".into());
     }
+    // Workspace guards: dearth mode (brood paths) and a chat lockdown require
+    // a human member's own signed approval, whatever the quorum says.
+    if let Some(reason) = hive_core::guard::human_gate_reason(&session, &proposal) {
+        return Err(format!("Not applied: {reason}."));
+    }
 
     // An agent-authored workflow: implementing it adds the definition. The
     // approving vote normally did this already; this covers a quorum reached
@@ -6099,7 +6107,7 @@ impl AppState {
 ///   to a known room *and* were authored locally (or predate creator tracking),
 ///   which re-homes legacy local chats and hides synced room chats that leaked
 ///   into the flat store before scoping existed.
-fn session_in_workspace(
+pub(crate) fn session_in_workspace(
     session_workspace_id: Uuid,
     creator_actor_id: &str,
     active_id: Uuid,
@@ -6122,12 +6130,13 @@ fn session_in_workspace(
 /// `start_workflow_run` uses. Idempotent: the pure selector skips any run
 /// already in `run_wakers`, and `SessionBusyGuard::acquire` fails closed if the
 /// session's slot is already held (so we never double-drive a session).
-fn recover_workflow_runs(app: &AppHandle) {
+pub(crate) fn recover_workflow_runs(app: &AppHandle) {
     let state = app.state::<AppState>();
     let active = state.active_workspace_id();
     let me = state.local_actor_id();
     let known_rooms = state.known_room_ids();
     let config_id = hive_core::workspace_config_session_id(active);
+    let beats_known = crate::guards::beats_known(&state);
 
     // (session_id, workspace_id, run_id, status) for every run in the workspace.
     let mut candidates: Vec<(Uuid, Uuid, Uuid, hive_core::workflow::WorkflowRunStatus)> = Vec::new();
@@ -6143,6 +6152,13 @@ fn recover_workflow_runs(app: &AppHandle) {
                 continue;
             }
             for run in &s.workflow_runs {
+                // Lease-aware: a run another device is still driving (its
+                // heartbeat is live) is left alone; see `guards::recovery_allowed`.
+                if crate::guards::is_live_status(run.status)
+                    && !crate::guards::recovery_allowed(&state, &s, run.id, svc.device_id(), &me, beats_known)
+                {
+                    continue;
+                }
                 candidates.push((id, s.workspace_id, run.id, run.status));
             }
         }
@@ -7226,6 +7242,9 @@ impl MessagesApi for AnthropicMessages {
 /// Executes a tool call by routing the (sanitized) tool name back to its MCP
 /// server. Honors the registry's enable gate.
 struct McpToolExecutor {
+    /// Prompt-injection markers seen in this turn's MCP results (shared so the
+    /// turn can read them after the executor moved into a tool set).
+    injection_hits: crate::guards::InjectionHits,
     registry: McpRegistry,
     /// sanitized anthropic tool name → (server id, real tool name)
     names: HashMap<String, (String, String)>,
@@ -7235,7 +7254,10 @@ impl ToolExecutor for McpToolExecutor {
     async fn call(&self, name: &str, input: &Value) -> (String, bool) {
         match self.names.get(name) {
             Some((server, tool)) => match self.registry.call_tool(server, tool, input).await {
-                Ok(text) => (text, false),
+                Ok(text) => {
+                    self.injection_hits.scan(&text);
+                    (text, false)
+                }
                 Err(e) => (format!("tool error: {e}"), true),
             },
             None => (format!("unknown tool {name}"), true),
@@ -7266,11 +7288,15 @@ fn turns_to_messages(turns: &[ChatTurn]) -> Vec<Value> {
 /// none of them lists a tool, so the caller streams a plain turn instead.
 /// Shared by the Anthropic loop and the HTTP-model loops (native Ollama and
 /// the OpenAI wire).
-async fn mcp_tool_set(state: &State<'_, AppState>) -> Option<(Vec<Value>, McpToolExecutor)> {
+async fn mcp_tool_set(
+    state: &State<'_, AppState>,
+    egress: &hive_core::sandbox::EgressPolicy,
+) -> Option<(Vec<Value>, McpToolExecutor)> {
     // Renew any near-expiry remote-server tokens before we build the registry.
     state.ensure_fresh_mcp_tokens().await;
-    // Snapshot the registry so we don't hold locks across awaits.
-    let registry = McpRegistry::new(state.combined_mcp_servers());
+    // Snapshot the registry so we don't hold locks across awaits. The turn's
+    // sandbox envelope decides which servers it may reach at all.
+    let registry = McpRegistry::new(crate::guards::filter_mcp_servers(state, state.combined_mcp_servers(), egress));
     registry.enabled().next()?;
 
     let tagged = registry.list_all_tools().await;
@@ -7289,7 +7315,7 @@ async fn mcp_tool_set(state: &State<'_, AppState>) -> Option<(Vec<Value>, McpToo
         }));
         names.insert(tname, (server.clone(), tool.name.clone()));
     }
-    Some((tool_defs, McpToolExecutor { registry, names }))
+    Some((tool_defs, McpToolExecutor { injection_hits: Default::default(), registry, names }))
 }
 
 /// Whether an HTTP model turn gets Hive's built-in file tools: the runtime
@@ -7377,11 +7403,12 @@ async fn try_tool_loop(
     system: &str,
     turns: &[ChatTurn],
     reply_to: Option<Uuid>,
+    egress: &hive_core::sandbox::EgressPolicy,
 ) -> Result<Option<TurnOutcome>, String> {
     let Some(api_key) = responder.runtime.api_key.clone() else {
         return Ok(None);
     };
-    let Some((tool_defs, executor)) = mcp_tool_set(state).await else {
+    let Some((tool_defs, executor)) = mcp_tool_set(state, egress).await else {
         return Ok(None);
     };
 
@@ -7400,6 +7427,9 @@ async fn try_tool_loop(
     let initial = turns_to_messages(turns);
 
     let result = tool_loop::run_with_messages(&model, &executor, initial, tool_defs, hive_runtime::agent_tools::ANTHROPIC_TOOL_ROUNDS).await;
+    // Self-medication: an injection marker in what the tools returned locks
+    // this chat down.
+    crate::guards::self_medicate_after_turn(state, workspace_id, session_id, &executor.injection_hits.take(), None, &[], turns);
 
     let (phase, text) = match result {
         Ok(text) => {
@@ -7644,12 +7674,21 @@ async fn run_prepared_turn(
     // (see ChatMessage::reply_to_message_id / pending_mentions).
     let reply_to = session.messages.iter().rev().find(|m| !m.is_streaming).map(|m| m.id);
 
+    // The workspace's sandbox envelope for this turn (isolation, egress,
+    // redaction, human gate), enforced below for whatever runtime answers.
+    let envelope = crate::guards::turn_envelope(session);
+    let enforcement = crate::guards::enforcement_for(state, responder.runtime.provider, &envelope);
+    if let Some(reason) = &enforcement.refuse {
+        crate::guards::record_egress_refusal(state, workspace_id, session_id, responder.runtime.provider);
+        return Err(reason.clone());
+    }
+
     // If MCP tools are enabled and the responder runs on Anthropic, take the
     // (non-streaming) agentic tool loop instead of plain streaming. On any MCP
     // failure we fall through to streaming.
     if responder.runtime.provider == ModelProviderKind::Anthropic {
         if let Some(outcome) =
-            try_tool_loop(app, state, session_id, workspace_id, responder, &system, &turns, reply_to)
+            try_tool_loop(app, state, session_id, workspace_id, responder, &system, &turns, reply_to, &envelope.egress)
                 .await?
         {
             return Ok(outcome);
@@ -7665,13 +7704,17 @@ async fn run_prepared_turn(
     // the dispatcher; an OpenAI-wire server that rejects tools falls back to
     // plain chat there.
     let mcp_tools = if responder.runtime.runs_agent_tools() {
-        mcp_tool_set(state).await
+        mcp_tool_set(state, &envelope.egress).await
     } else {
         None
     };
+    // Injection markers seen in any tool result this turn (Ligus-run MCP tools
+    // and the runtime's own tools, via the activity stream).
+    let injection_hits = mcp_tools.as_ref().map(|(_, ex)| ex.injection_hits.clone()).unwrap_or_default();
     let (builtin_on, builtin_write_in_place, builtin_run_command) = {
         let s = state.settings.lock().unwrap();
-        (s.builtin_tools, s.builtin_write_in_place, s.builtin_run_command)
+        // `run_command` is a shell: off whenever the envelope closes egress.
+        (s.builtin_tools, s.builtin_write_in_place, s.builtin_run_command && enforcement.allow_run_command)
     };
     let builtin_wanted = wants_builtin_tools(&responder.runtime, builtin_on);
 
@@ -7796,6 +7839,13 @@ async fn run_prepared_turn(
             "API turn has MCP tools enabled and runs in place — its file writes are NOT worktree-isolated or diff-gated (unlike subprocess agents). See P2-5."
         );
     }
+    // A tightened envelope never lets a write-capable agent run in place.
+    if envelope.isolate_writes && git_subprocess && write_capable && worktree.is_none() {
+        let mut svc = state.service.lock().unwrap();
+        let note = "This chat's sandbox requires an isolated git worktree for agents that edit files, and one couldn't be made here (no git repository bound, or the worktree failed).";
+        let _ = svc.complete_assistant_message(session_id, workspace_id, message_id, note);
+        return Err(note.into());
+    }
     let effective_root = worktree
         .as_ref()
         .map(|w| w.path.to_string_lossy().into_owned())
@@ -7858,6 +7908,9 @@ async fn run_prepared_turn(
             None => tools,
         }
     });
+    if let Some(tools) = &http_tools {
+        crate::guards::record_tools_selected(state, workspace_id, session_id, &tools.mcp_selection());
+    }
     let tool_rounds = hive_runtime::agent_tools::tool_round_budget(
         responder.runtime.provider,
         responder.runtime.max_tool_rounds,
@@ -7904,8 +7957,15 @@ async fn run_prepared_turn(
     // outer select, which still wins there, so its clean break path is unchanged.
     let stop = state.turn_stops.lock().unwrap().entry(session_id).or_default().clone();
     let mut stopped = false;
+    // The runtime with the envelope's own flags (no web tools, no foreign MCP,
+    // network off) appended for subprocess agents.
+    let enforced_runtime = {
+        let mut rt = responder.runtime.clone();
+        rt.args.extend(enforcement.extra_args.iter().cloned());
+        rt
+    };
     let stream_fut = dispatch::stream_with_tools(
-        &responder.runtime,
+        &enforced_runtime,
         Some(&system),
         &turns,
         working_dir,
@@ -7949,13 +8009,16 @@ async fn run_prepared_turn(
                     is_error: false,
                 },
                 dispatch::StreamActivity::ToolResult { call_id, is_error, content } => ChatActivityEvent {
+                    content: {
+                        injection_hits.scan(&content);
+                        content
+                    },
                     session_id: session_id.to_string(),
                     message_id: message_id.to_string(),
                     kind: "result".into(),
                     id: call_id,
                     name: String::new(),
                     input_json: String::new(),
-                    content,
                     is_error,
                 },
                 // `content` carries a reasoning model's chain-of-thought fragment
@@ -7971,6 +8034,11 @@ async fn run_prepared_turn(
                     content: text,
                     is_error: false,
                 },
+                // Plan-window telemetry: feeds the staggered throttles, not the UI stream.
+                dispatch::StreamActivity::RateLimit { window } => {
+                    crate::guards::record_plan_window(state, responder.runtime.provider, window);
+                    return;
+                }
             };
             let _ = app.emit(ChatActivityEvent::EVENT, ev);
         },
@@ -7989,6 +8057,10 @@ async fn run_prepared_turn(
             ))),
         },
     };
+    // Patch-leaving: what the tool loop measurably achieved, as signals.
+    if let Some(tools) = &http_tools {
+        crate::guards::record_progress(state, workspace_id, session_id, tools.progress());
+    }
     // The worktree a lazily isolating turn cut on its first write, if it
     // wrote at all; from here on it is handled like an eager one.
     let worktree = worktree.or_else(|| lazy_worktree.as_ref().and_then(|l| l.finish()));
@@ -8006,6 +8078,21 @@ async fn run_prepared_turn(
                 .as_ref()
                 .and_then(|wt| wt.diff().ok())
                 .filter(|diff| !diff.trim().is_empty());
+            // Self-medication: an injection marker in a tool result, a
+            // credential in the diff, or an unrequested CI change locks the
+            // chat down before its proposal reaches anyone.
+            {
+                let changed = worktree.as_ref().and_then(|wt| wt.changed_files().ok()).unwrap_or_default();
+                crate::guards::self_medicate_after_turn(
+                    state,
+                    workspace_id,
+                    session_id,
+                    &injection_hits.take(),
+                    captured.as_deref(),
+                    &changed,
+                    &turns,
+                );
+            }
             let body = {
                 let root = state.workspace_root.lock().unwrap().clone();
                 let mut svc = state.service.lock().unwrap();
@@ -8059,6 +8146,7 @@ async fn run_prepared_turn(
             Ok(TurnOutcome { message_id, body })
         }
         Err(e) => {
+            crate::guards::self_medicate_after_turn(state, workspace_id, session_id, &injection_hits.take(), None, &[], &turns);
             // Discard the isolated worktree — a failed/aborted turn's partial
             // edits are not surfaced (no proposal), and the worktree is pruned.
             if let Some(wt) = worktree {
@@ -8091,6 +8179,7 @@ async fn run_prepared_turn(
                 return Err(msg);
             }
             tracing::error!(target: "dispatch", error = %msg, "turn failed");
+            crate::guards::record_usage_error(state, responder.runtime.provider, &msg);
             {
                 let mut svc = state.service.lock().unwrap();
                 let _ = svc.complete_assistant_message(
@@ -8309,6 +8398,18 @@ async fn send_message(
             visited.push(a.id);
         }
         let responder = responder_for(&state, &session, agent.as_ref());
+
+        // Protect the brood: the person's own turn (depth 0) always runs. An
+        // agent-to-agent hand-off is workflow-tier work and pauses when the
+        // runtime's plan window is past this agent's staggered threshold.
+        if depth > 0 {
+            let key = responder.agent_id.map(|a| a.to_string()).unwrap_or_else(|| responder.author.clone());
+            if let Some(note) = crate::guards::cascade_paused(&state, workspace_id, sid, responder.runtime.provider, &key, &responder.author) {
+                let mut svc = state.service.lock().unwrap();
+                let _ = svc.post_system_note(sid, workspace_id, note);
+                break;
+            }
+        }
 
         // Cross-device dispatch: only the device that owns this responder runs
         // the turn. If it's owned elsewhere, we've already recorded the user
@@ -10644,6 +10745,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
     Ok(AppState {
         service: Mutex::new(service),
         host_presence: hive_runtime::HostPresence::new(),
+        guards: Default::default(),
         identity,
         data_dir,
         base_runtimes: Mutex::new(base_runtimes),
@@ -10903,6 +11005,11 @@ async fn run_scheduler_loop(app: AppHandle, settings: Arc<Mutex<LiveSettings>>, 
                 .collect()
         };
         for sched in due {
+            // Staggered throttle: scheduled work is the first to back off near
+            // a plan-window limit. Not stamped, so it fires once there's room.
+            if crate::guards::defer_background(&app, &sched.runtime_id, &sched.id) {
+                continue;
+            }
             if let Err(e) = fire_schedule(&app, &sched).await {
                 tracing::error!(target: "scheduler", "schedule {} failed: {e}", sched.label);
             }
@@ -14231,6 +14338,10 @@ pub fn run() {
             // the phone (via `ligus serve`) can tell whether @hive can answer now.
             tauri::async_runtime::spawn(run_device_host_loop(app.handle().clone()));
 
+            // Coordinator leases: publish our heartbeats, read others', and
+            // succeed a lapsed holder's workflow runs.
+            tauri::async_runtime::spawn(crate::guards::run_lease_loop(app.handle().clone()));
+
             // Scheduled/triggered agents: fires due schedules on a 30s tick.
             // Idle until the user adds a schedule (Settings → Schedules).
             {
@@ -14251,6 +14362,18 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            guards::hand_over_workflow_run,
+            guards::list_guard_signals,
+            guards::get_dearth_state,
+            guards::set_dearth_mode,
+            guards::approve_join,
+            guards::get_chat_lockdown,
+            guards::clear_chat_lockdown,
+            guards::lock_chat,
+            guards::run_hygiene_now,
+            guards::get_throttle_state,
+            guards::growth_suggestions,
+            guards::get_hygiene_report,
             get_app_info,
             list_relay_users,
             create_relay_user,

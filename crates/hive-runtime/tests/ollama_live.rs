@@ -242,6 +242,7 @@ async fn tool_call_round_trip_with_the_live_model() {
                 StreamActivity::Tool { name, input_json, .. } => format!("call {name}({input_json})"),
                 StreamActivity::ToolResult { content, is_error, .. } => format!("result err={is_error} {content}"),
                 StreamActivity::Thinking { text } => format!("thinking {} chars", text.len()),
+                StreamActivity::RateLimit { .. } => "rate limit".to_string(),
             });
         })
         .await
