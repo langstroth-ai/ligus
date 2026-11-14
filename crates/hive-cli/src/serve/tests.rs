@@ -2720,6 +2720,51 @@ async fn a_reviewer_recruit_naming_you_pushes() {
     h.handle.shutdown();
 }
 
+/// A burst of reviewer recruits naming the user (FlowRecorded is a
+/// Contributor event, so any member or agent can write them) is one push, not
+/// one push each: every recruit points at the same waiting proposal, and ntfy
+/// has no rate limit of its own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_burst_of_recruits_is_one_push() {
+    use hive_core::flow::{self as hflow, FlowRecord};
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let me = h.handle.shared.my_actor_id();
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Queue" }))).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    {
+        let mut svc = h.handle.shared.lock();
+        let mut p = hive_core::ActionProposal::new("Pick a queue", hive_core::ProposalKind::Decision, "someone-else");
+        p.author_actor_id = "someone-else".into();
+        svc.upsert_proposal(chat_id, ws, p).unwrap();
+    }
+    h.handle.shared.after_write();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    {
+        let mut svc = h.handle.shared.lock();
+        for _ in 0..40 {
+            let r = FlowRecord::Recruit(hflow::RecruitNotice {
+                id: Uuid::new_v4(),
+                action: "approvers".into(),
+                queue_len: 6,
+                oldest_wait_ms: 0,
+                member_ids: vec![me.clone()],
+                to_host: String::new(),
+                from_host: String::new(),
+                reference: String::new(),
+                at_ms: hflow::now_ms(),
+            });
+            svc.record_flow(chat_id, ws, r).unwrap();
+        }
+    }
+    h.handle.shared.after_write();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let n = h.ntfy.lock().unwrap().iter().filter(|(_, body)| body.contains("proposals waiting")).count();
+    assert_eq!(n, 1, "one recruit burst sent {n} pushes");
+    h.handle.shutdown();
+}
+
 /// Chat details carry each workflow run's coordinator (the run lease's holder).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn workflow_runs_show_their_coordinator() {

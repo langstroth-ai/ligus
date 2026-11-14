@@ -45,6 +45,13 @@ fn non_empty(s: Option<&String>) -> Option<&String> {
     s.filter(|v| !v.trim().is_empty())
 }
 
+/// An avatar the phone may draw: only an inline `data:image/` URL. The roster
+/// is synced, so anything else came from another member's client and would
+/// make the phone fetch a remote URL on render.
+fn inline_avatar(s: Option<&String>) -> Option<&String> {
+    s.filter(|v| v.trim_start().get(..11).is_some_and(|p| p.eq_ignore_ascii_case("data:image/")))
+}
+
 // ── Agents: avatar + where it runs ─────────────────────────────────────────
 
 /// Where an agent runs, as the desktop's host badge says it: `ownerDevice`
@@ -72,7 +79,7 @@ pub fn decorate_agent(v: &mut Value, s: &Shared, a: &WorkspaceAgent, hosts: &[Wo
     if !a.role.trim().is_empty() {
         v["role"] = json!(a.role);
     }
-    if let Some(u) = non_empty(a.avatar_url.as_ref()) {
+    if let Some(u) = inline_avatar(a.avatar_url.as_ref()) {
         v["avatarUrl"] = json!(u);
     }
     if let Some(c) = non_empty(a.avatar_color_hex.as_ref()) {
@@ -98,7 +105,7 @@ fn person_dto(m: &WorkspaceMember, me: &str) -> Value {
     if !m.title.trim().is_empty() {
         v["title"] = json!(m.title);
     }
-    if let Some(u) = non_empty(m.actor.avatar_url.as_ref()) {
+    if let Some(u) = inline_avatar(m.actor.avatar_url.as_ref()) {
         v["avatarUrl"] = json!(u);
     }
     v
@@ -444,4 +451,26 @@ pub async fn chat_details(State(s): S, Path(id): Path<String>) -> ApiResult<Json
         out["channel"] = channel_dto(&c);
     }
     Ok(Json(out))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The roster is synced, so a member's avatar URL comes from their client:
+    /// only an inline `data:image/` avatar reaches the phone, never a remote
+    /// URL it would fetch (and so tell that host who is looking, and when).
+    #[test]
+    fn only_inline_avatars_reach_the_phone() {
+        let mut m: WorkspaceMember = serde_json::from_value(json!({
+            "id": "mallory",
+            "actor": { "id": "mallory", "displayName": "Mallory", "kind": "human" },
+            "role": "contributor",
+        }))
+        .unwrap();
+        m.actor.avatar_url = Some("https://evil.example/p.png?who=owner".into());
+        assert!(person_dto(&m, "me").get("avatarUrl").is_none(), "a remote avatar URL reached the phone");
+        m.actor.avatar_url = Some("data:image/png;base64,iVBORw0KGgo=".into());
+        assert_eq!(person_dto(&m, "me")["avatarUrl"], "data:image/png;base64,iVBORw0KGgo=");
+    }
 }

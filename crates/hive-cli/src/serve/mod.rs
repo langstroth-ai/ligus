@@ -639,6 +639,7 @@ impl Shared {
                     return;
                 }
             };
+            let mut recruit_pushed = false;
             for change in differ.diff(&sessions) {
                 use hub::Change;
                 match change {
@@ -687,9 +688,15 @@ impl Shared {
                     Change::RecruitApprovers { chat, recruit } => {
                         let Some(s) = sessions.iter().find(|s| s.id == chat) else { continue };
                         let Some(r) = s.flow.recruits.iter().find(|r| r.id == recruit) else { continue };
-                        if self.fresh(hive_core::Timestamp::from_unix_seconds(r.at_ms / 1000)) {
+                        // One recruit push per refresh: recruits are Contributor
+                        // records any member or agent can write, every one points
+                        // at the same waiting proposal, and ntfy has no rate limit.
+                        if !recruit_pushed && self.fresh(hive_core::Timestamp::from_unix_seconds(r.at_ms / 1000)) {
                             let me = notify::Me::in_chat(&author, s, &links);
-                            notices.extend(notify::for_recruit(&sessions, s, r, &me));
+                            if let Some(n) = notify::for_recruit(&sessions, s, r, &me) {
+                                recruit_pushed = true;
+                                notices.push(n);
+                            }
                         }
                     }
                     Change::ProposalUpdated { chat, proposal } => {
