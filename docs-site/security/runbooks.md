@@ -177,6 +177,16 @@ The complete way to cut someone's reading, including on headless devices.
    rotation includes it. Invites carry every authorized epoch key, so a
    fresh invite avoids that.
 
+## A new device on a rules v2 workspace {#confirm-device}
+
+When your account has a passkey, a new device of yours (a second laptop
+signed in with the same account) doesn't count on a rules v2 workspace until
+that passkey confirms it: other devices don't accept its changes, and it
+gets no new workspace keys. Open **Settings → Passkeys & keys** on it and
+choose **Confirm this device**. Ligus never asks for this on its own in the
+background. A serve box you enroll is confirmed when you approve its
+enrollment on your desktop (also with your passkey).
+
 ## Lost a passkey {#lost-passkey}
 
 1. If you have another passkey or your recovery key: **Settings → Passkeys

@@ -230,7 +230,8 @@ each stays on this list until a release fixes it.
    first passkey is trust on first use from the device. Once an account has
    a passkey, a new device of that account and an account-key rotation need
    its presence too (a stolen device and account key can't add devices or
-   re-pin the key), and any switch to rules v2 or later, an unknown version
+   re-pin the key; a new laptop of yours shows **Confirm this device** in
+   **Settings → Passkeys & keys** and counts once you confirm it), and any switch to rules v2 or later, an unknown version
    included, needs the switcher's presence. An Admin can't clear the
    passkeys of a member above them. Until someone registers a passkey, their
    account is only as strong as their devices.
