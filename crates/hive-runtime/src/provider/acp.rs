@@ -287,8 +287,13 @@ impl FsPolicy {
         if !c.starts_with(&self.root) {
             return Err("outside the turn's directory".into());
         }
-        if self.deny_read.iter().any(|d| c.starts_with(d)) && !c.starts_with(&self.root) {
-            return Err("denied".into());
+        // A denied path inside the root (a data dir or secret file that sits
+        // in the turn's directory) stays denied: the host reads and writes
+        // for the agent in its own, unsandboxed process. A root that is
+        // itself inside a denied dir (a checkout under the data dir) is the
+        // turn's own and stays usable.
+        if self.deny_read.iter().any(|d| d.starts_with(&self.root) && d != &self.root && c.starts_with(d)) {
+            return Err("that path is not readable by agents".into());
         }
         Ok(c)
     }
@@ -1041,6 +1046,26 @@ mod tests {
             std::thread::spawn(move || tx.send(w.write(p.to_str().unwrap(), "x").is_err()).unwrap());
             assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)), Ok(true), "a FIFO write hung");
         }
+    }
+
+    /// A path the plan denies reads of (a secret file or data dir that sits
+    /// inside the turn's directory) is refused to the host's own fs/* reads
+    /// and writes too; a worktree that is itself inside a denied dir (a
+    /// checkout under the data dir) stays usable.
+    #[test]
+    fn fs_policy_refuses_denied_paths_inside_the_root() {
+        let wt = tempfile::tempdir().unwrap();
+        let root = crate::executor::canonical(wt.path());
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        std::fs::write(root.join("data/serve.token"), "secret").unwrap();
+        std::fs::write(root.join("ok.txt"), "fine").unwrap();
+        let fs = FsPolicy { root: root.clone(), writable: true, read_only: vec![], deny_read: vec![root.join("data")] };
+        assert!(fs.read(root.join("data/serve.token").to_str().unwrap(), None, None).is_err(), "read a denied path");
+        assert!(fs.write(root.join("data/x").to_str().unwrap(), "x").is_err(), "wrote a denied path");
+        assert_eq!(fs.read(root.join("ok.txt").to_str().unwrap(), None, None).unwrap(), "fine");
+        // The root inside a denied dir: the root's own files stay readable.
+        let inner = FsPolicy { root: root.join("data"), writable: false, read_only: vec![], deny_read: vec![root.clone()] };
+        assert_eq!(inner.read(root.join("data/serve.token").to_str().unwrap(), None, None).unwrap(), "secret");
     }
 
     /// Protected paths are compared by name, case-insensitively and at any
