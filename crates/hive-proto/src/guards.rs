@@ -136,6 +136,9 @@ pub struct HygieneReportDto {
     pub repo_bound: bool,
     pub turn_worktrees_removed: u32,
     pub chat_checkouts_removed: u32,
+    /// Worktrees parked for reuse by a chat that is gone or archived.
+    #[serde(default)]
+    pub parked_worktrees_removed: u32,
     pub stale_proposals: Vec<StaleProposalDto>,
 }
 

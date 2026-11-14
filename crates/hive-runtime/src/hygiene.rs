@@ -8,6 +8,12 @@
 //! * **Chat worktrees** (`hive/chat/<id>`) belong to a chat. When the chat is
 //!   gone or archived, the *checkout* is removed but the branch is kept, since
 //!   it may hold applied work nobody has merged.
+//! * **Parked worktrees** (detached, in the chat's reuse pool; see
+//!   `git_worktree::Worktree::park`) are kept while their chat is live, so a
+//!   parked tree is never swept out from under the next turn, and removed with
+//!   the checkout of a gone or archived chat. A turn worktree that a turn in
+//!   this process is still using (`git_worktree::is_in_use`), including one
+//!   just claimed from the pool, is never touched.
 //! * **Stale proposals**: an open diff that no longer applies to its chat's
 //!   branch is "capped dead brood": marked stale and taken out of the inbox
 //!   (restorable) instead of being kept open forever.
@@ -69,18 +75,36 @@ pub enum SweepAction {
     RemoveTurnWorktree { path: PathBuf, branch: String },
     /// A gone or archived chat's checkout (the branch is kept).
     RemoveChatCheckout { path: PathBuf, chat_slug: String },
+    /// A worktree parked for reuse by a gone or archived chat.
+    RemoveParkedWorktree { path: PathBuf, chat_slug: String },
 }
 
 /// Decide what to clean. `live_turn_slugs`: turns still streaming (by the
-/// slug of their message id); `chats`: the workspace's chats by slug.
+/// slug of their message id); `chats`: the workspace's chats by slug;
+/// `in_use`: whether a turn worktree is in use right now (cut or claimed for a
+/// turn and not yet parked or removed; `git_worktree::is_in_use`).
 pub fn plan_sweep(
     entries: &[WorktreeEntry],
     live_turn_slugs: &HashSet<String>,
     chats: &HashMap<String, ChatStatus>,
+    in_use: &dyn Fn(&Path) -> bool,
 ) -> Vec<SweepAction> {
     let mut out = Vec::new();
     for e in entries {
-        let Some(branch) = &e.branch else { continue };
+        if in_use(&e.path) {
+            continue;
+        }
+        let Some(branch) = &e.branch else {
+            // Detached: a parked tree in a chat's reuse pool, or something
+            // that isn't ours. Only a parked tree of a chat that is gone or
+            // archived is removed; a live chat keeps its pool.
+            if let Some(chat) = crate::git_worktree::parked_chat_slug(&e.path) {
+                if chats.get(&chat) != Some(&ChatStatus::Live) {
+                    out.push(SweepAction::RemoveParkedWorktree { path: e.path.clone(), chat_slug: chat });
+                }
+            }
+            continue;
+        };
         if let Some(turn) = branch.strip_prefix("hive/turn-") {
             if !live_turn_slugs.contains(turn) {
                 out.push(SweepAction::RemoveTurnWorktree { path: e.path.clone(), branch: branch.clone() });
@@ -128,7 +152,7 @@ pub fn apply(repo_root: &Path, action: &SweepAction) -> bool {
             let _ = git(repo_root, &["branch", "-D", branch]);
             removed || !path.exists()
         }
-        SweepAction::RemoveChatCheckout { path, .. } => {
+        SweepAction::RemoveChatCheckout { path, .. } | SweepAction::RemoveParkedWorktree { path, .. } => {
             let p = path.to_string_lossy().into_owned();
             git(repo_root, &["worktree", "remove", "--force", &p]).map(|r| r.0).unwrap_or(false)
         }
@@ -191,7 +215,7 @@ mod tests {
         let entries = vec![wt("main"), wt("hive/turn-live"), wt("hive/turn-dead"), wt("hive/chat/a"), wt("hive/chat/b"), wt("hive/chat/gone")];
         let live: HashSet<String> = ["live".to_string()].into();
         let chats: HashMap<String, ChatStatus> = [("a".to_string(), ChatStatus::Live), ("b".to_string(), ChatStatus::Archived)].into();
-        let plan = plan_sweep(&entries, &live, &chats);
+        let plan = plan_sweep(&entries, &live, &chats, &|_| false);
         assert_eq!(
             plan,
             vec![
@@ -200,6 +224,67 @@ mod tests {
                 SweepAction::RemoveChatCheckout { path: "/r/hive/chat/gone".into(), chat_slug: "gone".into() },
             ]
         );
+    }
+
+    #[test]
+    fn parked_and_in_use_trees_are_kept_and_a_dead_chats_pool_is_cleared() {
+        let live = uuid::Uuid::new_v4().to_string();
+        let gone = uuid::Uuid::new_v4().to_string();
+        let parked = |chat: &str, turn: &str| WorktreeEntry { path: PathBuf::from(format!("/r/.ligus/worktrees/pool-{chat}-{turn}")), branch: None };
+        let entries = vec![
+            parked(&live, "t1"),
+            parked(&gone, "t2"),
+            // A turn that stopped streaming but hasn't parked yet.
+            WorktreeEntry { path: "/r/.ligus/worktrees/t3".into(), branch: Some("hive/turn-t3".into()) },
+            // Something detached that isn't ours.
+            WorktreeEntry { path: "/r/elsewhere".into(), branch: None },
+        ];
+        let chats: HashMap<String, ChatStatus> = [(live.clone(), ChatStatus::Live)].into();
+        let in_use = |p: &Path| p.ends_with("t3");
+        let plan = plan_sweep(&entries, &HashSet::new(), &chats, &in_use);
+        assert_eq!(
+            plan,
+            vec![SweepAction::RemoveParkedWorktree { path: entries[1].path.clone(), chat_slug: gone.clone() }],
+            "the live chat's pool and the in-use turn tree are kept"
+        );
+        // Archived: its pool goes too.
+        let archived: HashMap<String, ChatStatus> = [(live.clone(), ChatStatus::Archived)].into();
+        assert_eq!(plan_sweep(&entries[..1], &HashSet::new(), &archived, &|_| false).len(), 1);
+    }
+
+    #[test]
+    fn a_reused_tree_survives_a_sweep_and_parking_never_counts_as_abandoned() {
+        let dir = std::env::temp_dir().join(format!("ligus-hygiene-reuse-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = |args: &[&str]| {
+            let o = command("git").arg("-C").arg(&dir).args(args).output().unwrap();
+            assert!(o.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+        };
+        run(&["init", "-q", "-b", "main"]);
+        run(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"]);
+        let chat = uuid::Uuid::new_v4().to_string();
+        let chats: HashMap<String, ChatStatus> = [(slug(&chat), ChatStatus::Live)].into();
+        let sweep = || plan_sweep(&list_worktrees(&dir), &HashSet::new(), &chats, &crate::git_worktree::is_in_use);
+        // A turn tree, not streaming (the turn just finished) but not parked yet.
+        let wt = crate::git_worktree::cut_turn_worktree_reusing(&dir, &chat, "turn-1").unwrap();
+        std::fs::write(wt.path.join("work.txt"), "in progress").unwrap();
+        assert!(sweep().is_empty(), "an in-use turn tree is never swept");
+        wt.park(&chat).unwrap();
+        assert!(sweep().is_empty(), "a live chat's parked tree is kept for reuse");
+        // The next turn claims it: still nothing to sweep, and it's the same tree.
+        let wt2 = crate::git_worktree::cut_turn_worktree_reusing(&dir, &chat, "turn-2").unwrap();
+        assert!(sweep().is_empty());
+        wt2.park(&chat).unwrap();
+        // The chat goes away: its parked tree is a hygienic removal, not an abandoned turn.
+        let plan = plan_sweep(&list_worktrees(&dir), &HashSet::new(), &HashMap::new(), &crate::git_worktree::is_in_use);
+        assert_eq!(plan.iter().filter(|a| matches!(a, SweepAction::RemoveParkedWorktree { .. })).count(), 1, "{plan:?}");
+        assert!(plan.iter().all(|a| !matches!(a, SweepAction::RemoveTurnWorktree { .. })), "nothing counts as abandoned: {plan:?}");
+        for a in &plan {
+            assert!(apply(&dir, a), "{a:?}");
+        }
+        prune(&dir);
+        assert!(list_worktrees(&dir).iter().all(|e| crate::git_worktree::parked_chat_slug(&e.path).is_none()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -224,7 +309,8 @@ mod tests {
         let turn = crate::git_worktree::Worktree::create(&dir, "dead-turn").unwrap();
         std::fs::write(turn.path.join("work.txt"), "unsaved").unwrap();
 
-        let plan = plan_sweep(&list_worktrees(&dir), &HashSet::new(), &HashMap::new());
+        // A crash leftover: the process that cut it is gone, so nothing holds it.
+        let plan = plan_sweep(&list_worktrees(&dir), &HashSet::new(), &HashMap::new(), &|_| false);
         assert_eq!(plan.len(), 2);
         for a in &plan {
             assert!(apply(&dir, a), "{a:?}");

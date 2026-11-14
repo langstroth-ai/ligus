@@ -175,7 +175,7 @@ function DearthPanel({ d, onChanged }: { d: DearthStateDto; onChanged: () => voi
 export function hygieneSummary(r: HygieneReportDto): string {
   if (!r.ranAt) return "No sweep has run since Ligus started.";
   if (!r.repoBound) return "No git repository is bound to this workspace on this device; nothing to sweep.";
-  const n = r.turnWorktreesRemoved + r.chatCheckoutsRemoved;
+  const n = r.turnWorktreesRemoved + r.chatCheckoutsRemoved + (r.parkedWorktreesRemoved ?? 0);
   return `${n} leftover worktree${n === 1 ? "" : "s"} removed, ${r.staleProposals.length} stale proposal${r.staleProposals.length === 1 ? "" : "s"} set aside.`;
 }
 

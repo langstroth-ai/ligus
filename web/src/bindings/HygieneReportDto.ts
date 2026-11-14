@@ -12,4 +12,8 @@ ranAt: string,
 /**
  * False when the workspace has no git repository bound on this device.
  */
-repoBound: boolean, turnWorktreesRemoved: number, chatCheckoutsRemoved: number, staleProposals: Array<StaleProposalDto>, };
+repoBound: boolean, turnWorktreesRemoved: number, chatCheckoutsRemoved: number, 
+/**
+ * Worktrees parked for reuse by a chat that is gone or archived.
+ */
+parkedWorktreesRemoved: number, staleProposals: Array<StaleProposalDto>, };

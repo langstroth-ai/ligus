@@ -185,6 +185,11 @@ rebuilt: tracked changes and stray files are cleared, while ignored files
 kept per chat, and deleting the chat removes them. Turn it off in Settings →
 Flow.
 
+The [hygiene sweep](guards.md#hygiene) knows about these: it never touches a
+worktree a turn is using or one parked for a live chat, and it clears the
+parked worktrees of a chat that is gone or archived. Parking and reuse are not
+counted as leftovers.
+
 ## Home beacon
 
 **Flow → Home** shows the workspace's home: the relay it syncs through, the

@@ -614,7 +614,7 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> hive_proto::HygieneReportDt
     let entries = hygiene::list_worktrees(&root);
     let secret = device.as_bytes().to_vec();
     let mut signals = Vec::new();
-    for action in hygiene::plan_sweep(&entries, &live_turns, &chats) {
+    for action in hygiene::plan_sweep(&entries, &live_turns, &chats, &hive_runtime::git_worktree::is_in_use) {
         if !hygiene::apply(&root, &action) {
             continue;
         }
@@ -625,6 +625,15 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> hive_proto::HygieneReportDt
             }
             SweepAction::RemoveChatCheckout { chat_slug, .. } => {
                 report.chat_checkouts_removed += 1;
+                signals.push(GuardSignal::WorktreeState {
+                    state: WorktreeState::Removed,
+                    repo_key: Some(hygiene::opaque_key(&secret, chat_slug)),
+                });
+            }
+            // A gone or archived chat's reuse pool: a hygienic removal, never
+            // an abandoned turn (parking and reuse record nothing).
+            SweepAction::RemoveParkedWorktree { chat_slug, .. } => {
+                report.parked_worktrees_removed += 1;
                 signals.push(GuardSignal::WorktreeState {
                     state: WorktreeState::Removed,
                     repo_key: Some(hygiene::opaque_key(&secret, chat_slug)),

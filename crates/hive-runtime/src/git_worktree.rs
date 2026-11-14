@@ -18,6 +18,45 @@ use std::path::{Path, PathBuf};
 // isolated turn makes don't each flash a console window on Windows.
 use hive_core::process_util::command;
 
+// ---------------------------------------------------------------------------
+// In-use turn worktrees: from the moment a turn's worktree is cut (or a parked
+// one is claimed for reuse) until it is parked again or removed. The hygiene
+// sweep never touches one of these, so a turn that just stopped streaming but
+// hasn't parked its tree yet isn't mistaken for a crash leftover. Process-wide;
+// the sweep runs in the same process as the turns it protects.
+// ---------------------------------------------------------------------------
+
+fn in_use_set() -> &'static std::sync::Mutex<std::collections::HashSet<PathBuf>> {
+    static IN_USE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> = std::sync::OnceLock::new();
+    IN_USE.get_or_init(Default::default)
+}
+
+fn canonical(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn mark_in_use(path: &Path) {
+    in_use_set().lock().unwrap_or_else(|e| e.into_inner()).insert(canonical(path));
+}
+
+/// Release an in-use mark. `key` is from [`in_use_key`], taken while the
+/// worktree was still at its path (a moved or removed tree can't be
+/// canonicalized any more).
+fn unmark_in_use(key: &Path) {
+    in_use_set().lock().unwrap_or_else(|e| e.into_inner()).remove(key);
+}
+
+fn in_use_key(path: &Path) -> PathBuf {
+    canonical(path)
+}
+
+/// Whether `path` is a turn worktree a turn in this process is using right
+/// now (see the hygiene sweep).
+pub fn is_in_use(path: &Path) -> bool {
+    let set = in_use_set().lock().unwrap_or_else(|e| e.into_inner());
+    set.contains(&canonical(path)) || set.contains(path)
+}
+
 /// A live isolated worktree for one turn. Drop does NOT auto-remove — call
 /// [`Worktree::remove`] once the turn's diff has been captured (merged or
 /// discarded), so a captured-but-unmerged diff isn't lost by an early drop.
@@ -216,6 +255,7 @@ impl Worktree {
             repo_root,
             &["worktree", "add", "-b", &branch, &path_str, base_ref],
         )?;
+        mark_in_use(&path);
         Ok(Worktree { path, branch, repo_root: repo_root.to_path_buf() })
     }
 
@@ -239,8 +279,13 @@ impl Worktree {
     /// diff is captured (merged or discarded). Best-effort: a failure to prune
     /// leaves a stale entry that the next same-id `create` clears anyway.
     pub fn remove(self) -> io::Result<()> {
+        // In use until it's gone; either way not after this (a tree that
+        // fails to go is left for the hygiene sweep).
+        let key = in_use_key(&self.path);
         let path_str = self.path.to_string_lossy().into_owned();
-        git(&self.repo_root, &["worktree", "remove", "--force", &path_str])?;
+        let removed = git(&self.repo_root, &["worktree", "remove", "--force", &path_str]);
+        unmark_in_use(&key);
+        removed?;
         let _ = git(&self.repo_root, &["branch", "-D", &self.branch]);
         Ok(())
     }
@@ -419,6 +464,7 @@ impl Worktree {
         if pooled(&self.repo_root, chat_id).len() >= POOL_PER_CHAT {
             return self.remove();
         }
+        let key = in_use_key(&self.path);
         let parked = (|| -> io::Result<()> {
             git(&self.path, &["checkout", "-q", "--detach"])?;
             git(&self.path, &["reset", "-q", "--hard"])?;
@@ -429,10 +475,28 @@ impl Worktree {
             Ok(())
         })();
         if parked.is_err() {
-            return self.remove();
+            // `remove` releases the mark (it can still canonicalize the path
+            // when the move is what failed); release this one too in case
+            // the tree moved and a later step failed.
+            let r = self.remove();
+            unmark_in_use(&key);
+            return r;
         }
+        unmark_in_use(&key);
         Ok(())
     }
+}
+
+/// The chat a parked (pooled) worktree belongs to, by the slug of its id,
+/// from the worktree's directory name. `None` for anything that isn't a
+/// parked tree. Parked trees are detached (no branch); the hygiene sweep uses
+/// this to keep a live chat's pool and clear a gone or archived chat's.
+pub fn parked_chat_slug(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    let rest = name.strip_prefix("pool-")?;
+    // Chat ids are UUIDs: 36 characters, then `-` and the parked turn's slug.
+    let (chat, tail) = (rest.get(..36)?, rest.get(36..)?);
+    (tail.starts_with('-') && uuid::Uuid::parse_str(chat).is_ok()).then(|| chat.to_string())
 }
 
 fn uuid_like_suffix(path: &Path) -> String {
@@ -453,6 +517,7 @@ pub fn cut_turn_worktree_reusing(repo_root: &Path, chat_id: &str, turn_id: &str)
         if git(repo_root, &["worktree", "move", &parked.to_string_lossy(), &path.to_string_lossy()]).is_err() {
             continue;
         }
+        mark_in_use(&path);
         let base = match chat_worktree(repo_root, chat_id) {
             Ok(_) => format!("hive/chat/{chat_id}"),
             Err(_) => "HEAD".to_string(),
@@ -530,6 +595,29 @@ mod reuse_tests {
         // Deleting the chat drops its parked trees.
         remove_chat_worktree(&root, "chat1").unwrap();
         assert!(pooled(&root, "chat1").is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn turn_trees_are_in_use_until_parked_or_removed() {
+        let root = repo();
+        let chat = uuid::Uuid::new_v4().to_string();
+        let wt = cut_turn_worktree_reusing(&root, &chat, "t-a").unwrap();
+        let first = wt.path.clone();
+        assert!(is_in_use(&first), "a fresh turn tree is in use");
+        wt.park(&chat).unwrap();
+        assert!(!is_in_use(&first));
+        let parked = pooled(&root, &chat);
+        assert_eq!(parked.len(), 1);
+        assert!(!is_in_use(&parked[0]), "a parked tree is idle, not in use");
+        assert_eq!(parked_chat_slug(&parked[0]).as_deref(), Some(chat.as_str()));
+        let wt2 = cut_turn_worktree_reusing(&root, &chat, "t-b").unwrap();
+        assert!(is_in_use(&wt2.path), "a reused tree is in use again");
+        let p2 = wt2.path.clone();
+        wt2.remove().unwrap();
+        assert!(!is_in_use(&p2));
+        assert_eq!(parked_chat_slug(Path::new("/r/.ligus/worktrees/t-a")), None);
+        assert_eq!(parked_chat_slug(Path::new("/r/pool-not-a-uuid-x")), None);
         let _ = std::fs::remove_dir_all(&root);
     }
 

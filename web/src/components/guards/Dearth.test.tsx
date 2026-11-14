@@ -15,8 +15,8 @@ vi.mock("@/lib/ipc", () => ({
     windows: [{ runtime: "ClaudeCode", status: "warning", effectivePct: 88, reported: true, window: "five_hour", resetsAt: "", ageSecs: 3 }],
     deferred: [{ priority: "background", what: "scheduled run", runtime: "ClaudeCode", utilizationPct: 88, thresholdPct: 70 }],
   })),
-  getHygieneReport: vi.fn(async () => ({ ranAt: "", repoBound: false, turnWorktreesRemoved: 0, chatCheckoutsRemoved: 0, staleProposals: [] })),
-  runHygieneNow: vi.fn(async () => ({ ranAt: "2026-11-13T00:00:00Z", repoBound: true, turnWorktreesRemoved: 2, chatCheckoutsRemoved: 0, staleProposals: [] })),
+  getHygieneReport: vi.fn(async () => ({ ranAt: "", repoBound: false, turnWorktreesRemoved: 0, chatCheckoutsRemoved: 0, parkedWorktreesRemoved: 0, staleProposals: [] })),
+  runHygieneNow: vi.fn(async () => ({ ranAt: "2026-11-13T00:00:00Z", repoBound: true, turnWorktreesRemoved: 2, chatCheckoutsRemoved: 0, parkedWorktreesRemoved: 0, staleProposals: [] })),
   getDearthState: vi.fn(async () => state.d),
   setDearthMode: (...a: unknown[]) => setDearthMode(...(a as [])),
   approveJoin: (...a: unknown[]) => approveJoin(...(a as [])),
@@ -99,8 +99,9 @@ describe("guards settings", () => {
 
 describe("hygiene", () => {
   it("summarizes a sweep", () => {
-    const r = { ranAt: "x", repoBound: true, turnWorktreesRemoved: 1, chatCheckoutsRemoved: 0, staleProposals: [] };
+    const r = { ranAt: "x", repoBound: true, turnWorktreesRemoved: 1, chatCheckoutsRemoved: 0, parkedWorktreesRemoved: 0, staleProposals: [] };
     expect(hygieneSummary(r)).toBe("1 leftover worktree removed, 0 stale proposals set aside.");
+    expect(hygieneSummary({ ...r, parkedWorktreesRemoved: 2 })).toBe("3 leftover worktrees removed, 0 stale proposals set aside.");
     expect(hygieneSummary({ ...r, repoBound: false })).toContain("No git repository");
     expect(hygieneSummary({ ...r, ranAt: "" })).toContain("No sweep");
   });
