@@ -193,6 +193,16 @@ impl ChatService {
         Ok(env)
     }
 
+    /// Remove one of `account_id`'s passkeys on `workspace_id` (the account
+    /// itself, or an Admin; a passkey confirmation under rules v2).
+    pub fn remove_passkey(&mut self, workspace_id: Uuid, account_id: Uuid, credential_id: &str) -> Result<SessionEventEnvelope> {
+        self.append_signed(
+            workspace_config_session_id(workspace_id),
+            workspace_id,
+            SessionEvent::PasskeyRemoved { account_id, credential_id: credential_id.to_string() },
+        )
+    }
+
     /// This device's account's credentials on `workspace_id`.
     pub fn passkeys_of(&self, workspace_id: Uuid, account_id: Uuid) -> Result<Vec<(String, bool)>> {
         let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;

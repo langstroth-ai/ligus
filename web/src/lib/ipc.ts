@@ -1681,6 +1681,7 @@ export type PresencePromptDto = { kind: string; summary: string; digestShort: st
 export const securityStatus = () => invoke<SecurityStatusDto>("security_status");
 export const passkeyRegister = (label: string) => invoke<void>("passkey_register", { label });
 export const recoveryKeyCreate = () => invoke<string>("recovery_key_create");
+export const passkeyRemove = (credentialId: string) => invoke<void>("passkey_remove", { credentialId });
 export const workspaceRulesSet = (version: number) => invoke<void>("workspace_rules_set", { version });
 export const rotateWorkspaceKey = () => invoke<{ rotated: boolean; recipients: number }>("rotate_workspace_key");
 export const presenceCancel = () => invoke<void>("presence_cancel");

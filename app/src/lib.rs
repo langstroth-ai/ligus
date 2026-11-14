@@ -14888,6 +14888,7 @@ pub fn run() {
             passkey_ui::security_status,
             passkey_ui::passkey_register,
             passkey_ui::recovery_key_create,
+            passkey_ui::passkey_remove,
             passkey_ui::workspace_rules_set,
             passkey_ui::presence_cancel,
             set_relay_user_disabled,

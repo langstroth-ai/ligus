@@ -367,6 +367,21 @@ pub async fn workspace_rules_set(app: AppHandle, version: u32) -> Result<(), Str
     .map_err(|e| e.to_string())?
 }
 
+/// Remove one of this account's passkeys (or the recovery key) on the
+/// active workspace.
+#[tauri::command]
+pub async fn passkey_remove(app: AppHandle, credential_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let ws = state.active_workspace_id();
+        let mut svc = state.service.lock().unwrap();
+        let account = svc.author().account_id.ok_or("this device has no account")?;
+        svc.remove_passkey(ws, account, &credential_id).map(|_| ()).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Stop waiting for the browser.
 #[tauri::command]
 pub fn presence_cancel() {

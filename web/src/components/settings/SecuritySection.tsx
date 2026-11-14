@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, Section, fieldStyle } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
-import { passkeyRegister, recoveryKeyCreate, rotateWorkspaceKey, securityStatus, workspaceRulesSet } from "@/lib/ipc";
+import { passkeyRegister, passkeyRemove, recoveryKeyCreate, rotateWorkspaceKey, securityStatus, workspaceRulesSet } from "@/lib/ipc";
 
 /// Passkeys, the recovery key, workspace rules v2 and the workspace key.
 /// Admin actions in a rules-v2 workspace need a passkey confirmation; this is
@@ -27,6 +27,14 @@ export function SecuritySection() {
     onSuccess: (w) => {
       setWords(w);
       refresh();
+    },
+    onError: (e) => toast.error(errMsg(e)),
+  });
+  const remove = useMutation({
+    mutationFn: passkeyRemove,
+    onSuccess: () => {
+      refresh();
+      toast.success("Removed.");
     },
     onError: (e) => toast.error(errMsg(e)),
   });
@@ -60,9 +68,20 @@ export function SecuritySection() {
           two.
         </p>
         <ul className="space-y-1 text-sm" data-testid="passkey-list">
-          {passkeys.map((p) => (
-            <li key={p.credentialId} className="truncate">
-              <code>{p.credentialId.slice(0, 16)}…</code>
+          {(st?.passkeys ?? []).map((p) => (
+            <li key={p.credentialId} className="flex items-center justify-between gap-2">
+              <code className="truncate">
+                {p.recovery ? "Recovery key " : ""}
+                {p.credentialId.slice(0, 16)}…
+              </code>
+              <button
+                className="shrink-0 text-xs hover:opacity-80"
+                style={{ color: "var(--hive-danger-ink)" }}
+                disabled={remove.isPending}
+                onClick={() => remove.mutate(p.credentialId)}
+              >
+                Remove
+              </button>
             </li>
           ))}
           {passkeys.length === 0 && <li className="text-xs text-ink-soft">No passkeys yet.</li>}

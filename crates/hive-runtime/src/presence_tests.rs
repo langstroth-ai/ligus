@@ -443,3 +443,17 @@ fn primary_runtime_effects_judged_at_agent_tier() {
     let v = fold_decisions(&log, None, None, WorkspaceAuthz::Timeline(&t));
     assert_eq!(v[&forged.event_id], Verdict::Denied);
 }
+
+#[test]
+fn removing_a_passkey_needs_presence_under_v2_and_then_it_no_longer_counts() {
+    let (mut svc, wid, key, rec) = on_rules_v2();
+    let account = account(&svc);
+    let id = key.credential(account, "").credential_id;
+    assert!(svc.remove_passkey(wid, account, &id).is_err(), "needs a passkey confirmation");
+    svc.set_presence_provider(Some(Arc::new(Rec(rec))));
+    svc.remove_passkey(wid, account, &id).unwrap();
+    // The removed passkey can't confirm anything any more.
+    svc.set_presence_provider(Some(Arc::new(Soft(key))));
+    let cfg = workspace_config_session_id(wid);
+    assert!(svc.add_member(cfg, wid, member("fay", WorkspaceRole::Viewer)).is_err());
+}
