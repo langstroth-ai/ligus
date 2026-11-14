@@ -263,3 +263,45 @@ fn an_unauthorized_device_revocation_is_ignored() {
     assert!(build_roster(&log.envs).is_revoked(laptop));
     let _ = owner;
 }
+
+/// Dearth mode under a founder pin (B2 residual): a member who forges a
+/// lower-lamport config seed naming themself Owner must not be able to pick
+/// the projection dearth mode is read from. The roster's own projection uses
+/// the pin, so the dearth policy must too, or the forged base (with no dearth
+/// switch in force) admits a device certified while the entrance is closed.
+#[test]
+fn a_forged_seed_cannot_switch_dearth_off_under_a_founder_pin() {
+    use crate::envelope_verifier::{build_roster_pinned, FounderPin};
+    let owner = Who { id: String::new(), account: Uuid::new_v4(), kp: SigningKeypair::generate().unwrap() };
+    let owner = Who { id: owner.account.to_string(), ..owner };
+    let alice = who("alice");
+    let ws = Uuid::new_v4();
+    let seed = |creator: &Who, members: &[(&Who, WorkspaceRole)]| {
+        let mut cfg = ChatSession::new("", ws, "");
+        cfg.id = workspace_config_session_id(ws);
+        cfg.creator_actor_id = creator.id.clone();
+        for (w, role) in members {
+            cfg.members.push(WorkspaceMember { id: w.id.clone(), actor: actor(w), role: *role, title: String::new(), index: 0, joined_at: Timestamp::epoch() });
+        }
+        SessionEvent::SessionSnapshot { session: Box::new(cfg) }
+    };
+    let mut log = Log { ws, lamport: 0, envs: Vec::new() };
+    log.push(&owner, seed(&owner, &[(&owner, WorkspaceRole::Owner), (&alice, WorkspaceRole::Contributor)]));
+    for w in [&owner, &alice] {
+        log.push(w, SessionEvent::AccountKeyRegistered { account_id: w.account, signing_public_key: w.kp.public_key_bytes().to_vec() });
+    }
+    let laptop = Uuid::new_v4();
+    log.cert(&owner, laptop);
+    log.push(&owner, dearth(true, vec![laptop]));
+    // Alice forges a seed below the founder's, naming herself Owner.
+    let mut forged = SessionEventEnvelope::new(workspace_config_session_id(ws), ws, 0, seed(&alice, &[(&alice, WorkspaceRole::Owner)]));
+    forged.lamport = 0;
+    forged.actor_stamp = Some(ActorStamp { actor: actor(&alice), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false });
+    log.envs.push(forged);
+    let new_box = Uuid::new_v4();
+    log.cert(&alice, new_box);
+    let pin = FounderPin { founder_account: owner.account, fk: FounderPin::fingerprint(&owner.kp.public_key_bytes()) };
+    let r = build_roster_pinned(&log.envs, Some(&pin));
+    assert!(r.public_key(laptop).is_some(), "control: the founder's device is trusted");
+    assert!(r.public_key(new_box).is_none(), "a forged seed switched dearth mode off for the pinned roster");
+}
