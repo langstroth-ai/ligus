@@ -648,6 +648,7 @@ impl SyncEngine {
         let mut resolved: Vec<u64> = Vec::new();
         let mut retry_at: Option<u64> = None;
         let mut parked_now: Vec<u64> = Vec::new();
+        let mut to_park: Vec<(u64, &Value, u8)> = Vec::new();
         let mut foreign = 0usize;
         for (seq, body) in fetched {
             match self.decode(body) {
@@ -670,7 +671,7 @@ impl SyncEngine {
                 // bodies are retried whenever the ring changes.
                 Decoded::NotYetOpenable(reason) if self.key_source.is_some() => {
                     tracing::debug!(seq = *seq, reason, "parking a body sealed under a key this device doesn't hold");
-                    store.park_body(&self.workspace, *seq, body)?;
+                    to_park.push((*seq, body, self.park_priority(body)));
                     self.rows_wanted = true;
                     parked_now.push(*seq);
                     resolved.push(*seq);
@@ -684,6 +685,7 @@ impl SyncEngine {
             }
         }
 
+        store.park_bodies(&self.workspace, &to_park)?;
         if foreign > 0 {
             tracing::warn!(room = %self.workspace, foreign, "dropped fetched events stamped with another workspace");
         }
@@ -837,6 +839,10 @@ impl SyncEngine {
         if parked.is_empty() {
             return Ok(0);
         }
+        // B-11: re-rank what is parked against the new ring, so the cap
+        // evicts junk before a body waiting for an authorized rotation.
+        let ranks: Vec<(u64, u8)> = parked.iter().map(|(seq, body)| (*seq, self.park_priority(body))).collect();
+        store.set_parked_priorities(&self.workspace, &ranks)?;
         let (hold, behind) = (self.walk_hold, self.behind);
         self.in_retry = true;
         self.behind = false;
@@ -844,6 +850,14 @@ impl SyncEngine {
         self.in_retry = false;
         (self.walk_hold, self.behind) = (hold, behind);
         r
+    }
+
+    /// How much a parked body is worth keeping (see
+    /// [`KeyringEngine::park_priority`]).
+    fn park_priority(&self, body: &Value) -> u8 {
+        serde_json::from_value::<SealedEnvelope>(body.clone())
+            .map(|s| self.keyring.park_priority(s.version, s.kid.as_deref()))
+            .unwrap_or(0)
     }
 
     /// The current fetch cursor (highest relay sequence durably applied).

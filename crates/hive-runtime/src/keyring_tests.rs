@@ -920,3 +920,45 @@ fn removed_member_cannot_read_lease_beats_after_rotation() {
     blobs.insert(slot, seal_lease_beat(&mara, &beat).unwrap());
     assert!(open_lease_beats(&blobs, &owner, 5_000, |_| Some(pk.clone())).is_empty(), "a beat under an old epoch");
 }
+
+/// Track B residual 4 (B-11): parked bodies are capped per room, and a flood
+/// of junk (an epoch no authorized rotation names) must not evict a real body
+/// sealed under an authorized rotation this device can't open yet: that one
+/// opens as soon as the rotation reaches it.
+#[test]
+fn parked_flood_does_not_evict_pending_rotation_bodies() {
+    let mut w = World::new();
+    w.rotate("owner");
+    let owner = w.engine("owner", &[]);
+    let head = owner.seal_key().unwrap().clone();
+    assert_eq!(head.version, 1);
+    let mut store = crate::EventStore::open_in_memory().unwrap();
+    for env in &w.cfg {
+        store.ingest(env).unwrap();
+    }
+    let founder = &w.people["owner"];
+    let fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&founder.account.public_key_bytes());
+    store.set_workspace_pin(w.wid, &founder.account_id.to_string(), &fk).unwrap();
+    // eve isn't a recipient of the rotation: she knows it's authorized but
+    // can't open it yet.
+    let p = &w.people["eve"];
+    let src = KeySource::for_device(p.device_id, p.ka(), Some(PASSPHRASE), &[]);
+    let room = "ws-b11";
+    let mut engine = crate::SyncEngine::new(crate::RelayClient::new("http://127.0.0.1:9"), room)
+        .with_room_workspace(w.wid)
+        .with_key_source(src);
+    engine.refresh_keyring(&store).unwrap();
+    assert_eq!(engine.keyring().authorized_head(), 1);
+    assert!(engine.keyring().seal_key().is_none(), "eve can't open the rotation");
+
+    let real = seal_symmetric_kid(&head.key, head.version, &head.kid, b"{\"pending\":true}").unwrap();
+    let mut fetched = vec![(1u64, serde_json::to_value(&real).unwrap())];
+    for seq in 2..(crate::event_store::PARKED_KEEP as u64 + 50) {
+        let junk = json!({ "version": 77, "kid": "deadbeefdeadbeef", "nonce": vec![1u8; 12], "ciphertext": vec![2u8; 48] });
+        fetched.push((seq, junk));
+    }
+    engine.apply_fetched(&mut store, &fetched).unwrap();
+    let parked = store.parked_bodies(room).unwrap();
+    assert!(parked.len() as i64 <= crate::event_store::PARKED_KEEP, "the cap holds");
+    assert!(parked.iter().any(|(seq, _)| *seq == 1), "the flood evicted the body waiting for the authorized rotation");
+}
