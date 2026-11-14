@@ -630,6 +630,11 @@ impl LigusMcp {
                         })
                     })
                     .collect();
+                // Each proposal is read content like a message (up to 2,000
+                // body chars): charged against maxReadMessages.
+                if let Err(r) = Self::charge_reads(st, list.len() as u32) {
+                    return (r, Some(chat));
+                }
                 (ToolResult::ok(json!({"header": READ_HEADER, "proposals": list})), (chat != st.spec.chat_id).then_some(chat))
             }
             "ligus_read_board" => {

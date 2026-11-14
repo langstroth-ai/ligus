@@ -66,7 +66,7 @@ first time it is created; after that, Settings is the source of truth.
 | `LIGUS_MCP_MAX_PROPOSALS` | `8` | desktop, CLI | proposals per turn |
 | `LIGUS_MCP_MAX_HANDOFFS` | `2` | desktop, CLI | hand-offs per turn |
 | `LIGUS_MCP_MAX_ASKS` | `3` | desktop, CLI | questions to the chat per turn |
-| `LIGUS_MCP_MAX_READ_MESSAGES` | `500` | desktop, CLI | messages read per turn |
+| `LIGUS_MCP_MAX_READ_MESSAGES` | `500` | desktop, CLI | messages and proposals read per turn |
 | `LIGUS_MCP_MAX_SPEND_USD` | unset | desktop, CLI | spend per turn, where the runtime reports cost |
 | `LIGUS_MCP_BRIDGE` | this binary | desktop, CLI | the program agents run as `ligus mcp-bridge` |
 

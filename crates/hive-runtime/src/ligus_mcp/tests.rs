@@ -784,3 +784,17 @@ async fn host_notes_quote_agent_text_as_one_bounded_line() {
         assert!(n.body.chars().count() <= 600, "{} chars", n.body.chars().count());
     }
 }
+
+/// `ligus_read_proposals` returns up to 50 proposals (2,000 body chars each),
+/// so it is charged against `maxReadMessages` like `ligus_read_chat`.
+#[tokio::test]
+async fn read_proposals_charged_against_read_budget() {
+    let w = world();
+    let turn = w.mcp.begin_turn(spec(&w, Budgets { max_read_messages: 1, ..Budgets::default() }));
+    for i in 0..2 {
+        assert!(!turn.call("ligus_propose_decision", &json!({"title": format!("d{i}"), "body": "b"})).await.is_error);
+    }
+    let r = turn.call("ligus_read_proposals", &json!({})).await;
+    assert!(r.is_error, "two proposals read under a one-item read budget: {}", r.text);
+    assert_eq!(body(&r)["budget"], "maxReadMessages");
+}

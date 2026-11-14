@@ -97,7 +97,7 @@ Per turn, and set per device:
 | Proposals (any kind) | 8 | `LIGUS_MCP_MAX_PROPOSALS` |
 | Hand-offs | 2 | `LIGUS_MCP_MAX_HANDOFFS` |
 | Questions | 3 | `LIGUS_MCP_MAX_ASKS` |
-| Messages read | 500 | `LIGUS_MCP_MAX_READ_MESSAGES` |
+| Messages and proposals read | 500 | `LIGUS_MCP_MAX_READ_MESSAGES` |
 | Spend (USD) | unset | `LIGUS_MCP_MAX_SPEND_USD`, counted where the runtime reports cost (ACP `usage_update`) |
 
 When a budget runs out, the call returns
