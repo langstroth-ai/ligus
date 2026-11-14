@@ -243,11 +243,53 @@ pub fn human_gate_reason(session: &crate::ChatSession, proposal: &crate::ActionP
         return Some("this chat is locked down: every proposal needs a human member's approval".into());
     }
     if let Some(d) = session.guards.dearth_on() {
-        if touches_any(&d.brood_paths, &proposal.changed_files) {
+        if touches_any(&d.brood_paths, &touched_paths(proposal)) {
             return Some("dearth mode: this change touches protected (brood) paths and needs a human member's approval".into());
         }
     }
     None
+}
+
+/// Every path a proposal may write: its declared `changed_files` plus every
+/// path named in its diff's headers. The declared list is the author's own
+/// summary, so a gate must never rely on it alone: a patch that rewrites
+/// `.github/workflows/ci.yml` while declaring only `src/lib.rs` would slip by.
+/// Over-approximates (both sides of a rename, prefixed and unprefixed forms),
+/// which can only make a gate stricter.
+pub fn touched_paths(proposal: &crate::ActionProposal) -> Vec<String> {
+    let mut out: Vec<String> = proposal.changed_files.clone();
+    let mut push = |raw: &str| {
+        let p = raw.trim().trim_end_matches('\t').trim_matches('"');
+        if p.is_empty() || p == "/dev/null" {
+            return;
+        }
+        for cand in [p, p.strip_prefix("a/").unwrap_or(p), p.strip_prefix("b/").unwrap_or(p)] {
+            if !out.iter().any(|x| x == cand) {
+                out.push(cand.to_string());
+            }
+        }
+    };
+    for line in proposal.diff.as_deref().unwrap_or("").lines() {
+        if let Some(rest) = line.strip_prefix("diff --git ") {
+            match rest.find(" b/").or_else(|| rest.find(" \"b/")) {
+                Some(i) => {
+                    push(&rest[..i]);
+                    push(&rest[i + 1..]);
+                }
+                None => push(rest),
+            }
+        } else if let Some(rest) = line
+            .strip_prefix("--- ")
+            .or_else(|| line.strip_prefix("+++ "))
+            .or_else(|| line.strip_prefix("rename from "))
+            .or_else(|| line.strip_prefix("rename to "))
+            .or_else(|| line.strip_prefix("copy from "))
+            .or_else(|| line.strip_prefix("copy to "))
+        {
+            push(rest.split('\t').next().unwrap_or(rest));
+        }
+    }
+    out
 }
 
 /// Whether a change to `files` in `session` is under a workspace guard's human

@@ -58,3 +58,46 @@ fn signed_flow_records_with_floats_verify_after_a_json_round_trip() {
     }
     assert_eq!(failures, 0, "signed events with floats failed to verify after a JSON round trip");
 }
+
+// ---- human gate: what a proposal touches ----
+
+use crate::guard::{human_gate_reason, DearthMode, DEFAULT_BROOD_PATHS};
+use crate::lease_projection_tests::{base, ev, seed};
+use crate::proposals::ActionProposal;
+use crate::time_util::Timestamp;
+
+fn dearth_on() -> SessionEvent {
+    SessionEvent::DearthModeChanged {
+        dearth: DearthMode {
+            enabled: true,
+            reason: String::new(),
+            brood_paths: DEFAULT_BROOD_PATHS.iter().map(|s| s.to_string()).collect(),
+            allowed_mcp_servers: vec![],
+            admitted_devices: vec![],
+            set_by: "owner".into(),
+            set_at: Timestamp::epoch(),
+        },
+    }
+}
+
+fn diff_for(path: &str) -> String {
+    format!("diff --git a/{path} b/{path}\nindex 1111111..2222222 100644\n--- a/{path}\n+++ b/{path}\n@@ -1 +1 @@\n-a\n+b\n")
+}
+
+/// The brood gate must judge the patch that will be applied, not the
+/// author-declared `changed_files` summary: a diff that rewrites CI while
+/// declaring only `src/lib.rs` must still need a human approval.
+#[test]
+fn brood_gate_reads_the_diff_not_the_declared_file_list() {
+    let s = base();
+    let lying = ActionProposal::file_diff("p", "", diff_for(".github/workflows/ci.yml"), vec!["src/lib.rs".into()]);
+    let pid = lying.id;
+    let p = crate::events::project(&[
+        seed(&s),
+        ev(&s, 1, "owner", None, dearth_on()),
+        ev(&s, 2, "alice", None, SessionEvent::ProposalUpserted { proposal: lying }),
+    ])
+    .unwrap();
+    let prop = p.proposals.iter().find(|x| x.id == pid).unwrap();
+    assert!(human_gate_reason(&p, prop).is_some(), "a CI change hidden behind a false file list skipped the human gate");
+}
