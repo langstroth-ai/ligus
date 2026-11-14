@@ -123,9 +123,12 @@ on ingest. Its session id is a UUIDv5 of the workspace id. It carries:
 
 ## Device-local knobs that are deliberately not synced
 
-- the pre-flight test command (`LIGUS_PREFLIGHT_TEST` or git config
-  `ligus.preflightTest`), so a teammate can't make your machine run a
-  command;
+- the pre-flight test command (`LIGUS_PREFLIGHT_TEST`; never the repo's git
+  config), so neither a teammate nor a repository can make your machine run
+  a command;
+- which repo-supplied runtimes and MCP servers this device trusts
+  ([Trust this workspace](../concepts/security.md#workspace-trust));
+- `settings.json` itself, written owner-only (`0600`) and atomically;
 - workspace folders (`workspace_dirs`) and repo bindings;
 - Claude Code permission mode and built-in tool switches;
 - MCP OAuth and bearer tokens;

@@ -74,10 +74,14 @@ repo, a teammate's message) can try to steer it. Defences:
 - Ligus's own git calls (worktrees, diffs, apply, the hygiene sweep, PR
   fetch and push) never run the repository's hooks or fsmonitor, so a file an
   agent plants can't get code run by Ligus outside the agent's sandbox;
-- agent CLIs, MCP servers, pre-flight tests and git never inherit Ligus's
-  own secrets (the workspace key, relay and tunnel tokens, ntfy tokens,
-  `LIGUS_WS_SECRET_*`); model provider keys such as `ANTHROPIC_API_KEY` do
-  pass through, because the runtimes need them;
+- agent CLIs, MCP servers, `run_command` and pre-flight tests start with an
+  allow-listed environment: no Ligus secrets and no provider key except the
+  one you configured for that runtime in Ligus;
+- agent processes run in the OS sandbox: no reads of Ligus's data or your
+  credential dirs, writes only in the worktree, and the network only through
+  a per-chat egress allow-list (model endpoints plus the chat's MCP hosts);
+- a repository's own runtimes and MCP servers are inert until you trust them
+  on your device;
 - while egress is restricted, Claude Code loads no settings or hooks from
   the repository (only your user settings), so a cloned `.claude/settings.json`
   can't reopen the network;
@@ -92,9 +96,11 @@ repo, a teammate's message) can try to steer it. Defences:
   paths;
 - secret redaction masks credentials and invite codes in replies before
   they're logged;
-- on headless hosts, tools only run for authors at or above
-  `LIGUS_MCP_MIN_ROLE`. Below it, Claude Code, Antigravity and Copilot run
-  read-only and Codex, aider, pi and Hermes are refused with a note.
+- on every host, a turn runs at its configured tier only for authors at or
+  above the floor (Admin for a write-capable turn, Contributor for a
+  read-only one; `LIGUS_MCP_MIN_ROLE`). Below it, Claude Code, Antigravity
+  and Copilot run read-only and Codex, aider, pi and Hermes are refused with
+  a note.
 
 These reduce risk; they don't make an agent safe to run with broad
 permissions on an untrusted repository. Runtimes Ligus can't confine from
@@ -131,11 +137,16 @@ fixes it.
 2. **`config.toml` and `settings.json` hold the workspace key in clear.**
    So does a `hivews1:` invite. Treat each like a password. `ligus enroll`
    writes `config.toml` `0600` and keeps the data dir `0700`.
-3. **Agents can read the data dir.** **(Phase 0)** Agent CLIs on a desktop or
-   a box run as the same OS user as Ligus. One with shell or file tools can
-   read the data dir (key seeds, workspace keys, `serve.token`) even though it
-   can't write into `.ligus` inside its worktree. Secret scrubbing keeps
-   Ligus's secrets out of the agent's *environment*, not off the disk.
+3. **Agents run as your OS user, inside a sandbox.** Agent processes run in
+   the [OS sandbox](../concepts/security.md#os-sandbox) (Seatbelt on macOS,
+   bubblewrap + Landlock + seccomp on Linux), which denies the data dir (key
+   seeds, workspace keys, `settings.json`, `serve.token`), credential dirs and
+   direct network. The sandbox shares your user and kernel: it is not a
+   boundary against kernel bugs, and on a host without it (Windows, Linux
+   without bubblewrap or user namespaces) the data dir is readable to
+   read-only agent turns, while write-capable turns are refused. On Linux a
+   protected directory that doesn't exist yet is pinned by an empty
+   read-only directory for the turn.
 4. **Agents have no identity of their own.** **(Phase 0)** An agent's
    messages and proposals are signed by the device that ran the turn. Peers
    can tell which host ran it, not prove which agent wrote it.

@@ -119,11 +119,13 @@ Choosing happens in two steps, so a stale or broken change can't land:
    front-runner).
 2. **Run pre-flight.** Ligus checks, and records in the set:
     - **Tests**: your pre-flight test command runs in a scratch worktree with
-      the change applied. Set the command per repository with
-      `git config ligus.preflightTest "cargo test"`, or for every repository
-      with `LIGUS_PREFLIGHT_TEST`. It is read from your machine only and never
-      synced, so a teammate can't make your machine run a command. With no
-      command set, the check is skipped.
+      the change applied. Set the command with `LIGUS_PREFLIGHT_TEST`. It is
+      read from your machine only, never synced and never taken from the
+      repository (not even its git config), so neither a teammate nor a repo
+      can make your machine run a command. It runs in the agent sandbox:
+      writes only in the scratch worktree, no network unless
+      `LIGUS_SANDBOX_EGRESS_ALLOW` names hosts. With no command set, the
+      check is skipped.
     - **Base unchanged**: the chat's branch hasn't moved since the set
       opened, and the change still applies cleanly.
     - **Hosts online**: the hosts needed to carry it out are online.

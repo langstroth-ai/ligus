@@ -145,8 +145,13 @@ relay refusal.
 5. **Did a turn hard-fail?** A mention whose reply failed isn't retried every
    tick; restart the worker to retry, and check its log for the error.
 6. **No tools, or no edits?** Tools run only for authors at or above
-   `LIGUS_MCP_MIN_ROLE` (default Contributor). Claude Code on a worker is
-   read-only unless `LIGUS_WORKER_PERMISSION_MODE` raises it.
+   `LIGUS_MCP_MIN_ROLE` (default Admin on a write-capable tier, Contributor
+   when read-only). Claude Code on a worker is read-only unless
+   `LIGUS_WORKER_PERMISSION_MODE` raises it, and a write tier needs the
+   agent sandbox (bubblewrap on Linux): without it the turn is refused.
+   A tool call that fails with a network error may have hit the egress
+   allow-list: the chat shows a note; add hosts with
+   `LIGUS_SANDBOX_EGRESS_ALLOW`.
 7. **Is it syncing at all?** Look for `sync: … retrying` lines in the log.
 8. **Egress restricted?** In dearth mode or a locked chat, runtimes Ligus
    can't confine (aider, pi, Hermes, Antigravity, Copilot) are refused, with

@@ -65,7 +65,7 @@ $ curl -s http://127.0.0.1:8787/v1/health -H "Authorization: Bearer $(cat ~/.lig
 |---|---|---|
 | `GET /v1/proposals` | `?status=open\|all` (default `open`) | newest first |
 | `GET /v1/proposals/:id` | | adds `myRole`, `myVote`, `canVote`, `isMine` |
-| `POST /v1/proposals/:id/approve` | | votes approve at the box's role; applies the change only with `LIGUS_SERVE_APPLY_ON_APPROVE` |
+| `POST /v1/proposals/:id/approve` | | votes approve at the box's role; applies the change only with `LIGUS_SERVE_APPLY_ON_APPROVE`. On a box enrolled as the owner's device: `403 {"error":"presence_required","hint":…}` (as for `reject` and `lockdown/clear`) |
 | `POST /v1/proposals/:id/reject` | `{reason?}` | the reason becomes a thread comment |
 | `GET /v1/proposals/:id/comments` | | refinement thread |
 | `POST /v1/proposals/:id/comments` | `{text, requestChanges?}` | a Viewer gets 403 |

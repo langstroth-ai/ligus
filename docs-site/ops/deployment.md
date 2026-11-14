@@ -118,8 +118,10 @@ ligus worker --label team-worker
 Run it under systemd (see `deploy/ligus-serve/` for a unit to adapt) and
 consider:
 
-- `LIGUS_MCP_MIN_ROLE` (default `contributor`): who can make the worker use
-  tools;
+- `LIGUS_MCP_MIN_ROLE` (default `admin` when the worker's tier can write,
+  `contributor` when read-only): who can make the worker use tools;
+- bubblewrap: agent processes run in the Linux sandbox; without `bwrap` the
+  worker refuses write-capable turns;
 - `LIGUS_WORKER_PERMISSION_MODE`: off (read-only) unless you want worker
   turns to propose edits;
 - whoever administers the worker box can read the workspace.

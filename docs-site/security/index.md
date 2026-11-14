@@ -115,22 +115,33 @@ turn-scoped inputs. See [Keys off the cluster](../deploy/keys-off-cluster.md).
 Non-members are treated as Viewers. Event kinds with no explicit rule
 require Owner. Proposal sets add their own decision role on top.
 
-- **Tool gate on headless hosts.** On `ligus worker` and `ligus serve`, a
-  turn gets tools only if the message's author holds at least
-  `LIGUS_MCP_MIN_ROLE` (default Contributor). Below it, Ligus's own tool
-  loop runs without tools, Claude Code, Antigravity and Copilot run
-  read-only, and Codex, aider, pi and Hermes are refused with a note. An
-  author that can't be resolved gets no tools.
+- **Author gate on every host.** On the desktop, `ligus worker`, `ligus
+  serve` and `ligus agent`, a turn runs at its configured tier only if the
+  message's author holds the host's floor: **Admin** when the turn can write,
+  **Contributor** when it is read-only (`LIGUS_MCP_MIN_ROLE` overrides it; a
+  lower value logs a warning). Below it, Ligus's own tool loop runs without
+  tools, Claude Code, Antigravity and Copilot run read-only, and Codex,
+  aider, pi and Hermes are refused with a note. An author that can't be
+  resolved gets no tools. See [the author gate](../concepts/security.md#author-gate).
 - **Worker write access** is off by default:
-  `LIGUS_WORKER_PERMISSION_MODE` must raise it. When you raise it, raise
-  `LIGUS_MCP_MIN_ROLE` too (to `admin`, say), so only people you'd trust with
-  a shell on the box can drive a write-capable agent there.
+  `LIGUS_WORKER_PERMISSION_MODE` must raise it, and then only Admins' messages
+  drive write-capable turns there unless you lower `LIGUS_MCP_MIN_ROLE`.
+- **Agent processes are sandboxed.** No agent process can read Ligus's keys,
+  settings, database or `serve.token`, write outside its worktree, or reach
+  the network except through a per-chat allow-list. See [the OS
+  sandbox](../concepts/security.md#os-sandbox).
+- **Phone and serve approvals.** A `ligus serve` box enrolled as your device
+  signs as you, so until passkey presence lands it refuses votes, rejects and
+  lockdown clears from the phone or any bearer caller (`403
+  presence_required`): approve on your laptop.
 
 ## The 2.0 guards {#guards}
 
 | Guard | What it does | Who can switch it | Details |
 |---|---|---|---|
 | **Sandbox envelope** | per turn: isolated worktree, protected dirs (`.git`, `.ligus`, `.hive`, `.claude`, `.vscode`, config files), egress policy, secret redaction in logged replies; only ever tightens | automatic | [The sandbox envelope](../concepts/security.md#the-sandbox-envelope-around-every-agent-turn) |
+| **OS sandbox** | every agent process: Seatbelt (macOS) or bubblewrap + Landlock + seccomp (Linux); no reads of Ligus's data, keys or `serve.token`; writes only in the worktree; network only through the turn's egress proxy; write-capable turns refused where no sandbox exists | automatic | [The OS sandbox](../concepts/security.md#os-sandbox) |
+| **Workspace trust** | repo-supplied runtimes and MCP servers stay inert until enabled on this device, per exact command | you, per device | [Trust this workspace](../concepts/security.md#workspace-trust) |
 | **Dearth mode** | two Admins for new members; cross-account approval for new devices; agents limited to allow-listed MCP servers; human approval for protected (brood) paths | Admin | [Dearth mode](../features/guards.md#dearth-mode) |
 | **Chat lockdown** | on an injection marker, a credential in a diff or an unrequested CI change: no network or MCP for that chat's agents, human approval on every proposal | raised by anyone (or automatically); cleared by a human Contributor+ | [Chat lockdown](../features/guards.md#chat-lockdown) |
 | **Leases** | exactly one device drives a workflow run or the workspace coordinator role; signed heartbeats over relay presence; epoch fencing | Contributor (signed by the holder device) | [Which device drives a run](../features/workflows.md#which-device-drives-a-run) |

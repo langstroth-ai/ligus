@@ -72,7 +72,8 @@ an API model calling MCP tools:
   envelope is tightened (dearth mode, a chat lockdown), a turn that can't get
   a worktree is refused instead of running in place.
 - **Filesystem allow-list.** Agents never write into `.git`, `.ligus`, `.hive`,
-  `.claude`, `.vscode` or the workspace config files.
+  `.claude`, `.vscode` or the workspace config files. Ligus's built-in file
+  tools and the OS sandbox (below) both read this list from the envelope.
 - **Egress policy.** Normally open (each runtime's own permission tier
   applies). Tightened, it is either *allow-listed MCP servers only* or
   *closed*. Ligus enforces it per runtime: Claude Code loses its web and shell
@@ -82,20 +83,124 @@ an API model calling MCP tools:
   Copilot) are **refused** while egress is restricted, with a note in the chat.
 - **Secret redaction.** API keys, tokens, private keys and Ligus invite codes
   in an agent's reply are masked before the reply is written to the log, so
-  they never reach other members or the relay.
+  they never reach other members or the relay. Ligus's **own** secrets are
+  masked by exact value as `[ligus-secret]`: the serve token, relay `hrt1`
+  tokens, phone pairing credentials, device and workspace key seeds, and
+  every key or token in this device's settings. That covers streamed
+  replies and proposal titles, bodies and diffs.
 - **No repository code run by Ligus.** Ligus's own git calls (worktrees,
   diffs, apply, the hygiene sweep) never run the repository's hooks or
   fsmonitor, and while egress is restricted Claude Code loads no settings or
   hooks from the repository, only your user settings.
-- **Ligus's secrets stay out of child processes.** Agent CLIs, MCP servers,
-  pre-flight tests and git start without the workspace key, relay and tunnel
-  tokens or `LIGUS_WS_SECRET_*` values in their environment. Model provider
-  keys pass through, since the runtimes need them.
+- **An allow-listed environment.** Agent CLIs, MCP servers, `run_command`
+  and pre-flight tests start with an empty environment plus an allow-list:
+  `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TERM`,
+  `TMPDIR`, the CA variables, `XDG_*` on Linux, the CLIs' own config-dir
+  variables when you set them, the proxy variables Ligus sets, git
+  attribution, and **one** provider key: the one you configured for that
+  runtime in Ligus. A key in Ligus's own environment (`ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY`, …) is no longer inherited; Ligus still uses it for its
+  own API calls. Claude Code therefore uses its subscription login unless
+  you give its runtime a key in Ligus.
 - **No remote images in chat.** Markdown images from remote URLs render as
   links, so a reply can't send data to a server just by being displayed.
 
 On Kubernetes the same envelope becomes the turn executor's pod spec and
 NetworkPolicy.
+
+## The OS sandbox around agent processes {#os-sandbox}
+
+Every process Ligus starts for a turn (a CLI agent, a stdio MCP server,
+`run_command`, a pre-flight test) runs inside an OS sandbox planned from the
+envelope, the runtime and the author gate. The plan is the same on the
+desktop, `ligus serve`, `ligus worker` and `ligus agent`.
+
+| | macOS (Seatbelt, `sandbox-exec`) | Linux (bubblewrap + Landlock + seccomp) |
+|---|---|---|
+| Writes | the turn's worktree (only when the turn may write), its scratch dir, the runtime's own state dirs (`~/.claude`, `~/.codex`, `~/.copilot`, …) | the same, as bind mounts on a read-only `/`; Landlock limits writes to them again |
+| Never readable | Ligus's data dir (keys, `settings.json`, the database, `serve.token`), a `--token-file` elsewhere, `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config/gcloud`, `~/.kube`, `~/.netrc`, `~/.git-credentials` | the same (tmpfs over them), plus `$XDG_RUNTIME_DIR`, so the D-Bus session bus and Secret Service are out of reach |
+| Read-only inside the worktree | `.git`, the protected dirs, `ligus.config.toml`, `hive.config.toml`, `.envrc` | the same |
+| Network | denied except the turn's egress proxy on loopback | a fresh network namespace; the only way out is the egress proxy through a socket |
+| Other | | seccomp denies `ptrace`, `process_vm_*`, `mount`, `bpf`, `keyctl`, kernel-module and `kexec` calls, and new user namespaces |
+
+- **cwd and HOME.** An agent never runs in your home directory, in `/` or in
+  Ligus's data dir; a turn without a worktree gets a fresh scratch dir
+  (`$TMPDIR/ligus-turn-…`).
+- **Egress proxy.** Each turn gets its own HTTP `CONNECT` proxy on
+  `127.0.0.1`, with a random credential in the child's `HTTPS_PROXY`. It
+  allows exactly the runtime's model endpoints (Claude Code:
+  `api.anthropic.com`, `console.anthropic.com`, `claude.ai`; Codex:
+  `api.openai.com`, `chatgpt.com`, `auth.openai.com`; Copilot:
+  `api.githubcopilot.com`, `github.com`, `api.github.com`; Antigravity: the
+  Google endpoints; an API runtime: its base URL) plus the hosts of the MCP
+  servers this chat may reach. Under dearth mode only the allow-listed MCP
+  servers' hosts are added; under a chat lockdown only the model endpoints
+  remain. The `CONNECT` host and the TLS server name (SNI) must both match;
+  there is no TLS interception. A refused endpoint shows as a system note in
+  the chat and a content-free decision. A tool that ignores `HTTPS_PROXY`
+  simply has no network. To let agents reach more hosts on your device under
+  the normal envelope, set `LIGUS_SANDBOX_EGRESS_ALLOW`.
+- **Keychain (macOS).** Subscription CLIs (Claude Code, Codex, Copilot,
+  Antigravity) keep access to the login keychain, because their logins live
+  there; every other agent process can't read the keychain files. Ligus's own
+  keychain items are protected by their access lists, not by the profile.
+- **Codex** runs its commands inside Ligus's sandbox instead of its own
+  (Seatbelt and bubblewrap sandboxes can't nest).
+- **No sandbox, no writing agents.** Where neither sandbox is available
+  (Windows, a Linux host without bubblewrap or user namespaces,
+  `LIGUS_SANDBOX=off`), Ligus still applies the environment allow-list and
+  cwd rules, but refuses write-capable agent turns. Read-only turns still
+  run.
+- **One control among several.** The sandbox does not replace the author
+  gate, the MCP role gate, review of proposals or the human gate, and it is
+  not a boundary against kernel bugs.
+
+## Who can drive a turn: the author gate {#author-gate}
+
+A turn runs on the host's keys and files on behalf of whoever wrote the
+message that triggered it. Every host (desktop, `ligus serve`, `ligus
+worker`, `ligus agent`) applies the same gate to every runtime:
+
+- The floor is **Admin** for a turn that can write (a raised permission tier,
+  or a CLI that always edits: Codex, aider, pi, Hermes) and **Contributor**
+  for a read-only one. `LIGUS_MCP_MIN_ROLE` overrides it; a value below the
+  default logs a warning at startup.
+- At or above the floor the turn runs as configured. Below it, an API model
+  gets no tools, Claude Code, Antigravity and Copilot run at their read-only
+  tier (and the OS sandbox mounts the worktree read-only), and Codex, aider,
+  pi and Hermes are refused with a note in the chat. An author that can't be
+  resolved is below every floor. On the desktop, your own messages always
+  clear it.
+
+## Trust this workspace {#workspace-trust}
+
+A repository can ship runtimes and MCP servers (`ligus.config.toml`,
+`.ligus/runtimes.json`, `.ligus/mcp-servers.json`): commands Ligus would run
+and endpoints it would send prompts to. They load **inert**. Ligus shows
+*"This workspace wants to run N commands (MCP servers, runtimes)"*; **Review**
+lists each exact command line and the file it came from, and you enable
+items one by one or **Trust this workspace** for all current ones.
+
+- The decision lives only on this device (a table in its database), keyed by
+  the repository (its path and first commit) and a digest of each item's
+  command, arguments and URL. A changed command is a new item and is inert
+  again.
+- Items you add in Settings are trusted as you save them.
+- Headless hosts use `ligus trust list | enable <digest> | enable-all`.
+- The pre-flight test command comes only from `LIGUS_PREFLIGHT_TEST` on your
+  device, never from the repository's git config.
+
+## Telemetry stays on your device {#facts}
+
+Per-turn measurements (which agent answered, task class, tool calls, test
+results, waits, touched-file keys, route stops) are **facts** on the device
+that ran the turn, not events in the signed log. Each host syncs one bounded
+summary per agent per day (turn, error and test counts per task class,
+proposal outcomes), which is what other devices score from. Routing
+decisions stay in the log, because other devices follow them. External
+observability tools read facts with `ligus facts export --jsonl` (schema
+`ligus.facts.v1`: ids, enums, numbers and timestamps only; any string that
+isn't an id or looks like a secret is exported as `redacted`).
 
 ## Dearth mode: a tighter entrance on demand
 

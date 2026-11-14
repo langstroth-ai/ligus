@@ -214,11 +214,13 @@ table is in the chart's
 !!! warning "Workers with write access"
     `worker.permissionMode` (`acceptEdits`, `runCommands`,
     `bypassPermissions`) lets CLI agents on the workers edit files or run
-    commands. Raise the tool gate with it, for example
-    `worker.extraEnv: [{name: LIGUS_MCP_MIN_ROLE, value: admin}]`, so only
-    members you'd trust with a shell on the pod can drive those agents.
-    Below the gate, Claude Code, Antigravity and Copilot run read-only and
-    the other CLIs are refused.
+    commands. The tool gate then defaults to Admin, so only members you'd
+    trust with a shell on the pod can drive those agents; below it, Claude
+    Code, Antigravity and Copilot run read-only and the other CLIs are
+    refused. Agent processes run in the bubblewrap sandbox, which needs
+    unprivileged user namespaces in the pod; where the cluster forbids them,
+    write-capable turns are refused. `HOME` is `/home/ligus` (a `home`
+    subdirectory of the data volume), outside the data dir agents can't read.
 
 ## Known limits
 

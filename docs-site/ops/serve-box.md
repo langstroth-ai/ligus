@@ -112,11 +112,29 @@ ligus serve enroll --new-device
   relay token) `0600` and keeps the data dir `0700`; key seeds are `0600` in
   a `0700` key dir. The shipped unit also sets `UMask=0077`.
 - **Agents on the box don't see Ligus's secrets.** Agent CLIs, MCP servers,
-  pre-flight tests and git run without the workspace key, relay and tunnel
-  tokens, ntfy tokens or `LIGUS_WS_SECRET_*` in their environment. Model
-  provider keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, ...) do reach them.
-  They still run as the box's OS user and can read its data dir; see
-  [Known limitations](../security/threat-model.md#known-limitations).
+  `run_command` and pre-flight tests start with an allow-listed environment
+  (no workspace key, relay or tunnel tokens, ntfy tokens, `LIGUS_WS_SECRET_*`,
+  and no provider key unless that runtime was given one in Ligus), and run
+  in the [OS sandbox](../concepts/security.md#os-sandbox): bubblewrap,
+  Landlock and seccomp on Linux. The data dir, `serve.token` (also a
+  `--token-file` elsewhere), `~/.ssh` and the other credential dirs are
+  unreadable; writes land only in the turn's worktree; the network is a
+  fresh namespace whose only exit is the turn's egress proxy. So an agent
+  can't read the token, and can't reach the serve API on loopback either.
+- **Install bubblewrap.** The Linux sandbox needs `bwrap` and unprivileged
+  user namespaces. Without them the box runs read-only agent turns only and
+  refuses write-capable ones (`LIGUS_WORKER_PERMISSION_MODE` has no effect).
+  Check with a write-tier turn after installing; the [container
+  image](../deploy/kubernetes.md) ships `bwrap`.
+- **HOME is not the data dir.** Agent CLIs keep their logins under `$HOME`;
+  run the service with a `HOME` outside `LIGUS_DATA_DIR` (the container image
+  and chart use `/home/ligus`), because the data dir is unreadable to them.
+- **Votes from the phone need you present.** A box enrolled as your device
+  signs as you. Until passkey presence lands, it refuses approve, reject and
+  lockdown clear from the phone or any bearer caller with `403
+  {"error":"presence_required","hint":"approve on your laptop, or confirm with a passkey after updating"}`,
+  and records one fact per refusal. Approve on your laptop. A box that is its
+  own member is unaffected: its votes are its own.
 
 ## Host liveness
 
@@ -157,7 +175,7 @@ the current holder and epoch, along with dearth mode and locked chats. See
 |---|---|
 | `GET /v1/proposal-sets`, `GET /v1/proposal-sets/{id}`, `GET /v1/chats/{id}/proposal-sets` | Proposal sets with standings, posted assessments and pre-flight results (read-only; votes use the proposal routes) |
 | `GET /v1/guards` | Dearth mode, locked chats, the coordinator, and whether this box's identity may clear a lockdown |
-| `POST /v1/chats/{id}/lockdown/clear` | Clear a chat's lockdown as this box's identity: a human member at Contributor or above only, through the desktop's signed event |
+| `POST /v1/chats/{id}/lockdown/clear` | Clear a chat's lockdown as this box's identity: a human member at Contributor or above only (by member record and folded role), through the desktop's signed event. On a box enrolled as your device: `403 presence_required` |
 | `GET /v1/flow` | Board, review queue and alert, marks, routing summary |
 | `GET /v1/chats/{id}/handoffs` | A chat's hand-off cards |
 
