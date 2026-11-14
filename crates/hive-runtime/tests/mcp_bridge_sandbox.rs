@@ -1,5 +1,6 @@
 //! `mcp_bridge_reachable_inside_seatbelt_and_bwrap`: an agent child confined
-//! by the host's executor (Seatbelt on macOS, bubblewrap on Linux) under a
+//! by the host's executor (Seatbelt on macOS, bubblewrap or the Landlock
+//! tier on Linux) under a
 //! **closed** egress envelope reaches the turn's Ligus MCP socket through
 //! `ligus-mcp-bridge`, and nothing else. On macOS a control run without the
 //! socket in the plan is refused by the profile.
@@ -57,8 +58,9 @@ async fn run_bridge(socket_in_plan: bool) -> Result<Vec<Value>, String> {
         ("LIGUS_MCP_SOCKET".to_string(), socket.to_string_lossy().into_owned()),
         ("LIGUS_TURN_CRED".to_string(), turn.credential().to_string()),
     ];
-    // Under bubblewrap the bridge goes through the helper's forwarder (C-10).
-    env.extend(hive_runtime::ligus_mcp::bridge::sandbox_tcp_env());
+    // Under bubblewrap the bridge goes through the helper's forwarder, under
+    // the Landlock tier through the endpoint's loopback listener (C-10).
+    env.extend(hive_runtime::ligus_mcp::bridge::sandbox_tcp_env_for(&socket));
     let work = tempfile::tempdir().unwrap();
     let out = executor::with_turn(policy, async {
         let spec = SpawnSpec::new(Purpose::Agent(ModelProviderKind::ClaudeCode), BRIDGE, Vec::<String>::new()).cwd(Some(work.path())).env(&env);
@@ -103,8 +105,7 @@ async fn run_bridge(socket_in_plan: bool) -> Result<Vec<Value>, String> {
 
 #[tokio::test]
 async fn mcp_bridge_reachable_inside_seatbelt_and_bwrap() {
-    if executor::refuses_writes() {
-        eprintln!("skipping: no OS sandbox on this host");
+    if executor::skip_without_sandbox("mcp_bridge_reachable_inside_seatbelt_and_bwrap") {
         return;
     }
     let got = run_bridge(true).await.expect("bridge reaches the socket");

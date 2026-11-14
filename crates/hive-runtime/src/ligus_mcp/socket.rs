@@ -29,14 +29,44 @@ pub const MCP_PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-
 pub struct SocketEndpoint {
     pub dir: PathBuf,
     pub path: PathBuf,
+    /// The loopback TCP listener for the same turn, under the Linux Landlock
+    /// tier only (see [`tcp_port_for`]).
+    pub tcp_port: Option<u16>,
     task: tokio::task::JoinHandle<()>,
+    tcp_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Drop for SocketEndpoint {
     fn drop(&mut self) {
         self.task.abort();
+        if let Some(t) = self.tcp_task.take() {
+            t.abort();
+        }
+        if self.tcp_port.is_some() {
+            tcp_ports().lock().unwrap_or_else(|e| e.into_inner()).remove(&self.path);
+        }
         let _ = std::fs::remove_dir_all(&self.dir);
     }
+}
+
+/// Socket path to its loopback TCP port, for endpoints that have one.
+fn tcp_ports() -> &'static std::sync::Mutex<std::collections::HashMap<PathBuf, u16>> {
+    static M: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<PathBuf, u16>>> = std::sync::OnceLock::new();
+    M.get_or_init(Default::default)
+}
+
+/// The loopback TCP port that serves the same turns as the socket at
+/// `socket`, if it has one.
+///
+/// Under the Linux Landlock tier there is no network namespace for a
+/// forwarder to live in, and seccomp refuses new unix sockets (Landlock
+/// can't limit which socket paths a child connects to before ABI 9), so the
+/// endpoint also listens on an ephemeral `127.0.0.1` port and the sandbox
+/// lets the child connect to exactly that port. The listener is reachable by
+/// other local processes, like the egress proxy: every connection must
+/// still open with the turn's credential (`initialize`), as on the socket.
+pub fn tcp_port_for(socket: &Path) -> Option<u16> {
+    tcp_ports().lock().unwrap_or_else(|e| e.into_inner()).get(socket).copied()
 }
 
 /// The program that bridges stdio to the socket: an explicit one (tests,
@@ -73,7 +103,7 @@ impl SocketEndpoint {
                 (super::bridge::CRED_ENV.to_string(), credential.to_string()),
             ]
             .into_iter()
-            .chain(super::bridge::sandbox_tcp_env())
+            .chain(super::bridge::sandbox_tcp_env_for(&self.path))
             .collect(),
             socket: self.path.clone(),
             config_dir: self.dir.clone(),
@@ -107,6 +137,7 @@ pub fn listen(mcp: Arc<LigusMcp>) -> std::io::Result<SocketEndpoint> {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     }
+    let mcp_tcp = mcp.clone();
     let task = tokio::spawn(async move {
         loop {
             let Ok((stream, _)) = listener.accept().await else { break };
@@ -116,7 +147,28 @@ pub fn listen(mcp: Arc<LigusMcp>) -> std::io::Result<SocketEndpoint> {
             });
         }
     });
-    Ok(SocketEndpoint { dir, path, task })
+    let (tcp_port, tcp_task) = if crate::executor::default_executor().kind() == crate::executor::ExecutorKind::Landlock {
+        let l = tokio::net::TcpListener::from_std({
+            let l = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+            l.set_nonblocking(true)?;
+            l
+        })?;
+        let port = l.local_addr()?.port();
+        tcp_ports().lock().unwrap_or_else(|e| e.into_inner()).insert(path.clone(), port);
+        let task = tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = l.accept().await else { break };
+                let mcp = mcp_tcp.clone();
+                tokio::spawn(async move {
+                    let _ = serve_conn(mcp, stream).await;
+                });
+            }
+        });
+        (Some(port), Some(task))
+    } else {
+        (None, None)
+    };
+    Ok(SocketEndpoint { dir, path, tcp_port, task, tcp_task })
 }
 
 #[cfg(not(unix))]
@@ -125,8 +177,8 @@ pub fn listen(_mcp: Arc<LigusMcp>) -> std::io::Result<SocketEndpoint> {
 }
 
 #[cfg(unix)]
-async fn serve_conn(mcp: Arc<LigusMcp>, stream: tokio::net::UnixStream) -> std::io::Result<()> {
-    let (r, mut w) = stream.into_split();
+async fn serve_conn<S: tokio::io::AsyncRead + tokio::io::AsyncWrite>(mcp: Arc<LigusMcp>, stream: S) -> std::io::Result<()> {
+    let (r, mut w) = tokio::io::split(stream);
     let mut reader = BufReader::new(r);
     let mut cred: Option<String> = None;
     while let Some(line) = read_bounded_line(&mut reader).await? {

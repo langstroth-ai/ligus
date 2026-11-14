@@ -9,9 +9,11 @@
 //!    environment. It is a pure function, so the desktop, `ligus worker`,
 //!    `ligus serve` and `ligus agent` get the same plan for the same turn.
 //! 2. A [`TurnExecutor`] confines a command to the plan: Seatbelt
-//!    (`sandbox-exec`) on macOS, bubblewrap + Landlock + seccomp on Linux,
-//!    or [`Unconfined`] where neither is available (then write-capable turns
-//!    are refused; see [`refuses_writes`]).
+//!    (`sandbox-exec`) on macOS; on Linux, bubblewrap + Landlock + seccomp,
+//!    or (where bubblewrap can't create namespaces) Landlock + seccomp
+//!    alone ([`ExecutorKind::Landlock`]); or [`Unconfined`] where none is
+//!    available (then write-capable turns are refused; see
+//!    [`refuses_writes`]). [`sandbox_status`] says which, and why.
 //! 3. [`prepare`] is what spawn sites call: it resolves the plan from the
 //!    turn scope ([`with_turn`]) or the safe default, starts the per-turn
 //!    egress proxy ([`crate::egress`]), creates the turn's scratch dir, and
@@ -32,16 +34,23 @@ use crate::author_gate::GatePlan;
 use crate::egress::{EgressPreset, EgressProxy, HostPort};
 
 pub mod cli_home;
+#[cfg(unix)]
+pub mod landlock_rules;
 #[cfg(target_os = "linux")]
 pub mod linux;
 pub mod seatbelt;
 
-/// Which mechanism confines a turn.
+/// Which mechanism confines a turn. On Linux the tiers rank
+/// `Bwrap` (namespaces + Landlock + seccomp) > `Landlock` (Landlock +
+/// seccomp, no namespaces) > `Unconfined` (write-capable turns refused).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutorKind {
     Unconfined,
     Seatbelt,
     Bwrap,
+    /// Linux without usable user namespaces: Landlock (filesystem, TCP
+    /// ports, scoping) and seccomp, no namespaces.
+    Landlock,
     Gvisor,
     AppleContainer,
     K8sJob,
@@ -598,26 +607,35 @@ pub fn plan_env(plan: &EnforcementPlan, proxy: Option<&EgressProxy>) -> Vec<(OsS
 }
 
 /// The executor for this host, probed once. `LIGUS_SANDBOX=off` forces
-/// [`Unconfined`] (write tiers are then refused).
+/// [`Unconfined`] (write tiers are then refused); on Linux,
+/// `LIGUS_SANDBOX=landlock` skips bubblewrap and `LIGUS_SANDBOX=bwrap`
+/// refuses the Landlock fallback.
 pub fn default_executor() -> Arc<dyn TurnExecutor> {
     static E: OnceLock<Arc<dyn TurnExecutor>> = OnceLock::new();
     E.get_or_init(|| {
-        if hive_core::compat::var("LIGUS_SANDBOX").is_ok_and(|v| v.trim().eq_ignore_ascii_case("off")) {
-            tracing::warn!(target: "sandbox", "LIGUS_SANDBOX=off: agent processes run unconfined and write-capable turns are refused");
-            return Arc::new(Unconfined);
-        }
-        #[cfg(target_os = "macos")]
-        if seatbelt::available() {
-            return Arc::new(seatbelt::Seatbelt);
-        }
-        #[cfg(target_os = "linux")]
-        match linux::Bwrap::probe() {
-            Ok(b) => return Arc::new(b),
-            Err(e) => tracing::warn!(target: "sandbox", "bubblewrap sandbox unavailable ({e}): agent processes run unconfined and write-capable turns are refused"),
-        }
-        Arc::new(Unconfined)
+        let (e, status) = select_executor();
+        status.log();
+        let _ = STATUS.set(status);
+        e
     })
     .clone()
+}
+
+fn select_executor() -> (Arc<dyn TurnExecutor>, SandboxStatus) {
+    if hive_core::compat::var("LIGUS_SANDBOX").is_ok_and(|v| v.trim().eq_ignore_ascii_case("off")) {
+        return (Arc::new(Unconfined), SandboxStatus::unconfined("LIGUS_SANDBOX=off".into(), Vec::new()));
+    }
+    #[cfg(target_os = "macos")]
+    if seatbelt::available() {
+        let s = SandboxStatus { kind: ExecutorKind::Seatbelt, summary: "Seatbelt (sandbox-exec)".into(), notes: Vec::new() };
+        return (Arc::new(seatbelt::Seatbelt), s);
+    }
+    #[cfg(target_os = "linux")]
+    let chosen = linux::select_executor();
+    #[cfg(not(target_os = "linux"))]
+    let chosen: (Arc<dyn TurnExecutor>, SandboxStatus) =
+        (Arc::new(Unconfined), SandboxStatus::unconfined("this platform has no agent sandbox Ligus can use".into(), Vec::new()));
+    chosen
 }
 
 /// Whether the host's executor refuses write-capable turns (it can't confine
@@ -1086,8 +1104,9 @@ pub fn prepare_with(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>) -> io::Res
     // can write is not run at all.
     if kind == ExecutorKind::Unconfined && matches!(spec.purpose, Purpose::Agent(_)) && write_capable && policy.gate.allows_writes() {
         return Err(refuse(
-            "this host has no agent sandbox (sandbox-exec on macOS, bubblewrap with user namespaces on Linux), \
-             so Ligus won't run a write-capable agent turn here; use the read-only tier, or install the sandbox",
+            "this host has no agent sandbox (sandbox-exec on macOS; on Linux, bubblewrap with user namespaces, \
+             or Landlock on Linux 6.7+), so Ligus won't run a write-capable agent turn here; use the read-only tier, \
+             or install the sandbox (`ligus doctor` says why it's missing)",
         ));
     }
     let proxy = match &plan.egress {
@@ -1109,6 +1128,79 @@ pub fn tokio_command(spec: SpawnSpec<'_>) -> io::Result<(tokio::process::Command
     let mut cmd = tokio::process::Command::from(command);
     cmd.kill_on_drop(true);
     Ok((cmd, guard))
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics
+// ---------------------------------------------------------------------------
+
+static STATUS: OnceLock<SandboxStatus> = OnceLock::new();
+
+/// Which sandbox tier this host uses, and why: for `ligus doctor`, the logs
+/// and the Settings banner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxStatus {
+    pub kind: ExecutorKind,
+    /// One line: the tier and why it was chosen.
+    pub summary: String,
+    /// What this tier doesn't enforce here (residuals, kernel features
+    /// missing), and what would restore a stronger tier.
+    pub notes: Vec<String>,
+}
+
+impl SandboxStatus {
+    pub fn unconfined(why: String, notes: Vec<String>) -> Self {
+        SandboxStatus { kind: ExecutorKind::Unconfined, summary: format!("no agent sandbox: {why}; write-capable agent turns are refused"), notes }
+    }
+
+    /// The tier's short name: `seatbelt`, `bwrap`, `landlock` or `unconfined`.
+    pub fn tier(&self) -> &'static str {
+        match self.kind {
+            ExecutorKind::Seatbelt => "seatbelt",
+            ExecutorKind::Bwrap => "bwrap",
+            ExecutorKind::Landlock => "landlock",
+            ExecutorKind::Unconfined => "unconfined",
+            ExecutorKind::Gvisor => "gvisor",
+            ExecutorKind::AppleContainer => "apple-container",
+            ExecutorKind::K8sJob => "k8s-job",
+        }
+    }
+
+    fn log(&self) {
+        match self.kind {
+            ExecutorKind::Unconfined | ExecutorKind::Landlock => {
+                tracing::warn!(target: "sandbox", tier = self.tier(), "agent sandbox: {}", self.summary);
+                for n in &self.notes {
+                    tracing::warn!(target: "sandbox", tier = self.tier(), "agent sandbox: {n}");
+                }
+            }
+            _ => tracing::info!(target: "sandbox", tier = self.tier(), "agent sandbox: {}", self.summary),
+        }
+    }
+}
+
+/// This host's sandbox tier (probing it on first use).
+pub fn sandbox_status() -> SandboxStatus {
+    let _ = default_executor();
+    STATUS.get().cloned().unwrap_or_else(|| SandboxStatus::unconfined("not probed".into(), Vec::new()))
+}
+
+/// For tests that need a real sandbox: `true` (skip) when this host has
+/// none, after printing a `SKIPPED` line that the test harness doesn't
+/// capture. With `LIGUS_REQUIRE_SANDBOX=1` (CI on a sandbox-capable runner)
+/// a missing sandbox fails the test instead.
+#[doc(hidden)]
+pub fn skip_without_sandbox(test: &str) -> bool {
+    if !refuses_writes() {
+        return false;
+    }
+    let why = sandbox_status().summary;
+    if std::env::var("LIGUS_REQUIRE_SANDBOX").is_ok_and(|v| v.trim() == "1") {
+        panic!("{test}: LIGUS_REQUIRE_SANDBOX=1 but this host has no agent sandbox ({why})");
+    }
+    use std::io::Write;
+    let _ = writeln!(std::io::stderr().lock(), "SKIPPED {test}: {why}");
+    true
 }
 
 #[cfg(test)]

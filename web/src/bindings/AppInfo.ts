@@ -3,4 +3,17 @@
 /**
  * Backend build/version info — the Phase 0 smoke-test round-trip.
  */
-export type AppInfo = { name: string, coreVersion: string, buildProfile: string, };
+export type AppInfo = { name: string, coreVersion: string, buildProfile: string, 
+/**
+ * This host's agent sandbox tier: "seatbelt" | "bwrap" | "landlock" |
+ * "unconfined" (write-capable agent turns refused).
+ */
+sandboxTier: string, 
+/**
+ * One line: the tier and why it was chosen.
+ */
+sandboxSummary: string, 
+/**
+ * What the tier leaves open here, and how to get a stronger one.
+ */
+sandboxNotes: Array<string>, };

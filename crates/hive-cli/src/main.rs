@@ -1306,12 +1306,27 @@ fn truncate(s: &str, n: usize) -> String {
     }
 }
 
+/// `ligus doctor`: the agent sandbox tier this device uses, why, and what
+/// it leaves open (the same text as the Settings banner and the logs).
+fn cmd_doctor() {
+    let s = hive_runtime::executor::sandbox_status();
+    println!("agent sandbox: {}", s.tier());
+    println!("  {}", s.summary);
+    for n in &s.notes {
+        println!("  - {n}");
+    }
+    if s.kind == hive_runtime::executor::ExecutorKind::Unconfined {
+        println!("  write-capable agent turns are refused here; read-only turns still run");
+    }
+}
+
 fn usage() -> ! {
     eprintln!(
         "ligus — headless Ligus client\n\n\
          USAGE:\n  \
          ligus --version\n  \
          ligus whoami\n  \
+         ligus doctor                    this device's agent sandbox tier and what it leaves open\n  \
          ligus chats\n  \
          ligus new [title]\n  \
          ligus tail <chat-id> [--watch]\n  \
@@ -1467,6 +1482,10 @@ fn run() -> Result<()> {
     match cmd {
         "auth" => auth::cmd_auth(&cfg.data_dir, &positional, flag_val("--label")),
         "whoami" => cmd_whoami(&cfg),
+        "doctor" => {
+            cmd_doctor();
+            Ok(())
+        }
         "chats" => cmd_chats(&cfg),
         "new" => cmd_new(&cfg, positional.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ")),
         "tail" => {

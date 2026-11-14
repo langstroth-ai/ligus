@@ -22,7 +22,7 @@ targets: Array<[string, string]>, runtime: string,
  */
 driver: string, permissionTier: string, 
 /**
- * "Seatbelt" | "Bwrap" | "Unconfined" | …
+ * "Seatbelt" | "Bwrap" | "Landlock" | "Unconfined" | …
  */
 executor: string, 
 /**

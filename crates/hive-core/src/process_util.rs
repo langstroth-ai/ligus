@@ -79,7 +79,8 @@ pub struct ChildEnvSpec {
     pub proxy: Vec<(String, String)>,
     /// Extra variables from the caller. Only allow-listed names pass:
     /// `GIT_AUTHOR_*`, `GIT_COMMITTER_*`, `PI_CODING_AGENT_DIR`,
-    /// `LIGUS_TURN_CRED`, `LIGUS_MCP_SOCKET`.
+    /// `LIGUS_TURN_CRED`, `LIGUS_MCP_SOCKET`, `LIGUS_MCP_TCP` (the bridge's
+    /// loopback address inside the Linux sandbox).
     pub extra: Vec<(String, String)>,
     /// The one provider key this runtime was configured with **in Ligus**,
     /// as (env var name, value). Never inherited from the parent.
@@ -100,7 +101,7 @@ const PLATFORM: &[&str] = &["SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "TEMP", "TMP"
 #[cfg(not(any(target_os = "linux", windows)))]
 const PLATFORM: &[&str] = &[];
 /// Caller-supplied names that may pass.
-const EXTRA_ALLOWED: &[&str] = &["GIT_AUTHOR_*", "GIT_COMMITTER_*", "PI_CODING_AGENT_DIR", "LIGUS_TURN_CRED", "LIGUS_MCP_SOCKET"];
+const EXTRA_ALLOWED: &[&str] = &["GIT_AUTHOR_*", "GIT_COMMITTER_*", "PI_CODING_AGENT_DIR", "LIGUS_TURN_CRED", "LIGUS_MCP_SOCKET", "LIGUS_MCP_TCP"];
 
 fn name_matches(name: &str, pats: &[&str]) -> bool {
     pats.iter().any(|p| match p.strip_suffix('*') {

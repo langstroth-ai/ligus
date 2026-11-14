@@ -18,8 +18,22 @@ cd "$(dirname "$0")/.."
 
 ALL_ROWS="claude-code-acp claude-code-legacy codex-acp codex-legacy copilot-acp copilot-legacy antigravity-acp antigravity-legacy anthropic-api openai-api gemini-api llama-cpp ollama mlx"
 ROWS="${ROWS:-$ALL_ROWS}"
-OUT="$(mktemp -d)"
+# Logs go to a fresh private dir (kept: FAIL rows point into it), or to
+# MATRIX_OUT_DIR when set. MATRIX_KEEP_LOGS=0 removes them on exit.
+if [ -n "${MATRIX_OUT_DIR:-}" ]; then
+  OUT="$MATRIX_OUT_DIR"
+  mkdir -p "$OUT"
+else
+  OUT="$(mktemp -d)"
+fi
 chmod 700 "$OUT"
+# Header files hold keys: never left behind, even on an interrupt.
+cleanup() {
+  rm -f "$OUT"/.*.hdr
+  if [ "${MATRIX_KEEP_LOGS:-1}" = 0 ]; then rm -rf "$OUT"; fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
 results=()
 
 # Write one header line to a private file for curl's `-H @file`: a key on
@@ -90,5 +104,5 @@ echo "| Runtime | Result |"
 echo "|---|---|"
 printf '%s\n' "${results[@]}"
 echo
-echo "Logs: $OUT"
+if [ "${MATRIX_KEEP_LOGS:-1}" = 0 ]; then echo "Logs: removed (MATRIX_KEEP_LOGS=0)"; else echo "Logs: $OUT"; fi
 if printf '%s\n' "${results[@]}" | grep -q FAIL; then exit 1; fi
