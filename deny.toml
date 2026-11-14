@@ -13,14 +13,17 @@ version = 2
 yanked = "deny"
 unmaintained = "workspace"
 # quick-xml DoS advisories (quadratic attribute scan; unbounded namespace
-# allocation). Reached ONLY transitively via `plist` (Tauri config + netdev
-# reading local system property lists) — not from parsing attacker-controlled
-# network XML, so exposure is local-input only. No fix exists in the semver range
-# our deps pin; revisit (and drop these) once plist/tauri bump quick-xml to the
-# patched line.
+# allocation), patched in quick-xml >= 0.41. Reached ONLY transitively: 0.39
+# via `plist` (Tauri config + netdev reading local system property lists) and
+# 0.37 via `tauri-winrt-notification` (Windows toast XML that Ligus builds
+# itself). Neither parses attacker-controlled network XML, so exposure is
+# local-input only, and no release of plist/notify-rust in our semver range
+# moves to the patched line yet.
+# Review by 2027-02-15: drop these as soon as `cargo update` reaches quick-xml
+# >= 0.41 through both paths (cargo-deny then warns advisory-not-detected).
 ignore = [
-    "RUSTSEC-2026-0194",
-    "RUSTSEC-2026-0195",
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml via plist/tauri-winrt-notification; local input only; review by 2027-02-15" },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml via plist/tauri-winrt-notification; local input only; review by 2027-02-15" },
 ]
 
 [licenses]

@@ -22,7 +22,7 @@ argon2 = "0.5"
 url = "2"
 # B3 passkeys: ES256 verification (RustCrypto), base64url WebAuthn fields,
 # and the 24-word recovery key.
-p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
 base64 = "0.22"
 bip39 = { version = "2", default-features = false, features = ["std"] }
 
