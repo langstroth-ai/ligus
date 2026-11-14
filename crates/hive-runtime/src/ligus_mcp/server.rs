@@ -572,6 +572,9 @@ impl LigusMcp {
                 let Some(session) = self.svc(|svc| svc.load(chat).ok().flatten()).filter(|sess| sess.workspace_id == ws) else {
                     return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": "no such chat in this workspace"})), Some(chat));
                 };
+                if !self.cross_read_allowed(st, &session) {
+                    return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": "that chat is more restricted than this one (locked down or allow-listed); its content can't be read from here"})), Some(chat));
+                }
                 let msgs = read_messages(&session, since, limit);
                 if let Err(r) = Self::charge_reads(st, msgs.len() as u32) {
                     return (r, Some(chat));
@@ -584,6 +587,9 @@ impl LigusMcp {
                 let Some(session) = self.svc(|svc| svc.load(chat).ok().flatten()).filter(|sess| sess.workspace_id == ws) else {
                     return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": "no such chat in this workspace"})), Some(chat));
                 };
+                if !self.cross_read_allowed(st, &session) {
+                    return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": "that chat is more restricted than this one (locked down or allow-listed); its content can't be read from here"})), Some(chat));
+                }
                 let status = s("status");
                 let set = Uuid::parse_str(&s("setId")).ok();
                 let list: Vec<Value> = session
@@ -637,6 +643,21 @@ impl LigusMcp {
             }
             _ => (ToolResult::err(Outcome::Denied, json!({"error": "unknown_tool"})), None),
         }
+    }
+
+    /// Whether this turn may read `target`'s content: its own chat always;
+    /// another chat only when this turn's egress is at least as strict as
+    /// that chat's. A locked-down (or allow-listed) chat's content stays
+    /// where its egress is cut, so an injection or a leaked credential in it
+    /// can't be carried out through a chat with open egress (D.8).
+    fn cross_read_allowed(&self, st: &TurnState, target: &ChatSession) -> bool {
+        if target.id == st.spec.chat_id {
+            return true;
+        }
+        let Some(reader) = self.svc(|svc| svc.load(st.spec.chat_id).ok().flatten()) else { return false };
+        let mine = hive_core::sandbox::envelope_for_session(&reader).egress;
+        let theirs = hive_core::sandbox::envelope_for_session(target).egress;
+        mine.stricter(&theirs) == mine
     }
 
     /// `ligus_ask_human`: post the ask, pause the turn, wait for the first

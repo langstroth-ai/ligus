@@ -623,3 +623,29 @@ async fn permission_escalation_needs_the_hosts_own_person() {
         assert_eq!(got.is_some_and(|a| a.option_index == Some(0)), expect_allowed, "answered by {answerer}");
     }
 }
+
+/// A locked-down chat (an injection marker, or a credential in an agent's
+/// changes) has its egress cut so its content can't leave. Reading it from a
+/// chat with open egress would carry the poisoned content or the secret out
+/// of the quarantine, so cross-chat reads never widen the reader's egress.
+#[tokio::test]
+async fn read_chat_never_reads_a_locked_down_chat_from_open_egress() {
+    let w = world();
+    let locked = {
+        let mut svc = w.host.svc.lock().unwrap();
+        let c = svc.create_chat("Quarantined", w.wid, "rt").unwrap();
+        svc.post_user_message(c.id, w.wid, "the leaked key is sk-not-a-real-key").unwrap();
+        svc.self_medicate(w.wid, c.id, None, &[(hive_core::guard::LockdownSignal::SecretInDiff, "api key".into())]).unwrap();
+        assert!(svc.load(c.id).unwrap().unwrap().guards.lockdown_active(), "the chat is locked down");
+        c.id
+    };
+    let turn = w.mcp.begin_turn(spec(&w, Budgets::default()));
+    for tool in ["ligus_read_chat", "ligus_read_proposals"] {
+        let r = turn.call(tool, &json!({"chatId": locked.to_string()})).await;
+        assert!(r.is_error, "{tool} read a locked-down chat: {}", r.text);
+        assert!(!r.text.contains("sk-not-a-real-key"));
+    }
+    // The reader's own chat is still readable.
+    let r = turn.call("ligus_read_chat", &json!({})).await;
+    assert!(!r.is_error, "{}", r.text);
+}
