@@ -1067,10 +1067,14 @@ mod tests {
     }
 }
 
-/// Live smoke test for the subscription CLIs: one tiny prompt through the real
-/// `agy` / `copilot` on this machine. Ignored by default (needs the CLI
-/// installed and signed in, and spends a little quota):
-/// `LIGUS_LIVE_CLI=antigravity LIGUS_LIVE_MODEL=<id> cargo test -p hive-runtime --lib live_cli_smoke -- --ignored --nocapture`
+/// Live smoke test for the subscription CLIs (release matrix, D.2.4): one
+/// tiny prompt through the real CLI on this machine, over ACP or its legacy
+/// adapter. Ignored by default (needs the CLI installed and signed in, and
+/// spends a little quota):
+/// `LIGUS_LIVE_CLI=claude-code|codex|copilot|antigravity LIGUS_LIVE_DRIVER=acp|legacy [LIGUS_LIVE_MODEL=<id>] [LIGUS_LIVE_KEY=<api key, Claude over ACP>] cargo test -p hive-runtime --lib live_cli_smoke -- --ignored --nocapture`
+///
+/// With `LIGUS_LIVE_DRIVER=acp` the test fails (instead of falling back) when
+/// ACP doesn't start, so the matrix records which path really ran.
 #[cfg(test)]
 mod live_cli {
     use super::*;
@@ -1081,17 +1085,26 @@ mod live_cli {
         let provider = match hive_core::compat::var("LIGUS_LIVE_CLI").as_deref() {
             Ok("antigravity") => ModelProviderKind::Antigravity,
             Ok("copilot") => ModelProviderKind::Copilot,
+            Ok("codex") => ModelProviderKind::Codex,
+            Ok("claude-code") | Ok("claude") => ModelProviderKind::ClaudeCode,
             _ => return,
         };
+        let driver = hive_core::Driver::parse(&hive_core::compat::var("LIGUS_LIVE_DRIVER").unwrap_or_default());
         let args = match provider {
             ModelProviderKind::Antigravity => super::super::antigravity::permission_args("default"),
-            _ => super::super::copilot::permission_args("default"),
+            ModelProviderKind::Copilot => super::super::copilot::permission_args("default"),
+            _ => Vec::new(),
+        };
+        let endpoint = match provider {
+            ModelProviderKind::ClaudeCode => "claude",
+            ModelProviderKind::Codex => "codex",
+            _ => "",
         };
         let rt = ResolvedRuntime {
             provider,
             model: hive_core::compat::var("LIGUS_LIVE_MODEL").unwrap_or_default(),
-            endpoint: String::new(),
-            api_key: None,
+            endpoint: endpoint.into(),
+            api_key: hive_core::compat::var("LIGUS_LIVE_KEY").ok().filter(|k| !k.is_empty()),
             args,
             model_provider_id: None,
             model_base_url: None,
@@ -1101,15 +1114,35 @@ mod live_cli {
             tools: false,
             max_tool_rounds: None,
             allow_remote_file_tools: false,
-            driver: Default::default(),
+            driver,
         };
+        if driver == hive_core::Driver::Acp {
+            match super::super::acp::resolve(&rt, false) {
+                Ok(cmd) => println!("ACP command: {} {:?}", cmd.program, cmd.args),
+                Err(why) => panic!("{provider:?} can't run over ACP here: {why:?}"),
+            }
+        }
+        let scope = crate::agent_turn::AgentTurnScope::default();
+        let notes = scope.notes.clone();
         let dir = tempfile::tempdir().unwrap();
         let turns = vec![ChatTurn { role: "user".into(), content: "Reply with the word ok and nothing else.".into() }];
         let mut deltas = 0;
         let mut acts = 0;
         let started = std::time::Instant::now();
-        let out = stream(&rt, None, &turns, dir.path().to_str(), &[], 256, |_| deltas += 1, |_| acts += 1).await;
-        println!("{provider:?}: {:?} in {:?} ({deltas} deltas, {acts} activity events)", out, started.elapsed());
+        let out = crate::agent_turn::with_agent_turn(
+            scope,
+            stream(&rt, None, &turns, dir.path().to_str(), &[], 256, |_| deltas += 1, |_| acts += 1),
+        )
+        .await;
+        let fell_back = notes.lock().unwrap().iter().any(|n| n.starts_with("acp_fallback"));
+        println!(
+            "MATRIX {provider:?} driver={} result={} in {:?} ({deltas} deltas, {acts} activity events) {:?}",
+            driver.as_str(),
+            if out.is_ok() && !fell_back { "ok" } else { "FAIL" },
+            started.elapsed(),
+            out
+        );
+        assert!(!(driver == hive_core::Driver::Acp && fell_back), "ACP failed to start and the turn fell back to the legacy adapter");
         assert!(out.unwrap().to_lowercase().contains("ok"));
     }
 }

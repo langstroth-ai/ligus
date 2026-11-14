@@ -27,6 +27,8 @@ const FOLD_ENV_DENYLIST: &[(&str, &str, &str)] = &[
     ("\"LIGUS_OLLAMA_WIRE\"", "LIGUS_OLLAMA_WIRE", "provider wire format for a turn"),
     ("\"LIGUS_LIVE_MODEL\"", "LIGUS_LIVE_MODEL", "live provider tests"),
     ("\"LIGUS_LIVE_CLI\"", "LIGUS_LIVE_CLI", "live provider tests"),
+    ("\"LIGUS_LIVE_DRIVER\"", "LIGUS_LIVE_DRIVER", "live provider tests"),
+    ("\"LIGUS_LIVE_KEY\"", "LIGUS_LIVE_KEY", "live provider tests"),
     ("\"LIGUS_AGENT_TIMEOUT_SECS\"", "LIGUS_AGENT_TIMEOUT_SECS", "subprocess turn timeout"),
     ("\"LIGUS_PATCH_LEAVING_CALLS\"", "LIGUS_PATCH_LEAVING_CALLS", "agent tool-loop stall limit"),
     ("IDLE_TIMEOUT_ENV", "LIGUS_TURN_IDLE_TIMEOUT_SECS", "provider stream idle timeout"),
