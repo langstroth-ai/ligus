@@ -667,3 +667,29 @@ async fn agent_quorum_can_only_raise_the_bar() {
     let got = s.proposal_sets.iter().find(|x| x.id == set).unwrap().agent_quorum;
     assert!(got >= default, "an agent lowered the agent quorum from {default} to {got}");
 }
+
+/// The socket is reachable from inside the agent's sandbox, and the host
+/// reads it in the app's own process: one endless line (no newline) must not
+/// grow the host's memory without bound. The server hangs up instead.
+#[cfg(unix)]
+#[tokio::test]
+async fn socket_hangs_up_on_an_oversized_line() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let w = world();
+    let turn = w.mcp.begin_turn(spec(&w, Budgets::default()));
+    let path = turn.listen().unwrap();
+    let mut s = tokio::net::UnixStream::connect(&path).await.unwrap();
+    let chunk = vec![b'a'; 1024 * 1024];
+    let mut closed = false;
+    for _ in 0..(super::socket::MAX_LINE_BYTES / chunk.len() + 4) {
+        if s.write_all(&chunk).await.is_err() {
+            closed = true;
+            break;
+        }
+    }
+    if !closed {
+        let mut buf = [0u8; 16];
+        closed = matches!(tokio::time::timeout(Duration::from_secs(5), s.read(&mut buf)).await, Ok(Ok(0)) | Ok(Err(_)));
+    }
+    assert!(closed, "the server kept buffering an endless line");
+}
