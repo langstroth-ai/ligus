@@ -70,7 +70,7 @@ fn parse_one(inner: &str) -> Option<BlobRef> {
             content_type = v.to_string();
         }
     }
-    if id.is_empty() {
+    if !valid_blob_id(&id) {
         return None;
     }
     Some(BlobRef { id, name, size, content_type })
@@ -138,8 +138,19 @@ pub async fn download(
     }
 }
 
+/// Blob ids are UUIDs we mint; a synced marker can claim anything, so only
+/// plain `[A-Za-z0-9_-]` ids are accepted (no separators, no `..`).
+pub fn valid_blob_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 /// A safe, collision-free local cache filename for a blob: `<id>-<sanitized name>`.
+/// The id is sanitized too, so the name is always a single path component.
 pub fn cache_filename(id: &str, name: &str) -> String {
+    let id: String = id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
     let safe: String = name
         .chars()
         .map(|c| if c.is_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' })
@@ -197,6 +208,21 @@ mod tests {
         assert_eq!(open_framed(&[9u8; 32], &framed), None);
         // Malformed frame.
         assert_eq!(open_framed(&key, b"short"), None);
+    }
+
+    /// A synced marker's id is attacker-chosen (any member, or a relay holding
+    /// the key). It must never steer the cache write out of the cache dir.
+    #[test]
+    fn hostile_blob_ids_never_escape_the_cache_dir() {
+        let cache = std::path::Path::new("/data/attachments/blobs");
+        for id in ["../../../Library/LaunchAgents/com.evil", "/etc/evil", "..", "a/b", "a\\b"] {
+            let p = cache.join(cache_filename(id, "x.plist"));
+            assert_eq!(p.parent(), Some(cache), "{id:?} -> {}", p.display());
+            assert!(!p.components().any(|c| matches!(c, std::path::Component::ParentDir)), "{id:?}");
+            let body = format!("[Attached-blob: id={id} size=1 type=text/plain name=x.plist]");
+            assert!(parse_markers(&body).is_empty(), "marker with id {id:?} was accepted");
+        }
+        assert!(valid_blob_id("6f1c2b8e-3d4a-4e5f-9a0b-1c2d3e4f5a6b"));
     }
 
     #[test]

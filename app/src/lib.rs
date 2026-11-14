@@ -3369,6 +3369,9 @@ async fn resolve_attachment_blob(
     id: String,
     name: String,
 ) -> Result<String, String> {
+    if !hive_runtime::attachment_blob::valid_blob_id(&id) {
+        return Err("invalid attachment id".into());
+    }
     let cache = blob_cache_dir(&state.data_dir);
     let path = cache.join(hive_runtime::attachment_blob::cache_filename(&id, &name));
     if path.exists() {
