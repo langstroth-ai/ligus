@@ -50,7 +50,8 @@ private.
 | `git_email` | none | commit attribution |
 | `p2p_secret` | generated | direct peer-to-peer (iroh) secret |
 | `ka_secret` | generated | X25519 seed for receiving rotated workspace keys |
-| `github_account`, `github_token`, `github_client_id` | none | GitHub identity (`LIGUS_GITHUB_CLIENT_ID` wins) |
+| `contact` | none | This device's contact (relay v0.3): `cid`, `write_key` (in the secret store), where it is published, drop seqs handled |
+| `archived_dms` | `[]` | Rooms of DMs archived because both people opened one at once |
 | `provider_keys`, `provider_base_urls` | `{}` | per provider: `anthropic`, `openAI`, `openRouter`, `custom` |
 | `workspaces` | `[]` | each `{name, relay_url, room, key, icon, dm_account, founder_actor_id}` |
 | `dismissed_invites` | `[]` | |

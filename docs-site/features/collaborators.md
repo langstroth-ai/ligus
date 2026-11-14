@@ -1,70 +1,79 @@
-# Collaborators, presence & DMs
+# People, contacts & DMs
 
-Beyond sharing a workspace, Ligus lets you connect with people directly by their
-**GitHub username** — see who's online, and message them one-to-one. It's the
-consumer-grade side of Ligus's identity model; the workspace-level sharing flow is
-covered in [Invites & joining](invites.md).
+Ligus has no user directory, no friend requests and no lookup by username.
+You reach people through workspaces you share with them, or by handing them a
+link. Open **People** from the button on the left workspace rail.
 
-![Collaborators](../images/collaborators.png){ width="820" }
+## People you share a workspace with
 
-## Add someone by GitHub username
+People lists every member of every workspace you share with them, once per
+account, with:
 
-1. Sign in with GitHub (Settings → **Account**) — this is your identity across
-   every device.
-2. Open the **Friends** view from the **☺** button on the left workspace rail.
-3. Type a teammate's GitHub username and **Add**.
+- their name and picture (names aren't unique and identify nobody);
+- their **safety code**, the fingerprint of their account key (see
+  [Identity & devices](../concepts/identity.md#safety-code));
+- the workspaces you share.
 
-They receive a request on **every device** they're signed in on. Accepting on one
-device dismisses it on the rest. Nothing about you syncs until they accept —
-looking someone up only sends a signed request, stamped with your verified GitHub
-identity so it can't be spoofed.
+Their devices' encryption keys come from those workspaces' signed logs, not
+from a server, so Ligus can seal things to them without asking anyone who
+they are. If two of your workspaces disagree about someone's account key,
+People shows a warning and Ligus won't send them anything until it is
+resolved.
 
-> **Username-only.** You can only reach someone by their exact GitHub handle (no
-> email/enumeration), and they must have signed into Ligus at least once.
+From a person's row you can:
 
-## Presence
-
-Once connected, each friend shows a presence dot:
-
-- **● online** — active in the last ~minute
-- **● away** — seen in the last few minutes
-- **○ offline** — older, or appearing offline
-
-Presence is **account-level** (not per-device) and only visible to accepted
-friends. Flip **Appear offline** in the Friends view to stay dark regardless of
-activity.
+- **Message** them (a direct message, below);
+- **Invite to…** another workspace you administer. The invite is sealed to
+  their verified devices and dropped into their contact box (below). If it
+  can't be delivered, you get a single-use link to send them yourself.
 
 ## Direct messages
 
-Click **Message** on a connected friend to open a private 1:1 conversation. Under
-the hood a DM is just a **two-person workspace** with its own end-to-end
-encryption key, so it reuses the same chat sync you already know — the relay only
-ever sees ciphertext. DMs live in the Friends section, not the workspace rail.
+**Message** opens a private conversation with one co-member. A DM is a
+two-person workspace with its own end-to-end encryption key, so the relay
+only ever sees ciphertext.
 
-## How it syncs
+- **Its room and invite are random.** Nothing about a DM is derived from
+  either person's account id, a forge id, an email or a name, so nobody (the
+  relay included) can work out whether two people have a DM.
+- **You found it.** The DM's invite names your account and carries your
+  safety code, and it is addressed to the other person's account: it can't be
+  used by anyone else.
+- **They accept only if it checks out.** Their Ligus compares your safety
+  code with the one your shared workspaces register for you. A mismatch is
+  refused. From someone you share no workspace with, Ligus asks them to
+  compare safety codes with you first.
+- **Opening at the same time.** If you both open a DM at the same moment,
+  you get two. Both sides keep the older one (the earlier founding time,
+  then the smaller room id) and archive the other; the archived one stays
+  readable and is linked from the one you keep.
 
-- **Identity** is your GitHub account (`github:<id>`), shared across your devices;
-  commits Ligus makes on your behalf are attributed to you.
-- **Requests, presence, and DM keys** flow through a relay you can
-  [self-host](../networking/self-host.md) (or Ligus Cloud). Everything sensitive is
-  end-to-end encrypted.
-- Once two devices are connected, Ligus will also try a **direct peer-to-peer**
-  link (see [Rendezvous](../networking/rendezvous.md) and
-  [TURN fallback](../networking/turn.md)), falling back to relay forwarding.
+## Contacts (relay v0.3)
 
-## Free-tier limit
+Each of your devices keeps a **contact** on its relays: a random id and a
+drop box. Ligus publishes a record there that anyone can check (your account
+key, the device's certificate, and its signed encryption key), refreshes it
+daily, and announces the contact id on what the device writes, so
+co-members can deliver to it.
 
-On the hosted free tier you can have up to **5** active collaborators; paid plans
-lift the cap (see [pricing](../ops/pricing.md)). Self-hosting your own relay has
-no cap.
+- An invite to you is sealed to your verified devices before it is dropped.
+  The relay can't read it, and garbage that doesn't open is discarded.
+- New invites show as a banner with the founder's safety code and whether
+  it matches what you know. **Accept** joins; **Dismiss** deletes it from the
+  relay.
+- Only the device that owns a box reads it, and deletes what it handled.
+
+A relay without the contact routes (v0.2) answers "not found". Ligus then
+says **your relay doesn't support contacts yet** and falls back to links, QR
+codes and co-member invites by link. Nothing else changes.
 
 ## Where this differs from workspace invites
 
-| | Collaborators (this page) | Workspace invites |
+| | People (this page) | Workspace invites |
 |---|---|---|
-| Reach by | GitHub username | a shared link / short code |
-| Scope | 1:1 (presence + DMs) | a whole shared workspace + roster |
-| Set up in | the **Friends** view (rail ☺) | the **People** pane (right rail) |
+| Reach by | a shared workspace | a link you hand over |
+| Scope | 1:1 DMs, and inviting co-members | a whole shared workspace and roster |
+| Set up in | **People** (left rail) | the **People** pane (right rail) or the ＋ button |
 
 See also: [Identity & devices](../concepts/identity.md),
 [Invites & joining](invites.md).

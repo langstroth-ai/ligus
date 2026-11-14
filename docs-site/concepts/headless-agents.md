@@ -116,7 +116,8 @@ travels in the generated line.)
 **…or from the app (no CLI).** If you run the issuer alongside the desktop app,
 paste the Ed25519 seed once under **Settings → Team sync → Advanced → Relay
 issuer key** (local-only, never synced). Then the **People pane → Remote
-agents** section takes an agent's GitHub handle + role, enrolls it, and shows the
+agents** section takes a role and a box label, mints the box its own random relay
+identity (`ligus:<id>`), enrolls it, and shows the
 same copy-paste command in a box — no terminal needed on the admin side. See
 [Right Rail — People](../features/right-rail.md).
 

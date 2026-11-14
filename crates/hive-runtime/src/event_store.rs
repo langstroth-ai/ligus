@@ -1088,6 +1088,43 @@ impl EventStore {
         Ok(row.and_then(|(f, k)| crate::envelope_verifier::FounderPin::parse(&f, &k)))
     }
 
+    /// Every workspace this device pinned a founder for.
+    pub fn pinned_workspaces(&self) -> Result<Vec<Uuid>> {
+        let mut stmt = self.conn.prepare("SELECT workspace_id FROM workspace_pins")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            if let Ok(id) = Uuid::parse_str(&row?) {
+                out.push(id);
+            }
+        }
+        Ok(out)
+    }
+
+    /// The earliest envelope timestamp on a workspace's config log: when the
+    /// workspace was founded, as every device holding the log computes it.
+    /// `None` until this device holds any of the log.
+    pub fn config_created_at(&self, workspace_id: Uuid) -> Result<Option<hive_core::Timestamp>> {
+        let config_id = hive_core::workspace_config_session_id(workspace_id);
+        let envs = self.query_envelopes("SELECT envelope_json FROM events WHERE session_id = ?1", [config_id.to_string()])?;
+        Ok(envs.iter().map(|e| e.timestamp).min())
+    }
+
+    /// The contact id (relay v0.3 drop box) `account` most recently stamped
+    /// on an event in `workspace_id`, if any. A delivery address only: what
+    /// is dropped there is sealed to keys verified on the config log.
+    pub fn latest_contact_of(&self, workspace_id: Uuid, account: Uuid) -> Result<Option<String>> {
+        let envs = self.query_envelopes(
+            "SELECT envelope_json FROM events WHERE workspace_id = ?1 AND envelope_json LIKE '%\"contact\":\"%' \
+             ORDER BY row_id DESC LIMIT 200",
+            [workspace_id.to_string()],
+        )?;
+        Ok(envs.into_iter().find_map(|e| {
+            let a = e.actor_stamp?.actor;
+            (a.account_id == Some(account)).then_some(a.contact).flatten()
+        }))
+    }
+
     /// Remember the invite this device redeems to join `workspace_id` (the
     /// latest one wins: a fresh invite replaces a used one).
     pub fn set_join_invite(&self, workspace_id: Uuid, invite_id: Uuid) -> Result<()> {

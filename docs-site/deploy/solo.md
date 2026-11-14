@@ -41,7 +41,7 @@ claude --version        # or: codex --version, ollama list
 
 ## 2. First launch
 
-Open **Ligus**. The five-step wizard asks for a name (or GitHub sign-in),
+Open **Ligus**. The five-step wizard asks for a name (and shows your safety code),
 the project folder, a runtime, an optional relay (**skip it**) and a theme.
 See [First launch](../getting-started/first-launch.md#wizard-steps).
 

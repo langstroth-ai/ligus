@@ -121,7 +121,7 @@ nav:
       - Managing context: features/voice-and-slash.md
       - Git integration: features/git.md
       - Invites & joining: features/invites.md
-      - Collaborators, presence & DMs: features/collaborators.md
+      - People, contacts & DMs: features/collaborators.md
       - Collaborative editing: features/collaboration.md
       - Onboarding: features/onboarding.md
   - Networking:

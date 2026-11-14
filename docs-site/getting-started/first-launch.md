@@ -32,10 +32,9 @@ from source, are unsigned, so first launch needs a nudge:
 The onboarding is **five quick steps** (the progress dots at the top count
 them off):
 
-1. **Identity** — enter a display name, **or sign in with GitHub** (see
-   below) for one identity across all your devices. Either way Ligus
-   auto-generates an Ed25519 device key behind the scenes; you never
-   see it directly.
+1. **Identity** — enter a display name and, optionally, a picture. Ligus
+   has already made your account key and this device's key behind the
+   scenes; this step shows your safety code (see below).
 2. **Project folder** — pick a folder on disk. Ligus treats this as the
    root; everything agents do (file edits, command runs, git
    operations) is scoped to this directory.
@@ -82,26 +81,23 @@ Everything is local. Nothing leaves your machine unless you
 explicitly configure a transport (relay endpoint or LAN discovery
 toggle).
 
-## Sign in with GitHub
+## Your account and safety code
 
-You can use Ligus anonymously with just a local device identity, but
-**signing in with GitHub** (during onboarding or later in **Settings →
-Account**) gives you:
+There is no sign-in. On first launch Ligus makes an account key and a random
+account id on this device, silently, and certifies this device with it.
+Onboarding shows your **safety code**, the fingerprint of that key, which
+people compare with the code they see for you (see
+[Identity & devices](../concepts/identity.md#safety-code)).
 
-- **One account identity across devices** — the same GitHub account on
-  your laptop and desktop resolves to one member, two devices.
-- **Attributed commits** — git commits Ligus makes on your behalf are
-  attributed to you.
-- **Reach teammates by `@handle`** — invite and add collaborators by
-  their GitHub username.
+- **More devices** join your account through an enrollment code, from
+  **Settings → Profile → My devices**. They don't sign in anywhere.
+- **Commits** Ligus makes on your behalf are attributed to the commit email
+  in your profile.
+- **Reaching people** works through invite links and through the workspaces
+  you share. See [People, contacts & DMs](../features/collaborators.md).
 
-Sign-in uses GitHub's **device flow**: Ligus shows a short code, you enter
-it on github.com, and approve. Official builds ship with the OAuth App
-client id baked in; if you build a fork yourself, paste your own OAuth App
-client id in the sign-in panel.
-
-See [Identity & devices](../concepts/identity.md) and
-[Collaborators, presence & DMs](../features/collaborators.md).
+A GitHub, GitLab or Forgejo connection is only ever for repository work,
+never for signing in.
 
 ## Reset local data
 

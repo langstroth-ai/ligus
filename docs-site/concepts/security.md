@@ -24,9 +24,9 @@ The key is exchanged **out-of-band**:
 - The `hivews1:` invite code carries the key *inside the code itself*, so share
   the code over a channel you trust — paste it directly to the joiner. See the
   [invite code format](../reference/invite-payload.md).
-- [Invite by GitHub handle](../features/invites.md#invite-by-github-handle)
-  seals the key to the invitee's devices instead, so nothing sensitive is
-  copy-pasted — the key still never touches the relay.
+- [Inviting a co-member](../features/invites.md#invite-someone-you-already-share-a-workspace-with)
+  seals the code to their verified devices instead, so nothing sensitive is
+  copy-pasted; the relay only stores the sealed drop.
 
 The old relay-brokered "short code" that published the key to the relay's
 pairing store has been **removed**; the relay is never a party to key exchange.

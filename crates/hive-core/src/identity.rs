@@ -58,6 +58,13 @@ pub struct ActorIdentity {
     /// event log. `None` = fall back to initials-on-color.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar_url: Option<String>,
+    /// This device's contact id on the relay (`cid`: 16 random bytes,
+    /// base64url; relay v0.3 contacts), so co-members can drop an invite
+    /// sealed to this device's key-agreement key into its drop box. Random,
+    /// never derived from anything public. Absent before contacts and on
+    /// relays without them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact: Option<String>,
 }
 
 impl ActorIdentity {
@@ -71,6 +78,7 @@ impl ActorIdentity {
             git_email: None,
             key_agreement_public: None,
             avatar_url: None,
+            contact: None,
         }
     }
 }

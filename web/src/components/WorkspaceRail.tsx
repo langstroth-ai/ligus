@@ -230,8 +230,8 @@ export function WorkspaceRail({
       {onOpenFriends && (
         <button
           onClick={onOpenFriends}
-          title="Friends — add collaborators by GitHub username, see who's online"
-          aria-label="Friends"
+          title="People — co-members, direct messages and invites"
+          aria-label="People"
           className="mt-auto flex h-10 w-10 items-center justify-center rounded-2xl transition-all hover:brightness-110"
           style={{ background: "var(--hive-panel)", color: "var(--hive-ink)", border: "1px solid var(--hive-line)", opacity: 0.85 }}
         >

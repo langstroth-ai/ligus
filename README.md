@@ -225,7 +225,11 @@ The full model is documented in
   cannot help recover a lost one.
 - **The workspace key never transits the relay.** It's exchanged **out-of-band** —
   carried *inside* the `hivews1:` invite code, or sealed to an invitee's devices
-  when you invite by GitHub handle — so the relay is never a party to key exchange.
+  when you invite someone you already share a workspace with, so the relay is never
+  a party to key exchange.
+- **No sign-in provider.** Your account is a key made on your device with a random
+  id; people check each other by safety code. Forge tokens (GitHub, GitLab, ...)
+  stay in the OS secret store of the device doing git work and never reach a relay.
 - **Authorization is enforced on ingest.** Governance is re-checked when a synced
   event is **projected**, not just when it was authored, deterministically on
   every device. A member therefore cannot forge a validly-signed
@@ -289,7 +293,7 @@ see [Configure a worker](#run-a-headless-worker) below.
    writes or commands in the **Review** pane and click **Implement** to run them.
 4. **Invite a teammate (optional).** Share a workspace by handing over its
    `hivews1:` invite code **out-of-band** (paste it over a channel you trust) or
-   by inviting a GitHub handle. The invite carries the workspace key; the relay
+   by inviting someone you already share a workspace with. The invite carries the workspace key; the relay
    never sees it. Both of you then sync the same encrypted log.
 5. **Go always-on (optional).** Run the [`ligus` CLI](crates/hive-cli/README.md)
    worker daemon on a spare box so an agent keeps answering while your laptop is

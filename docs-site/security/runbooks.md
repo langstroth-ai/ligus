@@ -148,8 +148,8 @@ The complete way to cut someone's reading, including on headless devices.
 2. Re-create the workspace configuration there (agents, runtimes, skills,
    channels). `ligus config export` / `ligus config import` moves workspace
    runtimes (inline secrets are exported as `secretRef`s).
-3. Invite the people who stay (by GitHub handle, or the invite over a
-   trusted channel).
+3. Invite the people who stay (from People if you share another workspace
+   with them, or the invite link over a trusted channel).
 4. Re-enroll headless boxes with **new** data dirs:
    `ligus enroll 'hivews1:…'`, then restart them.
 5. Archive the old workspace. Its history stays on the devices that had it.
