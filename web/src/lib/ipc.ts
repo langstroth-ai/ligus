@@ -1404,6 +1404,24 @@ export const setDearthMode = (
 /// Approve a member or device waiting on dearth mode's second approval.
 export const approveJoin = (subject: string) => invoke<void>("approve_join", { subject });
 
+// ── Egress presets (device-local, off by default) ──
+export type { EgressPresetsDto } from "@/bindings/EgressPresetsDto";
+export type { EgressPresetDto } from "@/bindings/EgressPresetDto";
+
+/// Presets that exist, what the active workspace (and `sessionId`'s chat)
+/// has on, and whether a guard overrides them for that chat.
+export const getEgressPresets = (sessionId?: string | null) =>
+  invoke<import("@/bindings/EgressPresetsDto").EgressPresetsDto>("get_egress_presets", { sessionId: sessionId ?? null });
+
+/// Turn presets on for the active workspace on this device (`[]` = off).
+export const setWorkspaceEgressPresets = (presets: string[]) =>
+  invoke<void>("set_workspace_egress_presets", { presets });
+
+/// Override the workspace for one chat: `null` = follow the workspace,
+/// `[]` = off for this chat.
+export const setChatEgressPresets = (sessionId: string, presets: string[] | null) =>
+  invoke<void>("set_chat_egress_presets", { sessionId, presets });
+
 // ── Workspace guards: chat lockdown (self-medication) ──
 export type { ChatLockdownDto } from "@/bindings/ChatLockdownDto";
 export type { LockdownSignalDto } from "@/bindings/LockdownSignalDto";

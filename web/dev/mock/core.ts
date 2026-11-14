@@ -81,6 +81,24 @@ function handle(cmd: string, args: Args): unknown {
       return { root: "/mock/repo", items: [] };
     case "get_dearth_state":
       return fx.dearth(flags.dearth);
+    case "get_egress_presets":
+      return {
+        available: [
+          {
+            name: "package-registries",
+            label: "Package registries",
+            hosts: ["registry.npmjs.org", "crates.io", "static.crates.io", "index.crates.io", "pypi.org", "files.pythonhosted.org", "github.com", "api.github.com", "codeload.github.com", "objects.githubusercontent.com", "raw.githubusercontent.com"],
+          },
+          { name: "claude-connectors", label: "Claude connectors", hosts: ["mcp-proxy.anthropic.com"] },
+        ],
+        workspace: [],
+        chat: null,
+        host: [],
+        restrictedBy: flags.lockdown ? "lockdown" : flags.dearth ? "dearth" : "",
+      };
+    case "set_workspace_egress_presets":
+    case "set_chat_egress_presets":
+      return null;
     case "get_chat_lockdown":
       return fx.lockdown(flags.lockdown);
     case "list_guard_signals":

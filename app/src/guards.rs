@@ -804,12 +804,16 @@ pub(crate) fn enforcement_for(
 /// lets this chat reach (their hosts join the egress allow-list).
 pub(crate) fn turn_sandbox_policy(
     state: &AppState,
+    session: &hive_core::ChatSession,
     envelope: &hive_core::sandbox::SandboxEnvelope,
     gate: &hive_runtime::author_gate::GatePlan,
     isolated: bool,
 ) -> hive_runtime::executor::TurnPolicy {
     let mut policy = hive_runtime::executor::TurnPolicy::new(hive_runtime::executor::HostKind::Desktop, envelope.clone(), gate.clone());
     policy.worktree_is_isolated = isolated;
+    // Opt-in egress presets (device-local). The plan applies them only under
+    // an open envelope, so dearth mode and a lockdown override them.
+    policy.egress_presets = chat_egress_presets(state, session.workspace_id, session.id);
     for s in state.combined_mcp_servers().into_iter().filter(|s| s.enabled && envelope.egress.allows_mcp(&s.id)) {
         if let hive_runtime::McpTransport::Http { url } = &s.transport {
             policy.mcp_hosts.extend(hive_runtime::egress::HostPort::from_url(url));
@@ -817,6 +821,123 @@ pub(crate) fn turn_sandbox_policy(
         policy.mcp_ids.push(s.id.clone());
     }
     policy
+}
+
+// ---------------------------------------------------------------------------
+// Egress presets
+// ---------------------------------------------------------------------------
+
+/// The egress presets a chat opted into on this device: the chat's own
+/// setting when it has one, else its workspace's. Off by default.
+pub(crate) fn chat_egress_presets(state: &AppState, workspace_id: Uuid, session_id: Uuid) -> Vec<hive_runtime::egress::EgressPreset> {
+    let s = state.settings.lock().unwrap();
+    effective_egress_presets(&s.egress_presets_by_workspace, &s.egress_presets_by_chat, workspace_id, session_id)
+}
+
+pub(crate) fn effective_egress_presets(
+    by_workspace: &std::collections::HashMap<String, Vec<String>>,
+    by_chat: &std::collections::HashMap<String, Vec<String>>,
+    workspace_id: Uuid,
+    session_id: Uuid,
+) -> Vec<hive_runtime::egress::EgressPreset> {
+    let names = by_chat.get(&session_id.to_string()).or_else(|| by_workspace.get(&workspace_id.to_string()));
+    names.map(|n| hive_runtime::egress::EgressPreset::parse_list(n.iter().map(String::as_str))).unwrap_or_default()
+}
+
+fn preset_names(presets: &[hive_runtime::egress::EgressPreset]) -> Vec<String> {
+    presets.iter().map(|p| p.name().to_string()).collect()
+}
+
+/// Settings → Guards → Network presets: what exists, what the active
+/// workspace and (optionally) one chat have on, and whether a guard is
+/// overriding them right now.
+#[tauri::command]
+pub(crate) fn get_egress_presets(state: State<AppState>, session_id: Option<String>) -> Result<hive_proto::EgressPresetsDto, String> {
+    let ws = state.active_workspace_id();
+    let sid = session_id.as_deref().filter(|s| !s.is_empty()).map(Uuid::parse_str).transpose().map_err(map_err)?;
+    let session = match sid {
+        Some(id) => state.service.lock().unwrap().load(id).map_err(map_err)?,
+        None => None,
+    };
+    let (workspace, chat) = {
+        let s = state.settings.lock().unwrap();
+        let known = |n: &Vec<String>| preset_names(&hive_runtime::egress::EgressPreset::parse_list(n.iter().map(String::as_str)));
+        let workspace = s.egress_presets_by_workspace.get(&ws.to_string()).map(known).unwrap_or_default();
+        let chat = sid.and_then(|id| s.egress_presets_by_chat.get(&id.to_string())).map(known);
+        (workspace, chat)
+    };
+    let host = preset_names(&hive_runtime::executor::host_paths().egress_presets);
+    let restricted_by = session
+        .as_ref()
+        .map(|s| {
+            let env = hive_core::sandbox::envelope_for_session(s);
+            if env.egress.is_open() {
+                String::new()
+            } else if env.tightened_by.contains(&hive_core::sandbox::TightenedBy::Lockdown) {
+                "lockdown".to_string()
+            } else {
+                "dearth".to_string()
+            }
+        })
+        .unwrap_or_default();
+    Ok(hive_proto::EgressPresetsDto {
+        available: hive_runtime::egress::EgressPreset::ALL
+            .iter()
+            .map(|p| hive_proto::EgressPresetDto {
+                name: p.name().into(),
+                label: p.label().into(),
+                hosts: p.host_names().iter().map(|h| h.to_string()).collect(),
+            })
+            .collect(),
+        workspace,
+        chat,
+        host,
+        restricted_by,
+    })
+}
+
+/// Turn presets on or off for the active workspace (device-local).
+#[tauri::command]
+pub(crate) fn set_workspace_egress_presets(state: State<AppState>, presets: Vec<String>) -> Result<(), String> {
+    let parsed = parse_preset_names(&presets)?;
+    let ws = state.active_workspace_id().to_string();
+    let mut s = state.settings.lock().unwrap();
+    if parsed.is_empty() {
+        s.egress_presets_by_workspace.remove(&ws);
+    } else {
+        s.egress_presets_by_workspace.insert(ws, preset_names(&parsed));
+    }
+    crate::save_settings(&state.data_dir, &s);
+    Ok(())
+}
+
+/// Override the workspace's presets for one chat (`None` = follow the
+/// workspace again; an empty list = off for this chat).
+#[tauri::command]
+pub(crate) fn set_chat_egress_presets(state: State<AppState>, session_id: String, presets: Option<Vec<String>>) -> Result<(), String> {
+    let sid = Uuid::parse_str(&session_id).map_err(map_err)?.to_string();
+    let parsed = presets.as_deref().map(parse_preset_names).transpose()?;
+    let mut s = state.settings.lock().unwrap();
+    match parsed {
+        None => {
+            s.egress_presets_by_chat.remove(&sid);
+        }
+        Some(p) => {
+            s.egress_presets_by_chat.insert(sid, preset_names(&p));
+        }
+    }
+    crate::save_settings(&state.data_dir, &s);
+    Ok(())
+}
+
+/// Known preset names, or an error naming the unknown one.
+fn parse_preset_names(names: &[String]) -> Result<Vec<hive_runtime::egress::EgressPreset>, String> {
+    for n in names {
+        if hive_runtime::egress::EgressPreset::parse(n).is_none() {
+            return Err(format!("unknown egress preset '{n}'"));
+        }
+    }
+    Ok(hive_runtime::egress::EgressPreset::parse_list(names.iter().map(String::as_str)))
 }
 
 /// Endpoints the turn's egress proxy refused: one content-free decision per
@@ -832,7 +953,7 @@ pub(crate) fn record_sandbox_egress_denials(state: &AppState, workspace_id: Uuid
         session_id,
         workspace_id,
         format!(
-            "The agent's sandbox refused {denied} network endpoint{} that {} not on this chat's allow-list (its model provider and allowed MCP servers).",
+            "The agent's sandbox refused {denied} network endpoint{} that {} not on this chat's allow-list (its model provider, allowed MCP servers and any egress presets).",
             if denied == 1 { "" } else { "s" },
             if denied == 1 { "is" } else { "are" }
         ),
@@ -1553,5 +1674,30 @@ mod tests {
         // A plain release (no successor) is open to anyone at once.
         l.handover_to = None;
         assert_eq!(takeover_reason(&l, other, None, 1_000_001, false, false), Some(LeaseClaimReason::Released));
+    }
+}
+
+#[cfg(test)]
+mod egress_preset_settings_tests {
+    use super::*;
+    use hive_runtime::egress::EgressPreset;
+
+    /// Off by default; the chat's own setting wins over the workspace's, and
+    /// an empty chat list switches the preset off for that chat.
+    #[test]
+    fn chat_setting_overrides_workspace_and_default_is_off() {
+        let (ws, chat, other) = (Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3));
+        let mut by_ws = std::collections::HashMap::new();
+        let mut by_chat = std::collections::HashMap::new();
+        assert!(effective_egress_presets(&by_ws, &by_chat, ws, chat).is_empty());
+        by_ws.insert(ws.to_string(), vec!["package-registries".to_string()]);
+        assert_eq!(effective_egress_presets(&by_ws, &by_chat, ws, chat), vec![EgressPreset::PackageRegistries]);
+        by_chat.insert(chat.to_string(), Vec::new());
+        assert!(effective_egress_presets(&by_ws, &by_chat, ws, chat).is_empty());
+        assert_eq!(effective_egress_presets(&by_ws, &by_chat, ws, other), vec![EgressPreset::PackageRegistries]);
+        by_ws.clear();
+        by_chat.insert(chat.to_string(), vec!["package-registries".into(), "bogus".into()]);
+        assert_eq!(effective_egress_presets(&by_ws, &by_chat, ws, chat), vec![EgressPreset::PackageRegistries]);
+        assert!(parse_preset_names(&["bogus".to_string()]).is_err());
     }
 }

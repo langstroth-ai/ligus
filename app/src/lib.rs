@@ -428,6 +428,17 @@ struct LiveSettings {
     /// folder.
     #[serde(default)]
     workspace_dirs: std::collections::HashMap<String, String>,
+    /// Opt-in egress presets (Settings → Guards → Network presets), per
+    /// workspace: workspace UUID (string) → preset names such as
+    /// `package-registries`. Device-LOCAL on purpose: widening where this
+    /// device's agents may connect is this device's decision, never a synced
+    /// setting a teammate (or a committed config) could flip. Off by default.
+    #[serde(default)]
+    egress_presets_by_workspace: std::collections::HashMap<String, Vec<String>>,
+    /// Per-chat override of the above: chat UUID → preset names (an empty
+    /// list = off for this chat). No entry = the workspace's choice.
+    #[serde(default)]
+    egress_presets_by_chat: std::collections::HashMap<String, Vec<String>>,
 }
 
 /// Persisted OAuth state for one remote MCP server (see [`mcp_oauth`] +
@@ -565,6 +576,8 @@ impl Default for LiveSettings {
             remote_file_tools_optins: std::collections::HashMap::new(),
             workspace_root: None,
             workspace_dirs: std::collections::HashMap::new(),
+            egress_presets_by_workspace: std::collections::HashMap::new(),
+            egress_presets_by_chat: std::collections::HashMap::new(),
         }
     }
 }
@@ -5836,10 +5849,17 @@ fn implement_preview(state: &AppState, session: &ChatSession, p: &ActionProposal
         ..Default::default()
     };
     match plan.kind {
-        // A command runs as a tool: no model, no network.
+        // A command runs as a tool: no model, and no network unless the
+        // chat opted into an egress preset (open envelope only).
         ImplementKind::Argv => {
             dto.runtime = "none (runs the argv directly)".into();
             dto.permission_tier = "worktree only".into();
+            if envelope.egress.is_open() {
+                dto.egress = crate::guards::chat_egress_presets(state, session.workspace_id, session.id)
+                    .into_iter()
+                    .map(|p| format!("(preset: {})", p.name()))
+                    .collect();
+            }
         }
         ImplementKind::Instruction => {
             let agent = plan.target_agent_id.and_then(|id| session.workspace_agents.iter().find(|a| a.id == id));
@@ -5862,6 +5882,10 @@ fn implement_preview(state: &AppState, session: &ChatSession, p: &ActionProposal
             let mut egress: Vec<String> = hive_runtime::executor::provider_endpoints(rt.provider).iter().map(|h| h.to_string()).collect();
             if !envelope.egress.is_open() {
                 egress.push(format!("({})", envelope.egress.label()));
+            } else {
+                for p in crate::guards::chat_egress_presets(state, session.workspace_id, session.id) {
+                    egress.push(format!("(preset: {})", p.name()));
+                }
             }
             dto.egress = egress;
         }
@@ -5996,7 +6020,7 @@ async fn implement_proposal_targeted(
         let isolated = chat_wt.is_some();
         let dir = chat_wt.unwrap_or_else(|| std::path::PathBuf::from(state.workspace_root.lock().unwrap().clone()));
         let envelope = hive_core::sandbox::envelope_for_session(&session);
-        let mut policy = crate::guards::turn_sandbox_policy(&state, &envelope, &hive_runtime::author_gate::GatePlan::Full, isolated);
+        let mut policy = crate::guards::turn_sandbox_policy(&state, &session, &envelope, &hive_runtime::author_gate::GatePlan::Full, isolated);
         policy.mcp_ids.clear();
         let cmd = cmd.clone();
         let run = tokio::task::spawn_blocking(move || {
@@ -8496,7 +8520,7 @@ async fn run_prepared_turn_inner(
     };
     // Every child this turn spawns (the CLI, stdio MCP servers, run_command)
     // runs under this policy in the host's OS sandbox.
-    let mut sandbox_policy = crate::guards::turn_sandbox_policy(state, &envelope, &gate_plan, worktree.is_some() || lazy_worktree.is_some());
+    let mut sandbox_policy = crate::guards::turn_sandbox_policy(state, session, &envelope, &gate_plan, worktree.is_some() || lazy_worktree.is_some());
     // The turn's Ligus MCP socket: the one extra path the sandbox allows.
     sandbox_policy.ligus_mcp_socket = ligus.socket.clone();
     let sandbox_denials = sandbox_policy.denials.clone();
@@ -11183,6 +11207,11 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
     // Agent processes never read this device's data dir (keys, settings,
     // the database).
     hive_runtime::executor::configure_host(&data_dir, &[], &[]);
+    // Turn scratch dirs a killed turn (or a killed app) left behind are swept
+    // now and every ten minutes, once older than the longest turn.
+    hive_runtime::executor::start_turn_dir_sweeper(std::time::Duration::from_secs(
+        hive_core::compat::var("LIGUS_TURN_TIMEOUT_SECS").ok().and_then(|v| v.parse().ok()).filter(|&s: &u64| s > 0).unwrap_or(3600),
+    ));
     let (base_runtimes, default_runtime_id, base_mcp, managed_runtimes, managed_mcp) =
         load_workspace_catalogs(&workspace_root, &data_dir);
     let catalog_trust = CatalogTrust::compute(&workspace_root, &data_dir, &base_runtimes, &base_mcp);
@@ -11248,6 +11277,8 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         remote_file_tools_optins: std::collections::HashMap::new(),
         workspace_root: None,
         workspace_dirs: std::collections::HashMap::new(),
+        egress_presets_by_workspace: std::collections::HashMap::new(),
+        egress_presets_by_chat: std::collections::HashMap::new(),
     };
     let settings = Arc::new(Mutex::new(load_or_seed_settings(&data_dir, env_seed)));
     {
@@ -14946,6 +14977,9 @@ pub fn run() {
             guards::hand_over_workflow_run,
             guards::list_guard_signals,
             guards::get_dearth_state,
+            guards::get_egress_presets,
+            guards::set_workspace_egress_presets,
+            guards::set_chat_egress_presets,
             guards::set_dearth_mode,
             guards::approve_join,
             guards::get_chat_lockdown,

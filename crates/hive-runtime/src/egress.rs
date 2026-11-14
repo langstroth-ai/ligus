@@ -91,6 +91,102 @@ impl std::fmt::Display for HostPort {
     }
 }
 
+/// A named, opt-in group of endpoints a chat's egress allow-list can add
+/// (off by default). A preset only widens an **open** envelope: under dearth
+/// mode or a chat lockdown it is ignored, like every other device-local
+/// widening. Hosts are matched exactly, on port 443, with the proxy's SNI pin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum EgressPreset {
+    /// npm, crates.io, PyPI and GitHub: what `npm install`, `cargo build`,
+    /// `pip install` and a git dependency fetch.
+    PackageRegistries,
+    /// `mcp-proxy.anthropic.com`, for Claude Code turns only: the proxy
+    /// behind the user's claude.ai MCP connectors (Drive, Gmail, ...). It
+    /// lets the agent reach whatever services the user connected there.
+    /// Claude Code's telemetry hosts stay blocked.
+    ClaudeConnectors,
+}
+
+impl EgressPreset {
+    /// Every preset, in display order.
+    pub const ALL: &'static [EgressPreset] = &[EgressPreset::PackageRegistries, EgressPreset::ClaudeConnectors];
+
+    /// The preset's name in settings and `LIGUS_SANDBOX_EGRESS_PRESETS`.
+    pub fn name(self) -> &'static str {
+        match self {
+            EgressPreset::PackageRegistries => "package-registries",
+            EgressPreset::ClaudeConnectors => "claude-connectors",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            EgressPreset::PackageRegistries => "Package registries",
+            EgressPreset::ClaudeConnectors => "Claude connectors",
+        }
+    }
+
+    /// A preset by name (case-insensitive; `_` and `-` alike).
+    pub fn parse(s: &str) -> Option<Self> {
+        let n = s.trim().to_ascii_lowercase().replace('_', "-");
+        Self::ALL.iter().copied().find(|p| p.name() == n)
+    }
+
+    /// Known presets among `names`, deduplicated and sorted (unknown names
+    /// are dropped).
+    pub fn parse_list<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<Self> {
+        let mut v: Vec<Self> = names.into_iter().filter_map(Self::parse).collect();
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    /// The host names the preset adds.
+    pub fn host_names(self) -> &'static [&'static str] {
+        match self {
+            EgressPreset::PackageRegistries => &[
+                // npm
+                "registry.npmjs.org",
+                // crates.io
+                "crates.io",
+                "static.crates.io",
+                "index.crates.io",
+                // PyPI
+                "pypi.org",
+                "files.pythonhosted.org",
+                // GitHub
+                "github.com",
+                "api.github.com",
+                "codeload.github.com",
+                "objects.githubusercontent.com",
+                "raw.githubusercontent.com",
+            ],
+            EgressPreset::ClaudeConnectors => &["mcp-proxy.anthropic.com"],
+        }
+    }
+
+    /// The one runtime a preset is for, if it is runtime-specific (it then
+    /// widens only that runtime's agent children, never `run_command` or
+    /// pre-flight).
+    pub fn only_for(self) -> Option<hive_core::ModelProviderKind> {
+        match self {
+            EgressPreset::PackageRegistries => None,
+            EgressPreset::ClaudeConnectors => Some(hive_core::ModelProviderKind::ClaudeCode),
+        }
+    }
+
+    /// The endpoints the preset adds (each host on 443).
+    pub fn hosts(self) -> Vec<HostPort> {
+        self.host_names().iter().map(|h| HostPort::new(*h, 443)).collect()
+    }
+}
+
+impl std::fmt::Display for EgressPreset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
 /// A running proxy. Dropping it stops the listener.
 pub struct EgressProxy {
     port: u16,

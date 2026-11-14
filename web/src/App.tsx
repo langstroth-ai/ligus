@@ -1271,6 +1271,7 @@ export function App() {
           appearanceMode={appearanceMode}
           onAppearanceModeChange={setAppearanceMode}
           onClose={() => setSettingsOpen(false)}
+          activeChat={selectedId ? { id: selectedId, title: activeChat.data?.title ?? "" } : null}
         />
       )}
     </div>

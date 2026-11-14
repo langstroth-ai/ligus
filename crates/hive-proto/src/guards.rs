@@ -208,6 +208,35 @@ pub struct GrowthSuggestionDto {
     pub reason: String,
 }
 
+/// One opt-in egress preset (Settings → Guards → Network presets).
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct EgressPresetDto {
+    /// The name used in settings and `LIGUS_SANDBOX_EGRESS_PRESETS`.
+    pub name: String,
+    pub label: String,
+    /// The hosts it adds (each on port 443).
+    pub hosts: Vec<String>,
+}
+
+/// Egress presets on this device: what exists and what is on.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct EgressPresetsDto {
+    pub available: Vec<EgressPresetDto>,
+    /// On for the active workspace (names).
+    pub workspace: Vec<String>,
+    /// The asked-about chat's own setting; `None` = follows the workspace.
+    pub chat: Option<Vec<String>>,
+    /// On for every turn on this device via `LIGUS_SANDBOX_EGRESS_PRESETS`.
+    pub host: Vec<String>,
+    /// Why presets are ignored for that chat right now: "lockdown",
+    /// "dearth", or empty when they apply.
+    pub restricted_by: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,5 +259,7 @@ mod tests {
         DeferredWorkDto::export_all(&cfg).unwrap();
         ThrottleStateDto::export_all(&cfg).unwrap();
         GrowthSuggestionDto::export_all(&cfg).unwrap();
+        EgressPresetDto::export_all(&cfg).unwrap();
+        EgressPresetsDto::export_all(&cfg).unwrap();
     }
 }
