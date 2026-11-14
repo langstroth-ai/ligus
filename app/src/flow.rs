@@ -2156,8 +2156,7 @@ mod tests {
         use hive_core::throttle::{PlanWindow, WindowStatus};
         use hive_core::ModelProviderKind as P;
         let open = SandboxEnvelope::default();
-        let mut closed = SandboxEnvelope::default();
-        closed.egress = EgressPolicy::Closed;
+        let closed = SandboxEnvelope { egress: EgressPolicy::Closed, ..Default::default() };
         assert!(open.egress.is_open() && !closed.egress.is_open());
         // Egress restricted: an unconfinable CLI is left out, a confinable one stays.
         assert_eq!(route_block(P::Aider, &open, None, "a", 0), None);

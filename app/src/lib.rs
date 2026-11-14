@@ -7434,6 +7434,7 @@ fn isolates_on_write(builtin_tools: bool, in_repo: bool) -> bool {
 
 /// Attempt the MCP tool loop. Returns `Ok(Some(text))` if it ran, `Ok(None)` if
 /// there were no enabled tools / no API key (caller falls back to streaming).
+#[allow(clippy::too_many_arguments)]
 async fn try_tool_loop(
     app: &AppHandle,
     state: &State<'_, AppState>,
