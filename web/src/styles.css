@@ -14,9 +14,9 @@
   --hive-accent-warm: rgb(214, 130, 56);
   --hive-accent-cool: rgb(216, 150, 32);
   --hive-sidebar-top: rgb(74, 46, 18);
-  --hive-sidebar-bottom: rgb(154, 102, 32);
+  --hive-sidebar-bottom: rgb(134, 88, 28);
   --hive-sidebar-ink: rgb(252, 242, 216);
-  --hive-sidebar-ink-muted: rgb(222, 196, 150);
+  --hive-sidebar-ink-muted: rgb(248, 234, 206);
   /* Status + overlay tokens (light defaults; applyTheme overrides per scheme).
      Replace hardcoded #34c759 / #ff5a5f / rgba(0,0,0,…) literals with these so
      every palette (esp. light variants) stays legible. */
@@ -28,8 +28,11 @@
   /* Derived chat-layer tokens (redesign). Built from the base --hive-* tokens
      with color-mix / relative-color, so they follow every palette automatically
      when applyTheme() overrides the base vars — no per-theme wiring needed. */
-  --hive-ink-soft: color-mix(in srgb, var(--hive-ink) 55%, transparent);
-  --hive-ink-faint: color-mix(in srgb, var(--hive-ink) 42%, transparent);
+  /* ink-soft: secondary TEXT — 70% keeps ≥4.5:1 on canvas/panel/mist in every
+     palette (55% was 3.3–3.7:1 in light themes). ink-faint: placeholders,
+     disabled controls and decoration only (≥3:1), never body/meta text. */
+  --hive-ink-soft: color-mix(in srgb, var(--hive-ink) 70%, transparent);
+  --hive-ink-faint: color-mix(in srgb, var(--hive-ink) 56%, transparent);
   --hive-hover: color-mix(in srgb, var(--hive-ink) 6%, transparent);
   /* Faint separator between flat turns (redesign) — softer than --hive-line. */
   --hive-hairline: color-mix(in srgb, var(--hive-ink) 7%, transparent);
@@ -65,6 +68,104 @@
   --hive-warm-fill: oklch(from var(--hive-accent-warm) var(--hive-fill-l) c h);
 
   --hive-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+
+  /* ── 2.0 token layer (additive: no existing name changes; the phone matches
+     themes by palette name, so these derive from the base tokens) ── */
+  /* Text-weight accent (links, active tabs) — the accent at the scheme's legible
+     lightness; raw --hive-accent-cool is a fill colour, 2.5:1 as text in pollen. */
+  --hive-accent-ink: oklch(from var(--hive-accent-cool) var(--hive-accent-ink-l) c h);
+  --hive-danger-fill: oklch(from var(--hive-danger) var(--hive-fill-l) c h);
+  /* Semantic status quads: *-ink (text), *-tint (wash), *-line (border). */
+  --hive-success-tint: color-mix(in srgb, var(--hive-success) 11%, transparent);
+  --hive-success-line: color-mix(in srgb, var(--hive-success) 34%, transparent);
+  --hive-danger-tint: color-mix(in srgb, var(--hive-danger) 10%, transparent);
+  --hive-danger-line: color-mix(in srgb, var(--hive-danger) 34%, transparent);
+  --hive-warn-tint: color-mix(in srgb, var(--hive-warn) 13%, transparent);
+  --hive-warn-line: color-mix(in srgb, var(--hive-warn) 38%, transparent);
+  --hive-info-ink: var(--hive-accent-ink);
+  --hive-info-tint: var(--tint-cool);
+  --hive-info-line: var(--tint-cool-line);
+  /* Names used by 2.0 code before they existed — alias, don't break. */
+  --hive-warning: var(--hive-warn);
+  --hive-surface: var(--hive-panel);
+  /* Keyboard focus ring (≥3:1 against every surface). */
+  --hive-focus: var(--hive-accent-ink);
+
+  /* Spacing (4px grid), radii, type, elevation, motion. */
+  --hive-space-1: 4px;
+  --hive-space-2: 8px;
+  --hive-space-3: 12px;
+  --hive-space-4: 16px;
+  --hive-space-5: 20px;
+  --hive-space-6: 24px;
+  --hive-space-8: 32px;
+  --hive-radius-sm: 6px;
+  --hive-radius-md: 8px;
+  --hive-radius-lg: 10px;
+  --hive-radius-xl: 14px;
+  --hive-radius-pill: 999px;
+  --hive-text-2xs: 0.75rem;    /* 10.5px — caps labels only */
+  --hive-text-xs: 0.8215rem;   /* 11.5px — meta, hints */
+  --hive-text-sm: 0.9286rem;   /* 13px — dense UI, rail rows */
+  --hive-text-md: 1rem;        /* 14px — body */
+  --hive-text-lg: 1.143rem;    /* 16px — pane/section titles */
+  --hive-text-xl: 1.357rem;    /* 19px — sheet titles */
+  --hive-shadow-1: 0 1px 2px color-mix(in srgb, var(--hive-ink) 10%, transparent);
+  --hive-shadow-2: 0 4px 14px -6px color-mix(in srgb, var(--hive-ink) 22%, transparent);
+  --hive-shadow-pop: 0 18px 44px -16px color-mix(in srgb, #000 45%, transparent), 0 0 0 1px var(--hive-line);
+  --hive-dur: 140ms;
+  --hive-ease: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Tailwind reads its scale from the tokens, so `text-xs`, `rounded-xl`,
+   `text-ink-soft`, `bg-mist`, `border-line` … all mean the design system. */
+@theme inline {
+  --color-canvas: var(--hive-canvas);
+  --color-panel: var(--hive-panel);
+  --color-mist: var(--hive-mist);
+  --color-line: var(--hive-line);
+  --color-ink: var(--hive-ink);
+  --color-ink-soft: var(--hive-ink-soft);
+  --color-ink-faint: var(--hive-ink-faint);
+  --color-accent: var(--hive-accent-cool);
+  --color-accent-ink: var(--hive-accent-ink);
+  --color-success-ink: var(--hive-success-ink);
+  --color-danger-ink: var(--hive-danger-ink);
+  --color-warn-ink: var(--hive-warn-ink);
+  --text-xs: var(--hive-text-xs);
+  --text-xs--line-height: 1.45;
+  --text-sm: var(--hive-text-sm);
+  --text-sm--line-height: 1.45;
+  --radius-md: var(--hive-radius-sm);
+  --radius-lg: var(--hive-radius-md);
+  --radius-xl: var(--hive-radius-lg);
+  --radius-2xl: var(--hive-radius-xl);
+}
+
+/* ── Focus: one visible ring for every keyboard-reachable control ── */
+:where(button, a[href], summary, select, [role="tab"], [role="switch"], [role="radio"], [role="menuitem"], [role="option"], [tabindex]:not(textarea):not(input)):focus-visible {
+  outline: 2px solid var(--hive-focus);
+  outline-offset: 2px;
+}
+/* Text fields: accent border + halo (an outline on every click would be noise). */
+:where(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), textarea):not(.monaco-editor *):not(.xterm *):not(.cmp-in *):focus-visible {
+  outline: none;
+  border-color: var(--hive-accent-cool) !important;
+  box-shadow: 0 0 0 3px var(--tint-cool);
+}
+:where(input[type="checkbox"], input[type="radio"]) { accent-color: var(--hive-accent-fill); }
+:where(input[type="checkbox"], input[type="radio"]):focus-visible { outline: 2px solid var(--hive-focus); outline-offset: 2px; }
+
+/* Shared motion: short, and off when the OS asks. */
+@keyframes hive-fade-in { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+.hive-enter { animation: hive-fade-in var(--hive-dur) var(--hive-ease) both; }
+/* Briefly mark the element a cross-surface link jumped to. */
+@keyframes hive-flash { 0% { box-shadow: 0 0 0 0 transparent; } 20% { box-shadow: 0 0 0 3px var(--tint-cool-line); background-color: var(--tint-cool); } 100% { box-shadow: 0 0 0 0 transparent; } }
+.hive-flash { animation: hive-flash 1.6s var(--hive-ease) 1; border-radius: var(--hive-radius-md); }
+@media (prefers-reduced-motion: reduce) {
+  .hive-enter, .hive-flash { animation: none; }
+  .hive-flash { outline: 2px solid var(--hive-focus); outline-offset: 2px; }
+  *, *::before, *::after { transition-duration: 0.01ms !important; }
 }
 
 /* ================= CHAT LAYER — turns, cards, composer =================
@@ -195,7 +296,7 @@
 .route-glyph { width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; background: var(--tint-cool); color: var(--hive-accent-cool); flex: none; }
 
 /* Popover (route runtime picker). Anchored above the pill. */
-.pop { position: absolute; bottom: calc(100% + 7px); left: 0; z-index: 50; min-width: 262px; background: var(--hive-panel); border: 1px solid var(--hive-line); border-radius: 11px; box-shadow: 0 16px 40px -14px var(--hive-overlay); padding: 5px; max-height: 340px; overflow: auto; }
+.pop { position: absolute; bottom: calc(100% + 7px); left: 0; z-index: 50; min-width: 262px; background: var(--hive-panel); border: 1px solid var(--hive-line); border-radius: 11px; box-shadow: var(--hive-shadow-pop); padding: 5px; max-height: 340px; overflow: auto; }
 .pop-h { font-family: var(--hive-mono); font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--hive-ink-faint); padding: 7px 9px 4px; }
 .pop-i { display: flex; align-items: center; gap: 9px; width: 100%; font: inherit; font-size: 12.5px; color: var(--hive-ink); background: none; border: 0; border-radius: 8px; padding: 6px 9px; cursor: pointer; text-align: left; }
 .pop-i:hover { background: var(--hive-hover); }

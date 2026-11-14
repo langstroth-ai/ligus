@@ -46,9 +46,9 @@ export const THEMES: Record<ThemeName, ThemeVariants> = {
       accentWarm: "rgb(214,130,56)",
       accentCool: "rgb(216,150,32)",
       sidebarTop: "rgb(74,46,18)",
-      sidebarBottom: "rgb(154,102,32)",
+      sidebarBottom: "rgb(134,88,28)",
       sidebarInk: "rgb(252,242,216)",
-      sidebarInkMuted: "rgb(222,196,150)",
+      sidebarInkMuted: "rgb(248,234,206)",
       scheme: "light",
     },
     dark: {
@@ -112,7 +112,7 @@ export const THEMES: Record<ThemeName, ThemeVariants> = {
       sidebarTop: "rgb(16,52,78)",
       sidebarBottom: "rgb(28,86,120)",
       sidebarInk: "rgb(232,244,251)",
-      sidebarInkMuted: "rgb(168,198,218)",
+      sidebarInkMuted: "rgb(192,216,232)",
       scheme: "light",
     },
     dark: {
@@ -178,7 +178,7 @@ export const THEMES: Record<ThemeName, ThemeVariants> = {
       sidebarTop: "rgb(30,56,32)",
       sidebarBottom: "rgb(54,92,54)",
       sidebarInk: "rgb(238,246,230)",
-      sidebarInkMuted: "rgb(178,200,168)",
+      sidebarInkMuted: "rgb(204,222,194)",
       scheme: "light",
     },
     dark: {
