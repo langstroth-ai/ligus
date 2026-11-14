@@ -230,3 +230,34 @@ fn author_side_authz_enforces_the_set_floor_and_no_self_decision() {
     assert!(!authorize(&tune, "v", WorkspaceRole::Viewer, &s).allowed);
     assert!(authorize(&tune, "c", WorkspaceRole::Contributor, &s).allowed);
 }
+
+#[test]
+fn a_sets_gate_only_raises_an_alternatives_own_bar() {
+    let mut log = Log::new();
+    let set_id = Uuid::new_v4();
+    // A core path zone already raised this one's bar when it was filed.
+    let mut core = ActionProposal::new("Core change", ProposalKind::Decision, "planner");
+    core.required_approvals = 3;
+    core.approval_role_floor = WorkspaceRole::Admin;
+    let docs = ActionProposal::new("Docs change", ProposalKind::Decision, "planner");
+    let (c, d) = (core.id, docs.id);
+    log.push(SessionEvent::ProposalUpserted { proposal: core });
+    log.push(SessionEvent::ProposalUpserted { proposal: docs });
+    let mut set = ProposalSet::new("Which?", "planner", vec![c, d]);
+    set.id = set_id;
+    log.push(SessionEvent::ProposalSetOpened { set: Box::new(set) });
+    let gate = |s: &ChatSession, id: Uuid| {
+        let p = s.proposals.iter().find(|p| p.id == id).unwrap();
+        (p.required_approvals, p.approval_role_floor)
+    };
+    // Careful: two approvals. The core change keeps its stricter three.
+    log.push(SessionEvent::ProposalSetTuned { set_id, agent_quorum: 3, required_approvals: 2, quality_bar: 80 });
+    let s = log.state();
+    assert_eq!(gate(&s, c), (3, WorkspaceRole::Admin));
+    assert_eq!(gate(&s, d), (2, WorkspaceRole::Contributor));
+    // Back to fast: the set's gate drops to one, but never below either's own.
+    log.push(SessionEvent::ProposalSetTuned { set_id, agent_quorum: 1, required_approvals: 1, quality_bar: 60 });
+    let s = log.state();
+    assert_eq!(gate(&s, c), (3, WorkspaceRole::Admin));
+    assert_eq!(gate(&s, d).0, 1);
+}

@@ -128,8 +128,15 @@ pub fn review_bar(zones: &[PathZone], files: &[String]) -> Option<(Option<Worksp
 /// Apply the zone bar to a file-diff proposal before it is filed. A core
 /// zone only ever *raises* the bar; a low-bar zone may lower the quorum but
 /// never below one approval. Returns the zone kind applied.
-pub fn apply_review_bar(proposal: &mut ActionProposal, zones: &[PathZone]) -> Option<ZoneKind> {
+///
+/// `protected`: the change is under a workspace guard's human gate (dearth
+/// brood paths, a chat lockdown; see `guard::guards_protect`). Then the
+/// strictest bar wins and a low-bar zone can't lower anything.
+pub fn apply_review_bar(proposal: &mut ActionProposal, zones: &[PathZone], protected: bool) -> Option<ZoneKind> {
     let (floor, approvals, kind) = review_bar(zones, &proposal.changed_files)?;
+    if protected && kind == ZoneKind::LowBar {
+        return None;
+    }
     match kind {
         ZoneKind::Core => {
             if let Some(f) = floor {
@@ -179,7 +186,7 @@ mod tests {
     fn core_raises_the_bar_and_wins_over_low_bar() {
         let zones = vec![zone("crates/hive-core/", ZoneKind::Core), zone("**/*.md", ZoneKind::LowBar)];
         let mut p = ActionProposal::file_diff("x", "a", "d".into(), vec!["crates/hive-core/src/crypto.rs".into(), "README.md".into()]);
-        assert_eq!(apply_review_bar(&mut p, &zones), Some(ZoneKind::Core));
+        assert_eq!(apply_review_bar(&mut p, &zones, false), Some(ZoneKind::Core));
         assert_eq!(p.approval_role_floor, WorkspaceRole::Admin);
         assert_eq!(p.required_approvals, 2);
     }
@@ -191,11 +198,11 @@ mod tests {
         let zones = vec![z];
         let mut docs = ActionProposal::file_diff("x", "a", "d".into(), vec!["a.md".into(), "docs/b.md".into()]);
         docs.required_approvals = 2;
-        assert_eq!(apply_review_bar(&mut docs, &zones), Some(ZoneKind::LowBar));
+        assert_eq!(apply_review_bar(&mut docs, &zones, false), Some(ZoneKind::LowBar));
         assert_eq!(docs.required_approvals, 1, "never below one approval");
         let mut mixed = ActionProposal::file_diff("x", "a", "d".into(), vec!["a.md".into(), "src/x.rs".into()]);
         mixed.required_approvals = 2;
-        assert_eq!(apply_review_bar(&mut mixed, &zones), None);
+        assert_eq!(apply_review_bar(&mut mixed, &zones, false), None);
         assert_eq!(mixed.required_approvals, 2);
     }
 
@@ -207,9 +214,28 @@ mod tests {
         let mut p = ActionProposal::file_diff("x", "a", "d".into(), vec!["src/a.rs".into()]);
         p.approval_role_floor = WorkspaceRole::Owner;
         p.required_approvals = 3;
-        apply_review_bar(&mut p, &[z]);
+        apply_review_bar(&mut p, &[z], false);
         assert_eq!(p.approval_role_floor, WorkspaceRole::Owner);
         assert_eq!(p.required_approvals, 3);
+    }
+
+    #[test]
+    fn a_guarded_change_never_gets_a_lowered_bar() {
+        let mut low = zone("**/*.md", ZoneKind::LowBar);
+        low.required_approvals = Some(1);
+        low.approval_floor = Some(WorkspaceRole::Viewer);
+        let mut docs = ActionProposal::file_diff("x", "a", "d".into(), vec!["docs/a.md".into()]);
+        docs.required_approvals = 2;
+        docs.approval_role_floor = WorkspaceRole::Contributor;
+        assert_eq!(apply_review_bar(&mut docs, std::slice::from_ref(&low), true), None);
+        assert_eq!((docs.required_approvals, docs.approval_role_floor), (2, WorkspaceRole::Contributor));
+        // Unguarded, the same zone lowers it.
+        assert_eq!(apply_review_bar(&mut docs, std::slice::from_ref(&low), false), Some(ZoneKind::LowBar));
+        assert_eq!((docs.required_approvals, docs.approval_role_floor), (1, WorkspaceRole::Viewer));
+        // A core zone still raises a guarded change.
+        let mut p = ActionProposal::file_diff("x", "a", "d".into(), vec!["src/a.rs".into()]);
+        assert_eq!(apply_review_bar(&mut p, &[zone("src/", ZoneKind::Core)], true), Some(ZoneKind::Core));
+        assert_eq!(p.approval_role_floor, WorkspaceRole::Admin);
     }
 
     #[test]

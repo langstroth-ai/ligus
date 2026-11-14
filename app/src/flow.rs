@@ -1414,9 +1414,20 @@ fn apply_mark_directives(
 /// claims on the files it touches (the proposal still goes up; a person
 /// decides).
 pub(crate) fn before_file_proposal(state: &AppState, session_id: Uuid, workspace_id: Uuid, agent: Option<Uuid>, proposal: &mut hive_core::ActionProposal) {
-    let config = state.service.lock().unwrap().flow_config(workspace_id).unwrap_or_default();
+    let (config, protected) = {
+        let svc = state.service.lock().unwrap();
+        let config = svc.flow_config(workspace_id).unwrap_or_default();
+        // A change under a workspace guard's human gate (dearth brood paths, a
+        // lockdown) keeps the strictest bar: a low-bar zone can't lower it.
+        let protected = svc
+            .load(session_id)
+            .ok()
+            .flatten()
+            .is_some_and(|s| hive_core::guard::guards_protect(&s, &proposal.changed_files));
+        (config, protected)
+    };
     // Path zones: the review bar comes from where the change lands.
-    if let Some(kind) = flow::zones::apply_review_bar(proposal, &config.zones) {
+    if let Some(kind) = flow::zones::apply_review_bar(proposal, &config.zones, protected) {
         let why = match kind {
             flow::ZoneKind::Core => "it touches core paths",
             flow::ZoneKind::LowBar => "every file is in a low-bar path",

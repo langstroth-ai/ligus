@@ -135,6 +135,19 @@ pub struct ActionProposal {
     /// An applied change that was later reverted (`ProposalReverted`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub reverted: bool,
+    /// The human gate this proposal was filed with (its own bar, including a
+    /// path zone's), kept when a proposal set stamps its gate on it so the
+    /// set can only raise the bar and re-tuning the set never loses it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub own_gate: Option<OwnGate>,
+}
+
+/// A proposal's own human gate (see [`ActionProposal::own_gate`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnGate {
+    pub required_approvals: u32,
+    pub approval_role_floor: WorkspaceRole,
 }
 
 fn default_floor() -> WorkspaceRole {
@@ -169,6 +182,7 @@ impl ActionProposal {
             set_id: None,
             task_class: None,
             reverted: false,
+            own_gate: None,
         }
     }
 
@@ -211,10 +225,18 @@ impl ActionProposal {
     }
 
     /// Set the human gate (approvals needed + role floor) and recompute the
-    /// status — a proposal set applies its gate to every alternative.
+    /// status — a proposal set applies its gate to every alternative. The
+    /// strictest bar wins: the proposal's own gate (what it was filed with,
+    /// a path zone's bar included) is remembered the first time and the
+    /// set's gate can only raise it, so re-tuning the set never drops below it.
     pub fn set_human_gate(&mut self, required_approvals: u32, floor: WorkspaceRole) {
-        self.required_approvals = required_approvals;
-        self.approval_role_floor = floor;
+        let own = *self.own_gate.get_or_insert(OwnGate {
+            required_approvals: self.required_approvals,
+            approval_role_floor: self.approval_role_floor,
+        });
+        self.required_approvals = required_approvals.max(own.required_approvals);
+        self.approval_role_floor =
+            if floor.rank() >= own.approval_role_floor.rank() { floor } else { own.approval_role_floor };
         self.recompute_status();
     }
 

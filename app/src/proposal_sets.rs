@@ -718,6 +718,15 @@ pub(crate) fn close_proposal_set(
     one_set(&svc, sid, set_id)
 }
 
+/// Why a set alternative can't move toward apply yet because of a workspace
+/// guard (a chat lockdown, or dearth mode with a change to a brood path): it
+/// needs a human member's own approval first, set or no set. Checked before
+/// the pre-flight and the apply so a guard block is never recorded as a failed
+/// pre-flight (which would send the whole set back to scouting).
+pub(crate) fn guard_block(session: &ChatSession, proposal: &ActionProposal) -> Option<String> {
+    hive_core::guard::human_gate_reason(session, proposal).map(|r| format!("Not yet: {r}."))
+}
+
 /// Phase one: run and record the pre-flight for an approved alternative. A
 /// failure sends the set back to scouting.
 #[tauri::command]
@@ -745,6 +754,9 @@ pub(crate) async fn preflight_proposal_set(
                 p.required_approvals,
                 if p.required_approvals == 1 { "" } else { "s" }
             ));
+        }
+        if let Some(reason) = guard_block(&session, &p) {
+            return Err(reason);
         }
         let host = p
             .producing_agent_id
@@ -821,6 +833,11 @@ pub(crate) async fn apply_proposal_set(
         let set = session.proposal_sets.iter().find(|s| s.id == set_id).ok_or("unknown proposal set")?;
         if !set.can_decide_for(&session.proposals, pid) {
             return Err("run a passing pre-flight on an approved alternative first".into());
+        }
+        if let Some(p) = session.proposals.iter().find(|p| p.id == pid) {
+            if let Some(reason) = guard_block(&session, p) {
+                return Err(reason);
+            }
         }
         // Authorize the decision before touching the code.
         let actor = crate::local_actor(&state);
@@ -1064,6 +1081,53 @@ mod tests {
             plan.iter().filter(|(p, _)| *p == b.id).map(|(_, i)| scouts[*i].runtime.as_str()).collect();
         assert_eq!(for_b.len(), 2);
         assert!(for_b.contains(&"ollama") && for_b.contains(&"claude-code"), "two runtimes, not two of one: {for_b:?}");
+    }
+
+    #[test]
+    fn a_lockdown_or_dearth_brood_path_blocks_set_alternatives_until_a_human_approves() {
+        let mut svc = service();
+        let wid = Uuid::new_v4();
+        let sid = svc.create_chat("A", wid, "anthropic").unwrap().id;
+        let mut alt = ActionProposal::file_diff("A", "", "diff".into(), vec!["crates/hive-core/src/crypto.rs".into()]);
+        let agent = Uuid::new_v4();
+        alt.producing_agent_id = Some(agent);
+        let pid = alt.id;
+        let other = ActionProposal::new("B", ProposalKind::Decision, "planner");
+        svc.open_proposal_set(sid, wid, ProposalSet::new("Q", "planner", vec![]), vec![alt, other]).unwrap();
+        let mut s = svc.load(sid).unwrap().unwrap();
+        let p = s.proposals.iter().find(|p| p.id == pid).cloned().unwrap();
+        assert!(guard_block(&s, &p).is_none(), "no guard on: nothing extra");
+        // Dearth mode protecting the crypto paths.
+        s.guards.dearth = Some(hive_core::guard::DearthMode {
+            enabled: true,
+            reason: String::new(),
+            brood_paths: vec!["crates/hive-core/src/crypto*.rs".into()],
+            allowed_mcp_servers: vec![],
+            admitted_devices: vec![],
+            set_by: String::new(),
+            set_at: hive_core::Timestamp::now(),
+        });
+        assert!(guard_block(&s, &p).unwrap().contains("dearth"));
+        // A chat lockdown blocks any alternative, brood path or not.
+        s.guards.dearth = None;
+        s.guards.chat_id = Some(sid);
+        s.guards.lockdowns.insert(
+            sid,
+            vec![hive_core::guard::ChatLockdown {
+                id: Uuid::new_v4(),
+                signal: hive_core::guard::LockdownSignal::Manual,
+                detail: String::new(),
+                raised_by: String::new(),
+                raised_at: hive_core::Timestamp::now(),
+            }],
+        );
+        assert!(guard_block(&s, &p).unwrap().contains("locked down"));
+        // The producing agent's vote never counts; a human member's does.
+        let me = s.members.iter().find(|m| m.actor.kind == hive_core::ActorKind::Human).unwrap().id.clone();
+        s.guards.verified_approvals.entry(pid).or_default().insert(agent.to_string());
+        assert!(guard_block(&s, &p).is_some());
+        s.guards.verified_approvals.entry(pid).or_default().insert(me);
+        assert!(guard_block(&s, &p).is_none());
     }
 
     #[test]

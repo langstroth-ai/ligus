@@ -232,6 +232,14 @@ pub fn human_gate_reason(session: &crate::ChatSession, proposal: &crate::ActionP
     None
 }
 
+/// Whether a change to `files` in `session` is under a workspace guard's human
+/// gate (a chat lockdown, or dearth mode with a file in a brood path). Such a
+/// change's review bar may be raised but never lowered (see
+/// `flow::zones::apply_review_bar`).
+pub fn guards_protect(session: &crate::ChatSession, files: &[String]) -> bool {
+    session.guards.lockdown_active() || session.guards.dearth_on().is_some_and(|d| touches_any(&d.brood_paths, files))
+}
+
 /// Match a workspace-relative path against a glob: `**` spans directories,
 /// `*` stays within one segment, `?` is one character. A pattern without a
 /// slash also matches the file name anywhere (like `.gitignore`).

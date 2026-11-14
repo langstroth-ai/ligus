@@ -31,7 +31,9 @@ While it is on:
   [the sandbox envelope](../concepts/security.md#the-sandbox-envelope-around-every-agent-turn).
 - **Protected (brood) paths need a human.** A proposal that changes a
   protected path applies only after a human member approves it themself, even
-  if its quorum is met. The default list covers CI and deployment config
+  if its quorum is met. That includes an alternative in a proposal set: its
+  pre-flight and apply wait for the approval, and a low-bar path zone can't
+  lower its review bar. The default list covers CI and deployment config
   (`.github/**`, `.gitlab-ci.yml`, `.circleci/**`, `Jenkinsfile`, `deploy/**`,
   `infra/**`, ...); edit it as globs, one per line.
 

@@ -130,6 +130,13 @@ Choosing happens in two steps, so a stale or broken change can't land:
 3. **Apply.** Only after a passing pre-flight. The change is applied exactly
    as Implement applies a proposal, and the set is marked decided.
 
+The dial sets the approvals every alternative needs, but it only ever raises
+an alternative's own bar (a [core path zone](flow.md#path-zones) keeps its
+stricter one). In a locked-down chat, or in dearth mode for a change to a
+protected path, the pre-flight and the apply also wait for a human member's
+own approval ([workspace guards](guards.md)); that wait never counts as a
+failed pre-flight.
+
 **A failed pre-flight sends the set back to scouting.** Rivals thaw, the
 round advances (so older support fades), and scouts can assess again. A failed
 apply counts as a failed pre-flight.

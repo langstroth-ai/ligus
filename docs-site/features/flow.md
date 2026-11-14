@@ -166,6 +166,12 @@ a bar), and a change whose every file is low-bar may need fewer approvals,
 never fewer than one. The task board keeps agents on probation away from
 core paths.
 
+Zones, [proposal sets](proposal-sets.md) and the
+[workspace guards](guards.md) feed one review bar, and the strictest wins: a
+set's dial can raise an alternative's bar but never lowers what its zone set,
+and a low-bar zone can't lower the bar of a change to a dearth-mode protected
+path or in a locked-down chat.
+
 ## Reusing worktrees
 
 An isolated turn's worktree is kept for the chat's next turn instead of being
