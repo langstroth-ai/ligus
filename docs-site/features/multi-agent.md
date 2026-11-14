@@ -114,6 +114,10 @@ clicks **Implement**, which dispatches it back to an agent to carry out
 through the normal consent-gated tool loop. Nothing touches the workspace
 until that deliberate "go".
 
+When there's more than one reasonable answer, an agent can instead offer
+several **alternatives** for scouts to assess independently before you
+choose. See [Exploring options: proposal sets](proposal-sets.md).
+
 ## Quorum voting on proposals
 
 A proposal (a reviewed file write, command, etc.) can require **more than

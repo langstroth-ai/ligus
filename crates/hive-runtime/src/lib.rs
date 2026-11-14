@@ -32,6 +32,7 @@ pub mod peer;
 #[cfg(feature = "p2p")]
 pub mod peer_iroh;
 pub mod prompt;
+pub mod proposal_preflight;
 pub mod provider;
 pub mod relay_client;
 pub mod remote_manifest;

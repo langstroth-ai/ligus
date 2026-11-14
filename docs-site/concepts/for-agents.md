@@ -30,6 +30,13 @@ each agent's system prompt; this is the human-readable version.
 - To put a concrete action up for approval, end a reply with:
   `[[propose: {"title": "…", "kind": "fileDiff|command|decision", "body": "…", "requiredApprovals": 1}]]`.
   Your own authorship never counts toward its quorum.
+- When asked to explore options, offer 2 to 6 genuinely different
+  alternatives with one `[[alternatives: {…}]]` directive instead of picking
+  one. When asked to assess **one** alternative of a proposal set, judge only
+  that option and end with
+  `[[assess: {"alternative": "<id>", "score": 0-100, "rationale": "…"}]]`.
+  You can't vote on or decide a set; a person does. See
+  [proposal sets](../features/proposal-sets.md).
 
 ## Use repo-relative paths only
 

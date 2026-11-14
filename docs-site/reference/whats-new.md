@@ -7,7 +7,7 @@ Changes since 1.15, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/ligus-ai/ligus/releases).
 
-## 2.1 (guards)
+## 2.1
 
 - **Workspace guards.** A new Settings → Guards page collects the controls
   that keep a workspace inside safe bounds.
@@ -40,6 +40,12 @@ Full release notes are on the
   when they stop making measurable progress; and the workspace suggests a
   host, worker or agent only when its occupancy calls for one.
   [Hygiene](../features/guards.md#hygiene)
+- **Proposal sets.** Ask for options and agents offer competing
+  alternatives; other agents assess each one blind, their support fades
+  unless renewed, a quorum of scouts picks a front-runner and stops its
+  rivals, and you decide with a pre-flight (tests, base, hosts) before
+  applying. A fast to careful dial sets how much agreement is needed. See
+  [Exploring options](../features/proposal-sets.md).
 
 ## 2.0
 

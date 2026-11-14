@@ -16,6 +16,7 @@ import type { WorkspaceAgentDto } from "@/bindings/WorkspaceAgentDto";
 import type { SkillDto } from "@/bindings/SkillDto";
 import type { McpServerDto } from "@/bindings/McpServerDto";
 import type { ProposalDto } from "@/bindings/ProposalDto";
+import type { ProposalSetDto } from "@/bindings/ProposalSetDto";
 import type { WorkspaceMemberDto } from "@/bindings/WorkspaceMemberDto";
 import type { VaultSourceDto } from "@/bindings/VaultSourceDto";
 import type { RuntimeSummaryDto } from "@/bindings/RuntimeSummaryDto";
@@ -1540,3 +1541,55 @@ export const onLspMessage = (cb: (e: LspMessage) => void): Promise<UnlistenFn> =
 /// Subscribe to language-server process exits. Returns an unlisten function.
 export const onLspExit = (cb: (e: LspExit) => void): Promise<UnlistenFn> =>
   listen<LspExit>("lsp://exit", (evt) => cb(evt.payload));
+
+// ── Proposal sets ───────────────────────────────────────────────────────────
+// Competing alternatives scored blind by agent scouts; a person decides after
+// a pre-flight (see the Review pane's set view).
+
+export type { ProposalSetDto } from "@/bindings/ProposalSetDto";
+export type { SetAlternativeDto } from "@/bindings/SetAlternativeDto";
+
+export const listProposalSets = (sessionId: string) =>
+  invoke<ProposalSetDto[]>("list_proposal_sets", { sessionId });
+
+/// Send one scout turn per alternative that still needs assessments this round.
+/// Resolves to the number of scout turns sent.
+export const sendScouts = (sessionId: string, setId: string) =>
+  invoke<number>("send_scouts", { sessionId, setId });
+
+/// The "fast ↔ careful" dial, or explicit knobs.
+export const tuneProposalSet = (
+  sessionId: string,
+  setId: string,
+  knobs: { dial?: string; agentQuorum?: number; requiredApprovals?: number; qualityBar?: number },
+) =>
+  invoke<ProposalSetDto>("tune_proposal_set", {
+    sessionId,
+    setId,
+    dial: knobs.dial ?? null,
+    agentQuorum: knobs.agentQuorum ?? null,
+    requiredApprovals: knobs.requiredApprovals ?? null,
+    qualityBar: knobs.qualityBar ?? null,
+  });
+
+/// New evidence: advance the round so scout support decays and scouts re-evaluate.
+export const advanceProposalSetRound = (sessionId: string, setId: string) =>
+  invoke<ProposalSetDto>("advance_proposal_set_round", { sessionId, setId });
+
+export const withdrawSetAlternative = (sessionId: string, setId: string, proposalId: string) =>
+  invoke<ProposalSetDto>("withdraw_set_alternative", { sessionId, setId, proposalId });
+
+export const closeProposalSet = (sessionId: string, setId: string) =>
+  invoke<ProposalSetDto>("close_proposal_set", { sessionId, setId });
+
+/// Phase one of the two-phase commit: run and record the pre-flight.
+export const preflightProposalSet = (sessionId: string, setId: string, proposalId: string) =>
+  invoke<ProposalSetDto>("preflight_proposal_set", { sessionId, setId, proposalId });
+
+/// Phase two: apply the alternative whose pre-flight passed and decide the set.
+export const applyProposalSet = (sessionId: string, setId: string, proposalId: string) =>
+  invoke<ProposalSetDto>("apply_proposal_set", { sessionId, setId, proposalId });
+
+/// Revert an applied file change (reverse patch + commit in the chat's worktree).
+export const revertProposal = (sessionId: string, proposalId: string) =>
+  invoke<void>("revert_proposal", { sessionId, proposalId });

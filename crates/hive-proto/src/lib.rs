@@ -15,6 +15,10 @@ use ts_rs::TS;
 
 pub mod guards;
 pub use guards::*;
+mod proposal_sets;
+pub use proposal_sets::{
+    PreflightCheckDto, PreflightDto, ProposalSetDto, ScoutAssessmentDto, SetAlternativeDto,
+};
 
 /// Backend build/version info — the Phase 0 smoke-test round-trip.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -183,6 +187,16 @@ pub struct ProposalDto {
     /// it (or, when its id matches an existing workflow, replaces that one).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<WorkflowDefinitionDto>,
+    /// The proposal set this is an alternative in; the Review pane shows it
+    /// inside the set instead of on its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_class: Option<String>,
+    /// An applied change that was later reverted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub reverted: bool,
 }
 
 /// A chat as listed in the sidebar.
@@ -766,5 +780,6 @@ mod tests {
         WorkspaceHostDto::export_all(&cfg).unwrap();
         MentionStateDto::export_all(&cfg).unwrap();
         LspServerDto::export_all(&cfg).unwrap();
+        ProposalSetDto::export_all(&cfg).unwrap();
     }
 }

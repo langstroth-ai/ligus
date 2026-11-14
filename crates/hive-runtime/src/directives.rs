@@ -8,6 +8,9 @@
 //!   saved by the app layer; inert until a human runs it)
 //! - `[[propose: { …json… }]]` — author an action proposal saved for human
 //!   review (approved via quorum in the Review pane; never auto-executed)
+//! - `[[alternatives: { …json… }]]` — open a proposal set: one question,
+//!   several competing alternatives for scouts to assess
+//! - `[[assess: { …json… }]]` — a scout's score for one alternative of a set
 //!
 //! Directives are stripped from the visible body. Pure + unit-tested.
 
@@ -39,6 +42,47 @@ struct RawProposal {
     required_approvals: Option<u32>,
 }
 
+/// One option of an `[[alternatives: …]]` directive.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParsedAlternative {
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub kind: Option<ProposalKind>,
+}
+
+/// A parsed `[[alternatives: …]]` directive: the app files each option as a
+/// proposal and opens a proposal set over them.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParsedAlternatives {
+    pub question: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub task_class: Option<String>,
+    /// Requested agent quorum `k`; clamped by the fold.
+    #[serde(default)]
+    pub agent_quorum: Option<u32>,
+    #[serde(default, alias = "alternatives")]
+    pub options: Vec<ParsedAlternative>,
+}
+
+/// A parsed `[[assess: …]]` directive. `alternative` is the proposal id the
+/// scout was asked to rate (a letter like "B" is also accepted and resolved
+/// against the set by the app). Who the scout is comes from the turn, never
+/// from this payload.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParsedAssessment {
+    pub alternative: String,
+    pub score: u32,
+    #[serde(default)]
+    pub rationale: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ReplyDirectives {
     /// Emoji to seed as reactions on the reply, in order, deduped.
@@ -49,6 +93,10 @@ pub struct ReplyDirectives {
     /// Parsed `[[propose: …]]` directives, in order. Malformed blocks are
     /// skipped (lenient — a bad proposal doesn't fail the whole reply).
     pub proposals: Vec<ParsedProposal>,
+    /// Parsed `[[alternatives: …]]` directives (at least two options each).
+    pub alternatives: Vec<ParsedAlternatives>,
+    /// Parsed `[[assess: …]]` directives.
+    pub assessments: Vec<ParsedAssessment>,
     /// The body with the directive markers removed.
     pub cleaned: String,
 }
@@ -59,6 +107,8 @@ pub fn parse_reply_directives(body: &str) -> ReplyDirectives {
     let mut emojis: Vec<String> = Vec::new();
     let mut workflows: Vec<String> = Vec::new();
     let mut proposals: Vec<ParsedProposal> = Vec::new();
+    let mut alternatives: Vec<ParsedAlternatives> = Vec::new();
+    let mut assessments: Vec<ParsedAssessment> = Vec::new();
     let mut cleaned = String::with_capacity(body.len());
     let bytes = body.as_bytes();
     let mut i = 0;
@@ -108,6 +158,28 @@ pub fn parse_reply_directives(body: &str) -> ReplyDirectives {
                     }
                 }
             }
+            // Proposal sets: `alternatives` opens one, `assess` scores an
+            // option. Same balanced-JSON scan; a malformed block is stripped.
+            if let Some((json, end)) = json_directive(body, i, "alternatives:") {
+                if let Ok(raw) = serde_json::from_str::<ParsedAlternatives>(json) {
+                    let options: Vec<ParsedAlternative> =
+                        raw.options.iter().filter(|o| !o.title.trim().is_empty()).cloned().collect();
+                    if !raw.question.trim().is_empty() && options.len() >= 2 {
+                        alternatives.push(ParsedAlternatives { options, ..raw });
+                    }
+                }
+                i = end;
+                continue;
+            }
+            if let Some((json, end)) = json_directive(body, i, "assess:") {
+                if let Ok(raw) = serde_json::from_str::<ParsedAssessment>(json) {
+                    if !raw.alternative.trim().is_empty() {
+                        assessments.push(raw);
+                    }
+                }
+                i = end;
+                continue;
+            }
             if let Some(end_rel) = body[i..].find("]]") {
                 let inner = &body[i + 2..i + end_rel];
                 let lower = inner.trim_start();
@@ -135,8 +207,25 @@ pub fn parse_reply_directives(body: &str) -> ReplyDirectives {
         emojis,
         workflows,
         proposals,
+        alternatives,
+        assessments,
         cleaned: cleaned.trim().to_string(),
     }
+}
+
+/// A `[[<name> {json}]]` directive starting at `body[i..]` (which begins with
+/// `[[`): the JSON object and the index just past the closing `]]`. `None`
+/// when it isn't one or the JSON is unbalanced.
+fn json_directive<'a>(body: &'a str, i: usize, name: &str) -> Option<(&'a str, usize)> {
+    let rest = body[i + 2..].strip_prefix(name)?;
+    let json_start = i + 2 + name.len() + leading_ws(rest);
+    if !body[json_start..].starts_with('{') {
+        return None;
+    }
+    let obj_len = scan_json_object(&body[json_start..])?;
+    let after = json_start + obj_len;
+    let close = after + leading_ws(&body[after..]);
+    body[close..].starts_with("]]").then(|| (&body[json_start..after], close + 2))
 }
 
 fn leading_ws(s: &str) -> usize {
@@ -298,5 +387,40 @@ mod tests {
         assert_eq!(r.emojis, vec!["✅"]);
         assert_eq!(r.workflows.len(), 1);
         assert_eq!(r.cleaned, "Done.");
+    }
+
+    #[test]
+    fn parses_alternatives_and_strips() {
+        let body = r#"Three ways. [[alternatives: {"question": "Which cache?", "taskClass": "design", "agentQuorum": 2, "options": [{"title": "Redis", "body": "shared"}, {"title": "LRU", "kind": "command"}, {"title": ""}]}]] Pick one."#;
+        let r = parse_reply_directives(body);
+        assert_eq!(r.alternatives.len(), 1);
+        let a = &r.alternatives[0];
+        assert_eq!(a.question, "Which cache?");
+        assert_eq!(a.task_class.as_deref(), Some("design"));
+        assert_eq!(a.agent_quorum, Some(2));
+        assert_eq!(a.options.len(), 2, "an untitled option is dropped");
+        assert_eq!(a.options[1].kind, Some(ProposalKind::Command));
+        assert_eq!(r.cleaned, "Three ways.  Pick one.");
+    }
+
+    #[test]
+    fn alternatives_need_a_question_and_two_options() {
+        let r = parse_reply_directives(r#"[[alternatives: {"question": "Q", "options": [{"title": "only"}]}]] x"#);
+        assert!(r.alternatives.is_empty());
+        assert_eq!(r.cleaned, "x");
+    }
+
+    #[test]
+    fn parses_assessment_and_strips() {
+        let body = r#"Looked at it. [[assess: {"alternative": "B", "score": 82, "rationale": "fewer moving parts]] here"}]]"#;
+        let r = parse_reply_directives(body);
+        assert_eq!(r.assessments.len(), 1);
+        assert_eq!(r.assessments[0].alternative, "B");
+        assert_eq!(r.assessments[0].score, 82);
+        assert!(r.assessments[0].rationale.contains("fewer moving parts"));
+        assert_eq!(r.cleaned, "Looked at it.");
+        // A negative or missing score is malformed: stripped, not recorded.
+        let bad = parse_reply_directives(r#"[[assess: {"alternative": "B", "score": -3}]]"#);
+        assert!(bad.assessments.is_empty());
     }
 }

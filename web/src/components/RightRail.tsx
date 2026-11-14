@@ -90,6 +90,8 @@ import {
 } from "@/lib/icons";
 import { PANES, type UtilityPane } from "@/lib/panes";
 import { WorkflowsPane, WorkflowStages } from "@/components/WorkflowsPane";
+import { ProposalSets, useProposalSets } from "@/components/ProposalSets";
+import { withoutSetAlternatives } from "@/lib/proposalSets";
 
 // Re-exported from the shared pane source so existing
 // `import type { UtilityPane } from "@/components/RightRail"` keeps working.
@@ -1608,7 +1610,9 @@ function ReviewPane({ sessionId }: { sessionId: string }) {
   const [showSettled, setShowSettled] = useState(false);
   const [showDismissed, setShowDismissed] = useState(false);
 
-  const groups = groupProposals(proposals.data ?? []);
+  // Alternatives of a proposal set render inside their set, not on their own.
+  const sets = useProposalSets(sessionId);
+  const groups = groupProposals(withoutSetAlternatives(proposals.data ?? [], sets.data ?? []));
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["proposals", sessionId] });
     qc.invalidateQueries({ queryKey: ["chat", sessionId] });
@@ -1634,6 +1638,11 @@ function ReviewPane({ sessionId }: { sessionId: string }) {
   return (
     <RailFrame title="Review" subtitle="Pending decisions and proposal quorum for this chat.">
       <QueuedWorkSection />
+      {(sets.data ?? []).length > 0 && (
+        <Section title="Proposal Sets">
+          <ProposalSets sessionId={sessionId} sets={sets.data ?? []} />
+        </Section>
+      )}
       <Section title="Pending Proposals">
         {groups.active.map(card)}
         {groups.active.length === 0 && (

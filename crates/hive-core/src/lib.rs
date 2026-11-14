@@ -27,6 +27,7 @@ mod lockdown_tests;
 pub mod model_profile;
 pub mod policy;
 pub mod process_util;
+pub mod proposal_sets;
 pub mod proposals;
 pub mod runtime;
 pub mod sandbox;
@@ -68,6 +69,7 @@ pub use identity::{
     ActorIdentity, ActorKind, ActorStamp, HiveUserProfile, WorkspaceMember, WorkspaceRole,
 };
 pub use policy::{PermissionPolicy, PermissionScope, Workspace};
+pub use proposal_sets::{ProposalSet, ScoutAssessment, SetPhase};
 pub use proposals::{ActionProposal, ProposalApproval, ProposalKind, ProposalStatus};
 pub use runtime::{ModelProviderKind, RuntimeCapabilities, RuntimeLocation, RuntimeTarget};
 pub use schedule::ScheduleTrigger;

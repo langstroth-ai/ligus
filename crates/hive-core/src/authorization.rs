@@ -236,6 +236,18 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         // same content-level floor as posting a message or voting — so a
         // role-qualified agent can refine too.
         | SessionEvent::ProposalRefined { .. }
+        // Proposal sets: content-level, like proposals and votes. Deciding and
+        // tuning also need the set's role floor (see `proposal_sets::denies`).
+        | SessionEvent::ProposalSetOpened { .. }
+        | SessionEvent::ProposalSetAlternativeAdded { .. }
+        | SessionEvent::ScoutAssessmentPosted { .. }
+        | SessionEvent::ProposalSetRoundAdvanced { .. }
+        | SessionEvent::ProposalSetQuorumReached { .. }
+        | SessionEvent::ProposalSetAlternativeStopped { .. }
+        | SessionEvent::ProposalSetTuned { .. }
+        | SessionEvent::ProposalSetPreflightRecorded { .. }
+        | SessionEvent::ProposalSetDecided { .. }
+        | SessionEvent::ProposalReverted { .. }
         | SessionEvent::VaultSourcesUpdated { .. }
         | SessionEvent::WorkflowDefinitionsUpdated { .. }
         | SessionEvent::WorkflowRunUpserted { .. }
@@ -409,6 +421,10 @@ pub fn evaluate(
             AuthzReason::InsufficientRole,
             format!("role {actor_role:?} cannot perform {}", event.kind_str()),
         );
+    }
+
+    if let Some(why) = crate::proposal_sets::denies(event, actor_id, actor_role, session) {
+        return AuthzDecision::deny(AuthzReason::InsufficientRole, why);
     }
 
     // Last-owner protection: can't remove or demote the only remaining owner.

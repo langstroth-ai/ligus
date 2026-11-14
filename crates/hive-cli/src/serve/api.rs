@@ -214,6 +214,14 @@ pub fn proposal_dto(s: &ChatSession, p: &ActionProposal) -> Value {
     if let Some(d) = &p.diff {
         v["diff"] = json!(d);
     }
+    // An alternative in a proposal set (the desktop decides those through the
+    // set's pre-flight; the phone shows them grouped).
+    if let Some(set_id) = p.set_id {
+        v["setId"] = json!(set_id);
+    }
+    if let Some(class) = &p.task_class {
+        v["taskClass"] = json!(class);
+    }
     collab_fields(&mut v, s, p);
     v
 }
@@ -700,7 +708,10 @@ async fn approve_proposal(State(s): S, Path(id): Path<String>) -> ApiResult<Json
     // after a qualifying reject, and Applied is terminal on every peer, so
     // applying on quorum would override a rejection for good. Dismissed and
     // superseded versions aren't open work either.
-    if s.opts.apply_on_approve && updated.ready_to_apply() && !updated.dismissed {
+    // An alternative in an open proposal set is applied only through the
+    // set's two-phase commit (pre-flight first), never on approval here.
+    let in_open_set = chat.proposal_sets.iter().any(|set| set.is_open() && set.contains(updated.id));
+    if s.opts.apply_on_approve && updated.ready_to_apply() && !updated.dismissed && !in_open_set {
         if let Some(applied) = apply_on_this_host(&s, &chat, &updated)? {
             updated = applied;
         }
