@@ -588,7 +588,12 @@ async fn workspace_guards(State(s): S) -> ApiResult<Json<Value>> {
         .filter(|(_, l)| !l.is_empty())
         .map(|(chat, l)| json!({ "chatId": chat, "signals": l.iter().map(|x| json!({ "signal": x.signal, "detail": x.detail })).collect::<Vec<_>>() }))
         .collect();
-    Ok(Json(json!({ "dearth": dearth, "pendingMembers": g.pending_members.len(), "lockedChats": locked })))
+    // The workspace coordinator lease (held by a serve box), if any.
+    let coordinator = g
+        .leases
+        .get(&hive_core::lease::lease_key(hive_core::lease::LeaseScope::Workspace, &s.ws.to_string()))
+        .map(|l| json!({ "holder": l.current.holder, "epoch": l.current.epoch, "leaseMs": l.current.lease_ms, "released": l.released, "isThis": l.current.holder.to_string() == s.host_id }));
+    Ok(Json(json!({ "dearth": dearth, "pendingMembers": g.pending_members.len(), "lockedChats": locked, "coordinator": coordinator })))
 }
 
 async fn list_hosts(State(s): S) -> ApiResult<Json<Value>> {

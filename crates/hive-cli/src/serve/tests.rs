@@ -2271,3 +2271,51 @@ diff --git a/gone.md b/gone.md\ndeleted file mode 100644\n--- a/gone.md\n+++ /de
     assert!(v.to_string().contains("no repository"), "{v}");
     h.handle.shutdown();
 }
+
+/// The phone's read-only view of the workspace guards: dearth mode, locked
+/// chats and the workspace coordinator lease this box holds.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn guards_endpoint_shows_dearth_lockdowns_and_the_coordinator() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let g = h.get("/v1/guards").await;
+    assert!(g["dearth"].is_null(), "{g}");
+    assert_eq!(g["lockedChats"], json!([]));
+
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    let ws = h.handle.shared.ws;
+    {
+        let mut svc = h.handle.shared.lock();
+        svc.self_medicate(ws, chat_id, &[(hive_core::guard::LockdownSignal::SecretInDiff, "aws_access_key".into())]).unwrap();
+        let d = hive_core::guard::DearthMode {
+            enabled: true,
+            reason: "leaked invite".into(),
+            brood_paths: vec![".github/**".into()],
+            allowed_mcp_servers: vec![],
+            admitted_devices: vec![],
+            set_by: String::new(),
+            set_at: Timestamp::now(),
+        };
+        // The box may not be an Admin; switching dearth mode is then refused,
+        // which is itself the rule under test. Seed it as the desktop would.
+        let _ = svc.set_dearth_mode(ws, d);
+    }
+    let g = h.get("/v1/guards").await;
+    assert_eq!(g["lockedChats"][0]["chatId"], json!(chat_id), "{g}");
+    assert_eq!(g["lockedChats"][0]["signals"][0]["signal"], "secretInDiff");
+    assert!(!g.to_string().contains("AKIA"), "only kinds, never values");
+
+    // The box claims the workspace coordinator lease on its first presence tick.
+    let mut coordinator = Value::Null;
+    for _ in 0..50 {
+        coordinator = h.get("/v1/guards").await["coordinator"].clone();
+        if !coordinator.is_null() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(coordinator["isThis"], true, "{coordinator}");
+    assert_eq!(coordinator["epoch"], 1);
+    h.handle.shutdown();
+}
