@@ -10,6 +10,7 @@ metadata:
   labels:
     {{- include "ligus.labels" . | nindent 4 }}
     app.kubernetes.io/component: test
+    ligus.ai/role: test
   annotations:
     helm.sh/hook: test
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded

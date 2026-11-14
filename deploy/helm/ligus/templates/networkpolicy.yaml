@@ -22,7 +22,15 @@ spec:
         {{- if $np.serveIngressFrom }}
         {{- toYaml $np.serveIngressFrom | nindent 8 }}
         {{- else }}
-        - podSelector: {}
+        # This release's own pods only, not every pod in the namespace (MCP
+        # server images are third-party code).
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+            matchExpressions:
+              - key: ligus.ai/role
+                operator: In
+                values: [controller, executor, test]
         {{- end }}
       ports:
         - port: 8787

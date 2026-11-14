@@ -92,7 +92,7 @@ outside the cluster can read the workspace. Use it for CI and trials only.
 | `sandbox.runtimeClassName` | empty | `gvisor`, a Kata class, ...; empty means runc, which is not a security boundary |
 | `sandbox.egress` | `[]` | Extra egress rules for agent-turn executors (model endpoint, granted MCP Services) |
 | `sandbox.smokeJob.enabled` | `false` | Post-install Job that verifies the executor hardening |
-| `networkPolicy.serveIngressFrom` | same namespace | Who reaches serve:8787 |
+| `networkPolicy.serveIngressFrom` | this release's own pods | Who reaches serve:8787; MCP server pods and other pods in the namespace are excluded by default |
 | `networkPolicy.restrictEgress` / `relayNamespace` / `extraEgress` | off | Lock serve and worker egress down to DNS, the relay and listed peers |
 | `networkPolicy.dns` | kube-system `k8s-app=kube-dns` | The only DNS peer any policy allows; change it if your cluster DNS is labelled differently |
 

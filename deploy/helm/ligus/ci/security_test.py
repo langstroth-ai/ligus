@@ -84,7 +84,31 @@ def test_dns_egress_is_scoped():
                       scoped, "port 53 open to any address: a direct exfiltration channel")
 
 
-TESTS = [test_dns_egress_is_scoped]
+# --- Only Ligus pods reach serve ------------------------------------------
+
+def test_serve_ingress_excludes_foreign_pods():
+    docs = render("--set", "sandbox.enabled=true",
+                  "--set", "mcp.servers[0].name=linear",
+                  "--set", "mcp.servers[0].image=registry.example/mcp@sha256:" + "0" * 64,
+                  "--set", "mcp.servers[0].allowUnpinned=true")
+    ctrl = [p for p in policies(docs) if p["metadata"]["name"].endswith("-controller")][0]
+    peers = [peer for rule in ctrl["spec"]["ingress"] for peer in rule.get("from") or []]
+
+    def admitted(labels):
+        return any("podSelector" in peer and "namespaceSelector" not in peer
+                   and selector_matches(peer["podSelector"], labels) for peer in peers)
+
+    mcp = [t for k, n, t in pod_templates(docs) if n.startswith("mcp-")][0]
+    check("MCP server pods cannot reach serve:8787", not admitted(mcp["metadata"]["labels"]),
+          "a third-party MCP image in the namespace can call the serve API")
+    check("an unlabelled pod in the namespace cannot reach serve:8787", not admitted({"app": "other"}))
+    executor = [t for k, n, t in pod_templates(docs) if k == "JobTemplate"][0]
+    check("executors still reach serve:8787", admitted(executor["metadata"]["labels"]))
+    test_pod = [t for k, n, t in pod_templates(docs) if k == "Pod"][0]
+    check("the helm test pod still reaches serve:8787", admitted(test_pod["metadata"]["labels"]))
+
+
+TESTS = [test_dns_egress_is_scoped, test_serve_ingress_excludes_foreign_pods]
 
 if __name__ == "__main__":
     for t in TESTS:

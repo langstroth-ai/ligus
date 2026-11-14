@@ -174,7 +174,8 @@ sandbox:
 
 networkPolicy:
   enabled: true
-  # Sources allowed to reach serve:8787. Empty = pods in this namespace only.
+  # Sources allowed to reach serve:8787. Empty = this release's serve, worker,
+  # executor and test pods only (not MCP servers or other pods in the namespace).
   # Add the tailnet proxy or ingress controller here if you expose the API.
   serveIngressFrom: []
   # Restrict serve/worker egress to DNS, the relay and extraEgress. Off by
