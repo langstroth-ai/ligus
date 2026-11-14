@@ -36,11 +36,48 @@ pub struct Budgets {
     /// Charged from ACP `usage_update` reports and from the API runtimes'
     /// reported token usage ([`crate::spend`]); reaching it cancels the turn.
     pub max_spend_usd: Option<f64>,
+    /// Shared by every turn descended from one human message.
+    pub cascade: CascadeBudgets,
 }
 
 impl Default for Budgets {
     fn default() -> Self {
-        Self { max_tool_calls: 64, max_proposals: 8, max_handoffs: 2, max_asks: 3, max_read_messages: 500, max_spend_usd: None }
+        Self { max_tool_calls: 64, max_proposals: 8, max_handoffs: 2, max_asks: 3, max_read_messages: 500, max_spend_usd: None, cascade: CascadeBudgets::default() }
+    }
+}
+
+/// Budgets for a whole cascade: every turn that descends from one human
+/// message through hand-offs (and replies to agent replies) draws on these,
+/// on top of its own per-turn budget. Without them one message could fan
+/// out to `MAX_CASCADE_DEPTH` turns times each turn's budget.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CascadeBudgets {
+    pub max_tool_calls: u32,
+    pub max_proposals: u32,
+    pub max_handoffs: u32,
+    /// Questions, ACP permission escalations included.
+    pub max_asks: u32,
+}
+
+impl Default for CascadeBudgets {
+    fn default() -> Self {
+        Self { max_tool_calls: 192, max_proposals: 12, max_handoffs: 6, max_asks: 6 }
+    }
+}
+
+impl CascadeBudgets {
+    /// Defaults, overridden by this device's env
+    /// (`LIGUS_MCP_MAX_CASCADE_TOOL_CALLS`, `…_PROPOSALS`, `…_HANDOFFS`,
+    /// `…_ASKS`).
+    pub fn from_env() -> Self {
+        let n = |k: &str, d: u32| hive_core::compat::var(k).ok().and_then(|v| v.trim().parse().ok()).unwrap_or(d);
+        let d = Self::default();
+        Self {
+            max_tool_calls: n("LIGUS_MCP_MAX_CASCADE_TOOL_CALLS", d.max_tool_calls),
+            max_proposals: n("LIGUS_MCP_MAX_CASCADE_PROPOSALS", d.max_proposals),
+            max_handoffs: n("LIGUS_MCP_MAX_CASCADE_HANDOFFS", d.max_handoffs),
+            max_asks: n("LIGUS_MCP_MAX_CASCADE_ASKS", d.max_asks),
+        }
     }
 }
 
@@ -58,6 +95,7 @@ impl Budgets {
             max_asks: n("LIGUS_MCP_MAX_ASKS", d.max_asks),
             max_read_messages: n("LIGUS_MCP_MAX_READ_MESSAGES", d.max_read_messages),
             max_spend_usd: hive_core::compat::var("LIGUS_MCP_MAX_SPEND_USD").ok().and_then(|v| v.trim().parse().ok()).filter(|x: &f64| *x > 0.0),
+            cascade: CascadeBudgets::from_env(),
         }
     }
 }
@@ -123,6 +161,8 @@ pub(crate) struct TurnState {
     pub(crate) paused: Arc<AtomicUsize>,
     revoked: AtomicBool,
     spend: Arc<crate::agent_turn::SpendMeter>,
+    /// The counters of the cascade this turn belongs to.
+    cascade: Arc<Mutex<CascadeCounters>>,
     report: Mutex<Option<SelfReport>>,
 }
 
@@ -172,6 +212,40 @@ pub struct LigusMcp {
     pub(crate) key: [u8; 32],
     turns: Mutex<HashMap<Uuid, Arc<TurnState>>>,
     pub(crate) host: Arc<dyn LigusHost>,
+    /// Cascade counters by root (the human message a cascade descends
+    /// from), most recent last; bounded.
+    cascades: Mutex<std::collections::VecDeque<(Uuid, Arc<Mutex<CascadeCounters>>)>>,
+}
+
+/// How many cascades' counters a host keeps (oldest dropped first).
+const MAX_CASCADES: usize = 1024;
+
+/// What one cascade has used so far (on this host).
+#[derive(Debug, Default)]
+struct CascadeCounters {
+    total: u32,
+    proposals: u32,
+    handoffs: u32,
+    asks: u32,
+}
+
+/// The human message a turn descends from: follow `reply_to_message_id`
+/// from the turn's reply through agent replies (hand-offs, @mention
+/// cascades) to the first user message. A chain without one is rooted at
+/// its oldest reply.
+fn cascade_root(session: &ChatSession, turn: Uuid) -> Uuid {
+    let mut cur = turn;
+    for _ in 0..64 {
+        let Some(m) = session.messages.iter().find(|m| m.id == cur) else { return cur };
+        if m.role == hive_core::MessageRole::User {
+            return cur;
+        }
+        match m.reply_to_message_id {
+            Some(p) if p != cur => cur = p,
+            _ => return cur,
+        }
+    }
+    cur
 }
 
 /// Why a call was refused before reaching a tool.
@@ -198,7 +272,7 @@ fn agent_cred_id(agent: Option<Uuid>) -> Uuid {
 
 impl LigusMcp {
     pub fn new(host: Arc<dyn LigusHost>) -> Arc<Self> {
-        Arc::new(Self { key: cred::host_key(), turns: Mutex::new(HashMap::new()), host })
+        Arc::new(Self { key: cred::host_key(), turns: Mutex::new(HashMap::new()), host, cascades: Mutex::new(Default::default()) })
     }
 
     /// Register a turn and mint its credential.
@@ -207,7 +281,9 @@ impl LigusMcp {
         let binding = TurnBinding { turn_id: spec.message_id, chat_id: spec.chat_id, agent_id: agent_cred_id(spec.agent_id), expires_unix: expires };
         let credential = cred::mint(&self.key, &binding);
         let spend = crate::agent_turn::SpendMeter::new(spec.budgets.max_spend_usd);
+        let cascade = self.cascade_for(spec.chat_id, spec.message_id);
         let state = Arc::new(TurnState {
+            cascade,
             spec,
             counters: Mutex::new(Counters::default()),
             effects: Mutex::new(McpEffectsLog::default()),
@@ -218,6 +294,29 @@ impl LigusMcp {
         });
         self.turns.lock().unwrap_or_else(|e| e.into_inner()).insert(binding.turn_id, state.clone());
         TurnHandle { mcp: self.clone(), state, cred: credential, socket: Mutex::new(None), finished: AtomicBool::new(false) }
+    }
+
+    /// The counters of the cascade `turn` (a reply in `chat`) belongs to.
+    fn cascade_for(&self, chat: Uuid, turn: Uuid) -> Arc<Mutex<CascadeCounters>> {
+        let mut root = turn;
+        self.host.with_service(&mut |svc| {
+            if let Ok(Some(s)) = svc.load(chat) {
+                root = cascade_root(&s, turn);
+            }
+        });
+        let mut cs = self.cascades.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(i) = cs.iter().position(|(r, _)| *r == root) {
+            let e = cs.remove(i).expect("present");
+            let c = e.1.clone();
+            cs.push_back(e);
+            return c;
+        }
+        let c = Arc::new(Mutex::new(CascadeCounters::default()));
+        cs.push_back((root, c.clone()));
+        while cs.len() > MAX_CASCADES {
+            cs.pop_front();
+        }
+        c
     }
 
     /// Check a credential: MAC, expiry, a live (not revoked) turn, and the
@@ -317,10 +416,13 @@ impl LigusMcp {
         }
     }
 
-    /// Count one call against `budget`; `Err` when it is used up.
+    /// Count one call against the turn's budgets and its cascade's; `Err`
+    /// when one is used up (nothing is counted then).
     fn charge(st: &TurnState, tool: &str) -> Result<(), ToolResult> {
         let b = &st.spec.budgets;
+        let cb = &b.cascade;
         let mut c = st.counters.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cc = st.cascade.lock().unwrap_or_else(|e| e.into_inner());
         let exhausted = |name: &str| {
             ToolResult::err(
                 Outcome::Budget,
@@ -330,26 +432,53 @@ impl LigusMcp {
         if c.total >= b.max_tool_calls {
             return Err(exhausted("maxToolCalls"));
         }
+        if cc.total >= cb.max_tool_calls {
+            return Err(exhausted("cascadeToolCalls"));
+        }
         if st.spend.exhausted() {
             return Err(exhausted("maxSpendUsd"));
         }
-        let (counter, max, name): (Option<&mut u32>, u32, &str) = match tool {
-            "ligus_propose_diff" | "ligus_propose_decision" | "ligus_propose_command" | "ligus_propose_workflow" | "ligus_open_alternatives" => {
-                (Some(&mut c.proposals), b.max_proposals, "maxProposals")
-            }
-            "ligus_handoff" => (Some(&mut c.handoffs), b.max_handoffs, "maxHandoffs"),
-            "ligus_ask_human" => (Some(&mut c.asks), b.max_asks, "maxAsks"),
-            _ => (None, 0, ""),
+        let kind = match tool {
+            "ligus_propose_diff" | "ligus_propose_decision" | "ligus_propose_command" | "ligus_propose_workflow" | "ligus_open_alternatives" => Some(0),
+            "ligus_handoff" => Some(1),
+            "ligus_ask_human" => Some(2),
+            _ => None,
         };
-        if let Some(n) = counter {
+        if let Some(k) = kind {
+            let (n, max, name, cn, cmax, cname) = match k {
+                0 => (&mut c.proposals, b.max_proposals, "maxProposals", &mut cc.proposals, cb.max_proposals, "cascadeProposals"),
+                1 => (&mut c.handoffs, b.max_handoffs, "maxHandoffs", &mut cc.handoffs, cb.max_handoffs, "cascadeHandoffs"),
+                _ => (&mut c.asks, b.max_asks, "maxAsks", &mut cc.asks, cb.max_asks, "cascadeAsks"),
+            };
             if *n >= max {
                 return Err(exhausted(name));
             }
+            if *cn >= cmax {
+                return Err(exhausted(cname));
+            }
             *n += 1;
+            *cn += 1;
         }
         c.total += 1;
+        cc.total += 1;
         *c.calls.entry(tool.to_string()).or_insert(0) += 1;
         Ok(())
+    }
+
+    /// Count an ACP permission escalation (a question to the chat's people)
+    /// against the turn's and the cascade's question budgets. `false` = used
+    /// up: the request is denied without asking.
+    fn charge_escalation(st: &TurnState) -> bool {
+        let b = &st.spec.budgets;
+        let mut c = st.counters.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cc = st.cascade.lock().unwrap_or_else(|e| e.into_inner());
+        if c.asks >= b.max_asks || cc.asks >= b.cascade.max_asks {
+            c.budget_exhausted = true;
+            return false;
+        }
+        c.asks += 1;
+        cc.asks += 1;
+        true
     }
 
     fn charge_reads(st: &TurnState, n: u32) -> Result<(), ToolResult> {
@@ -966,11 +1095,19 @@ pub struct HostAsker {
     pub host: Arc<dyn LigusHost>,
     pub ctx: EffectCtx,
     pub turn_id: Uuid,
+    /// The turn whose question budgets an escalation is charged to.
+    turn: Option<Arc<TurnState>>,
 }
 
 impl crate::agent_turn::HumanAsker for HostAsker {
     fn ask(&self, question: String, options: Vec<String>, timeout: Duration) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<crate::agent_turn::HumanAnswer>> + Send + '_>> {
         Box::pin(async move {
+            // It asks the chat's people like ligus_ask_human: past the
+            // question budgets (the turn's maxAsks, the cascade's) it is
+            // denied without asking.
+            if self.turn.as_ref().is_some_and(|st| !LigusMcp::charge_escalation(st)) {
+                return None;
+            }
             let q: String = question.chars().take(flow::MAX_ASK_QUESTION_CHARS).collect();
             let posted = post_ask_as(&*self.host, &self.ctx, self.turn_id, q, options, timeout, true).ok()?;
             match wait_answer(&*self.host, self.ctx.session_id, posted.ask_id, timeout, || false).await {
@@ -1010,7 +1147,7 @@ impl HostAsker {
 impl TurnHandle {
     /// An asker for this turn's ACP permission escalations.
     pub fn asker(&self) -> Arc<dyn crate::agent_turn::HumanAsker> {
-        Arc::new(HostAsker { host: self.mcp.host.clone(), ctx: LigusMcp::ctx(&self.state), turn_id: self.state.spec.message_id })
+        Arc::new(HostAsker { host: self.mcp.host.clone(), ctx: LigusMcp::ctx(&self.state), turn_id: self.state.spec.message_id, turn: Some(self.state.clone()) })
     }
 
     /// [`Self::scope`] with the asker set: what a host wraps a CLI turn in.

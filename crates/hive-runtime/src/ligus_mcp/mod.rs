@@ -18,7 +18,7 @@ pub mod tools;
 #[cfg(test)]
 mod tests;
 
-pub use server::{Budgets, HostAsker, InProcessTools, LigusHost, LigusMcp, Outcome, SelfReport, ToolResult, TurnHandle, TurnSpec, WithLigus};
+pub use server::{Budgets, CascadeBudgets, HostAsker, InProcessTools, LigusHost, LigusMcp, Outcome, SelfReport, ToolResult, TurnHandle, TurnSpec, WithLigus};
 
 impl TurnHandle {
     /// Serve this turn on its own unix socket (for CLI agents). Must run

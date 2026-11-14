@@ -100,12 +100,28 @@ Per turn, and set per device:
 | Tool calls (every call, unknown tools included) | 64 | `LIGUS_MCP_MAX_TOOL_CALLS` |
 | Proposals (any kind) | 8 | `LIGUS_MCP_MAX_PROPOSALS` |
 | Hand-offs | 2 | `LIGUS_MCP_MAX_HANDOFFS` |
-| Questions | 3 | `LIGUS_MCP_MAX_ASKS` |
+| Questions (ACP permission requests included) | 3 | `LIGUS_MCP_MAX_ASKS` |
 | Messages and proposals read | 500 | `LIGUS_MCP_MAX_READ_MESSAGES` |
 | Spend (USD) | unset | `LIGUS_MCP_MAX_SPEND_USD`; see [Spend budget](#spend) |
 
+One human message can fan out: a turn hands off, the receiver hands off
+again, up to the chat's cascade depth. So every turn that descends from the
+same human message (through hand-offs and replies to agent replies) also
+draws on a **cascade budget**, shared by all of them on this device:
+
+| Cascade budget | Default | Variable |
+|---|---|---|
+| Tool calls | 192 | `LIGUS_MCP_MAX_CASCADE_TOOL_CALLS` |
+| Proposals | 12 | `LIGUS_MCP_MAX_CASCADE_PROPOSALS` |
+| Hand-offs | 6 | `LIGUS_MCP_MAX_CASCADE_HANDOFFS` |
+| Questions (ACP permission requests included) | 6 | `LIGUS_MCP_MAX_CASCADE_ASKS` |
+
+An ACP permission request that would go to a person counts as a question:
+past either question budget it is denied without asking anyone.
+
 When a budget runs out, the call returns
-`{"error":"budget_exhausted","budget":"…"}` along with the note that tells
+`{"error":"budget_exhausted","budget":"…"}` (`maxProposals`,
+`cascadeProposals`, …) along with the note that tells
 the model to finish its answer.
 
 ### Spend budget {#spend}
