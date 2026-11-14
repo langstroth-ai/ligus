@@ -122,6 +122,7 @@ nav:
       - Git integration: features/git.md
       - Invites & joining: features/invites.md
       - People, contacts & DMs: features/collaborators.md
+      - Linked accounts: features/linked-identities.md
       - Collaborative editing: features/collaboration.md
       - Onboarding: features/onboarding.md
   - Networking:
@@ -155,5 +156,6 @@ nav:
       - Settings: reference/settings.md
       - Configuration (TOML): reference/config-toml.md
       - Invite payload format: reference/invite-payload.md
+      - Identity link statement: reference/identity-link-statement.md
       - Wire protocols: reference/wire-protocols.md
       - Runtime matrix: reference/runtime-matrix.md
