@@ -802,3 +802,24 @@ async fn cached_check_is_bound_to_the_account_key() {
     assert!(matches!(s, LinkStatus::Stale { .. }), "the forge lists the old key, not this one: {s:?}");
     assert_ne!(cache_key(&l, ws(), &ACCOUNT_KEY), cache_key(&l, ws(), &other));
 }
+
+/// D15: the published-key fallback is offered only where the Ligus key
+/// grants no push access. GitLab's default usage type, "Authentication &
+/// Signing", grants push; only a "Signing" key counts.
+#[tokio::test]
+async fn gitlab_key_published_needs_a_signing_only_key() {
+    let gl = server().await;
+    let mine = account_key_openssh(&ACCOUNT_KEY).unwrap();
+    gl.set("/users/77/keys", 200, serde_json::json!([{"id": 2, "key": mine, "usage_type": "auth_and_signing"}]).to_string());
+    let f = fetcher(&[("gitlab", "gitlab.com", &gl)]);
+    let mut kp = golden_link();
+    kp.provider = "gitlab".into();
+    kp.host = "gitlab.com".into();
+    kp.subject_id = "77".into();
+    kp.method = LinkMethod::KeyPublished;
+    kp.nonce.clear();
+    let s = check_link(&kp, ctx(), &f, now(), None).await;
+    assert!(matches!(s, LinkStatus::Stale { .. }), "a key that also grants push: {s:?}");
+    gl.set("/users/77/keys", 200, serde_json::json!([{"id": 2, "key": mine, "usage_type": "signing"}]).to_string());
+    assert!(check_link(&kp, ctx(), &f, now(), None).await.is_verified());
+}

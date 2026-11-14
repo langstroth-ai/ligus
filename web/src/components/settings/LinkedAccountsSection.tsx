@@ -205,7 +205,7 @@ function LinkFlow({ onDone }: { onDone: () => void }) {
             <p style={{ color: "var(--hive-danger-ink)" }}>{KEY_PUBLISHED_DISCLOSURE}</p>
             <p>
               Add this as a <strong>signing key</strong> on {forgeLabel(draft.provider, draft.host)} (GitHub: Settings → SSH
-              and GPG keys → New SSH key → Key type "Signing Key"; GitLab: SSH Keys → Usage type "Signing"), then publish.
+              and GPG keys → New SSH key → Key type "Signing Key"; GitLab: SSH Keys → Usage type "Signing", not the default "Authentication &amp; Signing"), then publish.
             </p>
             <textarea readOnly rows={2} value={draft.accountKeyOpenssh ?? ""} className="w-full rounded-lg border px-2 py-1 font-mono text-[11px]" style={fieldStyle} />
             <Button size="sm" onClick={() => void navigator.clipboard.writeText(draft.accountKeyOpenssh ?? "")}>

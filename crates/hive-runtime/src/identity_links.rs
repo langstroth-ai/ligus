@@ -710,9 +710,9 @@ impl LinkFetcher {
                 let root = self.root(provider, host)?;
                 // By id: no rename window.
                 let v = self.get_json(&format!("{root}/users/{subject_id}/keys"), false).await?;
-                let keys = json_keys(&v, "key", |k| {
-                    matches!(k["usage_type"].as_str(), Some("signing") | Some("auth_and_signing"))
-                });
+                // `signing` marks a key that grants no push access (D15):
+                // "auth_and_signing", GitLab's default, grants push.
+                let keys = json_keys(&v, "key", |k| k["usage_type"].as_str() == Some("signing"));
                 // The handle is display only; gitlab.com doesn't answer
                 // `/users/{id}` anonymously.
                 let handle = match self.get_json(&format!("{root}/users/{subject_id}"), false).await {
