@@ -25,8 +25,12 @@ export function Avatar({
   const radius = kind === "agent" ? "30%" : "50%";
   const cls = `av ${kind}`;
   const base: CSSProperties = { width: size, height: size, borderRadius: radius, flex: "none" };
-  const face = url ? (
-    <img src={url} alt="" aria-hidden width={size} height={size} className={cls} style={{ ...base, objectFit: "cover" }} />
+  // Only an inline data:image/ avatar renders. The roster is synced, so a URL
+  // here can come from another member's client; a remote one would load on
+  // render and tell its host who is reading, and when.
+  const src = url && /^data:image\//i.test(url.trim()) ? url : null;
+  const face = src ? (
+    <img src={src} alt="" aria-hidden width={size} height={size} className={cls} style={{ ...base, objectFit: "cover" }} />
   ) : (
     <div
       aria-hidden
