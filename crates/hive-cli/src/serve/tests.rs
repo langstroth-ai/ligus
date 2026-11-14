@@ -2800,7 +2800,8 @@ async fn a_burst_of_recruits_is_one_push() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     {
         let mut svc = h.handle.shared.lock();
-        for _ in 0..40 {
+        // As many as the fold keeps for one reference (S6 bound).
+        for _ in 0..hive_core::authz::bounds::MAX_RECRUITS_PER_PROPOSAL {
             let r = FlowRecord::Recruit(hflow::RecruitNotice {
                 id: Uuid::new_v4(),
                 action: "approvers".into(),
