@@ -361,6 +361,29 @@ fn delegated_host_cannot_publish_its_owners_links() {
     assert_eq!(w.verdict(id), Verdict::Denied);
 }
 
+/// A delegated host (a box acting for its owner without the account key)
+/// can't remove its owner's identity links either: unlinking is as much the
+/// account's own act as linking.
+#[test]
+fn delegated_host_cannot_remove_its_owners_links() {
+    let mut w = World::new();
+    let l = w.link("ada", "7");
+    let id = w.push("ada", publish(l.clone()));
+    assert_eq!(w.verdict(id), Verdict::Allowed);
+    let ada = &w.people["ada"];
+    let box_id = Uuid::new_v4();
+    let box_key = SigningKeypair::generate().unwrap();
+    let cert = DeviceCertificate::issue(&ada.account, ada.account_id, box_id, &box_key.public_key_bytes(), Timestamp::epoch());
+    w.push("ada", SessionEvent::DeviceCertificateAdded { certificate: cert });
+    assert!(w.roster().devices[&box_id].delegated_for(w.account("ada")));
+    let mut env = w.draft("ada", SessionEvent::IdentityLinkRemoved { account_id: w.account("ada"), link_id: l.link_id });
+    env.clear_raw();
+    sign_envelope(&mut env, box_id, &box_key);
+    let id = w.push_env(env);
+    assert_eq!(w.verdict(id), Verdict::Denied);
+    assert!(w.roster().links[&w.account("ada")].contains_key(&l.link_id));
+}
+
 proptest! {
     /// S2 `prop_link_bound_to_account_and_key`: any change to the statement
     /// (one byte), or to a field it renders, is refused by the fold.

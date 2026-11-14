@@ -98,6 +98,10 @@ impl ChatService {
 
     /// Remove a link (this account's own, or another member's as an Admin).
     pub fn remove_identity_link(&mut self, workspace_id: Uuid, account_id: Uuid, link_id: Uuid) -> Result<SessionEventEnvelope> {
+        if self.author.account_id == Some(account_id) {
+            // Unlinking is the account's own act, like linking.
+            self.link_account()?;
+        }
         self.append_signed(
             workspace_config_session_id(workspace_id),
             workspace_id,
