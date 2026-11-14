@@ -2628,6 +2628,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "hive-forge"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "hive-core",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "toml 0.8.2",
+ "tracing",
+ "url",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "hive-proto"
 version = "2.0.0"
 dependencies = [

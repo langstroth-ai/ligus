@@ -4,6 +4,7 @@ members = [
     "crates/hive-core",
     "crates/hive-proto",
     "crates/hive-runtime",
+    "crates/hive-forge",
     "crates/hive-cli",
     "app",
 ]
@@ -38,6 +39,7 @@ hive-proto = { path = "crates/hive-proto" }
 # feature gate whether hive-runtime pulls iroh, so the Windows cross-build can
 # drop it via `--no-default-features` while native builds keep P2P on.
 hive-runtime = { path = "crates/hive-runtime", default-features = false }
+hive-forge = { path = "crates/hive-forge" }
 
 [profile.release]
 strip = true

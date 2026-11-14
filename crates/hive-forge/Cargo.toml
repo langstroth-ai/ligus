@@ -1,0 +1,25 @@
+[package]
+name = "hive-forge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Ligus forges: one trait over GitHub, GitLab and Forgejo/Gitea/Codeberg for repo work (pure HTTP plus git argv builders)"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+async-trait = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+url = "2"
+zeroize = "1"
+toml = "0.8"
+uuid.workspace = true
+
+[dev-dependencies]
+axum = "0.7"
+tempfile = "3"
+hive-core.workspace = true
