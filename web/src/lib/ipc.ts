@@ -533,6 +533,30 @@ export const githubLoginPoll = (deviceCode: string) =>
   invoke<GithubPollDto>("github_login_poll", { deviceCode });
 export const githubLogout = () => invoke<void>("github_logout");
 
+/// Organization sign-in through ligus-auth (device code). The session's
+/// short-lived relay token replaces the static relay access token while it is
+/// valid. It grants relay access only, never workspace membership.
+export interface LigusAuthStatusDto {
+  authUrl: string;
+  tenant: string;
+  sub: string;
+  workspaces: string[];
+  accessExpiresAt: number;
+  active: boolean;
+}
+export interface LigusAuthStartDto {
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete: string | null;
+  interval: number;
+  expiresIn: number;
+}
+export const ligusAuthStatus = () => invoke<LigusAuthStatusDto | null>("ligus_auth_status");
+export const ligusAuthStart = (url: string) => invoke<LigusAuthStartDto>("ligus_auth_start", { url });
+/** "pending" | "slowDown" | "denied" | "expired" | "success" | "none" */
+export const ligusAuthPoll = () => invoke<string>("ligus_auth_poll");
+export const ligusAuthSignOut = () => invoke<void>("ligus_auth_sign_out");
+
 /// What's installed/available on this machine, to drive first-run defaults.
 export interface EnvDetectDto {
   claudeCode: boolean;

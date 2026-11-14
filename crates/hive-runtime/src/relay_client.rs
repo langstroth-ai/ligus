@@ -296,6 +296,9 @@ pub struct RelayClient {
     /// so a membership-enforcing relay can authenticate the caller; `None` when
     /// not signed in (open relays ignore it).
     github_token: Option<String>,
+    /// A ligus-auth access token kept fresh in the background. When it holds
+    /// a value it is sent instead of `auth` (see `with_auth_cell`).
+    auth_cell: Option<crate::ligus_auth::TokenCell>,
 }
 
 impl RelayClient {
@@ -320,6 +323,7 @@ impl RelayClient {
             base: base.into().trim_end_matches('/').to_string(),
             auth: None,
             github_token: None,
+            auth_cell: None,
         }
     }
 
@@ -331,6 +335,14 @@ impl RelayClient {
         self
     }
 
+    /// Read the bearer from a ligus-auth token cell on every request, so a
+    /// long-lived client picks up refreshed tokens. An empty cell falls back
+    /// to the static token from `with_auth`.
+    pub fn with_auth_cell(mut self, cell: Option<crate::ligus_auth::TokenCell>) -> Self {
+        self.auth_cell = cell;
+        self
+    }
+
     /// Set the caller's GitHub identity token (for membership-enforcing relays).
     /// Empty = none. Attached as `X-Hive-Github-Token` on every request.
     pub fn with_github_token(mut self, token: Option<String>) -> Self {
@@ -339,8 +351,9 @@ impl RelayClient {
     }
 
     /// Attach the entitlement bearer + GitHub identity (if any) to a request.
-    fn authed(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        let rb = match &self.auth {
+    pub(crate) fn authed(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        let fresh = self.auth_cell.as_ref().and_then(|c| c.get()).filter(|t| !t.is_empty());
+        let rb = match fresh.as_ref().or(self.auth.as_ref()) {
             Some(t) => rb.bearer_auth(t),
             None => rb,
         };
