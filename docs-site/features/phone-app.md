@@ -15,7 +15,73 @@ through it.
 To set up the box and pair a phone, see
 [Remote access for your phone](../networking/remote-access.md). To make the
 box act as you rather than as a separate member, see
-[Running ligus serve as your own device](../ops/serve-box.md).
+[Running ligus serve as your own device](../ops/serve-box.md). For the whole
+setup end to end, see [Personal fleet](../deploy/personal-fleet.md).
+
+## Pairing: direct or through the relay
+
+The app connects to a box in one of two ways, and a host profile can use
+both:
+
+| Path | How | What the phone stores |
+|---|---|---|
+| **Direct** | plain HTTP to the box's address (`http://<host>:8787`) on your LAN or tailnet, with the box's bearer token | the URL and `serve.token` |
+| **Relay** | a Noise session through your relay's tunnel; the relay forwards ciphertext only | the box's host id and public key, the relay URL, and the phone's own key and credential (90 days, renewed daily while used) |
+
+Pair by scanning the QR code `ligus pair` prints (or opening its
+`hive://pair?…` link; `ligus://` works too). A **v2** link carries the relay
+details as well as, when there is a usable direct address, the URL and token.
+You can also add a host by typing its address; the app assumes
+`http://…:8787`.
+
+Each host profile has a **path** setting:
+
+- **Auto (direct, then relay)**: use the direct address when it answers
+  quickly, otherwise the relay;
+- **Direct only**;
+- **Relay only**, even when the direct address would answer.
+
+The app can hold several host profiles, each stored as its own Keychain
+item. Credentials live in the iOS Keychain; the phone never holds a
+workspace key or a device key.
+
+## Host path policy
+
+What the phone can reach on the box's disk is deliberately narrow:
+
+- **Checkouts** come only from the box's repos dir (`LIGUS_REPOS_DIR`,
+  default `<data dir>/repos`). A chat can be bound only to a plain directory
+  name directly inside it that is already a git repository. Bindings to
+  other paths are made on the box with `ligus bind-repo`; the phone sees only
+  their last path component.
+- **Clones** accept only `owner/name` or `https://github.com/owner/name`;
+  other hosts, schemes, credentials in URLs and query strings are refused.
+  They land in `<repos dir>/<owner>__<name>`, limited by
+  `LIGUS_REPOS_MAX_CLONE_MB` (2048) and `LIGUS_REPOS_CLONE_TIMEOUT_SECS`
+  (900), two at a time.
+- **Proposal files** (`GET /v1/proposals/{id}/file`) take a plain relative
+  path: no `..`, no absolute paths, nothing under `.git`. The file is rebuilt
+  in a scratch directory, never in the checkout.
+- **GitHub** actions use the box's own `gh` login. Ligus never force-pushes,
+  never pushes to an upstream it doesn't own and never creates forks.
+- Writes that change repos need the box's role to be Contributor or above.
+
+## App lock (Face ID)
+
+**Settings → Security → Require Face ID / Touch ID** locks the app, with your
+passcode as fallback. It is off by default and offered once after the first
+pairing. Choose when it locks again: immediately, after 1 minute or after 5
+minutes in the background. A privacy cover hides content in the app
+switcher. Networking keeps running while the app is locked. The lock protects
+the app on an unlocked phone; it isn't a substitute for
+[revoking a lost phone](../security/runbooks.md#lost-phone).
+
+## Demo mode
+
+**Try the demo** on the pairing screen opens a sample workspace that runs
+entirely on the phone, with no box or relay. Replies come from Apple's
+on-device model where available, otherwise from scripted text. Nothing is
+sent anywhere, and there's no push in the demo.
 
 ## Chats
 
@@ -119,7 +185,9 @@ ciphertext.
 | Change ready for review | a proposal is waiting for review (a workflow gate is announced once, as an approval, not also here) |
 | New phone paired | a new phone was paired with the box |
 
-Tapping a notification opens its chat.
+Tapping a notification opens its chat. Notifications offer **Approve** and
+**Reply** actions where they apply; a reply that can't reach the box
+within 20 seconds is queued.
 
 - **Previews are on by default.** A notification shows who did what as the
   title and, for replies and mentions, the first 120 characters of the message
@@ -135,6 +203,12 @@ Tapping a notification opens its chat.
   10 seconds, there are per-phone and host-wide rate limits, and history that
   synced in late (older than 10 minutes when `ligus serve` started) never
   pushes.
+
+!!! note "Push is off in standard builds"
+    The app's push support is compiled in but switched off by default
+    (`LIGUS_PUSH_NOTIFICATIONS = NO` in its build settings). To get push you
+    build the app yourself with it switched on. Without push the app still
+    shows everything when you open it.
 
 !!! warning "Push needs your own APNs key today"
     Apple accepts a push only when it is signed with a key from the team that
@@ -175,3 +249,21 @@ The box can also serve a dashboard for the phone: a built-in Ligus section
 define in `dashboard.toml` on the box. The app hides its dashboard tab when
 the dashboard is empty. Format and examples:
 [`docs/dashboard.md`](https://github.com/ligus-ai/ligus/blob/main/docs/dashboard.md).
+
+## What stays on the desktop
+
+The phone is for following, deciding and steering. These need the desktop
+app:
+
+- creating agents and editing runtimes (moving an agent to another host
+  works on the phone);
+- managing skills, vaults, MCP servers and settings;
+- applying a proposal-set alternative (you can vote on it from the phone);
+- applying a file-diff proposal, unless the box sets
+  `LIGUS_SERVE_APPLY_ON_APPROVE=1`;
+- switching dearth mode, approving joins, clearing a chat lockdown (the
+  phone shows guard state read-only);
+- answering `@hive`: only a desktop runs a chat's primary runtime;
+- inviting, removing or re-roling members.
+
+The full API the phone uses is in the [serve API reference](../reference/serve-api.md).

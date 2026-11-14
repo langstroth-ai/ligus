@@ -92,7 +92,7 @@ code — is a tracked follow-up and **not in the current build**. See
 Peers on different networks converge through a shared **relay**: set
 the same **Relay URL** and join the same room + key (an invite code
 does this automatically). Configure the relay under
-**Settings → Team**. See [Self-hosting a relay](../networking/self-host.md)
+**Settings → Team sync**. See [Self-hosting a relay](../networking/self-host.md)
 for how to run one.
 
 ## Revocation

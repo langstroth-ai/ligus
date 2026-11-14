@@ -23,6 +23,7 @@ The body is a `WorkspaceConn` serialized to JSON and base64url-encoded
 | `key` | The E2EE passphrase that derives the workspace key. `null` = a keyless room, which **cannot sync through a relay** — E2EE is mandatory for relay sync, so a keyless workspace is local-only. |
 | `name` | Friendly display label (defaults to the room name). |
 | `dm_account` | Set only for a 1:1 direct-message workspace; otherwise absent. |
+| `founder_actor_id` | The founding identity. Projection accepts only this founder's seed as the base snapshot, so a keyholder can't fork the workspace with a forged base. |
 
 The workspace **icon** is deliberately stripped before encoding — it's
 local rail decoration and could be a large `data:` URL.

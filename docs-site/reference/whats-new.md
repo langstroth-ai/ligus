@@ -30,6 +30,17 @@ Full release notes are on the
     `LIGUS_*` in your shell profile, env files and CI. A `HIVE_*` variable that
     is still set is ignored, with a one-time warning naming the new spelling.
     See [Configuration](config-toml.md).
+- **Upgrading.** The desktop *copies* its old data dir (a 1.x app still
+  finds its data), while the CLI's `~/.hive`, each repo's `.hive/` and
+  `hive.config.toml` are *renamed*. The relay (v0.2.0) still reads its
+  `HIVE_RELAY_*` names as well; the app and CLI don't. Step by step, with
+  rollback: [Upgrading from Hive 1.x](../deploy/upgrade-from-hive.md).
+- **Deployment and security docs.** [Choose a deployment](../deploy/index.md)
+  with guides for each supported shape, a [security model](../security/index.md),
+  [threat model](../security/threat-model.md) and [runbooks](../security/runbooks.md),
+  [Operations](../ops/operations.md), and references for the
+  [CLI](cli.md), [environment variables](env-vars.md),
+  [serve API](serve-api.md) and [settings](settings.md).
 - **Desktop.** The app is `Ligus.app`. Theme and pane layout reset once, and
   macOS asks again for folder and notification access. An auto-updated app
   may still be at `/Applications/Hive.app`; you can rename it to `Ligus.app`.

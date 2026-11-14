@@ -96,7 +96,7 @@ Under **Advanced — set room & key by hand**:
   See [Remote agents](#remote-agents-people-pane).
 
 See [Self-hosting a relay](../networking/self-host.md), the
-[small-team deployment guide](../ops/deployment.md), and the
+[team deployment guide](../ops/deployment.md), and the
 [pricing tiers](../ops/pricing.md).
 
 ### Team members
@@ -124,7 +124,9 @@ on a relay that supports user management (your GitHub login is in the
 relay's admin list); everyone else sees a short explanatory note
 instead. Managing members needs you signed in to GitHub
 (Settings → Account). See
-[Managing relay access](../networking/self-host.md#managing-relay-access).
+[The user and token admin API](../networking/self-host.md#the-user-and-token-admin-api).
+The open-source relay build doesn't include that API, so the panel only
+appears against a relay that adds it.
 
 ## Schedules
 
@@ -267,10 +269,9 @@ Per-device settings for [Flow](flow.md):
 ## Updates & data
 
 - **Check for updates** — reports the version you're on and checks
-  whether a newer **signed** build is available, then installs it. The
-  auto-updater activates for signed builds; on current unsigned dists a
-  lightweight version check still notifies you when a newer release is
-  published.
+  whether a newer **signed** build is available, then installs it.  When an
+  in-place update can't be applied, Ligus links to the release on GitHub
+  instead.
 - **Export data** — download a copy of this device's local data.
 
 ## Diagnostics

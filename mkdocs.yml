@@ -81,6 +81,19 @@ nav:
       - Configuring a runtime: getting-started/configuring-a-runtime.md
       - Offline setup with local models: getting-started/offline-local-models.md
       - Your first chat: getting-started/first-chat.md
+  - Deploy:
+      - Choose a deployment: deploy/index.md
+      - Solo laptop: deploy/solo.md
+      - Personal fleet (laptop, home server, phone): deploy/personal-fleet.md
+      - Team on a relay: ops/deployment.md
+      - Kubernetes (preview): deploy/kubernetes.md
+      - Keys off the cluster (design): deploy/keys-off-cluster.md
+      - Multi-tenant (design): deploy/multi-tenant.md
+      - Upgrading from Hive 1.x: deploy/upgrade-from-hive.md
+  - Security:
+      - Security model: security/index.md
+      - Threat model: security/threat-model.md
+      - Runbooks: security/runbooks.md
   - Concepts:
       - Workspaces & chats: concepts/workspaces.md
       - Agents (built-in vs BYO): concepts/agents.md
@@ -121,7 +134,7 @@ nav:
       - Linear & remote MCP (OAuth): addons/linear.md
   - Operations:
       - Building the dist: ops/build.md
-      - Deploying for a small team: ops/deployment.md
+      - Operations (health, logs, backups): ops/operations.md
       - Running ligus serve as your own device: ops/serve-box.md
       - Repos on the home host: ops/serve-repos.md
       - Pricing tiers: ops/pricing.md
@@ -131,6 +144,10 @@ nav:
       - Troubleshooting: ops/troubleshooting.md
   - Reference:
       - What's new: reference/whats-new.md
+      - CLI: reference/cli.md
+      - Environment variables: reference/env-vars.md
+      - Serve HTTP API: reference/serve-api.md
+      - Settings: reference/settings.md
       - Configuration (TOML): reference/config-toml.md
       - Invite payload format: reference/invite-payload.md
       - Wire protocols: reference/wire-protocols.md
