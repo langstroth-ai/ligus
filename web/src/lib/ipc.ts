@@ -1662,3 +1662,29 @@ export const getWorkspaceTrust = () => invoke<WorkspaceTrust>("get_workspace_tru
 export const setWorkspaceTrust = (digest: string, enabled: boolean) =>
   invoke<WorkspaceTrust>("set_workspace_trust", { digest, enabled });
 export const trustWorkspace = () => invoke<WorkspaceTrust>("trust_workspace");
+
+// ── Passkeys and workspace keys (Phase 0, Track B) ─────────────────────────
+
+export type PasskeyDto = { credentialId: string; recovery: boolean };
+export type SecurityStatusDto = {
+  passkeys: PasskeyDto[];
+  /** Workspace rules version (2 = passkey presence enforced). */
+  rules: number;
+  /** The newest authorized workspace key version (0 = the passphrase key). */
+  keyVersion: number;
+  /** Where this device keeps Ligus's secrets ("keychain", "file", …). */
+  secretBackend: string;
+};
+/** What the "Confirm with passkey" sheet shows while the browser is open. */
+export type PresencePromptDto = { kind: string; summary: string; digestShort: string; op: "get" | "create" };
+
+export const securityStatus = () => invoke<SecurityStatusDto>("security_status");
+export const passkeyRegister = (label: string) => invoke<void>("passkey_register", { label });
+export const recoveryKeyCreate = () => invoke<string>("recovery_key_create");
+export const workspaceRulesSet = (version: number) => invoke<void>("workspace_rules_set", { version });
+export const rotateWorkspaceKey = () => invoke<{ rotated: boolean; recipients: number }>("rotate_workspace_key");
+export const presenceCancel = () => invoke<void>("presence_cancel");
+export const onPresenceRequested = (cb: (p: PresencePromptDto) => void): Promise<UnlistenFn> =>
+  listen<PresencePromptDto>("presence://requested", (e) => cb(e.payload));
+export const onPresenceDone = (cb: (ok: boolean) => void): Promise<UnlistenFn> =>
+  listen<boolean>("presence://done", (e) => cb(e.payload));

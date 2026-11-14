@@ -26,6 +26,7 @@ import { DiagnosticsSection } from "@/components/settings/DiagnosticsSection";
 import { DangerZoneSection } from "@/components/settings/DangerZoneSection";
 import { GuardsSection } from "@/components/guards/GuardsSection";
 import { FlowSection } from "@/components/settings/FlowSection";
+import { SecuritySection } from "@/components/settings/SecuritySection";
 import { IconComb } from "@/components/flow/icon";
 
 // ── Grouped nav (§6.5) ──────────────────────────────────────────────────────
@@ -36,6 +37,7 @@ export type SettingsTab =
   | "folder-git"
   | "team-sync"
   | "guards"
+  | "passkeys"
   | "schedules"
   | "models"
   | "tools"
@@ -64,6 +66,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: "folder-git", label: "Folder & Git", icon: <IconFile size={16} />, keywords: ["project", "folder", "directory", "path", "git", "branch", "repo"] },
       { id: "team-sync", label: "Team sync", icon: <IconUsers size={16} />, keywords: ["relay", "e2ee", "encryption", "sync", "token", "invite", "p2p", "peer", "collaborate"] },
+      { id: "passkeys", label: "Passkeys & keys", icon: <IconLock size={16} />, keywords: ["passkey", "webauthn", "touch id", "recovery", "rules v2", "presence", "rotate", "workspace key", "keychain"] },
       { id: "guards", label: "Guards", icon: <IconLock size={16} />, keywords: ["dearth", "security", "lockdown", "entrance", "approval", "throttle", "lease", "sandbox", "egress"] },
       { id: "schedules", label: "Schedules", icon: <IconActivity size={16} />, keywords: ["cron", "recurring", "timer", "automation"] },
     ],
@@ -111,6 +114,9 @@ export function parseSettingsTab(raw: string | undefined | null): SettingsTab {
     case "team-sync":
     case "team":
       return "team-sync";
+    case "passkeys":
+    case "passkey":
+      return "passkeys";
     case "guards":
     case "security":
     case "dearth":
@@ -259,6 +265,7 @@ export function SettingsView({
           {tab === "folder-git" && <FolderGitSection />}
           {tab === "team-sync" && <TeamSyncSection />}
           {tab === "guards" && <GuardsSection />}
+          {tab === "passkeys" && <SecuritySection />}
           {tab === "schedules" && <SchedulesSection />}
           {tab === "models" && <ModelsSection />}
           {tab === "tools" && <ToolsSection />}
