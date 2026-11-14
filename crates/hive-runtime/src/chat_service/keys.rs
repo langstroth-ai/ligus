@@ -16,6 +16,21 @@ pub struct RotationIssued {
 }
 
 impl ChatService {
+    /// The config log folded with this device's founder pin for it. Keys are
+    /// only ever decided on a pinned fold (B2 residual): without a pin a
+    /// forged lower-lamport seed could choose the roster rotations seal to.
+    pub(crate) fn pinned_config(
+        &self,
+        workspace_id: Uuid,
+    ) -> Result<(Option<hive_core::ChatSession>, std::sync::Arc<hive_core::authz::ConfigTimeline>)> {
+        let Some(pin) = self.store.workspace_pin(workspace_id)? else {
+            return Err(ChatError::Unauthorized(
+                "this device has no founder pin for the workspace (join it from an invite)".into(),
+            ));
+        };
+        Ok(self.store.load_config(workspace_id, Some(&pin.founder_account.to_string()), self.local_workspace_id)?)
+    }
+
     /// Publish this device's own X25519 key-agreement key on `workspace_id`'s
     /// config log, unless the log already carries exactly that key for this
     /// device. Rotations seal only to keys published this way. Returns whether
@@ -24,8 +39,7 @@ impl ChatService {
         if self.local_workspace_id == Some(workspace_id) {
             return Ok(false);
         }
-        let (config, timeline) =
-            self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let (config, timeline) = self.pinned_config(workspace_id)?;
         if config.is_none() {
             return Ok(false);
         }
@@ -74,8 +88,7 @@ impl ChatService {
         if self.local_workspace_id == Some(workspace_id) {
             return Err(ChatError::Unauthorized("the local workspace has no shared key".into()));
         }
-        let (config, timeline) =
-            self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let (config, timeline) = self.pinned_config(workspace_id)?;
         if config.is_none() {
             return Err(ChatError::Unauthorized("the workspace configuration hasn't synced to this device yet".into()));
         }
@@ -103,8 +116,7 @@ impl ChatService {
         workspace_id: Uuid,
         src: &crate::keyring::KeySource,
     ) -> Result<Vec<crate::keyring::DeliveredKey>> {
-        let (config, timeline) =
-            self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let Ok((config, timeline)) = self.pinned_config(workspace_id) else { return Ok(Vec::new()) };
         if config.is_none() {
             return Ok(Vec::new());
         }

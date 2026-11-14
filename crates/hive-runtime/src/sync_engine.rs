@@ -112,12 +112,16 @@ pub struct SyncEngine {
     relay_rows: Vec<Value>,
     /// When the keyring route was last fetched.
     rows_fetched: Option<std::time::Instant>,
+    /// The ring parked bodies were last replayed against (A-13).
+    parked_ring: Option<Vec<u8>>,
+    /// Replaying parked bodies now (no nested replay).
+    in_retry: bool,
     /// A body couldn't be opened (or no seal key is held): fetch the keyring
     /// route on the next round.
     rows_wanted: bool,
     /// What the ring was last built from: (config fingerprint, rotations seen,
     /// relay rows).
-    ring_built_from: Option<(u64, usize, usize)>,
+    ring_built_from: Option<(u64, usize, usize, bool)>,
     /// Identity-verification mode (security plan S1). `Relay` (Option A, the
     /// default) trusts the roster's account keys as-is — **current behavior**.
     /// `GithubSigningKeys` (Option C) additionally requires each account key to
@@ -168,6 +172,8 @@ impl SyncEngine {
             key_source: None,
             relay_rows: Vec::new(),
             rows_fetched: None,
+            parked_ring: None,
+            in_retry: false,
             rows_wanted: false,
             ring_built_from: None,
             #[cfg(test)]
@@ -270,13 +276,15 @@ impl SyncEngine {
     pub fn refresh_keyring(&mut self, store: &EventStore) -> Result<(), SyncError> {
         let Some(src) = self.key_source.as_ref() else { return Ok(()) };
         let ws = self.room_workspace();
+        // Only a pinned fold decides keys (B2 residual): without a founder pin
+        // this device seals under the passphrase epoch and adopts no rotation.
         let pin = store.workspace_pin(ws)?.map(|p| p.founder_account.to_string());
         let (config, timeline) = store.load_config(ws, pin.as_deref(), None)?;
-        let from = (timeline.fingerprint(), timeline.rotation_candidates().len(), self.relay_rows.len());
+        let from = (timeline.fingerprint(), timeline.rotation_candidates().len(), self.relay_rows.len(), pin.is_some());
         if self.ring_built_from == Some(from) {
             return Ok(());
         }
-        let cfg = config.is_some().then_some(&*timeline);
+        let cfg = (config.is_some() && pin.is_some()).then_some(&*timeline);
         self.keyring = KeyringEngine::build(ws, cfg, src, &self.relay_rows);
         self.ring_built_from = Some(from);
         Ok(())
@@ -639,6 +647,7 @@ impl SyncEngine {
         let mut decoded: Vec<(u64, SessionEventEnvelope)> = Vec::new();
         let mut resolved: Vec<u64> = Vec::new();
         let mut retry_at: Option<u64> = None;
+        let mut parked_now: Vec<u64> = Vec::new();
         let mut foreign = 0usize;
         for (seq, body) in fetched {
             match self.decode(body) {
@@ -653,6 +662,17 @@ impl SyncEngine {
                 Decoded::Ready(env) => decoded.push((*seq, *env)),
                 Decoded::Malformed(reason) => {
                     tracing::warn!(seq = *seq, reason, "skipping a malformed relay body; advancing the cursor past it");
+                    resolved.push(*seq);
+                }
+                // A-13: with the one keyring, a body sealed under a key this
+                // device doesn't hold is parked (device-local) and the cursor
+                // moves on: a junk epoch nobody announced can't pin it. Parked
+                // bodies are retried whenever the ring changes.
+                Decoded::NotYetOpenable(reason) if self.key_source.is_some() => {
+                    tracing::debug!(seq = *seq, reason, "parking a body sealed under a key this device doesn't hold");
+                    store.park_body(&self.workspace, *seq, body)?;
+                    self.rows_wanted = true;
+                    parked_now.push(*seq);
                     resolved.push(*seq);
                 }
                 Decoded::NotYetOpenable(reason) => {
@@ -776,6 +796,7 @@ impl SyncEngine {
         // past the lowest not-yet-openable sequence (so it's re-fetched), and
         // never backwards. Later openable events above `retry_at` were still
         // applied above; the cursor just waits for the gap to fill.
+        let settled: Vec<u64> = if self.in_retry { resolved.clone() } else { Vec::new() };
         for seq in resolved {
             if retry_at.is_none_or(|r| seq < r) {
                 self.last_fetched_seq = self.last_fetched_seq.max(seq);
@@ -793,7 +814,36 @@ impl SyncEngine {
         if self.last_fetched_seq != cursor_before {
             store.set_sync_cursor(&self.workspace, self.last_fetched_seq)?;
         }
+        // A replay of parked bodies: forget the ones that resolved.
+        for seq in settled.into_iter().filter(|s| !parked_now.contains(s)) {
+            store.unpark(&self.workspace, seq)?;
+        }
+        applied += self.retry_parked(store)?;
         Ok(applied)
+    }
+
+    /// Replay parked bodies when the keyring changed since the last replay
+    /// (A-13). Returns how many were newly applied.
+    pub fn retry_parked(&mut self, store: &mut EventStore) -> Result<usize, SyncError> {
+        if self.key_source.is_none() || self.in_retry {
+            return Ok(0);
+        }
+        let fp = self.keyring.fingerprint();
+        if self.parked_ring.as_ref() == Some(&fp) {
+            return Ok(0);
+        }
+        self.parked_ring = Some(fp);
+        let parked = store.parked_bodies(&self.workspace)?;
+        if parked.is_empty() {
+            return Ok(0);
+        }
+        let (hold, behind) = (self.walk_hold, self.behind);
+        self.in_retry = true;
+        self.behind = false;
+        let r = self.apply_fetched(store, &parked);
+        self.in_retry = false;
+        (self.walk_hold, self.behind) = (hold, behind);
+        r
     }
 
     /// The current fetch cursor (highest relay sequence durably applied).
@@ -824,8 +874,8 @@ impl SyncEngine {
             return Ok(None);
         }
         let ws = self.room_workspace();
-        let pin = store.workspace_pin(ws)?.map(|p| p.founder_account.to_string());
-        let (config, timeline) = store.load_config(ws, pin.as_deref(), None)?;
+        let Some(pin) = store.workspace_pin(ws)?.map(|p| p.founder_account.to_string()) else { return Ok(None) };
+        let (config, timeline) = store.load_config(ws, Some(&pin), None)?;
         Ok(config.map(|_| Box::new(timeline.current().clone())))
     }
 }

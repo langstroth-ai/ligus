@@ -78,6 +78,8 @@ type RowsSig = (i64, i64);
 
 /// Guard signals kept per device (all workspaces); older rows are pruned.
 pub const GUARD_SIGNALS_KEEP: i64 = 20_000;
+/// Parked relay bodies kept per room (A-13).
+pub const PARKED_KEEP: i64 = 5_000;
 /// Facts kept on this device (newest).
 pub const FACTS_KEEP: i64 = 50_000;
 
@@ -148,6 +150,16 @@ impl EventStore {
             CREATE TABLE IF NOT EXISTS join_invites (
                 workspace_id TEXT PRIMARY KEY,
                 invite_id    TEXT NOT NULL
+            );
+
+            -- Device-local (A-13): relay bodies sealed under a key this
+            -- device doesn't hold, parked so they never pin the fetch cursor;
+            -- retried whenever the keyring changes. Bounded per room.
+            CREATE TABLE IF NOT EXISTS parked_bodies (
+                workspace TEXT NOT NULL,
+                seq       INTEGER NOT NULL,
+                body      TEXT NOT NULL,
+                PRIMARY KEY (workspace, seq)
             );
 
             CREATE TABLE IF NOT EXISTS sync_cursor (
@@ -549,6 +561,44 @@ impl EventStore {
             }
         }
         Ok(out)
+    }
+
+    /// Park a relay body this device can't open yet (A-13). Keeps at most
+    /// [`PARKED_KEEP`] per room, dropping the oldest.
+    pub fn park_body(&self, workspace: &str, seq: u64, body: &serde_json::Value) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO parked_bodies (workspace, seq, body) VALUES (?1, ?2, ?3)",
+            rusqlite::params![workspace, seq as i64, serde_json::to_string(body)?],
+        )?;
+        self.conn.execute(
+            "DELETE FROM parked_bodies WHERE workspace = ?1 AND seq NOT IN \
+             (SELECT seq FROM parked_bodies WHERE workspace = ?1 ORDER BY seq DESC LIMIT ?2)",
+            rusqlite::params![workspace, PARKED_KEEP],
+        )?;
+        Ok(())
+    }
+
+    /// Every parked body of a room, by relay sequence.
+    pub fn parked_bodies(&self, workspace: &str) -> Result<Vec<(u64, serde_json::Value)>> {
+        let mut stmt = self.conn.prepare("SELECT seq, body FROM parked_bodies WHERE workspace = ?1 ORDER BY seq ASC")?;
+        let rows = stmt.query_map([workspace], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (seq, body) = row?;
+            if let Ok(v) = serde_json::from_str(&body) {
+                out.push((seq as u64, v));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Forget a parked body (it opened, or proved bad).
+    pub fn unpark(&self, workspace: &str, seq: u64) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM parked_bodies WHERE workspace = ?1 AND seq = ?2",
+            rusqlite::params![workspace, seq as i64],
+        )?;
+        Ok(())
     }
 
     /// The key epoch an event arrived sealed under, if it was received sealed.

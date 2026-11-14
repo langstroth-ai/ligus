@@ -74,8 +74,9 @@ impl World {
         let mut w = Self { wid, clock: 0, cfg: Vec::new(), people };
         let mut seed = ChatSession::new("", wid, "");
         seed.id = workspace_config_session_id(wid);
-        seed.creator_actor_id = "owner".into();
-        seed.members = vec![member("owner", &w.people["owner"], WorkspaceRole::Owner)];
+        let owner = w.aid("owner");
+        seed.creator_actor_id = owner.clone();
+        seed.members = vec![member(&owner, &w.people["owner"], WorkspaceRole::Owner)];
         w.push("owner", SessionEvent::SessionSnapshot { session: Box::new(seed) });
         for name in NAMES {
             w.publish_identity(name);
@@ -100,6 +101,16 @@ impl World {
         self.push(name, SessionEvent::DeviceCertificateAdded { certificate: cert });
     }
 
+    /// The actor id `name` signs as: the owner is the founder, whose actor
+    /// id is its account id (what a founder pin names); the rest keep names.
+    fn aid(&self, name: &str) -> String {
+        if name == "owner" {
+            self.people["owner"].account_id.to_string()
+        } else {
+            name.to_string()
+        }
+    }
+
     fn head(&self) -> Option<CfgFrontier> {
         self.cfg.iter().map(|e| CfgFrontier { lamport: e.lamport, event_id: e.event_id }).max()
     }
@@ -110,7 +121,7 @@ impl World {
         let mut env =
             SessionEventEnvelope::new(workspace_config_session_id(self.wid), self.wid, self.clock as i64, payload);
         env.lamport = self.clock;
-        let mut actor = ActorIdentity::new(by, by, ActorKind::Human);
+        let mut actor = ActorIdentity::new(self.aid(by), by, ActorKind::Human);
         actor.account_id = Some(p.account_id);
         env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: self.head() });
         sign_envelope(&mut env, p.device_id, &p.device);
@@ -535,8 +546,8 @@ fn stale_epoch_write_refused_after_frontier() {
     let wid = w.wid;
 
     let mut chat = ChatSession::new("chat", wid, "anthropic");
-    chat.creator_actor_id = "owner".into();
-    chat.members = vec![member("owner", &w.people["owner"], WorkspaceRole::Owner)];
+    chat.creator_actor_id = w.aid("owner");
+    chat.members = vec![member(&w.aid("owner"), &w.people["owner"], WorkspaceRole::Owner)];
     let sid = chat.id;
     let mut log = Vec::new();
     let mut clock = 1000;
@@ -545,7 +556,7 @@ fn stale_epoch_write_refused_after_frontier() {
         let p = &w.people[by];
         let mut env = SessionEventEnvelope::new(sid, wid, clock, payload);
         env.lamport = clock as u64;
-        let mut actor = ActorIdentity::new(by, by, ActorKind::Human);
+        let mut actor = ActorIdentity::new(w.aid(by), by, ActorKind::Human);
         actor.account_id = Some(p.account_id);
         env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: f });
         sign_envelope(&mut env, p.device_id, &p.device);
@@ -593,6 +604,9 @@ fn host_parity_keyring() {
     for env in &w.cfg {
         store.ingest(env).unwrap();
     }
+    let owner = &w.people["owner"];
+    let fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&owner.account.public_key_bytes());
+    store.set_workspace_pin(w.wid, &owner.account_id.to_string(), &fk).unwrap();
     let p = &w.people["mara"];
     let src = KeySource::for_device(p.device_id, p.ka(), Some(PASSPHRASE), &[]);
     let mut engine = crate::SyncEngine::new(crate::RelayClient::new("http://127.0.0.1:9"), "parity")
@@ -625,12 +639,19 @@ fn ingest_refuses_old_key_writes_from_non_members() {
 
 fn service(path: &std::path::Path, name: &str) -> (crate::ChatService, KeyAgreementKeypair, Uuid) {
     let store = crate::EventStore::open(path).unwrap();
-    let mut author = ActorIdentity::new(name, name, ActorKind::Human);
     let account = Uuid::new_v4();
+    let mut author = ActorIdentity::new(account.to_string(), name, ActorKind::Human);
     author.account_id = Some(account);
     let device = Uuid::new_v4();
     let svc = crate::ChatService::new(store, device, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
     (svc, KeyAgreementKeypair::generate().unwrap(), device)
+}
+
+/// What an invite does on a joining device: the founder pin.
+fn pin_like_an_invite(joiner: &crate::ChatService, founder: &crate::ChatService, wid: Uuid) {
+    let founder_id = founder.author().account_id.unwrap().to_string();
+    let fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&founder.account_public_key());
+    joiner.store().set_workspace_pin(wid, &founder_id, &fk).unwrap();
 }
 
 async fn spawn_relay() -> String {
@@ -689,6 +710,7 @@ async fn cli_host_reads_and_seals_after_rotation() {
     // serve joins with the invite (passphrase only), enrolls, publishes its key.
     let (mut serve, serve_ka, serve_dev) = service(&serve_db, "serve-box");
     serve.store().set_join_invite(wid, invite).unwrap();
+    pin_like_an_invite(&serve, &desk, wid);
     let mut serve_sync = engine(&relay, room, serve_dev, &serve_ka, &[]);
     round(&mut serve_sync, &serve_db).await;
     serve.ensure_self_member(chat, wid).unwrap();
@@ -726,6 +748,7 @@ async fn cli_host_reads_and_seals_after_rotation() {
     round(&mut desk_sync, &desk_db).await;
     let (mut worker, worker_ka, worker_dev) = service(&worker_db, "worker-box");
     worker.store().set_join_invite(wid, invite).unwrap();
+    pin_like_an_invite(&worker, &desk, wid);
     let mut worker_sync = engine(&relay, room, worker_dev, &worker_ka, &delivered);
     round(&mut worker_sync, &worker_db).await;
     let seen = bodies(&worker_db, chat);
@@ -736,4 +759,66 @@ async fn cli_host_reads_and_seals_after_rotation() {
     round(&mut worker_sync, &worker_db).await;
     round(&mut desk_sync, &desk_db).await;
     assert!(bodies(&desk_db, chat).contains(&"from the worker".to_string()));
+}
+
+/// A-13: a well-formed body claiming an epoch nobody announced is parked on
+/// this device and never pins the fetch cursor; a later body still lands.
+#[tokio::test]
+async fn junk_epoch_body_does_not_pin_cursor() {
+    let relay = spawn_relay().await;
+    let room = "ws-a13";
+    let wid = hive_core::room_workspace_id(room);
+    let dir = tempfile::tempdir().unwrap();
+    let (desk_db, other_db) = (dir.path().join("desk.db"), dir.path().join("other.db"));
+    let (mut desk, desk_ka, desk_dev) = service(&desk_db, "owner");
+    desk.ensure_workspace_config(wid).unwrap();
+    let chat = desk.create_chat("Home", wid, "anthropic").unwrap().id;
+    let mut desk_sync = engine(&relay, room, desk_dev, &desk_ka, &[]);
+    round(&mut desk_sync, &desk_db).await;
+
+    // Anyone with relay access posts a body under an epoch nobody holds.
+    let client = crate::RelayClient::new(&relay);
+    let junk = json!({ "version": 77, "kid": "deadbeefdeadbeef", "nonce": vec![1u8; 12], "ciphertext": vec![2u8; 48] });
+    client.push_value(room, &junk).await.unwrap();
+    desk.post_user_message(chat, wid, "after the junk").unwrap();
+    round(&mut desk_sync, &desk_db).await;
+
+    // Another device of the room reads past it.
+    let (other, other_ka, other_dev) = service(&other_db, "reader-device");
+    pin_like_an_invite(&other, &desk, wid);
+    let mut other_sync = engine(&relay, room, other_dev, &other_ka, &[]);
+    round(&mut other_sync, &other_db).await;
+    assert!(bodies(&other_db, chat).contains(&"after the junk".to_string()));
+    let store = crate::EventStore::open(&other_db).unwrap();
+    let parked = store.parked_bodies(room).unwrap();
+    assert_eq!(parked.len(), 1, "the junk body is parked, not retried from the cursor");
+    assert!(other_sync.cursor() >= parked[0].0, "the cursor moved past the junk body");
+    assert_eq!(store.sync_cursor(room).unwrap(), other_sync.cursor());
+}
+
+/// B2 residual: keys are only decided on a pinned fold. A device without a
+/// founder pin adopts no rotation (it would be judging the roster from
+/// whatever seed sorts first), and can't issue one.
+#[test]
+fn unpinned_device_never_decides_keys() {
+    let mut w = World::new();
+    w.rotate("owner");
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = crate::EventStore::open(dir.path().join("u.db")).unwrap();
+    for env in &w.cfg {
+        store.ingest(env).unwrap();
+    }
+    let p = &w.people["ada"];
+    let src = KeySource::for_device(p.device_id, p.ka(), Some(PASSPHRASE), &[]);
+    let mut engine = crate::SyncEngine::new(crate::RelayClient::new("http://127.0.0.1:9"), "unpinned")
+        .with_room_workspace(w.wid)
+        .with_key_source(src);
+    engine.refresh_keyring(&store).unwrap();
+    assert_eq!(engine.keyring().authorized_head(), 0, "no rotation adopted without a pin");
+    let owner = &w.people["owner"];
+    let fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&owner.account.public_key_bytes());
+    store.set_workspace_pin(w.wid, &owner.account_id.to_string(), &fk).unwrap();
+    engine.refresh_keyring(&store).unwrap();
+    assert_eq!(engine.keyring().authorized_head(), 1);
+    let _ = &mut store;
 }

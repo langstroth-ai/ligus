@@ -1324,6 +1324,12 @@ impl ChatService {
                 workspace_id,
                 SessionEvent::SessionSnapshot { session: Box::new(session) },
             )?;
+            // The founder pins itself (B2 residual): this device's own fold
+            // then never takes a forged lower-lamport seed as the base.
+            if !self.delegated && self.author.account_id.is_some_and(|a| a.to_string() == self.author.id) {
+                let fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&self.account_keypair.public_key_bytes());
+                self.store.set_workspace_pin(workspace_id, &self.author.id, &fk)?;
+            }
             self.publish_identity(config_id, workspace_id)?;
         }
         Ok(config_id)
@@ -4320,7 +4326,7 @@ mod tests {
         peer.actor_stamp = Some(ActorStamp {
             actor: svc.author().clone(),
             recorded_at: Timestamp::now(),
-            cfg_frontier: Some(hive_core::CfgFrontier { lamport: 7_777, event_id: Uuid::new_v4() }),
+            cfg_frontier: Some(hive_core::CfgFrontier { lamport: 500, event_id: Uuid::new_v4() }),
         });
         svc.store().append_envelope(&peer).unwrap();
         let s = svc.load(sid).unwrap().unwrap();

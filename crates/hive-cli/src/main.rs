@@ -186,7 +186,7 @@ fn config() -> Config {
 #[allow(clippy::type_complexity)]
 fn decode_hivews_invite_full(
     invite: &str,
-) -> Result<(String, String, Option<String>, Option<Uuid>, Vec<hive_runtime::keyring::DeliveredKey>)> {
+) -> Result<(String, String, Option<String>, Option<Uuid>, Vec<hive_runtime::keyring::DeliveredKey>, Option<(String, String)>)> {
     use base64::Engine;
     #[derive(serde::Deserialize)]
     struct Conn {
@@ -202,6 +202,11 @@ fn decode_hivews_invite_full(
         /// Every authorized epoch key the inviter held (B1).
         #[serde(default)]
         ek: Vec<hive_runtime::keyring::DeliveredKey>,
+        /// The founder and their key fingerprint (the pin keys are decided on).
+        #[serde(default)]
+        founder_actor_id: Option<String>,
+        #[serde(default)]
+        fk: Option<String>,
     }
     let body = invite
         .trim()
@@ -214,14 +219,15 @@ fn decode_hivews_invite_full(
     if c.room.trim().is_empty() {
         bail!("invite is missing a room");
     }
-    Ok((c.relay_url, c.room, c.key, c.inv.and_then(|i| Uuid::parse_str(i.trim()).ok()), c.ek))
+    let pin = c.founder_actor_id.zip(c.fk);
+    Ok((c.relay_url, c.room, c.key, c.inv.and_then(|i| Uuid::parse_str(i.trim()).ok()), c.ek, pin))
 }
 
 /// `ligus enroll <hivews1:…> [--token <access-token>]` — one-command bootstrap:
 /// decode the invite, persist the connection to config.toml, and (with --token)
 /// wire the relay identity. After this a headless box just runs `ligus worker`.
 fn cmd_enroll(cfg: &Config, invite: &str, token: Option<String>) -> Result<()> {
-    let (relay_url, room, key, inv, ek) = decode_hivews_invite_full(invite)?;
+    let (relay_url, room, key, inv, ek, pin) = decode_hivews_invite_full(invite)?;
     std::fs::create_dir_all(&cfg.data_dir)?;
     let mut f = load_file_config(&cfg.data_dir);
     f.relay_url = Some(relay_url.clone());
@@ -234,10 +240,15 @@ fn cmd_enroll(cfg: &Config, invite: &str, token: Option<String>) -> Result<()> {
     // The workspace E2EE key and the relay token go to the secret store; the
     // file (owner-only) keeps the relay and room.
     f.save(&cfg.data_dir)?;
-    // Keep the invite this box redeems when it enrolls itself (device-local).
+    // Keep the invite this box redeems when it enrolls itself, and the
+    // founder pin the invite carries (device-local; keys and rosters are
+    // only decided on a pinned fold).
+    let store = EventStore::open(cfg.data_dir.join("hive.db"))?;
     if let Some(inv) = inv {
-        let store = EventStore::open(cfg.data_dir.join("hive.db"))?;
         store.set_join_invite(uuid_of_room(&room), inv)?;
+    }
+    if let Some((founder, fk)) = pin {
+        store.set_workspace_pin(uuid_of_room(&room), &founder, &fk)?;
     }
     println!("Enrolled workspace '{room}' at {relay_url}.");
     println!("Saved to {}.", config_path(&cfg.data_dir).display());

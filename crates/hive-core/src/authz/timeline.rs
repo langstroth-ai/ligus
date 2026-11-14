@@ -327,6 +327,10 @@ fn touches_roster(e: &SessionEvent) -> bool {
     )
 }
 
+/// How far past this device's newest config event a frontier may claim to be
+/// and still be waited for (A-14).
+pub const FRONTIER_SLACK: u64 = 4096;
+
 /// The roster at every position of one workspace's config log.
 #[derive(Debug, Clone, Default)]
 pub struct ConfigTimeline {
@@ -434,9 +438,22 @@ impl ConfigTimeline {
     /// `frontier`. A frontier naming an event this device doesn't hold is
     /// held back ([`HoldReason::ConfigFrontierAhead`]); one that names a held
     /// event under the wrong lamport is forged (`Err(None)`).
+    ///
+    /// A-14: a hold is bounded. A frontier naming an event this device doesn't
+    /// hold, at a lamport the config log has already passed, or more than
+    /// [`FRONTIER_SLACK`] past its newest event, can't be waited for: it is
+    /// treated like a forged one (the event is left out, not held, so it
+    /// blocks no side effect). The fold is re-run as events arrive, so a
+    /// genuinely late config event still validates it then.
     pub fn at(&self, frontier: CfgFrontier) -> Result<&RosterState, Option<HoldReason>> {
         match self.held.get(&frontier.event_id) {
-            None => return Err(Some(HoldReason::ConfigFrontierAhead)),
+            None => {
+                let newest = self.held.values().copied().max().unwrap_or(0);
+                if !self.held.is_empty() && (frontier.lamport < newest || frontier.lamport > newest.saturating_add(FRONTIER_SLACK)) {
+                    return Err(None);
+                }
+                return Err(Some(HoldReason::ConfigFrontierAhead));
+            }
             Some(l) if *l != frontier.lamport => return Err(None),
             Some(_) => {}
         }

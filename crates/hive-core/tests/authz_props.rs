@@ -359,6 +359,35 @@ fn held_until_config_frontier_arrives() {
     assert!(!s.authz.blocks(pid, None));
 }
 
+/// A-14: a vote naming a config event nobody will ever deliver can't hold
+/// its proposal forever. Once the config log has passed the claimed lamport
+/// (or the claim is absurdly far ahead), the vote is left out, not held, and
+/// blocks no side effect.
+#[test]
+fn forged_frontier_hold_cannot_block_side_effects_indefinitely() {
+    let mut w = World::new();
+    let pid = Uuid::from_u128(0xC7);
+    w.chat_push("mara", SessionEvent::ProposalUpserted { proposal: proposal(pid, 1, ProposalStatus::Open) });
+    let head = w.head().unwrap();
+    // Just ahead of the head: a plausible lagging config event, held.
+    let near = CfgFrontier { lamport: head.lamport + 1, event_id: Uuid::new_v4() };
+    w.clock += 5;
+    let vid = w.chat_at("val", vote("val", pid, WorkspaceRole::Viewer, false, None), Some(near));
+    assert!(w.state().authz.blocks(pid, None), "held while it could still arrive");
+    // The config log moves past the claimed lamport: the hold is dropped.
+    for _ in 0..3 {
+        w.cfg_push("owner", SessionEvent::JoinApproved { subject: "noop".into() });
+    }
+    let s = w.state();
+    assert!(!s.authz.blocks(pid, None), "a frontier the log has passed can't block side effects");
+    assert_eq!(w.verdicts()[&vid], Verdict::Denied);
+    // Absurdly far ahead: never waited for.
+    let far = CfgFrontier { lamport: u64::MAX - 1, event_id: Uuid::new_v4() };
+    let fid = w.chat_at("val", vote("val", pid, WorkspaceRole::Viewer, false, None), Some(far));
+    assert!(!w.state().authz.blocks(pid, None));
+    assert_eq!(w.verdicts()[&fid], Verdict::Denied);
+}
+
 #[test]
 fn held_when_no_config_log() {
     let mut w = World::new();
