@@ -78,6 +78,8 @@ type RowsSig = (i64, i64);
 
 /// Guard signals kept per device (all workspaces); older rows are pruned.
 pub const GUARD_SIGNALS_KEEP: i64 = 20_000;
+/// Facts kept on this device (newest).
+pub const FACTS_KEEP: i64 = 50_000;
 
 /// Cached projections kept at most; past this the cache starts over.
 const PROJECTION_CACHE_MAX: usize = 256;
@@ -186,6 +188,20 @@ impl EventStore {
             );
             CREATE INDEX IF NOT EXISTS idx_guard_signals_ws
                 ON guard_signals (workspace_id, row_id);
+
+            -- Device-local facts (P0.5): per-turn measurement records that
+            -- no longer ride the signed log. Ids, enums, numbers and
+            -- timestamps only (see `crate::facts`). Bounded by `record_fact`.
+            CREATE TABLE IF NOT EXISTS facts (
+                row_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                workspace_id TEXT NOT NULL,
+                session_id   TEXT NOT NULL,
+                at_ms        INTEGER NOT NULL,
+                kind         TEXT NOT NULL,
+                record_json  TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_facts_session ON facts (session_id, row_id);
+            CREATE INDEX IF NOT EXISTS idx_facts_ws ON facts (workspace_id, row_id);
             "#,
         )?;
         Ok(Self { conn, projections: Mutex::new(HashMap::new()), configs: Mutex::new(HashMap::new()) })
@@ -729,6 +745,46 @@ impl EventStore {
             });
         }
         Ok(out)
+    }
+
+    // --- Device-local facts (`facts`). Never synced; bounded to the newest
+    // [`FACTS_KEEP`] rows. ---
+
+    /// Record one fact (a measurement flow record).
+    pub fn record_fact(&self, workspace_id: Uuid, session_id: Uuid, at_ms: i64, kind: &str, record_json: &str) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO facts (workspace_id, session_id, at_ms, kind, record_json) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![workspace_id.to_string(), session_id.to_string(), at_ms, kind, record_json],
+        )?;
+        let row = self.conn.last_insert_rowid();
+        if row % 256 == 0 {
+            self.conn.execute("DELETE FROM facts WHERE row_id <= ?1", [row - FACTS_KEEP])?;
+        }
+        Ok(row)
+    }
+
+    /// Highest fact row (0 when none): with [`Self::max_row_id`], what a
+    /// cached view of folded state plus facts is keyed on.
+    pub fn max_fact_row(&self) -> Result<i64> {
+        Ok(self.conn.query_row("SELECT COALESCE(MAX(row_id), 0) FROM facts", [], |row| row.get(0))?)
+    }
+
+    /// A session's facts, oldest first: (row, at_ms, kind, record_json).
+    pub fn session_facts(&self, session_id: Uuid) -> Result<Vec<(i64, i64, String, String)>> {
+        let mut stmt = self.conn.prepare("SELECT row_id, at_ms, kind, record_json FROM facts WHERE session_id = ?1 ORDER BY row_id ASC")?;
+        let rows = stmt.query_map([session_id.to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Every fact at or after `since_ms` (all workspaces), oldest first:
+    /// (row, workspace, session, at_ms, kind, record_json).
+    #[allow(clippy::type_complexity)]
+    pub fn facts_since(&self, since_ms: i64) -> Result<Vec<(i64, String, String, i64, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT row_id, workspace_id, session_id, at_ms, kind, record_json FROM facts WHERE at_ms >= ?1 ORDER BY row_id ASC",
+        )?;
+        let rows = stmt.query_map([since_ms], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
     /// Distinct session ids known to the store, in first-seen order.

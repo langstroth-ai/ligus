@@ -133,8 +133,10 @@ app.kubernetes.io/component: {{ .component }}
 {{- define "ligus.commonEnv" -}}
 - name: LIGUS_DATA_DIR
   value: /var/lib/ligus
+# HOME (agent CLIs' logins and caches) is outside the data dir: agent
+# processes never read the data dir (keys, hive.db, serve.token).
 - name: HOME
-  value: /var/lib/ligus
+  value: /home/ligus
 - name: POD_NAME
   valueFrom:
     fieldRef:

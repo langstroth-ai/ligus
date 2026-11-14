@@ -335,6 +335,32 @@ pub async fn stream_with_tools<E: ToolExecutor>(
     max_tokens: u32,
     tools: Option<ToolSet<'_, E>>,
     on_delta: impl FnMut(String),
+    on_activity: impl FnMut(StreamActivity),
+) -> Result<String, ProviderError> {
+    // A CLI child gets only the key it was configured with in Ligus (never
+    // the parent's env) and its model endpoint on the egress allow-list.
+    let scope = crate::executor::RuntimeScope {
+        provider_key: rt.api_key.clone().filter(|_| rt.provider.is_cli_agent()),
+        model_provider_id: rt.model_provider_id.clone(),
+        model_base_url: rt.model_base_url.clone().filter(|s| !s.is_empty()),
+    };
+    crate::executor::with_runtime(
+        scope,
+        stream_with_tools_inner(rt, system, turns, working_dir, extra_env, max_tokens, tools, on_delta, on_activity),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn stream_with_tools_inner<E: ToolExecutor>(
+    rt: &ResolvedRuntime,
+    system: Option<&str>,
+    turns: &[ChatTurn],
+    working_dir: Option<&str>,
+    extra_env: &[(String, String)],
+    max_tokens: u32,
+    tools: Option<ToolSet<'_, E>>,
+    on_delta: impl FnMut(String),
     mut on_activity: impl FnMut(StreamActivity),
 ) -> Result<String, ProviderError> {
     match rt.provider {
@@ -500,6 +526,7 @@ pub async fn stream_with_tools<E: ToolExecutor>(
             envs.extend(extra_env.iter().cloned());
 
             let result = subprocess::run_with(
+                ModelProviderKind::Pi,
                 &rt.endpoint,
                 &args,
                 working_dir,
@@ -517,6 +544,7 @@ pub async fn stream_with_tools<E: ToolExecutor>(
         ModelProviderKind::Aider => {
             let input = subprocess::render_prompt(system, turns);
             subprocess::run_with(
+                ModelProviderKind::Aider,
                 &rt.endpoint,
                 &rt.args,
                 working_dir,
@@ -586,6 +614,7 @@ pub async fn stream_with_tools<E: ToolExecutor>(
             let input = subprocess::render_prompt(system, turns);
             let program = if rt.endpoint.is_empty() { "hermes" } else { &rt.endpoint };
             subprocess::run_with(
+                ModelProviderKind::Hermes,
                 program,
                 &rt.args,
                 working_dir,

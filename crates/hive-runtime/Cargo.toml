@@ -26,8 +26,18 @@ sha2 = "0.10"
 getrandom = "0.2"
 # Built-in coding tools (search). Both already in the lockfile.
 regex = "1"
+# Exact-match redaction of Ligus's own secrets (already in the tree via regex).
+aho-corasick = "1"
+# Egress proxy allow-list parsing (already in the tree via hive-core).
+url = "2"
 walkdir = "2"
 iroh = { version = "1.0.0-rc.1", optional = true }
+
+# The Linux agent sandbox's pre-exec helper (see `executor::linux`).
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4"
+seccompiler = "0.4"
+libc = "0.2"
 
 [features]
 # P2P is ON by default. The Windows *cross-compile* (cargo-xwin) is the one

@@ -134,6 +134,9 @@ struct AppState {
     /// workspace catalog and are merged at read time.
     base_mcp: Mutex<Vec<McpServerSpec>>,
     managed_mcp: Mutex<Vec<McpServerSpec>>,
+    /// S1: which repo-supplied runtimes and MCP servers this device trusts
+    /// (see `hive_runtime::workspace_trust`). Untrusted ones stay inert.
+    catalog_trust: Mutex<CatalogTrust>,
     /// SQLite path — the background sync task opens its own connection here.
     db_path: PathBuf,
     /// Runtime-editable settings (relay, key, API key, permission mode),
@@ -887,16 +890,29 @@ fn settings_file(data_dir: &std::path::Path) -> PathBuf {
     data_dir.join("settings.json")
 }
 
+/// `settings.json` holds provider keys and OAuth tokens: owner-only (0600)
+/// and written atomically, so a crash never leaves it truncated.
 fn save_settings(data_dir: &std::path::Path, settings: &LiveSettings) {
+    if let Ok(v) = serde_json::to_value(settings) {
+        hive_runtime::secret_redact::register_json_secrets(&v);
+    }
     if let Ok(bytes) = serde_json::to_vec_pretty(settings) {
-        let _ = std::fs::write(settings_file(data_dir), bytes);
+        if let Err(e) = hive_runtime::private_file::write_private_atomic(&settings_file(data_dir), &bytes) {
+            tracing::warn!(target: "settings", "couldn't save settings: {e}");
+        }
     }
 }
 
 /// Load persisted settings, or seed the file from `env_seed` on first launch.
 fn load_or_seed_settings(data_dir: &std::path::Path, env_seed: LiveSettings) -> LiveSettings {
+    hive_runtime::secret_redact::register_env_secrets();
     match std::fs::read_to_string(settings_file(data_dir)) {
-        Ok(text) => serde_json::from_str(&text).unwrap_or(env_seed),
+        Ok(text) => {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                hive_runtime::secret_redact::register_json_secrets(&v);
+            }
+            serde_json::from_str(&text).unwrap_or(env_seed)
+        }
         Err(_) => {
             save_settings(data_dir, &env_seed);
             env_seed
@@ -2127,6 +2143,68 @@ fn save_managed_mcp(workspace_root: &str, servers: &[McpServerSpec]) -> Result<(
     std::fs::write(path, text).map_err(map_err)
 }
 
+/// S1 state for the current workspace: the repo's root id, the digests this
+/// device enabled, and the digests of items from this device's own config
+/// (the data dir), which need no trust.
+#[derive(Debug, Default)]
+struct CatalogTrust {
+    root_id: String,
+    enabled: std::collections::HashSet<String>,
+    implicit: std::collections::HashSet<String>,
+}
+
+impl CatalogTrust {
+    fn compute(workspace_root: &str, data_dir: &Path, base_runtimes: &[RuntimeTarget], base_mcp: &[McpServerSpec]) -> Self {
+        use hive_runtime::workspace_trust as wt;
+        let mut t = CatalogTrust::default();
+        // The base catalog came from the repo when the root's config file
+        // parses (it is read first); otherwise from the data dir.
+        let base_from_repo = !workspace_root.trim().is_empty()
+            && hive_core::compat::config_candidates(&[Path::new(workspace_root)])
+                .first()
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .is_some_and(|text| hive_core::config::load_from_str(&text).is_ok());
+        if !base_from_repo {
+            t.implicit.extend(base_runtimes.iter().map(|r| wt::runtime_item(r, "").digest));
+            t.implicit.extend(base_mcp.iter().map(|s| wt::mcp_item(s, "").digest));
+        }
+        if workspace_root.trim().is_empty() {
+            return t;
+        }
+        t.root_id = wt::root_id(Path::new(workspace_root));
+        if let Ok(store) = wt::TrustStore::open(data_dir) {
+            let mut items = wt::repo_items(Path::new(workspace_root));
+            store.mark(&t.root_id, &mut items);
+            t.enabled.extend(items.into_iter().filter(|i| i.enabled).map(|i| i.digest));
+        }
+        t
+    }
+
+    fn allows(&self, digest: &str) -> bool {
+        self.implicit.contains(digest) || self.enabled.contains(digest)
+    }
+
+    fn retain_runtimes(&self, rts: &mut Vec<RuntimeTarget>) {
+        rts.retain(|r| self.allows(&hive_runtime::workspace_trust::runtime_item(r, "").digest));
+    }
+
+    fn retain_mcp(&self, servers: &mut Vec<McpServerSpec>) {
+        servers.retain(|s| self.allows(&hive_runtime::workspace_trust::mcp_item(s, "").digest));
+    }
+}
+
+/// Trust an item the user just added or edited on this device (it is theirs,
+/// not the repo's).
+fn trust_own_item(state: &AppState, kind: hive_runtime::workspace_trust::ItemKind, digest: String) {
+    let mut t = state.catalog_trust.lock().unwrap();
+    if !t.root_id.is_empty() {
+        if let Ok(store) = hive_runtime::workspace_trust::TrustStore::open(&state.data_dir) {
+            let _ = store.enable(&t.root_id, kind, &digest, "");
+        }
+    }
+    t.enabled.insert(digest);
+}
+
 fn load_workspace_catalogs(
     workspace_root: &str,
     data_dir: &PathBuf,
@@ -2864,6 +2942,8 @@ impl AppState {
         let base = self.base_runtimes.lock().unwrap();
         let managed = self.managed_runtimes.lock().unwrap();
         let mut merged = merge_runtimes(&base, &managed);
+        // Repo-supplied runtimes stay inert until trusted on this device.
+        self.catalog_trust.lock().unwrap().retain_runtimes(&mut merged);
         apply_remote_file_tools_optins(&mut merged, &self.settings.lock().unwrap());
         merged
     }
@@ -2876,6 +2956,9 @@ impl AppState {
         let base = self.base_mcp.lock().unwrap();
         let managed = self.managed_mcp.lock().unwrap();
         let mut merged = merge_mcp_servers(&base, &managed);
+        // Repo-supplied MCP servers stay inert (never offered, never spawned)
+        // until trusted on this device.
+        self.catalog_trust.lock().unwrap().retain_mcp(&mut merged);
         apply_mcp_auth(&mut merged, &self.settings.lock().unwrap());
         merged
     }
@@ -2938,6 +3021,8 @@ impl AppState {
                 save_settings(&self.data_dir, &settings);
             }
         }
+        *self.catalog_trust.lock().unwrap() =
+            CatalogTrust::compute(workspace_root, &self.data_dir, &self.base_runtimes.lock().unwrap(), &self.base_mcp.lock().unwrap());
         *self.managed_mcp.lock().unwrap() = managed_mcp;
     }
 
@@ -3075,8 +3160,14 @@ impl AppState {
             } else {
                 cli_permission_args(provider, &permission_mode)
             };
-            // Per-provider key → legacy global key → env.
-            let api_key = provider_key.or(settings_key).or_else(|| api_key_for(provider));
+            // Per-provider key → legacy global key → env, for Ligus's own
+            // in-process API calls. A CLI agent child gets only the key the
+            // user configured for that runtime in Ligus, never the parent env.
+            let api_key = if provider.is_cli_agent() {
+                provider_key
+            } else {
+                provider_key.or(settings_key).or_else(|| api_key_for(provider))
+            };
             // A hosted-API provider with no key would dispatch and fail (401) — the
             // classic "fresh install, no API key, @hive won't answer" case, since
             // the compiled default runtime is `anthropic`. Fall back to the
@@ -4841,6 +4932,66 @@ fn parse_mcp_manifest(text: &str, fallback_id: &str) -> Result<Vec<McpServerSpec
     Ok(vec![parse_mcp_transport(id, &value)?])
 }
 
+/// S1: the repo-supplied runtimes and MCP servers of the open workspace, each
+/// with its exact command line, source file and whether this device trusts
+/// it. Untrusted items are inert.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceTrustDto {
+    root: String,
+    items: Vec<hive_runtime::workspace_trust::TrustItem>,
+}
+
+fn workspace_trust_dto(state: &AppState) -> Result<WorkspaceTrustDto, String> {
+    use hive_runtime::workspace_trust as wt;
+    let root = state.workspace_root.lock().unwrap().clone();
+    if root.trim().is_empty() {
+        return Ok(WorkspaceTrustDto { root, items: Vec::new() });
+    }
+    let store = wt::TrustStore::open(&state.data_dir).map_err(map_err)?;
+    let mut items = wt::repo_items(Path::new(&root));
+    store.mark(&wt::root_id(Path::new(&root)), &mut items);
+    Ok(WorkspaceTrustDto { root, items })
+}
+
+#[tauri::command]
+fn get_workspace_trust(state: State<AppState>) -> Result<WorkspaceTrustDto, String> {
+    workspace_trust_dto(&state)
+}
+
+/// Enable or disable one repo item (by digest) on this device.
+#[tauri::command]
+fn set_workspace_trust(state: State<AppState>, digest: String, enabled: bool) -> Result<WorkspaceTrustDto, String> {
+    use hive_runtime::workspace_trust as wt;
+    let root = state.workspace_root.lock().unwrap().clone();
+    let item = wt::repo_items(Path::new(&root)).into_iter().find(|i| i.digest == digest).ok_or("no such item in this workspace")?;
+    let store = wt::TrustStore::open(&state.data_dir).map_err(map_err)?;
+    let rid = wt::root_id(Path::new(&root));
+    if enabled {
+        store.enable(&rid, item.kind, &digest, &state.service.lock().unwrap().author().id).map_err(map_err)?;
+    } else {
+        store.disable(&rid, item.kind, &digest).map_err(map_err)?;
+    }
+    state.reload_workspace_catalogs(&root);
+    workspace_trust_dto(&state)
+}
+
+/// "Trust this workspace": enable every item the repo ships right now.
+/// Anything it changes or adds later needs a new decision.
+#[tauri::command]
+fn trust_workspace(state: State<AppState>) -> Result<WorkspaceTrustDto, String> {
+    use hive_runtime::workspace_trust as wt;
+    let root = state.workspace_root.lock().unwrap().clone();
+    let store = wt::TrustStore::open(&state.data_dir).map_err(map_err)?;
+    let rid = wt::root_id(Path::new(&root));
+    let me = state.service.lock().unwrap().author().id.clone();
+    for item in wt::repo_items(Path::new(&root)) {
+        store.enable(&rid, item.kind, &item.digest, &me).map_err(map_err)?;
+    }
+    state.reload_workspace_catalogs(&root);
+    workspace_trust_dto(&state)
+}
+
 #[tauri::command]
 async fn install_mcp_server(state: State<'_, AppState>, source: String) -> Result<(), String> {
     let url = resolve_manifest_url(&source).map_err(map_err)?;
@@ -4850,6 +5001,7 @@ async fn install_mcp_server(state: State<'_, AppState>, source: String) -> Resul
     let root = state.workspace_root.lock().unwrap().clone();
     for server in &parsed {
         upsert_mcp_server_in_config(&state.data_dir, &root, server)?;
+        trust_own_item(&state, hive_runtime::workspace_trust::ItemKind::McpServer, hive_runtime::workspace_trust::mcp_item(server, "").digest);
     }
     let servers = {
         let mut managed = state.managed_mcp.lock().unwrap();
@@ -4938,6 +5090,7 @@ fn add_remote_mcp_server(
     };
     let root = state.workspace_root.lock().unwrap().clone();
     upsert_mcp_server_in_config(&state.data_dir, &root, &server)?;
+    trust_own_item(&state, hive_runtime::workspace_trust::ItemKind::McpServer, hive_runtime::workspace_trust::mcp_item(&server, "").digest);
     let servers = {
         let mut managed = state.managed_mcp.lock().unwrap();
         if let Some(existing) = managed.iter_mut().find(|s| s.id == id) {
@@ -7839,10 +7992,31 @@ async fn run_prepared_turn_inner(
         return Err(reason.clone());
     }
 
+    // H1: the author-role gate, as on every host. The floor is Admin for a
+    // turn that can write and Contributor for a read-only one
+    // (LIGUS_MCP_MIN_ROLE overrides); this device's own user always clears it.
+    // Below it an HTTP model gets no tools, a CLI runs read-only, and a CLI
+    // with no read-only tier is refused.
+    let gate_plan = {
+        let trigger = reply_to.and_then(|id| session.messages.iter().find(|m| m.id == id));
+        let me = state.service.lock().unwrap().author().id.clone();
+        let author_role = trigger.and_then(|m| m.actor_identity.as_ref()).map(|a| {
+            if a.id == me { hive_core::WorkspaceRole::Owner } else { session.role_of(&a.id) }
+        });
+        let mut args = responder.runtime.args.clone();
+        hive_runtime::author_gate::gate_turn(responder.runtime.provider, &mut args, author_role)
+    };
+    if let hive_runtime::author_gate::GatePlan::Refuse(reason) = &gate_plan {
+        let mut svc = state.service.lock().unwrap();
+        let _ = svc.post_system_note(session_id, workspace_id, format!("A {:?} turn was not run: {reason}", responder.runtime.provider));
+        return Err(reason.clone());
+    }
+    let tools_allowed = gate_plan.allows_tools();
+
     // If MCP tools are enabled and the responder runs on Anthropic, take the
     // (non-streaming) agentic tool loop instead of plain streaming. On any MCP
     // failure we fall through to streaming.
-    if responder.runtime.provider == ModelProviderKind::Anthropic {
+    if tools_allowed && responder.runtime.provider == ModelProviderKind::Anthropic {
         if let Some(outcome) =
             try_tool_loop(app, state, session_id, workspace_id, responder, &system, &turns, reply_to, &envelope.egress)
                 .await?
@@ -7859,7 +8033,7 @@ async fn run_prepared_turn_inner(
     // loop existed. Native Ollama is further gated on its capability probe in
     // the dispatcher; an OpenAI-wire server that rejects tools falls back to
     // plain chat there.
-    let mcp_tools = if responder.runtime.runs_agent_tools() {
+    let mcp_tools = if tools_allowed && responder.runtime.runs_agent_tools() {
         mcp_tool_set(state, &envelope.egress).await
     } else {
         None
@@ -7872,7 +8046,7 @@ async fn run_prepared_turn_inner(
         // `run_command` is a shell: off whenever the envelope closes egress.
         (s.builtin_tools, s.builtin_write_in_place, s.builtin_run_command && enforcement.allow_run_command)
     };
-    let builtin_wanted = wants_builtin_tools(&responder.runtime, builtin_on);
+    let builtin_wanted = tools_allowed && wants_builtin_tools(&responder.runtime, builtin_on);
 
     // Git commit attribution: credit the human who drove this turn as the
     // commit author (+ other thread participants as co-authors), so commits a
@@ -7915,14 +8089,12 @@ async fn run_prepared_turn_inner(
     // worktree is removed. Read-only claude turns, API/MCP turns, and non-git
     // roots run in place (no worktree). Isolating from HEAD means an isolated
     // turn starts from the last commit, not the main tree's uncommitted WIP.
-    let write_capable = match responder.runtime.provider {
-        // Read-only at the default tier; any raised tier may write.
-        p if p.follows_permission_mode() => {
-            state.settings.lock().unwrap().claude_permission_mode != "default"
-        }
-        ModelProviderKind::Pi | ModelProviderKind::Aider | ModelProviderKind::Codex | ModelProviderKind::Hermes => true,
-        _ => false,
-    };
+    let write_capable = gate_plan.allows_writes()
+        && match responder.runtime.provider {
+            // Read-only at the default tier; any raised tier may write.
+            p if p.follows_permission_mode() => state.settings.lock().unwrap().claude_permission_mode != "default",
+            p => hive_runtime::author_gate::always_writes(p),
+        };
     // Worktrees are cut from the workspace's own checkout, not from
     // `workspace_root`, which follows the *active* chat's base worktree.
     let repo_root = turn_repo_root(&state.workspace_repo_root(), &workspace_root);
@@ -8021,7 +8193,8 @@ async fn run_prepared_turn_inner(
             lazy_worktree.is_some(),
             builtin_write_in_place,
             builtin_run_command,
-        );
+        )
+        .with_protected_dirs(&envelope.protected_dirs);
         let made = match &lazy_worktree {
             Some(lazy) => hive_runtime::BuiltinTools::lazy(policy, lazy.clone(), builtin_write_in_place),
             None => hive_runtime::BuiltinTools::new(policy),
@@ -8117,10 +8290,16 @@ async fn run_prepared_turn_inner(
     // network off) appended for subprocess agents.
     let enforced_runtime = {
         let mut rt = responder.runtime.clone();
+        // Below the floor: the CLI's read-only tier (Refuse returned above).
+        let _ = hive_runtime::author_gate::apply(&gate_plan, rt.provider, &mut rt.args);
         rt.args.extend(enforcement.extra_args.iter().cloned());
         rt
     };
-    let stream_fut = dispatch::stream_with_tools(
+    // Every child this turn spawns (the CLI, stdio MCP servers, run_command)
+    // runs under this policy in the host's OS sandbox.
+    let sandbox_policy = crate::guards::turn_sandbox_policy(state, &envelope, &gate_plan, worktree.is_some() || lazy_worktree.is_some());
+    let sandbox_denials = sandbox_policy.denials.clone();
+    let stream_fut = hive_runtime::executor::with_turn(sandbox_policy, dispatch::stream_with_tools(
         &enforced_runtime,
         Some(&system),
         &turns,
@@ -8199,7 +8378,7 @@ async fn run_prepared_turn_inner(
             };
             let _ = app.emit(ChatActivityEvent::EVENT, ev);
         },
-    );
+    ));
     let result = tokio::select! {
         biased;
         _ = stop.notified() => {
@@ -8214,6 +8393,7 @@ async fn run_prepared_turn_inner(
             ))),
         },
     };
+    crate::guards::record_sandbox_egress_denials(state, workspace_id, session_id, sandbox_denials.lock().map(|d| d.len()).unwrap_or(0));
     // Patch-leaving: what the tool loop measurably achieved, as signals.
     if let Some(tools) = &http_tools {
         crate::guards::record_progress(state, workspace_id, session_id, tools.progress());
@@ -9796,10 +9976,9 @@ async fn probe_provider(
     // A key passed in wins (test-before-save, e.g. from onboarding); otherwise
     // the stored precedence: per-provider → legacy global → env.
     let typed_key = key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
-    let api_key = typed_key
-        .or_else(|| provider_keys.get(cfg).cloned().filter(|s| !s.is_empty()))
-        .or(settings_key)
-        .or_else(|| api_key_for(provider));
+    let configured = typed_key.or_else(|| provider_keys.get(cfg).cloned().filter(|s| !s.is_empty()));
+    // A CLI agent child gets only a key configured in Ligus (see resolve).
+    let api_key = if provider.is_cli_agent() { configured } else { configured.or(settings_key).or_else(|| api_key_for(provider)) };
     // A passed base URL wins (test-before-save from onboarding); else the stored one.
     let base = base_url
         .map(|b| b.trim().to_string())
@@ -10071,6 +10250,7 @@ fn add_runtime(
     }
     let root = state.workspace_root.lock().unwrap().clone();
     upsert_runtime_in_config(&state.data_dir, &root, &runtime)?;
+    trust_own_item(&state, hive_runtime::workspace_trust::ItemKind::Runtime, hive_runtime::workspace_trust::runtime_item(&runtime, "").digest);
     let runtimes = {
         let mut managed = state.managed_runtimes.lock().unwrap();
         // Upsert by id: replace an existing entry (edit) or append (add). The
@@ -10724,8 +10904,12 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         }
     }
 
+    // Agent processes never read this device's data dir (keys, settings,
+    // the database).
+    hive_runtime::executor::configure_host(&data_dir, &[], &[]);
     let (base_runtimes, default_runtime_id, base_mcp, managed_runtimes, managed_mcp) =
         load_workspace_catalogs(&workspace_root, &data_dir);
+    let catalog_trust = CatalogTrust::compute(&workspace_root, &data_dir, &base_runtimes, &base_mcp);
 
     let fallback_model =
         hive_core::compat::var("LIGUS_ANTHROPIC_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
@@ -10932,6 +11116,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         summary_backoff: Mutex::new(HashMap::new()),
         vault_cache: Mutex::new(HashMap::new()),
         retriever: hive_runtime::retrieval::Retriever::new(),
+        catalog_trust: Mutex::new(catalog_trust),
         base_mcp: Mutex::new(base_mcp),
         managed_mcp: Mutex::new(managed_mcp),
         db_path,
@@ -14746,6 +14931,9 @@ pub fn run() {
             set_mcp_bearer_token,
             linear_issues_context,
             install_mcp_server,
+            get_workspace_trust,
+            set_workspace_trust,
+            trust_workspace,
             remove_mcp_server,
             sync_status,
             probe_relay,

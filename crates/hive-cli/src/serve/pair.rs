@@ -22,6 +22,7 @@ pub fn load_or_create_token(path: &Path) -> Result<String> {
             if t.len() < 32 {
                 bail!("{} holds a token shorter than 32 characters; delete it to generate a new one", path.display());
             }
+            hive_runtime::secret_redact::register(&t);
             return Ok(t);
         }
     }
@@ -46,6 +47,7 @@ pub fn load_or_create_token(path: &Path) -> Result<String> {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     }
+    hive_runtime::secret_redact::register(&token);
     Ok(token)
 }
 

@@ -40,6 +40,13 @@ pub struct PhoneRecord {
     pub push_seq: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_seen: Option<u64>,
+    /// The owner's own phone (P0.6 interim): set only by the desktop owner
+    /// over a signed pairing confirmation. While serve acts for the owner
+    /// (delegated), only an owner phone may vote, and its votes are recorded
+    /// as delegated. No path sets it yet, so a delegated serve refuses every
+    /// phone vote until passkey presence lands.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub owner_phone: bool,
 }
 
 fn default_true() -> bool {

@@ -17,7 +17,6 @@ use std::process::Stdio;
 
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::Command;
 
 use super::anthropic::{ChatTurn, ProviderError};
 use super::dispatch::StreamActivity;
@@ -236,25 +235,21 @@ pub async fn stream_reply(
     }
     args.extend(extra_args.iter().cloned());
 
-    let mut cmd = Command::new(program);
-    for k in hive_core::process_util::ligus_secret_env_names() {
-        cmd.env_remove(k);
-    }
-    cmd.args(&args)
-        .stdin(Stdio::piped())
+    // Confined to the turn's sandbox plan (see `executor`): its worktree,
+    // the egress proxy, an allow-listed env (extra_env carries GIT_AUTHOR_*
+    // so commits are credited to the requester). With no working dir it runs
+    // in the turn's own scratch dir, never the app's cwd.
+    let spec = crate::executor::SpawnSpec::new(crate::executor::Purpose::Agent(hive_core::ModelProviderKind::ClaudeCode), program, &args)
+        .cwd(working_dir.map(std::path::Path::new))
+        .env(extra_env);
+    let (mut cmd, _sandbox) = crate::executor::tokio_command(spec).map_err(|e| ProviderError::Subprocess(format!("sandbox {program}: {e}")))?;
+    cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         // Kill the CLI if this future is dropped (e.g. the user hits Stop and the
         // caller's `select!` aborts the turn) — otherwise the subprocess would
         // keep generating, orphaned, after we stopped reading it.
         .kill_on_drop(true);
-    if let Some(dir) = working_dir {
-        cmd.current_dir(dir);
-    }
-    // e.g. GIT_AUTHOR_* so commits the agent makes are credited to the requester.
-    for (k, v) in extra_env {
-        cmd.env(k, v);
-    }
     super::subprocess::suppress_console_window(&mut cmd);
 
     tracing::debug!(target: "claude", %program, ?args, ?working_dir, "spawning claude");
@@ -383,10 +378,60 @@ mod tests {
         std::fs::write(&fake, format!("#!/bin/sh\nenv > '{}'\n", out.display())).unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::env::set_var("LIGUS_SCRUBTEST_WORKSPACE_KEY", "e2ee-passphrase-value");
-        let _ = stream_reply(fake.to_str().unwrap(), &[], None, &[], None, &[], |_| {}, |_| {}).await;
+        std::env::set_var("ANTHROPIC_API_KEY", "sk-ant-parent-env-key");
+        // A write tier, so the (sandboxed) fake may write its env file into
+        // its working dir.
+        let args = ["--permission-mode".to_string(), "acceptEdits".to_string()];
+        let _ = stream_reply(fake.to_str().unwrap(), &args, dir.path().to_str(), &[], None, &[], |_| {}, |_| {}).await;
         std::env::remove_var("LIGUS_SCRUBTEST_WORKSPACE_KEY");
+        std::env::remove_var("ANTHROPIC_API_KEY");
         let env = std::fs::read_to_string(&out).unwrap();
         assert!(!env.contains("e2ee-passphrase-value"), "workspace key reached claude");
+        assert!(!env.contains("sk-ant-parent-env-key"), "the parent's provider key reached claude");
+    }
+
+    /// End to end through the real provider path and this host's sandbox: a
+    /// stub `claude` that tries to read Ligus's keys, settings and serve
+    /// token, write outside its worktree and reach the network gets none of
+    /// it, while it still writes its own worktree.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn claude_turn_cannot_read_ligus_data_or_escape() {
+        use std::os::unix::fs::PermissionsExt;
+        if crate::executor::default_executor().kind() == crate::executor::ExecutorKind::Unconfined {
+            eprintln!("skipped: no agent sandbox on this host");
+            return;
+        }
+        let root = crate::executor::canonical(&tempfile::tempdir().unwrap().keep());
+        let data = root.join("data");
+        std::fs::create_dir_all(data.join("keys")).unwrap();
+        std::fs::write(data.join("keys/device.seed"), "SEED-SECRET").unwrap();
+        std::fs::write(data.join("settings.json"), "SETTINGS-SECRET").unwrap();
+        std::fs::write(data.join("serve.token"), "SERVE-TOKEN-SECRET").unwrap();
+        crate::executor::configure_host(&data, &[data.join("serve.token")], &[]);
+        let wt = root.join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        let fake = root.join("claude");
+        let script = format!(
+            "#!/bin/sh\n\
+             cat '{d}/keys/device.seed' '{d}/settings.json' '{d}/serve.token' > report.txt 2>&1\n\
+             echo escaped > '{r}/escape.txt' 2>> report.txt\n\
+             (curl -s -m 3 --noproxy '*' https://example.com || echo no-network) >> report.txt 2>&1\n\
+             echo done >> report.txt\n",
+            d = data.display(),
+            r = root.display()
+        );
+        std::fs::write(&fake, script).unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let args = ["--permission-mode".to_string(), "acceptEdits".to_string()];
+        let _ = stream_reply(fake.to_str().unwrap(), &args, wt.to_str(), &[], None, &[], |_| {}, |_| {}).await;
+        let report = std::fs::read_to_string(wt.join("report.txt")).expect("the stub ran and wrote its worktree");
+        assert!(report.contains("done"), "{report}");
+        for secret in ["SEED-SECRET", "SETTINGS-SECRET", "SERVE-TOKEN-SECRET"] {
+            assert!(!report.contains(secret), "{secret} reached the agent: {report}");
+        }
+        assert!(!root.join("escape.txt").exists(), "wrote outside its worktree");
+        assert!(!report.contains("<html"), "reached the network directly: {report}");
     }
 
     #[test]

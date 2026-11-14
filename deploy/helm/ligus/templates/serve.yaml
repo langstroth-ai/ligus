@@ -170,6 +170,11 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/ligus
+            # Same volume, its own subdirectory: CLI logins persist, outside
+            # the data dir agents can't read.
+            - name: data
+              mountPath: /home/ligus
+              subPath: home
             - name: tmp
               mountPath: /tmp
             {{- if or $v.mcpToml $v.dashboardToml }}

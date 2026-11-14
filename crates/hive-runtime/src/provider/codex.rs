@@ -19,7 +19,6 @@ use std::process::Stdio;
 
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
-use tokio::process::Command;
 
 use super::anthropic::{ChatTurn, ProviderError};
 
@@ -56,7 +55,10 @@ pub async fn stream_reply(
         "--json".into(),
         "--skip-git-repo-check".into(),
         "--sandbox".into(),
-        "workspace-write".into(),
+        // Inside Ligus's own OS sandbox Codex's Seatbelt/bwrap can't nest
+        // (sandbox_apply fails), so Ligus's sandbox replaces it: writes only
+        // in the worktree, network only through the turn's egress proxy.
+        if crate::executor::os_confined() { "danger-full-access".into() } else { "workspace-write".into() },
         "--color".into(),
         "never".into(),
     ];
@@ -67,24 +69,13 @@ pub async fn stream_reply(
     args.extend(extra_args.iter().cloned());
     args.push(prompt);
 
-    let mut cmd = Command::new(program);
-    for k in hive_core::process_util::ligus_secret_env_names() {
-        cmd.env_remove(k);
-    }
-    cmd.args(&args)
-        // Null stdin: the prompt is a positional arg, so codex must not sit
-        // "Reading additional input from stdin…".
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        // Kill codex if this future is dropped (the user hits Stop).
-        .kill_on_drop(true);
-    if let Some(dir) = working_dir {
-        cmd.current_dir(dir);
-    }
-    for (k, v) in extra_env {
-        cmd.env(k, v);
-    }
+    let spec = crate::executor::SpawnSpec::new(crate::executor::Purpose::Agent(hive_core::ModelProviderKind::Codex), program, &args)
+        .cwd(working_dir.map(std::path::Path::new))
+        .env(extra_env);
+    let (mut cmd, _sandbox) = crate::executor::tokio_command(spec).map_err(|e| ProviderError::Subprocess(format!("sandbox {program}: {e}")))?;
+    // Null stdin: the prompt is a positional arg, so codex must not sit
+    // "Reading additional input from stdin…". Killed if this future drops.
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     super::subprocess::suppress_console_window(&mut cmd);
 
     let mut child = cmd

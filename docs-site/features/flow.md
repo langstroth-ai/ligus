@@ -10,9 +10,13 @@ off, or watch in shadow mode.
 
 Everything lives in the **Flow** pane of the [right rail](right-rail.md)
 (Board, Queue, Marks, Routing, Roster, Zones, Home) and in
-**Settings → Flow**. Flow settings are per device. Everything Flow records
-rides the workspace's end-to-end encrypted event log like messages do; an
-older Ligus ignores it.
+**Settings → Flow**. Flow settings are per device. Coordination records
+(routing decisions, hand-off cards, marks, zones, profiles, the beacon,
+recruits) ride the workspace's end-to-end encrypted event log like messages
+do. Per-turn measurements (turn tags, touched-file keys, progress, waits,
+route cool-downs) are facts on the device that ran the turn; other devices
+see each host's bounded daily outcome summary per agent instead, and score
+from that. See [Telemetry stays on your device](../concepts/security.md#facts).
 
 ## Hand-off cards and context parcels
 
@@ -91,6 +95,8 @@ server) and after any other failure that repeats within ten minutes. A
 provider-wide failure pauses every agent on that runtime. The cool-down is 15
 minutes by default (0 turns it off). Stopped routes are listed in Flow →
 Routing with a **Clear** button; an `@mention` still reaches a stopped agent.
+A cool-down is a fact on the device that saw the failure, so other devices
+keep routing to the agent until they see failures themselves.
 
 ## Backpressure: the review queue
 

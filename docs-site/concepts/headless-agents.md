@@ -181,11 +181,13 @@ in the file). With no config it runs tool-free, exactly as before. See the
 [CLI README — MCP tools for headless agents](https://github.com/ligus-ai/ligus/blob/main/crates/hive-cli/README.md#mcp-tools-for-headless-agents).
 
 **Tools are gated on the requester's role.** A synced message only drives the
-worker's MCP tools if its author holds at least `LIGUS_MCP_MIN_ROLE`
-(`viewer`|`contributor`|`admin`|`owner`, default `contributor`). Below that bar
-the agent still replies — it just runs **tool-free**, so a Viewer can't provoke
-a write to Linear or GitHub through a headless agent. Raise the bar with
-`LIGUS_MCP_MIN_ROLE=admin`. See the
+worker's tools if its author holds at least `LIGUS_MCP_MIN_ROLE`
+(`viewer`|`contributor`|`admin`|`owner`; default `admin` when the worker's tier
+can write, `contributor` when it is read-only). Below that bar the agent still
+replies, tool-free or at the CLI's read-only tier (Codex, aider, pi and Hermes
+are refused), so a Viewer can't provoke a write to Linear or GitHub through a
+headless agent. The same gate applies to `ligus agent` and the desktop. Every
+agent process also runs in the [OS sandbox](security.md#os-sandbox). See the
 [CLI README — requester-role gate](https://github.com/ligus-ai/ligus/blob/main/crates/hive-cli/README.md#requester-role-gate-ligus_mcp_min_role).
 
 Do **not** try to substitute a network filesystem (SSHFS/NFS) for the relay —

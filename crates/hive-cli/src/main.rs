@@ -788,6 +788,7 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
             }
         }
     }
+    hive_runtime::author_gate::warn_if_lowered(hive_runtime::author_gate::turn_writes(rt.provider, &rt.args));
     println!("agent @{name} online ({rt_label}); replying to @primary / un-mentioned turns. Ctrl-C to stop.");
     let host_label = env_opt("HOSTNAME").unwrap_or_else(|| "this worker".into());
     let system = format!(
@@ -830,22 +831,37 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
                 let mut turns = turns_for(&worker::through_trigger(&s, last.id), None, &name);
                 materialize_turns(cfg, &mut turns).await;
                 print!("↳ @{name} replying in {} … ", s.id);
-                // H1 gate: only execute MCP tools when the triggering author holds
-                // ≥ LIGUS_MCP_MIN_ROLE (default Contributor). Unresolved author →
-                // fail closed. Under-privileged requesters still get a tool-free
-                // reply, but cannot drive tools on this worker's key.
+                // H1 gate, the same as the worker's: at or above this host's
+                // floor (Admin when the runtime can write, Contributor when
+                // read-only; LIGUS_MCP_MIN_ROLE overrides) the turn runs as
+                // configured. Below it an HTTP model gets no tools, a CLI runs
+                // at its read-only tier, and one with none is refused.
+                // Unresolved author → fail closed.
                 let author_role = last.actor_identity.as_ref().map(|a| s.role_of(&a.id));
-                let min_role = reply::mcp_min_role();
-                let allow_mcp = reply::mcp_allowed_for(author_role, min_role);
+                let mut turn_rt = rt.clone();
+                let plan = hive_runtime::author_gate::gate_turn(turn_rt.provider, &mut turn_rt.args, author_role);
+                let allow_mcp = plan.allows_tools();
+                if let hive_runtime::author_gate::GatePlan::Refuse(reason) = &plan {
+                    println!("refused: {reason}");
+                    continue;
+                }
                 if !allow_mcp {
-                    eprintln!(
-                        "withholding MCP tools for message {} — author role {:?} below minimum {:?}",
-                        last.id, author_role, min_role
-                    );
+                    eprintln!("gating message {} — author role {author_role:?} below this host's floor", last.id);
                 }
                 // MCP tools when LIGUS_MCP_CONFIG provisions them and the gate allows,
                 // else a plain stream.
-                let reply = reply::generate_reply(&rt, &system, &turns, allow_mcp, None).await?;
+                // The CLI child runs in this host's OS sandbox, in a fresh
+                // scratch dir (never this process's cwd).
+                let envelope = hive_core::sandbox::envelope_for_session(&s);
+                let enforcement = hive_runtime::sandbox::enforce(turn_rt.provider, &envelope, &Vec::new());
+                if let Some(reason) = enforcement.refuse {
+                    println!("refused: {reason}");
+                    continue;
+                }
+                turn_rt.args.extend(enforcement.extra_args);
+                let allow_mcp = allow_mcp && enforcement.allow_run_command;
+                let sandbox = hive_runtime::executor::TurnPolicy::new(hive_runtime::executor::HostKind::Agent, envelope, plan.clone());
+                let reply = hive_runtime::executor::with_turn(sandbox, reply::generate_reply(&turn_rt, &system, &turns, allow_mcp, None)).await?;
                 let mid = svc.begin_assistant_message(s.id, s.workspace_id, name.clone(), rt_label.clone(), None, Some(last.id))?;
                 svc.complete_assistant_message(s.id, s.workspace_id, mid, reply)?;
                 seen.insert(mid);
@@ -857,6 +873,52 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
             let _ = sync_once(cfg).await;
         }
         tokio::time::sleep(Duration::from_secs(3)).await;
+    }
+}
+
+/// `ligus trust list | enable <digest> | enable-all`: the S1 decision for a
+/// repository's runtimes and MCP servers on this device (the same table the
+/// desktop's *Trust this workspace* writes, in this host's data dir).
+fn cmd_trust(cfg: &Config, repo: &std::path::Path, action: Option<&str>, digest: Option<&str>) -> Result<()> {
+    use hive_runtime::workspace_trust as wt;
+    let store = wt::TrustStore::open(&cfg.data_dir)?;
+    let rid = wt::root_id(repo);
+    let mut items = wt::repo_items(repo);
+    store.mark(&rid, &mut items);
+    match action {
+        Some("list") | None => {
+            if items.is_empty() {
+                println!("{} ships no runtimes or MCP servers", repo.display());
+            }
+            for i in &items {
+                println!(
+                    "{}  {:<9} {:<20} {}  ({})  {}",
+                    &i.digest[..16],
+                    i.kind.as_str(),
+                    i.id,
+                    if i.enabled { "trusted" } else { "INERT" },
+                    i.source,
+                    i.command_line
+                );
+            }
+            Ok(())
+        }
+        Some("enable") => {
+            let d = digest.ok_or_else(|| anyhow!("usage: ligus trust enable <digest> (from `ligus trust list`)"))?;
+            let matching: Vec<&wt::TrustItem> = items.iter().filter(|i| i.digest.starts_with(d)).collect();
+            let [item] = matching.as_slice() else { bail!("{} items match {d}: give more of the digest", matching.len()) };
+            store.enable(&rid, item.kind, &item.digest, "ligus-cli")?;
+            println!("trusted {} {}: {}", item.kind.as_str(), item.id, item.command_line);
+            Ok(())
+        }
+        Some("enable-all") => {
+            for i in &items {
+                store.enable(&rid, i.kind, &i.digest, "ligus-cli")?;
+                println!("trusted {} {}: {}", i.kind.as_str(), i.id, i.command_line);
+            }
+            Ok(())
+        }
+        Some(other) => bail!("unknown `ligus trust {other}`: use list|enable|enable-all"),
     }
 }
 
@@ -1165,6 +1227,8 @@ fn usage() -> ! {
          ligus remote enable --relay URL [--reg-token T] | status | disable | reset\n                                       \
          phone remote access through a relay tunnel (off by default)\n  \
          ligus phones list | revoke <pid|name> [--keep-token]   phones paired over the relay\n  \
+         ligus trust list | enable <digest> | enable-all [--repo PATH]   repo-supplied runtimes and MCP servers this device runs\n  \
+         ligus facts export --jsonl [--since MS]   this device's measurement facts (ligus.facts.v1), for external observability tools\n  \
          ligus dashboard check [--file PATH]   validate dashboard.toml and evaluate it once\n  \
          ligus dashboard default         print the generated default dashboard as TOML\n  \
          ligus dashboard metrics         list the built-in hive metrics panels can show\n\n\
@@ -1194,6 +1258,9 @@ fn main() {
 }
 
 fn run() -> Result<()> {
+    // Inside the Linux agent sandbox this process is only the pre-exec helper.
+    #[cfg(target_os = "linux")]
+    hive_runtime::executor::linux::maybe_run_helper();
     // Before any thread starts: the only time Linux lets us read it.
     serve::dashboard_hive::init_local_offset();
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -1202,6 +1269,12 @@ fn run() -> Result<()> {
         return Ok(());
     }
     let cfg = config();
+    // Agent processes this host spawns never read its data dir (keys,
+    // database, serve token); checked-out repos under it stay readable.
+    hive_runtime::executor::configure_host(&cfg.data_dir, &[], &[repos::repos_dir(&cfg.data_dir)]);
+    // Ligus's own secret env values are masked wherever agent output is
+    // logged (relay tokens, the workspace key, provider keys passed in).
+    hive_runtime::secret_redact::register_env_secrets();
     let cmd = args.first().map(String::as_str).unwrap_or("");
     let rest = &args[args.len().min(1)..];
     // `hive <cmd> --help` prints usage instead of running the command (a bare
@@ -1237,6 +1310,8 @@ fn run() -> Result<()> {
         "--reg-token",
         "--remote-relay",
         "--file",
+        "--repo",
+        "--since",
     ];
     let mut positional: Vec<&String> = Vec::new();
     let mut skip = false;
@@ -1418,6 +1493,20 @@ fn run() -> Result<()> {
                 Some("reset") => cli::remote_reset(&cfg.data_dir),
                 Some(other) => bail!("unknown `ligus remote {other}`: use enable|status|disable|reset"),
             }
+        }
+        "facts" => {
+            if positional.first().map(|s| s.as_str()) != Some("export") || !has("--jsonl") {
+                bail!("usage: ligus facts export --jsonl [--since <unix ms>]");
+            }
+            let since: i64 = flag_val("--since").map(|v| v.parse()).transpose().map_err(|_| anyhow!("--since takes unix milliseconds"))?.unwrap_or(0);
+            for line in open_service(&cfg)?.export_facts(since)? {
+                println!("{line}");
+            }
+            Ok(())
+        }
+        "trust" => {
+            let repo = flag_val("--repo").map(PathBuf::from).map(Ok).unwrap_or_else(std::env::current_dir)?;
+            cmd_trust(&cfg, &repo, positional.first().map(|s| s.as_str()), positional.get(1).map(|s| s.as_str()))
         }
         "phones" => {
             use serve::tunnel::cli;

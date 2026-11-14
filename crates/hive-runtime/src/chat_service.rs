@@ -25,6 +25,7 @@ use hive_core::authorization::{evaluate as authorize, requires_authz};
 use crate::event_store::{EventStore, EventStoreError};
 use crate::provider::ChatTurn;
 
+mod facts;
 mod guards;
 
 #[derive(Debug, thiserror::Error)]
@@ -1436,6 +1437,11 @@ impl ChatService {
         workspace_id: Uuid,
         record: hive_core::flow::FlowRecord,
     ) -> Result<()> {
+        // P0.5: measurements are device-local facts, never log events.
+        if record.is_measurement() {
+            let target = if record.is_config() { workspace_config_session_id(workspace_id) } else { session_id };
+            return self.record_fact(target, workspace_id, &record);
+        }
         let target = if record.is_config() { self.ensure_workspace_config(workspace_id)? } else { session_id };
         self.append_signed(target, workspace_id, SessionEvent::FlowRecorded { record })?;
         Ok(())
@@ -1444,10 +1450,16 @@ impl ChatService {
     /// The workspace's flow configuration (marks, zones, route stops, agent
     /// profiles, home beacon), folded from the config log.
     pub fn flow_config(&self, workspace_id: Uuid) -> Result<hive_core::flow::FlowState> {
-        Ok(self
-            .load(workspace_config_session_id(workspace_id))?
-            .map(|s| s.flow)
-            .unwrap_or_default())
+        let config_id = workspace_config_session_id(workspace_id);
+        Ok(match self.load(config_id)? {
+            Some(s) => s.flow,
+            // No config log yet: this device's facts (route stops) still apply.
+            None => {
+                let mut flow = hive_core::flow::FlowState::default();
+                self.overlay_facts_on(config_id, &mut flow);
+                flow
+            }
+        })
     }
 
     /// Register (or replace by id) a host. The id is a machine's device id.
@@ -1993,8 +2005,14 @@ impl ChatService {
         &mut self,
         session_id: Uuid,
         workspace_id: Uuid,
-        proposal: ActionProposal,
+        mut proposal: ActionProposal,
     ) -> Result<()> {
+        // Never let one of this device's own secrets ride a synced proposal.
+        proposal.title = crate::secret_redact::redacted(&proposal.title);
+        proposal.body = crate::secret_redact::redacted(&proposal.body);
+        if let Some(d) = proposal.diff.as_mut() {
+            *d = crate::secret_redact::redacted(d);
+        }
         self.append_signed(
             session_id,
             workspace_id,
@@ -2213,7 +2231,12 @@ impl ChatService {
         let config_id = workspace_config_session_id(workspace_id);
         let (cfg, timeline) = self.store.load_config(workspace_id, founder, local)?;
         if session_id == config_id {
-            return Ok(cfg);
+            // This device's facts (route stops) overlay the config fold too;
+            // they never enter the timeline above, so authorization is unaffected.
+            return Ok(cfg.map(|mut c| {
+                self.overlay_facts(&mut c);
+                c
+            }));
         }
         // A chat is folded against the config log's roster history (A2): its
         // workspace-authorized events are judged at their own frontier, and
@@ -2286,6 +2309,8 @@ impl ChatService {
                 }
             }
         }
+        // This device's measurement facts (P0.5), on top of the fold.
+        self.overlay_facts(&mut session);
         Ok(Some(session))
     }
 }
@@ -4054,5 +4079,135 @@ mod flow_tests {
         assert!(s.flow.marks.is_empty());
         svc.record_flow(chat.id, wid, FlowRecord::MarkCleared { mark_id: mark.id }).unwrap();
         assert!(svc.flow_config(wid).unwrap().marks.is_empty());
+    }
+
+    fn turn(agent: &str, at_ms: i64, error: bool) -> hive_core::flow::TurnTag {
+        hive_core::flow::TurnTag {
+            message_id: Uuid::new_v4(),
+            trigger_id: None,
+            agent: agent.into(),
+            runtime_id: "rt".into(),
+            host_id: "host-a".into(),
+            task_class: "code".into(),
+            role: String::new(),
+            arm: String::new(),
+            upstream_arm: String::new(),
+            error,
+            error_kind: String::new(),
+            tests_passed: None,
+            tool_calls: 1,
+            duration_ms: 10,
+            cost_usd: 0.0,
+            proposal_ids: vec![],
+            handoff_parcel: false,
+            at_ms,
+        }
+    }
+
+    fn flow_kinds(svc: &ChatService, session: Uuid) -> Vec<&'static str> {
+        svc.store
+            .list(session)
+            .unwrap()
+            .into_iter()
+            .filter_map(|e| match e.payload {
+                SessionEvent::FlowRecorded { record } => Some(record.type_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// P0.5 `measurement_records_not_emitted_to_log`: turn tags, touches,
+    /// progress, edge waits and route stops become device-local facts (the
+    /// fold on this device still sees them); nothing is signed or synced.
+    #[test]
+    fn measurement_records_not_emitted_to_log() {
+        let mut svc = service();
+        let wid = Uuid::new_v4();
+        let chat = svc.create_chat("A", wid, "rt").unwrap();
+        svc.record_flow(chat.id, wid, FlowRecord::TurnTagged(turn("primary", 1, false))).unwrap();
+        svc.record_flow(
+            chat.id,
+            wid,
+            FlowRecord::Progress(ProgressMark { message_id: Uuid::new_v4(), agent: "primary".into(), units: 1.0, kind: "tests_passing".into(), at_ms: 2 }),
+        )
+        .unwrap();
+        svc.record_flow(
+            chat.id,
+            wid,
+            FlowRecord::EdgeWait(hive_core::flow::EdgeWait { edge: "gate".into(), reference: "r".into(), wait_ms: 5, host_id: String::new(), at_ms: 3 }),
+        )
+        .unwrap();
+        svc.record_flow(
+            chat.id,
+            wid,
+            FlowRecord::RouteStop(hive_core::flow::route::RouteStop {
+                route: "runtime:rt".into(),
+                reason: hive_core::flow::route::FailureKind::RateLimited,
+                until_ms: i64::MAX,
+                failures: 3,
+                host_id: String::new(),
+                at_ms: 4,
+            }),
+        )
+        .unwrap();
+        assert!(flow_kinds(&svc, chat.id).is_empty(), "{:?}", flow_kinds(&svc, chat.id));
+        assert!(flow_kinds(&svc, workspace_config_session_id(wid)).is_empty());
+        let s = svc.load(chat.id).unwrap().unwrap();
+        assert_eq!((s.flow.turns.len(), s.flow.progress.len(), s.flow.waits.len()), (1, 1, 1));
+        assert!(svc.flow_config(wid).unwrap().route_stops.contains_key("runtime:rt"));
+        // Facts export as ligus.facts.v1 lines.
+        let lines = svc.export_facts(0).unwrap();
+        assert_eq!(lines.len(), 4);
+        assert!(lines.iter().all(|l| l.contains("\"schema\":\"ligus.facts.v1\"")));
+    }
+
+    /// P0.5 `route_decision_still_synced`: other devices follow the first
+    /// decision per trigger, so route decisions stay signed log events.
+    #[test]
+    fn route_decision_still_synced() {
+        let mut svc = service();
+        let wid = Uuid::new_v4();
+        let chat = svc.create_chat("A", wid, "rt").unwrap();
+        let d = hive_core::flow::RouteDecision {
+            trigger_id: Uuid::new_v4(),
+            task_class: "feature".into(),
+            chosen: "primary".into(),
+            preferred: "primary".into(),
+            explore: false,
+            mode: hive_core::flow::RouteMode::Shadow,
+            shadow_choice: "primary".into(),
+            reason: hive_core::flow::route::RouteReason::Sampled,
+            epsilon: 0.1,
+            scores: Default::default(),
+            excluded: vec![],
+            at_ms: 1,
+        };
+        svc.record_flow(chat.id, wid, FlowRecord::RouteDecision(d.clone())).unwrap();
+        assert_eq!(flow_kinds(&svc, chat.id), vec!["routeDecision"]);
+        assert!(svc.load(chat.id).unwrap().unwrap().flow.route_decisions.contains_key(&d.trigger_id));
+    }
+
+    /// One bounded summary per agent per complete UTC day per host, synced
+    /// on the config log; a second call emits nothing.
+    #[test]
+    fn daily_summaries_emit_once_per_agent_day_host() {
+        let mut svc = service();
+        let wid = Uuid::new_v4();
+        let chat = svc.create_chat("A", wid, "rt").unwrap();
+        let day = hive_core::flow::utc_day(1_760_000_000_000);
+        for (agent, err) in [("a", false), ("a", true), ("b", false)] {
+            svc.record_flow(chat.id, wid, FlowRecord::TurnTagged(turn(agent, day + 1000, err))).unwrap();
+        }
+        // Today's turns wait for the day to end.
+        svc.record_flow(chat.id, wid, FlowRecord::TurnTagged(turn("a", day + 86_400_000 + 5, false))).unwrap();
+        let now = day + 86_400_000 + 10;
+        assert_eq!(svc.emit_daily_summaries(wid, "host-a", now).unwrap(), 2);
+        assert_eq!(svc.emit_daily_summaries(wid, "host-a", now).unwrap(), 0);
+        let cfg = svc.flow_config(wid).unwrap();
+        let a = &cfg.outcome_summaries["a"];
+        assert_eq!(a.len(), 1);
+        assert_eq!((a[0].turns, a[0].window_start, a[0].host_id.as_str()), (2, day, "host-a"));
+        assert_eq!(a[0].errors_by_class.get("code"), Some(&1));
+        assert_eq!(flow_kinds(&svc, workspace_config_session_id(wid)), vec!["agentOutcomeSummary", "agentOutcomeSummary"]);
     }
 }

@@ -33,11 +33,12 @@ fn secret_patterns() -> &'static [SecretPattern] {
     })
 }
 
-/// Mask every credential in `text` as `[redacted <kind>]`. Returns the masked
-/// text and how many credentials were masked.
+/// Mask every credential in `text`: Ligus's own secrets as `[ligus-secret]`
+/// (see [`crate::secret_redact`]), others as `[redacted <kind>]`. Returns
+/// the masked text and how many credentials were masked.
 pub fn redact_secrets(text: &str) -> (String, u32) {
-    let mut out = text.to_string();
-    let mut count = 0u32;
+    // Ligus's own secrets first (exact values and hrt1/hpc1 shapes).
+    let (mut out, mut count) = crate::secret_redact::redact_ligus_secrets(text);
     for p in secret_patterns() {
         let n = p.re.find_iter(&out).count() as u32;
         if n > 0 {

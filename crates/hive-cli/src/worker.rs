@@ -110,30 +110,6 @@ fn worker_args(provider: ModelProviderKind, mode: &str) -> Vec<String> {
     }
 }
 
-/// The role gate for subprocess agents. Their tools (shell, edits) are part
-/// of the CLI, so withholding Ligus's tool loop does nothing for them: when
-/// the author is below the floor, a CLI that can be held read-only runs at
-/// its read-only tier, and one that can't (codex, aider, pi, hermes) is
-/// refused. `Err` carries the reason for the chat note.
-fn gate_subprocess_tools(rt: &mut ResolvedRuntime, allow_tools: bool) -> std::result::Result<(), String> {
-    if allow_tools {
-        return Ok(());
-    }
-    match rt.provider {
-        ModelProviderKind::ClaudeCode => rt.args = Vec::new(),
-        ModelProviderKind::Antigravity | ModelProviderKind::Copilot => rt.args = worker_args(rt.provider, "default"),
-        ModelProviderKind::Codex | ModelProviderKind::Aider | ModelProviderKind::Pi | ModelProviderKind::Hermes => {
-            return Err(format!(
-                "{:?} always runs with its own file and shell tools, and the message's author is below this host's tool floor ({})",
-                rt.provider,
-                reply::MIN_ROLE_ENV
-            ));
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
 /// Whether a keyless runtime is usable: native Ollama, or an OpenAI-wire
 /// server on this machine / the LAN / the tailnet (a llama.cpp gateway).
 /// Subscription CLI agents (claude / codex / agy / copilot) are keyless too:
@@ -323,6 +299,9 @@ pub const INTERRUPTED_NOTE: &str = "[interrupted: the host restarted before this
 /// [`INTERRUPTED_NOTE`], so the asker sees it failed and can ask again.
 /// Returns `(chat, message)` for each reply finished this way.
 pub fn recover_interrupted_turns(svc: &mut ChatService) -> Result<Vec<(Uuid, Uuid)>> {
+    // Startup of `ligus worker` and `ligus serve` both pass here: warn once
+    // when LIGUS_MCP_MIN_ROLE sits below this box's default floor (S3).
+    hive_runtime::author_gate::warn_if_lowered(worker_permission_mode() != "default");
     let me = svc.device_id();
     let mut out = Vec::new();
     for id in svc.store().list_session_ids()? {
@@ -408,17 +387,21 @@ async fn run_turn(
         // every turn: the phone can switch a chat's repo between turns.
         crate::repos::turn_context(&ctx.cfg.data_dir, s.id)
     );
-    // H1 gate: resolve the triggering message's author + role and only offer
-    // tools (MCP and the built-in file tools) when they clear
-    // LIGUS_MCP_MIN_ROLE (default Contributor). Unresolved author → fail closed.
+    // H1 gate: resolve the triggering message's author + role. At or above
+    // this host's floor (Admin for a write-capable tier, Contributor for a
+    // read-only one; LIGUS_MCP_MIN_ROLE overrides) the turn runs at its
+    // configured tier; below it a CLI runs read-only or is refused and an
+    // HTTP model gets no tools. Unresolved author → fail closed.
     let author_role = s
         .messages
         .iter()
         .find(|m| m.id == pm.message_id)
         .and_then(|m| m.actor_identity.as_ref())
         .map(|a| s.role_of(&a.id));
-    let min_role = reply::mcp_min_role();
-    let allow_tools = reply::mcp_allowed_for(author_role, min_role);
+    let mut rt = rt;
+    let min_role = reply::mcp_min_role(hive_runtime::author_gate::turn_writes(rt.provider, &rt.args));
+    let gate_plan = hive_runtime::author_gate::gate_turn(rt.provider, &mut rt.args, author_role);
+    let allow_tools = gate_plan.allows_tools();
     if !allow_tools {
         eprintln!(
             "withholding tools for message {} — author role {:?} below minimum {:?}",
@@ -453,8 +436,7 @@ async fn run_turn(
         // (and the note re-posted) every tick.
         return Err(anyhow!("refused by the workspace sandbox"));
     }
-    let mut rt = rt;
-    if let Err(reason) = gate_subprocess_tools(&mut rt, allow_tools) {
+    if let hive_runtime::author_gate::GatePlan::Refuse(reason) = &gate_plan {
         let _ = lock(svc).post_system_note(s.id, s.workspace_id, format!("@{} did not run: {reason}", agent.name));
         sink.changed();
         return Err(anyhow!("refused by the tool role gate"));
@@ -463,6 +445,7 @@ async fn run_turn(
     let mut tool_settings = ctx.settings.clone();
     tool_settings.run_command &= enforcement.allow_run_command;
     tool_settings.mcp_egress = envelope.egress.clone();
+    tool_settings.protected_dirs = envelope.protected_dirs.clone();
 
     // The checkout this chat is bound to on this box (see `repos.rs`).
     let repo_root = RepoBindings::load(&ctx.cfg.data_dir).resolve(&repos_dir(&ctx.cfg.data_dir), s.id);
@@ -494,11 +477,10 @@ async fn run_turn(
         ModelProviderKind::Pi | ModelProviderKind::Aider | ModelProviderKind::Codex | ModelProviderKind::Hermes => true,
         _ => false,
     };
-    // Subprocess agents fall back to the process's cwd when nothing is bound
-    // (the pre-binding behavior of `ligus worker`); a writing one must still get
-    // a worktree there (checked below).
-    let subprocess_root = repo_root.clone().or_else(|| std::env::current_dir().ok());
-    let eager = match subprocess_root.as_deref() {
+    // Only a bound checkout is ever a turn's directory: never the service's
+    // own cwd (its home, or the data dir). A read-only turn with no worktree
+    // runs in a fresh per-turn scratch dir (`executor::prepare`).
+    let eager = match repo_root.as_deref() {
         Some(root) if write_capable && hive_runtime::git_worktree::is_git_repo(root) => {
             match hive_runtime::git_worktree::cut_turn_worktree(root, &s.id.to_string(), &mid.to_string()) {
                 Ok(wt) => Some(wt),
@@ -541,7 +523,11 @@ async fn run_turn(
             last_flush = Instant::now();
         }
     };
-    let fut = reply::generate_reply_streaming(
+    // Every child of this turn runs in this host's OS sandbox under the
+    // turn's envelope and gate.
+    let mut sandbox = hive_runtime::executor::TurnPolicy::new(hive_runtime::executor::HostKind::Worker, envelope.clone(), gate_plan.clone());
+    sandbox.worktree_is_isolated = eager.is_some();
+    let fut = hive_runtime::executor::with_turn(sandbox, reply::generate_reply_streaming(
         &rt,
         &system,
         &turns,
@@ -550,7 +536,7 @@ async fn run_turn(
         Some(&files),
         &tool_settings,
         on_delta,
-    );
+    ));
     let result = match tokio::time::timeout(turn_timeout(), fut).await {
         Ok(r) => r,
         Err(_) => Err(anyhow!("runtime timed out after {}s", turn_timeout().as_secs())),
@@ -633,6 +619,13 @@ mod tests {
         });
         rt.args = args.iter().map(|a| a.to_string()).collect();
         rt
+    }
+
+    fn gate_subprocess_tools(rt: &mut ResolvedRuntime, allow: bool) -> std::result::Result<(), String> {
+        use hive_core::WorkspaceRole;
+        let role = if allow { WorkspaceRole::Owner } else { WorkspaceRole::Viewer };
+        let plan = hive_runtime::author_gate::gate(rt.provider, Some(role), WorkspaceRole::Admin);
+        hive_runtime::author_gate::apply(&plan, rt.provider, &mut rt.args)
     }
 
     /// A member below the tool floor must not get a write- or shell-capable

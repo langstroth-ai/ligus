@@ -72,6 +72,10 @@ pub struct Policy {
     pub default_command_timeout: Duration,
     /// Upper bound on a model-requested timeout.
     pub max_command_timeout: Duration,
+    /// Directory names a write may never land in, at any depth: the turn's
+    /// sandbox envelope's `protected_dirs` (git internals, Ligus's own state,
+    /// agent/editor configs that run commands on their own).
+    pub protected_dirs: Vec<String>,
 }
 
 impl Policy {
@@ -88,7 +92,14 @@ impl Policy {
             max_list_entries: 400,
             default_command_timeout: Duration::from_secs(60),
             max_command_timeout: Duration::from_secs(600),
+            protected_dirs: hive_core::sandbox::PROTECTED_DIRS.iter().map(|s| s.to_string()).collect(),
         }
+    }
+
+    /// Protect the envelope's directories (replaces the defaults).
+    pub fn with_protected_dirs(mut self, dirs: &[String]) -> Self {
+        self.protected_dirs = dirs.to_vec();
+        self
     }
 
     /// Whether the policy permits tool `name` at all.
@@ -425,12 +436,6 @@ fn clip_bytes(s: &str, max: usize) -> &str {
     &s[..end]
 }
 
-/// Directories a write may never land in, at any depth: git internals (hooks
-/// run code), Hive's own state (event logs), and agent/editor configs that
-/// run commands on their own (`.claude` hooks, `.vscode` folder-open tasks).
-/// Both workspace state dir names (`.ligus`, legacy `.hive`) stay protected
-/// permanently.
-const WRITE_PROTECTED_DIRS: &[&str] = &[".git", ".ligus", ".hive", ".claude", ".vscode"];
 /// Files at the root a write may never replace: Hive's workspace config
 /// (declares stdio MCP server commands and runtime endpoints, loaded on
 /// workspace open) and direnv's auto-sourced `.envrc`.
@@ -440,9 +445,9 @@ const WRITE_PROTECTED_ROOT_FILES: &[&str] = &["ligus.config.toml", "hive.config.
 /// case-insensitively: macOS volumes usually are, so `.GIT/config` is
 /// `.git/config`. Everything here can escalate a file edit into code
 /// execution or tamper with Hive itself while `run_command` is off.
-fn write_protected(rel: &Path) -> Option<String> {
+fn write_protected(rel: &Path, protected_dirs: &[String]) -> Option<String> {
     let names: Vec<String> = rel.components().map(|c| c.as_os_str().to_string_lossy().to_lowercase()).collect();
-    if let Some(dir) = names.iter().find(|n| WRITE_PROTECTED_DIRS.contains(&n.as_str())) {
+    if let Some(dir) = names.iter().find(|n| protected_dirs.iter().any(|d| d.eq_ignore_ascii_case(n))) {
         return Some(format!("inside {dir}"));
     }
     match names.as_slice() {
@@ -597,7 +602,7 @@ impl Inner {
         }
 
         if for_write {
-            if let Some(why) = write_protected(&rel) {
+            if let Some(why) = write_protected(&rel, &self.policy.protected_dirs) {
                 return Err(format!("{raw} is {why}; writing there is not allowed"));
             }
         }
@@ -896,27 +901,18 @@ async fn run_shell(command: &str, dir: &Path, timeout: Duration, max_output: usi
     use std::process::Stdio;
     use tokio::io::{AsyncRead, AsyncReadExt};
 
+    // Confined by the turn's sandbox plan: writes only in `dir`, no Ligus
+    // data or keys, an allow-listed env, network only through the turn's
+    // egress proxy (and only for device-allowed hosts).
     #[cfg(unix)]
-    let mut cmd = {
-        let mut c = tokio::process::Command::new("sh");
-        c.arg("-c").arg(command);
-        c.process_group(0);
-        c
-    };
+    let (shell, flag) = ("sh", "-c");
     #[cfg(not(unix))]
-    let mut cmd = {
-        let mut c = tokio::process::Command::new("cmd");
-        c.arg("/C").arg(command);
-        c
-    };
-    cmd.current_dir(dir).env_clear().stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
-    // Minimal env: enough to find tools and behave non-interactively, without
-    // handing the model the app's secrets.
-    for key in ["PATH", "HOME", "USER", "LANG", "TMPDIR", "SYSTEMROOT", "TEMP", "TMP"] {
-        if let Some(v) = std::env::var_os(key) {
-            cmd.env(key, v);
-        }
-    }
+    let (shell, flag) = ("cmd", "/C");
+    let spec = crate::executor::SpawnSpec::new(crate::executor::Purpose::Tool, shell, [flag, command]).cwd(Some(dir));
+    let (mut cmd, _sandbox) = crate::executor::tokio_command(spec).map_err(|e| format!("cannot start command: {e}"))?;
+    #[cfg(unix)]
+    cmd.process_group(0);
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     cmd.env("TERM", "dumb").env("NO_COLOR", "1").env("CI", "1").env("GIT_TERMINAL_PROMPT", "0");
 
     let mut child = cmd.spawn().map_err(|e| format!("cannot start command: {e}"))?;
@@ -1198,6 +1194,23 @@ mod tests {
         ok(&t, READ_FILE, json!({"path": "hive.config.toml"})).await;
         ok(&t, WRITE_FILE, json!({"path": "docs/hive.config.toml", "content": "example\n"})).await;
         ok(&t, WRITE_FILE, json!({"path": ".hive-notes.md", "content": "x\n"})).await;
+    }
+
+    /// C1.7: the envelope's `protected_dirs` are what the tools enforce, not
+    /// a private copy: a directory the envelope adds is refused too.
+    #[tokio::test]
+    async fn envelope_protected_dirs_are_enforced() {
+        let (_tmp, root) = setup();
+        let mut dirs: Vec<String> = hive_core::sandbox::SandboxEnvelope::workspace_default().protected_dirs;
+        dirs.push(".github".into());
+        let t = tools(&root, |p| {
+            p.allow_write = true;
+            p.protected_dirs = dirs.clone();
+        });
+        assert!(fail(&t, WRITE_FILE, json!({"path": ".github/workflows/ci.yml", "content": "x"})).await.contains(".github"));
+        fail(&t, WRITE_FILE, json!({"path": ".git/hooks/pre-commit", "content": "x"})).await;
+        fail(&t, WRITE_FILE, json!({"path": ".envrc", "content": "x"})).await;
+        ok(&t, WRITE_FILE, json!({"path": "src/ok.rs", "content": "x"})).await;
     }
 
     #[tokio::test]

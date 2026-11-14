@@ -799,6 +799,46 @@ pub(crate) fn enforcement_for(
     hive_runtime::sandbox::enforce(provider, envelope, &entries)
 }
 
+/// The OS-sandbox policy for one turn on this desktop: the envelope, the
+/// author gate's plan, and the endpoints of the MCP servers the envelope
+/// lets this chat reach (their hosts join the egress allow-list).
+pub(crate) fn turn_sandbox_policy(
+    state: &AppState,
+    envelope: &hive_core::sandbox::SandboxEnvelope,
+    gate: &hive_runtime::author_gate::GatePlan,
+    isolated: bool,
+) -> hive_runtime::executor::TurnPolicy {
+    let mut policy = hive_runtime::executor::TurnPolicy::new(hive_runtime::executor::HostKind::Desktop, envelope.clone(), gate.clone());
+    policy.worktree_is_isolated = isolated;
+    for s in state.combined_mcp_servers().into_iter().filter(|s| s.enabled && envelope.egress.allows_mcp(&s.id)) {
+        if let hive_runtime::McpTransport::Http { url } = &s.transport {
+            policy.mcp_hosts.extend(hive_runtime::egress::HostPort::from_url(url));
+        }
+        policy.mcp_ids.push(s.id.clone());
+    }
+    policy
+}
+
+/// Endpoints the turn's egress proxy refused: one content-free decision per
+/// endpoint count (no host names: a name can itself carry data) and a note
+/// in the chat so members see why a tool call failed.
+pub(crate) fn record_sandbox_egress_denials(state: &AppState, workspace_id: Uuid, session_id: Uuid, denied: usize) {
+    if denied == 0 {
+        return;
+    }
+    let mut svc = state.service.lock().unwrap();
+    let _ = svc.record_signal(workspace_id, Some(session_id), &egress_decision("sandbox_proxy", "endpoint_not_allowed"));
+    let _ = svc.post_system_note(
+        session_id,
+        workspace_id,
+        format!(
+            "The agent's sandbox refused {denied} network endpoint{} that {} not on this chat's allow-list (its model provider and allowed MCP servers).",
+            if denied == 1 { "" } else { "s" },
+            if denied == 1 { "is" } else { "are" }
+        ),
+    );
+}
+
 /// A turn refused because its runtime can't be confined: tell the chat (so
 /// every member sees why nobody answered) and record the decision.
 pub(crate) fn record_egress_refusal(state: &AppState, workspace_id: Uuid, session_id: Uuid, provider: hive_core::ModelProviderKind) {

@@ -7,14 +7,18 @@
 
 pub mod agent_tools;
 pub mod attachment_blob;
+pub mod author_gate;
 pub mod builtin_tools;
 pub mod chat_service;
 pub mod cli_detect;
 pub mod context;
 pub mod device_enroll;
 pub mod directives;
+pub mod egress;
+pub mod facts;
 pub mod envelope_verifier;
 pub mod event_store;
+pub mod executor;
 pub mod git_attribution;
 pub mod git_worktree;
 pub mod github;
@@ -31,6 +35,7 @@ pub mod patch_leaving;
 pub mod peer;
 #[cfg(feature = "p2p")]
 pub mod peer_iroh;
+pub mod private_file;
 pub mod prompt;
 pub mod proposal_preflight;
 pub mod provider;
@@ -38,11 +43,13 @@ pub mod relay_client;
 pub mod remote_manifest;
 pub mod retrieval;
 pub mod sandbox;
+pub mod secret_redact;
 pub mod sse;
 pub mod sync_engine;
 pub mod tool_loop;
 pub mod vault_fetcher;
 pub mod workflow_tool;
+pub mod workspace_trust;
 
 #[cfg(test)]
 mod test_relay;

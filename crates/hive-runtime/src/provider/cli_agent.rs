@@ -9,7 +9,6 @@
 use std::process::{ExitStatus, Stdio};
 
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
-use tokio::process::Command;
 
 use super::anthropic::ProviderError;
 use super::dispatch::StreamActivity;
@@ -25,6 +24,12 @@ pub enum CliKind {
 }
 
 impl CliKind {
+    pub fn provider(self) -> hive_core::ModelProviderKind {
+        match self {
+            CliKind::Antigravity => hive_core::ModelProviderKind::Antigravity,
+            CliKind::Copilot => hive_core::ModelProviderKind::Copilot,
+        }
+    }
     pub fn display(self) -> &'static str {
         match self {
             CliKind::Antigravity => "Antigravity CLI (agy)",
@@ -186,24 +191,14 @@ pub(crate) async fn run_cli<P: CliStreamParser>(
     mut on_delta: impl FnMut(String),
     mut on_activity: impl FnMut(StreamActivity),
 ) -> Result<String, ProviderError> {
-    let mut cmd = Command::new(program);
-    for k in hive_core::process_util::ligus_secret_env_names() {
-        cmd.env_remove(k);
-    }
-    cmd.args(args)
-        // The prompt is an argument; a closed stdin means the CLI never waits
-        // on the terminal.
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        // Stop → the future is dropped → the CLI is killed, not orphaned.
-        .kill_on_drop(true);
-    if let Some(dir) = working_dir {
-        cmd.current_dir(dir);
-    }
-    for (k, v) in extra_env {
-        cmd.env(k, v);
-    }
+    // Confined to the turn's sandbox plan (see `executor`).
+    let spec = crate::executor::SpawnSpec::new(crate::executor::Purpose::Agent(kind.provider()), program, args)
+        .cwd(working_dir.map(std::path::Path::new))
+        .env(extra_env);
+    let (mut cmd, _sandbox) = crate::executor::tokio_command(spec).map_err(|e| ProviderError::Subprocess(format!("sandbox {program}: {e}")))?;
+    // The prompt is an argument; a closed stdin means the CLI never waits
+    // on the terminal. Stop → the future is dropped → the CLI is killed.
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     super::subprocess::suppress_console_window(&mut cmd);
 
     let mut child = cmd.spawn().map_err(|e| {

@@ -404,18 +404,13 @@ async fn call_tool_stdio(
     arguments: &Value,
 ) -> Result<Value, McpError> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    use tokio::process::Command;
 
-    let mut cmd = Command::new(command);
-    for k in hive_core::process_util::ligus_secret_env_names() {
-        cmd.env_remove(k);
-    }
-    // A caller that gives up (a timeout drops this future) must not leave the
-    // server process running.
-    cmd.args(args)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .kill_on_drop(true);
+    // Confined like an agent's child: no Ligus data or keys, an allow-listed
+    // env, writes only in its scratch dir (its cwd). A caller that gives up
+    // (a timeout drops this future) must not leave the server running.
+    let spec = crate::executor::SpawnSpec::new(crate::executor::Purpose::McpServer, command, args);
+    let (mut cmd, _sandbox) = crate::executor::tokio_command(spec).map_err(|e| McpError::Transport(format!("sandbox {command}: {e}")))?;
+    cmd.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).kill_on_drop(true);
     crate::provider::subprocess::suppress_console_window(&mut cmd);
     let mut child = cmd
         .spawn()
@@ -455,18 +450,13 @@ async fn call_tool_stdio(
 
 async fn list_tools_stdio(command: &str, args: &[String]) -> Result<Vec<McpTool>, McpError> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    use tokio::process::Command;
 
-    let mut cmd = Command::new(command);
-    for k in hive_core::process_util::ligus_secret_env_names() {
-        cmd.env_remove(k);
-    }
-    // A caller that gives up (a timeout drops this future) must not leave the
-    // server process running.
-    cmd.args(args)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .kill_on_drop(true);
+    // Confined like an agent's child: no Ligus data or keys, an allow-listed
+    // env, writes only in its scratch dir (its cwd). A caller that gives up
+    // (a timeout drops this future) must not leave the server running.
+    let spec = crate::executor::SpawnSpec::new(crate::executor::Purpose::McpServer, command, args);
+    let (mut cmd, _sandbox) = crate::executor::tokio_command(spec).map_err(|e| McpError::Transport(format!("sandbox {command}: {e}")))?;
+    cmd.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).kill_on_drop(true);
     crate::provider::subprocess::suppress_console_window(&mut cmd);
     let mut child = cmd
         .spawn()
