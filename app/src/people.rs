@@ -640,8 +640,38 @@ async fn deliver_invite(state: &AppState, person: &CoMember, invite: &str) -> bo
         s.workspaces.iter().find(|w| w.id() == ws).map(|w| w.relay_url.trim().to_string()).filter(|r| !r.is_empty())
     };
     let Some(relay) = relay else { return false };
+    // The drop box must be theirs: their record at that cid verifies under
+    // the account key the shared logs register for them, is no older than
+    // the newest one seen for it, and lists a device not revoked (S4). A cid
+    // someone else stamped, or a relay serving a stale record, gets nothing.
+    let client = state.relay_client(&relay);
+    let record = match client.contact_get(&cid).await {
+        Ok(Some(r)) => r.record,
+        Ok(None) => return false,
+        Err(e) => {
+            tracing::info!(target: "contacts", error = %e, "contact record not readable; share the link");
+            return false;
+        }
+    };
+    let checked = {
+        let svc = state.service.lock().unwrap();
+        contacts::accept_contact_record(svc.store(), &cid, &record, person.fingerprint.as_deref(), &|d| {
+            person.revoked_devices.contains(&d)
+        })
+    };
+    match checked {
+        Ok(v) if v.anchored && v.account_id == person.account_id => {}
+        Ok(_) => {
+            tracing::warn!(target: "contacts", "a co-member's contact id holds someone else's record; not delivering");
+            return false;
+        }
+        Err(e) => {
+            tracing::warn!(target: "contacts", error = %e, "contact record refused; share the link");
+            return false;
+        }
+    }
     let Ok(blob) = contacts::seal_drop(invite.as_bytes(), &plan.recipients) else { return false };
-    match state.relay_client(&relay).contact_drop(&cid, &blob).await {
+    match client.contact_drop(&cid, &blob).await {
         Ok(()) => true,
         Err(e) => {
             tracing::info!(target: "contacts", error = %e, "invite not delivered to the drop box; share the link");
