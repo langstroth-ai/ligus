@@ -16,7 +16,9 @@ in one of three ways:
 - **API and local models** that run Ligus's tool loop (Anthropic, and
   OpenAI-compatible endpoints with "Supports tools") get the same tools
   folded into four (`ligus_propose`, `ligus_flow`, `ligus_read`,
-  `ligus_ask`), called in-process.
+  `ligus_ask`), called in-process. The code-host reads fold into
+  `ligus_read` as `what: forge.prs | forge.pr | forge.issues | forge.issue |
+  forge.ci | forge.file`.
 - **aider, pi, Hermes**, and any runtime without tool use, keep the
   directives.
 
@@ -45,6 +47,11 @@ changes workspace settings.
 | `ligus_read_board` | | Marks, hand-offs and open questions |
 | `ligus_ask_human` | `question`, `options? ≤ 6`, `timeoutSecs ≤ 3600` | Asks the chat's people. **The turn pauses** until someone answers or the timeout passes (then `{"error":"no_answer"}`) |
 | `ligus_report` | `status: done\|blocked\|needsReview`, `summary ≤ 400`, `filesTouched?`, `confidence?` | A short self-report, shown on the turn. Never used for scoring |
+| `ligus_forge_list_prs` | `repo?`, `state?: open\|closed\|all`, `limit ≤ 50` | Pull or merge requests on the chat's [code host](../features/code-hosts.md) |
+| `ligus_forge_read_pr` | `repo?`, `number` | One pull or merge request with its review comments and CI |
+| `ligus_forge_list_issues` / `ligus_forge_read_issue` | `repo?`, `state?`, `limit?` / `repo?`, `number` | Issues |
+| `ligus_forge_ci_status` | `repo?`, `ref` | Checks and commit statuses of a branch, tag or commit |
+| `ligus_forge_read_file` | `repo?`, `path`, `ref?` | A text file at a ref |
 
 A hand-off's receivers are claimed one by one: when a reply hands off to
 two agents that run on different devices, each device runs its own
@@ -60,6 +67,14 @@ can reach, so treat a chat's contents accordingly. A chat that is locked
 down (or limited to an MCP allow-list) can't be read from a chat with wider
 egress: `ligus_read_chat` and `ligus_read_proposals` refuse it, so its
 content stays where its egress is cut.
+
+The `ligus_forge_*` tools are read-only: there is no tool to open a pull
+request, fork, comment or push. They run in the host, so the code-host token
+never enters the agent's sandbox. `repo` is the chat's bound repository
+(default) or, for a fork, its upstream; nothing else. A chat with closed
+egress gets none of them, an allow-listed chat only when its list names
+`ligus.forge`, and each turn may make at most 16 of them
+(`LIGUS_MCP_MAX_FORGE_CALLS`).
 
 ## Who signs what {#signing}
 

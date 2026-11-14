@@ -317,6 +317,28 @@ Approved proposals reach `hive/chat/<id>` only when the box applies them
 (`LIGUS_SERVE_APPLY_ON_APPROVE=1`). Otherwise the chat branch has nothing to
 open a pull request for.
 
+#### Code hosts (2.0, additive)
+
+The rows above are unchanged for the shipped app; 2.0 adds:
+
+- `GET /v1/repos` also returns `forges: [Forge]` (every connection on the
+  box). With `&forge=<id>` it returns that connection's listing as `forge`
+  (the `GitHub` shape plus `id`) instead of `github`.
+- `GET /v1/repos/fork` and `POST /v1/repos/clone` take `forge` (default
+  `github.com`); a `https://<host>/…` URL picks the connection by host (400 if
+  the host has no connection). Checkouts from other hosts are named
+  `<host>__<owner>__<name>`.
+- `POST /v1/chats/{id}/pr` answers with `kind` (`pr` or `mr`) and `forge`.
+  Drafts are a real draft on GitHub, a `Draft:` title on GitLab and a `WIP:`
+  title on Forgejo, Gitea and Codeberg.
+- `Forge = {id, kind, flavor, displayName, baseUrl, authSource: gh|token|oauth|none, user?, available, reason?, hasRead, hasWrite, deviceFlow, openLabel, changeRequestKind, holder}`.
+- `GET|POST /v1/forges`, `DELETE /v1/forges/{id}`, `POST /v1/forges/{id}/test`,
+  `PUT|DELETE /v1/forges/{id}/token`, `POST|GET /v1/forges/{id}/auth/device`:
+  see `docs-site/reference/serve-api.md`. The phone never stores a forge
+  token. `PUT …/token` and `POST …/auth/device` are accepted only through the
+  tunnel (or on a loopback bind) and need presence; on a direct LAN bind
+  they answer 403, and `GET /v1/forges` says `tokenEntry: false`.
+
 ### Events (`GET /v1/events`)
 
 Each event has `id: <n>` (increasing), `event: <name>` and `data: <JSON>`. A

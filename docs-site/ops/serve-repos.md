@@ -2,8 +2,9 @@
 
 The agents on your `ligus serve` box work on git checkouts on that box. From
 the [phone](../features/phone-app.md) you can pick which repository a chat
-works in, clone a new one from GitHub, pull the latest, and open a pull
-request, all without leaving the chat.
+works in, clone a new one from GitHub, GitLab, Codeberg, Forgejo or Gitea,
+pull the latest, and open a pull or merge request, all without leaving the
+chat.
 
 ## Where checkouts live
 
@@ -19,12 +20,31 @@ workspace = "sandbox"
 
 You can set the default from the box's shell with
 `ligus bind-repo <name>`. A repo cloned from the phone is named
-`<owner>__<name>`.
+`<owner>__<name>` (from github.com) or `<host>__<owner>__<name>` (from any
+other code host; GitLab subgroups are joined with `__`).
 
-## Sign the box in to GitHub (once)
+## Connect the box to your code hosts (once)
 
-Listing your GitHub repos, cloning private ones, and opening pull requests use
-the box's own GitHub CLI login. Ligus never stores a GitHub token. On the box:
+Listing your repos, cloning private ones, and opening pull or merge requests
+use the box's own code-host connections. Tokens stay in the box's secret
+store; see [Code hosts](../features/code-hosts.md). Other code hosts:
+
+```sh
+ligus forge add gitlab https://gitlab.example.com
+ligus forge token gitlab:gitlab.example.com write   # paste the token on stdin
+ligus forge add codeberg https://codeberg.org
+ligus forge token gitea:codeberg.org write
+ligus forge list
+```
+
+You can also add a code host and paste its token from the phone, through
+[remote access](../networking/remote-access.md) (end-to-end encrypted to the
+box). The box refuses tokens over a plain LAN or tailnet address.
+
+### GitHub through the box's gh login
+
+By default the box's GitHub connection uses its own GitHub CLI login, and
+Ligus doesn't store that token. On the box:
 
 ```sh
 gh auth login -h github.com -p https -s repo,read:org --web
@@ -43,14 +63,14 @@ repo and branch, then:
 - **Switch** the chat to another checkout. The chat stays the same. Ligus posts
   a note in the chat, and the agent's next turn is told which repository and
   branch it's working in.
-- **Clone** a GitHub repo. The clone runs on the box with progress, and once
-  it finishes you can switch to it.
+- **Clone** a repo from any connected code host. The clone runs on the box
+  with progress, and once it finishes you can switch to it.
 - **Pull latest** fast-forwards the checkout's base branch from `origin`
   (from `upstream` in a fork). A checkout with local changes, or one that has
   diverged, is left alone.
-- **Open pull request** pushes the chat's branch and opens a PR against the
-  default branch (upstream's, as a draft, in a fork). The link is posted in
-  the chat.
+- **Open pull request** pushes the chat's branch and opens a pull request
+  (a merge request on GitLab) against the default branch (upstream's, as a
+  draft, in a fork). The link is posted in the chat.
 
 ## Forks: contributing upstream
 
@@ -104,9 +124,10 @@ remote branch has moved, the push is refused and the phone says so.
 
 ## Limits and safety
 
-- Only `github.com` repositories, given as `owner/name` or
-  `https://github.com/owner/name`, can be cloned. Other hosts, paths and URL
-  forms are refused.
+- A repository is given as `owner/name` (on the chosen connection, by default
+  github.com) or `https://<host>/owner/name` on a connected code host.
+  Unconnected hosts, credentials in URLs, other schemes, paths and queries are
+  refused.
 - A clone stops after `LIGUS_REPOS_CLONE_TIMEOUT_SECS` (default 900) or once
   it passes `LIGUS_REPOS_MAX_CLONE_MB` (default 2048), and leaves nothing
   behind. Two clones can run at a time.

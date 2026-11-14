@@ -90,14 +90,34 @@ vote, reject, lockdown clear and agent rebind (see
 
 | Method + path | Request | Notes |
 |---|---|---|
-| `GET /v1/repos` | `?q=&owner=&page=&perPage=` | local checkouts, the host's GitHub repos (through its `gh` login) and running clone jobs |
-| `GET /v1/repos/fork` | `?repo=owner/name` | the signed-in account's fork, if any. 412 if `gh` isn't signed in |
-| `POST /v1/repos/clone` | `{repo, viaFork?}` | Contributor. Starts a clone (or fetch) job; 429 with 2 jobs running; 409 if the target dir holds another repo |
+| `GET /v1/repos` | `?q=&owner=&page=&perPage=&forge=` | local checkouts and running clone jobs, plus: without `forge`, `github` (the GitHub connection's repos, as before) and `forges` (every connection); with `forge=<id>`, that connection's repos under `forge` |
+| `GET /v1/repos/fork` | `?repo=owner/name&forge=` | the signed-in account's fork, if any. 412 if the connection isn't signed in |
+| `POST /v1/repos/clone` | `{repo, viaFork?, forge?}` | Contributor. Starts a clone (or fetch) job. A URL's host picks the connection; `owner/name` uses `forge` (default `github.com`). 400 for a host with no connection; 429 with 2 jobs running; 409 if the target dir holds another repo |
 | `GET /v1/repos/clone/:job` | | job status (last 20 finished kept) |
 | `GET /v1/chats/:id/repo` | | the chat's checkout, branch, ahead/behind, PR branch |
 | `PUT /v1/chats/:id/repo` | `{repo?}` | Contributor. Binds a checkout under the repos dir; `null`/`""` = workspace default |
 | `POST /v1/chats/:id/repo/pull` | | Contributor. Fast-forward-only pull; 409 if dirty or diverged |
-| `POST /v1/chats/:id/pr` | `{title, body?, draft?}` | Contributor. Pushes `hive/chat/<id>` (never forced) and opens a PR with `gh` |
+| `POST /v1/chats/:id/pr` | `{title, body?, draft?}` | Contributor. Pushes `hive/chat/<id>` (never forced, never to upstream) and opens a pull or merge request on the checkout's code host. The answer adds `kind` (`pr` or `mr`) and `forge` |
+
+### Code hosts
+
+The box's code-host connections ([Code hosts](../features/code-hosts.md)).
+No answer ever carries a token.
+
+| Method + path | Request | Notes |
+|---|---|---|
+| `GET /v1/forges` | | `{forges: [{id, kind, flavor, displayName, baseUrl, authSource, user, available, reason, hasRead, hasWrite, deviceFlow, openLabel, changeRequestKind, holder}], tokenEntry}`. `tokenEntry` says whether this channel may carry a token |
+| `POST /v1/forges` | `{kind, baseUrl, auth?, clientId?}` | Contributor and presence. `kind` is `github`, `gitlab`, `forgejo`, `gitea` or `codeberg`; `baseUrl` must be `https`. 409 if already connected |
+| `DELETE /v1/forges/:id` | | Contributor and presence. Removes the connection and its tokens |
+| `POST /v1/forges/:id/test` | | signs in; `{ok, user?, error?}` |
+| `PUT /v1/forges/:id/token` | `{purpose: read\|write, token}` | Contributor and presence, **through the tunnel or on a loopback bind only** (403 otherwise). Stored in the box's secret store |
+| `DELETE /v1/forges/:id/token` | `?purpose=read\|write` | Contributor and presence |
+| `POST /v1/forges/:id/auth/device` | | Contributor and presence, tunnel or loopback only. `{userCode, verificationUri, expiresIn}`; the box polls |
+| `GET /v1/forges/:id/auth/device` | | `{state: pending\|done\|denied\|expired\|error, userCode, verificationUri, expiresIn}` |
+
+Connection ids are `<kind>:<host>`, for example `github:github.com`,
+`gitlab:gitlab.example.com` or `gitea:codeberg.org`; `github.com` alone also
+names the GitHub connection.
 
 What the phone may touch on disk is limited; see
 [Host path policy](../features/phone-app.md#host-path-policy).
