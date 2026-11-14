@@ -1085,11 +1085,11 @@ fn impersonation_by_display_name_is_a_different_co_member() {
     let impostor_fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&w.people["impostor"].account.public_key_bytes());
     let known = crate::dm::known_fingerprints(&list);
     assert_eq!(
-        crate::dm::check_founder(Some(&ada.account_id.to_string()), Some(&impostor_fk), &known),
+        crate::dm::check_founder(Some(&ada.account_id.to_string()), Some(&impostor_fk), &known, Some(ada.account_id)),
         crate::dm::FounderTrust::Mismatch
     );
     let ada_fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&ada.account.public_key_bytes());
-    assert_eq!(crate::dm::check_founder(Some(&ada.account_id.to_string()), Some(&ada_fk), &known), crate::dm::FounderTrust::KnownMatch);
+    assert_eq!(crate::dm::check_founder(Some(&ada.account_id.to_string()), Some(&ada_fk), &known, Some(ada.account_id)), crate::dm::FounderTrust::KnownMatch);
 }
 
 /// A co-member forges a DM "from Bob": the invite names Bob as founder with

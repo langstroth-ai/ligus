@@ -526,6 +526,31 @@ impl ChatService {
         env
     }
 
+    /// Sign an invite's fields as its founder (R1; [`crate::invite_sig`]).
+    /// `None` unless this device holds its account's key, `cert` is this
+    /// device's certificate for that account, and the invite names this
+    /// account and its key fingerprint as founder.
+    pub fn sign_invite(
+        &self,
+        claims: &crate::invite_sig::InviteClaims<'_>,
+        cert: &hive_core::crypto::DeviceCertificate,
+    ) -> Option<crate::invite_sig::InviteSignature> {
+        let me = self.author.account_id?;
+        let account_pk = self.account_public_key();
+        let fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&account_pk);
+        let names_me = claims.founder.and_then(|f| Uuid::parse_str(f.trim()).ok()) == Some(me)
+            && claims.fk.is_some_and(|k| k.trim().eq_ignore_ascii_case(&fk));
+        let mine = cert.account_id == me
+            && cert.device_id == self.device_id
+            && cert.device_public_key == self.keypair.public_key_bytes()
+            && cert.verify(&account_pk).is_ok();
+        if self.delegated || !names_me || !mine {
+            return None;
+        }
+        let at = time::OffsetDateTime::now_utc().unix_timestamp();
+        Some(crate::invite_sig::sign(claims, at, &self.keypair, cert, &account_pk))
+    }
+
     /// Set the git email carried on this user's identity (for commit
     /// attribution when a host runs an agent on their behalf). Empty clears it.
     pub fn set_author_git_email(&mut self, email: Option<String>) {

@@ -51,6 +51,7 @@ Unless a path says otherwise, citations are relative to the root of this repo. R
 | `ligus-mcp-turn-cred-v1\0` | D | HMAC tag of the per-turn MCP credential (device-local, never synced) |
 | `ligus.facts.v1` | C | Facts schema id (device-local export) |
 | `ligus-auth-device-proof-v1\0` | E | Device proof on every ligus-auth token request: Ed25519 over this tag and tenant, grant type, nonce, device id and SHA-256(credential), NUL-separated. Added 2026-11-13 when the owner moved Track E into 2.0 |
+| `ligus-invite-v1\0` | F | The founder's device signature over a workspace or DM invite: Ed25519 over this tag, the invite's name, relay, room, DM account, founder account, `fk` and invite id (each NUL-terminated), SHA-256 of the workspace key, SHA-256 of the delivered epoch keys and the signing time; the invite carries the device certificate and account key ([identity-and-forges](identity-and-forges.md) §4). No existing context binds invite fields, and reusing `hive-envelope-v3` would need a new event kind. Added 2026-11-14 (review item R1) |
 | `ligus-identity-link-v1@ligus.ai` (SSHSIG namespace; no `\0` by format: SSHSIG carries the namespace as a length-prefixed string passed on the `ssh-keygen -Y sign -n` command line) | F | Forge-key SSHSIG over an identity-link statement ([identity-and-forges](identity-and-forges.md) §2.4). Added 2026-11-14 (owner decision D1) |
 
 New `SessionEvent` kinds (tags):

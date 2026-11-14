@@ -652,11 +652,47 @@ struct WorkspaceConn {
     /// device. A bearer secret, like `key`. Left out when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     ek: Vec<hive_runtime::keyring::DeliveredKey>,
+    /// The founder's device signature over the invite's fields
+    /// (`hive_runtime::invite_sig`, R1). Only an invite whose signature
+    /// verifies is shown as coming from its founder; anything else only says
+    /// it is. Invite-only: never kept in settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sig: Option<hive_runtime::invite_sig::InviteSignature>,
 }
 
 impl WorkspaceConn {
     fn id(&self) -> Uuid {
         room_workspace_id(&self.room)
+    }
+    /// The canonical bytes of the epoch keys a signature covers.
+    fn ek_json(&self) -> Vec<u8> {
+        if self.ek.is_empty() {
+            Vec::new()
+        } else {
+            serde_json::to_vec(&self.ek).unwrap_or_default()
+        }
+    }
+    /// What an invite signature covers (`hive_runtime::invite_sig`). `name`
+    /// is [`Self::display_name`], what a reader decodes the name to.
+    fn sig_claims<'a>(&'a self, name: &'a str, ek_json: &'a [u8]) -> hive_runtime::invite_sig::InviteClaims<'a> {
+        hive_runtime::invite_sig::InviteClaims {
+            name,
+            relay_url: &self.relay_url,
+            room: &self.room,
+            key: self.key.as_deref(),
+            dm_account: self.dm_account.as_deref(),
+            founder: self.founder_actor_id.as_deref(),
+            fk: self.fk.as_deref(),
+            inv: self.inv.as_deref(),
+            ek_json,
+        }
+    }
+    /// The founder account the invite's signature proves, if it verifies
+    /// (`revoked`: devices the reader's logs revoked).
+    fn signed_by(&self, revoked: &dyn Fn(Uuid) -> bool) -> Option<Uuid> {
+        let sig = self.sig.as_ref()?;
+        let (name, ek) = (self.display_name(), self.ek_json());
+        hive_runtime::invite_sig::verify(sig, &self.sig_claims(&name, &ek), revoked).ok()
     }
     fn display_name(&self) -> String {
         if self.name.trim().is_empty() {
@@ -702,6 +738,44 @@ fn decode_workspace_invite(invite: &str) -> Result<WorkspaceConn, String> {
 mod workspace_invite_tests {
     use super::*;
 
+    /// R1: the founder's signature survives encoding (including an unnamed
+    /// invite, whose name decodes to the room) and binds the relay, room and
+    /// key: a relabelled copy is no longer the founder's.
+    #[test]
+    fn invite_signature_survives_encoding_and_binds_fields() {
+        use hive_core::crypto::{DeviceCertificate, SigningKeypair};
+        let account = SigningKeypair::generate().unwrap();
+        let device = SigningKeypair::generate().unwrap();
+        let founder = Uuid::new_v4();
+        let cert = DeviceCertificate::issue(&account, founder, Uuid::new_v4(), &device.public_key_bytes(), hive_core::Timestamp::epoch());
+        let fk = hive_runtime::envelope_verifier::FounderPin::fingerprint_hex(&account.public_key_bytes());
+        for name in ["", "Team"] {
+            let mut conn = WorkspaceConn {
+                name: name.into(),
+                relay_url: "https://relay.example".into(),
+                room: "r00m".into(),
+                key: Some("k".into()),
+                icon: None,
+                dm_account: None,
+                founder_actor_id: Some(founder.to_string()),
+                fk: Some(fk.clone()),
+                inv: Some(Uuid::new_v4().to_string()),
+                ek: Vec::new(),
+                sig: None,
+            };
+            let (n, ek) = (conn.display_name(), conn.ek_json());
+            conn.sig = Some(hive_runtime::invite_sig::sign(&conn.sig_claims(&n, &ek), 1, &device, &cert, &account.public_key_bytes()));
+            let back = decode_workspace_invite(&encode_workspace_invite(&conn)).unwrap();
+            assert_eq!(back.signed_by(&|_| false), Some(founder));
+            let moved = WorkspaceConn { relay_url: "https://evil.example".into(), ..back.clone() };
+            assert_eq!(moved.signed_by(&|_| false), None);
+            let rekeyed = WorkspaceConn { key: Some("other".into()), ..back.clone() };
+            assert_eq!(rekeyed.signed_by(&|_| false), None);
+            let unsigned = WorkspaceConn { sig: None, ..back };
+            assert_eq!(unsigned.signed_by(&|_| false), None);
+        }
+    }
+
     #[test]
     fn invite_round_trips() {
         let conn = WorkspaceConn {
@@ -715,6 +789,7 @@ mod workspace_invite_tests {
             fk: Some("00112233445566778899aabbccddeeff".into()),
             inv: None,
             ek: Vec::new(),
+            sig: None,
         };
         let invite = encode_workspace_invite(&conn);
         assert!(invite.starts_with("hivews1:"));
@@ -743,6 +818,7 @@ mod workspace_invite_tests {
             fk: None,
             inv: None,
             ek: Vec::new(),
+            sig: None,
         };
         let invite = format!("  {}\n", encode_workspace_invite(&conn));
         let back = decode_workspace_invite(&invite).unwrap();
@@ -779,8 +855,8 @@ mod workspace_invite_tests {
 
     #[test]
     fn same_room_shares_workspace_id() {
-        let a = WorkspaceConn { name: "A".into(), relay_url: "x".into(), room: "shared".into(), key: None, icon: None, dm_account: None, founder_actor_id: None, fk: None, inv: None, ek: Vec::new() };
-        let b = WorkspaceConn { name: "B".into(), relay_url: "y".into(), room: "shared".into(), key: Some("k".into()), icon: None, dm_account: None, founder_actor_id: Some(Uuid::new_v4().to_string()), fk: None, inv: None, ek: Vec::new() };
+        let a = WorkspaceConn { name: "A".into(), relay_url: "x".into(), room: "shared".into(), key: None, icon: None, dm_account: None, founder_actor_id: None, fk: None, inv: None, ek: Vec::new(), sig: None };
+        let b = WorkspaceConn { name: "B".into(), relay_url: "y".into(), room: "shared".into(), key: Some("k".into()), icon: None, dm_account: None, founder_actor_id: Some(Uuid::new_v4().to_string()), fk: None, inv: None, ek: Vec::new(), sig: None };
         assert_eq!(a.id(), b.id());
     }
 
@@ -823,6 +899,7 @@ mod workspace_invite_tests {
             fk: None,
             inv: None,
             ek: Vec::new(),
+            sig: None,
         };
         let invite = encode_workspace_invite(&founder);
         let joined = decode_workspace_invite(&invite).unwrap();
@@ -4716,6 +4793,19 @@ fn key_source_for(state: &AppState, conn: Option<&WorkspaceConn>) -> hive_runtim
 }
 
 /// `conn` with every authorized epoch key this device holds, for an invite.
+/// Sign an invite as its founder when this device is the founder's (R1):
+/// readers show it as coming from the founder only when this signature
+/// verifies. Left unsigned otherwise (another Admin's invite only says who
+/// founded the workspace).
+fn sign_invite(state: &AppState, mut conn: WorkspaceConn) -> WorkspaceConn {
+    conn.sig = None;
+    let Some(stored) = state.identity.load().ok().flatten() else { return conn };
+    let (name, ek) = (conn.display_name(), conn.ek_json());
+    let sig = state.service.lock().unwrap().sign_invite(&conn.sig_claims(&name, &ek), &stored.device.certificate);
+    conn.sig = sig;
+    conn
+}
+
 fn with_epoch_keys(state: &AppState, mut conn: WorkspaceConn) -> WorkspaceConn {
     let src = key_source_for(state, Some(&conn));
     if let Ok(keys) = state.service.lock().unwrap().delivered_epoch_keys(conn.id(), &src) {
@@ -11273,6 +11363,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
                     fk: None,
                     inv: None,
                     ek: Vec::new(),
+                    sig: None,
                 };
                 s.workspaces.push(conn);
             }
@@ -12296,6 +12387,7 @@ fn create_workspace(state: State<AppState>, name: String) -> Result<WorkspaceInf
             fk: founder_fk.clone(),
             inv: None,
             ek: Vec::new(),
+            sig: None,
         };
         s.workspaces.push(conn.clone());
         save_settings(&state.data_dir, &s);
@@ -12326,6 +12418,8 @@ fn join_workspace(state: State<AppState>, invite: String) -> Result<WorkspaceInf
 
 /// Join from an already-checked connection.
 fn join_workspace_conn(state: State<AppState>, mut conn: WorkspaceConn) -> Result<WorkspaceInfoDto, String> {
+    // The invite's signature was for the reader's check; never kept.
+    conn.sig = None;
     // The invite this device redeems to enroll itself (kept device-local, not
     // in settings: it is single-use).
     if let Some(inv) = conn.inv.take().and_then(|i| Uuid::parse_str(&i).ok()) {
@@ -12367,7 +12461,7 @@ fn workspace_invite(state: State<AppState>, workspace_id: String) -> Result<Stri
         .issue_invite(id)
         .map_err(|e| format!("Only a workspace Admin can invite people ({e})."))?;
     conn.inv = Some(invite.to_string());
-    Ok(encode_workspace_invite(&with_epoch_keys(&state, conn)))
+    Ok(encode_workspace_invite(&sign_invite(&state, with_epoch_keys(&state, conn))))
 }
 
 /// Leave a team workspace (removes it from the rail). If it was active, falls
@@ -16768,6 +16862,7 @@ mod settings_secret_tests {
             fk: None,
             inv: None,
             ek: vec![hive_runtime::keyring::DeliveredKey::new(1, &[0x5a; 32])],
+            sig: None,
         });
         save_settings(&dir, &s);
         let text = std::fs::read_to_string(settings_file(&dir)).unwrap();
@@ -16841,6 +16936,7 @@ mod settings_secret_tests {
             fk: Some("00112233445566778899aabbccddeeff".into()),
             inv: Some(Uuid::new_v4().to_string()),
             ek: Vec::new(),
+            sig: None,
         };
         s.workspaces.push(conn.clone());
         save_settings(&dir, &s);

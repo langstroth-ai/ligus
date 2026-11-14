@@ -30,7 +30,7 @@ use hive_runtime::contacts::{self, ContactsError};
 
 use crate::{
     decode_workspace_invite, encode_workspace_invite, join_workspace_conn, map_err, parse_hex32, random_token,
-    save_settings, set_active_workspace, with_epoch_keys, AppState, LiveSettings, WorkspaceConn,
+    save_settings, set_active_workspace, sign_invite, with_epoch_keys, AppState, LiveSettings, WorkspaceConn,
 };
 
 /// This device's account: id, key fingerprint (when it holds the key).
@@ -40,6 +40,19 @@ fn me(state: &AppState) -> (Option<Uuid>, Option<String>) {
     let fk = (!svc.is_delegated())
         .then(|| hive_runtime::envelope_verifier::FounderPin::fingerprint_hex(&svc.account_public_key()));
     (account, fk)
+}
+
+/// The founder account an invite's signature proves (R1), checked against
+/// the devices the shared logs revoked.
+fn invite_signer(conn: &WorkspaceConn, people: &[CoMember]) -> Option<Uuid> {
+    conn.signed_by(&|d| people.iter().any(|p| p.revoked_devices.contains(&d)))
+}
+
+/// An invite's trust label: a co-member's name and fingerprint count as
+/// theirs only with their device's valid signature.
+fn invite_trust(conn: &WorkspaceConn, people: &[CoMember]) -> dm::FounderTrust {
+    let known = dm::known_fingerprints(people);
+    dm::check_founder(conn.founder_actor_id.as_deref(), conn.fk.as_deref(), &known, invite_signer(conn, people))
 }
 
 fn co_members_of(state: &AppState) -> Vec<CoMember> {
@@ -310,6 +323,7 @@ pub(crate) async fn open_dm(state: State<'_, AppState>, account_id: String) -> R
             fk: Some(my_fk),
             inv: None,
             ek: Vec::new(),
+            sig: None,
         };
         s.workspaces.push(conn.clone());
         save_settings(&state.data_dir, &s);
@@ -318,7 +332,7 @@ pub(crate) async fn open_dm(state: State<'_, AppState>, account_id: String) -> R
     let ws_id = conn.id();
     set_active_workspace(state.clone(), ws_id.to_string())?;
     let inv = state.service.lock().unwrap().issue_invite(ws_id).map_err(map_err)?;
-    let invite = encode_workspace_invite(&with_epoch_keys(&state, WorkspaceConn { inv: Some(inv.to_string()), ..conn }));
+    let invite = encode_workspace_invite(&sign_invite(&state, with_epoch_keys(&state, WorkspaceConn { inv: Some(inv.to_string()), ..conn })));
     let delivered = deliver_invite(&state, &person, &invite).await;
     Ok(OpenDmDto { workspace_id: ws_id.to_string(), invite: Some(invite), delivered, safety_code: person.safety_code() })
 }
@@ -335,9 +349,11 @@ pub(crate) struct InviteInfoDto {
     founder_name: Option<String>,
     /// The founder's safety code as the invite carries it.
     safety_code: Option<String>,
-    /// `known` (a co-member, and the key matches), `mismatch` (a co-member
-    /// with a different key: not from them), `unknown` (compare the code out
-    /// of band) or `none` (the invite carries no code).
+    /// `known` (a co-member whose device signed it, and the key matches),
+    /// `claimed` (names a co-member and their key, but isn't signed by their
+    /// device: it only says it's from them), `mismatch` (a co-member with a
+    /// different key: not from them), `unknown` (compare the code out of
+    /// band) or `none` (the invite carries no code).
     trust: String,
     already_joined: bool,
 }
@@ -348,8 +364,7 @@ pub(crate) fn inspect_invite(state: State<AppState>, code: String) -> Result<Inv
     let conn = decode_workspace_invite(&code)?;
     let (me_account, _) = me(&state);
     let people = co_members_of(&state);
-    let known = dm::known_fingerprints(&people);
-    let trust = dm::check_founder(conn.founder_actor_id.as_deref(), conn.fk.as_deref(), &known);
+    let trust = invite_trust(&conn, &people);
     let founder = conn.founder_actor_id.as_deref().and_then(|f| Uuid::parse_str(f).ok());
     let already_joined = state.settings.lock().unwrap().workspaces.iter().any(|w| w.room == conn.room);
     Ok(InviteInfoDto {
@@ -381,6 +396,7 @@ pub(crate) fn admit_dm_invite(state: &AppState, conn: &mut WorkspaceConn, safety
         conn.fk.as_deref(),
         me_account,
         &known,
+        invite_signer(conn, &people),
         safety_code_confirmed,
         joined,
     )?;
@@ -456,7 +472,7 @@ pub(crate) async fn co_member_invite(
         .unwrap()
         .issue_invite(ws)
         .map_err(|e| format!("Only a workspace Admin can invite people ({e})."))?;
-    let invite = encode_workspace_invite(&with_epoch_keys(&state, WorkspaceConn { inv: Some(inv.to_string()), ..conn }));
+    let invite = encode_workspace_invite(&sign_invite(&state, with_epoch_keys(&state, WorkspaceConn { inv: Some(inv.to_string()), ..conn })));
     let delivered = deliver_invite(&state, &person, &invite).await;
     Ok(CoMemberInviteDto {
         invite,
@@ -679,7 +695,6 @@ pub(crate) async fn list_pending_invites(state: State<'_, AppState>) -> Result<P
     };
     let (me_account, _) = me(&state);
     let people = co_members_of(&state);
-    let known = dm::known_fingerprints(&people);
     let joined: Vec<String> = state.settings.lock().unwrap().workspaces.iter().map(|w| w.room.clone()).collect();
     let mut out = Vec::new();
     let mut handled_now: BTreeMap<String, Vec<u64>> = BTreeMap::new();
@@ -706,7 +721,7 @@ pub(crate) async fn list_pending_invites(state: State<'_, AppState>) -> Result<P
                 handled.push(item.seq);
                 continue;
             }
-            let trust = dm::check_founder(conn.founder_actor_id.as_deref(), conn.fk.as_deref(), &known);
+            let trust = invite_trust(&conn, &people);
             let founder = conn.founder_actor_id.as_deref().and_then(|f| Uuid::parse_str(f).ok());
             pending.push(item.seq);
             out.push(PendingInviteDto {
@@ -749,6 +764,7 @@ pub(crate) async fn list_pending_invites(state: State<'_, AppState>) -> Result<P
 fn trust_str(t: dm::FounderTrust) -> &'static str {
     match t {
         dm::FounderTrust::KnownMatch => "known",
+        dm::FounderTrust::Claimed => "claimed",
         dm::FounderTrust::Mismatch => "mismatch",
         dm::FounderTrust::Unknown => "unknown",
         dm::FounderTrust::NoFingerprint => "none",
@@ -782,8 +798,7 @@ pub(crate) fn accept_pending_invite(
     if conn.dm_account.is_some() {
         admit_dm_invite(&state, &mut conn, confirm_safety_code)?;
     } else {
-        let known = dm::known_fingerprints(&co_members_of(&state));
-        if dm::check_founder(conn.founder_actor_id.as_deref(), conn.fk.as_deref(), &known) == dm::FounderTrust::Mismatch {
+        if invite_trust(&conn, &co_members_of(&state)) == dm::FounderTrust::Mismatch {
             return Err("the invite's founder key doesn't match the one your shared workspaces have for that person".into());
         }
     }

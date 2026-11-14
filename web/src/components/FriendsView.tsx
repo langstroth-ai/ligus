@@ -221,7 +221,7 @@ export function FriendsView({
             <button
               className="mt-2 rounded-lg px-3 py-1.5 text-xs font-medium disabled:opacity-40"
               style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
-              disabled={info.alreadyJoined || info.trust === "mismatch" || (info.isDm && !info.addressedToMe)}
+              disabled={info.alreadyJoined || info.trust === "mismatch" || (info.isDm && (!info.addressedToMe || info.trust === "claimed"))}
               onClick={() => void join()}
             >
               {info.alreadyJoined ? "Already joined" : "Join"}

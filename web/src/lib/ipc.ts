@@ -857,7 +857,7 @@ export const coMemberInvite = (workspaceId: string, accountId: string) =>
 /// `known`: a co-member and the key matches. `mismatch`: a co-member with a
 /// different key (not from them). `unknown`: compare the safety code out of
 /// band. `none`: the invite carries no safety code.
-export type InviteTrust = "known" | "mismatch" | "unknown" | "none";
+export type InviteTrust = "known" | "claimed" | "mismatch" | "unknown" | "none";
 
 export interface InviteInfoDto {
   workspaceName: string;

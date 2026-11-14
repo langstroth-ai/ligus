@@ -106,6 +106,9 @@ pub struct CoMember {
     pub key_conflict: bool,
     /// Their devices' key-agreement keys, verified on the config logs.
     pub devices: Vec<Recipient>,
+    /// Devices certified for them that a shared log revoked (an invite
+    /// signed by one of these is not from them).
+    pub revoked_devices: Vec<Uuid>,
     /// The shared workspaces.
     pub workspaces: Vec<Uuid>,
     /// Their contact id (relay v0.3 drop box) as their roster entry or latest
@@ -164,6 +167,7 @@ pub fn co_members(store: &EventStore, me: Uuid) -> Vec<CoMember> {
                 fingerprint: None,
                 key_conflict: false,
                 devices: Vec::new(),
+                revoked_devices: Vec::new(),
                 workspaces: Vec::new(),
                 contact: None,
             });
@@ -192,6 +196,11 @@ pub fn co_members(store: &EventStore, me: Uuid) -> Vec<CoMember> {
                 entry.key_conflict = true;
             } else if let Some(key) = roster.account_signing_key(account) {
                 fks.entry(account).or_default().insert(FounderPin::fingerprint_hex(key));
+            }
+            for (device, d) in &head.devices {
+                if d.revoked && !entry.revoked_devices.contains(device) {
+                    entry.revoked_devices.push(*device);
+                }
             }
             for (device, key) in &head.ka_keys {
                 let vouched = head.devices.get(device).is_some_and(|d| !d.revoked && d.accounts.contains(&account));
