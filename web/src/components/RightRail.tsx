@@ -130,7 +130,10 @@ export function RightRail({
   // header ✕. Ignored while typing so it never eats a composer/​input Escape.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      // Escape closes the innermost thing first: an open dialog, menu or
+      // popover owns this press, not the rail behind it.
+      if (document.querySelector('[aria-modal="true"], [role="menu"], [role="listbox"]')) return;
       const el = document.activeElement;
       const typing =
         el instanceof HTMLElement &&
