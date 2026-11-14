@@ -68,8 +68,9 @@ validate an earlier step and a later demotion doesn't undo one. After removal
 they can't come back: joining needs a single-use invite an Admin issued, and
 a removed account also needs an Admin to re-add it; a removed member's new
 events are refused on every device. After removal with key rotation they can't read new
-traffic on any host, and old-key writes from them are refused (see the
-attachment caveat in [Known limitations](#known-limitations)).
+traffic or attachments on any host, old-key writes from them are refused,
+and a box enrolled for them (even one still hosting an agent) gets no new
+key.
 
 ### Prompt injection and hostile content {#prompt-injection}
 
@@ -172,12 +173,15 @@ each stays on this list until a release fixes it.
    signs for the agent itself; under rules version 2 that output, and every
    effect of the chat's primary runtime (stamped `runtime_effect`), is judged
    at the Agent tier too. Under rules v1 it is judged by its host's role.
-5. **Attachments and host presence beats use the passphrase key.** Chat
-   events follow signed key rotations on every host, but attachment blobs and
-   the hosts' liveness beats are still sealed under the passphrase-derived
-   key (epoch 0), which a removed member who knew the passphrase keeps.
-   After offboarding someone, treat attachments sent later as readable by
-   them, or [move to a new workspace](runbooks.md#move-to-a-new-workspace).
+5. **Lease beats and invites use older keys.** Chat events, attachment
+   blobs and host liveness beats follow signed key rotations on every host
+   (readers take host beats only at the newest authorized key). Workflow and
+   coordinator lease beats are signed by their device but still sealed under
+   the passphrase-derived key (epoch 0), so a removed member who knew the
+   passphrase can still see which device holds a lease. An invite code
+   carries the passphrase and every authorized epoch key: anyone who sees a
+   code reads the workspace's history up to that point, whether or not its
+   single-use invite was redeemed; rotate after a code leaks.
 6. **Signed rotations rely on what a device folds.** A rotation counts only
    when an Admin's certified device signed it at the next version on the
    config log, and a device seals only under such a rotation; junk or
@@ -197,8 +201,13 @@ each stays on this list until a release fixes it.
    in your browser on `https://ligus.ai/presence`; a compromised page there
    can't forge a device signature, but it could ask your authenticator to
    sign a different event during a gesture you started. The desktop checks
-   the returned challenge is its own, and the sheet shows the digest so you
-   can compare it with the page.
+   the returned challenge is its own, and the sheet shows the first 64 bits
+   of the digest; the page computes the same id from the challenge it signs
+   (never from the link), so compare the two. A person who lost every
+   passkey confirms with the recovery key's 24 words in the same sheet. An
+   account's **first** passkey is trust-on-first-use from its device: under
+   rules v2, an account without a passkey is only as strong as its devices,
+   and an Admin can't clear the passkeys of a member above them.
 8. **Phone approvals through a box carry your passkey.** A `ligus serve`
    box enrolled as your device signs as you, so votes, lockdown clears and
    agent rebinds from the phone go through `presence/prepare` and
@@ -311,6 +320,8 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 | Secrets (Track B) | Seeds and `settings.json` secrets were plain files readable by anything running as the user | OS secret store (a dedicated macOS keychain in the data dir, Secret Service, `systemd-creds`); files keep `{"set": true}` placeholders |
 | Secrets (C-11) | A subscription CLI agent keeps login-keychain access and could ask for items that trust `/usr/bin/security` | Ligus's items are in their own keychain file under the data dir, which every agent sandbox denies |
 | Presence (Track B) | No human presence on admin events | Rules v2: passkey assertions over the event digest inside the signed stamp, verified offline on every device |
+| Keys (Track B review) | Attachments and host liveness beats stayed on the passphrase key; a removed member's box still hosting an agent got every new key; a stranger could deliver the key a DM's second side adopted | Blobs and host beats follow the keyring; rotations seal only to devices of current members; a DM key is adopted only from the DM's friend |
+| Presence (Track B review) | The passkey page showed a 32-bit digest id taken from its link; re-owning another member's host skipped presence; an Admin could strip an Owner's passkeys; the recovery key had no way to be used; dearth mode was read from an unpinned projection | A 64-bit id the page computes from the challenge; host takeovers need presence; removals only at or below the remover's role; Use recovery key in the confirmation sheet; dearth mode follows the founder pin |
 | Relay (E-5) | The ligus-auth access token was sent to any configured relay, an invite's included | Only to the relay origin its session was signed in for |
 | Host (C-9) | An agent could write hooks or MCP servers into `~/.claude`, `~/.codex` and the other CLIs' config, which ran unsandboxed on the user's next CLI start | CLI agents run with a per-turn home seeded with the top-level config files; their real config dirs aren't writable, and only refreshed sign-in files are copied back ([details](../addons/acp.md#cli-home)) |
 | Host (C-13) | A macOS agent could drive other apps with Apple Events or read the pasteboard | The Seatbelt profile denies Apple Events and the pasteboard services |
@@ -327,8 +338,8 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 ### Open {#findings-open}
 
 These are in [Known limitations](#known-limitations) and stay there until a
-release fixes them: attachments and host liveness beats on the passphrase key,
-rules v1 as the default (presence only once an Owner turns rules v2 on),
+release fixes them: lease beats on the passphrase key and invite codes
+carrying every epoch key, rules v1 as the default (presence only once an Owner turns rules v2 on),
 devices without a founder pin keeping the passphrase key, and ingest-time
 decisions that depend on arrival order. On Kubernetes, DNS tunnelling through
 the cluster resolver remains possible (see

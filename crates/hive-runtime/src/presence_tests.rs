@@ -457,3 +457,96 @@ fn removing_a_passkey_needs_presence_under_v2_and_then_it_no_longer_counts() {
     let cfg = workspace_config_session_id(wid);
     assert!(svc.add_member(cfg, wid, member("fay", WorkspaceRole::Viewer)).is_err());
 }
+
+/// Rules v2: touching a host someone else owns needs presence, including
+/// re-owning it under the same id (a takeover looks like a self-owned host).
+#[test]
+fn taking_over_a_foreign_host_needs_presence() {
+    use hive_core::authz::rules::requires_presence;
+    use hive_core::authz::RosterState;
+    let roster = RosterState::default();
+    let mut fold = hive_core::ChatSession::new("c", Uuid::nil(), "x");
+    let mut theirs = hive_core::WorkspaceHost::new("box1", hive_core::HostKind::Worker, "box1");
+    theirs.owner_actor_id = "ana".into();
+    fold.workspace_hosts.push(theirs.clone());
+    let mut mine = theirs.clone();
+    mine.owner_actor_id = "me".into();
+    assert!(requires_presence(&SessionEvent::WorkspaceHostUpserted { host: mine.clone() }, "me", &roster, &fold));
+    assert!(requires_presence(&SessionEvent::WorkspaceHostsUpdated { hosts: vec![mine] }, "me", &roster, &fold));
+}
+
+/// An Admin may clear a member's lost credentials, but not strip an Owner's
+/// (passkeys or recovery key): after that the Owner's account would take a
+/// new "first" passkey on its device key alone (TOFU).
+#[test]
+fn an_admin_cannot_remove_an_owners_passkey() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("hive.db");
+    let ana_account = Uuid::new_v4();
+    let mut ana_author = ActorIdentity::new(ana_account.to_string(), "Ana", ActorKind::Human);
+    ana_author.account_id = Some(ana_account);
+    let mut ana = ChatService::new(EventStore::open(&db).unwrap(), Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), ana_author);
+    let wid = Uuid::new_v4();
+    ana.ensure_workspace_config(wid).unwrap();
+    let key = SoftAuthenticator::es256();
+    register(&mut ana, wid, &key, None).unwrap();
+    let cfg = workspace_config_session_id(wid);
+    let bea_account = Uuid::new_v4();
+    let mut bea_author = ActorIdentity::new(bea_account.to_string(), "Bea", ActorKind::Human);
+    bea_author.account_id = Some(bea_account);
+    let mut m = member(&bea_account.to_string(), WorkspaceRole::Admin);
+    m.actor = bea_author.clone();
+    ana.add_member(cfg, wid, m).unwrap();
+    let bea_dev = SigningKeypair::generate().unwrap();
+    let bea_dev_id = Uuid::new_v4();
+    let bea_acct_key = SigningKeypair::generate().unwrap();
+    let mut bea = ChatService::new(EventStore::open(&db).unwrap(), bea_dev_id, bea_dev, bea_acct_key, bea_author);
+    bea.ensure_workspace_config(wid).unwrap();
+    let id = key.credential(ana_account, "").credential_id;
+    let r = bea.remove_passkey(wid, ana_account, &id);
+    assert!(r.is_err(), "an Admin removed the Owner's passkey: {r:?}");
+    assert_eq!(ana.passkeys_of(wid, ana_account).unwrap().len(), 1);
+}
+
+/// The digest short id a person compares between the app and the passkey
+/// page must not be grindable: 32 bits are (an attacker who can draft events
+/// varies the event id until a different event shows the same short id).
+/// 64 bits, and it is the prefix of the very challenge signed.
+#[test]
+fn digest_short_id_is_64_bits_of_the_challenge() {
+    let (mut svc, wid, _key, _rec) = on_rules_v2();
+    let cfg = workspace_config_session_id(wid);
+    svc.capture_presence(true);
+    assert!(svc.add_member(cfg, wid, member("gus", WorkspaceRole::Viewer)).is_err());
+    let draft = svc.take_presence_draft().unwrap();
+    assert_eq!(draft.request.digest_short, hive_core::keys::hex(&draft.request.challenge[..8]));
+}
+
+/// Under rules v2, leaving v2 (back to v1, or on to a version this build
+/// doesn't know) is itself presence-gated: a device key alone can't switch
+/// presence off.
+#[test]
+fn downgrading_from_v2_needs_presence() {
+    let (mut svc, wid, key, _rec) = on_rules_v2();
+    for v in [1, 0, hive_core::authz::RULES_SUPPORTED + 1] {
+        let err = svc.set_workspace_rules(wid, v).unwrap_err().to_string();
+        assert!(err.contains(hive_core::authz::PRESENCE_REQUIRED), "v{v}: {err}");
+    }
+    // A forged switch back to v1 without presence is denied by the fold.
+    let cfg = workspace_config_session_id(wid);
+    let mut forged = config_log(&svc, wid).into_iter().rev().find(|e| matches!(e.payload, SessionEvent::WorkspaceRulesSet { .. })).unwrap();
+    forged.clear_raw();
+    forged.event_id = Uuid::new_v4();
+    forged.lamport += 100;
+    forged.payload = SessionEvent::WorkspaceRulesSet { version: 1 };
+    forged.actor_stamp.as_mut().unwrap().presence = None;
+    forged.signature = None;
+    svc.sign_for_test(&mut forged);
+    let mut log = config_log(&svc, wid);
+    log.push(forged.clone());
+    assert_eq!(fold_decisions(&log, None, None, WorkspaceAuthz::Unchecked)[&forged.event_id], Verdict::Denied);
+    // With the passkey it goes through.
+    svc.set_presence_provider(Some(Arc::new(Soft(key))));
+    svc.set_workspace_rules(wid, 1).unwrap();
+    let _ = cfg;
+}

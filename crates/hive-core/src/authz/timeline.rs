@@ -138,18 +138,17 @@ impl RosterState {
     /// Who a rotation at this position seals the new key to (B1): every
     /// device that published its own key-agreement key, is certified and not
     /// revoked, and acts for a current member's account (a member's own
-    /// devices and the serve or worker boxes enrolled for them), plus every
-    /// device an agent is bound to. Device id → X25519 public key.
+    /// devices and the serve or worker boxes enrolled for them, which is how
+    /// an agent's host gets the key). A device an agent is merely bound to
+    /// is not enough: a removed member's box still hosting an agent would
+    /// otherwise get every later key. Device id → X25519 public key.
     pub fn rotation_recipients(&self) -> BTreeMap<Uuid, Vec<u8>> {
         let accounts: BTreeSet<Uuid> = self.members.values().filter_map(|m| m.account_id).collect();
-        let hosts: BTreeSet<&str> = self.agents.values().map(|a| a.host_id.as_str()).filter(|h| !h.is_empty()).collect();
         self.ka_keys
             .iter()
             .filter(|(device, _)| {
                 let Some(d) = self.devices.get(device) else { return false };
-                !d.revoked
-                    && !d.accounts.is_empty()
-                    && (d.accounts.iter().any(|a| accounts.contains(a)) || hosts.contains(device.to_string().as_str()))
+                !d.revoked && d.accounts.iter().any(|a| accounts.contains(a))
             })
             .map(|(d, k)| (*d, k.clone()))
             .collect()

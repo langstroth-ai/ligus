@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 
 const handlers: Record<string, (e: { payload: unknown }) => void> = {};
 vi.mock("@tauri-apps/api/event", () => ({
@@ -38,5 +38,29 @@ describe("PresenceSheet", () => {
       handlers["presence://done"]({ payload: true });
     });
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+  it("confirms with the recovery key words instead of a passkey", async () => {
+    render(<PresenceSheet />);
+    await act(async () => {
+      handlers["presence://requested"]({ payload: { kind: "memberRemoved", summary: "Remove member bea", digestShort: "1a2b3c4d", op: "get" } });
+    });
+    await act(async () => {
+      screen.getByText("Use recovery key").click();
+    });
+    const box = screen.getByLabelText("Recovery key words") as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.change(box, { target: { value: "abandon ability able" } });
+    });
+    await act(async () => {
+      screen.getByText("Confirm with recovery key").click();
+    });
+    expect(invoke).toHaveBeenCalledWith("presence_use_recovery", { words: "abandon ability able" });
+  });
+  it("offers no recovery key while creating a passkey", async () => {
+    render(<PresenceSheet />);
+    await act(async () => {
+      handlers["presence://requested"]({ payload: { kind: "passkeyRegistered", summary: "Create", digestShort: "aa", op: "create" } });
+    });
+    expect(screen.queryByText("Use recovery key")).toBeNull();
   });
 });

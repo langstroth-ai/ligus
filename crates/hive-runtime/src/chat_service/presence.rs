@@ -30,7 +30,7 @@ pub struct PresenceRequest {
     pub account_id: Uuid,
     /// That account's credentials here (WebAuthn `allowCredentials`).
     pub credential_ids: Vec<String>,
-    /// First 8 hex characters of the digest, shown to the person.
+    /// First 16 hex characters (64 bits) of the digest, shown to the person.
     pub digest_short: String,
     /// What is being authorized, in words.
     pub summary: String,
@@ -115,7 +115,7 @@ impl ChatService {
             kind: env.payload.kind_str().to_string(),
             account_id,
             credential_ids,
-            digest_short: hive_core::keys::hex(&challenge[..4]),
+            digest_short: hive_core::keys::hex(&challenge[..8]),
             summary: summarize(&env.payload),
         })
     }

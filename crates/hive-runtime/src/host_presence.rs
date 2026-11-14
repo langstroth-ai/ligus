@@ -8,8 +8,11 @@
 //! the event log). The durable host record is only written when something real
 //! changes (label, kind, owner).
 //!
-//! A beat is sealed under the workspace key, so the relay sees only an opaque
-//! slot name and ciphertext. Readers merge beats with the durable `last_seen`
+//! A beat is sealed under the keyring's seal key (the authorized head, B1), so
+//! the relay sees only an opaque slot name and ciphertext. Beats are unsigned,
+//! so a reader accepts only those sealed at the authorized head: anyone still
+//! holding an older key (a removed member, an old invite's passphrase) can
+//! neither read nor forge liveness after a rotation. Readers merge beats with the durable `last_seen`
 //! (whichever is newer), so a host still running an older build — which keeps
 //! heartbeating durably — shows its true state; an older reader sees the new
 //! hosts' durable `last_seen` stop moving and reports them offline/stale.
@@ -17,10 +20,11 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use hive_core::{open_symmetric, seal_symmetric, SealedEnvelope, Timestamp, WorkspaceHost};
+use hive_core::{open_symmetric, seal_symmetric_kid, SealedEnvelope, Timestamp, WorkspaceHost};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::keyring::KeyringEngine;
 use crate::relay_client::{RelayClient, RelayError};
 
 /// A host counts as online when it beat within this many seconds.
@@ -43,22 +47,32 @@ struct Beat {
     at: i64,
 }
 
-/// Seal a beat for `host_id` at `at` (unix seconds) under the workspace key.
-pub fn seal_host_beat(key: &[u8; 32], host_id: &str, at: i64) -> Option<Value> {
+/// Seal a beat for `host_id` at `at` (unix seconds) under `ring`'s seal key
+/// (none when this device may not seal).
+pub fn seal_host_beat(ring: &KeyringEngine, host_id: &str, at: i64) -> Option<Value> {
+    let k = ring.seal_key()?;
     let plain = serde_json::to_vec(&Beat { host_id: host_id.to_string(), at }).ok()?;
-    let sealed = seal_symmetric(key, 0, &plain).ok()?;
+    let sealed = seal_symmetric_kid(&k.key, k.version, &k.kid, &plain).ok()?;
     Some(serde_json::json!({ "hostBeat": sealed }))
 }
 
 /// Open every host beat in a presence listing (`slot` → blob). Skips human
-/// presence, beats sealed under another key, and a beat whose slot doesn't
-/// match the host it names. A beat from the future is clamped to `now`.
-pub fn open_host_beats(blobs: &HashMap<String, Value>, key: &[u8; 32], now: i64) -> HashMap<String, i64> {
+/// presence, beats sealed under another key or under an epoch older than the
+/// authorized head, and a beat whose slot doesn't match the host it names. A
+/// beat from the future is clamped to `now`.
+pub fn open_host_beats(blobs: &HashMap<String, Value>, ring: &KeyringEngine, now: i64) -> HashMap<String, i64> {
     let mut out = HashMap::new();
+    let floor = ring.authorized_head();
     for (slot, blob) in blobs {
         let Some(sealed) = blob.get("hostBeat") else { continue };
         let Ok(sealed) = serde_json::from_value::<SealedEnvelope>(sealed.clone()) else { continue };
-        let Ok(plain) = open_symmetric(key, &sealed) else { continue };
+        if sealed.version < floor {
+            continue;
+        }
+        let Some(plain) = ring.keys_for(sealed.version, sealed.kid.as_deref()).into_iter().find_map(|k| open_symmetric(k, &sealed).ok())
+        else {
+            continue;
+        };
         let Ok(beat) = serde_json::from_slice::<Beat>(&plain) else { continue };
         if *slot != host_presence_slot(&beat.host_id) {
             continue;
@@ -71,16 +85,16 @@ pub fn open_host_beats(blobs: &HashMap<String, Value>, key: &[u8; 32], now: i64)
 }
 
 /// Publish this host's beat to the room's presence channel.
-pub async fn publish_host_beat(relay: &RelayClient, room: &str, key: &[u8; 32], host_id: &str) -> Result<(), RelayError> {
+pub async fn publish_host_beat(relay: &RelayClient, room: &str, ring: &KeyringEngine, host_id: &str) -> Result<(), RelayError> {
     let now = Timestamp::now().inner().unix_timestamp();
-    let Some(blob) = seal_host_beat(key, host_id, now) else { return Ok(()) };
+    let Some(blob) = seal_host_beat(ring, host_id, now) else { return Ok(()) };
     relay.publish_presence(room, &host_presence_slot(host_id), &blob).await
 }
 
 /// Read every host's latest beat in the room (host id → unix seconds).
-pub async fn fetch_host_beats(relay: &RelayClient, room: &str, key: &[u8; 32]) -> Result<HashMap<String, i64>, RelayError> {
+pub async fn fetch_host_beats(relay: &RelayClient, room: &str, ring: &KeyringEngine) -> Result<HashMap<String, i64>, RelayError> {
     let blobs = relay.list_presence(room).await?;
-    Ok(open_host_beats(&blobs, key, Timestamp::now().inner().unix_timestamp()))
+    Ok(open_host_beats(&blobs, ring, Timestamp::now().inner().unix_timestamp()))
 }
 
 /// The latest beat seen per host, shared between the task that polls the relay
@@ -135,8 +149,8 @@ mod tests {
     use super::*;
     use hive_core::HostKind;
 
-    fn key(s: &str) -> [u8; 32] {
-        hive_core::derive_workspace_key(s)
+    fn key(s: &str) -> KeyringEngine {
+        KeyringEngine::passphrase(uuid::Uuid::nil(), hive_core::derive_workspace_key(s))
     }
 
     #[test]

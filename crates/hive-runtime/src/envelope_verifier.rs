@@ -252,8 +252,11 @@ fn config_workspaces(ordered: &[&SessionEventEnvelope]) -> HashSet<Uuid> {
 }
 
 /// Per workspace, the active dearth policy from its config log, projected with
-/// the usual ingest authorization (so only an Admin's switch or approval counts).
-fn dearth_policies(ordered: &[&SessionEventEnvelope]) -> HashMap<Uuid, DearthPolicy> {
+/// the usual ingest authorization (so only an Admin's switch or approval counts)
+/// and the same founder pin as the roster, so a forged lower-lamport seed
+/// can't pick the projection dearth mode is read from.
+fn dearth_policies(ordered: &[&SessionEventEnvelope], pin: Option<&FounderPin>) -> HashMap<Uuid, DearthPolicy> {
+    let founder = pin.map(|p| p.founder_account.to_string());
     let mut logs: HashMap<Uuid, Vec<SessionEventEnvelope>> = HashMap::new();
     for env in ordered {
         if env.session_id == hive_core::workspace_config_session_id(env.workspace_id) {
@@ -265,7 +268,7 @@ fn dearth_policies(ordered: &[&SessionEventEnvelope]) -> HashMap<Uuid, DearthPol
         if !envs.iter().any(|e| matches!(e.payload, SessionEvent::DearthModeChanged { .. })) {
             continue;
         }
-        let Some(cfg) = hive_core::project(&envs) else { continue };
+        let Some(cfg) = hive_core::project_with_founder(&envs, founder.as_deref()) else { continue };
         let Some(d) = cfg.guards.dearth_on() else { continue };
         let approvers = cfg
             .guards
@@ -547,7 +550,7 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
             roster.account_keys.insert(*account_id, key.clone());
         }
     }
-    let dearth = dearth_policies(&ordered);
+    let dearth = dearth_policies(&ordered, pin);
     roster.dearth_workspaces = dearth.keys().copied().collect();
     for (cert, ws) in certs.iter().zip(&cert_ws) {
         let Some(account_key) = account_keys.get(&cert.account_id) else { continue };

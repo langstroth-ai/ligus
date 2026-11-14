@@ -7,10 +7,17 @@
 //! fetch + open the file. The relay stores ciphertext; only key-holders decrypt.
 //!
 //! Frame layout (little-endian): `[epoch: u32][nonce: 12 bytes][ciphertext]`.
-//! Self-describing so a downloader needs only the workspace key.
+//! Self-describing so a downloader picks the key for that epoch from its
+//! keyring.
+//!
+//! Attachments are sealed under the keyring's seal key (the authorized head,
+//! B1), never the passphrase epoch once a rotation exists: a member removed
+//! and rotated out keeps the passphrase, and would otherwise read every
+//! attachment shared after their removal.
 
 use hive_core::e2ee::{open_symmetric, seal_symmetric, SealedEnvelope};
 
+use crate::keyring::KeyringEngine;
 use crate::relay_client::{RelayClient, RelayError};
 
 const NONCE_LEN: usize = 12;
@@ -104,18 +111,37 @@ pub fn open_framed(key: &[u8; 32], framed: &[u8]) -> Option<Vec<u8>> {
     open_symmetric(key, &sealed).ok()
 }
 
+/// Seal + frame file bytes under `ring`'s seal key (the authorized head).
+/// Refuses when this device may not seal (not a recipient of the head).
+pub fn seal_with_ring(ring: &KeyringEngine, plaintext: &[u8]) -> Result<Vec<u8>, RelayError> {
+    let k = ring
+        .seal_key()
+        .ok_or_else(|| RelayError::Message("no workspace key to seal the attachment under".into()))?;
+    seal_framed(&k.key, k.version, plaintext)
+}
+
+/// Unframe + open a downloaded blob with whichever key `ring` holds for its
+/// epoch.
+pub fn open_with_ring(ring: &KeyringEngine, framed: &[u8]) -> Option<Vec<u8>> {
+    if framed.len() < HEADER_LEN {
+        return None;
+    }
+    let version = u32::from_le_bytes(framed[0..4].try_into().ok()?);
+    ring.keys_for(version, None).into_iter().find_map(|k| open_framed(k, framed))
+}
+
 /// Seal `plaintext`, upload it to the workspace's relay blob channel, and return
 /// the reference to embed in the message. `id` is caller-chosen (a UUID).
 pub async fn upload(
     client: &RelayClient,
     workspace: &str,
-    key: &[u8; 32],
+    ring: &KeyringEngine,
     id: &str,
     name: &str,
     content_type: &str,
     plaintext: &[u8],
 ) -> Result<BlobRef, RelayError> {
-    let framed = seal_framed(key, 0, plaintext)?;
+    let framed = seal_with_ring(ring, plaintext)?;
     client.put_blob(workspace, id, framed).await?;
     Ok(BlobRef {
         id: id.to_string(),
@@ -130,11 +156,11 @@ pub async fn upload(
 pub async fn download(
     client: &RelayClient,
     workspace: &str,
-    key: &[u8; 32],
+    ring: &KeyringEngine,
     id: &str,
 ) -> Result<Option<Vec<u8>>, RelayError> {
     match client.get_blob(workspace, id).await? {
-        Some(framed) => Ok(open_framed(key, &framed)),
+        Some(framed) => Ok(open_with_ring(ring, &framed)),
         None => Ok(None),
     }
 }
@@ -168,7 +194,7 @@ pub async fn materialize_body(
     body: &str,
     client: &RelayClient,
     workspace: &str,
-    key: &[u8; 32],
+    ring: &KeyringEngine,
     cache_dir: &std::path::Path,
 ) -> String {
     let refs = parse_markers(body);
@@ -179,7 +205,7 @@ pub async fn materialize_body(
     for r in refs {
         let path = cache_dir.join(cache_filename(&r.id, &r.name));
         if !path.exists() {
-            match download(client, workspace, key, &r.id).await {
+            match download(client, workspace, ring, &r.id).await {
                 Ok(Some(bytes)) => {
                     let _ = std::fs::create_dir_all(cache_dir);
                     if std::fs::write(&path, &bytes).is_err() {

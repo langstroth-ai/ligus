@@ -152,8 +152,10 @@ The complete way to cut someone's reading, including on headless devices.
 
 1. An Admin opens **Settings → Passkeys & keys → Rotate workspace key**
    (under rules v2, confirm with a passkey). The new key is sealed to every
-   current member's devices that published a key-agreement key, and to
-   agent host boxes; the rotation is a signed `WorkspaceKeyRotated` event on
+   current member's devices that published a key-agreement key, including
+   the serve and worker boxes enrolled for a current member (a box enrolled
+   for someone who was removed gets no new key, even while an agent is still
+   bound to it); the rotation is a signed `WorkspaceKeyRotated` event on
    the config log, one version above the last one.
 2. Every device adopts it from the config log; its body also goes to the
    relay keyring route so a device whose log is behind can read it sooner.
@@ -173,12 +175,17 @@ The complete way to cut someone's reading, including on headless devices.
 
 1. If you have another passkey or your recovery key: **Settings → Passkeys
    & keys**, register a replacement (confirm with the one you still have),
-   then remove the lost one (an Admin can also remove it for you).
+   then remove the lost one (an Admin can also remove it for you, unless
+   you are an Owner: an Admin never removes the passkeys of a role above
+   theirs).
 2. Synced passkeys (iCloud Keychain, Google Password Manager) usually come
    back with the account; a lost YubiKey doesn't.
-3. Lost every passkey but the recovery key: confirm with the recovery key
-   (enter the 24 words when Ligus asks) and register new passkeys.
-4. Lost everything: another Owner or Admin removes your passkeys (with their
+3. Lost every passkey but the recovery key: when the **Confirm with
+   passkey** sheet opens, choose **Use recovery key** and enter the 24 words
+   (they are checked and used on this device only, never stored), then
+   register new passkeys.
+4. Lost everything: another Owner (or, for an Admin or below, an Admin)
+   removes your passkeys (with their
    own passkey) and you register a new first passkey. **A sole Owner without
    a recovery key can't make admin changes under rules v2, by design.** That
    is why Ligus asks for the recovery key before it turns rules v2 on.

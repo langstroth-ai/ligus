@@ -194,6 +194,19 @@ impl KeyringEngine {
         Self { workspace_id, read, seal, head, lost, authorized }
     }
 
+    /// The ring for `workspace_id` from `store`'s config log, folded with this
+    /// device's founder pin for it (only a pinned fold decides keys; without
+    /// one the ring holds what `src` holds and seals under the passphrase
+    /// epoch, as [`crate::SyncEngine`] does).
+    pub fn from_store(store: &crate::EventStore, workspace_id: Uuid, src: &KeySource) -> Self {
+        let pinned = store.workspace_pin(workspace_id).ok().flatten().map(|p| p.founder_account.to_string());
+        let loaded = pinned.as_deref().and_then(|pin| store.load_config(workspace_id, Some(pin), None).ok());
+        match loaded {
+            Some((Some(_), timeline)) => Self::build(workspace_id, Some(&timeline), src, &[]),
+            _ => Self::build(workspace_id, None, src, &[]),
+        }
+    }
+
     /// The key a `WorkspaceKeyRotated` body is sealed under: the epoch it
     /// follows (`prev_version`), so every recipient of that epoch can read the
     /// rotation and learn the new key. Falls back to the seal key.

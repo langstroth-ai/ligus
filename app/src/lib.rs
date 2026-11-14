@@ -757,6 +757,34 @@ mod workspace_invite_tests {
         assert_eq!(back.founder_actor_id, None);
     }
 
+    /// The friend's side of a DM (no key yet) adopts a delivered key only
+    /// from the friend it is a DM with: the inbox accepts invites from anyone,
+    /// and the DM room is derived from two public account ids, so anyone
+    /// could otherwise deliver their own key first and read what this side
+    /// writes.
+    #[test]
+    fn dm_key_is_adopted_only_from_the_dm_friend() {
+        let pending = || WorkspaceConn {
+            name: "ana".into(),
+            relay_url: "x".into(),
+            room: "dm-0123".into(),
+            key: None,
+            icon: None,
+            dm_account: Some("github:7".into()),
+            founder_actor_id: Some("github:7".into()),
+            fk: None,
+            inv: None,
+            ek: Vec::new(),
+        };
+        let delivered = WorkspaceConn { key: Some("mallory-chose-this".into()), dm_account: None, ..pending() };
+        let mut w = pending();
+        assert!(!adopt_dm_key(&mut w, &delivered, "mallory"), "a stranger's invite named the DM room");
+        assert_eq!(w.key, None);
+        assert!(adopt_dm_key(&mut w, &delivered, "Ana"), "the friend's own delivery (login case-insensitive)");
+        assert!(w.key.is_some());
+        assert!(!adopt_dm_key(&mut w, &delivered, "ana"), "only once");
+    }
+
     #[test]
     fn same_room_shares_workspace_id() {
         let a = WorkspaceConn { name: "A".into(), relay_url: "x".into(), room: "shared".into(), key: None, icon: None, dm_account: None, founder_actor_id: None, fk: None, inv: None, ek: Vec::new() };
@@ -3498,14 +3526,32 @@ fn content_type_for(path: &std::path::Path) -> String {
     .to_string()
 }
 
-/// The relay room + workspace key needed for the blob channel. `None` when no
-/// relay is configured or no workspace key is set → attachments stay local-only.
-fn blob_transport(state: &AppState) -> Option<(String, String, [u8; 32])> {
-    let s = state.settings.lock().unwrap();
-    let url = s.relay_url.clone().filter(|u| !u.trim().is_empty())?;
-    let room = s.sync_room.clone();
-    let key = s.workspace_key()?;
-    Some((url, room, key))
+/// The relay room + workspace keyring needed for the blob channel. `None` when
+/// no relay is configured or no workspace key is held → attachments stay
+/// local-only. Blobs seal under the ring's seal key (the authorized head, B1)
+/// and open with whichever key the ring holds for their epoch.
+fn blob_transport(state: &AppState) -> Option<(String, String, hive_runtime::keyring::KeyringEngine)> {
+    let (url, room, conn) = {
+        let s = state.settings.lock().unwrap();
+        let url = s.relay_url.clone().filter(|u| !u.trim().is_empty())?;
+        s.workspace_key()?;
+        let room = s.sync_room.clone();
+        let conn = s.workspaces.iter().find(|w| w.room == room).cloned();
+        (url, room, conn)
+    };
+    let ring = workspace_ring(state, &room, conn.as_ref());
+    if ring.is_empty() {
+        return None;
+    }
+    Some((url, room, ring))
+}
+
+/// This device's keyring for `room` (B1), from the pinned config fold: what
+/// blobs and liveness beats seal under and open with.
+fn workspace_ring(state: &AppState, room: &str, conn: Option<&WorkspaceConn>) -> hive_runtime::keyring::KeyringEngine {
+    let src = key_source_for(state, conn);
+    let svc = state.service.lock().unwrap();
+    hive_runtime::keyring::KeyringEngine::from_store(svc.store(), room_workspace_id(room), &src)
 }
 
 /// Share a composer attachment so every workspace member can receive it: seal the
@@ -3537,7 +3583,7 @@ async fn share_attachment(
         }
     }
 
-    let Some((url, room, key)) = blob_transport(&state) else {
+    let Some((url, room, ring)) = blob_transport(&state) else {
         // Local-only: no relay, so keep the path marker (unchanged behavior).
         return Ok(format!("[Attached: {}]", p.display()));
     };
@@ -3545,7 +3591,7 @@ async fn share_attachment(
     let id = Uuid::new_v4().to_string();
     let client = state.relay_client(&url);
     let blob_ref =
-        hive_runtime::attachment_blob::upload(&client, &room, &key, &id, &name, &content_type, &bytes)
+        hive_runtime::attachment_blob::upload(&client, &room, &ring, &id, &name, &content_type, &bytes)
             .await
             .map_err(|e| format!("upload attachment: {e}"))?;
     // Cache the plaintext locally so the sender resolves it with no download.
@@ -3576,11 +3622,11 @@ async fn resolve_attachment_blob(
     if path.exists() {
         return Ok(path.to_string_lossy().into_owned());
     }
-    let Some((url, room, key)) = blob_transport(&state) else {
+    let Some((url, room, ring)) = blob_transport(&state) else {
         return Err("no relay configured — this attachment is only on the sender's device".into());
     };
     let client = state.relay_client(&url);
-    match hive_runtime::attachment_blob::download(&client, &room, &key, &id).await {
+    match hive_runtime::attachment_blob::download(&client, &room, &ring, &id).await {
         Ok(Some(bytes)) => {
             std::fs::create_dir_all(&cache).map_err(map_err)?;
             std::fs::write(&path, &bytes).map_err(map_err)?;
@@ -6908,13 +6954,13 @@ async fn windowed_context(
     // Materialize any `[Attached-blob: …]` references to local files so the agent
     // (which reads paths) can open attachments other members shared over the relay.
     // No-op for turns without blob markers, or when no relay/key is configured.
-    if let Some((url, room, key)) = blob_transport(state) {
+    if let Some((url, room, ring)) = blob_transport(state) {
         let client = state.relay_client(&url);
         let cache = blob_cache_dir(&state.data_dir);
         for t in turns.iter_mut() {
             if t.content.contains("[Attached-blob:") {
                 t.content =
-                    hive_runtime::attachment_blob::materialize_body(&t.content, &client, &room, &key, &cache)
+                    hive_runtime::attachment_blob::materialize_body(&t.content, &client, &room, &ring, &cache)
                         .await;
             }
         }
@@ -11463,12 +11509,12 @@ async fn run_device_host_loop(app: AppHandle) {
         let state = app.state::<AppState>();
         let conn = {
             let s = state.settings.lock().unwrap();
-            s.relay_url
-                .clone()
-                .filter(|u| !u.trim().is_empty())
-                .map(|u| (u, s.sync_room.clone(), s.workspace_key()))
+            s.relay_url.clone().filter(|u| !u.trim().is_empty()).map(|u| {
+                let ws_conn = s.workspaces.iter().find(|w| w.room == s.sync_room).cloned();
+                (u, s.sync_room.clone(), s.workspace_key(), ws_conn)
+            })
         };
-        let Some((url, room, key)) = conn else { continue };
+        let Some((url, room, key, ws_conn)) = conn else { continue };
         let ws = room_workspace_id(&room);
         let host_id = state.local_host_id();
         {
@@ -11482,19 +11528,22 @@ async fn run_device_host_loop(app: AppHandle) {
             }
         }
         state.host_presence.record(&host_id, hive_core::Timestamp::now().inner().unix_timestamp());
-        let Some(key) = key else { continue };
+        if key.is_none() {
+            continue;
+        }
+        let ring = workspace_ring(&state, &room, ws_conn.as_ref());
         let relay = state.relay_client(&url);
         let due = match &last_beat {
             Some((r, at)) => r != &room || at.elapsed() >= beat_every,
             None => true,
         };
         if due {
-            match hive_runtime::host_presence::publish_host_beat(&relay, &room, &key, &host_id).await {
+            match hive_runtime::host_presence::publish_host_beat(&relay, &room, &ring, &host_id).await {
                 Ok(()) => last_beat = Some((room.clone(), std::time::Instant::now())),
                 Err(e) => tracing::debug!(target: "hosts", "presence beat failed: {e}"),
             }
         }
-        if let Ok(beats) = hive_runtime::host_presence::fetch_host_beats(&relay, &room, &key).await {
+        if let Ok(beats) = hive_runtime::host_presence::fetch_host_beats(&relay, &room, &ring).await {
             state.host_presence.merge(beats);
         }
     }
@@ -13210,9 +13259,7 @@ async fn list_pending_invites(state: State<'_, AppState>) -> Result<Vec<PendingI
             // A joined DM still waiting for its key (the friend's side): adopt
             // the key and epoch keys its owner delivered.
             let mut s = state.settings.lock().unwrap();
-            if let Some(w) = s.workspaces.iter_mut().find(|w| w.room == conn.room && w.key.is_none() && w.dm_account.is_some()) {
-                w.key = conn.key.clone();
-                w.ek = conn.ek.clone();
+            if s.workspaces.iter_mut().any(|w| adopt_dm_key(w, &conn, &from_login)) {
                 save_settings(&state.data_dir, &s);
             }
             continue; // already joined
@@ -13226,6 +13273,28 @@ async fn list_pending_invites(state: State<'_, AppState>) -> Result<Vec<PendingI
         });
     }
     Ok(out)
+}
+
+/// The friend's side of a DM adopts the key (and epoch keys) its owner
+/// delivered through the inbox, once, while it has none, and only from that
+/// friend: the relay stamps the sender's GitHub login on every inbox event,
+/// and a DM workspace is named by its friend's login (`friend_open_dm`).
+/// Anyone can post to an inbox and the DM room is derived from two public
+/// account ids, so without the sender check a stranger's earlier delivery
+/// would choose the key this side seals its messages under. Returns whether
+/// `w` adopted `conn`'s keys.
+fn adopt_dm_key(w: &mut WorkspaceConn, conn: &WorkspaceConn, from_login: &str) -> bool {
+    if w.room != conn.room || w.key.is_some() || w.dm_account.is_none() {
+        return false;
+    }
+    let friend = w.name.trim().trim_start_matches('@');
+    if friend.is_empty() || !friend.eq_ignore_ascii_case(from_login.trim().trim_start_matches('@')) {
+        tracing::warn!(target: "workspace", "ignored a DM key delivered by someone other than the DM's friend");
+        return false;
+    }
+    w.key = conn.key.clone();
+    w.ek = conn.ek.clone();
+    true
 }
 
 /// Accept a pending invite: join the workspace from its code.
@@ -14891,6 +14960,7 @@ pub fn run() {
             passkey_ui::passkey_remove,
             passkey_ui::workspace_rules_set,
             passkey_ui::presence_cancel,
+            passkey_ui::presence_use_recovery,
             set_relay_user_disabled,
             workflows::list_workflows,
             flow::flow_get_settings,
