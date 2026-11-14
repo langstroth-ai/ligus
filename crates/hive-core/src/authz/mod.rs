@@ -37,6 +37,7 @@ pub mod bounds;
 pub mod timeline;
 pub mod votes;
 pub mod passkeys;
+pub mod links;
 pub mod rules;
 
 use std::collections::BTreeMap;
@@ -371,6 +372,18 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         }
         SessionEvent::PasskeyRemoved { account_id, credential_id } => {
             return match passkeys::removal_ok(env, *account_id, credential_id, on_config, ctx.running, fold, author) {
+                Ok(()) => Decision::Allow,
+                Err(why) => Decision::deny(why),
+            };
+        }
+        SessionEvent::IdentityLinkPublished { link } => {
+            return match links::publish_ok(env, link, on_config, ctx.running) {
+                Ok(()) => Decision::Allow,
+                Err(why) => Decision::deny(why),
+            };
+        }
+        SessionEvent::IdentityLinkRemoved { account_id, link_id } => {
+            return match links::removal_ok(env, *account_id, *link_id, on_config, ctx.running, fold, author) {
                 Ok(()) => Decision::Allow,
                 Err(why) => Decision::deny(why),
             };
