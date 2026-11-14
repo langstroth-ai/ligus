@@ -2017,7 +2017,13 @@ const Bubble = memo(function Bubble({
     // Left-aligned turn row: a whisper of tint + avatar shape carry identity.
     // `content-visibility: auto` lets the engine skip layout/paint for off-screen
     // rows — cheap virtualization for long logs.
-    <div className={`group tt ${kindClass}`} style={rowStyle} onContextMenu={onContextMenu}>
+    <div
+      className={`group tt ${kindClass}`}
+      style={rowStyle}
+      onContextMenu={onContextMenu}
+      data-message-id={messageId}
+      data-author={author}
+    >
       <div className="tt-av">
         <Avatar
           name={author}
