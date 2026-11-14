@@ -2403,18 +2403,31 @@ async fn guards_endpoint_shows_dearth_lockdowns_and_the_coordinator() {
     assert_eq!(g["lockedChats"][0]["signals"][0]["messageId"], json!(cause), "names the reply that tripped it");
     assert!(!g.to_string().contains("AKIA"), "only kinds, never values");
 
-    // The box claims the workspace coordinator lease on its first presence tick.
-    let mut coordinator = Value::Null;
-    for _ in 0..50 {
-        coordinator = h.get("/v1/guards").await["coordinator"].clone();
-        if !coordinator.is_null() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    // The box claims the workspace coordinator lease on a presence tick. The
+    // background loop ticks every 30 s, and its first tick can land before
+    // the box can write (under load it often does), so drive the tick here
+    // instead of waiting for the timer: the outcome no longer depends on
+    // scheduling.
+    // By now the box writes (it created the chat above), so one tick claims
+    // the lease unless the loop already did.
+    tick_coordinator(&h.handle.shared).await;
+    let coordinator = h.get("/v1/guards").await["coordinator"].clone();
     assert_eq!(coordinator["isThis"], true, "{coordinator}");
     assert_eq!(coordinator["epoch"], 1);
     h.handle.shutdown();
+}
+
+/// One coordinator-lease tick, as `presence_loop` runs it.
+async fn tick_coordinator(shared: &Arc<Shared>) {
+    let relay = crate::relay_client(&shared.cfg).unwrap();
+    let ring = match crate::key_source(&shared.cfg) {
+        Ok(src) => hive_runtime::keyring::KeyringEngine::from_store(shared.lock().store(), shared.ws, &src),
+        Err(_) => {
+            let key = hive_core::derive_workspace_key(shared.cfg.key.as_deref().unwrap_or_default());
+            hive_runtime::keyring::KeyringEngine::passphrase(shared.ws, key)
+        }
+    };
+    WorkspaceLease::default().tick(shared, &relay, &shared.cfg.room, &ring).await;
 }
 
 // ── Phone 2.0: proposal sets, lockdown clear, Flow, reviewer recruits ──────
