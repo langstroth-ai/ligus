@@ -110,6 +110,30 @@ fn worker_args(provider: ModelProviderKind, mode: &str) -> Vec<String> {
     }
 }
 
+/// The role gate for subprocess agents. Their tools (shell, edits) are part
+/// of the CLI, so withholding Ligus's tool loop does nothing for them: when
+/// the author is below the floor, a CLI that can be held read-only runs at
+/// its read-only tier, and one that can't (codex, aider, pi, hermes) is
+/// refused. `Err` carries the reason for the chat note.
+fn gate_subprocess_tools(rt: &mut ResolvedRuntime, allow_tools: bool) -> std::result::Result<(), String> {
+    if allow_tools {
+        return Ok(());
+    }
+    match rt.provider {
+        ModelProviderKind::ClaudeCode => rt.args = Vec::new(),
+        ModelProviderKind::Antigravity | ModelProviderKind::Copilot => rt.args = worker_args(rt.provider, "default"),
+        ModelProviderKind::Codex | ModelProviderKind::Aider | ModelProviderKind::Pi | ModelProviderKind::Hermes => {
+            return Err(format!(
+                "{:?} always runs with its own file and shell tools, and the message's author is below this host's tool floor ({})",
+                rt.provider,
+                reply::MIN_ROLE_ENV
+            ));
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// Whether a keyless runtime is usable: native Ollama, or an OpenAI-wire
 /// server on this machine / the LAN / the tailnet (a llama.cpp gateway).
 /// Subscription CLI agents (claude / codex / agy / copilot) are keyless too:
@@ -430,6 +454,11 @@ async fn run_turn(
         return Err(anyhow!("refused by the workspace sandbox"));
     }
     let mut rt = rt;
+    if let Err(reason) = gate_subprocess_tools(&mut rt, allow_tools) {
+        let _ = lock(svc).post_system_note(s.id, s.workspace_id, format!("@{} did not run: {reason}", agent.name));
+        sink.changed();
+        return Err(anyhow!("refused by the tool role gate"));
+    }
     rt.args.extend(enforcement.extra_args);
     let mut tool_settings = ctx.settings.clone();
     tool_settings.run_command &= enforcement.allow_run_command;
@@ -592,6 +621,38 @@ async fn run_turn(
 mod tests {
     use super::*;
     use hive_core::{WorkspaceCredential, WorkspaceRuntime};
+
+    fn rt_with(provider: ModelProviderKind, args: &[&str]) -> ResolvedRuntime {
+        let wr = WorkspaceRuntime::new("gate", "Gate", provider, "m");
+        let mut rt = agent_workspace_runtime(&[wr], &agent("gate")).map(|r| r.0).unwrap_or_else(|_| {
+            // Runtimes that need a secret on this box: shape one by hand.
+            let wr = WorkspaceRuntime::new("gate", "Gate", ModelProviderKind::ClaudeCode, "m");
+            let mut rt = agent_workspace_runtime(&[wr], &agent("gate")).unwrap().0;
+            rt.provider = provider;
+            rt
+        });
+        rt.args = args.iter().map(|a| a.to_string()).collect();
+        rt
+    }
+
+    /// A member below the tool floor must not get a write- or shell-capable
+    /// CLI turn on this box (the CLI's own tools bypass Ligus's tool loop).
+    #[test]
+    fn below_the_floor_cli_agents_run_read_only_or_not_at_all() {
+        let mut rt = rt_with(ModelProviderKind::ClaudeCode, &["--permission-mode", "bypassPermissions"]);
+        gate_subprocess_tools(&mut rt, false).unwrap();
+        assert!(!rt.args.iter().any(|a| a == "bypassPermissions" || a == "acceptEdits"), "{:?}", rt.args);
+        let mut rt = rt_with(ModelProviderKind::Copilot, &["--allow-all-tools"]);
+        gate_subprocess_tools(&mut rt, false).unwrap();
+        assert!(rt.args.contains(&"--deny-tool=shell".to_string()) && !rt.args.contains(&"--allow-all-tools".to_string()));
+        for p in [ModelProviderKind::Codex, ModelProviderKind::Aider, ModelProviderKind::Pi, ModelProviderKind::Hermes] {
+            assert!(gate_subprocess_tools(&mut rt_with(p, &[]), false).is_err(), "{p:?}");
+        }
+        // At or above the floor nothing changes.
+        let mut rt = rt_with(ModelProviderKind::ClaudeCode, &["--permission-mode", "bypassPermissions"]);
+        gate_subprocess_tools(&mut rt, true).unwrap();
+        assert!(rt.args.iter().any(|a| a == "bypassPermissions"));
+    }
 
     fn agent(rt: &str) -> WorkspaceAgent {
         WorkspaceAgent::new("coder", rt)
