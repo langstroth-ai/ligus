@@ -37,6 +37,8 @@ iroh = { version = "1.0.0-rc.1", optional = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = "0.4"
 seccompiler = "0.4"
+
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [features]

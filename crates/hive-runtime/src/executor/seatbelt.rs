@@ -129,6 +129,7 @@ impl TurnExecutor for Seatbelt {
         crate::private_file::write_private_atomic(&path, prof.as_bytes())?;
         let mut c = hive_core::process_util::command(SANDBOX_EXEC);
         c.arg("-f").arg(&path).arg("--").arg(program).args(args).current_dir(cwd).env_clear().envs(plan_env(plan, proxy));
+        super::new_session(&mut c);
         Ok(c)
     }
 }

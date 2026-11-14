@@ -539,3 +539,24 @@ fn sandbox_denies_launchservices_escape() {
     let leaked = std::fs::read_to_string(&loot).unwrap_or_default();
     assert!(!leaked.contains("SETTINGS-SECRET") && !loot.exists(), "an app launched via LaunchServices ran outside the sandbox: {out}");
 }
+
+/// A confined child runs in a session of its own, without the parent's
+/// controlling terminal: with it, an agent could open `/dev/tty` and push
+/// keystrokes into the user's shell with `TIOCSTI` (Seatbelt allows tty
+/// writes), and they would run unconfined once `ligus agent`/`serve`
+/// returns to the prompt.
+#[cfg(target_os = "macos")]
+#[test]
+fn confined_child_runs_in_its_own_session() {
+    let Some(e) = real_executor() else { return };
+    if !Path::new("/usr/bin/python3").exists() {
+        eprintln!("skipped: no python3");
+        return;
+    }
+    let f = Fixture::new();
+    let (ok, out) = run_sh(&*e, &f, "/usr/bin/python3 -I -c 'import os; print(os.getsid(0), os.getpid())'", isolated());
+    assert!(ok, "{out}");
+    let mine = unsafe { libc::getsid(0) };
+    let child_sid: i32 = out.split_whitespace().next().and_then(|s| s.parse().ok()).expect("sid");
+    assert_ne!(child_sid, mine, "the agent shares the parent's session (and its controlling terminal)");
+}

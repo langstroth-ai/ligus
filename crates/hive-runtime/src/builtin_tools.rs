@@ -910,8 +910,10 @@ async fn run_shell(command: &str, dir: &Path, timeout: Duration, max_output: usi
     let (shell, flag) = ("cmd", "/C");
     let spec = crate::executor::SpawnSpec::new(crate::executor::Purpose::Tool, shell, [flag, command]).cwd(Some(dir));
     let (mut cmd, _sandbox) = crate::executor::tokio_command(spec).map_err(|e| format!("cannot start command: {e}"))?;
-    #[cfg(unix)]
-    cmd.process_group(0);
+    // The executor starts the child in a new session (`setsid`), which also
+    // makes it its own process group (pgid = pid) for the timeout kill below.
+    // Don't set a process group here: a group leader can't `setsid`, and the
+    // child would keep the controlling terminal.
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     cmd.env("TERM", "dumb").env("NO_COLOR", "1").env("CI", "1").env("GIT_TERMINAL_PROMPT", "0");
 
