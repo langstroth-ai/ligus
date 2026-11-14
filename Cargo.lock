@@ -2548,6 +2548,8 @@ dependencies = [
  "async-trait",
  "axum",
  "hive-core",
+ "http",
+ "hyper-util",
  "libc",
  "reqwest",
  "rustls",
