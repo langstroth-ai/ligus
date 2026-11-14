@@ -315,18 +315,29 @@ pub fn ref_exists(dir: &Path, r: &str) -> bool {
 /// remote's push URL must not resolve to `upstream`'s repository (or to
 /// `forbidden`, e.g. the parent GitHub reports). `Ok` names the repo pushed to.
 pub fn check_push_target(dir: &Path, remote: &str, forbidden: Option<&RemoteRef>) -> std::result::Result<RemoteRef, String> {
-    let url = git_out(dir, &["remote", "get-url", "--push", remote]).ok_or_else(|| format!("no remote named {remote}"))?;
-    let target = parse_remote(&url).ok_or_else(|| format!("can't tell where {remote} pushes to"))?;
+    // `git push <remote>` pushes to every push URL, not just the first.
+    let urls = git_out(dir, &["remote", "get-url", "--push", "--all", remote]).ok_or_else(|| format!("no remote named {remote}"))?;
     let upstream = git_out(dir, &["remote", "get-url", UPSTREAM_REMOTE]).and_then(|u| parse_remote(&u));
-    for no in upstream.iter().chain(forbidden) {
-        if same_repo(&target, no) {
-            return Err(format!(
-                "refusing to push: {remote} points at {}, the upstream project; this host pushes only to your fork",
-                no.full_name()
-            ));
+    let mut first: Option<RemoteRef> = None;
+    for url in urls.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let target = parse_remote(url).ok_or_else(|| format!("can't tell where {remote} pushes to"))?;
+        for no in upstream.iter().chain(forbidden) {
+            // Hosts are ignored here: the same repository is reachable as
+            // ssh.github.com, www.github.com or an ssh config alias.
+            if target.owner.eq_ignore_ascii_case(&no.owner) && target.name.eq_ignore_ascii_case(&no.name) {
+                return Err(format!(
+                    "refusing to push: {remote} points at {}, the upstream project; this host pushes only to your fork",
+                    no.full_name()
+                ));
+            }
+        }
+        match &first {
+            None => first = Some(target),
+            Some(f) if same_repo(f, &target) => {}
+            Some(_) => return Err(format!("refusing to push: {remote} has push URLs for different repositories")),
         }
     }
-    Ok(target)
+    first.ok_or_else(|| format!("can't tell where {remote} pushes to"))
 }
 
 /// Keep `hive.chatBase` (where fresh chat branches start, see
@@ -692,6 +703,27 @@ mod tests {
         run(&["remote", "remove", "upstream"]);
         ensure_chat_base(dir);
         assert_eq!(git_out(dir, &["config", "hive.chatBase"]), None);
+    }
+
+    /// `git push origin` pushes to every `pushurl`, and the same GitHub repo
+    /// is reachable under other host names. Neither may slip a push to the
+    /// upstream project past the guard.
+    #[test]
+    fn push_guard_checks_every_push_url_and_host_aliases() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let run = |args: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(dir).args(args).status().unwrap().success());
+        run(&["init", "-q"]);
+        run(&["remote", "add", "origin", "https://github.com/me/pipelines.git"]);
+        run(&["remote", "add", "upstream", "https://github.com/kubeflow/pipelines.git"]);
+        run(&["config", "--add", "remote.origin.pushurl", "https://github.com/me/pipelines.git"]);
+        run(&["config", "--add", "remote.origin.pushurl", "https://github.com/kubeflow/pipelines.git"]);
+        assert!(check_push_target(dir, "origin", None).is_err(), "second push URL is upstream");
+        run(&["config", "--unset-all", "remote.origin.pushurl"]);
+        run(&["config", "--add", "remote.origin.pushurl", "ssh://git@ssh.github.com:443/kubeflow/pipelines.git"]);
+        assert!(check_push_target(dir, "origin", None).is_err(), "ssh.github.com is github.com");
+        run(&["config", "--unset-all", "remote.origin.pushurl"]);
+        assert_eq!(check_push_target(dir, "origin", None).unwrap().full_name(), "me/pipelines");
     }
 
     #[test]
