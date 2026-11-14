@@ -89,7 +89,7 @@ const MAX_UI_SCALE = 1.2;
 const MENU_PANE_WIDTH_STORAGE_KEY = "hive.menuPaneWidth";
 const UTILITY_PANE_WIDTH_STORAGE_KEY = "hive.utilityPaneWidth";
 const DEFAULT_MENU_PANE_WIDTH = 260;
-const DEFAULT_UTILITY_PANE_WIDTH = 300;
+const DEFAULT_UTILITY_PANE_WIDTH = 340;
 const MIN_MENU_PANE_WIDTH = 200;
 const MAX_MENU_PANE_WIDTH = 420;
 const MIN_UTILITY_PANE_WIDTH = 220;
@@ -107,14 +107,19 @@ function clampPaneWidth(value: number, min: number, max: number) {
 
 function loadUiScale() {
   if (typeof window === "undefined") return DEFAULT_UI_SCALE;
-  const parsed = Number(window.localStorage.getItem(UI_SCALE_STORAGE_KEY));
-  return Number.isFinite(parsed) ? clampUiScale(parsed) : DEFAULT_UI_SCALE;
+  const raw = window.localStorage.getItem(UI_SCALE_STORAGE_KEY);
+  // A missing key must mean 100%, not Number(null) = 0 clamped to 85%.
+  const parsed = raw == null || raw.trim() === "" ? NaN : Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? clampUiScale(parsed) : DEFAULT_UI_SCALE;
 }
 
 function loadPaneWidth(storageKey: string, fallback: number, min: number, max: number) {
   if (typeof window === "undefined") return fallback;
-  const parsed = Number(window.localStorage.getItem(storageKey));
-  return Number.isFinite(parsed) ? clampPaneWidth(parsed, min, max) : fallback;
+  const raw = window.localStorage.getItem(storageKey);
+  // Number(null) is 0, which used to clamp a fresh install to the minimum
+  // width instead of the default.
+  const parsed = raw == null || raw.trim() === "" ? NaN : Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? clampPaneWidth(parsed, min, max) : fallback;
 }
 
 export function App() {
