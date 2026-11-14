@@ -1316,6 +1316,7 @@ export function ChatView({
                   </Popover>
                 )}
                 <textarea
+                  data-composer
                   ref={taRef}
                   value={input}
                   onPaste={(e) => {

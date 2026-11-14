@@ -601,6 +601,7 @@ export function Sidebar({
               {visible.map((c) => (
                 <ChatRow
                   key={c.id}
+                  chatId={c.id}
                   title={c.title || "Untitled"}
                   when={relTime(c.lastActivityAt)}
                   unread={unreadSessions.has(c.id) ? 1 : 0}
@@ -746,6 +747,7 @@ export function Sidebar({
                         {focused.map((c) => (
                           <ChatRow
                             key={c.id}
+                            chatId={c.id}
                             title={c.title || "Untitled"}
                             when={relTime(c.lastActivityAt)}
                             unread={unreadSessions.has(c.id) ? 1 : 0}
@@ -780,6 +782,7 @@ export function Sidebar({
                   {unfiled.map((c) => (
                     <ChatRow
                       key={c.id}
+                      chatId={c.id}
                       title={c.title || "Untitled"}
                       when={relTime(c.lastActivityAt)}
                       unread={unreadSessions.has(c.id) ? 1 : 0}

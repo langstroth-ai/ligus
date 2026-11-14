@@ -10,6 +10,9 @@ export interface PaletteActions {
   openSettings: () => void;
   selectChat: (id: string) => void;
   selectWorkspace: (id: string) => void;
+  /// Keyboard chat stepping (⌘⇧] / ⌘⇧[) and composer focus (⌘L).
+  stepChat?: (dir: 1 | -1) => void;
+  focusComposer?: () => void;
   /// Focus mode: collapse/restore the sidebar (⌘B) and tools rail (⌘J).
   toggleSidebar?: () => void;
   toggleTools?: () => void;
@@ -85,14 +88,23 @@ export function CommandPalette({
       items.push({ id: "friends", label: "Open Friends & DMs", hint: "Go", run: run(actions.openFriends) });
     }
     if (actions.openPane) {
-      for (const p of PANES) {
+      PANES.forEach((p, i) => {
         items.push({
           id: `pane-${p.id}`,
           label: `Open ${p.label}`,
-          hint: "Pane",
+          hint: `Pane · ⌘⌥${i + 1}`,
           run: run(() => actions.openPane!(p.id)),
         });
-      }
+      });
+    }
+    if (actions.stepChat) {
+      items.push(
+        { id: "next-chat", label: "Next chat", hint: "Go · ⌘⇧]", run: run(() => actions.stepChat!(1)) },
+        { id: "prev-chat", label: "Previous chat", hint: "Go · ⌘⇧[", run: run(() => actions.stepChat!(-1)) },
+      );
+    }
+    if (actions.focusComposer) {
+      items.push({ id: "focus-composer", label: "Focus the message box", hint: "Go · ⌘L", run: run(actions.focusComposer) });
     }
     if (actions.cycleAppearance) {
       items.push({ id: "appearance", label: "Toggle light / dark", hint: "Action", run: run(actions.cycleAppearance) });

@@ -355,6 +355,7 @@ export function SectionCap({ children, action }: { children: ReactNode; action?:
 /// §5.2 — the two-line, 46px chat row. Shows recency + participants, never a
 /// message count. `options` renders a hover ⋯ button; `menu` is its Popover.
 export function ChatRow({
+  chatId,
   title,
   when,
   unread = 0,
@@ -366,6 +367,9 @@ export function ChatRow({
   avatars,
   sub,
 }: {
+  /// Rendered as data-chat-id so keyboard next/previous chat follows the
+  /// sidebar's own order.
+  chatId?: string;
   title: string;
   when?: string;
   unread?: number;
@@ -381,6 +385,8 @@ export function ChatRow({
     <div className="group/crow relative" onContextMenu={onContextMenu}>
       <button
         onClick={onClick}
+        data-chat-id={chatId}
+        aria-current={active ? "page" : undefined}
         className="flex min-h-[46px] w-full flex-col justify-center gap-[3px] rounded-xl px-2.5 py-1.5 text-left transition-colors hover:bg-[color:var(--hive-overlay)]"
         style={active ? { background: SELECT_TINT } : undefined}
       >

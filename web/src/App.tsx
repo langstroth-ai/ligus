@@ -55,6 +55,8 @@ import { FriendsView } from "@/components/FriendsView";
 import { AddWorkspaceModal } from "@/components/AddWorkspaceModal";
 import { BindWorkspacePrompt } from "@/components/BindWorkspacePrompt";
 import { PaneErrorBoundary } from "@/components/ErrorBoundary";
+import { PANES } from "@/lib/panes";
+import { OPEN_CHAT_EVENT, flashMessage, type OpenChatDetail } from "@/lib/nav";
 import {
   applyTheme,
   loadMode,
@@ -314,9 +316,39 @@ export function App() {
     window.localStorage.setItem(UTILITY_PANE_WIDTH_STORAGE_KEY, String(utilityPaneWidth));
   }, [utilityPaneWidth]);
 
+  // Live callbacks for the global key handler (registered once).
+  const stepChatRef = useRef<(dir: 1 | -1) => void>(() => {});
+  const togglePaneRef = useRef<(pane: UtilityPane) => void>(() => {});
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+      if (!(event.metaKey || event.ctrlKey)) return;
+
+      // ⌘⇧] / ⌘⇧[ — next / previous chat, in the sidebar's own order.
+      if (event.shiftKey && !event.altKey && (event.code === "BracketRight" || event.code === "BracketLeft")) {
+        event.preventDefault();
+        stepChatRef.current(event.code === "BracketRight" ? 1 : -1);
+        return;
+      }
+      // ⌘⌥1…9 — open the nth rail pane (sidebar Workspace order); again closes it.
+      if (event.altKey && !event.shiftKey && /^Digit[1-9]$/.test(event.code)) {
+        const pane = PANES[Number(event.code.slice(5)) - 1];
+        if (!pane) return;
+        event.preventDefault();
+        togglePaneRef.current(pane.id);
+        return;
+      }
+      if (event.altKey) return;
+
+      // ⌘L — focus the composer (from anywhere: rail, sidebar, a dialog-free canvas).
+      if (event.key.toLowerCase() === "l" && !event.shiftKey) {
+        const composer = document.querySelector<HTMLTextAreaElement>("textarea[data-composer]");
+        if (composer) {
+          event.preventDefault();
+          composer.focus();
+        }
+        return;
+      }
 
       if (event.key.toLowerCase() === "k") {
         event.preventDefault();
@@ -617,6 +649,50 @@ export function App() {
     },
     [activeWorkspaceId],
   );
+  stepChatRef.current = (dir) => {
+    // Follow what the sidebar shows (channels, filters, sort); fall back to
+    // recency when the sidebar is hidden.
+    let ids = Array.from(document.querySelectorAll<HTMLElement>("[data-chat-id]"))
+      .map((el) => el.dataset.chatId!)
+      .filter((id, i, all) => all.indexOf(id) === i);
+    if (ids.length === 0) {
+      const cached = qc.getQueryData<{ id: string; archived: boolean; lastActivityAt: string }[]>(["chats"]) ?? [];
+      ids = cached
+        .filter((c) => !c.archived)
+        .sort((a, b) => new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime())
+        .map((c) => c.id);
+    }
+    if (ids.length === 0) return;
+    const at = selectedId ? ids.indexOf(selectedId) : -1;
+    const next = ids[(at + dir + ids.length) % ids.length] ?? ids[0];
+    rememberChat(next);
+    setSelectedId(next);
+    setView("workspace");
+    setMode("chat");
+    document.querySelector<HTMLElement>(`[data-chat-id="${CSS.escape(next)}"]`)?.scrollIntoView({ block: "nearest" });
+  };
+  togglePaneRef.current = (pane) => {
+    setView("workspace");
+    if (showUtilityPane && utilityPane === pane) setShowUtilityPane(false);
+    else openUtilityPane(pane);
+  };
+
+  // Cross-surface jumps (Flow board → chat, …): select the chat, then flash the
+  // message if one was named.
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const d = (e as CustomEvent<OpenChatDetail>).detail;
+      if (!d?.sessionId) return;
+      rememberChat(d.sessionId);
+      setSelectedId(d.sessionId);
+      setView("workspace");
+      setMode("chat");
+      if (d.messageId) flashMessage(d.messageId);
+    };
+    window.addEventListener(OPEN_CHAT_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_CHAT_EVENT, onOpen);
+  }, [rememberChat]);
+
   const workspaceLabel = useMemo(() => {
     // Prefer the workspace's own name (what you named the team/room); fall back
     // to the project-folder basename only when it has none.
@@ -913,6 +989,10 @@ export function App() {
           cycleAppearance: () =>
             setAppearanceMode(appearanceMode === "dark" ? "light" : "dark"),
           takeTour: () => startTour(),
+          stepChat: (dir) => stepChatRef.current(dir),
+          // After the palette closes, so its focus-return doesn't steal it back.
+          focusComposer: () =>
+            window.setTimeout(() => document.querySelector<HTMLTextAreaElement>("textarea[data-composer]")?.focus(), 0),
         }}
       />
       <WorkspaceRail
