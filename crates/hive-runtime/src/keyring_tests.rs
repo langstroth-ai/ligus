@@ -884,3 +884,39 @@ fn unpinned_device_never_decides_keys() {
     assert_eq!(engine.keyring().authorized_head(), 1);
     let _ = &mut store;
 }
+
+/// Track B residual 3: coordinator and workflow lease beats follow the
+/// keyring like host beats (B-05). They seal under the authorized head, and a
+/// reader takes only beats sealed there, so after a rotation a removed member
+/// still holding the passphrase can't see which device holds a lease.
+#[test]
+fn removed_member_cannot_read_lease_beats_after_rotation() {
+    use crate::lease_presence::{lease_presence_slot, open_lease_beats, seal_lease_beat, LeaseBeat};
+    use hive_core::lease::LeaseScope;
+    let mut w = World::new();
+    w.push("owner", SessionEvent::MemberRemoved { member_id: "mara".into() });
+    w.rotate("owner");
+    let owner = w.engine("owner", &[]);
+    let mara = KeyringEngine::passphrase(w.wid, pass_key());
+    let kp = hive_core::SigningKeypair::generate().unwrap();
+    let pk = kp.public_key_bytes().to_vec();
+    let beat = LeaseBeat {
+        scope: LeaseScope::Workspace,
+        scope_id: w.wid.to_string(),
+        holder: Uuid::new_v4(),
+        epoch: 1,
+        beat: 1,
+        lease_ms: 30_000,
+        at_ms: 1_000,
+        signature: Vec::new(),
+    }
+    .sign(&kp);
+    let slot = lease_presence_slot(LeaseScope::Workspace, &w.wid.to_string());
+    let mut blobs = std::collections::HashMap::new();
+    blobs.insert(slot.clone(), seal_lease_beat(&owner, &beat).unwrap());
+    assert!(open_lease_beats(&blobs, &mara, 5_000, |_| Some(pk.clone())).is_empty(), "mara read a beat sealed after her removal");
+    assert_eq!(open_lease_beats(&blobs, &w.engine("ada", &[]), 5_000, |_| Some(pk.clone())).len(), 1, "a member reads it");
+    // A beat sealed under the passphrase epoch is refused by readers at the head.
+    blobs.insert(slot, seal_lease_beat(&mara, &beat).unwrap());
+    assert!(open_lease_beats(&blobs, &owner, 5_000, |_| Some(pk.clone())).is_empty(), "a beat under an old epoch");
+}

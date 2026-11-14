@@ -3548,7 +3548,7 @@ fn blob_transport(state: &AppState) -> Option<(String, String, hive_runtime::key
 
 /// This device's keyring for `room` (B1), from the pinned config fold: what
 /// blobs and liveness beats seal under and open with.
-fn workspace_ring(state: &AppState, room: &str, conn: Option<&WorkspaceConn>) -> hive_runtime::keyring::KeyringEngine {
+pub(crate) fn workspace_ring(state: &AppState, room: &str, conn: Option<&WorkspaceConn>) -> hive_runtime::keyring::KeyringEngine {
     let src = key_source_for(state, conn);
     let svc = state.service.lock().unwrap();
     hive_runtime::keyring::KeyringEngine::from_store(svc.store(), room_workspace_id(room), &src)

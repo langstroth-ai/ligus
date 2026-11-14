@@ -432,11 +432,17 @@ pub(crate) async fn run_lease_loop(app: AppHandle) {
         let state = app.state::<AppState>();
         let conn = {
             let s = state.settings.lock().unwrap();
-            s.relay_url
-                .clone()
-                .filter(|u| !u.trim().is_empty())
-                .map(|u| (u, s.sync_room.clone(), s.workspace_key()))
+            s.relay_url.clone().filter(|u| !u.trim().is_empty()).map(|u| {
+                let ws_conn = s.workspaces.iter().find(|w| w.room == s.sync_room).cloned();
+                (u, s.sync_room.clone(), s.workspace_key(), ws_conn)
+            })
         };
+        // The one keyring (B1): lease beats seal at the authorized head, and
+        // only beats sealed there are read.
+        let conn = conn.map(|(u, room, key, ws_conn)| {
+            let ring = key.is_some().then(|| crate::workspace_ring(&state, &room, ws_conn.as_ref()));
+            (u, room, ring)
+        });
         let me = device_id(&state);
         // Our own beats: always recorded locally (signals), published when a
         // relay is configured.
@@ -476,17 +482,17 @@ pub(crate) async fn run_lease_loop(app: AppHandle) {
                     beat: h.beat,
                 },
             );
-            if let Some((url, room, Some(key))) = &conn {
+            if let Some((url, room, Some(ring))) = &conn {
                 if hive_core::room_workspace_id(room) == h.workspace_id {
                     let relay = state.relay_client(url);
-                    if let Err(e) = hive_runtime::lease_presence::publish_lease_beat(&relay, room, key, &signed).await {
+                    if let Err(e) = hive_runtime::lease_presence::publish_lease_beat(&relay, room, ring, &signed).await {
                         tracing::debug!(target: "leases", "lease beat publish failed: {e}");
                     }
                 }
             }
         }
         // Everyone else's beats.
-        if let Some((url, room, Some(key))) = &conn {
+        if let Some((url, room, Some(ring))) = &conn {
             let relay = state.relay_client(url);
             if let Ok(blobs) = relay.list_presence(room).await {
                 let ws = hive_core::room_workspace_id(room);
@@ -496,7 +502,7 @@ pub(crate) async fn run_lease_loop(app: AppHandle) {
                     hive_runtime::envelope_verifier::build_roster(&trust)
                 };
                 use hive_runtime::envelope_verifier::DeviceKeyResolver;
-                let beats = hive_runtime::lease_presence::open_lease_beats(&blobs, key, now_ms(), |d| {
+                let beats = hive_runtime::lease_presence::open_lease_beats(&blobs, ring, now_ms(), |d| {
                     if resolver.is_revoked(d) {
                         // A revoked device's beat can't renew anything: treat as
                         // certified with an impossible key so it fails.

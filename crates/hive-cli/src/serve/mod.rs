@@ -1119,7 +1119,7 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
             if let Err(e) = publish_host_beat(&relay, &room, &ring, &shared.host_id).await {
                 eprintln!("presence: publishing this host's beat failed: {e}");
             }
-            coordinator.tick(&shared, &relay, &room, &key).await;
+            coordinator.tick(&shared, &relay, &room, &ring).await;
         }
         if let Ok(beats) = fetch_host_beats(&relay, &room, &ring).await {
             shared.presence.merge(beats);
@@ -1146,7 +1146,7 @@ struct WorkspaceLease {
 const WORKSPACE_LEASE_MS: u64 = 3 * hive_runtime::host_presence::HOST_BEAT_EVERY_SECS as u64 * 1000;
 
 impl WorkspaceLease {
-    async fn tick(&mut self, shared: &Arc<Shared>, relay: &hive_runtime::RelayClient, room: &str, key: &[u8; 32]) {
+    async fn tick(&mut self, shared: &Arc<Shared>, relay: &hive_runtime::RelayClient, room: &str, ring: &hive_runtime::keyring::KeyringEngine) {
         use hive_core::lease::{lease_health, LeaseClaimReason, LeaseHealth, LeaseScope};
         use hive_runtime::lease_presence::{open_lease_beats, publish_lease_beat, LeaseBeat};
         let ws = shared.ws;
@@ -1165,7 +1165,7 @@ impl WorkspaceLease {
                     hive_runtime::envelope_verifier::build_roster(&svc.store().trust_envelopes(ws).unwrap_or_default())
                 };
                 use hive_runtime::envelope_verifier::DeviceKeyResolver;
-                open_lease_beats(&blobs, key, now_ms, |d| roster.public_key(d).map(<[u8]>::to_vec))
+                open_lease_beats(&blobs, ring, now_ms, |d| roster.public_key(d).map(<[u8]>::to_vec))
                     .into_iter()
                     .filter(|(b, _)| b.scope == LeaseScope::Workspace && b.scope_id == scope_id)
                     .map(|(b, _)| (b.holder, b.epoch, b.at_ms))
@@ -1209,7 +1209,7 @@ impl WorkspaceLease {
             at_ms: now_ms,
             signature: Vec::new(),
         });
-        if let Err(e) = publish_lease_beat(relay, room, key, &beat).await {
+        if let Err(e) = publish_lease_beat(relay, room, ring, &beat).await {
             eprintln!("presence: publishing the coordinator heartbeat failed: {e}");
             return;
         }
