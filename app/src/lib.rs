@@ -43,6 +43,7 @@ mod guards;
 mod proposal_sets;
 mod data_migration;
 mod flow;
+mod ligus_auth_ui;
 /// In-app live test support (see `tests/app_live.rs`); not in release builds.
 #[cfg(feature = "e2e")]
 #[doc(hidden)]
@@ -6040,7 +6041,7 @@ impl AppState {
     /// Relay access token (entitlement) for a gated/paid hosted relay. `None`
     /// for self-hosted/open relays. Attached as a bearer to every relay call.
     fn relay_token(&self) -> Option<String> {
-        self.settings.lock().unwrap().relay_access_token.clone()
+        ligus_auth_ui::effective(self.settings.lock().unwrap().relay_access_token.clone())
     }
 
     /// The caller's GitHub identity token, attached as `X-Hive-Github-Token` so a
@@ -11223,7 +11224,7 @@ fn read_local_sync_sig(settings: &Arc<Mutex<LiveSettings>>) -> LocalSyncSig {
         s.relay_url.clone(),
         s.sync_room.clone(),
         s.workspace_key(),
-        s.relay_access_token.clone(),
+        ligus_auth_ui::effective(s.relay_access_token.clone()),
         s.github_token.clone(),
     )
 }
@@ -11387,7 +11388,7 @@ async fn run_sync_loop(app: AppHandle, settings: Arc<Mutex<LiveSettings>>, db_pa
                 s.relay_url.clone(),
                 s.sync_room.clone(),
                 s.workspace_key(),
-                s.relay_access_token.clone(),
+                ligus_auth_ui::effective(s.relay_access_token.clone()),
                 s.github_token.clone(),
             )
         };
@@ -11699,7 +11700,7 @@ async fn probe_relay(state: State<'_, AppState>) -> Result<RelayProbeDto, String
         let s = state.settings.lock().unwrap();
         (
             s.relay_url.clone().unwrap_or_default(),
-            s.relay_access_token.clone(),
+            ligus_auth_ui::effective(s.relay_access_token.clone()),
             s.github_token.clone(),
             s.sync_room.clone(),
         )
@@ -14396,6 +14397,8 @@ pub fn run() {
             #[cfg(feature = "p2p")]
             let p2p = (ensure_p2p_secret(&state), state.data_dir.clone(), state.db_path.clone());
             app.manage(state);
+            // ligus-auth: keep a signed-in session's relay token fresh.
+            ligus_auth_ui::start(&app.state::<AppState>());
 
             // Arm the workspace file watcher on the initial root (re-armed later
             // whenever `set_workspace_root` changes it).
@@ -14531,6 +14534,10 @@ pub fn run() {
             create_relay_user,
             issue_relay_token,
             revoke_relay_token,
+            ligus_auth_ui::ligus_auth_status,
+            ligus_auth_ui::ligus_auth_start,
+            ligus_auth_ui::ligus_auth_poll,
+            ligus_auth_ui::ligus_auth_sign_out,
             set_relay_user_disabled,
             workflows::list_workflows,
             flow::flow_get_settings,

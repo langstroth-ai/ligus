@@ -34,6 +34,7 @@ import {
 import { Button, Section, fieldStyle } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
 import { confirmThen } from "@/lib/confirm";
+import { OrgSignInSection } from "./OrgSignInSection";
 
 /// Team sync: the relay connection (E2EE), the relay's team-member tokens, and
 /// direct peer (P2P) contacts. Connection fields write through on blur (D18).
@@ -41,6 +42,7 @@ export function TeamSyncSection() {
   return (
     <>
       <SyncSection />
+      <OrgSignInSection />
       <RelayUsersSection />
       <PeersSection />
     </>
