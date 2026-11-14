@@ -4352,8 +4352,8 @@ fn list_device_requests(state: State<AppState>) -> Result<Vec<DeviceRequestDto>,
 }
 
 /// Revoke one of your devices (lost box, re-enrollment): every member stops
-/// accepting its events. Admin+ in the workspace (the same gate as any device
-/// revocation). Never this desktop itself.
+/// accepting its events. Self-service for a device your account certified, at
+/// any role (Phase 0, R5); only those are offered. Never this desktop itself.
 #[tauri::command]
 fn revoke_my_device(state: State<AppState>, device_id: String) -> Result<(), String> {
     let device = Uuid::parse_str(&device_id).map_err(map_err)?;

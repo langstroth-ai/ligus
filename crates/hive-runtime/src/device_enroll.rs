@@ -458,6 +458,37 @@ mod flow_tests {
         }
     }
 
+    /// R5: revoking a device your own account certified is self-service at
+    /// any role; anyone else's device needs an Admin.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_contributor_revokes_their_own_device_but_not_anothers() {
+        let relay = spawn_relay().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = Uuid::new_v4();
+        let cfg = workspace_config_session_id(ws);
+        let mut mac = Dev::open(&tmp.path().join("mac"), "Alex", &relay, ws);
+        mac.svc.ensure_self_member(cfg, ws).unwrap();
+        mac.sync().await;
+        let mut taylor = Dev::open(&tmp.path().join("taylor"), "Taylor", &relay, ws);
+        taylor.sync().await;
+        taylor.svc.ensure_self_member(cfg, ws).unwrap();
+        taylor.sync().await;
+        // Taylor (a Contributor) certifies a second device of hers.
+        let spare = Dev::open(&tmp.path().join("spare"), "Spare", &relay, ws);
+        let request = DeviceEnrollment::decode(&spare.svc.enrollment_request(ws, "spare").encode()).unwrap();
+        taylor.svc.certify_device(&request).unwrap();
+        let spare_id = spare.svc.device_id();
+        // She can't revoke Alex's desktop...
+        assert!(taylor.svc.revoke_device(cfg, ws, mac.svc.device_id()).is_err());
+        // ...but can revoke her own spare.
+        taylor.svc.revoke_device(cfg, ws, spare_id).unwrap();
+        taylor.sync().await;
+        mac.sync().await;
+        let config = mac.svc.load(cfg).unwrap().unwrap();
+        assert!(config.guards.revoked_devices.contains(&spare_id));
+        assert!(!config.guards.revoked_devices.contains(&mac.svc.device_id()));
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn box_enrolled_as_the_owners_device_authors_as_the_owner_until_revoked() {
         let relay = spawn_relay().await;

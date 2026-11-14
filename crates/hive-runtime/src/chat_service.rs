@@ -435,7 +435,10 @@ impl ChatService {
         // churn would otherwise deny the sole user routine actions in their own
         // workspace (the "unauthorized in your own Home" bug).
         let is_local = self.local_workspace_id == Some(workspace_id);
-        if !is_local && requires_authz(&payload) {
+        // A device revocation is judged only by the fold's rule below (R5: your
+        // own certified device is self-service, anyone else's needs Admin).
+        let fold_only = matches!(payload, SessionEvent::DeviceRevoked { .. });
+        if !is_local && !fold_only && requires_authz(&payload) {
             // Authorize against the *projected* session — i.e. the workspace-wide
             // roster after the member hoist (§11) unions the config-log members on
             // (config-wins). For a config-log write this loads raw, so it gates on
@@ -1685,7 +1688,7 @@ impl ChatService {
     }
 
     /// Revoke a single device (lost/compromised) without removing its account
-    /// (authz: admin+). Folds into the roster's revoked set so the device can no
+    /// (authz: one your own account certified, or anyone's as Admin+). Folds into the roster's revoked set so the device can no
     /// longer sign events. Pair with a `WorkspaceKeyRotation` excluding the device
     /// to also cut its read access. Rides the workspace-config log (workspace-wide).
     pub fn revoke_device(
