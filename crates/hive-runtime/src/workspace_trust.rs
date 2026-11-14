@@ -101,10 +101,24 @@ pub fn runtime_item(r: &RuntimeTarget, source: &str) -> TrustItem {
         (e, u) => format!("{e} → {u}"),
     };
     let kind_and_endpoint = format!("{:?}|{}", r.provider_kind, r.endpoint);
+    // C-14: the provider id (which key and wire a pi/aider runtime uses), the
+    // metrics endpoint Ligus polls, and a non-default driver (ACP runs a
+    // different program) are part of what the user trusted. Absent ones add
+    // nothing, so existing approvals keep their digests.
+    let mut extra: Vec<String> = Vec::new();
+    if let Some(id) = r.model_provider_id.as_deref().filter(|s| !s.is_empty()) {
+        extra.push(format!("modelProviderId={id}"));
+    }
+    if let Some(m) = r.metrics_endpoint.as_deref().filter(|s| !s.is_empty()) {
+        extra.push(format!("metricsEndpoint={m}"));
+    }
+    if !r.driver.is_auto() {
+        extra.push(format!("driver={}", r.driver.as_str()));
+    }
     TrustItem {
         kind: ItemKind::Runtime,
         id: r.id.clone(),
-        digest: item_digest(ItemKind::Runtime, &kind_and_endpoint, &[], &[], &url),
+        digest: item_digest(ItemKind::Runtime, &kind_and_endpoint, &extra, &[], &url),
         command_line,
         source: source.into(),
         enabled: false,
@@ -279,6 +293,45 @@ mod tests {
     /// `untrusted_repo_mcp_never_spawns`: a repo's stdio MCP server is inert
     /// until this device enables its exact digest; only then is it in the
     /// catalog the app spawns from.
+    /// C-14: changing a runtime's provider id, metrics endpoint or driver
+    /// changes its digest (a re-trust), while a runtime without them keeps
+    /// the digest it had.
+    #[test]
+    fn runtime_digest_covers_provider_id_metrics_and_driver() {
+        let base = hive_core::RuntimeTarget {
+            id: "r".into(),
+            name: "R".into(),
+            provider_kind: hive_core::ModelProviderKind::Pi,
+            location: hive_core::RuntimeLocation::Local,
+            model_id: "m".into(),
+            available_models: vec![],
+            endpoint: "pi".into(),
+            metrics_endpoint: None,
+            model_provider_id: None,
+            model_base_url: Some("http://localhost:11434/v1".into()),
+            request_keep_alive: None,
+            think: None,
+            max_tool_rounds: None,
+            allow_remote_file_tools: false,
+            driver: hive_core::Driver::Auto,
+            estimated_performance_score: 0.0,
+            estimated_cost_per_1m_input_tokens_usd: 0.0,
+            capabilities: Default::default(),
+        };
+        let d = |r: &hive_core::RuntimeTarget| runtime_item(r, "x").digest;
+        let plain = d(&base);
+        assert_eq!(plain, item_digest(ItemKind::Runtime, "Pi|pi", &[], &[], "http://localhost:11434/v1"), "unchanged without the new fields");
+        let with_id = hive_core::RuntimeTarget { model_provider_id: Some("openrouter".into()), ..base.clone() };
+        let with_metrics = hive_core::RuntimeTarget { metrics_endpoint: Some("http://evil:9090".into()), ..base.clone() };
+        let with_driver = hive_core::RuntimeTarget { driver: hive_core::Driver::Acp, ..base.clone() };
+        let all = [plain, d(&with_id), d(&with_metrics), d(&with_driver)];
+        for i in 0..all.len() {
+            for j in i + 1..all.len() {
+                assert_ne!(all[i], all[j]);
+            }
+        }
+    }
+
     #[test]
     fn untrusted_repo_mcp_never_spawns() {
         let repo = repo_with_mcp("sh");
