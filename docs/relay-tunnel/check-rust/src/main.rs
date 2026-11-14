@@ -25,19 +25,19 @@ fn check_transcript(t: &Value, keys: &Value) {
     let (pk_i, pk_r) = (h(&keys["phoneStaticPrivHex"]), h(&keys["hostStaticPrivHex"]));
     let (e_i, e_r) = (h(&t["phoneEphemeralPrivHex"]), h(&t["hostEphemeralPrivHex"]));
     let mut ib = snow::Builder::new(proto.parse().unwrap())
-        .local_private_key(&pk_i)
-        .remote_public_key(&host_pub)
-        .prologue(&prologue)
+        .local_private_key(&pk_i).unwrap()
+        .remote_public_key(&host_pub).unwrap()
+        .prologue(&prologue).unwrap()
         .fixed_ephemeral_key_for_testing_only(&e_i);
     let mut rb = snow::Builder::new(proto.parse().unwrap())
-        .local_private_key(&pk_r)
-        .prologue(&prologue)
+        .local_private_key(&pk_r).unwrap()
+        .prologue(&prologue).unwrap()
         .fixed_ephemeral_key_for_testing_only(&e_r);
     let psk;
     if t.get("pskHex").is_some() {
-        psk = h(&t["pskHex"]);
-        ib = ib.psk(1, &psk);
-        rb = rb.psk(1, &psk);
+        psk = <[u8; 32]>::try_from(h(&t["pskHex"])).unwrap();
+        ib = ib.psk(1, &psk).unwrap();
+        rb = rb.psk(1, &psk).unwrap();
     }
     let mut ini = ib.build_initiator().unwrap();
     let mut res = rb.build_responder().unwrap();
@@ -110,7 +110,7 @@ fn main() {
     let ad = ctx("push", &[host_id.as_bytes(), v["pid"].as_str().unwrap().as_bytes()]);
     assert_eq!(hex::encode(&ad), push["adHex"].as_str().unwrap());
     let pt = ChaCha20Poly1305::new_from_slice(&key).unwrap()
-        .decrypt(Nonce::from_slice(&ct[..12]), Payload { msg: &ct[12..], aad: &ad }).unwrap();
+        .decrypt(&Nonce::try_from(&ct[..12]).unwrap(), Payload { msg: &ct[12..], aad: &ad }).unwrap();
     assert_eq!(pt, push["plaintext"].as_str().unwrap().as_bytes());
     println!("ok: host id, challenge sigs, credential, pairing derivations, push");
     // Negative vectors.
@@ -123,15 +123,15 @@ fn main() {
     let s = &v["session"];
     let mk_resp = || {
         let k = h(&keys["hostStaticPrivHex"]);
-        snow::Builder::new(s["protocol"].as_str().unwrap().parse().unwrap()).local_private_key(&k).prologue(&h(&s["prologueHex"])).build_responder().unwrap()
+        snow::Builder::new(s["protocol"].as_str().unwrap().parse().unwrap()).local_private_key(&k).unwrap().prologue(&h(&s["prologueHex"])).unwrap().build_responder().unwrap()
     };
     let mut out = vec![0u8; 65535];
     assert!(mk_resp().read_message(&h(&neg["sessionMsg1OtherHostPrologueHex"]), &mut out).is_err(), "wrong prologue must fail");
     // Tampered msg2: initiator with the vector's ephemeral reads it.
     let (pk_i, e_i) = (h(&keys["phoneStaticPrivHex"]), h(&s["phoneEphemeralPrivHex"]));
     let hp = b(&keys["hostStaticPub"]);
-    let mut ini = snow::Builder::new(s["protocol"].as_str().unwrap().parse().unwrap()).local_private_key(&pk_i).remote_public_key(&hp)
-        .prologue(&h(&s["prologueHex"])).fixed_ephemeral_key_for_testing_only(&e_i).build_initiator().unwrap();
+    let mut ini = snow::Builder::new(s["protocol"].as_str().unwrap().parse().unwrap()).local_private_key(&pk_i).unwrap().remote_public_key(&hp).unwrap()
+        .prologue(&h(&s["prologueHex"])).unwrap().fixed_ephemeral_key_for_testing_only(&e_i).build_initiator().unwrap();
     let mut buf = vec![0u8; 65535];
     ini.write_message(b"{\"v\":1}", &mut buf).unwrap();
     assert!(ini.read_message(&h(&neg["sessionMsg2TamperedHex"]), &mut out).is_err(), "tampered msg2 must fail");
@@ -140,15 +140,15 @@ fn main() {
 }
 
 /// Spec 7.1: an all-zero DH output (low-order peer key) MUST abort the
-/// handshake. snow 0.9.6's default resolver does NOT do this: a handshake
+/// handshake. snow's default resolver (0.9.6 and 0.10.0) does NOT do this: a handshake
 /// against an all-zero peer static writes msg1 without error. Implementations
 /// MUST check every DH result themselves; this shows the hazard and the check.
 fn check_all_zero_dh(priv_hex: &Value, proto: &Value, prologue_hex: &Value) {
     let k = h(priv_hex);
     let mut ini = snow::Builder::new(proto.as_str().unwrap().parse().unwrap())
-        .local_private_key(&k)
-        .remote_public_key(&[0u8; 32])
-        .prologue(&h(prologue_hex))
+        .local_private_key(&k).unwrap()
+        .remote_public_key(&[0u8; 32]).unwrap()
+        .prologue(&h(prologue_hex)).unwrap()
         .build_initiator()
         .unwrap();
     let mut buf = vec![0u8; 65535];

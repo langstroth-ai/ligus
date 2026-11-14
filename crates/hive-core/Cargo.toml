@@ -12,19 +12,19 @@ thiserror.workspace = true
 uuid.workspace = true
 time.workspace = true
 toml = "1.2"
-ed25519-dalek = "2"
+ed25519-dalek = "3"
 getrandom = "0.4"
-x25519-dalek = { version = "2", features = ["static_secrets"] }
-chacha20poly1305 = "0.10"
-hkdf = "0.12"
-sha2 = "0.10"
-argon2 = "0.5"
+x25519-dalek = { version = "3", features = ["static_secrets"] }
+chacha20poly1305 = "0.11"
+hkdf = "0.13"
+sha2 = "0.11"
+argon2 = "0.6"
 url = "2"
 # B3 passkeys: ES256 verification (RustCrypto), base64url WebAuthn fields,
 # and the 24-word recovery key.
 p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
 base64 = "0.23"
-bip39 = { version = "2", default-features = false, features = ["std"] }
+bip39 = { version = "3", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 # Property tests (Phase 0): default 256 cases; nightly sets PROPTEST_CASES=4096.

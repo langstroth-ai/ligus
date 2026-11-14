@@ -914,7 +914,7 @@ pub fn push_encrypt(key: &[u8; 32], host_id: &str, pid: &str, nonce: &[u8; 12], 
 
 /// `b64u(HMAC-SHA256(push_key, chatId)[0..12])`.
 pub fn push_collapse(key: &[u8; 32], chat_id: &str) -> String {
-    use hmac::Mac;
+    use hmac::{KeyInit, Mac};
     let mut mac = hmac::Hmac::<Sha256>::new_from_slice(key).expect("any key length");
     mac.update(chat_id.as_bytes());
     b64u(&mac.finalize().into_bytes()[..12])

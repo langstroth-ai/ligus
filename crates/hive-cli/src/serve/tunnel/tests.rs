@@ -276,7 +276,7 @@ fn v_push_vector() {
     assert_eq!(b64u(&ct), p["ct"]);
     let cipher = chacha20poly1305::ChaCha20Poly1305::new((&key).into());
     let ad = h(&p["adHex"]);
-    let dec = |ct: &[u8], ad: &[u8]| cipher.decrypt(ct[..12].into(), Payload { msg: &ct[12..], aad: ad });
+    let dec = |ct: &[u8], ad: &[u8]| cipher.decrypt(&chacha20poly1305::Nonce::try_from(&ct[..12]).unwrap(), Payload { msg: &ct[12..], aad: ad });
     assert_eq!(dec(&ct, &ad).unwrap(), p["plaintext"].as_str().unwrap().as_bytes());
     let mut flipped = ct.clone();
     flipped[20] ^= 1;
@@ -290,7 +290,7 @@ fn v_push_vector() {
     // RFC 4231 test case 2.
     {
         use hmac::Mac;
-        let mut mac = <hmac::Hmac<sha2::Sha256> as Mac>::new_from_slice(b"Jefe").unwrap();
+        let mut mac = <hmac::Hmac<sha2::Sha256> as hmac::KeyInit>::new_from_slice(b"Jefe").unwrap();
         mac.update(b"what do ya want for nothing?");
         assert_eq!(hex::encode(mac.finalize().into_bytes()), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
     }

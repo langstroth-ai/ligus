@@ -36,7 +36,7 @@ impl Dh for CheckedDh {
     fn set(&mut self, privkey: &[u8]) {
         self.0.set(privkey)
     }
-    fn generate(&mut self, rng: &mut dyn Random) {
+    fn generate(&mut self, rng: &mut dyn Random) -> Result<(), snow::Error> {
         self.0.generate(rng)
     }
     fn pubkey(&self) -> &[u8] {
@@ -92,9 +92,9 @@ pub fn responder_with(
     ephemeral: Option<&[u8; 32]>,
 ) -> Result<HandshakeState, snow::Error> {
     let prologue = prologue(host_id);
-    let mut b = builder(psk).local_private_key(static_priv).prologue(&prologue);
+    let mut b = builder(psk).local_private_key(static_priv)?.prologue(&prologue)?;
     if let Some(p) = psk {
-        b = b.psk(1, p);
+        b = b.psk(1, p)?;
     }
     if let Some(e) = ephemeral {
         b = b.fixed_ephemeral_key_for_testing_only(e);
@@ -111,9 +111,9 @@ pub fn initiator(
     ephemeral: Option<&[u8; 32]>,
 ) -> Result<HandshakeState, snow::Error> {
     let prologue = prologue(host_id);
-    let mut b = builder(psk).local_private_key(static_priv).remote_public_key(host_static_pub).prologue(&prologue);
+    let mut b = builder(psk).local_private_key(static_priv)?.remote_public_key(host_static_pub)?.prologue(&prologue)?;
     if let Some(p) = psk {
-        b = b.psk(1, p);
+        b = b.psk(1, p)?;
     }
     if let Some(e) = ephemeral {
         b = b.fixed_ephemeral_key_for_testing_only(e);

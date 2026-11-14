@@ -546,6 +546,6 @@ pub fn open_push(key: &[u8; 32], hid: &str, pid: &str, ct: &[u8]) -> Value {
     use chacha20poly1305::aead::{Aead, KeyInit, Payload};
     let cipher = chacha20poly1305::ChaCha20Poly1305::new(key.into());
     let ad = ctx("push", &[hid.as_bytes(), pid.as_bytes()]);
-    let pt = cipher.decrypt(ct[..12].into(), Payload { msg: &ct[12..], aad: &ad }).expect("push decrypts");
+    let pt = cipher.decrypt(&chacha20poly1305::Nonce::try_from(&ct[..12]).unwrap(), Payload { msg: &ct[12..], aad: &ad }).expect("push decrypts");
     serde_json::from_slice(&pt).unwrap()
 }

@@ -96,9 +96,9 @@ pub fn seal(recipient_public: &[u8], plaintext: &[u8]) -> Result<SealedBlob, Cry
     let shared = ephemeral.diffie_hellman(&recipient_pk);
     let (key, nonce) = derive_key_nonce(shared.as_bytes(), &ephemeral_pub, &recipient);
 
-    let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
+    let cipher = ChaCha20Poly1305::new(&Key::from(key));
     let ciphertext = cipher
-        .encrypt(Nonce::from_slice(&nonce), plaintext)
+        .encrypt(&Nonce::from(nonce), plaintext)
         .map_err(|_| CryptoError::VerifyFailed)?;
 
     Ok(SealedBlob {
@@ -120,9 +120,9 @@ pub fn open(recipient: &KeyAgreementKeypair, blob: &SealedBlob) -> Result<Vec<u8
     let shared = recipient.secret.diffie_hellman(&ephemeral_pub);
     let (key, nonce) = derive_key_nonce(shared.as_bytes(), &eph, &recipient_pub);
 
-    let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
+    let cipher = ChaCha20Poly1305::new(&Key::from(key));
     cipher
-        .decrypt(Nonce::from_slice(&nonce), blob.ciphertext.as_ref())
+        .decrypt(&Nonce::from(nonce), blob.ciphertext.as_ref())
         .map_err(|_| CryptoError::VerifyFailed)
 }
 
@@ -208,9 +208,9 @@ pub fn seal_symmetric(
 ) -> Result<SealedEnvelope, CryptoError> {
     let mut nonce = [0u8; 12];
     getrandom::fill(&mut nonce).map_err(|_| CryptoError::Random)?;
-    let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
+    let cipher = ChaCha20Poly1305::new(&Key::from(*key));
     let ciphertext = cipher
-        .encrypt(Nonce::from_slice(&nonce), plaintext)
+        .encrypt(&Nonce::from(nonce), plaintext)
         .map_err(|_| CryptoError::VerifyFailed)?;
     Ok(SealedEnvelope {
         version,
@@ -238,9 +238,10 @@ pub fn open_symmetric(key: &[u8; 32], sealed: &SealedEnvelope) -> Result<Vec<u8>
     if sealed.nonce.len() != 12 {
         return Err(CryptoError::BadKey);
     }
-    let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
+    let nonce = Nonce::try_from(sealed.nonce.as_slice()).map_err(|_| CryptoError::BadKey)?;
+    let cipher = ChaCha20Poly1305::new(&Key::from(*key));
     cipher
-        .decrypt(Nonce::from_slice(&sealed.nonce), sealed.ciphertext.as_ref())
+        .decrypt(&nonce, sealed.ciphertext.as_ref())
         .map_err(|_| CryptoError::VerifyFailed)
 }
 
