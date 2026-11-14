@@ -156,11 +156,21 @@ function handle(cmd: string, args: Args): unknown {
       return { accountId: "6f1c2d3e-8a7b-4c1d-9e0f-112233445566", displayName: "Zaz", avatarUrl: null, safetyCode: "3f2a 91c0 77de 0b14 c2e8 5a6f 9d31 e047", gitEmail: "zaz@example.com" };
     case "list_co_members":
       return [
-        { accountId: "a1b2c3d4-0000-4000-8000-000000000002", displayName: "Maya", avatarUrl: null, safetyCode: "b7e1 04aa 3c9f 6d20 18ee 7f45 a0c3 5b92", keyConflict: false, devices: 2, workspaces: [{ id: "w-bees", name: "Bees" }], dmWorkspaceId: null },
+        { accountId: "a1b2c3d4-0000-4000-8000-000000000002", displayName: "Maya", avatarUrl: null, safetyCode: "b7e1 04aa 3c9f 6d20 18ee 7f45 a0c3 5b92", keyConflict: false, devices: 2, workspaces: [{ id: "w-bees", name: "Bees" }], dmWorkspaceId: null, links: [{ provider: "forgejo", host: "codeberg.org", handle: "maya", subjectId: "48213", status: null }] },
         { accountId: "a1b2c3d4-0000-4000-8000-000000000003", displayName: "Theo", avatarUrl: null, safetyCode: "0c4d 8e21 f9a7 3b56 e102 4d8c 77a9 1f30", keyConflict: false, devices: 1, workspaces: [{ id: "w-bees", name: "Bees" }], dmWorkspaceId: null },
       ];
     case "list_dms":
       return [];
+    case "my_identity_links":
+      return [
+        { linkId: "l-1", provider: "github", host: "github.com", handle: "zaz", subjectId: "1234567", method: "sshSig", issuedAt: "2026-11-14T12:00:00Z", expiresAt: "2027-11-14T12:00:00Z", workspaces: [{ id: "w-bees", name: "Bees" }], discoverable: false, status: { state: "verified", checkedAt: "2026-11-14T12:00:00Z", handle: "zaz", nameBound: false } },
+      ];
+    case "identity_link_statuses":
+      return [
+        { linkId: "l-2", provider: "forgejo", host: "codeberg.org", handle: "maya", subjectId: "48213", method: "sshSig", issuedAt: "2026-11-01T12:00:00Z", expiresAt: "2027-11-01T12:00:00Z", workspaces: [{ id: "w-bees", name: "Bees" }], discoverable: false, status: { state: "verified", checkedAt: "2026-11-14T12:00:00Z", handle: "maya", nameBound: false } },
+      ];
+    case "identity_link_settings":
+      return { checkForges: true, forges: [] };
     case "list_pending_invites":
       return { contacts: "on", invites: [] };
     case "list_schedules":
