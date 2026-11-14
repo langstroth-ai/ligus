@@ -173,6 +173,7 @@ where
                     push_previews: true,
                     push_seq: 0,
                     last_seen: None,
+                    owner_phone: false,
                 };
                 Ok((ts, pid, Some(PendingEnroll { rec, eid: eid.clone() })))
             }

@@ -27,6 +27,9 @@ pub enum GuardGate {
     ToolCall,
     McpTool,
     Egress,
+    /// A human-only action (a vote, a lockdown clear) that needs proof a
+    /// human was present (P0.6).
+    Presence,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

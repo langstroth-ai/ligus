@@ -69,7 +69,53 @@ impl From<hive_runtime::chat_service::ChatError> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        if self.0 == StatusCode::FORBIDDEN && self.1 == PRESENCE_REQUIRED {
+            return (self.0, Json(json!({ "error": PRESENCE_REQUIRED, "hint": PRESENCE_HINT }))).into_response();
+        }
         (self.0, Json(json!({ "error": self.1 }))).into_response()
+    }
+}
+
+/// P0.6: the 403 a human-only action gets from a host that can't tell a
+/// human approved it.
+pub(super) const PRESENCE_REQUIRED: &str = "presence_required";
+const PRESENCE_HINT: &str = "approve on your laptop, or confirm with a passkey after updating";
+
+/// P0.6 interim: while this box acts for the owner (`act_as_owner_device`),
+/// anything it signs is signed as the owner, so a phone's or a bearer
+/// caller's vote would pass for the owner's own. Until passkey presence
+/// lands, such a host refuses votes (approve, reject), lockdown clears and
+/// applies from the API, except from a phone the owner marked as theirs
+/// (`owner_phone`), whose action is recorded as delegated. Every decision is
+/// one content-free fact naming the phone (`pid`) or `bearer`.
+pub(super) fn presence_gate(s: &Shared, peer: Option<&TunnelPeer>, action: &str) -> ApiResult<()> {
+    if !s.lock().is_delegated() {
+        return Ok(());
+    }
+    let owner_phone = peer
+        .and_then(|p| s.tunnel.as_ref().and_then(|t| t.registry.get(&p.pid)))
+        .is_some_and(|r| r.is_active() && r.owner_phone);
+    let source = peer.map(|p| p.pid.clone()).unwrap_or_else(|| "bearer".into());
+    let (verdict, reason) = if owner_phone {
+        (hive_core::signal::GuardVerdict::Accept, format!("delegated_{action}"))
+    } else {
+        (hive_core::signal::GuardVerdict::Reject, format!("presence_required_{action}"))
+    };
+    let _ = s.lock().record_signal(
+        s.ws,
+        None,
+        &hive_core::signal::GuardSignal::GuardDecision {
+            gate: hive_core::signal::GuardGate::Presence,
+            verdict,
+            subject: hive_core::signal::GuardSubject::Nestmate,
+            source,
+            reason,
+        },
+    );
+    if owner_phone {
+        Ok(())
+    } else {
+        Err(ApiError(StatusCode::FORBIDDEN, PRESENCE_REQUIRED.into()))
     }
 }
 
@@ -661,8 +707,9 @@ pub(super) fn can_clear_lockdown(members: &[hive_core::WorkspaceMember], me: &st
 /// member at Contributor or above may: anyone else gets 403 and nothing is
 /// written (the core re-checks when the event is authored and on every peer
 /// that folds it). A chat that isn't locked answers 409.
-async fn clear_lockdown(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+async fn clear_lockdown(State(s): S, peer: Option<axum::Extension<TunnelPeer>>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     let chat = load_chat(&s, &id)?;
+    presence_gate(&s, peer.as_deref(), "lockdown_clear")?;
     let me = s.my_actor_id();
     let (_, allowed) = my_standing(&s, &me)?;
     if !allowed {
@@ -774,8 +821,9 @@ fn vote(s: &Shared, chat: &ChatSession, pid: Uuid, approved: bool) -> ApiResult<
         .ok_or_else(|| ApiError::not_found("proposal"))
 }
 
-async fn approve_proposal(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+async fn approve_proposal(State(s): S, peer: Option<axum::Extension<TunnelPeer>>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     let (chat, p) = find_proposal(&s, &id)?;
+    presence_gate(&s, peer.as_deref(), "approve")?;
     let mut updated = vote(&s, &chat, p.id, true)?;
     // Only a proposal whose folded status is Approved: quorum alone stays met
     // after a qualifying reject, and Applied is terminal on every peer, so
@@ -800,9 +848,10 @@ struct RejectReq {
     reason: Option<String>,
 }
 
-async fn reject_proposal(State(s): S, Path(id): Path<String>, body: Bytes) -> ApiResult<Json<Value>> {
+async fn reject_proposal(State(s): S, peer: Option<axum::Extension<TunnelPeer>>, Path(id): Path<String>, body: Bytes) -> ApiResult<Json<Value>> {
     let req: RejectReq = optional_json(&body)?;
     let (chat, p) = find_proposal(&s, &id)?;
+    presence_gate(&s, peer.as_deref(), "reject")?;
     // A reason rides the proposal's refinement thread as a comment, the way a
     // reviewer's note does on the desktop.
     if let Some(reason) = req.reason.map(|r| r.trim().to_string()).filter(|r| !r.is_empty()) {

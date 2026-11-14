@@ -410,6 +410,7 @@ fn record(pid: &str, phone: &PhoneKeys) -> PhoneRecord {
         push_previews: true,
         push_seq: 0,
         last_seen: None,
+        owner_phone: false,
     }
 }
 

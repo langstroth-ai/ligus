@@ -1518,7 +1518,12 @@ async fn phone_box_enrolled_as_the_owners_device() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert!(found, "the desktop's proposal reaches the phone");
-    h.send(reqwest::Method::POST, &format!("/v1/proposals/{pid}/approve"), None).await;
+    // P0.6 interim: this box signs as the owner, so the phone's vote can't
+    // pass for the owner's own without presence. Refused, nothing written.
+    let (code, body) = status_of(&h, reqwest::Method::POST, &format!("/v1/proposals/{pid}/approve"), None).await;
+    assert_eq!(code, 403, "{body}");
+    assert_eq!(body["error"], "presence_required");
+    assert!(body["hint"].as_str().unwrap().contains("passkey"));
     h.send(reqwest::Method::POST, &format!("/v1/proposals/{pid}/comments"), Some(json!({ "text": "looks right" }))).await;
     tokio::time::sleep(Duration::from_millis(600)).await;
     sync_once(&h.desktop).await.unwrap();
@@ -1528,11 +1533,10 @@ async fn phone_box_enrolled_as_the_owners_device() {
     let m = s.messages.iter().find(|m| m.body == "@hive what changed?").expect("message accepted");
     assert_eq!(m.actor_identity.as_ref().unwrap().id, desktop_actor);
     let p = s.proposals.iter().find(|p| p.id == pid).unwrap();
-    assert_eq!(p.approvals.len(), 1);
-    assert_eq!(p.approvals[0].actor_id, desktop_actor);
+    assert!(p.approvals.is_empty(), "the phone's refused vote never reached the log: {:?}", p.approvals);
     assert_eq!(p.refinements.last().unwrap().actor_id, desktop_actor);
     drop(svc);
-    // One person, one vote: the desktop's vote replaces the phone's.
+    // The owner votes on their own desktop.
     open_service(&h.desktop).unwrap().vote_on_proposal(cid, ws, pid, desktop_actor.clone(), hive_core::WorkspaceRole::Owner, false).unwrap();
     sync_once(&h.desktop).await.unwrap();
     let mut votes = Value::Null;
@@ -2783,4 +2787,88 @@ fn lockdown_clear_requires_contributor_human() {
     // The roster's folded role is checked too: a member record that says
     // Contributor while the folded role is Viewer is refused.
     assert!(!api::can_clear_lockdown(&members, "ana", WorkspaceRole::Viewer));
+}
+
+/// A chat with one open decision proposal; returns (chat, proposal).
+async fn chat_with_proposal(h: &Harness) -> (Uuid, Uuid) {
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    let p = hive_core::ActionProposal::new("Ship the cache", hive_core::ProposalKind::Decision, "");
+    let pid = p.id;
+    h.handle.shared.lock().upsert_proposal(chat_id, h.handle.shared.ws, p).unwrap();
+    h.handle.shared.after_write();
+    (chat_id, pid)
+}
+
+/// P0.6 interim: a box acting for the owner signs everything as the owner,
+/// so a vote or a lockdown clear from the phone (or any bearer caller) would
+/// pass for the owner's own. Without presence it is refused with
+/// `presence_required`, nothing reaches the log, the proposal's human gate is
+/// still unmet, and each refusal is one content-free fact naming the caller.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn phone_vote_refused_on_delegated_host_without_presence() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let (chat_id, pid) = chat_with_proposal(&h).await;
+    let owner = open_service(&h.desktop).unwrap().author().clone();
+    h.handle.shared.lock().act_as_owner_device(owner.clone());
+
+    for path in [format!("/v1/proposals/{pid}/approve"), format!("/v1/proposals/{pid}/reject")] {
+        let (code, body) = status_of(&h, reqwest::Method::POST, &path, None).await;
+        assert_eq!(code, 403, "{path}: {body}");
+        assert_eq!(body["error"], "presence_required");
+        assert_eq!(body["hint"], "approve on your laptop, or confirm with a passkey after updating");
+    }
+    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    let p = s.proposals.iter().find(|p| p.id == pid).unwrap();
+    assert!(p.approvals.is_empty(), "a refused vote is never written: {:?}", p.approvals);
+    assert_eq!(p.status, hive_core::ProposalStatus::Open, "the human gate is still unmet");
+
+    // Lockdown clear from the phone needs the same.
+    h.handle
+        .shared
+        .lock()
+        .self_medicate(ws, chat_id, None, &[(hive_core::guard::LockdownSignal::InjectionDetected, "ignore-previous".into())])
+        .unwrap();
+    let (code, body) = status_of(&h, reqwest::Method::POST, &format!("/v1/chats/{chat_id}/lockdown/clear"), None).await;
+    assert_eq!((code, body["error"].clone()), (403, json!("presence_required")));
+    assert!(h.handle.shared.lock().load(chat_id).unwrap().unwrap().guards.lockdown_active());
+
+    // One fact per refusal, naming the caller (`bearer` here), no content.
+    let facts = h.handle.shared.lock().list_signals(ws, 0, None, 100).unwrap();
+    let refusals: Vec<_> = facts
+        .iter()
+        .filter_map(|r| match &r.signal {
+            hive_core::signal::GuardSignal::GuardDecision { gate: hive_core::signal::GuardGate::Presence, verdict, source, reason, .. } => {
+                Some((*verdict, source.clone(), reason.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(refusals.len(), 3, "{refusals:?}");
+    assert!(refusals.iter().all(|(v, src, _)| *v == hive_core::signal::GuardVerdict::Reject && src == "bearer"));
+    assert!(refusals.iter().any(|(_, _, r)| r == "presence_required_lockdown_clear"));
+    h.handle.shutdown();
+}
+
+/// On a box that votes as its own member (not delegated), a phone's vote is
+/// that member's: attributed to the box's identity at its roster role, never
+/// to the workspace owner.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn phone_vote_attribution() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let (chat_id, pid) = chat_with_proposal(&h).await;
+    assert!(!h.handle.shared.lock().is_delegated());
+    h.send(reqwest::Method::POST, &format!("/v1/proposals/{pid}/approve"), None).await;
+    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    let p = s.proposals.iter().find(|p| p.id == pid).unwrap();
+    let me = h.handle.shared.my_actor_id();
+    let owner = open_service(&h.desktop).unwrap().author().id.clone();
+    assert_eq!(p.approvals.len(), 1);
+    assert_eq!(p.approvals[0].actor_id, me);
+    assert_ne!(p.approvals[0].actor_id, owner);
+    assert_eq!(p.approvals[0].role, s.role_of(&me));
+    h.handle.shutdown();
 }
