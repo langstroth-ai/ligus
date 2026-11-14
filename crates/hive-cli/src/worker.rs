@@ -21,7 +21,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Result};
 use hive_core::{workspace_config_session_id, ChatSession, ModelProviderKind, WorkspaceAgent, WorkspaceRuntime};
-use hive_runtime::{pending_mentions, resolve_workspace_credential, turns_for, ChatService, PendingMention, ResolvedRuntime};
+use hive_runtime::ligus_mcp::{Budgets, LigusHost, LigusMcp, TurnSpec};
+use hive_runtime::{pending_turns, resolve_workspace_credential, turns_for, ChatService, PendingMention, ResolvedRuntime};
 use uuid::Uuid;
 
 use crate::reply::{self, ToolSettings, TurnFiles};
@@ -69,6 +70,45 @@ pub struct WorkerCtx<'a> {
     pub my_host: &'a str,
     pub host_label: &'a str,
     pub settings: ToolSettings,
+    /// This host's Ligus MCP server (Track D). `None`: agents use the reply
+    /// directives only.
+    pub ligus: Option<std::sync::Arc<LigusMcp>>,
+}
+
+/// Where a headless host's chat service lives, for its Ligus MCP server.
+pub trait ServiceSource: Send + Sync {
+    fn service(&self) -> &Mutex<ChatService>;
+    /// Wake the drain loop (a hand-off queued a turn).
+    fn kick(&self) {}
+    /// An agent asked the chat's humans a question (push it).
+    fn ask_posted(&self, _chat: Uuid, _ask: &hive_core::flow::HumanAsk) {}
+}
+
+impl ServiceSource for Mutex<ChatService> {
+    fn service(&self) -> &Mutex<ChatService> {
+        self
+    }
+}
+
+/// The Ligus host of `ligus worker` / `ligus serve`: hand-offs are queued
+/// (`pending_turns`) and picked up by the next drain pass, which this kicks.
+pub struct CliLigusHost(pub std::sync::Arc<dyn ServiceSource>);
+
+impl LigusHost for CliLigusHost {
+    fn with_service(&self, f: &mut dyn FnMut(&mut ChatService)) {
+        f(&mut lock(self.0.service()))
+    }
+    fn start_turn(&self, _chat: Uuid, _agent: Uuid, _trigger: Uuid) {
+        self.0.kick();
+    }
+    fn ask_posted(&self, chat: Uuid, ask: &hive_core::flow::HumanAsk) {
+        self.0.ask_posted(chat, ask);
+    }
+}
+
+/// A Ligus MCP server over `source`.
+pub fn ligus_server(source: std::sync::Arc<dyn ServiceSource>) -> std::sync::Arc<LigusMcp> {
+    LigusMcp::new(std::sync::Arc::new(CliLigusHost(source)))
 }
 
 fn lock(svc: &Mutex<ChatService>) -> MutexGuard<'_, ChatService> {
@@ -200,6 +240,7 @@ pub fn agent_workspace_runtime(
         tools: reply::worker_tools_enabled(),
         max_tool_rounds: None,
         allow_remote_file_tools: false,
+        driver: wr.driver,
     };
     Ok((rt, wr.id.clone()))
 }
@@ -255,8 +296,9 @@ pub async fn drain_tick(
             if s.workspace_id != ctx.ws || id == workspace_config_session_id(s.workspace_id) {
                 continue;
             }
+            // Mentions, @mention cascades and Ligus hand-offs (D.4.1).
             candidates.extend(
-                pending_mentions(&s)
+                pending_turns(&s)
                     .into_iter()
                     .filter(|pm| hosted.contains(&pm.agent_id) && !failed.contains(&pm.message_id)),
             );
@@ -520,11 +562,49 @@ async fn run_turn(
             last_flush = Instant::now();
         }
     };
+    // Track D: this turn's Ligus MCP server (agent-signed proposals,
+    // hand-offs, asks, reads), when the runtime can use it; else directives.
+    let restricted = !envelope.egress.is_open();
+    let ligus = ctx
+        .ligus
+        .as_ref()
+        .filter(|_| allow_tools && hive_runtime::ligus_mcp::offered_for(&rt, restricted))
+        .map(|mcp| {
+            std::sync::Arc::new(mcp.begin_turn(TurnSpec {
+                workspace_id: s.workspace_id,
+                chat_id: s.id,
+                agent_id: Some(agent.id),
+                author: format!("@{}", agent.name),
+                message_id: mid,
+                worktree: eager.as_ref().map(|w| w.path.clone()),
+                budgets: Budgets::from_env(),
+                ttl: turn_timeout() + Duration::from_secs(300),
+            }))
+        });
+    let cli = rt.provider.is_cli_agent();
+    let socket = match ligus.as_ref().filter(|_| cli).map(|t| t.listen()) {
+        Some(Ok(p)) => Some(p),
+        Some(Err(e)) => {
+            eprintln!("worker: Ligus MCP socket unavailable, using directives: {e}");
+            None
+        }
+        None => None,
+    };
+    let ligus = ligus.filter(|_| !cli || socket.is_some());
+    let system = match &ligus {
+        Some(_) => hive_runtime::prompt::with_ligus_tools(&system, !cli, &[]),
+        None => system,
+    };
+    let scope = match &ligus {
+        Some(t) => hive_runtime::agent_turn::AgentTurnScope { ligus: (!cli).then(|| t.clone()), ..t.agent_scope() },
+        None => Default::default(),
+    };
     // Every child of this turn runs in this host's OS sandbox under the
     // turn's envelope and gate.
     let mut sandbox = hive_runtime::executor::TurnPolicy::new(hive_runtime::executor::HostKind::Worker, envelope.clone(), gate_plan.clone());
     sandbox.worktree_is_isolated = eager.is_some();
-    let fut = hive_runtime::executor::with_turn(sandbox, reply::generate_reply_streaming(
+    sandbox.ligus_mcp_socket = socket;
+    let fut = hive_runtime::executor::with_turn(sandbox, hive_runtime::agent_turn::with_agent_turn(scope, reply::generate_reply_streaming(
         &rt,
         &system,
         &turns,
@@ -533,7 +613,7 @@ async fn run_turn(
         Some(&files),
         &tool_settings,
         on_delta,
-    ));
+    )));
     let result = match tokio::time::timeout(turn_timeout(), fut).await {
         Ok(r) => r,
         Err(_) => Err(anyhow!("runtime timed out after {}s", turn_timeout().as_secs())),
@@ -557,11 +637,37 @@ async fn run_turn(
             }
             // A model that produced nothing (and changed no files) never posts
             // an empty reply: the chat gets a notice saying so, as on the desktop.
-            let empty = reply.text.trim().is_empty() && captured.is_none();
-            let body = if empty { hive_runtime::empty_reply_notice(&format!("@{}", agent.name)) } else { reply.text };
+            let mcp_effects = ligus.as_ref().map(|t| t.effects());
+            let empty = reply.text.trim().is_empty() && captured.is_none() && mcp_effects.as_ref().is_none_or(|m| m.is_empty());
             {
                 let mut svc = lock(svc);
-                svc.complete_assistant_message(s.id, s.workspace_id, mid, body)?;
+                // The same finalize as the desktop (D.4.3): directives are
+                // stripped and applied here too, MCP effects win over
+                // duplicates.
+                let full = if empty { hive_runtime::empty_reply_notice(&format!("@{}", agent.name)) } else { reply.text };
+                let fin = hive_runtime::finalize::finalize_reply(
+                    &mut svc,
+                    hive_runtime::finalize::FinalizeInput {
+                        ctx: hive_runtime::effects::EffectCtx {
+                            session_id: s.id,
+                            workspace_id: s.workspace_id,
+                            author: format!("@{}", agent.name),
+                            agent_id: Some(agent.id),
+                            message_id: Some(mid),
+                            via: hive_runtime::effects::Via::Directive,
+                        },
+                        workspace_root: "",
+                        full: &full,
+                        edits_in_review: captured.is_some(),
+                        mcp: mcp_effects.as_ref(),
+                        base_commit: None,
+                        apply_flow: true,
+                    },
+                );
+                if let Err(e) = fin {
+                    eprintln!("worker: finalize failed: {e}");
+                    svc.complete_assistant_message(s.id, s.workspace_id, mid, full)?;
+                }
                 if let (Some(wt), Some(diff)) = (worktree.as_ref(), captured) {
                     let files = wt.changed_files().unwrap_or_default();
                     let n = files.len();
@@ -571,11 +677,18 @@ async fn run_turn(
                     // approve it — the self-approval guard excludes no one.
                     let mut prop = hive_core::ActionProposal::file_diff(title, "", diff, files);
                     prop.producing_agent_id = Some(agent.id);
-                    if let Err(e) = svc.upsert_proposal(s.id, s.workspace_id, prop) {
+                    if let Some((t, b, tc)) = mcp_effects.as_ref().and_then(|m| m.diff_intent.clone()) {
+                        prop.title = t;
+                        prop.body = b;
+                        prop.task_class = tc;
+                    }
+                    // Filed as the agent's own effect (A3 key, Agent tier).
+                    if let Err(e) = svc.as_agent(Some(agent.id), |svc| svc.upsert_proposal(s.id, s.workspace_id, prop)) {
                         eprintln!("worker: proposal failed: {e}");
                     }
                 }
             }
+            finish_ligus(svc, ligus.as_deref(), &s, &format!("@{}", agent.name));
             if let Some(wt) = worktree {
                 let _ = wt.remove();
             }
@@ -590,6 +703,7 @@ async fn run_turn(
             Ok(())
         }
         Err(e) => {
+            finish_ligus(svc, ligus.as_deref(), &s, &format!("@{}", agent.name));
             if let Some(wt) = eager {
                 let _ = wt.remove();
             }
@@ -597,6 +711,16 @@ async fn run_turn(
             sink.changed();
             Err(e)
         }
+    }
+}
+
+/// End a Ligus turn: revoke, record the tool summary, show the self-report.
+fn finish_ligus(svc: &Mutex<ChatService>, turn: Option<&hive_runtime::ligus_mcp::TurnHandle>, s: &ChatSession, author: &str) {
+    let Some(t) = turn else { return };
+    t.finish();
+    if let Some(r) = t.report() {
+        let files = if r.files_touched.is_empty() { String::new() } else { format!(" Files: {}.", r.files_touched.join(", ")) };
+        let _ = lock(svc).post_system_note(s.id, s.workspace_id, format!("\u{1f4cb} {author} reported {}: {}.{files}", r.status, r.summary.trim_end_matches('.')));
     }
 }
 
@@ -662,7 +786,7 @@ mod tests {
         let other = ChatMessage::new(MessageRole::User, "Alex", "@hive what's the status?");
         let ask_id = ask.id;
         s.messages = vec![ask, other];
-        let queued = pending_mentions(&s);
+        let queued = hive_runtime::pending_mentions(&s);
         assert_eq!(queued.len(), 1);
         assert_eq!((queued[0].message_id, queued[0].agent_id), (ask_id, coder_id));
         let seen = turns_for(&through_trigger(&s, ask_id), Some(coder_id), "coder");

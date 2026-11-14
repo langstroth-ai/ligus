@@ -133,6 +133,15 @@ pub fn bwrap_args(plan: &EnforcementPlan, cwd: &Path) -> Vec<OsString> {
             push(&["--bind".as_ref(), w.as_os_str(), w.as_os_str()]);
         }
     }
+    // The turn's Ligus MCP socket (D.3.2): its 0700 directory is bound in, so
+    // the socket is reachable even when a denied path's tmpfs covers it.
+    // Unix sockets work across the fresh network namespace.
+    if let Some(dir) = plan.ligus_mcp_socket.as_ref().and_then(|s| s.parent()) {
+        let d = canonical(dir);
+        if d.exists() {
+            push(&["--bind".as_ref(), d.as_os_str(), d.as_os_str()]);
+        }
+    }
     push(&["--chdir".as_ref(), cwd.as_os_str()]);
     a
 }

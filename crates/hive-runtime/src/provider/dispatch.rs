@@ -50,6 +50,9 @@ pub struct ResolvedRuntime {
     /// offer Hive's built-in file tools even when the endpoint's host isn't
     /// local or private (they send file contents to it).
     pub allow_remote_file_tools: bool,
+    /// How a subscription CLI is driven: ACP or its legacy headless adapter
+    /// (Track D1). Ignored by every other provider.
+    pub driver: hive_core::Driver,
 }
 
 /// Tools to offer a turn: neutral definitions (`{name, description,
@@ -363,6 +366,63 @@ async fn stream_with_tools_inner<E: ToolExecutor>(
     on_delta: impl FnMut(String),
     mut on_activity: impl FnMut(StreamActivity),
 ) -> Result<String, ProviderError> {
+    // Subscription CLIs: over ACP when the runtime's driver resolves to it
+    // (Track D1); an ACP start failure falls back to the legacy adapter once.
+    if matches!(
+        rt.provider,
+        ModelProviderKind::ClaudeCode | ModelProviderKind::Codex | ModelProviderKind::Antigravity | ModelProviderKind::Copilot
+    ) {
+        let restricted = crate::executor::current_turn().is_some_and(|p| !p.envelope.egress.is_open());
+        match super::acp::resolve(rt, restricted) {
+            Ok(cmd) => {
+                let turn = super::acp::AcpTurn {
+                    kind: rt.provider,
+                    command: &cmd,
+                    model: &rt.model,
+                    working_dir,
+                    extra_env,
+                    system,
+                    turns,
+                    extra_mcp: Vec::new(),
+                    api_key: rt.api_key.as_deref(),
+                    tier_args: &rt.args,
+                };
+                // The callbacks are lent to the ACP attempt and kept for a
+                // legacy fallback.
+                let mut on_delta = on_delta;
+                let mut produced = false;
+                let r = super::acp::stream_reply(
+                    turn,
+                    |t| {
+                        produced = true;
+                        on_delta(t)
+                    },
+                    &mut on_activity,
+                )
+                .await;
+                match r {
+                    Ok(text) => return Ok(text),
+                    Err(super::acp::AcpFailure::Turn(e)) => return Err(e),
+                    Err(super::acp::AcpFailure::Init(why)) if !produced => {
+                        tracing::warn!(target: "dispatch", provider = ?rt.provider, %why, "ACP start failed; using the legacy adapter for this turn");
+                        crate::agent_turn::note(format!("acp_fallback:{}", provider_label(rt.provider)));
+                        // The prompt taught the Ligus tools; a legacy adapter
+                        // that can't take the server gets the directives back.
+                        let lost_tools = crate::agent_turn::current().is_some_and(|s| s.mcp.is_some())
+                            && !crate::ligus_mcp::attach::legacy_attaches(rt.provider);
+                        let with_directives = system.map(|s| format!("{s}\n\n{}", crate::prompt::directive_fallback_guidance()));
+                        let system = if lost_tools { with_directives.as_deref() } else { system };
+                        return legacy_cli(rt, system, turns, working_dir, extra_env, on_delta, on_activity).await;
+                    }
+                    Err(super::acp::AcpFailure::Init(why)) => return Err(ProviderError::Subprocess(why)),
+                }
+            }
+            Err(reason) => {
+                tracing::debug!(target: "dispatch", provider = ?rt.provider, ?reason, "legacy CLI adapter");
+                return legacy_cli(rt, system, turns, working_dir, extra_env, on_delta, on_activity).await;
+            }
+        }
+    }
     match rt.provider {
         ModelProviderKind::Anthropic => {
             let key = rt.api_key.as_deref().unwrap_or_default();
@@ -463,21 +523,6 @@ async fn stream_with_tools_inner<E: ToolExecutor>(
                 }
             }
         }
-        ModelProviderKind::ClaudeCode => {
-            // BYO subscription via the `claude` CLI in stream-json mode (no API
-            // key). endpoint = the binary (default "claude").
-            super::claude_code::stream_reply(
-                &rt.endpoint,
-                &rt.args,
-                working_dir,
-                extra_env,
-                system,
-                turns,
-                on_delta,
-                on_activity,
-            )
-            .await
-        }
         ModelProviderKind::Pi => {
             // `pi` is interactive by default; `-p` runs one-shot and takes the
             // prompt as a positional argument (not stdin). When the runtime
@@ -554,6 +599,66 @@ async fn stream_with_tools_inner<E: ToolExecutor>(
             )
             .await
         }
+        ModelProviderKind::ClaudeCode | ModelProviderKind::Codex | ModelProviderKind::Antigravity | ModelProviderKind::Copilot => {
+            legacy_cli(rt, system, turns, working_dir, extra_env, on_delta, on_activity).await
+        }
+        ModelProviderKind::Hermes => {
+            // Generic stdin-driven CLI agent: feed the rendered prompt on stdin
+            // and stream stdout, with the binary (`endpoint`, default "hermes")
+            // and any flags (`args`) configured on the runtime. This is the same
+            // shape as aider, so any prompt-on-stdin agent works with no new code.
+            let input = subprocess::render_prompt(system, turns);
+            let program = if rt.endpoint.is_empty() { "hermes" } else { &rt.endpoint };
+            subprocess::run_with(
+                ModelProviderKind::Hermes,
+                program,
+                &rt.args,
+                working_dir,
+                extra_env,
+                subprocess::PromptInput::Stdin(&input),
+                on_delta,
+            )
+            .await
+        }
+    }
+}
+
+/// The legacy headless adapters of the subscription CLIs (`claude -p`,
+/// `codex exec`, `agy --print`, `copilot -p`). The Ligus MCP server is
+/// attached where the CLI takes an MCP config file (Claude Code, Copilot);
+/// Codex and Antigravity on their legacy adapters use the reply directives.
+async fn legacy_cli(
+    rt: &ResolvedRuntime,
+    system: Option<&str>,
+    turns: &[ChatTurn],
+    working_dir: Option<&str>,
+    extra_env: &[(String, String)],
+    on_delta: impl FnMut(String),
+    on_activity: impl FnMut(StreamActivity),
+) -> Result<String, ProviderError> {
+    let attach = crate::agent_turn::current().and_then(|s| s.mcp.clone());
+    let mut args = rt.args.clone();
+    if let Some(a) = attach.as_ref() {
+        crate::ligus_mcp::attach::legacy_args(rt.provider, a, &mut args);
+    }
+    let rt = &ResolvedRuntime { args, ..rt.clone() };
+    #[allow(unreachable_patterns)]
+    match rt.provider {
+        ModelProviderKind::ClaudeCode => {
+            // BYO subscription via the `claude` CLI in stream-json mode (no API
+            // key). endpoint = the binary (default "claude").
+            super::claude_code::stream_reply(
+                &rt.endpoint,
+                &rt.args,
+                working_dir,
+                extra_env,
+                system,
+                turns,
+                on_delta,
+                on_activity,
+            )
+            .await
+        }
         ModelProviderKind::Codex => {
             // OpenAI Codex CLI, headless: `codex exec --json … <prompt>` in a
             // workspace-write sandbox (it edits files in the working dir, which
@@ -606,24 +711,7 @@ async fn stream_with_tools_inner<E: ToolExecutor>(
             )
             .await
         }
-        ModelProviderKind::Hermes => {
-            // Generic stdin-driven CLI agent: feed the rendered prompt on stdin
-            // and stream stdout, with the binary (`endpoint`, default "hermes")
-            // and any flags (`args`) configured on the runtime. This is the same
-            // shape as aider, so any prompt-on-stdin agent works with no new code.
-            let input = subprocess::render_prompt(system, turns);
-            let program = if rt.endpoint.is_empty() { "hermes" } else { &rt.endpoint };
-            subprocess::run_with(
-                ModelProviderKind::Hermes,
-                program,
-                &rt.args,
-                working_dir,
-                extra_env,
-                subprocess::PromptInput::Stdin(&input),
-                on_delta,
-            )
-            .await
-        }
+        _ => unreachable!("legacy_cli is only called for subscription CLIs"),
     }
 }
 
@@ -657,6 +745,12 @@ pub struct ProviderPreset {
 /// replaces `<host>` with the gateway's address.
 pub const LOCAL_GATEWAY_ENDPOINT: &str = "http://<host>:8080/v1/chat/completions";
 
+/// `mlx_lm.server`'s chat-completions URL on this machine.
+pub const MLX_ENDPOINT: &str = "http://localhost:8080/v1/chat/completions";
+
+/// The Gemini API's OpenAI-compatible endpoint (no new provider kind).
+pub const GEMINI_OPENAI_ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+
 /// Known OpenAI-compatible endpoints offered as presets. They all route through
 /// the OpenAI-compatible client; Gemini/LM Studio/Groq/Together need only a base
 /// URL + key, while Azure additionally swaps bearer auth for an `api-key` header.
@@ -670,7 +764,9 @@ pub fn provider_presets() -> Vec<ProviderPreset> {
         // (5.8x Ollama's prefill on ROCm in Hive's lab), tool calls verified.
         ProviderPreset { label: "Local gateway (llama.cpp, OpenAI-compatible)", provider: Custom, endpoint: LOCAL_GATEWAY_ENDPOINT, needs_key: false, tools: true },
         ProviderPreset { label: "LM Studio (local)", provider: Custom, endpoint: "http://localhost:1234/v1/chat/completions", needs_key: false, tools: true },
-        ProviderPreset { label: "Google Gemini", provider: Custom, endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", needs_key: true, tools: true },
+        // Apple Silicon: `mlx_lm.server` speaks the OpenAI wire (default port 8080).
+        ProviderPreset { label: "MLX (local, mlx_lm.server)", provider: Custom, endpoint: MLX_ENDPOINT, needs_key: false, tools: true },
+        ProviderPreset { label: "Google Gemini", provider: Custom, endpoint: GEMINI_OPENAI_ENDPOINT, needs_key: true, tools: true },
         ProviderPreset { label: "Groq", provider: Custom, endpoint: "https://api.groq.com/openai/v1/chat/completions", needs_key: true, tools: true },
         ProviderPreset { label: "Together", provider: Custom, endpoint: "https://api.together.xyz/v1/chat/completions", needs_key: true, tools: true },
         ProviderPreset { label: "Azure OpenAI", provider: Azure, endpoint: "", needs_key: true, tools: true },
@@ -681,6 +777,23 @@ pub fn provider_presets() -> Vec<ProviderPreset> {
 mod tests {
     use super::*;
     use super::super::ollama::ModelCapabilities;
+
+    /// The first-class runtime matrix's API and local rows (D.2.4) are all
+    /// one-click presets over the OpenAI-compatible provider (no new kind).
+    #[test]
+    fn gemini_and_mlx_presets_ride_the_openai_wire() {
+        let presets = provider_presets();
+        let gemini = presets.iter().find(|p| p.label == "Google Gemini").unwrap();
+        assert_eq!(gemini.provider, ModelProviderKind::Custom);
+        assert!(gemini.endpoint.starts_with("https://generativelanguage.googleapis.com/v1beta/openai/"));
+        assert!(gemini.needs_key);
+        let mlx = presets.iter().find(|p| p.label.starts_with("MLX")).unwrap();
+        assert_eq!(mlx.provider, ModelProviderKind::Custom);
+        assert!(!mlx.needs_key && mlx.endpoint.ends_with("/v1/chat/completions"));
+        for label in ["OpenAI", "Ollama (local)", "Local gateway (llama.cpp, OpenAI-compatible)"] {
+            assert!(presets.iter().any(|p| p.label == label), "{label}");
+        }
+    }
 
     fn ollama_rt() -> ResolvedRuntime {
         ResolvedRuntime {
@@ -697,6 +810,7 @@ mod tests {
             tools: false,
             max_tool_rounds: None,
             allow_remote_file_tools: false,
+            driver: Default::default(),
         }
     }
 
@@ -775,6 +889,7 @@ mod tests {
             tools: false,
             max_tool_rounds: None,
             allow_remote_file_tools: false,
+            driver: Default::default(),
         };
         assert!(rt.is_subprocess());
         rt.provider = ModelProviderKind::Anthropic;
@@ -800,6 +915,7 @@ mod tests {
             tools: false,
             max_tool_rounds: None,
             allow_remote_file_tools: false,
+            driver: Default::default(),
         };
         // Name-based guess for a qwen model.
         assert_eq!(rt.context_window(), 32_768);
@@ -951,10 +1067,14 @@ mod tests {
     }
 }
 
-/// Live smoke test for the subscription CLIs: one tiny prompt through the real
-/// `agy` / `copilot` on this machine. Ignored by default (needs the CLI
-/// installed and signed in, and spends a little quota):
-/// `LIGUS_LIVE_CLI=antigravity LIGUS_LIVE_MODEL=<id> cargo test -p hive-runtime --lib live_cli_smoke -- --ignored --nocapture`
+/// Live smoke test for the subscription CLIs (release matrix, D.2.4): one
+/// tiny prompt through the real CLI on this machine, over ACP or its legacy
+/// adapter. Ignored by default (needs the CLI installed and signed in, and
+/// spends a little quota):
+/// `LIGUS_LIVE_CLI=claude-code|codex|copilot|antigravity LIGUS_LIVE_DRIVER=acp|legacy [LIGUS_LIVE_MODEL=<id>] [LIGUS_LIVE_KEY=<api key, Claude over ACP>] cargo test -p hive-runtime --lib live_cli_smoke -- --ignored --nocapture`
+///
+/// With `LIGUS_LIVE_DRIVER=acp` the test fails (instead of falling back) when
+/// ACP doesn't start, so the matrix records which path really ran.
 #[cfg(test)]
 mod live_cli {
     use super::*;
@@ -965,17 +1085,26 @@ mod live_cli {
         let provider = match hive_core::compat::var("LIGUS_LIVE_CLI").as_deref() {
             Ok("antigravity") => ModelProviderKind::Antigravity,
             Ok("copilot") => ModelProviderKind::Copilot,
+            Ok("codex") => ModelProviderKind::Codex,
+            Ok("claude-code") | Ok("claude") => ModelProviderKind::ClaudeCode,
             _ => return,
         };
+        let driver = hive_core::Driver::parse(&hive_core::compat::var("LIGUS_LIVE_DRIVER").unwrap_or_default());
         let args = match provider {
             ModelProviderKind::Antigravity => super::super::antigravity::permission_args("default"),
-            _ => super::super::copilot::permission_args("default"),
+            ModelProviderKind::Copilot => super::super::copilot::permission_args("default"),
+            _ => Vec::new(),
+        };
+        let endpoint = match provider {
+            ModelProviderKind::ClaudeCode => "claude",
+            ModelProviderKind::Codex => "codex",
+            _ => "",
         };
         let rt = ResolvedRuntime {
             provider,
             model: hive_core::compat::var("LIGUS_LIVE_MODEL").unwrap_or_default(),
-            endpoint: String::new(),
-            api_key: None,
+            endpoint: endpoint.into(),
+            api_key: hive_core::compat::var("LIGUS_LIVE_KEY").ok().filter(|k| !k.is_empty()),
             args,
             model_provider_id: None,
             model_base_url: None,
@@ -985,14 +1114,35 @@ mod live_cli {
             tools: false,
             max_tool_rounds: None,
             allow_remote_file_tools: false,
+            driver,
         };
+        if driver == hive_core::Driver::Acp {
+            match super::super::acp::resolve(&rt, false) {
+                Ok(cmd) => println!("ACP command: {} {:?}", cmd.program, cmd.args),
+                Err(why) => panic!("{provider:?} can't run over ACP here: {why:?}"),
+            }
+        }
+        let scope = crate::agent_turn::AgentTurnScope::default();
+        let notes = scope.notes.clone();
         let dir = tempfile::tempdir().unwrap();
         let turns = vec![ChatTurn { role: "user".into(), content: "Reply with the word ok and nothing else.".into() }];
         let mut deltas = 0;
         let mut acts = 0;
         let started = std::time::Instant::now();
-        let out = stream(&rt, None, &turns, dir.path().to_str(), &[], 256, |_| deltas += 1, |_| acts += 1).await;
-        println!("{provider:?}: {:?} in {:?} ({deltas} deltas, {acts} activity events)", out, started.elapsed());
+        let out = crate::agent_turn::with_agent_turn(
+            scope,
+            stream(&rt, None, &turns, dir.path().to_str(), &[], 256, |_| deltas += 1, |_| acts += 1),
+        )
+        .await;
+        let fell_back = notes.lock().unwrap().iter().any(|n| n.starts_with("acp_fallback"));
+        println!(
+            "MATRIX {provider:?} driver={} result={} in {:?} ({deltas} deltas, {acts} activity events) {:?}",
+            driver.as_str(),
+            if out.is_ok() && !fell_back { "ok" } else { "FAIL" },
+            started.elapsed(),
+            out
+        );
+        assert!(!(driver == hive_core::Driver::Acp && fell_back), "ACP failed to start and the turn fell back to the legacy adapter");
         assert!(out.unwrap().to_lowercase().contains("ok"));
     }
 }

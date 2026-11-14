@@ -59,6 +59,7 @@ fn live_rt() -> Option<ResolvedRuntime> {
         tools: true,
         max_tool_rounds: None,
         allow_remote_file_tools: false,
+        driver: Default::default(),
     })
 }
 

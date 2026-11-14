@@ -81,6 +81,17 @@ the chat (an installed-but-disabled MCP server is inert). The `claude`
 runtime governs its own file/command actions through its permission mode.
 See [Tools & permissions](tools-and-consent.md).
 
+## Ligus tools
+
+When your runtime offers them, use the Ligus tools rather than `[[…]]`
+directives: `ligus_propose_diff`, `ligus_propose_decision`,
+`ligus_propose_command` (an exact argv a person approves and Ligus runs),
+`ligus_open_alternatives`, `ligus_handoff` (the receiving agent starts
+right away), `ligus_mark`, `ligus_read_chat` and the other read tools, and
+`ligus_ask_human` when you need a decision (your turn pauses until someone
+answers). You can't apply, vote or change settings; you can only propose.
+See [Ligus tools for agents](../addons/ligus-mcp.md).
+
 ## In one line
 
 You run on one host, against one chat's isolated worktree; your edits are

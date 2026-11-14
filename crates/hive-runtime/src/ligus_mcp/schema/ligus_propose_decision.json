@@ -1,0 +1,29 @@
+{
+  "description": "Put a decision up for the team to approve. Saved for human review, never executed. requiredApprovals can only raise the chat's default.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "body": {
+        "description": "Context and recommendation",
+        "maxLength": 8000,
+        "type": "string"
+      },
+      "requiredApprovals": {
+        "maximum": 16,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "title": {
+        "description": "The decision",
+        "maxLength": 200,
+        "type": "string"
+      }
+    },
+    "required": [
+      "title",
+      "body"
+    ],
+    "type": "object"
+  },
+  "name": "ligus_propose_decision"
+}

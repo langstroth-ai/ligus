@@ -175,6 +175,7 @@ One block per LLM or CLI agent. See
 | `keep_alive`                    | string   | Optional keep-alive hint                          |
 | `think`                         | bool     | Optional thinking switch (Ollama)                 |
 | `max_tool_rounds`               | int      | Tool-loop rounds per turn (default 24, max 100)   |
+| `driver`                        | string   | Subscription CLIs: `auto` (default), `acp` or `legacy`; see [ACP](../addons/acp.md#driver) |
 | `supports_embeddings`           | bool     | Whether the runtime can embed                     |
 | `supports_tools`                | bool     | Whether the runtime accepts tool calls            |
 | `context_window`                | int      | Optional context-window size                      |

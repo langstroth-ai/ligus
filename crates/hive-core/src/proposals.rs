@@ -146,6 +146,49 @@ pub struct ActionProposal {
     /// set can only raise the bar and re-tuning the set never loses it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub own_gate: Option<OwnGate>,
+    /// For a [`ProposalKind::Command`] filed through `ligus_propose_command`:
+    /// the exact argv Implement runs (in the chat's worktree, inside the
+    /// sandbox; no model reinterprets it). Bound into the vote digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<ProposedCommand>,
+}
+
+/// A structured command proposal (Track D4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposedCommand {
+    /// Program and arguments; never run through a shell.
+    pub argv: Vec<String>,
+    /// Worktree-relative directory; `None` = the worktree root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+}
+
+/// Bounds on a structured command (checked when it is filed).
+pub const MAX_COMMAND_ARGS: usize = 64;
+pub const MAX_COMMAND_ARG_BYTES: usize = 4096;
+
+impl ProposedCommand {
+    /// Checks the shape: a non-empty program, bounded args, no NULs, and a
+    /// relative `cwd` that stays inside the worktree.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.argv.is_empty() || self.argv[0].trim().is_empty() {
+            return Err("argv needs a program".into());
+        }
+        if self.argv.len() > MAX_COMMAND_ARGS {
+            return Err(format!("at most {MAX_COMMAND_ARGS} arguments"));
+        }
+        if self.argv.iter().any(|a| a.len() > MAX_COMMAND_ARG_BYTES || a.contains('\0')) {
+            return Err("an argument is too long or contains NUL".into());
+        }
+        if let Some(c) = &self.cwd {
+            let p = std::path::Path::new(c);
+            if p.is_absolute() || p.components().any(|x| matches!(x, std::path::Component::ParentDir | std::path::Component::Prefix(_))) {
+                return Err("cwd must be relative to the worktree, without ..".into());
+            }
+        }
+        Ok(())
+    }
 }
 
 /// A proposal's own human gate (see [`ActionProposal::own_gate`]).
@@ -187,6 +230,7 @@ impl ActionProposal {
             workflow: None,
             set_id: None,
             task_class: None,
+            command: None,
             reverted: false,
             own_gate: None,
         }

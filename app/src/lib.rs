@@ -44,6 +44,7 @@ mod proposal_sets;
 mod data_migration;
 mod flow;
 mod ligus_auth_ui;
+mod agent_iface;
 /// In-app live test support (see `tests/app_live.rs`); not in release builds.
 #[cfg(feature = "e2e")]
 #[doc(hidden)]
@@ -2427,7 +2428,33 @@ fn proposal_dto(p: &ActionProposal, members: &[hive_core::identity::WorkspaceMem
         set_id: p.set_id.map(|id| id.to_string()),
         task_class: p.task_class.clone(),
         reverted: p.reverted,
+        argv: p.command.as_ref().map(|c| c.argv.clone()),
+        producing_agent_id: p.producing_agent_id.map(|id| id.to_string()),
+        ..Default::default()
     }
+}
+
+/// `proposal_dto` with the review badges (Track D4): kind is already on the
+/// DTO; author (human or agent, and whether the agent's own key signed it),
+/// config impact, human gate, presence, and a legacy command's warning.
+fn proposal_dto_reviewed(p: &ActionProposal, s: &ChatSession, svc: &ChatService) -> ProposalDto {
+    let mut dto = proposal_dto(p, &s.members);
+    let (kind, name) = hive_runtime::review::author_of(s, p);
+    let agent = kind == hive_runtime::review::AuthorKind::Agent;
+    dto.author_kind = if agent { "agent".into() } else { "human".into() };
+    dto.author_name = name;
+    dto.signed_by = match svc.proposal_signer(s.id, p.id, agent) {
+        Some(hive_runtime::review::SignedBy::Agent) => "agent".into(),
+        Some(hive_runtime::review::SignedBy::Host) => "host".into(),
+        Some(hive_runtime::review::SignedBy::Human) => "human".into(),
+        None => String::new(),
+    };
+    let protected = hive_core::sandbox::envelope_for_session(s).protected_dirs;
+    dto.config_impact = hive_runtime::review::config_impact(p, &protected);
+    dto.human_gate = hive_core::guard::human_gate_reason(s, p).is_some();
+    dto.presence_required = s.authz.rules >= 2;
+    dto.legacy_command = p.kind == ProposalKind::Command && p.command.is_none();
+    dto
 }
 
 fn session_dto(s: &ChatSession) -> ChatSessionDto {
@@ -3211,6 +3238,7 @@ impl AppState {
                     max_tool_rounds: rt.max_tool_rounds,
                     // "Allow workspace file tools for this endpoint".
                     allow_remote_file_tools: rt.allow_remote_file_tools,
+                    driver: rt.driver,
                 };
             }
         }
@@ -3231,6 +3259,7 @@ impl AppState {
             tools: false,
             max_tool_rounds: None,
             allow_remote_file_tools: false,
+            driver: Default::default(),
         }
     }
 }
@@ -5377,7 +5406,7 @@ fn list_proposals(state: State<AppState>, session_id: String) -> Result<Vec<Prop
     Ok(svc
         .load(id)
         .map_err(map_err)?
-        .map(|s| s.proposals.iter().map(|p| proposal_dto(p, &s.members)).collect())
+        .map(|s| s.proposals.iter().map(|p| proposal_dto_reviewed(p, &s, &svc)).collect())
         .unwrap_or_default())
 }
 
@@ -5691,6 +5720,7 @@ async fn implement_proposal(
     state: State<'_, AppState>,
     session_id: String,
     proposal_id: String,
+    target_agent_id: Option<String>,
 ) -> Result<(), String> {
     // An alternative in an open proposal set goes through the set's two-phase
     // commit (pre-flight, then apply), not a plain Implement.
@@ -5704,7 +5734,8 @@ async fn implement_proposal(
             }
         }
     }
-    implement_proposal_inner(app, state, session_id, proposal_id).await
+    let target = target_agent_id.as_deref().filter(|t| !t.is_empty()).map(Uuid::parse_str).transpose().map_err(map_err)?;
+    implement_proposal_targeted(app, state, session_id, proposal_id, target).await
 }
 
 /// [`implement_proposal`] without the proposal-set guard; the set's apply
@@ -5714,6 +5745,95 @@ async fn implement_proposal_inner(
     state: State<'_, AppState>,
     session_id: String,
     proposal_id: String,
+) -> Result<(), String> {
+    implement_proposal_targeted(app, state, session_id, proposal_id, None).await
+}
+
+/// The preview of what Implement will do (Track D4): built by the same
+/// `hive_runtime::review::implement_plan` the runner uses.
+#[tauri::command]
+fn get_implement_plan(
+    state: State<'_, AppState>,
+    session_id: String,
+    proposal_id: String,
+    target_agent_id: Option<String>,
+) -> Result<hive_proto::ImplementPreviewDto, String> {
+    let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
+    let pid = Uuid::parse_str(&proposal_id).map_err(map_err)?;
+    let target = target_agent_id.as_deref().filter(|t| !t.is_empty()).map(Uuid::parse_str).transpose().map_err(map_err)?;
+    let session = state.service.lock().unwrap().load(sid).map_err(map_err)?.ok_or("unknown session")?;
+    let p = session.proposals.iter().find(|p| p.id == pid).cloned().ok_or("unknown proposal")?;
+    Ok(implement_preview(&state, &session, &p, target))
+}
+
+fn implement_preview(state: &AppState, session: &ChatSession, p: &ActionProposal, target: Option<Uuid>) -> hive_proto::ImplementPreviewDto {
+    use hive_runtime::review::ImplementKind;
+    let plan = hive_runtime::review::implement_plan(session, p, target);
+    let executor = format!("{:?}", hive_runtime::executor::default_executor().kind());
+    let envelope = hive_core::sandbox::envelope_for_session(session);
+    let mut dto = hive_proto::ImplementPreviewDto {
+        kind: match plan.kind {
+            ImplementKind::Argv => "argv",
+            ImplementKind::Instruction => "instruction",
+            ImplementKind::ApplyDiff => "applyDiff",
+            ImplementKind::AddWorkflow => "addWorkflow",
+        }
+        .into(),
+        argv: plan.argv.clone(),
+        cwd: plan.cwd.clone(),
+        instruction: plan.instruction.clone(),
+        target_agent_id: plan.target_agent_id.map(|id| id.to_string()),
+        target_name: plan.target_name.clone(),
+        targets: session.workspace_agents.iter().map(|a| (a.id.to_string(), format!("@{}", a.name))).collect(),
+        executor,
+        presence_required: session.authz.rules >= 2,
+        human_gate: hive_core::guard::human_gate_reason(session, p).is_some(),
+        legacy_command: plan.legacy_command,
+        ..Default::default()
+    };
+    match plan.kind {
+        // A command runs as a tool: no model, no network.
+        ImplementKind::Argv => {
+            dto.runtime = "none (runs the argv directly)".into();
+            dto.permission_tier = "worktree only".into();
+        }
+        ImplementKind::Instruction => {
+            let agent = plan.target_agent_id.and_then(|id| session.workspace_agents.iter().find(|a| a.id == id));
+            let responder = responder_for(state, session, agent);
+            let rt = &responder.runtime;
+            dto.runtime = format!("{} ({:?})", responder.runtime_id, rt.provider);
+            dto.driver = if rt.provider.is_cli_agent() {
+                match hive_runtime::provider::acp::resolve(rt, !envelope.egress.is_open()) {
+                    Ok(_) => "acp".into(),
+                    Err(_) => "legacy".into(),
+                }
+            } else {
+                String::new()
+            };
+            dto.permission_tier = if rt.provider.is_cli_agent() {
+                hive_runtime::provider::acp::tier_from_args(rt.provider, &rt.args).into()
+            } else {
+                "tools per runtime".into()
+            };
+            let mut egress: Vec<String> = hive_runtime::executor::provider_endpoints(rt.provider).iter().map(|h| h.to_string()).collect();
+            if !envelope.egress.is_open() {
+                egress.push(format!("({})", envelope.egress.label()));
+            }
+            dto.egress = egress;
+        }
+        ImplementKind::ApplyDiff | ImplementKind::AddWorkflow => {
+            dto.runtime = "none (applied by Ligus)".into();
+        }
+    }
+    dto
+}
+
+async fn implement_proposal_targeted(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+    proposal_id: String,
+    target: Option<Uuid>,
 ) -> Result<(), String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let pid = Uuid::parse_str(&proposal_id).map_err(map_err)?;
@@ -5820,19 +5940,56 @@ async fn implement_proposal_inner(
         }
     }
 
-    // Dispatch the proposal to the responder as an instruction, so the agent
-    // carries it out via its own (consent-gated) tools.
-    let kind = match proposal.kind {
-        ProposalKind::FileDiff => "file change",
-        ProposalKind::Command => "command",
-        ProposalKind::Decision => "decision",
-    };
-    let prompt = format!(
-        "An approved proposal ({kind}) is ready to implement. Carry it out now using your tools, \
-         then briefly confirm what you did.\n\n## {}\n\n{}",
-        proposal.title, proposal.body
-    );
-    let responder = responder_for(&state, &session, None);
+    // The one plan the preview showed (Track D4).
+    let plan = hive_runtime::review::implement_plan(&session, &proposal, target);
+    // A structured command: run exactly its argv in the chat's worktree,
+    // sandboxed, with no model involved.
+    if let (hive_runtime::review::ImplementKind::Argv, Some(cmd)) = (&plan.kind, proposal.command.as_ref()) {
+        let repo_root = state.workspace_repo_root();
+        let chat_wt = (!repo_root.trim().is_empty() && hive_runtime::git_worktree::is_git_repo(std::path::Path::new(&repo_root)))
+            .then(|| hive_runtime::git_worktree::chat_worktree(std::path::Path::new(&repo_root), &sid.to_string()).ok())
+            .flatten();
+        let isolated = chat_wt.is_some();
+        let dir = chat_wt.unwrap_or_else(|| std::path::PathBuf::from(state.workspace_root.lock().unwrap().clone()));
+        let envelope = hive_core::sandbox::envelope_for_session(&session);
+        let mut policy = crate::guards::turn_sandbox_policy(&state, &envelope, &hive_runtime::author_gate::GatePlan::Full, isolated);
+        policy.mcp_ids.clear();
+        let cmd = cmd.clone();
+        let run = tokio::task::spawn_blocking(move || {
+            hive_runtime::executor::with_turn_sync(policy, || hive_runtime::review::run_command(&dir, &cmd, std::time::Duration::from_secs(1800)))
+        })
+        .await
+        .map_err(map_err)??;
+        let ok = run.exit_code == Some(0);
+        {
+            let mut svc = state.service.lock().unwrap();
+            let shown = plan.argv.as_ref().map(|a| a.join(" ")).unwrap_or_default();
+            let tail: String = run.output.chars().rev().take(1500).collect::<Vec<_>>().into_iter().rev().collect();
+            let _ = svc.post_system_note(
+                sid,
+                workspace_id,
+                format!(
+                    "\u{25b6} Ran the approved command for {} ({:?} sandbox): `{shown}` \u{2192} exit {}\n\n{}",
+                    plan.target_name,
+                    run.executor,
+                    run.exit_code.map(|c| c.to_string()).unwrap_or_else(|| "killed".into()),
+                    tail.trim()
+                ),
+            );
+            if ok {
+                svc.mark_proposal_applied(sid, workspace_id, pid, None).map_err(map_err)?;
+            }
+        }
+        let _ = app.emit("workspace://synced", 1);
+        return if ok { Ok(()) } else { Err(format!("the command exited {:?}; the proposal stays approved", run.exit_code)) };
+    }
+    // Dispatch the proposal to its producing agent (or the picked one) as
+    // the exact instruction the preview showed.
+    let prompt = hive_runtime::review::executed_instruction(&plan)
+        .map(str::to_owned)
+        .unwrap_or_else(|| hive_runtime::review::implement_instruction(&proposal));
+    let agent = plan.target_agent_id.and_then(|id| session.workspace_agents.iter().find(|a| a.id == id)).cloned();
+    let responder = responder_for(&state, &session, agent.as_ref());
     {
         let mut svc = state.service.lock().unwrap();
         svc.post_user_message(sid, workspace_id, &prompt).map_err(map_err)?;
@@ -7649,39 +7806,58 @@ async fn try_tool_loop(
     let Some(api_key) = responder.runtime.api_key.clone() else {
         return Ok(None);
     };
-    let Some((tool_defs, executor)) = mcp_tool_set(state, egress).await else {
+    let mcp = mcp_tool_set(state, egress).await;
+    // The Ligus tools ride the same loop (D.3.3), with or without MCP servers.
+    let ligus_offered = hive_runtime::ligus_mcp::offered_for(&responder.runtime, !egress.is_open());
+    if mcp.is_none() && !ligus_offered {
         return Ok(None);
-    };
+    }
 
     let message_id = {
         let mut svc = state.service.lock().unwrap();
         svc.begin_assistant_message(session_id, workspace_id, &responder.author, &responder.runtime_id, responder.agent_id, reply_to)
             .map_err(map_err)?
     };
+    let ligus = crate::agent_iface::begin(app, &responder.runtime, !egress.is_open(), true, workspace_id, session_id, responder.agent_id, &responder.author, message_id, None);
+    let (mut tool_defs, executor) = match mcp {
+        Some((d, e)) => (d, Some(e)),
+        None => (Vec::new(), None),
+    };
+    if ligus.offered() {
+        let mut defs = hive_runtime::ligus_mcp::tools::tool_loop_defs();
+        defs.extend(tool_defs);
+        tool_defs = defs;
+    }
 
     let model = AnthropicMessages {
         client: AnthropicClient::new(),
         api_key,
         model: responder.runtime.model.clone(),
-        system: Some(system.to_string()),
+        system: Some(ligus.system(system.to_string())),
     };
     let initial = turns_to_messages(turns);
 
-    let result = tool_loop::run_with_messages(&model, &executor, initial, tool_defs, hive_runtime::agent_tools::ANTHROPIC_TOOL_ROUNDS).await;
+    let routed = hive_runtime::ligus_mcp::WithLigus { turn: ligus.turn.as_deref(), inner: executor.as_ref() };
+    let result = tool_loop::run_with_messages(&model, &routed, initial, tool_defs, hive_runtime::agent_tools::ANTHROPIC_TOOL_ROUNDS).await;
     // Self-medication: an injection marker in what the tools returned locks
     // this chat down.
-    crate::guards::self_medicate_after_turn(state, workspace_id, session_id, message_id, &executor.injection_hits.take(), None, &[], turns);
+    let hits = executor.as_ref().map(|e| e.injection_hits.take()).unwrap_or_default();
+    crate::guards::self_medicate_after_turn(state, workspace_id, session_id, message_id, &hits, None, &[], turns);
 
     let (phase, text) = match result {
         Ok(text) => {
             let root = state.workspace_root.lock().unwrap().clone();
             let mut svc = state.service.lock().unwrap();
-            let body = finalize_reply(
+            let body = finalize_reply_with(
                 &mut svc, session_id, workspace_id, message_id, &responder.author, responder.agent_id, &root, &text, false,
-            )?;
-            ("completed".to_string(), body)
+                ligus.effects().as_ref(),
+            );
+            drop(svc);
+            ligus.finish(state, session_id, workspace_id, &responder.author, &[]);
+            ("completed".to_string(), body?)
         }
         Err(e) => {
+            ligus.finish(state, session_id, workspace_id, &responder.author, &[]);
             let msg = e.to_string();
             let mut svc = state.service.lock().unwrap();
             let _ = svc.complete_assistant_message(
@@ -7715,19 +7891,12 @@ async fn try_tool_loop(
 /// `/Users/x/projects/api/src/main.rs` → `api/src/main.rs`. A backstop behind
 /// the prompt guidance — the model shouldn't emit absolute paths, but if it
 /// does, they don't reach the shared log. No-op when the root isn't present.
+#[cfg(test)]
 fn redact_workspace_path(body: &str, workspace_root: &str) -> String {
-    let root = workspace_root.trim_end_matches('/');
-    if root.is_empty() || !body.contains(root) {
-        return body.to_string();
-    }
-    let base = std::path::Path::new(root)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(root);
-    body.replace(root, base)
+    hive_runtime::finalize::redact_workspace_path(body, workspace_root)
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn finalize_reply(
     svc: &mut ChatService,
@@ -7740,98 +7909,53 @@ fn finalize_reply(
     full: &str,
     edits_in_review: bool,
 ) -> Result<String, String> {
-    // Flow directives (hand-off parcels, workspace marks) are kept for after the turn.
-    let full = &crate::flow::take_directives(message_id, full);
-    let parsed = hive_runtime::directives::parse_reply_directives(full);
-    let mut cleaned = redact_workspace_path(&parsed.cleaned, workspace_root);
-    // A scout's assessment: recorded in its proposal set, and the visible
-    // reply replaced so the next scout assesses blind.
-    if let Some(note) =
-        proposal_sets::record_assessments(svc, session_id, workspace_id, author, agent_id, &parsed.assessments)
-    {
-        cleaned = note;
+    finalize_reply_with(svc, session_id, workspace_id, message_id, author, agent_id, workspace_root, full, edits_in_review, None)
+}
+
+/// The desktop's finalize: the shared one every host runs
+/// (`hive_runtime::finalize`, D.4.3), plus the desktop's own follow-ups:
+/// flow directives kept for the after-turn hook, same-request grouping, and
+/// the pending-scout hints. `mcp` is what the turn's Ligus tools already did
+/// (their effects win over duplicate directives).
+#[allow(clippy::too_many_arguments)]
+fn finalize_reply_with(
+    svc: &mut ChatService,
+    session_id: Uuid,
+    workspace_id: Uuid,
+    message_id: Uuid,
+    author: &str,
+    agent_id: Option<Uuid>,
+    workspace_root: &str,
+    full: &str,
+    edits_in_review: bool,
+    mcp: Option<&hive_runtime::finalize::McpEffectsLog>,
+) -> Result<String, String> {
+    let base_commit = full.contains("[[alternatives").then(|| proposal_sets::base_commit_for(workspace_root, session_id)).flatten();
+    let out = hive_runtime::finalize::finalize_reply(
+        svc,
+        hive_runtime::finalize::FinalizeInput {
+            ctx: hive_runtime::effects::EffectCtx {
+                session_id,
+                workspace_id,
+                author: author.to_string(),
+                agent_id,
+                message_id: Some(message_id),
+                via: hive_runtime::effects::Via::Directive,
+            },
+            workspace_root,
+            full,
+            edits_in_review,
+            mcp,
+            base_commit,
+            apply_flow: false,
+        },
+    )?;
+    crate::flow::stash_directives(message_id, out.flow);
+    for id in &out.filed {
+        proposal_sets::group_same_trigger(svc, session_id, workspace_id, *id);
     }
-    // A turn that produced nothing at all — no text, no directive, no edits —
-    // never posts an empty message: the chat says the model came back empty.
-    let did_nothing = parsed.emojis.is_empty()
-        && parsed.workflows.is_empty()
-        && parsed.proposals.is_empty()
-        && parsed.alternatives.is_empty()
-        && !edits_in_review;
-    if cleaned.trim().is_empty() && did_nothing {
-        tracing::warn!(target: "dispatch", %author, "the model returned an empty reply");
-        cleaned = hive_runtime::empty_reply_notice(author);
-    }
-    svc.complete_assistant_message(session_id, workspace_id, message_id, &cleaned)
-        .map_err(map_err)?;
-    if !parsed.emojis.is_empty() {
-        let actor = hive_core::ActorIdentity::new(author, author, hive_core::ActorKind::Agent);
-        for emoji in &parsed.emojis {
-            let _ = svc.add_reaction(session_id, workspace_id, message_id, emoji.clone(), &actor);
-        }
-    }
-    // Agent-authored workflows: validated, then filed as a proposal for human
-    // review. Approving it adds the definition; nothing reaches the definition
-    // set (or runs) without a person's vote. A rejected payload leaves the
-    // reason in the chat, where the agent sees it next turn and can fix it.
-    for json in &parsed.workflows {
-        let session = svc.load(session_id).map_err(map_err)?.ok_or("unknown session")?;
-        match workflows::definition_from_directive(json, &session) {
-            Ok(def) => {
-                let name = def.name.clone();
-                workflows::file_workflow_proposal(svc, &session, workspace_id, def, author, agent_id)?;
-                let _ = svc.post_system_note(
-                    session_id,
-                    workspace_id,
-                    format!("\u{1f4dd} {author} proposed the workflow \u{201c}{name}\u{201d} \u{2014} review it in the Review pane."),
-                );
-            }
-            Err(e) => {
-                let _ = svc.post_system_note(
-                    session_id,
-                    workspace_id,
-                    format!("{author} suggested a workflow, but it couldn't be filed ({e}) \u{2014} no changes were made."),
-                );
-            }
-        }
-    }
-    // Agent-authored action proposals: saved for human review, never executed
-    // here. The author is the responding agent, so the governance self-approval
-    // guard applies — its own vote can't satisfy quorum.
-    for proposed in &parsed.proposals {
-        // The turn's own file edits are already up for review as a real diff
-        // (`edits_in_review`); a `fileDiff` directive from the same reply can
-        // carry no diff, so it would only duplicate that proposal — and
-        // implementing it would send the agent to redo the edit.
-        if edits_in_review && proposed.kind == ProposalKind::FileDiff {
-            tracing::info!(target: "dispatch", title = %proposed.title, "skipping a fileDiff directive: the turn's edits are already in review");
-            continue;
-        }
-        let mut proposal = hive_core::ActionProposal::new(&proposed.title, proposed.kind, author);
-        proposal.body = proposed.body.clone();
-        proposal.required_approvals = proposed.required_approvals;
-        let filed = proposal.id;
-        svc.upsert_proposal(session_id, workspace_id, proposal).map_err(map_err)?;
-        proposal_sets::group_same_trigger(svc, session_id, workspace_id, filed);
-        let _ = svc.post_system_note(
-            session_id,
-            workspace_id,
-            format!(
-                "📝 {author} proposed “{}” — review and approve it in the Review pane.",
-                proposed.title
-            ),
-        );
-    }
-    // Agent-authored alternatives: a proposal set for scouts to assess.
-    if !parsed.alternatives.is_empty() {
-        let trigger = svc
-            .load(session_id)
-            .map_err(map_err)?
-            .and_then(|s| s.messages.iter().rev().find(|m| m.role == MessageRole::User).map(|m| m.id));
-        let base = proposal_sets::base_commit_for(workspace_root, session_id);
-        proposal_sets::file_alternatives(svc, session_id, workspace_id, author, agent_id, &parsed.alternatives, trigger, base)?;
-    }
-    Ok(cleaned)
+    proposal_sets::assessments_arrived(author, &out.assessed);
+    Ok(out.cleaned)
 }
 
 /// A finished assistant turn: the transcript message it produced plus the
@@ -8189,6 +8313,22 @@ async fn run_prepared_turn_inner(
     // fails the spawn (chdir to "" → ENOENT). When no workspace folder is set,
     // run the agent in the app's own cwd (None) instead.
     let working_dir = (!effective_root.trim().is_empty()).then_some(effective_root.as_str());
+    // Track D: the Ligus MCP server for this turn (agent-signed proposals,
+    // hand-offs, asks, reads), when the runtime can use it; else directives.
+    let ligus = crate::agent_iface::begin(
+        app,
+        &responder.runtime,
+        !envelope.egress.is_open(),
+        tools_allowed,
+        workspace_id,
+        session_id,
+        responder.agent_id,
+        &responder.author,
+        message_id,
+        worktree.as_ref().map(|w| w.path.clone()),
+    );
+    let system = ligus.system(system);
+    let ligus_loop = ligus.tool_loop.then(|| ligus.turn.clone()).flatten();
     // Built-in file tools, confined to the turn's dir. In a repo their edits
     // land in the lazily cut worktree (captured below as a proposal); outside
     // one, in place only if the user allowed it. `run_command` needs its own
@@ -8222,7 +8362,8 @@ async fn run_prepared_turn_inner(
     // from the cap rather than growing it.
     let workflow_tool = {
         let last_user = turns.iter().rev().find(|t| t.role == "user").map_or("", |t| t.content.as_str());
-        let wanted = (builtin.is_some() || mcp_tools.is_some()) && hive_runtime::workflow_tool::wanted(last_user);
+        // The Ligus tools carry workflow proposals themselves.
+        let wanted = (builtin.is_some() || mcp_tools.is_some()) && ligus_loop.is_none() && hive_runtime::workflow_tool::wanted(last_user);
         let session = if wanted { state.service.lock().unwrap().load(session_id).ok().flatten() } else { None };
         session.map(|session| {
             hive_runtime::workflow_tool::WorkflowTool::new(Box::new(move |json: &str| {
@@ -8230,17 +8371,23 @@ async fn run_prepared_turn_inner(
             }))
         })
     };
-    let http_tools = (builtin.is_some() || mcp_tools.is_some()).then(|| {
+    let http_tools = (builtin.is_some() || mcp_tools.is_some() || ligus_loop.is_some()).then(|| {
         // Tools the agent's prompt, skills or the user's message name are
-        // offered first when the cap trims.
+        // offered first when the cap trims. The folded Ligus tools hold their
+        // own places outside the cap's count.
+        let ligus_slots = if ligus_loop.is_some() { hive_runtime::ligus_mcp::tools::FOLDED.len() } else { 0 };
         let tools = hive_runtime::agent_tools::CompositeTools::with_hints(
             builtin,
             mcp_tools,
-            hive_runtime::agent_tools::MAX_OFFERED_TOOLS - usize::from(workflow_tool.is_some()),
+            hive_runtime::agent_tools::MAX_OFFERED_TOOLS - usize::from(workflow_tool.is_some()) - ligus_slots,
             &hive_runtime::agent_tools::tool_hints(&system, &turns),
         );
-        match workflow_tool {
+        let tools = match workflow_tool {
             Some(tool) => tools.with_workflow_tool(tool),
+            None => tools,
+        };
+        match ligus_loop.clone() {
+            Some(turn) => tools.with_ligus_tools(turn),
             None => tools,
         }
     });
@@ -8304,9 +8451,13 @@ async fn run_prepared_turn_inner(
     };
     // Every child this turn spawns (the CLI, stdio MCP servers, run_command)
     // runs under this policy in the host's OS sandbox.
-    let sandbox_policy = crate::guards::turn_sandbox_policy(state, &envelope, &gate_plan, worktree.is_some() || lazy_worktree.is_some());
+    let mut sandbox_policy = crate::guards::turn_sandbox_policy(state, &envelope, &gate_plan, worktree.is_some() || lazy_worktree.is_some());
+    // The turn's Ligus MCP socket: the one extra path the sandbox allows.
+    sandbox_policy.ligus_mcp_socket = ligus.socket.clone();
     let sandbox_denials = sandbox_policy.denials.clone();
-    let stream_fut = hive_runtime::executor::with_turn(sandbox_policy, dispatch::stream_with_tools(
+    let agent_scope = ligus.scope();
+    let turn_notes = agent_scope.notes.clone();
+    let stream_fut = hive_runtime::executor::with_turn(sandbox_policy, hive_runtime::agent_turn::with_agent_turn(agent_scope, dispatch::stream_with_tools(
         &enforced_runtime,
         Some(&system),
         &turns,
@@ -8385,7 +8536,7 @@ async fn run_prepared_turn_inner(
             };
             let _ = app.emit(ChatActivityEvent::EVENT, ev);
         },
-    ));
+    )));
     let result = tokio::select! {
         biased;
         _ = stop.notified() => {
@@ -8438,12 +8589,14 @@ async fn run_prepared_turn_inner(
                     &turns,
                 );
             }
+            let mcp_effects = ligus.effects();
             let body = {
                 let root = state.workspace_root.lock().unwrap().clone();
                 let mut svc = state.service.lock().unwrap();
-                finalize_reply(
+                finalize_reply_with(
                     &mut svc, session_id, workspace_id, message_id, &responder.author, responder.agent_id, &root, &full,
                     captured.is_some(),
+                    mcp_effects.as_ref(),
                 )
             };
             // Capture the isolated worktree's changes as a review-gated proposal,
@@ -8468,11 +8621,19 @@ async fn run_prepared_turn_inner(
                         // Record which agent produced it so "Send to agent to
                         // revise" re-dispatches the right one (None = primary @hive).
                         prop.producing_agent_id = responder.agent_id;
+                        // `ligus_propose_diff` named and described it.
+                        if let Some((t, b, tc)) = mcp_effects.as_ref().and_then(|m| m.diff_intent.clone()) {
+                            prop.title = t;
+                            prop.body = b;
+                            prop.task_class = tc;
+                        }
                         flow::before_file_proposal(state, session_id, workspace_id, responder.agent_id, &mut prop);
                         {
                             let mut svc = state.service.lock().unwrap();
                             let filed = prop.id;
-                            if svc.upsert_proposal(session_id, workspace_id, prop).is_ok() {
+                            // Filed as the agent's own effect (A3 key, Agent tier).
+                            let ok = svc.as_agent(responder.agent_id, |svc| svc.upsert_proposal(session_id, workspace_id, prop)).is_ok();
+                            if ok {
                                 proposal_sets::group_same_trigger(&mut svc, session_id, workspace_id, filed);
                             }
                         }
@@ -8482,6 +8643,8 @@ async fn run_prepared_turn_inner(
                 }
                 flow::release_worktree(state, wt, session_id);
             }
+            let notes = turn_notes.lock().map(|n| n.clone()).unwrap_or_default();
+            ligus.finish(state, session_id, workspace_id, &responder.author, &notes);
             let body = body?;
             let _ = app.emit(
                 ChatStreamEvent::EVENT,
@@ -8495,6 +8658,7 @@ async fn run_prepared_turn_inner(
             Ok(TurnOutcome { message_id, body })
         }
         Err(e) => {
+            ligus.finish(state, session_id, workspace_id, &responder.author, &[]);
             crate::guards::self_medicate_after_turn(state, workspace_id, session_id, message_id, &injection_hits.take(), None, &[], &turns);
             // Discard the isolated worktree — a failed/aborted turn's partial
             // edits are not surfaced (no proposal), and the worktree is pruned.
@@ -9125,6 +9289,47 @@ async fn respond_once(
     tracing::info!(target: "dispatch", session = %sid, ms = started.elapsed().as_millis() as u64, "claimed turn");
     flow::record_route_if_missing(state, sid, trigger_id);
     run_turn_answering(app, state, sid, workspace_id, &responder, Some(trigger_id)).await.map(|_| ())
+}
+
+/// A hand-off made with `ligus_handoff` (or a `[[handoff: {"to": …}]]`
+/// directive) starts its receiver here when this device runs that agent
+/// (D.4.1). It waits out the handing turn (which holds the chat), then runs
+/// once: the turn claim and `pending_turns` (cleared by the receiver's reply)
+/// make a duplicate delivery or a concurrent @mention cascade a no-op.
+pub(crate) async fn handoff_turn(app: &AppHandle, sid: Uuid, agent_id: Uuid, trigger: Uuid) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4 * 3600);
+    let _guard = loop {
+        match crate::workflows::SessionBusyGuard::acquire(app, sid) {
+            Ok(g) => break g,
+            Err(_) if std::time::Instant::now() < deadline => tokio::time::sleep(std::time::Duration::from_millis(500)).await,
+            Err(_) => return Ok(()),
+        }
+    };
+    let plan = {
+        let local_actor_id = state.local_actor_id();
+        let local_host_id = state.local_host_id();
+        let mut svc = state.service.lock().unwrap();
+        let Some(session) = svc.load(sid).map_err(map_err)? else { return Ok(()) };
+        let pending = hive_runtime::pending_turns(&session).iter().any(|p| p.agent_id == agent_id && p.message_id == trigger);
+        let Some(agent) = session.workspace_agents.iter().find(|a| a.id == agent_id).cloned() else { return Ok(()) };
+        if !pending {
+            return Ok(());
+        }
+        let responder = responder_for(&state, &session, Some(&agent));
+        let local_only = state.is_local_only_ws(session.workspace_id);
+        let links = device_links_of(&svc, session.workspace_id);
+        let binding = host_binding(&responder.host_id, &local_host_id);
+        if !runs_here_linked(local_only, &links, &session, &local_actor_id, &responder.owner_actor_id, binding) {
+            return Ok(());
+        }
+        if !svc.claim_turn(sid, session.workspace_id, trigger).map_err(map_err)? {
+            return Ok(());
+        }
+        (session.workspace_id, responder)
+    };
+    let (workspace_id, responder) = plan;
+    run_turn_answering(app, &state, sid, workspace_id, &responder, Some(trigger)).await.map(|_| ())
 }
 
 /// Answer what a sync pull brought in: for each chat in the active workspace,
@@ -10041,6 +10246,7 @@ async fn probe_provider(
         tools: false,
         max_tool_rounds: None,
         allow_remote_file_tools: false,
+        driver: Default::default(),
     };
     let workspace_root = {
         let r = state.workspace_root.lock().unwrap().clone();
@@ -10237,6 +10443,7 @@ fn add_runtime(
         // Built-in file tools against a non-local endpoint: the explicit
         // opt-in lives in this device's settings (below), never in config.
         allow_remote_file_tools: false,
+            driver: Default::default(),
         estimated_performance_score: 0.0,
         estimated_cost_per_1m_input_tokens_usd: 0.0,
         capabilities: hive_core::RuntimeCapabilities {
@@ -10882,7 +11089,10 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
     // NB: chunk-row pruning (one-time DB shrink) is deferred to a background
     // thread after the window is live — see `run()`. Running it here scanned
     // the events table on every launch and blocked first paint.
-    let service = ChatService::new(store, stored.device.id, device_kp, account_kp, stored.account.actor());
+    let mut service = ChatService::new(store, stored.device.id, device_kp, account_kp, stored.account.actor());
+    // Agents bound to this device sign their own output with keys it
+    // certifies (A3), kept with this device's other keys.
+    service.set_agent_vault(Box::new(FileKeyVault::new(&data_dir)));
 
     // Restore the folder the user last chose (persisted by `set_workspace_root`);
     // failing that, adopt the process cwd ONLY when it's clearly a project we were
@@ -14799,6 +15009,9 @@ pub fn run() {
             flow::flow_routing_report,
             flow::flow_clear_route_stop,
             flow::flow_queue_report,
+            agent_iface::list_asks,
+            get_implement_plan,
+            agent_iface::answer_ask,
             flow::flow_marks,
             flow::flow_add_mark,
             flow::flow_clear_mark,
@@ -16368,7 +16581,7 @@ mod finalize_proposal_tests {
         let p = &s.proposals[0];
         assert_eq!(p.title, "Add workflow \u{201c}Triage\u{201d}");
         assert_eq!(p.kind, ProposalKind::Decision);
-        assert_eq!(p.author_actor_id, "Scout");
+        assert_eq!(p.author_actor_id, scout_id.to_string(), "an agent files as itself (A-6)");
         assert_eq!(p.producing_agent_id, Some(scout_id));
         assert!(p.body.contains("@Scout"), "{}", p.body);
         let def = p.workflow.as_deref().unwrap().clone();
@@ -16764,6 +16977,7 @@ mod utility_runtime_tests {
             tools: true,
             max_tool_rounds: None,
             allow_remote_file_tools: false,
+            driver: Default::default(),
         }
     }
 
@@ -16856,6 +17070,7 @@ mod agentic_turn_tests {
             tools,
             max_tool_rounds: None,
             allow_remote_file_tools: false,
+            driver: Default::default(),
         }
     }
 

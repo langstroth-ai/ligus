@@ -1,0 +1,29 @@
+{
+  "description": "Read proposals in a chat (this chat by default).",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "chatId": {
+        "description": "Chat id",
+        "maxLength": 64,
+        "type": "string"
+      },
+      "setId": {
+        "description": "Proposal set id",
+        "maxLength": 64,
+        "type": "string"
+      },
+      "status": {
+        "enum": [
+          "open",
+          "approved",
+          "rejected",
+          "applied"
+        ],
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "name": "ligus_read_proposals"
+}

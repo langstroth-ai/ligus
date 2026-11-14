@@ -1,0 +1,40 @@
+{
+  "description": "Propose an exact command for the team to approve. On approval Implement runs exactly this argv in your chat's worktree, inside the sandbox; no model reinterprets it.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "argv": {
+        "description": "Program and arguments, no shell",
+        "items": {
+          "maxLength": 4096,
+          "type": "string"
+        },
+        "maxItems": 64,
+        "minItems": 1,
+        "type": "array"
+      },
+      "body": {
+        "description": "Why it should run",
+        "maxLength": 8000,
+        "type": "string"
+      },
+      "cwd": {
+        "description": "Worktree-relative directory (default: the worktree root)",
+        "maxLength": 1024,
+        "type": "string"
+      },
+      "title": {
+        "description": "What the command does",
+        "maxLength": 200,
+        "type": "string"
+      }
+    },
+    "required": [
+      "title",
+      "body",
+      "argv"
+    ],
+    "type": "object"
+  },
+  "name": "ligus_propose_command"
+}

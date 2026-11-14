@@ -103,6 +103,10 @@ impl ChatService {
             if kind == SUMMARY_MARK {
                 continue;
             }
+            if kind == crate::facts::TOOL_CALL_KIND {
+                out.extend(crate::facts::tool_call_line(row, &ws, &sid, at_ms, &json));
+                continue;
+            }
             let Ok(record) = serde_json::from_str::<FlowRecord>(&json) else { continue };
             if let Some(v) = crate::facts::export_line(row, &ws, &sid, at_ms, &record) {
                 out.push(v);

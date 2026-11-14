@@ -1,0 +1,28 @@
+{
+  "description": "Clear your own marks: by id, by path, or by kind.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "id": {
+        "description": "Mark id",
+        "maxLength": 64,
+        "type": "string"
+      },
+      "kind": {
+        "enum": [
+          "claim",
+          "lock",
+          "review"
+        ],
+        "type": "string"
+      },
+      "path": {
+        "description": "Workspace-relative path",
+        "maxLength": 1024,
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "name": "ligus_unmark"
+}

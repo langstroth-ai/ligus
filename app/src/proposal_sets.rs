@@ -18,7 +18,6 @@ use hive_core::proposal_sets::{
 use hive_core::{ActionProposal, ChatSession, ProposalKind, ProposalStatus, Timestamp};
 use hive_proto::{PreflightCheckDto, PreflightDto, ProposalSetDto, ScoutAssessmentDto, SetAlternativeDto};
 use hive_runtime::chat_service::{ChatService, QuorumOutcome};
-use hive_runtime::directives::{ParsedAlternatives, ParsedAssessment};
 use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
@@ -230,135 +229,15 @@ A person makes the final call: approve it, run the pre-flight, then apply.",
     }
 }
 
-/// File an agent's `[[alternatives:]]` as a proposal set. Returns the number
-/// of sets opened. `base_commit` is the chat's base on this device, recorded
-/// for the pre-flight.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn file_alternatives(
-    svc: &mut ChatService,
-    sid: Uuid,
-    wid: Uuid,
-    author: &str,
-    agent_id: Option<Uuid>,
-    parsed: &[ParsedAlternatives],
-    trigger_message_id: Option<Uuid>,
-    base_commit: Option<String>,
-) -> Result<usize, String> {
-    let mut opened = 0;
-    for alts in parsed {
-        let proposals: Vec<ActionProposal> = alts
-            .options
-            .iter()
-            .take(hive_core::proposal_sets::MAX_ALTERNATIVES)
-            .map(|o| {
-                let mut p = ActionProposal::new(o.title.trim(), o.kind.unwrap_or(ProposalKind::Decision), author);
-                p.body = o.body.clone();
-                p.producing_agent_id = agent_id;
-                p
-            })
-            .collect();
-        let mut set = ProposalSet::new(alts.question.trim(), author, Vec::new());
-        set.body = alts.body.clone();
-        set.task_class = alts.task_class.clone().filter(|c| !c.trim().is_empty());
-        set.producing_agent_id = agent_id;
-        set.trigger_message_id = trigger_message_id;
-        set.base_commit = base_commit.clone();
-        if let Some(k) = alts.agent_quorum {
-            set.agent_quorum = k;
-        }
-        let n = proposals.len();
-        let set = svc.open_proposal_set(sid, wid, set, proposals).map_err(map_err)?;
-        opened += 1;
-        let _ = svc.post_system_note(
-            sid,
-            wid,
-            format!(
-                "\u{1f41d} {author} opened \u{201c}{}\u{201d} with {n} alternatives. Send scouts from the Review pane to assess them independently.",
-                set.question
-            ),
-        );
-    }
-    Ok(opened)
-}
-
-/// Resolve an `[[assess:]]` target: a proposal id, or a letter ("B").
-fn resolve_target(session: &ChatSession, target: &str) -> Option<(Uuid, Uuid)> {
-    let t = target.trim();
-    if let Ok(id) = Uuid::parse_str(t) {
-        return session.proposal_sets.iter().find(|s| s.contains(id)).map(|s| (s.id, id));
-    }
-    // A bare letter only resolves when exactly one set is open.
-    let mut open = session.proposal_sets.iter().filter(|s| s.is_open());
-    let set = open.next()?;
-    if open.next().is_some() || t.len() != 1 {
-        return None;
-    }
-    let idx = (t.to_ascii_uppercase().as_bytes()[0]).checked_sub(b'A')? as usize;
-    set.alternatives.get(idx).map(|id| (set.id, *id))
-}
-
-/// Record a scout reply's `[[assess:]]` directives. The scout is the turn's
-/// responder (never the payload). Returns the neutral note that replaces the
-/// reply's visible text, so later scouts can't read the score in the
-/// transcript — `None` when nothing was recorded.
-pub(crate) fn record_assessments(
-    svc: &mut ChatService,
-    sid: Uuid,
-    wid: Uuid,
-    author: &str,
-    agent_id: Option<Uuid>,
-    parsed: &[ParsedAssessment],
-) -> Option<String> {
-    if parsed.is_empty() {
-        return None;
-    }
-    let session = svc.load(sid).ok().flatten()?;
-    let runtime = match agent_id {
-        Some(id) => session.workspace_agents.iter().find(|a| a.id == id).map(|a| a.runtime_id.clone()),
-        None => Some(session.runtime_id.clone()),
-    }
-    .unwrap_or_default();
-    let mut recorded: Vec<(Uuid, String)> = Vec::new();
-    for a in parsed {
-        let Some((set_id, pid)) = resolve_target(&session, &a.alternative) else { continue };
-        let assessment = ScoutAssessment {
-            id: Uuid::new_v4(),
-            proposal_id: pid,
-            scout_agent_id: agent_id,
-            scout_name: author.to_string(),
-            scout_runtime: runtime.clone(),
-            score: a.score.min(hive_core::proposal_sets::MAX_SCORE),
-            rationale: a.rationale.trim().to_string(),
-            round: 0,
-            attempt: 0,
-            created_at: Timestamp::now(),
-        };
-        match svc.post_scout_assessment(sid, wid, set_id, assessment) {
-            Ok(Some(set)) => {
-                recorded.push((set_id, format!("{} \u{201c}{}\u{201d}", label_of(&set, pid), title_of(&session, pid))));
-                if let Some(list) = pending().lock().unwrap().get_mut(&set_id) {
-                    list.retain(|(p, n)| !(*p == pid && n == author));
-                }
-            }
-            Ok(None) => tracing::info!(target: "proposal_sets", %author, "assessment refused: the alternative is frozen or closed"),
-            Err(e) => tracing::warn!(target: "proposal_sets", "couldn't record an assessment: {e}"),
+/// Assessments a reply recorded (through the shared finalize): clear the
+/// matching pending-scout hints.
+pub(crate) fn assessments_arrived(author: &str, recorded: &[(Uuid, Uuid)]) {
+    let mut p = pending().lock().unwrap();
+    for (set_id, pid) in recorded {
+        if let Some(list) = p.get_mut(set_id) {
+            list.retain(|(x, n)| !(x == pid && n == author));
         }
     }
-    if recorded.is_empty() {
-        return None;
-    }
-    let mut sets: Vec<Uuid> = recorded.iter().map(|(s, _)| *s).collect();
-    sets.dedup();
-    for set_id in sets {
-        if let Ok(Some(out)) = svc.settle_proposal_set(sid, wid, set_id, Timestamp::now()) {
-            announce(svc, sid, wid, set_id, &out);
-        }
-    }
-    let what: Vec<String> = recorded.into_iter().map(|(_, w)| w).collect();
-    Some(format!(
-        "\u{1f41d} Posted a scout assessment of {}. Scores stay in the proposal set so other scouts assess blind.",
-        what.join(", ")
-    ))
 }
 
 /// Group a just-filed agent proposal with others answering the same request,

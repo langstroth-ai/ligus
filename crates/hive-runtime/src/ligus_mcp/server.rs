@@ -1,0 +1,962 @@
+//! The Ligus MCP server core: per-turn credentials, the tools, budgets and
+//! the audit trail. It runs inside the host process; agents reach it over a
+//! per-turn unix socket through `ligus mcp-bridge` (see [`super::socket`]),
+//! and in-process tool loops call it directly ([`TurnHandle::call`]).
+//!
+//! Hard limits, enforced here and again by authz: no admin or governance
+//! events, no votes, no `ProposalApplied`, no apply, git or filesystem
+//! writes; proposals only. Every effect goes through
+//! [`crate::effects`] inside [`crate::ChatService::as_agent`].
+
+use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use hive_core::flow::directives::{MarkDirective, UnmarkDirective};
+use hive_core::flow::{self, ContextParcel, FlowRecord, HumanAsk, MarkKind, TurnToolSummary};
+use hive_core::{ChatSession, ProposalKind, ProposalStatus, ProposedCommand};
+use serde_json::{json, Value};
+use uuid::Uuid;
+
+use super::cred::{self, TurnBinding};
+use crate::effects::{self, EffectCtx, NewProposal, Via};
+use crate::finalize::{kind_key, McpEffectsLog};
+use crate::ChatService;
+
+/// Per-turn budgets (D.3.4). Device-local host policy, never a fold rule.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Budgets {
+    pub max_tool_calls: u32,
+    pub max_proposals: u32,
+    pub max_handoffs: u32,
+    pub max_asks: u32,
+    pub max_read_messages: u32,
+    /// Enforced only where usage is reported (ACP `usage_update`, API
+    /// runtimes).
+    pub max_spend_usd: Option<f64>,
+}
+
+impl Default for Budgets {
+    fn default() -> Self {
+        Self { max_tool_calls: 64, max_proposals: 8, max_handoffs: 2, max_asks: 3, max_read_messages: 500, max_spend_usd: None }
+    }
+}
+
+impl Budgets {
+    /// Defaults, overridden by this device's env (`LIGUS_MCP_MAX_TOOL_CALLS`,
+    /// `…_PROPOSALS`, `…_HANDOFFS`, `…_ASKS`, `…_READ_MESSAGES`,
+    /// `LIGUS_MCP_MAX_SPEND_USD`).
+    pub fn from_env() -> Self {
+        let n = |k: &str, d: u32| hive_core::compat::var(k).ok().and_then(|v| v.trim().parse().ok()).unwrap_or(d);
+        let d = Self::default();
+        Self {
+            max_tool_calls: n("LIGUS_MCP_MAX_TOOL_CALLS", d.max_tool_calls),
+            max_proposals: n("LIGUS_MCP_MAX_PROPOSALS", d.max_proposals),
+            max_handoffs: n("LIGUS_MCP_MAX_HANDOFFS", d.max_handoffs),
+            max_asks: n("LIGUS_MCP_MAX_ASKS", d.max_asks),
+            max_read_messages: n("LIGUS_MCP_MAX_READ_MESSAGES", d.max_read_messages),
+            max_spend_usd: hive_core::compat::var("LIGUS_MCP_MAX_SPEND_USD").ok().and_then(|v| v.trim().parse().ok()).filter(|x: &f64| *x > 0.0),
+        }
+    }
+}
+
+/// What the server needs from its host.
+pub trait LigusHost: Send + Sync {
+    /// Run `f` with the host's chat service (under its lock).
+    fn with_service(&self, f: &mut dyn FnMut(&mut ChatService));
+    /// A hand-off to an agent: start (queue) its turn now (D.4.1). The
+    /// trigger is the handing agent's reply.
+    fn start_turn(&self, _chat_id: Uuid, _agent_id: Uuid, _trigger_message_id: Uuid) {}
+    /// An ask was posted (push it to phones, refresh the UI).
+    fn ask_posted(&self, _chat_id: Uuid, _ask: &HumanAsk) {}
+}
+
+/// One turn's binding and context.
+#[derive(Debug, Clone)]
+pub struct TurnSpec {
+    pub workspace_id: Uuid,
+    pub chat_id: Uuid,
+    /// The responding agent (`None` = the chat's primary runtime).
+    pub agent_id: Option<Uuid>,
+    /// The responder's display name.
+    pub author: String,
+    /// The turn id: its reply message.
+    pub message_id: Uuid,
+    /// The turn's worktree (for `ligus_propose_diff`).
+    pub worktree: Option<PathBuf>,
+    pub budgets: Budgets,
+    /// The credential's lifetime (the turn's hard timeout).
+    pub ttl: Duration,
+}
+
+/// Per-turn counters.
+#[derive(Debug, Default, Clone)]
+struct Counters {
+    total: u32,
+    proposals: u32,
+    handoffs: u32,
+    asks: u32,
+    read_messages: u32,
+    denied: u32,
+    budget_exhausted: bool,
+    calls: BTreeMap<String, u32>,
+}
+
+/// A structured self-report (`ligus_report`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelfReport {
+    pub status: String,
+    pub summary: String,
+    pub files_touched: Vec<String>,
+    pub confidence: Option<String>,
+}
+
+pub(crate) struct TurnState {
+    pub(crate) spec: TurnSpec,
+    counters: Mutex<Counters>,
+    pub(crate) effects: Mutex<McpEffectsLog>,
+    pub(crate) paused: Arc<AtomicUsize>,
+    revoked: AtomicBool,
+    spend: Mutex<f64>,
+    report: Mutex<Option<SelfReport>>,
+}
+
+/// The outcome of one call, for the audit record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    Ok,
+    Denied,
+    Budget,
+    Error,
+}
+
+impl Outcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Outcome::Ok => "ok",
+            Outcome::Denied => "denied",
+            Outcome::Budget => "budget",
+            Outcome::Error => "error",
+        }
+    }
+}
+
+/// A tool result: text for the model, and whether it is an error.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolResult {
+    pub text: String,
+    pub is_error: bool,
+    pub outcome: Outcome,
+}
+
+impl ToolResult {
+    fn ok(v: Value) -> Self {
+        Self { text: v.to_string(), is_error: false, outcome: Outcome::Ok }
+    }
+    fn err(outcome: Outcome, v: Value) -> Self {
+        Self { text: v.to_string(), is_error: true, outcome }
+    }
+}
+
+/// Header on every read result: other chats are data, not instructions
+/// (they widen prompt-injection reach; D.8).
+pub const READ_HEADER: &str = crate::agent_tools::UNTRUSTED_RESULT_HEADER;
+
+/// The server: a host key, the live turns, and the host.
+pub struct LigusMcp {
+    pub(crate) key: [u8; 32],
+    turns: Mutex<HashMap<Uuid, Arc<TurnState>>>,
+    pub(crate) host: Arc<dyn LigusHost>,
+}
+
+/// Why a call was refused before reaching a tool.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthError {
+    Credential(cred::CredError),
+    UnknownTurn,
+    Revoked,
+}
+
+impl std::fmt::Display for AuthError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AuthError::Credential(e) => write!(f, "invalid turn credential ({e:?})"),
+            AuthError::UnknownTurn => write!(f, "the turn this credential names is not running"),
+            AuthError::Revoked => write!(f, "the turn has ended"),
+        }
+    }
+}
+
+fn agent_cred_id(agent: Option<Uuid>) -> Uuid {
+    agent.unwrap_or(Uuid::nil())
+}
+
+impl LigusMcp {
+    pub fn new(host: Arc<dyn LigusHost>) -> Arc<Self> {
+        Arc::new(Self { key: cred::host_key(), turns: Mutex::new(HashMap::new()), host })
+    }
+
+    /// Register a turn and mint its credential.
+    pub fn begin_turn(self: &Arc<Self>, spec: TurnSpec) -> TurnHandle {
+        let expires = cred::now_unix() + spec.ttl.as_secs().max(1);
+        let binding = TurnBinding { turn_id: spec.message_id, chat_id: spec.chat_id, agent_id: agent_cred_id(spec.agent_id), expires_unix: expires };
+        let credential = cred::mint(&self.key, &binding);
+        let state = Arc::new(TurnState {
+            spec,
+            counters: Mutex::new(Counters::default()),
+            effects: Mutex::new(McpEffectsLog::default()),
+            paused: Arc::new(AtomicUsize::new(0)),
+            revoked: AtomicBool::new(false),
+            spend: Mutex::new(0.0),
+            report: Mutex::new(None),
+        });
+        self.turns.lock().unwrap_or_else(|e| e.into_inner()).insert(binding.turn_id, state.clone());
+        TurnHandle { mcp: self.clone(), state, cred: credential, socket: Mutex::new(None), finished: AtomicBool::new(false) }
+    }
+
+    /// Check a credential: MAC, expiry, a live (not revoked) turn, and the
+    /// chat and agent it binds.
+    pub(crate) fn authorize(&self, credential: &str) -> Result<Arc<TurnState>, AuthError> {
+        let b = cred::verify(&self.key, credential, cred::now_unix()).map_err(AuthError::Credential)?;
+        let st = self.turns.lock().unwrap_or_else(|e| e.into_inner()).get(&b.turn_id).cloned().ok_or(AuthError::UnknownTurn)?;
+        if st.revoked.load(Ordering::SeqCst) {
+            return Err(AuthError::Revoked);
+        }
+        if st.spec.chat_id != b.chat_id || agent_cred_id(st.spec.agent_id) != b.agent_id {
+            return Err(AuthError::UnknownTurn);
+        }
+        Ok(st)
+    }
+
+    fn revoke(&self, turn_id: Uuid) {
+        if let Some(st) = self.turns.lock().unwrap_or_else(|e| e.into_inner()).remove(&turn_id) {
+            st.revoked.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// Call `tool` with `args` under `credential`. Every call is audited.
+    pub async fn call(&self, credential: &str, tool: &str, args: &Value) -> Result<ToolResult, AuthError> {
+        let st = self.authorize(credential)?;
+        let started = Instant::now();
+        let (res, read_chat) = self.dispatch(&st, tool, args).await;
+        {
+            let mut c = st.counters.lock().unwrap_or_else(|e| e.into_inner());
+            match res.outcome {
+                Outcome::Denied => c.denied += 1,
+                Outcome::Budget => c.budget_exhausted = true,
+                _ => {}
+            }
+        }
+        self.audit(&st, tool, res.outcome, started.elapsed(), read_chat);
+        Ok(res)
+    }
+
+    /// One device-local, content-free audit fact per call (D.3.5).
+    fn audit(&self, st: &TurnState, tool: &str, outcome: Outcome, latency: Duration, read_chat: Option<Uuid>) {
+        let mut rec = json!({
+            "ts": flow::now_ms(),
+            "turnId": st.spec.message_id.to_string(),
+            "chatId": st.spec.chat_id.to_string(),
+            "agentKey": flow::agent_key(st.spec.agent_id),
+            "tool": if super::tools::is_ligus_tool(tool) { tool } else { "unknown" },
+            "outcome": outcome.as_str(),
+            "latencyMs": latency.as_millis() as u64,
+        });
+        if let Some(c) = read_chat {
+            rec["readChatId"] = json!(c.to_string());
+        }
+        let line = rec.to_string();
+        let (ws, chat) = (st.spec.workspace_id, st.spec.chat_id);
+        self.host.with_service(&mut |svc| {
+            if let Err(e) = svc.record_tool_audit(ws, chat, flow::now_ms(), &line) {
+                tracing::warn!(target: "ligus_mcp", "audit record failed: {e}");
+            }
+        });
+    }
+
+    /// Run `f` with the service; returns its result.
+    fn svc<R>(&self, mut f: impl FnMut(&mut ChatService) -> R) -> R {
+        let mut out = None;
+        self.host.with_service(&mut |svc| out = Some(f(svc)));
+        out.expect("the host ran the closure")
+    }
+
+    fn ctx(st: &TurnState) -> EffectCtx {
+        EffectCtx {
+            session_id: st.spec.chat_id,
+            workspace_id: st.spec.workspace_id,
+            author: st.spec.author.clone(),
+            agent_id: st.spec.agent_id,
+            message_id: Some(st.spec.message_id),
+            via: Via::Mcp,
+        }
+    }
+
+    /// Count one call against `budget`; `Err` when it is used up.
+    fn charge(st: &TurnState, tool: &str) -> Result<(), ToolResult> {
+        let b = &st.spec.budgets;
+        let mut c = st.counters.lock().unwrap_or_else(|e| e.into_inner());
+        let exhausted = |name: &str| {
+            ToolResult::err(
+                Outcome::Budget,
+                json!({"error": "budget_exhausted", "budget": name, "message": crate::tool_loop::FINAL_ROUND_NUDGE}),
+            )
+        };
+        if c.total >= b.max_tool_calls {
+            return Err(exhausted("maxToolCalls"));
+        }
+        if let Some(max) = b.max_spend_usd {
+            if *st.spend.lock().unwrap_or_else(|e| e.into_inner()) >= max {
+                return Err(exhausted("maxSpendUsd"));
+            }
+        }
+        let (counter, max, name): (Option<&mut u32>, u32, &str) = match tool {
+            "ligus_propose_diff" | "ligus_propose_decision" | "ligus_propose_command" | "ligus_propose_workflow" | "ligus_open_alternatives" => {
+                (Some(&mut c.proposals), b.max_proposals, "maxProposals")
+            }
+            "ligus_handoff" => (Some(&mut c.handoffs), b.max_handoffs, "maxHandoffs"),
+            "ligus_ask_human" => (Some(&mut c.asks), b.max_asks, "maxAsks"),
+            _ => (None, 0, ""),
+        };
+        if let Some(n) = counter {
+            if *n >= max {
+                return Err(exhausted(name));
+            }
+            *n += 1;
+        }
+        c.total += 1;
+        *c.calls.entry(tool.to_string()).or_insert(0) += 1;
+        Ok(())
+    }
+
+    fn charge_reads(st: &TurnState, n: u32) -> Result<(), ToolResult> {
+        let mut c = st.counters.lock().unwrap_or_else(|e| e.into_inner());
+        if c.read_messages.saturating_add(n) > st.spec.budgets.max_read_messages {
+            return Err(ToolResult::err(
+                Outcome::Budget,
+                json!({"error": "budget_exhausted", "budget": "maxReadMessages", "message": crate::tool_loop::FINAL_ROUND_NUDGE}),
+            ));
+        }
+        c.read_messages += n;
+        Ok(())
+    }
+
+    async fn dispatch(&self, st: &Arc<TurnState>, tool: &str, args: &Value) -> (ToolResult, Option<Uuid>) {
+        if !super::tools::TOOLS.iter().any(|(n, _)| *n == tool) {
+            // Unknown, or an attempt at something the server never offers
+            // (apply, vote, admin): refused and audited as denied.
+            return (ToolResult::err(Outcome::Denied, json!({"error": "unknown_tool", "message": format!("Ligus has no tool {tool:?}; agents can only propose, never apply or vote.")})), None);
+        }
+        if let Err(r) = Self::charge(st, tool) {
+            return (r, None);
+        }
+        let s = |k: &str| args.get(k).and_then(Value::as_str).map(str::trim).unwrap_or("").to_string();
+        let strs = |k: &str| -> Vec<String> {
+            args.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect()).unwrap_or_default()
+        };
+        let ctx = Self::ctx(st);
+        let denied_or_err = |e: String| {
+            let lower = e.to_ascii_lowercase();
+            let outcome = if lower.contains("agent tier") || lower.contains("unauthorized") || lower.contains("not allowed") || lower.contains("can't") {
+                Outcome::Denied
+            } else {
+                Outcome::Error
+            };
+            ToolResult::err(outcome, json!({"error": if outcome == Outcome::Denied { "denied" } else { "failed" }, "message": e}))
+        };
+        let log = |f: &mut dyn FnMut(&mut McpEffectsLog)| f(&mut st.effects.lock().unwrap_or_else(|e| e.into_inner()));
+        match tool {
+            "ligus_propose_diff" => {
+                let title = s("title");
+                if title.is_empty() {
+                    return (denied_or_err("a title is required".into()), None);
+                }
+                let Some(wt) = st.spec.worktree.clone() else {
+                    return (denied_or_err("this turn has no worktree, so there is no diff to propose".into()), None);
+                };
+                let files = worktree_changes(&wt);
+                if files.is_empty() {
+                    return (denied_or_err("your worktree has no changes yet; edit files first, then call ligus_propose_diff".into()), None);
+                }
+                let tc = Some(s("taskClass")).filter(|t| !t.is_empty());
+                log(&mut |l| l.diff_intent = Some((title.clone(), s("body"), tc.clone())));
+                (
+                    ToolResult::ok(json!({"ok": true, "files": files.len(), "message": format!("Your changes to {} file(s) will be filed for review as \u{201c}{title}\u{201d} when your turn ends. A human approves and applies them.", files.len())})),
+                    None,
+                )
+            }
+            "ligus_propose_decision" | "ligus_propose_command" => {
+                let command = if tool == "ligus_propose_command" {
+                    let cwd = Some(s("cwd")).filter(|c| !c.is_empty() && c != ".");
+                    Some(ProposedCommand { argv: strs("argv"), cwd })
+                } else {
+                    None
+                };
+                let kind = if command.is_some() { ProposalKind::Command } else { ProposalKind::Decision };
+                let np = NewProposal {
+                    title: s("title"),
+                    body: s("body"),
+                    kind: Some(kind),
+                    required_approvals: args.get("requiredApprovals").and_then(Value::as_u64).map(|n| n.min(16) as u32),
+                    command,
+                    task_class: None,
+                };
+                let title = np.title.to_lowercase();
+                match self.svc(|svc| effects::propose(svc, &ctx, np.clone())) {
+                    Ok(id) => {
+                        log(&mut |l| {
+                            l.proposals.insert((kind_key(kind), title.clone()));
+                        });
+                        (ToolResult::ok(json!({"ok": true, "proposalId": id.to_string(), "status": "open", "message": "Filed for human review. It is not executed until a person approves and implements it."})), None)
+                    }
+                    Err(e) => (denied_or_err(e), None),
+                }
+            }
+            "ligus_propose_workflow" => {
+                let Some(def) = args.get("definition").filter(|d| d.is_object()) else {
+                    return (denied_or_err("definition must be an object".into()), None);
+                };
+                let json = def.to_string();
+                match self.svc(|svc| effects::file_workflow(svc, &ctx, &json)) {
+                    Ok(name) => {
+                        log(&mut |l| {
+                            l.workflows.insert(name.trim().to_lowercase());
+                        });
+                        (ToolResult::ok(json!({"ok": true, "workflow": name, "message": "Filed for review; a human approves it before it can run."})), None)
+                    }
+                    Err(e) => (denied_or_err(e), None),
+                }
+            }
+            "ligus_open_alternatives" => {
+                let options: Vec<crate::directives::ParsedAlternative> = args
+                    .get("options")
+                    .and_then(Value::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .map(|o| crate::directives::ParsedAlternative {
+                                title: o.get("title").and_then(Value::as_str).unwrap_or("").to_string(),
+                                body: o.get("body").and_then(Value::as_str).unwrap_or("").to_string(),
+                                kind: None,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if !(2..=6).contains(&options.len()) {
+                    return (denied_or_err("give 2 to 6 options".into()), None);
+                }
+                let alts = crate::directives::ParsedAlternatives {
+                    question: s("question"),
+                    body: s("body"),
+                    task_class: Some(s("taskClass")).filter(|t| !t.is_empty()),
+                    agent_quorum: args.get("agentQuorum").and_then(Value::as_u64).map(|n| n.min(8) as u32),
+                    options,
+                };
+                let q = alts.question.to_lowercase();
+                let r = self.svc(|svc| {
+                    let trigger = svc.load(ctx.session_id).ok().flatten().and_then(|sess| effects::trigger_of(&sess, ctx.message_id));
+                    effects::open_alternatives(svc, &ctx, &alts, trigger, None)
+                });
+                match r {
+                    Ok(set) => {
+                        log(&mut |l| {
+                            l.set_questions.insert(q.clone());
+                        });
+                        (ToolResult::ok(json!({"ok": true, "setId": set.to_string()})), None)
+                    }
+                    Err(e) => (denied_or_err(e), None),
+                }
+            }
+            "ligus_assess" => {
+                let set = Uuid::parse_str(&s("setId")).ok();
+                let a = crate::directives::ParsedAssessment {
+                    alternative: s("alternative"),
+                    score: args.get("score").and_then(Value::as_u64).unwrap_or(0).min(100) as u32,
+                    rationale: s("rationale"),
+                };
+                match self.svc(|svc| effects::assess(svc, &ctx, set, &a)) {
+                    Ok((set, pid)) => {
+                        log(&mut |l| {
+                            l.assessed.insert(a.alternative.clone());
+                        });
+                        let _ = self.svc(|svc| svc.settle_proposal_set(ctx.session_id, ctx.workspace_id, set, hive_core::Timestamp::now()));
+                        (ToolResult::ok(json!({"ok": true, "setId": set.to_string(), "proposalId": pid.to_string()})), None)
+                    }
+                    Err(e) => (denied_or_err(e), None),
+                }
+            }
+            "ligus_handoff" => {
+                let to = s("to");
+                let parcel = ContextParcel { key_files: strs("keyFiles"), decisions: strs("decisions"), ruled_out: strs("ruledOut"), notes: s("notes") };
+                let deep = self.svc(|svc| svc.load(ctx.session_id).ok().flatten().is_some_and(|sess| sess.cascade_depth() >= hive_core::MAX_CASCADE_DEPTH));
+                if deep {
+                    return (denied_or_err("the hand-off chain is too deep; let a person take it from here".into()), None);
+                }
+                match self.svc(|svc| effects::handoff(svc, &ctx, &to, parcel.clone())) {
+                    Ok(h) => {
+                        log(&mut |l| {
+                            l.handoffs_to.insert(to.trim_start_matches('@').to_lowercase());
+                        });
+                        if let Some(agent) = h.agent {
+                            self.host.start_turn(ctx.session_id, agent, st.spec.message_id);
+                        }
+                        let started = h.agent.is_some();
+                        (ToolResult::ok(json!({"ok": true, "handoffId": h.card.id.to_string(), "receiverStarted": started})), None)
+                    }
+                    Err(e) => (denied_or_err(e), None),
+                }
+            }
+            "ligus_mark" => {
+                let kind = match s("kind").as_str() {
+                    "claim" => MarkKind::Claim,
+                    "lock" => MarkKind::UnderConstruction,
+                    "review" => MarkKind::NeedsReview,
+                    _ => return (denied_or_err("kind is claim, lock or review".into()), None),
+                };
+                let lines = args.get("lines").and_then(Value::as_array).and_then(|a| match (a.first().and_then(Value::as_u64), a.get(1).and_then(Value::as_u64)) {
+                    (Some(x), Some(y)) if x >= 1 && y >= x => Some((x as u32, y as u32)),
+                    _ => None,
+                });
+                let m = MarkDirective { kind, path: s("path"), lines, note: s("note") };
+                match self.svc(|svc| effects::mark(svc, &ctx, &m)) {
+                    Ok(id) => {
+                        log(&mut |l| {
+                            l.mark_paths.insert(m.path.clone());
+                        });
+                        (ToolResult::ok(json!({"ok": true, "markId": id.to_string()})), None)
+                    }
+                    Err(e) => (denied_or_err(e), None),
+                }
+            }
+            "ligus_unmark" => {
+                let kind = match s("kind").as_str() {
+                    "claim" => Some(MarkKind::Claim),
+                    "lock" => Some(MarkKind::UnderConstruction),
+                    "review" => Some(MarkKind::NeedsReview),
+                    _ => None,
+                };
+                let u = UnmarkDirective { id: Uuid::parse_str(&s("id")).ok(), path: Some(s("path")).filter(|p| !p.is_empty()), kind };
+                match self.svc(|svc| effects::unmark(svc, &ctx, &u)) {
+                    Ok(n) => (ToolResult::ok(json!({"ok": true, "cleared": n})), None),
+                    Err(e) => (denied_or_err(e), None),
+                }
+            }
+            "ligus_react" => {
+                let mid = Uuid::parse_str(&s("messageId")).unwrap_or(st.spec.message_id);
+                let emoji = s("emoji");
+                match self.svc(|svc| effects::react(svc, &ctx, mid, &emoji)) {
+                    Ok(()) => {
+                        if mid == st.spec.message_id {
+                            log(&mut |l| {
+                                l.reactions.insert(emoji.clone());
+                            });
+                        }
+                        (ToolResult::ok(json!({"ok": true})), None)
+                    }
+                    Err(e) => (denied_or_err(e), None),
+                }
+            }
+            "ligus_list_chats" => {
+                let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(20).clamp(1, 50) as usize;
+                let channel = s("channel").to_lowercase();
+                let ws = st.spec.workspace_id;
+                let chats = self.svc(|svc| list_chats(svc, ws, &channel, limit));
+                (ToolResult::ok(json!({"header": READ_HEADER, "chats": chats})), None)
+            }
+            "ligus_read_chat" => {
+                let chat = Uuid::parse_str(&s("chatId")).unwrap_or(st.spec.chat_id);
+                let since = Uuid::parse_str(&s("sinceMessageId")).ok();
+                let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(50).clamp(1, 100) as usize;
+                let ws = st.spec.workspace_id;
+                let Some(session) = self.svc(|svc| svc.load(chat).ok().flatten()).filter(|sess| sess.workspace_id == ws) else {
+                    return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": "no such chat in this workspace"})), Some(chat));
+                };
+                let msgs = read_messages(&session, since, limit);
+                if let Err(r) = Self::charge_reads(st, msgs.len() as u32) {
+                    return (r, Some(chat));
+                }
+                (ToolResult::ok(json!({"header": READ_HEADER, "chatId": chat.to_string(), "title": session.title, "messages": msgs})), Some(chat))
+            }
+            "ligus_read_proposals" => {
+                let chat = Uuid::parse_str(&s("chatId")).unwrap_or(st.spec.chat_id);
+                let ws = st.spec.workspace_id;
+                let Some(session) = self.svc(|svc| svc.load(chat).ok().flatten()).filter(|sess| sess.workspace_id == ws) else {
+                    return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": "no such chat in this workspace"})), Some(chat));
+                };
+                let status = s("status");
+                let set = Uuid::parse_str(&s("setId")).ok();
+                let list: Vec<Value> = session
+                    .proposals
+                    .iter()
+                    .filter(|p| status.is_empty() || status_str(p.status) == status)
+                    .filter(|p| set.is_none_or(|x| p.set_id == Some(x)))
+                    .rev()
+                    .take(50)
+                    .map(|p| {
+                        json!({
+                            "id": p.id.to_string(), "title": p.title, "kind": kind_key(p.kind), "status": status_str(p.status),
+                            "author": p.author_actor_id, "producingAgentId": p.producing_agent_id.map(|a| a.to_string()),
+                            "setId": p.set_id.map(|x| x.to_string()), "body": p.body.chars().take(2000).collect::<String>(),
+                            "changedFiles": p.changed_files, "argv": p.command.as_ref().map(|c| c.argv.clone()),
+                        })
+                    })
+                    .collect();
+                (ToolResult::ok(json!({"header": READ_HEADER, "proposals": list})), (chat != st.spec.chat_id).then_some(chat))
+            }
+            "ligus_read_board" => {
+                let ws = st.spec.workspace_id;
+                let chat = st.spec.chat_id;
+                let (config, session) = self.svc(|svc| (svc.flow_config(ws).unwrap_or_default(), svc.load(chat).ok().flatten()));
+                let marks: Vec<Value> = config
+                    .marks
+                    .values()
+                    .take(100)
+                    .map(|m| json!({"id": m.id.to_string(), "kind": m.kind.as_str(), "path": m.path, "lines": m.lines, "by": m.by, "note": m.note}))
+                    .collect();
+                let (handoffs, asks): (Vec<Value>, Vec<Value>) = session
+                    .map(|sess| {
+                        let h = sess.flow.handoffs.iter().rev().take(20).map(|h| json!({"from": h.from_name, "to": h.to_name, "task": h.task, "via": h.via})).collect();
+                        let a = sess.flow.asks.values().filter(|a| a.is_open()).map(|a| json!({"askId": a.ask.ask_id.to_string(), "question": a.ask.question})).collect();
+                        (h, a)
+                    })
+                    .unwrap_or_default();
+                (ToolResult::ok(json!({"header": READ_HEADER, "marks": marks, "handoffs": handoffs, "openAsks": asks})), None)
+            }
+            "ligus_ask_human" => self.ask_human(st, &ctx, args).await,
+            "ligus_report" => {
+                let status = s("status");
+                if !matches!(status.as_str(), "done" | "blocked" | "needsReview") {
+                    return (denied_or_err("status is done, blocked or needsReview".into()), None);
+                }
+                let summary: String = s("summary").chars().take(400).collect();
+                let files: Vec<String> = strs("filesTouched").into_iter().take(32).collect();
+                let confidence = Some(s("confidence")).filter(|c| matches!(c.as_str(), "low" | "medium" | "high"));
+                *st.report.lock().unwrap_or_else(|e| e.into_inner()) = Some(SelfReport { status, summary, files_touched: files, confidence });
+                (ToolResult::ok(json!({"ok": true})), None)
+            }
+            _ => (ToolResult::err(Outcome::Denied, json!({"error": "unknown_tool"})), None),
+        }
+    }
+
+    /// `ligus_ask_human`: post the ask, pause the turn, wait for the first
+    /// human answer (or the timeout), and return it.
+    async fn ask_human(&self, st: &Arc<TurnState>, ctx: &EffectCtx, args: &Value) -> (ToolResult, Option<Uuid>) {
+        let question: String = args.get("question").and_then(Value::as_str).unwrap_or("").trim().chars().take(flow::MAX_ASK_QUESTION_CHARS).collect();
+        if question.is_empty() {
+            return (ToolResult::err(Outcome::Error, json!({"error": "failed", "message": "a question is required"})), None);
+        }
+        let options: Vec<String> = args
+            .get("options")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|v| v.as_str()).map(|o| o.trim().chars().take(flow::MAX_ASK_OPTION_CHARS).collect::<String>()).filter(|o| !o.is_empty()).take(flow::MAX_ASK_OPTIONS).collect())
+            .unwrap_or_default();
+        let timeout = Duration::from_secs(args.get("timeoutSecs").and_then(Value::as_u64).unwrap_or(600).clamp(1, 3600));
+        let (ask_id, _rx) = match post_ask(&*self.host, ctx, st.spec.message_id, question, options, timeout) {
+            Ok(a) => (a.ask_id, a),
+            Err(e) => return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": e})), None),
+        };
+        let _pause = crate::agent_turn::pause_counter(&st.paused);
+        match wait_answer(&*self.host, ctx.session_id, ask_id, timeout, || st.revoked.load(Ordering::SeqCst)).await {
+            Some(ans) => (
+                ToolResult::ok(json!({"answer": ans.answer, "optionIndex": ans.option_index, "answeredBy": ans.by})),
+                None,
+            ),
+            None => {
+                close_ask(&*self.host, ctx, st.spec.message_id, ask_id);
+                (ToolResult::err(Outcome::Ok, json!({"error": "no_answer"})), None)
+            }
+        }
+    }
+
+    /// The turn's summary so far (content-free).
+    fn summary(&self, st: &TurnState) -> TurnToolSummary {
+        let c = st.counters.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let mut calls = c.calls;
+        while calls.len() > flow::MAX_SUMMARY_TOOLS {
+            let k = calls.keys().next_back().cloned().unwrap_or_default();
+            calls.remove(&k);
+        }
+        TurnToolSummary {
+            turn_id: st.spec.message_id,
+            agent_key: flow::agent_key(st.spec.agent_id),
+            calls,
+            denied: c.denied,
+            budget_exhausted: c.budget_exhausted,
+            at_ms: flow::now_ms(),
+        }
+    }
+}
+
+fn status_str(s: ProposalStatus) -> &'static str {
+    match s {
+        ProposalStatus::Open => "open",
+        ProposalStatus::Approved => "approved",
+        ProposalStatus::Rejected => "rejected",
+        ProposalStatus::Applied => "applied",
+    }
+}
+
+fn list_chats(svc: &ChatService, ws: Uuid, channel: &str, limit: usize) -> Vec<Value> {
+    let config_id = hive_core::workspace_config_session_id(ws);
+    let channels = svc.list_channels(ws).unwrap_or_default();
+    let mut out: Vec<(i64, Value)> = Vec::new();
+    for id in svc.session_ids().unwrap_or_default().into_iter().filter(|id| *id != config_id).take(2000) {
+        let Ok(Some(sess)) = svc.load(id) else { continue };
+        if sess.workspace_id != ws {
+            continue;
+        }
+        let ch = channels.iter().find(|c| c.id == sess.channel_id).map(|c| c.name.clone()).unwrap_or_default();
+        if !channel.is_empty() && ch.to_lowercase() != channel {
+            continue;
+        }
+        let last = sess.messages.last().map(|m| flow::ms(&m.created_at)).unwrap_or(0);
+        out.push((last, json!({"chatId": id.to_string(), "title": sess.title, "channel": ch, "messages": sess.messages.len()})));
+    }
+    out.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
+    out.into_iter().take(limit).map(|(_, v)| v).collect()
+}
+
+fn read_messages(session: &ChatSession, since: Option<Uuid>, limit: usize) -> Vec<Value> {
+    let start = since.and_then(|id| session.messages.iter().position(|m| m.id == id)).map(|i| i + 1).unwrap_or(0);
+    let msgs: Vec<_> = session.messages[start..].iter().filter(|m| !m.is_streaming).collect();
+    let tail = if since.is_some() { &msgs[..msgs.len().min(limit)] } else { &msgs[msgs.len().saturating_sub(limit)..] };
+    tail.iter()
+        .map(|m| {
+            json!({
+                "id": m.id.to_string(),
+                "author": m.author,
+                "role": format!("{:?}", m.role).to_lowercase(),
+                "body": m.body.chars().take(8000).collect::<String>(),
+            })
+        })
+        .collect()
+}
+
+/// The files a worktree changed (staged or not, untracked included).
+fn worktree_changes(wt: &std::path::Path) -> Vec<String> {
+    let out = hive_core::process_util::git().arg("-C").arg(wt).args(["status", "--porcelain", "--untracked-files=all"]).output();
+    match out {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).lines().filter_map(|l| l.get(3..)).map(str::to_owned).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// A posted ask.
+pub struct PostedAsk {
+    pub ask_id: Uuid,
+}
+
+/// Post a [`HumanAsk`] as the agent (Agent tier) and tell the host.
+pub fn post_ask(host: &dyn LigusHost, ctx: &EffectCtx, turn_id: Uuid, question: String, options: Vec<String>, timeout: Duration) -> Result<PostedAsk, String> {
+    let ask = HumanAsk {
+        ask_id: Uuid::new_v4(),
+        turn_id,
+        agent_key: ctx.agent_key(),
+        question,
+        options,
+        expires_at_ms: flow::now_ms() + timeout.as_millis() as i64,
+        closed: false,
+        at_ms: flow::now_ms(),
+    };
+    let mut r = Ok(());
+    host.with_service(&mut |svc| {
+        r = svc.as_agent(ctx.agent_id, |svc| svc.record_flow(ctx.session_id, ctx.workspace_id, FlowRecord::HumanAsk(ask.clone()))).map_err(|e| e.to_string());
+    });
+    r?;
+    host.ask_posted(ctx.session_id, &ask);
+    Ok(PostedAsk { ask_id: ask.ask_id })
+}
+
+/// Close an unanswered ask (timeout, cancel).
+pub fn close_ask(host: &dyn LigusHost, ctx: &EffectCtx, turn_id: Uuid, ask_id: Uuid) {
+    let close = HumanAsk { ask_id, turn_id, agent_key: ctx.agent_key(), closed: true, at_ms: flow::now_ms(), ..Default::default() };
+    host.with_service(&mut |svc| {
+        let _ = svc.as_agent(ctx.agent_id, |svc| svc.record_flow(ctx.session_id, ctx.workspace_id, FlowRecord::HumanAsk(close.clone())));
+    });
+}
+
+/// Wait for the first answer to `ask_id` in the chat's fold (answers arrive
+/// from any device through sync), until `timeout` or `cancelled()`.
+pub async fn wait_answer(host: &dyn LigusHost, chat: Uuid, ask_id: Uuid, timeout: Duration, cancelled: impl Fn() -> bool) -> Option<flow::HumanAnswered> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let mut found = None;
+        host.with_service(&mut |svc| {
+            found = svc.load(chat).ok().flatten().and_then(|s| s.flow.asks.get(&ask_id).and_then(|a| a.answer.clone()));
+        });
+        if found.is_some() {
+            return found;
+        }
+        if Instant::now() >= deadline || cancelled() {
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+/// A live turn on the server. Dropping it (or [`TurnHandle::finish`])
+/// revokes the credential.
+pub struct TurnHandle {
+    pub(crate) mcp: Arc<LigusMcp>,
+    pub(crate) state: Arc<TurnState>,
+    cred: String,
+    pub(crate) socket: Mutex<Option<super::socket::SocketEndpoint>>,
+    finished: AtomicBool,
+}
+
+impl TurnHandle {
+    /// The turn's credential (`LIGUS_TURN_CRED`).
+    pub fn credential(&self) -> &str {
+        &self.cred
+    }
+
+    pub fn turn_id(&self) -> Uuid {
+        self.state.spec.message_id
+    }
+
+    /// Call a tool in-process (tool-loop runtimes), full or folded name.
+    pub async fn call(&self, tool: &str, args: &Value) -> ToolResult {
+        let (name, args) = match super::tools::unfold(tool, args) {
+            Ok(x) => x,
+            Err(e) => return ToolResult::err(Outcome::Error, json!({"error": "failed", "message": e})),
+        };
+        match self.mcp.call(&self.cred, &name, &args).await {
+            Ok(r) => r,
+            Err(e) => ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": e.to_string()})),
+        }
+    }
+
+    /// What the tools did (for finalize's dedupe and the diff intent).
+    pub fn effects(&self) -> McpEffectsLog {
+        self.state.effects.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// The agent's self-report, if it made one.
+    pub fn report(&self) -> Option<SelfReport> {
+        self.state.report.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Whether any Ligus tool was called.
+    pub fn used(&self) -> bool {
+        self.state.counters.lock().unwrap_or_else(|e| e.into_inner()).total > 0
+    }
+
+    /// The agent turn scope for adapters: the MCP attach (when a socket is
+    /// serving), the pause counter, and the spend sink.
+    pub fn scope(&self) -> crate::agent_turn::AgentTurnScope {
+        let st = self.state.clone();
+        crate::agent_turn::AgentTurnScope {
+            mcp: self.socket.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|s| s.attach(&self.cred)),
+            paused: self.state.paused.clone(),
+            spend: Some(Arc::new(move |usd| *st.spend.lock().unwrap_or_else(|e| e.into_inner()) += usd)),
+            ..Default::default()
+        }
+    }
+
+    /// The tool executor for in-process tool loops (the four folded tools).
+    pub fn executor(&self) -> InProcessTools<'_> {
+        InProcessTools { turn: self }
+    }
+
+    /// End the turn: revoke the credential, stop the socket, and record the
+    /// synced, content-free `TurnToolSummary` (Agent tier) when any tool was
+    /// called. Returns the summary.
+    pub fn finish(&self) -> TurnToolSummary {
+        let summary = self.mcp.summary(&self.state);
+        self.mcp.revoke(self.state.spec.message_id);
+        *self.socket.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        if self.finished.swap(true, Ordering::SeqCst) {
+            return summary;
+        }
+        if !summary.calls.is_empty() || summary.denied > 0 {
+            let spec = self.state.spec.clone();
+            let rec = FlowRecord::TurnToolSummary(summary.clone());
+            self.mcp.host.with_service(&mut |svc| {
+                if let Err(e) = svc.as_agent(spec.agent_id, |svc| svc.record_flow(spec.chat_id, spec.workspace_id, rec.clone())) {
+                    tracing::warn!(target: "ligus_mcp", "turn tool summary not recorded: {e}");
+                }
+            });
+        }
+        summary
+    }
+}
+
+impl Drop for TurnHandle {
+    fn drop(&mut self) {
+        if !self.finished.load(Ordering::SeqCst) {
+            self.mcp.revoke(self.state.spec.message_id);
+        }
+    }
+}
+
+/// [`crate::tool_loop::ToolExecutor`] over the folded Ligus tools.
+pub struct InProcessTools<'a> {
+    turn: &'a TurnHandle,
+}
+
+impl crate::tool_loop::ToolExecutor for InProcessTools<'_> {
+    async fn call(&self, name: &str, input: &Value) -> (String, bool) {
+        let r = self.turn.call(name, input).await;
+        (r.text, r.is_error)
+    }
+}
+
+/// Puts ACP permission escalations to the chat's humans as asks (D.2.2,
+/// D.4.2): the same `HumanAsk` / `HumanAnswered` records `ligus_ask_human`
+/// uses, so a person answers from the desktop or the phone.
+pub struct HostAsker {
+    pub host: Arc<dyn LigusHost>,
+    pub ctx: EffectCtx,
+    pub turn_id: Uuid,
+}
+
+impl crate::agent_turn::HumanAsker for HostAsker {
+    fn ask(&self, question: String, options: Vec<String>, timeout: Duration) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<crate::agent_turn::HumanAnswer>> + Send + '_>> {
+        Box::pin(async move {
+            let q: String = question.chars().take(flow::MAX_ASK_QUESTION_CHARS).collect();
+            let posted = post_ask(&*self.host, &self.ctx, self.turn_id, q, options, timeout).ok()?;
+            match wait_answer(&*self.host, self.ctx.session_id, posted.ask_id, timeout, || false).await {
+                Some(a) => Some(crate::agent_turn::HumanAnswer { answer: a.answer, option_index: a.option_index.map(|i| i as usize) }),
+                None => {
+                    close_ask(&*self.host, &self.ctx, self.turn_id, posted.ask_id);
+                    None
+                }
+            }
+        })
+    }
+}
+
+impl TurnHandle {
+    /// An asker for this turn's ACP permission escalations.
+    pub fn asker(&self) -> Arc<dyn crate::agent_turn::HumanAsker> {
+        Arc::new(HostAsker { host: self.mcp.host.clone(), ctx: LigusMcp::ctx(&self.state), turn_id: self.state.spec.message_id })
+    }
+
+    /// [`Self::scope`] with the asker set: what a host wraps a CLI turn in.
+    pub fn agent_scope(&self) -> crate::agent_turn::AgentTurnScope {
+        crate::agent_turn::AgentTurnScope { asker: Some(self.asker()), ..self.scope() }
+    }
+}
+
+/// A tool executor that routes the Ligus tools (full or folded names) to a
+/// turn and everything else to `inner` (an MCP registry executor).
+pub struct WithLigus<'a, E> {
+    pub turn: Option<&'a TurnHandle>,
+    pub inner: Option<&'a E>,
+}
+
+impl<E: crate::tool_loop::ToolExecutor> crate::tool_loop::ToolExecutor for WithLigus<'_, E> {
+    async fn call(&self, name: &str, input: &Value) -> (String, bool) {
+        if super::tools::is_ligus_tool(name) {
+            if let Some(t) = self.turn {
+                let r = t.call(name, input).await;
+                return (r.text, r.is_error);
+            }
+        }
+        match self.inner {
+            Some(e) => e.call(name, input).await,
+            None => (format!("Error: unknown tool {name:?}. Use only the tools you were given."), true),
+        }
+    }
+}

@@ -145,6 +145,22 @@ pub fn for_proposal(s: &ChatSession, p: &ActionProposal) -> Option<(Notice, Push
     Some((notice, push))
 }
 
+/// An agent's question waiting for a person (`ask.pending`).
+pub fn for_ask(s: &ChatSession, a: &hive_core::flow::HumanAsk) -> Option<(Notice, PushContent)> {
+    if a.closed {
+        return None;
+    }
+    let agent = hive_core::flow::agent_from_key(&a.agent_key)
+        .and_then(|id| s.workspace_agents.iter().find(|x| x.id == id))
+        .map(|x| format!("@{}", x.name))
+        .unwrap_or_else(|| "An agent".into());
+    let notice = ntfy::ask_notice(&agent, &s.title, s.id);
+    let mut push = base("ask.pending", s, notice.title.clone());
+    push.sender = Some(agent);
+    push.preview = Some(a.question.clone());
+    Some((notice, push))
+}
+
 /// A workflow run's gate `node` waiting for approval.
 pub fn for_workflow_gate(s: &ChatSession, run: &WorkflowRun, node: &str) -> Option<(Notice, PushContent)> {
     let state = run.node_state(node)?;

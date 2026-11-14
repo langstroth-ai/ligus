@@ -40,6 +40,8 @@ export type { WorkspaceAgentDto } from "@/bindings/WorkspaceAgentDto";
 export type { SkillDto } from "@/bindings/SkillDto";
 export type { McpServerDto } from "@/bindings/McpServerDto";
 export type { ProposalDto } from "@/bindings/ProposalDto";
+export type { ImplementPreviewDto } from "@/bindings/ImplementPreviewDto";
+import type { ImplementPreviewDto } from "@/bindings/ImplementPreviewDto";
 export type { ReactionDto } from "@/bindings/ReactionDto";
 export type { WorkspaceMemberDto } from "@/bindings/WorkspaceMemberDto";
 export type { VaultSourceDto } from "@/bindings/VaultSourceDto";
@@ -1232,9 +1234,34 @@ export const setMcpBearerToken = (serverId: string, token: string) =>
 export const authorizeMcpServer = (serverId: string, scope?: string) =>
   invoke<void>("authorize_mcp_server", { serverId, scope });
 
-/// Carry out an approved proposal (agreement-gated; agent executes it).
-export const implementProposal = (sessionId: string, proposalId: string) =>
-  invoke<void>("implement_proposal", { sessionId, proposalId });
+/// Carry out an approved proposal (agreement-gated): a structured command
+/// runs its exact argv; anything else goes to the producing agent (or
+/// `targetAgentId`) as the exact instruction the preview shows.
+export const implementProposal = (sessionId: string, proposalId: string, targetAgentId?: string | null) =>
+  invoke<void>("implement_proposal", { sessionId, proposalId, targetAgentId: targetAgentId ?? null });
+
+/// What Implement will do, exactly (built by the same function that runs it).
+export const getImplementPlan = (sessionId: string, proposalId: string, targetAgentId?: string | null) =>
+  invoke<ImplementPreviewDto>("get_implement_plan", { sessionId, proposalId, targetAgentId: targetAgentId ?? null });
+
+/// An agent's question to the chat's people (ligus_ask_human).
+export type AskDto = {
+  askId: string;
+  agentName: string;
+  question: string;
+  options: string[];
+  expiresAtMs: number;
+  answer?: string | null;
+  answeredBy?: string | null;
+  open: boolean;
+};
+
+/// The agents' questions in a chat, newest first.
+export const listAsks = (sessionId: string) => invoke<AskDto[]>("list_asks", { sessionId });
+
+/// Answer an agent's question (the first answer wins; it authorizes nothing).
+export const answerAsk = (sessionId: string, askId: string, answer: string, optionIndex?: number | null) =>
+  invoke<void>("answer_ask", { sessionId, askId, answer, optionIndex: optionIndex ?? null });
 
 /// Check for an app update. Resolves to the new version if one is available,
 /// null if up to date; rejects with a friendly message if the updater isn't

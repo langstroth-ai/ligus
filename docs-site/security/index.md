@@ -141,9 +141,11 @@ it names.
   lockdown clears from the phone or any bearer caller (`403
   presence_required`), and every device's fold drops a vote such a box signs
   for you: approve on your laptop.
-- **Agents** can be given their own host-certified keys, judged by a capped
-  Agent tier that never votes, applies or administers; 2.0.0 hosts still sign
-  agent output with their own device key (see
+- **Agents** sign with their own host-certified keys, judged by a capped
+  Agent tier that never votes, applies or administers. They act through the
+  [Ligus tools](../addons/ligus-mcp.md): proposals only, behind a per-turn
+  credential, with budgets and an audit trail. A host that can't certify a
+  key signs for the agent (see
   [Known limitations](threat-model.md#known-limitations)).
 
 ## The 2.0 guards {#guards}
@@ -156,6 +158,7 @@ it names.
 | **Dearth mode** | two Admins for new members; cross-account approval for new devices; agents limited to allow-listed MCP servers; human approval for protected (brood) paths | Admin | [Dearth mode](../features/guards.md#dearth-mode) |
 | **Chat lockdown** | on an injection marker, a credential in a diff or an unrequested CI change: no network or MCP for that chat's agents, human approval on every proposal | raised by anyone (or automatically); cleared by a human Contributor+ | [Chat lockdown](../features/guards.md#chat-lockdown) |
 | **Leases** | exactly one device drives a workflow run or the workspace coordinator role; signed heartbeats over relay presence; epoch fencing | Contributor (signed by the holder device) | [Which device drives a run](../features/workflows.md#which-device-drives-a-run) |
+| **Ligus tools** | agents act through typed tools bound to one turn (an HMAC credential that expires with it): proposals only, never votes, applies or admin changes; budgets per turn; a device-local audit per call and a synced summary per turn | automatic; budgets per device (`LIGUS_MCP_MAX_*`) | [Ligus tools for agents](../addons/ligus-mcp.md) |
 | **Exfiltration guard** | once a turn has read project files, MCP calls are refused | on by default; CLI can disable with `LIGUS_MCP_AFTER_READS` | [MCP servers](../addons/mcp.md) |
 | **Hygiene sweep** | removes leftover worktrees (saving patches), marks un-appliable proposals stale | automatic | [Hygiene](../features/guards.md#hygiene) |
 
@@ -168,6 +171,18 @@ Findings from security reviews that change what this section says are
 recorded here, each with the date and the page section it affects. The full
 list with status is in
 [Reviewer findings](threat-model.md#reviewer-findings).
+
+**2026-11-14: Phase 0 Track D (agent interface).**
+
+- [Roles](#roles): agents bound to a host sign their replies and tool
+  effects with their own certified keys; the Ligus MCP server checks the
+  Agent tier before signing.
+- [The 2.0 guards](#guards): the OS sandbox allows exactly one extra path, the
+  turn's Ligus MCP socket. CLI agents run with a per-turn home, so they can't
+  persist hooks or MCP servers into your real CLI config (C-9). On macOS the
+  profile also denies Apple Events and the pasteboard (C-13).
+- Implement on a command proposal runs its stored argv exactly, sandboxed and
+  offline; the preview shows the same plan the runner uses.
 
 **2026-11-13: core, host, chart and relay v0.2.0 review.**
 

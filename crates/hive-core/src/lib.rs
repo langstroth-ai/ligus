@@ -75,8 +75,8 @@ pub use identity::{
 };
 pub use policy::{PermissionPolicy, PermissionScope, Workspace};
 pub use proposal_sets::{ProposalSet, ScoutAssessment, SetPhase};
-pub use proposals::{ActionProposal, ProposalApproval, ProposalKind, ProposalStatus};
-pub use runtime::{ModelProviderKind, RuntimeCapabilities, RuntimeLocation, RuntimeTarget};
+pub use proposals::{ActionProposal, ProposalApproval, ProposalKind, ProposalStatus, ProposedCommand};
+pub use runtime::{Driver, ModelProviderKind, RuntimeCapabilities, RuntimeLocation, RuntimeTarget};
 pub use schedule::ScheduleTrigger;
 pub use session::{ChatSession, MAX_CASCADE_DEPTH};
 pub use skills::SkillProfile;

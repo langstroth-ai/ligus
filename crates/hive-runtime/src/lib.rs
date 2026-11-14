@@ -6,6 +6,7 @@
 //! Crypto/signing, providers, MCP, and transports arrive in later phases.
 
 pub mod agent_tools;
+pub mod agent_turn;
 pub mod attachment_blob;
 pub mod author_gate;
 pub mod builtin_tools;
@@ -14,8 +15,10 @@ pub mod cli_detect;
 pub mod context;
 pub mod device_enroll;
 pub mod directives;
+pub mod effects;
 pub mod egress;
 pub mod facts;
+pub mod finalize;
 pub mod envelope_verifier;
 pub mod event_store;
 pub mod executor;
@@ -29,6 +32,7 @@ pub mod identity_store;
 pub mod identity_verifier;
 pub mod lease_presence;
 pub mod ligus_auth;
+pub mod ligus_mcp;
 pub mod mcp;
 pub mod mcp_oauth;
 pub mod mentions;
@@ -43,12 +47,14 @@ pub mod provider;
 pub mod relay_client;
 pub mod remote_manifest;
 pub mod retrieval;
+pub mod review;
 pub mod sandbox;
 pub mod secret_redact;
 pub mod sse;
 pub mod sync_engine;
 pub mod tool_loop;
 pub mod vault_fetcher;
+pub mod workflow_directive;
 pub mod workflow_tool;
 pub mod workspace_trust;
 
@@ -61,7 +67,7 @@ mod ligus_auth_membership_tests;
 
 pub use builtin_tools::{BuiltinTools, Policy as BuiltinToolPolicy};
 pub use chat_service::{
-    cascade_target, empty_reply_notice, pending_mentions, resolve_workspace_credential, turns_for, turns_from, turns_with_summary,
+    cascade_target, empty_reply_notice, pending_mentions, pending_turns, resolve_workspace_credential, turns_for, turns_from, turns_with_summary,
     ChatService, PendingMention, SUMMARY_TURN_HEADER,
 };
 pub use context::{Compactor, CompactionResult, Summarizer};

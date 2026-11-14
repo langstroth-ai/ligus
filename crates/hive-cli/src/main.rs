@@ -205,13 +205,11 @@ fn open_service(cfg: &Config) -> Result<ChatService> {
     let device_kp = identity.device_keypair(stored.device.id)?;
     let account_kp = identity.account_keypair(stored.account.id)?;
     let store = EventStore::open(cfg.data_dir.join("hive.db"))?;
-    Ok(ChatService::new(
-        store,
-        stored.device.id,
-        device_kp,
-        account_kp,
-        stored.account.actor(),
-    ))
+    let mut svc = ChatService::new(store, stored.device.id, device_kp, account_kp, stored.account.actor());
+    // Agents bound to this host sign their own output with keys this device
+    // certifies (A3); the keys live with this host's other keys.
+    svc.set_agent_vault(Box::new(FileKeyVault::new(&cfg.data_dir)));
+    Ok(svc)
 }
 
 /// One-time cleanup: drop events of any workspace other than this config's
@@ -512,6 +510,7 @@ fn resolve_runtime_from_env() -> Result<(ResolvedRuntime, String)> {
         tools: false,
         max_tool_rounds: None,
         allow_remote_file_tools: false,
+        driver: Default::default(),
     };
     Ok((rt, format!("{provider_str}/{model}")))
 }
@@ -754,6 +753,7 @@ fn resolve_agent_runtime(cfg: &Config, runtime_id: Option<&str>) -> Result<(Reso
         tools: false,
         max_tool_rounds: None,
         allow_remote_file_tools: false,
+        driver: Default::default(),
     };
     Ok((rt, format!("workspace:{}", wr.name)))
 }
@@ -1032,13 +1032,14 @@ async fn cmd_worker(cfg: &Config, label: Option<String>) -> Result<()> {
         Ok(_) => {}
         Err(e) => eprintln!("worker: interrupted-turn recovery failed: {e}"),
     }
-    let svc = std::sync::Mutex::new(svc);
+    let svc = std::sync::Arc::new(std::sync::Mutex::new(svc));
     let ctx = worker::WorkerCtx {
         cfg,
         ws,
         my_host: &my_host,
         host_label: &host_label,
         settings: reply::ToolSettings::from_env(),
+        ligus: Some(worker::ligus_server(svc.clone())),
     };
     // Mentions whose reply hard-failed, so we don't retry them every tick.
     let mut failed: HashSet<Uuid> = HashSet::new();
@@ -1268,6 +1269,9 @@ fn run() -> Result<()> {
     // Inside the Linux agent sandbox this process is only the pre-exec helper.
     #[cfg(target_os = "linux")]
     hive_runtime::executor::linux::maybe_run_helper();
+    // `ligus mcp-bridge`: inside an agent's sandbox, pipe its MCP stdio to
+    // the turn's Ligus MCP socket (Track D). No config, no data dir.
+    hive_runtime::ligus_mcp::bridge::maybe_run_bridge();
     // Before any thread starts: the only time Linux lets us read it.
     serve::dashboard_hive::init_local_offset();
     let args: Vec<String> = std::env::args().skip(1).collect();

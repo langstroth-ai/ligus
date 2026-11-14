@@ -59,6 +59,50 @@ impl ModelProviderKind {
     }
 }
 
+/// How a subscription CLI runtime is driven (Track D1).
+///
+/// - `Auto`: over the Agent Client Protocol when the CLI's ACP entry point is
+///   detected and `initialize` succeeds, otherwise the legacy headless
+///   adapter. Claude Code resolves to ACP only when an API key or cloud
+///   provider is configured in Ligus (the claude.ai login stays on the legacy
+///   `claude -p` adapter).
+/// - `Acp`: always ACP (a failed `initialize` still falls back to Legacy once
+///   per turn, recorded as a fact).
+/// - `Legacy`: always the headless adapter.
+///
+/// Serialized only when not `Auto`, so existing configs and events are
+/// byte-identical.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Driver {
+    #[default]
+    Auto,
+    Acp,
+    Legacy,
+}
+
+impl Driver {
+    pub fn is_auto(&self) -> bool {
+        *self == Driver::Auto
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Driver::Auto => "auto",
+            Driver::Acp => "acp",
+            Driver::Legacy => "legacy",
+        }
+    }
+    /// Parse a config/setting value (`auto`, `acp`, `legacy`); anything else
+    /// is `Auto`.
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "acp" => Driver::Acp,
+            "legacy" => Driver::Legacy,
+            _ => Driver::Auto,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RuntimeLocation {
@@ -128,6 +172,9 @@ pub struct RuntimeTarget {
     /// runtime's endpoint origin.
     #[serde(skip)]
     pub allow_remote_file_tools: bool,
+    /// How a subscription CLI runtime is driven (ACP or the legacy adapter).
+    #[serde(default, skip_serializing_if = "Driver::is_auto")]
+    pub driver: Driver,
     #[serde(default)]
     pub estimated_performance_score: f64,
     #[serde(default)]
@@ -188,10 +235,22 @@ mod tests {
             think: None,
             max_tool_rounds: None,
             allow_remote_file_tools: false,
+            driver: Driver::Auto,
             estimated_performance_score: 0.0,
             estimated_cost_per_1m_input_tokens_usd: 0.0,
             capabilities: RuntimeCapabilities::default(),
         };
         assert_eq!(rt.display_label(), "Local · qwen2.5");
+    }
+
+    #[test]
+    fn driver_is_skipped_when_auto() {
+        let ws = crate::WorkspaceRuntime::new("r", "R", ModelProviderKind::Copilot, "m");
+        assert!(!serde_json::to_string(&ws).unwrap().contains("driver"), "auto is omitted");
+        let acp = crate::WorkspaceRuntime { driver: Driver::Acp, ..ws };
+        assert!(serde_json::to_string(&acp).unwrap().contains("\"driver\":\"acp\""));
+        assert_eq!(serde_json::to_string(&Driver::Acp).unwrap(), "\"acp\"");
+        assert_eq!(Driver::parse("LEGACY"), Driver::Legacy);
+        assert_eq!(Driver::parse("whatever"), Driver::Auto);
     }
 }

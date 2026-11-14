@@ -83,6 +83,10 @@ pub struct ChatService {
     agent_vault: Option<Box<dyn crate::identity_store::KeyVault + Send>>,
     /// Assistant messages this host is writing as an agent: message → agent.
     agent_messages: std::collections::HashMap<Uuid, Uuid>,
+    /// While set, every append is an agent's effect (Track D): held to the
+    /// Agent tier, and signed with the agent's own key when this host holds
+    /// one (see [`ChatService::as_agent`]).
+    acting_agent: Option<Uuid>,
     /// Streamed text not yet written to the log, per message: a trailing
     /// token (at most [`STREAM_HOLD`] bytes) is held back so a secret split
     /// across chunk boundaries is redacted whole before any of it is signed.
@@ -114,6 +118,7 @@ impl ChatService {
             write_block: None,
             agent_vault: None,
             agent_messages: std::collections::HashMap::new(),
+            acting_agent: None,
             stream_hold: std::collections::HashMap::new(),
         }
     }
@@ -175,7 +180,17 @@ impl ChatService {
         if self.local_workspace_id == Some(workspace_id) {
             return Ok(None);
         }
-        let Some((key_id, kp)) = self.ensure_agent_key(workspace_id, agent_id)? else { return Ok(None) };
+        // A key that can't be certified here (this device isn't certified in
+        // the workspace yet, a role below Contributor) is not the turn's
+        // failure: the host signs, as in the A3 transition.
+        let key = match self.ensure_agent_key(workspace_id, agent_id) {
+            Ok(k) => k,
+            Err(e) => {
+                tracing::warn!(target: "agent_keys", %agent_id, "agent key unavailable, signing as the host: {e}");
+                None
+            }
+        };
+        let Some((key_id, kp)) = key else { return Ok(None) };
         let (config, timeline) =
             self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
         let name = config
@@ -193,6 +208,49 @@ impl ChatService {
         sign_envelope(&mut env, key_id, &kp);
         self.store.append_envelope(&env)?;
         Ok(Some(env))
+    }
+
+    /// Run `f` with every append made as `agent`'s effect (Track D): each
+    /// event must pass the Agent tier (no admin or governance events, no
+    /// votes, no `ProposalApplied`, proposals only) against the log's current
+    /// fold, and is signed with the agent's own key when this host holds one
+    /// (A3), else by the host (the A3 transition). `None` runs `f` as the
+    /// host.
+    pub fn as_agent<R>(&mut self, agent: Option<Uuid>, f: impl FnOnce(&mut Self) -> R) -> R {
+        let prev = std::mem::replace(&mut self.acting_agent, agent);
+        let r = f(self);
+        self.acting_agent = prev;
+        r
+    }
+
+    /// The agent whose effects are being appended, if any.
+    pub fn acting_agent(&self) -> Option<Uuid> {
+        self.acting_agent
+    }
+
+    /// An agent's effect: Agent tier first, then the agent's key or the host.
+    fn append_agent_effect(&mut self, session_id: Uuid, workspace_id: Uuid, agent: Uuid, payload: SessionEvent) -> Result<SessionEventEnvelope> {
+        let fold = self.load(session_id)?.unwrap_or_else(|| ChatSession::new("", workspace_id, ""));
+        if let Err(why) = hive_core::authz::agent::tier_allows(&payload, agent, self.device_id, &fold) {
+            return Err(ChatError::Unauthorized(format!("agent tier: {why}")));
+        }
+        if let Some(env) = self.append_signed_as_agent(session_id, workspace_id, agent, payload.clone())? {
+            return Ok(env);
+        }
+        self.append_signed(session_id, workspace_id, payload)
+    }
+
+    /// Record one Ligus MCP tool call as a device-local, content-free fact
+    /// (D.3.5). Never synced.
+    pub fn record_tool_audit(&self, workspace_id: Uuid, chat_id: Uuid, at_ms: i64, json: &str) -> Result<()> {
+        self.store.record_fact(workspace_id, chat_id, at_ms, crate::facts::TOOL_CALL_KIND, json)?;
+        Ok(())
+    }
+
+    /// Record a device-local, content-free fact of `kind` (never synced).
+    pub fn record_device_fact(&self, workspace_id: Uuid, chat_id: Uuid, kind: &str, json: &str) -> Result<()> {
+        self.store.record_fact(workspace_id, chat_id, hive_core::flow::now_ms(), kind, json)?;
+        Ok(())
     }
 
     /// Append for an assistant message: as its agent when this host writes
@@ -536,6 +594,11 @@ impl ChatService {
     ) -> Result<SessionEventEnvelope> {
         if let Some(reason) = &self.write_block {
             return Err(ChatError::Unauthorized(reason.clone()));
+        }
+        if let Some(agent) = self.acting_agent.take() {
+            let r = self.append_agent_effect(session_id, workspace_id, agent, payload);
+            self.acting_agent = Some(agent);
+            return r;
         }
         // Skip governance authz entirely for the device-local workspace: it's solo
         // and never syncs, so the check protects nothing there — and an identity
@@ -921,6 +984,11 @@ impl ChatService {
     /// startup when no stream is live in *this* process, and were another device
     /// still streaming the same message its later chunks/completion carry a higher
     /// lamport and win the fold.
+    /// Every session id in this device's store.
+    pub fn session_ids(&self) -> Result<Vec<Uuid>> {
+        Ok(self.store.list_session_ids()?)
+    }
+
     pub fn clear_stale_streaming(&mut self) -> Result<usize> {
         let mut cleared = 0usize;
         for session_id in self.store.list_session_ids()? {
@@ -2518,6 +2586,36 @@ pub fn pending_mentions(session: &ChatSession) -> Vec<PendingMention> {
                 agent_id: agent.id,
                 agent_name: agent.name.clone(),
             });
+        }
+    }
+    out
+}
+
+/// Every agent turn a host should run now: [`pending_mentions`], plus
+/// hand-offs made with `ligus_handoff` or a `[[handoff: {"to": …}]]`
+/// directive (D.4.1) whose receiver hasn't answered the handing reply yet.
+/// One entry per agent (the latest); bounded by the cascade depth. Every
+/// host's queue (desktop, `ligus worker`, `ligus serve`) drains this, so a
+/// hand-off starts its receiver wherever that agent runs, exactly once: a
+/// duplicate delivery folds to the same card, and the receiver's reply
+/// (stamped as answering the handing reply) clears it.
+pub fn pending_turns(session: &ChatSession) -> Vec<PendingMention> {
+    let mut out = pending_mentions(session);
+    if session.cascade_depth() >= hive_core::MAX_CASCADE_DEPTH {
+        return out;
+    }
+    for card in session.flow.handoffs.iter().filter(|h| h.via == "tool" || h.via == "directive") {
+        let (Some(agent_id), Some(trigger)) = (hive_core::flow::agent_from_key(&card.to), card.message_id) else { continue };
+        let Some(agent) = session.workspace_agents.iter().find(|a| a.id == agent_id) else { continue };
+        let Some(at) = session.messages.iter().position(|m| m.id == trigger) else { continue };
+        // Any later reply by the receiver consumes the hand-off (an @mention
+        // cascade of the same reply may have answered it first).
+        let answered = session.messages[at + 1..]
+            .iter()
+            .any(|m| matches!(m.role, MessageRole::Assistant | MessageRole::Agent) && m.responder_id == Some(agent_id));
+        if !answered {
+            out.retain(|p| p.agent_id != agent_id);
+            out.push(PendingMention { session_id: session.id, message_id: trigger, agent_id, agent_name: agent.name.clone() });
         }
     }
     out

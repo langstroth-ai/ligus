@@ -223,6 +223,10 @@ struct RawRuntime {
     keep_alive: Option<String>,
     think: Option<bool>,
     max_tool_rounds: Option<u32>,
+    /// `auto` (default), `acp` or `legacy`: how a subscription CLI runtime
+    /// is driven (Track D1).
+    #[serde(default)]
+    driver: String,
     #[serde(default)]
     supports_embeddings: bool,
     #[serde(default)]
@@ -471,6 +475,7 @@ impl RawRuntime {
             max_tool_rounds: self.max_tool_rounds.filter(|n| *n > 0),
             // Device-local consent, never taken from a config file.
             allow_remote_file_tools: false,
+            driver: crate::runtime::Driver::parse(&self.driver),
             estimated_performance_score: self.performance_score,
             estimated_cost_per_1m_input_tokens_usd: self.cost_per_1m_input_tokens_usd,
             capabilities: RuntimeCapabilities {

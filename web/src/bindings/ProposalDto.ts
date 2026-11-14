@@ -64,4 +64,42 @@ setId?: string | null, taskClass?: string | null,
 /**
  * An applied change that was later reverted.
  */
-reverted?: boolean, };
+reverted?: boolean, 
+/**
+ * Review badges (Track D4): "human" | "agent".
+ */
+authorKind?: string, 
+/**
+ * The author's display name (`@coder`, a person's name).
+ */
+authorName?: string, 
+/**
+ * Who signed it: "agent" (the agent's own key), "host" (a host device
+ * speaking for an agent: legacy), "human".
+ */
+signedBy?: string, 
+/**
+ * It touches configuration, CI, hooks, protected dirs or MCP config.
+ */
+configImpact?: boolean, 
+/**
+ * A human gate applies (dearth mode, a lockdown, a path zone).
+ */
+humanGate?: boolean, 
+/**
+ * Applying needs a passkey presence proof (rules v2).
+ */
+presenceRequired?: boolean, 
+/**
+ * A command proposal without a structured argv (Implement falls back
+ * to an instruction).
+ */
+legacyCommand?: boolean, 
+/**
+ * A structured command's exact argv.
+ */
+argv?: Array<string>, 
+/**
+ * The agent whose turn produced it (Implement's default target).
+ */
+producingAgentId?: string, };

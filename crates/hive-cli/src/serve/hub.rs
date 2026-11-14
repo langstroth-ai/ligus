@@ -87,6 +87,8 @@ struct ChatSnap {
     /// Reviewer-recruit notices (`FlowRecord::Recruit` with action
     /// `approvers`) already seen.
     recruits: HashSet<Uuid>,
+    /// Open asks already announced.
+    asks: HashSet<Uuid>,
 }
 
 /// The parts of a proposal whose change is a `proposal.updated`: its status,
@@ -127,6 +129,8 @@ pub enum Change {
     /// A backpressure response asked more reviewers to look at the queue
     /// (`flowRecorded` recruit with action `approvers`).
     RecruitApprovers { chat: Uuid, recruit: Uuid },
+    /// An agent asked the chat's humans a question (D.4.2).
+    AskPending { chat: Uuid, ask: Uuid },
     ChatUpdated { chat: Uuid },
 }
 
@@ -143,6 +147,7 @@ fn snap(s: &ChatSession) -> ChatSnap {
         proposals: s.proposals.iter().map(|p| (p.id, proposal_snap(p))).collect(),
         gates: awaiting_gates(s).collect(),
         recruits: approver_recruits(s).collect(),
+        asks: s.flow.asks.values().filter(|a| a.is_open()).map(|a| a.ask.ask_id).collect(),
     }
 }
 
@@ -236,6 +241,11 @@ impl Differ {
             for recruit in approver_recruits(s) {
                 if !before.recruits.contains(&recruit) {
                     out.push(Change::RecruitApprovers { chat: s.id, recruit });
+                }
+            }
+            for a in s.flow.asks.values().filter(|a| a.is_open()) {
+                if !before.asks.contains(&a.ask.ask_id) {
+                    out.push(Change::AskPending { chat: s.id, ask: a.ask.ask_id });
                 }
             }
             if touched {

@@ -101,6 +101,9 @@ import { WorkflowsPane, WorkflowStages } from "@/components/WorkflowsPane";
 import { ProposalSets, useProposalSets } from "@/components/ProposalSets";
 import { withoutSetAlternatives } from "@/lib/proposalSets";
 import { FlowPane } from "@/components/flow/FlowPane";
+import { ProposalBadges } from "@/components/ReviewBadges";
+import { ImplementPreview } from "@/components/ImplementPreview";
+import { AgentAsks } from "@/components/AgentAsks";
 
 // Re-exported from the shared pane source so existing
 // `import type { UtilityPane } from "@/components/RightRail"` keeps working.
@@ -1265,13 +1268,15 @@ function ProposalCard({
   });
 
   const implement = useMutation({
-    mutationFn: () => implementProposal(sessionId, proposal.id),
+    mutationFn: (target: string | null) => implementProposal(sessionId, proposal.id, target),
     onSuccess: () => {
       onChanged();
-      toast.success(proposal.workflow ? "Workflow added." : "Sent to the agent to implement.");
+      toast.success(proposal.workflow ? "Workflow added." : proposal.argv ? "Command ran." : "Sent to the agent to implement.");
     },
     onError: (e) => toast.error(`Couldn't implement: ${errMsg(e)}`),
   });
+  // Implement shows exactly what will run first (Track D4).
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   // Full-width diff viewer — the per-file diff is cramped in this narrow pane.
   const [diffOpen, setDiffOpen] = useState(false);
@@ -1339,6 +1344,7 @@ function ProposalCard({
         </div>
       </div>
       <div className="mt-0.5 pl-[22px] text-xs text-ink-soft">{relTime(proposal.createdAt)}</div>
+      <ProposalBadges proposal={proposal} />
 
       {superseded && (
         <div
@@ -1463,9 +1469,9 @@ function ProposalCard({
             variant="primary"
             className="ml-auto"
             disabled={busy}
-            onClick={() => implement.mutate()}
+            onClick={() => setPreviewOpen(true)}
           >
-            {implement.isPending ? "Implementing…" : "Implement"}
+            {implement.isPending ? "Implementing…" : "Implement…"}
           </Button>
         )}
         {proposal.status === "applied" && (
@@ -1486,6 +1492,18 @@ function ProposalCard({
         </button>
       )}
 
+      {previewOpen && (
+        <ImplementPreview
+          sessionId={sessionId}
+          proposalId={proposal.id}
+          title={proposal.title}
+          onClose={() => setPreviewOpen(false)}
+          onConfirm={(target) => {
+            setPreviewOpen(false);
+            implement.mutate(target);
+          }}
+        />
+      )}
       {diffOpen && proposal.diff && (
         <ProposalDiffModal
           title={proposal.title}
@@ -1685,6 +1703,7 @@ function ReviewPane({ sessionId }: { sessionId: string }) {
   const failed = proposals.isError || sets.isError;
   return (
     <RailFrame title="Review" subtitle="Pending decisions and proposal quorum for this chat.">
+      <AgentAsks sessionId={sessionId} />
       <QueuedWorkSection />
       {failed && (
         <div className="mb-4">

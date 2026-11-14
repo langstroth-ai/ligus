@@ -152,13 +152,15 @@ each stays on this list until a release fixes it.
    read-only agent turns, while write-capable turns are refused. On Linux a
    protected directory that doesn't exist yet is pinned by an empty
    read-only directory for the turn.
-4. **Agent output is still signed by its host.** **(Phase 0, Track B)** The
-   protocol has agent identities: host-certified agent keys, judged by a capped
-   Agent tier that can never vote, apply or administer, and retired when the
-   agent moves to another host. 2.0.0 hosts don't issue agent keys yet, so an
-   agent's messages and proposals are signed by the device that ran the turn,
-   and the Agent tier for host-signed agent output takes effect with rules
-   version 2.
+4. **Some agent output is still signed by its host.** **(Phase 0, Track B)**
+   Hosts now certify a key for each agent bound to them, and that agent's
+   replies and Ligus tool effects are signed with it, judged by the capped
+   Agent tier (never a vote, an apply or an admin change) and retired when
+   the agent moves to another host. A host that can't certify a key (not yet
+   certified in the workspace, or the device-local Home workspace) signs for
+   the agent itself; the Agent tier for such host-signed agent output takes
+   effect with rules version 2. The Ligus tools check the Agent tier before
+   signing either way.
 5. **Key rotation doesn't reach headless devices.** **(Phase 0, Track B)**
    `ligus serve` and `ligus worker` only know the base (epoch 0) key from the
    invite; they can't open rotated keys. After a **Remove & revoke**,
@@ -193,12 +195,22 @@ each stays on this list until a release fixes it.
    vote such a box signs for you. Approve on a device that holds your account
    key. A box that is its own member votes with its own role. Phone votes
    return with passkey presence.
-9. **Agents ask for actions in reply text.** **(Phase 0, Track D)** Agents
-   file proposals, hand-offs and marks through `[[…]]` directives parsed from
-   their replies, and Copilot, Antigravity and Codex are driven through
-   per-CLI adapters. A typed Ligus MCP server and an Agent Client Protocol
-   (ACP) driver replace them in Track D; directives stay as the fallback for
-   runtimes without tool use.
+9. **Some agents still ask for actions in reply text.** Agents with tool use
+   get the typed [Ligus tools](../addons/ligus-mcp.md), and the subscription
+   CLIs run over [ACP](../addons/acp.md). aider, pi, Hermes, and Codex and
+   Antigravity on their headless adapters still use the `[[…]]` directives,
+   which every host (desktop, worker, serve) now parses the same way. A
+   directive can file only what the matching tool can.
+12. **Agents can read every chat in the workspace.** `ligus_read_chat` reads
+    any chat of the workspace the agent runs in (by design), so a prompt
+    injection planted in one chat can reach agents working in another. Read
+    results are marked as data, every read is in the device-local audit with
+    the chat it read, and reads are budgeted (500 messages per turn).
+13. **A paused turn holds its host.** A turn waiting on `ligus_ask_human` or
+    an ACP permission request keeps its process and chat until someone
+    answers or its timeout passes (at most an hour; 10 minutes for permission
+    requests). Stop the turn to release it. A restart cancels it; questions
+    can't be resumed in 2.0.
 10. **Invite codes carry the base key only.** A joiner who arrives with a
     `hivews1:` code after a rotation needs the rotation sealed to their
     devices (inviting by GitHub handle does this).
@@ -279,14 +291,17 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 | Host | The tool role gate only held on headless hosts and read today's roster | One author gate on every host, at the author's role when the message was posted |
 | Host | Repository-supplied runtimes and MCP servers ran on clone | Inert until enabled on this device by digest |
 | Host | Votes through an owner-enrolled serve box counted as the owner's | The box refuses them (`403 presence_required`) and every device's fold drops them |
+| Host (C-9) | An agent could write hooks or MCP servers into `~/.claude`, `~/.codex` and the other CLIs' config, which ran unsandboxed on the user's next CLI start | CLI agents run with a per-turn home seeded with the top-level config files; their real config dirs aren't writable, and only refreshed sign-in files are copied back ([details](../addons/acp.md#cli-home)) |
+| Host (C-13) | A macOS agent could drive other apps with Apple Events or read the pasteboard | The Seatbelt profile denies Apple Events and the pasteboard services |
+| Host (C-14) | A runtime's trust digest didn't cover its provider id or metrics endpoint | It covers both, and a non-default driver |
+| Agents | Agents filed actions through reply text, and every host but the desktop ignored it | Typed Ligus tools with a per-turn credential, budgets, an audit trail and agent-signed effects; one directive parser on every host |
 
 ### Open {#findings-open}
 
 These are in [Known limitations](#known-limitations) and stay there until a
 release fixes them: headless devices stuck at key epoch 0, unsigned key
 rotations, no human presence on admin events, phone approvals through an
-owner-enrolled serve box (refused until passkey presence), agent output
-still signed by its host (all Track B), and agents' text directives in
-place of typed tools (Track D). On Kubernetes, DNS tunnelling through the
+owner-enrolled serve box (refused until passkey presence) and the Agent
+tier for host-signed agent output (all Track B). On Kubernetes, DNS tunnelling through the
 cluster resolver remains possible (see
 [Kubernetes](../deploy/kubernetes.md#residual-risks)).

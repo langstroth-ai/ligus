@@ -59,6 +59,16 @@ first time it is created; after that, Settings is the source of truth.
 | `LIGUS_PROVIDER_API_KEY` | unset | desktop and CLI | a provider key that overrides the provider's own variable |
 | `LIGUS_RUNTIME_TEST_TIMEOUT_SECS` | `45` | desktop | timeout of the runtime **Test** button |
 | `LIGUS_LOG` | `info` | desktop | log filter (`tracing` syntax, for example `debug` or `hive_runtime=debug`) |
+| `LIGUS_CLI_HOME` | per-turn | desktop, CLI | `shared` lets CLI agents write their real config dirs again. By default each turn gets a throwaway home ([details](../addons/acp.md#cli-home)) |
+| `LIGUS_ACP_INIT_TIMEOUT_SECS` | `60` | desktop, CLI | how long an ACP agent may take to answer `initialize` before the turn falls back to the headless adapter |
+| `LIGUS_ACP_ASK_TIMEOUT_SECS` | `600` | desktop, CLI | how long an ACP permission request waits for a person before it's denied |
+| `LIGUS_MCP_MAX_TOOL_CALLS` | `64` | desktop, CLI | per-turn budget of [Ligus tool](../addons/ligus-mcp.md#budgets) calls |
+| `LIGUS_MCP_MAX_PROPOSALS` | `8` | desktop, CLI | proposals per turn |
+| `LIGUS_MCP_MAX_HANDOFFS` | `2` | desktop, CLI | hand-offs per turn |
+| `LIGUS_MCP_MAX_ASKS` | `3` | desktop, CLI | questions to the chat per turn |
+| `LIGUS_MCP_MAX_READ_MESSAGES` | `500` | desktop, CLI | messages read per turn |
+| `LIGUS_MCP_MAX_SPEND_USD` | unset | desktop, CLI | spend per turn, where the runtime reports cost |
+| `LIGUS_MCP_BRIDGE` | this binary | desktop, CLI | the program agents run as `ligus mcp-bridge` |
 
 ### `ligus agent` (development responder)
 

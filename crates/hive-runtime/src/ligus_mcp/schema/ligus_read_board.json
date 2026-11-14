@@ -1,0 +1,9 @@
+{
+  "description": "Read the workspace flow board: marks, hand-offs and open asks.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "name": "ligus_read_board"
+}
