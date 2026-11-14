@@ -7,6 +7,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ButtonHTMLAttributes, CSSProperties, ReactNode, RefObject } from "react";
+import { IconAlertTriangle } from "@/lib/icons";
 
 type Variant = "primary" | "ghost" | "danger";
 type Size = "sm" | "md";
@@ -561,15 +562,21 @@ export function SelectField({
   );
 }
 
-/// §7.1 EmptyHint — one terse sentence for an empty list (state matrix §8).
-export function EmptyHint({ text, action }: { text: string; action?: ReactNode }) {
+/// §7.1 EmptyHint — one terse sentence for an empty list (state matrix §8),
+/// with an optional glyph and a single next action.
+export function EmptyHint({ text, action, icon }: { text: string; action?: ReactNode; icon?: ReactNode }) {
   return (
     <div
-      className="rounded-xl border px-3 py-4 text-center text-xs"
-      style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)", color: "var(--hive-ink-soft)" }}
+      className="flex flex-col items-center gap-1.5 rounded-xl border border-dashed px-3 py-4 text-center text-xs text-ink-soft"
+      style={{ borderColor: "var(--hive-line)", background: "color-mix(in srgb, var(--hive-mist) 55%, transparent)" }}
     >
+      {icon && (
+        <span aria-hidden className="text-ink-faint">
+          {icon}
+        </span>
+      )}
       <div>{text}</div>
-      {action && <div className="mt-2">{action}</div>}
+      {action && <div className="mt-1">{action}</div>}
     </div>
   );
 }
@@ -580,21 +587,230 @@ export function EmptyHint({ text, action }: { text: string; action?: ReactNode }
 export function ErrorState({ text, onRetry }: { text: string; onRetry?: () => void }) {
   return (
     <div
-      className="rounded-xl border px-3 py-4 text-center text-xs"
-      style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)", color: "var(--hive-ink)" }}
+      role="alert"
+      className="flex items-start gap-2.5 rounded-xl border px-3 py-2.5 text-xs"
+      style={{ borderColor: "var(--hive-danger-line)", background: "var(--hive-danger-tint)", color: "var(--hive-ink)" }}
     >
-      <div style={{ color: "var(--hive-danger-ink)" }}>{text}</div>
+      <span aria-hidden className="mt-px shrink-0" style={{ color: "var(--hive-danger-ink)" }}>
+        <IconAlertTriangle size={14} />
+      </span>
+      <div className="min-w-0 flex-1 leading-5">{text}</div>
       {onRetry && (
-        <div className="mt-2">
-          <button
-            onClick={onRetry}
-            className="rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors hover:border-[color:var(--hive-accent-cool)]"
-            style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)", color: "var(--hive-ink)" }}
-          >
-            Retry
-          </button>
-        </div>
+        <button
+          onClick={onRetry}
+          className="shrink-0 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors hover:border-[color:var(--hive-accent-cool)]"
+          style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)", color: "var(--hive-ink)" }}
+        >
+          Retry
+        </button>
       )}
+    </div>
+  );
+}
+
+/// Skeleton rows shaped like a pane's cards, so loading never reads as empty
+/// and the layout doesn't jump when data lands.
+export function LoadingState({ rows = 3, label = "Loading" }: { rows?: number; label?: string }) {
+  return (
+    <div role="status" aria-live="polite" aria-label={label} className="space-y-2">
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} className="rounded-xl border px-3 py-3" style={{ borderColor: "var(--hive-line)" }}>
+          <div className="hive-skel h-3" style={{ width: `${62 - i * 9}%` }} />
+          <div className="hive-skel mt-2 h-2.5" style={{ width: `${38 + i * 7}%` }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export type Tone = "neutral" | "info" | "success" | "warn" | "danger";
+
+const TONE_STYLE: Record<Tone, CSSProperties> = {
+  neutral: { color: "var(--hive-ink-soft)", background: "var(--hive-overlay)", borderColor: "var(--hive-line)" },
+  info: { color: "var(--hive-info-ink)", background: "var(--hive-info-tint)", borderColor: "var(--hive-info-line)" },
+  success: { color: "var(--hive-success-ink)", background: "var(--hive-success-tint)", borderColor: "var(--hive-success-line)" },
+  warn: { color: "var(--hive-warn-ink)", background: "var(--hive-warn-tint)", borderColor: "var(--hive-warn-line)" },
+  danger: { color: "var(--hive-danger-ink)", background: "var(--hive-danger-tint)", borderColor: "var(--hive-danger-line)" },
+};
+
+/// The one status chip: text always present (never colour alone), an optional
+/// leading glyph, ink-on-tint colours that pass AA in every palette.
+export function Badge({
+  tone = "neutral",
+  icon,
+  children,
+  title,
+  className = "",
+}: {
+  tone?: Tone;
+  icon?: ReactNode;
+  children: ReactNode;
+  title?: string;
+  className?: string;
+}) {
+  return (
+    <span
+      title={title}
+      className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border px-1.5 py-px text-[10.5px] font-semibold leading-4 tracking-[0.02em] ${className}`}
+      style={TONE_STYLE[tone]}
+    >
+      {icon && (
+        <span aria-hidden className="inline-flex">
+          {icon}
+        </span>
+      )}
+      {children}
+    </span>
+  );
+}
+
+/// A full-width notice strip (workspace banners, chat bars). One height, one
+/// padding, one link style wherever it appears; the detail truncates instead
+/// of wrapping the title. `tone` sets the icon colour and a faint wash.
+export function Banner({
+  tone,
+  icon,
+  title,
+  detail,
+  actions,
+  role = "status",
+  testId,
+}: {
+  tone: Tone;
+  icon: ReactNode;
+  title: ReactNode;
+  detail?: ReactNode;
+  actions?: ReactNode;
+  role?: "status" | "alert";
+  testId?: string;
+}) {
+  const t = TONE_STYLE[tone];
+  return (
+    <div
+      role={role}
+      data-testid={testId}
+      className="hive-enter flex min-h-[34px] shrink-0 items-center gap-2.5 border-b px-4 py-1.5 text-[12.5px]"
+      style={{
+        borderColor: tone === "neutral" ? "var(--hive-line)" : t.borderColor,
+        background: tone === "neutral" ? "var(--hive-panel)" : `color-mix(in srgb, ${t.background} 100%, var(--hive-panel))`,
+        color: "var(--hive-ink)",
+      }}
+    >
+      <span aria-hidden className="inline-flex shrink-0" style={{ color: t.color }}>
+        {icon}
+      </span>
+      <span className="shrink-0 whitespace-nowrap font-semibold">{title}</span>
+      {detail && <span className="min-w-0 flex-1 truncate text-ink-soft">{detail}</span>}
+      {!detail && <span className="flex-1" />}
+      {actions && <span className="flex shrink-0 items-center gap-3">{actions}</span>}
+    </div>
+  );
+}
+
+/// A text action inside a Banner / card footer: quiet until hovered, visible
+/// focus, never colour-only (underline on hover).
+export function LinkButton({
+  children,
+  onClick,
+  disabled,
+  title,
+  tone = "accent",
+}: {
+  children: ReactNode;
+  onClick?: () => void;
+  disabled?: boolean;
+  title?: string;
+  tone?: "accent" | "ink";
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      disabled={disabled}
+      onClick={onClick}
+      className="inline-flex items-center gap-1 whitespace-nowrap rounded font-medium underline-offset-2 hover:underline disabled:opacity-50"
+      style={{ color: tone === "accent" ? "var(--hive-accent-ink)" : "var(--hive-ink)" }}
+    >
+      {children}
+    </button>
+  );
+}
+
+/// Presence/health dot that never relies on colour alone: online = filled,
+/// offline = hollow ring; the label is announced and shown on hover.
+export function StatusDot({ on, label, size = 8 }: { on: boolean; label: string; size?: number }) {
+  return (
+    <span
+      role="img"
+      aria-label={label}
+      title={label}
+      className="inline-block shrink-0 rounded-full"
+      style={{
+        width: size,
+        height: size,
+        background: on ? "var(--hive-success)" : "transparent",
+        boxShadow: on ? "0 0 0 2px var(--hive-panel)" : "inset 0 0 0 1.5px var(--hive-ink-faint)",
+      }}
+    />
+  );
+}
+
+/// Segmented tabs for a pane's sub-views. Scrolls horizontally instead of
+/// wrapping (seven tabs at 300px used to stack three rows); arrow keys move
+/// between tabs (roving tabindex).
+export function SegmentedTabs<T extends string>({
+  tabs,
+  value,
+  onChange,
+  label,
+}: {
+  tabs: { id: T; label: string; count?: number }[];
+  value: T;
+  onChange: (id: T) => void;
+  label: string;
+}) {
+  const onKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft" && e.key !== "Home" && e.key !== "End") return;
+    e.preventDefault();
+    const i = tabs.findIndex((t) => t.id === value);
+    const next =
+      e.key === "Home" ? 0 : e.key === "End" ? tabs.length - 1 : (i + (e.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+    onChange(tabs[next].id);
+    const btn = e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next];
+    btn?.focus();
+    btn?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  };
+  return (
+    <div
+      role="tablist"
+      aria-label={label}
+      onKeyDown={onKey}
+      className="hive-scroll-x -mx-1 flex gap-0.5 overflow-x-auto px-1 pb-0.5"
+    >
+      {tabs.map((t) => {
+        const on = t.id === value;
+        return (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={on}
+            tabIndex={on ? 0 : -1}
+            onClick={() => onChange(t.id)}
+            className="relative shrink-0 whitespace-nowrap rounded-lg px-2.5 py-1 text-[12.5px] font-medium transition-colors hover:bg-[color:var(--hive-hover)]"
+            style={{
+              color: on ? "var(--hive-ink)" : "var(--hive-ink-soft)",
+              background: on ? "var(--hive-mist)" : "transparent",
+              boxShadow: on ? "inset 0 0 0 1px var(--hive-line)" : undefined,
+            }}
+          >
+            {t.label}
+            {typeof t.count === "number" && t.count > 0 && (
+              <span className="ml-1 tabular-nums text-ink-soft">{t.count}</span>
+            )}
+          </button>
+        );
+      })}
     </div>
   );
 }

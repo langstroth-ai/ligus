@@ -410,3 +410,11 @@ select optgroup {
 .hljs-emphasis { font-style: italic; }
 .hljs-strong { font-weight: 600; }
 .hljs-deletion { color: var(--hive-danger-ink, var(--hive-danger)); }
+
+/* Skeleton block (LoadingState). */
+.hive-skel { border-radius: var(--hive-radius-sm); background: color-mix(in srgb, var(--hive-ink) 9%, transparent); animation: hive-pulse 1.4s ease-in-out infinite; }
+@keyframes hive-pulse { 50% { opacity: 0.5; } }
+@media (prefers-reduced-motion: reduce) { .hive-skel { animation: none; } }
+/* Horizontal scrollers (segmented tabs) without a heavy scrollbar. */
+.hive-scroll-x { scrollbar-width: none; }
+.hive-scroll-x::-webkit-scrollbar { display: none; }
