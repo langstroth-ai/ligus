@@ -214,3 +214,29 @@ fn value_reencoded_envelopes_verify_only_without_additions() {
     let back: SessionEventEnvelope = serde_json::from_value(smuggled).unwrap();
     assert!(verify_envelope(&back, &kp.public_key_bytes()).is_err());
 }
+
+proptest! {
+    /// The hand-written envelope serde never panics on mutated input, and
+    /// whatever it accepts it re-emits exactly (a stand-in for the
+    /// `envelope_roundtrip` fuzz target, which needs a nightly toolchain).
+    #[test]
+    fn prop_envelope_parser_is_total_and_round_trips(
+        which in 0usize..64,
+        edits in prop::collection::vec((any::<prop::sample::Index>(), any::<u8>()), 1..6),
+    ) {
+        let vectors = golden();
+        let (_, _, wire) = &vectors[which % vectors.len()];
+        let mut bytes = wire.clone().into_bytes();
+        for (at, b) in edits {
+            let i = at.index(bytes.len());
+            bytes[i] = b" {}[],:\"0123456789abcdefnulltrue"[b as usize % 32];
+        }
+        let Ok(text) = String::from_utf8(bytes) else { return Ok(()) };
+        if let Ok(env) = serde_json::from_str::<SessionEventEnvelope>(&text) {
+            let out = serde_json::to_string(&env).unwrap();
+            prop_assert_eq!(out.as_str(), text.trim(), "accepted text is re-emitted exactly");
+            let back: SessionEventEnvelope = serde_json::from_str(&out).unwrap();
+            prop_assert_eq!(serde_json::to_string(&back).unwrap(), out);
+        }
+    }
+}

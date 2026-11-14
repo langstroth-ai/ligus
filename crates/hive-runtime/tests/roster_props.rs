@@ -223,3 +223,65 @@ fn an_ex_members_events_are_refused_at_ingest() {
     sign_envelope(&mut fresh, Uuid::new_v4(), &SigningKeypair::generate().unwrap());
     assert_eq!(verdict_for(&roster, &fresh), Verdict::Unverifiable(QuarantineReason::UncertifiedDevice));
 }
+
+proptest! {
+    /// Delivery with duplicates and in any order converges: two stores that
+    /// ingest the same events (one in order, one shuffled with repeats) hold
+    /// the same rows and fold the same config and chat.
+    #[test]
+    fn prop_duplicate_and_reordered_delivery_converge(dups in prop::collection::vec(0usize..64, 0..24), seed in any::<u64>()) {
+        use hive_runtime::event_store::EventStore;
+        let (owner, mara) = (Principal::new("owner"), Principal::new("mara"));
+        let ws = Uuid::new_v4();
+        let mut events = workspace(ws, &owner, &[&mara]);
+        let head = |evs: &[SessionEventEnvelope]| evs.iter().map(|e| hive_core::CfgFrontier { lamport: e.lamport, event_id: e.event_id }).max();
+        let f = head(&events);
+        let sid = Uuid::new_v4();
+        let mut chat = ChatSession::new("c", ws, "x");
+        chat.id = sid;
+        chat.creator_actor_id = owner.account_id.to_string();
+        chat.members = vec![owner.member(WorkspaceRole::Owner)];
+        let in_chat = |p: &Principal, l: u64, payload: SessionEvent| {
+            let mut e = SessionEventEnvelope::new(sid, ws, l as i64, payload);
+            e.lamport = l;
+            e.actor_stamp = Some(ActorStamp { actor: p.actor(), recorded_at: Timestamp::epoch(), cfg_frontier: f });
+            sign_envelope(&mut e, p.device_id, &p.device);
+            e
+        };
+        let pid = Uuid::new_v4();
+        let mut prop = hive_core::ActionProposal::new("p", hive_core::ProposalKind::Decision, "planner");
+        prop.id = pid;
+        events.push(in_chat(&owner, 200, SessionEvent::SessionSnapshot { session: Box::new(chat) }));
+        events.push(in_chat(&mara, 201, SessionEvent::ProposalUpserted { proposal: prop }));
+        for (i, p) in [&owner, &mara].iter().enumerate() {
+            let vote = SessionEvent::ProposalVoteCast {
+                proposal_id: pid,
+                approval: hive_core::ProposalApproval { actor_id: p.account_id.to_string(), role: WorkspaceRole::Viewer, approved: i == 0, created_at: Timestamp::epoch(), diff_digest: None },
+            };
+            events.push(in_chat(p, 202 + i as u64, vote));
+        }
+        let mut delivery = events.clone();
+        for d in &dups {
+            delivery.push(events[d % events.len()].clone());
+        }
+        let mut rng = seed | 1;
+        for i in (1..delivery.len()).rev() {
+            rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17;
+            delivery.swap(i, (rng % (i as u64 + 1)) as usize);
+        }
+        let fold = |evs: &[SessionEventEnvelope]| {
+            let mut store = EventStore::open_in_memory().unwrap();
+            for e in evs {
+                // Through the wire, as sync delivers it.
+                let back: SessionEventEnvelope = serde_json::from_str(&serde_json::to_string(e).unwrap()).unwrap();
+                store.ingest(&back).unwrap();
+            }
+            let (cfg, timeline) = store.load_config(ws, None, None).unwrap();
+            let chat = store.load_session_authorized(sid, None, None, hive_core::WorkspaceAuthz::Timeline(&timeline)).unwrap();
+            (cfg.map(|c| c.members), chat.map(|c| (c.proposals, c.authz.held)), store.list(sid).unwrap().len())
+        };
+        let a = fold(&events);
+        prop_assert_eq!(a.2, 4);
+        prop_assert_eq!(&a, &fold(&delivery));
+    }
+}

@@ -1077,6 +1077,37 @@ mod tests {
         assert_eq!(eng.cursor(), 2, "skipped for good, not retried");
     }
 
+    /// A 2.0 build receives a signed envelope a newer "2.1 encoder" made (an
+    /// extra top-level field, a new event kind with nested data): it verifies,
+    /// is stored byte for byte, and goes back out byte for byte on re-push.
+    #[test]
+    fn a_newer_builds_envelope_is_stored_and_re_pushed_byte_identically() {
+        let kp = hive_core::SigningKeypair::from_seed(&[11u8; 32]).unwrap();
+        let (sid, wid) = (Uuid::new_v4(), Uuid::new_v4());
+        let base = SessionEventEnvelope::new(sid, wid, 1, SessionEvent::MessageRemoved { message_id: Uuid::nil() });
+        let mut v = serde_json::to_value(&base).unwrap();
+        v["payload"] = serde_json::json!({"kind": "zz21Kind", "nested": {"b": [1, 2.5, "✓"], "a": null}});
+        v["zz21Field"] = serde_json::json!({"z": 1, "y": "two"});
+        let mut env: SessionEventEnvelope = serde_json::from_str(&v.to_string()).unwrap();
+        hive_core::sign_envelope(&mut env, Uuid::from_u128(3), &kp);
+        // The 2.1 encoder's exact bytes, with its own spacing.
+        let wire = serde_json::to_string(&env).unwrap().replacen("\"zz21Field\":", "\"zz21Field\" : ", 1);
+
+        let key = hive_core::derive_workspace_key("newer build");
+        let sealed = hive_core::seal_symmetric(&key, 0, wire.as_bytes()).unwrap();
+        let mut store = EventStore::open_in_memory().unwrap();
+        let mut eng = SyncEngine::unscoped(RelayClient::new("http://127.0.0.1:0"), Uuid::new_v4().to_string()).with_key(key);
+        assert_eq!(eng.apply_fetched(&mut store, &[(1, serde_json::to_value(&sealed).unwrap())]).unwrap(), 1);
+
+        let stored = store.list(sid).unwrap().remove(0);
+        assert_eq!(stored.payload, SessionEvent::Unknown, "this build doesn't know the kind");
+        assert!(hive_core::verify_envelope(&stored, &kp.public_key_bytes()).is_ok());
+        assert_eq!(serde_json::to_string(&stored).unwrap(), wire, "stored byte for byte");
+        // Re-push: what the relay gets opens to the very same bytes.
+        let out: hive_core::SealedEnvelope = serde_json::from_value(eng.encode(&stored).unwrap()).unwrap();
+        assert_eq!(hive_core::open_symmetric(&key, &out).unwrap(), wire.as_bytes());
+    }
+
     #[test]
     fn malformed_body_is_skipped_and_cursor_advances_past_it() {
         // A garbage `{"ciphertext":1}` (hostile or corrupt) sitting between two
