@@ -138,6 +138,10 @@ export function parseSettingsTab(raw: string | undefined | null): SettingsTab {
   }
 }
 
+// The tab Settings last showed, so ⌘, reopens where you were.
+let rememberedTab: SettingsTab = "account";
+export const lastSettingsTab = () => rememberedTab;
+
 /// Settings, presented as a focus-trapped sheet over the workspace (§6.5/§5.7).
 /// It composes `Modal` from ui.tsx for the scrim + Escape/click-away + trap.
 /// Nav is grouped and searchable; every section applies its changes immediately.
@@ -158,7 +162,12 @@ export function SettingsView({
   initialTab?: SettingsTab;
   onClose: () => void;
 }) {
-  const [tab, setTab] = useState<SettingsTab>(initialTab ?? "account");
+  const [tab, setTabState] = useState<SettingsTab>(initialTab ?? rememberedTab);
+  const setTab = (t: SettingsTab) => {
+    rememberedTab = t;
+    setTabState(t);
+  };
+  rememberedTab = tab;
   const [query, setQuery] = useState("");
 
   const filtered = useMemo(() => {
@@ -235,7 +244,9 @@ export function SettingsView({
             <IconX size={18} />
           </IconButton>
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+        {/* Keyed by tab: each tab opens at its top instead of inheriting the
+            previous tab's scroll offset. */}
+        <div key={tab} className="hive-enter min-h-0 flex-1 overflow-y-auto px-6 py-5">
           {tab === "account" && <AccountSection />}
           {tab === "appearance" && (
             <AppearanceSection

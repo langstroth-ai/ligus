@@ -37,7 +37,7 @@ const DiffView = lazy(() => import("@/components/DiffView").then((m) => ({ defau
 // Lazy so Monaco + xterm (the code view's heavy deps) only load when it opens.
 const CodeView = lazy(() => import("@/components/editor/CodeView").then((m) => ({ default: m.CodeView })));
 import type { CodeViewIntent } from "@/components/editor/CodeView";
-import { SettingsView, parseSettingsTab, type SettingsTab } from "@/components/SettingsView";
+import { SettingsView, lastSettingsTab, parseSettingsTab, type SettingsTab } from "@/components/SettingsView";
 import { RightRail } from "@/components/RightRail";
 import { Onboarding } from "@/components/Onboarding";
 import { Tour, type TourStep } from "@/components/Tour";
@@ -137,8 +137,8 @@ export function App() {
 
   // Open the Settings sheet on a given tab. Accepts new ids, legacy names, or a
   // deep-link fragment (parseSettingsTab normalizes them).
-  function openSettings(tab: string = "account") {
-    setSettingsTab(parseSettingsTab(tab));
+  function openSettings(tab?: string) {
+    setSettingsTab(tab ? parseSettingsTab(tab) : lastSettingsTab());
     setSettingsNonce((n) => n + 1);
     setSettingsOpen(true);
   }
