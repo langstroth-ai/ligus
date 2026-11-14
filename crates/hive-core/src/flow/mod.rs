@@ -402,6 +402,13 @@ pub struct FlowState {
 
 /// Fold cap on summaries kept per agent.
 pub const MAX_SUMMARIES_PER_AGENT: usize = 400;
+/// Cap on any one count in a summary (turns, per-class counts) and on its
+/// per-summary samples: a host doesn't run more turns of one agent in a day.
+pub const MAX_SUMMARY_COUNT: u32 = 2_000;
+/// Cap on the distinct agent keys that carry summaries.
+pub const MAX_SUMMARY_AGENTS: usize = 256;
+/// Cap on a summary's estimated cost, in USD.
+pub const MAX_SUMMARY_COST_USD: f64 = 100_000.0;
 /// Cap on the task classes one summary carries.
 pub const MAX_SUMMARY_CLASSES: usize = 16;
 
@@ -448,6 +455,18 @@ fn is_zero(x: &f64) -> bool {
 impl AgentOutcomeSummary {
     /// Keep the class maps within [`MAX_SUMMARY_CLASSES`] (the busiest classes).
     pub fn bounded(mut self) -> Self {
+        // Counts and cost come off the wire: clamp them so one summary can't
+        // inflate scores or make a scorer expand billions of samples.
+        self.turns = self.turns.min(MAX_SUMMARY_COUNT);
+        self.accepted = self.accepted.min(MAX_SUMMARY_COUNT);
+        self.reverted = self.reverted.min(MAX_SUMMARY_COUNT);
+        self.rejected = self.rejected.min(MAX_SUMMARY_COUNT);
+        for m in [&mut self.task_class_counts, &mut self.errors_by_class, &mut self.tests_passed_by_class, &mut self.tests_failed_by_class] {
+            for v in m.values_mut() {
+                *v = (*v).min(MAX_SUMMARY_COUNT);
+            }
+        }
+        self.cost_usd = if self.cost_usd.is_finite() { self.cost_usd.clamp(0.0, MAX_SUMMARY_COST_USD) } else { 0.0 };
         if self.task_class_counts.len() > MAX_SUMMARY_CLASSES {
             let mut by: Vec<(String, u32)> = self.task_class_counts.clone().into_iter().collect();
             by.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
@@ -544,6 +563,9 @@ impl FlowState {
             }
             FlowRecord::Beacon(b) => self.beacon = Some(b.clone()),
             FlowRecord::AgentOutcomeSummary(sum) => {
+                if !self.outcome_summaries.contains_key(&sum.agent_key) && self.outcome_summaries.len() >= MAX_SUMMARY_AGENTS {
+                    return;
+                }
                 let list = self.outcome_summaries.entry(sum.agent_key.clone()).or_default();
                 // One per (host, day): a re-emission replaces.
                 if let Some(slot) = list.iter_mut().find(|x| x.host_id == sum.host_id && x.window_start == sum.window_start) {

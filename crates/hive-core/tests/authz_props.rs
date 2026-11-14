@@ -1333,3 +1333,47 @@ fn only_its_author_rewrites_a_message() {
     let moderated = w.chat_push("ada", SessionEvent::MessageRemoved { message_id: m2id });
     assert_eq!(w.verdicts()[&moderated], Verdict::Allowed);
 }
+
+/// P0.5 summaries are synced by any Contributor, so the fold must keep them
+/// bounded and honest: (1) a summary's `hostId` is the device that signed
+/// it (another member can't replace a host's day, which is keyed by host);
+/// (2) counts and cost are clamped, so one event can't make every scorer
+/// expand billions of samples or push an agent's cost below zero; (3) the
+/// number of distinct agent keys is capped.
+#[test]
+fn outcome_summaries_are_bounded_and_bound_to_their_host() {
+    use hive_core::flow::score::{summary_outcomes, summary_turns_spent};
+    use hive_core::flow::{MAX_SUMMARY_AGENTS, MAX_SUMMARY_COUNT};
+    let mut w = World::new();
+    let push_signed = |w: &mut World, by: &str, signer: Uuid, v: serde_json::Value| {
+        let rec: FlowRecord = serde_json::from_value(v).unwrap();
+        w.cfg_push(by, SessionEvent::FlowRecorded { record: rec });
+        w.cfg.last_mut().unwrap().signer_device_id = Some(signer);
+    };
+    let host = Uuid::new_v4();
+    let other = Uuid::new_v4();
+    let sum = |host: Uuid, agent: &str, passed: u64, cost: f64| {
+        serde_json::json!({"type": "agentOutcomeSummary", "agentKey": agent, "hostId": host.to_string(), "windowStart": 0,
+            "turns": 5, "testsPassedByClass": {"code": passed}, "taskClassCounts": {"code": 5}, "costUsd": cost})
+    };
+    push_signed(&mut w, "mara", host, sum(host, "coder", 5, 1.0));
+    // Another member's device replays the host's (host, day) with fake numbers.
+    push_signed(&mut w, "ada", other, sum(host, "coder", 0, 999.0));
+    let cfg = w.config();
+    let kept = &cfg.flow.outcome_summaries["coder"];
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].tests_passed_by_class["code"], 5, "a summary for another host is refused");
+    // Amplification: one event with a huge count, and a negative cost.
+    let big = Uuid::new_v4();
+    push_signed(&mut w, "mara", big, sum(big, "coder", 3_000_000, -1.0e12));
+    let cfg = w.config();
+    let samples = summary_outcomes(&cfg.flow.outcome_summaries, "me");
+    assert!(samples.len() <= 2 * MAX_SUMMARY_COUNT as usize, "{} samples from two summaries", samples.len());
+    assert!(summary_turns_spent(&cfg.flow.outcome_summaries, "me").values().all(|(t, c)| *t >= 0.0 && *c >= 0.0 && c.is_finite()));
+    // Distinct agent keys are capped.
+    for i in 0..(MAX_SUMMARY_AGENTS + 10) {
+        let d = Uuid::new_v4();
+        push_signed(&mut w, "mara", d, sum(d, &format!("a{i}"), 1, 0.0));
+    }
+    assert!(w.config().flow.outcome_summaries.len() <= MAX_SUMMARY_AGENTS);
+}

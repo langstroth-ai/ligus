@@ -229,6 +229,14 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             if !bounds::flow_within_bounds(fold, record) {
                 return Decision::deny("flow state bound reached");
             }
+            // A daily outcome summary speaks for the device that signed it:
+            // the fold keys summaries by (agent, host, day), so another
+            // member's device must not replace or invent a host's numbers.
+            if let crate::flow::FlowRecord::AgentOutcomeSummary(sum) = record {
+                if env.signer_device_id.map(|d| d.to_string()).as_deref() != Some(sum.host_id.as_str()) {
+                    return Decision::deny("an outcome summary is signed by its own host");
+                }
+            }
         }
         _ => {}
     }

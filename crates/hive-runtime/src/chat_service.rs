@@ -4413,18 +4413,21 @@ mod flow_tests {
         let wid = Uuid::new_v4();
         let chat = svc.create_chat("A", wid, "rt").unwrap();
         let day = hive_core::flow::utc_day(1_760_000_000_000);
+        // The host is this device: a summary is signed by its own host.
+        let host = svc.device_id().to_string();
+        let turn = |agent: &str, at: i64, err: bool| hive_core::flow::TurnTag { host_id: host.clone(), ..turn(agent, at, err) };
         for (agent, err) in [("a", false), ("a", true), ("b", false)] {
             svc.record_flow(chat.id, wid, FlowRecord::TurnTagged(turn(agent, day + 1000, err))).unwrap();
         }
         // Today's turns wait for the day to end.
         svc.record_flow(chat.id, wid, FlowRecord::TurnTagged(turn("a", day + 86_400_000 + 5, false))).unwrap();
         let now = day + 86_400_000 + 10;
-        assert_eq!(svc.emit_daily_summaries(wid, "host-a", now).unwrap(), 2);
-        assert_eq!(svc.emit_daily_summaries(wid, "host-a", now).unwrap(), 0);
+        assert_eq!(svc.emit_daily_summaries(wid, &host, now).unwrap(), 2);
+        assert_eq!(svc.emit_daily_summaries(wid, &host, now).unwrap(), 0);
         let cfg = svc.flow_config(wid).unwrap();
         let a = &cfg.outcome_summaries["a"];
         assert_eq!(a.len(), 1);
-        assert_eq!((a[0].turns, a[0].window_start, a[0].host_id.as_str()), (2, day, "host-a"));
+        assert_eq!((a[0].turns, a[0].window_start, a[0].host_id.as_str()), (2, day, host.as_str()));
         assert_eq!(a[0].errors_by_class.get("code"), Some(&1));
         assert_eq!(flow_kinds(&svc, workspace_config_session_id(wid)), vec!["agentOutcomeSummary", "agentOutcomeSummary"]);
     }

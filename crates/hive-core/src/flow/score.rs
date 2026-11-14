@@ -196,7 +196,11 @@ pub fn turns_spent(sessions: &[ChatSession]) -> BTreeMap<(String, String), (f64,
 pub fn summary_outcomes(summaries: &BTreeMap<String, Vec<AgentOutcomeSummary>>, this_host: &str) -> Vec<OutcomeSample> {
     let mut out = Vec::new();
     for sum in summaries.values().flatten().filter(|s| s.host_id != this_host) {
+        // At most MAX_SUMMARY_COUNT samples per summary, whatever it claims.
+        let mut budget = super::MAX_SUMMARY_COUNT;
         let mut push = |class: &String, n: u32, quality: f64, success: bool, source: OutcomeSource| {
+            let n = n.min(budget);
+            budget -= n;
             for _ in 0..n {
                 out.push(OutcomeSample {
                     agent: sum.agent_key.clone(),
