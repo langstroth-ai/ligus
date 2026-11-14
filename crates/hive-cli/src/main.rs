@@ -11,7 +11,6 @@
 //!   LIGUS_DATA_DIR            where identity + hive.db live (default: $HOME/.ligus)
 //!   LIGUS_RELAY_URL           relay base URL (needed for `sync`/`send --push`)
 //!   LIGUS_RELAY_ACCESS_TOKEN  relay entitlement token (hrt1/hex), provisioned out-of-band
-//!   LIGUS_RELAY_GITHUB_TOKEN  optional, only on membership-enforcing relays
 //!   LIGUS_WORKSPACE           relay room / workspace (default: "default")
 //!   LIGUS_WORKSPACE_KEY       E2EE passphrase; omit for a plaintext relay
 //!
@@ -52,7 +51,6 @@ struct Config {
     data_dir: PathBuf,
     relay_url: Option<String>,
     token: Option<String>,
-    github_token: Option<String>,
     room: String,
     key: Option<String>,
     /// Epoch keys an invite delivered (B1 newcomer bootstrap).
@@ -173,7 +171,6 @@ fn config() -> Config {
         data_dir,
         relay_url: env_opt("LIGUS_RELAY_URL").or(f.relay_url),
         token: env_opt("LIGUS_RELAY_ACCESS_TOKEN").or(f.token),
-        github_token: env_opt("LIGUS_RELAY_GITHUB_TOKEN"),
         room: env_opt("LIGUS_WORKSPACE").or(f.room).unwrap_or_else(|| "default".into()),
         key: env_opt("LIGUS_WORKSPACE_KEY").or(f.key),
         epoch_keys: f.ek,
@@ -269,8 +266,7 @@ async fn cmd_join(cfg: &Config, code: &str) -> Result<()> {
         .ok_or_else(|| anyhow!("no relay — run `ligus enroll <invite>` or set LIGUS_RELAY_URL first"))?;
     let relay = RelayClient::new(&relay_url)
         .with_auth(cfg.token.clone())
-        .with_auth_cell(auth::cell())
-        .with_github_token(cfg.github_token.clone());
+        .with_auth_cell(auth::cell());
     match relay.join_via_invite(&cfg.room, code.trim(), "").await? {
         Some(role) => {
             println!("Joined workspace '{}' as {role}. Run `ligus sync`.", cfg.room);
@@ -358,8 +354,7 @@ fn relay_client(cfg: &Config) -> Result<RelayClient> {
         .ok_or_else(|| anyhow!("set LIGUS_RELAY_URL to sync"))?;
     Ok(RelayClient::new(&relay_url)
         .with_auth(cfg.token.clone())
-        .with_auth_cell(auth::cell())
-        .with_github_token(cfg.github_token.clone()))
+        .with_auth_cell(auth::cell()))
 }
 
 /// This box's keyring for its room (B1), from its store's pinned config fold:
@@ -424,8 +419,7 @@ async fn materialize_turns(cfg: &Config, turns: &mut [ChatTurn]) {
     }
     let relay = RelayClient::new(&relay_url)
         .with_auth(cfg.token.clone())
-        .with_auth_cell(auth::cell())
-        .with_github_token(cfg.github_token.clone());
+        .with_auth_cell(auth::cell());
     // The one keyring (B1): blobs sealed at any epoch this box holds open.
     let Some(ring) = box_ring(cfg) else { return };
     let cache = cfg.data_dir.join("attachments").join("blobs");
@@ -1696,7 +1690,6 @@ mod cli_tests {
             data_dir: tmp.path().join("data"),
             relay_url: None,
             token: None,
-            github_token: None,
             room: "r".into(),
             key: None,
             epoch_keys: Vec::new(),

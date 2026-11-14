@@ -976,16 +976,16 @@ fn pinned_store(w: &World) -> crate::EventStore {
     store
 }
 
-fn directory_device(id: &str, ka: &[u8]) -> crate::relay_client::DirectoryDevice {
-    crate::relay_client::DirectoryDevice { device_id: id.into(), ka_public: hive_core::keys::hex(ka) }
+fn recipient(id: &str, ka: [u8; 32]) -> crate::directory_trust::Recipient {
+    crate::directory_trust::Recipient { device_id: id.into(), ka_public: ka }
 }
 
-/// Track B residual 7: a directory key counts as verified only when a device
-/// certified for that very account published it, signed, on a config log
-/// this device holds with a founder pin. A key the relay substituted, a key
-/// another account published, and a revoked device's key are not.
+/// A co-member's key counts as verified only when a device certified for
+/// that very account published it, signed, on a config log this device holds
+/// with a founder pin. A key the relay substituted, a key another account
+/// published, and a revoked device's key are not.
 #[test]
-fn directory_keys_verified_only_from_a_certified_devices_publication() {
+fn co_member_keys_verified_only_from_a_certified_devices_publication() {
     use crate::directory_trust::signed_ka_keys;
     let mut w = World::new();
     let ada = w.people["ada"].account_id;
@@ -1007,26 +1007,87 @@ fn directory_keys_verified_only_from_a_certified_devices_publication() {
     assert!(!signed_ka_keys(&pinned_store(&w), ada).contains(&ada_ka), "a revoked device's key");
 }
 
-/// Track B residual 7: an invite or a DM is sealed only to verified devices
-/// when the invitee has any; with none, sealing needs the inviter's explicit
-/// confirmation (the UI's "unverified recipient" warning).
+/// S6 (`relay_substituted_ka_key_not_sealed_to`): an invite or a DM is sealed
+/// only to verified devices when the invitee has any; a key only the relay
+/// (or any other unchecked source) offers is left out, and with none
+/// verified, sealing needs the inviter's explicit confirmation.
 #[test]
-fn directory_seal_plan_prefers_verified_devices() {
+fn relay_substituted_ka_key_not_sealed_to() {
     use crate::directory_trust::{plan, UNVERIFIED_RECIPIENT};
     let w = World::new();
     let ada = w.people["ada"].account_id;
     let ada_ka = w.people["ada"].ka().public_key_bytes();
     let relay_ka = KeyAgreementKeypair::generate().unwrap().public_key_bytes();
     let signed = crate::directory_trust::signed_ka_keys(&pinned_store(&w), ada);
-    let listed = [directory_device("relay-added", &relay_ka), directory_device("ada-desk", &ada_ka), directory_device("bad", b"short")];
+    let listed = [recipient("relay-added", relay_ka), recipient("ada-desk", ada_ka)];
     let p = plan(&listed, &signed, false).unwrap();
     assert!(p.verified);
     assert_eq!(p.recipients.iter().map(|r| r.device_id.as_str()).collect::<Vec<_>>(), vec!["ada-desk"], "the relay's extra device is left out");
-    let stranger = [directory_device("relay-added", &relay_ka)];
+    let stranger = [recipient("relay-added", relay_ka)];
     let err = plan(&stranger, &signed, false).unwrap_err();
     assert!(err.starts_with(UNVERIFIED_RECIPIENT), "{err}");
     let p = plan(&stranger, &signed, true).unwrap();
     assert!(!p.verified);
     assert_eq!(p.recipients.len(), 1, "sealed after the inviter confirmed");
     assert!(plan(&[], &signed, false).unwrap().recipients.is_empty(), "no devices: nothing to seal, nothing to confirm");
+    // A co-member's own seal plan holds only keys from the config log.
+    let me = w.people["owner"].account_id;
+    let ada_entry = crate::directory_trust::co_members(&pinned_store(&w), me).into_iter().find(|c| c.account_id == ada).unwrap();
+    let p = ada_entry.seal_plan().unwrap();
+    assert!(p.verified);
+    assert_eq!(p.recipients.iter().map(|r| r.ka_public).collect::<Vec<_>>(), vec![ada_ka]);
+}
+
+/// Co-members come from the pinned config logs, keyed by their random
+/// account id, each with the safety code of the account key the log
+/// registers. Non-members (eve published keys but was never added) and this
+/// device's own account are left out.
+#[test]
+fn co_members_listed_with_verified_keys_and_safety_codes() {
+    let w = World::new();
+    let me = w.people["owner"].account_id;
+    let list = crate::directory_trust::co_members(&pinned_store(&w), me);
+    let names: Vec<&str> = list.iter().map(|c| c.display_name.as_str()).collect();
+    assert_eq!(list.len(), 2, "{names:?}");
+    for name in ["ada", "mara"] {
+        let p = &w.people[name];
+        let c = list.iter().find(|c| c.account_id == p.account_id).unwrap();
+        let fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&p.account.public_key_bytes());
+        assert_eq!(c.fingerprint.as_deref(), Some(fk.as_str()));
+        assert_eq!(c.safety_code().unwrap().replace(' ', ""), fk);
+        assert!(!c.key_conflict);
+        assert_eq!(c.workspaces, vec![w.wid]);
+        assert_eq!(c.devices.len(), 1);
+    }
+}
+
+/// Impersonation via a name: a second member who calls themself "ada" is a
+/// separate co-member with their own account id and safety code, and a DM
+/// invite that names ada's account but carries the impostor's key
+/// fingerprint is refused.
+#[test]
+fn impersonation_by_display_name_is_a_different_co_member() {
+    let mut w = World::new();
+    w.people.insert("impostor", Person::new());
+    w.publish_identity("impostor");
+    let mut m = member("impostor", &w.people["impostor"], WorkspaceRole::Contributor);
+    m.actor.display_name = "ada".into();
+    w.push("owner", SessionEvent::MemberAdded { member: m, invite: None });
+    let me = w.people["owner"].account_id;
+    let store = pinned_store(&w);
+    let list = crate::directory_trust::co_members(&store, me);
+    let adas: Vec<_> = list.iter().filter(|c| c.display_name == "ada").collect();
+    assert_eq!(adas.len(), 2, "same name, two accounts");
+    assert_ne!(adas[0].account_id, adas[1].account_id);
+    assert_ne!(adas[0].fingerprint, adas[1].fingerprint);
+    // An invite claiming to be from ada's account with the impostor's key.
+    let ada = &w.people["ada"];
+    let impostor_fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&w.people["impostor"].account.public_key_bytes());
+    let known = crate::dm::known_fingerprints(&list);
+    assert_eq!(
+        crate::dm::check_founder(Some(&ada.account_id.to_string()), Some(&impostor_fk), &known),
+        crate::dm::FounderTrust::Mismatch
+    );
+    let ada_fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&ada.account.public_key_bytes());
+    assert_eq!(crate::dm::check_founder(Some(&ada.account_id.to_string()), Some(&ada_fk), &known), crate::dm::FounderTrust::KnownMatch);
 }

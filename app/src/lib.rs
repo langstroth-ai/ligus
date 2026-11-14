@@ -45,6 +45,7 @@ mod data_migration;
 mod flow;
 mod ligus_auth_ui;
 mod passkey_ui;
+mod people;
 mod agent_iface;
 /// In-app live test support (see `tests/app_live.rs`); not in release builds.
 #[cfg(feature = "e2e")]
@@ -347,16 +348,6 @@ struct LiveSettings {
     /// this device when revoking a member. Distinct from `p2p_secret` (iroh).
     #[serde(default)]
     ka_secret: Option<String>,
-    /// Signed-in GitHub account (the Hive account identity). Same account across
-    /// this user's devices; each device keeps its own keypairs.
-    #[serde(default)]
-    github_account: Option<hive_runtime::github::GithubAccount>,
-    /// GitHub access token (device-flow), for authenticated directory calls.
-    #[serde(default)]
-    github_token: Option<String>,
-    /// OAuth App client id for the device flow (env LIGUS_GITHUB_CLIENT_ID wins).
-    #[serde(default)]
-    github_client_id: Option<String>,
     /// Per-provider API keys, keyed by provider name (see `provider_config_name`):
     /// "anthropic", "openAI", "openRouter", "custom". Lets multiple providers
     /// have distinct keys (vs the single legacy `api_key`).
@@ -371,10 +362,16 @@ struct LiveSettings {
     /// this list on load.
     #[serde(default)]
     workspaces: Vec<WorkspaceConn>,
-    /// Inbox seqs of workspace invites the user dismissed, so they stay hidden
-    /// from the Pending-invites list.
-    #[serde(default)]
-    dismissed_invites: Vec<u64>,
+    /// Rooms of direct messages archived by the simultaneous-open rule
+    /// (owner decision D12): read-only, linked from the DM that was kept.
+    /// Device-local; every device computes the same set.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    archived_dms: Vec<String>,
+    /// This device's contact on its relays (relay v0.3 `/v1/contacts/`):
+    /// where co-members drop invites sealed to it. Device-local; the write
+    /// key goes to the OS secret store.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    contact: Option<people::OwnContact>,
     /// Reusable agent definitions (a persona = name + model/runtime + role +
     /// instructions) the user can attach to any chat.
     #[serde(default)]
@@ -549,13 +546,11 @@ impl Default for LiveSettings {
             git_email: None,
             p2p_secret: None,
             ka_secret: None,
-            github_account: None,
-            github_token: None,
-            github_client_id: None,
             provider_keys: std::collections::HashMap::new(),
             provider_base_urls: std::collections::HashMap::new(),
             workspaces: Vec::new(),
-            dismissed_invites: Vec::new(),
+            archived_dms: Vec::new(),
+            contact: None,
             agent_templates: Vec::new(),
             local_workspace_icon: None,
             schedules: Vec::new(),
@@ -598,12 +593,15 @@ struct WorkspaceConn {
     /// Optional workspace icon as a `data:` URL, set by an owner/admin.
     #[serde(default)]
     icon: Option<String>,
-    /// When set, this workspace is a 1:1 direct message with that friend's
-    /// account key (`github:<id>`). DMs are kept out of the workspace rail and
-    /// surfaced in the Friends section instead.
+    /// When set, this workspace is a 1:1 direct message. In an invite it names
+    /// the account id the DM is addressed to; in this device's settings, the
+    /// other person's account id. Account ids are random UUIDs, never derived
+    /// from a public identifier (see `hive_runtime::dm`). DMs are kept out of
+    /// the workspace rail and surfaced under People instead.
     #[serde(default)]
     dm_account: Option<String>,
-    /// The account id (`github:<id>`) that legitimately founded this workspace —
+    /// The account id that legitimately founded this workspace (for a DM, the
+    /// person who opened it) —
     /// the out-of-band trust anchor for projection's base-seed selection (B2
     /// residual fix). The founder embeds their own id when generating the
     /// `hivews1:` invite (`workspace_invite`/`create_workspace`); a joiner records
@@ -691,7 +689,7 @@ mod workspace_invite_tests {
             key: Some("hunter2".into()),
             icon: None,
             dm_account: None,
-            founder_actor_id: Some("github:42".into()),
+            founder_actor_id: Some("6f1c2d3e-0000-4000-8000-000000000042".into()),
             fk: Some("00112233445566778899aabbccddeeff".into()),
             inv: None,
             ek: Vec::new(),
@@ -702,7 +700,7 @@ mod workspace_invite_tests {
         assert_eq!(back, conn);
         // The founder pin (B2 anchor) survives the round trip so a joiner learns
         // who legitimately founded the workspace, and with which key.
-        assert_eq!(back.founder_actor_id.as_deref(), Some("github:42"));
+        assert_eq!(back.founder_actor_id.as_deref(), Some("6f1c2d3e-0000-4000-8000-000000000042"));
         assert_eq!(back.fk.as_deref(), Some("00112233445566778899aabbccddeeff"));
         // Without a key fingerprint the invite JSON keeps its old shape.
         let plain = WorkspaceConn { fk: None, ..conn };
@@ -757,38 +755,10 @@ mod workspace_invite_tests {
         assert_eq!(back.founder_actor_id, None);
     }
 
-    /// The friend's side of a DM (no key yet) adopts a delivered key only
-    /// from the friend it is a DM with: the inbox accepts invites from anyone,
-    /// and the DM room is derived from two public account ids, so anyone
-    /// could otherwise deliver their own key first and read what this side
-    /// writes.
-    #[test]
-    fn dm_key_is_adopted_only_from_the_dm_friend() {
-        let pending = || WorkspaceConn {
-            name: "ana".into(),
-            relay_url: "x".into(),
-            room: "dm-0123".into(),
-            key: None,
-            icon: None,
-            dm_account: Some("github:7".into()),
-            founder_actor_id: Some("github:7".into()),
-            fk: None,
-            inv: None,
-            ek: Vec::new(),
-        };
-        let delivered = WorkspaceConn { key: Some("mallory-chose-this".into()), dm_account: None, ..pending() };
-        let mut w = pending();
-        assert!(!adopt_dm_key(&mut w, &delivered, "mallory"), "a stranger's invite named the DM room");
-        assert_eq!(w.key, None);
-        assert!(adopt_dm_key(&mut w, &delivered, "Ana"), "the friend's own delivery (login case-insensitive)");
-        assert!(w.key.is_some());
-        assert!(!adopt_dm_key(&mut w, &delivered, "ana"), "only once");
-    }
-
     #[test]
     fn same_room_shares_workspace_id() {
         let a = WorkspaceConn { name: "A".into(), relay_url: "x".into(), room: "shared".into(), key: None, icon: None, dm_account: None, founder_actor_id: None, fk: None, inv: None, ek: Vec::new() };
-        let b = WorkspaceConn { name: "B".into(), relay_url: "y".into(), room: "shared".into(), key: Some("k".into()), icon: None, dm_account: None, founder_actor_id: Some("github:1".into()), fk: None, inv: None, ek: Vec::new() };
+        let b = WorkspaceConn { name: "B".into(), relay_url: "y".into(), room: "shared".into(), key: Some("k".into()), icon: None, dm_account: None, founder_actor_id: Some(Uuid::new_v4().to_string()), fk: None, inv: None, ek: Vec::new() };
         assert_eq!(a.id(), b.id());
     }
 
@@ -827,7 +797,7 @@ mod workspace_invite_tests {
             key: Some(random_token(24)),
             icon: None,
             dm_account: None,
-            founder_actor_id: Some("github:7".into()),
+            founder_actor_id: Some(Uuid::new_v4().to_string()),
             fk: None,
             inv: None,
             ek: Vec::new(),
@@ -854,24 +824,6 @@ mod workspace_invite_tests {
         assert_eq!(room_workspace_id(" team-alpha "), room_workspace_id("team-alpha"));
     }
 
-    /// S5 #2 friend DMs: both peers derive the identical room regardless of argument
-    /// order, and the room no longer leaks the participants' account ids in cleartext
-    /// (not the old enumerable `dm-<a>-<b>` plaintext).
-    #[test]
-    fn dm_room_is_symmetric_and_opaque() {
-        let a = "github:1001";
-        let b = "github:2002";
-        // Same room whichever side computes it, and whichever order args arrive in.
-        assert_eq!(dm_room_for(a, b), dm_room_for(b, a));
-        assert_eq!(dm_room_for("1001", "github:2002"), dm_room_for(a, b));
-        // Opaque: neither account id appears in the room string.
-        let room = dm_room_for(a, b);
-        assert!(!room.contains("1001") && !room.contains("2002"));
-        assert_ne!(room, "dm-1001-2002", "must not be the guessable plaintext");
-        assert!(room.starts_with("dm-"));
-        // Different pairs ⇒ different rooms.
-        assert_ne!(dm_room_for(a, b), dm_room_for(a, "github:3003"));
-    }
 }
 
 impl LiveSettings {
@@ -941,7 +893,6 @@ const SETTINGS_SECRETS: hive_runtime::secret_store::SecretPaths = &[
     "api_key",
     "p2p_secret",
     "ka_secret",
-    "github_token",
     "provider_keys/*",
     "mcp_oauth/*/accessToken",
     "mcp_oauth/*/refreshToken",
@@ -949,6 +900,7 @@ const SETTINGS_SECRETS: hive_runtime::secret_store::SecretPaths = &[
     "mcp_bearer_tokens/*",
     "workspaces[room]/key",
     "workspaces[room]/ek",
+    "contact/write_key",
 ];
 
 fn save_settings(data_dir: &std::path::Path, settings: &LiveSettings) {
@@ -4321,52 +4273,6 @@ fn add_member(
     svc.add_member(id, state.active_workspace_id(), member).map_err(map_err)
 }
 
-/// Enterprise (#143): import a GitHub org's Teams as workspace members, mapping
-/// team membership → roles (highest wins). Needs a signed-in GitHub token with
-/// `read:org`. Idempotent — existing members (by stable account id) are skipped.
-#[tauri::command]
-async fn import_github_teams(
-    state: State<'_, AppState>,
-    session_id: String,
-    org: String,
-) -> Result<u32, String> {
-    let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
-    let token = state
-        .settings
-        .lock()
-        .unwrap()
-        .github_token
-        .clone()
-        .filter(|t| !t.is_empty())
-        .ok_or("sign in to GitHub first (Settings → Account)")?;
-    let roster = hive_runtime::github::resolve_org_roster(&token, &org)
-        .await
-        .map_err(|e| e.to_string())?;
-    let ws = state.active_workspace_id();
-    let mut svc = state.service.lock().unwrap();
-    let session = svc.load(sid).map_err(map_err)?.ok_or("unknown session")?;
-    let mut next_index = session.members.iter().map(|m| m.index).max().unwrap_or(0);
-    let mut added = 0u32;
-    for om in roster {
-        let account_id = hive_runtime::github::account_id_for(om.github_user_id).to_string();
-        if session.members.iter().any(|m| m.id == account_id) {
-            continue; // already imported
-        }
-        next_index += 1;
-        let member = WorkspaceMember {
-            id: account_id.clone(),
-            actor: ActorIdentity::new(account_id, om.login, ActorKind::Human),
-            role: om.role,
-            title: String::new(),
-            index: next_index,
-            joined_at: hive_core::Timestamp::now(),
-        };
-        svc.add_member(sid, ws, member).map_err(map_err)?;
-        added += 1;
-    }
-    Ok(added)
-}
-
 #[tauri::command(async)]
 fn remove_member(state: State<AppState>, session_id: String, member_id: String) -> Result<(), String> {
     let id = Uuid::parse_str(&session_id).map_err(map_err)?;
@@ -6418,19 +6324,10 @@ impl AppState {
         ligus_auth_ui::effective(s.relay_url.as_deref(), s.relay_access_token.clone())
     }
 
-    /// The caller's GitHub identity token, attached as `X-Hive-Github-Token` so a
-    /// membership-enforcing relay can authenticate the caller. `None` if not
-    /// signed in (open relays ignore it).
-    fn github_token(&self) -> Option<String> {
-        self.settings.lock().unwrap().github_token.clone()
-    }
-
-    /// A relay client for `url` carrying both the entitlement bearer and the
-    /// GitHub identity token from settings.
+    /// A relay client for `url` carrying the entitlement bearer. No forge
+    /// token ever goes to a relay.
     fn relay_client(&self, url: &str) -> hive_runtime::RelayClient {
-        hive_runtime::RelayClient::new(url)
-            .with_auth(self.relay_token())
-            .with_github_token(self.github_token())
+        hive_runtime::RelayClient::new(url).with_auth(self.relay_token())
     }
 
     /// The workspace new chats are stamped with / the chat list is scoped to.
@@ -8919,6 +8816,12 @@ async fn send_message(
     let stop = state.turn_stops.lock().unwrap().entry(sid).or_default().clone();
 
     // Record the user turn, then decide who (if anyone) answers it.
+    // An archived DM (two were opened at once; the other was kept) is
+    // read-only. Checked before taking the service lock.
+    let ws_of_chat = state.service.lock().unwrap().load(sid).ok().flatten().map(|c| c.workspace_id);
+    if ws_of_chat.is_some_and(|w| people::is_archived_dm(&state, w)) {
+        return Err("This conversation was archived: two DMs were opened at once and the other one was kept. Write there.".into());
+    }
     let (workspace_id, trigger_id, mut next_target) = {
         let mut svc = state.service.lock().unwrap();
         let session = svc.load(sid).map_err(map_err)?.ok_or("unknown session")?;
@@ -9231,13 +9134,13 @@ fn plan_response(state: &AppState, sid: Uuid, trigger: Option<Uuid>) -> Result<O
         },
     };
     // In a solo workspace (≤1 human) there is no *other* device to defer the
-    // turn to, so this device always answers — regardless of the responder's
-    // recorded owner. Without this, a churned local identity (e.g. the author
-    // id changes from a device/anon id to the GitHub account id on sign-in,
-    // via `set_author_account`) leaves a chat whose `creator_actor_id` no
-    // longer matches `local_actor_id`: `owns_responder` returns false and the
-    // primary silently never answers ("thinking…" forever, nothing logged).
-    // The cross-device ownership split only matters in a real multi-human room.
+    // turn to, so this device always answers, whatever the responder's
+    // recorded owner. The account id no longer changes after first launch
+    // (no provider sign-in switches it), but a chat can still carry an owner
+    // id this device doesn't use (a chat created before an enrollment moved
+    // this device into another account, or an imported one); without this
+    // rule the primary would silently never answer. The cross-device
+    // ownership split only matters in a real multi-human room.
     let local_only = state.is_local_only_ws(session.workspace_id);
     let links = device_links_of(&svc, session.workspace_id);
     let runs_here = |responder: &Responder| {
@@ -11232,13 +11135,11 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         git_email: None,
         p2p_secret: None,
         ka_secret: None,
-        github_account: None,
-        github_token: None,
-        github_client_id: None,
         provider_keys: std::collections::HashMap::new(),
         provider_base_urls: std::collections::HashMap::new(),
         workspaces: Vec::new(),
-        dismissed_invites: Vec::new(),
+        archived_dms: Vec::new(),
+        contact: None,
         agent_templates: Vec::new(),
         local_workspace_icon: None,
         schedules: Vec::new(),
@@ -11298,12 +11199,9 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
             kp
         });
         service.set_author_key_agreement_public(Some(kp.public_key_bytes().to_vec()));
-    }
-
-    // If signed in to GitHub, bind the local actor to that account identity so
-    // the same person is recognized as one member across all their devices.
-    if let Some(acct) = settings.lock().unwrap().github_account.clone() {
-        service.set_author_account(acct.account_id().to_string(), acct.display_name(), acct.email.clone());
+        // This device's contact id rides on what it stamps once a relay holds
+        // its record, so co-members can deliver invites to its drop box.
+        service.set_author_contact(people::announced_cid(&s));
     }
 
     // Ensure a stable local workspace id, and record the configured room (if
@@ -11639,7 +11537,7 @@ async fn fire_schedule(app: &AppHandle, sched: &ScheduledAgentConfig) -> Result<
 /// a Settings edit (connect / reconnect / go local-only) takes effect promptly
 /// without a per-tick network poll. (Remote *key rotations* are picked up on the
 /// heartbeat re-entry, which re-fetches the keyring.)
-type LocalSyncSig = (Option<String>, String, Option<[u8; 32]>, Option<String>, Option<String>);
+type LocalSyncSig = (Option<String>, String, Option<[u8; 32]>, Option<String>);
 
 fn read_local_sync_sig(settings: &Arc<Mutex<LiveSettings>>) -> LocalSyncSig {
     let s = settings.lock().unwrap();
@@ -11648,7 +11546,6 @@ fn read_local_sync_sig(settings: &Arc<Mutex<LiveSettings>>) -> LocalSyncSig {
         s.sync_room.clone(),
         s.workspace_key(),
         ligus_auth_ui::effective(s.relay_url.as_deref(), s.relay_access_token.clone()),
-        s.github_token.clone(),
     )
 }
 
@@ -11805,14 +11702,13 @@ async fn run_sync_loop(app: AppHandle, settings: Arc<Mutex<LiveSettings>>, db_pa
     let mut next_sse_attempt = std::time::Instant::now();
     let mut sse_unsupported: Option<ConnSig> = None;
     loop {
-        let (relay_url, room, passphrase_key, access_token, github_token) = {
+        let (relay_url, room, passphrase_key, access_token) = {
             let s = settings.lock().unwrap();
             (
                 s.relay_url.clone(),
                 s.sync_room.clone(),
                 s.workspace_key(),
                 ligus_auth_ui::effective(s.relay_url.as_deref(), s.relay_access_token.clone()),
-                s.github_token.clone(),
             )
         };
         match relay_url {
@@ -11833,9 +11729,7 @@ async fn run_sync_loop(app: AppHandle, settings: Arc<Mutex<LiveSettings>>, db_pa
                 if changed {
                     let src = key_source_for(&app.state::<AppState>(), conn.as_ref());
                     let mut e = hive_runtime::SyncEngine::new(
-                        hive_runtime::RelayClient::new(&url)
-                            .with_auth(access_token.clone())
-                            .with_github_token(github_token.clone()),
+                        hive_runtime::RelayClient::new(&url).with_auth(access_token.clone()),
                         room.clone(),
                     )
                     .with_key_source(src);
@@ -11903,9 +11797,7 @@ async fn run_sync_loop(app: AppHandle, settings: Arc<Mutex<LiveSettings>>, db_pa
                 let sse_known_unsupported = sse_unsupported.as_ref() == Some(&sig);
                 let mut stream: Option<hive_runtime::SseStream> = None;
                 if !sse_known_unsupported && std::time::Instant::now() >= next_sse_attempt {
-                    let client = hive_runtime::RelayClient::new(&url)
-                        .with_auth(access_token.clone())
-                        .with_github_token(github_token.clone());
+                    let client = hive_runtime::RelayClient::new(&url).with_auth(access_token.clone());
                     match client.open_event_stream(&room).await {
                         Ok(s) => {
                             sse_attempt = 0; // fresh, successful connection
@@ -12086,13 +11978,11 @@ struct RelayProbeDto {
     detail: String,
 }
 
-/// Probe a specific relay URL + token (the caller's GitHub token is attached
-/// from settings). Shared by `probe_relay` (configured) and `probe_relay_at`
+/// Probe a specific relay URL + token. Shared by `probe_relay` (configured) and `probe_relay_at`
 /// (a URL/token being entered in onboarding/settings, before it's saved).
 async fn probe_relay_inner(
     url: String,
     token: Option<String>,
-    github: Option<String>,
     room: String,
 ) -> RelayProbeDto {
     if url.trim().is_empty() {
@@ -12104,7 +11994,6 @@ async fn probe_relay_inner(
     let workspace = if room.trim().is_empty() { "_probe".to_string() } else { room };
     let probe = hive_runtime::RelayClient::new(url)
         .with_auth(token)
-        .with_github_token(github)
         .probe(&workspace)
         .await;
     match probe {
@@ -12132,32 +12021,28 @@ async fn probe_relay_inner(
 /// a URL is set, not whether it works.
 #[tauri::command]
 async fn probe_relay(state: State<'_, AppState>) -> Result<RelayProbeDto, String> {
-    let (url, token, github, room) = {
+    let (url, token, room) = {
         let s = state.settings.lock().unwrap();
         (
             s.relay_url.clone().unwrap_or_default(),
             ligus_auth_ui::effective(s.relay_url.as_deref(), s.relay_access_token.clone()),
-            s.github_token.clone(),
             s.sync_room.clone(),
         )
     };
-    Ok(probe_relay_inner(url, token, github, room).await)
+    Ok(probe_relay_inner(url, token, room).await)
 }
 
 /// Probe a URL + token the user is *entering* (onboarding / Settings), before
 /// committing it — so the flow can validate a relay connection and only save a
-/// working one. The GitHub identity comes from settings.
+/// working one.
 #[tauri::command]
 async fn probe_relay_at(
     state: State<'_, AppState>,
     url: String,
     access_token: Option<String>,
 ) -> Result<RelayProbeDto, String> {
-    let (github, room) = {
-        let s = state.settings.lock().unwrap();
-        (s.github_token.clone(), s.sync_room.clone())
-    };
-    Ok(probe_relay_inner(url, access_token.filter(|t| !t.trim().is_empty()), github, room).await)
+    let room = state.settings.lock().unwrap().sync_room.clone();
+    Ok(probe_relay_inner(url, access_token.filter(|t| !t.trim().is_empty()), room).await)
 }
 
 /// The selectable workspaces: always "My workspace" (local), plus the joined
@@ -12390,6 +12275,16 @@ fn create_workspace(state: State<AppState>, name: String) -> Result<WorkspaceInf
 #[tauri::command]
 fn join_workspace(state: State<AppState>, invite: String) -> Result<WorkspaceInfoDto, String> {
     let mut conn = decode_workspace_invite(&invite)?;
+    // A DM invite is accepted only under the DM rule (addressed to this
+    // account, from a founder whose key the shared logs confirm).
+    if conn.dm_account.is_some() {
+        people::admit_dm_invite(&state, &mut conn, false)?;
+    }
+    join_workspace_conn(state, conn)
+}
+
+/// Join from an already-checked connection.
+fn join_workspace_conn(state: State<AppState>, mut conn: WorkspaceConn) -> Result<WorkspaceInfoDto, String> {
     // The invite this device redeems to enroll itself (kept device-local, not
     // in settings: it is single-use).
     if let Some(inv) = conn.inv.take().and_then(|i| Uuid::parse_str(&i).ok()) {
@@ -12544,11 +12439,6 @@ async fn update_connection_settings(
         }
         save_settings(&state.data_dir, &s);
     }
-    // Configuring (or changing) the relay after sign-in should make this account
-    // discoverable immediately — otherwise "sign in first, add relay later"
-    // leaves the user invisible until the next app launch. Self-gates on relay +
-    // github token, so it's a no-op until both exist.
-    let _ = register_directory(&state).await;
     Ok(get_connection_settings(state))
 }
 
@@ -12663,7 +12553,7 @@ fn claude_cached_model_options() -> Vec<ClaudeModelOption> {
 #[cfg(target_os = "macos")]
 fn build_tray_icon(app: &AppHandle) -> Result<TrayIcon<tauri::Wry>, Box<dyn std::error::Error>> {
     let show_item = MenuItem::with_id(app, "tray-show", "Show Ligus", true, None::<&str>)?;
-    let friends_item = MenuItem::with_id(app, "tray-friends", "Friends", true, None::<&str>)?;
+    let friends_item = MenuItem::with_id(app, "tray-friends", "People", true, None::<&str>)?;
     let team_item =
         MenuItem::with_id(app, "tray-team", "Team & Relay Sync…", true, None::<&str>)?;
     let settings_item = MenuItem::with_id(app, "tray-settings", "Settings…", true, None::<&str>)?;
@@ -12874,475 +12764,13 @@ fn configured_relay(state: &AppState) -> Result<String, String> {
         })
 }
 
-// ---------------------------------------------------------------------------
-// Commands — GitHub sign-in (device flow). The GitHub user is the Hive account;
-// the same person on multiple devices resolves to one account id.
-// ---------------------------------------------------------------------------
-
-/// Resolve the OAuth App client id, in priority order:
-///   1. runtime env `LIGUS_GITHUB_CLIENT_ID`
-///   2. the per-device setting (pasted in the UI)
-///   3. a value baked at build time (compile with `LIGUS_GITHUB_CLIENT_ID` set to
-///      ship Hive's own OAuth App so users never create one).
-fn github_client_id(state: &AppState) -> Option<String> {
-    hive_core::compat::var("LIGUS_GITHUB_CLIENT_ID")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| {
-            state
-                .settings
-                .lock()
-                .unwrap()
-                .github_client_id
-                .clone()
-                .filter(|s| !s.trim().is_empty())
-        })
-        // Baked at compile time by build.rs from env or the gitignored
-        // `app/github_client_id` file (empty in forks without it).
-        .or_else(|| option_env!("LIGUS_GITHUB_CLIENT_ID").map(str::to_string).filter(|s| !s.is_empty()))
-}
-
-#[tauri::command]
-fn set_github_client_id(state: State<AppState>, client_id: String) -> Result<(), String> {
-    let mut s = state.settings.lock().unwrap();
-    let c = client_id.trim().to_string();
-    s.github_client_id = (!c.is_empty()).then_some(c);
-    save_settings(&state.data_dir, &s);
-    Ok(())
-}
-
-/// The signed-in GitHub account, if any (safe to expose; no token).
-#[tauri::command]
-fn github_account(state: State<AppState>) -> Option<hive_runtime::github::GithubAccount> {
-    state.settings.lock().unwrap().github_account.clone()
-}
-
-/// Whether a client id is configured (so the UI can prompt to set one).
-#[tauri::command]
-fn github_client_configured(state: State<AppState>) -> bool {
-    github_client_id(&state).is_some()
-}
-
-/// Step 1: begin the device flow — returns the code + URL to show the user.
-#[tauri::command]
-async fn github_login_start(
-    state: State<'_, AppState>,
-) -> Result<hive_runtime::github::DeviceStart, String> {
-    let client_id = github_client_id(&state).ok_or_else(|| {
-        "No GitHub client id. Create an OAuth App (enable Device Flow) and set its client id."
-            .to_string()
-    })?;
-    hive_runtime::github::start_device_flow(&client_id)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GithubPollDto {
-    /// "pending" | "slowDown" | "success" | "denied" | "expired"
-    status: String,
-    account: Option<hive_runtime::github::GithubAccount>,
-}
-
-/// Step 2: poll once. On success, persists the account + token and binds the
-/// local actor to the GitHub account identity.
-#[tauri::command]
-async fn github_login_poll(
-    state: State<'_, AppState>,
-    device_code: String,
-) -> Result<GithubPollDto, String> {
-    use hive_runtime::github::PollOutcome;
-    let client_id = github_client_id(&state).ok_or_else(|| "No GitHub client id.".to_string())?;
-    let outcome = hive_runtime::github::poll_token(&client_id, &device_code)
-        .await
-        .map_err(|e| e.to_string())?;
-    let token = match outcome {
-        PollOutcome::Pending => return Ok(GithubPollDto { status: "pending".into(), account: None }),
-        PollOutcome::SlowDown => return Ok(GithubPollDto { status: "slowDown".into(), account: None }),
-        PollOutcome::Denied => return Ok(GithubPollDto { status: "denied".into(), account: None }),
-        PollOutcome::Expired => return Ok(GithubPollDto { status: "expired".into(), account: None }),
-        PollOutcome::Token(t) => t,
-    };
-    let account = hive_runtime::github::fetch_user(&token)
-        .await
-        .map_err(|e| e.to_string())?;
-    {
-        let mut s = state.settings.lock().unwrap();
-        s.github_account = Some(account.clone());
-        s.github_token = Some(token);
-        // Adopt the GitHub account email as the git-commit email while signed in
-        // (the field is locked in the UI; sign-out unlocks it). Only overwrite a
-        // blank or previously-GitHub-derived value, never a hand-set one.
-        if let Some(email) = account.email.as_deref().filter(|e| !e.is_empty()) {
-            s.git_email = Some(email.to_string());
-        }
-        save_settings(&state.data_dir, &s);
-    }
-    {
-        let active = state.active_workspace_id();
-        let mut svc = state.service.lock().unwrap();
-        // Migrate the provisional pre-sign-in self into the account identity instead
-        // of leaving a duplicate "self" in the roster (the root of the churn class:
-        // inflated membership → broken solo detection). Falls back to a plain switch
-        // if the migration can't be applied.
-        if let Err(e) = svc.adopt_account_identity(
-            active,
-            account.account_id().to_string(),
-            account.display_name(),
-            account.email.clone(),
-        ) {
-            tracing::warn!(target: "identity", error = %e, "adopt_account_identity failed; switching identity without migration");
-            svc.set_author_account(
-                account.account_id().to_string(),
-                account.display_name(),
-                account.email.clone(),
-            );
-        }
-        svc.set_author_git_email(account.email.clone().filter(|e| !e.is_empty()));
-    }
-    // Adopt the GitHub name as the local display name on sign-in, so the user
-    // isn't left as the placeholder "You". Only when they haven't set a custom
-    // name (still blank or the default) — never clobber a hand-picked one.
-    let current = state.identity.load().ok().flatten().map(|s| s.account.display_name).unwrap_or_default();
-    if current.trim().is_empty() || current.trim().eq_ignore_ascii_case("you") {
-        let gh_name = account.display_name();
-        if !gh_name.trim().is_empty() {
-            let _ = state.identity.update_display_name(&gh_name);
-            state.service.lock().unwrap().set_author_display_name(gh_name.trim());
-        }
-    }
-    // Register in the relay directory now that a token exists, so teammates can
-    // invite this account by handle immediately — without waiting for a restart
-    // (the mount-time directory_register no-ops before sign-in). Best-effort.
-    let _ = register_directory(&state).await;
-    Ok(GithubPollDto { status: "success".into(), account: Some(account) })
-}
-
-/// This device's key-agreement public key (hex) + a short device id, if set up.
-fn this_device_ka(state: &AppState) -> Option<(String, String)> {
-    let s = state.settings.lock().unwrap();
-    let kp = s
-        .ka_secret
-        .as_deref()
-        .and_then(parse_hex32)
-        .and_then(|seed| hive_core::e2ee::KeyAgreementKeypair::from_seed(&seed).ok())?;
-    let hex = hex32(&kp.public_key_bytes());
-    let device_id = hex[..16].to_string();
-    Some((device_id, hex))
-}
-
-/// Register this device in the relay directory under the signed-in GitHub
-/// account, so teammates can invite this account by handle and seal keys to it.
-/// Best-effort: no-op (Ok) if not signed in or no relay. Callable directly with
-/// `&AppState` so sign-in can register immediately (not only the mount-time
-/// command) — otherwise a user who signs in *after* app launch never lands in
-/// the directory and can't be invited ("isn't on Ligus yet").
-async fn register_directory(state: &AppState) -> Result<(), String> {
-    let relay = match configured_relay(state) {
-        Ok(r) => r,
-        Err(_) => return Ok(()),
-    };
-    if state.github_token().is_none() {
-        return Ok(());
-    }
-    let Some((device_id, ka_hex)) = this_device_ka(state) else {
-        return Ok(());
-    };
-    let client = state.relay_client(&relay);
-    client
-        .directory_register(&device_id, &ka_hex)
-        .await
-        .map_err(|e| e.to_string())?;
-    // Also register in the social account registry (friends + presence). The
-    // node id is wired later (P2P bootstrap); the label is the OS hostname.
-    let label = hostname_label();
-    let _ = client.account_register(&device_id, None, label.as_deref()).await;
-    Ok(())
-}
-
-#[tauri::command]
-async fn directory_register(state: State<'_, AppState>) -> Result<(), String> {
-    register_directory(&state).await
-}
-
-/// A friendly device label for the account registry (the machine's hostname).
+/// A friendly device label (the machine's hostname).
 fn hostname_label() -> Option<String> {
     std::env::var("HOSTNAME")
         .ok()
         .or_else(|| std::env::var("COMPUTERNAME").ok())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct InviteResultDto {
-    login: String,
-    /// Devices the workspace key was sealed to.
-    devices: u32,
-    /// Whether a workspace key was sealed (false for a plaintext room).
-    sealed: bool,
-    /// Whether those devices' keys are ones the invitee's account signed
-    /// (false: only the relay vouched for them and the inviter confirmed).
-    verified: bool,
-}
-
-/// Who an invite or DM code may be sealed to (Track B residual 7): the
-/// directory devices whose keys `account` published, signed, on a config log
-/// this device holds; else, once the inviter confirmed, every listed device.
-fn seal_plan(
-    state: &AppState,
-    account: Uuid,
-    devices: &[hive_runtime::relay_client::DirectoryDevice],
-    confirmed: bool,
-) -> Result<hive_runtime::directory_trust::SealPlan, String> {
-    let signed = {
-        let svc = state.service.lock().unwrap();
-        hive_runtime::directory_trust::signed_ka_keys(svc.store(), account)
-    };
-    hive_runtime::directory_trust::plan(devices, &signed, confirmed)
-}
-
-/// Invite a GitHub user (by handle) to this chat's workspace: add them to the
-/// roster and seal the invite code (the workspace key) to their devices. Only
-/// devices whose keys their account signed get it when there are any; when
-/// the relay alone vouches for the keys, this refuses with "unverified
-/// recipient" unless `confirm_unverified` (the UI asks first).
-#[tauri::command]
-async fn invite_by_handle(
-    state: State<'_, AppState>,
-    session_id: String,
-    handle: String,
-    confirm_unverified: Option<bool>,
-) -> Result<InviteResultDto, String> {
-    let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
-    let relay = configured_relay(&state)?;
-    if state.github_token().is_none() {
-        return Err("Sign in with GitHub first (Settings → Account).".to_string());
-    }
-    let client = state.relay_client(&relay);
-    let entry = client
-        .directory_lookup(&handle)
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| {
-            format!(
-                "@{} isn't on Ligus yet — they need to sign in once.",
-                handle.trim().trim_start_matches('@')
-            )
-        })?;
-    let account_id = hive_runtime::github::account_id_for(entry.github_id);
-    let plan = seal_plan(&state, account_id, &entry.devices, confirm_unverified.unwrap_or(false))
-        .map_err(|e| format!("{e} (@{})", entry.login))?;
-    let recipients: Vec<(String, Vec<u8>)> =
-        plan.recipients.iter().map(|r| (r.device_id.clone(), r.ka_public.to_vec())).collect();
-
-    // Add the invitee to the roster (keyed by their stable account id).
-    {
-        let mut svc = state.service.lock().unwrap();
-        let next_index = svc
-            .load(sid)
-            .map_err(map_err)?
-            .map(|s| s.members.iter().map(|m| m.index).max().unwrap_or(0) + 1)
-            .unwrap_or(1);
-        let member = WorkspaceMember {
-            id: Uuid::new_v4().to_string(),
-            actor: ActorIdentity {
-                id: account_id.to_string(),
-                display_name: entry.name.clone().unwrap_or_else(|| entry.login.clone()),
-                kind: ActorKind::Human,
-                account_id: Some(account_id),
-                device_id: None,
-                git_email: None,
-                key_agreement_public: recipients.first().map(|(_, b)| b.clone()),
-                avatar_url: None,
-            },
-            role: WorkspaceRole::Contributor,
-            title: String::new(),
-            index: next_index,
-            joined_at: hive_core::Timestamp::now(),
-        };
-        svc.add_member(sid, state.active_workspace_id(), member).map_err(map_err)?;
-    }
-
-    // No rotation here (B1): the in-app invite below carries the passphrase and
-    // every authorized epoch key, and the next rotation seals to the
-    // invitee's devices once they publish their own key-agreement keys on the
-    // config log. Relay-directory keys are never rotation recipients.
-    let mut sealed = false;
-    // Best-effort: also register them in server-side membership (no-op on open
-    // relays). The relay keys membership on `github:<id>` (its caller identity),
-    // distinct from the roster's UUID account id used for E2EE sealing.
-    {
-        let room = state.settings.lock().unwrap().sync_room.clone();
-        let _ = client
-            .upsert_member(&room, &format!("github:{}", entry.github_id), &entry.login, "contributor")
-            .await;
-    }
-
-    // Deliver an in-app invite: seal the workspace invite code (which carries the
-    // key) to each of the invitee's devices' key-agreement keys and post it to
-    // their account inbox, so the workspace surfaces as a "Pending invite" — no
-    // code to copy/paste. Opaque to the relay (sealed per device). Best-effort.
-    {
-        let conn = state
-            .settings
-            .lock()
-            .unwrap()
-            .workspaces
-            .iter()
-            .find(|w| w.id() == state.active_workspace_id())
-            .cloned();
-        if let Some(conn) = conn {
-            sealed = conn.key.is_some();
-            let code = encode_workspace_invite(&with_epoch_keys(&state, conn));
-            let mut sealed_map = serde_json::Map::new();
-            for (device_id, ka_pub) in &recipients {
-                if let Ok(blob) = hive_core::e2ee::seal(ka_pub, code.as_bytes()) {
-                    if let Ok(v) = serde_json::to_value(&blob) {
-                        sealed_map.insert(device_id.clone(), v);
-                    }
-                }
-            }
-            if !sealed_map.is_empty() {
-                let invite = serde_json::json!({ "sealed": sealed_map });
-                let _ = client.post_workspace_invite(&entry.login, &invite).await;
-            }
-        }
-    }
-
-    Ok(InviteResultDto { login: entry.login, devices: recipients.len() as u32, sealed, verified: plan.verified })
-}
-
-/// A workspace invite waiting in this account's inbox (decrypted locally).
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PendingInviteDto {
-    seq: u64,
-    from_login: String,
-    workspace_name: String,
-    room: String,
-    /// The decoded `hivews1:` code — passed back to accept (join).
-    code: String,
-}
-
-/// Pending workspace invites for this account — sealed to this device's
-/// key-agreement key and delivered via the relay inbox. Excludes workspaces
-/// already joined and invites the user dismissed.
-#[tauri::command]
-async fn list_pending_invites(state: State<'_, AppState>) -> Result<Vec<PendingInviteDto>, String> {
-    let relay = match configured_relay(&state) {
-        Ok(r) => r,
-        Err(_) => return Ok(vec![]),
-    };
-    if state.github_token().is_none() {
-        return Ok(vec![]);
-    }
-    let ka = {
-        let s = state.settings.lock().unwrap();
-        s.ka_secret
-            .as_deref()
-            .and_then(parse_hex32)
-            .and_then(|seed| hive_core::e2ee::KeyAgreementKeypair::from_seed(&seed).ok())
-    };
-    let Some(ka) = ka else { return Ok(vec![]) };
-    let events = state
-        .relay_client(&relay)
-        .account_inbox(0)
-        .await
-        .map_err(|e| e.to_string())?;
-    let (joined_rooms, dismissed): (Vec<String>, Vec<u64>) = {
-        let s = state.settings.lock().unwrap();
-        (
-            s.workspaces.iter().map(|w| w.room.clone()).collect(),
-            s.dismissed_invites.clone(),
-        )
-    };
-    let mut out = Vec::new();
-    for ev in events {
-        if ev.body.get("kind").and_then(|k| k.as_str()) != Some("workspaceInvite") {
-            continue;
-        }
-        if dismissed.contains(&ev.seq) {
-            continue;
-        }
-        let from_login = ev.body.get("fromLogin").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let Some(sealed) = ev.body.get("invite").and_then(|i| i.get("sealed")).and_then(|s| s.as_object())
-        else {
-            continue;
-        };
-        // Unseal the code with this device's KA key (try each per-device blob).
-        let mut code: Option<String> = None;
-        for blob_v in sealed.values() {
-            if let Ok(blob) = serde_json::from_value::<hive_core::e2ee::SealedBlob>(blob_v.clone()) {
-                if let Ok(bytes) = hive_core::e2ee::open(&ka, &blob) {
-                    if let Ok(s) = String::from_utf8(bytes) {
-                        code = Some(s);
-                        break;
-                    }
-                }
-            }
-        }
-        let Some(code) = code else { continue };
-        let Ok(conn) = decode_workspace_invite(&code) else { continue };
-        if joined_rooms.contains(&conn.room) {
-            // A joined DM still waiting for its key (the friend's side): adopt
-            // the key and epoch keys its owner delivered.
-            let mut s = state.settings.lock().unwrap();
-            if s.workspaces.iter_mut().any(|w| adopt_dm_key(w, &conn, &from_login)) {
-                save_settings(&state.data_dir, &s);
-            }
-            continue; // already joined
-        }
-        out.push(PendingInviteDto {
-            seq: ev.seq,
-            from_login,
-            workspace_name: conn.display_name(),
-            room: conn.room.clone(),
-            code,
-        });
-    }
-    Ok(out)
-}
-
-/// The friend's side of a DM adopts the key (and epoch keys) its owner
-/// delivered through the inbox, once, while it has none, and only from that
-/// friend: the relay stamps the sender's GitHub login on every inbox event,
-/// and a DM workspace is named by its friend's login (`friend_open_dm`).
-/// Anyone can post to an inbox and the DM room is derived from two public
-/// account ids, so without the sender check a stranger's earlier delivery
-/// would choose the key this side seals its messages under. Returns whether
-/// `w` adopted `conn`'s keys.
-fn adopt_dm_key(w: &mut WorkspaceConn, conn: &WorkspaceConn, from_login: &str) -> bool {
-    if w.room != conn.room || w.key.is_some() || w.dm_account.is_none() {
-        return false;
-    }
-    let friend = w.name.trim().trim_start_matches('@');
-    if friend.is_empty() || !friend.eq_ignore_ascii_case(from_login.trim().trim_start_matches('@')) {
-        tracing::warn!(target: "workspace", "ignored a DM key delivered by someone other than the DM's friend");
-        return false;
-    }
-    w.key = conn.key.clone();
-    w.ek = conn.ek.clone();
-    true
-}
-
-/// Accept a pending invite: join the workspace from its code.
-#[tauri::command]
-async fn accept_invite(state: State<'_, AppState>, code: String) -> Result<WorkspaceInfoDto, String> {
-    join_workspace(state, code)
-}
-
-/// Dismiss a pending invite by its inbox seq (persisted so it stays hidden).
-#[tauri::command]
-fn dismiss_invite(state: State<AppState>, seq: u64) -> Result<(), String> {
-    let mut s = state.settings.lock().unwrap();
-    if !s.dismissed_invites.contains(&seq) {
-        s.dismissed_invites.push(seq);
-    }
-    save_settings(&state.data_dir, &s);
-    Ok(())
 }
 
 /// Claim the active team workspace's room on a membership-enforcing relay, making
@@ -13413,61 +12841,33 @@ async fn workspace_revoke_invite(state: State<'_, AppState>, invite_id: String) 
 }
 
 /// Redeem a relay invite code to self-enroll in the active workspace. Returns
-/// the granted role, or `None` if the code was refused. Enrolls under this
-/// device's GitHub login when signed in.
+/// the granted role, or `None` if the code was refused. The relay keys the
+/// membership on its access token's subject; it is told no name.
 #[tauri::command]
 async fn workspace_join_via_invite(state: State<'_, AppState>, code: String) -> Result<Option<String>, String> {
     let relay = configured_relay(&state)?;
-    let (room, login) = {
-        let s = state.settings.lock().unwrap();
-        (
-            s.sync_room.clone(),
-            s.github_account.as_ref().map(|a| a.login.clone()).unwrap_or_default(),
-        )
-    };
+    let room = state.settings.lock().unwrap().sync_room.clone();
     state
         .relay_client(&relay)
-        .join_via_invite(&room, &code, &login)
+        .join_via_invite(&room, &code, "")
         .await
         .map_err(|e| e.to_string())
 }
 
-/// Add a member (by GitHub handle) or change their role on the active workspace.
-/// Caller must be `Admin`+. `role` = owner|admin|contributor|viewer.
-#[tauri::command]
-async fn workspace_add_member(
-    state: State<'_, AppState>,
-    handle: String,
-    role: String,
-) -> Result<(), String> {
-    if state.github_token().is_none() {
-        return Err("Sign in with GitHub first (Settings → Account).".to_string());
-    }
-    let relay = configured_relay(&state)?;
-    let room = state.settings.lock().unwrap().sync_room.clone();
-    let client = state.relay_client(&relay);
-    let entry = client
-        .directory_lookup(&handle)
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("@{} isn't on Ligus yet.", handle.trim().trim_start_matches('@')))?;
-    client
-        .upsert_member(&room, &format!("github:{}", entry.github_id), &entry.login, &role)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// The stable Hive account id (as a string) for a relay membership account key
-/// of the form `github:<numeric-id>`, or `None` if it isn't a github account.
-/// Lets us exclude a relay-removed member from the E2EE rotation recipient set.
+/// The Ligus account id (as a string) a relay membership subject names:
+/// `ligus:<account id>` for a desktop-minted token. Anything else (a
+/// ligus-auth `<tenant>:<user>` subject) names no account this device can
+/// map, and `None` leaves the roster alone. Lets us exclude a relay-removed
+/// member from the E2EE rotation recipient set.
 fn hive_account_id_for(account: &str) -> Option<String> {
     account
-        .strip_prefix("github:")
-        .and_then(|s| s.trim().parse::<u64>().ok())
-        .map(|id| hive_runtime::github::account_id_for(id).to_string())
+        .strip_prefix("ligus:")
+        .and_then(|s| Uuid::parse_str(s.trim()).ok())
+        .map(|id| id.to_string())
 }
 
-/// Remove a member from the active workspace (`account` = `github:<id>`) AND
+/// Remove a member from the active workspace (`account` = the relay subject,
+/// `ligus:<account id>` for desktop-minted tokens) AND
 /// rotate the workspace E2EE key so the removed member's retained key can't open
 /// post-removal traffic. Caller must be `Admin`+ (enforced by the relay).
 ///
@@ -13519,299 +12919,6 @@ async fn workspace_remove_member(
 
     // 3. Rotate the workspace key to everyone who remains (B1).
     rotate_active_workspace_key(&state).await
-}
-
-// ── Social graph: friends + presence (P5) ──────────────────────────────────
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct FriendDto {
-    account_id: String,
-    login: String,
-    /// "online" | "away" | "offline".
-    presence: String,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct IncomingRequestDto {
-    request_id: String,
-    from_account: String,
-    from_login: String,
-    created_at: u64,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct FriendsOverviewDto {
-    /// True once signed in + a relay is configured (the feature is available).
-    enabled: bool,
-    friends: Vec<FriendDto>,
-    incoming: Vec<IncomingRequestDto>,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct FriendRequestResultDto {
-    /// "sent" | "alreadyFriends" | "capReached" | "userNotFound" | "invalid".
-    outcome: String,
-    request_id: Option<String>,
-}
-
-/// The relay for social ops + this device id, or `None` if the feature isn't
-/// available (not signed in, or no relay configured).
-fn social_ctx(state: &AppState) -> Option<(hive_runtime::RelayClient, String)> {
-    let relay = configured_relay(state).ok()?;
-    state.github_token()?;
-    let (device_id, _) = this_device_ka(state)?;
-    Some((state.relay_client(&relay), device_id))
-}
-
-/// Heartbeat this device (registering first if the relay doesn't know it yet),
-/// then return the caller's friends-with-presence and incoming requests. The UI
-/// polls this so presence stays fresh. No-op overview when the feature is off.
-#[tauri::command]
-async fn friends_overview(state: State<'_, AppState>) -> Result<FriendsOverviewDto, String> {
-    let Some((client, device_id)) = social_ctx(&state) else {
-        return Ok(FriendsOverviewDto { enabled: false, friends: vec![], incoming: vec![] });
-    };
-    // Keep presence fresh; (re-)register if this device isn't known yet.
-    if !client.account_heartbeat(&device_id).await.unwrap_or(false) {
-        let label = hostname_label();
-        let _ = client.account_register(&device_id, None, label.as_deref()).await;
-    }
-    let friends = client
-        .friend_presence()
-        .await
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(|f| FriendDto { account_id: f.account_id, login: f.login, presence: f.presence })
-        .collect();
-    let incoming = client
-        .incoming_friend_requests()
-        .await
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(|r| IncomingRequestDto {
-            request_id: r.request_id,
-            from_account: r.from_account,
-            from_login: r.from_login,
-            created_at: r.created_at,
-        })
-        .collect();
-    Ok(FriendsOverviewDto { enabled: true, friends, incoming })
-}
-
-/// Send a friend request to a GitHub `@username`.
-#[tauri::command]
-async fn friend_send_request(
-    state: State<'_, AppState>,
-    login: String,
-) -> Result<FriendRequestResultDto, String> {
-    let (client, _) = social_ctx(&state)
-        .ok_or("Sign in with GitHub and configure a relay first.".to_string())?;
-    use hive_runtime::FriendRequestOutcome::*;
-    let (outcome, request_id) = match client.friend_request(&login).await.map_err(|e| e.to_string())? {
-        Sent(id) => ("sent", Some(id)),
-        AlreadyFriends => ("alreadyFriends", None),
-        CapReached => ("capReached", None),
-        UserNotFound => ("userNotFound", None),
-        Invalid => ("invalid", None),
-    };
-    Ok(FriendRequestResultDto { outcome: outcome.to_string(), request_id })
-}
-
-/// Accept a pending friend request by id.
-#[tauri::command]
-async fn friend_accept(state: State<'_, AppState>, request_id: String) -> Result<(), String> {
-    let (client, _) = social_ctx(&state).ok_or("Sign in with GitHub first.".to_string())?;
-    client.friend_accept(&request_id).await.map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-/// Reject (recipient) or cancel (sender) a pending friend request by id.
-#[tauri::command]
-async fn friend_reject(state: State<'_, AppState>, request_id: String) -> Result<(), String> {
-    let (client, _) = social_ctx(&state).ok_or("Sign in with GitHub first.".to_string())?;
-    client.friend_reject(&request_id).await.map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-/// Remove an accepted friend by their account key (`github:<id>`).
-#[tauri::command]
-async fn friend_remove(state: State<'_, AppState>, account_id: String) -> Result<(), String> {
-    let (client, _) = social_ctx(&state).ok_or("Sign in with GitHub first.".to_string())?;
-    client.friend_remove(&account_id).await.map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-/// Toggle "appear offline" for this account.
-#[tauri::command]
-async fn friend_set_visibility(state: State<'_, AppState>, appear_offline: bool) -> Result<(), String> {
-    let (client, _) = social_ctx(&state).ok_or("Sign in with GitHub first.".to_string())?;
-    client.set_visibility(appear_offline).await.map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-/// Deterministic DM room for two account keys (`github:<id>`): both sides derive
-/// the same name from the sorted numeric ids, so a 1:1 chat converges on one room.
-fn dm_room_for(a: &str, b: &str) -> String {
-    let na = a.trim().trim_start_matches("github:");
-    let nb = b.trim().trim_start_matches("github:");
-    let (lo, hi) = if na <= nb { (na, nb) } else { (nb, na) };
-    // High-entropy DM room (S5 metadata half): instead of the enumerable plaintext
-    // `dm-<accountA>-<accountB>` (which leaks both participants' account ids in the
-    // room name and lets anyone scan a shared relay for who's DMing whom), derive
-    // an opaque token from a UUIDv5 hash of the ordered pair. Still deterministic —
-    // both peers order the accounts the same way and compute the identical room —
-    // but the account ids no longer appear in cleartext on the relay.
-    const DM_NS: Uuid = Uuid::from_u128(0x6869_7665_646d_726f_6f6d_7061_6972_3031);
-    let id = Uuid::new_v5(&DM_NS, format!("{lo}\u{0}{hi}").as_bytes());
-    format!("dm-{}", id.simple())
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DmDto {
-    workspace_id: String,
-    account: String,
-    login: String,
-}
-
-/// The provisioned direct-message workspaces (Friends section list).
-#[tauri::command]
-fn list_dms(state: State<AppState>) -> Vec<DmDto> {
-    let s = state.settings.lock().unwrap();
-    s.workspaces
-        .iter()
-        .filter_map(|w| {
-            w.dm_account.as_ref().map(|acct| DmDto {
-                workspace_id: w.id().to_string(),
-                account: acct.clone(),
-                login: w.display_name(),
-            })
-        })
-        .collect()
-}
-
-/// Open (lazily provisioning) the private 1:1 DM workspace with a friend, and
-/// switch the chat list to it. The lexicographically-smaller account "owns" the
-/// DM: it mints the E2EE key and seals it to the friend's devices via the relay
-/// keyring (reusing the invite path); the other side receives the key from the
-/// keyring. DMs are kept out of the rail (see `list_workspaces`). Returns the
-/// DM workspace id.
-///
-/// The DM's code is sealed only to the friend's devices whose keys their
-/// account signed when there are any; when the relay alone vouches for them,
-/// this refuses with "unverified recipient" before creating anything, unless
-/// `confirm_unverified` (the UI asks first).
-#[tauri::command]
-async fn friend_open_dm(
-    state: State<'_, AppState>,
-    account_id: String,
-    login: String,
-    confirm_unverified: Option<bool>,
-) -> Result<String, String> {
-    let (client, _) = social_ctx(&state)
-        .ok_or("Sign in with GitHub and configure a relay first.".to_string())?;
-    let relay = configured_relay(&state)?;
-    let my_gid = state
-        .settings
-        .lock()
-        .unwrap()
-        .github_account
-        .as_ref()
-        .map(|a| a.id)
-        .ok_or("Sign in with GitHub first.".to_string())?;
-    let my_account = format!("github:{my_gid}");
-    let friend_account = account_id.trim().to_string();
-    if friend_account == my_account {
-        return Err("That's you.".to_string());
-    }
-    let room = dm_room_for(&my_account, &friend_account);
-    let i_am_owner = my_account <= friend_account;
-
-    // Provision the DM workspace on first open.
-    let existed = state.settings.lock().unwrap().workspaces.iter().any(|w| w.room == room);
-    // The owner seals the DM's key to the friend's devices: decide who before
-    // creating anything, so a refusal leaves no half-made DM behind.
-    let delivery = if i_am_owner && !existed {
-        match client.directory_lookup(&login).await {
-            Ok(Some(entry)) => {
-                let account = hive_runtime::github::account_id_for(entry.github_id);
-                let plan = seal_plan(&state, account, &entry.devices, confirm_unverified.unwrap_or(false))
-                    .map_err(|e| format!("{e} (@{})", entry.login))?;
-                Some((entry.login, plan))
-            }
-            _ => None,
-        }
-    } else {
-        None
-    };
-    if !existed {
-        let conn = WorkspaceConn {
-            name: login.trim().trim_start_matches('@').to_string(),
-            relay_url: relay.clone(),
-            room: room.clone(),
-            // The owner mints the key; the other side gets it from the keyring.
-            key: if i_am_owner { Some(random_token(24)) } else { None },
-            icon: None,
-            dm_account: Some(friend_account.clone()),
-            // The DM's deterministic owner (the lexicographically-smaller account,
-            // == `i_am_owner`) founds the config seed; both sides derive the same
-            // value, so the founder pin is consistent across the pair.
-            founder_actor_id: Some(if i_am_owner {
-                my_account.clone()
-            } else {
-                friend_account.clone()
-            }),
-            // A DM has no shared founder key to pin.
-            fk: None,
-            inv: None,
-            ek: Vec::new(),
-        };
-        let mut s = state.settings.lock().unwrap();
-        s.workspaces.push(conn);
-        save_settings(&state.data_dir, &s);
-    }
-
-    let ws_id = room_workspace_id(&room);
-    // The friend joins with an invite both sides derive from the room: the
-    // owner issues it, the friend redeems it.
-    let dm_invite = Uuid::new_v5(&ws_id, b"dm-invite");
-    if !i_am_owner {
-        state.service.lock().unwrap().store().set_join_invite(ws_id, dm_invite).map_err(map_err)?;
-    }
-    // Switch to it so the chat list scopes here (also points the sync fields at
-    // the room and, for the owner, makes `workspace_key()` the DM key).
-    set_active_workspace(state.clone(), ws_id.to_string())?;
-    if i_am_owner && !existed {
-        if let Err(e) = state.service.lock().unwrap().issue_invite_as(ws_id, dm_invite) {
-            tracing::error!(target: "workspace", "issuing the DM invite failed: {e}");
-        }
-    }
-
-    // The owner delivers the DM's connection code (its key, and every
-    // authorized epoch key) to the friend's inbox, sealed to each of their
-    // devices; the friend's side adopts it (`list_pending_invites`). No
-    // unsigned keyring rotation (B1).
-    if let Some((friend_login, plan)) = delivery {
-        let conn = state.settings.lock().unwrap().workspaces.iter().find(|w| w.room == room).cloned();
-        if let Some(conn) = conn {
-            let code = encode_workspace_invite(&with_epoch_keys(&state, conn));
-            let mut sealed_map = serde_json::Map::new();
-            for r in &plan.recipients {
-                if let Ok(Ok(v)) = hive_core::e2ee::seal(&r.ka_public, code.as_bytes()).map(|b| serde_json::to_value(&b)) {
-                    sealed_map.insert(r.device_id.clone(), v);
-                }
-            }
-            if !sealed_map.is_empty() {
-                let invite = serde_json::json!({ "sealed": sealed_map });
-                let _ = client.post_workspace_invite(&friend_login, &invite).await;
-            }
-        }
-    }
-    Ok(ws_id.to_string())
 }
 
 /// What's available on this machine, to drive first-run onboarding defaults.
@@ -14448,14 +13555,14 @@ fn set_relay_issuer_key(state: State<AppState>, key: String) -> Result<(), Strin
     Ok(())
 }
 
-/// Generate the remote-agent bootstrap: enroll the agent (by GitHub handle) in
-/// the roster, mint its identity token, and return the copy-paste command block.
-/// Requires an issuer key + a GitHub sign-in (for the directory lookup + admin
-/// authorization on the relay).
+/// Generate the remote-agent bootstrap: mint the box's relay identity token
+/// and enroll that identity in the relay's membership (when the relay
+/// enforces it), then return the copy-paste command block. The token subject
+/// is `ligus:<random id>`, a principal made for this box: never derived from
+/// a handle, a forge account or anything else public.
 #[tauri::command]
 async fn generate_agent_bootstrap(
     state: State<'_, AppState>,
-    handle: String,
     role: String,
     label: String,
     exp_days: i64,
@@ -14475,26 +13582,18 @@ async fn generate_agent_bootstrap(
     let relay = relay
         .filter(|s| !s.trim().is_empty())
         .ok_or("Connect a relay first (Settings → Team sync).")?;
-    if state.github_token().is_none() {
-        return Err("Sign in with GitHub first (Settings → Account).".to_string());
-    }
-
-    let client = state.relay_client(&configured_relay(&state)?);
-    // Resolve the handle → github account (so the token subject + roster entry match).
-    let entry = client
-        .directory_lookup(&handle)
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("@{} isn't on Ligus yet.", handle.trim().trim_start_matches('@')))?;
-    let sub = format!("github:{}", entry.github_id);
+    let label: String = label.trim().chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')).take(64).collect();
+    let label = if label.is_empty() { "agent-box".to_string() } else { label };
+    let sub = format!("ligus:{}", Uuid::new_v4());
     let role = if role.trim().is_empty() { "contributor".to_string() } else { role };
 
-    // Best-effort enroll in the roster (the admin's own token authorizes it).
-    let enrolled = client.upsert_member(&room, &sub, &entry.login, &role).await.is_ok();
+    let client = state.relay_client(&configured_relay(&state)?);
+    // Best-effort enroll on a membership-enforcing relay (the admin's own
+    // token authorizes it). The relay learns the label, nothing else.
+    let enrolled = client.upsert_member(&room, &sub, &label, &role).await.is_ok();
 
     let token = mint_hrt1_token(&issuer, &sub, exp_days)?;
     let invite = encode_hivews_conn(&relay, &room, key.as_deref());
-    let label = if label.trim().is_empty() { entry.login.clone() } else { label };
 
     let mut block = String::new();
     block.push_str("# Run on the remote agent box:\n");
@@ -14503,21 +13602,11 @@ async fn generate_agent_bootstrap(
     block.push_str(&format!("  ligus worker --label {label}\n"));
     if !enrolled {
         block.push_str(&format!(
-            "\n# NOTE: couldn't auto-enroll {sub} in the roster (are you the workspace owner/admin \
-             and has it been claimed?). Add @{} in People, or the agent can `ligus join <code>`.\n",
-            entry.login
+            "\n# NOTE: couldn't enroll {sub} in the relay's membership (are you the workspace owner/admin \
+             and has it been claimed?). The box can still `ligus join <code>` with an invite.\n"
         ));
     }
     Ok(block)
-}
-
-#[tauri::command]
-fn github_logout(state: State<AppState>) -> Result<(), String> {
-    let mut s = state.settings.lock().unwrap();
-    s.github_account = None;
-    s.github_token = None;
-    save_settings(&state.data_dir, &s);
-    Ok(())
 }
 
 /// Publish this device's friend code behind a short, speakable pairing code.
@@ -15090,7 +14179,6 @@ pub fn run() {
             list_members,
             list_membership_audit,
             add_member,
-            import_github_teams,
             remove_member,
             remove_and_revoke,
             rotate_workspace_key,
@@ -15191,33 +14279,23 @@ pub fn run() {
             p2p_share_code,
             workspace_share_code,
             redeem_short_code,
-            set_github_client_id,
-            github_account,
-            github_client_configured,
-            github_login_start,
-            github_login_poll,
-            github_logout,
-            directory_register,
-            invite_by_handle,
-            list_pending_invites,
-            accept_invite,
-            dismiss_invite,
             workspace_claim_membership,
             workspace_members,
             workspace_list_invites,
             workspace_create_invite,
             workspace_revoke_invite,
             workspace_join_via_invite,
-            workspace_add_member,
             workspace_remove_member,
-            friends_overview,
-            friend_send_request,
-            friend_accept,
-            friend_reject,
-            friend_remove,
-            friend_set_visibility,
-            friend_open_dm,
-            list_dms,
+            people::my_profile,
+            people::list_co_members,
+            people::list_dms,
+            people::open_dm,
+            people::inspect_invite,
+            people::join_dm,
+            people::co_member_invite,
+            people::list_pending_invites,
+            people::accept_pending_invite,
+            people::dismiss_pending_invite,
             detect_environment,
             detect_providers,
             has_issuer_key,
@@ -15439,12 +14517,12 @@ mod dispatch_ownership_tests {
 
     #[test]
     fn solo_workspace_always_runs_here_even_on_owner_mismatch() {
-        // The churned-identity regression: a chat created under an old author id
-        // ("anon") whose owner no longer matches the current local id ("github").
-        // In a solo workspace this device must still answer. (not local_only)
-        assert!(turn_runs_here(false, true, "github", "anon"));
-        assert!(turn_runs_here(false, true, "github", ""));
-        assert!(turn_runs_here(false, true, "github", "github"));
+        // A chat created under an old author id ("anon") whose owner no longer
+        // matches the current local id ("me"). In a solo workspace this device
+        // must still answer. (not local_only)
+        assert!(turn_runs_here(false, true, "me", "anon"));
+        assert!(turn_runs_here(false, true, "me", ""));
+        assert!(turn_runs_here(false, true, "me", "me"));
     }
 
     #[test]
@@ -15452,8 +14530,8 @@ mod dispatch_ownership_tests {
         // The real churn case: no relay, but the hoisted roster carries the old
         // self as a 2nd human (solo=false) and the owner is a stale self-id.
         // No relay ⇒ nothing syncs elsewhere ⇒ this device must answer.
-        assert!(turn_runs_here(true, false, "github", "stale-self-id"));
-        assert!(turn_runs_here(true, false, "github", "anything"));
+        assert!(turn_runs_here(true, false, "me", "stale-self-id"));
+        assert!(turn_runs_here(true, false, "me", "anything"));
     }
 
     #[test]
@@ -17603,11 +16681,11 @@ mod settings_secret_tests {
             api_key: Some(secret("api")),
             p2p_secret: Some(secret("p2p")),
             ka_secret: Some(secret("ka")),
-            github_token: Some(secret("gh")),
             ..LiveSettings::default()
         };
         s.provider_keys.insert("anthropic".into(), secret("anthropic"));
         s.mcp_bearer_tokens.insert("rdna".into(), secret("bearer"));
+        s.contact = Some(people::OwnContact { cid: hive_runtime::contacts::new_cid(), write_key: secret("contact"), ..Default::default() });
         s.mcp_oauth.insert(
             "linear".into(),
             McpOAuthEntry {
@@ -17639,7 +16717,6 @@ mod settings_secret_tests {
             s.api_key.clone(),
             s.p2p_secret.clone(),
             s.ka_secret.clone(),
-            s.github_token.clone(),
             s.provider_keys.get("anthropic").cloned(),
             s.mcp_bearer_tokens.get("rdna").cloned(),
             Some(s.mcp_oauth["linear"].access_token.clone()),
@@ -17647,6 +16724,7 @@ mod settings_secret_tests {
             s.mcp_oauth["linear"].client_secret.clone(),
             s.workspaces[0].key.clone(),
             Some(s.workspaces[0].ek[0].k.clone()),
+            s.contact.as_ref().map(|c| c.write_key.clone()),
         ]
         .into_iter()
         .flatten()
@@ -17667,6 +16745,81 @@ mod settings_secret_tests {
         assert_eq!(back.mcp_oauth["linear"].refresh_token, s.mcp_oauth["linear"].refresh_token);
         assert_eq!(back.workspaces[0].key, s.workspaces[0].key);
         assert_eq!(back.workspaces[0].ek, s.workspaces[0].ek);
+        assert_eq!(back.contact, s.contact, "the contact write key comes back from the store");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// S7 `no_forge_token_leaves_device`: forge tokens put in the secret
+    /// store (read and write, many random values) appear nowhere else in the
+    /// data dir (settings.json, hive.db), nor in an invite, a contact record
+    /// or a drop blob this device makes.
+    #[test]
+    fn no_forge_token_leaves_device() {
+        use hive_runtime::forge_secrets::{put_token, TokenPurpose};
+        let dir = std::env::temp_dir().join(format!("ligus-forge-locality-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = hive_runtime::secret_store::File0600::new(&dir);
+        let mut tokens = Vec::new();
+        for i in 0..64 {
+            let t = format!("{}{}", ["ghp_", "glpat-", "gto_", ""][i % 4], Uuid::new_v4().simple());
+            let forge = ["github.com", "gitlab:gitlab.example.com", "codeberg.org", "gitea:git.example.org"][i % 4];
+            let purpose = if i % 2 == 0 { TokenPurpose::Read } else { TokenPurpose::Write };
+            put_token(&store, forge, purpose, &t).unwrap();
+            tokens.push(t);
+        }
+        // Everything else this device writes or sends.
+        let mut s = LiveSettings { git_email: Some("ana@example.org".into()), ..LiveSettings::default() };
+        let conn = WorkspaceConn {
+            name: "Bees".into(),
+            relay_url: "https://relay.example".into(),
+            room: random_token(32),
+            key: Some(random_token(24)),
+            icon: None,
+            dm_account: None,
+            founder_actor_id: Some(Uuid::new_v4().to_string()),
+            fk: Some("00112233445566778899aabbccddeeff".into()),
+            inv: Some(Uuid::new_v4().to_string()),
+            ek: Vec::new(),
+        };
+        s.workspaces.push(conn.clone());
+        save_settings(&dir, &s);
+        let db = hive_runtime::EventStore::open(dir.join("hive.db")).unwrap();
+        drop(db);
+        let invite = encode_workspace_invite(&conn);
+        let ka = hive_core::e2ee::KeyAgreementKeypair::generate().unwrap();
+        let drop_blob = hive_runtime::contacts::seal_drop(
+            invite.as_bytes(),
+            &[hive_runtime::directory_trust::Recipient { device_id: "d".into(), ka_public: ka.public_key_bytes() }],
+        )
+        .unwrap();
+        let record = hive_runtime::contacts::build_record(&hive_runtime::contacts::new_cid(), Uuid::new_v4(), &[7u8; 32], Vec::new(), hive_core::Timestamp::now());
+        let mut outside = vec![invite, drop_blob.to_string(), serde_json::to_string(&record).unwrap()];
+        fn files(d: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    // The forge scope of the secret store is where they belong.
+                    if !p.ends_with("secrets/forge") {
+                        files(&p, out);
+                    }
+                } else {
+                    out.push(p);
+                }
+            }
+        }
+        let mut all = Vec::new();
+        files(&dir, &mut all);
+        assert!(all.iter().any(|p| p.ends_with("settings.json")));
+        for p in all {
+            outside.push(String::from_utf8_lossy(&std::fs::read(&p).unwrap()).into_owned());
+        }
+        for t in &tokens {
+            for text in &outside {
+                assert!(!text.contains(t.as_str()), "a forge token left the secret store");
+            }
+        }
+        // And they are where they should be.
+        assert!(dir.join("secrets/forge").is_dir());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
