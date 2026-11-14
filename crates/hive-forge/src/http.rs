@@ -156,7 +156,7 @@ struct PublicOnly {
 impl reqwest::dns::Resolve for PublicOnly {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let host = name.as_str().to_ascii_lowercase();
-        let proxy = self.proxies.iter().any(|p| *p == host);
+        let proxy = self.proxies.contains(&host);
         Box::pin(async move {
             let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host.as_str(), 0)).await?.collect();
             let ok: Vec<std::net::SocketAddr> = addrs.into_iter().filter(|a| proxy || is_public_ip(a.ip())).collect();
