@@ -134,6 +134,7 @@ mcp:
   servers: []
   # - name: linear
   #   image: registry.example.com/mcp-linear@sha256:...
+  #   allowUnpinned: false        # a tag is refused unless this is set
   #   args: []
   #   port: 8080
   #   env: []                     # list of EnvVar

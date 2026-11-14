@@ -131,8 +131,24 @@ def test_executor_waits_for_network_policy():
                       sc.get("readOnlyRootFilesystem") and sc.get("allowPrivilegeEscalation") is False)
 
 
+# --- Third-party MCP images are pinned by digest ---------------------------
+
+def test_mcp_images_pinned():
+    p = render("--set", "mcp.servers[0].name=linear",
+               "--set", "mcp.servers[0].image=registry.example/mcp-linear:latest", ok=False)
+    check("an MCP server image given by tag is refused", p.returncode != 0,
+          "a moving tag lets whoever controls the registry swap code that holds MCP secrets")
+    docs = render("--set", "mcp.servers[0].name=linear",
+                  "--set", "mcp.servers[0].image=registry.example/mcp-linear@sha256:" + "0" * 64)
+    check("an MCP server image pinned by digest renders", any(d["kind"] == "Deployment" for d in docs))
+    docs = render("--set", "mcp.servers[0].name=linear",
+                  "--set", "mcp.servers[0].image=registry.example/mcp-linear:1.2",
+                  "--set", "mcp.servers[0].allowUnpinned=true")
+    check("allowUnpinned opts out explicitly", any(d["kind"] == "Deployment" for d in docs))
+
+
 TESTS = [test_dns_egress_is_scoped, test_serve_ingress_excludes_foreign_pods,
-         test_executor_waits_for_network_policy]
+         test_executor_waits_for_network_policy, test_mcp_images_pinned]
 
 if __name__ == "__main__":
     for t in TESTS:

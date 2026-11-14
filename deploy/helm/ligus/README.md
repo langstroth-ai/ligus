@@ -87,7 +87,7 @@ outside the cluster can read the workspace. Use it for CI and trials only.
 | `serve.ntfy.*` | off | Notifications |
 | `serve.persistence.*` | 5Gi | Use an encrypted StorageClass: the volume is as sensitive as the workspace key |
 | `worker.enabled` / `replicas` / `permissionMode` | off, 1 | Sharded hosts |
-| `mcp.servers[]` | `[]` | `name`, `image`, `args`, `port`, `env`, `secretEnv`, `resources` |
+| `mcp.servers[]` | `[]` | `name`, `image` (pinned by digest; a tag needs `allowUnpinned: true`), `args`, `port`, `env`, `secretEnv`, `resources` |
 | `sandbox.enabled` / `profile` | off, `agent-turn` | `pr-test` has no egress at all and refuses to render without `runtimeClassName` unless `allowDefaultRuntime` |
 | `sandbox.runtimeClassName` | empty | `gvisor`, a Kata class, ...; empty means runc, which is not a security boundary |
 | `sandbox.egress` | `[]` | Extra egress rules for agent-turn executors (model endpoint, granted MCP Services) |

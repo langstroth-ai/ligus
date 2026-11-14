@@ -3,6 +3,9 @@
 ---
 {{- end }}
 {{- $name := printf "mcp-%s" $s.name | trunc 63 | trimSuffix "-" }}
+{{- if and (not (contains "@sha256:" (required "mcp.servers[].image is required" $s.image))) (not $s.allowUnpinned) }}
+{{- fail (printf "mcp.servers[%s].image must be pinned by digest (image@sha256:...): MCP servers are third-party code that holds their secrets. Set allowUnpinned=true to accept a tag." $s.name) }}
+{{- end }}
 apiVersion: v1
 kind: Service
 metadata:
