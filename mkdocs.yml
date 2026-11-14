@@ -86,6 +86,9 @@ nav:
       - Solo laptop: deploy/solo.md
       - Personal fleet (laptop, home server, phone): deploy/personal-fleet.md
       - Team on a relay: ops/deployment.md
+      - Sign in with your IdP (ligus-auth): deploy/ligus-auth.md
+      - ligus-auth with Pocket ID: deploy/ligus-auth-pocket-id.md
+      - ligus-auth with Dex: deploy/ligus-auth-dex.md
       - Kubernetes (preview): deploy/kubernetes.md
       - Keys off the cluster (design): deploy/keys-off-cluster.md
       - Multi-tenant (design): deploy/multi-tenant.md

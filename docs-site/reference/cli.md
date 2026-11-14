@@ -65,6 +65,22 @@ Next: `ligus sync` then `ligus worker` to bring the agent online.
     `ligus enroll` writes the E2EE key in clear to `config.toml`. Keep the
     data dir private (`chmod 700`), as with the key files next to it.
 
+## Signing in to an organization's relay
+
+For a relay behind [ligus-auth](../deploy/ligus-auth.md):
+
+| Command | What it does |
+|---|---|
+| `ligus auth login <url> [--label NAME]` | device-code sign-in at `https://auth.example.com/t/<tenant>`: prints a code to enter in a browser, then saves the session to `<data dir>/ligus-auth.json` (0600) |
+| `ligus auth status` | the tenant, subject, granted workspaces and access-token lifetime (never the tokens) |
+| `ligus auth logout` | revokes the session at ligus-auth and deletes the file |
+
+While a session exists, every `ligus` command uses its short-lived relay
+token and refreshes it in the background (the refresh token only works with
+this box's device key). `LIGUS_RELAY_ACCESS_TOKEN`, when set, takes
+precedence. Signing in opens the relay only: joining a workspace still takes
+an invite and an Admin.
+
 ## Chats and messages
 
 | Command | What it does |
