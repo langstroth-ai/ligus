@@ -89,6 +89,10 @@ pub fn check_founder(founder: Option<&str>, fk: Option<&str>, known: &BTreeMap<U
 /// - A co-member must match the key the shared logs register for them.
 /// - An account this device shares nothing with is accepted only once the
 ///   person confirmed the safety code (`safety_code_confirmed`).
+/// - A DM invite for a room this device already holds is refused: a DM is
+///   always a fresh room, and accepting would rewrite that workspace's relay
+///   and key to the invite's (a co-member who knows a workspace's room could
+///   otherwise turn it into a "DM" synced through a relay of their choosing).
 pub fn accept_dm_invite(
     dm_account: Option<&str>,
     founder: Option<&str>,
@@ -96,7 +100,11 @@ pub fn accept_dm_invite(
     me: Uuid,
     known: &BTreeMap<Uuid, Option<String>>,
     safety_code_confirmed: bool,
+    room_already_joined: bool,
 ) -> Result<Uuid, String> {
+    if room_already_joined {
+        return Err("this direct message invite names a room you're already in".into());
+    }
     let to = dm_account.and_then(|a| Uuid::parse_str(a.trim()).ok());
     if to != Some(me) {
         return Err("this direct message invite is addressed to someone else".into());
@@ -225,17 +233,17 @@ mod tests {
         let mut known = BTreeMap::new();
         known.insert(peer, Some(fk.to_string()));
         let (me_s, peer_s) = (me.to_string(), peer.to_string());
-        assert_eq!(accept_dm_invite(Some(&me_s), Some(&peer_s), Some(fk), me, &known, false), Ok(peer));
+        assert_eq!(accept_dm_invite(Some(&me_s), Some(&peer_s), Some(fk), me, &known, false, false), Ok(peer));
         // Addressed to someone else (a replayed invite).
-        assert!(accept_dm_invite(Some(&Uuid::new_v4().to_string()), Some(&peer_s), Some(fk), me, &known, true).is_err());
+        assert!(accept_dm_invite(Some(&Uuid::new_v4().to_string()), Some(&peer_s), Some(fk), me, &known, true, false).is_err());
         // The co-member's name with another key: refused even when "confirmed".
-        assert!(accept_dm_invite(Some(&me_s), Some(&peer_s), Some(other), me, &known, true).is_err());
+        assert!(accept_dm_invite(Some(&me_s), Some(&peer_s), Some(other), me, &known, true, false).is_err());
         // No fingerprint at all.
-        assert!(accept_dm_invite(Some(&me_s), Some(&peer_s), None, me, &known, true).is_err());
+        assert!(accept_dm_invite(Some(&me_s), Some(&peer_s), None, me, &known, true, false).is_err());
         // A stranger: only after the safety code was compared.
         let stranger = Uuid::new_v4().to_string();
-        assert!(accept_dm_invite(Some(&me_s), Some(&stranger), Some(fk), me, &known, false).is_err());
-        assert!(accept_dm_invite(Some(&me_s), Some(&stranger), Some(fk), me, &known, true).is_ok());
+        assert!(accept_dm_invite(Some(&me_s), Some(&stranger), Some(fk), me, &known, false, false).is_err());
+        assert!(accept_dm_invite(Some(&me_s), Some(&stranger), Some(fk), me, &known, true, false).is_ok());
         // A co-member whose key the logs dispute is a mismatch.
         known.insert(peer, None);
         assert_eq!(check_founder(Some(&peer_s), Some(fk), &known), FounderTrust::Mismatch);
@@ -256,5 +264,19 @@ mod tests {
         let b_older = DmCandidate { created_at: Some(ts(50)), ..b };
         apply_resolution(&mut archived, &resolve_concurrent(&[a, b_older]).unwrap());
         assert_eq!(archived, vec!["dm-a".to_string()], "exactly one of the two stays live");
+    }
+
+    /// A DM invite reusing a room this device already holds (say a team
+    /// workspace's) is refused even from a known co-member: accepting would
+    /// rewrite that workspace's relay and key and hide it as a DM.
+    #[test]
+    fn dm_invite_for_a_joined_room_is_refused() {
+        let me = Uuid::new_v4();
+        let peer = Uuid::new_v4();
+        let fk = "00112233445566778899aabbccddeeff";
+        let known = BTreeMap::from([(peer, Some(fk.to_string()))]);
+        let (me_s, peer_s) = (me.to_string(), peer.to_string());
+        assert!(accept_dm_invite(Some(&me_s), Some(&peer_s), Some(fk), me, &known, true, true).is_err());
+        assert_eq!(accept_dm_invite(Some(&me_s), Some(&peer_s), Some(fk), me, &known, false, false), Ok(peer));
     }
 }

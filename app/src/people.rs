@@ -366,6 +366,7 @@ pub(crate) fn admit_dm_invite(state: &AppState, conn: &mut WorkspaceConn, safety
     let me_account = me_account.ok_or("this device has no account yet")?;
     let people = co_members_of(state);
     let known = dm::known_fingerprints(&people);
+    let joined = state.settings.lock().unwrap().workspaces.iter().any(|w| w.room == conn.room);
     let peer = dm::accept_dm_invite(
         conn.dm_account.as_deref(),
         conn.founder_actor_id.as_deref(),
@@ -373,6 +374,7 @@ pub(crate) fn admit_dm_invite(state: &AppState, conn: &mut WorkspaceConn, safety
         me_account,
         &known,
         safety_code_confirmed,
+        joined,
     )?;
     conn.dm_account = Some(peer.to_string());
     conn.name = people
