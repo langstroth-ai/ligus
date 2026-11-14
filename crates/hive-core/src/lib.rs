@@ -34,6 +34,7 @@ pub mod schedule;
 pub mod session;
 pub mod signal;
 pub mod skills;
+pub mod throttle;
 pub mod time_util;
 pub mod vault;
 pub mod workflow;

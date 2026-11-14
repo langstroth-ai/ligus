@@ -90,3 +90,34 @@ repository (**Sweep now** in Settings → Guards runs it at once):
 - an open proposal whose diff no longer applies to its chat's branch is
   marked **stale** and taken out of the Review inbox (you can still restore
   it), instead of sitting there forever.
+
+## Plan windows: staggered throttles
+
+Subscription runtimes (Claude Code, Codex, Copilot, Antigravity) have usage
+windows, such as Claude's five-hour and weekly limits. Instead of every agent
+running at full speed until the window is exhausted and then all stopping at
+once, Ligus backs off in steps, the way a hive holds its brood nest in a
+narrow temperature band with many bees reacting at slightly different
+thresholds:
+
+- **Your own requests always run.** A message you send, a regenerate, a
+  proposal you act on: never throttled. They are the brood.
+- **Scheduled runs pause first**, from about 70 % of the window. A due
+  schedule simply waits and fires once there's room again.
+- **Workflow stages and agent-to-agent hand-offs pause next**, from about
+  85 %. A workflow stage waits (the run card keeps showing it running; Cancel
+  still works); a hand-off between agents stops with a note in the chat, and
+  mentioning the agent again continues it.
+- **Each agent has its own threshold**, a few percent either side of those
+  figures, so agents stop one at a time as the window fills.
+
+The 15 % between the workflow threshold and the limit is slack kept for your
+interactive turns. It is deliberately not larger: idle headroom just invites
+background agents to fill it with busywork.
+
+Ligus learns where a window stands from the runtime itself: Claude Code
+reports rate-limit events while it works (status, how full, when it resets),
+and any subscription CLI that fails with a usage-limit error marks its window
+full until it resets (an hour, when the CLI doesn't say). **Plan windows** in
+Settings → Guards shows each runtime's window and anything being held back.
+A runtime that reports nothing is never throttled.

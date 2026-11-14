@@ -4,10 +4,12 @@ import {
   approveJoin,
   getDearthState,
   getHygieneReport,
+  getThrottleState,
   runHygieneNow,
   setDearthMode,
   type DearthStateDto,
   type HygieneReportDto,
+  type ThrottleStateDto,
 } from "@/lib/ipc";
 import { toast, errMsg } from "@/components/Toast";
 import { Button, Section } from "@/components/ui";
@@ -34,6 +36,7 @@ export function GuardsSection() {
   return (
     <div>
       {d && <DearthPanel d={d} onChanged={() => qc.invalidateQueries({ queryKey: ["dearth-state"] })} />}
+      <ThrottlePanel />
       <HygienePanel />
     </div>
   );
@@ -213,6 +216,59 @@ function HygienePanel() {
           {r.staleProposals.map((p) => (
             <li key={p.proposalId} className="opacity-80">
               Stale: {p.title}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
+  );
+}
+
+/// Tone for a window's fill against the thresholds. Exported for tests.
+export function windowTone(pct: number, t: ThrottleStateDto): "ok" | "warn" | "bad" {
+  if (pct >= t.workflowPct) return "bad";
+  if (pct >= t.backgroundPct) return "warn";
+  return "ok";
+}
+
+const TONE: Record<string, string> = { ok: "var(--hive-success)", warn: "var(--hive-warning, #b7791f)", bad: "var(--hive-danger)" };
+
+function ThrottlePanel() {
+  const q = useQuery({ queryKey: ["throttle-state"], queryFn: getThrottleState, refetchInterval: 15000 });
+  const t = q.data;
+  if (!t) return null;
+  return (
+    <Section title="Plan windows">
+      <p className="mb-2 text-[13px] opacity-75">
+        Near a subscription&apos;s usage limit, agents back off in steps instead of all stopping at once: scheduled runs
+        pause from about {t.backgroundPct}%, workflow stages and agent hand-offs from about {t.workflowPct}% (each agent
+        at a slightly different point). Your own requests always run.
+      </p>
+      {t.windows.length === 0 ? (
+        <p className="text-[12px] opacity-60" data-testid="no-windows">
+          No runtime has reported a plan window yet.
+        </p>
+      ) : (
+        <ul className="text-[13px]" data-testid="windows">
+          {t.windows.map((w) => (
+            <li key={w.runtime} className="flex items-center justify-between py-0.5">
+              <span>
+                {w.runtime}
+                {w.window ? <span className="opacity-55"> · {w.window.replace("_", " ")}</span> : null}
+              </span>
+              <span style={{ color: TONE[windowTone(w.effectivePct, t)] }}>
+                {w.reported ? `${w.effectivePct}%` : w.status}
+                {w.resetsAt ? <span className="opacity-60"> · resets {new Date(w.resetsAt).toLocaleTimeString()}</span> : null}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {t.deferred.length > 0 && (
+        <ul className="mt-2 text-[13px]" data-testid="deferred">
+          {t.deferred.map((d) => (
+            <li key={`${d.priority}:${d.what}`} className="opacity-80">
+              Waiting: {d.what} ({d.runtime} at {d.utilizationPct}%, pauses at {d.thresholdPct}%)
             </li>
           ))}
         </ul>

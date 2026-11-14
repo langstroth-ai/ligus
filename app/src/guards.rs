@@ -63,6 +63,10 @@ pub(crate) struct GuardRuntime {
     pub beats_fetched: AtomicBool,
     /// The last hygiene sweep's results (in memory; a restart sweeps again).
     pub hygiene: Mutex<hive_proto::HygieneReportDto>,
+    /// Last plan-window observation per runtime kind.
+    pub plan_windows: Mutex<HashMap<hive_core::ModelProviderKind, hive_core::throttle::PlanWindow>>,
+    /// Work the throttles hold back right now, by key (for the UI).
+    pub deferred: Mutex<HashMap<String, hive_proto::DeferredWorkDto>>,
     /// When the lease loop next runs the hygiene sweep.
     pub last_sweep: Mutex<Option<std::time::Instant>>,
 }
@@ -1029,6 +1033,220 @@ pub(crate) fn lock_chat(app: AppHandle, state: State<AppState>, session_id: Stri
     drop(svc);
     let _ = tauri::Emitter::emit(&app, "workspace://synced", 1);
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Staggered throttles (protect the brood)
+// ---------------------------------------------------------------------------
+
+fn now_secs() -> i64 {
+    now_ms() / 1000
+}
+
+/// Assumed reset when a runtime says "limit reached" without saying when.
+const UNKNOWN_RESET_SECS: i64 = 3600;
+
+/// Record a runtime's plan-window report (Claude Code rate-limit events).
+pub(crate) fn record_plan_window(state: &AppState, provider: hive_core::ModelProviderKind, mut window: hive_core::throttle::PlanWindow) {
+    if window.observed_at == 0 {
+        window.observed_at = now_secs();
+    }
+    state.guards.plan_windows.lock().unwrap().insert(provider, window);
+}
+
+/// A failed turn whose error says the subscription limit was hit counts as a
+/// rejected window (for the CLIs that only report it as an error).
+pub(crate) fn record_usage_error(state: &AppState, provider: hive_core::ModelProviderKind, message: &str) {
+    use hive_runtime::provider::cli_agent::{classify_failure, CliFailure};
+    if !provider.is_cli_agent() || classify_failure(message) != CliFailure::UsageLimit {
+        return;
+    }
+    let now = now_secs();
+    record_plan_window(
+        state,
+        provider,
+        hive_core::throttle::PlanWindow {
+            status: hive_core::throttle::WindowStatus::Rejected,
+            utilization_pct: Some(100),
+            resets_at: Some(now + UNKNOWN_RESET_SECS),
+            window: None,
+            observed_at: now,
+        },
+    );
+}
+
+fn decide(
+    state: &AppState,
+    provider: hive_core::ModelProviderKind,
+    priority: hive_core::throttle::TurnPriority,
+    agent_key: &str,
+) -> hive_core::throttle::ThrottleDecision {
+    let window = state.guards.plan_windows.lock().unwrap().get(&provider).cloned();
+    hive_core::throttle::ThrottlePolicy::default().decide(priority, agent_key, window.as_ref(), now_secs())
+}
+
+/// Note (or clear) a deferral for the UI, recording a throttle signal when it
+/// starts.
+fn note_deferral(
+    state: &AppState,
+    workspace_id: Uuid,
+    key: String,
+    what: String,
+    provider: hive_core::ModelProviderKind,
+    priority: hive_core::throttle::TurnPriority,
+    decision: hive_core::throttle::ThrottleDecision,
+) {
+    let mut deferred = state.guards.deferred.lock().unwrap();
+    match decision {
+        hive_core::throttle::ThrottleDecision::Run => {
+            deferred.remove(&key);
+        }
+        hive_core::throttle::ThrottleDecision::Defer { utilization_pct, threshold_pct, .. } => {
+            let fresh = !deferred.contains_key(&key);
+            deferred.insert(
+                key,
+                hive_proto::DeferredWorkDto {
+                    priority: priority.as_str().into(),
+                    what,
+                    runtime: format!("{provider:?}"),
+                    utilization_pct,
+                    threshold_pct,
+                },
+            );
+            drop(deferred);
+            if fresh {
+                if let Ok(svc) = state.service.try_lock() {
+                    let _ = svc.record_signal(
+                        workspace_id,
+                        None,
+                        &GuardSignal::Throttle {
+                            runtime_id: format!("{provider:?}"),
+                            priority: priority.as_str().into(),
+                            utilization_pct,
+                            threshold_pct,
+                            deferred: true,
+                        },
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Wait while a workflow stage's runtime is past this agent's threshold.
+/// Returns an error if the run is canceled while waiting.
+pub(crate) async fn wait_for_capacity(
+    app: &AppHandle,
+    provider: hive_core::ModelProviderKind,
+    priority: hive_core::throttle::TurnPriority,
+    agent_key: &str,
+    run_id: Option<Uuid>,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let ws = state.active_workspace_id();
+    let key = format!("{}:{agent_key}", run_id.map(|r| r.to_string()).unwrap_or_default());
+    loop {
+        let d = decide(&state, provider, priority, agent_key);
+        note_deferral(&state, ws, key.clone(), format!("workflow stage ({agent_key})"), provider, priority, d);
+        let hive_core::throttle::ThrottleDecision::Defer { resets_at, .. } = d else { return Ok(()) };
+        if let Some(rid) = run_id {
+            if state.canceled_runs.lock().unwrap().contains(&rid) {
+                state.guards.deferred.lock().unwrap().remove(&key);
+                return Err("canceled while waiting for plan-window capacity".into());
+            }
+        }
+        // Re-check every minute, or at the reset if that's sooner.
+        let wait = resets_at.map(|r| (r - now_secs()).clamp(5, 60)).unwrap_or(60) as u64;
+        tokio::time::sleep(Duration::from_secs(wait)).await;
+    }
+}
+
+/// Whether a due schedule should wait (background tier).
+pub(crate) fn defer_background(app: &AppHandle, runtime_id: &str, schedule_id: &str) -> bool {
+    let state = app.state::<AppState>();
+    let rid = if runtime_id.is_empty() { state.current_default_runtime_id() } else { runtime_id.to_string() };
+    let provider = state.resolve_runtime(&rid).provider;
+    let d = decide(&state, provider, hive_core::throttle::TurnPriority::Background, schedule_id);
+    note_deferral(
+        &state,
+        state.active_workspace_id(),
+        format!("schedule:{schedule_id}"),
+        "scheduled run".into(),
+        provider,
+        hive_core::throttle::TurnPriority::Background,
+        d,
+    );
+    matches!(d, hive_core::throttle::ThrottleDecision::Defer { .. })
+}
+
+/// For an agent-to-agent hand-off: the note to post when it must pause.
+pub(crate) fn cascade_paused(
+    state: &AppState,
+    workspace_id: Uuid,
+    _session_id: Uuid,
+    provider: hive_core::ModelProviderKind,
+    agent_key: &str,
+    agent_name: &str,
+) -> Option<String> {
+    let d = decide(state, provider, hive_core::throttle::TurnPriority::Workflow, agent_key);
+    if let hive_core::throttle::ThrottleDecision::Defer { utilization_pct, threshold_pct, .. } = d {
+        note_deferral(
+            state,
+            workspace_id,
+            format!("cascade:{agent_key}"),
+            format!("hand-off to {agent_name}"),
+            provider,
+            hive_core::throttle::TurnPriority::Workflow,
+            d,
+        );
+        // A hand-off isn't retried on its own; it's recorded and then cleared.
+        state.guards.deferred.lock().unwrap().remove(&format!("cascade:{agent_key}"));
+        return Some(format!(
+            "Paused the hand-off to {agent_name}: its runtime's plan window is at {utilization_pct}% (agent hand-offs pause at {threshold_pct}% to keep room for your own requests). Mention it again to continue."
+        ));
+    }
+    None
+}
+
+/// Plan windows, thresholds and what's being held back.
+#[tauri::command]
+pub(crate) fn get_throttle_state(state: State<AppState>) -> hive_proto::ThrottleStateDto {
+    let p = hive_core::throttle::ThrottlePolicy::default();
+    let now = now_secs();
+    let mut windows: Vec<hive_proto::PlanWindowDto> = state
+        .guards
+        .plan_windows
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(k, w)| hive_proto::PlanWindowDto {
+            runtime: format!("{k:?}"),
+            status: match w.status {
+                hive_core::throttle::WindowStatus::Allowed => "allowed",
+                hive_core::throttle::WindowStatus::Warning => "warning",
+                hive_core::throttle::WindowStatus::Rejected => "rejected",
+            }
+            .into(),
+            effective_pct: w.effective_pct(now),
+            reported: w.utilization_pct.is_some(),
+            window: w.window.clone().unwrap_or_default(),
+            resets_at: w
+                .resets_at
+                .map(|r| crate::rfc3339(hive_core::Timestamp::from_unix_seconds(r)))
+                .unwrap_or_default(),
+            age_secs: (now - w.observed_at).clamp(0, u32::MAX as i64) as u32,
+        })
+        .collect();
+    windows.sort_by(|a, b| a.runtime.cmp(&b.runtime));
+    let mut deferred: Vec<_> = state.guards.deferred.lock().unwrap().values().cloned().collect();
+    deferred.sort_by(|a, b| a.what.cmp(&b.what));
+    hive_proto::ThrottleStateDto {
+        background_pct: p.background_pct,
+        workflow_pct: p.workflow_pct,
+        stagger_pct: p.stagger_pct,
+        windows,
+        deferred,
+    }
 }
 
 /// Whether a run is in a state a coordinator drives.

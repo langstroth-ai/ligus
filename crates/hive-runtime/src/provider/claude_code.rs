@@ -89,6 +89,45 @@ pub fn extract_result(line: &str) -> Option<String> {
     v.get("result")?.as_str().map(str::to_owned)
 }
 
+/// A plan-window observation from a `rate_limit_event` line, if this is one.
+/// Parsed defensively: every field is optional, unknown statuses are ignored.
+/// Shape: `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed" |
+/// "allowed_warning" | "rejected","resetsAt":<unix s>,"rateLimitType":
+/// "five_hour" | "seven_day" | ...,"utilization":<0..1 or 0..100>}}`.
+pub fn extract_rate_limit(line: &str) -> Option<hive_core::throttle::PlanWindow> {
+    use hive_core::throttle::{PlanWindow, WindowStatus};
+    let v: Value = serde_json::from_str(line.trim()).ok()?;
+    if v.get("type")?.as_str()? != "rate_limit_event" {
+        return None;
+    }
+    let info = v.get("rate_limit_info").or_else(|| v.get("rateLimitInfo"))?;
+    let status = match info.get("status")?.as_str()? {
+        "allowed" => WindowStatus::Allowed,
+        "allowed_warning" | "warning" => WindowStatus::Warning,
+        "rejected" => WindowStatus::Rejected,
+        _ => return None,
+    };
+    let utilization_pct = info.get("utilization").and_then(Value::as_f64).map(|u| {
+        let pct = if u <= 1.0 { u * 100.0 } else { u };
+        pct.clamp(0.0, 100.0).round() as u8
+    });
+    let resets_at = info
+        .get("resetsAt")
+        .or_else(|| info.get("resets_at"))
+        .and_then(Value::as_i64)
+        .map(|t| if t > 10_000_000_000 { t / 1000 } else { t });
+    let window = info
+        .get("rateLimitType")
+        .or_else(|| info.get("rate_limit_type"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let observed_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    Some(PlanWindow { status, utilization_pct, resets_at, window, observed_at })
+}
+
 /// Background-activity signals from one non-text stream-json line: `tool_use`
 /// blocks on an `assistant` line, `tool_result` blocks on a `user` line, and a
 /// `thinking` block (either). Returns empty for text/delta/result/system lines.
@@ -278,6 +317,9 @@ pub async fn stream_reply(
             for act in extract_activity(&line) {
                 on_activity(act);
             }
+            if let Some(window) = extract_rate_limit(&line) {
+                on_activity(StreamActivity::RateLimit { window });
+            }
         }
     }
 
@@ -381,6 +423,21 @@ mod tests {
         assert!(extract_activity(r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}}"#).is_empty());
         assert!(extract_activity(r#"{"type":"result","result":"done"}"#).is_empty());
         assert!(extract_activity("not json").is_empty());
+    }
+
+    #[test]
+    fn parses_rate_limit_events() {
+        use hive_core::throttle::WindowStatus;
+        let w = extract_rate_limit(r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1900000000,"rateLimitType":"five_hour","utilization":0.86}}"#).unwrap();
+        assert_eq!(w.status, WindowStatus::Warning);
+        assert_eq!(w.utilization_pct, Some(86));
+        assert_eq!(w.resets_at, Some(1_900_000_000));
+        assert_eq!(w.window.as_deref(), Some("five_hour"));
+        let r = extract_rate_limit(r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1900000000000}}"#).unwrap();
+        assert_eq!(r.status, WindowStatus::Rejected);
+        assert_eq!(r.resets_at, Some(1_900_000_000), "milliseconds are normalized");
+        assert!(extract_rate_limit(r#"{"type":"rate_limit_event","rate_limit_info":{"status":"mystery"}}"#).is_none());
+        assert!(extract_rate_limit(r#"{"type":"result","result":"x"}"#).is_none());
     }
 
     #[test]

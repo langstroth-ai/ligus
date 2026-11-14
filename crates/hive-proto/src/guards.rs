@@ -139,6 +139,53 @@ pub struct HygieneReportDto {
     pub stale_proposals: Vec<StaleProposalDto>,
 }
 
+/// A subscription runtime's plan window, as last reported.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct PlanWindowDto {
+    /// Runtime kind, e.g. "ClaudeCode".
+    pub runtime: String,
+    /// "allowed" | "warning" | "rejected"
+    pub status: String,
+    /// The utilization the throttles act on (0-100).
+    pub effective_pct: u8,
+    /// Whether the runtime reported the figure (false = implied by status).
+    pub reported: bool,
+    /// "five_hour", "seven_day", ... or "".
+    pub window: String,
+    /// RFC 3339, or "" when unknown.
+    pub resets_at: String,
+    /// Seconds since it was observed.
+    pub age_secs: u32,
+}
+
+/// Something the throttles are holding back right now.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct DeferredWorkDto {
+    /// "workflow" | "background"
+    pub priority: String,
+    /// What is waiting (a schedule label, an agent, a workflow stage).
+    pub what: String,
+    pub runtime: String,
+    pub utilization_pct: u8,
+    pub threshold_pct: u8,
+}
+
+/// The throttle state for Settings → Guards.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct ThrottleStateDto {
+    pub background_pct: u8,
+    pub workflow_pct: u8,
+    pub stagger_pct: u8,
+    pub windows: Vec<PlanWindowDto>,
+    pub deferred: Vec<DeferredWorkDto>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,5 +204,8 @@ mod tests {
         ChatLockdownDto::export_all(&cfg).unwrap();
         StaleProposalDto::export_all(&cfg).unwrap();
         HygieneReportDto::export_all(&cfg).unwrap();
+        PlanWindowDto::export_all(&cfg).unwrap();
+        DeferredWorkDto::export_all(&cfg).unwrap();
+        ThrottleStateDto::export_all(&cfg).unwrap();
     }
 }

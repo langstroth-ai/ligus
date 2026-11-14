@@ -1371,6 +1371,11 @@ export const getHygieneReport = () =>
 export const runHygieneNow = () =>
   invoke<import("@/bindings/HygieneReportDto").HygieneReportDto>("run_hygiene_now");
 
+// ── Workspace guards: staggered throttles ──
+export type { ThrottleStateDto } from "@/bindings/ThrottleStateDto";
+export const getThrottleState = () =>
+  invoke<import("@/bindings/ThrottleStateDto").ThrottleStateDto>("get_throttle_state");
+
 /// Fires whenever a workflow run's persisted state changes.
 export const onWorkflowRun = (
   cb: (e: WorkflowRunEvent) => void,

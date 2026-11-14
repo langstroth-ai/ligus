@@ -339,17 +339,33 @@ async fn drive_run_inner(
             async move {
                 let result = match p {
                     PreparedStage::Local { responder, session, system, turns } => {
-                        run_prepared_turn(
+                        // Staggered throttle: a workflow stage waits while its
+                        // runtime's plan window is past this agent's threshold.
+                        let agent_key = responder.agent_id.map(|a| a.to_string()).unwrap_or_else(|| responder.author.clone());
+                        match crate::guards::wait_for_capacity(
                             app,
-                            state,
-                            session_id,
-                            workspace_id,
-                            &responder,
-                            &session,
-                            system,
-                            turns,
+                            responder.runtime.provider,
+                            hive_core::throttle::TurnPriority::Workflow,
+                            &agent_key,
+                            Some(run_id),
                         )
                         .await
+                        {
+                            Err(e) => Err(e),
+                            Ok(()) => {
+                                run_prepared_turn(
+                                    app,
+                                    state,
+                                    session_id,
+                                    workspace_id,
+                                    &responder,
+                                    &session,
+                                    system,
+                                    turns,
+                                )
+                                .await
+                            }
+                        }
                     }
                     PreparedStage::Remote { agent_author, prompt_message_id } => {
                         await_remote_stage(

@@ -8031,6 +8031,11 @@ async fn run_prepared_turn(
                     content: text,
                     is_error: false,
                 },
+                // Plan-window telemetry: feeds the staggered throttles, not the UI stream.
+                dispatch::StreamActivity::RateLimit { window } => {
+                    crate::guards::record_plan_window(state, responder.runtime.provider, window);
+                    return;
+                }
             };
             let _ = app.emit(ChatActivityEvent::EVENT, ev);
         },
@@ -8167,6 +8172,7 @@ async fn run_prepared_turn(
                 return Err(msg);
             }
             tracing::error!(target: "dispatch", error = %msg, "turn failed");
+            crate::guards::record_usage_error(state, responder.runtime.provider, &msg);
             {
                 let mut svc = state.service.lock().unwrap();
                 let _ = svc.complete_assistant_message(
@@ -8385,6 +8391,18 @@ async fn send_message(
             visited.push(a.id);
         }
         let responder = responder_for(&state, &session, agent.as_ref());
+
+        // Protect the brood: the person's own turn (depth 0) always runs. An
+        // agent-to-agent hand-off is workflow-tier work and pauses when the
+        // runtime's plan window is past this agent's staggered threshold.
+        if depth > 0 {
+            let key = responder.agent_id.map(|a| a.to_string()).unwrap_or_else(|| responder.author.clone());
+            if let Some(note) = crate::guards::cascade_paused(&state, workspace_id, sid, responder.runtime.provider, &key, &responder.author) {
+                let mut svc = state.service.lock().unwrap();
+                let _ = svc.post_system_note(sid, workspace_id, note);
+                break;
+            }
+        }
 
         // Cross-device dispatch: only the device that owns this responder runs
         // the turn. If it's owned elsewhere, we've already recorded the user
@@ -10980,6 +10998,11 @@ async fn run_scheduler_loop(app: AppHandle, settings: Arc<Mutex<LiveSettings>>, 
                 .collect()
         };
         for sched in due {
+            // Staggered throttle: scheduled work is the first to back off near
+            // a plan-window limit. Not stamped, so it fires once there's room.
+            if crate::guards::defer_background(&app, &sched.runtime_id, &sched.id) {
+                continue;
+            }
             if let Err(e) = fire_schedule(&app, &sched).await {
                 tracing::error!(target: "scheduler", "schedule {} failed: {e}", sched.label);
             }
@@ -14341,6 +14364,7 @@ pub fn run() {
             guards::clear_chat_lockdown,
             guards::lock_chat,
             guards::run_hygiene_now,
+            guards::get_throttle_state,
             guards::get_hygiene_report,
             get_app_info,
             list_relay_users,
