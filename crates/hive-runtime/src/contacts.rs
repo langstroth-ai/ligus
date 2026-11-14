@@ -216,6 +216,23 @@ impl RelayClient {
         Ok(resp.json().await?)
     }
 
+    /// Read this account's whole box, page by page (at most 64 pages; a
+    /// relay that doesn't advance the seqs stops the read).
+    pub async fn contact_drops_all(&self, cid: &str, write_key: &str) -> Result<Vec<ContactDrop>, ContactsError> {
+        let mut out: Vec<ContactDrop> = Vec::new();
+        let mut after = 0u64;
+        for _ in 0..64 {
+            let page = self.contact_drops(cid, write_key, after).await?;
+            let next = page.items.iter().map(|d| d.seq).max().unwrap_or(after);
+            out.extend(page.items.into_iter().filter(|d| d.seq > after));
+            if !page.more || next <= after {
+                break;
+            }
+            after = next;
+        }
+        Ok(out)
+    }
+
     /// Delete every drop up to and including `through` from this account's
     /// box.
     pub async fn contact_drops_ack(&self, cid: &str, write_key: &str, through: u64) -> Result<(), ContactsError> {
@@ -559,6 +576,29 @@ mod tests {
         assert!(RelayClient::new(&a).contact_drops(&cid, &master, 0).await.is_ok());
         assert!(stolen.contact_drops(&cid, &master, 0).await.is_ok());
         assert!(RelayClient::new(&b).contact_put(&cid, &master, &rec, false).await.is_ok());
+    }
+
+    /// A box with more drops than one page (junk sealed to the owner's public
+    /// keys, or invites left unanswered) must not hide later invites: the
+    /// owner reads every page.
+    #[tokio::test]
+    async fn drop_flood_does_not_hide_later_invites() {
+        async fn paged(State(s): State<S>, Path(cid): Path<String>, Query(q): Query<HashMap<String, String>>) -> Json<serde_json::Value> {
+            let f = s.lock().unwrap();
+            let after: usize = q.get("after").and_then(|a| a.parse().ok()).unwrap_or(0);
+            let all = f.drops.get(&cid).cloned().unwrap_or_default();
+            let items: Vec<_> = all.iter().enumerate().skip(after).take(3).map(|(i, b)| serde_json::json!({ "seq": i + 1, "blob": b })).collect();
+            Json(serde_json::json!({ "items": items, "more": after + 3 < all.len() }))
+        }
+        let s: S = Arc::default();
+        let cid = new_cid();
+        let mut drops: Vec<serde_json::Value> = (0..7).map(|i| serde_json::json!({ "junk": i })).collect();
+        drops.push(serde_json::json!({ "real": true }));
+        s.lock().unwrap().drops.insert(cid.clone(), drops);
+        let base = spawn(Router::new().route("/v1/contacts/:cid/drop", get(paged)).with_state(s)).await;
+        let items = RelayClient::new(&base).contact_drops_all(&cid, &new_write_key()).await.unwrap();
+        assert_eq!(items.len(), 8);
+        assert_eq!(items.last().unwrap().blob, serde_json::json!({ "real": true }));
     }
 
     /// S15: a 2.0 client against a relay without the contact routes (v0.2)

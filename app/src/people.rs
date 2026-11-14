@@ -667,11 +667,11 @@ pub(crate) async fn list_pending_invites(state: State<'_, AppState>) -> Result<P
     let mut handled_now: BTreeMap<String, Vec<u64>> = BTreeMap::new();
     for relay in contact.published.keys() {
         let client = state.relay_client(relay);
-        let Ok(page) = client.contact_drops(&contact.cid, &contact.write_key, 0).await else { continue };
+        let Ok(items) = client.contact_drops_all(&contact.cid, &contact.write_key).await else { continue };
         let already = contact.handled.get(relay).cloned().unwrap_or_default();
         let mut pending = Vec::new();
         let mut handled = already.clone();
-        for item in page.items {
+        for item in items {
             if already.contains(&item.seq) {
                 continue;
             }
