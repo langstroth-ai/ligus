@@ -158,6 +158,10 @@ pub struct WorkspaceRoster {
     /// workspace was in dearth mode and lack a second approval:
     /// `(workspace, device, account)`.
     pending: Vec<(Uuid, Uuid, Uuid)>,
+    /// Workspaces whose config log has dearth mode on (Admin-authorized).
+    /// While on, an event no certified device vouches for is held, not
+    /// accepted, whatever the identity mode.
+    dearth_workspaces: HashSet<Uuid>,
     /// Accounts for which two *different* signing keys were registered — a
     /// contested binding. Events stamped as one of these are quarantined (fail
     /// closed), so a forged registration under a victim's account can't hijack it.
@@ -390,6 +394,7 @@ pub fn build_roster(envelopes: &[SessionEventEnvelope]) -> WorkspaceRoster {
         }
     }
     let dearth = dearth_policies(&ordered);
+    roster.dearth_workspaces = dearth.keys().copied().collect();
     for (cert, ws) in certs.iter().zip(&cert_ws) {
         let Some(account_key) = account_keys.get(&cert.account_id) else { continue };
         if cert.verify(account_key).is_err() {
@@ -443,6 +448,24 @@ pub enum Verdict {
     Unverifiable(QuarantineReason),
 }
 
+/// Account-key and certificate events: inert in projection (only the roster
+/// reads them, and the roster applies the dearth policy to certificates
+/// itself), and Admins must be able to see a pending device to approve it.
+fn is_trust_bootstrap(env: &SessionEventEnvelope) -> bool {
+    matches!(
+        env.payload,
+        SessionEvent::AccountKeyRegistered { .. }
+            | SessionEvent::AccountKeyRotated { .. }
+            | SessionEvent::DeviceCertificateAdded { .. }
+    )
+}
+
+/// Dearth mode is on for the event's workspace and the event is not a trust
+/// bootstrap: an event no certified device vouches for waits.
+fn entrance_closed(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> bool {
+    roster.dearth_workspaces.contains(&env.workspace_id) && !is_trust_bootstrap(env)
+}
+
 /// Classify an envelope against the roster (see [`Verdict`]).
 pub fn verdict_for(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verdict {
     let Some(device_id) = env.signer_device_id else {
@@ -457,6 +480,8 @@ pub fn verdict_for(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verd
         // author, so it stays the lenient `Unverifiable`.
         return if env.actor_stamp.is_some() {
             Verdict::Quarantine(QuarantineReason::Unsigned)
+        } else if entrance_closed(roster, env) {
+            Verdict::Unverifiable(QuarantineReason::PendingApproval)
         } else {
             Verdict::Unverifiable(QuarantineReason::Unsigned)
         };
@@ -465,7 +490,10 @@ pub fn verdict_for(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verd
         return Verdict::Quarantine(QuarantineReason::RevokedDevice);
     }
     let Some(signing_key) = roster.public_key(device_id) else {
-        if roster.pending.iter().any(|(_, d, _)| *d == device_id) {
+        if roster.pending.iter().any(|(_, d, _)| *d == device_id) && !is_trust_bootstrap(env) {
+            return Verdict::Unverifiable(QuarantineReason::PendingApproval);
+        }
+        if entrance_closed(roster, env) {
             return Verdict::Unverifiable(QuarantineReason::PendingApproval);
         }
         return Verdict::Unverifiable(QuarantineReason::UnknownDevice);

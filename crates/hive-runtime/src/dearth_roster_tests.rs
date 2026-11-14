@@ -150,3 +150,36 @@ fn a_pending_device_is_not_accepted_in_relay_mode() {
     let action = gate_ingest(IdentityMode::Relay, verdict_for(&roster, &e), Some(owner.account), None, &IdentityCache::new());
     assert!(!matches!(action, IngestAction::Accept), "an unapproved dearth-mode device's event was accepted: {action:?}");
 }
+
+/// The same entrance, without publishing a certificate at all: a device the
+/// roster has never seen (and an unsigned event) must not be accepted while
+/// dearth mode is on in Relay mode either, or skipping the certificate is a
+/// way around the second approval.
+#[test]
+fn an_uncertified_device_is_not_accepted_during_dearth_in_relay_mode() {
+    use crate::envelope_verifier::verdict_for;
+    use crate::identity_verifier::{gate_ingest, IdentityCache, IdentityMode, IngestAction};
+    let (mut log, owner, _admin2, _alice, laptop) = setup();
+    log.push(&owner, dearth(true, vec![laptop]));
+    let stranger = SigningKeypair::generate().unwrap();
+    let mut e = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 99, SessionEvent::SessionTitleChanged { title: "x".into() });
+    e.lamport = 99;
+    hive_core::sign_envelope(&mut e, Uuid::new_v4(), &stranger);
+    let mut unsigned = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 98, SessionEvent::SessionTitleChanged { title: "y".into() });
+    unsigned.lamport = 98;
+    let roster = build_roster(&log.envs);
+    for ev in [&e, &unsigned] {
+        let action = gate_ingest(IdentityMode::Relay, verdict_for(&roster, ev), None, None, &IdentityCache::new());
+        assert!(!matches!(action, IngestAction::Accept), "an unverifiable event was accepted during dearth mode: {action:?}");
+    }
+    // Control: with dearth mode off the lenient Relay policy is unchanged.
+    let (log2, ..) = setup();
+    let roster = build_roster(&log2.envs);
+    let mut e2 = e.clone();
+    e2.workspace_id = log2.ws;
+    hive_core::sign_envelope(&mut e2, Uuid::new_v4(), &stranger);
+    assert!(matches!(
+        gate_ingest(IdentityMode::Relay, verdict_for(&roster, &e2), None, None, &IdentityCache::new()),
+        IngestAction::Accept
+    ));
+}
