@@ -16,6 +16,6 @@ dependencies:
   # chart. Most installs point at an existing relay (relayUrl) instead.
   - name: ligus-relay
     alias: relay
-    version: 0.1.0
+    version: 0.2.0
     repository: oci://ghcr.io/ligus-ai/charts
     condition: relay.enabled

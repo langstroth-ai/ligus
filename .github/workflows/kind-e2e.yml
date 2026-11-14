@@ -99,9 +99,13 @@ jobs:
         run: |
           kubectl create namespace ligus-relay
           kubectl label namespace ligus-relay pod-security.kubernetes.io/enforce=restricted
+          # The relay chart's tunnel is off by default since relay 0.2.0. Open
+          # is fine for this throwaway in-cluster relay; never without a token
+          # gate on a reachable one.
           helm install ligus-relay _relay/deploy/helm/ligus-relay -n ligus-relay \
             --set image.repository=ligus-relay --set image.tag=dev \
-            --set postgres.enabled=true --set postgres.persistence.size=256Mi --wait --timeout 5m
+            --set postgres.enabled=true --set postgres.persistence.size=256Mi \
+            --set tunnel.mode=open --wait --timeout 5m
           helm test ligus-relay -n ligus-relay --logs
       - name: install workspace (throwaway)
         run: |
