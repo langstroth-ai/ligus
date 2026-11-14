@@ -301,13 +301,31 @@ impl FsPolicy {
         Ok(text.split_inclusive('\n').skip(start).take(take).collect())
     }
 
+    /// Whether `p` (inside the root) is protected: under a read-only path,
+    /// or naming one of the root's protected entries at any depth, compared
+    /// case-insensitively (macOS and Windows file systems ignore case, so a
+    /// not-yet-existing `.CLAUDE/` is `.claude/`).
+    fn protected(&self, p: &Path) -> bool {
+        if self.read_only.iter().any(|r| p.starts_with(r)) {
+            return true;
+        }
+        let names: Vec<String> = self
+            .read_only
+            .iter()
+            .filter(|r| r.parent() == Some(self.root.as_path()))
+            .filter_map(|r| r.file_name().map(|n| n.to_string_lossy().to_lowercase()))
+            .collect();
+        let rel = p.strip_prefix(&self.root).unwrap_or(p);
+        rel.components().any(|c| names.iter().any(|n| *n == c.as_os_str().to_string_lossy().to_lowercase()))
+    }
+
     /// `fs/write_text_file`.
     pub fn write(&self, path: &str, content: &str) -> Result<(), String> {
         if !self.writable {
             return Err("this turn may not write files".into());
         }
         let c = self.inside(path)?;
-        if self.read_only.iter().any(|r| c.starts_with(r)) {
+        if self.protected(&c) {
             return Err("that path is protected".into());
         }
         let parent = c.parent().ok_or("no parent directory")?;
@@ -328,7 +346,7 @@ impl FsPolicy {
             return Err("outside the turn's directory".into());
         }
         let target = real_parent.join(name);
-        if self.read_only.iter().any(|r| target.starts_with(r)) {
+        if self.protected(&target) {
             return Err("that path is protected".into());
         }
         let mut opts = std::fs::OpenOptions::new();
@@ -970,5 +988,25 @@ mod tests {
         assert!(!target.exists(), "wrote outside the worktree through a dangling symlink");
         assert!(fs.write(root.join("hook").to_str().unwrap(), "#!/bin/sh").is_err());
         assert!(!root.join(".git/hooks/pre-commit").exists(), "wrote a git hook through a dangling symlink");
+    }
+
+    /// Protected paths are compared by name, case-insensitively and at any
+    /// depth (macOS and Windows file systems ignore case, so `.CLAUDE/` is
+    /// `.claude/`).
+    #[test]
+    fn fs_write_protected_paths_ignore_case_and_depth() {
+        let wt = tempfile::tempdir().unwrap();
+        let root = crate::executor::canonical(wt.path());
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        let fs = FsPolicy {
+            root: root.clone(),
+            writable: true,
+            read_only: vec![root.join(".git"), root.join(".claude"), root.join("ligus.config.toml")],
+            deny_read: vec![],
+        };
+        for p in [".CLAUDE/settings.json", ".Git/hooks/pre-commit", "LIGUS.CONFIG.TOML", "sub/.claude/settings.json"] {
+            assert!(fs.write(root.join(p).to_str().unwrap(), "{}").is_err(), "{p} must be protected");
+        }
+        assert!(fs.write(root.join("sub/ok.txt").to_str().unwrap(), "ok").is_ok());
     }
 }
