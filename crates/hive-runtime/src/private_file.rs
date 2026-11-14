@@ -13,10 +13,15 @@ use std::path::Path;
 /// atomically: readers see the old file or the new one, never a partial one.
 /// An existing file's looser mode is tightened too.
 pub fn write_private_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_private_atomic_with(path, bytes, getrandom::fill)
+}
+
+/// [`write_private_atomic`] with the randomness source for the temp name.
+fn write_private_atomic_with(path: &Path, bytes: &[u8], fill: fn(&mut [u8]) -> Result<(), getrandom::Error>) -> std::io::Result<()> {
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let mut rnd = [0u8; 6];
-    let _ = getrandom::fill(&mut rnd);
+    fill(&mut rnd).map_err(|e| std::io::Error::other(format!("no OS randomness for a temp file name: {e}")))?;
     let suffix: String = rnd.iter().map(|b| format!("{b:02x}")).collect();
     let tmp = dir.join(format!(".{name}.{suffix}.tmp"));
     let mut opts = std::fs::OpenOptions::new();
@@ -69,5 +74,17 @@ mod tests {
         // No temp files left behind.
         let names: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
         assert_eq!(names.len(), 1, "{names:?}");
+    }
+
+    /// No OS randomness: the write fails instead of using a fixed temp name
+    /// (which another local user could pre-create or race), and nothing is
+    /// written.
+    #[test]
+    fn refuses_to_write_without_randomness() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("settings.json");
+        let err = write_private_atomic_with(&p, b"secret", |_| Err(getrandom::Error::UNSUPPORTED)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::Other, "{err}");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 }

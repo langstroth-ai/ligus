@@ -10845,14 +10845,31 @@ fn open_file_access_settings() -> Result<(), String> {
 /// the new and old URLs side by side.
 const VERSION_MANIFEST_URLS: [&str; 1] = ["https://docs.ligus.ai/version.json"];
 
-/// The first manifest among `urls` that answers 2xx with a parseable body.
-async fn fetch_update_manifest(client: &reqwest::Client, urls: &[&str]) -> Option<UpdateInfo> {
-    for url in urls {
-        let Ok(resp) = client.get(*url).send().await else { continue };
-        if !resp.status().is_success() {
-            continue;
+/// Largest version-manifest body read, in bytes. The real one is a few
+/// hundred bytes; a bigger answer is refused rather than buffered.
+const MAX_MANIFEST_BYTES: usize = 64 * 1024;
+/// How long one manifest URL gets, connect to last byte.
+const MANIFEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// The first manifest among `urls` that answers 2xx with a parseable body of
+/// at most [`MAX_MANIFEST_BYTES`] within `per_url`.
+async fn fetch_update_manifest(client: &reqwest::Client, urls: &[&str], per_url: std::time::Duration) -> Option<UpdateInfo> {
+    async fn one(client: &reqwest::Client, url: &str) -> Option<UpdateInfo> {
+        let mut resp = client.get(url).send().await.ok()?;
+        if !resp.status().is_success() || resp.content_length().is_some_and(|n| n > MAX_MANIFEST_BYTES as u64) {
+            return None;
         }
-        if let Ok(info) = resp.json::<UpdateInfo>().await {
+        let mut buf: Vec<u8> = Vec::new();
+        while let Some(chunk) = resp.chunk().await.ok()? {
+            if buf.len() + chunk.len() > MAX_MANIFEST_BYTES {
+                return None;
+            }
+            buf.extend_from_slice(&chunk);
+        }
+        serde_json::from_slice(&buf).ok()
+    }
+    for url in urls {
+        if let Ok(Some(info)) = tokio::time::timeout(per_url, one(client, url)).await {
             return Some(info);
         }
     }
@@ -10909,10 +10926,10 @@ async fn check_for_app_update() -> Option<UpdateInfo> {
         return None;
     }
     let client = hive_forge::http_client_builder()
-        .timeout(std::time::Duration::from_secs(8))
+        .timeout(MANIFEST_TIMEOUT)
         .build()
         .ok()?;
-    let mut info = fetch_update_manifest(&client, &VERSION_MANIFEST_URLS).await?;
+    let mut info = fetch_update_manifest(&client, &VERSION_MANIFEST_URLS, MANIFEST_TIMEOUT).await?;
     info.url = release_page_url(&info.url);
     // Only offer an update when the manifest is a *strictly newer* release than
     // this build. Comparing tags for mere inequality (the old behavior) would
@@ -15245,6 +15262,39 @@ mod update_version_tests {
         format!("http://{addr}")
     }
 
+    /// A manifest body over the cap is refused (the docs host can't make the
+    /// app buffer an unbounded answer), and a host that never finishes
+    /// answering is given up on: the next URL is tried.
+    #[tokio::test]
+    async fn manifest_is_size_capped_and_timed_out() {
+        let client = hive_forge::new_http_client();
+        let huge: &'static str = Box::leak(format!(r#"{{"tag":"v9.0.0","notes":"{}"}}"#, "x".repeat(super::MAX_MANIFEST_BYTES)).into_boxed_str());
+        let ok = r#"{"tag":"v2.0.0"}"#;
+        let base = serve(vec![("/huge.json", 200, huge), ("/ok.json", 200, ok)]);
+        let (huge_url, ok_url) = (format!("{base}/huge.json"), format!("{base}/ok.json"));
+        assert!(super::fetch_update_manifest(&client, &[&huge_url], super::MANIFEST_TIMEOUT).await.is_none());
+        assert_eq!(super::fetch_update_manifest(&client, &[&huge_url, &ok_url], super::MANIFEST_TIMEOUT).await.unwrap().tag, "v2.0.0");
+
+        // Headers, then silence.
+        let stall = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let stall_url = format!("http://{}/v.json", stall.local_addr().unwrap());
+        std::thread::spawn(move || {
+            use std::io::Write;
+            let mut held = Vec::new();
+            for mut s in stall.incoming().flatten() {
+                let mut req = [0u8; 4096];
+                let _ = std::io::Read::read(&mut s, &mut req);
+                let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{");
+                held.push(s);
+            }
+        });
+        let started = std::time::Instant::now();
+        let got = super::fetch_update_manifest(&client, &[&stall_url, &ok_url], std::time::Duration::from_millis(300)).await;
+        assert_eq!(got.unwrap().tag, "v2.0.0");
+        let took = started.elapsed();
+        assert!(took >= std::time::Duration::from_millis(300) && took < std::time::Duration::from_secs(5), "{took:?}");
+    }
+
     #[tokio::test]
     async fn manifest_falls_back_to_the_old_url_and_prefers_the_new_one() {
         let client = hive_forge::new_http_client();
@@ -15256,15 +15306,15 @@ mod update_version_tests {
         let u = |p: &str| format!("{base}{p}");
         // New host not live yet (404) or serving junk: the old one answers.
         let (missing, garbage, old, new) = (u("/missing.json"), u("/garbage.json"), u("/old.json"), u("/new.json"));
-        let got = super::fetch_update_manifest(&client, &[&missing, &old]).await.unwrap();
+        let got = super::fetch_update_manifest(&client, &[&missing, &old], super::MANIFEST_TIMEOUT).await.unwrap();
         assert_eq!(got.tag, "v1.19.0");
-        let got = super::fetch_update_manifest(&client, &[&garbage, &old]).await.unwrap();
+        let got = super::fetch_update_manifest(&client, &[&garbage, &old], super::MANIFEST_TIMEOUT).await.unwrap();
         assert_eq!(got.tag, "v1.19.0");
         // Both up: the new one wins.
-        let got = super::fetch_update_manifest(&client, &[&new, &old]).await.unwrap();
+        let got = super::fetch_update_manifest(&client, &[&new, &old], super::MANIFEST_TIMEOUT).await.unwrap();
         assert_eq!(got.tag, "v2.0.0");
         // Nothing answers: quiet None. (Port 9 on localhost is closed.)
-        assert!(super::fetch_update_manifest(&client, &[&missing, "http://127.0.0.1:9/x.json"]).await.is_none());
+        assert!(super::fetch_update_manifest(&client, &[&missing, "http://127.0.0.1:9/x.json"], super::MANIFEST_TIMEOUT).await.is_none());
     }
 
     #[test]

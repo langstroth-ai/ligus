@@ -78,7 +78,11 @@ resolves to one) is refused unless you tick **Internal server on this device's n
 it (`ligus forge add --internal` on a box). The mark stays on that device and
 is never synced; it stops a code-host address from being used to reach
 other machines on your network, such as a cloud metadata service. Behind an
-HTTP proxy, the proxy resolves the address instead.
+HTTP proxy, the proxy resolves the address instead. That includes the proxy
+in your macOS or Windows network settings, not only `HTTPS_PROXY`. A proxy on
+your own machine or network is allowed from either source. A code-host
+address with the same name as the proxy that `NO_PROXY` sends direct is
+refused unless the connection is marked internal.
 
 ## On the desktop
 

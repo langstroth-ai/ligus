@@ -4,6 +4,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use hyper_util::client::proxy::matcher::Matcher;
 use reqwest::{Method, StatusCode};
 use serde_json::Value;
 
@@ -62,17 +63,27 @@ pub fn install_tls_provider() {
     });
 }
 
-/// Whether reqwest's default verifier (rustls-platform-verifier: the OS
-/// trust store) can be built here. On Linux it refuses to build when the
-/// system has no CA certificates (a minimal container, an empty
-/// `SSL_CERT_FILE`), which would make every client build fail and
-/// `Client::new()` panic, even for loopback-only use. Probed once.
-fn platform_roots_usable() -> bool {
+/// The process's rustls provider (ring unless someone installed another).
+fn tls_provider() -> std::sync::Arc<rustls::crypto::CryptoProvider> {
+    install_tls_provider();
+    rustls::crypto::CryptoProvider::get_default()
+        .cloned()
+        .unwrap_or_else(|| std::sync::Arc::new(rustls::crypto::ring::default_provider()))
+}
+
+/// Whether the OS trust store can be used here: rustls-platform-verifier
+/// (what reqwest verifies with by default) builds. On Linux it refuses to
+/// build when the system has no CA certificates (a minimal container, an
+/// empty `SSL_CERT_FILE`), which would make every client build fail and
+/// `Client::new()` panic, even for loopback-only use. Probed once; the one
+/// answer picks the roots for HTTP ([`client_builder`]) and for every other
+/// TLS connection ([`tls_client_config`]) alike.
+pub fn uses_platform_roots() -> bool {
     static OK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *OK.get_or_init(|| {
-        let ok = reqwest::Client::builder().build().is_ok();
+        let ok = rustls_platform_verifier::Verifier::new(tls_provider()).is_ok();
         if !ok {
-            tracing::warn!("no usable system CA certificates; HTTPS verifies against Ligus's bundled Mozilla roots");
+            tracing::warn!("no usable system CA certificates; TLS verifies against Ligus's bundled Mozilla roots");
         }
         ok
     })
@@ -81,25 +92,41 @@ fn platform_roots_usable() -> bool {
 /// A verifying rustls config over the bundled Mozilla roots (what reqwest
 /// 0.12 used before the OS trust store), for hosts without a CA store.
 fn bundled_roots_tls() -> rustls::ClientConfig {
-    let provider = rustls::crypto::CryptoProvider::get_default()
-        .cloned()
-        .unwrap_or_else(|| std::sync::Arc::new(rustls::crypto::ring::default_provider()));
     let roots = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
-    rustls::ClientConfig::builder_with_provider(provider)
+    rustls::ClientConfig::builder_with_provider(tls_provider())
         .with_safe_default_protocol_versions()
         .expect("ring supports the default TLS versions")
         .with_root_certificates(roots)
         .with_no_client_auth()
 }
 
+/// The rustls client config for a TLS connection Ligus makes outside
+/// reqwest (the relay tunnel's WebSockets). It trusts exactly what the HTTP
+/// clients trust: the OS trust store, or the bundled Mozilla roots when the
+/// OS has none. No ALPN is set; callers add their own.
+pub fn tls_client_config() -> rustls::ClientConfig {
+    let provider = tls_provider();
+    if uses_platform_roots() {
+        if let Ok(v) = rustls_platform_verifier::Verifier::new(provider.clone()) {
+            return rustls::ClientConfig::builder_with_provider(provider)
+                .with_safe_default_protocol_versions()
+                .expect("ring supports the default TLS versions")
+                .dangerous()
+                .with_custom_certificate_verifier(std::sync::Arc::new(v))
+                .with_no_client_auth();
+        }
+    }
+    bundled_roots_tls()
+}
+
 /// `reqwest::Client::builder()` with the TLS provider installed. Use this
 /// (not `reqwest::Client::builder()`) everywhere in Ligus. Certificates are
 /// verified against the OS trust store, or the bundled Mozilla roots when the
-/// OS has none.
+/// OS has none (the same choice as [`tls_client_config`]).
 pub fn client_builder() -> reqwest::ClientBuilder {
     install_tls_provider();
     let b = reqwest::Client::builder();
-    if platform_roots_usable() {
+    if uses_platform_roots() {
         b
     } else {
         b.tls_backend_preconfigured(bundled_roots_tls())
@@ -182,13 +209,31 @@ pub(crate) fn internal_refused(what: &str) -> ForgeError {
 /// Refuse a URL whose host is an internal IP literal (literals never go
 /// through the resolver).
 pub(crate) fn check_url_address(raw: &str, internal: bool) -> Result<()> {
+    check_url_address_with(raw, internal, &proxy_matcher())
+}
+
+/// [`check_url_address`] against the proxy settings in `proxies`. Besides
+/// internal IP literals, it refuses a target whose name is a proxy's host but
+/// that would go direct (excluded by `NO_PROXY`): the resolver answers proxy
+/// hosts as is, so that target would reach the proxy's (possibly internal)
+/// address without the guard.
+fn check_url_address_with(raw: &str, internal: bool, proxies: &Matcher) -> Result<()> {
     if internal {
         return Ok(());
     }
-    let ip = match url::Url::parse(raw).ok().and_then(|u| u.host().map(|h| h.to_owned())) {
+    let Ok(u) = url::Url::parse(raw) else { return Ok(()) };
+    let ip = match u.host().map(|h| h.to_owned()) {
         Some(url::Host::Ipv4(ip)) => std::net::IpAddr::V4(ip),
         Some(url::Host::Ipv6(ip)) => std::net::IpAddr::V6(ip),
-        _ => return Ok(()),
+        Some(url::Host::Domain(d)) => {
+            let d = d.to_ascii_lowercase();
+            let direct = raw.parse::<http::Uri>().map(|uri| proxies.intercept(&uri).is_none()).unwrap_or(true);
+            if direct && proxy_hosts_of(proxies).contains(&d) {
+                return Err(internal_refused(&d));
+            }
+            return Ok(());
+        }
+        None => return Ok(()),
     };
     if is_public_ip(ip) {
         Ok(())
@@ -197,18 +242,34 @@ pub(crate) fn check_url_address(raw: &str, internal: bool) -> Result<()> {
     }
 }
 
-/// The hosts of the proxies in the environment: the resolver answers for
+/// The proxy settings reqwest applies: hyper-util's `Matcher::from_system`,
+/// which reqwest's own system proxy calls. That is the environment
+/// (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`) and, where it sets
+/// nothing, the OS proxy settings on macOS and Windows. Read per check, as
+/// reqwest reads it per client.
+fn proxy_matcher() -> Matcher {
+    Matcher::from_system()
+}
+
+/// The hosts of the configured proxies (env or OS): the resolver answers for
 /// them as is (a local proxy is the person's own setup; through a proxy the
 /// target is resolved by the proxy, see the docs' caveat).
 fn proxy_hosts() -> Vec<String> {
-    ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]
-        .iter()
-        .filter_map(|k| std::env::var(k).ok())
-        .filter_map(|v| {
-            let v = if v.contains("://") { v } else { format!("http://{v}") };
-            url::Url::parse(&v).ok().and_then(|u| u.host_str().map(|h| h.trim_matches(['[', ']']).to_ascii_lowercase()))
-        })
-        .collect()
+    proxy_hosts_of(&proxy_matcher())
+}
+
+/// The proxy hosts `m` sends http and https requests to.
+fn proxy_hosts_of(m: &Matcher) -> Vec<String> {
+    let mut hosts: Vec<String> = Vec::new();
+    for probe in ["http://ligus-proxy-probe.invalid/", "https://ligus-proxy-probe.invalid/"] {
+        let Ok(uri) = probe.parse::<http::Uri>() else { continue };
+        if let Some(h) = m.intercept(&uri).and_then(|i| i.uri().host().map(|h| h.trim_matches(['[', ']']).to_ascii_lowercase())) {
+            if !hosts.contains(&h) {
+                hosts.push(h);
+            }
+        }
+    }
+    hosts
 }
 
 /// A resolver that answers with public addresses only, so a name that
@@ -393,6 +454,55 @@ pub(crate) fn id_str(v: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// Non-reqwest TLS trusts the same roots as reqwest: the OS store's
+    /// verifier, or the bundled roots when the OS has none.
+    #[test]
+    fn tls_client_config_follows_the_root_policy() {
+        let dbg = format!("{:?}", super::tls_client_config());
+        if super::uses_platform_roots() {
+            assert!(dbg.contains("verifier: Verifier"), "{dbg}");
+        } else {
+            assert!(dbg.contains("WebPkiServerVerifier"), "{dbg}");
+        }
+        assert!(super::tls_client_config().alpn_protocols.is_empty());
+    }
+
+    /// What a macOS or Windows system proxy setting looks like to the
+    /// matcher (`host:port`, no scheme), and an env-style one.
+    fn proxied(p: &str, no: &str) -> super::Matcher {
+        super::Matcher::builder().http(p).https(p).no(no).build()
+    }
+
+    /// A system proxy on localhost is answered by the public-only resolver
+    /// exactly like an env proxy on localhost (it used to be refused, so the
+    /// forge client failed wherever the OS proxy was a local one).
+    #[tokio::test]
+    async fn a_system_proxy_on_localhost_is_trusted_like_an_env_one() {
+        use reqwest::dns::Resolve;
+        for p in ["localhost:3128", "http://localhost:3128", "http://user:pw@LocalHost:3128"] {
+            let hosts = super::proxy_hosts_of(&proxied(p, ""));
+            assert_eq!(hosts, vec!["localhost".to_string()], "{p}");
+            let r = super::PublicOnly { proxies: hosts };
+            assert!(r.resolve("localhost".parse().unwrap()).await.is_ok(), "{p}");
+        }
+        assert!(super::proxy_hosts_of(&super::Matcher::builder().build()).is_empty());
+        let r = super::PublicOnly { proxies: vec![] };
+        assert!(r.resolve("localhost".parse().unwrap()).await.is_err());
+    }
+
+    /// A target named like the proxy but excluded from it (NO_PROXY) would be
+    /// resolved here, with the proxy's exemption: refused unless the
+    /// connection is internal. Proxied targets and other names are fine.
+    #[test]
+    fn a_direct_target_named_like_the_proxy_is_refused() {
+        let m = proxied("localhost:3128", "localhost");
+        assert!(super::check_url_address_with("https://localhost:8443/api", false, &m).is_err());
+        assert!(super::check_url_address_with("https://localhost:8443/api", true, &m).is_ok());
+        assert!(super::check_url_address_with("https://git.example.com/api", false, &m).is_ok());
+        let m = proxied("localhost:3128", "");
+        assert!(super::check_url_address_with("https://localhost:8443/api", false, &m).is_ok());
+    }
+
     #[test]
     fn forge_messages_are_one_bounded_line() {
         assert_eq!(super::forge_message(r#"{"message":"Validation Failed","errors":[{"message":"A pull request already exists for a:b."}]}"#), "Validation Failed; A pull request already exists for a:b.");

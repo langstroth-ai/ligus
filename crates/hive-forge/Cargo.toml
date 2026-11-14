@@ -21,7 +21,16 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 # Fallback roots when the OS has no CA store (already in the tree via iroh-relay
 # and tokio-tungstenite).
 webpki-roots = "1"
+# The OS trust store verifier reqwest uses, built directly for TLS outside
+# reqwest (the relay tunnel) so both trust the same roots. Already in the
+# tree via reqwest.
+rustls-platform-verifier = "0.7"
 url = "2"
+# The proxy settings reqwest applies (env, plus the OS settings on macOS and
+# Windows via client-proxy-system, the same feature reqwest's system-proxy
+# turns on), read by the public-address guard so it sees the same proxies.
+http = "1"
+hyper-util = { version = "0.1", default-features = false, features = ["client-proxy", "client-proxy-system"] }
 zeroize = "1"
 toml = "1.2"
 uuid.workspace = true

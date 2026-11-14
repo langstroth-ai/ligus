@@ -84,6 +84,11 @@ fn derive_key_nonce(shared: &[u8], ephemeral_pub: &[u8], recipient_pub: &[u8]) -
 
 /// Seal `plaintext` (the workspace key) for `recipient_public` (an X25519
 /// public key).
+///
+/// A low-order recipient key (one that forces the all-zero shared secret,
+/// which anyone can compute) is refused with [`CryptoError::BadKey`], as
+/// [`open`] refuses a low-order ephemeral key: the same check the tunnel's
+/// Noise handshake makes on every DH output.
 pub fn seal(recipient_public: &[u8], plaintext: &[u8]) -> Result<SealedBlob, CryptoError> {
     let recipient: [u8; 32] = recipient_public.try_into().map_err(|_| CryptoError::BadKey)?;
     let recipient_pk = PublicKey::from(recipient);
@@ -94,6 +99,9 @@ pub fn seal(recipient_public: &[u8], plaintext: &[u8]) -> Result<SealedBlob, Cry
     let ephemeral_pub = PublicKey::from(&ephemeral).to_bytes();
 
     let shared = ephemeral.diffie_hellman(&recipient_pk);
+    if !shared.was_contributory() {
+        return Err(CryptoError::BadKey);
+    }
     let (key, nonce) = derive_key_nonce(shared.as_bytes(), &ephemeral_pub, &recipient);
 
     let cipher = ChaCha20Poly1305::new(&Key::from(key));
@@ -118,6 +126,9 @@ pub fn open(recipient: &KeyAgreementKeypair, blob: &SealedBlob) -> Result<Vec<u8
     let recipient_pub = recipient.public_key_bytes();
 
     let shared = recipient.secret.diffie_hellman(&ephemeral_pub);
+    if !shared.was_contributory() {
+        return Err(CryptoError::BadKey);
+    }
     let (key, nonce) = derive_key_nonce(shared.as_bytes(), &eph, &recipient_pub);
 
     let cipher = ChaCha20Poly1305::new(&Key::from(key));
@@ -271,6 +282,43 @@ mod tests {
         let blob = seal(&device.public_key_bytes(), secret).unwrap();
         let opened = open(&device, &blob).unwrap();
         assert_eq!(opened, secret);
+    }
+
+    /// Low-order X25519 points (RFC 7748 §6.1; the all-zero shared secret
+    /// they force is what the tunnel's Noise `CheckedResolver` refuses).
+    const LOW_ORDER: [&str; 4] = [
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "0100000000000000000000000000000000000000000000000000000000000000",
+        "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800",
+        "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+    ];
+
+    fn unhex(s: &str) -> [u8; 32] {
+        let v: Vec<u8> = (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect();
+        v.try_into().unwrap()
+    }
+
+    #[test]
+    fn seal_refuses_a_low_order_recipient() {
+        for p in LOW_ORDER {
+            assert!(seal(&unhex(p), b"workspace-key-payload-1234567890").is_err(), "sealed to low-order point {p}");
+        }
+    }
+
+    /// Anyone can compute the all-zero shared secret a low-order ephemeral
+    /// forces, so such a blob is forgeable without the recipient's key:
+    /// `open` must refuse it rather than authenticate it.
+    #[test]
+    fn open_refuses_a_low_order_ephemeral() {
+        let device = KeyAgreementKeypair::generate().unwrap();
+        let recipient = device.public_key_bytes();
+        for p in LOW_ORDER {
+            let eph = unhex(p);
+            let (key, nonce) = derive_key_nonce(&[0u8; 32], &eph, &recipient);
+            let ciphertext = ChaCha20Poly1305::new(&Key::from(key)).encrypt(&Nonce::from(nonce), &b"forged"[..]).unwrap();
+            let blob = SealedBlob { ephemeral_public: eph.to_vec(), ciphertext };
+            assert!(open(&device, &blob).is_err(), "opened a blob with low-order ephemeral {p}");
+        }
     }
 
     #[test]

@@ -217,11 +217,29 @@ flowchart TD
   with the ring provider, installed once per process). Server certificates are
   checked against the OS trust store, so roots an administrator installed are
   trusted too; on a host with no CA certificates (a minimal Linux container)
-  the bundled Mozilla roots are used instead. The relay tunnel's WebSockets
-  check the bundled Mozilla roots and refuse any message over 65 535 bytes.
-  Content never depends on TLS: sync is end-to-end encrypted, updates are
+  the bundled Mozilla roots are used instead. One probe
+  (`hive_forge::uses_platform_roots`) makes that choice for the whole
+  process. TLS outside reqwest uses `hive_forge::tls_client_config`, which
+  makes the same choice. The relay tunnel's WebSockets use it, so a relay
+  that answers for sync behind a TLS-inspecting proxy whose root the OS
+  trusts also works for remote access. They still refuse any message or
+  frame over 65 535 bytes.
+- **Proxies**: reqwest applies the environment proxies (`HTTPS_PROXY`,
+  `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`) and, where those set nothing, the
+  OS proxy settings on macOS and Windows (hyper-util `Matcher::from_system`;
+  `hive-forge` enables `client-proxy-system`, so this holds in every binary,
+  not only the desktop). The code-host guard reads the same matcher: its
+  public-only resolver lets a proxy's own host through whether the proxy came
+  from the environment or the OS, and it refuses a target named like a proxy
+  host that `NO_PROXY` sends direct, unless the connection is marked
+  internal. Behind a proxy, the proxy resolves the target.
+- **Update check**: the version manifest is read up to 64 KiB, with 8 s per
+  URL, then the next URL is tried.
+- Content never depends on TLS: sync is end-to-end encrypted, updates are
   minisign-signed, and the update banner only links to the ligus-ai/ligus
-  releases page.
+  releases page. Sealing a workspace key (`e2ee::seal` / `open`) refuses a
+  low-order X25519 key (an all-zero shared secret), as the tunnel's Noise
+  handshake does.
 
 ---
 
