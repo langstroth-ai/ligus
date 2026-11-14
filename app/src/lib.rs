@@ -1239,7 +1239,7 @@ fn list_workspace_files(state: State<AppState>) -> Vec<String> {
     if root.trim().is_empty() {
         return Vec::new();
     }
-    let out = std::process::Command::new("git")
+    let out = hive_core::process_util::git()
         .args(["ls-files", "--cached", "--others", "--exclude-standard"])
         .current_dir(&root)
         .output();
@@ -1299,11 +1299,35 @@ fn resolve_workspace_target(root: &str, path: &str) -> Result<(PathBuf, PathBuf)
 /// not-yet-existing tail. So a target that doesn't exist still resolves symlinks
 /// (and `.`) in its existing prefix, giving an absolute path safe to range-check.
 fn resolve_existing_ancestor(path: &std::path::Path) -> PathBuf {
+    resolve_existing_ancestor_depth(path, 0)
+}
+
+fn resolve_existing_ancestor_depth(path: &std::path::Path, depth: u32) -> PathBuf {
     let mut existing = path.to_path_buf();
     let mut tail: Vec<std::ffi::OsString> = Vec::new();
     loop {
         if existing.exists() {
             let mut base = dunce::canonicalize(&existing).unwrap_or_else(|_| existing.clone());
+            for comp in tail.iter().rev() {
+                base.push(comp);
+            }
+            return base;
+        }
+        // A dangling symlink doesn't "exist", but a write or create_dir
+        // through it lands at its target: resolve where it points instead of
+        // treating it as a not-yet-existing name.
+        if std::fs::symlink_metadata(&existing).is_ok_and(|m| m.file_type().is_symlink()) {
+            let Ok(link) = std::fs::read_link(&existing) else { return path.to_path_buf() };
+            let target = match existing.parent() {
+                Some(dir) if link.is_relative() => dir.join(link),
+                _ => link,
+            };
+            if depth >= 32 {
+                // A link loop: resolve to the raw target, which fails the range check
+                // unless it is inside the root.
+                return target;
+            }
+            let mut base = resolve_existing_ancestor_depth(&target, depth + 1);
             for comp in tail.iter().rev() {
                 base.push(comp);
             }
@@ -3369,6 +3393,9 @@ async fn resolve_attachment_blob(
     id: String,
     name: String,
 ) -> Result<String, String> {
+    if !hive_runtime::attachment_blob::valid_blob_id(&id) {
+        return Err("invalid attachment id".into());
+    }
     let cache = blob_cache_dir(&state.data_dir);
     let path = cache.join(hive_runtime::attachment_blob::cache_filename(&id, &name));
     if path.exists() {
@@ -4341,7 +4368,7 @@ fn relay_url_or_err(state: &AppState) -> Result<String, String> {
         .relay_url
         .clone()
         .filter(|u| !u.trim().is_empty())
-        .ok_or_else(|| "set a relay URL in Settings → Team first".into())
+        .ok_or_else(|| "set a relay URL in Settings → Team sync first".into())
 }
 
 fn relay_token_dto(t: &hive_runtime::RelayTokenEntry) -> RelayTokenDto {
@@ -5424,7 +5451,7 @@ fn dismiss_proposals(
 fn apply_patch(workspace_root: &str, diff: &str) -> Result<(), String> {
     use std::io::Write;
     use std::process::Stdio;
-    let mut child = hive_core::process_util::command("git")
+    let mut child = hive_core::process_util::git()
         .arg("-C")
         .arg(workspace_root)
         .args(["apply", "--whitespace=nowarn"])
@@ -5454,7 +5481,7 @@ fn apply_patch(workspace_root: &str, diff: &str) -> Result<(), String> {
 /// no-op tree (nothing staged) is treated as success so a re-apply doesn't
 /// error. Errors surface so the caller doesn't leave a half-applied state.
 fn commit_worktree(worktree: &str, message: &str) -> Result<(), String> {
-    let add = hive_core::process_util::command("git")
+    let add = hive_core::process_util::git()
         .arg("-C")
         .arg(worktree)
         .args(["add", "-A"])
@@ -5463,7 +5490,7 @@ fn commit_worktree(worktree: &str, message: &str) -> Result<(), String> {
     if !add.status.success() {
         return Err(format!("git add: {}", String::from_utf8_lossy(&add.stderr).trim()));
     }
-    let out = hive_core::process_util::command("git")
+    let out = hive_core::process_util::git()
         .arg("-C")
         .arg(worktree)
         .args(["commit", "-m", message])
@@ -9134,7 +9161,7 @@ fn get_file_diff_sides(state: State<AppState>, path: String) -> Result<FileDiffS
     if rel.is_empty() || rel.starts_with('/') || rel.contains("..") {
         return Err("invalid path".into());
     }
-    let original = hive_core::process_util::command("git")
+    let original = hive_core::process_util::git()
         .args(["show", &format!("HEAD:{rel}")])
         .current_dir(&root)
         .output()
@@ -11280,7 +11307,7 @@ async fn sync_pull_once(
             let msg = match &e {
                 hive_runtime::SyncError::Relay(hive_runtime::RelayError::Unauthorized) => {
                     "sync paused: the relay rejected this device's access token \
-                     — add yourself in Settings → Team (or clear the relay URL \
+                     — add yourself in Settings → Team sync (or clear the relay URL \
                      to work local-only)"
                         .to_string()
                 }
@@ -11393,7 +11420,7 @@ async fn run_sync_loop(app: AppHandle, settings: Arc<Mutex<LiveSettings>>, db_pa
                     engine = None;
                     let msg = "sync paused: this workspace is configured for a relay but \
                                has no end-to-end-encryption key — set a workspace passphrase \
-                               (Settings → Team) to sync encrypted, or clear the relay URL to \
+                               (Settings → Team sync) to sync encrypted, or clear the relay URL to \
                                work local-only. Refusing to send plaintext to the relay."
                         .to_string();
                     if last_sync_err.as_deref() != Some(msg.as_str()) {
@@ -13348,7 +13375,7 @@ fn on_path(bin: &str) -> bool {
 }
 
 fn git_config_value(key: &str) -> Option<String> {
-    hive_core::process_util::command("git")
+    hive_core::process_util::git()
         .args(["config", "--get", key])
         .output()
         .ok()
@@ -16301,6 +16328,25 @@ mod editor_fs_tests {
         assert!(resolve_workspace_target(&tmp.root(), "a/../../secret.txt").is_err());
         // An absolute path outside the root is rejected by the range check.
         assert!(resolve_workspace_target(&tmp.root(), "/etc/passwd").is_err());
+    }
+
+    /// A repo can ship a dangling symlink (`evil -> ~/Library/LaunchAgents/x`).
+    /// It doesn't "exist", but writing through it lands outside the root.
+    #[cfg(unix)]
+    #[test]
+    fn dangling_symlinks_out_of_the_root_are_rejected() {
+        let tmp = TmpDir::new();
+        let outside = TmpDir::new();
+        let target = outside.0.join("not-yet.plist");
+        std::os::unix::fs::symlink(&target, tmp.0.join("evil")).unwrap();
+        std::os::unix::fs::symlink(outside.0.join("missing-dir"), tmp.0.join("evil-dir")).unwrap();
+        assert!(resolve_workspace_target(&tmp.root(), "evil").is_err(), "dangling file link");
+        assert!(resolve_workspace_target(&tmp.root(), "evil-dir/x.txt").is_err(), "dangling dir link");
+        // A dangling link that stays inside the root is still fine.
+        std::os::unix::fs::symlink(tmp.0.join("later.txt"), tmp.0.join("inside")).unwrap();
+        let (root, t) = resolve_workspace_target(&tmp.root(), "inside").unwrap();
+        assert!(is_within(&root, &t));
+        assert!(!target.exists());
     }
 
     #[test]

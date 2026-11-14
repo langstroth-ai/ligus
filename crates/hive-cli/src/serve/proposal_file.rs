@@ -180,7 +180,7 @@ impl Drop for Scratch {
 }
 
 fn git_bytes(dir: &FsPath, args: &[&str]) -> Option<Vec<u8>> {
-    let out = hive_core::process_util::command("git")
+    let out = hive_core::process_util::git()
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -229,7 +229,7 @@ fn apply_in_scratch(
         }
         std::fs::write(&f, content).map_err(io)?;
     }
-    let mut cmd = hive_core::process_util::command("git");
+    let mut cmd = hive_core::process_util::git();
     cmd.current_dir(&work)
         // Never find a repository above the scratch dir: a plain patch tool.
         .env("GIT_CEILING_DIRECTORIES", &scratch.0)
@@ -255,10 +255,17 @@ fn apply_in_scratch(
     }
     let Some(want) = want else { return Ok(Some(None)) };
     let f = work.join(want);
-    if !f.is_file() {
+    // Never follow a link: a patch can create one pointing anywhere on the
+    // host. Show a symlink the way git stores it, as its target path.
+    let Ok(meta) = std::fs::symlink_metadata(&f) else { return Ok(Some(None)) };
+    if meta.file_type().is_symlink() {
+        let target = std::fs::read_link(&f).map_err(io)?;
+        return Ok(Some(Some(target.to_string_lossy().into_owned().into_bytes())));
+    }
+    if !meta.is_file() {
         return Ok(Some(None));
     }
-    if std::fs::metadata(&f).map(|m| m.len()).unwrap_or(0) > MAX_FILE_BYTES {
+    if meta.len() > MAX_FILE_BYTES {
         return Err(too_big());
     }
     Ok(Some(Some(std::fs::read(&f).map_err(io)?)))
@@ -405,6 +412,25 @@ diff --git a/gone.md b/gone.md\ndeleted file mode 100644\n--- a/gone.md\n+++ /de
         assert_eq!(hunk_counts("@@ -3,4 +3,5 @@ ctx"), (4, 5));
         assert_eq!(hunk_counts("@@ -1 +1 @@"), (1, 1));
         assert_eq!(hunk_counts("@@ é -0,0 +1,2 @@"), (0, 2));
+    }
+
+    /// A proposal diff that adds a symlink must never make the endpoint read
+    /// the link's target off the host (serve.token, keys, ~/.ssh).
+    #[test]
+    fn symlinks_in_a_patch_are_not_followed_out_of_the_scratch_dir() {
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("secret.txt");
+        std::fs::write(&secret, b"HOST-SECRET\n").unwrap();
+        let target = secret.to_str().unwrap();
+        let patch = format!(
+            "diff --git a/leak b/leak\nnew file mode 120000\nindex 0000000..1111111\n--- /dev/null\n+++ b/leak\n@@ -0,0 +1 @@\n+{target}\n\\ No newline at end of file\n"
+        );
+        let got = apply_in_scratch(&patch, false, None, None, Some("leak")).ok().flatten();
+        let bytes = got.flatten().unwrap_or_default();
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains("HOST-SECRET"),
+            "the endpoint returned a host file through a symlink"
+        );
     }
 
     #[test]

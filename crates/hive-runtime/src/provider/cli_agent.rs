@@ -187,6 +187,9 @@ pub(crate) async fn run_cli<P: CliStreamParser>(
     mut on_activity: impl FnMut(StreamActivity),
 ) -> Result<String, ProviderError> {
     let mut cmd = Command::new(program);
+    for k in hive_core::process_util::ligus_secret_env_names() {
+        cmd.env_remove(k);
+    }
     cmd.args(args)
         // The prompt is an argument; a closed stdin means the CLI never waits
         // on the terminal.

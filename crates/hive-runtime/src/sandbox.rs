@@ -10,7 +10,7 @@
 //!
 //! | Runtime | How egress is closed |
 //! |---|---|
-//! | Claude Code | `--disallowedTools WebFetch WebSearch Bash`, `--strict-mcp-config` with only the allow-listed servers |
+//! | Claude Code | `--disallowedTools WebFetch WebSearch Bash`, user settings only with hooks off, `--strict-mcp-config` with only the allow-listed servers |
 //! | Codex | its own `workspace-write` sandbox with `network_access=false`, no MCP servers |
 //! | API models (Anthropic, OpenAI wire, Ollama) | Ligus runs the tools: MCP filtered to the allow-list, `run_command` off |
 //! | aider, pi, Hermes, Antigravity, Copilot | can't be confined from outside: refused while egress is not open |
@@ -46,6 +46,15 @@ pub fn enforce(provider: ModelProviderKind, envelope: &SandboxEnvelope, allowed_
     match provider {
         ModelProviderKind::ClaudeCode => {
             out.extra_args.extend(["--disallowedTools".into(), "WebFetch".into(), "WebSearch".into(), "Bash".into()]);
+            // Repo-shipped `.claude/settings*.json` hooks run shell commands
+            // with full network; load only the user's own settings and run
+            // no hooks at all while egress is restricted.
+            out.extra_args.extend([
+                "--setting-sources".into(),
+                "user".into(),
+                "--settings".into(),
+                json!({ "disableAllHooks": true }).to_string(),
+            ]);
             let servers: serde_json::Map<String, Value> = match &envelope.egress {
                 EgressPolicy::AllowList { .. } => allowed_mcp.iter().cloned().collect(),
                 _ => Default::default(),
@@ -118,6 +127,21 @@ mod tests {
         // Closed: an empty server set even if the caller passed some.
         let e = enforce(ModelProviderKind::ClaudeCode, &tight(EgressPolicy::Closed), &allowed);
         assert_eq!(e.extra_args.last().unwrap(), r#"{"mcpServers":{}}"#);
+    }
+
+    /// A repo can ship `.claude/settings.json` (or an earlier turn can write
+    /// the gitignored `settings.local.json`) with hooks, which Claude Code runs
+    /// as shell commands with full network in `-p` mode. Under a restricted
+    /// envelope those must not load, or the egress rule is moot.
+    #[test]
+    fn claude_code_ignores_repo_settings_and_hooks_under_restriction() {
+        for egress in [EgressPolicy::Closed, EgressPolicy::AllowList { mcp_servers: vec![] }] {
+            let e = enforce(ModelProviderKind::ClaudeCode, &tight(egress), &Vec::new());
+            assert!(e.extra_args.windows(2).any(|w| w == ["--setting-sources", "user"]), "{:?}", e.extra_args);
+            let i = e.extra_args.iter().position(|a| a == "--settings").expect("--settings");
+            let v: Value = serde_json::from_str(&e.extra_args[i + 1]).unwrap();
+            assert_eq!(v["disableAllHooks"], json!(true));
+        }
     }
 
     #[test]

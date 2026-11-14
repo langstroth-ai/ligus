@@ -8,7 +8,7 @@
 //! connect → sync → read → post.
 //!
 //! Config (all via env; a persistent data dir keeps a stable identity):
-//!   LIGUS_DATA_DIR            where identity + hive.db live (default: $HOME/.hive)
+//!   LIGUS_DATA_DIR            where identity + hive.db live (default: $HOME/.ligus)
 //!   LIGUS_RELAY_URL           relay base URL (needed for `sync`/`send --push`)
 //!   LIGUS_RELAY_ACCESS_TOKEN  relay entitlement token (hrt1/hex), provisioned out-of-band
 //!   LIGUS_RELAY_GITHUB_TOKEN  optional, only on membership-enforcing relays
@@ -155,7 +155,8 @@ fn cmd_enroll(cfg: &Config, invite: &str, token: Option<String>) -> Result<()> {
     if let Some(t) = token {
         f.token = Some(t);
     }
-    std::fs::write(config_path(&cfg.data_dir), toml::to_string_pretty(&f)?)?;
+    // It holds the workspace E2EE key and the relay token: owner-only.
+    serve::tunnel::write_private(&config_path(&cfg.data_dir), toml::to_string_pretty(&f)?.as_bytes())?;
     println!("Enrolled workspace '{room}' at {relay_url}.");
     println!("Saved to {}.", config_path(&cfg.data_dir).display());
     if f.token.is_none() {
@@ -1134,6 +1135,10 @@ fn usage() -> ! {
          ligus send <chat-id> <message…> [--push]\n  \
          ligus sync [--watch]\n  \
          ligus runtimes                  list workspace-owned runtimes (spec §12.5)\n  \
+         ligus add-runtime <id> <name> <provider> <model> [--endpoint <url>] [--secret-ref <name> | --secret <value>]\n                                       define a workspace-owned runtime\n  \
+         ligus rm-runtime <id>           remove a workspace-owned runtime\n  \
+         ligus agents                    list the workspace's agents\n  \
+         ligus add-agent <name> <runtime-id> [--host <id>] [--role <role>]   add a workspace agent\n  \
          ligus agent [name] [--runtime <id>]   reply as the primary agent; --runtime uses a\n                                       workspace-owned credential (else a personal env key)\n  \
          ligus hosts                     list workspace hosts (devices + workers)\n  \
          ligus register-worker [--label <name>]   register this box as a worker host\n  \
@@ -1451,6 +1456,30 @@ fn run() -> Result<()> {
 #[cfg(test)]
 mod cli_tests {
     use super::*;
+
+    /// config.toml holds the workspace E2EE key and relay token.
+    #[cfg(unix)]
+    #[test]
+    fn enroll_saves_the_connection_owner_only() {
+        use base64::Engine;
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = Config {
+            data_dir: tmp.path().join("data"),
+            relay_url: None,
+            token: None,
+            github_token: None,
+            room: "r".into(),
+            key: None,
+        };
+        let body = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(br#"{"relay_url":"https://relay.example","room":"r","key":"test-passphrase"}"#);
+        cmd_enroll(&cfg, &format!("hivews1:{body}"), Some("hrt1-test".into())).unwrap();
+        let mode = std::fs::metadata(config_path(&cfg.data_dir)).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "config.toml is {mode:o}");
+        let dir = std::fs::metadata(&cfg.data_dir).unwrap().permissions().mode() & 0o077;
+        assert_eq!(dir, 0, "data dir is readable by others");
+    }
 
     fn argv(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| s.to_string()).collect()

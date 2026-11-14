@@ -68,6 +68,9 @@ pub async fn stream_reply(
     args.push(prompt);
 
     let mut cmd = Command::new(program);
+    for k in hive_core::process_util::ligus_secret_env_names() {
+        cmd.env_remove(k);
+    }
     cmd.args(&args)
         // Null stdin: the prompt is a positional arg, so codex must not sit
         // "Reading additional input from stdin…".

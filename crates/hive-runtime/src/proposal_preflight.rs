@@ -55,7 +55,7 @@ pub fn test_command(repo_root: Option<&Path>) -> Option<String> {
         }
     }
     let root = repo_root?;
-    let out = command("git")
+    let out = hive_core::process_util::git()
         .arg("-C")
         .arg(root)
         .args(["config", "--get", PREFLIGHT_TEST_CONFIG])
@@ -66,7 +66,7 @@ pub fn test_command(repo_root: Option<&Path>) -> Option<String> {
 }
 
 fn git_out(dir: &Path, args: &[&str]) -> Option<String> {
-    let out = command("git").arg("-C").arg(dir).args(args).output().ok()?;
+    let out = hive_core::process_util::git().arg("-C").arg(dir).args(args).output().ok()?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
@@ -87,7 +87,7 @@ fn patch_applies(dir: &Path, diff: &str) -> Result<(), String> {
 fn run_git_apply(dir: &Path, diff: &str, check_only: bool) -> Result<(), String> {
     use std::io::Write;
     use std::process::Stdio;
-    let mut cmd = command("git");
+    let mut cmd = hive_core::process_util::git();
     cmd.arg("-C").arg(dir).args(["apply", "--whitespace=nowarn"]);
     if check_only {
         cmd.arg("--check");
@@ -166,7 +166,10 @@ fn shell(cmdline: &str) -> std::process::Command {
 /// Run `cmdline` in `dir`, bounded by `timeout`. Ok(true) = exit 0.
 fn run_bounded(dir: &Path, cmdline: &str, timeout: Duration) -> Result<bool, String> {
     use std::process::Stdio;
-    let mut child = shell(cmdline)
+    let mut sh = shell(cmdline);
+    // It runs the alternative's code (teammate or agent content).
+    hive_core::process_util::scrub_ligus_secrets(&mut sh);
+    let mut child = sh
         .current_dir(dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())

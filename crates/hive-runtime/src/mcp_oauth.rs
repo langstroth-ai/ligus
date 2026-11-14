@@ -168,6 +168,43 @@ pub struct AsMetadata {
     pub registration_endpoint: Option<String>,
 }
 
+/// A server-supplied OAuth endpoint is only used when it is https (http only
+/// for a loopback host, for local development). The authorization endpoint
+/// is handed to the OS URL opener, and the token and registration endpoints
+/// receive the code, PKCE verifier, client secret and refresh token, so a
+/// malicious MCP server must not be able to name `file:`, a custom app
+/// scheme, or a plain-http host.
+pub fn endpoint_allowed(url: &str) -> bool {
+    let Ok(u) = reqwest::Url::parse(url) else { return false };
+    match u.scheme() {
+        "https" => u.host_str().is_some(),
+        "http" => matches!(u.host_str(), Some("localhost" | "127.0.0.1" | "[::1]")),
+        _ => false,
+    }
+}
+
+/// Refuse authorization-server metadata with an endpoint [`endpoint_allowed`]
+/// rejects.
+pub fn check_metadata(meta: &AsMetadata) -> Result<(), OAuthError> {
+    let eps = [Some(&meta.authorization_endpoint), Some(&meta.token_endpoint), meta.registration_endpoint.as_ref()];
+    for ep in eps.into_iter().flatten() {
+        if !endpoint_allowed(ep) {
+            return Err(OAuthError::Protocol(format!("refusing a non-https OAuth endpoint from the server: {ep}")));
+        }
+    }
+    Ok(())
+}
+
+/// HTTP client for the OAuth exchange: never follows redirects (a 307/308
+/// would resend the client secret to wherever it points) and never hangs.
+fn oauth_http() -> reqwest::Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap_or_default()
+}
+
 /// RFC 9728 protected-resource metadata (the fields we use).
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ProtectedResourceMetadata {
@@ -218,8 +255,9 @@ pub async fn authorize(
     cfg: &OAuthConfig,
     open_url: impl Fn(&str),
 ) -> Result<Authorized, OAuthError> {
-    let http = reqwest::Client::new();
+    let http = oauth_http();
     let meta = discover(&http, &cfg.server_url).await?;
+    check_metadata(&meta)?;
 
     // Bind the *fixed* loopback redirect: a manually-registered OAuth app must
     // know the exact redirect URI ahead of time, so the port can't be random.
@@ -276,7 +314,10 @@ pub async fn refresh(
     client_secret: Option<&str>,
     refresh_token: &str,
 ) -> Result<TokenResponse, OAuthError> {
-    let http = reqwest::Client::new();
+    if !endpoint_allowed(token_endpoint) {
+        return Err(OAuthError::Protocol(format!("refusing a non-https token endpoint: {token_endpoint}")));
+    }
+    let http = oauth_http();
     let mut form = vec![
         ("grant_type", "refresh_token"),
         ("refresh_token", refresh_token),
@@ -307,7 +348,8 @@ async fn discover(http: &reqwest::Client, server_url: &str) -> Result<AsMetadata
             .json::<ProtectedResourceMetadata>()
             .await
             .ok()
-            .and_then(|m| m.authorization_servers.into_iter().next()),
+            .and_then(|m| m.authorization_servers.into_iter().next())
+            .filter(|i| endpoint_allowed(i)),
         _ => None,
     }
     .unwrap_or_else(|| origin(server_url));
@@ -440,6 +482,33 @@ async fn exchange_code(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hostile_server_metadata_is_refused() {
+        let ok = AsMetadata {
+            authorization_endpoint: "https://auth.example/authorize".into(),
+            token_endpoint: "https://auth.example/token".into(),
+            registration_endpoint: Some("https://auth.example/register".into()),
+        };
+        assert!(check_metadata(&ok).is_ok());
+        for bad in [
+            "file:///Applications/Calculator.app",
+            "smb://evil.example/share",
+            "x-custom-app://run",
+            "javascript:alert(1)",
+            "http://169.254.169.254/latest/meta-data",
+            "http://evil.example/token",
+            "not a url",
+        ] {
+            let m = AsMetadata { authorization_endpoint: bad.into(), ..ok.clone() };
+            assert!(check_metadata(&m).is_err(), "authorization_endpoint {bad}");
+            let m = AsMetadata { token_endpoint: bad.into(), ..ok.clone() };
+            assert!(check_metadata(&m).is_err(), "token_endpoint {bad}");
+            let m = AsMetadata { registration_endpoint: Some(bad.into()), ..ok.clone() };
+            assert!(check_metadata(&m).is_err(), "registration_endpoint {bad}");
+        }
+        assert!(endpoint_allowed("http://127.0.0.1:8080/token"), "local development");
+    }
 
     #[test]
     fn pkce_challenge_is_s256_base64url() {

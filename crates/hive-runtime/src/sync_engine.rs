@@ -256,6 +256,11 @@ impl SyncEngine {
                     sealed.version
                 )),
             }
+        } else if self.is_encrypted() {
+            // A keyed workspace only ever pushes ciphertext, and the relay
+            // never holds the key: a plaintext body here was written by the
+            // relay (or a keyless client), never by a member. Skip it for good.
+            Decoded::Malformed("plaintext body in an encrypted workspace".into())
         } else {
             match serde_json::from_value(body.clone()) {
                 Ok(env) => Decoded::Ready(Box::new(env)),
@@ -1031,6 +1036,30 @@ mod tests {
         sync_b.add_key(1, k1);
         assert_eq!(sync_b.pull(&mut store_b).await.unwrap(), 2);
         assert_eq!(store_b.load_session(sid).unwrap().unwrap().messages.len(), 1);
+    }
+
+    /// A keyed (E2EE) workspace never accepts plaintext from the relay: the
+    /// relay sees only ciphertext, so a plaintext body is relay-authored and
+    /// must not be applied.
+    #[test]
+    fn keyed_engine_never_applies_relay_supplied_plaintext() {
+        let session = ChatSession::new("Injected", Uuid::new_v4(), "anthropic");
+        let (sid, wid) = (session.id, session.workspace_id);
+        let snap = SessionEventEnvelope::new(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(session) });
+        let msg = SessionEventEnvelope::new(
+            sid,
+            wid,
+            2,
+            SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "relay", "injected") },
+        );
+        let batch: Vec<(u64, Value)> =
+            vec![(1, serde_json::to_value(&snap).unwrap()), (2, serde_json::to_value(&msg).unwrap())];
+        let mut store = EventStore::open_in_memory().unwrap();
+        let mut eng = SyncEngine::unscoped(RelayClient::new("http://127.0.0.1:0"), Uuid::new_v4().to_string());
+        eng.set_key(hive_core::derive_workspace_key("keyed"));
+        assert_eq!(eng.apply_fetched(&mut store, &batch).unwrap(), 0, "plaintext applied in a keyed workspace");
+        assert!(!store.has_event(snap.event_id).unwrap() && !store.has_event(msg.event_id).unwrap());
+        assert_eq!(eng.cursor(), 2, "skipped for good, not retried");
     }
 
     #[test]

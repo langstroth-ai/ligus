@@ -16,6 +16,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 // Spawns go through `process_util::command` so the ~dozen `git` invocations an
 // isolated turn makes don't each flash a console window on Windows.
+#[cfg(test)]
 use hive_core::process_util::command;
 
 // ---------------------------------------------------------------------------
@@ -72,7 +73,7 @@ pub struct Worktree {
 
 /// Whether `root` is inside a git working tree. Isolation only applies to repos.
 pub fn is_git_repo(root: &Path) -> bool {
-    command("git")
+    hive_core::process_util::git()
         .arg("-C")
         .arg(root)
         .args(["rev-parse", "--is-inside-work-tree"])
@@ -82,7 +83,7 @@ pub fn is_git_repo(root: &Path) -> bool {
 }
 
 fn git(dir: &Path, args: &[&str]) -> io::Result<String> {
-    let out = command("git").arg("-C").arg(dir).args(args).output()?;
+    let out = hive_core::process_util::git().arg("-C").arg(dir).args(args).output()?;
     if !out.status.success() {
         return Err(io::Error::other(format!(
             "git {}: {}",
@@ -105,7 +106,7 @@ fn slug(turn_id: &str) -> String {
 /// make [`chat_worktree`] idempotent (reuse an existing chat branch) without
 /// treating a plain `git` failure as "exists".
 fn branch_exists(repo_root: &Path, branch: &str) -> bool {
-    command("git")
+    hive_core::process_util::git()
         .arg("-C")
         .arg(repo_root)
         .args(["rev-parse", "--verify", "--quiet"])
@@ -154,7 +155,7 @@ pub fn chat_worktree(repo_root: &Path, chat_id: &str) -> io::Result<PathBuf> {
     }
     // Clear any stale worktree registration at this path (e.g. the checkout dir
     // was deleted out from under git) so `worktree add` doesn't refuse.
-    let _ = command("git")
+    let _ = hive_core::process_util::git()
         .arg("-C")
         .arg(repo_root)
         .args(["worktree", "remove", "--force"])
@@ -179,7 +180,7 @@ pub const CHAT_BASE_CONFIG: &str = "hive.chatBase";
 /// Where a fresh chat branch starts: `hive.chatBase` when it's set and names a
 /// commit, else `HEAD`.
 pub fn chat_base(repo_root: &Path) -> String {
-    let configured = command("git")
+    let configured = hive_core::process_util::git()
         .arg("-C")
         .arg(repo_root)
         .args(["config", "--get", CHAT_BASE_CONFIG])
@@ -242,7 +243,7 @@ impl Worktree {
             let dirty = git(&path, &["status", "--porcelain"]).map(|s| !s.trim().is_empty()).unwrap_or(false);
             tracing::warn!(target: "worktree", path = %path.display(), dirty, "clearing a stale turn worktree");
         }
-        let _ = command("git")
+        let _ = hive_core::process_util::git()
             .arg("-C")
             .arg(repo_root)
             .args(["worktree", "remove", "--force"])
@@ -265,7 +266,7 @@ impl Worktree {
     /// it's local to this worktree's index and never touches the main tree.
     pub fn diff(&self) -> io::Result<String> {
         git(&self.path, &["add", "-A"])?;
-        git(&self.path, &["diff", "--cached", "HEAD"])
+        git(&self.path, &["diff", "--cached", "--no-ext-diff", "--no-textconv", "HEAD"])
     }
 
     /// Paths the turn changed (name-only), for a compact review summary.
@@ -668,6 +669,36 @@ mod tests {
         run(&dir, "git", &["add", "-A"]);
         run(&dir, "git", &["commit", "-qm", "init"]);
         dir
+    }
+
+    /// A file-write-only agent plants a hook in its turn tree (husky-style
+    /// `core.hooksPath` points into the work tree). Hive's own git calls on
+    /// that tree (park's checkout, diff, add) must never run it: they run
+    /// outside any agent sandbox, with Hive's environment and network.
+    #[cfg(unix)]
+    #[test]
+    fn hives_git_calls_never_run_repo_hooks() {
+        use std::os::unix::fs::PermissionsExt;
+        let repo = temp_repo();
+        run(&repo, "git", &["config", "core.hooksPath", ".hooks"]);
+        let marker = repo.with_extension("hook-ran");
+        let _ = std::fs::remove_file(&marker);
+        let wt = Worktree::create(&repo, "00000000-hook").unwrap();
+        std::fs::create_dir_all(wt.path.join(".hooks")).unwrap();
+        for hook in ["post-checkout", "pre-commit", "post-merge", "reference-transaction"] {
+            let h = wt.path.join(".hooks").join(hook);
+            std::fs::write(&h, format!("#!/bin/sh\necho {hook} >> '{}'\n", marker.display())).unwrap();
+            std::fs::set_permissions(&h, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let _ = wt.diff();
+        let _ = wt.changed_files();
+        wt.park("11111111-2222-3333-4444-555555555555").unwrap();
+        let reused = cut_turn_worktree_reusing(&repo, "11111111-2222-3333-4444-555555555555", "00000000-hook2").unwrap();
+        let _ = reused.remove();
+        let ran = std::fs::read_to_string(&marker).unwrap_or_default();
+        let _ = std::fs::remove_file(&marker);
+        let _ = std::fs::remove_dir_all(&repo);
+        assert!(ran.is_empty(), "repo hooks ran during Hive's git calls: {ran}");
     }
 
     #[test]
