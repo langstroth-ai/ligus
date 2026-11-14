@@ -39,6 +39,7 @@ use hive_runtime::{
 };
 use uuid::Uuid;
 
+mod auth;
 mod mcp_config;
 mod reply;
 mod repos;
@@ -176,6 +177,7 @@ async fn cmd_join(cfg: &Config, code: &str) -> Result<()> {
         .ok_or_else(|| anyhow!("no relay — run `ligus enroll <invite>` or set LIGUS_RELAY_URL first"))?;
     let relay = RelayClient::new(&relay_url)
         .with_auth(cfg.token.clone())
+        .with_auth_cell(auth::cell())
         .with_github_token(cfg.github_token.clone());
     match relay.join_via_invite(&cfg.room, code.trim(), "").await? {
         Some(role) => {
@@ -266,6 +268,7 @@ fn relay_client(cfg: &Config) -> Result<RelayClient> {
         .ok_or_else(|| anyhow!("set LIGUS_RELAY_URL to sync"))?;
     Ok(RelayClient::new(&relay_url)
         .with_auth(cfg.token.clone())
+        .with_auth_cell(auth::cell())
         .with_github_token(cfg.github_token.clone()))
 }
 
@@ -302,6 +305,7 @@ async fn materialize_turns(cfg: &Config, turns: &mut [ChatTurn]) {
     }
     let relay = RelayClient::new(&relay_url)
         .with_auth(cfg.token.clone())
+        .with_auth_cell(auth::cell())
         .with_github_token(cfg.github_token.clone());
     let key = derive_workspace_key(&pass);
     let cache = cfg.data_dir.join("attachments").join("blobs");
@@ -1163,6 +1167,8 @@ fn usage() -> ! {
          Setup:\n  \
          ligus enroll <hivews1:invite> [--token <hrt1>]   one-shot: save the workspace connection\n  \
          ligus join <invite-code>        redeem a relay invite to self-enroll this box's identity\n  \
+         ligus auth login <url> [--label NAME]   sign in through ligus-auth (device code); the relay\n                                       \
+         token is then refreshed automatically | ligus auth status | ligus auth logout\n  \
          ligus setup [--apply]           detect providers; --apply defines keyless runtimes\n  \
          ligus config <export|import <file>>   round-trip the workspace runtime set\n\n\
          Config via env (override the saved config.toml from `enroll`):\n  \
@@ -1254,7 +1260,14 @@ fn run() -> Result<()> {
             .build()?)
     };
 
+    // A ligus-auth sign-in (see `ligus auth`) supplies the relay token and
+    // keeps it fresh in the background for the life of this process.
+    if !matches!(cmd, "auth" | "") {
+        auth::init(&cfg.data_dir);
+    }
+
     match cmd {
+        "auth" => auth::cmd_auth(&cfg.data_dir, &positional, flag_val("--label")),
         "whoami" => cmd_whoami(&cfg),
         "chats" => cmd_chats(&cfg),
         "new" => cmd_new(&cfg, positional.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ")),

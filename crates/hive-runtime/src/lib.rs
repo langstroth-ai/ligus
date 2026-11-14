@@ -24,6 +24,7 @@ pub mod hygiene;
 pub mod identity_store;
 pub mod identity_verifier;
 pub mod lease_presence;
+pub mod ligus_auth;
 pub mod mcp;
 pub mod mcp_oauth;
 pub mod mentions;
@@ -48,6 +49,8 @@ pub mod workflow_tool;
 mod test_relay;
 #[cfg(test)]
 mod dearth_roster_tests;
+#[cfg(test)]
+mod ligus_auth_membership_tests;
 
 pub use builtin_tools::{BuiltinTools, Policy as BuiltinToolPolicy};
 pub use chat_service::{
