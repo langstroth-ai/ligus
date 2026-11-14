@@ -326,12 +326,16 @@ body {
   box-sizing: border-box;
 }
 
-button,
-input,
-textarea,
-select,
-option {
-  font: inherit;
+/* In the base layer so Tailwind's text-size utilities on buttons and inputs
+   win; unlayered, this reset silently overrode every \`text-xs\` on a button. */
+@layer base {
+  button,
+  input,
+  textarea,
+  select,
+  option {
+    font: inherit;
+  }
 }
 
 /* Markdown rendering for chat messages (Tailwind preflight strips these). */
