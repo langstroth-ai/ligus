@@ -1105,6 +1105,14 @@ export interface SyncStatusDto {
 
 export const syncStatus = () => invoke<SyncStatusDto>("sync_status");
 
+/// Whether sending in a chat waits for its workspace's founder (their signed
+/// founding hasn't synced to this device yet). A state, not a failure.
+export interface FounderStatusDto {
+  waiting: boolean;
+  founderName: string | null;
+}
+export const founderStatus = (sessionId: string) => invoke<FounderStatusDto>("founder_status", { sessionId });
+
 export type RelayProbeStatus =
   | "ok"
   | "unauthorized"

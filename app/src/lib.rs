@@ -14438,6 +14438,7 @@ pub fn run() {
             workspace_revoke_invite,
             workspace_join_via_invite,
             workspace_remove_member,
+            people::founder_status,
             people::my_profile,
             people::list_co_members,
             links_ui::identity_link_prepare,

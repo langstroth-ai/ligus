@@ -1160,6 +1160,7 @@ async fn forged_dm_founder_never_gets_writes() {
     let _ = alice.ensure_self_member(chat, wid);
 
     assert!(!alice.founder_verified(wid).unwrap(), "no seed from Bob's pinned key is on the log");
+    assert_eq!(alice.waiting_for_founder(wid).unwrap(), bob.author().account_id, "shown as waiting for Bob");
     assert_eq!(alice.store().config_founded_at(wid).unwrap(), None, "a forged DM has no founding time for D12");
     let sent = alice.post_user_message(chat, wid, "for Bob only");
     assert!(sent.is_err(), "Alice wrote into a room whose pinned founder never founded it");
@@ -1312,8 +1313,11 @@ async fn genuine_founder_verifies_and_joiner_writes() {
     alice.set_trusted_founder(Some(bob.author().account_id.unwrap().to_string()));
     let mut alice_sync = engine(&relay, room, alice_dev, &alice_ka, &[]);
     assert!(!alice.founder_verified(wid).unwrap(), "nothing synced yet");
+    assert!(alice.waiting_for_founder(wid).unwrap().is_some());
     round(&mut alice_sync, &alice_db).await;
     assert!(alice.founder_verified(wid).unwrap());
+    assert_eq!(alice.waiting_for_founder(wid).unwrap(), None, "the waiting state clears once the founding syncs");
+    assert_eq!(bob.waiting_for_founder(wid).unwrap(), None, "the founder never waits for itself");
     // D12's founding time is the founder's signed seed, which no later event
     // moves: a config event dated before it (a skewed clock, or a party
     // backdating to flip which DM is kept) changes nothing.

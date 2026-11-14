@@ -49,6 +49,12 @@ pub type Result<T> = std::result::Result<T, ChatError>;
 mod proposal_sets;
 pub use proposal_sets::QuorumOutcome;
 
+/// The start of the error a write gets while [`ChatService::waiting_for_founder`]
+/// holds; the desktop shows it as a waiting state, not a send failure.
+pub const WAITING_FOR_FOUNDER: &str =
+    "waiting for the workspace's founder: their signed founding hasn't reached this device, so nothing is sent yet";
+
+
 /// Drives a single workspace's chat sessions over an [`EventStore`], signing
 /// every appended event with this device's key.
 pub struct ChatService {
@@ -443,20 +449,25 @@ impl ChatService {
     /// is readable by them. The founder's own device is exempt (it writes the
     /// seed).
     fn require_verified_founder(&self, workspace_id: Uuid) -> Result<()> {
+        if self.waiting_for_founder(workspace_id)?.is_none() {
+            return Ok(());
+        }
+        Err(ChatError::Unauthorized(WAITING_FOR_FOUNDER.into()))
+    }
+
+    /// Whether writes into `workspace_id` wait for its pinned founder's signed
+    /// founding (see [`Self::founder_verified`]): `Some(founder account)`
+    /// while they do, `None` when this device may write. A state to show,
+    /// not a failure: it clears once the founding syncs.
+    pub fn waiting_for_founder(&self, workspace_id: Uuid) -> Result<Option<Uuid>> {
         if self.local_workspace_id == Some(workspace_id) {
-            return Ok(());
+            return Ok(None);
         }
-        let Some(pin) = self.store.workspace_pin(workspace_id)? else { return Ok(()) };
-        if self.author.account_id == Some(pin.founder_account) {
-            return Ok(());
+        let Some(pin) = self.store.workspace_pin(workspace_id)? else { return Ok(None) };
+        if self.author.account_id == Some(pin.founder_account) || self.founder_verified(workspace_id)? {
+            return Ok(None);
         }
-        if self.founder_verified(workspace_id)? {
-            return Ok(());
-        }
-        Err(ChatError::Unauthorized(
-            "waiting for the workspace's founder: their signed founding hasn't reached this device, so nothing is sent yet"
-                .into(),
-        ))
+        Ok(Some(pin.founder_account))
     }
 
     /// The currently-pinned trusted founder, if any.

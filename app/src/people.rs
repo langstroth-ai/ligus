@@ -55,6 +55,33 @@ fn invite_trust(conn: &WorkspaceConn, people: &[CoMember]) -> dm::FounderTrust {
     dm::check_founder(conn.founder_actor_id.as_deref(), conn.fk.as_deref(), &known, invite_signer(conn, people))
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FounderStatusDto {
+    /// Writes into this chat's workspace wait for its founder's signed
+    /// founding to sync (a state, not a failure).
+    waiting: bool,
+    /// The founder's name, when they are a co-member.
+    founder_name: Option<String>,
+}
+
+/// Whether sending in a chat waits for its workspace's founder: an invite's
+/// founder is a claim until the founder's signed founding is on this device,
+/// and nothing is written there before.
+#[tauri::command]
+pub(crate) fn founder_status(state: State<AppState>, session_id: String) -> Result<FounderStatusDto, String> {
+    let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
+    let waiting = {
+        let svc = state.service.lock().unwrap();
+        match svc.store().workspace_of(sid).map_err(map_err)? {
+            Some(ws) => svc.waiting_for_founder(ws).map_err(map_err)?,
+            None => None,
+        }
+    };
+    let founder_name = waiting.and_then(|f| co_members_of(&state).into_iter().find(|c| c.account_id == f)).map(|c| c.display_name);
+    Ok(FounderStatusDto { waiting: waiting.is_some(), founder_name })
+}
+
 fn co_members_of(state: &AppState) -> Vec<CoMember> {
     let (account, _) = me(state);
     let svc = state.service.lock().unwrap();
