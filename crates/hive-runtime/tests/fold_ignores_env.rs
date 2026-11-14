@@ -32,6 +32,12 @@ const FOLD_ENV_DENYLIST: &[(&str, &str, &str)] = &[
     ("IDLE_TIMEOUT_ENV", "LIGUS_TURN_IDLE_TIMEOUT_SECS", "provider stream idle timeout"),
     ("PREFLIGHT_TEST_ENV", "LIGUS_PREFLIGHT_TEST", "pre-flight test command (a side effect, recorded as an event)"),
     ("&WorkspaceCredential::env_var(secret_ref)", "LIGUS_CRED_FOLD_ENV", "a runtime credential for a turn"),
+    ("MIN_ROLE_ENV", "LIGUS_MCP_MIN_ROLE", "this host's tool floor for a turn (H1 author gate)"),
+    ("\"LIGUS_DATA_DIR\"", "LIGUS_DATA_DIR", "a directory the OS sandbox denies to agent processes"),
+    ("\"LIGUS_SANDBOX\"", "LIGUS_SANDBOX", "which executor spawns agent processes"),
+    ("name", "LIGUS_SANDBOX_EGRESS_ALLOW", "extra egress hosts for a turn's proxy"),
+    ("name", "LIGUS_SANDBOX_WRITE_ALLOW", "extra sandbox write paths for a turn"),
+    ("name", "LIGUS_SANDBOX_READ_ALLOW", "extra sandbox read paths for a turn"),
 ];
 
 fn rs_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
