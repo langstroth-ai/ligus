@@ -352,7 +352,9 @@ impl RelayClient {
 
     /// Attach the entitlement bearer + GitHub identity (if any) to a request.
     pub(crate) fn authed(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        let fresh = self.auth_cell.as_ref().and_then(|c| c.get()).filter(|t| !t.is_empty());
+        // A ligus-auth token goes only to the relay its session is bound to
+        // (E-5); any other relay gets the static token, if one is configured.
+        let fresh = self.auth_cell.as_ref().and_then(|c| c.get_for(&self.base)).filter(|t| !t.is_empty());
         let rb = match fresh.as_ref().or(self.auth.as_ref()) {
             Some(t) => rb.bearer_auth(t),
             None => rb,

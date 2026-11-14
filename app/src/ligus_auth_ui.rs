@@ -28,8 +28,10 @@ struct Pending {
 
 /// The relay bearer to use: the ligus-auth access token when signed in,
 /// otherwise the static token from settings.
-pub(crate) fn effective(static_token: Option<String>) -> Option<String> {
-    CELL.get().filter(|t| !t.is_empty()).or(static_token)
+/// The ligus-auth token goes only to the relay its session was signed in
+/// for (E-5); any other relay gets the static token.
+pub(crate) fn effective(relay_url: Option<&str>, static_token: Option<String>) -> Option<String> {
+    relay_url.and_then(|u| CELL.get_for(u)).filter(|t| !t.is_empty()).or(static_token)
 }
 
 fn signer(state: &AppState) -> Result<Arc<dyn DeviceSigner>, String> {
@@ -139,8 +141,11 @@ pub async fn ligus_auth_poll(state: State<'_, AppState>) -> Result<String, Strin
         Poll::Denied => "denied",
         Poll::Expired => "expired",
         Poll::SignedIn(s) => {
+            // Bound to the relay configured now (E-5).
+            let mut s = *s;
+            s.relay_origin = state.settings.lock().unwrap().relay_url.as_deref().and_then(ligus_auth::origin_of);
             ligus_auth::save_session(&state.data_dir, &s).map_err(|e| e.to_string())?;
-            CELL.set(Some(s.access_token.clone()));
+            CELL.set_session(&s);
             "success"
         }
     };

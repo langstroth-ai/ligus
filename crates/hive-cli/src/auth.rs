@@ -124,6 +124,14 @@ fn login(data_dir: &Path, url: &str, label: Option<String>) -> Result<()> {
             Poll::SignedIn(s) => break *s,
         }
     };
+    // E-5: the token is for the relay this box syncs through, and only that.
+    let mut session = session;
+    session.relay_origin = hive_core::compat::env_opt("LIGUS_RELAY_URL")
+        .or_else(|| crate::load_file_config(data_dir).relay_url)
+        .and_then(|u| ligus_auth::origin_of(&u));
+    if session.relay_origin.is_none() {
+        eprintln!("No relay is configured: the relay access token won't be sent anywhere until you sign in again after `ligus enroll`.");
+    }
     ligus_auth::save_session(data_dir, &session)
         .map_err(|e| anyhow!("{e}"))
         .context("saving the session")?;

@@ -6367,7 +6367,8 @@ impl AppState {
     /// Relay access token (entitlement) for a gated/paid hosted relay. `None`
     /// for self-hosted/open relays. Attached as a bearer to every relay call.
     fn relay_token(&self) -> Option<String> {
-        ligus_auth_ui::effective(self.settings.lock().unwrap().relay_access_token.clone())
+        let s = self.settings.lock().unwrap();
+        ligus_auth_ui::effective(s.relay_url.as_deref(), s.relay_access_token.clone())
     }
 
     /// The caller's GitHub identity token, attached as `X-Hive-Github-Token` so a
@@ -11586,7 +11587,7 @@ fn read_local_sync_sig(settings: &Arc<Mutex<LiveSettings>>) -> LocalSyncSig {
         s.relay_url.clone(),
         s.sync_room.clone(),
         s.workspace_key(),
-        ligus_auth_ui::effective(s.relay_access_token.clone()),
+        ligus_auth_ui::effective(s.relay_url.as_deref(), s.relay_access_token.clone()),
         s.github_token.clone(),
     )
 }
@@ -11750,7 +11751,7 @@ async fn run_sync_loop(app: AppHandle, settings: Arc<Mutex<LiveSettings>>, db_pa
                 s.relay_url.clone(),
                 s.sync_room.clone(),
                 s.workspace_key(),
-                ligus_auth_ui::effective(s.relay_access_token.clone()),
+                ligus_auth_ui::effective(s.relay_url.as_deref(), s.relay_access_token.clone()),
                 s.github_token.clone(),
             )
         };
@@ -12075,7 +12076,7 @@ async fn probe_relay(state: State<'_, AppState>) -> Result<RelayProbeDto, String
         let s = state.settings.lock().unwrap();
         (
             s.relay_url.clone().unwrap_or_default(),
-            ligus_auth_ui::effective(s.relay_access_token.clone()),
+            ligus_auth_ui::effective(s.relay_url.as_deref(), s.relay_access_token.clone()),
             s.github_token.clone(),
             s.sync_room.clone(),
         )
