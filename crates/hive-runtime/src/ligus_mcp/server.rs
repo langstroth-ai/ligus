@@ -102,6 +102,9 @@ struct Counters {
     denied: u32,
     budget_exhausted: bool,
     calls: BTreeMap<String, u32>,
+    /// Every call presented, charged or not (unknown tools, calls after a
+    /// budget ran out): what bounds the turn's audit rows.
+    attempts: u32,
 }
 
 /// A structured self-report (`ligus_report`).
@@ -240,7 +243,24 @@ impl LigusMcp {
     pub async fn call(&self, credential: &str, tool: &str, args: &Value) -> Result<ToolResult, AuthError> {
         let st = self.authorize(credential)?;
         let started = Instant::now();
-        let (res, read_chat) = self.dispatch(&st, tool, args).await;
+        // Every call counts toward maxToolCalls, unknown tools included: past
+        // it, nothing runs and only the first refusal is audited, so a turn
+        // can't flood the bounded audit ring and push older records out.
+        let attempt = {
+            let mut c = st.counters.lock().unwrap_or_else(|e| e.into_inner());
+            c.attempts = c.attempts.saturating_add(1);
+            c.attempts
+        };
+        let over = attempt > st.spec.budgets.max_tool_calls;
+        let (res, read_chat) = if over {
+            let r = ToolResult::err(
+                Outcome::Budget,
+                json!({"error": "budget_exhausted", "budget": "maxToolCalls", "message": crate::tool_loop::FINAL_ROUND_NUDGE}),
+            );
+            (r, None)
+        } else {
+            self.dispatch(&st, tool, args).await
+        };
         {
             let mut c = st.counters.lock().unwrap_or_else(|e| e.into_inner());
             match res.outcome {
@@ -249,7 +269,9 @@ impl LigusMcp {
                 _ => {}
             }
         }
-        self.audit(&st, tool, res.outcome, started.elapsed(), read_chat);
+        if attempt <= st.spec.budgets.max_tool_calls.saturating_add(1) {
+            self.audit(&st, tool, res.outcome, started.elapsed(), read_chat);
+        }
         Ok(res)
     }
 

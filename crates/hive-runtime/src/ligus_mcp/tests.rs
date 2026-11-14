@@ -721,3 +721,22 @@ async fn primary_runtime_proposals_never_badge_as_human() {
     assert_eq!(crate::review::author_of(&s, &find(pid)).0, crate::review::AuthorKind::Agent, "an LLM's proposal badged as a person's");
     assert_eq!(crate::review::author_of(&s, &find(human_pid)).0, crate::review::AuthorKind::Human);
 }
+
+/// Per-call audit facts live in a bounded, device-local ring. Calls the
+/// budget never charged (unknown tools, calls after a budget ran out) still
+/// wrote one fact each, so an agent could flood the ring and push older
+/// audit records (its own cross-chat reads included) out of it. A turn's
+/// audit rows stay within its call budget.
+#[tokio::test]
+async fn audit_rows_stay_within_the_call_budget() {
+    let w = world();
+    let b = Budgets { max_tool_calls: 4, ..Budgets::default() };
+    let turn = w.mcp.begin_turn(spec(&w, b));
+    for i in 0..60 {
+        let tool = if i % 2 == 0 { "ligus_apply_everything" } else { "ligus_read_board" };
+        // As the socket does: the raw name, straight to the server.
+        let _ = w.mcp.call(turn.credential(), tool, &json!({})).await;
+    }
+    let rows = audit(&w).len();
+    assert!(rows <= 5, "{rows} audit rows from one turn with maxToolCalls 4");
+}
