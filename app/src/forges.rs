@@ -86,22 +86,9 @@ fn run_helper(id: &str, dir: &Path, action: &str) -> Result<(), String> {
 /// folder's `origin` on one of this device's connections (and `upstream`
 /// when it is a fork checkout).
 pub(crate) fn binding_for_dir(data_dir: &Path, dir: &Path) -> Option<hive_runtime::ligus_mcp::forge_tools::ForgeBinding> {
-    let out = |args: &[&str]| -> Option<String> {
-        let o = hive_core::process_util::git().arg("-C").arg(dir).args(args).output().ok()?;
-        o.status.success().then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
-    };
-    let origin = out(&["remote", "get-url", "origin"])?;
-    let all = Connections::load(data_dir);
-    for c in &all.forges {
-        let f = forge(c, data_dir);
-        if let Some(repo) = f.repo_of_remote(&origin) {
-            let upstream = out(&["remote", "get-url", "upstream"])
-                .and_then(|u| f.repo_of_remote(&u))
-                .filter(|u| !u.same(&repo));
-            return Some(hive_runtime::ligus_mcp::forge_tools::ForgeBinding { reader: Arc::new(hive_forge::ReadOnly(f)), repo, upstream });
-        }
-    }
-    None
+    // The configured remote URLs, never git's insteadOf rewrites of them.
+    let forges: Vec<Arc<dyn Forge>> = Connections::load(data_dir).forges.iter().map(|c| forge(c, data_dir)).collect();
+    hive_runtime::ligus_mcp::forge_tools::binding_for_checkout(dir, &forges)
 }
 
 // ── Commands ───────────────────────────────────────────────────────────────
