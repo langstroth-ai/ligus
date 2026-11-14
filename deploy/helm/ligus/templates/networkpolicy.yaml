@@ -28,9 +28,7 @@ spec:
         - port: 8787
   {{- if $np.restrictEgress }}
   egress:
-    - ports:
-        - { port: 53, protocol: UDP }
-        - { port: 53, protocol: TCP }
+    {{- include "ligus.dnsEgress" . | nindent 4 }}
     - to:
         {{- if .Values.relay.enabled }}
         - podSelector:

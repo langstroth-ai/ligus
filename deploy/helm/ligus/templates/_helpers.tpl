@@ -99,6 +99,18 @@ app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 {{- end -}}
 
+{{/* Egress rule for the cluster DNS resolver only. */}}
+{{- define "ligus.dnsEgress" -}}
+- to:
+    - namespaceSelector:
+        {{- toYaml .Values.networkPolicy.dns.namespaceSelector | nindent 8 }}
+      podSelector:
+        {{- toYaml .Values.networkPolicy.dns.podSelector | nindent 8 }}
+  ports:
+    - { port: 53, protocol: UDP }
+    - { port: 53, protocol: TCP }
+{{- end -}}
+
 {{- define "ligus.validate" -}}
 {{- if not (include "ligus.relayUrl" .) -}}
 {{- fail "set relayUrl (or relay.enabled=true for an in-release relay)" -}}

@@ -184,6 +184,15 @@ networkPolicy:
   # Namespace of the relay, for the egress rule when restrictEgress is on.
   relayNamespace: ""
   extraEgress: []
+  # The cluster DNS resolver. Every policy that allows DNS allows it to these
+  # pods only: port 53 to any address is a direct exfiltration channel.
+  dns:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: kube-system
+    podSelector:
+      matchLabels:
+        k8s-app: kube-dns
 
 serviceAccount:
   create: true
