@@ -158,7 +158,7 @@ export function WorkspaceRail({
     <div
       data-tour="workspaces"
       className="flex w-14 shrink-0 flex-col items-center gap-2 border-r py-3"
-      style={{ background: "var(--hive-sidebar-bottom)", borderColor: "var(--hive-line)" }}
+      style={{ background: "var(--hive-sidebar-top)", borderColor: "var(--hive-line)" }}
     >
       {(workspaces.data ?? []).map((w) => {
         const local = w.kind === "local";
@@ -208,7 +208,7 @@ export function WorkspaceRail({
                 className="absolute right-0 top-0 h-2.5 w-2.5 rounded-full"
                 style={{
                   background: "var(--hive-accent-cool)",
-                  boxShadow: "0 0 0 2px var(--hive-sidebar-bottom)",
+                  boxShadow: "0 0 0 2px var(--hive-sidebar-top)",
                 }}
                 aria-label={`${w.name} — unread mention`}
                 title={`${w.name} — you were mentioned`}

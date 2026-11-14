@@ -425,11 +425,11 @@ export function Sidebar({
 
   // Inside the sidebar, text rides the dedicated sidebar-ink tokens (spec §2)
   // and hover is a light overlay — so the shared primitives (which reference
-  // --hive-ink/--hive-overlay) render correctly on the dark gradient without
+  // --hive-ink/--hive-overlay) render correctly on the dark sidebar without
   // being parameterized.
   const asideStyle: Record<string, string | number> = {
     width,
-    background: "linear-gradient(180deg, var(--hive-sidebar-top), var(--hive-sidebar-bottom))",
+    background: "var(--hive-sidebar-top)",
     color: "var(--hive-sidebar-ink)",
     borderColor: "var(--hive-line)",
     "--hive-ink": "var(--hive-sidebar-ink)",
