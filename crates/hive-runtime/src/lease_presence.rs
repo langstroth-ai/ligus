@@ -98,11 +98,16 @@ pub enum BeatTrust {
     Unverified,
 }
 
+/// How far ahead of a reader's clock a beat may be stamped and still count.
+/// A beat further ahead is dropped: clamping it to "now" on every read would
+/// make one replayed blob look fresh forever.
+pub const MAX_BEAT_SKEW_MS: i64 = 120_000;
+
 /// Open every lease beat in a presence listing. `device_key` resolves a
 /// holder's certified device key (`None` when the device has none). Skips
 /// human/host presence, beats under another key, beats in the wrong slot, and
-/// beats whose signature fails against a certified key. Future timestamps are
-/// clamped to `now_ms`.
+/// beats whose signature fails against a certified key. Timestamps up to
+/// [`MAX_BEAT_SKEW_MS`] ahead are clamped to `now_ms`; later ones are dropped.
 pub fn open_lease_beats(
     blobs: &HashMap<String, Value>,
     key: &[u8; 32],
@@ -116,6 +121,9 @@ pub fn open_lease_beats(
         let Ok(plain) = open_symmetric(key, &sealed) else { continue };
         let Ok(mut beat) = serde_json::from_slice::<LeaseBeat>(&plain) else { continue };
         if *slot != lease_presence_slot(beat.scope, &beat.scope_id) {
+            continue;
+        }
+        if beat.at_ms > now_ms.saturating_add(MAX_BEAT_SKEW_MS) {
             continue;
         }
         let trust = match device_key(beat.holder) {
@@ -245,6 +253,42 @@ mod tests {
         assert_eq!(o[0].1, BeatTrust::Unverified);
         // The relay sees only ciphertext.
         assert!(!serde_json::to_string(&blobs3).unwrap().contains("holder"));
+    }
+
+    /// A beat stamped far in the future (a holder whose clock ran ahead, or
+    /// one that pre-signed beats) must not keep the lease alive after the
+    /// holder dies: anyone holding the sealed blob can republish it, and a
+    /// future timestamp was clamped to "now" on every read, so it never aged.
+    #[test]
+    fn a_future_dated_beat_cannot_keep_a_dead_lease_alive() {
+        use hive_core::lease::{fold_claim, lease_health, CoordinatorLease, LeaseClaimReason, LeaseHealth, LeaseTable};
+        let k = hive_core::derive_workspace_key("room secret");
+        let kp = SigningKeypair::generate().unwrap();
+        let holder = Uuid::new_v4();
+        let pk = kp.public_key_bytes().to_vec();
+        let t0: i64 = 1_800_000_000_000;
+        let mut table = LeaseTable::new();
+        fold_claim(&mut table, &CoordinatorLease {
+            scope: LeaseScope::WorkflowRun,
+            scope_id: "run".into(),
+            holder,
+            epoch: 1,
+            lease_ms: 60_000,
+            reason: LeaseClaimReason::Initial,
+            claimed_at: hive_core::Timestamp::from_unix_seconds(t0 / 1000),
+        });
+        let state = table.into_values().next().unwrap();
+        let mut b = beat(holder, 1, 1);
+        b.at_ms = t0 + 365 * 24 * 3600 * 1000;
+        let mut blobs = HashMap::new();
+        blobs.insert(lease_presence_slot(LeaseScope::WorkflowRun, "run"), seal_lease_beat(&k, &b.sign(&kp)).unwrap());
+        // The holder died at t0; a reader looks ten minutes later.
+        let now = t0 + 10 * 60_000;
+        let last = open_lease_beats(&blobs, &k, now, |_| Some(pk.clone()))
+            .into_iter()
+            .map(|(b, _)| (b.holder, b.epoch, b.at_ms))
+            .next();
+        assert_eq!(lease_health(&state, last, now), LeaseHealth::Lapsed, "a replayed future beat kept the lease live");
     }
 
     #[test]
