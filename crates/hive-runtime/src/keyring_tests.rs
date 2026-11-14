@@ -472,6 +472,30 @@ impl Junk {
     }
 }
 
+/// Attachments follow the keyring (B1): once a removed member is rotated
+/// out, an attachment shared afterwards is sealed under the new epoch, not
+/// the passphrase epoch they still hold.
+#[test]
+fn removed_member_cannot_read_later_attachments() {
+    use crate::attachment_blob::{open_framed, open_with_ring, seal_framed, seal_with_ring};
+    let mut w = World::new();
+    w.push("owner", SessionEvent::MemberRemoved { member_id: "mara".into() });
+    w.rotate("owner");
+    let data = b"quarterly numbers";
+    // Control: the passphrase epoch is exactly what mara kept.
+    assert_eq!(open_framed(&pass_key(), &seal_framed(&pass_key(), 0, data).unwrap()).as_deref(), Some(&data[..]));
+    let framed = seal_with_ring(&w.engine("owner", &[]), data).unwrap();
+    assert_eq!(u32::from_le_bytes(framed[0..4].try_into().unwrap()), 1, "sealed at the authorized head");
+    assert_eq!(open_framed(&pass_key(), &framed), None, "the passphrase doesn't open it");
+    assert_eq!(open_with_ring(&w.engine("mara", &[]), &framed), None, "the removed member can't read it");
+    assert_eq!(open_with_ring(&w.engine("ada", &[]), &framed).as_deref(), Some(&data[..]));
+    // Older attachments (epoch 0) still open for current members.
+    let old = seal_framed(&pass_key(), 0, data).unwrap();
+    assert_eq!(open_with_ring(&w.engine("ada", &[]), &old).as_deref(), Some(&data[..]));
+    // A device that isn't a recipient of the head refuses to seal.
+    assert!(seal_with_ring(&w.engine("mara", &[]), data).is_err());
+}
+
 #[test]
 fn removed_member_cannot_inject_epoch() {
     // K1: mara is removed and the key rotated; she then publishes a rotation

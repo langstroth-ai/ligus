@@ -408,7 +408,7 @@ async fn sync_round(engine: &mut SyncEngine, store: &mut EventStore) -> Result<(
 /// a headless agent can read attachments other members shared. No-op when no
 /// relay/workspace key is configured or no turn carries a blob marker.
 async fn materialize_turns(cfg: &Config, turns: &mut [ChatTurn]) {
-    let (Some(relay_url), Some(pass)) = (cfg.relay_url.clone(), cfg.key.clone()) else {
+    let (Some(relay_url), Some(_)) = (cfg.relay_url.clone(), cfg.key.as_ref()) else {
         return;
     };
     if !turns.iter().any(|t| t.content.contains("[Attached-blob:")) {
@@ -418,12 +418,16 @@ async fn materialize_turns(cfg: &Config, turns: &mut [ChatTurn]) {
         .with_auth(cfg.token.clone())
         .with_auth_cell(auth::cell())
         .with_github_token(cfg.github_token.clone());
-    let key = derive_workspace_key(&pass);
+    // The one keyring (B1): blobs sealed at any epoch this box holds open.
+    let Ok(src) = key_source(cfg) else { return };
+    let Ok(store) = EventStore::open(cfg.data_dir.join("hive.db")) else { return };
+    let ring = hive_runtime::keyring::KeyringEngine::from_store(&store, hive_core::room_workspace_id(&cfg.room), &src);
+    drop(store);
     let cache = cfg.data_dir.join("attachments").join("blobs");
     for t in turns.iter_mut() {
         if t.content.contains("[Attached-blob:") {
             t.content = hive_runtime::attachment_blob::materialize_body(
-                &t.content, &relay, &cfg.room, &key, &cache,
+                &t.content, &relay, &cfg.room, &ring, &cache,
             )
             .await;
         }

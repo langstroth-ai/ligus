@@ -3526,14 +3526,29 @@ fn content_type_for(path: &std::path::Path) -> String {
     .to_string()
 }
 
-/// The relay room + workspace key needed for the blob channel. `None` when no
-/// relay is configured or no workspace key is set → attachments stay local-only.
-fn blob_transport(state: &AppState) -> Option<(String, String, [u8; 32])> {
-    let s = state.settings.lock().unwrap();
-    let url = s.relay_url.clone().filter(|u| !u.trim().is_empty())?;
-    let room = s.sync_room.clone();
-    let key = s.workspace_key()?;
-    Some((url, room, key))
+/// The relay room + workspace keyring needed for the blob channel. `None` when
+/// no relay is configured or no workspace key is held → attachments stay
+/// local-only. Blobs seal under the ring's seal key (the authorized head, B1)
+/// and open with whichever key the ring holds for their epoch.
+fn blob_transport(state: &AppState) -> Option<(String, String, hive_runtime::keyring::KeyringEngine)> {
+    let (url, room, conn) = {
+        let s = state.settings.lock().unwrap();
+        let url = s.relay_url.clone().filter(|u| !u.trim().is_empty())?;
+        s.workspace_key()?;
+        let room = s.sync_room.clone();
+        let conn = s.workspaces.iter().find(|w| w.room == room).cloned();
+        (url, room, conn)
+    };
+    let src = key_source_for(state, conn.as_ref());
+    let ws = room_workspace_id(&room);
+    let ring = {
+        let svc = state.service.lock().unwrap();
+        hive_runtime::keyring::KeyringEngine::from_store(svc.store(), ws, &src)
+    };
+    if ring.is_empty() {
+        return None;
+    }
+    Some((url, room, ring))
 }
 
 /// Share a composer attachment so every workspace member can receive it: seal the
@@ -3565,7 +3580,7 @@ async fn share_attachment(
         }
     }
 
-    let Some((url, room, key)) = blob_transport(&state) else {
+    let Some((url, room, ring)) = blob_transport(&state) else {
         // Local-only: no relay, so keep the path marker (unchanged behavior).
         return Ok(format!("[Attached: {}]", p.display()));
     };
@@ -3573,7 +3588,7 @@ async fn share_attachment(
     let id = Uuid::new_v4().to_string();
     let client = state.relay_client(&url);
     let blob_ref =
-        hive_runtime::attachment_blob::upload(&client, &room, &key, &id, &name, &content_type, &bytes)
+        hive_runtime::attachment_blob::upload(&client, &room, &ring, &id, &name, &content_type, &bytes)
             .await
             .map_err(|e| format!("upload attachment: {e}"))?;
     // Cache the plaintext locally so the sender resolves it with no download.
@@ -3604,11 +3619,11 @@ async fn resolve_attachment_blob(
     if path.exists() {
         return Ok(path.to_string_lossy().into_owned());
     }
-    let Some((url, room, key)) = blob_transport(&state) else {
+    let Some((url, room, ring)) = blob_transport(&state) else {
         return Err("no relay configured — this attachment is only on the sender's device".into());
     };
     let client = state.relay_client(&url);
-    match hive_runtime::attachment_blob::download(&client, &room, &key, &id).await {
+    match hive_runtime::attachment_blob::download(&client, &room, &ring, &id).await {
         Ok(Some(bytes)) => {
             std::fs::create_dir_all(&cache).map_err(map_err)?;
             std::fs::write(&path, &bytes).map_err(map_err)?;
@@ -6936,13 +6951,13 @@ async fn windowed_context(
     // Materialize any `[Attached-blob: …]` references to local files so the agent
     // (which reads paths) can open attachments other members shared over the relay.
     // No-op for turns without blob markers, or when no relay/key is configured.
-    if let Some((url, room, key)) = blob_transport(state) {
+    if let Some((url, room, ring)) = blob_transport(state) {
         let client = state.relay_client(&url);
         let cache = blob_cache_dir(&state.data_dir);
         for t in turns.iter_mut() {
             if t.content.contains("[Attached-blob:") {
                 t.content =
-                    hive_runtime::attachment_blob::materialize_body(&t.content, &client, &room, &key, &cache)
+                    hive_runtime::attachment_blob::materialize_body(&t.content, &client, &room, &ring, &cache)
                         .await;
             }
         }
