@@ -1,3 +1,4 @@
+import type React from "react";
 import { Badge } from "@/components/ui";
 import { IconAlertTriangle, IconLock, IconShield, IconUsers, IconWrench, IconSparkle, IconFile, IconMessage, IconFlow } from "@/lib/icons";
 import type { ProposalDto } from "@/lib/ipc";
@@ -7,7 +8,7 @@ import type { ProposalDto } from "@/lib/ipc";
 export function ProposalBadges({ proposal }: { proposal: ProposalDto }) {
   const kind = proposal.workflow ? "workflow" : proposal.kind;
   const kindLabel: Record<string, string> = { fileDiff: "File change", command: "Command", decision: "Decision", workflow: "Workflow" };
-  const kindIcon: Record<string, JSX.Element> = {
+  const kindIcon: Record<string, React.JSX.Element> = {
     fileDiff: <IconFile size={11} />,
     command: <IconWrench size={11} />,
     decision: <IconMessage size={11} />,

@@ -592,7 +592,7 @@ export function EditorView() {
               // Monaco's built-in workers (TS/JS/JSON/CSS/HTML) or the LSP
               // adapter for other languages — but the affordances are enabled here.
               contextmenu: true,
-              hover: { enabled: true, sticky: true },
+              hover: { enabled: "on", sticky: true },
               quickSuggestions: true,
               suggestOnTriggerCharacters: true,
               parameterHints: { enabled: true },

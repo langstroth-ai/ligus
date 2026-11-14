@@ -42,7 +42,8 @@ engineering step, not part of PR CI.
 
 The frontend bundle is large because Monaco ships every language worker. Before a
 production release, trim Monaco to the languages actually used (diff/markdown/json/
-plaintext) via `monaco-editor/esm` feature imports or a Vite `manualChunks` split.
+plaintext) via the `monaco-editor/editor` entry point plus per-feature and
+per-language `register` imports (monaco-editor 0.56+), or a Vite `manualChunks` split.
 
 ## Relay
 

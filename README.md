@@ -199,7 +199,7 @@ everything after their cursor; it never sees plaintext and never holds a key.
 | [`crates/hive-proto`](crates/hive-proto/README.md) | The `ts-rs` DTOs shared with the frontend; a test regenerates `web/src/bindings/` so the TS contract can't drift. |
 | [`crates/hive-cli`](crates/hive-cli/README.md) | The headless `ligus` client and worker daemon — the same runtime, no Tauri. |
 | [`app/`](app/README.md) | The Tauri v2 desktop shell: IPC commands, `AppState`, and streaming events; bundles the web UI. |
-| [`web/`](web/README.md) | The React 18 + TypeScript frontend (Vite, TanStack Query, Tauri IPC). |
+| [`web/`](web/README.md) | The React 19 + TypeScript frontend (Vite, TanStack Query, Tauri IPC). |
 | `addons/` | Optional agent shims (e.g. `aider-mcp`). |
 | `deploy/` | Homebrew cask + distribution. |
 | `docs/` | Developer & maintainer docs. |

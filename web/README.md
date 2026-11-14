@@ -1,6 +1,6 @@
 # `web` — Hive frontend
 
-The **React 18 + TypeScript** frontend, built with **Vite**. It runs inside the
+The **React 19 + TypeScript** frontend, built with **Vite**. It runs inside the
 [Tauri desktop shell](../app/README.md) (not a standalone web server) and talks
 to the Rust backend over IPC.
 
@@ -27,17 +27,12 @@ bun run test       # vitest
 bun run typecheck  # tsc --noEmit
 ```
 
-> **Node.js is a prerequisite for `bun install` here.** `esbuild` is a
-> `trustedDependency`, so bun runs its postinstall (`node install.js`). With no
-> `node` on PATH that script fails and bun **removes esbuild** rather than leaving
-> a broken install — quietly: `bun install` reports success, and the breakage only
-> surfaces later as vitest failing with `Cannot find package 'esbuild'` (which
-> points at the symptom, not the cause). If you can't install Node, install
-> without postinstall scripts instead:
->
-> ```bash
-> bun install --ignore-scripts
-> ```
+> **Node.js 22 or newer is a prerequisite.** `bun run test`, `bun run build` and
+> `bun run dev` launch Vitest, Vite and tsc through their Node shebangs, and
+> Vitest 5, jsdom 31 and jest-dom 7 require Node 22+ (jsdom asks for 22.22.2+,
+> 24.15+ or 26+). `esbuild` stays listed in `trustedDependencies` so its
+> postinstall can run if a dependency pulls it in again, but Vite 8 bundles with
+> Rolldown and the current lockfile does not install it.
 
 `dev:mock` swaps the Tauri IPC modules for `dev/mock/` (see
 `vite.mock.config.ts`) so the UI renders in a plain browser with fixture data —

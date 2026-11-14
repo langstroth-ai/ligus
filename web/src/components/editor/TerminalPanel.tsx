@@ -252,7 +252,7 @@ export function TerminalPanel({ onCollapse }: Props) {
   }, []);
 
   // Ensure one terminal exists on mount; close every PTY + clear the store on
-  // unmount. `bootRef` (persisted across React 18 strict-mode remounts) keeps
+  // unmount. `bootRef` (persisted across React strict-mode remounts) keeps
   // the auto-spawn from firing twice.
   useEffect(() => {
     if (!bootRef.current && terminalStore.getState().terminals.length === 0) {
