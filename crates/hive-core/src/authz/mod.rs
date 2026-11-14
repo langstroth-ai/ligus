@@ -305,6 +305,16 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 if approval.actor_id != author {
                     return Decision::deny("a vote must be cast by the voter it names");
                 }
+                // P0.6: a delegated host (a serve box enrolled as its owner's
+                // device) signs as the owner without the owner being there.
+                // Until Track B's presence proofs, its votes don't count
+                // toward a human gate; `ligus serve` refuses them up front
+                // (403 presence_required).
+                let account = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id);
+                let signer = env.signer_device_id.and_then(|d| at.devices.get(&d));
+                if signer.zip(account).is_some_and(|(d, a)| d.delegated_for(a)) {
+                    return Decision::deny("a vote signed by a delegated host doesn't count toward the human gate");
+                }
                 if let (Some(d), Some(p)) =
                     (&approval.diff_digest, fold.proposals.iter().find(|p| p.id == *proposal_id))
                 {

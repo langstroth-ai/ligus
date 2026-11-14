@@ -567,7 +567,10 @@ mod flow_tests {
         assert_eq!(owner.id, alex.id);
         sff.svc.act_as_owner_device(owner);
         sff.svc.post_user_message(chat, ws, "from the phone").unwrap();
-        sff.svc.vote_on_proposal(chat, ws, pid, true).unwrap();
+        // P0.6: a vote it signs as Alex is refused here and would be dropped
+        // by every fold (delegated_host_vote_not_counted_for_human_gate).
+        let refused = sff.svc.vote_on_proposal(chat, ws, pid, true).unwrap_err().to_string();
+        assert!(refused.contains("delegated host"), "{refused}");
         sff.svc.refine_proposal(chat, ws, pid, sff.id(), WorkspaceRole::Owner, "looks good", false).unwrap();
         let mut host = WorkspaceHost::new(sff.svc.device_id().to_string(), hive_core::HostKind::Worker, "sff");
         host.owner_actor_id = alex.id.clone();
@@ -583,14 +586,13 @@ mod flow_tests {
             assert!(bodies.contains(&("from the phone".into(), alex.id.clone())), "{bodies:?}");
             let s = dev.svc.load(chat).unwrap().unwrap();
             let p = s.proposals.iter().find(|p| p.id == pid).unwrap();
-            assert_eq!(p.approvals.len(), 1);
-            assert_eq!(p.approvals[0].actor_id, alex.id);
+            assert!(p.approvals.is_empty(), "{:?}", p.approvals);
             assert_eq!(p.refinements[0].actor_id, alex.id);
             let hosts = dev.svc.list_hosts(ws).unwrap();
             assert!(hosts.iter().any(|h| h.id == sff.svc.device_id().to_string() && h.owner_actor_id == alex.id));
         }
 
-        // One person, one vote: Alex votes again on the desktop; still one vote.
+        // Alex votes on the desktop: that one counts.
         mac.svc.vote_on_proposal(chat, ws, pid, false).unwrap();
         mac.sync().await;
         sff.sync().await;

@@ -42,6 +42,20 @@ pub struct DeviceState {
     pub revoked: bool,
     /// The device's signing key, from its certificate.
     pub public_key: Vec<u8>,
+    /// Accounts this device acts for without holding their key: each one's
+    /// certificate for it was only ever published by another device (the
+    /// owner's desktop approving `hive serve enroll`). A device that holds an
+    /// account key publishes its own certificate for that account. A vote it
+    /// signs for one of these accounts doesn't count toward a human gate (see
+    /// `authz::authorize`).
+    pub delegated_for: BTreeSet<Uuid>,
+}
+
+impl DeviceState {
+    /// Whether this device signs for `account` as a delegated host.
+    pub fn delegated_for(&self, account: Uuid) -> bool {
+        self.delegated_for.contains(&account)
+    }
 }
 
 /// An agent signing key certified by its host device (A3).
@@ -122,6 +136,9 @@ pub struct RosterTracker {
     account_keys: BTreeMap<Uuid, Vec<u8>>,
     disputed: BTreeSet<Uuid>,
     certs: Vec<crate::crypto::DeviceCertificate>,
+    /// (device, account) certificates the device published itself (the
+    /// envelope's signer is the certified device).
+    self_published: BTreeSet<(Uuid, Uuid)>,
 }
 
 impl RosterTracker {
@@ -169,6 +186,9 @@ impl RosterTracker {
             }
             SessionEvent::DeviceCertificateAdded { certificate } => {
                 self.certs.push(certificate.clone());
+                if env.signer_device_id == Some(certificate.device_id) {
+                    self.self_published.insert((certificate.device_id, certificate.account_id));
+                }
                 self.rebuild_devices(fold);
             }
             SessionEvent::AgentKeyCertified { cert } if allowed => {
@@ -216,6 +236,9 @@ impl RosterTracker {
                 let d = devices.entry(cert.device_id).or_default();
                 d.accounts.insert(cert.account_id);
                 d.public_key = cert.device_public_key.clone();
+                if !self.self_published.contains(&(cert.device_id, cert.account_id)) {
+                    d.delegated_for.insert(cert.account_id);
+                }
             }
         }
         for d in &fold.guards.revoked_devices {

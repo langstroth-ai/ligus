@@ -1058,3 +1058,64 @@ fn rules_v2_tier_applies_to_host_signed_agent_output() {
     p.approvals.push(ProposalApproval { actor_id: "owner".into(), role: WorkspaceRole::Owner, approved: true, created_at: Timestamp::epoch(), diff_digest: None });
     assert!(tier_allows(&SessionEvent::ProposalUpserted { proposal: p }, agent, Uuid::nil(), &fold).is_err(), "an agent never asserts approvals");
 }
+
+/// P0.6 (A2 fold rule): a `ligus serve` box enrolled as its owner's device
+/// signs as the owner without the owner being there. Until Track B's presence
+/// proofs its vote doesn't count toward the human gate on any device (the
+/// box's API refuses it up front with 403 `presence_required`); the same
+/// owner's vote from a device holding their account key does. The box having
+/// once published its own identity under its own account changes nothing.
+#[test]
+fn delegated_host_vote_not_counted_for_human_gate() {
+    use hive_core::crypto::{DeviceCertificate, SigningKeypair};
+    let mut w = World::new();
+    let owner_acct = account("owner");
+    let owner_key = SigningKeypair::generate().unwrap();
+    let (desk_key, box_key, box_acct_key) =
+        (SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap());
+    let (desk, bx, box_acct) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let cert = |k: &SigningKeypair, acct, dev, dk: &SigningKeypair| SessionEvent::DeviceCertificateAdded {
+        certificate: DeviceCertificate::issue(k, acct, dev, &dk.public_key_bytes(), Timestamp::epoch()),
+    };
+    let signed = |w: &mut World, by: &str, e: SessionEvent, signer: Uuid| {
+        w.cfg_push(by, e);
+        w.cfg.last_mut().unwrap().signer_device_id = Some(signer);
+    };
+    // The owner's desktop publishes its own identity.
+    signed(&mut w, "owner", SessionEvent::AccountKeyRegistered {
+        account_id: owner_acct,
+        signing_public_key: owner_key.public_key_bytes().to_vec(),
+    }, desk);
+    signed(&mut w, "owner", cert(&owner_key, owner_acct, desk, &desk_key), desk);
+    // The box first published an identity of its own...
+    signed(&mut w, "sff", SessionEvent::AccountKeyRegistered {
+        account_id: box_acct,
+        signing_public_key: box_acct_key.public_key_bytes().to_vec(),
+    }, bx);
+    signed(&mut w, "sff", cert(&box_acct_key, box_acct, bx, &box_key), bx);
+    // ...then the owner's desktop enrolled it as one of the owner's devices.
+    signed(&mut w, "owner", cert(&owner_key, owner_acct, bx, &box_key), desk);
+
+    let roster = w.timeline().current().clone();
+    assert!(roster.devices[&bx].delegated_for(owner_acct));
+    assert!(!roster.devices[&bx].delegated_for(box_acct), "the box holds its own account key");
+    assert!(!roster.devices[&desk].delegated_for(owner_acct));
+
+    let pid = Uuid::from_u128(0xD1);
+    w.chat_push("owner", SessionEvent::ProposalUpserted { proposal: proposal(pid, 1, ProposalStatus::Open) });
+    let digest = Some(diff_digest(&proposal(pid, 1, ProposalStatus::Open)));
+    let from_box = w.chat_push("owner", vote("owner", pid, WorkspaceRole::Owner, true, digest.clone()));
+    w.chat.last_mut().unwrap().signer_device_id = Some(bx);
+    let p = w.state().proposals.into_iter().find(|p| p.id == pid).unwrap();
+    assert!(p.approvals.is_empty(), "the delegated host's vote counted: {:?}", p.approvals);
+    assert_eq!(p.status, ProposalStatus::Open);
+    assert_eq!(w.verdicts()[&from_box], Verdict::Denied);
+
+    // The owner, at their desktop.
+    let from_desk = w.chat_push("owner", vote("owner", pid, WorkspaceRole::Owner, true, digest));
+    w.chat.last_mut().unwrap().signer_device_id = Some(desk);
+    let p = w.state().proposals.into_iter().find(|p| p.id == pid).unwrap();
+    assert_eq!(p.approvals.len(), 1);
+    assert_eq!(p.status, ProposalStatus::Approved);
+    assert_eq!(w.verdicts()[&from_desk], Verdict::Allowed);
+}
