@@ -1122,6 +1122,17 @@ impl EventStore {
         Ok(row.and_then(|(f, k)| crate::envelope_verifier::FounderPin::parse(&f, &k)))
     }
 
+    /// This device left `workspace_id`: drop its founder pin and the invite
+    /// it redeemed. Its log then vouches for no one (co-members, verified
+    /// keys, contact ids and links all come from pinned logs only); a rejoin
+    /// pins again from the new invite.
+    pub fn forget_workspace(&self, workspace_id: Uuid) -> Result<()> {
+        let id = workspace_id.to_string();
+        self.conn.execute("DELETE FROM workspace_pins WHERE workspace_id = ?1", [&id])?;
+        self.conn.execute("DELETE FROM join_invites WHERE workspace_id = ?1", [&id])?;
+        Ok(())
+    }
+
     /// Every workspace this device pinned a founder for, in the order it
     /// pinned them (first joined first: the co-member directory trusts the
     /// earliest-pinned registration of an account's key).
@@ -1150,15 +1161,25 @@ impl EventStore {
     }
 
     /// The contact id (relay v0.3 drop box) `account` most recently stamped
-    /// on an event in `workspace_id`, if any. A delivery address only: what
-    /// is dropped there is sealed to keys verified on the config log.
-    pub fn latest_contact_of(&self, workspace_id: Uuid, account: Uuid) -> Result<Option<String>> {
+    /// on an event in `workspace_id`, if any, counting only events signed by
+    /// a device `signer_key` returns a key for (the caller's certified,
+    /// non-revoked devices of `account`): anyone else can stamp any account
+    /// on what they sign. A delivery address only: what is dropped there is
+    /// sealed to keys verified on the config log.
+    pub fn latest_contact_of(
+        &self,
+        workspace_id: Uuid,
+        account: Uuid,
+        signer_key: &dyn Fn(Uuid) -> Option<Vec<u8>>,
+    ) -> Result<Option<String>> {
         let envs = self.query_envelopes(
             "SELECT envelope_json FROM events WHERE workspace_id = ?1 AND envelope_json LIKE '%\"contact\":\"%' \
              ORDER BY row_id DESC LIMIT 200",
             [workspace_id.to_string()],
         )?;
         Ok(envs.into_iter().find_map(|e| {
+            let key = e.signer_device_id.and_then(signer_key)?;
+            hive_core::crypto::verify_envelope(&e, &key).ok()?;
             let a = e.actor_stamp?.actor;
             (a.account_id == Some(account)).then_some(a.contact).flatten()
         }))

@@ -1216,6 +1216,58 @@ fn co_member_key_conflict_from_attacker_founded_log() {
     let _ = &mut store;
 }
 
+/// S2: after this device leaves a workspace its log no longer vouches for
+/// anyone: its founder pin is gone, so co-members, verified keys and contact
+/// ids stop coming from it (a rejoin pins again from the new invite).
+#[test]
+fn left_workspace_stops_contributing_co_members() {
+    let w = World::new();
+    let me = w.people["owner"].account_id;
+    let ada = w.people["ada"].account_id;
+    let store = pinned_store(&w);
+    assert!(crate::directory_trust::co_members(&store, me).iter().any(|c| c.account_id == ada));
+    store.forget_workspace(w.wid).unwrap();
+    assert!(store.workspace_pin(w.wid).unwrap().is_none(), "the founder pin outlived leaving");
+    assert!(crate::directory_trust::co_members(&store, me).is_empty(), "a left workspace still feeds co-members");
+    assert!(crate::directory_trust::signed_ka_keys(&store, ada).is_empty(), "a left workspace still verifies keys");
+}
+
+/// S2: a contact id rides on whatever an account's devices stamp. Mara signs
+/// an event with her own (certified) device but stamps it as Ada with
+/// Mara's drop box: invites meant for Ada must not be routed there. Nor may a
+/// revoked device of Ada's move it.
+#[test]
+fn forged_stamp_cannot_set_contact() {
+    let mut w = World::new();
+    let ada = w.people["ada"].account_id;
+    let me = w.people["owner"].account_id;
+    let stamp_contact = |w: &mut World, by: &str, as_account: Uuid, cid: &str| {
+        let mut env = w.draft(by, SessionEvent::ChannelCreated { channel: hive_core::Channel::new("x", "x") });
+        let stamp = env.actor_stamp.as_mut().unwrap();
+        stamp.actor.account_id = Some(as_account);
+        stamp.actor.id = "ada".into();
+        stamp.actor.contact = Some(cid.into());
+        let p = &w.people[by];
+        sign_envelope(&mut env, p.device_id, &p.device);
+        w.cfg.push(env);
+    };
+    let real = crate::contacts::new_cid();
+    stamp_contact(&mut w, "ada", ada, &real);
+    let contact = |w: &World| {
+        crate::directory_trust::co_members(&pinned_store(w), me).into_iter().find(|c| c.account_id == ada).unwrap().contact.map(|c| c.0)
+    };
+    assert_eq!(contact(&w).as_deref(), Some(real.as_str()));
+    let forged = crate::contacts::new_cid();
+    stamp_contact(&mut w, "mara", ada, &forged);
+    assert_eq!(contact(&w).as_deref(), Some(real.as_str()), "Mara's stamp moved Ada's drop box");
+    // An unsigned copy (signature stripped) doesn't count either.
+    let mut env = w.draft("ada", SessionEvent::ChannelCreated { channel: hive_core::Channel::new("y", "y") });
+    env.actor_stamp.as_mut().unwrap().actor.contact = Some(crate::contacts::new_cid());
+    env.signature = None;
+    w.cfg.push(env);
+    assert_eq!(contact(&w).as_deref(), Some(real.as_str()), "an unsigned stamp moved Ada's drop box");
+}
+
 /// The control: the real founder's seed verifies under the pinned key, and the
 /// joiner writes as usual.
 #[tokio::test]

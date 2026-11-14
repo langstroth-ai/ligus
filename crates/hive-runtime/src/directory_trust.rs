@@ -300,12 +300,22 @@ pub fn co_members(store: &EventStore, me: Uuid) -> Vec<CoMember> {
                 }
             }
             if entry.contact.is_none() {
-                let cid = config
-                    .members
-                    .iter()
-                    .find(|x| x.actor.account_id == Some(account))
-                    .and_then(|x| x.actor.contact.clone())
-                    .or_else(|| store.latest_contact_of(ws, account).ok().flatten())
+                // What their own certified, non-revoked devices stamped first
+                // (anyone can stamp any account on what they sign; an Admin
+                // writes the roster entry), then the roster entry.
+                let signer_key = |device: Uuid| {
+                    head.devices
+                        .get(&device)
+                        .filter(|d| !d.revoked && d.accounts.contains(&account))
+                        .map(|d| d.public_key.clone())
+                };
+                let cid = store
+                    .latest_contact_of(ws, account, &signer_key)
+                    .ok()
+                    .flatten()
+                    .or_else(|| {
+                        config.members.iter().find(|x| x.actor.account_id == Some(account)).and_then(|x| x.actor.contact.clone())
+                    })
                     .filter(|c| crate::contacts::valid_cid(c));
                 entry.contact = cid.map(|c| (c, ws));
             }

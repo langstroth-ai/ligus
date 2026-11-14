@@ -12487,6 +12487,11 @@ fn remove_workspace(state: State<AppState>, workspace_id: String) -> Result<(), 
         }
         save_settings(&state.data_dir, &s);
     }
+    // Its log stops vouching for anyone on this device: co-members, verified
+    // keys and contact ids come from pinned logs only (S2).
+    if let Err(e) = state.service.lock().unwrap().store().forget_workspace(id) {
+        tracing::warn!(error = %e, "couldn't drop the founder pin of a left workspace");
+    }
     if state.active_workspace_id() == id {
         set_active_workspace(state.clone(), state.local_workspace_id.to_string())?;
     }
