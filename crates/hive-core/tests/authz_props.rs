@@ -1189,3 +1189,34 @@ fn contributor_cannot_create_an_agent_owned_by_someone_else() {
     assert_eq!((v[&one], v[&list]), (Verdict::Denied, Verdict::Denied));
     assert_eq!((v[&own], v[&admin]), (Verdict::Allowed, Verdict::Allowed));
 }
+/// Hardening A-3: a chat's creator is Owner of the chat's own roster, but that
+/// never grants a workspace role. Workspace-config kinds on a chat log (agent
+/// bindings, runtimes) are capped by the author's workspace role at the
+/// event's position, so a Contributor can't re-bind a workspace agent inside
+/// a chat they created (the chat's agents shadow the config log's).
+#[test]
+fn chat_creator_cannot_rebind_a_workspace_agent_in_their_chat() {
+    let mut w = World::new();
+    let mut agent = hive_core::WorkspaceAgent::new("coder", "gw");
+    agent.owner_actor_id = "owner".into();
+    agent.host_id = "sff".into();
+    w.cfg_push("owner", SessionEvent::AgentUpserted { agent: agent.clone() });
+    // mara (Contributor) founds a chat of her own.
+    let mut seed = ChatSession::new("mara's", w.wid, "anthropic");
+    seed.creator_actor_id = "mara".into();
+    seed.members = vec![member("mara", WorkspaceRole::Owner)];
+    let mut m = World { chat: Vec::new(), sid: seed.id, ..w.clone() };
+    m.chat_push("mara", SessionEvent::SessionSnapshot { session: Box::new(seed) });
+    let mut moved = agent.clone();
+    moved.host_id = String::new();
+    moved.owner_actor_id = "mara".into();
+    moved.runtime_id = "other".into();
+    let rebind = m.chat_push("mara", SessionEvent::AgentUpserted { agent: moved });
+    let rt = hive_core::WorkspaceRuntime::new("gw", "gw", hive_core::ModelProviderKind::Anthropic, "m");
+    let runtime = m.chat_push("mara", SessionEvent::WorkspaceRuntimeUpserted { runtime: rt });
+    let v = m.verdicts();
+    assert_eq!(v[&rebind], Verdict::Denied, "a chat-level rebind of a workspace agent folded");
+    assert_eq!(v[&runtime], Verdict::Denied, "a Contributor defined a runtime in her chat");
+    let s = m.state();
+    assert!(s.workspace_agents.is_empty() && s.workspace_runtimes.is_empty());
+}

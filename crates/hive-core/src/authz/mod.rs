@@ -254,7 +254,16 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
     }
 
     if requires_projection_authz(&env.payload) {
-        let role = fold.role_of(author);
+        let mut role = fold.role_of(author);
+        // A chat's own roster (its creator is its Owner) never grants a
+        // workspace role: on a chat log, governance and workspace-config kinds
+        // are capped by the author's workspace role at this position.
+        if ctx.checked && !on_config && caps_by_workspace_role(&env.payload) {
+            let ws_role = ctx.workspace.and_then(|at| at.role_of(author)).unwrap_or(WorkspaceRole::Viewer);
+            if ws_role.rank() < role.rank() {
+                role = ws_role;
+            }
+        }
         // R5: revoking a device your own account certified is self-service.
         if let SessionEvent::DeviceRevoked { device_id } = &env.payload {
             let account = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id);
@@ -271,7 +280,8 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             }
         }
         // S2: binding an agent to a host or runtime is an Admin action.
-        if let Some(floor) = agent_change_floor(&env.payload, author, fold) {
+        let ws_agents = if ctx.checked && !on_config { ctx.workspace } else { None };
+        if let Some(floor) = agent_change_floor(&env.payload, author, fold, ws_agents) {
             if role.rank() < floor.rank() {
                 return Decision::deny(format!("role {role:?} cannot change this agent's host, runtime or owner"));
             }
@@ -399,6 +409,13 @@ fn agent_cert_ok(
     Ok(())
 }
 
+/// Kinds whose chat-log role is capped by the workspace role: everything that
+/// needs projection authz except archiving a chat (a chat-level act its
+/// creator keeps).
+fn caps_by_workspace_role(e: &SessionEvent) -> bool {
+    !matches!(e, SessionEvent::SessionArchivedChanged { .. })
+}
+
 /// Account keys and device certificates: self-validating (the roster checks
 /// the chain), published by members and joiners alike.
 fn is_trust_publication(e: &SessionEvent) -> bool {
@@ -421,9 +438,28 @@ pub fn counted_role(at: &RosterState, author: &str) -> Option<WorkspaceRole> {
 /// host, runtime or owner, is
 /// Admin; editing an agent you don't own (name, role text, avatar) is Admin
 /// unless it is unowned; everything else is the usual Contributor floor.
-fn agent_change_floor(event: &SessionEvent, author: &str, fold: &ChatSession) -> Option<WorkspaceRole> {
+///
+/// On a chat log (`workspace` = the config roster at the event's position), an
+/// agent the chat doesn't define yet is judged against the workspace's agent
+/// of that id: a chat-level copy shadows it in that chat.
+fn agent_change_floor(
+    event: &SessionEvent,
+    author: &str,
+    fold: &ChatSession,
+    workspace: Option<&RosterState>,
+) -> Option<WorkspaceRole> {
     let one = |new: &WorkspaceAgent| -> WorkspaceRole {
-        match fold.workspace_agents.iter().find(|a| a.id == new.id) {
+        let in_chat = fold.workspace_agents.iter().find(|a| a.id == new.id);
+        if let (None, Some(ws)) = (in_chat, workspace.and_then(|w| w.agents.get(&new.id))) {
+            return if ws.host_id != new.host_id || ws.runtime_id != new.runtime_id || ws.owner != new.owner_actor_id {
+                WorkspaceRole::Admin
+            } else if ws.owner.is_empty() || ws.owner == author {
+                WorkspaceRole::Contributor
+            } else {
+                WorkspaceRole::Admin
+            };
+        }
+        match in_chat {
             None if !new.host_id.is_empty() => WorkspaceRole::Admin,
             // An unbound agent runs on its owner's device: naming someone else
             // as the owner binds it to their device (and runtimes, and keys).
