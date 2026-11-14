@@ -241,11 +241,10 @@ pub fn author_of(session: &ChatSession, p: &ActionProposal) -> (AuthorKind, Stri
     if let Some(m) = session.members.iter().find(|m| m.id == p.author_actor_id) {
         return (AuthorKind::Human, m.actor.display_name.clone());
     }
-    if p.producing_agent_id.is_some() || p.author_actor_id.is_empty() {
-        // An authorless turn diff, or an agent no longer on the roster.
-        return (AuthorKind::Agent, if p.author_actor_id.is_empty() { "@hive".into() } else { p.author_actor_id.clone() });
-    }
-    (AuthorKind::Human, p.author_actor_id.clone())
+    // Not a member: an authorless turn diff, an agent no longer on the
+    // roster, or the chat's primary runtime (no agent id; it files under its
+    // label). Never badged as a person's (A-6): only a member is a human.
+    (AuthorKind::Agent, if p.author_actor_id.is_empty() { "@hive".into() } else { p.author_actor_id.clone() })
 }
 
 /// Who signed a proposal's latest upsert.

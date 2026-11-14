@@ -693,3 +693,31 @@ async fn socket_hangs_up_on_an_oversized_line() {
     }
     assert!(closed, "the server kept buffering an endless line");
 }
+
+/// The chat's primary runtime has no agent id, so its tool effects are
+/// signed by the host. Its proposals must still show as an agent's in
+/// Review, never as a person's (A-6): the author badge is what a reviewer
+/// trusts.
+#[tokio::test]
+async fn primary_runtime_proposals_never_badge_as_human() {
+    let w = world();
+    let mut sp = spec(&w, Budgets::default());
+    sp.agent_id = None;
+    sp.author = "Claude Code".into();
+    let turn = w.mcp.begin_turn(sp);
+    let r = turn.call("ligus_propose_decision", &json!({"title": "Use postgres", "body": "trust me"})).await;
+    assert!(!r.is_error, "{}", r.text);
+    let pid: Uuid = body(&r)["proposalId"].as_str().unwrap().parse().unwrap();
+    let human_pid = {
+        let mut svc = w.host.svc.lock().unwrap();
+        let me = svc.author().id.clone();
+        let p = hive_core::ActionProposal::new("Mine", hive_core::ProposalKind::Decision, me);
+        let id = p.id;
+        svc.upsert_proposal(w.chat, w.wid, p).unwrap();
+        id
+    };
+    let s = w.host.svc.lock().unwrap().load(w.chat).unwrap().unwrap();
+    let find = |id: Uuid| s.proposals.iter().find(|p| p.id == id).unwrap().clone();
+    assert_eq!(crate::review::author_of(&s, &find(pid)).0, crate::review::AuthorKind::Agent, "an LLM's proposal badged as a person's");
+    assert_eq!(crate::review::author_of(&s, &find(human_pid)).0, crate::review::AuthorKind::Human);
+}
