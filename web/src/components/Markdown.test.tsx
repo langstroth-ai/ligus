@@ -40,6 +40,14 @@ describe("Markdown", () => {
     expect(link).toHaveAttribute("href", "https://evil.example/p.png?q=sk-secret");
   });
 
+  it("a malformed image URL in synced text doesn't throw while rendering", () => {
+    // A member or agent can post ![](http://[) or ![](https://); new URL() on
+    // it throws during render and takes the whole chat view down with it.
+    for (const bad of ["![](http://[)", "![](https://)", "![](http://a b)", "![](<http://[::1>)"]) {
+      expect(() => render(<Markdown content={bad} />)).not.toThrow();
+    }
+  });
+
   it("still renders gfm tables", () => {
     const { container } = render(
       <Markdown content={"| a | b |\n| - | - |\n| 1 | 2 |"} />,

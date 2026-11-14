@@ -42,6 +42,16 @@ function safeHref(href: string | undefined): string | null {
   return h && SAFE_LINK.test(h) ? h : null;
 }
 
+/// The host of a URL for a label, or null when it doesn't parse. Synced text
+/// can carry a malformed URL, and a throw here would take the chat view down.
+function hostOf(url: string): string | null {
+  try {
+    return new URL(url).host || null;
+  } catch {
+    return null;
+  }
+}
+
 /// GitHub-flavored markdown for chat messages. Memoized on `content` so it only
 /// re-parses when the text actually changes — the transcript stays cheap during
 /// typing/streaming (streaming bubbles render plain text until complete).
@@ -81,7 +91,7 @@ export const Markdown = memo(function Markdown({ content }: { content: string })
           // link the reader can choose to open.
           img: ({ src, alt }) => {
             const safe = safeHref(typeof src === "string" ? src : undefined);
-            const label = `image: ${alt || (safe ? new URL(safe).host : "unavailable")}`;
+            const label = `image: ${alt || (safe && hostOf(safe)) || "unavailable"}`;
             return safe ? (
               <a
                 href={safe}
