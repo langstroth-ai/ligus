@@ -124,6 +124,24 @@ pub struct GuardState {
 }
 
 impl GuardState {
+    /// True when nothing is set, so the field can be left out of a
+    /// serialized session.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+#[cfg(test)]
+mod empty_state_tests {
+    use super::GuardState;
+
+    #[test]
+    fn default_guard_state_is_empty() {
+        assert!(GuardState::default().is_empty());
+    }
+}
+
+impl GuardState {
     /// The active dearth mode, if switched on.
     pub fn dearth_on(&self) -> Option<&DearthMode> {
         self.dearth.as_ref().filter(|d| d.enabled)

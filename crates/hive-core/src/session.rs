@@ -92,7 +92,9 @@ pub struct ChatSession {
     pub workspace_hosts: Vec<WorkspaceHost>,
     /// Guard state: coordinator leases on this log, plus the workspace's guard
     /// settings when this is (or is overlaid from) the config log.
-    #[serde(default)]
+    /// Skipped when empty so a session without guard state serializes exactly
+    /// as before (snapshots are signed over that form).
+    #[serde(default, skip_serializing_if = "crate::guard::GuardState::is_empty")]
     pub guards: crate::guard::GuardState,
     /// Flow records (routing, hand-offs, marks, …) folded from this log; see
     /// [`crate::flow`]. Skipped when empty so a session that never used flow
@@ -186,5 +188,22 @@ impl ChatSession {
 
     pub fn message_index(&self, id: Uuid) -> Option<usize> {
         self.messages.iter().position(|m| m.id == id)
+    }
+}
+
+#[cfg(test)]
+mod serialized_form_tests {
+    use super::ChatSession;
+    use uuid::Uuid;
+
+    /// A session that never used 2.1 guard or flow state must serialize with
+    /// the same keys as 2.0, because snapshots are signed over that form.
+    #[test]
+    fn empty_guard_and_flow_state_are_left_out() {
+        let session = ChatSession::new("t", Uuid::nil(), "claude-code");
+        let json = serde_json::to_value(&session).unwrap();
+        let obj = json.as_object().unwrap();
+        assert!(!obj.contains_key("guards"));
+        assert!(!obj.contains_key("flow"));
     }
 }
