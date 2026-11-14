@@ -528,7 +528,7 @@ export function EditorView() {
           {changedLines > 0 && (
             <span
               className="shrink-0 rounded-full px-2 py-0.5 text-[0.7rem] font-medium"
-              style={{ color: "var(--hive-accent-cool)", background: "var(--hive-mist)" }}
+              style={{ color: "var(--hive-accent-ink)", background: "var(--hive-mist)" }}
               title="Lines changed vs the last commit (HEAD)"
             >
               {changedLines} changed vs HEAD
@@ -553,7 +553,7 @@ export function EditorView() {
             color: "var(--hive-ink)",
           }}
         >
-          <span style={{ color: "var(--hive-warn)" }}>
+          <span style={{ color: "var(--hive-warn-ink)" }}>
             <IconAlertTriangle size={14} />
           </span>
           <span className="flex-1">

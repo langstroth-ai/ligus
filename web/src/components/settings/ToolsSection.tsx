@@ -107,7 +107,7 @@ export function ToolsSection() {
   const hasLinear = (servers.data ?? []).some((s) => s.id === "linear");
   return (
     <Section title="MCP servers">
-      <p className="text-xs opacity-50">
+      <p className="text-xs text-ink-soft">
         Servers stay inert until enabled. Add a hosted server (e.g. Linear) and Connect to authorize
         it, or install a workspace-scoped entry from a manifest URL or GitHub reference.
       </p>
@@ -179,7 +179,7 @@ export function ToolsSection() {
           </Button>
         </form>
       </FormDisclosure>
-      {servers.data?.length === 0 && <p className="text-sm opacity-50">None configured.</p>}
+      {servers.data?.length === 0 && <p className="text-sm text-ink-soft">None configured.</p>}
       {(servers.data ?? []).map((s) => (
         <div
           key={s.id}
@@ -188,20 +188,20 @@ export function ToolsSection() {
         >
           <span>
             <span className="font-medium">{s.id}</span>{" "}
-            <span className="text-xs opacity-50">
+            <span className="text-xs text-ink-soft">
               [{s.transport}] {s.detail}
             </span>
             {s.hasBearerToken && (
-              <span className="ml-2 text-xs opacity-70" title="A static bearer token is saved on this device">
+              <span className="ml-2 text-xs text-ink-soft" title="A static bearer token is saved on this device">
                 · token set
               </span>
             )}
             {!s.hasBearerToken && s.oauthConnected && (
-              <span className="ml-2 text-xs opacity-70">· connected</span>
+              <span className="ml-2 text-xs text-ink-soft">· connected</span>
             )}
             {s.secretForOtherUrl && (
               <span
-                className="ml-2 text-xs opacity-70"
+                className="ml-2 text-xs text-ink-soft"
                 title="This server's URL changed since its token was saved, so the token is not sent. Set the token again or reconnect."
               >
                 · token saved for a different URL
@@ -241,7 +241,7 @@ export function ToolsSection() {
             {s.isManaged && (
               <button
                 className="text-xs hover:opacity-80"
-                style={{ color: "var(--hive-danger)" }}
+                style={{ color: "var(--hive-danger-ink)" }}
                 onClick={() => remove.mutate(s.id)}
               >
                 Remove

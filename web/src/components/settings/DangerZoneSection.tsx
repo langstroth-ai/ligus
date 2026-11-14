@@ -32,7 +32,7 @@ export function DangerZoneSection() {
         }}
       >
         <div className="font-medium">Reset local data</div>
-        <p className="mt-1 text-sm opacity-60">
+        <p className="mt-1 text-sm text-ink-soft">
           Permanently deletes this device's chats, identity, keys, settings, and workspaces, then
           restarts Ligus fresh. Anything synced to teammates or a relay is unaffected. This can't be
           undone.

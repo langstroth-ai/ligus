@@ -65,28 +65,28 @@ export function CliRuntimesPanel() {
           )}
         </div>
       </div>
-      <p className="mt-0.5 text-xs opacity-55">
+      <p className="mt-0.5 text-xs text-ink-soft">
         Use a Google AI Pro / Ultra or GitHub Copilot subscription through its official CLI. Ligus runs the CLI
         headless with your permission setting; the login stays in the CLI — Ligus never sees it.
       </p>
-      {clis.isError && <p className="mt-2 text-xs opacity-70">{errMsg(clis.error)}</p>}
+      {clis.isError && <p className="mt-2 text-xs text-ink-soft">{errMsg(clis.error)}</p>}
       <div className="mt-2 space-y-2">
         {list.map((c) => (
           <div key={c.id} data-testid={`cli-${c.id}`} className="rounded-xl border px-3 py-2 text-sm" style={fieldStyle}>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span>
                 <span className="font-medium">{c.label}</span>{" "}
-                <span className="font-mono text-xs opacity-50">
+                <span className="font-mono text-xs text-ink-soft">
                   {c.binary}
                   {c.version ? ` ${c.version}` : ""}
                 </span>
               </span>
               {!c.installed ? (
-                <span className="text-xs opacity-55">not installed</span>
+                <span className="text-xs text-ink-soft">not installed</span>
               ) : !c.supported ? (
-                <span className="text-xs opacity-55">not usable for subscriptions</span>
+                <span className="text-xs text-ink-soft">not usable for subscriptions</span>
               ) : added(c.provider) ? (
-                <span className="text-xs opacity-55">runtime added</span>
+                <span className="text-xs text-ink-soft">runtime added</span>
               ) : (
                 <Button size="sm" variant="primary" disabled={busy === c.id} onClick={() => void add(c)}>
                   Add runtime
@@ -99,15 +99,15 @@ export function CliRuntimesPanel() {
                   style={{
                     color:
                       c.login === "loggedIn"
-                        ? "var(--hive-accent-cool)"
+                        ? "var(--hive-success-ink)"
                         : c.login === "notLoggedIn"
-                          ? "var(--hive-danger)"
+                          ? "var(--hive-danger-ink)"
                           : undefined,
                   }}
                 >
                   {LOGIN_TEXT[c.login]}
                 </span>
-                {c.loginDetail && <span className="opacity-55"> · {c.loginDetail}</span>}
+                {c.loginDetail && <span className="text-ink-soft"> · {c.loginDetail}</span>}
                 {c.login !== "loggedIn" && (
                   <div className="mt-0.5 opacity-70">
                     To sign in, run <code>{c.loginCommand}</code> in a terminal on this machine.
@@ -135,11 +135,11 @@ export function CliRuntimesPanel() {
               </>
             )}
             {!c.installed && (
-              <div className="mt-1 text-xs opacity-60">
+              <div className="mt-1 text-xs text-ink-soft">
                 Install: <code>{c.installCommand}</code>
               </div>
             )}
-            {c.note && <div className="mt-1 text-xs opacity-55">{c.note}</div>}
+            {c.note && <div className="mt-1 text-xs text-ink-soft">{c.note}</div>}
           </div>
         ))}
       </div>

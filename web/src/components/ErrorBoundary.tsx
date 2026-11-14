@@ -44,14 +44,14 @@ export class ErrorBoundary extends Component<Props, State> {
             className="max-w-sm rounded-xl border px-4 py-4 text-center text-sm"
             style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)", color: "var(--hive-ink)" }}
           >
-            <div className="font-medium" style={{ color: "var(--hive-danger)" }}>
+            <div className="font-medium" style={{ color: "var(--hive-danger-ink)" }}>
               {this.props.label ? `${this.props.label} hit a problem.` : "This panel hit a problem."}
             </div>
             <p className="mt-1 text-xs opacity-70">The rest of the app is still working.</p>
             <button
               onClick={this.reset}
               className="mt-3 rounded-lg px-3 py-1.5 text-xs font-medium transition-all hover:brightness-105"
-              style={{ background: "var(--hive-accent-cool)", color: "#fff" }}
+              style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
             >
               Try again
             </button>
@@ -80,7 +80,7 @@ export class ErrorBoundary extends Component<Props, State> {
           className="w-full max-w-md rounded-2xl border p-6 text-center"
           style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)" }}
         >
-          <h1 className="text-lg font-semibold tracking-tight" style={{ color: "var(--hive-danger)" }}>
+          <h1 className="text-lg font-semibold tracking-tight" style={{ color: "var(--hive-danger-ink)" }}>
             Something went wrong
           </h1>
           <p className="mt-2 text-sm opacity-70">
@@ -90,7 +90,7 @@ export class ErrorBoundary extends Component<Props, State> {
           <button
             onClick={() => location.reload()}
             className="mt-4 rounded-xl px-4 py-2 text-sm font-semibold transition-all hover:brightness-105"
-            style={{ background: "var(--hive-accent-cool)", color: "#fff" }}
+            style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
           >
             Reload
           </button>

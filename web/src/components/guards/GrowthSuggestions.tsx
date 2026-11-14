@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { growthSuggestions } from "@/lib/ipc";
 import { IconSparkle, IconX } from "@/lib/icons";
+import { Banner, LinkButton } from "@/components/ui";
 
 const KEY = "ligus.growth.dismissed";
 
@@ -35,23 +36,25 @@ export function GrowthSuggestions({ onOpen }: { onOpen: (kind: string) => void }
     saveDismissed(ids);
   };
   return (
-    <div
-      data-testid="growth-suggestion"
-      className="flex shrink-0 items-start gap-2 border-b px-4 py-2 text-[12px]"
-      style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)", color: "var(--hive-ink)" }}
-    >
-      <span className="mt-0.5" style={{ color: "var(--hive-accent-cool)" }}>
-        <IconSparkle size={14} />
-      </span>
-      <div className="min-w-0 flex-1">
-        <span className="font-semibold">{next.title}.</span> <span className="opacity-75">{next.reason}</span>
-      </div>
-      <button type="button" className="shrink-0 font-medium underline-offset-2 hover:underline" onClick={() => onOpen(next.kind)}>
-        Set up
-      </button>
-      <button type="button" aria-label="Dismiss suggestion" className="shrink-0 opacity-60 hover:opacity-100" onClick={dismiss}>
-        <IconX size={14} />
-      </button>
-    </div>
+    <Banner
+      tone="neutral"
+      testId="growth-suggestion"
+      icon={<span style={{ color: "var(--hive-accent-ink)" }}><IconSparkle size={14} /></span>}
+      title={`${next.title}.`}
+      detail={<span title={next.reason}>{next.reason}</span>}
+      actions={
+        <>
+          <LinkButton onClick={() => onOpen(next.kind)}>Set up</LinkButton>
+          <button
+            type="button"
+            aria-label="Dismiss suggestion"
+            className="grid h-6 w-6 place-items-center rounded-md text-ink-soft hover:bg-[color:var(--hive-hover)] hover:text-ink"
+            onClick={dismiss}
+          >
+            <IconX size={13} />
+          </button>
+        </>
+      }
+    />
   );
 }

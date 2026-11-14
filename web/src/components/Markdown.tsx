@@ -53,7 +53,7 @@ function safeHref(href: string | undefined): string | null {
 /// retired into its persisted copy.
 export const Markdown = memo(function Markdown({ content }: { content: string }) {
   return (
-    <div className="hive-md text-[0.95rem] leading-7">
+    <div className="hive-md text-[length:var(--hive-text-md)] leading-[1.6]">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkBreaks]}
         components={{
@@ -69,7 +69,7 @@ export const Markdown = memo(function Markdown({ content }: { content: string })
                   if (safe) window.open(safe, "_blank", "noopener,noreferrer");
                 }}
                 className="underline decoration-dotted underline-offset-2"
-                style={{ color: "var(--hive-accent-cool)" }}
+                style={{ color: "var(--hive-accent-ink)" }}
               >
                 {children}
               </a>
@@ -154,7 +154,7 @@ function CodeBlock({ children }: { children: ReactNode }) {
         <span className="font-mono lowercase">{language || "text"}</span>
         <button
           className="rounded-md px-1.5 py-0.5 opacity-0 transition-opacity group-hover/code:opacity-80 group-focus-within/code:opacity-80 focus-visible:!opacity-100 hover:!opacity-100"
-          style={{ color: copied ? "var(--hive-success)" : undefined }}
+          style={{ color: copied ? "var(--hive-success-ink)" : undefined }}
           onClick={() => {
             void navigator.clipboard.writeText(source);
             setCopied(true);

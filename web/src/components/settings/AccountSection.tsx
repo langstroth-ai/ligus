@@ -122,7 +122,7 @@ function IdentitySection() {
             }}
           />
         </label>
-        <div className="text-xs opacity-60">
+        <div className="text-xs text-ink-soft">
           <div>Your avatar is shown to everyone in the workspace.</div>
           {settings.data?.avatarUrl && (
             <button onClick={() => void clearAvatar()} className="mt-1 underline opacity-80 hover:opacity-100">
@@ -131,7 +131,7 @@ function IdentitySection() {
           )}
         </div>
       </div>
-      <label className="block text-sm opacity-70">Display name</label>
+      <label className="block text-sm text-ink-soft">Display name</label>
       <input
         value={name}
         onChange={(e) => setName(e.target.value)}
@@ -139,7 +139,7 @@ function IdentitySection() {
         className="w-full rounded-xl border px-3 py-2 text-sm"
         style={fieldStyle}
       />
-      <label className="mt-2 block text-sm opacity-70">Git email</label>
+      <label className="mt-2 block text-sm text-ink-soft">Git email</label>
       <input
         value={emailLocked ? (account.data?.email ?? email) : email}
         onChange={(e) => setEmail(e.target.value)}
@@ -149,12 +149,12 @@ function IdentitySection() {
         className="w-full rounded-xl border px-3 py-2 font-mono text-sm"
         style={{ ...fieldStyle, opacity: emailLocked ? 0.6 : 1 }}
       />
-      <p className="text-xs opacity-50">
+      <p className="text-xs text-ink-soft">
         {emailLocked
           ? "From your GitHub account — sign out below to set it by hand."
           : "Used to credit you as the commit author when an agent does work you asked for — even if it runs on a teammate's machine."}
       </p>
-      <span className="text-xs opacity-50">Device: {settings.data?.deviceName ?? "…"}</span>
+      <span className="text-xs text-ink-soft">Device: {settings.data?.deviceName ?? "…"}</span>
     </Section>
   );
 }
@@ -246,19 +246,19 @@ function GithubSection() {
             {acct.avatarUrl && <img src={acct.avatarUrl} alt="" className="h-9 w-9 rounded-full" />}
             <div className="min-w-0">
               <div className="truncate font-medium">{acct.name || acct.login}</div>
-              <div className="truncate text-xs opacity-60">
+              <div className="truncate text-xs text-ink-soft">
                 @{acct.login}
                 {acct.email ? ` · ${acct.email}` : ""}
               </div>
             </div>
           </div>
-          <button className="shrink-0 text-xs hover:opacity-80" style={{ color: "var(--hive-danger)" }} onClick={() => logout.mutate()}>
+          <button className="shrink-0 text-xs hover:opacity-80" style={{ color: "var(--hive-danger-ink)" }} onClick={() => logout.mutate()}>
             Sign out
           </button>
         </div>
       ) : configured.data === false ? (
         <div className="space-y-2">
-          <p className="text-xs opacity-60">
+          <p className="text-xs text-ink-soft">
             Sign in with GitHub for one identity across all your devices. First paste a GitHub OAuth
             App <strong>client ID</strong> (GitHub → Settings → Developer settings → OAuth Apps, with
             Device Flow enabled). No client secret needed.
@@ -278,7 +278,7 @@ function GithubSection() {
         </div>
       ) : flow ? (
         <div className="space-y-2 rounded-xl border px-3 py-3" style={{ borderColor: "var(--hive-accent-cool)" }}>
-          <p className="text-xs opacity-60">
+          <p className="text-xs text-ink-soft">
             Go to <code>{flow.verificationUri}</code> and enter this code:
           </p>
           <div className="flex items-center gap-3">
@@ -299,14 +299,14 @@ function GithubSection() {
               open
             </button>
           </div>
-          <p className="text-xs opacity-50">{status}</p>
+          <p className="text-xs text-ink-soft">{status}</p>
           <button className="text-xs opacity-60 hover:opacity-100" onClick={() => { setFlow(null); setStatus(""); }}>
             cancel
           </button>
         </div>
       ) : (
         <div className="space-y-2">
-          <p className="text-xs opacity-60">
+          <p className="text-xs text-ink-soft">
             One identity across all your devices (this Mac, your Windows box, …). Sign in to invite
             teammates by GitHub handle and attribute commits automatically.
           </p>
@@ -400,7 +400,7 @@ export function DevicesSection() {
         ) : undefined
       }
     >
-      <p className="text-xs opacity-60">
+      <p className="text-xs text-ink-soft">
         Devices that act as you in this workspace. Add your phone's home host (<code>ligus serve</code>) here
         so what you do from your phone is yours, not a separate member's.
       </p>
@@ -428,18 +428,18 @@ export function DevicesSection() {
           {preview && (
             <div className="space-y-1.5 text-xs">
               <div>
-                <span className="opacity-60">Device</span> <strong>{preview.label || "unnamed"}</strong>
+                <span className="text-ink-soft">Device</span> <strong>{preview.label || "unnamed"}</strong>
               </div>
               <div>
-                <span className="opacity-60">Fingerprint</span>{" "}
+                <span className="text-ink-soft">Fingerprint</span>{" "}
                 <code className="font-bold tracking-wider">{preview.fingerprint}</code>
-                <span className="opacity-60"> (must match the device's terminal)</span>
+                <span className="text-ink-soft"> (must match the device's terminal)</span>
               </div>
               {!preview.knownWorkspace && (
-                <div style={{ color: "var(--hive-danger)" }}>This code is for a workspace this desktop doesn't have.</div>
+                <div style={{ color: "var(--hive-danger-ink)" }}>This code is for a workspace this desktop doesn't have.</div>
               )}
               {preview.revoked && (
-                <div style={{ color: "var(--hive-danger)" }}>
+                <div style={{ color: "var(--hive-danger-ink)" }}>
                   This device was revoked. Run <code>ligus serve enroll --new-device</code> on it for a new code.
                 </div>
               )}
@@ -484,15 +484,15 @@ export function DevicesSection() {
           <div className="min-w-0">
             <div className="truncate text-sm font-medium">
               {d.label}
-              {d.thisDevice && <span className="opacity-60"> · this device</span>}
-              {d.revoked && <span style={{ color: "var(--hive-danger)" }}> · revoked</span>}
+              {d.thisDevice && <span className="text-ink-soft"> · this device</span>}
+              {d.revoked && <span style={{ color: "var(--hive-danger-ink)" }}> · revoked</span>}
             </div>
-            <div className="truncate font-mono text-[11px] opacity-60">{d.fingerprint}</div>
+            <div className="truncate font-mono text-[11px] text-ink-soft">{d.fingerprint}</div>
           </div>
           {!d.thisDevice && !d.revoked && (
             <button
               className="shrink-0 text-xs hover:opacity-80"
-              style={{ color: "var(--hive-danger)" }}
+              style={{ color: "var(--hive-danger-ink)" }}
               onClick={() => void revoke(d.deviceId, d.label)}
             >
               Revoke

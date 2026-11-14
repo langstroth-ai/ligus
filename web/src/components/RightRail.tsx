@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addAgent,
@@ -78,6 +78,11 @@ import {
   SelectField,
   FormDisclosure,
   EmptyHint,
+  ErrorState,
+  LoadingState,
+  Badge,
+  StatusDot,
+  type Tone,
   Popover,
   PopoverHeader,
   PopoverItem,
@@ -87,6 +92,9 @@ import {
   IconX,
   IconChevronDown,
   IconPlus,
+  IconCheck,
+  IconInbox,
+  IconMonitor,
 } from "@/lib/icons";
 import { PANES, type UtilityPane } from "@/lib/panes";
 import { WorkflowsPane, WorkflowStages } from "@/components/WorkflowsPane";
@@ -122,7 +130,10 @@ export function RightRail({
   // header ✕. Ignored while typing so it never eats a composer/​input Escape.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      // Escape closes the innermost thing first: an open dialog, menu or
+      // popover owns this press, not the rail behind it.
+      if (document.querySelector('[aria-modal="true"], [role="menu"], [role="listbox"]')) return;
       const el = document.activeElement;
       const typing =
         el instanceof HTMLElement &&
@@ -164,7 +175,7 @@ export function RightRail({
               className="relative flex h-10 w-10 items-center justify-center rounded-2xl transition-colors"
               style={{
                 background: pane === item.id ? "var(--hive-mist)" : "transparent",
-                color: pane === item.id ? "var(--hive-accent-cool)" : "var(--hive-ink)",
+                color: pane === item.id ? "var(--hive-accent-ink)" : "var(--hive-ink)",
                 opacity: pane === item.id ? 1 : 0.72,
               }}
               title={item.label}
@@ -176,7 +187,7 @@ export function RightRail({
               {(paneBadges[item.id] ?? 0) > 0 && (
                 <span
                   className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none"
-                  style={{ background: "var(--hive-accent-warm)", color: "var(--hive-on-accent)" }}
+                  style={{ background: "var(--hive-warm-fill)", color: "var(--hive-on-accent)" }}
                   aria-label={`${paneBadges[item.id]} awaiting review`}
                 >
                   {paneBadges[item.id]}
@@ -212,22 +223,63 @@ export function RightRail({
   );
 }
 
+// Scroll offsets per rail pane, so flipping Review → Flow → Review returns you
+// to where you were instead of the top (module-level: survives remounts).
+const railScroll = new Map<string, number>();
+
 export function RailFrame({
   title,
   subtitle,
   children,
+  actions,
 }: {
   title: string;
   subtitle: string;
   children: ReactNode;
+  /// Optional header controls, right-aligned under the close button's row.
+  actions?: ReactNode;
 }) {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    // Content often arrives a frame or two after mount (queries, lazy cards),
+    // so keep re-applying the saved offset until it sticks, and don't record
+    // the clamped offsets seen on the way.
+    const target = railScroll.get(title) ?? 0;
+    let restoring = target > 0;
+    let tries = 0;
+    let raf = 0;
+    const tryRestore = () => {
+      el.scrollTop = target;
+      if (Math.abs(el.scrollTop - target) < 2 || ++tries > 30) restoring = false;
+      else raf = requestAnimationFrame(tryRestore);
+    };
+    if (restoring) tryRestore();
+    const save = () => {
+      if (!restoring) railScroll.set(title, el.scrollTop);
+    };
+    const stop = () => (restoring = false);
+    el.addEventListener("scroll", save, { passive: true });
+    el.addEventListener("wheel", stop, { passive: true });
+    el.addEventListener("pointerdown", stop);
+    return () => {
+      cancelAnimationFrame(raf);
+      el.removeEventListener("scroll", save);
+      el.removeEventListener("wheel", stop);
+      el.removeEventListener("pointerdown", stop);
+    };
+  }, [title]);
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b px-4 py-3" style={{ borderColor: "var(--hive-line)" }}>
-        <div className="text-lg font-semibold tracking-tight">{title}</div>
-        <div className="mt-0.5 text-xs leading-5 opacity-60">{subtitle}</div>
+      <div className="border-b px-4 pb-2.5 pt-3" style={{ borderColor: "var(--hive-line)" }}>
+        <h2 className="pr-8 text-[15px] font-semibold tracking-[-0.01em]">{title}</h2>
+        <p className="mt-0.5 pr-2 text-xs leading-[1.45] text-ink-soft">{subtitle}</p>
+        {actions && <div className="mt-2">{actions}</div>}
       </div>
-      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-3 py-3">{children}</div>
+      <div ref={bodyRef} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-3 py-3">
+        {children}
+      </div>
     </div>
   );
 }
@@ -363,7 +415,7 @@ function ToolsPane({
             <button
               onClick={() => setScope("workspace")}
               className="font-medium underline underline-offset-2"
-              style={{ color: "var(--hive-accent-cool)" }}
+              style={{ color: "var(--hive-accent-ink)" }}
             >
               Edit in Workspace
             </button>
@@ -599,7 +651,7 @@ function ToolsPane({
                   style={fieldStyle}
                 />
                 {mcpError && (
-                  <div className="text-xs" style={{ color: "var(--hive-danger)" }}>
+                  <div className="text-xs" style={{ color: "var(--hive-danger-ink)" }}>
                     {mcpError}
                   </div>
                 )}
@@ -696,7 +748,7 @@ function McpServerCard({
             <span className="truncate text-[13px] font-medium">{server.id}</span>
             <span
               className="shrink-0 text-[11px] uppercase tracking-[0.08em]"
-              style={{ color: disabled ? "var(--hive-ink-soft)" : "var(--hive-success)" }}
+              style={{ color: disabled ? "var(--hive-ink-soft)" : "var(--hive-success-ink)" }}
             >
               {disabled ? "inert" : "enabled"}
             </span>
@@ -771,7 +823,7 @@ function AgentHostBadge({ hostId, hosts }: { hostId: string; hosts: WorkspaceHos
           : `Worker “${label}” is offline; queued work waits until it reconnects`
       }
     >
-      <span aria-hidden>🖥</span>
+      <span aria-hidden className="inline-flex"><IconMonitor size={12} /></span>
       <span className="truncate">{label}</span>
       <span aria-hidden>·</span>
       <span style={{ color: online ? "var(--hive-success-ink)" : "var(--hive-warn-ink)" }}>
@@ -837,7 +889,7 @@ function AgentRosterRow({
           </label>
           <div className="min-w-0">
             <div className="font-medium">@{agent.name}</div>
-            <div className="mt-1 text-xs opacity-60">
+            <div className="mt-1 text-xs text-ink-soft">
               {agent.runtimeId} · {agent.role || "agent"}
             </div>
             <div className="mt-1">
@@ -863,7 +915,7 @@ function AgentRosterRow({
         <button
           onClick={onRemove}
           className="text-xs hover:opacity-80"
-          style={{ color: "var(--hive-danger)" }}
+          style={{ color: "var(--hive-danger-ink)" }}
         >
           Remove
         </button>
@@ -889,7 +941,7 @@ function RuntimeCard({
     <div className="flex items-center justify-between gap-3">
       <div className="min-w-0">
         <div className="truncate text-base font-semibold">{runtime.label}</div>
-        <div className="mt-1 truncate text-xs opacity-55">
+        <div className="mt-1 truncate text-xs text-ink-soft">
           {runtime.location} · {runtime.provider}
           {runtime.endpoint ? ` · ${runtime.endpoint}` : ""}
         </div>
@@ -897,7 +949,7 @@ function RuntimeCard({
       <div className="flex items-center gap-2">
         {runtime.isManaged && (
           <span
-            className="rounded-full px-2 py-1 text-[10px] font-semibold uppercase opacity-70"
+            className="rounded-full px-2 py-1 text-[10px] font-semibold uppercase text-ink-soft"
             style={{ background: "var(--hive-mist)" }}
             title="A runtime you configured (vs. an auto-detected local CLI)"
           >
@@ -909,7 +961,7 @@ function RuntimeCard({
             className="rounded-full px-2 py-1 text-xs font-semibold"
             style={{
               background: "color-mix(in srgb, var(--hive-success) 18%, transparent)",
-              color: "var(--hive-success)",
+              color: "var(--hive-success-ink)",
             }}
           >
             Active
@@ -947,42 +999,20 @@ function RuntimeCard({
 /// ("OFFLINE → queued"), device/unknown = neutral. All tints route through
 /// --hive-* tokens (R1).
 function HostStatusBadge({ item }: { item: QueuedWorkDto }) {
-  const style: { bg: string; fg: string; label: string } = (() => {
-    switch (item.hostStatus) {
-      case "online":
-        return {
-          bg: "color-mix(in srgb, var(--hive-success) 18%, transparent)",
-          fg: "var(--hive-success)",
-          label: item.hostLabel ? `online · ${item.hostLabel}` : "online",
-        };
-      case "offline":
-        return {
-          bg: "color-mix(in srgb, var(--hive-accent-warm) 18%, transparent)",
-          fg: "var(--hive-accent-warm)",
-          label: "OFFLINE → queued",
-        };
-      case "device":
-        return {
-          bg: "var(--hive-mist)",
-          fg: "var(--hive-ink-soft)",
-          label: "device",
-        };
-      default:
-        return {
-          bg: "var(--hive-mist)",
-          fg: "var(--hive-ink-soft)",
-          label: "unknown host",
-        };
-    }
-  })();
-  return (
-    <span
-      className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em]"
-      style={{ background: style.bg, color: style.fg }}
-    >
-      {style.label}
-    </span>
-  );
+  switch (item.hostStatus) {
+    case "online":
+      return <Badge tone="success">{item.hostLabel ? `online · ${item.hostLabel}` : "online"}</Badge>;
+    case "offline":
+      return (
+        <Badge tone="warn" title={item.hostLabel ? `${item.hostLabel} is offline` : undefined}>
+          offline · queued
+        </Badge>
+      );
+    case "device":
+      return <Badge>device</Badge>;
+    default:
+      return <Badge>unknown host</Badge>;
+  }
 }
 
 /// "Run on worker" affordance: a small menu of the online workers. Selecting
@@ -1043,16 +1073,12 @@ function QueuedWorkRow({
   const needsHandoff = item.hostStatus === "offline" || item.hostStatus === "device";
   return (
     <Card className="px-3 py-2.5">
-      <div className="flex items-center gap-2">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <span className="truncate text-[13px] font-medium">@{item.agentName}</span>
-            <HostStatusBadge item={item} />
-          </div>
-          <div className="truncate text-[11.5px]" style={{ color: "var(--hive-ink-soft)" }}>
-            {item.chatTitle || "Untitled chat"}
-          </div>
-        </div>
+      <div className="flex min-w-0 items-baseline gap-1.5">
+        <span className="shrink-0 text-[13px] font-semibold">@{item.agentName}</span>
+        <span className="min-w-0 truncate text-xs text-ink-soft">in {item.chatTitle || "Untitled chat"}</span>
+      </div>
+      <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
+        <HostStatusBadge item={item} />
         {needsHandoff && (
           <RunOnWorkerMenu
             workers={workers}
@@ -1148,10 +1174,10 @@ function DiffFileBlock({
         className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left"
         style={{ background: "var(--hive-mist)" }}
       >
-        <span className="opacity-50" aria-hidden>{open ? "▾" : "▸"}</span>
+        <span className="text-ink-soft" aria-hidden>{open ? "▾" : "▸"}</span>
         <span className={`min-w-0 flex-1 truncate font-mono ${pathClass}`}>{file.path}</span>
-        {file.added > 0 && <span className={pathClass} style={{ color: "var(--hive-success)" }}>+{file.added}</span>}
-        {file.removed > 0 && <span className={pathClass} style={{ color: "var(--hive-danger)" }}>−{file.removed}</span>}
+        {file.added > 0 && <span className={pathClass} style={{ color: "var(--hive-success-ink)" }}>+{file.added}</span>}
+        {file.removed > 0 && <span className={pathClass} style={{ color: "var(--hive-danger-ink)" }}>−{file.removed}</span>}
       </button>
       {open && (
         <div className={`overflow-x-auto font-mono ${fontClass}`} style={{ background: "var(--hive-overlay)" }}>
@@ -1166,16 +1192,17 @@ function DiffFileBlock({
             }
             const num = isDel || isMeta || isHunk ? "" : String(newLine++);
             const color = isAdd
-              ? "var(--hive-success)"
+              ? "var(--hive-success-ink)"
               : isDel
-                ? "var(--hive-danger)"
+                ? "var(--hive-danger-ink)"
                 : isHunk
-                  ? "var(--hive-accent-cool)"
+                  ? "var(--hive-accent-ink)"
                   : isMeta
-                    ? "var(--hive-ink-faint)"
-                    : "var(--hive-ink-soft)";
+                    ? "var(--hive-ink-soft)"
+                    : "var(--hive-ink)";
+            const rowBg = isAdd ? "var(--hive-success-tint)" : isDel ? "var(--hive-danger-tint)" : isHunk ? "var(--hive-info-tint)" : undefined;
             return (
-              <div key={i} className="flex" style={{ whiteSpace: "pre" }}>
+              <div key={i} className="flex" style={{ whiteSpace: "pre", background: rowBg }}>
                 <span
                   className="select-none pr-2 pl-2 text-right"
                   style={{ minWidth: "3ch", color: "var(--hive-ink-faint)" }}
@@ -1311,7 +1338,7 @@ function ProposalCard({
           )}
         </div>
       </div>
-      <div className="mt-0.5 pl-[22px] text-xs opacity-50">{relTime(proposal.createdAt)}</div>
+      <div className="mt-0.5 pl-[22px] text-xs text-ink-soft">{relTime(proposal.createdAt)}</div>
 
       {superseded && (
         <div
@@ -1327,9 +1354,9 @@ function ProposalCard({
           {proposal.workflow ? (
             <>
               {proposal.workflow.description && (
-                <p className="mt-2 text-sm leading-6 opacity-75">{proposal.workflow.description}</p>
+                <p className="mt-2 text-sm leading-6 text-ink-soft">{proposal.workflow.description}</p>
               )}
-              <div className="mt-2 text-xs opacity-55">
+              <div className="mt-2 text-xs text-ink-soft">
                 Approving adds this workflow to the Workflows pane. Runs still start only when someone presses Run.
               </div>
               <WorkflowStages
@@ -1338,7 +1365,7 @@ function ProposalCard({
               />
             </>
           ) : (
-            proposal.body && <p className="mt-2 text-sm leading-6 opacity-75">{proposal.body}</p>
+            proposal.body && <p className="mt-2 text-sm leading-6 text-ink-soft">{proposal.body}</p>
           )}
           {/* A fileDiff proposal (from an agent's isolated worktree) carries a
               unified diff. It's cramped in this narrow pane, so offer opening it
@@ -1347,14 +1374,14 @@ function ProposalCard({
           {proposal.diff && (
             <>
               <div className="mt-2 flex items-center justify-between gap-2">
-                <span className="text-xs opacity-55">
+                <span className="text-xs text-ink-soft">
                   {(proposal.changedFiles?.length ?? 0)} file
                   {(proposal.changedFiles?.length ?? 0) === 1 ? "" : "s"} changed
                 </span>
                 <button
                   type="button"
                   className="rounded-md px-2 py-0.5 text-xs font-medium transition-colors hover:brightness-110"
-                  style={{ border: "1px solid var(--hive-line)", color: "var(--hive-accent-cool)" }}
+                  style={{ border: "1px solid var(--hive-line)", color: "var(--hive-accent-ink)" }}
                   onClick={() => setDiffOpen(true)}
                 >
                   View full diff ↗
@@ -1379,7 +1406,7 @@ function ProposalCard({
         </>
       )}
 
-      <div className="mt-3 text-xs opacity-60">
+      <div className="mt-3 text-xs text-ink-soft">
         {proposal.qualifyingApprovals}/{proposal.requiredApprovals} approvals
       </div>
       {/* Who voted: tag each approver/rejecter by name + role. */}
@@ -1389,12 +1416,12 @@ function ProposalCard({
             <div key={a.actorId} className="flex items-center gap-1.5 text-xs">
               <span
                 aria-hidden
-                style={{ color: a.approved ? "var(--hive-success)" : "var(--hive-danger)" }}
+                style={{ color: a.approved ? "var(--hive-success-ink)" : "var(--hive-danger-ink)" }}
               >
                 {a.approved ? "✓" : "✕"}
               </span>
               <span className="font-medium">{a.displayName}</span>
-              <span className="opacity-50">
+              <span className="text-ink-soft">
                 {a.approved ? "approved" : "rejected"} · {a.role}
               </span>
             </div>
@@ -1410,7 +1437,7 @@ function ProposalCard({
               className="rounded-xl px-3 py-2 text-sm font-medium transition-opacity disabled:opacity-50"
               style={{
                 background: "color-mix(in srgb, var(--hive-success) 20%, transparent)",
-                color: "var(--hive-success)",
+                color: "var(--hive-success-ink)",
               }}
               onClick={() => vote.mutate(true)}
             >
@@ -1421,7 +1448,7 @@ function ProposalCard({
               className="rounded-xl px-3 py-2 text-sm font-medium transition-opacity disabled:opacity-50"
               style={{
                 background: "color-mix(in srgb, var(--hive-danger) 18%, transparent)",
-                color: "var(--hive-danger)",
+                color: "var(--hive-danger-ink)",
               }}
               onClick={() => vote.mutate(false)}
             >
@@ -1442,7 +1469,7 @@ function ProposalCard({
           </Button>
         )}
         {proposal.status === "applied" && (
-          <span className="ml-auto self-center text-xs opacity-60">Implemented</span>
+          <span className="ml-auto self-center text-xs text-ink-soft">Implemented</span>
         )}
       </div>
 
@@ -1460,32 +1487,51 @@ function ProposalCard({
       )}
 
       {diffOpen && proposal.diff && (
-        <Modal
+        <ProposalDiffModal
+          title={proposal.title}
+          diff={proposal.diff}
+          files={proposal.changedFiles?.length ?? 0}
           onClose={() => setDiffOpen(false)}
-          panelClassName="flex max-h-[88vh] w-[min(96vw,1100px)] flex-col overflow-hidden rounded-2xl border"
-          panelStyle={{ background: "var(--hive-panel)", borderColor: "var(--hive-line)" }}
-        >
-          <div
-            className="flex items-center justify-between gap-3 border-b px-4 py-3"
-            style={{ borderColor: "var(--hive-line)" }}
-          >
-            <div className="min-w-0">
-              <div className="truncate font-semibold">{proposal.title}</div>
-              <div className="text-xs opacity-55">
-                {(proposal.changedFiles?.length ?? 0)} file
-                {(proposal.changedFiles?.length ?? 0) === 1 ? "" : "s"} changed
-              </div>
-            </div>
-            <IconButton label="Close" onClick={() => setDiffOpen(false)}>
-              <IconX size={14} />
-            </IconButton>
-          </div>
-          <div className="min-h-0 flex-1 overflow-auto p-4">
-            <ProposalDiff diff={proposal.diff} wide />
-          </div>
-        </Modal>
+        />
       )}
     </Card>
+  );
+}
+
+/// A proposal's full diff in a wide sheet (Review card, proposal-set
+/// alternatives).
+export function ProposalDiffModal({
+  title,
+  diff,
+  files,
+  onClose,
+}: {
+  title: string;
+  diff: string;
+  files: number;
+  onClose: () => void;
+}) {
+  return (
+    <Modal
+      onClose={onClose}
+      panelClassName="flex max-h-[88vh] w-[min(96vw,1100px)] flex-col overflow-hidden rounded-2xl border"
+      panelStyle={{ background: "var(--hive-panel)", borderColor: "var(--hive-line)", boxShadow: "var(--hive-shadow-pop)" }}
+    >
+      <div className="flex items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: "var(--hive-line)" }}>
+        <div className="min-w-0">
+          <div className="truncate font-semibold">{title}</div>
+          <div className="text-xs text-ink-soft">
+            {files} file{files === 1 ? "" : "s"} changed
+          </div>
+        </div>
+        <IconButton label="Close" onClick={onClose}>
+          <IconX size={14} />
+        </IconButton>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto p-4">
+        <ProposalDiff diff={diff} wide />
+      </div>
+    </Modal>
   );
 }
 
@@ -1512,26 +1558,26 @@ function RefinementThread({
 }) {
   return (
     <div className="mt-3 border-t pt-3" style={{ borderColor: "var(--hive-line)" }}>
-      <div className="text-xs font-medium opacity-60">Refinement</div>
+      <div className="text-xs font-medium text-ink-soft">Refinement</div>
       {proposal.refinements.length > 0 && (
         <div className="mt-2 flex flex-col gap-2">
           {proposal.refinements.map((r) => (
             <div key={r.id} className="text-xs">
               <div className="flex items-center gap-1.5">
                 <span className="font-medium">{r.displayName}</span>
-                <span className="opacity-45">{r.role}</span>
+                <span className="text-ink-soft">{r.role}</span>
                 {r.requestChanges && (
                   <span
                     className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
                     style={{
-                      color: "var(--hive-accent-warm)",
+                      color: "var(--hive-warm-ink)",
                       background: "color-mix(in srgb, var(--hive-accent-warm) 15%, transparent)",
                     }}
                   >
                     changes
                   </span>
                 )}
-                <span className="opacity-40">· {relTime(r.createdAt)}</span>
+                <span className="text-ink-soft">· {relTime(r.createdAt)}</span>
               </div>
               <div className="mt-0.5 whitespace-pre-wrap break-words leading-5 opacity-80">
                 {r.text}
@@ -1554,7 +1600,7 @@ function RefinementThread({
           }}
         />
         <div className="flex items-center justify-between gap-2">
-          <label className="flex items-center gap-1.5 text-xs opacity-70">
+          <label className="flex items-center gap-1.5 text-xs text-ink-soft">
             <input
               type="checkbox"
               checked={asChangeRequest}
@@ -1567,7 +1613,7 @@ function RefinementThread({
             disabled={disabled || submitting || !note.trim()}
             onClick={onSubmit}
             className="rounded-lg px-3 py-1.5 text-xs font-semibold transition-opacity disabled:opacity-40"
-            style={{ background: "var(--hive-accent-cool)", color: "var(--hive-on-accent)" }}
+            style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
           >
             {submitting ? "Adding…" : asChangeRequest ? "Request changes" : "Comment"}
           </button>
@@ -1581,22 +1627,20 @@ function RefinementThread({
 /// dim uppercase text (open = neutral, approved = success, rejected = danger,
 /// applied = accent).
 function StatusPill({ status }: { status: string }) {
-  const tone =
+  const tone: Tone =
     status === "approved" || status === "applied"
-      ? "var(--hive-success)"
+      ? "success"
       : status === "rejected"
-        ? "var(--hive-danger)"
-        : "var(--hive-ink)";
+        ? "danger"
+        : status === "open"
+          ? "info"
+          : "neutral";
+  const icon =
+    tone === "success" ? <IconCheck size={11} /> : tone === "danger" ? <IconX size={11} /> : undefined;
   return (
-    <span
-      className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]"
-      style={{
-        color: tone,
-        background: `color-mix(in srgb, ${tone} 14%, transparent)`,
-      }}
-    >
+    <Badge tone={tone} icon={icon}>
       {status}
-    </span>
+    </Badge>
   );
 }
 
@@ -1637,18 +1681,34 @@ function ReviewPane({ sessionId }: { sessionId: string }) {
     />
   );
 
+  const loading = proposals.isPending || sets.isPending;
+  const failed = proposals.isError || sets.isError;
   return (
     <RailFrame title="Review" subtitle="Pending decisions and proposal quorum for this chat.">
       <QueuedWorkSection />
+      {failed && (
+        <div className="mb-4">
+          <ErrorState
+            text="Couldn't load proposals for this chat."
+            onRetry={() => {
+              void proposals.refetch();
+              void sets.refetch();
+            }}
+          />
+        </div>
+      )}
+      {loading && !failed && <LoadingState rows={3} label="Loading proposals" />}
+      {!loading && !failed && (
+      <>
       {(sets.data ?? []).length > 0 && (
-        <Section title="Proposal Sets">
+        <Section title="Proposal sets">
           <ProposalSets sessionId={sessionId} sets={sets.data ?? []} />
         </Section>
       )}
-      <Section title="Pending Proposals">
+      <Section title="Pending proposals">
         {groups.active.map(card)}
         {groups.active.length === 0 && (
-          <EmptyHint text="No proposals are waiting for review." />
+          <EmptyHint icon={<IconInbox size={18} />} text="Nothing is waiting for review." />
         )}
       </Section>
 
@@ -1684,6 +1744,8 @@ function ReviewPane({ sessionId }: { sessionId: string }) {
             <div className="space-y-2.5">{groups.dismissed.map(card)}</div>
           </FormDisclosure>
         </Section>
+      )}
+          </>
       )}
     </RailFrame>
   );
@@ -1914,7 +1976,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
     <RailFrame title="People" subtitle="Workspace members and governance roles for this chat.">
       <Section title="Members">
         {error && (
-          <div className="text-xs" style={{ color: "var(--hive-danger)" }}>
+          <div className="text-xs" style={{ color: "var(--hive-danger-ink)" }}>
             {error}
           </div>
         )}
@@ -1922,13 +1984,13 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
           <Card className="flex items-center justify-between px-3 py-2">
             <div className="min-w-0">
               <div className="font-medium">
-                {selfMember.displayName} <span className="text-xs opacity-50">· you</span>
+                {selfMember.displayName} <span className="text-xs text-ink-soft">· you</span>
               </div>
-              <div className="text-xs opacity-50">{selfMember.role}</div>
+              <div className="text-xs text-ink-soft">{selfMember.role}</div>
             </div>
           </Card>
         ) : (
-          <div className="rounded-xl border px-3 py-2 text-xs" style={{ borderColor: "var(--hive-line)", color: "var(--hive-accent-warm)" }}>
+          <div className="rounded-xl border px-3 py-2 text-xs" style={{ borderColor: "var(--hive-line)", color: "var(--hive-warm-ink)" }}>
             You aren't in this workspace's roster — it was created under a different identity. If it's
             your own, re-create it; identity is stable going forward.
           </div>
@@ -1941,27 +2003,26 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
               <div className="flex items-center gap-2 font-medium">
                 <span className="relative shrink-0">
                   <Avatar name={member.displayName} url={member.avatarUrl} kind="human" size={26} />
-                  <span
-                    className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full"
-                    style={{
-                      background: online ? "var(--hive-success)" : "var(--hive-line)",
-                      boxShadow: "0 0 0 2px var(--hive-panel)",
-                    }}
-                    title={sync.data?.relayConfigured ? (online ? "Online" : "Offline") : "Presence needs a relay"}
-                  />
+                  <span className="absolute -bottom-0.5 -right-0.5 inline-flex rounded-full" style={{ background: "var(--hive-panel)" }}>
+                    <StatusDot
+                      on={online}
+                      size={9}
+                      label={sync.data?.relayConfigured ? (online ? "Online" : "Offline") : "Presence needs a relay"}
+                    />
+                  </span>
                 </span>
                 {member.displayName}
                 {dup && (
                   <span
-                    className="text-xs opacity-50"
+                    className="text-xs text-ink-soft"
                     title={`Mention precisely with @${member.displayName}#${member.index}`}
                   >
                     #{member.index}
                   </span>
                 )}
-                {member.title && <span className="text-xs opacity-50">· {member.title}</span>}
+                {member.title && <span className="text-xs text-ink-soft">· {member.title}</span>}
               </div>
-              <div className="mt-2 flex items-center gap-2">
+              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
                 <SubtleSelectField
                   label="Role"
                   value={member.role}
@@ -1974,7 +2035,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                   ))}
                 </SubtleSelectField>
                 <button
-                  className="shrink-0 text-xs opacity-70 hover:opacity-100"
+                  className="shrink-0 rounded text-xs text-ink-soft hover:text-ink hover:underline"
                   onClick={() =>
                     confirmThen("Remove this member from the roster?", () =>
                       removeMutation.mutate(member.id),
@@ -1986,7 +2047,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                 </button>
                 <button
                   className="shrink-0 text-xs font-medium hover:opacity-80"
-                  style={{ color: "var(--hive-danger)" }}
+                  style={{ color: "var(--hive-danger-ink)" }}
                   onClick={() =>
                     confirmThen(
                       `Remove ${member.displayName} and revoke their access? The workspace key will be rotated so they can't read new messages.`,
@@ -2056,12 +2117,12 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
               (audit.data ?? []).map((e, i) => (
                 <div key={i} className="flex items-baseline justify-between gap-2 text-xs">
                   <span className="min-w-0 truncate">
-                    <span style={{ color: e.action === "removed" ? "var(--hive-danger)" : "var(--hive-accent-warm)" }}>
+                    <span style={{ color: e.action === "removed" ? "var(--hive-danger-ink)" : "var(--hive-accent-warm)" }}>
                       {e.action === "removed" ? "removed" : `added${e.role ? ` (${e.role})` : ""}`}
                     </span>{" "}
-                    <b>{e.member}</b> <span className="opacity-50">by {e.by}</span>
+                    <b>{e.member}</b> <span className="text-ink-soft">by {e.by}</span>
                   </span>
-                  <span className="shrink-0 opacity-40" title={e.at}>
+                  <span className="shrink-0 text-ink-soft" title={e.at}>
                     {new Date(e.at).toLocaleDateString()}
                   </span>
                 </div>
@@ -2076,7 +2137,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
           <EmptyHint text="Connect a relay (Settings → Team sync) to use server-enforced membership." />
         ) : (
           <>
-            <p className="text-xs opacity-60">
+            <p className="text-xs text-ink-soft">
               Who the relay accepts writes from. Requires a membership-enforcing (paid/enterprise)
               relay; on an open relay this stays empty and everyone can write.
             </p>
@@ -2084,13 +2145,13 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
               <Card key={m.account} className="flex items-center justify-between px-3 py-2">
                 <div className="min-w-0">
                   <div className="truncate font-medium">@{m.login}</div>
-                  <div className="text-xs opacity-50">
+                  <div className="text-xs text-ink-soft">
                     {m.role} · {m.account}
                   </div>
                 </div>
                 <button
                   className="shrink-0 text-xs font-medium hover:opacity-80"
-                  style={{ color: "var(--hive-danger)" }}
+                  style={{ color: "var(--hive-danger-ink)" }}
                   onClick={() =>
                     confirmThen(`Remove @${m.login} from this workspace on the relay?`, () =>
                       srvRemoveMutation.mutate(m.account),
@@ -2148,7 +2209,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
           <EmptyHint text="Connect a relay (Settings → Team sync) to issue invites." />
         ) : (
           <>
-            <p className="text-xs opacity-55">
+            <p className="text-xs text-ink-soft">
               Share a code so someone can join at a set role. Codes are revocable, can expire, and
               can cap how many times they're used. The code shows once, on creation.
             </p>
@@ -2164,11 +2225,11 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                 <option value="contributor">contributor</option>
                 <option value="admin">admin</option>
               </select>
-              <label className="flex items-center gap-1 text-xs opacity-70">
+              <label className="flex items-center gap-1 text-xs text-ink-soft">
                 days
                 <input value={invDays} onChange={(e) => setInvDays(e.target.value)} inputMode="numeric" className="w-12 rounded-lg border px-2 py-1 text-sm" style={fieldStyle} />
               </label>
-              <label className="flex items-center gap-1 text-xs opacity-70">
+              <label className="flex items-center gap-1 text-xs text-ink-soft">
                 uses
                 <input value={invUses} onChange={(e) => setInvUses(e.target.value)} inputMode="numeric" className="w-12 rounded-lg border px-2 py-1 text-sm" style={fieldStyle} />
               </label>
@@ -2176,7 +2237,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                 Create invite
               </Button>
             </div>
-            <p className="mt-1 text-[11px] opacity-45">0 days = never expires · 0 uses = unlimited.</p>
+            <p className="mt-1 text-[11px] text-ink-soft">0 days = never expires · 0 uses = unlimited.</p>
             {lastCode && (
               <div
                 className="mt-2 flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5"
@@ -2193,12 +2254,12 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
               <div key={i.id} className="mt-1.5 flex items-center justify-between gap-2 text-sm">
                 <span className="min-w-0">
                   <span className="font-medium">{i.role}</span>{" "}
-                  <span className="text-xs opacity-50">
+                  <span className="text-xs text-ink-soft">
                     · {i.maxUses === 0 ? `${i.uses} uses` : `${i.uses}/${i.maxUses} used`}
                     {i.expiresAt > 0 ? ` · expires ${new Date(i.expiresAt * 1000).toLocaleDateString()}` : ""}
                   </span>
                 </span>
-                <button className="shrink-0 text-xs" style={{ color: "var(--hive-danger)" }} onClick={() => revokeInviteMutation.mutate(i.id)}>
+                <button className="shrink-0 text-xs" style={{ color: "var(--hive-danger-ink)" }} onClick={() => revokeInviteMutation.mutate(i.id)}>
                   Revoke
                 </button>
               </div>
@@ -2225,14 +2286,14 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
         {!relayOn ? (
           <EmptyHint text="Connect a relay (Settings → Team sync) to add remote agents." />
         ) : !issuerKey.data ? (
-          <p className="text-xs opacity-55">
+          <p className="text-xs text-ink-soft">
             To generate a one-paste command for a headless agent, add your relay issuer key in
             Settings → Team sync (advanced). The key mints the agent's identity token locally; only
             the token travels to the box.
           </p>
         ) : (
           <>
-            <p className="text-xs opacity-55">
+            <p className="text-xs text-ink-soft">
               Enroll a remote agent and generate the exact command a developer runs on its box —
               installs the CLI, connects to this workspace, and starts the worker.
             </p>
@@ -2307,17 +2368,13 @@ function HostRow({ host }: { host: WorkspaceHostDto }) {
   return (
     <Card className="flex items-center justify-between gap-2 px-3 py-2">
       <div className="flex min-w-0 items-center gap-2">
-        <span
-          className="h-2.5 w-2.5 shrink-0 rounded-full"
-          style={{ background: host.online ? "var(--hive-success)" : "var(--hive-line)" }}
-          title={host.online ? "Online" : "Offline"}
-        />
+        <StatusDot on={host.online} size={9} label={host.online ? "Online" : "Offline"} />
         <span className="truncate font-medium">{host.label || "Unnamed host"}</span>
         <span
           className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
           style={{
             background: "color-mix(in srgb, var(--hive-accent-cool) 15%, transparent)",
-            color: "var(--hive-accent-cool)",
+            color: "var(--hive-accent-ink)",
           }}
         >
           {host.kind}
@@ -2450,7 +2507,7 @@ function VaultsPane({ sessionId }: { sessionId: string }) {
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="font-medium">{vault.label}</div>
-                <div className="mt-1 truncate text-xs opacity-60">
+                <div className="mt-1 truncate text-xs text-ink-soft">
                   {vault.kind} · {vault.url}
                 </div>
                 <div className="mt-1.5">
@@ -2463,7 +2520,7 @@ function VaultsPane({ sessionId }: { sessionId: string }) {
                 </button>
                 <button
                   className="hover:opacity-80"
-                  style={{ color: "var(--hive-danger)" }}
+                  style={{ color: "var(--hive-danger-ink)" }}
                   onClick={() => confirmThen("Remove this vault source?", () => removeVaultMutation.mutate(vault.url))}
                 >
                   Remove
@@ -2503,7 +2560,7 @@ function VaultsPane({ sessionId }: { sessionId: string }) {
               onChange={setTargetIds}
             />
             {error && (
-              <div className="text-xs" style={{ color: "var(--hive-danger)" }}>
+              <div className="text-xs" style={{ color: "var(--hive-danger-ink)" }}>
                 {error}
               </div>
             )}
@@ -2551,8 +2608,8 @@ function SkillsPane({ sessionId }: { sessionId: string }) {
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="font-medium">{skill.name}</div>
-                {skill.sourceUrl && <div className="mt-1 truncate text-xs opacity-55">{skill.sourceUrl}</div>}
-                <div className="mt-2 line-clamp-3 text-xs leading-5 opacity-60">{skill.instructions}</div>
+                {skill.sourceUrl && <div className="mt-1 truncate text-xs text-ink-soft">{skill.sourceUrl}</div>}
+                <div className="mt-2 line-clamp-3 text-xs leading-5 text-ink-soft">{skill.instructions}</div>
                 <div className="mt-1.5">
                   <TargetBadge agentIds={skill.agentIds} agents={agents.data ?? []} />
                 </div>
@@ -2560,7 +2617,7 @@ function SkillsPane({ sessionId }: { sessionId: string }) {
               <button
                 onClick={() => confirmThen("Remove this skill?", () => removeSkillMutation.mutate(skill.id))}
                 className="text-xs hover:opacity-80"
-                style={{ color: "var(--hive-danger)" }}
+                style={{ color: "var(--hive-danger-ink)" }}
               >
                 Remove
               </button>
@@ -2593,7 +2650,7 @@ function SkillsPane({ sessionId }: { sessionId: string }) {
               onChange={setTargetIds}
             />
             {error && (
-              <div className="text-xs" style={{ color: "var(--hive-danger)" }}>
+              <div className="text-xs" style={{ color: "var(--hive-danger-ink)" }}>
                 {error}
               </div>
             )}
@@ -2709,10 +2766,10 @@ function ContextPane({
       <Section title="Budget">
         <div className="rounded-2xl border p-3" style={panelStyle}>
           <div className="mb-2 flex items-center justify-between text-xs">
-            <span className="opacity-65">
+            <span className="text-ink-soft">
               {data ? `${fmtTokens(totalPlannedTokens)} in prompt` : "Loading..."}
             </span>
-            <span className="opacity-40">
+            <span className="text-ink-soft">
               {data ? `${fmtTokens(data.contextWindowTokens)} window` : ""}
             </span>
           </div>
@@ -2722,11 +2779,14 @@ function ContextPane({
               style={{ width: `${budgetPct}%`, background: budgetColor }}
             />
           </div>
-          <div className="mt-1.5 text-right text-[11px] font-medium" style={{ color: budgetColor }}>
+          <div
+            className="mt-1.5 text-right text-[11px] font-medium"
+            style={{ color: budgetPct >= 90 ? "var(--hive-danger-ink)" : budgetPct >= 70 ? "var(--hive-warm-ink)" : "var(--hive-ink-soft)" }}
+          >
             {budgetPct}%
           </div>
           {data && (
-            <div className="mt-2.5 grid grid-cols-2 gap-1.5 text-[11px] opacity-55">
+            <div className="mt-2.5 grid grid-cols-2 gap-1.5 text-[11px] text-ink-soft">
               <span>System {fmtTokens(data.systemPromptTokens)}</span>
               <span className="text-right">History budget {fmtTokens(data.historyBudgetTokens)}</span>
               <span>Reserved output {fmtTokens(data.reservedOutputTokens)}</span>
@@ -2738,19 +2798,19 @@ function ContextPane({
               className="mt-2.5 rounded-xl px-3 py-2 text-xs leading-5"
               style={{
                 background: "color-mix(in srgb, var(--hive-accent-warm) 10%, transparent)",
-                color: "var(--hive-accent-warm)",
+                color: "var(--hive-warm-ink)",
               }}
             >
               {data.overflowMessageCount} earlier messages are currently condensed to fit the context window.
             </div>
           )}
-          {data && <div className="mt-2 text-[11px] opacity-50">{summaryLabel}</div>}
+          {data && <div className="mt-2 text-[11px] text-ink-soft">{summaryLabel}</div>}
           {budgetPct >= 70 && (
             <div
               className="mt-2.5 rounded-xl px-3 py-2 text-xs leading-5"
               style={{
                 background: "color-mix(in srgb, var(--hive-danger) 10%, transparent)",
-                color: "var(--hive-danger)",
+                color: "var(--hive-danger-ink)",
               }}
             >
               Context is getting full — consider removing unused skills or vaults below.
@@ -2778,7 +2838,7 @@ function ContextPane({
               >
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium">{skill.name}</div>
-                  <div className="mt-0.5 text-xs opacity-50">~{fmtTokens(est)} tokens in prompt</div>
+                  <div className="mt-0.5 text-xs text-ink-soft">~{fmtTokens(est)} tokens in prompt</div>
                 </div>
                 <IconButton
                   label="Remove skill"
@@ -2805,7 +2865,7 @@ function ContextPane({
             >
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-medium">{vault.label}</div>
-                <div className="mt-0.5 text-xs opacity-50">{vault.kind} reference source</div>
+                <div className="mt-0.5 text-xs text-ink-soft">{vault.kind} reference source</div>
               </div>
               <IconButton
                 label="Unmount vault"
@@ -2849,18 +2909,18 @@ export function SubtleSelectField({
       className="inline-flex w-full min-w-0 items-center gap-2.5 rounded-xl border px-2.5 py-1.5"
       style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}
     >
-      <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.12em] opacity-45">
+      <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.12em] text-ink-soft">
         {label}
       </span>
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="min-w-0 flex-1 appearance-none bg-transparent pr-1 text-sm font-medium outline-none"
-        style={{ color: "var(--hive-ink)", fontFamily: "inherit" }}
+        className="min-w-0 flex-1 appearance-none bg-transparent text-sm font-medium outline-none"
+        style={{ color: "var(--hive-ink)", fontFamily: "inherit", backgroundImage: "none", paddingRight: 4 }}
       >
         {children}
       </select>
-      <span className="shrink-0 opacity-40">
+      <span className="shrink-0 text-ink-faint">
         <IconChevronDown size={13} />
       </span>
     </label>
@@ -2871,7 +2931,7 @@ function ContextStat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl border py-2 text-center" style={panelStyle}>
       <div className="text-base font-semibold">{value}</div>
-      <div className="text-[10px] uppercase tracking-[0.12em] opacity-50">{label}</div>
+      <div className="text-[10px] uppercase tracking-[0.12em] text-ink-soft">{label}</div>
     </div>
   );
 }

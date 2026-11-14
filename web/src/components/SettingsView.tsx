@@ -123,14 +123,24 @@ export function parseSettingsTab(raw: string | undefined | null): SettingsTab {
       return "tools";
     case "permissions":
       return "permissions";
+    case "flow":
+    case "routing":
+      return "flow";
     case "updates":
       return "updates";
+    case "diagnostics":
+    case "logs":
+      return "diagnostics";
     case "danger":
       return "danger";
     default:
       return "account";
   }
 }
+
+// The tab Settings last showed, so ⌘, reopens where you were.
+let rememberedTab: SettingsTab = "account";
+export const lastSettingsTab = () => rememberedTab;
 
 /// Settings, presented as a focus-trapped sheet over the workspace (§6.5/§5.7).
 /// It composes `Modal` from ui.tsx for the scrim + Escape/click-away + trap.
@@ -152,7 +162,12 @@ export function SettingsView({
   initialTab?: SettingsTab;
   onClose: () => void;
 }) {
-  const [tab, setTab] = useState<SettingsTab>(initialTab ?? "account");
+  const [tab, setTabState] = useState<SettingsTab>(initialTab ?? rememberedTab);
+  const setTab = (t: SettingsTab) => {
+    rememberedTab = t;
+    setTabState(t);
+  };
+  rememberedTab = tab;
   const [query, setQuery] = useState("");
 
   const filtered = useMemo(() => {
@@ -173,14 +188,15 @@ export function SettingsView({
       onClose={onClose}
       overlayClassName="z-[900] flex items-center justify-center p-4"
       overlayStyle={{ background: "color-mix(in srgb, var(--hive-canvas) 60%, transparent)" }}
-      panelClassName="flex overflow-hidden shadow-2xl"
+      panelClassName="flex overflow-hidden"
       panelStyle={{
-        width: 840,
-        height: 600,
+        width: 920,
+        height: 680,
         maxWidth: "95vw",
         maxHeight: "90vh",
-        borderRadius: 14,
+        borderRadius: "var(--hive-radius-xl)",
         border: "1px solid var(--hive-line)",
+        boxShadow: "var(--hive-shadow-pop)",
         background: "var(--hive-canvas)",
         color: "var(--hive-ink)",
       }}
@@ -213,7 +229,7 @@ export function SettingsView({
           </div>
         ))}
         {filtered.length === 0 && (
-          <p className="px-2.5 text-xs opacity-50">No settings match “{query}”.</p>
+          <p className="px-2.5 text-xs text-ink-soft">No settings match “{query}”.</p>
         )}
       </nav>
 
@@ -223,12 +239,14 @@ export function SettingsView({
           className="flex shrink-0 items-center justify-between gap-3 border-b px-6 py-3"
           style={{ borderColor: "var(--hive-line)" }}
         >
-          <h1 className="text-[19px] font-semibold">{TAB_LABEL[tab]}</h1>
+          <h1 className="text-[length:var(--hive-text-xl)] font-semibold tracking-[-0.01em]">{TAB_LABEL[tab]}</h1>
           <IconButton label="Close settings" onClick={onClose}>
             <IconX size={18} />
           </IconButton>
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+        {/* Keyed by tab: each tab opens at its top instead of inheriting the
+            previous tab's scroll offset. */}
+        <div key={tab} className="hive-enter min-h-0 flex-1 overflow-y-auto px-6 py-5">
           {tab === "account" && <AccountSection />}
           {tab === "appearance" && (
             <AppearanceSection

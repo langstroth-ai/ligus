@@ -23,11 +23,30 @@ const card: HandoffCard = {
 describe("hand-off cards", () => {
   it("shows what, where and how good, and opens the parcel", () => {
     render(<HandoffCardView card={card} />);
-    expect(screen.getByText("Hand-off · coder → reviewer")).toBeInTheDocument();
+    expect(screen.getByTestId("handoff-card")).toHaveTextContent("Hand-off@coder@reviewer");
+    expect(screen.getByRole("button", { name: "Go to reply" })).toBeInTheDocument();
     expect(screen.getByText(/1 file · tests passed · proposal open · 2 turns so far/)).toBeInTheDocument();
     expect(screen.queryByText("a regex rewrite")).not.toBeInTheDocument();
     fireEvent.click(screen.getByText("Context parcel"));
     expect(screen.getByText("a regex rewrite")).toBeInTheDocument();
+  });
+
+  it("jumps to the receiving agent's reply, or says it hasn't come yet", () => {
+    render(
+      <>
+        <div className="tt" data-message-id="m1" data-author="coder" />
+        <div className="tt" data-message-id="m2" data-author="reviewer" />
+        <HandoffCardView card={card} />
+      </>,
+    );
+    const reply = document.querySelector<HTMLElement>('[data-message-id="m2"]')!;
+    reply.scrollIntoView = () => {};
+    window.matchMedia = ((q: string) => ({ matches: false, media: q })) as unknown as typeof window.matchMedia;
+    fireEvent.click(screen.getByRole("button", { name: "Go to reply" }));
+    expect(reply.classList.contains("hive-flash")).toBe(true);
+    reply.dataset.author = "someone-else";
+    fireEvent.click(screen.getByRole("button", { name: "Go to reply" }));
+    expect(screen.getByText("@reviewer hasn't replied yet.")).toBeInTheDocument();
   });
 
   it("hides the parcel toggle when there is none", () => {

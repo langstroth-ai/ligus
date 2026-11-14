@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { SegmentedTabs } from "@/components/ui";
 import { RailFrame } from "@/components/RightRail";
 import { RoutingSection } from "@/components/flow/RoutingSection";
 import { QueueSection } from "@/components/flow/QueueSection";
@@ -23,16 +24,19 @@ const TABS: { id: FlowTab; label: string }[] = [
   { id: "home", label: "Home" },
 ];
 
+let lastFlowTab: FlowTab | null = null;
+
 export function FlowPane({ initialTab = "board" }: { initialTab?: FlowTab }) {
-  const [tab, setTab] = useState<FlowTab>(initialTab);
+  // Remember the last Flow tab, so leaving the pane and coming back lands where you were.
+  const [tab, setTab] = useState<FlowTab>(() => lastFlowTab ?? initialTab);
+  const selectTab = (t: FlowTab) => {
+    lastFlowTab = t;
+    setTab(t);
+  };
   return (
     <RailFrame title="Flow" subtitle="Who picks up work, where it waits, and what agents left for each other.">
-      <div className="mb-3 flex flex-wrap gap-1" role="tablist" aria-label="Flow sections">
-        {TABS.map((t) => (
-          <TabButton key={t.id} active={tab === t.id} onClick={() => setTab(t.id)}>
-            {t.label}
-          </TabButton>
-        ))}
+      <div className="mb-3">
+        <SegmentedTabs tabs={TABS} value={tab} onChange={selectTab} label="Flow sections" />
       </div>
       {tab === "board" && <BoardSection />}
       {tab === "queue" && <QueueSection />}
@@ -45,38 +49,19 @@ export function FlowPane({ initialTab = "board" }: { initialTab?: FlowTab }) {
   );
 }
 
-function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={active}
-      onClick={onClick}
-      className="rounded-lg px-2.5 py-1 text-xs font-medium transition-colors"
-      style={{
-        background: active ? "var(--hive-mist)" : "transparent",
-        color: active ? "var(--hive-accent-cool)" : "var(--hive-ink)",
-        opacity: active ? 1 : 0.75,
-      }}
-    >
-      {children}
-    </button>
-  );
-}
-
 /// Small key/value tile used across flow sections.
 export function Stat({ label, value, hint }: { label: string; value: ReactNode; hint?: string }) {
   return (
-    <div className="rounded-xl border px-3 py-2" style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }} title={hint}>
-      <div className="text-[10.5px] uppercase tracking-wide opacity-60">{label}</div>
-      <div className="text-sm font-semibold">{value}</div>
+    <div className="rounded-lg border px-2.5 py-2" style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)" }} title={hint}>
+      <div className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-ink-soft">{label}</div>
+      <div className="mt-0.5 text-[15px] font-semibold tabular-nums">{value}</div>
     </div>
   );
 }
 
 export function Muted({ children }: { children: ReactNode }) {
   return (
-    <p className="text-xs" style={{ color: "var(--hive-ink-soft)" }}>
+    <p className="text-xs leading-[1.5] text-ink-soft">
       {children}
     </p>
   );

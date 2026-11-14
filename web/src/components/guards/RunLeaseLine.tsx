@@ -37,16 +37,16 @@ export function RunLeaseLine({
   return (
     <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]" data-testid="run-lease">
       <span style={{ color: TONE[tone] }}>●</span>
-      <span className="opacity-75">{text}</span>
+      <span className="text-ink-soft">{text}</span>
       {!lease.verified && !lease.isMe && (
-        <span className="opacity-60" title="The holder has no certified device key, so its heartbeat is trusted only as far as the workspace key">
+        <span className="text-ink-soft" title="The holder has no certified device key, so its heartbeat is trusted only as far as the workspace key">
           unverified
         </span>
       )}
       {lease.fencedClaims > 0 && (
         <span
           className="rounded px-1.5 py-0.5"
-          style={{ color: "var(--hive-danger)", background: "color-mix(in srgb, var(--hive-danger) 12%, transparent)" }}
+          style={{ color: "var(--hive-danger-ink)", background: "color-mix(in srgb, var(--hive-danger) 12%, transparent)" }}
           title="Another device tried to drive this run at the same time; the newer lease epoch won and the other was stopped"
         >
           {lease.fencedClaims} competing claim{lease.fencedClaims === 1 ? "" : "s"} fenced

@@ -138,7 +138,7 @@ function ContextMenuView({ x, y, items, onClose }: OpenState & { onClose: () => 
               className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors disabled:opacity-40"
               style={{
                 background: active === i ? "var(--hive-overlay)" : "transparent",
-                color: it.danger ? "var(--hive-danger)" : "var(--hive-ink)",
+                color: it.danger ? "var(--hive-danger-ink)" : "var(--hive-ink)",
               }}
             >
               {it.icon && (

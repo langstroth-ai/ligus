@@ -23,7 +23,8 @@ import {
 } from "@/lib/ipc";
 import { toast, errMsg } from "@/components/Toast";
 import { confirmThen } from "@/lib/confirm";
-import { Button, Section, ErrorState } from "@/components/ui";
+import { Badge, Button, Section, ErrorState } from "@/components/ui";
+import { IconChevronRight, IconLock } from "@/lib/icons";
 import { RailFrame, Stack, EmptyHint, panelStyle, fieldStyle } from "@/components/RightRail";
 import { RunLeaseLine } from "@/components/guards/RunLeaseLine";
 
@@ -31,17 +32,17 @@ import { RunLeaseLine } from "@/components/guards/RunLeaseLine";
 export function statusTone(status: string): { color: string; background: string } {
   switch (status) {
     case "running":
-      return { color: "var(--hive-accent-cool)", background: "color-mix(in srgb, var(--hive-accent-cool) 12%, transparent)" };
+      return { color: "var(--hive-accent-ink)", background: "color-mix(in srgb, var(--hive-accent-cool) 12%, transparent)" };
     case "awaitingApproval":
     case "awaitingGate":
-      return { color: "var(--hive-warn)", background: "color-mix(in srgb, var(--hive-accent-warm) 14%, transparent)" };
+      return { color: "var(--hive-warn-ink)", background: "color-mix(in srgb, var(--hive-accent-warm) 14%, transparent)" };
     case "succeeded":
     case "completed":
-      return { color: "var(--hive-success)", background: "color-mix(in srgb, var(--hive-success) 14%, transparent)" };
+      return { color: "var(--hive-success-ink)", background: "color-mix(in srgb, var(--hive-success) 14%, transparent)" };
     case "failed":
     case "rejected":
     case "halted":
-      return { color: "var(--hive-danger)", background: "color-mix(in srgb, var(--hive-danger) 14%, transparent)" };
+      return { color: "var(--hive-danger-ink)", background: "color-mix(in srgb, var(--hive-danger) 14%, transparent)" };
     default: // pending, skipped, canceled
       return { color: "var(--hive-ink)", background: "var(--hive-overlay)" };
   }
@@ -89,19 +90,19 @@ export function WorkflowStages({
       {readingOrder(nodes).map((n, i) => (
         <li key={n.id} className="rounded-lg border px-2.5 py-1.5 text-xs" style={{ borderColor: "var(--hive-line)" }}>
           <div className="flex flex-wrap items-baseline gap-x-1.5">
-            <span className="opacity-50">{i + 1}.</span>
+            <span className="text-ink-soft">{i + 1}.</span>
             <span className="font-medium">
-              {n.kind === "gate" ? "◈ " : ""}
+              {n.kind === "gate" ? <span aria-label="approval gate" className="mr-1 inline-flex align-[-2px]"><IconLock size={11} /></span> : null}
               {n.name}
             </span>
-            <span className="opacity-55">
+            <span className="text-ink-soft">
               {n.kind === "gate"
                 ? `approval gate · ${n.requiredApprovals ?? 1} approval${(n.requiredApprovals ?? 1) === 1 ? "" : "s"}`
                 : n.agentId
                   ? `@${agentName(n.agentId) ?? "agent not in this chat"}`
                   : "primary runtime"}
             </span>
-            {n.dependsOn.length > 0 && <span className="opacity-45">after {n.dependsOn.join(", ")}</span>}
+            {n.dependsOn.length > 0 && <span className="text-ink-soft">after {n.dependsOn.join(", ")}</span>}
           </div>
           {n.kind === "gate" ? (
             <div className="mt-0.5 opacity-70">
@@ -263,51 +264,56 @@ function DefinitionCard({
   }
 
   return (
-    <div className="rounded-xl border px-4 py-3" style={panelStyle}>
-      <div className="flex items-start justify-between gap-2">
-        <button
-          type="button"
-          className="min-w-0 text-left"
-          onClick={() => setShowStages((v) => !v)}
-          aria-expanded={showStages}
+    <div className="rounded-xl border px-3 py-2.5" style={panelStyle}>
+      <button
+        type="button"
+        className="flex w-full min-w-0 items-start gap-1.5 rounded-md text-left"
+        onClick={() => setShowStages((v) => !v)}
+        aria-expanded={showStages}
+      >
+        <span
+          aria-hidden
+          className="mt-0.5 inline-flex shrink-0 text-ink-faint transition-transform"
+          style={{ transform: showStages ? "rotate(90deg)" : undefined }}
         >
-          <div className="flex items-center gap-1.5">
-            <span className="truncate font-semibold">{wf.name}</span>
-            {wf.disabled && (
-              <span className="shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-medium" style={statusTone("pending")}>
-                paused
-              </span>
-            )}
-          </div>
-          <div className="text-xs opacity-55">
+          <IconChevronRight size={13} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[13.5px] font-semibold leading-snug">{wf.name}</span>
+            {wf.disabled && <Badge tone="warn">paused</Badge>}
+          </span>
+          <span className="block text-xs text-ink-soft">
             {wf.nodes.length} stage{wf.nodes.length === 1 ? "" : "s"} · {showStages ? "hide" : "show"} stages
-          </div>
-        </button>
-        <div className="flex shrink-0 flex-wrap justify-end gap-1 text-xs">
-          <Button disabled={busy || wf.disabled} onClick={() => toggle("run")}>
-            Run
-          </Button>
-          <Button
-            disabled={busy}
-            aria-label={`${wf.disabled ? "Resume" : "Pause"} workflow ${wf.name}`}
-            onClick={() => act(() => setWorkflowEnabled(sessionId, wf.id, wf.disabled))}
-          >
-            {wf.disabled ? "Resume" : "Pause"}
-          </Button>
-          <Button
-            disabled={busy}
-            onClick={() =>
-              confirmThen(`Delete workflow “${wf.name}”? Past runs stay in the history.`, () =>
-                act(() => removeWorkflow(sessionId, wf.id)),
-              )
-            }
-          >
-            Delete
-          </Button>
-        </div>
-      </div>
-      {wf.description && <p className="mt-1.5 text-xs leading-5 opacity-70">{wf.description}</p>}
+          </span>
+        </span>
+      </button>
+      {wf.description && <p className="mt-1 text-xs leading-[1.5] text-ink-soft">{wf.description}</p>}
       {showStages && <WorkflowStages nodes={wf.nodes} agentName={agentName} />}
+      <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+        <Button variant="primary" disabled={busy || wf.disabled} onClick={() => toggle("run")}>
+          Run
+        </Button>
+        <Button
+          disabled={busy}
+          aria-label={`${wf.disabled ? "Resume" : "Pause"} workflow ${wf.name}`}
+          onClick={() => act(() => setWorkflowEnabled(sessionId, wf.id, wf.disabled))}
+        >
+          {wf.disabled ? "Resume" : "Pause"}
+        </Button>
+        <span className="flex-1" />
+        <Button
+          variant="danger"
+          disabled={busy}
+          onClick={() =>
+            confirmThen(`Delete workflow “${wf.name}”? Past runs stay in the history.`, () =>
+              act(() => removeWorkflow(sessionId, wf.id)),
+            )
+          }
+        >
+          Delete
+        </Button>
+      </div>
       {open !== "none" && (
         <div className="mt-2 flex gap-2">
           <input
@@ -331,7 +337,7 @@ function DefinitionCard({
         <button
           type="button"
           className="mt-2 text-xs font-medium hover:underline"
-          style={{ color: "var(--hive-accent-cool)" }}
+          style={{ color: "var(--hive-accent-ink)" }}
           onClick={() => toggle("change")}
           disabled={busy}
         >
@@ -366,7 +372,7 @@ function RunCard({ sessionId, run }: { sessionId: string; run: WorkflowRunDto })
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
           <div className="truncate font-semibold">{run.definitionName}</div>
-          <div className="truncate text-xs opacity-55">{run.input}</div>
+          <div className="truncate text-xs text-ink-soft">{run.input}</div>
         </div>
         <span
           className="shrink-0 rounded-lg px-2 py-0.5 text-[11px] font-medium"
@@ -386,17 +392,17 @@ function RunCard({ sessionId, run }: { sessionId: string; run: WorkflowRunDto })
         .filter((n) => n.status === "awaitingApproval" && n.proposalId)
         .map((n) => (
           <div key={n.nodeId} className="mt-2 flex items-center gap-2 text-xs">
-            <span className="opacity-70">“{n.name}” needs your decision:</span>
+            <span className="text-ink-soft">“{n.name}” needs your decision:</span>
             <button
               className="rounded-lg px-2.5 py-1 font-medium"
-              style={{ background: "color-mix(in srgb, var(--hive-success) 20%, transparent)", color: "var(--hive-success)" }}
+              style={{ background: "color-mix(in srgb, var(--hive-success) 20%, transparent)", color: "var(--hive-success-ink)" }}
               onClick={() => act(async () => void (await voteProposal(sessionId, n.proposalId!, true)))}
             >
               Approve
             </button>
             <button
               className="rounded-lg px-2.5 py-1 font-medium"
-              style={{ background: "color-mix(in srgb, var(--hive-danger) 18%, transparent)", color: "var(--hive-danger)" }}
+              style={{ background: "color-mix(in srgb, var(--hive-danger) 18%, transparent)", color: "var(--hive-danger-ink)" }}
               onClick={() => act(async () => void (await voteProposal(sessionId, n.proposalId!, false)))}
             >
               Reject
@@ -417,7 +423,7 @@ function RunCard({ sessionId, run }: { sessionId: string; run: WorkflowRunDto })
       )}
 
       {run.nodes.some((n) => n.error) && (
-        <div className="mt-2 text-xs" style={{ color: "var(--hive-danger)" }}>
+        <div className="mt-2 text-xs" style={{ color: "var(--hive-danger-ink)" }}>
           {run.nodes.find((n) => n.error)?.error}
         </div>
       )}
@@ -455,7 +461,7 @@ function NodeChip({ node }: { node: WorkflowNodeRunDto }) {
         aria-expanded={hasDetail ? open : undefined}
         title={`${node.name}: ${statusLabel(node.status)}`}
       >
-        {node.kind === "gate" ? "◈ " : ""}
+        {node.kind === "gate" ? <span aria-label="approval gate" className="mr-1 inline-flex align-[-2px]"><IconLock size={11} /></span> : null}
         {node.name}
         {node.attempts > 1 ? ` ×${node.attempts}` : ""}
       </button>
@@ -469,7 +475,7 @@ function NodeChip({ node }: { node: WorkflowNodeRunDto }) {
             {node.attempts > 1 ? ` · ${node.attempts} attempts` : ""}
           </div>
           {node.error && (
-            <div className="mt-1 whitespace-pre-wrap break-words" style={{ color: "var(--hive-danger)" }}>
+            <div className="mt-1 whitespace-pre-wrap break-words" style={{ color: "var(--hive-danger-ink)" }}>
               {node.error}
             </div>
           )}

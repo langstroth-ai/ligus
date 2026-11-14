@@ -230,3 +230,32 @@ export const IconFlow = ({ size }: P) => (
     <path d="M6 9v7a2 2 0 0 0 2 2h1" />
   </Icon>
 );
+
+export const IconArrowRight = ({ size }: P) => (
+  <Icon size={size}>
+    <path d="M5 12h14" />
+    <path d="M13 6l6 6-6 6" />
+  </Icon>
+);
+
+/// A desktop/host machine (replaces the 🖥 emoji on host badges).
+export const IconMonitor = ({ size }: P) => (
+  <Icon size={size}>
+    <rect x="3" y="4" width="18" height="12" rx="2" />
+    <path d="M8 20h8" />
+    <path d="M12 16v4" />
+  </Icon>
+);
+
+export const IconClock = ({ size }: P) => (
+  <Icon size={size}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M12 7.5V12l3 2" />
+  </Icon>
+);
+
+export const IconShield = ({ size }: P) => (
+  <Icon size={size}>
+    <path d="M12 3l7 3v5.5c0 4.2-2.9 7.9-7 9.5-4.1-1.6-7-5.3-7-9.5V6z" />
+  </Icon>
+);

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Button, EmptyHint, ErrorState, Section, SelectField } from "@/components/ui";
+import { Button, EmptyHint, ErrorState, Section, SelectField, LoadingState } from "@/components/ui";
 import { Muted } from "@/components/flow/FlowPane";
 import { toast, errMsg } from "@/components/Toast";
 import { listZones, removeZone, setZone, type PathZone, type Role, type ZoneKind } from "@/lib/flow";
@@ -11,6 +11,7 @@ import { listZones, removeZone, setZone, type PathZone, type Role, type ZoneKind
 export function ZonesSection() {
   const q = useQuery({ queryKey: ["flow-zones"], queryFn: listZones });
   if (q.isError) return <ErrorState text="Couldn't load zones." onRetry={() => void q.refetch()} />;
+  if (q.isPending) return <LoadingState rows={2} label="Loading zones" />;
   return (
     <ZonesView
       zones={q.data ?? []}

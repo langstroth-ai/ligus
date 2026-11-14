@@ -510,7 +510,7 @@ export function Sidebar({
             )}
             <PopoverItem label="Workspace settings…" onSelect={() => { setShowWorkspaceMenu(false); onOpenSettings(); }} />
             {workspaceError && (
-              <div className="px-2 pt-1 text-[11px]" style={{ color: "var(--hive-danger)" }}>{workspaceError}</div>
+              <div className="px-2 pt-1 text-[11px]" style={{ color: "var(--hive-danger-ink)" }}>{workspaceError}</div>
             )}
           </Popover>
         )}
@@ -601,6 +601,7 @@ export function Sidebar({
               {visible.map((c) => (
                 <ChatRow
                   key={c.id}
+                  chatId={c.id}
                   title={c.title || "Untitled"}
                   when={relTime(c.lastActivityAt)}
                   unread={unreadSessions.has(c.id) ? 1 : 0}
@@ -630,8 +631,8 @@ export function Sidebar({
                   action={
                     <button
                       onClick={handleNew}
-                      className="rounded-lg px-3 py-1.5 text-xs font-medium text-white"
-                      style={{ background: "var(--hive-accent-cool)" }}
+                      className="rounded-lg px-3 py-1.5 text-xs font-medium"
+                      style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
                     >
                       Start a chat
                     </button>
@@ -746,6 +747,7 @@ export function Sidebar({
                         {focused.map((c) => (
                           <ChatRow
                             key={c.id}
+                            chatId={c.id}
                             title={c.title || "Untitled"}
                             when={relTime(c.lastActivityAt)}
                             unread={unreadSessions.has(c.id) ? 1 : 0}
@@ -780,6 +782,7 @@ export function Sidebar({
                   {unfiled.map((c) => (
                     <ChatRow
                       key={c.id}
+                      chatId={c.id}
                       title={c.title || "Untitled"}
                       when={relTime(c.lastActivityAt)}
                       unread={unreadSessions.has(c.id) ? 1 : 0}

@@ -37,7 +37,7 @@ const DiffView = lazy(() => import("@/components/DiffView").then((m) => ({ defau
 // Lazy so Monaco + xterm (the code view's heavy deps) only load when it opens.
 const CodeView = lazy(() => import("@/components/editor/CodeView").then((m) => ({ default: m.CodeView })));
 import type { CodeViewIntent } from "@/components/editor/CodeView";
-import { SettingsView, parseSettingsTab, type SettingsTab } from "@/components/SettingsView";
+import { SettingsView, lastSettingsTab, parseSettingsTab, type SettingsTab } from "@/components/SettingsView";
 import { RightRail } from "@/components/RightRail";
 import { Onboarding } from "@/components/Onboarding";
 import { Tour, type TourStep } from "@/components/Tour";
@@ -48,13 +48,17 @@ import { LockdownBar } from "@/components/guards/LockdownBar";
 import { GrowthSuggestions } from "@/components/guards/GrowthSuggestions";
 import { PendingInvitesBanner } from "@/components/PendingInvitesBanner";
 import { DialogHost, promptDialog } from "@/components/Dialog";
-import { IconPencil, IconHexagon } from "@/lib/icons";
+import { IconPencil, IconHexagon, IconAlertTriangle } from "@/lib/icons";
+import { StatusDot } from "@/components/ui";
+import { CanvasLoading, EmptyCanvas } from "@/components/EmptyCanvas";
 import { CommandPalette } from "@/components/CommandPalette";
 import { WorkspaceRail } from "@/components/WorkspaceRail";
 import { FriendsView } from "@/components/FriendsView";
 import { AddWorkspaceModal } from "@/components/AddWorkspaceModal";
 import { BindWorkspacePrompt } from "@/components/BindWorkspacePrompt";
 import { PaneErrorBoundary } from "@/components/ErrorBoundary";
+import { PANES } from "@/lib/panes";
+import { OPEN_CHAT_EVENT, flashMessage, type OpenChatDetail } from "@/lib/nav";
 import {
   applyTheme,
   loadMode,
@@ -87,7 +91,7 @@ const MAX_UI_SCALE = 1.2;
 const MENU_PANE_WIDTH_STORAGE_KEY = "hive.menuPaneWidth";
 const UTILITY_PANE_WIDTH_STORAGE_KEY = "hive.utilityPaneWidth";
 const DEFAULT_MENU_PANE_WIDTH = 260;
-const DEFAULT_UTILITY_PANE_WIDTH = 300;
+const DEFAULT_UTILITY_PANE_WIDTH = 340;
 const MIN_MENU_PANE_WIDTH = 200;
 const MAX_MENU_PANE_WIDTH = 420;
 const MIN_UTILITY_PANE_WIDTH = 220;
@@ -105,14 +109,19 @@ function clampPaneWidth(value: number, min: number, max: number) {
 
 function loadUiScale() {
   if (typeof window === "undefined") return DEFAULT_UI_SCALE;
-  const parsed = Number(window.localStorage.getItem(UI_SCALE_STORAGE_KEY));
-  return Number.isFinite(parsed) ? clampUiScale(parsed) : DEFAULT_UI_SCALE;
+  const raw = window.localStorage.getItem(UI_SCALE_STORAGE_KEY);
+  // A missing key must mean 100%, not Number(null) = 0 clamped to 85%.
+  const parsed = raw == null || raw.trim() === "" ? NaN : Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? clampUiScale(parsed) : DEFAULT_UI_SCALE;
 }
 
 function loadPaneWidth(storageKey: string, fallback: number, min: number, max: number) {
   if (typeof window === "undefined") return fallback;
-  const parsed = Number(window.localStorage.getItem(storageKey));
-  return Number.isFinite(parsed) ? clampPaneWidth(parsed, min, max) : fallback;
+  const raw = window.localStorage.getItem(storageKey);
+  // Number(null) is 0, which used to clamp a fresh install to the minimum
+  // width instead of the default.
+  const parsed = raw == null || raw.trim() === "" ? NaN : Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? clampPaneWidth(parsed, min, max) : fallback;
 }
 
 export function App() {
@@ -128,8 +137,8 @@ export function App() {
 
   // Open the Settings sheet on a given tab. Accepts new ids, legacy names, or a
   // deep-link fragment (parseSettingsTab normalizes them).
-  function openSettings(tab: string = "account") {
-    setSettingsTab(parseSettingsTab(tab));
+  function openSettings(tab?: string) {
+    setSettingsTab(tab ? parseSettingsTab(tab) : lastSettingsTab());
     setSettingsNonce((n) => n + 1);
     setSettingsOpen(true);
   }
@@ -314,9 +323,39 @@ export function App() {
     window.localStorage.setItem(UTILITY_PANE_WIDTH_STORAGE_KEY, String(utilityPaneWidth));
   }, [utilityPaneWidth]);
 
+  // Live callbacks for the global key handler (registered once).
+  const stepChatRef = useRef<(dir: 1 | -1) => void>(() => {});
+  const togglePaneRef = useRef<(pane: UtilityPane) => void>(() => {});
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+      if (!(event.metaKey || event.ctrlKey)) return;
+
+      // ⌘⇧] / ⌘⇧[ — next / previous chat, in the sidebar's own order.
+      if (event.shiftKey && !event.altKey && (event.code === "BracketRight" || event.code === "BracketLeft")) {
+        event.preventDefault();
+        stepChatRef.current(event.code === "BracketRight" ? 1 : -1);
+        return;
+      }
+      // ⌘⌥1…9 — open the nth rail pane (sidebar Workspace order); again closes it.
+      if (event.altKey && !event.shiftKey && /^Digit[1-9]$/.test(event.code)) {
+        const pane = PANES[Number(event.code.slice(5)) - 1];
+        if (!pane) return;
+        event.preventDefault();
+        togglePaneRef.current(pane.id);
+        return;
+      }
+      if (event.altKey) return;
+
+      // ⌘L — focus the composer (from anywhere: rail, sidebar, a dialog-free canvas).
+      if (event.key.toLowerCase() === "l" && !event.shiftKey) {
+        const composer = document.querySelector<HTMLTextAreaElement>("textarea[data-composer]");
+        if (composer) {
+          event.preventDefault();
+          composer.focus();
+        }
+        return;
+      }
 
       if (event.key.toLowerCase() === "k") {
         event.preventDefault();
@@ -617,6 +656,63 @@ export function App() {
     },
     [activeWorkspaceId],
   );
+  async function startNewChat() {
+    try {
+      const created = await createChat("");
+      await qc.invalidateQueries({ queryKey: ["chats"] });
+      rememberChat(created.id);
+      setSelectedId(created.id);
+      setView("workspace");
+      setMode("chat");
+    } catch (e) {
+      toast.error(`Couldn't create chat: ${errMsg(e)}`);
+    }
+  }
+
+  stepChatRef.current = (dir) => {
+    // Follow what the sidebar shows (channels, filters, sort); fall back to
+    // recency when the sidebar is hidden.
+    let ids = Array.from(document.querySelectorAll<HTMLElement>("[data-chat-id]"))
+      .map((el) => el.dataset.chatId!)
+      .filter((id, i, all) => all.indexOf(id) === i);
+    if (ids.length === 0) {
+      const cached = qc.getQueryData<{ id: string; archived: boolean; lastActivityAt: string }[]>(["chats"]) ?? [];
+      ids = cached
+        .filter((c) => !c.archived)
+        .sort((a, b) => new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime())
+        .map((c) => c.id);
+    }
+    if (ids.length === 0) return;
+    const at = selectedId ? ids.indexOf(selectedId) : -1;
+    const next = ids[(at + dir + ids.length) % ids.length] ?? ids[0];
+    rememberChat(next);
+    setSelectedId(next);
+    setView("workspace");
+    setMode("chat");
+    document.querySelector<HTMLElement>(`[data-chat-id="${CSS.escape(next)}"]`)?.scrollIntoView({ block: "nearest" });
+  };
+  togglePaneRef.current = (pane) => {
+    setView("workspace");
+    if (showUtilityPane && utilityPane === pane) setShowUtilityPane(false);
+    else openUtilityPane(pane);
+  };
+
+  // Cross-surface jumps (Flow board → chat, …): select the chat, then flash the
+  // message if one was named.
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const d = (e as CustomEvent<OpenChatDetail>).detail;
+      if (!d?.sessionId) return;
+      rememberChat(d.sessionId);
+      setSelectedId(d.sessionId);
+      setView("workspace");
+      setMode("chat");
+      if (d.messageId) flashMessage(d.messageId);
+    };
+    window.addEventListener(OPEN_CHAT_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_CHAT_EVENT, onOpen);
+  }, [rememberChat]);
+
   const workspaceLabel = useMemo(() => {
     // Prefer the workspace's own name (what you named the team/room); fall back
     // to the project-folder basename only when it has none.
@@ -729,7 +825,7 @@ export function App() {
           className="w-full max-w-md rounded-2xl border p-6 text-center"
           style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)" }}
         >
-          <h1 className="text-lg font-semibold tracking-tight" style={{ color: "var(--hive-danger)" }}>
+          <h1 className="text-lg font-semibold tracking-tight" style={{ color: "var(--hive-danger-ink)" }}>
             Couldn't load your settings
           </h1>
           <p className="mt-2 text-sm opacity-70">
@@ -739,8 +835,8 @@ export function App() {
           <div className="mt-4 flex items-center justify-center gap-2">
             <button
               onClick={() => void settings.refetch()}
-              className="rounded-xl px-4 py-2 text-sm font-semibold text-white transition-all hover:brightness-105"
-              style={{ background: "var(--hive-accent-cool)" }}
+              className="rounded-xl px-4 py-2 text-sm font-semibold transition-all hover:brightness-105"
+              style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
             >
               Retry
             </button>
@@ -862,17 +958,7 @@ export function App() {
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         actions={{
-          newChat: async () => {
-            try {
-              const created = await createChat("");
-              await qc.invalidateQueries({ queryKey: ["chats"] });
-              rememberChat(created.id);
-              setSelectedId(created.id);
-              setView("workspace");
-            } catch (e) {
-              toast.error(`Couldn't create chat: ${errMsg(e)}`);
-            }
-          },
+          newChat: startNewChat,
           openSettings: () => openSettings(),
           selectChat: (id) => {
             rememberChat(id);
@@ -913,6 +999,10 @@ export function App() {
           cycleAppearance: () =>
             setAppearanceMode(appearanceMode === "dark" ? "light" : "dark"),
           takeTour: () => startTour(),
+          stepChat: (dir) => stepChatRef.current(dir),
+          // After the palette closes, so its focus-return doesn't steal it back.
+          focusComposer: () =>
+            window.setTimeout(() => document.querySelector<HTMLTextAreaElement>("textarea[data-composer]")?.focus(), 0),
         }}
       />
       <WorkspaceRail
@@ -1013,9 +1103,7 @@ export function App() {
                   ) : mode === "diff" ? (
                     <Suspense
                       fallback={
-                        <div className="flex h-full items-center justify-center opacity-50">
-                          Loading diff editor…
-                        </div>
+                        <CanvasLoading label="Loading the diff view" />
                       }
                     >
                       <DiffView
@@ -1026,9 +1114,7 @@ export function App() {
                   ) : mode === "code" ? (
                     <Suspense
                       fallback={
-                        <div className="flex h-full items-center justify-center opacity-50">
-                          Loading code editor…
-                        </div>
+                        <CanvasLoading label="Loading the code editor" />
                       }
                     >
                       <CodeView
@@ -1037,9 +1123,11 @@ export function App() {
                       />
                     </Suspense>
                   ) : (
-                    <div className="flex h-full items-center justify-center opacity-60">
-                      Select or create a chat to begin.
-                    </div>
+                    <EmptyCanvas
+                      workspaceName={workspaceLabel}
+                      onNewChat={() => void startNewChat()}
+                      onOpenPalette={() => setPaletteOpen(true)}
+                    />
                   )}
                 </PaneErrorBoundary>
               </div>
@@ -1114,9 +1202,7 @@ export function App() {
                 {mode === "diff" && !!workspaceFolder && (
                   <Suspense
                     fallback={
-                      <div className="flex h-full items-center justify-center opacity-50">
-                        Loading diff editor…
-                      </div>
+                      <CanvasLoading label="Loading the diff view" />
                     }
                   >
                     <DiffView
@@ -1128,9 +1214,7 @@ export function App() {
                 {mode === "code" && !!workspaceFolder && (
                   <Suspense
                     fallback={
-                      <div className="flex h-full items-center justify-center opacity-50">
-                        Loading code editor…
-                      </div>
+                      <CanvasLoading label="Loading the code editor" />
                     }
                   >
                     <CodeView
@@ -1216,21 +1300,21 @@ function PaneResizeHandle({
 /// The header status pill, driven by real connection health (not just "a relay
 /// URL is set"): live → success tint, error → danger tint (with the failure in
 /// the tooltip), offline → a muted neutral state. All color via --hive-* tokens.
-type SyncPill = { label: string; color: string | null; title?: string; actionable?: boolean };
+type SyncPill = { label: string; color: "success" | "danger" | "warn" | null; title?: string; actionable?: boolean };
 
 function deriveSyncPill(s: SyncStatusDto | undefined): SyncPill {
   const state = s?.connectionState ?? "offline";
   if (state === "live") {
     return {
       label: `Live · room ${s?.room ?? ""}`,
-      color: "var(--hive-success)",
+      color: "success",
       title: "Live — syncing with your team",
     };
   }
   if (state === "error") {
     return {
       label: "Sync error",
-      color: "var(--hive-danger)",
+      color: "danger",
       title: s?.lastError ?? "Sync failed — reconnect or check your key / token",
       actionable: true,
     };
@@ -1240,7 +1324,7 @@ function deriveSyncPill(s: SyncStatusDto | undefined): SyncPill {
   if (state === "needs_key") {
     return {
       label: "Set a passphrase to sync",
-      color: "var(--hive-warn)",
+      color: "warn",
       title:
         s?.lastError ??
         "A relay is configured but this workspace has no encryption key — set a workspace passphrase in Settings → Team to sync encrypted, or clear the relay URL to work local-only.",
@@ -1263,27 +1347,36 @@ function deriveSyncPill(s: SyncStatusDto | undefined): SyncPill {
 function SyncPillChip({ pill, onFix }: { pill: SyncPill; onFix?: () => void }) {
   if (!pill.color) {
     return (
-      <span className="ml-1 hidden shrink-0 text-xs opacity-40 sm:inline" title={pill.title}>
+      <span className="ml-1 hidden shrink-0 items-center gap-1.5 text-xs text-ink-soft sm:inline-flex" title={pill.title}>
+        <StatusDot on={false} size={7} label={pill.label} />
         {pill.label}
       </span>
     );
   }
   const chipStyle: CSSProperties = {
-    color: pill.color,
-    borderColor: `color-mix(in srgb, ${pill.color} 40%, transparent)`,
-    background: `color-mix(in srgb, ${pill.color} 12%, transparent)`,
+    color: `var(--hive-${pill.color}-ink)`,
+    borderColor: `var(--hive-${pill.color}-line)`,
+    background: `var(--hive-${pill.color}-tint)`,
   };
+  const icon =
+    pill.color === "success" ? (
+      <span aria-hidden className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--hive-success)" }} />
+    ) : (
+      <IconAlertTriangle size={11} />
+    );
   const className =
-    "ml-1 hidden shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium sm:inline-flex";
+    "ml-1 hidden shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium sm:inline-flex";
   if (pill.actionable && onFix) {
     return (
-      <button type="button" className={`${className} hover:brightness-110`} style={chipStyle} title={pill.title} onClick={onFix}>
+      <button type="button" className={`${className} hover:brightness-105`} style={chipStyle} title={pill.title} onClick={onFix}>
+        {icon}
         {pill.label}
       </button>
     );
   }
   return (
     <span className={className} style={chipStyle} title={pill.title}>
+      {icon}
       {pill.label}
     </span>
   );
@@ -1319,12 +1412,11 @@ function CanvasModeTabs({
           role="tab"
           aria-selected={mode === t.id}
           onClick={() => onChangeMode(t.id)}
-          className="rounded-[10px] px-3 py-1 text-sm font-medium transition-colors"
+          className="rounded-lg px-3 py-1 text-sm font-medium transition-colors hover:text-ink"
           style={{
             background: mode === t.id ? "var(--hive-panel)" : "transparent",
-            color: "var(--hive-ink)",
-            opacity: mode === t.id ? 1 : 0.55,
-            boxShadow: mode === t.id ? "0 1px 2px color-mix(in srgb, var(--hive-ink) 12%, transparent)" : undefined,
+            color: mode === t.id ? "var(--hive-ink)" : "var(--hive-ink-soft)",
+            boxShadow: mode === t.id ? "var(--hive-shadow-1)" : undefined,
           }}
         >
           {t.label}
@@ -1381,7 +1473,7 @@ function ChatHeaderBar({
         )}
         <h1 className="truncate text-base font-semibold tracking-tight">{title}</h1>
         <button
-          className="shrink-0 rounded-md p-1 opacity-40 transition-opacity hover:opacity-100"
+          className="shrink-0 rounded-md p-1 text-ink-faint transition-colors hover:bg-[color:var(--hive-hover)] hover:text-ink"
           title="Rename chat"
           aria-label="Rename chat"
           onClick={onRename}
@@ -1400,7 +1492,7 @@ function ChatHeaderBar({
           style={{
             borderColor: "var(--hive-line)",
             background: "var(--hive-mist)",
-            color: contextPct >= 80 ? "var(--hive-warn)" : "var(--hive-ink)",
+            color: contextPct >= 80 ? "var(--hive-warn-ink)" : "var(--hive-ink)",
           }}
         >
           <IconHexagon size={11} />

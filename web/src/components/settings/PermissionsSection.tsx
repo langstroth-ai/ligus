@@ -113,21 +113,21 @@ export function PermissionsSection() {
           style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}
         >
           <div className="text-sm font-medium">macOS file access</div>
-          <p className="text-xs opacity-60">
+          <p className="text-xs text-ink-soft">
             Agents run local CLIs (Claude Code, Codex) that read your workspace files. macOS
             attributes that access to Ligus and may put up a folder-permission modal a turn silently
             waits on. Grant Ligus <strong>Full Disk Access</strong> so agent turns don't stall on a
             hidden prompt.
           </p>
           {health.data?.translocated && (
-            <p className="text-xs" style={{ color: "var(--hive-danger)" }}>
+            <p className="text-xs" style={{ color: "var(--hive-danger-ink)" }}>
               Ligus is running from a temporary location (App Translocation), so permission grants
               won't stick. Move Ligus to <code>/Applications</code> and reopen it — or install via{" "}
               <code>brew install --cask ligus-ai/ligus/ligus-app</code>.
             </p>
           )}
           {health.data?.quarantined && !health.data?.translocated && (
-            <p className="text-xs" style={{ color: "var(--hive-accent-warm)" }}>
+            <p className="text-xs" style={{ color: "var(--hive-warm-ink)" }}>
               This copy still carries the “downloaded from the internet” quarantine flag, which can
               keep permissions from persisting. Installing via Homebrew avoids it.
             </p>
@@ -137,14 +137,14 @@ export function PermissionsSection() {
           </Button>
         </div>
       )}
-      <p className="text-xs opacity-50">
+      <p className="text-xs text-ink-soft">
         The setting below controls the <code>claude</code> CLI's permission mode (it runs headless,
         so it can't show an approval prompt), and the same tier for the subscription CLIs{" "}
         <code>agy</code> (Google Antigravity) and <code>copilot</code> (GitHub Copilot), mapped to their
         own flags. Other agents gate file access their own way: aider/pi via their flags, and
         API/MCP-backed agents via built-in-tool consent + per-tool MCP trust.
       </p>
-      <label className="block text-xs opacity-60">Claude Code permission mode</label>
+      <label className="block text-xs text-ink-soft">Claude Code permission mode</label>
       <SelectField
         value={permissionMode}
         onChange={(v) => setMode(v as ClaudePermissionMode)}
@@ -157,12 +157,12 @@ export function PermissionsSection() {
         <option value="bypassPermissions">Bypass all permissions — edits, commands, and every tool</option>
       </SelectField>
       {permissionMode === "default" ? (
-        <p className="text-xs opacity-60">
+        <p className="text-xs text-ink-soft">
           In read-only mode the <code>claude</code> agent's file writes are blocked. Choose{" "}
           <strong>Accept file edits</strong> to let it create/modify files in your workspace.
         </p>
       ) : (
-        <p className="text-xs" style={{ color: "var(--hive-accent-warm)" }}>
+        <p className="text-xs" style={{ color: "var(--hive-warm-ink)" }}>
           The <code>claude</code> agent can modify files
           {permissionMode === "runCommands" ? " and run shell commands (build, test, git)" : ""}
           {permissionMode === "bypassPermissions" ? " and run any command or tool" : ""} in your
@@ -171,7 +171,7 @@ export function PermissionsSection() {
       )}
       <div className="mt-4 space-y-2">
         <div className="text-sm font-medium">Local model file tools</div>
-        <p className="text-xs opacity-60">
+        <p className="text-xs text-ink-soft">
           Local or self-hosted model runtimes (Ollama, or a Custom / Hive daemon endpoint such as a
           llama.cpp server — never hosted APIs like OpenAI or OpenRouter) with{" "}
           <strong>Supports tools</strong> on get Ligus's built-in tools: <code>read_file</code>,{" "}
@@ -179,7 +179,7 @@ export function PermissionsSection() {
           <code>write_file</code> when the turn runs in the chat's isolated git worktree — their
           changes come back as a proposal in the Review pane, never straight into your folder.
         </p>
-        <div className="flex items-center gap-2 text-sm opacity-75">
+        <div className="flex items-center gap-2 text-sm text-ink-soft">
           <Switch
             on={tools.enabled}
             onChange={(v) => setTools({ enabled: v })}
@@ -188,7 +188,7 @@ export function PermissionsSection() {
           />
           <span>Offer built-in file tools to local models</span>
         </div>
-        <div className="flex items-center gap-2 text-sm opacity-75">
+        <div className="flex items-center gap-2 text-sm text-ink-soft">
           <Switch
             on={tools.writeInPlace}
             onChange={(v) => setTools({ writeInPlace: v })}
@@ -197,7 +197,7 @@ export function PermissionsSection() {
           />
           <span>Allow edits outside an isolated worktree (folders that aren't git repositories)</span>
         </div>
-        <div className="flex items-center gap-2 text-sm opacity-75">
+        <div className="flex items-center gap-2 text-sm text-ink-soft">
           <Switch
             on={tools.runCommand}
             onChange={(v) => setTools({ runCommand: v })}
@@ -210,13 +210,13 @@ export function PermissionsSection() {
           </span>
         </div>
         {tools.enabled && tools.runCommand && (
-          <p className="text-xs" style={{ color: "var(--hive-accent-warm)" }}>
+          <p className="text-xs" style={{ color: "var(--hive-warm-ink)" }}>
             Local models can run any shell command in the turn's folder without asking. A command is
             not sandboxed: it can reach the network and anything your account can.
           </p>
         )}
         {tools.enabled && tools.writeInPlace && (
-          <p className="text-xs" style={{ color: "var(--hive-accent-warm)" }}>
+          <p className="text-xs" style={{ color: "var(--hive-warm-ink)" }}>
             Outside a git repository, local models edit your files directly with no review step.
           </p>
         )}

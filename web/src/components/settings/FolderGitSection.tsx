@@ -58,7 +58,7 @@ export function FolderGitSection() {
 
   return (
     <Section title="Folder & Git">
-      <label className="block text-sm opacity-70">Root path (for the Diff canvas + git)</label>
+      <label className="block text-sm text-ink-soft">Root path (for the Diff canvas + git)</label>
       <div className="flex gap-2">
         <input
           value={root}
@@ -71,7 +71,7 @@ export function FolderGitSection() {
           Choose folder…
         </Button>
       </div>
-      <div className="flex items-center gap-3 text-xs opacity-60">
+      <div className="flex items-center gap-3 text-xs text-ink-soft">
         <span>
           git: {git.data?.branch ?? "—"}
           {git.data ? ` · ${git.data.dirtyCount} changed` : ""}

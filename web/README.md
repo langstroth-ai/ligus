@@ -21,6 +21,7 @@ to the Rust backend over IPC.
 ```bash
 bun install        # or: npm install
 bun run dev        # Vite dev server (usually driven via `cargo tauri dev`)
+bun run dev:mock   # browser preview on :5199 with a canned backend (dev/mock)
 bun run build      # tsc --noEmit typecheck + vite build
 bun run test       # vitest
 bun run typecheck  # tsc --noEmit
@@ -37,6 +38,12 @@ bun run typecheck  # tsc --noEmit
 > ```bash
 > bun install --ignore-scripts
 > ```
+
+`dev:mock` swaps the Tauri IPC modules for `dev/mock/` (see
+`vite.mock.config.ts`) so the UI renders in a plain browser with fixture data —
+handy for design work and screenshots. Query knobs: `?scenario=onboarding|empty`,
+`&dearth=1`, `&lockdown=1`, `&loading=1`, `&error=1`. The production build never
+references `dev/`.
 
 The full app runs via `cargo tauri dev` from the repo root, which serves this
 frontend and the Rust backend together.

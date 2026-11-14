@@ -26,7 +26,7 @@ export function DiagnosticsSection() {
 
   return (
     <Section title="Diagnostics">
-      <p className="text-xs opacity-50">
+      <p className="text-xs text-ink-soft">
         Recent internal log output — background errors from sync, agents, scheduling, and workflows,
         plus panics. Useful when something misbehaves silently. Set <code>LIGUS_LOG=debug</code> for
         more detail. Newest lines are at the bottom.

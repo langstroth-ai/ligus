@@ -64,7 +64,7 @@ export function SchedulesSection() {
 
   return (
     <Section title="Schedules">
-      <p className="text-sm opacity-60">
+      <p className="text-sm text-ink-soft">
         Run an agent on a recurring schedule — each fire opens a new chat, posts the prompt, and the
         agent answers. Times are UTC.
       </p>
@@ -77,8 +77,8 @@ export function SchedulesSection() {
         >
           <div className="min-w-0">
             <div className="font-medium">{s.label || "Scheduled run"}</div>
-            <div className="text-xs opacity-60">{triggerSummary(s.trigger)}</div>
-            <div className="mt-1 truncate text-sm opacity-75">{s.prompt}</div>
+            <div className="text-xs text-ink-soft">{triggerSummary(s.trigger)}</div>
+            <div className="mt-1 truncate text-sm text-ink-soft">{s.prompt}</div>
           </div>
           <div className="flex shrink-0 items-center gap-3">
             <Switch
@@ -88,7 +88,7 @@ export function SchedulesSection() {
             />
             <button
               className="text-xs hover:opacity-80"
-              style={{ color: "var(--hive-danger)" }}
+              style={{ color: "var(--hive-danger-ink)" }}
               onClick={() => confirmThen(`Remove schedule "${s.label || "Scheduled run"}"?`, () => remove.mutate(s.id))}
             >
               Remove
@@ -96,7 +96,7 @@ export function SchedulesSection() {
           </div>
         </div>
       ))}
-      {(schedules.data ?? []).length === 0 && <p className="text-sm opacity-50">No schedules yet.</p>}
+      {(schedules.data ?? []).length === 0 && <p className="text-sm text-ink-soft">No schedules yet.</p>}
 
       {/* Add form */}
       <div className="mt-2 space-y-2 rounded-lg border p-3" style={{ borderColor: "var(--hive-line)" }}>
@@ -136,7 +136,7 @@ export function SchedulesSection() {
                 className="w-20 rounded-xl border px-2 py-1.5 text-sm"
                 style={fieldStyle}
               />
-              <span className="text-sm opacity-70">minutes</span>
+              <span className="text-sm text-ink-soft">minutes</span>
             </>
           ) : (
             <input

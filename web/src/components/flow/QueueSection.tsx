@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { EmptyHint, ErrorState, Section } from "@/components/ui";
+import { IconAlertTriangle } from "@/lib/icons";
+import { EmptyHint, ErrorState, Section, LoadingState } from "@/components/ui";
 import { Muted, Stat } from "@/components/flow/FlowPane";
 import { RECRUIT_LABEL, duration, pct, queueReport, type QueueReport } from "@/lib/flow";
 import { onWorkspaceSynced } from "@/lib/ipc";
@@ -16,7 +17,7 @@ export function QueueSection() {
     return () => un?.();
   }, [q]);
   if (q.isError) return <ErrorState text="Couldn't load the queue." onRetry={() => void q.refetch()} />;
-  if (!q.data) return null;
+  if (!q.data) return <LoadingState rows={2} label="Loading the queue" />;
   return <QueueView report={q.data} />;
 }
 
@@ -29,10 +30,13 @@ export function QueueView({ report: r }: { report: QueueReport }) {
       {r.alert ? (
         <div
           role="alert"
-          className="rounded-xl border px-3 py-2 text-xs"
-          style={{ borderColor: "var(--hive-warn)", background: "color-mix(in srgb, var(--hive-accent-warm) 12%, transparent)" }}
+          className="flex items-start gap-2 rounded-lg border px-2.5 py-2 text-xs leading-[1.5]"
+          style={{ borderColor: "var(--hive-warn-line)", background: "var(--hive-warn-tint)" }}
         >
-          {r.alert}
+          <span aria-hidden className="mt-0.5 inline-flex shrink-0" style={{ color: "var(--hive-warn-ink)" }}>
+            <IconAlertTriangle size={13} />
+          </span>
+          <span>{r.alert}</span>
         </div>
       ) : (
         <Muted>Nothing is backed up.</Muted>
@@ -46,7 +50,7 @@ export function QueueView({ report: r }: { report: QueueReport }) {
       <Section title="Waits at hand-off points (7 d)">
         <table className="w-full text-xs" aria-label="Edge waits">
           <thead>
-            <tr className="text-left opacity-60">
+            <tr className="text-left text-ink-soft">
               <th className="py-1 font-medium">Where</th>
               <th className="font-medium">Median</th>
               <th className="font-medium">Long</th>

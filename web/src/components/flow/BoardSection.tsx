@@ -1,6 +1,8 @@
 import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Button, EmptyHint, ErrorState } from "@/components/ui";
+import { Badge, Button, EmptyHint, ErrorState, LoadingState } from "@/components/ui";
+import { openChat } from "@/lib/nav";
+import { editorStore } from "@/state/editorStore";
 import { Muted } from "@/components/flow/FlowPane";
 import { toast, errMsg } from "@/components/Toast";
 import { BOARD_KIND_LABEL, duration, listBoard, pickupItem, type BoardRow } from "@/lib/flow";
@@ -17,6 +19,7 @@ export function BoardSection() {
     return () => un?.();
   }, [q]);
   if (q.isError) return <ErrorState text="Couldn't load the task board." onRetry={() => void q.refetch()} />;
+  if (q.isPending) return <LoadingState rows={2} label="Loading the task board" />;
   return (
     <BoardView
       rows={q.data ?? []}
@@ -44,26 +47,46 @@ export function BoardView({ rows, onPickup, now = Date.now() }: { rows: BoardRow
       ) : (
         <ul className="space-y-2 text-xs">
           {rows.map((r) => (
-            <li key={r.id} className="space-y-1 rounded-lg border px-2 py-2" style={{ borderColor: "var(--hive-line)" }}>
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="font-semibold">{r.title}</div>
-                  <div style={{ color: "var(--hive-ink-soft)" }}>
-                    {BOARD_KIND_LABEL[r.kind]}
-                    {r.chatTitle && ` · “${r.chatTitle}”`} · waiting {duration(Math.max(0, now - r.sinceMs))} · stimulus{" "}
-                    {r.stimulus.toFixed(1)}
-                  </div>
-                </div>
+            <li key={r.id} className="rounded-lg border px-2.5 py-2" style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)" }}>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Badge tone={r.kind === "failingTests" || r.kind === "failedStage" ? "danger" : "neutral"}>
+                  {BOARD_KIND_LABEL[r.kind]}
+                </Badge>
+                <span className="text-ink-soft">waiting {duration(Math.max(0, now - r.sinceMs))}</span>
+              </div>
+              <div className="mt-1 break-words text-[12.5px] font-semibold leading-snug">{r.title}</div>
+              <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-ink-soft">
+                {r.chatTitle && (
+                  <button
+                    type="button"
+                    className="min-w-0 truncate underline-offset-2 hover:text-ink hover:underline"
+                    title={`Open “${r.chatTitle}”`}
+                    onClick={() => openChat(r.sessionId)}
+                  >
+                    in “{r.chatTitle}”
+                  </button>
+                )}
+                {r.files?.[0] && (
+                  <button
+                    type="button"
+                    className="min-w-0 truncate font-mono text-[11px] underline-offset-2 hover:text-ink hover:underline"
+                    title={`Open ${r.files[0]} in the editor`}
+                    onClick={() => editorStore.requestOpen(r.files![0])}
+                  >
+                    {r.files[0]}
+                  </button>
+                )}
+                <span title="How strongly this item calls for an agent">stimulus {r.stimulus.toFixed(1)}</span>
+              </div>
+              <div className="mt-2 flex items-center justify-end gap-2">
                 {r.claimedBy ? (
-                  <span className="shrink-0" style={{ color: "var(--hive-success)" }}>
-                    {r.claimedBy} has it
-                  </span>
+                  <Badge tone="success">{r.claimedBy} has it</Badge>
                 ) : r.suggested ? (
                   <Button size="sm" onClick={() => onPickup(r)}>
                     Hand to {r.suggestedName}
                   </Button>
                 ) : (
-                  <span className="shrink-0" style={{ color: "var(--hive-ink-soft)" }}>
+                  <span className="text-ink-soft">
                     {r.nearestThreshold != null ? `needs ${r.nearestThreshold.toFixed(1)}` : "no free agent"}
                   </span>
                 )}

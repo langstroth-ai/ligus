@@ -12,13 +12,14 @@ import {
   type ThrottleStateDto,
 } from "@/lib/ipc";
 import { toast, errMsg } from "@/components/Toast";
-import { Button, Section } from "@/components/ui";
+import { Badge, Button, EmptyHint, ErrorState, Field, LoadingState, Section, type Tone } from "@/components/ui";
+import { IconLock } from "@/lib/icons";
 
-const STATE_COLOR: Record<string, string> = {
-  open: "var(--hive-ink-soft)",
-  allowed: "var(--hive-success)",
-  closed: "var(--hive-danger)",
-  refused: "var(--hive-danger)",
+const STATE_TONE: Record<string, Tone> = {
+  open: "neutral",
+  allowed: "success",
+  closed: "danger",
+  refused: "danger",
 };
 
 const lines = (s: string) =>
@@ -34,7 +35,9 @@ export function GuardsSection() {
   const q = useQuery({ queryKey: ["dearth-state"], queryFn: getDearthState });
   const d = q.data;
   return (
-    <div>
+    <div className="space-y-2">
+      {q.isError && <ErrorState text="Couldn't load dearth mode." onRetry={() => void q.refetch()} />}
+      {q.isPending && <LoadingState rows={2} label="Loading guards" />}
       {d && <DearthPanel d={d} onChanged={() => qc.invalidateQueries({ queryKey: ["dearth-state"] })} />}
       <ThrottlePanel />
       <HygienePanel />
@@ -73,100 +76,132 @@ function DearthPanel({ d, onChanged }: { d: DearthStateDto; onChanged: () => voi
   const fieldStyle = { borderColor: "var(--hive-line)", background: "var(--hive-panel)", color: "var(--hive-ink)" };
   return (
     <>
-      <Section
-        title="Dearth mode"
-        action={
-          d.canManage ? (
-            <Button
-              variant={d.enabled ? "ghost" : "primary"}
-              disabled={save.isPending}
-              onClick={() => save.mutate(!d.enabled)}
+      <Section title="Dearth mode">
+        <div
+          className="rounded-xl border p-3"
+          style={{
+            borderColor: d.enabled ? "var(--hive-warn-line)" : "var(--hive-line)",
+            background: d.enabled ? "var(--hive-warn-tint)" : "var(--hive-panel)",
+          }}
+        >
+          <div className="flex flex-wrap items-start gap-3">
+            <span
+              aria-hidden
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-lg"
+              style={{ background: d.enabled ? "var(--hive-warn-tint)" : "var(--hive-mist)", color: d.enabled ? "var(--hive-warn-ink)" : "var(--hive-ink-soft)" }}
             >
-              {d.enabled ? "Switch off" : "Switch on"}
-            </Button>
-          ) : undefined
-        }
-      >
-        <p className="mb-3 text-[13px] opacity-75">
-          A tight entrance for hostile periods: a leaked invite, an untrusted repository, a new worker host. While it is
-          on, new members and devices need approvals from two different Admins, agents can reach only the MCP servers
-          listed below (no web or shell tools; runtimes Ligus can&apos;t confine are refused), and changes to protected
-          paths need a human member&apos;s approval before they apply. Everyone sees a banner.
-        </p>
-        {d.enabled && (
-          <p className="mb-3 text-[12px] opacity-70">
-            On since {d.setAt ? new Date(d.setAt).toLocaleString() : "now"}
-            {d.setBy ? `, by ${d.setBy}` : ""}.
-          </p>
-        )}
-        {!d.canManage && <p className="mb-3 text-[12px] opacity-70">Only Admins and Owners can change this.</p>}
-        <label className="mb-1 block text-[12px] font-medium">Reason (shown on the banner)</label>
-        <input
-          className={`${field} mb-3`}
-          style={fieldStyle}
-          value={reason}
-          disabled={!d.canManage}
-          onChange={(e) => setReason(e.target.value)}
-          placeholder="e.g. invite link leaked"
-        />
-        <label className="mb-1 block text-[12px] font-medium">Allowed MCP servers (one per line)</label>
-        <textarea
-          className={`${field} mb-3 font-mono`}
-          style={fieldStyle}
-          rows={3}
-          value={allowed}
-          disabled={!d.canManage}
-          onChange={(e) => setAllowed(e.target.value)}
-        />
-        <label className="mb-1 block text-[12px] font-medium">Protected (brood) paths, globs, one per line</label>
-        <textarea
-          className={`${field} mb-2 font-mono`}
-          style={fieldStyle}
-          rows={5}
-          value={brood}
-          disabled={!d.canManage}
-          onChange={(e) => setBrood(e.target.value)}
-        />
+              <IconLock size={16} />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[13.5px] font-semibold">A tight entrance for hostile periods</span>
+                <Badge tone={d.enabled ? "warn" : "neutral"}>{d.enabled ? "on" : "off"}</Badge>
+              </div>
+              <p className="mt-0.5 text-xs leading-[1.5] text-ink-soft">
+                For a leaked invite, an untrusted repository or a new worker host.
+                {d.enabled && (
+                  <>
+                    {" "}On since {d.setAt ? new Date(d.setAt).toLocaleString() : "now"}
+                    {d.setBy ? `, by ${d.setBy}` : ""}.
+                  </>
+                )}
+              </p>
+            </div>
+            {d.canManage && (
+              <Button
+                variant={d.enabled ? "ghost" : "primary"}
+                disabled={save.isPending}
+                onClick={() => save.mutate(!d.enabled)}
+              >
+                {d.enabled ? "Switch off" : "Switch on"}
+              </Button>
+            )}
+          </div>
+          <ul className="mt-2.5 space-y-1 pl-11 text-xs leading-[1.5]">
+            <li>New members and devices need approvals from two different Admins.</li>
+            <li>Agents reach only the MCP servers listed below: no web or shell tools; runtimes Ligus can&apos;t confine are refused.</li>
+            <li>Changes to protected paths need a human member&apos;s approval before they apply.</li>
+            <li>Everyone sees a banner.</li>
+          </ul>
+        </div>
+        {!d.canManage && <p className="text-xs text-ink-soft">Only Admins and Owners can change this.</p>}
+        <Field label="Reason (shown on the banner)">
+          <input
+            className={field}
+            style={fieldStyle}
+            value={reason}
+            disabled={!d.canManage}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="e.g. invite link leaked"
+          />
+        </Field>
+        <div className="grid gap-3 md:grid-cols-2">
+          <Field label="Allowed MCP servers" hint="One per line.">
+            <textarea
+              className={`${field} font-mono`}
+              style={fieldStyle}
+              rows={4}
+              value={allowed}
+              disabled={!d.canManage}
+              onChange={(e) => setAllowed(e.target.value)}
+            />
+          </Field>
+          <Field label="Protected (brood) paths" hint="Globs, one per line.">
+            <textarea
+              className={`${field} font-mono`}
+              style={fieldStyle}
+              rows={4}
+              value={brood}
+              disabled={!d.canManage}
+              onChange={(e) => setBrood(e.target.value)}
+            />
+          </Field>
+        </div>
         {d.enabled && d.canManage && (
-          <Button disabled={save.isPending} onClick={() => save.mutate(true)}>
-            Save changes
-          </Button>
+          <div>
+            <Button disabled={save.isPending} onClick={() => save.mutate(true)}>
+              Save changes
+            </Button>
+          </div>
         )}
-      </Section>
-
-      <Section title="Entrances">
-        <ul className="text-[13px]" data-testid="entrances">
-          {d.entrances.map((e) => (
-            <li key={`${e.kind}:${e.name}`} className="flex items-center justify-between py-0.5">
-              <span>
-                <span className="opacity-55">{e.kind}</span> {e.name}
-              </span>
-              <span style={{ color: STATE_COLOR[e.state] }}>{e.state}</span>
-            </li>
-          ))}
-        </ul>
       </Section>
 
       {d.pending.length > 0 && (
         <Section title="Waiting for a second approval">
-          <ul className="text-[13px]">
+          <ul className="divide-y rounded-xl border" style={{ borderColor: "var(--hive-line)" }}>
             {d.pending.map((p) => (
-              <li key={p.subject} className="flex items-center justify-between gap-2 py-1">
-                <span>
-                  {p.name} <span className="opacity-55">({p.kind}, {p.kind === "device" ? "owned" : "added"} by {p.addedBy || "unknown"})</span>
+              <li key={p.subject} className="flex items-center justify-between gap-2 px-3 py-2 text-[13px]" style={{ borderColor: "var(--hive-line)" }}>
+                <span className="min-w-0">
+                  <span className="font-medium">{p.name}</span>{" "}
+                  <span className="text-xs text-ink-soft">
+                    {p.kind}, {p.kind === "device" ? "owned" : "added"} by {p.addedBy || "unknown"}
+                  </span>
                 </span>
                 {p.canApprove ? (
                   <Button disabled={approve.isPending} onClick={() => approve.mutate(p.subject)}>
                     Approve
                   </Button>
                 ) : (
-                  <span className="text-[12px] opacity-55">needs another Admin</span>
+                  <span className="text-xs text-ink-soft">needs another Admin</span>
                 )}
               </li>
             ))}
           </ul>
         </Section>
       )}
+
+      <Section title="Entrances">
+        <ul className="divide-y rounded-xl border" style={{ borderColor: "var(--hive-line)" }} data-testid="entrances">
+          {d.entrances.map((e) => (
+            <li key={`${e.kind}:${e.name}`} className="flex items-center justify-between gap-2 px-3 py-2 text-[13px]" style={{ borderColor: "var(--hive-line)" }}>
+              <span>
+                {e.name} <span className="text-xs text-ink-soft">{e.kind}</span>
+              </span>
+              <Badge tone={STATE_TONE[e.state] ?? (d.enabled ? "warn" : "neutral")}>{e.state}</Badge>
+            </li>
+          ))}
+        </ul>
+      </Section>
     </>
   );
 }
@@ -200,22 +235,22 @@ function HygienePanel() {
         </Button>
       }
     >
-      <p className="mb-2 text-[13px] opacity-75">
+      <p className="text-xs leading-[1.5] text-ink-soft">
         Every few hours Ligus removes worktrees agents left behind (saving any unfinished edits as a patch), removes the
         checkouts of deleted or archived chats (their branches are kept), and sets aside proposals whose changes no longer
         apply to their chat&apos;s branch.
       </p>
       {r && (
-        <p className="text-[12px] opacity-70" data-testid="hygiene-summary">
+        <p className="text-[13px]" data-testid="hygiene-summary">
           {hygieneSummary(r)}
           {r.ranAt ? ` Last sweep ${new Date(r.ranAt).toLocaleString()}.` : ""}
         </p>
       )}
       {r && r.staleProposals.length > 0 && (
-        <ul className="mt-2 text-[13px]">
+        <ul className="space-y-1 text-[13px]">
           {r.staleProposals.map((p) => (
-            <li key={p.proposalId} className="opacity-80">
-              Stale: {p.title}
+            <li key={p.proposalId} className="flex items-center gap-2">
+              <Badge tone="warn">stale</Badge> {p.title}
             </li>
           ))}
         </ul>
@@ -231,44 +266,61 @@ export function windowTone(pct: number, t: ThrottleStateDto): "ok" | "warn" | "b
   return "ok";
 }
 
-const TONE: Record<string, string> = { ok: "var(--hive-success)", warn: "var(--hive-warning, #b7791f)", bad: "var(--hive-danger)" };
+const TONE: Record<string, Tone> = { ok: "success", warn: "warn", bad: "danger" };
 
 function ThrottlePanel() {
   const q = useQuery({ queryKey: ["throttle-state"], queryFn: getThrottleState, refetchInterval: 15000 });
   const t = q.data;
+  if (q.isPending) return <LoadingState rows={1} label="Loading plan windows" />;
   if (!t) return null;
   return (
     <Section title="Plan windows">
-      <p className="mb-2 text-[13px] opacity-75">
+      <p className="text-xs leading-[1.5] text-ink-soft">
         Near a subscription&apos;s usage limit, agents back off in steps instead of all stopping at once: scheduled runs
         pause from about {t.backgroundPct}%, workflow stages and agent hand-offs from about {t.workflowPct}% (each agent
         at a slightly different point). Your own requests always run.
       </p>
       {t.windows.length === 0 ? (
-        <p className="text-[12px] opacity-60" data-testid="no-windows">
-          No runtime has reported a plan window yet.
-        </p>
+        <div data-testid="no-windows">
+          <EmptyHint text="No runtime has reported a plan window yet." />
+        </div>
       ) : (
-        <ul className="text-[13px]" data-testid="windows">
-          {t.windows.map((w) => (
-            <li key={w.runtime} className="flex items-center justify-between py-0.5">
-              <span>
-                {w.runtime}
-                {w.window ? <span className="opacity-55"> · {w.window.replace("_", " ")}</span> : null}
-              </span>
-              <span style={{ color: TONE[windowTone(w.effectivePct, t)] }}>
-                {w.reported ? `${w.effectivePct}%` : w.status}
-                {w.resetsAt ? <span className="opacity-60"> · resets {new Date(w.resetsAt).toLocaleTimeString()}</span> : null}
-              </span>
-            </li>
-          ))}
+        <ul className="divide-y rounded-xl border" style={{ borderColor: "var(--hive-line)" }} data-testid="windows">
+          {t.windows.map((w) => {
+            const tone = TONE[windowTone(w.effectivePct, t)];
+            return (
+              <li key={w.runtime} className="px-3 py-2 text-[13px]" style={{ borderColor: "var(--hive-line)" }}>
+                <div className="flex items-center justify-between gap-2">
+                  <span>
+                    <span className="font-medium">{w.runtime}</span>
+                    {w.window ? <span className="text-xs text-ink-soft"> · {w.window.replace("_", " ")}</span> : null}
+                  </span>
+                  <span className="flex items-center gap-2">
+                    {w.resetsAt ? <span className="text-xs text-ink-soft">resets {new Date(w.resetsAt).toLocaleTimeString()}</span> : null}
+                    <Badge tone={tone}>{w.reported ? `${w.effectivePct}%` : w.status}</Badge>
+                  </span>
+                </div>
+                {w.reported && (
+                  <div className="mt-1.5 h-1 overflow-hidden rounded-full" style={{ background: "color-mix(in srgb, var(--hive-ink) 10%, transparent)" }} aria-hidden>
+                    <div
+                      className="h-full rounded-full"
+                      style={{
+                        width: `${Math.min(100, Math.max(0, w.effectivePct))}%`,
+                        background: tone === "danger" ? "var(--hive-danger)" : tone === "warn" ? "var(--hive-warn)" : "var(--hive-success)",
+                      }}
+                    />
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
       {t.deferred.length > 0 && (
-        <ul className="mt-2 text-[13px]" data-testid="deferred">
+        <ul className="space-y-1 text-[13px]" data-testid="deferred">
           {t.deferred.map((d) => (
-            <li key={`${d.priority}:${d.what}`} className="opacity-80">
-              Waiting: {d.what} ({d.runtime} at {d.utilizationPct}%, pauses at {d.thresholdPct}%)
+            <li key={`${d.priority}:${d.what}`} className="flex flex-wrap items-center gap-2">
+              <Badge tone="warn">waiting</Badge> {d.what} ({d.runtime} at {d.utilizationPct}%, pauses at {d.thresholdPct}%)
             </li>
           ))}
         </ul>

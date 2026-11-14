@@ -156,44 +156,44 @@ function SyncSection() {
       <div className="rounded-xl border px-3 py-2.5 text-sm" style={fieldStyle}>
         {s?.connectionState === "error" ? (
           <div className="space-y-1">
-            <span className="flex items-center gap-1.5 font-medium" style={{ color: "var(--hive-danger)" }}>
+            <span className="flex items-center gap-1.5 font-medium" style={{ color: "var(--hive-danger-ink)" }}>
               <IconAlertTriangle size={13} /> Sync error
             </span>
-            <div className="text-xs opacity-80">
+            <div className="text-xs text-ink-soft">
               {s.lastError ?? "The last sync attempt failed."}
             </div>
-            <div className="text-xs" style={{ color: "var(--hive-danger)" }}>
+            <div className="text-xs" style={{ color: "var(--hive-danger-ink)" }}>
               Reconnect — check your relay URL, key, or access token below, then test the connection.
             </div>
           </div>
         ) : s?.connectionState === "live" ? (
           <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
-            <span className="flex items-center gap-1.5" style={{ color: "var(--hive-success)" }}>
+            <span className="flex items-center gap-1.5" style={{ color: "var(--hive-success-ink)" }}>
               <IconHexagon size={13} /> Live
             </span>
-            <span className="opacity-50">·</span>
+            <span className="text-ink-soft">·</span>
             <code className="text-xs">{s.relayUrl}</code>
-            <span className="opacity-50">· room</span>
+            <span className="text-ink-soft">· room</span>
             <code className="text-xs">{s.room}</code>
-            <span className="opacity-50">·</span>
+            <span className="text-ink-soft">·</span>
             {s.encrypted ? (
               <span
                 className="flex items-center gap-1"
                 title="Messages sealed with the workspace key"
-                style={{ color: "var(--hive-success)" }}
+                style={{ color: "var(--hive-success-ink)" }}
               >
                 <IconLock size={12} /> encrypted
               </span>
             ) : (
-              <span className="flex items-center gap-1" style={{ color: "var(--hive-warn)" }}>
+              <span className="flex items-center gap-1" style={{ color: "var(--hive-warn-ink)" }}>
                 <IconAlertTriangle size={12} /> plaintext
               </span>
             )}
           </div>
         ) : s?.relayConfigured ? (
-          <span className="opacity-70">Offline — a relay is configured but nothing is syncing right now.</span>
+          <span className="text-ink-soft">Offline — a relay is configured but nothing is syncing right now.</span>
         ) : (
-          <span className="opacity-70">Local only — not syncing with anyone yet.</span>
+          <span className="text-ink-soft">Local only — not syncing with anyone yet.</span>
         )}
       </div>
 
@@ -212,7 +212,7 @@ function SyncSection() {
           // Surface the live sync failure right next to the fix affordance until
           // the user runs a fresh probe.
           s?.connectionState === "error" && (
-            <span className="flex items-center gap-1.5 text-xs" style={{ color: "var(--hive-danger)" }}>
+            <span className="flex items-center gap-1.5 text-xs" style={{ color: "var(--hive-danger-ink)" }}>
               <IconAlertTriangle size={13} />
               {s.lastError ?? "Sync is failing — test the connection."}
             </span>
@@ -221,14 +221,14 @@ function SyncSection() {
       </div>
 
       {/* How teams work now */}
-      <p className="text-xs opacity-60">
+      <p className="text-xs text-ink-soft">
         Teams live in the left rail — hit <strong>＋</strong> to create or join one. Ligus
         generates the room, encryption key, and a shareable code for you. The relay below just
         brokers sync, short pairing codes, and member revocation; messages stay end-to-end
         encrypted and the relay only ever sees ciphertext.
       </p>
 
-      <label className="block text-sm opacity-70">Relay URL</label>
+      <label className="block text-sm text-ink-soft">Relay URL</label>
       <input
         value={relayUrl}
         onChange={(e) => setRelayUrl(e.target.value)}
@@ -237,9 +237,9 @@ function SyncSection() {
         className={inputClass}
         style={fieldStyle}
       />
-      <p className="text-xs opacity-50">Use the same relay URL on every device that should sync.</p>
+      <p className="text-xs text-ink-soft">Use the same relay URL on every device that should sync.</p>
 
-      <label className="block text-sm opacity-70">Relay access token</label>
+      <label className="block text-sm text-ink-soft">Relay access token</label>
       <div className="flex items-center gap-2">
         <input
           type="password"
@@ -253,14 +253,14 @@ function SyncSection() {
         {c?.hasRelayAccessToken && (
           <button
             className="text-xs hover:opacity-80"
-            style={{ color: "var(--hive-danger)" }}
+            style={{ color: "var(--hive-danger-ink)" }}
             onClick={() => clearSecret.mutate("relayAccessToken")}
           >
             clear
           </button>
         )}
       </div>
-      <p className="text-xs opacity-50">
+      <p className="text-xs text-ink-soft">
         Needed only for a gated/paid hosted relay. Leave blank for a relay you host yourself.
         Paste only the token value — if yours looks like <code>name:abc123</code>, drop the
         <code> name:</code> prefix.
@@ -276,11 +276,11 @@ function SyncSection() {
       </button>
       {showAdvanced && (
         <div className="space-y-2 rounded-2xl border p-3" style={{ borderColor: "var(--hive-line)" }}>
-          <p className="text-xs opacity-50">
+          <p className="text-xs text-ink-soft">
             Normally the rail’s ＋ fills these in. Set them by hand only to join a specific room
             or change the passphrase directly.
           </p>
-          <label className="block text-sm opacity-70">Room</label>
+          <label className="block text-sm text-ink-soft">Room</label>
           <input
             value={room}
             onChange={(e) => setRoom(e.target.value)}
@@ -289,7 +289,7 @@ function SyncSection() {
             className={inputClass}
             style={fieldStyle}
           />
-          <label className="block text-sm opacity-70">Workspace key (E2EE passphrase)</label>
+          <label className="block text-sm text-ink-soft">Workspace key (E2EE passphrase)</label>
           <div className="flex items-center gap-2">
             <input
               type="password"
@@ -303,7 +303,7 @@ function SyncSection() {
             {c?.hasWorkspaceKey && (
               <button
                 className="text-xs hover:opacity-80"
-                style={{ color: "var(--hive-danger)" }}
+                style={{ color: "var(--hive-danger-ink)" }}
                 onClick={() => clearSecret.mutate("workspaceKey")}
               >
                 clear
@@ -311,10 +311,10 @@ function SyncSection() {
             )}
           </div>
 
-          <label className="block text-sm opacity-70">
+          <label className="block text-sm text-ink-soft">
             Relay issuer key {issuerSet.data ? "✓ set" : "(for adding remote agents)"}
           </label>
-          <p className="text-xs opacity-50">
+          <p className="text-xs text-ink-soft">
             The Ed25519 seed from <code>hive-relay keygen</code> (whose public half is on the relay).
             Lets you mint agent tokens locally for the People pane’s “Add a remote agent”. Stays on
             this device — never synced.
@@ -334,7 +334,7 @@ function SyncSection() {
             {issuerSet.data && (
               <button
                 className="text-xs hover:opacity-80"
-                style={{ color: "var(--hive-danger)" }}
+                style={{ color: "var(--hive-danger-ink)" }}
                 onClick={() => saveIssuer.mutate("")}
               >
                 clear
@@ -402,7 +402,7 @@ function RelayUsersSection() {
   if (users.isError) {
     return (
       <Section title="Team members">
-        <p className="text-xs opacity-55">
+        <p className="text-xs text-ink-soft">
           Managing relay access here needs an admin account on a relay that supports user
           management. Ask your relay operator to add your GitHub login to its admin list.
         </p>
@@ -412,7 +412,7 @@ function RelayUsersSection() {
 
   return (
     <Section title="Team members">
-      <p className="text-xs opacity-60">
+      <p className="text-xs text-ink-soft">
         Give a teammate their own relay access token — no redeploy, and revoking is instant.
         The token is shown once; paste it into their Ligus under Settings → Team sync.
       </p>
@@ -446,7 +446,7 @@ function RelayUsersSection() {
       {/* Create */}
       <div className="flex flex-wrap items-end gap-2">
         <div className="min-w-0 flex-1">
-          <label className="block text-xs opacity-70">Name</label>
+          <label className="block text-xs text-ink-soft">Name</label>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -457,7 +457,7 @@ function RelayUsersSection() {
           />
         </div>
         <div className="min-w-0 flex-1">
-          <label className="block text-xs opacity-70">GitHub login (optional)</label>
+          <label className="block text-xs text-ink-soft">GitHub login (optional)</label>
           <input
             value={login}
             onChange={(e) => setLogin(e.target.value)}
@@ -479,13 +479,13 @@ function RelayUsersSection() {
             <div className="flex items-center justify-between gap-2">
               <div className="min-w-0">
                 <span className="text-sm font-medium">{u.name}</span>
-                {u.login && <span className="ml-1.5 text-xs opacity-55">@{u.login}</span>}
+                {u.login && <span className="ml-1.5 text-xs text-ink-soft">@{u.login}</span>}
                 {u.disabled && (
-                  <span className="ml-1.5 text-[10px] uppercase tracking-wider" style={{ color: "var(--hive-danger)" }}>
+                  <span className="ml-1.5 text-[10px] uppercase tracking-wider" style={{ color: "var(--hive-danger-ink)" }}>
                     disabled
                   </span>
                 )}
-                <div className="text-xs opacity-50">
+                <div className="text-xs text-ink-soft">
                   {u.tokens.length} active token{u.tokens.length === 1 ? "" : "s"}
                 </div>
               </div>
@@ -502,13 +502,13 @@ function RelayUsersSection() {
               <div className="mt-2 space-y-1 border-t pt-2" style={{ borderColor: "var(--hive-line)" }}>
                 {u.tokens.map((t) => (
                   <div key={t.id} className="flex items-center justify-between gap-2 text-xs">
-                    <span className="min-w-0 truncate opacity-70">
+                    <span className="min-w-0 truncate text-ink-soft">
                       {t.label || "token"}
                       {t.lastUsed ? ` · last used ${new Date(t.lastUsed).toLocaleDateString()}` : " · never used"}
                     </span>
                     <button
                       className="shrink-0 underline opacity-70 hover:opacity-100"
-                      style={{ color: "var(--hive-danger)" }}
+                      style={{ color: "var(--hive-danger-ink)" }}
                       onClick={() =>
                         confirmThen("Revoke this token? The device using it stops syncing.", () =>
                           act(() => revokeRelayToken(t.id)),
@@ -524,7 +524,7 @@ function RelayUsersSection() {
           </div>
         ))}
         {!users.isLoading && (users.data ?? []).length === 0 && (
-          <p className="text-xs opacity-50">No team members yet — add one above.</p>
+          <p className="text-xs text-ink-soft">No team members yet — add one above.</p>
         )}
       </div>
     </Section>
@@ -573,11 +573,11 @@ function PeersSection() {
 
   return (
     <Section title="Direct peers (P2P)">
-      <p className="text-xs opacity-50">
+      <p className="text-xs text-ink-soft">
         Connect to a friend device-to-device (no shared room). Share your code; add theirs to sync
         directly. Falls back to a relay when a direct connection can't be made.
       </p>
-      <label className="block text-sm opacity-70">Your peer code</label>
+      <label className="block text-sm text-ink-soft">Your peer code</label>
       <div className="flex gap-2">
         <input
           readOnly
@@ -612,7 +612,7 @@ function PeersSection() {
       {shortCode && (
         <div className="flex items-center justify-between gap-3 rounded-xl border px-3 py-2" style={{ borderColor: "var(--hive-accent-cool)" }}>
           <div>
-            <div className="text-[10px] font-semibold uppercase tracking-wider opacity-50">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-ink-soft">
               Share this code (expires in {Math.round(shortCode.expiresIn / 60)} min)
             </div>
             <div className="font-mono text-2xl font-bold tracking-[0.2em]">{shortCode.code}</div>
@@ -656,18 +656,18 @@ function PeersSection() {
           <div key={c.peerId} className="flex items-center justify-between gap-3 rounded-xl border px-3 py-2" style={fieldStyle}>
             <div className="min-w-0">
               <div className="font-medium">{c.label || "Unnamed peer"}</div>
-              <div className="truncate font-mono text-xs opacity-50">{c.peerId}</div>
+              <div className="truncate font-mono text-xs text-ink-soft">{c.peerId}</div>
             </div>
             <button
               className="shrink-0 text-xs hover:opacity-80"
-              style={{ color: "var(--hive-danger)" }}
+              style={{ color: "var(--hive-danger-ink)" }}
               onClick={() => confirmThen(`Remove peer "${c.label || c.peerId}"?`, () => remove.mutate(c.peerId))}
             >
               Remove
             </button>
           </div>
         ))}
-        {(contacts.data ?? []).length === 0 && <p className="text-sm opacity-50">No peers added yet.</p>}
+        {(contacts.data ?? []).length === 0 && <p className="text-sm text-ink-soft">No peers added yet.</p>}
       </div>
 
       <div className="space-y-2 rounded-2xl border p-3" style={{ borderColor: "var(--hive-line)" }}>
