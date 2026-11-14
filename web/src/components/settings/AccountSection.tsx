@@ -252,7 +252,7 @@ function GithubSection() {
               </div>
             </div>
           </div>
-          <button className="shrink-0 text-xs hover:opacity-80" style={{ color: "var(--hive-danger)" }} onClick={() => logout.mutate()}>
+          <button className="shrink-0 text-xs hover:opacity-80" style={{ color: "var(--hive-danger-ink)" }} onClick={() => logout.mutate()}>
             Sign out
           </button>
         </div>
@@ -436,10 +436,10 @@ export function DevicesSection() {
                 <span className="opacity-60"> (must match the device's terminal)</span>
               </div>
               {!preview.knownWorkspace && (
-                <div style={{ color: "var(--hive-danger)" }}>This code is for a workspace this desktop doesn't have.</div>
+                <div style={{ color: "var(--hive-danger-ink)" }}>This code is for a workspace this desktop doesn't have.</div>
               )}
               {preview.revoked && (
-                <div style={{ color: "var(--hive-danger)" }}>
+                <div style={{ color: "var(--hive-danger-ink)" }}>
                   This device was revoked. Run <code>ligus serve enroll --new-device</code> on it for a new code.
                 </div>
               )}
@@ -485,14 +485,14 @@ export function DevicesSection() {
             <div className="truncate text-sm font-medium">
               {d.label}
               {d.thisDevice && <span className="opacity-60"> · this device</span>}
-              {d.revoked && <span style={{ color: "var(--hive-danger)" }}> · revoked</span>}
+              {d.revoked && <span style={{ color: "var(--hive-danger-ink)" }}> · revoked</span>}
             </div>
             <div className="truncate font-mono text-[11px] opacity-60">{d.fingerprint}</div>
           </div>
           {!d.thisDevice && !d.revoked && (
             <button
               className="shrink-0 text-xs hover:opacity-80"
-              style={{ color: "var(--hive-danger)" }}
+              style={{ color: "var(--hive-danger-ink)" }}
               onClick={() => void revoke(d.deviceId, d.label)}
             >
               Revoke

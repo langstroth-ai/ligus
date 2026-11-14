@@ -179,8 +179,8 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
           <button
             onClick={onCreate}
             disabled={busy || !name.trim()}
-            className="w-full rounded-lg px-3 py-2 text-sm font-semibold text-white disabled:opacity-40"
-            style={{ background: "var(--hive-accent-cool)" }}
+            className="w-full rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-40"
+            style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
           >
             {busy ? "Creating…" : "Create workspace"}
           </button>
@@ -220,8 +220,8 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
           <button
             onClick={onJoin}
             disabled={busy || !invite.trim()}
-            className="w-full rounded-lg px-3 py-2 text-sm font-semibold text-white disabled:opacity-40"
-            style={{ background: "var(--hive-accent-cool)" }}
+            className="w-full rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-40"
+            style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
           >
             {busy ? "Joining…" : "Join workspace"}
           </button>
@@ -242,8 +242,8 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
             <button
               onClick={joinByShortCode}
               disabled={busy || !joinCode.trim()}
-              className="shrink-0 rounded-lg px-3 py-2 text-sm font-semibold text-white disabled:opacity-40"
-              style={{ background: "var(--hive-accent-cool)" }}
+              className="shrink-0 rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-40"
+              style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
             >
               Use code
             </button>
@@ -269,7 +269,7 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
                   </button>
                   <button
                     className="underline opacity-70 hover:opacity-100"
-                    style={{ color: "var(--hive-danger)" }}
+                    style={{ color: "var(--hive-danger-ink)" }}
                     onClick={() => leave(w)}
                   >
                     Leave

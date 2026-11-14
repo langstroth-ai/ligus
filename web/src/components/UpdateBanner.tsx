@@ -84,7 +84,7 @@ export function UpdateBanner() {
       style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)", color: "var(--hive-ink)" }}
     >
       <div className="flex items-start gap-3">
-        <div className="mt-0.5" style={{ color: "var(--hive-accent-cool)" }} aria-hidden>
+        <div className="mt-0.5" style={{ color: "var(--hive-accent-ink)" }} aria-hidden>
           <IconSparkle size={18} />
         </div>
         <div className="min-w-0 flex-1">
@@ -95,8 +95,8 @@ export function UpdateBanner() {
             <button
               onClick={() => void handleInstall()}
               disabled={installing}
-              className="rounded-lg px-3 py-1.5 text-sm font-medium text-white hover:brightness-110 disabled:opacity-70"
-              style={{ background: "var(--hive-accent-cool)" }}
+              className="rounded-lg px-3 py-1.5 text-sm font-medium hover:brightness-110 disabled:opacity-70"
+              style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
             >
               {label}
             </button>

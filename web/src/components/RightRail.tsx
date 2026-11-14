@@ -164,7 +164,7 @@ export function RightRail({
               className="relative flex h-10 w-10 items-center justify-center rounded-2xl transition-colors"
               style={{
                 background: pane === item.id ? "var(--hive-mist)" : "transparent",
-                color: pane === item.id ? "var(--hive-accent-cool)" : "var(--hive-ink)",
+                color: pane === item.id ? "var(--hive-accent-ink)" : "var(--hive-ink)",
                 opacity: pane === item.id ? 1 : 0.72,
               }}
               title={item.label}
@@ -176,7 +176,7 @@ export function RightRail({
               {(paneBadges[item.id] ?? 0) > 0 && (
                 <span
                   className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none"
-                  style={{ background: "var(--hive-accent-warm)", color: "var(--hive-on-accent)" }}
+                  style={{ background: "var(--hive-warm-fill)", color: "var(--hive-on-accent)" }}
                   aria-label={`${paneBadges[item.id]} awaiting review`}
                 >
                   {paneBadges[item.id]}
@@ -363,7 +363,7 @@ function ToolsPane({
             <button
               onClick={() => setScope("workspace")}
               className="font-medium underline underline-offset-2"
-              style={{ color: "var(--hive-accent-cool)" }}
+              style={{ color: "var(--hive-accent-ink)" }}
             >
               Edit in Workspace
             </button>
@@ -599,7 +599,7 @@ function ToolsPane({
                   style={fieldStyle}
                 />
                 {mcpError && (
-                  <div className="text-xs" style={{ color: "var(--hive-danger)" }}>
+                  <div className="text-xs" style={{ color: "var(--hive-danger-ink)" }}>
                     {mcpError}
                   </div>
                 )}
@@ -696,7 +696,7 @@ function McpServerCard({
             <span className="truncate text-[13px] font-medium">{server.id}</span>
             <span
               className="shrink-0 text-[11px] uppercase tracking-[0.08em]"
-              style={{ color: disabled ? "var(--hive-ink-soft)" : "var(--hive-success)" }}
+              style={{ color: disabled ? "var(--hive-ink-soft)" : "var(--hive-success-ink)" }}
             >
               {disabled ? "inert" : "enabled"}
             </span>
@@ -863,7 +863,7 @@ function AgentRosterRow({
         <button
           onClick={onRemove}
           className="text-xs hover:opacity-80"
-          style={{ color: "var(--hive-danger)" }}
+          style={{ color: "var(--hive-danger-ink)" }}
         >
           Remove
         </button>
@@ -909,7 +909,7 @@ function RuntimeCard({
             className="rounded-full px-2 py-1 text-xs font-semibold"
             style={{
               background: "color-mix(in srgb, var(--hive-success) 18%, transparent)",
-              color: "var(--hive-success)",
+              color: "var(--hive-success-ink)",
             }}
           >
             Active
@@ -1150,8 +1150,8 @@ function DiffFileBlock({
       >
         <span className="opacity-50" aria-hidden>{open ? "▾" : "▸"}</span>
         <span className={`min-w-0 flex-1 truncate font-mono ${pathClass}`}>{file.path}</span>
-        {file.added > 0 && <span className={pathClass} style={{ color: "var(--hive-success)" }}>+{file.added}</span>}
-        {file.removed > 0 && <span className={pathClass} style={{ color: "var(--hive-danger)" }}>−{file.removed}</span>}
+        {file.added > 0 && <span className={pathClass} style={{ color: "var(--hive-success-ink)" }}>+{file.added}</span>}
+        {file.removed > 0 && <span className={pathClass} style={{ color: "var(--hive-danger-ink)" }}>−{file.removed}</span>}
       </button>
       {open && (
         <div className={`overflow-x-auto font-mono ${fontClass}`} style={{ background: "var(--hive-overlay)" }}>
@@ -1354,7 +1354,7 @@ function ProposalCard({
                 <button
                   type="button"
                   className="rounded-md px-2 py-0.5 text-xs font-medium transition-colors hover:brightness-110"
-                  style={{ border: "1px solid var(--hive-line)", color: "var(--hive-accent-cool)" }}
+                  style={{ border: "1px solid var(--hive-line)", color: "var(--hive-accent-ink)" }}
                   onClick={() => setDiffOpen(true)}
                 >
                   View full diff ↗
@@ -1389,7 +1389,7 @@ function ProposalCard({
             <div key={a.actorId} className="flex items-center gap-1.5 text-xs">
               <span
                 aria-hidden
-                style={{ color: a.approved ? "var(--hive-success)" : "var(--hive-danger)" }}
+                style={{ color: a.approved ? "var(--hive-success-ink)" : "var(--hive-danger-ink)" }}
               >
                 {a.approved ? "✓" : "✕"}
               </span>
@@ -1410,7 +1410,7 @@ function ProposalCard({
               className="rounded-xl px-3 py-2 text-sm font-medium transition-opacity disabled:opacity-50"
               style={{
                 background: "color-mix(in srgb, var(--hive-success) 20%, transparent)",
-                color: "var(--hive-success)",
+                color: "var(--hive-success-ink)",
               }}
               onClick={() => vote.mutate(true)}
             >
@@ -1421,7 +1421,7 @@ function ProposalCard({
               className="rounded-xl px-3 py-2 text-sm font-medium transition-opacity disabled:opacity-50"
               style={{
                 background: "color-mix(in srgb, var(--hive-danger) 18%, transparent)",
-                color: "var(--hive-danger)",
+                color: "var(--hive-danger-ink)",
               }}
               onClick={() => vote.mutate(false)}
             >
@@ -1524,7 +1524,7 @@ function RefinementThread({
                   <span
                     className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
                     style={{
-                      color: "var(--hive-accent-warm)",
+                      color: "var(--hive-warm-ink)",
                       background: "color-mix(in srgb, var(--hive-accent-warm) 15%, transparent)",
                     }}
                   >
@@ -1567,7 +1567,7 @@ function RefinementThread({
             disabled={disabled || submitting || !note.trim()}
             onClick={onSubmit}
             className="rounded-lg px-3 py-1.5 text-xs font-semibold transition-opacity disabled:opacity-40"
-            style={{ background: "var(--hive-accent-cool)", color: "var(--hive-on-accent)" }}
+            style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
           >
             {submitting ? "Adding…" : asChangeRequest ? "Request changes" : "Comment"}
           </button>
@@ -1914,7 +1914,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
     <RailFrame title="People" subtitle="Workspace members and governance roles for this chat.">
       <Section title="Members">
         {error && (
-          <div className="text-xs" style={{ color: "var(--hive-danger)" }}>
+          <div className="text-xs" style={{ color: "var(--hive-danger-ink)" }}>
             {error}
           </div>
         )}
@@ -1928,7 +1928,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
             </div>
           </Card>
         ) : (
-          <div className="rounded-xl border px-3 py-2 text-xs" style={{ borderColor: "var(--hive-line)", color: "var(--hive-accent-warm)" }}>
+          <div className="rounded-xl border px-3 py-2 text-xs" style={{ borderColor: "var(--hive-line)", color: "var(--hive-warm-ink)" }}>
             You aren't in this workspace's roster — it was created under a different identity. If it's
             your own, re-create it; identity is stable going forward.
           </div>
@@ -1986,7 +1986,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                 </button>
                 <button
                   className="shrink-0 text-xs font-medium hover:opacity-80"
-                  style={{ color: "var(--hive-danger)" }}
+                  style={{ color: "var(--hive-danger-ink)" }}
                   onClick={() =>
                     confirmThen(
                       `Remove ${member.displayName} and revoke their access? The workspace key will be rotated so they can't read new messages.`,
@@ -2056,7 +2056,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
               (audit.data ?? []).map((e, i) => (
                 <div key={i} className="flex items-baseline justify-between gap-2 text-xs">
                   <span className="min-w-0 truncate">
-                    <span style={{ color: e.action === "removed" ? "var(--hive-danger)" : "var(--hive-accent-warm)" }}>
+                    <span style={{ color: e.action === "removed" ? "var(--hive-danger-ink)" : "var(--hive-accent-warm)" }}>
                       {e.action === "removed" ? "removed" : `added${e.role ? ` (${e.role})` : ""}`}
                     </span>{" "}
                     <b>{e.member}</b> <span className="opacity-50">by {e.by}</span>
@@ -2090,7 +2090,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                 </div>
                 <button
                   className="shrink-0 text-xs font-medium hover:opacity-80"
-                  style={{ color: "var(--hive-danger)" }}
+                  style={{ color: "var(--hive-danger-ink)" }}
                   onClick={() =>
                     confirmThen(`Remove @${m.login} from this workspace on the relay?`, () =>
                       srvRemoveMutation.mutate(m.account),
@@ -2198,7 +2198,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                     {i.expiresAt > 0 ? ` · expires ${new Date(i.expiresAt * 1000).toLocaleDateString()}` : ""}
                   </span>
                 </span>
-                <button className="shrink-0 text-xs" style={{ color: "var(--hive-danger)" }} onClick={() => revokeInviteMutation.mutate(i.id)}>
+                <button className="shrink-0 text-xs" style={{ color: "var(--hive-danger-ink)" }} onClick={() => revokeInviteMutation.mutate(i.id)}>
                   Revoke
                 </button>
               </div>
@@ -2317,7 +2317,7 @@ function HostRow({ host }: { host: WorkspaceHostDto }) {
           className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
           style={{
             background: "color-mix(in srgb, var(--hive-accent-cool) 15%, transparent)",
-            color: "var(--hive-accent-cool)",
+            color: "var(--hive-accent-ink)",
           }}
         >
           {host.kind}
@@ -2463,7 +2463,7 @@ function VaultsPane({ sessionId }: { sessionId: string }) {
                 </button>
                 <button
                   className="hover:opacity-80"
-                  style={{ color: "var(--hive-danger)" }}
+                  style={{ color: "var(--hive-danger-ink)" }}
                   onClick={() => confirmThen("Remove this vault source?", () => removeVaultMutation.mutate(vault.url))}
                 >
                   Remove
@@ -2503,7 +2503,7 @@ function VaultsPane({ sessionId }: { sessionId: string }) {
               onChange={setTargetIds}
             />
             {error && (
-              <div className="text-xs" style={{ color: "var(--hive-danger)" }}>
+              <div className="text-xs" style={{ color: "var(--hive-danger-ink)" }}>
                 {error}
               </div>
             )}
@@ -2560,7 +2560,7 @@ function SkillsPane({ sessionId }: { sessionId: string }) {
               <button
                 onClick={() => confirmThen("Remove this skill?", () => removeSkillMutation.mutate(skill.id))}
                 className="text-xs hover:opacity-80"
-                style={{ color: "var(--hive-danger)" }}
+                style={{ color: "var(--hive-danger-ink)" }}
               >
                 Remove
               </button>
@@ -2593,7 +2593,7 @@ function SkillsPane({ sessionId }: { sessionId: string }) {
               onChange={setTargetIds}
             />
             {error && (
-              <div className="text-xs" style={{ color: "var(--hive-danger)" }}>
+              <div className="text-xs" style={{ color: "var(--hive-danger-ink)" }}>
                 {error}
               </div>
             )}
@@ -2738,7 +2738,7 @@ function ContextPane({
               className="mt-2.5 rounded-xl px-3 py-2 text-xs leading-5"
               style={{
                 background: "color-mix(in srgb, var(--hive-accent-warm) 10%, transparent)",
-                color: "var(--hive-accent-warm)",
+                color: "var(--hive-warm-ink)",
               }}
             >
               {data.overflowMessageCount} earlier messages are currently condensed to fit the context window.
@@ -2750,7 +2750,7 @@ function ContextPane({
               className="mt-2.5 rounded-xl px-3 py-2 text-xs leading-5"
               style={{
                 background: "color-mix(in srgb, var(--hive-danger) 10%, transparent)",
-                color: "var(--hive-danger)",
+                color: "var(--hive-danger-ink)",
               }}
             >
               Context is getting full — consider removing unused skills or vaults below.

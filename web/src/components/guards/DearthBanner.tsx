@@ -31,7 +31,7 @@ export function DearthBanner({ onManage }: { onManage: () => void }) {
         color: "var(--hive-ink)",
       }}
     >
-      <span style={{ color: "var(--hive-warning, #b7791f)" }}>
+      <span style={{ color: "var(--hive-warn-ink)" }}>
         <IconLock size={14} />
       </span>
       <span className="font-semibold">Dearth mode</span>

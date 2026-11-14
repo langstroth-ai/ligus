@@ -128,17 +128,18 @@ export function DialogHost() {
           // For a destructive confirm, focus Cancel — so a reflexive Enter
           // cancels rather than executing the dangerous action.
           autoFocus={req.kind === "confirm" && req.danger}
-          className="rounded-lg px-3 py-1.5 text-sm opacity-60 hover:opacity-100"
+          className="rounded-lg px-3 py-1.5 text-sm text-ink-soft transition-colors hover:bg-[color:var(--hive-hover)] hover:text-ink"
         >
           Cancel
         </button>
         <button
           autoFocus={req.kind === "confirm" && !req.danger}
           onClick={onAccept}
-          className="rounded-lg px-4 py-1.5 text-sm font-medium text-white hover:brightness-110"
+          className="rounded-lg px-4 py-1.5 text-sm font-medium hover:brightness-110"
           style={{
             background:
-              req.kind === "confirm" && req.danger ? "var(--hive-danger)" : "var(--hive-accent-cool)",
+              req.kind === "confirm" && req.danger ? "var(--hive-danger-fill)" : "var(--hive-accent-fill)",
+            color: "var(--hive-on-accent)",
           }}
         >
           {req.kind === "prompt" ? "OK" : req.confirmLabel ?? "Confirm"}

@@ -327,7 +327,7 @@ function MenuItem({ label, onClick, danger }: { label: string; onClick: () => vo
   return (
     <button
       className="block w-full px-3 py-1.5 text-left hover:bg-[color:var(--hive-overlay)]"
-      style={danger ? { color: "var(--hive-danger)" } : undefined}
+      style={danger ? { color: "var(--hive-danger-ink)" } : undefined}
       onClick={onClick}
     >
       {label}

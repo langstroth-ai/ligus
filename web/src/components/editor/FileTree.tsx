@@ -321,7 +321,7 @@ export function FileTree() {
       </div>
 
       {error && (
-        <div className="px-3 py-2 text-xs" style={{ color: "var(--hive-danger)" }}>
+        <div className="px-3 py-2 text-xs" style={{ color: "var(--hive-danger-ink)" }}>
           {error}
         </div>
       )}
@@ -396,7 +396,7 @@ function MenuItem({ label, onClick, danger }: { label: string; onClick: () => vo
     <button
       onClick={onClick}
       className="block w-full px-3 py-1.5 text-left"
-      style={{ color: danger ? "var(--hive-danger)" : "var(--hive-ink)", background: "transparent" }}
+      style={{ color: danger ? "var(--hive-danger-ink)" : "var(--hive-ink)", background: "transparent" }}
       onMouseEnter={(e) => (e.currentTarget.style.background = "var(--hive-hover)")}
       onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
     >

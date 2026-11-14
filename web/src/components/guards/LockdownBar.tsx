@@ -47,7 +47,7 @@ export function LockdownBar({ sessionId }: { sessionId: string }) {
         color: "var(--hive-ink)",
       }}
     >
-      <span style={{ color: "var(--hive-danger)" }}>
+      <span style={{ color: "var(--hive-danger-ink)" }}>
         <IconAlertTriangle size={14} />
       </span>
       <span className="font-semibold">Locked down</span>

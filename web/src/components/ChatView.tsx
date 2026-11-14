@@ -960,7 +960,7 @@ export function ChatView({
             >
               <div
                 className="flex h-11 w-11 items-center justify-center rounded-2xl"
-                style={{ background: "color-mix(in srgb, var(--hive-accent-cool) 18%, transparent)", color: "var(--hive-accent-cool)" }}
+                style={{ background: "color-mix(in srgb, var(--hive-accent-cool) 18%, transparent)", color: "var(--hive-accent-ink)" }}
                 aria-hidden
               >
                 <IconMessage size={22} />
@@ -986,7 +986,7 @@ export function ChatView({
                     <span className="flex-1">{p}</span>
                     <span
                       className="shrink-0 -rotate-90 opacity-0 transition-opacity group-hover/starter:opacity-60"
-                      style={{ color: "var(--hive-accent-cool)" }}
+                      style={{ color: "var(--hive-accent-ink)" }}
                       aria-hidden
                     >
                       <IconArrowDown size={14} />
@@ -2176,7 +2176,7 @@ function FilePickerModal({
 function CopyAction({ body }: { body: string }) {
   const [copied, setCopied] = useState(false);
   return (
-    <span style={copied ? { color: "var(--hive-success)" } : undefined}>
+    <span style={copied ? { color: "var(--hive-success-ink)" } : undefined}>
       <IconAction
         title={copied ? "Copied" : "Copy"}
         onClick={() => {

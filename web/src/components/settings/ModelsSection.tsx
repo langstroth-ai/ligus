@@ -419,7 +419,7 @@ function ProviderRow({
         </span>
         <span className="flex items-center gap-2 text-xs">
           {provider.needsKey ? (
-            <span style={{ color: provider.hasKey ? "var(--hive-success)" : "var(--hive-accent-warm)" }}>
+            <span style={{ color: provider.hasKey ? "var(--hive-success-ink)" : "var(--hive-accent-warm)" }}>
               {provider.hasKey ? "● key set" : "○ no key"}
             </span>
           ) : configured && provider.baseUrl.trim() !== "" ? (
@@ -478,7 +478,7 @@ function ProviderRow({
                 background: probe.ok
                   ? "color-mix(in srgb, var(--hive-success) 12%, transparent)"
                   : "color-mix(in srgb, var(--hive-danger) 12%, transparent)",
-                color: probe.ok ? "var(--hive-success)" : "var(--hive-danger)",
+                color: probe.ok ? "var(--hive-success-ink)" : "var(--hive-danger-ink)",
               }}
             >
               {probe.ok
@@ -523,7 +523,7 @@ function ProviderRow({
           <div className="mt-2 text-right">
             <button
               className="text-xs hover:opacity-80"
-              style={{ color: "var(--hive-danger)" }}
+              style={{ color: "var(--hive-danger-ink)" }}
               onClick={() => (configured ? remove.mutate() : onHide())}
             >
               Remove
@@ -832,7 +832,7 @@ function RuntimesSection() {
                   <button
                     onClick={() => confirmThen(`Remove runtime "${runtime.label}"?`, () => removeRuntimeMutation.mutate(runtime.id))}
                     className="text-xs hover:opacity-80"
-                    style={{ color: "var(--hive-danger)" }}
+                    style={{ color: "var(--hive-danger-ink)" }}
                   >
                     Remove
                   </button>
@@ -856,7 +856,7 @@ function RuntimesSection() {
             {tests[runtime.id]?.result && (
               <div className="mt-2 rounded-xl px-3 py-2 text-xs" style={fieldStyle}>
                 {tests[runtime.id]!.result!.ok ? (
-                  <span style={{ color: "var(--hive-success, #3fb950)" }}>
+                  <span style={{ color: "var(--hive-success-ink)" }}>
                     ✓ Responded in {tests[runtime.id]!.result!.latency_ms} ms
                     {tests[runtime.id]!.result!.reply
                       ? ` — "${tests[runtime.id]!.result!.reply.slice(0, 60)}"`
@@ -866,7 +866,7 @@ function RuntimesSection() {
                       : ""}
                   </span>
                 ) : (
-                  <span style={{ color: "var(--hive-danger)" }}>
+                  <span style={{ color: "var(--hive-danger-ink)" }}>
                     ✕ {tests[runtime.id]!.result!.error ?? "No response"}
                   </span>
                 )}
@@ -1078,7 +1078,7 @@ function RuntimesSection() {
                   />
                   <span>Allow workspace file tools for this endpoint</span>
                 </div>
-                <p className="text-xs" style={{ color: "var(--hive-warn)" }}>
+                <p className="text-xs" style={{ color: "var(--hive-warn-ink)" }}>
                   This endpoint isn't on this machine or a private network (LAN, Tailscale). With this
                   on, Ligus's file tools send the contents of files the model reads from your workspace
                   to it. Off: the model here only gets your MCP tools.
@@ -1250,7 +1250,7 @@ function OllamaModelsPanel({
     return (
       <div className="mt-1 space-y-1">
         <div className="flex items-center justify-between gap-2 text-xs">
-          <span style={{ color: p.error ? "var(--hive-danger)" : undefined }} className={p.error ? "" : "opacity-70"}>
+          <span style={{ color: p.error ? "var(--hive-danger-ink)" : undefined }} className={p.error ? "" : "opacity-70"}>
             {p.error
               ? `✕ ${p.error}`
               : pct !== null
@@ -1275,7 +1275,7 @@ function OllamaModelsPanel({
               </button>
             </div>
           ) : (
-            <button onClick={() => void cancel(p.model)} className="text-xs hover:opacity-80" style={{ color: "var(--hive-danger)" }}>
+            <button onClick={() => void cancel(p.model)} className="text-xs hover:opacity-80" style={{ color: "var(--hive-danger-ink)" }}>
               Cancel
             </button>
           )}
@@ -1312,7 +1312,7 @@ function OllamaModelsPanel({
         </div>
       </div>
       {list.isError && (
-        <p className="text-xs" style={{ color: "var(--hive-danger)" }}>
+        <p className="text-xs" style={{ color: "var(--hive-danger-ink)" }}>
           ✕ {errMsg(list.error)}
         </p>
       )}
@@ -1332,14 +1332,14 @@ function OllamaModelsPanel({
                   <div className="flex items-center gap-2">
                     <span className="truncate font-mono text-sm">{m.name}</span>
                     {current && (
-                      <span className="rounded-full px-2 py-0.5 text-[10px]" style={{ background: "var(--hive-accent-cool)", color: "white" }}>
+                      <span className="rounded-full px-2 py-0.5 text-[10px]" style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}>
                         current
                       </span>
                     )}
                     {m.loaded && (
                       <span
                         className="rounded-full border px-2 py-0.5 text-[10px]"
-                        style={{ borderColor: "var(--hive-success)", color: "var(--hive-success)" }}
+                        style={{ borderColor: "var(--hive-success)", color: "var(--hive-success-ink)" }}
                         title={m.expiresAt ? `Loaded in memory; unloads at ${new Date(m.expiresAt).toLocaleTimeString()}` : "Loaded in memory"}
                       >
                         loaded{m.loadedContextLength ? ` · ${fmtCtx(m.loadedContextLength)}` : ""}
@@ -1376,7 +1376,7 @@ function OllamaModelsPanel({
                       }
                       disabled={remove.isPending}
                       className="text-xs hover:opacity-80 disabled:opacity-50"
-                      style={{ color: "var(--hive-danger)" }}
+                      style={{ color: "var(--hive-danger-ink)" }}
                     >
                       Remove
                     </button>
@@ -1535,7 +1535,7 @@ function AgentsSection() {
               </div>
               <button
                 className="shrink-0 text-xs hover:opacity-80"
-                style={{ color: "var(--hive-danger)" }}
+                style={{ color: "var(--hive-danger-ink)" }}
                 onClick={() => confirmThen(`Remove agent "${t.name}"?`, () => remove.mutate(t.id))}
               >
                 Remove
@@ -1625,7 +1625,7 @@ function TemplatesSection() {
             </div>
             <button
               className="shrink-0 text-xs hover:opacity-80"
-              style={{ color: "var(--hive-danger)" }}
+              style={{ color: "var(--hive-danger-ink)" }}
               onClick={() => confirmThen(`Delete template "${t.name}"?`, () => setItems(removeTemplate(t.id)))}
             >
               Delete

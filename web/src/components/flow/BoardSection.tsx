@@ -55,7 +55,7 @@ export function BoardView({ rows, onPickup, now = Date.now() }: { rows: BoardRow
                   </div>
                 </div>
                 {r.claimedBy ? (
-                  <span className="shrink-0" style={{ color: "var(--hive-success)" }}>
+                  <span className="shrink-0" style={{ color: "var(--hive-success-ink)" }}>
                     {r.claimedBy} has it
                   </span>
                 ) : r.suggested ? (

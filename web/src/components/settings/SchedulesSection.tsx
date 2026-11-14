@@ -88,7 +88,7 @@ export function SchedulesSection() {
             />
             <button
               className="text-xs hover:opacity-80"
-              style={{ color: "var(--hive-danger)" }}
+              style={{ color: "var(--hive-danger-ink)" }}
               onClick={() => confirmThen(`Remove schedule "${s.label || "Scheduled run"}"?`, () => remove.mutate(s.id))}
             >
               Remove

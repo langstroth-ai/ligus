@@ -28,8 +28,8 @@ export function Button({
   const base = `inline-flex shrink-0 items-center justify-center gap-1.5 rounded-xl font-medium transition-all disabled:cursor-not-allowed disabled:opacity-40 ${SIZE[size]}`;
   const variants: Record<Variant, { className: string; style: React.CSSProperties }> = {
     primary: {
-      className: "text-white shadow-sm hover:brightness-105 disabled:shadow-none",
-      style: { background: "var(--hive-accent-cool)" },
+      className: "shadow-sm hover:brightness-105 disabled:shadow-none",
+      style: { background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" },
     },
     ghost: {
       className: "border hover:border-[color:var(--hive-accent-cool)]",
@@ -42,9 +42,9 @@ export function Button({
     danger: {
       className: "border hover:brightness-110",
       style: {
-        borderColor: "color-mix(in srgb, var(--hive-danger) 35%, transparent)",
-        background: "color-mix(in srgb, var(--hive-danger) 12%, transparent)",
-        color: "var(--hive-danger)",
+        borderColor: "var(--hive-danger-line)",
+        background: "var(--hive-danger-tint)",
+        color: "var(--hive-danger-ink)",
       },
     },
   };
@@ -295,7 +295,7 @@ export function NavRow({
       {icon != null && (
         <span
           className="grid h-4 w-4 shrink-0 place-items-center"
-          style={{ color: active ? "var(--hive-accent-cool)" : "var(--hive-ink-soft)" }}
+          style={{ color: active ? "var(--hive-accent-ink)" : "var(--hive-ink-soft)" }}
           aria-hidden
         >
           {icon}
@@ -322,8 +322,8 @@ export function NavRow({
       {typeof count === "number" &&
         (attn ? (
           <span
-            className="shrink-0 rounded-full px-1.5 text-[10.5px] font-bold tabular-nums text-white"
-            style={{ background: "var(--hive-accent-warm)" }}
+            className="shrink-0 rounded-full px-1.5 text-[10.5px] font-bold tabular-nums"
+            style={{ background: "var(--hive-warm-fill)", color: "var(--hive-on-accent)" }}
           >
             {count}
           </span>
@@ -455,12 +455,16 @@ export function Switch({
       onClick={() => onChange(!on)}
       className="relative inline-flex h-5 w-[34px] shrink-0 items-center rounded-full transition-colors disabled:opacity-40"
       style={{
-        background: on ? "var(--hive-accent-cool)" : "color-mix(in srgb, var(--hive-ink) 18%, transparent)",
+        background: on ? "var(--hive-accent-fill)" : "color-mix(in srgb, var(--hive-ink) 22%, transparent)",
       }}
     >
       <span
-        className="absolute h-4 w-4 rounded-full bg-white transition-all"
-        style={{ left: on ? 16 : 2 }}
+        className="absolute h-4 w-4 rounded-full transition-all"
+        style={{
+          left: on ? 16 : 2,
+          background: on ? "var(--hive-on-accent)" : "var(--hive-panel)",
+          boxShadow: "var(--hive-shadow-1)",
+        }}
       />
     </button>
   );
@@ -468,8 +472,8 @@ export function Switch({
 
 /// §5.5 — three-segment permission picker (never a dropdown).
 const PERMS: { id: "auto" | "ask" | "off"; label: string; on: CSSProperties }[] = [
-  { id: "auto", label: "Auto", on: { background: "color-mix(in srgb, var(--hive-success) 20%, transparent)", color: "var(--hive-success)" } },
-  { id: "ask", label: "Ask", on: { background: "color-mix(in srgb, var(--hive-accent-warm) 18%, transparent)", color: "var(--hive-accent-warm)" } },
+  { id: "auto", label: "Auto", on: { background: "color-mix(in srgb, var(--hive-success) 20%, transparent)", color: "var(--hive-success-ink)" } },
+  { id: "ask", label: "Ask", on: { background: "color-mix(in srgb, var(--hive-accent-warm) 18%, transparent)", color: "var(--hive-warm-ink)" } },
   { id: "off", label: "Off", on: { background: "color-mix(in srgb, var(--hive-ink) 12%, transparent)", color: "var(--hive-ink)" } },
 ];
 export function PermissionPicker({
@@ -579,7 +583,7 @@ export function ErrorState({ text, onRetry }: { text: string; onRetry?: () => vo
       className="rounded-xl border px-3 py-4 text-center text-xs"
       style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)", color: "var(--hive-ink)" }}
     >
-      <div style={{ color: "var(--hive-danger)" }}>{text}</div>
+      <div style={{ color: "var(--hive-danger-ink)" }}>{text}</div>
       {onRetry && (
         <div className="mt-2">
           <button
@@ -614,7 +618,7 @@ export function FormDisclosure({
         onClick={onToggle}
         aria-expanded={open}
         className="flex h-[30px] w-full items-center gap-2 rounded-xl px-2.5 text-left text-[13px] transition-colors hover:bg-[color:var(--hive-overlay)]"
-        style={{ color: "var(--hive-accent-cool)" }}
+        style={{ color: "var(--hive-accent-ink)" }}
       >
         <span aria-hidden className="text-base leading-none">
           {open ? "×" : "+"}
@@ -774,7 +778,7 @@ export function PopoverItem({
       className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors"
       style={{
         background: active ? SELECT_TINT : "transparent",
-        color: danger ? "var(--hive-danger)" : "var(--hive-ink)",
+        color: danger ? "var(--hive-danger-ink)" : "var(--hive-ink)",
       }}
     >
       {glyph != null && <span className="grid h-5 w-5 shrink-0 place-items-center">{glyph}</span>}

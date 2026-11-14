@@ -729,7 +729,7 @@ export function App() {
           className="w-full max-w-md rounded-2xl border p-6 text-center"
           style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)" }}
         >
-          <h1 className="text-lg font-semibold tracking-tight" style={{ color: "var(--hive-danger)" }}>
+          <h1 className="text-lg font-semibold tracking-tight" style={{ color: "var(--hive-danger-ink)" }}>
             Couldn't load your settings
           </h1>
           <p className="mt-2 text-sm opacity-70">
@@ -739,8 +739,8 @@ export function App() {
           <div className="mt-4 flex items-center justify-center gap-2">
             <button
               onClick={() => void settings.refetch()}
-              className="rounded-xl px-4 py-2 text-sm font-semibold text-white transition-all hover:brightness-105"
-              style={{ background: "var(--hive-accent-cool)" }}
+              className="rounded-xl px-4 py-2 text-sm font-semibold transition-all hover:brightness-105"
+              style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
             >
               Retry
             </button>
@@ -1223,14 +1223,14 @@ function deriveSyncPill(s: SyncStatusDto | undefined): SyncPill {
   if (state === "live") {
     return {
       label: `Live · room ${s?.room ?? ""}`,
-      color: "var(--hive-success)",
+      color: "var(--hive-success-ink)",
       title: "Live — syncing with your team",
     };
   }
   if (state === "error") {
     return {
       label: "Sync error",
-      color: "var(--hive-danger)",
+      color: "var(--hive-danger-ink)",
       title: s?.lastError ?? "Sync failed — reconnect or check your key / token",
       actionable: true,
     };
@@ -1240,7 +1240,7 @@ function deriveSyncPill(s: SyncStatusDto | undefined): SyncPill {
   if (state === "needs_key") {
     return {
       label: "Set a passphrase to sync",
-      color: "var(--hive-warn)",
+      color: "var(--hive-warn-ink)",
       title:
         s?.lastError ??
         "A relay is configured but this workspace has no encryption key — set a workspace passphrase in Settings → Team to sync encrypted, or clear the relay URL to work local-only.",
@@ -1400,7 +1400,7 @@ function ChatHeaderBar({
           style={{
             borderColor: "var(--hive-line)",
             background: "var(--hive-mist)",
-            color: contextPct >= 80 ? "var(--hive-warn)" : "var(--hive-ink)",
+            color: contextPct >= 80 ? "var(--hive-warn-ink)" : "var(--hive-ink)",
           }}
         >
           <IconHexagon size={11} />

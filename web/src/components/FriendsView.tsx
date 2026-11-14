@@ -140,7 +140,7 @@ export function FriendsView({
           className="rounded-2xl border p-6 text-center"
           style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}
         >
-          <h1 className="text-lg font-semibold tracking-tight" style={{ color: "var(--hive-danger)" }}>
+          <h1 className="text-lg font-semibold tracking-tight" style={{ color: "var(--hive-danger-ink)" }}>
             Couldn't load collaborators
           </h1>
           <p className="mt-2 opacity-70">
@@ -148,8 +148,8 @@ export function FriendsView({
           </p>
           <button
             onClick={() => void overview.refetch()}
-            className="mt-4 rounded-xl px-4 py-2 text-sm font-semibold text-white transition-all hover:brightness-105"
-            style={{ background: "var(--hive-accent-cool)" }}
+            className="mt-4 rounded-xl px-4 py-2 text-sm font-semibold transition-all hover:brightness-105"
+            style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
           >
             Retry
           </button>
@@ -167,7 +167,7 @@ export function FriendsView({
         >
           <div
             className="flex h-11 w-11 items-center justify-center rounded-2xl"
-            style={{ background: "color-mix(in srgb, var(--hive-accent-cool) 18%, transparent)", color: "var(--hive-accent-cool)" }}
+            style={{ background: "color-mix(in srgb, var(--hive-accent-cool) 18%, transparent)", color: "var(--hive-accent-ink)" }}
             aria-hidden
           >
             <IconUsers size={20} />
@@ -180,8 +180,8 @@ export function FriendsView({
           <div className="mt-4 flex flex-wrap gap-2">
             <button
               onClick={() => onOpenSettings?.("Account")}
-              className="rounded-xl px-3.5 py-2 text-sm font-semibold text-white transition-all hover:brightness-105"
-              style={{ background: "var(--hive-accent-cool)" }}
+              className="rounded-xl px-3.5 py-2 text-sm font-semibold transition-all hover:brightness-105"
+              style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
             >
               Sign in with GitHub
             </button>
@@ -222,7 +222,7 @@ export function FriendsView({
           onClick={() => void send()}
           disabled={busy || !handle.trim()}
           className="rounded-lg px-4 py-2 text-sm font-medium transition-all hover:brightness-110 disabled:opacity-50"
-          style={{ background: "var(--hive-accent-cool)", color: "#fff" }}
+          style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
         >
           Add
         </button>
@@ -242,8 +242,8 @@ export function FriendsView({
               <div className="flex gap-2">
                 <button
                   onClick={() => void accept(r.requestId, r.fromLogin)}
-                  className="rounded-md px-3 py-1 text-xs font-medium text-white transition-all hover:brightness-110"
-                  style={{ background: "var(--hive-accent-cool)" }}
+                  className="rounded-md px-3 py-1 text-xs font-medium transition-all hover:brightness-110"
+                  style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
                 >
                   Accept
                 </button>
@@ -293,7 +293,7 @@ export function FriendsView({
               <button
                 onClick={() => remove(f.accountId, f.login)}
                 className="text-xs opacity-0 transition-opacity group-hover:opacity-100"
-                style={{ color: "var(--hive-danger)" }}
+                style={{ color: "var(--hive-danger-ink)" }}
               >
                 Remove
               </button>

@@ -531,8 +531,8 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
                 </button>
                 <button
                   type="button"
-                  className="w-full rounded-lg px-3 py-2 text-xs font-semibold text-white hover:brightness-110"
-                  style={{ background: "var(--hive-accent-cool)", color: "var(--hive-on-accent)" }}
+                  className="w-full rounded-lg px-3 py-2 text-xs font-semibold hover:brightness-110"
+                  style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
                   onClick={() => void copyCodeAndOpenGithub(ghFlow.userCode, ghFlow.verificationUri)}
                 >
                   Copy code &amp; open GitHub ↗
@@ -542,7 +542,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
                   <button
                     type="button"
                     className="underline hover:opacity-80"
-                    style={{ color: "var(--hive-accent-cool)" }}
+                    style={{ color: "var(--hive-accent-ink)" }}
                     onClick={() => void openExternal(ghFlow.verificationUri).catch(() => {})}
                   >
                     {ghFlow.verificationUri}
@@ -555,7 +555,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
                 {ghConfigured && (
                   <>
                     <button
-                      className="flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold text-white"
+                      className="flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold"
                       style={{ background: "#24292f" }}
                       onClick={startGithub}
                     >
@@ -579,8 +579,8 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
                       <div className="flex gap-2">
                         <input value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="Iv1.…" className={field + " font-mono text-xs"} style={inputStyle} />
                         <button
-                          className="shrink-0 rounded-lg px-3 text-sm font-semibold text-white disabled:opacity-40"
-                          style={{ background: "var(--hive-accent-cool)", color: "var(--hive-on-accent)" }}
+                          className="shrink-0 rounded-lg px-3 text-sm font-semibold disabled:opacity-40"
+                          style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
                           disabled={!clientId.trim()}
                           onClick={async () => {
                             await setGithubClientId(clientId.trim());
@@ -606,7 +606,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
           <div className="space-y-3">
             <div className="text-sm font-medium">Open your project</div>
             <div className="text-xs opacity-50">Pick the folder agents should work in (a git repo is ideal).</div>
-            <button className="rounded-xl px-3 py-2.5 text-sm font-semibold text-white" style={{ background: "var(--hive-accent-cool)", color: "var(--hive-on-accent)" }} onClick={pickFolder}>
+            <button className="rounded-xl px-3 py-2.5 text-sm font-semibold" style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }} onClick={pickFolder}>
               {folder ? "Choose a different folder…" : "Choose folder…"}
             </button>
             {folder && <div className="truncate rounded-lg border px-3 py-2 font-mono text-xs" style={inputStyle}>✓ {folder}</div>}
@@ -636,7 +636,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
                 className="rounded-xl border px-3 py-2 text-xs"
                 style={{ borderColor: "color-mix(in srgb, var(--hive-warn) 45%, transparent)", background: "color-mix(in srgb, var(--hive-warn) 12%, transparent)" }}
               >
-                <span style={{ color: "var(--hive-warn)" }}>
+                <span style={{ color: "var(--hive-warn-ink)" }}>
                   {choice === "claudeCode" ? "Claude Code" : "Codex"} isn't on your PATH yet, so
                   @hive won't answer until it's installed.
                 </span>{" "}
@@ -729,7 +729,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
                 {agentProbe && agentProbe !== "running" && (
                   <div
                     className="text-xs"
-                    style={{ color: agentProbe.ok ? "var(--hive-success)" : "var(--hive-danger)" }}
+                    style={{ color: agentProbe.ok ? "var(--hive-success-ink)" : "var(--hive-danger-ink)" }}
                   >
                     {agentProbe.ok
                       ? `✓ Connected (${agentProbe.latency_ms} ms)`
@@ -813,7 +813,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
                   {testing ? "Testing…" : "Test connection"}
                 </button>
                 {probe && (
-                  <span className="text-xs" style={{ color: connectionOk ? "var(--hive-success)" : "var(--hive-accent-warm)" }}>
+                  <span className="text-xs" style={{ color: connectionOk ? "var(--hive-success-ink)" : "var(--hive-accent-warm)" }}>
                     {connectionOk ? "✓ Connected" : probe.detail}
                   </span>
                 )}
@@ -826,7 +826,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
                 onClick={issueMyToken}
                 disabled={issuing}
                 className="text-xs underline opacity-80 hover:opacity-100"
-                style={{ color: "var(--hive-accent-cool)" }}
+                style={{ color: "var(--hive-accent-ink)" }}
               >
                 {issuing ? "Creating…" : "I'm an admin on this relay — create my access token"}
               </button>
@@ -883,7 +883,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
           </div>
         )}
 
-        {error && <p className="mt-3 text-xs" style={{ color: "var(--hive-accent-warm)" }}>{error}</p>}
+        {error && <p className="mt-3 text-xs" style={{ color: "var(--hive-warm-ink)" }}>{error}</p>}
 
         <div className="mt-6 flex items-center justify-between">
           <button className="text-xs opacity-50 hover:opacity-100 disabled:opacity-20" disabled={step === 1 || busy} onClick={() => setStep((s) => s - 1)}>
@@ -898,8 +898,8 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
             <button
               onClick={next}
               disabled={!canNext || busy}
-              className="rounded-xl px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-40"
-              style={{ background: "var(--hive-accent-cool)", color: "var(--hive-on-accent)" }}
+              className="rounded-xl px-5 py-2.5 text-sm font-semibold disabled:opacity-40"
+              style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
             >
               {busy ? "…" : step === 5 ? "Finish" : "Next"}
             </button>

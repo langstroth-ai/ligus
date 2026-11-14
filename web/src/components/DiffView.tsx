@@ -71,12 +71,12 @@ export function languageForPath(path: string): string {
 }
 
 const KIND_BADGE: Record<string, { label: string; color: string }> = {
-  added: { label: "added", color: "var(--hive-success)" },
-  untracked: { label: "new", color: "var(--hive-success)" },
-  deleted: { label: "deleted", color: "var(--hive-danger)" },
-  modified: { label: "modified", color: "var(--hive-accent-cool)" },
-  renamed: { label: "renamed", color: "var(--hive-accent-cool)" },
-  conflicted: { label: "conflict", color: "var(--hive-warn)" },
+  added: { label: "added", color: "var(--hive-success-ink)" },
+  untracked: { label: "new", color: "var(--hive-success-ink)" },
+  deleted: { label: "deleted", color: "var(--hive-danger-ink)" },
+  modified: { label: "modified", color: "var(--hive-accent-ink)" },
+  renamed: { label: "renamed", color: "var(--hive-accent-ink)" },
+  conflicted: { label: "conflict", color: "var(--hive-warn-ink)" },
 };
 
 const LIST_WIDTH_KEY = "hive.diff.listWidth";
@@ -203,8 +203,8 @@ export function DiffView({
           >
             <span className="truncate font-mono text-xs">{f.path}</span>
             <span className="shrink-0 text-xs">
-              <span style={{ color: "var(--hive-success)" }}>+{f.addedLines}</span>{" "}
-              <span style={{ color: "var(--hive-danger)" }}>−{f.removedLines}</span>
+              <span style={{ color: "var(--hive-success-ink)" }}>+{f.addedLines}</span>{" "}
+              <span style={{ color: "var(--hive-danger-ink)" }}>−{f.removedLines}</span>
             </span>
           </button>
         ))}

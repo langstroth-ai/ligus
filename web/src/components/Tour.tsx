@@ -231,7 +231,7 @@ export function Tour({ steps, onClose }: { steps: TourStep[]; onClose: (complete
               // `--hive-on-accent` is the scheme-derived legible foreground for the
               // accent fill (dark on Obsidian's silver, white elsewhere) — plain
               // `text-white` was invisible on Obsidian's near-white accent.
-              style={{ background: "var(--hive-accent-cool)", color: "var(--hive-on-accent)" }}
+              style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
             >
               {atEnd ? "Done" : i === 0 ? "Start" : "Next"}
             </button>

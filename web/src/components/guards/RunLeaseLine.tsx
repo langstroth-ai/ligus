@@ -46,7 +46,7 @@ export function RunLeaseLine({
       {lease.fencedClaims > 0 && (
         <span
           className="rounded px-1.5 py-0.5"
-          style={{ color: "var(--hive-danger)", background: "color-mix(in srgb, var(--hive-danger) 12%, transparent)" }}
+          style={{ color: "var(--hive-danger-ink)", background: "color-mix(in srgb, var(--hive-danger) 12%, transparent)" }}
           title="Another device tried to drive this run at the same time; the newer lease epoch won and the other was stopped"
         >
           {lease.fencedClaims} competing claim{lease.fencedClaims === 1 ? "" : "s"} fenced

@@ -39,7 +39,7 @@ export function HandoffCardView({ card }: { card: HandoffCard }) {
           <button
             type="button"
             className="underline-offset-2 hover:underline"
-            style={{ color: "var(--hive-accent-cool)" }}
+            style={{ color: "var(--hive-accent-ink)" }}
             onClick={() => setOpen((v) => !v)}
             aria-expanded={open}
           >

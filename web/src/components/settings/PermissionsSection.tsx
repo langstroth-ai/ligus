@@ -120,14 +120,14 @@ export function PermissionsSection() {
             hidden prompt.
           </p>
           {health.data?.translocated && (
-            <p className="text-xs" style={{ color: "var(--hive-danger)" }}>
+            <p className="text-xs" style={{ color: "var(--hive-danger-ink)" }}>
               Ligus is running from a temporary location (App Translocation), so permission grants
               won't stick. Move Ligus to <code>/Applications</code> and reopen it — or install via{" "}
               <code>brew install --cask ligus-ai/ligus/ligus-app</code>.
             </p>
           )}
           {health.data?.quarantined && !health.data?.translocated && (
-            <p className="text-xs" style={{ color: "var(--hive-accent-warm)" }}>
+            <p className="text-xs" style={{ color: "var(--hive-warm-ink)" }}>
               This copy still carries the “downloaded from the internet” quarantine flag, which can
               keep permissions from persisting. Installing via Homebrew avoids it.
             </p>
@@ -162,7 +162,7 @@ export function PermissionsSection() {
           <strong>Accept file edits</strong> to let it create/modify files in your workspace.
         </p>
       ) : (
-        <p className="text-xs" style={{ color: "var(--hive-accent-warm)" }}>
+        <p className="text-xs" style={{ color: "var(--hive-warm-ink)" }}>
           The <code>claude</code> agent can modify files
           {permissionMode === "runCommands" ? " and run shell commands (build, test, git)" : ""}
           {permissionMode === "bypassPermissions" ? " and run any command or tool" : ""} in your
@@ -210,13 +210,13 @@ export function PermissionsSection() {
           </span>
         </div>
         {tools.enabled && tools.runCommand && (
-          <p className="text-xs" style={{ color: "var(--hive-accent-warm)" }}>
+          <p className="text-xs" style={{ color: "var(--hive-warm-ink)" }}>
             Local models can run any shell command in the turn's folder without asking. A command is
             not sandboxed: it can reach the network and anything your account can.
           </p>
         )}
         {tools.enabled && tools.writeInPlace && (
-          <p className="text-xs" style={{ color: "var(--hive-accent-warm)" }}>
+          <p className="text-xs" style={{ color: "var(--hive-warm-ink)" }}>
             Outside a git repository, local models edit your files directly with no review step.
           </p>
         )}

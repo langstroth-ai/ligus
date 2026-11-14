@@ -241,7 +241,7 @@ export function ToolsSection() {
             {s.isManaged && (
               <button
                 className="text-xs hover:opacity-80"
-                style={{ color: "var(--hive-danger)" }}
+                style={{ color: "var(--hive-danger-ink)" }}
                 onClick={() => remove.mutate(s.id)}
               >
                 Remove

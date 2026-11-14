@@ -156,19 +156,19 @@ function SyncSection() {
       <div className="rounded-xl border px-3 py-2.5 text-sm" style={fieldStyle}>
         {s?.connectionState === "error" ? (
           <div className="space-y-1">
-            <span className="flex items-center gap-1.5 font-medium" style={{ color: "var(--hive-danger)" }}>
+            <span className="flex items-center gap-1.5 font-medium" style={{ color: "var(--hive-danger-ink)" }}>
               <IconAlertTriangle size={13} /> Sync error
             </span>
             <div className="text-xs opacity-80">
               {s.lastError ?? "The last sync attempt failed."}
             </div>
-            <div className="text-xs" style={{ color: "var(--hive-danger)" }}>
+            <div className="text-xs" style={{ color: "var(--hive-danger-ink)" }}>
               Reconnect — check your relay URL, key, or access token below, then test the connection.
             </div>
           </div>
         ) : s?.connectionState === "live" ? (
           <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
-            <span className="flex items-center gap-1.5" style={{ color: "var(--hive-success)" }}>
+            <span className="flex items-center gap-1.5" style={{ color: "var(--hive-success-ink)" }}>
               <IconHexagon size={13} /> Live
             </span>
             <span className="opacity-50">·</span>
@@ -180,12 +180,12 @@ function SyncSection() {
               <span
                 className="flex items-center gap-1"
                 title="Messages sealed with the workspace key"
-                style={{ color: "var(--hive-success)" }}
+                style={{ color: "var(--hive-success-ink)" }}
               >
                 <IconLock size={12} /> encrypted
               </span>
             ) : (
-              <span className="flex items-center gap-1" style={{ color: "var(--hive-warn)" }}>
+              <span className="flex items-center gap-1" style={{ color: "var(--hive-warn-ink)" }}>
                 <IconAlertTriangle size={12} /> plaintext
               </span>
             )}
@@ -212,7 +212,7 @@ function SyncSection() {
           // Surface the live sync failure right next to the fix affordance until
           // the user runs a fresh probe.
           s?.connectionState === "error" && (
-            <span className="flex items-center gap-1.5 text-xs" style={{ color: "var(--hive-danger)" }}>
+            <span className="flex items-center gap-1.5 text-xs" style={{ color: "var(--hive-danger-ink)" }}>
               <IconAlertTriangle size={13} />
               {s.lastError ?? "Sync is failing — test the connection."}
             </span>
@@ -253,7 +253,7 @@ function SyncSection() {
         {c?.hasRelayAccessToken && (
           <button
             className="text-xs hover:opacity-80"
-            style={{ color: "var(--hive-danger)" }}
+            style={{ color: "var(--hive-danger-ink)" }}
             onClick={() => clearSecret.mutate("relayAccessToken")}
           >
             clear
@@ -303,7 +303,7 @@ function SyncSection() {
             {c?.hasWorkspaceKey && (
               <button
                 className="text-xs hover:opacity-80"
-                style={{ color: "var(--hive-danger)" }}
+                style={{ color: "var(--hive-danger-ink)" }}
                 onClick={() => clearSecret.mutate("workspaceKey")}
               >
                 clear
@@ -334,7 +334,7 @@ function SyncSection() {
             {issuerSet.data && (
               <button
                 className="text-xs hover:opacity-80"
-                style={{ color: "var(--hive-danger)" }}
+                style={{ color: "var(--hive-danger-ink)" }}
                 onClick={() => saveIssuer.mutate("")}
               >
                 clear
@@ -481,7 +481,7 @@ function RelayUsersSection() {
                 <span className="text-sm font-medium">{u.name}</span>
                 {u.login && <span className="ml-1.5 text-xs opacity-55">@{u.login}</span>}
                 {u.disabled && (
-                  <span className="ml-1.5 text-[10px] uppercase tracking-wider" style={{ color: "var(--hive-danger)" }}>
+                  <span className="ml-1.5 text-[10px] uppercase tracking-wider" style={{ color: "var(--hive-danger-ink)" }}>
                     disabled
                   </span>
                 )}
@@ -508,7 +508,7 @@ function RelayUsersSection() {
                     </span>
                     <button
                       className="shrink-0 underline opacity-70 hover:opacity-100"
-                      style={{ color: "var(--hive-danger)" }}
+                      style={{ color: "var(--hive-danger-ink)" }}
                       onClick={() =>
                         confirmThen("Revoke this token? The device using it stops syncing.", () =>
                           act(() => revokeRelayToken(t.id)),
@@ -660,7 +660,7 @@ function PeersSection() {
             </div>
             <button
               className="shrink-0 text-xs hover:opacity-80"
-              style={{ color: "var(--hive-danger)" }}
+              style={{ color: "var(--hive-danger-ink)" }}
               onClick={() => confirmThen(`Remove peer "${c.label || c.peerId}"?`, () => remove.mutate(c.peerId))}
             >
               Remove

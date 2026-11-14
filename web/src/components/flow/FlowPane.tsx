@@ -55,7 +55,7 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
       className="rounded-lg px-2.5 py-1 text-xs font-medium transition-colors"
       style={{
         background: active ? "var(--hive-mist)" : "transparent",
-        color: active ? "var(--hive-accent-cool)" : "var(--hive-ink)",
+        color: active ? "var(--hive-accent-ink)" : "var(--hive-ink)",
         opacity: active ? 1 : 0.75,
       }}
     >

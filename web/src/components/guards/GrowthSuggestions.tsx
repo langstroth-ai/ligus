@@ -40,7 +40,7 @@ export function GrowthSuggestions({ onOpen }: { onOpen: (kind: string) => void }
       className="flex shrink-0 items-start gap-2 border-b px-4 py-2 text-[12px]"
       style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)", color: "var(--hive-ink)" }}
     >
-      <span className="mt-0.5" style={{ color: "var(--hive-accent-cool)" }}>
+      <span className="mt-0.5" style={{ color: "var(--hive-accent-ink)" }}>
         <IconSparkle size={14} />
       </span>
       <div className="min-w-0 flex-1">
