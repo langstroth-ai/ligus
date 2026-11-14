@@ -7,13 +7,13 @@ says what the step achieves and what it doesn't. Background:
 !!! info "Two different levers"
     **Revoking** a device or removing a member stops their **new events**
     from being accepted. **Rotating** the workspace key stops them from
-    **reading new traffic**. You usually need both. In 2.0 the only way to
-    rotate is **Remove & revoke** on a member (People pane), which seals a
-    new key to every remaining *desktop*; there is no stand-alone "rotate
-    key" button, and headless devices can't follow a rotation (see
-    [Known limitations](threat-model.md#known-limitations)). When rotation
-    isn't available or isn't enough, move to a new workspace
-    ([below](#move-to-a-new-workspace)).
+    **reading new traffic**. You usually need both. **Remove & revoke** on a
+    member (People pane) does both; **Settings → Passkeys & keys → Rotate
+    workspace key** rotates on its own. A rotation is a signed event on the
+    workspace's config log, sealed to the key-agreement keys every remaining
+    member's devices published themselves, `ligus serve` and `ligus worker`
+    boxes included. Under [rules v2](index.md#presence) both need a passkey
+    confirmation.
 
 ## Revoke one of your devices {#revoke-device}
 
@@ -96,13 +96,14 @@ can act as that device and read everything it could.
 2. **Cut its relay access.** On a gated relay, revoke its token: remove it
    from `LIGUS_RELAY_ACCESS_TOKENS` and restart, or (signed tokens) see
    [Relay token compromised](#relay-token).
-3. **Cut its reads.** It holds the workspace key. Removing a member with
-   **Remove & revoke** rotates the key for remaining desktops. For your own
-   lost device, or any workspace with headless devices,
-   [move to a new workspace](#move-to-a-new-workspace). Key rotations aren't
-   signed yet, so a holder of the old key who can still write to the relay
-   could publish a rotation of their own; cutting its relay access (step 2)
-   matters for that reason too.
+3. **Cut its reads.** It holds the workspace key. After step 1, **rotate the
+   workspace key** ([below](#rotate-workspace-key)): the new key is sealed
+   only to devices that are still certified and whose account is still a
+   member, so the revoked device can't read anything sent after it. Its old
+   key can't be used to write either: every device refuses events sealed
+   under an older key by someone who is no longer a member, and a rotation
+   it published itself is never adopted (rotations are signed by an Admin's
+   device and checked on every device).
 4. **Rotate what it held besides Ligus keys**: model API keys, MCP tokens,
    `LIGUS_WS_SECRET_*` values, the `gh` login of a serve box, Git
    credentials.
@@ -113,22 +114,24 @@ can act as that device and read everything it could.
 ## Offboarding a person {#offboarding}
 
 1. **Admin, People pane → Members → Remove & revoke** on the person. This
-   removes them from the roster and rotates the workspace key, sealed to the
-   remaining members' desktops. The toast says whether the key was rotated
-   ("No relay configured, so the key wasn't rotated" means it wasn't).
+   removes them from the roster and rotates the workspace key, sealed to
+   every remaining member's devices (desktops, `ligus serve` and `ligus
+   worker` boxes). The toast says whether the key was rotated ("No relay
+   configured, so the key wasn't rotated" means it wasn't). Under rules v2
+   your browser asks for a passkey for each of the two events.
 2. If the relay enforces membership, also remove them in **Settings → Team
    sync → Team members** (or the relay roster). That alone doesn't rotate
    the key; step 1 does.
 3. Revoke their relay token ([below](#relay-token)).
 4. If they had access to shared worker or serve boxes, remove their logins
    there and rotate any secrets they could read.
-5. **If the workspace has `ligus serve` or `ligus worker` devices**, the
-   rotation strands them (they keep the old key and can't read new desktop
-   traffic, and what they write stays readable by the removed person). Move
-   to a new workspace.
+5. Headless boxes follow the rotation on their next sync, as long as they
+   published their key-agreement key (they do on start). **Settings →
+   Passkeys & keys** shows the key version; on a box, `ligus sync` logs it.
 6. They can't enroll themselves back: a removed account's self-enrollment is
    refused on every device until an Admin adds them again.
-7. Remember: they keep everything they had already synced.
+7. Remember: they keep everything they had already synced, and every
+   earlier key epoch (old epochs stay readable by design).
 
 ## Move to a new workspace {#move-to-a-new-workspace}
 
@@ -147,9 +150,49 @@ The complete way to cut someone's reading, including on headless devices.
 
 ## Rotate the workspace key {#rotate-workspace-key}
 
-There is no direct rotation command in 2.0. Rotation happens when an Admin
-uses **Remove & revoke**, invites someone by GitHub handle, or opens a DM.
-To rotate for any other reason, [move to a new workspace](#move-to-a-new-workspace).
+1. An Admin opens **Settings → Passkeys & keys → Rotate workspace key**
+   (under rules v2, confirm with a passkey). The new key is sealed to every
+   current member's devices that published a key-agreement key, and to
+   agent host boxes; the rotation is a signed `WorkspaceKeyRotated` event on
+   the config log, one version above the last one.
+2. Every device adopts it from the config log; its body also goes to the
+   relay keyring route so a device whose log is behind can read it sooner.
+   A device seals new events only under the newest **authorized** rotation,
+   never under a key it merely found on the relay.
+3. Check: **Settings → Passkeys & keys** shows the new key version on each
+   desktop; a box's log says `encrypted, key version N`.
+4. If two Admins rotate at the same moment, the one that sorts first wins
+   everywhere; events already sealed under the other key stay readable, and
+   its issuer simply rotates again.
+5. A device that isn't a recipient yet (it joined after the last rotation
+   from an old invite) reads what it can and writes nothing until the next
+   rotation includes it. Invites carry every authorized epoch key, so a
+   fresh invite avoids that.
+
+## Lost a passkey {#lost-passkey}
+
+1. If you have another passkey or your recovery key: **Settings → Passkeys
+   & keys**, register a replacement (confirm with the one you still have),
+   then remove the lost one (an Admin can also remove it for you).
+2. Synced passkeys (iCloud Keychain, Google Password Manager) usually come
+   back with the account; a lost YubiKey doesn't.
+3. Lost every passkey but the recovery key: confirm with the recovery key
+   (enter the 24 words when Ligus asks) and register new passkeys.
+4. Lost everything: another Owner or Admin removes your passkeys (with their
+   own passkey) and you register a new first passkey. **A sole Owner without
+   a recovery key can't make admin changes under rules v2, by design.** That
+   is why Ligus asks for the recovery key before it turns rules v2 on.
+
+## Recovery key {#recovery-key}
+
+- Created in **Settings → Passkeys & keys → Create recovery key**: 24 words
+  (BIP-39), shown once, never stored by Ligus. Write them down; keep them
+  offline.
+- It is an Ed25519 key registered like a passkey and accepted wherever a
+  passkey is. Treat it like a master password: anyone with the words and one
+  of your devices can make admin changes as you.
+- Creating a new one doesn't remove the old one; remove it in the same
+  screen once the new one is written down.
 
 ## Relay token compromised {#relay-token}
 
@@ -170,7 +213,8 @@ Paste the key carefully: since relay v0.2.0 a value that isn't a valid
 Ed25519 public key stops the relay from starting rather than leaving it
 ungated.
 Remove the old seed from **Settings → Team sync → Advanced → Relay issuer
-key** on any desktop that held it.
+key** on any desktop that held it (it lives in the OS secret store, not in
+`settings.json`).
 
 ## `serve.token` leaked {#serve-token}
 

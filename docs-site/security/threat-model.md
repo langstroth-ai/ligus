@@ -28,12 +28,16 @@ A relay operator (or anyone who compromises the relay) **can**:
 
 It **can't** read content, forge a member's events (they are signed, and
 roles are checked by every device), or obtain a workspace key: keys are
-exchanged out of band and rotations are sealed to devices. It can't inject
-plaintext either: a device that holds a workspace key skips any body from the
-relay that isn't sealed. In the tunnel it can't read or alter phone traffic
-(Noise, with the box's key pinned from the QR code). Two gaps remain, both in
-[Known limitations](#known-limitations): key rotations aren't signed, and the
-GitHub-backed routes see the GitHub tokens clients send them.
+exchanged out of band, and rotations are signed events on the config log,
+sealed only to keys devices published there. It can't inject a key: keyring
+rows on the relay are used only to read, never to seal. It can't pin a
+device's sync with a body under an unknown key either (such bodies are
+parked). It can't inject plaintext: a device that holds a workspace key skips
+any body from the relay that isn't sealed. In the tunnel it can't read or
+alter phone traffic (Noise, with the box's key pinned from the QR code). A
+ligus-auth token goes only to the relay the session was signed in for. One
+gap remains (see [Known limitations](#known-limitations)): the GitHub-backed
+routes see the GitHub tokens clients send them.
 
 Each invite carries a fingerprint of the founder's account key, and a device
 pins it when it joins, so a hostile relay can't substitute the founder's key.
@@ -63,9 +67,9 @@ judged by the roster in force when it was made, so a later promotion doesn't
 validate an earlier step and a later demotion doesn't undo one. After removal
 they can't come back: joining needs a single-use invite an Admin issued, and
 a removed account also needs an Admin to re-add it; a removed member's new
-events are refused on every device. After removal with key rotation they can't read new desktop
-traffic (see the headless caveat and the unsigned-rotation gap in
-[Known limitations](#known-limitations)).
+events are refused on every device. After removal with key rotation they can't read new
+traffic on any host, and old-key writes from them are refused (see the
+attachment caveat in [Known limitations](#known-limitations)).
 
 ### Prompt injection and hostile content {#prompt-injection}
 
@@ -134,14 +138,22 @@ Stated plainly, as of 2.0.0. Items marked **(Phase 0, Track B)** or
 **(Phase 0, Track D)** are planned for the rest of the Phase 0 refactor;
 each stays on this list until a release fixes it.
 
-1. **Key seeds are plain files.** **(Phase 0, Track B)** Account and device
-   seeds are raw 32-byte files under `keys/`. They are written `0600` in a `0700` directory (and an
-   older, looser seed is tightened when it is next loaded), but no OS keystore
-   is used: anything running as your OS user can read them, except agent
-   processes, which the OS sandbox keeps out of the data dir.
-2. **`config.toml` and `settings.json` hold the workspace key in clear.**
-   So does a `hivews1:` invite. Treat each like a password. `ligus enroll`
-   writes `config.toml` `0600` and keeps the data dir `0700`.
+1. **Secrets in the OS secret store, with a file fallback.** Account,
+   device and key-agreement seeds, the workspace passphrase and epoch keys,
+   relay and provider tokens and the ligus-auth session live in the OS secret
+   store: on macOS a dedicated keychain file inside the data dir (its unlock
+   password is a login-keychain item that trusts only Ligus), the Secret
+   Service on a Linux desktop, `systemd-creds` on a headless Linux box.
+   `settings.json` and `config.toml` hold only `{"set": true}`
+   placeholders. Where no store works (Windows, a locked or missing
+   keychain, a box without `systemd-creds`) Ligus falls back to `0600` files
+   and says so in **Settings → Passkeys & keys**. Anything running unconfined
+   as your OS user (not an agent, which the sandbox keeps out of the data
+   dir) can still ask the Secret Service or, on macOS, prompt for the unlock
+   item.
+2. **An invite carries keys.** A `hivews1:` code carries the passphrase and
+   every authorized epoch key the inviter holds, so the joiner can read the
+   history. Treat it like a password and send it over a trusted channel.
 3. **Agents run as your OS user, inside a sandbox.** Agent processes run in
    the [OS sandbox](../concepts/security.md#os-sandbox) (Seatbelt on macOS,
    bubblewrap + Landlock + seccomp on Linux), which denies the data dir (key
@@ -152,49 +164,47 @@ each stays on this list until a release fixes it.
    read-only agent turns, while write-capable turns are refused. On Linux a
    protected directory that doesn't exist yet is pinned by an empty
    read-only directory for the turn.
-4. **Some agent output is still signed by its host.** **(Phase 0, Track B)**
-   Hosts now certify a key for each agent bound to them, and that agent's
-   replies and Ligus tool effects are signed with it, judged by the capped
-   Agent tier (never a vote, an apply or an admin change) and retired when
-   the agent moves to another host. A host that can't certify a key (not yet
-   certified in the workspace, or the device-local Home workspace) signs for
-   the agent itself; the Agent tier for such host-signed agent output takes
-   effect with rules version 2. The Ligus tools check the Agent tier before
-   signing either way.
-5. **Key rotation doesn't reach headless devices.** **(Phase 0, Track B)**
-   `ligus serve` and `ligus worker` only know the base (epoch 0) key from the
-   invite; they can't open rotated keys. After a **Remove & revoke**,
-   desktops seal new traffic under the new key, which headless boxes can't
-   read, while anything a headless box writes is still sealed under the old
-   key, which the removed member holds. For a workspace with headless
-   devices, offboard by moving to a new workspace; see
-   [Offboarding](runbooks.md#offboarding).
-6. **Key rotations aren't signed.** **(Phase 0, Track B)** A rotation is a set
-   of sealed copies of the new key with no author signature, and a desktop adopts
-   any rotation on the relay it can open, sealing new events under the
-   highest epoch it holds. Someone who knows your devices' public
-   key-agreement keys (every member sees them, a removed member included) and
-   can write the workspace's keyring on the relay can publish a key they
-   chose, and your desktop's new traffic becomes readable to them. Until this
-   is fixed: gate the relay with tokens, confine tokens to their workspaces
-   (`LIGUS_RELAY_WORKSPACE_SCOPE`, see
-   [Self-hosting a relay](../networking/self-host.md#per-workspace-token-scope)),
-   and after offboarding someone who could reach the relay, prefer
-   [moving to a new workspace](runbooks.md#move-to-a-new-workspace).
-7. **No human presence on admin events.** **(Phase 0, Track B)** Membership
-   and role changes, device revocation, dearth mode, lockdown clears, path
-   zones, workflow definitions, agent host or runtime changes and votes on
-   human-gated items are authorized by signature and role only, so whoever
-   holds a device's keys can make them as that device's person. Passkey
-   assertions over the event, inside the signed stamp, come with Track B
-   (rules version 2).
-8. **Phone approvals need your laptop.** **(Phase 0, Track B)** A `ligus
-   serve` box enrolled as your device signs as you without you being there,
-   so it refuses votes, rejects and lockdown clears from the phone or any
-   bearer caller (`403 presence_required`), and every device's fold drops a
-   vote such a box signs for you. Approve on a device that holds your account
-   key. A box that is its own member votes with its own role. Phone votes
-   return with passkey presence.
+4. **Agent output signed by its host.** Hosts certify a key for each agent
+   bound to them, and that agent's replies and Ligus tool effects are signed
+   with it, judged by the capped Agent tier (never a vote, an apply or an
+   admin change) and retired when the agent moves to another host. A host
+   that can't certify a key (not yet certified, or the device-local Home)
+   signs for the agent itself; under rules version 2 that output, and every
+   effect of the chat's primary runtime (stamped `runtime_effect`), is judged
+   at the Agent tier too. Under rules v1 it is judged by its host's role.
+5. **Attachments and host presence beats use the passphrase key.** Chat
+   events follow signed key rotations on every host, but attachment blobs and
+   the hosts' liveness beats are still sealed under the passphrase-derived
+   key (epoch 0), which a removed member who knew the passphrase keeps.
+   After offboarding someone, treat attachments sent later as readable by
+   them, or [move to a new workspace](runbooks.md#move-to-a-new-workspace).
+6. **Signed rotations rely on what a device folds.** A rotation counts only
+   when an Admin's certified device signed it at the next version on the
+   config log, and a device seals only under such a rotation; junk or
+   unsigned keyring rows on the relay are never used. A device that has no
+   founder pin for a workspace (joined without a pinned invite, such as a DM's
+   second side) adopts no rotation and keeps sealing under the passphrase
+   key. A device that isn't a recipient of the newest rotation doesn't write
+   until the next rotation includes it.
+7. **Presence needs rules v2, and a passkey on every workspace.** Under
+   rules version 2 membership and role changes, device revocation, key
+   rotation, passkey removal, dearth mode, lockdown clears, path zones,
+   workflow definitions, agent host or runtime changes, lowered gates and
+   human-gated votes need a passkey assertion over the event inside its
+   signed stamp, verified on every device. Under rules v1 (the default until
+   an Owner turns v2 on) they need signature and role only. Passkeys are
+   registered per workspace (on its config log). The desktop runs WebAuthn
+   in your browser on `https://ligus.ai/presence`; a compromised page there
+   can't forge a device signature, but it could ask your authenticator to
+   sign a different event during a gesture you started. The desktop checks
+   the returned challenge is its own, and the sheet shows the digest so you
+   can compare it with the page.
+8. **Phone approvals through a box carry your passkey.** A `ligus serve`
+   box enrolled as your device signs as you, so votes, lockdown clears and
+   agent rebinds from the phone go through `presence/prepare` and
+   `presence/commit`: the phone's passkey (Face ID) signs the event's digest
+   and the vote counts as the passkey's account. Without it the box answers
+   `403 presence_required` and every device's fold drops such a vote.
 9. **Some agents still ask for actions in reply text.** Agents with tool use
    get the typed [Ligus tools](../addons/ligus-mcp.md), and the subscription
    CLIs run over [ACP](../addons/acp.md). aider, pi, Hermes, and Codex and
@@ -213,9 +223,8 @@ each stays on this list until a release fixes it.
     answers or its timeout passes (at most an hour; 10 minutes for permission
     requests). Stop the turn to release it. A restart cancels it; questions
     can't be resumed in 2.0.
-10. **Invite codes carry the base key only.** A joiner who arrives with a
-    `hivews1:` code after a rotation needs the rotation sealed to their
-    devices (inviting by GitHub handle does this).
+10. **Sign counters aren't checked.** Synced passkeys report a signature
+    counter of 0, so Ligus doesn't use it to detect cloned authenticators.
 11. **No account-key rotation.** The core supports rotating an account key,
     but nothing in the app or CLI exposes it. A leaked account key means a new
     account.
@@ -237,10 +246,11 @@ each stays on this list until a release fixes it.
 17. **One `serve.token` for every direct-path client.** Revoking one direct
     phone means rotating it for all. Tunnel phones are revoked one by one.
 18. **Revoking a device doesn't rotate the key.** A revoked device's new
-    events are refused, but it still holds every key it had. Rotation happens
-    only through **Remove & revoke** on a member (and a few invite paths); for
-    your own lost device, move to a new workspace. See
-    [Runbooks](runbooks.md#compromised-device).
+    events are refused, but it still holds every key it had until an Admin
+    rotates ([Rotate the workspace key](runbooks.md#rotate-workspace-key)).
+    A removed member who writes with an old key is refused once a device
+    knows of the removal; an event already accepted before that stays (the
+    choice of what was accepted depends on arrival, like revocation).
 19. **Pre-encryption history isn't shown.** A device with a workspace key
     never applies a plaintext body from the relay, so events a workspace
     stored on a relay before it had a key don't appear on devices that sync
@@ -292,7 +302,16 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 | Host | Agents could read the data dir (keys, settings, `serve.token`) and reach the network directly | Agent processes run in the OS sandbox with a per-turn egress proxy and an allow-listed environment |
 | Host | The tool role gate only held on headless hosts and read today's roster | One author gate on every host, at the author's role when the message was posted |
 | Host | Repository-supplied runtimes and MCP servers ran on clone | Inert until enabled on this device by digest |
-| Host | Votes through an owner-enrolled serve box counted as the owner's | The box refuses them (`403 presence_required`) and every device's fold drops them |
+| Host | Votes through an owner-enrolled serve box counted as the owner's | They count only with the owner's passkey over the vote (`presence/prepare`, `presence/commit`); without it the box answers `403 presence_required` and every fold drops them |
+| Keys (Track B) | Key rotations were unsigned; a desktop sealed under any key it could open from the relay, so a removed member or an outsider who knew device keys could inject one | Rotations are signed `WorkspaceKeyRotated` events (Admin, next version, key commitment) sealed only to keys devices published on the config log; devices seal only under the newest authorized rotation |
+| Keys (Track B) | `ligus serve`, `ligus worker` and the CLI stayed on epoch 0 | One keyring for every host: they read and write rotated epochs |
+| Keys (Track B) | An event sealed under an old key was accepted from someone who had already folded the rotation, or from a removed member | Refused by every fold (sealed epoch below the one at its author's frontier) and, for non-members, at ingest |
+| Keys (Track B, A-13) | A body sealed under an epoch nobody holds pinned every device's sync cursor | Parked on the device and retried when the keyring changes |
+| Core (A-14) | A frontier naming a config event nobody will deliver held its proposal's side effects forever | Holds end once the config log passes the claimed position (or it is far ahead) |
+| Secrets (Track B) | Seeds and `settings.json` secrets were plain files readable by anything running as the user | OS secret store (a dedicated macOS keychain in the data dir, Secret Service, `systemd-creds`); files keep `{"set": true}` placeholders |
+| Secrets (C-11) | A subscription CLI agent keeps login-keychain access and could ask for items that trust `/usr/bin/security` | Ligus's items are in their own keychain file under the data dir, which every agent sandbox denies |
+| Presence (Track B) | No human presence on admin events | Rules v2: passkey assertions over the event digest inside the signed stamp, verified offline on every device |
+| Relay (E-5) | The ligus-auth access token was sent to any configured relay, an invite's included | Only to the relay origin its session was signed in for |
 | Host (C-9) | An agent could write hooks or MCP servers into `~/.claude`, `~/.codex` and the other CLIs' config, which ran unsandboxed on the user's next CLI start | CLI agents run with a per-turn home seeded with the top-level config files; their real config dirs aren't writable, and only refreshed sign-in files are copied back ([details](../addons/acp.md#cli-home)) |
 | Host (C-13) | A macOS agent could drive other apps with Apple Events or read the pasteboard | The Seatbelt profile denies Apple Events and the pasteboard services |
 | Host (C-14) | A runtime's trust digest didn't cover its provider id or metrics endpoint | It covers both, and a non-default driver |
@@ -308,9 +327,9 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 ### Open {#findings-open}
 
 These are in [Known limitations](#known-limitations) and stay there until a
-release fixes them: headless devices stuck at key epoch 0, unsigned key
-rotations, no human presence on admin events, phone approvals through an
-owner-enrolled serve box (refused until passkey presence) and the Agent
-tier for host-signed agent output (all Track B). On Kubernetes, DNS tunnelling through the
-cluster resolver remains possible (see
+release fixes them: attachments and host liveness beats on the passphrase key,
+rules v1 as the default (presence only once an Owner turns rules v2 on),
+devices without a founder pin keeping the passphrase key, and ingest-time
+decisions that depend on arrival order. On Kubernetes, DNS tunnelling through
+the cluster resolver remains possible (see
 [Kubernetes](../deploy/kubernetes.md#residual-risks)).

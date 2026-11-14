@@ -60,16 +60,30 @@ through their own events.
 
 ## Key storage
 
-Ligus stores private key seeds as raw files in the `keys/` subdirectory of
-its data directory (`ai.ligus.desktop` for the desktop, `LIGUS_DATA_DIR` for
-the CLI), owner-only: each seed is `0600` and `keys/` is `0700`, and a seed
-written by an older version is tightened when it is next loaded. Other local
-users can't read them, but anything running as your OS user can, agents
-included. Protect them with your OS account and disk encryption; anyone who
-can read these files can act as your device. An OS-keystore-backed vault
-(macOS Keychain / Windows Credential Manager / Secret Service) is a
-planned drop-in behind the same interface but is **not** what ships
-today, so don't assume OS-keystore protection.
+Ligus keeps private key seeds, and every other secret it holds, in the OS
+secret store:
+
+| Where | Backend |
+|---|---|
+| macOS (desktop and CLI) | a dedicated keychain file, `secrets/ligus.keychain-db` in the data dir, unlocked by a random password kept in your login keychain (an item only the Ligus binary can read without a prompt) |
+| Linux desktop | the Secret Service of your session (GNOME Keyring, KWallet, KeePassXC), through `secret-tool` |
+| Headless Linux (`ligus serve`, `ligus worker`) | `systemd-creds` (TPM2 when present, else the host key), credential files under `credentials/` in the data dir |
+| Kubernetes | Secret files mounted at `LIGUS_SECRETS_DIR`; anything not provisioned there falls back to files |
+| Anywhere else | owner-only files (`keys/*.seed` and `secrets/`, `0600` in `0700` dirs), with a warning in Settings |
+
+`LIGUS_SECRET_BACKEND` (`keychain`, `secret-service`, `systemd-creds`, `k8s`,
+`file`) picks one. `settings.json`, `config.toml` and the ligus-auth session
+file hold `{"set": true}` where a secret was; a plaintext secret found in one
+is removed, not imported (2.0 starts from scratch; enter it again).
+
+Agents can't reach the store: the data dir (keychain file included) is
+denied to every agent process by the OS sandbox, even to subscription CLIs
+that keep login-keychain access, and the session bus never reaches an agent.
+
+!!! warning "Backups on macOS"
+    A backup of the data dir includes the Ligus keychain file but not its
+    unlock password, which stays in your login keychain. Restoring on another
+    Mac needs that login keychain too (or start that Mac as a new device).
 
 ## Direct peer-to-peer links
 

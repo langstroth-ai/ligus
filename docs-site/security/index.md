@@ -19,16 +19,23 @@ described in
 
 | Component | Secrets it holds | Data it holds | Talks to |
 |---|---|---|---|
-| **Desktop app** | account key seed and device key seed (`keys/`), every workspace key (`settings.json`), an X25519 key-agreement seed for receiving rotated keys, API keys and MCP tokens you paste, GitHub token, relay access tokens, the relay issuer key if you set one | `hive.db`: every event of every workspace it belongs to, in clear | relay, peers (P2P), model providers, MCP servers, GitHub |
-| **`ligus serve`** | its device key, the workspace key (`config.toml`), `serve.token`, tunnel host keys, per-phone push keys, `LIGUS_WS_SECRET_*` and MCP tokens from its environment, the host's `gh` login | `hive.db`, checkouts under `LIGUS_REPOS_DIR` | relay, phones, model providers, MCP servers, GitHub |
-| **`ligus worker`** | its device key, the workspace key, `LIGUS_WS_SECRET_*` and MCP tokens | `hive.db`, bound checkouts | relay, model providers, MCP servers |
+| **Desktop app** | in the OS secret store: account and device key seeds, an X25519 key-agreement seed for receiving rotated keys, every workspace passphrase and delivered epoch key, API keys and MCP tokens you paste, GitHub token, relay access tokens, the relay issuer key if you set one | `hive.db`: every event of every workspace it belongs to, in clear | relay, peers (P2P), model providers, MCP servers, GitHub |
+| **`ligus serve`** | in the OS secret store: its device and key-agreement keys, the workspace passphrase and epoch keys, the relay token; on disk: `serve.token`, tunnel host keys, per-phone push keys, `LIGUS_WS_SECRET_*` and MCP tokens from its environment, the host's `gh` login | `hive.db`, checkouts under `LIGUS_REPOS_DIR` | relay, phones, model providers, MCP servers, GitHub |
+| **`ligus worker`** | in the OS secret store: its device and key-agreement keys, the workspace passphrase and epoch keys; `LIGUS_WS_SECRET_*` and MCP tokens | `hive.db`, bound checkouts | relay, model providers, MCP servers |
 | **Relay** | token-issuer **public** key, hashed access tokens, APNs key (if push), DB password | ciphertext envelopes, keyring blobs, metadata (see [Self-hosting a relay](../networking/self-host.md#what-the-relay-holds)) | every device, Apple (APNs), GitHub API |
 | **Phone app** | the direct-path bearer token and/or its tunnel credential, Noise key and push key, per host profile, in the iOS Keychain | what it has fetched and cached | `ligus serve` (directly or through the relay) |
 | **Model providers, MCP servers** | | whatever a turn sends them: prompts, chat history, and file contents when file tools or a CLI agent read them | |
 
-The desktop and the CLI store private key seeds as plain files, owner-only
-(`0600` in a `0700` directory); see
-[Key storage](../concepts/identity.md#key-storage) and
+The desktop and the CLI keep their secrets in the OS secret store (Phase 0,
+Track B): on macOS a dedicated keychain file inside the data dir, unlocked by
+a login-keychain item only Ligus can read; the Secret Service on a Linux
+desktop; `systemd-creds` on a headless Linux box; mounted Secrets on
+Kubernetes; owner-only `0600` files as a fallback, with a warning.
+`settings.json` and `config.toml` keep `{"set": true}` placeholders. Agents
+can't reach any of it: the data dir, keychain file included, is denied to
+every agent sandbox, even to subscription CLIs that keep login-keychain
+access. `LIGUS_SECRET_BACKEND` (`keychain`, `secret-service`,
+`systemd-creds`, `k8s`, `file`) picks the backend on a device. See
 [known limitations](threat-model.md#known-limitations).
 
 ## Encryption {#encryption}
@@ -38,10 +45,18 @@ The desktop and the CLI store private key seeds as plain files, owner-only
   they leave the device. Sync refuses to push without a key, and a device
   that holds a key never applies an unsealed body from the relay.
 - **The workspace key** starts as a passphrase in the `hivews1:` invite
-  (epoch 0). Rotations (epochs 1, 2, …) are sealed to each remaining device's
-  X25519 key-agreement key and published through the relay; a device seals
-  new events under the highest epoch it holds and opens each event with that
-  event's own epoch.
+  (epoch 0). A rotation (epoch 1, 2, …) is a signed `WorkspaceKeyRotated`
+  event on the workspace config log: an Admin's certified device issues it at
+  exactly the next version, with a commitment to the new key
+  (`ligus-workspace-key-commit-v1`), sealed to the X25519 key-agreement keys
+  each member's devices published themselves on the config log (never a
+  relay directory entry). Every host (desktop, `ligus serve`, `ligus worker`,
+  the CLI) builds the same keyring: it seals new events only under the
+  newest **authorized** rotation, stamping the key id on each body, and
+  reads with every key it can open. Old epochs stay readable. An event
+  sealed under an older epoch than its author had folded is refused, and so
+  is an old-key write from someone no longer a member. Invites carry every
+  authorized epoch key, so newcomers read the history.
 - **Phone to box**: direct path is plain HTTP with a bearer token, so keep it
   on loopback, LAN or a VPN such as Tailscale (which encrypts). Tunnel path
   is a Noise IK session (`Noise_IK_25519_ChaChaPoly_SHA256`) end to end
@@ -137,16 +152,62 @@ it names.
   the network except through a per-chat allow-list. See [the OS
   sandbox](../concepts/security.md#os-sandbox).
 - **Phone and serve approvals.** A `ligus serve` box enrolled as your device
-  signs as you, so until passkey presence lands it refuses votes, rejects and
-  lockdown clears from the phone or any bearer caller (`403
-  presence_required`), and every device's fold drops a vote such a box signs
-  for you: approve on your laptop.
+  signs as you, so a vote, reject, lockdown clear or agent rebind from the
+  phone carries **your passkey** over that event (`POST v1/presence/prepare`,
+  then `v1/presence/commit`): the vote counts as the passkey's account. A
+  plain request gets `403 presence_required`, and every device's fold drops
+  a vote such a box signs without your passkey.
 - **Agents** sign with their own host-certified keys, judged by a capped
   Agent tier that never votes, applies or administers. They act through the
   [Ligus tools](../addons/ligus-mcp.md): proposals only, behind a per-turn
   credential, with budgets and an audit trail. A host that can't certify a
   key signs for the agent (see
   [Known limitations](threat-model.md#known-limitations)).
+
+## Passkey presence {#presence}
+
+Signatures prove which device made an event, not that its person was there.
+Under **workspace rules v2** (Settings → Passkeys & keys → Turn on rules v2,
+an Owner's call, after registering a passkey and a recovery key) the events
+that change who can do what need a **passkey** assertion over the event:
+
+| Category | Events |
+|---|---|
+| Membership and roles | adding someone else, removing, changing a role, join approvals |
+| Devices | revoking a device (your own included) |
+| Keys | key rotation, removing a passkey, account key rotation |
+| Guards | dearth mode, clearing a lockdown |
+| Zones | path zones and the home beacon |
+| Workflows | workflow definitions; votes on a proposal that carries a workflow |
+| Agents and runtimes | an agent's host or runtime changing, removing an agent, workspace runtimes, someone else's host |
+| Gates | tuning a proposal set, lowering a proposal's approvals or role floor, the rules version |
+| Human-gated decisions | votes on a human-gated proposal (lockdown, dearth over brood paths), a person deciding a proposal set, applying a human-gated proposal |
+
+- **What is signed.** The WebAuthn challenge is SHA-256 of
+  `ligus-presence-v1\0`, the workspace, chat and event ids, the event's
+  position, its exact payload bytes, its config frontier and its author's
+  account. The assertion rides inside the actor stamp, which the device
+  signature covers, so it can't be stripped, moved or replayed onto another
+  event.
+- **Verified everywhere, offline.** Every device checks it while folding:
+  relying party `ligus.ai`, user presence **and** user verification, origin
+  `https://ligus.ai`, a passkey registered to the event's author on the
+  config log at that position, ES256 or EdDSA. Signature counters aren't
+  used (synced passkeys report 0).
+- **Any passkey.** Touch ID and iCloud Keychain, Windows Hello, Google
+  Password Manager, phones over QR, YubiKeys. Secure Enclave-only keys aren't
+  required. The desktop runs the ceremony in your browser on
+  `https://ligus.ai/presence` and checks the result is for its own challenge;
+  the iPhone app uses `ASAuthorization` directly.
+- **Registration.** A passkey is registered per workspace on its config log.
+  The account's first proves itself (its own assertion over the
+  registration); every later one needs an existing passkey. Keep at least
+  two, plus the **recovery key**: 24 words, an Ed25519 key accepted wherever
+  a passkey is (`ligus-recovery-v1`). See [Lost a
+  passkey](runbooks.md#lost-passkey).
+- **Agents never satisfy presence.** Under rules v2, host-signed agent output
+  and every effect of a chat's primary runtime are judged at the Agent tier,
+  which can't vote or administer.
 
 ## The 2.0 guards {#guards}
 
@@ -234,13 +295,11 @@ list with status is in
   runtimes and MCP servers are inert until trusted on the device; the author
   gate applies on every host at the author's role when they posted. Turn
   measurements are device-local facts.
-- [Phone and serve approvals](#roles): a delegated serve box refuses votes,
-  rejects and lockdown clears, and folds drop its votes.
+- [Phone and serve approvals](#roles): a delegated serve box's votes count
+  only with the owner's passkey over them.
+- [Signed key rotations](#encryption) and one keyring on every host;
+  [secrets in the OS secret store](#components); [passkey presence](#presence)
+  under rules v2.
 - Organization sign-in: [ligus-auth](../deploy/ligus-auth.md) issues
   short-lived relay tokens from your identity provider.
-- Still open and listed in
-  [Known limitations](threat-model.md#known-limitations) until the rest of
-  Phase 0 fixes them: signed key rotations, the keyring on headless devices,
-  keys in an OS keystore, passkey presence on admin events and phone votes,
-  and hosts issuing agent keys (Track B); typed agent tools and the ACP
-  driver (Track D).
+- Still open: see [Known limitations](threat-model.md#known-limitations).

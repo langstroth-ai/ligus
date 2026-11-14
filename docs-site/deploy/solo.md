@@ -66,16 +66,17 @@ and [Git integration](../features/git.md).
 - **Back up** the app data dir and your repositories. The data dir holds
   your keys and every chat; see
   [Backups and restore](../ops/operations.md#backups-and-restore).
-- Private keys are files under `keys/` in the data dir. Use full-disk
-  encryption; see [Key storage](../concepts/identity.md#key-storage).
+- Private keys and tokens are in the OS secret store (a Ligus keychain on
+  macOS); see [Key storage](../concepts/identity.md#key-storage). Use
+  full-disk encryption anyway.
 
 ## Where things live
 
 | What | Where |
 |---|---|
 | Events, chats, proposals | `hive.db` in the app data dir |
-| Identity and keys | `identity.json`, `keys/` in the app data dir |
-| Settings, API keys | `settings.json` in the app data dir |
+| Identity and keys | `identity.json` in the app data dir; private keys in the OS secret store |
+| Settings | `settings.json` in the app data dir (API keys and tokens in the OS secret store) |
 | Per-chat worktrees, interrupted-turn patches | `<repo>/.ligus/` |
 | Logs | the OS log dir for `ai.ligus.desktop`, file `hive.log.<date>` |
 

@@ -129,14 +129,22 @@ ligus serve enroll --new-device
 - **HOME is not the data dir.** Agent CLIs keep their logins under `$HOME`;
   run the service with a `HOME` outside `LIGUS_DATA_DIR` (the container image
   and chart use `/home/ligus`), because the data dir is unreadable to them.
-- **Votes from the phone need you present.** A box enrolled as your device
-  signs as you. Until passkey presence lands, it refuses approve, reject and
-  lockdown clear from the phone or any bearer caller with `403
-  {"error":"presence_required","hint":"approve on your laptop, or confirm with a passkey after updating"}`,
-  and records one fact per refusal. Every device's fold drops a vote such a
-  box signs for you anyway, so a modified box can't get one counted. Approve
-  on your laptop. A box that is its own member is unaffected: its votes are
-  its own.
+- **Votes from the phone carry your passkey.** A box enrolled as your device
+  signs as you. A plain approve, reject, lockdown clear or agent rebind from
+  the phone or any bearer caller gets `403 {"error":"presence_required",…}`
+  and one fact per refusal. The phone instead calls `POST
+  /v1/presence/prepare`, signs the returned digest with your passkey (Face
+  ID), and `POST /v1/presence/commit` appends the event with the assertion
+  inside its signed stamp. Every device's fold counts the vote as the
+  passkey's account and drops one without it. Register the passkey on your
+  desktop first (**Settings → Passkeys & keys**); an iCloud Keychain passkey
+  syncs to the iPhone. A box that is its own member is unaffected: its votes
+  are its own.
+- **Keys follow rotations.** On start the box publishes its key-agreement
+  key on the workspace config log, so the next rotation is sealed to it; it
+  reads and writes at the newest key version. Its secrets (device keys,
+  passphrase, relay token) are in `systemd-creds` or your keychain, not in
+  `config.toml`.
 
 ## Host liveness
 
@@ -177,7 +185,7 @@ the current holder and epoch, along with dearth mode and locked chats. See
 |---|---|
 | `GET /v1/proposal-sets`, `GET /v1/proposal-sets/{id}`, `GET /v1/chats/{id}/proposal-sets` | Proposal sets with standings, posted assessments and pre-flight results (read-only; votes use the proposal routes) |
 | `GET /v1/guards` | Dearth mode, locked chats, the coordinator, and whether this box's identity may clear a lockdown |
-| `POST /v1/chats/{id}/lockdown/clear` | Clear a chat's lockdown as this box's identity: a human member at Contributor or above only (by member record and folded role), through the desktop's signed event. On a box enrolled as your device: `403 presence_required` |
+| `POST /v1/chats/{id}/lockdown/clear` | Clear a chat's lockdown as this box's identity: a human member at Contributor or above only (by member record and folded role), through the desktop's signed event. On a box enrolled as your device: `403 presence_required`; confirm through `/v1/presence/prepare` and `/v1/presence/commit` |
 | `GET /v1/flow` | Board, review queue and alert, marks, routing summary |
 | `GET /v1/chats/{id}/handoffs` | A chat's hand-off cards |
 

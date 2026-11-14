@@ -57,9 +57,10 @@ any events it hadn't synced yet.
 | File | Desktop | CLI (`serve`/`worker`) | Contains |
 |---|---|---|---|
 | `hive.db` (+ `-wal`, `-shm`) | yes | yes | all events (SQLite, WAL mode) |
-| `identity.json`, `keys/` | yes | yes | identity and **private key seeds** |
-| `settings.json` | yes | | settings, workspace keys, API keys, tokens |
-| `config.toml` | | yes | relay URL, room, **workspace key**, relay token |
+| `identity.json` | yes | yes | public identity |
+| `secrets/` (`ligus.keychain-db` on macOS), `credentials/` (systemd-creds), or `keys/` (file fallback) | yes | yes | **private key seeds**, workspace keys, API keys and tokens (see [Key storage](../concepts/identity.md#key-storage)) |
+| `settings.json` | yes | | settings; secrets only as `{"set": true}` |
+| `config.toml` | | yes | relay URL and room (the workspace key and relay token are in the secret store) |
 | `serve.token`, `serve-state.json` | | serve | direct-path token, read marks |
 | `tunnel/` | | serve | host keys, paired phones, relay settings |
 | `repo-bindings.toml`, `repos/` | | serve/worker | bound checkouts |
