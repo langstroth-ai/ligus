@@ -1299,11 +1299,35 @@ fn resolve_workspace_target(root: &str, path: &str) -> Result<(PathBuf, PathBuf)
 /// not-yet-existing tail. So a target that doesn't exist still resolves symlinks
 /// (and `.`) in its existing prefix, giving an absolute path safe to range-check.
 fn resolve_existing_ancestor(path: &std::path::Path) -> PathBuf {
+    resolve_existing_ancestor_depth(path, 0)
+}
+
+fn resolve_existing_ancestor_depth(path: &std::path::Path, depth: u32) -> PathBuf {
     let mut existing = path.to_path_buf();
     let mut tail: Vec<std::ffi::OsString> = Vec::new();
     loop {
         if existing.exists() {
             let mut base = dunce::canonicalize(&existing).unwrap_or_else(|_| existing.clone());
+            for comp in tail.iter().rev() {
+                base.push(comp);
+            }
+            return base;
+        }
+        // A dangling symlink doesn't "exist", but a write or create_dir
+        // through it lands at its target: resolve where it points instead of
+        // treating it as a not-yet-existing name.
+        if std::fs::symlink_metadata(&existing).is_ok_and(|m| m.file_type().is_symlink()) {
+            let Ok(link) = std::fs::read_link(&existing) else { return path.to_path_buf() };
+            let target = match existing.parent() {
+                Some(dir) if link.is_relative() => dir.join(link),
+                _ => link,
+            };
+            if depth >= 32 {
+                // A link loop: resolve to the raw target, which fails the range check
+                // unless it is inside the root.
+                return target;
+            }
+            let mut base = resolve_existing_ancestor_depth(&target, depth + 1);
             for comp in tail.iter().rev() {
                 base.push(comp);
             }
@@ -16304,6 +16328,25 @@ mod editor_fs_tests {
         assert!(resolve_workspace_target(&tmp.root(), "a/../../secret.txt").is_err());
         // An absolute path outside the root is rejected by the range check.
         assert!(resolve_workspace_target(&tmp.root(), "/etc/passwd").is_err());
+    }
+
+    /// A repo can ship a dangling symlink (`evil -> ~/Library/LaunchAgents/x`).
+    /// It doesn't "exist", but writing through it lands outside the root.
+    #[cfg(unix)]
+    #[test]
+    fn dangling_symlinks_out_of_the_root_are_rejected() {
+        let tmp = TmpDir::new();
+        let outside = TmpDir::new();
+        let target = outside.0.join("not-yet.plist");
+        std::os::unix::fs::symlink(&target, tmp.0.join("evil")).unwrap();
+        std::os::unix::fs::symlink(outside.0.join("missing-dir"), tmp.0.join("evil-dir")).unwrap();
+        assert!(resolve_workspace_target(&tmp.root(), "evil").is_err(), "dangling file link");
+        assert!(resolve_workspace_target(&tmp.root(), "evil-dir/x.txt").is_err(), "dangling dir link");
+        // A dangling link that stays inside the root is still fine.
+        std::os::unix::fs::symlink(tmp.0.join("later.txt"), tmp.0.join("inside")).unwrap();
+        let (root, t) = resolve_workspace_target(&tmp.root(), "inside").unwrap();
+        assert!(is_within(&root, &t));
+        assert!(!target.exists());
     }
 
     #[test]
