@@ -138,8 +138,8 @@ export function SecuritySection() {
       </Section>
       <Section title="Workspace key">
         <p className="text-xs text-ink-soft">
-          Rotating seals a new key to every current member's devices and bound hosts. Removed members can't read
-          anything sent after it.
+          Rotating seals a new key to every current member's devices, including the serve and worker boxes enrolled
+          for them. Removed members can't read messages or attachments sent after it.
         </p>
         <div className="text-sm">Key version: {st?.keyVersion ?? "…"}</div>
         <Button disabled={rotate.isPending} onClick={() => rotate.mutate()}>
