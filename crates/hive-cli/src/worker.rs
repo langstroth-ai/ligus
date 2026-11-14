@@ -445,6 +445,7 @@ async fn run_turn(
     let mut tool_settings = ctx.settings.clone();
     tool_settings.run_command &= enforcement.allow_run_command;
     tool_settings.mcp_egress = envelope.egress.clone();
+    tool_settings.protected_dirs = envelope.protected_dirs.clone();
 
     // The checkout this chat is bound to on this box (see `repos.rs`).
     let repo_root = RepoBindings::load(&ctx.cfg.data_dir).resolve(&repos_dir(&ctx.cfg.data_dir), s.id);

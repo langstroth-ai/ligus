@@ -8025,7 +8025,8 @@ async fn run_prepared_turn_inner(
             lazy_worktree.is_some(),
             builtin_write_in_place,
             builtin_run_command,
-        );
+        )
+        .with_protected_dirs(&envelope.protected_dirs);
         let made = match &lazy_worktree {
             Some(lazy) => hive_runtime::BuiltinTools::lazy(policy, lazy.clone(), builtin_write_in_place),
             None => hive_runtime::BuiltinTools::new(policy),

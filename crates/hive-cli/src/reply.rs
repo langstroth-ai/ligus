@@ -109,6 +109,8 @@ pub struct ToolSettings {
     /// The turn's sandbox-envelope egress policy: which MCP servers it may
     /// reach (open by default; narrowed per turn by dearth mode or a lockdown).
     pub mcp_egress: hive_core::sandbox::EgressPolicy,
+    /// The envelope's protected directories: writes never land in them.
+    pub protected_dirs: Vec<String>,
 }
 
 impl Default for ToolSettings {
@@ -119,6 +121,7 @@ impl Default for ToolSettings {
             allow_remote_file_tools: false,
             mcp_after_reads: false,
             mcp_egress: hive_core::sandbox::EgressPolicy::Open,
+            protected_dirs: hive_core::sandbox::PROTECTED_DIRS.iter().map(|s| s.to_string()).collect(),
         }
     }
 }
@@ -140,6 +143,7 @@ impl ToolSettings {
             allow_remote_file_tools: env_flag("LIGUS_ALLOW_REMOTE_FILE_TOOLS", d.allow_remote_file_tools),
             mcp_after_reads: env_flag("LIGUS_MCP_AFTER_READS", d.mcp_after_reads),
             mcp_egress: d.mcp_egress,
+            protected_dirs: d.protected_dirs,
         }
     }
 }
@@ -260,7 +264,7 @@ async fn tool_loop_turn(
             });
             // isolated = true: writes go to the lazily cut turn worktree, never
             // the checkout (no in-place fallback on a headless host).
-            let policy = builtin_policy(&read_root, true, false, settings.run_command);
+            let policy = builtin_policy(&read_root, true, false, settings.run_command).with_protected_dirs(&settings.protected_dirs);
             match hive_runtime::BuiltinTools::lazy(policy, wt.clone(), false) {
                 Ok(b) => {
                     lazy = Some(wt);
