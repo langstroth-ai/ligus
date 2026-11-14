@@ -134,6 +134,7 @@ mcp:
   servers: []
   # - name: linear
   #   image: registry.example.com/mcp-linear@sha256:...
+  #   allowUnpinned: false        # a tag is refused unless this is set
   #   args: []
   #   port: 8080
   #   env: []                     # list of EnvVar
@@ -165,6 +166,16 @@ sandbox:
   # Egress for agent-turn executors besides DNS: model endpoints, granted MCP
   # Services (list of NetworkPolicyEgressRule). pr-test gets no egress at all.
   egress: []
+  # Init container that holds the executor until its NetworkPolicy is in
+  # force: it waits for a connection to `probe` (host:port that the executor
+  # policy must block but that is reachable without it) to fail, and for
+  # pr-test also for DNS to fail, then exits; after timeoutSeconds it fails the
+  # Job. The default probe is the cluster DNS metrics port, which the policy
+  # never allows. If the probe is unreachable even without policy, the gate
+  # passes at once (pr-test still waits for DNS to be blocked).
+  policyGate:
+    probe: kube-dns.kube-system.svc.cluster.local:9153
+    timeoutSeconds: 60
   # Render a one-shot Job that checks the hardening (no service account
   # token, read-only root, no secrets in env, network as the profile says).
   smokeJob:
@@ -174,7 +185,8 @@ sandbox:
 
 networkPolicy:
   enabled: true
-  # Sources allowed to reach serve:8787. Empty = pods in this namespace only.
+  # Sources allowed to reach serve:8787. Empty = this release's serve, worker,
+  # executor and test pods only (not MCP servers or other pods in the namespace).
   # Add the tailnet proxy or ingress controller here if you expose the API.
   serveIngressFrom: []
   # Restrict serve/worker egress to DNS, the relay and extraEgress. Off by
@@ -184,6 +196,15 @@ networkPolicy:
   # Namespace of the relay, for the egress rule when restrictEgress is on.
   relayNamespace: ""
   extraEgress: []
+  # The cluster DNS resolver. Every policy that allows DNS allows it to these
+  # pods only: port 53 to any address is a direct exfiltration channel.
+  dns:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: kube-system
+    podSelector:
+      matchLabels:
+        k8s-app: kube-dns
 
 serviceAccount:
   create: true

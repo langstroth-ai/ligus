@@ -89,6 +89,7 @@ jobs:
           ! helm template t deploy/helm/ligus --set relayUrl=x --set workspace.generate=true \
               --set sandbox.enabled=true --set sandbox.profile=pr-test 2>/dev/null
           ! helm template t deploy/helm/ligus --set relayUrl=x 2>/dev/null
+          python3 deploy/helm/ligus/ci/security_test.py
       - uses: helm/kind-action@v1
         with:
           cluster_name: ligus-e2e
