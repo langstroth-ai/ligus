@@ -133,7 +133,7 @@ pub async fn add(State(s): S, peer: Option<Extension<TunnelPeer>>, Json(req): Js
     let (kind, flavor) = forge_cmd::parse_kind(&req.kind).map_err(|e| ApiError::bad_request(e.to_string()))?;
     let auth = match req.auth.as_deref().map(str::trim) {
         None | Some("") => {
-            if kind == hive_forge::ForgeKind::GitHub && req.base_url.contains("://github.com") {
+            if kind == hive_forge::ForgeKind::GitHub && hive_forge::conn::validate_base_url(&req.base_url).ok().and_then(|b| hive_forge::spec::host_of(&b)).as_deref() == Some("github.com") {
                 AuthSource::Gh
             } else {
                 AuthSource::None

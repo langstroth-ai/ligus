@@ -3423,3 +3423,16 @@ async fn device_user_code_never_over_plain_http() {
     let (c, _) = status_of(&h, reqwest::Method::POST, "/v1/forges/gitlab:gitlab.com/auth/device", None).await;
     assert_eq!(c, 403, "starting one is refused there too");
 }
+
+/// The gh login is the default only for github.com itself: a look-alike host
+/// that merely contains "://github.com" must not get it (gh answers for
+/// other hosts from GH_ENTERPRISE_TOKEN, which would then go to that host).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn gh_default_only_for_exact_github_com() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    for base in ["https://github.com.evil.example", "https://github.com.evil.example/x"] {
+        let (c, v) = status_of(&h, reqwest::Method::POST, "/v1/forges", Some(json!({"kind": "github", "baseUrl": base}))).await;
+        assert!(c != 200 || v["forge"]["authSource"] != "gh", "{base}: {v}");
+    }
+}
