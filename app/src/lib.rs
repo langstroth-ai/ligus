@@ -757,6 +757,34 @@ mod workspace_invite_tests {
         assert_eq!(back.founder_actor_id, None);
     }
 
+    /// The friend's side of a DM (no key yet) adopts a delivered key only
+    /// from the friend it is a DM with: the inbox accepts invites from anyone,
+    /// and the DM room is derived from two public account ids, so anyone
+    /// could otherwise deliver their own key first and read what this side
+    /// writes.
+    #[test]
+    fn dm_key_is_adopted_only_from_the_dm_friend() {
+        let pending = || WorkspaceConn {
+            name: "ana".into(),
+            relay_url: "x".into(),
+            room: "dm-0123".into(),
+            key: None,
+            icon: None,
+            dm_account: Some("github:7".into()),
+            founder_actor_id: Some("github:7".into()),
+            fk: None,
+            inv: None,
+            ek: Vec::new(),
+        };
+        let delivered = WorkspaceConn { key: Some("mallory-chose-this".into()), dm_account: None, ..pending() };
+        let mut w = pending();
+        assert!(!adopt_dm_key(&mut w, &delivered, "mallory"), "a stranger's invite named the DM room");
+        assert_eq!(w.key, None);
+        assert!(adopt_dm_key(&mut w, &delivered, "Ana"), "the friend's own delivery (login case-insensitive)");
+        assert!(w.key.is_some());
+        assert!(!adopt_dm_key(&mut w, &delivered, "ana"), "only once");
+    }
+
     #[test]
     fn same_room_shares_workspace_id() {
         let a = WorkspaceConn { name: "A".into(), relay_url: "x".into(), room: "shared".into(), key: None, icon: None, dm_account: None, founder_actor_id: None, fk: None, inv: None, ek: Vec::new() };
@@ -13210,9 +13238,7 @@ async fn list_pending_invites(state: State<'_, AppState>) -> Result<Vec<PendingI
             // A joined DM still waiting for its key (the friend's side): adopt
             // the key and epoch keys its owner delivered.
             let mut s = state.settings.lock().unwrap();
-            if let Some(w) = s.workspaces.iter_mut().find(|w| w.room == conn.room && w.key.is_none() && w.dm_account.is_some()) {
-                w.key = conn.key.clone();
-                w.ek = conn.ek.clone();
+            if s.workspaces.iter_mut().any(|w| adopt_dm_key(w, &conn, &from_login)) {
                 save_settings(&state.data_dir, &s);
             }
             continue; // already joined
@@ -13226,6 +13252,28 @@ async fn list_pending_invites(state: State<'_, AppState>) -> Result<Vec<PendingI
         });
     }
     Ok(out)
+}
+
+/// The friend's side of a DM adopts the key (and epoch keys) its owner
+/// delivered through the inbox, once, while it has none, and only from that
+/// friend: the relay stamps the sender's GitHub login on every inbox event,
+/// and a DM workspace is named by its friend's login (`friend_open_dm`).
+/// Anyone can post to an inbox and the DM room is derived from two public
+/// account ids, so without the sender check a stranger's earlier delivery
+/// would choose the key this side seals its messages under. Returns whether
+/// `w` adopted `conn`'s keys.
+fn adopt_dm_key(w: &mut WorkspaceConn, conn: &WorkspaceConn, from_login: &str) -> bool {
+    if w.room != conn.room || w.key.is_some() || w.dm_account.is_none() {
+        return false;
+    }
+    let friend = w.name.trim().trim_start_matches('@');
+    if friend.is_empty() || !friend.eq_ignore_ascii_case(from_login.trim().trim_start_matches('@')) {
+        tracing::warn!(target: "workspace", "ignored a DM key delivered by someone other than the DM's friend");
+        return false;
+    }
+    w.key = conn.key.clone();
+    w.ek = conn.ek.clone();
+    true
 }
 
 /// Accept a pending invite: join the workspace from its code.
