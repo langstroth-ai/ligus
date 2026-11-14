@@ -2672,6 +2672,7 @@ dependencies = [
  "hive-core",
  "hive-forge",
  "hive-proto",
+ "hkdf",
  "iroh",
  "landlock",
  "libc",

@@ -42,6 +42,20 @@ fn random_b64(n: usize) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b)
 }
 
+/// The write key one relay sees: derived from the device's master write key
+/// and the relay's base URL. Every relay sees its key in clear on each call,
+/// so a single shared key would let any one relay read, acknowledge (delete)
+/// or overwrite the same contact on every other relay. The master key never
+/// leaves the device.
+pub fn relay_write_key(master: &str, relay_base: &str) -> String {
+    let relay = relay_base.trim().trim_end_matches('/').to_ascii_lowercase();
+    let hk = hkdf::Hkdf::<sha2::Sha256>::new(None, master.as_bytes());
+    let mut out = [0u8; 32];
+    let info = format!("ligus-contact-write-key-v1\0{relay}");
+    hk.expand(info.as_bytes(), &mut out).expect("32 bytes is a valid HKDF-SHA256 length");
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(out)
+}
+
 /// Whether `s` is a well-formed contact id (base64url of exactly 16 bytes).
 pub fn valid_cid(s: &str) -> bool {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s).is_ok_and(|b| b.len() == 16)
@@ -146,7 +160,8 @@ impl RelayClient {
         first: bool,
     ) -> Result<ContactPutResponse, ContactsError> {
         let url = self.contact_url(cid, "")?;
-        let body = PutBody { record, write_key: first.then_some(write_key) };
+        let write_key = &relay_write_key(write_key, self.base_url());
+        let body = PutBody { record, write_key: first.then_some(write_key.as_str()) };
         let resp = self.authed(self.http_client().put(url)).header(CONTACT_KEY_HEADER, write_key).json(&body).send().await?;
         let code = resp.status().as_u16();
         if !resp.status().is_success() {
@@ -170,6 +185,7 @@ impl RelayClient {
     /// Delete this account's record and its drop box.
     pub async fn contact_delete(&self, cid: &str, write_key: &str) -> Result<(), ContactsError> {
         let url = self.contact_url(cid, "")?;
+        let write_key = relay_write_key(write_key, self.base_url());
         let resp = self.authed(self.http_client().delete(url)).header(CONTACT_KEY_HEADER, write_key).send().await?;
         if !resp.status().is_success() {
             return Err(status_err(resp.status().as_u16(), false));
@@ -192,6 +208,7 @@ impl RelayClient {
     /// Read this account's box past `after` (non-destructive).
     pub async fn contact_drops(&self, cid: &str, write_key: &str, after: u64) -> Result<ContactDropPage, ContactsError> {
         let url = self.contact_url(cid, &format!("/drop?after={after}"))?;
+        let write_key = relay_write_key(write_key, self.base_url());
         let resp = self.authed(self.http_client().get(url)).header(CONTACT_KEY_HEADER, write_key).send().await?;
         if !resp.status().is_success() {
             return Err(status_err(resp.status().as_u16(), false));
@@ -203,6 +220,7 @@ impl RelayClient {
     /// box.
     pub async fn contact_drops_ack(&self, cid: &str, write_key: &str, through: u64) -> Result<(), ContactsError> {
         let url = self.contact_url(cid, &format!("/drop?through={through}"))?;
+        let write_key = relay_write_key(write_key, self.base_url());
         let resp = self.authed(self.http_client().delete(url)).header(CONTACT_KEY_HEADER, write_key).send().await?;
         if !resp.status().is_success() {
             return Err(status_err(resp.status().as_u16(), false));
@@ -501,6 +519,46 @@ mod tests {
         assert_eq!(page.items.len(), 1);
         assert_eq!(page.items[0].seq, 1);
         assert_eq!(stranger.contact_get(&new_cid()).await.unwrap().map(|r| r.record), None);
+    }
+
+    /// The write key is a bearer capability every relay sees in clear on each
+    /// call. One key for every relay would let any one of them read, ack
+    /// (delete) or overwrite the same contact on every other relay. Each relay
+    /// must get its own key, and none of them the master key.
+    #[tokio::test]
+    async fn contact_write_key_is_per_relay() {
+        let mk = || {
+            let s: S = Arc::default();
+            let router = Router::new()
+                .route("/v1/contacts/:cid", put(put_rec).get(get_rec))
+                .route("/v1/contacts/:cid/drop", get(list_drops).post(post_drop))
+                .with_state(s.clone());
+            (s, router)
+        };
+        let ((sa, ra), (sb, rb)) = (mk(), mk());
+        let (a, b) = (spawn(ra).await, spawn(rb).await);
+        let (cid, master) = (new_cid(), new_write_key());
+        let rec = serde_json::json!({ "v": 1, "cid": cid });
+        RelayClient::new(&a).contact_put(&cid, &master, &rec, true).await.unwrap();
+        RelayClient::new(&b).contact_put(&cid, &master, &rec, true).await.unwrap();
+        let ka = sa.lock().unwrap().records[&cid].0.clone();
+        let kb = sb.lock().unwrap().records[&cid].0.clone();
+        assert_ne!(ka, master, "relay A saw the master key");
+        assert_ne!(kb, master, "relay B saw the master key");
+        assert_ne!(ka, kb, "both relays got the same capability");
+        // What relay A saw is useless on relay B.
+        let stolen = RelayClient::new(&b);
+        let raw = reqwest::Client::new()
+            .get(format!("{b}/v1/contacts/{cid}/drop?after=0"))
+            .header(CONTACT_KEY_HEADER, &ka)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(raw.status().as_u16(), 403);
+        // The owner still reads and writes both with the one master key.
+        assert!(RelayClient::new(&a).contact_drops(&cid, &master, 0).await.is_ok());
+        assert!(stolen.contact_drops(&cid, &master, 0).await.is_ok());
+        assert!(RelayClient::new(&b).contact_put(&cid, &master, &rec, false).await.is_ok());
     }
 
     /// S15: a 2.0 client against a relay without the contact routes (v0.2)
