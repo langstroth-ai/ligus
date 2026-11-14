@@ -25,6 +25,8 @@ mod lease_projection_tests;
 mod dearth_tests;
 #[cfg(test)]
 mod lockdown_tests;
+#[cfg(test)]
+mod sec_tests;
 pub mod model_profile;
 pub mod policy;
 pub mod process_util;
