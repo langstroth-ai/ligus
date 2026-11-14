@@ -45,12 +45,12 @@ pub fn requires_presence(event: &SessionEvent, author: &str, roster: &RosterStat
         SessionEvent::WorkspaceRuntimesUpdated { .. }
         | SessionEvent::WorkspaceRuntimeUpserted { .. }
         | SessionEvent::WorkspaceRuntimeRemoved { .. } => true,
-        SessionEvent::WorkspaceHostUpserted { host } => host.owner_actor_id != author,
+        SessionEvent::WorkspaceHostUpserted { host } => host.owner_actor_id != author || foreign_host(fold, &host.id, author),
         SessionEvent::WorkspaceHostRemoved { host_id } => {
             fold.workspace_hosts.iter().any(|h| &h.id == host_id && h.owner_actor_id != author)
         }
         SessionEvent::WorkspaceHostsUpdated { hosts } => {
-            hosts.iter().any(|h| h.owner_actor_id != author)
+            hosts.iter().any(|h| h.owner_actor_id != author || foreign_host(fold, &h.id, author))
                 || fold.workspace_hosts.iter().any(|h| h.owner_actor_id != author && !hosts.iter().any(|n| n.id == h.id))
         }
         // Gates and quorum.
@@ -112,6 +112,12 @@ pub fn requires_presence(event: &SessionEvent, author: &str, roster: &RosterStat
         | SessionEvent::DeviceKeyAgreementPublished { .. }
         | SessionEvent::Unknown => false,
     }
+}
+
+/// Whether host `id` exists in the fold and someone other than `author` owns
+/// it (re-owning it under the same id touches it).
+fn foreign_host(fold: &ChatSession, id: &str, author: &str) -> bool {
+    fold.workspace_hosts.iter().any(|h| h.id == id && h.owner_actor_id != author)
 }
 
 fn agent_rebinds(agent: &crate::agent::WorkspaceAgent, fold: &ChatSession) -> bool {

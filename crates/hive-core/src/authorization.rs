@@ -386,6 +386,11 @@ fn hosts_changed<'a>(
     added_or_modified.chain(removed)
 }
 
+/// Whether host `id` exists and someone other than `actor_id` owns it.
+fn owned_by_other(session: &ChatSession, id: &str, actor_id: &str) -> bool {
+    session.workspace_hosts.iter().any(|h| h.id == id && h.owner_actor_id != actor_id)
+}
+
 /// The **self-host allowance** for `WorkspaceHostsUpdated`: a change that only
 /// adds, removes, or modifies hosts the actor *owns* (`owner_actor_id ==
 /// actor_id`) is a self-scoped presence action a non-member may perform — e.g. a
@@ -397,8 +402,10 @@ fn self_host_allowance(
     actor_id: &str,
     session: &ChatSession,
 ) -> Option<AuthzDecision> {
-    let touches_foreign_host =
-        hosts_changed(&session.workspace_hosts, new_hosts).any(|h| h.owner_actor_id != actor_id);
+    // A changed host is foreign when its new owner or its current owner (the
+    // same id re-owned is a takeover, not a self-registration) is someone else.
+    let touches_foreign_host = hosts_changed(&session.workspace_hosts, new_hosts)
+        .any(|h| h.owner_actor_id != actor_id || owned_by_other(session, &h.id, actor_id));
     (!touches_foreign_host).then(|| AuthzDecision::allow_reason(AuthzReason::SelfHost))
 }
 
@@ -424,7 +431,9 @@ pub fn evaluate(
     // (new writes) and the legacy whole-list event (backward-compat).
     match event {
         // A single-host upsert (register/heartbeat) of a host the actor owns.
-        SessionEvent::WorkspaceHostUpserted { host } if host.owner_actor_id == actor_id => {
+        SessionEvent::WorkspaceHostUpserted { host }
+            if host.owner_actor_id == actor_id && !owned_by_other(session, &host.id, actor_id) =>
+        {
             return AuthzDecision::allow_reason(AuthzReason::SelfHost);
         }
         // Removing a host the actor owns — look the current owner up by id. An
@@ -730,6 +739,17 @@ mod tests {
         let d = evaluate(&foreign, "worker", WorkspaceRole::Viewer, &s);
         assert!(!d.allowed);
         assert_eq!(d.reason, AuthzReason::InsufficientRole);
+    }
+
+    #[test]
+    fn non_member_cannot_take_over_a_foreign_host_by_renaming_its_owner() {
+        // The same host id, re-owned by the caller: a takeover, not a
+        // self-registration. Neither form may use the self-host carve-out.
+        let mut s = session_with_members(vec![("owner", WorkspaceRole::Owner)]);
+        s.workspace_hosts = vec![host_owned("box1", "someone-else")];
+        let upsert = SessionEvent::WorkspaceHostUpserted { host: host_owned("box1", "worker") };
+        assert!(!evaluate(&upsert, "worker", WorkspaceRole::Viewer, &s).allowed, "per-item takeover");
+        assert!(!evaluate(&hosts_event(vec![host_owned("box1", "worker")]), "worker", WorkspaceRole::Viewer, &s).allowed, "whole-list takeover");
     }
 
     #[test]

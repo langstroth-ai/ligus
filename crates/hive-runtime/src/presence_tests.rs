@@ -457,3 +457,20 @@ fn removing_a_passkey_needs_presence_under_v2_and_then_it_no_longer_counts() {
     let cfg = workspace_config_session_id(wid);
     assert!(svc.add_member(cfg, wid, member("fay", WorkspaceRole::Viewer)).is_err());
 }
+
+/// Rules v2: touching a host someone else owns needs presence, including
+/// re-owning it under the same id (a takeover looks like a self-owned host).
+#[test]
+fn taking_over_a_foreign_host_needs_presence() {
+    use hive_core::authz::rules::requires_presence;
+    use hive_core::authz::RosterState;
+    let roster = RosterState::default();
+    let mut fold = hive_core::ChatSession::new("c", Uuid::nil(), "x");
+    let mut theirs = hive_core::WorkspaceHost::new("box1", hive_core::HostKind::Worker, "box1");
+    theirs.owner_actor_id = "ana".into();
+    fold.workspace_hosts.push(theirs.clone());
+    let mut mine = theirs.clone();
+    mine.owner_actor_id = "me".into();
+    assert!(requires_presence(&SessionEvent::WorkspaceHostUpserted { host: mine.clone() }, "me", &roster, &fold));
+    assert!(requires_presence(&SessionEvent::WorkspaceHostsUpdated { hosts: vec![mine] }, "me", &roster, &fold));
+}
