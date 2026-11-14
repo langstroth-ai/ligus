@@ -521,3 +521,32 @@ fn digest_short_id_is_64_bits_of_the_challenge() {
     let draft = svc.take_presence_draft().unwrap();
     assert_eq!(draft.request.digest_short, hive_core::keys::hex(&draft.request.challenge[..8]));
 }
+
+/// Under rules v2, leaving v2 (back to v1, or on to a version this build
+/// doesn't know) is itself presence-gated: a device key alone can't switch
+/// presence off.
+#[test]
+fn downgrading_from_v2_needs_presence() {
+    let (mut svc, wid, key, _rec) = on_rules_v2();
+    for v in [1, 0, hive_core::authz::RULES_SUPPORTED + 1] {
+        let err = svc.set_workspace_rules(wid, v).unwrap_err().to_string();
+        assert!(err.contains(hive_core::authz::PRESENCE_REQUIRED), "v{v}: {err}");
+    }
+    // A forged switch back to v1 without presence is denied by the fold.
+    let cfg = workspace_config_session_id(wid);
+    let mut forged = config_log(&svc, wid).into_iter().rev().find(|e| matches!(e.payload, SessionEvent::WorkspaceRulesSet { .. })).unwrap();
+    forged.clear_raw();
+    forged.event_id = Uuid::new_v4();
+    forged.lamport += 100;
+    forged.payload = SessionEvent::WorkspaceRulesSet { version: 1 };
+    forged.actor_stamp.as_mut().unwrap().presence = None;
+    forged.signature = None;
+    svc.sign_for_test(&mut forged);
+    let mut log = config_log(&svc, wid);
+    log.push(forged.clone());
+    assert_eq!(fold_decisions(&log, None, None, WorkspaceAuthz::Unchecked)[&forged.event_id], Verdict::Denied);
+    // With the passkey it goes through.
+    svc.set_presence_provider(Some(Arc::new(Soft(key))));
+    svc.set_workspace_rules(wid, 1).unwrap();
+    let _ = cfg;
+}
