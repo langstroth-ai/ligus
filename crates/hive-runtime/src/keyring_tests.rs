@@ -884,3 +884,149 @@ fn unpinned_device_never_decides_keys() {
     assert_eq!(engine.keyring().authorized_head(), 1);
     let _ = &mut store;
 }
+
+/// Track B residual 3: coordinator and workflow lease beats follow the
+/// keyring like host beats (B-05). They seal under the authorized head, and a
+/// reader takes only beats sealed there, so after a rotation a removed member
+/// still holding the passphrase can't see which device holds a lease.
+#[test]
+fn removed_member_cannot_read_lease_beats_after_rotation() {
+    use crate::lease_presence::{lease_presence_slot, open_lease_beats, seal_lease_beat, LeaseBeat};
+    use hive_core::lease::LeaseScope;
+    let mut w = World::new();
+    w.push("owner", SessionEvent::MemberRemoved { member_id: "mara".into() });
+    w.rotate("owner");
+    let owner = w.engine("owner", &[]);
+    let mara = KeyringEngine::passphrase(w.wid, pass_key());
+    let kp = hive_core::SigningKeypair::generate().unwrap();
+    let pk = kp.public_key_bytes().to_vec();
+    let beat = LeaseBeat {
+        scope: LeaseScope::Workspace,
+        scope_id: w.wid.to_string(),
+        holder: Uuid::new_v4(),
+        epoch: 1,
+        beat: 1,
+        lease_ms: 30_000,
+        at_ms: 1_000,
+        signature: Vec::new(),
+    }
+    .sign(&kp);
+    let slot = lease_presence_slot(LeaseScope::Workspace, &w.wid.to_string());
+    let mut blobs = std::collections::HashMap::new();
+    blobs.insert(slot.clone(), seal_lease_beat(&owner, &beat).unwrap());
+    assert!(open_lease_beats(&blobs, &mara, 5_000, |_| Some(pk.clone())).is_empty(), "mara read a beat sealed after her removal");
+    assert_eq!(open_lease_beats(&blobs, &w.engine("ada", &[]), 5_000, |_| Some(pk.clone())).len(), 1, "a member reads it");
+    // A beat sealed under the passphrase epoch is refused by readers at the head.
+    blobs.insert(slot, seal_lease_beat(&mara, &beat).unwrap());
+    assert!(open_lease_beats(&blobs, &owner, 5_000, |_| Some(pk.clone())).is_empty(), "a beat under an old epoch");
+}
+
+/// Track B residual 4 (B-11): parked bodies are capped per room, and a flood
+/// of junk (an epoch no authorized rotation names) must not evict a real body
+/// sealed under an authorized rotation this device can't open yet: that one
+/// opens as soon as the rotation reaches it.
+#[test]
+fn parked_flood_does_not_evict_pending_rotation_bodies() {
+    let mut w = World::new();
+    w.rotate("owner");
+    let owner = w.engine("owner", &[]);
+    let head = owner.seal_key().unwrap().clone();
+    assert_eq!(head.version, 1);
+    let mut store = crate::EventStore::open_in_memory().unwrap();
+    for env in &w.cfg {
+        store.ingest(env).unwrap();
+    }
+    let founder = &w.people["owner"];
+    let fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&founder.account.public_key_bytes());
+    store.set_workspace_pin(w.wid, &founder.account_id.to_string(), &fk).unwrap();
+    // eve isn't a recipient of the rotation: she knows it's authorized but
+    // can't open it yet.
+    let p = &w.people["eve"];
+    let src = KeySource::for_device(p.device_id, p.ka(), Some(PASSPHRASE), &[]);
+    let room = "ws-b11";
+    let mut engine = crate::SyncEngine::new(crate::RelayClient::new("http://127.0.0.1:9"), room)
+        .with_room_workspace(w.wid)
+        .with_key_source(src);
+    engine.refresh_keyring(&store).unwrap();
+    assert_eq!(engine.keyring().authorized_head(), 1);
+    assert!(engine.keyring().seal_key().is_none(), "eve can't open the rotation");
+
+    let real = seal_symmetric_kid(&head.key, head.version, &head.kid, b"{\"pending\":true}").unwrap();
+    let mut fetched = vec![(1u64, serde_json::to_value(&real).unwrap())];
+    for seq in 2..(crate::event_store::PARKED_KEEP as u64 + 50) {
+        let junk = json!({ "version": 77, "kid": "deadbeefdeadbeef", "nonce": vec![1u8; 12], "ciphertext": vec![2u8; 48] });
+        fetched.push((seq, junk));
+    }
+    engine.apply_fetched(&mut store, &fetched).unwrap();
+    let parked = store.parked_bodies(room).unwrap();
+    assert!(parked.len() as i64 <= crate::event_store::PARKED_KEEP, "the cap holds");
+    assert!(parked.iter().any(|(seq, _)| *seq == 1), "the flood evicted the body waiting for the authorized rotation");
+}
+
+/// World's config log in a store, pinned to its founder (what a member's
+/// device holds).
+fn pinned_store(w: &World) -> crate::EventStore {
+    let mut store = crate::EventStore::open_in_memory().unwrap();
+    for env in &w.cfg {
+        store.ingest(env).unwrap();
+    }
+    let founder = &w.people["owner"];
+    let fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&founder.account.public_key_bytes());
+    store.set_workspace_pin(w.wid, &founder.account_id.to_string(), &fk).unwrap();
+    store
+}
+
+fn directory_device(id: &str, ka: &[u8]) -> crate::relay_client::DirectoryDevice {
+    crate::relay_client::DirectoryDevice { device_id: id.into(), ka_public: hive_core::keys::hex(ka) }
+}
+
+/// Track B residual 7: a directory key counts as verified only when a device
+/// certified for that very account published it, signed, on a config log
+/// this device holds with a founder pin. A key the relay substituted, a key
+/// another account published, and a revoked device's key are not.
+#[test]
+fn directory_keys_verified_only_from_a_certified_devices_publication() {
+    use crate::directory_trust::signed_ka_keys;
+    let mut w = World::new();
+    let ada = w.people["ada"].account_id;
+    let ada_ka = w.people["ada"].ka().public_key_bytes();
+    let mara_ka = w.people["mara"].ka().public_key_bytes();
+    let signed = signed_ka_keys(&pinned_store(&w), ada);
+    assert!(signed.contains(&ada_ka), "ada's own publication");
+    assert!(!signed.contains(&mara_ka), "another account's key");
+    assert!(!signed.contains(&KeyAgreementKeypair::generate().unwrap().public_key_bytes()), "a key nobody published");
+    // An unpinned store decides nothing.
+    let mut unpinned = crate::EventStore::open_in_memory().unwrap();
+    for env in &w.cfg {
+        unpinned.ingest(env).unwrap();
+    }
+    assert!(signed_ka_keys(&unpinned, ada).is_empty(), "keys from an unpinned fold");
+    // Revoked: no longer vouched for.
+    let device = w.people["ada"].device_id;
+    w.push("owner", SessionEvent::DeviceRevoked { device_id: device });
+    assert!(!signed_ka_keys(&pinned_store(&w), ada).contains(&ada_ka), "a revoked device's key");
+}
+
+/// Track B residual 7: an invite or a DM is sealed only to verified devices
+/// when the invitee has any; with none, sealing needs the inviter's explicit
+/// confirmation (the UI's "unverified recipient" warning).
+#[test]
+fn directory_seal_plan_prefers_verified_devices() {
+    use crate::directory_trust::{plan, UNVERIFIED_RECIPIENT};
+    let w = World::new();
+    let ada = w.people["ada"].account_id;
+    let ada_ka = w.people["ada"].ka().public_key_bytes();
+    let relay_ka = KeyAgreementKeypair::generate().unwrap().public_key_bytes();
+    let signed = crate::directory_trust::signed_ka_keys(&pinned_store(&w), ada);
+    let listed = [directory_device("relay-added", &relay_ka), directory_device("ada-desk", &ada_ka), directory_device("bad", b"short")];
+    let p = plan(&listed, &signed, false).unwrap();
+    assert!(p.verified);
+    assert_eq!(p.recipients.iter().map(|r| r.device_id.as_str()).collect::<Vec<_>>(), vec!["ada-desk"], "the relay's extra device is left out");
+    let stranger = [directory_device("relay-added", &relay_ka)];
+    let err = plan(&stranger, &signed, false).unwrap_err();
+    assert!(err.starts_with(UNVERIFIED_RECIPIENT), "{err}");
+    let p = plan(&stranger, &signed, true).unwrap();
+    assert!(!p.verified);
+    assert_eq!(p.recipients.len(), 1, "sealed after the inviter confirmed");
+    assert!(plan(&[], &signed, false).unwrap().recipients.is_empty(), "no devices: nothing to seal, nothing to confirm");
+}

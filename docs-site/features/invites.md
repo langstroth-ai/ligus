@@ -54,9 +54,15 @@ GitHub handle**. Enter someone's `@handle` and Ligus:
 
 1. Looks them up in the relay directory (they must have signed in to
    Ligus with GitHub at least once).
-2. Adds them to the roster keyed by their stable GitHub account id.
-3. **Seals the workspace key to every one of their devices** — so
-   the key never travels in a pasteable code at all.
+2. Checks their devices' keys against what their account signed on a
+   workspace you already share. If none matches (you share no workspace
+   yet), it shows an **Unverified recipient** warning: only the relay
+   vouches for those keys, so a compromised relay could read the workspace.
+   Invite anyway only if you trust the relay, or send a `hivews1:` code over
+   a channel you trust instead.
+3. Adds them to the roster keyed by their stable GitHub account id.
+4. **Seals the workspace key to their devices** (only the verified ones when
+   there are any), so the key never travels in a pasteable code at all.
 
 This is the most secure path: nothing sensitive is copy-pasted, and
 the invitee's laptop and desktop both come online as one member with

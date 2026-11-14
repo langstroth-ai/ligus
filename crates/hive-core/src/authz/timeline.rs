@@ -90,6 +90,11 @@ pub struct RosterState {
     /// Each account's registered passkeys and recovery keys, by credential
     /// id (B3).
     pub passkeys: BTreeMap<Uuid, BTreeMap<String, crate::presence::PasskeyKey>>,
+    /// Accounts without a credential that an Admin's presence-confirmed act
+    /// under rules v2 lets register a first passkey, once (B.4.6): adding
+    /// them as a new member, or re-granting their role after their
+    /// credentials were removed.
+    pub passkey_grants: BTreeSet<Uuid>,
 }
 
 impl RosterState {
@@ -192,6 +197,9 @@ impl RosterTracker {
     /// roster side read back from the fold. Returns whether the state changed.
     pub fn observe(&mut self, env: &SessionEventEnvelope, allowed: bool, fold: &ChatSession) -> bool {
         let before = self.state.clone();
+        if allowed && self.state.rules.min(super::RULES_SUPPORTED) >= 2 {
+            self.note_grant(&env.payload);
+        }
         match &env.payload {
             SessionEvent::AccountKeyRegistered { account_id, signing_public_key } => {
                 match self.account_keys.get(account_id) {
@@ -205,7 +213,9 @@ impl RosterTracker {
                 }
                 self.rebuild_devices(fold);
             }
-            SessionEvent::AccountKeyRotated { account_id, new_signing_public_key, succession_signature } => {
+            // A rotation the log refused (under rules v2, one without the
+            // account's presence) re-pins nothing.
+            SessionEvent::AccountKeyRotated { account_id, new_signing_public_key, succession_signature } if allowed => {
                 match self.account_keys.get(account_id) {
                     Some(k) if k == new_signing_public_key => {}
                     Some(k) => {
@@ -221,7 +231,9 @@ impl RosterTracker {
                 }
                 self.rebuild_devices(fold);
             }
-            SessionEvent::DeviceCertificateAdded { certificate } => {
+            // Only a certificate the log allowed certifies (under rules v2 a
+            // new device of an account with a passkey needs its presence).
+            SessionEvent::DeviceCertificateAdded { certificate } if allowed => {
                 self.certs.push(certificate.clone());
                 let key = (certificate.device_id, certificate.account_id);
                 match env.signer_device_id {
@@ -262,6 +274,7 @@ impl RosterTracker {
                 self.state.ka_keys.insert(*device_id, ka_public.clone());
             }
             SessionEvent::PasskeyRegistered { credential } if allowed => {
+                self.state.passkey_grants.remove(&credential.account_id);
                 self.state
                     .passkeys
                     .entry(credential.account_id)
@@ -280,6 +293,22 @@ impl RosterTracker {
             _ => {}
         }
         self.state != before
+    }
+
+    /// Rules v2 (B.4.6): an allowed act that lets an account without a
+    /// credential register a first passkey. Under rules v2 both need an
+    /// Admin's presence, except a self-enrollment through an invite an Admin
+    /// issued (which itself needed presence when issued under v2). An
+    /// idempotent self re-add of an existing member grants nothing.
+    fn note_grant(&mut self, e: &SessionEvent) {
+        let account = match e {
+            SessionEvent::MemberAdded { member, .. } if !self.state.members.contains_key(&member.id) => member.actor.account_id,
+            SessionEvent::MemberRoleChanged { change } => self.state.members.get(&change.member_id).and_then(|m| m.account_id),
+            _ => None,
+        };
+        if let Some(a) = account.filter(|a| self.state.passkeys.get(a).is_none_or(|m| m.is_empty())) {
+            self.state.passkey_grants.insert(a);
+        }
     }
 
     fn refresh(&mut self, fold: &ChatSession) {

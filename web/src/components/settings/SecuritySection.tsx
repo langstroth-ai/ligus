@@ -2,7 +2,15 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, Section, fieldStyle } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
-import { passkeyRegister, passkeyRemove, recoveryKeyCreate, rotateWorkspaceKey, securityStatus, workspaceRulesSet } from "@/lib/ipc";
+import {
+  deviceConfirm,
+  passkeyRegister,
+  passkeyRemove,
+  recoveryKeyCreate,
+  rotateWorkspaceKey,
+  securityStatus,
+  workspaceRulesSet,
+} from "@/lib/ipc";
 
 /// Passkeys, the recovery key, workspace rules v2 and the workspace key.
 /// Admin actions in a rules-v2 workspace need a passkey confirmation; this is
@@ -46,6 +54,14 @@ export function SecuritySection() {
     },
     onError: (e) => toast.error(errMsg(e)),
   });
+  const confirmDevice = useMutation({
+    mutationFn: deviceConfirm,
+    onSuccess: () => {
+      refresh();
+      toast.success("This device is confirmed.");
+    },
+    onError: (e) => toast.error(errMsg(e)),
+  });
   const rotate = useMutation({
     mutationFn: rotateWorkspaceKey,
     onSuccess: (r) => {
@@ -61,6 +77,17 @@ export function SecuritySection() {
 
   return (
     <>
+      {st && st.rules >= 2 && !st.deviceConfirmed && (
+        <Section title="This device">
+          <p className="text-xs" style={{ color: "var(--hive-warn-ink)" }}>
+            This device isn't confirmed for this workspace yet. Under rules v2 a new device of an account with a
+            passkey counts only after that passkey confirms it; until then other devices don't accept its changes.
+          </p>
+          <Button variant="primary" size="md" disabled={confirmDevice.isPending} onClick={() => confirmDevice.mutate()}>
+            Confirm this device
+          </Button>
+        </Section>
+      )}
       <Section title="Passkeys">
         <p className="text-xs text-ink-soft">
           A passkey confirms that you, not just your device, approved an admin action. Any passkey works: Touch ID
@@ -148,6 +175,13 @@ export function SecuritySection() {
         {st?.secretBackend === "file" && (
           <p className="text-xs" style={{ color: "var(--hive-warn-ink)" }}>
             This device keeps Ligus's secrets in owner-only files, not an OS secret store.
+          </p>
+        )}
+        {st?.secretBackend === "unavailable" && (
+          <p className="text-xs" style={{ color: "var(--hive-danger-ink)" }}>
+            The Ligus keychain isn't available, so Ligus can't save secrets on this device. Ligus won't fall back to
+            plain files on its own: fix the keychain, or start Ligus with LIGUS_SECRET_BACKEND=file to keep them in
+            owner-only files.
           </p>
         )}
       </Section>

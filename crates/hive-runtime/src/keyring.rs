@@ -258,6 +258,19 @@ impl KeyringEngine {
         }
     }
 
+    /// How much a relay body this device can't open is worth keeping while
+    /// parked (A-13, B-11): 2 when it names an authorized rotation (it opens
+    /// as soon as that rotation reaches this device), 1 when it claims an
+    /// epoch past the authorized head (a rotation not folded here yet), 0
+    /// for an epoch no authorized rotation names (junk, or a lost tie).
+    pub fn park_priority(&self, version: u32, kid: Option<&str>) -> u8 {
+        match self.authorized.get(&version) {
+            Some(k) if kid.is_none_or(|kid| kid == k) => 2,
+            _ if version > self.head => 1,
+            _ => 0,
+        }
+    }
+
     /// Every (version, kid) this device can read.
     pub fn readable(&self) -> Vec<(u32, String)> {
         self.read.keys().cloned().collect()

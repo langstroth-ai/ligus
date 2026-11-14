@@ -67,7 +67,7 @@ vote, reject, lockdown clear and agent rebind (see
 
 | Method + path | Request | Notes |
 |---|---|---|
-| `POST /v1/presence/prepare` | `{action: "approve"\|"reject"\|"lockdown_clear"\|"agent_host", target, hostId?}` | drafts the event as the plain endpoint would and writes nothing: `{prepareId, challenge, preview: {kind, summary, digestShort, rpId, allowCredentials, chatTitle?, proposalTitle?, diffDigest?}}`. `challenge` is the base64url event digest the passkey signs (RP `ligus.ai`, user verification required). `prepareId` is single use and lasts 5 minutes. 409 when there is nothing to confirm |
+| `POST /v1/presence/prepare` | `{action: "approve"\|"reject"\|"lockdown_clear"\|"agent_host", target, hostId?}` | drafts the event as the plain endpoint would and writes nothing: `{prepareId, challenge, preview: {kind, summary, digestShort, rpId, allowCredentials, chatTitle?, proposalTitle?, diffDigest?}}`. `challenge` is the base64url event digest the passkey signs (RP `ligus.ai`, user verification required). `digestShort` is the first 16 hex characters (64 bits) of that digest; show it so the person can compare it with the one the passkey page computes from the challenge it signs. `prepareId` is single use and lasts 5 minutes. 409 when there is nothing to confirm |
 | `POST /v1/presence/commit` | `{prepareId, assertion: {credentialId, authenticatorData, clientDataJSON, signature}}` (base64url) | appends the event with the assertion inside its signed stamp: `{committed, kind, eventId}`. 403 when the assertion doesn't verify or the passkey isn't the owner's; 404 for an unknown, expired or used `prepareId` |
 
 ### Proposals

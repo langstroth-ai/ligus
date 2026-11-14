@@ -11,7 +11,8 @@ name: Release (desktop app)
 # Signing is wired but inert until the secrets exist (private beta ships
 # unsigned — see task: "Auto-updater + code signing"):
 #   macOS:   APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
-#            APPLE_API_KEY, APPLE_API_ISSUER, APPLE_API_KEY_PATH  (notarization)
+#            APPLE_API_KEY, APPLE_API_ISSUER, APPLE_API_KEY_PATH  (notarization),
+#            APPLE_TEAM_ID (the keychain unlock item's designated requirement)
 #   updater: TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 #   Windows: Azure Trusted Signing via a signCommand (added later)
 
@@ -96,6 +97,7 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           if [ -z "$APPLE_CERTIFICATE" ]; then
             echo "No APPLE_CERTIFICATE secret — building unsigned."
@@ -111,6 +113,9 @@ jobs:
             echo "APPLE_API_ISSUER=$APPLE_API_ISSUER"
             echo "APPLE_API_KEY=$APPLE_API_KEY"
             echo "APPLE_API_KEY_PATH=$KEY_PATH"
+            # Baked into the app: the keychain unlock item trusts only code
+            # that satisfies Ligus's designated requirement for this team.
+            if [ -n "$APPLE_TEAM_ID" ]; then echo "LIGUS_APPLE_TEAM_ID=$APPLE_TEAM_ID"; fi
           } >> "$GITHUB_ENV"
           echo "macOS signing + notarization configured."
 

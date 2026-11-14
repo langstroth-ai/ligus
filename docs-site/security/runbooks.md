@@ -110,6 +110,12 @@ can act as that device and read everything it could.
 5. A compromised `ligus serve` also held phone credentials:
    `ligus remote reset` on its replacement gives new host keys; pair phones
    again.
+6. Under rules v2, if your account has a passkey, the stolen device can't
+   add a device for you or rotate your account key without that passkey, and
+   if your credentials were cleared it can't register a passkey of its own
+   without an Admin's re-grant. Don't approve a passkey confirmation you
+   didn't start, and remove a passkey that lived only on the stolen device
+   (**Settings → Passkeys & keys**).
 
 ## Offboarding a person {#offboarding}
 
@@ -171,6 +177,16 @@ The complete way to cut someone's reading, including on headless devices.
    rotation includes it. Invites carry every authorized epoch key, so a
    fresh invite avoids that.
 
+## A new device on a rules v2 workspace {#confirm-device}
+
+When your account has a passkey, a new device of yours (a second laptop
+signed in with the same account) doesn't count on a rules v2 workspace until
+that passkey confirms it: other devices don't accept its changes, and it
+gets no new workspace keys. Open **Settings → Passkeys & keys** on it and
+choose **Confirm this device**. Ligus never asks for this on its own in the
+background. A serve box you enroll is confirmed when you approve its
+enrollment on your desktop (also with your passkey).
+
 ## Lost a passkey {#lost-passkey}
 
 1. If you have another passkey or your recovery key: **Settings → Passkeys
@@ -185,10 +201,32 @@ The complete way to cut someone's reading, including on headless devices.
    (they are checked and used on this device only, never stored), then
    register new passkeys.
 4. Lost everything: another Owner (or, for an Admin or below, an Admin)
-   removes your passkeys (with their
-   own passkey) and you register a new first passkey. **A sole Owner without
-   a recovery key can't make admin changes under rules v2, by design.** That
+   removes your passkeys (with their own passkey), then **re-grants** you in
+   the **People** pane (**Allow new passkey**, confirmed with their passkey),
+   and you register a new first passkey. Under rules v2 your device alone
+   can't register one without that grant (so a stolen device can't either),
+   and a grant is good for one registration. **A sole Owner without a
+   recovery key can't make admin changes under rules v2, by design.** That
    is why Ligus asks for the recovery key before it turns rules v2 on.
+5. Never had a passkey on a rules v2 workspace (you were a member before an
+   Owner turned it on): ask an Admin for **Allow new passkey**, then register
+   one. Someone added after the switch can register their first passkey
+   right away.
+
+## The Ligus keychain on macOS {#mac-keychain}
+
+- Ligus's secrets live in `secrets/ligus.keychain-db` in the data dir; its
+  unlock password is a login-keychain item named `ai.ligus.secrets.unlock`
+  whose access list trusts only the Ligus binary.
+- **A development build** (or the CLI) is trusted by its code hash: after
+  each rebuild or upgrade macOS asks once for your login keychain password
+  to let it read the unlock item. Choose **Always Allow**. A release app is
+  trusted by its signature (bundle id and team), so updates don't ask.
+- **If the keychain can't be used**, Ligus won't save secrets and says why in
+  **Settings → Passkeys & keys**. Fix the keychain (unlock it, or remove a
+  stale `ai.ligus.secrets.unlock` item together with the keychain file to
+  start over), or start Ligus with `LIGUS_SECRET_BACKEND=file` to keep its
+  secrets in owner-only files instead.
 
 ## Recovery key {#recovery-key}
 

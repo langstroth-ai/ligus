@@ -3548,7 +3548,7 @@ fn blob_transport(state: &AppState) -> Option<(String, String, hive_runtime::key
 
 /// This device's keyring for `room` (B1), from the pinned config fold: what
 /// blobs and liveness beats seal under and open with.
-fn workspace_ring(state: &AppState, room: &str, conn: Option<&WorkspaceConn>) -> hive_runtime::keyring::KeyringEngine {
+pub(crate) fn workspace_ring(state: &AppState, room: &str, conn: Option<&WorkspaceConn>) -> hive_runtime::keyring::KeyringEngine {
     let src = key_source_for(state, conn);
     let svc = state.service.lock().unwrap();
     hive_runtime::keyring::KeyringEngine::from_store(svc.store(), room_workspace_id(room), &src)
@@ -13083,16 +13083,38 @@ struct InviteResultDto {
     devices: u32,
     /// Whether a workspace key was sealed (false for a plaintext room).
     sealed: bool,
+    /// Whether those devices' keys are ones the invitee's account signed
+    /// (false: only the relay vouched for them and the inviter confirmed).
+    verified: bool,
+}
+
+/// Who an invite or DM code may be sealed to (Track B residual 7): the
+/// directory devices whose keys `account` published, signed, on a config log
+/// this device holds; else, once the inviter confirmed, every listed device.
+fn seal_plan(
+    state: &AppState,
+    account: Uuid,
+    devices: &[hive_runtime::relay_client::DirectoryDevice],
+    confirmed: bool,
+) -> Result<hive_runtime::directory_trust::SealPlan, String> {
+    let signed = {
+        let svc = state.service.lock().unwrap();
+        hive_runtime::directory_trust::signed_ka_keys(svc.store(), account)
+    };
+    hive_runtime::directory_trust::plan(devices, &signed, confirmed)
 }
 
 /// Invite a GitHub user (by handle) to this chat's workspace: add them to the
-/// roster and seal the current workspace key to *all* their devices via the
-/// relay keyring, so any of their machines can read it.
+/// roster and seal the invite code (the workspace key) to their devices. Only
+/// devices whose keys their account signed get it when there are any; when
+/// the relay alone vouches for the keys, this refuses with "unverified
+/// recipient" unless `confirm_unverified` (the UI asks first).
 #[tauri::command]
 async fn invite_by_handle(
     state: State<'_, AppState>,
     session_id: String,
     handle: String,
+    confirm_unverified: Option<bool>,
 ) -> Result<InviteResultDto, String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let relay = configured_relay(&state)?;
@@ -13111,11 +13133,10 @@ async fn invite_by_handle(
             )
         })?;
     let account_id = hive_runtime::github::account_id_for(entry.github_id);
-    let recipients: Vec<(String, Vec<u8>)> = entry
-        .devices
-        .iter()
-        .filter_map(|d| parse_hex32(&d.ka_public).map(|b| (d.device_id.clone(), b.to_vec())))
-        .collect();
+    let plan = seal_plan(&state, account_id, &entry.devices, confirm_unverified.unwrap_or(false))
+        .map_err(|e| format!("{e} (@{})", entry.login))?;
+    let recipients: Vec<(String, Vec<u8>)> =
+        plan.recipients.iter().map(|r| (r.device_id.clone(), r.ka_public.to_vec())).collect();
 
     // Add the invitee to the roster (keyed by their stable account id).
     {
@@ -13191,7 +13212,7 @@ async fn invite_by_handle(
         }
     }
 
-    Ok(InviteResultDto { login: entry.login, devices: recipients.len() as u32, sealed })
+    Ok(InviteResultDto { login: entry.login, devices: recipients.len() as u32, sealed, verified: plan.verified })
 }
 
 /// A workspace invite waiting in this account's inbox (decrypted locally).
@@ -13679,11 +13700,17 @@ fn list_dms(state: State<AppState>) -> Vec<DmDto> {
 /// keyring (reusing the invite path); the other side receives the key from the
 /// keyring. DMs are kept out of the rail (see `list_workspaces`). Returns the
 /// DM workspace id.
+///
+/// The DM's code is sealed only to the friend's devices whose keys their
+/// account signed when there are any; when the relay alone vouches for them,
+/// this refuses with "unverified recipient" before creating anything, unless
+/// `confirm_unverified` (the UI asks first).
 #[tauri::command]
 async fn friend_open_dm(
     state: State<'_, AppState>,
     account_id: String,
     login: String,
+    confirm_unverified: Option<bool>,
 ) -> Result<String, String> {
     let (client, _) = social_ctx(&state)
         .ok_or("Sign in with GitHub and configure a relay first.".to_string())?;
@@ -13706,6 +13733,21 @@ async fn friend_open_dm(
 
     // Provision the DM workspace on first open.
     let existed = state.settings.lock().unwrap().workspaces.iter().any(|w| w.room == room);
+    // The owner seals the DM's key to the friend's devices: decide who before
+    // creating anything, so a refusal leaves no half-made DM behind.
+    let delivery = if i_am_owner && !existed {
+        match client.directory_lookup(&login).await {
+            Ok(Some(entry)) => {
+                let account = hive_runtime::github::account_id_for(entry.github_id);
+                let plan = seal_plan(&state, account, &entry.devices, confirm_unverified.unwrap_or(false))
+                    .map_err(|e| format!("{e} (@{})", entry.login))?;
+                Some((entry.login, plan))
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
     if !existed {
         let conn = WorkspaceConn {
             name: login.trim().trim_start_matches('@').to_string(),
@@ -13753,22 +13795,19 @@ async fn friend_open_dm(
     // authorized epoch key) to the friend's inbox, sealed to each of their
     // devices; the friend's side adopts it (`list_pending_invites`). No
     // unsigned keyring rotation (B1).
-    if i_am_owner && !existed {
-        if let Ok(Some(entry)) = client.directory_lookup(&login).await {
-            let conn = state.settings.lock().unwrap().workspaces.iter().find(|w| w.room == room).cloned();
-            if let Some(conn) = conn {
-                let code = encode_workspace_invite(&with_epoch_keys(&state, conn));
-                let mut sealed_map = serde_json::Map::new();
-                for d in &entry.devices {
-                    let Some(ka_pub) = parse_hex32(&d.ka_public) else { continue };
-                    if let Ok(Ok(v)) = hive_core::e2ee::seal(&ka_pub, code.as_bytes()).map(|b| serde_json::to_value(&b)) {
-                        sealed_map.insert(d.device_id.clone(), v);
-                    }
+    if let Some((friend_login, plan)) = delivery {
+        let conn = state.settings.lock().unwrap().workspaces.iter().find(|w| w.room == room).cloned();
+        if let Some(conn) = conn {
+            let code = encode_workspace_invite(&with_epoch_keys(&state, conn));
+            let mut sealed_map = serde_json::Map::new();
+            for r in &plan.recipients {
+                if let Ok(Ok(v)) = hive_core::e2ee::seal(&r.ka_public, code.as_bytes()).map(|b| serde_json::to_value(&b)) {
+                    sealed_map.insert(r.device_id.clone(), v);
                 }
-                if !sealed_map.is_empty() {
-                    let invite = serde_json::json!({ "sealed": sealed_map });
-                    let _ = client.post_workspace_invite(&entry.login, &invite).await;
-                }
+            }
+            if !sealed_map.is_empty() {
+                let invite = serde_json::json!({ "sealed": sealed_map });
+                let _ = client.post_workspace_invite(&friend_login, &invite).await;
             }
         }
     }
@@ -14968,6 +15007,8 @@ pub fn run() {
             passkey_ui::passkey_register,
             passkey_ui::recovery_key_create,
             passkey_ui::passkey_remove,
+            passkey_ui::passkey_regrant,
+            passkey_ui::device_confirm,
             passkey_ui::workspace_rules_set,
             passkey_ui::presence_cancel,
             passkey_ui::presence_use_recovery,

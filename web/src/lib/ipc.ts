@@ -682,11 +682,14 @@ export interface InviteResultDto {
   login: string;
   devices: number;
   sealed: boolean;
+  /// The devices' keys are ones the invitee's account signed (false: only the
+  /// relay vouched for them and you confirmed).
+  verified: boolean;
 }
 /// Invite a GitHub user by handle to this chat's workspace (seals the key to
 /// all their devices via the directory).
-export const inviteByHandle = (sessionId: string, handle: string) =>
-  invoke<InviteResultDto>("invite_by_handle", { sessionId, handle });
+export const inviteByHandle = (sessionId: string, handle: string, confirmUnverified = false) =>
+  invoke<InviteResultDto>("invite_by_handle", { sessionId, handle, confirmUnverified });
 
 /// A server-side workspace member (membership-enforcing / paid relays only).
 export interface MemberEntry {
@@ -805,8 +808,8 @@ export interface DmDto {
 }
 /// Open (provisioning on first use) the 1:1 DM workspace with a friend and
 /// switch the chat list to it. Returns the DM workspace id.
-export const friendOpenDm = (accountId: string, login: string) =>
-  invoke<string>("friend_open_dm", { accountId, login });
+export const friendOpenDm = (accountId: string, login: string, confirmUnverified = false) =>
+  invoke<string>("friend_open_dm", { accountId, login, confirmUnverified });
 /// The provisioned DM workspaces (Friends section).
 export const listDms = () => invoke<DmDto[]>("list_dms");
 
@@ -1674,6 +1677,9 @@ export type SecurityStatusDto = {
   keyVersion: number;
   /** Where this device keeps Ligus's secrets ("keychain", "file", …). */
   secretBackend: string;
+  /// This device counts on the workspace (rules v2: a new device of an
+  /// account with a passkey needs Confirm this device).
+  deviceConfirmed: boolean;
 };
 /** What the "Confirm with passkey" sheet shows while the browser is open. */
 export type PresencePromptDto = { kind: string; summary: string; digestShort: string; op: "get" | "create" };
@@ -1683,6 +1689,10 @@ export const passkeyRegister = (label: string) => invoke<void>("passkey_register
 export const recoveryKeyCreate = () => invoke<string>("recovery_key_create");
 export const passkeyRemove = (credentialId: string) => invoke<void>("passkey_remove", { credentialId });
 export const workspaceRulesSet = (version: number) => invoke<void>("workspace_rules_set", { version });
+/** Confirm this device on the active workspace with your passkey (rules v2). */
+export const deviceConfirm = () => invoke<boolean>("device_confirm");
+/** Let a member register a first passkey again (an Admin's re-grant, confirmed with your passkey). */
+export const passkeyRegrant = (memberId: string) => invoke<void>("passkey_regrant", { memberId });
 export const rotateWorkspaceKey = () => invoke<{ rotated: boolean; recipients: number }>("rotate_workspace_key");
 export const presenceCancel = () => invoke<void>("presence_cancel");
 /** Confirm the pending request with the recovery key's 24 words (signed on this device, never stored). */

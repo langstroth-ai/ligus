@@ -28,6 +28,7 @@ column says which. The relay's own variables are on
 | `LIGUS_IDENTITY_MODE` | ignored | desktop and CLI | ignored since 2.0: every device verifies and folds by the same rules (a set value logs one warning). The founder's account key is pinned from the invite instead |
 | `LIGUS_GITHUB_CLIENT_ID` | the built-in OAuth App | desktop | OAuth App client id for GitHub sign-in (wins over Settings) |
 | `LIGUS_DISABLE_P2P` | unset | desktop | any value turns off direct peer-to-peer sync (iroh) |
+| `LIGUS_SECRET_BACKEND` | the OS default | desktop, CLI | where secrets live: `keychain`, `secret-service`, `systemd-creds`, `k8s` or `file`. On macOS a keychain that can't be used is an error; `file` is the explicit opt-in to owner-only files ([key storage](../concepts/identity.md#key-storage)) |
 
 On the desktop, the connection variables only **seed** `settings.json` the
 first time it is created; after that, Settings is the source of truth.
@@ -128,3 +129,5 @@ first time it is created; after that, Settings is the source of truth.
 |---|---|
 | `LIGUS_RELEASE_TAG` | baked into release builds for the update check (`dev` otherwise) |
 | `LIGUS_GITHUB_CLIENT_ID` | also baked in at build time as the default OAuth App |
+| `LIGUS_APPLE_TEAM_ID` | the Apple team id of a signed macOS release (from the `APPLE_TEAM_ID` release secret): the app trusts the keychain's unlock item only to code that satisfies Ligus's designated requirement for that team |
+| `LIGUS_TEST_KEYCHAIN` | `1` runs the macOS keychain tests (`cargo test`), against throwaway keychain files only; never the login keychain |

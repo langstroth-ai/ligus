@@ -28,9 +28,11 @@ described in
 
 The desktop and the CLI keep their secrets in the OS secret store (Phase 0,
 Track B): on macOS a dedicated keychain file inside the data dir, unlocked by
-a login-keychain item only Ligus can read; the Secret Service on a Linux
-desktop; `systemd-creds` on a headless Linux box; mounted Secrets on
-Kubernetes; owner-only `0600` files as a fallback, with a warning.
+a login-keychain item only Ligus can read (on macOS there is no silent
+fallback to files: `LIGUS_SECRET_BACKEND=file` opts in); the Secret Service
+on a Linux desktop; `systemd-creds` on a headless Linux box; mounted Secrets
+on Kubernetes; owner-only `0600` files as a fallback elsewhere, with a
+warning.
 `settings.json` and `config.toml` keep `{"set": true}` placeholders. Agents
 can't reach any of it: the data dir, keychain file included, is denied to
 every agent sandbox, even to subscription CLIs that keep login-keychain

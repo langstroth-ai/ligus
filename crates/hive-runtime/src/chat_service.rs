@@ -779,11 +779,31 @@ impl ChatService {
     /// `DeviceCertificateAdded` (this device's certificate, freshly issued under
     /// the account's *current* id so it stays consistent across a GitHub sign-in
     /// that changes the id). Peers fold these into their device roster
-    /// (`envelope_verifier::build_roster`) to verify signatures. Idempotent per
-    /// (workspace, device, account); a no-op when the actor has no account id
+    /// (`envelope_verifier::build_roster`) to verify signatures. Published on
+    /// the workspace config log when this device holds it (else on
+    /// `session_id`). Idempotent per (workspace, device, account) and log; a
+    /// no-op when the actor has no account id
     /// (a local-only session with no verifiable identity). Returns whether it
     /// published.
     pub fn publish_identity(&mut self, session_id: Uuid, workspace_id: Uuid) -> Result<bool> {
+        // Ligus publishes identity on its own (opening a workspace or a chat,
+        // the sync loop), so this never asks for a passkey: a prompt would hold
+        // the service lock for minutes and reopen on every retry. A device that
+        // needs one under rules v2 stays unpublished until the person confirms
+        // it (`confirm_device`).
+        let provider = self.presence_provider.take();
+        let published = self.publish_identity_unprompted(session_id, workspace_id);
+        self.presence_provider = provider;
+        match published {
+            Err(ChatError::Unauthorized(why)) if why == hive_core::authz::PRESENCE_REQUIRED => {
+                tracing::info!(target: "presence", %workspace_id, "this device needs a passkey confirmation before it counts here");
+                Ok(false)
+            }
+            r => r,
+        }
+    }
+
+    fn publish_identity_unprompted(&mut self, session_id: Uuid, workspace_id: Uuid) -> Result<bool> {
         // A delegated device's identity is the owner's certificate for it; its own
         // account key must never be registered under the owner's account id (that
         // would contest the owner's key and quarantine all of their events).
@@ -793,10 +813,18 @@ impl ChatService {
         let Some(account_id) = self.author.account_id else {
             return Ok(false);
         };
-        if self
-            .store
-            .has_device_certificate(workspace_id, self.device_id, account_id)?
-        {
+        // Under rules v2 a device of an account with a passkey counts only once
+        // the workspace config log carries its certificate, so publish there
+        // whenever this device holds that log (a certificate only on a chat
+        // log is mirrored the next time this runs).
+        let config_id = workspace_config_session_id(workspace_id);
+        let session_id = if self.store.max_sequence(config_id)?.is_some() { config_id } else { session_id };
+        let published = if session_id == config_id {
+            self.store.has_device_certificate_in(config_id, self.device_id, account_id)?
+        } else {
+            self.store.has_device_certificate(workspace_id, self.device_id, account_id)?
+        };
+        if published {
             return Ok(false);
         }
         self.append_signed(
@@ -828,6 +856,8 @@ impl ChatService {
     /// under it — the device's old certificate no longer verifies against the newly
     /// pinned key, so without the fresh cert the device would drop out of the
     /// roster. A no-op (Ok(false)) if the local actor has no account id.
+    /// Under rules v2, for an account with a passkey, only a rotation on the
+    /// workspace config log (with that passkey's presence) takes effect.
     pub fn rotate_account_key(
         &mut self,
         new_keypair: SigningKeypair,
@@ -4361,19 +4391,24 @@ mod tests {
     }
 
     /// A rules version this build doesn't enforce makes the workspace
-    /// read-only here: every write is refused with an "update" message.
+    /// read-only here (every write refused with an "update" message; see
+    /// `presence_tests::switching_to_any_later_rules_version_needs_presence`).
+    /// The switch itself needs presence, so a device key alone (here, an
+    /// author without an account or passkey) can't freeze the workspace.
     #[test]
-    fn unknown_rules_version_refuses_writes_on_this_device() {
+    fn unknown_rules_version_needs_presence_to_take_effect() {
         let (mut svc, _) = service();
         let chat = svc.create_chat("Demo", Uuid::new_v4(), "anthropic").unwrap();
         let (sid, wid) = (chat.id, chat.workspace_id);
         let cfg = svc.ensure_workspace_config(wid).unwrap();
         svc.post_user_message(sid, wid, "before").unwrap();
-        svc.append_signed(cfg, wid, SessionEvent::WorkspaceRulesSet { version: hive_core::authz::RULES_SUPPORTED + 1 })
-            .unwrap();
-        let err = svc.post_user_message(sid, wid, "after").unwrap_err().to_string();
-        assert!(err.contains("update Ligus"), "{err}");
-        assert!(svc.load(cfg).unwrap().unwrap().authz.read_only());
+        let err = svc
+            .append_signed(cfg, wid, SessionEvent::WorkspaceRulesSet { version: hive_core::authz::RULES_SUPPORTED + 1 })
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("passkey"), "{err}");
+        svc.post_user_message(sid, wid, "after").unwrap();
+        assert!(!svc.load(cfg).unwrap().unwrap().authz.read_only());
     }
 
     /// A vote this device can't place yet (its config frontier hasn't

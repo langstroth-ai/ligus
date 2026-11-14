@@ -12,7 +12,7 @@
 //! | [`SecretService`] | Linux desktop: the session's Secret Service (through `secret-tool`) |
 //! | [`SystemdCreds`] | headless Linux (serve, worker): `systemd-creds encrypt` (TPM2 when present, else the host key) |
 //! | [`K8sSecretFile`] | the chart: read-only mounted Secret files, writes fall back to [`File0600`] |
-//! | [`File0600`] | fallback: owner-only files, with a warning |
+//! | [`File0600`] | fallback: owner-only files, with a warning (on macOS only when chosen: `LIGUS_SECRET_BACKEND=file`) |
 //!
 //! ## Agents can't reach Ligus's items
 //!
@@ -23,9 +23,13 @@
 //! file under the data dir, which every agent sandbox denies (`file-read*`
 //! of the data dir, Seatbelt and bubblewrap alike), and that keychain stays
 //! out of the user's keychain search list. Only its unlock password is a
-//! login-keychain item, and that item's ACL trusts only the Ligus binary;
-//! even an agent that talked a user into allowing it would get a password
-//! for a file it can't open. On Linux the Secret Service is a D-Bus session
+//! login-keychain item, and that item's access list trusts only the Ligus
+//! binary (by its designated requirement when signed: Apple anchor, bundle
+//! id `ai.ligus.desktop`, team id; a release app refuses to create it unless
+//! it satisfies that requirement). Even an agent that talked a user into
+//! allowing it would get a password for a file it can't open. A development
+//! build is pinned by its code hash, so every rebuild asks once for the login
+//! keychain password. On Linux the Secret Service is a D-Bus session
 //! service the bubblewrap profile never binds, and `DBUS_SESSION_BUS_ADDRESS`
 //! is outside the child env allow-list.
 //!
@@ -88,6 +92,9 @@ pub enum Backend {
     SystemdCreds,
     K8sSecretFile,
     File0600,
+    /// No usable store, and plain files weren't chosen (macOS): every use
+    /// fails with the reason ([`Unavailable`]).
+    Unavailable,
 }
 
 impl Backend {
@@ -98,6 +105,7 @@ impl Backend {
             Backend::SystemdCreds => "systemd-creds",
             Backend::K8sSecretFile => "k8s",
             Backend::File0600 => "file",
+            Backend::Unavailable => "unavailable",
         }
     }
     /// Whether secrets sit in plain owner-only files (the UI and `ligus
@@ -418,11 +426,15 @@ mod mac {
 
     /// A dedicated keychain file (`<data dir>/secrets/ligus.keychain-db`),
     /// unlocked with a random password that is itself a login-keychain item
-    /// (`<service>.unlock`, its ACL trusting only this binary). See the
+    /// (`<service>.unlock`). That item's access list trusts only the Ligus
+    /// binary ([`acl`]), not whatever process happened to create it. See the
     /// module docs for why Ligus's items aren't in the login keychain.
     pub struct MacKeychain {
         path: PathBuf,
         service: String,
+        /// The keychain holding the unlock password: the login keychain
+        /// (`None`), or a throwaway keychain in tests.
+        unlock_in: Option<PathBuf>,
         lock: Mutex<()>,
     }
 
@@ -432,10 +444,19 @@ mod mac {
             Self::open_with(data_dir.as_ref().join("secrets").join("ligus.keychain-db"), SERVICE)
         }
 
-        /// A keychain at `path` with its own service name (tests use a
-        /// throwaway one).
+        /// A keychain at `path` with its own service name.
         pub fn open_with(path: PathBuf, service: &str) -> Result<Self, SecretError> {
-            let me = Self { path, service: service.to_string(), lock: Mutex::new(()) };
+            let me = Self { path, service: service.to_string(), unlock_in: None, lock: Mutex::new(()) };
+            me.keychain()?;
+            Ok(me)
+        }
+
+        /// A keychain at `path` whose unlock password lives in the keychain
+        /// file `unlock_in` instead of the login keychain (tests: a
+        /// throwaway pair, so no test ever writes to the login keychain).
+        #[cfg(test)]
+        pub(crate) fn open_with_unlock_in(path: PathBuf, service: &str, unlock_in: PathBuf) -> Result<Self, SecretError> {
+            let me = Self { path, service: service.to_string(), unlock_in: Some(unlock_in), lock: Mutex::new(()) };
             me.keychain()?;
             Ok(me)
         }
@@ -450,14 +471,27 @@ mod mac {
             format!("{}.unlock", self.service)
         }
 
+        /// The keychains to look the unlock password up in (`None`: the
+        /// user's search list, where the login keychain is).
+        fn unlock_search(&self) -> Result<Option<Vec<SecKeychain>>, SecretError> {
+            match &self.unlock_in {
+                None => Ok(None),
+                Some(p) => Ok(Some(vec![SecKeychain::open(p).map_err(|e| backend_err("keychain", e.to_string()))?])),
+            }
+        }
+
+        fn find_unlock(&self) -> Option<(Vec<u8>, security_framework::os::macos::keychain_item::SecKeychainItem)> {
+            let search = self.unlock_search().ok()?;
+            find_generic_password(search.as_deref(), &self.unlock_service(), &self.unlock_account())
+                .ok()
+                .map(|(pw, item)| (pw.to_vec(), item))
+        }
+
         /// Open (or create) and unlock the keychain.
         fn keychain(&self) -> Result<SecKeychain, SecretError> {
             let err = |e: security_framework::base::Error| backend_err("keychain", e.to_string());
             let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-            let password = match find_generic_password(None, &self.unlock_service(), &self.unlock_account()) {
-                Ok((pw, _)) => Some(Zeroizing::new(String::from_utf8_lossy(&pw).into_owned())),
-                Err(_) => None,
-            };
+            let password = self.find_unlock().map(|(pw, _)| Zeroizing::new(String::from_utf8_lossy(&pw).into_owned()));
             if self.path.exists() {
                 let Some(pw) = password else {
                     return Err(backend_err("keychain", "the Ligus keychain's unlock password is missing from the login keychain"));
@@ -477,9 +511,23 @@ mod mac {
             let mut raw = [0u8; 32];
             getrandom::getrandom(&mut raw).map_err(|e| backend_err("keychain", e.to_string()))?;
             let pw = Zeroizing::new(hive_core::keys::hex(&raw));
-            SecKeychain::default()
-                .and_then(|login| login.set_generic_password(&self.unlock_service(), &self.unlock_account(), pw.as_bytes()))
-                .map_err(err)?;
+            // The unlock password trusts only the Ligus binary: in a release
+            // build, only after this app proves it is Ligus (its designated
+            // requirement: Apple-anchored, Ligus's bundle id and team id).
+            let binary = acl::ligus_binary()?;
+            acl::check_self(&binary)?;
+            if let Some((_, stale)) = self.find_unlock() {
+                stale.delete(); // a password for a keychain file that is gone
+            }
+            acl::add_generic_password(
+                self.unlock_in.as_deref(),
+                &self.unlock_service(),
+                &self.unlock_account(),
+                "Ligus keychain unlock",
+                pw.as_bytes(),
+                &binary,
+            )
+            .map_err(|e| backend_err("keychain", e))?;
             let mut kc = CreateOptions::new().password(&pw).prompt_user(false).create(&self.path).map_err(err)?;
             // Stay unlocked while the user's session is (no idle or sleep lock):
             // the file itself is what agents can't reach.
@@ -493,7 +541,7 @@ mod mac {
         /// Remove the keychain file and its unlock password (tests, and
         /// `ligus doctor` resets).
         pub fn destroy(self) -> Result<(), SecretError> {
-            if let Ok((_, item)) = find_generic_password(None, &self.unlock_service(), &self.unlock_account()) {
+            if let Some((_, item)) = self.find_unlock() {
                 item.delete();
             }
             match std::fs::remove_file(&self.path) {
@@ -509,13 +557,13 @@ mod mac {
 
         /// A handle that doesn't open anything (tests probing cleanup).
         #[cfg(test)]
-        pub(crate) fn unopened(path: PathBuf, service: &str) -> Self {
-            Self { path, service: service.to_string(), lock: Mutex::new(()) }
+        pub(crate) fn unopened(path: PathBuf, service: &str, unlock_in: Option<PathBuf>) -> Self {
+            Self { path, service: service.to_string(), unlock_in, lock: Mutex::new(()) }
         }
 
         /// Whether the unlock password item exists in the login keychain.
         pub fn unlock_item_exists(&self) -> bool {
-            find_generic_password(None, &self.unlock_service(), &self.unlock_account()).is_ok()
+            self.find_unlock().is_some()
         }
     }
 
@@ -543,6 +591,240 @@ mod mac {
             Ok(())
         }
     }
+
+    /// The unlock item's access list (Security.framework's legacy keychain
+    /// ACLs, which the security-framework crate doesn't wrap).
+    ///
+    /// The item is created with an explicit access whose only trusted
+    /// application is the Ligus binary: the `.app` bundle the desktop runs
+    /// from, else the executable. For signed code the keychain records the
+    /// binary's designated requirement (Apple anchor, bundle id, team id), so
+    /// an update signed the same way keeps access without a prompt, and any
+    /// other program (an agent's CLI, `/usr/bin/security`) gets a system
+    /// prompt. A development build is unsigned or ad-hoc signed: the entry
+    /// then pins that build's code hash, and every rebuild asks once for the
+    /// login keychain password (Always Allow) before it can read the item.
+    pub(super) mod acl {
+        use std::ffi::{c_char, c_void, CString};
+        use std::os::unix::ffi::OsStrExt;
+        use std::path::{Path, PathBuf};
+
+        use security_framework::os::macos::code_signing::{Flags, SecCode, SecRequirement};
+
+        use super::super::{backend_err, SecretError};
+
+        /// The desktop app's bundle id (`app/tauri.conf.json`).
+        pub const BUNDLE_ID: &str = "ai.ligus.desktop";
+
+        type CFTypeRef = *const c_void;
+        type OSStatus = i32;
+
+        #[repr(C)]
+        struct Attribute {
+            tag: u32,
+            length: u32,
+            data: *mut c_void,
+        }
+
+        #[repr(C)]
+        struct AttributeList {
+            count: u32,
+            attr: *mut Attribute,
+        }
+
+        const GENERIC_PASSWORD: u32 = u32::from_be_bytes(*b"genp");
+        const SERVICE: u32 = u32::from_be_bytes(*b"svce");
+        const ACCOUNT: u32 = u32::from_be_bytes(*b"acct");
+        const LABEL: u32 = u32::from_be_bytes(*b"labl");
+        const UTF8: u32 = 0x0800_0100;
+
+        #[link(name = "CoreFoundation", kind = "framework")]
+        extern "C" {
+            static kCFTypeArrayCallBacks: [usize; 5];
+            fn CFArrayCreate(alloc: CFTypeRef, values: *const CFTypeRef, count: isize, callbacks: *const c_void) -> CFTypeRef;
+            fn CFStringCreateWithBytes(alloc: CFTypeRef, bytes: *const u8, len: isize, encoding: u32, external: u8) -> CFTypeRef;
+            fn CFRelease(cf: CFTypeRef);
+        }
+
+        #[link(name = "Security", kind = "framework")]
+        extern "C" {
+            fn SecTrustedApplicationCreateFromPath(path: *const c_char, app: *mut CFTypeRef) -> OSStatus;
+            fn SecAccessCreate(descriptor: CFTypeRef, trusted: CFTypeRef, access: *mut CFTypeRef) -> OSStatus;
+            fn SecKeychainOpen(path: *const c_char, keychain: *mut CFTypeRef) -> OSStatus;
+            fn SecKeychainCopyDefault(keychain: *mut CFTypeRef) -> OSStatus;
+            fn SecKeychainItemCreateFromContent(
+                class: u32,
+                attrs: *mut AttributeList,
+                length: u32,
+                data: *const c_void,
+                keychain: CFTypeRef,
+                access: CFTypeRef,
+                item: *mut CFTypeRef,
+            ) -> OSStatus;
+        }
+
+        /// Releases a Core Foundation object when dropped.
+        struct Owned(CFTypeRef);
+        impl Drop for Owned {
+            fn drop(&mut self) {
+                if !self.0.is_null() {
+                    unsafe { CFRelease(self.0) }
+                }
+            }
+        }
+
+        fn status(what: &str, st: OSStatus) -> Result<(), String> {
+            if st == 0 {
+                Ok(())
+            } else {
+                Err(format!("{what} failed (OSStatus {st})"))
+            }
+        }
+
+        fn c_path(p: &Path) -> Result<CString, String> {
+            CString::new(p.as_os_str().as_bytes()).map_err(|_| "a path with a NUL byte".to_string())
+        }
+
+        /// The Ligus binary to trust: the `.app` bundle the running
+        /// executable is in, else the executable itself.
+        pub fn ligus_binary() -> Result<PathBuf, SecretError> {
+            let exe = std::env::current_exe()?.canonicalize()?;
+            Ok(exe
+                .ancestors()
+                .find(|p| p.extension().is_some_and(|e| e == "app") && exe.starts_with(p.join("Contents").join("MacOS")))
+                .map(Path::to_path_buf)
+                .unwrap_or(exe))
+        }
+
+        /// The designated requirement a release build of the desktop app
+        /// satisfies, when this build knows its team id
+        /// (`LIGUS_APPLE_TEAM_ID` at build time) and runs from an app bundle.
+        /// `None` for development builds and the CLI.
+        pub fn requirement_for(binary: &Path) -> Option<String> {
+            requirement(option_env!("LIGUS_APPLE_TEAM_ID"), binary)
+        }
+
+        /// Ligus's designated requirement for team `team`, when `binary` is
+        /// an app bundle.
+        pub fn requirement(team: Option<&str>, binary: &Path) -> Option<String> {
+            let team = team.map(str::trim).filter(|t| !t.is_empty())?;
+            binary.extension().is_some_and(|e| e == "app").then(|| {
+                format!("anchor apple generic and identifier \"{BUNDLE_ID}\" and certificate leaf[subject.OU] = \"{team}\"")
+            })
+        }
+
+        /// A release app trusts itself with the unlock password only after
+        /// proving it is Ligus: the running code must satisfy
+        /// [`requirement_for`] (a copied or re-signed binary doesn't).
+        pub fn check_self(binary: &Path) -> Result<(), SecretError> {
+            match requirement_for(binary) {
+                Some(req) => check_self_against(&req),
+                None => Ok(()),
+            }
+        }
+
+        /// Whether the running code satisfies `req`.
+        pub fn check_self_against(req: &str) -> Result<(), SecretError> {
+            let req: SecRequirement = req.parse().map_err(|e: security_framework::base::Error| backend_err("keychain", e.to_string()))?;
+            SecCode::for_self(Flags::NONE).and_then(|c| c.check_validity(Flags::NONE, &req)).map_err(|e| {
+                backend_err("keychain", format!("this app isn't signed as Ligus ({e}), so it won't hold the keychain's unlock password"))
+            })
+        }
+
+        /// Add a generic password to `keychain` (the login keychain when
+        /// `None`) whose access list trusts only `trusted`.
+        pub fn add_generic_password(
+            keychain: Option<&Path>,
+            service: &str,
+            account: &str,
+            label: &str,
+            secret: &[u8],
+            trusted: &Path,
+        ) -> Result<(), String> {
+            unsafe {
+                let mut kc: CFTypeRef = std::ptr::null();
+                match keychain {
+                    Some(p) => status("SecKeychainOpen", SecKeychainOpen(c_path(p)?.as_ptr(), &mut kc))?,
+                    None => status("SecKeychainCopyDefault", SecKeychainCopyDefault(&mut kc))?,
+                }
+                let kc = Owned(kc);
+                let mut app: CFTypeRef = std::ptr::null();
+                status("SecTrustedApplicationCreateFromPath", SecTrustedApplicationCreateFromPath(c_path(trusted)?.as_ptr(), &mut app))?;
+                let app = Owned(app);
+                let apps = [app.0];
+                let list = Owned(CFArrayCreate(std::ptr::null(), apps.as_ptr(), 1, kCFTypeArrayCallBacks.as_ptr() as *const c_void));
+                let desc = Owned(CFStringCreateWithBytes(std::ptr::null(), label.as_ptr(), label.len() as isize, UTF8, 0));
+                if list.0.is_null() || desc.0.is_null() {
+                    return Err("out of memory".into());
+                }
+                let mut access: CFTypeRef = std::ptr::null();
+                status("SecAccessCreate", SecAccessCreate(desc.0, list.0, &mut access))?;
+                let access = Owned(access);
+                let mut attrs = [
+                    Attribute { tag: SERVICE, length: service.len() as u32, data: service.as_ptr() as *mut c_void },
+                    Attribute { tag: ACCOUNT, length: account.len() as u32, data: account.as_ptr() as *mut c_void },
+                    Attribute { tag: LABEL, length: label.len() as u32, data: label.as_ptr() as *mut c_void },
+                ];
+                let mut attr_list = AttributeList { count: attrs.len() as u32, attr: attrs.as_mut_ptr() };
+                let mut item: CFTypeRef = std::ptr::null();
+                let st = SecKeychainItemCreateFromContent(
+                    GENERIC_PASSWORD,
+                    &mut attr_list,
+                    secret.len() as u32,
+                    secret.as_ptr() as *const c_void,
+                    kc.0,
+                    access.0,
+                    &mut item,
+                );
+                drop(Owned(item));
+                status("SecKeychainItemCreateFromContent", st)
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Unavailable
+// ---------------------------------------------------------------------------
+
+/// A store that refuses every use with its reason: on macOS a Ligus keychain
+/// that can't be used is an error the person sees, not a silent move of
+/// every secret into plain files (B2 residual). `LIGUS_SECRET_BACKEND=file`
+/// is the explicit opt-in to owner-only files.
+pub struct Unavailable {
+    why: String,
+}
+
+impl SecretStore for Unavailable {
+    fn backend(&self) -> Backend {
+        Backend::Unavailable
+    }
+    fn get(&self, _: &SecretId) -> Result<Option<Zeroizing<Vec<u8>>>, SecretError> {
+        Err(backend_err("keychain", self.why.clone()))
+    }
+    fn put(&self, _: &SecretId, _: &[u8]) -> Result<(), SecretError> {
+        Err(backend_err("keychain", self.why.clone()))
+    }
+    fn delete(&self, _: &SecretId) -> Result<(), SecretError> {
+        Err(backend_err("keychain", self.why.clone()))
+    }
+}
+
+/// The keychain, or, when it can't be used, a store that refuses with a
+/// clear error (macOS never degrades to plain files unless asked).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn keychain_or_refuse<S: SecretStore + 'static>(keychain: Result<S, SecretError>) -> Arc<dyn SecretStore> {
+    match keychain {
+        Ok(k) => Arc::new(k),
+        Err(e) => {
+            let why = format!(
+                "the Ligus keychain isn't available ({e}). Ligus doesn't move its secrets into plain files on its own: \
+                 fix the keychain, or set LIGUS_SECRET_BACKEND=file to keep them in owner-only files under the data dir"
+            );
+            tracing::error!(target: "secrets", "{why}");
+            Arc::new(Unavailable { why })
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -556,7 +838,9 @@ fn on_path(bin: &str) -> Option<PathBuf> {
 
 /// Open the store for `data_dir`: `choice` (`keychain`, `secret-service`,
 /// `systemd-creds`, `k8s`, `file`) or, when `None`, the OS default. A backend
-/// that can't be used falls back to [`File0600`] with a warning.
+/// that can't be used falls back to [`File0600`] with a warning, except the
+/// macOS keychain: that one refuses ([`Unavailable`]) unless `file` was
+/// chosen.
 pub fn open(data_dir: &Path, choice: Option<&str>) -> Arc<dyn SecretStore> {
     let choice = choice.map(|c| c.trim().to_ascii_lowercase()).filter(|c| !c.is_empty());
     let fallback = |why: String| -> Arc<dyn SecretStore> {
@@ -585,10 +869,7 @@ pub fn open(data_dir: &Path, choice: Option<&str>) -> Arc<dyn SecretStore> {
     }
     #[cfg(target_os = "macos")]
     {
-        match MacKeychain::open(data_dir) {
-            Ok(k) => Arc::new(k),
-            Err(e) => fallback(format!("the Ligus keychain isn't available ({e})")),
-        }
+        keychain_or_refuse(MacKeychain::open(data_dir))
     }
     #[cfg(target_os = "linux")]
     {
@@ -1043,20 +1324,41 @@ esac"#,
         assert_eq!(store.get(&SecretId::new("cli", "token")).unwrap().unwrap().as_slice(), b"from-unit");
     }
 
+    /// A throwaway stand-in for the login keychain (tests never write to
+    /// the real one): a keychain file in `dir` with a random password.
+    #[cfg(target_os = "macos")]
+    fn throwaway_unlock_keychain(dir: &Path) -> PathBuf {
+        use security_framework::os::macos::keychain::CreateOptions;
+        let path = dir.join("unlock-standin.keychain-db");
+        let pw = uuid::Uuid::new_v4().simple().to_string();
+        CreateOptions::new().password(&pw).prompt_user(false).create(&path).unwrap();
+        path
+    }
+
+    #[cfg(target_os = "macos")]
+    fn keychain_opt_in() -> bool {
+        if std::env::var("LIGUS_TEST_KEYCHAIN").ok().as_deref() != Some("1") {
+            eprintln!("skipped: set LIGUS_TEST_KEYCHAIN=1 to exercise the real keychain (throwaway keychains only)");
+            return false;
+        }
+        true
+    }
+
     /// The real macOS keychain, only with `LIGUS_TEST_KEYCHAIN=1` (CI never
     /// writes to a keychain): a throwaway keychain file and service name,
-    /// removed afterwards with its unlock password.
+    /// with the unlock password in a throwaway stand-in for the login
+    /// keychain, all removed afterwards.
     #[cfg(target_os = "macos")]
     #[test]
     fn vault_roundtrip_mac_keychain_opt_in() {
-        if std::env::var("LIGUS_TEST_KEYCHAIN").ok().as_deref() != Some("1") {
-            eprintln!("skipped: set LIGUS_TEST_KEYCHAIN=1 to exercise the real keychain");
+        if !keychain_opt_in() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
+        let unlock = throwaway_unlock_keychain(dir.path());
         let service = format!("ai.ligus.secrets.test-{}", uuid::Uuid::new_v4());
         let path = dir.path().join("secrets/ligus-test.keychain-db");
-        let store = MacKeychain::open_with(path.clone(), &service).unwrap();
+        let store = MacKeychain::open_with_unlock_in(path.clone(), &service, unlock.clone()).unwrap();
         roundtrip(&store);
         store.put(&SecretId::new("settings", "probe"), b"keychain-secret").unwrap();
         // The secret isn't in the file in the clear, and the keychain file
@@ -1066,7 +1368,7 @@ esac"#,
         assert!(!raw.windows(15).any(|w| w == b"keychain-secret"));
         // Reopening (a restart) finds the unlock password and the item.
         drop(store);
-        let again = MacKeychain::open_with(path.clone(), &service).unwrap();
+        let again = MacKeychain::open_with_unlock_in(path.clone(), &service, unlock.clone()).unwrap();
         assert_eq!(again.get(&SecretId::new("settings", "probe")).unwrap().unwrap().as_slice(), b"keychain-secret");
         // The Ligus keychain is not in the user's search list, so a lookup
         // by service alone (what any process with keychain access does)
@@ -1074,10 +1376,81 @@ esac"#,
         let out = std::process::Command::new("/usr/bin/security").args(["find-generic-password", "-s", &service]).output().unwrap();
         assert!(!out.status.success(), "found Ligus's item through the default search list");
         assert!(again.unlock_item_exists());
-        let probe = MacKeychain::unopened(path.clone(), &service);
+        let probe = MacKeychain::unopened(path.clone(), &service, Some(unlock.clone()));
         again.destroy().unwrap();
         assert!(!path.exists());
-        assert!(!probe.unlock_item_exists(), "the unlock password left the login keychain");
+        assert!(!probe.unlock_item_exists(), "the unlock password stayed behind");
+    }
+
+    /// Track B residual 6: the unlock password's access list trusts only the
+    /// Ligus binary (here, the test executable), named explicitly, rather
+    /// than defaulting to whatever process created the item. Throwaway
+    /// keychains only, with `LIGUS_TEST_KEYCHAIN=1`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn unlock_item_trusts_only_the_ligus_binary() {
+        if !keychain_opt_in() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let unlock = throwaway_unlock_keychain(dir.path());
+        let service = format!("ai.ligus.secrets.test-{}", uuid::Uuid::new_v4());
+        let path = dir.path().join("secrets/ligus-test.keychain-db");
+        let store = MacKeychain::open_with_unlock_in(path.clone(), &service, unlock.clone()).unwrap();
+        let out = std::process::Command::new("/usr/bin/security").arg("dump-keychain").arg("-a").arg(&unlock).output().unwrap();
+        let dump = String::from_utf8_lossy(&out.stdout);
+        let me = mac::acl::ligus_binary().unwrap();
+        // `0: /path/to/binary (OK)` under each entry's applications.
+        let apps: Vec<&str> = dump
+            .lines()
+            .map(str::trim)
+            .filter_map(|l| l.split_once(": /").filter(|(n, _)| n.chars().all(|c| c.is_ascii_digit())).map(|(_, rest)| rest))
+            .collect();
+        assert!(!apps.is_empty(), "no trusted applications listed:\n{dump}");
+        let me = me.to_string_lossy();
+        assert!(apps.iter().all(|a| format!("/{a}").starts_with(&*me)), "trusts something other than the Ligus binary {me}:\n{dump}");
+        assert!(dump.contains("description: Ligus keychain unlock"), "not the explicit access list:\n{dump}");
+        store.destroy().unwrap();
+    }
+
+    /// Track B residual 6: a release app trusts itself with the unlock
+    /// password only if it satisfies Ligus's designated requirement (Apple
+    /// anchor, bundle id, team id). This test binary isn't signed as Ligus,
+    /// so it is refused. No keychain is touched.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_binary_not_signed_as_ligus_is_not_trusted_with_the_unlock_password() {
+        let app = Path::new("/Applications/Ligus.app");
+        let req = mac::acl::requirement(Some("ABCDE12345"), app).unwrap();
+        assert_eq!(
+            req,
+            "anchor apple generic and identifier \"ai.ligus.desktop\" and certificate leaf[subject.OU] = \"ABCDE12345\""
+        );
+        let err = mac::acl::check_self_against(&req).unwrap_err().to_string();
+        assert!(err.contains("isn't signed as Ligus"), "{err}");
+        // No team id (a development build), or not an app bundle (the CLI):
+        // no requirement, and the access list pins the binary's code hash.
+        assert!(mac::acl::requirement(None, app).is_none());
+        assert!(mac::acl::requirement(Some("ABCDE12345"), Path::new("/usr/local/bin/ligus")).is_none());
+    }
+
+    /// Track B residual 6: on macOS a Ligus keychain that can't be used
+    /// doesn't silently degrade to plain files. Every use fails with an error
+    /// that names the opt-in, nothing reaches the data dir, and only an
+    /// explicit `file` choice keeps secrets in owner-only files.
+    #[test]
+    fn an_unavailable_keychain_refuses_instead_of_degrading_to_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = keychain_or_refuse(Err::<File0600, _>(backend_err("keychain", "no keychain here")));
+        assert_eq!(store.backend(), Backend::Unavailable);
+        assert!(!store.backend().is_plain_file());
+        let id = SecretId::new("settings", "api_key");
+        let err = store.put(&id, b"secret-value").unwrap_err().to_string();
+        assert!(err.contains("LIGUS_SECRET_BACKEND=file") && err.contains("no keychain here"), "{err}");
+        assert!(store.get(&id).is_err(), "a read doesn't pass for 'not set'");
+        assert!(store.delete(&id).is_err());
+        assert!(std::fs::read_dir(dir.path()).unwrap().next().is_none(), "something was written under the data dir");
+        assert_eq!(open(dir.path(), Some("file")).backend(), Backend::File0600, "the explicit opt-in");
     }
 
     /// An in-memory store (property tests; the file and CLI backends have

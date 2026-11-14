@@ -700,8 +700,13 @@ fn glob_semantics_are_unchanged() {
 
 // ---- rules version ----
 
+/// A version this build doesn't enforce makes the workspace read-only here,
+/// but only once its switch is allowed: any switch to version 2 or later needs
+/// the Owner's passkey presence (an allowed switch going read-only, and the
+/// device folding on, is `presence_tests::switching_to_any_later_rules_version_needs_presence`
+/// in hive-runtime, which has a software authenticator).
 #[test]
-fn unknown_rules_version_makes_workspace_read_only() {
+fn unknown_rules_version_needs_presence_to_make_workspace_read_only() {
     let mut w = World::new();
     assert_eq!(w.config().authz.rules, 1, "workspaces start at rules v1");
     assert!(!w.config().authz.read_only());
@@ -709,14 +714,14 @@ fn unknown_rules_version_makes_workspace_read_only() {
     let by_admin = w.cfg_push("ada", SessionEvent::WorkspaceRulesSet { version: 9 });
     assert_eq!(w.verdicts()[&by_admin], Verdict::Denied);
     assert!(!w.config().authz.read_only());
-    w.cfg_push("owner", SessionEvent::WorkspaceRulesSet { version: hive_core::authz::RULES_SUPPORTED + 1 });
-    let cfg = w.config();
-    assert!(cfg.authz.read_only(), "a version this build doesn't enforce is read-only");
-    // The device keeps folding.
+    // The Owner's device key alone can't switch to an unknown version.
+    let by_owner = w.cfg_push("owner", SessionEvent::WorkspaceRulesSet { version: hive_core::authz::RULES_SUPPORTED + 1 });
+    assert_eq!(w.verdicts()[&by_owner], Verdict::Denied);
+    assert!(!w.config().authz.read_only(), "a switch without presence froze the workspace");
     w.chat_push("mara", SessionEvent::ProposalUpserted { proposal: proposal(Uuid::from_u128(0xF1), 1, ProposalStatus::Open) });
     let s = w.state();
     assert_eq!(s.proposals.len(), 1);
-    assert!(s.authz.read_only());
+    assert!(!s.authz.read_only());
 }
 
 // ---- upgrade refold ----

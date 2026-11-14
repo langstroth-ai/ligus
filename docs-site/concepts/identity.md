@@ -65,7 +65,7 @@ secret store:
 
 | Where | Backend |
 |---|---|
-| macOS (desktop and CLI) | a dedicated keychain file, `secrets/ligus.keychain-db` in the data dir, unlocked by a random password kept in your login keychain (an item only the Ligus binary can read without a prompt) |
+| macOS (desktop and CLI) | a dedicated keychain file, `secrets/ligus.keychain-db` in the data dir, unlocked by a random password kept in your login keychain (an item only the Ligus binary can read without a prompt: by signature for a release app, by code hash for a development build or the CLI, which ask once after each rebuild). If the keychain can't be used, Ligus refuses rather than fall back to files; `LIGUS_SECRET_BACKEND=file` opts in |
 | Linux desktop | the Secret Service of your session (GNOME Keyring, KWallet, KeePassXC), through `secret-tool` |
 | Headless Linux (`ligus serve`, `ligus worker`) | `systemd-creds` (TPM2 when present, else the host key), credential files under `credentials/` in the data dir |
 | Kubernetes | Secret files mounted at `LIGUS_SECRETS_DIR`; anything not provisioned there falls back to files |

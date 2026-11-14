@@ -78,7 +78,7 @@ type RowsSig = (i64, i64);
 
 /// Guard signals kept per device (all workspaces); older rows are pruned.
 pub const GUARD_SIGNALS_KEEP: i64 = 20_000;
-/// Parked relay bodies kept per room (A-13).
+/// Parked relay bodies kept per room (A-13); junk is evicted first (B-11).
 pub const PARKED_KEEP: i64 = 5_000;
 /// Facts kept on this device (newest).
 pub const FACTS_KEEP: i64 = 50_000;
@@ -224,6 +224,14 @@ impl EventStore {
         if !has_epoch {
             conn.execute_batch("ALTER TABLE events ADD COLUMN sealed_epoch INTEGER")?;
         }
+        // B-11: how much a parked body is worth keeping when the room's cap
+        // is reached (see [`EventStore::park_bodies`]).
+        let has_priority: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('parked_bodies') WHERE name = 'priority'")?
+            .exists([])?;
+        if !has_priority {
+            conn.execute_batch("ALTER TABLE parked_bodies ADD COLUMN priority INTEGER NOT NULL DEFAULT 0")?;
+        }
         Ok(Self { conn, projections: Mutex::new(HashMap::new()), configs: Mutex::new(HashMap::new()) })
     }
 
@@ -335,7 +343,8 @@ impl EventStore {
     }
 
     /// The envelopes that feed the trust roster (membership, account keys and
-    /// their rotations, device certificates and revocations, snapshots), across
+    /// their rotations, device certificates and revocations, snapshots, and
+    /// the rules and passkeys that gate devices under rules v2), across
     /// all sessions. Cheap — filtered by `kind`. Consumed by
     /// `envelope_verifier::build_roster` to verify signatures on ingest without
     /// any network. Revocations and rotations must be here: a `DeviceRevoked`
@@ -346,21 +355,24 @@ impl EventStore {
             "SELECT envelope_json FROM events \
              WHERE kind IN ('accountKeyRegistered','accountKeyRotated','deviceCertificateAdded','deviceRevoked',\
              'memberAdded','memberRemoved','sessionSnapshot','memberRoleChanged','dearthModeChanged','joinApproved',\
-             'agentKeyCertified','agentUpserted','agentRosterUpdated','agentRemoved') \
+             'agentKeyCertified','agentUpserted','agentRosterUpdated','agentRemoved',\
+             'workspaceRulesSet','passkeyRegistered','passkeyRemoved') \
              ORDER BY row_id ASC",
             [],
         )
     }
 
     /// A workspace's whole trust history — account keys (registered/rotated),
-    /// device certificates and revocations, and membership — for folding its
+    /// device certificates and revocations, membership, and the rules and
+    /// passkeys that gate new devices under rules v2 — for folding its
     /// [`crate::envelope_verifier::WorkspaceRoster`] without the rest of the log.
     pub fn trust_envelopes(&self, workspace_id: Uuid) -> Result<Vec<SessionEventEnvelope>> {
         self.query_envelopes(
             "SELECT envelope_json FROM events WHERE workspace_id = ?1 \
              AND kind IN ('accountKeyRegistered','accountKeyRotated','deviceCertificateAdded','deviceRevoked',\
              'memberAdded','memberRemoved','sessionSnapshot','memberRoleChanged','dearthModeChanged','joinApproved',\
-             'agentKeyCertified','agentUpserted','agentRosterUpdated','agentRemoved') \
+             'agentKeyCertified','agentUpserted','agentRosterUpdated','agentRemoved',\
+             'workspaceRulesSet','passkeyRegistered','passkeyRemoved') \
              ORDER BY row_id ASC",
             [workspace_id.to_string()],
         )
@@ -423,6 +435,31 @@ impl EventStore {
     /// Whether this workspace already carries a device certificate binding
     /// `device_id` to `account_id` — so identity publication stays idempotent
     /// (and re-publishes once when the account id changes, e.g. GitHub sign-in).
+    /// Workspaces where some device published its key-agreement key (B1).
+    pub fn workspaces_with_ka_publications(&self) -> Result<Vec<Uuid>> {
+        let mut stmt = self.conn.prepare("SELECT DISTINCT workspace_id FROM events WHERE kind = 'deviceKeyAgreementPublished'")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            if let Ok(id) = Uuid::parse_str(&row?) {
+                out.push(id);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Whether `session_id` itself carries a certificate for (device, account).
+    pub fn has_device_certificate_in(&self, session_id: Uuid, device_id: Uuid, account_id: Uuid) -> Result<bool> {
+        let envs = self.query_envelopes(
+            "SELECT envelope_json FROM events WHERE session_id = ?1 AND kind = 'deviceCertificateAdded'",
+            [session_id.to_string()],
+        )?;
+        Ok(envs.iter().any(|e| {
+            matches!(&e.payload, SessionEvent::DeviceCertificateAdded { certificate }
+                if certificate.device_id == device_id && certificate.account_id == account_id)
+        }))
+    }
+
     pub fn has_device_certificate(
         &self,
         workspace_id: Uuid,
@@ -563,18 +600,48 @@ impl EventStore {
         Ok(out)
     }
 
-    /// Park a relay body this device can't open yet (A-13). Keeps at most
-    /// [`PARKED_KEEP`] per room, dropping the oldest.
+    /// Park a relay body this device can't open yet (A-13), with priority 0.
     pub fn park_body(&self, workspace: &str, seq: u64, body: &serde_json::Value) -> Result<()> {
-        self.conn.execute(
-            "INSERT OR REPLACE INTO parked_bodies (workspace, seq, body) VALUES (?1, ?2, ?3)",
-            rusqlite::params![workspace, seq as i64, serde_json::to_string(body)?],
-        )?;
-        self.conn.execute(
+        self.park_bodies(workspace, &[(seq, body, 0)])
+    }
+
+    /// Park relay bodies this device can't open yet (A-13), each with how
+    /// much it is worth keeping (`priority`, higher first; see
+    /// `KeyringEngine::park_priority`). Keeps at most [`PARKED_KEEP`] per
+    /// room: past that the lowest priority goes first, oldest first within a
+    /// priority (B-11: a flood of junk can't evict a body waiting for an
+    /// authorized rotation).
+    pub fn park_bodies(&self, workspace: &str, bodies: &[(u64, &serde_json::Value, u8)]) -> Result<()> {
+        if bodies.is_empty() {
+            return Ok(());
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        for (seq, body, priority) in bodies {
+            tx.execute(
+                "INSERT OR REPLACE INTO parked_bodies (workspace, seq, body, priority) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![workspace, *seq as i64, serde_json::to_string(body)?, *priority as i64],
+            )?;
+        }
+        tx.execute(
             "DELETE FROM parked_bodies WHERE workspace = ?1 AND seq NOT IN \
-             (SELECT seq FROM parked_bodies WHERE workspace = ?1 ORDER BY seq DESC LIMIT ?2)",
+             (SELECT seq FROM parked_bodies WHERE workspace = ?1 ORDER BY priority DESC, seq DESC LIMIT ?2)",
             rusqlite::params![workspace, PARKED_KEEP],
         )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Re-rank parked bodies (the keyring changed: a rotation they wait for
+    /// may now be authorized, or one they claim may have turned out junk).
+    pub fn set_parked_priorities(&self, workspace: &str, priorities: &[(u64, u8)]) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        for (seq, priority) in priorities {
+            tx.execute(
+                "UPDATE parked_bodies SET priority = ?3 WHERE workspace = ?1 AND seq = ?2",
+                rusqlite::params![workspace, *seq as i64, *priority as i64],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
     }
 

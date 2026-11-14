@@ -2,7 +2,9 @@
 //!
 //! WebAuthn in the Tauri webview is unreliable, so every OS uses one path:
 //! the desktop listens on `127.0.0.1:<random>` with a one-time nonce and opens
-//! `https://ligus.ai/presence#c=<challenge>&p=<port>&n=<nonce>&op=get|create…`.
+//! `https://ligus.ai/presence#c=<challenge>&p=<port>&n=<nonce>&op=get|create…`
+//! (through a private redirect page under the data dir, so the nonce is never
+//! in a command line).
 //! That static page (strict CSP, no third-party script) runs
 //! `navigator.credentials.get/create` with `rpId: "ligus.ai"` and
 //! `userVerification: "required"`, then submits the result to the loopback
@@ -112,7 +114,14 @@ fn hand_off(app: &AppHandle, prompt: PresencePrompt, fragment: String) -> Result
     CANCEL.store(false, Ordering::SeqCst);
     let _ = take_recovery();
     let _ = app.emit("presence://requested", &prompt);
-    crate::open_url_in_browser(&url).map_err(|e| format!("couldn't open the browser: {e}"))?;
+    // The nonce goes through a private redirect page, never the command line.
+    let dir = app.state::<AppState>().data_dir.join("presence");
+    let page = redirect_page(&dir, &url).map_err(|e| format!("couldn't prepare the passkey page: {e}"))?;
+    let opened = crate::open_url_in_browser(&page.to_string_lossy());
+    if let Err(e) = opened {
+        let _ = std::fs::remove_file(&page);
+        return Err(format!("couldn't open the browser: {e}"));
+    }
     let deadline = Instant::now() + WAIT;
     let result = loop {
         if CANCEL.load(Ordering::SeqCst) {
@@ -136,6 +145,7 @@ fn hand_off(app: &AppHandle, prompt: PresencePrompt, fragment: String) -> Result
             Err(e) => break Err(e.to_string()),
         }
     };
+    let _ = std::fs::remove_file(&page);
     let _ = app.emit("presence://done", result.is_ok());
     result
 }
@@ -145,26 +155,13 @@ fn hand_off(app: &AppHandle, prompt: PresencePrompt, fragment: String) -> Result
 fn read_submission(mut stream: std::net::TcpStream, nonce: &str) -> Option<HandOff> {
     let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-    let mut reader = BufReader::new(stream.try_clone().ok()?);
-    let mut line = String::new();
-    reader.read_line(&mut line).ok()?;
-    let ok_path = format!("POST /{nonce} ");
-    let mut len = 0usize;
-    loop {
-        let mut h = String::new();
-        if reader.read_line(&mut h).ok()? == 0 || h == "\r\n" || h == "\n" {
-            break;
+    let body = match parse_submission(stream.try_clone().ok()?, nonce) {
+        Ok(body) => body,
+        Err(()) => {
+            let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            return None;
         }
-        if let Some(v) = h.to_ascii_lowercase().strip_prefix("content-length:") {
-            len = v.trim().parse().unwrap_or(0);
-        }
-    }
-    if !line.starts_with(&ok_path) || len == 0 || len > 64 * 1024 {
-        let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-        return None;
-    }
-    let mut body = vec![0u8; len];
-    reader.read_exact(&mut body).ok()?;
+    };
     let page = "<!doctype html><meta charset=utf-8><title>Ligus</title><p style=\"font-family:system-ui\">Done. You can close this tab and return to Ligus.</p>";
     let _ = write!(
         stream,
@@ -185,6 +182,79 @@ fn read_submission(mut stream: std::net::TcpStream, nonce: &str) -> Option<HandO
         }
     }
     Some(r)
+}
+
+/// Caps on what the loopback reads from one connection (B-12): a line (the
+/// request line or one header), the number of headers, the whole header
+/// block, and the form body.
+const MAX_LINE: u64 = 4 * 1024;
+const MAX_HEADERS: usize = 64;
+const MAX_HEAD: u64 = 16 * 1024;
+const MAX_BODY: usize = 64 * 1024;
+
+/// One line of at most [`MAX_LINE`] bytes, ending in `\n`.
+fn capped_line(reader: &mut impl BufRead) -> Result<String, ()> {
+    let mut buf = Vec::new();
+    reader.by_ref().take(MAX_LINE).read_until(b'\n', &mut buf).map_err(|_| ())?;
+    if buf.last() != Some(&b'\n') {
+        return Err(()); // too long, or the connection ended mid-line
+    }
+    String::from_utf8(buf).map_err(|_| ())
+}
+
+/// The form body of a `POST /<nonce>` request read from `stream`, reading at
+/// most [`MAX_HEAD`] + [`MAX_BODY`] bytes whatever the client sends.
+fn parse_submission(stream: impl Read, nonce: &str) -> Result<Vec<u8>, ()> {
+    let mut reader = BufReader::new(stream.take(MAX_HEAD + MAX_BODY as u64));
+    let line = capped_line(&mut reader)?;
+    let ok_path = format!("POST /{nonce} ");
+    let mut len = 0usize;
+    let mut head = line.len() as u64;
+    let mut ended = false;
+    for _ in 0..MAX_HEADERS {
+        let h = capped_line(&mut reader)?;
+        head += h.len() as u64;
+        if head > MAX_HEAD {
+            return Err(());
+        }
+        if h == "\r\n" || h == "\n" {
+            ended = true;
+            break;
+        }
+        if let Some(v) = h.to_ascii_lowercase().strip_prefix("content-length:") {
+            len = v.trim().parse().unwrap_or(0);
+        }
+    }
+    if !ended || !line.starts_with(&ok_path) || len == 0 || len > MAX_BODY {
+        return Err(());
+    }
+    let mut body = vec![0u8; len];
+    reader.read_exact(&mut body).map_err(|_| ())?;
+    Ok(body)
+}
+
+/// Where the browser is pointed (B-12): a one-off redirect page in a private
+/// directory under the data dir (which agent sandboxes can't read), so the
+/// loopback nonce never appears in the `open` command's arguments, which
+/// every local process can list. The page forwards to `url` (fragment and
+/// all) and is deleted when the ceremony ends.
+fn redirect_page(dir: &std::path::Path, url: &str) -> std::io::Result<std::path::PathBuf> {
+    std::fs::create_dir_all(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    let target = serde_json::to_string(url).map_err(std::io::Error::other)?;
+    let attr = url.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;");
+    let page = format!(
+        "<!doctype html><meta charset=utf-8><meta name=referrer content=no-referrer>\
+         <meta http-equiv=refresh content=\"0;url={attr}\"><title>Ligus</title>\
+         <script>location.replace({target})</script>"
+    );
+    let path = dir.join(format!("presence-{}.html", uuid::Uuid::new_v4().simple()));
+    hive_runtime::secret_store::write_private_atomic(&path, page.as_bytes())?;
+    Ok(path)
 }
 
 /// The challenge a returned `clientDataJSON` names.
@@ -275,6 +345,10 @@ pub struct SecurityStatusDto {
     rules: u32,
     key_version: u32,
     secret_backend: String,
+    /// This device's certificate is in force on the workspace config log
+    /// (under rules v2 a new device of an account with a passkey needs
+    /// **Confirm this device**).
+    device_confirmed: bool,
 }
 
 /// Passkeys of this account on the active workspace, the rules version and
@@ -298,7 +372,22 @@ pub fn security_status(state: State<'_, AppState>) -> Result<SecurityStatusDto, 
         rules,
         key_version: timeline.current().key_epochs.head_version(),
         secret_backend: hive_runtime::secret_store::for_data_dir(&state.data_dir).backend().as_str().into(),
+        device_confirmed: svc.device_confirmed(ws).unwrap_or(false),
     })
+}
+
+/// Confirm this device on the active workspace (rules v2: a new device of an
+/// account with a passkey counts only once that passkey confirms it).
+#[tauri::command]
+pub async fn device_confirm(app: AppHandle) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let ws = state.active_workspace_id();
+        let mut svc = state.service.lock().unwrap();
+        svc.confirm_device(ws).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Register a passkey on the active workspace: one browser ceremony creates
@@ -409,6 +498,21 @@ pub async fn passkey_remove(app: AppHandle, credential_id: String) -> Result<(),
     .map_err(|e| e.to_string())?
 }
 
+/// Let member `member_id` of the active workspace register a first passkey
+/// again (rules v2): an Admin's re-grant of their role, confirmed with this
+/// account's passkey.
+#[tauri::command]
+pub async fn passkey_regrant(app: AppHandle, member_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let ws = state.active_workspace_id();
+        let mut svc = state.service.lock().unwrap();
+        svc.regrant_passkey(ws, &member_id).map(|_| ()).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Stop waiting for the browser.
 #[tauri::command]
 pub fn presence_cancel() {
@@ -429,4 +533,70 @@ pub fn presence_use_recovery(words: String) -> Result<(), String> {
 /// Install the browser hand-off as the desktop's presence provider.
 pub fn install(state: &AppState, app: &AppHandle) {
     state.service.lock().unwrap().set_presence_provider(Some(Arc::new(DesktopPresence(app.clone()))));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A stream that never ends: a request line (or header block) with no
+    /// end. Fails the test if the loopback reads more than 1 MiB of it.
+    struct Endless {
+        prefix: Vec<u8>,
+        fill: &'static [u8],
+        read: usize,
+    }
+
+    impl Read for Endless {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            assert!(self.read < 1 << 20, "the loopback kept reading an endless request");
+            let n = buf.len().min(4096);
+            for (i, b) in buf[..n].iter_mut().enumerate() {
+                let at = self.read + i;
+                *b = if at < self.prefix.len() { self.prefix[at] } else { self.fill[(at - self.prefix.len()) % self.fill.len()] };
+            }
+            self.read += n;
+            Ok(n)
+        }
+    }
+
+    /// B-12: one connection to the loopback can't make the desktop read
+    /// without bound: the request line, each header, the header block and
+    /// the body are capped.
+    #[test]
+    fn loopback_reads_are_capped() {
+        let endless_line = Endless { prefix: b"POST /n".to_vec(), fill: b"AAAAAAAA", read: 0 };
+        assert!(parse_submission(endless_line, "n").is_err());
+        let endless_headers = Endless { prefix: b"POST /n HTTP/1.1\r\n".to_vec(), fill: b"X-A: b\r\n", read: 0 };
+        assert!(parse_submission(endless_headers, "n").is_err());
+        let endless_header = Endless { prefix: b"POST /n HTTP/1.1\r\nX-A: ".to_vec(), fill: b"bbbbbbbb", read: 0 };
+        assert!(parse_submission(endless_header, "n").is_err());
+        let huge_body = b"POST /n HTTP/1.1\r\nContent-Length: 99999999\r\n\r\nab".to_vec();
+        assert!(parse_submission(&huge_body[..], "n").is_err());
+        let many_headers = [b"POST /n HTTP/1.1\r\n".to_vec(), b"X: y\r\n".repeat(MAX_HEADERS + 1), b"\r\n".to_vec()].concat();
+        assert!(parse_submission(&many_headers[..], "n").is_err());
+        // A well-formed submission still goes through; a wrong nonce doesn't.
+        let ok = b"POST /n HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 5\r\n\r\nab=cd".to_vec();
+        assert_eq!(parse_submission(&ok[..], "n").unwrap(), b"ab=cd");
+        assert!(parse_submission(&ok[..], "m").is_err());
+    }
+
+    /// B-12: the browser is opened on a private redirect page, so the
+    /// loopback nonce isn't in the `open` command's arguments.
+    #[test]
+    fn the_nonce_stays_off_the_command_line() {
+        let dir = std::env::temp_dir().join(format!("ligus-presence-test-{}", uuid::Uuid::new_v4().simple()));
+        let url = format!("{PRESENCE_PAGE}#op=get&c=abc&p=4242&n=secret-nonce-123");
+        let page = redirect_page(&dir.join("presence"), &url).unwrap();
+        assert!(!page.to_string_lossy().contains("secret-nonce-123"), "the nonce is in the path");
+        let html = std::fs::read_to_string(&page).unwrap();
+        assert!(html.contains(&serde_json::to_string(&url).unwrap()), "{html}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&page).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(std::fs::metadata(page.parent().unwrap()).unwrap().permissions().mode() & 0o777, 0o700);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

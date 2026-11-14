@@ -8,8 +8,11 @@
 //! beat for the current holder and epoch arrives within the lease.
 //!
 //! Two layers protect a beat:
-//!   * it is sealed under the workspace key, so the relay sees only an opaque
-//!     slot name and ciphertext;
+//!   * it is sealed under the keyring's seal key (the authorized head, B1),
+//!     so the relay sees only an opaque slot name and ciphertext, and readers
+//!     take only beats sealed at that head: after a rotation, anyone still
+//!     holding an older key (a removed member, an old invite's passphrase)
+//!     can neither see which device holds a lease nor replay a beat into it;
 //!   * it is **signed by the holder's device key** under its own frozen
 //!     context, so another keyholder cannot keep a dead holder's lease alive
 //!     (which would block succession). Readers verify it against the holder's
@@ -21,11 +24,12 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use hive_core::lease::{lease_key, LeaseScope};
-use hive_core::{open_symmetric, seal_symmetric, SealedEnvelope, SigningKeypair};
+use hive_core::{open_symmetric, seal_symmetric_kid, SealedEnvelope, SigningKeypair};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::keyring::KeyringEngine;
 use crate::relay_client::{RelayClient, RelayError};
 
 /// FROZEN signature context for lease beats. Never rename with the product.
@@ -80,10 +84,12 @@ impl LeaseBeat {
     }
 }
 
-/// Seal a signed beat under the workspace key, as a presence blob.
-pub fn seal_lease_beat(key: &[u8; 32], beat: &LeaseBeat) -> Option<Value> {
+/// Seal a signed beat under `ring`'s seal key, as a presence blob (none when
+/// this device may not seal).
+pub fn seal_lease_beat(ring: &KeyringEngine, beat: &LeaseBeat) -> Option<Value> {
+    let k = ring.seal_key()?;
     let plain = serde_json::to_vec(beat).ok()?;
-    let sealed = seal_symmetric(key, 0, &plain).ok()?;
+    let sealed = seal_symmetric_kid(&k.key, k.version, &k.kid, &plain).ok()?;
     Some(serde_json::json!({ "leaseBeat": sealed }))
 }
 
@@ -105,20 +111,29 @@ pub const MAX_BEAT_SKEW_MS: i64 = 120_000;
 
 /// Open every lease beat in a presence listing. `device_key` resolves a
 /// holder's certified device key (`None` when the device has none). Skips
-/// human/host presence, beats under another key, beats in the wrong slot, and
+/// human/host presence, beats under another key or under an epoch older than
+/// the authorized head, beats in the wrong slot, and
 /// beats whose signature fails against a certified key. Timestamps up to
 /// [`MAX_BEAT_SKEW_MS`] ahead are clamped to `now_ms`; later ones are dropped.
 pub fn open_lease_beats(
     blobs: &HashMap<String, Value>,
-    key: &[u8; 32],
+    ring: &KeyringEngine,
     now_ms: i64,
     device_key: impl Fn(Uuid) -> Option<Vec<u8>>,
 ) -> Vec<(LeaseBeat, BeatTrust)> {
     let mut out = Vec::new();
+    let floor = ring.authorized_head();
     for (slot, blob) in blobs {
         let Some(sealed) = blob.get("leaseBeat") else { continue };
         let Ok(sealed) = serde_json::from_value::<SealedEnvelope>(sealed.clone()) else { continue };
-        let Ok(plain) = open_symmetric(key, &sealed) else { continue };
+        if sealed.version < floor {
+            continue;
+        }
+        let Some(plain) =
+            ring.keys_for(sealed.version, sealed.kid.as_deref()).into_iter().find_map(|k| open_symmetric(k, &sealed).ok())
+        else {
+            continue;
+        };
         let Ok(mut beat) = serde_json::from_slice::<LeaseBeat>(&plain) else { continue };
         if *slot != lease_presence_slot(beat.scope, &beat.scope_id) {
             continue;
@@ -138,8 +153,8 @@ pub fn open_lease_beats(
 }
 
 /// Publish a beat to the room's presence channel.
-pub async fn publish_lease_beat(relay: &RelayClient, room: &str, key: &[u8; 32], beat: &LeaseBeat) -> Result<(), RelayError> {
-    let Some(blob) = seal_lease_beat(key, beat) else { return Ok(()) };
+pub async fn publish_lease_beat(relay: &RelayClient, room: &str, ring: &KeyringEngine, beat: &LeaseBeat) -> Result<(), RelayError> {
+    let Some(blob) = seal_lease_beat(ring, beat) else { return Ok(()) };
     relay.publish_presence(room, &lease_presence_slot(beat.scope, &beat.scope_id), &blob).await
 }
 
@@ -186,6 +201,10 @@ impl LeaseBeats {
 mod tests {
     use super::*;
 
+    fn ring(pass: &str) -> KeyringEngine {
+        KeyringEngine::passphrase(Uuid::nil(), hive_core::derive_workspace_key(pass))
+    }
+
     fn beat(holder: Uuid, epoch: u64, n: u64) -> LeaseBeat {
         LeaseBeat {
             scope: LeaseScope::WorkflowRun,
@@ -208,7 +227,7 @@ mod tests {
 
     #[test]
     fn signed_beats_round_trip_and_forgeries_are_dropped() {
-        let k = hive_core::derive_workspace_key("room secret");
+        let k = ring("room secret");
         let holder_kp = SigningKeypair::generate().unwrap();
         let mallory_kp = SigningKeypair::generate().unwrap();
         let holder = Uuid::new_v4();
@@ -242,7 +261,7 @@ mod tests {
         blobs2.insert("lease:workflow_run:other".to_string(), seal_lease_beat(&k, &good).unwrap());
         blobs2.insert(
             lease_presence_slot(LeaseScope::WorkflowRun, "run"),
-            seal_lease_beat(&hive_core::derive_workspace_key("other"), &good).unwrap(),
+            seal_lease_beat(&ring("other"), &good).unwrap(),
         );
         assert!(open_lease_beats(&blobs2, &k, 10_000, |_| Some(pk.clone())).is_empty());
 
@@ -262,7 +281,7 @@ mod tests {
     #[test]
     fn a_future_dated_beat_cannot_keep_a_dead_lease_alive() {
         use hive_core::lease::{fold_claim, lease_health, CoordinatorLease, LeaseClaimReason, LeaseHealth, LeaseTable};
-        let k = hive_core::derive_workspace_key("room secret");
+        let k = ring("room secret");
         let kp = SigningKeypair::generate().unwrap();
         let holder = Uuid::new_v4();
         let pk = kp.public_key_bytes().to_vec();
@@ -308,7 +327,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, crate::test_relay::router()).await.unwrap() });
         let relay = RelayClient::new(format!("http://{addr}"));
-        let k = hive_core::derive_workspace_key("room secret");
+        let k = ring("room secret");
         let kp = SigningKeypair::generate().unwrap();
         let h = Uuid::new_v4();
         publish_lease_beat(&relay, "room-a", &k, &beat(h, 1, 1).sign(&kp)).await.unwrap();
