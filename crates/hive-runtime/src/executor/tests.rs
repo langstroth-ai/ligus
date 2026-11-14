@@ -1293,3 +1293,17 @@ fn sandbox_default_always_writing_clis_need_admin() {
         assert!(!always_writes(kind), "{kind:?} has a read-only tier");
     }
 }
+
+/// S11: forge CLIs keep their logins in plain files on a box without a secret
+/// service (gh's hosts.yml holds a write-capable token). An agent never reads
+/// them; the forge tools reach the code host for it.
+#[test]
+fn home_secret_dirs_cover_forge_cli_logins() {
+    let home = Path::new("/home/u");
+    for purpose in [Purpose::Agent(ModelProviderKind::ClaudeCode), Purpose::Agent(ModelProviderKind::Aider), Purpose::Agent(ModelProviderKind::Codex)] {
+        let dirs = home_secret_dirs(home, purpose);
+        for rel in [".config/gh", ".config/glab-cli", ".config/tea", ".config/hub"] {
+            assert!(dirs.contains(&home.join(rel)), "{rel} readable by {purpose:?}");
+        }
+    }
+}
