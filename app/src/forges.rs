@@ -177,6 +177,13 @@ pub async fn forges_add(state: State<'_, AppState>, kind: String, base_url: Stri
 #[tauri::command]
 pub async fn forges_remove(state: State<'_, AppState>, id: String) -> Result<(), String> {
     let id = ForgeId::parse(&id).map_err(err)?;
+    // End a device sign-in for it first: its poll then stores nothing.
+    {
+        let mut d = DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+        if d.as_ref().is_some_and(|p| p.id == id) {
+            *d = None;
+        }
+    }
     let dir = state.data_dir.clone();
     let mut all = Connections::load(&dir);
     all.remove(&id);
@@ -232,6 +239,13 @@ struct DevicePending {
     user_code: String,
     verification_uri: String,
     expires: Instant,
+    /// Which sign-in this is: its poll saves tokens only while it is still
+    /// the pending one (a removal or a newer sign-in ends it).
+    nonce: u64,
+}
+
+fn new_nonce() -> u64 {
+    uuid::Uuid::new_v4().as_u64_pair().0
 }
 
 static DEVICE: LazyLock<Mutex<Option<DevicePending>>> = LazyLock::new(|| Mutex::new(None));
@@ -245,7 +259,9 @@ pub async fn forges_device_start(state: State<'_, AppState>, id: String) -> Resu
     let c = Connections::load(&dir).get(&id).ok_or("no such connection")?.clone();
     let ep = hive_forge::device::endpoints(&c).map_err(err)?;
     let start = hive_forge::device::start(&ep).await.map_err(err)?;
+    let nonce = new_nonce();
     *DEVICE.lock().unwrap_or_else(|e| e.into_inner()) = Some(DevicePending {
+        nonce,
         id: id.clone(),
         state: "pending",
         error: None,
@@ -256,7 +272,7 @@ pub async fn forges_device_start(state: State<'_, AppState>, id: String) -> Resu
     let out = json!({ "userCode": start.user_code, "verificationUri": start.verification_uri, "expiresIn": start.expires_in });
     tauri::async_runtime::spawn(async move {
         let set = |st: &'static str, e: Option<String>| {
-            if let Some(p) = DEVICE.lock().unwrap_or_else(|e| e.into_inner()).as_mut().filter(|p| p.id == id) {
+            if let Some(p) = DEVICE.lock().unwrap_or_else(|e| e.into_inner()).as_mut().filter(|p| p.id == id && p.nonce == nonce) {
                 p.state = st;
                 p.error = e;
             }
@@ -264,7 +280,7 @@ pub async fn forges_device_start(state: State<'_, AppState>, id: String) -> Resu
         let mut interval = start.interval;
         loop {
             tokio::time::sleep(Duration::from_secs(interval)).await;
-            let expired = DEVICE.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_none_or(|p| p.id != id || Instant::now() > p.expires);
+            let expired = DEVICE.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_none_or(|p| p.id != id || p.nonce != nonce || Instant::now() > p.expires);
             if expired {
                 return set("expired", None);
             }
@@ -274,19 +290,19 @@ pub async fn forges_device_start(state: State<'_, AppState>, id: String) -> Resu
                 Ok(hive_forge::device::Poll::Denied) => return set("denied", None),
                 Ok(hive_forge::device::Poll::Expired) => return set("expired", None),
                 Ok(hive_forge::device::Poll::Done(t)) => {
-                    let s = store(&dir);
-                    let mut r = s.put(&id, Purpose::Write, &t.access).map_err(err);
-                    if let (Ok(()), Some(rt)) = (&r, &t.refresh) {
-                        r = s.put(&id, Purpose::Refresh, rt).map_err(err);
-                    }
-                    let mut all = Connections::load(&dir);
-                    if let Some(c) = all.get_mut(&id) {
-                        c.auth = AuthSource::Oauth;
-                        c.token_expires_at = t.expires_in.map(|x| hive_forge::device::now_unix() + x);
-                    }
-                    let r = r.and_then(|()| all.save(&dir).map_err(err));
+                    // Stored only while this sign-in is still the pending
+                    // one and the connection still exists.
+                    let (d, pid) = (dir.clone(), id.clone());
+                    let r = tokio::task::spawn_blocking(move || {
+                        let current = || DEVICE.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|p| p.id == pid && p.nonce == nonce);
+                        hive_forge::conn::save_device_sign_in(&d, store(&d).as_ref(), &pid, &t, current).map_err(err)
+                    })
+                    .await
+                    .map_err(err)
+                    .and_then(|r| r);
                     return match r {
-                        Ok(()) => set("done", None),
+                        Ok(true) => set("done", None),
+                        Ok(false) => {}
                         Err(e) => set("error", Some(e)),
                     };
                 }

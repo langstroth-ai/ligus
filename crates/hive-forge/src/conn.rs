@@ -127,6 +127,32 @@ pub fn validate_base_url(raw: &str) -> Result<String> {
     Ok(raw.to_string())
 }
 
+/// Save a finished device sign-in's tokens and mark the connection OAuth,
+/// under [`ForgesLock`]. Nothing is stored (and `Ok(false)` returned) when
+/// the connection is gone or `still_current` says the sign-in that produced
+/// these tokens is no longer the pending one (the connection was removed,
+/// perhaps added again, or another sign-in started since): a background
+/// poll must never leave a stray token behind, nor attach one to a
+/// connection nobody signed in on. Not for use while holding the lock.
+pub fn save_device_sign_in(data_dir: &Path, store: &dyn TokenStore, id: &ForgeId, t: &crate::device::TokenSet, still_current: impl FnOnce() -> bool) -> Result<bool> {
+    let _lock = ForgesLock::acquire(data_dir)?;
+    let mut all = Connections::load(data_dir);
+    if all.get(id).is_none() || !still_current() {
+        return Ok(false);
+    }
+    store.put(id, crate::tokens::Purpose::Write, &t.access)?;
+    match &t.refresh {
+        Some(r) => store.put(id, crate::tokens::Purpose::Refresh, r)?,
+        None => store.delete(id, crate::tokens::Purpose::Refresh)?,
+    }
+    if let Some(c) = all.get_mut(id) {
+        c.auth = AuthSource::Oauth;
+        c.token_expires_at = t.expires_in.map(|s| crate::device::now_unix() + s);
+    }
+    all.save(data_dir)?;
+    Ok(true)
+}
+
 /// The forge a well-known host runs.
 pub fn known_kind(host: &str) -> Option<(ForgeKind, Option<&'static str>)> {
     match host.trim().to_ascii_lowercase().as_str() {

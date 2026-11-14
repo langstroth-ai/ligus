@@ -316,6 +316,9 @@ pub struct DeviceSession {
     /// `pending`, `done`, `denied`, `expired` or `error`.
     pub state: &'static str,
     pub error: Option<String>,
+    /// Which sign-in this is: a poll saves its tokens only while its own
+    /// session is still the pending one for the connection.
+    pub nonce: u64,
 }
 
 #[derive(Debug, Clone)]

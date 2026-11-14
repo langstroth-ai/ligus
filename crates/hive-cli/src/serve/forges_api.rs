@@ -170,9 +170,10 @@ pub async fn remove(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): 
     ensure_can_write(&s, None)?;
     presence_gate(&s, peer.as_deref(), "forge_remove")?;
     let id = parse_id(&id)?;
+    // First end any device sign-in for it: its poll then stores nothing.
+    s.repos.device.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
     let removed = edit_connections(&s, |all| Ok(all.remove(&id))).await?;
     forge_cmd::token_store(&s.cfg.data_dir).delete_all(&id).map_err(forge_err)?;
-    s.repos.device.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
     if !removed {
         return Err(ApiError::not_found("code host connection"));
     }
@@ -271,7 +272,13 @@ pub async fn device_start(State(s): S, peer: Option<Extension<TunnelPeer>>, Path
         return Err(ApiError::new(StatusCode::SERVICE_UNAVAILABLE, super::repos_api::OFFLINE));
     }
     let start = hive_forge::device::start(&ep).await.map_err(forge_err)?;
+    let nonce = {
+        let mut b = [0u8; 8];
+        let _ = getrandom::getrandom(&mut b);
+        u64::from_le_bytes(b)
+    };
     let session = DeviceSession {
+        nonce,
         user_code: start.user_code.clone(),
         verification_uri: start.verification_uri.clone(),
         expires_at: Instant::now() + Duration::from_secs(start.expires_in),
@@ -285,7 +292,7 @@ pub async fn device_start(State(s): S, peer: Option<Extension<TunnelPeer>>, Path
         let mut interval = start.interval;
         let deadline = Instant::now() + Duration::from_secs(expires_in);
         let set = |state: &'static str, error: Option<String>| {
-            if let Some(d) = shared.repos.device.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&poll_id) {
+            if let Some(d) = shared.repos.device.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&poll_id).filter(|d| d.nonce == nonce) {
                 d.state = state;
                 d.error = error;
             }
@@ -296,23 +303,33 @@ pub async fn device_start(State(s): S, peer: Option<Extension<TunnelPeer>>, Path
                 set("expired", None);
                 return;
             }
+            // Removed (or replaced by another sign-in): stop polling.
+            if shared.repos.device.lock().unwrap_or_else(|e| e.into_inner()).get(&poll_id).is_none_or(|d| d.nonce != nonce) {
+                return;
+            }
             match hive_forge::device::poll(&ep, &start.device_code).await {
                 Ok(hive_forge::device::Poll::Pending) => {}
                 Ok(hive_forge::device::Poll::SlowDown(i)) => interval = i,
                 Ok(hive_forge::device::Poll::Denied) => return set("denied", None),
                 Ok(hive_forge::device::Poll::Expired) => return set("expired", None),
                 Ok(hive_forge::device::Poll::Done(t)) => {
-                    let lock = hive_forge::conn::ForgesLock::acquire_async(&shared.cfg.data_dir).await;
-                    let r = {
-                        let _forges = lock;
-                        let _g = shared.repos.bindings.lock().unwrap_or_else(|e| e.into_inner());
-                        let mut all = Connections::load(&shared.cfg.data_dir);
-                        forge_cmd::save_token_set(&shared.cfg.data_dir, &mut all, &poll_id, &t)
-                    };
+                    // Stored only while this sign-in is still the pending one
+                    // and the connection still exists (a removal ends it).
+                    let sh = shared.clone();
+                    let pid = poll_id.clone();
+                    let r = tokio::task::spawn_blocking(move || {
+                        let data_dir = sh.cfg.data_dir.clone();
+                        let current = || sh.repos.device.lock().unwrap_or_else(|e| e.into_inner()).get(&pid).is_some_and(|d| d.nonce == nonce);
+                        hive_forge::conn::save_device_sign_in(&data_dir, forge_cmd::token_store(&data_dir).as_ref(), &pid, &t, current)
+                    })
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| r.map_err(|e| e.to_string()));
                     shared.repos.invalidate();
                     return match r {
-                        Ok(()) => set("done", None),
-                        Err(e) => set("error", Some(e.to_string())),
+                        Ok(true) => set("done", None),
+                        Ok(false) => {}
+                        Err(e) => set("error", Some(e)),
                     };
                 }
                 Err(e) => return set("error", Some(e.to_string())),

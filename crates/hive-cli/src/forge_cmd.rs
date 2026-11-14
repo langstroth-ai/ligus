@@ -149,7 +149,7 @@ pub fn cmd(data_dir: &Path, args: &[&str], auth: Option<String>, client_id: Opti
         }
         Some("login") => {
             let id = ForgeId::parse(args.get(1).copied().unwrap_or("")).map_err(|e| anyhow::anyhow!("{e}"))?;
-            let mut all = Connections::load(data_dir);
+            let all = Connections::load(data_dir);
             let c = all.get(&id).with_context(|| format!("no connection {id}"))?.clone();
             let ep = hive_forge::device::endpoints(&c).map_err(|e| anyhow::anyhow!("{e}"))?;
             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
@@ -168,9 +168,7 @@ pub fn cmd(data_dir: &Path, args: &[&str], auth: Option<String>, client_id: Opti
                     hive_forge::device::Poll::Denied => bail!("sign-in was denied"),
                     hive_forge::device::Poll::Expired => bail!("the code expired; run ligus forge login {id} again"),
                     hive_forge::device::Poll::Done(t) => {
-                        let _forges = hive_forge::conn::ForgesLock::acquire(data_dir).map_err(|e| anyhow::anyhow!("{e}"))?;
-                        all = Connections::load(data_dir);
-                        save_token_set(data_dir, &mut all, &id, &t)?;
+                        save_token_set(data_dir, &id, &t)?;
                         println!("signed in; the token is in this device's secret store.");
                         return Ok(());
                     }
@@ -181,20 +179,14 @@ pub fn cmd(data_dir: &Path, args: &[&str], auth: Option<String>, client_id: Opti
     }
 }
 
-/// Store a device sign-in's tokens and mark the connection as OAuth. The
-/// caller holds the data dir's `ForgesLock` and loaded `all` under it.
-pub fn save_token_set(data_dir: &Path, all: &mut Connections, id: &ForgeId, t: &hive_forge::device::TokenSet) -> Result<()> {
-    let store = token_store(data_dir);
-    store.put(id, Purpose::Write, &t.access).map_err(|e| anyhow::anyhow!("{e}"))?;
-    match &t.refresh {
-        Some(r) => store.put(id, Purpose::Refresh, r).map_err(|e| anyhow::anyhow!("{e}"))?,
-        None => store.delete(id, Purpose::Refresh).map_err(|e| anyhow::anyhow!("{e}"))?,
+/// Store a device sign-in's tokens and mark the connection as OAuth, only
+/// while the connection still exists.
+pub fn save_token_set(data_dir: &Path, id: &ForgeId, t: &hive_forge::device::TokenSet) -> Result<()> {
+    let saved = hive_forge::conn::save_device_sign_in(data_dir, token_store(data_dir).as_ref(), id, t, || true).map_err(|e| anyhow::anyhow!("{e}"))?;
+    if !saved {
+        bail!("{id} was removed during the sign-in; nothing was stored");
     }
-    if let Some(c) = all.get_mut(id) {
-        c.auth = AuthSource::Oauth;
-        c.token_expires_at = t.expires_in.map(|s| hive_forge::device::now_unix() + s);
-    }
-    all.save(data_dir).map_err(|e| anyhow::anyhow!("{e}"))
+    Ok(())
 }
 
 /// One git credential helper call: answer `get` from the store.

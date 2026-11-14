@@ -3471,12 +3471,73 @@ async fn device_user_code_never_over_plain_http() {
             expires_at: std::time::Instant::now() + Duration::from_secs(300),
             state: "pending",
             error: None,
+            nonce: 1,
         },
     );
     let (c, v) = status_of(&h, reqwest::Method::GET, "/v1/forges/gitlab:gitlab.com/auth/device", None).await;
     assert!(!v.to_string().contains("WDJB-MJHT"), "the user code went out over plain HTTP: {c} {v}");
     let (c, _) = status_of(&h, reqwest::Method::POST, "/v1/forges/gitlab:gitlab.com/auth/device", None).await;
     assert_eq!(c, 403, "starting one is refused there too");
+}
+
+/// A device sign-in polls in the background. If the connection is removed
+/// meanwhile (or removed and added again), the poll's answer must not land
+/// in the secret store: no orphaned token, and none attached to a later
+/// connection the person never signed in on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn device_poll_after_remove_stores_nothing() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let approved = Arc::new(AtomicBool::new(false));
+    let a = approved.clone();
+    let app = Router::new()
+        .route(
+            "/oauth/authorize_device",
+            post(|| async {
+                axum::Json(json!({"device_code": "DEV", "user_code": "ABCD-1234", "verification_uri": "http://127.0.0.1/oauth/device", "expires_in": 300, "interval": 1}))
+            }),
+        )
+        .route(
+            "/oauth/token",
+            post(move || {
+                let a = a.clone();
+                async move {
+                    if a.load(Ordering::SeqCst) {
+                        axum::Json(json!({"access_token": "STRAY-ACCESS", "refresh_token": "STRAY-REFRESH", "expires_in": 7200}))
+                    } else {
+                        axum::Json(json!({"error": "authorization_pending"}))
+                    }
+                }
+            }),
+        );
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", l.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    h.handle.shared.repos.offline.store(false, std::sync::atomic::Ordering::SeqCst);
+    let add = json!({"kind": "gitlab", "baseUrl": base, "auth": "token", "clientId": "app-123"});
+    let added = h.send(reqwest::Method::POST, "/v1/forges", Some(add.clone())).await;
+    let id_str = added["forge"]["id"].as_str().unwrap().to_string();
+    let id = hive_forge::ForgeId::parse(&id_str).unwrap();
+    let store = crate::forge_cmd::token_store(&h.handle.shared.cfg.data_dir);
+    for re_add in [false, true] {
+        let st = h.send(reqwest::Method::POST, &format!("/v1/forges/{id_str}/auth/device"), None).await;
+        assert_eq!(st["state"], "pending", "{st}");
+        h.send(reqwest::Method::DELETE, &format!("/v1/forges/{id_str}"), None).await;
+        if re_add {
+            h.send(reqwest::Method::POST, "/v1/forges", Some(add.clone())).await;
+        }
+        approved.store(true, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert!(store.present(&id).is_empty(), "re-added {re_add}: the removed connection's sign-in stored a token");
+        let saved = hive_forge::Connections::load(&h.handle.shared.cfg.data_dir);
+        assert!(saved.get(&id).is_none_or(|c| c.auth == hive_forge::AuthSource::Token && c.token_expires_at.is_none()), "re-added {re_add}: {saved:?}");
+        approved.store(false, Ordering::SeqCst);
+        if !re_add {
+            h.send(reqwest::Method::POST, "/v1/forges", Some(add.clone())).await;
+        }
+    }
 }
 
 /// The gh login is the default only for github.com itself: a look-alike host
