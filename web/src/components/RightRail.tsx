@@ -1461,32 +1461,51 @@ function ProposalCard({
       )}
 
       {diffOpen && proposal.diff && (
-        <Modal
+        <ProposalDiffModal
+          title={proposal.title}
+          diff={proposal.diff}
+          files={proposal.changedFiles?.length ?? 0}
           onClose={() => setDiffOpen(false)}
-          panelClassName="flex max-h-[88vh] w-[min(96vw,1100px)] flex-col overflow-hidden rounded-2xl border"
-          panelStyle={{ background: "var(--hive-panel)", borderColor: "var(--hive-line)" }}
-        >
-          <div
-            className="flex items-center justify-between gap-3 border-b px-4 py-3"
-            style={{ borderColor: "var(--hive-line)" }}
-          >
-            <div className="min-w-0">
-              <div className="truncate font-semibold">{proposal.title}</div>
-              <div className="text-xs opacity-55">
-                {(proposal.changedFiles?.length ?? 0)} file
-                {(proposal.changedFiles?.length ?? 0) === 1 ? "" : "s"} changed
-              </div>
-            </div>
-            <IconButton label="Close" onClick={() => setDiffOpen(false)}>
-              <IconX size={14} />
-            </IconButton>
-          </div>
-          <div className="min-h-0 flex-1 overflow-auto p-4">
-            <ProposalDiff diff={proposal.diff} wide />
-          </div>
-        </Modal>
+        />
       )}
     </Card>
+  );
+}
+
+/// A proposal's full diff in a wide sheet (Review card, proposal-set
+/// alternatives).
+export function ProposalDiffModal({
+  title,
+  diff,
+  files,
+  onClose,
+}: {
+  title: string;
+  diff: string;
+  files: number;
+  onClose: () => void;
+}) {
+  return (
+    <Modal
+      onClose={onClose}
+      panelClassName="flex max-h-[88vh] w-[min(96vw,1100px)] flex-col overflow-hidden rounded-2xl border"
+      panelStyle={{ background: "var(--hive-panel)", borderColor: "var(--hive-line)", boxShadow: "var(--hive-shadow-pop)" }}
+    >
+      <div className="flex items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: "var(--hive-line)" }}>
+        <div className="min-w-0">
+          <div className="truncate font-semibold">{title}</div>
+          <div className="text-xs text-ink-soft">
+            {files} file{files === 1 ? "" : "s"} changed
+          </div>
+        </div>
+        <IconButton label="Close" onClick={onClose}>
+          <IconX size={14} />
+        </IconButton>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto p-4">
+        <ProposalDiff diff={diff} wide />
+      </div>
+    </Modal>
   );
 }
 
