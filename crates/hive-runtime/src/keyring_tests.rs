@@ -1138,6 +1138,12 @@ async fn forged_dm_founder_never_gets_writes() {
     round(&mut alice_sync, &alice_db).await;
     round(&mut mal_sync, &mal_db).await;
     assert!(!bodies(&mal_db, chat).contains(&"for Bob only".to_string()), "Mallory read Alice's DM to Bob");
+    // Nor does the forged log vouch for anyone: names, keys and drop boxes
+    // come only from logs whose pinned founder really founded them (else
+    // Mallory registers a key under any co-member's account there).
+    let me = alice.author().account_id.unwrap();
+    let listed = crate::directory_trust::co_members(alice.store(), me);
+    assert!(listed.iter().all(|c| !c.workspaces.contains(&wid)), "a forged log fed the co-member directory: {listed:?}");
 }
 
 /// The control: the real founder's seed verifies under the pinned key, and the
