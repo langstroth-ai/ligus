@@ -531,7 +531,7 @@ fn removed_member_cannot_forge_or_read_host_beats() {
     let beats = open_host_beats(&blobs, &w.engine("ada", &[]), 5_000);
     assert_eq!(beats.get("desk"), Some(&1_000), "a beat at the authorized head");
     assert_eq!(beats.get("box"), None, "a forged beat under the old epoch");
-    assert!(open_host_beats(&blobs, &mara, 5_000).get("desk").is_none(), "mara can't read the new beats");
+    assert!(!open_host_beats(&blobs, &mara, 5_000).contains_key("desk"), "mara can't read the new beats");
 }
 
 #[test]

@@ -110,7 +110,7 @@ fn hand_off(app: &AppHandle, prompt: PresencePrompt, fragment: String) -> Result
     let nonce = b64url(uuid::Uuid::new_v4().as_bytes());
     let url = format!("{PRESENCE_PAGE}#{fragment}&p={port}&n={nonce}");
     CANCEL.store(false, Ordering::SeqCst);
-    drop(take_recovery());
+    let _ = take_recovery();
     let _ = app.emit("presence://requested", &prompt);
     crate::open_url_in_browser(&url).map_err(|e| format!("couldn't open the browser: {e}"))?;
     let deadline = Instant::now() + WAIT;
