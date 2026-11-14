@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addAgent,
@@ -78,6 +78,11 @@ import {
   SelectField,
   FormDisclosure,
   EmptyHint,
+  ErrorState,
+  LoadingState,
+  Badge,
+  StatusDot,
+  type Tone,
   Popover,
   PopoverHeader,
   PopoverItem,
@@ -87,6 +92,9 @@ import {
   IconX,
   IconChevronDown,
   IconPlus,
+  IconCheck,
+  IconInbox,
+  IconMonitor,
 } from "@/lib/icons";
 import { PANES, type UtilityPane } from "@/lib/panes";
 import { WorkflowsPane, WorkflowStages } from "@/components/WorkflowsPane";
@@ -212,22 +220,41 @@ export function RightRail({
   );
 }
 
+// Scroll offsets per rail pane, so flipping Review → Flow → Review returns you
+// to where you were instead of the top (module-level: survives remounts).
+const railScroll = new Map<string, number>();
+
 export function RailFrame({
   title,
   subtitle,
   children,
+  actions,
 }: {
   title: string;
   subtitle: string;
   children: ReactNode;
+  /// Optional header controls, right-aligned under the close button's row.
+  actions?: ReactNode;
 }) {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.scrollTop = railScroll.get(title) ?? 0;
+    const save = () => railScroll.set(title, el.scrollTop);
+    el.addEventListener("scroll", save, { passive: true });
+    return () => el.removeEventListener("scroll", save);
+  }, [title]);
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b px-4 py-3" style={{ borderColor: "var(--hive-line)" }}>
-        <div className="text-lg font-semibold tracking-tight">{title}</div>
-        <div className="mt-0.5 text-xs leading-5 opacity-60">{subtitle}</div>
+      <div className="border-b px-4 pb-2.5 pt-3" style={{ borderColor: "var(--hive-line)" }}>
+        <h2 className="pr-8 text-[15px] font-semibold tracking-[-0.01em]">{title}</h2>
+        <p className="mt-0.5 pr-2 text-xs leading-[1.45] text-ink-soft">{subtitle}</p>
+        {actions && <div className="mt-2">{actions}</div>}
       </div>
-      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-3 py-3">{children}</div>
+      <div ref={bodyRef} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-3 py-3">
+        {children}
+      </div>
     </div>
   );
 }
@@ -771,7 +798,7 @@ function AgentHostBadge({ hostId, hosts }: { hostId: string; hosts: WorkspaceHos
           : `Worker “${label}” is offline; queued work waits until it reconnects`
       }
     >
-      <span aria-hidden>🖥</span>
+      <span aria-hidden className="inline-flex"><IconMonitor size={12} /></span>
       <span className="truncate">{label}</span>
       <span aria-hidden>·</span>
       <span style={{ color: online ? "var(--hive-success-ink)" : "var(--hive-warn-ink)" }}>
@@ -947,42 +974,20 @@ function RuntimeCard({
 /// ("OFFLINE → queued"), device/unknown = neutral. All tints route through
 /// --hive-* tokens (R1).
 function HostStatusBadge({ item }: { item: QueuedWorkDto }) {
-  const style: { bg: string; fg: string; label: string } = (() => {
-    switch (item.hostStatus) {
-      case "online":
-        return {
-          bg: "color-mix(in srgb, var(--hive-success) 18%, transparent)",
-          fg: "var(--hive-success)",
-          label: item.hostLabel ? `online · ${item.hostLabel}` : "online",
-        };
-      case "offline":
-        return {
-          bg: "color-mix(in srgb, var(--hive-accent-warm) 18%, transparent)",
-          fg: "var(--hive-accent-warm)",
-          label: "OFFLINE → queued",
-        };
-      case "device":
-        return {
-          bg: "var(--hive-mist)",
-          fg: "var(--hive-ink-soft)",
-          label: "device",
-        };
-      default:
-        return {
-          bg: "var(--hive-mist)",
-          fg: "var(--hive-ink-soft)",
-          label: "unknown host",
-        };
-    }
-  })();
-  return (
-    <span
-      className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em]"
-      style={{ background: style.bg, color: style.fg }}
-    >
-      {style.label}
-    </span>
-  );
+  switch (item.hostStatus) {
+    case "online":
+      return <Badge tone="success">{item.hostLabel ? `online · ${item.hostLabel}` : "online"}</Badge>;
+    case "offline":
+      return (
+        <Badge tone="warn" title={item.hostLabel ? `${item.hostLabel} is offline` : undefined}>
+          offline · queued
+        </Badge>
+      );
+    case "device":
+      return <Badge>device</Badge>;
+    default:
+      return <Badge>unknown host</Badge>;
+  }
 }
 
 /// "Run on worker" affordance: a small menu of the online workers. Selecting
@@ -1043,16 +1048,12 @@ function QueuedWorkRow({
   const needsHandoff = item.hostStatus === "offline" || item.hostStatus === "device";
   return (
     <Card className="px-3 py-2.5">
-      <div className="flex items-center gap-2">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <span className="truncate text-[13px] font-medium">@{item.agentName}</span>
-            <HostStatusBadge item={item} />
-          </div>
-          <div className="truncate text-[11.5px]" style={{ color: "var(--hive-ink-soft)" }}>
-            {item.chatTitle || "Untitled chat"}
-          </div>
-        </div>
+      <div className="flex min-w-0 items-baseline gap-1.5">
+        <span className="shrink-0 text-[13px] font-semibold">@{item.agentName}</span>
+        <span className="min-w-0 truncate text-xs text-ink-soft">in {item.chatTitle || "Untitled chat"}</span>
+      </div>
+      <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
+        <HostStatusBadge item={item} />
         {needsHandoff && (
           <RunOnWorkerMenu
             workers={workers}
@@ -1581,22 +1582,20 @@ function RefinementThread({
 /// dim uppercase text (open = neutral, approved = success, rejected = danger,
 /// applied = accent).
 function StatusPill({ status }: { status: string }) {
-  const tone =
+  const tone: Tone =
     status === "approved" || status === "applied"
-      ? "var(--hive-success)"
+      ? "success"
       : status === "rejected"
-        ? "var(--hive-danger)"
-        : "var(--hive-ink)";
+        ? "danger"
+        : status === "open"
+          ? "info"
+          : "neutral";
+  const icon =
+    tone === "success" ? <IconCheck size={11} /> : tone === "danger" ? <IconX size={11} /> : undefined;
   return (
-    <span
-      className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]"
-      style={{
-        color: tone,
-        background: `color-mix(in srgb, ${tone} 14%, transparent)`,
-      }}
-    >
+    <Badge tone={tone} icon={icon}>
       {status}
-    </span>
+    </Badge>
   );
 }
 
@@ -1637,18 +1636,34 @@ function ReviewPane({ sessionId }: { sessionId: string }) {
     />
   );
 
+  const loading = proposals.isPending || sets.isPending;
+  const failed = proposals.isError || sets.isError;
   return (
     <RailFrame title="Review" subtitle="Pending decisions and proposal quorum for this chat.">
       <QueuedWorkSection />
+      {failed && (
+        <div className="mb-4">
+          <ErrorState
+            text="Couldn't load proposals for this chat."
+            onRetry={() => {
+              void proposals.refetch();
+              void sets.refetch();
+            }}
+          />
+        </div>
+      )}
+      {loading && !failed && <LoadingState rows={3} label="Loading proposals" />}
+      {!loading && !failed && (
+      <>
       {(sets.data ?? []).length > 0 && (
-        <Section title="Proposal Sets">
+        <Section title="Proposal sets">
           <ProposalSets sessionId={sessionId} sets={sets.data ?? []} />
         </Section>
       )}
-      <Section title="Pending Proposals">
+      <Section title="Pending proposals">
         {groups.active.map(card)}
         {groups.active.length === 0 && (
-          <EmptyHint text="No proposals are waiting for review." />
+          <EmptyHint icon={<IconInbox size={18} />} text="Nothing is waiting for review." />
         )}
       </Section>
 
@@ -1684,6 +1699,8 @@ function ReviewPane({ sessionId }: { sessionId: string }) {
             <div className="space-y-2.5">{groups.dismissed.map(card)}</div>
           </FormDisclosure>
         </Section>
+      )}
+          </>
       )}
     </RailFrame>
   );
@@ -1941,14 +1958,13 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
               <div className="flex items-center gap-2 font-medium">
                 <span className="relative shrink-0">
                   <Avatar name={member.displayName} url={member.avatarUrl} kind="human" size={26} />
-                  <span
-                    className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full"
-                    style={{
-                      background: online ? "var(--hive-success)" : "var(--hive-line)",
-                      boxShadow: "0 0 0 2px var(--hive-panel)",
-                    }}
-                    title={sync.data?.relayConfigured ? (online ? "Online" : "Offline") : "Presence needs a relay"}
-                  />
+                  <span className="absolute -bottom-0.5 -right-0.5 inline-flex rounded-full" style={{ background: "var(--hive-panel)" }}>
+                    <StatusDot
+                      on={online}
+                      size={9}
+                      label={sync.data?.relayConfigured ? (online ? "Online" : "Offline") : "Presence needs a relay"}
+                    />
+                  </span>
                 </span>
                 {member.displayName}
                 {dup && (
@@ -1961,7 +1977,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                 )}
                 {member.title && <span className="text-xs opacity-50">· {member.title}</span>}
               </div>
-              <div className="mt-2 flex items-center gap-2">
+              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
                 <SubtleSelectField
                   label="Role"
                   value={member.role}
@@ -1974,7 +1990,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                   ))}
                 </SubtleSelectField>
                 <button
-                  className="shrink-0 text-xs opacity-70 hover:opacity-100"
+                  className="shrink-0 rounded text-xs text-ink-soft hover:text-ink hover:underline"
                   onClick={() =>
                     confirmThen("Remove this member from the roster?", () =>
                       removeMutation.mutate(member.id),
@@ -2307,11 +2323,7 @@ function HostRow({ host }: { host: WorkspaceHostDto }) {
   return (
     <Card className="flex items-center justify-between gap-2 px-3 py-2">
       <div className="flex min-w-0 items-center gap-2">
-        <span
-          className="h-2.5 w-2.5 shrink-0 rounded-full"
-          style={{ background: host.online ? "var(--hive-success)" : "var(--hive-line)" }}
-          title={host.online ? "Online" : "Offline"}
-        />
+        <StatusDot on={host.online} size={9} label={host.online ? "Online" : "Offline"} />
         <span className="truncate font-medium">{host.label || "Unnamed host"}</span>
         <span
           className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
@@ -2849,18 +2861,18 @@ export function SubtleSelectField({
       className="inline-flex w-full min-w-0 items-center gap-2.5 rounded-xl border px-2.5 py-1.5"
       style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}
     >
-      <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.12em] opacity-45">
+      <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.12em] text-ink-soft">
         {label}
       </span>
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="min-w-0 flex-1 appearance-none bg-transparent pr-1 text-sm font-medium outline-none"
-        style={{ color: "var(--hive-ink)", fontFamily: "inherit" }}
+        className="min-w-0 flex-1 appearance-none bg-transparent text-sm font-medium outline-none"
+        style={{ color: "var(--hive-ink)", fontFamily: "inherit", backgroundImage: "none", paddingRight: 4 }}
       >
         {children}
       </select>
-      <span className="shrink-0 opacity-40">
+      <span className="shrink-0 text-ink-faint">
         <IconChevronDown size={13} />
       </span>
     </label>
