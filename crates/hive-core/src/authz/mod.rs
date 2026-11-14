@@ -431,6 +431,28 @@ fn authorize_agent(env: &SessionEventEnvelope, ctx: &Ctx<'_>, roster: &RosterSta
     if let Err(why) = agent::tier_allows(&env.payload, key.agent_id, key.host_device_id, ctx.fold) {
         return Decision::deny(why);
     }
+    // Agent output only: never a user turn (a prompt other agents answer),
+    // and never under a human's identity other than its own host's user
+    // (whose host generated it) or its owner.
+    if let SessionEvent::MessageAppended { message } = &env.payload {
+        if message.role != crate::chat::MessageRole::Assistant {
+            return Decision::deny("an agent appends only its own replies");
+        }
+        if let Some(id) = &message.actor_identity {
+            let ok = match id.kind {
+                ActorKind::Agent => id.id == author,
+                _ => {
+                    id.id == owner
+                        || id.account_id.is_some_and(|acct| {
+                            roster.devices.get(&key.host_device_id).is_some_and(|d| d.accounts.contains(&acct))
+                        })
+                }
+            };
+            if !ok {
+                return Decision::deny("an agent reply names someone else");
+            }
+        }
+    }
     let d = evaluate(&env.payload, author, cap, ctx.fold);
     if !d.allowed {
         return Decision::deny(d.summary);
