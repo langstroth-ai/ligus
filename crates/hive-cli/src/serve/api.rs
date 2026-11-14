@@ -646,7 +646,13 @@ async fn workspace_guards(State(s): S) -> ApiResult<Json<Value>> {
 fn my_standing(s: &Shared, me: &str) -> ApiResult<(WorkspaceRole, bool)> {
     let (_, config) = hosts_and_agents(s)?;
     let role = config.role_of(me);
-    Ok((role, hive_core::guard::is_human_member(&config.members, me)))
+    Ok((role, can_clear_lockdown(&config.members, me, role)))
+}
+
+/// The lockdown-clear rule: a human member at Contributor or above. A
+/// Viewer, an agent or an unknown identity never may.
+pub(super) fn can_clear_lockdown(members: &[hive_core::WorkspaceMember], me: &str, role: WorkspaceRole) -> bool {
+    hive_core::guard::is_human_member(members, me) && role.rank() >= WorkspaceRole::Contributor.rank()
 }
 
 /// `POST /v1/chats/:id/lockdown/clear`: clear a chat's lockdown as this box's

@@ -2756,3 +2756,31 @@ async fn workflow_runs_show_their_coordinator() {
     assert!(c["holderLabel"].as_str().unwrap().contains("this host"));
     h.handle.shutdown();
 }
+
+/// C1.8: clearing a lockdown needs a human member at Contributor or above,
+/// by both the member record and the roster role the caller folds; a Viewer,
+/// an agent or a stranger never may.
+#[test]
+fn lockdown_clear_requires_contributor_human() {
+    use hive_core::{ActorIdentity, ActorKind, WorkspaceMember, WorkspaceRole};
+    let member = |id: &str, kind: ActorKind, role: WorkspaceRole| WorkspaceMember {
+        id: id.into(),
+        actor: ActorIdentity::new(id, id, kind),
+        role,
+        title: String::new(),
+        index: 1,
+        joined_at: hive_core::Timestamp::now(),
+    };
+    let members = vec![
+        member("ana", ActorKind::Human, WorkspaceRole::Contributor),
+        member("vic", ActorKind::Human, WorkspaceRole::Viewer),
+        member("bot", ActorKind::Agent, WorkspaceRole::Admin),
+    ];
+    assert!(api::can_clear_lockdown(&members, "ana", WorkspaceRole::Contributor));
+    assert!(!api::can_clear_lockdown(&members, "vic", WorkspaceRole::Viewer));
+    assert!(!api::can_clear_lockdown(&members, "bot", WorkspaceRole::Admin));
+    assert!(!api::can_clear_lockdown(&members, "nobody", WorkspaceRole::Owner));
+    // The roster's folded role is checked too: a member record that says
+    // Contributor while the folded role is Viewer is refused.
+    assert!(!api::can_clear_lockdown(&members, "ana", WorkspaceRole::Viewer));
+}
