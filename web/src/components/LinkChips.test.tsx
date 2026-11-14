@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { LinkChips } from "./LinkChips";
 import { chipFor, normalizeHandle, signScript } from "@/lib/links";
-import { KEY_PUBLISHED_DISCLOSURE } from "@/components/settings/LinkedAccountsSection";
+import { CONTACT_CARD_LINK_DISCLOSURE, KEY_PUBLISHED_DISCLOSURE } from "@/components/settings/LinkedAccountsSection";
 import type { LinkChipDto } from "@/lib/ipc";
 
 const base = { provider: "github", host: "github.com", handle: "alice", subjectId: "1234567" };
@@ -80,6 +80,12 @@ describe("linking helpers", () => {
   it("signs under the link namespace only", () => {
     const s = signScript("ligus-identity-link-v1@ligus.ai", "~/.ssh/id_ed25519", [{ workspaceName: "Bees" }]);
     expect(s).toContain("ssh-keygen -Y sign -n ligus-identity-link-v1@ligus.ai -f ~/.ssh/id_ed25519");
+  });
+  /// The contact card is a plain signed record on the relay: the opt-in says
+  /// who can read a link put on it.
+  it("the contact-card opt-in says the relay and contact-id holders read it", () => {
+    expect(CONTACT_CARD_LINK_DISCLOSURE).toMatch(/relay/);
+    expect(CONTACT_CARD_LINK_DISCLOSURE).toMatch(/isn't encrypted/);
   });
   it("the published-key fallback says it is public", () => {
     expect(KEY_PUBLISHED_DISCLOSURE).toMatch(/publicly/);

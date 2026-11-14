@@ -25,6 +25,12 @@ import { FORGES, forgeLabel, normalizeHandle } from "@/lib/links";
 export const KEY_PUBLISHED_DISCLOSURE =
   "This puts your Ligus account key on your forge profile, where anyone can see it. It links your Ligus account to that forge account publicly, for as long as the key stays there. It grants no access: it goes on the signing keys list, not the SSH (push) keys.";
 
+/// What putting a link on the contact card discloses: the record is plain
+/// (signed, not sealed), so the relays that hold it and anyone who has your
+/// contact id (co-members, anyone you gave an invite link or QR) can read it.
+export const CONTACT_CARD_LINK_DISCLOSURE =
+  "Also put it on this device's contact card. The card isn't encrypted: your relays and anyone with your contact id (your co-members, anyone you gave an invite link or QR code) can read it.";
+
 /// Settings → Profile → Linked accounts: show that you are also someone on
 /// a code forge, per workspace, proven with an SSH key the forge already
 /// lists for you. Off until you add one.
@@ -308,7 +314,7 @@ function LinkFlow({ onDone }: { onDone: () => void }) {
       ))}
       <label className="flex items-center gap-2">
         <input type="checkbox" checked={discoverable} onChange={(e) => setDiscoverable(e.target.checked)} />
-        Also put it on this device's contact card (people with your card see it)
+        {CONTACT_CARD_LINK_DISCLOSURE}
       </label>
       <div className="text-ink-soft">How to prove it</div>
       <label className="flex items-center gap-2">
