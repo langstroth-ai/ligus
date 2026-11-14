@@ -230,6 +230,15 @@ impl DearthPolicy {
     }
 }
 
+/// Workspaces whose config log is in `ordered`.
+fn config_workspaces(ordered: &[&SessionEventEnvelope]) -> HashSet<Uuid> {
+    ordered
+        .iter()
+        .filter(|e| e.session_id == hive_core::workspace_config_session_id(e.workspace_id))
+        .map(|e| e.workspace_id)
+        .collect()
+}
+
 /// Per workspace, the member ids a `MemberRemoved` on its config log named.
 fn removed_on_config(ordered: &[&SessionEventEnvelope]) -> HashMap<Uuid, HashSet<String>> {
     let mut out: HashMap<Uuid, HashSet<String>> = HashMap::new();
@@ -399,21 +408,34 @@ pub fn build_roster(envelopes: &[SessionEventEnvelope]) -> WorkspaceRoster {
     // raw `MemberAdded`, chat seed or unsigned event naming them afterwards,
     // their own included, doesn't count: a removed member still holds old
     // epoch keys and could otherwise re-enter with a freshly certified device.
-    for (ws, removed_ids) in removed_on_config(&ordered) {
+    //
+    // And the converse: a raw `MemberRemoved` that projection refuses (a
+    // Contributor "removing" the owner, an unsigned one, one on a chat log)
+    // must not revoke anyone. Every member of an authorization-checked config
+    // projection stays a member, unless an authorized removal elsewhere took
+    // the account out (removal wins, as the roster is shared by workspaces).
+    let removed_by_ws = removed_on_config(&ordered);
+    let mut current_accounts: HashSet<Uuid> = HashSet::new();
+    let mut sticky_removed: HashSet<Uuid> = HashSet::new();
+    for ws in config_workspaces(&ordered) {
         let cfg_envs: Vec<SessionEventEnvelope> = ordered
             .iter()
             .filter(|e| e.workspace_id == ws && e.session_id == hive_core::workspace_config_session_id(ws))
             .map(|e| (*e).clone())
             .collect();
-        let current: HashSet<String> =
-            hive_core::project(&cfg_envs).map(|c| c.members.into_iter().map(|m| m.id).collect()).unwrap_or_default();
-        for id in removed_ids {
-            if !current.contains(&id) {
-                if let Some(aid) = member_account.get(&id) {
-                    members.remove(aid);
+        let current: Vec<hive_core::WorkspaceMember> = hive_core::project(&cfg_envs).map(|c| c.members).unwrap_or_default();
+        current_accounts.extend(current.iter().filter_map(|m| m.actor.account_id));
+        for id in removed_by_ws.get(&ws).into_iter().flatten() {
+            if !current.iter().any(|m| &m.id == id) {
+                if let Some(aid) = member_account.get(id) {
+                    sticky_removed.insert(*aid);
                 }
             }
         }
+    }
+    members.extend(current_accounts);
+    for aid in &sticky_removed {
+        members.remove(aid);
     }
 
     let mut roster = WorkspaceRoster::default();

@@ -215,3 +215,33 @@ fn a_removed_member_cannot_reenter_the_roster_with_a_fresh_device() {
     hive_core::sign_envelope(&mut e, fresh, &fk);
     assert_ne!(verdict_for(&roster, &e), Verdict::Valid, "the removed member's fresh device is trusted again");
 }
+
+/// The other direction: a `MemberRemoved` that projection refuses (a
+/// Contributor "removing" the owner, or one in a chat log) must not revoke the
+/// victim's devices in the trust roster. The roster used to drop the account
+/// on any raw removal, so one unauthorized event quarantined every later
+/// event of the workspace owner.
+#[test]
+fn an_unauthorized_removal_does_not_revoke_the_victims_devices() {
+    use crate::envelope_verifier::{verdict_for, Verdict};
+    let (mut log, owner, _admin2, alice, laptop) = setup();
+    let owner_dk = {
+        // Re-certify a device whose key we hold for the owner.
+        let d = Uuid::new_v4();
+        (d, log.cert(&owner, d))
+    };
+    log.push(&alice, SessionEvent::MemberRemoved { member_id: owner.id.clone() });
+    // Same thing, unsigned and unstamped, on a chat log.
+    let mut chat_rm = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 70, SessionEvent::MemberRemoved { member_id: owner.id.clone() });
+    chat_rm.lamport = 70;
+    log.envs.push(chat_rm);
+    let cfg = hive_core::project(&log.envs).unwrap();
+    assert!(cfg.members.iter().any(|m| m.id == owner.id), "control: projection refuses the removal");
+    let roster = build_roster(&log.envs);
+    assert!(!crate::envelope_verifier::DeviceKeyResolver::is_revoked(&roster, laptop), "the owner's laptop was revoked by an unauthorized removal");
+    let mut e = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 99, SessionEvent::SessionTitleChanged { title: "x".into() });
+    e.lamport = 99;
+    e.actor_stamp = Some(ActorStamp { actor: actor(&owner), recorded_at: Timestamp::epoch() });
+    hive_core::sign_envelope(&mut e, owner_dk.0, &owner_dk.1);
+    assert_eq!(verdict_for(&roster, &e), Verdict::Valid);
+}
