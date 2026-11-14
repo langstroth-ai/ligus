@@ -46,9 +46,10 @@ first time it is created; after that, Settings is the source of truth.
 | `LIGUS_MCP_AFTER_READS` | off | CLI | **turns off** the exfiltration guard that refuses MCP calls once a turn has read project files |
 | `LIGUS_MCP_CONFIG` | unset | CLI | path to a TOML file of MCP servers for headless turns and dashboard panels |
 | `LIGUS_MCP_MIN_ROLE` | `admin` for a write-capable turn, `contributor` for a read-only one | desktop, CLI | `viewer`, `contributor`, `admin` or `owner`: the minimum role of a message's author before its turn runs at its configured tier. Below it, Ligus's own tool loop replies tool-free, Claude Code, Antigravity and Copilot run read-only, and Codex, aider, pi and Hermes are refused with a note; an unknown author fails closed. A value below the default logs a warning at startup |
-| `LIGUS_SANDBOX` | on | desktop, CLI | `off` runs agent processes without the OS sandbox; write-capable agent turns are then refused |
+| `LIGUS_SANDBOX` | on | desktop, CLI | `off` runs agent processes without the OS sandbox; write-capable agent turns are then refused (see [Sandbox defaults](../concepts/security.md#sandbox-defaults)) |
 | `LIGUS_SANDBOX_UNIX_SOCKETS` | unset | desktop and CLI (Linux) | `allow` lets sandboxed agents create unix sockets again (known host sockets stay masked) |
 | `LIGUS_SANDBOX_EGRESS_ALLOW` | unset | desktop, CLI | comma-separated `host[:port]` agents may also reach through the egress proxy under the normal envelope (not under dearth mode or a lockdown); `run_command` and pre-flight get only these |
+| `LIGUS_SANDBOX_EGRESS_PRESETS` | unset (off) | desktop, CLI | comma-separated [egress presets](../concepts/security.md#egress-presets) on for every turn on this host: `package-registries` (npm, crates.io, PyPI, GitHub) and `claude-connectors` (`mcp-proxy.anthropic.com`, Claude Code turns only; lets the agent reach the services you connected to claude.ai). Ignored under dearth mode or a lockdown. On the desktop you can also switch presets per workspace and per chat in **Settings → Guards → Network presets** |
 | `LIGUS_SANDBOX_WRITE_ALLOW` | unset | desktop, CLI | comma-separated extra paths agent processes may write (e.g. `~/.cargo/registry`) |
 | `LIGUS_SANDBOX_READ_ALLOW` | unset | desktop, CLI | credential dirs under `~` an agent process may read after all (e.g. `~/.aws`) |
 | `LIGUS_AGENT_TIMEOUT_SECS` | `300` | desktop and CLI | wall-clock budget for one subprocess agent turn (aider, pi, ...) |
@@ -57,7 +58,7 @@ first time it is created; after that, Settings is the source of truth.
 | `LIGUS_TURN_IDLE_TIMEOUT_SECS` | `300` | desktop and CLI | how long a streaming model may produce nothing before the turn fails |
 | `LIGUS_TURN_TIMEOUT_SECS` | `3600` | desktop and CLI | total backstop for one turn (the desktop adds 300 s) |
 | `LIGUS_PATCH_LEAVING_CALLS` | `12` | desktop and CLI | tool calls in a row without measurable progress before the agent must check in; `0` turns the rule off |
-| `LIGUS_PREFLIGHT_TEST` | unset | desktop | the test command a proposal-set pre-flight runs. Device-local on purpose: the repository's git config is never read. It runs in the agent sandbox, offline unless `LIGUS_SANDBOX_EGRESS_ALLOW` names hosts |
+| `LIGUS_PREFLIGHT_TEST` | unset | desktop | the test command a proposal-set pre-flight runs. Device-local on purpose: the repository's git config is never read. It runs in the agent sandbox, offline unless `LIGUS_SANDBOX_EGRESS_ALLOW` names hosts or the `package-registries` preset is on |
 | `LIGUS_OLLAMA_WIRE` | native | desktop and CLI | `openai` sends Ollama runtimes through the OpenAI-compatible shim (loses `num_ctx`, `keep_alive`, `think`) |
 | `LIGUS_ANTHROPIC_MODEL` | `claude-sonnet-4-6` | desktop | fallback model when no default is set |
 | `LIGUS_PROVIDER_API_KEY` | unset | desktop and CLI | a provider key that overrides the provider's own variable |

@@ -1396,6 +1396,9 @@ fn run() -> Result<()> {
     // Agent processes this host spawns never read its data dir (keys,
     // database, serve token); checked-out repos under it stay readable.
     hive_runtime::executor::configure_host(&cfg.data_dir, &[], &[repos::repos_dir(&cfg.data_dir)]);
+    // Turn scratch dirs a killed turn or host left behind are swept (now and
+    // every ten minutes) once older than the longest turn.
+    hive_runtime::executor::start_turn_dir_sweeper(worker::turn_timeout());
     // Ligus's own secret env values are masked wherever agent output is
     // logged (relay tokens, the workspace key, provider keys passed in).
     hive_runtime::secret_redact::register_env_secrets();

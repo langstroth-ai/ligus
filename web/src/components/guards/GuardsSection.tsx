@@ -14,6 +14,7 @@ import {
 import { toast, errMsg } from "@/components/Toast";
 import { Badge, Button, EmptyHint, ErrorState, Field, LoadingState, Section, type Tone } from "@/components/ui";
 import { IconLock } from "@/lib/icons";
+import { EgressPresetsPanel } from "./EgressPresetsPanel";
 
 const STATE_TONE: Record<string, Tone> = {
   open: "neutral",
@@ -28,9 +29,10 @@ const lines = (s: string) =>
     .map((x) => x.trim())
     .filter(Boolean);
 
-/// Settings → Guards: dearth mode (the workspace's tight entrance) and the
-/// joins waiting on its second approval.
-export function GuardsSection() {
+/// Settings → Guards: dearth mode (the workspace's tight entrance), the
+/// joins waiting on its second approval, and the opt-in network presets
+/// (for the workspace and, when one is open, the current chat).
+export function GuardsSection({ chat }: { chat?: { id: string; title: string } | null } = {}) {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["dearth-state"], queryFn: getDearthState });
   const d = q.data;
@@ -39,6 +41,7 @@ export function GuardsSection() {
       {q.isError && <ErrorState text="Couldn't load dearth mode." onRetry={() => void q.refetch()} />}
       {q.isPending && <LoadingState rows={2} label="Loading guards" />}
       {d && <DearthPanel d={d} onChanged={() => qc.invalidateQueries({ queryKey: ["dearth-state"] })} />}
+      <EgressPresetsPanel chat={chat} />
       <ThrottlePanel />
       <HygienePanel />
     </div>

@@ -29,7 +29,7 @@ use hive_core::sandbox::{EgressPolicy, SandboxEnvelope};
 use hive_core::ModelProviderKind;
 
 use crate::author_gate::GatePlan;
-use crate::egress::{EgressProxy, HostPort};
+use crate::egress::{EgressPreset, EgressProxy, HostPort};
 
 pub mod cli_home;
 #[cfg(target_os = "linux")]
@@ -127,6 +127,11 @@ pub struct HostPaths {
     /// Device-local extra endpoints for agents under an open envelope
     /// (`LIGUS_SANDBOX_EGRESS_ALLOW`, comma-separated `host[:port]`).
     pub extra_egress: Vec<HostPort>,
+    /// Device-local egress presets on for every turn on this host
+    /// (`LIGUS_SANDBOX_EGRESS_PRESETS`, comma-separated names such as
+    /// `package-registries`). Same rule as `extra_egress`: only under an
+    /// open envelope.
+    pub egress_presets: Vec<EgressPreset>,
     /// Device-local extra writable paths (`LIGUS_SANDBOX_WRITE_ALLOW`).
     pub extra_write: Vec<PathBuf>,
     /// Paths under `~` the user lets agents read (`LIGUS_SANDBOX_READ_ALLOW`,
@@ -171,6 +176,7 @@ impl HostPaths {
                 .unwrap_or_default()
         };
         h.extra_egress = list("LIGUS_SANDBOX_EGRESS_ALLOW").iter().filter_map(|s| HostPort::parse(s)).collect();
+        h.egress_presets = EgressPreset::parse_list(list("LIGUS_SANDBOX_EGRESS_PRESETS").iter().map(String::as_str));
         h.extra_write = list("LIGUS_SANDBOX_WRITE_ALLOW").into_iter().map(|p| expand_home(&p)).collect();
         h.home_read_allow = list("LIGUS_SANDBOX_READ_ALLOW").into_iter().map(|p| expand_home(&p)).collect();
         h
@@ -265,6 +271,10 @@ pub struct PlanInputs<'a> {
     pub envelope_args: &'a [String],
     /// The turn's Ligus MCP socket, if the turn offers the Ligus server.
     pub ligus_mcp_socket: Option<&'a Path>,
+    /// Egress presets this chat opted into (workspace or chat setting), on
+    /// top of the host's own (`HostPaths::egress_presets`). Ignored unless
+    /// the envelope's egress is open.
+    pub egress_presets: &'a [EgressPreset],
     /// A CLI agent's per-turn home (C-9): its real state dirs are then not
     /// writable, and `HOME` points here.
     pub cli_home: Option<&'a Path>,
@@ -418,19 +428,38 @@ impl EnvelopeEnforcer {
             }
             _ => Vec::new(),
         };
+        // Opt-in widenings (device-local hosts and presets): only under an
+        // open envelope, so dearth mode and a lockdown always win over them.
+        // A runtime-specific preset (claude-connectors) widens only that
+        // runtime's agent children.
+        let agent_kind = match i.purpose {
+            Purpose::Agent(k) => Some(k),
+            _ => None,
+        };
+        let mut widen: Vec<HostPort> = host_paths.extra_egress.clone();
+        let mut presets: Vec<EgressPreset> = host_paths
+            .egress_presets
+            .iter()
+            .chain(i.egress_presets)
+            .copied()
+            .filter(|p| p.only_for().is_none_or(|k| Some(k) == agent_kind))
+            .collect();
+        presets.sort();
+        presets.dedup();
+        widen.extend(presets.into_iter().flat_map(EgressPreset::hosts));
+        widen.sort();
+        widen.dedup();
         let egress_plan = match (i.purpose, egress) {
             (Purpose::McpServer, EgressPolicy::Closed) => EgressPlan::Closed,
             (Purpose::McpServer, _) => EgressPlan::Open,
-            (Purpose::Tool | Purpose::Preflight, EgressPolicy::Open) if !host_paths.extra_egress.is_empty() => {
-                EgressPlan::Proxy { allow: host_paths.extra_egress.clone() }
-            }
+            (Purpose::Tool | Purpose::Preflight, EgressPolicy::Open) if !widen.is_empty() => EgressPlan::Proxy { allow: widen },
             (Purpose::Tool | Purpose::Preflight, _) => EgressPlan::Closed,
             (Purpose::Agent(_), policy) => {
                 let mut allow = model_hosts;
                 match policy {
                     EgressPolicy::Open => {
                         allow.extend(i.mcp_hosts.iter().cloned());
-                        allow.extend(host_paths.extra_egress.iter().cloned());
+                        allow.extend(widen);
                     }
                     EgressPolicy::AllowList { .. } => allow.extend(i.mcp_hosts.iter().cloned()),
                     EgressPolicy::Closed => {}
@@ -462,6 +491,13 @@ impl EnvelopeEnforcer {
                 env.retain(|(x, _)| *x != key);
                 env.push((key, val));
             }
+            env.sort();
+        }
+        // Claude Code mkdirs its own scratch under `/tmp/claude-<uid>`, which
+        // the sandbox doesn't let it write; point it at the turn's scratch dir.
+        if let Purpose::Agent(ModelProviderKind::ClaudeCode) = i.purpose {
+            env.retain(|(k, _)| k != "CLAUDE_CODE_TMPDIR");
+            env.push(("CLAUDE_CODE_TMPDIR".into(), i.tmp.as_os_str().to_os_string()));
             env.sort();
         }
         let mut mcp = match egress {
@@ -614,6 +650,9 @@ pub struct TurnPolicy {
     pub mcp_hosts: Vec<HostPort>,
     /// The turn's Ligus MCP socket (D.3.2), allowed through the sandbox.
     pub ligus_mcp_socket: Option<PathBuf>,
+    /// Egress presets this chat opted into (its own setting, else the
+    /// workspace's). Applied only under an open envelope.
+    pub egress_presets: Vec<EgressPreset>,
     /// Endpoints the turn's egress proxies refused (host and port only),
     /// collected for the host to record as a content-free decision.
     pub denials: Arc<std::sync::Mutex<Vec<HostPort>>>,
@@ -640,6 +679,7 @@ impl TurnPolicy {
             mcp_ids: Vec::new(),
             mcp_hosts: Vec::new(),
             ligus_mcp_socket: None,
+            egress_presets: Vec::new(),
             denials: Default::default(),
         }
     }
@@ -732,7 +772,7 @@ pub struct TurnGuard {
     cli_home: Option<(ModelProviderKind, PathBuf, PathBuf)>,
     proxy: Option<EgressProxy>,
     denials: Option<Arc<std::sync::Mutex<Vec<HostPort>>>>,
-    tmp: Option<PathBuf>,
+    tmp: Option<TurnTmp>,
     kind: ExecutorKind,
     plan: EnforcementPlan,
 }
@@ -768,9 +808,8 @@ impl Drop for TurnGuard {
         if let Some((k, real, home)) = self.cli_home.take() {
             cli_home::copy_back(k, &real, &home);
         }
-        if let Some(t) = self.tmp.take() {
-            let _ = std::fs::remove_dir_all(t);
-        }
+        // Dropping the scratch dir removes it (after the copy-back above).
+        drop(self.tmp.take());
     }
 }
 
@@ -830,11 +869,49 @@ pub fn check_cwd(cwd: &Path, host: &HostPaths) -> io::Result<()> {
     Ok(())
 }
 
-fn make_turn_tmp() -> io::Result<PathBuf> {
+/// Prefix of a turn's scratch dir under the system temp dir.
+pub const TURN_DIR_PREFIX: &str = "ligus-turn-";
+/// The file in a turn dir naming the process that made it (its pid).
+const TURN_DIR_OWNER: &str = ".ligus-owner";
+
+/// Turn dirs this process is using right now (never swept).
+fn live_turn_dirs() -> &'static std::sync::Mutex<std::collections::HashSet<PathBuf>> {
+    static L: OnceLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> = OnceLock::new();
+    L.get_or_init(Default::default)
+}
+
+/// A turn's scratch dir. Dropping it (the turn ended, failed to start, or
+/// its future was cancelled) removes the dir; [`sweep_stale_turn_dirs`]
+/// catches what a killed process leaves behind.
+#[derive(Debug)]
+pub struct TurnTmp {
+    path: PathBuf,
+}
+
+impl TurnTmp {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TurnTmp {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+        if let Ok(mut l) = live_turn_dirs().lock() {
+            l.remove(&self.path);
+        }
+    }
+}
+
+fn make_turn_tmp() -> io::Result<TurnTmp> {
+    make_turn_tmp_in(&std::env::temp_dir())
+}
+
+fn make_turn_tmp_in(parent: &Path) -> io::Result<TurnTmp> {
     let mut rnd = [0u8; 8];
     getrandom::getrandom(&mut rnd).map_err(|e| io::Error::other(e.to_string()))?;
     let id: String = rnd.iter().map(|b| format!("{b:02x}")).collect();
-    let dir = canonical(&std::env::temp_dir()).join(format!("ligus-turn-{id}"));
+    let dir = canonical(parent).join(format!("{TURN_DIR_PREFIX}{id}"));
     let mut b = std::fs::DirBuilder::new();
     #[cfg(unix)]
     {
@@ -842,7 +919,98 @@ fn make_turn_tmp() -> io::Result<PathBuf> {
         b.mode(0o700);
     }
     b.create(&dir)?;
-    Ok(dir)
+    if let Ok(mut l) = live_turn_dirs().lock() {
+        l.insert(dir.clone());
+    }
+    let tmp = TurnTmp { path: dir };
+    std::fs::write(tmp.path.join(TURN_DIR_OWNER), std::process::id().to_string())?;
+    Ok(tmp)
+}
+
+/// Whether process `pid` is running (unknown counts as running).
+fn pid_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        let Ok(p) = libc::pid_t::try_from(pid) else { return false };
+        if p <= 0 {
+            return false;
+        }
+        // SAFETY: signal 0 only checks that the process exists.
+        let r = unsafe { libc::kill(p, 0) };
+        r == 0 || io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        true
+    }
+}
+
+/// Remove `ligus-turn-*` dirs under the system temp dir that no live
+/// process owns and that are older than `older_than` (the longest a turn
+/// may run). A turn killed with its host (or a host killed mid-turn) would
+/// otherwise leave its scratch dir, with any CLI config copied into its
+/// per-turn home, behind. Returns how many were removed.
+pub fn sweep_stale_turn_dirs(older_than: std::time::Duration) -> usize {
+    sweep_stale_turn_dirs_in(&std::env::temp_dir(), older_than)
+}
+
+/// [`sweep_stale_turn_dirs`] under `parent` (tests).
+pub fn sweep_stale_turn_dirs_in(parent: &Path, older_than: std::time::Duration) -> usize {
+    let Ok(rd) = std::fs::read_dir(parent) else { return 0 };
+    let parent = canonical(parent);
+    let live = live_turn_dirs().lock().map(|l| l.clone()).unwrap_or_default();
+    let me = std::process::id();
+    let mut removed = 0;
+    for entry in rd.flatten() {
+        let name = entry.file_name();
+        if !name.to_string_lossy().starts_with(TURN_DIR_PREFIX) {
+            continue;
+        }
+        // Never follow a link someone planted under the temp dir.
+        let Ok(meta) = std::fs::symlink_metadata(entry.path()) else { continue };
+        if !meta.is_dir() {
+            continue;
+        }
+        let dir = parent.join(&name);
+        if live.contains(&dir) {
+            continue;
+        }
+        let owner_file = dir.join(TURN_DIR_OWNER);
+        let owner: Option<u32> = std::fs::read_to_string(&owner_file).ok().and_then(|s| s.trim().parse().ok());
+        // Another running process's turn: not ours to judge. Our own pid
+        // but not live here: a leaked dir of this process.
+        if owner.is_some_and(|pid| pid != me && pid_alive(pid)) {
+            continue;
+        }
+        let made = std::fs::symlink_metadata(&owner_file).or(Ok::<_, io::Error>(meta)).and_then(|m| m.modified());
+        let age = made.ok().and_then(|t| t.elapsed().ok()).unwrap_or_default();
+        if age < older_than {
+            continue;
+        }
+        if std::fs::remove_dir_all(&dir).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+/// Sweep stale turn dirs now and every ten minutes on a background thread
+/// (once per process). `max_turn` is the host's longest turn; a dir is swept
+/// only once it is older than that plus a margin.
+pub fn start_turn_dir_sweeper(max_turn: std::time::Duration) {
+    static STARTED: OnceLock<()> = OnceLock::new();
+    if STARTED.set(()).is_err() {
+        return;
+    }
+    let older_than = max_turn + std::time::Duration::from_secs(600);
+    let _ = std::thread::Builder::new().name("ligus-turn-sweep".into()).spawn(move || loop {
+        let n = sweep_stale_turn_dirs(older_than);
+        if n > 0 {
+            tracing::info!(target: "sandbox", "removed {n} stale turn scratch dir(s)");
+        }
+        std::thread::sleep(std::time::Duration::from_secs(600));
+    });
 }
 
 /// Confine one child for the current turn: plan it, start its proxy, make
@@ -861,14 +1029,13 @@ pub fn prepare_with(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>) -> io::Res
     let model_base_url = spec.model_base_url.or(rt.model_base_url.as_deref().filter(|_| agent));
     let host = host_paths();
     let home = home_dir().unwrap_or_else(|| PathBuf::from("/nonexistent"));
-    let tmp = make_turn_tmp()?;
-    let cleanup_tmp = |e: io::Error| {
-        let _ = std::fs::remove_dir_all(&tmp);
-        e
-    };
+    // Removed on every early return below, and with the guard when the
+    // turn ends or its future is dropped.
+    let turn_tmp = make_turn_tmp()?;
+    let tmp = turn_tmp.path().to_path_buf();
     let cwd = match spec.cwd {
         Some(c) if !c.as_os_str().is_empty() => {
-            check_cwd(c, &host).map_err(cleanup_tmp)?;
+            check_cwd(c, &host)?;
             canonical(c)
         }
         _ => tmp.clone(),
@@ -877,7 +1044,7 @@ pub fn prepare_with(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>) -> io::Res
     let cli_home_dir = match spec.purpose {
         Purpose::Agent(k) if k.is_cli_agent() && cli_home::enabled() => {
             let h = tmp.join("home");
-            cli_home::populate(k, &home, &h).map_err(cleanup_tmp)?;
+            cli_home::populate(k, &home, &h)?;
             Some((k, h))
         }
         _ => None,
@@ -910,6 +1077,7 @@ pub fn prepare_with(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>) -> io::Res
         model_provider_id,
         envelope_args: &envelope_args,
         ligus_mcp_socket: policy.ligus_mcp_socket.as_deref(),
+        egress_presets: &policy.egress_presets,
         cli_home: cli_home_dir.as_ref().map(|(_, h)| h.as_path()),
     };
     let plan = EnvelopeEnforcer::plan(&inputs);
@@ -917,7 +1085,6 @@ pub fn prepare_with(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>) -> io::Res
     // `unconfined_refuses_write_tiers`: without an OS sandbox a CLI agent that
     // can write is not run at all.
     if kind == ExecutorKind::Unconfined && matches!(spec.purpose, Purpose::Agent(_)) && write_capable && policy.gate.allows_writes() {
-        let _ = std::fs::remove_dir_all(&tmp);
         return Err(refuse(
             "this host has no agent sandbox (sandbox-exec on macOS, bubblewrap with user namespaces on Linux), \
              so Ligus won't run a write-capable agent turn here; use the read-only tier, or install the sandbox",
@@ -926,13 +1093,13 @@ pub fn prepare_with(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>) -> io::Res
     let proxy = match &plan.egress {
         EgressPlan::Proxy { allow } => {
             let sock = (kind == ExecutorKind::Bwrap).then(|| tmp.join(".ligus-egress.sock"));
-            Some(EgressProxy::start(allow.clone(), sock.as_deref()).map_err(cleanup_tmp)?)
+            Some(EgressProxy::start(allow.clone(), sock.as_deref())?)
         }
         _ => None,
     };
-    let command = executor.confine(spec.program, &spec.args, &cwd, &plan, proxy.as_ref()).map_err(cleanup_tmp)?;
+    let command = executor.confine(spec.program, &spec.args, &cwd, &plan, proxy.as_ref())?;
     let cli_home = cli_home_dir.map(|(k, h)| (k, home.clone(), h));
-    Ok(Prepared { command, guard: TurnGuard { cli_home, proxy, denials: Some(policy.denials.clone()), tmp: Some(tmp), kind, plan } })
+    Ok(Prepared { command, guard: TurnGuard { cli_home, proxy, denials: Some(policy.denials.clone()), tmp: Some(turn_tmp), kind, plan } })
 }
 
 /// A tokio command for `spec`, confined; the caller sets stdio. Hold the

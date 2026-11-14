@@ -38,6 +38,7 @@ const FOLD_ENV_DENYLIST: &[(&str, &str, &str)] = &[
     ("\"LIGUS_DATA_DIR\"", "LIGUS_DATA_DIR", "a directory the OS sandbox denies to agent processes"),
     ("\"LIGUS_SANDBOX\"", "LIGUS_SANDBOX", "which executor spawns agent processes"),
     ("name", "LIGUS_SANDBOX_EGRESS_ALLOW", "extra egress hosts for a turn's proxy"),
+    ("name", "LIGUS_SANDBOX_EGRESS_PRESETS", "opt-in egress presets for a turn's proxy"),
     ("name", "LIGUS_SANDBOX_WRITE_ALLOW", "extra sandbox write paths for a turn"),
     ("name", "LIGUS_SANDBOX_READ_ALLOW", "extra sandbox read paths for a turn"),
     ("\"LIGUS_ACP_INIT_TIMEOUT_SECS\"", "LIGUS_ACP_INIT_TIMEOUT_SECS", "how long an ACP agent may take to answer initialize"),

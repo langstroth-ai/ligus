@@ -375,7 +375,7 @@ pub fn recover_interrupted_turns(svc: &mut ChatService) -> Result<Vec<(Uuid, Uui
 
 /// Total wall-clock backstop for one turn (the provider's idle timeout is the
 /// real "wedged" gate), as in the app: `LIGUS_TURN_TIMEOUT_SECS`, default 1 h.
-fn turn_timeout() -> Duration {
+pub(crate) fn turn_timeout() -> Duration {
     Duration::from_secs(
         hive_core::compat::var("LIGUS_TURN_TIMEOUT_SECS")
             .ok()

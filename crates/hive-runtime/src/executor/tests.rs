@@ -80,6 +80,7 @@ fn prop_enforcement_plan_host_independent() {
         let mcp_hosts = vec![HostPort::new("mcp.example", 443)];
         let mcp_ids = vec!["docs".to_string()];
         let (iso, writes) = (r.coin(), r.coin());
+        let presets: Vec<EgressPreset> = if r.coin() { vec![EgressPreset::PackageRegistries] } else { Vec::new() };
         let plan_for = |h: HostKind| {
             EnvelopeEnforcer::plan(&PlanInputs {
                 host: h,
@@ -100,6 +101,7 @@ fn prop_enforcement_plan_host_independent() {
                 model_provider_id: None,
                 envelope_args: &[],
                 ligus_mcp_socket: None,
+                egress_presets: &presets,
                 cli_home: None,
             })
         };
@@ -120,6 +122,7 @@ fn prop_enforcement_plan_host_independent() {
             if let EgressPlan::Proxy { allow } = &desktop.egress {
                 if !envelope.egress.is_open() {
                     assert!(!allow.contains(&HostPort::new("crates.io", 443)), "device extras only under an open envelope");
+                    assert!(!allow.contains(&HostPort::new("registry.npmjs.org", 443)), "presets only under an open envelope");
                 }
                 if envelope.egress == EgressPolicy::Closed {
                     assert!(!allow.contains(&HostPort::new("mcp.example", 443)), "lockdown cuts MCP hosts");
@@ -160,6 +163,7 @@ fn prop_every_envelope_field_consumed() {
             model_provider_id: None,
             envelope_args: &[],
             ligus_mcp_socket: None,
+            egress_presets: &[],
                 cli_home: None,
         })
     };
@@ -213,6 +217,7 @@ fn provider_key_only_when_configured_in_ligus() {
             model_provider_id: mp,
             envelope_args: &[],
             ligus_mcp_socket: None,
+            egress_presets: &[],
                 cli_home: None,
         })
     };
@@ -661,6 +666,7 @@ fn sandbox_denies_apple_events_and_pasteboard() {
         model_provider_id: None,
         envelope_args: &[],
         ligus_mcp_socket: None,
+        egress_presets: &[],
         cli_home: None,
     }), None);
     assert!(prof.contains("(deny appleevent-send)") && prof.contains("com.apple.pasteboard"));
@@ -694,6 +700,7 @@ fn ligus_server_present_under_closed_egress() {
             model_provider_id: None,
             envelope_args: &[],
             ligus_mcp_socket: Some(sock),
+            egress_presets: &[],
             cli_home: None,
         });
         assert_eq!(plan.mcp.first().map(String::as_str), Some(LIGUS_MCP_ID), "{egress:?}");
@@ -762,7 +769,461 @@ fn agent_env_has_no_session_bus() {
         model_provider_id: None,
         envelope_args: &[],
         ligus_mcp_socket: None,
+        egress_presets: &[],
         cli_home: None,
     });
     assert!(plan.env.iter().all(|(k, _)| !k.to_string_lossy().starts_with("DBUS")), "{:?}", plan.env);
+}
+
+// ---------------------------------------------------------------------------
+// Egress presets
+// ---------------------------------------------------------------------------
+
+fn preset_plan(envelope: &SandboxEnvelope, purpose: Purpose, host: &HostPaths, presets: &[EgressPreset]) -> EnforcementPlan {
+    EnvelopeEnforcer::plan(&PlanInputs {
+        host: HostKind::Desktop,
+        envelope,
+        purpose,
+        gate: &GatePlan::Full,
+        worktree: Path::new("/repo"),
+        worktree_is_isolated: true,
+        write_capable: true,
+        tmp: Path::new("/tmp/t"),
+        home: Path::new("/home/u"),
+        host_paths: host,
+        mcp_hosts: &[],
+        mcp_ids: &[],
+        model_base_url: None,
+        extra_env: &[],
+        provider_key: None,
+        model_provider_id: None,
+        envelope_args: &[],
+        ligus_mcp_socket: None,
+        egress_presets: presets,
+        cli_home: None,
+    })
+}
+
+fn allow_of(p: &EnforcementPlan) -> Vec<HostPort> {
+    match &p.egress {
+        EgressPlan::Proxy { allow } => allow.clone(),
+        _ => Vec::new(),
+    }
+}
+
+const REGISTRY_HOSTS: &[&str] = &[
+    "registry.npmjs.org",
+    "crates.io",
+    "static.crates.io",
+    "index.crates.io",
+    "pypi.org",
+    "files.pythonhosted.org",
+    "github.com",
+    "api.github.com",
+    "codeload.github.com",
+    "objects.githubusercontent.com",
+    "raw.githubusercontent.com",
+];
+
+/// The preset is off by default: no turn policy, host or plan carries it
+/// unless something opts in, and an open workspace's agent reaches only its
+/// provider.
+#[test]
+fn egress_preset_off_by_default() {
+    assert!(TurnPolicy::baseline(HostKind::Desktop).egress_presets.is_empty());
+    assert!(TurnPolicy::new(HostKind::Worker, SandboxEnvelope::workspace_default(), GatePlan::Full).egress_presets.is_empty());
+    assert!(HostPaths::default().egress_presets.is_empty());
+    let open = SandboxEnvelope::workspace_default();
+    let agent = preset_plan(&open, Purpose::Agent(ModelProviderKind::ClaudeCode), &HostPaths::default(), &[]);
+    let allow = allow_of(&agent);
+    for h in REGISTRY_HOSTS {
+        // github.com is not a Claude Code endpoint; nothing from the preset leaks in.
+        assert!(!allow.contains(&HostPort::new(*h, 443)), "{h} allowed without the preset");
+    }
+    // run_command and pre-flight stay offline.
+    for p in [Purpose::Tool, Purpose::Preflight] {
+        assert_eq!(preset_plan(&open, p, &HostPaths::default(), &[]).egress, EgressPlan::Closed);
+    }
+}
+
+#[test]
+fn egress_preset_names_parse() {
+    assert_eq!(EgressPreset::parse("package-registries"), Some(EgressPreset::PackageRegistries));
+    assert_eq!(EgressPreset::parse(" Package_Registries "), Some(EgressPreset::PackageRegistries));
+    assert_eq!(EgressPreset::parse("everything"), None);
+    assert_eq!(EgressPreset::parse_list(["package-registries", "nope", "package-registries"]), vec![EgressPreset::PackageRegistries]);
+    let hosts: Vec<String> = EgressPreset::PackageRegistries.hosts().into_iter().map(|h| h.to_string()).collect();
+    assert_eq!(hosts, REGISTRY_HOSTS.iter().map(|h| format!("{h}:443")).collect::<Vec<_>>());
+}
+
+/// Enabling the preset adds exactly its hosts (port 443) to the plan, and
+/// nothing else; it works from the chat/workspace setting and from the
+/// host's `LIGUS_SANDBOX_EGRESS_PRESETS` alike.
+#[test]
+fn egress_preset_adds_exactly_its_hosts() {
+    let open = SandboxEnvelope::workspace_default();
+    let preset = [EgressPreset::PackageRegistries];
+    let want: std::collections::BTreeSet<HostPort> = REGISTRY_HOSTS.iter().map(|h| HostPort::new(*h, 443)).collect();
+    for kind in [ModelProviderKind::ClaudeCode, ModelProviderKind::Codex, ModelProviderKind::Aider] {
+        let base: std::collections::BTreeSet<HostPort> = allow_of(&preset_plan(&open, Purpose::Agent(kind), &HostPaths::default(), &[])).into_iter().collect();
+        let with: std::collections::BTreeSet<HostPort> = allow_of(&preset_plan(&open, Purpose::Agent(kind), &HostPaths::default(), &preset)).into_iter().collect();
+        let expected: std::collections::BTreeSet<HostPort> = base.union(&want).cloned().collect();
+        assert_eq!(with, expected, "{kind:?}");
+        let host = HostPaths { egress_presets: preset.to_vec(), ..Default::default() };
+        let via_env: std::collections::BTreeSet<HostPort> = allow_of(&preset_plan(&open, Purpose::Agent(kind), &host, &[])).into_iter().collect();
+        assert_eq!(via_env, expected, "{kind:?} via the host setting");
+    }
+    for p in [Purpose::Tool, Purpose::Preflight] {
+        let plan = preset_plan(&open, p, &HostPaths::default(), &preset);
+        let got: std::collections::BTreeSet<HostPort> = allow_of(&plan).into_iter().collect();
+        assert_eq!(got, want, "{p:?} gets exactly the preset");
+    }
+    // A stdio MCP server's egress isn't the agent's allow-list; unchanged.
+    assert_eq!(preset_plan(&open, Purpose::McpServer, &HostPaths::default(), &preset).egress, EgressPlan::Open);
+}
+
+/// Lockdown and dearth mode override the preset: a chat whose egress a
+/// guard restricted never gets the registries, whoever opted in.
+#[test]
+fn egress_preset_ignored_under_lockdown_and_dearth() {
+    let preset = [EgressPreset::PackageRegistries];
+    let host = HostPaths { egress_presets: preset.to_vec(), ..Default::default() };
+    let base = SandboxEnvelope::workspace_default();
+    let lockdown = base.clone().tighten(TightenedBy::Lockdown, EgressPolicy::Closed, true);
+    let dearth = base.clone().tighten(TightenedBy::Dearth, EgressPolicy::AllowList { mcp_servers: vec![] }, false);
+    let both = dearth.clone().tighten(TightenedBy::Lockdown, EgressPolicy::Closed, true);
+    for env in [&lockdown, &dearth, &both] {
+        for h in [&HostPaths::default(), &host] {
+            let agent = preset_plan(env, Purpose::Agent(ModelProviderKind::ClaudeCode), h, &preset);
+            assert_eq!(
+                allow_of(&agent).into_iter().collect::<std::collections::BTreeSet<_>>(),
+                provider_endpoints(ModelProviderKind::ClaudeCode).into_iter().collect(),
+                "{:?}: the agent keeps only its provider",
+                env.tightened_by
+            );
+            for p in [Purpose::Tool, Purpose::Preflight] {
+                assert_eq!(preset_plan(env, p, h, &preset).egress, EgressPlan::Closed, "{:?} {p:?}", env.tightened_by);
+            }
+        }
+    }
+}
+
+async fn connect_via(p: &EgressProxy, target: &str) -> (tokio::net::TcpStream, String) {
+    use base64::Engine;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", p.port())).await.unwrap();
+    let cred = base64::engine::general_purpose::STANDARD.encode(format!("ligus:{}", p.token()));
+    s.write_all(format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\nProxy-Authorization: Basic {cred}\r\n\r\n").as_bytes()).await.unwrap();
+    let mut buf = vec![0u8; 256];
+    let n = s.read(&mut buf).await.unwrap();
+    (s, String::from_utf8_lossy(&buf[..n]).into_owned())
+}
+
+/// The per-turn proxy started from a plan with the preset lets each preset
+/// host through (on 443 only), refuses everything else, and still pins the
+/// TLS server name: a ClientHello for another host is cut. No network is
+/// needed: the allow decision and the SNI pin come before any upstream dial.
+#[tokio::test]
+async fn egress_preset_hosts_pass_the_proxy_with_sni_pinning() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let open = SandboxEnvelope::workspace_default();
+    let plan = preset_plan(&open, Purpose::Tool, &HostPaths::default(), &[EgressPreset::PackageRegistries]);
+    let proxy = EgressProxy::start(allow_of(&plan), None).unwrap();
+    for h in REGISTRY_HOSTS {
+        let (_s, resp) = connect_via(&proxy, &format!("{h}:443")).await;
+        assert!(resp.starts_with("HTTP/1.1 200"), "{h}: {resp}");
+    }
+    for refused in ["example.com:443", "registry.npmjs.org:80", "evil.github.com:443", "gist.github.com:443", "registry.yarnpkg.com:443"] {
+        let (_s, resp) = connect_via(&proxy, refused).await;
+        assert!(resp.starts_with("HTTP/1.1 403"), "{refused}: {resp}");
+    }
+    // SNI pinning: CONNECT to an allowed registry, then a ClientHello for
+    // another server, is cut.
+    let (mut s, resp) = connect_via(&proxy, "registry.npmjs.org:443").await;
+    assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
+    s.write_all(&crate::egress::tests::client_hello(Some("evil.example"))).await.unwrap();
+    let mut b = [0u8; 16];
+    let n = tokio::time::timeout(std::time::Duration::from_secs(5), s.read(&mut b)).await.unwrap().unwrap_or(0);
+    assert_eq!(n, 0, "a mismatched SNI is cut");
+    let denied = proxy.denials();
+    assert!(denied.contains(&HostPort::new("registry.npmjs.org", 443)) && denied.contains(&HostPort::new("example.com", 443)), "{denied:?}");
+}
+
+/// `claude-connectors` adds only `mcp-proxy.anthropic.com:443`, only to
+/// Claude Code turns, never to tools or other runtimes; it's off by default,
+/// ignored under lockdown/dearth, and telemetry hosts stay off the list.
+#[test]
+fn claude_connectors_preset_is_claude_code_only() {
+    let open = SandboxEnvelope::workspace_default();
+    let preset = [EgressPreset::ClaudeConnectors];
+    let mcp_proxy = HostPort::new("mcp-proxy.anthropic.com", 443);
+    let cc = Purpose::Agent(ModelProviderKind::ClaudeCode);
+    assert!(!allow_of(&preset_plan(&open, cc, &HostPaths::default(), &[])).contains(&mcp_proxy), "off by default");
+    let base: std::collections::BTreeSet<HostPort> = allow_of(&preset_plan(&open, cc, &HostPaths::default(), &[])).into_iter().collect();
+    let with: std::collections::BTreeSet<HostPort> = allow_of(&preset_plan(&open, cc, &HostPaths::default(), &preset)).into_iter().collect();
+    assert_eq!(with.difference(&base).cloned().collect::<Vec<_>>(), vec![mcp_proxy.clone()]);
+    for h in &with {
+        assert!(!h.host.contains("statsig") || base.contains(h), "the preset adds no telemetry host");
+    }
+    assert!(!with.iter().any(|h| h.host.contains("sentry") || h.host.contains("datadog")));
+    for other in [ModelProviderKind::Codex, ModelProviderKind::Copilot, ModelProviderKind::Aider] {
+        assert!(!allow_of(&preset_plan(&open, Purpose::Agent(other), &HostPaths::default(), &preset)).contains(&mcp_proxy), "{other:?}");
+    }
+    for p in [Purpose::Tool, Purpose::Preflight] {
+        assert_eq!(preset_plan(&open, p, &HostPaths::default(), &preset).egress, EgressPlan::Closed, "{p:?}");
+    }
+    let lockdown = open.clone().tighten(TightenedBy::Lockdown, EgressPolicy::Closed, true);
+    let dearth = open.clone().tighten(TightenedBy::Dearth, EgressPolicy::AllowList { mcp_servers: vec![] }, false);
+    for env in [&lockdown, &dearth] {
+        assert!(!allow_of(&preset_plan(env, cc, &HostPaths::default(), &preset)).contains(&mcp_proxy), "{:?}", env.tightened_by);
+    }
+    assert_eq!(EgressPreset::parse("claude-connectors"), Some(EgressPreset::ClaudeConnectors));
+}
+
+/// Claude Code's Bash tool mkdirs `/tmp/claude-<uid>`, which the sandbox
+/// refuses: its plan points `CLAUDE_CODE_TMPDIR` at the turn's scratch dir,
+/// with or without a per-turn home, and the variable reaches the child
+/// through the executor (Seatbelt or bwrap) unchanged.
+#[test]
+fn claude_code_tmpdir_is_the_turn_scratch_dir() {
+    let open = SandboxEnvelope::workspace_default();
+    let get = |p: &EnforcementPlan| p.env.iter().find(|(k, _)| k == "CLAUDE_CODE_TMPDIR").map(|(_, v)| PathBuf::from(v));
+    let plan = preset_plan(&open, Purpose::Agent(ModelProviderKind::ClaudeCode), &HostPaths::default(), &[]);
+    assert_eq!(get(&plan), Some(plan.tmp.clone()));
+    let with_home = EnvelopeEnforcer::plan(&PlanInputs {
+        host: HostKind::Worker,
+        envelope: &open,
+        purpose: Purpose::Agent(ModelProviderKind::ClaudeCode),
+        gate: &GatePlan::ReadOnly,
+        worktree: Path::new("/repo"),
+        worktree_is_isolated: false,
+        write_capable: false,
+        tmp: Path::new("/tmp/ligus-turn-cc"),
+        home: Path::new("/home/u"),
+        host_paths: &HostPaths::default(),
+        mcp_hosts: &[],
+        mcp_ids: &[],
+        model_base_url: None,
+        extra_env: &[("CLAUDE_CODE_TMPDIR".to_string(), "/tmp/elsewhere".to_string())],
+        provider_key: None,
+        model_provider_id: None,
+        envelope_args: &[],
+        ligus_mcp_socket: None,
+        egress_presets: &[],
+        cli_home: Some(Path::new("/tmp/ligus-turn-cc/home")),
+    });
+    assert_eq!(get(&with_home), Some(PathBuf::from("/tmp/ligus-turn-cc")));
+    assert_eq!(with_home.env.iter().filter(|(k, _)| k == "CLAUDE_CODE_TMPDIR").count(), 1);
+    // Other runtimes don't get it.
+    assert_eq!(get(&preset_plan(&open, Purpose::Agent(ModelProviderKind::Codex), &HostPaths::default(), &[])), None);
+    // The executors pass the plan's env through: Seatbelt's and bwrap's
+    // child env is `plan_env`, so the variable arrives as planned.
+    let env = plan_env(&plan, None);
+    assert!(env.iter().any(|(k, v)| k == "CLAUDE_CODE_TMPDIR" && Path::new(v) == plan.tmp));
+    #[cfg(target_os = "macos")]
+    {
+        let cmd = seatbelt::Seatbelt.confine(OsStr::new("/usr/bin/true"), &[], Path::new("/tmp"), &plan, None).unwrap();
+        assert!(cmd.get_envs().any(|(k, v)| k == "CLAUDE_CODE_TMPDIR" && v.map(Path::new) == Some(plan.tmp.as_path())));
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(cmd) = linux::Bwrap::probe().ok().and_then(|b| b.confine(OsStr::new("/bin/true"), &[], Path::new("/tmp"), &plan, None).ok()) {
+        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        let via_env = cmd.get_envs().any(|(k, v)| k == "CLAUDE_CODE_TMPDIR" && v.map(Path::new) == Some(plan.tmp.as_path()));
+        let via_args = args.windows(3).any(|w| w[0] == "--setenv" && w[1] == "CLAUDE_CODE_TMPDIR" && Path::new(&w[2]) == plan.tmp);
+        assert!(via_env || via_args, "bwrap child env lacks CLAUDE_CODE_TMPDIR: {args:?}");
+    }
+}
+
+/// The scratch dir goes away when the turn's guard drops (a cancelled turn
+/// drops it with its future), and the sweep removes a leaked dir that no
+/// live process owns once it's older than the longest turn, but never a dir
+/// in use here, a young one, or one another running process owns.
+#[test]
+fn stale_turn_dirs_are_swept_and_live_ones_kept() {
+    use std::time::Duration;
+    let root = tempfile::tempdir().unwrap();
+    let parent = root.path();
+    // A live dir of this process: kept, then removed on drop.
+    let live = make_turn_tmp_in(parent).unwrap();
+    let live_path = live.path().to_path_buf();
+    assert!(live_path.join(".ligus-owner").exists());
+    // A leaked dir whose owner is gone (a dead pid), with a copied config.
+    let dead = parent.join("ligus-turn-dead");
+    std::fs::create_dir_all(dead.join("home/.copilot")).unwrap();
+    std::fs::write(dead.join("home/.copilot/config.json"), "{}").unwrap();
+    // Find a pid that isn't running.
+    let dead_pid = (400_000u32..500_000).find(|p| !pid_alive(*p)).unwrap();
+    std::fs::write(dead.join(".ligus-owner"), dead_pid.to_string()).unwrap();
+    // No owner file at all (a dir from an older Ligus).
+    let ownerless = parent.join("ligus-turn-old");
+    std::fs::create_dir_all(&ownerless).unwrap();
+    // Owned by a running process (pid 1).
+    let other = parent.join("ligus-turn-other");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join(".ligus-owner"), "1").unwrap();
+    // Not a turn dir.
+    let unrelated = parent.join("something-else");
+    std::fs::create_dir_all(&unrelated).unwrap();
+
+    // Young: nothing goes.
+    assert_eq!(sweep_stale_turn_dirs_in(parent, Duration::from_secs(3600)), 0);
+    assert!(dead.exists() && ownerless.exists());
+    // Older than the longest turn: the dead and ownerless dirs go.
+    assert_eq!(sweep_stale_turn_dirs_in(parent, Duration::ZERO), 2);
+    assert!(!dead.exists() && !ownerless.exists());
+    assert!(live_path.exists() && other.exists() && unrelated.exists());
+    drop(live);
+    assert!(!live_path.exists(), "dropping the turn's scratch dir removes it");
+
+    // A whole prepared turn: its guard removes the dir, including when the
+    // turn's future is cancelled before the child finishes.
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let dir = rt.block_on(async {
+        let (tx, rx) = tokio::sync::oneshot::channel::<PathBuf>();
+        let turn = async move {
+            let p = prepare_with(&Unconfined, SpawnSpec::new(Purpose::McpServer, "/bin/sh", ["-c", "sleep 30"])).unwrap();
+            let tmp = p.guard.plan().tmp.clone();
+            let _ = tx.send(tmp);
+            let _guard = p.guard;
+            std::future::pending::<()>().await;
+        };
+        let _ = tokio::time::timeout(Duration::from_millis(50), turn).await;
+        rx.await.unwrap()
+    });
+    assert!(!dir.exists(), "a cancelled turn's scratch dir is removed");
+}
+
+// ---------------------------------------------------------------------------
+// Sandbox defaults (owner-approved; docs: concepts/security.md "Sandbox
+// defaults"). Each test pins one default.
+// ---------------------------------------------------------------------------
+
+/// Default 1: an agent can't commit inside a turn. `.git` is read-only in
+/// every plan, and under the real sandbox `git commit` fails while `git
+/// status` still works, so the turn's changes stay a diff Ligus captures as
+/// a proposal.
+#[test]
+fn sandbox_default_agents_cannot_commit() {
+    let host = HostPaths::default();
+    for kind in KINDS {
+        for gate in [GatePlan::Full, GatePlan::ReadOnly] {
+            let plan = EnvelopeEnforcer::plan(&PlanInputs {
+                host: HostKind::Desktop,
+                envelope: &SandboxEnvelope::workspace_default(),
+                purpose: Purpose::Agent(*kind),
+                gate: &gate,
+                worktree: Path::new("/repo"),
+                worktree_is_isolated: true,
+                write_capable: true,
+                tmp: Path::new("/tmp/t"),
+                home: Path::new("/home/u"),
+                host_paths: &host,
+                mcp_hosts: &[],
+                mcp_ids: &[],
+                model_base_url: None,
+                extra_env: &[],
+                provider_key: None,
+                model_provider_id: None,
+                envelope_args: &[],
+                ligus_mcp_socket: None,
+                egress_presets: &[],
+                cli_home: None,
+            });
+            assert!(plan.read_only.contains(&PathBuf::from("/repo/.git")), "{kind:?} {gate:?}");
+        }
+    }
+    let Some(e) = real_executor() else { return };
+    if std::process::Command::new("git").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("skipping: no git");
+        return;
+    }
+    let f = Fixture::new();
+    let wt = &f.worktree;
+    let _ = std::fs::remove_dir_all(wt.join(".git"));
+    let git = |args: &[&str]| {
+        let o = std::process::Command::new("git").args(args).current_dir(wt).output().unwrap();
+        assert!(o.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    git(&["init", "-q"]);
+    git(&["-c", "user.name=t", "-c", "user.email=t@example.com", "add", "-A"]);
+    git(&["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "base"]);
+    let head = git(&["rev-parse", "HEAD"]);
+    let (ok, out) = run_sh(&*e, &f, "git status --porcelain >/dev/null && echo READS", isolated());
+    if !ok || !out.contains("READS") {
+        eprintln!("skipping the commit half: git can't run under this host's sandbox ({out})");
+        return;
+    }
+    let (ok, out) = run_sh(
+        &*e,
+        &f,
+        "echo changed > README.md && git -c user.name=a -c user.email=a@example.com commit -qam agent-commit",
+        isolated(),
+    );
+    assert!(!ok, "an agent committed inside a turn: {out}");
+    assert_eq!(git(&["rev-parse", "HEAD"]), head, "HEAD moved");
+    // The edit itself landed in the worktree: Ligus captures it as a diff.
+    assert_eq!(std::fs::read_to_string(wt.join("README.md")).unwrap().trim(), "changed");
+}
+
+/// Default 2: where there's no OS sandbox (`LIGUS_SANDBOX=off`, Windows,
+/// Linux without bubblewrap) every write-capable agent turn is refused
+/// before it starts; read-only turns run.
+#[test]
+fn sandbox_default_write_turns_refused_without_os_sandbox() {
+    let wt = tempfile::tempdir().unwrap();
+    let write_specs: Vec<(ModelProviderKind, Vec<&str>)> = vec![
+        (ModelProviderKind::ClaudeCode, vec!["--permission-mode", "acceptEdits"]),
+        (ModelProviderKind::ClaudeCode, vec!["--dangerously-skip-permissions"]),
+        (ModelProviderKind::Copilot, vec!["--allow-all-tools"]),
+        (ModelProviderKind::Antigravity, vec!["--mode", "auto"]),
+        (ModelProviderKind::Codex, vec![]),
+        (ModelProviderKind::Aider, vec![]),
+        (ModelProviderKind::Pi, vec![]),
+        (ModelProviderKind::Hermes, vec![]),
+    ];
+    for (kind, args) in write_specs {
+        let spec = SpawnSpec::new(Purpose::Agent(kind), "true", args.clone()).cwd(Some(wt.path()));
+        let err = prepare_with(&Unconfined, spec).err().unwrap_or_else(|| panic!("{kind:?} {args:?} ran unconfined"));
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{kind:?}");
+    }
+    for kind in [ModelProviderKind::ClaudeCode, ModelProviderKind::Copilot, ModelProviderKind::Antigravity] {
+        // The CLI at its read-only tier (Copilot's is explicit deny rules).
+        let ro = crate::author_gate::read_only_args(kind, &[]);
+        let spec = SpawnSpec::new(Purpose::Agent(kind), "true", ro).cwd(Some(wt.path()));
+        assert!(prepare_with(&Unconfined, spec).is_ok(), "{kind:?} read-only runs");
+    }
+    // No Seatbelt and no bubblewrap backend on this OS (Windows): the host
+    // refuses write turns.
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    assert!(refuses_writes());
+}
+
+/// Default 3: on a worker (and every other host) a CLI that always writes
+/// (codex, aider, pi, hermes) runs only for a message whose author was an
+/// Admin or Owner when they posted it; below that it is refused, not
+/// downgraded, because it has no read-only tier.
+#[test]
+fn sandbox_default_always_writing_clis_need_admin() {
+    use hive_core::WorkspaceRole::*;
+    use crate::author_gate::{always_writes, gate, gate_turn, min_role_from};
+    for kind in [ModelProviderKind::Codex, ModelProviderKind::Aider, ModelProviderKind::Pi, ModelProviderKind::Hermes] {
+        assert!(always_writes(kind));
+        // The default floor for such a turn (no LIGUS_MCP_MIN_ROLE) is Admin.
+        assert_eq!(min_role_from(None, true), Admin);
+        for role in [None, Some(Viewer), Some(Contributor)] {
+            assert!(matches!(gate(kind, role, Admin), GatePlan::Refuse(_)), "{kind:?} {role:?}");
+        }
+        for role in [Admin, Owner] {
+            assert_eq!(gate(kind, Some(role), Admin), GatePlan::Full, "{kind:?} {role:?}");
+        }
+        if std::env::var_os("LIGUS_MCP_MIN_ROLE").is_none() && std::env::var_os("HIVE_MCP_MIN_ROLE").is_none() {
+            let mut args = Vec::new();
+            assert!(matches!(gate_turn(kind, &mut args, Some(Contributor)), GatePlan::Refuse(_)), "{kind:?}");
+            assert_eq!(gate_turn(kind, &mut args, Some(Admin)), GatePlan::Full);
+        }
+    }
+    for kind in [ModelProviderKind::ClaudeCode, ModelProviderKind::Copilot, ModelProviderKind::Antigravity] {
+        assert!(!always_writes(kind), "{kind:?} has a read-only tier");
+    }
 }
