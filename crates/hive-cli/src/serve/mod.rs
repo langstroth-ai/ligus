@@ -796,6 +796,11 @@ pub struct ServeHandle {
     pub shared: Arc<Shared>,
     shutdown: watch::Sender<bool>,
     worker: Mutex<Option<std::thread::JoinHandle<()>>>,
+    /// The background tasks (API, sync, presence, token watch, tunnel).
+    /// Only tests wait for them (so a late round can't recreate a removed
+    /// temp data dir); a real stop leaves them to the runtime's shutdown.
+    #[cfg_attr(not(test), allow(dead_code))]
+    tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
 impl ServeHandle {
@@ -827,6 +832,8 @@ impl ServeHandle {
         if self.shared.cfg.relay_url.is_some() {
             let _ = tokio::time::timeout(Duration::from_secs(3), sync_once(&self.shared.cfg)).await;
         }
+        #[cfg(test)]
+        self.wait_stopped_blocking(grace);
         true
     }
 }
@@ -834,6 +841,41 @@ impl ServeHandle {
 impl Drop for ServeHandle {
     fn drop(&mut self) {
         self.shutdown();
+        // Tests: the tasks and the worker finish before the test's temp dir
+        // is removed (a late sync round would recreate the data dir there).
+        #[cfg(test)]
+        self.wait_stopped_blocking(Duration::from_secs(10));
+    }
+}
+
+#[cfg(test)]
+impl ServeHandle {
+    fn wait_stopped_blocking(&self, grace: Duration) {
+        let deadline = std::time::Instant::now() + grace;
+        if let Some(w) = self.worker.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            while !w.is_finished() && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            if w.is_finished() {
+                let _ = w.join();
+            }
+        }
+        let tasks: Vec<_> = std::mem::take(&mut *self.tasks.lock().unwrap_or_else(|e| e.into_inner()));
+        let Ok(rt) = tokio::runtime::Handle::try_current() else { return };
+        if rt.runtime_flavor() != tokio::runtime::RuntimeFlavor::MultiThread {
+            return;
+        }
+        tokio::task::block_in_place(|| {
+            rt.block_on(async {
+                for t in tasks {
+                    let left = deadline.saturating_duration_since(std::time::Instant::now());
+                    let abort = t.abort_handle();
+                    if tokio::time::timeout(left, t).await.is_err() {
+                        abort.abort();
+                    }
+                }
+            })
+        });
     }
 }
 
@@ -964,26 +1006,26 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
     let addr = listener.local_addr()?;
     let app = api::router(shared.clone());
     let mut rx_api = rx.clone();
-    tokio::spawn(async move {
+    let mut tasks = vec![tokio::spawn(async move {
         let graceful = async move {
             let _ = rx_api.wait_for(|stop| *stop).await;
         };
         if let Err(e) = axum::serve(listener, app).with_graceful_shutdown(graceful).await {
             eprintln!("serve: API stopped: {e}");
         }
-    });
+    })];
     if shared.cfg.relay_url.is_some() {
-        tokio::spawn(sync_loop(shared.clone(), rx.clone()));
-        tokio::spawn(presence_loop(shared.clone(), rx.clone()));
+        tasks.push(tokio::spawn(sync_loop(shared.clone(), rx.clone())));
+        tasks.push(tokio::spawn(presence_loop(shared.clone(), rx.clone())));
     }
-    tokio::spawn(token_watch(shared.clone(), rx.clone()));
+    tasks.push(tokio::spawn(token_watch(shared.clone(), rx.clone())));
     if let Some(t) = shared.tunnel.clone() {
-        tokio::spawn(tunnel::pending_loop(t.clone(), rx.clone()));
-        tokio::spawn(tunnel::control::run(t, api::router(shared.clone()), rx.clone(), Default::default()));
+        tasks.push(tokio::spawn(tunnel::pending_loop(t.clone(), rx.clone())));
+        tasks.push(tokio::spawn(tunnel::control::run(t, api::router(shared.clone()), rx.clone(), Default::default())));
     }
     let worker = spawn_worker(shared.clone())?;
     shared.sync_kick.notify_one();
-    Ok(ServeHandle { addr, shared, shutdown, worker: Mutex::new(Some(worker)) })
+    Ok(ServeHandle { addr, shared, shutdown, worker: Mutex::new(Some(worker)), tasks: Mutex::new(tasks) })
 }
 
 /// Pick up a token rotated by `ligus phones revoke` (§13.2 step 4).

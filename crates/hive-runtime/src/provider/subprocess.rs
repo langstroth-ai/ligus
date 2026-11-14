@@ -259,6 +259,11 @@ mod tests {
 
     #[tokio::test]
     async fn echoes_stdin_through_cat() {
+        // An agent child needs this host's sandbox (write-capable turns are
+        // refused without one).
+        if crate::executor::skip_without_sandbox("echoes_stdin_through_cat") {
+            return;
+        }
         // `cat` echoes stdin to stdout — a portable stand-in for a CLI agent.
         let mut deltas = Vec::new();
         let out = run("cat", &[], None, "hello\nworld", |c| deltas.push(c))
@@ -274,6 +279,11 @@ mod tests {
     /// member who can prompt it could have it print its environment.
     #[tokio::test]
     async fn agent_children_never_inherit_ligus_secrets() {
+        // An agent child needs this host's sandbox (write-capable turns are
+        // refused without one).
+        if crate::executor::skip_without_sandbox("agent_children_never_inherit_ligus_secrets") {
+            return;
+        }
         std::env::set_var("LIGUS_WS_SECRET_SCRUBTEST", "ws-secret-value");
         std::env::set_var("HIVE_SCRUBTEST_ACCESS_TOKEN", "relay-token-value");
         std::env::set_var("LIGUS_SCRUBTEST_PLAIN", "kept");
@@ -290,12 +300,24 @@ mod tests {
 
     #[tokio::test]
     async fn nonzero_exit_is_an_error() {
-        let err = run("sh", &["-c".into(), "exit 3".into()], None, "", |_| {}).await;
-        assert!(err.is_err());
+        // An agent child needs this host's sandbox (write-capable turns are
+        // refused without one).
+        if crate::executor::skip_without_sandbox("nonzero_exit_is_an_error") {
+            return;
+        }
+        let err = run("sh", &["-c".into(), "exit 3".into()], None, "", |_| {}).await.expect_err("exit 3 is an error");
+        // The exit itself, not a refusal to spawn.
+        let msg = err.to_string();
+        assert!(matches!(err, ProviderError::Subprocess(_)) && msg.contains("sh exited with") && msg.contains('3'), "{msg}");
     }
 
     #[tokio::test]
     async fn slow_command_times_out_and_is_killed() {
+        // An agent child needs this host's sandbox (write-capable turns are
+        // refused without one).
+        if crate::executor::skip_without_sandbox("slow_command_times_out_and_is_killed") {
+            return;
+        }
         std::env::set_var("LIGUS_AGENT_TIMEOUT_SECS", "1");
         let err = run("sh", &["-c".into(), "sleep 30".into()], None, "", |_| {})
             .await
@@ -306,6 +328,11 @@ mod tests {
 
     #[tokio::test]
     async fn nonzero_exit_surfaces_stderr() {
+        // An agent child needs this host's sandbox (write-capable turns are
+        // refused without one).
+        if crate::executor::skip_without_sandbox("nonzero_exit_surfaces_stderr") {
+            return;
+        }
         let err = run(
             "sh",
             &["-c".into(), "echo 'boom: no api key' >&2; exit 1".into()],
@@ -321,6 +348,11 @@ mod tests {
 
     #[tokio::test]
     async fn prompt_in_args_path_streams_stdout() {
+        // An agent child needs this host's sandbox (write-capable turns are
+        // refused without one).
+        if crate::executor::skip_without_sandbox("prompt_in_args_path_streams_stdout") {
+            return;
+        }
         // `echo <prompt>` stands in for a CLI that takes the prompt as an arg.
         let mut deltas = Vec::new();
         let out = run_with(

@@ -114,10 +114,14 @@ use hive_proto::AppInfo;
 
 /// Assemble the [`AppInfo`] payload returned by the `get_app_info` IPC command.
 pub fn app_info() -> AppInfo {
+    let sandbox = executor::sandbox_status();
     AppInfo {
         name: "Ligus".to_string(),
         core_version: hive_core::VERSION.to_string(),
         build_profile: if cfg!(debug_assertions) { "debug" } else { "release" }.to_string(),
+        sandbox_tier: sandbox.tier().to_string(),
+        sandbox_summary: sandbox.summary,
+        sandbox_notes: sandbox.notes,
     }
 }
 

@@ -121,11 +121,21 @@ ligus serve enroll --new-device
   unreadable; writes land only in the turn's worktree; the network is a
   fresh namespace whose only exit is the turn's egress proxy. So an agent
   can't read the token, and can't reach the serve API on loopback either.
-- **Install bubblewrap.** The Linux sandbox needs `bwrap` and unprivileged
-  user namespaces. Without them the box runs read-only agent turns only and
-  refuses write-capable ones (`LIGUS_WORKER_PERMISSION_MODE` has no effect).
-  Check with a write-tier turn after installing; the [container
-  image](../deploy/kubernetes.md) ships `bwrap`.
+  Under the [Landlock tier](linux-sandbox.md) the same paths are denied by
+  Landlock rules, and TCP is limited to the egress proxy's port (by port,
+  not address: see the residuals there), so the serve API's port is out of
+  reach too.
+- **Install bubblewrap.** The strongest Linux sandbox needs `bwrap` and
+  unprivileged user namespaces. Where bubblewrap can't create them, the box
+  falls back to the [Landlock tier](linux-sandbox.md) (Linux 6.7+:
+  Landlock + seccomp, no namespaces, with known gaps); with neither it runs
+  read-only agent turns only and refuses write-capable ones
+  (`LIGUS_WORKER_PERMISSION_MODE` has no effect). Run `ligus doctor` to see
+  the tier. On **Ubuntu 24.04** AppArmor blocks bubblewrap's user namespace
+  (`kernel.apparmor_restrict_unprivileged_userns=1`, and no bwrap profile
+  ships before 24.10): the box uses the Landlock tier until you install the
+  [optional AppArmor profile](linux-sandbox.md#apparmor-profile). The
+  [container image](../deploy/kubernetes.md) ships `bwrap`.
 - **HOME is not the data dir.** Agent CLIs keep their logins under `$HOME`;
   run the service with a `HOME` outside `LIGUS_DATA_DIR` (the container image
   and chart use `/home/ligus`), because the data dir is unreadable to them.
