@@ -14939,6 +14939,7 @@ pub fn run() {
             passkey_ui::passkey_remove,
             passkey_ui::workspace_rules_set,
             passkey_ui::presence_cancel,
+            passkey_ui::presence_use_recovery,
             set_relay_user_disabled,
             workflows::list_workflows,
             flow::flow_get_settings,

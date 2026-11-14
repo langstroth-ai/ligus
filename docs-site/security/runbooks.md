@@ -178,8 +178,10 @@ The complete way to cut someone's reading, including on headless devices.
    theirs).
 2. Synced passkeys (iCloud Keychain, Google Password Manager) usually come
    back with the account; a lost YubiKey doesn't.
-3. Lost every passkey but the recovery key: confirm with the recovery key
-   (enter the 24 words when Ligus asks) and register new passkeys.
+3. Lost every passkey but the recovery key: when the **Confirm with
+   passkey** sheet opens, choose **Use recovery key** and enter the 24 words
+   (they are checked and used on this device only, never stored), then
+   register new passkeys.
 4. Lost everything: another Owner (or, for an Admin or below, an Admin)
    removes your passkeys (with their
    own passkey) and you register a new first passkey. **A sole Owner without

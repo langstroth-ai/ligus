@@ -1685,6 +1685,8 @@ export const passkeyRemove = (credentialId: string) => invoke<void>("passkey_rem
 export const workspaceRulesSet = (version: number) => invoke<void>("workspace_rules_set", { version });
 export const rotateWorkspaceKey = () => invoke<{ rotated: boolean; recipients: number }>("rotate_workspace_key");
 export const presenceCancel = () => invoke<void>("presence_cancel");
+/** Confirm the pending request with the recovery key's 24 words (signed on this device, never stored). */
+export const presenceUseRecovery = (words: string) => invoke<void>("presence_use_recovery", { words });
 export const onPresenceRequested = (cb: (p: PresencePromptDto) => void): Promise<UnlistenFn> =>
   listen<PresencePromptDto>("presence://requested", (e) => cb(e.payload));
 export const onPresenceDone = (cb: (ok: boolean) => void): Promise<UnlistenFn> =>

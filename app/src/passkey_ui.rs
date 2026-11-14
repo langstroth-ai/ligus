@@ -32,6 +32,19 @@ pub const PRESENCE_PAGE: &str = "https://ligus.ai/presence";
 const WAIT: Duration = Duration::from_secs(180);
 
 static CANCEL: AtomicBool = AtomicBool::new(false);
+/// A recovery key the person entered for the pending `get` (its 24 words),
+/// used once instead of the browser and dropped right after.
+static RECOVERY: std::sync::Mutex<Option<RecoveryKey>> = std::sync::Mutex::new(None);
+
+/// What answered a ceremony.
+enum Outcome {
+    Browser(HandOff),
+    Recovery(RecoveryKey),
+}
+
+fn take_recovery() -> Option<RecoveryKey> {
+    RECOVERY.lock().unwrap_or_else(|e| e.into_inner()).take()
+}
 
 /// What the confirmation sheet shows.
 #[derive(Debug, Clone, Serialize)]
@@ -85,7 +98,8 @@ fn urldecode(s: &str) -> String {
 }
 
 /// Run one ceremony in the system browser and wait for its result.
-fn hand_off(app: &AppHandle, prompt: PresencePrompt, fragment: String) -> Result<HandOff, String> {
+fn hand_off(app: &AppHandle, prompt: PresencePrompt, fragment: String) -> Result<Outcome, String> {
+    let recovery_ok = prompt.op == "get";
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
@@ -93,6 +107,7 @@ fn hand_off(app: &AppHandle, prompt: PresencePrompt, fragment: String) -> Result
     let nonce = b64url(uuid::Uuid::new_v4().as_bytes());
     let url = format!("{PRESENCE_PAGE}#{fragment}&p={port}&n={nonce}");
     CANCEL.store(false, Ordering::SeqCst);
+    drop(take_recovery());
     let _ = app.emit("presence://requested", &prompt);
     crate::open_url_in_browser(&url).map_err(|e| format!("couldn't open the browser: {e}"))?;
     let deadline = Instant::now() + WAIT;
@@ -103,10 +118,15 @@ fn hand_off(app: &AppHandle, prompt: PresencePrompt, fragment: String) -> Result
         if Instant::now() > deadline {
             break Err("timed out waiting for the passkey".to_string());
         }
+        if recovery_ok {
+            if let Some(k) = take_recovery() {
+                break Ok(Outcome::Recovery(k));
+            }
+        }
         match listener.accept() {
             Ok((stream, _)) => {
                 if let Some(r) = read_submission(stream, &nonce) {
-                    break Ok(r);
+                    break Ok(Outcome::Browser(r));
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(100)),
@@ -182,7 +202,11 @@ pub fn browser_get(app: &AppHandle, req: &PresenceRequest) -> Result<PresenceAss
         urlencode(&req.summary),
     );
     let prompt = PresencePrompt { kind: req.kind.clone(), summary: req.summary.clone(), digest_short: req.digest_short.clone(), op: "get".into() };
-    let r = hand_off(app, prompt, fragment)?;
+    let r = match hand_off(app, prompt, fragment)? {
+        Outcome::Browser(r) => r,
+        // The recovery key signs the very challenge requested, here.
+        Outcome::Recovery(k) => return Ok(k.assert(&req.challenge)),
+    };
     if returned_challenge(&r.client_data_json).as_deref() != Some(&req.challenge[..]) {
         return Err("the browser returned an assertion for a different challenge".into());
     }
@@ -211,7 +235,9 @@ fn browser_create(app: &AppHandle, req: &PresenceRequest, user_name: &str) -> Re
         digest_short: req.digest_short.clone(),
         op: "create".into(),
     };
-    let r = hand_off(app, prompt, fragment)?;
+    let Outcome::Browser(r) = hand_off(app, prompt, fragment)? else {
+        return Err("a recovery key doesn't create a passkey".into());
+    };
     if returned_challenge(&r.client_data_json).as_deref() != Some(&req.challenge[..]) {
         return Err("the browser returned a credential for a different challenge".into());
     }
@@ -386,6 +412,17 @@ pub async fn passkey_remove(app: AppHandle, credential_id: String) -> Result<(),
 #[tauri::command]
 pub fn presence_cancel() {
     CANCEL.store(true, Ordering::SeqCst);
+}
+
+/// Confirm the pending request with the recovery key's 24 words instead of
+/// a passkey (lost every passkey). The words are parsed here (checksum
+/// verified), used for that one assertion and never stored; the fold accepts
+/// it only if that recovery key is registered to this account.
+#[tauri::command]
+pub fn presence_use_recovery(words: String) -> Result<(), String> {
+    let key = RecoveryKey::from_words(&words).map_err(|e| e.0)?;
+    *RECOVERY.lock().unwrap_or_else(|e| e.into_inner()) = Some(key);
+    Ok(())
 }
 
 /// Install the browser hand-off as the desktop's presence provider.
