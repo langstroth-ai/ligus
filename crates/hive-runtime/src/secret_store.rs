@@ -12,7 +12,7 @@
 //! | [`SecretService`] | Linux desktop: the session's Secret Service (through `secret-tool`) |
 //! | [`SystemdCreds`] | headless Linux (serve, worker): `systemd-creds encrypt` (TPM2 when present, else the host key) |
 //! | [`K8sSecretFile`] | the chart: read-only mounted Secret files, writes fall back to [`File0600`] |
-//! | [`File0600`] | fallback: owner-only files, with a warning |
+//! | [`File0600`] | fallback: owner-only files, with a warning (on macOS only when chosen: `LIGUS_SECRET_BACKEND=file`) |
 //!
 //! ## Agents can't reach Ligus's items
 //!
@@ -88,6 +88,9 @@ pub enum Backend {
     SystemdCreds,
     K8sSecretFile,
     File0600,
+    /// No usable store, and plain files weren't chosen (macOS): every use
+    /// fails with the reason ([`Unavailable`]).
+    Unavailable,
 }
 
 impl Backend {
@@ -98,6 +101,7 @@ impl Backend {
             Backend::SystemdCreds => "systemd-creds",
             Backend::K8sSecretFile => "k8s",
             Backend::File0600 => "file",
+            Backend::Unavailable => "unavailable",
         }
     }
     /// Whether secrets sit in plain owner-only files (the UI and `ligus
@@ -546,6 +550,50 @@ mod mac {
 }
 
 // ---------------------------------------------------------------------------
+// Unavailable
+// ---------------------------------------------------------------------------
+
+/// A store that refuses every use with its reason: on macOS a Ligus keychain
+/// that can't be used is an error the person sees, not a silent move of
+/// every secret into plain files (B2 residual). `LIGUS_SECRET_BACKEND=file`
+/// is the explicit opt-in to owner-only files.
+pub struct Unavailable {
+    why: String,
+}
+
+impl SecretStore for Unavailable {
+    fn backend(&self) -> Backend {
+        Backend::Unavailable
+    }
+    fn get(&self, _: &SecretId) -> Result<Option<Zeroizing<Vec<u8>>>, SecretError> {
+        Err(backend_err("keychain", self.why.clone()))
+    }
+    fn put(&self, _: &SecretId, _: &[u8]) -> Result<(), SecretError> {
+        Err(backend_err("keychain", self.why.clone()))
+    }
+    fn delete(&self, _: &SecretId) -> Result<(), SecretError> {
+        Err(backend_err("keychain", self.why.clone()))
+    }
+}
+
+/// The keychain, or, when it can't be used, a store that refuses with a
+/// clear error (macOS never degrades to plain files unless asked).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn keychain_or_refuse<S: SecretStore + 'static>(keychain: Result<S, SecretError>) -> Arc<dyn SecretStore> {
+    match keychain {
+        Ok(k) => Arc::new(k),
+        Err(e) => {
+            let why = format!(
+                "the Ligus keychain isn't available ({e}). Ligus doesn't move its secrets into plain files on its own: \
+                 fix the keychain, or set LIGUS_SECRET_BACKEND=file to keep them in owner-only files under the data dir"
+            );
+            tracing::error!(target: "secrets", "{why}");
+            Arc::new(Unavailable { why })
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Selection
 // ---------------------------------------------------------------------------
 
@@ -556,7 +604,9 @@ fn on_path(bin: &str) -> Option<PathBuf> {
 
 /// Open the store for `data_dir`: `choice` (`keychain`, `secret-service`,
 /// `systemd-creds`, `k8s`, `file`) or, when `None`, the OS default. A backend
-/// that can't be used falls back to [`File0600`] with a warning.
+/// that can't be used falls back to [`File0600`] with a warning, except the
+/// macOS keychain: that one refuses ([`Unavailable`]) unless `file` was
+/// chosen.
 pub fn open(data_dir: &Path, choice: Option<&str>) -> Arc<dyn SecretStore> {
     let choice = choice.map(|c| c.trim().to_ascii_lowercase()).filter(|c| !c.is_empty());
     let fallback = |why: String| -> Arc<dyn SecretStore> {
@@ -585,10 +635,7 @@ pub fn open(data_dir: &Path, choice: Option<&str>) -> Arc<dyn SecretStore> {
     }
     #[cfg(target_os = "macos")]
     {
-        match MacKeychain::open(data_dir) {
-            Ok(k) => Arc::new(k),
-            Err(e) => fallback(format!("the Ligus keychain isn't available ({e})")),
-        }
+        keychain_or_refuse(MacKeychain::open(data_dir))
     }
     #[cfg(target_os = "linux")]
     {
@@ -1078,6 +1125,25 @@ esac"#,
         again.destroy().unwrap();
         assert!(!path.exists());
         assert!(!probe.unlock_item_exists(), "the unlock password left the login keychain");
+    }
+
+    /// Track B residual 6: on macOS a Ligus keychain that can't be used
+    /// doesn't silently degrade to plain files. Every use fails with an error
+    /// that names the opt-in, nothing reaches the data dir, and only an
+    /// explicit `file` choice keeps secrets in owner-only files.
+    #[test]
+    fn an_unavailable_keychain_refuses_instead_of_degrading_to_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = keychain_or_refuse(Err::<File0600, _>(backend_err("keychain", "no keychain here")));
+        assert_eq!(store.backend(), Backend::Unavailable);
+        assert!(!store.backend().is_plain_file());
+        let id = SecretId::new("settings", "api_key");
+        let err = store.put(&id, b"secret-value").unwrap_err().to_string();
+        assert!(err.contains("LIGUS_SECRET_BACKEND=file") && err.contains("no keychain here"), "{err}");
+        assert!(store.get(&id).is_err(), "a read doesn't pass for 'not set'");
+        assert!(store.delete(&id).is_err());
+        assert!(std::fs::read_dir(dir.path()).unwrap().next().is_none(), "something was written under the data dir");
+        assert_eq!(open(dir.path(), Some("file")).backend(), Backend::File0600, "the explicit opt-in");
     }
 
     /// An in-memory store (property tests; the file and CLI backends have

@@ -150,6 +150,13 @@ export function SecuritySection() {
             This device keeps Ligus's secrets in owner-only files, not an OS secret store.
           </p>
         )}
+        {st?.secretBackend === "unavailable" && (
+          <p className="text-xs" style={{ color: "var(--hive-danger-ink)" }}>
+            The Ligus keychain isn't available, so Ligus can't save secrets on this device. Ligus won't fall back to
+            plain files on its own: fix the keychain, or start Ligus with LIGUS_SECRET_BACKEND=file to keep them in
+            owner-only files.
+          </p>
+        )}
       </Section>
     </>
   );
