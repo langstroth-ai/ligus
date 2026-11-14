@@ -71,6 +71,6 @@ spec:
 -}}
 {{- $job := include "ligus.sandboxJob" (dict "root" . "name" (printf "%s-sandbox-smoke" $fullname) "command" (list "/bin/bash" "-c" (join "\n" $script)) "entrypoint" true) | fromYaml }}
 {{- $_ := set $job.metadata "annotations" (dict "helm.sh/hook" "post-install,post-upgrade" "helm.sh/hook-delete-policy" "before-hook-creation") }}
-{{- toYaml $job }}
+{{ toYaml $job }}
 {{- end }}
 {{- end }}
