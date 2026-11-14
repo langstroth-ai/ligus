@@ -417,13 +417,17 @@ pub fn counted_role(at: &RosterState, author: &str) -> Option<WorkspaceRole> {
 }
 
 /// S2: the role an agent change needs, when it touches agents. A new agent
-/// bound to a host, or any change of an agent's host, runtime or owner, is
+/// bound to a host or owned by someone else, or any change of an agent's
+/// host, runtime or owner, is
 /// Admin; editing an agent you don't own (name, role text, avatar) is Admin
 /// unless it is unowned; everything else is the usual Contributor floor.
 fn agent_change_floor(event: &SessionEvent, author: &str, fold: &ChatSession) -> Option<WorkspaceRole> {
     let one = |new: &WorkspaceAgent| -> WorkspaceRole {
         match fold.workspace_agents.iter().find(|a| a.id == new.id) {
             None if !new.host_id.is_empty() => WorkspaceRole::Admin,
+            // An unbound agent runs on its owner's device: naming someone else
+            // as the owner binds it to their device (and runtimes, and keys).
+            None if !new.owner_actor_id.is_empty() && new.owner_actor_id != author => WorkspaceRole::Admin,
             None => WorkspaceRole::Contributor,
             Some(old) if old == new => WorkspaceRole::Contributor,
             Some(old)

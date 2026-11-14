@@ -1165,3 +1165,27 @@ fn delegated_host_republishing_its_cert_stays_delegated() {
     signed(&mut w, SessionEvent::DeviceCertificateAdded { certificate: desk_cert }, bx);
     assert!(!w.timeline().current().devices[&desk].delegated_for(owner_acct));
 }
+
+/// Hardening A-2: an unbound agent runs on its owner's device, so its owner
+/// is its host binding. A Contributor can't create an agent owned by someone
+/// else (it would run on their device, with their runtimes and keys).
+#[test]
+fn contributor_cannot_create_an_agent_owned_by_someone_else() {
+    let mut w = World::new();
+    let mut theirs = hive_core::WorkspaceAgent::new("helper", "claude-code");
+    theirs.owner_actor_id = "owner".into();
+    let one = w.cfg_push("mara", SessionEvent::AgentUpserted { agent: theirs.clone() });
+    let mut also = hive_core::WorkspaceAgent::new("helper2", "claude-code");
+    also.owner_actor_id = "ada".into();
+    let list = w.cfg_push("mara", SessionEvent::AgentRosterUpdated { agents: vec![also] });
+    // Her own agent: fine. An Admin may create one for someone else.
+    let mut mine = hive_core::WorkspaceAgent::new("mine", "claude-code");
+    mine.owner_actor_id = "mara".into();
+    let own = w.cfg_push("mara", SessionEvent::AgentUpserted { agent: mine });
+    let mut for_val = hive_core::WorkspaceAgent::new("vals", "claude-code");
+    for_val.owner_actor_id = "val".into();
+    let admin = w.cfg_push("ada", SessionEvent::AgentUpserted { agent: for_val });
+    let v = w.verdicts();
+    assert_eq!((v[&one], v[&list]), (Verdict::Denied, Verdict::Denied));
+    assert_eq!((v[&own], v[&admin]), (Verdict::Allowed, Verdict::Allowed));
+}
