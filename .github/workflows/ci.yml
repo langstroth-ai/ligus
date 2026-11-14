@@ -78,6 +78,15 @@ jobs:
         run: bun run test
       - name: Web typecheck + build
         run: bun run build
+      # Monaco vendors DOMPurify; vite.config.ts swaps it for the overridden
+      # npm package. Fail if any other DOMPurify version reached the bundle
+      # (DOMPurify's minified init sets .version then .removed=[]).
+      - name: Bundled DOMPurify is the pinned one
+        run: |
+          want=$(node -p 'require("./package.json").overrides.dompurify')
+          found=$(grep -ohE '\.version=.[0-9]+\.[0-9]+\.[0-9]+.,[A-Za-z_$]+\.removed=' dist/assets/*.js | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -u)
+          echo "pinned=$want bundled=$found"
+          test -n "$found" && test "$found" = "$want"
 
   rust:
     strategy:
