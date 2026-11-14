@@ -993,7 +993,7 @@ pub fn project_with_options(
     trusted_founder: Option<&str>,
     trusted_workspace: Option<Uuid>,
 ) -> Option<ChatSession> {
-    fold(envelopes, trusted_founder, trusted_workspace, WorkspaceAuthz::Unchecked, None)
+    fold(envelopes, trusted_founder, trusted_workspace, WorkspaceAuthz::Unchecked, None, None)
 }
 
 /// How a chat log's workspace-authorized events are judged.
@@ -1017,7 +1017,7 @@ pub fn project_authorized(
     trusted_workspace: Option<Uuid>,
     workspace: WorkspaceAuthz<'_>,
 ) -> Option<ChatSession> {
-    fold(envelopes, trusted_founder, trusted_workspace, workspace, None)
+    fold(envelopes, trusted_founder, trusted_workspace, workspace, None, None)
 }
 
 /// Fold a **workspace-config** log and record its roster at every position.
@@ -1027,8 +1027,30 @@ pub fn project_config(
     trusted_workspace: Option<Uuid>,
 ) -> (Option<ChatSession>, crate::authz::ConfigTimeline) {
     let mut timeline = crate::authz::ConfigTimeline::default();
-    let session = fold(envelopes, trusted_founder, trusted_workspace, WorkspaceAuthz::Unchecked, Some(&mut timeline));
+    let session =
+        fold(envelopes, trusted_founder, trusted_workspace, WorkspaceAuthz::Unchecked, Some(&mut timeline), None);
     (session, timeline.finish_if_begun())
+}
+
+/// The fold's verdict on one event (see [`fold_decisions`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    Allowed,
+    Denied,
+    Held,
+}
+
+/// Every event's verdict in a fold (the base seed and anything sorting before
+/// it are absent), for audits and the authorization property tests.
+pub fn fold_decisions(
+    envelopes: &[SessionEventEnvelope],
+    trusted_founder: Option<&str>,
+    trusted_workspace: Option<Uuid>,
+    workspace: WorkspaceAuthz<'_>,
+) -> std::collections::BTreeMap<Uuid, Verdict> {
+    let mut out = std::collections::BTreeMap::new();
+    fold(envelopes, trusted_founder, trusted_workspace, workspace, None, Some(&mut out));
+    out
 }
 
 fn fold(
@@ -1037,6 +1059,7 @@ fn fold(
     trusted_workspace: Option<Uuid>,
     workspace: WorkspaceAuthz<'_>,
     mut timeline: Option<&mut crate::authz::ConfigTimeline>,
+    mut decisions: Option<&mut std::collections::BTreeMap<Uuid, Verdict>>,
 ) -> Option<ChatSession> {
     use crate::authz::{self, Decision, HeldEvent, HoldReason};
 
@@ -1078,6 +1101,7 @@ fn fold(
         let trusted = trusted_workspace == Some(env.workspace_id);
         let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
         let mut allowed = false;
+        let mut held = false;
         'judge: {
             if let SessionEvent::SessionSnapshot { session: snap } = &env.payload {
                 // A non-seed snapshot is a full-state overwrite folded mid-stream (a
@@ -1118,6 +1142,7 @@ fn fold(
                 if let Some(reason) = hold {
                     let (proposal_id, set_id) = authz::subject_of(&env.payload);
                     session.authz.held.push(HeldEvent { event_id: env.event_id, reason, proposal_id, set_id });
+                    held = true;
                     break 'judge;
                 }
             }
@@ -1156,6 +1181,16 @@ fn fold(
                 session.apply(payload);
             }
             session.updated_at = env.timestamp;
+        }
+        if let Some(d) = decisions.as_deref_mut() {
+            let v = if allowed {
+                Verdict::Allowed
+            } else if held {
+                Verdict::Held
+            } else {
+                Verdict::Denied
+            };
+            d.insert(env.event_id, v);
         }
         let changed = tracker.observe(env, allowed, &session);
         if let Some(t) = timeline.as_deref_mut() {

@@ -3657,6 +3657,52 @@ mod tests {
         assert_eq!(svc.load(sid).unwrap().unwrap().workflow_definitions.len(), 1);
     }
 
+    /// A rules version this build doesn't enforce makes the workspace
+    /// read-only here: every write is refused with an "update" message.
+    #[test]
+    fn unknown_rules_version_refuses_writes_on_this_device() {
+        let (mut svc, _) = service();
+        let chat = svc.create_chat("Demo", Uuid::new_v4(), "anthropic").unwrap();
+        let (sid, wid) = (chat.id, chat.workspace_id);
+        let cfg = svc.ensure_workspace_config(wid).unwrap();
+        svc.post_user_message(sid, wid, "before").unwrap();
+        svc.append_signed(cfg, wid, SessionEvent::WorkspaceRulesSet { version: hive_core::authz::RULES_SUPPORTED + 1 })
+            .unwrap();
+        let err = svc.post_user_message(sid, wid, "after").unwrap_err().to_string();
+        assert!(err.contains("update Ligus"), "{err}");
+        assert!(svc.load(cfg).unwrap().unwrap().authz.read_only());
+    }
+
+    /// A vote this device can't place yet (its config frontier hasn't
+    /// synced) holds, and Implement refuses while it does.
+    #[test]
+    fn a_held_vote_blocks_marking_the_proposal_applied() {
+        let (mut svc, _) = service();
+        let chat = svc.create_chat("Demo", Uuid::new_v4(), "anthropic").unwrap();
+        let (sid, wid) = (chat.id, chat.workspace_id);
+        svc.ensure_workspace_config(wid).unwrap();
+        let p = ActionProposal::new("Ship it", hive_core::ProposalKind::Decision, "agent");
+        let pid = p.id;
+        svc.upsert_proposal(sid, wid, p).unwrap();
+        svc.vote_on_proposal(sid, wid, pid, true).unwrap();
+        // A peer's vote naming a config event this device doesn't hold.
+        let mut peer = SessionEventEnvelope::new(sid, wid, 99, SessionEvent::ProposalDismissed { proposal_id: pid, dismissed: false });
+        peer.payload = SessionEvent::ProposalVoteCast {
+            proposal_id: pid,
+            approval: ProposalApproval { actor_id: "u1".into(), role: WorkspaceRole::Owner, approved: false, created_at: Timestamp::now(), diff_digest: None },
+        };
+        peer.lamport = 1_000;
+        peer.actor_stamp = Some(ActorStamp {
+            actor: svc.author().clone(),
+            recorded_at: Timestamp::now(),
+            cfg_frontier: Some(hive_core::CfgFrontier { lamport: 7_777, event_id: Uuid::new_v4() }),
+        });
+        svc.store().append_envelope(&peer).unwrap();
+        let s = svc.load(sid).unwrap().unwrap();
+        assert!(s.authz.blocks(pid, None));
+        assert!(svc.mark_proposal_applied(sid, wid, pid, None).is_err());
+    }
+
     #[test]
     fn rejecting_a_workflow_proposal_leaves_definitions_alone() {
         let (mut svc, _) = service();

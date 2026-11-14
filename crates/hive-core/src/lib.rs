@@ -66,7 +66,7 @@ pub use e2ee::{
     seal_symmetric, KeyAgreementKeypair, SealedBlob, SealedEnvelope, WorkspaceKeyRotation,
 };
 pub use events::{
-    project, project_authorized, project_config, project_with_founder, project_with_options, WorkspaceAuthz, EventScope, MemberRoleChange, SessionEvent,
+    fold_decisions, project, project_authorized, project_config, Verdict, project_with_founder, project_with_options, WorkspaceAuthz, EventScope, MemberRoleChange, SessionEvent,
     SessionEventEnvelope,
 };
 pub use git_context::{GitContextReader, GitFileChange, GitFileDiff, GitSnapshot};
