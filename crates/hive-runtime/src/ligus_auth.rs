@@ -201,11 +201,20 @@ pub fn session_path(dir: &Path) -> PathBuf {
 
 pub fn load_session(dir: &Path) -> Option<Session> {
     let raw = std::fs::read(session_path(dir)).ok()?;
-    serde_json::from_slice(&raw).ok()
+    let s: Session = serde_json::from_slice(&raw).ok()?;
+    register_secrets(&s);
+    Some(s)
+}
+
+/// Mask the session's refresh token in replies and proposals. It is opaque;
+/// the access token is an `hrt1` token, which redaction masks by its shape.
+fn register_secrets(s: &Session) {
+    crate::secret_redact::register(&s.refresh_token);
 }
 
 /// Write the session atomically with owner-only permissions.
 pub fn save_session(dir: &Path, s: &Session) -> Result<(), AuthError> {
+    register_secrets(s);
     std::fs::create_dir_all(dir).map_err(|e| AuthError::Io(e.to_string()))?;
     let tmp = dir.join(format!(".{SESSION_FILE}.{}", std::process::id()));
     let body = serde_json::to_vec_pretty(s).map_err(|e| AuthError::Io(e.to_string()))?;
@@ -727,6 +736,29 @@ mod tests {
         assert!(parse_auth_url("https://auth.example.com/t/Home").is_err());
         assert!(parse_auth_url("https://u:p@auth.example.com/t/home").is_err());
         assert!(parse_auth_url("https://auth.example.com/t/home?x=1").is_err());
+    }
+
+    /// A saved or loaded session's refresh token is masked in agent output
+    /// (Track C's redaction), like Ligus's other secrets.
+    #[test]
+    fn session_refresh_token_is_redacted_in_replies() {
+        let dir = tempfile::tempdir().unwrap();
+        let refresh = "rt-7Qm2xVb9Lk4pZr8sWc1N";
+        let s = Session {
+            auth_url: "https://a/t/h".into(),
+            tenant: "h".into(),
+            client_id: "ligus-desktop".into(),
+            device_id: "d".into(),
+            refresh_token: refresh.into(),
+            refresh_nonce: None,
+            access_token: "hrt1.eyJzdWIiOiJ4In0.c2lnbmF0dXJlMTIz".into(),
+            access_expires_at: 10,
+            sub: "h:u".into(),
+            workspaces: vec![],
+        };
+        save_session(dir.path(), &s).unwrap();
+        let out = crate::secret_redact::redacted(&format!("refresh={refresh} access={}", s.access_token));
+        assert!(!out.contains(refresh) && !out.contains("hrt1."), "{out}");
     }
 
     #[test]
