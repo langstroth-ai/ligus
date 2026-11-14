@@ -838,6 +838,8 @@ impl ChatService {
     /// under it — the device's old certificate no longer verifies against the newly
     /// pinned key, so without the fresh cert the device would drop out of the
     /// roster. A no-op (Ok(false)) if the local actor has no account id.
+    /// Under rules v2, for an account with a passkey, only a rotation on the
+    /// workspace config log (with that passkey's presence) takes effect.
     pub fn rotate_account_key(
         &mut self,
         new_keypair: SigningKeypair,

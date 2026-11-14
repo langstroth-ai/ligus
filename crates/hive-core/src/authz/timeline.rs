@@ -205,7 +205,9 @@ impl RosterTracker {
                 }
                 self.rebuild_devices(fold);
             }
-            SessionEvent::AccountKeyRotated { account_id, new_signing_public_key, succession_signature } => {
+            // A rotation the log refused (under rules v2, one without the
+            // account's presence) re-pins nothing.
+            SessionEvent::AccountKeyRotated { account_id, new_signing_public_key, succession_signature } if allowed => {
                 match self.account_keys.get(account_id) {
                     Some(k) if k == new_signing_public_key => {}
                     Some(k) => {

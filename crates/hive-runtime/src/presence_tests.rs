@@ -631,3 +631,44 @@ fn device_key_thief_cannot_add_a_device_under_v2() {
     assert!(roster.is_certified(thief_dev));
     assert!(svc.certify_device(&req).is_ok(), "re-publishing a certified device");
 }
+
+/// Track B residual 1a (same gap, account keys): rotating an account key is
+/// presence-gated under rules v2, so a rotation without presence must not
+/// take effect anywhere. Otherwise a thief holding the account key re-pins
+/// it and every device the owner certified drops out of the roster.
+#[test]
+fn device_key_thief_cannot_rotate_the_account_key_under_v2() {
+    let (mut svc, wid, key, account_kp) = on_rules_v2_with_account_key();
+    let account = account(&svc);
+    let cfg = workspace_config_session_id(wid);
+    let next = SigningKeypair::generate().unwrap();
+    let err = svc.rotate_account_key(SigningKeypair::from_seed(&next.seed_bytes()).unwrap(), cfg, wid).unwrap_err().to_string();
+    assert!(err.contains(hive_core::authz::PRESENCE_REQUIRED), "{err}");
+    let new_pub = next.public_key_bytes().to_vec();
+    let rotation = SessionEvent::AccountKeyRotated {
+        account_id: account,
+        new_signing_public_key: new_pub.clone(),
+        succession_signature: account_kp.sign(&new_pub).to_vec(),
+    };
+    let on_cfg = forged(&svc, wid, cfg, rotation.clone());
+    let chat = svc.create_chat("c", wid, "anthropic").unwrap().id;
+    let on_chat = forged(&svc, wid, chat, rotation);
+    let mut log = config_log(&svc, wid);
+    log.push(on_cfg.clone());
+    assert_eq!(fold_decisions(&log, None, None, WorkspaceAuthz::Unchecked)[&on_cfg.event_id], Verdict::Denied);
+    let (_, timeline) = hive_core::project_config(&log, None, None);
+    assert!(timeline.current().device_trusted(svc.device_id()), "the refused rotation dropped Ana's device from the config roster");
+    let mut trust = svc.store().trust_envelopes(wid).unwrap();
+    trust.push(on_cfg);
+    trust.push(on_chat);
+    let roster = crate::envelope_verifier::build_roster(&trust);
+    assert_eq!(roster.account_signing_key(account), Some(&account_kp.public_key_bytes()[..]), "re-pinned without presence");
+    assert!(roster.is_certified(svc.device_id()), "Ana's device dropped out of the ingest roster");
+
+    // With her passkey the rotation takes effect (and re-certifies the device).
+    svc.set_presence_provider(Some(Arc::new(Soft(key))));
+    svc.rotate_account_key(next, cfg, wid).unwrap();
+    let roster = crate::envelope_verifier::build_roster(&svc.store().trust_envelopes(wid).unwrap());
+    assert_eq!(roster.account_signing_key(account), Some(&new_pub[..]));
+    assert!(roster.is_certified(svc.device_id()));
+}

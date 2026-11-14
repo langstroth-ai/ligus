@@ -375,8 +375,32 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
         }
     };
 
+    // Each workspace's config log, folded once with the founder pin (a
+    // lower-lamport seed from a keyholder who merely verifies, a
+    // self-enrolled joiner, must not become a projection's founder).
+    let founder = pin.map(|p| p.founder_account.to_string());
+    let cfg_folds: Vec<CfgFold> = config_workspaces(&ordered)
+        .into_iter()
+        .map(|ws| {
+            let envs: Vec<SessionEventEnvelope> = ordered
+                .iter()
+                .filter(|e| e.workspace_id == ws && e.session_id == hive_core::workspace_config_session_id(ws))
+                .map(|e| (*e).clone())
+                .collect();
+            let (projected, timeline) = hive_core::project_config(&envs, founder.as_deref(), None);
+            let decisions = hive_core::fold_decisions(&envs, founder.as_deref(), None, hive_core::WorkspaceAuthz::Unchecked);
+            CfgFold { ws, envs, projected, timeline, decisions }
+        })
+        .collect();
+
     for env in &ordered {
         match &env.payload {
+            // Rules v2: rotating the key of an account that holds a passkey
+            // needs its presence, so only a rotation its config log allowed
+            // counts (one without presence, or published elsewhere, would let
+            // a thief holding the account key re-pin it and drop every device
+            // the owner certified).
+            SessionEvent::AccountKeyRotated { account_id, .. } if rotation_gated(&cfg_folds, env, *account_id) => {}
             SessionEvent::AccountKeyRegistered { account_id, signing_public_key } => {
                 // With the founder pinned out of band we know which key is
                 // genuine: a registration of the founder's account under any
@@ -482,29 +506,17 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
     // Each workspace's config roster at its head (rules, passkeys, the
     // devices its own log allowed).
     let mut heads: HashMap<Uuid, hive_core::authz::RosterState> = HashMap::new();
-    let config_ws = config_workspaces(&ordered);
     // A device revocation counts when the config projection accepted it
     // (Admin+). One for a workspace whose config log we don't hold (legacy,
     // pre-hoist) keeps the raw behaviour.
     for (ws, device) in &raw_revocations {
-        if !config_ws.contains(ws) {
+        if !cfg_folds.iter().any(|c| c.ws == *ws) {
             explicit_revoked.insert(*device);
         }
     }
-    for ws in config_ws {
-        let cfg_envs: Vec<SessionEventEnvelope> = ordered
-            .iter()
-            .filter(|e| e.workspace_id == ws && e.session_id == hive_core::workspace_config_session_id(ws))
-            .map(|e| (*e).clone())
-            .collect();
-        // The founder pin picks the base seed: a lower-lamport seed from a
-        // keyholder who merely verifies (a self-enrolled joiner) must not
-        // become this projection's founder.
-        let founder = pin.map(|p| p.founder_account.to_string());
-        let (projected, timeline) = hive_core::project_config(&cfg_envs, founder.as_deref(), None);
+    for CfgFold { ws, envs: cfg_envs, projected, timeline, decisions } in cfg_folds {
         // Only removals this projection accepted are sticky; a raw one it
         // refused (anyone "removing" the founder) removes no one.
-        let decisions = hive_core::fold_decisions(&cfg_envs, founder.as_deref(), None, hive_core::WorkspaceAuthz::Unchecked);
         for e in &cfg_envs {
             if let SessionEvent::MemberRemoved { member_id } = &e.payload {
                 if decisions.get(&e.event_id) == Some(&hive_core::Verdict::Allowed) {
@@ -612,6 +624,28 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
         }
     }
     roster
+}
+
+/// One workspace's config log, folded for the roster.
+struct CfgFold {
+    ws: Uuid,
+    envs: Vec<SessionEventEnvelope>,
+    projected: Option<hive_core::ChatSession>,
+    timeline: hive_core::authz::ConfigTimeline,
+    decisions: std::collections::BTreeMap<Uuid, hive_core::Verdict>,
+}
+
+/// Whether an `AccountKeyRotated` for `account` is left out of the roster:
+/// its workspace is on rules v2, the account holds a passkey or a recovery
+/// key, and the rotation isn't one its config log allowed.
+fn rotation_gated(cfg: &[CfgFold], env: &SessionEventEnvelope, account: Uuid) -> bool {
+    let Some(c) = cfg.iter().find(|c| c.ws == env.workspace_id) else { return false };
+    let head = c.timeline.current();
+    if head.rules < 2 || head.passkeys.get(&account).is_none_or(|m| m.is_empty()) {
+        return false;
+    }
+    let on_config = env.session_id == hive_core::workspace_config_session_id(c.ws);
+    !on_config || c.decisions.get(&env.event_id) != Some(&hive_core::Verdict::Allowed)
 }
 
 /// One roster per workspace, each folded from that workspace's events only
