@@ -173,12 +173,15 @@ The complete way to cut someone's reading, including on headless devices.
 
 1. If you have another passkey or your recovery key: **Settings → Passkeys
    & keys**, register a replacement (confirm with the one you still have),
-   then remove the lost one (an Admin can also remove it for you).
+   then remove the lost one (an Admin can also remove it for you, unless
+   you are an Owner: an Admin never removes the passkeys of a role above
+   theirs).
 2. Synced passkeys (iCloud Keychain, Google Password Manager) usually come
    back with the account; a lost YubiKey doesn't.
 3. Lost every passkey but the recovery key: confirm with the recovery key
    (enter the 24 words when Ligus asks) and register new passkeys.
-4. Lost everything: another Owner or Admin removes your passkeys (with their
+4. Lost everything: another Owner (or, for an Admin or below, an Admin)
+   removes your passkeys (with their
    own passkey) and you register a new first passkey. **A sole Owner without
    a recovery key can't make admin changes under rules v2, by design.** That
    is why Ligus asks for the recovery key before it turns rules v2 on.

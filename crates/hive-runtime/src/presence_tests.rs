@@ -474,3 +474,36 @@ fn taking_over_a_foreign_host_needs_presence() {
     assert!(requires_presence(&SessionEvent::WorkspaceHostUpserted { host: mine.clone() }, "me", &roster, &fold));
     assert!(requires_presence(&SessionEvent::WorkspaceHostsUpdated { hosts: vec![mine] }, "me", &roster, &fold));
 }
+
+/// An Admin may clear a member's lost credentials, but not strip an Owner's
+/// (passkeys or recovery key): after that the Owner's account would take a
+/// new "first" passkey on its device key alone (TOFU).
+#[test]
+fn an_admin_cannot_remove_an_owners_passkey() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("hive.db");
+    let ana_account = Uuid::new_v4();
+    let mut ana_author = ActorIdentity::new(ana_account.to_string(), "Ana", ActorKind::Human);
+    ana_author.account_id = Some(ana_account);
+    let mut ana = ChatService::new(EventStore::open(&db).unwrap(), Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), ana_author);
+    let wid = Uuid::new_v4();
+    ana.ensure_workspace_config(wid).unwrap();
+    let key = SoftAuthenticator::es256();
+    register(&mut ana, wid, &key, None).unwrap();
+    let cfg = workspace_config_session_id(wid);
+    let bea_account = Uuid::new_v4();
+    let mut bea_author = ActorIdentity::new(bea_account.to_string(), "Bea", ActorKind::Human);
+    bea_author.account_id = Some(bea_account);
+    let mut m = member(&bea_account.to_string(), WorkspaceRole::Admin);
+    m.actor = bea_author.clone();
+    ana.add_member(cfg, wid, m).unwrap();
+    let bea_dev = SigningKeypair::generate().unwrap();
+    let bea_dev_id = Uuid::new_v4();
+    let bea_acct_key = SigningKeypair::generate().unwrap();
+    let mut bea = ChatService::new(EventStore::open(&db).unwrap(), bea_dev_id, bea_dev, bea_acct_key, bea_author);
+    bea.ensure_workspace_config(wid).unwrap();
+    let id = key.credential(ana_account, "").credential_id;
+    let r = bea.remove_passkey(wid, ana_account, &id);
+    assert!(r.is_err(), "an Admin removed the Owner's passkey: {r:?}");
+    assert_eq!(ana.passkeys_of(wid, ana_account).unwrap().len(), 1);
+}

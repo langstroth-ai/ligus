@@ -101,8 +101,24 @@ pub fn removal_ok(
         return Err("no such passkey".into());
     }
     let own = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) == Some(account_id);
-    if !own && fold.role_of(author).rank() < WorkspaceRole::Admin.rank() {
+    if own {
+        return Ok(());
+    }
+    let rank = fold.role_of(author).rank();
+    if rank < WorkspaceRole::Admin.rank() {
         return Err("only the account itself or an Admin removes a passkey".into());
+    }
+    // Never someone above you: stripping an Owner's credentials would let
+    // that account's next passkey register on a device key alone (TOFU).
+    let target = fold
+        .members
+        .iter()
+        .filter(|m| m.actor.account_id == Some(account_id))
+        .map(|m| m.role.rank())
+        .max()
+        .unwrap_or(0);
+    if target > rank {
+        return Err("an Admin can't remove the passkeys of a member above them".into());
     }
     Ok(())
 }
