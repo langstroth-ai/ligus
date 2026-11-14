@@ -189,8 +189,8 @@ export const members = [
 ];
 
 export const serverMembers = [
-  { account: "github:1", login: "zazulam", role: "owner", addedBy: "", addedAt: 0 },
-  { account: "github:2", login: "maya", role: "admin", addedBy: "zazulam", addedAt: 0 },
+  { account: "ligus:6f1c2d3e-8a7b-4c1d-9e0f-112233445566", login: "", role: "owner", addedBy: "", addedAt: 0 },
+  { account: "ligus:a1b2c3d4-0000-4000-8000-000000000002", login: "", role: "admin", addedBy: "ligus:6f1c2d3e-8a7b-4c1d-9e0f-112233445566", addedAt: 0 },
 ];
 
 export const presence = [{ actorId: "a-maya", name: "Maya", typing: false, sessionId: "chat-1" }];

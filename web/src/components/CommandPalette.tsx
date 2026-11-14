@@ -85,7 +85,7 @@ export function CommandPalette({
       }
     }
     if (actions.openFriends) {
-      items.push({ id: "friends", label: "Open Friends & DMs", hint: "Go", run: run(actions.openFriends) });
+      items.push({ id: "friends", label: "Open People & DMs", hint: "Go", run: run(actions.openFriends) });
     }
     if (actions.openPane) {
       PANES.forEach((p, i) => {

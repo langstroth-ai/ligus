@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Onboarding } from "./Onboarding";
 import * as ipc from "@/lib/ipc";
@@ -25,7 +25,7 @@ vi.mock("@/lib/ipc", () => ({
     { value: "haiku", label: "Haiku", description: null },
     { value: "claude-fable-5[1m]", label: "Fable", description: "Fable 5" },
   ]),
-  setGithubClientId: vi.fn(async () => {}),
+  setAvatar: vi.fn(async () => {}),
   openExternal: vi.fn(async () => {}),
   updateConnectionSettings: vi.fn(async () => ({
     relayUrl: "",
@@ -49,10 +49,13 @@ vi.mock("@/lib/ipc", () => ({
     gitName: "Sam Dev",
     gitEmail: "sam@example.com",
   })),
-  githubAccount: vi.fn(async () => null),
-  githubClientConfigured: vi.fn(async () => false),
-  githubLoginStart: vi.fn(),
-  githubLoginPoll: vi.fn(),
+  myProfile: vi.fn(async () => ({
+    accountId: "6f1c2d3e-0000-4000-8000-000000000001",
+    displayName: "You",
+    avatarUrl: null,
+    safetyCode: "0011 2233 4455 6677 8899 aabb ccdd eeff",
+    gitEmail: "",
+  })),
   joinWorkspace: vi.fn(async () => ({ id: "w", name: "Acme", kind: "room", active: true })),
   redeemShortCode: vi.fn(async () => ({ kind: "workspace", label: "Acme" })),
   probeRelay: vi.fn(async () => ({ status: "ok", detail: "" })),
@@ -71,7 +74,7 @@ describe("Onboarding wizard flow", () => {
     render(<Onboarding onComplete={onComplete} />);
 
     // Step 1: name is prefilled from git config.
-    const nameInput = await screen.findByPlaceholderText("Continue with a name");
+    const nameInput = await screen.findByPlaceholderText("Your name");
     await waitFor(() => expect((nameInput as HTMLInputElement).value).toBe("Sam Dev"));
     await clickByName("Next");
     expect(ipc.setDisplayName).toHaveBeenCalledWith("Sam Dev");
@@ -116,7 +119,7 @@ describe("Onboarding wizard flow", () => {
   it("picks Claude Code + Opus and makes Opus the Primary Runtime default", async () => {
     render(<Onboarding onComplete={vi.fn()} />);
 
-    await screen.findByPlaceholderText("Continue with a name");
+    await screen.findByPlaceholderText("Your name");
     await clickByName("Next"); // identity
     await clickByName("Next"); // project
 
@@ -139,7 +142,7 @@ describe("Onboarding wizard flow", () => {
   it("surfaces a cached Claude Code model (Fable) and wires the default from it", async () => {
     render(<Onboarding onComplete={vi.fn()} />);
 
-    await screen.findByPlaceholderText("Continue with a name");
+    await screen.findByPlaceholderText("Your name");
     await clickByName("Next"); // identity
     await clickByName("Next"); // project
 
@@ -168,7 +171,7 @@ describe("Onboarding wizard flow", () => {
     const onComplete = vi.fn();
     render(<Onboarding onComplete={onComplete} />);
 
-    await screen.findByPlaceholderText("Continue with a name");
+    await screen.findByPlaceholderText("Your name");
     await clickByName("Next"); // identity
     await clickByName("Next"); // project (skip-by-next)
 
@@ -204,7 +207,7 @@ describe("Onboarding wizard flow", () => {
     });
     render(<Onboarding onComplete={vi.fn()} />);
 
-    await screen.findByPlaceholderText("Continue with a name");
+    await screen.findByPlaceholderText("Your name");
     await clickByName("Next"); // identity
     await clickByName("Next"); // project
 
@@ -222,29 +225,21 @@ describe("Onboarding wizard flow", () => {
     await waitFor(() => expect(ipc.updateConnectionSettings).toHaveBeenCalled());
   });
 
-  it("GitHub sign-in pre-copies the device code instead of auto-opening the browser", async () => {
-    const writeText = vi.fn(async () => {});
-    Object.assign(navigator, { clipboard: { writeText } });
-    (ipc.githubClientConfigured as ReturnType<typeof vi.fn>).mockResolvedValue(true);
-    (ipc.githubLoginStart as ReturnType<typeof vi.fn>).mockResolvedValue({
-      deviceCode: "dev",
-      userCode: "ABCD-1234",
-      verificationUri: "https://github.com/login/device",
-      interval: 5,
+  it("onboards without any provider: a name, an optional picture and the safety code", async () => {
+    (ipc.myProfile as ReturnType<typeof vi.fn>).mockResolvedValue({
+      accountId: "6f1c2d3e-0000-4000-8000-000000000001",
+      displayName: "You",
+      avatarUrl: null,
+      safetyCode: "0011 2233 4455 6677 8899 aabb ccdd eeff",
+      gitEmail: "",
     });
-
     render(<Onboarding onComplete={vi.fn()} />);
-    await screen.findByPlaceholderText("Continue with a name");
-    await clickByName(/Sign in with GitHub/);
-
-    // The code is shown and copied to the clipboard — no auto-open.
-    await screen.findByText("ABCD-1234");
-    expect(writeText).toHaveBeenCalledWith("ABCD-1234");
-    expect(ipc.openExternal).not.toHaveBeenCalled();
-
-    // The primary button both copies and opens GitHub.
-    await clickByName(/Copy code & open GitHub/);
-    expect(ipc.openExternal).toHaveBeenCalledWith("https://github.com/login/device");
+    await screen.findByPlaceholderText("Your name");
+    await screen.findByText("0011 2233 4455 6677 8899 aabb ccdd eeff");
+    expect(screen.queryByText(/GitHub/)).toBeNull();
+    fireEvent.change(screen.getByPlaceholderText("Your name"), { target: { value: "Ana" } });
+    await clickByName("Next");
+    await waitFor(() => expect(ipc.setDisplayName).toHaveBeenCalledWith("Ana"));
   });
 
   it("blocks Finish when a host relay is unauthorized, allows it once connected", async () => {
@@ -255,7 +250,7 @@ describe("Onboarding wizard flow", () => {
       .mockResolvedValueOnce({ status: "ok", detail: "" });
 
     render(<Onboarding onComplete={onComplete} />);
-    await screen.findByPlaceholderText("Continue with a name");
+    await screen.findByPlaceholderText("Your name");
     await clickByName("Next"); // identity
     await clickByName("Next"); // project
     await screen.findByText("Choose your agent");

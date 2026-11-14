@@ -406,7 +406,7 @@ function RelayUsersSection() {
       <Section title="Team members">
         <p className="text-xs text-ink-soft">
           Managing relay access here needs an admin account on a relay that supports user
-          management. Ask your relay operator to add your GitHub login to its admin list.
+          management. Ask your relay operator to make you an admin.
         </p>
       </Section>
     );
@@ -459,12 +459,12 @@ function RelayUsersSection() {
           />
         </div>
         <div className="min-w-0 flex-1">
-          <label className="block text-xs text-ink-soft">GitHub login (optional)</label>
+          <label className="block text-xs text-ink-soft">Relay login (optional)</label>
           <input
             value={login}
             onChange={(e) => setLogin(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && create()}
-            placeholder="octocat"
+            placeholder="a name the relay shows"
             className="w-full rounded-xl border px-3 py-2 text-sm"
             style={fieldStyle}
           />
