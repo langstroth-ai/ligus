@@ -9,9 +9,10 @@
 //! - **hosts online**: the hosts needed to carry it out answer presence.
 //!
 //! The test command is device-local on purpose: it comes from
-//! `LIGUS_PREFLIGHT_TEST` or the repo's git config (`ligus.preflightTest`),
-//! never from the synced log, so a teammate can't make your machine run a
-//! command. Notes recorded in the report are short status lines, never test
+//! `LIGUS_PREFLIGHT_TEST` only, never from the synced log and never from the
+//! repository (not even its `.git/config`, which a clone can carry), so
+//! neither a teammate nor a repo can make your machine run a command. It
+//! runs in the agent sandbox like any agent child. Notes recorded in the report are short status lines, never test
 //! output or file contents (the report is synced).
 
 use std::path::Path;
@@ -22,9 +23,7 @@ use hive_core::proposal_sets::{CheckOutcome, PreflightReport};
 
 use crate::git_worktree::{self, Worktree};
 
-/// The git config key holding the pre-flight test command.
-pub const PREFLIGHT_TEST_CONFIG: &str = "ligus.preflightTest";
-/// Environment override for the pre-flight test command.
+/// The pre-flight test command (device-local env).
 pub const PREFLIGHT_TEST_ENV: &str = "LIGUS_PREFLIGHT_TEST";
 /// Default bound on the test run.
 pub const DEFAULT_TEST_TIMEOUT: Duration = Duration::from_secs(15 * 60);
@@ -47,22 +46,10 @@ pub struct PreflightInputs<'a> {
     pub hosts: Vec<(String, bool)>,
 }
 
-/// The configured pre-flight test command for `repo_root`, if any.
-pub fn test_command(repo_root: Option<&Path>) -> Option<String> {
-    if let Ok(v) = hive_core::compat::var(PREFLIGHT_TEST_ENV) {
-        if !v.trim().is_empty() {
-            return Some(v.trim().to_string());
-        }
-    }
-    let root = repo_root?;
-    let out = hive_core::process_util::git()
-        .arg("-C")
-        .arg(root)
-        .args(["config", "--get", PREFLIGHT_TEST_CONFIG])
-        .output()
-        .ok()?;
-    let cmd = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (out.status.success() && !cmd.is_empty()).then_some(cmd)
+/// The configured pre-flight test command, if any: `LIGUS_PREFLIGHT_TEST`
+/// on this device. The repository is never consulted.
+pub fn test_command() -> Option<String> {
+    hive_core::compat::var(PREFLIGHT_TEST_ENV).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
 }
 
 fn git_out(dir: &Path, args: &[&str]) -> Option<String> {
@@ -198,7 +185,7 @@ fn run_bounded(dir: &Path, cmdline: &str, timeout: Duration) -> Result<bool, Str
 
 fn check_tests(inputs: &PreflightInputs<'_>, scratch_id: &str) -> CheckOutcome {
     let Some(cmd) = inputs.test_command.as_deref() else {
-        return CheckOutcome::skipped(format!("no pre-flight test command set (git config {PREFLIGHT_TEST_CONFIG})"));
+        return CheckOutcome::skipped(format!("no pre-flight test command set ({PREFLIGHT_TEST_ENV})"));
     };
     let (Some(root), Some(diff)) = (inputs.repo_root, inputs.diff) else {
         return CheckOutcome::skipped("not a code change");
@@ -250,6 +237,19 @@ pub fn run(inputs: &PreflightInputs<'_>, scratch_id: &str) -> PreflightReport {
 
 #[cfg(test)]
 mod tests {
+
+    /// S1: a repository's `.git/config` can't name a command for this device
+    /// to run (`ligus.preflightTest` was a repo-controlled source).
+    #[test]
+    fn preflight_ignores_repo_git_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| assert!(hive_core::process_util::git().arg("-C").arg(dir.path()).args(args).status().unwrap().success());
+        run(&["init", "-q"]);
+        run(&["config", "ligus.preflightTest", "touch /tmp/ligus-preflight-pwned"]);
+        let cmd = test_command();
+        assert_ne!(cmd.as_deref(), Some("touch /tmp/ligus-preflight-pwned"));
+    }
+
     use super::*;
     use hive_core::proposal_sets::CheckStatus;
     use std::path::PathBuf;

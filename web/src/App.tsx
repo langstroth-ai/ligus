@@ -47,6 +47,7 @@ import { DearthBanner } from "@/components/guards/DearthBanner";
 import { LockdownBar } from "@/components/guards/LockdownBar";
 import { GrowthSuggestions } from "@/components/guards/GrowthSuggestions";
 import { PendingInvitesBanner } from "@/components/PendingInvitesBanner";
+import { WorkspaceTrustBanner } from "@/components/WorkspaceTrustBanner";
 import { DialogHost, promptDialog } from "@/components/Dialog";
 import { IconPencil, IconHexagon, IconAlertTriangle } from "@/lib/icons";
 import { StatusDot } from "@/components/ui";
@@ -734,6 +735,7 @@ export function App() {
       qc.invalidateQueries({ queryKey: ["chat"] }),
       qc.invalidateQueries({ queryKey: ["runtimes"] }),
       qc.invalidateQueries({ queryKey: ["mcp"] }),
+      qc.invalidateQueries({ queryKey: ["workspace-trust"] }),
       qc.invalidateQueries({ queryKey: ["vaults"] }),
       qc.invalidateQueries({ queryKey: ["skills"] }),
       qc.invalidateQueries({ queryKey: ["members"] }),
@@ -954,6 +956,7 @@ export function App() {
       <DialogHost />
       <UpdateBanner />
       <PendingInvitesBanner />
+      <WorkspaceTrustBanner />
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}

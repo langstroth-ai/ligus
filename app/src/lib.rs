@@ -134,6 +134,9 @@ struct AppState {
     /// workspace catalog and are merged at read time.
     base_mcp: Mutex<Vec<McpServerSpec>>,
     managed_mcp: Mutex<Vec<McpServerSpec>>,
+    /// S1: which repo-supplied runtimes and MCP servers this device trusts
+    /// (see `hive_runtime::workspace_trust`). Untrusted ones stay inert.
+    catalog_trust: Mutex<CatalogTrust>,
     /// SQLite path — the background sync task opens its own connection here.
     db_path: PathBuf,
     /// Runtime-editable settings (relay, key, API key, permission mode),
@@ -2116,6 +2119,68 @@ fn save_managed_mcp(workspace_root: &str, servers: &[McpServerSpec]) -> Result<(
     std::fs::write(path, text).map_err(map_err)
 }
 
+/// S1 state for the current workspace: the repo's root id, the digests this
+/// device enabled, and the digests of items from this device's own config
+/// (the data dir), which need no trust.
+#[derive(Debug, Default)]
+struct CatalogTrust {
+    root_id: String,
+    enabled: std::collections::HashSet<String>,
+    implicit: std::collections::HashSet<String>,
+}
+
+impl CatalogTrust {
+    fn compute(workspace_root: &str, data_dir: &Path, base_runtimes: &[RuntimeTarget], base_mcp: &[McpServerSpec]) -> Self {
+        use hive_runtime::workspace_trust as wt;
+        let mut t = CatalogTrust::default();
+        // The base catalog came from the repo when the root's config file
+        // parses (it is read first); otherwise from the data dir.
+        let base_from_repo = !workspace_root.trim().is_empty()
+            && hive_core::compat::config_candidates(&[Path::new(workspace_root)])
+                .first()
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .is_some_and(|text| hive_core::config::load_from_str(&text).is_ok());
+        if !base_from_repo {
+            t.implicit.extend(base_runtimes.iter().map(|r| wt::runtime_item(r, "").digest));
+            t.implicit.extend(base_mcp.iter().map(|s| wt::mcp_item(s, "").digest));
+        }
+        if workspace_root.trim().is_empty() {
+            return t;
+        }
+        t.root_id = wt::root_id(Path::new(workspace_root));
+        if let Ok(store) = wt::TrustStore::open(data_dir) {
+            let mut items = wt::repo_items(Path::new(workspace_root));
+            store.mark(&t.root_id, &mut items);
+            t.enabled.extend(items.into_iter().filter(|i| i.enabled).map(|i| i.digest));
+        }
+        t
+    }
+
+    fn allows(&self, digest: &str) -> bool {
+        self.implicit.contains(digest) || self.enabled.contains(digest)
+    }
+
+    fn retain_runtimes(&self, rts: &mut Vec<RuntimeTarget>) {
+        rts.retain(|r| self.allows(&hive_runtime::workspace_trust::runtime_item(r, "").digest));
+    }
+
+    fn retain_mcp(&self, servers: &mut Vec<McpServerSpec>) {
+        servers.retain(|s| self.allows(&hive_runtime::workspace_trust::mcp_item(s, "").digest));
+    }
+}
+
+/// Trust an item the user just added or edited on this device (it is theirs,
+/// not the repo's).
+fn trust_own_item(state: &AppState, kind: hive_runtime::workspace_trust::ItemKind, digest: String) {
+    let mut t = state.catalog_trust.lock().unwrap();
+    if !t.root_id.is_empty() {
+        if let Ok(store) = hive_runtime::workspace_trust::TrustStore::open(&state.data_dir) {
+            let _ = store.enable(&t.root_id, kind, &digest, "");
+        }
+    }
+    t.enabled.insert(digest);
+}
+
 fn load_workspace_catalogs(
     workspace_root: &str,
     data_dir: &PathBuf,
@@ -2853,6 +2918,8 @@ impl AppState {
         let base = self.base_runtimes.lock().unwrap();
         let managed = self.managed_runtimes.lock().unwrap();
         let mut merged = merge_runtimes(&base, &managed);
+        // Repo-supplied runtimes stay inert until trusted on this device.
+        self.catalog_trust.lock().unwrap().retain_runtimes(&mut merged);
         apply_remote_file_tools_optins(&mut merged, &self.settings.lock().unwrap());
         merged
     }
@@ -2865,6 +2932,9 @@ impl AppState {
         let base = self.base_mcp.lock().unwrap();
         let managed = self.managed_mcp.lock().unwrap();
         let mut merged = merge_mcp_servers(&base, &managed);
+        // Repo-supplied MCP servers stay inert (never offered, never spawned)
+        // until trusted on this device.
+        self.catalog_trust.lock().unwrap().retain_mcp(&mut merged);
         apply_mcp_auth(&mut merged, &self.settings.lock().unwrap());
         merged
     }
@@ -2927,6 +2997,8 @@ impl AppState {
                 save_settings(&self.data_dir, &settings);
             }
         }
+        *self.catalog_trust.lock().unwrap() =
+            CatalogTrust::compute(workspace_root, &self.data_dir, &self.base_runtimes.lock().unwrap(), &self.base_mcp.lock().unwrap());
         *self.managed_mcp.lock().unwrap() = managed_mcp;
     }
 
@@ -4836,6 +4908,66 @@ fn parse_mcp_manifest(text: &str, fallback_id: &str) -> Result<Vec<McpServerSpec
     Ok(vec![parse_mcp_transport(id, &value)?])
 }
 
+/// S1: the repo-supplied runtimes and MCP servers of the open workspace, each
+/// with its exact command line, source file and whether this device trusts
+/// it. Untrusted items are inert.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceTrustDto {
+    root: String,
+    items: Vec<hive_runtime::workspace_trust::TrustItem>,
+}
+
+fn workspace_trust_dto(state: &AppState) -> Result<WorkspaceTrustDto, String> {
+    use hive_runtime::workspace_trust as wt;
+    let root = state.workspace_root.lock().unwrap().clone();
+    if root.trim().is_empty() {
+        return Ok(WorkspaceTrustDto { root, items: Vec::new() });
+    }
+    let store = wt::TrustStore::open(&state.data_dir).map_err(map_err)?;
+    let mut items = wt::repo_items(Path::new(&root));
+    store.mark(&wt::root_id(Path::new(&root)), &mut items);
+    Ok(WorkspaceTrustDto { root, items })
+}
+
+#[tauri::command]
+fn get_workspace_trust(state: State<AppState>) -> Result<WorkspaceTrustDto, String> {
+    workspace_trust_dto(&state)
+}
+
+/// Enable or disable one repo item (by digest) on this device.
+#[tauri::command]
+fn set_workspace_trust(state: State<AppState>, digest: String, enabled: bool) -> Result<WorkspaceTrustDto, String> {
+    use hive_runtime::workspace_trust as wt;
+    let root = state.workspace_root.lock().unwrap().clone();
+    let item = wt::repo_items(Path::new(&root)).into_iter().find(|i| i.digest == digest).ok_or("no such item in this workspace")?;
+    let store = wt::TrustStore::open(&state.data_dir).map_err(map_err)?;
+    let rid = wt::root_id(Path::new(&root));
+    if enabled {
+        store.enable(&rid, item.kind, &digest, &state.service.lock().unwrap().author().id).map_err(map_err)?;
+    } else {
+        store.disable(&rid, item.kind, &digest).map_err(map_err)?;
+    }
+    state.reload_workspace_catalogs(&root);
+    workspace_trust_dto(&state)
+}
+
+/// "Trust this workspace": enable every item the repo ships right now.
+/// Anything it changes or adds later needs a new decision.
+#[tauri::command]
+fn trust_workspace(state: State<AppState>) -> Result<WorkspaceTrustDto, String> {
+    use hive_runtime::workspace_trust as wt;
+    let root = state.workspace_root.lock().unwrap().clone();
+    let store = wt::TrustStore::open(&state.data_dir).map_err(map_err)?;
+    let rid = wt::root_id(Path::new(&root));
+    let me = state.service.lock().unwrap().author().id.clone();
+    for item in wt::repo_items(Path::new(&root)) {
+        store.enable(&rid, item.kind, &item.digest, &me).map_err(map_err)?;
+    }
+    state.reload_workspace_catalogs(&root);
+    workspace_trust_dto(&state)
+}
+
 #[tauri::command]
 async fn install_mcp_server(state: State<'_, AppState>, source: String) -> Result<(), String> {
     let url = resolve_manifest_url(&source).map_err(map_err)?;
@@ -4845,6 +4977,7 @@ async fn install_mcp_server(state: State<'_, AppState>, source: String) -> Resul
     let root = state.workspace_root.lock().unwrap().clone();
     for server in &parsed {
         upsert_mcp_server_in_config(&state.data_dir, &root, server)?;
+        trust_own_item(&state, hive_runtime::workspace_trust::ItemKind::McpServer, hive_runtime::workspace_trust::mcp_item(server, "").digest);
     }
     let servers = {
         let mut managed = state.managed_mcp.lock().unwrap();
@@ -4933,6 +5066,7 @@ fn add_remote_mcp_server(
     };
     let root = state.workspace_root.lock().unwrap().clone();
     upsert_mcp_server_in_config(&state.data_dir, &root, &server)?;
+    trust_own_item(&state, hive_runtime::workspace_trust::ItemKind::McpServer, hive_runtime::workspace_trust::mcp_item(&server, "").digest);
     let servers = {
         let mut managed = state.managed_mcp.lock().unwrap();
         if let Some(existing) = managed.iter_mut().find(|s| s.id == id) {
@@ -10097,6 +10231,7 @@ fn add_runtime(
     }
     let root = state.workspace_root.lock().unwrap().clone();
     upsert_runtime_in_config(&state.data_dir, &root, &runtime)?;
+    trust_own_item(&state, hive_runtime::workspace_trust::ItemKind::Runtime, hive_runtime::workspace_trust::runtime_item(&runtime, "").digest);
     let runtimes = {
         let mut managed = state.managed_runtimes.lock().unwrap();
         // Upsert by id: replace an existing entry (edit) or append (add). The
@@ -10755,6 +10890,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
     hive_runtime::executor::configure_host(&data_dir, &[], &[]);
     let (base_runtimes, default_runtime_id, base_mcp, managed_runtimes, managed_mcp) =
         load_workspace_catalogs(&workspace_root, &data_dir);
+    let catalog_trust = CatalogTrust::compute(&workspace_root, &data_dir, &base_runtimes, &base_mcp);
 
     let fallback_model =
         hive_core::compat::var("LIGUS_ANTHROPIC_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
@@ -10959,6 +11095,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         summary_backoff: Mutex::new(HashMap::new()),
         vault_cache: Mutex::new(HashMap::new()),
         retriever: hive_runtime::retrieval::Retriever::new(),
+        catalog_trust: Mutex::new(catalog_trust),
         base_mcp: Mutex::new(base_mcp),
         managed_mcp: Mutex::new(managed_mcp),
         db_path,
@@ -14732,6 +14869,9 @@ pub fn run() {
             set_mcp_bearer_token,
             linear_issues_context,
             install_mcp_server,
+            get_workspace_trust,
+            set_workspace_trust,
+            trust_workspace,
             remove_mcp_server,
             sync_status,
             probe_relay,

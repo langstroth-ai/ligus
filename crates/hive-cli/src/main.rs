@@ -868,6 +868,52 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
     }
 }
 
+/// `ligus trust list | enable <digest> | enable-all`: the S1 decision for a
+/// repository's runtimes and MCP servers on this device (the same table the
+/// desktop's *Trust this workspace* writes, in this host's data dir).
+fn cmd_trust(cfg: &Config, repo: &std::path::Path, action: Option<&str>, digest: Option<&str>) -> Result<()> {
+    use hive_runtime::workspace_trust as wt;
+    let store = wt::TrustStore::open(&cfg.data_dir)?;
+    let rid = wt::root_id(repo);
+    let mut items = wt::repo_items(repo);
+    store.mark(&rid, &mut items);
+    match action {
+        Some("list") | None => {
+            if items.is_empty() {
+                println!("{} ships no runtimes or MCP servers", repo.display());
+            }
+            for i in &items {
+                println!(
+                    "{}  {:<9} {:<20} {}  ({})  {}",
+                    &i.digest[..16],
+                    i.kind.as_str(),
+                    i.id,
+                    if i.enabled { "trusted" } else { "INERT" },
+                    i.source,
+                    i.command_line
+                );
+            }
+            Ok(())
+        }
+        Some("enable") => {
+            let d = digest.ok_or_else(|| anyhow!("usage: ligus trust enable <digest> (from `ligus trust list`)"))?;
+            let matching: Vec<&wt::TrustItem> = items.iter().filter(|i| i.digest.starts_with(d)).collect();
+            let [item] = matching.as_slice() else { bail!("{} items match {d}: give more of the digest", matching.len()) };
+            store.enable(&rid, item.kind, &item.digest, "ligus-cli")?;
+            println!("trusted {} {}: {}", item.kind.as_str(), item.id, item.command_line);
+            Ok(())
+        }
+        Some("enable-all") => {
+            for i in &items {
+                store.enable(&rid, i.kind, &i.digest, "ligus-cli")?;
+                println!("trusted {} {}: {}", i.kind.as_str(), i.id, i.command_line);
+            }
+            Ok(())
+        }
+        Some(other) => bail!("unknown `ligus trust {other}`: use list|enable|enable-all"),
+    }
+}
+
 /// Create a workspace agent (bound to a runtime; optionally a host + role).
 fn cmd_add_agent(
     cfg: &Config,
@@ -1173,6 +1219,7 @@ fn usage() -> ! {
          ligus remote enable --relay URL [--reg-token T] | status | disable | reset\n                                       \
          phone remote access through a relay tunnel (off by default)\n  \
          ligus phones list | revoke <pid|name> [--keep-token]   phones paired over the relay\n  \
+         ligus trust list | enable <digest> | enable-all [--repo PATH]   repo-supplied runtimes and MCP servers this device runs\n  \
          ligus dashboard check [--file PATH]   validate dashboard.toml and evaluate it once\n  \
          ligus dashboard default         print the generated default dashboard as TOML\n  \
          ligus dashboard metrics         list the built-in hive metrics panels can show\n\n\
@@ -1254,6 +1301,7 @@ fn run() -> Result<()> {
         "--reg-token",
         "--remote-relay",
         "--file",
+        "--repo",
     ];
     let mut positional: Vec<&String> = Vec::new();
     let mut skip = false;
@@ -1435,6 +1483,10 @@ fn run() -> Result<()> {
                 Some("reset") => cli::remote_reset(&cfg.data_dir),
                 Some(other) => bail!("unknown `ligus remote {other}`: use enable|status|disable|reset"),
             }
+        }
+        "trust" => {
+            let repo = flag_val("--repo").map(PathBuf::from).map(Ok).unwrap_or_else(std::env::current_dir)?;
+            cmd_trust(&cfg, &repo, positional.first().map(|s| s.as_str()), positional.get(1).map(|s| s.as_str()))
         }
         "phones" => {
             use serve::tunnel::cli;

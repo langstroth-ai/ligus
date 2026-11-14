@@ -785,7 +785,7 @@ pub(crate) async fn preflight_proposal_set(
             chat_id: &chat_id,
             diff: diff.as_deref(),
             base_commit: base.as_deref(),
-            test_command: hive_runtime::proposal_preflight::test_command(root.as_deref()),
+            test_command: hive_runtime::proposal_preflight::test_command(),
             test_timeout: None,
             hosts,
         };

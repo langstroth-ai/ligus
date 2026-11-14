@@ -1593,3 +1593,21 @@ export const applyProposalSet = (sessionId: string, setId: string, proposalId: s
 /// Revert an applied file change (reverse patch + commit in the chat's worktree).
 export const revertProposal = (sessionId: string, proposalId: string) =>
   invoke<void>("revert_proposal", { sessionId, proposalId });
+
+// ── S1: trust this workspace ──
+/// A runtime or MCP server the open repository ships. Inert until this
+/// device enables its exact digest (a changed command is a new digest).
+export type WorkspaceTrustItem = {
+  kind: "mcpServer" | "runtime";
+  id: string;
+  commandLine: string;
+  source: string;
+  digest: string;
+  enabled: boolean;
+};
+export type WorkspaceTrust = { root: string; items: WorkspaceTrustItem[] };
+
+export const getWorkspaceTrust = () => invoke<WorkspaceTrust>("get_workspace_trust");
+export const setWorkspaceTrust = (digest: string, enabled: boolean) =>
+  invoke<WorkspaceTrust>("set_workspace_trust", { digest, enabled });
+export const trustWorkspace = () => invoke<WorkspaceTrust>("trust_workspace");

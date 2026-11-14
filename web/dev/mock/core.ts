@@ -75,6 +75,10 @@ function handle(cmd: string, args: Args): unknown {
     case "list_mention_states":
     case "list_all_mention_states":
       return [];
+    case "get_workspace_trust":
+    case "set_workspace_trust":
+    case "trust_workspace":
+      return { root: "/mock/repo", items: [] };
     case "get_dearth_state":
       return fx.dearth(flags.dearth);
     case "get_chat_lockdown":
