@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { EmptyHint, ErrorState, Section, SelectField, Switch } from "@/components/ui";
+import { EmptyHint, ErrorState, Section, SelectField, Switch, LoadingState } from "@/components/ui";
 import { Muted } from "@/components/flow/FlowPane";
 import { toast, errMsg } from "@/components/Toast";
 import { CAREER_LABEL, rosterReport, setAgentProfile, type Career, type RosterReport, type RosterRow } from "@/lib/flow";
@@ -10,7 +10,7 @@ import { CAREER_LABEL, rosterReport, setAgentProfile, type Career, type RosterRe
 export function RosterSection() {
   const q = useQuery({ queryKey: ["flow-roster"], queryFn: rosterReport });
   if (q.isError) return <ErrorState text="Couldn't load the roster." onRetry={() => void q.refetch()} />;
-  if (!q.data) return null;
+  if (!q.data) return <LoadingState rows={2} label="Loading the roster" />;
   const save = (row: RosterRow, patch: { career?: Career | null; boardOptOut?: boolean }) => {
     if (!row.agentId) return;
     const career = patch.career !== undefined ? patch.career : (row.profile?.career ?? null);

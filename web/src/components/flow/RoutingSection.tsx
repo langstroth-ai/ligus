@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ErrorState, EmptyHint, Section } from "@/components/ui";
+import { ErrorState, EmptyHint, Section, LoadingState } from "@/components/ui";
 import { REASON_LABEL, clearRouteStop, minutesLeft, pct, routingReport, type RoutingReport } from "@/lib/flow";
 import { Button } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
@@ -19,7 +19,7 @@ export function RoutingSection() {
   }, [report]);
   if (report.isError) return <ErrorState text="Couldn't load the routing report." onRetry={() => void report.refetch()} />;
   const r = report.data;
-  if (!r) return null;
+  if (!r) return <LoadingState rows={2} label="Loading the routing report" />;
   const clear = (route: string) =>
     clearRouteStop(route)
       .then(() => report.refetch())
@@ -82,7 +82,7 @@ export function RoutingReportView({ report: r, onClearStop }: { report: RoutingR
         ) : (
           <table className="w-full text-xs" aria-label="Outcomes by arm">
             <thead>
-              <tr className="text-left opacity-60">
+              <tr className="text-left text-ink-soft">
                 <th className="py-1 font-medium">Arm</th>
                 <th className="font-medium">Turns</th>
                 <th className="font-medium">Accepted</th>
@@ -114,7 +114,7 @@ export function RoutingReportView({ report: r, onClearStop }: { report: RoutingR
         ) : (
           <table className="w-full text-xs" aria-label="Scores">
             <thead>
-              <tr className="text-left opacity-60">
+              <tr className="text-left text-ink-soft">
                 <th className="py-1 font-medium">Class</th>
                 <th className="font-medium">Agent</th>
                 <th className="font-medium">Score</th>

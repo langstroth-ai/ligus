@@ -21,7 +21,10 @@ describe("task board", () => {
   it("offers the hand-off to the suggested agent", () => {
     const picked: string[] = [];
     render(<BoardView rows={[row({})]} onPickup={(r) => picked.push(r.id)} now={2 * 3_600_000} />);
-    expect(screen.getByText(/Unreviewed proposal · “Parser” · waiting 2 h · stimulus 2.4/)).toBeInTheDocument();
+    expect(screen.getByText("Unreviewed proposal")).toBeInTheDocument();
+    expect(screen.getByText("waiting 2 h")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "in “Parser”" })).toBeInTheDocument();
+    expect(screen.getByText("stimulus 2.4")).toBeInTheDocument();
     fireEvent.click(screen.getByText("Hand to reviewer"));
     expect(picked).toEqual(["proposal:p"]);
   });

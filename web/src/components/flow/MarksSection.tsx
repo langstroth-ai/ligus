@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Button, EmptyHint, ErrorState, Section, SelectField } from "@/components/ui";
+import { Button, EmptyHint, ErrorState, Section, SelectField, LoadingState } from "@/components/ui";
 import { Muted } from "@/components/flow/FlowPane";
 import { toast, errMsg } from "@/components/Toast";
 import { MARK_LABEL, addMark, clearMark, listMarks, minutesLeft, type MarkRow } from "@/lib/flow";
@@ -17,6 +17,7 @@ export function MarksSection() {
     return () => un?.();
   }, [q]);
   if (q.isError) return <ErrorState text="Couldn't load marks." onRetry={() => void q.refetch()} />;
+  if (q.isPending) return <LoadingState rows={2} label="Loading marks" />;
   const done = () => void q.refetch();
   return (
     <MarksView

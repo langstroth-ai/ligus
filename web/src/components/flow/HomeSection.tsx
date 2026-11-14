@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Button, ErrorState, Section, Switch } from "@/components/ui";
+import { Button, ErrorState, Section, Switch, LoadingState } from "@/components/ui";
 import { Muted } from "@/components/flow/FlowPane";
 import { toast, errMsg } from "@/components/Toast";
 import { homeReport, publishBeacon, type HomeReport } from "@/lib/flow";
@@ -11,7 +11,7 @@ import { homeReport, publishBeacon, type HomeReport } from "@/lib/flow";
 export function HomeSection() {
   const q = useQuery({ queryKey: ["flow-home"], queryFn: homeReport });
   if (q.isError) return <ErrorState text="Couldn't load the home beacon." onRetry={() => void q.refetch()} />;
-  if (!q.data) return null;
+  if (!q.data) return <LoadingState rows={2} label="Loading the home beacon" />;
   return (
     <HomeView
       report={q.data}
@@ -33,22 +33,22 @@ export function HomeView({ report: r, onPublish }: { report: HomeReport; onPubli
       {b ? (
         <div className="space-y-1 rounded-xl border px-3 py-2 text-xs" style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}>
           <div>
-            <span className="opacity-60">Relay </span>
+            <span className="text-ink-soft">Relay </span>
             {b.relayUrl || "none (local only)"}
           </div>
           <div>
-            <span className="opacity-60">Chats start from </span>
+            <span className="text-ink-soft">Chats start from </span>
             {b.baseBranch || "HEAD"}
           </div>
           {b.coordinatorHostId && (
             <div>
-              <span className="opacity-60">Coordinator </span>
+              <span className="text-ink-soft">Coordinator </span>
               {r.coordinatorLabel}
               {r.coordinatorOnline != null && ` · ${r.coordinatorOnline ? "online" : "offline"}`}
             </div>
           )}
           {b.note && <div>{b.note}</div>}
-          <div className="opacity-60">Published by {b.updatedBy}</div>
+          <div className="text-ink-soft">Published by {b.updatedBy}</div>
         </div>
       ) : (
         <Muted>No home beacon yet. An admin can publish this device's setup as the workspace's home.</Muted>
