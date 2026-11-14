@@ -179,14 +179,15 @@ export function SettingsView({
       onClose={onClose}
       overlayClassName="z-[900] flex items-center justify-center p-4"
       overlayStyle={{ background: "color-mix(in srgb, var(--hive-canvas) 60%, transparent)" }}
-      panelClassName="flex overflow-hidden shadow-2xl"
+      panelClassName="flex overflow-hidden"
       panelStyle={{
-        width: 840,
-        height: 600,
+        width: 920,
+        height: 680,
         maxWidth: "95vw",
         maxHeight: "90vh",
-        borderRadius: 14,
+        borderRadius: "var(--hive-radius-xl)",
         border: "1px solid var(--hive-line)",
+        boxShadow: "var(--hive-shadow-pop)",
         background: "var(--hive-canvas)",
         color: "var(--hive-ink)",
       }}
@@ -219,7 +220,7 @@ export function SettingsView({
           </div>
         ))}
         {filtered.length === 0 && (
-          <p className="px-2.5 text-xs opacity-50">No settings match “{query}”.</p>
+          <p className="px-2.5 text-xs text-ink-soft">No settings match “{query}”.</p>
         )}
       </nav>
 
@@ -229,7 +230,7 @@ export function SettingsView({
           className="flex shrink-0 items-center justify-between gap-3 border-b px-6 py-3"
           style={{ borderColor: "var(--hive-line)" }}
         >
-          <h1 className="text-[19px] font-semibold">{TAB_LABEL[tab]}</h1>
+          <h1 className="text-[length:var(--hive-text-xl)] font-semibold tracking-[-0.01em]">{TAB_LABEL[tab]}</h1>
           <IconButton label="Close settings" onClick={onClose}>
             <IconX size={18} />
           </IconButton>
