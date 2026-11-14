@@ -135,6 +135,9 @@ pub struct AuthzState {
     pub content_frontier: BTreeMap<Uuid, CfgFrontier>,
     /// The config frontier each proposal set was opened at (same rule).
     pub set_frontier: BTreeMap<Uuid, CfgFrontier>,
+    /// The signed author who first appended each message: only they continue
+    /// or rewrite it (and only they or an Admin remove it).
+    pub message_authors: BTreeMap<Uuid, String>,
 }
 
 impl AuthzState {
@@ -240,6 +243,26 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
     let on_config = env.session_id == crate::channel::workspace_config_session_id(env.workspace_id);
     // Agent-signed events (A3): judged by the Agent tier, capped by the
     // agent's owner's role, with the key valid at this position.
+    // A message is its author's (checked chat folds).
+    if ctx.checked && !on_config {
+        let target = match &env.payload {
+            SessionEvent::MessageAppended { message } => Some((message.id, false)),
+            SessionEvent::MessageChunkReceived { message_id, .. } | SessionEvent::MessageCompleted { message_id, .. } => {
+                Some((*message_id, false))
+            }
+            SessionEvent::MessageRemoved { message_id } => Some((*message_id, true)),
+            _ => None,
+        };
+        if let Some((id, removal)) = target {
+            if fold.authz.message_authors.get(&id).is_some_and(|orig| orig != author) {
+                let moderator = removal
+                    && ctx.workspace.and_then(|w| w.role_of(author)).is_some_and(|r| r.rank() >= WorkspaceRole::Admin.rank());
+                if !moderator {
+                    return Decision::deny("only its author continues, rewrites or removes a message");
+                }
+            }
+        }
+    }
     let roster_here = if ctx.checked { ctx.workspace } else if on_config { Some(ctx.running) } else { None };
     if let Some(roster) = roster_here {
         if env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == ActorKind::Agent) {

@@ -1212,6 +1212,11 @@ fn fold(
             if let SessionEvent::ChatLockdownRaised { lockdown, .. } = payload {
                 session.authz.lockdown_raisers.insert(lockdown.id, author.to_string());
             }
+            if checked && !trusted {
+                if let SessionEvent::MessageAppended { message } = payload {
+                    session.authz.message_authors.entry(message.id).or_insert_with(|| author.to_string());
+                }
+            }
             // Where content was filed (see `AuthzState::content_frontier`).
             if checked && !trusted {
                 if let Some(f) = env.actor_stamp.as_ref().and_then(|s| s.cfg_frontier) {

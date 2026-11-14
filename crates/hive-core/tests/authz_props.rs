@@ -1301,3 +1301,35 @@ fn agent_cannot_file_a_proposal_under_a_humans_name() {
     let v = w.verdicts();
     assert_eq!((v[&as_ada], v[&as_other_agent], v[&ok]), (Verdict::Denied, Verdict::Denied, Verdict::Allowed));
 }
+
+/// Hardening A-11: a message is its author's. Any member could rewrite
+/// another's message (a second `MessageAppended` with its id, a chunk, or a
+/// `MessageCompleted`) or remove it; the gate on an agent turn then read one
+/// body while every chat showed another. Only the author who first appended a
+/// message continues it; removal is the author's or an Admin's.
+#[test]
+fn only_its_author_rewrites_a_message() {
+    let mut w = World::new();
+    let (ada_msg, mid) = {
+        let SessionEvent::MessageAppended { message } = message("ada", "ship it") else { unreachable!() };
+        (message.clone(), message.id)
+    };
+    w.chat_push("ada", SessionEvent::MessageAppended { message: ada_msg.clone() });
+    let mut forged = ada_msg.clone();
+    forged.body = "rm -rf everything".into();
+    let reappend = w.chat_push("mara", SessionEvent::MessageAppended { message: forged });
+    let chunk = w.chat_push("mara", SessionEvent::MessageChunkReceived { message_id: mid, chunk: " and more".into() });
+    let complete = w.chat_push("mara", SessionEvent::MessageCompleted { message_id: mid, body: "rewritten".into() });
+    let remove = w.chat_push("mara", SessionEvent::MessageRemoved { message_id: mid });
+    let own = w.chat_push("ada", SessionEvent::MessageCompleted { message_id: mid, body: "ship it now".into() });
+    let v = w.verdicts();
+    assert_eq!((v[&reappend], v[&chunk], v[&complete], v[&remove]), (Verdict::Denied, Verdict::Denied, Verdict::Denied, Verdict::Denied));
+    assert_eq!(v[&own], Verdict::Allowed);
+    assert_eq!(w.state().messages.iter().find(|m| m.id == mid).unwrap().body, "ship it now");
+    // An Admin may remove a member's message (moderation).
+    let SessionEvent::MessageAppended { message: m2 } = message("mara", "oops") else { unreachable!() };
+    let m2id = m2.id;
+    w.chat_push("mara", SessionEvent::MessageAppended { message: m2 });
+    let moderated = w.chat_push("ada", SessionEvent::MessageRemoved { message_id: m2id });
+    assert_eq!(w.verdicts()[&moderated], Verdict::Allowed);
+}
