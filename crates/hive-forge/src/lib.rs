@@ -589,6 +589,41 @@ pub trait Forge: ForgeReader {
     fn git_auth_args(&self) -> Vec<String>;
 }
 
+/// The read side of a forge and nothing else: what the agent-facing tools
+/// are handed, so even a cast can't reach a write.
+pub struct ReadOnly(pub std::sync::Arc<dyn Forge>);
+
+#[async_trait]
+impl ForgeReader for ReadOnly {
+    fn kind(&self) -> ForgeKind {
+        self.0.kind()
+    }
+    fn id(&self) -> &ForgeId {
+        self.0.id()
+    }
+    async fn list_change_requests(&self, r: &RepoRef, state: StateFilter, limit: u32) -> Result<Vec<ChangeRequest>> {
+        self.0.list_change_requests(r, state, limit).await
+    }
+    async fn change_request(&self, r: &RepoRef, number: &str) -> Result<ChangeRequest> {
+        self.0.change_request(r, number).await
+    }
+    async fn review_comments(&self, r: &RepoRef, number: &str) -> Result<Vec<ReviewComment>> {
+        self.0.review_comments(r, number).await
+    }
+    async fn issues(&self, r: &RepoRef, state: StateFilter, limit: u32) -> Result<Vec<Issue>> {
+        self.0.issues(r, state, limit).await
+    }
+    async fn issue(&self, r: &RepoRef, number: &str) -> Result<Issue> {
+        self.0.issue(r, number).await
+    }
+    async fn ci_status(&self, r: &RepoRef, git_ref: &str) -> Result<CiStatus> {
+        self.0.ci_status(r, git_ref).await
+    }
+    async fn file_at(&self, r: &RepoRef, path: &str, git_ref: &str) -> Result<FileAtRef> {
+        self.0.file_at(r, path, git_ref).await
+    }
+}
+
 /// Where the `ligus` binary is, for the `!ligus forge git-credential <id>`
 /// helper ([`tokens::store_helper_args`]).
 #[derive(Debug, Clone)]

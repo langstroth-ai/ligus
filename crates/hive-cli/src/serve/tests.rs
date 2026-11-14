@@ -2248,6 +2248,10 @@ async fn fork_checkouts_base_on_upstream_and_open_prs_there() {
     assert_eq!(r["repo"]["fork"]["upstream"], "kubeflow/pipelines", "{r}");
     let ctx = crate::repos::turn_context(&h.handle.shared.cfg.data_dir, Uuid::parse_str(&chat_id).unwrap());
     assert!(ctx.contains("a fork of `kubeflow/pipelines`") && ctx.contains("`upstream/main`"), "{ctx}");
+    // The agent's read-only code-host tools see the fork and its upstream.
+    let b = crate::worker::ServiceSource::forge_for(&*h.handle.shared, Uuid::parse_str(&chat_id).unwrap()).expect("bound to a code host");
+    assert_eq!((b.repo.full_name(), b.upstream.map(|u| u.full_name())), ("acme/pipelines".into(), Some("kubeflow/pipelines".into())));
+    assert_eq!(b.reader.id().as_str(), "github:github.com");
 
     // Upstream moves; pull fast-forwards the base from upstream.
     commit(&up_work, "UPSTREAM2.md");
