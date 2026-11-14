@@ -14,17 +14,30 @@ pub const BRIDGE_ARG: &str = "mcp-bridge";
 pub const SOCKET_ENV: &str = "LIGUS_MCP_SOCKET";
 pub const CRED_ENV: &str = "LIGUS_TURN_CRED";
 /// Under the Linux sandbox, where seccomp refuses new unix sockets (C-10),
-/// the bridge reaches the server through the sandbox helper's forwarder on
-/// this loopback address instead (inside the turn's own network namespace).
+/// the bridge reaches the server through this loopback address instead: the
+/// sandbox helper's forwarder inside the turn's own network namespace
+/// (bubblewrap), or the endpoint's own listener (the Landlock tier).
 pub const TCP_ENV: &str = "LIGUS_MCP_TCP";
 /// The forwarder's port inside the sandbox's network namespace.
 pub const SANDBOX_TCP_PORT: u16 = 29417;
 
 /// The extra bridge env this host's sandbox needs: the forwarder's address
-/// under bubblewrap, nothing elsewhere.
+/// under bubblewrap, nothing elsewhere (see [`sandbox_tcp_env_for`] for the
+/// Landlock tier, whose port is per endpoint).
 pub fn sandbox_tcp_env() -> Option<(String, String)> {
     (crate::executor::default_executor().kind() == crate::executor::ExecutorKind::Bwrap)
         .then(|| (TCP_ENV.to_string(), format!("127.0.0.1:{SANDBOX_TCP_PORT}")))
+}
+
+/// The extra bridge env for the endpoint listening on `socket`: under
+/// bubblewrap the helper's forwarder; under the Landlock tier (no network
+/// namespace) the endpoint's own loopback port
+/// ([`super::socket::tcp_port_for`]); nothing elsewhere.
+pub fn sandbox_tcp_env_for(socket: &std::path::Path) -> Option<(String, String)> {
+    match crate::executor::default_executor().kind() {
+        crate::executor::ExecutorKind::Landlock => super::socket::tcp_port_for(socket).map(|p| (TCP_ENV.to_string(), format!("127.0.0.1:{p}"))),
+        _ => sandbox_tcp_env(),
+    }
 }
 
 /// Add the credential to an `initialize` message.

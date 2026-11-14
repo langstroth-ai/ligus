@@ -104,14 +104,9 @@ async fn run_budget(
     Out { text: text.map_err(|e| e.to_string()), activity, spend }
 }
 
-fn sandbox_ok() -> bool {
-    !executor::refuses_writes()
-}
-
 #[tokio::test]
 async fn copilot_flavor_streams_and_auto_allows_edits_at_its_tier() {
-    if !sandbox_ok() {
-        eprintln!("skipping: no OS sandbox on this host");
+    if executor::skip_without_sandbox("copilot_flavor_streams_and_auto_allows_edits_at_its_tier") {
         return;
     }
     let wt = tempfile::tempdir().unwrap();
@@ -129,7 +124,7 @@ async fn copilot_flavor_streams_and_auto_allows_edits_at_its_tier() {
 
 #[tokio::test]
 async fn agy_flavor_below_tier_escalates_to_a_human() {
-    if !sandbox_ok() {
+    if executor::skip_without_sandbox("agy_flavor_below_tier_escalates_to_a_human") {
         return;
     }
     let wt = tempfile::tempdir().unwrap();
@@ -155,7 +150,7 @@ async fn agy_flavor_below_tier_escalates_to_a_human() {
 
 #[tokio::test]
 async fn read_only_gate_denies_edits_without_asking() {
-    if !sandbox_ok() {
+    if executor::skip_without_sandbox("read_only_gate_denies_edits_without_asking") {
         return;
     }
     let wt = tempfile::tempdir().unwrap();
@@ -169,7 +164,7 @@ async fn read_only_gate_denies_edits_without_asking() {
 
 #[tokio::test]
 async fn codex_flavor_authenticates_with_the_api_key_method() {
-    if !sandbox_ok() {
+    if executor::skip_without_sandbox("codex_flavor_authenticates_with_the_api_key_method") {
         return;
     }
     let wt = tempfile::tempdir().unwrap();
@@ -181,7 +176,7 @@ async fn codex_flavor_authenticates_with_the_api_key_method() {
 
 #[tokio::test]
 async fn an_agent_without_acp_is_an_init_failure() {
-    if !sandbox_ok() {
+    if executor::skip_without_sandbox("an_agent_without_acp_is_an_init_failure") {
         return;
     }
     let wt = tempfile::tempdir().unwrap();
@@ -216,7 +211,7 @@ async fn an_agent_without_acp_is_an_init_failure() {
 /// line cap and ends the turn with a clear error instead of buffering it.
 #[tokio::test]
 async fn oversized_output_line_ends_the_turn() {
-    if !sandbox_ok() {
+    if executor::skip_without_sandbox("oversized_output_line_ends_the_turn") {
         return;
     }
     let wt = tempfile::tempdir().unwrap();
@@ -230,7 +225,7 @@ async fn oversized_output_line_ends_the_turn() {
 /// Ligus tool calls while the agent keeps working (and spending).
 #[tokio::test]
 async fn spend_budget_cancels_the_turn() {
-    if !sandbox_ok() {
+    if executor::skip_without_sandbox("spend_budget_cancels_the_turn") {
         return;
     }
     let wt = tempfile::tempdir().unwrap();
@@ -247,7 +242,7 @@ async fn spend_budget_cancels_the_turn() {
 /// budget it is ignored.
 #[tokio::test]
 async fn non_usd_usage_ends_a_budgeted_turn() {
-    if !sandbox_ok() {
+    if executor::skip_without_sandbox("non_usd_usage_ends_a_budgeted_turn") {
         return;
     }
     let wt = tempfile::tempdir().unwrap();

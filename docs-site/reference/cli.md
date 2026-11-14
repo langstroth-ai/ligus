@@ -34,6 +34,7 @@ command); it prints to stderr and exits with status 2.
 |---|---|
 | `ligus --version` (`-V`, `version`) | prints `ligus <version>` |
 | `ligus whoami` | prints account id, device id, name, data dir and room |
+| `ligus doctor` | prints this device's agent sandbox tier (`seatbelt`, `bwrap`, `landlock` or `unconfined`), why, and what it leaves open; see [The Linux agent sandbox](../ops/linux-sandbox.md) |
 
 ```console
 $ ligus whoami

@@ -28,6 +28,10 @@ fn release_matrix_keeps_api_keys_off_the_command_line() {
         .arg(root.join("scripts/release-matrix.sh"))
         .env("PATH", path)
         .env("ROWS", "anthropic-api openai-api gemini-api")
+        // Logs inside the test's own temp dir, removed by the script on exit
+        // (and by the TempDir guard if it isn't).
+        .env("MATRIX_OUT_DIR", stub.path().join("out"))
+        .env("MATRIX_KEEP_LOGS", "0")
         .env("ANTHROPIC_API_KEY", "fake-anthropic-key-1")
         .env("OPENAI_API_KEY", "fake-openai-key-2")
         .env("GEMINI_API_KEY", "fake-gemini-key-3")
@@ -42,4 +46,5 @@ fn release_matrix_keeps_api_keys_off_the_command_line() {
         assert!(!stdout.contains(key), "{key} was printed");
     }
     assert_eq!(stdout.matches("| pass |").count(), 3, "{stdout}");
+    assert!(!stub.path().join("out").exists(), "the script left its logs behind");
 }

@@ -148,7 +148,9 @@ relay refusal.
    `LIGUS_MCP_MIN_ROLE` (default Admin on a write-capable tier, Contributor
    when read-only). Claude Code on a worker is read-only unless
    `LIGUS_WORKER_PERMISSION_MODE` raises it, and a write tier needs the
-   agent sandbox (bubblewrap on Linux): without it the turn is refused.
+   agent sandbox (bubblewrap, or the Landlock tier, on Linux): without one
+   the turn is refused. `ligus doctor` says which tier the box has and why;
+   see [The Linux agent sandbox](linux-sandbox.md).
    A tool call that fails with a network error may have hit the egress
    allow-list: the chat shows a note; add hosts with
    `LIGUS_SANDBOX_EGRESS_ALLOW`.

@@ -1,0 +1,85 @@
+# Optional AppArmor profile for Ligus's Linux agent sandbox (bubblewrap).
+#
+# Ubuntu 24.04 sets kernel.apparmor_restrict_unprivileged_userns=1 and ships
+# no AppArmor profile for /usr/bin/bwrap (Ubuntu 24.10 and later ship
+# bwrap-userns-restrict). Without one, bwrap can't create the user namespace
+# Ligus's strongest sandbox tier needs, and Ligus falls back to its Landlock
+# tier (Landlock + seccomp, no namespaces). This profile, modelled on Ubuntu
+# 24.10's bwrap-userns-restrict, lets bwrap create user namespaces again and
+# moves everything bwrap runs into a stacked profile without capabilities,
+# so the userns grant doesn't extend to the processes inside the sandbox.
+#
+# Install (needs root, AppArmor 4.0+; Ligus never installs it for you):
+#
+#   sudo install -m 0644 deploy/linux/apparmor/ligus-bwrap /etc/apparmor.d/ligus-bwrap
+#   sudo apparmor_parser -r /etc/apparmor.d/ligus-bwrap
+#
+# Then restart Ligus (the desktop, ligus serve or ligus worker) and check
+# `ligus doctor` says "agent sandbox: bwrap". Remove it with
+#
+#   sudo apparmor_parser -R /etc/apparmor.d/ligus-bwrap
+#   sudo rm /etc/apparmor.d/ligus-bwrap
+#
+# Don't install it on Ubuntu 24.10+ or anywhere a bwrap profile already
+# exists (`sudo aa-status | grep bwrap`): two profiles must not attach to the
+# same binary. The trade-off: every user of /usr/bin/bwrap on this host (not
+# only Ligus: Flatpak, GNOME's thumbnailers, other sandboxes) may create user
+# namespaces through it, exactly as on a distro without the restriction or
+# with Ubuntu's own profile. Processes bwrap starts get no capabilities, not
+# even inside their own namespace, and can't create further user namespaces.
+# See https://docs.ligus.ai/ops/linux-sandbox/#apparmor-profile
+
+abi <abi/4.0>,
+
+include <tunables/global>
+
+profile ligus-bwrap /usr/bin/bwrap flags=(attach_disconnected,mediate_deleted) {
+  # bwrap builds the sandbox with the capabilities it holds inside its new
+  # user namespace: mounts, pivot_root, the loopback interface.
+  allow capability,
+  allow userns,
+  allow mount,
+  allow umount,
+  allow pivot_root,
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow signal,
+  allow ptrace,
+  allow mqueue,
+  allow dbus,
+  allow io_uring,
+
+  # Whatever bwrap runs (Ligus's sandbox helper, then the agent) is
+  # confined by this profile stacked with ligus-bwrap-child. A stack is
+  # the one transition no_new_privs (which bwrap sets) allows.
+  allow px /** -> ligus-bwrap//&ligus-bwrap-child,
+
+  # Site-specific additions and overrides.
+  include if exists <local/ligus-bwrap>
+}
+
+profile ligus-bwrap-child flags=(attach_disconnected,mediate_deleted) {
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow signal,
+  allow ptrace,
+  allow mqueue,
+  allow dbus,
+  allow io_uring,
+
+  # No capabilities, even those a process holds inside bwrap's user
+  # namespace; no new user namespaces, mounts or pivot_root.
+  audit deny capability,
+  audit deny userns,
+  audit deny mount,
+  audit deny umount,
+  audit deny pivot_root,
+
+  # Children stay in this stack.
+  allow pix /** -> &ligus-bwrap-child,
+
+  # Site-specific additions and overrides.
+  include if exists <local/ligus-bwrap-child>
+}

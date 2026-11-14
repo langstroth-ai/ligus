@@ -38,6 +38,39 @@
 //! Deviation from the spec: the network is always a fresh namespace (not
 //! Landlock's TCP port filter on ABI ≥ 4), so UDP and every other protocol
 //! are cut too, on every kernel.
+//!
+//! ## The Landlock tier
+//!
+//! Where bubblewrap can't create a user namespace (Ubuntu 24.04 restricts
+//! unprivileged user namespaces through AppArmor and ships no profile for
+//! `bwrap`; a kernel with them disabled), [`LandlockTier`] runs the same
+//! helper **without namespaces**, as a weaker but real sandbox (see
+//! [`super::landlock_rules`] for the filesystem and TCP rules):
+//!
+//! - Landlock filesystem rules at the highest ABI the kernel has: reads
+//!   carved around the denied paths, writes only beneath the worktree
+//!   (minus `.git` and the protected paths), the scratch dir and the turn
+//!   home;
+//! - Landlock network rules (ABI ≥ 4, required for this tier): TCP connect
+//!   only to the egress proxy, the Ligus MCP listener and allow-listed
+//!   loopback endpoints; no TCP bind;
+//! - Landlock scoping (ABI ≥ 6): no signals to, and no abstract unix
+//!   sockets of, processes outside the sandbox;
+//! - seccomp: everything the bubblewrap tier denies, plus every namespace
+//!   flag on `unshare`/`clone`, `setns`, and, for any child whose network is
+//!   restricted, every socket but TCP over IPv4/IPv6 and route netlink (no
+//!   UDP, so no DNS or QUIC of its own: names resolve at the proxy; no raw,
+//!   packet, SCTP or MPTCP sockets), `listen`, and TCP Fast Open (which
+//!   would connect without `connect()`); `io_uring` (whose operations
+//!   bypass seccomp) is unavailable in both tiers;
+//! - `no_new_privs`, a new session, the env allow-list, and death with the
+//!   parent.
+//!
+//! What it can't do that bubblewrap does: hide other processes (no PID
+//! namespace; Landlock still refuses `ptrace`-class access to them, which
+//! covers `/proc/<pid>/environ`, `mem` and `fd`), restrict TCP by address
+//! (Landlock matches ports only), give the agent its own ptys, or let it
+//! create new entries in the worktree's top-level directory.
 
 use std::ffi::{OsStr, OsString};
 use std::io;
@@ -68,30 +101,196 @@ pub const HELPER_ARG: &str = "__ligus-sandbox-exec-linux";
 /// `ps`). The helper takes it out of its env before running the command.
 pub const PROXY_TOKEN_ENV: &str = "LIGUS_SANDBOX_PROXY_TOKEN";
 
+/// Where the docs explain the optional AppArmor profile for bubblewrap.
+pub const APPARMOR_DOCS: &str = "https://docs.ligus.ai/ops/linux-sandbox/#apparmor-profile";
+
 pub struct Bwrap {
     bwrap: PathBuf,
 }
 
+/// Why bubblewrap couldn't start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BwrapUnavailable {
+    pub reason: String,
+    /// AppArmor's unprivileged-user-namespace restriction is the cause (an
+    /// AppArmor profile for `bwrap` fixes it).
+    pub apparmor: bool,
+}
+
+fn read_sysctl(path: &str) -> Option<String> {
+    std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
+}
+
+/// Explain a failed bubblewrap probe from its stderr and the host's
+/// user-namespace sysctls.
+pub fn bwrap_failure(stderr: &str, apparmor_restrict: Option<&str>, userns_clone: Option<&str>, max_userns: Option<&str>) -> BwrapUnavailable {
+    let denied = stderr.contains("Permission denied") || stderr.contains("Operation not permitted");
+    if apparmor_restrict == Some("1") && denied {
+        return BwrapUnavailable {
+            reason: "bubblewrap can't create a user namespace: AppArmor restricts unprivileged user namespaces on this host \
+                     (kernel.apparmor_restrict_unprivileged_userns=1) and there is no AppArmor profile for bwrap \
+                     (Ubuntu 24.04 ships none; 24.10 and later do)"
+                .into(),
+            apparmor: true,
+        };
+    }
+    if userns_clone == Some("0") {
+        return BwrapUnavailable { reason: "unprivileged user namespaces are disabled (kernel.unprivileged_userns_clone=0)".into(), apparmor: false };
+    }
+    if max_userns == Some("0") {
+        return BwrapUnavailable { reason: "user namespaces are disabled (user.max_user_namespaces=0)".into(), apparmor: false };
+    }
+    let first = stderr.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("no error output");
+    BwrapUnavailable { reason: format!("bwrap can't create namespaces here ({first})"), apparmor: false }
+}
+
 impl Bwrap {
     /// `bwrap` on PATH, and able to create a user namespace here.
-    pub fn probe() -> Result<Self, String> {
+    pub fn probe() -> Result<Self, BwrapUnavailable> {
         let path = std::env::var_os("PATH").unwrap_or_default();
         let bwrap = std::env::split_paths(&path)
             .map(|d| d.join("bwrap"))
             .find(|p| p.is_file())
-            .ok_or_else(|| "bwrap is not installed".to_string())?;
-        let ok = std::process::Command::new(&bwrap)
+            .ok_or_else(|| BwrapUnavailable { reason: "bubblewrap (bwrap) is not installed".into(), apparmor: false })?;
+        let out = std::process::Command::new(&bwrap)
             .args(["--ro-bind", "/", "/", "--dev", "/dev", "--unshare-net", "--unshare-pid", "--die-with-parent", "--", "true"])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if !ok {
-            return Err("bwrap can't create namespaces here (user namespaces disabled?)".into());
+            .stderr(std::process::Stdio::piped())
+            .output();
+        match out {
+            Ok(o) if o.status.success() => Ok(Self { bwrap }),
+            Ok(o) => Err(bwrap_failure(
+                &String::from_utf8_lossy(&o.stderr),
+                read_sysctl("/proc/sys/kernel/apparmor_restrict_unprivileged_userns").as_deref(),
+                read_sysctl("/proc/sys/kernel/unprivileged_userns_clone").as_deref(),
+                read_sysctl("/proc/sys/user/max_user_namespaces").as_deref(),
+            )),
+            Err(e) => Err(BwrapUnavailable { reason: format!("bwrap failed to start: {e}"), apparmor: false }),
         }
-        Ok(Self { bwrap })
+    }
+}
+
+/// The kernel's Landlock ABI version (0: no Landlock).
+pub fn kernel_landlock_abi() -> i32 {
+    // landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION)
+    // SAFETY: a version query; no pointers are read or written.
+    let r = unsafe { libc::syscall(libc::SYS_landlock_create_ruleset, std::ptr::null::<u8>(), 0usize, 1u32) };
+    if r < 0 {
+        0
+    } else {
+        r as i32
+    }
+}
+
+/// Seccomp filters are available (`PR_GET_SECCOMP` answers).
+fn seccomp_available() -> bool {
+    // SAFETY: a read-only prctl.
+    unsafe { libc::prctl(libc::PR_GET_SECCOMP, 0, 0, 0, 0) >= 0 }
+}
+
+/// The Landlock tier: the helper with Landlock and seccomp, no namespaces.
+pub struct LandlockTier {
+    abi: i32,
+}
+
+/// The first Landlock ABI with network rules (Linux 6.7), required for the
+/// Landlock tier: without them nothing would stop an agent's own TCP.
+pub const LANDLOCK_MIN_ABI: i32 = 4;
+
+impl LandlockTier {
+    pub fn probe() -> Result<Self, String> {
+        let abi = kernel_landlock_abi();
+        if abi < 1 {
+            return Err("Landlock is not enabled in this kernel (needs Linux 6.7+ with lsm=…,landlock)".into());
+        }
+        if abi < LANDLOCK_MIN_ABI {
+            return Err(format!("this kernel's Landlock (ABI {abi}) has no network rules; the Landlock tier needs ABI {LANDLOCK_MIN_ABI} (Linux 6.7+)"));
+        }
+        if !seccomp_available() {
+            return Err("seccomp filters are not available in this kernel".into());
+        }
+        Ok(Self { abi })
+    }
+
+    pub fn abi(&self) -> i32 {
+        self.abi
+    }
+
+    /// What this tier leaves open on this kernel.
+    pub fn notes(&self) -> Vec<String> {
+        let mut n = vec![
+            "no namespaces: the agent sees the host's processes and their command lines (Landlock still blocks ptrace-class access: their environment, memory and open files)".to_string(),
+            "TCP is limited by port, not address: an agent can reach any host on the egress proxy's or the Ligus MCP listener's port number".to_string(),
+            "UDP, raw and other non-TCP sockets are refused (no DNS of its own: names resolve at the egress proxy)".to_string(),
+            "nothing can be created, removed or renamed directly in the worktree's top-level directory (subdirectories and existing files are writable)".to_string(),
+            "no terminals (/dev/pts) for the agent".to_string(),
+        ];
+        if self.abi < 6 {
+            n.push(format!("Landlock ABI {}: no signal or abstract-socket scoping (Linux 6.12+), so an agent can signal your other processes", self.abi));
+        }
+        n
+    }
+}
+
+impl TurnExecutor for LandlockTier {
+    fn kind(&self) -> ExecutorKind {
+        ExecutorKind::Landlock
+    }
+
+    fn confine(&self, program: &OsStr, args: &[OsString], cwd: &Path, plan: &EnforcementPlan, proxy: Option<&EgressProxy>) -> io::Result<std::process::Command> {
+        let helper = helper_exe()?;
+        let mcp_port = plan.ligus_mcp_socket.as_deref().and_then(crate::ligus_mcp::socket::tcp_port_for);
+        let home = super::home_dir();
+        let rules = super::landlock_rules::rules(plan, home.as_deref(), proxy.map(EgressProxy::port), mcp_port);
+        let file = rules.write_file(&canonical(&plan.tmp))?;
+        let mut c = hive_core::process_util::command(&helper);
+        c.arg(HELPER_ARG).arg("--landlock-rules").arg(file);
+        if !matches!(plan.egress, EgressPlan::Open) && !unix_sockets_allowed() {
+            c.arg("--deny-unix");
+        }
+        c.arg("--").arg(program).args(args).current_dir(cwd).env_clear().envs(plan_env(plan, proxy));
+        super::new_session(&mut c);
+        Ok(c)
+    }
+}
+
+/// Pick this host's Linux tier: bubblewrap, else Landlock, else none.
+/// `LIGUS_SANDBOX=landlock` skips bubblewrap; `LIGUS_SANDBOX=bwrap` refuses
+/// the Landlock fallback.
+pub fn select_executor() -> (std::sync::Arc<dyn TurnExecutor>, super::SandboxStatus) {
+    use super::SandboxStatus;
+    use std::sync::Arc;
+    let mode = hive_core::compat::var("LIGUS_SANDBOX").map(|v| v.trim().to_ascii_lowercase()).unwrap_or_default();
+    let bwrap_err = if mode == "landlock" {
+        BwrapUnavailable { reason: "LIGUS_SANDBOX=landlock skips bubblewrap".into(), apparmor: false }
+    } else {
+        match Bwrap::probe() {
+            Ok(b) => {
+                let s = SandboxStatus { kind: ExecutorKind::Bwrap, summary: "bubblewrap + Landlock + seccomp (namespaces)".into(), notes: Vec::new() };
+                return (Arc::new(b), s);
+            }
+            Err(e) => e,
+        }
+    };
+    let mut notes = Vec::new();
+    if bwrap_err.apparmor {
+        notes.push(format!("to restore the bubblewrap tier, install the optional AppArmor profile for bwrap: {APPARMOR_DOCS}"));
+    }
+    if mode == "bwrap" {
+        return (Arc::new(super::Unconfined), SandboxStatus::unconfined(format!("{}; LIGUS_SANDBOX=bwrap refuses the Landlock fallback", bwrap_err.reason), notes));
+    }
+    match LandlockTier::probe() {
+        Ok(l) => {
+            notes.extend(l.notes());
+            let s = SandboxStatus {
+                kind: ExecutorKind::Landlock,
+                summary: format!("Landlock (ABI {}) + seccomp, without namespaces, because {}", l.abi(), bwrap_err.reason),
+                notes,
+            };
+            (Arc::new(l), s)
+        }
+        Err(le) => (Arc::new(super::Unconfined), SandboxStatus::unconfined(format!("{}; and {le}", bwrap_err.reason), notes)),
     }
 }
 
@@ -296,6 +495,8 @@ pub fn maybe_run_helper() {
 
 struct HelperOpts {
     rw: Vec<PathBuf>,
+    /// The Landlock tier: its rules file (no bubblewrap around the helper).
+    landlock_rules: Option<PathBuf>,
     /// The turn's Ligus MCP socket, forwarded from 127.0.0.1:SANDBOX_TCP_PORT.
     mcp_sock: Option<PathBuf>,
     /// Refuse new AF_UNIX sockets (C-10).
@@ -308,7 +509,7 @@ struct HelperOpts {
 }
 
 fn parse_helper(args: Vec<OsString>) -> io::Result<HelperOpts> {
-    let mut o = HelperOpts { rw: Vec::new(), mcp_sock: None, deny_unix: false, proxy_sock: None, proxy_port: None, token: String::new(), loop_ports: Vec::new(), cmd: Vec::new() };
+    let mut o = HelperOpts { rw: Vec::new(), landlock_rules: None, mcp_sock: None, deny_unix: false, proxy_sock: None, proxy_port: None, token: String::new(), loop_ports: Vec::new(), cmd: Vec::new() };
     let mut it = args.into_iter();
     let bad = |m: &str| io::Error::new(io::ErrorKind::InvalidInput, m.to_string());
     while let Some(a) = it.next() {
@@ -316,6 +517,7 @@ fn parse_helper(args: Vec<OsString>) -> io::Result<HelperOpts> {
         let mut val = || it.next().ok_or_else(|| bad(&format!("{s} needs a value")));
         match s.as_str() {
             "--rw" => o.rw.push(PathBuf::from(val()?)),
+            "--landlock-rules" => o.landlock_rules = Some(PathBuf::from(val()?)),
             "--proxy-sock" => o.proxy_sock = Some(PathBuf::from(val()?)),
             "--mcp-sock" => o.mcp_sock = Some(PathBuf::from(val()?)),
             "--deny-unix" => o.deny_unix = true,
@@ -455,7 +657,19 @@ fn apply_landlock(rw: &[PathBuf]) -> io::Result<()> {
     Ok(())
 }
 
-fn apply_seccomp(deny_unix: bool) -> io::Result<()> {
+/// What the seccomp filter refuses beyond the base list.
+#[derive(Debug, Clone, Copy, Default)]
+struct SeccompOpts {
+    /// `socket(AF_UNIX, …)` (C-10).
+    deny_unix: bool,
+    /// The Landlock tier with a restricted network: only TCP (and route
+    /// netlink) sockets, no `listen`, no TCP Fast Open.
+    restrict_net: bool,
+    /// The Landlock tier: every namespace flag, not just `CLONE_NEWUSER`.
+    all_namespaces: bool,
+}
+
+fn apply_seccomp(o: SeccompOpts) -> io::Result<()> {
     use seccompiler::{BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter, SeccompRule, TargetArch};
     use std::collections::BTreeMap;
     let arch: TargetArch = std::env::consts::ARCH.try_into().map_err(|e: seccompiler::BackendError| io::Error::other(e.to_string()))?;
@@ -478,37 +692,182 @@ fn apply_seccomp(deny_unix: bool) -> io::Result<()> {
         libc::SYS_kexec_file_load,
         libc::SYS_init_module,
         libc::SYS_finit_module,
+        libc::SYS_setns,
     ] {
         deny.insert(nr, vec![]);
     }
-    let newuser = libc::CLONE_NEWUSER as u64;
-    let flag_rule = |idx: u8| -> io::Result<SeccompRule> {
-        SeccompRule::new(vec![SeccompCondition::new(idx, SeccompCmpArgLen::Qword, SeccompCmpOp::MaskedEq(newuser), newuser).map_err(be)?]).map_err(be)
+    let cond = |idx: u8, len: SeccompCmpArgLen, op: SeccompCmpOp, v: u64| SeccompCondition::new(idx, len, op, v).map_err(be);
+    let rule = |c: Vec<SeccompCondition>| SeccompRule::new(c).map_err(be);
+    let ns_flags: Vec<u64> = if o.all_namespaces {
+        [libc::CLONE_NEWUSER, libc::CLONE_NEWNS, libc::CLONE_NEWPID, libc::CLONE_NEWNET, libc::CLONE_NEWIPC, libc::CLONE_NEWUTS, libc::CLONE_NEWCGROUP]
+            .iter()
+            .map(|f| *f as u64)
+            .collect()
+    } else {
+        vec![libc::CLONE_NEWUSER as u64]
     };
-    deny.insert(libc::SYS_unshare, vec![flag_rule(0)?]);
-    deny.insert(libc::SYS_clone, vec![flag_rule(0)?]);
-    if deny_unix {
+    let flag_rules = |extra: &[u64]| -> io::Result<Vec<SeccompRule>> {
+        ns_flags.iter().chain(extra).map(|f| rule(vec![cond(0, SeccompCmpArgLen::Qword, SeccompCmpOp::MaskedEq(*f), *f)?])).collect()
+    };
+    // CLONE_NEWTIME (0x80) shares clone()'s exit-signal byte, so it is
+    // matched on unshare only.
+    let newtime: &[u64] = if o.all_namespaces { &[0x80] } else { &[] };
+    deny.insert(libc::SYS_unshare, flag_rules(newtime)?);
+    deny.insert(libc::SYS_clone, flag_rules(&[])?);
+    let mut socket_rules: Vec<SeccompRule> = Vec::new();
+    if o.deny_unix {
         // C-10: socket(AF_UNIX, …). socketpair (local IPC) stays allowed.
-        let unix = SeccompRule::new(vec![SeccompCondition::new(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, libc::AF_UNIX as u64).map_err(be)?]).map_err(be)?;
-        deny.insert(libc::SYS_socket, vec![unix]);
+        socket_rules.push(rule(vec![cond(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, libc::AF_UNIX as u64)?])?);
+    }
+    if o.restrict_net {
+        let (inet, inet6, unix, netlink) = (libc::AF_INET as u64, libc::AF_INET6 as u64, libc::AF_UNIX as u64, libc::AF_NETLINK as u64);
+        // Any family but IPv4, IPv6, unix (decided above) and netlink.
+        socket_rules.push(rule(vec![
+            cond(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Ne, inet)?,
+            cond(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Ne, inet6)?,
+            cond(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Ne, unix)?,
+            cond(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Ne, netlink)?,
+        ])?);
+        // Netlink: route only (interface lists; changing them needs
+        // CAP_NET_ADMIN).
+        socket_rules.push(rule(vec![
+            cond(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, netlink)?,
+            cond(2, SeccompCmpArgLen::Dword, SeccompCmpOp::Ne, libc::NETLINK_ROUTE as u64)?,
+        ])?);
+        for fam in [inet, inet6] {
+            // Not a stream socket: SOCK_DGRAM (UDP, ICMP), SOCK_RAW, SOCK_RDM,
+            // SOCK_SEQPACKET, SOCK_DCCP (6), SOCK_PACKET (10). The type's
+            // low four bits; the high ones are SOCK_NONBLOCK/SOCK_CLOEXEC.
+            for ty in [libc::SOCK_DGRAM as u64, libc::SOCK_RAW as u64, libc::SOCK_RDM as u64, libc::SOCK_SEQPACKET as u64, 6, 10] {
+                socket_rules.push(rule(vec![cond(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, fam)?, cond(1, SeccompCmpArgLen::Dword, SeccompCmpOp::MaskedEq(0xf), ty)?])?);
+            }
+            // A stream socket that isn't TCP (SCTP, MPTCP): Landlock's
+            // port rules cover TCP only.
+            socket_rules.push(rule(vec![
+                cond(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, fam)?,
+                cond(2, SeccompCmpArgLen::Dword, SeccompCmpOp::Ne, 0)?,
+                cond(2, SeccompCmpArgLen::Dword, SeccompCmpOp::Ne, libc::IPPROTO_TCP as u64)?,
+            ])?);
+        }
+        // No inbound connections (an unbound socket's listen() would pick
+        // a port without the bind Landlock refuses).
+        deny.insert(libc::SYS_listen, vec![]);
+        // TCP Fast Open connects from sendto/sendmsg, past Landlock's
+        // connect hook.
+        let fastopen = libc::MSG_FASTOPEN as u64;
+        deny.insert(libc::SYS_sendto, vec![rule(vec![cond(3, SeccompCmpArgLen::Dword, SeccompCmpOp::MaskedEq(fastopen), fastopen)?])?]);
+        deny.insert(libc::SYS_sendmsg, vec![rule(vec![cond(2, SeccompCmpArgLen::Dword, SeccompCmpOp::MaskedEq(fastopen), fastopen)?])?]);
+        deny.insert(libc::SYS_sendmmsg, vec![rule(vec![cond(3, SeccompCmpArgLen::Dword, SeccompCmpOp::MaskedEq(fastopen), fastopen)?])?]);
+    }
+    if !socket_rules.is_empty() {
+        deny.insert(libc::SYS_socket, socket_rules);
     }
     let f1 = SeccompFilter::new(deny, SeccompAction::Allow, SeccompAction::Errno(libc::EPERM as u32), arch).map_err(be)?;
     let mut enosys: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
-    enosys.insert(libc::SYS_clone3, vec![]);
+    // clone3 takes its flags in memory seccomp can't read: ENOSYS makes libc
+    // fall back to clone. io_uring operations (socket, connect, open) run
+    // without the syscalls this filter sees; ENOSYS makes libuv & co. fall
+    // back to plain syscalls.
+    for nr in [libc::SYS_clone3, libc::SYS_io_uring_setup, libc::SYS_io_uring_enter, libc::SYS_io_uring_register] {
+        enosys.insert(nr, vec![]);
+    }
     let f2 = SeccompFilter::new(enosys, SeccompAction::Allow, SeccompAction::Errno(libc::ENOSYS as u32), arch).map_err(be)?;
     let p1: BpfProgram = f1.try_into().map_err(be)?;
     let p2: BpfProgram = f2.try_into().map_err(be)?;
+    #[cfg(target_arch = "x86_64")]
+    seccompiler::apply_filter(&x32_filter()).map_err(e)?;
     seccompiler::apply_filter(&p1).map_err(e)?;
     seccompiler::apply_filter(&p2).map_err(e)?;
     Ok(())
 }
 
+/// x86-64 only: refuse the x32 ABI (syscall numbers with bit 30 set), whose
+/// numbers the lists above don't name. 32-bit (i386) calls fail the
+/// filters' architecture check and kill the process.
+#[cfg(target_arch = "x86_64")]
+fn x32_filter() -> seccompiler::BpfProgram {
+    use seccompiler::sock_filter;
+    const AUDIT_ARCH_X86_64: u32 = 62 | 0x8000_0000 | 0x4000_0000;
+    let f = |code: u16, jt: u8, jf: u8, k: u32| sock_filter { code, jt, jf, k };
+    vec![
+        f(0x20, 0, 0, 4),                    // ld [arch]
+        f(0x15, 0, 3, AUDIT_ARCH_X86_64),    // jeq x86_64 ? next : allow
+        f(0x20, 0, 0, 0),                    // ld [nr]
+        f(0x45, 0, 1, 0x4000_0000),          // jset x32 bit ? deny : allow
+        f(0x06, 0, 0, 0x0005_0000 | libc::EPERM as u32), // ret ERRNO(EPERM)
+        f(0x06, 0, 0, 0x7fff_0000),          // ret ALLOW
+    ]
+}
+
+/// The Landlock tier's filesystem, network and scope rules. Fails closed:
+/// a kernel without Landlock, or without network rules for a turn whose
+/// network must be restricted, runs nothing.
+fn apply_landlock_tier(r: &super::landlock_rules::LandlockRules) -> io::Result<()> {
+    use landlock::{path_beneath_rules, Access, AccessFs, AccessNet, NetPort, Ruleset, RulesetAttr, RulesetCreatedAttr, Scope, ABI};
+    let kernel = kernel_landlock_abi();
+    if kernel < 1 {
+        return Err(io::Error::other("Landlock is not available on this kernel"));
+    }
+    if r.restrict_net && kernel < LANDLOCK_MIN_ABI {
+        return Err(io::Error::other(format!("this kernel's Landlock (ABI {kernel}) can't restrict the network")));
+    }
+    // The newest ABI this crate knows, best effort: rights the kernel lacks
+    // are dropped (`sandbox_status` names what that leaves open).
+    let abi = ABI::V9;
+    let err = |e: landlock::RulesetError| io::Error::other(e.to_string());
+    let mut rs = Ruleset::default().handle_access(AccessFs::from_all(abi)).map_err(err)?;
+    if r.restrict_net {
+        rs = rs.handle_access(AccessNet::BindTcp | AccessNet::ConnectTcp).map_err(err)?;
+    }
+    let mut c = rs
+        .scope(Scope::AbstractUnixSocket | Scope::Signal)
+        .map_err(err)?
+        .create()
+        .map_err(err)?
+        .add_rules(path_beneath_rules(&r.read, AccessFs::from_read(abi)))
+        .map_err(err)?
+        .add_rules(path_beneath_rules(&r.write, AccessFs::from_all(abi)))
+        .map_err(err)?
+        .add_rules(path_beneath_rules(&r.dev, AccessFs::ReadFile | AccessFs::WriteFile | AccessFs::Truncate | AccessFs::IoctlDev))
+        .map_err(err)?;
+    if r.restrict_net {
+        for p in &r.connect {
+            c = c.add_rule(NetPort::new(*p, AccessNet::ConnectTcp)).map_err(err)?;
+        }
+    }
+    let status = c.restrict_self().map_err(err)?;
+    if status.ruleset == landlock::RulesetStatus::NotEnforced || !status.no_new_privs {
+        return Err(io::Error::other("Landlock could not be enforced"));
+    }
+    Ok(())
+}
+
+/// The Landlock tier: no bubblewrap around us. Apply Landlock and seccomp
+/// to this process and become the command.
+fn run_landlock_tier(o: &HelperOpts, rules_file: &Path) -> io::Result<i32> {
+    use std::os::unix::process::CommandExt;
+    let rules = super::landlock_rules::LandlockRules::decode(&std::fs::read(rules_file)?)?;
+    // Die with the parent, as bwrap's --die-with-parent does.
+    // SAFETY: a prctl on this process.
+    unsafe {
+        libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+    }
+    apply_landlock_tier(&rules)?;
+    apply_seccomp(SeccompOpts { deny_unix: o.deny_unix, restrict_net: rules.restrict_net, all_namespaces: true })?;
+    let mut cmd = std::process::Command::new(&o.cmd[0]);
+    cmd.args(&o.cmd[1..]);
+    Err(cmd.exec())
+}
+
 fn run_helper(args: Vec<OsString>) -> io::Result<i32> {
     use std::os::unix::process::{CommandExt, ExitStatusExt};
     let o = parse_helper(args)?;
+    if let Some(f) = o.landlock_rules.clone() {
+        return run_landlock_tier(&o, &f);
+    }
     let forwarding = start_forwarders(&o)?;
     apply_landlock(&o.rw)?;
-    apply_seccomp(o.deny_unix)?;
+    apply_seccomp(SeccompOpts { deny_unix: o.deny_unix, ..Default::default() })?;
     let mut cmd = std::process::Command::new(&o.cmd[0]);
     cmd.args(&o.cmd[1..]);
     if !forwarding {
@@ -569,6 +928,42 @@ mod tests {
         assert!(std::env::var_os(PROXY_TOKEN_ENV).is_none(), "the command would inherit the token");
         // The old argument is gone.
         assert!(parse_helper(vec!["--token".into(), "x".into(), "--".into(), "true".into()]).is_err());
+    }
+
+    /// The probe names AppArmor's user-namespace restriction (Ubuntu 24.04)
+    /// and points at the profile; other causes are named too.
+    #[test]
+    fn bwrap_probe_explains_apparmor_userns_restriction() {
+        let e = bwrap_failure("bwrap: setting up uid map: Permission denied\n", Some("1"), None, Some("63000"));
+        assert!(e.apparmor && e.reason.contains("AppArmor") && e.reason.contains("apparmor_restrict_unprivileged_userns=1"), "{e:?}");
+        let e = bwrap_failure("bwrap: No permissions to creating new namespace", Some("0"), Some("0"), None);
+        assert!(!e.apparmor && e.reason.contains("unprivileged_userns_clone=0"), "{e:?}");
+        let e = bwrap_failure("bwrap: Creating new namespace failed: No space left on device", None, None, Some("0"));
+        assert!(e.reason.contains("max_user_namespaces=0"), "{e:?}");
+        let e = bwrap_failure("bwrap: something else\n", None, None, None);
+        assert!(e.reason.contains("something else") && !e.apparmor, "{e:?}");
+    }
+
+    /// The Landlock tier hands the helper a rules file in the turn's 0700
+    /// scratch dir, never paths or the proxy token on its command line.
+    #[test]
+    fn landlock_tier_rules_stay_off_the_command_line() {
+        let t = tempfile::tempdir().unwrap();
+        let mut p = plan(t.path());
+        p.worktree_writable = true;
+        std::fs::create_dir_all(&p.worktree).unwrap();
+        let proxy = EgressProxy::start(vec![HostPort::new("api.anthropic.com", 443)], None).unwrap();
+        let c = LandlockTier { abi: 6 }.confine(OsStr::new("/bin/true"), &[], t.path(), &p, Some(&proxy)).unwrap();
+        let args: Vec<String> = c.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(args[0], HELPER_ARG);
+        assert!(args.windows(2).any(|w| w[0] == "--landlock-rules" && w[1].starts_with(&*canonical(t.path()).to_string_lossy())), "{args:?}");
+        assert!(args.contains(&"--deny-unix".to_string()), "{args:?}");
+        assert!(!args.iter().any(|a| a.contains(proxy.token())), "{args:?}");
+        assert!(!c.get_envs().any(|(k, _)| k == PROXY_TOKEN_ENV), "the Landlock tier needs no token in the helper");
+        let rules = crate::executor::landlock_rules::LandlockRules::decode(&std::fs::read(t.path().join(".ligus-landlock-rules")).unwrap()).unwrap();
+        assert!(rules.restrict_net && rules.connect.contains(&proxy.port()) && rules.connect.contains(&11434), "{rules:?}");
+        let o = parse_helper(c.get_args().skip(1).map(|a| a.to_os_string()).collect()).unwrap();
+        assert!(o.landlock_rules.is_some() && o.deny_unix && o.cmd == vec![OsString::from("/bin/true")]);
     }
 
     /// C-10: a child with a network namespace gets the unix-socket filter

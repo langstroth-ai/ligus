@@ -146,6 +146,12 @@ Every process Ligus starts for a turn (a CLI agent, a stdio MCP server,
 envelope, the runtime and the author gate. The plan is the same on the
 desktop, `ligus serve`, `ligus worker` and `ligus agent`.
 
+On Linux this is the strongest of [three tiers](../ops/linux-sandbox.md):
+bubblewrap + Landlock + seccomp where bubblewrap can create a user
+namespace; Landlock + seccomp without namespaces where it can't (Ubuntu
+24.04, whose AppArmor restricts user namespaces); none, with write-capable
+turns refused, where neither is available. The table shows the first.
+
 | | macOS (Seatbelt, `sandbox-exec`) | Linux (bubblewrap + Landlock + seccomp) |
 |---|---|---|
 | Writes | the turn's worktree (only when the turn may write), its scratch dir, the runtime's own state dirs (`~/.claude`, `~/.codex`, `~/.copilot`, …) | the same, as bind mounts on a read-only `/`; Landlock limits writes to them again |
@@ -177,11 +183,18 @@ desktop, `ligus serve`, `ligus worker` and `ligus agent`.
   keychain items are protected by their access lists, not by the profile.
 - **Codex** runs its commands inside Ligus's sandbox instead of its own
   (Seatbelt and bubblewrap sandboxes can't nest).
-- **No sandbox, no writing agents.** Where neither sandbox is available
-  (Windows, a Linux host without bubblewrap or user namespaces,
-  `LIGUS_SANDBOX=off`), Ligus still applies the environment allow-list and
-  cwd rules, but refuses write-capable agent turns. Read-only turns still
-  run.
+- **No sandbox, no writing agents.** Where no sandbox is available
+  (Windows, a Linux host with neither bubblewrap and user namespaces nor
+  Landlock 6.7+, `LIGUS_SANDBOX=off`), Ligus still applies the environment
+  allow-list and cwd rules, but refuses write-capable agent turns.
+  Read-only turns still run. `ligus doctor` says which tier a host uses
+  and why.
+- **The Landlock tier (Linux without user namespaces)** enforces the same
+  reads, writes and egress allow-list without namespaces, with known gaps:
+  TCP is limited by port rather than address, other processes are visible,
+  and nothing can be created at the worktree's top level. See
+  [The Linux agent sandbox](../ops/linux-sandbox.md), including the
+  optional AppArmor profile that restores bubblewrap on Ubuntu 24.04.
 - **Why the macOS profile is default-allow.** The Seatbelt profile allows
   by default and then denies what matters: every file write outside the
   turn's paths, reads of Ligus's data and your credential dirs, all network

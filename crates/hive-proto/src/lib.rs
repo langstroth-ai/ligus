@@ -28,6 +28,16 @@ pub struct AppInfo {
     pub name: String,
     pub core_version: String,
     pub build_profile: String,
+    /// This host's agent sandbox tier: "seatbelt" | "bwrap" | "landlock" |
+    /// "unconfined" (write-capable agent turns refused).
+    #[serde(default)]
+    pub sandbox_tier: String,
+    /// One line: the tier and why it was chosen.
+    #[serde(default)]
+    pub sandbox_summary: String,
+    /// What the tier leaves open here, and how to get a stronger one.
+    #[serde(default)]
+    pub sandbox_notes: Vec<String>,
 }
 
 /// One emoji reaction on a message.
@@ -265,7 +275,7 @@ pub struct ImplementPreviewDto {
     /// "acp" | "legacy" | "" (not a CLI runtime)
     pub driver: String,
     pub permission_tier: String,
-    /// "Seatbelt" | "Bwrap" | "Unconfined" | …
+    /// "Seatbelt" | "Bwrap" | "Landlock" | "Unconfined" | …
     pub executor: String,
     /// Endpoints the run may reach (empty = no network).
     pub egress: Vec<String>,

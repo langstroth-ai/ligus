@@ -9,6 +9,11 @@ Full release notes are on the
 
 ## 2.0
 
+- **A Linux sandbox without user namespaces.** Where bubblewrap can't
+  create a user namespace (Ubuntu 24.04's AppArmor restriction), agent
+  turns now run in a Landlock + seccomp tier instead of being refused, and
+  an optional AppArmor profile restores bubblewrap. `ligus doctor` shows
+  the tier. See [The Linux agent sandbox](../ops/linux-sandbox.md).
 - **Passkeys for admin changes.** Under workspace rules v2, membership and
   role changes, device revocation, key rotation, guards, zones, workflow
   definitions, agent hosts and human-gated approvals need a passkey (Touch

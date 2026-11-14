@@ -6,6 +6,8 @@ import {
   setAgentToolSettings,
   launchHealth,
   openFileAccessSettings,
+  getAppInfo,
+  openExternal,
   type AgentToolSettings,
   type ClaudePermissionMode,
 } from "@/lib/ipc";
@@ -105,8 +107,35 @@ export function PermissionsSection() {
     onError: (e) => toast.error(`Couldn't open settings: ${errMsg(e)}`),
   });
 
+  const info = useQuery({ queryKey: ["app-info"], queryFn: getAppInfo });
+  const tier = info.data?.sandboxTier;
+
   return (
     <Section title="Permissions">
+      {(tier === "landlock" || tier === "unconfined") && (
+        <div
+          className="space-y-2 rounded-2xl border p-3"
+          style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}
+        >
+          <div className="text-sm font-medium">
+            {tier === "landlock" ? "Agent sandbox: Landlock (no namespaces)" : "No agent sandbox"}
+          </div>
+          <p className="text-xs" style={{ color: tier === "unconfined" ? "var(--hive-danger-ink)" : "var(--hive-warm-ink)" }}>
+            {tier === "landlock"
+              ? "Agents run under Landlock and seccomp without bubblewrap's namespaces: a weaker sandbox than bubblewrap. "
+              : "Write-capable agent turns are refused on this device; read-only turns still run. "}
+            {info.data?.sandboxSummary}
+          </p>
+          {(info.data?.sandboxNotes ?? []).length > 0 && (
+            <ul className="list-disc space-y-1 pl-4 text-xs text-ink-soft">
+              {info.data?.sandboxNotes.map((n) => <li key={n}>{n}</li>)}
+            </ul>
+          )}
+          <Button size="sm" onClick={() => void openExternal("https://docs.ligus.ai/ops/linux-sandbox/")}>
+            About the Linux sandbox tiers
+          </Button>
+        </div>
+      )}
       {health.data?.macos && (
         <div
           className="space-y-2 rounded-2xl border p-3"

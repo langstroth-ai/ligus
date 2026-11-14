@@ -279,6 +279,7 @@ impl Fixture {
         std::fs::write(data.join("serve.token"), "SERVE-TOKEN-SECRET").unwrap();
         let worktree = base.join("repo/.ligus/worktrees/t1");
         std::fs::create_dir_all(worktree.join(".git")).unwrap();
+        std::fs::create_dir_all(worktree.join("src")).unwrap();
         std::fs::write(worktree.join("README.md"), "hello").unwrap();
         let outside = base.join("outside");
         std::fs::create_dir_all(&outside).unwrap();
@@ -316,11 +317,17 @@ pub(crate) fn real_executor() -> Option<Arc<dyn TurnExecutor>> {
         }
     }
     let e = default_executor();
-    if e.kind() == ExecutorKind::Unconfined {
-        eprintln!("skipped: no agent sandbox on this host (see docs: the Linux sandbox tests must run where bubblewrap and user namespaces are available)");
+    // Linux: bubblewrap, else the Landlock tier; neither (or macOS without
+    // sandbox-exec) prints SKIPPED, or fails with LIGUS_REQUIRE_SANDBOX=1.
+    if skip_without_sandbox("executor sandbox test") {
         return None;
     }
     Some(e)
+}
+
+/// Whether this host runs the Landlock tier (no namespaces).
+fn landlock_tier() -> bool {
+    default_executor().kind() == ExecutorKind::Landlock
 }
 
 /// Run `script` under the plan for a write-capable claude turn in the
@@ -400,9 +407,18 @@ fn sandbox_denies_write_outside_worktree() {
         let _ = std::fs::remove_file(&probe);
         assert!(!ok && !existed, "wrote to $HOME");
     }
-    // Inside the worktree, writes work.
-    let (ok, out) = run_sh(&*e, &f, "echo ok > new.txt && cat new.txt", isolated());
+    // Inside the worktree, writes work: a new file in a subdirectory, an
+    // existing top-level file.
+    let (ok, out) = run_sh(&*e, &f, "echo ok > src/new.txt && cat src/new.txt && echo more >> README.md", isolated());
     assert!(ok && out.contains("ok"), "{out}");
+    // A new top-level entry: allowed under bubblewrap and Seatbelt; the
+    // Landlock tier can't grant it without granting `.git` too.
+    let (ok, out) = run_sh(&*e, &f, "echo ok > new.txt && cat new.txt", isolated());
+    if landlock_tier() {
+        assert!(!ok && !f.worktree.join("new.txt").exists(), "{out}");
+    } else {
+        assert!(ok && out.contains("ok"), "{out}");
+    }
     // A read-only turn can't write even its worktree.
     let ro = TurnPolicy { gate: GatePlan::ReadOnly, ..isolated() };
     let (ok, _) = run_sh(&*e, &f, "echo no > ro.txt", ro);
@@ -534,6 +550,56 @@ fn sandbox_linux_seccomp_and_landlock() {
     if let Some(run) = std::env::var_os("XDG_RUNTIME_DIR") {
         let (_, out) = run_sh(&*e, &f, &format!("ls -A '{}'", PathBuf::from(run).display()), isolated());
         assert!(!out.contains("bus"), "{out}");
+    }
+}
+
+/// Linux, Landlock tier: what the missing namespaces would otherwise have
+/// covered. No UDP (so no DNS or QUIC of its own), no raw sockets, no TCP
+/// bind or listen, no Fast Open connect; no reading another process's
+/// environment; no signals out of the sandbox (Landlock ABI 6+); no new
+/// namespaces of any kind; no `io_uring`.
+#[cfg(target_os = "linux")]
+#[test]
+fn sandbox_landlock_tier_closes_namespace_gaps() {
+    let Some(e) = real_executor() else { return };
+    if !landlock_tier() {
+        let _ = std::io::Write::write_all(&mut std::io::stderr().lock(), b"SKIPPED sandbox_landlock_tier_closes_namespace_gaps: this host uses bubblewrap (run with LIGUS_SANDBOX=landlock)\n");
+        return;
+    }
+    if !which("python3") {
+        eprintln!("skipped: python3 is needed for the socket probes");
+        return;
+    }
+    let f = Fixture::new();
+    let py = |code: &str| format!("python3 -I -c '{code}'");
+    for (what, code) in [
+        ("udp socket", "import socket; socket.socket(socket.AF_INET, socket.SOCK_DGRAM); print(\"OPENED\")"),
+        ("udp6 socket", "import socket; socket.socket(socket.AF_INET6, socket.SOCK_DGRAM); print(\"OPENED\")"),
+        ("raw socket", "import socket; socket.socket(socket.AF_INET, socket.SOCK_RAW, 1); print(\"OPENED\")"),
+        ("sctp socket", "import socket; socket.socket(socket.AF_INET, socket.SOCK_STREAM, 132); print(\"OPENED\")"),
+        ("packet socket", "import socket; socket.socket(17, socket.SOCK_RAW, 0); print(\"OPENED\")"),
+        ("tcp bind", "import socket; s=socket.socket(); s.bind((\"127.0.0.1\", 0)); print(\"OPENED\")"),
+        ("tcp listen", "import socket; s=socket.socket(); s.listen(1); print(\"OPENED\")"),
+        ("fast open", "import socket; s=socket.socket(); s.sendto(b\"x\", 0x20000000, (\"1.1.1.1\", 80)); print(\"OPENED\")"),
+        ("dns", "import socket; socket.getaddrinfo(\"example.com\", 443); print(\"OPENED\")"),
+        ("unshare net", "import os; os.unshare(os.CLONE_NEWNET); print(\"OPENED\")"),
+        ("io_uring", "import ctypes; r=ctypes.CDLL(None).syscall(425, 8, ctypes.create_string_buffer(120)); print(\"OPENED\" if r >= 0 else \"refused\")"),
+    ] {
+        let (_, out) = run_sh(&*e, &f, &py(code), isolated());
+        assert!(!out.contains("OPENED"), "{what} was allowed: {out}");
+    }
+    // A plain TCP socket still opens (the egress proxy is TCP).
+    let (ok, out) = run_sh(&*e, &f, &py("import socket; socket.socket(); print(\"TCP-OK\")"), isolated());
+    assert!(ok && out.contains("TCP-OK"), "{out}");
+    // Another process's environment (here: this test's) is out of reach.
+    std::env::set_var("LIGUS_LANDLOCK_PROBE_SECRET", "ENVIRON-SECRET");
+    let me = std::process::id();
+    let (_, out) = run_sh(&*e, &f, &format!("cat /proc/{me}/environ | tr '\\0' '\\n'"), isolated());
+    assert!(!out.contains("ENVIRON-SECRET"), "read another process's environment: {out}");
+    // Signals out of the sandbox (Landlock scoping, ABI 6+).
+    if super::linux::kernel_landlock_abi() >= 6 {
+        let (ok, out) = run_sh(&*e, &f, &format!("kill -0 {me} && echo SIGNALED"), isolated());
+        assert!(!ok && !out.contains("SIGNALED"), "signaled a process outside the sandbox: {out}");
     }
 }
 

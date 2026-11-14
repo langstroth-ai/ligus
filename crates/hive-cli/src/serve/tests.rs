@@ -130,8 +130,9 @@ fn config(dir: &Path, relay: &str, room: &str) -> Config {
     }
 }
 
+// Fields drop in order: the handle (which waits for its tasks under test)
+// goes before the temp dir it writes to.
 struct Harness {
-    _tmp: tempfile::TempDir,
     desktop: Config,
     handle: ServeHandle,
     base: String,
@@ -139,6 +140,7 @@ struct Harness {
     client: reqwest::Client,
     agent_id: Uuid,
     ntfy: Pushes,
+    _tmp: tempfile::TempDir,
 }
 
 /// A desktop that owns the workspace (founder) with one agent `@coder` on a

@@ -25,8 +25,7 @@ fn targets(kind: ModelProviderKind) -> (&'static str, &'static str) {
 
 #[test]
 fn agent_cannot_persist_cli_config() {
-    if executor::refuses_writes() {
-        eprintln!("skipping: no OS sandbox on this host");
+    if executor::skip_without_sandbox("agent_cannot_persist_cli_config") {
         return;
     }
     let real = tempfile::tempdir().unwrap();

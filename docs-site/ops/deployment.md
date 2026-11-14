@@ -120,8 +120,10 @@ consider:
 
 - `LIGUS_MCP_MIN_ROLE` (default `admin` when the worker's tier can write,
   `contributor` when read-only): who can make the worker use tools;
-- bubblewrap: agent processes run in the Linux sandbox; without `bwrap` the
-  worker refuses write-capable turns;
+- bubblewrap: agent processes run in the Linux sandbox; without `bwrap` (or
+  where it can't create user namespaces) the worker uses the Landlock tier
+  on Linux 6.7+, and refuses write-capable turns with neither (`ligus
+  doctor`; see [The Linux agent sandbox](linux-sandbox.md));
 - `LIGUS_WORKER_PERMISSION_MODE`: off (read-only) unless you want worker
   turns to propose edits;
 - whoever administers the worker box can read the workspace.

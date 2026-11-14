@@ -515,7 +515,7 @@ mod tests {
     /// (no shell: `;` is a literal argument), in the worktree, confined.
     #[test]
     fn command_proposal_runs_exact_argv_in_sandbox() {
-        if crate::executor::refuses_writes() {
+        if crate::executor::skip_without_sandbox("command_proposal_runs_exact_argv_in_sandbox") {
             return;
         }
         let wt = tempfile::tempdir().unwrap();

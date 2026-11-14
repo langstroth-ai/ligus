@@ -141,6 +141,7 @@ nav:
       - Building the dist: ops/build.md
       - Operations (health, logs, backups): ops/operations.md
       - Running ligus serve as your own device: ops/serve-box.md
+      - The Linux agent sandbox: ops/linux-sandbox.md
       - Repos on the home host: ops/serve-repos.md
       - Pricing tiers: ops/pricing.md
       - Tiering (open-core model): ops/tiering.md
