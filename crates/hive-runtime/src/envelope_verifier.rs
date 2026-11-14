@@ -479,6 +479,9 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
     let mut agent_keys: HashMap<Uuid, (Vec<u8>, Uuid)> = HashMap::new();
     let mut current_accounts: HashSet<Uuid> = HashSet::new();
     let mut sticky_removed: HashSet<Uuid> = HashSet::new();
+    // Each workspace's config roster at its head (rules, passkeys, the
+    // devices its own log allowed).
+    let mut heads: HashMap<Uuid, hive_core::authz::RosterState> = HashMap::new();
     let config_ws = config_workspaces(&ordered);
     // A device revocation counts when the config projection accepted it
     // (Admin+). One for a workspace whose config log we don't hold (legacy,
@@ -509,6 +512,7 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
                 }
             }
         }
+        heads.insert(ws, timeline.current().clone());
         // A3: agent keys valid at the config head (certified, still bound).
         let head = timeline.current();
         for (key_id, k) in &head.agent_keys {
@@ -556,6 +560,17 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
         let Some(account_key) = account_keys.get(&cert.account_id) else { continue };
         if cert.verify(account_key).is_err() {
             continue; // cert must chain to its account's key
+        }
+        // Rules v2: a device of an account that holds a passkey or a recovery
+        // key counts only once its config log allowed it (with that account's
+        // presence). A certificate published anywhere else (a chat log, or
+        // under a backdated frontier) certifies nothing then.
+        if heads.get(ws).is_some_and(|h| {
+            h.rules >= 2
+                && h.passkeys.get(&cert.account_id).is_some_and(|m| !m.is_empty())
+                && !h.account_certified(cert.account_id, cert.device_id)
+        }) {
+            continue;
         }
         if !roster.disputed.contains(&cert.account_id) {
             roster
@@ -632,6 +647,9 @@ fn is_trust_kind(e: &SessionEvent) -> bool {
             | SessionEvent::AgentUpserted { .. }
             | SessionEvent::AgentRosterUpdated { .. }
             | SessionEvent::AgentRemoved { .. }
+            | SessionEvent::WorkspaceRulesSet { .. }
+            | SessionEvent::PasskeyRegistered { .. }
+            | SessionEvent::PasskeyRemoved { .. }
     )
 }
 

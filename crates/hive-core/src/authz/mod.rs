@@ -348,11 +348,16 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             }
         }
         let switch_to_v2 = matches!(env.payload, SessionEvent::WorkspaceRulesSet { version: 2 });
-        if (roster.rules.min(RULES_SUPPORTED) >= 2 || switch_to_v2)
-            && rules::requires_presence(&env.payload, author, roster, fold)
-            && present.is_none()
-        {
-            return Decision::deny(PRESENCE_REQUIRED);
+        if (roster.rules.min(RULES_SUPPORTED) >= 2 || switch_to_v2) && rules::requires_presence(&env.payload, author, roster, fold) {
+            // A device is added with its own account's presence, whoever
+            // publishes the certificate.
+            let whose = match &env.payload {
+                SessionEvent::DeviceCertificateAdded { certificate } => Some(certificate.account_id),
+                _ => None,
+            };
+            if present.is_none() || whose.is_some_and(|a| present != Some(a)) {
+                return Decision::deny(PRESENCE_REQUIRED);
+            }
         }
     }
     match &env.payload {

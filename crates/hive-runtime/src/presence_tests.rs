@@ -550,3 +550,84 @@ fn downgrading_from_v2_needs_presence() {
     svc.set_workspace_rules(wid, 1).unwrap();
     let _ = cfg;
 }
+
+/// Ana (founder, actor id = account id) on rules v2 with a passkey and a
+/// recovery key, and the account key her device holds (what a thief who
+/// copied her device's secrets has too).
+fn on_rules_v2_with_account_key() -> (ChatService, Uuid, Arc<SoftAuthenticator>, SigningKeypair) {
+    let store = EventStore::open_in_memory().unwrap();
+    let account = Uuid::new_v4();
+    let seed = SigningKeypair::generate().unwrap().seed_bytes();
+    let mut author = ActorIdentity::new(account.to_string(), "Ana", ActorKind::Human);
+    author.account_id = Some(account);
+    let mut svc = ChatService::new(store, Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::from_seed(&seed).unwrap(), author);
+    let wid = Uuid::new_v4();
+    svc.ensure_workspace_config(wid).unwrap();
+    let key = Arc::new(SoftAuthenticator::es256());
+    register(&mut svc, wid, &key, None).unwrap();
+    let rec = RecoveryKey::generate().unwrap();
+    let k2 = key.clone();
+    svc.register_passkey(wid, rec.credential(account, "Recovery key"), &move |req| Ok(k2.get(&req.challenge))).unwrap();
+    svc.set_presence_provider(Some(Arc::new(Soft(key.clone()))));
+    svc.set_workspace_rules(wid, 2).unwrap();
+    svc.set_presence_provider(None);
+    (svc, wid, key, SigningKeypair::from_seed(&seed).unwrap())
+}
+
+/// A copy of the newest config event re-dressed as `payload` on `session`,
+/// signed by `svc`'s device without presence (what a device-key thief can
+/// produce by hand).
+fn forged(svc: &ChatService, wid: Uuid, session: Uuid, payload: SessionEvent) -> SessionEventEnvelope {
+    let mut env = config_log(svc, wid).into_iter().max_by_key(|e| e.lamport).unwrap();
+    env.clear_raw();
+    env.event_id = Uuid::new_v4();
+    env.session_id = session;
+    env.lamport += 1000;
+    env.payload = payload;
+    env.actor_stamp.as_mut().unwrap().presence = None;
+    env.signature = None;
+    svc.sign_for_test(&mut env);
+    env
+}
+
+/// Track B residual 1a: under rules v2 an account that holds a passkey adds
+/// a device only with that passkey's presence. A thief holding the device and
+/// account keys can't certify a device of their own, on the config log or by
+/// publishing the certificate on a chat log.
+#[test]
+fn device_key_thief_cannot_add_a_device_under_v2() {
+    let (mut svc, wid, key, account_kp) = on_rules_v2_with_account_key();
+    let account = account(&svc);
+    let cfg = workspace_config_session_id(wid);
+    let thief_key = SigningKeypair::generate().unwrap();
+    let thief_dev = Uuid::new_v4();
+    let req = crate::device_enroll::DeviceEnrollment::new(wid, thief_dev, &thief_key, "thief");
+    let err = svc.certify_device(&req).unwrap_err().to_string();
+    assert!(err.contains(hive_core::authz::PRESENCE_REQUIRED), "{err}");
+
+    // By hand: a certificate under the account key, without presence.
+    let cert = hive_core::crypto::DeviceCertificate::issue(&account_kp, account, thief_dev, &thief_key.public_key_bytes(), Timestamp::now());
+    let on_cfg = forged(&svc, wid, cfg, SessionEvent::DeviceCertificateAdded { certificate: cert.clone() });
+    let chat = svc.create_chat("c", wid, "anthropic").unwrap().id;
+    let on_chat = forged(&svc, wid, chat, SessionEvent::DeviceCertificateAdded { certificate: cert });
+    let mut log = config_log(&svc, wid);
+    log.push(on_cfg.clone());
+    assert_eq!(fold_decisions(&log, None, None, WorkspaceAuthz::Unchecked)[&on_cfg.event_id], Verdict::Denied);
+    let (_, timeline) = hive_core::project_config(&log, None, None);
+    assert!(!timeline.current().device_trusted(thief_dev), "the config roster certified the thief's device");
+    let mut trust = svc.store().trust_envelopes(wid).unwrap();
+    trust.push(on_cfg);
+    trust.push(on_chat);
+    let roster = crate::envelope_verifier::build_roster(&trust);
+    assert!(!roster.is_certified(thief_dev), "the ingest roster certified the thief's device");
+    assert!(roster.is_certified(svc.device_id()), "Ana's own device stays certified");
+
+    // With Ana's passkey it goes through, and re-publishing an already
+    // certified device needs nothing.
+    svc.set_presence_provider(Some(Arc::new(Soft(key))));
+    svc.certify_device(&req).unwrap();
+    svc.set_presence_provider(None);
+    let roster = crate::envelope_verifier::build_roster(&svc.store().trust_envelopes(wid).unwrap());
+    assert!(roster.is_certified(thief_dev));
+    assert!(svc.certify_device(&req).is_ok(), "re-publishing a certified device");
+}

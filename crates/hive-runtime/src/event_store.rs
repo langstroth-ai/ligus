@@ -335,7 +335,8 @@ impl EventStore {
     }
 
     /// The envelopes that feed the trust roster (membership, account keys and
-    /// their rotations, device certificates and revocations, snapshots), across
+    /// their rotations, device certificates and revocations, snapshots, and
+    /// the rules and passkeys that gate devices under rules v2), across
     /// all sessions. Cheap — filtered by `kind`. Consumed by
     /// `envelope_verifier::build_roster` to verify signatures on ingest without
     /// any network. Revocations and rotations must be here: a `DeviceRevoked`
@@ -346,21 +347,24 @@ impl EventStore {
             "SELECT envelope_json FROM events \
              WHERE kind IN ('accountKeyRegistered','accountKeyRotated','deviceCertificateAdded','deviceRevoked',\
              'memberAdded','memberRemoved','sessionSnapshot','memberRoleChanged','dearthModeChanged','joinApproved',\
-             'agentKeyCertified','agentUpserted','agentRosterUpdated','agentRemoved') \
+             'agentKeyCertified','agentUpserted','agentRosterUpdated','agentRemoved',\
+             'workspaceRulesSet','passkeyRegistered','passkeyRemoved') \
              ORDER BY row_id ASC",
             [],
         )
     }
 
     /// A workspace's whole trust history — account keys (registered/rotated),
-    /// device certificates and revocations, and membership — for folding its
+    /// device certificates and revocations, membership, and the rules and
+    /// passkeys that gate new devices under rules v2 — for folding its
     /// [`crate::envelope_verifier::WorkspaceRoster`] without the rest of the log.
     pub fn trust_envelopes(&self, workspace_id: Uuid) -> Result<Vec<SessionEventEnvelope>> {
         self.query_envelopes(
             "SELECT envelope_json FROM events WHERE workspace_id = ?1 \
              AND kind IN ('accountKeyRegistered','accountKeyRotated','deviceCertificateAdded','deviceRevoked',\
              'memberAdded','memberRemoved','sessionSnapshot','memberRoleChanged','dearthModeChanged','joinApproved',\
-             'agentKeyCertified','agentUpserted','agentRosterUpdated','agentRemoved') \
+             'agentKeyCertified','agentUpserted','agentRosterUpdated','agentRemoved',\
+             'workspaceRulesSet','passkeyRegistered','passkeyRemoved') \
              ORDER BY row_id ASC",
             [workspace_id.to_string()],
         )
@@ -423,6 +427,18 @@ impl EventStore {
     /// Whether this workspace already carries a device certificate binding
     /// `device_id` to `account_id` — so identity publication stays idempotent
     /// (and re-publishes once when the account id changes, e.g. GitHub sign-in).
+    /// Whether `session_id` itself carries a certificate for (device, account).
+    pub fn has_device_certificate_in(&self, session_id: Uuid, device_id: Uuid, account_id: Uuid) -> Result<bool> {
+        let envs = self.query_envelopes(
+            "SELECT envelope_json FROM events WHERE session_id = ?1 AND kind = 'deviceCertificateAdded'",
+            [session_id.to_string()],
+        )?;
+        Ok(envs.iter().any(|e| {
+            matches!(&e.payload, SessionEvent::DeviceCertificateAdded { certificate }
+                if certificate.device_id == device_id && certificate.account_id == account_id)
+        }))
+    }
+
     pub fn has_device_certificate(
         &self,
         workspace_id: Uuid,

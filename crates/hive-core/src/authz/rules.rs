@@ -20,6 +20,14 @@ pub fn requires_presence(event: &SessionEvent, author: &str, roster: &RosterStat
         | SessionEvent::JoinApproved { .. } => true,
         // Devices: self-revoke included.
         SessionEvent::DeviceRevoked { .. } => true,
+        // A new device for an account that holds a passkey or a recovery key
+        // (a device-key thief would otherwise add devices of their own); the
+        // presence must be that account's (`authz::authorize`). Re-publishing a
+        // certificate already in force here needs nothing.
+        SessionEvent::DeviceCertificateAdded { certificate: c } => {
+            roster.passkeys.get(&c.account_id).is_some_and(|m| !m.is_empty())
+                && !roster.account_certified(c.account_id, c.device_id)
+        }
         // Keys. A passkey registration has its own rule (`authz::passkeys`):
         // the account's first proves itself, every later one needs presence
         // from an existing credential, under every rules version.
@@ -98,7 +106,6 @@ pub fn requires_presence(event: &SessionEvent, author: &str, roster: &RosterStat
         | SessionEvent::MessageReactionAdded { .. }
         | SessionEvent::MessageReactionRemoved { .. }
         | SessionEvent::AccountKeyRegistered { .. }
-        | SessionEvent::DeviceCertificateAdded { .. }
         | SessionEvent::ChannelCreated { .. }
         | SessionEvent::ChannelRenamed { .. }
         | SessionEvent::ChannelReordered { .. }

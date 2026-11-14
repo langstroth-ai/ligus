@@ -221,7 +221,9 @@ impl RosterTracker {
                 }
                 self.rebuild_devices(fold);
             }
-            SessionEvent::DeviceCertificateAdded { certificate } => {
+            // Only a certificate the log allowed certifies (under rules v2 a
+            // new device of an account with a passkey needs its presence).
+            SessionEvent::DeviceCertificateAdded { certificate } if allowed => {
                 self.certs.push(certificate.clone());
                 let key = (certificate.device_id, certificate.account_id);
                 match env.signer_device_id {
