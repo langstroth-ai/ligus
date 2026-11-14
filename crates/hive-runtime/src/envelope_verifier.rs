@@ -36,6 +36,10 @@ pub enum QuarantineReason {
     /// victim's account id can no longer silently win first-registration and
     /// hijack the victim). See `build_roster`.
     DisputedAccountKey,
+    /// The device was certified while dearth mode is on and still waits for a
+    /// second Admin's approval. Held (never accepted, never dropped) in every
+    /// identity mode, so the approval binds in Relay mode too.
+    PendingApproval,
 }
 
 /// Resolves device public keys + revocation status for verification.
@@ -461,6 +465,9 @@ pub fn verdict_for(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verd
         return Verdict::Quarantine(QuarantineReason::RevokedDevice);
     }
     let Some(signing_key) = roster.public_key(device_id) else {
+        if roster.pending.iter().any(|(_, d, _)| *d == device_id) {
+            return Verdict::Unverifiable(QuarantineReason::PendingApproval);
+        }
         return Verdict::Unverifiable(QuarantineReason::UnknownDevice);
     };
     if verify_envelope(env, signing_key).is_err() {

@@ -125,3 +125,28 @@ fn without_dearth_mode_one_certificate_is_enough() {
     log.cert(&owner, new_box);
     assert!(build_roster(&log.envs).public_key(new_box).is_some());
 }
+
+/// Dearth mode in the default (Relay) identity mode: a device certified while
+/// the entrance is closed and not yet approved by a second Admin must not
+/// have its events accepted. It used to fall through to "unknown device",
+/// which Relay mode accepts, so the second approval bound nothing.
+#[test]
+fn a_pending_device_is_not_accepted_in_relay_mode() {
+    use crate::envelope_verifier::verdict_for;
+    use crate::identity_verifier::{gate_ingest, IdentityCache, IdentityMode, IngestAction};
+    let (mut log, owner, _admin2, _alice, laptop) = setup();
+    log.push(&owner, dearth(true, vec![laptop]));
+    let new_box = Uuid::new_v4();
+    let dk = log.cert(&owner, new_box);
+    // The pending device signs a chat message as the owner's account.
+    let mut e = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 99, SessionEvent::SessionTitleChanged { title: "x".into() });
+    e.lamport = 99;
+    e.actor_stamp = Some(ActorStamp { actor: actor(&owner), recorded_at: Timestamp::epoch() });
+    hive_core::sign_envelope(&mut e, new_box, &dk);
+    let mut envs = log.envs.clone();
+    envs.push(e.clone());
+    let roster = build_roster(&envs);
+    assert_eq!(roster.pending_devices().len(), 1, "control: the device is pending");
+    let action = gate_ingest(IdentityMode::Relay, verdict_for(&roster, &e), Some(owner.account), None, &IdentityCache::new());
+    assert!(!matches!(action, IngestAction::Accept), "an unapproved dearth-mode device's event was accepted: {action:?}");
+}

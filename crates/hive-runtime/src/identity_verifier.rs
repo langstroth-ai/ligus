@@ -184,6 +184,11 @@ pub fn gate_ingest(
     match mode {
         // Option A: exactly the pre-existing policy (drop only provably-bad).
         IdentityMode::Relay => match base {
+            // A dearth-mode device awaiting its second approval: hold it (as
+            // Option C holds), so the approval binds in Relay mode too.
+            Verdict::Unverifiable(QuarantineReason::PendingApproval) => {
+                IngestAction::Hold("device awaits a second approval (dearth mode)")
+            }
             Verdict::Valid | Verdict::Unverifiable(_) => IngestAction::Accept,
             Verdict::Quarantine(r) => IngestAction::Quarantine(r),
         },
