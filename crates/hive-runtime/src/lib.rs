@@ -20,6 +20,7 @@ pub mod effects;
 pub mod egress;
 pub mod facts;
 pub mod finalize;
+pub mod forge_secrets;
 pub mod envelope_verifier;
 pub mod event_store;
 pub mod executor;

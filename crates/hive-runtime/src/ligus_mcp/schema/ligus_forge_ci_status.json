@@ -1,0 +1,19 @@
+{
+  "description": "CI status (checks and commit statuses) of a branch, tag or commit. Read-only.",
+  "inputSchema": {
+    "properties": {
+      "ref": {
+        "type": "string"
+      },
+      "repo": {
+        "description": "owner/name: the chat's bound repository (default) or its upstream",
+        "type": "string"
+      }
+    },
+    "required": [
+      "ref"
+    ],
+    "type": "object"
+  },
+  "name": "ligus_forge_ci_status"
+}

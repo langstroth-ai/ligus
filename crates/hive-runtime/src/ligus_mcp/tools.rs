@@ -4,7 +4,9 @@
 use serde_json::{json, Value};
 
 /// The full tool set, offered over MCP to agents that take MCP servers.
-pub const TOOLS: [(&str, &str); 16] = [
+/// Release note (2.0): six read-only `ligus_forge_*` tools joined the set,
+/// and `ligus_read` gained the matching `forge.*` reads.
+pub const TOOLS: [(&str, &str); 22] = [
     ("ligus_propose_diff", include_str!("schema/ligus_propose_diff.json")),
     ("ligus_propose_decision", include_str!("schema/ligus_propose_decision.json")),
     ("ligus_propose_command", include_str!("schema/ligus_propose_command.json")),
@@ -21,6 +23,14 @@ pub const TOOLS: [(&str, &str); 16] = [
     ("ligus_read_board", include_str!("schema/ligus_read_board.json")),
     ("ligus_ask_human", include_str!("schema/ligus_ask_human.json")),
     ("ligus_report", include_str!("schema/ligus_report.json")),
+    // Read-only code-host tools (IDENTITY-AND-FORGES 5.5): the token stays
+    // in the host process; see `forge_tools`.
+    ("ligus_forge_list_prs", include_str!("schema/ligus_forge_list_prs.json")),
+    ("ligus_forge_read_pr", include_str!("schema/ligus_forge_read_pr.json")),
+    ("ligus_forge_list_issues", include_str!("schema/ligus_forge_list_issues.json")),
+    ("ligus_forge_read_issue", include_str!("schema/ligus_forge_read_issue.json")),
+    ("ligus_forge_ci_status", include_str!("schema/ligus_forge_ci_status.json")),
+    ("ligus_forge_read_file", include_str!("schema/ligus_forge_read_file.json")),
 ];
 
 /// The same capabilities folded into four tools, for in-process tool loops
@@ -84,6 +94,12 @@ pub fn unfold(name: &str, input: &Value) -> Result<(String, Value), String> {
             "chat" => "ligus_read_chat",
             "proposals" => "ligus_read_proposals",
             "board" => "ligus_read_board",
+            "forge.prs" => "ligus_forge_list_prs",
+            "forge.pr" => "ligus_forge_read_pr",
+            "forge.issues" => "ligus_forge_list_issues",
+            "forge.issue" => "ligus_forge_read_issue",
+            "forge.ci" => "ligus_forge_ci_status",
+            "forge.file" => "ligus_forge_read_file",
             other => return Err(format!("unknown read {other:?}")),
         },
         "ligus_ask" => "ligus_ask_human",
@@ -121,12 +137,12 @@ mod tests {
         }
         let digest: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(digest, GOLDEN, "a frozen Ligus tool schema changed");
-        assert_eq!(TOOLS.len(), 16);
+        assert_eq!(TOOLS.len(), 22);
         assert_eq!(FOLDED.len(), 4, "the folded set fits the reserved MCP slots");
         assert!(FOLDED.len() <= crate::agent_tools::MCP_RESERVED_SLOTS);
     }
 
-    const GOLDEN: &str = "2f9f554d6897e0d75f82e371f42d9a7eee44b67c34391e11701faa69b17a57c0";
+    const GOLDEN: &str = "476f51f7c20b24726925c0e9cd9e9a44beb157bf7101c35a5e85cc39bd3c44bb";
 
     #[test]
     fn folded_calls_unfold_to_the_full_tools() {
@@ -140,5 +156,8 @@ mod tests {
         assert_eq!(unfold("ligus_ask", &json!({"question": "?"})).unwrap().0, "ligus_ask_human");
         assert!(unfold("ligus_propose", &json!({"kind": "vote"})).is_err());
         assert!(unfold("ligus_apply", &json!({})).is_err());
+        let (n, a) = unfold("ligus_read", &json!({"what": "forge.pr", "number": "7"})).unwrap();
+        assert_eq!((n.as_str(), a["number"].as_str()), ("ligus_forge_read_pr", Some("7")));
+        assert!(a.get("what").is_none());
     }
 }

@@ -33,6 +33,9 @@ pub struct Budgets {
     pub max_handoffs: u32,
     pub max_asks: u32,
     pub max_read_messages: u32,
+    /// Read-only code-host calls (`ligus_forge_*`), each a request from the
+    /// host to the forge on the agent's behalf.
+    pub max_forge_calls: u32,
     /// Charged from ACP `usage_update` reports and from the API runtimes'
     /// reported token usage ([`crate::spend`]); reaching it cancels the turn.
     pub max_spend_usd: Option<f64>,
@@ -42,7 +45,7 @@ pub struct Budgets {
 
 impl Default for Budgets {
     fn default() -> Self {
-        Self { max_tool_calls: 64, max_proposals: 8, max_handoffs: 2, max_asks: 3, max_read_messages: 500, max_spend_usd: None, cascade: CascadeBudgets::default() }
+        Self { max_tool_calls: 64, max_proposals: 8, max_handoffs: 2, max_asks: 3, max_read_messages: 500, max_forge_calls: 16, max_spend_usd: None, cascade: CascadeBudgets::default() }
     }
 }
 
@@ -94,6 +97,7 @@ impl Budgets {
             max_handoffs: n("LIGUS_MCP_MAX_HANDOFFS", d.max_handoffs),
             max_asks: n("LIGUS_MCP_MAX_ASKS", d.max_asks),
             max_read_messages: n("LIGUS_MCP_MAX_READ_MESSAGES", d.max_read_messages),
+            max_forge_calls: n("LIGUS_MCP_MAX_FORGE_CALLS", d.max_forge_calls),
             max_spend_usd: hive_core::compat::var("LIGUS_MCP_MAX_SPEND_USD").ok().and_then(|v| v.trim().parse().ok()).filter(|x: &f64| *x > 0.0),
             cascade: CascadeBudgets::from_env(),
         }
@@ -109,6 +113,11 @@ pub trait LigusHost: Send + Sync {
     fn start_turn(&self, _chat_id: Uuid, _agent_id: Uuid, _trigger_message_id: Uuid) {}
     /// An ask was posted (push it to phones, refresh the UI).
     fn ask_posted(&self, _chat_id: Uuid, _ask: &HumanAsk) {}
+    /// The code host behind `chat_id`'s bound repository, for the read-only
+    /// `ligus_forge_*` tools (`None` = this host has none for that chat).
+    fn forge_for(&self, _chat_id: Uuid) -> Option<super::forge_tools::ForgeBinding> {
+        None
+    }
 }
 
 /// One turn's binding and context.
@@ -137,6 +146,7 @@ struct Counters {
     handoffs: u32,
     asks: u32,
     read_messages: u32,
+    forge_calls: u32,
     denied: u32,
     budget_exhausted: bool,
     calls: BTreeMap<String, u32>,
@@ -502,6 +512,9 @@ impl LigusMcp {
         if let Err(r) = Self::charge(st, tool) {
             return (r, None);
         }
+        if super::forge_tools::is_forge_tool(tool) {
+            return (self.forge_tool(st, tool, args).await, None);
+        }
         let s = |k: &str| args.get(k).and_then(Value::as_str).map(str::trim).unwrap_or("").to_string();
         let strs = |k: &str| -> Vec<String> {
             args.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect()).unwrap_or_default()
@@ -803,6 +816,27 @@ impl LigusMcp {
             }
             _ => (ToolResult::err(Outcome::Denied, json!({"error": "unknown_tool"})), None),
         }
+    }
+
+    /// A read-only code-host call: the egress tier, the forge budget, the
+    /// host's binding for this chat, then the read itself.
+    async fn forge_tool(&self, st: &TurnState, tool: &str, args: &Value) -> ToolResult {
+        let deny = |m: &str| ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": m}));
+        let egress = self.svc(|svc| svc.load(st.spec.chat_id).ok().flatten()).map(|s| hive_core::sandbox::envelope_for_session(&s).egress);
+        if !egress.as_ref().is_some_and(super::forge_tools::egress_allows) {
+            return deny("this chat's sandbox doesn't allow code-host reads (its egress is closed, or its allow-list doesn't name ligus.forge)");
+        }
+        {
+            let mut c = st.counters.lock().unwrap_or_else(|e| e.into_inner());
+            if c.forge_calls >= st.spec.budgets.max_forge_calls {
+                return ToolResult::err(Outcome::Budget, json!({"error": "budget_exhausted", "budget": "maxForgeCalls", "message": crate::tool_loop::FINAL_ROUND_NUDGE}));
+            }
+            c.forge_calls += 1;
+        }
+        let Some(binding) = self.host.forge_for(st.spec.chat_id) else {
+            return deny("this chat has no repository on a connected code host on this device");
+        };
+        super::forge_tools::call(&binding, tool, args).await
     }
 
     /// Whether this turn may read `target`'s content: its own chat always;
