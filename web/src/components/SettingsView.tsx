@@ -123,8 +123,14 @@ export function parseSettingsTab(raw: string | undefined | null): SettingsTab {
       return "tools";
     case "permissions":
       return "permissions";
+    case "flow":
+    case "routing":
+      return "flow";
     case "updates":
       return "updates";
+    case "diagnostics":
+    case "logs":
+      return "diagnostics";
     case "danger":
       return "danger";
     default:
