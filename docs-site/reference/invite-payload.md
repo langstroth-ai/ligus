@@ -24,6 +24,8 @@ The body is a `WorkspaceConn` serialized to JSON and base64url-encoded
 | `name` | Friendly display label (defaults to the room name). |
 | `dm_account` | Set only for a 1:1 direct-message workspace; otherwise absent. |
 | `founder_actor_id` | The founding identity. Projection accepts only this founder's seed as the base snapshot, so a keyholder can't fork the workspace with a forged base. |
+| `fk` | Hex of the first 16 bytes of SHA-256 of the founder's account key. The joining device pins (`founder_actor_id`, `fk`), first pin wins, and its trust roster refuses the founder's account under any other key. Absent when unknown. |
+| `inv` | A single-use invite id an Admin issued for this code. The joiner's self-enrollment redeems it once; without an unused invite, joining a non-empty workspace is refused on every device. Absent on older codes. |
 
 The workspace **icon** is deliberately stripped before encoding — it's
 local rail decoration and could be a large `data:` URL.
@@ -57,13 +59,18 @@ seals the key to the invitee's devices instead of brokering it.
 
 1. Strips the `hivews1:` prefix and base64url-decodes the body.
 2. Rejects a code whose `room` is empty or whose encoding is invalid.
-3. Adds the workspace to the rail (refreshing relay/key if the room
-   is already known) and switches to it.
+3. Pins the founder (`founder_actor_id`, `fk`) and stores the invite
+   id (`inv`) on this device.
+4. Adds the workspace to the rail (refreshing relay/key if the room
+   is already known) and switches to it. The joiner's first membership
+   event redeems the invite.
 
 There is no signature check, expiry check, or passcode step on the
 raw code itself — possession of the code is possession of the key.
-Authorization for individual envelopes is still enforced
-workspace-side by the authz evaluator at acceptance time.
+Possession is not membership, though: every event's author must be a
+member at the event's position, and a newcomer becomes one only by
+redeeming an Admin's unused invite, so a leaked code that has been used
+(or a removed member's old code) reads the workspace but can't post to it.
 
 See `encode_workspace_invite` / `decode_workspace_invite` in
 `app/src/lib.rs` for the canonical implementation.

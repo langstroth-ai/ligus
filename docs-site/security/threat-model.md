@@ -35,9 +35,10 @@ relay that isn't sealed. In the tunnel it can't read or alter phone traffic
 [Known limitations](#known-limitations): key rotations aren't signed, and the
 GitHub-backed routes see the GitHub tokens clients send them.
 
-`LIGUS_IDENTITY_MODE=github-signing-keys` additionally checks each account
-key against the GitHub login's SSH signing keys, so a hostile relay can't
-substitute an account key in the directory.
+Each invite carries a fingerprint of the founder's account key, and a device
+pins it when it joins, so a hostile relay can't substitute the founder's key.
+Every device verifies and folds by the same rules whatever its environment:
+`LIGUS_IDENTITY_MODE` is ignored since 2.0 (a set value logs a warning).
 
 ### A network attacker {#network}
 
@@ -55,11 +56,14 @@ workspace**, including history from before they joined and any inline
 runtime credentials (use `secretRef` to keep keys off the log). What they
 **can't** do is act above their role: changes their role doesn't allow are
 dropped on every device; they can't promote themselves, approve their own
-join in dearth mode, vote as someone else, forge the founder, or revoke
-another person's device (that needs Admin, and every device ignores a
-revocation or removal from anyone below it). After removal they can't enroll
-themselves back: self-enrollment is refused for a removed account until an
-Admin re-adds it. After removal with key rotation they can't read new desktop
+join in dearth mode, vote as someone else or above their role, forge the
+founder, or revoke another person's device (that needs Admin, and every
+device ignores a revocation or removal from anyone below it). Each event is
+judged by the roster in force when it was made, so a later promotion doesn't
+validate an earlier step and a later demotion doesn't undo one. After removal
+they can't come back: joining needs a single-use invite an Admin issued, and
+a removed account also needs an Admin to re-add it; a removed member's new
+events are refused on every device. After removal with key rotation they can't read new desktop
 traffic (see the headless caveat and the unsigned-rotation gap in
 [Known limitations](#known-limitations)).
 
@@ -126,14 +130,15 @@ encryption and OS account separation are the protection; see
 
 ## Known limitations {#known-limitations}
 
-Stated plainly, as of 2.0.0. Items marked **(Phase 0)** are planned for the
-coming identity and key refactor; each stays on this list until a release
-fixes it.
+Stated plainly, as of 2.0.0. Items marked **(Phase 0, Track B)** or
+**(Phase 0, Track D)** are planned for the rest of the Phase 0 refactor;
+each stays on this list until a release fixes it.
 
-1. **Key seeds are plain files.** Account and device seeds are raw 32-byte
-   files under `keys/`. They are written `0600` in a `0700` directory (and an
+1. **Key seeds are plain files.** **(Phase 0, Track B)** Account and device
+   seeds are raw 32-byte files under `keys/`. They are written `0600` in a `0700` directory (and an
    older, looser seed is tightened when it is next loaded), but no OS keystore
-   is used: anything running as your OS user can read them.
+   is used: anything running as your OS user can read them, except agent
+   processes, which the OS sandbox keeps out of the data dir.
 2. **`config.toml` and `settings.json` hold the workspace key in clear.**
    So does a `hivews1:` invite. Treat each like a password. `ligus enroll`
    writes `config.toml` `0600` and keeps the data dir `0700`.
@@ -147,10 +152,14 @@ fixes it.
    read-only agent turns, while write-capable turns are refused. On Linux a
    protected directory that doesn't exist yet is pinned by an empty
    read-only directory for the turn.
-4. **Agents have no identity of their own.** **(Phase 0)** An agent's
-   messages and proposals are signed by the device that ran the turn. Peers
-   can tell which host ran it, not prove which agent wrote it.
-5. **Key rotation doesn't reach headless devices.** **(Phase 0)**
+4. **Agent output is still signed by its host.** **(Phase 0, Track B)** The
+   protocol has agent identities: host-certified agent keys, judged by a capped
+   Agent tier that can never vote, apply or administer, and retired when the
+   agent moves to another host. 2.0.0 hosts don't issue agent keys yet, so an
+   agent's messages and proposals are signed by the device that ran the turn,
+   and the Agent tier for host-signed agent output takes effect with rules
+   version 2.
+5. **Key rotation doesn't reach headless devices.** **(Phase 0, Track B)**
    `ligus serve` and `ligus worker` only know the base (epoch 0) key from the
    invite; they can't open rotated keys. After a **Remove & revoke**,
    desktops seal new traffic under the new key, which headless boxes can't
@@ -158,8 +167,8 @@ fixes it.
    key, which the removed member holds. For a workspace with headless
    devices, offboard by moving to a new workspace; see
    [Offboarding](runbooks.md#offboarding).
-6. **Key rotations aren't signed.** **(Phase 0)** A rotation is a set of
-   sealed copies of the new key with no author signature, and a desktop adopts
+6. **Key rotations aren't signed.** **(Phase 0, Track B)** A rotation is a set
+   of sealed copies of the new key with no author signature, and a desktop adopts
    any rotation on the relay it can open, sealing new events under the
    highest epoch it holds. Someone who knows your devices' public
    key-agreement keys (every member sees them, a removed member included) and
@@ -170,19 +179,26 @@ fixes it.
    [Self-hosting a relay](../networking/self-host.md#per-workspace-token-scope)),
    and after offboarding someone who could reach the relay, prefer
    [moving to a new workspace](runbooks.md#move-to-a-new-workspace).
-7. **Proposal-set vote roles are self-declared.** **(Phase 0)** A vote names
-   the role it was cast with, and a set's decision floor reads that role
-   rather than the voter's role on the roster, so a Viewer's vote that claims
-   Admin meets an Admin floor.
-8. **Hoisted checks are retroactive.** **(Phase 0)** Proposal-set steps are
-   checked against the workspace's *current* member list, not the list at the
-   time of each step. Demoting an Admin later undoes the decisions they made;
-   promoting someone later validates steps they took before they could.
-9. **A `ligus serve` box enrolled as your device votes as you.** **(Phase 0)**
-   Votes and approvals sent through its API (from a phone, or from anyone
-   holding `serve.token` or a phone credential) count as your own vote. With
-   `LIGUS_SERVE_APPLY_ON_APPROVE=1`, approving also applies the change on the
-   box. A box that is its own member acts with its own role.
+7. **No human presence on admin events.** **(Phase 0, Track B)** Membership
+   and role changes, device revocation, dearth mode, lockdown clears, path
+   zones, workflow definitions, agent host or runtime changes and votes on
+   human-gated items are authorized by signature and role only, so whoever
+   holds a device's keys can make them as that device's person. Passkey
+   assertions over the event, inside the signed stamp, come with Track B
+   (rules version 2).
+8. **Phone approvals need your laptop.** **(Phase 0, Track B)** A `ligus
+   serve` box enrolled as your device signs as you without you being there,
+   so it refuses votes, rejects and lockdown clears from the phone or any
+   bearer caller (`403 presence_required`), and every device's fold drops a
+   vote such a box signs for you. Approve on a device that holds your account
+   key. A box that is its own member votes with its own role. Phone votes
+   return with passkey presence.
+9. **Agents ask for actions in reply text.** **(Phase 0, Track D)** Agents
+   file proposals, hand-offs and marks through `[[…]]` directives parsed from
+   their replies, and Copilot, Antigravity and Codex are driven through
+   per-CLI adapters. A typed Ligus MCP server and an Agent Client Protocol
+   (ACP) driver replace them in Track D; directives stay as the fallback for
+   runtimes without tool use.
 10. **Invite codes carry the base key only.** A joiner who arrives with a
     `hivews1:` code after a rotation needs the rotation sealed to their
     devices (inviting by GitHub handle does this).
@@ -200,26 +216,18 @@ fixes it.
     to its directory, account and friends routes (it has to present them to
     GitHub). Use those routes only with a relay you trust. The relay's admin
     API isn't in the open-source build, so per-person relay tokens need signed
-    tokens or a restart to change an allowlist.
+    tokens (short-lived ones from [ligus-auth](../deploy/ligus-auth.md), for
+    example) or a restart to change an allowlist.
 16. **The direct phone path is plain HTTP.** Use the relay tunnel or a
     tailnet, or a LAN you trust.
 17. **One `serve.token` for every direct-path client.** Revoking one direct
     phone means rotating it for all. Tunnel phones are revoked one by one.
-18. **Desktop runtimes run as you.** Claude Code and other CLI agents run
-    with your OS permissions within their own permission mode; isolation
-    is a git worktree, not a sandbox. Kubernetes executors are the
-    sandboxed path, and their controller isn't built yet.
-19. **Revoking a device doesn't rotate the key.** A revoked device's new
+18. **Revoking a device doesn't rotate the key.** A revoked device's new
     events are refused, but it still holds every key it had. Rotation happens
     only through **Remove & revoke** on a member (and a few invite paths); for
     your own lost device, move to a new workspace. See
     [Runbooks](runbooks.md#compromised-device).
-20. **Outside dearth mode, the default identity mode accepts events from a
-    device with no certificate.** During dearth mode, events no certified
-    device vouches for, and devices awaiting their second approval, are held
-    in every identity mode. See
-    [Dearth mode](../concepts/security.md#dearth-mode-a-tighter-entrance-on-demand).
-21. **Pre-encryption history isn't shown.** A device with a workspace key
+19. **Pre-encryption history isn't shown.** A device with a workspace key
     never applies a plaintext body from the relay, so events a workspace
     stored on a relay before it had a key don't appear on devices that sync
     them later. Devices that already held them keep them.
@@ -248,7 +256,7 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 | Core | A lease beat stamped in the future stayed fresh forever; a claim could jump to the maximum epoch and freeze a scope | Beats more than 2 minutes ahead are ignored; epoch jumps are bounded |
 | Core | Key seeds were written with the default umask (often `0644`) | Seeds are `0600` in a `0700` key dir |
 | Host | Ligus's own git calls ran repository hooks and fsmonitor | They never do |
-| Host | Agent CLIs, MCP servers, pre-flight and git inherited Ligus's secrets | Ligus secrets are scrubbed from child processes; provider keys still pass |
+| Host | Agent CLIs, MCP servers, pre-flight and git inherited Ligus's secrets | Child processes start from an allow-listed environment: no Ligus secrets, and only the provider key configured for that runtime |
 | Host | Restricted egress still loaded the repository's Claude Code settings and hooks | Under restricted egress Claude Code loads user settings only, with hooks off |
 | Host | Chat markdown loaded remote images, an exfiltration channel | Remote images render as links |
 | Host | A keyed workspace accepted plaintext bodies from the relay, so a relay could inject events | Keyed workspaces skip any unsealed body |
@@ -262,13 +270,23 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 | Relay | Client-supplied `Fly-Client-IP` was trusted everywhere | Only on Fly; elsewhere `LIGUS_RELAY_TRUSTED_PROXIES` decides |
 | Relay | Unbounded ids, list responses and memory-store growth | Id limits (`400`), `LIGUS_RELAY_MAX_LIST_BYTES`, `LIGUS_RELAY_MAX_STORE_BYTES` (`507`) |
 | Relay | The Helm chart's tunnel defaulted to open | Off, like the binary |
+| Core | Proposal-set vote roles were self-declared, so a Viewer's vote claiming Admin met an Admin floor | A vote counts only from the voter it names, at their role on the roster when they cast it, for the content digest it names; status is derived from counted votes |
+| Core | Hoisted checks were retroactive: a later demotion undid decisions, a later promotion validated earlier steps | Every event is judged at its own position on the workspace config log; events whose position hasn't synced wait instead of being dropped |
+| Core | Key possession alone let a non-member or ex-member post and self-enroll | Every author must be a member at the event's position; joining needs an Admin's single-use invite |
+| Core | Signatures covered re-encoded JSON, so fields an older build didn't know were lost or broke verification | Envelopes are verified, stored and re-sent as the bytes received |
+| Core | A removal in one workspace revoked devices in another; the identity mode came from the environment | Trust rosters are per workspace with the founder pinned from the invite; folds never read the environment |
+| Host | Agents could read the data dir (keys, settings, `serve.token`) and reach the network directly | Agent processes run in the OS sandbox with a per-turn egress proxy and an allow-listed environment |
+| Host | The tool role gate only held on headless hosts and read today's roster | One author gate on every host, at the author's role when the message was posted |
+| Host | Repository-supplied runtimes and MCP servers ran on clone | Inert until enabled on this device by digest |
+| Host | Votes through an owner-enrolled serve box counted as the owner's | The box refuses them (`403 presence_required`) and every device's fold drops them |
 
 ### Open {#findings-open}
 
 These are in [Known limitations](#known-limitations) and stay there until a
 release fixes them: headless devices stuck at key epoch 0, unsigned key
-rotations, self-declared vote roles, retroactive hoisted checks, agents that
-can read the data dir, no agent identity, and votes through an owner-enrolled
-serve box counting as the owner. On Kubernetes, DNS tunnelling through the
+rotations, no human presence on admin events, phone approvals through an
+owner-enrolled serve box (refused until passkey presence), agent output
+still signed by its host (all Track B), and agents' text directives in
+place of typed tools (Track D). On Kubernetes, DNS tunnelling through the
 cluster resolver remains possible (see
 [Kubernetes](../deploy/kubernetes.md#residual-risks)).

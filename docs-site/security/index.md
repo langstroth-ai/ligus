@@ -112,12 +112,18 @@ turn-scoped inputs. See [Keys off the cluster](../deploy/keys-off-cluster.md).
 | **Contributor** | messages, proposals and votes, proposal sets, agents, skills, vaults, workflows, channels, hosts, leases; clear a chat lockdown (humans only) |
 | **Viewer** | read; raise a chat lockdown |
 
-Non-members are treated as Viewers. Event kinds with no explicit rule
-require Owner. Proposal sets add their own decision role on top.
+Every event is judged by one authorization engine, the same on every device,
+against the roster **in force when it was made**: its author must have been a
+member then, with the role the event needs. A non-member's events are
+refused, joining needs a single-use invite an Admin issued, and a later
+promotion or demotion never changes an earlier verdict. Event kinds with no
+explicit rule require Owner. Proposal sets add their own decision role on
+top, and a vote counts at the voter's role when cast, for the exact content
+it names.
 
 - **Author gate on every host.** On the desktop, `ligus worker`, `ligus
   serve` and `ligus agent`, a turn runs at its configured tier only if the
-  message's author holds the host's floor: **Admin** when the turn can write,
+  message's author held the host's floor when they posted it: **Admin** when the turn can write,
   **Contributor** when it is read-only (`LIGUS_MCP_MIN_ROLE` overrides it; a
   lower value logs a warning). Below it, Ligus's own tool loop runs without
   tools, Claude Code, Antigravity and Copilot run read-only, and Codex,
@@ -133,7 +139,12 @@ require Owner. Proposal sets add their own decision role on top.
 - **Phone and serve approvals.** A `ligus serve` box enrolled as your device
   signs as you, so until passkey presence lands it refuses votes, rejects and
   lockdown clears from the phone or any bearer caller (`403
-  presence_required`): approve on your laptop.
+  presence_required`), and every device's fold drops a vote such a box signs
+  for you: approve on your laptop.
+- **Agents** can be given their own host-certified keys, judged by a capped
+  Agent tier that never votes, applies or administers; 2.0.0 hosts still sign
+  agent output with their own device key (see
+  [Known limitations](threat-model.md#known-limitations)).
 
 ## The 2.0 guards {#guards}
 
@@ -192,9 +203,29 @@ list with status is in
   is trusted only on Fly; tokens can be confined to workspaces
   (`LIGUS_RELAY_WORKSPACE_SCOPE`); the chart's tunnel is off by default. See
   [Self-hosting a relay](../networking/self-host.md).
+
+**2026-11-14: Phase 0, Tracks A, C and E.**
+
+- [Roles](#roles): one authorization engine judges every event at its
+  position on the workspace config log; votes count at the signer's role
+  then, for the content digest they name, and proposal status is derived
+  from counted votes. Every author must be a member at the event's position;
+  joining needs an Admin's single-use invite. Envelopes are verified and
+  re-sent as the bytes received. Trust rosters are per workspace, with the
+  founder pinned from the invite, and nothing in a fold reads the
+  environment (`LIGUS_IDENTITY_MODE` is ignored).
+- [The 2.0 guards](#guards): agent processes run in the OS sandbox with a
+  per-turn egress proxy and an allow-listed environment; repository-supplied
+  runtimes and MCP servers are inert until trusted on the device; the author
+  gate applies on every host at the author's role when they posted. Turn
+  measurements are device-local facts.
+- [Phone and serve approvals](#roles): a delegated serve box refuses votes,
+  rejects and lockdown clears, and folds drop its votes.
+- Organization sign-in: [ligus-auth](../deploy/ligus-auth.md) issues
+  short-lived relay tokens from your identity provider.
 - Still open and listed in
-  [Known limitations](threat-model.md#known-limitations) until the Phase 0
-  refactor fixes them: serve and CLI devices at key epoch 0, unsigned key
-  rotations, self-declared vote roles, retroactive hoisted checks, agents
-  that can read the data dir, no agent identity, serve API votes counting as
-  the owner.
+  [Known limitations](threat-model.md#known-limitations) until the rest of
+  Phase 0 fixes them: signed key rotations, the keyring on headless devices,
+  keys in an OS keystore, passkey presence on admin events and phone votes,
+  and hosts issuing agent keys (Track B); typed agent tools and the ACP
+  driver (Track D).

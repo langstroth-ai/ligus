@@ -50,16 +50,47 @@ signature verifies, but the author's role at that point did not permit the
 change, so every peer drops it. Membership is workspace-wide (via the config
 log) and roles are **Owner / Admin / Contributor / Viewer**.
 
-Proposal-set steps ride a chat's own log, so they are checked against the
-workspace's member list from the config log instead: a pre-flight result, a
-change to the dial, a quorum or stop signal, or a decision signed by someone
-below Contributor (or below the set's decision role), or by a non-member, is
-dropped on every device.
+### One engine, judged at each event's position {#authz-at-position}
+
+Every event a device folds, and every event it authors, goes through the
+same authorization engine, so authoring and folding can't disagree:
+
+- **Roles as of the event.** Each chat event stamps the position of the
+  workspace config log its author had seen. Proposal-set steps, votes and
+  applies are judged against the roster **at that position**, never today's:
+  demoting an Admin later doesn't undo their decisions, and promoting
+  someone later doesn't validate steps they took before. An event whose
+  position hasn't synced to this device yet **waits** (it is kept, left out
+  of the chat, and blocks side effects on the proposal it touches) and is
+  decided once it can be.
+- **Members only.** Every author must be a workspace member at the event's
+  position. Joining needs a single-use invite an Admin issued; a removed
+  account also needs an Admin to re-add it.
+- **Votes that mean something.** A vote counts only from the voter it
+  names, at their role then (the role a vote claims is ignored), and only
+  for the content digest it names; editing a proposal's patch voids earlier
+  votes. Proposal status is derived from counted votes, and *Applied* comes
+  only from a human member's apply event for the approved content. A vote
+  signed by a `ligus serve` box enrolled as its owner's device doesn't count
+  (see [Phone and serve approvals](../security/index.md#roles)).
+- **Agents.** An agent can sign with its own key, certified by the host it
+  is bound to and retired when it moves; such events are judged by a capped
+  Agent tier that never votes, applies or administers.
+- **Versioned rules.** The rules are versioned on the config log; a version
+  this build doesn't know makes the workspace read-only on this device.
+- **Bytes as received.** Envelopes are verified, stored and re-sent as the
+  bytes received, so an event from a newer build keeps fields this build
+  doesn't know and still verifies everywhere.
+- **No environment.** Nothing that decides which events fold reads the
+  environment; `LIGUS_IDENTITY_MODE` is ignored.
 
 The workspace **founder is pinned via the invite**: the invite carries the
-founding identity, and projection only accepts the real founder's seed as
-the base snapshot. So a malicious keyholder can't forge a competing base to
-hijack or fork the workspace out from under everyone else.
+founding identity and a fingerprint of the founder's account key, a joining
+device pins both, and projection only accepts the real founder's seed as the
+base snapshot. So a malicious keyholder can't forge a competing base, or a
+second key for the founder, to hijack or fork the workspace out from under
+everyone else. Trust rosters are kept per workspace: a removal in one
+workspace doesn't touch devices in another.
 
 ## The sandbox envelope around every agent turn
 
@@ -171,6 +202,9 @@ worker`, `ligus agent`) applies the same gate to every runtime:
   pi and Hermes are refused with a note in the chat. An author that can't be
   resolved is below every floor. On the desktop, your own messages always
   clear it.
+- The author's role is the one they held **when they posted the message**
+  (the roster at the message's position), so a promotion after the fact
+  doesn't widen an old message's reach.
 
 ## Trust this workspace {#workspace-trust}
 

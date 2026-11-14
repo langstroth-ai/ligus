@@ -5,10 +5,10 @@ people sign in with Touch ID, Face ID or a security key, and there are no
 passwords to leak. It suits a home lab or a family relay. This page sets up
 Pocket ID, [ligus-auth](ligus-auth.md) and the relay together.
 
-Pocket ID's passkeys and the passkeys Ligus uses for presence on admin
-actions can be the same physical authenticator, but nothing in the code ties
-them together: Pocket ID gates the relay, Ligus presence gates admin events
-in a workspace.
+Pocket ID's passkeys and the passkeys Ligus will use for presence on admin
+actions (Phase 0, Track B; not in 2.0.0) can be the same physical
+authenticator, but nothing in the code ties them together: Pocket ID gates
+the relay, while Ligus presence will gate admin events in a workspace.
 
 ## What you need
 

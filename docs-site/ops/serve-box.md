@@ -133,8 +133,10 @@ ligus serve enroll --new-device
   signs as you. Until passkey presence lands, it refuses approve, reject and
   lockdown clear from the phone or any bearer caller with `403
   {"error":"presence_required","hint":"approve on your laptop, or confirm with a passkey after updating"}`,
-  and records one fact per refusal. Approve on your laptop. A box that is its
-  own member is unaffected: its votes are its own.
+  and records one fact per refusal. Every device's fold drops a vote such a
+  box signs for you anyway, so a modified box can't get one counted. Approve
+  on your laptop. A box that is its own member is unaffected: its votes are
+  its own.
 
 ## Host liveness
 

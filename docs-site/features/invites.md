@@ -30,6 +30,12 @@ Invite codes look like `hivews1:…` (see the
 format). Because the code embeds the workspace key, treat it like a
 secret — share it over a channel you trust.
 
+Only an **Admin** (or the Owner) can make an invite code, and each code
+carries a fresh **single-use invite**: it admits one person, once. Copy a
+new code for each person you invite. Someone who joins without an unused
+invite, or a removed member coming back, is refused on every device until an
+Admin invites (or re-adds) them.
+
 The relay-brokered **short code** — a brief token (e.g. `K7P2QX`) that
 published the full invite to the relay so a peer could redeem it — has
 been **removed**: it put the workspace key on the relay, which E2EE now

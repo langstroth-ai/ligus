@@ -41,6 +41,38 @@ Full release notes are on the
   [Operations](../ops/operations.md), and references for the
   [CLI](cli.md), [environment variables](env-vars.md),
   [serve API](serve-api.md) and [settings](settings.md).
+- **Every device judges history the same way.** One authorization engine
+  judges each event at its position on the workspace config log: votes count
+  at the voter's role when cast, for the exact content they name; proposal
+  status is derived from counted votes; later promotions and demotions never
+  rewrite earlier verdicts; events whose position hasn't synced wait instead
+  of being dropped. Every author must be a member at the event's position,
+  and joining needs an Admin's single-use invite. Envelopes are kept and
+  re-sent as the bytes received, so a newer build's fields survive.
+  [Authorization](../concepts/security.md#authz-at-position)
+- **Agent processes run in an OS sandbox.** Seatbelt on macOS, bubblewrap +
+  Landlock + seccomp on Linux: no reads of Ligus's data dir or credential
+  dirs, writes only in the worktree, and the network only through a per-turn
+  egress proxy. Children start from an allow-listed environment.
+  [The OS sandbox](../concepts/security.md#os-sandbox)
+- **One author gate on every host.** A write-capable turn needs an Admin's
+  message and a read-only one a Contributor's, at the author's role when they
+  posted. [The author gate](../concepts/security.md#author-gate)
+- **Trust this workspace.** Runtimes and MCP servers a repository supplies
+  stay inert until you enable them on your device (`ligus trust`).
+  [Trust this workspace](../concepts/security.md#workspace-trust)
+- **Telemetry stays on your device.** Turn measurements are device-local
+  facts (`ligus facts export --jsonl`); only a bounded daily outcome summary
+  syncs. [Telemetry](../concepts/security.md#facts)
+- **Phone approvals wait for presence.** A `ligus serve` box enrolled as your
+  device refuses votes, rejects and lockdown clears (`403
+  presence_required`) until passkey presence lands, and folds drop its votes.
+  [Securing the box](../ops/serve-box.md)
+- **Organization sign-in.** `ligus auth login` and Settings → Team sync sign
+  in through [ligus-auth](../deploy/ligus-auth.md) with your identity
+  provider (setups for [Pocket ID](../deploy/ligus-auth-pocket-id.md) and
+  [Dex](../deploy/ligus-auth-dex.md)) and keep a short-lived relay token
+  fresh.
 - **Desktop.** The app is `Ligus.app`. Theme and pane layout reset once, and
   macOS asks again for folder and notification access. An auto-updated app
   may still be at `/Applications/Hive.app`; you can rename it to `Ligus.app`.

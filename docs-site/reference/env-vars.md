@@ -25,7 +25,7 @@ column says which. The relay's own variables are on
 | `LIGUS_WORKSPACE` | `default` | CLI; desktop on first launch only | relay room |
 | `LIGUS_WORKSPACE_KEY` | from `config.toml` | CLI; desktop on first launch only | E2EE workspace passphrase. Sync refuses to run without one |
 | `LIGUS_RELAY_ISSUER_KEY` | unset | desktop, first launch only | relay issuer seed for minting agent tokens from the People pane (local only, never synced) |
-| `LIGUS_IDENTITY_MODE` | `relay` | desktop and CLI | `github-signing-keys` (also `github`, `option-c`) verifies each account key against the GitHub login's SSH signing keys, which survives a hostile relay |
+| `LIGUS_IDENTITY_MODE` | ignored | desktop and CLI | ignored since 2.0: every device verifies and folds by the same rules (a set value logs one warning). The founder's account key is pinned from the invite instead |
 | `LIGUS_GITHUB_CLIENT_ID` | the built-in OAuth App | desktop | OAuth App client id for GitHub sign-in (wins over Settings) |
 | `LIGUS_DISABLE_P2P` | unset | desktop | any value turns off direct peer-to-peer sync (iroh) |
 
