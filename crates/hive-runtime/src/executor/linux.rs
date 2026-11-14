@@ -36,6 +36,11 @@ use crate::egress::EgressProxy;
 /// The hidden first argument that turns a Ligus binary into the helper.
 pub const HELPER_ARG: &str = "__ligus-sandbox-exec-linux";
 
+/// The env var that carries the egress proxy's token to the helper (C-12:
+/// never on a command line, which every user on the host can read with
+/// `ps`). The helper takes it out of its env before running the command.
+pub const PROXY_TOKEN_ENV: &str = "LIGUS_SANDBOX_PROXY_TOKEN";
+
 pub struct Bwrap {
     bwrap: PathBuf,
 }
@@ -176,7 +181,6 @@ pub fn helper_args(plan: &EnforcementPlan, proxy: Option<&EgressProxy>) -> Vec<O
         if let Some(sock) = p.unix_socket() {
             a.extend(["--proxy-sock".into(), sock.as_os_str().to_os_string()]);
             a.extend(["--proxy-port".into(), p.port().to_string().into()]);
-            a.extend(["--token".into(), p.token().into()]);
             for hp in allow.iter().filter(|h| h.is_loopback()) {
                 a.extend(["--loop-port".into(), hp.port.to_string().into()]);
             }
@@ -205,6 +209,9 @@ impl TurnExecutor for Bwrap {
             .current_dir(cwd)
             .env_clear()
             .envs(plan_env(plan, proxy));
+        if let (Some(p), EgressPlan::Proxy { .. }) = (proxy, &plan.egress) {
+            c.env(PROXY_TOKEN_ENV, p.token());
+        }
         // bwrap itself leads a new session/process group too (the inner
         // command gets `--new-session`), so callers can kill the group.
         super::new_session(&mut c);
@@ -254,7 +261,6 @@ fn parse_helper(args: Vec<OsString>) -> io::Result<HelperOpts> {
             "--rw" => o.rw.push(PathBuf::from(val()?)),
             "--proxy-sock" => o.proxy_sock = Some(PathBuf::from(val()?)),
             "--proxy-port" => o.proxy_port = Some(val()?.to_string_lossy().parse().map_err(|_| bad("port"))?),
-            "--token" => o.token = val()?.to_string_lossy().into_owned(),
             "--loop-port" => o.loop_ports.push(val()?.to_string_lossy().parse().map_err(|_| bad("port"))?),
             "--" => {
                 o.cmd = it.collect();
@@ -266,7 +272,18 @@ fn parse_helper(args: Vec<OsString>) -> io::Result<HelperOpts> {
     if o.cmd.is_empty() {
         return Err(bad("no command"));
     }
+    o.token = take_proxy_token();
     Ok(o)
+}
+
+/// The proxy token from the helper's env, removed from it so the command
+/// (which inherits the env) never sees this copy.
+fn take_proxy_token() -> String {
+    let t = std::env::var(PROXY_TOKEN_ENV).unwrap_or_default();
+    // SAFETY (edition 2021: safe fn): the helper is single-threaded here,
+    // before it starts its forwarders or the command.
+    std::env::remove_var(PROXY_TOKEN_ENV);
+    t
 }
 
 fn splice(a: std::os::unix::net::UnixStream, b: std::net::TcpStream) {
@@ -422,4 +439,50 @@ fn run_helper(args: Vec<OsString>) -> io::Result<i32> {
     }
     let status = cmd.spawn()?.wait()?;
     Ok(status.code().unwrap_or_else(|| 128 + status.signal().unwrap_or(9)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::egress::HostPort;
+
+    fn plan(tmp: &Path) -> EnforcementPlan {
+        EnforcementPlan {
+            worktree: tmp.join("wt"),
+            worktree_writable: false,
+            read_only: vec![],
+            deny_read: vec![],
+            allow_read: vec![],
+            write_extra: vec![],
+            tmp: tmp.to_path_buf(),
+            egress: EgressPlan::Proxy { allow: vec![HostPort::new("api.anthropic.com", 443), HostPort::new("127.0.0.1", 11434)] },
+            env: vec![],
+            args: vec![],
+            mcp: vec![],
+            ligus_mcp_socket: None,
+        }
+    }
+
+    /// C-12: the egress proxy's token used to be a helper argument, readable
+    /// by every user on the host in `ps`. It now reaches the helper in its
+    /// env, which the helper clears before running the command.
+    #[test]
+    fn proxy_token_stays_off_the_helper_command_line() {
+        let t = tempfile::tempdir().unwrap();
+        let p = plan(t.path());
+        let proxy = EgressProxy::start(vec![HostPort::new("api.anthropic.com", 443)], Some(&t.path().join("e.sock"))).unwrap();
+        let token = proxy.token().to_string();
+        assert!(!token.is_empty());
+        assert!(!helper_args(&p, Some(&proxy)).iter().any(|a| a.to_string_lossy().contains(&token)), "token in the helper's args");
+        let c = Bwrap { bwrap: PathBuf::from("/usr/bin/bwrap") }.confine(OsStr::new("/bin/true"), &[], t.path(), &p, Some(&proxy)).unwrap();
+        assert!(!c.get_args().any(|a| a.to_string_lossy().contains(&token)), "token on bwrap's command line");
+        assert!(c.get_envs().any(|(k, v)| k == PROXY_TOKEN_ENV && v.is_some_and(|v| v == token.as_str())), "the helper gets the token in its env");
+        // The helper takes it out of its env.
+        std::env::set_var(PROXY_TOKEN_ENV, "tok-123");
+        let o = parse_helper(vec!["--proxy-port".into(), "1".into(), "--".into(), "true".into()]).unwrap();
+        assert_eq!(o.token, "tok-123");
+        assert!(std::env::var_os(PROXY_TOKEN_ENV).is_none(), "the command would inherit the token");
+        // The old argument is gone.
+        assert!(parse_helper(vec!["--token".into(), "x".into(), "--".into(), "true".into()]).is_err());
+    }
 }
