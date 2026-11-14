@@ -8,7 +8,10 @@
 //! - a message from another member that `@mentions` the user → `mention`;
 //! - a proposal waiting for review → `proposal.created`, except a workflow
 //!   gate's proposal, which is announced as `workflow.approval` instead;
-//! - a workflow run's gate waiting for approval → `workflow.approval`.
+//! - a workflow run's gate waiting for approval → `workflow.approval`;
+//! - a reviewer recruit (`flowRecorded` recruit `approvers`) naming the user
+//!   → `review.recruit`, pointing at the proposal that has waited longest for
+//!   them.
 //!
 //! "The user" is the identity the phone posts as — the owner, once this box is
 //! enrolled as their device — plus every actor that is the same person: a
@@ -55,6 +58,11 @@ impl Me {
             }
         }
         me
+    }
+
+    /// Whether `id` (a member or actor id) is the user.
+    pub fn is(&self, id: &str) -> bool {
+        self.ids.contains(id)
     }
 
     /// Written by the user (here, on the phone, or on their desktop).
@@ -147,6 +155,46 @@ pub fn for_workflow_gate(s: &ChatSession, run: &WorkflowRun, node: &str) -> Opti
     push.workflow_run_id = Some(run.id.to_string());
     push.workflow_id = Some(run.definition_id.to_string());
     push.preview = Some(stage.to_string());
+    Some((notice, push))
+}
+
+/// The proposal a reviewer recruit points the user at: the open one that has
+/// waited longest for them (they haven't voted on it and didn't write it),
+/// preferring the chat the recruit fired in.
+pub fn waiting_for(sessions: &[ChatSession], chat: uuid::Uuid, me: &Me) -> Option<(uuid::Uuid, uuid::Uuid)> {
+    let waiting = |s: &ChatSession| {
+        s.proposals
+            .iter()
+            .filter(|p| super::hub::is_open(p) && !me.is(&p.author_actor_id) && !p.approvals.iter().any(|a| me.is(&a.actor_id)))
+            .map(|p| (p.created_at, s.id, p.id))
+            .collect::<Vec<_>>()
+    };
+    let oldest = |v: Vec<(hive_core::Timestamp, uuid::Uuid, uuid::Uuid)>| v.into_iter().min_by_key(|(t, _, _)| *t).map(|(_, c, p)| (c, p));
+    let here = sessions.iter().find(|s| s.id == chat).map(waiting).unwrap_or_default();
+    oldest(here).or_else(|| oldest(sessions.iter().filter(|s| !s.archived).flat_map(waiting).collect()))
+}
+
+/// A reviewer recruit that names the user (by member or actor id):
+/// `review.recruit`, deep-linking to the proposal waiting longest for them.
+/// The preview is the proposal's title, so it obeys the phone's previews
+/// setting like every other push.
+pub fn for_recruit(sessions: &[ChatSession], s: &ChatSession, r: &hive_core::flow::RecruitNotice, me: &Me) -> Option<(Notice, PushContent)> {
+    if r.action != "approvers" || !r.member_ids.iter().any(|id| me.is(id)) {
+        return None;
+    }
+    let target = waiting_for(sessions, s.id, me);
+    let (chat, title) = match target.and_then(|(c, _)| sessions.iter().find(|x| x.id == c)) {
+        Some(c) => (c, c.title.clone()),
+        None => (s, s.title.clone()),
+    };
+    let notice = ntfy::recruit_notice(r.queue_len, &title, chat.id);
+    let mut push = base("review.recruit", chat, notice.title.clone());
+    if let Some((_, pid)) = target {
+        push.proposal_id = Some(pid.to_string());
+        push.preview = chat.proposals.iter().find(|p| p.id == pid).map(|p| p.title.clone());
+    } else {
+        push.fixed_body = notice.body.clone();
+    }
     Some((notice, push))
 }
 
@@ -336,5 +384,50 @@ mod tests {
         assert_eq!(pt["body"], "Approval", "the stage name is the preview");
         assert_eq!(push_plaintext(&p, false, 6, 0)["body"], "");
         assert!(for_workflow_gate(&f.s, &run, "nope").is_none());
+    }
+
+    #[test]
+    fn a_recruit_naming_you_points_at_the_oldest_proposal_waiting_for_you() {
+        let mut f = fixture();
+        let mut old = ActionProposal::new("Pick a cache", ProposalKind::Decision, "ana-1");
+        old.author_actor_id = "ana-1".into();
+        old.created_at = hive_core::Timestamp::from_unix_seconds(1_000);
+        let newer = ActionProposal::new("Rename module", ProposalKind::Decision, "ana-1");
+        // One the user wrote doesn't count.
+        let mut own = ActionProposal::new("My own", ProposalKind::Decision, "desk-1");
+        own.author_actor_id = "desk-1".into();
+        own.created_at = hive_core::Timestamp::from_unix_seconds(10);
+        let old_id = old.id;
+        f.s.proposals = vec![own, newer, old];
+        let me = f.me();
+        let r = |members: Vec<&str>| hive_core::flow::RecruitNotice {
+            id: Uuid::new_v4(),
+            action: "approvers".into(),
+            queue_len: 6,
+            oldest_wait_ms: 0,
+            member_ids: members.into_iter().map(String::from).collect(),
+            to_host: String::new(),
+            from_host: String::new(),
+            reference: String::new(),
+            at_ms: 0,
+        };
+        let sessions = vec![f.s.clone()];
+        // Named by a linked identity (the desktop member) still counts.
+        let (notice, p) = for_recruit(&sessions, &f.s, &r(vec!["desk-1"]), &me).unwrap();
+        assert_eq!(p.kind, "review.recruit");
+        assert_eq!(p.proposal_id, Some(old_id.to_string()));
+        assert_eq!(notice.title, "The review queue needs you");
+        assert!(notice.body.contains("6 proposals waiting"));
+        let on = push_plaintext(&p, true, 1, 0);
+        assert_eq!(on["body"], "Pick a cache");
+        let off = push_plaintext(&p, false, 2, 0);
+        assert_eq!(off["body"], "");
+        assert_eq!(off["proposalId"], old_id.to_string());
+        assert!(!off.to_string().contains("cache"), "previews off hides the title");
+        // Someone else's recruit, or another action, isn't yours.
+        assert!(for_recruit(&sessions, &f.s, &r(vec!["ana-1"]), &me).is_none());
+        let mut stop = r(vec!["desk-1"]);
+        stop.action = "stop_upstream".into();
+        assert!(for_recruit(&sessions, &f.s, &stop, &me).is_none());
     }
 }

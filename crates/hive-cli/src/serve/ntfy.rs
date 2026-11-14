@@ -84,6 +84,18 @@ pub fn reply_notice(agent: &str, chat_title: &str, chat_id: Uuid, failed: bool) 
     }
 }
 
+/// The notice asking this member to help with a backed-up review queue.
+pub fn recruit_notice(queue_len: u32, chat_title: &str, chat_id: Uuid) -> Notice {
+    let chat = short(if chat_title.trim().is_empty() { "Untitled" } else { chat_title }, 60);
+    let n = queue_len.max(1);
+    Notice {
+        title: "The review queue needs you".into(),
+        body: format!("{n} proposal{} waiting — from “{chat}”", if n == 1 { "" } else { "s" }),
+        chat_id,
+        tags: "inbox_tray",
+    }
+}
+
 /// The notice for a new proposal awaiting review.
 pub fn proposal_notice(title: &str, chat_title: &str, chat_id: Uuid) -> Notice {
     let chat = short(if chat_title.trim().is_empty() { "Untitled" } else { chat_title }, 60);

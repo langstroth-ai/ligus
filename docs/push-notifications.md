@@ -51,7 +51,7 @@ Plaintext (JSON) of every push:
 | `body` | ≤ 512 bytes | always | the preview, or `""` with previews off |
 | `chatId` | UUID | chat events | deep link `hive://chat/<chatId>`; also the collapse key (HMACed) |
 | `sender` | ≤ 64 bytes | `message.done`, `mention` | the agent or member name alone |
-| `proposalId` | UUID | `proposal.created`, `workflow.approval` | the proposal to review |
+| `proposalId` | UUID | `proposal.created`, `workflow.approval`, `review.recruit` | the proposal to review |
 | `workflowRunId` | UUID | `workflow.approval` | the run waiting on the gate |
 | `workflowId` | UUID | `workflow.approval` | the run's workflow definition |
 | `preview` | `true` | when `body` is a content preview | |
@@ -65,6 +65,7 @@ Unknown fields and kinds must be ignored by the app (an unknown kind shows
 | `mention` | a message from an agent or another member `@mentions` you | `Ana mentioned you` | first 120 characters of the message |
 | `proposal.created` | a proposal is waiting for review (not a workflow gate's) | `Change ready for review` | the proposal title, cut the same way |
 | `workflow.approval` | a workflow run's approval gate is waiting (again on each rerouted attempt) | `<workflow name> needs approval` | the gate's stage name |
+| `review.recruit` | a backed-up review queue asked you to help (a `flowRecorded` recruit with action `approvers` naming you) | `The review queue needs you` | the title of the proposal that has waited longest for you (one you haven't voted on and didn't write); `proposalId` deep-links to it |
 | `phone.paired` | a new phone was paired with this host | `New phone paired` | the phone's name (always shown) |
 | `test` | reserved for a test push | | |
 

@@ -151,6 +151,21 @@ been silent for two lease periods (three minutes). `GET /v1/guards` reports
 the current holder and epoch, along with dearth mode and locked chats. See
 [Workspace guards](../features/guards.md).
 
+### What the phone reads from the box (2.0)
+
+| Endpoint | What |
+|---|---|
+| `GET /v1/proposal-sets`, `GET /v1/proposal-sets/{id}`, `GET /v1/chats/{id}/proposal-sets` | Proposal sets with standings, posted assessments and pre-flight results (read-only; votes use the proposal routes) |
+| `GET /v1/guards` | Dearth mode, locked chats, the coordinator, and whether this box's identity may clear a lockdown |
+| `POST /v1/chats/{id}/lockdown/clear` | Clear a chat's lockdown as this box's identity: a human member at Contributor or above only, through the desktop's signed event |
+| `GET /v1/flow` | Board, review queue and alert, marks, routing summary |
+| `GET /v1/chats/{id}/handoffs` | A chat's hand-off cards |
+
+Every route needs the pairing token (or the relay tunnel) like the rest of the
+API, and acts at the box identity's real roster role. A reviewer recruit that
+names you pushes `review.recruit` to paired phones with push on, honouring each
+phone's previews setting. The full contract is in `docs/ios-app.md`.
+
 ## Apply on approve
 
 By default, approving a file-diff proposal from the phone records the vote

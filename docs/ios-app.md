@@ -92,6 +92,13 @@ and public addresses unless `LIGUS_SERVE_ALLOW_ANY_BIND=1`.
 | GET | `/v1/proposals/{id}/comments` | `{comments: [Comment]}`, the refinement thread, oldest first |
 | POST | `/v1/proposals/{id}/comments` `{text, requestChanges?}` | `{comment, proposal}`. `requestChanges: true` marks it a change request |
 | POST | `/v1/proposals/{id}/request-changes` `{note?}` | `{proposal, message}`. The desktop's "Send to agent to revise"; `note` is added first as a change request |
+| GET | `/v1/proposal-sets?status=open\|all` | `{sets: [ProposalSet]}`, every [proposal set](../docs-site/features/proposal-sets.md) in the workspace, newest first (open by default). Read-only |
+| GET | `/v1/proposal-sets/{id}` | `{set: ProposalSet}` |
+| GET | `/v1/chats/{id}/proposal-sets?status=open\|all` | `{sets: [ProposalSet]}`, one chat's sets (all by default) |
+| GET | `/v1/guards` | `{dearth: {reason, broodPaths, allowedMcpServers, setBy, setAt}?, pendingMembers, lockedChats: [{chatId, chatTitle, signals: [{signal, detail, raisedAt}]}], coordinator: {holder, epoch, leaseMs, released, isThis}?, myRole, canClearLockdown}` |
+| POST | `/v1/chats/{id}/lockdown/clear` | `{chatId, cleared: true}`. Writes the same signed `ChatLockdownCleared` the desktop's *Clear lockdown* does. `403` unless this box's identity is a human member at Contributor or above; `409` when the chat isn't locked |
+| GET | `/v1/flow` | `{board: [BoardItem], queue: Queue, marks: [Mark], routing: Routing}`, the desktop's Flow pane, read-only; see below |
+| GET | `/v1/chats/{id}/handoffs` | `{handoffs: [Handoff]}`, oldest first |
 | GET | `/v1/dashboard` | `{title, source, refreshSeconds, sections: [{title, panels: [Panel]}], updatedAt, error?}`. Defined by the host's `dashboard.toml`; see [dashboard.md](dashboard.md) |
 | GET | `/v1/appearance` | `{palette, mode, source}`, the host's theme for a phone set to "Match host". `palette` is `pollen`, `studio`, `harbor`, `slate`, `meadow`, `obsidian` or `null`; `mode` is `auto`, `light`, `dark` or `null`; `source` is `config`, `desktop` or `none` |
 | GET | `/v1/lab/status` | **Deprecated** (`Deprecation: true`; use `/v1/dashboard`). `{workers: [{name, up}], powerWatts?, costPerHour?, ratePerKwh?, temps: [{name, celsius}], solar?, updatedAt}` |
@@ -117,6 +124,48 @@ and events also say what this box's identity, the one the phone acts as, can
 do: `myRole`, `myVote: "approve"|"reject"|null`, `canVote` (its role meets the
 content floor the core applies to votes and notes) and `isMine`.
 `Comment = {id, actorId, author, role, text, requestChanges, createdAt}`.
+
+`ProposalSet = {id, chatId, chatTitle, question, body, author, taskClass?,
+phase: "scouting"|"piping"|"decided", open, round, attempt, agentQuorum,
+qualityBar, decayPerRound, requiredApprovals, approvalRoleFloor, dial:
+"fast"|"balanced"|"careful"|"custom", scoutingDeadline?, deadlinePassed,
+frontRunner?, tieBreak, winner?, decidedAt?, createdAt, alternatives:
+[Alternative], decideOn: "desktop"}`.
+`Alternative = {proposalId, label: "A"|"B"|…, title, body, kind, status,
+author, changedFiles, support, qualifyingScouts, scouts, runtimes, meetsQuorum,
+frozen, active, superseded, isFrontRunner, isWinner, stopReason?:
+"quorum"|"tieDeadline"|"withdrawn", stoppedBy?, assessments: [{id, scoutName,
+scoutRuntime, score, currentSupport, rationale, round, isSelf, createdAt}],
+qualifyingApprovals, requiredApprovals, votes, myVote, canVote, isMine,
+reverted, preflight?: {passed, tests, baseUnchanged, hostsOnline, at}}`, each
+check `{status: "passed"|"failed"|"skipped"|"unknown", note}`. `support` is
+the decayed sum over counting scouts; an assessment by the alternative's own
+producer is listed with `isSelf` and never counts. Assessments are blind until
+posted: only posted ones exist, so a scout in flight is never shown. Vote on an
+alternative with `POST /v1/proposals/{proposalId}/approve|reject`; tuning,
+pre-flight, apply and the decision are desktop-only (`decideOn`).
+
+`BoardItem = {id, kind: "failingTests"|"unreviewedProposal"|"failedStage"|"needsReview",
+kindLabel, title, chatId?, chatTitle?, proposalId?, sinceMs, stimulus, claimedBy}`.
+`Queue = {gate: {open, oldestWaitMs, medianWaitMs, trembleShare,
+openedLastHour, decidedLastHour, overLimit}, edges: [{edge, samples,
+medianWaitMs, trembleShare}], alert?, queueLimit, longWaitMs, recruits: [{id,
+action, queueLen, oldestWaitMs, memberCount, chatId, atMs}]}` (the default
+thresholds: queue limit 5, long wait 2 h). `Mark = {id, kind:
+"claim"|"underConstruction"|"needsReview", kindLabel, path, lines?: [a, b],
+taskId, note, by, byAgent, atMs, expiresMs?, describe, chatId?, chatTitle?}`.
+`Routing = {windowDays: 14, decisions, liveDecisions, offPrimaryShare,
+explored, topPicks: [{agent, name, count}], arms: [{arm, turns, proposals,
+accepted, judged, acceptanceRate?}], stops: [{route, name, reason, untilMs,
+failures}]}`. `Handoff = {id, from, to, fromName, toName, task, taskClass,
+branch, files, via: "mention"|"stage", quality: {testsPassed?, proposalId?,
+proposalStatus, turns, costUsd, error}, atMs, messageId?, parcel?: {keyFiles,
+decisions, ruledOut, notes}}`; `messageId` is the reply that handed the work
+on, so the app can place the card in the transcript.
+
+A workflow run in `GET /v1/chats/{id}/details` also carries `coordinator:
+{holder, holderLabel, epoch, released, isThis, online}?`, the device driving it
+(its run lease), or `null`.
 `role` everywhere is `owner`, `admin`, `contributor` or `viewer`.
 
 Field notes:

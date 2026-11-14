@@ -2348,3 +2348,379 @@ async fn guards_endpoint_shows_dearth_lockdowns_and_the_coordinator() {
     assert_eq!(coordinator["epoch"], 1);
     h.handle.shutdown();
 }
+
+// ── Phone 2.0: proposal sets, lockdown clear, Flow, reviewer recruits ──────
+
+/// Demote this box's identity to Viewer on the desktop and wait until the box
+/// has synced the demotion into `chat_id`'s roster.
+async fn demote_box_to_viewer(h: &Harness, chat_id: Uuid) {
+    let me = h.handle.shared.my_actor_id();
+    let ws = h.handle.shared.ws;
+    let mut demoted = false;
+    for _ in 0..50 {
+        sync_once(&h.desktop).await.unwrap();
+        let mut svc = open_service(&h.desktop).unwrap();
+        let cfg = workspace_config_session_id(ws);
+        if svc.load(cfg).unwrap().is_some_and(|s| s.members.iter().any(|m| m.id == me)) {
+            svc.set_member_role(cfg, ws, me.clone(), hive_core::WorkspaceRole::Viewer).unwrap();
+            drop(svc);
+            sync_once(&h.desktop).await.unwrap();
+            demoted = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert!(demoted, "the box never joined the desktop's roster");
+    for _ in 0..50 {
+        let viewer_here = h.handle.shared.lock().load(chat_id).unwrap().unwrap().role_of(&me) == hive_core::WorkspaceRole::Viewer;
+        let (_, config) = api::hosts_and_agents(&h.handle.shared).ok().unwrap();
+        if viewer_here && config.role_of(&me) == hive_core::WorkspaceRole::Viewer {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    panic!("the demotion never synced to the box");
+}
+
+/// A chat with a two-alternative proposal set; alternative A has one posted
+/// scout assessment. Returns (chat, set, A, B).
+async fn chat_with_set(h: &Harness) -> (Uuid, Uuid, Uuid, Uuid) {
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    let ws = h.handle.shared.ws;
+    let mut a = hive_core::ActionProposal::new("Cache in memory", hive_core::ProposalKind::Decision, "");
+    a.producing_agent_id = Some(h.agent_id);
+    let b = hive_core::ActionProposal::new("Cache in Redis", hive_core::ProposalKind::Decision, "planner");
+    let (aid, bid) = (a.id, b.id);
+    let set_id = {
+        let mut svc = h.handle.shared.lock();
+        let set = hive_core::ProposalSet::new("Where should the cache live?", "planner", vec![]);
+        let set = svc.open_proposal_set(chat_id, ws, set, vec![a, b]).unwrap();
+        let assessment = hive_core::proposal_sets::ScoutAssessment {
+            id: Uuid::new_v4(),
+            proposal_id: aid,
+            scout_agent_id: None,
+            scout_name: "reviewer".into(),
+            scout_runtime: "rt-2".into(),
+            score: 80,
+            rationale: "Simple and fast enough".into(),
+            round: 0,
+            attempt: 0,
+            created_at: hive_core::Timestamp::now(),
+        };
+        svc.post_scout_assessment(chat_id, ws, set.id, assessment).unwrap().expect("assessment folded");
+        set.id
+    };
+    h.handle.shared.after_write();
+    (chat_id, set_id, aid, bid)
+}
+
+/// The phone reads proposal sets (standings, posted assessments, quorum and
+/// pre-flight state) and votes on an alternative through the ordinary vote
+/// route; nothing on the set routes writes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn proposal_sets_are_listed_with_standing_and_votable_alternatives() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let (chat_id, set_id, aid, bid) = chat_with_set(&h).await;
+
+    let sets = h.get("/v1/proposal-sets").await;
+    let set = &sets["sets"][0];
+    assert_eq!(set["id"], json!(set_id), "{sets}");
+    assert_eq!(set["chatId"], json!(chat_id));
+    assert_eq!(set["question"], "Where should the cache live?");
+    assert_eq!(set["phase"], "scouting");
+    assert_eq!(set["open"], true);
+    assert_eq!(set["dial"], "balanced");
+    assert_eq!(set["decideOn"], "desktop");
+    let alts = set["alternatives"].as_array().unwrap();
+    assert_eq!(alts.len(), 2);
+    let (a, b) = (&alts[0], &alts[1]);
+    assert_eq!((a["label"].as_str(), a["proposalId"].clone()), (Some("A"), json!(aid)));
+    assert_eq!((b["label"].as_str(), b["proposalId"].clone()), (Some("B"), json!(bid)));
+    assert_eq!(a["assessments"][0]["scoutName"], "reviewer");
+    assert_eq!(a["assessments"][0]["score"], 80);
+    assert_eq!(a["assessments"][0]["currentSupport"], 80);
+    assert_eq!(a["assessments"][0]["isSelf"], false);
+    assert_eq!(a["support"], 80);
+    assert_eq!(a["scouts"], 1);
+    assert_eq!(b["assessments"], json!([]), "B has no posted assessment");
+    assert_eq!(b["support"], 0);
+    assert_eq!(a["frozen"], false);
+    assert_eq!(a["isFrontRunner"], false);
+    assert!(a.get("preflight").is_none() || a["preflight"].is_null());
+    assert_eq!(a["canVote"], true);
+    assert_eq!(a["myVote"], Value::Null);
+
+    // The chat's and the single-set views agree.
+    let per_chat = h.get(&format!("/v1/chats/{chat_id}/proposal-sets")).await;
+    assert_eq!(per_chat["sets"][0]["id"], json!(set_id));
+    let one = h.get(&format!("/v1/proposal-sets/{set_id}")).await;
+    assert_eq!(one["set"]["alternatives"][1]["title"], "Cache in Redis");
+    let (code, _) = status_of(&h, reqwest::Method::GET, &format!("/v1/proposal-sets/{}", Uuid::new_v4()), None).await;
+    assert_eq!(code, 404);
+    let (code, _) = status_of(&h, reqwest::Method::GET, "/v1/proposal-sets?status=bogus", None).await;
+    assert_eq!(code, 400);
+    // Read-only: no route writes a set.
+    let (code, _) = status_of(&h, reqwest::Method::POST, &format!("/v1/proposal-sets/{set_id}"), Some(json!({}))).await;
+    assert_eq!(code, 405);
+
+    // Voting on an alternative is the ordinary proposal vote.
+    let voted = h.send(reqwest::Method::POST, &format!("/v1/proposals/{bid}/approve"), None).await;
+    assert_eq!(voted["proposal"]["setId"], json!(set_id));
+    let one = h.get(&format!("/v1/proposal-sets/{set_id}")).await;
+    assert_eq!(one["set"]["alternatives"][1]["myVote"], "approve", "{one}");
+    assert_eq!(one["set"]["alternatives"][1]["qualifyingApprovals"], 1);
+    // An unauthenticated caller sees nothing.
+    let r = h.client.get(format!("{}/v1/proposal-sets", h.base)).send().await.unwrap();
+    assert_eq!(r.status().as_u16(), 401);
+    h.handle.shutdown();
+}
+
+/// Clearing a lockdown from the phone writes the same signed
+/// `ChatLockdownCleared` the desktop does, only for a human Contributor+; a
+/// Viewer is refused and the lockdown stays.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn lockdown_clear_needs_a_human_contributor() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let lock = |chat: Uuid| {
+        h.handle
+            .shared
+            .lock()
+            .self_medicate(ws, chat, &[(hive_core::guard::LockdownSignal::InjectionDetected, "ignore-previous".into())])
+            .unwrap();
+    };
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Triage" }))).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    lock(chat_id);
+
+    let g = h.get("/v1/guards").await;
+    assert_eq!(g["lockedChats"][0]["chatId"], json!(chat_id), "{g}");
+    assert_eq!(g["lockedChats"][0]["chatTitle"], "Triage");
+    assert_eq!(g["lockedChats"][0]["signals"][0]["signal"], "injectionDetected");
+    assert!(g["lockedChats"][0]["signals"][0]["raisedAt"].is_string());
+    assert_eq!(g["canClearLockdown"], true, "{g}");
+
+    let res = h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/lockdown/clear"), None).await;
+    assert_eq!(res["cleared"], true);
+    let g = h.get("/v1/guards").await;
+    assert_eq!(g["lockedChats"], json!([]), "{g}");
+    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    assert!(!s.guards.lockdown_active());
+    assert!(s.messages.iter().any(|m| m.body.contains("cleared this chat's lockdown")), "the desktop's system note");
+    drop(s);
+    // Not locked any more: nothing to clear.
+    let (code, _) = status_of(&h, reqwest::Method::POST, &format!("/v1/chats/{chat_id}/lockdown/clear"), None).await;
+    assert_eq!(code, 409);
+
+    // As a Viewer: refused, and the lockdown stays.
+    lock(chat_id);
+    demote_box_to_viewer(&h, chat_id).await;
+    let g = h.get("/v1/guards").await;
+    assert_eq!(g["canClearLockdown"], false, "{g}");
+    assert_eq!(g["myRole"], "viewer");
+    let (code, v) = status_of(&h, reqwest::Method::POST, &format!("/v1/chats/{chat_id}/lockdown/clear"), None).await;
+    assert_eq!(code, 403, "{v}");
+    let g = h.get("/v1/guards").await;
+    assert_eq!(g["lockedChats"][0]["chatId"], json!(chat_id), "a refused clear left the lockdown in place: {g}");
+    h.handle.shutdown();
+}
+
+/// `GET /v1/flow` and `GET /v1/chats/:id/handoffs` read the folded flow
+/// records: the board (an unreviewed proposal), the queue, marks, the routing
+/// shadow summary and hand-off cards.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn flow_view_shows_board_queue_marks_routing_and_handoffs() {
+    use hive_core::flow::{self as hflow, FlowRecord};
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Auth" }))).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    let now = hflow::now_ms();
+    let reply = Uuid::new_v4();
+    {
+        let mut svc = h.handle.shared.lock();
+        let mut p = hive_core::ActionProposal::file_diff("Add login", "", "diff --git a/x b/x\n".into(), vec!["src/login.rs".into()]);
+        p.author_actor_id = "someone-else".into();
+        svc.upsert_proposal(chat_id, ws, p).unwrap();
+        svc.record_flow(chat_id, ws, FlowRecord::Mark(hflow::WorkspaceMark {
+            id: Uuid::new_v4(),
+            kind: hflow::MarkKind::UnderConstruction,
+            path: "src/auth.rs".into(),
+            lines: Some((10, 20)),
+            task_id: String::new(),
+            note: "refactoring".into(),
+            agent: hflow::agent_key(Some(h.agent_id)),
+            by: "coder".into(),
+            session_id: Some(chat_id),
+            at_ms: now,
+            expires_ms: Some(now + 3_600_000),
+        }))
+        .unwrap();
+        let trigger = Uuid::new_v4();
+        svc.record_flow(chat_id, ws, FlowRecord::RouteDecision(hflow::RouteDecision {
+            trigger_id: trigger,
+            task_class: "feature".into(),
+            chosen: hflow::PRIMARY.into(),
+            preferred: hflow::agent_key(Some(h.agent_id)),
+            explore: false,
+            mode: hflow::RouteMode::Shadow,
+            shadow_choice: hflow::agent_key(Some(h.agent_id)),
+            reason: hflow::route::RouteReason::Sampled,
+            epsilon: 0.1,
+            scores: Default::default(),
+            excluded: vec![],
+            at_ms: now,
+        }))
+        .unwrap();
+        svc.record_flow(chat_id, ws, FlowRecord::Handoff(hflow::HandoffCard {
+            id: Uuid::new_v4(),
+            from: hflow::agent_key(Some(h.agent_id)),
+            to: hflow::PRIMARY.into(),
+            from_name: "coder".into(),
+            to_name: String::new(),
+            message_id: Some(reply),
+            task: "Review the login flow".into(),
+            task_class: "review".into(),
+            branch: "ligus/chat/x".into(),
+            files: vec!["src/login.rs".into()],
+            quality: hflow::HandoffQuality { tests_passed: Some(true), ..Default::default() },
+            via: "mention".into(),
+            parcel: Some(hflow::ContextParcel { decisions: vec!["kept the API".into()], ..Default::default() }),
+            at_ms: now,
+        }))
+        .unwrap();
+    }
+    h.handle.shared.after_write();
+
+    let f = h.get("/v1/flow").await;
+    let board = f["board"].as_array().unwrap();
+    let item = board.iter().find(|i| i["kind"] == "unreviewedProposal").unwrap_or_else(|| panic!("{f}"));
+    assert_eq!(item["chatId"], json!(chat_id));
+    assert_eq!(item["chatTitle"], "Auth");
+    assert!(item["proposalId"].is_string());
+    assert_eq!(f["queue"]["gate"]["open"], 1, "{f}");
+    assert_eq!(f["queue"]["queueLimit"], 5);
+    assert!(f["queue"]["alert"].is_null(), "one waiting proposal isn't a bottleneck");
+    let mark = &f["marks"][0];
+    assert_eq!(mark["kind"], "underConstruction");
+    assert_eq!(mark["path"], "src/auth.rs");
+    assert_eq!(mark["lines"], json!([10, 20]));
+    assert_eq!(mark["chatTitle"], "Auth");
+    assert_eq!(f["routing"]["decisions"], 1);
+    assert_eq!(f["routing"]["offPrimaryShare"], 1.0);
+    assert_eq!(f["routing"]["topPicks"][0]["name"], "coder");
+
+    let cards = h.get(&format!("/v1/chats/{chat_id}/handoffs")).await;
+    let c = &cards["handoffs"][0];
+    assert_eq!(c["fromName"], "coder");
+    assert_eq!(c["toName"], "Ligus (primary)", "an empty name falls back to the agent's");
+    assert_eq!(c["messageId"], json!(reply));
+    assert_eq!(c["quality"]["testsPassed"], true);
+    assert_eq!(c["parcel"]["decisions"][0], "kept the API");
+    let (code, _) = status_of(&h, reqwest::Method::GET, &format!("/v1/chats/{}/handoffs", Uuid::new_v4()), None).await;
+    assert_eq!(code, 404);
+    h.handle.shutdown();
+}
+
+/// A reviewer recruit naming this box's user pushes `review.recruit` (here
+/// through ntfy), pointing at the proposal waiting longest for them; one that
+/// names someone else doesn't.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_reviewer_recruit_naming_you_pushes() {
+    use hive_core::flow::{self as hflow, FlowRecord};
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let me = h.handle.shared.my_actor_id();
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Queue" }))).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    let recruit = |members: Vec<String>| {
+        FlowRecord::Recruit(hflow::RecruitNotice {
+            id: Uuid::new_v4(),
+            action: "approvers".into(),
+            queue_len: 6,
+            oldest_wait_ms: 3 * 3_600_000,
+            member_ids: members,
+            to_host: String::new(),
+            from_host: String::new(),
+            reference: String::new(),
+            at_ms: hflow::now_ms(),
+        })
+    };
+    {
+        let mut svc = h.handle.shared.lock();
+        let mut p = hive_core::ActionProposal::new("Pick a queue", hive_core::ProposalKind::Decision, "someone-else");
+        p.author_actor_id = "someone-else".into();
+        svc.upsert_proposal(chat_id, ws, p).unwrap();
+    }
+    h.handle.shared.after_write();
+    let before = h.ntfy.lock().unwrap().len();
+    {
+        let mut svc = h.handle.shared.lock();
+        svc.record_flow(chat_id, ws, recruit(vec!["not-me".into()])).unwrap();
+    }
+    h.handle.shared.after_write();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let titles = |pushes: &Pushes| -> Vec<String> {
+        pushes.lock().unwrap().iter().filter_map(|(hd, _)| hd.get("title").and_then(|t| t.to_str().ok()).map(str::to_string)).collect()
+    };
+    assert!(!titles(&h.ntfy).iter().any(|t| t.contains("review queue")), "a recruit for someone else pushed");
+    {
+        let mut svc = h.handle.shared.lock();
+        svc.record_flow(chat_id, ws, recruit(vec![me.clone()])).unwrap();
+    }
+    h.handle.shared.after_write();
+    let mut ok = false;
+    for _ in 0..30 {
+        if h.ntfy.lock().unwrap().len() > before
+            && h.ntfy.lock().unwrap().iter().any(|(_, body)| body.contains("6 proposals waiting"))
+        {
+            ok = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(ok, "no recruit push: {:?}", h.ntfy.lock().unwrap());
+    h.handle.shutdown();
+}
+
+/// Chat details carry each workflow run's coordinator (the run lease's holder).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn workflow_runs_show_their_coordinator() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    {
+        let mut svc = h.handle.shared.lock();
+        let def = hive_core::workflow::preset_review_gate();
+        let me = svc.author().id.clone();
+        let run = hive_core::workflow::new_run(&def, "go", &me);
+        let run_id = run.id;
+        svc.upsert_workflow_run(chat_id, ws, run).unwrap();
+        svc.claim_lease(
+            chat_id,
+            ws,
+            hive_core::lease::LeaseScope::WorkflowRun,
+            &run_id.to_string(),
+            1,
+            90_000,
+            hive_core::lease::LeaseClaimReason::Initial,
+        )
+        .unwrap();
+    }
+    h.handle.shared.after_write();
+    let d = h.get(&format!("/v1/chats/{chat_id}/details")).await;
+    let c = &d["workflowRuns"][0]["coordinator"];
+    assert_eq!(c["isThis"], true, "{d}");
+    assert_eq!(c["epoch"], 1);
+    assert_eq!(c["released"], false);
+    assert_eq!(c["online"], true);
+    assert!(c["holderLabel"].as_str().unwrap().contains("this host"));
+    h.handle.shutdown();
+}

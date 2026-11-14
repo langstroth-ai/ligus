@@ -84,6 +84,9 @@ struct ChatSnap {
     proposals: HashMap<Uuid, ProposalSnap>,
     /// Workflow gates awaiting approval: (run id, node id, attempt).
     gates: HashSet<(Uuid, String, u32)>,
+    /// Reviewer-recruit notices (`FlowRecord::Recruit` with action
+    /// `approvers`) already seen.
+    recruits: HashSet<Uuid>,
 }
 
 /// The parts of a proposal whose change is a `proposal.updated`: its status,
@@ -121,6 +124,9 @@ pub enum Change {
     /// A workflow run's gate started waiting for approval (each attempt of a
     /// rerouted gate counts again).
     WorkflowApproval { chat: Uuid, run: Uuid, node: String },
+    /// A backpressure response asked more reviewers to look at the queue
+    /// (`flowRecorded` recruit with action `approvers`).
+    RecruitApprovers { chat: Uuid, recruit: Uuid },
     ChatUpdated { chat: Uuid },
 }
 
@@ -136,7 +142,12 @@ fn snap(s: &ChatSession) -> ChatSnap {
         messages: s.messages.iter().map(|m| (m.id, (m.is_streaming, m.body.len()))).collect(),
         proposals: s.proposals.iter().map(|p| (p.id, proposal_snap(p))).collect(),
         gates: awaiting_gates(s).collect(),
+        recruits: approver_recruits(s).collect(),
     }
+}
+
+fn approver_recruits(s: &ChatSession) -> impl Iterator<Item = Uuid> + '_ {
+    s.flow.recruits.iter().filter(|r| r.action == "approvers").map(|r| r.id)
 }
 
 fn awaiting_gates(s: &ChatSession) -> impl Iterator<Item = (Uuid, String, u32)> + '_ {
@@ -220,6 +231,11 @@ impl Differ {
             for (run, node, attempt) in awaiting_gates(s) {
                 if !before.gates.contains(&(run, node.clone(), attempt)) {
                     out.push(Change::WorkflowApproval { chat: s.id, run, node });
+                }
+            }
+            for recruit in approver_recruits(s) {
+                if !before.recruits.contains(&recruit) {
+                    out.push(Change::RecruitApprovers { chat: s.id, recruit });
                 }
             }
             if touched {

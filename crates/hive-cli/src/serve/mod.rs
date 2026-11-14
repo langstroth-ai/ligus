@@ -37,6 +37,7 @@ pub mod api;
 pub mod appearance;
 pub mod dashboard;
 pub mod dashboard_hive;
+pub mod flow_api;
 pub mod hub;
 pub mod lab;
 pub mod notify;
@@ -45,6 +46,7 @@ pub mod pair;
 pub mod people;
 pub mod proposal_file;
 pub mod repos_api;
+pub mod sets;
 pub mod tunnel;
 
 #[cfg(test)]
@@ -680,6 +682,14 @@ impl Shared {
                         let Some(r) = s.workflow_runs.iter().find(|r| r.id == run) else { continue };
                         if self.fresh(r.updated_at) {
                             notices.extend(notify::for_workflow_gate(s, r, &node));
+                        }
+                    }
+                    Change::RecruitApprovers { chat, recruit } => {
+                        let Some(s) = sessions.iter().find(|s| s.id == chat) else { continue };
+                        let Some(r) = s.flow.recruits.iter().find(|r| r.id == recruit) else { continue };
+                        if self.fresh(hive_core::Timestamp::from_unix_seconds(r.at_ms / 1000)) {
+                            let me = notify::Me::in_chat(&author, s, &links);
+                            notices.extend(notify::for_recruit(&sessions, s, r, &me));
                         }
                     }
                     Change::ProposalUpdated { chat, proposal } => {
