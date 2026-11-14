@@ -134,3 +134,20 @@ agent stops, says what it tried and what is blocking it, and asks you how to
 continue. Set `LIGUS_PATCH_LEAVING_CALLS` to change the number (0 turns the
 rule off). Subscription CLIs (Claude Code, Codex, ...) run their own tool
 loops and are not affected.
+
+## Growing the workspace when it's ready
+
+Beekeepers start a colony in a small "nuc" box and add space when about seven
+of ten frames are drawn, not before: empty comb nobody patrols invites pests.
+Ligus does the same. A workspace starts with one agent on your device, and a
+small card above the chat suggests growing it only when the workspace's
+occupancy says so:
+
+- **Add an always-on host** when requests keep waiting for an agent whose
+  machine is offline (a `ligus serve` box answers while laptops sleep);
+- **Add a worker with its own capacity** when agents are pausing near a plan
+  window's limit;
+- **Add another agent** when one agent wrote 80 % or more of the last forty or
+  more agent replies.
+
+Dismiss a suggestion and it stays dismissed on this device.

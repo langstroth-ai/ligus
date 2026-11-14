@@ -1274,6 +1274,141 @@ pub(crate) fn record_progress(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Nuc workspaces: grow on occupancy, not up front
+// ---------------------------------------------------------------------------
+
+/// What the workspace's occupancy looks like right now.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct Occupancy {
+    pub agents: usize,
+    pub worker_hosts: usize,
+    /// Mentions waiting for an agent whose worker host is offline.
+    pub queued_on_offline_hosts: usize,
+    /// Mentions waiting for an agent that runs on its owner's device.
+    pub queued_on_devices: usize,
+    /// Work the plan-window throttles are holding back.
+    pub deferred: usize,
+    /// A subscription window is past the workflow threshold.
+    pub hot_window: bool,
+    /// Agent replies in the last 7 days, and the busiest agent's share.
+    pub agent_replies_7d: usize,
+    pub busiest_share: f64,
+}
+
+/// Suggestions from occupancy, like adding a box to a hive when about seven of
+/// ten frames are drawn: a little ahead of demand, never before it.
+pub(crate) fn suggest_growth(o: &Occupancy) -> Vec<hive_proto::GrowthSuggestionDto> {
+    let mut out = Vec::new();
+    let s = |id: &str, kind: &str, title: &str, reason: String| hive_proto::GrowthSuggestionDto {
+        id: id.into(),
+        kind: kind.into(),
+        title: title.into(),
+        reason,
+    };
+    if o.queued_on_offline_hosts >= 2 || (o.worker_hosts == 0 && o.queued_on_devices >= 3) {
+        out.push(s(
+            "always-on-host",
+            "host",
+            "Add an always-on host",
+            format!(
+                "{} request{} waiting for an agent whose machine is offline. A `ligus serve` box answers while laptops sleep.",
+                o.queued_on_offline_hosts + o.queued_on_devices,
+                if o.queued_on_offline_hosts + o.queued_on_devices == 1 { " is" } else { "s are" }
+            ),
+        ));
+    }
+    if o.hot_window && o.deferred > 0 {
+        out.push(s(
+            "worker-capacity",
+            "worker",
+            "Add a worker with its own capacity",
+            format!(
+                "Agents are pausing near a plan-window limit ({} item{} held back). A worker with a local model or another subscription takes background work off this window.",
+                o.deferred,
+                if o.deferred == 1 { "" } else { "s" }
+            ),
+        ));
+    }
+    if o.agents <= 2 && o.agent_replies_7d >= 40 && o.busiest_share >= 0.8 {
+        out.push(s(
+            "second-agent",
+            "agent",
+            "Add another agent",
+            format!(
+                "One agent wrote {:.0}% of the last {} agent replies. A second agent with its own role spreads the load and lets them review each other.",
+                o.busiest_share * 100.0,
+                o.agent_replies_7d
+            ),
+        ));
+    }
+    out
+}
+
+fn gather_occupancy(state: &AppState) -> Occupancy {
+    let ws = state.active_workspace_id();
+    let me = state.local_actor_id();
+    let known = state.known_room_ids();
+    let deferred = state.guards.deferred.lock().unwrap().len();
+    let policy = hive_core::throttle::ThrottlePolicy::default();
+    let now = now_secs();
+    let hot_window = state
+        .guards
+        .plan_windows
+        .lock()
+        .unwrap()
+        .values()
+        .any(|w| w.effective_pct(now) >= policy.workflow_pct);
+    let svc = state.service.lock().unwrap();
+    let hosts = svc.list_hosts(ws).unwrap_or_default();
+    let ts_now = hive_core::Timestamp::now();
+    let mut o = Occupancy {
+        worker_hosts: hosts.iter().filter(|h| h.kind == hive_core::HostKind::Worker).count(),
+        deferred,
+        hot_window,
+        ..Default::default()
+    };
+    let week_ago = ts_now.inner().unix_timestamp() - 7 * 86_400;
+    let mut by_agent: HashMap<String, usize> = HashMap::new();
+    let config_id = hive_core::workspace_config_session_id(ws);
+    for id in svc.store().list_session_ids().unwrap_or_default() {
+        if id == config_id {
+            continue;
+        }
+        let Ok(Some(s)) = svc.load(id) else { continue };
+        if !crate::session_in_workspace(s.workspace_id, &s.creator_actor_id, ws, &me, &known) {
+            continue;
+        }
+        o.agents = o.agents.max(s.workspace_agents.len());
+        for pm in hive_runtime::chat_service::pending_mentions(&s) {
+            let host = s.workspace_agents.iter().find(|a| a.id == pm.agent_id).map(|a| a.host_id.clone()).unwrap_or_default();
+            if host.is_empty() {
+                o.queued_on_devices += 1;
+            } else if !hosts.iter().any(|h| h.id == host && state.host_presence.is_online(h, &ts_now)) {
+                o.queued_on_offline_hosts += 1;
+            }
+        }
+        for m in &s.messages {
+            if matches!(m.role, hive_core::MessageRole::Assistant | hive_core::MessageRole::Agent)
+                && m.created_at.inner().unix_timestamp() >= week_ago
+            {
+                *by_agent.entry(m.author.clone()).or_default() += 1;
+            }
+        }
+    }
+    o.agent_replies_7d = by_agent.values().sum();
+    if o.agent_replies_7d > 0 {
+        o.busiest_share = *by_agent.values().max().unwrap_or(&0) as f64 / o.agent_replies_7d as f64;
+    }
+    o
+}
+
+/// Growth suggestions for the active workspace (nuc workspaces start small).
+#[tauri::command]
+pub(crate) fn growth_suggestions(state: State<AppState>) -> Vec<hive_proto::GrowthSuggestionDto> {
+    suggest_growth(&gather_occupancy(&state))
+}
+
 /// Whether a run is in a state a coordinator drives.
 pub(crate) fn is_live_status(status: WorkflowRunStatus) -> bool {
     matches!(status, WorkflowRunStatus::Running | WorkflowRunStatus::AwaitingGate)
@@ -1317,6 +1452,21 @@ mod tests {
         assert_eq!(takeover_reason(&l, me, None, t0 + 130_000, true, false), Some(LeaseClaimReason::Lapsed));
         // A beat from a stale epoch or another holder doesn't keep it alive.
         assert_eq!(takeover_reason(&l, me, Some((holder, 0, t0 + 69_000)), t0 + 70_000, true, true), Some(LeaseClaimReason::Lapsed));
+    }
+
+    #[test]
+    fn growth_is_suggested_from_occupancy_only() {
+        // A quiet nuc: nothing to suggest.
+        assert!(suggest_growth(&Occupancy { agents: 1, ..Default::default() }).is_empty());
+        let host = suggest_growth(&Occupancy { queued_on_offline_hosts: 2, worker_hosts: 1, ..Default::default() });
+        assert_eq!(host[0].id, "always-on-host");
+        let worker = suggest_growth(&Occupancy { hot_window: true, deferred: 3, ..Default::default() });
+        assert_eq!(worker[0].kind, "worker");
+        // A hot window with nothing held back isn't a reason yet.
+        assert!(suggest_growth(&Occupancy { hot_window: true, ..Default::default() }).is_empty());
+        let agent = suggest_growth(&Occupancy { agents: 1, agent_replies_7d: 50, busiest_share: 0.9, ..Default::default() });
+        assert_eq!(agent[0].id, "second-agent");
+        assert!(suggest_growth(&Occupancy { agents: 1, agent_replies_7d: 10, busiest_share: 1.0, ..Default::default() }).is_empty());
     }
 
     #[test]

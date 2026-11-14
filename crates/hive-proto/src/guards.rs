@@ -186,6 +186,20 @@ pub struct ThrottleStateDto {
     pub deferred: Vec<DeferredWorkDto>,
 }
 
+/// A suggestion to grow the workspace, made from occupancy signals.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct GrowthSuggestionDto {
+    /// Stable id, for dismissing it.
+    pub id: String,
+    /// "agent" | "host" | "worker"
+    pub kind: String,
+    pub title: String,
+    /// The occupancy signal behind it.
+    pub reason: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,5 +221,6 @@ mod tests {
         PlanWindowDto::export_all(&cfg).unwrap();
         DeferredWorkDto::export_all(&cfg).unwrap();
         ThrottleStateDto::export_all(&cfg).unwrap();
+        GrowthSuggestionDto::export_all(&cfg).unwrap();
     }
 }

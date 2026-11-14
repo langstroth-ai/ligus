@@ -6107,7 +6107,7 @@ impl AppState {
 ///   to a known room *and* were authored locally (or predate creator tracking),
 ///   which re-homes legacy local chats and hides synced room chats that leaked
 ///   into the flat store before scoping existed.
-fn session_in_workspace(
+pub(crate) fn session_in_workspace(
     session_workspace_id: Uuid,
     creator_actor_id: &str,
     active_id: Uuid,
@@ -14369,6 +14369,7 @@ pub fn run() {
             guards::lock_chat,
             guards::run_hygiene_now,
             guards::get_throttle_state,
+            guards::growth_suggestions,
             guards::get_hygiene_report,
             get_app_info,
             list_relay_users,

@@ -1376,6 +1376,11 @@ export type { ThrottleStateDto } from "@/bindings/ThrottleStateDto";
 export const getThrottleState = () =>
   invoke<import("@/bindings/ThrottleStateDto").ThrottleStateDto>("get_throttle_state");
 
+// ── Nuc workspaces: growth suggestions from occupancy ──
+export type { GrowthSuggestionDto } from "@/bindings/GrowthSuggestionDto";
+export const growthSuggestions = () =>
+  invoke<import("@/bindings/GrowthSuggestionDto").GrowthSuggestionDto[]>("growth_suggestions");
+
 /// Fires whenever a workflow run's persisted state changes.
 export const onWorkflowRun = (
   cb: (e: WorkflowRunEvent) => void,

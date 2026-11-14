@@ -45,6 +45,7 @@ import { ToastHost, toast, errMsg } from "@/components/Toast";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { DearthBanner } from "@/components/guards/DearthBanner";
 import { LockdownBar } from "@/components/guards/LockdownBar";
+import { GrowthSuggestions } from "@/components/guards/GrowthSuggestions";
 import { PendingInvitesBanner } from "@/components/PendingInvitesBanner";
 import { DialogHost, promptDialog } from "@/components/Dialog";
 import { IconPencil, IconHexagon } from "@/lib/icons";
@@ -974,6 +975,7 @@ export function App() {
 
       <main data-tour="canvas" className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <DearthBanner onManage={() => openSettings("guards")} />
+        <GrowthSuggestions onOpen={(kind) => openSettings(kind === "agent" ? "models" : "team-sync")} />
         {view === "friends" ? (
           <PaneErrorBoundary label="Friends">
             <FriendsView
