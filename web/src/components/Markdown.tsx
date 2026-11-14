@@ -53,7 +53,7 @@ function safeHref(href: string | undefined): string | null {
 /// retired into its persisted copy.
 export const Markdown = memo(function Markdown({ content }: { content: string }) {
   return (
-    <div className="hive-md text-[0.95rem] leading-7">
+    <div className="hive-md text-[length:var(--hive-text-md)] leading-[1.6]">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkBreaks]}
         components={{

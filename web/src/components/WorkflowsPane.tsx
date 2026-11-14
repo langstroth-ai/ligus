@@ -23,7 +23,8 @@ import {
 } from "@/lib/ipc";
 import { toast, errMsg } from "@/components/Toast";
 import { confirmThen } from "@/lib/confirm";
-import { Button, Section, ErrorState } from "@/components/ui";
+import { Badge, Button, Section, ErrorState } from "@/components/ui";
+import { IconChevronRight, IconLock } from "@/lib/icons";
 import { RailFrame, Stack, EmptyHint, panelStyle, fieldStyle } from "@/components/RightRail";
 import { RunLeaseLine } from "@/components/guards/RunLeaseLine";
 
@@ -91,7 +92,7 @@ export function WorkflowStages({
           <div className="flex flex-wrap items-baseline gap-x-1.5">
             <span className="opacity-50">{i + 1}.</span>
             <span className="font-medium">
-              {n.kind === "gate" ? "◈ " : ""}
+              {n.kind === "gate" ? <span aria-label="approval gate" className="mr-1 inline-flex align-[-2px]"><IconLock size={11} /></span> : null}
               {n.name}
             </span>
             <span className="opacity-55">
@@ -263,51 +264,56 @@ function DefinitionCard({
   }
 
   return (
-    <div className="rounded-xl border px-4 py-3" style={panelStyle}>
-      <div className="flex items-start justify-between gap-2">
-        <button
-          type="button"
-          className="min-w-0 text-left"
-          onClick={() => setShowStages((v) => !v)}
-          aria-expanded={showStages}
+    <div className="rounded-xl border px-3 py-2.5" style={panelStyle}>
+      <button
+        type="button"
+        className="flex w-full min-w-0 items-start gap-1.5 rounded-md text-left"
+        onClick={() => setShowStages((v) => !v)}
+        aria-expanded={showStages}
+      >
+        <span
+          aria-hidden
+          className="mt-0.5 inline-flex shrink-0 text-ink-faint transition-transform"
+          style={{ transform: showStages ? "rotate(90deg)" : undefined }}
         >
-          <div className="flex items-center gap-1.5">
-            <span className="truncate font-semibold">{wf.name}</span>
-            {wf.disabled && (
-              <span className="shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-medium" style={statusTone("pending")}>
-                paused
-              </span>
-            )}
-          </div>
-          <div className="text-xs opacity-55">
+          <IconChevronRight size={13} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[13.5px] font-semibold leading-snug">{wf.name}</span>
+            {wf.disabled && <Badge tone="warn">paused</Badge>}
+          </span>
+          <span className="block text-xs text-ink-soft">
             {wf.nodes.length} stage{wf.nodes.length === 1 ? "" : "s"} · {showStages ? "hide" : "show"} stages
-          </div>
-        </button>
-        <div className="flex shrink-0 flex-wrap justify-end gap-1 text-xs">
-          <Button disabled={busy || wf.disabled} onClick={() => toggle("run")}>
-            Run
-          </Button>
-          <Button
-            disabled={busy}
-            aria-label={`${wf.disabled ? "Resume" : "Pause"} workflow ${wf.name}`}
-            onClick={() => act(() => setWorkflowEnabled(sessionId, wf.id, wf.disabled))}
-          >
-            {wf.disabled ? "Resume" : "Pause"}
-          </Button>
-          <Button
-            disabled={busy}
-            onClick={() =>
-              confirmThen(`Delete workflow “${wf.name}”? Past runs stay in the history.`, () =>
-                act(() => removeWorkflow(sessionId, wf.id)),
-              )
-            }
-          >
-            Delete
-          </Button>
-        </div>
-      </div>
-      {wf.description && <p className="mt-1.5 text-xs leading-5 opacity-70">{wf.description}</p>}
+          </span>
+        </span>
+      </button>
+      {wf.description && <p className="mt-1 text-xs leading-[1.5] text-ink-soft">{wf.description}</p>}
       {showStages && <WorkflowStages nodes={wf.nodes} agentName={agentName} />}
+      <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+        <Button variant="primary" disabled={busy || wf.disabled} onClick={() => toggle("run")}>
+          Run
+        </Button>
+        <Button
+          disabled={busy}
+          aria-label={`${wf.disabled ? "Resume" : "Pause"} workflow ${wf.name}`}
+          onClick={() => act(() => setWorkflowEnabled(sessionId, wf.id, wf.disabled))}
+        >
+          {wf.disabled ? "Resume" : "Pause"}
+        </Button>
+        <span className="flex-1" />
+        <Button
+          variant="danger"
+          disabled={busy}
+          onClick={() =>
+            confirmThen(`Delete workflow “${wf.name}”? Past runs stay in the history.`, () =>
+              act(() => removeWorkflow(sessionId, wf.id)),
+            )
+          }
+        >
+          Delete
+        </Button>
+      </div>
       {open !== "none" && (
         <div className="mt-2 flex gap-2">
           <input
@@ -455,7 +461,7 @@ function NodeChip({ node }: { node: WorkflowNodeRunDto }) {
         aria-expanded={hasDetail ? open : undefined}
         title={`${node.name}: ${statusLabel(node.status)}`}
       >
-        {node.kind === "gate" ? "◈ " : ""}
+        {node.kind === "gate" ? <span aria-label="approval gate" className="mr-1 inline-flex align-[-2px]"><IconLock size={11} /></span> : null}
         {node.name}
         {node.attempts > 1 ? ` ×${node.attempts}` : ""}
       </button>
