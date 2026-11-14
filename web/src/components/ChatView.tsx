@@ -97,6 +97,11 @@ function runtimePickerLabel(runtime: RuntimeSummaryDto) {
   return runtime.label.trim() || runtime.name.trim() || "runtime";
 }
 
+// Per-chat drafts and reading positions, kept across chat switches (and the
+// ChatView remounts that Diff/Code cause) for the life of the window.
+const chatDrafts = new Map<string, string>();
+const chatScroll = new Map<string, { top: number; pinned: boolean }>();
+
 export function ChatView({
   sessionId,
   runtimes,
@@ -118,6 +123,8 @@ export function ChatView({
 }) {
   const qc = useQueryClient();
   const [input, setInput] = useState("");
+  const inputLatest = useRef(input);
+  inputLatest.current = input;
   const [sending, setSending] = useState(false);
   const [optimisticUser, setOptimisticUser] = useState<string | null>(null);
   // messageId → accumulated text. A Map (not a single slot) because workflow
@@ -158,6 +165,7 @@ export function ChatView({
   const atBottomRef = useRef(true);
   // Last position the scroll handler saw, so it can tell a reader scrolling up
   // from the layout growing underneath a settling pin (lib/autoscroll).
+  const pendingRestore = useRef<number | null>(null);
   const scrollMark = useRef(0);
   const [hasNew, setHasNew] = useState(false);
   // @-mention autocomplete in the composer.
@@ -367,16 +375,30 @@ export function ChatView({
     setMention(null);
     setSlash(null);
     setAttachments([]);
-    // A fresh chat always starts at the bottom. Re-pinning here (rather than in
-    // an effect declared after the follow effect below) matters on a session
-    // switch: the follow effect fires on the incoming chat's data and must not
-    // see the outgoing session's "reader had scrolled up" state.
-    atBottomRef.current = true;
-    setAtBottom(true);
+    // Returning to a chat restores its unsent draft and, if you had scrolled up
+    // to read, where you were. Otherwise a chat starts at the bottom.
+    // Re-pinning here (rather than in an effect declared after the follow
+    // effect below) matters on a session switch: the follow effect fires on the
+    // incoming chat's data and must not see the outgoing session's state.
+    setInput(chatDrafts.get(sessionId) ?? "");
+    const saved = chatScroll.get(sessionId);
+    const resume = saved && !saved.pinned;
+    pendingRestore.current = resume ? saved.top : null;
+    atBottomRef.current = !resume;
+    setAtBottom(!resume);
     setHasNew(false);
-    scrollMark.current = 0;
+    scrollMark.current = resume ? saved.top : 0;
     if (stopTypingTimer.current) clearTimeout(stopTypingTimer.current);
     lastTypingPing.current = 0;
+    return () => {
+      // Remember the outgoing chat's draft and reading position.
+      const draft = inputLatest.current;
+      if (draft.trim()) chatDrafts.set(sessionId, draft);
+      else chatDrafts.delete(sessionId);
+      // scrollMark tracks the last scroll offset (the element may already be
+      // detached when this cleanup runs on unmount).
+      chatScroll.set(sessionId, { top: scrollMark.current, pinned: atBottomRef.current });
+    };
   }, [sessionId]);
 
   // Jump to the newest turn and hold there while the layout settles — one
@@ -413,6 +435,13 @@ export function ChatView({
   // This also covers mount: switching to another view unmounts ChatView, so
   // coming back re-runs it and re-pins the freshly rendered transcript.
   useEffect(() => {
+    const restore = pendingRestore.current;
+    if (restore != null && chat.data) {
+      pendingRestore.current = null;
+      const el = scrollRef.current;
+      if (el) el.scrollTop = restore;
+      return;
+    }
     if (atBottomRef.current) pin();
     else setHasNew(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps

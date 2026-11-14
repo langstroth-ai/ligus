@@ -240,10 +240,32 @@ export function RailFrame({
   useLayoutEffect(() => {
     const el = bodyRef.current;
     if (!el) return;
-    el.scrollTop = railScroll.get(title) ?? 0;
-    const save = () => railScroll.set(title, el.scrollTop);
+    // Content often arrives a frame or two after mount (queries, lazy cards),
+    // so keep re-applying the saved offset until it sticks, and don't record
+    // the clamped offsets seen on the way.
+    const target = railScroll.get(title) ?? 0;
+    let restoring = target > 0;
+    let tries = 0;
+    let raf = 0;
+    const tryRestore = () => {
+      el.scrollTop = target;
+      if (Math.abs(el.scrollTop - target) < 2 || ++tries > 30) restoring = false;
+      else raf = requestAnimationFrame(tryRestore);
+    };
+    if (restoring) tryRestore();
+    const save = () => {
+      if (!restoring) railScroll.set(title, el.scrollTop);
+    };
+    const stop = () => (restoring = false);
     el.addEventListener("scroll", save, { passive: true });
-    return () => el.removeEventListener("scroll", save);
+    el.addEventListener("wheel", stop, { passive: true });
+    el.addEventListener("pointerdown", stop);
+    return () => {
+      cancelAnimationFrame(raf);
+      el.removeEventListener("scroll", save);
+      el.removeEventListener("wheel", stop);
+      el.removeEventListener("pointerdown", stop);
+    };
   }, [title]);
   return (
     <div className="flex h-full flex-col">
