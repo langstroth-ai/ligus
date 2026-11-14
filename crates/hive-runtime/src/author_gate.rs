@@ -15,9 +15,10 @@
 //! - `LIGUS_MCP_MIN_ROLE` overrides both; a value below the default logs a
 //!   warning (see [`warn_if_lowered`]).
 //!
-//! The author's role is taken **as of the triggering message** where the
-//! caller can tell (the roster in force at that position); an author that
-//! can't be resolved is below every floor (fail closed).
+//! The author's role is taken **as of the triggering message**: every host
+//! resolves it with `ChatService::author_role_at`, the config-log roster at
+//! the frontier the message stamped (Track A's `ConfigTimeline`). An author
+//! that can't be resolved is below every floor (fail closed).
 
 use hive_core::{ModelProviderKind, WorkspaceRole};
 

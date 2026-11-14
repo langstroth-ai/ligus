@@ -7996,13 +7996,19 @@ async fn run_prepared_turn_inner(
     // turn that can write and Contributor for a read-only one
     // (LIGUS_MCP_MIN_ROLE overrides); this device's own user always clears it.
     // Below it an HTTP model gets no tools, a CLI runs read-only, and a CLI
-    // with no read-only tier is refused.
+    // with no read-only tier is refused. The author's role is the one they
+    // held when they posted the message (the config roster at its frontier).
     let gate_plan = {
         let trigger = reply_to.and_then(|id| session.messages.iter().find(|m| m.id == id));
-        let me = state.service.lock().unwrap().author().id.clone();
-        let author_role = trigger.and_then(|m| m.actor_identity.as_ref()).map(|a| {
-            if a.id == me { hive_core::WorkspaceRole::Owner } else { session.role_of(&a.id) }
-        });
+        let author_role = {
+            let svc = state.service.lock().unwrap();
+            let me = svc.author().id.clone();
+            match trigger {
+                Some(m) if m.actor_identity.as_ref().is_some_and(|a| a.id == me) => Some(hive_core::WorkspaceRole::Owner),
+                Some(m) => svc.author_role_at(session_id, m.id).ok().flatten(),
+                None => None,
+            }
+        };
         let mut args = responder.runtime.args.clone();
         hive_runtime::author_gate::gate_turn(responder.runtime.provider, &mut args, author_role)
     };

@@ -837,7 +837,8 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
                 // configured. Below it an HTTP model gets no tools, a CLI runs
                 // at its read-only tier, and one with none is refused.
                 // Unresolved author → fail closed.
-                let author_role = last.actor_identity.as_ref().map(|a| s.role_of(&a.id));
+                // The author's role when they posted it (config roster at its frontier).
+                let author_role = svc.author_role_at(s.id, last.id).ok().flatten();
                 let mut turn_rt = rt.clone();
                 let plan = hive_runtime::author_gate::gate_turn(turn_rt.provider, &mut turn_rt.args, author_role);
                 let allow_mcp = plan.allows_tools();

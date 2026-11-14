@@ -392,12 +392,9 @@ async fn run_turn(
     // read-only one; LIGUS_MCP_MIN_ROLE overrides) the turn runs at its
     // configured tier; below it a CLI runs read-only or is refused and an
     // HTTP model gets no tools. Unresolved author → fail closed.
-    let author_role = s
-        .messages
-        .iter()
-        .find(|m| m.id == pm.message_id)
-        .and_then(|m| m.actor_identity.as_ref())
-        .map(|a| s.role_of(&a.id));
+    // The role is the one the author held when they posted the message (the
+    // config roster at its frontier), not today's.
+    let author_role = lock(svc).author_role_at(pm.session_id, pm.message_id).ok().flatten();
     let mut rt = rt;
     let min_role = reply::mcp_min_role(hive_runtime::author_gate::turn_writes(rt.provider, &rt.args));
     let gate_plan = hive_runtime::author_gate::gate_turn(rt.provider, &mut rt.args, author_role);

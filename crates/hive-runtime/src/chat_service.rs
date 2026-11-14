@@ -2211,6 +2211,35 @@ impl ChatService {
     /// workspace's — held on the config log (§11 config hoist) — so overlay them
     /// (union with any pre-hoist per-chat config, so nothing vanishes before the
     /// migration). The config log itself loads raw: it IS the source.
+    /// The workspace role the author of `message_id` held **when they posted
+    /// it**: the config-log roster at the frontier their message stamped
+    /// (A2's `ConfigTimeline`), not today's roster. A later promotion doesn't
+    /// widen an old message's reach and a later demotion or removal doesn't
+    /// narrow it. `None` (fail closed) when the message, its author, its
+    /// frontier or the config log isn't known here. In the device-local
+    /// workspace (one human, no config log) it is the folded role.
+    pub fn author_role_at(&self, session_id: Uuid, message_id: Uuid) -> Result<Option<WorkspaceRole>> {
+        let envs = self.store.list(session_id)?;
+        let Some(env) = envs.iter().find(|e| {
+            matches!(&e.payload, SessionEvent::MessageAppended { message } if message.id == message_id)
+        }) else {
+            return Ok(None);
+        };
+        let Some(stamp) = env.actor_stamp.as_ref().filter(|s| !s.actor.id.is_empty()) else {
+            return Ok(None);
+        };
+        if self.local_workspace_id == Some(env.workspace_id) {
+            return Ok(self.load(session_id)?.map(|s| s.role_of(&stamp.actor.id)));
+        }
+        let Some(frontier) = stamp.cfg_frontier else { return Ok(None) };
+        let (cfg, timeline) =
+            self.store.load_config(env.workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        if cfg.is_none() {
+            return Ok(None);
+        }
+        Ok(timeline.at(frontier).ok().and_then(|r| r.role_of(&stamp.actor.id)))
+    }
+
     pub fn load(&self, session_id: Uuid) -> Result<Option<ChatSession>> {
         // Pin the base seed to the out-of-band founder (B2 residual fix). This is
         // load-bearing for the workspace-config log — where the roster/ownership
@@ -3404,6 +3433,50 @@ mod tests {
         // The roster is untouched.
         let cfg = svc_on(&path, "u1", "Ana").load(workspace_config_session_id(wid)).unwrap().unwrap();
         assert_eq!(cfg.members.iter().find(|m| m.id == "u2").unwrap().role, WorkspaceRole::Contributor);
+    }
+
+    /// H1 x A2: the author gate reads the author's role as of the triggering
+    /// message (the config roster at its frontier). A demotion after an
+    /// Admin's message doesn't take back that message's write-capable turn,
+    /// a later message is judged at the lower role, and a promotion after a
+    /// Contributor's message doesn't upgrade it.
+    #[test]
+    fn author_gate_uses_role_as_of_the_triggering_message() {
+        use crate::author_gate::{gate, GatePlan};
+        use hive_core::ModelProviderKind;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hive.db");
+        let wid = Uuid::new_v4();
+        let chat_id = {
+            let mut a = svc_on(&path, "u1", "Ana");
+            let chat = a.create_chat("A", wid, "anthropic").unwrap();
+            a.add_member(chat.id, wid, test_member("adm", "Adm", WorkspaceRole::Admin)).unwrap();
+            a.add_member(chat.id, wid, test_member("con", "Con", WorkspaceRole::Contributor)).unwrap();
+            chat.id
+        };
+        let m_admin = svc_on(&path, "adm", "Adm").post_user_message(chat_id, wid, "@hive refactor it").unwrap().id;
+        let m_con = svc_on(&path, "con", "Con").post_user_message(chat_id, wid, "@hive delete the tests").unwrap().id;
+        {
+            let mut a = svc_on(&path, "u1", "Ana");
+            a.set_member_role(chat_id, wid, "adm", WorkspaceRole::Contributor).unwrap();
+            a.set_member_role(chat_id, wid, "con", WorkspaceRole::Admin).unwrap();
+        }
+        let m_admin_later = svc_on(&path, "adm", "Adm").post_user_message(chat_id, wid, "@hive and again").unwrap().id;
+        let host = svc_on(&path, "u1", "Ana");
+        // Today's roster has swapped the two roles...
+        let now = host.load(chat_id).unwrap().unwrap();
+        assert_eq!((now.role_of("adm"), now.role_of("con")), (WorkspaceRole::Contributor, WorkspaceRole::Admin));
+        // ...but each message is judged at its own position.
+        let at = |m| host.author_role_at(chat_id, m).unwrap();
+        assert_eq!(at(m_admin), Some(WorkspaceRole::Admin));
+        assert_eq!(at(m_con), Some(WorkspaceRole::Contributor));
+        assert_eq!(at(m_admin_later), Some(WorkspaceRole::Contributor));
+        assert_eq!(at(Uuid::new_v4()), None, "an unknown message fails closed");
+        let floor = WorkspaceRole::Admin;
+        assert_eq!(gate(ModelProviderKind::ClaudeCode, at(m_admin), floor), GatePlan::Full);
+        assert_eq!(gate(ModelProviderKind::ClaudeCode, at(m_con), floor), GatePlan::ReadOnly);
+        assert_eq!(gate(ModelProviderKind::ClaudeCode, at(m_admin_later), floor), GatePlan::ReadOnly);
+        assert!(matches!(gate(ModelProviderKind::Codex, at(m_con), floor), GatePlan::Refuse(_)));
     }
 
     #[test]
