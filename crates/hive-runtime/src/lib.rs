@@ -31,6 +31,7 @@ pub mod patch_leaving;
 pub mod peer;
 #[cfg(feature = "p2p")]
 pub mod peer_iroh;
+pub mod private_file;
 pub mod prompt;
 pub mod proposal_preflight;
 pub mod provider;

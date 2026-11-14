@@ -863,9 +863,13 @@ fn settings_file(data_dir: &std::path::Path) -> PathBuf {
     data_dir.join("settings.json")
 }
 
+/// `settings.json` holds provider keys and OAuth tokens: owner-only (0600)
+/// and written atomically, so a crash never leaves it truncated.
 fn save_settings(data_dir: &std::path::Path, settings: &LiveSettings) {
     if let Ok(bytes) = serde_json::to_vec_pretty(settings) {
-        let _ = std::fs::write(settings_file(data_dir), bytes);
+        if let Err(e) = hive_runtime::private_file::write_private_atomic(&settings_file(data_dir), &bytes) {
+            tracing::warn!(target: "settings", "couldn't save settings: {e}");
+        }
     }
 }
 
