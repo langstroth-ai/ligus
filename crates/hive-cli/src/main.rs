@@ -35,8 +35,9 @@ use hive_core::{
 };
 use hive_runtime::{
     parse_mentions, pending_mentions, resolve_workspace_credential, turns_for, ChatService,
-    ChatTurn, EventStore, FileKeyVault, IdentityStore, RelayClient, ResolvedRuntime, SyncEngine,
+    ChatTurn, EventStore, IdentityStore, RelayClient, ResolvedRuntime, SyncEngine,
 };
+use hive_runtime::secret_store::StoreKeyVault;
 use uuid::Uuid;
 
 mod auth;
@@ -54,6 +55,8 @@ struct Config {
     github_token: Option<String>,
     room: String,
     key: Option<String>,
+    /// Epoch keys an invite delivered (B1 newcomer bootstrap).
+    epoch_keys: Vec<hive_runtime::keyring::DeliveredKey>,
 }
 
 /// Env lookup (blank = unset; `LIGUS_*` names only, see `hive_core::compat`).
@@ -76,27 +79,85 @@ fn default_home_data_dir(home: &std::path::Path) -> PathBuf {
 
 /// Persisted connection config (written by `ligus enroll`), read as a fallback
 /// under the env vars so a headless box needn't re-export them each run.
+/// `config.toml` holds only `relay_url` and `room`; the relay token, the
+/// workspace passphrase and delivered epoch keys live in the OS secret store
+/// (B2: scope `cli`, see [`FileConfig::load`] and [`FileConfig::save`]).
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 struct FileConfig {
     #[serde(default)]
     relay_url: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     token: Option<String>,
     #[serde(default)]
     room: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     key: Option<String>,
+    /// Epoch keys the invite delivered (B1).
+    #[serde(default, skip_serializing)]
+    ek: Vec<hive_runtime::keyring::DeliveredKey>,
 }
 
 fn config_path(data_dir: &std::path::Path) -> PathBuf {
     data_dir.join("config.toml")
 }
 
+fn cli_secret(name: &str) -> hive_runtime::secret_store::SecretId {
+    hive_runtime::secret_store::SecretId::new("cli", name)
+}
+
+impl FileConfig {
+    /// `config.toml`, with its secrets from the store. Secrets still written
+    /// in the file in the clear are dropped and the file rewritten without
+    /// them (2.0 starts from scratch: re-run `ligus enroll`).
+    fn load(data_dir: &std::path::Path) -> Self {
+        let mut f: FileConfig = std::fs::read_to_string(config_path(data_dir))
+            .ok()
+            .and_then(|t| toml::from_str(&t).ok())
+            .unwrap_or_default();
+        if f.token.is_some() || f.key.is_some() || !f.ek.is_empty() {
+            eprintln!("{} held plaintext secrets; removed them (re-run `ligus enroll`)", config_path(data_dir).display());
+            f.token = None;
+            f.key = None;
+            f.ek.clear();
+            if let Ok(text) = toml::to_string_pretty(&f) {
+                let _ = serve::tunnel::write_private(&config_path(data_dir), text.as_bytes());
+            }
+        }
+        let store = hive_runtime::secret_store::for_data_dir(data_dir);
+        let get = |n: &str| store.get_string(&cli_secret(n)).ok().flatten().map(|z| z.to_string()).filter(|v| !v.is_empty());
+        f.token = get("token");
+        f.key = get("key");
+        f.ek = get("ek").and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default();
+        if let Some(t) = &f.token {
+            hive_runtime::secret_redact::register(t);
+        }
+        if let Some(k) = &f.key {
+            hive_runtime::secret_redact::register(k);
+        }
+        f
+    }
+
+    /// Write `config.toml` (owner-only, no secrets) and the secrets to the store.
+    fn save(&self, data_dir: &std::path::Path) -> Result<()> {
+        let store = hive_runtime::secret_store::for_data_dir(data_dir);
+        let put = |n: &str, v: Option<&str>| -> Result<()> {
+            match v.filter(|v| !v.is_empty()) {
+                Some(v) => store.put(&cli_secret(n), v.as_bytes())?,
+                None => store.delete(&cli_secret(n))?,
+            }
+            Ok(())
+        };
+        put("token", self.token.as_deref())?;
+        put("key", self.key.as_deref())?;
+        let ek = (!self.ek.is_empty()).then(|| serde_json::to_string(&self.ek)).transpose()?;
+        put("ek", ek.as_deref())?;
+        serve::tunnel::write_private(&config_path(data_dir), toml::to_string_pretty(self)?.as_bytes())?;
+        Ok(())
+    }
+}
+
 fn load_file_config(data_dir: &std::path::Path) -> FileConfig {
-    std::fs::read_to_string(config_path(data_dir))
-        .ok()
-        .and_then(|t| toml::from_str(&t).ok())
-        .unwrap_or_default()
+    FileConfig::load(data_dir)
 }
 
 fn config() -> Config {
@@ -104,6 +165,8 @@ fn config() -> Config {
         .map(PathBuf::from)
         .or_else(|| env_opt("HOME").map(|h| default_home_data_dir(std::path::Path::new(&h))))
         .unwrap_or_else(|| PathBuf::from("./hive-data"));
+    // B2: secrets come from the OS secret store from here on.
+    hive_runtime::secret_store::init_for_data_dir(&data_dir, None);
     // Env wins; the saved config.toml (from `ligus enroll`) fills the rest.
     let f = load_file_config(&data_dir);
     Config {
@@ -113,12 +176,17 @@ fn config() -> Config {
         github_token: env_opt("LIGUS_RELAY_GITHUB_TOKEN"),
         room: env_opt("LIGUS_WORKSPACE").or(f.room).unwrap_or_else(|| "default".into()),
         key: env_opt("LIGUS_WORKSPACE_KEY").or(f.key),
+        epoch_keys: f.ek,
     }
 }
 
-/// Decode a `hivews1:` workspace invite → (relay_url, room, key). Mirrors the
-/// app's encoder (base64url(json) of the connection; snake_case fields).
-fn decode_hivews_invite(invite: &str) -> Result<(String, String, Option<String>, Option<Uuid>)> {
+/// Decode a `hivews1:` workspace invite → (relay_url, room, key, invite id,
+/// delivered epoch keys). Mirrors the app's encoder (base64url(json) of the
+/// connection; snake_case fields).
+#[allow(clippy::type_complexity)]
+fn decode_hivews_invite_full(
+    invite: &str,
+) -> Result<(String, String, Option<String>, Option<Uuid>, Vec<hive_runtime::keyring::DeliveredKey>, Option<(String, String)>)> {
     use base64::Engine;
     #[derive(serde::Deserialize)]
     struct Conn {
@@ -131,6 +199,14 @@ fn decode_hivews_invite(invite: &str) -> Result<(String, String, Option<String>,
         /// The single-use invite an Admin issued with this code.
         #[serde(default)]
         inv: Option<String>,
+        /// Every authorized epoch key the inviter held (B1).
+        #[serde(default)]
+        ek: Vec<hive_runtime::keyring::DeliveredKey>,
+        /// The founder and their key fingerprint (the pin keys are decided on).
+        #[serde(default)]
+        founder_actor_id: Option<String>,
+        #[serde(default)]
+        fk: Option<String>,
     }
     let body = invite
         .trim()
@@ -143,28 +219,36 @@ fn decode_hivews_invite(invite: &str) -> Result<(String, String, Option<String>,
     if c.room.trim().is_empty() {
         bail!("invite is missing a room");
     }
-    Ok((c.relay_url, c.room, c.key, c.inv.and_then(|i| Uuid::parse_str(i.trim()).ok())))
+    let pin = c.founder_actor_id.zip(c.fk);
+    Ok((c.relay_url, c.room, c.key, c.inv.and_then(|i| Uuid::parse_str(i.trim()).ok()), c.ek, pin))
 }
 
 /// `ligus enroll <hivews1:…> [--token <access-token>]` — one-command bootstrap:
 /// decode the invite, persist the connection to config.toml, and (with --token)
 /// wire the relay identity. After this a headless box just runs `ligus worker`.
 fn cmd_enroll(cfg: &Config, invite: &str, token: Option<String>) -> Result<()> {
-    let (relay_url, room, key, inv) = decode_hivews_invite(invite)?;
+    let (relay_url, room, key, inv, ek, pin) = decode_hivews_invite_full(invite)?;
     std::fs::create_dir_all(&cfg.data_dir)?;
     let mut f = load_file_config(&cfg.data_dir);
     f.relay_url = Some(relay_url.clone());
     f.room = Some(room.clone());
     f.key = key;
+    f.ek = ek;
     if let Some(t) = token {
         f.token = Some(t);
     }
-    // It holds the workspace E2EE key and the relay token: owner-only.
-    serve::tunnel::write_private(&config_path(&cfg.data_dir), toml::to_string_pretty(&f)?.as_bytes())?;
-    // Keep the invite this box redeems when it enrolls itself (device-local).
+    // The workspace E2EE key and the relay token go to the secret store; the
+    // file (owner-only) keeps the relay and room.
+    f.save(&cfg.data_dir)?;
+    // Keep the invite this box redeems when it enrolls itself, and the
+    // founder pin the invite carries (device-local; keys and rosters are
+    // only decided on a pinned fold).
+    let store = EventStore::open(cfg.data_dir.join("hive.db"))?;
     if let Some(inv) = inv {
-        let store = EventStore::open(cfg.data_dir.join("hive.db"))?;
         store.set_join_invite(uuid_of_room(&room), inv)?;
+    }
+    if let Some((founder, fk)) = pin {
+        store.set_workspace_pin(uuid_of_room(&room), &founder, &fk)?;
     }
     println!("Enrolled workspace '{room}' at {relay_url}.");
     println!("Saved to {}.", config_path(&cfg.data_dir).display());
@@ -200,7 +284,7 @@ async fn cmd_join(cfg: &Config, code: &str) -> Result<()> {
 /// fresh identity on first run (idempotent thereafter).
 fn open_service(cfg: &Config) -> Result<ChatService> {
     std::fs::create_dir_all(&cfg.data_dir)?;
-    let identity = IdentityStore::new(&cfg.data_dir, FileKeyVault::new(&cfg.data_dir));
+    let identity = IdentityStore::new(&cfg.data_dir, StoreKeyVault::for_data_dir(&cfg.data_dir));
     let stored = identity.bootstrap("hive-cli", "hive-cli", "hive-cli")?;
     let device_kp = identity.device_keypair(stored.device.id)?;
     let account_kp = identity.account_keypair(stored.account.id)?;
@@ -208,7 +292,7 @@ fn open_service(cfg: &Config) -> Result<ChatService> {
     let mut svc = ChatService::new(store, stored.device.id, device_kp, account_kp, stored.account.actor());
     // Agents bound to this host sign their own output with keys this device
     // certifies (A3); the keys live with this host's other keys.
-    svc.set_agent_vault(Box::new(FileKeyVault::new(&cfg.data_dir)));
+    svc.set_agent_vault(Box::new(StoreKeyVault::for_data_dir(&cfg.data_dir)));
     Ok(svc)
 }
 
@@ -222,7 +306,7 @@ fn purge_foreign_workspaces(cfg: &Config) -> Result<()> {
     if !db.exists() {
         return Ok(());
     }
-    let identity = IdentityStore::new(&cfg.data_dir, FileKeyVault::new(&cfg.data_dir));
+    let identity = IdentityStore::new(&cfg.data_dir, StoreKeyVault::for_data_dir(&cfg.data_dir));
     let own_device = identity.bootstrap("hive-cli", "hive-cli", "hive-cli")?.device.id;
     let keep = HashSet::from([uuid_of_room(&cfg.room)]);
     let mut store = EventStore::open(&db)?;
@@ -280,12 +364,33 @@ fn relay_client(cfg: &Config) -> Result<RelayClient> {
 
 /// A sync engine for this config. Kept across rounds (as `ligus serve` does),
 /// it scans only rows stored since its last push instead of the whole store.
+/// Every CLI host (serve, worker, `ligus sync`) builds its keyring the same
+/// way as the desktop (B1): from the folded config log and this box's own
+/// key-agreement key, so it reads and seals at rotated epochs.
 fn sync_engine(cfg: &Config) -> Result<SyncEngine> {
-    let mut engine = SyncEngine::new(relay_client(cfg)?, cfg.room.clone());
-    if let Some(pass) = &cfg.key {
-        engine = engine.with_key(derive_workspace_key(pass));
+    Ok(SyncEngine::new(relay_client(cfg)?, cfg.room.clone()).with_key_source(key_source(cfg)?))
+}
+
+/// What this box holds for the keyring (B1).
+fn key_source(cfg: &Config) -> Result<hive_runtime::keyring::KeySource> {
+    let identity = IdentityStore::new(&cfg.data_dir, StoreKeyVault::for_data_dir(&cfg.data_dir));
+    let device = identity.bootstrap("hive-cli", "hive-cli", "hive-cli")?.device.id;
+    let ka = identity.key_agreement(device)?;
+    Ok(hive_runtime::keyring::KeySource::for_device(device, ka, cfg.key.as_deref(), &cfg.epoch_keys))
+}
+
+/// Publish this box's own key-agreement key on the workspace config log
+/// (once; B1), so the next rotation seals the workspace key to it. Best
+/// effort: a box whose config log hasn't synced, or that isn't certified
+/// yet, tries again on its next start.
+fn publish_key_agreement(cfg: &Config, svc: &mut ChatService) {
+    let identity = IdentityStore::new(&cfg.data_dir, StoreKeyVault::for_data_dir(&cfg.data_dir));
+    let Ok(ka) = identity.key_agreement(svc.device_id()) else { return };
+    match svc.publish_key_agreement(uuid_of_room(&cfg.room), ka.public_key_bytes()) {
+        Ok(true) => println!("published this box's key-agreement key for workspace key rotations"),
+        Ok(false) => {}
+        Err(e) => eprintln!("key-agreement key not published yet: {e}"),
     }
-    Ok(engine)
 }
 
 /// One push + pull round: (pushed, pulled).
@@ -326,7 +431,7 @@ async fn materialize_turns(cfg: &Config, turns: &mut [ChatTurn]) {
 }
 
 fn cmd_whoami(cfg: &Config) -> Result<()> {
-    let identity = IdentityStore::new(&cfg.data_dir, FileKeyVault::new(&cfg.data_dir));
+    let identity = IdentityStore::new(&cfg.data_dir, StoreKeyVault::for_data_dir(&cfg.data_dir));
     let stored = identity.bootstrap("hive-cli", "hive-cli", "hive-cli")?;
     println!("account : {}", stored.account.id);
     println!("device  : {}", stored.device.id);
@@ -1025,6 +1130,7 @@ async fn cmd_worker(cfg: &Config, label: Option<String>) -> Result<()> {
     }
     println!("worker {my_host} online — draining queued mentions for its agents. Ctrl-C to stop.");
     let mut svc = open_service(cfg)?;
+    publish_key_agreement(cfg, &mut svc);
     // Finish replies a previous run was streaming when it stopped (see
     // `worker::recover_interrupted_turns`).
     match worker::recover_interrupted_turns(&mut svc) {
@@ -1586,6 +1692,7 @@ mod cli_tests {
             github_token: None,
             room: "r".into(),
             key: None,
+            epoch_keys: Vec::new(),
         };
         let body = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(br#"{"relay_url":"https://relay.example","room":"r","key":"test-passphrase"}"#);

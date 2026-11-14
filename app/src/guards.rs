@@ -940,7 +940,7 @@ pub(crate) fn get_dearth_state(state: State<AppState>) -> Result<hive_proto::Dea
 }
 
 /// Switch dearth mode on or off for the active workspace (Admin+).
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn set_dearth_mode(
     app: AppHandle,
     state: State<AppState>,
@@ -968,7 +968,7 @@ pub(crate) fn set_dearth_mode(
 }
 
 /// Approve a member or device waiting on dearth mode's second approval.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn approve_join(app: AppHandle, state: State<AppState>, subject: String) -> Result<(), String> {
     let ws = state.active_workspace_id();
     let mut svc = state.service.lock().unwrap();
@@ -1064,7 +1064,7 @@ pub(crate) fn get_chat_lockdown(state: State<AppState>, session_id: String) -> R
 
 /// Clear this chat's lockdown (a human member, Contributor+; re-checked on
 /// every device's ingest).
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn clear_chat_lockdown(app: AppHandle, state: State<AppState>, session_id: String) -> Result<(), String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();

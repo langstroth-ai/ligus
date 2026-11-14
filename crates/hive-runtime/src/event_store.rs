@@ -78,6 +78,8 @@ type RowsSig = (i64, i64);
 
 /// Guard signals kept per device (all workspaces); older rows are pruned.
 pub const GUARD_SIGNALS_KEEP: i64 = 20_000;
+/// Parked relay bodies kept per room (A-13).
+pub const PARKED_KEEP: i64 = 5_000;
 /// Facts kept on this device (newest).
 pub const FACTS_KEEP: i64 = 50_000;
 
@@ -150,6 +152,16 @@ impl EventStore {
                 invite_id    TEXT NOT NULL
             );
 
+            -- Device-local (A-13): relay bodies sealed under a key this
+            -- device doesn't hold, parked so they never pin the fetch cursor;
+            -- retried whenever the keyring changes. Bounded per room.
+            CREATE TABLE IF NOT EXISTS parked_bodies (
+                workspace TEXT NOT NULL,
+                seq       INTEGER NOT NULL,
+                body      TEXT NOT NULL,
+                PRIMARY KEY (workspace, seq)
+            );
+
             CREATE TABLE IF NOT EXISTS sync_cursor (
                 workspace        TEXT PRIMARY KEY,
                 last_fetched_seq INTEGER NOT NULL
@@ -204,6 +216,14 @@ impl EventStore {
             CREATE INDEX IF NOT EXISTS idx_facts_ws ON facts (workspace_id, row_id);
             "#,
         )?;
+        // B1: the key epoch each relay body arrived sealed under (device-local,
+        // unsigned; NULL for events authored here or received unsealed).
+        let has_epoch: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('events') WHERE name = 'sealed_epoch'")?
+            .exists([])?;
+        if !has_epoch {
+            conn.execute_batch("ALTER TABLE events ADD COLUMN sealed_epoch INTEGER")?;
+        }
         Ok(Self { conn, projections: Mutex::new(HashMap::new()), configs: Mutex::new(HashMap::new()) })
     }
 
@@ -436,6 +456,13 @@ impl EventStore {
     /// are commutative enough (upsert-by-id, idempotent reactions) for that to
     /// converge across peers.
     pub fn ingest(&mut self, env: &SessionEventEnvelope) -> Result<bool> {
+        self.ingest_sealed(env, env.sealed_epoch())
+    }
+
+    /// [`EventStore::ingest`], recording the key epoch the body arrived sealed
+    /// under (B1). The first copy of an event wins: a re-seal by an old-key
+    /// holder only repeats its `event_id`.
+    pub fn ingest_sealed(&mut self, env: &SessionEventEnvelope, sealed_epoch: Option<u32>) -> Result<bool> {
         if self.has_event(env.event_id)? {
             return Ok(false);
         }
@@ -458,8 +485,8 @@ impl EventStore {
         tx.execute(
             r#"
             INSERT INTO events
-                (event_id, session_id, workspace_id, sequence, kind, scope, timestamp, envelope_json)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                (event_id, session_id, workspace_id, sequence, kind, scope, timestamp, envelope_json, sealed_epoch)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
             "#,
             rusqlite::params![
                 env.event_id.to_string(),
@@ -470,6 +497,7 @@ impl EventStore {
                 serde_json::to_value(env.scope)?.as_str().unwrap_or_default(),
                 timestamp,
                 json,
+                sealed_epoch,
             ],
         )?;
         tx.commit()?;
@@ -513,6 +541,73 @@ impl EventStore {
             "SELECT envelope_json FROM events WHERE session_id = ?1 AND sequence > ?2 ORDER BY sequence ASC",
             rusqlite::params![session_id.to_string(), after],
         )
+    }
+
+    /// Like [`EventStore::query_envelopes`] for `SELECT envelope_json,
+    /// sealed_epoch …`: each envelope carries the epoch it arrived sealed
+    /// under, which the fold's old-epoch rule reads (B1).
+    fn query_envelopes_sealed(&self, sql: &str, params: impl rusqlite::Params) -> Result<Vec<SessionEventEnvelope>> {
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map(params, |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (json, epoch) = row?;
+            match serde_json::from_str::<SessionEventEnvelope>(&json) {
+                Ok(mut env) => {
+                    env.set_sealed_epoch(epoch.and_then(|e| u32::try_from(e).ok()));
+                    out.push(env);
+                }
+                Err(e) => tracing::warn!(error = %e, "skipping unparseable event row during load"),
+            }
+        }
+        Ok(out)
+    }
+
+    /// Park a relay body this device can't open yet (A-13). Keeps at most
+    /// [`PARKED_KEEP`] per room, dropping the oldest.
+    pub fn park_body(&self, workspace: &str, seq: u64, body: &serde_json::Value) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO parked_bodies (workspace, seq, body) VALUES (?1, ?2, ?3)",
+            rusqlite::params![workspace, seq as i64, serde_json::to_string(body)?],
+        )?;
+        self.conn.execute(
+            "DELETE FROM parked_bodies WHERE workspace = ?1 AND seq NOT IN \
+             (SELECT seq FROM parked_bodies WHERE workspace = ?1 ORDER BY seq DESC LIMIT ?2)",
+            rusqlite::params![workspace, PARKED_KEEP],
+        )?;
+        Ok(())
+    }
+
+    /// Every parked body of a room, by relay sequence.
+    pub fn parked_bodies(&self, workspace: &str) -> Result<Vec<(u64, serde_json::Value)>> {
+        let mut stmt = self.conn.prepare("SELECT seq, body FROM parked_bodies WHERE workspace = ?1 ORDER BY seq ASC")?;
+        let rows = stmt.query_map([workspace], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (seq, body) = row?;
+            if let Ok(v) = serde_json::from_str(&body) {
+                out.push((seq as u64, v));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Forget a parked body (it opened, or proved bad).
+    pub fn unpark(&self, workspace: &str, seq: u64) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM parked_bodies WHERE workspace = ?1 AND seq = ?2",
+            rusqlite::params![workspace, seq as i64],
+        )?;
+        Ok(())
+    }
+
+    /// The key epoch an event arrived sealed under, if it was received sealed.
+    pub fn sealed_epoch_of(&self, event_id: Uuid) -> Result<Option<u32>> {
+        let v: Option<Option<i64>> = self
+            .conn
+            .query_row("SELECT sealed_epoch FROM events WHERE event_id = ?1", [event_id.to_string()], |r| r.get(0))
+            .optional()?;
+        Ok(v.flatten().and_then(|e| u32::try_from(e).ok()))
     }
 
     fn query_envelopes(
@@ -857,8 +952,8 @@ impl EventStore {
                 return Ok(session.clone());
             }
         }
-        let envelopes = self.query_envelopes(
-            "SELECT envelope_json FROM events WHERE session_id = ?1 ORDER BY row_id ASC",
+        let envelopes = self.query_envelopes_sealed(
+            "SELECT envelope_json, sealed_epoch FROM events WHERE session_id = ?1 ORDER BY row_id ASC",
             [session_id.to_string()],
         )?;
         let session = project_authorized(&envelopes, trusted_founder, trusted_workspace, ws);
@@ -890,8 +985,8 @@ impl EventStore {
                 return Ok((session.clone(), Arc::clone(timeline)));
             }
         }
-        let envelopes = self.query_envelopes(
-            "SELECT envelope_json FROM events WHERE session_id = ?1 ORDER BY row_id ASC",
+        let envelopes = self.query_envelopes_sealed(
+            "SELECT envelope_json, sealed_epoch FROM events WHERE session_id = ?1 ORDER BY row_id ASC",
             [config_id.to_string()],
         )?;
         let (session, timeline) = project_config(&envelopes, trusted_founder, trusted_workspace);

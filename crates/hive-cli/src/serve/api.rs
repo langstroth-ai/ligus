@@ -60,6 +60,9 @@ impl From<hive_runtime::chat_service::ChatError> for ApiError {
     fn from(e: hive_runtime::chat_service::ChatError) -> Self {
         use hive_runtime::chat_service::ChatError;
         match e {
+            ChatError::Unauthorized(m) if m == hive_core::authz::PRESENCE_REQUIRED => {
+                Self(StatusCode::FORBIDDEN, PRESENCE_REQUIRED.into())
+            }
             ChatError::Unauthorized(m) => Self(StatusCode::FORBIDDEN, format!("unauthorized: {m}")),
             ChatError::NotFound(m) => Self(StatusCode::NOT_FOUND, m),
             other => Self(StatusCode::INTERNAL_SERVER_ERROR, other.to_string()),
@@ -79,7 +82,7 @@ impl IntoResponse for ApiError {
 /// P0.6: the 403 a human-only action gets from a host that can't tell a
 /// human approved it.
 pub(super) const PRESENCE_REQUIRED: &str = "presence_required";
-const PRESENCE_HINT: &str = "approve on your laptop, or confirm with a passkey after updating";
+const PRESENCE_HINT: &str = "confirm with your passkey: POST /v1/presence/prepare, then /v1/presence/commit";
 
 /// P0.6 interim: while this box acts for the owner (`act_as_owner_device`),
 /// anything it signs is signed as the owner, so a phone's or a bearer
@@ -445,6 +448,8 @@ async fn auth(State(s): S, mut req: Request, next: Next) -> Response {
 pub fn router(shared: Arc<Shared>) -> Router {
     Router::new()
         .route("/v1/health", get(health))
+        .route("/v1/presence/prepare", post(super::presence_api::prepare))
+        .route("/v1/presence/commit", post(super::presence_api::commit))
         .route("/v1/chats", get(list_chats).post(create_chat))
         .route("/v1/chats/:id/messages", get(list_messages).post(post_message))
         .route("/v1/agents", get(list_agents))

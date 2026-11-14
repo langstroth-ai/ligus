@@ -44,6 +44,7 @@ pub mod notify;
 pub mod ntfy;
 pub mod pair;
 pub mod people;
+pub mod presence_api;
 pub mod proposal_file;
 pub mod repos_api;
 pub mod sets;
@@ -272,7 +273,7 @@ pub fn cmd_enroll(cfg: &Config, opts: &ServeOptions, new_device: bool) -> Result
         ),
         (_, true) => {
             drop(svc);
-            let ids = hive_runtime::IdentityStore::new(&cfg.data_dir, hive_runtime::FileKeyVault::new(&cfg.data_dir));
+            let ids = hive_runtime::IdentityStore::new(&cfg.data_dir, hive_runtime::secret_store::StoreKeyVault::for_data_dir(&cfg.data_dir));
             let rotated = ids.rotate_device()?;
             println!(
                 "This box has a new device key ({}). Restart ligus serve so it uses it (e.g. systemctl --user restart hive-serve).",
@@ -337,6 +338,8 @@ pub struct Shared {
     pub dashboard_mcp: std::result::Result<hive_runtime::McpRegistry, String>,
     /// Repos from the phone: the GitHub backend, clone jobs, checkout locks.
     pub repos: repos_api::RepoState,
+    /// Events waiting for a phone's passkey (B3 `presence/prepare`).
+    pub presence_drafts: presence_api::Pending,
 }
 
 /// How long a dashboard snapshot of the workspace is reused.
@@ -904,6 +907,9 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         Standing::Revoked => {}
         Standing::Own => register_own(&mut svc, ws, &host_id, &opts)?,
     }
+    if standing != Standing::Revoked {
+        crate::publish_key_agreement(&cfg, &mut svc);
+    }
     let tunnel = match &opts.remote {
         Some(settings) => Some(tunnel::TunnelHost::open(&cfg.data_dir, settings.clone()).context("opening the relay tunnel state")?),
         None => None,
@@ -930,6 +936,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         presence: hive_runtime::HostPresence::new(),
         sync_status: Mutex::new((first_sync, None)),
         busy: Mutex::new(HashSet::new()),
+        presence_drafts: presence_api::Pending::default(),
         hive_snapshot: Mutex::new(None),
         dashboard_mcp: dashboard_mcp_registry(),
         repos: repos_api::RepoState::default(),

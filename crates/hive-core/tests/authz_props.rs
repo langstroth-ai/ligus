@@ -67,7 +67,7 @@ impl World {
     fn stamp(by: &str, frontier: Option<CfgFrontier>) -> Option<ActorStamp> {
         let mut actor = ActorIdentity::new(by, by, ActorKind::Human);
         actor.account_id = Some(account(by));
-        Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: frontier })
+        Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: frontier, presence: None, runtime_effect: false })
     }
 
     fn head(&self) -> Option<CfgFrontier> {
@@ -357,6 +357,35 @@ fn held_until_config_frontier_arrives() {
     assert_eq!(p.approvals[0].role, WorkspaceRole::Admin);
     assert!(s.authz.held.is_empty());
     assert!(!s.authz.blocks(pid, None));
+}
+
+/// A-14: a vote naming a config event nobody will ever deliver can't hold
+/// its proposal forever. Once the config log has passed the claimed lamport
+/// (or the claim is absurdly far ahead), the vote is left out, not held, and
+/// blocks no side effect.
+#[test]
+fn forged_frontier_hold_cannot_block_side_effects_indefinitely() {
+    let mut w = World::new();
+    let pid = Uuid::from_u128(0xC7);
+    w.chat_push("mara", SessionEvent::ProposalUpserted { proposal: proposal(pid, 1, ProposalStatus::Open) });
+    let head = w.head().unwrap();
+    // Just ahead of the head: a plausible lagging config event, held.
+    let near = CfgFrontier { lamport: head.lamport + 1, event_id: Uuid::new_v4() };
+    w.clock += 5;
+    let vid = w.chat_at("val", vote("val", pid, WorkspaceRole::Viewer, false, None), Some(near));
+    assert!(w.state().authz.blocks(pid, None), "held while it could still arrive");
+    // The config log moves past the claimed lamport: the hold is dropped.
+    for _ in 0..3 {
+        w.cfg_push("owner", SessionEvent::JoinApproved { subject: "noop".into() });
+    }
+    let s = w.state();
+    assert!(!s.authz.blocks(pid, None), "a frontier the log has passed can't block side effects");
+    assert_eq!(w.verdicts()[&vid], Verdict::Denied);
+    // Absurdly far ahead: never waited for.
+    let far = CfgFrontier { lamport: u64::MAX - 1, event_id: Uuid::new_v4() };
+    let fid = w.chat_at("val", vote("val", pid, WorkspaceRole::Viewer, false, None), Some(far));
+    assert!(!w.state().authz.blocks(pid, None));
+    assert_eq!(w.verdicts()[&fid], Verdict::Denied);
 }
 
 #[test]
@@ -894,7 +923,7 @@ impl World {
         let mut actor = ActorIdentity::new(a.agent_id.to_string(), "coder", ActorKind::Agent);
         actor.device_id = Some(a.key_id);
         let f = env.actor_stamp.as_ref().unwrap().cfg_frontier;
-        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: f });
+        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: f, presence: None, runtime_effect: false });
         env.signer_device_id = Some(a.key_id);
         id
     }
@@ -991,7 +1020,7 @@ fn agent_tier_cannot_emit_admin_events() {
         let env = w.cfg.iter_mut().find(|x| x.event_id == id).unwrap();
         let mut actor = ActorIdentity::new(a.agent_id.to_string(), "coder", ActorKind::Agent);
         actor.device_id = Some(a.key_id);
-        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: None });
+        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false });
         env.signer_device_id = Some(a.key_id);
         assert_eq!(w.verdicts()[&id], Verdict::Denied);
     }
@@ -1000,7 +1029,7 @@ fn agent_tier_cannot_emit_admin_events() {
     let env = w.cfg.iter_mut().find(|x| x.event_id == id).unwrap();
     let mut actor = ActorIdentity::new(a.agent_id.to_string(), "coder", ActorKind::Agent);
     actor.device_id = Some(a.key_id);
-    env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: None });
+    env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false });
     env.signer_device_id = Some(a.key_id);
     assert_eq!(w.verdicts()[&id], Verdict::Allowed);
 }
@@ -1046,8 +1075,8 @@ fn agent_of_viewer_capped_at_viewer() {
 #[test]
 fn rules_v2_tier_applies_to_host_signed_agent_output() {
     // Under rules v2 a host-signed event that speaks for an agent is judged
-    // with the Agent tier; tested on the tier itself because this build folds
-    // with rules v1 (RULES_SUPPORTED) until Track B enforces v2.
+    // with the Agent tier (the tier itself here; the fold under v2, which
+    // needs a passkey-confirmed switch, is in hive-runtime's presence_tests).
     use hive_core::authz::agent::{agent_authored, tier_allows};
     let agent = Uuid::new_v4();
     let mut p = proposal(Uuid::from_u128(0x91), 1, ProposalStatus::Open);
@@ -1062,9 +1091,9 @@ fn rules_v2_tier_applies_to_host_signed_agent_output() {
 }
 
 /// P0.6 (A2 fold rule): a `ligus serve` box enrolled as its owner's device
-/// signs as the owner without the owner being there. Until Track B's presence
-/// proofs its vote doesn't count toward the human gate on any device (the
-/// box's API refuses it up front with 403 `presence_required`); the same
+/// signs as the owner without the owner being there. Without the owner's
+/// passkey presence (B3) its vote doesn't count toward the human gate on any
+/// device (the box's API asks the phone for one); the same
 /// owner's vote from a device holding their account key does. The box having
 /// once published its own identity under its own account changes nothing.
 #[test]

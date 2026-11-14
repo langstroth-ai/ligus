@@ -99,6 +99,7 @@ pub fn open_framed(key: &[u8; 32], framed: &[u8]) -> Option<Vec<u8>> {
         version,
         nonce: framed[4..HEADER_LEN].to_vec(),
         ciphertext: framed[HEADER_LEN..].to_vec(),
+        kid: None,
     };
     open_symmetric(key, &sealed).ok()
 }

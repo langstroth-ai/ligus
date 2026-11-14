@@ -1,0 +1,133 @@
+//! Which events need a human's passkey presence under workspace rules v2
+//! (Phase 0, B3, table B.4.4). One exhaustive `match`: a new `SessionEvent`
+//! kind doesn't compile until it is placed here.
+
+use crate::events::SessionEvent;
+use crate::identity::ActorKind;
+use crate::session::ChatSession;
+
+use super::RosterState;
+
+/// Whether `event`, authored by `author`, needs presence under rules v2,
+/// judged against the roster at its position and its log's fold so far.
+pub fn requires_presence(event: &SessionEvent, author: &str, roster: &RosterState, fold: &ChatSession) -> bool {
+    match event {
+        // Membership and roles. Adding yourself (the founder's own seed
+        // member, or redeeming an Admin's invite) is the bootstrap exception.
+        SessionEvent::MemberAdded { member, .. } => member.id != author,
+        SessionEvent::MemberRemoved { .. }
+        | SessionEvent::MemberRoleChanged { .. }
+        | SessionEvent::JoinApproved { .. } => true,
+        // Devices: self-revoke included.
+        SessionEvent::DeviceRevoked { .. } => true,
+        // Keys. A passkey registration has its own rule (`authz::passkeys`):
+        // the account's first proves itself, every later one needs presence
+        // from an existing credential, under every rules version.
+        SessionEvent::WorkspaceKeyRotated { .. }
+        | SessionEvent::PasskeyRemoved { .. }
+        | SessionEvent::AccountKeyRotated { .. } => true,
+        SessionEvent::PasskeyRegistered { .. } => false,
+        // Guards.
+        SessionEvent::DearthModeChanged { .. } | SessionEvent::ChatLockdownCleared { .. } => true,
+        // Zones and the beacon (the governance flow records).
+        SessionEvent::FlowRecorded { record } => record.is_governance(),
+        // Workflows.
+        SessionEvent::WorkflowDefinitionsUpdated { .. } => true,
+        // Agents and runtimes: rebinding an agent's host or runtime,
+        // removing one, every workspace runtime change, and touching a host
+        // someone else owns.
+        SessionEvent::AgentUpserted { agent } => agent_rebinds(agent, fold),
+        SessionEvent::AgentRosterUpdated { agents } => {
+            agents.iter().any(|a| agent_rebinds(a, fold))
+                || fold.workspace_agents.iter().any(|old| !agents.iter().any(|a| a.id == old.id))
+        }
+        SessionEvent::AgentRemoved { .. } => true,
+        SessionEvent::WorkspaceRuntimesUpdated { .. }
+        | SessionEvent::WorkspaceRuntimeUpserted { .. }
+        | SessionEvent::WorkspaceRuntimeRemoved { .. } => true,
+        SessionEvent::WorkspaceHostUpserted { host } => host.owner_actor_id != author,
+        SessionEvent::WorkspaceHostRemoved { host_id } => {
+            fold.workspace_hosts.iter().any(|h| &h.id == host_id && h.owner_actor_id != author)
+        }
+        SessionEvent::WorkspaceHostsUpdated { hosts } => {
+            hosts.iter().any(|h| h.owner_actor_id != author)
+                || fold.workspace_hosts.iter().any(|h| h.owner_actor_id != author && !hosts.iter().any(|n| n.id == h.id))
+        }
+        // Gates and quorum.
+        SessionEvent::ProposalSetTuned { .. } | SessionEvent::WorkspaceRulesSet { .. } => true,
+        SessionEvent::ProposalUpserted { proposal } => fold.proposals.iter().find(|p| p.id == proposal.id).is_some_and(|old| {
+            proposal.required_approvals < old.required_approvals
+                || proposal.approval_role_floor.rank() < old.approval_role_floor.rank()
+        }),
+        // Human-gated decisions.
+        SessionEvent::ProposalVoteCast { proposal_id, .. } => fold
+            .proposals
+            .iter()
+            .find(|p| p.id == *proposal_id)
+            .is_some_and(|p| p.workflow.is_some() || human_gated(fold, p)),
+        SessionEvent::ProposalSetDecided { .. } => {
+            roster.members.get(author).is_some_and(|m| m.kind == ActorKind::Human)
+        }
+        SessionEvent::ProposalApplied { proposal_id, .. } => {
+            fold.proposals.iter().find(|p| p.id == *proposal_id).is_some_and(|p| human_gated(fold, p))
+        }
+        // Everything else is content, coordination or a self-validating
+        // publication.
+        SessionEvent::SessionSnapshot { .. }
+        | SessionEvent::MessageAppended { .. }
+        | SessionEvent::MessageChunkReceived { .. }
+        | SessionEvent::MessageCompleted { .. }
+        | SessionEvent::MessageRemoved { .. }
+        | SessionEvent::TurnClaimed { .. }
+        | SessionEvent::SessionRuntimeChanged { .. }
+        | SessionEvent::SessionTitleChanged { .. }
+        | SessionEvent::SessionArchivedChanged { .. }
+        | SessionEvent::SkillsUpdated { .. }
+        | SessionEvent::ProposalDismissed { .. }
+        | SessionEvent::ProposalRefined { .. }
+        | SessionEvent::ProposalSetOpened { .. }
+        | SessionEvent::ProposalSetAlternativeAdded { .. }
+        | SessionEvent::ScoutAssessmentPosted { .. }
+        | SessionEvent::ProposalSetRoundAdvanced { .. }
+        | SessionEvent::ProposalSetQuorumReached { .. }
+        | SessionEvent::ProposalSetAlternativeStopped { .. }
+        | SessionEvent::ProposalSetPreflightRecorded { .. }
+        | SessionEvent::ProposalReverted { .. }
+        | SessionEvent::VaultSourcesUpdated { .. }
+        | SessionEvent::WorkflowRunUpserted { .. }
+        | SessionEvent::MessageReactionAdded { .. }
+        | SessionEvent::MessageReactionRemoved { .. }
+        | SessionEvent::AccountKeyRegistered { .. }
+        | SessionEvent::DeviceCertificateAdded { .. }
+        | SessionEvent::ChannelCreated { .. }
+        | SessionEvent::ChannelRenamed { .. }
+        | SessionEvent::ChannelReordered { .. }
+        | SessionEvent::ChannelArchived { .. }
+        | SessionEvent::ChatChannelChanged { .. }
+        | SessionEvent::CoordinatorLeaseClaimed { .. }
+        | SessionEvent::CoordinatorLeaseReleased { .. }
+        | SessionEvent::ChatLockdownRaised { .. }
+        | SessionEvent::ProposalMarkedStale { .. }
+        | SessionEvent::AgentKeyCertified { .. }
+        | SessionEvent::DeviceKeyAgreementPublished { .. }
+        | SessionEvent::Unknown => false,
+    }
+}
+
+fn agent_rebinds(agent: &crate::agent::WorkspaceAgent, fold: &ChatSession) -> bool {
+    match fold.workspace_agents.iter().find(|a| a.id == agent.id) {
+        None => !agent.host_id.is_empty() || !agent.runtime_id.is_empty(),
+        Some(old) => old.host_id != agent.host_id || old.runtime_id != agent.runtime_id,
+    }
+}
+
+/// Whether a proposal sits behind a human gate (a lockdown, or dearth mode
+/// over brood paths), whether or not a human already approved it.
+pub fn human_gated(fold: &ChatSession, p: &crate::ActionProposal) -> bool {
+    if fold.guards.lockdown_active() {
+        return true;
+    }
+    fold.guards.dearth_on().is_some_and(|d| {
+        crate::guard::touched_paths(p).iter().any(|t| crate::guard::touches_any(&d.brood_paths, std::slice::from_ref(t)))
+    })
+}

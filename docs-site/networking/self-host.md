@@ -268,9 +268,9 @@ and `LIGUS_RELAY_WORKSPACE_SCOPE` decides what the relay does with it:
 
 The claim sits inside the signed claims, so the `hrt1` format is unchanged,
 but a relay that doesn't enforce it (older, or `off`) ignores it. Scoping
-tokens also narrows who can write a workspace's keyring, which matters while
-key rotations are unsigned (see
-[Known limitations](../security/threat-model.md#known-limitations)).
+tokens also narrows who can fill a workspace's keyring route. Rotations are
+signed and devices never seal under a keyring row, but junk rows can use up
+the relay's keyring cap; newcomers then get the keys from their invite.
 Relay-side membership (below) is the alternative when the roster, not the
 issuer, should decide.
 

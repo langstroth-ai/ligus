@@ -352,7 +352,9 @@ impl RelayClient {
 
     /// Attach the entitlement bearer + GitHub identity (if any) to a request.
     pub(crate) fn authed(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        let fresh = self.auth_cell.as_ref().and_then(|c| c.get()).filter(|t| !t.is_empty());
+        // A ligus-auth token goes only to the relay its session is bound to
+        // (E-5); any other relay gets the static token, if one is configured.
+        let fresh = self.auth_cell.as_ref().and_then(|c| c.get_for(&self.base)).filter(|t| !t.is_empty());
         let rb = match fresh.as_ref().or(self.auth.as_ref()) {
             Some(t) => rb.bearer_auth(t),
             None => rb,
@@ -660,6 +662,27 @@ impl RelayClient {
         let body = serde_json::to_value(rotation)?;
         self.authed(self.http.post(url)).json(&body).send().await?;
         Ok(())
+    }
+
+    /// Publish a signed rotation body (B1) to the keyring route, for devices
+    /// whose config log is behind. Same `/v1` route and opaque body as before;
+    /// the body holds only sealed blobs, versions and the key commitment (not
+    /// the signed envelope, so the relay learns nothing about its author). A
+    /// full keyring (507) is an error the caller may ignore: the config log
+    /// carries the rotation either way.
+    pub async fn publish_keyring_row(&self, workspace: &str, body: &serde_json::Value) -> Result<(), RelayError> {
+        let url = format!("{}/v1/workspaces/{}/keyring", self.base, workspace);
+        let resp = self.authed(self.http.post(url)).json(body).send().await?;
+        if !resp.status().is_success() {
+            return Err(RelayError::Status(resp.status().as_u16()));
+        }
+        Ok(())
+    }
+
+    /// Every raw row of a workspace's keyring route (opaque JSON).
+    pub async fn fetch_keyring_rows(&self, workspace: &str) -> Result<Vec<serde_json::Value>, RelayError> {
+        let url = format!("{}/v1/workspaces/{}/keyring", self.base, workspace);
+        json_ok(self.authed(self.http.get(url)).send().await?).await
     }
 
     /// Fetch all key rotations published to a workspace's keyring.

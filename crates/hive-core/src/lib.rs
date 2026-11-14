@@ -20,6 +20,7 @@ pub mod flow;
 pub mod git_context;
 pub mod guard;
 pub mod identity;
+pub mod keys;
 pub mod lease;
 #[cfg(test)]
 mod lease_projection_tests;
@@ -31,6 +32,7 @@ mod lockdown_tests;
 mod sec_tests;
 pub mod model_profile;
 pub mod policy;
+pub mod presence;
 pub mod process_util;
 pub mod proposal_sets;
 pub mod proposals;
@@ -63,7 +65,7 @@ pub use crypto::{
 };
 pub use e2ee::{
     derive_workspace_key, generate_workspace_key, open as seal_open, open_symmetric, seal,
-    seal_symmetric, KeyAgreementKeypair, SealedBlob, SealedEnvelope, WorkspaceKeyRotation,
+    seal_symmetric, seal_symmetric_kid, KeyAgreementKeypair, SealedBlob, SealedEnvelope, WorkspaceKeyRotation,
 };
 pub use events::{
     fold_decisions, project, project_authorized, project_config, Verdict, project_with_founder, project_with_options, WorkspaceAuthz, EventScope, MemberRoleChange, SessionEvent,

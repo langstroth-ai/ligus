@@ -31,7 +31,13 @@ aho-corasick = "1"
 # Egress proxy allow-list parsing (already in the tree via hive-core).
 url = "2"
 walkdir = "2"
+# Zeroized secret buffers (B2; already in the tree).
+zeroize = "1"
 iroh = { version = "1.0.0-rc.1", optional = true }
+
+# B2: Ligus's own keychain file on macOS (already in the tree via rustls).
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
 
 # The Linux agent sandbox's pre-exec helper (see `executor::linux`).
 [target.'cfg(target_os = "linux")'.dependencies]

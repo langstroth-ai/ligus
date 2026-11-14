@@ -126,6 +126,7 @@ fn config(dir: &Path, relay: &str, room: &str) -> Config {
         github_token: None,
         room: room.to_string(),
         key: Some("serve-test-passphrase".into()),
+        epoch_keys: Vec::new(),
     }
 }
 
@@ -1431,6 +1432,7 @@ fn serve_options_refuse_public_binds_and_need_both_ntfy_parts() {
         github_token: None,
         room: "r".into(),
         key: None,
+        epoch_keys: Vec::new(),
     };
     let opts = |listen: &str, url: Option<&str>, topic: Option<&str>| {
         ServeOptions::from_flags(
@@ -2923,7 +2925,7 @@ async fn phone_vote_refused_on_delegated_host_without_presence() {
         let (code, body) = status_of(&h, reqwest::Method::POST, &path, None).await;
         assert_eq!(code, 403, "{path}: {body}");
         assert_eq!(body["error"], "presence_required");
-        assert_eq!(body["hint"], "approve on your laptop, or confirm with a passkey after updating");
+        assert_eq!(body["hint"], "confirm with your passkey: POST /v1/presence/prepare, then /v1/presence/commit");
     }
     let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
     let p = s.proposals.iter().find(|p| p.id == pid).unwrap();
@@ -3089,5 +3091,79 @@ async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
     let p = h.get(&format!("/v1/proposals/{}", sqlite[0].id)).await;
     assert_eq!(p["proposal"]["authorKind"], "agent");
     assert_eq!(p["proposal"]["implementPlan"]["targetAgentId"], json!(h.agent_id));
+    h.handle.shutdown();
+}
+
+/// B3: the phone confirms a vote on a box that acts for the owner with the
+/// owner's passkey: `presence/prepare` drafts the vote and returns its
+/// digest, the phone's authenticator signs it (a software one here), and
+/// `presence/commit` appends it with the assertion inside the stamp. A key
+/// that isn't the owner's is refused; the vote counts as the owner's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn phone_confirms_a_vote_with_a_passkey() {
+    use hive_core::presence::{soft::SoftAuthenticator, unb64url};
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let (chat_id, pid) = chat_with_proposal(&h).await;
+    let key = SoftAuthenticator::es256();
+    let owner = {
+        let mut d = open_service(&h.desktop).unwrap();
+        let account = d.author().account_id.unwrap();
+        d.register_passkey(ws, key.credential(account, "phone"), &|req| Ok(key.get(&req.challenge))).unwrap();
+        d.author().clone()
+    };
+    sync_once(&h.desktop).await.unwrap();
+    let account = owner.account_id.unwrap();
+    for _ in 0..100 {
+        h.handle.shared.sync_kick.notify_one();
+        if !h.handle.shared.lock().passkeys_of(ws, account).unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(!h.handle.shared.lock().passkeys_of(ws, account).unwrap().is_empty(), "the passkey synced to the box");
+    h.handle.shared.lock().act_as_owner_device(owner.clone());
+
+    let prepare = || async {
+        let (code, body) = status_of(&h, reqwest::Method::POST, "/v1/presence/prepare", Some(json!({ "action": "approve", "target": pid.to_string() }))).await;
+        assert_eq!(code, 200, "{body}");
+        body
+    };
+    let p = prepare().await;
+    assert_eq!(p["preview"]["kind"], "proposalVoteCast");
+    assert_eq!(p["preview"]["rpId"], "ligus.ai");
+    assert_eq!(p["preview"]["allowCredentials"][0], json!(key.credential(account, "").credential_id));
+    let challenge = unb64url(p["challenge"].as_str().unwrap()).unwrap();
+    let a = |k: &SoftAuthenticator| {
+        let a = k.get(&challenge);
+        json!({ "credentialId": a.credential_id, "authenticatorData": a.authenticator_data, "clientDataJSON": a.client_data_json, "signature": a.signature })
+    };
+    let (code, body) =
+        status_of(&h, reqwest::Method::POST, "/v1/presence/commit", Some(json!({ "prepareId": p["prepareId"], "assertion": a(&SoftAuthenticator::es256()) }))).await;
+    assert_eq!(code, 403, "another key isn't the owner's: {body}");
+    // Nothing was written by prepare or the refused commit.
+    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    assert!(s.proposals.iter().find(|x| x.id == pid).unwrap().approvals.is_empty());
+
+    let p = prepare().await;
+    let challenge = unb64url(p["challenge"].as_str().unwrap()).unwrap();
+    let signed = key.get(&challenge);
+    let (code, body) = status_of(
+        &h,
+        reqwest::Method::POST,
+        "/v1/presence/commit",
+        Some(json!({ "prepareId": p["prepareId"], "assertion": {
+            "credentialId": signed.credential_id, "authenticatorData": signed.authenticator_data,
+            "clientDataJSON": signed.client_data_json, "signature": signed.signature } })),
+    )
+    .await;
+    assert_eq!(code, 200, "{body}");
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/presence/commit", Some(json!({ "prepareId": p["prepareId"], "assertion": a(&key) }))).await;
+    assert_eq!(code, 404, "a prepared event commits once");
+    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    let approvals = &s.proposals.iter().find(|x| x.id == pid).unwrap().approvals;
+    assert_eq!(approvals.len(), 1);
+    assert_eq!(approvals[0].actor_id, owner.id, "counted as the passkey's owner");
     h.handle.shutdown();
 }

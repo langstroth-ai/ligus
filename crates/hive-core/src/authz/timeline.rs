@@ -82,6 +82,14 @@ pub struct RosterState {
     pub rules: u32,
     /// The path zones (Admin-set review bars) in force.
     pub zones: Vec<crate::flow::PathZone>,
+    /// The authorized workspace-key rotations so far (B1).
+    pub key_epochs: crate::keys::KeyEpochs,
+    /// Each device's own published X25519 key-agreement key (B1): the only
+    /// keys a rotation seals to.
+    pub ka_keys: BTreeMap<Uuid, Vec<u8>>,
+    /// Each account's registered passkeys and recovery keys, by credential
+    /// id (B3).
+    pub passkeys: BTreeMap<Uuid, BTreeMap<String, crate::presence::PasskeyKey>>,
 }
 
 impl RosterState {
@@ -125,6 +133,26 @@ impl RosterState {
     pub fn valid_agent_key(&self, key_id: Uuid) -> Option<&AgentKeyState> {
         let key = self.agent_keys.get(&key_id)?;
         self.agent_bound_to(key.agent_id, key.host_device_id).then_some(key)
+    }
+
+    /// Who a rotation at this position seals the new key to (B1): every
+    /// device that published its own key-agreement key, is certified and not
+    /// revoked, and acts for a current member's account (a member's own
+    /// devices and the serve or worker boxes enrolled for them), plus every
+    /// device an agent is bound to. Device id → X25519 public key.
+    pub fn rotation_recipients(&self) -> BTreeMap<Uuid, Vec<u8>> {
+        let accounts: BTreeSet<Uuid> = self.members.values().filter_map(|m| m.account_id).collect();
+        let hosts: BTreeSet<&str> = self.agents.values().map(|a| a.host_id.as_str()).filter(|h| !h.is_empty()).collect();
+        self.ka_keys
+            .iter()
+            .filter(|(device, _)| {
+                let Some(d) = self.devices.get(device) else { return false };
+                !d.revoked
+                    && !d.accounts.is_empty()
+                    && (d.accounts.iter().any(|a| accounts.contains(a)) || hosts.contains(device.to_string().as_str()))
+            })
+            .map(|(d, k)| (*d, k.clone()))
+            .collect()
     }
 
     fn fingerprint(&self) -> u64 {
@@ -228,6 +256,27 @@ impl RosterTracker {
             SessionEvent::WorkspaceRulesSet { version } if allowed => {
                 self.state.rules = *version;
             }
+            SessionEvent::WorkspaceKeyRotated { rotation } if allowed => {
+                self.state.key_epochs.push(rotation, env.canonical_key());
+            }
+            SessionEvent::DeviceKeyAgreementPublished { device_id, ka_public } if allowed => {
+                self.state.ka_keys.insert(*device_id, ka_public.clone());
+            }
+            SessionEvent::PasskeyRegistered { credential } if allowed => {
+                self.state
+                    .passkeys
+                    .entry(credential.account_id)
+                    .or_default()
+                    .insert(credential.credential_id.clone(), crate::presence::PasskeyKey::from(credential));
+            }
+            SessionEvent::PasskeyRemoved { account_id, credential_id } if allowed => {
+                if let Some(m) = self.state.passkeys.get_mut(account_id) {
+                    m.remove(credential_id);
+                    if m.is_empty() {
+                        self.state.passkeys.remove(account_id);
+                    }
+                }
+            }
             e if allowed && touches_roster(e) => self.refresh(fold),
             _ => {}
         }
@@ -296,6 +345,10 @@ fn touches_roster(e: &SessionEvent) -> bool {
     )
 }
 
+/// How far past this device's newest config event a frontier may claim to be
+/// and still be waited for (A-14).
+pub const FRONTIER_SLACK: u64 = 4096;
+
 /// The roster at every position of one workspace's config log.
 #[derive(Debug, Clone, Default)]
 pub struct ConfigTimeline {
@@ -307,6 +360,10 @@ pub struct ConfigTimeline {
     states: Vec<Arc<RosterState>>,
     /// Every config event this device holds (folded or not) → its lamport.
     held: HashMap<Uuid, u64>,
+    /// Every rotation body on the log, authorized or not: keys a device can
+    /// open from these are read-only candidates (B1; never sealed under
+    /// unless authorized).
+    rotations: Vec<crate::keys::SignedRotation>,
     fingerprint: u64,
 }
 
@@ -319,6 +376,18 @@ impl ConfigTimeline {
     /// Note an event of the config log this device holds (folded or not).
     pub fn note_held(&mut self, event_id: Uuid, lamport: u64) {
         self.held.insert(event_id, lamport);
+    }
+
+    /// Note a rotation body seen on the log (authorized or not).
+    pub fn note_rotation(&mut self, rotation: &crate::keys::SignedRotation) {
+        if !self.rotations.contains(rotation) {
+            self.rotations.push(rotation.clone());
+        }
+    }
+
+    /// Every rotation body seen on the log, authorized or not.
+    pub fn rotation_candidates(&self) -> &[crate::keys::SignedRotation] {
+        &self.rotations
     }
 
     /// Record the state after the folded event `key` (`changed` = a new state).
@@ -387,9 +456,22 @@ impl ConfigTimeline {
     /// `frontier`. A frontier naming an event this device doesn't hold is
     /// held back ([`HoldReason::ConfigFrontierAhead`]); one that names a held
     /// event under the wrong lamport is forged (`Err(None)`).
+    ///
+    /// A-14: a hold is bounded. A frontier naming an event this device doesn't
+    /// hold, at a lamport the config log has already passed, or more than
+    /// [`FRONTIER_SLACK`] past its newest event, can't be waited for: it is
+    /// treated like a forged one (the event is left out, not held, so it
+    /// blocks no side effect). The fold is re-run as events arrive, so a
+    /// genuinely late config event still validates it then.
     pub fn at(&self, frontier: CfgFrontier) -> Result<&RosterState, Option<HoldReason>> {
         match self.held.get(&frontier.event_id) {
-            None => return Err(Some(HoldReason::ConfigFrontierAhead)),
+            None => {
+                let newest = self.held.values().copied().max().unwrap_or(0);
+                if !self.held.is_empty() && (frontier.lamport < newest || frontier.lamport > newest.saturating_add(FRONTIER_SLACK)) {
+                    return Err(None);
+                }
+                return Err(Some(HoldReason::ConfigFrontierAhead));
+            }
             Some(l) if *l != frontier.lamport => return Err(None),
             Some(_) => {}
         }

@@ -42,6 +42,7 @@ import { RightRail } from "@/components/RightRail";
 import { Onboarding } from "@/components/Onboarding";
 import { Tour, type TourStep } from "@/components/Tour";
 import { ToastHost, toast, errMsg } from "@/components/Toast";
+import { PresenceSheet } from "@/components/PresenceSheet";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { DearthBanner } from "@/components/guards/DearthBanner";
 import { LockdownBar } from "@/components/guards/LockdownBar";
@@ -954,6 +955,7 @@ export function App() {
       {tourOpen && <Tour steps={tourSteps} onClose={() => endTour()} />}
       <ToastHost />
       <DialogHost />
+      <PresenceSheet />
       <UpdateBanner />
       <PendingInvitesBanner />
       <WorkspaceTrustBanner />

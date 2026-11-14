@@ -641,3 +641,68 @@ fn ligus_server_present_under_closed_egress() {
         assert!(seatbelt::profile(&plan, Some(1)).contains("unix-socket (path-literal"), "{egress:?}");
     }
 }
+
+/// B2 / C-11: a subscription-CLI agent keeps Keychain service access (its
+/// login lives in the login keychain), but Ligus's own secret store sits in
+/// the data dir, which the sandbox denies: neither the owner-only files nor
+/// Ligus's keychain file can be read. With `LIGUS_TEST_KEYCHAIN=1` the real
+/// keychain backend is exercised (a throwaway keychain and service name,
+/// removed afterwards): `security` inside the sandbox can't open it.
+#[test]
+fn ligus_secrets_unreachable_by_subscription_cli_agent() {
+    use crate::secret_store::{File0600, SecretId, SecretStore};
+    let Some(e) = real_executor() else { return };
+    let f = Fixture::new();
+    File0600::new(&f.data).put(&SecretId::new("settings", "api_key"), b"STORE-SECRET").unwrap();
+    std::fs::write(f.data.join("secrets/ligus.keychain-db"), "KEYCHAIN-FILE").unwrap();
+    for target in ["secrets/settings/api_key", "secrets/ligus.keychain-db"] {
+        let (ok, out) = run_sh(&*e, &f, &format!("cat '{}'", f.data.join(target).display()), isolated());
+        assert!(!ok && !out.contains("SECRET") && !out.contains("KEYCHAIN-FILE"), "read {target}: {out}");
+    }
+    #[cfg(target_os = "macos")]
+    if std::env::var("LIGUS_TEST_KEYCHAIN").ok().as_deref() == Some("1") {
+        let service = format!("ai.ligus.secrets.test-{}", uuid::Uuid::new_v4());
+        let path = f.data.join("secrets/ligus-sandbox-test.keychain-db");
+        let kc = crate::secret_store::MacKeychain::open_with(path.clone(), &service).unwrap();
+        kc.put(&SecretId::new("settings", "probe"), b"REAL-KEYCHAIN-SECRET").unwrap();
+        let script = format!(
+            "/usr/bin/security find-generic-password -s '{service}' -a settings:probe -w '{}'",
+            path.display()
+        );
+        let (ok, out) = run_sh(&*e, &f, &script, isolated());
+        let cleaned = kc.destroy();
+        assert!(!ok && !out.contains("REAL-KEYCHAIN-SECRET"), "the agent read Ligus's keychain: {out}");
+        cleaned.unwrap();
+    }
+}
+
+/// B2: the Secret Service is a D-Bus session service; an agent child never
+/// gets the session bus address (it isn't on the env allow-list), and the
+/// bubblewrap profile doesn't bind the bus socket.
+#[test]
+fn agent_env_has_no_session_bus() {
+    let host = host_fixture();
+    let envelope = SandboxEnvelope::workspace_default();
+    let plan = EnvelopeEnforcer::plan(&PlanInputs {
+        host: HostKind::Desktop,
+        envelope: &envelope,
+        purpose: Purpose::Agent(ModelProviderKind::ClaudeCode),
+        gate: &GatePlan::Full,
+        worktree: Path::new("/repo/.ligus/worktrees/t1"),
+        worktree_is_isolated: true,
+        write_capable: true,
+        tmp: Path::new("/tmp/ligus-turn-1"),
+        home: Path::new("/home/u"),
+        host_paths: &host,
+        mcp_hosts: &[],
+        mcp_ids: &[],
+        model_base_url: None,
+        extra_env: &[("DBUS_SESSION_BUS_ADDRESS".into(), "unix:path=/run/user/1/bus".into())],
+        provider_key: None,
+        model_provider_id: None,
+        envelope_args: &[],
+        ligus_mcp_socket: None,
+        cli_home: None,
+    });
+    assert!(plan.env.iter().all(|(k, _)| !k.to_string_lossy().starts_with("DBUS")), "{:?}", plan.env);
+}

@@ -279,6 +279,19 @@ impl<V: KeyVault> IdentityStore<V> {
             .ok_or_else(|| IdentityError::MissingSeed(device_key_id(device_id)))?;
         Ok(SigningKeypair::from_seed(&seed)?)
     }
+
+    /// This device's X25519 key-agreement keypair (B1), generated and kept in
+    /// the vault on first use. Rotations seal the workspace key to its public
+    /// half once the device publishes it on the config log.
+    pub fn key_agreement(&self, device_id: Uuid) -> Result<hive_core::KeyAgreementKeypair, IdentityError> {
+        let id = format!("ka:{device_id}");
+        if let Some(seed) = self.vault.load_seed(&id)? {
+            return Ok(hive_core::KeyAgreementKeypair::from_seed(&seed)?);
+        }
+        let kp = hive_core::KeyAgreementKeypair::generate()?;
+        self.vault.store_seed(&id, &kp.seed_bytes())?;
+        Ok(kp)
+    }
 }
 
 #[cfg(test)]

@@ -30,6 +30,7 @@ pub mod host_presence;
 pub mod hygiene;
 pub mod identity_store;
 pub mod identity_verifier;
+pub mod keyring;
 pub mod lease_presence;
 pub mod ligus_auth;
 pub mod ligus_mcp;
@@ -50,6 +51,7 @@ pub mod retrieval;
 pub mod review;
 pub mod sandbox;
 pub mod secret_redact;
+pub mod secret_store;
 pub mod sse;
 pub mod sync_engine;
 pub mod tool_loop;
@@ -64,6 +66,10 @@ mod test_relay;
 mod dearth_roster_tests;
 #[cfg(test)]
 mod ligus_auth_membership_tests;
+#[cfg(test)]
+mod keyring_tests;
+#[cfg(test)]
+mod presence_tests;
 
 pub use builtin_tools::{BuiltinTools, Policy as BuiltinToolPolicy};
 pub use chat_service::{

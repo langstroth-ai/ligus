@@ -567,10 +567,11 @@ mod flow_tests {
         assert_eq!(owner.id, alex.id);
         sff.svc.act_as_owner_device(owner);
         sff.svc.post_user_message(chat, ws, "from the phone").unwrap();
-        // P0.6: a vote it signs as Alex is refused here and would be dropped
-        // by every fold (delegated_host_vote_not_counted_for_human_gate).
+        // P0.6: a vote it signs as Alex needs Alex's passkey presence; without
+        // it, it is refused here and would be dropped by every fold
+        // (delegated_host_vote_not_counted_for_human_gate).
         let refused = sff.svc.vote_on_proposal(chat, ws, pid, true).unwrap_err().to_string();
-        assert!(refused.contains("delegated host"), "{refused}");
+        assert!(refused.contains(hive_core::authz::PRESENCE_REQUIRED), "{refused}");
         sff.svc.refine_proposal(chat, ws, pid, sff.id(), WorkspaceRole::Owner, "looks good", false).unwrap();
         let mut host = WorkspaceHost::new(sff.svc.device_id().to_string(), hive_core::HostKind::Worker, "sff");
         host.owner_actor_id = alex.id.clone();

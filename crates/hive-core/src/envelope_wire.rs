@@ -244,6 +244,7 @@ fn from_raw(whole: Box<RawValue>) -> Result<SessionEventEnvelope, serde_json::Er
         signer_device_id,
         signature,
         raw: None,
+        sealed_epoch: None,
     };
     let routing = Routing::of(&env);
     env.raw = Some(RawSigned {
@@ -336,6 +337,17 @@ impl SessionEventEnvelope {
     /// received envelope in memory.
     pub fn clear_raw(&mut self) {
         self.raw = None;
+    }
+
+    /// The relay key epoch this device received the envelope sealed under
+    /// (Phase 0, B1), recorded at ingest. Device-local and unsigned: never
+    /// serialized, `None` for events authored here or received unsealed.
+    pub fn sealed_epoch(&self) -> Option<u32> {
+        self.sealed_epoch
+    }
+
+    pub fn set_sealed_epoch(&mut self, epoch: Option<u32>) {
+        self.sealed_epoch = epoch;
     }
 }
 

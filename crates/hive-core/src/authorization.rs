@@ -114,6 +114,7 @@ pub fn requires_projection_authz(event: &SessionEvent) -> bool {
             | SessionEvent::ChatLockdownCleared { .. }
             | SessionEvent::WorkspaceRulesSet { .. }
             | SessionEvent::AgentKeyCertified { .. }
+            | SessionEvent::WorkspaceKeyRotated { .. }
     ) || matches!(event, SessionEvent::FlowRecorded { record } if record.is_config())
 }
 
@@ -287,6 +288,15 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         // A host certifying an agent key: a member's act, plus the
         // certificate's own checks (`authz::authorize`).
         SessionEvent::AgentKeyCertified { .. } => WorkspaceRole::Contributor,
+        // Rotating the workspace key decides who can read from here on.
+        SessionEvent::WorkspaceKeyRotated { .. } => WorkspaceRole::Admin,
+        // A device's own key-agreement key: self-validating (signed by that
+        // device, see `authz::authorize`), like its certificate.
+        SessionEvent::DeviceKeyAgreementPublished { .. } => WorkspaceRole::Viewer,
+        // Passkeys: an account's own (self-validating, see `authz::passkeys`);
+        // removing someone else's is an Admin's.
+        SessionEvent::PasskeyRegistered { .. } => WorkspaceRole::Viewer,
+        SessionEvent::PasskeyRemoved { .. } => WorkspaceRole::Viewer,
         // A newer-client event this build can't author or interpret — require
         // the highest role so it can never be produced locally by accident.
         SessionEvent::Unknown => WorkspaceRole::Owner,

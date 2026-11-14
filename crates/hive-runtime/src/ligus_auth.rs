@@ -174,6 +174,20 @@ pub struct Session {
     pub sub: String,
     #[serde(default)]
     pub workspaces: Vec<String>,
+    /// The relay (`scheme://host:port`) this session's access token is for
+    /// (E-5): set at sign-in from the relay configured then. The token is sent
+    /// to that origin only, never to another relay a setting or invite names.
+    /// A session without it sends its token nowhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_origin: Option<String>,
+}
+
+/// `scheme://host:port` of a URL (lower-case; the default port filled in).
+pub fn origin_of(url: &str) -> Option<String> {
+    let u = url::Url::parse(url.trim()).ok()?;
+    let host = u.host_str()?.to_ascii_lowercase();
+    let port = u.port_or_known_default()?;
+    Some(format!("{}://{host}:{port}", u.scheme()))
 }
 
 impl std::fmt::Debug for Session {
@@ -199,9 +213,17 @@ pub fn session_path(dir: &Path) -> PathBuf {
     dir.join(SESSION_FILE)
 }
 
+/// Where a session keeps its tokens (B2): the OS secret store (scope
+/// `auth`); the session file holds `{"set": true}` in their place.
+const SESSION_SECRETS: crate::secret_store::SecretPaths = &["refresh_token", "access_token"];
+
 pub fn load_session(dir: &Path) -> Option<Session> {
-    let raw = std::fs::read(session_path(dir)).ok()?;
-    let s: Session = serde_json::from_slice(&raw).ok()?;
+    let store = crate::secret_store::for_data_dir(dir);
+    let v = crate::secret_store::load_settings_json(&session_path(dir), &*store, "auth", SESSION_SECRETS)?;
+    let s: Session = serde_json::from_value(v).ok()?;
+    if s.refresh_token.is_empty() {
+        return None;
+    }
     register_secrets(&s);
     Some(s)
 }
@@ -212,36 +234,27 @@ fn register_secrets(s: &Session) {
     crate::secret_redact::register(&s.refresh_token);
 }
 
-/// Write the session atomically with owner-only permissions.
+/// Write the session: its tokens to the OS secret store, the rest to the
+/// session file (atomic, owner-only).
 pub fn save_session(dir: &Path, s: &Session) -> Result<(), AuthError> {
     register_secrets(s);
     std::fs::create_dir_all(dir).map_err(|e| AuthError::Io(e.to_string()))?;
-    let tmp = dir.join(format!(".{SESSION_FILE}.{}", std::process::id()));
-    let body = serde_json::to_vec_pretty(s).map_err(|e| AuthError::Io(e.to_string()))?;
-    {
-        use std::io::Write;
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        let mut f = opts.open(&tmp).map_err(|e| AuthError::Io(e.to_string()))?;
-        f.write_all(&body)
-            .map_err(|e| AuthError::Io(e.to_string()))?;
-        f.sync_all().map_err(|e| AuthError::Io(e.to_string()))?;
-    }
-    std::fs::rename(&tmp, session_path(dir)).map_err(|e| AuthError::Io(e.to_string()))
+    let store = crate::secret_store::for_data_dir(dir);
+    let v = serde_json::to_value(s).map_err(|e| AuthError::Io(e.to_string()))?;
+    crate::secret_store::save_settings_json(&session_path(dir), &*store, "auth", v, SESSION_SECRETS)
+        .map_err(|e| AuthError::Io(e.to_string()))
 }
 
 pub fn delete_session(dir: &Path) {
+    let store = crate::secret_store::for_data_dir(dir);
+    let _ = crate::secret_store::persist(&*store, "auth", &Default::default());
     let _ = std::fs::remove_file(session_path(dir));
 }
 
-/// The current relay access token, shared with `RelayClient::with_auth_cell`.
+/// The current relay access token, shared with `RelayClient::with_auth_cell`,
+/// and the relay origin it may be sent to (E-5).
 #[derive(Clone, Default)]
-pub struct TokenCell(Arc<RwLock<Option<String>>>);
+pub struct TokenCell(Arc<RwLock<Option<String>>>, Arc<RwLock<Option<String>>>);
 
 impl std::fmt::Debug for TokenCell {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -255,6 +268,23 @@ impl TokenCell {
     }
     pub fn set(&self, v: Option<String>) {
         *self.0.write().unwrap_or_else(|e| e.into_inner()) = v;
+    }
+    /// The relay origin the token is bound to.
+    pub fn origin(&self) -> Option<String> {
+        self.1.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+    pub fn set_origin(&self, origin: Option<String>) {
+        *self.1.write().unwrap_or_else(|e| e.into_inner()) = origin;
+    }
+    /// Hold `s`'s access token, bound to its relay origin.
+    pub fn set_session(&self, s: &Session) {
+        self.set_origin(s.relay_origin.clone());
+        self.set(Some(s.access_token.clone()));
+    }
+    /// The token, only for a request to the bound relay origin.
+    pub fn get_for(&self, url: &str) -> Option<String> {
+        let bound = self.origin()?;
+        (origin_of(url).as_deref() == Some(bound.as_str())).then(|| self.get()).flatten()
     }
 }
 
@@ -452,6 +482,7 @@ fn session_from(
         access_expires_at: now_unix() + t.expires_in.clamp(0, 3600),
         sub: t.sub,
         workspaces: t.workspaces,
+        relay_origin: None,
     }
 }
 
@@ -520,13 +551,10 @@ pub async fn refresh(
     )
     .await?
     {
-        Ok(t) => Ok(session_from(
-            &base,
-            &tenant,
-            &s.client_id,
-            s.device_id.clone(),
-            t,
-        )),
+        Ok(t) => Ok(Session {
+            relay_origin: s.relay_origin.clone(),
+            ..session_from(&base, &tenant, &s.client_id, s.device_id.clone(), t)
+        }),
         Err(v) => match v.get("error").and_then(|x| x.as_str()).unwrap_or("") {
             "invalid_grant" | "access_denied" => Err(AuthError::SignInNeeded(oauth_error(&v))),
             _ => Err(AuthError::Protocol(oauth_error(&v))),
@@ -674,7 +702,7 @@ pub async fn run_refresher(dir: PathBuf, signer: Arc<dyn DeviceSigner>, cell: To
     loop {
         let wait = match fresh_access_token(&http, &dir, signer.as_ref()).await {
             Ok(Some(s)) => {
-                cell.set(Some(s.access_token.clone()));
+                cell.set_session(&s);
                 backoff = 30;
                 (s.access_expires_at - REFRESH_MARGIN_SECS - now_unix()).clamp(15, 3600) as u64
             }
@@ -711,7 +739,7 @@ pub fn start_background_refresh(
         .map_err(|e| AuthError::Io(e.to_string()))?;
     let first = rt.block_on(fresh_access_token(&http_client(), &dir, signer.as_ref()));
     match first {
-        Ok(Some(s)) => cell.set(Some(s.access_token)),
+        Ok(Some(s)) => cell.set_session(&s),
         Ok(None) => return Ok(()),
         Err(e) => return Err(e),
     }
@@ -800,6 +828,7 @@ mod tests {
             access_expires_at: 10,
             sub: "h:u".into(),
             workspaces: vec![],
+            relay_origin: None,
         };
         save_session(dir.path(), &s).unwrap();
         let out = crate::secret_redact::redacted(&format!("refresh={refresh} access={}", s.access_token));
@@ -820,6 +849,7 @@ mod tests {
             access_expires_at: 10,
             sub: "h:u".into(),
             workspaces: vec!["w".into()],
+            relay_origin: None,
         };
         save_session(dir.path(), &s).unwrap();
         #[cfg(unix)]
@@ -1062,6 +1092,7 @@ mod tests {
                 .to_string()
         };
         assert_eq!(bearer(req(&rc)), "Bearer static", "empty cell falls back");
+        cell.set_origin(origin_of("http://127.0.0.1:9"));
         cell.set(Some("hrt1.fresh".into()));
         assert_eq!(bearer(req(&rc)), "Bearer hrt1.fresh");
         cell.set(Some("hrt1.fresher".into()));
@@ -1071,6 +1102,54 @@ mod tests {
             "a refresh is picked up without rebuilding the client"
         );
         assert!(!format!("{cell:?}").contains("fresher"));
+    }
+
+    /// E-5: the ligus-auth bearer goes only to the relay the session was
+    /// signed in for. A relay an invite or a setting names elsewhere gets the
+    /// static token (or nothing); a session with no bound relay sends its
+    /// token nowhere.
+    #[tokio::test]
+    async fn relay_bearer_only_sent_to_session_relay_origin() {
+        let cell = TokenCell::default();
+        cell.set(Some("hrt1.session-token".into()));
+        let auth = |base: &str, fallback: Option<&str>| {
+            let rc = crate::RelayClient::new(base).with_auth(fallback.map(str::to_string)).with_auth_cell(Some(cell.clone()));
+            rc.authed(reqwest::Client::new().get(format!("{base}/v1/x")))
+                .build()
+                .unwrap()
+                .headers()
+                .get("authorization")
+                .map(|v| v.to_str().unwrap().to_string())
+        };
+        assert_eq!(auth("https://relay.home.example", None), None, "unbound: sent nowhere");
+        cell.set_origin(origin_of("https://relay.home.example/"));
+        assert_eq!(auth("https://relay.home.example", None).as_deref(), Some("Bearer hrt1.session-token"));
+        assert_eq!(auth("https://RELAY.home.example:443", None).as_deref(), Some("Bearer hrt1.session-token"));
+        assert_eq!(auth("https://evil.example", None), None, "another relay never gets it");
+        assert_eq!(auth("http://relay.home.example", None), None, "nor the same host over another scheme");
+        assert_eq!(auth("https://relay.home.example:8443", None), None, "nor another port");
+        assert_eq!(auth("https://evil.example", Some("static")).as_deref(), Some("Bearer static"));
+        // A refresh keeps the binding.
+        let s = Session { relay_origin: origin_of("https://relay.home.example"), ..session_fixture() };
+        cell.set_session(&s);
+        assert_eq!(auth("https://relay.home.example", None).as_deref(), Some("Bearer hrt1.fixture"));
+        assert_eq!(auth("https://evil.example", None), None);
+    }
+
+    fn session_fixture() -> Session {
+        Session {
+            auth_url: "https://auth.example".into(),
+            tenant: "home".into(),
+            client_id: "ligus-cli".into(),
+            device_id: "d".into(),
+            refresh_token: "refresh-fixture-value".into(),
+            refresh_nonce: None,
+            access_token: "hrt1.fixture".into(),
+            access_expires_at: 0,
+            sub: String::new(),
+            workspaces: Vec::new(),
+            relay_origin: None,
+        }
     }
 
     #[tokio::test]

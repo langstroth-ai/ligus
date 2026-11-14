@@ -9,6 +9,22 @@ Full release notes are on the
 
 ## 2.0
 
+- **Passkeys for admin changes.** Under workspace rules v2, membership and
+  role changes, device revocation, key rotation, guards, zones, workflow
+  definitions, agent hosts and human-gated approvals need a passkey (Touch
+  ID, Windows Hello, a phone, a YubiKey), verified on every device. Register
+  passkeys and a recovery key in **Settings → Passkeys & keys**; the phone
+  confirms votes through your box with Face ID. See
+  [Passkey presence](../security/index.md#presence).
+- **Signed key rotations on every host.** Rotating the workspace key is a
+  signed event on the workspace log, sealed to keys each device published
+  itself; `ligus serve`, `ligus worker` and the CLI follow rotations too.
+  **Settings → Passkeys & keys → Rotate workspace key**.
+- **Secrets in the OS secret store.** Keys and tokens move out of
+  `settings.json` and `config.toml` into a dedicated macOS keychain, the
+  Secret Service or `systemd-creds`. See
+  [Key storage](../concepts/identity.md#key-storage).
+
 - **Agents get typed tools.** Agents file proposals, hand off, leave marks,
   read the workspace and ask you questions through the
   [Ligus tools](../addons/ligus-mcp.md) instead of `[[…]]` reply text. A
@@ -82,10 +98,10 @@ Full release notes are on the
 - **Telemetry stays on your device.** Turn measurements are device-local
   facts (`ligus facts export --jsonl`); only a bounded daily outcome summary
   syncs. [Telemetry](../concepts/security.md#facts)
-- **Phone approvals wait for presence.** A `ligus serve` box enrolled as your
-  device refuses votes, rejects and lockdown clears (`403
-  presence_required`) until passkey presence lands, and folds drop its votes.
-  [Securing the box](../ops/serve-box.md)
+- **Phone approvals carry your passkey.** A `ligus serve` box enrolled as
+  your device takes votes, rejects and lockdown clears from the phone only
+  with your passkey over them (`presence/prepare`, `presence/commit`); folds
+  drop its votes without one. [Securing the box](../ops/serve-box.md)
 - **Organization sign-in.** `ligus auth login` and Settings → Team sync sign
   in through [ligus-auth](../deploy/ligus-auth.md) with your identity
   provider (setups for [Pocket ID](../deploy/ligus-auth-pocket-id.md) and

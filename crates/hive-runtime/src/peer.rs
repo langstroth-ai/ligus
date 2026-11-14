@@ -474,7 +474,8 @@ mod tests {
                     key_agreement_public: None,
                     avatar_url: None,
                 },
-                recorded_at: Timestamp::epoch(), cfg_frontier: None });
+                recorded_at: Timestamp::epoch(), cfg_frontier: None,
+                presence: None, runtime_effect: false, });
             hive_core::sign_envelope(&mut e, device_id, &device);
             e
         };

@@ -59,13 +59,24 @@ $ curl -s http://127.0.0.1:8787/v1/health -H "Authorization: Bearer $(cat ~/.lig
 | `GET /v1/hosts` | | hosts, with `isThis` and `online` |
 | `GET /v1/guards` | | dearth mode, pending members, locked chats, coordinator lease. Read-only |
 
+### Passkey presence
+
+On a box enrolled as its owner's device, the owner's passkey confirms each
+vote, reject, lockdown clear and agent rebind (see
+[Passkey presence](../security/index.md#presence)).
+
+| Method + path | Request | Notes |
+|---|---|---|
+| `POST /v1/presence/prepare` | `{action: "approve"\|"reject"\|"lockdown_clear"\|"agent_host", target, hostId?}` | drafts the event as the plain endpoint would and writes nothing: `{prepareId, challenge, preview: {kind, summary, digestShort, rpId, allowCredentials, chatTitle?, proposalTitle?, diffDigest?}}`. `challenge` is the base64url event digest the passkey signs (RP `ligus.ai`, user verification required). `prepareId` is single use and lasts 5 minutes. 409 when there is nothing to confirm |
+| `POST /v1/presence/commit` | `{prepareId, assertion: {credentialId, authenticatorData, clientDataJSON, signature}}` (base64url) | appends the event with the assertion inside its signed stamp: `{committed, kind, eventId}`. 403 when the assertion doesn't verify or the passkey isn't the owner's; 404 for an unknown, expired or used `prepareId` |
+
 ### Proposals
 
 | Method + path | Request | Notes |
 |---|---|---|
 | `GET /v1/proposals` | `?status=open\|all` (default `open`) | newest first |
 | `GET /v1/proposals/:id` | | adds `myRole`, `myVote`, `canVote`, `isMine`. Every proposal also carries the review badges `authorKind`, `authorName`, `configImpact`, `humanGate`, `presenceRequired`, `argv` (a structured command) and `implementPlan` |
-| `POST /v1/proposals/:id/approve` | | votes approve at the box's role; applies the change only with `LIGUS_SERVE_APPLY_ON_APPROVE`. On a box enrolled as the owner's device: `403 {"error":"presence_required","hint":…}` (as for `reject` and `lockdown/clear`) |
+| `POST /v1/proposals/:id/approve` | | votes approve at the box's role; applies the change only with `LIGUS_SERVE_APPLY_ON_APPROVE`. On a box enrolled as the owner's device: `403 {"error":"presence_required","hint":…}` (as for `reject`, `lockdown/clear` and `agents/:id/host`); use the presence endpoints below |
 | `POST /v1/proposals/:id/reject` | `{reason?}` | the reason becomes a thread comment |
 | `GET /v1/proposals/:id/comments` | | refinement thread |
 | `POST /v1/proposals/:id/comments` | `{text, requestChanges?}` | a Viewer gets 403 |

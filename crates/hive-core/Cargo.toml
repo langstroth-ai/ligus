@@ -20,6 +20,11 @@ hkdf = "0.12"
 sha2 = "0.10"
 argon2 = "0.5"
 url = "2"
+# B3 passkeys: ES256 verification (RustCrypto), base64url WebAuthn fields,
+# and the 24-word recovery key.
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+base64 = "0.22"
+bip39 = { version = "2", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 # Property tests (Phase 0): default 256 cases; nightly sets PROPTEST_CASES=4096.

@@ -947,7 +947,7 @@ pub(crate) fn list_workflows(
         .unwrap_or_default())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn remove_workflow(
     state: State<AppState>,
     session_id: String,

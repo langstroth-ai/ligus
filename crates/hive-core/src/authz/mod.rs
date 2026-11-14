@@ -35,6 +35,8 @@ pub mod agent;
 pub mod bounds;
 pub mod timeline;
 pub mod votes;
+pub mod passkeys;
+pub mod rules;
 
 use std::collections::BTreeMap;
 
@@ -48,14 +50,17 @@ use crate::events::{SessionEvent, SessionEventEnvelope};
 use crate::identity::{ActorKind, CfgFrontier, WorkspaceRole};
 use crate::session::ChatSession;
 
-/// The workspace rules version: 1 = the 2.0 base rules. Track B's human
-/// presence is version 2; this build does not enforce it yet, so it treats 2
-/// as unknown (read-only) rather than claim rules it would not apply.
+/// The workspace rules version: 1 = the 2.0 base rules; 2 = human presence
+/// (passkeys, Track B) and the Agent tier for host-signed agent output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RulesVersion(pub u32);
 
 /// The highest rules version this build enforces.
-pub const RULES_SUPPORTED: u32 = 1;
+pub const RULES_SUPPORTED: u32 = 2;
+
+/// The refusal of an event that needs its author's passkey presence (B3).
+/// Authoring paths match on it to ask for a passkey confirmation.
+pub const PRESENCE_REQUIRED: &str = "this needs a passkey confirmation from its author";
 
 /// Why an event was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -255,6 +260,12 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
     // roster at its frontier. Self-validating trust publications are exempt,
     // and a self-enrollment is judged by its invite below.
     let on_config = env.session_id == crate::channel::workspace_config_session_id(env.workspace_id);
+    // B1 old-epoch policy: an event that arrived sealed under epoch `e` is
+    // accepted only if `e` is at least the authorized epoch at its author's
+    // frontier (an author who had seen a rotation must have used it).
+    if let Some(why) = stale_epoch(env, ctx, on_config) {
+        return Decision::deny(why);
+    }
     // Agent-signed events (A3): judged by the Agent tier, capped by the
     // agent's owner's role, with the key valid at this position.
     // A message is its author's (checked chat folds).
@@ -283,6 +294,34 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             return authorize_agent(env, ctx, roster);
         }
     }
+    // Rules v2 (A3 transition): a host-signed chat event that speaks for an
+    // agent (its reply, its streaming, a proposal it produced) is judged with
+    // the Agent tier, whether or not the host could certify a key for that
+    // agent. Folds use the highest rules this build knows.
+    if ctx.checked && !on_config && ctx.workspace.is_some_and(|at| at.rules.min(RULES_SUPPORTED) >= 2) {
+        let speaks_for = agent::agent_authored(&env.payload).or_else(|| match &env.payload {
+            SessionEvent::MessageChunkReceived { message_id, .. } | SessionEvent::MessageCompleted { message_id, .. } => fold
+                .messages
+                .iter()
+                .find(|m| m.id == *message_id && m.role != crate::chat::MessageRole::User)
+                .and_then(|m| m.responder_id),
+            _ => None,
+        });
+        if let Some(agent_id) = speaks_for {
+            if let Err(why) = agent::tier_allows(&env.payload, agent_id, env.signer_device_id.unwrap_or_default(), fold) {
+                return Decision::deny(why);
+            }
+        }
+    }
+    // Rules v2: an effect of the chat's primary runtime (host-signed, no
+    // agent identity) is judged at the Agent tier too.
+    if env.actor_stamp.as_ref().is_some_and(|s| s.runtime_effect)
+        && roster_here.is_some_and(|r| r.rules.min(RULES_SUPPORTED) >= 2)
+    {
+        if let Err(why) = agent::runtime_tier_allows(&env.payload) {
+            return Decision::deny(why);
+        }
+    }
     let exempt = is_trust_publication(&env.payload) || matches!(env.payload, SessionEvent::MemberAdded { .. });
     if !exempt {
         let member = if ctx.checked {
@@ -297,8 +336,57 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         }
     }
 
+    // B3: human presence. A stamped assertion must verify; under rules v2
+    // (and for the switch to v2 itself) the events of the presence table
+    // need one. Passkey registrations prove themselves below.
+    let mut present: Option<Uuid> = None;
+    if let Some(roster) = roster_here {
+        if !matches!(env.payload, SessionEvent::PasskeyRegistered { .. }) {
+            match passkeys::verify_stamped(env, roster) {
+                Ok(p) => present = p,
+                Err(why) => return Decision::deny(why),
+            }
+        }
+        let switch_to_v2 = matches!(env.payload, SessionEvent::WorkspaceRulesSet { version: 2 });
+        if (roster.rules.min(RULES_SUPPORTED) >= 2 || switch_to_v2)
+            && rules::requires_presence(&env.payload, author, roster, fold)
+            && present.is_none()
+        {
+            return Decision::deny(PRESENCE_REQUIRED);
+        }
+    }
+    match &env.payload {
+        SessionEvent::PasskeyRegistered { credential } => {
+            return match passkeys::registration_ok(env, credential, on_config, ctx.running) {
+                Ok(()) => Decision::Allow,
+                Err(why) => Decision::deny(why),
+            };
+        }
+        SessionEvent::PasskeyRemoved { account_id, credential_id } => {
+            return match passkeys::removal_ok(env, *account_id, credential_id, on_config, ctx.running, fold, author) {
+                Ok(()) => Decision::Allow,
+                Err(why) => Decision::deny(why),
+            };
+        }
+        _ => {}
+    }
+
+    if let SessionEvent::DeviceKeyAgreementPublished { device_id, ka_public } = &env.payload {
+        return match ka_publication_ok(env, *device_id, ka_public, on_config, ctx.running) {
+            Ok(()) => Decision::Allow,
+            Err(why) => Decision::deny(why),
+        };
+    }
+
     if requires_projection_authz(&env.payload) {
         let mut role = fold.role_of(author);
+        // B1: a key rotation follows the authorized head by exactly one and
+        // is signed by a certified device of its author.
+        if let SessionEvent::WorkspaceKeyRotated { rotation } = &env.payload {
+            if let Err(why) = rotation_ok(env, rotation, on_config, ctx.running) {
+                return Decision::deny(why);
+            }
+        }
         // A chat's own roster (its creator is its Owner) never grants a
         // workspace role: on a chat log, governance and workspace-config kinds
         // are capped by the author's workspace role at this position.
@@ -355,30 +443,22 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 return Decision::deny("names a config position older than the content it judges");
             }
         }
-        // Rules v2 (A3 transition): a host-signed event that speaks for an
-        // agent is judged with the Agent tier. Folds use the highest rules
-        // this build knows.
-        if at.rules.min(RULES_SUPPORTED) >= 2 {
-            if let Some(agent_id) = agent::agent_authored(&env.payload) {
-                if let Err(why) = agent::tier_allows(&env.payload, agent_id, env.signer_device_id.unwrap_or_default(), fold) {
-                    return Decision::deny(why);
-                }
-            }
-        }
         match &env.payload {
             SessionEvent::ProposalVoteCast { proposal_id, approval } => {
                 if approval.actor_id != author {
                     return Decision::deny("a vote must be cast by the voter it names");
                 }
-                // P0.6: a delegated host (a serve box enrolled as its owner's
-                // device) signs as the owner without the owner being there.
-                // Until Track B's presence proofs, its votes don't count
-                // toward a human gate; `ligus serve` refuses them up front
-                // (403 presence_required).
+                // P0.6 / B3: a delegated host (a serve box enrolled as its
+                // owner's device) signs as the owner without the owner being
+                // there. Its vote counts only with the owner's passkey
+                // presence over it (the phone's `presence/prepare` and
+                // `presence/commit`): the counted human is the credential's
+                // account, which must be the voter's.
                 let account = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id);
                 let signer = env.signer_device_id.and_then(|d| at.devices.get(&d));
-                if signer.zip(account).is_some_and(|(d, a)| d.delegated_for(a)) {
-                    return Decision::deny("a vote signed by a delegated host doesn't count toward the human gate");
+                if signer.zip(account).is_some_and(|(d, a)| d.delegated_for(a)) && (present.is_none() || present != account) {
+                    // A delegated host's vote needs the owner's presence.
+                    return Decision::deny(PRESENCE_REQUIRED);
                 }
                 if let (Some(d), Some(p)) =
                     (&approval.diff_digest, fold.proposals.iter().find(|p| p.id == *proposal_id))
@@ -464,6 +544,78 @@ fn authorize_agent(env: &SessionEventEnvelope, ctx: &Ctx<'_>, roster: &RosterSta
         return Decision::deny(d.summary);
     }
     Decision::Allow
+}
+
+/// The B1 write rule (see [`authorize`]): `Some(reason)` when the envelope
+/// arrived sealed under an epoch older than the one authorized at its
+/// author's frontier.
+fn stale_epoch(env: &SessionEventEnvelope, ctx: &Ctx<'_>, on_config: bool) -> Option<String> {
+    let sealed = env.sealed_epoch()?;
+    let frontier = env.actor_stamp.as_ref()?.cfg_frontier?;
+    let roster = if on_config {
+        ctx.running
+    } else if ctx.checked {
+        ctx.workspace?
+    } else {
+        return None;
+    };
+    let required = roster.key_epochs.version_at(frontier.key());
+    (sealed < required).then(|| format!("sealed under key epoch {sealed}, but its author had seen epoch {required}"))
+}
+
+/// The signing device of a key event: certified here (not revoked), certified
+/// for the stamped account when there is one, and its signature verifies
+/// against the certificate's key (defense in depth over ingest).
+pub(crate) fn certified_signer<'r>(env: &SessionEventEnvelope, roster: &'r RosterState) -> Result<&'r timeline::DeviceState, String> {
+    let device = env.signer_device_id.ok_or("unsigned")?;
+    let d = roster
+        .devices
+        .get(&device)
+        .filter(|d| !d.revoked && !d.accounts.is_empty())
+        .ok_or("signed by a device that isn't certified here")?;
+    if let Some(account) = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) {
+        if !d.accounts.contains(&account) {
+            return Err("signed by a device that doesn't act for its author".into());
+        }
+    }
+    crate::crypto::verify_envelope(env, &d.public_key).map_err(|_| "bad signature".to_string())?;
+    Ok(d)
+}
+
+/// `DeviceKeyAgreementPublished`: on the config log, signed by the very device
+/// it names (certified here), with a 32-byte X25519 key.
+fn ka_publication_ok(
+    env: &SessionEventEnvelope,
+    device_id: Uuid,
+    ka_public: &[u8],
+    on_config: bool,
+    roster: &RosterState,
+) -> Result<(), String> {
+    if !on_config {
+        return Err("a key-agreement key is published on the workspace config log".into());
+    }
+    if env.signer_device_id != Some(device_id) {
+        return Err("a device publishes only its own key-agreement key".into());
+    }
+    if ka_public.len() != 32 {
+        return Err("malformed key-agreement key".into());
+    }
+    certified_signer(env, roster).map(|_| ())
+}
+
+/// `WorkspaceKeyRotated`: on the config log, from a certified device, and the
+/// next version after the authorized head.
+fn rotation_ok(
+    env: &SessionEventEnvelope,
+    rotation: &crate::keys::SignedRotation,
+    on_config: bool,
+    roster: &RosterState,
+) -> Result<(), String> {
+    if !on_config {
+        return Err("a key rotation is published on the workspace config log".into());
+    }
+    certified_signer(env, roster)?;
+    roster.key_epochs.check_next(rotation)
 }
 
 /// The certificate checks of an `AgentKeyCertified`.

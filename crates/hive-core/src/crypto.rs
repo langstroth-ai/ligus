@@ -500,7 +500,8 @@ mod tests {
         let mut spoofed = env.clone();
         spoofed.actor_stamp = Some(crate::identity::ActorStamp {
             actor: crate::identity::ActorIdentity::new("mallory", "Mallory", crate::identity::ActorKind::Human),
-            recorded_at: crate::time_util::Timestamp::epoch(), cfg_frontier: None });
+            recorded_at: crate::time_util::Timestamp::epoch(), cfg_frontier: None,
+            presence: None, runtime_effect: false, });
         assert!(verify_envelope(&spoofed, &kp.public_key_bytes()).is_err());
 
         // wrong key -> fails
