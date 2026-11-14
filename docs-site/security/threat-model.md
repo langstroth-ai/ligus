@@ -32,7 +32,12 @@ exchanged out of band, and rotations are signed events on the config log,
 sealed only to keys devices published there. It can't inject a key: keyring
 rows on the relay are used only to read, never to seal. It can't pin a
 device's sync with a body under an unknown key either (such bodies are
-parked). It can't inject plaintext: a device that holds a workspace key skips
+parked), and a flood of such bodies can't push out the ones waiting for an
+authorized rotation (junk is evicted first). An invite by GitHub handle or a
+new DM is sealed only to the invitee's directory keys that their account
+signed on a workspace you share; when none is, the desktop warns
+**Unverified recipient** and seals only if you confirm, because then the
+relay alone vouches for those keys and could read what you seal. It can't inject plaintext: a device that holds a workspace key skips
 any body from the relay that isn't sealed. In the tunnel it can't read or
 alter phone traffic (Noise, with the box's key pinned from the QR code). A
 ligus-auth token goes only to the relay the session was signed in for. One
@@ -142,16 +147,23 @@ each stays on this list until a release fixes it.
 1. **Secrets in the OS secret store, with a file fallback.** Account,
    device and key-agreement seeds, the workspace passphrase and epoch keys,
    relay and provider tokens and the ligus-auth session live in the OS secret
-   store: on macOS a dedicated keychain file inside the data dir (its unlock
-   password is a login-keychain item that trusts only Ligus), the Secret
+   store: on macOS a dedicated keychain file inside the data dir, the Secret
    Service on a Linux desktop, `systemd-creds` on a headless Linux box.
    `settings.json` and `config.toml` hold only `{"set": true}`
-   placeholders. Where no store works (Windows, a locked or missing
-   keychain, a box without `systemd-creds`) Ligus falls back to `0600` files
-   and says so in **Settings → Passkeys & keys**. Anything running unconfined
-   as your OS user (not an agent, which the sandbox keeps out of the data
-   dir) can still ask the Secret Service or, on macOS, prompt for the unlock
-   item.
+   placeholders. On macOS the keychain's unlock password is a login-keychain
+   item whose access list trusts only the Ligus binary: a release app by its
+   designated requirement (Apple anchor, bundle id `ai.ligus.desktop`, team
+   id), and it won't create the item unless it satisfies it; a development
+   build or the CLI by its code hash, so each rebuild or upgrade of those
+   asks once for your login keychain password. An unlock item created by a
+   build before 2.0.0's review fixes keeps its original access list. If the
+   keychain can't be used, macOS refuses to save secrets (Settings says why)
+   rather than move them to files; `LIGUS_SECRET_BACKEND=file` is the
+   explicit opt-in to `0600` files. Elsewhere, where no store works (Windows,
+   a box without `systemd-creds`), Ligus falls back to `0600` files and says
+   so in **Settings → Passkeys & keys**. Anything running unconfined as your
+   OS user (not an agent, which the sandbox keeps out of the data dir) can
+   still ask the Secret Service or, on macOS, prompt for the unlock item.
 2. **An invite carries keys.** A `hivews1:` code carries the passphrase and
    every authorized epoch key the inviter holds, so the joiner can read the
    history. Treat it like a password and send it over a trusted channel.
@@ -173,15 +185,21 @@ each stays on this list until a release fixes it.
    signs for the agent itself; under rules version 2 that output, and every
    effect of the chat's primary runtime (stamped `runtime_effect`), is judged
    at the Agent tier too. Under rules v1 it is judged by its host's role.
-5. **Lease beats and invites use older keys.** Chat events, attachment
-   blobs and host liveness beats follow signed key rotations on every host
-   (readers take host beats only at the newest authorized key). Workflow and
-   coordinator lease beats are signed by their device but still sealed under
-   the passphrase-derived key (epoch 0), so a removed member who knew the
-   passphrase can still see which device holds a lease. An invite code
-   carries the passphrase and every authorized epoch key: anyone who sees a
-   code reads the workspace's history up to that point, whether or not its
-   single-use invite was redeemed; rotate after a code leaks.
+5. **Invites carry every key, and the directory is trusted only after a
+   warning.** Chat events, attachment blobs, host liveness beats and
+   workflow and coordinator lease beats follow signed key rotations on every
+   host (readers take beats only at the newest authorized key). An invite
+   code carries the passphrase and every authorized epoch key: anyone who
+   sees a code reads the workspace's history up to that point, whether or
+   not its single-use invite was redeemed; rotate after a code leaks. An
+   invite by handle and a new DM seal the code to directory keys: verified
+   ones (published, signed, by a device certified for that account on a
+   workspace you share) when there are any, otherwise only after you confirm
+   the **Unverified recipient** warning. Verification is as strong as that
+   shared workspace's binding of the account key (first registration wins
+   there), and the relay still maps the handle to a GitHub account id; the
+   desktop shows the login it resolved. Signed directory records anchored
+   outside the relay need a relay change and are not in 2.0.
 6. **Signed rotations rely on what a device folds.** A rotation counts only
    when an Admin's certified device signed it at the next version on the
    config log, and a device seals only under such a rotation; junk or
@@ -204,10 +222,18 @@ each stays on this list until a release fixes it.
    the returned challenge is its own, and the sheet shows the first 64 bits
    of the digest; the page computes the same id from the challenge it signs
    (never from the link), so compare the two. A person who lost every
-   passkey confirms with the recovery key's 24 words in the same sheet. An
-   account's **first** passkey is trust-on-first-use from its device: under
-   rules v2, an account without a passkey is only as strong as its devices,
-   and an Admin can't clear the passkeys of a member above them.
+   passkey confirms with the recovery key's 24 words in the same sheet. Under
+   rules v2 an account's **first** passkey needs an Admin's grant: being
+   added as a new member under v2, or an Admin's re-grant with their own
+   passkey (**People → Allow new passkey**), good for one registration; an
+   account that kept its recovery key re-registers with it. Under rules v1 a
+   first passkey is trust on first use from the device. Once an account has
+   a passkey, a new device of that account and an account-key rotation need
+   its presence too (a stolen device and account key can't add devices or
+   re-pin the key), and any switch to rules v2 or later, an unknown version
+   included, needs the switcher's presence. An Admin can't clear the
+   passkeys of a member above them. Until someone registers a passkey, their
+   account is only as strong as their devices.
 8. **Phone approvals through a box carry your passkey.** A `ligus serve`
    box enrolled as your device signs as you, so votes, lockdown clears and
    agent rebinds from the phone go through `presence/prepare` and
@@ -322,6 +348,9 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 | Presence (Track B) | No human presence on admin events | Rules v2: passkey assertions over the event digest inside the signed stamp, verified offline on every device |
 | Keys (Track B review) | Attachments and host liveness beats stayed on the passphrase key; a removed member's box still hosting an agent got every new key; a stranger could deliver the key a DM's second side adopted | Blobs and host beats follow the keyring; rotations seal only to devices of current members; a DM key is adopted only from the DM's friend |
 | Presence (Track B review) | The passkey page showed a 32-bit digest id taken from its link; re-owning another member's host skipped presence; an Admin could strip an Owner's passkeys; the recovery key had no way to be used; dearth mode was read from an unpinned projection | A 64-bit id the page computes from the challenge; host takeovers need presence; removals only at or below the remover's role; Use recovery key in the confirmation sheet; dearth mode follows the founder pin |
+| Presence (Track B residuals) | Under rules v2 a device-key thief could certify new devices, rotate the account key (refused by the fold but still applied to the rosters) and, once an account's credentials were cleared or before it had any, register a "first" passkey; switching to an unknown rules version needed no presence | New devices and account-key rotations of an account with a passkey need its presence, and both rosters apply only allowed ones; a first passkey under v2 needs an Admin's grant; every switch to v2 or later needs presence |
+| Keys (Track B residuals) | Lease beats stayed on the passphrase key; a flood of junk bodies could evict parked bodies waiting for an authorized rotation (B-11); invite and DM codes were sealed to whatever keys the relay directory listed | Lease beats follow the keyring; parked bodies are ranked and junk goes first; codes go to signed directory keys, or after an Unverified recipient warning |
+| Secrets (Track B residuals) | The keychain unlock item trusted whichever process created it; an unusable keychain silently moved secrets to plain files; the passkey loopback read unbounded lines and its nonce was on the browser's command line (B-12) | An explicit access list for the Ligus binary (designated requirement for release apps); macOS refuses without `LIGUS_SECRET_BACKEND=file`; the loopback caps what it reads and the browser opens a private redirect page |
 | Relay (E-5) | The ligus-auth access token was sent to any configured relay, an invite's included | Only to the relay origin its session was signed in for |
 | Host (C-9) | An agent could write hooks or MCP servers into `~/.claude`, `~/.codex` and the other CLIs' config, which ran unsandboxed on the user's next CLI start | CLI agents run with a per-turn home seeded with the top-level config files; their real config dirs aren't writable, and only refreshed sign-in files are copied back ([details](../addons/acp.md#cli-home)) |
 | Host (C-13) | A macOS agent could drive other apps with Apple Events or read the pasteboard | The Seatbelt profile denies Apple Events and the pasteboard services |
@@ -338,8 +367,9 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 ### Open {#findings-open}
 
 These are in [Known limitations](#known-limitations) and stay there until a
-release fixes them: lease beats on the passphrase key and invite codes
-carrying every epoch key, rules v1 as the default (presence only once an Owner turns rules v2 on),
+release fixes them: invite codes carrying every epoch key, directory keys
+for people you share no workspace with (unverified, sealed only after a
+warning), rules v1 as the default (presence only once an Owner turns rules v2 on),
 devices without a founder pin keeping the passphrase key, and ingest-time
 decisions that depend on arrival order. On Kubernetes, DNS tunnelling through
 the cluster resolver remains possible (see
