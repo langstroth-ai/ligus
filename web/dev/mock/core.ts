@@ -212,6 +212,13 @@ function handle(cmd: string, args: Args): unknown {
       return { base: "http://localhost:11434", host: "localhost", models: [], pulling: [] };
     case "model_profile_hint":
       return null;
+    case "forges_list":
+      return [
+        { id: "github:github.com", kind: "github", flavor: null, displayName: "GitHub", baseUrl: "https://github.com", authSource: "gh", hasRead: true, hasWrite: true, user: "ana", deviceFlow: false, openLabel: "Open draft PR", holder: "this device", available: true },
+        { id: "gitea:codeberg.org", kind: "gitea", flavor: "codeberg", displayName: "Codeberg", baseUrl: "https://codeberg.org", authSource: "token", hasRead: true, hasWrite: false, user: null, deviceFlow: false, openLabel: "Open WIP PR", holder: "this device" },
+      ];
+    case "forges_repos":
+      return { login: "ana", owners: ["ana"], repos: [{ repo: { owner: "ana", name: "hive-notes" }, description: "Bee notes", private: false, defaultBranch: "main", updatedAt: "2026-11-01", webUrl: "https://github.com/ana/hive-notes", fork: false }], hasMore: false };
     default:
       if (cmd.startsWith("list_")) return [];
       return null;

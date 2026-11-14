@@ -71,6 +71,7 @@ first time it is created; after that, Settings is the source of truth.
 | `LIGUS_MCP_MAX_HANDOFFS` | `2` | desktop, CLI | hand-offs per turn |
 | `LIGUS_MCP_MAX_ASKS` | `3` | desktop, CLI | questions to the chat per turn |
 | `LIGUS_MCP_MAX_READ_MESSAGES` | `500` | desktop, CLI | messages and proposals read per turn |
+| `LIGUS_MCP_MAX_FORGE_CALLS` | `16` | desktop, CLI | read-only code-host calls (`ligus_forge_*`) per turn |
 | `LIGUS_MCP_MAX_CASCADE_TOOL_CALLS` | `192` | desktop, CLI | Ligus tool calls shared by every turn descended from one human message |
 | `LIGUS_MCP_MAX_CASCADE_PROPOSALS` | `12` | desktop, CLI | proposals per cascade |
 | `LIGUS_MCP_MAX_CASCADE_HANDOFFS` | `6` | desktop, CLI | hand-offs per cascade |
@@ -106,6 +107,8 @@ first time it is created; after that, Settings is the source of truth.
 | `LIGUS_DESKTOP_DATA_DIR` | the OS app-data dir for `ai.ligus.desktop` | where to read the desktop's theme on the same machine |
 | `LIGUS_REPOS_DIR` | `<data dir>/repos` | checkouts the phone may bind and clone into |
 | `LIGUS_REPOS_MAX_CLONE_MB` | `2048` | clone size cap |
+| `LIGUS_GITHUB_APP_CLIENT_ID` | unset | the Ligus GitHub App's client id for device sign-in (also read at build time); no secret |
+| `LIGUS_GITLAB_CLIENT_ID` | unset | the gitlab.com OAuth application id for device sign-in (also read at build time); no secret |
 | `LIGUS_REPOS_CLONE_TIMEOUT_SECS` | `900` | clone and fetch timeout |
 | `LIGUS_REMOTE_RELAY` | from `tunnel/relay.json` | relay for the phone tunnel; `off` disables it for this run |
 | `LIGUS_REMOTE_REG_TOKEN` | from `relay.json` | registration token for a gated relay |

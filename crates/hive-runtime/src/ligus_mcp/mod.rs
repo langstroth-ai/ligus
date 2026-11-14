@@ -5,12 +5,14 @@
 //! - [`socket`]: the per-turn unix socket agents reach through
 //!   `ligus mcp-bridge` ([`bridge`]) inside the sandbox;
 //! - [`attach`]: how the legacy CLI adapters get the server;
-//! - [`tools`]: the frozen schemas (16 tools, folded into 4 for tool loops);
-//! - [`cred`]: the per-turn credential (`ligus-mcp-turn-cred-v1\0`).
+//! - [`tools`]: the frozen schemas (22 tools, folded into 4 for tool loops);
+//! - [`cred`]: the per-turn credential (`ligus-mcp-turn-cred-v1\0`);
+//! - [`forge_tools`]: the read-only code-host tools (no writes, no token in the sandbox).
 
 pub mod attach;
 pub mod bridge;
 pub mod cred;
+pub mod forge_tools;
 pub mod server;
 pub mod socket;
 pub mod tools;

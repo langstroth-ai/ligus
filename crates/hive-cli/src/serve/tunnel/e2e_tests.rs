@@ -400,3 +400,38 @@ async fn interop_against_a_real_relay() {
     let err = testkit::phone_session(&info, &phone, &credential).await.err().expect("revoked at the relay");
     assert_eq!(testkit::close_code(&err), Some(4003), "{err:#}");
 }
+
+/// A token set through the tunnel: the router called the way the connector
+/// calls it, for a paired phone. (The LAN-bind refusal is
+/// `forges_api::tests::tokens_travel_only_through_the_tunnel_or_loopback`.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forge_tokens_can_be_set_through_the_tunnel() {
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    h.send(reqwest::Method::POST, "/v1/forges", Some(json!({"kind": "gitlab", "baseUrl": "https://gitlab.example.com", "auth": "token"}))).await;
+    let t = h.handle.shared.tunnel.clone().unwrap();
+    let (_, _, _, ps) = parse_link(&pair_link(&h));
+    relay.wait_for("enroll", |m| m["eid"] == ps.eid, Duration::from_secs(5)).await.unwrap();
+    let info = host_info(&h, &relay.url);
+    let phone = PhoneKeys::generate();
+    let (_c, pid, _) = testkit::phone_enroll(&info, &phone, &ps, "p").await.unwrap();
+    assert!(t.registry.is_active(&pid));
+    let body = json!({"purpose": "write", "token": "glpat-tunnel-0123456789"}).to_string();
+    let mut req = axum::http::Request::builder()
+        .method("PUT")
+        .uri("/v1/forges/gitlab:gitlab.example.com/token")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body))
+        .unwrap();
+    req.extensions_mut().insert(tun::TunnelPeer { pid });
+    use tower::ServiceExt;
+    let resp = crate::serve::api::router(h.handle.shared.clone()).oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    assert!(!String::from_utf8_lossy(&bytes).contains("glpat-tunnel"), "the answer never echoes the token");
+    let store = crate::forge_cmd::token_store(&h.handle.shared.cfg.data_dir);
+    let id = hive_forge::ForgeId::parse("gitlab:gitlab.example.com").unwrap();
+    assert_eq!(store.get(&id, hive_forge::Purpose::Write).unwrap().unwrap().expose(), "glpat-tunnel-0123456789");
+    h.handle.shutdown();
+}

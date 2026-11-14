@@ -19,6 +19,7 @@ hive-proto.workspace = true
 # Inherits default-features = false from the workspace root, so this app's own
 # `p2p` feature is what enables hive-runtime's iroh-backed P2P.
 hive-runtime.workspace = true
+hive-forge.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true

@@ -1716,3 +1716,50 @@ export const onPresenceRequested = (cb: (p: PresencePromptDto) => void): Promise
   listen<PresencePromptDto>("presence://requested", (e) => cb(e.payload));
 export const onPresenceDone = (cb: (ok: boolean) => void): Promise<UnlistenFn> =>
   listen<boolean>("presence://done", (e) => cb(e.payload));
+
+// ── Code hosts (forges): Settings → Code hosts and the repo picker ─────────
+// Tokens go from this window to this device's backend and its OS secret
+// store, and nowhere else: never synced, never sent to the relay.
+
+export type ForgeConnection = {
+  id: string;
+  kind: "github" | "gitlab" | "gitea";
+  flavor?: string | null;
+  displayName: string;
+  baseUrl: string;
+  authSource: "gh" | "token" | "oauth" | "none";
+  hasRead: boolean;
+  hasWrite: boolean;
+  user?: string | null;
+  deviceFlow: boolean;
+  openLabel: string;
+  holder: string;
+  available?: boolean;
+  reason?: string | null;
+};
+
+export type ForgeRepo = {
+  repo: { owner: string; name: string };
+  description: string;
+  private: boolean;
+  defaultBranch: string;
+  updatedAt: string;
+  webUrl: string;
+  fork: boolean;
+};
+
+export type ForgeDeviceStart = { userCode: string; verificationUri: string; expiresIn: number };
+export type ForgeDeviceStatus = { id: string; state: "pending" | "done" | "denied" | "expired" | "error"; error?: string | null };
+
+export const forgesList = (check = false) => invoke<ForgeConnection[]>("forges_list", { check });
+export const forgesAdd = (kind: string, baseUrl: string, auth?: string, clientId?: string) =>
+  invoke<ForgeConnection>("forges_add", { kind, baseUrl, auth, clientId });
+export const forgesRemove = (id: string) => invoke<void>("forges_remove", { id });
+export const forgesSetToken = (id: string, purpose: "read" | "write", token: string) =>
+  invoke<ForgeConnection>("forges_set_token", { id, purpose, token });
+export const forgesTest = (id: string) => invoke<ForgeConnection>("forges_test", { id });
+export const forgesDeviceStart = (id: string) => invoke<ForgeDeviceStart>("forges_device_start", { id });
+export const forgesDeviceStatus = () => invoke<ForgeDeviceStatus>("forges_device_status");
+export const forgesRepos = (id: string, q?: string, owner?: string, page?: number) =>
+  invoke<{ login: string; owners: string[]; repos: ForgeRepo[]; hasMore: boolean }>("forges_repos", { id, q, owner, page });
+export const forgesClone = (id: string, repo: string, parent: string) => invoke<string>("forges_clone", { id, repo, parent });

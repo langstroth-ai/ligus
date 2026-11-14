@@ -111,7 +111,7 @@ async fn mcp_bridge_reachable_inside_seatbelt_and_bwrap() {
     let got = run_bridge(true).await.expect("bridge reaches the socket");
     assert_eq!(got[0]["result"]["serverInfo"]["name"], "ligus");
     let tools = got[1]["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 16);
+    assert_eq!(tools.len(), hive_runtime::ligus_mcp::tools::TOOLS.len(), "the full set, code-host reads included");
     assert_eq!(got[2]["result"]["isError"], false);
 
     // macOS: without the socket in the plan, the profile denies the connect.

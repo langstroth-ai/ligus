@@ -8,6 +8,8 @@ license.workspace = true
 [dependencies]
 hive-core.workspace = true
 hive-proto.workspace = true
+hive-forge.workspace = true
+async-trait = "0.1"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

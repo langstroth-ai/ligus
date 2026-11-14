@@ -24,6 +24,9 @@ pub const FORGE_SCOPE: &str = "forge";
 pub enum TokenPurpose {
     Read,
     Write,
+    /// An OAuth refresh token from a device sign-in (never handed out; it
+    /// only buys a new write token).
+    Refresh,
 }
 
 impl TokenPurpose {
@@ -31,6 +34,7 @@ impl TokenPurpose {
         match self {
             TokenPurpose::Read => "read",
             TokenPurpose::Write => "write",
+            TokenPurpose::Refresh => "refresh",
         }
     }
 }
@@ -64,10 +68,57 @@ pub fn get_token(store: &dyn SecretStore, forge_id: &str, purpose: TokenPurpose)
     Ok(t)
 }
 
-/// Remove both tokens of a connection.
+/// Remove every token of a connection.
 pub fn delete_connection(store: &dyn SecretStore, forge_id: &str) -> Result<(), SecretError> {
     store.delete(&secret_id(forge_id, TokenPurpose::Read)?)?;
-    store.delete(&secret_id(forge_id, TokenPurpose::Write)?)
+    store.delete(&secret_id(forge_id, TokenPurpose::Write)?)?;
+    store.delete(&secret_id(forge_id, TokenPurpose::Refresh)?)
+}
+
+// ── hive-forge's TokenStore over these slots ───────────────────────────────
+
+/// [`hive_forge::TokenStore`] over the functions above, so the forge
+/// crate, `ligus serve` and the desktop share one set of slots.
+pub struct ForgeSecrets {
+    store: std::sync::Arc<dyn SecretStore>,
+}
+
+impl ForgeSecrets {
+    pub fn new(store: std::sync::Arc<dyn SecretStore>) -> Self {
+        Self { store }
+    }
+
+    /// The tokens of `data_dir`'s store.
+    pub fn for_data_dir(data_dir: &std::path::Path) -> std::sync::Arc<dyn hive_forge::TokenStore> {
+        std::sync::Arc::new(Self::new(crate::secret_store::for_data_dir(data_dir)))
+    }
+}
+
+fn purpose_of(p: hive_forge::Purpose) -> TokenPurpose {
+    match p {
+        hive_forge::Purpose::Read => TokenPurpose::Read,
+        hive_forge::Purpose::Write => TokenPurpose::Write,
+        hive_forge::Purpose::Refresh => TokenPurpose::Refresh,
+    }
+}
+
+fn forge_err(e: SecretError) -> hive_forge::ForgeError {
+    hive_forge::ForgeError::Store(e.to_string())
+}
+
+impl hive_forge::TokenStore for ForgeSecrets {
+    fn get(&self, forge: &hive_forge::ForgeId, purpose: hive_forge::Purpose) -> Result<Option<hive_forge::Secret>, hive_forge::ForgeError> {
+        Ok(get_token(&*self.store, forge.as_str(), purpose_of(purpose))
+            .map_err(forge_err)?
+            .filter(|t| !t.trim().is_empty())
+            .map(|t| hive_forge::Secret::new(t.as_str())))
+    }
+    fn put(&self, forge: &hive_forge::ForgeId, purpose: hive_forge::Purpose, token: &hive_forge::Secret) -> Result<(), hive_forge::ForgeError> {
+        put_token(&*self.store, forge.as_str(), purpose_of(purpose), token.expose()).map_err(forge_err)
+    }
+    fn delete(&self, forge: &hive_forge::ForgeId, purpose: hive_forge::Purpose) -> Result<(), hive_forge::ForgeError> {
+        self.store.delete(&secret_id(forge.as_str(), purpose_of(purpose)).map_err(forge_err)?).map_err(forge_err)
+    }
 }
 
 #[cfg(test)]
@@ -89,6 +140,31 @@ mod tests {
         assert!(secret_id("../x", TokenPurpose::Read).is_err());
         delete_connection(&store, "github.com").unwrap();
         assert!(get_token(&store, "github.com", TokenPurpose::Read).unwrap().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The forge crate's view of the same slots: a token put through
+    /// [`ForgeSecrets`] is the one [`get_token`] reads, and it lands only in
+    /// the `forge` scope, never in the connection file.
+    #[test]
+    fn forge_crate_uses_the_same_slots() {
+        use hive_forge::TokenStore as _;
+        let dir = std::env::temp_dir().join(format!("ligus-forge-secrets-{}", uuid::Uuid::new_v4()));
+        let store: std::sync::Arc<dyn SecretStore> = std::sync::Arc::new(File0600::new(&dir));
+        let t = ForgeSecrets::new(store.clone());
+        let id = hive_forge::ForgeId::parse("gitea:codeberg.org").unwrap();
+        t.put(&id, hive_forge::Purpose::Write, &hive_forge::Secret::new("cb-token-XYZ-0123456789")).unwrap();
+        assert_eq!(get_token(&*store, "gitea:codeberg.org", TokenPurpose::Write).unwrap().as_deref().map(String::as_str), Some("cb-token-XYZ-0123456789"));
+        assert!(t.get(&id, hive_forge::Purpose::Read).unwrap().is_none());
+        t.put(&id, hive_forge::Purpose::Refresh, &hive_forge::Secret::new("refresh-0123456789abcdef")).unwrap();
+        assert_eq!(t.present(&id), vec![hive_forge::Purpose::Write, hive_forge::Purpose::Refresh]);
+        let mut conns = hive_forge::Connections::default();
+        conns.upsert(hive_forge::Connection::new(hive_forge::ForgeKind::Gitea, "https://codeberg.org", hive_forge::AuthSource::Token).unwrap());
+        conns.save(&dir).unwrap();
+        assert!(!std::fs::read_to_string(hive_forge::Connections::path(&dir)).unwrap().contains("cb-token-XYZ"));
+        assert!(!crate::secret_redact::redacted("leak cb-token-XYZ-0123456789 here").contains("cb-token-XYZ-0123456789"), "a token read is masked in logs");
+        delete_connection(&*store, "gitea:codeberg.org").unwrap();
+        assert!(t.present(&id).is_empty(), "removing a connection removes its refresh token too");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

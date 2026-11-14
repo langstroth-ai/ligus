@@ -43,6 +43,9 @@ mod guards;
 mod proposal_sets;
 mod data_migration;
 mod flow;
+mod forges;
+/// git's credential helper entry for this binary (see `forges`).
+pub use forges::maybe_run_git_credential;
 mod ligus_auth_ui;
 mod passkey_ui;
 mod people;
@@ -14102,6 +14105,15 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            forges::forges_list,
+            forges::forges_add,
+            forges::forges_remove,
+            forges::forges_set_token,
+            forges::forges_test,
+            forges::forges_device_start,
+            forges::forges_device_status,
+            forges::forges_repos,
+            forges::forges_clone,
             guards::hand_over_workflow_run,
             guards::list_guard_signals,
             guards::get_dearth_state,

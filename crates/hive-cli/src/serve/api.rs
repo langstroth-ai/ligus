@@ -17,7 +17,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use axum::{Extension, Json, Router};
 use futures_util::stream::{self, Stream, StreamExt};
 use hive_core::proposals::ProposalRefinement;
@@ -475,6 +475,11 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/chats/:id/repo", get(super::repos_api::get_chat_repo).put(super::repos_api::put_chat_repo))
         .route("/v1/chats/:id/repo/pull", post(super::repos_api::pull_chat_repo))
         .route("/v1/chats/:id/pr", post(super::repos_api::open_pr))
+        .route("/v1/forges", get(super::forges_api::list).post(super::forges_api::add))
+        .route("/v1/forges/:id", delete(super::forges_api::remove))
+        .route("/v1/forges/:id/test", post(super::forges_api::test))
+        .route("/v1/forges/:id/token", put(super::forges_api::put_token).delete(super::forges_api::delete_token))
+        .route("/v1/forges/:id/auth/device", post(super::forges_api::device_start).get(super::forges_api::device_status))
         .route("/v1/proposals", get(list_proposals))
         .route("/v1/proposals/:id/approve", post(approve_proposal))
         .route("/v1/proposals/:id/reject", post(reject_proposal))

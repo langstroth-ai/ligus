@@ -124,6 +124,11 @@ nav:
       - People, contacts & DMs: features/collaborators.md
       - Collaborative editing: features/collaboration.md
       - Onboarding: features/onboarding.md
+  - Code hosts:
+      - Overview: features/code-hosts.md
+      - GitHub: forges/github.md
+      - GitLab: forges/gitlab.md
+      - Forgejo, Gitea and Codeberg: forges/forgejo-gitea-codeberg.md
   - Networking:
       - LAN discovery: networking/lan.md
       - Rendezvous relay: networking/rendezvous.md

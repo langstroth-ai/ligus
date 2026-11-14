@@ -82,6 +82,10 @@ pub trait ServiceSource: Send + Sync {
     fn kick(&self) {}
     /// An agent asked the chat's humans a question (push it).
     fn ask_posted(&self, _chat: Uuid, _ask: &hive_core::flow::HumanAsk) {}
+    /// The code host behind the chat's bound repository (read-only tools).
+    fn forge_for(&self, _chat: Uuid) -> Option<hive_runtime::ligus_mcp::forge_tools::ForgeBinding> {
+        None
+    }
 }
 
 impl ServiceSource for Mutex<ChatService> {
@@ -103,6 +107,9 @@ impl LigusHost for CliLigusHost {
     }
     fn ask_posted(&self, chat: Uuid, ask: &hive_core::flow::HumanAsk) {
         self.0.ask_posted(chat, ask);
+    }
+    fn forge_for(&self, chat: Uuid) -> Option<hive_runtime::ligus_mcp::forge_tools::ForgeBinding> {
+        self.0.forge_for(chat)
     }
 }
 

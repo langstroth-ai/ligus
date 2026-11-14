@@ -11,6 +11,7 @@ dependencies = [
  "ed25519-dalek 2.2.0",
  "futures",
  "hive-core",
+ "hive-forge",
  "hive-proto",
  "hive-runtime",
  "notify",
@@ -2575,6 +2576,7 @@ name = "hive-cli"
 version = "2.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "base64 0.21.7",
  "chacha20poly1305",
@@ -2583,6 +2585,7 @@ dependencies = [
  "getrandom 0.2.17",
  "hex",
  "hive-core",
+ "hive-forge",
  "hive-runtime",
  "hkdf",
  "hmac",
@@ -2628,6 +2631,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "hive-forge"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "hive-core",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "toml 0.8.2",
+ "tracing",
+ "url",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "hive-proto"
 version = "2.0.0"
 dependencies = [
@@ -2641,11 +2664,13 @@ version = "2.0.0"
 dependencies = [
  "aho-corasick",
  "anyhow",
+ "async-trait",
  "axum",
  "base64 0.22.1",
  "futures-util",
  "getrandom 0.2.17",
  "hive-core",
+ "hive-forge",
  "hive-proto",
  "iroh",
  "landlock",

@@ -1831,30 +1831,102 @@ async fn sync_once_pages_through_a_large_room() {
 // ── Repos from the phone (`repos_api.rs`) ──────────────────────────────────
 
 /// GitHub stand-in: "repos" are bare repos under `remotes/<owner>/<name>.git`,
-/// pull requests are recorded instead of opened.
+/// change requests are recorded instead of opened.
 struct FakeGitHub {
     remotes: PathBuf,
     available: bool,
-    prs: Mutex<Vec<super::repos_api::PrRequest>>,
+    prs: Mutex<Vec<hive_forge::ChangeRequestDraft>>,
     /// "owner/name" of a fork → its parent (owner, name, default branch).
     parents: std::collections::HashMap<String, (String, String, String)>,
+    creds: Arc<dyn hive_forge::CredentialSource>,
+    id: hive_forge::ForgeId,
+}
+
+/// The fake's credentials: the box's gh login, signed in or not.
+struct FakeCreds(bool);
+
+#[async_trait::async_trait]
+impl hive_forge::CredentialSource for FakeCreds {
+    fn source(&self) -> hive_forge::AuthSource {
+        hive_forge::AuthSource::Gh
+    }
+    async fn token(&self, _: hive_forge::Purpose) -> hive_forge::Result<Option<hive_forge::Secret>> {
+        Ok(self.0.then(|| hive_forge::Secret::new("fake")))
+    }
+    fn has_write(&self) -> bool {
+        self.0
+    }
+    fn signed_out_reason(&self) -> Option<String> {
+        (!self.0).then(|| "Run gh auth login on the host".into())
+    }
+    fn git_helper(&self) -> Option<String> {
+        None
+    }
 }
 
 impl FakeGitHub {
     fn new(remotes: &Path, available: bool) -> Self {
-        Self { remotes: remotes.to_path_buf(), available, prs: Mutex::new(Vec::new()), parents: Default::default() }
+        Self {
+            remotes: remotes.to_path_buf(),
+            available,
+            prs: Mutex::new(Vec::new()),
+            parents: Default::default(),
+            creds: Arc::new(FakeCreds(available)),
+            id: hive_forge::ForgeId::github_com(),
+        }
     }
 }
 
-impl super::repos_api::GitHub for FakeGitHub {
-    fn status(&self) -> super::repos_api::GhStatus {
-        if self.available {
-            super::repos_api::GhStatus { available: true, login: Some("acme".into()), reason: None }
-        } else {
-            super::repos_api::GhStatus { available: false, login: None, reason: Some("Run gh auth login on the host".into()) }
-        }
+fn unsupported<T>() -> hive_forge::Result<T> {
+    Err(hive_forge::ForgeError::Unsupported("fake".into()))
+}
+
+#[async_trait::async_trait]
+impl hive_forge::ForgeReader for FakeGitHub {
+    fn kind(&self) -> hive_forge::ForgeKind {
+        hive_forge::ForgeKind::GitHub
     }
-    fn list(&self, q: &super::repos_api::RepoQuery, _login: &str) -> Result<Vec<super::repos_api::GhRepo>, String> {
+    fn id(&self) -> &hive_forge::ForgeId {
+        &self.id
+    }
+    async fn list_change_requests(&self, _: &hive_forge::RepoRef, _: hive_forge::StateFilter, _: u32) -> hive_forge::Result<Vec<hive_forge::ChangeRequest>> {
+        unsupported()
+    }
+    async fn change_request(&self, _: &hive_forge::RepoRef, _: &str) -> hive_forge::Result<hive_forge::ChangeRequest> {
+        unsupported()
+    }
+    async fn review_comments(&self, _: &hive_forge::RepoRef, _: &str) -> hive_forge::Result<Vec<hive_forge::ReviewComment>> {
+        unsupported()
+    }
+    async fn issues(&self, _: &hive_forge::RepoRef, _: hive_forge::StateFilter, _: u32) -> hive_forge::Result<Vec<hive_forge::Issue>> {
+        unsupported()
+    }
+    async fn issue(&self, _: &hive_forge::RepoRef, _: &str) -> hive_forge::Result<hive_forge::Issue> {
+        unsupported()
+    }
+    async fn ci_status(&self, _: &hive_forge::RepoRef, _: &str) -> hive_forge::Result<hive_forge::CiStatus> {
+        unsupported()
+    }
+    async fn file_at(&self, _: &hive_forge::RepoRef, _: &str, _: &str) -> hive_forge::Result<hive_forge::FileAtRef> {
+        unsupported()
+    }
+}
+
+#[async_trait::async_trait]
+impl hive_forge::Forge for FakeGitHub {
+    fn web_base(&self) -> &str {
+        "https://github.com"
+    }
+    fn capabilities(&self) -> hive_forge::ForgeCaps {
+        hive_forge::ForgeCaps { draft_cr: true, fork_api: true, ci_status: true, review_threads: true, issues: true, api_open_cr: true, device_flow: true }
+    }
+    fn creds(&self) -> &Arc<dyn hive_forge::CredentialSource> {
+        &self.creds
+    }
+    async fn whoami(&self) -> hive_forge::Result<Option<hive_forge::ForgeUser>> {
+        Ok(self.available.then(|| hive_forge::ForgeUser { id: "1".into(), login: "acme".into(), name: String::new() }))
+    }
+    async fn list_repos(&self, q: &hive_forge::RepoQuery, _login: &str) -> hive_forge::Result<Vec<hive_forge::RepoSummary>> {
         let mut out = Vec::new();
         for owner in std::fs::read_dir(&self.remotes).unwrap().flatten() {
             for repo in std::fs::read_dir(owner.path()).unwrap().flatten() {
@@ -1862,49 +1934,58 @@ impl super::repos_api::GitHub for FakeGitHub {
                 if q.q.as_deref().is_some_and(|t| !name.contains(t)) {
                     continue;
                 }
-                out.push(super::repos_api::GhRepo {
-                    owner: owner.file_name().to_string_lossy().into_owned(),
-                    name,
+                out.push(hive_forge::RepoSummary {
+                    repo: hive_forge::RepoRef::new(owner.file_name().to_string_lossy(), name),
                     description: String::new(),
                     private: false,
                     default_branch: "main".into(),
                     updated_at: String::new(),
-                    url: String::new(),
+                    web_url: String::new(),
                     fork: false,
                 });
             }
         }
         Ok(out)
     }
-    fn owners(&self, login: &str) -> Result<Vec<String>, String> {
+    async fn owners(&self, login: &str) -> hive_forge::Result<Vec<String>> {
         Ok(vec![login.to_string(), "acme-org".into()])
     }
-    fn clone_url(&self, owner: &str, name: &str) -> String {
-        format!("file://{}/{owner}/{name}.git", self.remotes.display())
+    async fn repo(&self, r: &hive_forge::RepoRef) -> hive_forge::Result<Option<hive_forge::RepoMeta>> {
+        if !self.remotes.join(&r.owner).join(format!("{}.git", r.name)).exists() {
+            return Ok(None);
+        }
+        Ok(Some(hive_forge::RepoMeta {
+            repo: r.clone(),
+            default_branch: "main".into(),
+            parent: self.parents.get(&r.full_name()).map(|(o, n, b)| (hive_forge::RepoRef::new(o.clone(), n.clone()), b.clone())),
+            private: false,
+            web_url: String::new(),
+            can_push: Some(true),
+        }))
+    }
+    async fn create_fork(&self, _: &hive_forge::RepoRef) -> hive_forge::Result<hive_forge::RepoRef> {
+        panic!("this host never creates forks")
+    }
+    async fn open_change_request(&self, d: &hive_forge::ChangeRequestDraft) -> hive_forge::Result<hive_forge::ChangeRequestOutcome> {
+        let mut prs = self.prs.lock().unwrap();
+        let existing = prs.iter().any(|p| p.base == d.base && p.head == d.head && p.head_branch == d.head_branch);
+        prs.push(d.clone());
+        Ok(hive_forge::ChangeRequestOutcome::Opened { number: "1".into(), url: format!("https://github.com/{}/pull/1", d.base.full_name()), draft_supported: true, existing })
+    }
+    fn clone_url(&self, r: &hive_forge::RepoRef, _: hive_forge::Transport) -> String {
+        format!("file://{}/{}/{}.git", self.remotes.display(), r.owner, r.name)
+    }
+    fn repo_of_remote(&self, url: &str) -> Option<hive_forge::RepoRef> {
+        url.starts_with("file://").then(|| crate::repos::parse_remote(url)).flatten().map(|r| hive_forge::RepoRef::new(r.owner, r.name))
     }
     fn git_auth_args(&self) -> Vec<String> {
         Vec::new()
     }
-    fn repo_of_remote(&self, url: &str) -> Option<crate::repos::RemoteRef> {
-        url.starts_with("file://").then(|| crate::repos::parse_remote(url)).flatten()
-    }
-    fn create_pr(&self, _dir: &Path, pr: &super::repos_api::PrRequest) -> Result<(String, bool), String> {
-        let mut prs = self.prs.lock().unwrap();
-        let existing = prs.iter().any(|p| p.repo == pr.repo && p.head == pr.head);
-        prs.push(pr.clone());
-        Ok((format!("https://github.com/{}/pull/1", pr.repo), existing))
-    }
-    fn repo_meta(&self, owner: &str, name: &str) -> Result<Option<super::repos_api::RepoMeta>, String> {
-        if !self.remotes.join(owner).join(format!("{name}.git")).exists() {
-            return Ok(None);
-        }
-        Ok(Some(super::repos_api::RepoMeta {
-            owner: owner.into(),
-            name: name.into(),
-            default_branch: "main".into(),
-            parent: self.parents.get(&format!("{owner}/{name}")).cloned(),
-        }))
-    }
+}
+
+/// Make `fake` this box's only code host (the github.com connection).
+fn use_fake(h: &Harness, fake: Arc<FakeGitHub>) {
+    h.handle.shared.repos.set_forges(vec![super::repos_api::ForgeHandle { conn: hive_forge::Connection::github_gh(), forge: fake }]);
 }
 
 /// A bare "GitHub" repo `owner/name` with one commit on `main`; returns a
@@ -1943,7 +2024,7 @@ async fn repos_clone_switch_pull_and_pr() {
     std::fs::create_dir_all(&remotes).unwrap();
     let work = fake_remote(&remotes, "acme", "widget");
     let fake = Arc::new(FakeGitHub::new(&remotes, true));
-    h.handle.shared.repos.set_github(fake.clone());
+    use_fake(&h, fake.clone());
 
     // Listing: no local checkouts yet; GitHub lists the fake remote.
     let v = h.get("/v1/repos").await;
@@ -2043,7 +2124,9 @@ async fn repos_clone_switch_pull_and_pr() {
     assert_eq!(pr["base"], "main");
     let rec = fake.prs.lock().unwrap().clone();
     assert_eq!(rec.len(), 1);
-    assert_eq!((rec[0].head.as_str(), rec[0].base.as_str(), rec[0].draft), (format!("hive/chat/{chat_id}").as_str(), "main", true));
+    assert_eq!((rec[0].head_branch.as_str(), rec[0].base_branch.as_str(), rec[0].draft), (format!("hive/chat/{chat_id}").as_str(), "main", true));
+    assert_eq!((rec[0].base.full_name(), rec[0].head.full_name()), ("acme/widget".into(), "acme/widget".into()));
+    assert_eq!((pr["kind"].as_str(), pr["forge"].as_str()), (Some("pr"), Some("github:github.com")));
     let bare = remotes.join("acme").join("widget.git");
     git(&bare, &["rev-parse", "--verify", &format!("refs/heads/hive/chat/{chat_id}")]);
     let msgs = h.get(&format!("/v1/chats/{chat_id}/messages")).await;
@@ -2058,7 +2141,7 @@ async fn repos_clone_switch_pull_and_pr() {
 
     // Signed out: listing says so, PRs are refused clearly, public clones still work.
     let signed_out = Arc::new(FakeGitHub::new(&remotes, false));
-    h.handle.shared.repos.set_github(signed_out);
+    use_fake(&h, signed_out);
     let v = h.get("/v1/repos").await;
     assert_eq!(v["github"], json!({ "available": false, "reason": "Run gh auth login on the host" }));
     let (c, v) = status_of(&h, reqwest::Method::POST, &pr_path, Some(json!({ "title": "x" }))).await;
@@ -2117,7 +2200,7 @@ async fn fork_checkouts_base_on_upstream_and_open_prs_there() {
     let mut fake = FakeGitHub::new(&remotes, true);
     fake.parents.insert("acme/pipelines".into(), ("kubeflow".into(), "pipelines".into(), "main".into()));
     let fake = Arc::new(fake);
-    h.handle.shared.repos.set_github(fake.clone());
+    use_fake(&h, fake.clone());
 
     // Does the account have a fork? Yes for pipelines, no for other.
     let f = h.get("/v1/repos/fork?repo=kubeflow/pipelines").await;
@@ -2165,6 +2248,10 @@ async fn fork_checkouts_base_on_upstream_and_open_prs_there() {
     assert_eq!(r["repo"]["fork"]["upstream"], "kubeflow/pipelines", "{r}");
     let ctx = crate::repos::turn_context(&h.handle.shared.cfg.data_dir, Uuid::parse_str(&chat_id).unwrap());
     assert!(ctx.contains("a fork of `kubeflow/pipelines`") && ctx.contains("`upstream/main`"), "{ctx}");
+    // The agent's read-only code-host tools see the fork and its upstream.
+    let b = crate::worker::ServiceSource::forge_for(&*h.handle.shared, Uuid::parse_str(&chat_id).unwrap()).expect("bound to a code host");
+    assert_eq!((b.repo.full_name(), b.upstream.map(|u| u.full_name())), ("acme/pipelines".into(), Some("kubeflow/pipelines".into())));
+    assert_eq!(b.reader.id().as_str(), "github:github.com");
 
     // Upstream moves; pull fast-forwards the base from upstream.
     commit(&up_work, "UPSTREAM2.md");
@@ -2184,7 +2271,10 @@ async fn fork_checkouts_base_on_upstream_and_open_prs_there() {
     assert_eq!(pr["pushedBranch"], want.as_str(), "{pr}");
     assert_eq!((pr["repo"].clone(), pr["base"].clone(), pr["draft"].clone()), (json!("kubeflow/pipelines"), json!("main"), json!(true)));
     let rec = fake.prs.lock().unwrap().last().cloned().unwrap();
-    assert_eq!((rec.repo.as_str(), rec.head.as_str(), rec.base.as_str(), rec.draft), ("kubeflow/pipelines", format!("acme:{want}").as_str(), "main", true));
+    assert_eq!(
+        (rec.base.full_name(), format!("{}:{}", rec.head.owner, rec.head_branch), rec.base_branch.as_str(), rec.draft),
+        ("kubeflow/pipelines".to_string(), format!("acme:{want}"), "main", true)
+    );
     assert_eq!(rev(&fork_bare, &format!("refs/heads/{want}")), rev(&wt, "HEAD"));
     assert!(!git_ok(&up_bare, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{want}")]), "never pushed upstream");
     assert_eq!(h.get(&format!("/v1/chats/{chat_id}/repo")).await["prBranch"], want.as_str());
@@ -2235,7 +2325,7 @@ async fn fetching_a_fork_checkout_adds_upstream() {
     std::fs::create_dir_all(fork_bare.parent().unwrap()).unwrap();
     git(h._tmp.path(), &["clone", "-q", "--bare", remotes.join("kubeflow/pipelines.git").to_str().unwrap(), fork_bare.to_str().unwrap()]);
     // Plain clone first (GitHub signed out: no fork info).
-    h.handle.shared.repos.set_github(Arc::new(FakeGitHub::new(&remotes, false)));
+    use_fake(&h, Arc::new(FakeGitHub::new(&remotes, false)));
     let job = h.send(reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repo": "acme/pipelines" }))).await;
     assert_eq!(wait_job(&h, job["job"]["id"].as_str().unwrap()).await["state"], "done");
     let co = h.handle.shared.cfg.data_dir.join("repos").join("acme__pipelines");
@@ -2245,7 +2335,7 @@ async fn fetching_a_fork_checkout_adds_upstream() {
     // Signed in: a fetch notices it's a fork and sets up upstream.
     let mut fake = FakeGitHub::new(&remotes, true);
     fake.parents.insert("acme/pipelines".into(), ("kubeflow".into(), "pipelines".into(), "main".into()));
-    h.handle.shared.repos.set_github(Arc::new(fake));
+    use_fake(&h, Arc::new(fake));
     let job = h.send(reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repo": "acme/pipelines" }))).await;
     assert_eq!(job["job"]["action"], "fetch");
     assert_eq!(wait_job(&h, job["job"]["id"].as_str().unwrap()).await["state"], "done");
@@ -3171,4 +3261,139 @@ async fn phone_confirms_a_vote_with_a_passkey() {
     assert_eq!(approvals.len(), 1);
     assert_eq!(approvals[0].actor_id, owner.id, "counted as the passkey's owner");
     h.handle.shutdown();
+}
+
+// ── Code hosts from the phone (`forges_api.rs`) ────────────────────────────
+
+/// Files under `dir` (the secret store's own `secrets/` dir excluded) that
+/// contain `needle`: a grep-style leak check.
+fn files_containing(dir: &Path, needle: &str) -> Vec<PathBuf> {
+    let mut hits = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.file_name().is_some_and(|n| n == "secrets") {
+                continue;
+            }
+            if p.is_dir() {
+                stack.push(p);
+            } else if std::fs::read(&p).is_ok_and(|b| b.windows(needle.len()).any(|w| w == needle.as_bytes())) {
+                hits.push(p);
+            }
+        }
+    }
+    hits
+}
+
+/// `no_forge_token_leaves_device`: add a connection, set a token (loopback
+/// bind), list it. The token is in the box's secret store and nowhere else:
+/// not in an API answer, not in `forges.toml` or `hive.db`, and not on the
+/// desktop after it pulls everything the relay holds.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forge_tokens_stay_in_the_boxs_secret_store() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let v = h.get("/v1/forges").await;
+    assert_eq!(v["forges"][0]["id"], "github:github.com", "the gh login is the default: {v}");
+    assert_eq!(v["forges"][0]["authSource"], "gh");
+    assert_eq!(v["tokenEntry"], true, "a loopback bind is this machine");
+    let add = h.send(reqwest::Method::POST, "/v1/forges", Some(json!({"kind": "codeberg", "baseUrl": "https://codeberg.org", "auth": "token"}))).await;
+    assert_eq!((add["forge"]["id"].as_str(), add["forge"]["displayName"].as_str()), (Some("gitea:codeberg.org"), Some("Codeberg")));
+    assert_eq!(add["forge"]["openLabel"], "Open WIP PR");
+    let (c, _) = status_of(&h, reqwest::Method::POST, "/v1/forges", Some(json!({"kind": "codeberg", "baseUrl": "https://codeberg.org"}))).await;
+    assert_eq!(c, 409, "added once");
+    for bad in [
+        json!({"kind": "gitlab", "baseUrl": "http://gitlab.example.com"}),
+        json!({"kind": "svn", "baseUrl": "https://x.org"}),
+        json!({"kind": "gitlab", "baseUrl": "https://gitlab.com", "auth": "gh"}),
+    ] {
+        let (c, v) = status_of(&h, reqwest::Method::POST, "/v1/forges", Some(bad.clone())).await;
+        assert_eq!(c, 400, "{bad}: {v}");
+    }
+    let token = "cbtok-0123456789-abcdefABCDEF";
+    let path = "/v1/forges/gitea:codeberg.org/token";
+    let (c, _) = status_of(&h, reqwest::Method::PUT, path, Some(json!({"purpose": "write", "token": "has space"}))).await;
+    assert_eq!(c, 400);
+    let (c, _) = status_of(&h, reqwest::Method::PUT, path, Some(json!({"purpose": "admin", "token": token}))).await;
+    assert_eq!(c, 400);
+    let r = h.send(reqwest::Method::PUT, path, Some(json!({"purpose": "write", "token": token}))).await;
+    assert_eq!((r["forge"]["hasWrite"].clone(), r["forge"]["hasRead"].clone()), (json!(true), json!(true)), "{r}");
+    let (c, _) = status_of(&h, reqwest::Method::PUT, "/v1/forges/github:github.com/token", Some(json!({"purpose": "write", "token": token}))).await;
+    assert_eq!(c, 409, "the gh connection takes no pasted token");
+    let data = h.handle.shared.cfg.data_dir.clone();
+    let store = crate::forge_cmd::token_store(&data);
+    let id = hive_forge::ForgeId::parse("gitea:codeberg.org").unwrap();
+    assert_eq!(store.get(&id, hive_forge::Purpose::Write).unwrap().unwrap().expose(), token);
+
+    let listing = h.get("/v1/repos").await;
+    assert!(listing["forges"].as_array().unwrap().iter().any(|f| f["id"] == "gitea:codeberg.org"), "{listing}");
+    for body in [h.get("/v1/forges").await, listing] {
+        assert!(!body.to_string().contains(token), "a token in an API answer: {body}");
+    }
+    // Something to sync after the token was set, then the desktop pulls.
+    h.send(reqwest::Method::POST, "/v1/chats", Some(json!({"title": "after the token"}))).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    crate::sync_once(&h.desktop).await.unwrap();
+    assert_eq!(files_containing(&data, token), Vec::<PathBuf>::new(), "the token leaked into the box's files");
+    assert_eq!(files_containing(&h.desktop.data_dir, token), Vec::<PathBuf>::new(), "the token reached a synced device");
+    assert!(std::fs::read_to_string(data.join("forges.toml")).unwrap().contains("codeberg.org"));
+
+    // Removing the connection removes its tokens.
+    h.send(reqwest::Method::DELETE, "/v1/forges/gitea:codeberg.org", None).await;
+    assert!(store.present(&id).is_empty());
+    let (c, _) = status_of(&h, reqwest::Method::DELETE, "/v1/forges/gitea:codeberg.org", None).await;
+    assert_eq!(c, 404);
+}
+
+/// The forges API needs the bearer, and changes need a box that can write.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forge_endpoints_need_the_bearer_and_a_box_that_can_write() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    for (m, p) in [
+        (reqwest::Method::GET, "/v1/forges"),
+        (reqwest::Method::POST, "/v1/forges/github:github.com/test"),
+        (reqwest::Method::PUT, "/v1/forges/github:github.com/token"),
+    ] {
+        let r = h.client.request(m, format!("{}{p}", h.base)).send().await.unwrap();
+        assert_eq!(r.status(), 401, "{p}");
+    }
+    h.send(reqwest::Method::POST, "/v1/forges", Some(json!({"kind": "codeberg", "baseUrl": "https://codeberg.org", "auth": "token"}))).await;
+    h.handle.shared.lock().set_write_block(Some("this box was revoked".into()));
+    for (m, p, b) in [
+        (reqwest::Method::POST, "/v1/forges", Some(json!({"kind": "gitlab", "baseUrl": "https://gitlab.com"}))),
+        (reqwest::Method::DELETE, "/v1/forges/github:github.com", None),
+        (reqwest::Method::PUT, "/v1/forges/gitea:codeberg.org/token", Some(json!({"purpose": "read", "token": "abc"}))),
+        (reqwest::Method::POST, "/v1/forges/gitea:codeberg.org/auth/device", None),
+    ] {
+        let (c, v) = status_of(&h, m, p, b).await;
+        assert_eq!(c, 403, "{p}: {v}");
+    }
+    let id = hive_forge::ForgeId::parse("gitea:codeberg.org").unwrap();
+    assert!(crate::forge_cmd::token_store(&h.handle.shared.cfg.data_dir).present(&id).is_empty());
+}
+
+/// Clone specs pick the connection by host: an unconnected host, a nested
+/// path on GitHub and an unknown connection are all refused clearly.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn clone_specs_pick_the_connection_by_host() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let remotes = h._tmp.path().join("remotes");
+    std::fs::create_dir_all(&remotes).unwrap();
+    use_fake(&h, Arc::new(FakeGitHub::new(&remotes, true)));
+    for (spec, code) in [
+        (json!({"repo": "https://gitlab.example.com/a/b"}), 400),
+        (json!({"repo": "grp/sub/app"}), 400),
+        (json!({"repo": "a/b", "forge": "gitlab:nowhere.example"}), 404),
+        (json!({"repo": "a/b", "forge": "nonsense"}), 400),
+    ] {
+        let (c, v) = status_of(&h, reqwest::Method::POST, "/v1/repos/clone", Some(spec.clone())).await;
+        assert_eq!(c, code, "{spec}: {v}");
+    }
+    let v = h.get("/v1/repos?forge=github.com").await;
+    assert_eq!((v["forge"]["id"].as_str(), v["forge"]["available"].as_bool()), (Some("github:github.com"), Some(true)), "{v}");
+    let (c, _) = status_of(&h, reqwest::Method::GET, "/v1/repos?forge=gitea:codeberg.org", None).await;
+    assert_eq!(c, 404);
 }

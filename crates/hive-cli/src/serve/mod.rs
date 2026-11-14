@@ -38,6 +38,7 @@ pub mod appearance;
 pub mod dashboard;
 pub mod dashboard_hive;
 pub mod flow_api;
+pub mod forges_api;
 pub mod hub;
 pub mod lab;
 pub mod notify;
@@ -1281,6 +1282,15 @@ impl worker::ServiceSource for Shared {
     }
     fn ask_posted(&self, chat: Uuid, ask: &hive_core::flow::HumanAsk) {
         self.hub.emit("ask.pending", json!({ "ask": api::ask_dto(chat, ask) }));
+    }
+    /// The chat's bound checkout → its `origin` on one of this box's code
+    /// hosts (and `upstream` for a fork), read-only.
+    fn forge_for(&self, chat: Uuid) -> Option<hive_runtime::ligus_mcp::forge_tools::ForgeBinding> {
+        let dir = crate::repos::RepoBindings::load(&self.cfg.data_dir).resolve(&crate::repos::repos_dir(&self.cfg.data_dir), chat)?;
+        let origin = crate::repos::git_out(&dir, &["remote", "get-url", "origin"])?;
+        let (h, repo) = self.repos.forge_of_remote(&self.cfg.data_dir, &origin)?;
+        let upstream = crate::repos::fork_layout(&dir).map(|f| hive_forge::RepoRef::new(f.upstream.owner, f.upstream.name));
+        Some(hive_runtime::ligus_mcp::forge_tools::ForgeBinding { reader: std::sync::Arc::new(hive_forge::ReadOnly(h.forge)), repo, upstream })
     }
 }
 

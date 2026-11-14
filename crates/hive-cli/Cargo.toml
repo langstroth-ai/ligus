@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 hive-core = { path = "../hive-core" }
 hive-runtime = { path = "../hive-runtime" }
+hive-forge = { path = "../hive-forge" }
 anyhow.workspace = true
 uuid.workspace = true
 tokio.workspace = true
@@ -48,5 +49,6 @@ tokio-tungstenite = { version = "0.24", default-features = false, features = ["c
 tower = { version = "0.5", default-features = false, features = ["util"] }
 
 [dev-dependencies]
+async-trait = "0.1"
 tempfile = "3"
 hex = "0.4"
