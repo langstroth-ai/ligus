@@ -256,8 +256,14 @@ async fn tool_loop_turn(
         }
         _ => None,
     };
-    let tools = CompositeTools::with_hints(builtin, mcp, MAX_OFFERED_TOOLS, &tool_hints(system, turns))
-        .allow_mcp_after_reads(settings.mcp_after_reads);
+    // The folded Ligus tools, when the host started a Ligus turn (D.3.3).
+    let ligus = hive_runtime::agent_turn::current().and_then(|s| s.ligus.clone());
+    let cap = MAX_OFFERED_TOOLS - if ligus.is_some() { hive_runtime::ligus_mcp::tools::FOLDED.len() } else { 0 };
+    let tools = CompositeTools::with_hints(builtin, mcp, cap, &tool_hints(system, turns)).allow_mcp_after_reads(settings.mcp_after_reads);
+    let tools = match ligus {
+        Some(l) => tools.with_ligus_tools(l),
+        None => tools,
+    };
     dispatch::warm_context_probe(rt).await;
     let rounds = tool_round_budget(rt.provider, rt.max_tool_rounds);
     let set = (!tools.is_empty()).then(|| dispatch::ToolSet { defs: tools.defs(), executor: &tools, max_rounds: rounds });
@@ -326,15 +332,14 @@ async fn try_tool_loop(
     let Some(api_key) = rt.api_key.clone() else {
         return Ok(None);
     };
-    // No config / no enabled servers → empty registry → fall back to streaming.
+    // No config / no enabled servers → empty registry → fall back to streaming,
+    // unless the host started a Ligus turn (its tools ride this loop).
     // Servers outside the envelope's egress policy are never offered.
+    let ligus = hive_runtime::agent_turn::current().and_then(|s| s.ligus.clone());
     let specs: Vec<_> = mcp_config::load_from_env()?.into_iter().filter(|s| egress.allows_mcp(&s.id)).collect();
     let registry = McpRegistry::new(specs);
-    if registry.enabled().next().is_none() {
-        return Ok(None);
-    }
-    let tagged = registry.list_all_tools().await;
-    if tagged.is_empty() {
+    let tagged = if registry.enabled().next().is_some() { registry.list_all_tools().await } else { Vec::new() };
+    if tagged.is_empty() && ligus.is_none() {
         return Ok(None);
     }
 
@@ -357,8 +362,14 @@ async fn try_tool_loop(
         system: Some(system.to_string()),
     };
     let executor = McpToolExecutor { registry, names };
+    if ligus.is_some() {
+        let mut defs = hive_runtime::ligus_mcp::tools::tool_loop_defs();
+        defs.extend(tool_defs);
+        tool_defs = defs;
+    }
+    let routed = hive_runtime::ligus_mcp::WithLigus { turn: ligus.as_deref(), inner: Some(&executor) };
     let initial = turns_to_messages(turns);
-    let text = tool_loop::run_with_messages(&model, &executor, initial, tool_defs, MAX_TOOL_ITERS)
+    let text = tool_loop::run_with_messages(&model, &routed, initial, tool_defs, MAX_TOOL_ITERS)
         .await
         .map_err(|e| anyhow!("tool loop: {e}"))?;
     Ok(Some(text))

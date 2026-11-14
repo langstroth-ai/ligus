@@ -1,0 +1,71 @@
+{
+  "description": "File a proposal for human review (never applied by you). kind: diff (your worktree changes), decision, command (exact argv), workflow, alternatives (a proposal set), assess (score an alternative). Pass the fields of that kind.",
+  "inputSchema": {
+    "properties": {
+      "agentQuorum": {
+        "type": "integer"
+      },
+      "alternative": {
+        "type": "string"
+      },
+      "argv": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "body": {
+        "type": "string"
+      },
+      "cwd": {
+        "type": "string"
+      },
+      "definition": {
+        "type": "object"
+      },
+      "kind": {
+        "enum": [
+          "diff",
+          "decision",
+          "command",
+          "workflow",
+          "alternatives",
+          "assess"
+        ],
+        "type": "string"
+      },
+      "options": {
+        "items": {
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "question": {
+        "type": "string"
+      },
+      "rationale": {
+        "type": "string"
+      },
+      "requiredApprovals": {
+        "type": "integer"
+      },
+      "score": {
+        "type": "integer"
+      },
+      "setId": {
+        "type": "string"
+      },
+      "taskClass": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "kind"
+    ],
+    "type": "object"
+  },
+  "name": "ligus_propose"
+}

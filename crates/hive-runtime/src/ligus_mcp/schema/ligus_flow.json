@@ -1,0 +1,85 @@
+{
+  "description": "Coordinate: op handoff (to + parcel; starts the receiver now), mark, unmark, react, report.",
+  "inputSchema": {
+    "properties": {
+      "confidence": {
+        "type": "string"
+      },
+      "decisions": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "emoji": {
+        "type": "string"
+      },
+      "filesTouched": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "id": {
+        "type": "string"
+      },
+      "keyFiles": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "kind": {
+        "type": "string"
+      },
+      "lines": {
+        "items": {
+          "type": "integer"
+        },
+        "type": "array"
+      },
+      "messageId": {
+        "type": "string"
+      },
+      "note": {
+        "type": "string"
+      },
+      "notes": {
+        "type": "string"
+      },
+      "op": {
+        "enum": [
+          "handoff",
+          "mark",
+          "unmark",
+          "react",
+          "report"
+        ],
+        "type": "string"
+      },
+      "path": {
+        "type": "string"
+      },
+      "ruledOut": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "status": {
+        "type": "string"
+      },
+      "summary": {
+        "type": "string"
+      },
+      "to": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "op"
+    ],
+    "type": "object"
+  },
+  "name": "ligus_flow"
+}

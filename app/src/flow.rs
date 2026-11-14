@@ -883,20 +883,16 @@ fn stash() -> &'static Mutex<HashMap<Uuid, flow::directives::FlowDirectives>> {
     STASH.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Strip `[[handoff:]]` / `[[mark:]]` / `[[unmark:]]` directives from a reply
-/// and keep them for [`after_turn`]. Returns the reply without them.
-pub(crate) fn take_directives(message_id: Uuid, body: &str) -> String {
-    let parsed = flow::directives::parse(body);
-    let cleaned = parsed.cleaned.clone();
-    if !parsed.is_empty() {
-        let mut s = stash().lock().unwrap();
-        // Bounded: a reply whose turn never reaches after_turn can't leak.
-        if s.len() > 256 {
-            s.clear();
-        }
-        s.insert(message_id, parsed);
+/// Keep a reply's already-parsed flow directives for [`after_turn`].
+pub(crate) fn stash_directives(message_id: Uuid, parsed: flow::directives::FlowDirectives) {
+    if parsed.is_empty() {
+        return;
     }
-    cleaned
+    let mut s = stash().lock().unwrap();
+    if s.len() > 256 {
+        s.clear();
+    }
+    s.insert(message_id, parsed);
 }
 
 fn take_stashed(message_id: Uuid) -> flow::directives::FlowDirectives {
@@ -924,6 +920,12 @@ pub(crate) fn with_guidance(state: &AppState, system: String) -> String {
     } else {
         format!("{system}\n\n{}", parts.join("\n"))
     }
+}
+
+/// The desktop's own directive guidance (removed from a turn that has the
+/// Ligus tools instead).
+pub(crate) fn directive_guidance() -> [&'static str; 2] {
+    [HANDOFF_GUIDANCE, MARK_GUIDANCE]
 }
 
 const HANDOFF_GUIDANCE: &str = r#"When you hand work to another agent with an @mention, give it a compact context parcel so it starts primed instead of rereading the chat: end the reply with [[handoff: {"keyFiles": ["path", …], "decisions": ["…"], "ruledOut": ["…"], "notes": "…"}]]. Keep it short; it is stripped from the visible reply. If you receive a hand-off, its card and parcel appear under "[Ligus flow context]" in the latest message."#;
@@ -2248,13 +2250,15 @@ mod tests {
     fn directives_are_stripped_and_kept_for_after_the_turn() {
         let id = Uuid::new_v4();
         let body = "Over to you @reviewer\n[[handoff: {\"decisions\":[\"kept the API\"]}]]";
-        assert_eq!(take_directives(id, body), "Over to you @reviewer");
+        let parsed = flow::directives::parse(body);
+        assert_eq!(parsed.cleaned, "Over to you @reviewer");
+        stash_directives(id, parsed);
         let kept = take_stashed(id);
         assert_eq!(kept.parcels[0].parcel.decisions, vec!["kept the API"]);
         assert!(take_stashed(id).is_empty());
         // A reply without directives passes through untouched and stashes nothing.
         let plain = Uuid::new_v4();
-        assert_eq!(take_directives(plain, "hi"), "hi");
+        stash_directives(plain, flow::directives::parse("hi"));
         assert!(take_stashed(plain).is_empty());
     }
 

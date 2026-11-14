@@ -58,6 +58,17 @@ pub fn flow_within_bounds(fold: &ChatSession, record: &FlowRecord) -> bool {
             f.recruits.iter().any(|x| x.id == r.id)
                 || f.recruits.iter().filter(|x| x.reference == r.reference).count() < MAX_RECRUITS_PER_PROPOSAL
         }
+        FlowRecord::HumanAsk(a) => {
+            use crate::flow::{MAX_ASK_OPTIONS, MAX_ASK_OPTION_CHARS, MAX_ASK_QUESTION_CHARS};
+            a.question.chars().count() <= MAX_ASK_QUESTION_CHARS
+                && a.options.len() <= MAX_ASK_OPTIONS
+                && a.options.iter().all(|o| o.chars().count() <= MAX_ASK_OPTION_CHARS)
+        }
+        FlowRecord::HumanAnswered(a) => {
+            a.answer.chars().count() <= crate::flow::MAX_ANSWER_CHARS
+                && a.option_index.is_none_or(|i| f.asks.get(&a.ask_id).is_some_and(|s| (i as usize) < s.ask.options.len()))
+        }
+        FlowRecord::TurnToolSummary(t) => t.calls.len() <= crate::flow::MAX_SUMMARY_TOOLS,
         _ => true,
     }
 }

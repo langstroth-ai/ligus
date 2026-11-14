@@ -293,6 +293,13 @@ pub enum FlowRecord {
     /// synced input to cross-device scoring, now that per-turn measurements
     /// are device-local facts (P0.5).
     AgentOutcomeSummary(AgentOutcomeSummary),
+    /// An agent asked the chat's humans a question and paused its turn
+    /// (chat log, Agent tier; D.4.2).
+    HumanAsk(HumanAsk),
+    /// A human answered an ask (chat log; humans only).
+    HumanAnswered(HumanAnswered),
+    /// One turn's Ligus tool use, content-free (chat log, Agent tier; D.3.5).
+    TurnToolSummary(TurnToolSummary),
     /// A record type from a newer build — kept in the log, inert here.
     #[serde(other)]
     Unknown,
@@ -317,6 +324,9 @@ impl FlowRecord {
             FlowRecord::AgentProfile(_) => "agentProfile",
             FlowRecord::Beacon(_) => "beacon",
             FlowRecord::AgentOutcomeSummary(_) => "agentOutcomeSummary",
+            FlowRecord::HumanAsk(_) => "humanAsk",
+            FlowRecord::HumanAnswered(_) => "humanAnswered",
+            FlowRecord::TurnToolSummary(_) => "turnToolSummary",
             FlowRecord::Unknown => "unknown",
         }
     }
@@ -398,6 +408,93 @@ pub struct FlowState {
     /// [`MAX_SUMMARIES_PER_AGENT`] each; one per (host, day).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub outcome_summaries: BTreeMap<String, Vec<AgentOutcomeSummary>>,
+    /// Questions agents asked the chat's humans, by ask id (D.4.2).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub asks: BTreeMap<Uuid, AskState>,
+    /// Per-turn Ligus tool summaries, newest last.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_summaries: Vec<TurnToolSummary>,
+}
+
+/// Bounds on asks and tool summaries (fold rules, `authz::bounds`).
+pub const MAX_ASK_QUESTION_CHARS: usize = 2000;
+pub const MAX_ASK_OPTIONS: usize = 6;
+pub const MAX_ASK_OPTION_CHARS: usize = 200;
+pub const MAX_ANSWER_CHARS: usize = 2000;
+pub const MAX_SUMMARY_TOOLS: usize = 16;
+/// Asks kept per chat (open or settled).
+pub const MAX_ASKS_PER_CHAT: usize = 256;
+
+/// An agent's question to the chat's humans. The asking turn is paused until
+/// the first answer (canonical order) or its timeout.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HumanAsk {
+    pub ask_id: Uuid,
+    /// The asking turn (its reply message id).
+    pub turn_id: Uuid,
+    /// [`agent_key`] of the asking agent.
+    pub agent_key: String,
+    pub question: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
+    /// When the asking turn stops waiting (ms since the epoch).
+    #[serde(default, skip_serializing_if = "is_zero_i64")]
+    pub expires_at_ms: i64,
+    /// The host closed the ask without an answer (timeout, cancel, restart).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub closed: bool,
+    pub at_ms: i64,
+}
+
+/// A human's answer to a [`HumanAsk`].
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HumanAnswered {
+    pub ask_id: Uuid,
+    pub answer: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub option_index: Option<u32>,
+    /// Display name of who answered.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub by: String,
+    pub at_ms: i64,
+}
+
+/// An ask and its settlement, as folded.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AskState {
+    pub ask: HumanAsk,
+    /// The first answer in canonical order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<HumanAnswered>,
+}
+
+impl AskState {
+    pub fn is_open(&self) -> bool {
+        self.answer.is_none() && !self.ask.closed
+    }
+}
+
+/// What one turn did with the Ligus tools, without content: call counts per
+/// tool, denials, and whether a budget ran out.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnToolSummary {
+    pub turn_id: Uuid,
+    pub agent_key: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub calls: BTreeMap<String, u32>,
+    #[serde(default)]
+    pub denied: u32,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub budget_exhausted: bool,
+    pub at_ms: i64,
+}
+
+fn is_zero_i64(x: &i64) -> bool {
+    *x == 0
 }
 
 /// Fold cap on summaries kept per agent.
@@ -557,6 +654,32 @@ impl FlowState {
                     }
                 }
             }
+            FlowRecord::HumanAsk(a) => match self.asks.get_mut(&a.ask_id) {
+                // Only the asking turn may close it; the question is fixed.
+                Some(st) if st.ask.turn_id == a.turn_id && st.ask.agent_key == a.agent_key => st.ask.closed |= a.closed,
+                Some(_) => {}
+                None => {
+                    if self.asks.len() >= MAX_ASKS_PER_CHAT {
+                        if let Some(oldest) = self.asks.iter().filter(|(_, s)| !s.is_open()).min_by_key(|(_, s)| s.ask.at_ms).map(|(k, _)| *k) {
+                            self.asks.remove(&oldest);
+                        }
+                    }
+                    self.asks.insert(a.ask_id, AskState { ask: a.clone(), answer: None });
+                }
+            },
+            FlowRecord::HumanAnswered(ans) => {
+                if let Some(st) = self.asks.get_mut(&ans.ask_id) {
+                    // First answer in canonical order wins; a closed ask takes none.
+                    if st.answer.is_none() && !st.ask.closed {
+                        st.answer = Some(ans.clone());
+                    }
+                }
+            }
+            FlowRecord::TurnToolSummary(t) => {
+                if !self.tool_summaries.iter().any(|x| x.turn_id == t.turn_id) {
+                    push_capped(&mut self.tool_summaries, t.clone());
+                }
+            }
             FlowRecord::Unknown => {}
         }
     }
@@ -585,6 +708,32 @@ impl FlowState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_answer_wins_and_closed_asks_take_none() {
+        let ask = HumanAsk { ask_id: Uuid::from_u128(1), turn_id: Uuid::from_u128(2), agent_key: "a".into(), question: "q?".into(), at_ms: 1, ..Default::default() };
+        let mut s = FlowState::default();
+        s.apply(&FlowRecord::HumanAsk(ask.clone()));
+        assert!(s.asks[&ask.ask_id].is_open());
+        let ans = |t: &str| FlowRecord::HumanAnswered(HumanAnswered { ask_id: ask.ask_id, answer: t.into(), at_ms: 2, ..Default::default() });
+        s.apply(&ans("first"));
+        s.apply(&ans("second"));
+        assert_eq!(s.asks[&ask.ask_id].answer.as_ref().unwrap().answer, "first");
+        // Another turn can't rewrite or close it.
+        let mut forged = ask.clone();
+        forged.turn_id = Uuid::from_u128(9);
+        forged.question = "other".into();
+        s.apply(&FlowRecord::HumanAsk(forged));
+        assert_eq!(s.asks[&ask.ask_id].ask.question, "q?");
+        // A closed ask takes no answer.
+        let mut t = FlowState::default();
+        t.apply(&FlowRecord::HumanAsk(ask.clone()));
+        t.apply(&FlowRecord::HumanAsk(HumanAsk { closed: true, ..ask.clone() }));
+        t.apply(&ans("late"));
+        assert!(t.asks[&ask.ask_id].answer.is_none() && !t.asks[&ask.ask_id].is_open());
+        // Wire tags.
+        assert!(serde_json::to_string(&FlowRecord::HumanAsk(ask)).unwrap().contains("\"type\":\"humanAsk\""));
+    }
 
     #[test]
     fn empty_state_serializes_to_an_empty_object() {

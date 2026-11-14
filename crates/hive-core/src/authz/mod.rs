@@ -219,6 +219,12 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             if !bounds::flow_within_bounds(fold, record) {
                 return Decision::deny("flow state bound reached");
             }
+            // Track D (D.4.2): only a person answers an agent's question.
+            if matches!(record, crate::flow::FlowRecord::HumanAnswered(_))
+                && !env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == ActorKind::Human)
+            {
+                return Decision::deny("only a human answers an agent's question");
+            }
         }
         _ => {}
     }

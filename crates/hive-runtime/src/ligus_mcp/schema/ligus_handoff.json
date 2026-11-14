@@ -1,0 +1,50 @@
+{
+  "description": "Hand the work to another agent now, with a compact context parcel. The receiver's turn starts immediately. Handing off to a person only notifies them.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "decisions": {
+        "description": "Decisions made",
+        "items": {
+          "maxLength": 400,
+          "type": "string"
+        },
+        "maxItems": 12,
+        "type": "array"
+      },
+      "keyFiles": {
+        "description": "Key files",
+        "items": {
+          "maxLength": 400,
+          "type": "string"
+        },
+        "maxItems": 12,
+        "type": "array"
+      },
+      "notes": {
+        "description": "Notes",
+        "maxLength": 400,
+        "type": "string"
+      },
+      "ruledOut": {
+        "description": "What was ruled out",
+        "items": {
+          "maxLength": 400,
+          "type": "string"
+        },
+        "maxItems": 12,
+        "type": "array"
+      },
+      "to": {
+        "description": "Agent (or person) name",
+        "maxLength": 80,
+        "type": "string"
+      }
+    },
+    "required": [
+      "to"
+    ],
+    "type": "object"
+  },
+  "name": "ligus_handoff"
+}

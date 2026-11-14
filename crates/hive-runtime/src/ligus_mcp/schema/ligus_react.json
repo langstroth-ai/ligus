@@ -1,0 +1,23 @@
+{
+  "description": "React to a message (your own reply by default).",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "emoji": {
+        "description": "One emoji",
+        "maxLength": 16,
+        "type": "string"
+      },
+      "messageId": {
+        "description": "Message id (default: your reply)",
+        "maxLength": 64,
+        "type": "string"
+      }
+    },
+    "required": [
+      "emoji"
+    ],
+    "type": "object"
+  },
+  "name": "ligus_react"
+}

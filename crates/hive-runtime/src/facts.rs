@@ -27,6 +27,34 @@ use sha2::{Digest, Sha256};
 /// The schema id.
 pub const SCHEMA: &str = "ligus.facts.v1";
 
+/// Fact kind of a Ligus MCP tool call's audit record (D.3.5).
+pub const TOOL_CALL_KIND: &str = "mcpToolCall";
+
+/// One tool-call audit row as a `ligus.facts.v1` line. The row is already
+/// content-free (ids, tool name, outcome, latency); strings are cleaned again.
+pub fn tool_call_line(seq: i64, workspace_id: &str, chat_id: &str, at_ms: i64, json: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(json).ok()?;
+    let mut a = Map::new();
+    a.insert("ligus.workspace.id_hash".into(), Value::String(id_hash(workspace_id)));
+    let mut s = |k: &str, field: &str| {
+        let c = clean(v.get(field).and_then(Value::as_str).unwrap_or(""));
+        if !c.is_empty() {
+            a.insert(k.into(), Value::String(c));
+        }
+    };
+    s("ligus.chat.id", "chatId");
+    s("ligus.turn.id", "turnId");
+    s("ligus.agent.key", "agentKey");
+    s("gen_ai.tool.name", "tool");
+    s("ligus.tool.outcome", "outcome");
+    s("ligus.tool.read_chat_id", "readChatId");
+    let _ = chat_id;
+    if let Some(ms) = v.get("latencyMs").and_then(Value::as_u64) {
+        a.insert("ligus.tool.latency_ms".into(), json!(ms));
+    }
+    Some(json!({ "schema": SCHEMA, "seq": seq, "timeUnixMs": at_ms, "kind": "toolCall", "attributes": Value::Object(a) }).to_string())
+}
+
 /// When a measurement record happened.
 pub fn record_at_ms(r: &FlowRecord) -> Option<i64> {
     Some(match r {

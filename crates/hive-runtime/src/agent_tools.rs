@@ -53,6 +53,7 @@ enum Source {
     Builtin,
     Mcp,
     Workflow,
+    Ligus,
 }
 
 /// Built-in tools plus MCP tools behind one executor. See the module docs.
@@ -72,6 +73,8 @@ pub struct CompositeTools<M: ToolExecutor> {
     workflow: Option<WorkflowTool>,
     /// Patch-leaving rule: measured progress of this turn's tool loop.
     progress: crate::patch_leaving::ProgressTracker,
+    /// The Ligus tools (folded), when the turn offers them (D.3.3).
+    ligus: Option<std::sync::Arc<crate::ligus_mcp::TurnHandle>>,
 }
 
 /// Header put on every MCP result: the model sees where the text came from
@@ -264,6 +267,7 @@ impl<M: ToolExecutor> CompositeTools<M> {
             allow_mcp_after_reads: false,
             workflow: None,
             progress: Default::default(),
+            ligus: None,
         }
     }
 
@@ -274,6 +278,23 @@ impl<M: ToolExecutor> CompositeTools<M> {
         self.defs.insert(0, WorkflowTool::def());
         self.routes.insert(PROPOSE_WORKFLOW.to_string(), Source::Workflow);
         self.workflow = Some(tool);
+        self
+    }
+
+    /// Offer the four folded Ligus tools first (D.3.3). Like
+    /// `propose_workflow`, they are not counted by the cap passed to
+    /// [`CompositeTools::with_hints`]: a caller that adds them passes
+    /// [`crate::ligus_mcp::tools::FOLDED`]`.len()` less, so the Ligus server
+    /// always holds its place and the user's MCP servers keep their reserved
+    /// slots.
+    pub fn with_ligus_tools(mut self, turn: std::sync::Arc<crate::ligus_mcp::TurnHandle>) -> Self {
+        for def in crate::ligus_mcp::tools::tool_loop_defs().into_iter().rev() {
+            let name = def_name(&def).to_string();
+            self.defs.retain(|d| def_name(d) != name);
+            self.defs.insert(0, def);
+            self.routes.insert(name, Source::Ligus);
+        }
+        self.ligus = Some(turn);
         self
     }
 
@@ -352,6 +373,10 @@ impl<M: ToolExecutor> ToolExecutor for CompositeTools<M> {
         });
         if let (Some(Source::Workflow), Some(w)) = (route, &self.workflow) {
             return w.call(input);
+        }
+        if let (Some(Source::Ligus), Some(l)) = (route, &self.ligus) {
+            let r = l.call(name, input).await;
+            return (r.text, r.is_error);
         }
         // Patch-leaving: once the loop stops making measured progress, every
         // further call gets a check-in instead of running.

@@ -61,6 +61,10 @@ pub struct WorkspaceRuntime {
     pub credential: WorkspaceCredential,
     #[serde(default)]
     pub created_at: Timestamp,
+    /// How a subscription CLI runtime is driven (Track D1). Omitted when
+    /// `auto`, so existing events stay byte-identical.
+    #[serde(default, skip_serializing_if = "crate::runtime::Driver::is_auto")]
+    pub driver: crate::runtime::Driver,
 }
 
 impl WorkspaceRuntime {
@@ -78,6 +82,7 @@ impl WorkspaceRuntime {
             endpoint: String::new(),
             credential: WorkspaceCredential::None,
             created_at: Timestamp::now(),
+            driver: crate::runtime::Driver::Auto,
         }
     }
 }

@@ -23,7 +23,10 @@ pub fn diff_digest(p: &ActionProposal) -> String {
         Some(w) => serde_json::to_vec(w).expect("serialize workflow"),
         None => Vec::new(),
     };
-    let command: Vec<u8> = Vec::new();
+    let command: Vec<u8> = match &p.command {
+        Some(c) => serde_json::to_vec(c).expect("serialize command"),
+        None => Vec::new(),
+    };
     let mut h = Sha256::new();
     h.update(PROPOSAL_DIGEST_TAG);
     for part in [kind.as_bytes(), &diff, &files, &workflow, &command] {
@@ -56,4 +59,37 @@ pub fn normalize_upsert(existing: Option<&ActionProposal>, incoming: &ActionProp
     }
     p.rederive_status();
     p
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proposals::{ProposalKind, ProposedCommand};
+
+    #[test]
+    fn the_structured_command_is_bound_into_the_digest() {
+        let mut p = ActionProposal::new("run", ProposalKind::Command, "a");
+        let none = diff_digest(&p);
+        p.command = Some(ProposedCommand { argv: vec!["cargo".into(), "test".into()], cwd: None });
+        let a = diff_digest(&p);
+        p.command = Some(ProposedCommand { argv: vec!["cargo".into(), "test".into(), "--all".into()], cwd: None });
+        let b = diff_digest(&p);
+        assert!(none != a && a != b, "a vote for one argv never counts for another");
+        p.command = None;
+        assert_eq!(diff_digest(&p), none, "no command keeps the pre-D4 digest");
+    }
+
+    #[test]
+    fn command_shape_is_checked() {
+        let ok = ProposedCommand { argv: vec!["make".into()], cwd: Some("crates/x".into()) };
+        assert!(ok.validate().is_ok());
+        for bad in [
+            ProposedCommand { argv: vec![], cwd: None },
+            ProposedCommand { argv: vec!["make".into()], cwd: Some("../x".into()) },
+            ProposedCommand { argv: vec!["make".into()], cwd: Some("/etc".into()) },
+            ProposedCommand { argv: vec!["a\0b".into()], cwd: None },
+        ] {
+            assert!(bad.validate().is_err(), "{bad:?}");
+        }
+    }
 }

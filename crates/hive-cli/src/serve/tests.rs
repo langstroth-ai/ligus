@@ -2975,3 +2975,98 @@ async fn phone_vote_attribution() {
     assert_eq!(p.approvals[0].role, s.role_of(&me));
     h.handle.shutdown();
 }
+
+/// Track D on a headless host: a hosted agent on a tool-loop runtime gets the
+/// folded Ligus tools; it files a proposal, asks a question that the phone
+/// answers (`POST v1/asks/{id}/answer`, pushed as `ask.pending`), and hands
+/// off to a second hosted agent, whose turn starts on this host
+/// (`handoff_starts_receiver_on_every_host`). The worker also applies the
+/// reply's directives (`worker_applies_directives`), and a directive that
+/// duplicates an MCP effect is dropped.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
+    let rounds = vec![
+        streamed_call("c1", "ligus_propose", r#"{"kind":"decision","title":"Use sqlite","body":"smaller footprint"}"#),
+        streamed_call("c2", "ligus_ask", r#"{"question":"Which database?","options":["sqlite","postgres"],"timeoutSecs":60}"#),
+        streamed_call("c3", "ligus_flow", r#"{"op":"handoff","to":"reviewer","keyFiles":["README.md"],"notes":"check it"}"#),
+        vec![delta(json!({"content": "Asked and handed off.\n[[propose: {\"title\": \"Use sqlite\", \"kind\": \"decision\"}]]\n[[mark: {\"kind\": \"claim\", \"path\": \"README.md\"}]]"}))],
+        vec![delta(json!({"content": "Reviewed."}))],
+    ];
+    let (endpoint, model) = spawn_model(rounds).await;
+    let h = harness(&endpoint, "gemma4:12b", &[("README.md", "# demo\n")]).await;
+    let ws = h.handle.shared.ws;
+    // A second agent on the same runtime.
+    let reviewer_id = {
+        let mut desk = open_service(&h.desktop).unwrap();
+        let mut a = WorkspaceAgent::new("reviewer", "gw");
+        a.owner_actor_id = desk.author().id.clone();
+        let id = a.id;
+        desk.add_agent(ws, ws, a).unwrap();
+        id
+    };
+    sync_once(&h.desktop).await.unwrap();
+    let host = this_host(&h).await;
+    make_serve_admin(&h).await;
+    for id in [h.agent_id, reviewer_id] {
+        for _ in 0..100 {
+            let r = h.client.put(format!("{}/v1/agents/{id}/host", h.base)).bearer_auth(&h.token).json(&json!({ "hostId": host })).send().await.unwrap();
+            if r.status().is_success() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Ligus tools" }))).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    let mut rx = h.events(None).await;
+    h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "@coder pick a database" }))).await;
+
+    // The question reaches the phone; answer it there.
+    let seen = collect_until(&mut rx, 30, |evs| evs.iter().any(|(n, _, _)| n == "ask.pending")).await;
+    let ask = seen.iter().find(|(n, _, _)| n == "ask.pending").map(|(_, d, _)| d["ask"].clone()).expect("ask.pending pushed");
+    assert_eq!(ask["question"], "Which database?");
+    let ask_id = ask["id"].as_str().unwrap().to_string();
+    let listed = h.get(&format!("/v1/chats/{chat_id}/asks")).await;
+    assert_eq!(listed["asks"][0]["open"], json!(true));
+    let answered = h.send(reqwest::Method::POST, &format!("/v1/asks/{ask_id}/answer"), Some(json!({ "optionIndex": 1 }))).await;
+    assert_eq!(answered["ask"]["answer"], "postgres");
+
+    // The receiver's turn starts on this host and answers once.
+    let seen = collect_until(&mut rx, 60, |evs| {
+        evs.iter().any(|(n, d, _)| n == "message.done" && d["message"]["body"] == "Reviewed.")
+    })
+    .await;
+    assert!(seen.iter().any(|(n, d, _)| n == "message.done" && d["message"]["body"] == "Reviewed."), "the reviewer never ran");
+
+    // The model was offered the folded Ligus tools, and got the answer back.
+    {
+        let bodies = model.bodies.lock().unwrap();
+        let tools: Vec<&str> = bodies[0]["tools"].as_array().unwrap().iter().filter_map(|t| t["function"]["name"].as_str()).collect();
+        for t in ["ligus_propose", "ligus_flow", "ligus_read", "ligus_ask"] {
+            assert!(tools.contains(&t), "{t} offered: {tools:?}");
+        }
+        assert!(bodies[2].to_string().contains("postgres"), "the ask's answer reached the model");
+        // No directive teaching with the tools on.
+        assert!(!bodies[0].to_string().contains("[[propose:"), "directives aren't taught when the Ligus tools are offered");
+    }
+    // A few more drain passes: still exactly one reviewer reply.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let cid = Uuid::parse_str(&chat_id).unwrap();
+    let s = h.handle.shared.lock().load(cid).unwrap().unwrap();
+    assert_eq!(s.messages.iter().filter(|m| m.body == "Reviewed.").count(), 1, "the hand-off ran its receiver once");
+    let coder_reply = s.messages.iter().find(|m| m.responder_id == Some(h.agent_id) && !m.is_streaming).unwrap();
+    assert_eq!(coder_reply.body, "Asked and handed off.", "directives stripped on the worker");
+    let sqlite: Vec<_> = s.proposals.iter().filter(|p| p.title.eq_ignore_ascii_case("use sqlite")).collect();
+    assert_eq!(sqlite.len(), 1, "the duplicate directive was dropped");
+    assert_eq!(sqlite[0].producing_agent_id, Some(h.agent_id));
+    let card = s.flow.handoffs.iter().find(|c| c.via == "tool").expect("a tool hand-off card");
+    assert_eq!(card.to_name, "reviewer");
+    assert!(s.flow.tool_summaries.iter().any(|t| t.turn_id == coder_reply.id && t.calls.get("ligus_ask_human") == Some(&1)));
+    let marks = h.handle.shared.lock().flow_config(ws).unwrap().marks;
+    assert!(marks.values().any(|m| m.path == "README.md"), "the worker applied the [[mark]] directive");
+    // The review DTO carries the badges and the exact plan.
+    let p = h.get(&format!("/v1/proposals/{}", sqlite[0].id)).await;
+    assert_eq!(p["proposal"]["authorKind"], "agent");
+    assert_eq!(p["proposal"]["implementPlan"]["targetAgentId"], json!(h.agent_id));
+    h.handle.shutdown();
+}

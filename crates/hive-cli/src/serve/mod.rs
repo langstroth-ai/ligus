@@ -699,6 +699,14 @@ impl Shared {
                             }
                         }
                     }
+                    Change::AskPending { chat, ask } => {
+                        let Some(s) = sessions.iter().find(|s| s.id == chat) else { continue };
+                        let Some(a) = s.flow.asks.get(&ask) else { continue };
+                        self.hub.emit("ask.pending", json!({ "ask": api::ask_dto(chat, &a.ask) }));
+                        if self.fresh(hive_core::Timestamp::from_unix_seconds(a.ask.at_ms / 1000)) {
+                            notices.extend(notify::for_ask(s, &a.ask));
+                        }
+                    }
                     Change::ProposalUpdated { chat, proposal } => {
                         let Some(s) = sessions.iter().find(|s| s.id == chat) else { continue };
                         let Some(p) = s.proposals.iter().find(|p| p.id == proposal) else { continue };
@@ -1208,6 +1216,20 @@ impl WorkspaceLease {
     }
 }
 
+/// The serve box's chat service, for its Ligus MCP server (Track D).
+impl worker::ServiceSource for Shared {
+    fn service(&self) -> &Mutex<ChatService> {
+        &self.svc
+    }
+    fn kick(&self) {
+        // A hand-off queued a turn: drain now instead of on the next tick.
+        self.worker_kick.notify_one();
+    }
+    fn ask_posted(&self, chat: Uuid, ask: &hive_core::flow::HumanAsk) {
+        self.hub.emit("ask.pending", json!({ "ask": api::ask_dto(chat, ask) }));
+    }
+}
+
 /// The worker runs on its own thread with a current-thread runtime: a turn's
 /// tool executors (MCP clients, the lazy worktree) never have to be `Send`, and
 /// a long turn never starves the API.
@@ -1227,6 +1249,7 @@ fn spawn_worker(shared: Arc<Shared>) -> Result<std::thread::JoinHandle<()>> {
                 my_host: &shared.host_id,
                 host_label: &shared.opts.label,
                 settings: ToolSettings::from_env(),
+                ligus: Some(worker::ligus_server(shared.clone())),
             };
             let sink = ServeSink(shared.clone());
             let mut failed: HashSet<Uuid> = HashSet::new();

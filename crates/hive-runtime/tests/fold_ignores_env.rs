@@ -38,6 +38,15 @@ const FOLD_ENV_DENYLIST: &[(&str, &str, &str)] = &[
     ("name", "LIGUS_SANDBOX_EGRESS_ALLOW", "extra egress hosts for a turn's proxy"),
     ("name", "LIGUS_SANDBOX_WRITE_ALLOW", "extra sandbox write paths for a turn"),
     ("name", "LIGUS_SANDBOX_READ_ALLOW", "extra sandbox read paths for a turn"),
+    ("\"LIGUS_ACP_INIT_TIMEOUT_SECS\"", "LIGUS_ACP_INIT_TIMEOUT_SECS", "how long an ACP agent may take to answer initialize"),
+    ("\"LIGUS_ACP_ASK_TIMEOUT_SECS\"", "LIGUS_ACP_ASK_TIMEOUT_SECS", "how long an ACP permission escalation waits for a person"),
+    ("\"LIGUS_MCP_BRIDGE\"", "LIGUS_MCP_BRIDGE", "which binary bridges an agent to the Ligus MCP socket"),
+    ("k", "LIGUS_MCP_MAX_TOOL_CALLS", "per-turn Ligus tool budget (device-local host policy)"),
+    ("k", "LIGUS_MCP_MAX_PROPOSALS", "per-turn Ligus tool budget (device-local host policy)"),
+    ("k", "LIGUS_MCP_MAX_HANDOFFS", "per-turn Ligus tool budget (device-local host policy)"),
+    ("k", "LIGUS_MCP_MAX_ASKS", "per-turn Ligus tool budget (device-local host policy)"),
+    ("k", "LIGUS_MCP_MAX_READ_MESSAGES", "per-turn Ligus tool budget (device-local host policy)"),
+    ("\"LIGUS_MCP_MAX_SPEND_USD\"", "LIGUS_MCP_MAX_SPEND_USD", "per-turn Ligus spend budget (device-local host policy)"),
 ];
 
 fn rs_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {

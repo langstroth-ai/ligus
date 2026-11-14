@@ -1,0 +1,29 @@
+{
+  "description": "File the changes in your worktree as a FileDiff proposal for human review. Ligus captures the diff itself when your turn ends; you only give it a title and a description. Never applied by you: a human approves and applies it.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "body": {
+        "description": "What changed and why",
+        "maxLength": 8000,
+        "type": "string"
+      },
+      "taskClass": {
+        "description": "Short class of work (refactor, docs, fix, ...)",
+        "maxLength": 40,
+        "type": "string"
+      },
+      "title": {
+        "description": "Short title",
+        "maxLength": 200,
+        "type": "string"
+      }
+    },
+    "required": [
+      "title",
+      "body"
+    ],
+    "type": "object"
+  },
+  "name": "ligus_propose_diff"
+}

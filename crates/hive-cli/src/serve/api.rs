@@ -269,6 +269,52 @@ pub fn proposal_dto(s: &ChatSession, p: &ActionProposal) -> Value {
         v["taskClass"] = json!(class);
     }
     collab_fields(&mut v, s, p);
+    review_fields(&mut v, s, p);
+    v
+}
+
+/// The review badges (Track D4), as on the desktop: author kind, config
+/// impact, the human gate and presence, a structured command's argv, and the
+/// exact Implement plan (the same function the runner uses).
+fn review_fields(v: &mut Value, s: &ChatSession, p: &ActionProposal) {
+    let (kind, name) = hive_runtime::review::author_of(s, p);
+    v["authorKind"] = json!(kind);
+    v["authorName"] = json!(name);
+    let protected = hive_core::sandbox::envelope_for_session(s).protected_dirs;
+    v["configImpact"] = json!(hive_runtime::review::config_impact(p, &protected));
+    v["humanGate"] = json!(hive_core::guard::human_gate_reason(s, p).is_some());
+    v["presenceRequired"] = json!(s.authz.rules >= 2);
+    if let Some(c) = &p.command {
+        v["argv"] = json!(c.argv);
+    }
+    v["implementPlan"] = json!(hive_runtime::review::implement_plan(s, p, None));
+}
+
+/// An agent's open question, for the phone.
+pub fn ask_dto(chat: Uuid, a: &hive_core::flow::HumanAsk) -> Value {
+    json!({
+        "id": a.ask_id,
+        "chatId": chat,
+        "turnId": a.turn_id,
+        "agentKey": a.agent_key,
+        "question": a.question,
+        "options": a.options,
+        "expiresAtMs": a.expires_at_ms,
+        "closed": a.closed,
+    })
+}
+
+fn ask_state_dto(s: &ChatSession, st: &hive_core::flow::AskState) -> Value {
+    let mut v = ask_dto(s.id, &st.ask);
+    v["agentName"] = json!(hive_core::flow::agent_from_key(&st.ask.agent_key)
+        .and_then(|id| s.workspace_agents.iter().find(|a| a.id == id))
+        .map(|a| format!("@{}", a.name))
+        .unwrap_or_else(|| "@hive".into()));
+    v["open"] = json!(st.is_open());
+    if let Some(a) = &st.answer {
+        v["answer"] = json!(a.answer);
+        v["answeredBy"] = json!(a.by);
+    }
     v
 }
 
@@ -428,6 +474,9 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/proposals/:id/file", get(super::proposal_file::proposal_file))
         .route("/v1/proposals/:id/comments", get(list_comments).post(post_comment))
         .route("/v1/proposals/:id/request-changes", post(request_changes))
+        .route("/v1/proposals/:id/implement-plan", get(implement_plan))
+        .route("/v1/chats/:id/asks", get(list_asks))
+        .route("/v1/asks/:id/answer", post(answer_ask))
         .route("/v1/dashboard", get(dashboard_view))
         .route("/v1/lab/status", get(lab_status))
         .route("/v1/appearance", get(appearance))
@@ -907,6 +956,66 @@ async fn post_comment(State(s): S, Path(id): Path<String>, Json(req): Json<NewCo
     let updated = chat.proposals.iter().find(|q| q.id == updated.id).cloned().unwrap_or(updated);
     let comment = updated.refinements.last().map(|r| comment_dto(&chat, r)).unwrap_or(Value::Null);
     Ok(Json(json!({ "comment": comment, "proposal": proposal_dto_as(&chat, &updated, &s.my_actor_id()) })))
+}
+
+async fn implement_plan(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    let (chat, p) = find_proposal(&s, &id)?;
+    Ok(Json(json!({ "plan": hive_runtime::review::implement_plan(&chat, &p, None) })))
+}
+
+async fn list_asks(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    let chat = load_chat(&s, &id)?;
+    let mut asks: Vec<&hive_core::flow::AskState> = chat.flow.asks.values().collect();
+    asks.sort_by_key(|a| std::cmp::Reverse(a.ask.at_ms));
+    Ok(Json(json!({ "asks": asks.into_iter().take(50).map(|a| ask_state_dto(&chat, a)).collect::<Vec<_>>() })))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AnswerReq {
+    #[serde(default)]
+    answer: String,
+    #[serde(default)]
+    option_index: Option<u32>,
+}
+
+/// `POST v1/asks/{id}/answer` (D.4.2): a person answers an agent's question
+/// from the phone. Answering authorizes nothing by itself, so it needs no
+/// presence; the first answer in canonical order wins.
+async fn answer_ask(State(s): S, Path(id): Path<String>, Json(req): Json<AnswerReq>) -> ApiResult<Json<Value>> {
+    let ask_id = parse_id(&id, "question")?;
+    let chat = s
+        .workspace_chats()?
+        .into_iter()
+        .find(|c| c.flow.asks.contains_key(&ask_id))
+        .ok_or_else(|| ApiError::not_found("question"))?;
+    let st = chat.flow.asks.get(&ask_id).cloned().ok_or_else(|| ApiError::not_found("question"))?;
+    if !st.is_open() {
+        return Err(ApiError::bad_request("that question is already answered or closed"));
+    }
+    let text = match req.option_index.and_then(|i| st.ask.options.get(i as usize)) {
+        Some(o) if req.answer.trim().is_empty() => o.clone(),
+        _ => req.answer.trim().to_string(),
+    };
+    if text.is_empty() {
+        return Err(ApiError::bad_request("an answer is required"));
+    }
+    {
+        let mut svc = s.lock();
+        let by = svc.author().display_name.clone();
+        let rec = hive_core::flow::FlowRecord::HumanAnswered(hive_core::flow::HumanAnswered {
+            ask_id,
+            answer: text.chars().take(hive_core::flow::MAX_ANSWER_CHARS).collect(),
+            option_index: req.option_index,
+            by,
+            at_ms: hive_core::flow::now_ms(),
+        });
+        svc.record_flow(chat.id, chat.workspace_id, rec)?;
+    }
+    s.after_write();
+    let chat = load_chat(&s, &chat.id.to_string())?;
+    let st = chat.flow.asks.get(&ask_id).ok_or_else(|| ApiError::not_found("question"))?;
+    Ok(Json(json!({ "ask": ask_state_dto(&chat, st) })))
 }
 
 /// A "Send to agent to revise" waiting for the agent's new version.

@@ -87,9 +87,17 @@ pub struct EnforcementPlan {
     pub env: Vec<(OsString, OsString)>,
     /// Extra CLI args the envelope adds for this runtime.
     pub args: Vec<String>,
-    /// MCP servers the turn may reach (ids).
+    /// MCP servers the turn may reach (ids). The Ligus server (`ligus`) is
+    /// always among them when the turn has one: it is local and needs no
+    /// network, so it holds its slot under every egress policy.
     pub mcp: Vec<String>,
+    /// The turn's Ligus MCP unix socket: the one extra path an agent child
+    /// may connect to (D.3.2).
+    pub ligus_mcp_socket: Option<PathBuf>,
 }
+
+/// The MCP server id the Ligus server holds in a plan's MCP list.
+pub const LIGUS_MCP_ID: &str = "ligus";
 
 /// What kind of child is being spawned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -254,6 +262,8 @@ pub struct PlanInputs<'a> {
     pub model_provider_id: Option<&'a str>,
     /// Extra args from the envelope for this runtime (`sandbox::enforce`).
     pub envelope_args: &'a [String],
+    /// The turn's Ligus MCP socket, if the turn offers the Ligus server.
+    pub ligus_mcp_socket: Option<&'a Path>,
 }
 
 /// Model endpoints each subscription CLI must reach (its API, its sign-in
@@ -439,10 +449,20 @@ impl EnvelopeEnforcer {
             extra: i.extra_env.to_vec(),
             provider_key,
         });
-        let mcp = match egress {
+        let mut mcp = match egress {
             EgressPolicy::Closed => Vec::new(),
             _ => i.mcp_ids.to_vec(),
         };
+        // The Ligus server is local (a unix socket): present under every
+        // egress policy, including `Closed`, and always first.
+        let ligus_mcp_socket = match i.purpose {
+            Purpose::Agent(_) => i.ligus_mcp_socket.map(Path::to_path_buf),
+            _ => None,
+        };
+        if ligus_mcp_socket.is_some() {
+            mcp.retain(|m| m != LIGUS_MCP_ID);
+            mcp.insert(0, LIGUS_MCP_ID.to_string());
+        }
         EnforcementPlan {
             worktree: i.worktree.to_path_buf(),
             worktree_writable,
@@ -455,6 +475,7 @@ impl EnvelopeEnforcer {
             env,
             args: i.envelope_args.to_vec(),
             mcp,
+            ligus_mcp_socket,
         }
     }
 }
@@ -555,6 +576,8 @@ pub struct TurnPolicy {
     /// The MCP servers this chat may reach, by id and endpoint.
     pub mcp_ids: Vec<String>,
     pub mcp_hosts: Vec<HostPort>,
+    /// The turn's Ligus MCP socket (D.3.2), allowed through the sandbox.
+    pub ligus_mcp_socket: Option<PathBuf>,
     /// Endpoints the turn's egress proxies refused (host and port only),
     /// collected for the host to record as a content-free decision.
     pub denials: Arc<std::sync::Mutex<Vec<HostPort>>>,
@@ -580,6 +603,7 @@ impl TurnPolicy {
             worktree_is_isolated: false,
             mcp_ids: Vec::new(),
             mcp_hosts: Vec::new(),
+            ligus_mcp_socket: None,
             denials: Default::default(),
         }
     }
@@ -635,6 +659,10 @@ pub struct SpawnSpec<'a> {
     pub provider_key: Option<&'a str>,
     pub model_provider_id: Option<&'a str>,
     pub model_base_url: Option<&'a str>,
+    /// Whether the child may write, when its args don't say (an ACP agent,
+    /// whose tier is Ligus's permission setting rather than CLI flags).
+    /// `None` = derived from the args.
+    pub writes: Option<bool>,
 }
 
 impl<'a> SpawnSpec<'a> {
@@ -648,6 +676,7 @@ impl<'a> SpawnSpec<'a> {
             provider_key: None,
             model_provider_id: None,
             model_base_url: None,
+            writes: None,
         }
     }
     pub fn cwd(mut self, cwd: Option<&'a Path>) -> Self {
@@ -806,6 +835,7 @@ pub fn prepare_with(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>) -> io::Res
     let envelope_args: Vec<String> = Vec::new();
     let arg_strings: Vec<String> = spec.args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
     let write_capable = match spec.purpose {
+        Purpose::Agent(_) if spec.writes.is_some() => spec.writes.unwrap_or(false),
         Purpose::Agent(k) => crate::author_gate::turn_writes(k, &arg_strings),
         Purpose::Tool | Purpose::Preflight => true,
         Purpose::McpServer => false,
@@ -829,6 +859,7 @@ pub fn prepare_with(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>) -> io::Res
         provider_key,
         model_provider_id,
         envelope_args: &envelope_args,
+        ligus_mcp_socket: policy.ligus_mcp_socket.as_deref(),
     };
     let plan = EnvelopeEnforcer::plan(&inputs);
     let kind = executor.kind();

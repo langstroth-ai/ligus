@@ -1,0 +1,59 @@
+{
+  "description": "Open a proposal set: one question and 2 to 6 genuinely different options for other agents to assess and a human to decide.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "agentQuorum": {
+        "maximum": 8,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "body": {
+        "description": "Context",
+        "maxLength": 8000,
+        "type": "string"
+      },
+      "options": {
+        "description": "The options",
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "body": {
+              "description": "Option description",
+              "maxLength": 8000,
+              "type": "string"
+            },
+            "title": {
+              "description": "Option title",
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          "required": [
+            "title"
+          ],
+          "type": "object"
+        },
+        "maxItems": 6,
+        "minItems": 2,
+        "type": "array"
+      },
+      "question": {
+        "description": "The question",
+        "maxLength": 400,
+        "type": "string"
+      },
+      "taskClass": {
+        "description": "Short class of work",
+        "maxLength": 40,
+        "type": "string"
+      }
+    },
+    "required": [
+      "question",
+      "options"
+    ],
+    "type": "object"
+  },
+  "name": "ligus_open_alternatives"
+}

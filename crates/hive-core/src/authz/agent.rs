@@ -46,6 +46,9 @@ pub fn tier_allows(event: &SessionEvent, agent_id: Uuid, host_device: Uuid, fold
             | FlowRecord::Recruit(_)
             | FlowRecord::RouteDecision(_) => true,
             FlowRecord::AgentProfile(p) => p.agent_id == agent_id,
+            // Track D: an agent's own ask and its own turn's tool summary.
+            FlowRecord::HumanAsk(a) => a.agent_key == me,
+            FlowRecord::TurnToolSummary(t) => t.agent_key == me,
             _ => false,
         },
         SessionEvent::ChatLockdownRaised { .. } => true,

@@ -16,6 +16,7 @@
 //! (allow file-read* (subpath "<worktree>") <readable dirs inside a denied one>)
 //! (deny network*)
 //! (allow network-outbound (remote ip "localhost:<proxy port>"))
+//! (allow network-outbound (remote unix-socket (path-literal "<ligus mcp socket>")))
 //! ```
 //!
 //! Keychain: agent CLIs keep Keychain *service* access (mach lookups to
@@ -107,6 +108,10 @@ pub fn profile(plan: &EnforcementPlan, proxy_port: Option<u16>) -> String {
             }
         }
         _ => p.push_str("(deny network*)\n"),
+    }
+    // The turn's Ligus MCP socket (D.3.2): the one extra connection allowed.
+    if let Some(sock) = &plan.ligus_mcp_socket {
+        p.push_str(&format!("(allow network-outbound (remote unix-socket (path-literal {})))\n", q(sock)));
     }
     p
 }

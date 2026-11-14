@@ -1,0 +1,36 @@
+{
+  "description": "Score one alternative of a proposal set you were asked to assess.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "alternative": {
+        "description": "The alternative's proposal id (or its letter)",
+        "maxLength": 64,
+        "type": "string"
+      },
+      "rationale": {
+        "description": "Why",
+        "maxLength": 2000,
+        "type": "string"
+      },
+      "score": {
+        "maximum": 100,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "setId": {
+        "description": "The proposal set id",
+        "maxLength": 64,
+        "type": "string"
+      }
+    },
+    "required": [
+      "setId",
+      "alternative",
+      "score",
+      "rationale"
+    ],
+    "type": "object"
+  },
+  "name": "ligus_assess"
+}

@@ -142,7 +142,7 @@ pub struct RefinementDto {
 }
 
 /// A proposal in the review queue, with computed quorum state.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, Default)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct ProposalDto {
@@ -197,6 +197,81 @@ pub struct ProposalDto {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub reverted: bool,
+    /// Review badges (Track D4): "human" | "agent".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(as = "Option<String>", optional)]
+    pub author_kind: String,
+    /// The author's display name (`@coder`, a person's name).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(as = "Option<String>", optional)]
+    pub author_name: String,
+    /// Who signed it: "agent" (the agent's own key), "host" (a host device
+    /// speaking for an agent: legacy), "human".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(as = "Option<String>", optional)]
+    pub signed_by: String,
+    /// It touches configuration, CI, hooks, protected dirs or MCP config.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub config_impact: bool,
+    /// A human gate applies (dearth mode, a lockdown, a path zone).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub human_gate: bool,
+    /// Applying needs a passkey presence proof (rules v2).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub presence_required: bool,
+    /// A command proposal without a structured argv (Implement falls back
+    /// to an instruction).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub legacy_command: bool,
+    /// A structured command's exact argv.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub argv: Option<Vec<String>>,
+    /// The agent whose turn produced it (Implement's default target).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub producing_agent_id: Option<String>,
+}
+
+/// What Implement will do for a proposal, exactly (the preview sheet). The
+/// text and argv here come from the same function the runner uses.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct ImplementPreviewDto {
+    /// "argv" | "instruction" | "applyDiff" | "addWorkflow"
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub argv: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cwd: Option<String>,
+    /// The exact instruction text the agent receives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub instruction: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub target_agent_id: Option<String>,
+    pub target_name: String,
+    /// Agents the picker offers: `[id, name]`.
+    pub targets: Vec<(String, String)>,
+    pub runtime: String,
+    /// "acp" | "legacy" | "" (not a CLI runtime)
+    pub driver: String,
+    pub permission_tier: String,
+    /// "Seatbelt" | "Bwrap" | "Unconfined" | …
+    pub executor: String,
+    /// Endpoints the run may reach (empty = no network).
+    pub egress: Vec<String>,
+    pub presence_required: bool,
+    pub human_gate: bool,
+    pub legacy_command: bool,
 }
 
 /// A chat as listed in the sidebar.
@@ -763,6 +838,7 @@ mod tests {
         McpServerDto::export_all(&cfg).unwrap();
         ReactionDto::export_all(&cfg).unwrap();
         ProposalDto::export_all(&cfg).unwrap();
+        ImplementPreviewDto::export_all(&cfg).unwrap();
         RefinementDto::export_all(&cfg).unwrap();
         ApprovalDto::export_all(&cfg).unwrap();
         WorkspaceMemberDto::export_all(&cfg).unwrap();

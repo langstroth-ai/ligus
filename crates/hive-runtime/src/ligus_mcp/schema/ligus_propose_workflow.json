@@ -1,0 +1,17 @@
+{
+  "description": "Propose a multi-stage workflow (stages and human gates). Only when the user explicitly asked for a workflow, pipeline or loop. Validated now; a human approves it before it can run.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "definition": {
+        "description": "The workflow: {name, description?, inputLabel?, revises?, stages:[{id, name?, kind: agent|gate, agent?, prompt?, after?, title?, body?, approvals?, onReject?}]}",
+        "type": "object"
+      }
+    },
+    "required": [
+      "definition"
+    ],
+    "type": "object"
+  },
+  "name": "ligus_propose_workflow"
+}

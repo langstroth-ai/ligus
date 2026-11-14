@@ -1,0 +1,44 @@
+{
+  "description": "Report how your turn went. Shown on the turn; never used for scoring.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "confidence": {
+        "enum": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "type": "string"
+      },
+      "filesTouched": {
+        "description": "Files touched",
+        "items": {
+          "maxLength": 1024,
+          "type": "string"
+        },
+        "maxItems": 32,
+        "type": "array"
+      },
+      "status": {
+        "enum": [
+          "done",
+          "blocked",
+          "needsReview"
+        ],
+        "type": "string"
+      },
+      "summary": {
+        "description": "What you did",
+        "maxLength": 400,
+        "type": "string"
+      }
+    },
+    "required": [
+      "status",
+      "summary"
+    ],
+    "type": "object"
+  },
+  "name": "ligus_report"
+}

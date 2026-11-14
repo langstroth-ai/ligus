@@ -1,0 +1,42 @@
+{
+  "description": "Leave a workspace mark: a claim on work, a lock on a file or range, or a request for review.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "kind": {
+        "enum": [
+          "claim",
+          "lock",
+          "review"
+        ],
+        "type": "string"
+      },
+      "lines": {
+        "description": "Inclusive line range [start, end]",
+        "items": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maxItems": 2,
+        "minItems": 2,
+        "type": "array"
+      },
+      "note": {
+        "description": "Note",
+        "maxLength": 400,
+        "type": "string"
+      },
+      "path": {
+        "description": "Workspace-relative path",
+        "maxLength": 1024,
+        "type": "string"
+      }
+    },
+    "required": [
+      "kind",
+      "path"
+    ],
+    "type": "object"
+  },
+  "name": "ligus_mark"
+}

@@ -99,6 +99,7 @@ fn prop_enforcement_plan_host_independent() {
                 provider_key: None,
                 model_provider_id: None,
                 envelope_args: &[],
+                ligus_mcp_socket: None,
             })
         };
         let desktop = plan_for(HostKind::Desktop);
@@ -157,6 +158,7 @@ fn prop_every_envelope_field_consumed() {
             provider_key: None,
             model_provider_id: None,
             envelope_args: &[],
+            ligus_mcp_socket: None,
         })
     };
     let base = SandboxEnvelope::workspace_default();
@@ -208,6 +210,7 @@ fn provider_key_only_when_configured_in_ligus() {
             provider_key: key,
             model_provider_id: mp,
             envelope_args: &[],
+            ligus_mcp_socket: None,
         })
     };
     let p = env_for(Some("sk-configured"), ModelProviderKind::Aider, Some("anthropic"));

@@ -1,0 +1,24 @@
+{
+  "description": "Ask the chat's humans a question and wait for the answer (your turn pauses).",
+  "inputSchema": {
+    "properties": {
+      "options": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "question": {
+        "type": "string"
+      },
+      "timeoutSecs": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "question"
+    ],
+    "type": "object"
+  },
+  "name": "ligus_ask"
+}

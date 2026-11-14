@@ -12,6 +12,7 @@
 
 use std::time::Duration;
 
+pub mod acp;
 pub mod anthropic;
 pub mod antigravity;
 pub mod claude_code;

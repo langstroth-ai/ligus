@@ -146,6 +146,45 @@ pub fn failure_error(kind: CliKind, detail: &str) -> ProviderError {
     ProviderError::Subprocess(msg)
 }
 
+/// The default binary of a subscription CLI runtime.
+pub fn default_program_for(kind: hive_core::ModelProviderKind) -> &'static str {
+    use hive_core::ModelProviderKind as K;
+    match kind {
+        K::ClaudeCode => "claude",
+        K::Codex => "codex",
+        K::Antigravity => "agy",
+        K::Copilot => "copilot",
+        _ => "",
+    }
+}
+
+/// A display name for any CLI runtime (ACP and legacy).
+pub fn display_for(kind: hive_core::ModelProviderKind) -> &'static str {
+    use hive_core::ModelProviderKind as K;
+    match kind {
+        K::ClaudeCode => "Claude Code",
+        K::Codex => "Codex",
+        K::Antigravity => CliKind::Antigravity.display(),
+        K::Copilot => CliKind::Copilot.display(),
+        _ => "The agent",
+    }
+}
+
+/// [`failure_error`] for any CLI runtime: the sign-in / usage-limit hints
+/// for Copilot and Antigravity, the plain message for the others.
+pub fn failure_error_for(kind: hive_core::ModelProviderKind, detail: &str) -> ProviderError {
+    use hive_core::ModelProviderKind as K;
+    match kind {
+        K::Antigravity => failure_error(CliKind::Antigravity, detail),
+        K::Copilot => failure_error(CliKind::Copilot, detail),
+        other => {
+            let d = detail.trim();
+            let d = if d.len() > 1500 { &d[..floor_char_boundary(d, 1500)] } else { d };
+            ProviderError::Subprocess(format!("{}: {d}", display_for(other)))
+        }
+    }
+}
+
 fn floor_char_boundary(s: &str, mut i: usize) -> usize {
     while i > 0 && !s.is_char_boundary(i) {
         i -= 1;

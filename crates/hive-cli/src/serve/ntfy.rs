@@ -107,6 +107,12 @@ pub fn proposal_notice(title: &str, chat_title: &str, chat_id: Uuid) -> Notice {
     }
 }
 
+/// The notice for an agent's question waiting for an answer.
+pub fn ask_notice(agent: &str, chat_title: &str, chat_id: Uuid) -> Notice {
+    let chat = short(if chat_title.trim().is_empty() { "Untitled" } else { chat_title }, 60);
+    Notice { title: format!("{} has a question", short(agent, 40)), body: format!("in \u{201c}{chat}\u{201d}"), chat_id, tags: "question" }
+}
+
 /// The notice for a message that `@mentions` the user.
 pub fn mention_notice(sender: &str, chat_title: &str, chat_id: Uuid) -> Notice {
     let chat = short(if chat_title.trim().is_empty() { "Untitled" } else { chat_title }, 60);
