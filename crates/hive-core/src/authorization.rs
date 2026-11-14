@@ -307,6 +307,7 @@ fn owner_count(session: &ChatSession) -> usize {
 /// by the role gate.
 fn self_enroll_allowance(
     member: &WorkspaceMember,
+    invite: Option<uuid::Uuid>,
     actor_id: &str,
     session: &ChatSession,
 ) -> Option<AuthzDecision> {
@@ -335,12 +336,27 @@ fn self_enroll_allowance(
         // so fall through to the role gate.
         Some(existing) => (existing.role == member.role)
             .then(|| AuthzDecision::allow_reason(AuthzReason::SelfEnroll)),
-        // Not yet a member, joining a non-empty workspace: pure self-enroll is
-        // allowed only at a *non-governance* floor (Viewer/Contributor). Granting
-        // yourself Admin/Owner falls through to the role gate → denied.
-        None => (member.role.rank() < WorkspaceRole::Admin.rank())
-            .then(|| AuthzDecision::allow_reason(AuthzReason::SelfEnroll)),
+        // Not yet a member, joining a non-empty workspace: self-enroll needs an
+        // unused invite an Admin issued (holding the workspace key is not
+        // enough: an ex-member keeps old keys), and only at a *non-governance*
+        // floor (Viewer/Contributor). Granting yourself Admin/Owner falls
+        // through to the role gate → denied.
+        None => (member.role.rank() < WorkspaceRole::Admin.rank()
+            && invite.is_some_and(|id| invite_redeemable(session, id)))
+        .then(|| AuthzDecision::allow_reason(AuthzReason::SelfEnroll)),
     }
+}
+
+/// The `JoinApproved` subject that issues invite `id`.
+pub fn invite_subject(id: uuid::Uuid) -> String {
+    format!("invite:{id}")
+}
+
+/// Whether invite `id` was issued (an Admin's `JoinApproved` of its subject,
+/// which the fold only keeps from an Admin+) and not yet redeemed.
+pub fn invite_redeemable(session: &ChatSession, id: uuid::Uuid) -> bool {
+    !session.guards.used_invites.contains(&id)
+        && session.guards.join_approvals.get(&invite_subject(id)).is_some_and(|by| !by.is_empty())
 }
 
 /// The hosts that differ between the current roster (`old`) and a proposed one
@@ -383,8 +399,8 @@ pub fn evaluate(
     // Bootstrap seam: a self-scoped `MemberAdded` can be permitted for an actor
     // who isn't (yet) Admin+ — but *only* the narrow self-enroll cases below.
     // Everything else (adding others, removing/demoting anyone) is role-gated.
-    if let SessionEvent::MemberAdded { member } = event {
-        if let Some(decision) = self_enroll_allowance(member, actor_id, session) {
+    if let SessionEvent::MemberAdded { member, invite } = event {
+        if let Some(decision) = self_enroll_allowance(member, *invite, actor_id, session) {
             return decision;
         }
     }
@@ -502,7 +518,7 @@ mod tests {
         add_member_role("new", WorkspaceRole::Contributor)
     }
     fn add_member_role(id: &str, role: WorkspaceRole) -> SessionEvent {
-        SessionEvent::MemberAdded {
+        SessionEvent::MemberAdded { invite: None,
             member: WorkspaceMember {
                 id: id.into(),
                 actor: ActorIdentity::new(id, id, ActorKind::Human),
@@ -620,13 +636,24 @@ mod tests {
     }
 
     #[test]
-    fn non_member_may_self_enroll_at_non_governance_role() {
-        // A device joining a non-empty workspace: Viewer/Contributor self-enroll ok.
-        let s = session_with_members(vec![("owner", WorkspaceRole::Owner)]);
+    fn a_non_member_self_enrolls_only_with_an_unused_admin_invite() {
+        // A device joining a non-empty workspace: holding the workspace key is
+        // not enough; it needs an invite an Admin issued, used once.
+        let mut s = session_with_members(vec![("owner", WorkspaceRole::Owner)]);
         let join = add_member_role("newbie", WorkspaceRole::Contributor);
-        let d = evaluate(&join, "newbie", WorkspaceRole::Viewer, &s);
+        assert!(!evaluate(&join, "newbie", WorkspaceRole::Viewer, &s).allowed, "key possession alone");
+        let id = Uuid::new_v4();
+        let with = |invite| match add_member_role("newbie", WorkspaceRole::Contributor) {
+            SessionEvent::MemberAdded { member, .. } => SessionEvent::MemberAdded { member, invite: Some(invite) },
+            _ => unreachable!(),
+        };
+        assert!(!evaluate(&with(id), "newbie", WorkspaceRole::Viewer, &s).allowed, "an invite nobody issued");
+        s.guards.join_approvals.entry(invite_subject(id)).or_default().insert("owner".into());
+        let d = evaluate(&with(id), "newbie", WorkspaceRole::Viewer, &s);
         assert!(d.allowed);
         assert_eq!(d.reason, AuthzReason::SelfEnroll);
+        s.guards.used_invites.insert(id);
+        assert!(!evaluate(&with(id), "newbie", WorkspaceRole::Viewer, &s).allowed, "an invite admits one member");
     }
 
     #[test]

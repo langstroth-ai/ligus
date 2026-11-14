@@ -169,11 +169,18 @@ async fn harness_with(
         agent.owner_actor_id = svc.author().id.clone();
         let id = agent.id;
         svc.add_agent(ws, ws, agent).unwrap();
-        id
+        (id, svc.issue_invite(ws).unwrap())
     };
+    let (agent_id, invite) = agent_id;
     sync_once(&desktop).await.unwrap();
 
     let serve_dir = tmp.path().join("serve");
+    // The box joins with the founder's invite (redeemed by its self-enrollment).
+    std::fs::create_dir_all(&serve_dir).unwrap();
+    hive_runtime::event_store::EventStore::open(serve_dir.join("hive.db"))
+        .unwrap()
+        .set_join_invite(ws, invite)
+        .unwrap();
     let serve_cfg = config(&serve_dir, &relay, &room);
     let repo = tmp.path().join("repo");
     make_repo(&repo, repo_files);

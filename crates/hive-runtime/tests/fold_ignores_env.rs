@@ -136,7 +136,7 @@ fn fixture() -> (Vec<SessionEventEnvelope>, Vec<SessionEventEnvelope>) {
     cfg.push(make(cfg_id, SessionEvent::AccountKeyRegistered { account_id: owner_id, signing_public_key: owner_acct.public_key_bytes().to_vec() }, None));
     let cert = DeviceCertificate::issue(&owner_acct, owner_id, dev_id, &owner_dev.public_key_bytes(), Timestamp::epoch());
     cfg.push(make(cfg_id, SessionEvent::DeviceCertificateAdded { certificate: cert }, None));
-    cfg.push(make(cfg_id, SessionEvent::MemberAdded { member: member("mara", WorkspaceRole::Contributor, Uuid::from_u128(12)) }, None));
+    cfg.push(make(cfg_id, SessionEvent::MemberAdded { invite: None, member: member("mara", WorkspaceRole::Contributor, Uuid::from_u128(12)) }, None));
     let head = Some(hive_core::CfgFrontier { lamport: cfg.last().unwrap().lamport, event_id: cfg.last().unwrap().event_id });
 
     let sid = Uuid::from_u128(20);

@@ -47,7 +47,7 @@ impl Config {
         let mut c = Self { wid, lamport: 0, envs: Vec::new() };
         c.push("owner", SessionEvent::SessionSnapshot { session: Box::new(seed) });
         for (id, role) in [("mara", WorkspaceRole::Contributor), ("ada", WorkspaceRole::Admin), ("val", WorkspaceRole::Viewer)] {
-            c.push("owner", SessionEvent::MemberAdded { member: member(id, role) });
+            c.push("owner", SessionEvent::MemberAdded { invite: None, member: member(id, role) });
         }
         c
     }
@@ -243,7 +243,7 @@ fn a_demotion_on_the_config_log_is_what_counts_not_the_chats_stale_roster() {
     // The chat's own roster still lists mara as a Contributor (a pre-hoist
     // add); the workspace demoted her to Viewer before she acted.
     let mut log = Log::new();
-    log.push("owner", SessionEvent::MemberAdded { member: member("mara", WorkspaceRole::Contributor) });
+    log.push("owner", SessionEvent::MemberAdded { invite: None, member: member("mara", WorkspaceRole::Contributor) });
     log.cfg.set_role("mara", WorkspaceRole::Contributor, WorkspaceRole::Viewer);
     let (set_id, _, _) = piping_set(&mut log, WorkspaceRole::Contributor);
     let s = log.hoisted();
@@ -258,7 +258,7 @@ fn a_demotion_on_the_config_log_is_what_counts_not_the_chats_stale_roster() {
 fn a_chat_only_member_counts_for_nothing() {
     let mut log = Log::new();
     // "temp" was added to this chat only, never admitted on the config log.
-    log.push("owner", SessionEvent::MemberAdded { member: member("temp", WorkspaceRole::Contributor) });
+    log.push("owner", SessionEvent::MemberAdded { invite: None, member: member("temp", WorkspaceRole::Contributor) });
     let p = ActionProposal::new("A", ProposalKind::Decision, "planner");
     let set = ProposalSet::new("Q", "planner", vec![p.id]);
     let set_id = set.id;

@@ -202,7 +202,7 @@ fn a_removed_member_cannot_reenter_the_roster_with_a_fresh_device() {
     let fk = log.cert(&alice, fresh);
     log.push(
         &alice,
-        SessionEvent::MemberAdded {
+        SessionEvent::MemberAdded { invite: None,
             member: WorkspaceMember { id: alice.id.clone(), actor: actor(&alice), role: WorkspaceRole::Contributor, title: String::new(), index: 0, joined_at: Timestamp::epoch() },
         },
     );

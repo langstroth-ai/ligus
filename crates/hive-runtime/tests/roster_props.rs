@@ -75,7 +75,7 @@ fn workspace(ws: Uuid, owner: &Principal, others: &[&Principal]) -> Vec<SessionE
     out.extend(owner.trust(ws, 2));
     let mut l = 10;
     for p in others {
-        out.push(owner.sign(ws, l, SessionEvent::MemberAdded { member: p.member(WorkspaceRole::Contributor) }));
+        out.push(owner.sign(ws, l, SessionEvent::MemberAdded { invite: None, member: p.member(WorkspaceRole::Contributor) }));
         out.extend(p.trust(ws, l + 1));
         l += 10;
     }
@@ -121,7 +121,7 @@ fn roster_ignores_unverified_batch_membership() {
     let ws = Uuid::new_v4();
     let stored = workspace(ws, &owner, &[]);
     // Eve signs with her own device but stamps the owner as author.
-    let mut forged = eve.sign(ws, 100, SessionEvent::MemberAdded { member: eve.member(WorkspaceRole::Admin) });
+    let mut forged = eve.sign(ws, 100, SessionEvent::MemberAdded { invite: None, member: eve.member(WorkspaceRole::Admin) });
     forged.actor_stamp = Some(ActorStamp { actor: owner.actor(), recorded_at: Timestamp::epoch(), cfg_frontier: None });
     forged.clear_raw();
     sign_envelope(&mut forged, eve.device_id, &eve.device);
@@ -167,7 +167,7 @@ fn a_fresh_workspace_verifies_in_one_batch() {
     // A self-enrollment below Admin, signed by the joiner's own device, too.
     let joe = Principal::new("joe");
     let mut batch2 = joe.trust(ws, 200);
-    batch2.push(joe.sign(ws, 202, SessionEvent::MemberAdded { member: joe.member(WorkspaceRole::Contributor) }));
+    batch2.push(joe.sign(ws, 202, SessionEvent::MemberAdded { invite: None, member: joe.member(WorkspaceRole::Contributor) }));
     let refs: Vec<&SessionEventEnvelope> = batch2.iter().collect();
     let roster = roster_with_batch(batch, &refs, None);
     assert!(roster.is_certified(joe.device_id));
@@ -205,4 +205,21 @@ fn founder_pin_disputes_forged_founder_key() {
     assert_eq!(verdict_for(roster, &founder.content(ws, 50)), Verdict::Valid);
     assert!(roster.public_key(forger.device_id).is_none(), "the forger's device chains to a rejected key");
     assert_ne!(verdict_for(roster, &forger.content(ws, 51)), Verdict::Valid);
+}
+
+/// An ex-member keeps old keys, but after the removal syncs, none of their
+/// events is accepted: their certified devices are revoked, and a fresh
+/// device stamping their account is held (never accepted on the stamp).
+#[test]
+fn an_ex_members_events_are_refused_at_ingest() {
+    let (owner, mara) = (Principal::new("owner"), Principal::new("mara"));
+    let ws = Uuid::new_v4();
+    let mut events = workspace(ws, &owner, &[&mara]);
+    events.push(owner.sign(ws, 100, SessionEvent::MemberRemoved { member_id: mara.account_id.to_string() }));
+    let roster = build_roster(&events);
+    assert!(matches!(verdict_for(&roster, &mara.content(ws, 120)), Verdict::Quarantine(QuarantineReason::RevokedDevice)));
+    let mut fresh = mara.content(ws, 121);
+    fresh.clear_raw();
+    sign_envelope(&mut fresh, Uuid::new_v4(), &SigningKeypair::generate().unwrap());
+    assert_eq!(verdict_for(&roster, &fresh), Verdict::Unverifiable(QuarantineReason::UncertifiedDevice));
 }

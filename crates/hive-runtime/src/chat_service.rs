@@ -507,16 +507,15 @@ impl ChatService {
         // A brand-new log (its seed) has nothing to judge against yet.
         let Some(fold) = fold else { return Ok(()) };
         let is_chat = env.session_id != config_id;
-        let needs_ws = is_chat && authz::needs_workspace_authz(&env.payload);
-        if needs_ws && config.is_none() {
+        if is_chat && config.is_none() {
             return Err(ChatError::Unauthorized("the workspace configuration hasn't synced to this device yet".into()));
         }
         let ctx = authz::Ctx {
             fold: &fold,
             running: timeline.current(),
-            workspace: needs_ws.then(|| timeline.current()),
+            workspace: is_chat.then(|| timeline.current()),
             trusted: false,
-            checked: is_chat && config.is_some(),
+            checked: is_chat,
         };
         match authz::authorize(env, &ctx) {
             Decision::Allow => Ok(()),
@@ -532,6 +531,11 @@ impl ChatService {
         workspace_id: Uuid,
         runtime_id: impl Into<String>,
     ) -> Result<ChatSession> {
+        // A chat's events are judged against its workspace's config roster, so
+        // the config log must exist (created and seeded on first use).
+        if self.local_workspace_id != Some(workspace_id) {
+            self.ensure_workspace_config(workspace_id)?;
+        }
         let mut session = ChatSession::new(title, workspace_id, runtime_id);
         // The creator owns the primary runtime (cross-device dispatch) and is the
         // first workspace member.
@@ -989,6 +993,12 @@ impl ChatService {
         // register self there (not on this chat) so we're visible in every chat.
         // `ensure_workspace_config` seeds the very first toucher as Owner, so a
         // fresh workspace creator is found by the check below (no self-demote).
+        // A joiner (holding an invite) waits for the workspace's own config log
+        // instead of founding a competing one; this runs again after a sync.
+        let config_id = workspace_config_session_id(workspace_id);
+        if self.load(config_id)?.is_none() && self.store.join_invite(workspace_id)?.is_some() {
+            return Ok(false);
+        }
         let config_id = self.ensure_workspace_config(workspace_id)?;
         let config = self.load(config_id)?.expect("config log exists after ensure");
         // Already present? Match by actor id, or by the same GitHub account — so
@@ -1009,7 +1019,12 @@ impl ChatService {
                 index: next_index,
                 joined_at: Timestamp::now(),
             };
-            self.add_member(session_id, workspace_id, member)?;
+            // Joining needs the invite an Admin issued (from the hivews1:
+            // invite, kept in this device's store); key possession alone
+            // never admits anyone.
+            let invite = self.store.join_invite(workspace_id)?;
+            let config_id = self.ensure_workspace_config(workspace_id)?;
+            self.append_signed(config_id, workspace_id, SessionEvent::MemberAdded { member, invite })?;
             true
         };
         // Publish this device's identity so peers can verify our events. Runs
@@ -1078,6 +1093,13 @@ impl ChatService {
     pub fn ensure_workspace_config(&mut self, workspace_id: Uuid) -> Result<Uuid> {
         let config_id = workspace_config_session_id(workspace_id);
         if self.load(config_id)?.is_none() {
+            // A device that joins with an invite never founds the workspace:
+            // it waits for the founder's config log to sync.
+            if self.store.join_invite(workspace_id)?.is_some() {
+                return Err(ChatError::Unauthorized(
+                    "the workspace configuration hasn't synced to this device yet".into(),
+                ));
+            }
             let mut session = ChatSession::new("", workspace_id, "");
             session.id = config_id;
             session.creator_actor_id = self.author.id.clone();
@@ -1663,7 +1685,7 @@ impl ChatService {
         // chat (closes the self-member staleness gap). The passed-in session is
         // shadowed by the config-log id.
         let session_id = self.ensure_workspace_config(workspace_id)?;
-        self.append_signed(session_id, workspace_id, SessionEvent::MemberAdded { member })?;
+        self.append_signed(session_id, workspace_id, SessionEvent::MemberAdded { member, invite: None })?;
         Ok(())
     }
 
@@ -1685,6 +1707,25 @@ impl ChatService {
             },
         )?;
         Ok(())
+    }
+
+    /// Issue a single-use invite to `workspace_id` (Admin+): a
+    /// `JoinApproved` of `invite:<id>` on the config log. A newcomer's
+    /// self-enrollment must redeem one; the id travels in the hivews1: invite.
+    pub fn issue_invite(&mut self, workspace_id: Uuid) -> Result<Uuid> {
+        self.issue_invite_as(workspace_id, Uuid::new_v4())
+    }
+
+    /// [`issue_invite`](Self::issue_invite) with a chosen id (a DM derives it
+    /// from its room so both sides know it).
+    pub fn issue_invite_as(&mut self, workspace_id: Uuid, id: Uuid) -> Result<Uuid> {
+        let config_id = self.ensure_workspace_config(workspace_id)?;
+        self.append_signed(
+            config_id,
+            workspace_id,
+            SessionEvent::JoinApproved { subject: hive_core::authorization::invite_subject(id) },
+        )?;
+        Ok(id)
     }
 
     /// Revoke a single device (lost/compromised) without removing its account
@@ -2926,6 +2967,8 @@ mod tests {
         owner.set_author_account(owner_id.clone(), "Alex", None);
         owner.create_chat("general", wid, "rt").unwrap();
         owner.ensure_workspace_config(wid).unwrap();
+        let invite = owner.issue_invite(wid).unwrap();
+        owner.store().set_join_invite(wid, invite).unwrap();
         let mut boxed = svc_on(&path, "y", "Phone");
         boxed.set_author_account(box_id.clone(), "Phone", None);
         boxed.ensure_self_member(cfg, wid).unwrap();
@@ -2962,20 +3005,26 @@ mod tests {
     }
 
     #[test]
-    fn non_member_worker_manages_its_own_host_but_not_governance() {
-        // The self-host carve-out: a worker box (not a workspace member, so
-        // Viewer-floored) may register + heartbeat the host it owns, yet still
-        // can't perform governance. Proves the #61-hardening worker regression
-        // is closed without enrolling the worker as a member.
+    fn a_worker_manages_its_own_host_only_once_it_is_a_member() {
+        // Every author must be a workspace member (2.0): a worker box holding
+        // the workspace key but not on the roster can't even register its own
+        // host. Once it joined with an Admin's invite (as a Contributor) it
+        // manages its own host, yet still can't perform governance.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hive.db");
         let wid = Uuid::new_v4();
-        {
+        let invite = {
             let mut owner = svc_on(&path, "owner", "Owner");
             owner.create_chat("A", wid, "anthropic").unwrap();
             owner.ensure_workspace_config(wid).unwrap();
-        }
+            owner.issue_invite(wid).unwrap()
+        };
         let mut worker = svc_on(&path, "worker", "Worker");
+        assert!(worker
+            .register_host(wid, hive_core::WorkspaceHost::new("box1", hive_core::HostKind::Worker, "prod"))
+            .is_err());
+        worker.store().set_join_invite(wid, invite).unwrap();
+        worker.ensure_self_member(workspace_config_session_id(wid), wid).unwrap();
         // register_host stamps owner_actor_id = self → allowed via the carve-out.
         worker
             .register_host(wid, hive_core::WorkspaceHost::new("box1", hive_core::HostKind::Worker, "prod"))
@@ -3057,8 +3106,10 @@ mod tests {
             let mut a = svc_on(&path, "u1", "Ana");
             let ca = a.create_chat("A", wid, "anthropic").unwrap();
             let cb = a.create_chat("B", wid, "anthropic").unwrap();
-            // Seed the config log with u1 as Owner (first toucher).
+            // Seed the config log with u1 as Owner (first toucher), who invites u2.
             a.ensure_workspace_config(wid).unwrap();
+            let invite = a.issue_invite(wid).unwrap();
+            a.store().set_join_invite(wid, invite).unwrap();
             (ca.id, cb.id)
         };
 
@@ -3151,9 +3202,9 @@ mod tests {
         let (mut svc, _) = service();
         let wid = Uuid::new_v4();
         let chat = svc.create_chat("A", wid, "anthropic").unwrap();
-        let cfg = svc.load(workspace_config_session_id(wid));
-        // (config log is seeded lazily; first governance call seeds it)
-        assert!(cfg.unwrap().is_none());
+        // Creating a chat seeds the config log (its roster judges the chat).
+        let cfg = svc.load(workspace_config_session_id(wid)).unwrap().unwrap();
+        assert_eq!(cfg.role_of("u1"), WorkspaceRole::Owner);
         svc.add_member(chat.id, wid, test_member("u2", "Bo", WorkspaceRole::Contributor))
             .unwrap();
         let cfg = svc.load(workspace_config_session_id(wid)).unwrap().unwrap();
@@ -3230,6 +3281,8 @@ mod tests {
             let mut a = svc_on(&path, "u1", "Ana");
             let chat = a.create_chat("A", wid, "anthropic").unwrap();
             a.ensure_workspace_config(wid).unwrap();
+            let invite = a.issue_invite(wid).unwrap();
+            a.store().set_join_invite(wid, invite).unwrap();
             chat.id
         };
         let mut eve = svc_on(&path, "eve", "Eve");
@@ -3258,7 +3311,7 @@ mod tests {
         svc.append_signed(
             chat.id,
             wid,
-            SessionEvent::MemberAdded { member: test_member("u2", "Bo", WorkspaceRole::Viewer) },
+            SessionEvent::MemberAdded { invite: None, member: test_member("u2", "Bo", WorkspaceRole::Viewer) },
         )
         .unwrap();
         // The authoritative config-log entry gives u2 a higher role.

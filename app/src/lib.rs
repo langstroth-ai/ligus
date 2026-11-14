@@ -614,6 +614,12 @@ struct WorkspaceConn {
     /// roster. Absent on invites from builds before it, and left out then.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     fk: Option<String>,
+    /// The single-use invite an Admin issued with this code (a
+    /// `JoinApproved` of `invite:<id>` on the config log). A joiner redeems it
+    /// to enroll itself; key possession alone never admits anyone. Left out
+    /// when absent (and never stored in the founder's own settings).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    inv: Option<String>,
 }
 
 impl WorkspaceConn {
@@ -675,6 +681,7 @@ mod workspace_invite_tests {
             dm_account: None,
             founder_actor_id: Some("github:42".into()),
             fk: Some("00112233445566778899aabbccddeeff".into()),
+            inv: None,
         };
         let invite = encode_workspace_invite(&conn);
         assert!(invite.starts_with("hivews1:"));
@@ -701,6 +708,7 @@ mod workspace_invite_tests {
             dm_account: None,
             founder_actor_id: None,
             fk: None,
+            inv: None,
         };
         let invite = format!("  {}\n", encode_workspace_invite(&conn));
         let back = decode_workspace_invite(&invite).unwrap();
@@ -737,8 +745,8 @@ mod workspace_invite_tests {
 
     #[test]
     fn same_room_shares_workspace_id() {
-        let a = WorkspaceConn { name: "A".into(), relay_url: "x".into(), room: "shared".into(), key: None, icon: None, dm_account: None, founder_actor_id: None, fk: None };
-        let b = WorkspaceConn { name: "B".into(), relay_url: "y".into(), room: "shared".into(), key: Some("k".into()), icon: None, dm_account: None, founder_actor_id: Some("github:1".into()), fk: None };
+        let a = WorkspaceConn { name: "A".into(), relay_url: "x".into(), room: "shared".into(), key: None, icon: None, dm_account: None, founder_actor_id: None, fk: None, inv: None };
+        let b = WorkspaceConn { name: "B".into(), relay_url: "y".into(), room: "shared".into(), key: Some("k".into()), icon: None, dm_account: None, founder_actor_id: Some("github:1".into()), fk: None, inv: None };
         assert_eq!(a.id(), b.id());
     }
 
@@ -779,6 +787,7 @@ mod workspace_invite_tests {
             dm_account: None,
             founder_actor_id: Some("github:7".into()),
             fk: None,
+            inv: None,
         };
         let invite = encode_workspace_invite(&founder);
         let joined = decode_workspace_invite(&invite).unwrap();
@@ -4067,7 +4076,7 @@ fn list_membership_audit(state: State<AppState>) -> Result<Vec<MembershipAuditDt
             .unwrap_or_else(|| "unknown".to_string());
         let at = rfc3339(env.timestamp);
         match &env.payload {
-            hive_core::SessionEvent::MemberAdded { member } => {
+            hive_core::SessionEvent::MemberAdded { member, .. } => {
                 names.insert(member.id.clone(), member.actor.display_name.clone());
                 out.push(MembershipAuditDto {
                     action: "added".into(),
@@ -10863,6 +10872,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
                     // self-consistency fallback).
                     founder_actor_id: None,
                     fk: None,
+                    inv: None,
                 };
                 s.workspaces.push(conn);
             }
@@ -11942,6 +11952,7 @@ fn create_workspace(state: State<AppState>, name: String) -> Result<WorkspaceInf
             dm_account: None,
             founder_actor_id: (!founder.is_empty()).then(|| founder.clone()),
             fk: founder_fk.clone(),
+            inv: None,
         };
         s.workspaces.push(conn.clone());
         save_settings(&state.data_dir, &s);
@@ -11961,7 +11972,12 @@ fn create_workspace(state: State<AppState>, name: String) -> Result<WorkspaceInf
 /// and switches to it.
 #[tauri::command]
 fn join_workspace(state: State<AppState>, invite: String) -> Result<WorkspaceInfoDto, String> {
-    let conn = decode_workspace_invite(&invite)?;
+    let mut conn = decode_workspace_invite(&invite)?;
+    // The invite this device redeems to enroll itself (kept device-local, not
+    // in settings: it is single-use).
+    if let Some(inv) = conn.inv.take().and_then(|i| Uuid::parse_str(&i).ok()) {
+        state.service.lock().unwrap().store().set_join_invite(conn.id(), inv).map_err(map_err)?;
+    }
     {
         let mut s = state.settings.lock().unwrap();
         if let Some(existing) = s.workspaces.iter_mut().find(|w| w.room == conn.room) {
@@ -11985,13 +12001,20 @@ fn join_workspace(state: State<AppState>, invite: String) -> Result<WorkspaceInf
 #[tauri::command]
 fn workspace_invite(state: State<AppState>, workspace_id: String) -> Result<String, String> {
     let id = Uuid::parse_str(&workspace_id).map_err(map_err)?;
-    let s = state.settings.lock().unwrap();
-    let conn = s
-        .workspaces
-        .iter()
-        .find(|w| w.id() == id)
-        .ok_or_else(|| "unknown workspace".to_string())?;
-    Ok(encode_workspace_invite(conn))
+    let mut conn = {
+        let s = state.settings.lock().unwrap();
+        s.workspaces.iter().find(|w| w.id() == id).cloned().ok_or_else(|| "unknown workspace".to_string())?
+    };
+    // Each code carries a fresh single-use invite an Admin issues on the
+    // workspace's config log: only an Admin can let someone in.
+    let invite = state
+        .service
+        .lock()
+        .unwrap()
+        .issue_invite(id)
+        .map_err(|e| format!("Only a workspace Admin can invite people ({e})."))?;
+    conn.inv = Some(invite.to_string());
+    Ok(encode_workspace_invite(&conn))
 }
 
 /// Leave a team workspace (removes it from the rail). If it was active, falls
@@ -13343,6 +13366,7 @@ async fn friend_open_dm(
             }),
             // A DM has no shared founder key to pin.
             fk: None,
+            inv: None,
         };
         let mut s = state.settings.lock().unwrap();
         s.workspaces.push(conn);
@@ -13350,9 +13374,20 @@ async fn friend_open_dm(
     }
 
     let ws_id = room_workspace_id(&room);
+    // The friend joins with an invite both sides derive from the room: the
+    // owner issues it, the friend redeems it.
+    let dm_invite = Uuid::new_v5(&ws_id, b"dm-invite");
+    if !i_am_owner {
+        state.service.lock().unwrap().store().set_join_invite(ws_id, dm_invite).map_err(map_err)?;
+    }
     // Switch to it so the chat list scopes here (also points the sync fields at
     // the room and, for the owner, makes `workspace_key()` the DM key).
     set_active_workspace(state.clone(), ws_id.to_string())?;
+    if i_am_owner && !existed {
+        if let Err(e) = state.service.lock().unwrap().issue_invite_as(ws_id, dm_invite) {
+            tracing::error!(target: "workspace", "issuing the DM invite failed: {e}");
+        }
+    }
 
     // Owner seals the DM key to the friend's devices so they can decrypt it.
     if i_am_owner && !existed {

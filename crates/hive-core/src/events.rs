@@ -69,7 +69,15 @@ pub enum SessionEvent {
     /// device that has synced another device's winning claim backs off. Benign
     /// coordination — not projection-gated.
     TurnClaimed { trigger_id: Uuid, device_id: Uuid },
-    MemberAdded { member: WorkspaceMember },
+    MemberAdded {
+        member: WorkspaceMember,
+        /// The Admin-issued invite a self-enrollment redeems (an id whose
+        /// `JoinApproved { subject: "invite:<id>" }` an Admin signed). Every
+        /// self-add into a non-empty workspace needs one; each invite admits
+        /// one member. Left out when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        invite: Option<Uuid>,
+    },
     MemberRemoved { member_id: String },
     MemberRoleChanged { change: MemberRoleChange },
     AgentRosterUpdated { agents: Vec<WorkspaceAgent> },
@@ -565,7 +573,10 @@ impl ChatSession {
                 // same trigger are ignored. Deterministic across devices.
                 self.turn_claims.entry(*trigger_id).or_insert(*device_id);
             }
-            SessionEvent::MemberAdded { member } => {
+            SessionEvent::MemberAdded { member, invite } => {
+                if let Some(id) = invite {
+                    self.guards.used_invites.insert(*id);
+                }
                 // Only reached once authorized: an Admin's re-add (or an
                 // allowed self-add) lifts a removal.
                 self.guards.removed_members.remove(&member.id);
@@ -1087,6 +1098,23 @@ fn fold(
     };
     session.updated_at = ordered[base].timestamp;
     session.authz = Default::default();
+    // A chat founded by someone who wasn't a workspace member at its frontier
+    // (a keyholder outside the roster) doesn't exist for a checked fold.
+    if let WorkspaceAuthz::Timeline(t) = workspace {
+        if trusted_workspace != Some(ordered[base].workspace_id) {
+            let seed = ordered[base];
+            let author = seed.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
+            let member_then = seed
+                .actor_stamp
+                .as_ref()
+                .and_then(|s| s.cfg_frontier)
+                .and_then(|f| t.at(f).ok())
+                .is_some_and(|r| !author.is_empty() && r.members.contains_key(author));
+            if !member_then {
+                return None;
+            }
+        }
+    }
     let mut tracker = authz::RosterTracker::seeded(&session);
     if let Some(t) = timeline.as_deref_mut() {
         *t = authz::ConfigTimeline::begin(tracker.state.clone());
@@ -1117,7 +1145,9 @@ fn fold(
             }
             // The workspace position of a chat event that needs the roster.
             let mut at = None;
-            if checked && !trusted && authz::needs_workspace_authz(&env.payload) {
+            // Every chat event of a checked fold has a position: its author
+            // must be a member there, and some kinds need more (see authz).
+            if checked && !trusted {
                 let hold = match workspace {
                     WorkspaceAuthz::NoConfigLog => Some(HoldReason::NoConfigLog),
                     WorkspaceAuthz::Timeline(t) => {
@@ -1463,7 +1493,7 @@ mod tests {
                     sid,
                     wid,
                     2,
-                    SessionEvent::MemberAdded {
+                    SessionEvent::MemberAdded { invite: None,
                         member: member.clone(),
                     },
                 ),
@@ -1629,8 +1659,8 @@ mod tests {
         let events = vec![
             env(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(base) }),
             env(sid, wid, 2, SessionEvent::MessageAppended { message: msg }),
-            by("owner", env(sid, wid, 3, SessionEvent::MemberAdded { member: member("m1", "u1", WorkspaceRole::Contributor) })),
-            by("owner", env(sid, wid, 4, SessionEvent::MemberAdded { member: member("m2", "u2", WorkspaceRole::Contributor) })),
+            by("owner", env(sid, wid, 3, SessionEvent::MemberAdded { invite: None, member: member("m1", "u1", WorkspaceRole::Contributor) })),
+            by("owner", env(sid, wid, 4, SessionEvent::MemberAdded { invite: None, member: member("m2", "u2", WorkspaceRole::Contributor) })),
             env(sid, wid, 5, SessionEvent::SessionTitleChanged { title: "Foo".into() }),
             env(sid, wid, 6, SessionEvent::MessageReactionAdded { message_id: mid, reaction: reaction("u1", "👍") }),
             by("owner", env(sid, wid, 7, SessionEvent::MemberRoleChanged { change: MemberRoleChange { member_id: "m1".into(), old_role: WorkspaceRole::Contributor, new_role: WorkspaceRole::Admin } })),
@@ -1676,9 +1706,9 @@ mod tests {
 
         let events = vec![
             env(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(base) }),
-            by("owner", env(sid, wid, 2, SessionEvent::MemberAdded { member: member("m1", "u1", WorkspaceRole::Contributor) })),
+            by("owner", env(sid, wid, 2, SessionEvent::MemberAdded { invite: None, member: member("m1", "u1", WorkspaceRole::Contributor) })),
             // Concurrent — authored by a peer, canonically before the snapshot below.
-            by("owner", env(sid, wid, 3, SessionEvent::MemberAdded { member: member("m2", "u2", WorkspaceRole::Contributor) })),
+            by("owner", env(sid, wid, 3, SessionEvent::MemberAdded { invite: None, member: member("m2", "u2", WorkspaceRole::Contributor) })),
             // A later snapshot whose captured state is missing m2.
             env(sid, wid, 5, SessionEvent::SessionSnapshot { session: Box::new(compacted) }),
         ];
@@ -2277,7 +2307,7 @@ mod tests {
         compacted.members.push(bob.clone());
         let events = vec![
             by("alice", env(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(alice) })),
-            by("alice", env(sid, wid, 2, SessionEvent::MemberAdded { member: bob })),
+            by("alice", env(sid, wid, 2, SessionEvent::MemberAdded { invite: None, member: bob })),
             by("bob", env(sid, wid, 3, SessionEvent::SessionSnapshot { session: Box::new(compacted) })),
         ];
         let s = project(&events).expect("session");
@@ -2364,7 +2394,7 @@ mod tests {
         compacted.members.push(bob.clone());
         let events = vec![
             by("alice", env(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(alice) })),
-            by("alice", env(sid, wid, 2, SessionEvent::MemberAdded { member: bob })),
+            by("alice", env(sid, wid, 2, SessionEvent::MemberAdded { invite: None, member: bob })),
             by("bob", env(sid, wid, 3, SessionEvent::SessionSnapshot { session: Box::new(compacted) })),
         ];
         let s = project_with_founder(&events, Some("alice")).expect("session");

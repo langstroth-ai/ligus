@@ -141,6 +141,13 @@ impl EventStore {
                 fk           TEXT NOT NULL
             );
 
+            -- Device-local: the Admin-issued invite this device redeems when it
+            -- enrolls itself in a workspace (from the hivews1: invite).
+            CREATE TABLE IF NOT EXISTS join_invites (
+                workspace_id TEXT PRIMARY KEY,
+                invite_id    TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS sync_cursor (
                 workspace        TEXT PRIMARY KEY,
                 last_fetched_seq INTEGER NOT NULL
@@ -861,6 +868,28 @@ impl EventStore {
         Ok(row.and_then(|(f, k)| crate::envelope_verifier::FounderPin::parse(&f, &k)))
     }
 
+    /// Remember the invite this device redeems to join `workspace_id` (the
+    /// latest one wins: a fresh invite replaces a used one).
+    pub fn set_join_invite(&self, workspace_id: Uuid, invite_id: Uuid) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO join_invites (workspace_id, invite_id) VALUES (?1, ?2) \
+             ON CONFLICT(workspace_id) DO UPDATE SET invite_id = excluded.invite_id",
+            rusqlite::params![workspace_id.to_string(), invite_id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// The invite this device redeems to join `workspace_id`, if it has one.
+    pub fn join_invite(&self, workspace_id: Uuid) -> Result<Option<Uuid>> {
+        let v: Option<String> = self
+            .conn
+            .query_row("SELECT invite_id FROM join_invites WHERE workspace_id = ?1", [workspace_id.to_string()], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        Ok(v.and_then(|s| Uuid::parse_str(&s).ok()))
+    }
+
     /// The workspace a stored session belongs to, if any of its rows exist.
     pub fn workspace_of(&self, session_id: Uuid) -> Result<Option<Uuid>> {
         let ws: Option<String> = self
@@ -1136,7 +1165,7 @@ mod tests {
         let events = vec![
             SessionEventEnvelope::new(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(base) }),
             SessionEventEnvelope::new(sid, wid, 2, SessionEvent::SessionTitleChanged { title: "First".into() }),
-            SessionEventEnvelope::new(sid, wid, 3, SessionEvent::MemberAdded { member }),
+            SessionEventEnvelope::new(sid, wid, 3, SessionEvent::MemberAdded { member, invite: None }),
             SessionEventEnvelope::new(sid, wid, 4, SessionEvent::SessionTitleChanged { title: "Second".into() }),
             SessionEventEnvelope::new(sid, wid, 5, SessionEvent::MemberRemoved { member_id: "m1".into() }),
         ];

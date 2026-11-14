@@ -445,6 +445,15 @@ mod flow_tests {
             self.svc.author().id.clone()
         }
 
+        /// Join with an invite `admin` issues (and syncs) for this device.
+        async fn join_via(&mut self, admin: &mut Dev, ws: Uuid) {
+            let invite = admin.svc.issue_invite(ws).unwrap();
+            admin.sync().await;
+            self.sync().await;
+            self.svc.store().set_join_invite(ws, invite).unwrap();
+            self.svc.ensure_self_member(workspace_config_session_id(ws), ws).unwrap();
+        }
+
         fn bodies(&self, chat: Uuid) -> Vec<(String, String)> {
             self.svc
                 .load(chat)
@@ -470,8 +479,7 @@ mod flow_tests {
         mac.svc.ensure_self_member(cfg, ws).unwrap();
         mac.sync().await;
         let mut taylor = Dev::open(&tmp.path().join("taylor"), "Taylor", &relay, ws);
-        taylor.sync().await;
-        taylor.svc.ensure_self_member(cfg, ws).unwrap();
+        taylor.join_via(&mut mac, ws).await;
         taylor.sync().await;
         // Taylor (a Contributor) certifies a second device of hers.
         let spare = Dev::open(&tmp.path().join("spare"), "Spare", &relay, ws);
@@ -507,14 +515,12 @@ mod flow_tests {
 
         // A teammate joins.
         let mut taylor = Dev::open(&tmp.path().join("taylor"), "Taylor", &relay, ws);
-        taylor.sync().await;
-        taylor.svc.ensure_self_member(cfg, ws).unwrap();
+        taylor.join_via(&mut mac, ws).await;
         taylor.sync().await;
 
         // The box joins the old way: its own member.
         let mut sff = Dev::open(&tmp.path().join("sff"), "hive-cli", &relay, ws);
-        sff.sync().await;
-        sff.svc.ensure_self_member(cfg, ws).unwrap();
+        sff.join_via(&mut mac, ws).await;
         let box_actor = sff.id();
         sff.svc.post_user_message(chat, ws, "before enrollment").unwrap();
         sff.sync().await;

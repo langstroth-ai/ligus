@@ -59,7 +59,7 @@ impl World {
         w.cfg_push("owner", SessionEvent::SessionSnapshot { session: Box::new(seed) });
         w.chat_push("owner", SessionEvent::SessionSnapshot { session: Box::new(chat) });
         for (id, role) in [("ada", WorkspaceRole::Admin), ("mara", WorkspaceRole::Contributor), ("val", WorkspaceRole::Viewer)] {
-            w.cfg_push("owner", SessionEvent::MemberAdded { member: member(id, role) });
+            w.cfg_push("owner", SessionEvent::MemberAdded { invite: None, member: member(id, role) });
         }
         w
     }
@@ -370,8 +370,8 @@ fn held_when_no_config_log() {
     w.chat_push("owner", vote("owner", pid, WorkspaceRole::Owner, true, None));
     let s = project_authorized(&w.chat, None, None, WorkspaceAuthz::NoConfigLog).unwrap();
     assert!(s.proposal_sets.is_empty(), "the set waits for the roster");
-    assert_eq!(s.proposals[0].status, ProposalStatus::Open, "the vote waits for the roster");
-    assert_eq!(s.authz.held.len(), 2);
+    assert!(s.proposals.is_empty(), "every chat event waits for the roster");
+    assert_eq!(s.authz.held.len(), 3);
     assert!(s.authz.held.iter().all(|h| h.reason == HoldReason::NoConfigLog));
     assert!(s.authz.blocks(pid, None) && s.authz.blocks_set(set_id, &[pid]));
     // With the config log they fold.
@@ -562,9 +562,12 @@ fn lockdown_bounds_s5() {
         w.cfg_push("val", SessionEvent::ChatLockdownRaised { chat_id: chat, lockdown: lockdown(i, &format!("alias{i}")) });
     }
     assert_eq!(w.config().guards.lockdowns_of(chat).len(), 3);
-    // Many raisers: at most 16 active per chat.
+    // Many raisers (all members): at most 16 active per chat.
+    for i in 0..10u128 {
+        w.cfg_push("owner", SessionEvent::MemberAdded { member: member(&format!("worker{i}"), WorkspaceRole::Viewer), invite: None });
+    }
     for i in 0..40u128 {
-        let by = format!("worker{i}");
+        let by = format!("worker{}", i % 10);
         w.cfg_push(&by, SessionEvent::ChatLockdownRaised { chat_id: chat, lockdown: lockdown(100 + i, &by) });
     }
     assert_eq!(w.config().guards.lockdowns_of(chat).len(), 16);
@@ -723,4 +726,132 @@ fn upgrade_refold_recovers_unknown_events() {
     upgraded.chat.push(serde_json::from_str(&wire).unwrap());
     assert_eq!(serde_json::to_string(upgraded.chat.last().unwrap()).unwrap(), wire);
     assert_eq!(upgraded.state().proposals[0].status, ProposalStatus::Applied);
+}
+
+// ---- membership: every author is a member at the event's position ----
+
+fn message(by: &str, body: &str) -> SessionEvent {
+    let mut m = hive_core::ChatMessage::new(hive_core::MessageRole::User, by, body);
+    m.actor_identity = Some(ActorIdentity::new(by, by, ActorKind::Human));
+    SessionEvent::MessageAppended { message: m }
+}
+
+fn enroll(id: &str, invite: Option<Uuid>) -> SessionEvent {
+    SessionEvent::MemberAdded { member: member(id, WorkspaceRole::Contributor), invite }
+}
+
+fn issue(invite: Uuid) -> SessionEvent {
+    SessionEvent::JoinApproved { subject: hive_core::authorization::invite_subject(invite) }
+}
+
+proptest! {
+    /// A keyholder who isn't on the roster (eve) posts: whatever the order of
+    /// delivery and whatever frontier she names, no device folds her message;
+    /// members' messages around it all fold.
+    #[test]
+    fn prop_non_member_message_is_dropped_everywhere(
+        posts in prop::collection::vec((0usize..5, any::<bool>()), 1..16),
+        seed in any::<u64>(),
+    ) {
+        let mut w = World::new();
+        let mut expected = 0;
+        for (i, (who, stale)) in posts.iter().enumerate() {
+            let by = PEOPLE[*who];
+            let body = format!("m{i}");
+            if *stale {
+                // Name the very first config position (before anyone joined).
+                let first = w.cfg.iter().map(|e| CfgFrontier { lamport: e.lamport, event_id: e.event_id }).min();
+                w.chat_at(by, message(by, &body), first);
+                if by == "owner" { expected += 1; }
+            } else {
+                w.chat_push(by, message(by, &body));
+                if by != "eve" { expected += 1; }
+            }
+        }
+        let mut shuffled = w.clone();
+        let mut rng = seed | 1;
+        for i in (1..shuffled.chat.len()).rev() {
+            rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17;
+            shuffled.chat.swap(i, (rng % (i as u64 + 1)) as usize);
+        }
+        for s in [w.state(), shuffled.state()] {
+            prop_assert!(s.messages.iter().all(|m| m.author != "eve"), "a non-member's message folded");
+            prop_assert_eq!(s.messages.len(), expected);
+        }
+    }
+
+    /// Removal is not undone by the removed: whatever invites exist (unused
+    /// ones included), an ex-member's self-enrollment after their removal is
+    /// refused, and their later posts never fold.
+    #[test]
+    fn prop_ex_member_self_enrollment_after_removal_is_refused(invites in 0usize..4, post_first in any::<bool>()) {
+        let mut w = World::new();
+        w.chat_push("mara", message("mara", "while a member"));
+        w.cfg_push("owner", SessionEvent::MemberRemoved { member_id: "mara".into() });
+        let mut ids = Vec::new();
+        for _ in 0..invites {
+            let id = Uuid::new_v4();
+            w.cfg_push("owner", issue(id));
+            ids.push(id);
+        }
+        if post_first {
+            w.chat_push("mara", message("mara", "after removal"));
+        }
+        for id in ids.iter().copied().map(Some).chain([None]) {
+            w.cfg_push("mara", enroll("mara", id));
+        }
+        w.chat_push("mara", message("mara", "after re-enrolling"));
+        prop_assert!(w.config().role_of("mara") == WorkspaceRole::Viewer && !w.config().members.iter().any(|m| m.id == "mara"));
+        let s = w.state();
+        let bodies: Vec<&str> = s.messages.iter().map(|m| m.body.as_str()).collect();
+        prop_assert_eq!(bodies, vec!["while a member"], "only the pre-removal post stands");
+    }
+}
+
+#[test]
+fn an_invited_member_enrolls_once_and_the_invite_is_spent() {
+    let mut w = World::new();
+    let id = Uuid::new_v4();
+    // Without an issued invite, key possession alone: refused.
+    let early = w.cfg_push("joe", enroll("joe", Some(id)));
+    // A non-Admin can't issue one either.
+    let by_mara = w.cfg_push("mara", issue(id));
+    let joe_post_before = w.chat_push("joe", message("joe", "not yet"));
+    w.cfg_push("ada", issue(id));
+    let ok = w.cfg_push("joe", enroll("joe", Some(id)));
+    let joe_post = w.chat_push("joe", message("joe", "hello"));
+    // The same invite admits no one else.
+    let reuse = w.cfg_push("zed", enroll("zed", Some(id)));
+    // Admin-level self-enrollment with an invite: refused.
+    let id2 = Uuid::new_v4();
+    w.cfg_push("owner", issue(id2));
+    let mut admin = member("kim", WorkspaceRole::Admin);
+    admin.role = WorkspaceRole::Admin;
+    let greedy = w.cfg_push("kim", SessionEvent::MemberAdded { member: admin, invite: Some(id2) });
+    let v = w.verdicts();
+    assert_eq!(v[&early], Verdict::Denied);
+    assert_eq!(v[&by_mara], Verdict::Denied);
+    assert_eq!(v[&joe_post_before], Verdict::Denied);
+    assert_eq!(v[&ok], Verdict::Allowed);
+    assert_eq!(v[&joe_post], Verdict::Allowed);
+    assert_eq!(v[&reuse], Verdict::Denied);
+    assert_eq!(v[&greedy], Verdict::Denied);
+    assert_eq!(w.config().role_of("joe"), WorkspaceRole::Contributor);
+    assert_eq!(w.state().messages.iter().map(|m| m.body.as_str()).collect::<Vec<_>>(), vec!["hello"]);
+}
+
+#[test]
+fn a_chat_founded_by_a_non_member_does_not_exist() {
+    let mut w = World::new();
+    let mut seed = ChatSession::new("eve's", w.wid, "anthropic");
+    seed.creator_actor_id = "eve".into();
+    seed.members = vec![member("eve", WorkspaceRole::Owner)];
+    let mut forged = World { chat: Vec::new(), sid: seed.id, ..w.clone() };
+    forged.chat_push("eve", SessionEvent::SessionSnapshot { session: Box::new(seed) });
+    forged.chat_push("eve", message("eve", "hi"));
+    let t = forged.timeline();
+    assert!(project_authorized(&forged.chat, None, None, WorkspaceAuthz::Timeline(&t)).is_none());
+    // A member's chat does.
+    w.chat_push("mara", message("mara", "hi"));
+    assert_eq!(w.state().messages.len(), 1);
 }

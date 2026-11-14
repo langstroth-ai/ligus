@@ -174,6 +174,8 @@ pub struct WorkspaceRoster {
     /// Every device whose certificate verifies against its account's pinned
     /// key, member or not (for the batch fixpoint's self-validating events).
     chained: HashMap<Uuid, (Vec<u8>, HashSet<Uuid>)>,
+    /// Accounts an authorized removal took out (and no Admin re-added).
+    removed_accounts: HashSet<Uuid>,
 }
 
 impl WorkspaceRoster {
@@ -446,7 +448,7 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
                     note_member(&mut members, &mut member_account, m);
                 }
             }
-            SessionEvent::MemberAdded { member } => {
+            SessionEvent::MemberAdded { member, .. } => {
                 note_member(&mut members, &mut member_account, member);
             }
             SessionEvent::MemberRemoved { member_id } => {
@@ -514,6 +516,7 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
 
     let mut roster = WorkspaceRoster::default();
     roster.disputed = disputed;
+    roster.removed_accounts = sticky_removed.clone();
     // Explicitly-revoked devices (a `DeviceRevoked` event) are never trusted, even
     // if they still hold a valid member cert — verdict_for checks is_revoked first.
     roster.revoked.extend(explicit_revoked);
@@ -668,7 +671,7 @@ fn self_validating(roster: &WorkspaceRoster, env: &SessionEventEnvelope, pin: Op
                 && pin.is_none_or(|p| p.founder_account == account)
                 && signed_as(roster, env, account)
         }
-        SessionEvent::MemberAdded { member } => {
+        SessionEvent::MemberAdded { member, .. } => {
             member.id == author
                 && member.actor.account_id == Some(account)
                 && member.role.rank() < hive_core::WorkspaceRole::Admin.rank()
@@ -764,7 +767,9 @@ pub fn verdict_for(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verd
             .actor_stamp
             .as_ref()
             .and_then(|s| s.actor.account_id)
-            .is_some_and(|a| roster.account_signing_key(a).is_some() || roster.is_disputed(a));
+            .is_some_and(|a| {
+                roster.account_signing_key(a).is_some() || roster.is_disputed(a) || roster.removed_accounts.contains(&a)
+            });
         if claims_known && !is_trust_bootstrap(env) {
             return Verdict::Unverifiable(QuarantineReason::UncertifiedDevice);
         }
@@ -935,7 +940,7 @@ mod tests {
             joined_at: Timestamp::epoch(),
         };
         vec![
-            env(lamport_base, SessionEvent::MemberAdded { member }),
+            env(lamport_base, SessionEvent::MemberAdded { member, invite: None }),
             env(
                 lamport_base + 1,
                 SessionEvent::AccountKeyRegistered {
@@ -1218,8 +1223,8 @@ mod tests {
             joined_at: Timestamp::epoch(),
         };
         let events = vec![
-            env(1, SessionEvent::MemberAdded { member: mk_member(old_account) }),
-            env(2, SessionEvent::MemberAdded { member: mk_member(new_account) }),
+            env(1, SessionEvent::MemberAdded { invite: None, member: mk_member(old_account) }),
+            env(2, SessionEvent::MemberAdded { invite: None, member: mk_member(new_account) }),
             env(3, SessionEvent::AccountKeyRegistered {
                 account_id: old_account,
                 signing_public_key: p.account_kp.public_key_bytes().to_vec(),

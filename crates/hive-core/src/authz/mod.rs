@@ -225,6 +225,25 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         return Decision::Allow;
     }
 
+    // Every author must be a workspace member at the event's position: on the
+    // config log, the roster folded so far; on a chat (checked), the config
+    // roster at its frontier. Self-validating trust publications are exempt,
+    // and a self-enrollment is judged by its invite below.
+    let on_config = env.session_id == crate::channel::workspace_config_session_id(env.workspace_id);
+    let exempt = is_trust_publication(&env.payload) || matches!(env.payload, SessionEvent::MemberAdded { .. });
+    if !exempt {
+        let member = if ctx.checked {
+            ctx.workspace.is_some_and(|at| !author.is_empty() && at.members.contains_key(author))
+        } else if on_config {
+            !author.is_empty() && fold.members.iter().any(|m| m.id == author)
+        } else {
+            true
+        };
+        if !member {
+            return Decision::deny("not a workspace member at this position");
+        }
+    }
+
     if requires_projection_authz(&env.payload) {
         let role = fold.role_of(author);
         // R5: revoking a device your own account certified is self-service.
@@ -294,6 +313,17 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         }
     }
     Decision::Allow
+}
+
+/// Account keys and device certificates: self-validating (the roster checks
+/// the chain), published by members and joiners alike.
+fn is_trust_publication(e: &SessionEvent) -> bool {
+    matches!(
+        e,
+        SessionEvent::AccountKeyRegistered { .. }
+            | SessionEvent::AccountKeyRotated { .. }
+            | SessionEvent::DeviceCertificateAdded { .. }
+    )
 }
 
 /// The role a counted vote carries: the signer's workspace role at its
