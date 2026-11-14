@@ -503,13 +503,17 @@ async fn tangled_resolves_the_did_then_reads_the_pds() {
         200,
         serde_json::json!({"records": [{"uri": "at://x", "value": {"name": "laptop", "publicKey": openssh_pub(&k), "createdAt": "2026-01-01T00:00:00Z"}}]}).to_string(),
     );
-    let cfg = ForgeConfig {
+    // erin.example.com names the DID back, so the handle is shown.
+    let erin = server().await;
+    erin.set("/.well-known/atproto-did", 200, did);
+    let mut cfg = ForgeConfig {
         check_forges: true,
         ask_owner_chosen_hosts: true,
         test_plc: Some(plc.url.clone()),
         test_allow_loopback: true,
         ..Default::default()
     };
+    cfg.test_https.insert("erin.example.com".into(), erin.url.clone());
     let f = LinkFetcher::new(cfg);
     let l = signed("tangled", "atproto", did, "erin.example.com", &k);
     let s = check_link(&l, ctx(), &f, now(), None).await;
@@ -698,4 +702,56 @@ async fn automatic_checks_never_contact_hosts_the_link_owner_chose() {
     for host in ["erin.example.com", "bsky.network.evil.example", "evilbsky.network", "127.0.0.1"] {
         assert!(!well_known_pds(host), "{host}");
     }
+}
+/// A DID document for `did` naming `handle` and a PDS.
+fn did_doc(did: &str, handle: &str, pds: &str) -> String {
+    serde_json::json!({
+        "id": did,
+        "alsoKnownAs": [format!("at://{handle}")],
+        "service": [{"id": "#atproto_pds", "type": "AtprotoPersonalDataServer", "serviceEndpoint": pds}],
+    })
+    .to_string()
+}
+
+fn tangled_keys(pds: &Server, did: &str, k: &PrivateKey) {
+    pds.set(
+        &format!("/xrpc/com.atproto.repo.listRecords?repo={did}&collection=org.tangled.key.sshKey&limit=100"),
+        200,
+        serde_json::json!({"records": [{"uri": "at://x", "value": {"publicKey": openssh_pub(k)}}]}).to_string(),
+    );
+}
+
+
+/// An atproto handle is only shown as the account's when the handle's
+/// domain names the DID back (`/.well-known/atproto-did`): a DID document
+/// claiming someone else's handle in `alsoKnownAs` verifies (the keys are
+/// the DID's), but the chip shows the DID, never the borrowed handle.
+#[tokio::test]
+async fn tangled_handle_shown_only_when_its_domain_names_the_did() {
+    let plc = server().await;
+    let pds = server().await;
+    let famous = server().await;
+    let k = key(6);
+    let did = "did:plc:abcdefghijklmnopqrstuvwx";
+    plc.set(&format!("/{did}"), 200, did_doc(did, "famous.example.com", &pds.url));
+    tangled_keys(&pds, did, &k);
+    famous.set("/.well-known/atproto-did", 200, "did:plc:zzzzzzzzzzzzzzzzzzzzzzzz");
+    let mut cfg = ForgeConfig {
+        check_forges: true,
+        ask_owner_chosen_hosts: true,
+        test_plc: Some(plc.url.clone()),
+        test_allow_loopback: true,
+        ..Default::default()
+    };
+    cfg.test_https.insert("famous.example.com".into(), famous.url.clone());
+    let f = LinkFetcher::new(cfg);
+    let l = signed("tangled", "atproto", did, "famous.example.com", &k);
+    let s = check_link(&l, ctx(), &f, now(), None).await;
+    assert!(matches!(&s, LinkStatus::Verified { handle: None, .. }), "a borrowed handle is not shown: {s:?}");
+    // The same DID entering the link flow by DID gets no borrowed handle either.
+    assert_eq!(f.resolve_handle("tangled", "atproto", did).await.unwrap(), (did.to_string(), did.to_string()));
+    // When the domain does name the DID, the handle is shown.
+    famous.set("/.well-known/atproto-did", 200, did);
+    let s = check_link(&l, ctx(), &f, now(), None).await;
+    assert!(matches!(&s, LinkStatus::Verified { handle: Some(h), .. } if h == "famous.example.com"), "{s:?}");
 }

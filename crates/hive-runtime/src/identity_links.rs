@@ -269,6 +269,10 @@ pub struct ForgeConfig {
     pub test_plc: Option<String>,
     #[doc(hidden)]
     pub test_allow_loopback: bool,
+    /// Tests only: the server standing in for `https://{host}` (a handle's
+    /// domain, a `did:web` host).
+    #[doc(hidden)]
+    pub test_https: BTreeMap<String, String>,
 }
 
 /// The built-in forges (anonymous key listings documented in §2.3).
@@ -584,7 +588,8 @@ impl LinkFetcher {
             "tangled" => {
                 if valid_did(handle) {
                     let doc = self.did_document(handle).await?;
-                    return Ok((handle.to_string(), handle_of(&doc).unwrap_or_else(|| handle.to_string())));
+                    let shown = self.verified_handle(handle, &doc).await.unwrap_or_else(|| handle.to_string());
+                    return Ok((handle.to_string(), shown));
                 }
                 // A handle: its domain's well-known DID (a host the user
                 // named, so public addresses only).
@@ -592,7 +597,7 @@ impl LinkFetcher {
                 if !h.contains('.') || !h.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'-')) {
                     return Err(FetchError::Gone);
                 }
-                let b = self.get_ok(&format!("https://{h}/.well-known/atproto-did"), true).await?;
+                let b = self.get_ok(&self.https_url(&h, "/.well-known/atproto-did"), true).await?;
                 let did = String::from_utf8_lossy(&b).trim().to_string();
                 if !valid_did(&did) {
                     return Err(FetchError::Gone);
@@ -607,12 +612,32 @@ impl LinkFetcher {
         }
     }
 
+    /// `https://{host}{path}` (a host a link or DID document names).
+    fn https_url(&self, host: &str, path: &str) -> String {
+        match self.cfg.test_https.get(host) {
+            Some(base) => format!("{}{path}", base.trim_end_matches('/')),
+            None => format!("https://{host}{path}"),
+        }
+    }
+
+    /// The handle a DID document claims (`alsoKnownAs`), only when the
+    /// handle's domain names the DID back (atproto's bidirectional check):
+    /// anyone can write any handle into their own DID document.
+    async fn verified_handle(&self, did: &str, doc: &serde_json::Value) -> Option<String> {
+        let h = handle_of(doc)?.to_ascii_lowercase();
+        if !h.contains('.') || !h.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'-')) {
+            return None;
+        }
+        let b = self.get_ok(&self.https_url(&h, "/.well-known/atproto-did"), true).await.ok()?;
+        (String::from_utf8_lossy(&b).trim() == did).then_some(h)
+    }
+
     async fn did_document(&self, did: &str) -> Result<serde_json::Value, FetchError> {
         if !valid_did(did) {
             return Err(FetchError::Gone);
         }
         let doc = if let Some(host) = did.strip_prefix("did:web:") {
-            self.get_json(&format!("https://{host}/.well-known/did.json"), true).await?
+            self.get_json(&self.https_url(host, "/.well-known/did.json"), true).await?
         } else {
             self.get_json(&format!("{}/{did}", self.cfg.plc()), false).await?
         };
@@ -727,7 +752,7 @@ impl LinkFetcher {
                         Err(_) => {}
                     }
                 }
-                Ok(KeyList { handle: handle_of(&doc), keys, name_bound: false })
+                Ok(KeyList { handle: self.verified_handle(subject_id, &doc).await, keys, name_bound: false })
             }
             _ => Err(FetchError::NotConfigured(format!("{provider} has no public key list"))),
         }
