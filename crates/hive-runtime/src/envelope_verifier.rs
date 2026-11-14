@@ -230,6 +230,19 @@ impl DearthPolicy {
     }
 }
 
+/// Per workspace, the member ids a `MemberRemoved` on its config log named.
+fn removed_on_config(ordered: &[&SessionEventEnvelope]) -> HashMap<Uuid, HashSet<String>> {
+    let mut out: HashMap<Uuid, HashSet<String>> = HashMap::new();
+    for env in ordered {
+        if let SessionEvent::MemberRemoved { member_id } = &env.payload {
+            if env.session_id == hive_core::workspace_config_session_id(env.workspace_id) {
+                out.entry(env.workspace_id).or_default().insert(member_id.clone());
+            }
+        }
+    }
+    out
+}
+
 /// Per workspace, the active dearth policy from its config log, projected with
 /// the usual ingest authorization (so only an Admin's switch or approval counts).
 fn dearth_policies(ordered: &[&SessionEventEnvelope]) -> HashMap<Uuid, DearthPolicy> {
@@ -377,6 +390,29 @@ pub fn build_roster(envelopes: &[SessionEventEnvelope]) -> WorkspaceRoster {
                 explicit_revoked.insert(*device_id);
             }
             _ => {}
+        }
+    }
+
+    // Removal is sticky against the removed: an account taken out on a
+    // workspace-config log stays out unless the authorization-checked
+    // projection of that log has it as a member again (an Admin's re-add). A
+    // raw `MemberAdded`, chat seed or unsigned event naming them afterwards,
+    // their own included, doesn't count: a removed member still holds old
+    // epoch keys and could otherwise re-enter with a freshly certified device.
+    for (ws, removed_ids) in removed_on_config(&ordered) {
+        let cfg_envs: Vec<SessionEventEnvelope> = ordered
+            .iter()
+            .filter(|e| e.workspace_id == ws && e.session_id == hive_core::workspace_config_session_id(ws))
+            .map(|e| (*e).clone())
+            .collect();
+        let current: HashSet<String> =
+            hive_core::project(&cfg_envs).map(|c| c.members.into_iter().map(|m| m.id).collect()).unwrap_or_default();
+        for id in removed_ids {
+            if !current.contains(&id) {
+                if let Some(aid) = member_account.get(&id) {
+                    members.remove(aid);
+                }
+            }
         }
     }
 

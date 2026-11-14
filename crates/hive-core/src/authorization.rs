@@ -401,6 +401,11 @@ fn self_enroll_allowance(
     if session.guards.dearth_on().is_some() && !session.members.iter().any(|m| m.id == actor_id) {
         return None;
     }
+    // Someone an Admin removed can't enroll themself back (they still hold
+    // old-epoch keys): only an authorized re-add lifts the removal.
+    if session.guards.removed_members.contains(actor_id) {
+        return None;
+    }
     match session.members.iter().find(|m| m.id == actor_id) {
         // Already a member: allowed only if the role is unchanged (idempotent
         // re-add). A role bump on yourself is a governance change — needs Admin+,

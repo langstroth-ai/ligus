@@ -117,6 +117,11 @@ pub struct GuardState {
     /// Proposals the hygiene sweep found stale (their diff no longer applies).
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub stale_proposals: BTreeSet<Uuid>,
+    /// Members an authorized `MemberRemoved` took out. A removed member keeps
+    /// old-epoch keys, so they could otherwise self-enroll straight back;
+    /// only an authorized re-add (an Admin's) lifts the removal.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub removed_members: BTreeSet<String>,
     /// Set on a chat session by the overlay: this chat's id, so
     /// [`GuardState::lockdown_active`] can find its entry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -196,6 +201,7 @@ pub fn fold_authored(session: &mut crate::ChatSession, event: &crate::SessionEve
                 .position(|p| &p.member.id == subject && p.added_by != author)
             {
                 let p = session.guards.pending_members.remove(i);
+                session.guards.removed_members.remove(&p.member.id);
                 if !session.members.iter().any(|m| m.id == p.member.id) {
                     session.members.push(p.member);
                 }

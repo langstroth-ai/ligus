@@ -183,3 +183,35 @@ fn an_uncertified_device_is_not_accepted_during_dearth_in_relay_mode() {
         IngestAction::Accept
     ));
 }
+
+/// An Admin removes Alice and revokes her laptop. Alice still holds an old
+/// epoch's key, so she can still publish: she certifies a fresh device with
+/// her account key and enrolls herself back on the config log. Projection
+/// refuses the self-enrollment of a removed member, and the trust roster must
+/// agree: her fresh device is not a trusted nestmate.
+#[test]
+fn a_removed_member_cannot_reenter_the_roster_with_a_fresh_device() {
+    use crate::envelope_verifier::{verdict_for, Verdict};
+    let (mut log, owner, _admin2, alice, _laptop) = setup();
+    let alice_laptop = Uuid::new_v4();
+    log.cert(&alice, alice_laptop);
+    log.push(&owner, SessionEvent::MemberRemoved { member_id: alice.id.clone() });
+    log.push(&owner, SessionEvent::DeviceRevoked { device_id: alice_laptop });
+    // Alice comes back on her own.
+    let fresh = Uuid::new_v4();
+    let fk = log.cert(&alice, fresh);
+    log.push(
+        &alice,
+        SessionEvent::MemberAdded {
+            member: WorkspaceMember { id: alice.id.clone(), actor: actor(&alice), role: WorkspaceRole::Contributor, title: String::new(), index: 0, joined_at: Timestamp::epoch() },
+        },
+    );
+    let cfg = hive_core::project(&log.envs).unwrap();
+    assert!(!cfg.members.iter().any(|m| m.id == alice.id), "control: projection refuses the self re-enrollment");
+    let roster = build_roster(&log.envs);
+    let mut e = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 99, SessionEvent::SessionTitleChanged { title: "x".into() });
+    e.lamport = 99;
+    e.actor_stamp = Some(ActorStamp { actor: actor(&alice), recorded_at: Timestamp::epoch() });
+    hive_core::sign_envelope(&mut e, fresh, &fk);
+    assert_ne!(verdict_for(&roster, &e), Verdict::Valid, "the removed member's fresh device is trusted again");
+}

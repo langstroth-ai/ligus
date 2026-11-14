@@ -220,3 +220,37 @@ fn a_rogue_epoch_jump_cannot_freeze_a_lease() {
         assert_eq!(st.current.holder, honest_b, "a claim at epoch {jump} froze the lease");
     }
 }
+
+// ---- membership: removal is not undone by the removed ----
+
+/// An Admin removed a member. The removed member still holds an old epoch's
+/// workspace key (older epochs stay openable so history reads), so they can
+/// still publish. Their own self-enrollment must not put them back: only an
+/// Admin's re-add can. Checked over every canonical interleaving of a few
+/// unrelated events.
+#[test]
+fn a_removed_member_cannot_self_enroll_back() {
+    use crate::identity::WorkspaceRole;
+    use crate::lease_projection_tests::member;
+    let s = base();
+    let removed = SessionEvent::MemberRemoved { member_id: "alice".into() };
+    let rejoin = SessionEvent::MemberAdded { member: member("alice", WorkspaceRole::Contributor) };
+    let noise = |n: u64| SessionEvent::SessionTitleChanged { title: format!("t{n}") };
+    let mut rng = Rng::new(77);
+    for _ in 0..32 {
+        let mut envs = vec![seed(&s), ev(&s, 10, "owner", None, removed.clone()), ev(&s, 20, "alice", None, rejoin.clone())];
+        for _ in 0..3 {
+            let l = rng.next() % 30 + 1;
+            envs.push(ev(&s, l, "owner", None, noise(l)));
+        }
+        let p = crate::events::project(&envs).unwrap();
+        assert!(!p.members.iter().any(|m| m.id == "alice"), "the removed member enrolled themself back");
+        // An Admin's re-add does restore them.
+        envs.push(ev(&s, 30, "owner", None, rejoin.clone()));
+        let p = crate::events::project(&envs).unwrap();
+        assert!(p.members.iter().any(|m| m.id == "alice"), "an Admin re-add must still work");
+        // And after that re-add, the member's own idempotent re-add is fine.
+        envs.push(ev(&s, 40, "alice", None, rejoin.clone()));
+        assert!(crate::events::project(&envs).unwrap().members.iter().any(|m| m.id == "alice"));
+    }
+}

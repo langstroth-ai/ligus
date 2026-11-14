@@ -526,6 +526,9 @@ impl ChatSession {
                 self.turn_claims.entry(*trigger_id).or_insert(*device_id);
             }
             SessionEvent::MemberAdded { member } => {
+                // Only reached once authorized: an Admin's re-add (or an
+                // allowed self-add) lifts a removal.
+                self.guards.removed_members.remove(&member.id);
                 if let Some(idx) = self.members.iter().position(|m| m.id == member.id) {
                     self.members[idx] = member.clone();
                 } else {
@@ -533,6 +536,9 @@ impl ChatSession {
                 }
             }
             SessionEvent::MemberRemoved { member_id } => {
+                if self.members.iter().any(|m| &m.id == member_id) {
+                    self.guards.removed_members.insert(member_id.clone());
+                }
                 self.members.retain(|m| &m.id != member_id);
             }
             SessionEvent::MemberRoleChanged { change } => {
@@ -753,6 +759,7 @@ impl ChatSession {
                 // Switching off returns to normal rules: pending joins land.
                 if !dearth.enabled {
                     for p in std::mem::take(&mut self.guards.pending_members) {
+                        self.guards.removed_members.remove(&p.member.id);
                         if !self.members.iter().any(|m| m.id == p.member.id) {
                             self.members.push(p.member);
                         }
