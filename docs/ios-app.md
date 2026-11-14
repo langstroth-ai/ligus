@@ -79,7 +79,7 @@ and public addresses unless `LIGUS_SERVE_ALLOW_ANY_BIND=1`.
 | GET | `/v1/chats/{id}/messages?after=<messageId>&limit=<n>` | `{messages: [Message]}`, oldest first. Without `after`, the latest page (default limit 100, max 1000) |
 | POST | `/v1/chats/{id}/messages` `{body}` | `{message}`. `@Name` mentions route to agents exactly as on the desktop/CLI |
 | GET | `/v1/chats/{id}/details` | The chat's details (the desktop's right-hand panel, read-only); see below |
-| GET | `/v1/agents` | `{agents: [{id, name, runtimeLabel, model?, hostId?, hostLabel?, hostKind, hostOnline?, role?, avatarUrl?, avatarColorHex?}]}` |
+| GET | `/v1/agents` | `{agents: [{id, name, runtimeLabel, model?, hostId?, hostLabel?, hostKind, hostOnline?, role?, avatarUrl?, avatarColorHex?, ownerActorId?}]}`. `ownerActorId` (absent when the agent has no recorded owner) is the account that may grant the agent's permission requests besides the host's own person: show the Allow button on a `permission` ask only when it is yours |
 | GET | `/v1/people` | `{people: [Person]}`, the workspace's human members |
 | GET | `/v1/channels` | `{channels: [{id, name, purpose?, position, archived, defaultChatId}]}`, in sidebar order |
 | GET | `/v1/hosts` | `{hosts: [{id, label, isThis: bool, online: bool}]}` |

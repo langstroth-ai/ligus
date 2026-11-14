@@ -54,7 +54,7 @@ $ curl -s http://127.0.0.1:8787/v1/health -H "Authorization: Bearer $(cat ~/.lig
 | `GET /v1/chats/:id/details` | | the desktop's right-hand panel, read-only |
 | `GET /v1/people` | | human roster with roles and avatars |
 | `GET /v1/channels` | | channel tree in sidebar order |
-| `GET /v1/agents` | | agents with runtime and host labels |
+| `GET /v1/agents` | | agents with runtime and host labels, and `ownerActorId` when the agent has an owner (who, besides the box's person, may grant its permission requests) |
 | `PUT /v1/agents/:id/host` | `{hostId}` (`""` = the owner's device) | moves an agent to another host |
 | `GET /v1/hosts` | | hosts, with `isThis` and `online` |
 | `GET /v1/guards` | | dearth mode, pending members, locked chats, coordinator lease. Read-only |

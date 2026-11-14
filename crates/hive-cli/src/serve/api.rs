@@ -654,6 +654,11 @@ pub(super) fn agent_dto(s: &Shared, a: &hive_core::WorkspaceAgent, config: &Chat
         "name": a.name,
         "runtimeLabel": rt.map(|r| r.name.clone()).unwrap_or_else(|| a.runtime_id.clone()),
     });
+    // Who may grant the agent's permission requests (with this host's
+    // person); the phone compares it with its own actor.
+    if !a.owner_actor_id.trim().is_empty() {
+        v["ownerActorId"] = json!(a.owner_actor_id);
+    }
     if let Some(r) = rt.filter(|r| !r.model.trim().is_empty()) {
         v["model"] = json!(r.model);
     }
@@ -1330,3 +1335,4 @@ async fn events(State(s): S, peer: Option<Extension<TunnelPeer>>, headers: Heade
     });
     Sse::new(backlog.chain(live)).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("heartbeat"))
 }
+

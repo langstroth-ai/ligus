@@ -464,6 +464,9 @@ async fn people_channels_and_chat_details() {
     assert_eq!(coder["avatarUrl"], avatar);
     assert_eq!(coder["avatarColorHex"], "#336699");
     assert_eq!(coder["hostKind"], "ownerDevice");
+    // Its owner, so the phone can tell whether its person may answer the
+    // agent's permission requests.
+    assert_eq!(coder["ownerActorId"], json!(desktop_actor));
     let host = this_host(&h).await;
     make_serve_admin(&h).await;
     let moved = h
