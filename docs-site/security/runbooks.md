@@ -152,8 +152,10 @@ The complete way to cut someone's reading, including on headless devices.
 
 1. An Admin opens **Settings → Passkeys & keys → Rotate workspace key**
    (under rules v2, confirm with a passkey). The new key is sealed to every
-   current member's devices that published a key-agreement key, and to
-   agent host boxes; the rotation is a signed `WorkspaceKeyRotated` event on
+   current member's devices that published a key-agreement key, including
+   the serve and worker boxes enrolled for a current member (a box enrolled
+   for someone who was removed gets no new key, even while an agent is still
+   bound to it); the rotation is a signed `WorkspaceKeyRotated` event on
    the config log, one version above the last one.
 2. Every device adopts it from the config log; its body also goes to the
    relay keyring route so a device whose log is behind can read it sooner.

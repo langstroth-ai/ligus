@@ -496,6 +496,23 @@ fn removed_member_cannot_read_later_attachments() {
     assert!(seal_with_ring(&w.engine("mara", &[]), data).is_err());
 }
 
+/// A removed member's device stays certified (nobody revoked it), so it must
+/// not come back as a rotation recipient through an agent binding: a member
+/// who binds an agent's host to that device id would otherwise have the next
+/// rotation seal the new key to it.
+#[test]
+fn removed_members_device_is_not_a_recipient_through_an_agent_host() {
+    let mut w = World::new();
+    w.push("owner", SessionEvent::MemberRemoved { member_id: "mara".into() });
+    let mut agent = hive_core::WorkspaceAgent::new("helper", "rt");
+    agent.host_id = w.people["mara"].device_id.to_string();
+    agent.owner_actor_id = "ada".into();
+    let id = w.push("ada", SessionEvent::AgentUpserted { agent });
+    assert_eq!(fold_decisions(&w.cfg, None, None, WorkspaceAuthz::Unchecked)[&id], Verdict::Allowed, "control: an Admin binds the agent");
+    let recipients = w.timeline().current().rotation_recipients();
+    assert!(!recipients.contains_key(&w.people["mara"].device_id), "the removed member's device would get the next key");
+}
+
 #[test]
 fn removed_member_cannot_inject_epoch() {
     // K1: mara is removed and the key rotated; she then publishes a rotation
