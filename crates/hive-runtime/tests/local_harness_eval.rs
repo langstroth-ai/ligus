@@ -642,7 +642,7 @@ async fn live_mcp() -> Option<(Vec<Value>, McpExec)> {
 
 /// Current stable Rust version (e.g. "1.99.1") from the release channel file.
 async fn rust_stable_version() -> Option<String> {
-    let text = reqwest::Client::new()
+    let text = hive_forge::new_http_client()
         .get("https://static.rust-lang.org/dist/channel-rust-stable.toml")
         .timeout(Duration::from_secs(30))
         .send()

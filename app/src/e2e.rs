@@ -215,7 +215,7 @@ async fn start_proxy(upstream: String, vault_doc: Arc<String>) -> Proxy {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind proxy");
     let base = format!("http://{}", listener.local_addr().unwrap());
     let log = Arc::new(Mutex::new(Vec::new()));
-    let client = reqwest::Client::builder().build().unwrap();
+    let client = hive_forge::http_client_builder().build().unwrap();
     let proxy = Proxy { base, log: log.clone() };
     tauri::async_runtime::spawn(async move {
         loop {

@@ -400,7 +400,7 @@ pub struct LinkFetcher {
 }
 
 fn client(public_only: bool) -> reqwest::Client {
-    let mut b = reqwest::Client::builder()
+    let mut b = hive_forge::http_client_builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(REQUEST_TIMEOUT)
         .connect_timeout(Duration::from_secs(5))

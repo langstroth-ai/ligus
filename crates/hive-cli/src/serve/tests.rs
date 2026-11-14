@@ -87,7 +87,7 @@ async fn spawn_ntfy() -> (String, Pushes) {
     let pushes: Pushes = Default::default();
     let p = pushes.clone();
     let router = Router::new().route(
-        "/:topic",
+        "/{topic}",
         post(move |headers: HeaderMap, body: String| {
             let p = p.clone();
             async move {
@@ -213,7 +213,7 @@ async fn harness_with(
     let handle = start(serve_cfg, opts).await.unwrap();
     let base = format!("http://{}", handle.addr);
     let token = handle.shared.token();
-    Harness { _tmp: tmp, desktop, handle, base, token, client: reqwest::Client::new(), agent_id, ntfy }
+    Harness { _tmp: tmp, desktop, handle, base, token, client: hive_forge::new_http_client(), agent_id, ntfy }
 }
 
 impl Harness {
@@ -358,7 +358,7 @@ async fn empty_workspace_lists_are_empty_not_404() {
     };
     let handle = start(config(&dir, &relay, &room), opts).await.unwrap();
     let base = format!("http://{}", handle.addr);
-    let client = reqwest::Client::new();
+    let client = hive_forge::new_http_client();
     for (path, key) in [("/v1/agents", "agents"), ("/v1/hosts", "hosts"), ("/v1/chats", "chats"), ("/v1/proposals", "proposals")] {
         let r = client.get(format!("{base}{path}")).bearer_auth(handle.shared.token()).send().await.unwrap();
         assert_eq!(r.status(), 200, "{path}");

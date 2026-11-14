@@ -65,16 +65,16 @@ pub fn router_with_stats(page_cap: usize) -> (Router, EnvelopeGets) {
     let router = Router::new()
         .route("/v1/health", get(|| async { "ok" }))
         .route(
-            "/v1/workspaces/:ws/envelopes",
+            "/v1/workspaces/{ws}/envelopes",
             post(push_envelope).get(list_envelopes),
         )
         .route(
-            "/v1/workspaces/:ws/keyring",
+            "/v1/workspaces/{ws}/keyring",
             post(push_keyring).get(list_keyring),
         )
-        .route("/v1/workspaces/:ws/presence", post(put_presence).get(list_presence))
+        .route("/v1/workspaces/{ws}/presence", post(put_presence).get(list_presence))
         .route("/v1/pair", post(create_pair))
-        .route("/v1/pair/:code", get(resolve_pair))
+        .route("/v1/pair/{code}", get(resolve_pair))
         .with_state(state);
     (router, gets)
 }

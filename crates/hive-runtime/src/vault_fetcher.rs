@@ -17,7 +17,7 @@ pub enum FetchError {
 
 /// GET a URL and return its body text (errors on non-2xx).
 pub async fn fetch_text(url: &str) -> Result<String, FetchError> {
-    let resp = reqwest::Client::new().get(url).send().await?;
+    let resp = hive_forge::new_http_client().get(url).send().await?;
     if !resp.status().is_success() {
         return Err(FetchError::Status {
             status: resp.status().as_u16(),

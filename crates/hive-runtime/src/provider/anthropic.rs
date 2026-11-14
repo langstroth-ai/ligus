@@ -211,7 +211,7 @@ pub struct AnthropicClient {
 impl Default for AnthropicClient {
     fn default() -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: hive_forge::new_http_client(),
             endpoint: DEFAULT_ENDPOINT.to_string(),
         }
     }

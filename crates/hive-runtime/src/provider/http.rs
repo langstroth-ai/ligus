@@ -14,7 +14,7 @@ pub const RETRY_DELAY: Duration = Duration::from_millis(500);
 
 /// A reqwest client with the shared connect timeout applied.
 pub fn client() -> reqwest::Client {
-    reqwest::Client::builder()
+    hive_forge::http_client_builder()
         .connect_timeout(HTTP_CONNECT_TIMEOUT)
         .build()
         .unwrap_or_default()

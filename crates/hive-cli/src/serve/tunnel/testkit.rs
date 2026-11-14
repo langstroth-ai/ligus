@@ -105,7 +105,7 @@ where
 {
     loop {
         match ws.next().await {
-            Some(Ok(Message::Binary(b))) => return Ok(b),
+            Some(Ok(Message::Binary(b))) => return Ok(b.to_vec()),
             Some(Ok(Message::Close(Some(f)))) => return Err(Closed(f.code.into(), f.reason.to_string()).into()),
             Some(Ok(Message::Close(None))) | None => return Err(Closed(1005, String::new()).into()),
             Some(Ok(_)) => {}
@@ -136,7 +136,7 @@ where
         let mut hs = noise::initiator(&keys.static_priv, &host.hs, &host.host_id, None, None)?;
         let mut buf = vec![0u8; noise::MAX_MSG];
         let n = hs.write_message(br#"{"v":1}"#, &mut buf)?;
-        ws.send(Message::Binary(buf[..n].to_vec())).await?;
+        ws.send(Message::Binary(buf[..n].to_vec().into())).await?;
         let msg2 = next_bin(&mut ws).await?;
         let mut out = vec![0u8; noise::MAX_MSG];
         hs.read_message(&msg2, &mut out).map_err(|e| anyhow!("msg2: {e}"))?;
@@ -149,7 +149,7 @@ where
         let mut buf = vec![0u8; noise::MAX_MSG];
         let payload = json!({ "v": 1, "name": name, "pk": b64u(keys.auth.verifying_key().as_bytes()) }).to_string();
         let n = hs.write_message(payload.as_bytes(), &mut buf)?;
-        ws.send(Message::Binary(buf[..n].to_vec())).await?;
+        ws.send(Message::Binary(buf[..n].to_vec().into())).await?;
         let msg2 = next_bin(&mut ws).await?;
         let mut out = vec![0u8; noise::MAX_MSG];
         let m = hs.read_message(&msg2, &mut out).map_err(|e| anyhow!("msg2: {e}"))?;
@@ -168,7 +168,7 @@ where
 
     pub async fn send(&mut self, f: Frame) -> Result<()> {
         let n = self.ts.write_message(&f.encode(), &mut self.buf)?;
-        self.ws.send(Message::Binary(self.buf[..n].to_vec())).await?;
+        self.ws.send(Message::Binary(self.buf[..n].to_vec().into())).await?;
         Ok(())
     }
 
@@ -255,7 +255,7 @@ async fn phone_dial(host: &HostInfo) -> Result<(ClientWs, [u8; 32])> {
 /// Enroll through the relay with the pairing secret from a link.
 pub async fn phone_enroll(host: &HostInfo, keys: &PhoneKeys, ps: &PairingSecret, name: &str) -> Result<(PhoneConn<ClientWs>, String, String)> {
     let (mut ws, _) = phone_dial(host).await?;
-    ws.send(Message::Text(json!({ "t": "enroll", "eid": ps.eid, "tag": b64u(ps.tag) }).to_string())).await?;
+    ws.send(Message::Text(json!({ "t": "enroll", "eid": ps.eid, "tag": b64u(ps.tag) }).to_string().into())).await?;
     await_ready(&mut ws).await?;
     PhoneConn::enroll_handshake(ws, keys, host, ps, name).await
 }
@@ -264,7 +264,7 @@ pub async fn phone_enroll(host: &HostInfo, keys: &PhoneKeys, ps: &PairingSecret,
 pub async fn phone_session(host: &HostInfo, keys: &PhoneKeys, credential: &str) -> Result<PhoneConn<ClientWs>> {
     let (mut ws, nonce) = phone_dial(host).await?;
     let sig = keys.auth.sign(&ctx("phone-auth", &[host.host_id.as_bytes(), &nonce]));
-    ws.send(Message::Text(json!({ "t": "auth", "cred": credential, "sig": b64u(sig.to_bytes()) }).to_string())).await?;
+    ws.send(Message::Text(json!({ "t": "auth", "cred": credential, "sig": b64u(sig.to_bytes()) }).to_string().into())).await?;
     await_ready(&mut ws).await?;
     PhoneConn::handshake(ws, keys, host).await
 }
@@ -358,7 +358,7 @@ impl FakeRelay {
 }
 
 async fn close_with(ws: &mut WebSocketStream<TcpStream>, code: u16, name: &str) {
-    let _ = ws.send(Message::Text(json!({ "t": "error", "code": name, "message": name }).to_string())).await;
+    let _ = ws.send(Message::Text(json!({ "t": "error", "code": name, "message": name }).to_string().into())).await;
     let _ = ws.send(Message::Close(Some(CloseFrame { code: CloseCode::from(code), reason: name.to_string().into() }))).await;
 }
 
@@ -399,7 +399,7 @@ async fn conn(tcp: TcpStream, st: Arc<RelayState>, log_tx: broadcast::Sender<Val
 
 async fn control_conn(mut ws: WebSocketStream<TcpStream>, st: Arc<RelayState>, log_tx: broadcast::Sender<Value>) -> Result<()> {
     let nonce: [u8; 32] = random_bytes();
-    ws.send(Message::Text(json!({ "t": "challenge", "v": 1, "nonce": b64u(nonce) }).to_string())).await?;
+    ws.send(Message::Text(json!({ "t": "challenge", "v": 1, "nonce": b64u(nonce) }).to_string().into())).await?;
     let hello = next_text(&mut ws).await?;
     let host_pub: [u8; 32] = b64u_fixed(hello["hostPub"].as_str().unwrap_or_default())?;
     let host_id = hello["hostId"].as_str().unwrap_or_default().to_string();
@@ -409,7 +409,7 @@ async fn control_conn(mut ws: WebSocketStream<TcpStream>, st: Arc<RelayState>, l
         close_with(&mut ws, 4001, "unauthorized").await;
         return Ok(());
     }
-    ws.send(Message::Text(json!({ "t": "welcome", "status": "active", "maxSessions": 8, "push": false }).to_string())).await?;
+    ws.send(Message::Text(json!({ "t": "welcome", "status": "active", "maxSessions": 8, "push": false }).to_string().into())).await?;
     let (tx, mut rx) = mpsc::unbounded_channel();
     *st.host.lock().unwrap() = Some(HostConn { host_id, key, tx });
     loop {
@@ -432,12 +432,12 @@ async fn control_conn(mut ws: WebSocketStream<TcpStream>, st: Arc<RelayState>, l
                     _ => {}
                 }
                 if let Some(id) = m["id"].as_str() {
-                    ws.send(Message::Text(json!({ "t": "ack", "id": id, "ok": true }).to_string())).await?;
+                    ws.send(Message::Text(json!({ "t": "ack", "id": id, "ok": true }).to_string().into())).await?;
                 }
                 st.log.lock().unwrap().push(m.clone());
                 let _ = log_tx.send(m);
             }
-            Some(out) = rx.recv() => ws.send(Message::Text(out)).await?,
+            Some(out) = rx.recv() => ws.send(Message::Text(out.into())).await?,
         }
     }
     *st.host.lock().unwrap() = None;
@@ -446,7 +446,7 @@ async fn control_conn(mut ws: WebSocketStream<TcpStream>, st: Arc<RelayState>, l
 
 async fn phone_conn(mut ws: WebSocketStream<TcpStream>, st: Arc<RelayState>, host: String) -> Result<()> {
     let nonce: [u8; 32] = random_bytes();
-    ws.send(Message::Text(json!({ "t": "challenge", "v": 1, "nonce": b64u(nonce) }).to_string())).await?;
+    ws.send(Message::Text(json!({ "t": "challenge", "v": 1, "nonce": b64u(nonce) }).to_string().into())).await?;
     let m = next_text(&mut ws).await?;
     let (hid, key, tx) = match st.host.lock().unwrap().as_ref() {
         Some(h) => (h.host_id.clone(), h.key, h.tx.clone()),
@@ -514,7 +514,7 @@ async fn phone_conn(mut ws: WebSocketStream<TcpStream>, st: Arc<RelayState>, hos
             return Ok(());
         }
     };
-    ws.send(Message::Text(json!({ "t": "ready", "sid": sid }).to_string())).await?;
+    ws.send(Message::Text(json!({ "t": "ready", "sid": sid }).to_string().into())).await?;
     splice(ws, host_ws).await;
     Ok(())
 }

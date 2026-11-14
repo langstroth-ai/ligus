@@ -291,13 +291,13 @@ impl TokenCell {
 /// HTTP client for ligus-auth: bounded, and never follows redirects (a
 /// redirect must not carry a refresh token or device code elsewhere).
 pub fn http_client() -> reqwest::Client {
-    reqwest::Client::builder()
+    hive_forge::http_client_builder()
         .user_agent("ligus-app")
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+        .unwrap_or_else(|_| hive_forge::new_http_client())
 }
 
 /// The code and link the person uses to approve this device.
@@ -1079,7 +1079,7 @@ mod tests {
             .with_auth(Some("static".into()))
             .with_auth_cell(Some(cell.clone()));
         let req = |rc: &crate::RelayClient| {
-            rc.authed(reqwest::Client::new().get("http://127.0.0.1:9/x"))
+            rc.authed(hive_forge::new_http_client().get("http://127.0.0.1:9/x"))
                 .build()
                 .unwrap()
         };
@@ -1114,7 +1114,7 @@ mod tests {
         cell.set(Some("hrt1.session-token".into()));
         let auth = |base: &str, fallback: Option<&str>| {
             let rc = crate::RelayClient::new(base).with_auth(fallback.map(str::to_string)).with_auth_cell(Some(cell.clone()));
-            rc.authed(reqwest::Client::new().get(format!("{base}/v1/x")))
+            rc.authed(hive_forge::new_http_client().get(format!("{base}/v1/x")))
                 .build()
                 .unwrap()
                 .headers()

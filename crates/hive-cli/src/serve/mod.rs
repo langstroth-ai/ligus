@@ -971,7 +971,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         worker_kick: Notify::new(),
         stopping: AtomicBool::new(false),
         started_at: Timestamp::now(),
-        http: reqwest::Client::builder().connect_timeout(Duration::from_secs(3)).build()?,
+        http: hive_forge::http_client_builder().connect_timeout(Duration::from_secs(3)).build()?,
         dashboard_cache: dashboard::Cache::default(),
         rt: tokio::runtime::Handle::current(),
         revisions: Mutex::new(HashMap::new()),

@@ -163,7 +163,7 @@ async fn connect_once(host: &Arc<TunnelHost>, router: &Router, stop: &mut watch:
         if let Some(r) = &host.settings.reg_token {
             hello["reg"] = json!(r);
         }
-        ws.send(Message::Text(hello.to_string())).await.map_err(|e| End::Other(e.into()))?;
+        ws.send(Message::Text(hello.to_string().into())).await.map_err(|e| End::Other(e.into()))?;
         loop {
             let m = next_json(&mut ws).await?;
             match m["t"].as_str() {
@@ -219,7 +219,7 @@ async fn connect_once(host: &Arc<TunnelHost>, router: &Router, stop: &mut watch:
                 handle(host, router, &v, session_stop.clone(), t);
             }
             Some(out) = rx.recv() => {
-                if let Err(e) = ws.send(Message::Text(out)).await {
+                if let Err(e) = ws.send(Message::Text(out.into())).await {
                     break End::Other(anyhow!("control send: {e}"));
                 }
             }

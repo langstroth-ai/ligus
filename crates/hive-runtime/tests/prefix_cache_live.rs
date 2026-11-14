@@ -105,7 +105,7 @@ async fn forward(State(p): State<Proxy>, body: Bytes) -> axum::response::Respons
 
 async fn start_proxy(upstream: String) -> (String, Arc<Mutex<Vec<Exchange>>>) {
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let proxy = Proxy { upstream, http: reqwest::Client::new(), seen: seen.clone() };
+    let proxy = Proxy { upstream, http: hive_forge::new_http_client(), seen: seen.clone() };
     let app = Router::new().route("/v1/chat/completions", post(forward)).with_state(proxy);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

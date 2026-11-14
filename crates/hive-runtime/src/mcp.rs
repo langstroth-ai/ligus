@@ -353,7 +353,7 @@ pub fn parse_sse_jsonrpc(body: &str, id: Option<u64>) -> Option<Value> {
 }
 
 async fn list_tools_http(url: &str, auth: Option<&str>) -> Result<Vec<McpTool>, McpError> {
-    let http = reqwest::Client::new();
+    let http = hive_forge::new_http_client();
     let (_, session) =
         http_send(&http, url, auth, None, &jsonrpc_request(1, "initialize", initialize_params())).await?;
     let (value, _) =
@@ -370,7 +370,7 @@ async fn call_tool_http(
     tool: &str,
     arguments: &Value,
 ) -> Result<Value, McpError> {
-    let http = reqwest::Client::new();
+    let http = hive_forge::new_http_client();
     let (_, session) =
         http_send(&http, url, auth, None, &jsonrpc_request(1, "initialize", initialize_params())).await?;
     let (value, _) = http_send(

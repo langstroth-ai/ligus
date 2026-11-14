@@ -562,8 +562,8 @@ mod tests {
     async fn contact_record_and_drop_box_round_trip() {
         let s: S = Arc::default();
         let router = Router::new()
-            .route("/v1/contacts/:cid", put(put_rec).get(get_rec))
-            .route("/v1/contacts/:cid/drop", get(list_drops).post(post_drop))
+            .route("/v1/contacts/{cid}", put(put_rec).get(get_rec))
+            .route("/v1/contacts/{cid}/drop", get(list_drops).post(post_drop))
             .with_state(s);
         let base = spawn(router).await;
         let owner = RelayClient::new(&base);
@@ -592,8 +592,8 @@ mod tests {
         let mk = || {
             let s: S = Arc::default();
             let router = Router::new()
-                .route("/v1/contacts/:cid", put(put_rec).get(get_rec))
-                .route("/v1/contacts/:cid/drop", get(list_drops).post(post_drop))
+                .route("/v1/contacts/{cid}", put(put_rec).get(get_rec))
+                .route("/v1/contacts/{cid}/drop", get(list_drops).post(post_drop))
                 .with_state(s.clone());
             (s, router)
         };
@@ -610,7 +610,7 @@ mod tests {
         assert_ne!(ka, kb, "both relays got the same capability");
         // What relay A saw is useless on relay B.
         let stolen = RelayClient::new(&b);
-        let raw = reqwest::Client::new()
+        let raw = hive_forge::new_http_client()
             .get(format!("{b}/v1/contacts/{cid}/drop?after=0"))
             .header(CONTACT_KEY_HEADER, &ka)
             .send()
@@ -640,7 +640,7 @@ mod tests {
         let mut drops: Vec<serde_json::Value> = (0..7).map(|i| serde_json::json!({ "junk": i })).collect();
         drops.push(serde_json::json!({ "real": true }));
         s.lock().unwrap().drops.insert(cid.clone(), drops);
-        let base = spawn(Router::new().route("/v1/contacts/:cid/drop", get(paged)).with_state(s)).await;
+        let base = spawn(Router::new().route("/v1/contacts/{cid}/drop", get(paged)).with_state(s)).await;
         let items = RelayClient::new(&base).contact_drops_all(&cid, &new_write_key()).await.unwrap();
         assert_eq!(items.len(), 8);
         assert_eq!(items.last().unwrap().blob, serde_json::json!({ "real": true }));

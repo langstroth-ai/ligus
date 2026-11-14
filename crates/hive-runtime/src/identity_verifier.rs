@@ -302,7 +302,7 @@ where
 /// token needed (public endpoint). Parses each listed key to a raw ed25519
 /// pubkey; non-ed25519 keys are ignored (Hive account keys are ed25519).
 pub async fn fetch_ssh_signing_keys(login: String) -> FetchOutcome {
-    let client = match reqwest::Client::builder().user_agent(USER_AGENT).build() {
+    let client = match hive_forge::http_client_builder().user_agent(USER_AGENT).build() {
         Ok(c) => c,
         Err(e) => return FetchOutcome::Unreachable(e.to_string()),
     };

@@ -198,7 +198,7 @@ pub fn check_metadata(meta: &AsMetadata) -> Result<(), OAuthError> {
 /// HTTP client for the OAuth exchange: never follows redirects (a 307/308
 /// would resend the client secret to wherever it points) and never hangs.
 fn oauth_http() -> reqwest::Client {
-    reqwest::Client::builder()
+    hive_forge::http_client_builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(30))
         .build()

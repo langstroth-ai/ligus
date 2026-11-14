@@ -55,7 +55,7 @@ ed25519-dalek = "2"
 dunce = "1"
 # Used by check_for_app_update to fetch the public version manifest (in Rust, so
 # there's no webview CORS issue). Same features as hive-runtime; already built.
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
 
 # Windows-only: themed native title bar (DWM caption color) so the title bar
 # matches the app background. Version pinned to what Tauri 2.12 already pulls,

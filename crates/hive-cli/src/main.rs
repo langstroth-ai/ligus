@@ -1383,6 +1383,9 @@ fn wants_help(args: &[String]) -> bool {
 }
 
 fn main() {
+    // reqwest 0.13 / rustls (and the tunnel's WebSockets): one process-wide
+    // crypto provider (ring).
+    hive_forge::install_tls_provider();
     if let Err(e) = run() {
         eprintln!("error: {e:#}");
         std::process::exit(1);

@@ -79,7 +79,7 @@ where
 {
     loop {
         match rx.next().await {
-            Some(Ok(Message::Binary(b))) => return Ok(b),
+            Some(Ok(Message::Binary(b))) => return Ok(b.to_vec()),
             Some(Ok(Message::Close(c))) => bail!("closed before the handshake ({c:?})"),
             Some(Ok(_)) => continue,
             Some(Err(e)) => return Err(e.into()),
@@ -115,7 +115,7 @@ where
                     bail!("relay opened pid {pid} but the Noise static belongs to {}: relay or credential inconsistent", rec.pid);
                 }
                 let n = hs.write_message(br#"{"v":1}"#, &mut buf)?;
-                tx.send(Message::Binary(buf[..n].to_vec())).await?;
+                tx.send(Message::Binary(buf[..n].to_vec().into())).await?;
                 let ts = hs.into_transport_mode()?;
                 Ok((ts, rec.pid, None))
             }
@@ -158,7 +158,7 @@ where
                 );
                 let n = hs.write_message(payload.as_bytes(), &mut buf)?;
                 let push_key = hkdf(hs.get_handshake_hash(), "push-key", 32);
-                tx.send(Message::Binary(buf[..n].to_vec())).await?;
+                tx.send(Message::Binary(buf[..n].to_vec().into())).await?;
                 let ts = hs.into_transport_mode()?;
                 let rec = PhoneRecord {
                     pid: pid.clone(),
@@ -240,7 +240,7 @@ where
                         Ok(n) => n,
                         Err(_) => break,
                     };
-                    if tx.send(Message::Binary(buf[..n].to_vec())).await.is_err() {
+                    if tx.send(Message::Binary(buf[..n].to_vec().into())).await.is_err() {
                         return;
                     }
                     sent += 1;

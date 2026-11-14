@@ -45,6 +45,34 @@ pub fn real_hosts_denied() -> bool {
         .unwrap_or(false)
 }
 
+/// Install rustls's ring provider as the process default, once.
+///
+/// reqwest 0.13 is built with `rustls-no-provider` (iroh already pulls it that
+/// way, and the default `rustls` feature would add aws-lc-rs next to ring), so
+/// it panics on `Client::build` unless a process-level provider is installed.
+/// Every Ligus HTTP client goes through [`client_builder`] / [`new_client`],
+/// which call this first. A provider installed earlier by someone else wins.
+pub fn install_tls_provider() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
+/// `reqwest::Client::builder()` with the TLS provider installed. Use this
+/// (not `reqwest::Client::builder()`) everywhere in Ligus.
+pub fn client_builder() -> reqwest::ClientBuilder {
+    install_tls_provider();
+    reqwest::Client::builder()
+}
+
+/// `reqwest::Client::new()` with the TLS provider installed. Use this (not
+/// `reqwest::Client::new()`) everywhere in Ligus.
+pub fn new_client() -> reqwest::Client {
+    install_tls_provider();
+    reqwest::Client::new()
+}
+
 /// Refuse a request to a non-loopback host from a test build.
 pub(crate) fn guard_url(raw: &str) -> Result<()> {
     if !real_hosts_denied() {
@@ -64,7 +92,7 @@ pub(crate) fn guard_url(raw: &str) -> Result<()> {
 }
 
 pub(crate) fn client() -> reqwest::Client {
-    reqwest::Client::builder()
+    client_builder()
         .user_agent(concat!("ligus/", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(30))
         .connect_timeout(Duration::from_secs(10))

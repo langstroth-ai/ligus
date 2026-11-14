@@ -211,10 +211,10 @@ impl Default for Retriever {
 
 impl Retriever {
     pub fn new() -> Self {
-        let http = reqwest::Client::builder()
+        let http = hive_forge::http_client_builder()
             .timeout(HTTP_TIMEOUT)
             .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+            .unwrap_or_else(|_| hive_forge::new_http_client());
         Self { http, cache: Mutex::new(HashMap::new()) }
     }
 

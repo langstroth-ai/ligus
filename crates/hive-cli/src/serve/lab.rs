@@ -375,7 +375,7 @@ mod tests {
 
     #[tokio::test]
     async fn unreachable_prometheus_yields_empty_status() {
-        let client = reqwest::Client::new();
+        let client = hive_forge::new_http_client();
         let out = status(&client, "http://127.0.0.1:9").await;
         assert_eq!(out["workers"], json!([]));
         assert_eq!(out["temps"], json!([]));

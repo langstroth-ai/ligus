@@ -625,10 +625,10 @@ async fn session_replayed_msg1_executes_nothing() {
     let mut buf = vec![0u8; 65535];
     let n = hs.write_message(br#"{"v":1}"#, &mut buf).unwrap();
     use futures_util::{SinkExt, StreamExt};
-    ws.send(tokio_tungstenite::tungstenite::Message::Binary(buf[..n].to_vec())).await.unwrap();
+    ws.send(tokio_tungstenite::tungstenite::Message::Binary(buf[..n].to_vec().into())).await.unwrap();
     assert!(matches!(ws.next().await, Some(Ok(tokio_tungstenite::tungstenite::Message::Binary(_)))));
     // A tampered transport message ends the session (P2).
-    ws.send(tokio_tungstenite::tungstenite::Message::Binary(vec![0u8; 40])).await.unwrap();
+    ws.send(tokio_tungstenite::tungstenite::Message::Binary(vec![0u8; 40].into())).await.unwrap();
     let res = tokio::time::timeout(Duration::from_secs(5), task).await.unwrap().unwrap();
     assert!(res.unwrap_err().to_string().contains("decrypt"));
 }
@@ -698,7 +698,7 @@ async fn enrollment_binds_window_and_activates_on_first_transport_message() {
         let payload = json!({ "v": 1, "name": "n", "pk": b64u(newbie.auth.verifying_key().as_bytes()) }).to_string();
         let n = hs.write_message(payload.as_bytes(), &mut buf).unwrap();
         use futures_util::{SinkExt, StreamExt};
-        ws.send(tokio_tungstenite::tungstenite::Message::Binary(buf[..n].to_vec())).await.unwrap();
+        ws.send(tokio_tungstenite::tungstenite::Message::Binary(buf[..n].to_vec().into())).await.unwrap();
         assert!(matches!(ws.next().await, Some(Ok(tokio_tungstenite::tungstenite::Message::Binary(_)))));
         drop(ws);
         let _ = task.await;

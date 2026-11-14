@@ -212,12 +212,12 @@ impl RelayClient {
         // the next request opens a fresh connection and sync self-heals without a
         // restart. connect_timeout bounds a wedged connect (SSE streams stay
         // untimed — no per-request timeout, which would sever a long-lived stream).
-        let http = reqwest::Client::builder()
+        let http = hive_forge::http_client_builder()
             .connect_timeout(std::time::Duration::from_secs(10))
             .tcp_keepalive(std::time::Duration::from_secs(30))
             .pool_idle_timeout(std::time::Duration::from_secs(30))
             .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+            .unwrap_or_else(|_| hive_forge::new_http_client());
         Self {
             http,
             base: base.into().trim_end_matches('/').to_string(),

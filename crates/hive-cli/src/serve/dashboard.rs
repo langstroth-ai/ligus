@@ -1844,7 +1844,7 @@ pub fn cmd_check(config: &crate::Config, file: Option<String>) -> Result<()> {
     for p in &problems {
         println!("  invalid: {p}");
     }
-    let http = reqwest::Client::builder().connect_timeout(Duration::from_secs(3)).build()?;
+    let http = hive_forge::http_client_builder().connect_timeout(Duration::from_secs(3)).build()?;
     let base = prometheus_url.unwrap_or_else(|| "http://127.0.0.1:9090".into());
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     let hive_src = store_hive(config);
@@ -2009,7 +2009,7 @@ mod tests {
     }
 
     async fn eval(p: &PanelConfig, prom: &str) -> Value {
-        let http = reqwest::Client::new();
+        let http = hive_forge::new_http_client();
         eval_panel("p", p, &DashboardConfig::default(), &Sources::new(&http, prom)).await
     }
 
@@ -2280,7 +2280,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let http = reqwest::Client::new();
+        let http = hive_forge::new_http_client();
         let src = Sources::new(&http, &prom);
         let cache = Cache::default();
         let v = evaluate(&cfg, &src, Some(&cache)).await;
@@ -2306,7 +2306,7 @@ mod tests {
         std::fs::write(&path, "title = [").unwrap();
         let Loaded::Invalid(e) = load(&path, true) else { panic!("invalid TOML") };
         assert!(e.contains(FILE_NAME));
-        let http = reqwest::Client::new();
+        let http = hive_forge::new_http_client();
         let src = Sources::new(&http, "http://127.0.0.1:9");
         let v = render(&Loaded::Invalid(e), &src, None).await;
         assert_eq!(v["sections"], json!([]));
@@ -2332,7 +2332,7 @@ mod tests {
 
         // Against an empty Prometheus every section drops out: an empty dashboard.
         let (prom, _) = fake_prometheus().await;
-        let http = reqwest::Client::new();
+        let http = hive_forge::new_http_client();
         let v = render(&Loaded::Default(cfg), &Sources::new(&http, &prom), None).await;
         assert_eq!(v["source"], "default");
         assert_eq!(v["title"], "Lab");
@@ -2387,7 +2387,7 @@ mod tests {
     #[tokio::test]
     async fn builtin_section_shows_first_by_default_and_can_be_moved_or_dropped() {
         let (prom, _) = fake_prometheus().await;
-        let http = reqwest::Client::new();
+        let http = hive_forge::new_http_client();
         let hive = fake_hive();
         let src = Sources { hive: Some(&hive), ..Sources::new(&http, &prom) };
         let mine = "title = \"Home\"\n[[section]]\ntitle = \"Power\"\n[[section.panel]]\ntitle = \"Power\"\nquery = \"power\"\n";
@@ -2427,7 +2427,7 @@ mod tests {
 
     #[tokio::test]
     async fn hive_panels_in_a_config() {
-        let http = reqwest::Client::new();
+        let http = hive_forge::new_http_client();
         let hive = fake_hive();
         let src = Sources { hive: Some(&hive), ..Sources::new(&http, "http://127.0.0.1:9") };
         let cfg = parse(
@@ -2551,7 +2551,7 @@ mod tests {
     async fn mcp_panels_map_text_json_and_tables() {
         let (url, calls) = fake_mcp().await;
         let reg = registry(&url);
-        let http = reqwest::Client::new();
+        let http = hive_forge::new_http_client();
         let src = Sources { mcp: Ok(&reg), ..Sources::new(&http, "http://127.0.0.1:9") };
         let cfg = parse(&format!(
             r##"builtin = false
@@ -2646,7 +2646,7 @@ mod tests {
     async fn mcp_failures_are_panel_errors_and_respect_refresh() {
         let (url, calls) = fake_mcp().await;
         let reg = registry(&url);
-        let http = reqwest::Client::new();
+        let http = hive_forge::new_http_client();
         let src = Sources { mcp: Ok(&reg), ..Sources::new(&http, "http://127.0.0.1:9") };
         let one = |tool: &str, server: &str, extra: &str| {
             parse(&format!("builtin = false\n{MCP_ALLOW}[[section]]\ntitle = \"S\"\n[[section.panel]]\ntitle = \"x\"\nserver = \"{server}\"\ntool = \"{tool}\"\n{extra}")).unwrap()

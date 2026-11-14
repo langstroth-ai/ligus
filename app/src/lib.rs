@@ -10800,7 +10800,7 @@ async fn check_for_app_update() -> Option<UpdateInfo> {
     if current == "dev" {
         return None;
     }
-    let client = reqwest::Client::builder()
+    let client = hive_forge::http_client_builder()
         .timeout(std::time::Duration::from_secs(8))
         .build()
         .ok()?;
@@ -13966,6 +13966,8 @@ fn init_logging(app: &tauri::App) {
 
 /// Build and run the Tauri application.
 pub fn run() {
+    // reqwest 0.13 / rustls: one process-wide crypto provider (ring).
+    hive_forge::install_tls_provider();
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         // Auto-updater (scaffold): registered but inert until tauri.conf.json's
@@ -15094,7 +15096,7 @@ mod update_version_tests {
 
     #[tokio::test]
     async fn manifest_falls_back_to_the_old_url_and_prefers_the_new_one() {
-        let client = reqwest::Client::new();
+        let client = hive_forge::new_http_client();
         let base = serve(vec![
             ("/old.json", 200, r#"{"tag":"v1.19.0","url":"old"}"#),
             ("/new.json", 200, r#"{"tag":"v2.0.0","url":"new"}"#),
