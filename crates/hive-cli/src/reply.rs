@@ -34,25 +34,20 @@ const MAX_TOKENS: u32 = 1024;
 const MAX_TOOL_ITERS: usize = 6;
 
 /// Env var that raises (or lowers) the minimum author role required before a
-/// headless reply is allowed to execute MCP tools. See [`parse_min_role`].
-pub const MIN_ROLE_ENV: &str = "LIGUS_MCP_MIN_ROLE";
+/// headless turn may use tools. See [`hive_runtime::author_gate`].
+pub const MIN_ROLE_ENV: &str = hive_runtime::author_gate::MIN_ROLE_ENV;
 
-/// Parse `LIGUS_MCP_MIN_ROLE` (viewer|contributor|admin|owner, case-insensitive)
-/// into the minimum author role that unlocks the MCP tool loop. Unknown or
-/// absent → `Contributor` (the safe default: a Viewer can never drive tools).
-pub fn parse_min_role(v: Option<&str>) -> WorkspaceRole {
-    match v.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
-        Some("viewer") => WorkspaceRole::Viewer,
-        Some("contributor") => WorkspaceRole::Contributor,
-        Some("admin") => WorkspaceRole::Admin,
-        Some("owner") => WorkspaceRole::Owner,
-        _ => WorkspaceRole::Contributor,
-    }
+/// The floor from `LIGUS_MCP_MIN_ROLE`'s value (viewer|contributor|admin|
+/// owner, any case), or the default for the turn's tier when unset or
+/// unknown: **Admin** for a write-capable turn, Contributor for a read-only
+/// one (S3).
+pub fn parse_min_role(v: Option<&str>, write_capable: bool) -> WorkspaceRole {
+    hive_runtime::author_gate::min_role_from(v, write_capable)
 }
 
-/// The configured minimum author role, read from `LIGUS_MCP_MIN_ROLE`.
-pub fn mcp_min_role() -> WorkspaceRole {
-    parse_min_role(hive_core::compat::var(MIN_ROLE_ENV).ok().as_deref())
+/// The configured minimum author role for a turn of this tier.
+pub fn mcp_min_role(write_capable: bool) -> WorkspaceRole {
+    hive_runtime::author_gate::min_role(write_capable)
 }
 
 /// Whether the triggering message's author is privileged enough to have MCP
@@ -446,22 +441,31 @@ mod tests {
 
     #[test]
     fn viewer_denied_at_default() {
-        let min = parse_min_role(None);
+        let min = parse_min_role(None, false);
         assert_eq!(min, Contributor);
         assert!(!mcp_allowed_for(Some(Viewer), min));
     }
 
     #[test]
-    fn contributor_allowed_at_default() {
-        assert!(mcp_allowed_for(Some(Contributor), parse_min_role(None)));
-        // and everyone above the floor
-        assert!(mcp_allowed_for(Some(Admin), parse_min_role(None)));
-        assert!(mcp_allowed_for(Some(Owner), parse_min_role(None)));
+    fn contributor_allowed_at_the_read_only_default() {
+        assert!(mcp_allowed_for(Some(Contributor), parse_min_role(None, false)));
+        assert!(mcp_allowed_for(Some(Admin), parse_min_role(None, false)));
+        assert!(mcp_allowed_for(Some(Owner), parse_min_role(None, false)));
+    }
+
+    /// S3: a write-capable worker defaults to an Admin floor.
+    #[test]
+    fn worker_default_floor_is_admin_on_write_tiers() {
+        let min = parse_min_role(None, true);
+        assert_eq!(min, Admin);
+        assert!(!mcp_allowed_for(Some(Contributor), min));
+        assert!(mcp_allowed_for(Some(Admin), min));
+        assert_eq!(parse_min_role(Some("superuser"), true), Admin);
     }
 
     #[test]
     fn raised_min_role_denies_contributor() {
-        let min = parse_min_role(Some("admin"));
+        let min = parse_min_role(Some("admin"), false);
         assert_eq!(min, Admin);
         assert!(!mcp_allowed_for(Some(Contributor), min));
         assert!(mcp_allowed_for(Some(Admin), min));
@@ -469,22 +473,21 @@ mod tests {
 
     #[test]
     fn env_parse_is_case_insensitive_and_trims() {
-        assert_eq!(parse_min_role(Some("  Owner ")), Owner);
-        assert_eq!(parse_min_role(Some("VIEWER")), Viewer);
-        assert_eq!(parse_min_role(Some("Contributor")), Contributor);
+        assert_eq!(parse_min_role(Some("  Owner "), false), Owner);
+        assert_eq!(parse_min_role(Some("VIEWER"), true), Viewer);
+        assert_eq!(parse_min_role(Some("Contributor"), true), Contributor);
     }
 
     #[test]
-    fn unknown_or_absent_env_defaults_to_contributor() {
-        assert_eq!(parse_min_role(None), Contributor);
-        assert_eq!(parse_min_role(Some("")), Contributor);
-        assert_eq!(parse_min_role(Some("superuser")), Contributor);
+    fn unknown_or_absent_env_defaults_to_the_tier_default() {
+        assert_eq!(parse_min_role(None, false), Contributor);
+        assert_eq!(parse_min_role(Some(""), false), Contributor);
+        assert_eq!(parse_min_role(Some(""), true), Admin);
     }
 
     #[test]
     fn unresolved_author_is_denied() {
-        // No actor_identity → None → fail closed at any threshold.
-        assert!(!mcp_allowed_for(None, parse_min_role(None)));
-        assert!(!mcp_allowed_for(None, parse_min_role(Some("viewer"))));
+        assert!(!mcp_allowed_for(None, parse_min_role(None, false)));
+        assert!(!mcp_allowed_for(None, parse_min_role(Some("viewer"), false)));
     }
 }

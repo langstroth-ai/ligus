@@ -7824,10 +7824,31 @@ async fn run_prepared_turn_inner(
         return Err(reason.clone());
     }
 
+    // H1: the author-role gate, as on every host. The floor is Admin for a
+    // turn that can write and Contributor for a read-only one
+    // (LIGUS_MCP_MIN_ROLE overrides); this device's own user always clears it.
+    // Below it an HTTP model gets no tools, a CLI runs read-only, and a CLI
+    // with no read-only tier is refused.
+    let gate_plan = {
+        let trigger = reply_to.and_then(|id| session.messages.iter().find(|m| m.id == id));
+        let me = state.service.lock().unwrap().author().id.clone();
+        let author_role = trigger.and_then(|m| m.actor_identity.as_ref()).map(|a| {
+            if a.id == me { hive_core::WorkspaceRole::Owner } else { session.role_of(&a.id) }
+        });
+        let mut args = responder.runtime.args.clone();
+        hive_runtime::author_gate::gate_turn(responder.runtime.provider, &mut args, author_role)
+    };
+    if let hive_runtime::author_gate::GatePlan::Refuse(reason) = &gate_plan {
+        let mut svc = state.service.lock().unwrap();
+        let _ = svc.post_system_note(session_id, workspace_id, format!("A {:?} turn was not run: {reason}", responder.runtime.provider));
+        return Err(reason.clone());
+    }
+    let tools_allowed = gate_plan.allows_tools();
+
     // If MCP tools are enabled and the responder runs on Anthropic, take the
     // (non-streaming) agentic tool loop instead of plain streaming. On any MCP
     // failure we fall through to streaming.
-    if responder.runtime.provider == ModelProviderKind::Anthropic {
+    if tools_allowed && responder.runtime.provider == ModelProviderKind::Anthropic {
         if let Some(outcome) =
             try_tool_loop(app, state, session_id, workspace_id, responder, &system, &turns, reply_to, &envelope.egress)
                 .await?
@@ -7844,7 +7865,7 @@ async fn run_prepared_turn_inner(
     // loop existed. Native Ollama is further gated on its capability probe in
     // the dispatcher; an OpenAI-wire server that rejects tools falls back to
     // plain chat there.
-    let mcp_tools = if responder.runtime.runs_agent_tools() {
+    let mcp_tools = if tools_allowed && responder.runtime.runs_agent_tools() {
         mcp_tool_set(state, &envelope.egress).await
     } else {
         None
@@ -7857,7 +7878,7 @@ async fn run_prepared_turn_inner(
         // `run_command` is a shell: off whenever the envelope closes egress.
         (s.builtin_tools, s.builtin_write_in_place, s.builtin_run_command && enforcement.allow_run_command)
     };
-    let builtin_wanted = wants_builtin_tools(&responder.runtime, builtin_on);
+    let builtin_wanted = tools_allowed && wants_builtin_tools(&responder.runtime, builtin_on);
 
     // Git commit attribution: credit the human who drove this turn as the
     // commit author (+ other thread participants as co-authors), so commits a
@@ -7900,14 +7921,12 @@ async fn run_prepared_turn_inner(
     // worktree is removed. Read-only claude turns, API/MCP turns, and non-git
     // roots run in place (no worktree). Isolating from HEAD means an isolated
     // turn starts from the last commit, not the main tree's uncommitted WIP.
-    let write_capable = match responder.runtime.provider {
-        // Read-only at the default tier; any raised tier may write.
-        p if p.follows_permission_mode() => {
-            state.settings.lock().unwrap().claude_permission_mode != "default"
-        }
-        ModelProviderKind::Pi | ModelProviderKind::Aider | ModelProviderKind::Codex | ModelProviderKind::Hermes => true,
-        _ => false,
-    };
+    let write_capable = gate_plan.allows_writes()
+        && match responder.runtime.provider {
+            // Read-only at the default tier; any raised tier may write.
+            p if p.follows_permission_mode() => state.settings.lock().unwrap().claude_permission_mode != "default",
+            p => hive_runtime::author_gate::always_writes(p),
+        };
     // Worktrees are cut from the workspace's own checkout, not from
     // `workspace_root`, which follows the *active* chat's base worktree.
     let repo_root = turn_repo_root(&state.workspace_repo_root(), &workspace_root);
@@ -8102,6 +8121,8 @@ async fn run_prepared_turn_inner(
     // network off) appended for subprocess agents.
     let enforced_runtime = {
         let mut rt = responder.runtime.clone();
+        // Below the floor: the CLI's read-only tier (Refuse returned above).
+        let _ = hive_runtime::author_gate::apply(&gate_plan, rt.provider, &mut rt.args);
         rt.args.extend(enforcement.extra_args.iter().cloned());
         rt
     };

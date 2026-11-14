@@ -7,6 +7,7 @@
 
 pub mod agent_tools;
 pub mod attachment_blob;
+pub mod author_gate;
 pub mod builtin_tools;
 pub mod chat_service;
 pub mod cli_detect;

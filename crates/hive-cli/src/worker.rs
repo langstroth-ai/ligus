@@ -110,30 +110,6 @@ fn worker_args(provider: ModelProviderKind, mode: &str) -> Vec<String> {
     }
 }
 
-/// The role gate for subprocess agents. Their tools (shell, edits) are part
-/// of the CLI, so withholding Ligus's tool loop does nothing for them: when
-/// the author is below the floor, a CLI that can be held read-only runs at
-/// its read-only tier, and one that can't (codex, aider, pi, hermes) is
-/// refused. `Err` carries the reason for the chat note.
-fn gate_subprocess_tools(rt: &mut ResolvedRuntime, allow_tools: bool) -> std::result::Result<(), String> {
-    if allow_tools {
-        return Ok(());
-    }
-    match rt.provider {
-        ModelProviderKind::ClaudeCode => rt.args = Vec::new(),
-        ModelProviderKind::Antigravity | ModelProviderKind::Copilot => rt.args = worker_args(rt.provider, "default"),
-        ModelProviderKind::Codex | ModelProviderKind::Aider | ModelProviderKind::Pi | ModelProviderKind::Hermes => {
-            return Err(format!(
-                "{:?} always runs with its own file and shell tools, and the message's author is below this host's tool floor ({})",
-                rt.provider,
-                reply::MIN_ROLE_ENV
-            ));
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
 /// Whether a keyless runtime is usable: native Ollama, or an OpenAI-wire
 /// server on this machine / the LAN / the tailnet (a llama.cpp gateway).
 /// Subscription CLI agents (claude / codex / agy / copilot) are keyless too:
@@ -323,6 +299,9 @@ pub const INTERRUPTED_NOTE: &str = "[interrupted: the host restarted before this
 /// [`INTERRUPTED_NOTE`], so the asker sees it failed and can ask again.
 /// Returns `(chat, message)` for each reply finished this way.
 pub fn recover_interrupted_turns(svc: &mut ChatService) -> Result<Vec<(Uuid, Uuid)>> {
+    // Startup of `ligus worker` and `ligus serve` both pass here: warn once
+    // when LIGUS_MCP_MIN_ROLE sits below this box's default floor (S3).
+    hive_runtime::author_gate::warn_if_lowered(worker_permission_mode() != "default");
     let me = svc.device_id();
     let mut out = Vec::new();
     for id in svc.store().list_session_ids()? {
@@ -408,17 +387,21 @@ async fn run_turn(
         // every turn: the phone can switch a chat's repo between turns.
         crate::repos::turn_context(&ctx.cfg.data_dir, s.id)
     );
-    // H1 gate: resolve the triggering message's author + role and only offer
-    // tools (MCP and the built-in file tools) when they clear
-    // LIGUS_MCP_MIN_ROLE (default Contributor). Unresolved author → fail closed.
+    // H1 gate: resolve the triggering message's author + role. At or above
+    // this host's floor (Admin for a write-capable tier, Contributor for a
+    // read-only one; LIGUS_MCP_MIN_ROLE overrides) the turn runs at its
+    // configured tier; below it a CLI runs read-only or is refused and an
+    // HTTP model gets no tools. Unresolved author → fail closed.
     let author_role = s
         .messages
         .iter()
         .find(|m| m.id == pm.message_id)
         .and_then(|m| m.actor_identity.as_ref())
         .map(|a| s.role_of(&a.id));
-    let min_role = reply::mcp_min_role();
-    let allow_tools = reply::mcp_allowed_for(author_role, min_role);
+    let mut rt = rt;
+    let min_role = reply::mcp_min_role(hive_runtime::author_gate::turn_writes(rt.provider, &rt.args));
+    let gate_plan = hive_runtime::author_gate::gate_turn(rt.provider, &mut rt.args, author_role);
+    let allow_tools = gate_plan.allows_tools();
     if !allow_tools {
         eprintln!(
             "withholding tools for message {} — author role {:?} below minimum {:?}",
@@ -453,8 +436,7 @@ async fn run_turn(
         // (and the note re-posted) every tick.
         return Err(anyhow!("refused by the workspace sandbox"));
     }
-    let mut rt = rt;
-    if let Err(reason) = gate_subprocess_tools(&mut rt, allow_tools) {
+    if let hive_runtime::author_gate::GatePlan::Refuse(reason) = gate_plan {
         let _ = lock(svc).post_system_note(s.id, s.workspace_id, format!("@{} did not run: {reason}", agent.name));
         sink.changed();
         return Err(anyhow!("refused by the tool role gate"));
@@ -633,6 +615,13 @@ mod tests {
         });
         rt.args = args.iter().map(|a| a.to_string()).collect();
         rt
+    }
+
+    fn gate_subprocess_tools(rt: &mut ResolvedRuntime, allow: bool) -> std::result::Result<(), String> {
+        use hive_core::WorkspaceRole;
+        let role = if allow { WorkspaceRole::Owner } else { WorkspaceRole::Viewer };
+        let plan = hive_runtime::author_gate::gate(rt.provider, Some(role), WorkspaceRole::Admin);
+        hive_runtime::author_gate::apply(&plan, rt.provider, &mut rt.args)
     }
 
     /// A member below the tool floor must not get a write- or shell-capable

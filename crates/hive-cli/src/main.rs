@@ -780,6 +780,7 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
             }
         }
     }
+    hive_runtime::author_gate::warn_if_lowered(hive_runtime::author_gate::turn_writes(rt.provider, &rt.args));
     println!("agent @{name} online ({rt_label}); replying to @primary / un-mentioned turns. Ctrl-C to stop.");
     let host_label = env_opt("HOSTNAME").unwrap_or_else(|| "this worker".into());
     let system = format!(
@@ -822,22 +823,26 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
                 let mut turns = turns_for(&worker::through_trigger(&s, last.id), None, &name);
                 materialize_turns(cfg, &mut turns).await;
                 print!("↳ @{name} replying in {} … ", s.id);
-                // H1 gate: only execute MCP tools when the triggering author holds
-                // ≥ LIGUS_MCP_MIN_ROLE (default Contributor). Unresolved author →
-                // fail closed. Under-privileged requesters still get a tool-free
-                // reply, but cannot drive tools on this worker's key.
+                // H1 gate, the same as the worker's: at or above this host's
+                // floor (Admin when the runtime can write, Contributor when
+                // read-only; LIGUS_MCP_MIN_ROLE overrides) the turn runs as
+                // configured. Below it an HTTP model gets no tools, a CLI runs
+                // at its read-only tier, and one with none is refused.
+                // Unresolved author → fail closed.
                 let author_role = last.actor_identity.as_ref().map(|a| s.role_of(&a.id));
-                let min_role = reply::mcp_min_role();
-                let allow_mcp = reply::mcp_allowed_for(author_role, min_role);
+                let mut turn_rt = rt.clone();
+                let plan = hive_runtime::author_gate::gate_turn(turn_rt.provider, &mut turn_rt.args, author_role);
+                let allow_mcp = plan.allows_tools();
+                if let hive_runtime::author_gate::GatePlan::Refuse(reason) = &plan {
+                    println!("refused: {reason}");
+                    continue;
+                }
                 if !allow_mcp {
-                    eprintln!(
-                        "withholding MCP tools for message {} — author role {:?} below minimum {:?}",
-                        last.id, author_role, min_role
-                    );
+                    eprintln!("gating message {} — author role {author_role:?} below this host's floor", last.id);
                 }
                 // MCP tools when LIGUS_MCP_CONFIG provisions them and the gate allows,
                 // else a plain stream.
-                let reply = reply::generate_reply(&rt, &system, &turns, allow_mcp, None).await?;
+                let reply = reply::generate_reply(&turn_rt, &system, &turns, allow_mcp, None).await?;
                 let mid = svc.begin_assistant_message(s.id, s.workspace_id, name.clone(), rt_label.clone(), None, Some(last.id))?;
                 svc.complete_assistant_message(s.id, s.workspace_id, mid, reply)?;
                 seen.insert(mid);
