@@ -15,6 +15,7 @@
 //! (deny file-read* file-write* (subpath "<data dir>") (subpath "~/.ssh") (literal "<serve.token>") …)
 //! (allow file-read* (subpath "<worktree>") <readable dirs inside a denied one>)
 //! (deny mach-lookup (global-name-prefix "com.apple.coreservices."))   ; no LaunchServices launches
+//! (deny appleevent-send) (deny mach-lookup … "com.apple.pasteboard…")  ; no Apple Events, no pasteboard
 //! (deny network*)
 //! (allow network-outbound (remote ip "localhost:<proxy port>"))
 //! (allow network-outbound (remote unix-socket (path-literal "<ligus mcp socket>")))
@@ -101,6 +102,11 @@ pub fn profile(plan: &EnforcementPlan, proxy_port: Option<u16>) -> String {
     // write an app bundle into its worktree and `open` it to read the data
     // dir; `sandbox_denies_launchservices_escape`).
     p.push_str("(deny mach-lookup (global-name-prefix \"com.apple.coreservices.\"))\n");
+    // C-13: no Apple Events to other apps (AppleScript driving Terminal or
+    // Finder runs outside this profile), and no pasteboard (it can hold a
+    // password or token the user just copied).
+    p.push_str("(deny appleevent-send)\n");
+    p.push_str("(deny mach-lookup (global-name \"com.apple.coreservices.appleevents\") (global-name-prefix \"com.apple.pasteboard\"))\n");
     match (&plan.egress, proxy_port) {
         (EgressPlan::Open, _) => {}
         (EgressPlan::Proxy { .. }, Some(port)) => {

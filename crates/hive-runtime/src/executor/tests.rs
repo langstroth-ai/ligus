@@ -100,6 +100,7 @@ fn prop_enforcement_plan_host_independent() {
                 model_provider_id: None,
                 envelope_args: &[],
                 ligus_mcp_socket: None,
+                cli_home: None,
             })
         };
         let desktop = plan_for(HostKind::Desktop);
@@ -159,6 +160,7 @@ fn prop_every_envelope_field_consumed() {
             model_provider_id: None,
             envelope_args: &[],
             ligus_mcp_socket: None,
+                cli_home: None,
         })
     };
     let base = SandboxEnvelope::workspace_default();
@@ -211,6 +213,7 @@ fn provider_key_only_when_configured_in_ligus() {
             model_provider_id: mp,
             envelope_args: &[],
             ligus_mcp_socket: None,
+                cli_home: None,
         })
     };
     let p = env_for(Some("sk-configured"), ModelProviderKind::Aider, Some("anthropic"));
@@ -562,4 +565,79 @@ fn confined_child_runs_in_its_own_session() {
     let mine = unsafe { libc::getsid(0) };
     let child_sid: i32 = out.split_whitespace().next().and_then(|s| s.parse().ok()).expect("sid");
     assert_ne!(child_sid, mine, "the agent shares the parent's session (and its controlling terminal)");
+}
+
+/// C-13: a confined child can't drive other apps with Apple Events, or read
+/// the pasteboard; ordinary commands still run.
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_denies_apple_events_and_pasteboard() {
+    let Some(e) = real_executor() else { return };
+    let f = Fixture::new();
+    // `count windows` needs a real event to Finder (an application's `name`
+    // is answered locally by AppleScript).
+    let (ok, out) = run_sh(&*e, &f, "/usr/bin/osascript -e 'tell application id \"com.apple.finder\" to count windows' 2>&1", isolated());
+    assert!(!ok || out.trim().parse::<i64>().is_err(), "Apple Events reached Finder: {out}");
+    let (ok, out) = run_sh(&*e, &f, "/usr/bin/pbpaste >/dev/null 2>&1 && echo READ", isolated());
+    assert!(!ok || !out.contains("READ"), "the pasteboard was readable: {out}");
+    let (ok, out) = run_sh(&*e, &f, "echo still-fine", isolated());
+    assert!(ok && out.contains("still-fine"), "{out}");
+    let prof = seatbelt::profile(&EnvelopeEnforcer::plan(&PlanInputs {
+        host: HostKind::Desktop,
+        envelope: &SandboxEnvelope::workspace_default(),
+        purpose: Purpose::Agent(ModelProviderKind::ClaudeCode),
+        gate: &GatePlan::Full,
+        worktree: Path::new("/repo"),
+        worktree_is_isolated: true,
+        write_capable: true,
+        tmp: Path::new("/tmp/t"),
+        home: Path::new("/home/u"),
+        host_paths: &HostPaths::default(),
+        mcp_hosts: &[],
+        mcp_ids: &[],
+        model_base_url: None,
+        extra_env: &[],
+        provider_key: None,
+        model_provider_id: None,
+        envelope_args: &[],
+        ligus_mcp_socket: None,
+        cli_home: None,
+    }), None);
+    assert!(prof.contains("(deny appleevent-send)") && prof.contains("com.apple.pasteboard"));
+}
+
+/// `ligus_server_present_under_closed_egress`: the Ligus MCP server holds
+/// its slot (first) under every egress policy, `Closed` included, and its
+/// socket is the profile's one allowed unix-socket connection.
+#[test]
+fn ligus_server_present_under_closed_egress() {
+    use hive_core::sandbox::{EgressPolicy, TightenedBy};
+    let sock = Path::new("/tmp/ligus-mcp-x/s");
+    for egress in [EgressPolicy::Closed, EgressPolicy::AllowList { mcp_servers: vec![] }, EgressPolicy::Open] {
+        let env = SandboxEnvelope::workspace_default().tighten(TightenedBy::Lockdown, egress.clone(), false);
+        let plan = EnvelopeEnforcer::plan(&PlanInputs {
+            host: HostKind::Worker,
+            envelope: &env,
+            purpose: Purpose::Agent(ModelProviderKind::Copilot),
+            gate: &GatePlan::ReadOnly,
+            worktree: Path::new("/repo"),
+            worktree_is_isolated: false,
+            write_capable: false,
+            tmp: Path::new("/tmp/t"),
+            home: Path::new("/home/u"),
+            host_paths: &HostPaths::default(),
+            mcp_hosts: &[],
+            mcp_ids: &["docs".to_string()],
+            model_base_url: None,
+            extra_env: &[],
+            provider_key: None,
+            model_provider_id: None,
+            envelope_args: &[],
+            ligus_mcp_socket: Some(sock),
+            cli_home: None,
+        });
+        assert_eq!(plan.mcp.first().map(String::as_str), Some(LIGUS_MCP_ID), "{egress:?}");
+        assert_eq!(plan.ligus_mcp_socket.as_deref(), Some(sock));
+        assert!(seatbelt::profile(&plan, Some(1)).contains("unix-socket (path-literal"), "{egress:?}");
+    }
 }

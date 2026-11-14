@@ -40,6 +40,7 @@ const FOLD_ENV_DENYLIST: &[(&str, &str, &str)] = &[
     ("name", "LIGUS_SANDBOX_READ_ALLOW", "extra sandbox read paths for a turn"),
     ("\"LIGUS_ACP_INIT_TIMEOUT_SECS\"", "LIGUS_ACP_INIT_TIMEOUT_SECS", "how long an ACP agent may take to answer initialize"),
     ("\"LIGUS_ACP_ASK_TIMEOUT_SECS\"", "LIGUS_ACP_ASK_TIMEOUT_SECS", "how long an ACP permission escalation waits for a person"),
+    ("\"LIGUS_CLI_HOME\"", "LIGUS_CLI_HOME", "whether CLI agents get a per-turn home (C-9)"),
     ("\"LIGUS_MCP_BRIDGE\"", "LIGUS_MCP_BRIDGE", "which binary bridges an agent to the Ligus MCP socket"),
     ("k", "LIGUS_MCP_MAX_TOOL_CALLS", "per-turn Ligus tool budget (device-local host policy)"),
     ("k", "LIGUS_MCP_MAX_PROPOSALS", "per-turn Ligus tool budget (device-local host policy)"),

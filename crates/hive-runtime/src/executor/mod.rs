@@ -31,6 +31,7 @@ use hive_core::ModelProviderKind;
 use crate::author_gate::GatePlan;
 use crate::egress::{EgressProxy, HostPort};
 
+pub mod cli_home;
 #[cfg(target_os = "linux")]
 pub mod linux;
 pub mod seatbelt;
@@ -264,6 +265,9 @@ pub struct PlanInputs<'a> {
     pub envelope_args: &'a [String],
     /// The turn's Ligus MCP socket, if the turn offers the Ligus server.
     pub ligus_mcp_socket: Option<&'a Path>,
+    /// A CLI agent's per-turn home (C-9): its real state dirs are then not
+    /// writable, and `HOME` points here.
+    pub cli_home: Option<&'a Path>,
 }
 
 /// Model endpoints each subscription CLI must reach (its API, its sign-in
@@ -385,7 +389,11 @@ impl EnvelopeEnforcer {
         }
         let mut write_extra = vec![i.tmp.to_path_buf()];
         if let Purpose::Agent(k) = i.purpose {
-            write_extra.extend(runtime_state_dirs(k, i.home));
+            // With a per-turn home (inside `tmp`) the CLI's real config is
+            // read-only to it: nothing it writes there outlives the turn.
+            if i.cli_home.is_none() {
+                write_extra.extend(runtime_state_dirs(k, i.home));
+            }
         }
         write_extra.extend(host_paths.extra_write.iter().cloned());
 
@@ -443,12 +451,19 @@ impl EnvelopeEnforcer {
             }),
             _ => None,
         };
-        let env = hive_core::process_util::child_env(&hive_core::process_util::ChildEnvSpec {
+        let mut env = hive_core::process_util::child_env(&hive_core::process_util::ChildEnvSpec {
             tmpdir: Some(i.tmp.to_path_buf()),
             proxy: Vec::new(),
             extra: i.extra_env.to_vec(),
             provider_key,
         });
+        if let (Purpose::Agent(k), Some(home)) = (i.purpose, i.cli_home) {
+            for (key, val) in cli_home::env(k, home) {
+                env.retain(|(x, _)| *x != key);
+                env.push((key, val));
+            }
+            env.sort();
+        }
         let mut mcp = match egress {
             EgressPolicy::Closed => Vec::new(),
             _ => i.mcp_ids.to_vec(),
@@ -713,6 +728,8 @@ impl<'a> SpawnSpec<'a> {
 /// Keeps a confined child's turn resources alive: the egress proxy, the
 /// scratch dir, the generated profile. Hold it until the child exits.
 pub struct TurnGuard {
+    /// A CLI agent's per-turn home: (kind, real home, turn home).
+    cli_home: Option<(ModelProviderKind, PathBuf, PathBuf)>,
     proxy: Option<EgressProxy>,
     denials: Option<Arc<std::sync::Mutex<Vec<HostPort>>>>,
     tmp: Option<PathBuf>,
@@ -747,6 +764,9 @@ impl Drop for TurnGuard {
         #[cfg(target_os = "linux")]
         if self.kind == ExecutorKind::Bwrap && self.plan.worktree_writable {
             linux::remove_placeholders(&self.plan);
+        }
+        if let Some((k, real, home)) = self.cli_home.take() {
+            cli_home::copy_back(k, &real, &home);
         }
         if let Some(t) = self.tmp.take() {
             let _ = std::fs::remove_dir_all(t);
@@ -853,6 +873,15 @@ pub fn prepare_with(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>) -> io::Res
         }
         _ => tmp.clone(),
     };
+    // C-9: a CLI agent runs with a throwaway home (its real config read-only).
+    let cli_home_dir = match spec.purpose {
+        Purpose::Agent(k) if k.is_cli_agent() && cli_home::enabled() => {
+            let h = tmp.join("home");
+            cli_home::populate(k, &home, &h).map_err(cleanup_tmp)?;
+            Some((k, h))
+        }
+        _ => None,
+    };
     let envelope_args: Vec<String> = Vec::new();
     let arg_strings: Vec<String> = spec.args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
     let write_capable = match spec.purpose {
@@ -881,6 +910,7 @@ pub fn prepare_with(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>) -> io::Res
         model_provider_id,
         envelope_args: &envelope_args,
         ligus_mcp_socket: policy.ligus_mcp_socket.as_deref(),
+        cli_home: cli_home_dir.as_ref().map(|(_, h)| h.as_path()),
     };
     let plan = EnvelopeEnforcer::plan(&inputs);
     let kind = executor.kind();
@@ -901,7 +931,8 @@ pub fn prepare_with(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>) -> io::Res
         _ => None,
     };
     let command = executor.confine(spec.program, &spec.args, &cwd, &plan, proxy.as_ref()).map_err(cleanup_tmp)?;
-    Ok(Prepared { command, guard: TurnGuard { proxy, denials: Some(policy.denials.clone()), tmp: Some(tmp), kind, plan } })
+    let cli_home = cli_home_dir.map(|(k, h)| (k, home.clone(), h));
+    Ok(Prepared { command, guard: TurnGuard { cli_home, proxy, denials: Some(policy.denials.clone()), tmp: Some(tmp), kind, plan } })
 }
 
 /// A tokio command for `spec`, confined; the caller sets stdio. Hold the
