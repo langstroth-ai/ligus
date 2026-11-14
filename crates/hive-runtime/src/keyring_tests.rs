@@ -1091,3 +1091,103 @@ fn impersonation_by_display_name_is_a_different_co_member() {
     let ada_fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&ada.account.public_key_bytes());
     assert_eq!(crate::dm::check_founder(Some(&ada.account_id.to_string()), Some(&ada_fk), &known), crate::dm::FounderTrust::KnownMatch);
 }
+
+/// A co-member forges a DM "from Bob": the invite names Bob as founder with
+/// Bob's (public) key fingerprint, but Mallory chose the room and key and
+/// founded the config log herself. Alice pins Bob as the invite says. Until a
+/// seed signed by a device certified under Bob's pinned key is on the log,
+/// Alice must not write there: anything she sends is readable by whoever
+/// made the room, not by Bob.
+#[tokio::test]
+async fn forged_dm_founder_never_gets_writes() {
+    let relay = spawn_relay().await;
+    let room = "dm-forged-founder";
+    let wid = hive_core::room_workspace_id(room);
+    let dir = tempfile::tempdir().unwrap();
+    let (mal_db, alice_db, bob_db) = (dir.path().join("mal.db"), dir.path().join("alice.db"), dir.path().join("bob.db"));
+
+    // Bob exists (Alice knows his account id and key fingerprint) but never
+    // touches this room.
+    let (bob, _, _) = service(&bob_db, "bob");
+
+    // Mallory founds the room and admits whoever redeems her invite.
+    let (mut mal, mal_ka, mal_dev) = service(&mal_db, "mallory");
+    mal.ensure_workspace_config(wid).unwrap();
+    let chat = mal.create_chat("DM", wid, "anthropic").unwrap().id;
+    mal.publish_key_agreement(wid, mal_ka.public_key_bytes()).unwrap();
+    let invite = mal.issue_invite(wid).unwrap();
+    let mut mal_sync = engine(&relay, room, mal_dev, &mal_ka, &[]);
+    round(&mut mal_sync, &mal_db).await;
+
+    // Alice joins from the forged invite: pinned to Bob, as the invite says.
+    let (mut alice, alice_ka, alice_dev) = service(&alice_db, "alice");
+    alice.store().set_join_invite(wid, invite).unwrap();
+    pin_like_an_invite(&alice, &bob, wid);
+    alice.set_trusted_founder(Some(bob.author().account_id.unwrap().to_string()));
+    let mut alice_sync = engine(&relay, room, alice_dev, &alice_ka, &[]);
+    round(&mut alice_sync, &alice_db).await;
+    let _ = alice.ensure_self_member(workspace_config_session_id(wid), wid);
+    round(&mut alice_sync, &alice_db).await;
+    round(&mut mal_sync, &mal_db).await;
+    let _ = alice.ensure_self_member(chat, wid);
+
+    assert!(!alice.founder_verified(wid).unwrap(), "no seed from Bob's pinned key is on the log");
+    assert_eq!(alice.store().config_founded_at(wid).unwrap(), None, "a forged DM has no founding time for D12");
+    let sent = alice.post_user_message(chat, wid, "for Bob only");
+    assert!(sent.is_err(), "Alice wrote into a room whose pinned founder never founded it");
+    round(&mut alice_sync, &alice_db).await;
+    round(&mut mal_sync, &mal_db).await;
+    assert!(!bodies(&mal_db, chat).contains(&"for Bob only".to_string()), "Mallory read Alice's DM to Bob");
+    // Nor does the forged log vouch for anyone: names, keys and drop boxes
+    // come only from logs whose pinned founder really founded them (else
+    // Mallory registers a key under any co-member's account there).
+    let me = alice.author().account_id.unwrap();
+    let listed = crate::directory_trust::co_members(alice.store(), me);
+    assert!(listed.iter().all(|c| !c.workspaces.contains(&wid)), "a forged log fed the co-member directory: {listed:?}");
+}
+
+/// The control: the real founder's seed verifies under the pinned key, and the
+/// joiner writes as usual.
+#[tokio::test]
+async fn genuine_founder_verifies_and_joiner_writes() {
+    let relay = spawn_relay().await;
+    let room = "dm-genuine-founder";
+    let wid = hive_core::room_workspace_id(room);
+    let dir = tempfile::tempdir().unwrap();
+    let (bob_db, alice_db) = (dir.path().join("bob.db"), dir.path().join("alice.db"));
+    let (mut bob, bob_ka, bob_dev) = service(&bob_db, "bob");
+    bob.ensure_workspace_config(wid).unwrap();
+    let chat = bob.create_chat("DM", wid, "anthropic").unwrap().id;
+    bob.publish_key_agreement(wid, bob_ka.public_key_bytes()).unwrap();
+    let invite = bob.issue_invite(wid).unwrap();
+    let mut bob_sync = engine(&relay, room, bob_dev, &bob_ka, &[]);
+    round(&mut bob_sync, &bob_db).await;
+    assert!(bob.founder_verified(wid).unwrap(), "the founder's own device");
+
+    let (mut alice, alice_ka, alice_dev) = service(&alice_db, "alice");
+    alice.store().set_join_invite(wid, invite).unwrap();
+    pin_like_an_invite(&alice, &bob, wid);
+    alice.set_trusted_founder(Some(bob.author().account_id.unwrap().to_string()));
+    let mut alice_sync = engine(&relay, room, alice_dev, &alice_ka, &[]);
+    assert!(!alice.founder_verified(wid).unwrap(), "nothing synced yet");
+    round(&mut alice_sync, &alice_db).await;
+    assert!(alice.founder_verified(wid).unwrap());
+    // D12's founding time is the founder's signed seed, which no later event
+    // moves: a config event dated before it (a skewed clock, or a party
+    // backdating to flip which DM is kept) changes nothing.
+    let founded = alice.store().config_founded_at(wid).unwrap().expect("founded");
+    let mut early = SessionEventEnvelope::new(
+        workspace_config_session_id(wid),
+        wid,
+        999,
+        SessionEvent::DeviceKeyAgreementPublished { device_id: alice_dev, ka_public: alice_ka.public_key_bytes().to_vec() },
+    );
+    early.timestamp = Timestamp(time::OffsetDateTime::from_unix_timestamp(946_684_800).unwrap());
+    alice.store().append_envelope(&early).unwrap();
+    assert_eq!(alice.store().config_founded_at(wid).unwrap(), Some(founded));
+    alice.ensure_self_member(chat, wid).unwrap();
+    alice.post_user_message(chat, wid, "hi Bob").unwrap();
+    round(&mut alice_sync, &alice_db).await;
+    round(&mut bob_sync, &bob_db).await;
+    assert!(bodies(&bob_db, chat).contains(&"hi Bob".to_string()));
+}

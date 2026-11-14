@@ -3410,3 +3410,42 @@ async fn clone_specs_pick_the_connection_by_host() {
     let (c, _) = status_of(&h, reqwest::Method::GET, "/v1/repos?forge=gitea:codeberg.org", None).await;
     assert_eq!(c, 404);
 }
+
+/// S12: the user code of a pending device sign-in is as good as the sign-in
+/// itself (whoever approves it first decides whose token the box stores).
+/// Starting one is refused on a plain-HTTP network bind; reading it back
+/// there must not hand the code over either.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn device_user_code_never_over_plain_http() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let mut h = harness_with(&endpoint, "m", &[("README.md", "x\n")], |o| o.listen = "0.0.0.0:0".parse().unwrap()).await;
+    h.base = format!("http://127.0.0.1:{}", h.handle.addr.port());
+    let id = hive_forge::ForgeId::parse("gitlab:gitlab.com").unwrap();
+    h.handle.shared.repos.device.lock().unwrap().insert(
+        id,
+        super::repos_api::DeviceSession {
+            user_code: "WDJB-MJHT".into(),
+            verification_uri: "https://gitlab.com/oauth/device".into(),
+            expires_at: std::time::Instant::now() + Duration::from_secs(300),
+            state: "pending",
+            error: None,
+        },
+    );
+    let (c, v) = status_of(&h, reqwest::Method::GET, "/v1/forges/gitlab:gitlab.com/auth/device", None).await;
+    assert!(!v.to_string().contains("WDJB-MJHT"), "the user code went out over plain HTTP: {c} {v}");
+    let (c, _) = status_of(&h, reqwest::Method::POST, "/v1/forges/gitlab:gitlab.com/auth/device", None).await;
+    assert_eq!(c, 403, "starting one is refused there too");
+}
+
+/// The gh login is the default only for github.com itself: a look-alike host
+/// that merely contains "://github.com" must not get it (gh answers for
+/// other hosts from GH_ENTERPRISE_TOKEN, which would then go to that host).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn gh_default_only_for_exact_github_com() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    for base in ["https://github.com.evil.example", "https://github.com.evil.example/x"] {
+        let (c, v) = status_of(&h, reqwest::Method::POST, "/v1/forges", Some(json!({"kind": "github", "baseUrl": base}))).await;
+        assert!(c != 200 || v["forge"]["authSource"] != "gh", "{base}: {v}");
+    }
+}

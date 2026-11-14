@@ -133,7 +133,7 @@ pub async fn add(State(s): S, peer: Option<Extension<TunnelPeer>>, Json(req): Js
     let (kind, flavor) = forge_cmd::parse_kind(&req.kind).map_err(|e| ApiError::bad_request(e.to_string()))?;
     let auth = match req.auth.as_deref().map(str::trim) {
         None | Some("") => {
-            if kind == hive_forge::ForgeKind::GitHub && req.base_url.contains("://github.com") {
+            if kind == hive_forge::ForgeKind::GitHub && hive_forge::conn::validate_base_url(&req.base_url).ok().and_then(|b| hive_forge::spec::host_of(&b)).as_deref() == Some("github.com") {
                 AuthSource::Gh
             } else {
                 AuthSource::None
@@ -314,8 +314,11 @@ pub async fn device_start(State(s): S, peer: Option<Extension<TunnelPeer>>, Path
     Ok(Json(json!({ "userCode": start.user_code, "verificationUri": start.verification_uri, "expiresIn": start.expires_in, "state": "pending" })))
 }
 
-/// `GET /v1/forges/:id/auth/device`
-pub async fn device_status(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+/// `GET /v1/forges/:id/auth/device`. The user code redeems the sign-in for
+/// whoever approves it first, so it is only read back over a channel a token
+/// may travel on (as starting one is).
+pub async fn device_status(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    require_secure(&s, peer.as_deref())?;
     let id = parse_id(&id)?;
     let d = s.repos.device.lock().unwrap_or_else(|e| e.into_inner()).get(&id).cloned().ok_or_else(|| ApiError::not_found("device sign-in"))?;
     let mut v = json!({ "state": d.state, "userCode": d.user_code, "verificationUri": d.verification_uri, "expiresIn": d.expires_at.saturating_duration_since(Instant::now()).as_secs() });

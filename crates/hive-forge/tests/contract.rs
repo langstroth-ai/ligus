@@ -416,10 +416,33 @@ fn push_remote_is_the_fork_never_upstream() {
 
 // ── Device sign-in ─────────────────────────────────────────────────────────
 
+/// The verification address the desktop opens and the phone shows must be on
+/// the code host itself, over https (plain http only to a real loopback
+/// host): `http://localhost.evil.example` and `http://127.0.0.1.nip.io` are
+/// not loopback, and a page elsewhere is a phishing page.
+#[tokio::test]
+async fn verification_uri_must_be_on_the_forge_host() {
+    for (uri, ok) in [
+        ("http://localhost.evil.example/device", false),
+        ("http://127.0.0.1.nip.io/device", false),
+        ("https://evil.example/device", false),
+        ("javascript:alert(1)", false),
+        ("http://127.0.0.1/oauth/device", true),
+    ] {
+        let f = Fake::default();
+        f.on(Method::POST, "/oauth/authorize_device", 200, json!({"device_code": "DEV", "user_code": "ABCD-1234", "verification_uri": uri}));
+        let base = serve(f.clone()).await;
+        let mut c = Connection::new(ForgeKind::GitLab, &base, AuthSource::Oauth).unwrap();
+        c.client_id = Some("app-123".into());
+        let ep = hive_forge::device::endpoints(&c).unwrap();
+        assert_eq!(hive_forge::device::start(&ep).await.is_ok(), ok, "{uri}");
+    }
+}
+
 #[tokio::test]
 async fn device_flow_starts_polls_and_refreshes_without_a_client_secret() {
     let f = Fake::default();
-    f.on(Method::POST, "/oauth/authorize_device", 200, json!({"device_code": "DEV", "user_code": "ABCD-1234", "verification_uri": "https://gitlab.example.com/oauth/device", "expires_in": 300, "interval": 5}))
+    f.on(Method::POST, "/oauth/authorize_device", 200, json!({"device_code": "DEV", "user_code": "ABCD-1234", "verification_uri": "http://127.0.0.1/oauth/device", "expires_in": 300, "interval": 5}))
         .on(Method::POST, "/oauth/token", 400, json!({"error": "authorization_pending"}));
     let base = serve(f.clone()).await;
     let mut c = Connection::new(ForgeKind::GitLab, &base, AuthSource::Oauth).unwrap();
@@ -477,4 +500,33 @@ async fn a_token_the_forge_echoes_back_is_redacted() {
     let e = g.whoami().await.unwrap_err();
     assert!(!e.to_string().contains("cb-ECHOED"), "{e}");
     assert!(e.to_string().contains("***"));
+}
+
+/// A hostile or broken code host that streams an endless answer to a device
+/// sign-in or refresh: the read stops at the cap, it doesn't buffer it all.
+#[tokio::test]
+async fn device_answers_are_read_with_a_cap() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = l.accept().await {
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                let _ = s.read(&mut buf).await;
+                let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n").await;
+                let chunk = format!("{:x}\r\n{}\r\n", 16 * 1024, " ".repeat(16 * 1024));
+                while s.write_all(chunk.as_bytes()).await.is_ok() {}
+            });
+        }
+    });
+    let ep = hive_forge::device::DeviceEndpoints {
+        device_url: format!("http://{addr}/login/device/code"),
+        token_url: format!("http://{addr}/login/oauth/access_token"),
+        client_id: "x".into(),
+        scope: None,
+    };
+    let r = tokio::time::timeout(std::time::Duration::from_secs(5), hive_forge::device::start(&ep)).await;
+    let err = r.expect("the read stops at the cap instead of draining an endless body").unwrap_err();
+    assert!(err.to_string().contains("too large"), "{err}");
 }

@@ -425,6 +425,40 @@ impl ChatService {
             .filter(|f| !f.is_empty());
     }
 
+    /// Whether a workspace this device pinned to a founder (from its invite)
+    /// was really founded by them: its config log holds the founder's seed,
+    /// signed by a device certified under the pinned key
+    /// ([`crate::envelope_verifier::founder_seed`]). `true` for a workspace
+    /// with no pin (created here, or the device-local one).
+    pub fn founder_verified(&self, workspace_id: Uuid) -> Result<bool> {
+        let Some(pin) = self.store.workspace_pin(workspace_id)? else { return Ok(true) };
+        let envs = self.store.list(workspace_config_session_id(workspace_id))?;
+        Ok(crate::envelope_verifier::founder_seed(&envs, &pin).is_some())
+    }
+
+    /// Refuse a write into a workspace pinned to a founder whose seed isn't on
+    /// its config log (yet). An invite's founder and `fk` are claims anyone
+    /// who knows them can copy; until the founder's signed seed arrives, the
+    /// room may belong to whoever made the invite, and anything written there
+    /// is readable by them. The founder's own device is exempt (it writes the
+    /// seed).
+    fn require_verified_founder(&self, workspace_id: Uuid) -> Result<()> {
+        if self.local_workspace_id == Some(workspace_id) {
+            return Ok(());
+        }
+        let Some(pin) = self.store.workspace_pin(workspace_id)? else { return Ok(()) };
+        if self.author.account_id == Some(pin.founder_account) {
+            return Ok(());
+        }
+        if self.founder_verified(workspace_id)? {
+            return Ok(());
+        }
+        Err(ChatError::Unauthorized(
+            "waiting for the workspace's founder: their signed founding hasn't reached this device, so nothing is sent yet"
+                .into(),
+        ))
+    }
+
     /// The currently-pinned trusted founder, if any.
     pub fn trusted_founder(&self) -> Option<&str> {
         self.trusted_founder.as_deref()
@@ -551,6 +585,7 @@ impl ChatService {
         if let Some(reason) = &self.write_block {
             return Err(ChatError::Unauthorized(reason.clone()));
         }
+        self.require_verified_founder(workspace_id)?;
         if let Some(agent) = self.acting_agent.take() {
             let r = self.append_agent_effect(session_id, workspace_id, agent, payload);
             self.acting_agent = Some(agent);

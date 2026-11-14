@@ -129,6 +129,7 @@ pub enum Poll {
 }
 
 async fn post_form(url: &str, form: &[(&str, &str)]) -> Result<(reqwest::StatusCode, Value)> {
+    crate::http::guard_url(url)?;
     let resp = crate::http::client()
         .post(url)
         .header("Accept", "application/json")
@@ -137,11 +138,15 @@ async fn post_form(url: &str, form: &[(&str, &str)]) -> Result<(reqwest::StatusC
         .await
         .map_err(|e| ForgeError::Transport(format!("couldn't reach the code host: {}", e.without_url())))?;
     let status = resp.status();
-    let text = resp.text().await.map_err(|e| ForgeError::Transport(e.without_url().to_string()))?;
-    if text.len() > 64 * 1024 {
-        return Err(ForgeError::Transport("the code host's answer was too large".into()));
+    let mut resp = resp;
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(|e| ForgeError::Transport(e.without_url().to_string()))? {
+        if buf.len() + chunk.len() > 64 * 1024 {
+            return Err(ForgeError::Transport("the code host's answer was too large".into()));
+        }
+        buf.extend_from_slice(&chunk);
     }
-    Ok((status, serde_json::from_str(&text).unwrap_or(Value::Null)))
+    Ok((status, serde_json::from_slice(&buf).unwrap_or(Value::Null)))
 }
 
 fn token_set(v: &Value) -> Option<TokenSet> {
@@ -152,6 +157,24 @@ fn token_set(v: &Value) -> Option<TokenSet> {
         expires_in: v["expires_in"].as_u64(),
         scope: v["scope"].as_str().map(str::to_string),
     })
+}
+
+/// A verification address is https on the code host's own host (that of the
+/// device endpoint), or plain http only when that host is a real loopback
+/// host. Parsed, never matched by prefix.
+fn verification_uri_ok(uri: &str, device_url: &str) -> bool {
+    let (Ok(u), Ok(d)) = (url::Url::parse(uri), url::Url::parse(device_url)) else { return false };
+    let (Some(host), Some(forge_host)) = (u.host_str(), d.host_str()) else { return false };
+    if !u.username().is_empty() || u.password().is_some() || !crate::spec::same_host(host, forge_host) {
+        return false;
+    }
+    let loopback = match u.host() {
+        Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    };
+    u.scheme() == "https" || (u.scheme() == "http" && loopback)
 }
 
 /// Start a device flow (only ever on the person's own request).
@@ -167,8 +190,8 @@ pub async fn start(ep: &DeviceEndpoints) -> Result<DeviceStart> {
         return Err(ForgeError::Rejected(format!("the code host refused to start a device sign-in: {why}")));
     };
     let uri = v["verification_uri"].as_str().or(v["verification_url"].as_str()).unwrap_or("").to_string();
-    if !uri.starts_with("https://") && !uri.starts_with("http://127.0.0.1") && !uri.starts_with("http://localhost") {
-        return Err(ForgeError::Rejected("the code host gave a verification address that isn't https".into()));
+    if !verification_uri_ok(&uri, &ep.device_url) {
+        return Err(ForgeError::Rejected("the code host gave a verification address that isn't https on the code host itself".into()));
     }
     Ok(DeviceStart {
         device_code: Secret::new(code),

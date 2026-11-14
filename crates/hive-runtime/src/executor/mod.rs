@@ -350,6 +350,14 @@ pub fn home_secret_dirs(home: &Path, purpose: Purpose) -> Vec<PathBuf> {
         purpose,
         Purpose::Agent(ModelProviderKind::ClaudeCode | ModelProviderKind::Codex | ModelProviderKind::Copilot | ModelProviderKind::Antigravity)
     );
+    // Forge CLI logins: gh keeps a write-capable token in hosts.yml on a box
+    // with no secret service, glab, tea and hub likewise. The forge tools
+    // reach the code host for agents; the Copilot CLI may sign in through
+    // the gh login, so it keeps that one.
+    if !matches!(purpose, Purpose::Agent(ModelProviderKind::Copilot)) {
+        v.push(home.join(".config/gh"));
+    }
+    v.extend([".config/glab-cli", ".config/tea", ".config/hub"].iter().map(|r| home.join(r)));
     #[cfg(target_os = "macos")]
     if !keychain_login {
         v.push(home.join("Library/Keychains"));

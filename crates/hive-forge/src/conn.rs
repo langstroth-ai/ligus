@@ -51,6 +51,12 @@ pub struct Connection {
 /// `http://` only to a loopback host. No credentials, query or fragment.
 pub fn validate_base_url(raw: &str) -> Result<String> {
     let raw = raw.trim().trim_end_matches('/');
+    // Only plain printable ASCII: a backslash (a path separator to the URL
+    // parser), percent-escapes in the authority, spaces or control bytes would
+    // let the host shown differ from the host requests reach.
+    if !raw.bytes().all(|b| b.is_ascii_graphic()) || raw.contains('\\') {
+        return Err(ForgeError::Invalid(format!("'{raw}' has characters a code host URL can't have")));
+    }
     let u = url::Url::parse(raw).map_err(|_| ForgeError::Invalid(format!("'{raw}' isn't a URL")))?;
     let host = u.host_str().ok_or_else(|| ForgeError::Invalid("the URL has no host".into()))?.to_ascii_lowercase();
     let loopback = host == "localhost" || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback());
@@ -65,6 +71,13 @@ pub fn validate_base_url(raw: &str) -> Result<String> {
     }
     if raw.split('/').any(|s| s == ".." || s == ".") {
         return Err(ForgeError::Invalid("bad path in the code host URL".into()));
+    }
+    let parsed_host = match u.port() {
+        Some(p) => format!("{host}:{p}"),
+        None => host.clone(),
+    };
+    if spec::host_of(raw).as_deref() != Some(parsed_host.as_str()) {
+        return Err(ForgeError::Invalid(format!("'{raw}' doesn't name one clear host")));
     }
     Ok(raw.to_string())
 }
@@ -179,7 +192,17 @@ impl Connections {
     /// nothing was ever saved.
     pub fn load(data_dir: &Path) -> Self {
         match std::fs::read_to_string(Self::path(data_dir)) {
-            Ok(t) => toml::from_str(&t).unwrap_or_default(),
+            Ok(t) => {
+                let mut cs: Self = toml::from_str(&t).unwrap_or_default();
+                // A hand-edited entry whose URLs don't validate, or whose id
+                // names another host than its URL, is dropped: a token is only
+                // ever sent to the host the connection is shown as.
+                cs.forges.retain(|c| {
+                    validate_base_url(&c.base_url).is_ok_and(|b| spec::host_of(&b).is_some_and(|h| c.id == ForgeId::new(c.kind, &h)))
+                        && c.api_url.as_deref().is_none_or(|a| validate_base_url(a).is_ok())
+                });
+                cs
+            }
             Err(_) => Self { forges: vec![Connection::github_gh()] },
         }
     }
@@ -270,5 +293,30 @@ mod tests {
         assert!(!text.to_lowercase().contains("token =") && text.contains("codeberg.org"), "{text}");
         assert_eq!(Connections::load(d.path()), cs, "a saved empty-of-GitHub list stays that way");
         assert!(cs.for_host("www.codeberg.org").is_some());
+    }
+
+    /// The host Ligus shows and keys a connection by must be the host its
+    /// requests reach. A backslash is a path separator to the URL parser
+    /// (WHATWG), so `https://evil.example\\@gitlab.com` parses to host
+    /// `evil.example` while a naive split reads `gitlab.com`.
+    #[test]
+    fn base_url_host_is_the_host_requests_reach() {
+        for raw in ["https://evil.example\\@gitlab.com", "https://evil.example\\@codeberg.org/", "https://evil.example%5C@gitlab.com"] {
+            match Connection::new(ForgeKind::GitLab, raw, AuthSource::Token) {
+                Err(_) => {}
+                Ok(c) => {
+                    let reached = url::Url::parse(&c.api_base()).unwrap().host_str().unwrap().to_string();
+                    assert_eq!(c.host(), reached, "{raw}: shown as {} but requests go to {reached}", c.display());
+                }
+            }
+        }
+        // Loaded from a hand-edited forges.toml, too.
+        let toml = "[[forge]]\nid = \"gitlab:gitlab.com\"\nkind = \"gitlab\"\nbaseUrl = \"https://evil.example\\\\@gitlab.com\"\nauth = \"token\"\n";
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(Connections::path(d.path()), toml).unwrap();
+        for c in Connections::load(d.path()).forges {
+            let reached = url::Url::parse(&c.api_base()).unwrap().host_str().unwrap().to_string();
+            assert_eq!(c.host(), reached);
+        }
     }
 }

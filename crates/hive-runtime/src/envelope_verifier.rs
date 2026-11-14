@@ -349,6 +349,38 @@ impl FounderPin {
     }
 }
 
+/// The creation seed a pinned fold takes as its base (the earliest seed
+/// naming the pinned founder as creator and author), when it is authentic:
+/// signed by a device certified for the founder's account under a key whose
+/// fingerprint is the pinned `fk`, and the account's key binding is not
+/// disputed. `None` while no such seed is on the log: the founder named by an
+/// invite has not (yet) founded it. A stamp claiming the founder's id is not
+/// enough; a co-member who forged an invite "from" someone else can't sign as
+/// that person's device.
+pub fn founder_seed<'a>(envelopes: &'a [SessionEventEnvelope], pin: &FounderPin) -> Option<&'a SessionEventEnvelope> {
+    let roster = build_roster_pinned(envelopes, Some(pin));
+    let account = pin.founder_account;
+    let key = roster.account_signing_key(account)?;
+    if FounderPin::fingerprint(key) != pin.fk || roster.is_disputed(account) {
+        return None;
+    }
+    let founder = account.to_string();
+    let mut ordered: Vec<&SessionEventEnvelope> = envelopes.iter().collect();
+    ordered.sort_by_key(|e| e.canonical_key());
+    let base = ordered.into_iter().find(|e| match &e.payload {
+        hive_core::SessionEvent::SessionSnapshot { session } => {
+            session.creator_actor_id == founder && e.actor_stamp.as_ref().is_some_and(|s| s.actor.id == founder)
+        }
+        _ => false,
+    })?;
+    let device = base.signer_device_id?;
+    let device_key = roster.public_key(device)?;
+    (roster.device_signs_for(device, account)
+        && !roster.is_revoked(device)
+        && hive_core::crypto::verify_envelope(base, device_key).is_ok())
+    .then_some(base)
+}
+
 /// One workspace's roster from that workspace's own trust events (P0.4). With
 /// a founder pin, a registration of the founder's account under a key that
 /// doesn't match the pin is rejected.

@@ -30,6 +30,39 @@ pub(crate) struct Api {
     pub headers: Vec<(&'static str, &'static str)>,
 }
 
+/// Whether this process is a test build that must never reach a real code
+/// host nor read the host's `gh` login: `cfg(test)`, any cargo test binary
+/// (they run from `target/<profile>/deps/`), or `LIGUS_FORGE_DENY_REAL=1`
+/// (for harnesses that spawn the real binary). Only loopback hosts are
+/// reachable then, and `gh` (from `PATH`) is never run.
+pub fn real_hosts_denied() -> bool {
+    if cfg!(test) || std::env::var_os("LIGUS_FORGE_DENY_REAL").is_some_and(|v| v == "1") {
+        return true;
+    }
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().and_then(|d| d.file_name()).map(|n| n == "deps"))
+        .unwrap_or(false)
+}
+
+/// Refuse a request to a non-loopback host from a test build.
+pub(crate) fn guard_url(raw: &str) -> Result<()> {
+    if !real_hosts_denied() {
+        return Ok(());
+    }
+    let loopback = match url::Url::parse(raw).ok().and_then(|u| u.host().map(|h| h.to_owned())) {
+        Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    };
+    if loopback {
+        Ok(())
+    } else {
+        Err(ForgeError::Transport("test builds never reach a real code host".into()))
+    }
+}
+
 pub(crate) fn client() -> reqwest::Client {
     reqwest::Client::builder()
         .user_agent(concat!("ligus/", env!("CARGO_PKG_VERSION")))
@@ -88,6 +121,7 @@ impl Api {
         if purpose == Purpose::Write && token.is_none() {
             return Err(ForgeError::NotSignedIn("this needs a write token for the code host on this device".into()));
         }
+        guard_url(&self.url(path))?;
         let mut req = self.client.request(method, self.url(path)).query(query);
         for (k, v) in &self.headers {
             if accept.is_some() && k.eq_ignore_ascii_case("accept") {

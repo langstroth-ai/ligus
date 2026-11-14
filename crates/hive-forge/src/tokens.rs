@@ -289,6 +289,12 @@ impl GhCredentials {
                 return r.clone();
             }
         }
+        // A test build never asks the host's own gh (a fake one by path is fine).
+        if self.gh == "gh" && crate::http::real_hosts_denied() {
+            let r: std::result::Result<Secret, String> = Err(GH_SIGNED_OUT.to_string());
+            *cache = Some((Instant::now(), r.clone()));
+            return r;
+        }
         let mut c = std::process::Command::new(&self.gh);
         c.args(["auth", "token", "--hostname", &self.host])
             .env("GH_PROMPT_DISABLED", "1")
@@ -392,6 +398,11 @@ pub fn answer_git_credential(action: &str, input: &str, host: &str, username: &s
     if token.is_empty() || token.expose().contains(['\n', '\r', '\0']) {
         return None;
     }
+    // The login is the code host's (cached at the last check): it never adds
+    // a key to the credential protocol.
+    if username.chars().any(char::is_control) {
+        return None;
+    }
     Some(format!("protocol=https\nhost={asked}\nusername={username}\npassword={}\n", token.expose()))
 }
 
@@ -434,6 +445,10 @@ mod tests {
         assert!(answer_git_credential("store", "protocol=https\nhost=github.com\npassword=x\n", "github.com", "u", Some(&t)).is_none());
         assert!(answer_git_credential("get", "protocol=https\nhost=github.com\n", "github.com", "u", None).is_none());
         assert!(answer_git_credential("get", "protocol=https\nhost=github.com\n", "github.com", "u", Some(&Secret::new("a\nb"))).is_none());
+        // The login comes from the code host (cached by the last check): a
+        // newline in it must not add credential-protocol keys.
+        let inj = answer_git_credential("get", "protocol=https\nhost=codeberg.org\n", "codeberg.org", "ana\nhost=evil.example\nquit=1", Some(&t));
+        assert!(inj.clone().is_none_or(|o| o.lines().count() == 4 && !o.contains("evil.example")), "{inj:?}");
     }
 
     #[test]

@@ -1369,8 +1369,6 @@ export const onUpdateProgress = (cb: (p: UpdateProgress) => void): Promise<Unlis
 
 /// Enterprise (#143): import a GitHub org's Teams as workspace members + roles.
 /// Returns the count added. Needs a signed-in GitHub token with read:org.
-export const importGithubTeams = (sessionId: string, org: string) =>
-  invoke<number>("import_github_teams", { sessionId, org });
 
 
 /// Linear context source (#145 L3): pull issues from the connected Linear MCP
