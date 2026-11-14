@@ -285,6 +285,15 @@ fn v_push_vector() {
     bad_ad[0] ^= 1;
     assert!(dec(&ct, &bad_ad).is_err());
     assert_eq!(push_collapse(&key, "chat").len(), 16);
+    // HMAC-SHA256 known answer (computed independently of the hmac crate).
+    assert_eq!(push_collapse(&key, "chat"), "fzmAklhg5o-SGq_8");
+    // RFC 4231 test case 2.
+    {
+        use hmac::Mac;
+        let mut mac = <hmac::Hmac<sha2::Sha256> as Mac>::new_from_slice(b"Jefe").unwrap();
+        mac.update(b"what do ya want for nothing?");
+        assert_eq!(hex::encode(mac.finalize().into_bytes()), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
+    }
 }
 
 // ── Push previews (§14) ──────────────────────────────────────────────────────
