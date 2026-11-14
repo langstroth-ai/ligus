@@ -141,6 +141,14 @@ Tapping a notification opens its chat.
 Mentions also work on the desktop; see
 [Mentions & notifications](mentions-and-notifications.md).
 
+## Workspace guards
+
+The box exposes the workspace's guard state read-only at `GET /v1/guards`:
+whether [dearth mode](guards.md#dearth-mode) is on and why, which chats are
+[locked down](guards.md#chat-lockdown) and by what kind of signal, and which
+host holds the workspace coordinator lease. Switching dearth mode, approving
+joins and clearing a lockdown stay on the desktop for now.
+
 ## Appearance
 
 The app can follow the box's theme. Pick **Match host** in the app's
