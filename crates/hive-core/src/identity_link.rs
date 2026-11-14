@@ -238,7 +238,7 @@ pub fn check_statement(link: &IdentityLink, workspace_id: Uuid, account_key: Opt
 /// A random link id and nonce for a new link.
 pub fn new_nonce() -> String {
     let mut b = [0u8; 16];
-    getrandom::getrandom(&mut b).expect("OS randomness");
+    getrandom::fill(&mut b).expect("OS randomness");
     b64url(&b)
 }
 

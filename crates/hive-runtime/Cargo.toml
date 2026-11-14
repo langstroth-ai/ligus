@@ -21,13 +21,13 @@ tracing.workspace = true
 rusqlite = { version = "0.41", features = ["bundled"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls-no-provider", "query", "form"] }
 futures-util = "0.3"
-base64 = "0.22"
+base64 = "0.23"
 # MCP OAuth 2.1 (PKCE): SHA-256 challenge + random verifier/state. Versions
 # already in the tree (hive-core uses them), so no new crates are pulled.
 sha2 = "0.10"
 # Per-relay contact write keys (already in the tree via hive-core).
 hkdf = "0.12"
-getrandom = "0.2"
+getrandom = "0.4"
 # Built-in coding tools (search). Both already in the lockfile.
 regex = "1"
 # Exact-match redaction of Ligus's own secrets (already in the tree via regex).

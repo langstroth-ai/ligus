@@ -38,7 +38,7 @@ pub fn new_write_key() -> String {
 
 fn random_b64(n: usize) -> String {
     let mut b = vec![0u8; n];
-    getrandom::getrandom(&mut b).expect("OS randomness");
+    getrandom::fill(&mut b).expect("OS randomness");
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b)
 }
 

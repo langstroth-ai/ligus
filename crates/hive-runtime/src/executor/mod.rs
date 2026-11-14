@@ -935,7 +935,7 @@ fn make_turn_tmp() -> io::Result<TurnTmp> {
 
 fn make_turn_tmp_in(parent: &Path) -> io::Result<TurnTmp> {
     let mut rnd = [0u8; 8];
-    getrandom::getrandom(&mut rnd).map_err(|e| io::Error::other(e.to_string()))?;
+    getrandom::fill(&mut rnd).map_err(|e| io::Error::other(e.to_string()))?;
     let id: String = rnd.iter().map(|b| format!("{b:02x}")).collect();
     let dir = canonical(parent).join(format!("{TURN_DIR_PREFIX}{id}"));
     let mut b = std::fs::DirBuilder::new();

@@ -216,7 +216,7 @@ impl EgressProxy {
             None => None,
         };
         let mut raw = [0u8; 24];
-        getrandom::getrandom(&mut raw).map_err(|e| std::io::Error::other(e.to_string()))?;
+        getrandom::fill(&mut raw).map_err(|e| std::io::Error::other(e.to_string()))?;
         let token: String = raw.iter().map(|b| format!("{b:02x}")).collect();
         let denials = Arc::new(Mutex::new(Vec::new()));
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();

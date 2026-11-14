@@ -117,7 +117,7 @@ pub fn random_id() -> String {
 
 pub fn random_bytes<const N: usize>() -> [u8; N] {
     let mut b = [0u8; N];
-    getrandom::getrandom(&mut b).expect("OS randomness");
+    getrandom::fill(&mut b).expect("OS randomness");
     b
 }
 

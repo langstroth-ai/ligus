@@ -496,7 +496,7 @@ pub struct RecoveryKey {
 impl RecoveryKey {
     pub fn generate() -> Result<Self, PresenceError> {
         let mut seed = [0u8; 32];
-        getrandom::getrandom(&mut seed).map_err(|_| err("random source"))?;
+        getrandom::fill(&mut seed).map_err(|_| err("random source"))?;
         Ok(Self { seed })
     }
     /// The 24 words (shown once).
@@ -569,7 +569,7 @@ pub mod soft {
     impl SoftAuthenticator {
         pub fn es256() -> Self {
             let mut id = [0u8; 16];
-            let _ = getrandom::getrandom(&mut id);
+            let _ = getrandom::fill(&mut id);
             Self {
                 credential_id: id.to_vec(),
                 key: Key::Es256(random_es256_key()),
@@ -700,7 +700,7 @@ pub mod soft {
     fn random_es256_key() -> p256::ecdsa::SigningKey {
         loop {
             let mut b = [0u8; 32];
-            getrandom::getrandom(&mut b).expect("random");
+            getrandom::fill(&mut b).expect("random");
             if let Ok(k) = p256::ecdsa::SigningKey::from_slice(&b) {
                 return k;
             }

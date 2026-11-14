@@ -13,7 +13,7 @@ uuid.workspace = true
 time.workspace = true
 toml = "1.2"
 ed25519-dalek = "2"
-getrandom = "0.2"
+getrandom = "0.4"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 chacha20poly1305 = "0.10"
 hkdf = "0.12"
@@ -23,7 +23,7 @@ url = "2"
 # B3 passkeys: ES256 verification (RustCrypto), base64url WebAuthn fields,
 # and the 24-word recovery key.
 p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
-base64 = "0.22"
+base64 = "0.23"
 bip39 = { version = "2", default-features = false, features = ["std"] }
 
 [dev-dependencies]

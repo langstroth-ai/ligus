@@ -35,7 +35,7 @@ pub struct KeyAgreementKeypair {
 impl KeyAgreementKeypair {
     pub fn generate() -> Result<Self, CryptoError> {
         let mut seed = [0u8; 32];
-        getrandom::getrandom(&mut seed).map_err(|_| CryptoError::Random)?;
+        getrandom::fill(&mut seed).map_err(|_| CryptoError::Random)?;
         Ok(Self {
             secret: StaticSecret::from(seed),
         })
@@ -89,7 +89,7 @@ pub fn seal(recipient_public: &[u8], plaintext: &[u8]) -> Result<SealedBlob, Cry
     let recipient_pk = PublicKey::from(recipient);
 
     let mut eph_seed = [0u8; 32];
-    getrandom::getrandom(&mut eph_seed).map_err(|_| CryptoError::Random)?;
+    getrandom::fill(&mut eph_seed).map_err(|_| CryptoError::Random)?;
     let ephemeral = StaticSecret::from(eph_seed);
     let ephemeral_pub = PublicKey::from(&ephemeral).to_bytes();
 
@@ -148,7 +148,7 @@ pub struct WorkspaceKeyRotation {
 /// Generate a fresh 32-byte symmetric workspace key.
 pub fn generate_workspace_key() -> Result<[u8; 32], CryptoError> {
     let mut key = [0u8; 32];
-    getrandom::getrandom(&mut key).map_err(|_| CryptoError::Random)?;
+    getrandom::fill(&mut key).map_err(|_| CryptoError::Random)?;
     Ok(key)
 }
 
@@ -207,7 +207,7 @@ pub fn seal_symmetric(
     plaintext: &[u8],
 ) -> Result<SealedEnvelope, CryptoError> {
     let mut nonce = [0u8; 12];
-    getrandom::getrandom(&mut nonce).map_err(|_| CryptoError::Random)?;
+    getrandom::fill(&mut nonce).map_err(|_| CryptoError::Random)?;
     let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
     let ciphertext = cipher
         .encrypt(Nonce::from_slice(&nonce), plaintext)

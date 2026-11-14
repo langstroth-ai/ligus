@@ -509,7 +509,7 @@ mod mac {
                 }
             }
             let mut raw = [0u8; 32];
-            getrandom::getrandom(&mut raw).map_err(|e| backend_err("keychain", e.to_string()))?;
+            getrandom::fill(&mut raw).map_err(|e| backend_err("keychain", e.to_string()))?;
             let pw = Zeroizing::new(hive_core::keys::hex(&raw));
             // The unlock password trusts only the Ligus binary: in a release
             // build, only after this app proves it is Ligus (its designated

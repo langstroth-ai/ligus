@@ -48,7 +48,7 @@ impl SigningKeypair {
     /// Generate a fresh keypair from the OS CSPRNG.
     pub fn generate() -> Result<Self, CryptoError> {
         let mut seed = [0u8; KEY_LEN];
-        getrandom::getrandom(&mut seed).map_err(|_| CryptoError::Random)?;
+        getrandom::fill(&mut seed).map_err(|_| CryptoError::Random)?;
         Ok(Self {
             signing: SigningKey::from_bytes(&seed),
         })

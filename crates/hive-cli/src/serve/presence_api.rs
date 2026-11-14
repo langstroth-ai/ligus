@@ -39,7 +39,7 @@ pub struct Pending(Mutex<HashMap<String, (PresenceDraft, Instant)>>);
 impl Pending {
     fn put(&self, draft: PresenceDraft) -> String {
         let mut raw = [0u8; 16];
-        let _ = getrandom::getrandom(&mut raw);
+        let _ = getrandom::fill(&mut raw);
         let id = b64url(&raw);
         let mut m = self.0.lock().unwrap_or_else(|e| e.into_inner());
         m.retain(|_, (_, at)| at.elapsed() < TTL);

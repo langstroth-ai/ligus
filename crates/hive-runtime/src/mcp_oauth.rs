@@ -50,7 +50,7 @@ pub struct Pkce {
 /// challenge `base64url(sha256(verifier))`.
 pub fn generate_pkce() -> Pkce {
     let mut bytes = [0u8; 32];
-    getrandom::getrandom(&mut bytes).expect("os rng");
+    getrandom::fill(&mut bytes).expect("os rng");
     let verifier = URL_SAFE_NO_PAD.encode(bytes);
     Pkce {
         challenge: pkce_challenge(&verifier),
@@ -68,7 +68,7 @@ pub fn pkce_challenge(verifier: &str) -> String {
 /// A random URL-safe token (for the `state` CSRF parameter).
 pub fn random_state() -> String {
     let mut bytes = [0u8; 16];
-    getrandom::getrandom(&mut bytes).expect("os rng");
+    getrandom::fill(&mut bytes).expect("os rng");
     URL_SAFE_NO_PAD.encode(bytes)
 }
 

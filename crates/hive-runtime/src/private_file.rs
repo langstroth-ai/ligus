@@ -16,7 +16,7 @@ pub fn write_private_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let mut rnd = [0u8; 6];
-    let _ = getrandom::getrandom(&mut rnd);
+    let _ = getrandom::fill(&mut rnd);
     let suffix: String = rnd.iter().map(|b| format!("{b:02x}")).collect();
     let tmp = dir.join(format!(".{name}.{suffix}.tmp"));
     let mut opts = std::fs::OpenOptions::new();

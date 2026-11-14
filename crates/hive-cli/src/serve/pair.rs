@@ -27,7 +27,7 @@ pub fn load_or_create_token(path: &Path) -> Result<String> {
         }
     }
     let mut bytes = [0u8; 32];
-    getrandom::getrandom(&mut bytes).map_err(|e| anyhow::anyhow!("no OS randomness for the serve token: {e}"))?;
+    getrandom::fill(&mut bytes).map_err(|e| anyhow::anyhow!("no OS randomness for the serve token: {e}"))?;
     let token: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;

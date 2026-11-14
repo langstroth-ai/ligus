@@ -113,7 +113,7 @@ impl SocketEndpoint {
 
 fn make_dir() -> std::io::Result<PathBuf> {
     let mut rnd = [0u8; 8];
-    getrandom::getrandom(&mut rnd).map_err(|e| std::io::Error::other(e.to_string()))?;
+    getrandom::fill(&mut rnd).map_err(|e| std::io::Error::other(e.to_string()))?;
     let id: String = rnd.iter().map(|b| format!("{b:02x}")).collect();
     let dir = crate::executor::canonical(&std::env::temp_dir()).join(format!("ligus-mcp-{id}"));
     let mut b = std::fs::DirBuilder::new();

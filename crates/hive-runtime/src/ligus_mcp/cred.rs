@@ -104,7 +104,7 @@ pub fn verify(key: &[u8; 32], cred: &str, now_unix: u64) -> Result<TurnBinding, 
 /// A fresh random host key.
 pub fn host_key() -> [u8; 32] {
     let mut k = [0u8; 32];
-    getrandom::getrandom(&mut k).expect("os randomness");
+    getrandom::fill(&mut k).expect("os randomness");
     k
 }
 
