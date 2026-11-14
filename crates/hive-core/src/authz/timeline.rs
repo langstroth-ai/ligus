@@ -40,6 +40,16 @@ pub struct DeviceState {
     /// Accounts whose (undisputed) key certified this device.
     pub accounts: BTreeSet<Uuid>,
     pub revoked: bool,
+    /// The device's signing key, from its certificate.
+    pub public_key: Vec<u8>,
+}
+
+/// An agent signing key certified by its host device (A3).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AgentKeyState {
+    pub agent_id: Uuid,
+    pub host_device_id: Uuid,
+    pub signing_public_key: Vec<u8>,
 }
 
 /// Who may do what at one position of the config log.
@@ -48,6 +58,8 @@ pub struct RosterState {
     pub members: BTreeMap<String, MemberState>,
     pub agents: BTreeMap<Uuid, AgentState>,
     pub devices: BTreeMap<Uuid, DeviceState>,
+    /// Agent keys by `key_id` (an agent-signed envelope's `signer_device_id`).
+    pub agent_keys: BTreeMap<Uuid, AgentKeyState>,
     pub dearth: bool,
     /// The workspace rules version in force (1 when never set).
     pub rules: u32,
@@ -61,6 +73,39 @@ impl RosterState {
     /// Whether `account` certified `device` (and the device is not revoked).
     pub fn account_certified(&self, account: Uuid, device: Uuid) -> bool {
         self.devices.get(&device).is_some_and(|d| d.accounts.contains(&account))
+    }
+
+    /// Whether a device is certified (by some undisputed account) and not
+    /// revoked.
+    pub fn device_trusted(&self, device: Uuid) -> bool {
+        self.devices.get(&device).is_some_and(|d| !d.revoked && !d.accounts.is_empty())
+    }
+
+    /// Whether `host` may hold keys for `agent_id` here: the agent is bound
+    /// to that host, or, unbound, its owner's account certified the host.
+    pub fn agent_bound_to(&self, agent_id: Uuid, host: Uuid) -> bool {
+        let Some(agent) = self.agents.get(&agent_id) else { return false };
+        if !self.device_trusted(host) {
+            return false;
+        }
+        if agent.host_id.is_empty() {
+            let owner_account = self
+                .members
+                .get(&agent.owner)
+                .and_then(|m| m.account_id)
+                .or_else(|| Uuid::parse_str(&agent.owner).ok());
+            owner_account.is_some_and(|a| self.account_certified(a, host))
+        } else {
+            agent.host_id == host.to_string()
+        }
+    }
+
+    /// The agent key `key_id`, if it is valid at this position: certified,
+    /// and its agent still bound to the certifying host. A rebinding
+    /// invalidates the old key from that position on.
+    pub fn valid_agent_key(&self, key_id: Uuid) -> Option<&AgentKeyState> {
+        let key = self.agent_keys.get(&key_id)?;
+        self.agent_bound_to(key.agent_id, key.host_device_id).then_some(key)
     }
 
     fn fingerprint(&self) -> u64 {
@@ -126,6 +171,16 @@ impl RosterTracker {
                 self.certs.push(certificate.clone());
                 self.rebuild_devices(fold);
             }
+            SessionEvent::AgentKeyCertified { cert } if allowed => {
+                self.state.agent_keys.insert(
+                    cert.key_id,
+                    AgentKeyState {
+                        agent_id: cert.agent_id,
+                        host_device_id: cert.host_device_id,
+                        signing_public_key: cert.signing_public_key.clone(),
+                    },
+                );
+            }
             SessionEvent::WorkspaceRulesSet { version } if allowed => {
                 self.state.rules = *version;
             }
@@ -158,7 +213,9 @@ impl RosterTracker {
             }
             let Some(key) = self.account_keys.get(&cert.account_id) else { continue };
             if cert.verify(key).is_ok() {
-                devices.entry(cert.device_id).or_default().accounts.insert(cert.account_id);
+                let d = devices.entry(cert.device_id).or_default();
+                d.accounts.insert(cert.account_id);
+                d.public_key = cert.device_public_key.clone();
             }
         }
         for d in &fold.guards.revoked_devices {

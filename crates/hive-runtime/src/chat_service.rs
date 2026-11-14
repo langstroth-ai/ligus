@@ -77,6 +77,11 @@ pub struct ChatService {
     delegated: bool,
     /// When set, every append is refused with this reason (a revoked device).
     write_block: Option<String>,
+    /// Where this host keeps the signing keys of agents bound to it (A3). When
+    /// unset, the host signs its agents' output itself (the transition).
+    agent_vault: Option<Box<dyn crate::identity_store::KeyVault + Send>>,
+    /// Assistant messages this host is writing as an agent: message → agent.
+    agent_messages: std::collections::HashMap<Uuid, Uuid>,
 }
 
 impl ChatService {
@@ -97,7 +102,98 @@ impl ChatService {
             local_workspace_id: None,
             delegated: false,
             write_block: None,
+            agent_vault: None,
+            agent_messages: std::collections::HashMap::new(),
         }
+    }
+
+    /// Keep agent signing keys in `vault` (A3): agents bound to this device
+    /// (or unbound and owned by its account) then sign their own output with a
+    /// key this device certifies on the config log.
+    pub fn set_agent_vault(&mut self, vault: Box<dyn crate::identity_store::KeyVault + Send>) {
+        self.agent_vault = Some(vault);
+    }
+
+    /// This device's signing key for `agent_id`, certified on the config log
+    /// (certifying it first if needed), when the agent may run here and an
+    /// agent vault is set. `None` otherwise: the host then signs as itself.
+    pub fn ensure_agent_key(&mut self, workspace_id: Uuid, agent_id: Uuid) -> Result<Option<(Uuid, SigningKeypair)>> {
+        let Some(vault) = self.agent_vault.as_ref() else { return Ok(None) };
+        let (config, timeline) =
+            self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        if config.is_none() || !timeline.current().agent_bound_to(agent_id, self.device_id) {
+            return Ok(None);
+        }
+        let name = format!("agent:{agent_id}:{}", self.device_id);
+        let seed = match vault.load_seed(&name).map_err(|e| ChatError::Unauthorized(e.to_string()))? {
+            Some(seed) => seed,
+            None => {
+                let kp = SigningKeypair::generate().map_err(|e| ChatError::Unauthorized(e.to_string()))?;
+                vault.store_seed(&name, &kp.seed_bytes()).map_err(|e| ChatError::Unauthorized(e.to_string()))?;
+                kp.seed_bytes()
+            }
+        };
+        let kp = SigningKeypair::from_seed(&seed).map_err(|e| ChatError::Unauthorized(e.to_string()))?;
+        let key_id = hive_core::AgentKeyCertificate::key_id_for(agent_id, &kp.public_key_bytes());
+        if timeline.current().valid_agent_key(key_id).is_none() {
+            let cert = hive_core::AgentKeyCertificate::issue(
+                &self.keypair,
+                self.device_id,
+                agent_id,
+                &kp.public_key_bytes(),
+                Timestamp::now(),
+            );
+            let config_id = workspace_config_session_id(workspace_id);
+            self.append_signed(config_id, workspace_id, SessionEvent::AgentKeyCertified { cert })?;
+        }
+        Ok(Some((key_id, kp)))
+    }
+
+    /// Append `payload` signed by `agent_id`'s own key (A3), when this host
+    /// holds one; `Ok(None)` means it doesn't and the caller signs as the host.
+    pub fn append_signed_as_agent(
+        &mut self,
+        session_id: Uuid,
+        workspace_id: Uuid,
+        agent_id: Uuid,
+        payload: SessionEvent,
+    ) -> Result<Option<SessionEventEnvelope>> {
+        if let Some(reason) = &self.write_block {
+            return Err(ChatError::Unauthorized(reason.clone()));
+        }
+        if self.local_workspace_id == Some(workspace_id) {
+            return Ok(None);
+        }
+        let Some((key_id, kp)) = self.ensure_agent_key(workspace_id, agent_id)? else { return Ok(None) };
+        let (config, timeline) =
+            self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let name = config
+            .as_ref()
+            .and_then(|c| c.workspace_agents.iter().find(|a| a.id == agent_id).map(|a| a.name.clone()))
+            .unwrap_or_default();
+        let next_seq = self.store.max_sequence(session_id)?.unwrap_or(0) + 1;
+        let mut env = SessionEventEnvelope::new(session_id, workspace_id, next_seq, payload);
+        env.lamport = self.store.max_lamport(session_id)?.saturating_add(1);
+        let mut actor = ActorIdentity::new(agent_id.to_string(), name, hive_core::ActorKind::Agent);
+        actor.device_id = Some(key_id);
+        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::now(), cfg_frontier: timeline.head() });
+        env.signer_device_id = Some(key_id);
+        self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
+        sign_envelope(&mut env, key_id, &kp);
+        self.store.append_envelope(&env)?;
+        Ok(Some(env))
+    }
+
+    /// Append for an assistant message: as its agent when this host writes
+    /// that message with the agent's own key, else as the host.
+    fn append_for_message(&mut self, session_id: Uuid, workspace_id: Uuid, message_id: Uuid, payload: SessionEvent) -> Result<()> {
+        if let Some(agent) = self.agent_messages.get(&message_id).copied() {
+            if self.append_signed_as_agent(session_id, workspace_id, agent, payload.clone())?.is_some() {
+                return Ok(());
+            }
+        }
+        self.append_signed(session_id, workspace_id, payload)?;
+        Ok(())
     }
 
     /// Act as `owner` — this device is enrolled as one of their devices (a
@@ -718,6 +814,14 @@ impl ChatService {
         // (named agents keep their roster avatar/name).
         message.actor_identity = Some(self.author.clone());
         let id = message.id;
+        // An agent with its own key on this host signs its own reply (A3).
+        if let Some(agent) = responder_id {
+            let payload = SessionEvent::MessageAppended { message: message.clone() };
+            if self.append_signed_as_agent(session_id, workspace_id, agent, payload)?.is_some() {
+                self.agent_messages.insert(id, agent);
+                return Ok(id);
+            }
+        }
         self.append_signed(
             session_id,
             workspace_id,
@@ -736,15 +840,7 @@ impl ChatService {
         // Envelope: mask credentials before they reach the synced log. A chunk
         // boundary can split one; the completed body is redacted whole below.
         let chunk = self.redact_for_log(workspace_id, session_id, chunk.into());
-        self.append_signed(
-            session_id,
-            workspace_id,
-            SessionEvent::MessageChunkReceived {
-                message_id,
-                chunk,
-            },
-        )?;
-        Ok(())
+        self.append_for_message(session_id, workspace_id, message_id, SessionEvent::MessageChunkReceived { message_id, chunk })
     }
 
     pub fn complete_assistant_message(
@@ -755,14 +851,8 @@ impl ChatService {
         body: impl Into<String>,
     ) -> Result<()> {
         let body = self.redact_for_log(workspace_id, session_id, body.into());
-        self.append_signed(
-            session_id,
-            workspace_id,
-            SessionEvent::MessageCompleted {
-                message_id,
-                body,
-            },
-        )?;
+        self.append_for_message(session_id, workspace_id, message_id, SessionEvent::MessageCompleted { message_id, body })?;
+        self.agent_messages.remove(&message_id);
         // A completed reply is a natural checkpoint — snapshot periodically so
         // reopening a long chat replays only recent events (#3).
         self.maybe_snapshot(session_id, workspace_id)?;
@@ -2854,6 +2944,55 @@ mod tests {
         let account_kp = SigningKeypair::generate().unwrap();
         let author = ActorIdentity::new(id, name, hive_core::ActorKind::Human);
         ChatService::new(store, Uuid::new_v4(), kp, account_kp, author)
+    }
+
+    /// A3: with an agent vault, an agent bound to this device signs its own
+    /// reply with a key this device certified; peers verify it as the agent.
+    /// Rebinding the agent elsewhere retires the key.
+    #[test]
+    fn a_bound_agent_signs_its_own_reply_and_rebinding_retires_the_key() {
+        use crate::envelope_verifier::{build_roster, verdict_for, QuarantineReason, Verdict};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hive.db");
+        let wid = Uuid::new_v4();
+        let mut svc = svc_on(&path, "x", "Alex");
+        let account = Uuid::new_v4().to_string();
+        svc.set_author_account(account.clone(), "Alex", None);
+        let chat = svc.create_chat("A", wid, "rt").unwrap();
+        svc.set_agent_vault(Box::new(crate::identity_store::FileKeyVault::new(dir.path())));
+        let mut agent = WorkspaceAgent::new("coder", "rt");
+        agent.owner_actor_id = account.clone();
+        let agent_id = agent.id;
+        svc.add_agent(chat.id, wid, agent).unwrap();
+        svc.set_agent_host(wid, agent_id, &svc.device_id().to_string()).unwrap();
+
+        let mid = svc.begin_assistant_message(chat.id, wid, "coder", "rt", Some(agent_id), None).unwrap();
+        svc.append_chunk(chat.id, wid, mid, "hel").unwrap();
+        svc.complete_assistant_message(chat.id, wid, mid, "hello").unwrap();
+        let envs = svc.store().list(chat.id).unwrap();
+        let reply: Vec<_> = envs
+            .iter()
+            .filter(|e| e.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == hive_core::ActorKind::Agent))
+            .collect();
+        assert_eq!(reply.len(), 3, "appended, chunk and completion are all agent-signed");
+        let key_id = reply[0].signer_device_id.unwrap();
+        assert_ne!(key_id, svc.device_id());
+        let roster = build_roster(&svc.store().trust_envelopes(wid).unwrap());
+        for e in &reply {
+            assert_eq!(verdict_for(&roster, e), Verdict::Valid);
+        }
+        let s = svc.load(chat.id).unwrap().unwrap();
+        assert_eq!(s.messages.iter().find(|m| m.id == mid).unwrap().body, "hello");
+
+        // Rebinding to another host (Owner = Admin+) retires this device's key.
+        svc.set_agent_host(wid, agent_id, "worker-9").unwrap();
+        let roster = build_roster(&svc.store().trust_envelopes(wid).unwrap());
+        assert_eq!(verdict_for(&roster, reply[0]), Verdict::Quarantine(QuarantineReason::RevokedDevice));
+        // And this host no longer writes as the agent: it falls back to itself.
+        let mid2 = svc.begin_assistant_message(chat.id, wid, "coder", "rt", Some(agent_id), None).unwrap();
+        let last = svc.store().list(chat.id).unwrap().into_iter().last().unwrap();
+        assert_eq!(last.signer_device_id, Some(svc.device_id()));
+        let _ = mid2;
     }
 
     #[test]

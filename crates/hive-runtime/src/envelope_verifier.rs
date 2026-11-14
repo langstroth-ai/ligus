@@ -176,6 +176,8 @@ pub struct WorkspaceRoster {
     chained: HashMap<Uuid, (Vec<u8>, HashSet<Uuid>)>,
     /// Accounts an authorized removal took out (and no Admin re-added).
     removed_accounts: HashSet<Uuid>,
+    /// Agent signing keys valid at the config head: key_id → (key, agent).
+    agent_keys: HashMap<Uuid, (Vec<u8>, Uuid)>,
 }
 
 impl WorkspaceRoster {
@@ -480,6 +482,7 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
     // projection stays a member, unless an authorized removal elsewhere took
     // the account out (removal wins, as the roster is shared by workspaces).
     let removed_by_ws = removed_on_config(&ordered);
+    let mut agent_keys: HashMap<Uuid, (Vec<u8>, Uuid)> = HashMap::new();
     let mut current_accounts: HashSet<Uuid> = HashSet::new();
     let mut sticky_removed: HashSet<Uuid> = HashSet::new();
     let config_ws = config_workspaces(&ordered);
@@ -497,7 +500,17 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
             .filter(|e| e.workspace_id == ws && e.session_id == hive_core::workspace_config_session_id(ws))
             .map(|e| (*e).clone())
             .collect();
-        let projected = hive_core::project(&cfg_envs);
+        let (projected, timeline) = hive_core::project_config(&cfg_envs, None, None);
+        // A3: agent keys valid at the config head (certified, still bound).
+        let head = timeline.current();
+        for (key_id, k) in &head.agent_keys {
+            if head.valid_agent_key(*key_id).is_some() {
+                agent_keys.insert(*key_id, (k.signing_public_key.clone(), k.agent_id));
+            } else {
+                // Rebound since (or its host revoked): its events are refused.
+                explicit_revoked.insert(*key_id);
+            }
+        }
         explicit_revoked.extend(projected.iter().flat_map(|c| c.guards.revoked_devices.iter().copied()));
         let current: Vec<hive_core::WorkspaceMember> = projected.map(|c| c.members).unwrap_or_default();
         current_accounts.extend(current.iter().filter_map(|m| m.actor.account_id));
@@ -515,6 +528,7 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
     }
 
     let mut roster = WorkspaceRoster::default();
+    roster.agent_keys = agent_keys;
     roster.disputed = disputed;
     roster.removed_accounts = sticky_removed.clone();
     // Explicitly-revoked devices (a `DeviceRevoked` event) are never trusted, even
@@ -606,6 +620,10 @@ fn is_trust_kind(e: &SessionEvent) -> bool {
             | SessionEvent::MemberRoleChanged { .. }
             | SessionEvent::DearthModeChanged { .. }
             | SessionEvent::JoinApproved { .. }
+            | SessionEvent::AgentKeyCertified { .. }
+            | SessionEvent::AgentUpserted { .. }
+            | SessionEvent::AgentRosterUpdated { .. }
+            | SessionEvent::AgentRemoved { .. }
     )
 }
 
@@ -751,6 +769,16 @@ pub fn verdict_for(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verd
             Verdict::Unverifiable(QuarantineReason::Unsigned)
         };
     };
+    // A3: an agent's own key (certified by its host, still bound to it).
+    if let Some((agent_key, agent_id)) = roster.agent_keys.get(&device_id) {
+        if verify_envelope(env, agent_key).is_err() {
+            return Verdict::Quarantine(QuarantineReason::BadSignature);
+        }
+        let speaks_as_agent = env.actor_stamp.as_ref().is_some_and(|s| {
+            s.actor.kind == hive_core::ActorKind::Agent && s.actor.id == agent_id.to_string() && s.actor.account_id.is_none()
+        });
+        return if speaks_as_agent { Verdict::Valid } else { Verdict::Quarantine(QuarantineReason::Impersonation) };
+    }
     if roster.is_revoked(device_id) {
         return Verdict::Quarantine(QuarantineReason::RevokedDevice);
     }

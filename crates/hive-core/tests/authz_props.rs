@@ -855,3 +855,206 @@ fn a_chat_founded_by_a_non_member_does_not_exist() {
     w.chat_push("mara", message("mara", "hi"));
     assert_eq!(w.state().messages.len(), 1);
 }
+
+// ---- A3: agent identities ----
+
+struct AgentSetup {
+    agent_id: Uuid,
+    key_id: Uuid,
+}
+
+/// `owner_name` owns an agent bound to their device `host`, which certifies a
+/// key for it on the config log.
+fn agent_world(owner_name: &str) -> (World, AgentSetup) {
+    use hive_core::crypto::{DeviceCertificate, SigningKeypair};
+    let mut w = World::new();
+    let acct = SigningKeypair::from_seed(&[owner_name.len() as u8 + 40; 32]).unwrap();
+    let dev = SigningKeypair::from_seed(&[owner_name.len() as u8 + 80; 32]).unwrap();
+    let host = Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("{owner_name}-device").as_bytes());
+    w.cfg_push(owner_name, SessionEvent::AccountKeyRegistered { account_id: account(owner_name), signing_public_key: acct.public_key_bytes().to_vec() });
+    let cert = DeviceCertificate::issue(&acct, account(owner_name), host, &dev.public_key_bytes(), Timestamp::epoch());
+    w.cfg_push(owner_name, SessionEvent::DeviceCertificateAdded { certificate: cert });
+    let mut agent = hive_core::WorkspaceAgent::new("coder", "gw");
+    agent.owner_actor_id = owner_name.into();
+    let agent_id = agent.id;
+    w.cfg_push("owner", SessionEvent::AgentUpserted { agent: { let mut a = agent.clone(); a.host_id = host.to_string(); a } });
+    let akp = SigningKeypair::from_seed(&[7; 32]).unwrap();
+    let acert = hive_core::AgentKeyCertificate::issue(&dev, host, agent_id, &akp.public_key_bytes(), Timestamp::epoch());
+    let key_id = acert.key_id;
+    let id = w.cfg_push(owner_name, SessionEvent::AgentKeyCertified { cert: acert });
+    w.cfg.iter_mut().find(|e| e.event_id == id).unwrap().signer_device_id = Some(host);
+    (w, AgentSetup { agent_id, key_id })
+}
+
+impl World {
+    /// A chat event signed by an agent's own key.
+    fn agent_push(&mut self, a: &AgentSetup, e: SessionEvent) -> Uuid {
+        let id = self.chat_push("x", e);
+        let env = self.chat.iter_mut().find(|x| x.event_id == id).unwrap();
+        let mut actor = ActorIdentity::new(a.agent_id.to_string(), "coder", ActorKind::Agent);
+        actor.device_id = Some(a.key_id);
+        let f = env.actor_stamp.as_ref().unwrap().cfg_frontier;
+        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: f });
+        env.signer_device_id = Some(a.key_id);
+        id
+    }
+}
+
+fn agent_reply(a: &AgentSetup, id: u128) -> (Uuid, SessionEvent) {
+    let mut m = hive_core::ChatMessage::new(hive_core::MessageRole::Assistant, "coder", "on it");
+    m.id = Uuid::from_u128(id);
+    m.responder_id = Some(a.agent_id);
+    (m.id, SessionEvent::MessageAppended { message: m })
+}
+
+#[test]
+fn agent_key_certification_is_checked() {
+    let (w, a) = agent_world("mara");
+    assert!(w.timeline().current().valid_agent_key(a.key_id).is_some());
+    // A certificate from a device the agent isn't bound to is refused.
+    let mut forged = w.clone();
+    let akp = hive_core::crypto::SigningKeypair::generate().unwrap();
+    let other = hive_core::crypto::SigningKeypair::generate().unwrap();
+    let stranger = Uuid::new_v4();
+    let c = hive_core::AgentKeyCertificate::issue(&other, stranger, a.agent_id, &akp.public_key_bytes(), Timestamp::epoch());
+    let id = forged.cfg_push("mara", SessionEvent::AgentKeyCertified { cert: c.clone() });
+    forged.cfg.iter_mut().find(|e| e.event_id == id).unwrap().signer_device_id = Some(stranger);
+    assert_eq!(forged.verdicts()[&id], Verdict::Denied);
+    assert!(forged.timeline().current().valid_agent_key(c.key_id).is_none());
+}
+
+#[test]
+fn an_agent_signs_its_own_reply() {
+    let (mut w, a) = agent_world("mara");
+    let (mid, reply) = agent_reply(&a, 0x51);
+    let ok = w.agent_push(&a, reply);
+    let chunk = w.agent_push(&a, SessionEvent::MessageCompleted { message_id: mid, body: "done".into() });
+    // Not someone else's message.
+    let (_, theirs) = {
+        let mut m = hive_core::ChatMessage::new(hive_core::MessageRole::Assistant, "hive", "x");
+        m.id = Uuid::from_u128(0x52);
+        (m.id, SessionEvent::MessageAppended { message: m })
+    };
+    let other = w.agent_push(&a, theirs);
+    let v = w.verdicts();
+    assert_eq!((v[&ok], v[&chunk], v[&other]), (Verdict::Allowed, Verdict::Allowed, Verdict::Denied));
+    assert_eq!(w.state().messages.iter().find(|m| m.id == mid).unwrap().body, "done");
+}
+
+#[test]
+fn agent_tier_never_votes_on_human_gate() {
+    let (mut w, a) = agent_world("owner");
+    let pid = Uuid::from_u128(0x61);
+    w.chat_push("mara", SessionEvent::ProposalUpserted { proposal: proposal(pid, 1, ProposalStatus::Open) });
+    let me = a.agent_id.to_string();
+    let v = w.agent_push(&a, vote(&me, pid, WorkspaceRole::Owner, true, None));
+    assert_eq!(w.verdicts()[&v], Verdict::Denied);
+    assert_eq!(w.state().proposals[0].status, ProposalStatus::Open);
+}
+
+#[test]
+fn agent_tier_never_applies() {
+    let (mut w, a) = agent_world("owner");
+    let pid = Uuid::from_u128(0x62);
+    let p = proposal(pid, 1, ProposalStatus::Open);
+    let d = diff_digest(&p);
+    w.chat_push("mara", SessionEvent::ProposalUpserted { proposal: p });
+    w.chat_push("owner", vote("owner", pid, WorkspaceRole::Owner, true, Some(d.clone())));
+    let applied = w.agent_push(&a, SessionEvent::ProposalApplied { proposal_id: pid, diff_digest: d, commit: None, at: Timestamp::epoch() });
+    assert_eq!(w.verdicts()[&applied], Verdict::Denied);
+    assert_eq!(w.state().proposals[0].status, ProposalStatus::Approved);
+}
+
+#[test]
+fn agent_tier_cannot_emit_admin_events() {
+    let (mut w, a) = agent_world("owner");
+    let set = ProposalSet::new("Q", "planner", vec![]);
+    let set_id = set.id;
+    w.chat_push("owner", SessionEvent::ProposalSetOpened { set: Box::new(set) });
+    let chat_events = [
+        SessionEvent::ProposalSetDecided { set_id, winner: None, at: Timestamp::epoch() },
+        SessionEvent::ProposalSetTuned { set_id, agent_quorum: 1, required_approvals: 0, quality_bar: 0 },
+        SessionEvent::WorkflowDefinitionsUpdated { definitions: vec![] },
+        SessionEvent::SessionArchivedChanged { archived: true },
+    ];
+    for e in chat_events {
+        let id = w.agent_push(&a, e);
+        assert_eq!(w.verdicts()[&id], Verdict::Denied);
+    }
+    // Config-log governance signed by the agent key: refused too.
+    for e in [
+        SessionEvent::MemberAdded { member: member("ghost", WorkspaceRole::Admin), invite: None },
+        SessionEvent::WorkspaceRulesSet { version: 1 },
+        SessionEvent::ChatLockdownCleared { chat_id: w.sid },
+    ] {
+        let id = w.cfg_push("x", e);
+        let env = w.cfg.iter_mut().find(|x| x.event_id == id).unwrap();
+        let mut actor = ActorIdentity::new(a.agent_id.to_string(), "coder", ActorKind::Agent);
+        actor.device_id = Some(a.key_id);
+        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: None });
+        env.signer_device_id = Some(a.key_id);
+        assert_eq!(w.verdicts()[&id], Verdict::Denied);
+    }
+    // What the tier allows on the config log does fold (a lockdown only tightens).
+    let id = w.cfg_push("x", SessionEvent::ChatLockdownRaised { chat_id: w.sid, lockdown: lockdown(0x77, "coder") });
+    let env = w.cfg.iter_mut().find(|x| x.event_id == id).unwrap();
+    let mut actor = ActorIdentity::new(a.agent_id.to_string(), "coder", ActorKind::Agent);
+    actor.device_id = Some(a.key_id);
+    env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: None });
+    env.signer_device_id = Some(a.key_id);
+    assert_eq!(w.verdicts()[&id], Verdict::Allowed);
+}
+
+#[test]
+fn agent_cert_invalid_after_rebind() {
+    let (mut w, a) = agent_world("mara");
+    let (_, before) = agent_reply(&a, 0x71);
+    let ok = w.agent_push(&a, before);
+    // An Admin rebinds the agent to another host: the old key stops counting
+    // from that position on.
+    let mut agent = w.config().workspace_agents.iter().find(|x| x.id == a.agent_id).unwrap().clone();
+    agent.host_id = "worker-2".into();
+    w.cfg_push("ada", SessionEvent::AgentUpserted { agent });
+    let (_, after) = agent_reply(&a, 0x72);
+    let late = w.agent_push(&a, after);
+    let v = w.verdicts();
+    assert_eq!((v[&ok], v[&late]), (Verdict::Allowed, Verdict::Denied));
+    assert!(w.timeline().current().valid_agent_key(a.key_id).is_none());
+}
+
+#[test]
+fn agent_of_viewer_capped_at_viewer() {
+    let (mut w, a) = agent_world("val");
+    // val is a Viewer: her agent may raise a lockdown (Viewer floor) but not
+    // file a proposal (Contributor floor), which a Contributor's agent may.
+    let mut p = proposal(Uuid::from_u128(0x81), 1, ProposalStatus::Open);
+    p.producing_agent_id = Some(a.agent_id);
+    let filed = w.agent_push(&a, SessionEvent::ProposalUpserted { proposal: p.clone() });
+    assert_eq!(w.verdicts()[&filed], Verdict::Denied);
+    let (mut w2, a2) = agent_world("mara");
+    p.producing_agent_id = Some(a2.agent_id);
+    let filed2 = w2.agent_push(&a2, SessionEvent::ProposalUpserted { proposal: p });
+    assert_eq!(w2.verdicts()[&filed2], Verdict::Allowed);
+    // Once its owner leaves, the agent's events stop counting.
+    w2.cfg_push("owner", SessionEvent::MemberRemoved { member_id: "mara".into() });
+    let (_, r) = agent_reply(&a2, 0x82);
+    let after = w2.agent_push(&a2, r);
+    assert_eq!(w2.verdicts()[&after], Verdict::Denied);
+}
+
+#[test]
+fn rules_v2_tier_applies_to_host_signed_agent_output() {
+    // Under rules v2 a host-signed event that speaks for an agent is judged
+    // with the Agent tier; tested on the tier itself because this build folds
+    // with rules v1 (RULES_SUPPORTED) until Track B enforces v2.
+    use hive_core::authz::agent::{agent_authored, tier_allows};
+    let agent = Uuid::new_v4();
+    let mut p = proposal(Uuid::from_u128(0x91), 1, ProposalStatus::Open);
+    p.producing_agent_id = Some(agent);
+    let upsert = SessionEvent::ProposalUpserted { proposal: p.clone() };
+    assert_eq!(agent_authored(&upsert), Some(agent));
+    let fold = ChatSession::new("c", Uuid::nil(), "x");
+    assert!(tier_allows(&upsert, agent, Uuid::nil(), &fold).is_ok());
+    p.approvals.push(ProposalApproval { actor_id: "owner".into(), role: WorkspaceRole::Owner, approved: true, created_at: Timestamp::epoch(), diff_digest: None });
+    assert!(tier_allows(&SessionEvent::ProposalUpserted { proposal: p }, agent, Uuid::nil(), &fold).is_err(), "an agent never asserts approvals");
+}

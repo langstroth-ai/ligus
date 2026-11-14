@@ -334,8 +334,11 @@ pub enum SessionEvent {
         commit: Option<String>,
         at: Timestamp,
     },
+    /// A host device certifies an agent's own signing key (config log;
+    /// Contributor, plus the certificate's own checks in `authz`). Agent-signed
+    /// events are judged with the capped Agent tier (`authz::agent`).
+    AgentKeyCertified { cert: crate::crypto::AgentKeyCertificate },
     // Phase 0 slots, uncommented by their PRs in merge-queue order:
-    // AgentKeyCertified { cert: AgentKeyCertificate },            // A3
     // WorkspaceKeyRotated { .. },                                  // B1
     // DeviceKeyAgreementPublished { .. },                          // B1
     // PasskeyRegistered { .. }, PasskeyRemoved { .. },             // B3
@@ -413,6 +416,7 @@ impl SessionEvent {
             SessionEvent::FlowRecorded { .. } => "flowRecorded",
             SessionEvent::WorkspaceRulesSet { .. } => "workspaceRulesSet",
             SessionEvent::ProposalApplied { .. } => "proposalApplied",
+            SessionEvent::AgentKeyCertified { .. } => "agentKeyCertified",
             SessionEvent::Unknown => "unknown",
         }
     }
@@ -442,7 +446,8 @@ impl SessionEvent {
             | SessionEvent::JoinApproved { .. }
             | SessionEvent::ChatLockdownRaised { .. }
             | SessionEvent::ChatLockdownCleared { .. }
-            | SessionEvent::WorkspaceRulesSet { .. } => EventScope::Workspace,
+            | SessionEvent::WorkspaceRulesSet { .. }
+            | SessionEvent::AgentKeyCertified { .. } => EventScope::Workspace,
             SessionEvent::FlowRecorded { record } if record.is_config() => EventScope::Workspace,
             SessionEvent::WorkflowRunUpserted { .. } => EventScope::Run,
             _ => EventScope::Session,
@@ -673,7 +678,7 @@ impl ChatSession {
                 }
             }
             // Read by the roster tracker (authz::timeline), not the session.
-            SessionEvent::WorkspaceRulesSet { .. } => {}
+            SessionEvent::WorkspaceRulesSet { .. } | SessionEvent::AgentKeyCertified { .. } => {}
             SessionEvent::ProposalReverted { proposal_id, .. } => {
                 if let Some(p) = self.proposals.iter_mut().find(|p| p.id == *proposal_id) {
                     p.reverted = p.status == crate::proposals::ProposalStatus::Applied;

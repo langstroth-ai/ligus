@@ -345,6 +345,59 @@ impl DeviceCertificate {
     }
 }
 
+/// An agent's own signing key, certified by the host device that holds it
+/// (Phase 0, A3). Agent-signed events carry `key_id` as their
+/// `signer_device_id`. Valid at a config position only while the host device
+/// is certified and the agent is bound to that host (or, unbound, owned by an
+/// account that certified the host); see `authz::RosterState::valid_agent_key`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentKeyCertificate {
+    pub agent_id: Uuid,
+    pub key_id: Uuid,
+    pub signing_public_key: Vec<u8>,
+    pub host_device_id: Uuid,
+    pub issued_at: Timestamp,
+    pub signature: Vec<u8>,
+}
+
+impl AgentKeyCertificate {
+    fn preimage(agent_id: Uuid, key_id: Uuid, pk: &[u8], host: Uuid, issued_at: Timestamp) -> Vec<u8> {
+        let mut out = Vec::with_capacity(128);
+        // Phase 0 domain tag (section 0.1).
+        out.extend_from_slice(b"ligus-agent-cert-v1\0");
+        out.extend_from_slice(agent_id.as_bytes());
+        out.extend_from_slice(key_id.as_bytes());
+        out.extend_from_slice(pk);
+        out.extend_from_slice(host.as_bytes());
+        let millis = (issued_at.inner().unix_timestamp_nanos() / 1_000_000) as i64;
+        out.extend_from_slice(&millis.to_le_bytes());
+        out
+    }
+
+    /// The `key_id` of an agent key: derived from the agent and the key, so a
+    /// host re-certifying the same key names it the same way.
+    pub fn key_id_for(agent_id: Uuid, signing_public_key: &[u8]) -> Uuid {
+        Uuid::new_v5(&agent_id, signing_public_key)
+    }
+
+    /// Certify `agent_key` for `agent_id`, signed by the host device's key.
+    pub fn issue(host: &SigningKeypair, host_device_id: Uuid, agent_id: Uuid, agent_key: &[u8], issued_at: Timestamp) -> Self {
+        let key_id = Self::key_id_for(agent_id, agent_key);
+        let signature = host.sign(&Self::preimage(agent_id, key_id, agent_key, host_device_id, issued_at)).to_vec();
+        Self { agent_id, key_id, signing_public_key: agent_key.to_vec(), host_device_id, issued_at, signature }
+    }
+
+    /// Verify against the host device's public key.
+    pub fn verify(&self, host_public_key: &[u8]) -> Result<(), CryptoError> {
+        if self.signing_public_key.len() != KEY_LEN || self.key_id != Self::key_id_for(self.agent_id, &self.signing_public_key) {
+            return Err(CryptoError::BadKey);
+        }
+        let pre = Self::preimage(self.agent_id, self.key_id, &self.signing_public_key, self.host_device_id, self.issued_at);
+        verify(host_public_key, &pre, &self.signature)
+    }
+}
+
 /// Public record of one device belonging to an account.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

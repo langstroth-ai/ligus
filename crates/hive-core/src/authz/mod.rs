@@ -31,6 +31,7 @@
 //! The device-local workspace (never synced, single human) is exempt from
 //! role checks, as before.
 
+pub mod agent;
 pub mod bounds;
 pub mod timeline;
 pub mod votes;
@@ -39,7 +40,7 @@ use std::collections::BTreeMap;
 
 use uuid::Uuid;
 
-pub use timeline::{AgentState, ConfigTimeline, DeviceState, MemberState, RosterState, RosterTracker};
+pub use timeline::{AgentKeyState, AgentState, ConfigTimeline, DeviceState, MemberState, RosterState, RosterTracker};
 
 use crate::agent::WorkspaceAgent;
 use crate::authorization::{evaluate, requires_projection_authz};
@@ -230,6 +231,14 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
     // roster at its frontier. Self-validating trust publications are exempt,
     // and a self-enrollment is judged by its invite below.
     let on_config = env.session_id == crate::channel::workspace_config_session_id(env.workspace_id);
+    // Agent-signed events (A3): judged by the Agent tier, capped by the
+    // agent's owner's role, with the key valid at this position.
+    let roster_here = if ctx.checked { ctx.workspace } else if on_config { Some(ctx.running) } else { None };
+    if let Some(roster) = roster_here {
+        if env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == ActorKind::Agent) {
+            return authorize_agent(env, ctx, roster);
+        }
+    }
     let exempt = is_trust_publication(&env.payload) || matches!(env.payload, SessionEvent::MemberAdded { .. });
     if !exempt {
         let member = if ctx.checked {
@@ -253,6 +262,14 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 return Decision::Allow;
             }
         }
+        // A3: a host certifies a key for an agent bound to it (or, unbound,
+        // owned by an account that certified the host), signing with its own
+        // device key, which must be the envelope's signer.
+        if let SessionEvent::AgentKeyCertified { cert } = &env.payload {
+            if let Err(why) = agent_cert_ok(env, cert, ctx.running) {
+                return Decision::deny(why);
+            }
+        }
         // S2: binding an agent to a host or runtime is an Admin action.
         if let Some(floor) = agent_change_floor(&env.payload, author, fold) {
             if role.rank() < floor.rank() {
@@ -273,6 +290,16 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         let Some(role) = at.role_of(author).filter(|_| !author.is_empty()) else {
             return Decision::deny("not a workspace member at this position");
         };
+        // Rules v2 (A3 transition): a host-signed event that speaks for an
+        // agent is judged with the Agent tier. Folds use the highest rules
+        // this build knows.
+        if at.rules.min(RULES_SUPPORTED) >= 2 {
+            if let Some(agent_id) = agent::agent_authored(&env.payload) {
+                if let Err(why) = agent::tier_allows(&env.payload, agent_id, env.signer_device_id.unwrap_or_default(), fold) {
+                    return Decision::deny(why);
+                }
+            }
+        }
         match &env.payload {
             SessionEvent::ProposalVoteCast { proposal_id, approval } => {
                 if approval.actor_id != author {
@@ -313,6 +340,53 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         }
     }
     Decision::Allow
+}
+
+/// An agent-signed event (A3): a key valid at this position whose agent the
+/// stamp names, an owner who is a member here, the Agent tier, and the
+/// owner's role as the cap.
+fn authorize_agent(env: &SessionEventEnvelope, ctx: &Ctx<'_>, roster: &RosterState) -> Decision {
+    let author = author_of(env);
+    let Some(key) = env.signer_device_id.and_then(|k| roster.valid_agent_key(k)) else {
+        return Decision::deny("not signed by an agent key valid here");
+    };
+    if key.agent_id.to_string() != author {
+        return Decision::deny("an agent key signs only for its own agent");
+    }
+    let Some(owner) = roster.agents.get(&key.agent_id).map(|a| a.owner.clone()) else {
+        return Decision::deny("unknown agent");
+    };
+    let Some(cap) = roster.role_of(&owner) else {
+        return Decision::deny("the agent's owner is not a workspace member here");
+    };
+    if let Err(why) = agent::tier_allows(&env.payload, key.agent_id, key.host_device_id, ctx.fold) {
+        return Decision::deny(why);
+    }
+    let d = evaluate(&env.payload, author, cap, ctx.fold);
+    if !d.allowed {
+        return Decision::deny(d.summary);
+    }
+    Decision::Allow
+}
+
+/// The certificate checks of an `AgentKeyCertified`.
+fn agent_cert_ok(
+    env: &SessionEventEnvelope,
+    cert: &crate::crypto::AgentKeyCertificate,
+    roster: &RosterState,
+) -> Result<(), String> {
+    if env.signer_device_id != Some(cert.host_device_id) {
+        return Err("an agent key is certified by the host device that holds it".into());
+    }
+    let host = roster.devices.get(&cert.host_device_id).filter(|d| !d.revoked && !d.accounts.is_empty());
+    let Some(host) = host else {
+        return Err("the host device isn't certified here".into());
+    };
+    cert.verify(&host.public_key).map_err(|e| format!("agent certificate: {e}"))?;
+    if !roster.agent_bound_to(cert.agent_id, cert.host_device_id) {
+        return Err("the agent isn't bound to this host".into());
+    }
+    Ok(())
 }
 
 /// Account keys and device certificates: self-validating (the roster checks

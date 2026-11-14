@@ -58,7 +58,7 @@ pub use chat::{
     ChatMessage, ChatToolCall, ChatToolResult, MessageReaction, MessageRole, TranscriptEventKind,
 };
 pub use crypto::{
-    sign_envelope, verify, verify_envelope, CryptoError, DeviceCertificate, DeviceIdentity,
+    sign_envelope, verify, verify_envelope, AgentKeyCertificate, CryptoError, DeviceCertificate, DeviceIdentity,
     HumanAccount, Platform, SigningKeypair,
 };
 pub use e2ee::{

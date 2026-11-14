@@ -309,7 +309,8 @@ impl EventStore {
         self.query_envelopes(
             "SELECT envelope_json FROM events \
              WHERE kind IN ('accountKeyRegistered','accountKeyRotated','deviceCertificateAdded','deviceRevoked',\
-             'memberAdded','memberRemoved','sessionSnapshot','memberRoleChanged','dearthModeChanged','joinApproved') \
+             'memberAdded','memberRemoved','sessionSnapshot','memberRoleChanged','dearthModeChanged','joinApproved',\
+             'agentKeyCertified','agentUpserted','agentRosterUpdated','agentRemoved') \
              ORDER BY row_id ASC",
             [],
         )
@@ -322,7 +323,8 @@ impl EventStore {
         self.query_envelopes(
             "SELECT envelope_json FROM events WHERE workspace_id = ?1 \
              AND kind IN ('accountKeyRegistered','accountKeyRotated','deviceCertificateAdded','deviceRevoked',\
-             'memberAdded','memberRemoved','sessionSnapshot','memberRoleChanged','dearthModeChanged','joinApproved') \
+             'memberAdded','memberRemoved','sessionSnapshot','memberRoleChanged','dearthModeChanged','joinApproved',\
+             'agentKeyCertified','agentUpserted','agentRosterUpdated','agentRemoved') \
              ORDER BY row_id ASC",
             [workspace_id.to_string()],
         )
