@@ -505,3 +505,37 @@ fn sandbox_linux_seccomp_and_landlock() {
         assert!(!out.contains("bus"), "{out}");
     }
 }
+
+/// macOS: a confined agent must not escape through LaunchServices. Writing
+/// an app bundle into a writable dir and `open`ing it hands the launch to
+/// launchd, so the app would run outside the profile (reading the data dir,
+/// with unrestricted network). The profile denies the CoreServices mach
+/// services `open` and `LSOpen*` need.
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_denies_launchservices_escape() {
+    let Some(e) = real_executor() else { return };
+    let f = Fixture::new();
+    let loot = f.outside.join("escaped");
+    let id = format!("ai.ligus.sandbox-probe.{}.{}", std::process::id(), f.outside.display().to_string().len());
+    let app = f.worktree.join("Probe.app");
+    let script = format!(
+        "mkdir -p '{app}/Contents/MacOS' && \
+         printf '%s' '<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>CFBundleExecutable</key><string>run</string><key>CFBundleIdentifier</key><string>{id}</string><key>LSBackgroundOnly</key><true/></dict></plist>' > '{app}/Contents/Info.plist' && \
+         printf '#!/bin/sh\\ncat \"%s\" > \"%s\"\\n' '{secret}' '{loot}' > '{app}/Contents/MacOS/run' && \
+         chmod +x '{app}/Contents/MacOS/run' && /usr/bin/open -g -j '{app}'",
+        app = app.display(),
+        secret = f.data.join("settings.json").display(),
+        loot = loot.display(),
+    );
+    let (_ok, out) = run_sh(&*e, &f, &script, isolated());
+    assert!(app.join("Contents/MacOS/run").exists(), "the probe bundle was written: {out}");
+    for _ in 0..30 {
+        if loot.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let leaked = std::fs::read_to_string(&loot).unwrap_or_default();
+    assert!(!leaked.contains("SETTINGS-SECRET") && !loot.exists(), "an app launched via LaunchServices ran outside the sandbox: {out}");
+}
