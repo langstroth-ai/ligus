@@ -834,3 +834,53 @@ fn switching_to_any_later_rules_version_needs_presence() {
     let err = svc.add_member(cfg, wid, member("hal", WorkspaceRole::Viewer)).unwrap_err().to_string();
     assert!(err.contains("update Ligus"), "{err}");
 }
+
+struct NeverAsk;
+impl PresenceProvider for NeverAsk {
+    fn assert(&self, req: &PresenceRequest) -> Result<PresenceAssertion, String> {
+        panic!("a background publication asked for a passkey ({})", req.kind);
+    }
+}
+
+/// Follow-up to residual 1a: a new device of an account with a passkey
+/// needs that passkey to be confirmed, but the identity publications Ligus
+/// makes on its own (opening a workspace, the sync loop's key-agreement
+/// key) never ask for one: the desktop's prompt would hold the service lock
+/// for minutes and reopen on every retry. The person confirms the device
+/// once, explicitly.
+#[test]
+fn a_new_device_is_confirmed_explicitly_never_from_a_background_publication() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("hive.db");
+    let account = Uuid::new_v4();
+    let account_seed = SigningKeypair::generate().unwrap().seed_bytes();
+    let mut author = ActorIdentity::new(account.to_string(), "Ana", ActorKind::Human);
+    author.account_id = Some(account);
+    let mut desk = ChatService::new(EventStore::open(&db).unwrap(), Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::from_seed(&account_seed).unwrap(), author.clone());
+    let wid = Uuid::new_v4();
+    desk.ensure_workspace_config(wid).unwrap();
+    let key = Arc::new(SoftAuthenticator::es256());
+    register(&mut desk, wid, &key, None).unwrap();
+    let rec = RecoveryKey::generate().unwrap();
+    let k2 = key.clone();
+    desk.register_passkey(wid, rec.credential(account, "Recovery key"), &move |req| Ok(k2.get(&req.challenge))).unwrap();
+    desk.set_presence_provider(Some(Arc::new(Soft(key.clone()))));
+    desk.set_workspace_rules(wid, 2).unwrap();
+
+    // Ana's second laptop: same account key, its own device key.
+    let mut laptop = ChatService::new(EventStore::open(&db).unwrap(), Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::from_seed(&account_seed).unwrap(), author);
+    laptop.set_presence_provider(Some(Arc::new(NeverAsk)));
+    let cfg = workspace_config_session_id(wid);
+    assert!(!laptop.publish_identity(cfg, wid).unwrap(), "published a device that needs a passkey");
+    let chat = desk.create_chat("c", wid, "anthropic").unwrap().id;
+    laptop.ensure_self_member(chat, wid).unwrap();
+    let ka = hive_core::e2ee::KeyAgreementKeypair::generate().unwrap();
+    assert!(laptop.publish_key_agreement(wid, ka.public_key_bytes()).is_err(), "an unconfirmed device publishes no key");
+    assert!(!laptop.device_confirmed(wid).unwrap());
+
+    // Confirming it is an explicit act, with the passkey.
+    laptop.set_presence_provider(Some(Arc::new(Soft(key))));
+    assert!(laptop.confirm_device(wid).unwrap());
+    assert!(laptop.device_confirmed(wid).unwrap());
+    assert!(laptop.publish_key_agreement(wid, ka.public_key_bytes()).unwrap());
+}

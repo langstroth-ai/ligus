@@ -47,26 +47,20 @@ impl ChatService {
             return Ok(false);
         }
         // The config log's roster must certify this device (a joiner may have
-        // published its identity on a chat log only).
-        if !timeline.current().device_trusted(self.device_id) && !self.delegated {
-            if let Some(account_id) = self.author.account_id {
-                let config_id = workspace_config_session_id(workspace_id);
-                self.append_signed(
-                    config_id,
-                    workspace_id,
-                    SessionEvent::AccountKeyRegistered {
-                        account_id,
-                        signing_public_key: self.account_keypair.public_key_bytes().to_vec(),
-                    },
-                )?;
-                let certificate = hive_core::crypto::DeviceCertificate::issue(
-                    &self.account_keypair,
-                    account_id,
-                    self.device_id,
-                    &self.keypair.public_key_bytes(),
-                    hive_core::Timestamp::now(),
-                );
-                self.append_signed(config_id, workspace_id, SessionEvent::DeviceCertificateAdded { certificate })?;
+        // published its identity on a chat log only). This never asks for a
+        // passkey: under rules v2 a new device of an account with one is
+        // confirmed explicitly (`confirm_device`), and until then it publishes
+        // no key.
+        if !timeline.current().device_trusted(self.device_id) && !self.delegated && self.author.account_id.is_some() {
+            let config_id = workspace_config_session_id(workspace_id);
+            let certified = self.store.has_device_certificate_in(config_id, self.device_id, self.author.account_id.unwrap_or_default())?;
+            if !certified {
+                self.publish_identity(config_id, workspace_id)?;
+            }
+            if !self.device_confirmed(workspace_id)? {
+                return Err(ChatError::Unauthorized(
+                    "this device isn't confirmed for the workspace yet (Settings → Passkeys & keys → Confirm this device)".into(),
+                ));
             }
         }
         self.append_signed(

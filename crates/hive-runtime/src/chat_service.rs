@@ -786,6 +786,24 @@ impl ChatService {
     /// (a local-only session with no verifiable identity). Returns whether it
     /// published.
     pub fn publish_identity(&mut self, session_id: Uuid, workspace_id: Uuid) -> Result<bool> {
+        // Ligus publishes identity on its own (opening a workspace or a chat,
+        // the sync loop), so this never asks for a passkey: a prompt would hold
+        // the service lock for minutes and reopen on every retry. A device that
+        // needs one under rules v2 stays unpublished until the person confirms
+        // it (`confirm_device`).
+        let provider = self.presence_provider.take();
+        let published = self.publish_identity_unprompted(session_id, workspace_id);
+        self.presence_provider = provider;
+        match published {
+            Err(ChatError::Unauthorized(why)) if why == hive_core::authz::PRESENCE_REQUIRED => {
+                tracing::info!(target: "presence", %workspace_id, "this device needs a passkey confirmation before it counts here");
+                Ok(false)
+            }
+            r => r,
+        }
+    }
+
+    fn publish_identity_unprompted(&mut self, session_id: Uuid, workspace_id: Uuid) -> Result<bool> {
         // A delegated device's identity is the owner's certificate for it; its own
         // account key must never be registered under the owner's account id (that
         // would contest the owner's key and quarantine all of their events).

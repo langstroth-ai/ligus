@@ -221,6 +221,42 @@ impl ChatService {
         )
     }
 
+    /// Whether this device's certificate is in force on `workspace_id`'s
+    /// config log (under rules v2 a new device of an account with a passkey
+    /// is only once [`ChatService::confirm_device`] ran).
+    pub fn device_confirmed(&self, workspace_id: Uuid) -> Result<bool> {
+        let Some(account) = self.author.account_id else { return Ok(false) };
+        let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let head = timeline.current();
+        Ok(head.device_trusted(self.device_id) && head.account_certified(account, self.device_id))
+    }
+
+    /// Confirm this device on `workspace_id`: publish its certificate on the
+    /// config log, asking for a passkey when the rules need one (rules v2, an
+    /// account with a passkey). The identity publications Ligus makes on its
+    /// own never ask ([`ChatService::publish_identity`]). Returns whether it
+    /// published.
+    pub fn confirm_device(&mut self, workspace_id: Uuid) -> Result<bool> {
+        if self.delegated || self.device_confirmed(workspace_id)? {
+            return Ok(false);
+        }
+        let Some(account_id) = self.author.account_id else { return Ok(false) };
+        let config_id = workspace_config_session_id(workspace_id);
+        self.publish_identity(config_id, workspace_id)?;
+        if self.device_confirmed(workspace_id)? {
+            return Ok(true);
+        }
+        let certificate = hive_core::crypto::DeviceCertificate::issue(
+            &self.account_keypair,
+            account_id,
+            self.device_id,
+            &self.keypair.public_key_bytes(),
+            hive_core::Timestamp::now(),
+        );
+        self.append_signed(config_id, workspace_id, SessionEvent::DeviceCertificateAdded { certificate })?;
+        Ok(true)
+    }
+
     /// This device's account's credentials on `workspace_id`.
     pub fn passkeys_of(&self, workspace_id: Uuid, account_id: Uuid) -> Result<Vec<(String, bool)>> {
         let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;

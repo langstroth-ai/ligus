@@ -345,6 +345,10 @@ pub struct SecurityStatusDto {
     rules: u32,
     key_version: u32,
     secret_backend: String,
+    /// This device's certificate is in force on the workspace config log
+    /// (under rules v2 a new device of an account with a passkey needs
+    /// **Confirm this device**).
+    device_confirmed: bool,
 }
 
 /// Passkeys of this account on the active workspace, the rules version and
@@ -368,7 +372,22 @@ pub fn security_status(state: State<'_, AppState>) -> Result<SecurityStatusDto, 
         rules,
         key_version: timeline.current().key_epochs.head_version(),
         secret_backend: hive_runtime::secret_store::for_data_dir(&state.data_dir).backend().as_str().into(),
+        device_confirmed: svc.device_confirmed(ws).unwrap_or(false),
     })
+}
+
+/// Confirm this device on the active workspace (rules v2: a new device of an
+/// account with a passkey counts only once that passkey confirms it).
+#[tauri::command]
+pub async fn device_confirm(app: AppHandle) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let ws = state.active_workspace_id();
+        let mut svc = state.service.lock().unwrap();
+        svc.confirm_device(ws).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Register a passkey on the active workspace: one browser ceremony creates

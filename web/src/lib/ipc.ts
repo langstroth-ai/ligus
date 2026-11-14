@@ -1677,6 +1677,9 @@ export type SecurityStatusDto = {
   keyVersion: number;
   /** Where this device keeps Ligus's secrets ("keychain", "file", …). */
   secretBackend: string;
+  /// This device counts on the workspace (rules v2: a new device of an
+  /// account with a passkey needs Confirm this device).
+  deviceConfirmed: boolean;
 };
 /** What the "Confirm with passkey" sheet shows while the browser is open. */
 export type PresencePromptDto = { kind: string; summary: string; digestShort: string; op: "get" | "create" };
@@ -1686,6 +1689,8 @@ export const passkeyRegister = (label: string) => invoke<void>("passkey_register
 export const recoveryKeyCreate = () => invoke<string>("recovery_key_create");
 export const passkeyRemove = (credentialId: string) => invoke<void>("passkey_remove", { credentialId });
 export const workspaceRulesSet = (version: number) => invoke<void>("workspace_rules_set", { version });
+/** Confirm this device on the active workspace with your passkey (rules v2). */
+export const deviceConfirm = () => invoke<boolean>("device_confirm");
 /** Let a member register a first passkey again (an Admin's re-grant, confirmed with your passkey). */
 export const passkeyRegrant = (memberId: string) => invoke<void>("passkey_regrant", { memberId });
 export const rotateWorkspaceKey = () => invoke<{ rotated: boolean; recipients: number }>("rotate_workspace_key");
