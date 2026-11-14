@@ -82,7 +82,7 @@ vote, reject, lockdown clear and agent rebind (see
 | `POST /v1/proposals/:id/comments` | `{text, requestChanges?}` | a Viewer gets 403 |
 | `POST /v1/proposals/:id/request-changes` | `{note?}` | sends the proposal back to its agent (or the default agent). 409 if already revised or applied |
 | `GET /v1/proposals/:id/implement-plan` | | exactly what Implement does: `{plan: {kind, argv?, cwd?, instruction?, targetAgentId?, targetName, legacyCommand}}` |
-| `GET /v1/chats/:id/asks` | | agents' questions in the chat, newest first: `{asks: [{id, agentName, question, options, open, answer?, answeredBy?, expiresAtMs}]}` |
+| `GET /v1/chats/:id/asks` | | agents' questions in the chat, newest first: `{asks: [{id, agentName, kind, question, options, open, answer?, answeredBy?, expiresAtMs}]}`. `kind` is `question` (an agent's `ligus_ask_human`) or `permission` (an ACP permission escalation, which only the host's person or the agent's owner can grant) |
 | `POST /v1/asks/:id/answer` | `{answer?, optionIndex?}` | answers an agent's question as the box's person (the first answer wins; it authorizes nothing, so it needs no presence). 400 if already answered or closed |
 | `GET /v1/proposals/:id/file` | `?path=<relative>&side=old\|new` | one whole file before or after the diff, rebuilt in a scratch dir. 400 bad path, 404, 409 base moved, 413 over 512 KiB, 415 not UTF-8 |
 
@@ -117,7 +117,8 @@ replays the backlog after the `Last-Event-ID` header (a ring of 1024
 events), then streams live, with a keep-alive every 15 s. Event names:
 `message.created`, `message.delta`, `message.done`, `proposal.created`,
 `proposal.updated`, `chat.updated`, `turn.status`, `ask.pending` (an
-agent's question, also pushed to phones). Through the tunnel, an
+agent's question or permission request, with its `kind`, also pushed to
+phones). Through the tunnel, an
 open stream marks the app as in the foreground, so the box doesn't push to
 that phone.
 

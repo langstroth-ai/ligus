@@ -304,6 +304,9 @@ pub fn ask_dto(chat: Uuid, a: &hive_core::flow::HumanAsk) -> Value {
         "options": a.options,
         "expiresAtMs": a.expires_at_ms,
         "closed": a.closed,
+        // `permission`: an ACP permission escalation (only the host's person
+        // or the agent's owner can grant it); `question`: an agent's question.
+        "kind": if a.permission { "permission" } else { "question" },
     })
 }
 
@@ -1336,3 +1339,18 @@ async fn events(State(s): S, peer: Option<Extension<TunnelPeer>>, headers: Heade
     Sse::new(backlog.chain(live)).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("heartbeat"))
 }
 
+#[cfg(test)]
+mod ask_kind_tests {
+    /// A permission escalation is marked as one; a question (and an ask
+    /// from before the field existed) is a question.
+    #[test]
+    fn ask_dto_says_its_kind() {
+        let chat = uuid::Uuid::new_v4();
+        let q = hive_core::flow::HumanAsk { question: "Which database?".into(), ..Default::default() };
+        assert_eq!(super::ask_dto(chat, &q)["kind"], "question");
+        let p = hive_core::flow::HumanAsk { question: "@coder asks permission to run rm (execute). Allow it once?".into(), permission: true, ..Default::default() };
+        assert_eq!(super::ask_dto(chat, &p)["kind"], "permission");
+        let old: hive_core::flow::HumanAsk = serde_json::from_value(serde_json::json!({"askId": chat, "turnId": chat, "agentKey": "a", "question": "q", "atMs": 1})).unwrap();
+        assert_eq!(super::ask_dto(chat, &old)["kind"], "question");
+    }
+}

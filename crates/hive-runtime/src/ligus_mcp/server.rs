@@ -801,7 +801,13 @@ pub struct PostedAsk {
 
 /// Post a [`HumanAsk`] as the agent (Agent tier) and tell the host.
 pub fn post_ask(host: &dyn LigusHost, ctx: &EffectCtx, turn_id: Uuid, question: String, options: Vec<String>, timeout: Duration) -> Result<PostedAsk, String> {
+    post_ask_as(host, ctx, turn_id, question, options, timeout, false)
+}
+
+/// [`post_ask`], marked as a permission escalation when `permission`.
+pub fn post_ask_as(host: &dyn LigusHost, ctx: &EffectCtx, turn_id: Uuid, question: String, options: Vec<String>, timeout: Duration, permission: bool) -> Result<PostedAsk, String> {
     let ask = HumanAsk {
+        permission,
         ask_id: Uuid::new_v4(),
         turn_id,
         agent_key: ctx.agent_key(),
@@ -966,7 +972,7 @@ impl crate::agent_turn::HumanAsker for HostAsker {
     fn ask(&self, question: String, options: Vec<String>, timeout: Duration) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<crate::agent_turn::HumanAnswer>> + Send + '_>> {
         Box::pin(async move {
             let q: String = question.chars().take(flow::MAX_ASK_QUESTION_CHARS).collect();
-            let posted = post_ask(&*self.host, &self.ctx, self.turn_id, q, options, timeout).ok()?;
+            let posted = post_ask_as(&*self.host, &self.ctx, self.turn_id, q, options, timeout, true).ok()?;
             match wait_answer(&*self.host, self.ctx.session_id, posted.ask_id, timeout, || false).await {
                 // A permission answer authorizes a run on this host: it counts
                 // only from the host's own person or the agent's owner. Any
