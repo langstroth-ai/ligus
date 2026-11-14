@@ -2013,6 +2013,48 @@ async fn wait_job(h: &Harness, id: &str) -> Value {
     panic!("clone job {id} never finished");
 }
 
+/// A plain (non-fork) checkout opens its PR on origin's repository, so the
+/// push must land there too: a pushurl or a pushInsteadOf rewrite that
+/// sends it to another repository is refused, and nothing is pushed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn non_fork_push_target_must_equal_origin_fetch_repo() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let remotes = h._tmp.path().join("remotes");
+    std::fs::create_dir_all(&remotes).unwrap();
+    fake_remote(&remotes, "acme", "widget");
+    fake_remote(&remotes, "mallory", "widget");
+    let fake = Arc::new(FakeGitHub::new(&remotes, true));
+    use_fake(&h, fake.clone());
+    let job = h.send(reqwest::Method::POST, "/v1/repos/clone", Some(json!({ "repo": "acme/widget" }))).await;
+    assert_eq!(wait_job(&h, job["job"]["id"].as_str().unwrap()).await["state"], "done");
+    let checkout = h.handle.shared.cfg.data_dir.join("repos").join("acme__widget");
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "push target" }))).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    h.send(reqwest::Method::PUT, &format!("/v1/chats/{chat_id}/repo"), Some(json!({ "repo": "acme/widget" }))).await;
+    let wt = hive_runtime::git_worktree::chat_worktree(&checkout, &chat_id).unwrap();
+    std::fs::write(wt.join("THING.md"), "thing\n").unwrap();
+    git(&wt, &["add", "-A"]);
+    git(&wt, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "thing"]);
+    let mallory = format!("file://{}/mallory/widget.git", remotes.display());
+    let mallory_bare = remotes.join("mallory").join("widget.git");
+    let pr_path = format!("/v1/chats/{chat_id}/pr");
+    for (key, value) in [
+        ("remote.origin.pushurl".to_string(), mallory.clone()),
+        (format!("url.file://{}/mallory/.pushInsteadOf", remotes.display()), format!("file://{}/acme/", remotes.display())),
+    ] {
+        git(&checkout, &["config", &key, &value]);
+        let (c, v) = status_of(&h, reqwest::Method::POST, &pr_path, Some(json!({ "title": "Add thing" }))).await;
+        assert_eq!(c, 409, "{key}: {v}");
+        let o = std::process::Command::new("git").arg("-C").arg(&mallory_bare).args(["rev-parse", "--verify", "--quiet", &format!("refs/heads/hive/chat/{chat_id}")]).output().unwrap();
+        assert!(!o.status.success(), "{key}: the chat branch was pushed to mallory/widget");
+        git(&checkout, &["config", "--unset-all", &key]);
+    }
+    assert!(fake.prs.lock().unwrap().is_empty(), "no PR opened");
+    let pr = h.send(reqwest::Method::POST, &pr_path, Some(json!({ "title": "Add thing" }))).await;
+    assert_eq!(pr["url"], "https://github.com/acme/widget/pull/1", "{pr}");
+}
+
 /// The phone lists repos, clones one, switches a chat onto it (and back),
 /// pulls, and opens a PR from the chat's branch; the agent's turn is told
 /// which repo and branch it works in.

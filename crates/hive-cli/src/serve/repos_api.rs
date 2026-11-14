@@ -1321,7 +1321,9 @@ pub async fn open_pr(State(s): S, Path(id): Path<String>, Json(req): Json<PrReq>
     let branch = repos::chat_branch(chat.id);
     let conflict = |m: String| err(StatusCode::CONFLICT, m);
     let d = dir.clone();
-    let origin = blocking(move || repos::git_out(&d, &["remote", "get-url", "origin"])).await?.unwrap_or_default();
+    // The configured URL: the PR is opened on that repository, whatever
+    // insteadOf rewrites say.
+    let origin = blocking(move || hive_runtime::ligus_mcp::forge_tools::configured_remote_url(&d, "origin")).await?.unwrap_or_default();
     let (h, remote) = s
         .repos
         .forge_of_remote(&s.cfg.data_dir, &origin)
@@ -1341,6 +1343,7 @@ pub async fn open_pr(State(s): S, Path(id): Path<String>, Json(req): Json<PrReq>
     let auth = h.forge.git_auth_args();
     let b = branch.clone();
     let remote_c = remote.clone();
+    let origin_url = origin.clone();
     // Git work (checks, fetch, push) on a blocking thread; nothing is pushed
     // to the upstream project, and nothing is ever forced.
     let pushed = blocking(move || -> Result<Pushed, (StatusCode, String)> {
@@ -1361,7 +1364,15 @@ pub async fn open_pr(State(s): S, Path(id): Path<String>, Json(req): Json<PrReq>
                     remote_c.full_name()
                 )));
             }
-            repos::check_push_target(&dir, "origin", None).map_err(conflict)?;
+            // The PR opens on origin's repository: every push URL (after
+            // pushurl and pushInsteadOf) must be that repository, or the
+            // branch lands somewhere the PR doesn't point.
+            let target = repos::check_push_target(&dir, "origin", None).map_err(conflict)?;
+            let fetch_host = repos::parse_remote(&origin_url).map(|r| r.host).unwrap_or_default();
+            let same_host = target.host.is_empty() || fetch_host.is_empty() || hive_forge::spec::same_host(&target.host, &fetch_host);
+            if !(same_host && target.owner.eq_ignore_ascii_case(&remote_c.owner) && target.name.eq_ignore_ascii_case(&remote_c.name)) {
+                return Err(conflict(format!("origin pushes to {}, not {}: fix the remote first", target.full_name(), remote_c.full_name())));
+            }
             let base = info.default_branch.ok_or_else(|| conflict("can't tell the default branch".into()))?;
             git(&dir, &auth, &["fetch", "origin", &base], GIT_TIMEOUT).map_err(|e| (StatusCode::BAD_GATEWAY, format!("git fetch: {e}")))?;
             let ahead = repos::git_out(&dir, &["rev-list", "--count", &format!("refs/remotes/origin/{base}..refs/heads/{branch}")])
