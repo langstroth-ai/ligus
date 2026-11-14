@@ -323,4 +323,18 @@ mod tests {
         assert_eq!(check_founder(Some(&peer.to_string()), Some(fk), &known, Some(Uuid::new_v4())), FounderTrust::Claimed);
         assert_eq!(check_founder(Some(&peer.to_string()), Some(fk), &known, Some(peer)), FounderTrust::KnownMatch);
     }
+
+    /// The display-name cleaner (S3) and the identity-link handle check (L5)
+    /// hide exactly the same characters.
+    #[test]
+    fn name_and_handle_sanitizers_agree() {
+        for c in (0u32..=0xE0FFF).filter_map(char::from_u32) {
+            assert_eq!(
+                hive_proto::names::is_hidden_name_char(c),
+                c.is_control() || hive_core::identity_link::is_invisible_format(c),
+                "U+{:04X}",
+                c as u32
+            );
+        }
+    }
 }

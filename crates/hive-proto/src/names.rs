@@ -34,8 +34,7 @@ pub fn is_hidden_name_char(c: char) -> bool {
         | '\u{FFA0}'                // halfwidth Hangul filler
         | '\u{FFF9}'..='\u{FFFB}'   // interlinear annotations
         | '\u{1D173}'..='\u{1D17A}' // musical format characters
-        | '\u{E0000}'..='\u{E007F}' // tags
-        | '\u{E0100}'..='\u{E01EF}' // variation selectors supplement
+        | '\u{E0000}'..='\u{E0FFF}' // tags, variation selectors supplement, unassigned format block
     ) || c.is_control()
 }
 
