@@ -883,12 +883,15 @@ pub trait LinkCheckCache {
     fn put_check(&self, key: &str, check: &CachedCheck);
 }
 
-/// The cache key: the link's content and the workspace it was published in
-/// (any change to the claim is a new check).
-pub fn cache_key(link: &IdentityLink, workspace_id: Uuid) -> String {
+/// The cache key: the link's content, the workspace it was published in and
+/// the account key it is checked under (any change to the claim, or to the
+/// key a published-key link stands for, is a new check).
+pub fn cache_key(link: &IdentityLink, workspace_id: Uuid, account_key: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
     h.update(workspace_id.as_bytes());
+    h.update((account_key.len() as u64).to_be_bytes());
+    h.update(account_key);
     h.update(serde_json::to_vec(link).unwrap_or_default());
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -910,7 +913,7 @@ pub async fn check_cached(
     now: Timestamp,
     force: bool,
 ) -> LinkStatus {
-    let key = cache_key(link, ctx.workspace_id);
+    let key = cache_key(link, ctx.workspace_id, ctx.account_key.unwrap_or_default());
     let cached = cache.get_check(&key);
     if let Err(status) = offline_check(link, ctx, now) {
         return status;

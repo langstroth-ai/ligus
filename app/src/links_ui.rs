@@ -336,7 +336,7 @@ fn links_of(state: &AppState, account: Uuid) -> Vec<ShownLink> {
         for l in wl.of(account) {
             let e = by_id.entry(l.link_id).or_insert_with(|| {
                 let key = wl.account_keys.get(&account).cloned();
-                let status = svc.store().get_check(&identity_links::cache_key(l, ws)).map(|c| c.status);
+                let status = svc.store().get_check(&identity_links::cache_key(l, ws, &key.clone().unwrap_or_default())).map(|c| c.status);
                 (
                     LinkDto {
                         link_id: l.link_id.to_string(),
@@ -379,7 +379,7 @@ pub(crate) async fn identity_link_statuses(state: State<'_, AppState>, account_i
     let mut out = Vec::new();
     for (mut dto, ws, link, key) in links_of(&state, account) {
         let ctx = LinkContext { workspace_id: ws, account_key: key.as_deref() };
-        let ck = identity_links::cache_key(&link, ws);
+        let ck = identity_links::cache_key(&link, ws, key.as_deref().unwrap_or_default());
         let cached = state.service.lock().unwrap().store().get_check(&ck);
         let offline = identity_links::offline_check(&link, ctx, now);
         let status = match offline {

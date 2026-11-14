@@ -779,3 +779,26 @@ fn embedded_private_ipv4_in_ipv6_is_not_public() {
         assert!(is_public_ip(good.parse().unwrap()), "{good}");
     }
 }
+
+/// A published-key link has no statement: what it proves depends on the
+/// account key at check time. A verified check cached under one account key
+/// must not answer for the link once the account key changed (rotation, or
+/// another workspace registering another key for the same account).
+#[tokio::test]
+async fn cached_check_is_bound_to_the_account_key() {
+    let gh = server().await;
+    let mine = account_key_openssh(&ACCOUNT_KEY).unwrap();
+    github_alice(&gh, "alice", &[], &[mine]);
+    let mut l = golden_link();
+    l.method = LinkMethod::KeyPublished;
+    l.nonce.clear();
+    let f = fetcher(&[("github", "github.com", &gh)]);
+    let cache = MemoryCache::default();
+    assert!(check_cached(&cache, &l, ctx(), &f, now(), false).await.is_verified());
+    let other = [9u8; 32];
+    let rotated = LinkContext { workspace_id: ws(), account_key: Some(&other) };
+    let later = Timestamp(now().0 + time::Duration::hours(1));
+    let s = check_cached(&cache, &l, rotated, &f, later, false).await;
+    assert!(matches!(s, LinkStatus::Stale { .. }), "the forge lists the old key, not this one: {s:?}");
+    assert_ne!(cache_key(&l, ws(), &ACCOUNT_KEY), cache_key(&l, ws(), &other));
+}
