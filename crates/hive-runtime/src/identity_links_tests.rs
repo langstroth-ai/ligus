@@ -634,3 +634,22 @@ async fn fold_ignores_forge_answers() {
     assert_eq!(before.0, after.0);
     assert_eq!(before.1, after.1);
 }
+
+// ---------------------------------------------------------------------------
+// Adversarial review (linked identities, 2.0 residuals)
+
+/// A forge (or a DID document) is not trusted to hand back a clean name: a
+/// GitLab username or an atproto handle carrying bidi overrides or
+/// zero-width characters is shown without them.
+#[tokio::test]
+async fn forge_supplied_handles_lose_bidi_controls() {
+    let gl = server().await;
+    let k = key(3);
+    gl.set("/users/77/keys", 200, serde_json::json!([{"id": 1, "key": openssh_pub(&k), "usage_type": "auth"}]).to_string());
+    gl.set("/users/77", 200, serde_json::json!({"id": 77, "username": "b\u{200B}ob\u{202E}"}).to_string());
+    let f = fetcher(&[("gitlab", "gitlab.com", &gl)]);
+    let l = signed("gitlab", "gitlab.com", "77", "bob", &k);
+    let s = check_link(&l, ctx(), &f, now(), None).await;
+    assert!(matches!(&s, LinkStatus::Verified { handle: Some(h), .. } if h == "bob"), "{s:?}");
+}
+

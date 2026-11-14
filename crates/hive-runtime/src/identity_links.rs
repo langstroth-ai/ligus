@@ -528,7 +528,7 @@ impl LinkFetcher {
                 let root = self.root(provider, host)?;
                 let v = self.get_json(&format!("{root}/users/{handle}"), false).await?;
                 let id = v["id"].as_u64().ok_or(FetchError::Gone)?;
-                Ok((id.to_string(), v["login"].as_str().unwrap_or(handle).to_string()))
+                Ok((id.to_string(), v["login"].as_str().and_then(clean_handle).unwrap_or_else(|| handle.to_string())))
             }
             "gitlab" => {
                 if !safe_segment(handle) {
@@ -538,7 +538,7 @@ impl LinkFetcher {
                 let v = self.get_json(&format!("{root}/users?username={handle}"), false).await?;
                 let u = v.as_array().and_then(|a| a.first()).ok_or(FetchError::Gone)?;
                 let id = u["id"].as_u64().ok_or(FetchError::Gone)?;
-                Ok((id.to_string(), u["username"].as_str().unwrap_or(handle).to_string()))
+                Ok((id.to_string(), u["username"].as_str().and_then(clean_handle).unwrap_or_else(|| handle.to_string())))
             }
             "forgejo" | "gitea" => {
                 if !safe_segment(handle) {
@@ -551,7 +551,7 @@ impl LinkFetcher {
                     .and_then(|a| a.iter().find(|u| u["login"].as_str().is_some_and(|l| l.eq_ignore_ascii_case(handle))))
                     .ok_or(FetchError::Gone)?;
                 let id = u["id"].as_u64().ok_or(FetchError::Gone)?;
-                Ok((id.to_string(), u["login"].as_str().unwrap_or(handle).to_string()))
+                Ok((id.to_string(), u["login"].as_str().and_then(clean_handle).unwrap_or_else(|| handle.to_string())))
             }
             "sourcehut" => {
                 let user = format!("~{}", handle.trim_start_matches('~'));
@@ -654,7 +654,7 @@ impl LinkFetcher {
                 // The handle is display only; gitlab.com doesn't answer
                 // `/users/{id}` anonymously.
                 let handle = match self.get_json(&format!("{root}/users/{subject_id}"), false).await {
-                    Ok(u) => u["username"].as_str().map(str::to_string),
+                    Ok(u) => u["username"].as_str().and_then(clean_handle),
                     Err(_) => None,
                 };
                 Ok(KeyList { handle, keys, name_bound: false })
@@ -735,7 +735,15 @@ fn text_keys(body: &[u8]) -> Vec<ForgeKey> {
 }
 
 fn handle_of(doc: &serde_json::Value) -> Option<String> {
-    doc["alsoKnownAs"].as_array()?.iter().filter_map(|a| a.as_str()?.strip_prefix("at://")).map(str::to_string).next()
+    doc["alsoKnownAs"].as_array()?.iter().filter_map(|a| a.as_str()?.strip_prefix("at://")).find_map(clean_handle)
+}
+
+/// A name a forge or DID document supplied, as it may be shown: without
+/// control, bidi or zero-width characters, trimmed, at most 256 bytes.
+fn clean_handle(s: &str) -> Option<String> {
+    let c = hive_core::identity_link::strip_bidi_controls(s);
+    let c = c.trim();
+    (!c.is_empty() && c.len() <= 256 && !c.chars().any(char::is_whitespace)).then(|| c.to_string())
 }
 
 fn pds_of(doc: &serde_json::Value) -> Option<String> {
