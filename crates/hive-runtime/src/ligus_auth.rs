@@ -554,12 +554,57 @@ pub async fn sign_out(http: &reqwest::Client, dir: &Path) {
 /// Cross-process lock around a refresh: two processes on one data directory
 /// must not both spend the same refresh token (ligus-auth would treat the
 /// second use as theft and end the session).
+///
+/// On Unix this is an advisory `flock` on the lock file: the kernel drops it
+/// when the holder exits or crashes, so there is no stale-lock guessing and a
+/// lock that is still held is never taken over, however long the refresh
+/// takes.
+#[cfg(unix)]
+struct RefreshLock(#[allow(dead_code)] std::fs::File);
+
+#[cfg(unix)]
+impl RefreshLock {
+    async fn acquire(dir: &Path) -> Result<Self, AuthError> {
+        use std::os::unix::fs::OpenOptionsExt;
+        use std::os::unix::io::AsRawFd;
+        std::fs::create_dir_all(dir).map_err(|e| AuthError::Io(e.to_string()))?;
+        let f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(dir.join(LOCK_FILE))
+            .map_err(|e| AuthError::Io(e.to_string()))?;
+        // Up to 90 s: longer than one refresh can hold the lock.
+        for _ in 0..900 {
+            // SAFETY: flock on a file descriptor this function owns.
+            if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                return Ok(Self(f));
+            }
+            let err = std::io::Error::last_os_error();
+            if err.kind() != std::io::ErrorKind::WouldBlock
+                && err.raw_os_error() != Some(libc::EINTR)
+            {
+                return Err(AuthError::Io(err.to_string()));
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        Err(AuthError::Io(
+            "timed out waiting for the refresh lock".into(),
+        ))
+    }
+}
+
+/// Elsewhere: an exclusive-create lock file, taken over only when older than
+/// the longest a refresh can hold it.
+#[cfg(not(unix))]
 struct RefreshLock(PathBuf);
 
+#[cfg(not(unix))]
 impl RefreshLock {
     async fn acquire(dir: &Path) -> Result<Self, AuthError> {
         let p = dir.join(LOCK_FILE);
-        for _ in 0..100 {
+        for _ in 0..900 {
             match std::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -567,12 +612,11 @@ impl RefreshLock {
             {
                 Ok(_) => return Ok(Self(p)),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    // A lock older than a minute is left over from a crash.
                     let stale = std::fs::metadata(&p)
                         .and_then(|m| m.modified())
                         .ok()
                         .and_then(|t| t.elapsed().ok())
-                        .is_some_and(|age| age > Duration::from_secs(60));
+                        .is_some_and(|age| age > Duration::from_secs(300));
                     if stale {
                         let _ = std::fs::remove_file(&p);
                         continue;
@@ -588,6 +632,7 @@ impl RefreshLock {
     }
 }
 
+#[cfg(not(unix))]
 impl Drop for RefreshLock {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.0);
@@ -796,6 +841,35 @@ mod tests {
         assert!(load_session(dir.path()).is_none());
     }
 
+    /// E-4: a refresh lock that is still held is never taken over, however
+    /// old its file looks. The old lock treated any lock file older than a
+    /// minute as left over from a crash and deleted it, but a refresh can hold
+    /// the lock that long (two token requests, each up to 40 s), so a second
+    /// process then spent the same refresh token and ligus-auth revoked the
+    /// whole session as stolen.
+    #[tokio::test]
+    async fn held_refresh_lock_is_never_stolen() {
+        let dir = tempfile::tempdir().unwrap();
+        let held = RefreshLock::acquire(dir.path()).await.unwrap();
+        let old = std::time::SystemTime::now() - Duration::from_secs(600);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(dir.path().join(LOCK_FILE))
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let second =
+            tokio::time::timeout(Duration::from_millis(800), RefreshLock::acquire(dir.path())).await;
+        assert!(
+            !matches!(second, Ok(Ok(_))),
+            "a held refresh lock was taken over"
+        );
+        drop(held);
+        let third =
+            tokio::time::timeout(Duration::from_secs(2), RefreshLock::acquire(dir.path())).await;
+        assert!(matches!(third, Ok(Ok(_))), "released lock is acquirable");
+    }
+
     // ── mock ligus-auth: device flow + device proof + refresh rotation ──────
 
     use axum::{extract::State, routing::post, Form, Json, Router};
@@ -947,7 +1021,12 @@ mod tests {
             "rotated token is saved"
         );
         assert_eq!(m.lock().unwrap().bad_proofs, 0);
-        assert!(!dir.path().join(LOCK_FILE).exists(), "lock released");
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), RefreshLock::acquire(dir.path()))
+                .await
+                .is_ok_and(|r| r.is_ok()),
+            "lock released"
+        );
 
         // Another device's key cannot use this session.
         let thief = DeviceKey::new(uuid::Uuid::new_v4(), SigningKeypair::generate().unwrap());

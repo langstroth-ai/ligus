@@ -38,6 +38,7 @@ iroh = { version = "1.0.0-rc.1", optional = true }
 landlock = "0.4"
 seccompiler = "0.4"
 
+# setsid for confined children; flock for the ligus-auth refresh lock.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
