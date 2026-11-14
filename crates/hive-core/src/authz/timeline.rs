@@ -82,6 +82,11 @@ pub struct RosterState {
     pub rules: u32,
     /// The path zones (Admin-set review bars) in force.
     pub zones: Vec<crate::flow::PathZone>,
+    /// The authorized workspace-key rotations so far (B1).
+    pub key_epochs: crate::keys::KeyEpochs,
+    /// Each device's own published X25519 key-agreement key (B1): the only
+    /// keys a rotation seals to.
+    pub ka_keys: BTreeMap<Uuid, Vec<u8>>,
 }
 
 impl RosterState {
@@ -125,6 +130,26 @@ impl RosterState {
     pub fn valid_agent_key(&self, key_id: Uuid) -> Option<&AgentKeyState> {
         let key = self.agent_keys.get(&key_id)?;
         self.agent_bound_to(key.agent_id, key.host_device_id).then_some(key)
+    }
+
+    /// Who a rotation at this position seals the new key to (B1): every
+    /// device that published its own key-agreement key, is certified and not
+    /// revoked, and acts for a current member's account (a member's own
+    /// devices and the serve or worker boxes enrolled for them), plus every
+    /// device an agent is bound to. Device id → X25519 public key.
+    pub fn rotation_recipients(&self) -> BTreeMap<Uuid, Vec<u8>> {
+        let accounts: BTreeSet<Uuid> = self.members.values().filter_map(|m| m.account_id).collect();
+        let hosts: BTreeSet<&str> = self.agents.values().map(|a| a.host_id.as_str()).filter(|h| !h.is_empty()).collect();
+        self.ka_keys
+            .iter()
+            .filter(|(device, _)| {
+                let Some(d) = self.devices.get(device) else { return false };
+                !d.revoked
+                    && !d.accounts.is_empty()
+                    && (d.accounts.iter().any(|a| accounts.contains(a)) || hosts.contains(device.to_string().as_str()))
+            })
+            .map(|(d, k)| (*d, k.clone()))
+            .collect()
     }
 
     fn fingerprint(&self) -> u64 {
@@ -228,6 +253,12 @@ impl RosterTracker {
             SessionEvent::WorkspaceRulesSet { version } if allowed => {
                 self.state.rules = *version;
             }
+            SessionEvent::WorkspaceKeyRotated { rotation } if allowed => {
+                self.state.key_epochs.push(rotation, env.canonical_key());
+            }
+            SessionEvent::DeviceKeyAgreementPublished { device_id, ka_public } if allowed => {
+                self.state.ka_keys.insert(*device_id, ka_public.clone());
+            }
             e if allowed && touches_roster(e) => self.refresh(fold),
             _ => {}
         }
@@ -307,6 +338,10 @@ pub struct ConfigTimeline {
     states: Vec<Arc<RosterState>>,
     /// Every config event this device holds (folded or not) → its lamport.
     held: HashMap<Uuid, u64>,
+    /// Every rotation body on the log, authorized or not: keys a device can
+    /// open from these are read-only candidates (B1; never sealed under
+    /// unless authorized).
+    rotations: Vec<crate::keys::SignedRotation>,
     fingerprint: u64,
 }
 
@@ -319,6 +354,18 @@ impl ConfigTimeline {
     /// Note an event of the config log this device holds (folded or not).
     pub fn note_held(&mut self, event_id: Uuid, lamport: u64) {
         self.held.insert(event_id, lamport);
+    }
+
+    /// Note a rotation body seen on the log (authorized or not).
+    pub fn note_rotation(&mut self, rotation: &crate::keys::SignedRotation) {
+        if !self.rotations.contains(rotation) {
+            self.rotations.push(rotation.clone());
+        }
+    }
+
+    /// Every rotation body seen on the log, authorized or not.
+    pub fn rotation_candidates(&self) -> &[crate::keys::SignedRotation] {
+        &self.rotations
     }
 
     /// Record the state after the folded event `key` (`changed` = a new state).

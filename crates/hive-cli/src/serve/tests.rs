@@ -126,6 +126,7 @@ fn config(dir: &Path, relay: &str, room: &str) -> Config {
         github_token: None,
         room: room.to_string(),
         key: Some("serve-test-passphrase".into()),
+        epoch_keys: Vec::new(),
     }
 }
 
@@ -1431,6 +1432,7 @@ fn serve_options_refuse_public_binds_and_need_both_ntfy_parts() {
         github_token: None,
         room: "r".into(),
         key: None,
+        epoch_keys: Vec::new(),
     };
     let opts = |listen: &str, url: Option<&str>, topic: Option<&str>| {
         ServeOptions::from_flags(

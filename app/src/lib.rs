@@ -625,6 +625,11 @@ struct WorkspaceConn {
     /// when absent (and never stored in the founder's own settings).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     inv: Option<String>,
+    /// Every authorized epoch key the inviter held (Phase 0, B1): a newcomer
+    /// reads the history and seals at the head before any rotation names its
+    /// device. A bearer secret, like `key`. Left out when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ek: Vec<hive_runtime::keyring::DeliveredKey>,
 }
 
 impl WorkspaceConn {
@@ -687,6 +692,7 @@ mod workspace_invite_tests {
             founder_actor_id: Some("github:42".into()),
             fk: Some("00112233445566778899aabbccddeeff".into()),
             inv: None,
+            ek: Vec::new(),
         };
         let invite = encode_workspace_invite(&conn);
         assert!(invite.starts_with("hivews1:"));
@@ -714,6 +720,7 @@ mod workspace_invite_tests {
             founder_actor_id: None,
             fk: None,
             inv: None,
+            ek: Vec::new(),
         };
         let invite = format!("  {}\n", encode_workspace_invite(&conn));
         let back = decode_workspace_invite(&invite).unwrap();
@@ -750,8 +757,8 @@ mod workspace_invite_tests {
 
     #[test]
     fn same_room_shares_workspace_id() {
-        let a = WorkspaceConn { name: "A".into(), relay_url: "x".into(), room: "shared".into(), key: None, icon: None, dm_account: None, founder_actor_id: None, fk: None, inv: None };
-        let b = WorkspaceConn { name: "B".into(), relay_url: "y".into(), room: "shared".into(), key: Some("k".into()), icon: None, dm_account: None, founder_actor_id: Some("github:1".into()), fk: None, inv: None };
+        let a = WorkspaceConn { name: "A".into(), relay_url: "x".into(), room: "shared".into(), key: None, icon: None, dm_account: None, founder_actor_id: None, fk: None, inv: None, ek: Vec::new() };
+        let b = WorkspaceConn { name: "B".into(), relay_url: "y".into(), room: "shared".into(), key: Some("k".into()), icon: None, dm_account: None, founder_actor_id: Some("github:1".into()), fk: None, inv: None, ek: Vec::new() };
         assert_eq!(a.id(), b.id());
     }
 
@@ -793,6 +800,7 @@ mod workspace_invite_tests {
             founder_actor_id: Some("github:7".into()),
             fk: None,
             inv: None,
+            ek: Vec::new(),
         };
         let invite = encode_workspace_invite(&founder);
         let joined = decode_workspace_invite(&invite).unwrap();
@@ -4639,37 +4647,6 @@ struct RevokeResultDto {
     recipients: u32,
 }
 
-/// Every key-agreement public key ever seen for each member account, gathered from
-/// the actor stamps on the workspace-config log (account id → set of KA keys). Each
-/// device stamps its own KA key on the events it authors, so this captures ALL of a
-/// member's devices — not just the one KA last synced onto their roster actor.
-///
-/// P2-4: sealing a rotation/invite to `member.actor.key_agreement_public` (one key
-/// per member) left a member's *other* devices unable to open the new epoch ("no
-/// key for epoch N"). Seal to every device instead.
-fn member_device_ka_keys(
-    svc: &hive_runtime::chat_service::ChatService,
-    workspace_id: Uuid,
-) -> std::collections::HashMap<String, Vec<Vec<u8>>> {
-    let config_id = hive_core::workspace_config_session_id(workspace_id);
-    let mut map: std::collections::HashMap<String, std::collections::HashSet<Vec<u8>>> =
-        Default::default();
-    if let Ok(envs) = svc.store().list(config_id) {
-        for env in envs {
-            if let Some(stamp) = &env.actor_stamp {
-                if let (Some(acct), Some(ka)) =
-                    (stamp.actor.account_id, stamp.actor.key_agreement_public.as_ref())
-                {
-                    if !ka.is_empty() {
-                        map.entry(acct.to_string()).or_default().insert(ka.clone());
-                    }
-                }
-            }
-        }
-    }
-    map.into_iter().map(|(k, v)| (k, v.into_iter().collect())).collect()
-}
-
 /// Remove a member AND rotate the workspace key, sealed only to the remaining
 /// members' devices. The removed member keeps the old key but can't open the
 /// rotation, so they can't read traffic sent after revocation. Authorization
@@ -4683,75 +4660,74 @@ async fn remove_and_revoke(
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let active_ws = state.active_workspace_id();
 
-    // Gather the remaining members' device keys, then remove the member. All
-    // synchronous — the service guard must not be held across an await.
-    let recipients: Vec<(String, Vec<u8>)> = {
-        let mut svc = state.service.lock().unwrap();
-        let session = svc
-            .load(sid)
-            .map_err(map_err)?
-            .ok_or_else(|| "Unknown chat.".to_string())?;
-        // All KA keys per member account, across every device (P2-4) — not just the
-        // one on the roster actor, so a remaining member's other devices can open
-        // the new epoch too.
-        let device_keys = member_device_ka_keys(&svc, active_ws);
-        let mut map: std::collections::BTreeMap<String, Vec<u8>> = Default::default();
-        for m in &session.members {
-            if m.id == member_id {
-                continue; // exclude the removed member's devices from the new epoch
-            }
-            let mut keys: std::collections::HashSet<Vec<u8>> =
-                device_keys.get(&m.actor.id).cloned().unwrap_or_default().into_iter().collect();
-            if let Some(pk) = &m.actor.key_agreement_public {
-                keys.insert(pk.clone());
-            }
-            for (i, ka) in keys.into_iter().enumerate() {
-                map.insert(format!("{}:{i}", m.actor.id), ka);
-            }
-        }
-        // Always seal to the acting owner's own device so they adopt the new key.
-        let me = svc.author().clone();
-        if let Some(pk) = &me.key_agreement_public {
-            map.insert(format!("{}:self", me.id), pk.clone());
-        }
-        svc.remove_member(sid, active_ws, member_id.clone())
-            .map_err(map_err)?;
-        map.into_iter().collect()
-    };
-
-    let (relay_url, room) = {
-        let s = state.settings.lock().unwrap();
-        (
-            s.relay_url.clone().filter(|u| !u.trim().is_empty()),
-            s.sync_room.clone(),
-        )
-    };
-    let Some(url) = relay_url else {
-        return Ok(RevokeResultDto { rotated: false, recipients: recipients.len() as u32 });
-    };
-    if recipients.is_empty() {
+    // Remove the member (synchronous; the service guard is never held across
+    // an await), then rotate the key to everyone who remains (B1).
+    state.service.lock().unwrap().remove_member(sid, active_ws, member_id.clone()).map_err(map_err)?;
+    let relay_url = state.settings.lock().unwrap().relay_url.clone().filter(|u| !u.trim().is_empty());
+    if relay_url.is_none() {
         return Ok(RevokeResultDto { rotated: false, recipients: 0 });
     }
-    let client = state.relay_client(&url);
-    let next_version = client
-        .fetch_key_rotations(&room)
-        .await
-        .ok()
-        .and_then(|rs| rs.iter().map(|r| r.version).max())
-        .unwrap_or(0)
-        + 1;
-    let new_key = hive_core::e2ee::generate_workspace_key().map_err(|e| format!("{e:?}"))?;
-    let rotation = hive_core::e2ee::WorkspaceKeyRotation::seal_for_devices(
-        next_version,
-        &new_key,
-        &recipients,
-    )
-    .map_err(|e| format!("{e:?}"))?;
-    client
-        .publish_key_rotation(&room, &rotation)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(RevokeResultDto { rotated: true, recipients: recipients.len() as u32 })
+    rotate_active_workspace_key(&state).await
+}
+
+/// Rotate the active workspace's key (Phase 0, B1): a signed
+/// `WorkspaceKeyRotated` on the config log, sealed only to the key-agreement
+/// keys the roster's devices published themselves (never the relay
+/// directory), then the body to the relay keyring route for devices whose
+/// config log is behind. Admin+ (and passkey presence under rules v2).
+async fn rotate_active_workspace_key(state: &AppState) -> Result<RevokeResultDto, String> {
+    let ws = state.active_workspace_id();
+    let issued = state.service.lock().unwrap().rotate_workspace_key(ws).map_err(map_err)?;
+    let (relay_url, room) = {
+        let s = state.settings.lock().unwrap();
+        (s.relay_url.clone().filter(|u| !u.trim().is_empty()), s.sync_room.clone())
+    };
+    if let Some(url) = relay_url {
+        let client = state.relay_client(&url);
+        if let Err(e) = hive_runtime::keyring::publish_rotation(&client, &room, &issued.rotation).await {
+            tracing::warn!(target: "sync", "keyring route refused the rotation body ({e}); the config log carries it");
+        }
+    }
+    Ok(RevokeResultDto { rotated: true, recipients: issued.rotation.sealed.len() as u32 })
+}
+
+/// Rotate the active workspace's key now (Settings → Security, or after a
+/// lost rotation tie).
+#[tauri::command]
+async fn rotate_workspace_key(state: State<'_, AppState>) -> Result<RevokeResultDto, String> {
+    rotate_active_workspace_key(&state).await
+}
+
+/// This device's key source for `conn`'s workspace (B1): its id, its
+/// key-agreement keypair, the passphrase key and the epoch keys an invite
+/// delivered. The same inputs every host's keyring is built from.
+fn key_source_for(state: &AppState, conn: Option<&WorkspaceConn>) -> hive_runtime::keyring::KeySource {
+    let device_id = state.service.lock().unwrap().device_id();
+    let s = state.settings.lock().unwrap();
+    let ka = s
+        .ka_secret
+        .as_deref()
+        .and_then(parse_hex32)
+        .and_then(|seed| hive_core::e2ee::KeyAgreementKeypair::from_seed(&seed).ok());
+    hive_runtime::keyring::KeySource {
+        device_id: Some(device_id),
+        ka,
+        passphrase: conn.and_then(|c| c.key.as_deref()).filter(|k| !k.is_empty()).map(hive_core::derive_workspace_key).or_else(|| s.workspace_key()),
+        delivered: conn
+            .map(|c| c.ek.iter().filter_map(|d| d.key().map(|k| (d.v, k))).collect())
+            .unwrap_or_default(),
+    }
+}
+
+/// `conn` with every authorized epoch key this device holds, for an invite.
+fn with_epoch_keys(state: &AppState, mut conn: WorkspaceConn) -> WorkspaceConn {
+    let src = key_source_for(state, Some(&conn));
+    if let Ok(keys) = state.service.lock().unwrap().delivered_epoch_keys(conn.id(), &src) {
+        if !keys.is_empty() {
+            conn.ek = keys;
+        }
+    }
+    conn
 }
 
 // ---------------------------------------------------------------------------
@@ -11274,6 +11250,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
                     founder_actor_id: None,
                     fk: None,
                     inv: None,
+                    ek: Vec::new(),
                 };
                 s.workspaces.push(conn);
             }
@@ -11353,68 +11330,6 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         lsp_sessions: Mutex::new(HashMap::new()),
         lsp_by_server: Mutex::new(HashMap::new()),
     })
-}
-
-/// Background relay sync: every few seconds, push new local envelopes and pull
-/// remote ones into a dedicated SQLite connection (WAL — the live UI connection
-/// sees the ingested rows). Emits `workspace://synced` when remote events land
-/// so the frontend refetches. This is the relay-forwarding multiuser path.
-/// Highest-version workspace key from `rotations` that `kp` can open. Returns
-/// `None` if none are sealed to this device — which is exactly what locks out a
-/// removed member (they can't open rotations issued after their removal).
-fn latest_openable_key(
-    kp: &hive_core::e2ee::KeyAgreementKeypair,
-    rotations: &[hive_core::e2ee::WorkspaceKeyRotation],
-) -> Option<[u8; 32]> {
-    let mut best: Option<(u32, [u8; 32])> = None;
-    for r in rotations {
-        for blob in r.sealed.values() {
-            if let Ok(bytes) = hive_core::e2ee::open(kp, blob) {
-                if bytes.len() == 32 {
-                    let mut k = [0u8; 32];
-                    k.copy_from_slice(&bytes);
-                    if best.map(|(v, _)| r.version > v).unwrap_or(true) {
-                        best = Some((r.version, k));
-                    }
-                    break;
-                }
-            }
-        }
-    }
-    best.map(|(_, k)| k)
-}
-
-/// The set of workspace keys this device can currently open, indexed by epoch:
-/// the passphrase-derived base key at epoch 0 (if any) plus every rotation this
-/// device can unseal, at its version. The sync engine seals new events under the
-/// highest epoch and opens each fetched event under its own epoch, so a rotation
-/// no longer strands history (older epochs stay in the ring). A removed member,
-/// unable to open rotations issued after their removal, simply never gains those
-/// epochs — they keep only the epochs they held while a member.
-fn build_keyring(
-    ka: Option<&hive_core::e2ee::KeyAgreementKeypair>,
-    passphrase_key: Option<[u8; 32]>,
-    rotations: &[hive_core::e2ee::WorkspaceKeyRotation],
-) -> std::collections::BTreeMap<u32, [u8; 32]> {
-    let mut ring = std::collections::BTreeMap::new();
-    if let Some(k) = passphrase_key {
-        ring.insert(0, k);
-    }
-    if let Some(kp) = ka {
-        for r in rotations {
-            for blob in r.sealed.values() {
-                if let Ok(bytes) = hive_core::e2ee::open(kp, blob) {
-                    if bytes.len() == 32 {
-                        let mut k = [0u8; 32];
-                        k.copy_from_slice(&bytes);
-                        ring.insert(r.version, k);
-                        break;
-                    }
-                }
-            }
-        }
-    }
-    ring
 }
 
 // ---------------------------------------------------------------------------
@@ -11753,6 +11668,10 @@ async fn sync_pull_once(
     }
 }
 
+/// Background relay sync: every few seconds, push new local envelopes and pull
+/// remote ones into a dedicated SQLite connection (WAL — the live UI connection
+/// sees the ingested rows). Emits `workspace://synced` when remote events land
+/// so the frontend refetches. This is the relay-forwarding multiuser path.
 async fn run_sync_loop(app: AppHandle, settings: Arc<Mutex<LiveSettings>>, db_path: PathBuf) {
     // Safety-net poll while an SSE stream is live: a full re-entry (re-fetch the
     // keyring, pull, reopen the stream) that catches any nudge SSE dropped. This
@@ -11780,18 +11699,14 @@ async fn run_sync_loop(app: AppHandle, settings: Arc<Mutex<LiveSettings>>, db_pa
             return;
         }
     };
-    // This device's key-agreement keypair — used to open sealed key rotations.
-    let ka = {
-        let s = settings.lock().unwrap();
-        s.ka_secret
-            .as_deref()
-            .and_then(parse_hex32)
-            .and_then(|seed| hive_core::e2ee::KeyAgreementKeypair::from_seed(&seed).ok())
-    };
-    // The engine is rebuilt whenever the relay url / room / key changes, so the
-    // Settings UI can connect, reconnect, or go local-only without a restart.
-    type ConnSig = (String, String, std::collections::BTreeMap<u32, [u8; 32]>);
+    // The engine is rebuilt whenever the relay url / room / key inputs change,
+    // so the Settings UI can connect, reconnect, or go local-only without a
+    // restart. Its keyring follows signed rotations on its own (B1).
+    type ConnSig = (String, String, Option<[u8; 32]>, Vec<hive_runtime::keyring::DeliveredKey>);
     let mut engine: Option<(hive_runtime::SyncEngine, ConnSig)> = None;
+    // Whether this device's key-agreement key was published on the room's
+    // config log yet (once per room per run).
+    let mut ka_published: Option<String> = None;
     // Suppress repeated identical sync errors so a persistent condition (e.g. an
     // unauthorized relay) logs once, not on every tick.
     let mut last_sync_err: Option<String> = None;
@@ -11816,31 +11731,39 @@ async fn run_sync_loop(app: AppHandle, settings: Arc<Mutex<LiveSettings>>, db_pa
         };
         match relay_url {
             Some(url) if !url.is_empty() => {
-                // Build the epoch keyring: the passphrase-derived base key plus
-                // every rotation we can open. Sealing uses the highest epoch;
-                // opening picks each event's own epoch, so a rotation never
-                // strands history. A revoked member can't open rotations issued
-                // after their removal, so they never gain those epochs and can't
-                // read new traffic.
-                let keyring = match ka.as_ref() {
-                    Some(kp) => {
-                        let rots = hive_runtime::RelayClient::new(&url)
+                // The workspace keyring (B1): rebuilt each round from the folded
+                // config log, this device's key-agreement key, the passphrase key
+                // and any epoch keys an invite delivered. Sealing uses only the
+                // newest authorized rotation; a removed member can't open later
+                // rotations, so they never read new traffic.
+                let conn = settings.lock().unwrap().workspaces.iter().find(|w| w.room == room).cloned();
+                let sig: ConnSig = (
+                    url.clone(),
+                    room.clone(),
+                    passphrase_key,
+                    conn.as_ref().map(|c| c.ek.clone()).unwrap_or_default(),
+                );
+                let changed = engine.as_ref().map(|(_, s)| s != &sig).unwrap_or(true);
+                if changed {
+                    let src = key_source_for(&app.state::<AppState>(), conn.as_ref());
+                    let mut e = hive_runtime::SyncEngine::new(
+                        hive_runtime::RelayClient::new(&url)
                             .with_auth(access_token.clone())
-                            .with_github_token(github_token.clone())
-                            .fetch_key_rotations(&room)
-                            .await
-                            .unwrap_or_default();
-                        build_keyring(Some(kp), passphrase_key, &rots)
-                    }
-                    None => build_keyring(None, passphrase_key, &[]),
-                };
+                            .with_github_token(github_token.clone()),
+                        room.clone(),
+                    )
+                    .with_key_source(src);
+                    let _ = e.refresh_keyring(&store);
+                    eprintln!("sync: relay {url} room {room} (encrypted, key version {})", e.keyring().authorized_head());
+                    engine = Some((e, sig.clone()));
+                }
                 // B4: E2EE is mandatory for relay sync. A relay-configured
                 // workspace with NO workspace key must never push plaintext
                 // (message bodies, the member roster, inline credentials) to the
                 // relay. Refuse to sync and surface an actionable error instead
                 // of silently degrading. (The genuinely local-only, no-relay
                 // path is the `_ =>` arm below and stays untouched.)
-                if keyring.is_empty() {
+                if engine.as_ref().is_some_and(|(e, _)| !e.is_encrypted()) {
                     engine = None;
                     let msg = "sync paused: this workspace is configured for a relay but \
                                has no end-to-end-encryption key — set a workspace passphrase \
@@ -11863,21 +11786,26 @@ async fn run_sync_loop(app: AppHandle, settings: Arc<Mutex<LiveSettings>>, db_pa
                     tokio::time::sleep(FALLBACK_POLL).await;
                     continue;
                 }
-                let sig: ConnSig = (url.clone(), room.clone(), keyring.clone());
-                let changed = engine.as_ref().map(|(_, s)| s != &sig).unwrap_or(true);
-                if changed {
-                    let e = hive_runtime::SyncEngine::new(
-                        hive_runtime::RelayClient::new(&url)
-                            .with_auth(access_token.clone())
-                            .with_github_token(github_token.clone()),
-                        room.clone(),
-                    )
-                    .with_keyring(keyring.clone());
-                    eprintln!(
-                        "sync: relay {url} room {room} (encrypted, {} epoch key(s))",
-                        keyring.len()
-                    );
-                    engine = Some((e, sig.clone()));
+                // Publish this device's key-agreement key on the room's config
+                // log once (B1), so the next rotation seals to it.
+                if ka_published.as_deref() != Some(room.as_str()) {
+                    let st = app.state::<AppState>();
+                    let ka_pub = st
+                        .settings
+                        .lock()
+                        .unwrap()
+                        .ka_secret
+                        .as_deref()
+                        .and_then(parse_hex32)
+                        .and_then(|seed| hive_core::e2ee::KeyAgreementKeypair::from_seed(&seed).ok())
+                        .map(|kp| kp.public_key_bytes());
+                    if let Some(ka_pub) = ka_pub {
+                        let ws = room_workspace_id(&room);
+                        match st.service.lock().unwrap().publish_key_agreement(ws, ka_pub) {
+                            Ok(_) => ka_published = Some(room.clone()),
+                            Err(e) => tracing::debug!(target: "sync", "key-agreement key not published yet: {e}"),
+                        }
+                    }
                 }
 
                 // Fast path: subscribe to the relay's live push stream *first* so
@@ -12355,6 +12283,7 @@ fn create_workspace(state: State<AppState>, name: String) -> Result<WorkspaceInf
             founder_actor_id: (!founder.is_empty()).then(|| founder.clone()),
             fk: founder_fk.clone(),
             inv: None,
+            ek: Vec::new(),
         };
         s.workspaces.push(conn.clone());
         save_settings(&state.data_dir, &s);
@@ -12416,7 +12345,7 @@ fn workspace_invite(state: State<AppState>, workspace_id: String) -> Result<Stri
         .issue_invite(id)
         .map_err(|e| format!("Only a workspace Admin can invite people ({e})."))?;
     conn.inv = Some(invite.to_string());
-    Ok(encode_workspace_invite(&conn))
+    Ok(encode_workspace_invite(&with_epoch_keys(&state, conn)))
 }
 
 /// Leave a team workspace (removes it from the rail). If it was active, falls
@@ -13130,67 +13059,11 @@ async fn invite_by_handle(
         svc.add_member(sid, state.active_workspace_id(), member).map_err(map_err)?;
     }
 
-    // Seal the current workspace key to all their devices (keyring rotation).
+    // No rotation here (B1): the in-app invite below carries the passphrase and
+    // every authorized epoch key, and the next rotation seals to the
+    // invitee's devices once they publish their own key-agreement keys on the
+    // config log. Relay-directory keys are never rotation recipients.
     let mut sealed = false;
-    if !recipients.is_empty() {
-        let (ka, passphrase_key, room) = {
-            let s = state.settings.lock().unwrap();
-            let ka = s
-                .ka_secret
-                .as_deref()
-                .and_then(parse_hex32)
-                .and_then(|seed| hive_core::e2ee::KeyAgreementKeypair::from_seed(&seed).ok());
-            (ka, s.workspace_key(), s.sync_room.clone())
-        };
-        let rotations = client.fetch_key_rotations(&room).await.unwrap_or_default();
-        let current_key = ka
-            .as_ref()
-            .and_then(|kp| latest_openable_key(kp, &rotations))
-            .or(passphrase_key);
-        if let Some(key) = current_key {
-            let version = rotations.iter().map(|r| r.version).max().unwrap_or(0) + 1;
-            // Seal the new epoch to the invitee's devices AND to every current
-            // member (including THIS device — the inviter). Sealing only to the
-            // invitee left everyone else — the inviter included — unable to open
-            // anything encrypted under the new epoch ("no key for epoch N"), which
-            // silently broke the whole room after an invite.
-            let mut all_recipients = recipients.clone();
-            {
-                let svc = state.service.lock().unwrap();
-                let cfg_id = hive_core::workspace_config_session_id(state.active_workspace_id());
-                // Every device KA of every current member (P2-4), so a member's
-                // second device can open the new epoch too — not just the one KA on
-                // their roster actor.
-                let device_keys = member_device_ka_keys(&svc, state.active_workspace_id());
-                if let Ok(Some(cfg)) = svc.load(cfg_id) {
-                    for m in &cfg.members {
-                        let mut keys: std::collections::HashSet<Vec<u8>> = device_keys
-                            .get(&m.actor.id)
-                            .cloned()
-                            .unwrap_or_default()
-                            .into_iter()
-                            .collect();
-                        if let Some(kap) =
-                            m.actor.key_agreement_public.as_ref().filter(|k| !k.is_empty())
-                        {
-                            keys.insert(kap.clone());
-                        }
-                        for (i, ka) in keys.into_iter().enumerate() {
-                            all_recipients.push((format!("{}:{i}", m.id), ka));
-                        }
-                    }
-                }
-            }
-            if let (Some(kp), Some((dev, _))) = (&ka, this_device_ka(&state)) {
-                all_recipients.push((dev, kp.public_key_bytes().to_vec()));
-            }
-            let rotation =
-                hive_core::e2ee::WorkspaceKeyRotation::seal_for_devices(version, &key, &all_recipients)
-                    .map_err(|e| format!("{e:?}"))?;
-            client.publish_key_rotation(&room, &rotation).await.map_err(|e| e.to_string())?;
-            sealed = true;
-        }
-    }
     // Best-effort: also register them in server-side membership (no-op on open
     // relays). The relay keys membership on `github:<id>` (its caller identity),
     // distinct from the roster's UUID account id used for E2EE sealing.
@@ -13215,7 +13088,8 @@ async fn invite_by_handle(
             .find(|w| w.id() == state.active_workspace_id())
             .cloned();
         if let Some(conn) = conn {
-            let code = encode_workspace_invite(&conn);
+            sealed = conn.key.is_some();
+            let code = encode_workspace_invite(&with_epoch_keys(&state, conn));
             let mut sealed_map = serde_json::Map::new();
             for (device_id, ka_pub) in &recipients {
                 if let Ok(blob) = hive_core::e2ee::seal(ka_pub, code.as_bytes()) {
@@ -13306,6 +13180,14 @@ async fn list_pending_invites(state: State<'_, AppState>) -> Result<Vec<PendingI
         let Some(code) = code else { continue };
         let Ok(conn) = decode_workspace_invite(&code) else { continue };
         if joined_rooms.contains(&conn.room) {
+            // A joined DM still waiting for its key (the friend's side): adopt
+            // the key and epoch keys its owner delivered.
+            let mut s = state.settings.lock().unwrap();
+            if let Some(w) = s.workspaces.iter_mut().find(|w| w.room == conn.room && w.key.is_none() && w.dm_account.is_some()) {
+                w.key = conn.key.clone();
+                w.ek = conn.ek.clone();
+                save_settings(&state.data_dir, &s);
+            }
             continue; // already joined
         }
         out.push(PendingInviteDto {
@@ -13482,65 +13364,34 @@ async fn workspace_remove_member(
     // 1. Remove server-side membership first (authorization enforced relay-side).
     client.remove_member(&room, &account).await.map_err(|e| e.to_string())?;
 
-    // 2. Gather the remaining members' device keys from the local roster.
+    // 2. Remove them from the workspace roster too (when they're on it), so
+    //    the rotation below doesn't seal to their devices.
     let removed_id = hive_account_id_for(&account);
-    let recipients: Vec<(String, Vec<u8>)> = {
-        let svc = state.service.lock().unwrap();
-        let active_ws = state.active_workspace_id();
-        let mut map: std::collections::BTreeMap<String, Vec<u8>> = Default::default();
-        let ids = svc.store().list_session_ids().map_err(map_err)?;
-        for id in ids {
-            let Some(session) = svc.load(id).map_err(map_err)? else { continue };
-            if session.workspace_id != active_ws {
-                continue;
-            }
-            for m in &session.members {
-                let is_removed = removed_id.as_deref() == Some(m.actor.id.as_str())
-                    || m.actor.account_id.map(|a| a.to_string()).as_deref() == removed_id.as_deref();
-                if is_removed {
-                    continue;
-                }
-                if let Some(pk) = &m.actor.key_agreement_public {
-                    map.insert(m.actor.id.clone(), pk.clone());
-                }
-            }
+    {
+        let mut svc = state.service.lock().unwrap();
+        let ws = state.active_workspace_id();
+        let config_id = hive_core::workspace_config_session_id(ws);
+        let members: Vec<String> = svc
+            .load(config_id)
+            .map_err(map_err)?
+            .map(|c| {
+                c.members
+                    .iter()
+                    .filter(|m| {
+                        removed_id.as_deref() == Some(m.actor.id.as_str())
+                            || m.actor.account_id.map(|a| a.to_string()).as_deref() == removed_id.as_deref()
+                    })
+                    .map(|m| m.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for id in members {
+            svc.remove_member(config_id, ws, id).map_err(map_err)?;
         }
-        // Always seal to the acting owner's own device so they adopt the new key.
-        let me = svc.author().clone();
-        if let Some(pk) = &me.key_agreement_public {
-            map.insert(me.id.clone(), pk.clone());
-        }
-        map.into_iter().collect()
-    };
-
-    // 3. Publish a fresh workspace key sealed only to those recipients.
-    if recipients.is_empty() {
-        eprintln!(
-            "workspace_remove_member: removed {account} from relay membership but could not \
-             rotate the E2EE key (no roster recipients with device keys) — read access is NOT \
-             revoked; the removed member retains the current key."
-        );
-        return Ok(RevokeResultDto { rotated: false, recipients: 0 });
     }
-    let next_version = client
-        .fetch_key_rotations(&room)
-        .await
-        .ok()
-        .and_then(|rs| rs.iter().map(|r| r.version).max())
-        .unwrap_or(0)
-        + 1;
-    let new_key = hive_core::e2ee::generate_workspace_key().map_err(|e| format!("{e:?}"))?;
-    let rotation = hive_core::e2ee::WorkspaceKeyRotation::seal_for_devices(
-        next_version,
-        &new_key,
-        &recipients,
-    )
-    .map_err(|e| format!("{e:?}"))?;
-    client
-        .publish_key_rotation(&room, &rotation)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(RevokeResultDto { rotated: true, recipients: recipients.len() as u32 })
+
+    // 3. Rotate the workspace key to everyone who remains (B1).
+    rotate_active_workspace_key(&state).await
 }
 
 // ── Social graph: friends + presence (P5) ──────────────────────────────────
@@ -13769,6 +13620,7 @@ async fn friend_open_dm(
             // A DM has no shared founder key to pin.
             fk: None,
             inv: None,
+            ek: Vec::new(),
         };
         let mut s = state.settings.lock().unwrap();
         s.workspaces.push(conn);
@@ -13791,22 +13643,25 @@ async fn friend_open_dm(
         }
     }
 
-    // Owner seals the DM key to the friend's devices so they can decrypt it.
+    // The owner delivers the DM's connection code (its key, and every
+    // authorized epoch key) to the friend's inbox, sealed to each of their
+    // devices; the friend's side adopts it (`list_pending_invites`). No
+    // unsigned keyring rotation (B1).
     if i_am_owner && !existed {
         if let Ok(Some(entry)) = client.directory_lookup(&login).await {
-            let recipients: Vec<(String, Vec<u8>)> = entry
-                .devices
-                .iter()
-                .filter_map(|d| parse_hex32(&d.ka_public).map(|b| (d.device_id.clone(), b.to_vec())))
-                .collect();
-            let key = state.settings.lock().unwrap().workspace_key();
-            if let (Some(key), false) = (key, recipients.is_empty()) {
-                let rotations = client.fetch_key_rotations(&room).await.unwrap_or_default();
-                let version = rotations.iter().map(|r| r.version).max().unwrap_or(0) + 1;
-                if let Ok(rotation) =
-                    hive_core::e2ee::WorkspaceKeyRotation::seal_for_devices(version, &key, &recipients)
-                {
-                    let _ = client.publish_key_rotation(&room, &rotation).await;
+            let conn = state.settings.lock().unwrap().workspaces.iter().find(|w| w.room == room).cloned();
+            if let Some(conn) = conn {
+                let code = encode_workspace_invite(&with_epoch_keys(&state, conn));
+                let mut sealed_map = serde_json::Map::new();
+                for d in &entry.devices {
+                    let Some(ka_pub) = parse_hex32(&d.ka_public) else { continue };
+                    if let Ok(Ok(v)) = hive_core::e2ee::seal(&ka_pub, code.as_bytes()).map(|b| serde_json::to_value(&b)) {
+                        sealed_map.insert(d.device_id.clone(), v);
+                    }
+                }
+                if !sealed_map.is_empty() {
+                    let invite = serde_json::json!({ "sealed": sealed_map });
+                    let _ = client.post_workspace_invite(&entry.login, &invite).await;
                 }
             }
         }
@@ -15082,6 +14937,7 @@ pub fn run() {
             import_github_teams,
             remove_member,
             remove_and_revoke,
+            rotate_workspace_key,
             inspect_device_code,
             approve_device,
             list_my_devices,

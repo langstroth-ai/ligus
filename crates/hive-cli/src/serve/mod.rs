@@ -904,6 +904,9 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         Standing::Revoked => {}
         Standing::Own => register_own(&mut svc, ws, &host_id, &opts)?,
     }
+    if standing != Standing::Revoked {
+        crate::publish_key_agreement(&cfg, &mut svc);
+    }
     let tunnel = match &opts.remote {
         Some(settings) => Some(tunnel::TunnelHost::open(&cfg.data_dir, settings.clone()).context("opening the relay tunnel state")?),
         None => None,

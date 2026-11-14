@@ -27,6 +27,8 @@ use crate::provider::ChatTurn;
 
 mod facts;
 mod guards;
+mod keys;
+pub use keys::RotationIssued;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ChatError {
@@ -203,9 +205,8 @@ impl ChatService {
         let mut actor = ActorIdentity::new(agent_id.to_string(), name, hive_core::ActorKind::Agent);
         actor.device_id = Some(key_id);
         env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::now(), cfg_frontier: timeline.head() });
-        env.signer_device_id = Some(key_id);
-        self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
         sign_envelope(&mut env, key_id, &kp);
+        self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
         self.store.append_envelope(&env)?;
         Ok(Some(env))
     }
@@ -638,12 +639,12 @@ impl ChatService {
             recorded_at: Timestamp::now(),
             cfg_frontier: timeline.head(),
         });
-        // Judged as signed by this device (`sign_envelope` sets the same id).
-        env.signer_device_id = Some(self.device_id);
+        // Signed first, so the fold's own signature checks (key events)
+        // judge exactly what peers will receive.
+        sign_envelope(&mut env, self.device_id, &self.keypair);
         if !is_local {
             self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
         }
-        sign_envelope(&mut env, self.device_id, &self.keypair);
         self.store.append_envelope(&env)?;
         Ok(env)
     }

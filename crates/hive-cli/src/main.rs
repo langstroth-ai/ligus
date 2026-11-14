@@ -54,6 +54,8 @@ struct Config {
     github_token: Option<String>,
     room: String,
     key: Option<String>,
+    /// Epoch keys an invite delivered (B1 newcomer bootstrap).
+    epoch_keys: Vec<hive_runtime::keyring::DeliveredKey>,
 }
 
 /// Env lookup (blank = unset; `LIGUS_*` names only, see `hive_core::compat`).
@@ -86,6 +88,9 @@ struct FileConfig {
     room: Option<String>,
     #[serde(default)]
     key: Option<String>,
+    /// Epoch keys the invite delivered (B1). Left out when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ek: Vec<hive_runtime::keyring::DeliveredKey>,
 }
 
 fn config_path(data_dir: &std::path::Path) -> PathBuf {
@@ -113,12 +118,17 @@ fn config() -> Config {
         github_token: env_opt("LIGUS_RELAY_GITHUB_TOKEN"),
         room: env_opt("LIGUS_WORKSPACE").or(f.room).unwrap_or_else(|| "default".into()),
         key: env_opt("LIGUS_WORKSPACE_KEY").or(f.key),
+        epoch_keys: f.ek,
     }
 }
 
-/// Decode a `hivews1:` workspace invite → (relay_url, room, key). Mirrors the
-/// app's encoder (base64url(json) of the connection; snake_case fields).
-fn decode_hivews_invite(invite: &str) -> Result<(String, String, Option<String>, Option<Uuid>)> {
+/// Decode a `hivews1:` workspace invite → (relay_url, room, key, invite id,
+/// delivered epoch keys). Mirrors the app's encoder (base64url(json) of the
+/// connection; snake_case fields).
+#[allow(clippy::type_complexity)]
+fn decode_hivews_invite_full(
+    invite: &str,
+) -> Result<(String, String, Option<String>, Option<Uuid>, Vec<hive_runtime::keyring::DeliveredKey>)> {
     use base64::Engine;
     #[derive(serde::Deserialize)]
     struct Conn {
@@ -131,6 +141,9 @@ fn decode_hivews_invite(invite: &str) -> Result<(String, String, Option<String>,
         /// The single-use invite an Admin issued with this code.
         #[serde(default)]
         inv: Option<String>,
+        /// Every authorized epoch key the inviter held (B1).
+        #[serde(default)]
+        ek: Vec<hive_runtime::keyring::DeliveredKey>,
     }
     let body = invite
         .trim()
@@ -143,19 +156,20 @@ fn decode_hivews_invite(invite: &str) -> Result<(String, String, Option<String>,
     if c.room.trim().is_empty() {
         bail!("invite is missing a room");
     }
-    Ok((c.relay_url, c.room, c.key, c.inv.and_then(|i| Uuid::parse_str(i.trim()).ok())))
+    Ok((c.relay_url, c.room, c.key, c.inv.and_then(|i| Uuid::parse_str(i.trim()).ok()), c.ek))
 }
 
 /// `ligus enroll <hivews1:…> [--token <access-token>]` — one-command bootstrap:
 /// decode the invite, persist the connection to config.toml, and (with --token)
 /// wire the relay identity. After this a headless box just runs `ligus worker`.
 fn cmd_enroll(cfg: &Config, invite: &str, token: Option<String>) -> Result<()> {
-    let (relay_url, room, key, inv) = decode_hivews_invite(invite)?;
+    let (relay_url, room, key, inv, ek) = decode_hivews_invite_full(invite)?;
     std::fs::create_dir_all(&cfg.data_dir)?;
     let mut f = load_file_config(&cfg.data_dir);
     f.relay_url = Some(relay_url.clone());
     f.room = Some(room.clone());
     f.key = key;
+    f.ek = ek;
     if let Some(t) = token {
         f.token = Some(t);
     }
@@ -280,12 +294,33 @@ fn relay_client(cfg: &Config) -> Result<RelayClient> {
 
 /// A sync engine for this config. Kept across rounds (as `ligus serve` does),
 /// it scans only rows stored since its last push instead of the whole store.
+/// Every CLI host (serve, worker, `ligus sync`) builds its keyring the same
+/// way as the desktop (B1): from the folded config log and this box's own
+/// key-agreement key, so it reads and seals at rotated epochs.
 fn sync_engine(cfg: &Config) -> Result<SyncEngine> {
-    let mut engine = SyncEngine::new(relay_client(cfg)?, cfg.room.clone());
-    if let Some(pass) = &cfg.key {
-        engine = engine.with_key(derive_workspace_key(pass));
+    Ok(SyncEngine::new(relay_client(cfg)?, cfg.room.clone()).with_key_source(key_source(cfg)?))
+}
+
+/// What this box holds for the keyring (B1).
+fn key_source(cfg: &Config) -> Result<hive_runtime::keyring::KeySource> {
+    let identity = IdentityStore::new(&cfg.data_dir, FileKeyVault::new(&cfg.data_dir));
+    let device = identity.bootstrap("hive-cli", "hive-cli", "hive-cli")?.device.id;
+    let ka = identity.key_agreement(device)?;
+    Ok(hive_runtime::keyring::KeySource::for_device(device, ka, cfg.key.as_deref(), &cfg.epoch_keys))
+}
+
+/// Publish this box's own key-agreement key on the workspace config log
+/// (once; B1), so the next rotation seals the workspace key to it. Best
+/// effort: a box whose config log hasn't synced, or that isn't certified
+/// yet, tries again on its next start.
+fn publish_key_agreement(cfg: &Config, svc: &mut ChatService) {
+    let identity = IdentityStore::new(&cfg.data_dir, FileKeyVault::new(&cfg.data_dir));
+    let Ok(ka) = identity.key_agreement(svc.device_id()) else { return };
+    match svc.publish_key_agreement(uuid_of_room(&cfg.room), ka.public_key_bytes()) {
+        Ok(true) => println!("published this box's key-agreement key for workspace key rotations"),
+        Ok(false) => {}
+        Err(e) => eprintln!("key-agreement key not published yet: {e}"),
     }
-    Ok(engine)
 }
 
 /// One push + pull round: (pushed, pulled).
@@ -1025,6 +1060,7 @@ async fn cmd_worker(cfg: &Config, label: Option<String>) -> Result<()> {
     }
     println!("worker {my_host} online — draining queued mentions for its agents. Ctrl-C to stop.");
     let mut svc = open_service(cfg)?;
+    publish_key_agreement(cfg, &mut svc);
     // Finish replies a previous run was streaming when it stopped (see
     // `worker::recover_interrupted_turns`).
     match worker::recover_interrupted_turns(&mut svc) {
@@ -1586,6 +1622,7 @@ mod cli_tests {
             github_token: None,
             room: "r".into(),
             key: None,
+            epoch_keys: Vec::new(),
         };
         let body = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(br#"{"relay_url":"https://relay.example","room":"r","key":"test-passphrase"}"#);

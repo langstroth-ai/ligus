@@ -191,6 +191,12 @@ pub struct SealedEnvelope {
     pub version: u32,
     pub nonce: Vec<u8>,
     pub ciphertext: Vec<u8>,
+    /// The sealing key's id (Phase 0, B1): the first 16 hex characters of its
+    /// commitment (see [`crate::keys::kid_of`]). Picks the key when two keys
+    /// share a version (a rotation that lost a tie). Absent on older bodies,
+    /// which a reader opens with every key it holds for `version`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kid: Option<String>,
 }
 
 /// Seal arbitrary bytes (a serialized envelope) with the workspace key for epoch
@@ -210,7 +216,20 @@ pub fn seal_symmetric(
         version,
         nonce: nonce.to_vec(),
         ciphertext,
+        kid: None,
     })
+}
+
+/// [`seal_symmetric`], stamping the sealing key's id (see [`SealedEnvelope::kid`]).
+pub fn seal_symmetric_kid(
+    key: &[u8; 32],
+    version: u32,
+    kid: &str,
+    plaintext: &[u8],
+) -> Result<SealedEnvelope, CryptoError> {
+    let mut sealed = seal_symmetric(key, version, plaintext)?;
+    sealed.kid = Some(kid.to_string());
+    Ok(sealed)
 }
 
 /// Open a [`SealedEnvelope`] with the workspace key. Also authenticates: only a

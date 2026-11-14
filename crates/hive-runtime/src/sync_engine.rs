@@ -8,14 +8,15 @@
 //! sequence on fetch + local ingestion order, which the commutative projector
 //! (upsert-by-id, idempotent reactions) tolerates.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
-use hive_core::{open_symmetric, seal_symmetric, SealedEnvelope, SessionEventEnvelope};
+use hive_core::{open_symmetric, seal_symmetric_kid, SealedEnvelope, SessionEventEnvelope};
 use serde_json::Value;
 use uuid::Uuid;
 
 use crate::event_store::EventStore;
+use crate::keyring::{KeyringEngine, KeySource};
 use crate::envelope_verifier::verdict_for;
 use crate::identity_verifier::{gate_ingest, shared_cache, IdentityMode, IngestAction, SharedIdentityCache};
 use crate::relay_client::{RelayClient, RelayError, ENVELOPE_PAGE_LIMIT};
@@ -42,6 +43,11 @@ pub enum SyncError {
     /// local-only. No plaintext value is ever produced in this case.
     #[error("refusing to push plaintext to the relay: no workspace key configured (E2EE is mandatory for relay sync)")]
     RelayRequiresEncryption,
+    /// The workspace has an authorized key rotation this device can't open:
+    /// it can read what it holds keys for, but writing under an older key
+    /// would be refused by every peer. An Admin rotates to include it.
+    #[error("waiting for the workspace key: this device isn't a recipient of key version {0} yet")]
+    NotARecipient(u32),
 }
 
 /// Drives one workspace's relay sync. Holds cursors so repeated rounds only
@@ -94,12 +100,24 @@ pub struct SyncEngine {
     /// by any store-bearing call. A **failed** push never lands here, preserving
     /// the partial-push rollback invariant.
     pending: Vec<Uuid>,
-    /// Key epoch → workspace key. New events are sealed under the **highest**
-    /// epoch; a fetched body is opened with the key for **its** epoch (stamped on
-    /// the `SealedEnvelope`). Retaining older epochs is what keeps history
-    /// readable across rotations. Empty ⇒ no key: relay pushes are **refused**
-    /// (E2EE is mandatory on the wire — see [`SyncEngine::encode`]).
-    keyring: BTreeMap<u32, [u8; 32]>,
+    /// The workspace keyring (B1, [`KeyringEngine`]): new events seal under
+    /// its one seal key (the authorized head); a fetched body is opened with
+    /// the key its `(version, kid)` names. Empty ⇒ no key: relay pushes are
+    /// **refused** (E2EE is mandatory on the wire — see [`SyncEngine::encode`]).
+    keyring: KeyringEngine,
+    /// What this device holds, when the ring is rebuilt from the folded config
+    /// log every round (every host but the passphrase-only solo case).
+    key_source: Option<KeySource>,
+    /// Rotation bodies from the relay keyring route (read-only candidates).
+    relay_rows: Vec<Value>,
+    /// When the keyring route was last fetched.
+    rows_fetched: Option<std::time::Instant>,
+    /// A body couldn't be opened (or no seal key is held): fetch the keyring
+    /// route on the next round.
+    rows_wanted: bool,
+    /// What the ring was last built from: (config fingerprint, rotations seen,
+    /// relay rows).
+    ring_built_from: Option<(u64, usize, usize)>,
     /// Identity-verification mode (security plan S1). `Relay` (Option A, the
     /// default) trusts the roster's account keys as-is — **current behavior**.
     /// `GithubSigningKeys` (Option C) additionally requires each account key to
@@ -146,7 +164,12 @@ impl SyncEngine {
             page_limit: ENVELOPE_PAGE_LIMIT,
             loaded: false,
             pending: Vec::new(),
-            keyring: BTreeMap::new(),
+            keyring: KeyringEngine::default(),
+            key_source: None,
+            relay_rows: Vec::new(),
+            rows_fetched: None,
+            rows_wanted: false,
+            ring_built_from: None,
             #[cfg(test)]
             identity_mode: IdentityMode::Relay,
             identity_cache: shared_cache(),
@@ -209,32 +232,101 @@ impl SyncEngine {
         Arc::clone(&self.identity_cache)
     }
 
-    /// Enable E2EE with a single base-epoch (0) key — the passphrase-derived path.
+    /// The workspace this room's keys belong to (the commitment binds it).
+    fn room_workspace(&self) -> Uuid {
+        self.scope.iter().next().copied().unwrap_or_else(|| hive_core::room_workspace_id(&self.workspace))
+    }
+
+    /// E2EE with only the passphrase-derived epoch-0 key: the solo,
+    /// local-only case. Hosts that follow rotations use
+    /// [`SyncEngine::with_key_source`].
     pub fn with_key(mut self, key: [u8; 32]) -> Self {
-        self.keyring.insert(0, key);
+        self.keyring = KeyringEngine::passphrase(self.room_workspace(), key);
         self
     }
 
-    /// Enable E2EE with a full epoch→key ring (base key + opened rotations).
-    pub fn with_keyring(mut self, keyring: BTreeMap<u32, [u8; 32]>) -> Self {
+    /// E2EE with a fixed ring (tests and one-shot callers).
+    pub fn with_keyring(mut self, keyring: KeyringEngine) -> Self {
         self.keyring = keyring;
         self
     }
 
-    /// Encode an envelope for the relay: sealed ciphertext under the current
-    /// (highest-epoch) key. With **no** key this **refuses** with
+    /// E2EE with the one keyring every host uses (B1): rebuilt each round
+    /// from the folded config log, this device's key-agreement key, the
+    /// passphrase key, delivered epoch keys and the relay keyring route.
+    pub fn with_key_source(mut self, source: KeySource) -> Self {
+        self.keyring = KeyringEngine::build(self.room_workspace(), None, &source, &[]);
+        self.key_source = Some(source);
+        self
+    }
+
+    /// The current ring.
+    pub fn keyring(&self) -> &KeyringEngine {
+        &self.keyring
+    }
+
+    /// Rebuild the ring from the store's folded config log (no-op without a
+    /// key source, or when nothing it depends on changed).
+    pub fn refresh_keyring(&mut self, store: &EventStore) -> Result<(), SyncError> {
+        let Some(src) = self.key_source.as_ref() else { return Ok(()) };
+        let ws = self.room_workspace();
+        let pin = store.workspace_pin(ws)?.map(|p| p.founder_account.to_string());
+        let (config, timeline) = store.load_config(ws, pin.as_deref(), None)?;
+        let from = (timeline.fingerprint(), timeline.rotation_candidates().len(), self.relay_rows.len());
+        if self.ring_built_from == Some(from) {
+            return Ok(());
+        }
+        let cfg = config.is_some().then_some(&*timeline);
+        self.keyring = KeyringEngine::build(ws, cfg, src, &self.relay_rows);
+        self.ring_built_from = Some(from);
+        Ok(())
+    }
+
+    /// Fetch the relay keyring route's rows when they could help: this device
+    /// holds no seal key, or a body it fetched couldn't be opened (at most once
+    /// a minute). Failures are soft: the config log alone carries every
+    /// authorized rotation; the route only speeds up a lagging device.
+    async fn fetch_keyring_rows(&mut self) {
+        if self.key_source.is_none() {
+            return;
+        }
+        let wanted = self.rows_wanted || self.keyring.seal_key().is_none();
+        let recent = self.rows_fetched.is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(60));
+        if !wanted || recent {
+            return;
+        }
+        match self.relay.fetch_keyring_rows(&self.workspace).await {
+            Ok(rows) => {
+                self.relay_rows = rows;
+                self.rows_fetched = Some(std::time::Instant::now());
+                self.rows_wanted = false;
+            }
+            Err(e) => tracing::debug!(error = %e, "keyring route unavailable; using the config log alone"),
+        }
+    }
+
+    /// Encode an envelope for the relay: sealed ciphertext under the ring's
+    /// seal key, stamped with its id. With **no** key this **refuses** with
     /// [`SyncError::RelayRequiresEncryption`] instead of emitting plaintext —
     /// E2EE is mandatory for relay sync, so the relay never sees cleartext
-    /// bodies, the member roster, or inline credentials (B4).
+    /// bodies, the member roster, or inline credentials (B4). A device that
+    /// isn't a recipient of the authorized head refuses too
+    /// ([`SyncError::NotARecipient`]): an older key would be refused by every
+    /// peer.
     fn encode(&self, env: &SessionEventEnvelope) -> Result<Value, SyncError> {
-        // Seal under the highest epoch we hold — the current key.
-        match self.keyring.iter().next_back() {
-            Some((&version, k)) => {
+        // A rotation is sealed under the epoch it follows, so the devices that
+        // hold that epoch can read it and learn the new key.
+        let rotation_key = match &env.payload {
+            hive_core::SessionEvent::WorkspaceKeyRotated { rotation } => self.keyring.seal_key_for_rotation(rotation),
+            _ => None,
+        };
+        match rotation_key.as_ref().or(self.keyring.seal_key()) {
+            Some(k) => {
                 let plain = serde_json::to_vec(env)?;
-                Ok(serde_json::to_value(seal_symmetric(k, version, &plain)?)?)
+                Ok(serde_json::to_value(seal_symmetric_kid(&k.key, k.version, &k.kid, &plain)?)?)
             }
-            // No key: never originate plaintext to a relay. Refuse the push.
-            None => Err(SyncError::RelayRequiresEncryption),
+            None if self.keyring.is_empty() => Err(SyncError::RelayRequiresEncryption),
+            None => Err(SyncError::NotARecipient(self.keyring.authorized_head())),
         }
     }
 
@@ -250,24 +342,31 @@ impl SyncEngine {
                 Err(e) => return Decoded::Malformed(format!("not a sealed envelope: {e}")),
             };
             // Well-formed, but we don't hold this epoch's key yet (lagging
-            // rotation, or a foreign-room post): a later key might open it → retry.
-            let Some(k) = self.keyring.get(&sealed.version) else {
+            // rotation, a tie's other key, or a foreign-room post): a later
+            // key might open it → retry.
+            let keys = self.keyring.keys_for(sealed.version, sealed.kid.as_deref());
+            if keys.is_empty() {
                 return Decoded::NotYetOpenable(format!("no key for epoch {}", sealed.version));
-            };
-            match open_symmetric(k, &sealed) {
-                Ok(plain) => match serde_json::from_slice(&plain) {
-                    Ok(env) => Decoded::Ready(Box::new(env)),
-                    Err(e) => Decoded::Malformed(format!("opened but not an envelope: {e}")),
-                },
-                // We hold this epoch's key yet the AEAD tag fails to verify: the
-                // body is tampered/corrupt (or foreign ciphertext colliding on
-                // this epoch, incl. a wrong workspace key). Re-fetching can't
-                // help → advance past it.
-                Err(_) => Decoded::Malformed(format!(
-                    "AEAD open failed at epoch {} (tampered/corrupt or wrong key)",
-                    sealed.version
-                )),
             }
+            for k in keys {
+                if let Ok(plain) = open_symmetric(k, &sealed) {
+                    return match serde_json::from_slice::<SessionEventEnvelope>(&plain) {
+                        Ok(mut env) => {
+                            env.set_sealed_epoch(Some(sealed.version));
+                            Decoded::Ready(Box::new(env))
+                        }
+                        Err(e) => Decoded::Malformed(format!("opened but not an envelope: {e}")),
+                    };
+                }
+            }
+            // We hold the key this body names yet the AEAD tag fails to
+            // verify: the body is tampered/corrupt (or foreign ciphertext
+            // colliding on this epoch, incl. a wrong workspace key).
+            // Re-fetching can't help → advance past it.
+            Decoded::Malformed(format!(
+                "AEAD open failed at epoch {} (tampered/corrupt or wrong key)",
+                sealed.version
+            ))
         } else if self.is_encrypted() {
             // A keyed workspace only ever pushes ciphertext, and the relay
             // never holds the key: a plaintext body here was written by the
@@ -311,6 +410,9 @@ impl SyncEngine {
         // Load the durable cursor before fetching so a fresh engine resumes from
         // it rather than re-fetching the whole room from 0.
         self.ensure_loaded(store)?;
+        self.refresh_keyring(store)?;
+        self.fetch_keyring_rows().await;
+        self.refresh_keyring(store)?;
         let mut applied = 0;
         for _ in 0..PULL_PAGES_PER_ROUND {
             let fetched = self.fetch_new().await?;
@@ -392,6 +494,7 @@ impl SyncEngine {
         // before persisting).
         self.ensure_loaded(store)?;
         self.persist_pending(store)?;
+        self.refresh_keyring(store)?;
         let mut out = Vec::new();
         if self.scanned_row > 0 {
             // Incremental: only rows stored since the last scan. Everything at
@@ -470,6 +573,11 @@ impl SyncEngine {
     /// an actionable "no workspace key" error rather than attempting to sync.
     pub fn is_encrypted(&self) -> bool {
         !self.keyring.is_empty()
+    }
+
+    /// Whether pushes will go out: a seal key is held.
+    pub fn can_seal(&self) -> bool {
+        self.keyring.seal_key().is_some()
     }
 
     /// Fetch the next page of raw remote bodies (async; no store). The durable
@@ -594,6 +702,8 @@ impl SyncEngine {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
+        // The authorized head this device folds now (B1 ingest rule).
+        let head = self.head_roster(store)?;
         let mut applied = 0;
         // Guard signals (device-local, content-free): every rejection, and one
         // accept per signing device per batch.
@@ -627,6 +737,14 @@ impl SyncEngine {
                     tracing::debug!(reason, seq = *seq, event_id = %env.event_id, "holding a fetched event for identity re-verification");
                     retry_at = Some(retry_at.map_or(*seq, |r| r.min(*seq)));
                 }
+                IngestAction::Accept if late_from_outsider(head.as_deref(), env) => {
+                    // B1: sealed under an older key by someone who is no
+                    // longer (or not yet) a member: a removed member writing
+                    // with the key they kept. Refused for good.
+                    tracing::warn!(event_id = %env.event_id, "refused an event sealed under an old key by a non-member");
+                    let _ = store.record_signal(env.workspace_id, None, &sync_decision(roster, env, false, "stale_epoch_non_member"));
+                    resolved.push(*seq);
+                }
                 IngestAction::Accept => {
                     if accepted_from.insert((env.workspace_id, env.signer_device_id)) {
                         let _ = store.record_signal(env.workspace_id, None, &sync_decision(roster, env, true, "accepted"));
@@ -635,7 +753,7 @@ impl SyncEngine {
                     // This event is now on the relay (we received it from there): queue
                     // it for the durable `pushed` set so a restart never bounces it back.
                     self.pending.push(env.event_id);
-                    if store.ingest(env)? {
+                    if store.ingest_sealed(env, env.sealed_epoch())? {
                         applied += 1;
                     }
                     resolved.push(*seq);
@@ -643,6 +761,16 @@ impl SyncEngine {
             }
         }
         drop(identity);
+
+        // B1: a rotation may have arrived on the config log; rebuild the ring
+        // so this page's held bodies open on the next pass. A body we couldn't
+        // open also makes the relay keyring route due again.
+        if applied > 0 {
+            self.refresh_keyring(store)?;
+        }
+        if retry_at.is_some() {
+            self.rows_wanted = true;
+        }
 
         // Advance the cursor to the highest resolved sequence, but never to or
         // past the lowest not-yet-openable sequence (so it's re-fetched), and
@@ -673,18 +801,46 @@ impl SyncEngine {
         self.last_fetched_seq
     }
 
-    /// Replace the base-epoch (0) key. Lets previously undecodable base-epoch
-    /// events decode on the next pull.
+    /// Test seam: replace the ring with only `key` at epoch 0.
+    #[cfg(test)]
     pub fn set_key(&mut self, key: [u8; 32]) {
-        self.keyring.insert(0, key);
+        self.keyring = KeyringEngine::passphrase(self.room_workspace(), key);
     }
 
-    /// Add (or replace) the key for a specific epoch — e.g. a rotation reached
-    /// us. New events then seal under the new highest epoch, while older-epoch
-    /// events already fetched remain openable.
+    /// Test seam: hold `key` for `version` and seal under it when it is the
+    /// highest held (the pre-B1 unsigned behaviour, for transport tests that
+    /// predate signed rotations).
+    #[cfg(test)]
     pub fn add_key(&mut self, version: u32, key: [u8; 32]) {
-        self.keyring.insert(version, key);
+        self.keyring.force_key(version, key);
     }
+}
+
+impl SyncEngine {
+    /// The roster at the head of this room's config log, when this device
+    /// follows rotations (a key source) and the log has synced.
+    fn head_roster(&self, store: &EventStore) -> Result<Option<Box<hive_core::authz::RosterState>>, SyncError> {
+        if self.key_source.is_none() {
+            return Ok(None);
+        }
+        let ws = self.room_workspace();
+        let pin = store.workspace_pin(ws)?.map(|p| p.founder_account.to_string());
+        let (config, timeline) = store.load_config(ws, pin.as_deref(), None)?;
+        Ok(config.map(|_| Box::new(timeline.current().clone())))
+    }
+}
+
+/// B1 ingest rule: a human-stamped event that arrives sealed under an epoch
+/// older than the authorized head, from an account that isn't a member at the
+/// head. A removed member keeps their old keys but can't write with them once
+/// this device knows of the removal and the rotation.
+pub(crate) fn late_from_outsider(head: Option<&hive_core::authz::RosterState>, env: &SessionEventEnvelope) -> bool {
+    let (Some(head), Some(sealed)) = (head, env.sealed_epoch()) else { return false };
+    if sealed >= head.key_epochs.head_version() {
+        return false;
+    }
+    let Some(account) = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) else { return false };
+    !head.members.values().any(|m| m.account_id == Some(account))
 }
 
 /// A content-free guard signal for one ingest decision: whether the signer is
@@ -731,6 +887,7 @@ mod tests {
     }
 
     use super::*;
+    use hive_core::seal_symmetric;
     use hive_core::{ChatMessage, ChatSession, MessageRole, SessionEvent, SessionEventEnvelope};
 
     async fn spawn_relay() -> String {

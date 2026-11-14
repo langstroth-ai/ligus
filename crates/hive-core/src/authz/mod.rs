@@ -255,6 +255,12 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
     // roster at its frontier. Self-validating trust publications are exempt,
     // and a self-enrollment is judged by its invite below.
     let on_config = env.session_id == crate::channel::workspace_config_session_id(env.workspace_id);
+    // B1 old-epoch policy: an event that arrived sealed under epoch `e` is
+    // accepted only if `e` is at least the authorized epoch at its author's
+    // frontier (an author who had seen a rotation must have used it).
+    if let Some(why) = stale_epoch(env, ctx, on_config) {
+        return Decision::deny(why);
+    }
     // Agent-signed events (A3): judged by the Agent tier, capped by the
     // agent's owner's role, with the key valid at this position.
     // A message is its author's (checked chat folds).
@@ -297,8 +303,22 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         }
     }
 
+    if let SessionEvent::DeviceKeyAgreementPublished { device_id, ka_public } = &env.payload {
+        return match ka_publication_ok(env, *device_id, ka_public, on_config, ctx.running) {
+            Ok(()) => Decision::Allow,
+            Err(why) => Decision::deny(why),
+        };
+    }
+
     if requires_projection_authz(&env.payload) {
         let mut role = fold.role_of(author);
+        // B1: a key rotation follows the authorized head by exactly one and
+        // is signed by a certified device of its author.
+        if let SessionEvent::WorkspaceKeyRotated { rotation } = &env.payload {
+            if let Err(why) = rotation_ok(env, rotation, on_config, ctx.running) {
+                return Decision::deny(why);
+            }
+        }
         // A chat's own roster (its creator is its Owner) never grants a
         // workspace role: on a chat log, governance and workspace-config kinds
         // are capped by the author's workspace role at this position.
@@ -464,6 +484,78 @@ fn authorize_agent(env: &SessionEventEnvelope, ctx: &Ctx<'_>, roster: &RosterSta
         return Decision::deny(d.summary);
     }
     Decision::Allow
+}
+
+/// The B1 write rule (see [`authorize`]): `Some(reason)` when the envelope
+/// arrived sealed under an epoch older than the one authorized at its
+/// author's frontier.
+fn stale_epoch(env: &SessionEventEnvelope, ctx: &Ctx<'_>, on_config: bool) -> Option<String> {
+    let sealed = env.sealed_epoch()?;
+    let frontier = env.actor_stamp.as_ref()?.cfg_frontier?;
+    let roster = if on_config {
+        ctx.running
+    } else if ctx.checked {
+        ctx.workspace?
+    } else {
+        return None;
+    };
+    let required = roster.key_epochs.version_at(frontier.key());
+    (sealed < required).then(|| format!("sealed under key epoch {sealed}, but its author had seen epoch {required}"))
+}
+
+/// The signing device of a key event: certified here (not revoked), certified
+/// for the stamped account when there is one, and its signature verifies
+/// against the certificate's key (defense in depth over ingest).
+fn certified_signer<'r>(env: &SessionEventEnvelope, roster: &'r RosterState) -> Result<&'r timeline::DeviceState, String> {
+    let device = env.signer_device_id.ok_or("unsigned")?;
+    let d = roster
+        .devices
+        .get(&device)
+        .filter(|d| !d.revoked && !d.accounts.is_empty())
+        .ok_or("signed by a device that isn't certified here")?;
+    if let Some(account) = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) {
+        if !d.accounts.contains(&account) {
+            return Err("signed by a device that doesn't act for its author".into());
+        }
+    }
+    crate::crypto::verify_envelope(env, &d.public_key).map_err(|_| "bad signature".to_string())?;
+    Ok(d)
+}
+
+/// `DeviceKeyAgreementPublished`: on the config log, signed by the very device
+/// it names (certified here), with a 32-byte X25519 key.
+fn ka_publication_ok(
+    env: &SessionEventEnvelope,
+    device_id: Uuid,
+    ka_public: &[u8],
+    on_config: bool,
+    roster: &RosterState,
+) -> Result<(), String> {
+    if !on_config {
+        return Err("a key-agreement key is published on the workspace config log".into());
+    }
+    if env.signer_device_id != Some(device_id) {
+        return Err("a device publishes only its own key-agreement key".into());
+    }
+    if ka_public.len() != 32 {
+        return Err("malformed key-agreement key".into());
+    }
+    certified_signer(env, roster).map(|_| ())
+}
+
+/// `WorkspaceKeyRotated`: on the config log, from a certified device, and the
+/// next version after the authorized head.
+fn rotation_ok(
+    env: &SessionEventEnvelope,
+    rotation: &crate::keys::SignedRotation,
+    on_config: bool,
+    roster: &RosterState,
+) -> Result<(), String> {
+    if !on_config {
+        return Err("a key rotation is published on the workspace config log".into());
+    }
+    certified_signer(env, roster)?;
+    roster.key_epochs.check_next(rotation)
 }
 
 /// The certificate checks of an `AgentKeyCertified`.

@@ -338,9 +338,15 @@ pub enum SessionEvent {
     /// Contributor, plus the certificate's own checks in `authz`). Agent-signed
     /// events are judged with the capped Agent tier (`authz::agent`).
     AgentKeyCertified { cert: crate::crypto::AgentKeyCertificate },
+    /// A signed workspace-key rotation (Phase 0, B1; config log, Admin, plus
+    /// presence under rules v2). Its version must follow the authorized head
+    /// by one; see [`crate::keys`].
+    WorkspaceKeyRotated { rotation: crate::keys::SignedRotation },
+    /// A device publishes its own X25519 key-agreement key (config log;
+    /// signed by that device, `signer_device_id == device_id`). Rotations
+    /// seal only to keys published this way, never to a relay directory entry.
+    DeviceKeyAgreementPublished { device_id: Uuid, ka_public: Vec<u8> },
     // Phase 0 slots, uncommented by their PRs in merge-queue order:
-    // WorkspaceKeyRotated { .. },                                  // B1
-    // DeviceKeyAgreementPublished { .. },                          // B1
     // PasskeyRegistered { .. }, PasskeyRemoved { .. },             // B3
     /// Forward-compat catch-all: an event `kind` this build does not recognize
     /// (produced by a newer client). Serde deserializes an unknown tag here
@@ -417,6 +423,8 @@ impl SessionEvent {
             SessionEvent::WorkspaceRulesSet { .. } => "workspaceRulesSet",
             SessionEvent::ProposalApplied { .. } => "proposalApplied",
             SessionEvent::AgentKeyCertified { .. } => "agentKeyCertified",
+            SessionEvent::WorkspaceKeyRotated { .. } => "workspaceKeyRotated",
+            SessionEvent::DeviceKeyAgreementPublished { .. } => "deviceKeyAgreementPublished",
             SessionEvent::Unknown => "unknown",
         }
     }
@@ -447,7 +455,9 @@ impl SessionEvent {
             | SessionEvent::ChatLockdownRaised { .. }
             | SessionEvent::ChatLockdownCleared { .. }
             | SessionEvent::WorkspaceRulesSet { .. }
-            | SessionEvent::AgentKeyCertified { .. } => EventScope::Workspace,
+            | SessionEvent::AgentKeyCertified { .. }
+            | SessionEvent::WorkspaceKeyRotated { .. }
+            | SessionEvent::DeviceKeyAgreementPublished { .. } => EventScope::Workspace,
             SessionEvent::FlowRecorded { record } if record.is_config() => EventScope::Workspace,
             SessionEvent::WorkflowRunUpserted { .. } => EventScope::Run,
             _ => EventScope::Session,
@@ -487,6 +497,9 @@ pub struct SessionEventEnvelope {
     /// The bytes this envelope was received as (`None` for one authored here
     /// and not yet round-tripped). Never a key of its own on the wire.
     pub(crate) raw: Option<crate::envelope_wire::RawSigned>,
+    /// The key epoch this envelope arrived sealed under (device-local, see
+    /// [`SessionEventEnvelope::sealed_epoch`]). Never on the wire.
+    pub(crate) sealed_epoch: Option<u32>,
 }
 
 /// Equality is over the typed fields; the received bytes are not compared.
@@ -533,6 +546,7 @@ impl SessionEventEnvelope {
             signer_device_id: None,
             signature: None,
             raw: None,
+            sealed_epoch: None,
         }
     }
 
@@ -678,7 +692,10 @@ impl ChatSession {
                 }
             }
             // Read by the roster tracker (authz::timeline), not the session.
-            SessionEvent::WorkspaceRulesSet { .. } | SessionEvent::AgentKeyCertified { .. } => {}
+            SessionEvent::WorkspaceRulesSet { .. }
+            | SessionEvent::AgentKeyCertified { .. }
+            | SessionEvent::WorkspaceKeyRotated { .. }
+            | SessionEvent::DeviceKeyAgreementPublished { .. } => {}
             SessionEvent::ProposalReverted { proposal_id, .. } => {
                 if let Some(p) = self.proposals.iter_mut().find(|p| p.id == *proposal_id) {
                     p.reverted = p.status == crate::proposals::ProposalStatus::Applied;
@@ -1125,6 +1142,9 @@ fn fold(
         *t = authz::ConfigTimeline::begin(tracker.state.clone());
         for e in &ordered {
             t.note_held(e.event_id, e.lamport);
+            if let SessionEvent::WorkspaceKeyRotated { rotation } = &e.payload {
+                t.note_rotation(rotation);
+            }
         }
         // The seed is a position too (a log with only its seed has a head).
         t.push(ordered[base].canonical_key(), &tracker.state, false);
