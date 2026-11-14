@@ -240,7 +240,7 @@ pub fn load_forges(data_dir: &FsPath, offline: bool) -> Vec<ForgeHandle> {
             let creds: Arc<dyn hive_forge::CredentialSource> = if offline && conn.auth == hive_forge::AuthSource::Gh {
                 Arc::new(hive_forge::tokens::Anonymous)
             } else {
-                conn.credentials(store.clone(), helper.as_deref())
+                conn.credentials(store.clone(), helper.as_deref(), Some(data_dir))
             };
             let forge = conn.build(creds);
             ForgeHandle { conn, forge }

@@ -36,7 +36,7 @@ fn helper_command(id: &ForgeId, data_dir: &Path) -> Option<String> {
 }
 
 fn credentials(c: &Connection, data_dir: &Path) -> Arc<dyn CredentialSource> {
-    c.credentials_with_helper(store(data_dir), helper_command(&c.id, data_dir))
+    c.credentials_with_helper(store(data_dir), helper_command(&c.id, data_dir), Some(data_dir))
 }
 
 fn forge(c: &Connection, data_dir: &Path) -> Arc<dyn Forge> {
@@ -72,7 +72,7 @@ fn run_helper(id: &str, dir: &Path, action: &str) -> Result<(), String> {
     if !matches!(c.auth, AuthSource::Token | AuthSource::Oauth) {
         return Ok(());
     }
-    let creds = c.credentials(store(dir), None);
+    let creds = c.credentials(store(dir), None, Some(dir));
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
     let token = rt.block_on(creds.token(Purpose::Write)).ok().flatten();
     let user = hive_forge::tokens::git_username(c.kind, c.auth, c.login.as_deref());

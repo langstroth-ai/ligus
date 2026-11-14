@@ -482,7 +482,7 @@ async fn an_expired_oauth_token_is_refreshed_from_the_store_before_use() {
     let store = Arc::new(MemoryTokens::default());
     store.put(&c.id, Purpose::Write, &Secret::new("OLD")).unwrap();
     store.put(&c.id, Purpose::Refresh, &Secret::new("RT")).unwrap();
-    let gh = c.build(c.credentials(store.clone(), None));
+    let gh = c.build(c.credentials(store.clone(), None, None));
     assert_eq!(gh.whoami().await.unwrap().unwrap().login, "me");
     assert_eq!(f.find("GET", "/api/v3/user").auth.as_deref(), Some("Bearer NEW"));
     assert_eq!(store.get(&c.id, Purpose::Refresh).unwrap().unwrap().expose(), "RT2");
@@ -529,4 +529,44 @@ async fn device_answers_are_read_with_a_cap() {
     let r = tokio::time::timeout(std::time::Duration::from_secs(5), hive_forge::device::start(&ep)).await;
     let err = r.expect("the read stops at the cap instead of draining an endless body").unwrap_err();
     assert!(err.to_string().contains("too large"), "{err}");
+}
+
+/// GitLab rotates refresh tokens: a refresh token works once. `ligus serve`,
+/// an agent's read tools and the git credential helper each build their own
+/// credentials from `forges.toml`. Only one of them may refresh, the new
+/// expiry must land in `forges.toml` (so the next process doesn't refresh
+/// again with a spent refresh token), and it is written once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn refreshed_expiry_is_persisted_once() {
+    let f = Fake::default();
+    f.on(Method::POST, "/oauth/token", 200, json!({"access_token": "NEW", "refresh_token": "RT2", "expires_in": 7200}));
+    let base = serve(f.clone()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut c = Connection::new(ForgeKind::GitLab, &base, AuthSource::Oauth).unwrap();
+    c.client_id = Some("app-123".into());
+    c.token_expires_at = Some(1);
+    let mut all = Connections::default();
+    all.upsert(c.clone());
+    all.save(dir.path()).unwrap();
+    let store = Arc::new(MemoryTokens::default());
+    store.put(&c.id, Purpose::Write, &Secret::new("OLD")).unwrap();
+    store.put(&c.id, Purpose::Refresh, &Secret::new("RT")).unwrap();
+    let mut tasks = Vec::new();
+    for _ in 0..3 {
+        let conn = Connections::load(dir.path()).get(&c.id).cloned().unwrap();
+        let creds = conn.credentials(store.clone(), None, Some(dir.path()));
+        tasks.push(tokio::spawn(async move { creds.token(Purpose::Write).await.unwrap().unwrap().expose().to_string() }));
+    }
+    for t in tasks {
+        assert_eq!(t.await.unwrap(), "NEW");
+    }
+    let refreshes = || f.seen().iter().filter(|s| s.method == "POST" && s.path == "/oauth/token").count();
+    assert_eq!(refreshes(), 1, "one refresh across processes: a second one would spend the rotated refresh token");
+    let saved = Connections::load(dir.path()).get(&c.id).and_then(|c| c.token_expires_at).unwrap_or(0);
+    assert!(saved > hive_forge::device::now_unix() + 7000, "the refreshed expiry is in forges.toml: {saved}");
+    // The next process reads the fresh expiry and doesn't refresh again.
+    let conn = Connections::load(dir.path()).get(&c.id).cloned().unwrap();
+    let late = conn.credentials(store.clone(), None, Some(dir.path()));
+    assert_eq!(late.token(Purpose::Write).await.unwrap().unwrap().expose(), "NEW");
+    assert_eq!(refreshes(), 1);
 }

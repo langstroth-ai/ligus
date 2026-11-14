@@ -138,7 +138,7 @@ pub fn cmd(data_dir: &Path, args: &[&str], auth: Option<String>, client_id: Opti
             let id = ForgeId::parse(args.get(1).copied().unwrap_or("")).map_err(|e| anyhow::anyhow!("{e}"))?;
             let all = Connections::load(data_dir);
             let c = all.get(&id).with_context(|| format!("no connection {id}"))?.clone();
-            let forge = c.build(c.credentials(token_store(data_dir), helper_program().as_deref()));
+            let forge = c.build(c.credentials(token_store(data_dir), helper_program().as_deref(), Some(data_dir)));
             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
             match rt.block_on(forge.whoami()) {
                 Ok(Some(u)) => println!("{id}: signed in as {} (id {}).", u.login, u.id),
@@ -168,6 +168,8 @@ pub fn cmd(data_dir: &Path, args: &[&str], auth: Option<String>, client_id: Opti
                     hive_forge::device::Poll::Denied => bail!("sign-in was denied"),
                     hive_forge::device::Poll::Expired => bail!("the code expired; run ligus forge login {id} again"),
                     hive_forge::device::Poll::Done(t) => {
+                        let _forges = hive_forge::conn::ForgesLock::acquire(data_dir).map_err(|e| anyhow::anyhow!("{e}"))?;
+                        all = Connections::load(data_dir);
                         save_token_set(data_dir, &mut all, &id, &t)?;
                         println!("signed in; the token is in this device's secret store.");
                         return Ok(());
@@ -179,7 +181,8 @@ pub fn cmd(data_dir: &Path, args: &[&str], auth: Option<String>, client_id: Opti
     }
 }
 
-/// Store a device sign-in's tokens and mark the connection as OAuth.
+/// Store a device sign-in's tokens and mark the connection as OAuth. The
+/// caller holds the data dir's `ForgesLock` and loaded `all` under it.
 pub fn save_token_set(data_dir: &Path, all: &mut Connections, id: &ForgeId, t: &hive_forge::device::TokenSet) -> Result<()> {
     let store = token_store(data_dir);
     store.put(id, Purpose::Write, &t.access).map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -204,7 +207,7 @@ pub fn git_credential(data_dir: &Path, id: &ForgeId, action: &str, input: &str, 
     if !matches!(c.auth, AuthSource::Token | AuthSource::Oauth) {
         return Ok(());
     }
-    let creds = c.credentials(token_store(data_dir), None);
+    let creds = c.credentials(token_store(data_dir), None, Some(data_dir));
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     // Through the credential source, so an expired device-flow token is
     // refreshed first.

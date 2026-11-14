@@ -16,6 +16,51 @@ use crate::{spec, Forge, ForgeError, ForgeId, ForgeKind, Result};
 
 pub const FILE: &str = "forges.toml";
 
+/// The lock file that serialises token refreshes and edits of
+/// `forges.toml` across this device's processes (`ligus serve`, the agents'
+/// read tools, the git credential helper, the desktop).
+pub const LOCK_FILE: &str = ".forges.lock";
+
+/// An exclusive hold on [`LOCK_FILE`] (released on drop). One holder per
+/// data dir at a time, across processes and threads: each acquire opens its
+/// own file description, so `flock` serialises threads of one process too.
+/// Not reentrant: never acquire it again while holding it.
+pub struct ForgesLock {
+    _file: std::fs::File,
+}
+
+impl ForgesLock {
+    /// Block until this process holds the lock.
+    pub fn acquire(data_dir: &Path) -> Result<Self> {
+        let io = |e: std::io::Error| ForgeError::Store(format!("couldn't lock the code host connections: {e}"));
+        std::fs::create_dir_all(data_dir).map_err(io)?;
+        let file = std::fs::OpenOptions::new().create(true).read(true).write(true).truncate(false).open(data_dir.join(LOCK_FILE)).map_err(io)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            loop {
+                // SAFETY: flock on a file descriptor this function owns; it
+                // stays open (and the lock held) for the life of `ForgesLock`.
+                if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+                    break;
+                }
+                let e = std::io::Error::last_os_error();
+                if e.kind() != std::io::ErrorKind::Interrupted {
+                    return Err(io(e));
+                }
+            }
+        }
+        // Closing the file releases the lock.
+        Ok(Self { _file: file })
+    }
+
+    /// [`ForgesLock::acquire`] off the async runtime.
+    pub async fn acquire_async(data_dir: &Path) -> Result<Self> {
+        let d = data_dir.to_path_buf();
+        tokio::task::spawn_blocking(move || Self::acquire(&d)).await.map_err(|e| ForgeError::Store(e.to_string()))?
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Connection {
@@ -143,13 +188,17 @@ impl Connection {
     }
 
     /// The credential source for this connection.
-    pub fn credentials(&self, store: Arc<dyn TokenStore>, helper_program: Option<&Path>) -> Arc<dyn CredentialSource> {
-        self.credentials_with_helper(store, helper_program.map(|p| crate::tokens::store_helper_command(p, &self.id)))
+    pub fn credentials(&self, store: Arc<dyn TokenStore>, helper_program: Option<&Path>, data_dir: Option<&Path>) -> Arc<dyn CredentialSource> {
+        self.credentials_with_helper(store, helper_program.map(|p| crate::tokens::store_helper_command(p, &self.id)), data_dir)
     }
 
     /// [`Connection::credentials`] with a ready-made helper command (the
     /// part after `!`), for hosts whose helper takes extra arguments.
-    pub fn credentials_with_helper(&self, store: Arc<dyn TokenStore>, helper: Option<String>) -> Arc<dyn CredentialSource> {
+    ///
+    /// `data_dir` is where `forges.toml` lives: a refreshed device sign-in's
+    /// expiry is saved there (once, under [`ForgesLock`]), and refreshes are
+    /// serialised with every other process using that data dir.
+    pub fn credentials_with_helper(&self, store: Arc<dyn TokenStore>, helper: Option<String>, data_dir: Option<&Path>) -> Arc<dyn CredentialSource> {
         match self.auth {
             AuthSource::Gh => Arc::new(GhCredentials::new(self.host())),
             AuthSource::None => Arc::new(Anonymous),
@@ -159,6 +208,21 @@ impl Connection {
                     *c.expires_at.get_mut().unwrap_or_else(|e| e.into_inner()) = self.token_expires_at;
                     if let Ok(ep) = crate::device::endpoints(self) {
                         c.refresh = Some(RefreshConfig { token_url: ep.token_url, client_id: ep.client_id });
+                    }
+                    if let Some(dir) = data_dir {
+                        c.data_dir = Some(dir.to_path_buf());
+                        let (dir, id) = (dir.to_path_buf(), self.id.clone());
+                        // Runs under the lock the refresh holds: no second
+                        // acquire here.
+                        c.on_refresh = Some(Arc::new(move |exp| {
+                            let mut all = Connections::load(&dir);
+                            if let Some(c) = all.get_mut(&id) {
+                                c.token_expires_at = exp;
+                                if let Err(e) = all.save(&dir) {
+                                    tracing::warn!("couldn't save the refreshed sign-in expiry for {id}: {e}");
+                                }
+                            }
+                        }));
                     }
                 }
                 Arc::new(c)
@@ -244,6 +308,17 @@ impl Connections {
             Some(x) => *x = c,
             None => self.forges.push(c),
         }
+    }
+
+    /// Load, change and save `forges.toml` under [`ForgesLock`], so a
+    /// refresh saving its expiry and another edit never lose each other's
+    /// change. Not for use while holding the lock.
+    pub fn update<T>(data_dir: &Path, f: impl FnOnce(&mut Connections) -> Result<T>) -> Result<T> {
+        let _lock = ForgesLock::acquire(data_dir)?;
+        let mut all = Self::load(data_dir);
+        let out = f(&mut all)?;
+        all.save(data_dir)?;
+        Ok(out)
     }
 
     pub fn remove(&mut self, id: &ForgeId) -> bool {

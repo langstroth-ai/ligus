@@ -33,7 +33,7 @@ async fn tests_never_reach_real_code_hosts_or_gh() {
     let empty = tempfile::tempdir().unwrap();
     let implicit = Connections::load(empty.path()).forges.remove(0);
     assert_eq!(implicit.auth, AuthSource::Gh);
-    let creds = implicit.credentials(Arc::new(MemoryTokens::default()), None);
+    let creds = implicit.credentials(Arc::new(MemoryTokens::default()), None, None);
     assert!(creds.token(Purpose::Read).await.unwrap().is_none());
     assert!(!marker.exists(), "a test build ran gh through the implicit connection");
 

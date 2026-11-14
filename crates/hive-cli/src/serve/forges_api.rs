@@ -85,8 +85,11 @@ fn forge_err(e: hive_forge::ForgeError) -> ApiError {
     ApiError::new(code, e.to_string())
 }
 
-/// Edit `forges.toml` under the repos lock, then reload.
-fn edit_connections<T>(s: &Shared, f: impl FnOnce(&mut Connections) -> ApiResult<T>) -> ApiResult<T> {
+/// Edit `forges.toml` under the data dir's forges lock (a token refresh in
+/// another process saves its expiry under it too) and the repos lock, then
+/// reload.
+async fn edit_connections<T>(s: &Shared, f: impl FnOnce(&mut Connections) -> ApiResult<T>) -> ApiResult<T> {
+    let _forges = hive_forge::conn::ForgesLock::acquire_async(&s.cfg.data_dir).await.map_err(forge_err)?;
     let out = {
         let _g = s.repos.bindings.lock().unwrap_or_else(|e| e.into_inner());
         let mut all = Connections::load(&s.cfg.data_dir);
@@ -156,7 +159,8 @@ pub async fn add(State(s): S, peer: Option<Extension<TunnelPeer>>, Json(req): Js
         }
         all.upsert(c);
         Ok(())
-    })?;
+    })
+    .await?;
     let h = handle(&s, &id)?;
     Ok(Json(json!({ "forge": dto(&s, &h).await })))
 }
@@ -166,7 +170,7 @@ pub async fn remove(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): 
     ensure_can_write(&s, None)?;
     presence_gate(&s, peer.as_deref(), "forge_remove")?;
     let id = parse_id(&id)?;
-    let removed = edit_connections(&s, |all| Ok(all.remove(&id)))?;
+    let removed = edit_connections(&s, |all| Ok(all.remove(&id))).await?;
     forge_cmd::token_store(&s.cfg.data_dir).delete_all(&id).map_err(forge_err)?;
     s.repos.device.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
     if !removed {
@@ -192,7 +196,8 @@ pub async fn test(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>>
                     c.user_id = Some(uid);
                 }
                 Ok(())
-            })?;
+            })
+            .await?;
             json!({ "ok": true, "user": u.login, "userId": u.id })
         }
         Ok(None) => json!({ "ok": false, "error": h.forge.signed_out_reason().unwrap_or_else(|| "no credentials".into()) }),
@@ -228,7 +233,8 @@ pub async fn put_token(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id
             }
         }
         Ok(())
-    })?;
+    })
+    .await?;
     let h = handle(&s, &id)?;
     Ok(Json(json!({ "forge": dto(&s, &h).await })))
 }
@@ -296,7 +302,9 @@ pub async fn device_start(State(s): S, peer: Option<Extension<TunnelPeer>>, Path
                 Ok(hive_forge::device::Poll::Denied) => return set("denied", None),
                 Ok(hive_forge::device::Poll::Expired) => return set("expired", None),
                 Ok(hive_forge::device::Poll::Done(t)) => {
+                    let lock = hive_forge::conn::ForgesLock::acquire_async(&shared.cfg.data_dir).await;
                     let r = {
+                        let _forges = lock;
                         let _g = shared.repos.bindings.lock().unwrap_or_else(|e| e.into_inner());
                         let mut all = Connections::load(&shared.cfg.data_dir);
                         forge_cmd::save_token_set(&shared.cfg.data_dir, &mut all, &poll_id, &t)
