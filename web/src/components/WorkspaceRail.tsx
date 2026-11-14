@@ -185,10 +185,12 @@ export function WorkspaceRail({
                 setMenu({ ws: w, x: e.clientX, y: e.clientY });
               }}
               title={local ? "Personal — right-click to set an icon" : `${w.name} — right-click for options`}
+              aria-current={w.active ? "true" : undefined}
+              aria-label={w.name}
               className="flex h-10 w-10 items-center justify-center overflow-hidden text-sm font-semibold transition-all hover:brightness-110"
               style={{
-                background: w.active ? "var(--hive-accent-cool)" : "var(--hive-panel)",
-                color: w.active ? "#fff" : "var(--hive-ink)",
+                background: w.active ? "var(--hive-accent-fill)" : "var(--hive-panel)",
+                color: w.active ? "var(--hive-on-accent)" : "var(--hive-ink)",
                 border: w.active ? "none" : "1px solid var(--hive-line)",
                 borderRadius: w.active ? 12 : 18,
               }}
