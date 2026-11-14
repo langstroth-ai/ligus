@@ -180,7 +180,7 @@ impl Drop for Scratch {
 }
 
 fn git_bytes(dir: &FsPath, args: &[&str]) -> Option<Vec<u8>> {
-    let out = hive_core::process_util::command("git")
+    let out = hive_core::process_util::git()
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -229,7 +229,7 @@ fn apply_in_scratch(
         }
         std::fs::write(&f, content).map_err(io)?;
     }
-    let mut cmd = hive_core::process_util::command("git");
+    let mut cmd = hive_core::process_util::git();
     cmd.current_dir(&work)
         // Never find a repository above the scratch dir: a plain patch tool.
         .env("GIT_CEILING_DIRECTORIES", &scratch.0)

@@ -23,6 +23,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
 use hive_core::process_util::command;
 
 /// One `git worktree list` entry.
@@ -34,7 +35,7 @@ pub struct WorktreeEntry {
 
 /// List a repository's worktrees (`git worktree list --porcelain`).
 pub fn list_worktrees(repo_root: &Path) -> Vec<WorktreeEntry> {
-    let Ok(out) = command("git").arg("-C").arg(repo_root).args(["worktree", "list", "--porcelain"]).output() else {
+    let Ok(out) = hive_core::process_util::git().arg("-C").arg(repo_root).args(["worktree", "list", "--porcelain"]).output() else {
         return Vec::new();
     };
     parse_porcelain(&String::from_utf8_lossy(&out.stdout))
@@ -128,7 +129,7 @@ pub fn slug(id: &str) -> String {
 /// Carry out one step. Returns whether something was removed. Never deletes a
 /// chat branch, and saves a turn worktree's uncommitted edits first.
 pub fn apply(repo_root: &Path, action: &SweepAction) -> bool {
-    let git = |dir: &Path, args: &[&str]| command("git").arg("-C").arg(dir).args(args).output().map(|o| (o.status.success(), o.stdout));
+    let git = |dir: &Path, args: &[&str]| hive_core::process_util::git().arg("-C").arg(dir).args(args).output().map(|o| (o.status.success(), o.stdout));
     match action {
         SweepAction::RemoveTurnWorktree { path, branch } => {
             if path.exists() {
@@ -161,14 +162,14 @@ pub fn apply(repo_root: &Path, action: &SweepAction) -> bool {
 
 /// Prune worktree records whose directory is gone.
 pub fn prune(repo_root: &Path) {
-    let _ = command("git").arg("-C").arg(repo_root).args(["worktree", "prune"]).output();
+    let _ = hive_core::process_util::git().arg("-C").arg(repo_root).args(["worktree", "prune"]).output();
 }
 
 /// Whether `diff` still applies cleanly in `dir` (`git apply --check`).
 pub fn patch_applies(dir: &Path, diff: &str) -> bool {
     use std::io::Write;
     use std::process::Stdio;
-    let Ok(mut child) = command("git")
+    let Ok(mut child) = hive_core::process_util::git()
         .arg("-C")
         .arg(dir)
         .args(["apply", "--check", "--whitespace=nowarn"])

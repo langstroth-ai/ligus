@@ -280,7 +280,7 @@ fn linked_worktrees(dir: &Path) -> Vec<PathBuf> {
 
 /// `git worktree repair <paths…>` in `root` (best effort; verified after).
 fn repair_worktrees(root: &Path, worktrees: &[PathBuf]) {
-    let _ = crate::process_util::command("git").arg("-C").arg(root).args(["worktree", "repair"]).args(worktrees).output();
+    let _ = crate::process_util::git().arg("-C").arg(root).args(["worktree", "repair"]).args(worktrees).output();
 }
 
 /// Whether git's two-way link for the linked worktree at `wt` is intact: its

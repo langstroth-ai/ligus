@@ -961,7 +961,7 @@ fn apply_on_this_host(s: &Shared, chat: &ChatSession, p: &ActionProposal) -> Api
 fn git_apply(dir: &std::path::Path, diff: &str) -> Result<(), String> {
     use std::io::Write;
     use std::process::Stdio;
-    let mut child = hive_core::process_util::command("git")
+    let mut child = hive_core::process_util::git()
         .arg("-C")
         .arg(dir)
         .args(["apply", "--whitespace=nowarn"])
@@ -988,7 +988,7 @@ fn git_apply(dir: &std::path::Path, diff: &str) -> Result<(), String> {
 
 fn git_commit(dir: &std::path::Path, message: &str) -> Result<(), String> {
     let run = |args: &[&str]| {
-        hive_core::process_util::command("git").arg("-C").arg(dir).args(args).output().map_err(|e| e.to_string())
+        hive_core::process_util::git().arg("-C").arg(dir).args(args).output().map_err(|e| e.to_string())
     };
     let add = run(&["add", "-A"])?;
     if !add.status.success() {

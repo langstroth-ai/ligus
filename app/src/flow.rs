@@ -764,7 +764,7 @@ fn local_base_branch(state: &AppState) -> String {
     if base != "HEAD" {
         return base;
     }
-    hive_core::process_util::command("git")
+    hive_core::process_util::git()
         .arg("-C")
         .arg(&root)
         .args(["rev-parse", "--abbrev-ref", "HEAD"])

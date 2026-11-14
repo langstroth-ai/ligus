@@ -208,7 +208,7 @@ pub fn parse_remote(url: &str) -> Option<RemoteRef> {
 
 /// `git -C dir <args>` → trimmed stdout, `None` on failure.
 pub fn git_out(dir: &Path, args: &[&str]) -> Option<String> {
-    let out = hive_core::process_util::command("git")
+    let out = hive_core::process_util::git()
         .arg("-C")
         .arg(dir)
         .args(args)

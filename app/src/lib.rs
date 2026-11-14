@@ -1239,7 +1239,7 @@ fn list_workspace_files(state: State<AppState>) -> Vec<String> {
     if root.trim().is_empty() {
         return Vec::new();
     }
-    let out = std::process::Command::new("git")
+    let out = hive_core::process_util::git()
         .args(["ls-files", "--cached", "--others", "--exclude-standard"])
         .current_dir(&root)
         .output();
@@ -5427,7 +5427,7 @@ fn dismiss_proposals(
 fn apply_patch(workspace_root: &str, diff: &str) -> Result<(), String> {
     use std::io::Write;
     use std::process::Stdio;
-    let mut child = hive_core::process_util::command("git")
+    let mut child = hive_core::process_util::git()
         .arg("-C")
         .arg(workspace_root)
         .args(["apply", "--whitespace=nowarn"])
@@ -5457,7 +5457,7 @@ fn apply_patch(workspace_root: &str, diff: &str) -> Result<(), String> {
 /// no-op tree (nothing staged) is treated as success so a re-apply doesn't
 /// error. Errors surface so the caller doesn't leave a half-applied state.
 fn commit_worktree(worktree: &str, message: &str) -> Result<(), String> {
-    let add = hive_core::process_util::command("git")
+    let add = hive_core::process_util::git()
         .arg("-C")
         .arg(worktree)
         .args(["add", "-A"])
@@ -5466,7 +5466,7 @@ fn commit_worktree(worktree: &str, message: &str) -> Result<(), String> {
     if !add.status.success() {
         return Err(format!("git add: {}", String::from_utf8_lossy(&add.stderr).trim()));
     }
-    let out = hive_core::process_util::command("git")
+    let out = hive_core::process_util::git()
         .arg("-C")
         .arg(worktree)
         .args(["commit", "-m", message])
@@ -9137,7 +9137,7 @@ fn get_file_diff_sides(state: State<AppState>, path: String) -> Result<FileDiffS
     if rel.is_empty() || rel.starts_with('/') || rel.contains("..") {
         return Err("invalid path".into());
     }
-    let original = hive_core::process_util::command("git")
+    let original = hive_core::process_util::git()
         .args(["show", &format!("HEAD:{rel}")])
         .current_dir(&root)
         .output()
@@ -13351,7 +13351,7 @@ fn on_path(bin: &str) -> bool {
 }
 
 fn git_config_value(key: &str) -> Option<String> {
-    hive_core::process_util::command("git")
+    hive_core::process_util::git()
         .args(["config", "--get", key])
         .output()
         .ok()

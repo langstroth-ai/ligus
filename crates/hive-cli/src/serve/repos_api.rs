@@ -182,6 +182,7 @@ pub fn run(cmd: Command, timeout: Duration) -> Result<RunOut, String> {
 /// `git -C dir [auth] <args>`, failing with git's own message.
 fn git(dir: &FsPath, auth: &[String], args: &[&str], timeout: Duration) -> Result<String, String> {
     let mut c = quiet("git");
+    hive_core::process_util::harden_git(&mut c);
     c.arg("-C").arg(dir).args(auth).args(args);
     let out = run(c, timeout)?;
     if !out.ok {
@@ -1043,6 +1044,7 @@ fn run_clone_job(
     // clone never shows up (or gets bound) as a checkout.
     let tmp = repos_dir.join(format!(".clone-{id}"));
     let mut c = quiet("git");
+    hive_core::process_util::harden_git(&mut c);
     let watch_dir: PathBuf = if action == "clone" {
         c.args(&auth).args(["clone", "--progress", "--no-recurse-submodules", "--", url]).arg(&tmp);
         tmp.clone()

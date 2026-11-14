@@ -932,7 +932,7 @@ pub(crate) async fn revert_proposal(
 fn reverse_patch(dir: &str, diff: &str) -> Result<(), String> {
     use std::io::Write;
     use std::process::Stdio;
-    let mut child = hive_core::process_util::command("git")
+    let mut child = hive_core::process_util::git()
         .arg("-C")
         .arg(dir)
         .args(["apply", "-R", "--whitespace=nowarn"])

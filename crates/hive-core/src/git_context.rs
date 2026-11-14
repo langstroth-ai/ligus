@@ -5,7 +5,6 @@
 //! proposals, the primary runtime, or subprocess agents).
 
 use std::path::Path;
-use crate::process_util::command;
 
 use serde::{Deserialize, Serialize};
 
@@ -79,7 +78,7 @@ pub struct GitFileDiff {
 
 /// Run `git` in `path`, returning stdout on a zero exit, else `None`.
 fn run(args: &[&str], path: &str) -> Option<String> {
-    let output = command("git")
+    let output = crate::process_util::git()
         .args(args)
         .current_dir(path)
         .output()

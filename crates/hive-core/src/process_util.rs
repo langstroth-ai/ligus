@@ -44,3 +44,61 @@ pub fn no_console_window(cmd: &mut Command) {
     #[cfg(not(windows))]
     let _ = cmd;
 }
+
+/// `git` for Hive's own operations on repositories whose content (and, in an
+/// agent's turn tree, whose files) may be attacker-written. Repo hooks and
+/// fsmonitor never run: a husky-style `core.hooksPath` points into the work
+/// tree, so an agent that can only write files could otherwise get code run
+/// by Hive, outside any agent sandbox. Passed as `GIT_CONFIG_*` so they
+/// override repo-local config and work before or after `-C`.
+pub fn git() -> Command {
+    let mut cmd = command("git");
+    harden_git(&mut cmd);
+    cmd
+}
+
+/// Apply [`git`]'s overrides to an already-built `git` `Command`.
+pub fn harden_git(cmd: &mut Command) {
+    const OVERRIDES: [(&str, &str); 3] = [
+        ("core.hooksPath", "/dev/null"),
+        ("core.fsmonitor", "false"),
+        ("protocol.ext.allow", "never"),
+    ];
+    cmd.env("GIT_CONFIG_COUNT", OVERRIDES.len().to_string());
+    for (i, (k, v)) in OVERRIDES.iter().enumerate() {
+        cmd.env(format!("GIT_CONFIG_KEY_{i}"), k).env(format!("GIT_CONFIG_VALUE_{i}"), v);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn hardened_git_ignores_repo_hooks_and_fsmonitor() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("hive-hardgit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".hooks")).unwrap();
+        let run = |c: &mut std::process::Command| assert!(c.output().unwrap().status.success());
+        run(super::command("git").arg("-C").arg(&dir).args(["init", "-q"]));
+        let marker = dir.with_extension("ran");
+        let _ = std::fs::remove_file(&marker);
+        let hook = dir.join(".hooks/pre-commit");
+        std::fs::write(&hook, format!("#!/bin/sh\necho hook >> '{}'\n", marker.display())).unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let fsm = dir.join("fsm.sh");
+        std::fs::write(&fsm, format!("#!/bin/sh\necho fsmonitor >> '{}'\n", marker.display())).unwrap();
+        std::fs::set_permissions(&fsm, std::fs::Permissions::from_mode(0o755)).unwrap();
+        for (k, v) in [("core.hooksPath", ".hooks"), ("core.fsmonitor", fsm.to_str().unwrap()), ("user.email", "t@t"), ("user.name", "t")] {
+            run(super::command("git").arg("-C").arg(&dir).args(["config", k, v]));
+        }
+        std::fs::write(dir.join("a"), "a").unwrap();
+        run(super::git().arg("-C").arg(&dir).args(["add", "-A"]));
+        run(super::git().arg("-C").arg(&dir).args(["status", "--porcelain"]));
+        run(super::git().arg("-C").arg(&dir).args(["commit", "-qm", "x"]));
+        let ran = std::fs::read_to_string(&marker).unwrap_or_default();
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_file(&marker);
+        assert!(ran.is_empty(), "ran: {ran}");
+    }
+}
