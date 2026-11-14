@@ -256,6 +256,40 @@ spec:
         runAsGroup: 65532
         fsGroup: 65532
         seccompProfile: { type: RuntimeDefault }
+      # CNIs program NetworkPolicy for a new pod asynchronously (kindnet takes
+      # a second or two), so nothing untrusted runs until a connection the
+      # policy must block actually fails. Fails closed after the timeout.
+      initContainers:
+        - name: netpol-gate
+          image: {{ include "ligus.sandboxImage" $root }}
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              probe={{ $s.policyGate.probe | quote }}
+              deadline=$((SECONDS + {{ int $s.policyGate.timeoutSeconds }}))
+              blocked() {
+                {{- if eq $s.profile "pr-test" }}
+                timeout 3 getent hosts kubernetes.default.svc.cluster.local >/dev/null 2>&1 && return 1
+                {{- end }}
+                [ -z "$probe" ] && return 0
+                ! timeout 3 bash -c "exec 3<>/dev/tcp/${probe%:*}/${probe##*:}" 2>/dev/null
+              }
+              until blocked; do
+                if [ "$SECONDS" -ge "$deadline" ]; then
+                  echo "network policy not in force after {{ int $s.policyGate.timeoutSeconds }}s; refusing to start"
+                  exit 1
+                fi
+                sleep 1
+              done
+              echo "network policy in force"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 100m, memory: 64Mi }
       containers:
         - name: turn
           image: {{ include "ligus.sandboxImage" $root }}

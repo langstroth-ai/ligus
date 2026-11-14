@@ -91,6 +91,7 @@ outside the cluster can read the workspace. Use it for CI and trials only.
 | `sandbox.enabled` / `profile` | off, `agent-turn` | `pr-test` has no egress at all and refuses to render without `runtimeClassName` unless `allowDefaultRuntime` |
 | `sandbox.runtimeClassName` | empty | `gvisor`, a Kata class, ...; empty means runc, which is not a security boundary |
 | `sandbox.egress` | `[]` | Extra egress rules for agent-turn executors (model endpoint, granted MCP Services) |
+| `sandbox.policyGate.probe` / `timeoutSeconds` | cluster DNS metrics port, 60 | Executors start only once a connection their NetworkPolicy must block fails (pr-test also waits for DNS to fail); the Job fails if that never happens |
 | `sandbox.smokeJob.enabled` | `false` | Post-install Job that verifies the executor hardening |
 | `networkPolicy.serveIngressFrom` | this release's own pods | Who reaches serve:8787; MCP server pods and other pods in the namespace are excluded by default |
 | `networkPolicy.restrictEgress` / `relayNamespace` / `extraEgress` | off | Lock serve and worker egress down to DNS, the relay and listed peers |
@@ -107,8 +108,9 @@ outside the cluster can read the workspace. Use it for CI and trials only.
   only by their full `*.svc.cluster.local` name today.
 - NetworkPolicy is programmed asynchronously for a new pod on some CNIs (kind's
   kindnet among them): a pod's first second or two of traffic can precede its
-  policy. Executors must not start untrusted work immediately, and the smoke
-  Job waits before checking. On kindnet, egress to the `kubernetes` Service VIP
+  policy. Executor Jobs therefore start with a `netpol-gate` init container
+  that waits until the policy demonstrably blocks traffic, and fail closed if it
+  never does. On kindnet, egress to the `kubernetes` Service VIP
   was also observed to bypass an egress policy in some runs; executors have no
   service account token, so only anonymous API access is possible.
 - The sandbox Job template expects the controller to add the turn bundle

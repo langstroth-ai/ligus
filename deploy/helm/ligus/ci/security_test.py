@@ -108,7 +108,31 @@ def test_serve_ingress_excludes_foreign_pods():
     check("the helm test pod still reaches serve:8787", admitted(test_pod["metadata"]["labels"]))
 
 
-TESTS = [test_dns_egress_is_scoped, test_serve_ingress_excludes_foreign_pods]
+# --- Executors wait for their NetworkPolicy before untrusted work ----------
+
+def test_executor_waits_for_network_policy():
+    for profile in ("agent-turn", "pr-test"):
+        docs = render("--set", "sandbox.enabled=true", "--set", "sandbox.profile=" + profile,
+                      "--set", "sandbox.allowDefaultRuntime=true", "--set", "sandbox.smokeJob.enabled=true")
+        for kind, name, tpl in pod_templates(docs):
+            if (tpl["metadata"].get("labels") or {}).get("ligus.ai/role") != "executor":
+                continue
+            inits = tpl["spec"].get("initContainers") or []
+            gate = [c for c in inits if c["name"] == "netpol-gate"]
+            check("%s %s (%s) gates on its NetworkPolicy before the turn starts" % (kind, name, profile),
+                  len(gate) == 1, "CNIs program policy asynchronously; the first seconds are unfiltered")
+            if gate:
+                script = gate[0]["args"][-1] if gate[0].get("args") else ""
+                check("%s %s (%s) gate fails closed" % (kind, name, profile), "exit 1" in script)
+                if profile == "pr-test":
+                    check("%s %s pr-test gate requires DNS to be blocked" % (kind, name), "getent" in script)
+                sc = gate[0].get("securityContext") or {}
+                check("%s %s gate is hardened" % (kind, name),
+                      sc.get("readOnlyRootFilesystem") and sc.get("allowPrivilegeEscalation") is False)
+
+
+TESTS = [test_dns_egress_is_scoped, test_serve_ingress_excludes_foreign_pods,
+         test_executor_waits_for_network_policy]
 
 if __name__ == "__main__":
     for t in TESTS:
