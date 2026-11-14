@@ -196,6 +196,26 @@ impl ChatSession {
     }
 }
 
+/// The key a turn claim is recorded under (`TurnClaimed.trigger_id`): the
+/// trigger itself for a turn with one responder (a user message), and a
+/// UUIDv5 of (trigger, receiving agent) for one receiver of a hand-off,
+/// which can start several agents on several devices from one reply. The
+/// plain form is what every device has always written, so older devices
+/// still coordinate on user-message turns.
+pub fn turn_claim_key(trigger_id: Uuid, agent_id: Option<Uuid>) -> Uuid {
+    /// Namespace for per-receiver claim keys (fixed; never change it).
+    const NS: Uuid = Uuid::from_u128(0x6c69_6775_732d_7475_726e_2d63_6c61_696d);
+    match agent_id {
+        None => trigger_id,
+        Some(a) => {
+            let mut name = [0u8; 32];
+            name[..16].copy_from_slice(trigger_id.as_bytes());
+            name[16..].copy_from_slice(a.as_bytes());
+            Uuid::new_v5(&NS, &name)
+        }
+    }
+}
+
 #[cfg(test)]
 mod serialized_form_tests {
     use super::ChatSession;

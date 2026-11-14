@@ -46,6 +46,10 @@ changes workspace settings.
 | `ligus_ask_human` | `question`, `options? ≤ 6`, `timeoutSecs ≤ 3600` | Asks the chat's people. **The turn pauses** until someone answers or the timeout passes (then `{"error":"no_answer"}`) |
 | `ligus_report` | `status: done\|blocked\|needsReview`, `summary ≤ 400`, `filesTouched?`, `confidence?` | A short self-report, shown on the turn. Never used for scoring |
 
+A hand-off's receivers are claimed one by one: when a reply hands off to
+two agents that run on different devices, each device runs its own
+receiver exactly once.
+
 The JSON Schemas are in
 `crates/hive-runtime/src/ligus_mcp/schema/` and are frozen per release: a
 test fails when one changes.
