@@ -81,7 +81,9 @@ pub fn injection_markers(text: &str) -> Vec<&'static str> {
 pub fn secrets_in_diff(diff: &str) -> Vec<&'static str> {
     let added: String = diff
         .lines()
-        .filter(|l| l.starts_with('+') && !l.starts_with("+++"))
+        // `+++ b/path` headers are scanned too: an added line whose content
+        // starts with `++` looks the same, and a header only holds a path.
+        .filter(|l| l.starts_with('+'))
         .map(|l| &l[1..])
         .collect::<Vec<_>>()
         .join("\n");
@@ -166,6 +168,14 @@ mod tests {
         assert!(!masked.contains(aws) && !masked.contains(&gh) && !masked.contains(&ant) && !masked.contains("abc"));
         assert!(masked.contains("[redacted aws_access_key]"));
         assert!(masked.contains("[redacted private_key]"));
+    }
+
+    /// An added line whose content starts with `++` renders as `+++...` in
+    /// the diff; it must still be scanned (a C++ comment, a markdown rule).
+    #[test]
+    fn added_lines_starting_with_plus_plus_are_scanned() {
+        let diff = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -0,0 +1 @@\n+++ AKIAIOSFODNN7EXAMPLE\n";
+        assert_eq!(secrets_in_diff(diff), vec!["aws_access_key"]);
     }
 
     #[test]
