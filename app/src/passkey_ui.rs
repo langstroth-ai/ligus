@@ -409,6 +409,21 @@ pub async fn passkey_remove(app: AppHandle, credential_id: String) -> Result<(),
     .map_err(|e| e.to_string())?
 }
 
+/// Let member `member_id` of the active workspace register a first passkey
+/// again (rules v2): an Admin's re-grant of their role, confirmed with this
+/// account's passkey.
+#[tauri::command]
+pub async fn passkey_regrant(app: AppHandle, member_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let ws = state.active_workspace_id();
+        let mut svc = state.service.lock().unwrap();
+        svc.regrant_passkey(ws, &member_id).map(|_| ()).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Stop waiting for the browser.
 #[tauri::command]
 pub fn presence_cancel() {

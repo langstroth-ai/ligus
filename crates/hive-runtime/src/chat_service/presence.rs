@@ -203,6 +203,24 @@ impl ChatService {
         )
     }
 
+    /// Let member `member_id` register a first passkey again (B.4.6): an
+    /// Admin's presence-confirmed re-grant of their role, for an account whose
+    /// credentials were all removed (or that never had one under rules v2).
+    pub fn regrant_passkey(&mut self, workspace_id: Uuid, member_id: &str) -> Result<SessionEventEnvelope> {
+        let config_id = workspace_config_session_id(workspace_id);
+        let role = self
+            .load(config_id)?
+            .and_then(|c| c.members.iter().find(|m| m.id == member_id).map(|m| m.role))
+            .ok_or_else(|| ChatError::Unauthorized("no such member".into()))?;
+        self.append_signed(
+            config_id,
+            workspace_id,
+            SessionEvent::MemberRoleChanged {
+                change: hive_core::events::MemberRoleChange { member_id: member_id.to_string(), old_role: role, new_role: role },
+            },
+        )
+    }
+
     /// This device's account's credentials on `workspace_id`.
     pub fn passkeys_of(&self, workspace_id: Uuid, account_id: Uuid) -> Result<Vec<(String, bool)>> {
         let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;

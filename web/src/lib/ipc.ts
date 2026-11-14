@@ -1683,6 +1683,8 @@ export const passkeyRegister = (label: string) => invoke<void>("passkey_register
 export const recoveryKeyCreate = () => invoke<string>("recovery_key_create");
 export const passkeyRemove = (credentialId: string) => invoke<void>("passkey_remove", { credentialId });
 export const workspaceRulesSet = (version: number) => invoke<void>("workspace_rules_set", { version });
+/** Let a member register a first passkey again (an Admin's re-grant, confirmed with your passkey). */
+export const passkeyRegrant = (memberId: string) => invoke<void>("passkey_regrant", { memberId });
 export const rotateWorkspaceKey = () => invoke<{ rotated: boolean; recipients: number }>("rotate_workspace_key");
 export const presenceCancel = () => invoke<void>("presence_cancel");
 /** Confirm the pending request with the recovery key's 24 words (signed on this device, never stored). */

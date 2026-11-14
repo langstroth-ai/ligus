@@ -672,3 +672,122 @@ fn device_key_thief_cannot_rotate_the_account_key_under_v2() {
     assert_eq!(roster.account_signing_key(account), Some(&new_pub[..]));
     assert!(roster.is_certified(svc.device_id()));
 }
+
+/// Ana (founder, Owner) on rules v2 and a second person's service on the
+/// same store: `who` becomes a member (by Ana, with her passkey) and
+/// publishes her device identity.
+fn second_person(dir: &std::path::Path, add: bool) -> (ChatService, ChatService, Uuid, Arc<SoftAuthenticator>, Uuid) {
+    let db = dir.join("hive.db");
+    let ana_account = Uuid::new_v4();
+    let mut ana_author = ActorIdentity::new(ana_account.to_string(), "Ana", ActorKind::Human);
+    ana_author.account_id = Some(ana_account);
+    let mut ana = ChatService::new(EventStore::open(&db).unwrap(), Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), ana_author);
+    let wid = Uuid::new_v4();
+    ana.ensure_workspace_config(wid).unwrap();
+    let key = Arc::new(SoftAuthenticator::es256());
+    register(&mut ana, wid, &key, None).unwrap();
+    let rec = RecoveryKey::generate().unwrap();
+    let k2 = key.clone();
+    ana.register_passkey(wid, rec.credential(ana_account, "Recovery key"), &move |req| Ok(k2.get(&req.challenge))).unwrap();
+    let cfg = workspace_config_session_id(wid);
+    let bea_account = Uuid::new_v4();
+    let mut bea_author = ActorIdentity::new(bea_account.to_string(), "Bea", ActorKind::Human);
+    bea_author.account_id = Some(bea_account);
+    let mut m = member(&bea_account.to_string(), WorkspaceRole::Contributor);
+    m.actor = bea_author.clone();
+    if !add {
+        // Bea joins under rules v1, before the switch.
+        ana.add_member(cfg, wid, m.clone()).unwrap();
+    }
+    ana.set_presence_provider(Some(Arc::new(Soft(key.clone()))));
+    ana.set_workspace_rules(wid, 2).unwrap();
+    if add {
+        ana.add_member(cfg, wid, m).unwrap();
+    }
+    ana.set_presence_provider(None);
+    let mut bea = ChatService::new(EventStore::open(&db).unwrap(), Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), bea_author);
+    bea.publish_identity(cfg, wid).unwrap();
+    (ana, bea, wid, key, bea_account)
+}
+
+/// Track B residual 1b: after every credential of an account is removed, a
+/// device-key thief can't register a new "first" passkey: that needs an
+/// Admin's presence-confirmed re-grant first (B.4.6), and a re-grant is good
+/// for one registration.
+#[test]
+fn first_passkey_after_all_credentials_removed_needs_a_regrant() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut ana, mut bea, wid, ana_key, bea_account) = second_person(dir.path(), true);
+    // Added by an Admin under v2: Bea's first passkey is allowed.
+    let first = SoftAuthenticator::es256();
+    register(&mut bea, wid, &first, None).unwrap();
+    // Ana clears Bea's lost passkey (with her own passkey).
+    ana.set_presence_provider(Some(Arc::new(Soft(ana_key.clone()))));
+    ana.remove_passkey(wid, bea_account, &first.credential(bea_account, "").credential_id).unwrap();
+    assert!(bea.passkeys_of(wid, bea_account).unwrap().is_empty());
+    // Bea's device alone (a thief) can't register a new first passkey.
+    let thief = SoftAuthenticator::es256();
+    let err = register(&mut bea, wid, &thief, None).unwrap_err().to_string();
+    assert!(err.contains("re-grant"), "{err}");
+    // A refused registration crafted by hand doesn't fold either.
+    // Ana re-grants (her presence), then a new first passkey registers once.
+    ana.regrant_passkey(wid, &bea_account.to_string()).unwrap();
+    let fresh = SoftAuthenticator::ed25519();
+    register(&mut bea, wid, &fresh, None).unwrap();
+    assert_eq!(bea.passkeys_of(wid, bea_account).unwrap().len(), 1);
+    // The re-grant is used up: cleared again, Bea needs another one.
+    ana.remove_passkey(wid, bea_account, &fresh.credential(bea_account, "").credential_id).unwrap();
+    assert!(register(&mut bea, wid, &SoftAuthenticator::es256(), None).is_err(), "a re-grant registers once");
+    // Without presence a re-grant is refused.
+    ana.set_presence_provider(None);
+    assert!(ana.regrant_passkey(wid, &bea_account.to_string()).is_err());
+}
+
+/// The recovery key is the other way back: with every passkey gone but the
+/// recovery key kept, a new passkey registers with the recovery key's
+/// presence (and still not on the device key alone).
+#[test]
+fn recovery_key_re_registers_after_passkeys_are_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut ana, mut bea, wid, ana_key, bea_account) = second_person(dir.path(), true);
+    let first = Arc::new(SoftAuthenticator::es256());
+    register(&mut bea, wid, &first, None).unwrap();
+    let rec = Arc::new(RecoveryKey::generate().unwrap());
+    let f2 = first.clone();
+    bea.register_passkey(wid, rec.credential(bea_account, "Recovery key"), &move |req| Ok(f2.get(&req.challenge))).unwrap();
+    ana.set_presence_provider(Some(Arc::new(Soft(ana_key))));
+    ana.remove_passkey(wid, bea_account, &first.credential(bea_account, "").credential_id).unwrap();
+    let fresh = SoftAuthenticator::ed25519();
+    assert!(register(&mut bea, wid, &fresh, None).is_err(), "the device key alone");
+    let cred = fresh.credential(bea_account, "new");
+    let r2 = rec.clone();
+    bea.register_passkey(wid, cred, &move |req| Ok(r2.assert(&req.challenge))).unwrap();
+    assert_eq!(bea.passkeys_of(wid, bea_account).unwrap().len(), 2);
+}
+
+/// Track B residual 1c: under rules v2, an account that never had a
+/// credential (a member from before the switch) registers its first passkey
+/// only after an Admin's re-grant; under rules v1 it stays trust on first use.
+#[test]
+fn first_passkey_under_v2_needs_a_grant() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut ana, mut bea, wid, ana_key, bea_account) = second_person(dir.path(), false);
+    let k = SoftAuthenticator::es256();
+    let err = register(&mut bea, wid, &k, None).unwrap_err().to_string();
+    assert!(err.contains("re-grant"), "{err}");
+    // A hand-made registration is refused by the fold too.
+    let mut log = config_log(&bea, wid);
+    let mut env = log.iter().rev().find(|e| matches!(e.payload, SessionEvent::DeviceCertificateAdded { .. })).unwrap().clone();
+    env.clear_raw();
+    env.event_id = Uuid::new_v4();
+    env.lamport += 1000;
+    env.payload = SessionEvent::PasskeyRegistered { credential: k.credential(bea_account, "k") };
+    env.actor_stamp.as_mut().unwrap().presence = Some(k.get(&presence::challenge(&env)));
+    env.signature = None;
+    bea.sign_for_test(&mut env);
+    log.push(env.clone());
+    assert_eq!(fold_decisions(&log, None, None, WorkspaceAuthz::Unchecked)[&env.event_id], Verdict::Denied);
+    ana.set_presence_provider(Some(Arc::new(Soft(ana_key))));
+    ana.regrant_passkey(wid, &bea_account.to_string()).unwrap();
+    register(&mut bea, wid, &k, None).unwrap();
+}

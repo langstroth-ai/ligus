@@ -10,6 +10,7 @@ import {
   removeMember,
   removeAndRevoke,
   setMemberRole,
+  passkeyRegrant,
   workspaceMembers,
   workspaceAddMember,
   workspaceRemoveMember,
@@ -1829,6 +1830,16 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
     },
     onError: (e) => setError(String(e)),
   });
+  // Rules v2: a member whose passkeys were all removed (or who never had
+  // one) registers a first passkey only after an Admin's re-grant.
+  const regrantMutation = useMutation({
+    mutationFn: (id: string) => passkeyRegrant(id),
+    onSuccess: () => {
+      setError(null);
+      toast.success("They can register a new passkey now.");
+    },
+    onError: (e) => toast.error(`Couldn't re-grant: ${errMsg(e)}`),
+  });
   const removeMutation = useMutation({
     mutationFn: (id: string) => removeMember(sessionId, id),
     onSuccess: () => {
@@ -2063,6 +2074,13 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                   title="Remove from the member list only"
                 >
                   Remove
+                </button>
+                <button
+                  className="shrink-0 rounded text-xs text-ink-soft hover:text-ink hover:underline"
+                  onClick={() => regrantMutation.mutate(member.id)}
+                  title="Under rules v2, let them register a first passkey (after theirs were removed). Confirmed with your passkey."
+                >
+                  Allow new passkey
                 </button>
                 <button
                   className="shrink-0 text-xs font-medium hover:opacity-80"
