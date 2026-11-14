@@ -3064,8 +3064,14 @@ impl AppState {
             } else {
                 cli_permission_args(provider, &permission_mode)
             };
-            // Per-provider key → legacy global key → env.
-            let api_key = provider_key.or(settings_key).or_else(|| api_key_for(provider));
+            // Per-provider key → legacy global key → env, for Ligus's own
+            // in-process API calls. A CLI agent child gets only the key the
+            // user configured for that runtime in Ligus, never the parent env.
+            let api_key = if provider.is_cli_agent() {
+                provider_key
+            } else {
+                provider_key.or(settings_key).or_else(|| api_key_for(provider))
+            };
             // A hosted-API provider with no key would dispatch and fail (401) — the
             // classic "fresh install, no API key, @hive won't answer" case, since
             // the compiled default runtime is `anthropic`. Fall back to the
@@ -8136,7 +8142,11 @@ async fn run_prepared_turn_inner(
         rt.args.extend(enforcement.extra_args.iter().cloned());
         rt
     };
-    let stream_fut = dispatch::stream_with_tools(
+    // Every child this turn spawns (the CLI, stdio MCP servers, run_command)
+    // runs under this policy in the host's OS sandbox.
+    let sandbox_policy = crate::guards::turn_sandbox_policy(state, &envelope, &gate_plan, worktree.is_some() || lazy_worktree.is_some());
+    let sandbox_denials = sandbox_policy.denials.clone();
+    let stream_fut = hive_runtime::executor::with_turn(sandbox_policy, dispatch::stream_with_tools(
         &enforced_runtime,
         Some(&system),
         &turns,
@@ -8215,7 +8225,7 @@ async fn run_prepared_turn_inner(
             };
             let _ = app.emit(ChatActivityEvent::EVENT, ev);
         },
-    );
+    ));
     let result = tokio::select! {
         biased;
         _ = stop.notified() => {
@@ -8230,6 +8240,7 @@ async fn run_prepared_turn_inner(
             ))),
         },
     };
+    crate::guards::record_sandbox_egress_denials(state, workspace_id, session_id, sandbox_denials.lock().map(|d| d.len()).unwrap_or(0));
     // Patch-leaving: what the tool loop measurably achieved, as signals.
     if let Some(tools) = &http_tools {
         crate::guards::record_progress(state, workspace_id, session_id, tools.progress());
@@ -9812,10 +9823,9 @@ async fn probe_provider(
     // A key passed in wins (test-before-save, e.g. from onboarding); otherwise
     // the stored precedence: per-provider → legacy global → env.
     let typed_key = key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
-    let api_key = typed_key
-        .or_else(|| provider_keys.get(cfg).cloned().filter(|s| !s.is_empty()))
-        .or(settings_key)
-        .or_else(|| api_key_for(provider));
+    let configured = typed_key.or_else(|| provider_keys.get(cfg).cloned().filter(|s| !s.is_empty()));
+    // A CLI agent child gets only a key configured in Ligus (see resolve).
+    let api_key = if provider.is_cli_agent() { configured } else { configured.or(settings_key).or_else(|| api_key_for(provider)) };
     // A passed base URL wins (test-before-save from onboarding); else the stored one.
     let base = base_url
         .map(|b| b.trim().to_string())
@@ -10740,6 +10750,9 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         }
     }
 
+    // Agent processes never read this device's data dir (keys, settings,
+    // the database).
+    hive_runtime::executor::configure_host(&data_dir, &[], &[]);
     let (base_runtimes, default_runtime_id, base_mcp, managed_runtimes, managed_mcp) =
         load_workspace_catalogs(&workspace_root, &data_dir);
 

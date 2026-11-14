@@ -373,7 +373,7 @@ fn serve_token_unreadable_by_agent() {
     // Also when the token file lives outside the data dir (`--token-file`).
     let token = f.outside.join("serve.token");
     std::fs::write(&token, "SERVE-TOKEN-SECRET").unwrap();
-    configure_host(&f.data, &[token.clone()], &[]);
+    configure_host(&f.data, std::slice::from_ref(&token), &[]);
     for t in [f.data.join("serve.token"), token] {
         let (ok, out) = run_sh(&*e, &f, &format!("cat '{}'", t.display()), isolated());
         assert!(!ok && !out.contains("SECRET"), "{}: {out}", t.display());

@@ -829,6 +829,8 @@ fn load_read_marks(cfg: &Config) -> HashMap<Uuid, Uuid> {
 /// Start everything on the current (multi-threaded) tokio runtime and return
 /// once the API is listening.
 pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
+    // Agents on this box never read the serve token, wherever it lives.
+    hive_runtime::executor::configure_host(&cfg.data_dir, std::slice::from_ref(&opts.token_file), &[crate::repos::repos_dir(&cfg.data_dir)]);
     let token = pair::load_or_create_token(&opts.token_file)?;
     let ws = uuid_of_room(&cfg.room);
     if let Err(e) = crate::purge_foreign_workspaces(&cfg) {

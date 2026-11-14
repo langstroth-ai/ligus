@@ -842,7 +842,18 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
                 }
                 // MCP tools when LIGUS_MCP_CONFIG provisions them and the gate allows,
                 // else a plain stream.
-                let reply = reply::generate_reply(&turn_rt, &system, &turns, allow_mcp, None).await?;
+                // The CLI child runs in this host's OS sandbox, in a fresh
+                // scratch dir (never this process's cwd).
+                let envelope = hive_core::sandbox::envelope_for_session(&s);
+                let enforcement = hive_runtime::sandbox::enforce(turn_rt.provider, &envelope, &Vec::new());
+                if let Some(reason) = enforcement.refuse {
+                    println!("refused: {reason}");
+                    continue;
+                }
+                turn_rt.args.extend(enforcement.extra_args);
+                let allow_mcp = allow_mcp && enforcement.allow_run_command;
+                let sandbox = hive_runtime::executor::TurnPolicy::new(hive_runtime::executor::HostKind::Agent, envelope, plan.clone());
+                let reply = hive_runtime::executor::with_turn(sandbox, reply::generate_reply(&turn_rt, &system, &turns, allow_mcp, None)).await?;
                 let mid = svc.begin_assistant_message(s.id, s.workspace_id, name.clone(), rt_label.clone(), None, Some(last.id))?;
                 svc.complete_assistant_message(s.id, s.workspace_id, mid, reply)?;
                 seen.insert(mid);
@@ -1202,6 +1213,9 @@ fn run() -> Result<()> {
         return Ok(());
     }
     let cfg = config();
+    // Agent processes this host spawns never read its data dir (keys,
+    // database, serve token); checked-out repos under it stay readable.
+    hive_runtime::executor::configure_host(&cfg.data_dir, &[], &[repos::repos_dir(&cfg.data_dir)]);
     // Ligus's own secret env values are masked wherever agent output is
     // logged (relay tokens, the workspace key, provider keys passed in).
     hive_runtime::secret_redact::register_env_secrets();

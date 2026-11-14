@@ -73,7 +73,7 @@ pub async fn run(
     input: &str,
     on_delta: impl FnMut(String),
 ) -> Result<String, ProviderError> {
-    run_with(program, args, working_dir, &[], PromptInput::Stdin(input), on_delta).await
+    run_with(hive_core::ModelProviderKind::Hermes, program, args, working_dir, &[], PromptInput::Stdin(input), on_delta).await
 }
 
 /// Like [`run`], but the caller chooses whether the prompt is delivered on
@@ -81,6 +81,7 @@ pub async fn run(
 /// variables. Captures stderr so a nonzero exit surfaces the tool's actual
 /// error message instead of a bare exit code.
 pub async fn run_with(
+    kind: hive_core::ModelProviderKind,
     program: &str,
     args: &[String],
     working_dir: Option<&str>,
@@ -88,22 +89,12 @@ pub async fn run_with(
     prompt: PromptInput<'_>,
     mut on_delta: impl FnMut(String),
 ) -> Result<String, ProviderError> {
-    let mut cmd = Command::new(program);
-    for k in hive_core::process_util::ligus_secret_env_names() {
-        cmd.env_remove(k);
-    }
-    cmd.args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        // Kill the agent if this future is dropped (Stop button aborts the turn).
-        .kill_on_drop(true);
-    for (k, v) in envs {
-        cmd.env(k, v);
-    }
-    if let Some(dir) = working_dir {
-        cmd.current_dir(dir);
-    }
+    let spec = crate::executor::SpawnSpec::new(crate::executor::Purpose::Agent(kind), program, args)
+        .cwd(working_dir.map(std::path::Path::new))
+        .env(envs);
+    let (mut cmd, _sandbox) = crate::executor::tokio_command(spec).map_err(|e| ProviderError::Subprocess(format!("sandbox {program}: {e}")))?;
+    // Kill the agent if this future is dropped (Stop button aborts the turn).
+    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     suppress_console_window(&mut cmd);
 
     let mut child = cmd
@@ -294,7 +285,9 @@ mod tests {
         std::env::remove_var("LIGUS_SCRUBTEST_PLAIN");
         assert!(!out.contains("ws-secret-value"), "workspace secret reached the agent");
         assert!(!out.contains("relay-token-value"), "token reached the agent");
-        assert!(out.contains("LIGUS_SCRUBTEST_PLAIN=kept"), "non-secret settings still pass");
+        // An allow-list, not a scrub: other Ligus settings don't pass either.
+        assert!(!out.contains("LIGUS_SCRUBTEST_PLAIN"), "{out}");
+        assert!(out.contains("PATH="), "the allow-listed basics pass");
     }
 
     #[tokio::test]
@@ -333,6 +326,7 @@ mod tests {
         // `echo <prompt>` stands in for a CLI that takes the prompt as an arg.
         let mut deltas = Vec::new();
         let out = run_with(
+            hive_core::ModelProviderKind::Hermes,
             "echo",
             &["hello from args".into()],
             None,

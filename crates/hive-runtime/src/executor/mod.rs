@@ -555,9 +555,21 @@ pub struct TurnPolicy {
     /// The MCP servers this chat may reach, by id and endpoint.
     pub mcp_ids: Vec<String>,
     pub mcp_hosts: Vec<HostPort>,
+    /// Endpoints the turn's egress proxies refused (host and port only),
+    /// collected for the host to record as a content-free decision.
+    pub denials: Arc<std::sync::Mutex<Vec<HostPort>>>,
 }
 
 impl TurnPolicy {
+    pub fn new(host: HostKind, envelope: SandboxEnvelope, gate: GatePlan) -> Self {
+        Self { envelope, gate, ..Self::baseline(host) }
+    }
+
+    /// Endpoints refused so far in this turn.
+    pub fn egress_denials(&self) -> Vec<HostPort> {
+        self.denials.lock().map(|d| d.clone()).unwrap_or_default()
+    }
+
     /// The policy when a spawn site has none in scope: the workspace's
     /// default envelope, full gate, no MCP.
     pub fn baseline(host: HostKind) -> Self {
@@ -568,12 +580,32 @@ impl TurnPolicy {
             worktree_is_isolated: false,
             mcp_ids: Vec::new(),
             mcp_hosts: Vec::new(),
+            denials: Default::default(),
         }
     }
 }
 
+/// The runtime a turn's CLI child belongs to: its Ligus-configured key and
+/// model endpoint (set by `dispatch` around a turn).
+#[derive(Debug, Clone, Default)]
+pub struct RuntimeScope {
+    pub provider_key: Option<String>,
+    pub model_provider_id: Option<String>,
+    pub model_base_url: Option<String>,
+}
+
 tokio::task_local! {
     static TURN: Arc<TurnPolicy>;
+    static RUNTIME: Arc<RuntimeScope>;
+}
+
+/// Run `fut` with `rt` as the runtime scope for CLI children spawned in it.
+pub async fn with_runtime<F: std::future::Future>(rt: RuntimeScope, fut: F) -> F::Output {
+    RUNTIME.scope(Arc::new(rt), fut).await
+}
+
+fn current_runtime() -> Option<Arc<RuntimeScope>> {
+    RUNTIME.try_with(Arc::clone).ok()
 }
 
 /// Run `fut` with `policy` as the turn scope for every spawn inside it.
@@ -632,6 +664,7 @@ impl<'a> SpawnSpec<'a> {
 /// scratch dir, the generated profile. Hold it until the child exits.
 pub struct TurnGuard {
     proxy: Option<EgressProxy>,
+    denials: Option<Arc<std::sync::Mutex<Vec<HostPort>>>>,
     tmp: Option<PathBuf>,
     kind: ExecutorKind,
     plan: EnforcementPlan,
@@ -652,7 +685,15 @@ impl TurnGuard {
 
 impl Drop for TurnGuard {
     fn drop(&mut self) {
-        self.proxy.take();
+        if let (Some(p), Some(d)) = (self.proxy.take(), &self.denials) {
+            if let Ok(mut d) = d.lock() {
+                for hp in p.denials() {
+                    if !d.contains(&hp) {
+                        d.push(hp);
+                    }
+                }
+            }
+        }
         #[cfg(target_os = "linux")]
         if self.kind == ExecutorKind::Bwrap && self.plan.worktree_writable {
             linux::remove_placeholders(&self.plan);
@@ -743,6 +784,11 @@ pub fn prepare(spec: SpawnSpec<'_>) -> io::Result<Prepared> {
 /// [`prepare`] with an explicit executor (tests).
 pub fn prepare_with(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>) -> io::Result<Prepared> {
     let policy = current_turn().unwrap_or_else(|| Arc::new(TurnPolicy::baseline(HostKind::Desktop)));
+    let rt = current_runtime().unwrap_or_default();
+    let agent = matches!(spec.purpose, Purpose::Agent(_));
+    let provider_key = spec.provider_key.or(rt.provider_key.as_deref().filter(|_| agent));
+    let model_provider_id = spec.model_provider_id.or(rt.model_provider_id.as_deref().filter(|_| agent));
+    let model_base_url = spec.model_base_url.or(rt.model_base_url.as_deref().filter(|_| agent));
     let host = host_paths();
     let home = home_dir().unwrap_or_else(|| PathBuf::from("/nonexistent"));
     let tmp = make_turn_tmp()?;
@@ -778,10 +824,10 @@ pub fn prepare_with(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>) -> io::Res
         host_paths: &host,
         mcp_hosts: &policy.mcp_hosts,
         mcp_ids: &policy.mcp_ids,
-        model_base_url: spec.model_base_url,
+        model_base_url,
         extra_env: spec.extra_env,
-        provider_key: spec.provider_key,
-        model_provider_id: spec.model_provider_id,
+        provider_key,
+        model_provider_id,
         envelope_args: &envelope_args,
     };
     let plan = EnvelopeEnforcer::plan(&inputs);
@@ -803,7 +849,16 @@ pub fn prepare_with(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>) -> io::Res
         _ => None,
     };
     let command = executor.confine(spec.program, &spec.args, &cwd, &plan, proxy.as_ref()).map_err(cleanup_tmp)?;
-    Ok(Prepared { command, guard: TurnGuard { proxy, tmp: Some(tmp), kind, plan } })
+    Ok(Prepared { command, guard: TurnGuard { proxy, denials: Some(policy.denials.clone()), tmp: Some(tmp), kind, plan } })
+}
+
+/// A tokio command for `spec`, confined; the caller sets stdio. Hold the
+/// guard until the child exits. `kill_on_drop` is on.
+pub fn tokio_command(spec: SpawnSpec<'_>) -> io::Result<(tokio::process::Command, TurnGuard)> {
+    let Prepared { command, guard } = prepare(spec)?;
+    let mut cmd = tokio::process::Command::from(command);
+    cmd.kill_on_drop(true);
+    Ok((cmd, guard))
 }
 
 #[cfg(test)]

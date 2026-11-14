@@ -901,27 +901,18 @@ async fn run_shell(command: &str, dir: &Path, timeout: Duration, max_output: usi
     use std::process::Stdio;
     use tokio::io::{AsyncRead, AsyncReadExt};
 
+    // Confined by the turn's sandbox plan: writes only in `dir`, no Ligus
+    // data or keys, an allow-listed env, network only through the turn's
+    // egress proxy (and only for device-allowed hosts).
     #[cfg(unix)]
-    let mut cmd = {
-        let mut c = tokio::process::Command::new("sh");
-        c.arg("-c").arg(command);
-        c.process_group(0);
-        c
-    };
+    let (shell, flag) = ("sh", "-c");
     #[cfg(not(unix))]
-    let mut cmd = {
-        let mut c = tokio::process::Command::new("cmd");
-        c.arg("/C").arg(command);
-        c
-    };
-    cmd.current_dir(dir).env_clear().stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
-    // Minimal env: enough to find tools and behave non-interactively, without
-    // handing the model the app's secrets.
-    for key in ["PATH", "HOME", "USER", "LANG", "TMPDIR", "SYSTEMROOT", "TEMP", "TMP"] {
-        if let Some(v) = std::env::var_os(key) {
-            cmd.env(key, v);
-        }
-    }
+    let (shell, flag) = ("cmd", "/C");
+    let spec = crate::executor::SpawnSpec::new(crate::executor::Purpose::Tool, shell, [flag, command]).cwd(Some(dir));
+    let (mut cmd, _sandbox) = crate::executor::tokio_command(spec).map_err(|e| format!("cannot start command: {e}"))?;
+    #[cfg(unix)]
+    cmd.process_group(0);
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     cmd.env("TERM", "dumb").env("NO_COLOR", "1").env("CI", "1").env("GIT_TERMINAL_PROMPT", "0");
 
     let mut child = cmd.spawn().map_err(|e| format!("cannot start command: {e}"))?;

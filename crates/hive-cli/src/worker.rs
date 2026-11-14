@@ -436,7 +436,7 @@ async fn run_turn(
         // (and the note re-posted) every tick.
         return Err(anyhow!("refused by the workspace sandbox"));
     }
-    if let hive_runtime::author_gate::GatePlan::Refuse(reason) = gate_plan {
+    if let hive_runtime::author_gate::GatePlan::Refuse(reason) = &gate_plan {
         let _ = lock(svc).post_system_note(s.id, s.workspace_id, format!("@{} did not run: {reason}", agent.name));
         sink.changed();
         return Err(anyhow!("refused by the tool role gate"));
@@ -477,11 +477,10 @@ async fn run_turn(
         ModelProviderKind::Pi | ModelProviderKind::Aider | ModelProviderKind::Codex | ModelProviderKind::Hermes => true,
         _ => false,
     };
-    // Subprocess agents fall back to the process's cwd when nothing is bound
-    // (the pre-binding behavior of `ligus worker`); a writing one must still get
-    // a worktree there (checked below).
-    let subprocess_root = repo_root.clone().or_else(|| std::env::current_dir().ok());
-    let eager = match subprocess_root.as_deref() {
+    // Only a bound checkout is ever a turn's directory: never the service's
+    // own cwd (its home, or the data dir). A read-only turn with no worktree
+    // runs in a fresh per-turn scratch dir (`executor::prepare`).
+    let eager = match repo_root.as_deref() {
         Some(root) if write_capable && hive_runtime::git_worktree::is_git_repo(root) => {
             match hive_runtime::git_worktree::cut_turn_worktree(root, &s.id.to_string(), &mid.to_string()) {
                 Ok(wt) => Some(wt),
@@ -524,7 +523,11 @@ async fn run_turn(
             last_flush = Instant::now();
         }
     };
-    let fut = reply::generate_reply_streaming(
+    // Every child of this turn runs in this host's OS sandbox under the
+    // turn's envelope and gate.
+    let mut sandbox = hive_runtime::executor::TurnPolicy::new(hive_runtime::executor::HostKind::Worker, envelope.clone(), gate_plan.clone());
+    sandbox.worktree_is_isolated = eager.is_some();
+    let fut = hive_runtime::executor::with_turn(sandbox, reply::generate_reply_streaming(
         &rt,
         &system,
         &turns,
@@ -533,7 +536,7 @@ async fn run_turn(
         Some(&files),
         &tool_settings,
         on_delta,
-    );
+    ));
     let result = match tokio::time::timeout(turn_timeout(), fut).await {
         Ok(r) => r,
         Err(_) => Err(anyhow!("runtime timed out after {}s", turn_timeout().as_secs())),

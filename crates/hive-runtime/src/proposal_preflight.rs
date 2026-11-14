@@ -166,11 +166,16 @@ fn shell(cmdline: &str) -> std::process::Command {
 /// Run `cmdline` in `dir`, bounded by `timeout`. Ok(true) = exit 0.
 fn run_bounded(dir: &Path, cmdline: &str, timeout: Duration) -> Result<bool, String> {
     use std::process::Stdio;
-    let mut sh = shell(cmdline);
-    // It runs the alternative's code (teammate or agent content).
-    hive_core::process_util::scrub_ligus_secrets(&mut sh);
+    // It runs the alternative's code (teammate or agent content): confined
+    // like an agent's child (writes only in the scratch worktree, no Ligus
+    // data or keys, allow-listed env, no network unless device-allowed).
+    let sh = shell(cmdline);
+    let program = sh.get_program().to_os_string();
+    let args: Vec<std::ffi::OsString> = sh.get_args().map(|a| a.to_os_string()).collect();
+    let spec = crate::executor::SpawnSpec::new(crate::executor::Purpose::Preflight, &program, args).cwd(Some(dir));
+    let crate::executor::Prepared { command: mut sh, guard: _sandbox } =
+        crate::executor::prepare(spec).map_err(|e| format!("couldn't start the test command: {e}"))?;
     let mut child = sh
-        .current_dir(dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
