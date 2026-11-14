@@ -70,6 +70,8 @@ pub struct CompositeTools<M: ToolExecutor> {
     allow_mcp_after_reads: bool,
     /// `propose_workflow`, when the turn offers it.
     workflow: Option<WorkflowTool>,
+    /// Patch-leaving rule: measured progress of this turn's tool loop.
+    progress: crate::patch_leaving::ProgressTracker,
 }
 
 /// Header put on every MCP result: the model sees where the text came from
@@ -259,6 +261,7 @@ impl<M: ToolExecutor> CompositeTools<M> {
             read_workspace: AtomicBool::new(false),
             allow_mcp_after_reads: false,
             workflow: None,
+            progress: Default::default(),
         }
     }
 
@@ -329,6 +332,30 @@ impl<M: ToolExecutor> ToolExecutor for CompositeTools<M> {
         if let (Some(Source::Workflow), Some(w)) = (route, &self.workflow) {
             return w.call(input);
         }
+        // Patch-leaving: once the loop stops making measured progress, every
+        // further call gets a check-in instead of running.
+        if let Some(check_in) = self.progress.gate() {
+            return (check_in.to_string(), true);
+        }
+        let (out, is_error) = self.call_routed(route, name, input).await;
+        self.progress.observe(name, input, &out, is_error);
+        (out, is_error)
+    }
+}
+
+impl<M: ToolExecutor> CompositeTools<M> {
+    /// This turn's measured progress (patch-leaving rule).
+    pub fn progress(&self) -> &crate::patch_leaving::ProgressTracker {
+        &self.progress
+    }
+
+    /// Replace the patch-leaving tracker (e.g. a different stall limit).
+    pub fn with_progress(mut self, progress: crate::patch_leaving::ProgressTracker) -> Self {
+        self.progress = progress;
+        self
+    }
+
+    async fn call_routed(&self, route: Option<Source>, name: &str, input: &Value) -> (String, bool) {
         match (route, &self.builtin, &self.mcp) {
             (Some(Source::Builtin), Some(b), _) => {
                 let (out, is_error) = b.call(name, input).await;

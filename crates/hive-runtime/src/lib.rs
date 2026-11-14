@@ -27,6 +27,7 @@ pub mod lease_presence;
 pub mod mcp;
 pub mod mcp_oauth;
 pub mod mentions;
+pub mod patch_leaving;
 pub mod peer;
 #[cfg(feature = "p2p")]
 pub mod peer_iroh;

@@ -121,3 +121,16 @@ and any subscription CLI that fails with a usage-limit error marks its window
 full until it resets (an hour, when the CLI doesn't say). **Plan windows** in
 Settings → Guards shows each runtime's window and anything being held back.
 A runtime that reports nothing is never throttled.
+
+## Long agent loops: the patch-leaving rule
+
+A forager leaves a patch of flowers once it stops paying off. When an agent
+works through Ligus's own tools (the built-in file tools and MCP, used by API
+and local models), Ligus measures its progress instead of taking its word for
+it: a write that actually changes a file, or a test run with more tests
+passing than before in the turn. After **12 tool calls in a row with no
+measurable progress**, every further call is answered with a check-in: the
+agent stops, says what it tried and what is blocking it, and asks you how to
+continue. Set `LIGUS_PATCH_LEAVING_CALLS` to change the number (0 turns the
+rule off). Subscription CLIs (Claude Code, Codex, ...) run their own tool
+loops and are not affected.

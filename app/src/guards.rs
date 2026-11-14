@@ -1249,6 +1249,31 @@ pub(crate) fn get_throttle_state(state: State<AppState>) -> hive_proto::Throttle
     }
 }
 
+// ---------------------------------------------------------------------------
+// Patch-leaving rule
+// ---------------------------------------------------------------------------
+
+/// Record a tool loop's measured progress (and whether it was made to check
+/// in) as content-free signals.
+pub(crate) fn record_progress(
+    state: &AppState,
+    workspace_id: Uuid,
+    session_id: Uuid,
+    progress: &hive_runtime::patch_leaving::ProgressTracker,
+) {
+    use hive_core::signal::ProgressKind;
+    let (tests, writes) = progress.units();
+    let svc = state.service.lock().unwrap();
+    for (units, kind) in [(tests, ProgressKind::TestsPassing), (writes, ProgressKind::FilesWritten)] {
+        if units > 0.0 {
+            let _ = svc.record_signal(workspace_id, Some(session_id), &GuardSignal::Progress { units, progress_kind: Some(kind) });
+        }
+    }
+    if progress.checked_in() {
+        tracing::info!(target: "guards", chat = %session_id, "patch-leaving rule: agent checked in after a stall");
+    }
+}
+
 /// Whether a run is in a state a coordinator drives.
 pub(crate) fn is_live_status(status: WorkflowRunStatus) -> bool {
     matches!(status, WorkflowRunStatus::Running | WorkflowRunStatus::AwaitingGate)

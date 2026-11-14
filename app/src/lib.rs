@@ -8054,6 +8054,10 @@ async fn run_prepared_turn(
             ))),
         },
     };
+    // Patch-leaving: what the tool loop measurably achieved, as signals.
+    if let Some(tools) = &http_tools {
+        crate::guards::record_progress(state, workspace_id, session_id, tools.progress());
+    }
     // The worktree a lazily isolating turn cut on its first write, if it
     // wrote at all; from here on it is handled like an eager one.
     let worktree = worktree.or_else(|| lazy_worktree.as_ref().and_then(|l| l.finish()));
