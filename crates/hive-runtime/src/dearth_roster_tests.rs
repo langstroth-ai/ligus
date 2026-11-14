@@ -245,3 +245,21 @@ fn an_unauthorized_removal_does_not_revoke_the_victims_devices() {
     hive_core::sign_envelope(&mut e, owner_dk.0, &owner_dk.1);
     assert_eq!(verdict_for(&roster, &e), Verdict::Valid);
 }
+
+/// `DeviceRevoked` is Admin-only in projection, and the roster must agree: a
+/// Contributor's revocation of the owner's laptop (or an unsigned one on a
+/// chat log) must not cut the owner off.
+#[test]
+fn an_unauthorized_device_revocation_is_ignored() {
+    use crate::envelope_verifier::DeviceKeyResolver;
+    let (mut log, owner, admin2, alice, laptop) = setup();
+    log.push(&alice, SessionEvent::DeviceRevoked { device_id: laptop });
+    let mut chat_rv = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 70, SessionEvent::DeviceRevoked { device_id: laptop });
+    chat_rv.lamport = 70;
+    log.envs.push(chat_rv);
+    assert!(!build_roster(&log.envs).is_revoked(laptop), "a Contributor revoked the owner's laptop");
+    // An Admin's revocation still works.
+    log.push(&admin2, SessionEvent::DeviceRevoked { device_id: laptop });
+    assert!(build_roster(&log.envs).is_revoked(laptop));
+    let _ = owner;
+}

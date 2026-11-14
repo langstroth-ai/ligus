@@ -312,6 +312,7 @@ pub fn build_roster(envelopes: &[SessionEventEnvelope]) -> WorkspaceRoster {
     let mut account_keys: HashMap<Uuid, Vec<u8>> = HashMap::new();
     let mut disputed: HashSet<Uuid> = HashSet::new();
     let mut explicit_revoked: HashSet<Uuid> = HashSet::new();
+    let mut raw_revocations: Vec<(Uuid, Uuid)> = Vec::new();
     let mut members: HashSet<Uuid> = HashSet::new();
     let mut member_account: HashMap<String, Uuid> = HashMap::new();
     let mut certs: Vec<hive_core::crypto::DeviceCertificate> = Vec::new();
@@ -396,7 +397,7 @@ pub fn build_roster(envelopes: &[SessionEventEnvelope]) -> WorkspaceRoster {
                 cert_ws.push(env.workspace_id);
             }
             SessionEvent::DeviceRevoked { device_id } => {
-                explicit_revoked.insert(*device_id);
+                raw_revocations.push((env.workspace_id, *device_id));
             }
             _ => {}
         }
@@ -417,13 +418,24 @@ pub fn build_roster(envelopes: &[SessionEventEnvelope]) -> WorkspaceRoster {
     let removed_by_ws = removed_on_config(&ordered);
     let mut current_accounts: HashSet<Uuid> = HashSet::new();
     let mut sticky_removed: HashSet<Uuid> = HashSet::new();
-    for ws in config_workspaces(&ordered) {
+    let config_ws = config_workspaces(&ordered);
+    // A device revocation counts when the config projection accepted it
+    // (Admin+). One for a workspace whose config log we don't hold (legacy,
+    // pre-hoist) keeps the raw behaviour.
+    for (ws, device) in &raw_revocations {
+        if !config_ws.contains(ws) {
+            explicit_revoked.insert(*device);
+        }
+    }
+    for ws in config_ws {
         let cfg_envs: Vec<SessionEventEnvelope> = ordered
             .iter()
             .filter(|e| e.workspace_id == ws && e.session_id == hive_core::workspace_config_session_id(ws))
             .map(|e| (*e).clone())
             .collect();
-        let current: Vec<hive_core::WorkspaceMember> = hive_core::project(&cfg_envs).map(|c| c.members).unwrap_or_default();
+        let projected = hive_core::project(&cfg_envs);
+        explicit_revoked.extend(projected.iter().flat_map(|c| c.guards.revoked_devices.iter().copied()));
+        let current: Vec<hive_core::WorkspaceMember> = projected.map(|c| c.members).unwrap_or_default();
         current_accounts.extend(current.iter().filter_map(|m| m.actor.account_id));
         for id in removed_by_ws.get(&ws).into_iter().flatten() {
             if !current.iter().any(|m| &m.id == id) {

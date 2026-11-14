@@ -747,8 +747,12 @@ impl ChatSession {
             // the device-roster builder (see hive-runtime::envelope_verifier).
             SessionEvent::AccountKeyRegistered { .. }
             | SessionEvent::AccountKeyRotated { .. }
-            | SessionEvent::DeviceCertificateAdded { .. }
-            | SessionEvent::DeviceRevoked { .. } => {}
+            | SessionEvent::DeviceCertificateAdded { .. } => {}
+            // Recorded once authorized (Admin+, checked on ingest), so the
+            // trust roster can tell a real revocation from a forged one.
+            SessionEvent::DeviceRevoked { device_id } => {
+                self.guards.revoked_devices.insert(*device_id);
+            }
             SessionEvent::CoordinatorLeaseClaimed { lease } => {
                 crate::lease::fold_claim(&mut self.guards.leases, lease);
             }

@@ -122,6 +122,11 @@ pub struct GuardState {
     /// only an authorized re-add (an Admin's) lifts the removal.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub removed_members: BTreeSet<String>,
+    /// Devices an authorized `DeviceRevoked` cut off (config log). The trust
+    /// roster reads this rather than raw events, so a revocation projection
+    /// refuses never revokes anyone.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub revoked_devices: BTreeSet<Uuid>,
     /// Set on a chat session by the overlay: this chat's id, so
     /// [`GuardState::lockdown_active`] can find its entry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
