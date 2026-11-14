@@ -50,7 +50,7 @@ security-framework = "3"
 # The Linux agent sandbox's pre-exec helper (see `executor::linux`).
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = "0.4"
-seccompiler = "0.4"
+seccompiler = "0.5"
 
 # setsid for confined children; flock for the ligus-auth refresh lock.
 [target.'cfg(unix)'.dependencies]

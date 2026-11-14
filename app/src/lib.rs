@@ -204,7 +204,7 @@ struct AppState {
 /// The concrete debounced-watcher type held alive in `AppState`.
 type FsWatcher = notify_debouncer_full::Debouncer<
     notify::RecommendedWatcher,
-    notify_debouncer_full::FileIdMap,
+    notify_debouncer_full::RecommendedCache,
 >;
 
 /// A live embedded terminal. `writer` feeds keystrokes to the PTY master;
@@ -3142,10 +3142,8 @@ impl AppState {
         );
         match debouncer {
             Ok(mut d) => {
-                use notify::Watcher;
-                d.cache()
-                    .add_root(&root_path, notify::RecursiveMode::Recursive);
-                if let Err(e) = d.watcher().watch(&root_path, notify::RecursiveMode::Recursive) {
+                // The debouncer registers the file-id cache root itself.
+                if let Err(e) = d.watch(&root_path, notify::RecursiveMode::Recursive) {
                     tracing::warn!("fs watcher failed to watch {root}: {e}");
                 } else {
                     *slot = Some(d);

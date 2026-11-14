@@ -20,7 +20,7 @@ uuid.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-toml = "0.8"
+toml = "1.2"
 base64 = "0.21"
 # `hive serve` (the home host for the iOS app): HTTP + SSE API. axum 0.7,
 # reqwest 0.12, futures-util and getrandom 0.2 are already in the lockfile

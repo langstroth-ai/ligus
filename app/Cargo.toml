@@ -39,14 +39,14 @@ tauri-plugin-notification = "2"
 # Auto-updater (scaffolded; inert until updater keys + createUpdaterArtifacts
 # are enabled at public launch — see #144).
 tauri-plugin-updater = "2"
-rfd = "0.15"
+rfd = "0.17.2"
 # Embedded terminal: a real PTY spawning the user's shell in the workspace root.
-portable-pty = "0.8"
+portable-pty = "0.9"
 # Debounced workspace file watcher → `workspace://fs-changed` events, so the
 # editor/file-tree refresh when files change on disk (git ops, agent edits).
-notify = "6"
-notify-debouncer-full = "0.3"
-toml = "0.8"
+notify = "8.2.1"
+notify-debouncer-full = "0.7"
+toml = "1.2"
 base64 = "0.22"
 ed25519-dalek = "2"
 # Like std::fs::canonicalize but strips Windows's `\\?\` verbatim prefix for
@@ -58,10 +58,10 @@ dunce = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # Windows-only: themed native title bar (DWM caption color) so the title bar
-# matches the app background. Version pinned to what Tauri 2.11 already pulls,
+# matches the app background. Version pinned to what Tauri 2.12 already pulls,
 # so this adds no new crate to the build graph.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Dwm"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm"] }
 
 [features]
 # P2P on by default. Only the Windows cross-compile turns it off, via
