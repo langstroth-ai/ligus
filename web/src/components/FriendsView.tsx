@@ -143,7 +143,7 @@ export function FriendsView({
           <h1 className="text-lg font-semibold tracking-tight" style={{ color: "var(--hive-danger-ink)" }}>
             Couldn't load collaborators
           </h1>
-          <p className="mt-2 opacity-70">
+          <p className="mt-2 text-ink-soft">
             Your connections couldn't be reached. Nothing has changed — retry to reconnect.
           </p>
           <button
@@ -173,7 +173,7 @@ export function FriendsView({
             <IconUsers size={20} />
           </div>
           <h1 className="mt-4 text-xl font-semibold tracking-tight">Collaborators</h1>
-          <p className="mt-2 opacity-70">
+          <p className="mt-2 text-ink-soft">
             Add teammates by GitHub username, see who's online, and DM them — end-to-end
             encrypted. Two things to set up first:
           </p>
@@ -202,7 +202,7 @@ export function FriendsView({
     <div className="mx-auto flex max-w-xl flex-col gap-6 p-8" style={{ color: "var(--hive-ink)" }}>
       <header className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Collaborators</h1>
-        <label className="flex items-center gap-2 text-xs opacity-70">
+        <label className="flex items-center gap-2 text-xs text-ink-soft">
           <input type="checkbox" checked={appearOffline} onChange={toggleVisibility} />
           Appear offline
         </label>
@@ -231,7 +231,7 @@ export function FriendsView({
       {/* Incoming requests */}
       {data && data.incoming.length > 0 && (
         <section className="flex flex-col gap-2">
-          <h2 className="text-[11px] font-semibold uppercase tracking-wider opacity-60">Requests</h2>
+          <h2 className="text-[11px] font-semibold uppercase tracking-wider text-ink-soft">Requests</h2>
           {data.incoming.map((r) => (
             <div
               key={r.requestId}
@@ -262,9 +262,9 @@ export function FriendsView({
 
       {/* Friends list */}
       <section className="flex flex-col gap-2">
-        <h2 className="text-[11px] font-semibold uppercase tracking-wider opacity-60">Connected</h2>
+        <h2 className="text-[11px] font-semibold uppercase tracking-wider text-ink-soft">Connected</h2>
         {data && data.friends.length === 0 && (
-          <p className="text-sm opacity-60">
+          <p className="text-sm text-ink-soft">
             No collaborators yet. Add someone by their GitHub username above.
           </p>
         )}

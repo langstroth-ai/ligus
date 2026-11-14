@@ -53,7 +53,7 @@ export function PendingInvitesBanner() {
             </div>
             <div className="min-w-0 flex-1">
               <div className="text-sm font-semibold">Workspace invite</div>
-              <div className="mt-0.5 text-sm opacity-70">
+              <div className="mt-0.5 text-sm text-ink-soft">
                 <b>@{inv.fromLogin || "someone"}</b> invited you to <b>{inv.workspaceName}</b>
               </div>
               <div className="mt-3 flex items-center gap-2">

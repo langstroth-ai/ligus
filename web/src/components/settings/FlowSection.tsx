@@ -45,7 +45,7 @@ export function FlowSection() {
         >
           <div className="flex items-center gap-2">
             <NumberInput value={Math.round(s.epsilonMin * 100)} min={0} max={50} onChange={(v) => set({ epsilonMin: v / 100, epsilonMax: Math.max(s.epsilonMax, v / 100) })} label="Minimum exploration %" />
-            <span className="text-xs opacity-60">to</span>
+            <span className="text-xs text-ink-soft">to</span>
             <NumberInput value={Math.round(s.epsilonMax * 100)} min={0} max={50} onChange={(v) => set({ epsilonMax: v / 100, epsilonMin: Math.min(s.epsilonMin, v / 100) })} label="Maximum exploration %" />
           </div>
         </Field>

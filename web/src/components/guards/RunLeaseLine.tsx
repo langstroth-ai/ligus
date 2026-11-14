@@ -37,9 +37,9 @@ export function RunLeaseLine({
   return (
     <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]" data-testid="run-lease">
       <span style={{ color: TONE[tone] }}>●</span>
-      <span className="opacity-75">{text}</span>
+      <span className="text-ink-soft">{text}</span>
       {!lease.verified && !lease.isMe && (
-        <span className="opacity-60" title="The holder has no certified device key, so its heartbeat is trusted only as far as the workspace key">
+        <span className="text-ink-soft" title="The holder has no certified device key, so its heartbeat is trusted only as far as the workspace key">
           unverified
         </span>
       )}

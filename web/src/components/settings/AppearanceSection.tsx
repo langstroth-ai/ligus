@@ -15,7 +15,7 @@ export function AppearanceSection({
 }) {
   return (
     <Section title="Appearance">
-      <label className="block text-sm opacity-70">Mode</label>
+      <label className="block text-sm text-ink-soft">Mode</label>
       <div className="flex gap-2">
         {(["auto", "light", "dark"] as AppearanceMode[]).map((m) => (
           <button
@@ -31,12 +31,12 @@ export function AppearanceSection({
           </button>
         ))}
       </div>
-      <p className="text-xs opacity-50">
+      <p className="text-xs text-ink-soft">
         Auto follows your operating system's light/dark setting. Every theme has a light and a dark
         variant.
       </p>
 
-      <label className="mt-3 block text-sm opacity-70">Theme</label>
+      <label className="mt-3 block text-sm text-ink-soft">Theme</label>
       <div className="flex flex-wrap gap-2">
         {(Object.keys(THEMES) as ThemeName[]).map((t) => (
           <button

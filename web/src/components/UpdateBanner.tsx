@@ -89,8 +89,8 @@ export function UpdateBanner() {
         </div>
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold">Update available</div>
-          <div className="mt-0.5 truncate text-sm opacity-70">{info.name || info.tag}</div>
-          {info.notes && <div className="mt-1 text-xs opacity-55">{info.notes}</div>}
+          <div className="mt-0.5 truncate text-sm text-ink-soft">{info.name || info.tag}</div>
+          {info.notes && <div className="mt-1 text-xs text-ink-soft">{info.notes}</div>}
           <div className="mt-3 flex items-center gap-2">
             <button
               onClick={() => void handleInstall()}

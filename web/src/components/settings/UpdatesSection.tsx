@@ -58,15 +58,15 @@ export function UpdatesSection() {
     <Section title="Updates">
       <div className="text-sm">
         You're on <b>Ligus v{info.data?.coreVersion ?? "…"}</b>
-        {info.data?.buildProfile === "debug" && <span className="opacity-50"> · debug build</span>}
+        {info.data?.buildProfile === "debug" && <span className="text-ink-soft"> · debug build</span>}
       </div>
-      <p className="text-sm opacity-60">
+      <p className="text-sm text-ink-soft">
         A shared workspace for you, your teammates and your coding agents. Ligus is short for{" "}
         <i>ligustica</i> (<i>Apis mellifera ligustica</i>, the Italian honeybee). Open source under the MIT
         license. Formerly Hive.
       </p>
       <div className="flex items-center justify-between gap-3">
-        <p className="text-sm opacity-60">Check whether a newer signed build is available, and install it.</p>
+        <p className="text-sm text-ink-soft">Check whether a newer signed build is available, and install it.</p>
         <Button
           onClick={() => check.mutate()}
           disabled={check.isPending || installing}

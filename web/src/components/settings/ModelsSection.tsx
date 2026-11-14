@@ -110,7 +110,7 @@ function PortableConfigSection() {
 
   return (
     <Section title="Portable config">
-      <p className="text-xs opacity-50">
+      <p className="text-xs text-ink-soft">
         Export your runtimes, agents, and MCP servers as TOML to version-control and share with a
         team — no API keys or tokens are included (each records only the env var its key comes from).
         Paste one here and Import to stamp that setup onto this machine (additive; nothing is deleted).
@@ -188,12 +188,12 @@ function DetectPanel({ onConfigured }: { onConfigured: () => void }) {
           {busy ? "Scanning…" : found ? "Re-scan" : "Detect"}
         </Button>
       </div>
-      <p className="mt-0.5 text-xs opacity-55">
+      <p className="mt-0.5 text-xs text-ink-soft">
         Finds providers that would answer right now — saved or environment API keys, a local Ollama
         server, and the Claude Code / Codex CLIs on your PATH.
       </p>
       {found && found.length === 0 && (
-        <p className="mt-2 text-xs opacity-60">
+        <p className="mt-2 text-xs text-ink-soft">
           Nothing detected. Add a provider below, or set an API key / start Ollama, then re-scan.
         </p>
       )}
@@ -203,14 +203,14 @@ function DetectPanel({ onConfigured }: { onConfigured: () => void }) {
             <div key={p.kind} className="flex items-center justify-between gap-2 text-sm">
               <span>
                 <span className="font-medium">{p.label}</span>{" "}
-                <span className="text-xs opacity-50">· {p.source}</span>
+                <span className="text-xs text-ink-soft">· {p.source}</span>
               </span>
               {p.addable ? (
                 <Button size="sm" variant="ghost" disabled={busy} onClick={() => void addOne(p).then(onConfigured)}>
                   Add
                 </Button>
               ) : (
-                <span className="text-xs opacity-55">available as @hive</span>
+                <span className="text-xs text-ink-soft">available as @hive</span>
               )}
             </div>
           ))}
@@ -252,13 +252,13 @@ function ProvidersSection() {
     <Section title="LLM providers">
       <DetectPanel onConfigured={() => qc.invalidateQueries({ queryKey: ["runtimes"] })} />
       <CliRuntimesPanel />
-      <p className="text-xs opacity-50">
+      <p className="text-xs text-ink-soft">
         A provider is a backend + how to reach it (key and/or base URL). Add the ones you use — the
         rest stay tucked away. Models (below) pick a provider; agents pick a model.
       </p>
       <div className="space-y-2">
         {visible.length === 0 && (
-          <p className="rounded-xl border px-3 py-4 text-xs opacity-60" style={fieldStyle}>
+          <p className="rounded-xl border px-3 py-4 text-xs text-ink-soft" style={fieldStyle}>
             No providers configured yet. Add one below to start.
           </p>
         )}
@@ -414,7 +414,7 @@ function ProviderRow({
         className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left"
       >
         <span className="flex items-center gap-2">
-          <span className="opacity-50">{open ? <IconChevronDown size={13} /> : <IconChevronRight size={13} />}</span>
+          <span className="text-ink-soft">{open ? <IconChevronDown size={13} /> : <IconChevronRight size={13} />}</span>
           <span className="font-medium">{provider.name}</span>
         </span>
         <span className="flex items-center gap-2 text-xs">
@@ -423,15 +423,15 @@ function ProviderRow({
               {provider.hasKey ? "● key set" : "○ no key"}
             </span>
           ) : configured && provider.baseUrl.trim() !== "" ? (
-            <span className="opacity-50">custom URL</span>
+            <span className="text-ink-soft">custom URL</span>
           ) : (
-            <span className="opacity-50">{localOnly ? "local · no key" : "—"}</span>
+            <span className="text-ink-soft">{localOnly ? "local · no key" : "—"}</span>
           )}
         </span>
       </button>
       {open && (
         <div className="border-t px-3 py-3" style={{ borderColor: "var(--hive-line)" }}>
-          <div className="text-xs opacity-50">{provider.note}</div>
+          <div className="text-xs text-ink-soft">{provider.note}</div>
           {provider.needsKey && (
             <div className="mt-2 flex items-center gap-2">
               <input
@@ -515,7 +515,7 @@ function ProviderRow({
                   Add model
                 </Button>
               </div>
-              <p className="mt-1 text-xs opacity-45">
+              <p className="mt-1 text-xs text-ink-soft">
                 Adds a ready-to-use runtime for this model. Test above validates the key first.
               </p>
             </div>
@@ -558,7 +558,7 @@ function DefaultModelPicker() {
   });
   return (
     <div className="mb-2 rounded-2xl border p-3" style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}>
-      <label className="block text-xs opacity-60">Default model (Primary Runtime · Anthropic)</label>
+      <label className="block text-xs text-ink-soft">Default model (Primary Runtime · Anthropic)</label>
       <select
         value={current}
         onChange={(e) => save.mutate(e.target.value)}
@@ -571,7 +571,7 @@ function DefaultModelPicker() {
           </option>
         ))}
       </select>
-      <p className="mt-1 text-xs opacity-50">
+      <p className="mt-1 text-xs text-ink-soft">
         Used when a chat has no specific runtime selected. Separate from the local Claude Code model
         (set on its runtime row above).
       </p>
@@ -783,7 +783,7 @@ function RuntimesSection() {
 
   return (
     <Section title="Models (runtimes)">
-      <p className="text-xs opacity-50">
+      <p className="text-xs text-ink-soft">
         A model on a provider (above) — what powers a chat or agent. Pick a provider kind + model;
         the key/base URL come from the provider. Mark one <strong>default</strong> for new chats.
       </p>
@@ -798,7 +798,7 @@ function RuntimesSection() {
             <div className="flex items-center justify-between gap-3">
               <div>
                 <div className="font-medium">{runtime.label}</div>
-                <div className="text-xs opacity-50">
+                <div className="text-xs text-ink-soft">
                   {runtime.location} · {runtime.provider}
                   {runtime.endpoint ? ` · ${runtime.endpoint}` : ""}
                 </div>
@@ -887,7 +887,7 @@ function RuntimesSection() {
         className="space-y-2 rounded-2xl border p-4"
         style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}
       >
-        <h3 className="text-sm font-semibold uppercase tracking-wide opacity-60">
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-ink-soft">
           {editingId ? `Edit runtime · ${editingId}` : "Add runtime"}
         </h3>
         <div className="grid gap-2 md:grid-cols-2">
@@ -964,7 +964,7 @@ function RuntimesSection() {
           style={fieldStyle}
         />
         {runtimeEndpoint.includes("<host>") && (
-          <p className="text-xs opacity-60">
+          <p className="text-xs text-ink-soft">
             Replace <code>&lt;host&gt;</code> with your gateway's address (e.g. its Tailscale IP).
           </p>
         )}
@@ -977,7 +977,7 @@ function RuntimesSection() {
               className="w-full rounded-xl border px-3 py-2 font-mono text-sm"
               style={fieldStyle}
             />
-            <p className="text-xs opacity-50">
+            <p className="text-xs text-ink-soft">
               Points <code>pi</code> at an OpenAI-compatible backend (a local Ollama). Leave blank
               to use your own <code>pi</code> provider config / <code>pi login</code>.
             </p>
@@ -992,7 +992,7 @@ function RuntimesSection() {
           style={fieldStyle}
         />
         {profile && (
-          <p className="text-xs opacity-70" data-testid="model-profile-hint">
+          <p className="text-xs text-ink-soft" data-testid="model-profile-hint">
             <span className="font-semibold">
               {profile.roleLabel ? `Recommended for: ${profile.roleLabel}` : "No recommended role"}
             </span>
@@ -1010,7 +1010,7 @@ function RuntimesSection() {
                 </option>
               ))}
             </datalist>
-            <p className="text-xs opacity-50">
+            <p className="text-xs text-ink-soft">
               {formModels.data
                 ? formModels.data.models.length
                   ? `${formModels.data.models.length} model${formModels.data.models.length === 1 ? "" : "s"} installed on ${formModels.data.host} — pick one above, or add the runtime and pull more from its Models panel.`
@@ -1029,7 +1029,7 @@ function RuntimesSection() {
           className="w-full rounded-xl border px-3 py-2 font-mono text-sm"
           style={fieldStyle}
         />
-        <p className="text-xs opacity-50">
+        <p className="text-xs text-ink-soft">
           Overrides the window the context planner budgets against. Useful for Ollama/custom
           models whose window can't be inferred from the model name.
           {runtimeProvider === "ollama" && " Ollama is told to allocate this window (num_ctx) on every request."}
@@ -1045,7 +1045,7 @@ function RuntimesSection() {
           />
         )}
         {thinkProviders.includes(runtimeProvider) && (
-          <div className="flex items-center gap-2 text-sm opacity-75">
+          <div className="flex items-center gap-2 text-sm text-ink-soft">
             <Switch on={runtimeThink} onChange={setRuntimeThink} label="Let the model think" />
             <span>
               Let the model think (reasoning models; slower, shown live, never in the transcript)
@@ -1064,13 +1064,13 @@ function RuntimesSection() {
               className="w-full rounded-xl border px-3 py-2 font-mono text-sm"
               style={fieldStyle}
             />
-            <p className="text-xs opacity-50">
+            <p className="text-xs text-ink-soft">
               How many times the model may call tools before it must answer. Tools also stop being
               offered when the conversation nears the context window.
             </p>
             {(endpointIsRemote || runtimeAllowRemoteFileTools) && (
               <div className="space-y-1">
-                <div className="flex items-center gap-2 text-sm opacity-75">
+                <div className="flex items-center gap-2 text-sm text-ink-soft">
                   <Switch
                     on={runtimeAllowRemoteFileTools}
                     onChange={setRuntimeAllowRemoteFileTools}
@@ -1087,7 +1087,7 @@ function RuntimesSection() {
             )}
           </>
         )}
-        <div className="flex items-center gap-2 text-sm opacity-75">
+        <div className="flex items-center gap-2 text-sm text-ink-soft">
           <Switch on={runtimeSupportsTools} onChange={setRuntimeSupportsTools} label="Supports tools" />
           <span>
             {httpProviders.includes(runtimeProvider) && !agentToolProviders.includes(runtimeProvider) ? (
@@ -1110,7 +1110,7 @@ function RuntimesSection() {
             )}
           </span>
         </div>
-        <div className="flex items-center gap-2 text-sm opacity-75">
+        <div className="flex items-center gap-2 text-sm text-ink-soft">
           <Switch on={runtimeSupportsEmbeddings} onChange={setRuntimeSupportsEmbeddings} label="Supports embeddings" />
           <span>Supports embeddings</span>
         </div>
@@ -1295,7 +1295,7 @@ function OllamaModelsPanel({
   return (
     <div className="mt-3 space-y-2 rounded-xl border p-3" style={{ borderColor: "var(--hive-line)" }}>
       <div className="flex items-center justify-between gap-2">
-        <div className="text-xs font-semibold uppercase tracking-wide opacity-60">
+        <div className="text-xs font-semibold uppercase tracking-wide text-ink-soft">
           Models on {list.data?.host ?? "this server"}
         </div>
         <div className="flex items-center gap-3">
@@ -1316,9 +1316,9 @@ function OllamaModelsPanel({
           ✕ {errMsg(list.error)}
         </p>
       )}
-      {list.isLoading && <p className="text-xs opacity-50">Loading…</p>}
+      {list.isLoading && <p className="text-xs text-ink-soft">Loading…</p>}
       {list.data && models.length === 0 && newPulls.length === 0 && (
-        <p className="text-xs opacity-50">No models installed yet. Pull one below.</p>
+        <p className="text-xs text-ink-soft">No models installed yet. Pull one below.</p>
       )}
       <div className="space-y-1">
         {models.map((m) => {
@@ -1346,7 +1346,7 @@ function OllamaModelsPanel({
                       </span>
                     )}
                   </div>
-                  {meta && <div className="text-xs opacity-50">{meta}</div>}
+                  {meta && <div className="text-xs text-ink-soft">{meta}</div>}
                 </div>
                 {!pull && (
                   <div className="flex shrink-0 items-center gap-2">
@@ -1413,7 +1413,7 @@ function OllamaModelsPanel({
           Pull
         </Button>
       </form>
-      <p className="text-xs opacity-50">
+      <p className="text-xs text-ink-soft">
         Pulls run on the server and continue while you use Ligus; a cancelled pull keeps what it downloaded and resumes on
         the next attempt.
       </p>
@@ -1515,7 +1515,7 @@ function AgentsSection() {
 
   return (
     <Section title="Agents">
-      <p className="text-xs opacity-50">
+      <p className="text-xs text-ink-soft">
         A reusable persona — name + model (runtime) + role + instructions. Define once here, then
         attach it to any chat from that chat's Tools pane.
       </p>
@@ -1526,9 +1526,9 @@ function AgentsSection() {
             <div key={t.id} className="flex items-center justify-between gap-2 rounded-xl border px-3 py-2" style={fieldStyle}>
               <div className="min-w-0">
                 <div className="font-medium">
-                  {t.name} <span className="text-xs opacity-50">· {t.role}</span>
+                  {t.name} <span className="text-xs text-ink-soft">· {t.role}</span>
                 </div>
-                <div className="truncate text-xs opacity-50">
+                <div className="truncate text-xs text-ink-soft">
                   {rt?.label ?? t.runtimeId ?? "no model"}
                   {t.instructions ? ` · ${t.instructions.slice(0, 48)}` : ""}
                 </div>
@@ -1543,7 +1543,7 @@ function AgentsSection() {
             </div>
           );
         })}
-        {(templates.data ?? []).length === 0 && <p className="text-sm opacity-50">No saved agents yet.</p>}
+        {(templates.data ?? []).length === 0 && <p className="text-sm text-ink-soft">No saved agents yet.</p>}
       </div>
 
       <div className="space-y-2 rounded-2xl border p-3" style={{ borderColor: "var(--hive-line)" }}>
@@ -1609,7 +1609,7 @@ function TemplatesSection() {
 
   return (
     <Section title="Prompt templates">
-      <p className="text-xs opacity-50">
+      <p className="text-xs text-ink-soft">
         Reusable prompts you can drop into the composer with <code>/</code>.
       </p>
       <div className="space-y-2">
@@ -1621,7 +1621,7 @@ function TemplatesSection() {
           >
             <div className="min-w-0">
               <div className="font-medium">{t.name}</div>
-              <div className="mt-0.5 truncate text-xs opacity-55">{t.body}</div>
+              <div className="mt-0.5 truncate text-xs text-ink-soft">{t.body}</div>
             </div>
             <button
               className="shrink-0 text-xs hover:opacity-80"
@@ -1632,7 +1632,7 @@ function TemplatesSection() {
             </button>
           </div>
         ))}
-        {items.length === 0 && <p className="text-sm opacity-50">No templates yet.</p>}
+        {items.length === 0 && <p className="text-sm text-ink-soft">No templates yet.</p>}
       </div>
       <div className="space-y-2 rounded-2xl border p-3" style={{ borderColor: "var(--hive-line)" }}>
         <input
@@ -1686,7 +1686,7 @@ function QuickTasksSection() {
           </option>
         ))}
       </select>
-      <p className="text-xs opacity-50">
+      <p className="text-xs text-ink-soft">
         Used for chat titles. A small non-reasoning model works best, e.g. lfm2:8b on CPU.
       </p>
     </Section>
@@ -1728,13 +1728,13 @@ function ContextCommandsSection() {
 
   return (
     <Section title="Context commands">
-      <p className="text-xs opacity-50">
+      <p className="text-xs text-ink-soft">
         The instructions the model follows for <code>/summarize</code> and <code>/compact</code>.
         Blank = the built-in default (shown as the placeholder). The <code>/summarize</code>{" "}
         instruction also guides the automatic summarization when a long chat overflows the
         model's context window.
       </p>
-      <label className="block text-sm opacity-70">
+      <label className="block text-sm text-ink-soft">
         <code>/summarize</code> instruction
       </label>
       <textarea
@@ -1746,7 +1746,7 @@ function ContextCommandsSection() {
         className={fieldClass}
         style={fieldStyle}
       />
-      <label className="block text-sm opacity-70">
+      <label className="block text-sm text-ink-soft">
         <code>/compact</code> instruction
       </label>
       <textarea
@@ -1825,7 +1825,7 @@ function VaultRetrievalSection() {
   const on = draft.embedUrl.trim() !== "" && draft.embedModel.trim() !== "";
   const text = (key: RetrievalTextKey, label: string, placeholder: string) => (
     <label className="block text-sm">
-      <span className="opacity-70">{label}</span>
+      <span className="text-ink-soft">{label}</span>
       <input
         value={draft[key]}
         onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
@@ -1839,7 +1839,7 @@ function VaultRetrievalSection() {
   );
   const count = (key: RetrievalCountKey, label: string, max: number) => (
     <label className="block text-sm">
-      <span className="opacity-70">{label}</span>
+      <span className="text-ink-soft">{label}</span>
       <input
         type="number"
         min={1}
@@ -1857,7 +1857,7 @@ function VaultRetrievalSection() {
 
   return (
     <Section title="Vault retrieval">
-      <p className="text-xs opacity-50">
+      <p className="text-xs text-ink-soft">
         Optional. With an embeddings endpoint set, chats search their vaults and add only the
         passages that answer each message, instead of pasting whole documents into the system
         prompt. Any OpenAI-compatible server works, e.g. a llama.cpp gateway. If retrieval fails,
@@ -1875,7 +1875,7 @@ function VaultRetrievalSection() {
         <Button disabled={!on || testing} onClick={() => void runTest()}>
           {testing ? "Testing…" : "Test"}
         </Button>
-        <span className="text-xs opacity-50">
+        <span className="text-xs text-ink-soft">
           {on ? "On: vaults are searched for each message." : "Off: vaults are pasted into the system prompt."}
         </span>
       </div>

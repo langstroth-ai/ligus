@@ -497,7 +497,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
           <HiveBrandIcon size={40} />
           <div className="text-xl font-semibold">Welcome to Ligus</div>
         </div>
-        <div className="mb-4 text-sm opacity-60">
+        <div className="mb-4 text-sm text-ink-soft">
           A local-first workspace where you and your AI agents build side by side — bring your own
           models, keep your code and keys on your machine. A few quick steps:
         </div>
@@ -517,7 +517,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
               </div>
             ) : ghFlow ? (
               <div className="space-y-3 rounded-xl border px-3 py-3 text-sm" style={{ borderColor: "var(--hive-accent-cool)" }}>
-                <div className="text-xs opacity-70">Your one-time code — enter it on GitHub:</div>
+                <div className="text-xs text-ink-soft">Your one-time code — enter it on GitHub:</div>
                 {/* The code, big + monospace, with an inline copy affordance. */}
                 <button
                   type="button"
@@ -527,7 +527,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
                   title="Copy code"
                 >
                   <code className="text-lg font-bold tracking-[0.3em]">{ghFlow.userCode}</code>
-                  <span className="text-xs opacity-60">{codeCopied ? "Copied ✓" : "Copy"}</span>
+                  <span className="text-xs text-ink-soft">{codeCopied ? "Copied ✓" : "Copy"}</span>
                 </button>
                 <button
                   type="button"
@@ -537,7 +537,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
                 >
                   Copy code &amp; open GitHub ↗
                 </button>
-                <div className="text-xs opacity-50">
+                <div className="text-xs text-ink-soft">
                   The code is copied to your clipboard — paste it at{" "}
                   <button
                     type="button"
@@ -561,18 +561,18 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
                     >
                       <GithubGlyph /> Sign in with GitHub
                     </button>
-                    <div className="text-center text-xs opacity-50">One identity across all your devices · attributes your commits</div>
-                    <div className="flex items-center gap-2 text-xs opacity-40">
+                    <div className="text-center text-xs text-ink-soft">One identity across all your devices · attributes your commits</div>
+                    <div className="flex items-center gap-2 text-xs text-ink-soft">
                       <div className="h-px flex-1" style={{ background: "var(--hive-line)" }} /> or <div className="h-px flex-1" style={{ background: "var(--hive-line)" }} />
                     </div>
                   </>
                 )}
                 <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Continue with a name" className={field} style={inputStyle} />
-                <div className="text-xs opacity-50">How teammates see you, and how commits are attributed.</div>
+                <div className="text-xs text-ink-soft">How teammates see you, and how commits are attributed.</div>
                 {!ghConfigured &&
                   (showClientId ? (
                     <div className="space-y-2 rounded-xl border p-3" style={inputStyle}>
-                      <div className="text-xs opacity-60">
+                      <div className="text-xs text-ink-soft">
                         Paste a GitHub OAuth App client ID (Developer settings → OAuth Apps, enable
                         Device Flow). No secret needed.
                       </div>
@@ -605,12 +605,12 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
         {step === 2 && (
           <div className="space-y-3">
             <div className="text-sm font-medium">Open your project</div>
-            <div className="text-xs opacity-50">Pick the folder agents should work in (a git repo is ideal).</div>
+            <div className="text-xs text-ink-soft">Pick the folder agents should work in (a git repo is ideal).</div>
             <button className="rounded-xl px-3 py-2.5 text-sm font-semibold" style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }} onClick={pickFolder}>
               {folder ? "Choose a different folder…" : "Choose folder…"}
             </button>
             {folder && <div className="truncate rounded-lg border px-3 py-2 font-mono text-xs" style={inputStyle}>✓ {folder}</div>}
-            {!folder && <div className="text-xs opacity-50">You can also set this later from the sidebar.</div>}
+            {!folder && <div className="text-xs text-ink-soft">You can also set this later from the sidebar.</div>}
           </div>
         )}
 
@@ -743,7 +743,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
               <input type="checkbox" checked={letEdit} onChange={(e) => setLetEdit(e.target.checked)} />
               Let agents edit files and run commands (build, test)
             </label>
-            <div className="text-xs opacity-50">
+            <div className="text-xs text-ink-soft">
               {letEdit ? "Agents can create/modify files and run shell commands like cargo/npm (recommended for coding). Web access stays gated — change any of this in Settings → Permissions." : "Read-only — agents can't write files (you can change this later)."}
             </div>
           </div>
@@ -752,7 +752,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
         {step === 4 && (
           <div className="space-y-3">
             <div className="text-sm font-medium">Team &amp; sync</div>
-            <div className="text-xs opacity-50">
+            <div className="text-xs text-ink-soft">
               How do you want to sync? You can always change this later in Settings → Team.
             </div>
 
@@ -837,7 +837,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
         {step === 5 && (
           <div className="space-y-3">
             <div className="text-sm font-medium">Make it yours</div>
-            <div className="text-xs opacity-50">Pick a look — change it anytime in Settings → Appearance.</div>
+            <div className="text-xs text-ink-soft">Pick a look — change it anytime in Settings → Appearance.</div>
             <div className="grid grid-cols-2 gap-2">
               {THEME_CHOICES.map((t) => {
                 const p = resolvePalette(t.name, appearance);
@@ -860,7 +860,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
                     </span>
                     <span className="min-w-0">
                       <span className="block truncate text-sm font-medium">{t.label}</span>
-                      <span className="block truncate text-[11px] opacity-50">{t.blurb}</span>
+                      <span className="block truncate text-[11px] text-ink-soft">{t.blurb}</span>
                     </span>
                   </button>
                 );
@@ -879,7 +879,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
                 </button>
               ))}
             </div>
-            <div className="text-xs opacity-40">Auto follows your system light/dark setting.</div>
+            <div className="text-xs text-ink-soft">Auto follows your system light/dark setting.</div>
           </div>
         )}
 
@@ -939,7 +939,7 @@ function RuntimeOption({
       style={{ borderColor: active ? "var(--hive-accent-cool)" : "var(--hive-line)", background: active ? "var(--hive-mist)" : "transparent" }}
     >
       <span className="font-medium">{label}</span>
-      <span className="ml-2 text-xs opacity-50">{note}</span>
+      <span className="ml-2 text-xs text-ink-soft">{note}</span>
     </button>
   );
 }
@@ -965,7 +965,7 @@ function TeamModeOption<T extends string>({
       style={{ borderColor: active ? "var(--hive-accent-cool)" : "var(--hive-line)", background: active ? "var(--hive-mist)" : "transparent" }}
     >
       <span className="text-sm font-medium">{title}</span>
-      <span className="text-xs opacity-50">{note}</span>
+      <span className="text-xs text-ink-soft">{note}</span>
     </button>
   );
 }

@@ -163,7 +163,7 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
 
       {tab === "create" ? (
         <div className="space-y-3">
-          <p className="text-xs opacity-60">
+          <p className="text-xs text-ink-soft">
             Creates a private, end-to-end-encrypted team room. You become the owner and get an
             invite code to share — anyone who pastes it joins and syncs with you.
           </p>
@@ -186,7 +186,7 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
           </button>
           {lastInvite && (
             <div className="rounded-lg border p-2" style={{ borderColor: "var(--hive-line)" }}>
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider opacity-50">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-ink-soft">
                 Invite code
               </div>
               <code className="block break-all text-xs opacity-80">{lastInvite}</code>
@@ -204,7 +204,7 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
         </div>
       ) : (
         <div className="space-y-3">
-          <p className="text-xs opacity-60">
+          <p className="text-xs text-ink-soft">
             Paste an invite code (<code>hivews1:…</code>) someone shared with you. It carries the
             relay, room, and key needed to sync.
           </p>
@@ -225,7 +225,7 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
           >
             {busy ? "Joining…" : "Join workspace"}
           </button>
-          <div className="flex items-center gap-2 pt-1 text-xs opacity-50">
+          <div className="flex items-center gap-2 pt-1 text-xs text-ink-soft">
             <div className="h-px flex-1" style={{ background: "var(--hive-line)" }} />
             or a short code
             <div className="h-px flex-1" style={{ background: "var(--hive-line)" }} />
@@ -253,7 +253,7 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
 
       {rooms.length > 0 && (
         <div className="mt-5 border-t pt-3" style={{ borderColor: "var(--hive-line)" }}>
-          <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider opacity-50">
+          <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-ink-soft">
             Your team workspaces
           </div>
           <ul className="space-y-1">

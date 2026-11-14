@@ -49,7 +49,7 @@ export function BindWorkspacePrompt() {
         <div className="text-base font-semibold tracking-tight">
           This workspace isn&rsquo;t linked to a folder on this device
         </div>
-        <p className="text-sm opacity-70">
+        <p className="text-sm text-ink-soft">
           Link a local folder to use the code editor, file tree, terminal, diff, and git for
           this workspace. Chat and review keep working without one — the binding stays on this
           device.

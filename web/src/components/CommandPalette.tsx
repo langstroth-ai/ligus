@@ -200,7 +200,7 @@ export function CommandPalette({
         }}
       />
       <div className="max-h-[50vh] overflow-y-auto py-1">
-        {filtered.length === 0 && <div className="px-4 py-6 text-center text-sm opacity-50">No matches.</div>}
+        {filtered.length === 0 && <div className="px-4 py-6 text-center text-sm text-ink-soft">No matches.</div>}
         {filtered.map((c, i) => (
           <button
             key={c.id}
@@ -210,12 +210,12 @@ export function CommandPalette({
             style={{ background: i === active ? "var(--hive-mist)" : "transparent" }}
           >
             <span className="truncate">{c.label}</span>
-            {c.hint && <span className="shrink-0 text-xs opacity-45">{c.hint}</span>}
+            {c.hint && <span className="shrink-0 text-xs text-ink-soft">{c.hint}</span>}
           </button>
         ))}
       </div>
       <div
-        className="flex items-center gap-3 border-t px-4 py-2 text-[11px] opacity-45"
+        className="flex items-center gap-3 border-t px-4 py-2 text-[11px] text-ink-soft"
         style={{ borderColor: "var(--hive-line)" }}
       >
         <span>↑↓ navigate</span>

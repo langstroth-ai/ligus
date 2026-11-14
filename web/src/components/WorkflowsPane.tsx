@@ -90,19 +90,19 @@ export function WorkflowStages({
       {readingOrder(nodes).map((n, i) => (
         <li key={n.id} className="rounded-lg border px-2.5 py-1.5 text-xs" style={{ borderColor: "var(--hive-line)" }}>
           <div className="flex flex-wrap items-baseline gap-x-1.5">
-            <span className="opacity-50">{i + 1}.</span>
+            <span className="text-ink-soft">{i + 1}.</span>
             <span className="font-medium">
               {n.kind === "gate" ? <span aria-label="approval gate" className="mr-1 inline-flex align-[-2px]"><IconLock size={11} /></span> : null}
               {n.name}
             </span>
-            <span className="opacity-55">
+            <span className="text-ink-soft">
               {n.kind === "gate"
                 ? `approval gate · ${n.requiredApprovals ?? 1} approval${(n.requiredApprovals ?? 1) === 1 ? "" : "s"}`
                 : n.agentId
                   ? `@${agentName(n.agentId) ?? "agent not in this chat"}`
                   : "primary runtime"}
             </span>
-            {n.dependsOn.length > 0 && <span className="opacity-45">after {n.dependsOn.join(", ")}</span>}
+            {n.dependsOn.length > 0 && <span className="text-ink-soft">after {n.dependsOn.join(", ")}</span>}
           </div>
           {n.kind === "gate" ? (
             <div className="mt-0.5 opacity-70">
@@ -372,7 +372,7 @@ function RunCard({ sessionId, run }: { sessionId: string; run: WorkflowRunDto })
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
           <div className="truncate font-semibold">{run.definitionName}</div>
-          <div className="truncate text-xs opacity-55">{run.input}</div>
+          <div className="truncate text-xs text-ink-soft">{run.input}</div>
         </div>
         <span
           className="shrink-0 rounded-lg px-2 py-0.5 text-[11px] font-medium"
@@ -392,7 +392,7 @@ function RunCard({ sessionId, run }: { sessionId: string; run: WorkflowRunDto })
         .filter((n) => n.status === "awaitingApproval" && n.proposalId)
         .map((n) => (
           <div key={n.nodeId} className="mt-2 flex items-center gap-2 text-xs">
-            <span className="opacity-70">“{n.name}” needs your decision:</span>
+            <span className="text-ink-soft">“{n.name}” needs your decision:</span>
             <button
               className="rounded-lg px-2.5 py-1 font-medium"
               style={{ background: "color-mix(in srgb, var(--hive-success) 20%, transparent)", color: "var(--hive-success-ink)" }}

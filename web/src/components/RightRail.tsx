@@ -886,7 +886,7 @@ function AgentRosterRow({
           </label>
           <div className="min-w-0">
             <div className="font-medium">@{agent.name}</div>
-            <div className="mt-1 text-xs opacity-60">
+            <div className="mt-1 text-xs text-ink-soft">
               {agent.runtimeId} · {agent.role || "agent"}
             </div>
             <div className="mt-1">
@@ -938,7 +938,7 @@ function RuntimeCard({
     <div className="flex items-center justify-between gap-3">
       <div className="min-w-0">
         <div className="truncate text-base font-semibold">{runtime.label}</div>
-        <div className="mt-1 truncate text-xs opacity-55">
+        <div className="mt-1 truncate text-xs text-ink-soft">
           {runtime.location} · {runtime.provider}
           {runtime.endpoint ? ` · ${runtime.endpoint}` : ""}
         </div>
@@ -946,7 +946,7 @@ function RuntimeCard({
       <div className="flex items-center gap-2">
         {runtime.isManaged && (
           <span
-            className="rounded-full px-2 py-1 text-[10px] font-semibold uppercase opacity-70"
+            className="rounded-full px-2 py-1 text-[10px] font-semibold uppercase text-ink-soft"
             style={{ background: "var(--hive-mist)" }}
             title="A runtime you configured (vs. an auto-detected local CLI)"
           >
@@ -1171,7 +1171,7 @@ function DiffFileBlock({
         className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left"
         style={{ background: "var(--hive-mist)" }}
       >
-        <span className="opacity-50" aria-hidden>{open ? "▾" : "▸"}</span>
+        <span className="text-ink-soft" aria-hidden>{open ? "▾" : "▸"}</span>
         <span className={`min-w-0 flex-1 truncate font-mono ${pathClass}`}>{file.path}</span>
         {file.added > 0 && <span className={pathClass} style={{ color: "var(--hive-success-ink)" }}>+{file.added}</span>}
         {file.removed > 0 && <span className={pathClass} style={{ color: "var(--hive-danger-ink)" }}>−{file.removed}</span>}
@@ -1334,7 +1334,7 @@ function ProposalCard({
           )}
         </div>
       </div>
-      <div className="mt-0.5 pl-[22px] text-xs opacity-50">{relTime(proposal.createdAt)}</div>
+      <div className="mt-0.5 pl-[22px] text-xs text-ink-soft">{relTime(proposal.createdAt)}</div>
 
       {superseded && (
         <div
@@ -1350,9 +1350,9 @@ function ProposalCard({
           {proposal.workflow ? (
             <>
               {proposal.workflow.description && (
-                <p className="mt-2 text-sm leading-6 opacity-75">{proposal.workflow.description}</p>
+                <p className="mt-2 text-sm leading-6 text-ink-soft">{proposal.workflow.description}</p>
               )}
-              <div className="mt-2 text-xs opacity-55">
+              <div className="mt-2 text-xs text-ink-soft">
                 Approving adds this workflow to the Workflows pane. Runs still start only when someone presses Run.
               </div>
               <WorkflowStages
@@ -1361,7 +1361,7 @@ function ProposalCard({
               />
             </>
           ) : (
-            proposal.body && <p className="mt-2 text-sm leading-6 opacity-75">{proposal.body}</p>
+            proposal.body && <p className="mt-2 text-sm leading-6 text-ink-soft">{proposal.body}</p>
           )}
           {/* A fileDiff proposal (from an agent's isolated worktree) carries a
               unified diff. It's cramped in this narrow pane, so offer opening it
@@ -1370,7 +1370,7 @@ function ProposalCard({
           {proposal.diff && (
             <>
               <div className="mt-2 flex items-center justify-between gap-2">
-                <span className="text-xs opacity-55">
+                <span className="text-xs text-ink-soft">
                   {(proposal.changedFiles?.length ?? 0)} file
                   {(proposal.changedFiles?.length ?? 0) === 1 ? "" : "s"} changed
                 </span>
@@ -1402,7 +1402,7 @@ function ProposalCard({
         </>
       )}
 
-      <div className="mt-3 text-xs opacity-60">
+      <div className="mt-3 text-xs text-ink-soft">
         {proposal.qualifyingApprovals}/{proposal.requiredApprovals} approvals
       </div>
       {/* Who voted: tag each approver/rejecter by name + role. */}
@@ -1417,7 +1417,7 @@ function ProposalCard({
                 {a.approved ? "✓" : "✕"}
               </span>
               <span className="font-medium">{a.displayName}</span>
-              <span className="opacity-50">
+              <span className="text-ink-soft">
                 {a.approved ? "approved" : "rejected"} · {a.role}
               </span>
             </div>
@@ -1465,7 +1465,7 @@ function ProposalCard({
           </Button>
         )}
         {proposal.status === "applied" && (
-          <span className="ml-auto self-center text-xs opacity-60">Implemented</span>
+          <span className="ml-auto self-center text-xs text-ink-soft">Implemented</span>
         )}
       </div>
 
@@ -1554,14 +1554,14 @@ function RefinementThread({
 }) {
   return (
     <div className="mt-3 border-t pt-3" style={{ borderColor: "var(--hive-line)" }}>
-      <div className="text-xs font-medium opacity-60">Refinement</div>
+      <div className="text-xs font-medium text-ink-soft">Refinement</div>
       {proposal.refinements.length > 0 && (
         <div className="mt-2 flex flex-col gap-2">
           {proposal.refinements.map((r) => (
             <div key={r.id} className="text-xs">
               <div className="flex items-center gap-1.5">
                 <span className="font-medium">{r.displayName}</span>
-                <span className="opacity-45">{r.role}</span>
+                <span className="text-ink-soft">{r.role}</span>
                 {r.requestChanges && (
                   <span
                     className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
@@ -1573,7 +1573,7 @@ function RefinementThread({
                     changes
                   </span>
                 )}
-                <span className="opacity-40">· {relTime(r.createdAt)}</span>
+                <span className="text-ink-soft">· {relTime(r.createdAt)}</span>
               </div>
               <div className="mt-0.5 whitespace-pre-wrap break-words leading-5 opacity-80">
                 {r.text}
@@ -1596,7 +1596,7 @@ function RefinementThread({
           }}
         />
         <div className="flex items-center justify-between gap-2">
-          <label className="flex items-center gap-1.5 text-xs opacity-70">
+          <label className="flex items-center gap-1.5 text-xs text-ink-soft">
             <input
               type="checkbox"
               checked={asChangeRequest}
@@ -1980,9 +1980,9 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
           <Card className="flex items-center justify-between px-3 py-2">
             <div className="min-w-0">
               <div className="font-medium">
-                {selfMember.displayName} <span className="text-xs opacity-50">· you</span>
+                {selfMember.displayName} <span className="text-xs text-ink-soft">· you</span>
               </div>
-              <div className="text-xs opacity-50">{selfMember.role}</div>
+              <div className="text-xs text-ink-soft">{selfMember.role}</div>
             </div>
           </Card>
         ) : (
@@ -2010,13 +2010,13 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                 {member.displayName}
                 {dup && (
                   <span
-                    className="text-xs opacity-50"
+                    className="text-xs text-ink-soft"
                     title={`Mention precisely with @${member.displayName}#${member.index}`}
                   >
                     #{member.index}
                   </span>
                 )}
-                {member.title && <span className="text-xs opacity-50">· {member.title}</span>}
+                {member.title && <span className="text-xs text-ink-soft">· {member.title}</span>}
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
                 <SubtleSelectField
@@ -2116,9 +2116,9 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                     <span style={{ color: e.action === "removed" ? "var(--hive-danger-ink)" : "var(--hive-accent-warm)" }}>
                       {e.action === "removed" ? "removed" : `added${e.role ? ` (${e.role})` : ""}`}
                     </span>{" "}
-                    <b>{e.member}</b> <span className="opacity-50">by {e.by}</span>
+                    <b>{e.member}</b> <span className="text-ink-soft">by {e.by}</span>
                   </span>
-                  <span className="shrink-0 opacity-40" title={e.at}>
+                  <span className="shrink-0 text-ink-soft" title={e.at}>
                     {new Date(e.at).toLocaleDateString()}
                   </span>
                 </div>
@@ -2133,7 +2133,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
           <EmptyHint text="Connect a relay (Settings → Team sync) to use server-enforced membership." />
         ) : (
           <>
-            <p className="text-xs opacity-60">
+            <p className="text-xs text-ink-soft">
               Who the relay accepts writes from. Requires a membership-enforcing (paid/enterprise)
               relay; on an open relay this stays empty and everyone can write.
             </p>
@@ -2141,7 +2141,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
               <Card key={m.account} className="flex items-center justify-between px-3 py-2">
                 <div className="min-w-0">
                   <div className="truncate font-medium">@{m.login}</div>
-                  <div className="text-xs opacity-50">
+                  <div className="text-xs text-ink-soft">
                     {m.role} · {m.account}
                   </div>
                 </div>
@@ -2205,7 +2205,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
           <EmptyHint text="Connect a relay (Settings → Team sync) to issue invites." />
         ) : (
           <>
-            <p className="text-xs opacity-55">
+            <p className="text-xs text-ink-soft">
               Share a code so someone can join at a set role. Codes are revocable, can expire, and
               can cap how many times they're used. The code shows once, on creation.
             </p>
@@ -2221,11 +2221,11 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                 <option value="contributor">contributor</option>
                 <option value="admin">admin</option>
               </select>
-              <label className="flex items-center gap-1 text-xs opacity-70">
+              <label className="flex items-center gap-1 text-xs text-ink-soft">
                 days
                 <input value={invDays} onChange={(e) => setInvDays(e.target.value)} inputMode="numeric" className="w-12 rounded-lg border px-2 py-1 text-sm" style={fieldStyle} />
               </label>
-              <label className="flex items-center gap-1 text-xs opacity-70">
+              <label className="flex items-center gap-1 text-xs text-ink-soft">
                 uses
                 <input value={invUses} onChange={(e) => setInvUses(e.target.value)} inputMode="numeric" className="w-12 rounded-lg border px-2 py-1 text-sm" style={fieldStyle} />
               </label>
@@ -2233,7 +2233,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                 Create invite
               </Button>
             </div>
-            <p className="mt-1 text-[11px] opacity-45">0 days = never expires · 0 uses = unlimited.</p>
+            <p className="mt-1 text-[11px] text-ink-soft">0 days = never expires · 0 uses = unlimited.</p>
             {lastCode && (
               <div
                 className="mt-2 flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5"
@@ -2250,7 +2250,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
               <div key={i.id} className="mt-1.5 flex items-center justify-between gap-2 text-sm">
                 <span className="min-w-0">
                   <span className="font-medium">{i.role}</span>{" "}
-                  <span className="text-xs opacity-50">
+                  <span className="text-xs text-ink-soft">
                     · {i.maxUses === 0 ? `${i.uses} uses` : `${i.uses}/${i.maxUses} used`}
                     {i.expiresAt > 0 ? ` · expires ${new Date(i.expiresAt * 1000).toLocaleDateString()}` : ""}
                   </span>
@@ -2282,14 +2282,14 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
         {!relayOn ? (
           <EmptyHint text="Connect a relay (Settings → Team sync) to add remote agents." />
         ) : !issuerKey.data ? (
-          <p className="text-xs opacity-55">
+          <p className="text-xs text-ink-soft">
             To generate a one-paste command for a headless agent, add your relay issuer key in
             Settings → Team sync (advanced). The key mints the agent's identity token locally; only
             the token travels to the box.
           </p>
         ) : (
           <>
-            <p className="text-xs opacity-55">
+            <p className="text-xs text-ink-soft">
               Enroll a remote agent and generate the exact command a developer runs on its box —
               installs the CLI, connects to this workspace, and starts the worker.
             </p>
@@ -2503,7 +2503,7 @@ function VaultsPane({ sessionId }: { sessionId: string }) {
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="font-medium">{vault.label}</div>
-                <div className="mt-1 truncate text-xs opacity-60">
+                <div className="mt-1 truncate text-xs text-ink-soft">
                   {vault.kind} · {vault.url}
                 </div>
                 <div className="mt-1.5">
@@ -2604,8 +2604,8 @@ function SkillsPane({ sessionId }: { sessionId: string }) {
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="font-medium">{skill.name}</div>
-                {skill.sourceUrl && <div className="mt-1 truncate text-xs opacity-55">{skill.sourceUrl}</div>}
-                <div className="mt-2 line-clamp-3 text-xs leading-5 opacity-60">{skill.instructions}</div>
+                {skill.sourceUrl && <div className="mt-1 truncate text-xs text-ink-soft">{skill.sourceUrl}</div>}
+                <div className="mt-2 line-clamp-3 text-xs leading-5 text-ink-soft">{skill.instructions}</div>
                 <div className="mt-1.5">
                   <TargetBadge agentIds={skill.agentIds} agents={agents.data ?? []} />
                 </div>
@@ -2762,10 +2762,10 @@ function ContextPane({
       <Section title="Budget">
         <div className="rounded-2xl border p-3" style={panelStyle}>
           <div className="mb-2 flex items-center justify-between text-xs">
-            <span className="opacity-65">
+            <span className="text-ink-soft">
               {data ? `${fmtTokens(totalPlannedTokens)} in prompt` : "Loading..."}
             </span>
-            <span className="opacity-40">
+            <span className="text-ink-soft">
               {data ? `${fmtTokens(data.contextWindowTokens)} window` : ""}
             </span>
           </div>
@@ -2779,7 +2779,7 @@ function ContextPane({
             {budgetPct}%
           </div>
           {data && (
-            <div className="mt-2.5 grid grid-cols-2 gap-1.5 text-[11px] opacity-55">
+            <div className="mt-2.5 grid grid-cols-2 gap-1.5 text-[11px] text-ink-soft">
               <span>System {fmtTokens(data.systemPromptTokens)}</span>
               <span className="text-right">History budget {fmtTokens(data.historyBudgetTokens)}</span>
               <span>Reserved output {fmtTokens(data.reservedOutputTokens)}</span>
@@ -2797,7 +2797,7 @@ function ContextPane({
               {data.overflowMessageCount} earlier messages are currently condensed to fit the context window.
             </div>
           )}
-          {data && <div className="mt-2 text-[11px] opacity-50">{summaryLabel}</div>}
+          {data && <div className="mt-2 text-[11px] text-ink-soft">{summaryLabel}</div>}
           {budgetPct >= 70 && (
             <div
               className="mt-2.5 rounded-xl px-3 py-2 text-xs leading-5"
@@ -2831,7 +2831,7 @@ function ContextPane({
               >
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium">{skill.name}</div>
-                  <div className="mt-0.5 text-xs opacity-50">~{fmtTokens(est)} tokens in prompt</div>
+                  <div className="mt-0.5 text-xs text-ink-soft">~{fmtTokens(est)} tokens in prompt</div>
                 </div>
                 <IconButton
                   label="Remove skill"
@@ -2858,7 +2858,7 @@ function ContextPane({
             >
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-medium">{vault.label}</div>
-                <div className="mt-0.5 text-xs opacity-50">{vault.kind} reference source</div>
+                <div className="mt-0.5 text-xs text-ink-soft">{vault.kind} reference source</div>
               </div>
               <IconButton
                 label="Unmount vault"
@@ -2924,7 +2924,7 @@ function ContextStat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl border py-2 text-center" style={panelStyle}>
       <div className="text-base font-semibold">{value}</div>
-      <div className="text-[10px] uppercase tracking-[0.12em] opacity-50">{label}</div>
+      <div className="text-[10px] uppercase tracking-[0.12em] text-ink-soft">{label}</div>
     </div>
   );
 }

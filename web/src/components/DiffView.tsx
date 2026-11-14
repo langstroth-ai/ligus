@@ -185,12 +185,12 @@ export function DiffView({
         style={{ width: listWidth, borderColor: "var(--hive-line)" }}
       >
         <div className="flex items-center justify-between px-2 py-1">
-          <span className="font-medium opacity-70">Changes</span>
+          <span className="font-medium text-ink-soft">Changes</span>
           <IconButton label="Refresh changes" size={24} onClick={() => diffs.refetch()}>
             <IconRegenerate size={13} />
           </IconButton>
         </div>
-        {files.length === 0 && <p className="px-2 py-4 opacity-50">No uncommitted changes.</p>}
+        {files.length === 0 && <p className="px-2 py-4 text-ink-soft">No uncommitted changes.</p>}
         {files.map((f) => (
           <button
             key={f.path}
@@ -232,7 +232,7 @@ export function DiffView({
               className="flex items-center gap-2 border-b px-3 py-1.5 text-xs"
               style={{ borderColor: "var(--hive-line)" }}
             >
-              <span className="truncate font-mono opacity-80">{active.path}</span>
+              <span className="truncate font-mono text-ink-soft">{active.path}</span>
               {KIND_BADGE[active.kind] && (
                 <span
                   className="shrink-0 rounded-full px-2 py-0.5 text-[0.7rem] font-medium"
@@ -337,7 +337,7 @@ export function DiffView({
 
             <div className="min-h-0 flex-1">
               {sides.data?.isBinary ? (
-                <div className="flex h-full items-center justify-center text-sm opacity-50">
+                <div className="flex h-full items-center justify-center text-sm text-ink-soft">
                   Binary file — no text diff.
                 </div>
               ) : sides.data ? (
@@ -367,7 +367,7 @@ export function DiffView({
                   theme={scheme === "dark" ? "vs-dark" : "light"}
                 />
               ) : (
-                <div className="flex h-full items-center justify-center text-sm opacity-50">
+                <div className="flex h-full items-center justify-center text-sm text-ink-soft">
                   {sides.isError ? `Couldn't load diff: ${errMsg(sides.error)}` : "Loading diff…"}
                 </div>
               )}
