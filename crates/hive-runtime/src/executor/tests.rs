@@ -420,6 +420,31 @@ fn sandbox_denies_git_dir_write() {
     }
 }
 
+/// macOS: the protected names are refused in any case and at any depth.
+/// APFS ignores case, so a `.CLAUDE/settings.json` made while `.claude/`
+/// doesn't exist yet is the `.claude/settings.json` Claude Code loads; and
+/// a nested `sub/.claude/` is the project config of a session started in
+/// `sub/`.
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_protected_names_ignore_case_and_depth() {
+    let Some(e) = real_executor() else { return };
+    let f = Fixture::new();
+    for (script, made) in [
+        ("mkdir .CLAUDE && touch .CLAUDE/settings.json", ".CLAUDE/settings.json"),
+        ("mkdir -p sub/.claude && touch sub/.claude/settings.json", "sub/.claude/settings.json"),
+        ("mkdir -p sub/.VSCode && touch sub/.VSCode/tasks.json", "sub/.VSCode/tasks.json"),
+        ("mkdir -p sub && echo x > sub/Ligus.Config.Toml", "sub/Ligus.Config.Toml"),
+        ("echo x > .ENVRC", ".ENVRC"),
+    ] {
+        let (ok, out) = run_sh(&*e, &f, script, isolated());
+        assert!(!ok && !f.worktree.join(made).exists(), "{script}: {out}");
+    }
+    // Names that only contain a protected one stay writable.
+    let (ok, out) = run_sh(&*e, &f, "mkdir -p sub/my.claude-notes && echo ok > sub/my.claude-notes/a && echo ok > envrc.md", isolated());
+    assert!(ok, "{out}");
+}
+
 #[test]
 fn sandbox_denies_direct_egress() {
     let Some(e) = real_executor() else { return };
