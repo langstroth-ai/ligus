@@ -914,6 +914,22 @@ pub fn project_with_options(
     trusted_founder: Option<&str>,
     trusted_workspace: Option<Uuid>,
 ) -> Option<ChatSession> {
+    project_with_hoist(envelopes, trusted_founder, trusted_workspace, None)
+}
+
+/// [`project_with_options`] for a **chat** log, with the workspace roster
+/// hoisted from the config log: proposal-set events
+/// ([`crate::authorization::requires_hoisted_authz`]) are folded only when
+/// their signed author holds the role for them in that roster. `None` skips
+/// the check (the config log itself, or no config log synced yet).
+/// Deterministic over the event set and the roster, so devices that hold the
+/// same config log drop the same events.
+pub fn project_with_hoist(
+    envelopes: &[SessionEventEnvelope],
+    trusted_founder: Option<&str>,
+    trusted_workspace: Option<Uuid>,
+    hoist: Option<crate::authorization::HoistedRoster<'_>>,
+) -> Option<ChatSession> {
     let mut ordered: Vec<&SessionEventEnvelope> = envelopes.iter().collect();
     ordered.sort_by_key(|e| e.canonical_key());
 
@@ -967,6 +983,15 @@ pub fn project_with_options(
             let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
             let role = session.role_of(author);
             if !crate::authorization::evaluate(&env.payload, author, role, &session).allowed {
+                continue;
+            }
+        } else if let Some(roster) = hoist.as_ref().filter(|_| {
+            trusted_workspace != Some(env.workspace_id) && crate::authorization::requires_hoisted_authz(&env.payload)
+        }) {
+            // Proposal-set events: the author's role comes from the workspace
+            // roster (hoisted from the config log), not this chat's own.
+            let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
+            if !roster.allows(&env.payload, author, &session) {
                 continue;
             }
         }

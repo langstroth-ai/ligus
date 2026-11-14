@@ -408,6 +408,62 @@ mod tests {
     }
 
     #[test]
+    fn forged_set_events_synced_in_from_a_viewer_or_stranger_are_dropped_on_load() {
+        let mut svc = service();
+        let chat = svc.create_chat("Demo", Uuid::nil(), "anthropic").unwrap();
+        let (sid, wid) = (chat.id, chat.workspace_id);
+        let val = ActorIdentity::new("val", "Val", hive_core::ActorKind::Human);
+        svc.add_member(
+            sid,
+            wid,
+            hive_core::WorkspaceMember {
+                id: "val".into(),
+                actor: val.clone(),
+                role: WorkspaceRole::Viewer,
+                title: String::new(),
+                index: 0,
+                joined_at: Timestamp::now(),
+            },
+        )
+        .unwrap();
+        let alts: Vec<ActionProposal> =
+            ["A", "B"].iter().map(|t| ActionProposal::new(*t, ProposalKind::Decision, "planner")).collect();
+        let a = alts[0].id;
+        let set_id = svc.open_proposal_set(sid, wid, ProposalSet::new("Q", "planner", vec![]), alts).unwrap().id;
+
+        // Signed envelopes from peers, as sync would store them: a Viewer's
+        // failing pre-flight and tune, and a stranger closing the set.
+        let forged = |by: &ActorIdentity, seq: i64, payload: SessionEvent| {
+            let mut env = hive_core::SessionEventEnvelope::new(sid, wid, seq, payload);
+            env.lamport = 1_000 + seq as u64;
+            env.actor_stamp = Some(hive_core::ActorStamp { actor: by.clone(), recorded_at: Timestamp::now() });
+            env
+        };
+        let eve = ActorIdentity::new("eve", "Eve", hive_core::ActorKind::Human);
+        let mut failing = passing();
+        failing.tests = CheckOutcome::failed("forged");
+        for env in [
+            forged(&val, 9_001, SessionEvent::ProposalSetPreflightRecorded { set_id, proposal_id: a, report: failing, at: Timestamp::now() }),
+            forged(&val, 9_002, SessionEvent::ProposalSetTuned { set_id, agent_quorum: 1, required_approvals: 1, quality_bar: 1 }),
+            forged(&eve, 9_003, SessionEvent::ProposalSetDecided { set_id, winner: None, at: Timestamp::now() }),
+        ] {
+            svc.store().append_envelope(&env).unwrap();
+        }
+        // The raw fold (no workspace roster) would take them.
+        let raw = svc.store().load_session(sid).unwrap().unwrap();
+        assert_eq!(raw.proposal_sets[0].phase, SetPhase::Decided);
+        // The service's load folds against the hoisted roster and drops them.
+        let s = svc.load(sid).unwrap().unwrap();
+        let set = &s.proposal_sets[0];
+        assert!(set.is_open(), "eve's close was dropped");
+        assert!(set.preflights.is_empty(), "val's pre-flight was dropped");
+        assert_ne!(set.quality_bar, 1, "val's tune was dropped");
+        // The owner's own events still fold.
+        svc.tune_proposal_set(sid, wid, set_id, QuorumDial::Careful.knobs()).unwrap();
+        assert_eq!(svc.load(sid).unwrap().unwrap().proposal_sets[0].agent_quorum, QuorumDial::Careful.knobs().agent_quorum);
+    }
+
+    #[test]
     fn a_viewer_cannot_decide_or_tune() {
         let mut svc = service();
         let chat = svc.create_chat("Demo", Uuid::nil(), "anthropic").unwrap();

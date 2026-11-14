@@ -146,6 +146,12 @@ required human approvals and a passing pre-flight, and every device checks
 this when it replays the set's history. A set alternative can't be applied
 with a plain **Implement** either.
 
+Every step of a set (opening it, assessments, quorum and stop signals, the
+dial, pre-flight results, the decision and a revert) is also re-checked
+against the workspace's member list when a device replays the chat. A step
+signed by someone below Contributor, below the set's decision role, or by a
+device whose owner isn't a member is ignored on every device.
+
 ## Older versions and the phone
 
 Proposal sets are new in 2.1. Devices on 2.0 ignore the set and see the

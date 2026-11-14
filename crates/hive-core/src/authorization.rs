@@ -153,6 +153,81 @@ pub fn lease_signer_ok(env: &crate::events::SessionEventEnvelope, session: &Chat
     }
 }
 
+/// Proposal-set events that are **re-authorized while a chat log is folded**,
+/// against the workspace roster hoisted from the config log (see
+/// [`HoistedRoster`]). They ride the chat's own log, whose roster holds only
+/// the chat's creator, so the generic projection check
+/// ([`requires_projection_authz`]) can't judge them; without this a member
+/// below Contributor, or a keyholder who isn't a member at all, could sign a
+/// forged pre-flight, tune the dial, declare quorum or decide a set and every
+/// device would fold it. Checked with the same [`evaluate`] as authoring
+/// (role floor plus `proposal_sets::denies`), so whatever a member could author
+/// also folds.
+pub fn requires_hoisted_authz(event: &SessionEvent) -> bool {
+    matches!(
+        event,
+        SessionEvent::ProposalSetOpened { .. }
+            | SessionEvent::ProposalSetAlternativeAdded { .. }
+            | SessionEvent::ScoutAssessmentPosted { .. }
+            | SessionEvent::ProposalSetRoundAdvanced { .. }
+            | SessionEvent::ProposalSetQuorumReached { .. }
+            | SessionEvent::ProposalSetAlternativeStopped { .. }
+            | SessionEvent::ProposalSetTuned { .. }
+            | SessionEvent::ProposalSetPreflightRecorded { .. }
+            | SessionEvent::ProposalSetDecided { .. }
+            | SessionEvent::ProposalReverted { .. }
+    )
+}
+
+/// The workspace roster as a chat log's fold sees it: the members on the
+/// workspace-config log, and whether dearth mode is on there. The same union
+/// `ChatService::load` overlays after projection: a config-log entry wins; a
+/// member only the chat knows (a pre-hoist add, the creator seed) keeps its
+/// chat role, except that during dearth mode only the chat's creator does.
+#[derive(Debug, Clone, Copy)]
+pub struct HoistedRoster<'a> {
+    pub members: &'a [WorkspaceMember],
+    pub dearth_on: bool,
+}
+
+impl HoistedRoster<'_> {
+    /// The role `actor_id` holds for the chat whose fold-so-far is `session`,
+    /// or `None` when they aren't a member.
+    pub fn role_of(&self, actor_id: &str, session: &ChatSession) -> Option<WorkspaceRole> {
+        if actor_id.is_empty() {
+            return None;
+        }
+        if let Some(m) = self.members.iter().find(|m| m.id == actor_id) {
+            return Some(m.role);
+        }
+        if self.dearth_on && actor_id != session.creator_actor_id {
+            return None;
+        }
+        session.members.iter().find(|m| m.id == actor_id).map(|m| m.role)
+    }
+
+    /// Whether `event`, authored by `actor_id`, may fold into `session`.
+    pub fn allows(&self, event: &SessionEvent, actor_id: &str, session: &ChatSession) -> bool {
+        match self.role_of(actor_id, session) {
+            Some(role) => evaluate(event, actor_id, role, session).allowed,
+            None => false,
+        }
+    }
+
+    /// A stable fingerprint of what this roster decides (member ids, roles and
+    /// the dearth flag), for keying cached projections.
+    pub fn fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut ids: Vec<(&str, u8)> = self.members.iter().map(|m| (m.id.as_str(), m.role.rank())).collect();
+        ids.sort_unstable();
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        ids.hash(&mut h);
+        self.dearth_on.hash(&mut h);
+        // Never 0, which keys an un-hoisted projection.
+        h.finish().max(1)
+    }
+}
+
 /// Whether a **non-seed** `SessionSnapshot` — one folded *after* the base seed,
 /// i.e. a compaction checkpoint — may be applied during projection. A snapshot is
 /// a full-state overwrite, so a mid-stream one must be constrained to what its

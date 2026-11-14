@@ -1982,6 +1982,18 @@ impl ChatService {
         let config_id = workspace_config_session_id(session.workspace_id);
         if session_id != config_id {
             if let Some(cfg) = self.store.load_session_with_founder(config_id, founder, local)? {
+                // Proposal-set events are role-checked against the workspace
+                // roster, which only the config log holds: re-fold a chat that
+                // has any (cached per roster, so this costs one fold per change).
+                if !session.proposal_sets.is_empty() || session.proposals.iter().any(|p| p.reverted) {
+                    let hoist = hive_core::authorization::HoistedRoster {
+                        members: &cfg.members,
+                        dearth_on: cfg.guards.dearth_on().is_some(),
+                    };
+                    if let Some(checked) = self.store.load_session_hoisted(session_id, founder, local, Some(hoist))? {
+                        session = checked;
+                    }
+                }
                 // Members hoist onto the config log so the roster is workspace-wide.
                 // Dedup by member id; the config-log entry is the source of truth,
                 // so it *replaces* any same-id per-session member (role/title/index

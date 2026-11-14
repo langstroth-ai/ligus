@@ -46,6 +46,12 @@ signature verifies, but the author's role at that point did not permit the
 change, so every peer drops it. Membership is workspace-wide (via the config
 log) and roles are **Owner / Admin / Contributor / Viewer**.
 
+Proposal-set steps ride a chat's own log, so they are checked against the
+workspace's member list from the config log instead: a pre-flight result, a
+change to the dial, a quorum or stop signal, or a decision signed by someone
+below Contributor (or below the set's decision role), or by a non-member, is
+dropped on every device.
+
 The workspace **founder is pinned via the invite**: the invite carries the
 founding identity, and projection only accepts the real founder's seed as
 the base snapshot. So a malicious keyholder can't forge a competing base to

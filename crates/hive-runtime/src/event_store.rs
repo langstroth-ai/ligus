@@ -16,7 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Mutex;
 
-use hive_core::{project_with_options, ChatSession, SessionEvent, SessionEventEnvelope};
+use hive_core::{project_with_hoist, ChatSession, SessionEvent, SessionEventEnvelope};
 use rusqlite::{Connection, OptionalExtension};
 use thiserror::Error;
 use uuid::Uuid;
@@ -54,9 +54,10 @@ pub struct EventStore {
     projections: Mutex<HashMap<ProjectionKey, (RowsSig, Option<ChatSession>)>>,
 }
 
-/// (session, trusted founder, trusted workspace): what a projection depends on
-/// besides the session's rows.
-type ProjectionKey = (Uuid, Option<String>, Option<Uuid>);
+/// (session, trusted founder, trusted workspace, hoisted-roster fingerprint):
+/// what a projection depends on besides the session's rows. The fingerprint
+/// is 0 for a projection without a hoisted roster.
+type ProjectionKey = (Uuid, Option<String>, Option<Uuid>, u64);
 
 /// (row count, max row id) of a session. Any append raises the max row id and
 /// any delete lowers the count, so an equal signature means the same rows
@@ -734,6 +735,19 @@ impl EventStore {
         // skip ingest-time authz (private, single-device; see project_with_options).
         trusted_workspace: Option<Uuid>,
     ) -> Result<Option<ChatSession>> {
+        self.load_session_hoisted(session_id, trusted_founder, trusted_workspace, None)
+    }
+
+    /// [`load_session_with_founder`] for a chat log, folded against the
+    /// workspace roster hoisted from its config log so proposal-set events are
+    /// role-checked (see `hive_core::project_with_hoist`).
+    pub fn load_session_hoisted(
+        &self,
+        session_id: Uuid,
+        trusted_founder: Option<&str>,
+        trusted_workspace: Option<Uuid>,
+        hoist: Option<hive_core::authorization::HoistedRoster<'_>>,
+    ) -> Result<Option<ChatSession>> {
         // Project the full stream. `project_with_founder` folds in canonical
         // (lamport, event_id) order and selects the base by a deterministic rule
         // (+ the fixed founder string), so the result is independent of *this
@@ -746,7 +760,8 @@ impl EventStore {
             [session_id.to_string()],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
-        let key: ProjectionKey = (session_id, trusted_founder.map(str::to_string), trusted_workspace);
+        let key: ProjectionKey =
+            (session_id, trusted_founder.map(str::to_string), trusted_workspace, hoist.map_or(0, |h| h.fingerprint()));
         if let Some((cached, session)) = self.projections.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
             if *cached == sig {
                 return Ok(session.clone());
@@ -756,7 +771,7 @@ impl EventStore {
             "SELECT envelope_json FROM events WHERE session_id = ?1 ORDER BY row_id ASC",
             [session_id.to_string()],
         )?;
-        let session = project_with_options(&envelopes, trusted_founder, trusted_workspace);
+        let session = project_with_hoist(&envelopes, trusted_founder, trusted_workspace, hoist);
         let mut cache = self.projections.lock().unwrap_or_else(|e| e.into_inner());
         if cache.len() >= PROJECTION_CACHE_MAX && !cache.contains_key(&key) {
             cache.clear();
