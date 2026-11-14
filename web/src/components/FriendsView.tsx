@@ -25,7 +25,11 @@ import { LinkChips } from "@/components/LinkChips";
 /// A co-member's linked accounts. Opening People checks them with their
 /// forges (this device's 24-hour cache answers first, so it is at most one
 /// request per link a day); until then the cached status shows.
+/// A link whose server its owner chose (a self-run PDS) is only asked when
+/// you click "Check now": an automatic check would tell that server who
+/// looked.
 function PersonLinks({ p }: { p: CoMemberDto }) {
+  const qc = useQueryClient();
   const has = (p.links?.length ?? 0) > 0;
   const checked = useQuery({
     queryKey: ["links-of", p.accountId],
@@ -34,7 +38,25 @@ function PersonLinks({ p }: { p: CoMemberDto }) {
     staleTime: 10 * 60_000,
   });
   if (!has) return null;
-  return <LinkChips links={checked.data ?? p.links} />;
+  const shown = checked.data ?? p.links;
+  const unchecked = (shown ?? []).some((l) => l.status?.state === "notChecked");
+  const checkNow = async () => {
+    try {
+      qc.setQueryData(["links-of", p.accountId], await identityLinkStatuses(p.accountId, true));
+    } catch (e) {
+      toast.error(errMsg(e));
+    }
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      <LinkChips links={shown} />
+      {unchecked && (
+        <button type="button" className="text-[11px] underline opacity-70" onClick={() => void checkNow()}>
+          Check now
+        </button>
+      )}
+    </div>
+  );
 }
 
 /// What the contacts status means for delivery. Exported for unit testing.

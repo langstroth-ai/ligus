@@ -1,5 +1,5 @@
 import type { LinkChipDto } from "@/lib/ipc";
-import { chipColor, chipFor, forgeLabel } from "@/lib/links";
+import { chipColor, chipFor, forgeLabel, stripBidi } from "@/lib/links";
 
 /// A person's linked accounts as small text chips: the forge, the handle and
 /// the stable id, and what this device's forge check said. Text only: Ligus
@@ -11,8 +11,15 @@ export function LinkChips({ links }: { links: LinkChipDto[] | undefined }) {
     <div className="flex flex-wrap gap-1" aria-label="Linked accounts">
       {shown.map(({ l, chip }) => {
         const c = chipColor(chip!.kind);
-        const handle = l.status?.state === "verified" && l.status.handle ? l.status.handle : l.handle;
-        const idNote = l.subjectId && l.subjectId !== handle ? ` (id ${l.subjectId})` : "";
+        // The link's handle is its publisher's claim: a verified chip shows
+        // only the handle the forge confirmed, else the stable id.
+        const verified = l.status?.state === "verified";
+        const forgeHandle = l.status?.state === "verified" && l.status.handle ? stripBidi(l.status.handle) : "";
+        const handle = verified ? forgeHandle || `id ${stripBidi(l.subjectId)}` : stripBidi(l.handle);
+        const claimed = stripBidi(l.handle);
+        const idNote =
+          (l.subjectId && !handle.endsWith(l.subjectId) ? ` (id ${stripBidi(l.subjectId)})` : "") +
+          (verified && !forgeHandle && claimed ? ` (the link says @${claimed}; the forge didn't confirm the name)` : "");
         return (
           <span
             key={`${l.provider}/${l.host}/${l.subjectId}`}
@@ -22,7 +29,7 @@ export function LinkChips({ links }: { links: LinkChipDto[] | undefined }) {
             data-chip={chip!.kind}
           >
             <span className="font-medium">{forgeLabel(l.provider, l.host)}</span>
-            <span className="font-mono">{handle}</span>
+            <bdi className="font-mono">{handle}</bdi>
             <span className="opacity-70">· {chip!.label}</span>
           </span>
         );

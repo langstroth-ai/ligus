@@ -71,7 +71,10 @@ pub fn removal_ok(
         return Err("only a person removes an identity link".into());
     }
     if stamp.actor.account_id == Some(account_id) {
-        super::certified_signer(env, roster)?;
+        let device = super::certified_signer(env, roster)?;
+        if device.delegated_for(account_id) {
+            return Err("a delegated host can't remove its owner's identity links".into());
+        }
         return Ok(());
     }
     let rank = fold.role_of(author).rank();

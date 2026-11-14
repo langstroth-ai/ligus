@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { LinkChips } from "./LinkChips";
 import { chipFor, normalizeHandle, signScript } from "@/lib/links";
-import { KEY_PUBLISHED_DISCLOSURE } from "@/components/settings/LinkedAccountsSection";
+import { CONTACT_CARD_LINK_DISCLOSURE, KEY_PUBLISHED_DISCLOSURE } from "@/components/settings/LinkedAccountsSection";
 import type { LinkChipDto } from "@/lib/ipc";
 
 const base = { provider: "github", host: "github.com", handle: "alice", subjectId: "1234567" };
@@ -42,6 +42,29 @@ describe("LinkChips", () => {
     expect(container.querySelector('[data-chip="verified"]')?.getAttribute("title")).toMatch(/id 1234567/);
     expect(container.querySelector('[data-chip="unverified"]')).toBeTruthy();
   });
+  /// The handle in a link is its publisher's own claim. A verified chip
+  /// shows only a handle the forge confirmed; when the forge didn't say
+  /// (GitLab's anonymous API, an atproto handle that doesn't name the DID
+  /// back), it shows the stable id, never the claimed handle.
+  it("never shows a self-claimed handle as verified", () => {
+    const links: LinkChipDto[] = [
+      { ...base, provider: "gitlab", host: "gitlab.com", handle: "torvalds", subjectId: "999", status: { state: "verified", checkedAt: "x", handle: null, nameBound: false } },
+    ];
+    const { container } = render(<LinkChips links={links} />);
+    const chip = container.querySelector('[data-chip="verified"]')!;
+    expect(chip.textContent).not.toMatch(/torvalds/);
+    expect(chip.textContent).toMatch(/id 999/);
+  });
+  /// Bidi overrides and zero-width characters in a handle can't reorder the
+  /// chip's label or hide in a look-alike name; the handle is isolated.
+  it("strips bidi and zero-width characters and isolates the handle", () => {
+    const links: LinkChipDto[] = [
+      { ...base, handle: "ali\u200Bce\u202E", status: { state: "selfAsserted" } },
+    ];
+    const { container } = render(<LinkChips links={links} />);
+    expect(container.textContent).not.toMatch(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/);
+    expect(container.querySelector("bdi")?.textContent).toBe("alice");
+  });
   it("shows nothing for invalid links only", () => {
     const { container } = render(<LinkChips links={[{ ...base, status: { state: "invalid", reason: "x" } }]} />);
     expect(container.innerHTML).toBe("");
@@ -57,6 +80,12 @@ describe("linking helpers", () => {
   it("signs under the link namespace only", () => {
     const s = signScript("ligus-identity-link-v1@ligus.ai", "~/.ssh/id_ed25519", [{ workspaceName: "Bees" }]);
     expect(s).toContain("ssh-keygen -Y sign -n ligus-identity-link-v1@ligus.ai -f ~/.ssh/id_ed25519");
+  });
+  /// The contact card is a plain signed record on the relay: the opt-in says
+  /// who can read a link put on it.
+  it("the contact-card opt-in says the relay and contact-id holders read it", () => {
+    expect(CONTACT_CARD_LINK_DISCLOSURE).toMatch(/relay/);
+    expect(CONTACT_CARD_LINK_DISCLOSURE).toMatch(/isn't encrypted/);
   });
   it("the published-key fallback says it is public", () => {
     expect(KEY_PUBLISHED_DISCLOSURE).toMatch(/publicly/);
