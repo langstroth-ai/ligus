@@ -91,7 +91,9 @@ The agent's `fs/write_text_file` requests are written by Ligus only inside
 the turn's worktree, never into `.git`, the protected dirs,
 `ligus.config.toml` or `.envrc` (matched by name at any depth and ignoring
 case), never through a symbolic link, and only when the tier allows edits.
-`fs/read_text_file` serves regular files of at most 16 MiB. A path the
+`fs/read_text_file` serves regular files of at most 16 MiB. The agent's
+own output is bounded too: a JSON-RPC line over 8 MiB, or more than 256 MiB
+in a turn, ends the turn with an error. A path the
 sandbox denies agents (Ligus's data dir, a token file) is refused to both,
 even when it sits inside the worktree.
 

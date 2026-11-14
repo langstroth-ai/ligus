@@ -50,6 +50,8 @@ first time it is created; after that, Settings is the source of truth.
 | `LIGUS_SANDBOX_WRITE_ALLOW` | unset | desktop, CLI | comma-separated extra paths agent processes may write (e.g. `~/.cargo/registry`) |
 | `LIGUS_SANDBOX_READ_ALLOW` | unset | desktop, CLI | credential dirs under `~` an agent process may read after all (e.g. `~/.aws`) |
 | `LIGUS_AGENT_TIMEOUT_SECS` | `300` | desktop and CLI | wall-clock budget for one subprocess agent turn (aider, pi, ...) |
+| `LIGUS_AGENT_MAX_LINE_BYTES` | `8388608` | desktop and CLI | longest stdout line an agent CLI or ACP adapter may write; a longer one ends the turn |
+| `LIGUS_AGENT_MAX_OUTPUT_BYTES` | `268435456` | desktop and CLI | most stdout one agent turn may produce |
 | `LIGUS_TURN_IDLE_TIMEOUT_SECS` | `300` | desktop and CLI | how long a streaming model may produce nothing before the turn fails |
 | `LIGUS_TURN_TIMEOUT_SECS` | `3600` | desktop and CLI | total backstop for one turn (the desktop adds 300 s) |
 | `LIGUS_PATCH_LEAVING_CALLS` | `12` | desktop and CLI | tool calls in a row without measurable progress before the agent must check in; `0` turns the rule off |

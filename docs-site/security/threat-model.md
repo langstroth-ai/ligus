@@ -322,6 +322,7 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 | Agents (Track D review) | `ligus_read_chat` could read a locked-down chat from a chat with open egress | Another chat is readable only when the reader's egress is at least as strict |
 | Agents (Track D review) | The config-impact badge missed case variants, paths in shell strings, `/usr/bin/git config` and inline code; a primary runtime's proposals were badged as a person's | Case-insensitive, shell-tokenized matching; inline interpreter code is flagged; only roster members badge as human |
 | Agents (Track D review) | `agentQuorum` could lower a set's scout quorum; uncharged calls flooded the audit ring; one endless socket line grew the app's memory | Raise-only quorum; every call counts toward `maxToolCalls`; socket lines are capped at 4 MiB |
+| Agents (Track C/D residuals) | An ACP adapter or legacy CLI adapter could write an unbounded stdout line (or endless output, or stderr) and grow the app's memory | Agent stdout lines are capped at 8 MiB and a turn's output at 256 MiB (`LIGUS_AGENT_MAX_LINE_BYTES`, `LIGUS_AGENT_MAX_OUTPUT_BYTES`); past either the turn ends with an error and the agent is stopped. 256 KiB of stderr is kept for error messages |
 | Release | `scripts/release-matrix.sh` passed API keys as curl arguments, visible in `ps` | Headers go through a private file |
 
 ### Open {#findings-open}

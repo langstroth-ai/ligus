@@ -12,6 +12,7 @@
 //!   client authenticates with the advertised API-key method.
 //! - `broken`: exits without answering `initialize` (an old CLI without ACP).
 //! - `slow`: never answers the prompt (idle timeout).
+//! - `flood`: answers the prompt after writing one 100 MiB line.
 //!
 //! Std-only; exits when stdin closes.
 
@@ -82,6 +83,18 @@ fn main() {
             "session/prompt" => {
                 if mode == "slow" {
                     continue;
+                }
+                if mode == "flood" {
+                    // Stdout's lock is reentrant, so this writes alongside `send`.
+                    let mut raw = std::io::stdout();
+                    let chunk = vec![b'x'; 1024 * 1024];
+                    for _ in 0..100 {
+                        if raw.write_all(&chunk).is_err() {
+                            std::process::exit(0);
+                        }
+                    }
+                    let _ = raw.write_all(b"\n");
+                    let _ = raw.flush();
                 }
                 let sid = params.get("sessionId").cloned().unwrap_or(Value::Null);
                 let update = |u: Value| json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":sid,"update":u}});

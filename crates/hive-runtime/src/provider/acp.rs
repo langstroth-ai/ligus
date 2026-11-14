@@ -31,7 +31,7 @@ use std::process::Stdio;
 
 use hive_core::{Driver, ModelProviderKind};
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWriteExt, BufReader};
 
 use super::anthropic::{ChatTurn, ProviderError};
 use super::dispatch::{ResolvedRuntime, StreamActivity};
@@ -479,7 +479,7 @@ pub fn tier_from_args(kind: ModelProviderKind, args: &[String]) -> &'static str 
 
 struct Conn {
     stdin: tokio::process::ChildStdin,
-    lines: tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    lines: super::bounded::BoundedLines<BufReader<tokio::process::ChildStdout>>,
     next_id: u64,
 }
 
@@ -648,7 +648,7 @@ pub fn ask_timeout() -> std::time::Duration {
 async fn read_line(conn: &mut Conn, idle: std::time::Duration, label: &str) -> Result<Option<String>, String> {
     match crate::agent_turn::idle_timeout(idle, conn.lines.next_line()).await {
         Ok(Ok(l)) => Ok(l),
-        Ok(Err(e)) => Err(format!("read: {e}")),
+        Ok(Err(e)) => Err(format!("{label}: {e}")),
         Err(()) => Err(format!(
             "{label} produced no output for {}s; raise LIGUS_TURN_IDLE_TIMEOUT_SECS for long silent steps",
             idle.as_secs()
@@ -750,12 +750,10 @@ pub async fn stream_reply(
     let stdout = child.stdout.take().ok_or_else(|| AcpFailure::Init("no stdout".into()))?;
     let stderr_task = child.stderr.take().map(|mut e| {
         tokio::spawn(async move {
-            let mut buf = String::new();
-            let _ = e.read_to_string(&mut buf).await;
-            buf
+            super::bounded::read_capped(&mut e, super::bounded::MAX_STDERR_BYTES).await
         })
     });
-    let mut conn = Conn { stdin, lines: BufReader::new(stdout).lines(), next_id: 1 };
+    let mut conn = Conn { stdin, lines: super::bounded::BoundedLines::new(BufReader::new(stdout)), next_id: 1 };
     let scope = crate::agent_turn::current();
     let egress_open = matches!(guard.plan().egress, crate::executor::EgressPlan::Open)
         || crate::executor::current_turn().is_none_or(|p| p.envelope.egress.is_open());
@@ -781,7 +779,9 @@ pub async fn stream_reply(
     );
     let stderr_of = |task: Option<tokio::task::JoinHandle<String>>| async move {
         match task {
-            Some(t) => t.await.unwrap_or_default(),
+            // Bounded: a child that keeps stderr open (or a grandchild that
+            // inherited it) must not hold the turn's error.
+            Some(t) => tokio::time::timeout(std::time::Duration::from_secs(2), t).await.ok().and_then(Result::ok).unwrap_or_default(),
             None => String::new(),
         }
     };
@@ -855,8 +855,12 @@ pub async fn stream_reply(
     let res = match res {
         Ok(r) => r,
         Err(e) => {
-            // Tell the agent to stop, then let kill_on_drop reap it.
-            let _ = conn.send(&json!({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": session_id}})).await;
+            // Tell the agent to stop, then kill it: an agent blocked writing
+            // output Ligus stopped reading (an over-long line) never exits on
+            // its own, and its stderr only closes when it does.
+            let cancel = json!({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": session_id}});
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), conn.send(&cancel)).await;
+            let _ = child.start_kill();
             let err = stderr_of(stderr_task).await;
             return Err(turn_err(format!("{e} {}", err.trim()).trim().to_string()));
         }

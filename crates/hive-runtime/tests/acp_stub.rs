@@ -200,3 +200,16 @@ async fn an_agent_without_acp_is_an_init_failure() {
     .await;
     assert!(matches!(r, Err(AcpFailure::Init(_))), "{:?}", r.err().map(|e| e.to_string()));
 }
+
+/// An agent that writes one 100 MiB line: the host stops reading at the
+/// line cap and ends the turn with a clear error instead of buffering it.
+#[tokio::test]
+async fn oversized_output_line_ends_the_turn() {
+    if !sandbox_ok() {
+        return;
+    }
+    let wt = tempfile::tempdir().unwrap();
+    let out = run("flood", ModelProviderKind::Copilot, &["--allow-tool=read"], GatePlan::Full, None, wt.path()).await;
+    let err = out.text.expect_err("a 100 MiB line was accepted");
+    assert!(err.contains("longer than"), "{err}");
+}

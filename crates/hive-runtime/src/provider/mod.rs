@@ -15,6 +15,7 @@ use std::time::Duration;
 pub mod acp;
 pub mod anthropic;
 pub mod antigravity;
+pub mod bounded;
 pub mod claude_code;
 pub mod cli_agent;
 pub mod codex;
