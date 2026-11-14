@@ -551,6 +551,7 @@ pub(crate) async fn ensure_contact(state: &AppState) -> bool {
     };
     let now = unix_now();
     let mut c = contact.clone();
+    let mut refused = 0usize;
     c.published.retain(|r, _| relays.contains(r));
     for relay in &relays {
         if c.published.get(relay).is_some_and(|t| now - t < REPUBLISH_SECS) {
@@ -571,13 +572,20 @@ pub(crate) async fn ensure_contact(state: &AppState) -> bool {
                 c.unsupported.insert(relay.clone(), now);
             }
             Err(ContactsError::Unauthorized) => {
-                // Someone else holds this cid now: start over with a new one.
-                tracing::warn!(target: "contacts", "contact id taken on a relay; making a new one");
-                c = OwnContact::fresh();
-                break;
+                // Someone else holds this cid on that relay now: stop using
+                // it there (asked again a day later); start over with a new
+                // id only when no relay holds the record any more.
+                tracing::warn!(target: "contacts", "contact id refused on a relay");
+                c.published.remove(relay);
+                c.unsupported.insert(relay.clone(), now);
+                refused += 1;
             }
             Err(e) => tracing::debug!(target: "contacts", error = %e, "contact publish failed"),
         }
+    }
+    if contacts::rotate_cid_after_refusal(refused, c.published.len()) {
+        tracing::warn!(target: "contacts", "contact id refused everywhere; making a new one");
+        c = OwnContact::fresh();
     }
     let changed = c != contact;
     let announced = (!c.published.is_empty()).then(|| c.cid.clone());

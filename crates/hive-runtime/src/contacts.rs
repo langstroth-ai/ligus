@@ -420,6 +420,15 @@ pub fn open_drop(blob: &serde_json::Value, ka: &hive_core::e2ee::KeyAgreementKey
     })
 }
 
+/// Whether a device should give up its contact id after some relays refused
+/// its write key (the id lapsed there and someone else holds it now). Only
+/// when no relay holds the record any more: one refusing (or hostile) relay
+/// must not orphan the record and drop box on every other relay, with the
+/// invites co-members already dropped there.
+pub fn rotate_cid_after_refusal(refused: usize, holding: usize) -> bool {
+    refused > 0 && holding == 0
+}
+
 /// The highest `through` an owner may acknowledge: every drop up to it is
 /// handled (acknowledging deletes all of them). `handled` need not be
 /// sorted; `pending` are seqs still waiting for the person.
@@ -501,6 +510,13 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         format!("http://{addr}")
+    }
+
+    #[test]
+    fn one_refusing_relay_does_not_orphan_the_others() {
+        assert!(!rotate_cid_after_refusal(1, 1), "another relay still holds the record");
+        assert!(!rotate_cid_after_refusal(0, 0));
+        assert!(rotate_cid_after_refusal(2, 0));
     }
 
     #[test]
