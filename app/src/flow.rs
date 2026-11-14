@@ -1830,12 +1830,31 @@ pub(crate) fn flow_set_settings(state: State<'_, AppState>, settings: FlowSettin
     Ok(s.flow.clone())
 }
 
+/// A hand-off card as the transcript shows it: the recorded card plus, once
+/// the receiver has answered, that answer's message id (derived on read from
+/// the chat's turn tags; never part of the recorded card).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HandoffCardView {
+    #[serde(flatten)]
+    card: HandoffCard,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reply_message_id: Option<Uuid>,
+}
+
+fn handoff_views(flow: &FlowState) -> Vec<HandoffCardView> {
+    flow.handoffs
+        .iter()
+        .map(|card| HandoffCardView { reply_message_id: flow.handoff_reply(card), card: card.clone() })
+        .collect()
+}
+
 /// Hand-off cards recorded in a chat, for the transcript.
 #[tauri::command]
-pub(crate) fn flow_handoffs(state: State<'_, AppState>, session_id: String) -> Result<Vec<HandoffCard>, String> {
+pub(crate) fn flow_handoffs(state: State<'_, AppState>, session_id: String) -> Result<Vec<HandoffCardView>, String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let svc = state.service.lock().unwrap();
-    Ok(svc.load(sid).map_err(map_err)?.map(|s| s.flow.handoffs).unwrap_or_default())
+    Ok(svc.load(sid).map_err(map_err)?.map(|s| handoff_views(&s.flow)).unwrap_or_default())
 }
 
 
@@ -2454,5 +2473,55 @@ diff --git a/old.txt b/old.txt\ndeleted file mode 100644\n";
         tag.error = false;
         s.flow.apply(&FlowRecord::TurnTagged(tag));
         assert_eq!(thread_memory(&s, now), Some(key));
+    }
+
+    /// The transcript's hand-off view adds the receiver's answer once it
+    /// exists, and otherwise serializes exactly as the recorded card.
+    #[test]
+    fn handoff_views_name_the_reply_once_the_receiver_answered() {
+        let mut flow = FlowState::default();
+        let card = HandoffCard {
+            id: Uuid::new_v4(),
+            from: "a".into(),
+            to: "b".into(),
+            from_name: "coder".into(),
+            to_name: "reviewer".into(),
+            message_id: Some(Uuid::new_v4()),
+            task: "check it".into(),
+            task_class: "review".into(),
+            branch: String::new(),
+            files: vec![],
+            quality: Default::default(),
+            via: "mention".into(),
+            parcel: None,
+            at_ms: 100,
+        };
+        flow.apply(&FlowRecord::Handoff(card.clone()));
+        let before = serde_json::to_value(&handoff_views(&flow)[0]).unwrap();
+        assert_eq!(before, serde_json::to_value(&card).unwrap(), "no reply yet: the card as recorded");
+        let reply = Uuid::new_v4();
+        flow.apply(&FlowRecord::TurnTagged(TurnTag {
+            message_id: reply,
+            trigger_id: card.message_id,
+            agent: "b".into(),
+            runtime_id: String::new(),
+            host_id: String::new(),
+            task_class: "review".into(),
+            role: "conversation".into(),
+            arm: String::new(),
+            upstream_arm: String::new(),
+            error: false,
+            error_kind: String::new(),
+            tests_passed: None,
+            tool_calls: 0,
+            duration_ms: 0,
+            cost_usd: 0.0,
+            proposal_ids: vec![],
+            handoff_parcel: false,
+            at_ms: 200,
+        }));
+        let after = serde_json::to_value(&handoff_views(&flow)[0]).unwrap();
+        assert_eq!(after["replyMessageId"], serde_json::json!(reply));
+        assert_eq!(after["id"], serde_json::json!(card.id));
     }
 }

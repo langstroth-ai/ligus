@@ -26,6 +26,8 @@ export interface HandoffCard {
   fromName: string;
   toName: string;
   messageId?: string;
+  /// The receiver's answer, once it has replied (derived on read).
+  replyMessageId?: string;
   task: string;
   taskClass: string;
   branch?: string;

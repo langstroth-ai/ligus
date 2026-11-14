@@ -1119,6 +1119,7 @@ mod tests {
                 detail: String::new(),
                 raised_by: String::new(),
                 raised_at: hive_core::Timestamp::now(),
+                message_id: None,
             }],
         );
         assert!(guard_block(&s, &p).unwrap().contains("locked down"));

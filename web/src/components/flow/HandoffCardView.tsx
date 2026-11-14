@@ -4,12 +4,19 @@ import { qualityLine } from "@/lib/flow";
 import { Badge } from "@/components/ui";
 import { IconArrowRight, IconChevronRight } from "@/lib/icons";
 
-/// Jump to the receiving agent's first turn after the hand-off and flash it.
-/// Returns false when that turn isn't in the transcript yet.
+/// Jump to the receiving agent's reply to the hand-off and flash it: by id
+/// when the card names the reply (it does once the receiver answered), else
+/// the receiver's first turn after the hand-off message. Returns false when
+/// that turn isn't in the transcript yet.
 export function revealHandoffReply(card: HandoffCard): boolean {
-  const turns = Array.from(document.querySelectorAll<HTMLElement>(".tt[data-message-id]"));
-  const from = card.messageId ? turns.findIndex((t) => t.dataset.messageId === card.messageId) : -1;
-  const target = turns.slice(from + 1).find((t) => t.dataset.author === card.toName);
+  let target: HTMLElement | undefined;
+  if (card.replyMessageId) {
+    target = document.querySelector<HTMLElement>(`.tt[data-message-id="${CSS.escape(card.replyMessageId)}"]`) ?? undefined;
+  } else {
+    const turns = Array.from(document.querySelectorAll<HTMLElement>(".tt[data-message-id]"));
+    const from = card.messageId ? turns.findIndex((t) => t.dataset.messageId === card.messageId) : -1;
+    target = turns.slice(from + 1).find((t) => t.dataset.author === card.toName);
+  }
   if (!target) return false;
   const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   target.scrollIntoView({ block: "center", behavior: reduce ? "auto" : "smooth" });
@@ -64,7 +71,11 @@ export function HandoffCardView({ card }: { card: HandoffCard }) {
       </div>
       {card.task && <div className="mt-1 text-[12.5px] leading-[1.45]">{card.task}</div>}
       {meta && <div className="mt-0.5 text-ink-soft">{meta}</div>}
-      {missing && <div className="mt-0.5 text-ink-soft">@{card.toName} hasn't replied yet.</div>}
+      {missing && (
+        <div className="mt-0.5 text-ink-soft">
+          {card.replyMessageId ? `@${card.toName}'s reply isn't in the loaded part of this chat.` : `@${card.toName} hasn't replied yet.`}
+        </div>
+      )}
       {hasParcel && (
         <div className="mt-1.5">
           <button

@@ -567,7 +567,7 @@ async fn run_turn(
                 let request = turns.iter().rev().find(|t| t.role == "user").map_or("", |t| t.content.as_str());
                 let findings = hive_runtime::guard_scan::assess_turn(&[], captured.as_deref(), &changed, request);
                 if !findings.is_empty() {
-                    if let Err(e) = lock(svc).self_medicate(s.workspace_id, s.id, &findings) {
+                    if let Err(e) = lock(svc).self_medicate(s.workspace_id, s.id, Some(mid), &findings) {
                         eprintln!("worker: lockdown failed: {e}");
                     }
                 }

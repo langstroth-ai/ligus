@@ -972,10 +972,12 @@ impl InjectionHits {
 }
 
 /// After a turn: lock its chat down for every infection signal it showed.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn self_medicate_after_turn(
     state: &AppState,
     workspace_id: Uuid,
     session_id: Uuid,
+    message_id: Uuid,
     tool_markers: &[&'static str],
     diff: Option<&str>,
     changed: &[String],
@@ -987,7 +989,7 @@ pub(crate) fn self_medicate_after_turn(
         return;
     }
     let mut svc = state.service.lock().unwrap();
-    match svc.self_medicate(workspace_id, session_id, &findings) {
+    match svc.self_medicate(workspace_id, session_id, Some(message_id), &findings) {
         Ok(n) => tracing::warn!(target: "guards", chat = %session_id, signals = n, "chat locked down by self-medication"),
         Err(e) => tracing::error!(target: "guards", "couldn't lock chat {session_id} down: {e}"),
     }
@@ -1010,6 +1012,7 @@ pub(crate) fn get_chat_lockdown(state: State<AppState>, session_id: String) -> R
             signal: serde_json::to_value(l.signal).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default(),
             detail: l.detail.clone(),
             raised_at: crate::rfc3339(l.raised_at),
+            message_id: l.message_id.map(|m| m.to_string()),
         })
         .collect::<Vec<_>>();
     Ok(hive_proto::ChatLockdownDto {
@@ -1038,7 +1041,7 @@ pub(crate) fn lock_chat(app: AppHandle, state: State<AppState>, session_id: Stri
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
     let ws = svc.load(sid).map_err(map_err)?.ok_or("unknown chat")?.workspace_id;
-    svc.self_medicate(ws, sid, &[(hive_core::guard::LockdownSignal::Manual, "manual".into())]).map_err(map_err)?;
+    svc.self_medicate(ws, sid, None, &[(hive_core::guard::LockdownSignal::Manual, "manual".into())]).map_err(map_err)?;
     drop(svc);
     let _ = tauri::Emitter::emit(&app, "workspace://synced", 1);
     Ok(())

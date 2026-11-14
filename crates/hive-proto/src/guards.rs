@@ -102,6 +102,11 @@ pub struct LockdownSignalDto {
     /// Content-free detail: a credential kind, a marker name, a file count.
     pub detail: String,
     pub raised_at: String,
+    /// The reply whose turn raised it, for a jump to the cause (absent for a
+    /// manual lockdown).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub message_id: Option<String>,
 }
 
 /// A chat's lockdown state (self-medication).

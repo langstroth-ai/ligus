@@ -95,7 +95,7 @@ and public addresses unless `LIGUS_SERVE_ALLOW_ANY_BIND=1`.
 | GET | `/v1/proposal-sets?status=open\|all` | `{sets: [ProposalSet]}`, every [proposal set](../docs-site/features/proposal-sets.md) in the workspace, newest first (open by default). Read-only |
 | GET | `/v1/proposal-sets/{id}` | `{set: ProposalSet}` |
 | GET | `/v1/chats/{id}/proposal-sets?status=open\|all` | `{sets: [ProposalSet]}`, one chat's sets (all by default) |
-| GET | `/v1/guards` | `{dearth: {reason, broodPaths, allowedMcpServers, setBy, setAt}?, pendingMembers, lockedChats: [{chatId, chatTitle, signals: [{signal, detail, raisedAt}]}], coordinator: {holder, epoch, leaseMs, released, isThis}?, myRole, canClearLockdown}` |
+| GET | `/v1/guards` | `{dearth: {reason, broodPaths, allowedMcpServers, setBy, setAt}?, pendingMembers, lockedChats: [{chatId, chatTitle, signals: [{signal, detail, raisedAt, messageId?}]}], coordinator: {holder, epoch, leaseMs, released, isThis}?, myRole, canClearLockdown}` |
 | POST | `/v1/chats/{id}/lockdown/clear` | `{chatId, cleared: true}`. Writes the same signed `ChatLockdownCleared` the desktop's *Clear lockdown* does. `403` unless this box's identity is a human member at Contributor or above; `409` when the chat isn't locked |
 | GET | `/v1/flow` | `{board: [BoardItem], queue: Queue, marks: [Mark], routing: Routing}`, the desktop's Flow pane, read-only; see below |
 | GET | `/v1/chats/{id}/handoffs` | `{handoffs: [Handoff]}`, oldest first |
@@ -160,8 +160,11 @@ accepted, judged, acceptanceRate?}], stops: [{route, name, reason, untilMs,
 failures}]}`. `Handoff = {id, from, to, fromName, toName, task, taskClass,
 branch, files, via: "mention"|"stage", quality: {testsPassed?, proposalId?,
 proposalStatus, turns, costUsd, error}, atMs, messageId?, parcel?: {keyFiles,
-decisions, ruledOut, notes}}`; `messageId` is the reply that handed the work
-on, so the app can place the card in the transcript.
+decisions, ruledOut, notes}, replyMessageId?}`; `messageId` is the reply that
+handed the work on, so the app can place the card in the transcript, and
+`replyMessageId` is the receiver's answer once it has replied. A lockdown
+signal's `messageId` is the reply whose turn raised it (absent for a manual
+lockdown).
 
 A workflow run in `GET /v1/chats/{id}/details` also carries `coordinator:
 {holder, holderLabel, epoch, released, isThis, online}?`, the device driving it

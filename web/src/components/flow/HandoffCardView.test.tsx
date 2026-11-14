@@ -49,6 +49,28 @@ describe("hand-off cards", () => {
     expect(screen.getByText("@reviewer hasn't replied yet.")).toBeInTheDocument();
   });
 
+  it("jumps to the named reply by id, even past an earlier turn by the same agent", () => {
+    render(
+      <>
+        <div className="tt" data-message-id="m1" data-author="coder" />
+        <div className="tt" data-message-id="m2" data-author="reviewer" />
+        <div className="tt" data-message-id="m3" data-author="reviewer" />
+        <HandoffCardView card={{ ...card, replyMessageId: "m3" }} />
+      </>,
+    );
+    const m2 = document.querySelector<HTMLElement>('[data-message-id="m2"]')!;
+    const m3 = document.querySelector<HTMLElement>('[data-message-id="m3"]')!;
+    m2.scrollIntoView = () => {};
+    m3.scrollIntoView = () => {};
+    window.matchMedia = ((q: string) => ({ matches: false, media: q })) as unknown as typeof window.matchMedia;
+    fireEvent.click(screen.getByRole("button", { name: "Go to reply" }));
+    expect(m3.classList.contains("hive-flash")).toBe(true);
+    expect(m2.classList.contains("hive-flash")).toBe(false);
+    m3.dataset.messageId = "m3-not-loaded";
+    fireEvent.click(screen.getByRole("button", { name: "Go to reply" }));
+    expect(screen.getByText("@reviewer's reply isn't in the loaded part of this chat.")).toBeInTheDocument();
+  });
+
   it("hides the parcel toggle when there is none", () => {
     render(<HandoffCardView card={{ ...card, parcel: undefined }} />);
     expect(screen.queryByText("Context parcel")).not.toBeInTheDocument();

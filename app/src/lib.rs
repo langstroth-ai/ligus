@@ -7497,7 +7497,7 @@ async fn try_tool_loop(
     let result = tool_loop::run_with_messages(&model, &executor, initial, tool_defs, hive_runtime::agent_tools::ANTHROPIC_TOOL_ROUNDS).await;
     // Self-medication: an injection marker in what the tools returned locks
     // this chat down.
-    crate::guards::self_medicate_after_turn(state, workspace_id, session_id, &executor.injection_hits.take(), None, &[], turns);
+    crate::guards::self_medicate_after_turn(state, workspace_id, session_id, message_id, &executor.injection_hits.take(), None, &[], turns);
 
     let (phase, text) = match result {
         Ok(text) => {
@@ -8225,6 +8225,7 @@ async fn run_prepared_turn_inner(
                     state,
                     workspace_id,
                     session_id,
+                    message_id,
                     &injection_hits.take(),
                     captured.as_deref(),
                     &changed,
@@ -8288,7 +8289,7 @@ async fn run_prepared_turn_inner(
             Ok(TurnOutcome { message_id, body })
         }
         Err(e) => {
-            crate::guards::self_medicate_after_turn(state, workspace_id, session_id, &injection_hits.take(), None, &[], &turns);
+            crate::guards::self_medicate_after_turn(state, workspace_id, session_id, message_id, &injection_hits.take(), None, &[], &turns);
             // Discard the isolated worktree — a failed/aborted turn's partial
             // edits are not surfaced (no proposal), and the worktree is pruned.
             if let Some(wt) = worktree {

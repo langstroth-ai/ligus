@@ -86,6 +86,11 @@ pub struct ChatLockdown {
     pub raised_by: String,
     #[serde(default)]
     pub raised_at: Timestamp,
+    /// The reply whose turn raised it (the message whose tool call read the
+    /// marker or whose changes tripped the scan), so the UI can jump to it.
+    /// Absent for a manual lockdown, and left out of the JSON when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<Uuid>,
 }
 
 /// Guard state carried by a projected session.

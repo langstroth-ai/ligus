@@ -2314,9 +2314,10 @@ async fn guards_endpoint_shows_dearth_lockdowns_and_the_coordinator() {
     let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
     let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
     let ws = h.handle.shared.ws;
+    let cause = Uuid::new_v4();
     {
         let mut svc = h.handle.shared.lock();
-        svc.self_medicate(ws, chat_id, &[(hive_core::guard::LockdownSignal::SecretInDiff, "aws_access_key".into())]).unwrap();
+        svc.self_medicate(ws, chat_id, Some(cause), &[(hive_core::guard::LockdownSignal::SecretInDiff, "aws_access_key".into())]).unwrap();
         let d = hive_core::guard::DearthMode {
             enabled: true,
             reason: "leaked invite".into(),
@@ -2333,6 +2334,7 @@ async fn guards_endpoint_shows_dearth_lockdowns_and_the_coordinator() {
     let g = h.get("/v1/guards").await;
     assert_eq!(g["lockedChats"][0]["chatId"], json!(chat_id), "{g}");
     assert_eq!(g["lockedChats"][0]["signals"][0]["signal"], "secretInDiff");
+    assert_eq!(g["lockedChats"][0]["signals"][0]["messageId"], json!(cause), "names the reply that tripped it");
     assert!(!g.to_string().contains("AKIA"), "only kinds, never values");
 
     // The box claims the workspace coordinator lease on its first presence tick.
@@ -2489,7 +2491,7 @@ async fn lockdown_clear_needs_a_human_contributor() {
         h.handle
             .shared
             .lock()
-            .self_medicate(ws, chat, &[(hive_core::guard::LockdownSignal::InjectionDetected, "ignore-previous".into())])
+            .self_medicate(ws, chat, None, &[(hive_core::guard::LockdownSignal::InjectionDetected, "ignore-previous".into())])
             .unwrap();
     };
     let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Triage" }))).await;
@@ -2619,8 +2621,38 @@ async fn flow_view_shows_board_queue_marks_routing_and_handoffs() {
     assert_eq!(c["fromName"], "coder");
     assert_eq!(c["toName"], "Ligus (primary)", "an empty name falls back to the agent's");
     assert_eq!(c["messageId"], json!(reply));
+    assert!(c.get("replyMessageId").is_none(), "the receiver hasn't answered yet: {c}");
     assert_eq!(c["quality"]["testsPassed"], true);
     assert_eq!(c["parcel"]["decisions"][0], "kept the API");
+    // Once the receiver answers, the card names that answer.
+    let answer = Uuid::new_v4();
+    {
+        let mut svc = h.handle.shared.lock();
+        svc.record_flow(chat_id, ws, FlowRecord::TurnTagged(hflow::TurnTag {
+            message_id: answer,
+            trigger_id: Some(reply),
+            agent: hflow::PRIMARY.into(),
+            runtime_id: String::new(),
+            host_id: String::new(),
+            task_class: "review".into(),
+            role: hflow::roles::CONVERSATION.into(),
+            arm: String::new(),
+            upstream_arm: String::new(),
+            error: false,
+            error_kind: String::new(),
+            tests_passed: None,
+            tool_calls: 0,
+            duration_ms: 0,
+            cost_usd: 0.0,
+            proposal_ids: vec![],
+            handoff_parcel: false,
+            at_ms: now + 1,
+        }))
+        .unwrap();
+    }
+    h.handle.shared.after_write();
+    let cards = h.get(&format!("/v1/chats/{chat_id}/handoffs")).await;
+    assert_eq!(cards["handoffs"][0]["replyMessageId"], json!(answer), "{cards}");
     let (code, _) = status_of(&h, reqwest::Method::GET, &format!("/v1/chats/{}/handoffs", Uuid::new_v4()), None).await;
     assert_eq!(code, 404);
     h.handle.shutdown();

@@ -18,21 +18,32 @@ export function signalLabel(s: LockdownSignalDto): string {
   }
 }
 
-/// Scroll the transcript to the tool call that tripped the lockdown (matched by
-/// tool name from the signal detail, e.g. "fetch_url result"), open it, and
-/// flash it. Falls back to the newest tool call. Returns false if none is shown.
-export function revealLockdownCause(detail: string): boolean {
+/// Scroll the transcript to the tool call that tripped the lockdown, open it,
+/// and flash it. With the cause's message id (newer lockdowns carry it) the
+/// search stays inside that reply: its tool call named in the signal detail
+/// (e.g. "fetch_url result"), else its last tool call, else the reply itself.
+/// Without one, it matches by tool name across the chat and falls back to the
+/// newest tool call. Returns false if the cause isn't shown.
+export function revealLockdownCause(detail: string, messageId?: string): boolean {
   const name = detail.split(/\s+/)[0] ?? "";
-  const cards = Array.from(document.querySelectorAll<HTMLDetailsElement>("details.tcall"));
-  const match =
+  let scope: ParentNode = document;
+  let turn: HTMLElement | null = null;
+  if (messageId) {
+    turn = document.querySelector<HTMLElement>(`.tt[data-message-id="${CSS.escape(messageId)}"]`);
+    if (!turn) return false;
+    scope = turn;
+  }
+  const cards = Array.from(scope.querySelectorAll<HTMLDetailsElement>("details.tcall"));
+  const card =
     [...cards].reverse().find((c) => c.querySelector(".tcall-n")?.textContent?.trim() === name) ?? cards[cards.length - 1];
-  if (!match) return false;
-  match.open = true;
-  match.scrollIntoView({ block: "center", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
-  match.classList.remove("hive-flash");
-  void match.offsetWidth;
-  match.classList.add("hive-flash");
-  (match.querySelector("summary") as HTMLElement | null)?.focus({ preventScroll: true });
+  const target: HTMLElement | null = card ?? turn;
+  if (!target) return false;
+  if (card) card.open = true;
+  target.scrollIntoView({ block: "center", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  target.classList.remove("hive-flash");
+  void target.offsetWidth;
+  target.classList.add("hive-flash");
+  if (card) (card.querySelector("summary") as HTMLElement | null)?.focus({ preventScroll: true });
   return true;
 }
 
@@ -76,7 +87,7 @@ export function LockdownBar({ sessionId }: { sessionId: string }) {
             <LinkButton
               tone="ink"
               onClick={() => {
-                if (!revealLockdownCause(cause.detail)) toast.info("The cause isn't in the loaded part of this chat.");
+                if (!revealLockdownCause(cause.detail, cause.messageId)) toast.info("The cause isn't in the loaded part of this chat.");
               }}
             >
               Show cause

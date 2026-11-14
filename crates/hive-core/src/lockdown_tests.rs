@@ -20,6 +20,7 @@ fn raise(chat: Uuid) -> SessionEvent {
             detail: "aws_access_key".into(),
             raised_by: "worker".into(),
             raised_at: Timestamp::epoch(),
+            message_id: None,
         },
     }
 }
@@ -91,4 +92,30 @@ fn lockdown_closes_egress_and_gates_every_proposal() {
     let p = ActionProposal::file_diff("p", "", "d".into(), vec!["README.md".into()]);
     c.proposals.push(p.clone());
     assert!(human_gate_reason(&c, &p).unwrap().contains("locked down"));
+}
+
+/// The cause's message id is optional and additive: a lockdown without one
+/// serializes exactly as before (no `messageId` key), one with it round-trips,
+/// and the projection keeps it so the UI can jump to the cause by id.
+#[test]
+fn lockdown_message_id_is_left_out_when_absent_and_kept_through_projection() {
+    let SessionEvent::ChatLockdownRaised { lockdown, .. } = raise(Uuid::nil()) else { unreachable!() };
+    let json = serde_json::to_value(&lockdown).unwrap();
+    assert!(json.get("messageId").is_none(), "{json}");
+    let old: ChatLockdown = serde_json::from_value(json).unwrap();
+    assert_eq!(old.message_id, None);
+
+    let reply = Uuid::new_v4();
+    let with = ChatLockdown { message_id: Some(reply), ..lockdown };
+    let json = serde_json::to_value(&with).unwrap();
+    assert_eq!(json["messageId"], serde_json::json!(reply));
+    assert_eq!(serde_json::from_value::<ChatLockdown>(json).unwrap(), with);
+
+    let s = with_bot();
+    let chat = Uuid::new_v4();
+    let envs = vec![
+        seed(&s),
+        ev(&s, 1, "some-worker-host", None, SessionEvent::ChatLockdownRaised { chat_id: chat, lockdown: with }),
+    ];
+    assert_eq!(as_chat(&envs, chat).guards.lockdowns_of(chat)[0].message_id, Some(reply));
 }

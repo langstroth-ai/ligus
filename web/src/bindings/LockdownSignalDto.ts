@@ -11,4 +11,9 @@ signal: string,
 /**
  * Content-free detail: a credential kind, a marker name, a file count.
  */
-detail: string, raisedAt: string, };
+detail: string, raisedAt: string, 
+/**
+ * The reply whose turn raised it, for a jump to the cause (absent for a
+ * manual lockdown).
+ */
+messageId?: string, };

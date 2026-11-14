@@ -150,12 +150,15 @@ impl ChatService {
     }
 
     /// Self-medication: lock `chat_id` down for each finding (signal +
-    /// content-free detail). Posts one note in the chat so members see why,
-    /// and records hygiene signals. Returns how many lockdowns were raised.
+    /// content-free detail). `message_id` is the reply whose turn showed the
+    /// signals (none for a manual lockdown), kept so the UI can jump to the
+    /// cause. Posts one note in the chat so members see why, and records
+    /// hygiene signals. Returns how many lockdowns were raised.
     pub fn self_medicate(
         &mut self,
         workspace_id: Uuid,
         chat_id: Uuid,
+        message_id: Option<Uuid>,
         findings: &[(hive_core::guard::LockdownSignal, String)],
     ) -> Result<usize> {
         use hive_core::guard::{ChatLockdown, LockdownSignal};
@@ -172,6 +175,7 @@ impl ChatService {
                 detail: detail.chars().take(120).collect(),
                 raised_by: self.author.id.clone(),
                 raised_at: Timestamp::now(),
+                message_id,
             };
             self.append_signed(config_id, workspace_id, SessionEvent::ChatLockdownRaised { chat_id, lockdown })?;
             let (kind, text) = match signal {
@@ -336,12 +340,14 @@ mod tests {
         let ws = Uuid::new_v4();
         svc.ensure_workspace_config(ws).unwrap();
         let chat = svc.create_chat("c", ws, "anthropic").unwrap();
+        let reply = Uuid::new_v4();
         let n = svc
-            .self_medicate(ws, chat.id, &[(LockdownSignal::SecretInDiff, "aws_access_key".into())])
+            .self_medicate(ws, chat.id, Some(reply), &[(LockdownSignal::SecretInDiff, "aws_access_key".into())])
             .unwrap();
         assert_eq!(n, 1);
         let s = svc.load(chat.id).unwrap().unwrap();
         assert!(s.guards.lockdown_active());
+        assert_eq!(s.guards.lockdowns_of(chat.id)[0].message_id, Some(reply), "the cause's reply is kept");
         assert_eq!(hive_core::sandbox::envelope_for_session(&s).egress, hive_core::sandbox::EgressPolicy::Closed);
         assert!(s.messages.iter().any(|m| m.body.contains("locked down")));
         // Other chats are untouched.

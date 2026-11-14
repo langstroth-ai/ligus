@@ -305,12 +305,23 @@ pub fn handoff_dto(h: &flow::HandoffCard, names: &HashMap<String, String>) -> Va
 
 /// `GET /v1/chats/:id/handoffs`: the chat's hand-off cards, oldest first
 /// (each names the reply message that handed the work on, so the phone can
-/// place it in the transcript).
+/// place it in the transcript, and once the receiver has answered, that
+/// answer as `replyMessageId`).
 pub async fn chat_handoffs(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     let chat = load_chat(&s, &id)?;
     let (_, config_session) = super::api::hosts_and_agents(&s)?;
     let names = agent_names(std::slice::from_ref(&chat), &config_session);
     let mut cards: Vec<&flow::HandoffCard> = chat.flow.handoffs.iter().collect();
     cards.sort_by_key(|h| h.at_ms);
-    Ok(Json(json!({ "handoffs": cards.into_iter().map(|h| handoff_dto(h, &names)).collect::<Vec<_>>() })))
+    let dtos: Vec<Value> = cards
+        .into_iter()
+        .map(|h| {
+            let mut v = handoff_dto(h, &names);
+            if let Some(r) = chat.flow.handoff_reply(h) {
+                v["replyMessageId"] = json!(r);
+            }
+            v
+        })
+        .collect();
+    Ok(Json(json!({ "handoffs": dtos })))
 }

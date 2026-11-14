@@ -463,6 +463,17 @@ impl FlowState {
         let consumed = self.turns.iter().any(|t| t.agent == agent && t.at_ms > card.at_ms);
         (!consumed).then_some(card)
     }
+
+    /// The reply that answered `card`: the receiver's first turn in this chat
+    /// after the card was recorded (the same turn [`Self::pending_handoff_for`]
+    /// counts as consuming it). `None` until the receiver has replied.
+    pub fn handoff_reply(&self, card: &HandoffCard) -> Option<Uuid> {
+        self.turns
+            .iter()
+            .filter(|t| t.agent == card.to && t.at_ms > card.at_ms)
+            .min_by_key(|t| t.at_ms)
+            .map(|t| t.message_id)
+    }
 }
 
 #[cfg(test)]
@@ -548,5 +559,44 @@ mod tests {
             at_ms: 20,
         }));
         assert!(s.pending_handoff_for("b").is_none());
+    }
+
+    fn turn(agent: &str, at_ms: i64) -> TurnTag {
+        TurnTag {
+            message_id: Uuid::new_v4(),
+            trigger_id: None,
+            agent: agent.into(),
+            runtime_id: String::new(),
+            host_id: String::new(),
+            task_class: "general".into(),
+            role: roles::CONVERSATION.into(),
+            arm: String::new(),
+            upstream_arm: String::new(),
+            error: false,
+            error_kind: String::new(),
+            tests_passed: None,
+            tool_calls: 0,
+            duration_ms: 0,
+            cost_usd: 0.0,
+            proposal_ids: vec![],
+            handoff_parcel: false,
+            at_ms,
+        }
+    }
+
+    #[test]
+    fn handoff_reply_is_the_receivers_first_turn_after_the_card() {
+        let mut s = FlowState::default();
+        let card = handoff::HandoffCard::example("a", "b", 10);
+        s.apply(&FlowRecord::TurnTagged(turn("b", 5)));
+        s.apply(&FlowRecord::Handoff(card.clone()));
+        assert_eq!(s.handoff_reply(&card), None, "an earlier turn of the receiver isn't the reply");
+        s.apply(&FlowRecord::TurnTagged(turn("a", 15)));
+        assert_eq!(s.handoff_reply(&card), None, "the sender's turn isn't the reply");
+        let later = turn("b", 30);
+        let first = turn("b", 20);
+        s.apply(&FlowRecord::TurnTagged(later.clone()));
+        s.apply(&FlowRecord::TurnTagged(first.clone()));
+        assert_eq!(s.handoff_reply(&card), Some(first.message_id), "the earliest turn after the card, in any fold order");
     }
 }

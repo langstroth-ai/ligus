@@ -609,11 +609,17 @@ async fn workspace_guards(State(s): S) -> ApiResult<Json<Value>> {
             json!({
                 "chatId": chat,
                 "chatTitle": title,
-                "signals": l.iter().map(|x| json!({
-                    "signal": x.signal,
-                    "detail": x.detail,
-                    "raisedAt": iso(x.raised_at),
-                })).collect::<Vec<_>>(),
+                "signals": l.iter().map(|x| {
+                    let mut v = json!({
+                        "signal": x.signal,
+                        "detail": x.detail,
+                        "raisedAt": iso(x.raised_at),
+                    });
+                    if let Some(m) = x.message_id {
+                        v["messageId"] = json!(m);
+                    }
+                    v
+                }).collect::<Vec<_>>(),
             })
         })
         .collect();
