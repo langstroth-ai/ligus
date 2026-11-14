@@ -657,8 +657,13 @@ impl LigusMcp {
                 if !matches!(status.as_str(), "done" | "blocked" | "needsReview") {
                     return (denied_or_err("status is done, blocked or needsReview".into()), None);
                 }
-                let summary: String = s("summary").chars().take(400).collect();
-                let files: Vec<String> = strs("filesTouched").into_iter().take(32).collect();
+                // Posted by the host as a system note: one line, bounded, so it
+                // can't pass for the host's own messages or flood the chat.
+                let one_line = |t: &str, max: usize| -> String {
+                    t.split_whitespace().collect::<Vec<_>>().join(" ").chars().filter(|c| !c.is_control()).take(max).collect()
+                };
+                let summary = one_line(&s("summary"), 400);
+                let files: Vec<String> = strs("filesTouched").iter().take(32).map(|f| one_line(f, 256)).filter(|f| !f.is_empty()).collect();
                 let confidence = Some(s("confidence")).filter(|c| matches!(c.as_str(), "low" | "medium" | "high"));
                 *st.report.lock().unwrap_or_else(|e| e.into_inner()) = Some(SelfReport { status, summary, files_touched: files, confidence });
                 (ToolResult::ok(json!({"ok": true})), None)
