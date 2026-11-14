@@ -31,7 +31,7 @@ use std::process::Stdio;
 
 use hive_core::{Driver, ModelProviderKind};
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWriteExt, BufReader};
 
 use super::anthropic::{ChatTurn, ProviderError};
 use super::dispatch::{ResolvedRuntime, StreamActivity};
@@ -287,8 +287,13 @@ impl FsPolicy {
         if !c.starts_with(&self.root) {
             return Err("outside the turn's directory".into());
         }
-        if self.deny_read.iter().any(|d| c.starts_with(d)) && !c.starts_with(&self.root) {
-            return Err("denied".into());
+        // A denied path inside the root (a data dir or secret file that sits
+        // in the turn's directory) stays denied: the host reads and writes
+        // for the agent in its own, unsandboxed process. A root that is
+        // itself inside a denied dir (a checkout under the data dir) is the
+        // turn's own and stays usable.
+        if self.deny_read.iter().any(|d| d.starts_with(&self.root) && d != &self.root && c.starts_with(d)) {
+            return Err("that path is not readable by agents".into());
         }
         Ok(c)
     }
@@ -297,16 +302,12 @@ impl FsPolicy {
     pub fn read(&self, path: &str, line: Option<u64>, limit: Option<u64>) -> Result<String, String> {
         let c = self.inside(path)?;
         use std::io::Read;
-        let mut opts = std::fs::OpenOptions::new();
-        opts.read(true);
-        // Never block the host on a FIFO the agent made (the type check
-        // below then refuses it).
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.custom_flags(libc::O_NONBLOCK);
-        }
-        let f = opts.open(&c).map_err(|e| e.to_string())?;
+        let rel = c.strip_prefix(&self.root).map_err(|_| "outside the turn's directory".to_string())?;
+        // Opened beneath the root one component at a time, never following
+        // a symlink (a directory swapped after the check above can't
+        // redirect it), non-blocking (a FIFO is refused below, not waited on).
+        crate::safe_fs::race_point(&c);
+        let f = crate::safe_fs::open_beneath(&self.root, rel, crate::safe_fs::Mode::Read).map_err(|e| e.to_string())?;
         let meta = f.metadata().map_err(|e| e.to_string())?;
         if !meta.is_file() || meta.len() > MAX_FS_READ_BYTES {
             return Err(format!("not a regular file of at most {} MiB", MAX_FS_READ_BYTES / (1024 * 1024)));
@@ -358,29 +359,12 @@ impl FsPolicy {
         if std::fs::symlink_metadata(&c).is_ok_and(|m| m.file_type().is_symlink()) {
             return Err("that path is a symbolic link".into());
         }
-        let name = c.file_name().ok_or("no file name")?.to_owned();
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        // Re-check where the directory really is now that it exists.
-        let real_parent = std::fs::canonicalize(parent).map_err(|e| e.to_string())?;
-        if !real_parent.starts_with(&self.root) {
-            return Err("outside the turn's directory".into());
-        }
-        let target = real_parent.join(name);
-        if self.protected(&target) {
-            return Err("that path is protected".into());
-        }
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-        }
-        let mut f = opts.open(&target).map_err(|e| e.to_string())?;
-        if !f.metadata().map_err(|e| e.to_string())?.is_file() {
-            return Err("not a regular file".into());
-        }
-        std::io::Write::write_all(&mut f, content.as_bytes()).map_err(|e| e.to_string())
+        let rel = c.strip_prefix(&self.root).map_err(|_| "outside the turn's directory".to_string())?;
+        // Missing directories are made and every component is opened
+        // beneath the root without following a symlink, so a directory the
+        // agent swaps for a link after these checks can't redirect the
+        // write; only a regular file is written (O_NOFOLLOW, non-blocking).
+        crate::safe_fs::write_beneath(&self.root, rel, content.as_bytes()).map_err(|e| e.to_string())
     }
 }
 
@@ -474,7 +458,7 @@ pub fn tier_from_args(kind: ModelProviderKind, args: &[String]) -> &'static str 
 
 struct Conn {
     stdin: tokio::process::ChildStdin,
-    lines: tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    lines: super::bounded::BoundedLines<BufReader<tokio::process::ChildStdout>>,
     next_id: u64,
 }
 
@@ -499,6 +483,8 @@ struct Handler<'a, D: FnMut(String), A: FnMut(StreamActivity)> {
     writes_allowed: bool,
     egress_open: bool,
     last_cost: f64,
+    /// Why the host ended the turn itself (the spend budget).
+    stopped: Option<String>,
     session_id: Option<String>,
     agent_label: &'a str,
 }
@@ -520,7 +506,9 @@ impl<D: FnMut(String), A: FnMut(StreamActivity)> Handler<'_, D, A> {
         (self.on_delta)(text.to_string());
     }
 
-    fn update(&mut self, u: &Value) {
+    /// One `session/update`. `Err` ends the turn (the spend budget is used
+    /// up, or a usage report can't be counted against it).
+    fn update(&mut self, u: &Value) -> Result<(), String> {
         let kind = u.get("sessionUpdate").and_then(Value::as_str).unwrap_or("");
         let content_text = |v: &Value| -> String {
             match v.get("content") {
@@ -562,23 +550,24 @@ impl<D: FnMut(String), A: FnMut(StreamActivity)> Handler<'_, D, A> {
                 input_json: u.get("entries").map(Value::to_string).unwrap_or_else(|| "[]".into()),
             }),
             "usage_update" => {
-                let cost = u.get("cost");
-                let usd = cost
-                    .filter(|c| c.get("currency").and_then(Value::as_str).is_none_or(|c| c.eq_ignore_ascii_case("usd")))
-                    .and_then(|c| c.get("amount").and_then(Value::as_f64));
-                if let Some(total) = usd {
-                    // Cumulative for the session: report the delta.
-                    let delta = (total - self.last_cost).max(0.0);
-                    self.last_cost = total.max(self.last_cost);
-                    if delta > 0.0 {
-                        if let Some(spend) = self.scope.as_ref().and_then(|s| s.spend.clone()) {
-                            spend(delta);
-                        }
+                let Some(meter) = self.scope.as_ref().and_then(|s| s.spend.clone()) else { return Ok(()) };
+                let Some(cost) = u.get("cost").filter(|c| !c.is_null()) else { return Ok(()) };
+                match usage_delta(cost, self.last_cost) {
+                    Ok((total, delta)) => {
+                        self.last_cost = total;
+                        meter.charge(delta).map_err(|e| e.to_string())?;
                     }
+                    // Without a budget a bad report is only noted; with one,
+                    // spend it can't count can't be held to the budget.
+                    Err(why) if meter.max().is_some() => {
+                        return Err(crate::agent_turn::SpendError::Invalid(format!("{} {why}", self.agent_label)).to_string());
+                    }
+                    Err(why) => crate::agent_turn::note(format!("acp_usage_ignored:{why}")),
                 }
             }
             _ => {}
         }
+        Ok(())
     }
 
     /// Answer an agent → client request. `Ok(result)` or `Err((code, msg))`.
@@ -633,6 +622,25 @@ impl<D: FnMut(String), A: FnMut(StreamActivity)> Handler<'_, D, A> {
     }
 }
 
+/// Check an ACP `usage_update` `cost` (`{amount, currency}`, cumulative for
+/// the session) against the last total: `Ok((total, delta))`, or why it
+/// can't be counted. The currency must be named and be USD; the amount
+/// must be a finite, non-negative number that never goes down.
+pub fn usage_delta(cost: &Value, last_total: f64) -> Result<(f64, f64), String> {
+    let currency = cost.get("currency").and_then(Value::as_str).map(str::trim).unwrap_or("");
+    if !currency.eq_ignore_ascii_case("usd") {
+        return Err(if currency.is_empty() { "reported a cost without a currency".into() } else { format!("reported a cost in {currency:.8}, not USD") });
+    }
+    let amount = cost.get("amount").and_then(Value::as_f64).ok_or_else(|| "reported a cost without an amount".to_string())?;
+    if !amount.is_finite() || amount < 0.0 {
+        return Err("reported a negative cost".into());
+    }
+    if amount < last_total {
+        return Err("reported a cost lower than it had already reported".into());
+    }
+    Ok((amount, amount - last_total))
+}
+
 /// How long a permission escalation waits for a person.
 pub fn ask_timeout() -> std::time::Duration {
     std::time::Duration::from_secs(
@@ -643,7 +651,7 @@ pub fn ask_timeout() -> std::time::Duration {
 async fn read_line(conn: &mut Conn, idle: std::time::Duration, label: &str) -> Result<Option<String>, String> {
     match crate::agent_turn::idle_timeout(idle, conn.lines.next_line()).await {
         Ok(Ok(l)) => Ok(l),
-        Ok(Err(e)) => Err(format!("read: {e}")),
+        Ok(Err(e)) => Err(format!("{label}: {e}")),
         Err(()) => Err(format!(
             "{label} produced no output for {}s; raise LIGUS_TURN_IDLE_TIMEOUT_SECS for long silent steps",
             idle.as_secs()
@@ -682,7 +690,10 @@ async fn call<D: FnMut(String), A: FnMut(StreamActivity)>(
             (Some(m), None) => {
                 if m == "session/update" {
                     if let Some(u) = msg.get("params").and_then(|p| p.get("update")) {
-                        h.update(u);
+                        if let Err(e) = h.update(u) {
+                            h.stopped = Some(e.clone());
+                            return Err(e);
+                        }
                     }
                 }
             }
@@ -745,12 +756,10 @@ pub async fn stream_reply(
     let stdout = child.stdout.take().ok_or_else(|| AcpFailure::Init("no stdout".into()))?;
     let stderr_task = child.stderr.take().map(|mut e| {
         tokio::spawn(async move {
-            let mut buf = String::new();
-            let _ = e.read_to_string(&mut buf).await;
-            buf
+            super::bounded::read_capped(&mut e, super::bounded::MAX_STDERR_BYTES).await
         })
     });
-    let mut conn = Conn { stdin, lines: BufReader::new(stdout).lines(), next_id: 1 };
+    let mut conn = Conn { stdin, lines: super::bounded::BoundedLines::new(BufReader::new(stdout)), next_id: 1 };
     let scope = crate::agent_turn::current();
     let egress_open = matches!(guard.plan().egress, crate::executor::EgressPlan::Open)
         || crate::executor::current_turn().is_none_or(|p| p.envelope.egress.is_open());
@@ -765,6 +774,7 @@ pub async fn stream_reply(
         writes_allowed: gate_writes,
         egress_open,
         last_cost: 0.0,
+        stopped: None,
         session_id: None,
         agent_label: label,
     };
@@ -776,7 +786,9 @@ pub async fn stream_reply(
     );
     let stderr_of = |task: Option<tokio::task::JoinHandle<String>>| async move {
         match task {
-            Some(t) => t.await.unwrap_or_default(),
+            // Bounded: a child that keeps stderr open (or a grandchild that
+            // inherited it) must not hold the turn's error.
+            Some(t) => tokio::time::timeout(std::time::Duration::from_secs(2), t).await.ok().and_then(Result::ok).unwrap_or_default(),
             None => String::new(),
         }
     };
@@ -850,8 +862,16 @@ pub async fn stream_reply(
     let res = match res {
         Ok(r) => r,
         Err(e) => {
-            // Tell the agent to stop, then let kill_on_drop reap it.
-            let _ = conn.send(&json!({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": session_id}})).await;
+            // Tell the agent to stop, then kill it: an agent blocked writing
+            // output Ligus stopped reading (an over-long line) never exits on
+            // its own, and its stderr only closes when it does.
+            let cancel = json!({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": session_id}});
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), conn.send(&cancel)).await;
+            let _ = child.start_kill();
+            if let Some(why) = h.stopped.take() {
+                // Ligus ended it (the spend budget): say so as is.
+                return Err(AcpFailure::Turn(ProviderError::Subprocess(format!("{label}: {why}"))));
+            }
             let err = stderr_of(stderr_task).await;
             return Err(turn_err(format!("{e} {}", err.trim()).trim().to_string()));
         }
@@ -900,6 +920,17 @@ mod tests {
         // Unknown kinds go to a person.
         assert_eq!(judge_permission("switch_mode", "bypassPermissions", true, true), Escalate);
         assert_eq!(judge_permission("other", "default", true, true), Escalate);
+    }
+
+    #[test]
+    fn usage_reports_must_be_usd_and_never_go_down() {
+        assert_eq!(usage_delta(&json!({"amount": 0.5, "currency": "USD"}), 0.25), Ok((0.5, 0.25)));
+        assert_eq!(usage_delta(&json!({"amount": 0.5, "currency": "usd"}), 0.0), Ok((0.5, 0.5)));
+        assert!(usage_delta(&json!({"amount": 0.5, "currency": "EUR"}), 0.0).unwrap_err().contains("EUR"));
+        assert!(usage_delta(&json!({"amount": 0.5}), 0.0).is_err(), "no currency");
+        assert!(usage_delta(&json!({"amount": -1.0, "currency": "USD"}), 0.0).is_err(), "negative");
+        assert!(usage_delta(&json!({"amount": 0.1, "currency": "USD"}), 0.25).is_err(), "decreasing");
+        assert!(usage_delta(&json!({"currency": "USD"}), 0.0).is_err(), "no amount");
     }
 
     #[test]
@@ -1041,6 +1072,57 @@ mod tests {
             std::thread::spawn(move || tx.send(w.write(p.to_str().unwrap(), "x").is_err()).unwrap());
             assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)), Ok(true), "a FIFO write hung");
         }
+    }
+
+    /// A path the plan denies reads of (a secret file or data dir that sits
+    /// inside the turn's directory) is refused to the host's own fs/* reads
+    /// and writes too; a worktree that is itself inside a denied dir (a
+    /// checkout under the data dir) stays usable.
+    #[test]
+    fn fs_policy_refuses_denied_paths_inside_the_root() {
+        let wt = tempfile::tempdir().unwrap();
+        let root = crate::executor::canonical(wt.path());
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        std::fs::write(root.join("data/serve.token"), "secret").unwrap();
+        std::fs::write(root.join("ok.txt"), "fine").unwrap();
+        let fs = FsPolicy { root: root.clone(), writable: true, read_only: vec![], deny_read: vec![root.join("data")] };
+        assert!(fs.read(root.join("data/serve.token").to_str().unwrap(), None, None).is_err(), "read a denied path");
+        assert!(fs.write(root.join("data/x").to_str().unwrap(), "x").is_err(), "wrote a denied path");
+        assert_eq!(fs.read(root.join("ok.txt").to_str().unwrap(), None, None).unwrap(), "fine");
+        // The root inside a denied dir: the root's own files stay readable.
+        let inner = FsPolicy { root: root.join("data"), writable: false, read_only: vec![], deny_read: vec![root.clone()] };
+        assert_eq!(inner.read(root.join("data/serve.token").to_str().unwrap(), None, None).unwrap(), "secret");
+    }
+
+    /// The host serves fs/* in its own process: a directory on the way that
+    /// the agent swaps for a symlink after the path was checked must not
+    /// redirect the open outside the worktree.
+    #[cfg(unix)]
+    #[test]
+    fn fs_requests_survive_a_parent_swapped_for_a_symlink() {
+        let wt = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = crate::executor::canonical(wt.path());
+        let out = crate::executor::canonical(outside.path());
+        std::fs::write(out.join("secret.txt"), "OUTSIDE").unwrap();
+        let fs = FsPolicy { root: root.clone(), writable: true, read_only: vec![], deny_read: vec![] };
+        let swap = |root: std::path::PathBuf, out: std::path::PathBuf| {
+            move || {
+                std::fs::rename(root.join("sub"), root.join("sub.real")).unwrap();
+                std::os::unix::fs::symlink(&out, root.join("sub")).unwrap();
+            }
+        };
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        crate::safe_fs::set_race_hook(&root, swap(root.clone(), out.clone()));
+        let _ = fs.write(root.join("sub/planted.txt").to_str().unwrap(), "x");
+        assert!(!out.join("planted.txt").exists(), "wrote outside the worktree through a swapped parent");
+        std::fs::remove_file(root.join("sub")).unwrap();
+        std::fs::remove_dir_all(root.join("sub.real")).unwrap();
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/secret.txt"), "inside").unwrap();
+        crate::safe_fs::set_race_hook(&root, swap(root.clone(), out.clone()));
+        let r = fs.read(root.join("sub/secret.txt").to_str().unwrap(), None, None);
+        assert!(r.as_deref() != Ok("OUTSIDE"), "read outside the worktree through a swapped parent");
     }
 
     /// Protected paths are compared by name, case-insensitively and at any

@@ -90,8 +90,14 @@ Ligus answers from your permission tier for CLI agents (Settings, Agents):
 The agent's `fs/write_text_file` requests are written by Ligus only inside
 the turn's worktree, never into `.git`, the protected dirs,
 `ligus.config.toml` or `.envrc` (matched by name at any depth and ignoring
-case), never through a symbolic link, and only when the tier allows edits.
-`fs/read_text_file` serves regular files of at most 16 MiB.
+case), never through a symbolic link (each path component is opened
+without following one, so a directory swapped mid-request can't redirect
+it), and only when the tier allows edits.
+`fs/read_text_file` serves regular files of at most 16 MiB. The agent's
+own output is bounded too: a JSON-RPC line over 8 MiB, or more than 256 MiB
+in a turn, ends the turn with an error. A path the
+sandbox denies agents (Ligus's data dir, a token file) is refused to both,
+even when it sits inside the worktree.
 
 ## The CLI's own config {#cli-home}
 
@@ -108,7 +114,14 @@ real config directories aren't writable from the sandbox. If the CLI
 refreshes its sign-in token during the turn, Ligus copies the refreshed
 credential file back afterwards. It does that only for the CLI's credential
 files, only when the result is valid JSON, and never through a symbolic or
-hard link the agent left in its turn home.
+hard link the agent left in its turn home. The refreshed file must also be
+the same sign-in: the same keys (top level and one level down) and the same
+account fields where the CLI's file has them (Codex's `account_id`, an API
+key and the `id_token` email; Copilot's `user` per host; Antigravity's
+active account and `id_token` email). Anything else is dropped and logged,
+so an agent can't sign your CLI into another account. Claude Code's
+credential file names no account, only a plan, so a swap to another account
+on the same plan can't be told apart from a refresh there.
 
 On macOS the login keychain stays reachable, so subscription sign-ins keep
 working. If a CLI misbehaves with a per-turn home, `LIGUS_CLI_HOME=shared`

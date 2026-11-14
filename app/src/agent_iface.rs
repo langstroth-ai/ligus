@@ -123,7 +123,11 @@ impl TurnIface {
     pub fn scope(&self) -> hive_runtime::agent_turn::AgentTurnScope {
         match &self.turn {
             Some(t) => t.agent_scope(),
-            None => Default::default(),
+            // No Ligus tools this turn: the spend budget still holds.
+            None => hive_runtime::agent_turn::AgentTurnScope {
+                spend: Some(hive_runtime::agent_turn::SpendMeter::new(Budgets::from_env().max_spend_usd)),
+                ..Default::default()
+            },
         }
     }
 

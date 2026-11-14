@@ -46,10 +46,13 @@ first time it is created; after that, Settings is the source of truth.
 | `LIGUS_MCP_CONFIG` | unset | CLI | path to a TOML file of MCP servers for headless turns and dashboard panels |
 | `LIGUS_MCP_MIN_ROLE` | `admin` for a write-capable turn, `contributor` for a read-only one | desktop, CLI | `viewer`, `contributor`, `admin` or `owner`: the minimum role of a message's author before its turn runs at its configured tier. Below it, Ligus's own tool loop replies tool-free, Claude Code, Antigravity and Copilot run read-only, and Codex, aider, pi and Hermes are refused with a note; an unknown author fails closed. A value below the default logs a warning at startup |
 | `LIGUS_SANDBOX` | on | desktop, CLI | `off` runs agent processes without the OS sandbox; write-capable agent turns are then refused |
+| `LIGUS_SANDBOX_UNIX_SOCKETS` | unset | desktop and CLI (Linux) | `allow` lets sandboxed agents create unix sockets again (known host sockets stay masked) |
 | `LIGUS_SANDBOX_EGRESS_ALLOW` | unset | desktop, CLI | comma-separated `host[:port]` agents may also reach through the egress proxy under the normal envelope (not under dearth mode or a lockdown); `run_command` and pre-flight get only these |
 | `LIGUS_SANDBOX_WRITE_ALLOW` | unset | desktop, CLI | comma-separated extra paths agent processes may write (e.g. `~/.cargo/registry`) |
 | `LIGUS_SANDBOX_READ_ALLOW` | unset | desktop, CLI | credential dirs under `~` an agent process may read after all (e.g. `~/.aws`) |
 | `LIGUS_AGENT_TIMEOUT_SECS` | `300` | desktop and CLI | wall-clock budget for one subprocess agent turn (aider, pi, ...) |
+| `LIGUS_AGENT_MAX_LINE_BYTES` | `8388608` | desktop and CLI | longest stdout line an agent CLI or ACP adapter may write; a longer one ends the turn |
+| `LIGUS_AGENT_MAX_OUTPUT_BYTES` | `268435456` | desktop and CLI | most stdout one agent turn may produce |
 | `LIGUS_TURN_IDLE_TIMEOUT_SECS` | `300` | desktop and CLI | how long a streaming model may produce nothing before the turn fails |
 | `LIGUS_TURN_TIMEOUT_SECS` | `3600` | desktop and CLI | total backstop for one turn (the desktop adds 300 s) |
 | `LIGUS_PATCH_LEAVING_CALLS` | `12` | desktop and CLI | tool calls in a row without measurable progress before the agent must check in; `0` turns the rule off |
@@ -66,8 +69,13 @@ first time it is created; after that, Settings is the source of truth.
 | `LIGUS_MCP_MAX_PROPOSALS` | `8` | desktop, CLI | proposals per turn |
 | `LIGUS_MCP_MAX_HANDOFFS` | `2` | desktop, CLI | hand-offs per turn |
 | `LIGUS_MCP_MAX_ASKS` | `3` | desktop, CLI | questions to the chat per turn |
-| `LIGUS_MCP_MAX_READ_MESSAGES` | `500` | desktop, CLI | messages read per turn |
-| `LIGUS_MCP_MAX_SPEND_USD` | unset | desktop, CLI | spend per turn, where the runtime reports cost |
+| `LIGUS_MCP_MAX_READ_MESSAGES` | `500` | desktop, CLI | messages and proposals read per turn |
+| `LIGUS_MCP_MAX_CASCADE_TOOL_CALLS` | `192` | desktop, CLI | Ligus tool calls shared by every turn descended from one human message |
+| `LIGUS_MCP_MAX_CASCADE_PROPOSALS` | `12` | desktop, CLI | proposals per cascade |
+| `LIGUS_MCP_MAX_CASCADE_HANDOFFS` | `6` | desktop, CLI | hand-offs per cascade |
+| `LIGUS_MCP_MAX_CASCADE_ASKS` | `6` | desktop, CLI | questions and permission requests per cascade |
+| `LIGUS_MCP_MAX_SPEND_USD` | unset | desktop, CLI | spend per turn; reaching it ends the turn ([what is counted](../addons/ligus-mcp.md#spend)) |
+| `LIGUS_MODEL_PRICES` | unset | desktop, CLI | `prefix=in/out,…` USD per million tokens, for pricing API turns against the spend budget |
 | `LIGUS_MCP_BRIDGE` | this binary | desktop, CLI | the program agents run as `ligus mcp-bridge` |
 
 ### `ligus agent` (development responder)

@@ -420,6 +420,31 @@ fn sandbox_denies_git_dir_write() {
     }
 }
 
+/// macOS: the protected names are refused in any case and at any depth.
+/// APFS ignores case, so a `.CLAUDE/settings.json` made while `.claude/`
+/// doesn't exist yet is the `.claude/settings.json` Claude Code loads; and
+/// a nested `sub/.claude/` is the project config of a session started in
+/// `sub/`.
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_protected_names_ignore_case_and_depth() {
+    let Some(e) = real_executor() else { return };
+    let f = Fixture::new();
+    for (script, made) in [
+        ("mkdir .CLAUDE && touch .CLAUDE/settings.json", ".CLAUDE/settings.json"),
+        ("mkdir -p sub/.claude && touch sub/.claude/settings.json", "sub/.claude/settings.json"),
+        ("mkdir -p sub/.VSCode && touch sub/.VSCode/tasks.json", "sub/.VSCode/tasks.json"),
+        ("mkdir -p sub && echo x > sub/Ligus.Config.Toml", "sub/Ligus.Config.Toml"),
+        ("echo x > .ENVRC", ".ENVRC"),
+    ] {
+        let (ok, out) = run_sh(&*e, &f, script, isolated());
+        assert!(!ok && !f.worktree.join(made).exists(), "{script}: {out}");
+    }
+    // Names that only contain a protected one stay writable.
+    let (ok, out) = run_sh(&*e, &f, "mkdir -p sub/my.claude-notes && echo ok > sub/my.claude-notes/a && echo ok > envrc.md", isolated());
+    assert!(ok, "{out}");
+}
+
 #[test]
 fn sandbox_denies_direct_egress() {
     let Some(e) = real_executor() else { return };
@@ -510,6 +535,41 @@ fn sandbox_linux_seccomp_and_landlock() {
         let (_, out) = run_sh(&*e, &f, &format!("ls -A '{}'", PathBuf::from(run).display()), isolated());
         assert!(!out.contains("bus"), "{out}");
     }
+}
+
+/// Linux (C-10): an agent can't reach the host's unix sockets
+/// (`docker.sock`, an ssh-agent, a desktop service): bwrap's read-only `/`
+/// still lets a process `connect()` to any socket file it can see. Seccomp
+/// refuses new `AF_UNIX` sockets inside the sandbox, so no socket path is
+/// reachable, while the turn's Ligus MCP server stays reachable through
+/// the helper's loopback forwarder (`mcp_bridge_reachable_inside_seatbelt_and_bwrap`).
+///
+/// Linux only: run it on a host with bubblewrap and user namespaces (the
+/// owner's SFF box, or Linux CI); it can't run on macOS.
+#[cfg(target_os = "linux")]
+#[test]
+fn sandbox_denies_unix_socket_connect() {
+    let Some(e) = real_executor() else { return };
+    let f = Fixture::new();
+    // A socket the agent's mount namespace can see, as docker.sock would be.
+    let path = f.outside.join("host-service.sock");
+    let _ = std::fs::remove_file(&path);
+    let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    if !which("python3") {
+        eprintln!("skipped: python3 is needed for the connect probe");
+        return;
+    }
+    let probe = format!(
+        "python3 -c 'import socket,sys\ns=socket.socket(socket.AF_UNIX)\ns.connect(sys.argv[1])\nprint(\"CONNECTED\")' '{}'",
+        path.display()
+    );
+    let (ok, out) = run_sh(&*e, &f, &probe, isolated());
+    assert!(!ok && !out.contains("CONNECTED"), "an agent reached a host unix socket: {out}");
+    assert!(listener.accept().is_err(), "the host socket saw a connection");
+    // socketpair (local IPC between the agent's own processes) still works.
+    let (ok, out) = run_sh(&*e, &f, "python3 -c 'import socket; a,b=socket.socketpair(); a.send(b\"x\"); print(b.recv(1))'", isolated());
+    assert!(ok && out.contains("x"), "{out}");
 }
 
 /// macOS: a confined agent must not escape through LaunchServices. Writing

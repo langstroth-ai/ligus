@@ -13,6 +13,19 @@ use serde_json::Value;
 pub const BRIDGE_ARG: &str = "mcp-bridge";
 pub const SOCKET_ENV: &str = "LIGUS_MCP_SOCKET";
 pub const CRED_ENV: &str = "LIGUS_TURN_CRED";
+/// Under the Linux sandbox, where seccomp refuses new unix sockets (C-10),
+/// the bridge reaches the server through the sandbox helper's forwarder on
+/// this loopback address instead (inside the turn's own network namespace).
+pub const TCP_ENV: &str = "LIGUS_MCP_TCP";
+/// The forwarder's port inside the sandbox's network namespace.
+pub const SANDBOX_TCP_PORT: u16 = 29417;
+
+/// The extra bridge env this host's sandbox needs: the forwarder's address
+/// under bubblewrap, nothing elsewhere.
+pub fn sandbox_tcp_env() -> Option<(String, String)> {
+    (crate::executor::default_executor().kind() == crate::executor::ExecutorKind::Bwrap)
+        .then(|| (TCP_ENV.to_string(), format!("127.0.0.1:{SANDBOX_TCP_PORT}")))
+}
 
 /// Add the credential to an `initialize` message.
 pub fn with_credential(line: &str, cred: &str) -> String {
@@ -38,15 +51,44 @@ pub fn run_stdio() -> i32 {
         eprintln!("ligus mcp-bridge: {SOCKET_ENV} and {CRED_ENV} must be set (Ligus sets them for an agent turn)");
         return 2;
     };
-    let stream = match std::os::unix::net::UnixStream::connect(&sock) {
-        Ok(s) => s,
+    match std::os::unix::net::UnixStream::connect(&sock) {
+        Ok(s) => match s.try_clone() {
+            Ok(w) => pipe(s, w, &cred, |w| {
+                let _ = w.shutdown(std::net::Shutdown::Write);
+            }),
+            Err(_) => 1,
+        },
+        // Inside the Linux sandbox new unix sockets are refused (EPERM from
+        // seccomp): use the helper's loopback forwarder. Only on that exact
+        // refusal, so the credential never goes to a loopback port anywhere
+        // else.
+        Err(e) if e.raw_os_error() == Some(libc::EPERM) && std::env::var_os(TCP_ENV).is_some() => {
+            let addr = std::env::var(TCP_ENV).unwrap_or_default();
+            match std::net::TcpStream::connect(addr.trim()).and_then(|s| Ok((s.try_clone()?, s))) {
+                Ok((w, r)) => pipe(r, w, &cred, |w| {
+                    let _ = w.shutdown(std::net::Shutdown::Write);
+                }),
+                Err(e) => {
+                    eprintln!("ligus mcp-bridge: can't reach the Ligus MCP server through the sandbox: {e}");
+                    1
+                }
+            }
+        }
         Err(e) => {
             eprintln!("ligus mcp-bridge: can't reach the Ligus MCP server: {e}");
-            return 1;
+            1
         }
-    };
-    let Ok(mut to_server) = stream.try_clone() else { return 1 };
-    let from_server = stream;
+    }
+}
+
+/// Pipe stdio to the server connection (`from_server` / `to_server` are the
+/// two halves of one stream) until either side closes.
+#[cfg(unix)]
+fn pipe<R, W>(from_server: R, mut to_server: W, cred: &str, close: impl FnOnce(&mut W)) -> i32
+where
+    R: std::io::Read + Send + 'static,
+    W: std::io::Write,
+{
     let out = std::thread::spawn(move || {
         let mut stdout = std::io::stdout();
         for line in BufReader::new(from_server).lines() {
@@ -64,13 +106,13 @@ pub fn run_stdio() -> i32 {
         if line.trim().is_empty() {
             continue;
         }
-        let msg = if first { with_credential(&line, &cred) } else { line };
+        let msg = if first { with_credential(&line, cred) } else { line };
         first = false;
         if writeln!(to_server, "{msg}").and_then(|_| to_server.flush()).is_err() {
             break;
         }
     }
-    let _ = to_server.shutdown(std::net::Shutdown::Write);
+    close(&mut to_server);
     let _ = out.join();
     0
 }

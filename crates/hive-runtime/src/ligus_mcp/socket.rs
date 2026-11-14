@@ -68,10 +68,13 @@ impl SocketEndpoint {
             name: crate::executor::LIGUS_MCP_ID.to_string(),
             command,
             args,
-            env: vec![
+            env: [
                 (super::bridge::SOCKET_ENV.to_string(), self.path.to_string_lossy().into_owned()),
                 (super::bridge::CRED_ENV.to_string(), credential.to_string()),
-            ],
+            ]
+            .into_iter()
+            .chain(super::bridge::sandbox_tcp_env())
+            .collect(),
             socket: self.path.clone(),
             config_dir: self.dir.clone(),
         }

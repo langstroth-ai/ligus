@@ -80,7 +80,7 @@ pub use proposal_sets::{ProposalSet, ScoutAssessment, SetPhase};
 pub use proposals::{ActionProposal, ProposalApproval, ProposalKind, ProposalStatus, ProposedCommand};
 pub use runtime::{Driver, ModelProviderKind, RuntimeCapabilities, RuntimeLocation, RuntimeTarget};
 pub use schedule::ScheduleTrigger;
-pub use session::{ChatSession, MAX_CASCADE_DEPTH};
+pub use session::{turn_claim_key, ChatSession, MAX_CASCADE_DEPTH};
 pub use skills::SkillProfile;
 pub use time_util::Timestamp;
 pub use vault::{MountedVault, VaultSource};

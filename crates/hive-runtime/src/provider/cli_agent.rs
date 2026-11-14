@@ -8,7 +8,7 @@
 
 use std::process::{ExitStatus, Stdio};
 
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::io::BufReader;
 
 use super::anthropic::ProviderError;
 use super::dispatch::StreamActivity;
@@ -258,18 +258,16 @@ pub(crate) async fn run_cli<P: CliStreamParser>(
     // Drain stderr concurrently so a chatty CLI can't block on a full pipe.
     let stderr_task = child.stderr.take().map(|mut e| {
         tokio::spawn(async move {
-            let mut buf = String::new();
-            let _ = e.read_to_string(&mut buf).await;
-            buf
+            super::bounded::read_capped(&mut e, super::bounded::MAX_STDERR_BYTES).await
         })
     });
-    let mut reader = BufReader::new(stdout).lines();
+    let mut reader = super::bounded::BoundedLines::new(BufReader::new(stdout));
     let idle = super::turn_idle_timeout();
     loop {
         let line = match tokio::time::timeout(idle, reader.next_line()).await {
             Ok(Ok(Some(line))) => line,
             Ok(Ok(None)) => break,
-            Ok(Err(e)) => return Err(ProviderError::Subprocess(format!("read stdout: {e}"))),
+            Ok(Err(e)) => return Err(ProviderError::Subprocess(format!("{}: {e}", kind.display()))),
             Err(_) => {
                 return Err(ProviderError::Subprocess(format!(
                     "{} produced no output for {}s — it may be waiting on sign-in or a blocked tool. {} Raise LIGUS_TURN_IDLE_TIMEOUT_SECS for long silent steps.",

@@ -1315,6 +1315,14 @@ impl ChatService {
             .unwrap_or(true))
     }
 
+    /// [`Self::claim_turn`] for one receiver of `trigger`: a hand-off reply
+    /// can start several agents (up to `maxHandoffs`), each possibly on
+    /// another device, so the claim is keyed by (trigger, agent)
+    /// ([`hive_core::turn_claim_key`]). `None` is the plain trigger claim.
+    pub fn claim_turn_for(&mut self, session_id: Uuid, workspace_id: Uuid, trigger_id: Uuid, agent_id: Option<Uuid>) -> Result<bool> {
+        self.claim_turn(session_id, workspace_id, hive_core::turn_claim_key(trigger_id, agent_id))
+    }
+
     /// Rename the session (manual, or auto-generated from the first exchange).
     pub fn set_title(
         &mut self,
@@ -2858,6 +2866,28 @@ mod tests {
         // No account id → publish_identity is a no-op (local-only, unverifiable).
         let author = ActorIdentity::new("u1", "Mara", hive_core::ActorKind::Human);
         (ChatService::new(store, device_id, kp, account_kp, author), public)
+    }
+
+    /// A hand-off reply that starts two receivers on two devices: device A
+    /// claims the reply for the first receiver, and device B must still be
+    /// able to claim it for the second one (claims keyed by trigger alone
+    /// left the second receiver unanswered). The same receiver stays
+    /// single-answer.
+    #[test]
+    fn turn_claims_are_keyed_by_trigger_and_receiver() {
+        let (mut svc, _pk) = service();
+        let wid = Uuid::new_v4();
+        let chat = svc.create_chat("A", wid, "anthropic").unwrap();
+        let reply = svc.post_user_message(chat.id, wid, "hand-off reply stands in here").unwrap().id;
+        let (first, second) = (Uuid::new_v4(), Uuid::new_v4());
+        let device_a = Uuid::new_v4();
+        // Device A's claim for the first receiver, synced in.
+        svc.append_signed(chat.id, wid, SessionEvent::TurnClaimed { trigger_id: hive_core::turn_claim_key(reply, Some(first)), device_id: device_a }).unwrap();
+        assert!(svc.claim_turn_for(chat.id, wid, reply, Some(second)).unwrap(), "the second receiver runs here");
+        assert!(!svc.claim_turn_for(chat.id, wid, reply, Some(first)).unwrap(), "the first receiver is device A's");
+        assert!(svc.claim_turn_for(chat.id, wid, reply, Some(second)).unwrap(), "re-claiming our own is idempotent");
+        // A plain trigger claim is unchanged (old devices interoperate).
+        assert_eq!(hive_core::turn_claim_key(reply, None), reply);
     }
 
     #[test]

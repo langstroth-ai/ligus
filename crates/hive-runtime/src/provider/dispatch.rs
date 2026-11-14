@@ -488,7 +488,10 @@ async fn stream_with_tools_inner<E: ToolExecutor>(
                 .with_api_key_header(rt.provider == ModelProviderKind::Azure)
                 .with_provider_label(provider_label(rt.provider))
                 .with_extra_body(openai_request_extras(rt))
-                .with_context_window(tool_loop_context_window(rt));
+                .with_context_window(tool_loop_context_window(rt))
+                // Hosted APIs bill per token: their reported usage is charged
+                // to the turn's maxSpendUsd. Local and custom servers are free.
+                .with_spend_metering(matches!(rt.provider, ModelProviderKind::OpenAI | ModelProviderKind::OpenRouter | ModelProviderKind::Azure));
             match tools.filter(|t| !t.defs.is_empty()) {
                 Some(t) if openai_tools_allowed(rt) => {
                     tracing::info!(target: "dispatch", provider = provider_label(rt.provider), host = %client.host(), model = %rt.model, tools = t.defs.len(), "openai-wire turn with tools");

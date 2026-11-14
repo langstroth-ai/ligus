@@ -464,6 +464,9 @@ async fn people_channels_and_chat_details() {
     assert_eq!(coder["avatarUrl"], avatar);
     assert_eq!(coder["avatarColorHex"], "#336699");
     assert_eq!(coder["hostKind"], "ownerDevice");
+    // Its owner, so the phone can tell whether its person may answer the
+    // agent's permission requests.
+    assert_eq!(coder["ownerActorId"], json!(desktop_actor));
     let host = this_host(&h).await;
     make_serve_admin(&h).await;
     let moved = h
@@ -3048,9 +3051,11 @@ async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
     let seen = collect_until(&mut rx, 30, |evs| evs.iter().any(|(n, _, _)| n == "ask.pending")).await;
     let ask = seen.iter().find(|(n, _, _)| n == "ask.pending").map(|(_, d, _)| d["ask"].clone()).expect("ask.pending pushed");
     assert_eq!(ask["question"], "Which database?");
+    assert_eq!(ask["kind"], "question", "the ask says what it is; the phone doesn't parse its text");
     let ask_id = ask["id"].as_str().unwrap().to_string();
     let listed = h.get(&format!("/v1/chats/{chat_id}/asks")).await;
     assert_eq!(listed["asks"][0]["open"], json!(true));
+    assert_eq!(listed["asks"][0]["kind"], "question");
     let answered = h.send(reqwest::Method::POST, &format!("/v1/asks/{ask_id}/answer"), Some(json!({ "optionIndex": 1 }))).await;
     assert_eq!(answered["ask"]["answer"], "postgres");
 

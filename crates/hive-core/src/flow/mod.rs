@@ -445,6 +445,12 @@ pub struct HumanAsk {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub closed: bool,
     pub at_ms: i64,
+    /// A permission escalation (an ACP agent asking to run something above
+    /// its tier), posted by the host, rather than an agent's question. Only
+    /// the host's person or the agent's owner can grant one. Older asks
+    /// lack the field and are questions.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub permission: bool,
 }
 
 /// A human's answer to a [`HumanAsk`].

@@ -53,10 +53,12 @@ async fn run_bridge(socket_in_plan: bool) -> Result<Vec<Value>, String> {
     if socket_in_plan {
         policy.ligus_mcp_socket = Some(socket.clone());
     }
-    let env = vec![
+    let mut env = vec![
         ("LIGUS_MCP_SOCKET".to_string(), socket.to_string_lossy().into_owned()),
         ("LIGUS_TURN_CRED".to_string(), turn.credential().to_string()),
     ];
+    // Under bubblewrap the bridge goes through the helper's forwarder (C-10).
+    env.extend(hive_runtime::ligus_mcp::bridge::sandbox_tcp_env());
     let work = tempfile::tempdir().unwrap();
     let out = executor::with_turn(policy, async {
         let spec = SpawnSpec::new(Purpose::Agent(ModelProviderKind::ClaudeCode), BRIDGE, Vec::<String>::new()).cwd(Some(work.path())).env(&env);

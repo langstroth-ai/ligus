@@ -11,7 +11,8 @@
 //! (version 1)(allow default)
 //! (deny file-write*)
 //! (allow file-write* (subpath "<worktree>") (subpath "<turn tmp>") <state dirs> <ttys, /dev/null>)
-//! (deny file-write* (subpath "<worktree>/.git") <protected dirs and files>)
+//! (deny file-write* (subpath "<worktree>/.git") <protected dirs and files>
+//!   (regex #"^<worktree>/(.*/)?[.][gG][iI][tT](/.*)?$") …)  ; each name, any depth, any case
 //! (deny file-read* file-write* (subpath "<data dir>") (subpath "~/.ssh") (literal "<serve.token>") …)
 //! (allow file-read* (subpath "<worktree>") <readable dirs inside a denied one>)
 //! (deny mach-lookup (global-name-prefix "com.apple.coreservices."))   ; no LaunchServices launches
@@ -47,6 +48,61 @@ fn q(p: &Path) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+/// An SBPL regex for `s`, matched without regard to ASCII case (macOS file
+/// systems are case-insensitive by default, so `.CLAUDE/` is `.claude/`).
+fn ci_regex(s: &str) -> String {
+    let mut r = String::new();
+    for c in s.chars() {
+        match c {
+            c if c.is_ascii_alphabetic() => {
+                r.push('[');
+                r.push(c.to_ascii_lowercase());
+                r.push(c.to_ascii_uppercase());
+                r.push(']');
+            }
+            c if c.is_ascii_digit() || matches!(c, '/' | '-' | '_' | ' ') => r.push(c),
+            ']' | '\\' | '^' => {
+                r.push('\\');
+                r.push(c);
+            }
+            c => {
+                r.push('[');
+                r.push(c);
+                r.push(']');
+            }
+        }
+    }
+    r
+}
+
+/// The deny-write filters for the plan's read-only paths: each as given
+/// (`subpath`), and each top-level protected name (`.git`, `.claude`,
+/// `ligus.config.toml`, …) at any depth below the worktree, in any case.
+fn protected_filters(plan: &EnforcementPlan) -> String {
+    let mut p = String::new();
+    for r in &plan.read_only {
+        p.push_str(&format!(" (subpath {})", q(r)));
+    }
+    let wt = canonical(&plan.worktree);
+    let wt_s = wt.to_string_lossy();
+    if wt_s.contains('"') {
+        // Not expressible in an SBPL regex literal; the subpaths still hold.
+        return p;
+    }
+    for r in &plan.read_only {
+        let r = canonical(r);
+        if r.parent() != Some(wt.as_path()) {
+            continue;
+        }
+        let Some(name) = r.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
+        if name.contains('"') {
+            continue;
+        }
+        p.push_str(&format!(" (regex #\"^{}/(.*/)?{}(/.*)?$\")", ci_regex(&wt_s), ci_regex(&name)));
+    }
+    p
+}
+
 /// The SBPL profile for `plan` (`proxy_port`: the egress proxy's port).
 pub fn profile(plan: &EnforcementPlan, proxy_port: Option<u16>) -> String {
     let mut p = String::from("(version 1)\n(allow default)\n");
@@ -60,11 +116,7 @@ pub fn profile(plan: &EnforcementPlan, proxy_port: Option<u16>) -> String {
     }
     p.push_str(" (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/dtracehelper\") (regex #\"^/dev/tty\") (regex #\"^/dev/fd/\") (regex #\"^/dev/ptmx\") (regex #\"^/dev/ttys\"))\n");
     if plan.worktree_writable && !plan.read_only.is_empty() {
-        p.push_str("(deny file-write*");
-        for r in &plan.read_only {
-            p.push_str(&format!(" (subpath {})", q(r)));
-        }
-        p.push_str(")\n");
+        p.push_str(&format!("(deny file-write*{})\n", protected_filters(plan)));
     }
     // Reads (and writes) of Ligus's data, keys and the user's credentials.
     if !plan.deny_read.is_empty() {
@@ -89,11 +141,7 @@ pub fn profile(plan: &EnforcementPlan, proxy_port: Option<u16>) -> String {
         if inside_denied {
             p.push_str(&format!("(allow file-write* (subpath {}))\n", q(&plan.worktree)));
             if !plan.read_only.is_empty() {
-                p.push_str("(deny file-write*");
-                for r in &plan.read_only {
-                    p.push_str(&format!(" (subpath {})", q(r)));
-                }
-                p.push_str(")\n");
+                p.push_str(&format!("(deny file-write*{})\n", protected_filters(plan)));
             }
         }
     }

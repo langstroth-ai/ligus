@@ -9324,10 +9324,18 @@ async fn respond_once(
     let (workspace_id, responder, trigger_id) = plan;
     // Cross-device single-answer: ownership is account-scoped, so all of the
     // owner's online devices would otherwise answer. Claim the turn; if another
-    // device already won the claim, back off.
+    // device already won the claim, back off. An agent reply hands the turn
+    // to an agent: that claim is per receiver (a reply can start several, on
+    // several devices), the same key `handoff_turn` claims.
     {
         let mut svc = state.service.lock().unwrap();
-        if !svc.claim_turn(sid, workspace_id, trigger_id).map_err(map_err)? {
+        let from_agent = svc
+            .load(sid)
+            .map_err(map_err)?
+            .and_then(|s| s.messages.iter().find(|m| m.id == trigger_id).map(|m| m.role != MessageRole::User))
+            .unwrap_or(false);
+        let receiver = if from_agent { responder.agent_id } else { None };
+        if !svc.claim_turn_for(sid, workspace_id, trigger_id, receiver).map_err(map_err)? {
             return Ok(());
         }
     }
@@ -9368,7 +9376,9 @@ pub(crate) async fn handoff_turn(app: &AppHandle, sid: Uuid, agent_id: Uuid, tri
         if !runs_here_linked(local_only, &links, &session, &local_actor_id, &responder.owner_actor_id, binding) {
             return Ok(());
         }
-        if !svc.claim_turn(sid, session.workspace_id, trigger).map_err(map_err)? {
+        // Keyed by (trigger, receiver): one reply can hand off to several
+        // agents, each of which may run on a different device.
+        if !svc.claim_turn_for(sid, session.workspace_id, trigger, Some(agent_id)).map_err(map_err)? {
             return Ok(());
         }
         (session.workspace_id, responder)

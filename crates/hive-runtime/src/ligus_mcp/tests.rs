@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use super::cred::{self, TurnBinding};
-use super::server::{Budgets, LigusHost, LigusMcp, Outcome, TurnSpec};
+use super::server::{Budgets, CascadeBudgets, LigusHost, LigusMcp, Outcome, TurnSpec};
 use crate::event_store::EventStore;
 use crate::ChatService;
 
@@ -290,7 +290,7 @@ async fn agent_scope_refuses_votes_applies_and_admin_events() {
 #[tokio::test]
 async fn budgets_enforced() {
     let w = world();
-    let b = Budgets { max_tool_calls: 6, max_proposals: 2, max_handoffs: 1, max_asks: 0, max_read_messages: 1, max_spend_usd: Some(1.0) };
+    let b = Budgets { max_tool_calls: 6, max_proposals: 2, max_handoffs: 1, max_asks: 0, max_read_messages: 1, max_spend_usd: Some(1.0), ..Budgets::default() };
     let turn = w.mcp.begin_turn(spec(&w, b));
     for i in 0..2 {
         assert!(!turn.call("ligus_propose_decision", &json!({"title": format!("d{i}"), "body": "b"})).await.is_error);
@@ -306,7 +306,7 @@ async fn budgets_enforced() {
     let r = turn.call("ligus_read_chat", &json!({})).await;
     assert_eq!(body(&r)["budget"], "maxReadMessages");
     // Spend: reported cost over the cap stops every further call.
-    (turn.scope().spend.unwrap())(1.5);
+    let _ = turn.scope().spend.unwrap().charge(1.5);
     let r = turn.call("ligus_read_board", &json!({})).await;
     assert_eq!(body(&r)["budget"], "maxSpendUsd");
     let summary = turn.finish();
@@ -783,4 +783,66 @@ async fn host_notes_quote_agent_text_as_one_bounded_line() {
         assert!(!n.body.contains('\n') || !n.body.contains("Hive:"), "{:?}", n.body.chars().take(120).collect::<String>());
         assert!(n.body.chars().count() <= 600, "{} chars", n.body.chars().count());
     }
+}
+
+/// `ligus_read_proposals` returns up to 50 proposals (2,000 body chars each),
+/// so it is charged against `maxReadMessages` like `ligus_read_chat`.
+#[tokio::test]
+async fn read_proposals_charged_against_read_budget() {
+    let w = world();
+    let turn = w.mcp.begin_turn(spec(&w, Budgets { max_read_messages: 1, ..Budgets::default() }));
+    for i in 0..2 {
+        assert!(!turn.call("ligus_propose_decision", &json!({"title": format!("d{i}"), "body": "b"})).await.is_error);
+    }
+    let r = turn.call("ligus_read_proposals", &json!({})).await;
+    assert!(r.is_error, "two proposals read under a one-item read budget: {}", r.text);
+    assert_eq!(body(&r)["budget"], "maxReadMessages");
+}
+
+/// One human message can fan out through hand-offs into many turns, each
+/// with its own per-turn budget. A cascade budget is shared by every turn
+/// descended from the same human message: the receiver of a hand-off draws
+/// on what the handing turn left, and a new human message starts afresh.
+#[tokio::test]
+async fn cascade_budget_is_shared_across_handoffs() {
+    let w = world();
+    let b = Budgets { cascade: CascadeBudgets { max_proposals: 3, ..CascadeBudgets::default() }, ..Budgets::default() };
+    let a = w.mcp.begin_turn(spec(&w, b.clone()));
+    for i in 0..2 {
+        assert!(!a.call("ligus_propose_decision", &json!({"title": format!("a{i}"), "body": "b"})).await.is_error);
+    }
+    a.finish();
+    // The receiver's turn answers coder's reply (a hand-off).
+    let recv = w.host.svc.lock().unwrap().begin_assistant_message(w.chat, w.wid, "reviewer", "rt", Some(w.reviewer), Some(w.reply)).unwrap();
+    let t2 = w.mcp.begin_turn(TurnSpec { agent_id: Some(w.reviewer), author: "reviewer".into(), message_id: recv, ..spec(&w, b.clone()) });
+    assert!(!t2.call("ligus_propose_decision", &json!({"title": "b1", "body": "b"})).await.is_error);
+    let r = t2.call("ligus_propose_decision", &json!({"title": "b2", "body": "b"})).await;
+    assert!(r.is_error, "the cascade's fourth proposal was filed: {}", r.text);
+    assert_eq!(body(&r)["budget"], "cascadeProposals");
+    t2.finish();
+    // A new human message is a new cascade.
+    let reply2 = {
+        let mut svc = w.host.svc.lock().unwrap();
+        let user = svc.post_user_message(w.chat, w.wid, "and another thing").unwrap();
+        svc.begin_assistant_message(w.chat, w.wid, "coder", "rt", Some(w.agent), Some(user.id)).unwrap()
+    };
+    let t3 = w.mcp.begin_turn(TurnSpec { message_id: reply2, ..spec(&w, b) });
+    assert!(!t3.call("ligus_propose_decision", &json!({"title": "c1", "body": "b"})).await.is_error);
+}
+
+/// An ACP permission escalation posts a question to the chat's people like
+/// `ligus_ask_human` does, so it counts against `maxAsks`: past it the
+/// request is denied without asking anyone.
+#[tokio::test]
+async fn permission_escalations_count_against_max_asks() {
+    let w = world();
+    let t = w.mcp.begin_turn(spec(&w, Budgets { max_asks: 1, ..Budgets::default() }));
+    let asker = t.asker();
+    let opts = || vec!["Allow once".to_string(), "Deny".to_string()];
+    assert!(asker.ask("run x?".into(), opts(), Duration::from_millis(300)).await.is_none());
+    assert!(asker.ask("run y?".into(), opts(), Duration::from_millis(300)).await.is_none());
+    let s = w.host.svc.lock().unwrap().load(w.chat).unwrap().unwrap();
+    assert_eq!(s.flow.asks.len(), 1, "an escalation was posted past maxAsks");
+    let r = t.call("ligus_ask_human", &json!({"question": "?"})).await;
+    assert_eq!(body(&r)["budget"], "maxAsks");
 }

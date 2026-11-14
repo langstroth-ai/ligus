@@ -6,8 +6,10 @@
 //! - the pause counter: while an ask-the-human is pending, idle timeouts are
 //!   suspended and only the ask's own timeout applies (D.4.2);
 //! - the human asker that ACP permission escalations go to;
-//! - a spend sink for runtimes that report cost (ACP `usage_update`), so the
-//!   per-turn `maxSpendUsd` budget is enforced where usage is reported.
+//! - the turn's spend meter ([`SpendMeter`]): ACP `usage_update` reports and
+//!   the API runtimes' token usage (priced by [`crate::spend`]) are charged
+//!   to it, and once the per-turn `maxSpendUsd` budget is used up the turn is
+//!   cancelled, not just refused further Ligus tool calls.
 //!
 //! A host sets it around dispatch with [`with_agent_turn`]; adapters read it
 //! with [`current`]. With no scope set, adapters behave as before: no Ligus
@@ -93,8 +95,8 @@ pub struct AgentTurnScope {
     /// > 0 while the turn is paused on a human.
     pub paused: Arc<AtomicUsize>,
     pub asker: Option<Arc<dyn HumanAsker>>,
-    /// Called with each reported cost delta (USD).
-    pub spend: Option<Arc<dyn Fn(f64) + Send + Sync>>,
+    /// The turn's spend meter (`maxSpendUsd`).
+    pub spend: Option<Arc<SpendMeter>>,
     /// The Ligus MCP turn, for in-process tool loops (folded tools).
     pub ligus: Option<Arc<crate::ligus_mcp::TurnHandle>>,
     /// Content-free notes for the host to record as device-local facts
@@ -110,6 +112,88 @@ impl std::fmt::Debug for AgentTurnScope {
             .field("asker", &self.asker.is_some())
             .finish()
     }
+}
+
+/// Why a spend report ended the turn.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SpendError {
+    /// The budget is used up.
+    Exceeded { total: f64, max: f64 },
+    /// A cost that can't be counted (negative, not a number).
+    Invalid(String),
+}
+
+impl std::fmt::Display for SpendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SpendError::Exceeded { total, max } => write!(
+                f,
+                "spend budget reached: this turn has cost about ${total:.2} of its ${max:.2} maxSpendUsd (LIGUS_MCP_MAX_SPEND_USD), so it was stopped"
+            ),
+            SpendError::Invalid(why) => write!(f, "the turn was stopped because its spend can't be counted against maxSpendUsd: {why}"),
+        }
+    }
+}
+
+/// What one turn has spent, against its `maxSpendUsd` (if any). Shared by
+/// the runtime adapters (which charge it) and the Ligus MCP server (which
+/// refuses tool calls once it is used up).
+#[derive(Debug, Default)]
+pub struct SpendMeter {
+    max: Option<f64>,
+    total: std::sync::Mutex<f64>,
+}
+
+impl SpendMeter {
+    pub fn new(max: Option<f64>) -> Arc<Self> {
+        Arc::new(Self { max: max.filter(|m| m.is_finite() && *m > 0.0), total: std::sync::Mutex::new(0.0) })
+    }
+
+    pub fn max(&self) -> Option<f64> {
+        self.max
+    }
+
+    pub fn total(&self) -> f64 {
+        *self.total.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Whether the budget is used up.
+    pub fn exhausted(&self) -> bool {
+        self.max.is_some_and(|m| self.total() >= m)
+    }
+
+    /// Charge `usd`. `Err` = the turn must end: the budget is used up, or
+    /// the amount can't be counted (only matters when there is a budget).
+    pub fn charge(&self, usd: f64) -> Result<(), SpendError> {
+        if !usd.is_finite() || usd < 0.0 {
+            return match self.max {
+                Some(_) => Err(SpendError::Invalid(format!("a cost of {usd} was reported"))),
+                None => Ok(()),
+            };
+        }
+        let total = {
+            let mut t = self.total.lock().unwrap_or_else(|e| e.into_inner());
+            *t += usd;
+            *t
+        };
+        match self.max {
+            Some(max) if total >= max => Err(SpendError::Exceeded { total, max }),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// Charge the current turn's meter (no-op without one).
+pub fn charge_spend(usd: f64) -> Result<(), SpendError> {
+    match current().and_then(|s| s.spend.clone()) {
+        Some(m) => m.charge(usd),
+        None => Ok(()),
+    }
+}
+
+/// Whether the current turn has a spend budget.
+pub fn has_spend_budget() -> bool {
+    current().and_then(|s| s.spend.clone()).is_some_and(|m| m.max().is_some())
 }
 
 /// Holds the turn paused (idle timers suspended) until dropped.

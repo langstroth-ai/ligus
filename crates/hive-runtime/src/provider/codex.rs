@@ -18,7 +18,7 @@
 use std::process::Stdio;
 
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::io::BufReader;
 
 use super::anthropic::{ChatTurn, ProviderError};
 
@@ -90,18 +90,16 @@ pub async fn stream_reply(
     // stderr pipe while we're blocked reading stdout.
     let stderr_task = child.stderr.take().map(|mut e| {
         tokio::spawn(async move {
-            let mut buf = String::new();
-            let _ = e.read_to_string(&mut buf).await;
-            buf
+            super::bounded::read_capped(&mut e, super::bounded::MAX_STDERR_BYTES).await
         })
     });
-    let mut reader = BufReader::new(stdout).lines();
+    let mut reader = super::bounded::BoundedLines::new(BufReader::new(stdout));
 
     let mut assembled = String::new();
     while let Some(line) = reader
         .next_line()
         .await
-        .map_err(|e| ProviderError::Subprocess(format!("read stdout: {e}")))?
+        .map_err(|e| ProviderError::Subprocess(format!("{program}: {e}")))?
     {
         if let Some(text) = extract_agent_message(&line) {
             assembled.push_str(&text);

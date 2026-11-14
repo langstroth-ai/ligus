@@ -16,7 +16,7 @@
 use std::process::Stdio;
 
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWriteExt, BufReader};
 
 use super::anthropic::{ChatTurn, ProviderError};
 use super::dispatch::StreamActivity;
@@ -278,12 +278,10 @@ pub async fn stream_reply(
     // read it in parallel and use the captured text for the failure path below.
     let stderr_task = child.stderr.take().map(|mut e| {
         tokio::spawn(async move {
-            let mut buf = String::new();
-            let _ = e.read_to_string(&mut buf).await;
-            buf
+            super::bounded::read_capped(&mut e, super::bounded::MAX_STDERR_BYTES).await
         })
     });
-    let mut reader = BufReader::new(stdout).lines();
+    let mut reader = super::bounded::BoundedLines::new(BufReader::new(stdout));
 
     // Idle timeout, not wall-clock. The cap exists to catch a runtime that streams
     // *nothing* (wedged on auth/input/a blocked tool) — not to bound how long real
@@ -300,7 +298,7 @@ pub async fn stream_reply(
         let line = match tokio::time::timeout(idle, reader.next_line()).await {
             Ok(Ok(Some(line))) => line,
             Ok(Ok(None)) => break, // clean EOF
-            Ok(Err(e)) => return Err(ProviderError::Subprocess(format!("read stdout: {e}"))),
+            Ok(Err(e)) => return Err(ProviderError::Subprocess(format!("claude: {e}"))),
             Err(_) => {
                 // No output at all for the idle window — dropping the future kills
                 // the CLI (kill_on_drop) once we return.
@@ -432,6 +430,26 @@ mod tests {
         }
         assert!(!root.join("escape.txt").exists(), "wrote outside its worktree");
         assert!(!report.contains("<html"), "reached the network directly: {report}");
+    }
+
+    /// The legacy adapter reads the CLI's stdout line by line: a 100 MiB
+    /// line ends the turn at the line cap instead of growing the host's
+    /// buffer.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn oversized_output_line_ends_the_turn() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let fake = dir.path().join("claude");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\nhead -c 104857600 /dev/zero | tr '\\0' x\necho\necho '{\"type\":\"result\",\"result\":\"ok\"}'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let r = stream_reply(fake.to_str().unwrap(), &[], dir.path().to_str(), &[], None, &[], |_| {}, |_| {}).await;
+        let err = r.expect_err("a 100 MiB line was accepted").to_string();
+        assert!(err.contains("longer than"), "{err}");
     }
 
     #[test]

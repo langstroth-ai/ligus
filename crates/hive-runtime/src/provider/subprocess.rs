@@ -9,7 +9,7 @@
 use std::process::Stdio;
 use std::time::Duration;
 
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
 use super::anthropic::{ChatTurn, ProviderError};
@@ -117,9 +117,7 @@ pub async fn run_with(
     // stderr pipe while we're blocked reading stdout.
     let stderr_handle = child.stderr.take().map(|mut err| {
         tokio::spawn(async move {
-            let mut buf = String::new();
-            let _ = err.read_to_string(&mut buf).await;
-            buf
+            super::bounded::read_capped(&mut err, super::bounded::MAX_STDERR_BYTES).await
         })
     });
 
@@ -127,7 +125,7 @@ pub async fn run_with(
         .stdout
         .take()
         .ok_or_else(|| ProviderError::Subprocess("no stdout".into()))?;
-    let mut reader = BufReader::new(stdout).lines();
+    let mut reader = super::bounded::BoundedLines::new(BufReader::new(stdout));
 
     // Bound the whole run so a tool that hangs (e.g. `pi` waiting on a
     // down Ollama) can't block the turn forever. Kill the child on timeout.
@@ -137,7 +135,7 @@ pub async fn run_with(
         while let Some(line) = reader
             .next_line()
             .await
-            .map_err(|e| ProviderError::Subprocess(format!("read stdout: {e}")))?
+            .map_err(|e| ProviderError::Subprocess(format!("{program}: {e}")))?
         {
             let chunk = format!("{line}\n");
             assembled.push_str(&chunk);

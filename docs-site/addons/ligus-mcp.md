@@ -46,6 +46,10 @@ changes workspace settings.
 | `ligus_ask_human` | `question`, `options? ≤ 6`, `timeoutSecs ≤ 3600` | Asks the chat's people. **The turn pauses** until someone answers or the timeout passes (then `{"error":"no_answer"}`) |
 | `ligus_report` | `status: done\|blocked\|needsReview`, `summary ≤ 400`, `filesTouched?`, `confidence?` | A short self-report, shown on the turn. Never used for scoring |
 
+A hand-off's receivers are claimed one by one: when a reply hands off to
+two agents that run on different devices, each device runs its own
+receiver exactly once.
+
 The JSON Schemas are in
 `crates/hive-runtime/src/ligus_mcp/schema/` and are frozen per release: a
 test fails when one changes.
@@ -96,13 +100,56 @@ Per turn, and set per device:
 | Tool calls (every call, unknown tools included) | 64 | `LIGUS_MCP_MAX_TOOL_CALLS` |
 | Proposals (any kind) | 8 | `LIGUS_MCP_MAX_PROPOSALS` |
 | Hand-offs | 2 | `LIGUS_MCP_MAX_HANDOFFS` |
-| Questions | 3 | `LIGUS_MCP_MAX_ASKS` |
-| Messages read | 500 | `LIGUS_MCP_MAX_READ_MESSAGES` |
-| Spend (USD) | unset | `LIGUS_MCP_MAX_SPEND_USD`, counted where the runtime reports cost (ACP `usage_update`) |
+| Questions (ACP permission requests included) | 3 | `LIGUS_MCP_MAX_ASKS` |
+| Messages and proposals read | 500 | `LIGUS_MCP_MAX_READ_MESSAGES` |
+| Spend (USD) | unset | `LIGUS_MCP_MAX_SPEND_USD`; see [Spend budget](#spend) |
+
+One human message can fan out: a turn hands off, the receiver hands off
+again, up to the chat's cascade depth. So every turn that descends from the
+same human message (through hand-offs and replies to agent replies) also
+draws on a **cascade budget**, shared by all of them on this device:
+
+| Cascade budget | Default | Variable |
+|---|---|---|
+| Tool calls | 192 | `LIGUS_MCP_MAX_CASCADE_TOOL_CALLS` |
+| Proposals | 12 | `LIGUS_MCP_MAX_CASCADE_PROPOSALS` |
+| Hand-offs | 6 | `LIGUS_MCP_MAX_CASCADE_HANDOFFS` |
+| Questions (ACP permission requests included) | 6 | `LIGUS_MCP_MAX_CASCADE_ASKS` |
+
+An ACP permission request that would go to a person counts as a question:
+past either question budget it is denied without asking anyone.
 
 When a budget runs out, the call returns
-`{"error":"budget_exhausted","budget":"…"}` along with the note that tells
+`{"error":"budget_exhausted","budget":"…"}` (`maxProposals`,
+`cascadeProposals`, …) along with the note that tells
 the model to finish its answer.
+
+### Spend budget {#spend}
+
+`LIGUS_MCP_MAX_SPEND_USD` caps what one turn may cost. When the turn
+reaches it, Ligus **ends the turn** (an ACP agent gets `session/cancel` and
+is stopped; an API request's stream is closed) with an error that says
+so, and any further Ligus tool call is refused. The budget holds on turns
+without the Ligus tools too.
+
+What is counted:
+
+- **ACP agents:** the cost in their `usage_update` reports. A report must
+  name its currency as USD and never go down; a negative, decreasing,
+  non-USD or currency-less report ends a budgeted turn (without a budget it
+  is ignored). An agent that reports nothing, or reports less than it
+  spent, isn't held by the budget: this counts what the agent says.
+- **Anthropic, OpenAI, OpenRouter and Azure runtimes:** the token usage
+  the API reports, priced by Ligus. Anthropic models use the list prices
+  (cache reads at 0.1x, cache writes at 1.25x input); a model Ligus doesn't
+  know, including every OpenAI model, is priced at the highest rate
+  ($15/$75 per million tokens), so it can only end a turn early. Set
+  `LIGUS_MODEL_PRICES` (`prefix=in/out,…`, USD per million tokens, for
+  example `gpt-4o=2.5/10`) on the device to price yours.
+- Legacy CLI adapters (`claude -p`, `codex exec`, …), aider, pi, Hermes,
+  Ollama and custom endpoints report no cost and aren't counted.
+
+The budget is per turn. A hand-off starts a new turn with its own budget.
 
 ## Audit {#audit}
 

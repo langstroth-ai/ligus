@@ -150,9 +150,9 @@ desktop, `ligus serve`, `ligus worker` and `ligus agent`.
 |---|---|---|
 | Writes | the turn's worktree (only when the turn may write), its scratch dir, the runtime's own state dirs (`~/.claude`, `~/.codex`, `~/.copilot`, …) | the same, as bind mounts on a read-only `/`; Landlock limits writes to them again |
 | Never readable | Ligus's data dir (keys, `settings.json`, the database, `serve.token`), a `--token-file` elsewhere, `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config/gcloud`, `~/.kube`, `~/.netrc`, `~/.git-credentials` | the same (tmpfs over them), plus `$XDG_RUNTIME_DIR`, so the D-Bus session bus and Secret Service are out of reach |
-| Read-only inside the worktree | `.git`, the protected dirs, `ligus.config.toml`, `hive.config.toml`, `.envrc` | the same |
+| Read-only inside the worktree | `.git`, the protected dirs, `ligus.config.toml`, `hive.config.toml`, `.envrc`, matched by name at any depth and in any case (`sub/.claude/`, `.CLAUDE/`) | the same names at the top level (a missing one is pinned by an empty read-only directory); Linux file systems are case-sensitive, so `.CLAUDE/` is a different directory no CLI reads. Nested names are not pinned, but Ligus's own file tools and ACP `fs/*` refuse them |
 | Network | denied except the turn's egress proxy on loopback | a fresh network namespace; the only way out is the egress proxy through a socket |
-| Other | | seccomp denies `ptrace`, `process_vm_*`, `mount`, `bpf`, `keyctl`, kernel-module and `kexec` calls, and new user namespaces |
+| Other | | seccomp denies `ptrace`, `process_vm_*`, `mount`, `bpf`, `keyctl`, kernel-module and `kexec` calls, new user namespaces, and new unix sockets (`socket(AF_UNIX)`), so `docker.sock`, an ssh-agent or a desktop service can't be reached; `socketpair` still works, and the Ligus MCP server is reached through a loopback forwarder inside the sandbox. Known host sockets (`docker.sock`, `podman.sock`, `containerd.sock`, `$SSH_AUTH_SOCK`) are also masked. `LIGUS_SANDBOX_UNIX_SOCKETS=allow` on the device lifts the unix-socket filter (the masks stay) for tools that need sockets of their own |
 
 - **cwd and HOME.** An agent never runs in your home directory, in `/` or in
   Ligus's data dir; a turn without a worktree gets a fresh scratch dir
@@ -182,6 +182,22 @@ desktop, `ligus serve`, `ligus worker` and `ligus agent`.
   `LIGUS_SANDBOX=off`), Ligus still applies the environment allow-list and
   cwd rules, but refuses write-capable agent turns. Read-only turns still
   run.
+- **Why the macOS profile is default-allow.** The Seatbelt profile allows
+  by default and then denies what matters: every file write outside the
+  turn's paths, reads of Ligus's data and your credential dirs, all network
+  except the proxy and the Ligus MCP socket, LaunchServices, Apple Events and
+  the pasteboard. A default-deny profile would also have to allow, by name,
+  every Mach service, sysctl, IOKit class and file the agent CLIs and the
+  tools they run need: `securityd` and `trustd` (the subscription logins and
+  TLS), `opendirectoryd`, `notifyd`, `logd`, `cfprefsd`, POSIX shared memory
+  for Node, ttys, and the toolchains agents call (`cargo`, `npm`, `python`,
+  `go`, `git`). Those differ per CLI and per macOS release, and a missing one
+  fails a turn in ways that look like CLI bugs. That is too much risk for
+  2.0, so it stays a planned change. What default-allow leaves open:
+  agents can look up other Mach/XPC services (one that acts on their behalf
+  runs outside the profile), read files outside the denied dirs, and run any
+  program, all as your user and still under the write, read and network
+  rules above.
 - **One control among several.** The sandbox does not replace the author
   gate, the MCP role gate, review of proposals or the human gate, and it is
   not a boundary against kernel bugs.

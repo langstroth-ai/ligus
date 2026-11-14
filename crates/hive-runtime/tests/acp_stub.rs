@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use hive_core::sandbox::SandboxEnvelope;
 use hive_core::ModelProviderKind;
-use hive_runtime::agent_turn::{AgentTurnScope, HumanAnswer, HumanAsker, McpAttach};
+use hive_runtime::agent_turn::{AgentTurnScope, HumanAnswer, HumanAsker, McpAttach, SpendMeter};
 use hive_runtime::author_gate::GatePlan;
 use hive_runtime::executor::{self, HostKind, TurnPolicy};
 use hive_runtime::provider::acp::{self, AcpCommand, AcpFailure, AcpTurn};
@@ -39,13 +39,24 @@ struct Out {
 }
 
 async fn run(mode: &str, kind: ModelProviderKind, tier_args: &[&str], gate: GatePlan, asker: Option<Arc<Answers>>, wt: &std::path::Path) -> Out {
+    run_budget(mode, kind, tier_args, gate, asker, wt, None).await
+}
+
+async fn run_budget(
+    mode: &str,
+    kind: ModelProviderKind,
+    tier_args: &[&str],
+    gate: GatePlan,
+    asker: Option<Arc<Answers>>,
+    wt: &std::path::Path,
+    max_spend: Option<f64>,
+) -> Out {
     let cmd = AcpCommand { program: STUB.to_string(), args: vec!["--mode".into(), mode.into()] };
     let tier: Vec<String> = tier_args.iter().map(|s| s.to_string()).collect();
     let turns = vec![ChatTurn { role: "user".into(), content: "hi".into() }];
     let wt_s = wt.to_string_lossy().into_owned();
-    let spent = Arc::new(Mutex::new(0.0f64));
-    let s2 = spent.clone();
-    let mut scope = AgentTurnScope { spend: Some(Arc::new(move |d| *s2.lock().unwrap() += d)), ..Default::default() };
+    let meter = SpendMeter::new(max_spend);
+    let mut scope = AgentTurnScope { spend: Some(meter.clone()), ..Default::default() };
     scope.asker = asker.map(|a| a as Arc<dyn HumanAsker>);
     let dir = tempfile::tempdir().unwrap();
     scope.mcp = Some(McpAttach {
@@ -89,7 +100,7 @@ async fn run(mode: &str, kind: ModelProviderKind, tier_args: &[&str], gate: Gate
         }),
     )
     .await;
-    let spend = *spent.lock().unwrap();
+    let spend = meter.total();
     Out { text: text.map_err(|e| e.to_string()), activity, spend }
 }
 
@@ -199,4 +210,51 @@ async fn an_agent_without_acp_is_an_init_failure() {
     )
     .await;
     assert!(matches!(r, Err(AcpFailure::Init(_))), "{:?}", r.err().map(|e| e.to_string()));
+}
+
+/// An agent that writes one 100 MiB line: the host stops reading at the
+/// line cap and ends the turn with a clear error instead of buffering it.
+#[tokio::test]
+async fn oversized_output_line_ends_the_turn() {
+    if !sandbox_ok() {
+        return;
+    }
+    let wt = tempfile::tempdir().unwrap();
+    let out = run("flood", ModelProviderKind::Copilot, &["--allow-tool=read"], GatePlan::Full, None, wt.path()).await;
+    let err = out.text.expect_err("a 100 MiB line was accepted");
+    assert!(err.contains("longer than"), "{err}");
+}
+
+/// Reaching `maxSpendUsd` cancels the turn: the host sends `session/cancel`
+/// and ends the turn with a clear error, instead of only refusing further
+/// Ligus tool calls while the agent keeps working (and spending).
+#[tokio::test]
+async fn spend_budget_cancels_the_turn() {
+    if !sandbox_ok() {
+        return;
+    }
+    let wt = tempfile::tempdir().unwrap();
+    let out = run_budget("spend", ModelProviderKind::Copilot, &["--allow-tool=read"], GatePlan::Full, None, wt.path(), Some(0.40)).await;
+    let err = out.text.expect_err("the turn ran past its spend budget");
+    assert!(err.contains("spend budget"), "{err}");
+    assert!((out.spend - 0.50).abs() < 1e-9, "{}", out.spend);
+    // Under budget the same agent finishes normally.
+    let out = run_budget("spend", ModelProviderKind::Copilot, &["--allow-tool=read"], GatePlan::Full, None, wt.path(), Some(5.0)).await;
+    assert!(out.text.unwrap().contains("kept going"));
+}
+
+/// A cost that can't be counted (not USD) ends a budgeted turn; without a
+/// budget it is ignored.
+#[tokio::test]
+async fn non_usd_usage_ends_a_budgeted_turn() {
+    if !sandbox_ok() {
+        return;
+    }
+    let wt = tempfile::tempdir().unwrap();
+    let out = run_budget("eur", ModelProviderKind::Copilot, &["--allow-tool=read"], GatePlan::Full, None, wt.path(), Some(5.0)).await;
+    let err = out.text.expect_err("a EUR cost was accepted under a USD budget");
+    assert!(err.contains("EUR"), "{err}");
+    let out = run_budget("eur", ModelProviderKind::Copilot, &["--allow-tool=read"], GatePlan::Full, None, wt.path(), None).await;
+    assert!(out.text.unwrap().contains("kept going"));
+    assert_eq!(out.spend, 0.0);
 }
