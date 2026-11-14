@@ -32,15 +32,20 @@ const TTL: Duration = Duration::from_secs(300);
 /// Prepared events kept at once.
 const MAX_PENDING: usize = 32;
 
+/// A fresh prepared-event id: 16 random bytes, base64url.
+fn pending_id(fill: fn(&mut [u8]) -> Result<(), getrandom::Error>) -> Result<String, getrandom::Error> {
+    let mut raw = [0u8; 16];
+    fill(&mut raw)?;
+    Ok(b64url(&raw))
+}
+
 /// Prepared events by id (single use, in memory).
 #[derive(Default)]
 pub struct Pending(Mutex<HashMap<String, (PresenceDraft, Instant)>>);
 
 impl Pending {
-    fn put(&self, draft: PresenceDraft) -> String {
-        let mut raw = [0u8; 16];
-        let _ = getrandom::fill(&mut raw);
-        let id = b64url(&raw);
+    fn put(&self, draft: PresenceDraft) -> Result<String, getrandom::Error> {
+        let id = pending_id(getrandom::fill)?;
         let mut m = self.0.lock().unwrap_or_else(|e| e.into_inner());
         m.retain(|_, (_, at)| at.elapsed() < TTL);
         if m.len() >= MAX_PENDING {
@@ -49,7 +54,7 @@ impl Pending {
             }
         }
         m.insert(id.clone(), (draft, Instant::now()));
-        id
+        Ok(id)
     }
     fn take(&self, id: &str) -> Option<PresenceDraft> {
         let mut m = self.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -117,7 +122,7 @@ pub async fn prepare(State(s): State<std::sync::Arc<Shared>>, Json(req): Json<Pr
     preview["rpId"] = json!(RP_ID);
     preview["allowCredentials"] = json!(r.credential_ids);
     let challenge = b64url(&r.challenge);
-    let id = s.presence_drafts.put(draft);
+    let id = s.presence_drafts.put(draft).map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("no OS randomness: {e}")))?;
     Ok(Json(json!({ "prepareId": id, "challenge": challenge, "preview": preview })))
 }
 
@@ -155,4 +160,17 @@ pub async fn commit(State(s): State<std::sync::Arc<Shared>>, Json(req): Json<Com
     let env = s.lock().commit_presence(draft, a)?;
     s.after_write();
     Ok(Json(json!({ "committed": true, "kind": kind, "eventId": env.event_id })))
+}
+
+#[cfg(test)]
+mod tests {
+    /// No OS randomness: no id (an all-zero id would be guessable, and the
+    /// next one would collide with it).
+    #[test]
+    fn pending_ids_need_randomness() {
+        assert!(super::pending_id(|_| Err(getrandom::Error::UNSUPPORTED)).is_err());
+        let (a, b) = (super::pending_id(getrandom::fill).unwrap(), super::pending_id(getrandom::fill).unwrap());
+        assert_ne!(a, b);
+        assert_eq!(a.len(), 22);
+    }
 }

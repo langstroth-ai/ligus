@@ -569,7 +569,7 @@ pub mod soft {
     impl SoftAuthenticator {
         pub fn es256() -> Self {
             let mut id = [0u8; 16];
-            let _ = getrandom::fill(&mut id);
+            getrandom::fill(&mut id).expect("OS randomness for a credential id");
             Self {
                 credential_id: id.to_vec(),
                 key: Key::Es256(random_es256_key()),

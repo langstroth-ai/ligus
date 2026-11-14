@@ -297,6 +297,13 @@ pub async fn delete_token(State(s): S, peer: Option<Extension<TunnelPeer>>, Path
     Ok(Json(json!({ "deleted": purpose.as_str() })))
 }
 
+/// A device sign-in's nonce: tells a stale poller from the current one.
+fn device_nonce(fill: fn(&mut [u8]) -> Result<(), getrandom::Error>) -> Result<u64, getrandom::Error> {
+    let mut b = [0u8; 8];
+    fill(&mut b)?;
+    Ok(u64::from_le_bytes(b))
+}
+
 /// `POST /v1/forges/:id/auth/device`: start a device sign-in (only ever on
 /// this request: S12). The box polls; the phone opens the URI.
 pub async fn device_start(State(s): S, peer: Option<Extension<TunnelPeer>>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
@@ -313,11 +320,7 @@ pub async fn device_start(State(s): S, peer: Option<Extension<TunnelPeer>>, Path
         return Err(ApiError::new(StatusCode::SERVICE_UNAVAILABLE, super::repos_api::OFFLINE));
     }
     let start = hive_forge::device::start(&ep).await.map_err(forge_err)?;
-    let nonce = {
-        let mut b = [0u8; 8];
-        let _ = getrandom::fill(&mut b);
-        u64::from_le_bytes(b)
-    };
+    let nonce = device_nonce(getrandom::fill).map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("no OS randomness: {e}")))?;
     let session = DeviceSession {
         nonce,
         user_code: start.user_code.clone(),
@@ -396,6 +399,14 @@ pub async fn device_status(State(s): S, peer: Option<Extension<TunnelPeer>>, Pat
 
 #[cfg(test)]
 mod tests {
+    /// No OS randomness: no device sign-in (a zero nonce would let an older
+    /// sign-in's poller overwrite this one's state).
+    #[test]
+    fn device_nonce_needs_randomness() {
+        assert!(super::device_nonce(|_| Err(getrandom::Error::UNSUPPORTED)).is_err());
+        assert_ne!(super::device_nonce(getrandom::fill).unwrap(), super::device_nonce(getrandom::fill).unwrap());
+    }
+
     #[test]
     fn tokens_travel_only_through_the_tunnel_or_loopback() {
         let lan: std::net::SocketAddr = "192.168.1.20:8787".parse().unwrap();
