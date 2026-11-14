@@ -127,6 +127,12 @@ impl ChatService {
         self.write_block.as_deref()
     }
 
+    /// The account signing key's public half (its fingerprint is the
+    /// founder pin an invite carries).
+    pub fn account_public_key(&self) -> [u8; 32] {
+        self.account_keypair.public_key_bytes()
+    }
+
     /// This device's id and its signing keypair's public key.
     pub fn device_public_key(&self) -> [u8; 32] {
         self.keypair.public_key_bytes()

@@ -16,7 +16,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::event_store::EventStore;
-use crate::envelope_verifier::{build_roster, verdict_for};
+use crate::envelope_verifier::verdict_for;
 use crate::identity_verifier::{gate_ingest, shared_cache, IdentityMode, IngestAction, SharedIdentityCache};
 use crate::relay_client::{RelayClient, RelayError, ENVELOPE_PAGE_LIMIT};
 
@@ -568,9 +568,11 @@ impl SyncEngine {
         // Only a *provably-bad* identity (GitHub fetched, key not listed) is
         // quarantined. `Relay` mode (Option A, default) never holds on identity —
         // it is byte-for-byte the pre-existing policy.
-        let mut roster_src = store.roster_envelopes()?;
-        roster_src.extend(decoded.iter().map(|(_, e)| e.clone()));
-        let roster = build_roster(&roster_src);
+        // P0.4: one roster per workspace, from its own stored trust events plus
+        // this batch's trust events only once they verify (batch fixpoint).
+        let batch: Vec<&SessionEventEnvelope> = decoded.iter().map(|(_, e)| e).collect();
+        let rosters = crate::envelope_verifier::rosters_for_batch(store, &batch)?;
+        let empty = crate::envelope_verifier::WorkspaceRoster::default();
         // Recover from a poisoned lock instead of panicking the sync task: the
         // identity cache holds only best-effort verification results (rebuilt/
         // re-fetched), so a panic in a prior holder shouldn't crash every future
@@ -585,7 +587,8 @@ impl SyncEngine {
         // accept per signing device per batch.
         let mut accepted_from: std::collections::HashSet<(Uuid, Option<Uuid>)> = std::collections::HashSet::new();
         for (seq, env) in &decoded {
-            let base = verdict_for(&roster, env);
+            let roster = rosters.get(&env.workspace_id).unwrap_or(&empty);
+            let base = verdict_for(roster, env);
             // The account this event is authored as — `verdict_for` has already
             // confirmed the signing device is cert-verified for it (else it's
             // quarantined as impersonation), so it's the right account to run the
@@ -600,7 +603,7 @@ impl SyncEngine {
             match gate_ingest(self.identity_mode, base, signer_account, account_key, &identity) {
                 IngestAction::Quarantine(reason) => {
                     tracing::warn!(?reason, event_id = %env.event_id, "quarantined a fetched event");
-                    let _ = store.record_signal(env.workspace_id, None, &sync_decision(&roster, env, false, &format!("{reason:?}")));
+                    let _ = store.record_signal(env.workspace_id, None, &sync_decision(roster, env, false, &format!("{reason:?}")));
                     // Provably bad and stable — advance past it (re-fetching won't help).
                     resolved.push(*seq);
                 }
@@ -614,7 +617,7 @@ impl SyncEngine {
                 }
                 IngestAction::Accept => {
                     if accepted_from.insert((env.workspace_id, env.signer_device_id)) {
-                        let _ = store.record_signal(env.workspace_id, None, &sync_decision(&roster, env, true, "accepted"));
+                        let _ = store.record_signal(env.workspace_id, None, &sync_decision(roster, env, true, "accepted"));
                     }
                     self.seen.insert(env.event_id);
                     // This event is now on the relay (we received it from there): queue
@@ -1157,6 +1160,30 @@ mod tests {
         assert_eq!(eng.cursor(), 2);
     }
 
+    /// The config log's founding seed naming `member` as its sole Owner,
+    /// signed and stamped by the member's device (how a workspace begins).
+    fn founding_seed(
+        member: &hive_core::WorkspaceMember,
+        device_id: Uuid,
+        device: &hive_core::crypto::SigningKeypair,
+        lamport: i64,
+    ) -> SessionEventEnvelope {
+        let ws = Uuid::nil();
+        let mut seed = hive_core::ChatSession::new("", ws, "");
+        seed.id = hive_core::workspace_config_session_id(ws);
+        seed.creator_actor_id = member.id.clone();
+        seed.members = vec![member.clone()];
+        let mut e = SessionEventEnvelope::new(seed.id, ws, lamport, SessionEvent::SessionSnapshot { session: Box::new(seed) });
+        e.lamport = lamport as u64;
+        e.actor_stamp = Some(hive_core::ActorStamp {
+            actor: member.actor.clone(),
+            recorded_at: hive_core::Timestamp::epoch(),
+            cfg_frontier: None,
+        });
+        hive_core::sign_envelope(&mut e, device_id, device);
+        e
+    }
+
     #[test]
     fn apply_fetched_rejects_provably_bad_keeps_good() {
         use hive_core::crypto::{DeviceCertificate, SigningKeypair};
@@ -1225,7 +1252,7 @@ mod tests {
             SessionEventEnvelope::new(Uuid::nil(), Uuid::nil(), lamport, payload)
         };
         let all: Vec<SessionEventEnvelope> = vec![
-            plain(1, SessionEvent::MemberAdded { member }),
+            founding_seed(&member, device_id, &device, 4),
             plain(2, SessionEvent::AccountKeyRegistered {
                 account_id,
                 signing_public_key: account.public_key_bytes().to_vec(),
@@ -1521,7 +1548,7 @@ mod tests {
             e
         };
         let trust = vec![
-            signed(1, SessionEvent::MemberAdded { member }),
+            founding_seed(&member, device_id, &device, 4),
             signed(
                 2,
                 SessionEvent::AccountKeyRegistered {

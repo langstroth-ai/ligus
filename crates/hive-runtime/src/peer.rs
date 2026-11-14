@@ -19,7 +19,7 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::envelope_verifier::{build_roster, verdict_for};
+use crate::envelope_verifier::verdict_for;
 use crate::event_store::EventStore;
 
 #[derive(Debug, Error)]
@@ -246,11 +246,12 @@ impl PeerSync {
         }
         self.seen.insert(env.event_id);
 
-        let mut roster_src = store
-            .roster_envelopes()
-            .map_err(|e| PeerError::Store(e.to_string()))?;
-        roster_src.push(env.clone());
-        let roster = build_roster(&roster_src);
+        // P0.4: the workspace's own roster; this envelope's trust content
+        // counts only once it verifies (see rosters_for_batch).
+        let roster = crate::envelope_verifier::rosters_for_batch(store, &[&env])
+            .map_err(|e| PeerError::Store(e.to_string()))?
+            .remove(&env.workspace_id)
+            .unwrap_or_default();
         // Run the SAME gate as the relay path (not just verdict_for): so the
         // Option-C GitHub-identity check applies on P2P too, instead of silently
         // accepting anything not provably-bad. Mirrors sync_engine::apply_fetched.

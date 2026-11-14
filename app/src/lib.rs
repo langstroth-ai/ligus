@@ -607,6 +607,13 @@ struct WorkspaceConn {
     /// fallback (back-compat).
     #[serde(default)]
     founder_actor_id: Option<String>,
+    /// The founder's key fingerprint: hex of the first 16 bytes of SHA-256 of
+    /// the founder's account signing key (Phase 0, P0.4). A joiner pins it with
+    /// `founder_actor_id` (`workspace_pins` in hive.db), so a registration of
+    /// the founder's account under any other key is rejected by the trust
+    /// roster. Absent on invites from builds before it, and left out then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fk: Option<String>,
 }
 
 impl WorkspaceConn {
@@ -667,14 +674,20 @@ mod workspace_invite_tests {
             icon: None,
             dm_account: None,
             founder_actor_id: Some("github:42".into()),
+            fk: Some("00112233445566778899aabbccddeeff".into()),
         };
         let invite = encode_workspace_invite(&conn);
         assert!(invite.starts_with("hivews1:"));
         let back = decode_workspace_invite(&invite).unwrap();
         assert_eq!(back, conn);
         // The founder pin (B2 anchor) survives the round trip so a joiner learns
-        // who legitimately founded the workspace.
+        // who legitimately founded the workspace, and with which key.
         assert_eq!(back.founder_actor_id.as_deref(), Some("github:42"));
+        assert_eq!(back.fk.as_deref(), Some("00112233445566778899aabbccddeeff"));
+        // Without a key fingerprint the invite JSON keeps its old shape.
+        let plain = WorkspaceConn { fk: None, ..conn };
+        let json = serde_json::to_string(&plain).unwrap();
+        assert!(!json.contains("\"fk\""), "{json}");
     }
 
     #[test]
@@ -687,6 +700,7 @@ mod workspace_invite_tests {
             icon: None,
             dm_account: None,
             founder_actor_id: None,
+            fk: None,
         };
         let invite = format!("  {}\n", encode_workspace_invite(&conn));
         let back = decode_workspace_invite(&invite).unwrap();
@@ -723,8 +737,8 @@ mod workspace_invite_tests {
 
     #[test]
     fn same_room_shares_workspace_id() {
-        let a = WorkspaceConn { name: "A".into(), relay_url: "x".into(), room: "shared".into(), key: None, icon: None, dm_account: None, founder_actor_id: None };
-        let b = WorkspaceConn { name: "B".into(), relay_url: "y".into(), room: "shared".into(), key: Some("k".into()), icon: None, dm_account: None, founder_actor_id: Some("github:1".into()) };
+        let a = WorkspaceConn { name: "A".into(), relay_url: "x".into(), room: "shared".into(), key: None, icon: None, dm_account: None, founder_actor_id: None, fk: None };
+        let b = WorkspaceConn { name: "B".into(), relay_url: "y".into(), room: "shared".into(), key: Some("k".into()), icon: None, dm_account: None, founder_actor_id: Some("github:1".into()), fk: None };
         assert_eq!(a.id(), b.id());
     }
 
@@ -764,6 +778,7 @@ mod workspace_invite_tests {
             icon: None,
             dm_account: None,
             founder_actor_id: Some("github:7".into()),
+            fk: None,
         };
         let invite = encode_workspace_invite(&founder);
         let joined = decode_workspace_invite(&invite).unwrap();
@@ -10847,6 +10862,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
                     // for this pre-existing room, so leave it unpinned (in-band
                     // self-consistency fallback).
                     founder_actor_id: None,
+                    fk: None,
                 };
                 s.workspaces.push(conn);
             }
@@ -11779,6 +11795,7 @@ fn set_active_workspace(state: State<AppState>, workspace_id: String) -> Result<
         s.workspace_passphrase = conn.key.clone();
         save_settings(&state.data_dir, &s);
         let founder = conn.founder_actor_id.clone();
+        let fk = conn.fk.clone();
         drop(s);
         *state.active_workspace.lock().unwrap() = id;
         // Announce self into the workspace-wide roster the moment the workspace is
@@ -11790,7 +11807,14 @@ fn set_active_workspace(state: State<AppState>, workspace_id: String) -> Result<
             // Pin the workspace's out-of-band founder (from the invite) BEFORE any
             // projection this activation triggers, so the founder's config seed is
             // the base and a forged low-lamport seed can't take over (B2 residual).
-            svc.set_trusted_founder(founder);
+            svc.set_trusted_founder(founder.clone());
+            // P0.4: pin the founder's key fingerprint from the invite (first pin
+            // wins), so the trust roster rejects a forged founder registration.
+            if let (Some(f), Some(fk)) = (founder.as_deref(), fk.as_deref()) {
+                if let Err(e) = svc.store().set_workspace_pin(id, f, fk) {
+                    tracing::error!(target: "workspace", "pinning the founder failed: {e}");
+                }
+            }
             if let Err(e) =
                 svc.ensure_self_member(hive_core::workspace_config_session_id(id), id)
             {
@@ -11892,7 +11916,12 @@ fn create_workspace(state: State<AppState>, name: String) -> Result<WorkspaceInf
     // This device is founding the workspace, so its account is the founder — pin
     // it in the invite so every joiner (and this device) selects this creator's
     // seed as projection base, and no forged low-lamport seed can displace it (B2).
-    let founder = state.service.lock().unwrap().author().id.clone();
+    let (founder, founder_fk) = {
+        let svc = state.service.lock().unwrap();
+        let fk = (!svc.is_delegated())
+            .then(|| hive_runtime::envelope_verifier::FounderPin::fingerprint_hex(&svc.account_public_key()));
+        (svc.author().id.clone(), fk)
+    };
     let conn = {
         let mut s = state.settings.lock().unwrap();
         // High-entropy, opaque room id (S5 metadata half): the room/sync id is a
@@ -11912,6 +11941,7 @@ fn create_workspace(state: State<AppState>, name: String) -> Result<WorkspaceInf
             icon: None,
             dm_account: None,
             founder_actor_id: (!founder.is_empty()).then(|| founder.clone()),
+            fk: founder_fk.clone(),
         };
         s.workspaces.push(conn.clone());
         save_settings(&state.data_dir, &s);
@@ -13311,6 +13341,8 @@ async fn friend_open_dm(
             } else {
                 friend_account.clone()
             }),
+            // A DM has no shared founder key to pin.
+            fk: None,
         };
         let mut s = state.settings.lock().unwrap();
         s.workspaces.push(conn);

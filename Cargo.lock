@@ -2541,6 +2541,7 @@ dependencies = [
  "hive-core",
  "hive-proto",
  "iroh",
+ "proptest",
  "regex",
  "reqwest 0.12.28",
  "rusqlite",

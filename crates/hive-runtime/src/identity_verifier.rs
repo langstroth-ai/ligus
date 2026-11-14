@@ -189,6 +189,11 @@ pub fn gate_ingest(
             Verdict::Unverifiable(QuarantineReason::PendingApproval) => {
                 IngestAction::Hold("device awaits a second approval (dearth mode)")
             }
+            // A known member's account on a device nobody certified: hold
+            // until the certificate arrives (or forever, for a forgery).
+            Verdict::Unverifiable(QuarantineReason::UncertifiedDevice) => {
+                IngestAction::Hold("device not certified for the member it claims")
+            }
             Verdict::Valid | Verdict::Unverifiable(_) => IngestAction::Accept,
             Verdict::Quarantine(r) => IngestAction::Quarantine(r),
         },

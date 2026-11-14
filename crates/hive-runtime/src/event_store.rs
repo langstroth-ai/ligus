@@ -131,6 +131,16 @@ impl EventStore {
             -- sequence durably applied; `pushed` is the set of event_ids already
             -- on the relay (we pushed them, or ingested them from there) so a
             -- restart never re-sends them.
+            -- Device-local, never synced: each workspace's founder as its
+            -- invite pinned it (account id, and `fk` = hex of the first 16
+            -- bytes of SHA-256 of the founder's account signing key). The
+            -- trust roster disputes a founder registration under another key.
+            CREATE TABLE IF NOT EXISTS workspace_pins (
+                workspace_id TEXT PRIMARY KEY,
+                founder      TEXT NOT NULL,
+                fk           TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS sync_cursor (
                 workspace        TEXT PRIMARY KEY,
                 last_fetched_seq INTEGER NOT NULL
@@ -829,6 +839,28 @@ impl EventStore {
         Ok((session, timeline))
     }
 
+    /// Pin a workspace's founder (first pin wins: a later invite can't move it).
+    pub fn set_workspace_pin(&self, workspace_id: Uuid, founder: &str, fk: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO workspace_pins (workspace_id, founder, fk) VALUES (?1, ?2, ?3)",
+            rusqlite::params![workspace_id.to_string(), founder, fk],
+        )?;
+        Ok(())
+    }
+
+    /// The founder pin of a workspace, if this device recorded one.
+    pub fn workspace_pin(&self, workspace_id: Uuid) -> Result<Option<crate::envelope_verifier::FounderPin>> {
+        let row: Option<(String, String)> = self
+            .conn
+            .query_row(
+                "SELECT founder, fk FROM workspace_pins WHERE workspace_id = ?1",
+                [workspace_id.to_string()],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        Ok(row.and_then(|(f, k)| crate::envelope_verifier::FounderPin::parse(&f, &k)))
+    }
+
     /// The workspace a stored session belongs to, if any of its rows exist.
     pub fn workspace_of(&self, session_id: Uuid) -> Result<Option<Uuid>> {
         let ws: Option<String> = self
@@ -1240,6 +1272,25 @@ mod tests {
         assert_eq!(stored, wire);
         let listed = store.list(sid).unwrap();
         assert_eq!(serde_json::to_string(&listed[0]).unwrap(), wire);
+    }
+
+    #[test]
+    fn workspace_pins_persist_and_the_first_pin_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hive.db");
+        let ws = Uuid::new_v4();
+        let founder = Uuid::new_v4().to_string();
+        let fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&[7u8; 32]);
+        {
+            let store = EventStore::open(&path).unwrap();
+            assert!(store.workspace_pin(ws).unwrap().is_none());
+            store.set_workspace_pin(ws, &founder, &fk).unwrap();
+            // A later invite can't move the pin.
+            store.set_workspace_pin(ws, &Uuid::new_v4().to_string(), &"ab".repeat(16)).unwrap();
+        }
+        let pin = EventStore::open(&path).unwrap().workspace_pin(ws).unwrap().unwrap();
+        assert_eq!(pin.founder_account.to_string(), founder);
+        assert_eq!(pin.fk, crate::envelope_verifier::FounderPin::fingerprint(&[7u8; 32]));
     }
 
     #[test]
