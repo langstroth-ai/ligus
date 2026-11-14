@@ -40,6 +40,8 @@ pub struct DeviceEndpoints {
     pub token_url: String,
     pub client_id: String,
     pub scope: Option<String>,
+    /// The connection is marked internal on this device.
+    pub internal: bool,
 }
 
 /// The Ligus GitHub App's client id: the connection's own (GHES), else
@@ -81,7 +83,7 @@ pub fn endpoints(conn: &Connection) -> Result<DeviceEndpoints> {
             let client_id = github_client_id(conn).ok_or_else(|| {
                 ForgeError::Unsupported("device sign-in for GitHub isn't configured in this build (no Ligus GitHub App client id): use the gh login on this device or paste a fine-grained token".into())
             })?;
-            Ok(DeviceEndpoints { device_url: format!("{base}/login/device/code"), token_url: format!("{base}/login/oauth/access_token"), client_id, scope: None })
+            Ok(DeviceEndpoints { device_url: format!("{base}/login/device/code"), token_url: format!("{base}/login/oauth/access_token"), client_id, scope: None, internal: conn.internal })
         }
         ForgeKind::GitLab => {
             let client_id = gitlab_client_id(conn).ok_or_else(|| {
@@ -92,6 +94,7 @@ pub fn endpoints(conn: &Connection) -> Result<DeviceEndpoints> {
                 token_url: format!("{base}/oauth/token"),
                 client_id,
                 scope: Some(GITLAB_SCOPES.into()),
+                internal: conn.internal,
             })
         }
         ForgeKind::Gitea => Err(ForgeError::Unsupported("Forgejo, Gitea and Codeberg have no device sign-in: paste a token".into())),
@@ -128,9 +131,10 @@ pub enum Poll {
     Expired,
 }
 
-async fn post_form(url: &str, form: &[(&str, &str)]) -> Result<(reqwest::StatusCode, Value)> {
+async fn post_form(url: &str, form: &[(&str, &str)], internal: bool) -> Result<(reqwest::StatusCode, Value)> {
     crate::http::guard_url(url)?;
-    let resp = crate::http::client()
+    crate::http::check_url_address(url, internal)?;
+    let resp = crate::http::client_for(internal)
         .post(url)
         .header("Accept", "application/json")
         .form(form)
@@ -183,7 +187,7 @@ pub async fn start(ep: &DeviceEndpoints) -> Result<DeviceStart> {
     if let Some(s) = &ep.scope {
         form.push(("scope", s.as_str()));
     }
-    let (status, v) = post_form(&ep.device_url, &form).await?;
+    let (status, v) = post_form(&ep.device_url, &form, ep.internal).await?;
     let code = v["device_code"].as_str().filter(|_| status.is_success());
     let Some(code) = code else {
         let why = v["error_description"].as_str().or(v["error"].as_str()).unwrap_or("no device code");
@@ -204,7 +208,7 @@ pub async fn start(ep: &DeviceEndpoints) -> Result<DeviceStart> {
 
 /// Poll once.
 pub async fn poll(ep: &DeviceEndpoints, device_code: &Secret) -> Result<Poll> {
-    let (_, v) = post_form(&ep.token_url, &[("client_id", ep.client_id.as_str()), ("device_code", device_code.expose()), ("grant_type", GRANT)]).await?;
+    let (_, v) = post_form(&ep.token_url, &[("client_id", ep.client_id.as_str()), ("device_code", device_code.expose()), ("grant_type", GRANT)], ep.internal).await?;
     if let Some(t) = token_set(&v) {
         return Ok(Poll::Done(t));
     }
@@ -222,7 +226,8 @@ pub async fn poll(ep: &DeviceEndpoints, device_code: &Secret) -> Result<Poll> {
 }
 
 /// Exchange a refresh token for a new access token.
-pub async fn refresh(token_url: &str, client_id: &str, refresh_token: &Secret) -> Result<TokenSet> {
-    let (_, v) = post_form(token_url, &[("client_id", client_id), ("grant_type", "refresh_token"), ("refresh_token", refresh_token.expose())]).await?;
+/// `internal`: the connection is marked internal on this device.
+pub async fn refresh(token_url: &str, client_id: &str, refresh_token: &Secret, internal: bool) -> Result<TokenSet> {
+    let (_, v) = post_form(token_url, &[("client_id", client_id), ("grant_type", "refresh_token"), ("refresh_token", refresh_token.expose())], internal).await?;
     token_set(&v).ok_or_else(|| ForgeError::NotSignedIn("the device sign-in for this code host expired: sign in again".into()))
 }

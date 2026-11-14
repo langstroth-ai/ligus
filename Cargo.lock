@@ -2655,6 +2655,7 @@ dependencies = [
  "hex",
  "hive-core",
  "hive-forge",
+ "hive-proto",
  "hive-runtime",
  "hkdf",
  "hmac 0.12.1",
@@ -2706,6 +2707,7 @@ dependencies = [
  "async-trait",
  "axum",
  "hive-core",
+ "libc",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -2724,6 +2726,7 @@ name = "hive-proto"
 version = "2.0.0"
 dependencies = [
  "serde",
+ "serde_json",
  "ts-rs",
 ]
 

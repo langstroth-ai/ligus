@@ -30,7 +30,7 @@ use hive_runtime::contacts::{self, ContactsError};
 
 use crate::{
     decode_workspace_invite, encode_workspace_invite, join_workspace_conn, map_err, parse_hex32, random_token,
-    save_settings, set_active_workspace, with_epoch_keys, AppState, LiveSettings, WorkspaceConn,
+    save_settings, set_active_workspace, sign_invite, with_epoch_keys, AppState, LiveSettings, WorkspaceConn,
 };
 
 /// This device's account: id, key fingerprint (when it holds the key).
@@ -40,6 +40,46 @@ fn me(state: &AppState) -> (Option<Uuid>, Option<String>) {
     let fk = (!svc.is_delegated())
         .then(|| hive_runtime::envelope_verifier::FounderPin::fingerprint_hex(&svc.account_public_key()));
     (account, fk)
+}
+
+/// The founder account an invite's signature proves (R1), checked against
+/// the devices the shared logs revoked.
+fn invite_signer(conn: &WorkspaceConn, people: &[CoMember]) -> Option<Uuid> {
+    conn.signed_by(&|d| people.iter().any(|p| p.revoked_devices.contains(&d)))
+}
+
+/// An invite's trust label: a co-member's name and fingerprint count as
+/// theirs only with their device's valid signature.
+fn invite_trust(conn: &WorkspaceConn, people: &[CoMember]) -> dm::FounderTrust {
+    let known = dm::known_fingerprints(people);
+    dm::check_founder(conn.founder_actor_id.as_deref(), conn.fk.as_deref(), &known, invite_signer(conn, people))
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FounderStatusDto {
+    /// Writes into this chat's workspace wait for its founder's signed
+    /// founding to sync (a state, not a failure).
+    waiting: bool,
+    /// The founder's name, when they are a co-member.
+    founder_name: Option<String>,
+}
+
+/// Whether sending in a chat waits for its workspace's founder: an invite's
+/// founder is a claim until the founder's signed founding is on this device,
+/// and nothing is written there before.
+#[tauri::command]
+pub(crate) fn founder_status(state: State<AppState>, session_id: String) -> Result<FounderStatusDto, String> {
+    let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
+    let waiting = {
+        let svc = state.service.lock().unwrap();
+        match svc.store().workspace_of(sid).map_err(map_err)? {
+            Some(ws) => svc.waiting_for_founder(ws).map_err(map_err)?,
+            None => None,
+        }
+    };
+    let founder_name = waiting.and_then(|f| co_members_of(&state).into_iter().find(|c| c.account_id == f)).map(|c| c.display_name);
+    Ok(FounderStatusDto { waiting: waiting.is_some(), founder_name })
 }
 
 fn co_members_of(state: &AppState) -> Vec<CoMember> {
@@ -98,6 +138,9 @@ pub(crate) struct CoMemberDto {
     /// The shared logs disagree about this person's account key: nothing is
     /// sealed to them until that is resolved.
     key_conflict: bool,
+    /// Another co-member's name looks like this one: tell them apart by
+    /// safety code.
+    look_alike: bool,
     /// Devices whose keys are verified on a shared config log.
     devices: u32,
     workspaces: Vec<SharedWorkspaceDto>,
@@ -127,6 +170,7 @@ pub(crate) fn list_co_members(state: State<AppState>) -> Vec<CoMemberDto> {
             avatar_url: c.avatar_url.clone(),
             safety_code: c.safety_code(),
             key_conflict: c.key_conflict,
+            look_alike: c.look_alike,
             devices: c.devices.len() as u32,
             workspaces: c
                 .workspaces
@@ -310,6 +354,7 @@ pub(crate) async fn open_dm(state: State<'_, AppState>, account_id: String) -> R
             fk: Some(my_fk),
             inv: None,
             ek: Vec::new(),
+            sig: None,
         };
         s.workspaces.push(conn.clone());
         save_settings(&state.data_dir, &s);
@@ -318,7 +363,7 @@ pub(crate) async fn open_dm(state: State<'_, AppState>, account_id: String) -> R
     let ws_id = conn.id();
     set_active_workspace(state.clone(), ws_id.to_string())?;
     let inv = state.service.lock().unwrap().issue_invite(ws_id).map_err(map_err)?;
-    let invite = encode_workspace_invite(&with_epoch_keys(&state, WorkspaceConn { inv: Some(inv.to_string()), ..conn }));
+    let invite = encode_workspace_invite(&sign_invite(&state, with_epoch_keys(&state, WorkspaceConn { inv: Some(inv.to_string()), ..conn })));
     let delivered = deliver_invite(&state, &person, &invite).await;
     Ok(OpenDmDto { workspace_id: ws_id.to_string(), invite: Some(invite), delivered, safety_code: person.safety_code() })
 }
@@ -335,9 +380,11 @@ pub(crate) struct InviteInfoDto {
     founder_name: Option<String>,
     /// The founder's safety code as the invite carries it.
     safety_code: Option<String>,
-    /// `known` (a co-member, and the key matches), `mismatch` (a co-member
-    /// with a different key: not from them), `unknown` (compare the code out
-    /// of band) or `none` (the invite carries no code).
+    /// `known` (a co-member whose device signed it, and the key matches),
+    /// `claimed` (names a co-member and their key, but isn't signed by their
+    /// device: it only says it's from them), `mismatch` (a co-member with a
+    /// different key: not from them), `unknown` (compare the code out of
+    /// band) or `none` (the invite carries no code).
     trust: String,
     already_joined: bool,
 }
@@ -348,12 +395,11 @@ pub(crate) fn inspect_invite(state: State<AppState>, code: String) -> Result<Inv
     let conn = decode_workspace_invite(&code)?;
     let (me_account, _) = me(&state);
     let people = co_members_of(&state);
-    let known = dm::known_fingerprints(&people);
-    let trust = dm::check_founder(conn.founder_actor_id.as_deref(), conn.fk.as_deref(), &known);
+    let trust = invite_trust(&conn, &people);
     let founder = conn.founder_actor_id.as_deref().and_then(|f| Uuid::parse_str(f).ok());
     let already_joined = state.settings.lock().unwrap().workspaces.iter().any(|w| w.room == conn.room);
     Ok(InviteInfoDto {
-        workspace_name: if conn.dm_account.is_some() { String::new() } else { conn.display_name() },
+        workspace_name: if conn.dm_account.is_some() { String::new() } else { hive_proto::names::clean_display_name(&conn.display_name()) },
         is_dm: conn.dm_account.is_some(),
         addressed_to_me: me_account.is_some_and(|m| conn.dm_account.as_deref() == Some(m.to_string().as_str())),
         founder_account: founder.map(|f| f.to_string()),
@@ -381,6 +427,7 @@ pub(crate) fn admit_dm_invite(state: &AppState, conn: &mut WorkspaceConn, safety
         conn.fk.as_deref(),
         me_account,
         &known,
+        invite_signer(conn, &people),
         safety_code_confirmed,
         joined,
     )?;
@@ -456,7 +503,7 @@ pub(crate) async fn co_member_invite(
         .unwrap()
         .issue_invite(ws)
         .map_err(|e| format!("Only a workspace Admin can invite people ({e})."))?;
-    let invite = encode_workspace_invite(&with_epoch_keys(&state, WorkspaceConn { inv: Some(inv.to_string()), ..conn }));
+    let invite = encode_workspace_invite(&sign_invite(&state, with_epoch_keys(&state, WorkspaceConn { inv: Some(inv.to_string()), ..conn })));
     let delivered = deliver_invite(&state, &person, &invite).await;
     Ok(CoMemberInviteDto {
         invite,
@@ -620,8 +667,38 @@ async fn deliver_invite(state: &AppState, person: &CoMember, invite: &str) -> bo
         s.workspaces.iter().find(|w| w.id() == ws).map(|w| w.relay_url.trim().to_string()).filter(|r| !r.is_empty())
     };
     let Some(relay) = relay else { return false };
+    // The drop box must be theirs: their record at that cid verifies under
+    // the account key the shared logs register for them, is no older than
+    // the newest one seen for it, and lists a device not revoked (S4). A cid
+    // someone else stamped, or a relay serving a stale record, gets nothing.
+    let client = state.relay_client(&relay);
+    let record = match client.contact_get(&cid).await {
+        Ok(Some(r)) => r.record,
+        Ok(None) => return false,
+        Err(e) => {
+            tracing::info!(target: "contacts", error = %e, "contact record not readable; share the link");
+            return false;
+        }
+    };
+    let checked = {
+        let svc = state.service.lock().unwrap();
+        contacts::accept_contact_record(svc.store(), &cid, &record, person.fingerprint.as_deref(), &|d| {
+            person.revoked_devices.contains(&d)
+        })
+    };
+    match checked {
+        Ok(v) if v.anchored && v.account_id == person.account_id => {}
+        Ok(_) => {
+            tracing::warn!(target: "contacts", "a co-member's contact id holds someone else's record; not delivering");
+            return false;
+        }
+        Err(e) => {
+            tracing::warn!(target: "contacts", error = %e, "contact record refused; share the link");
+            return false;
+        }
+    }
     let Ok(blob) = contacts::seal_drop(invite.as_bytes(), &plan.recipients) else { return false };
-    match state.relay_client(&relay).contact_drop(&cid, &blob).await {
+    match client.contact_drop(&cid, &blob).await {
         Ok(()) => true,
         Err(e) => {
             tracing::info!(target: "contacts", error = %e, "invite not delivered to the drop box; share the link");
@@ -679,7 +756,6 @@ pub(crate) async fn list_pending_invites(state: State<'_, AppState>) -> Result<P
     };
     let (me_account, _) = me(&state);
     let people = co_members_of(&state);
-    let known = dm::known_fingerprints(&people);
     let joined: Vec<String> = state.settings.lock().unwrap().workspaces.iter().map(|w| w.room.clone()).collect();
     let mut out = Vec::new();
     let mut handled_now: BTreeMap<String, Vec<u64>> = BTreeMap::new();
@@ -706,14 +782,14 @@ pub(crate) async fn list_pending_invites(state: State<'_, AppState>) -> Result<P
                 handled.push(item.seq);
                 continue;
             }
-            let trust = dm::check_founder(conn.founder_actor_id.as_deref(), conn.fk.as_deref(), &known);
+            let trust = invite_trust(&conn, &people);
             let founder = conn.founder_actor_id.as_deref().and_then(|f| Uuid::parse_str(f).ok());
             pending.push(item.seq);
             out.push(PendingInviteDto {
                 relay: relay.clone(),
                 seq: item.seq,
                 is_dm,
-                workspace_name: if is_dm { String::new() } else { conn.display_name() },
+                workspace_name: if is_dm { String::new() } else { hive_proto::names::clean_display_name(&conn.display_name()) },
                 founder_account: founder.map(|f| f.to_string()),
                 founder_name: founder.and_then(|f| people.iter().find(|p| p.account_id == f)).map(|p| p.display_name.clone()),
                 safety_code: conn.fk.as_deref().and_then(directory_trust::safety_code),
@@ -749,6 +825,7 @@ pub(crate) async fn list_pending_invites(state: State<'_, AppState>) -> Result<P
 fn trust_str(t: dm::FounderTrust) -> &'static str {
     match t {
         dm::FounderTrust::KnownMatch => "known",
+        dm::FounderTrust::Claimed => "claimed",
         dm::FounderTrust::Mismatch => "mismatch",
         dm::FounderTrust::Unknown => "unknown",
         dm::FounderTrust::NoFingerprint => "none",
@@ -781,11 +858,8 @@ pub(crate) fn accept_pending_invite(
     let mut conn = decode_workspace_invite(&code)?;
     if conn.dm_account.is_some() {
         admit_dm_invite(&state, &mut conn, confirm_safety_code)?;
-    } else {
-        let known = dm::known_fingerprints(&co_members_of(&state));
-        if dm::check_founder(conn.founder_actor_id.as_deref(), conn.fk.as_deref(), &known) == dm::FounderTrust::Mismatch {
-            return Err("the invite's founder key doesn't match the one your shared workspaces have for that person".into());
-        }
+    } else if invite_trust(&conn, &co_members_of(&state)) == dm::FounderTrust::Mismatch {
+        return Err("the invite's founder key doesn't match the one your shared workspaces have for that person".into());
     }
     let joined = join_workspace_conn(state.clone(), conn)?;
     mark_handled(&state, &relay, seq);

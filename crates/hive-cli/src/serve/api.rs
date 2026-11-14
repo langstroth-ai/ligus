@@ -95,6 +95,13 @@ pub(super) fn presence_gate(s: &Shared, peer: Option<&TunnelPeer>, action: &str)
     if !s.lock().is_delegated() {
         return Ok(());
     }
+    presence_gate_always(s, peer, action)
+}
+
+/// The decision of [`presence_gate`] for a host where presence applies:
+/// accept a request from a phone the owner marked as theirs (recorded as
+/// delegated), refuse anything else with `presence_required`.
+pub(super) fn presence_gate_always(s: &Shared, peer: Option<&TunnelPeer>, action: &str) -> ApiResult<()> {
     let owner_phone = peer
         .and_then(|p| s.tunnel.as_ref().and_then(|t| t.registry.get(&p.pid)))
         .is_some_and(|r| r.is_active() && r.owner_phone);
@@ -147,7 +154,7 @@ pub fn message_dto(chat: Uuid, m: &ChatMessage) -> Value {
     let mut v = json!({
         "id": m.id,
         "chatId": chat,
-        "author": m.author,
+        "author": hive_proto::names::clean_display_name(&m.author),
         "role": role_str(m),
         "body": m.body,
         "createdAt": iso(m.created_at),
@@ -177,8 +184,8 @@ pub fn linked_message_dto(chat: &ChatSession, m: &ChatMessage, links: &hive_core
     let Some(name) = chat.members.iter().find(|x| x.actor.id == owner).map(|x| x.actor.display_name.clone()) else {
         return v;
     };
-    v["author"] = json!(format!("{name} via {}", m.author));
-    v["via"] = json!(m.author);
+    v["author"] = json!(format!("{} via {}", hive_proto::names::clean_display_name(&name), hive_proto::names::clean_display_name(&m.author)));
+    v["via"] = json!(hive_proto::names::clean_display_name(&m.author));
     v["actorId"] = json!(owner);
     v
 }
@@ -239,7 +246,7 @@ pub(super) fn status_str(s: ProposalStatus) -> &'static str {
 pub(super) fn proposal_author(s: &ChatSession, p: &ActionProposal) -> String {
     if !p.author_actor_id.is_empty() {
         if let Some(m) = s.members.iter().find(|m| m.id == p.author_actor_id) {
-            return m.actor.display_name.clone();
+            return hive_proto::names::clean_display_name(&m.actor.display_name);
         }
         return p.author_actor_id.clone();
     }
@@ -282,7 +289,7 @@ pub fn proposal_dto(s: &ChatSession, p: &ActionProposal) -> Value {
 fn review_fields(v: &mut Value, s: &ChatSession, p: &ActionProposal) {
     let (kind, name) = hive_runtime::review::author_of(s, p);
     v["authorKind"] = json!(kind);
-    v["authorName"] = json!(name);
+    v["authorName"] = json!(hive_proto::names::clean_display_name(&name));
     let protected = hive_core::sandbox::envelope_for_session(s).protected_dirs;
     v["configImpact"] = json!(hive_runtime::review::config_impact(p, &protected));
     v["humanGate"] = json!(hive_core::guard::human_gate_reason(s, p).is_some());
@@ -337,8 +344,8 @@ pub(super) fn role_name(r: WorkspaceRole) -> &'static str {
 /// roster name, else a workspace agent's `@name`, else a short id.
 pub(super) fn actor_name(s: &ChatSession, actor_id: &str) -> String {
     if let Some(m) = s.members.iter().find(|m| m.id == actor_id) {
-        if !m.actor.display_name.trim().is_empty() {
-            return m.actor.display_name.clone();
+        if !hive_proto::names::clean_display_name(&m.actor.display_name).is_empty() {
+            return hive_proto::names::clean_display_name(&m.actor.display_name);
         }
     }
     if let Some(a) = s.workspace_agents.iter().find(|a| a.id.to_string() == actor_id) {

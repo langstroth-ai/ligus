@@ -1351,7 +1351,7 @@ fn usage() -> ! {
          ligus serve enroll [--new-device]   print the code that makes this box your own device\n                                       \
          (approve it on your desktop; --new-device after a revocation)\n  \
          ligus bind-repo <name|path> [--chat <id>] | --clear   bind a checkout for agent file tools\n  \
-         ligus forge list|add <kind> <https://base> [--auth token|oauth|gh|none] [--client-id ID]|token <id> <read|write>|login <id>|test <id>|remove <id>\n                                       code-host connections (tokens on stdin, kept in the OS secret store)\n  \
+         ligus forge list|add <kind> <https://base> [--auth token|oauth|gh|none] [--client-id ID] [--internal]|token <id> <read|write>|login <id>|test <id>|remove <id>\n                                       code-host connections (tokens on stdin, kept in the OS secret store)\n  \
          ligus repos                     show the repos dir and bindings\n  \
          ligus pair [--listen ADDR] [--public-url URL] [--relay-only]   show the phone pairing QR code\n  \
          ligus remote enable --relay URL [--reg-token T] | status | disable | reset\n                                       \
@@ -1694,7 +1694,7 @@ fn run() -> Result<()> {
         "repos" => repos::cmd_repos(&cfg.data_dir),
         "forge" => {
             let pos: Vec<&str> = positional.iter().map(|s| s.as_str()).collect();
-            forge_cmd::cmd(&cfg.data_dir, &pos, flag_val("--auth"), flag_val("--client-id"))
+            forge_cmd::cmd(&cfg.data_dir, &pos, flag_val("--auth"), flag_val("--client-id"), has("--internal"))
         }
         "agent" => {
             let name = positional.first().map(|s| s.as_str()).unwrap_or("assistant").to_string();

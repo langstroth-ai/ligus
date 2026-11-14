@@ -2,7 +2,9 @@
 //! credential helper that hands git a token from the OS secret store.
 //!
 //! - `ligus forge list`
-//! - `ligus forge add <github|gitlab|forgejo|gitea|codeberg> <https://base> [--auth token|oauth|gh|none] [--client-id ID]`
+//! - `ligus forge add <github|gitlab|forgejo|gitea|codeberg> <https://base> [--auth token|oauth|gh|none] [--client-id ID] [--internal]`
+//!   (`--internal`: the server is on this device's network; a loopback,
+//!   private or link-local address is refused without it)
 //! - `ligus forge token <id> <read|write>`: reads the token from **stdin**
 //!   (never argv, where `ps` and shell history would see it)
 //! - `ligus forge login <id>`: device sign-in (GitHub App, GitLab app)
@@ -48,7 +50,7 @@ pub fn clean_token(raw: &str) -> Result<Secret> {
     Ok(Secret::new(t))
 }
 
-pub fn cmd(data_dir: &Path, args: &[&str], auth: Option<String>, client_id: Option<String>) -> Result<()> {
+pub fn cmd(data_dir: &Path, args: &[&str], auth: Option<String>, client_id: Option<String>, internal: bool) -> Result<()> {
     match args.first().copied() {
         Some("git-credential") => {
             let id = ForgeId::parse(args.get(1).copied().unwrap_or("")).map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -74,7 +76,7 @@ pub fn cmd(data_dir: &Path, args: &[&str], auth: Option<String>, client_id: Opti
         }
         Some("add") => {
             let (Some(kind), Some(base)) = (args.get(1), args.get(2)) else {
-                bail!("usage: ligus forge add <github|gitlab|forgejo|gitea|codeberg> <https://base-url> [--auth token|oauth|gh|none] [--client-id ID]");
+                bail!("usage: ligus forge add <github|gitlab|forgejo|gitea|codeberg> <https://base-url> [--auth token|oauth|gh|none] [--client-id ID] [--internal]");
             };
             let (kind, flavor) = parse_kind(kind)?;
             let auth = match auth.as_deref() {
@@ -96,9 +98,14 @@ pub fn cmd(data_dir: &Path, args: &[&str], auth: Option<String>, client_id: Opti
                 c.flavor = flavor;
             }
             c.client_id = client_id.filter(|s| !s.trim().is_empty());
-            let mut all = Connections::load(data_dir);
-            all.upsert(c.clone());
-            all.save(data_dir).map_err(|e| anyhow::anyhow!("{e}"))?;
+            c.internal = internal;
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+            rt.block_on(hive_forge::conn::check_address(&c)).map_err(|e| anyhow::anyhow!("{e} (--internal)"))?;
+            hive_forge::Connections::update(data_dir, |all| {
+                all.upsert(c.clone());
+                Ok(())
+            })
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
             println!("added {} ({}).", c.id, c.display());
             if auth == AuthSource::Token {
                 println!("now: ligus forge token {} write   (paste the token on stdin)", c.id);
@@ -138,7 +145,7 @@ pub fn cmd(data_dir: &Path, args: &[&str], auth: Option<String>, client_id: Opti
             let id = ForgeId::parse(args.get(1).copied().unwrap_or("")).map_err(|e| anyhow::anyhow!("{e}"))?;
             let all = Connections::load(data_dir);
             let c = all.get(&id).with_context(|| format!("no connection {id}"))?.clone();
-            let forge = c.build(c.credentials(token_store(data_dir), helper_program().as_deref()));
+            let forge = c.build(c.credentials(token_store(data_dir), helper_program().as_deref(), Some(data_dir)));
             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
             match rt.block_on(forge.whoami()) {
                 Ok(Some(u)) => println!("{id}: signed in as {} (id {}).", u.login, u.id),
@@ -149,7 +156,7 @@ pub fn cmd(data_dir: &Path, args: &[&str], auth: Option<String>, client_id: Opti
         }
         Some("login") => {
             let id = ForgeId::parse(args.get(1).copied().unwrap_or("")).map_err(|e| anyhow::anyhow!("{e}"))?;
-            let mut all = Connections::load(data_dir);
+            let all = Connections::load(data_dir);
             let c = all.get(&id).with_context(|| format!("no connection {id}"))?.clone();
             let ep = hive_forge::device::endpoints(&c).map_err(|e| anyhow::anyhow!("{e}"))?;
             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
@@ -168,7 +175,7 @@ pub fn cmd(data_dir: &Path, args: &[&str], auth: Option<String>, client_id: Opti
                     hive_forge::device::Poll::Denied => bail!("sign-in was denied"),
                     hive_forge::device::Poll::Expired => bail!("the code expired; run ligus forge login {id} again"),
                     hive_forge::device::Poll::Done(t) => {
-                        save_token_set(data_dir, &mut all, &id, &t)?;
+                        save_token_set(data_dir, &id, &t)?;
                         println!("signed in; the token is in this device's secret store.");
                         return Ok(());
                     }
@@ -179,19 +186,14 @@ pub fn cmd(data_dir: &Path, args: &[&str], auth: Option<String>, client_id: Opti
     }
 }
 
-/// Store a device sign-in's tokens and mark the connection as OAuth.
-pub fn save_token_set(data_dir: &Path, all: &mut Connections, id: &ForgeId, t: &hive_forge::device::TokenSet) -> Result<()> {
-    let store = token_store(data_dir);
-    store.put(id, Purpose::Write, &t.access).map_err(|e| anyhow::anyhow!("{e}"))?;
-    match &t.refresh {
-        Some(r) => store.put(id, Purpose::Refresh, r).map_err(|e| anyhow::anyhow!("{e}"))?,
-        None => store.delete(id, Purpose::Refresh).map_err(|e| anyhow::anyhow!("{e}"))?,
+/// Store a device sign-in's tokens and mark the connection as OAuth, only
+/// while the connection still exists.
+pub fn save_token_set(data_dir: &Path, id: &ForgeId, t: &hive_forge::device::TokenSet) -> Result<()> {
+    let saved = hive_forge::conn::save_device_sign_in(data_dir, token_store(data_dir).as_ref(), id, t, || true).map_err(|e| anyhow::anyhow!("{e}"))?;
+    if !saved {
+        bail!("{id} was removed during the sign-in; nothing was stored");
     }
-    if let Some(c) = all.get_mut(id) {
-        c.auth = AuthSource::Oauth;
-        c.token_expires_at = t.expires_in.map(|s| hive_forge::device::now_unix() + s);
-    }
-    all.save(data_dir).map_err(|e| anyhow::anyhow!("{e}"))
+    Ok(())
 }
 
 /// One git credential helper call: answer `get` from the store.
@@ -204,7 +206,7 @@ pub fn git_credential(data_dir: &Path, id: &ForgeId, action: &str, input: &str, 
     if !matches!(c.auth, AuthSource::Token | AuthSource::Oauth) {
         return Ok(());
     }
-    let creds = c.credentials(token_store(data_dir), None);
+    let creds = c.credentials(token_store(data_dir), None, Some(data_dir));
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     // Through the credential source, so an expired device-flow token is
     // refreshed first.

@@ -15,6 +15,7 @@ use ts_rs::TS;
 
 pub mod guards;
 pub use guards::*;
+pub mod names;
 mod proposal_sets;
 pub use proposal_sets::{
     PreflightCheckDto, PreflightDto, ProposalSetDto, ScoutAssessmentDto, SetAlternativeDto,
@@ -47,6 +48,7 @@ pub struct AppInfo {
 pub struct ReactionDto {
     pub emoji: String,
     pub actor_id: String,
+    #[serde(serialize_with = "crate::names::ser_clean")]
     pub actor_display_name: String,
 }
 
@@ -58,6 +60,7 @@ pub struct ChatMessageDto {
     pub id: String,
     /// "system" | "user" | "assistant" | "agent"
     pub role: String,
+    #[serde(serialize_with = "crate::names::ser_clean")]
     pub author: String,
     pub body: String,
     pub is_streaming: bool,
@@ -128,7 +131,7 @@ pub struct ApprovalDto {
     /// Human-readable name of the voter, resolved from the workspace roster at
     /// projection time so the Review pane can tag who approved/rejected without a
     /// separate roster lookup. Falls back to a short actor id when unknown.
-    #[serde(default)]
+    #[serde(default, serialize_with = "crate::names::ser_clean")]
     pub display_name: String,
     pub role: String,
     pub approved: bool,
@@ -142,7 +145,7 @@ pub struct RefinementDto {
     pub id: String,
     pub actor_id: String,
     /// Voter/commenter name resolved from the roster at projection time.
-    #[serde(default)]
+    #[serde(default, serialize_with = "crate::names::ser_clean")]
     pub display_name: String,
     pub role: String,
     pub text: String,
@@ -212,7 +215,7 @@ pub struct ProposalDto {
     #[ts(as = "Option<String>", optional)]
     pub author_kind: String,
     /// The author's display name (`@coder`, a person's name).
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty", serialize_with = "crate::names::ser_clean")]
     #[ts(as = "Option<String>", optional)]
     pub author_name: String,
     /// Who signed it: "agent" (the agent's own key), "host" (a host device
@@ -440,6 +443,7 @@ pub struct WorkspaceMemberDto {
     pub id: String,
     /// The member's actor id — used to match against the presence feed (online).
     pub actor_id: String,
+    #[serde(serialize_with = "crate::names::ser_clean")]
     pub display_name: String,
     /// "owner" | "admin" | "contributor" | "viewer"
     pub role: String,

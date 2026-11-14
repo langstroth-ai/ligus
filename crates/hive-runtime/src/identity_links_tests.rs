@@ -503,7 +503,17 @@ async fn tangled_resolves_the_did_then_reads_the_pds() {
         200,
         serde_json::json!({"records": [{"uri": "at://x", "value": {"name": "laptop", "publicKey": openssh_pub(&k), "createdAt": "2026-01-01T00:00:00Z"}}]}).to_string(),
     );
-    let cfg = ForgeConfig { check_forges: true, test_plc: Some(plc.url.clone()), test_allow_loopback: true, ..Default::default() };
+    // erin.example.com names the DID back, so the handle is shown.
+    let erin = server().await;
+    erin.set("/.well-known/atproto-did", 200, did);
+    let mut cfg = ForgeConfig {
+        check_forges: true,
+        ask_owner_chosen_hosts: true,
+        test_plc: Some(plc.url.clone()),
+        test_allow_loopback: true,
+        ..Default::default()
+    };
+    cfg.test_https.insert("erin.example.com".into(), erin.url.clone());
     let f = LinkFetcher::new(cfg);
     let l = signed("tangled", "atproto", did, "erin.example.com", &k);
     let s = check_link(&l, ctx(), &f, now(), None).await;
@@ -511,7 +521,7 @@ async fn tangled_resolves_the_did_then_reads_the_pds() {
 
     // Without the test loopback allowance, a DID document pointing the PDS
     // at a private address is refused (SSRF).
-    let cfg = ForgeConfig { check_forges: true, test_plc: Some(plc.url.clone()), ..Default::default() };
+    let cfg = ForgeConfig { check_forges: true, ask_owner_chosen_hosts: true, test_plc: Some(plc.url.clone()), ..Default::default() };
     let before = pds.hits();
     let s = check_link(&l, ctx(), &LinkFetcher::new(cfg), now(), None).await;
     assert!(!s.is_verified(), "{s:?}");
@@ -633,4 +643,208 @@ async fn fold_ignores_forge_answers() {
     let after = fold(&svc);
     assert_eq!(before.0, after.0);
     assert_eq!(before.1, after.1);
+}
+
+// ---------------------------------------------------------------------------
+// Adversarial review (linked identities, 2.0 residuals)
+
+/// A forge (or a DID document) is not trusted to hand back a clean name: a
+/// GitLab username or an atproto handle carrying bidi overrides or
+/// zero-width characters is shown without them.
+#[tokio::test]
+async fn forge_supplied_handles_lose_bidi_controls() {
+    let gl = server().await;
+    let k = key(3);
+    gl.set("/users/77/keys", 200, serde_json::json!([{"id": 1, "key": openssh_pub(&k), "usage_type": "auth"}]).to_string());
+    gl.set("/users/77", 200, serde_json::json!({"id": 77, "username": "b\u{200B}ob\u{202E}"}).to_string());
+    let f = fetcher(&[("gitlab", "gitlab.com", &gl)]);
+    let l = signed("gitlab", "gitlab.com", "77", "bob", &k);
+    let s = check_link(&l, ctx(), &f, now(), None).await;
+    assert!(matches!(&s, LinkStatus::Verified { handle: Some(h), .. } if h == "bob"), "{s:?}");
+}
+
+
+/// Privacy: a Tangled link's owner chooses its PDS (and a `did:web` host,
+/// and a handle's domain). An automatic check (opening People) must not
+/// make every viewer's device contact a server the link's owner runs, which
+/// would tell them who looked and from where; only an explicit check does.
+/// The big hosted PDSes are asked automatically.
+#[tokio::test]
+async fn automatic_checks_never_contact_hosts_the_link_owner_chose() {
+    let plc = server().await;
+    let pds = server().await;
+    let k = key(6);
+    let did = "did:plc:abcdefghijklmnopqrstuvwx";
+    plc.set(
+        &format!("/{did}"),
+        200,
+        serde_json::json!({"id": did, "service": [{"id": "#atproto_pds", "serviceEndpoint": pds.url}]}).to_string(),
+    );
+    pds.set(
+        &format!("/xrpc/com.atproto.repo.listRecords?repo={did}&collection=org.tangled.key.sshKey&limit=100"),
+        200,
+        serde_json::json!({"records": [{"value": {"publicKey": openssh_pub(&k)}}]}).to_string(),
+    );
+    let l = signed("tangled", "atproto", did, "erin.example.com", &k);
+    let auto = ForgeConfig { check_forges: true, test_plc: Some(plc.url.clone()), test_allow_loopback: true, ..Default::default() };
+    let s = check_link(&l, ctx(), &LinkFetcher::new(auto.clone()), now(), None).await;
+    assert!(matches!(s, LinkStatus::NotChecked { .. }), "{s:?}");
+    assert_eq!(pds.hits(), 0, "the owner's server never hears of an automatic check");
+    let did_web = "did:web:erin.example.com";
+    let l_web = signed("tangled", "atproto", did_web, "erin.example.com", &k);
+    assert!(matches!(check_link(&l_web, ctx(), &LinkFetcher::new(auto.clone()), now(), None).await, LinkStatus::NotChecked { .. }));
+    let explicit = ForgeConfig { ask_owner_chosen_hosts: true, ..auto };
+    assert!(check_link(&l, ctx(), &LinkFetcher::new(explicit), now(), None).await.is_verified());
+    assert!(pds.hits() > 0);
+    for host in ["bsky.social", "morel.us-east.host.bsky.network"] {
+        assert!(well_known_pds(host), "{host}");
+    }
+    for host in ["erin.example.com", "bsky.network.evil.example", "evilbsky.network", "127.0.0.1"] {
+        assert!(!well_known_pds(host), "{host}");
+    }
+}
+/// A DID document for `did` naming `handle` and a PDS.
+fn did_doc(did: &str, handle: &str, pds: &str) -> String {
+    serde_json::json!({
+        "id": did,
+        "alsoKnownAs": [format!("at://{handle}")],
+        "service": [{"id": "#atproto_pds", "type": "AtprotoPersonalDataServer", "serviceEndpoint": pds}],
+    })
+    .to_string()
+}
+
+fn tangled_keys(pds: &Server, did: &str, k: &PrivateKey) {
+    pds.set(
+        &format!("/xrpc/com.atproto.repo.listRecords?repo={did}&collection=org.tangled.key.sshKey&limit=100"),
+        200,
+        serde_json::json!({"records": [{"uri": "at://x", "value": {"publicKey": openssh_pub(k)}}]}).to_string(),
+    );
+}
+
+
+/// An atproto handle is only shown as the account's when the handle's
+/// domain names the DID back (`/.well-known/atproto-did`): a DID document
+/// claiming someone else's handle in `alsoKnownAs` verifies (the keys are
+/// the DID's), but the chip shows the DID, never the borrowed handle.
+#[tokio::test]
+async fn tangled_handle_shown_only_when_its_domain_names_the_did() {
+    let plc = server().await;
+    let pds = server().await;
+    let famous = server().await;
+    let k = key(6);
+    let did = "did:plc:abcdefghijklmnopqrstuvwx";
+    plc.set(&format!("/{did}"), 200, did_doc(did, "famous.example.com", &pds.url));
+    tangled_keys(&pds, did, &k);
+    famous.set("/.well-known/atproto-did", 200, "did:plc:zzzzzzzzzzzzzzzzzzzzzzzz");
+    let mut cfg = ForgeConfig {
+        check_forges: true,
+        ask_owner_chosen_hosts: true,
+        test_plc: Some(plc.url.clone()),
+        test_allow_loopback: true,
+        ..Default::default()
+    };
+    cfg.test_https.insert("famous.example.com".into(), famous.url.clone());
+    let f = LinkFetcher::new(cfg);
+    let l = signed("tangled", "atproto", did, "famous.example.com", &k);
+    let s = check_link(&l, ctx(), &f, now(), None).await;
+    assert!(matches!(&s, LinkStatus::Verified { handle: None, .. }), "a borrowed handle is not shown: {s:?}");
+    // The same DID entering the link flow by DID gets no borrowed handle either.
+    assert_eq!(f.resolve_handle("tangled", "atproto", did).await.unwrap(), (did.to_string(), did.to_string()));
+    // When the domain does name the DID, the handle is shown.
+    famous.set("/.well-known/atproto-did", 200, did);
+    let s = check_link(&l, ctx(), &f, now(), None).await;
+    assert!(matches!(&s, LinkStatus::Verified { handle: Some(h), .. } if h == "famous.example.com"), "{s:?}");
+}
+
+/// SSRF: IPv6 forms that carry an IPv4 address (NAT64, 6to4, the old
+/// IPv4-compatible form, Teredo) and the deprecated site-local range reach
+/// the same internal hosts as the IPv4 address itself.
+#[test]
+fn embedded_private_ipv4_in_ipv6_is_not_public() {
+    for bad in [
+        "64:ff9b::a9fe:a9fe",
+        "64:ff9b::7f00:1",
+        "64:ff9b:1::a00:1",
+        "2002:7f00:1::",
+        "2002:a9fe:a9fe::1",
+        "::7f00:1",
+        "::a9fe:a9fe",
+        "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+        "fec0::1",
+        "100::1",
+    ] {
+        assert!(!is_public_ip(bad.parse().unwrap()), "{bad}");
+    }
+    for good in ["64:ff9b::8c52:7003", "2002:8c52:7003::1", "2606:4700::1111"] {
+        assert!(is_public_ip(good.parse().unwrap()), "{good}");
+    }
+}
+
+/// A published-key link has no statement: what it proves depends on the
+/// account key at check time. A verified check cached under one account key
+/// must not answer for the link once the account key changed (rotation, or
+/// another workspace registering another key for the same account).
+#[tokio::test]
+async fn cached_check_is_bound_to_the_account_key() {
+    let gh = server().await;
+    let mine = account_key_openssh(&ACCOUNT_KEY).unwrap();
+    github_alice(&gh, "alice", &[], &[mine]);
+    let mut l = golden_link();
+    l.method = LinkMethod::KeyPublished;
+    l.nonce.clear();
+    let f = fetcher(&[("github", "github.com", &gh)]);
+    let cache = MemoryCache::default();
+    assert!(check_cached(&cache, &l, ctx(), &f, now(), false).await.is_verified());
+    let other = [9u8; 32];
+    let rotated = LinkContext { workspace_id: ws(), account_key: Some(&other) };
+    let later = Timestamp(now().0 + time::Duration::hours(1));
+    let s = check_cached(&cache, &l, rotated, &f, later, false).await;
+    assert!(matches!(s, LinkStatus::Stale { .. }), "the forge lists the old key, not this one: {s:?}");
+    assert_ne!(cache_key(&l, ws(), &ACCOUNT_KEY), cache_key(&l, ws(), &other));
+}
+
+/// D15: the published-key fallback is offered only where the Ligus key
+/// grants no push access. GitLab's default usage type, "Authentication &
+/// Signing", grants push; only a "Signing" key counts.
+#[tokio::test]
+async fn gitlab_key_published_needs_a_signing_only_key() {
+    let gl = server().await;
+    let mine = account_key_openssh(&ACCOUNT_KEY).unwrap();
+    gl.set("/users/77/keys", 200, serde_json::json!([{"id": 2, "key": mine, "usage_type": "auth_and_signing"}]).to_string());
+    let f = fetcher(&[("gitlab", "gitlab.com", &gl)]);
+    let mut kp = golden_link();
+    kp.provider = "gitlab".into();
+    kp.host = "gitlab.com".into();
+    kp.subject_id = "77".into();
+    kp.method = LinkMethod::KeyPublished;
+    kp.nonce.clear();
+    let s = check_link(&kp, ctx(), &f, now(), None).await;
+    assert!(matches!(s, LinkStatus::Stale { .. }), "a key that also grants push: {s:?}");
+    gl.set("/users/77/keys", 200, serde_json::json!([{"id": 2, "key": mine, "usage_type": "signing"}]).to_string());
+    assert!(check_link(&kp, ctx(), &f, now(), None).await.is_verified());
+}
+
+/// People shows chips from the cache without asking the forge. A cached
+/// "verified" must not outlive the link (expiry), the 24-hour TTL, the
+/// account key it was made under, or forge checks being turned off.
+#[test]
+fn cached_chip_status_is_only_shown_while_it_holds() {
+    let k = key(1);
+    let l = signed("github", "github.com", "1234567", "alice", &k);
+    let t0 = now();
+    let verified = CachedCheck {
+        status: LinkStatus::Verified { checked_at: t0, handle: Some("alice".into()), name_bound: false },
+        checked_at: t0,
+        last_verified_at: Some(t0),
+    };
+    let soon = Timestamp(t0.0 + time::Duration::hours(1));
+    assert!(cached_status(Some(&verified), &l, ctx(), soon, true).is_some_and(|s| s.is_verified()));
+    let day_later = Timestamp(t0.0 + time::Duration::hours(30));
+    assert_eq!(cached_status(Some(&verified), &l, ctx(), day_later, true), None, "past the TTL: not checked");
+    assert_eq!(cached_status(Some(&verified), &l, ctx(), ts("2027-11-15T00:00:00Z"), true), Some(LinkStatus::Expired));
+    assert_eq!(cached_status(Some(&verified), &l, ctx(), soon, false), Some(LinkStatus::SignatureOnly), "checks off");
+    let other = [9u8; 32];
+    let rotated = LinkContext { workspace_id: ws(), account_key: Some(&other) };
+    assert!(!cached_status(Some(&verified), &l, rotated, soon, true).is_some_and(|s| s.is_verified()));
+    assert_eq!(cached_status(None, &l, ctx(), soon, true), None);
 }

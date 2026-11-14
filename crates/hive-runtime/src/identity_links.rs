@@ -254,6 +254,12 @@ pub struct ForgeConfig {
     /// "Contact forges to check linked identities" (on by default, D13).
     pub check_forges: bool,
     pub self_hosted: Vec<SelfHostedForge>,
+    /// Ask hosts the link's owner chose (a PDS other than the big hosted
+    /// ones, a `did:web` host, a handle's domain). Set only for a check the
+    /// person asked for ("Check now", linking their own account): an
+    /// automatic check must not tell a server the link's owner runs who
+    /// looked, and from where.
+    pub ask_owner_chosen_hosts: bool,
     /// Tests only: API roots by `(provider, host)` (fake servers on
     /// loopback), the PLC directory root, and plain HTTP to loopback for a
     /// PDS. Never set from settings.
@@ -263,6 +269,10 @@ pub struct ForgeConfig {
     pub test_plc: Option<String>,
     #[doc(hidden)]
     pub test_allow_loopback: bool,
+    /// Tests only: the server standing in for `https://{host}` (a handle's
+    /// domain, a `did:web` host).
+    #[doc(hidden)]
+    pub test_https: BTreeMap<String, String>,
 }
 
 /// The built-in forges (anonymous key listings documented in §2.3).
@@ -275,6 +285,13 @@ fn builtin_api(provider: &str, host: &str) -> Option<&'static str> {
         ("sourcehut", "meta.sr.ht") => "https://meta.sr.ht",
         _ => return None,
     })
+}
+
+/// The hosted PDSes an automatic check may ask (Bluesky's): a host the
+/// link's owner can't run.
+pub fn well_known_pds(host: &str) -> bool {
+    let h = host.trim_end_matches('.').to_ascii_lowercase();
+    h == "bsky.social" || (h.ends_with(".bsky.network") && h.len() > ".bsky.network".len())
 }
 
 /// The PLC directory (did:plc resolution).
@@ -364,12 +381,29 @@ pub fn is_public_ip(ip: IpAddr) -> bool {
                 return is_public_ip(IpAddr::V4(v4));
             }
             let s = v6.segments();
+            let v4_at = |hi: u16, lo: u16| std::net::Ipv4Addr::from(((hi as u32) << 16) | lo as u32);
+            // NAT64 (well-known prefix), the IPv4-compatible form and 6to4
+            // reach the IPv4 address they carry.
+            if s[0] == 0x64 && s[1] == 0xff9b && s[2..6] == [0, 0, 0, 0] {
+                return is_public_ip(IpAddr::V4(v4_at(s[6], s[7])));
+            }
+            if s[0..6] == [0, 0, 0, 0, 0, 0] && !v6.is_loopback() && !v6.is_unspecified() {
+                return is_public_ip(IpAddr::V4(v4_at(s[6], s[7])));
+            }
+            if s[0] == 0x2002 {
+                return is_public_ip(IpAddr::V4(v4_at(s[1], s[2])));
+            }
             !(v6.is_loopback()
                 || v6.is_unspecified()
                 || v6.is_multicast()
                 || (s[0] & 0xfe00) == 0xfc00
                 || (s[0] & 0xffc0) == 0xfe80
-                || (s[0] == 0x2001 && s[1] == 0x0db8))
+                || (s[0] == 0x2001 && s[1] == 0x0db8)
+                // Teredo, local-use NAT64, site-local, discard-only.
+                || (s[0] == 0x2001 && s[1] == 0)
+                || (s[0] == 0x64 && s[1] == 0xff9b)
+                || (s[0] & 0xffc0) == 0xfec0
+                || (s[0] == 0x100 && s[1..4] == [0, 0, 0]))
         }
     }
 }
@@ -460,6 +494,13 @@ impl LinkFetcher {
             if !parsed.username().is_empty() || parsed.password().is_some() {
                 return Err(FetchError::NotConfigured("a URL with credentials".into()));
             }
+            let chosen_by_owner = !parsed.host_str().is_some_and(well_known_pds);
+            if chosen_by_owner && !self.cfg.ask_owner_chosen_hosts {
+                return Err(FetchError::NotConfigured(format!(
+                    "checking this link asks {}, a server its owner chose; check it by hand to ask it",
+                    parsed.host_str().unwrap_or("a server")
+                )));
+            }
             if let Some(url::Host::Ipv4(ip)) = parsed.host() {
                 if !is_public_ip(IpAddr::V4(ip)) && !loopback_ok {
                     return Err(FetchError::NotConfigured("a private address".into()));
@@ -528,7 +569,7 @@ impl LinkFetcher {
                 let root = self.root(provider, host)?;
                 let v = self.get_json(&format!("{root}/users/{handle}"), false).await?;
                 let id = v["id"].as_u64().ok_or(FetchError::Gone)?;
-                Ok((id.to_string(), v["login"].as_str().unwrap_or(handle).to_string()))
+                Ok((id.to_string(), v["login"].as_str().and_then(clean_handle).unwrap_or_else(|| handle.to_string())))
             }
             "gitlab" => {
                 if !safe_segment(handle) {
@@ -538,7 +579,7 @@ impl LinkFetcher {
                 let v = self.get_json(&format!("{root}/users?username={handle}"), false).await?;
                 let u = v.as_array().and_then(|a| a.first()).ok_or(FetchError::Gone)?;
                 let id = u["id"].as_u64().ok_or(FetchError::Gone)?;
-                Ok((id.to_string(), u["username"].as_str().unwrap_or(handle).to_string()))
+                Ok((id.to_string(), u["username"].as_str().and_then(clean_handle).unwrap_or_else(|| handle.to_string())))
             }
             "forgejo" | "gitea" => {
                 if !safe_segment(handle) {
@@ -551,7 +592,7 @@ impl LinkFetcher {
                     .and_then(|a| a.iter().find(|u| u["login"].as_str().is_some_and(|l| l.eq_ignore_ascii_case(handle))))
                     .ok_or(FetchError::Gone)?;
                 let id = u["id"].as_u64().ok_or(FetchError::Gone)?;
-                Ok((id.to_string(), u["login"].as_str().unwrap_or(handle).to_string()))
+                Ok((id.to_string(), u["login"].as_str().and_then(clean_handle).unwrap_or_else(|| handle.to_string())))
             }
             "sourcehut" => {
                 let user = format!("~{}", handle.trim_start_matches('~'));
@@ -564,7 +605,8 @@ impl LinkFetcher {
             "tangled" => {
                 if valid_did(handle) {
                     let doc = self.did_document(handle).await?;
-                    return Ok((handle.to_string(), handle_of(&doc).unwrap_or_else(|| handle.to_string())));
+                    let shown = self.verified_handle(handle, &doc).await.unwrap_or_else(|| handle.to_string());
+                    return Ok((handle.to_string(), shown));
                 }
                 // A handle: its domain's well-known DID (a host the user
                 // named, so public addresses only).
@@ -572,7 +614,7 @@ impl LinkFetcher {
                 if !h.contains('.') || !h.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'-')) {
                     return Err(FetchError::Gone);
                 }
-                let b = self.get_ok(&format!("https://{h}/.well-known/atproto-did"), true).await?;
+                let b = self.get_ok(&self.https_url(&h, "/.well-known/atproto-did"), true).await?;
                 let did = String::from_utf8_lossy(&b).trim().to_string();
                 if !valid_did(&did) {
                     return Err(FetchError::Gone);
@@ -587,12 +629,32 @@ impl LinkFetcher {
         }
     }
 
+    /// `https://{host}{path}` (a host a link or DID document names).
+    fn https_url(&self, host: &str, path: &str) -> String {
+        match self.cfg.test_https.get(host) {
+            Some(base) => format!("{}{path}", base.trim_end_matches('/')),
+            None => format!("https://{host}{path}"),
+        }
+    }
+
+    /// The handle a DID document claims (`alsoKnownAs`), only when the
+    /// handle's domain names the DID back (atproto's bidirectional check):
+    /// anyone can write any handle into their own DID document.
+    async fn verified_handle(&self, did: &str, doc: &serde_json::Value) -> Option<String> {
+        let h = handle_of(doc)?.to_ascii_lowercase();
+        if !h.contains('.') || !h.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'-')) {
+            return None;
+        }
+        let b = self.get_ok(&self.https_url(&h, "/.well-known/atproto-did"), true).await.ok()?;
+        (String::from_utf8_lossy(&b).trim() == did).then_some(h)
+    }
+
     async fn did_document(&self, did: &str) -> Result<serde_json::Value, FetchError> {
         if !valid_did(did) {
             return Err(FetchError::Gone);
         }
         let doc = if let Some(host) = did.strip_prefix("did:web:") {
-            self.get_json(&format!("https://{host}/.well-known/did.json"), true).await?
+            self.get_json(&self.https_url(host, "/.well-known/did.json"), true).await?
         } else {
             self.get_json(&format!("{}/{did}", self.cfg.plc()), false).await?
         };
@@ -648,13 +710,13 @@ impl LinkFetcher {
                 let root = self.root(provider, host)?;
                 // By id: no rename window.
                 let v = self.get_json(&format!("{root}/users/{subject_id}/keys"), false).await?;
-                let keys = json_keys(&v, "key", |k| {
-                    matches!(k["usage_type"].as_str(), Some("signing") | Some("auth_and_signing"))
-                });
+                // `signing` marks a key that grants no push access (D15):
+                // "auth_and_signing", GitLab's default, grants push.
+                let keys = json_keys(&v, "key", |k| k["usage_type"].as_str() == Some("signing"));
                 // The handle is display only; gitlab.com doesn't answer
                 // `/users/{id}` anonymously.
                 let handle = match self.get_json(&format!("{root}/users/{subject_id}"), false).await {
-                    Ok(u) => u["username"].as_str().map(str::to_string),
+                    Ok(u) => u["username"].as_str().and_then(clean_handle),
                     Err(_) => None,
                 };
                 Ok(KeyList { handle, keys, name_bound: false })
@@ -707,7 +769,7 @@ impl LinkFetcher {
                         Err(_) => {}
                     }
                 }
-                Ok(KeyList { handle: handle_of(&doc), keys, name_bound: false })
+                Ok(KeyList { handle: self.verified_handle(subject_id, &doc).await, keys, name_bound: false })
             }
             _ => Err(FetchError::NotConfigured(format!("{provider} has no public key list"))),
         }
@@ -735,7 +797,15 @@ fn text_keys(body: &[u8]) -> Vec<ForgeKey> {
 }
 
 fn handle_of(doc: &serde_json::Value) -> Option<String> {
-    doc["alsoKnownAs"].as_array()?.iter().filter_map(|a| a.as_str()?.strip_prefix("at://")).map(str::to_string).next()
+    doc["alsoKnownAs"].as_array()?.iter().filter_map(|a| a.as_str()?.strip_prefix("at://")).find_map(clean_handle)
+}
+
+/// A name a forge or DID document supplied, as it may be shown: without
+/// control, bidi or zero-width characters, trimmed, at most 256 bytes.
+fn clean_handle(s: &str) -> Option<String> {
+    let c = hive_core::identity_link::strip_bidi_controls(s);
+    let c = c.trim();
+    (!c.is_empty() && c.len() <= 256 && !c.chars().any(char::is_whitespace)).then(|| c.to_string())
 }
 
 fn pds_of(doc: &serde_json::Value) -> Option<String> {
@@ -813,12 +883,15 @@ pub trait LinkCheckCache {
     fn put_check(&self, key: &str, check: &CachedCheck);
 }
 
-/// The cache key: the link's content and the workspace it was published in
-/// (any change to the claim is a new check).
-pub fn cache_key(link: &IdentityLink, workspace_id: Uuid) -> String {
+/// The cache key: the link's content, the workspace it was published in and
+/// the account key it is checked under (any change to the claim, or to the
+/// key a published-key link stands for, is a new check).
+pub fn cache_key(link: &IdentityLink, workspace_id: Uuid, account_key: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
     h.update(workspace_id.as_bytes());
+    h.update((account_key.len() as u64).to_be_bytes());
+    h.update(account_key);
     h.update(serde_json::to_vec(link).unwrap_or_default());
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -827,6 +900,27 @@ pub fn cache_key(link: &IdentityLink, workspace_id: Uuid) -> String {
 /// unreachable forge is asked again next time).
 pub fn fresh(c: &CachedCheck, now: Timestamp) -> bool {
     c.status.definitive() && now.0 - c.checked_at.0 < time::Duration::try_from(CHECK_TTL).unwrap_or(time::Duration::DAY)
+}
+
+/// What a chip may show from the cache alone, without asking the forge: the
+/// offline outcome when the link fails it (expired, invalid, the account
+/// key changed), "signature valid" when forge checks are off, and otherwise
+/// the cached result only while it is fresh ([`CHECK_TTL`]). `None` means
+/// not checked yet.
+pub fn cached_status(
+    cached: Option<&CachedCheck>,
+    link: &IdentityLink,
+    ctx: LinkContext<'_>,
+    now: Timestamp,
+    check_forges: bool,
+) -> Option<LinkStatus> {
+    if let Err(status) = offline_check(link, ctx, now) {
+        return Some(status);
+    }
+    if !check_forges {
+        return Some(LinkStatus::SignatureOnly);
+    }
+    cached.filter(|c| fresh(c, now)).map(|c| c.status.clone())
 }
 
 /// [`check_link`] behind the cache: reuse a fresh result unless `force`;
@@ -840,7 +934,7 @@ pub async fn check_cached(
     now: Timestamp,
     force: bool,
 ) -> LinkStatus {
-    let key = cache_key(link, ctx.workspace_id);
+    let key = cache_key(link, ctx.workspace_id, ctx.account_key.unwrap_or_default());
     let cached = cache.get_check(&key);
     if let Err(status) = offline_check(link, ctx, now) {
         return status;

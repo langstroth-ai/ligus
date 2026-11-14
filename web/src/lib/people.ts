@@ -6,7 +6,9 @@ import type { InviteTrust } from "@/lib/ipc";
 export function trustNote(trust: InviteTrust, founderName: string | null): string {
   switch (trust) {
     case "known":
-      return `From ${founderName || "someone you share a workspace with"}: their safety code matches.`;
+      return `From ${founderName || "someone you share a workspace with"}: signed by their device, and their safety code matches.`;
+    case "claimed":
+      return `Says it's from ${founderName || "someone you share a workspace with"}, but it isn't signed by their device, so nothing shows who sent it. Accept only if you expected it.`;
     case "mismatch":
       return `This invite claims to be from ${founderName || "a co-member"}, but its safety code doesn't match theirs. Don't accept it.`;
     case "unknown":

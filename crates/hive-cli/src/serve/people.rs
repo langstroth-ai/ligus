@@ -97,7 +97,7 @@ pub fn decorate_agent(v: &mut Value, s: &Shared, a: &WorkspaceAgent, hosts: &[Wo
 fn person_dto(m: &WorkspaceMember, me: &str) -> Value {
     let mut v = json!({
         "actorId": m.actor.id,
-        "displayName": m.actor.display_name,
+        "displayName": hive_proto::names::clean_display_name(&m.actor.display_name),
         "kind": camel(&m.actor.kind),
         "role": camel(&m.role),
         "isSelf": m.actor.id == me,
@@ -176,7 +176,7 @@ pub fn participants(s: &ChatSession, cap: usize) -> Vec<Value> {
         if id.is_empty() || !seen.insert((kind, id.clone())) {
             continue;
         }
-        out.push(json!({ "kind": kind, "id": id, "name": name }));
+        out.push(json!({ "kind": kind, "id": id, "name": hive_proto::names::clean_display_name(&name) }));
     }
     out
 }
@@ -345,7 +345,7 @@ fn workflow_run_dto(chat: &ChatSession, r: &hive_core::WorkflowRun) -> Value {
         .members
         .iter()
         .find(|m| m.actor.id == r.initiator_actor_id)
-        .map(|m| m.actor.display_name.clone())
+        .map(|m| hive_proto::names::clean_display_name(&m.actor.display_name))
         .unwrap_or_default();
     let mut v = json!({
         "id": r.id,

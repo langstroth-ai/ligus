@@ -160,3 +160,66 @@ pub async fn call(b: &ForgeBinding, tool: &str, args: &Value) -> ToolResult {
 pub fn is_forge_tool(name: &str) -> bool {
     name.starts_with("ligus_forge_")
 }
+
+/// A remote's URL exactly as configured (`remote.<name>.url`, the first one),
+/// without git's `insteadOf`/`pushInsteadOf` rewriting. The binding names the
+/// repository the person configured: a rewrite (in the checkout's own config,
+/// which agents may have touched, or a global one) must not turn it into a
+/// different repository the host's credential would then read.
+pub fn configured_remote_url(dir: &std::path::Path, remote: &str) -> Option<String> {
+    let o = hive_core::process_util::git()
+        .arg("-C")
+        .arg(dir)
+        .args(["config", "--get-all", &format!("remote.{remote}.url")])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let s = String::from_utf8_lossy(&o.stdout).lines().next().unwrap_or("").trim().to_string();
+    (o.status.success() && !s.is_empty()).then_some(s)
+}
+
+/// The read-only binding for a checkout: its configured `origin` on one of
+/// `forges`, and `upstream` (when it names another repository on the same
+/// forge).
+pub fn binding_for_checkout(dir: &std::path::Path, forges: &[Arc<dyn hive_forge::Forge>]) -> Option<ForgeBinding> {
+    let origin = configured_remote_url(dir, "origin")?;
+    for f in forges {
+        if let Some(repo) = f.repo_of_remote(&origin) {
+            let upstream = configured_remote_url(dir, "upstream").and_then(|u| f.repo_of_remote(&u)).filter(|u| !u.same(&repo));
+            return Some(ForgeBinding { reader: Arc::new(hive_forge::ReadOnly(f.clone())), repo, upstream });
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod binding_tests {
+    use super::*;
+
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let o = hive_core::process_util::git().arg("-C").arg(dir).args(args).output().unwrap();
+        assert!(o.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+    }
+
+    /// `url.<base>.insteadOf` rewrites what `git remote get-url` reports (and
+    /// where fetches go); the binding reads the configured URL instead, so a
+    /// rewrite can't point the agents' reads (on the host's credential) at
+    /// another repository.
+    #[test]
+    fn binding_ignores_rewritten_remote() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path();
+        git(dir, &["init", "-q"]);
+        git(dir, &["remote", "add", "origin", "https://github.com/me/app.git"]);
+        git(dir, &["remote", "add", "upstream", "https://github.com/org/app.git"]);
+        git(dir, &["config", "url.https://github.com/victim/.insteadOf", "https://github.com/me/"]);
+        git(dir, &["config", "url.https://github.com/victim2/.pushInsteadOf", "https://github.com/me/"]);
+        git(dir, &["config", "url.https://github.com/other/.insteadOf", "https://github.com/org/"]);
+        let c = hive_forge::Connection::new(hive_forge::ForgeKind::GitHub, "https://github.com", hive_forge::AuthSource::None).unwrap();
+        let f = c.build(Arc::new(hive_forge::tokens::Anonymous));
+        let b = binding_for_checkout(dir, &[f]).expect("origin is on github.com");
+        assert_eq!(b.repo.full_name(), "me/app");
+        assert_eq!(b.upstream.map(|u| u.full_name()).as_deref(), Some("org/app"));
+    }
+}

@@ -16,6 +16,51 @@ use crate::{spec, Forge, ForgeError, ForgeId, ForgeKind, Result};
 
 pub const FILE: &str = "forges.toml";
 
+/// The lock file that serialises token refreshes and edits of
+/// `forges.toml` across this device's processes (`ligus serve`, the agents'
+/// read tools, the git credential helper, the desktop).
+pub const LOCK_FILE: &str = ".forges.lock";
+
+/// An exclusive hold on [`LOCK_FILE`] (released on drop). One holder per
+/// data dir at a time, across processes and threads: each acquire opens its
+/// own file description, so `flock` serialises threads of one process too.
+/// Not reentrant: never acquire it again while holding it.
+pub struct ForgesLock {
+    _file: std::fs::File,
+}
+
+impl ForgesLock {
+    /// Block until this process holds the lock.
+    pub fn acquire(data_dir: &Path) -> Result<Self> {
+        let io = |e: std::io::Error| ForgeError::Store(format!("couldn't lock the code host connections: {e}"));
+        std::fs::create_dir_all(data_dir).map_err(io)?;
+        let file = std::fs::OpenOptions::new().create(true).read(true).write(true).truncate(false).open(data_dir.join(LOCK_FILE)).map_err(io)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            loop {
+                // SAFETY: flock on a file descriptor this function owns; it
+                // stays open (and the lock held) for the life of `ForgesLock`.
+                if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+                    break;
+                }
+                let e = std::io::Error::last_os_error();
+                if e.kind() != std::io::ErrorKind::Interrupted {
+                    return Err(io(e));
+                }
+            }
+        }
+        // Closing the file releases the lock.
+        Ok(Self { _file: file })
+    }
+
+    /// [`ForgesLock::acquire`] off the async runtime.
+    pub async fn acquire_async(data_dir: &Path) -> Result<Self> {
+        let d = data_dir.to_path_buf();
+        tokio::task::spawn_blocking(move || Self::acquire(&d)).await.map_err(|e| ForgeError::Store(e.to_string()))?
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Connection {
@@ -45,6 +90,13 @@ pub struct Connection {
     /// When the stored OAuth access token expires (unix seconds).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_expires_at: Option<u64>,
+    /// The person marked this connection internal on this device: its host
+    /// may be (or resolve to) a loopback, private or link-local address.
+    /// Without the mark such addresses are refused (when added, and on every
+    /// request), so a code-host URL can't be used to reach this device's own
+    /// network. Device-local, like the rest of this file.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub internal: bool,
 }
 
 /// A base URL Ligus will send a token to: `https://host[:port][/prefix]`, or
@@ -82,6 +134,60 @@ pub fn validate_base_url(raw: &str) -> Result<String> {
     Ok(raw.to_string())
 }
 
+/// Save a finished device sign-in's tokens and mark the connection OAuth,
+/// under [`ForgesLock`]. Nothing is stored (and `Ok(false)` returned) when
+/// the connection is gone or `still_current` says the sign-in that produced
+/// these tokens is no longer the pending one (the connection was removed,
+/// perhaps added again, or another sign-in started since): a background
+/// poll must never leave a stray token behind, nor attach one to a
+/// connection nobody signed in on. Not for use while holding the lock.
+pub fn save_device_sign_in(data_dir: &Path, store: &dyn TokenStore, id: &ForgeId, t: &crate::device::TokenSet, still_current: impl FnOnce() -> bool) -> Result<bool> {
+    let _lock = ForgesLock::acquire(data_dir)?;
+    let mut all = Connections::load(data_dir);
+    if all.get(id).is_none() || !still_current() {
+        return Ok(false);
+    }
+    store.put(id, crate::tokens::Purpose::Write, &t.access)?;
+    match &t.refresh {
+        Some(r) => store.put(id, crate::tokens::Purpose::Refresh, r)?,
+        None => store.delete(id, crate::tokens::Purpose::Refresh)?,
+    }
+    if let Some(c) = all.get_mut(id) {
+        c.auth = AuthSource::Oauth;
+        c.token_expires_at = t.expires_in.map(|s| crate::device::now_unix() + s);
+    }
+    all.save(data_dir)?;
+    Ok(true)
+}
+
+/// Refuse a connection whose host is, or resolves to, an internal address
+/// (see [`crate::http::is_public_ip`]) unless it is marked internal. Test
+/// builds resolve no names but `localhost` (the request-time resolver still
+/// applies); a name that doesn't resolve here is left to that resolver.
+pub async fn check_address(c: &Connection) -> Result<()> {
+    if c.internal {
+        return Ok(());
+    }
+    for raw in std::iter::once(c.base_url.as_str()).chain(c.api_url.as_deref()) {
+        crate::http::check_url_address(raw, false)?;
+        let Ok(u) = url::Url::parse(raw) else { continue };
+        let Some(url::Host::Domain(host)) = u.host() else { continue };
+        let host = host.to_ascii_lowercase();
+        if crate::http::real_hosts_denied() && host != "localhost" {
+            continue;
+        }
+        let port = u.port_or_known_default().unwrap_or(443);
+        let lookup = tokio::time::timeout(std::time::Duration::from_secs(5), tokio::net::lookup_host((host.as_str(), port))).await;
+        if let Ok(Ok(addrs)) = lookup {
+            let addrs: Vec<_> = addrs.collect();
+            if !addrs.is_empty() && addrs.iter().all(|a| !crate::http::is_public_ip(a.ip())) {
+                return Err(crate::http::internal_refused(&host));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The forge a well-known host runs.
 pub fn known_kind(host: &str) -> Option<(ForgeKind, Option<&'static str>)> {
     match host.trim().to_ascii_lowercase().as_str() {
@@ -102,7 +208,7 @@ impl Connection {
             return Err(ForgeError::Invalid("the gh login works only for GitHub".into()));
         }
         let flavor = known_kind(&host).and_then(|(_, f)| f).map(str::to_string).or_else(|| (kind == ForgeKind::GitHub && host != "github.com").then(|| "ghes".into()));
-        Ok(Self { id: ForgeId::new(kind, &host), kind, base_url, api_url: None, flavor, auth, client_id: None, login: None, user_id: None, token_expires_at: None })
+        Ok(Self { id: ForgeId::new(kind, &host), kind, base_url, api_url: None, flavor, auth, client_id: None, login: None, user_id: None, token_expires_at: None, internal: false })
     }
 
     /// The default connection: github.com through the host's `gh` login.
@@ -143,13 +249,17 @@ impl Connection {
     }
 
     /// The credential source for this connection.
-    pub fn credentials(&self, store: Arc<dyn TokenStore>, helper_program: Option<&Path>) -> Arc<dyn CredentialSource> {
-        self.credentials_with_helper(store, helper_program.map(|p| crate::tokens::store_helper_command(p, &self.id)))
+    pub fn credentials(&self, store: Arc<dyn TokenStore>, helper_program: Option<&Path>, data_dir: Option<&Path>) -> Arc<dyn CredentialSource> {
+        self.credentials_with_helper(store, helper_program.map(|p| crate::tokens::store_helper_command(p, &self.id)), data_dir)
     }
 
     /// [`Connection::credentials`] with a ready-made helper command (the
     /// part after `!`), for hosts whose helper takes extra arguments.
-    pub fn credentials_with_helper(&self, store: Arc<dyn TokenStore>, helper: Option<String>) -> Arc<dyn CredentialSource> {
+    ///
+    /// `data_dir` is where `forges.toml` lives: a refreshed device sign-in's
+    /// expiry is saved there (once, under [`ForgesLock`]), and refreshes are
+    /// serialised with every other process using that data dir.
+    pub fn credentials_with_helper(&self, store: Arc<dyn TokenStore>, helper: Option<String>, data_dir: Option<&Path>) -> Arc<dyn CredentialSource> {
         match self.auth {
             AuthSource::Gh => Arc::new(GhCredentials::new(self.host())),
             AuthSource::None => Arc::new(Anonymous),
@@ -158,7 +268,22 @@ impl Connection {
                 if self.auth == AuthSource::Oauth {
                     *c.expires_at.get_mut().unwrap_or_else(|e| e.into_inner()) = self.token_expires_at;
                     if let Ok(ep) = crate::device::endpoints(self) {
-                        c.refresh = Some(RefreshConfig { token_url: ep.token_url, client_id: ep.client_id });
+                        c.refresh = Some(RefreshConfig { token_url: ep.token_url, client_id: ep.client_id, internal: self.internal });
+                    }
+                    if let Some(dir) = data_dir {
+                        c.data_dir = Some(dir.to_path_buf());
+                        let (dir, id) = (dir.to_path_buf(), self.id.clone());
+                        // Runs under the lock the refresh holds: no second
+                        // acquire here.
+                        c.on_refresh = Some(Arc::new(move |exp| {
+                            let mut all = Connections::load(&dir);
+                            if let Some(c) = all.get_mut(&id) {
+                                c.token_expires_at = exp;
+                                if let Err(e) = all.save(&dir) {
+                                    tracing::warn!("couldn't save the refreshed sign-in expiry for {id}: {e}");
+                                }
+                            }
+                        }));
                     }
                 }
                 Arc::new(c)
@@ -244,6 +369,17 @@ impl Connections {
             Some(x) => *x = c,
             None => self.forges.push(c),
         }
+    }
+
+    /// Load, change and save `forges.toml` under [`ForgesLock`], so a
+    /// refresh saving its expiry and another edit never lose each other's
+    /// change. Not for use while holding the lock.
+    pub fn update<T>(data_dir: &Path, f: impl FnOnce(&mut Connections) -> Result<T>) -> Result<T> {
+        let _lock = ForgesLock::acquire(data_dir)?;
+        let mut all = Self::load(data_dir);
+        let out = f(&mut all)?;
+        all.save(data_dir)?;
+        Ok(out)
     }
 
     pub fn remove(&mut self, id: &ForgeId) -> bool {

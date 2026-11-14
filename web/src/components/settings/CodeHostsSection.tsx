@@ -206,10 +206,11 @@ function AddConnection({ onAdded }: { onAdded: () => void }) {
   const [kind, setKind] = useState("gitlab");
   const [base, setBase] = useState("https://gitlab.com");
   const [clientId, setClientId] = useState("");
+  const [internal, setInternal] = useState(false);
 
   async function add() {
     try {
-      await forgesAdd(kind, base, kind === "github" && base.trim() === "https://github.com" ? "gh" : "token", clientId || undefined);
+      await forgesAdd(kind, base, kind === "github" && base.trim() === "https://github.com" ? "gh" : "token", clientId || undefined, internal || undefined);
       onAdded();
     } catch (e) {
       toast.error(errMsg(e));
@@ -256,6 +257,10 @@ function AddConnection({ onAdded }: { onAdded: () => void }) {
           style={fieldStyle}
         />
       )}
+      <label className="flex items-center gap-2 text-sm">
+        <input type="checkbox" checked={internal} onChange={(e) => setInternal(e.target.checked)} />
+        Internal server on this device's network (allows a local or private address; this device only)
+      </label>
     </Section>
   );
 }
