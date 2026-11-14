@@ -65,6 +65,19 @@ fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
+/// Agent text quoted in a system note the host signs: one line, at most
+/// `max` characters, so it can't add lines that read as the host's own.
+pub fn quote_line(t: &str, max: usize) -> String {
+    let one: String = t.split_whitespace().collect::<Vec<_>>().join(" ").chars().filter(|c| !c.is_control()).collect();
+    if one.chars().count() > max {
+        let mut cut: String = one.chars().take(max).collect();
+        cut.push('\u{2026}');
+        cut
+    } else {
+        one
+    }
+}
+
 /// A proposal to file.
 #[derive(Debug, Clone, Default)]
 pub struct NewProposal {
@@ -104,7 +117,7 @@ pub fn propose(svc: &mut ChatService, ctx: &EffectCtx, np: NewProposal) -> Resul
     let _ = svc.post_system_note(
         ctx.session_id,
         ctx.workspace_id,
-        format!("\u{1f4dd} {} proposed \u{201c}{title}\u{201d}. Review and approve it in the Review pane.", ctx.author),
+        format!("\u{1f4dd} {} proposed \u{201c}{}\u{201d}. Review and approve it in the Review pane.", ctx.author, quote_line(title, 200)),
     );
     Ok(id)
 }
@@ -131,7 +144,7 @@ pub fn file_workflow(svc: &mut ChatService, ctx: &EffectCtx, json: &str) -> Resu
     let _ = svc.post_system_note(
         ctx.session_id,
         ctx.workspace_id,
-        format!("\u{1f4dd} {} proposed the workflow \u{201c}{name}\u{201d} \u{2014} review it in the Review pane.", ctx.author),
+        format!("\u{1f4dd} {} proposed the workflow \u{201c}{}\u{201d} \u{2014} review it in the Review pane.", ctx.author, quote_line(&name, 200)),
     );
     Ok(name)
 }
@@ -174,7 +187,8 @@ pub fn open_alternatives(
         ctx.workspace_id,
         format!(
             "\u{1f41d} {} opened \u{201c}{}\u{201d} with {n} alternatives. Send scouts from the Review pane to assess them independently.",
-            ctx.author, set.question
+            ctx.author,
+            quote_line(&set.question, 200)
         ),
     );
     Ok(set.id)
