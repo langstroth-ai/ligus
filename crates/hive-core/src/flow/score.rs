@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{agent_key, ms, task_class, TurnTag};
+use super::{agent_key, ms, task_class, AgentOutcomeSummary, TurnTag};
 use crate::proposals::ProposalStatus;
 use crate::session::ChatSession;
 use crate::workflow::{NodeRunStatus, WorkflowNodeKind};
@@ -187,6 +187,110 @@ pub fn turns_spent(sessions: &[ChatSession]) -> BTreeMap<(String, String), (f64,
         }
     }
     out
+}
+
+/// Turn-level outcomes from other hosts' daily summaries (P0.5: per-turn
+/// tags are device-local facts, so a host sees its own turns as facts and
+/// everyone else's as these summaries). `this_host`'s own summaries are
+/// skipped: its facts already count.
+pub fn summary_outcomes(summaries: &BTreeMap<String, Vec<AgentOutcomeSummary>>, this_host: &str) -> Vec<OutcomeSample> {
+    let mut out = Vec::new();
+    for sum in summaries.values().flatten().filter(|s| s.host_id != this_host) {
+        let mut push = |class: &String, n: u32, quality: f64, success: bool, source: OutcomeSource| {
+            for _ in 0..n {
+                out.push(OutcomeSample {
+                    agent: sum.agent_key.clone(),
+                    task_class: class.clone(),
+                    at_ms: sum.window_start,
+                    quality,
+                    success,
+                    source,
+                });
+            }
+        };
+        for (class, n) in &sum.errors_by_class {
+            push(class, *n, 0.0, false, OutcomeSource::TurnError);
+        }
+        for (class, n) in &sum.tests_passed_by_class {
+            push(class, *n, 1.0, true, OutcomeSource::Tests);
+        }
+        for (class, n) in &sum.tests_failed_by_class {
+            push(class, *n, 0.0, false, OutcomeSource::Tests);
+        }
+    }
+    out
+}
+
+/// Turns spent per (agent, class) from other hosts' summaries; see
+/// [`summary_outcomes`].
+pub fn summary_turns_spent(summaries: &BTreeMap<String, Vec<AgentOutcomeSummary>>, this_host: &str) -> BTreeMap<(String, String), (f64, f64)> {
+    let mut out: BTreeMap<(String, String), (f64, f64)> = BTreeMap::new();
+    for sum in summaries.values().flatten().filter(|s| s.host_id != this_host) {
+        let total: u32 = sum.task_class_counts.values().sum();
+        for (class, n) in &sum.task_class_counts {
+            let e = out.entry((sum.agent_key.clone(), class.clone())).or_default();
+            e.0 += *n as f64;
+            if total > 0 {
+                e.1 += sum.cost_usd * (*n as f64) / total as f64;
+            }
+        }
+    }
+    out
+}
+
+/// Every outcome a host can score from: the chats (proposals, stages, this
+/// host's turn facts) plus the other hosts' summaries.
+pub fn outcomes_with_summaries(sessions: &[ChatSession], summaries: &BTreeMap<String, Vec<AgentOutcomeSummary>>, this_host: &str) -> Vec<OutcomeSample> {
+    let mut out = outcomes(sessions);
+    out.extend(summary_outcomes(summaries, this_host));
+    out.sort_by_key(|o| o.at_ms);
+    out
+}
+
+/// [`turns_spent`] plus the other hosts' summaries.
+pub fn turns_spent_with_summaries(
+    sessions: &[ChatSession],
+    summaries: &BTreeMap<String, Vec<AgentOutcomeSummary>>,
+    this_host: &str,
+) -> BTreeMap<(String, String), (f64, f64)> {
+    let mut out = turns_spent(sessions);
+    for (k, (t, c)) in summary_turns_spent(summaries, this_host) {
+        let e = out.entry(k).or_default();
+        e.0 += t;
+        e.1 += c;
+    }
+    out
+}
+
+/// A host's daily summary for `agent` built from its own turn tags of that
+/// day (and the proposals those turns filed, by status).
+pub fn summarize_day(agent: &str, host_id: &str, day_start: i64, tags: &[TurnTag], proposals: &[&crate::proposals::ActionProposal]) -> AgentOutcomeSummary {
+    let mut sum = AgentOutcomeSummary { agent_key: agent.into(), host_id: host_id.into(), window_start: day_start, ..Default::default() };
+    for t in tags.iter().filter(|t| t.agent == agent && super::utc_day(t.at_ms) == day_start) {
+        sum.turns += 1;
+        *sum.task_class_counts.entry(t.task_class.clone()).or_default() += 1;
+        if t.error {
+            *sum.errors_by_class.entry(t.task_class.clone()).or_default() += 1;
+        }
+        match t.tests_passed {
+            Some(true) => *sum.tests_passed_by_class.entry(t.task_class.clone()).or_default() += 1,
+            Some(false) => *sum.tests_failed_by_class.entry(t.task_class.clone()).or_default() += 1,
+            None => {}
+        }
+        sum.cost_usd += t.cost_usd;
+        for p in proposals.iter().filter(|p| t.proposal_ids.contains(&p.id)) {
+            if p.reverted {
+                sum.reverted += 1;
+            } else {
+                match p.status {
+                    ProposalStatus::Approved | ProposalStatus::Applied => sum.accepted += 1,
+                    ProposalStatus::Rejected => sum.rejected += 1,
+                    ProposalStatus::Open => {}
+                }
+            }
+        }
+    }
+    sum.bounded()
 }
 
 /// Scoring knobs.
@@ -503,5 +607,66 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert!(out.iter().any(|o| o.source == OutcomeSource::TurnError && o.quality == 0.0));
         assert!(out.iter().any(|o| o.source == OutcomeSource::Tests && o.success));
+    }
+
+    /// P0.5: a host that only sees another host's daily summaries scores
+    /// that host's turns exactly as one that saw the legacy per-turn tags
+    /// (fixture turns at the start of their day).
+    #[test]
+    fn scores_equal_from_summaries_and_from_legacy_tagged() {
+        let day = super::super::utc_day(1_760_000_000_000);
+        let tag = |agent: &str, class: &str, error: bool, tests: Option<bool>, cost: f64| TurnTag {
+            message_id: uuid::Uuid::new_v4(),
+            trigger_id: None,
+            agent: agent.into(),
+            runtime_id: "rt".into(),
+            host_id: "worker-1".into(),
+            task_class: class.into(),
+            role: String::new(),
+            arm: String::new(),
+            upstream_arm: String::new(),
+            error,
+            error_kind: String::new(),
+            tests_passed: tests,
+            tool_calls: 0,
+            duration_ms: 0,
+            cost_usd: cost,
+            proposal_ids: vec![],
+            handoff_parcel: false,
+            at_ms: day,
+        };
+        let tags = vec![
+            tag("a", "code", false, Some(true), 0.5),
+            tag("a", "code", true, None, 0.25),
+            tag("a", "docs", false, Some(false), 0.0),
+            tag("b", "code", false, None, 1.0),
+        ];
+        // Legacy: the tags folded into a chat on this host.
+        let mut legacy = ChatSession::new("", uuid::Uuid::nil(), "");
+        legacy.flow.turns = tags.clone();
+        let now = day + 3 * 86_400_000;
+        let legacy_book = ScoreBook::new(&outcomes(&[legacy.clone()]), &turns_spent(&[legacy]), ScoreParams::default(), now);
+        // Summaries: what worker-1 syncs, seen from another host.
+        let mut summaries: BTreeMap<String, Vec<AgentOutcomeSummary>> = BTreeMap::new();
+        for agent in ["a", "b"] {
+            summaries.entry(agent.into()).or_default().push(summarize_day(agent, "worker-1", day, &tags, &[]));
+        }
+        let empty = ChatSession::new("", uuid::Uuid::nil(), "");
+        let sum_book = ScoreBook::new(
+            &outcomes_with_summaries(std::slice::from_ref(&empty), &summaries, "desktop"),
+            &turns_spent_with_summaries(&[empty], &summaries, "desktop"),
+            ScoreParams::default(),
+            now,
+        );
+        let legacy_all: Vec<_> = legacy_book.all().cloned().collect();
+        let sum_all: Vec<_> = sum_book.all().cloned().collect();
+        assert_eq!(legacy_all.len(), sum_all.len());
+        for (l, s) in legacy_all.iter().zip(&sum_all) {
+            assert_eq!((&l.agent, &l.task_class, l.outcomes, l.successes), (&s.agent, &s.task_class, s.outcomes, s.successes));
+            assert!((l.score - s.score).abs() < 1e-12 && (l.recent - s.recent).abs() < 1e-12, "{l:?} vs {s:?}");
+            assert_eq!(l.turns_per_success, s.turns_per_success);
+        }
+        // Its own summaries don't double-count on the host that wrote them.
+        assert!(summary_outcomes(&summaries, "worker-1").is_empty());
     }
 }

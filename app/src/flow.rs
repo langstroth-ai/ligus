@@ -128,7 +128,9 @@ pub(crate) struct WorkspaceView {
     pub config: Arc<FlowState>,
 }
 
-type ViewCache = HashMap<Uuid, (i64, WorkspaceView)>;
+/// Keyed by the event log's and the facts table's high-water rows: a new
+/// device-local fact changes the view as much as a new event.
+type ViewCache = HashMap<Uuid, ((i64, i64), WorkspaceView)>;
 
 fn view_cache() -> &'static Mutex<ViewCache> {
     static CACHE: OnceLock<Mutex<ViewCache>> = OnceLock::new();
@@ -144,7 +146,8 @@ pub(crate) fn workspace_view(state: &AppState, workspace_id: Uuid) -> WorkspaceV
 
 /// [`workspace_view`] for a caller already holding the service lock.
 pub(crate) fn view_with(svc: &ChatService, workspace_id: Uuid) -> WorkspaceView {
-    let row = svc.store().max_row_id().unwrap_or(0);
+    let _ = THIS_HOST.set(svc.device_id().to_string());
+    let row = (svc.store().max_row_id().unwrap_or(0), svc.store().max_fact_row().unwrap_or(0));
     if let Some((at, view)) = view_cache().lock().unwrap().get(&workspace_id) {
         if *at == row {
             return view.clone();
@@ -310,10 +313,24 @@ fn file_memory(view: &WorkspaceView, secret: &[u8], body: &str, now_ms: i64) -> 
         .map(|t| t.agent.clone())
 }
 
+/// This device's host id (its own turns are facts here; other hosts' arrive
+/// as daily summaries).
+fn this_host() -> String {
+    THIS_HOST.get().cloned().unwrap_or_default()
+}
+
+static THIS_HOST: OnceLock<String> = OnceLock::new();
+
+/// Every outcome this device can score from: chats, its own turn facts, and
+/// other hosts' daily summaries (P0.5).
+fn outcomes(view: &WorkspaceView) -> Vec<flow::score::OutcomeSample> {
+    flow::score::outcomes_with_summaries(&view.sessions, &view.config.outcome_summaries, &this_host())
+}
+
 /// The outcome scores for a workspace.
 pub(crate) fn score_book(view: &WorkspaceView, s: &FlowSettings, now_ms: i64) -> flow::score::ScoreBook {
-    let samples = flow::score::outcomes(&view.sessions);
-    let turns = flow::score::turns_spent(&view.sessions);
+    let samples = outcomes(view);
+    let turns = flow::score::turns_spent_with_summaries(&view.sessions, &view.config.outcome_summaries, &this_host());
     flow::score::ScoreBook::new(&samples, &turns, s.score_params(), now_ms)
 }
 
@@ -435,7 +452,7 @@ fn roster(view: &WorkspaceView) -> Vec<hive_core::WorkspaceAgent> {
 
 /// Career per agent key (the primary is always a proposer).
 pub(crate) fn careers(view: &WorkspaceView) -> HashMap<String, (flow::Career, &'static str)> {
-    let samples = flow::score::outcomes(&view.sessions);
+    let samples = outcomes(view);
     let agents = roster(view);
     let inputs: Vec<flow::career::CareerInput<'_>> = std::iter::once(flow::career::CareerInput {
         agent: flow::PRIMARY.into(),
@@ -477,7 +494,7 @@ pub(crate) struct RosterReport {
 
 pub(crate) fn roster_report(state: &AppState, workspace_id: Uuid) -> RosterReport {
     let view = workspace_view(state, workspace_id);
-    let samples = flow::score::outcomes(&view.sessions);
+    let samples = outcomes(&view);
     let careers = careers(&view);
     let runtimes = state.combined_runtimes();
     let provider = |rt: &str| {
@@ -1087,6 +1104,16 @@ pub(crate) struct TurnFacts<'a> {
 /// Tag a finished turn and record what it handed on. Best effort.
 pub(crate) fn after_turn(app: &AppHandle, state: &AppState, session_id: Uuid, workspace_id: Uuid, facts: TurnFacts<'_>) {
     let _ = app;
+    // Sync this device's bounded daily outcome summaries for any finished
+    // day (at most one per agent, per day, per host).
+    {
+        let mut svc = state.service.lock().unwrap();
+        let host = svc.device_id().to_string();
+        let _ = THIS_HOST.set(host.clone());
+        if let Err(e) = svc.emit_daily_summaries(workspace_id, &host, flow::now_ms()) {
+            tracing::warn!(target: "flow", "couldn't emit daily outcome summaries: {e}");
+        }
+    }
     let Some(message_id) = facts.message_id else { return };
     let session = match state.service.lock().unwrap().load(session_id) {
         Ok(Some(s)) => s,

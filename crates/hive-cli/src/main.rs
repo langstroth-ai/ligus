@@ -1220,6 +1220,7 @@ fn usage() -> ! {
          phone remote access through a relay tunnel (off by default)\n  \
          ligus phones list | revoke <pid|name> [--keep-token]   phones paired over the relay\n  \
          ligus trust list | enable <digest> | enable-all [--repo PATH]   repo-supplied runtimes and MCP servers this device runs\n  \
+         ligus facts export --jsonl [--since MS]   this device's measurement facts (ligus.facts.v1), for external observability tools\n  \
          ligus dashboard check [--file PATH]   validate dashboard.toml and evaluate it once\n  \
          ligus dashboard default         print the generated default dashboard as TOML\n  \
          ligus dashboard metrics         list the built-in hive metrics panels can show\n\n\
@@ -1302,6 +1303,7 @@ fn run() -> Result<()> {
         "--remote-relay",
         "--file",
         "--repo",
+        "--since",
     ];
     let mut positional: Vec<&String> = Vec::new();
     let mut skip = false;
@@ -1483,6 +1485,16 @@ fn run() -> Result<()> {
                 Some("reset") => cli::remote_reset(&cfg.data_dir),
                 Some(other) => bail!("unknown `ligus remote {other}`: use enable|status|disable|reset"),
             }
+        }
+        "facts" => {
+            if positional.first().map(|s| s.as_str()) != Some("export") || !has("--jsonl") {
+                bail!("usage: ligus facts export --jsonl [--since <unix ms>]");
+            }
+            let since: i64 = flag_val("--since").map(|v| v.parse()).transpose().map_err(|_| anyhow!("--since takes unix milliseconds"))?.unwrap_or(0);
+            for line in open_service(&cfg)?.export_facts(since)? {
+                println!("{line}");
+            }
+            Ok(())
         }
         "trust" => {
             let repo = flag_val("--repo").map(PathBuf::from).map(Ok).unwrap_or_else(std::env::current_dir)?;

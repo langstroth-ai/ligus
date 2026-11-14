@@ -289,6 +289,10 @@ pub enum FlowRecord {
     AgentProfile(AgentFlowProfile),
     /// The workspace's home beacon (config, admin).
     Beacon(HomeBeacon),
+    /// One host's bounded daily outcome summary for one agent (config): the
+    /// synced input to cross-device scoring, now that per-turn measurements
+    /// are device-local facts (P0.5).
+    AgentOutcomeSummary(AgentOutcomeSummary),
     /// A record type from a newer build — kept in the log, inert here.
     #[serde(other)]
     Unknown,
@@ -312,6 +316,7 @@ impl FlowRecord {
             FlowRecord::ZoneRemoved { .. } => "zoneRemoved",
             FlowRecord::AgentProfile(_) => "agentProfile",
             FlowRecord::Beacon(_) => "beacon",
+            FlowRecord::AgentOutcomeSummary(_) => "agentOutcomeSummary",
             FlowRecord::Unknown => "unknown",
         }
     }
@@ -329,6 +334,18 @@ impl FlowRecord {
                 | FlowRecord::ZoneRemoved { .. }
                 | FlowRecord::AgentProfile(_)
                 | FlowRecord::Beacon(_)
+                | FlowRecord::AgentOutcomeSummary(_)
+        )
+    }
+
+    /// Per-turn measurement records (P0.5): no longer written to the signed
+    /// log. They are device-local facts (`ligus.facts.v1`), and a bounded
+    /// daily [`AgentOutcomeSummary`] is what syncs. Ones already in a log
+    /// still fold.
+    pub fn is_measurement(&self) -> bool {
+        matches!(
+            self,
+            FlowRecord::TurnTagged(_) | FlowRecord::Touch(_) | FlowRecord::Progress(_) | FlowRecord::EdgeWait(_) | FlowRecord::RouteStop(_)
         )
     }
 
@@ -377,6 +394,81 @@ pub struct FlowState {
     pub profiles: BTreeMap<Uuid, AgentFlowProfile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub beacon: Option<HomeBeacon>,
+    /// Daily outcome summaries per agent key, newest last, at most
+    /// [`MAX_SUMMARIES_PER_AGENT`] each; one per (host, day).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub outcome_summaries: BTreeMap<String, Vec<AgentOutcomeSummary>>,
+}
+
+/// Fold cap on summaries kept per agent.
+pub const MAX_SUMMARIES_PER_AGENT: usize = 400;
+/// Cap on the task classes one summary carries.
+pub const MAX_SUMMARY_CLASSES: usize = 16;
+
+/// One host's outcome counts for one agent over one UTC day. Ids, enums and
+/// numbers only.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentOutcomeSummary {
+    /// [`agent_key`] of the agent.
+    pub agent_key: String,
+    /// The host (device or worker id) whose turns these are.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub host_id: String,
+    /// Start of the UTC day, in ms since the epoch.
+    pub window_start: i64,
+    pub turns: u32,
+    /// Proposals filed by these turns, by their status when summarized.
+    #[serde(default)]
+    pub accepted: u32,
+    #[serde(default)]
+    pub reverted: u32,
+    #[serde(default)]
+    pub rejected: u32,
+    /// Turns per task class (at most [`MAX_SUMMARY_CLASSES`]).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub task_class_counts: BTreeMap<String, u32>,
+    /// Turns that ended in an error, per task class.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub errors_by_class: BTreeMap<String, u32>,
+    /// Test runs that passed / failed, per task class.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tests_passed_by_class: BTreeMap<String, u32>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tests_failed_by_class: BTreeMap<String, u32>,
+    /// Estimated cost of these turns, in USD.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub cost_usd: f64,
+}
+
+fn is_zero(x: &f64) -> bool {
+    *x == 0.0
+}
+
+impl AgentOutcomeSummary {
+    /// Keep the class maps within [`MAX_SUMMARY_CLASSES`] (the busiest classes).
+    pub fn bounded(mut self) -> Self {
+        if self.task_class_counts.len() > MAX_SUMMARY_CLASSES {
+            let mut by: Vec<(String, u32)> = self.task_class_counts.clone().into_iter().collect();
+            by.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+            let keep: std::collections::BTreeSet<String> = by.into_iter().take(MAX_SUMMARY_CLASSES).map(|(k, _)| k).collect();
+            for m in [&mut self.task_class_counts, &mut self.errors_by_class, &mut self.tests_passed_by_class, &mut self.tests_failed_by_class] {
+                m.retain(|k, _| keep.contains(k));
+            }
+        }
+        for m in [&mut self.errors_by_class, &mut self.tests_passed_by_class, &mut self.tests_failed_by_class] {
+            while m.len() > MAX_SUMMARY_CLASSES {
+                let k = m.keys().next_back().cloned().unwrap_or_default();
+                m.remove(&k);
+            }
+        }
+        self
+    }
+}
+
+/// Start of the UTC day containing `at_ms`.
+pub fn utc_day(at_ms: i64) -> i64 {
+    at_ms.div_euclid(86_400_000) * 86_400_000
 }
 
 fn push_capped<T>(v: &mut Vec<T>, item: T) {
@@ -451,6 +543,20 @@ impl FlowState {
                 self.profiles.insert(p.agent_id, p.clone());
             }
             FlowRecord::Beacon(b) => self.beacon = Some(b.clone()),
+            FlowRecord::AgentOutcomeSummary(sum) => {
+                let list = self.outcome_summaries.entry(sum.agent_key.clone()).or_default();
+                // One per (host, day): a re-emission replaces.
+                if let Some(slot) = list.iter_mut().find(|x| x.host_id == sum.host_id && x.window_start == sum.window_start) {
+                    *slot = sum.clone().bounded();
+                } else {
+                    list.push(sum.clone().bounded());
+                    list.sort_by_key(|x| (x.window_start, x.host_id.clone()));
+                    if list.len() > MAX_SUMMARIES_PER_AGENT {
+                        let drop = list.len() - MAX_SUMMARIES_PER_AGENT;
+                        list.drain(..drop);
+                    }
+                }
+            }
             FlowRecord::Unknown => {}
         }
     }

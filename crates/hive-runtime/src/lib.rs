@@ -15,6 +15,7 @@ pub mod context;
 pub mod device_enroll;
 pub mod directives;
 pub mod egress;
+pub mod facts;
 pub mod envelope_verifier;
 pub mod event_store;
 pub mod executor;
