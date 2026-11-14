@@ -643,6 +643,10 @@ pub fn roster_with_batch(
     let mut pending: Vec<&SessionEventEnvelope> = batch.iter().copied().filter(|e| is_trust_kind(&e.payload)).collect();
     pending.sort_by_key(|e| e.canonical_key());
     let (boot, mut pending): (Vec<_>, Vec<_>) = pending.into_iter().partition(|e| is_trust_bootstrap(e));
+    // A key registration or rotation joins only when it speaks for its own
+    // signer's account (see `key_publication_ok`): a forged one would make the
+    // victim's account disputed for this very batch.
+    let boot: Vec<_> = boot.into_iter().filter(|e| key_publication_ok(e)).collect();
     stored.extend(boot.into_iter().cloned());
     let mut roster = build_roster_pinned(&stored, pin);
     while !pending.is_empty() {
@@ -749,8 +753,25 @@ fn entrance_closed(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> bool
     roster.dearth_workspaces.contains(&env.workspace_id) && !is_trust_bootstrap(env)
 }
 
+/// An account key registration or rotation is published by a device of that
+/// account: signed, and stamped as that account. Anyone else publishing one
+/// for a victim's account id would make it disputed (every event the victim
+/// signs is then quarantined).
+fn key_publication_ok(env: &SessionEventEnvelope) -> bool {
+    let account = match &env.payload {
+        SessionEvent::AccountKeyRegistered { account_id, .. } | SessionEvent::AccountKeyRotated { account_id, .. } => {
+            *account_id
+        }
+        _ => return true,
+    };
+    env.signer_device_id.is_some() && env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) == Some(account)
+}
+
 /// Classify an envelope against the roster (see [`Verdict`]).
 pub fn verdict_for(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verdict {
+    if !key_publication_ok(env) {
+        return Verdict::Quarantine(QuarantineReason::Impersonation);
+    }
     let Some(device_id) = env.signer_device_id else {
         // A genuine event is ALWAYS signed — `append_signed` sets the signature and
         // the actor stamp together — so an unsigned envelope that nonetheless

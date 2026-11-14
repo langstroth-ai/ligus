@@ -285,3 +285,38 @@ proptest! {
         prop_assert_eq!(&a, &fold(&delivery));
     }
 }
+
+/// Hardening A-9: an account key registration (or rotation) speaks for one
+/// account, and only that account's own devices may publish it. Otherwise any
+/// member, or anyone posting an unsigned body, registers a second key under a
+/// victim's account id: the account becomes disputed and every event the
+/// victim signs is quarantined (a lockout).
+#[test]
+fn only_an_account_registers_its_own_key() {
+    let (owner, mara, eve) = (Principal::new("owner"), Principal::new("mara"), Principal::new("eve"));
+    let ws = Uuid::new_v4();
+    let stored = workspace(ws, &owner, &[&mara, &eve]);
+    let roster = build_roster(&stored);
+    assert_eq!(verdict_for(&roster, &mara.content(ws, 90)), Verdict::Valid, "precondition");
+    let other_key = SigningKeypair::generate().unwrap();
+    let forged = SessionEvent::AccountKeyRegistered { account_id: mara.account_id, signing_public_key: other_key.public_key_bytes().to_vec() };
+    // A member (eve) signs it as herself...
+    let by_member = eve.sign(ws, 100, forged.clone());
+    // ...or nobody signs it at all.
+    let mut unsigned = SessionEventEnvelope::new(workspace_config_session_id(ws), ws, 101, forged);
+    unsigned.lamport = 101;
+    for env in [&by_member, &unsigned] {
+        assert!(
+            matches!(verdict_for(&roster, env), Verdict::Quarantine(_)),
+            "a registration for someone else's account was accepted: {:?}",
+            verdict_for(&roster, env)
+        );
+    }
+    // Had it been stored, mara would be locked out.
+    let mut poisoned = stored.clone();
+    poisoned.push(unsigned);
+    assert_ne!(verdict_for(&build_roster(&poisoned), &mara.content(ws, 120)), Verdict::Valid);
+    // Her own registration (idempotent) stays fine.
+    let own = mara.sign(ws, 130, SessionEvent::AccountKeyRegistered { account_id: mara.account_id, signing_public_key: mara.account.public_key_bytes().to_vec() });
+    assert_eq!(verdict_for(&roster, &own), Verdict::Valid);
+}
