@@ -11,7 +11,7 @@ import {
   type Presence,
 } from "@/lib/ipc";
 import { toast, errMsg } from "@/components/Toast";
-import { confirmThen } from "@/lib/confirm";
+import { confirmThen, withUnverifiedRecipientConfirm } from "@/lib/confirm";
 import { IconUsers } from "@/lib/icons";
 
 /// Dot color for a friend's presence. Exported for unit testing.
@@ -99,7 +99,8 @@ export function FriendsView({
   }
   async function message(accountId: string, login: string) {
     try {
-      await friendOpenDm(accountId, login);
+      const opened = await withUnverifiedRecipientConfirm(`@${login}`, (confirm) => friendOpenDm(accountId, login, confirm));
+      if (opened === null) return; // cancelled at the unverified-recipient warning
       await qc.invalidateQueries({ queryKey: ["workspaces"] });
       await qc.invalidateQueries({ queryKey: ["chats"] });
       onOpenDm?.();

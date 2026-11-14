@@ -435,6 +435,19 @@ impl EventStore {
     /// Whether this workspace already carries a device certificate binding
     /// `device_id` to `account_id` — so identity publication stays idempotent
     /// (and re-publishes once when the account id changes, e.g. GitHub sign-in).
+    /// Workspaces where some device published its key-agreement key (B1).
+    pub fn workspaces_with_ka_publications(&self) -> Result<Vec<Uuid>> {
+        let mut stmt = self.conn.prepare("SELECT DISTINCT workspace_id FROM events WHERE kind = 'deviceKeyAgreementPublished'")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            if let Ok(id) = Uuid::parse_str(&row?) {
+                out.push(id);
+            }
+        }
+        Ok(out)
+    }
+
     /// Whether `session_id` itself carries a certificate for (device, account).
     pub fn has_device_certificate_in(&self, session_id: Uuid, device_id: Uuid, account_id: Uuid) -> Result<bool> {
         let envs = self.query_envelopes(

@@ -67,7 +67,7 @@ import { Avatar } from "@/components/Avatar";
 import { fileToAvatarDataUrl } from "@/lib/avatar";
 import { PRIMARY_NAME, PRIMARY_HANDLE } from "@/lib/agent";
 import { toast, errMsg } from "@/components/Toast";
-import { confirmThen } from "@/lib/confirm";
+import { confirmThen, withUnverifiedRecipientConfirm } from "@/lib/confirm";
 import {
   Button,
   IconButton,
@@ -1864,15 +1864,21 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
     onError: (e) => toast.error(`Couldn't revoke: ${errMsg(e)}`),
   });
   const inviteMutation = useMutation({
-    mutationFn: () => inviteByHandle(sessionId, handle.trim()),
+    // Track B: when only the relay vouches for their device keys, ask before
+    // sealing the workspace key to them.
+    mutationFn: () =>
+      withUnverifiedRecipientConfirm(`@${handle.trim().replace(/^@/, "")}`, (confirm) =>
+        inviteByHandle(sessionId, handle.trim(), confirm),
+      ),
     onSuccess: (r) => {
+      if (!r) return; // cancelled at the unverified-recipient warning
       setHandle("");
       setError(null);
       setShowInvite(false);
       refresh();
       toast.success(
         r.sealed
-          ? `Invited @${r.login} — workspace key sealed to ${r.devices} device${r.devices === 1 ? "" : "s"}.`
+          ? `Invited @${r.login} — workspace key sealed to ${r.devices} ${r.verified ? "verified " : "unverified "}device${r.devices === 1 ? "" : "s"}.`
           : `Invited @${r.login}.`,
       );
     },

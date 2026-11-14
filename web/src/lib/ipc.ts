@@ -682,11 +682,14 @@ export interface InviteResultDto {
   login: string;
   devices: number;
   sealed: boolean;
+  /// The devices' keys are ones the invitee's account signed (false: only the
+  /// relay vouched for them and you confirmed).
+  verified: boolean;
 }
 /// Invite a GitHub user by handle to this chat's workspace (seals the key to
 /// all their devices via the directory).
-export const inviteByHandle = (sessionId: string, handle: string) =>
-  invoke<InviteResultDto>("invite_by_handle", { sessionId, handle });
+export const inviteByHandle = (sessionId: string, handle: string, confirmUnverified = false) =>
+  invoke<InviteResultDto>("invite_by_handle", { sessionId, handle, confirmUnverified });
 
 /// A server-side workspace member (membership-enforcing / paid relays only).
 export interface MemberEntry {
@@ -805,8 +808,8 @@ export interface DmDto {
 }
 /// Open (provisioning on first use) the 1:1 DM workspace with a friend and
 /// switch the chat list to it. Returns the DM workspace id.
-export const friendOpenDm = (accountId: string, login: string) =>
-  invoke<string>("friend_open_dm", { accountId, login });
+export const friendOpenDm = (accountId: string, login: string, confirmUnverified = false) =>
+  invoke<string>("friend_open_dm", { accountId, login, confirmUnverified });
 /// The provisioned DM workspaces (Friends section).
 export const listDms = () => invoke<DmDto[]>("list_dms");
 

@@ -14,6 +14,7 @@ pub mod chat_service;
 pub mod cli_detect;
 pub mod context;
 pub mod device_enroll;
+pub mod directory_trust;
 pub mod directives;
 pub mod effects;
 pub mod egress;

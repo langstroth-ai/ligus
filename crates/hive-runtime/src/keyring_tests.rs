@@ -962,3 +962,71 @@ fn parked_flood_does_not_evict_pending_rotation_bodies() {
     assert!(parked.len() as i64 <= crate::event_store::PARKED_KEEP, "the cap holds");
     assert!(parked.iter().any(|(seq, _)| *seq == 1), "the flood evicted the body waiting for the authorized rotation");
 }
+
+/// World's config log in a store, pinned to its founder (what a member's
+/// device holds).
+fn pinned_store(w: &World) -> crate::EventStore {
+    let mut store = crate::EventStore::open_in_memory().unwrap();
+    for env in &w.cfg {
+        store.ingest(env).unwrap();
+    }
+    let founder = &w.people["owner"];
+    let fk = crate::envelope_verifier::FounderPin::fingerprint_hex(&founder.account.public_key_bytes());
+    store.set_workspace_pin(w.wid, &founder.account_id.to_string(), &fk).unwrap();
+    store
+}
+
+fn directory_device(id: &str, ka: &[u8]) -> crate::relay_client::DirectoryDevice {
+    crate::relay_client::DirectoryDevice { device_id: id.into(), ka_public: hive_core::keys::hex(ka) }
+}
+
+/// Track B residual 7: a directory key counts as verified only when a device
+/// certified for that very account published it, signed, on a config log
+/// this device holds with a founder pin. A key the relay substituted, a key
+/// another account published, and a revoked device's key are not.
+#[test]
+fn directory_keys_verified_only_from_a_certified_devices_publication() {
+    use crate::directory_trust::signed_ka_keys;
+    let mut w = World::new();
+    let ada = w.people["ada"].account_id;
+    let ada_ka = w.people["ada"].ka().public_key_bytes();
+    let mara_ka = w.people["mara"].ka().public_key_bytes();
+    let signed = signed_ka_keys(&pinned_store(&w), ada);
+    assert!(signed.contains(&ada_ka), "ada's own publication");
+    assert!(!signed.contains(&mara_ka), "another account's key");
+    assert!(!signed.contains(&KeyAgreementKeypair::generate().unwrap().public_key_bytes()), "a key nobody published");
+    // An unpinned store decides nothing.
+    let mut unpinned = crate::EventStore::open_in_memory().unwrap();
+    for env in &w.cfg {
+        unpinned.ingest(env).unwrap();
+    }
+    assert!(signed_ka_keys(&unpinned, ada).is_empty(), "keys from an unpinned fold");
+    // Revoked: no longer vouched for.
+    let device = w.people["ada"].device_id;
+    w.push("owner", SessionEvent::DeviceRevoked { device_id: device });
+    assert!(!signed_ka_keys(&pinned_store(&w), ada).contains(&ada_ka), "a revoked device's key");
+}
+
+/// Track B residual 7: an invite or a DM is sealed only to verified devices
+/// when the invitee has any; with none, sealing needs the inviter's explicit
+/// confirmation (the UI's "unverified recipient" warning).
+#[test]
+fn directory_seal_plan_prefers_verified_devices() {
+    use crate::directory_trust::{plan, UNVERIFIED_RECIPIENT};
+    let w = World::new();
+    let ada = w.people["ada"].account_id;
+    let ada_ka = w.people["ada"].ka().public_key_bytes();
+    let relay_ka = KeyAgreementKeypair::generate().unwrap().public_key_bytes();
+    let signed = crate::directory_trust::signed_ka_keys(&pinned_store(&w), ada);
+    let listed = [directory_device("relay-added", &relay_ka), directory_device("ada-desk", &ada_ka), directory_device("bad", b"short")];
+    let p = plan(&listed, &signed, false).unwrap();
+    assert!(p.verified);
+    assert_eq!(p.recipients.iter().map(|r| r.device_id.as_str()).collect::<Vec<_>>(), vec!["ada-desk"], "the relay's extra device is left out");
+    let stranger = [directory_device("relay-added", &relay_ka)];
+    let err = plan(&stranger, &signed, false).unwrap_err();
+    assert!(err.starts_with(UNVERIFIED_RECIPIENT), "{err}");
+    let p = plan(&stranger, &signed, true).unwrap();
+    assert!(!p.verified);
+    assert_eq!(p.recipients.len(), 1, "sealed after the inviter confirmed");
+    assert!(plan(&[], &signed, false).unwrap().recipients.is_empty(), "no devices: nothing to seal, nothing to confirm");
+}
