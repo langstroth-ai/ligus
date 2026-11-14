@@ -91,9 +91,13 @@ pub fn extract_result(line: &str) -> Option<String> {
 
 /// A plan-window observation from a `rate_limit_event` line, if this is one.
 /// Parsed defensively: every field is optional, unknown statuses are ignored.
-/// Shape: `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed" |
+/// Shape (checked against the schema bundled in the Claude Code CLI, 2.1.x):
+/// `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed" |
 /// "allowed_warning" | "rejected","resetsAt":<unix s>,"rateLimitType":
-/// "five_hour" | "seven_day" | ...,"utilization":<0..1 or 0..100>}}`.
+/// "five_hour" | "seven_day" | "seven_day_opus" | ...,"utilization":<number>,
+/// "unifiedWindows":{"five_hour":{"utilization":..,"resetsAt":..},...}},
+/// "uuid":..,"session_id":..}`. Only `status` is required there; when the
+/// top-level `utilization` is missing, the busiest of `unifiedWindows` is used.
 pub fn extract_rate_limit(line: &str) -> Option<hive_core::throttle::PlanWindow> {
     use hive_core::throttle::{PlanWindow, WindowStatus};
     let v: Value = serde_json::from_str(line.trim()).ok()?;
@@ -107,20 +111,31 @@ pub fn extract_rate_limit(line: &str) -> Option<hive_core::throttle::PlanWindow>
         "rejected" => WindowStatus::Rejected,
         _ => return None,
     };
-    let utilization_pct = info.get("utilization").and_then(Value::as_f64).map(|u| {
+    let pct_of = |u: f64| {
         let pct = if u <= 1.0 { u * 100.0 } else { u };
         pct.clamp(0.0, 100.0).round() as u8
+    };
+    let secs = |t: i64| if t > 10_000_000_000 { t / 1000 } else { t };
+    // The busiest per-window entry, for when the top-level figures are absent.
+    let busiest = info.get("unifiedWindows").and_then(Value::as_object).and_then(|w| {
+        w.iter()
+            .filter_map(|(name, v)| Some((name.clone(), v.get("utilization")?.as_f64()?, v.get("resetsAt").and_then(Value::as_i64))))
+            .max_by(|a, b| a.1.total_cmp(&b.1))
     });
+    let utilization_pct =
+        info.get("utilization").and_then(Value::as_f64).or(busiest.as_ref().map(|b| b.1)).map(pct_of);
     let resets_at = info
         .get("resetsAt")
         .or_else(|| info.get("resets_at"))
         .and_then(Value::as_i64)
-        .map(|t| if t > 10_000_000_000 { t / 1000 } else { t });
+        .or(busiest.as_ref().and_then(|b| b.2))
+        .map(secs);
     let window = info
         .get("rateLimitType")
         .or_else(|| info.get("rate_limit_type"))
         .and_then(Value::as_str)
-        .map(str::to_owned);
+        .map(str::to_owned)
+        .or(busiest.map(|b| b.0));
     let observed_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -438,6 +453,22 @@ mod tests {
         assert_eq!(r.resets_at, Some(1_900_000_000), "milliseconds are normalized");
         assert!(extract_rate_limit(r#"{"type":"rate_limit_event","rate_limit_info":{"status":"mystery"}}"#).is_none());
         assert!(extract_rate_limit(r#"{"type":"result","result":"x"}"#).is_none());
+    }
+
+    #[test]
+    fn parses_the_cli_rate_limit_event_shape() {
+        use hive_core::throttle::WindowStatus;
+        // The full shape the CLI emits (uuid, session_id, per-window figures).
+        let line = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1900000000,"rateLimitType":"seven_day","utilization":0.42,"isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":0.9,"resetsAt":1800000000},"seven_day":{"utilization":0.42,"resetsAt":1900000000}}},"uuid":"u","session_id":"s"}"#;
+        let w = extract_rate_limit(line).unwrap();
+        assert_eq!((w.status, w.utilization_pct, w.resets_at, w.window.as_deref()), (WindowStatus::Allowed, Some(42), Some(1_900_000_000), Some("seven_day")));
+        // Only status and the per-window figures: the busiest window is used.
+        let line = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","unifiedWindows":{"five_hour":{"utilization":0.9,"resetsAt":1800000000},"seven_day":{"utilization":0.42,"resetsAt":1900000000}}},"uuid":"u","session_id":"s"}"#;
+        let w = extract_rate_limit(line).unwrap();
+        assert_eq!((w.status, w.utilization_pct, w.resets_at, w.window.as_deref()), (WindowStatus::Warning, Some(90), Some(1_800_000_000), Some("five_hour")));
+        // Status alone is enough.
+        let w = extract_rate_limit(r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected"},"uuid":"u","session_id":"s"}"#).unwrap();
+        assert_eq!((w.status, w.utilization_pct, w.resets_at), (WindowStatus::Rejected, None, None));
     }
 
     #[test]
