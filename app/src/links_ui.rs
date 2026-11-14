@@ -55,11 +55,14 @@ impl LinkSettings {
     }
 }
 
-fn fetcher(state: &AppState) -> LinkFetcher {
+/// `explicit`: the person asked for this check (linking their own account,
+/// "Check now"), so hosts the link's owner chose may be asked too.
+fn fetcher(state: &AppState, explicit: bool) -> LinkFetcher {
     let s = state.settings.lock().unwrap();
     LinkFetcher::new(ForgeConfig {
         check_forges: s.identity_links.checks_on(),
         self_hosted: s.identity_links.forges.clone(),
+        ask_owner_chosen_hosts: explicit,
         ..Default::default()
     })
 }
@@ -145,7 +148,7 @@ pub(crate) async fn identity_link_prepare(
     if targets.is_empty() {
         return Err("Pick at least one workspace to show this identity in.".into());
     }
-    let f = fetcher(&state);
+    let f = fetcher(&state, true);
     let (subject_id, canonical) = f.resolve_handle(&provider, &host, &handle).await.map_err(|e| match e {
         identity_links::FetchError::Gone => format!("{host} has no account {handle:?}"),
         identity_links::FetchError::NotConfigured(why) => why,
@@ -268,7 +271,7 @@ pub(crate) async fn identity_link_publish(
     }
     // Ask the forge once before publishing, so a key it doesn't list is
     // caught now (an unreachable forge doesn't block: others will check).
-    let f = fetcher(&state);
+    let f = fetcher(&state, true);
     let (ws0, l0) = ready.first().cloned().ok_or("nothing to publish")?;
     let status = identity_links::check_link(&l0, LinkContext { workspace_id: ws0, account_key: Some(&account_key) }, &f, Timestamp::now(), None).await;
     if let LinkStatus::Stale { reason, .. } | LinkStatus::Invalid { reason } = &status {
@@ -371,7 +374,7 @@ pub(crate) fn my_identity_links(state: State<AppState>) -> Vec<LinkDto> {
 #[tauri::command]
 pub(crate) async fn identity_link_statuses(state: State<'_, AppState>, account_id: String, force: bool) -> Result<Vec<LinkDto>, String> {
     let account = Uuid::parse_str(account_id.trim()).map_err(|_| "not an account id".to_string())?;
-    let f = fetcher(&state);
+    let f = fetcher(&state, force);
     let now = Timestamp::now();
     let mut out = Vec::new();
     for (mut dto, ws, link, key) in links_of(&state, account) {

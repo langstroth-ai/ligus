@@ -254,6 +254,12 @@ pub struct ForgeConfig {
     /// "Contact forges to check linked identities" (on by default, D13).
     pub check_forges: bool,
     pub self_hosted: Vec<SelfHostedForge>,
+    /// Ask hosts the link's owner chose (a PDS other than the big hosted
+    /// ones, a `did:web` host, a handle's domain). Set only for a check the
+    /// person asked for ("Check now", linking their own account): an
+    /// automatic check must not tell a server the link's owner runs who
+    /// looked, and from where.
+    pub ask_owner_chosen_hosts: bool,
     /// Tests only: API roots by `(provider, host)` (fake servers on
     /// loopback), the PLC directory root, and plain HTTP to loopback for a
     /// PDS. Never set from settings.
@@ -275,6 +281,13 @@ fn builtin_api(provider: &str, host: &str) -> Option<&'static str> {
         ("sourcehut", "meta.sr.ht") => "https://meta.sr.ht",
         _ => return None,
     })
+}
+
+/// The hosted PDSes an automatic check may ask (Bluesky's): a host the
+/// link's owner can't run.
+pub fn well_known_pds(host: &str) -> bool {
+    let h = host.trim_end_matches('.').to_ascii_lowercase();
+    h == "bsky.social" || (h.ends_with(".bsky.network") && h.len() > ".bsky.network".len())
 }
 
 /// The PLC directory (did:plc resolution).
@@ -459,6 +472,13 @@ impl LinkFetcher {
             }
             if !parsed.username().is_empty() || parsed.password().is_some() {
                 return Err(FetchError::NotConfigured("a URL with credentials".into()));
+            }
+            let chosen_by_owner = !parsed.host_str().is_some_and(well_known_pds);
+            if chosen_by_owner && !self.cfg.ask_owner_chosen_hosts {
+                return Err(FetchError::NotConfigured(format!(
+                    "checking this link asks {}, a server its owner chose; check it by hand to ask it",
+                    parsed.host_str().unwrap_or("a server")
+                )));
             }
             if let Some(url::Host::Ipv4(ip)) = parsed.host() {
                 if !is_public_ip(IpAddr::V4(ip)) && !loopback_ok {

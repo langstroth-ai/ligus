@@ -503,7 +503,13 @@ async fn tangled_resolves_the_did_then_reads_the_pds() {
         200,
         serde_json::json!({"records": [{"uri": "at://x", "value": {"name": "laptop", "publicKey": openssh_pub(&k), "createdAt": "2026-01-01T00:00:00Z"}}]}).to_string(),
     );
-    let cfg = ForgeConfig { check_forges: true, test_plc: Some(plc.url.clone()), test_allow_loopback: true, ..Default::default() };
+    let cfg = ForgeConfig {
+        check_forges: true,
+        ask_owner_chosen_hosts: true,
+        test_plc: Some(plc.url.clone()),
+        test_allow_loopback: true,
+        ..Default::default()
+    };
     let f = LinkFetcher::new(cfg);
     let l = signed("tangled", "atproto", did, "erin.example.com", &k);
     let s = check_link(&l, ctx(), &f, now(), None).await;
@@ -511,7 +517,7 @@ async fn tangled_resolves_the_did_then_reads_the_pds() {
 
     // Without the test loopback allowance, a DID document pointing the PDS
     // at a private address is refused (SSRF).
-    let cfg = ForgeConfig { check_forges: true, test_plc: Some(plc.url.clone()), ..Default::default() };
+    let cfg = ForgeConfig { check_forges: true, ask_owner_chosen_hosts: true, test_plc: Some(plc.url.clone()), ..Default::default() };
     let before = pds.hits();
     let s = check_link(&l, ctx(), &LinkFetcher::new(cfg), now(), None).await;
     assert!(!s.is_verified(), "{s:?}");
@@ -653,3 +659,43 @@ async fn forge_supplied_handles_lose_bidi_controls() {
     assert!(matches!(&s, LinkStatus::Verified { handle: Some(h), .. } if h == "bob"), "{s:?}");
 }
 
+
+/// Privacy: a Tangled link's owner chooses its PDS (and a `did:web` host,
+/// and a handle's domain). An automatic check (opening People) must not
+/// make every viewer's device contact a server the link's owner runs, which
+/// would tell them who looked and from where; only an explicit check does.
+/// The big hosted PDSes are asked automatically.
+#[tokio::test]
+async fn automatic_checks_never_contact_hosts_the_link_owner_chose() {
+    let plc = server().await;
+    let pds = server().await;
+    let k = key(6);
+    let did = "did:plc:abcdefghijklmnopqrstuvwx";
+    plc.set(
+        &format!("/{did}"),
+        200,
+        serde_json::json!({"id": did, "service": [{"id": "#atproto_pds", "serviceEndpoint": pds.url}]}).to_string(),
+    );
+    pds.set(
+        &format!("/xrpc/com.atproto.repo.listRecords?repo={did}&collection=org.tangled.key.sshKey&limit=100"),
+        200,
+        serde_json::json!({"records": [{"value": {"publicKey": openssh_pub(&k)}}]}).to_string(),
+    );
+    let l = signed("tangled", "atproto", did, "erin.example.com", &k);
+    let auto = ForgeConfig { check_forges: true, test_plc: Some(plc.url.clone()), test_allow_loopback: true, ..Default::default() };
+    let s = check_link(&l, ctx(), &LinkFetcher::new(auto.clone()), now(), None).await;
+    assert!(matches!(s, LinkStatus::NotChecked { .. }), "{s:?}");
+    assert_eq!(pds.hits(), 0, "the owner's server never hears of an automatic check");
+    let did_web = "did:web:erin.example.com";
+    let l_web = signed("tangled", "atproto", did_web, "erin.example.com", &k);
+    assert!(matches!(check_link(&l_web, ctx(), &LinkFetcher::new(auto.clone()), now(), None).await, LinkStatus::NotChecked { .. }));
+    let explicit = ForgeConfig { ask_owner_chosen_hosts: true, ..auto };
+    assert!(check_link(&l, ctx(), &LinkFetcher::new(explicit), now(), None).await.is_verified());
+    assert!(pds.hits() > 0);
+    for host in ["bsky.social", "morel.us-east.host.bsky.network"] {
+        assert!(well_known_pds(host), "{host}");
+    }
+    for host in ["erin.example.com", "bsky.network.evil.example", "evilbsky.network", "127.0.0.1"] {
+        assert!(!well_known_pds(host), "{host}");
+    }
+}
