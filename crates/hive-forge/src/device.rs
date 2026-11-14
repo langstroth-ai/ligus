@@ -129,6 +129,7 @@ pub enum Poll {
 }
 
 async fn post_form(url: &str, form: &[(&str, &str)]) -> Result<(reqwest::StatusCode, Value)> {
+    crate::http::guard_url(url)?;
     let resp = crate::http::client()
         .post(url)
         .header("Accept", "application/json")

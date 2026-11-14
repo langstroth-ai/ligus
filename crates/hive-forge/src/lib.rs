@@ -37,6 +37,7 @@ pub mod spec;
 pub mod tokens;
 
 pub use conn::{Connection, Connections};
+pub use http::real_hosts_denied;
 pub use tokens::{AuthSource, CredentialSource, Purpose, Secret, TokenStore};
 
 /// Environment variables forge CLIs and community MCP servers read tokens

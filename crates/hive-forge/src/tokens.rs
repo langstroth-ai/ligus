@@ -289,6 +289,12 @@ impl GhCredentials {
                 return r.clone();
             }
         }
+        // A test build never asks the host's own gh (a fake one by path is fine).
+        if self.gh == "gh" && crate::http::real_hosts_denied() {
+            let r: std::result::Result<Secret, String> = Err(GH_SIGNED_OUT.to_string());
+            *cache = Some((Instant::now(), r.clone()));
+            return r;
+        }
         let mut c = std::process::Command::new(&self.gh);
         c.args(["auth", "token", "--hostname", &self.host])
             .env("GH_PROMPT_DISABLED", "1")
