@@ -368,7 +368,7 @@ pub async fn forges_clone(state: State<'_, AppState>, id: String, repo: String, 
         if o.status.success() {
             Ok(d.to_string_lossy().into_owned())
         } else {
-            let msg = String::from_utf8_lossy(&o.stderr).lines().filter(|l| !l.trim().is_empty()).last().unwrap_or("").to_string();
+            let msg = String::from_utf8_lossy(&o.stderr).lines().rfind(|l| !l.trim().is_empty()).unwrap_or("").to_string();
             Err(format!("git clone failed: {msg}"))
         }
     })
