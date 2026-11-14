@@ -30,7 +30,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use hive_core::{
-    derive_workspace_key, workspace_config_session_id, HostKind, MessageRole, ModelProviderKind,
+    workspace_config_session_id, HostKind, MessageRole, ModelProviderKind,
     Timestamp, WorkspaceAgent, WorkspaceCredential, WorkspaceHost, WorkspaceRuntime,
 };
 use hive_runtime::{
@@ -362,6 +362,14 @@ fn relay_client(cfg: &Config) -> Result<RelayClient> {
         .with_github_token(cfg.github_token.clone()))
 }
 
+/// This box's keyring for its room (B1), from its store's pinned config fold:
+/// what blobs and liveness beats seal under and open with.
+fn box_ring(cfg: &Config) -> Option<hive_runtime::keyring::KeyringEngine> {
+    let src = key_source(cfg).ok()?;
+    let store = EventStore::open(cfg.data_dir.join("hive.db")).ok()?;
+    Some(hive_runtime::keyring::KeyringEngine::from_store(&store, hive_core::room_workspace_id(&cfg.room), &src))
+}
+
 /// A sync engine for this config. Kept across rounds (as `ligus serve` does),
 /// it scans only rows stored since its last push instead of the whole store.
 /// Every CLI host (serve, worker, `ligus sync`) builds its keyring the same
@@ -419,10 +427,7 @@ async fn materialize_turns(cfg: &Config, turns: &mut [ChatTurn]) {
         .with_auth_cell(auth::cell())
         .with_github_token(cfg.github_token.clone());
     // The one keyring (B1): blobs sealed at any epoch this box holds open.
-    let Ok(src) = key_source(cfg) else { return };
-    let Ok(store) = EventStore::open(cfg.data_dir.join("hive.db")) else { return };
-    let ring = hive_runtime::keyring::KeyringEngine::from_store(&store, hive_core::room_workspace_id(&cfg.room), &src);
-    drop(store);
+    let Some(ring) = box_ring(cfg) else { return };
     let cache = cfg.data_dir.join("attachments").join("blobs");
     for t in turns.iter_mut() {
         if t.content.contains("[Attached-blob:") {
@@ -1272,10 +1277,9 @@ fn cmd_queue(cfg: &Config) -> Result<()> {
 /// decides, see [`hive_runtime::HostPresence::is_online`]).
 fn fetch_presence(cfg: &Config) -> hive_runtime::HostPresence {
     let presence = hive_runtime::HostPresence::new();
-    if let (Ok(relay), Some(pass)) = (relay_client(cfg), cfg.key.as_deref()) {
-        let key = derive_workspace_key(pass);
+    if let (Ok(relay), Some(_), Some(ring)) = (relay_client(cfg), cfg.key.as_deref(), box_ring(cfg)) {
         if let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build() {
-            let fetch = hive_runtime::host_presence::fetch_host_beats(&relay, &cfg.room, &key);
+            let fetch = hive_runtime::host_presence::fetch_host_beats(&relay, &cfg.room, &ring);
             if let Ok(Ok(beats)) = rt.block_on(async { tokio::time::timeout(Duration::from_secs(5), fetch).await }) {
                 presence.merge(beats);
             }
@@ -1286,9 +1290,8 @@ fn fetch_presence(cfg: &Config) -> hive_runtime::HostPresence {
 
 /// Publish this host's liveness beat (best effort; no relay or key = no-op).
 async fn publish_beat(cfg: &Config, host_id: &str) {
-    if let (Ok(relay), Some(pass)) = (relay_client(cfg), cfg.key.as_deref()) {
-        let key = derive_workspace_key(pass);
-        if let Err(e) = hive_runtime::host_presence::publish_host_beat(&relay, &cfg.room, &key, host_id).await {
+    if let (Ok(relay), Some(_), Some(ring)) = (relay_client(cfg), cfg.key.as_deref(), box_ring(cfg)) {
+        if let Err(e) = hive_runtime::host_presence::publish_host_beat(&relay, &cfg.room, &ring, host_id).await {
             eprintln!("presence: publishing this host's beat failed: {e}");
         }
     }

@@ -513,6 +513,27 @@ fn removed_members_device_is_not_a_recipient_through_an_agent_host() {
     assert!(!recipients.contains_key(&w.people["mara"].device_id), "the removed member's device would get the next key");
 }
 
+/// Host beats are unsigned liveness facts; after a rotation, a removed
+/// member still holding the passphrase can neither read them nor make a host
+/// look online: readers take only beats sealed at the authorized head.
+#[test]
+fn removed_member_cannot_forge_or_read_host_beats() {
+    use crate::host_presence::{host_presence_slot, open_host_beats, seal_host_beat};
+    let mut w = World::new();
+    w.push("owner", SessionEvent::MemberRemoved { member_id: "mara".into() });
+    w.rotate("owner");
+    let owner = w.engine("owner", &[]);
+    // mara seals with what she still has: the passphrase epoch.
+    let mara = KeyringEngine::passphrase(w.wid, pass_key());
+    let mut blobs = std::collections::HashMap::new();
+    blobs.insert(host_presence_slot("box"), seal_host_beat(&mara, "box", 1_000).unwrap());
+    blobs.insert(host_presence_slot("desk"), seal_host_beat(&owner, "desk", 1_000).unwrap());
+    let beats = open_host_beats(&blobs, &w.engine("ada", &[]), 5_000);
+    assert_eq!(beats.get("desk"), Some(&1_000), "a beat at the authorized head");
+    assert_eq!(beats.get("box"), None, "a forged beat under the old epoch");
+    assert!(open_host_beats(&blobs, &mara, 5_000).get("desk").is_none(), "mara can't read the new beats");
+}
+
 #[test]
 fn removed_member_cannot_inject_epoch() {
     // K1: mara is removed and the key rotated; she then publishes a rotation

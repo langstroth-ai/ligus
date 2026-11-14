@@ -3539,16 +3539,19 @@ fn blob_transport(state: &AppState) -> Option<(String, String, hive_runtime::key
         let conn = s.workspaces.iter().find(|w| w.room == room).cloned();
         (url, room, conn)
     };
-    let src = key_source_for(state, conn.as_ref());
-    let ws = room_workspace_id(&room);
-    let ring = {
-        let svc = state.service.lock().unwrap();
-        hive_runtime::keyring::KeyringEngine::from_store(svc.store(), ws, &src)
-    };
+    let ring = workspace_ring(state, &room, conn.as_ref());
     if ring.is_empty() {
         return None;
     }
     Some((url, room, ring))
+}
+
+/// This device's keyring for `room` (B1), from the pinned config fold: what
+/// blobs and liveness beats seal under and open with.
+fn workspace_ring(state: &AppState, room: &str, conn: Option<&WorkspaceConn>) -> hive_runtime::keyring::KeyringEngine {
+    let src = key_source_for(state, conn);
+    let svc = state.service.lock().unwrap();
+    hive_runtime::keyring::KeyringEngine::from_store(svc.store(), room_workspace_id(room), &src)
 }
 
 /// Share a composer attachment so every workspace member can receive it: seal the
@@ -11506,12 +11509,12 @@ async fn run_device_host_loop(app: AppHandle) {
         let state = app.state::<AppState>();
         let conn = {
             let s = state.settings.lock().unwrap();
-            s.relay_url
-                .clone()
-                .filter(|u| !u.trim().is_empty())
-                .map(|u| (u, s.sync_room.clone(), s.workspace_key()))
+            s.relay_url.clone().filter(|u| !u.trim().is_empty()).map(|u| {
+                let ws_conn = s.workspaces.iter().find(|w| w.room == s.sync_room).cloned();
+                (u, s.sync_room.clone(), s.workspace_key(), ws_conn)
+            })
         };
-        let Some((url, room, key)) = conn else { continue };
+        let Some((url, room, key, ws_conn)) = conn else { continue };
         let ws = room_workspace_id(&room);
         let host_id = state.local_host_id();
         {
@@ -11525,19 +11528,22 @@ async fn run_device_host_loop(app: AppHandle) {
             }
         }
         state.host_presence.record(&host_id, hive_core::Timestamp::now().inner().unix_timestamp());
-        let Some(key) = key else { continue };
+        if key.is_none() {
+            continue;
+        }
+        let ring = workspace_ring(&state, &room, ws_conn.as_ref());
         let relay = state.relay_client(&url);
         let due = match &last_beat {
             Some((r, at)) => r != &room || at.elapsed() >= beat_every,
             None => true,
         };
         if due {
-            match hive_runtime::host_presence::publish_host_beat(&relay, &room, &key, &host_id).await {
+            match hive_runtime::host_presence::publish_host_beat(&relay, &room, &ring, &host_id).await {
                 Ok(()) => last_beat = Some((room.clone(), std::time::Instant::now())),
                 Err(e) => tracing::debug!(target: "hosts", "presence beat failed: {e}"),
             }
         }
-        if let Ok(beats) = hive_runtime::host_presence::fetch_host_beats(&relay, &room, &key).await {
+        if let Ok(beats) = hive_runtime::host_presence::fetch_host_beats(&relay, &room, &ring).await {
             state.host_presence.merge(beats);
         }
     }

@@ -1110,13 +1110,18 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
         shared.presence.record(&shared.host_id, Timestamp::now().inner().unix_timestamp());
         // A box that can't write (revoked, awaiting approval) isn't serving work.
         let writable = shared.lock().write_block().is_none();
+        // The one keyring (B1): beats seal at the authorized head.
+        let ring = match crate::key_source(&shared.cfg) {
+            Ok(src) => hive_runtime::keyring::KeyringEngine::from_store(shared.lock().store(), shared.ws, &src),
+            Err(_) => hive_runtime::keyring::KeyringEngine::passphrase(shared.ws, key),
+        };
         if writable {
-            if let Err(e) = publish_host_beat(&relay, &room, &key, &shared.host_id).await {
+            if let Err(e) = publish_host_beat(&relay, &room, &ring, &shared.host_id).await {
                 eprintln!("presence: publishing this host's beat failed: {e}");
             }
             coordinator.tick(&shared, &relay, &room, &key).await;
         }
-        if let Ok(beats) = fetch_host_beats(&relay, &room, &key).await {
+        if let Ok(beats) = fetch_host_beats(&relay, &room, &ring).await {
             shared.presence.merge(beats);
         }
         tokio::select! {
