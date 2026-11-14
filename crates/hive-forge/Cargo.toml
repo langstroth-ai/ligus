@@ -18,6 +18,9 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 # `http::install_tls_provider` installs ring (already in the tree via iroh and
 # tauri-plugin-updater), so aws-lc-rs is never pulled in.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+# Fallback roots when the OS has no CA store (already in the tree via iroh-relay
+# and tokio-tungstenite).
+webpki-roots = "1"
 url = "2"
 zeroize = "1"
 toml = "1.2"

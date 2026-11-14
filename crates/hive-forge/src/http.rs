@@ -62,18 +62,54 @@ pub fn install_tls_provider() {
     });
 }
 
+/// Whether reqwest's default verifier (rustls-platform-verifier: the OS
+/// trust store) can be built here. On Linux it refuses to build when the
+/// system has no CA certificates (a minimal container, an empty
+/// `SSL_CERT_FILE`), which would make every client build fail and
+/// `Client::new()` panic, even for loopback-only use. Probed once.
+fn platform_roots_usable() -> bool {
+    static OK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OK.get_or_init(|| {
+        let ok = reqwest::Client::builder().build().is_ok();
+        if !ok {
+            tracing::warn!("no usable system CA certificates; HTTPS verifies against Ligus's bundled Mozilla roots");
+        }
+        ok
+    })
+}
+
+/// A verifying rustls config over the bundled Mozilla roots (what reqwest
+/// 0.12 used before the OS trust store), for hosts without a CA store.
+fn bundled_roots_tls() -> rustls::ClientConfig {
+    let provider = rustls::crypto::CryptoProvider::get_default()
+        .cloned()
+        .unwrap_or_else(|| std::sync::Arc::new(rustls::crypto::ring::default_provider()));
+    let roots = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
+    rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .expect("ring supports the default TLS versions")
+        .with_root_certificates(roots)
+        .with_no_client_auth()
+}
+
 /// `reqwest::Client::builder()` with the TLS provider installed. Use this
-/// (not `reqwest::Client::builder()`) everywhere in Ligus.
+/// (not `reqwest::Client::builder()`) everywhere in Ligus. Certificates are
+/// verified against the OS trust store, or the bundled Mozilla roots when the
+/// OS has none.
 pub fn client_builder() -> reqwest::ClientBuilder {
     install_tls_provider();
-    reqwest::Client::builder()
+    let b = reqwest::Client::builder();
+    if platform_roots_usable() {
+        b
+    } else {
+        b.tls_backend_preconfigured(bundled_roots_tls())
+    }
 }
 
 /// `reqwest::Client::new()` with the TLS provider installed. Use this (not
 /// `reqwest::Client::new()`) everywhere in Ligus.
 pub fn new_client() -> reqwest::Client {
-    install_tls_provider();
-    reqwest::Client::new()
+    client_builder().build().expect("an HTTP client with default settings builds")
 }
 
 /// Refuse a request to a non-loopback host from a test build.
