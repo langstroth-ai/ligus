@@ -250,6 +250,10 @@ pub fn option_for(options: &[Value], allow: bool) -> Option<String> {
     })
 }
 
+/// The largest file `fs/read_text_file` loads (the host reads it in its own
+/// process).
+pub const MAX_FS_READ_BYTES: u64 = 16 * 1024 * 1024;
+
 /// Where the agent's `fs/*` requests may go: inside the turn's directory,
 /// never into its read-only paths for writes, and writes only when the plan
 /// and the tier allow them.
@@ -292,7 +296,23 @@ impl FsPolicy {
     /// `fs/read_text_file`: `line` is 1-based, `limit` a line count.
     pub fn read(&self, path: &str, line: Option<u64>, limit: Option<u64>) -> Result<String, String> {
         let c = self.inside(path)?;
-        let text = std::fs::read_to_string(&c).map_err(|e| e.to_string())?;
+        use std::io::Read;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.read(true);
+        // Never block the host on a FIFO the agent made (the type check
+        // below then refuses it).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.custom_flags(libc::O_NONBLOCK);
+        }
+        let f = opts.open(&c).map_err(|e| e.to_string())?;
+        let meta = f.metadata().map_err(|e| e.to_string())?;
+        if !meta.is_file() || meta.len() > MAX_FS_READ_BYTES {
+            return Err(format!("not a regular file of at most {} MiB", MAX_FS_READ_BYTES / (1024 * 1024)));
+        }
+        let mut text = String::new();
+        f.take(MAX_FS_READ_BYTES).read_to_string(&mut text).map_err(|e| e.to_string())?;
         if line.is_none() && limit.is_none() {
             return Ok(text);
         }
@@ -354,9 +374,12 @@ impl FsPolicy {
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
-            opts.custom_flags(libc::O_NOFOLLOW);
+            opts.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
         }
         let mut f = opts.open(&target).map_err(|e| e.to_string())?;
+        if !f.metadata().map_err(|e| e.to_string())?.is_file() {
+            return Err("not a regular file".into());
+        }
         std::io::Write::write_all(&mut f, content.as_bytes()).map_err(|e| e.to_string())
     }
 }
@@ -988,6 +1011,36 @@ mod tests {
         assert!(!target.exists(), "wrote outside the worktree through a dangling symlink");
         assert!(fs.write(root.join("hook").to_str().unwrap(), "#!/bin/sh").is_err());
         assert!(!root.join(".git/hooks/pre-commit").exists(), "wrote a git hook through a dangling symlink");
+    }
+
+    /// The host serves fs/read_text_file in its own process. An agent can make
+    /// a huge (even sparse) file in its worktree, so a read is size-capped
+    /// before anything is loaded.
+    #[test]
+    fn fs_read_is_size_capped() {
+        let wt = tempfile::tempdir().unwrap();
+        let root = crate::executor::canonical(wt.path());
+        let big = root.join("big.txt");
+        std::fs::File::create(&big).unwrap().set_len(MAX_FS_READ_BYTES + 1).unwrap();
+        let fs = FsPolicy { root: root.clone(), writable: false, read_only: vec![], deny_read: vec![] };
+        assert!(fs.read(big.to_str().unwrap(), None, None).is_err(), "read a file past the cap into the host");
+        assert!(fs.read(big.to_str().unwrap(), Some(1), Some(1)).is_err());
+        // A FIFO would block the host's open() forever.
+        #[cfg(unix)]
+        {
+            let fifo = root.join("pipe");
+            let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+            let (tx, rx) = std::sync::mpsc::channel();
+            let fs2 = fs.clone();
+            std::thread::spawn(move || tx.send(fs2.read(fifo.to_str().unwrap(), None, None).is_err()).unwrap());
+            assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)), Ok(true), "a FIFO hung or was read");
+            let w = FsPolicy { writable: true, ..fs.clone() };
+            let (tx, rx) = std::sync::mpsc::channel();
+            let p = root.join("pipe");
+            std::thread::spawn(move || tx.send(w.write(p.to_str().unwrap(), "x").is_err()).unwrap());
+            assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)), Ok(true), "a FIFO write hung");
+        }
     }
 
     /// Protected paths are compared by name, case-insensitively and at any
