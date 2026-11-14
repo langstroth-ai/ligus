@@ -66,6 +66,19 @@ access. `LIGUS_SECRET_BACKEND` (`keychain`, `secret-service`,
 - **Push** content is sealed (ChaCha20-Poly1305) with a per-phone key agreed
   at pairing; Apple and the relay see a generic alert and ciphertext.
 - **Peer-to-peer** sync between contacts' desktops runs over iroh (QUIC/TLS).
+- **Sealing a key for a device** (X25519, HKDF-SHA256, ChaCha20-Poly1305)
+  refuses a low-order X25519 key on either side, since the all-zero shared
+  secret it forces is known to anyone. The tunnel's Noise handshake makes the
+  same check.
+- **TLS** (transport only; content never depends on it): every HTTPS client
+  and the relay tunnel's WebSockets check certificates against the OS trust
+  store, so a root your administrator installed (for example a
+  TLS-inspecting proxy's) works for sync and remote access alike. A host with
+  no CA certificates, such as a minimal container, uses Ligus's bundled
+  Mozilla roots for both instead.
+- **Proxies**: Ligus uses `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY` and
+  `NO_PROXY`, and where those set nothing, the proxy in the macOS or Windows
+  network settings. A local proxy works the same way from either source.
 
 ## Trust boundaries by deployment shape {#trust-boundaries}
 
