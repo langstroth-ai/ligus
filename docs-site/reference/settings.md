@@ -52,6 +52,7 @@ private.
 | `ka_secret` | generated | X25519 seed for receiving rotated workspace keys |
 | `contact` | none | This device's contact (relay v0.3): `cid`, `write_key` (in the secret store), where it is published, drop seqs handled |
 | `archived_dms` | `[]` | Rooms of DMs archived because both people opened one at once |
+| `identity_links` | none | [Linked accounts](../features/linked-identities.md) on this device: `checkForges` (absent = on), `forges` (self-managed forges this device may ask: `provider`, `host`, `baseUrl`), `contactLinks` (links signed for this device's contact card). Never synced |
 | `provider_keys`, `provider_base_urls` | `{}` | per provider: `anthropic`, `openAI`, `openRouter`, `custom` |
 | `workspaces` | `[]` | each `{name, relay_url, room, key, icon, dm_account, founder_actor_id}` |
 | `dismissed_invites` | `[]` | |

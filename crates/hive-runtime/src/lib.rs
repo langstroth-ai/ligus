@@ -32,6 +32,7 @@ pub mod frozen_ns;
 pub mod guard_scan;
 pub mod host_presence;
 pub mod hygiene;
+pub mod identity_links;
 pub mod identity_store;
 pub mod identity_verifier;
 pub mod keyring;

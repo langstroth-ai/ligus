@@ -28,6 +28,8 @@ use crate::provider::ChatTurn;
 mod facts;
 mod guards;
 mod keys;
+mod links;
+pub use links::{LinkDraft, WorkspaceLinks};
 mod presence;
 pub use keys::RotationIssued;
 pub use presence::{PresenceDraft, PresenceProvider, PresenceRequest};

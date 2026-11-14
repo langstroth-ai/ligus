@@ -287,7 +287,15 @@ each stays on this list until a release fixes it.
     A removed member who writes with an old key is refused once a device
     knows of the removal; an event already accepted before that stays (the
     choice of what was accepted depends on arrival, like revocation).
-19. **Pre-encryption history isn't shown.** A device with a workspace key
+19. **A linked account proves "the forge says so", nothing more.** A forge
+    (or, for Tangled, a PDS or the PLC directory) can list any key for any
+    of its users, so it can make a link verify. Links never grant
+    membership, roles or sealing trust. A verified status is cached on a
+    device for up to 24 hours, so a key removed from the forge keeps a link
+    verified that long. SourceHut has no public stable id, so its links are
+    bound to a name that could be reused. Checking a link tells the forge
+    that your device looked. See [Linked accounts](../features/linked-identities.md#privacy).
+20. **Pre-encryption history isn't shown.** A device with a workspace key
     never applies a plaintext body from the relay, so events a workspace
     stored on a relay before it had a key don't appear on devices that sync
     them later. Devices that already held them keep them.

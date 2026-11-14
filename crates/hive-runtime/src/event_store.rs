@@ -214,6 +214,15 @@ impl EventStore {
             );
             CREATE INDEX IF NOT EXISTS idx_facts_session ON facts (session_id, row_id);
             CREATE INDEX IF NOT EXISTS idx_facts_ws ON facts (workspace_id, row_id);
+
+            -- Device-local identity-link checks (IDENTITY-AND-FORGES §2.5),
+            -- never synced and never folded: what a forge said about a link,
+            -- reused for 24 h. Keyed by a digest of the link and workspace.
+            CREATE TABLE IF NOT EXISTS identity_link_checks (
+                link_key    TEXT PRIMARY KEY,
+                checked_ms  INTEGER NOT NULL,
+                check_json  TEXT NOT NULL
+            );
             "#,
         )?;
         // B1: the key epoch each relay body arrived sealed under (device-local,
@@ -233,6 +242,31 @@ impl EventStore {
             conn.execute_batch("ALTER TABLE parked_bodies ADD COLUMN priority INTEGER NOT NULL DEFAULT 0")?;
         }
         Ok(Self { conn, projections: Mutex::new(HashMap::new()), configs: Mutex::new(HashMap::new()) })
+    }
+
+    /// A cached identity-link check (device-local).
+    pub fn link_check(&self, key: &str) -> Option<crate::identity_links::CachedCheck> {
+        let json: Option<String> = self
+            .conn
+            .query_row("SELECT check_json FROM identity_link_checks WHERE link_key = ?1", [key], |r| r.get(0))
+            .ok();
+        json.and_then(|j| serde_json::from_str(&j).ok())
+    }
+
+    /// Record an identity-link check, keeping at most 4096 (the oldest go).
+    pub fn put_link_check(&self, key: &str, check: &crate::identity_links::CachedCheck) {
+        let Ok(json) = serde_json::to_string(check) else { return };
+        let ms = (check.checked_at.0.unix_timestamp_nanos() / 1_000_000) as i64;
+        let _ = self.conn.execute(
+            "INSERT INTO identity_link_checks (link_key, checked_ms, check_json) VALUES (?1, ?2, ?3) \
+             ON CONFLICT(link_key) DO UPDATE SET checked_ms = excluded.checked_ms, check_json = excluded.check_json",
+            rusqlite::params![key, ms, json],
+        );
+        let _ = self.conn.execute(
+            "DELETE FROM identity_link_checks WHERE link_key NOT IN \
+             (SELECT link_key FROM identity_link_checks ORDER BY checked_ms DESC LIMIT 4096)",
+            [],
+        );
     }
 
     /// Highest sequence recorded for a session, if any.

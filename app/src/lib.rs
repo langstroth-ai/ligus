@@ -49,6 +49,7 @@ pub use forges::maybe_run_git_credential;
 mod ligus_auth_ui;
 mod passkey_ui;
 mod people;
+mod links_ui;
 mod agent_iface;
 /// In-app live test support (see `tests/app_live.rs`); not in release builds.
 #[cfg(feature = "e2e")]
@@ -375,6 +376,10 @@ struct LiveSettings {
     /// key goes to the OS secret store.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     contact: Option<people::OwnContact>,
+    /// Linked accounts on this device: forge checks on/off, self-managed
+    /// forges it may ask, links on its contact card. Never synced.
+    #[serde(default, skip_serializing_if = "links_ui::LinkSettings::is_default")]
+    identity_links: links_ui::LinkSettings,
     /// Reusable agent definitions (a persona = name + model/runtime + role +
     /// instructions) the user can attach to any chat.
     #[serde(default)]
@@ -565,6 +570,7 @@ impl Default for LiveSettings {
             workspaces: Vec::new(),
             archived_dms: Vec::new(),
             contact: None,
+            identity_links: Default::default(),
             agent_templates: Vec::new(),
             local_workspace_icon: None,
             schedules: Vec::new(),
@@ -11172,6 +11178,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         workspaces: Vec::new(),
         archived_dms: Vec::new(),
         contact: None,
+        identity_links: Default::default(),
         agent_templates: Vec::new(),
         local_workspace_icon: None,
         schedules: Vec::new(),
@@ -14334,6 +14341,14 @@ pub fn run() {
             workspace_remove_member,
             people::my_profile,
             people::list_co_members,
+            links_ui::identity_link_prepare,
+            links_ui::identity_link_sign_with_agent,
+            links_ui::identity_link_publish,
+            links_ui::my_identity_links,
+            links_ui::identity_link_statuses,
+            links_ui::identity_link_remove,
+            links_ui::identity_link_settings,
+            links_ui::set_identity_link_settings,
             people::list_dms,
             people::open_dm,
             people::inspect_invite,
