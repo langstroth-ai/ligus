@@ -1028,6 +1028,7 @@ fn agent_of_viewer_capped_at_viewer() {
     // val is a Viewer: her agent may raise a lockdown (Viewer floor) but not
     // file a proposal (Contributor floor), which a Contributor's agent may.
     let mut p = proposal(Uuid::from_u128(0x81), 1, ProposalStatus::Open);
+    p.author_actor_id = String::new(); // agent output is filed authorless
     p.producing_agent_id = Some(a.agent_id);
     let filed = w.agent_push(&a, SessionEvent::ProposalUpserted { proposal: p.clone() });
     assert_eq!(w.verdicts()[&filed], Verdict::Denied);
@@ -1050,6 +1051,7 @@ fn rules_v2_tier_applies_to_host_signed_agent_output() {
     use hive_core::authz::agent::{agent_authored, tier_allows};
     let agent = Uuid::new_v4();
     let mut p = proposal(Uuid::from_u128(0x91), 1, ProposalStatus::Open);
+    p.author_actor_id = String::new(); // agent output is filed authorless
     p.producing_agent_id = Some(agent);
     let upsert = SessionEvent::ProposalUpserted { proposal: p.clone() };
     assert_eq!(agent_authored(&upsert), Some(agent));
@@ -1279,4 +1281,23 @@ fn core_zone_bar_holds_in_the_fold() {
     assert_eq!(got.status, ProposalStatus::Open, "a core change passed on a lowered bar");
     w.chat_push("ada", vote("ada", pid, WorkspaceRole::Admin, true, digest));
     assert_eq!(w.state().proposals.into_iter().find(|x| x.id == pid).unwrap().status, ProposalStatus::Approved);
+}
+
+/// Hardening A-6: an agent files proposals as itself (or authorless, naming
+/// itself as producer), never under a human's name: that name is what the
+/// self-approval guard and the reviewers read.
+#[test]
+fn agent_cannot_file_a_proposal_under_a_humans_name() {
+    let (mut w, a) = agent_world("mara");
+    let mut forged = ActionProposal::file_diff("p", "ada", "diff --git a/f b/f\n+1\n".into(), vec!["f".into()]);
+    forged.producing_agent_id = Some(a.agent_id);
+    let as_ada = w.agent_push(&a, SessionEvent::ProposalUpserted { proposal: forged });
+    let mut other = ActionProposal::file_diff("p", "", "diff --git a/f b/f\n+2\n".into(), vec!["f".into()]);
+    other.producing_agent_id = Some(Uuid::new_v4());
+    let as_other_agent = w.agent_push(&a, SessionEvent::ProposalUpserted { proposal: other });
+    let mut honest = ActionProposal::file_diff("p", "", "diff --git a/f b/f\n+3\n".into(), vec!["f".into()]);
+    honest.producing_agent_id = Some(a.agent_id);
+    let ok = w.agent_push(&a, SessionEvent::ProposalUpserted { proposal: honest });
+    let v = w.verdicts();
+    assert_eq!((v[&as_ada], v[&as_other_agent], v[&ok]), (Verdict::Denied, Verdict::Denied, Verdict::Allowed));
 }
