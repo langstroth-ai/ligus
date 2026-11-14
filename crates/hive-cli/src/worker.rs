@@ -400,6 +400,22 @@ async fn run_turn(
             "withholding tools for message {} — author role {:?} below minimum {:?}",
             pm.message_id, author_role, min_role
         );
+        // Guard signal (device-local, content-free): the worker MCP role gate.
+        let subject = match author_role {
+            Some(_) => hive_core::signal::GuardSubject::Nestmate,
+            None => hive_core::signal::GuardSubject::Unknown,
+        };
+        let _ = lock(svc).record_signal(
+            s.workspace_id,
+            Some(s.id),
+            &hive_core::signal::GuardSignal::GuardDecision {
+                gate: hive_core::signal::GuardGate::ToolCall,
+                verdict: hive_core::signal::GuardVerdict::Reject,
+                subject,
+                source: "worker".into(),
+                reason: "role_floor".into(),
+            },
+        );
     }
 
     // The workspace's sandbox envelope (dearth mode, a chat lockdown): enforce

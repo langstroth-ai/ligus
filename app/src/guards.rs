@@ -1249,6 +1249,25 @@ pub(crate) fn get_throttle_state(state: State<AppState>) -> hive_proto::Throttle
     }
 }
 
+/// Record which MCP tools a turn was offered, per server, and how many the
+/// cap or a name collision dropped (content-free).
+pub(crate) fn record_tools_selected(state: &AppState, workspace_id: Uuid, session_id: Uuid, per_server: &[(String, u32, u32)]) {
+    let svc = state.service.lock().unwrap();
+    for (server, offered, dropped) in per_server {
+        let _ = svc.record_signal(
+            workspace_id,
+            Some(session_id),
+            &GuardSignal::ToolsSelected {
+                server: server.clone(),
+                offered: *offered,
+                dropped_cap: *dropped,
+                dropped_collision: 0,
+                dropped_policy: 0,
+            },
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Patch-leaving rule
 // ---------------------------------------------------------------------------

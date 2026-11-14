@@ -298,6 +298,25 @@ impl<M: ToolExecutor> CompositeTools<M> {
         &self.dropped
     }
 
+    /// Per MCP server: tools it offered and how many were dropped (for a
+    /// collision or the cap), sorted by server.
+    pub fn mcp_selection(&self) -> Vec<(String, u32, u32)> {
+        let mut by: std::collections::BTreeMap<String, (u32, u32)> = Default::default();
+        for (name, src) in &self.routes {
+            if matches!(src, Source::Mcp) {
+                by.entry(mcp_server(name).to_string()).or_default().0 += 1;
+            }
+        }
+        for name in &self.dropped {
+            if name.contains("__") {
+                let e = by.entry(mcp_server(name).to_string()).or_default();
+                e.0 += 1;
+                e.1 += 1;
+            }
+        }
+        by.into_iter().map(|(k, (o, d))| (k, o, d)).collect()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.defs.is_empty()
     }

@@ -576,6 +576,9 @@ impl SyncEngine {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         let mut applied = 0;
+        // Guard signals (device-local, content-free): every rejection, and one
+        // accept per signing device per batch.
+        let mut accepted_from: std::collections::HashSet<(Uuid, Option<Uuid>)> = std::collections::HashSet::new();
         for (seq, env) in &decoded {
             let base = verdict_for(&roster, env);
             // The account this event is authored as — `verdict_for` has already
@@ -592,6 +595,7 @@ impl SyncEngine {
             match gate_ingest(self.identity_mode, base, signer_account, account_key, &identity) {
                 IngestAction::Quarantine(reason) => {
                     tracing::warn!(?reason, event_id = %env.event_id, "quarantined a fetched event");
+                    let _ = store.record_signal(env.workspace_id, None, &sync_decision(&roster, env, false, &format!("{reason:?}")));
                     // Provably bad and stable — advance past it (re-fetching won't help).
                     resolved.push(*seq);
                 }
@@ -604,6 +608,9 @@ impl SyncEngine {
                     retry_at = Some(retry_at.map_or(*seq, |r| r.min(*seq)));
                 }
                 IngestAction::Accept => {
+                    if accepted_from.insert((env.workspace_id, env.signer_device_id)) {
+                        let _ = store.record_signal(env.workspace_id, None, &sync_decision(&roster, env, true, "accepted"));
+                    }
                     self.seen.insert(env.event_id);
                     // This event is now on the relay (we received it from there): queue
                     // it for the durable `pushed` set so a restart never bounces it back.
@@ -660,8 +667,49 @@ impl SyncEngine {
     }
 }
 
+/// A content-free guard signal for one ingest decision: whether the signer is
+/// a nestmate (a cert-verified device of this workspace) or a stranger.
+fn sync_decision(
+    roster: &crate::envelope_verifier::WorkspaceRoster,
+    env: &SessionEventEnvelope,
+    accept: bool,
+    reason: &str,
+) -> hive_core::signal::GuardSignal {
+    use hive_core::signal::{GuardGate, GuardSignal, GuardSubject, GuardVerdict};
+    let subject = match env.signer_device_id {
+        Some(d) if roster.is_certified(d) => GuardSubject::Nestmate,
+        Some(_) => GuardSubject::Stranger,
+        None => GuardSubject::Unknown,
+    };
+    GuardSignal::GuardDecision {
+        gate: GuardGate::SyncEvent,
+        verdict: if accept { GuardVerdict::Accept } else { GuardVerdict::Reject },
+        subject,
+        source: env.signer_device_id.map(|d| d.to_string()).unwrap_or_else(|| "relay".into()),
+        reason: reason.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sync_decisions_name_the_subject_without_content() {
+        use hive_core::signal::{GuardSignal, GuardSubject, GuardVerdict};
+        let roster = crate::envelope_verifier::build_roster(&[]);
+        let mut env = SessionEventEnvelope::new(Uuid::new_v4(), Uuid::new_v4(), 1, hive_core::SessionEvent::MessageAppended {
+            message: hive_core::ChatMessage::new(hive_core::MessageRole::User, "x", "secret body"),
+        });
+        env.signer_device_id = Some(Uuid::new_v4());
+        let GuardSignal::GuardDecision { verdict, subject, reason, .. } = super::sync_decision(&roster, &env, false, "BadSignature") else {
+            panic!("guard decision expected")
+        };
+        assert_eq!((verdict, subject, reason.as_str()), (GuardVerdict::Reject, GuardSubject::Stranger, "BadSignature"));
+        let json = serde_json::to_string(&super::sync_decision(&roster, &env, true, "accepted")).unwrap();
+        assert!(!json.contains("secret body"));
+        env.signer_device_id = None;
+        assert!(serde_json::to_string(&super::sync_decision(&roster, &env, false, "Unsigned")).unwrap().contains("relay"));
+    }
+
     use super::*;
     use hive_core::{ChatMessage, ChatSession, MessageRole, SessionEvent, SessionEventEnvelope};
 

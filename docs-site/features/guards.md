@@ -151,3 +151,14 @@ occupancy says so:
   more agent replies.
 
 Dismiss a suggestion and it stays dismissed on this device.
+
+## What the guards record
+
+Each device keeps a small local log of what its guards did: lease heartbeats
+sent and received, ingest decisions on synced events (every rejection, and a
+sample of acceptances), the worker's tool role gate, MCP tools offered and
+dropped, redactions, lockdown signals, worktree clean-ups, throttles and the
+progress of long tool loops. It holds only ids, kinds, counts and short
+reason codes, never message, prompt or diff text, file paths or repository
+names; it is never synced, and it keeps the newest 20,000 entries. It lives
+in the `guard_signals` table of the device's `hive.db`, for local monitoring.

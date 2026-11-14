@@ -7908,6 +7908,9 @@ async fn run_prepared_turn(
             None => tools,
         }
     });
+    if let Some(tools) = &http_tools {
+        crate::guards::record_tools_selected(state, workspace_id, session_id, &tools.mcp_selection());
+    }
     let tool_rounds = hive_runtime::agent_tools::tool_round_budget(
         responder.runtime.provider,
         responder.runtime.max_tool_rounds,
