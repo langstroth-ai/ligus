@@ -304,6 +304,33 @@ fn context_estimate(chat: &ChatSession, model: Option<&str>) -> Value {
     v
 }
 
+/// The device driving a workflow run (its coordinator lease on the chat log),
+/// for the phone's coordinator line: who holds it, at which epoch, whether it
+/// was released, and whether that host is online by its presence beacon.
+fn run_coordinator(s: &Shared, chat: &ChatSession, r: &hive_core::WorkflowRun, hosts: &[hive_core::WorkspaceHost]) -> Value {
+    use hive_core::lease::{lease_key, LeaseScope};
+    let Some(l) = chat.guards.leases.get(&lease_key(LeaseScope::WorkflowRun, &r.id.to_string())) else {
+        return Value::Null;
+    };
+    let holder = l.current.holder.to_string();
+    let is_this = holder == s.host_id;
+    let host = hosts.iter().find(|h| h.id == holder);
+    let label = if is_this {
+        format!("{} (this host)", s.opts.label)
+    } else {
+        host.map(|h| h.label.clone()).unwrap_or_default()
+    };
+    let now = hive_core::Timestamp::now();
+    json!({
+        "holder": holder,
+        "holderLabel": label,
+        "epoch": l.current.epoch,
+        "released": l.released,
+        "isThis": is_this,
+        "online": is_this || host.is_some_and(|h| s.presence.is_online(h, &now)),
+    })
+}
+
 fn workflow_run_dto(chat: &ChatSession, r: &hive_core::WorkflowRun) -> Value {
     use hive_core::workflow::NodeRunStatus;
     let done = r.nodes.iter().filter(|n| n.status == NodeRunStatus::Succeeded || n.status == NodeRunStatus::Skipped).count();
@@ -364,7 +391,15 @@ pub async fn chat_details(State(s): S, Path(id): Path<String>) -> ApiResult<Json
 
     let mut runs: Vec<&hive_core::WorkflowRun> = chat.workflow_runs.iter().collect();
     runs.sort_by_key(|r| std::cmp::Reverse(r.started_at));
-    let runs: Vec<Value> = runs.into_iter().take(RECENT_RUNS).map(|r| workflow_run_dto(&chat, r)).collect();
+    let runs: Vec<Value> = runs
+        .into_iter()
+        .take(RECENT_RUNS)
+        .map(|r| {
+            let mut v = workflow_run_dto(&chat, r);
+            v["coordinator"] = run_coordinator(&s, &chat, r, &hosts);
+            v
+        })
+        .collect();
 
     let skills: Vec<Value> = chat
         .loaded_skills

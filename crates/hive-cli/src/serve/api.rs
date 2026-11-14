@@ -168,7 +168,7 @@ pub fn chat_dto(s: &ChatSession, unread: usize) -> Value {
     })
 }
 
-fn kind_str(k: ProposalKind) -> &'static str {
+pub(super) fn kind_str(k: ProposalKind) -> &'static str {
     match k {
         ProposalKind::FileDiff => "fileDiff",
         ProposalKind::Command => "command",
@@ -176,7 +176,7 @@ fn kind_str(k: ProposalKind) -> &'static str {
     }
 }
 
-fn status_str(s: ProposalStatus) -> &'static str {
+pub(super) fn status_str(s: ProposalStatus) -> &'static str {
     match s {
         ProposalStatus::Open => "open",
         ProposalStatus::Approved => "approved",
@@ -187,7 +187,7 @@ fn status_str(s: ProposalStatus) -> &'static str {
 
 /// Who a proposal is from: its author's roster name, else the agent whose
 /// turn produced it, else empty.
-fn proposal_author(s: &ChatSession, p: &ActionProposal) -> String {
+pub(super) fn proposal_author(s: &ChatSession, p: &ActionProposal) -> String {
     if !p.author_actor_id.is_empty() {
         if let Some(m) = s.members.iter().find(|m| m.id == p.author_actor_id) {
             return m.actor.display_name.clone();
@@ -226,7 +226,7 @@ pub fn proposal_dto(s: &ChatSession, p: &ActionProposal) -> Value {
     v
 }
 
-fn role_name(r: WorkspaceRole) -> &'static str {
+pub(super) fn role_name(r: WorkspaceRole) -> &'static str {
     match r {
         WorkspaceRole::Owner => "owner",
         WorkspaceRole::Admin => "admin",
@@ -237,7 +237,7 @@ fn role_name(r: WorkspaceRole) -> &'static str {
 
 /// A voter's or commenter's name, as the desktop's Review pane tags them: the
 /// roster name, else a workspace agent's `@name`, else a short id.
-fn actor_name(s: &ChatSession, actor_id: &str) -> String {
+pub(super) fn actor_name(s: &ChatSession, actor_id: &str) -> String {
     if let Some(m) = s.members.iter().find(|m| m.id == actor_id) {
         if !m.actor.display_name.trim().is_empty() {
             return m.actor.display_name.clone();
@@ -360,6 +360,12 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/agents/:id/host", put(set_agent_host))
         .route("/v1/hosts", get(list_hosts))
         .route("/v1/guards", get(workspace_guards))
+        .route("/v1/chats/:id/lockdown/clear", post(clear_lockdown))
+        .route("/v1/proposal-sets", get(super::sets::list_sets))
+        .route("/v1/proposal-sets/:id", get(super::sets::get_set))
+        .route("/v1/chats/:id/proposal-sets", get(super::sets::chat_sets))
+        .route("/v1/flow", get(super::flow_api::flow_view))
+        .route("/v1/chats/:id/handoffs", get(super::flow_api::chat_handoffs))
         .route("/v1/people", get(super::people::list_people))
         .route("/v1/channels", get(super::people::list_channels))
         .route("/v1/chats/:id/details", get(super::people::chat_details))
@@ -576,11 +582,15 @@ async fn list_agents(State(s): S) -> ApiResult<Json<Value>> {
     Ok(Json(json!({ "agents": list })))
 }
 
-/// The workspace's guard state for a client to show (read-only): whether dearth
-/// mode is on, why, and what it restricts. Content-free beyond the reason an
-/// Admin typed.
+/// The workspace's guard state for a client to show: whether dearth mode is
+/// on, why, and what it restricts; the locked-down chats and by what kind of
+/// signal; the workspace coordinator lease; and whether this box's identity
+/// may clear a lockdown (`POST /v1/chats/:id/lockdown/clear`). Content-free
+/// beyond the reason an Admin typed and the chat titles.
 async fn workspace_guards(State(s): S) -> ApiResult<Json<Value>> {
     let g = s.lock().workspace_guards(s.ws)?;
+    let chats = s.workspace_chats()?;
+    let me = s.my_actor_id();
     let dearth = g.dearth_on().map(|d| {
         json!({
             "reason": d.reason,
@@ -594,14 +604,65 @@ async fn workspace_guards(State(s): S) -> ApiResult<Json<Value>> {
         .lockdowns
         .iter()
         .filter(|(_, l)| !l.is_empty())
-        .map(|(chat, l)| json!({ "chatId": chat, "signals": l.iter().map(|x| json!({ "signal": x.signal, "detail": x.detail })).collect::<Vec<_>>() }))
+        .map(|(chat, l)| {
+            let title = chats.iter().find(|c| c.id == *chat).map(|c| c.title.clone()).unwrap_or_default();
+            json!({
+                "chatId": chat,
+                "chatTitle": title,
+                "signals": l.iter().map(|x| json!({
+                    "signal": x.signal,
+                    "detail": x.detail,
+                    "raisedAt": iso(x.raised_at),
+                })).collect::<Vec<_>>(),
+            })
+        })
         .collect();
     // The workspace coordinator lease (held by a serve box), if any.
     let coordinator = g
         .leases
         .get(&hive_core::lease::lease_key(hive_core::lease::LeaseScope::Workspace, &s.ws.to_string()))
         .map(|l| json!({ "holder": l.current.holder, "epoch": l.current.epoch, "leaseMs": l.current.lease_ms, "released": l.released, "isThis": l.current.holder.to_string() == s.host_id }));
-    Ok(Json(json!({ "dearth": dearth, "pendingMembers": g.pending_members.len(), "lockedChats": locked, "coordinator": coordinator })))
+    let (role, human) = my_standing(&s, &me)?;
+    Ok(Json(json!({
+        "dearth": dearth,
+        "pendingMembers": g.pending_members.len(),
+        "lockedChats": locked,
+        "coordinator": coordinator,
+        "myRole": role_name(role),
+        "canClearLockdown": human,
+    })))
+}
+
+/// This box's identity's role on the workspace roster (the config log, which
+/// every chat's roster is hoisted from) and whether it may clear a lockdown:
+/// a human member at Contributor or above — the same rule the core's
+/// authorization applies to `ChatLockdownCleared`.
+fn my_standing(s: &Shared, me: &str) -> ApiResult<(WorkspaceRole, bool)> {
+    let (_, config) = hosts_and_agents(s)?;
+    let role = config.role_of(me);
+    Ok((role, hive_core::guard::is_human_member(&config.members, me)))
+}
+
+/// `POST /v1/chats/:id/lockdown/clear`: clear a chat's lockdown as this box's
+/// identity, through the same signed `ChatLockdownCleared` event (on the
+/// workspace-config log) the desktop's *Clear lockdown* writes. Only a human
+/// member at Contributor or above may: anyone else gets 403 and nothing is
+/// written (the core re-checks when the event is authored and on every peer
+/// that folds it). A chat that isn't locked answers 409.
+async fn clear_lockdown(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    let chat = load_chat(&s, &id)?;
+    let me = s.my_actor_id();
+    let (_, allowed) = my_standing(&s, &me)?;
+    if !allowed {
+        return Err(ApiError(StatusCode::FORBIDDEN, "only a human member (Contributor or above) can clear a lockdown".into()));
+    }
+    let locked = !s.lock().workspace_guards(s.ws)?.lockdowns_of(chat.id).is_empty();
+    if !locked {
+        return Err(ApiError(StatusCode::CONFLICT, "this chat isn't locked down".into()));
+    }
+    s.lock().clear_lockdown(s.ws, chat.id)?;
+    s.after_write();
+    Ok(Json(json!({ "chatId": chat.id, "cleared": true })))
 }
 
 async fn list_hosts(State(s): S) -> ApiResult<Json<Value>> {

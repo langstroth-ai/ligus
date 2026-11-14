@@ -88,9 +88,21 @@ phone with the same collaboration state as the desktop's Review card:
   (no checkout bound, or the file has moved on), the phone renders only the
   changed sections and says so.
 
-A proposal that is an alternative in a [proposal set](proposal-sets.md)
-carries its `setId`. You can vote on it from the phone, but it is applied only
-from the desktop's set view, after a pre-flight, and never on approval.
+### Proposal sets
+
+A [proposal set](proposal-sets.md) shows on the phone as one card per set:
+the question, its phase (scouting, piping, decided), and each alternative
+(A, B, …) with its decayed scout support against the quality bar, how many
+scouts qualify toward the agent quorum, and a badge when it is the
+front-runner, frozen, stopped or the winner. Scout assessments appear only
+once a scout has posted them (blind until posted), and a scout rating its own
+alternative is shown but never counted. The latest pre-flight result shows
+per check.
+
+You can vote on any alternative from the phone, through the same vote as any
+other proposal. Pre-flight, apply and the set's decision stay on the desktop's
+set view: an alternative is applied only after a passing pre-flight, never on
+approval.
 
 Approving a file-diff proposal from the phone doesn't apply it, unless the
 box is set to (see [`LIGUS_SERVE_APPLY_ON_APPROVE`](../ops/serve-box.md#apply-on-approve)).
@@ -117,6 +129,7 @@ ciphertext.
 | *Workflow* needs approval | a workflow run's approval gate is waiting (again on each rerouted attempt) |
 | *Agent* replied / hit an error | an agent reply finished (not your own messages, and not a reply that already notified you as a mention) |
 | Change ready for review | a proposal is waiting for review (a workflow gate is announced once, as an approval, not also here) |
+| The review queue needs you | the review queue backed up and a desktop with *Recruit reviewers* on asked you to help; tapping opens the proposal that has waited longest for you |
 | New phone paired | a new phone was paired with the box |
 
 Tapping a notification opens its chat.
@@ -147,11 +160,29 @@ Mentions also work on the desktop; see
 
 ## Workspace guards
 
-The box exposes the workspace's guard state read-only at `GET /v1/guards`:
-whether [dearth mode](guards.md#dearth-mode) is on and why, which chats are
+The box exposes the workspace's guard state at `GET /v1/guards`: whether
+[dearth mode](guards.md#dearth-mode) is on and why, which chats are
 [locked down](guards.md#chat-lockdown) and by what kind of signal, and which
-host holds the workspace coordinator lease. Switching dearth mode, approving
-joins and clearing a lockdown stay on the desktop for now.
+host holds the workspace coordinator lease. The app shows a dearth-mode banner
+and a lockdown bar on a locked chat. A workflow run in the chat's details names
+the device coordinating it.
+
+**Clearing a lockdown from the phone.** If the identity the phone acts as is a
+human member at Contributor or above, the lockdown bar has **Clear**. It writes
+the same signed event the desktop's *Clear lockdown* does
+(`POST /v1/chats/{id}/lockdown/clear`); anyone else gets an error and nothing
+is written. Switching dearth mode and approving joins stay on the desktop.
+
+## Flow
+
+`GET /v1/flow` gives the phone a compact, read-only view of
+[Flow](flow.md): the task board (open work and who claimed it), the review
+queue with its backpressure alert, active workspace marks, and a summary of
+the routing shadow report. The thresholds are the defaults (queue limit 5,
+long wait two hours), since a desktop's Flow settings are its own. Hand-off
+cards appear in the chat at the reply that handed the work on
+(`GET /v1/chats/{id}/handoffs`). Picking up board work, marks, zones and route
+stops stay on the desktop.
 
 ## Appearance
 
