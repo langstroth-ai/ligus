@@ -250,6 +250,10 @@ pub fn option_for(options: &[Value], allow: bool) -> Option<String> {
     })
 }
 
+/// The largest file `fs/read_text_file` loads (the host reads it in its own
+/// process).
+pub const MAX_FS_READ_BYTES: u64 = 16 * 1024 * 1024;
+
 /// Where the agent's `fs/*` requests may go: inside the turn's directory,
 /// never into its read-only paths for writes, and writes only when the plan
 /// and the tier allow them.
@@ -292,7 +296,23 @@ impl FsPolicy {
     /// `fs/read_text_file`: `line` is 1-based, `limit` a line count.
     pub fn read(&self, path: &str, line: Option<u64>, limit: Option<u64>) -> Result<String, String> {
         let c = self.inside(path)?;
-        let text = std::fs::read_to_string(&c).map_err(|e| e.to_string())?;
+        use std::io::Read;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.read(true);
+        // Never block the host on a FIFO the agent made (the type check
+        // below then refuses it).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.custom_flags(libc::O_NONBLOCK);
+        }
+        let f = opts.open(&c).map_err(|e| e.to_string())?;
+        let meta = f.metadata().map_err(|e| e.to_string())?;
+        if !meta.is_file() || meta.len() > MAX_FS_READ_BYTES {
+            return Err(format!("not a regular file of at most {} MiB", MAX_FS_READ_BYTES / (1024 * 1024)));
+        }
+        let mut text = String::new();
+        f.take(MAX_FS_READ_BYTES).read_to_string(&mut text).map_err(|e| e.to_string())?;
         if line.is_none() && limit.is_none() {
             return Ok(text);
         }
@@ -301,21 +321,66 @@ impl FsPolicy {
         Ok(text.split_inclusive('\n').skip(start).take(take).collect())
     }
 
+    /// Whether `p` (inside the root) is protected: under a read-only path,
+    /// or naming one of the root's protected entries at any depth, compared
+    /// case-insensitively (macOS and Windows file systems ignore case, so a
+    /// not-yet-existing `.CLAUDE/` is `.claude/`).
+    fn protected(&self, p: &Path) -> bool {
+        if self.read_only.iter().any(|r| p.starts_with(r)) {
+            return true;
+        }
+        let names: Vec<String> = self
+            .read_only
+            .iter()
+            .filter(|r| r.parent() == Some(self.root.as_path()))
+            .filter_map(|r| r.file_name().map(|n| n.to_string_lossy().to_lowercase()))
+            .collect();
+        let rel = p.strip_prefix(&self.root).unwrap_or(p);
+        rel.components().any(|c| names.iter().any(|n| *n == c.as_os_str().to_string_lossy().to_lowercase()))
+    }
+
     /// `fs/write_text_file`.
     pub fn write(&self, path: &str, content: &str) -> Result<(), String> {
         if !self.writable {
             return Err("this turn may not write files".into());
         }
         let c = self.inside(path)?;
-        if self.read_only.iter().any(|r| c.starts_with(r)) {
+        if self.protected(&c) {
             return Err("that path is protected".into());
         }
         let parent = c.parent().ok_or("no parent directory")?;
         if !parent.starts_with(&self.root) {
             return Err("outside the turn's directory".into());
         }
+        // The host writes unsandboxed, so it never follows a link the agent
+        // planted: a dangling symlink resolves nowhere, which left the check
+        // above looking at the link's own (inside) path.
+        if std::fs::symlink_metadata(&c).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err("that path is a symbolic link".into());
+        }
+        let name = c.file_name().ok_or("no file name")?.to_owned();
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        std::fs::write(&c, content).map_err(|e| e.to_string())
+        // Re-check where the directory really is now that it exists.
+        let real_parent = std::fs::canonicalize(parent).map_err(|e| e.to_string())?;
+        if !real_parent.starts_with(&self.root) {
+            return Err("outside the turn's directory".into());
+        }
+        let target = real_parent.join(name);
+        if self.protected(&target) {
+            return Err("that path is protected".into());
+        }
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        }
+        let mut f = opts.open(&target).map_err(|e| e.to_string())?;
+        if !f.metadata().map_err(|e| e.to_string())?.is_file() {
+            return Err("not a regular file".into());
+        }
+        std::io::Write::write_all(&mut f, content.as_bytes()).map_err(|e| e.to_string())
     }
 }
 
@@ -925,5 +990,76 @@ mod tests {
         assert!(fs.write(root.join(".git/config").to_str().unwrap(), "x").is_err());
         let ro = FsPolicy { writable: false, ..fs };
         assert!(ro.write(root.join("c.txt").to_str().unwrap(), "x").is_err());
+    }
+
+    /// A dangling symlink inside the worktree resolves nowhere, so the path
+    /// check saw only the link's own (inside) path; the host's write then
+    /// followed it and created a file outside the worktree.
+    #[cfg(unix)]
+    #[test]
+    fn fs_write_never_follows_a_dangling_symlink_out_of_the_worktree() {
+        let wt = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = crate::executor::canonical(wt.path());
+        let target = outside.path().join("planted.plist");
+        std::os::unix::fs::symlink(&target, root.join("evil")).unwrap();
+        // And one pointing at a protected path that doesn't exist yet.
+        std::fs::create_dir_all(root.join(".git/hooks")).unwrap();
+        std::os::unix::fs::symlink(root.join(".git/hooks/pre-commit"), root.join("hook")).unwrap();
+        let fs = FsPolicy { root: root.clone(), writable: true, read_only: vec![root.join(".git")], deny_read: vec![] };
+        assert!(fs.write(root.join("evil").to_str().unwrap(), "x").is_err());
+        assert!(!target.exists(), "wrote outside the worktree through a dangling symlink");
+        assert!(fs.write(root.join("hook").to_str().unwrap(), "#!/bin/sh").is_err());
+        assert!(!root.join(".git/hooks/pre-commit").exists(), "wrote a git hook through a dangling symlink");
+    }
+
+    /// The host serves fs/read_text_file in its own process. An agent can make
+    /// a huge (even sparse) file in its worktree, so a read is size-capped
+    /// before anything is loaded.
+    #[test]
+    fn fs_read_is_size_capped() {
+        let wt = tempfile::tempdir().unwrap();
+        let root = crate::executor::canonical(wt.path());
+        let big = root.join("big.txt");
+        std::fs::File::create(&big).unwrap().set_len(MAX_FS_READ_BYTES + 1).unwrap();
+        let fs = FsPolicy { root: root.clone(), writable: false, read_only: vec![], deny_read: vec![] };
+        assert!(fs.read(big.to_str().unwrap(), None, None).is_err(), "read a file past the cap into the host");
+        assert!(fs.read(big.to_str().unwrap(), Some(1), Some(1)).is_err());
+        // A FIFO would block the host's open() forever.
+        #[cfg(unix)]
+        {
+            let fifo = root.join("pipe");
+            let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+            let (tx, rx) = std::sync::mpsc::channel();
+            let fs2 = fs.clone();
+            std::thread::spawn(move || tx.send(fs2.read(fifo.to_str().unwrap(), None, None).is_err()).unwrap());
+            assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)), Ok(true), "a FIFO hung or was read");
+            let w = FsPolicy { writable: true, ..fs.clone() };
+            let (tx, rx) = std::sync::mpsc::channel();
+            let p = root.join("pipe");
+            std::thread::spawn(move || tx.send(w.write(p.to_str().unwrap(), "x").is_err()).unwrap());
+            assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)), Ok(true), "a FIFO write hung");
+        }
+    }
+
+    /// Protected paths are compared by name, case-insensitively and at any
+    /// depth (macOS and Windows file systems ignore case, so `.CLAUDE/` is
+    /// `.claude/`).
+    #[test]
+    fn fs_write_protected_paths_ignore_case_and_depth() {
+        let wt = tempfile::tempdir().unwrap();
+        let root = crate::executor::canonical(wt.path());
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        let fs = FsPolicy {
+            root: root.clone(),
+            writable: true,
+            read_only: vec![root.join(".git"), root.join(".claude"), root.join("ligus.config.toml")],
+            deny_read: vec![],
+        };
+        for p in [".CLAUDE/settings.json", ".Git/hooks/pre-commit", "LIGUS.CONFIG.TOML", "sub/.claude/settings.json"] {
+            assert!(fs.write(root.join(p).to_str().unwrap(), "{}").is_err(), "{p} must be protected");
+        }
+        assert!(fs.write(root.join("sub/ok.txt").to_str().unwrap(), "ok").is_ok());
     }
 }

@@ -17,6 +17,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use super::server::LigusMcp;
 use crate::agent_turn::McpAttach;
 
+/// The longest MCP message line the server reads; a longer one closes the
+/// connection.
+pub const MAX_LINE_BYTES: usize = 4 * 1024 * 1024;
+
 /// The MCP protocol versions the server answers with.
 pub const MCP_PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
@@ -120,10 +124,10 @@ pub fn listen(_mcp: Arc<LigusMcp>) -> std::io::Result<SocketEndpoint> {
 #[cfg(unix)]
 async fn serve_conn(mcp: Arc<LigusMcp>, stream: tokio::net::UnixStream) -> std::io::Result<()> {
     let (r, mut w) = stream.into_split();
-    let mut lines = BufReader::new(r).lines();
+    let mut reader = BufReader::new(r);
     let mut cred: Option<String> = None;
-    while let Some(line) = lines.next_line().await? {
-        let Ok(msg) = serde_json::from_str::<Value>(line.trim()) else { continue };
+    while let Some(line) = read_bounded_line(&mut reader).await? {
+        let Ok(msg) = serde_json::from_slice::<Value>(&line) else { continue };
         let reply = handle(&mcp, &mut cred, &msg).await;
         let close = cred.is_none();
         if let Some(r) = reply {
@@ -138,6 +142,31 @@ async fn serve_conn(mcp: Arc<LigusMcp>, stream: tokio::net::UnixStream) -> std::
         }
     }
     Ok(())
+}
+
+/// One newline-terminated line of at most [`MAX_LINE_BYTES`]; `None` at end
+/// of stream. A longer line is an error (the caller hangs up).
+#[cfg(unix)]
+async fn read_bounded_line<R: tokio::io::AsyncBufRead + Unpin>(r: &mut R) -> std::io::Result<Option<Vec<u8>>> {
+    let mut line = Vec::new();
+    loop {
+        let buf = r.fill_buf().await?;
+        if buf.is_empty() {
+            return Ok((!line.is_empty()).then_some(line));
+        }
+        let (take, done) = match buf.iter().position(|b| *b == b'\n') {
+            Some(i) => (i + 1, true),
+            None => (buf.len(), false),
+        };
+        if line.len() + take > MAX_LINE_BYTES {
+            return Err(std::io::Error::other("MCP message line too long"));
+        }
+        line.extend_from_slice(&buf[..take]);
+        r.consume(take);
+        if done {
+            return Ok(Some(line));
+        }
+    }
 }
 
 /// Handle one message. `cred` is set by a valid `initialize`.

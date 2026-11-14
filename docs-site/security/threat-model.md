@@ -205,7 +205,9 @@ each stays on this list until a release fixes it.
     any chat of the workspace the agent runs in (by design), so a prompt
     injection planted in one chat can reach agents working in another. Read
     results are marked as data, every read is in the device-local audit with
-    the chat it read, and reads are budgeted (500 messages per turn).
+    the chat it read, and reads are budgeted (500 messages per turn). A
+    locked-down or allow-listed chat can't be read from a chat with wider
+    egress.
 13. **A paused turn holds its host.** A turn waiting on `ligus_ask_human` or
     an ACP permission request keeps its process and chat until someone
     answers or its timeout passes (at most an hour; 10 minutes for permission
@@ -295,6 +297,13 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 | Host (C-13) | A macOS agent could drive other apps with Apple Events or read the pasteboard | The Seatbelt profile denies Apple Events and the pasteboard services |
 | Host (C-14) | A runtime's trust digest didn't cover its provider id or metrics endpoint | It covers both, and a non-default driver |
 | Agents | Agents filed actions through reply text, and every host but the desktop ignored it | Typed Ligus tools with a per-turn credential, budgets, an audit trail and agent-signed effects; one directive parser on every host |
+| Agents (Track D review) | ACP `fs/write_text_file` followed a dangling symlink out of the worktree, matched protected paths by exact case and only at the top level, and `fs/read_text_file` loaded any file (or blocked on a FIFO) in the app's process | Symlinks are refused and writes open with `O_NOFOLLOW`; protected names match at any depth ignoring case; reads are capped at 16 MiB and only regular files are served |
+| Agents (Track D review) | An ACP permission request was granted by the first answer from any member, on any device | Only the host's own person or the agent's owner can grant it |
+| Agents (Track D review) | The CLI credential copy-back read through symlinks and hard links the agent left in its turn home | Read without following links, regular single-link files only |
+| Agents (Track D review) | `ligus_read_chat` could read a locked-down chat from a chat with open egress | Another chat is readable only when the reader's egress is at least as strict |
+| Agents (Track D review) | The config-impact badge missed case variants, paths in shell strings, `/usr/bin/git config` and inline code; a primary runtime's proposals were badged as a person's | Case-insensitive, shell-tokenized matching; inline interpreter code is flagged; only roster members badge as human |
+| Agents (Track D review) | `agentQuorum` could lower a set's scout quorum; uncharged calls flooded the audit ring; one endless socket line grew the app's memory | Raise-only quorum; every call counts toward `maxToolCalls`; socket lines are capped at 4 MiB |
+| Release | `scripts/release-matrix.sh` passed API keys as curl arguments, visible in `ps` | Headers go through a private file |
 
 ### Open {#findings-open}
 

@@ -97,6 +97,16 @@ describe("implement preview", () => {
     expect(screen.getByRole("combobox", { name: "Target agent" })).toHaveValue("a1");
   });
 
+  it("shows invisible and direction-changing characters in an argv instead of rendering them", () => {
+    // U+202E reverses the text after it; U+200B is invisible. Either would let
+    // the preview read differently from what runs.
+    render(<PlanBody plan={{ ...plan, argv: ["rm", "-rf", "safe\u202Etxt.sh", "a\u200Bb", "x\ny"] }} target={null} setTarget={() => {}} />);
+    const shown = screen.getByTestId("plan-argv").textContent ?? "";
+    expect(shown).not.toMatch(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\n]/);
+    expect(shown).toContain("\\u202e");
+    expect(shown).toContain("\\u200b");
+  });
+
   it("shows the exact instruction text an agent gets, and lets you pick another agent", () => {
     const setTarget = vi.fn();
     const instruction = "An approved proposal (decision) is ready to implement. Carry it out now using your tools, then briefly confirm what you did.\n\n## Ship\n\nbody";

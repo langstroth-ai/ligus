@@ -150,13 +150,54 @@ pub fn env(kind: ModelProviderKind, home: &Path) -> Vec<(OsString, OsString)> {
     v
 }
 
+/// Read a file the agent could have written in its turn home, as the host
+/// (unsandboxed) without following anything the agent planted: no symlinked
+/// directory on the way, no symlink at the end (`O_NOFOLLOW`), and a regular
+/// file with one link (a hard link to a file the sandbox denies the agent
+/// would otherwise be read through).
+fn read_turn_file(home: &Path, rel: &str) -> Option<Vec<u8>> {
+    use std::io::Read;
+    if std::fs::symlink_metadata(home).ok()?.file_type().is_symlink() {
+        return None;
+    }
+    let mut cur = home.to_path_buf();
+    for part in Path::new(rel).components() {
+        let std::path::Component::Normal(name) = part else { return None };
+        cur.push(name);
+        if std::fs::symlink_metadata(&cur).ok()?.file_type().is_symlink() {
+            return None;
+        }
+    }
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(libc::O_NOFOLLOW);
+    }
+    let f = opts.open(&cur).ok()?;
+    let meta = f.metadata().ok()?;
+    if !meta.is_file() || meta.len() > MAX_COPY_BYTES {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if meta.nlink() != 1 {
+            return None;
+        }
+    }
+    let mut buf = Vec::new();
+    f.take(MAX_COPY_BYTES + 1).read_to_end(&mut buf).ok()?;
+    Some(buf)
+}
+
 /// After the turn: copy refreshed sign-in files back to their real place
 /// (only valid JSON objects, only the files in [`credential_files`]).
 pub fn copy_back(kind: ModelProviderKind, real_home: &Path, home: &Path) {
     for f in credential_files(kind) {
-        let turn = home.join(f);
         let real = real_path(kind, real_home, f);
-        let (Ok(new), old) = (std::fs::read(&turn), std::fs::read(&real).ok()) else { continue };
+        let (Some(new), old) = (read_turn_file(home, f), std::fs::read(&real).ok()) else { continue };
         if old.as_deref() == Some(new.as_slice()) || new.len() as u64 > MAX_COPY_BYTES {
             continue;
         }
@@ -210,5 +251,41 @@ mod tests {
         std::fs::write(home.join(".codex/auth.json"), "#!/bin/sh").unwrap();
         copy_back(ModelProviderKind::Codex, real.path(), &home);
         assert_eq!(std::fs::read_to_string(real.path().join(".codex/auth.json")).unwrap(), "{\"refresh\":\"new\"}");
+    }
+
+    /// The host copies back with its own (unsandboxed) reads, so a credential
+    /// file the agent swapped for a symlink or a hard link to a file the
+    /// sandbox denies it (another tool's JSON credentials, Ligus's data) would
+    /// be laundered into the CLI's real sign-in file and handed to the agent
+    /// by the next turn's home.
+    #[cfg(unix)]
+    #[test]
+    fn copy_back_never_follows_links_the_agent_planted() {
+        let real = tempfile::tempdir().unwrap();
+        let turn = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(real.path().join(".codex")).unwrap();
+        std::fs::write(real.path().join(".codex/auth.json"), "{\"refresh\":\"old\"}").unwrap();
+        let secret = real.path().join("other-tool-creds.json");
+        std::fs::write(&secret, "{\"token\":\"not-for-agents\"}").unwrap();
+        let home = turn.path().join("home");
+        populate(ModelProviderKind::Codex, real.path(), &home).unwrap();
+        let planted = home.join(".codex/auth.json");
+        std::fs::remove_file(&planted).unwrap();
+        std::os::unix::fs::symlink(&secret, &planted).unwrap();
+        copy_back(ModelProviderKind::Codex, real.path(), &home);
+        assert_eq!(std::fs::read_to_string(real.path().join(".codex/auth.json")).unwrap(), "{\"refresh\":\"old\"}", "symlink followed");
+        std::fs::remove_file(&planted).unwrap();
+        std::fs::hard_link(&secret, &planted).unwrap();
+        copy_back(ModelProviderKind::Codex, real.path(), &home);
+        assert_eq!(std::fs::read_to_string(real.path().join(".codex/auth.json")).unwrap(), "{\"refresh\":\"old\"}", "hard link followed");
+        // A symlinked config dir in the turn home is refused too.
+        std::fs::remove_file(&planted).unwrap();
+        std::fs::remove_dir_all(home.join(".codex")).unwrap();
+        let elsewhere = real.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("auth.json"), "{\"token\":\"not-for-agents\"}").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, home.join(".codex")).unwrap();
+        copy_back(ModelProviderKind::Codex, real.path(), &home);
+        assert_eq!(std::fs::read_to_string(real.path().join(".codex/auth.json")).unwrap(), "{\"refresh\":\"old\"}", "symlinked dir followed");
     }
 }

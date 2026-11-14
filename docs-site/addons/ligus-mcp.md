@@ -34,13 +34,13 @@ changes workspace settings.
 | `ligus_propose_decision` | `title`, `body`, `requiredApprovals?` | A decision for the team to approve. `requiredApprovals` can only raise the default |
 | `ligus_propose_command` | `title`, `body`, `argv[]`, `cwd?` | A command. On approval, Implement runs **exactly this argv** in the chat's worktree, sandboxed, with no network and no model in between |
 | `ligus_propose_workflow` | `definition` | A workflow, validated now and added only when a person approves it |
-| `ligus_open_alternatives` | `question`, `body?`, `taskClass?`, `agentQuorum?`, `options[2..6]` | A [proposal set](../features/proposal-sets.md) |
+| `ligus_open_alternatives` | `question`, `body?`, `taskClass?`, `agentQuorum?`, `options[2..6]` | A [proposal set](../features/proposal-sets.md). `agentQuorum` can only raise the default |
 | `ligus_assess` | `setId`, `alternative`, `score 0-100`, `rationale` | A scout's assessment |
 | `ligus_handoff` | `to`, `keyFiles?`, `decisions?`, `ruledOut?`, `notes?` | A hand-off card with a context parcel. **The receiving agent's turn starts right away**, on whatever host runs it. A hand-off to a person notifies them |
 | `ligus_mark` / `ligus_unmark` | `kind: claim\|lock\|review`, `path`, `lines?`, `note?` / `id?\|path?\|kind?` | Workspace marks (an agent clears only its own) |
 | `ligus_react` | `messageId?`, `emoji` | A reaction |
 | `ligus_list_chats` | `channel?`, `limit ≤ 50` | The workspace's chats |
-| `ligus_read_chat` | `chatId?`, `sinceMessageId?`, `limit ≤ 100` | Messages from **any chat in the workspace** |
+| `ligus_read_chat` | `chatId?`, `sinceMessageId?`, `limit ≤ 100` | Messages from **any chat in the workspace** whose egress is no stricter than this one's |
 | `ligus_read_proposals` | `chatId?`, `status?`, `setId?` | Proposals |
 | `ligus_read_board` | | Marks, hand-offs and open questions |
 | `ligus_ask_human` | `question`, `options? ≤ 6`, `timeoutSecs ≤ 3600` | Asks the chat's people. **The turn pauses** until someone answers or the timeout passes (then `{"error":"no_answer"}`) |
@@ -52,7 +52,10 @@ test fails when one changes.
 
 Results from the read tools carry a header that says they are data, not
 instructions. Reading other chats widens what a prompt injection in one chat
-can reach, so treat a chat's contents accordingly.
+can reach, so treat a chat's contents accordingly. A chat that is locked
+down (or limited to an MCP allow-list) can't be read from a chat with wider
+egress: `ligus_read_chat` and `ligus_read_proposals` refuse it, so its
+content stays where its egress is cut.
 
 ## Who signs what {#signing}
 
@@ -90,7 +93,7 @@ Per turn, and set per device:
 
 | Budget | Default | Variable |
 |---|---|---|
-| Tool calls (all Ligus tools) | 64 | `LIGUS_MCP_MAX_TOOL_CALLS` |
+| Tool calls (every call, unknown tools included) | 64 | `LIGUS_MCP_MAX_TOOL_CALLS` |
 | Proposals (any kind) | 8 | `LIGUS_MCP_MAX_PROPOSALS` |
 | Hand-offs | 2 | `LIGUS_MCP_MAX_HANDOFFS` |
 | Questions | 3 | `LIGUS_MCP_MAX_ASKS` |
@@ -105,7 +108,9 @@ the model to finish its answer.
 
 - **Every call** is a device-local, content-free fact: time, turn, chat,
   agent, tool, outcome (`ok`, `denied`, `budget`, `error`), latency, and for a
-  read, which chat it read. `ligus facts export` includes these lines.
+  read, which chat it read. `ligus facts export` includes these lines. Past
+  the tool-call budget nothing runs and only the first refusal is recorded,
+  so one turn can't flood the audit log.
 - **Every turn** that used the tools adds one synced `TurnToolSummary` to the
   chat: calls per tool, denials, and whether a budget ran out. Teammates see
   what an agent did without seeing content.
@@ -115,7 +120,9 @@ the model to finish its answer.
 `ligus_ask_human` (and an ACP permission request that needs a person) posts
 the question in the chat. It shows in the [Review pane](../features/right-rail.md)
 and is pushed to paired phones as `ask.pending`. Anyone in the chat can
-answer, and the first answer wins. Answering doesn't authorize anything by
-itself, so it needs no passkey. An agent can't answer a question. If the host
+answer, and the first answer wins. Answering a `ligus_ask_human` question
+doesn't authorize anything by itself, so it needs no passkey. A permission
+request is different: it is granted only by the host's own person or the
+agent's owner (see [ACP permissions](acp.md#permissions)). An agent can't answer a question. If the host
 restarts while a turn is waiting, the turn is cancelled. A question can't be
 resumed in 2.0.

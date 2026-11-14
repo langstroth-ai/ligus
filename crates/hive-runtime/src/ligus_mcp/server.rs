@@ -102,6 +102,9 @@ struct Counters {
     denied: u32,
     budget_exhausted: bool,
     calls: BTreeMap<String, u32>,
+    /// Every call presented, charged or not (unknown tools, calls after a
+    /// budget ran out): what bounds the turn's audit rows.
+    attempts: u32,
 }
 
 /// A structured self-report (`ligus_report`).
@@ -240,7 +243,24 @@ impl LigusMcp {
     pub async fn call(&self, credential: &str, tool: &str, args: &Value) -> Result<ToolResult, AuthError> {
         let st = self.authorize(credential)?;
         let started = Instant::now();
-        let (res, read_chat) = self.dispatch(&st, tool, args).await;
+        // Every call counts toward maxToolCalls, unknown tools included: past
+        // it, nothing runs and only the first refusal is audited, so a turn
+        // can't flood the bounded audit ring and push older records out.
+        let attempt = {
+            let mut c = st.counters.lock().unwrap_or_else(|e| e.into_inner());
+            c.attempts = c.attempts.saturating_add(1);
+            c.attempts
+        };
+        let over = attempt > st.spec.budgets.max_tool_calls;
+        let (res, read_chat) = if over {
+            let r = ToolResult::err(
+                Outcome::Budget,
+                json!({"error": "budget_exhausted", "budget": "maxToolCalls", "message": crate::tool_loop::FINAL_ROUND_NUDGE}),
+            );
+            (r, None)
+        } else {
+            self.dispatch(&st, tool, args).await
+        };
         {
             let mut c = st.counters.lock().unwrap_or_else(|e| e.into_inner());
             match res.outcome {
@@ -249,7 +269,9 @@ impl LigusMcp {
                 _ => {}
             }
         }
-        self.audit(&st, tool, res.outcome, started.elapsed(), read_chat);
+        if attempt <= st.spec.budgets.max_tool_calls.saturating_add(1) {
+            self.audit(&st, tool, res.outcome, started.elapsed(), read_chat);
+        }
         Ok(res)
     }
 
@@ -572,6 +594,9 @@ impl LigusMcp {
                 let Some(session) = self.svc(|svc| svc.load(chat).ok().flatten()).filter(|sess| sess.workspace_id == ws) else {
                     return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": "no such chat in this workspace"})), Some(chat));
                 };
+                if !self.cross_read_allowed(st, &session) {
+                    return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": "that chat is more restricted than this one (locked down or allow-listed); its content can't be read from here"})), Some(chat));
+                }
                 let msgs = read_messages(&session, since, limit);
                 if let Err(r) = Self::charge_reads(st, msgs.len() as u32) {
                     return (r, Some(chat));
@@ -584,6 +609,9 @@ impl LigusMcp {
                 let Some(session) = self.svc(|svc| svc.load(chat).ok().flatten()).filter(|sess| sess.workspace_id == ws) else {
                     return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": "no such chat in this workspace"})), Some(chat));
                 };
+                if !self.cross_read_allowed(st, &session) {
+                    return (ToolResult::err(Outcome::Denied, json!({"error": "denied", "message": "that chat is more restricted than this one (locked down or allow-listed); its content can't be read from here"})), Some(chat));
+                }
                 let status = s("status");
                 let set = Uuid::parse_str(&s("setId")).ok();
                 let list: Vec<Value> = session
@@ -629,14 +657,34 @@ impl LigusMcp {
                 if !matches!(status.as_str(), "done" | "blocked" | "needsReview") {
                     return (denied_or_err("status is done, blocked or needsReview".into()), None);
                 }
-                let summary: String = s("summary").chars().take(400).collect();
-                let files: Vec<String> = strs("filesTouched").into_iter().take(32).collect();
+                // Posted by the host as a system note: one line, bounded, so it
+                // can't pass for the host's own messages or flood the chat.
+                let one_line = |t: &str, max: usize| -> String {
+                    t.split_whitespace().collect::<Vec<_>>().join(" ").chars().filter(|c| !c.is_control()).take(max).collect()
+                };
+                let summary = one_line(&s("summary"), 400);
+                let files: Vec<String> = strs("filesTouched").iter().take(32).map(|f| one_line(f, 256)).filter(|f| !f.is_empty()).collect();
                 let confidence = Some(s("confidence")).filter(|c| matches!(c.as_str(), "low" | "medium" | "high"));
                 *st.report.lock().unwrap_or_else(|e| e.into_inner()) = Some(SelfReport { status, summary, files_touched: files, confidence });
                 (ToolResult::ok(json!({"ok": true})), None)
             }
             _ => (ToolResult::err(Outcome::Denied, json!({"error": "unknown_tool"})), None),
         }
+    }
+
+    /// Whether this turn may read `target`'s content: its own chat always;
+    /// another chat only when this turn's egress is at least as strict as
+    /// that chat's. A locked-down (or allow-listed) chat's content stays
+    /// where its egress is cut, so an injection or a leaked credential in it
+    /// can't be carried out through a chat with open egress (D.8).
+    fn cross_read_allowed(&self, st: &TurnState, target: &ChatSession) -> bool {
+        if target.id == st.spec.chat_id {
+            return true;
+        }
+        let Some(reader) = self.svc(|svc| svc.load(st.spec.chat_id).ok().flatten()) else { return false };
+        let mine = hive_core::sandbox::envelope_for_session(&reader).egress;
+        let theirs = hive_core::sandbox::envelope_for_session(target).egress;
+        mine.stricter(&theirs) == mine
     }
 
     /// `ligus_ask_human`: post the ask, pause the turn, wait for the first
@@ -917,13 +965,36 @@ impl crate::agent_turn::HumanAsker for HostAsker {
             let q: String = question.chars().take(flow::MAX_ASK_QUESTION_CHARS).collect();
             let posted = post_ask(&*self.host, &self.ctx, self.turn_id, q, options, timeout).ok()?;
             match wait_answer(&*self.host, self.ctx.session_id, posted.ask_id, timeout, || false).await {
-                Some(a) => Some(crate::agent_turn::HumanAnswer { answer: a.answer, option_index: a.option_index.map(|i| i as usize) }),
+                // A permission answer authorizes a run on this host: it counts
+                // only from the host's own person or the agent's owner. Any
+                // other first answer (a teammate on another device) denies.
+                Some(a) if self.answered_by_approver(&a) => {
+                    Some(crate::agent_turn::HumanAnswer { answer: a.answer, option_index: a.option_index.map(|i| i as usize) })
+                }
+                Some(_) => None,
                 None => {
                     close_ask(&*self.host, &self.ctx, self.turn_id, posted.ask_id);
                     None
                 }
             }
         })
+    }
+}
+
+impl HostAsker {
+    /// Whether the winning answer was signed by the host's own person or the
+    /// asking agent's owner.
+    fn answered_by_approver(&self, ans: &flow::HumanAnswered) -> bool {
+        let mut ok = false;
+        let ctx = &self.ctx;
+        self.host.with_service(&mut |svc| {
+            let Some(author) = svc.flow_answer_author(ctx.session_id, ans) else { return };
+            let owner = ctx.agent_id.and_then(|id| {
+                svc.load(ctx.session_id).ok().flatten().and_then(|s| s.workspace_agents.iter().find(|a| a.id == id).map(|a| a.owner_actor_id.clone()))
+            });
+            ok = !author.is_empty() && (author == svc.author().id || owner.as_deref() == Some(author.as_str()));
+        });
+        ok
     }
 }
 
