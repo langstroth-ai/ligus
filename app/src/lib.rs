@@ -10879,6 +10879,24 @@ struct UpdateInfo {
     notes: String,
 }
 
+/// The manifest's `url` if it is the ligus-ai/ligus GitHub releases page,
+/// else empty (the banner then opens its built-in releases link). The banner
+/// hands this to the system browser, and HTTPS trusts the OS store, so a
+/// store-installed root or a compromised docs host must not be able to point
+/// people at an arbitrary download.
+fn release_page_url(raw: &str) -> String {
+    const PAGE: &str = "https://github.com/ligus-ai/ligus/releases";
+    let Some(rest) = raw.strip_prefix(PAGE) else { return String::new() };
+    let tail_ok = rest.is_empty() || rest.starts_with('/');
+    let chars_ok = rest.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | '_' | '.'));
+    let segments_ok = rest.split('/').all(|seg| seg != "." && seg != "..");
+    if tail_ok && chars_ok && segments_ok {
+        raw.to_string()
+    } else {
+        String::new()
+    }
+}
+
 /// Lightweight "is there a newer version?" check, independent of the Tauri
 /// auto-updater (which stays inert until signing lands). Fetches the public
 /// version manifest and returns `Some(info)` only when its tag differs from this
@@ -10894,7 +10912,8 @@ async fn check_for_app_update() -> Option<UpdateInfo> {
         .timeout(std::time::Duration::from_secs(8))
         .build()
         .ok()?;
-    let info = fetch_update_manifest(&client, &VERSION_MANIFEST_URLS).await?;
+    let mut info = fetch_update_manifest(&client, &VERSION_MANIFEST_URLS).await?;
+    info.url = release_page_url(&info.url);
     // Only offer an update when the manifest is a *strictly newer* release than
     // this build. Comparing tags for mere inequality (the old behavior) would
     // prompt a "downgrade" whenever the manifest lagged the installed build —
@@ -15163,6 +15182,38 @@ mod update_version_tests {
         // Same minisign key across the rename: never rotate it.
         assert!(updater["pubkey"].as_str().unwrap().starts_with("dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhFQjA3RDUyRjVBRUM3QjQK"));
         assert_eq!(super::VERSION_MANIFEST_URLS, ["https://docs.ligus.ai/version.json"]);
+    }
+
+    /// The banner opens the manifest's `url` in the browser. HTTPS now trusts
+    /// the OS store (reqwest 0.13), so a store-installed root (or a
+    /// compromised docs host) must not be able to send people to an arbitrary
+    /// download: only the ligus-ai/ligus releases page is kept, else the UI's
+    /// default.
+    #[test]
+    fn update_banner_url_is_the_ligus_releases_page_only() {
+        use super::release_page_url as r;
+        for ok in [
+            "https://github.com/ligus-ai/ligus/releases/latest",
+            "https://github.com/ligus-ai/ligus/releases/tag/v2.0.0",
+            "https://github.com/ligus-ai/ligus/releases",
+        ] {
+            assert_eq!(r(ok), ok);
+        }
+        for bad in [
+            "",
+            "https://evil.example/ligus.dmg",
+            "http://github.com/ligus-ai/ligus/releases/latest",
+            "https://github.com/ligus-ai/ligus/releasesX",
+            "https://github.com/ligus-ai/ligus/releases/../../../evil/repo/releases",
+            "https://github.com/ligus-ai/ligus/releases/%2e%2e/%2e%2e/evil",
+            "https://github.com.evil.example/ligus-ai/ligus/releases",
+            "https://github.com@evil.example/ligus-ai/ligus/releases",
+            "https://github.com/ligus-ai/ligus/releases\\@evil.example",
+            "https://github.com/ligus-ai/ligus/releases latest",
+            "javascript:alert(1)//https://github.com/ligus-ai/ligus/releases",
+        ] {
+            assert_eq!(r(bad), "", "{bad}");
+        }
     }
 
     /// Serve `routes` (path -> (status, body)) over plain HTTP on localhost.

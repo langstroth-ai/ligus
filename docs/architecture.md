@@ -212,6 +212,16 @@ flowchart TD
   workspace key without a shared secret; wiring to membership exchange is a
   follow-up.
 - Private keys live in a `KeyVault` (file-backed now; OS keystore at packaging).
+- **TLS** (transport only): every HTTP client is built with
+  `hive_forge::http_client_builder` / `new_http_client` (reqwest 0.13, rustls
+  with the ring provider, installed once per process). Server certificates are
+  checked against the OS trust store, so roots an administrator installed are
+  trusted too; on a host with no CA certificates (a minimal Linux container)
+  the bundled Mozilla roots are used instead. The relay tunnel's WebSockets
+  check the bundled Mozilla roots and refuse any message over 65 535 bytes.
+  Content never depends on TLS: sync is end-to-end encrypted, updates are
+  minisign-signed, and the update banner only links to the ligus-ai/ligus
+  releases page.
 
 ---
 

@@ -13,11 +13,14 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 async-trait = "0.1"
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider", "query", "form"] }
 # reqwest 0.13's `rustls-no-provider` needs a process-level rustls provider;
 # `http::install_tls_provider` installs ring (already in the tree via iroh and
 # tauri-plugin-updater), so aws-lc-rs is never pulled in.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+# Fallback roots when the OS has no CA store (already in the tree via iroh-relay
+# and tokio-tungstenite).
+webpki-roots = "1"
 url = "2"
 zeroize = "1"
 toml = "1.2"

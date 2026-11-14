@@ -774,3 +774,43 @@ fn pending_hand_off_picks_up_windows_and_revocations() {
     cli::phones_revoke(tmp.path(), Some("def"), &token, true).unwrap();
     assert_eq!(std::fs::read_to_string(&token).unwrap(), t2);
 }
+
+/// A relay (or anything on the path that terminates the WebSocket) can't make
+/// the host buffer more than the spec's 65 535-byte message (§5, §7.1):
+/// tungstenite's defaults (64 MiB messages, 16 MiB frames) are lowered on
+/// every connection the host dials.
+#[tokio::test]
+async fn dialed_websocket_refuses_messages_over_the_spec_limit() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::handshake::server::{Request as WsReq, Response as WsResp};
+    use tokio_tungstenite::tungstenite::http::HeaderValue;
+    use tokio_tungstenite::tungstenite::Message;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        for size in [noise::MAX_MSG, noise::MAX_MSG + 1, 1 << 20] {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let cb = |_: &WsReq, mut resp: WsResp| {
+                resp.headers_mut().insert("sec-websocket-protocol", HeaderValue::from_static(SUBPROTOCOL));
+                Ok(resp)
+            };
+            let mut ws = tokio_tungstenite::accept_hdr_async(tcp, cb).await.unwrap();
+            let _ = ws.send(Message::Binary(vec![7u8; size].into())).await;
+            let _ = ws.next().await;
+        }
+    });
+    let url = format!("ws://{addr}/v1/tunnel/host");
+    let mut ws = control::dial(&url).await.unwrap();
+    match ws.next().await {
+        Some(Ok(Message::Binary(b))) => assert_eq!(b.len(), noise::MAX_MSG),
+        other => panic!("a 65 535-byte message is allowed: {other:?}"),
+    }
+    drop(ws);
+    for size in [noise::MAX_MSG + 1, 1 << 20] {
+        let mut ws = control::dial(&url).await.unwrap();
+        match ws.next().await {
+            Some(Err(_)) | None => {}
+            Some(Ok(m)) => panic!("a {size}-byte message must be refused, got {} bytes", m.len()),
+        }
+    }
+}

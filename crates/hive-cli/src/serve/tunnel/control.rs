@@ -37,10 +37,17 @@ enum End {
 }
 
 /// Dial `url` offering `hive-tunnel.1`; the relay must select it.
+///
+/// No message or frame may exceed the spec's 65 535 bytes (§5: text ≤ 8 KiB,
+/// binary ≤ 65 535; §7.1: one Noise message per binary message), so the
+/// relay can't make the host buffer tungstenite's defaults (64 MiB / 16 MiB).
 pub async fn dial(url: &str) -> Result<Ws> {
+    use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
     let mut req = url.into_client_request().with_context(|| format!("bad relay URL {url}"))?;
     req.headers_mut().insert("sec-websocket-protocol", HeaderValue::from_static(SUBPROTOCOL));
-    let (ws, resp) = tokio::time::timeout(HANDSHAKE, tokio_tungstenite::connect_async(req))
+    let limit = Some(super::noise::MAX_MSG);
+    let config = WebSocketConfig::default().max_message_size(limit).max_frame_size(limit);
+    let (ws, resp) = tokio::time::timeout(HANDSHAKE, tokio_tungstenite::connect_async_with_config(req, Some(config), false))
         .await
         .map_err(|_| anyhow!("connecting to {url} timed out"))?
         .map_err(|e| match e {
