@@ -42,6 +42,29 @@ describe("LinkChips", () => {
     expect(container.querySelector('[data-chip="verified"]')?.getAttribute("title")).toMatch(/id 1234567/);
     expect(container.querySelector('[data-chip="unverified"]')).toBeTruthy();
   });
+  /// The handle in a link is its publisher's own claim. A verified chip
+  /// shows only a handle the forge confirmed; when the forge didn't say
+  /// (GitLab's anonymous API, an atproto handle that doesn't name the DID
+  /// back), it shows the stable id, never the claimed handle.
+  it("never shows a self-claimed handle as verified", () => {
+    const links: LinkChipDto[] = [
+      { ...base, provider: "gitlab", host: "gitlab.com", handle: "torvalds", subjectId: "999", status: { state: "verified", checkedAt: "x", handle: null, nameBound: false } },
+    ];
+    const { container } = render(<LinkChips links={links} />);
+    const chip = container.querySelector('[data-chip="verified"]')!;
+    expect(chip.textContent).not.toMatch(/torvalds/);
+    expect(chip.textContent).toMatch(/id 999/);
+  });
+  /// Bidi overrides and zero-width characters in a handle can't reorder the
+  /// chip's label or hide in a look-alike name; the handle is isolated.
+  it("strips bidi and zero-width characters and isolates the handle", () => {
+    const links: LinkChipDto[] = [
+      { ...base, handle: "ali\u200Bce\u202E", status: { state: "selfAsserted" } },
+    ];
+    const { container } = render(<LinkChips links={links} />);
+    expect(container.textContent).not.toMatch(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/);
+    expect(container.querySelector("bdi")?.textContent).toBe("alice");
+  });
   it("shows nothing for invalid links only", () => {
     const { container } = render(<LinkChips links={[{ ...base, status: { state: "invalid", reason: "x" } }]} />);
     expect(container.innerHTML).toBe("");
