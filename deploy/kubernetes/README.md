@@ -1,10 +1,11 @@
 # Ligus on Kubernetes
 
-Status: **plan, not a supported install yet.** The design is in
-[`docs/design/kubernetes.md`](../../docs/design/kubernetes.md). This directory
-will hold the Helm chart and plain manifests as the phases in that document
-land. Today it holds only this README; the container image for the `ligus`
-binary is in [`../container/Dockerfile`](../container/Dockerfile).
+Status: **Phase 1.** The Helm chart is in
+[`../helm/ligus`](../helm/ligus) and its README is the install guide. The
+design, and the phases still to come, are in
+[`docs/design/kubernetes.md`](../../docs/design/kubernetes.md). The container
+image for the `ligus` binary is in
+[`../container/Dockerfile`](../container/Dockerfile).
 
 ## What runs where
 
@@ -40,10 +41,11 @@ contains git and CA certificates (agent turns use git worktrees). Agent CLIs
 (claude, codex, ...) are not included; build a derived image with the ones you
 use.
 
-## Trying it by hand (until the chart exists)
+## Trying it by hand (without the chart)
 
-The minimum for one workspace is a relay you can reach and one `ligus serve`
-StatefulSet. A sketch of the serve pod's settings; the full example, with the
+Use the chart in [`../helm/ligus`](../helm/ligus); it sets all of this, plus
+the security context and NetworkPolicies. The minimum for one workspace is a
+relay you can reach and one `ligus serve` StatefulSet. A sketch of the serve pod's settings; the full example, with the
 security context and NetworkPolicies, is in the design document:
 
 ```yaml

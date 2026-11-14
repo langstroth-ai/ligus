@@ -1,0 +1,244 @@
+# Default values for the ligus chart. One release = one workspace, installed
+# in that workspace's own namespace (for example ligus-ws-acme). See README.md.
+
+image:
+  # Built from deploy/container/Dockerfile.
+  repository: ghcr.io/ligus-ai/ligus
+  # Defaults to the chart's appVersion.
+  tag: ""
+  # Pin by digest in production (sha256:...). Overrides tag when set.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# --- Relay -------------------------------------------------------------------
+
+# The relay this workspace syncs through (LIGUS_RELAY_URL). Required unless
+# relay.enabled renders one in this release. Clients outside the cluster need
+# https://; in-cluster http:// is fine for sync.
+relayUrl: ""
+
+# The ligus-relay chart as a dependency. Off by default: a relay is shared by
+# many workspaces and belongs in its own namespace and release. Turn it on for
+# an all-in-one install (kind, k3d, a demo). Any ligus-relay value can be set
+# under this key.
+relay:
+  enabled: false
+  fullnameOverride: ligus-relay
+
+# --- Workspace connection ----------------------------------------------------
+
+workspace:
+  # Secret holding the workspace connection. Keys are below. Create it from a
+  # desktop invite (relay URL, room, key); never commit it.
+  existingSecret: ""
+  secretKeys:
+    room: room
+    key: key
+    # Optional; for relays that require an access token (hrt1...).
+    relayAccessToken: relay-access-token
+  # TEST ONLY: generate a throwaway workspace (random room and key) in a
+  # Secret owned by this release and kept across upgrades. Nobody else holds
+  # the key, so nothing outside the cluster can read this workspace.
+  generate: false
+
+# --- Remote access through the relay tunnel ----------------------------------
+
+remote:
+  enabled: false
+  # Tunnel relay URL (LIGUS_REMOTE_RELAY). Defaults to the in-release relay's
+  # tunnel Service when relay.enabled.
+  relayUrl: ""
+  # Allow an http:// tunnel relay (LIGUS_REMOTE_INSECURE_RELAY). In-cluster
+  # tests only.
+  insecureRelay: false
+  # Secret with a host registration token, when the relay requires one.
+  regTokenSecret:
+    name: ""
+    key: reg-token
+
+# --- serve: the always-on device for this workspace --------------------------
+
+serve:
+  enabled: true
+  # Host label other members see (LIGUS_SERVE_LABEL); defaults to the pod name.
+  label: ""
+  name: ""
+  # Owner to enroll this device for (LIGUS_SERVE_OWNER), by name or actor id.
+  owner: ""
+  defaultAgent: ""
+  applyOnApprove: false
+  # Above serve's 15 s turn grace.
+  terminationGracePeriodSeconds: 30
+  ntfy:
+    url: ""
+    topic: ""
+    tokenSecret:
+      name: ""
+      key: token
+  # The data dir: identity, device keys, hive.db, serve.token, tunnel keys,
+  # checkouts. Secret material: use an encrypted StorageClass. Never RWX or NFS.
+  persistence:
+    size: 5Gi
+    storageClass: ""
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "2", memory: 2Gi, ephemeral-storage: 2Gi }
+  service:
+    type: ClusterIP
+    port: 8787
+  # runtimes.toml is read from the data dir today, so an init container copies
+  # this into the PVC on every start (it is overwritten, not merged).
+  runtimesToml: ""
+  # Mounted read-only; LIGUS_MCP_CONFIG points at it.
+  mcpToml: ""
+  # Mounted read-only; LIGUS_DASHBOARD_FILE points at it.
+  dashboardToml: ""
+  # Plain extra environment variables (list of EnvVar).
+  extraEnv: []
+  # A Secret whose keys all become environment variables (LIGUS_WS_SECRET_*,
+  # model keys, MCP token_env values).
+  secretEnv:
+    existingSecret: ""
+  startupProbe:
+    failureThreshold: 60
+    periodSeconds: 5
+
+# --- worker: sharded agent hosts (one identity per replica) ------------------
+
+worker:
+  enabled: false
+  # Each replica is its own host; agents are bound to one replica with
+  # `ligus set-agent-host`. Never autoscale this StatefulSet.
+  replicas: 1
+  # LIGUS_WORKER_PERMISSION_MODE for CLI agents (for example acceptEdits).
+  permissionMode: ""
+  terminationGracePeriodSeconds: 60
+  persistence:
+    size: 5Gi
+    storageClass: ""
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "2", memory: 2Gi, ephemeral-storage: 2Gi }
+  runtimesToml: ""
+  extraEnv: []
+  secretEnv:
+    existingSecret: ""
+
+# --- MCP servers over HTTP (one Deployment + Service each) -------------------
+
+mcp:
+  servers: []
+  # - name: linear
+  #   image: registry.example.com/mcp-linear@sha256:...
+  #   allowUnpinned: false        # a tag is refused unless this is set
+  #   args: []
+  #   port: 8080
+  #   env: []                     # list of EnvVar
+  #   secretEnv: ""               # Secret name, all keys as env
+  #   resources: {}
+  # Ligus's config then points at http://mcp-linear.<ns>.svc.cluster.local:8080/mcp
+
+# --- Sandbox: hardened Job template for turn executors and PR tests ----------
+
+sandbox:
+  enabled: false
+  # gvisor, kata, ... (kubectl get runtimeclass). Empty = the default runtime
+  # (runc), which is not a security boundary.
+  runtimeClassName: ""
+  # pr-test refuses to render without a sandboxed runtimeClassName unless
+  # allowDefaultRuntime is set (kind and CI only).
+  profile: agent-turn   # agent-turn | pr-test
+  allowDefaultRuntime: false
+  image:
+    repository: ""      # defaults to .image.repository
+    tag: ""
+    digest: ""
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 300
+  resources:
+    requests: { cpu: 500m, memory: 1Gi, ephemeral-storage: 2Gi }
+    limits: { cpu: "2", memory: 4Gi, ephemeral-storage: 8Gi }
+  workSizeLimit: 8Gi
+  # Egress for agent-turn executors besides DNS: model endpoints, granted MCP
+  # Services (list of NetworkPolicyEgressRule). pr-test gets no egress at all.
+  egress: []
+  # Init container that holds the executor until its NetworkPolicy is in
+  # force: it waits for a connection to `probe` (host:port that the executor
+  # policy must block but that is reachable without it) to fail, and for
+  # pr-test also for DNS to fail, then exits; after timeoutSeconds it fails the
+  # Job. The default probe is the cluster DNS metrics port, which the policy
+  # never allows. If the probe is unreachable even without policy, the gate
+  # passes at once (pr-test still waits for DNS to be blocked).
+  policyGate:
+    probe: kube-dns.kube-system.svc.cluster.local:9153
+    timeoutSeconds: 60
+  # Render a one-shot Job that checks the hardening (no service account
+  # token, read-only root, no secrets in env, network as the profile says).
+  smokeJob:
+    enabled: false
+
+# --- Network policies --------------------------------------------------------
+
+networkPolicy:
+  enabled: true
+  # Sources allowed to reach serve:8787. Empty = this release's serve, worker,
+  # executor and test pods only (not MCP servers or other pods in the namespace).
+  # Add the tailnet proxy or ingress controller here if you expose the API.
+  serveIngressFrom: []
+  # Restrict serve/worker egress to DNS, the relay and extraEgress. Off by
+  # default because model providers, forges and ntfy are usually outside the
+  # cluster and NetworkPolicy cannot match host names.
+  restrictEgress: false
+  # Namespace of the relay, for the egress rule when restrictEgress is on.
+  relayNamespace: ""
+  extraEgress: []
+  # The cluster DNS resolver. Every policy that allows DNS allows it to these
+  # pods only: port 53 to any address is a direct exfiltration channel.
+  dns:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: kube-system
+    podSelector:
+      matchLabels:
+        k8s-app: kube-dns
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# Pod Security "restricted" for every pod in the chart.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Telemetry for the pods (standard OTel variables; Ligus does not export
+# OTLP yet, see docs/design/kubernetes.md section 11).
+otel:
+  endpoint: ""
+  resourceAttributes: ""
+
+tests:
+  # Image for `helm test` client pods; defaults to the chart image.
+  image: ""

@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+"""Security assertions on the rendered ligus chart.
+
+Run from anywhere: python3 -I deploy/helm/ligus/ci/security_test.py
+Needs helm and PyYAML. Renders the chart with several value sets and checks
+properties that `helm lint` cannot see.
+"""
+import os
+import subprocess
+import sys
+
+import yaml
+
+CHART = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+KUBE = "1.30.0"
+BASE = ["--set", "relayUrl=http://relay.example:8443", "--set", "workspace.generate=true"]
+
+
+def render(*args, ok=True):
+    cmd = ["helm", "template", "t", CHART, "--kube-version", KUBE, *BASE, *args]
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    if ok and p.returncode != 0:
+        raise AssertionError("render failed: %s\n%s" % (" ".join(args), p.stderr))
+    if not ok:
+        return p
+    return [d for d in yaml.safe_load_all(p.stdout) if d]
+
+
+def policies(docs):
+    return [d for d in docs if d["kind"] == "NetworkPolicy"]
+
+
+def selector_matches(sel, labels):
+    for k, v in (sel.get("matchLabels") or {}).items():
+        if labels.get(k) != v:
+            return False
+    for e in sel.get("matchExpressions") or []:
+        val = labels.get(e["key"])
+        op = e["operator"]
+        if op == "In" and val not in e["values"]:
+            return False
+        if op == "NotIn" and val in e["values"]:
+            return False
+        if op == "Exists" and val is None:
+            return False
+        if op == "DoesNotExist" and val is not None:
+            return False
+    return True
+
+
+def pod_templates(docs):
+    for d in docs:
+        if d["kind"] in ("Deployment", "StatefulSet", "Job"):
+            yield d["kind"], d["metadata"]["name"], d["spec"]["template"]
+        elif d["kind"] == "Pod":
+            yield "Pod", d["metadata"]["name"], d
+        elif d["kind"] == "ConfigMap" and "job.yaml" in (d.get("data") or {}):
+            job = yaml.safe_load(d["data"]["job.yaml"])
+            yield "JobTemplate", d["metadata"]["name"], job["spec"]["template"]
+
+
+FAILS = []
+
+
+def check(name, cond, detail=""):
+    print(("ok   " if cond else "FAIL ") + name + (("  -- " + detail) if detail and not cond else ""))
+    if not cond:
+        FAILS.append(name)
+
+
+# --- DNS egress must go to the cluster resolver only ------------------------
+
+def test_dns_egress_is_scoped():
+    docs = render("--set", "sandbox.enabled=true", "--set", "networkPolicy.restrictEgress=true",
+                  "--set", "networkPolicy.relayNamespace=ligus-relay")
+    for np in policies(docs):
+        for rule in np["spec"].get("egress") or []:
+            ports = [p.get("port") for p in rule.get("ports") or []]
+            if 53 in ports:
+                to = rule.get("to") or []
+                scoped = bool(to) and all(
+                    peer.get("namespaceSelector") and peer.get("podSelector") for peer in to)
+                check("DNS egress of %s is limited to the cluster resolver" % np["metadata"]["name"],
+                      scoped, "port 53 open to any address: a direct exfiltration channel")
+
+
+# --- Only Ligus pods reach serve ------------------------------------------
+
+def test_serve_ingress_excludes_foreign_pods():
+    docs = render("--set", "sandbox.enabled=true",
+                  "--set", "mcp.servers[0].name=linear",
+                  "--set", "mcp.servers[0].image=registry.example/mcp@sha256:" + "0" * 64,
+                  "--set", "mcp.servers[0].allowUnpinned=true")
+    ctrl = [p for p in policies(docs) if p["metadata"]["name"].endswith("-controller")][0]
+    peers = [peer for rule in ctrl["spec"]["ingress"] for peer in rule.get("from") or []]
+
+    def admitted(labels):
+        return any("podSelector" in peer and "namespaceSelector" not in peer
+                   and selector_matches(peer["podSelector"], labels) for peer in peers)
+
+    mcp = [t for k, n, t in pod_templates(docs) if n.startswith("mcp-")][0]
+    check("MCP server pods cannot reach serve:8787", not admitted(mcp["metadata"]["labels"]),
+          "a third-party MCP image in the namespace can call the serve API")
+    check("an unlabelled pod in the namespace cannot reach serve:8787", not admitted({"app": "other"}))
+    executor = [t for k, n, t in pod_templates(docs) if k == "JobTemplate"][0]
+    check("executors still reach serve:8787", admitted(executor["metadata"]["labels"]))
+    test_pod = [t for k, n, t in pod_templates(docs) if k == "Pod"][0]
+    check("the helm test pod still reaches serve:8787", admitted(test_pod["metadata"]["labels"]))
+
+
+# --- Executors wait for their NetworkPolicy before untrusted work ----------
+
+def test_executor_waits_for_network_policy():
+    for profile in ("agent-turn", "pr-test"):
+        docs = render("--set", "sandbox.enabled=true", "--set", "sandbox.profile=" + profile,
+                      "--set", "sandbox.allowDefaultRuntime=true", "--set", "sandbox.smokeJob.enabled=true")
+        for kind, name, tpl in pod_templates(docs):
+            if (tpl["metadata"].get("labels") or {}).get("ligus.ai/role") != "executor":
+                continue
+            inits = tpl["spec"].get("initContainers") or []
+            gate = [c for c in inits if c["name"] == "netpol-gate"]
+            check("%s %s (%s) gates on its NetworkPolicy before the turn starts" % (kind, name, profile),
+                  len(gate) == 1, "CNIs program policy asynchronously; the first seconds are unfiltered")
+            if gate:
+                script = gate[0]["args"][-1] if gate[0].get("args") else ""
+                check("%s %s (%s) gate fails closed" % (kind, name, profile), "exit 1" in script)
+                if profile == "pr-test":
+                    check("%s %s pr-test gate requires DNS to be blocked" % (kind, name), "getent" in script)
+                sc = gate[0].get("securityContext") or {}
+                check("%s %s gate is hardened" % (kind, name),
+                      sc.get("readOnlyRootFilesystem") and sc.get("allowPrivilegeEscalation") is False)
+
+
+# --- Third-party MCP images are pinned by digest ---------------------------
+
+def test_mcp_images_pinned():
+    p = render("--set", "mcp.servers[0].name=linear",
+               "--set", "mcp.servers[0].image=registry.example/mcp-linear:latest", ok=False)
+    check("an MCP server image given by tag is refused", p.returncode != 0,
+          "a moving tag lets whoever controls the registry swap code that holds MCP secrets")
+    docs = render("--set", "mcp.servers[0].name=linear",
+                  "--set", "mcp.servers[0].image=registry.example/mcp-linear@sha256:" + "0" * 64)
+    check("an MCP server image pinned by digest renders", any(d["kind"] == "Deployment" for d in docs))
+    docs = render("--set", "mcp.servers[0].name=linear",
+                  "--set", "mcp.servers[0].image=registry.example/mcp-linear:1.2",
+                  "--set", "mcp.servers[0].allowUnpinned=true")
+    check("allowUnpinned opts out explicitly", any(d["kind"] == "Deployment" for d in docs))
+
+
+TESTS = [test_dns_egress_is_scoped, test_serve_ingress_excludes_foreign_pods,
+         test_executor_waits_for_network_policy, test_mcp_images_pinned]
+
+if __name__ == "__main__":
+    for t in TESTS:
+        t()
+    if FAILS:
+        print("\n%d check(s) failed" % len(FAILS))
+        sys.exit(1)
+    print("\nall checks passed")

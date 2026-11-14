@@ -1,0 +1,32 @@
+# Values for a kind/CI smoke install: a throwaway workspace against a relay
+# installed separately in namespace ligus-relay (release name ligus-relay,
+# Postgres enabled), the tunnel over in-cluster http, egress locked down and
+# the sandbox hardening Job.
+image:
+  repository: ligus
+  tag: dev
+  pullPolicy: IfNotPresent
+relayUrl: http://ligus-relay-sync.ligus-relay.svc.cluster.local:8443
+workspace:
+  generate: true
+remote:
+  enabled: true
+  relayUrl: http://ligus-relay-tunnel.ligus-relay.svc.cluster.local:8443
+  insecureRelay: true
+serve:
+  persistence:
+    size: 1Gi
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: "1", memory: 512Mi, ephemeral-storage: 1Gi }
+networkPolicy:
+  restrictEgress: true
+  relayNamespace: ligus-relay
+sandbox:
+  enabled: true
+  smokeJob:
+    enabled: true
+  resources:
+    requests: { cpu: 50m, memory: 32Mi, ephemeral-storage: 64Mi }
+    limits: { cpu: 500m, memory: 256Mi, ephemeral-storage: 512Mi }
+  workSizeLimit: 256Mi
