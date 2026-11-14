@@ -348,7 +348,7 @@ fn a_forged_low_lamport_seed_cannot_lock_out_the_founder() {
             seed.members.push(owner.member(WorkspaceRole::Viewer));
         }
         let forged = eve.sign(ws, 0, SessionEvent::SessionSnapshot { session: Box::new(seed) });
-        let attack = vec![
+        let attack = [
             forged,
             eve.sign(ws, 103, SessionEvent::DeviceRevoked { device_id: owner.device_id }),
             eve.sign(ws, 104, SessionEvent::MemberRemoved { member_id: owner.account_id.to_string() }),
