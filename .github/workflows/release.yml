@@ -8,6 +8,17 @@ name: Release (desktop app)
 #
 # Trigger: push a tag like `v0.1.1`, or run manually (workflow_dispatch).
 #
+# Release ownership: the `release` job (scripts/ensure-release.sh, shared with
+# release-cli.yml) finds or creates the one release for the tag, and
+# tauri-action only uploads to it by id. tauri-action v1 rewrites the name and
+# body of an existing published release when given tagName, and with
+# releaseDraft it refuses a published release, so it is never given either: a
+# rerun cannot touch the notes, and the installers always land on the release
+# release-cli also uses. A new release is created as a prerelease (not Latest);
+# the owner promotes it with the notes:
+#   gh release edit vX.Y.Z --title "Ligus vX.Y.Z" --notes-file notes.md \
+#     --prerelease=false --latest
+#
 # Signing is wired but inert until the secrets exist (private beta ships
 # unsigned — see task: "Auto-updater + code signing"):
 #   macOS:   APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
@@ -52,8 +63,27 @@ jobs:
           print("matrix=" + json.dumps({"include": include}))
           PY
 
+  # Find or create the release for the tag (never edits an existing one).
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      id: ${{ steps.r.outputs.id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: r
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        # Assign first: a failure inside $(...) as an echo argument would not
+        # fail the step, and an empty releaseId makes tauri-action skip every
+        # upload while still reporting success.
+        run: |
+          id=$(scripts/ensure-release.sh "$GITHUB_REPOSITORY" "$TAG")
+          [[ "$id" =~ ^[0-9]+$ ]] || { echo "::error::no release id for $TAG"; exit 1; }
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
   build:
-    needs: setup
+    needs: [setup, release]
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
@@ -82,8 +112,14 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - name: Build the web frontend deps
-        run: bun install
+        run: bun install --frozen-lockfile
         working-directory: web
+
+      # tauri-action would otherwise run "npm install -g @tauri-apps/cli@v2"
+      # (whatever 2.x is newest) inside the step that holds the signing keys.
+      # Install the exact version web/bun.lock pins, in a step with no secrets.
+      - name: Install the Tauri CLI
+        run: npm install -g --ignore-scripts @tauri-apps/cli@2.12.4
 
       # macOS signing + notarization — ONLY activates when the secrets exist
       # (otherwise the build stays unsigned; empty APPLE_* vars would make tauri
@@ -141,12 +177,32 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          # cargo tauri build discovers app/tauri.conf.json from the repo root.
-          tagName: ${{ github.event.inputs.tag || github.ref_name }}
-          releaseName: "Ligus ${{ github.event.inputs.tag || github.ref_name }}"
+          # The CLI discovers app/tauri.conf.json from the repo root.
+          tauriScript: tauri
+          # Upload to the release the `release` job resolved. No tagName,
+          # releaseName, releaseDraft or prerelease: with those, tauri-action
+          # v1 looks the release up itself and rewrites a published release's
+          # name and body on every run (see the header).
+          releaseId: ${{ needs.release.outputs.id }}
+          # Only used as the "notes" field of latest.json.
           releaseBody: "Installers attached below."
-          releaseDraft: true
-          prerelease: true
+
+  # tauri-action merges latest.json per matrix job, so concurrent jobs can drop
+  # each other's entry and a rerun changes asset ids. Fail loudly (rerun the
+  # platform's job) rather than ship an updater feed that misses a platform.
+  verify-updater:
+    needs: [release, build]
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check latest.json against the release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          PLATFORMS: ${{ github.event.inputs.platforms || 'macos,windows,linux' }}
+          RELEASE_ID: ${{ needs.release.outputs.id }}
+        run: python3 scripts/verify-latest-json.py --repo "$GITHUB_REPOSITORY" --release-id "$RELEASE_ID" --tag "$TAG" --platforms "$PLATFORMS"
 
   # Auto-bump the Homebrew cask on the tap once the DMG is built + uploaded, so
   # `brew upgrade --cask ligus-app` tracks releases with no manual edits. Runs in the

@@ -1,0 +1,45 @@
+name: release-lint
+
+# Offline checks of the release workflows against the pinned release actions'
+# behaviour (scripts/test-release-workflow.rb): a rerun must never rewrite a
+# release's notes, installers and latest.json must land on the tag's one
+# release, the Tauri CLI is pinned, and the latest.json verifier works.
+on:
+  push:
+    branches: [main, "release/**"]
+    paths:
+      - ".github/workflows/release.yml"
+      - ".github/workflows/release-cli.yml"
+      - ".github/workflows/release-lint.yml"
+      - "scripts/ensure-release.sh"
+      - "scripts/verify-latest-json.py"
+      - "scripts/test-release-workflow.rb"
+      - "app/tauri.conf.json"
+      - "web/bun.lock"
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - ".github/workflows/release-cli.yml"
+      - ".github/workflows/release-lint.yml"
+      - "scripts/ensure-release.sh"
+      - "scripts/verify-latest-json.py"
+      - "scripts/test-release-workflow.rb"
+      - "app/tauri.conf.json"
+      - "web/bun.lock"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-workflows:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Release workflow tests
+        run: |
+          # minitest is a Ruby bundled gem; take Ubuntu's package if the
+          # runner's Ruby lacks it rather than pull an unpinned gem.
+          ruby -rminitest -e 1 2>/dev/null || sudo apt-get install -y ruby-minitest
+          ruby scripts/test-release-workflow.rb
