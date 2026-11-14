@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Ligus",
   "mainBinaryName": "Ligus",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "identifier": "ai.ligus.desktop",
   "build": {
     "frontendDist": "../web/dist",

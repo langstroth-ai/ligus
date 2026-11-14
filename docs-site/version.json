@@ -1,6 +1,6 @@
 {
-  "tag": "v2.0.0",
-  "name": "Ligus 2.0.0",
+  "tag": "v2.1.0",
+  "name": "Ligus 2.1.0",
   "url": "https://github.com/ligus-ai/ligus/releases/latest",
-  "notes": "Hive is now Ligus, short for ligustica. The CLI is ligus, settings are LIGUS_*, config is ligus.config.toml and workspace state lives in .ligus/; existing data (desktop data folder, .hive/, hive.config.toml, ~/.hive) moves over automatically on first use, and HIVE_* environment variables must be renamed. Features: repos from the phone with fork-aware pull requests opened upstream as drafts; whole-file proposal view so the phone renders Markdown changes; Kubernetes deployment design and a container image for the ligus binary."
+  "notes": "Features: workspace guards (dearth mode with a visible banner and two-Admin joins, one sandbox envelope for every agent runtime with secret redaction, chat lockdown on an infection signal, coordinator leases so exactly one device drives a workflow run, staggered plan-window throttles that always leave room for your own requests, hygiene sweeps and growth suggestions); proposal sets for exploring options, with blind scout assessments, decaying support, a quorum dial and a pre-flight before apply; and Flow: hand-off cards and context parcels, outcome-weighted routing in shadow mode, review-queue backpressure, a task board, workspace marks, path zones that set the review bar, reused turn worktrees and a home beacon."
 }
