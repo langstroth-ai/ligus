@@ -83,7 +83,16 @@ pub struct ChatService {
     agent_vault: Option<Box<dyn crate::identity_store::KeyVault + Send>>,
     /// Assistant messages this host is writing as an agent: message → agent.
     agent_messages: std::collections::HashMap<Uuid, Uuid>,
+    /// Streamed text not yet written to the log, per message: a trailing
+    /// token (at most [`STREAM_HOLD`] bytes) is held back so a secret split
+    /// across chunk boundaries is redacted whole before any of it is signed.
+    stream_hold: std::collections::HashMap<Uuid, String>,
 }
+
+/// Most bytes of a trailing token held back from the log until more text
+/// arrives (longer than any Ligus secret or common credential; see
+/// `append_chunk`).
+const STREAM_HOLD: usize = 512;
 
 impl ChatService {
     pub fn new(
@@ -105,6 +114,7 @@ impl ChatService {
             write_block: None,
             agent_vault: None,
             agent_messages: std::collections::HashMap::new(),
+            stream_hold: std::collections::HashMap::new(),
         }
     }
 
@@ -839,8 +849,39 @@ impl ChatService {
         chunk: impl Into<String>,
     ) -> Result<()> {
         // Envelope: mask credentials before they reach the synced log. A chunk
-        // boundary can split one; the completed body is redacted whole below.
-        let chunk = self.redact_for_log(workspace_id, session_id, chunk.into());
+        // boundary can split one, and every chunk is a signed event members
+        // read, so the trailing token (a run of credential characters, at
+        // most STREAM_HOLD bytes) is held back until text after it arrives,
+        // and nothing is written while a match spans the cut. The completed
+        // body is redacted whole below.
+        let pending = {
+            let p = self.stream_hold.entry(message_id).or_default();
+            p.push_str(&chunk.into());
+            p
+        };
+        let token_start = pending
+            .char_indices()
+            .rev()
+            .take_while(|(_, c)| c.is_ascii_alphanumeric() || "_-+/=.:~".contains(*c))
+            .last()
+            .map_or(pending.len(), |(i, _)| i);
+        let mut cut = token_start.max(pending.len().saturating_sub(STREAM_HOLD));
+        while !pending.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        if cut == 0 {
+            return Ok(());
+        }
+        let (head, tail) = pending.split_at(cut);
+        let whole = crate::guard_scan::redact_secrets(pending).0;
+        let (h, t) = (crate::guard_scan::redact_secrets(head).0, crate::guard_scan::redact_secrets(tail).0);
+        if h.len() + t.len() != whole.len() || !whole.starts_with(&h) {
+            // A match spans the cut: wait for more text (or the completion).
+            return Ok(());
+        }
+        let (head, rest) = (head.to_string(), tail.to_string());
+        *pending = rest;
+        let chunk = self.redact_for_log(workspace_id, session_id, head);
         self.append_for_message(session_id, workspace_id, message_id, SessionEvent::MessageChunkReceived { message_id, chunk })
     }
 
@@ -852,6 +893,7 @@ impl ChatService {
         body: impl Into<String>,
     ) -> Result<()> {
         let body = self.redact_for_log(workspace_id, session_id, body.into());
+        self.stream_hold.remove(&message_id);
         self.append_for_message(session_id, workspace_id, message_id, SessionEvent::MessageCompleted { message_id, body })?;
         self.agent_messages.remove(&message_id);
         // A completed reply is a natural checkpoint — snapshot periodically so
@@ -917,7 +959,13 @@ impl ChatService {
                 })
                 .map(|m| (m.id, m.body.clone()))
                 .collect();
-            for (message_id, body) in stale {
+            for (message_id, mut body) in stale {
+                // Text this process held back from the log (a trailing token)
+                // belongs to the body too, redacted whole.
+                if let Some(held) = self.stream_hold.remove(&message_id) {
+                    body.push_str(&held);
+                    body = crate::guard_scan::redact_secrets(&body).0;
+                }
                 // Likewise isolate a failed completion: one bad append must not
                 // strand the remaining ghosts in this or later sessions.
                 match self.append_signed(
@@ -3082,7 +3130,8 @@ mod tests {
         svc.set_agent_host(wid, agent_id, &svc.device_id().to_string()).unwrap();
 
         let mid = svc.begin_assistant_message(chat.id, wid, "coder", "rt", Some(agent_id), None).unwrap();
-        svc.append_chunk(chat.id, wid, mid, "hel").unwrap();
+        // A trailing token is held back from the log until text follows it.
+        svc.append_chunk(chat.id, wid, mid, "hel ").unwrap();
         svc.complete_assistant_message(chat.id, wid, mid, "hello").unwrap();
         let envs = svc.store().list(chat.id).unwrap();
         let reply: Vec<_> = envs
@@ -3622,6 +3671,39 @@ mod tests {
         // The host's own message clears the gate as the device's user.
         let own = host.post_user_message(chat_id, wid, "@hive go").unwrap().id;
         assert_eq!(host.trigger_author_role(chat_id, own).unwrap(), Some(WorkspaceRole::Owner));
+    }
+
+    /// C1.4: a Ligus secret split across two streamed chunks must not reach
+    /// the synced log in pieces. Chunks are signed events every member reads,
+    /// so redacting only the completed body leaves both halves in the log.
+    #[test]
+    fn a_secret_split_across_chunks_never_reaches_the_log() {
+        let (mut svc, _) = service();
+        let wid = Uuid::new_v4();
+        let chat = svc.create_chat("A", wid, "rt").unwrap();
+        let secret = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a6978";
+        crate::secret_redact::register(secret);
+        let id = svc.begin_assistant_message(chat.id, wid, "hive", "rt", None, None).unwrap();
+        let (a, b) = secret.split_at(20);
+        svc.append_chunk(chat.id, wid, id, format!("the serve token is {a}")).unwrap();
+        svc.append_chunk(chat.id, wid, id, format!("{b} - done. ")).unwrap();
+        svc.append_chunk(chat.id, wid, id, "x".repeat(2048)).unwrap();
+        let streamed: String = svc
+            .store
+            .list(chat.id)
+            .unwrap()
+            .into_iter()
+            .filter_map(|e| match e.payload {
+                SessionEvent::MessageChunkReceived { message_id, chunk } if message_id == id => Some(chunk),
+                _ => None,
+            })
+            .collect();
+        assert!(!streamed.contains(a) || !streamed.contains(b), "both halves of the secret were streamed into the log");
+        assert!(!streamed.contains(secret));
+        assert!(streamed.contains("the serve token is "), "text before the secret still streams: {streamed:?}");
+        svc.complete_assistant_message(chat.id, wid, id, format!("the serve token is {secret} - done.")).unwrap();
+        let body = svc.load(chat.id).unwrap().unwrap().messages.into_iter().find(|m| m.id == id).unwrap().body;
+        assert!(!body.contains(secret) && body.contains(crate::secret_redact::MARK), "{body}");
     }
 
     #[test]
