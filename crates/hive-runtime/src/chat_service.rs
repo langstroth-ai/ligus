@@ -4343,19 +4343,24 @@ mod tests {
     }
 
     /// A rules version this build doesn't enforce makes the workspace
-    /// read-only here: every write is refused with an "update" message.
+    /// read-only here (every write refused with an "update" message; see
+    /// `presence_tests::switching_to_any_later_rules_version_needs_presence`).
+    /// The switch itself needs presence, so a device key alone (here, an
+    /// author without an account or passkey) can't freeze the workspace.
     #[test]
-    fn unknown_rules_version_refuses_writes_on_this_device() {
+    fn unknown_rules_version_needs_presence_to_take_effect() {
         let (mut svc, _) = service();
         let chat = svc.create_chat("Demo", Uuid::new_v4(), "anthropic").unwrap();
         let (sid, wid) = (chat.id, chat.workspace_id);
         let cfg = svc.ensure_workspace_config(wid).unwrap();
         svc.post_user_message(sid, wid, "before").unwrap();
-        svc.append_signed(cfg, wid, SessionEvent::WorkspaceRulesSet { version: hive_core::authz::RULES_SUPPORTED + 1 })
-            .unwrap();
-        let err = svc.post_user_message(sid, wid, "after").unwrap_err().to_string();
-        assert!(err.contains("update Ligus"), "{err}");
-        assert!(svc.load(cfg).unwrap().unwrap().authz.read_only());
+        let err = svc
+            .append_signed(cfg, wid, SessionEvent::WorkspaceRulesSet { version: hive_core::authz::RULES_SUPPORTED + 1 })
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("passkey"), "{err}");
+        svc.post_user_message(sid, wid, "after").unwrap();
+        assert!(!svc.load(cfg).unwrap().unwrap().authz.read_only());
     }
 
     /// A vote this device can't place yet (its config frontier hasn't

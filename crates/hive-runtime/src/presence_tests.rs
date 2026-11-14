@@ -791,3 +791,46 @@ fn first_passkey_under_v2_needs_a_grant() {
     ana.regrant_passkey(wid, &bea_account.to_string()).unwrap();
     register(&mut bea, wid, &k, None).unwrap();
 }
+
+/// Track B residual 2: from rules v1 too, switching to rules v2 or any later
+/// version (one this build doesn't know included) needs presence. A device
+/// key alone can't make the workspace read-only on every device, or turn on
+/// a future rules version; with presence the switch to an unknown version
+/// still makes this build read-only.
+#[test]
+fn switching_to_any_later_rules_version_needs_presence() {
+    let (mut svc, wid) = founder();
+    let key = Arc::new(SoftAuthenticator::es256());
+    register(&mut svc, wid, &key, None).unwrap();
+    let rec = RecoveryKey::generate().unwrap();
+    let k = key.clone();
+    svc.register_passkey(wid, rec.credential(account(&svc), "Recovery"), &move |req| Ok(k.get(&req.challenge))).unwrap();
+    let cfg = workspace_config_session_id(wid);
+    let unknown = hive_core::authz::RULES_SUPPORTED + 1;
+    for v in [2, unknown, 7] {
+        let err = svc.set_workspace_rules(wid, v).unwrap_err().to_string();
+        assert!(err.contains(hive_core::authz::PRESENCE_REQUIRED), "v{v}: {err}");
+    }
+    // A switch to an unknown version crafted without presence is denied, and
+    // the workspace stays writable.
+    let mut forged = config_log(&svc, wid).into_iter().max_by_key(|e| e.lamport).unwrap();
+    forged.clear_raw();
+    forged.event_id = Uuid::new_v4();
+    forged.lamport += 100;
+    forged.sequence += 100;
+    forged.payload = SessionEvent::WorkspaceRulesSet { version: unknown };
+    forged.actor_stamp.as_mut().unwrap().presence = None;
+    forged.signature = None;
+    svc.sign_for_test(&mut forged);
+    let mut log = config_log(&svc, wid);
+    log.push(forged.clone());
+    assert_eq!(fold_decisions(&log, None, None, WorkspaceAuthz::Unchecked)[&forged.event_id], Verdict::Denied);
+    svc.store().append_envelope(&forged).unwrap();
+    assert!(!svc.load(cfg).unwrap().unwrap().authz.read_only(), "a forged switch made the workspace read-only");
+    // With the passkey, the switch goes through and this build goes read-only.
+    svc.set_presence_provider(Some(Arc::new(Soft(key))));
+    svc.set_workspace_rules(wid, unknown).unwrap();
+    assert!(svc.load(cfg).unwrap().unwrap().authz.read_only());
+    let err = svc.add_member(cfg, wid, member("hal", WorkspaceRole::Viewer)).unwrap_err().to_string();
+    assert!(err.contains("update Ligus"), "{err}");
+}

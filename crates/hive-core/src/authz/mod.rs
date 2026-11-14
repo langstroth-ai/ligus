@@ -25,6 +25,7 @@
 //!   derived from counted votes; `Applied` comes only from `ProposalApplied`.
 //! * **Rules** are versioned on the config log (`WorkspaceRulesSet`); a version
 //!   this build doesn't know makes the workspace read-only on this device.
+//!   Any switch to version 2 or later needs its author's presence.
 //! * **Bounds** (S5 lockdowns, S6 flow state) and the run-write rule (S4) are
 //!   fold rules too.
 //!
@@ -337,8 +338,9 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
     }
 
     // B3: human presence. A stamped assertion must verify; under rules v2
-    // (and for the switch to v2 itself) the events of the presence table
-    // need one. Passkey registrations prove themselves below.
+    // (and for any switch to v2 or later, a version this build doesn't know
+    // included) the events of the presence table need one. Passkey
+    // registrations prove themselves below.
     let mut present: Option<Uuid> = None;
     if let Some(roster) = roster_here {
         if !matches!(env.payload, SessionEvent::PasskeyRegistered { .. }) {
@@ -347,8 +349,8 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 Err(why) => return Decision::deny(why),
             }
         }
-        let switch_to_v2 = matches!(env.payload, SessionEvent::WorkspaceRulesSet { version: 2 });
-        if (roster.rules.min(RULES_SUPPORTED) >= 2 || switch_to_v2) && rules::requires_presence(&env.payload, author, roster, fold) {
+        let switch_up = matches!(env.payload, SessionEvent::WorkspaceRulesSet { version } if version >= 2);
+        if (roster.rules.min(RULES_SUPPORTED) >= 2 || switch_up) && rules::requires_presence(&env.payload, author, roster, fold) {
             // A device is added with its own account's presence, whoever
             // publishes the certificate.
             let whose = match &env.payload {
