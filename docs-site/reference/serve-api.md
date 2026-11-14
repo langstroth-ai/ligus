@@ -64,12 +64,15 @@ $ curl -s http://127.0.0.1:8787/v1/health -H "Authorization: Bearer $(cat ~/.lig
 | Method + path | Request | Notes |
 |---|---|---|
 | `GET /v1/proposals` | `?status=open\|all` (default `open`) | newest first |
-| `GET /v1/proposals/:id` | | adds `myRole`, `myVote`, `canVote`, `isMine` |
+| `GET /v1/proposals/:id` | | adds `myRole`, `myVote`, `canVote`, `isMine`. Every proposal also carries the review badges `authorKind`, `authorName`, `configImpact`, `humanGate`, `presenceRequired`, `argv` (a structured command) and `implementPlan` |
 | `POST /v1/proposals/:id/approve` | | votes approve at the box's role; applies the change only with `LIGUS_SERVE_APPLY_ON_APPROVE`. On a box enrolled as the owner's device: `403 {"error":"presence_required","hint":…}` (as for `reject` and `lockdown/clear`) |
 | `POST /v1/proposals/:id/reject` | `{reason?}` | the reason becomes a thread comment |
 | `GET /v1/proposals/:id/comments` | | refinement thread |
 | `POST /v1/proposals/:id/comments` | `{text, requestChanges?}` | a Viewer gets 403 |
 | `POST /v1/proposals/:id/request-changes` | `{note?}` | sends the proposal back to its agent (or the default agent). 409 if already revised or applied |
+| `GET /v1/proposals/:id/implement-plan` | | exactly what Implement does: `{plan: {kind, argv?, cwd?, instruction?, targetAgentId?, targetName, legacyCommand}}` |
+| `GET /v1/chats/:id/asks` | | agents' questions in the chat, newest first: `{asks: [{id, agentName, question, options, open, answer?, answeredBy?, expiresAtMs}]}` |
+| `POST /v1/asks/:id/answer` | `{answer?, optionIndex?}` | answers an agent's question as the box's person (the first answer wins; it authorizes nothing, so it needs no presence). 400 if already answered or closed |
 | `GET /v1/proposals/:id/file` | `?path=<relative>&side=old\|new` | one whole file before or after the diff, rebuilt in a scratch dir. 400 bad path, 404, 409 base moved, 413 over 512 KiB, 415 not UTF-8 |
 
 ### Repos on the host
@@ -102,7 +105,8 @@ What the phone may touch on disk is limited; see
 replays the backlog after the `Last-Event-ID` header (a ring of 1024
 events), then streams live, with a keep-alive every 15 s. Event names:
 `message.created`, `message.delta`, `message.done`, `proposal.created`,
-`proposal.updated`, `chat.updated`, `turn.status`. Through the tunnel, an
+`proposal.updated`, `chat.updated`, `turn.status`, `ask.pending` (an
+agent's question, also pushed to phones). Through the tunnel, an
 open stream marks the app as in the foreground, so the box doesn't push to
 that phone.
 

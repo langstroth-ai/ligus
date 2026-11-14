@@ -134,6 +134,8 @@ nav:
       - Bring-your-own agents: addons/byo-agents.md
       - Skills: addons/skills.md
       - MCP servers: addons/mcp.md
+      - Ligus tools for agents (MCP): addons/ligus-mcp.md
+      - Subscription CLIs over ACP: addons/acp.md
       - Linear & remote MCP (OAuth): addons/linear.md
   - Operations:
       - Building the dist: ops/build.md
@@ -154,3 +156,4 @@ nav:
       - Configuration (TOML): reference/config-toml.md
       - Invite payload format: reference/invite-payload.md
       - Wire protocols: reference/wire-protocols.md
+      - Runtime matrix: reference/runtime-matrix.md

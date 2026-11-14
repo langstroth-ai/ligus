@@ -9,6 +9,24 @@ Full release notes are on the
 
 ## 2.0
 
+- **Agents get typed tools.** Agents file proposals, hand off, leave marks,
+  read the workspace and ask you questions through the
+  [Ligus tools](../addons/ligus-mcp.md) instead of `[[…]]` reply text. A
+  hand-off starts the receiving agent right away, on whichever host runs it.
+  A question pauses the agent's turn until someone answers, from the desktop
+  or the phone. Agents sign with their own keys, and can only propose.
+- **Subscription CLIs over ACP.** Copilot CLI, Antigravity and Codex (and
+  Claude Code with an API key) run over the
+  [Agent Client Protocol](../addons/acp.md). Their permission requests follow
+  your tier or come to you as a question. The headless adapters remain the
+  fallback.
+- **Review shows exactly what Implement does.** Each proposal shows its kind,
+  its author and signature, config impact and gates. Implement previews the
+  exact command or instruction, the agent (the one that proposed it), the
+  runtime, the sandbox and the network. A command proposal runs its exact
+  argv, sandboxed and offline, with no model involved.
+- **Gemini API and MLX presets**, and a [runtime matrix](runtime-matrix.md)
+  that's run before every release.
 - **Hive is now Ligus.** Ligus is short for *ligustica* (*Apis mellifera
   ligustica*, the Italian honeybee). The protocol and your data are unchanged:
   workspaces, devices, relays and paired phones keep working, and the default

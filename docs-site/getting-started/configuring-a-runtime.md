@@ -48,12 +48,18 @@ have to remember them:
   for llama.cpp servers behind an OpenAI-compatible gateway, with tools
   on. Replace `<host>` in the endpoint with the gateway's address. See
   [Offline setup with local models](offline-local-models.md).
+- **Google Gemini**: the Gemini API's OpenAI-compatible endpoint
+  (`https://generativelanguage.googleapis.com/v1beta/openai/`) with your
+  Gemini API key.
+- **MLX (local, mlx_lm.server)**: Apple Silicon's `mlx_lm.server` on
+  `http://localhost:8080`, keyless, with tools on.
 - **Custom** — any other **OpenAI-compatible** HTTP endpoint; fill in the
   base URL yourself.
 
 All of these are OpenAI-wire-compatible, so the same multi-turn tool loop works
 across them. Pick the closest preset, then adjust the endpoint, model id,
-and API key as needed.
+and API key as needed. The [runtime matrix](../reference/runtime-matrix.md)
+lists the runtimes checked before every release.
 
 ## Runtime config schema
 

@@ -62,6 +62,12 @@ headless and streams its reply, text and tool steps included. The login stays
 in the CLI's own config / OS keychain — Ligus never reads, copies or syncs it,
 so these runtimes are keyless.
 
+Copilot CLI, Antigravity and Codex (and Claude Code with an API key) run over
+the Agent Client Protocol when it's available, with their permission
+requests answered by your tier or by a person; see
+[Subscription CLIs over ACP](acp.md). Each turn runs with a throwaway CLI
+home, so nothing an agent writes into the CLI's config outlives the turn.
+
 | | Google Antigravity CLI | GitHub Copilot CLI |
 |---|---|---|
 | Binary | `agy` | `copilot` |

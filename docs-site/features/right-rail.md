@@ -37,6 +37,22 @@ pane header to close the rail entirely.
   approve / disposition — approval counts at the voter's real role and an
   author can't approve their own — then **Implement** once quorum is met.
   See [agent-authored proposals](multi-agent.md#agent-authored-proposals).
+  Each card shows what the proposal is and where it came from, as badges:
+  its **kind** (file change, command, decision, workflow), its **author**
+  (a person, or an agent with "agent-signed" when its own key signed it, or
+  "host-signed (legacy)" when its host signed for it), **Config impact**
+  when it touches configuration, CI, hooks, protected dirs or MCP config,
+  **Human gate**, **Presence required**, and **No exact command** for a
+  command filed without an argv. **Implement…** first shows exactly what
+  will run: the argv of a command (run as-is in the chat's worktree,
+  sandboxed and offline, with no model involved), or the instruction text
+  an agent receives, and which agent (by default the one that produced the
+  proposal), on which runtime and driver, in which sandbox, with which
+  network. The preview and the run come from the same function.
+  **Questions from agents** (`ligus_ask_human`, and ACP permission requests
+  that need a person) appear at the top of the pane with their options; the
+  asking turn waits for your answer. See
+  [Ligus tools for agents](../addons/ligus-mcp.md#asks).
   **Proposal sets** (competing alternatives with scout scores, the quorum
   dial, and pre-flight then apply) sit at the top of the pane; see
   [Exploring options](proposal-sets.md).
