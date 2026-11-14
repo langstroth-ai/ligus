@@ -282,7 +282,7 @@ It can be produced by:
    - `statement` equals `render(link)`, byte for byte;
    - `account-key` equals the account key in force *at the event's position* (`RosterState`);
    - `expires_at > now` and `expires_at - issued_at` is at most 2 years.
-2. **Signature check** (offline): the SSHSIG verifies over the statement with the namespace above. Allowed algorithms are `ssh-ed25519`, `sk-ssh-ed25519@openssh.com`, `ecdsa-sha2-nistp256` and `rsa-sha2-512` with at least 3072 bits. **[I]** The RustCrypto `ssh-key` crate covers SshSig verification for these. Confirm sk-key support before choosing it; it is a new dependency for `deny.toml`.
+2. **Signature check** (offline): the SSHSIG verifies over the statement with the namespace above. Allowed algorithms are `ssh-ed25519`, `sk-ssh-ed25519@openssh.com`, `ecdsa-sha2-nistp256` and `rsa-sha2-512` with 3072 to 16384 bits (see 2.8 for how RSA is verified). **[I]** The RustCrypto `ssh-key` crate covers SshSig verification for these. Confirm sk-key support before choosing it; it is a new dependency for `deny.toml`.
 3. **Forge check** (online, direct to the forge, never through the relay):
    1. Resolve `subject_id` to the current handle (GitHub `/user/{id}`, GitLab `/users/{id}`, Forgejo `users/search?uid=`, DID document).
    2. Fetch the key list, by id wherever the API allows: GitLab, and atproto by DID.
@@ -330,6 +330,8 @@ The adversarial review of the merged linked identities (decision: approve with r
 - **Cache.** The 24-hour cache is keyed by the link, the workspace and the account key. A cached status is shown only after the offline checks pass, only while forge checks are on, and only within the TTL.
 - **GitLab published keys** need usage type **Signing**, not GitLab's default **Authentication & Signing** (which grants push).
 - **Removal.** Only the account itself, from a non-delegated device, removes its own links (an Admin may still moderate); a delegated host can't remove its owner's links.
+- **RSA without the Marvin advisory.** `ssh-key` 0.6's `rsa` feature pulls `rsa` 0.9 (RUSTSEC-2023-0071). The feature is off: `ssh-key` still parses RSA keys and SSHSIG blobs, and Ligus verifies RSA itself with `rsa` 0.10. It rebuilds the PROTOCOL.sshsig signed data the way OpenSSH does (magic, namespace, empty reserved field, `sha512`, SHA-512 of the statement) and checks a PKCS#1 v1.5 SHA-512 signature exactly as long as the modulus. Accepted: `rsa-sha2-512` only (not `rsa-sha2-256` or SHA-1 `ssh-rsa`), moduli of 3072 to 16384 bits, an odd public exponent of at least 3 and at most 2^33 - 1, and an empty reserved field. Other key types still use `ssh-key`'s verifier. No advisory ignore is needed in `deny.toml`.
+- **One form per proof.** `ssh-key` 0.6 accepts a length prefix larger than the field it frames, and the SSHSIG version isn't signed, so one signature had many byte forms. Every key type's proof must now be exactly framed (the public key in its canonical encoding) and version 1.
 
 ---
 
