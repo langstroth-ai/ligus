@@ -196,7 +196,7 @@ mod serialized_form_tests {
     use super::ChatSession;
     use uuid::Uuid;
 
-    /// A session that never used 2.1 guard or flow state must serialize with
+    /// A session that never used guard or flow state must serialize with
     /// the same keys as 2.0, because snapshots are signed over that form.
     #[test]
     fn empty_guard_and_flow_state_are_left_out() {

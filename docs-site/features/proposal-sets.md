@@ -161,8 +161,8 @@ device whose owner isn't a member is ignored on every device.
 
 ## Older versions and the phone
 
-Proposal sets are new in 2.1. Devices on 2.0 ignore the set and see the
-alternatives as ordinary proposals. The phone shows which set a proposal
+Proposal sets are new in 2.0. Devices on an older version ignore the set
+and see the alternatives as ordinary proposals. The phone shows which set a proposal
 belongs to, and `ligus serve` never applies a set alternative on approval
 (even with `LIGUS_SERVE_APPLY_ON_APPROVE`): apply it from the desktop's set
 view.

@@ -112,7 +112,7 @@ log. The durable host record is now written only when something real changes
 
 ### The workspace coordinator
 
-Since 2.1 the box also holds the workspace's **coordinator lease**: a signed
+Since 2.0 the box also holds the workspace's **coordinator lease**: a signed
 claim on the workspace config log, renewed by a heartbeat signed with the
 box's device key on the same presence channel. If a second `ligus serve` box
 serves the same workspace, it leaves the role to the first while that one

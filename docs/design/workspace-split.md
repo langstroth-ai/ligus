@@ -1,7 +1,7 @@
 # Guided workspace split (design note)
 
-Status: design only, not implemented (Ligus 2.1). Companion to the
-coordinator leases, dearth mode and lockdown work in 2.1.
+Status: design only, not implemented (Ligus 2.0). Companion to the
+coordinator leases, dearth mode and lockdown work in 2.0.
 
 ## Why
 
@@ -9,12 +9,12 @@ A honeybee colony that outgrows its cavity doesn't keep growing: it swarms.
 The old queen leaves with a large share of the workers and a daughter queen
 inherits the nest. Supersedure (replacing a failing coordinator in place) and
 swarming (splitting the group) are different events with different
-inheritance rules. Ligus 2.1 implements the first (planned lease handover).
+inheritance rules. Ligus 2.0 implements the first (planned lease handover).
 This note covers the second: a sub-team takes a subset of chats, agents and
 repositories into a **new workspace with fresh keys**, the parent keeps its
 identity, and history before the split stays readable to both.
 
-It doesn't fit in 2.1 because it touches the key schedule, the relay room
+It didn't fit in 2.0 because it touches the key schedule, the relay room
 model and membership at once, and each needs its own review.
 
 ## What a split must guarantee

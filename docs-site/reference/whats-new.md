@@ -7,52 +7,6 @@ Changes since 1.15, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/ligus-ai/ligus/releases).
 
-## 2.1
-
-- **Workspace guards.** A new Settings → Guards page collects the controls
-  that keep a workspace inside safe bounds.
-  [Workspace guards](../features/guards.md)
-- **Dearth mode.** An Admin can close the workspace's entrance for a hostile
-  period: new members and devices need two Admins, agents keep only
-  allow-listed MCP servers, and changes to protected paths need a human. Every
-  member sees a banner. [Dearth mode](../features/guards.md#dearth-mode)
-- **One sandbox envelope for every runtime.** Isolation, protected
-  directories, an egress policy and secret redaction now apply the same way to
-  Claude Code, Codex, API models and the rest; runtimes Ligus can't confine
-  are refused while egress is restricted, and credentials in agent replies are
-  masked before they're logged.
-  [The sandbox envelope](../concepts/security.md#the-sandbox-envelope-around-every-agent-turn)
-- **Chat lockdown.** A prompt-injection marker in a tool result, a credential
-  in an agent's diff or an unrequested CI change locks the chat down (no
-  network for its agents, a human approval on every proposal) until a member
-  clears it. [Chat lockdown](../features/guards.md#chat-lockdown)
-- **Coordinator leases for workflow runs.** Exactly one device drives a run,
-  renewing a signed heartbeat; another takes over only after it lapses, the
-  driver can hand a run over on purpose, and two devices that both try at once
-  are fenced by the lease epoch. A `ligus serve` box holds the workspace
-  coordinator lease. [Which device drives a run](../features/workflows.md#which-device-drives-a-run)
-- **Staggered plan-window throttles.** Near a subscription limit, scheduled
-  runs pause first, then workflow stages and agent hand-offs, each agent at a
-  slightly different point; your own requests always run.
-  [Plan windows](../features/guards.md#plan-windows-staggered-throttles)
-- **Hygiene, the patch-leaving rule and growth suggestions.** Leftover
-  worktrees are swept and stale proposals set aside; long tool loops check in
-  when they stop making measurable progress; and the workspace suggests a
-  host, worker or agent only when its occupancy calls for one.
-  [Hygiene](../features/guards.md#hygiene)
-- **Proposal sets.** Ask for options and agents offer competing
-  alternatives; other agents assess each one blind, their support fades
-  unless renewed, a quorum of scouts picks a front-runner and stops its
-  rivals, and you decide with a pre-flight (tests, base, hosts) before
-  applying. A fast to careful dial sets how much agreement is needed. See
-  [Exploring options](../features/proposal-sets.md).
-- **Flow.** Hand-off cards and context parcels when one agent passes work to
-  another; un-addressed work routed by measured outcomes (in shadow mode
-  first) with cool-downs after failures; backpressure at the review queue; a
-  task board for work nobody was asked to do; workspace marks (claims, locks,
-  review markers); path zones that raise the review bar where a change lands;
-  reused turn worktrees; and a home beacon. See [Flow](../features/flow.md).
-
 ## 2.0
 
 - **Hive is now Ligus.** Ligus is short for *ligustica* (*Apis mellifera
@@ -98,6 +52,49 @@ Full release notes are on the
 - **New addresses.** The project lives at github.com/ligus-ai/ligus and the
   docs at docs.ligus.ai. Old links redirect. Protocol identifiers that contain
   `hive` keep their names; see [Wire protocols](wire-protocols.md#legacy-protocol-identifiers).
+- **Workspace guards.** A new Settings → Guards page collects the controls
+  that keep a workspace inside safe bounds.
+  [Workspace guards](../features/guards.md)
+- **Dearth mode.** An Admin can close the workspace's entrance for a hostile
+  period: new members and devices need two Admins, agents keep only
+  allow-listed MCP servers, and changes to protected paths need a human. Every
+  member sees a banner. [Dearth mode](../features/guards.md#dearth-mode)
+- **One sandbox envelope for every runtime.** Isolation, protected
+  directories, an egress policy and secret redaction now apply the same way to
+  Claude Code, Codex, API models and the rest; runtimes Ligus can't confine
+  are refused while egress is restricted, and credentials in agent replies are
+  masked before they're logged.
+  [The sandbox envelope](../concepts/security.md#the-sandbox-envelope-around-every-agent-turn)
+- **Chat lockdown.** A prompt-injection marker in a tool result, a credential
+  in an agent's diff or an unrequested CI change locks the chat down (no
+  network for its agents, a human approval on every proposal) until a member
+  clears it. [Chat lockdown](../features/guards.md#chat-lockdown)
+- **Coordinator leases for workflow runs.** Exactly one device drives a run,
+  renewing a signed heartbeat; another takes over only after it lapses, the
+  driver can hand a run over on purpose, and two devices that both try at once
+  are fenced by the lease epoch. A `ligus serve` box holds the workspace
+  coordinator lease. [Which device drives a run](../features/workflows.md#which-device-drives-a-run)
+- **Staggered plan-window throttles.** Near a subscription limit, scheduled
+  runs pause first, then workflow stages and agent hand-offs, each agent at a
+  slightly different point; your own requests always run.
+  [Plan windows](../features/guards.md#plan-windows-staggered-throttles)
+- **Hygiene, the patch-leaving rule and growth suggestions.** Leftover
+  worktrees are swept and stale proposals set aside; long tool loops check in
+  when they stop making measurable progress; and the workspace suggests a
+  host, worker or agent only when its occupancy calls for one.
+  [Hygiene](../features/guards.md#hygiene)
+- **Proposal sets.** Ask for options and agents offer competing
+  alternatives; other agents assess each one blind, their support fades
+  unless renewed, a quorum of scouts picks a front-runner and stops its
+  rivals, and you decide with a pre-flight (tests, base, hosts) before
+  applying. A fast to careful dial sets how much agreement is needed. See
+  [Exploring options](../features/proposal-sets.md).
+- **Flow.** Hand-off cards and context parcels when one agent passes work to
+  another; un-addressed work routed by measured outcomes (in shadow mode
+  first) with cool-downs after failures; backpressure at the review queue; a
+  task board for work nobody was asked to do; workspace marks (claims, locks,
+  review markers); path zones that raise the review bar where a change lands;
+  reused turn worktrees; and a home beacon. See [Flow](../features/flow.md).
 
 ## 1.18
 

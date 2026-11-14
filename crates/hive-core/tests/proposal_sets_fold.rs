@@ -1,5 +1,5 @@
 //! Proposal sets through the real event fold: envelopes in canonical order,
-//! wire compatibility with 2.0 peers, and convergence regardless of arrival.
+//! wire compatibility with older peers, and convergence regardless of arrival.
 
 use hive_core::proposal_sets::{CheckOutcome, PreflightReport, ProposalSet, ScoutAssessment, SetPhase, StopReason};
 use hive_core::{
@@ -168,7 +168,7 @@ fn new_events_round_trip_and_a_2_0_peer_sees_them_as_unknown() {
     assert_eq!(serde_json::from_str::<SessionEvent>(&json).unwrap(), ev);
     assert_eq!(ev.kind_str(), "proposalSetDecided");
 
-    // What a 2.0 build does with a kind it doesn't know: decode as Unknown.
+    // What an older build does with a kind it doesn't know: decode as Unknown.
     #[derive(serde::Deserialize, Debug, PartialEq)]
     #[serde(tag = "kind", rename_all = "camelCase")]
     enum OldEvent {
@@ -178,7 +178,7 @@ fn new_events_round_trip_and_a_2_0_peer_sees_them_as_unknown() {
     }
     assert_eq!(serde_json::from_str::<OldEvent>(&json).unwrap(), OldEvent::Unknown);
 
-    // A 2.0 proposal (no set fields) still decodes; a 2.1 one omits empty fields.
+    // A proposal without set fields (older versions) still decodes; a new one omits empty fields.
     let old = r#"{"id":"6f1f8a3e-0d4f-4c38-9a59-2d1f6a1c1b2a","title":"X","kind":"decision","status":"open"}"#;
     let p: ActionProposal = serde_json::from_str(old).unwrap();
     assert_eq!(p.set_id, None);

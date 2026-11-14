@@ -33,7 +33,7 @@ keys:
 `agentRosterUpdated`, `proposalUpserted`, `messageReactionAdded`. The projector
 folds them in order; a `sessionSnapshot` seeds/bounds replay.
 
-[Proposal sets](../features/proposal-sets.md) (2.1) add `proposalSetOpened`,
+[Proposal sets](../features/proposal-sets.md) (2.0) add `proposalSetOpened`,
 `proposalSetAlternativeAdded`, `scoutAssessmentPosted`,
 `proposalSetRoundAdvanced`, `proposalSetQuorumReached`,
 `proposalSetAlternativeStopped`, `proposalSetTuned`,

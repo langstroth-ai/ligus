@@ -514,7 +514,7 @@ for tiny turns.
 
 ### 4.5 The workspace sandbox envelope on Kubernetes
 
-Ligus 2.1 makes the envelope a workspace property
+Ligus 2.0 makes the envelope a workspace property
 (`hive_core::sandbox::SandboxEnvelope`, enforced per runtime by
 `hive_runtime::sandbox`). The executor should render it, not invent its own:
 
