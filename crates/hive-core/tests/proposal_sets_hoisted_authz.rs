@@ -228,3 +228,58 @@ fn during_dearth_a_chat_only_member_counts_for_nothing() {
     let tight = log.hoisted(&workspace_roster(), true);
     assert!(tight.proposal_sets.iter().all(|x| x.id != set_id), "dearth mode: only config-log members count");
 }
+
+// ---- security review (2.0): proven, not yet fixed; see the review report ----
+
+/// A set's human gate is "`required_approvals` from members at or above the
+/// role floor". The vote's role is the voter's own claim, though, and the
+/// hoisted fold doesn't check it: a Viewer declaring Admin satisfies an
+/// Admin-floor set alone, and an Admin then decides it.
+#[test]
+#[ignore = "security review: vote roles are self-declared (required revision R1)"]
+fn a_viewers_self_declared_admin_vote_does_not_meet_an_admin_floor() {
+    let mut log = Log::new();
+    let set_id = Uuid::new_v4();
+    let p = ActionProposal::new("Redis", ProposalKind::Decision, "planner");
+    let a = p.id;
+    log.push("mara", SessionEvent::ProposalUpserted { proposal: p });
+    let mut set = ProposalSet::new("Which cache?", "planner", vec![a]);
+    set.id = set_id;
+    set.approval_role_floor = WorkspaceRole::Admin;
+    set.agent_quorum = 1;
+    log.push("mara", SessionEvent::ProposalSetOpened { set: Box::new(set) });
+    log.push("mara", SessionEvent::ScoutAssessmentPosted { set_id, assessment: scout(a, "coder", 90) });
+    log.push("mara", SessionEvent::ProposalSetQuorumReached { set_id, proposal_id: a, tie_break: false, at: Timestamp::epoch() });
+    log.push(
+        "val",
+        SessionEvent::ProposalVoteCast {
+            proposal_id: a,
+            approval: ProposalApproval { actor_id: "val".into(), role: WorkspaceRole::Admin, approved: true, created_at: Timestamp::epoch() },
+        },
+    );
+    log.push("ada", SessionEvent::ProposalSetPreflightRecorded { set_id, proposal_id: a, report: report(true), at: Timestamp::epoch() });
+    log.push("ada", SessionEvent::ProposalSetDecided { set_id, winner: Some(a), at: Timestamp::epoch() });
+    let s = log.hoisted(&workspace_roster(), false);
+    let set = s.proposal_sets.iter().find(|x| x.id == set_id).unwrap();
+    assert_ne!(set.winner, Some(a), "a Viewer's vote, claiming Admin, met the Admin-floor human gate");
+}
+
+/// Hoisted authorization judges every event against the roster as it is
+/// now, not as it was when the event was signed: a decision a Viewer signed
+/// (dropped at the time) folds once the Viewer is later promoted, and an
+/// Admin's decision is undone if she is later demoted.
+#[test]
+#[ignore = "security review: hoisted checks use the current roster (required revision R2)"]
+fn hoisted_authorization_is_not_retroactive() {
+    let mut log = Log::new();
+    let (set_id, a, _) = piping_set(&mut log, WorkspaceRole::Contributor);
+    log.push("owner", SessionEvent::ProposalSetPreflightRecorded { set_id, proposal_id: a, report: report(true), at: Timestamp::epoch() });
+    log.push("val", SessionEvent::ProposalSetDecided { set_id, winner: None, at: Timestamp::epoch() });
+    let before = log.hoisted(&workspace_roster(), false);
+    assert_eq!(before.proposal_sets.iter().find(|x| x.id == set_id).unwrap().phase, SetPhase::Piping, "control");
+    // Later, val is promoted. Her old, refused close must stay refused.
+    let mut promoted = workspace_roster();
+    promoted.iter_mut().find(|m| m.id == "val").unwrap().role = WorkspaceRole::Admin;
+    let after = log.hoisted(&promoted, false);
+    assert_eq!(after.proposal_sets.iter().find(|x| x.id == set_id).unwrap().phase, SetPhase::Piping, "a refused close became valid retroactively");
+}

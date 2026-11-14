@@ -125,3 +125,141 @@ fn without_dearth_mode_one_certificate_is_enough() {
     log.cert(&owner, new_box);
     assert!(build_roster(&log.envs).public_key(new_box).is_some());
 }
+
+/// Dearth mode in the default (Relay) identity mode: a device certified while
+/// the entrance is closed and not yet approved by a second Admin must not
+/// have its events accepted. It used to fall through to "unknown device",
+/// which Relay mode accepts, so the second approval bound nothing.
+#[test]
+fn a_pending_device_is_not_accepted_in_relay_mode() {
+    use crate::envelope_verifier::verdict_for;
+    use crate::identity_verifier::{gate_ingest, IdentityCache, IdentityMode, IngestAction};
+    let (mut log, owner, _admin2, _alice, laptop) = setup();
+    log.push(&owner, dearth(true, vec![laptop]));
+    let new_box = Uuid::new_v4();
+    let dk = log.cert(&owner, new_box);
+    // The pending device signs a chat message as the owner's account.
+    let mut e = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 99, SessionEvent::SessionTitleChanged { title: "x".into() });
+    e.lamport = 99;
+    e.actor_stamp = Some(ActorStamp { actor: actor(&owner), recorded_at: Timestamp::epoch() });
+    hive_core::sign_envelope(&mut e, new_box, &dk);
+    let mut envs = log.envs.clone();
+    envs.push(e.clone());
+    let roster = build_roster(&envs);
+    assert_eq!(roster.pending_devices().len(), 1, "control: the device is pending");
+    let action = gate_ingest(IdentityMode::Relay, verdict_for(&roster, &e), Some(owner.account), None, &IdentityCache::new());
+    assert!(!matches!(action, IngestAction::Accept), "an unapproved dearth-mode device's event was accepted: {action:?}");
+}
+
+/// The same entrance, without publishing a certificate at all: a device the
+/// roster has never seen (and an unsigned event) must not be accepted while
+/// dearth mode is on in Relay mode either, or skipping the certificate is a
+/// way around the second approval.
+#[test]
+fn an_uncertified_device_is_not_accepted_during_dearth_in_relay_mode() {
+    use crate::envelope_verifier::verdict_for;
+    use crate::identity_verifier::{gate_ingest, IdentityCache, IdentityMode, IngestAction};
+    let (mut log, owner, _admin2, _alice, laptop) = setup();
+    log.push(&owner, dearth(true, vec![laptop]));
+    let stranger = SigningKeypair::generate().unwrap();
+    let mut e = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 99, SessionEvent::SessionTitleChanged { title: "x".into() });
+    e.lamport = 99;
+    hive_core::sign_envelope(&mut e, Uuid::new_v4(), &stranger);
+    let mut unsigned = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 98, SessionEvent::SessionTitleChanged { title: "y".into() });
+    unsigned.lamport = 98;
+    let roster = build_roster(&log.envs);
+    for ev in [&e, &unsigned] {
+        let action = gate_ingest(IdentityMode::Relay, verdict_for(&roster, ev), None, None, &IdentityCache::new());
+        assert!(!matches!(action, IngestAction::Accept), "an unverifiable event was accepted during dearth mode: {action:?}");
+    }
+    // Control: with dearth mode off the lenient Relay policy is unchanged.
+    let (log2, ..) = setup();
+    let roster = build_roster(&log2.envs);
+    let mut e2 = e.clone();
+    e2.workspace_id = log2.ws;
+    hive_core::sign_envelope(&mut e2, Uuid::new_v4(), &stranger);
+    assert!(matches!(
+        gate_ingest(IdentityMode::Relay, verdict_for(&roster, &e2), None, None, &IdentityCache::new()),
+        IngestAction::Accept
+    ));
+}
+
+/// An Admin removes Alice and revokes her laptop. Alice still holds an old
+/// epoch's key, so she can still publish: she certifies a fresh device with
+/// her account key and enrolls herself back on the config log. Projection
+/// refuses the self-enrollment of a removed member, and the trust roster must
+/// agree: her fresh device is not a trusted nestmate.
+#[test]
+fn a_removed_member_cannot_reenter_the_roster_with_a_fresh_device() {
+    use crate::envelope_verifier::{verdict_for, Verdict};
+    let (mut log, owner, _admin2, alice, _laptop) = setup();
+    let alice_laptop = Uuid::new_v4();
+    log.cert(&alice, alice_laptop);
+    log.push(&owner, SessionEvent::MemberRemoved { member_id: alice.id.clone() });
+    log.push(&owner, SessionEvent::DeviceRevoked { device_id: alice_laptop });
+    // Alice comes back on her own.
+    let fresh = Uuid::new_v4();
+    let fk = log.cert(&alice, fresh);
+    log.push(
+        &alice,
+        SessionEvent::MemberAdded {
+            member: WorkspaceMember { id: alice.id.clone(), actor: actor(&alice), role: WorkspaceRole::Contributor, title: String::new(), index: 0, joined_at: Timestamp::epoch() },
+        },
+    );
+    let cfg = hive_core::project(&log.envs).unwrap();
+    assert!(!cfg.members.iter().any(|m| m.id == alice.id), "control: projection refuses the self re-enrollment");
+    let roster = build_roster(&log.envs);
+    let mut e = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 99, SessionEvent::SessionTitleChanged { title: "x".into() });
+    e.lamport = 99;
+    e.actor_stamp = Some(ActorStamp { actor: actor(&alice), recorded_at: Timestamp::epoch() });
+    hive_core::sign_envelope(&mut e, fresh, &fk);
+    assert_ne!(verdict_for(&roster, &e), Verdict::Valid, "the removed member's fresh device is trusted again");
+}
+
+/// The other direction: a `MemberRemoved` that projection refuses (a
+/// Contributor "removing" the owner, or one in a chat log) must not revoke the
+/// victim's devices in the trust roster. The roster used to drop the account
+/// on any raw removal, so one unauthorized event quarantined every later
+/// event of the workspace owner.
+#[test]
+fn an_unauthorized_removal_does_not_revoke_the_victims_devices() {
+    use crate::envelope_verifier::{verdict_for, Verdict};
+    let (mut log, owner, _admin2, alice, laptop) = setup();
+    let owner_dk = {
+        // Re-certify a device whose key we hold for the owner.
+        let d = Uuid::new_v4();
+        (d, log.cert(&owner, d))
+    };
+    log.push(&alice, SessionEvent::MemberRemoved { member_id: owner.id.clone() });
+    // Same thing, unsigned and unstamped, on a chat log.
+    let mut chat_rm = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 70, SessionEvent::MemberRemoved { member_id: owner.id.clone() });
+    chat_rm.lamport = 70;
+    log.envs.push(chat_rm);
+    let cfg = hive_core::project(&log.envs).unwrap();
+    assert!(cfg.members.iter().any(|m| m.id == owner.id), "control: projection refuses the removal");
+    let roster = build_roster(&log.envs);
+    assert!(!crate::envelope_verifier::DeviceKeyResolver::is_revoked(&roster, laptop), "the owner's laptop was revoked by an unauthorized removal");
+    let mut e = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 99, SessionEvent::SessionTitleChanged { title: "x".into() });
+    e.lamport = 99;
+    e.actor_stamp = Some(ActorStamp { actor: actor(&owner), recorded_at: Timestamp::epoch() });
+    hive_core::sign_envelope(&mut e, owner_dk.0, &owner_dk.1);
+    assert_eq!(verdict_for(&roster, &e), Verdict::Valid);
+}
+
+/// `DeviceRevoked` is Admin-only in projection, and the roster must agree: a
+/// Contributor's revocation of the owner's laptop (or an unsigned one on a
+/// chat log) must not cut the owner off.
+#[test]
+fn an_unauthorized_device_revocation_is_ignored() {
+    use crate::envelope_verifier::DeviceKeyResolver;
+    let (mut log, owner, admin2, alice, laptop) = setup();
+    log.push(&alice, SessionEvent::DeviceRevoked { device_id: laptop });
+    let mut chat_rv = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 70, SessionEvent::DeviceRevoked { device_id: laptop });
+    chat_rv.lamport = 70;
+    log.envs.push(chat_rv);
+    assert!(!build_roster(&log.envs).is_revoked(laptop), "a Contributor revoked the owner's laptop");
+    // An Admin's revocation still works.
+    log.push(&admin2, SessionEvent::DeviceRevoked { device_id: laptop });
+    assert!(build_roster(&log.envs).is_revoked(laptop));
+    let _ = owner;
+}

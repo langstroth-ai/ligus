@@ -36,6 +36,10 @@ pub enum QuarantineReason {
     /// victim's account id can no longer silently win first-registration and
     /// hijack the victim). See `build_roster`.
     DisputedAccountKey,
+    /// The device was certified while dearth mode is on and still waits for a
+    /// second Admin's approval. Held (never accepted, never dropped) in every
+    /// identity mode, so the approval binds in Relay mode too.
+    PendingApproval,
 }
 
 /// Resolves device public keys + revocation status for verification.
@@ -154,6 +158,10 @@ pub struct WorkspaceRoster {
     /// workspace was in dearth mode and lack a second approval:
     /// `(workspace, device, account)`.
     pending: Vec<(Uuid, Uuid, Uuid)>,
+    /// Workspaces whose config log has dearth mode on (Admin-authorized).
+    /// While on, an event no certified device vouches for is held, not
+    /// accepted, whatever the identity mode.
+    dearth_workspaces: HashSet<Uuid>,
     /// Accounts for which two *different* signing keys were registered — a
     /// contested binding. Events stamped as one of these are quarantined (fail
     /// closed), so a forged registration under a victim's account can't hijack it.
@@ -222,6 +230,28 @@ impl DearthPolicy {
     }
 }
 
+/// Workspaces whose config log is in `ordered`.
+fn config_workspaces(ordered: &[&SessionEventEnvelope]) -> HashSet<Uuid> {
+    ordered
+        .iter()
+        .filter(|e| e.session_id == hive_core::workspace_config_session_id(e.workspace_id))
+        .map(|e| e.workspace_id)
+        .collect()
+}
+
+/// Per workspace, the member ids a `MemberRemoved` on its config log named.
+fn removed_on_config(ordered: &[&SessionEventEnvelope]) -> HashMap<Uuid, HashSet<String>> {
+    let mut out: HashMap<Uuid, HashSet<String>> = HashMap::new();
+    for env in ordered {
+        if let SessionEvent::MemberRemoved { member_id } = &env.payload {
+            if env.session_id == hive_core::workspace_config_session_id(env.workspace_id) {
+                out.entry(env.workspace_id).or_default().insert(member_id.clone());
+            }
+        }
+    }
+    out
+}
+
 /// Per workspace, the active dearth policy from its config log, projected with
 /// the usual ingest authorization (so only an Admin's switch or approval counts).
 fn dearth_policies(ordered: &[&SessionEventEnvelope]) -> HashMap<Uuid, DearthPolicy> {
@@ -282,6 +312,7 @@ pub fn build_roster(envelopes: &[SessionEventEnvelope]) -> WorkspaceRoster {
     let mut account_keys: HashMap<Uuid, Vec<u8>> = HashMap::new();
     let mut disputed: HashSet<Uuid> = HashSet::new();
     let mut explicit_revoked: HashSet<Uuid> = HashSet::new();
+    let mut raw_revocations: Vec<(Uuid, Uuid)> = Vec::new();
     let mut members: HashSet<Uuid> = HashSet::new();
     let mut member_account: HashMap<String, Uuid> = HashMap::new();
     let mut certs: Vec<hive_core::crypto::DeviceCertificate> = Vec::new();
@@ -366,10 +397,57 @@ pub fn build_roster(envelopes: &[SessionEventEnvelope]) -> WorkspaceRoster {
                 cert_ws.push(env.workspace_id);
             }
             SessionEvent::DeviceRevoked { device_id } => {
-                explicit_revoked.insert(*device_id);
+                raw_revocations.push((env.workspace_id, *device_id));
             }
             _ => {}
         }
+    }
+
+    // Removal is sticky against the removed: an account taken out on a
+    // workspace-config log stays out unless the authorization-checked
+    // projection of that log has it as a member again (an Admin's re-add). A
+    // raw `MemberAdded`, chat seed or unsigned event naming them afterwards,
+    // their own included, doesn't count: a removed member still holds old
+    // epoch keys and could otherwise re-enter with a freshly certified device.
+    //
+    // And the converse: a raw `MemberRemoved` that projection refuses (a
+    // Contributor "removing" the owner, an unsigned one, one on a chat log)
+    // must not revoke anyone. Every member of an authorization-checked config
+    // projection stays a member, unless an authorized removal elsewhere took
+    // the account out (removal wins, as the roster is shared by workspaces).
+    let removed_by_ws = removed_on_config(&ordered);
+    let mut current_accounts: HashSet<Uuid> = HashSet::new();
+    let mut sticky_removed: HashSet<Uuid> = HashSet::new();
+    let config_ws = config_workspaces(&ordered);
+    // A device revocation counts when the config projection accepted it
+    // (Admin+). One for a workspace whose config log we don't hold (legacy,
+    // pre-hoist) keeps the raw behaviour.
+    for (ws, device) in &raw_revocations {
+        if !config_ws.contains(ws) {
+            explicit_revoked.insert(*device);
+        }
+    }
+    for ws in config_ws {
+        let cfg_envs: Vec<SessionEventEnvelope> = ordered
+            .iter()
+            .filter(|e| e.workspace_id == ws && e.session_id == hive_core::workspace_config_session_id(ws))
+            .map(|e| (*e).clone())
+            .collect();
+        let projected = hive_core::project(&cfg_envs);
+        explicit_revoked.extend(projected.iter().flat_map(|c| c.guards.revoked_devices.iter().copied()));
+        let current: Vec<hive_core::WorkspaceMember> = projected.map(|c| c.members).unwrap_or_default();
+        current_accounts.extend(current.iter().filter_map(|m| m.actor.account_id));
+        for id in removed_by_ws.get(&ws).into_iter().flatten() {
+            if !current.iter().any(|m| &m.id == id) {
+                if let Some(aid) = member_account.get(id) {
+                    sticky_removed.insert(*aid);
+                }
+            }
+        }
+    }
+    members.extend(current_accounts);
+    for aid in &sticky_removed {
+        members.remove(aid);
     }
 
     let mut roster = WorkspaceRoster::default();
@@ -386,6 +464,7 @@ pub fn build_roster(envelopes: &[SessionEventEnvelope]) -> WorkspaceRoster {
         }
     }
     let dearth = dearth_policies(&ordered);
+    roster.dearth_workspaces = dearth.keys().copied().collect();
     for (cert, ws) in certs.iter().zip(&cert_ws) {
         let Some(account_key) = account_keys.get(&cert.account_id) else { continue };
         if cert.verify(account_key).is_err() {
@@ -439,6 +518,24 @@ pub enum Verdict {
     Unverifiable(QuarantineReason),
 }
 
+/// Account-key and certificate events: inert in projection (only the roster
+/// reads them, and the roster applies the dearth policy to certificates
+/// itself), and Admins must be able to see a pending device to approve it.
+fn is_trust_bootstrap(env: &SessionEventEnvelope) -> bool {
+    matches!(
+        env.payload,
+        SessionEvent::AccountKeyRegistered { .. }
+            | SessionEvent::AccountKeyRotated { .. }
+            | SessionEvent::DeviceCertificateAdded { .. }
+    )
+}
+
+/// Dearth mode is on for the event's workspace and the event is not a trust
+/// bootstrap: an event no certified device vouches for waits.
+fn entrance_closed(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> bool {
+    roster.dearth_workspaces.contains(&env.workspace_id) && !is_trust_bootstrap(env)
+}
+
 /// Classify an envelope against the roster (see [`Verdict`]).
 pub fn verdict_for(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verdict {
     let Some(device_id) = env.signer_device_id else {
@@ -453,6 +550,8 @@ pub fn verdict_for(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verd
         // author, so it stays the lenient `Unverifiable`.
         return if env.actor_stamp.is_some() {
             Verdict::Quarantine(QuarantineReason::Unsigned)
+        } else if entrance_closed(roster, env) {
+            Verdict::Unverifiable(QuarantineReason::PendingApproval)
         } else {
             Verdict::Unverifiable(QuarantineReason::Unsigned)
         };
@@ -461,6 +560,12 @@ pub fn verdict_for(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verd
         return Verdict::Quarantine(QuarantineReason::RevokedDevice);
     }
     let Some(signing_key) = roster.public_key(device_id) else {
+        if roster.pending.iter().any(|(_, d, _)| *d == device_id) && !is_trust_bootstrap(env) {
+            return Verdict::Unverifiable(QuarantineReason::PendingApproval);
+        }
+        if entrance_closed(roster, env) {
+            return Verdict::Unverifiable(QuarantineReason::PendingApproval);
+        }
         return Verdict::Unverifiable(QuarantineReason::UnknownDevice);
     };
     if verify_envelope(env, signing_key).is_err() {

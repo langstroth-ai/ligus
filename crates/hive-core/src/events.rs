@@ -526,6 +526,9 @@ impl ChatSession {
                 self.turn_claims.entry(*trigger_id).or_insert(*device_id);
             }
             SessionEvent::MemberAdded { member } => {
+                // Only reached once authorized: an Admin's re-add (or an
+                // allowed self-add) lifts a removal.
+                self.guards.removed_members.remove(&member.id);
                 if let Some(idx) = self.members.iter().position(|m| m.id == member.id) {
                     self.members[idx] = member.clone();
                 } else {
@@ -533,6 +536,9 @@ impl ChatSession {
                 }
             }
             SessionEvent::MemberRemoved { member_id } => {
+                if self.members.iter().any(|m| &m.id == member_id) {
+                    self.guards.removed_members.insert(member_id.clone());
+                }
                 self.members.retain(|m| &m.id != member_id);
             }
             SessionEvent::MemberRoleChanged { change } => {
@@ -572,6 +578,17 @@ impl ChatSession {
             }
             SessionEvent::ProposalUpserted { proposal } => {
                 if let Some(slot) = self.proposals.iter_mut().find(|p| p.id == proposal.id) {
+                    // A verified human approval is for the change that was
+                    // reviewed: a re-upsert that swaps what would be applied
+                    // (patch, files, kind, workflow) drops it, so the human
+                    // gate re-arms for the new content.
+                    if slot.diff != proposal.diff
+                        || slot.changed_files != proposal.changed_files
+                        || slot.kind != proposal.kind
+                        || slot.workflow != proposal.workflow
+                    {
+                        self.guards.verified_approvals.remove(&proposal.id);
+                    }
                     *slot = proposal.clone();
                 } else {
                     self.proposals.push(proposal.clone());
@@ -730,8 +747,12 @@ impl ChatSession {
             // the device-roster builder (see hive-runtime::envelope_verifier).
             SessionEvent::AccountKeyRegistered { .. }
             | SessionEvent::AccountKeyRotated { .. }
-            | SessionEvent::DeviceCertificateAdded { .. }
-            | SessionEvent::DeviceRevoked { .. } => {}
+            | SessionEvent::DeviceCertificateAdded { .. } => {}
+            // Recorded once authorized (Admin+, checked on ingest), so the
+            // trust roster can tell a real revocation from a forged one.
+            SessionEvent::DeviceRevoked { device_id } => {
+                self.guards.revoked_devices.insert(*device_id);
+            }
             SessionEvent::CoordinatorLeaseClaimed { lease } => {
                 crate::lease::fold_claim(&mut self.guards.leases, lease);
             }
@@ -742,6 +763,7 @@ impl ChatSession {
                 // Switching off returns to normal rules: pending joins land.
                 if !dearth.enabled {
                     for p in std::mem::take(&mut self.guards.pending_members) {
+                        self.guards.removed_members.remove(&p.member.id);
                         if !self.members.iter().any(|m| m.id == p.member.id) {
                             self.members.push(p.member);
                         }

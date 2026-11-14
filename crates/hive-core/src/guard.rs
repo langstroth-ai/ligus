@@ -117,6 +117,16 @@ pub struct GuardState {
     /// Proposals the hygiene sweep found stale (their diff no longer applies).
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub stale_proposals: BTreeSet<Uuid>,
+    /// Members an authorized `MemberRemoved` took out. A removed member keeps
+    /// old-epoch keys, so they could otherwise self-enroll straight back;
+    /// only an authorized re-add (an Admin's) lifts the removal.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub removed_members: BTreeSet<String>,
+    /// Devices an authorized `DeviceRevoked` cut off (config log). The trust
+    /// roster reads this rather than raw events, so a revocation projection
+    /// refuses never revokes anyone.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub revoked_devices: BTreeSet<Uuid>,
     /// Set on a chat session by the overlay: this chat's id, so
     /// [`GuardState::lockdown_active`] can find its entry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -196,6 +206,7 @@ pub fn fold_authored(session: &mut crate::ChatSession, event: &crate::SessionEve
                 .position(|p| &p.member.id == subject && p.added_by != author)
             {
                 let p = session.guards.pending_members.remove(i);
+                session.guards.removed_members.remove(&p.member.id);
                 if !session.members.iter().any(|m| m.id == p.member.id) {
                     session.members.push(p.member);
                 }
@@ -243,11 +254,53 @@ pub fn human_gate_reason(session: &crate::ChatSession, proposal: &crate::ActionP
         return Some("this chat is locked down: every proposal needs a human member's approval".into());
     }
     if let Some(d) = session.guards.dearth_on() {
-        if touches_any(&d.brood_paths, &proposal.changed_files) {
+        if touches_any(&d.brood_paths, &touched_paths(proposal)) {
             return Some("dearth mode: this change touches protected (brood) paths and needs a human member's approval".into());
         }
     }
     None
+}
+
+/// Every path a proposal may write: its declared `changed_files` plus every
+/// path named in its diff's headers. The declared list is the author's own
+/// summary, so a gate must never rely on it alone: a patch that rewrites
+/// `.github/workflows/ci.yml` while declaring only `src/lib.rs` would slip by.
+/// Over-approximates (both sides of a rename, prefixed and unprefixed forms),
+/// which can only make a gate stricter.
+pub fn touched_paths(proposal: &crate::ActionProposal) -> Vec<String> {
+    let mut out: Vec<String> = proposal.changed_files.clone();
+    let mut push = |raw: &str| {
+        let p = raw.trim().trim_end_matches('\t').trim_matches('"');
+        if p.is_empty() || p == "/dev/null" {
+            return;
+        }
+        for cand in [p, p.strip_prefix("a/").unwrap_or(p), p.strip_prefix("b/").unwrap_or(p)] {
+            if !out.iter().any(|x| x == cand) {
+                out.push(cand.to_string());
+            }
+        }
+    };
+    for line in proposal.diff.as_deref().unwrap_or("").lines() {
+        if let Some(rest) = line.strip_prefix("diff --git ") {
+            match rest.find(" b/").or_else(|| rest.find(" \"b/")) {
+                Some(i) => {
+                    push(&rest[..i]);
+                    push(&rest[i + 1..]);
+                }
+                None => push(rest),
+            }
+        } else if let Some(rest) = line
+            .strip_prefix("--- ")
+            .or_else(|| line.strip_prefix("+++ "))
+            .or_else(|| line.strip_prefix("rename from "))
+            .or_else(|| line.strip_prefix("rename to "))
+            .or_else(|| line.strip_prefix("copy from "))
+            .or_else(|| line.strip_prefix("copy to "))
+        {
+            push(rest.split('\t').next().unwrap_or(rest));
+        }
+    }
+    out
 }
 
 /// Whether a change to `files` in `session` is under a workspace guard's human
@@ -294,9 +347,15 @@ fn seg_match(p: &[u8], s: &[u8]) -> bool {
     }
 }
 
-/// Whether any of `paths` falls under one of `patterns`.
+/// Whether any of `paths` falls under one of `patterns`. Case-insensitive:
+/// macOS and Windows volumes usually are, so `.GitHub/workflows/x.yml` lands
+/// in `.github/` and must be guarded like it (as the runtime's write guard
+/// already matches).
 pub fn touches_any(patterns: &[String], paths: &[String]) -> bool {
-    paths.iter().any(|f| patterns.iter().any(|p| glob_match(p, f)))
+    paths.iter().any(|f| {
+        let f = f.to_lowercase();
+        patterns.iter().any(|p| glob_match(&p.to_lowercase(), &f))
+    })
 }
 
 /// Whether `actor_id` is a human member at Contributor or above in `members`.
