@@ -222,6 +222,14 @@ pub enum SignedBy {
 }
 
 impl crate::ChatService {
+    /// The actor id that signed `answer` (a `HumanAnswered` in a chat).
+    pub fn flow_answer_author(&self, session_id: Uuid, answer: &hive_core::flow::HumanAnswered) -> Option<String> {
+        let envs = self.store().list(session_id).ok()?;
+        envs.iter()
+            .find(|e| matches!(&e.payload, hive_core::SessionEvent::FlowRecorded { record: hive_core::flow::FlowRecord::HumanAnswered(a) } if a == answer))
+            .and_then(|e| e.actor_stamp.as_ref().map(|s| s.actor.id.clone()))
+    }
+
     /// Who signed the latest `ProposalUpserted` of `proposal_id` in a chat.
     pub fn proposal_signer(&self, session_id: Uuid, proposal_id: Uuid, agent_authored: bool) -> Option<SignedBy> {
         let envs = self.store().list(session_id).ok()?;

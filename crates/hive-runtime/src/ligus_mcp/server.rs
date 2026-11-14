@@ -917,13 +917,36 @@ impl crate::agent_turn::HumanAsker for HostAsker {
             let q: String = question.chars().take(flow::MAX_ASK_QUESTION_CHARS).collect();
             let posted = post_ask(&*self.host, &self.ctx, self.turn_id, q, options, timeout).ok()?;
             match wait_answer(&*self.host, self.ctx.session_id, posted.ask_id, timeout, || false).await {
-                Some(a) => Some(crate::agent_turn::HumanAnswer { answer: a.answer, option_index: a.option_index.map(|i| i as usize) }),
+                // A permission answer authorizes a run on this host: it counts
+                // only from the host's own person or the agent's owner. Any
+                // other first answer (a teammate on another device) denies.
+                Some(a) if self.answered_by_approver(&a) => {
+                    Some(crate::agent_turn::HumanAnswer { answer: a.answer, option_index: a.option_index.map(|i| i as usize) })
+                }
+                Some(_) => None,
                 None => {
                     close_ask(&*self.host, &self.ctx, self.turn_id, posted.ask_id);
                     None
                 }
             }
         })
+    }
+}
+
+impl HostAsker {
+    /// Whether the winning answer was signed by the host's own person or the
+    /// asking agent's owner.
+    fn answered_by_approver(&self, ans: &flow::HumanAnswered) -> bool {
+        let mut ok = false;
+        let ctx = &self.ctx;
+        self.host.with_service(&mut |svc| {
+            let Some(author) = svc.flow_answer_author(ctx.session_id, ans) else { return };
+            let owner = ctx.agent_id.and_then(|id| {
+                svc.load(ctx.session_id).ok().flatten().and_then(|s| s.workspace_agents.iter().find(|a| a.id == id).map(|a| a.owner_actor_id.clone()))
+            });
+            ok = !author.is_empty() && (author == svc.author().id || owner.as_deref() == Some(author.as_str()));
+        });
+        ok
     }
 }
 

@@ -572,3 +572,55 @@ async fn agent_cannot_answer_ask() {
     let forged = hive_core::flow::HumanAsk { ask_id: Uuid::new_v4(), turn_id: w.reply, agent_key: ctx.agent_key(), question: "?".into(), at_ms: 2, ..Default::default() };
     assert!(svc.as_agent(Some(w.reviewer), |svc| svc.record_flow(w.chat, w.wid, FlowRecord::HumanAsk(forged))).is_err());
 }
+
+/// An ACP permission escalation is an authorization: "Allow once" lets the
+/// agent run a command or edit on this host. Any other member (a Viewer, a
+/// teammate on another device) answering first must not grant it; only the
+/// host's own person (or the agent's owner) can.
+#[tokio::test]
+async fn permission_escalation_needs_the_hosts_own_person() {
+    use crate::agent_turn::HumanAsker;
+    for (answerer, expect_allowed) in [("bob", false), ("host", true)] {
+        let w = world();
+        let turn = w.mcp.begin_turn(spec(&w, Budgets::default()));
+        let asker = turn.asker();
+        let host_id = w.host.svc.lock().unwrap().author().id.clone();
+        let host = w.host.clone();
+        let (chat, wid) = (w.chat, w.wid);
+        let answer = tokio::spawn(async move {
+            let mut ask_id = None;
+            for _ in 0..200 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                let s = host.svc.lock().unwrap().load(chat).unwrap().unwrap();
+                if let Some(a) = s.flow.asks.values().next() {
+                    ask_id = Some(a.ask.ask_id);
+                    break;
+                }
+            }
+            let ask_id = ask_id.expect("the escalation was posted");
+            let mut svc = host.svc.lock().unwrap();
+            if answerer == "bob" {
+                // A teammate with write access (a Viewer can't record flow at all).
+                let bob = Uuid::new_v4().to_string();
+                let member = hive_core::WorkspaceMember {
+                    id: bob.clone(),
+                    actor: ActorIdentity::new(bob.as_str(), "Bob", ActorKind::Human),
+                    role: hive_core::WorkspaceRole::Contributor,
+                    title: String::new(),
+                    index: 0,
+                    joined_at: hive_core::Timestamp::now(),
+                };
+                svc.add_member(chat, wid, member).unwrap();
+                svc.set_author_account(bob, "Bob", None);
+            }
+            svc.record_flow(chat, wid, FlowRecord::HumanAnswered(HumanAnswered { ask_id, answer: "Allow once".into(), option_index: Some(0), by: "Alex".into(), at_ms: 1 }))
+                .unwrap();
+            if answerer == "bob" {
+                svc.set_author_account(host_id, "Alex", None);
+            }
+        });
+        let got = asker.ask("coder asks permission to run rm (execute). Allow it once?".into(), vec!["Allow once".into(), "Deny".into()], Duration::from_secs(10)).await;
+        answer.await.unwrap();
+        assert_eq!(got.is_some_and(|a| a.option_index == Some(0)), expect_allowed, "answered by {answerer}");
+    }
+}
