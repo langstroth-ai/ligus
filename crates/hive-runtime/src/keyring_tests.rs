@@ -1132,6 +1132,7 @@ async fn forged_dm_founder_never_gets_writes() {
     let _ = alice.ensure_self_member(chat, wid);
 
     assert!(!alice.founder_verified(wid).unwrap(), "no seed from Bob's pinned key is on the log");
+    assert_eq!(alice.store().config_founded_at(wid).unwrap(), None, "a forged DM has no founding time for D12");
     let sent = alice.post_user_message(chat, wid, "for Bob only");
     assert!(sent.is_err(), "Alice wrote into a room whose pinned founder never founded it");
     round(&mut alice_sync, &alice_db).await;
@@ -1165,6 +1166,19 @@ async fn genuine_founder_verifies_and_joiner_writes() {
     assert!(!alice.founder_verified(wid).unwrap(), "nothing synced yet");
     round(&mut alice_sync, &alice_db).await;
     assert!(alice.founder_verified(wid).unwrap());
+    // D12's founding time is the founder's signed seed, which no later event
+    // moves: a config event dated before it (a skewed clock, or a party
+    // backdating to flip which DM is kept) changes nothing.
+    let founded = alice.store().config_founded_at(wid).unwrap().expect("founded");
+    let mut early = SessionEventEnvelope::new(
+        workspace_config_session_id(wid),
+        wid,
+        999,
+        SessionEvent::DeviceKeyAgreementPublished { device_id: alice_dev, ka_public: alice_ka.public_key_bytes().to_vec() },
+    );
+    early.timestamp = Timestamp(time::OffsetDateTime::from_unix_timestamp(946_684_800).unwrap());
+    alice.store().append_envelope(&early).unwrap();
+    assert_eq!(alice.store().config_founded_at(wid).unwrap(), Some(founded));
     alice.ensure_self_member(chat, wid).unwrap();
     alice.post_user_message(chat, wid, "hi Bob").unwrap();
     round(&mut alice_sync, &alice_db).await;

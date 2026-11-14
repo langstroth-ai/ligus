@@ -148,6 +148,18 @@ pub fn resolve_concurrent(candidates: &[DmCandidate]) -> Option<DmResolution> {
     Some(DmResolution { keep, archive })
 }
 
+/// Apply a resolution to this device's archived rooms: the kept room is
+/// (again) live and the others are archived. Recomputed every time, so a
+/// resolution that changes as logs sync never leaves both DMs archived.
+pub fn apply_resolution(archived: &mut Vec<String>, resolution: &DmResolution) {
+    archived.retain(|r| *r != resolution.keep);
+    for room in &resolution.archive {
+        if !archived.contains(room) {
+            archived.push(room.clone());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,5 +241,20 @@ mod tests {
         assert_eq!(check_founder(Some(&peer_s), Some(fk), &known), FounderTrust::Mismatch);
         // A legacy `github:<id>` founder is no account id.
         assert_eq!(check_founder(Some("github:42"), Some(fk), &known), FounderTrust::NoFingerprint);
+    }
+
+    /// D12 over time: Alice first sees DM A as the older one and archives B;
+    /// later the founding times she holds say B is older. She must end with
+    /// exactly one live DM (B), not two archived ones.
+    #[test]
+    fn d12_archive_set_is_recomputed_not_accumulated() {
+        let a = DmCandidate { room: "dm-a".into(), created_at: Some(ts(100)) };
+        let b = DmCandidate { room: "dm-b".into(), created_at: Some(ts(101)) };
+        let mut archived = Vec::new();
+        apply_resolution(&mut archived, &resolve_concurrent(&[a.clone(), b.clone()]).unwrap());
+        assert_eq!(archived, vec!["dm-b".to_string()]);
+        let b_older = DmCandidate { created_at: Some(ts(50)), ..b };
+        apply_resolution(&mut archived, &resolve_concurrent(&[a, b_older]).unwrap());
+        assert_eq!(archived, vec!["dm-a".to_string()], "exactly one of the two stays live");
     }
 }

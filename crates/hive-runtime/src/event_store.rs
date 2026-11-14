@@ -1101,13 +1101,16 @@ impl EventStore {
         Ok(out)
     }
 
-    /// The earliest envelope timestamp on a workspace's config log: when the
-    /// workspace was founded, as every device holding the log computes it.
-    /// `None` until this device holds any of the log.
-    pub fn config_created_at(&self, workspace_id: Uuid) -> Result<Option<hive_core::Timestamp>> {
-        let config_id = hive_core::workspace_config_session_id(workspace_id);
-        let envs = self.query_envelopes("SELECT envelope_json FROM events WHERE session_id = ?1", [config_id.to_string()])?;
-        Ok(envs.iter().map(|e| e.timestamp).min())
+    /// When a pinned workspace was founded: the timestamp of its founder's
+    /// signed seed ([`crate::envelope_verifier::founder_seed`]). `None` without
+    /// a pin or before (or without) a verified founding. Owner decision D12
+    /// orders DMs by it, so no later event (a joiner's, a denied one, or one
+    /// dated earlier by a skewed or hostile clock) can move it, and a forged
+    /// DM never has one.
+    pub fn config_founded_at(&self, workspace_id: Uuid) -> Result<Option<hive_core::Timestamp>> {
+        let Some(pin) = self.workspace_pin(workspace_id)? else { return Ok(None) };
+        let envs = self.list(hive_core::workspace_config_session_id(workspace_id))?;
+        Ok(crate::envelope_verifier::founder_seed(&envs, &pin).map(|e| e.timestamp))
     }
 
     /// The contact id (relay v0.3 drop box) `account` most recently stamped

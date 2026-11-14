@@ -165,32 +165,31 @@ fn resolve_concurrent_dms(state: &AppState) {
         }
         m
     };
-    let mut archive: Vec<String> = Vec::new();
+    let mut resolutions: Vec<dm::DmResolution> = Vec::new();
     for dms in by_peer.values().filter(|v| v.len() > 1) {
+        // Only DMs whose founder's signed seed is on their log take part: a
+        // DM still syncing joins the decision once founded, and a forged one
+        // (an invite "from" this peer that they never founded) never does.
         let candidates: Vec<dm::DmCandidate> = {
             let svc = state.service.lock().unwrap();
             dms.iter()
-                .map(|w| dm::DmCandidate {
-                    room: w.room.clone(),
-                    created_at: svc.store().config_created_at(w.id()).ok().flatten(),
-                })
+                .map(|w| dm::DmCandidate { room: w.room.clone(), created_at: svc.store().config_founded_at(w.id()).ok().flatten() })
+                .filter(|c| c.created_at.is_some())
                 .collect()
         };
         if let Some(r) = dm::resolve_concurrent(&candidates) {
-            archive.extend(r.archive);
+            resolutions.push(r);
         }
     }
-    if archive.is_empty() {
+    if resolutions.is_empty() {
         return;
     }
     let mut s = state.settings.lock().unwrap();
-    let before = s.archived_dms.len();
-    for room in archive {
-        if !s.archived_dms.contains(&room) {
-            s.archived_dms.push(room);
-        }
+    let before = s.archived_dms.clone();
+    for r in &resolutions {
+        dm::apply_resolution(&mut s.archived_dms, r);
     }
-    if s.archived_dms.len() != before {
+    if s.archived_dms != before {
         save_settings(&state.data_dir, &s);
     }
 }
@@ -211,7 +210,7 @@ pub(crate) fn list_dms(state: State<AppState>) -> Vec<DmDto> {
     let conns: Vec<WorkspaceConn> = state.settings.lock().unwrap().workspaces.iter().filter(|w| w.dm_account.is_some()).cloned().collect();
     let created_at: BTreeMap<Uuid, Option<Timestamp>> = {
         let svc = state.service.lock().unwrap();
-        conns.iter().map(|w| (w.id(), svc.store().config_created_at(w.id()).ok().flatten())).collect()
+        conns.iter().map(|w| (w.id(), svc.store().config_founded_at(w.id()).ok().flatten())).collect()
     };
     let created = |w: &WorkspaceConn| created_at.get(&w.id()).copied().flatten();
     let s = state.settings.lock().unwrap();
@@ -275,8 +274,15 @@ pub(crate) async fn open_dm(state: State<'_, AppState>, account_id: String) -> R
         let s = state.settings.lock().unwrap();
         s.workspaces
             .iter()
-            .find(|w| w.dm_account.as_deref() == Some(peer_s.as_str()) && !s.archived_dms.contains(&w.room))
+            .filter(|w| w.dm_account.as_deref() == Some(peer_s.as_str()) && !s.archived_dms.contains(&w.room))
             .map(|w| w.id())
+            .collect::<Vec<_>>()
+    };
+    // "Message <peer>" lands only in a DM their signed founding (or this
+    // device's own) verifies: never in a forged one that merely names them.
+    let existing = {
+        let svc = state.service.lock().unwrap();
+        existing.into_iter().find(|id| svc.founder_verified(*id).unwrap_or(false))
     };
     if let Some(id) = existing {
         set_active_workspace(state.clone(), id.to_string())?;
