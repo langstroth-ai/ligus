@@ -314,8 +314,32 @@ impl FsPolicy {
         if !parent.starts_with(&self.root) {
             return Err("outside the turn's directory".into());
         }
+        // The host writes unsandboxed, so it never follows a link the agent
+        // planted: a dangling symlink resolves nowhere, which left the check
+        // above looking at the link's own (inside) path.
+        if std::fs::symlink_metadata(&c).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err("that path is a symbolic link".into());
+        }
+        let name = c.file_name().ok_or("no file name")?.to_owned();
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        std::fs::write(&c, content).map_err(|e| e.to_string())
+        // Re-check where the directory really is now that it exists.
+        let real_parent = std::fs::canonicalize(parent).map_err(|e| e.to_string())?;
+        if !real_parent.starts_with(&self.root) {
+            return Err("outside the turn's directory".into());
+        }
+        let target = real_parent.join(name);
+        if self.read_only.iter().any(|r| target.starts_with(r)) {
+            return Err("that path is protected".into());
+        }
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.custom_flags(libc::O_NOFOLLOW);
+        }
+        let mut f = opts.open(&target).map_err(|e| e.to_string())?;
+        std::io::Write::write_all(&mut f, content.as_bytes()).map_err(|e| e.to_string())
     }
 }
 
@@ -925,5 +949,26 @@ mod tests {
         assert!(fs.write(root.join(".git/config").to_str().unwrap(), "x").is_err());
         let ro = FsPolicy { writable: false, ..fs };
         assert!(ro.write(root.join("c.txt").to_str().unwrap(), "x").is_err());
+    }
+
+    /// A dangling symlink inside the worktree resolves nowhere, so the path
+    /// check saw only the link's own (inside) path; the host's write then
+    /// followed it and created a file outside the worktree.
+    #[cfg(unix)]
+    #[test]
+    fn fs_write_never_follows_a_dangling_symlink_out_of_the_worktree() {
+        let wt = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = crate::executor::canonical(wt.path());
+        let target = outside.path().join("planted.plist");
+        std::os::unix::fs::symlink(&target, root.join("evil")).unwrap();
+        // And one pointing at a protected path that doesn't exist yet.
+        std::fs::create_dir_all(root.join(".git/hooks")).unwrap();
+        std::os::unix::fs::symlink(root.join(".git/hooks/pre-commit"), root.join("hook")).unwrap();
+        let fs = FsPolicy { root: root.clone(), writable: true, read_only: vec![root.join(".git")], deny_read: vec![] };
+        assert!(fs.write(root.join("evil").to_str().unwrap(), "x").is_err());
+        assert!(!target.exists(), "wrote outside the worktree through a dangling symlink");
+        assert!(fs.write(root.join("hook").to_str().unwrap(), "#!/bin/sh").is_err());
+        assert!(!root.join(".git/hooks/pre-commit").exists(), "wrote a git hook through a dangling symlink");
     }
 }
