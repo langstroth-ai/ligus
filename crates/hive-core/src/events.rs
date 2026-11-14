@@ -1210,6 +1210,25 @@ fn fold(
             if let SessionEvent::ChatLockdownRaised { lockdown, .. } = payload {
                 session.authz.lockdown_raisers.insert(lockdown.id, author.to_string());
             }
+            // Where content was filed (see `AuthzState::content_frontier`).
+            if checked && !trusted {
+                if let Some(f) = env.actor_stamp.as_ref().and_then(|s| s.cfg_frontier) {
+                    match payload {
+                        SessionEvent::ProposalUpserted { proposal } => {
+                            let changed = session.proposals.iter().find(|p| p.id == proposal.id).is_none_or(|old| {
+                                authz::votes::diff_digest(old) != authz::votes::diff_digest(proposal)
+                            });
+                            if changed {
+                                session.authz.content_frontier.insert(proposal.id, f);
+                            }
+                        }
+                        SessionEvent::ProposalSetOpened { set } => {
+                            session.authz.set_frontier.entry(set.id).or_insert(f);
+                        }
+                        _ => {}
+                    }
+                }
+            }
             // Guard folds that need the signed author (dearth-mode joins, verified
             // votes). Deterministic over the canonical fold like everything above.
             if !crate::guard::fold_authored(&mut session, payload, author) {

@@ -45,7 +45,7 @@ pub use timeline::{AgentKeyState, AgentState, ConfigTimeline, DeviceState, Membe
 use crate::agent::WorkspaceAgent;
 use crate::authorization::{evaluate, requires_projection_authz};
 use crate::events::{SessionEvent, SessionEventEnvelope};
-use crate::identity::{ActorKind, WorkspaceRole};
+use crate::identity::{ActorKind, CfgFrontier, WorkspaceRole};
 use crate::session::ChatSession;
 
 /// The workspace rules version: 1 = the 2.0 base rules. Track B's human
@@ -128,6 +128,13 @@ pub struct AuthzState {
     pub rules: u32,
     /// Signed raiser of each active lockdown (S5 accounting).
     pub lockdown_raisers: BTreeMap<Uuid, String>,
+    /// The config frontier each proposal's current content was filed at. A
+    /// vote or apply naming an older frontier is refused, so a stale role
+    /// (a demoted Admin who keeps naming a pre-demotion frontier) never
+    /// weighs on content filed after the demotion reached its author.
+    pub content_frontier: BTreeMap<Uuid, CfgFrontier>,
+    /// The config frontier each proposal set was opened at (same rule).
+    pub set_frontier: BTreeMap<Uuid, CfgFrontier>,
 }
 
 impl AuthzState {
@@ -300,6 +307,17 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         let Some(role) = at.role_of(author).filter(|_| !author.is_empty()) else {
             return Decision::deny("not a workspace member at this position");
         };
+        // No judging content from a position older than the one it was filed
+        // at (contains the backdated-frontier residual).
+        if let Some(f) = env.actor_stamp.as_ref().and_then(|s| s.cfg_frontier) {
+            let (pid, sid) = subject_of(&env.payload);
+            let filed_at = pid
+                .and_then(|p| fold.authz.content_frontier.get(&p))
+                .max(sid.and_then(|s| fold.authz.set_frontier.get(&s)));
+            if filed_at.is_some_and(|min| f < *min) {
+                return Decision::deny("names a config position older than the content it judges");
+            }
+        }
         // Rules v2 (A3 transition): a host-signed event that speaks for an
         // agent is judged with the Agent tier. Folds use the highest rules
         // this build knows.

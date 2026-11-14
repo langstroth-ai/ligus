@@ -1220,3 +1220,37 @@ fn chat_creator_cannot_rebind_a_workspace_agent_in_their_chat() {
     let s = m.state();
     assert!(s.workspace_agents.is_empty() && s.workspace_runtimes.is_empty());
 }
+
+/// Hardening A-4 (containment of the backdated-frontier residual): a demoted
+/// Admin keeps naming a config frontier from before the demotion. A vote (or
+/// an apply) can't name a frontier older than the one the content it judges
+/// was filed at, so the old role never weighs on a proposal filed after the
+/// demotion reached its author.
+#[test]
+fn a_backdated_vote_cannot_predate_the_content_it_judges() {
+    let mut w = World::new();
+    let before = w.head();
+    w.cfg_push("owner", SessionEvent::MemberRoleChanged {
+        change: MemberRoleChange { member_id: "ada".into(), old_role: WorkspaceRole::Admin, new_role: WorkspaceRole::Viewer },
+    });
+    let pid = Uuid::from_u128(0xA4);
+    let mut p = proposal(pid, 1, ProposalStatus::Open);
+    p.approval_role_floor = WorkspaceRole::Admin;
+    w.chat_push("mara", SessionEvent::ProposalUpserted { proposal: p.clone() });
+    let digest = Some(diff_digest(&p));
+    let stale = w.chat_at("ada", vote("ada", pid, WorkspaceRole::Admin, true, digest.clone()), before);
+    let v = w.verdicts();
+    assert_eq!(v[&stale], Verdict::Denied, "a vote backdated before its proposal counted");
+    let got = w.state().proposals.into_iter().find(|x| x.id == pid).unwrap();
+    assert_eq!(got.status, ProposalStatus::Open, "approved by a demoted Admin: {:?}", got.approvals);
+    // At the current head she is judged at her real role (a Viewer can't vote).
+    let honest = w.chat_push("ada", vote("ada", pid, WorkspaceRole::Admin, true, digest.clone()));
+    assert_eq!(w.verdicts()[&honest], Verdict::Denied);
+    // A real Admin's vote at the head counts.
+    w.cfg_push("owner", SessionEvent::MemberRoleChanged {
+        change: MemberRoleChange { member_id: "val".into(), old_role: WorkspaceRole::Viewer, new_role: WorkspaceRole::Admin },
+    });
+    let admin = w.chat_push("val", vote("val", pid, WorkspaceRole::Admin, true, digest));
+    assert_eq!(w.verdicts()[&admin], Verdict::Allowed);
+    assert_ne!(w.state().proposals.into_iter().find(|x| x.id == pid).unwrap().status, ProposalStatus::Open);
+}
