@@ -533,7 +533,7 @@ impl Shared {
             Standing::Own if self.opts.owner.is_some() => "pending",
             Standing::Own => "member",
         };
-        json!({ "mode": mode, "actorId": actor.id, "displayName": actor.display_name, "deviceFingerprint": fingerprint })
+        json!({ "mode": mode, "actorId": actor.id, "displayName": hive_proto::names::clean_display_name(&actor.display_name), "deviceFingerprint": fingerprint })
     }
 
     /// Re-read this box's standing after a pull, switching identity when the

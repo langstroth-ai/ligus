@@ -1100,6 +1100,26 @@ fn impersonation_by_display_name_is_a_different_co_member() {
     assert_eq!(crate::dm::check_founder(Some(&ada.account_id.to_string()), Some(&ada_fk), &known, Some(ada.account_id)), crate::dm::FounderTrust::KnownMatch);
 }
 
+/// S3: a member named with a right-to-left override and Cyrillic letters
+/// to look like "ada" is listed with the controls stripped, and both accounts
+/// whose names look alike are flagged; mara is not.
+#[test]
+fn look_alike_co_members_flagged_and_names_cleaned() {
+    let mut w = World::new();
+    w.people.insert("impostor", Person::new());
+    w.publish_identity("impostor");
+    let mut m = member("impostor", &w.people["impostor"], WorkspaceRole::Contributor);
+    m.actor.display_name = "\u{202D}\u{0430}d\u{0430}\u{200B}".into();
+    w.push("owner", SessionEvent::MemberAdded { member: m, invite: None });
+    let me = w.people["owner"].account_id;
+    let list = crate::directory_trust::co_members(&pinned_store(&w), me);
+    let imp = list.iter().find(|c| c.account_id == w.people["impostor"].account_id).unwrap();
+    assert_eq!(imp.display_name, "\u{0430}d\u{0430}", "controls stripped, letters kept");
+    assert!(imp.look_alike);
+    assert!(list.iter().find(|c| c.account_id == w.people["ada"].account_id).unwrap().look_alike);
+    assert!(!list.iter().find(|c| c.account_id == w.people["mara"].account_id).unwrap().look_alike);
+}
+
 /// A co-member forges a DM "from Bob": the invite names Bob as founder with
 /// Bob's (public) key fingerprint, but Mallory chose the room and key and
 /// founded the config log herself. Alice pins Bob as the invite says. Until a

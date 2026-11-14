@@ -271,6 +271,15 @@ export function FriendsView({
                 <span className="flex min-w-0 items-center gap-2 text-sm">
                   <Avatar name={p.displayName} url={p.avatarUrl} kind="human" size={24} />
                   <span className="truncate font-medium">{p.displayName || "Unnamed"}</span>
+                  {p.lookAlike && (
+                    <span
+                      className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium"
+                      style={{ color: "var(--hive-danger-ink)", border: "1px solid var(--hive-danger-ink)" }}
+                      title="Another person here has a name that looks like this one. Compare safety codes to tell them apart."
+                    >
+                      Look-alike name
+                    </span>
+                  )}
                 </span>
                 <button
                   onClick={() => (p.dmWorkspaceId ? void openExistingDm(p.dmWorkspaceId) : void message(p))}

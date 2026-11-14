@@ -2586,6 +2586,7 @@ dependencies = [
  "hex",
  "hive-core",
  "hive-forge",
+ "hive-proto",
  "hive-runtime",
  "hkdf",
  "hmac",
@@ -2655,6 +2656,7 @@ name = "hive-proto"
 version = "2.0.0"
 dependencies = [
  "serde",
+ "serde_json",
  "ts-rs",
 ]
 

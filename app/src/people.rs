@@ -111,6 +111,9 @@ pub(crate) struct CoMemberDto {
     /// The shared logs disagree about this person's account key: nothing is
     /// sealed to them until that is resolved.
     key_conflict: bool,
+    /// Another co-member's name looks like this one: tell them apart by
+    /// safety code.
+    look_alike: bool,
     /// Devices whose keys are verified on a shared config log.
     devices: u32,
     workspaces: Vec<SharedWorkspaceDto>,
@@ -140,6 +143,7 @@ pub(crate) fn list_co_members(state: State<AppState>) -> Vec<CoMemberDto> {
             avatar_url: c.avatar_url.clone(),
             safety_code: c.safety_code(),
             key_conflict: c.key_conflict,
+            look_alike: c.look_alike,
             devices: c.devices.len() as u32,
             workspaces: c
                 .workspaces
@@ -368,7 +372,7 @@ pub(crate) fn inspect_invite(state: State<AppState>, code: String) -> Result<Inv
     let founder = conn.founder_actor_id.as_deref().and_then(|f| Uuid::parse_str(f).ok());
     let already_joined = state.settings.lock().unwrap().workspaces.iter().any(|w| w.room == conn.room);
     Ok(InviteInfoDto {
-        workspace_name: if conn.dm_account.is_some() { String::new() } else { conn.display_name() },
+        workspace_name: if conn.dm_account.is_some() { String::new() } else { hive_proto::names::clean_display_name(&conn.display_name()) },
         is_dm: conn.dm_account.is_some(),
         addressed_to_me: me_account.is_some_and(|m| conn.dm_account.as_deref() == Some(m.to_string().as_str())),
         founder_account: founder.map(|f| f.to_string()),
@@ -728,7 +732,7 @@ pub(crate) async fn list_pending_invites(state: State<'_, AppState>) -> Result<P
                 relay: relay.clone(),
                 seq: item.seq,
                 is_dm,
-                workspace_name: if is_dm { String::new() } else { conn.display_name() },
+                workspace_name: if is_dm { String::new() } else { hive_proto::names::clean_display_name(&conn.display_name()) },
                 founder_account: founder.map(|f| f.to_string()),
                 founder_name: founder.and_then(|f| people.iter().find(|p| p.account_id == f)).map(|p| p.display_name.clone()),
                 safety_code: conn.fk.as_deref().and_then(directory_trust::safety_code),

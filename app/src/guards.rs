@@ -996,14 +996,14 @@ pub(crate) fn get_dearth_state(state: State<AppState>) -> Result<hive_proto::Dea
     let members = config.as_ref().map(|c| c.members.clone()).unwrap_or_default();
     let my_role = config.as_ref().map(|c| c.role_of(&me)).unwrap_or(hive_core::WorkspaceRole::Owner);
     let can_manage = my_role.rank() >= hive_core::WorkspaceRole::Admin.rank() || config.is_none();
-    let name_of = |id: &str| members.iter().find(|m| m.id == id).map(|m| m.actor.display_name.clone()).unwrap_or_else(|| id.to_string());
+    let name_of = |id: &str| members.iter().find(|m| m.id == id).map(|m| hive_proto::names::clean_display_name(&m.actor.display_name)).unwrap_or_else(|| id.to_string());
     let mut pending: Vec<hive_proto::PendingJoinDto> = guards
         .pending_members
         .iter()
         .map(|p| hive_proto::PendingJoinDto {
             subject: p.member.id.clone(),
             kind: "member".into(),
-            name: p.member.actor.display_name.clone(),
+            name: hive_proto::names::clean_display_name(&p.member.actor.display_name),
             added_by: name_of(&p.added_by),
             can_approve: can_manage && p.added_by != me,
         })
@@ -1015,7 +1015,7 @@ pub(crate) fn get_dearth_state(state: State<AppState>) -> Result<hive_proto::Dea
             subject: device.to_string(),
             kind: "device".into(),
             name: format!("Device {}", &device.to_string()[..8]),
-            added_by: owner.map(|m| m.actor.display_name.clone()).unwrap_or_default(),
+            added_by: owner.map(|m| hive_proto::names::clean_display_name(&m.actor.display_name)).unwrap_or_default(),
             can_approve: can_manage && my_account != Some(account),
         });
     }

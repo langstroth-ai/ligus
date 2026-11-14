@@ -728,6 +728,9 @@ export interface CoMemberDto {
   /// The shared workspaces disagree about their account key: nothing is
   /// sealed to them.
   keyConflict: boolean;
+  /// Another co-member's name looks like this one (case, look-alike letters
+  /// from other scripts): tell them apart by safety code.
+  lookAlike?: boolean;
   /// Devices whose keys are verified on a shared workspace.
   devices: number;
   workspaces: { id: string; name: string }[];

@@ -190,8 +190,13 @@ pub fn plan(candidates: &[Recipient], signed: &BTreeSet<[u8; 32]>, confirmed: bo
 pub struct CoMember {
     /// The random account id (never derived from anything public).
     pub account_id: Uuid,
-    /// The name they chose. Not unique and never an identifier.
+    /// The name they chose, cleaned for display
+    /// ([`hive_proto::names::clean_display_name`]). Not unique and never an
+    /// identifier.
     pub display_name: String,
+    /// Another co-member's name looks like this one (S3): show their safety
+    /// codes side by side.
+    pub look_alike: bool,
     pub avatar_url: Option<String>,
     /// Hex of the first 16 bytes of SHA-256 of their account signing key, as
     /// the config logs register it (the `fk` an invite carries). `None` when
@@ -271,6 +276,7 @@ pub fn co_members(store: &EventStore, me: Uuid) -> Vec<CoMember> {
                 revoked_devices: Vec::new(),
                 workspaces: Vec::new(),
                 key_disputed_in: Vec::new(),
+                look_alike: false,
                 contact: None,
             });
             match keys.get(&account) {
@@ -292,8 +298,10 @@ pub fn co_members(store: &EventStore, me: Uuid) -> Vec<CoMember> {
                 entry.workspaces.push(ws);
             }
             if let Some(member) = config.members.iter().find(|x| x.actor.account_id == Some(account)) {
-                if entry.display_name.trim().is_empty() {
-                    entry.display_name = member.actor.display_name.clone();
+                if entry.display_name.is_empty() {
+                    // Shown as cleaned: no bidi overrides, invisible or
+                    // control characters (S3).
+                    entry.display_name = hive_proto::names::clean_display_name(&member.actor.display_name);
                 }
                 if entry.avatar_url.is_none() {
                     entry.avatar_url = member.actor.avatar_url.clone();
@@ -333,7 +341,19 @@ pub fn co_members(store: &EventStore, me: Uuid) -> Vec<CoMember> {
             }
         }
     }
-    by_account.into_values().filter(|c| !c.workspaces.is_empty() || c.key_conflict).collect()
+    let mut out: Vec<CoMember> = by_account.into_values().filter(|c| !c.workspaces.is_empty() || c.key_conflict).collect();
+    // Two different accounts whose names look alike (same skeleton: case,
+    // look-alike letters from other scripts, invisible characters) are both
+    // flagged: their safety codes tell them apart.
+    let mut by_skeleton: BTreeMap<String, usize> = BTreeMap::new();
+    for c in &out {
+        *by_skeleton.entry(hive_proto::names::name_skeleton(&c.display_name)).or_default() += 1;
+    }
+    for c in &mut out {
+        let sk = hive_proto::names::name_skeleton(&c.display_name);
+        c.look_alike = !sk.is_empty() && by_skeleton.get(&sk).is_some_and(|n| *n > 1);
+    }
+    out
 }
 
 /// The safety code people compare out of band: the account fingerprint (32
