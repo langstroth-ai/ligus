@@ -75,6 +75,29 @@ export const Markdown = memo(function Markdown({ content }: { content: string })
               </a>
             );
           },
+          // Never load a remote image on render: message text is agent or
+          // member authored, and ![](https://host/?q=<secret>) would send the
+          // secret with no click (the CSP allows https: images). Show it as a
+          // link the reader can choose to open.
+          img: ({ src, alt }) => {
+            const safe = safeHref(typeof src === "string" ? src : undefined);
+            const label = `image: ${alt || (safe ? new URL(safe).host : "unavailable")}`;
+            return safe ? (
+              <a
+                href={safe}
+                onClick={(e) => {
+                  e.preventDefault();
+                  window.open(safe, "_blank", "noopener,noreferrer");
+                }}
+                className="underline decoration-dotted underline-offset-2"
+                style={{ color: "var(--hive-accent-cool)" }}
+              >
+                [{label}]
+              </a>
+            ) : (
+              <span>[{label}]</span>
+            );
+          },
           pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
           code: ({ className, children }) => (
             // Inline code (block code is handled by the `pre` wrapper above).
