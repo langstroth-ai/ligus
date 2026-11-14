@@ -10,7 +10,8 @@
 //!    account's current key, and the SSHSIG over the statement verifies under
 //!    the namespace [`LINK_NAMESPACE`] (RustCrypto `ssh-key`; Ed25519,
 //!    `sk-ssh-ed25519@openssh.com`, ECDSA P-256, `sk-ecdsa-sha2-nistp256@openssh.com`
-//!    and `rsa-sha2-512` of at least 3072 bits, hash `sha512`).
+//!    and `rsa-sha2-512` of 3072 to 16384 bits, hash `sha512`; RSA is
+//!    checked with rsa 0.10, not ssh-key's rsa 0.9 feature).
 //! 2. **Online, directly against the forge** (never through the relay, never
 //!    with a token): the forge's public key list for the *stable* subject id
 //!    must still contain the signing key (or, for `KeyPublished`, the Ligus
@@ -55,6 +56,14 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// The smallest RSA modulus accepted.
 pub const MIN_RSA_BITS: usize = 3072;
 
+/// The largest RSA modulus accepted (OpenSSH's own `ssh-keygen` ceiling);
+/// bounds the cost of one verification on hostile input.
+pub const MAX_RSA_BITS: usize = 16384;
+
+/// The largest RSA public exponent accepted, in bytes (rsa 0.10 further caps
+/// it at 2^33 - 1).
+const MAX_RSA_EXPONENT_BYTES: usize = 8;
+
 // ---------------------------------------------------------------------------
 // SSHSIG
 
@@ -77,6 +86,15 @@ pub fn verify_sshsig(armored: &str, namespace: &str, message: &[u8]) -> Result<S
         return Err("signature too large".into());
     }
     let sig = SshSig::from_pem(armored.trim().as_bytes()).map_err(|e| format!("not an SSH signature: {e}"))?;
+    // ssh-key's decoder ignores over-long length prefixes and the version
+    // isn't signed: require exact framing and version 1, the only one
+    // OpenSSH writes, so a proof has one binary form.
+    if !sshsig_framing_is_exact(armored, &PublicKey::from(sig.public_key().clone())) {
+        return Err("not an SSH signature: non-canonical encoding".into());
+    }
+    if sig.version() != SshSig::VERSION {
+        return Err(format!("unsupported SSH signature version {}", sig.version()));
+    }
     if namespace.is_empty() || sig.namespace() != namespace {
         return Err(format!("signed for namespace {:?}, not {namespace:?}", sig.namespace()));
     }
@@ -89,15 +107,12 @@ pub fn verify_sshsig(armored: &str, namespace: &str, message: &[u8]) -> Result<S
         (Algorithm::Ed25519, _) | (Algorithm::SkEd25519, _) | (Algorithm::SkEcdsaSha2NistP256, _) => {}
         (Algorithm::Ecdsa { curve: EcdsaCurve::NistP256 }, _) => {}
         (Algorithm::Rsa { .. }, ssh_key::public::KeyData::Rsa(rsa)) => {
-            let n = rsa.n.as_positive_bytes().unwrap_or_default();
-            let lead = n.first().map(|b| 8 - b.leading_zeros() as usize).unwrap_or(0);
-            let bits = n.len().saturating_sub(1) * 8 + lead;
-            if bits < MIN_RSA_BITS {
-                return Err(format!("RSA keys need at least {MIN_RSA_BITS} bits (this one has {bits})"));
-            }
-            if sig.signature().algorithm() != (Algorithm::Rsa { hash: Some(HashAlg::Sha512) }) {
-                return Err("RSA signatures must be rsa-sha2-512".into());
-            }
+            verify_rsa_sshsig(rsa, &sig, namespace, message)?;
+            return Ok(SigOk {
+                fingerprint: key.fingerprint(HashAlg::Sha256).to_string(),
+                algorithm: algorithm.as_str().to_string(),
+                public_key: key,
+            });
         }
         _ => return Err(format!("{} keys aren't accepted for identity links", algorithm.as_str())),
     }
@@ -116,6 +131,101 @@ pub fn verify_sshsig(armored: &str, namespace: &str, message: &[u8]) -> Result<S
         algorithm: algorithm.as_str().to_string(),
         public_key: key,
     })
+}
+
+/// Whether every length prefix of the SSHSIG framing (PROTOCOL.sshsig) is
+/// exactly filled: `ssh-key` 0.6 accepts a field whose declared length is
+/// larger than what it reads, which made a proof's bytes malleable. The
+/// public key must be byte-for-byte its canonical encoding, and the
+/// signature field exactly `string alg, string blob` (plus flags and counter
+/// for `sk-` algorithms).
+fn sshsig_framing_is_exact(armored: &str, key: &PublicKey) -> bool {
+    use base64::Engine as _;
+    let body: String = armored
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with("-----"))
+        .collect();
+    let Ok(blob) = base64::engine::general_purpose::STANDARD.decode(body) else { return false };
+    fn take<'a>(b: &mut &'a [u8], n: usize) -> Option<&'a [u8]> {
+        if b.len() < n {
+            return None;
+        }
+        let (h, t) = b.split_at(n);
+        *b = t;
+        Some(h)
+    }
+    fn string<'a>(b: &mut &'a [u8]) -> Option<&'a [u8]> {
+        let len = u32::from_be_bytes(take(b, 4)?.try_into().ok()?) as usize;
+        take(b, len)
+    }
+    let check = || -> Option<bool> {
+        let mut b = blob.as_slice();
+        if take(&mut b, 6)? != b"SSHSIG" {
+            return Some(false);
+        }
+        take(&mut b, 4)?; // version
+        let pk = string(&mut b)?;
+        string(&mut b)?; // namespace
+        string(&mut b)?; // reserved
+        string(&mut b)?; // hash algorithm
+        let mut sig = string(&mut b)?;
+        if !b.is_empty() || key.to_bytes().ok()?.as_slice() != pk {
+            return Some(false);
+        }
+        let alg = string(&mut sig)?;
+        string(&mut sig)?;
+        let tail = if alg.starts_with(b"sk-") { 5 } else { 0 };
+        Some(sig.len() == tail)
+    };
+    check().unwrap_or(false)
+}
+
+/// Verify an RSA SSHSIG (the namespace and `sha512` already checked) with
+/// rsa 0.10 rather than ssh-key's `rsa` feature, which pulls rsa 0.9
+/// (RUSTSEC-2023-0071). Rebuilds the signed-data blob of PROTOCOL.sshsig
+/// (`"SSHSIG"`, namespace, empty reserved, `"sha512"`, SHA-512 of the
+/// message) the way OpenSSH's `sshsig_wrap_verify` does, then checks a
+/// PKCS#1 v1.5 SHA-512 signature (`rsa-sha2-512`) of exactly the modulus
+/// length over it.
+fn verify_rsa_sshsig(
+    rsa: &ssh_key::public::RsaPublicKey,
+    sig: &SshSig,
+    namespace: &str,
+    message: &[u8],
+) -> Result<(), String> {
+    // Canonical mpints: after the sign byte is stripped the first byte is
+    // non-zero, so the byte length is the modulus size.
+    let n = rsa.n.as_positive_bytes().filter(|n| !n.is_empty()).ok_or("the RSA modulus isn't a positive integer")?;
+    let e = rsa.e.as_positive_bytes().filter(|e| !e.is_empty()).ok_or("the RSA exponent isn't a positive integer")?;
+    let bits = (n.len() - 1) * 8 + (8 - n[0].leading_zeros() as usize);
+    if bits < MIN_RSA_BITS {
+        return Err(format!("RSA keys need at least {MIN_RSA_BITS} bits (this one has {bits})"));
+    }
+    if bits > MAX_RSA_BITS {
+        return Err(format!("RSA keys of more than {MAX_RSA_BITS} bits aren't accepted (this one has {bits})"));
+    }
+    if e.len() > MAX_RSA_EXPONENT_BYTES || e.last().is_some_and(|b| b & 1 == 0) || e == [1] {
+        return Err("the RSA public exponent isn't acceptable".into());
+    }
+    if sig.signature().algorithm() != (Algorithm::Rsa { hash: Some(HashAlg::Sha512) }) {
+        return Err("RSA signatures must be rsa-sha2-512".into());
+    }
+    if !sig.reserved().is_empty() {
+        return Err("the signature's reserved field isn't empty".into());
+    }
+    let s = sig.signature().as_bytes();
+    if s.len() != n.len() {
+        return Err("signature doesn't verify: RSA signature length doesn't match the key".into());
+    }
+    // Both lengths are bounded above (16 KiB armor, MAX_RSA_BITS), so the
+    // precisions fit a u32.
+    let n = rsa::BoxedUint::from_be_slice(n, (n.len() * 8) as u32).map_err(|_| "bad RSA modulus")?;
+    let e = rsa::BoxedUint::from_be_slice(e, (e.len() * 8) as u32).map_err(|_| "bad RSA exponent")?;
+    let key = rsa::PublicKey::new_with_size_limits(n, e, MIN_RSA_BITS..=MAX_RSA_BITS)
+        .map_err(|e| format!("not a usable RSA key: {e}"))?;
+    let signed = SshSig::signed_data(namespace, HashAlg::Sha512, message).map_err(|e| e.to_string())?;
+    key.pkcs1v15_verify::<rsa::sha2::Sha512>(&signed, s).map_err(|e| format!("signature doesn't verify: {e}"))
 }
 
 /// Parse one OpenSSH public key line (`<algo> <base64> [comment]`).
