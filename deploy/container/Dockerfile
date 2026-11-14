@@ -13,9 +13,11 @@
 #     -f deploy/container/Dockerfile -t <registry>/ligus:<version> --push .
 #
 # Runtime contents: the ligus binary, git (agent turns cut per-turn git
-# worktrees by shelling out to git), CA certificates, and tini as PID 1 so
-# subprocesses an agent turn starts (git, CLI agents, MCP stdio servers) are
-# reaped. Agent CLIs (claude, codex, ...) are NOT included: extend this image
+# worktrees by shelling out to git), CA certificates, bubblewrap (the agent
+# sandbox; it needs user namespaces, so run the container with a seccomp
+# profile that allows them, or agent turns that write are refused), and tini
+# as PID 1 so subprocesses an agent turn starts (git, CLI agents, MCP stdio
+# servers) are reaped. Agent CLIs (claude, codex, ...) are NOT included: extend this image
 # with the ones you use. See docs/design/kubernetes.md.
 
 ARG RUST_VERSION=1.91
@@ -31,18 +33,21 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 FROM debian:${DEBIAN_RELEASE}-slim
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates git tini \
+ && apt-get install -y --no-install-recommends bubblewrap ca-certificates git tini \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd --system --gid 65532 ligus \
  && useradd --system --uid 65532 --gid 65532 --home-dir /var/lib/ligus --shell /usr/sbin/nologin ligus \
- && install -d -o 65532 -g 65532 -m 0700 /var/lib/ligus
+ && install -d -o 65532 -g 65532 -m 0700 /var/lib/ligus /home/ligus
 COPY --from=build /out/ligus /usr/local/bin/ligus
-# Identity, device keys, hive.db, serve.token and checkouts live here. Mount a
-# persistent volume at this path; it holds secrets, keep it private (0700).
+# Identity, device keys, hive.db, serve.token and checkouts live in the data
+# dir. Mount a persistent volume there; it holds secrets, keep it private
+# (0700). HOME (agent CLIs' logins and caches) and the working directory are
+# deliberately elsewhere: an agent process never runs in, or reads, the data
+# dir.
 ENV LIGUS_DATA_DIR=/var/lib/ligus \
-    HOME=/var/lib/ligus
+    HOME=/home/ligus
 USER 65532:65532
-WORKDIR /var/lib/ligus
+WORKDIR /home/ligus
 EXPOSE 8787
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/ligus"]
 CMD ["--version"]
