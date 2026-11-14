@@ -62,10 +62,11 @@ through their own events.
 
 Ligus stores private key seeds as raw files in the `keys/` subdirectory of
 its data directory (`ai.ligus.desktop` for the desktop, `LIGUS_DATA_DIR` for
-the CLI), written with the process's default file mode (on many Linux
-systems that is readable by other local users; keep the data dir `0700`).
-Protect them with your OS account and disk encryption; anyone who can
-read these files can act as your device. An OS-keystore-backed vault
+the CLI), owner-only: each seed is `0600` and `keys/` is `0700`, and a seed
+written by an older version is tightened when it is next loaded. Other local
+users can't read them, but anything running as your OS user can, agents
+included. Protect them with your OS account and disk encryption; anyone who
+can read these files can act as your device. An OS-keystore-backed vault
 (macOS Keychain / Windows Credential Manager / Secret Service) is a
 planned drop-in behind the same interface but is **not** what ships
 today, so don't assume OS-keystore protection.

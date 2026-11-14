@@ -43,7 +43,11 @@ ligus serve --listen 127.0.0.1:8787 --label home-box
 
 - `--listen` / `LIGUS_SERVE_LISTEN` (default `127.0.0.1:8787`). The box binds
   only to loopback, a private LAN address or a VPN address, and refuses
-  `0.0.0.0` and public addresses unless `LIGUS_SERVE_ALLOW_ANY_BIND=1`.
+  `0.0.0.0` and public addresses unless `LIGUS_SERVE_ALLOW_ANY_BIND=1`,
+  which removes that guard; set it only where a firewall or a private
+  network namespace decides who connects. Prefer the relay tunnel or a
+  tailnet address to a LAN bind: the direct path is plain HTTP, so on a LAN
+  anyone on the network can read the token.
   With the relay tunnel only, loopback is fine: the phone never connects to
   this port directly.
 - `--label` / `LIGUS_SERVE_LABEL` is the host name other members see.
@@ -104,7 +108,9 @@ box's host id, its public key, the relay URL and a one-time pairing secret.
 - The pairing secret works **once, for 10 minutes**, and only while
   `ligus serve` is running (it picks up the new pairing window within 2
   seconds). Run `ligus pair` again for a fresh one.
-- `ligus serve --pair` prints the same code when the server starts.
+- `ligus serve --pair` prints the same code when the server starts. Use it
+  only in a terminal: under systemd the link, direct-path token included,
+  lands in journald and stays there.
 
 !!! warning "The link is a key"
     A link with a direct URL also carries the box's API token. Share it only

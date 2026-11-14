@@ -27,13 +27,13 @@ For a `ligus serve` box (or another device) enrolled as **your** device.
 3. Not achieved: it still holds the workspace key and can read whatever it
    can still fetch. If the device itself is lost or compromised, continue
    with [Compromised device](#compromised-device).
-4. **If you aren't an Admin** of the workspace: device revocation is an
-   Admin-level change on the workspace log (`min_role_for` in
-   `crates/hive-core/src/authorization.rs`), so other devices may not apply
-   a revocation you sign. Ask an Admin to confirm the device shows as revoked
-   on their side, and if it doesn't, to remove that device's member (for a
-   box that was its own member) or to treat it as a
-   [compromised device](#compromised-device).
+4. **Revoking needs Admin.** Device revocation is an Admin-level change on
+   the workspace log, and every device ignores one signed by anyone below
+   Admin, both when it checks the event and when it builds its list of
+   trusted devices. If you aren't an Admin, your revocation has no effect on
+   other devices: ask an Admin to revoke the device, or to remove that
+   device's member (for a box that was its own member), and treat it as a
+   [compromised device](#compromised-device) meanwhile.
 5. To re-enroll the same box later:
    `ligus serve enroll --new-device`, then approve the new code.
 
@@ -58,7 +58,8 @@ ligus phones list                          # it now shows `revoked`
 - **rotates `serve.token`**, because the phone may also hold the direct-path
   token. Every phone that uses the direct path must pair again
   (`ligus pair`). Pass `--keep-token` only if the lost phone never used the
-  direct path.
+  direct path. There is no per-phone revocation on the direct path: revoking
+  any direct-path phone means rotating `serve.token` for all of them.
 
 A phone paired **only** on the direct path has no entry in
 `ligus phones list`. Rotate the token by hand; a running `ligus serve`
@@ -71,6 +72,15 @@ openssl rand -hex 32 > "$LIGUS_DATA_DIR/serve.token"
 
 Then re-pair your remaining phones. If the phone app's Face ID lock was on,
 the thief also needed your face or passcode; revoke anyway.
+
+!!! warning "Pairing codes in the journal"
+    `ligus serve --pair` prints the pairing link to stdout, and with a
+    direct path that link carries `serve.token`. Under the shipped systemd
+    unit stdout goes to journald, where it is kept and readable by root and
+    by the groups your distribution lets read journals (such as
+    `systemd-journal` or `adm`). Don't put `--pair` in a unit; pair with
+    `ligus pair` from a terminal. If a box ever started with it, rotate
+    `serve.token` (above) and re-pair.
 
 ## Compromised device {#compromised-device}
 
@@ -89,7 +99,10 @@ can act as that device and read everything it could.
 3. **Cut its reads.** It holds the workspace key. Removing a member with
    **Remove & revoke** rotates the key for remaining desktops. For your own
    lost device, or any workspace with headless devices,
-   [move to a new workspace](#move-to-a-new-workspace).
+   [move to a new workspace](#move-to-a-new-workspace). Key rotations aren't
+   signed yet, so a holder of the old key who can still write to the relay
+   could publish a rotation of their own; cutting its relay access (step 2)
+   matters for that reason too.
 4. **Rotate what it held besides Ligus keys**: model API keys, MCP tokens,
    `LIGUS_WS_SECRET_*` values, the `gh` login of a serve box, Git
    credentials.
@@ -113,7 +126,9 @@ can act as that device and read everything it could.
    rotation strands them (they keep the old key and can't read new desktop
    traffic, and what they write stays readable by the removed person). Move
    to a new workspace.
-6. Remember: they keep everything they had already synced.
+6. They can't enroll themselves back: a removed account's self-enrollment is
+   refused on every device until an Admin adds them again.
+7. Remember: they keep everything they had already synced.
 
 ## Move to a new workspace {#move-to-a-new-workspace}
 
@@ -141,7 +156,7 @@ To rotate for any other reason, [move to a new workspace](#move-to-a-new-workspa
 | Gate | Revoke |
 |---|---|
 | `LIGUS_RELAY_ACCESS_TOKENS` | remove the token from the list and restart the relay |
-| Signed `hrt1` tokens | the open-source relay has no per-token revocation list: tokens stay valid until they expire. Issue them with `--exp-days`. To cut one off now, generate a new issuer key (`ligus-relay keygen`), set the new public key, restart, and re-issue tokens to everyone else |
+| Signed `hrt1` tokens | the open-source relay has no per-token revocation list: tokens stay valid until they expire. Issue them with `--exp-days`, and with `--workspace <id>` under `LIGUS_RELAY_WORKSPACE_SCOPE` so a leaked token reaches only its own workspaces. To cut one off now, generate a new issuer key (`ligus-relay keygen`), set the new public key, restart, and re-issue tokens to everyone else |
 | Relay with an admin API (downstream builds) | revoke the token there; takes effect immediately |
 
 A relay token only grants use of the relay. Without the workspace key it
@@ -151,6 +166,9 @@ reads nothing.
 
 Anyone with the issuer seed can mint relay tokens. Generate a new pair, set
 `LIGUS_RELAY_TOKEN_PUBKEY` to the new public key, restart, re-issue tokens.
+Paste the key carefully: since relay v0.2.0 a value that isn't a valid
+Ed25519 public key stops the relay from starting rather than leaving it
+ungated.
 Remove the old seed from **Settings → Team sync → Advanced → Relay issuer
 key** on any desktop that held it.
 

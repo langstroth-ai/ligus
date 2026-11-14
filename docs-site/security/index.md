@@ -26,7 +26,8 @@ described in
 | **Phone app** | the direct-path bearer token and/or its tunnel credential, Noise key and push key, per host profile, in the iOS Keychain | what it has fetched and cached | `ligus serve` (directly or through the relay) |
 | **Model providers, MCP servers** | | whatever a turn sends them: prompts, chat history, and file contents when file tools or a CLI agent read them | |
 
-The desktop and the CLI store private key seeds as plain files; see
+The desktop and the CLI store private key seeds as plain files, owner-only
+(`0600` in a `0700` directory); see
 [Key storage](../concepts/identity.md#key-storage) and
 [known limitations](threat-model.md#known-limitations).
 
@@ -34,7 +35,8 @@ The desktop and the CLI store private key seeds as plain files; see
 
 - **Workspace events** are signed by the authoring device (Ed25519) and, for
   relay sync, sealed with ChaCha20-Poly1305 under the workspace key before
-  they leave the device. Sync refuses to push without a key.
+  they leave the device. Sync refuses to push without a key, and a device
+  that holds a key never applies an unsealed body from the relay.
 - **The workspace key** starts as a passphrase in the `hivews1:` invite
   (epoch 0). Rotations (epochs 1, 2, …) are sealed to each remaining device's
   X25519 key-agreement key and published through the relay; a device seals
@@ -85,6 +87,9 @@ as your device. Model and MCP providers see what turns send them.
 - Each workspace namespace holds that workspace's key on the serve and
   worker volumes: cluster admins, anyone who can `exec` into those pods or
   read their volumes or Secrets can read the workspace.
+- Only the release's own pods reach the serve API by default; MCP server
+  pods and other pods in the namespace don't. DNS egress goes to the cluster
+  resolver only.
 - Executors are designed to hold no workspace or device key; the controller
   that would launch them isn't built.
 
@@ -103,7 +108,7 @@ turn-scoped inputs. See [Keys off the cluster](../deploy/keys-off-cluster.md).
 | Role | Can |
 |---|---|
 | **Owner** | everything an Admin can; the last Owner can't be removed or demoted |
-| **Admin** | add, remove and re-role members; manage workspace runtimes (they carry credentials); revoke devices; dearth mode and join approvals; path zones and the home beacon |
+| **Admin** | add, remove and re-role members; manage workspace runtimes (they carry credentials); revoke devices (a revocation or removal from anyone below Admin is ignored on every device); dearth mode and join approvals; path zones and the home beacon |
 | **Contributor** | messages, proposals and votes, proposal sets, agents, skills, vaults, workflows, channels, hosts, leases; clear a chat lockdown (humans only) |
 | **Viewer** | read; raise a chat lockdown |
 
@@ -112,10 +117,14 @@ require Owner. Proposal sets add their own decision role on top.
 
 - **Tool gate on headless hosts.** On `ligus worker` and `ligus serve`, a
   turn gets tools only if the message's author holds at least
-  `LIGUS_MCP_MIN_ROLE` (default Contributor); otherwise the agent replies
-  without tools. An author that can't be resolved gets no tools.
+  `LIGUS_MCP_MIN_ROLE` (default Contributor). Below it, Ligus's own tool
+  loop runs without tools, Claude Code, Antigravity and Copilot run
+  read-only, and Codex, aider, pi and Hermes are refused with a note. An
+  author that can't be resolved gets no tools.
 - **Worker write access** is off by default:
-  `LIGUS_WORKER_PERMISSION_MODE` must raise it.
+  `LIGUS_WORKER_PERMISSION_MODE` must raise it. When you raise it, raise
+  `LIGUS_MCP_MIN_ROLE` too (to `admin`, say), so only people you'd trust with
+  a shell on the box can drive a write-capable agent there.
 
 ## The 2.0 guards {#guards}
 
@@ -134,6 +143,47 @@ re-checked on ingest by every device.
 ## Security review notes {#review-notes}
 
 Findings from security reviews that change what this section says are
-recorded here, each with the date and the page section it affects.
+recorded here, each with the date and the page section it affects. The full
+list with status is in
+[Reviewer findings](threat-model.md#reviewer-findings).
 
-*None recorded yet.*
+**2026-11-13: core, host, chart and relay v0.2.0 review.**
+
+- [Roles](#roles): revoking a device needs Admin, and both ingest and the
+  trust roster ignore anyone below it. A removed member can't enroll
+  themselves back; only an Admin's re-add lifts the removal.
+- [The 2.0 guards](#guards): dearth mode holds devices awaiting their second
+  approval, and events no certified device vouches for, in every identity
+  mode. The human gate for protected paths reads the paths in the diff
+  itself, case-insensitively, and an approval is void if the patch changes
+  afterwards. Lease beats stamped more than 2 minutes in the future are
+  ignored.
+- [Components](#components): key seeds are `0600` in a `0700` key dir;
+  `config.toml` is `0600` and the CLI data dir `0700`.
+- [Encryption](#encryption): a keyed workspace rejects plaintext bodies from
+  the relay, so plaintext history from before the workspace had a key isn't
+  shown on devices that fetch it later.
+- Agent turns: Ligus's own git calls never run repository hooks or
+  fsmonitor; Ligus's secrets are scrubbed from agent CLIs, MCP servers,
+  pre-flight and git, while model provider keys pass through; under
+  restricted egress Claude Code ignores the repository's settings and hooks;
+  remote markdown images render as links. See
+  [Prompt injection](threat-model.md#prompt-injection).
+- [Tool gate](#roles): below `LIGUS_MCP_MIN_ROLE`, subprocess CLI agents on
+  workers and serve boxes run read-only or are refused; raise it on any
+  worker with write access.
+- [Kubernetes](#tb-kubernetes): DNS only to the cluster resolver, serve
+  reachable only from the release's pods, executors held until their
+  NetworkPolicy is in force, MCP images pinned by digest. See
+  [Kubernetes](../deploy/kubernetes.md#hardening-the-charts-apply).
+- Relay v0.2.0: a malformed `LIGUS_RELAY_TOKEN_PUBKEY` refuses to start;
+  per-client limits use `LIGUS_RELAY_TRUSTED_PROXIES`, and `Fly-Client-IP`
+  is trusted only on Fly; tokens can be confined to workspaces
+  (`LIGUS_RELAY_WORKSPACE_SCOPE`); the chart's tunnel is off by default. See
+  [Self-hosting a relay](../networking/self-host.md).
+- Still open and listed in
+  [Known limitations](threat-model.md#known-limitations) until the Phase 0
+  refactor fixes them: serve and CLI devices at key epoch 0, unsigned key
+  rotations, self-declared vote roles, retroactive hoisted checks, agents
+  that can read the data dir, no agent identity, serve API votes counting as
+  the owner.

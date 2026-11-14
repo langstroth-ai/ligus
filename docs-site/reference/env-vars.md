@@ -44,7 +44,7 @@ first time it is created; after that, Settings is the source of truth.
 | `LIGUS_ALLOW_REMOTE_FILE_TOOLS` | off | CLI | offer file tools even when the model endpoint isn't on this machine, a private network or the tailnet (they send file contents to it) |
 | `LIGUS_MCP_AFTER_READS` | off | CLI | **turns off** the exfiltration guard that refuses MCP calls once a turn has read project files |
 | `LIGUS_MCP_CONFIG` | unset | CLI | path to a TOML file of MCP servers for headless turns and dashboard panels |
-| `LIGUS_MCP_MIN_ROLE` | `contributor` | CLI | `viewer`, `contributor`, `admin` or `owner`: the minimum role of a message's author before its turn gets any tools. Below it, the agent replies tool-free; an unknown author fails closed |
+| `LIGUS_MCP_MIN_ROLE` | `contributor` | CLI | `viewer`, `contributor`, `admin` or `owner`: the minimum role of a message's author before its turn gets any tools. Below it, Ligus's own tool loop replies tool-free, Claude Code, Antigravity and Copilot run read-only, and Codex, aider, pi and Hermes are refused with a note; an unknown author fails closed. Raise it on any worker with `LIGUS_WORKER_PERMISSION_MODE` set |
 | `LIGUS_AGENT_TIMEOUT_SECS` | `300` | desktop and CLI | wall-clock budget for one subprocess agent turn (aider, pi, ...) |
 | `LIGUS_TURN_IDLE_TIMEOUT_SECS` | `300` | desktop and CLI | how long a streaming model may produce nothing before the turn fails |
 | `LIGUS_TURN_TIMEOUT_SECS` | `3600` | desktop and CLI | total backstop for one turn (the desktop adds 300 s) |

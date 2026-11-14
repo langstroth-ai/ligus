@@ -106,7 +106,8 @@ curl -s localhost:8443/v1/health                # → ok
 
 ### Kubernetes
 
-A Helm chart is in preview; see [Kubernetes](../deploy/kubernetes.md).
+Relay v0.2.0 ships a Helm chart (`deploy/helm/ligus-relay`); see
+[Kubernetes](../deploy/kubernetes.md#relay).
 
 ## Listen address
 
@@ -132,12 +133,23 @@ relay.example.com {
 Keep the idle timeout of anything in front above 60 s: SSE and tunnel
 connections are long-lived.
 
-!!! warning "Strip `Fly-Client-IP` outside Fly"
-    For per-IP rate limits the relay trusts the `Fly-Client-IP` header when
-    present, else the TCP peer address. It doesn't read `X-Forwarded-For`.
-    Off Fly, a client can send `Fly-Client-IP` itself to dodge per-IP
-    limits, so have your proxy remove that header. Behind a proxy, every
-    client otherwise shares the proxy's IP for rate limiting.
+### Client addresses behind a proxy {#client-ip}
+
+Rate limits and abuse blocks are kept per client: the TCP peer address, with
+IPv6 keyed on its /64. Behind a reverse proxy, an ingress or a load balancer,
+every client then shares the proxy's address and one bucket (ten bad pairing
+guesses from anyone block pairing for everyone for a minute). Tell the relay
+which peers are your proxies:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `LIGUS_RELAY_TRUSTED_PROXIES` | empty | comma-separated CIDRs or IPs of your proxies. Only for a peer inside this list does the relay read the forwarding header; from anyone else it ignores every forwarding header |
+| `LIGUS_RELAY_CLIENT_IP_HEADER` | `X-Forwarded-For` | the header those proxies set. `X-Forwarded-For` is walked right to left past trusted hops; a single-address header such as `X-Real-IP` also works |
+
+Set `LIGUS_RELAY_TRUSTED_PROXIES` behind **any** proxy or ingress.
+`Fly-Client-IP` is used only on Fly.io (when `FLY_APP_NAME` is set and
+`LIGUS_RELAY_TRUSTED_PROXIES` isn't), where Fly's edge overwrites it;
+anywhere else a client-supplied `Fly-Client-IP` is ignored.
 
 ## Storage
 
@@ -150,6 +162,13 @@ connections are long-lived.
 There is no SQLite backend. Set `LIGUS_RELAY_REQUIRE_DB=1` in production to
 refuse to start without `DATABASE_URL` rather than silently running on
 memory.
+
+**Memory budget.** On the memory and snapshot stores everything lives in
+RAM. On any relay untrusted clients can reach (an open relay above all), set
+`LIGUS_RELAY_MAX_STORE_BYTES` below the process's memory limit: it caps the
+bytes held across all workspaces (envelope bodies, keyring rows, candidate
+and presence blobs, per-workspace overhead), and writes past it answer
+`507 relay storage is full`. The default `0` is unbounded.
 
 **Postgres.** Use a primary (the relay refuses a read replica). It works
 behind PgBouncer. The schema is created and upgraded automatically on every
@@ -166,10 +185,12 @@ events.
 
 | Setting | Default | Applies to |
 |---|---|---|
-| `LIGUS_RELAY_MAX_ENVELOPES` | `50000` per workspace (`0` = no cap) | memory and Postgres (Postgres is pruned hourly) |
+| `LIGUS_RELAY_MAX_ENVELOPES` | `50000` per workspace (`0` = no cap) | memory (on write) and Postgres (pruned hourly to the newest N, so a workspace can briefly exceed it) |
 | `LIGUS_RELAY_RETENTION_DAYS` | `0` (off) | memory and Postgres |
 | `LIGUS_RELAY_INBOX_MAX_ROWS` / `LIGUS_RELAY_INBOX_RETENTION_DAYS` | `5000` / `30` | account inbox |
-| `LIGUS_RELAY_MAX_KEYRING_PER_WS` | `2000` | keyring blobs |
+| `LIGUS_RELAY_MAX_KEYRING_PER_WS` | `2000` | key rotations per workspace; past it a new rotation gets `507` and stored ones are never evicted |
+| `LIGUS_RELAY_MAX_KEYRING_BYTES_PER_WS` | 16 MiB | keyring bytes per workspace (`507` past it); keep it at or below `LIGUS_RELAY_MAX_LIST_BYTES` |
+| `LIGUS_RELAY_MAX_ROTATION_BYTES` | 256 KiB | one key rotation (`413` past it) |
 | `LIGUS_RELAY_MAX_DEVICE_BLOBS_PER_WS` | `1000` | device blobs |
 | `LIGUS_RELAY_FRIEND_REQ_RETENTION_DAYS` | `30` | friend requests |
 | `LIGUS_RELAY_MAX_PAIRINGS` | `50000` | pending pairing codes |
@@ -218,10 +239,11 @@ mints a token for a headless agent and prints the one-line
 [Headless agents](../concepts/headless-agents.md#3-remote-agent-always-on-worker).
 Its output contains the workspace key, so treat it as a secret.
 
-!!! danger "A malformed public key fails open"
-    If `LIGUS_RELAY_TOKEN_PUBKEY` can't be parsed, the relay logs a warning
-    and falls through to the allowlist or **open** mode. After setting it,
-    check that an unauthenticated request is refused:
+!!! danger "A malformed public key stops the relay"
+    Since v0.2.0, if `LIGUS_RELAY_TOKEN_PUBKEY` is set but isn't an Ed25519
+    public key (64 hex characters or base64), the relay refuses to start.
+    (Earlier versions fell through to the allowlist or **open** mode.) After
+    setting it, check that an unauthenticated request is refused:
 
     ```sh
     curl -s -o /dev/null -w '%{http_code}\n' https://relay.example.com/v1/workspaces/x/envelopes
@@ -230,6 +252,27 @@ Its output contains the workspace key, so treat it as a secret.
 
 Each client sets its token in **Settings → Team sync → Relay access token**
 (desktop), `ligus enroll … --token` or `LIGUS_RELAY_ACCESS_TOKEN` (CLI).
+
+### Per-workspace token scope {#per-workspace-token-scope}
+
+The token gate is coarse: by default any entitled caller may read and write
+any workspace whose id it knows. Signed tokens can carry a `workspaces`
+claim (`ligus-relay issue … --workspace <id> [--workspace <id>]`, `*` = any),
+and `LIGUS_RELAY_WORKSPACE_SCOPE` decides what the relay does with it:
+
+| Value | Behaviour |
+|---|---|
+| `off` (default) | the claim is ignored |
+| `claims` | a token that carries the claim is confined to those workspace ids on every `/v1/workspaces/{id}/…` route (envelopes, events, keyring, presence, candidates, membership); a token without it keeps coarse access |
+| `strict` | every workspace route needs a token with the claim; the open policy and the static allowlist get `403`, so this needs signed tokens |
+
+The claim sits inside the signed claims, so the `hrt1` format is unchanged,
+but a relay that doesn't enforce it (older, or `off`) ignores it. Scoping
+tokens also narrows who can write a workspace's keyring, which matters while
+key rotations are unsigned (see
+[Known limitations](../security/threat-model.md#known-limitations)).
+Relay-side membership (below) is the alternative when the roster, not the
+issuer, should decide.
 
 ### Membership: who may use a given workspace
 
@@ -250,9 +293,13 @@ admin authorizer in code. No environment variable enables it. The desktop's
 
 ### GitHub-backed routes
 
-Directory, account and friends routes also verify a GitHub token
-(`x-hive-github-token`, else the bearer) against `api.github.com`, cached
-for 60 s (an invalid one for 30 s).
+Directory, account and friends routes identify the caller by a GitHub token
+sent in `X-Hive-Github-Token` (or `X-Ligus-Github-Token`), verified against
+`api.github.com` and cached briefly. Only that header is used: the
+`Authorization` bearer carries the relay access token and is never sent to
+GitHub. The relay operator can see the GitHub tokens clients send here,
+since the relay must present them to GitHub; use these routes only with a
+relay you trust. The relay needs outbound HTTPS to `api.github.com` for them.
 
 ## The phone tunnel and push
 
@@ -260,7 +307,7 @@ Off by default.
 
 | Setting | Values |
 |---|---|
-| `LIGUS_RELAY_TUNNEL` | `off` (default; `/v1/tunnel/*` answers 404), `open` (any host may register), `allowlist` |
+| `LIGUS_RELAY_TUNNEL` | `off` (default; `/v1/tunnel/*` answers 404), `open` (any host may register), `allowlist`. Use `open` only together with an entitlement gate, so that a host's first registration needs a token; otherwise anyone can relay phone sessions through you |
 | `LIGUS_RELAY_TUNNEL_HOSTS` | comma-separated host ids for `allowlist` (from `ligus remote status`). `allowlist` with no hosts leaves the tunnel off |
 
 If an entitlement gate is configured, a host must present a token that
@@ -293,18 +340,34 @@ curl -s https://relay.example.com/v1/tunnel/info
 | Setting | Default | What it limits |
 |---|---|---|
 | `LIGUS_RELAY_MAX_BODY_BYTES` | 4 MiB | request body (413 above) |
-| `LIGUS_RELAY_PUSH_RATE` / `LIGUS_RELAY_PUSH_BURST` | 100/s, burst 300 | writes per IP |
+| `LIGUS_RELAY_MAX_LIST_BYTES` | 16 MiB (`0` = unbounded) | one `GET …/keyring`, `…/candidates` or `…/presence` response, by stored bytes; at least one row is always returned |
+| `LIGUS_RELAY_PUSH_RATE` / `LIGUS_RELAY_PUSH_BURST` | 100/s, burst 300 | writes per client |
+| `LIGUS_RELAY_READ_RATE` / `LIGUS_RELAY_READ_BURST` | 100/s, burst 400 | workspace reads and SSE connects per client (429 above) |
 | `LIGUS_RELAY_WS_WRITER_RATE` / `LIGUS_RELAY_WS_WRITER_BURST` | 20/s, burst 200 | writes per workspace |
 | `LIGUS_RELAY_GITHUB_RATE` / `LIGUS_RELAY_GITHUB_BURST` | 30/s, burst 120 | GitHub-verified routes per IP |
 | `LIGUS_RELAY_INVITE_RATE` / `LIGUS_RELAY_INVITE_BURST` | 0.05/s, burst 10 | invite redemption |
 | `LIGUS_RELAY_INVITE_REQUIRE_FRIEND` | off | only friends may redeem invites |
-| `LIGUS_RELAY_MAX_SSE` | 2000 | concurrent SSE streams |
+| `LIGUS_RELAY_MAX_SSE` | 2000 | concurrent SSE streams per instance (503 above) |
+| `LIGUS_RELAY_MAX_SSE_PER_CLIENT` | 100 | concurrent SSE streams per client (429 above) |
 | `LIGUS_RELAY_FRIEND_CAP` | unlimited | friends per account |
 | pairing codes | 10 failed lookups per minute per IP, then 429 | fixed |
 | tunnel | 8 sessions per host, 30 connects per IP per minute | fixed |
 
 Envelope pages are at most 1000 envelopes or 4 MiB. The relay sends no CORS
-headers.
+headers. A "client" is the token subject where one applies, else the address
+(see [Client addresses behind a proxy](#client-ip)).
+
+Since v0.2.0 the relay also answers:
+
+| Status | When |
+|---|---|
+| `400` | a workspace id longer than 512 bytes, a device id longer than 256 bytes, or a malformed JSON body |
+| `507` | the memory store is at `LIGUS_RELAY_MAX_STORE_BYTES`, or a workspace's keyring is at its rotation or byte cap |
+| `413` | a body over `LIGUS_RELAY_MAX_BODY_BYTES`, or a key rotation over `LIGUS_RELAY_MAX_ROTATION_BYTES` |
+
+Pairing codes take only payloads safe for the operator to read (a peer
+friend code or a `sealed1:` payload; a workspace invite gets `422`) and are
+single-use.
 
 ## Monitoring
 
@@ -349,8 +412,9 @@ up for convenience, not as your only copy.
 
 - **Restore:** stop the relay, put the snapshot back (or `pg_restore`),
   start it. Devices resume from their own cursors.
-- The snapshot file is written with mode `0644`; keep the directory itself
-  private (`0700`), since it holds hashed tokens, push tokens and metadata.
+- The snapshot file is written owner-only (`0600`) since v0.2.0; keep the
+  directory private (`0700`) too, since it holds hashed tokens, push tokens
+  and metadata.
 
 ## Upgrades
 
@@ -367,10 +431,12 @@ changes have no down migration.
 
 ## Checklist for an internet-facing relay
 
-- [ ] TLS in front; `Fly-Client-IP` stripped if not on Fly
+- [ ] TLS in front; `LIGUS_RELAY_TRUSTED_PROXIES` set to your proxy's addresses
 - [ ] `DATABASE_URL` or `LIGUS_RELAY_DATA_DIR` set; `LIGUS_RELAY_REQUIRE_DB=1` with Postgres
+- [ ] `LIGUS_RELAY_MAX_STORE_BYTES` set on a memory or snapshot store
 - [ ] an entitlement gate (`LIGUS_RELAY_TOKEN_PUBKEY` or `LIGUS_RELAY_ACCESS_TOKENS`) unless you want a public relay, verified with an unauthenticated request
+- [ ] `LIGUS_RELAY_WORKSPACE_SCOPE=claims` (or `strict`) with workspace-scoped signed tokens
 - [ ] issuer private key kept off the relay host
 - [ ] `LIGUS_RELAY_METRICS_TOKEN` set
-- [ ] tunnel `off` unless you use the phone app; `allowlist` if only your boxes should register
+- [ ] tunnel `off` unless you use the phone app; `allowlist` if only your boxes should register, `open` only with an entitlement gate
 - [ ] backups scheduled

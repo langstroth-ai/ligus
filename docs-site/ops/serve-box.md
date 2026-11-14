@@ -75,7 +75,9 @@ removes the box's separate member, if it had one.
 
 On the desktop, **Settings → Account → My devices → Revoke**. Updated desktops
 stop accepting the box's events, and the box goes read-only
-(`identity.mode` `revoked`). To enroll it again, make a new device key and
+(`identity.mode` `revoked`). Revoking is an Admin action on the workspace:
+every device ignores a revocation signed by anyone below Admin, so if you
+aren't an Admin of this workspace, ask one to revoke the box. To enroll it again, make a new device key and
 approve its new code:
 
 ```sh
@@ -87,6 +89,34 @@ ligus serve enroll --new-device
     Enrollment needs no new event type, so older desktops also accept the
     enrolled box's events as yours. But only updated desktops keep honoring a
     revocation after the sync batch it arrived in.
+
+## Securing the box {#securing-the-box}
+
+- **Prefer the relay tunnel, or a tailnet address, over a LAN bind.** The
+  direct path is plain HTTP with one bearer token. On a tailnet (Tailscale,
+  Headscale) WireGuard encrypts it; on a LAN anyone on the network can read
+  the token as it passes. With the tunnel only, keep
+  `LIGUS_SERVE_LISTEN=127.0.0.1:8787`.
+- **`LIGUS_SERVE_ALLOW_ANY_BIND=1` turns the bind guard off.** The box then
+  listens on whatever you name, `0.0.0.0` or a public address included, and
+  anyone who can reach the port and learns the token can act as the box.
+  Set it only where something else decides who connects (a container's
+  private network namespace behind a NetworkPolicy, a firewall).
+- **Don't put `--pair` in the service.** `ligus serve --pair` prints the
+  pairing link, `serve.token` included on the direct path, and under systemd
+  that goes to journald and stays there. Run `ligus pair` from a terminal.
+- **Revoking a direct-path phone means rotating `serve.token`.** Every phone
+  on the direct path shares it, so all of them pair again; tunnel phones are
+  revoked one by one. See [Lost phone](../security/runbooks.md#lost-phone).
+- **File modes.** `ligus enroll` writes `config.toml` (the workspace key and
+  relay token) `0600` and keeps the data dir `0700`; key seeds are `0600` in
+  a `0700` key dir. The shipped unit also sets `UMask=0077`.
+- **Agents on the box don't see Ligus's secrets.** Agent CLIs, MCP servers,
+  pre-flight tests and git run without the workspace key, relay and tunnel
+  tokens, ntfy tokens or `LIGUS_WS_SECRET_*` in their environment. Model
+  provider keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, ...) do reach them.
+  They still run as the box's OS user and can read its data dir; see
+  [Known limitations](../security/threat-model.md#known-limitations).
 
 ## Host liveness
 

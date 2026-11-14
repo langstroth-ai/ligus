@@ -11,7 +11,11 @@ Ligus **refuses to push plaintext to a relay**. A workspace configured for sync
 but with no workspace key does not sync — the app surfaces a **Sync error**
 telling you to configure a key. The relay therefore only ever holds sealed
 (E2EE) bodies; there is no "encrypt later" mode that leaks cleartext in the
-meantime.
+meantime. The rule holds inbound too: a device that holds the workspace key
+never applies an unsealed body from the relay, so a relay can't inject
+events into an encrypted workspace. (Plaintext history a workspace left on a
+relay before it had a key therefore doesn't appear on devices that fetch it
+later.)
 
 ## The workspace key never transits the relay
 
@@ -79,6 +83,16 @@ an API model calling MCP tools:
 - **Secret redaction.** API keys, tokens, private keys and Ligus invite codes
   in an agent's reply are masked before the reply is written to the log, so
   they never reach other members or the relay.
+- **No repository code run by Ligus.** Ligus's own git calls (worktrees,
+  diffs, apply, the hygiene sweep) never run the repository's hooks or
+  fsmonitor, and while egress is restricted Claude Code loads no settings or
+  hooks from the repository, only your user settings.
+- **Ligus's secrets stay out of child processes.** Agent CLIs, MCP servers,
+  pre-flight tests and git start without the workspace key, relay and tunnel
+  tokens or `LIGUS_WS_SECRET_*` values in their environment. Model provider
+  keys pass through, since the runtimes need them.
+- **No remote images in chat.** Markdown images from remote URLs render as
+  links, so a reply can't send data to a server just by being displayed.
 
 On Kubernetes the same envelope becomes the turn executor's pod spec and
 NetworkPolicy.
@@ -95,10 +109,17 @@ ingest: a vote counts toward a human gate only when the voter it names is the
 person who signed it, and an approval carried inside a proposal snapshot never
 counts.
 
-Residual: in the default identity mode, events from a device with no
-certificate at all are still accepted (as before dearth mode); dearth mode
-withholds certificates, so it binds where certificates matter (owner-device
-enrollment, the `GithubSigningKeys` identity mode, impersonation checks).
+While dearth mode is on, every device holds, in every identity mode, the
+events of a device still waiting for its second approval and any event no
+certified device vouches for. Held events aren't dropped: sync waits on
+them and judges them again, so they apply once the device is approved. The
+protected-path gate
+reads the paths in the proposal's diff itself, not the list the author
+declared, and matches them case-insensitively; a human approval stops
+counting if the patch changes afterwards.
+
+Residual: outside dearth mode, the default identity mode still accepts events
+from a device with no certificate.
 
 ## Self-medication: a chat that shows infection locks itself down
 

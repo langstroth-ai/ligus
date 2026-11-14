@@ -209,7 +209,10 @@ or the other device's name and how long ago its last heartbeat arrived.
   goes up. If two devices both decide to take over at the same moment,
   every device agrees on one winner, and anything the other writes under
   the older epoch is ignored everywhere. The card shows *competing claims
-  fenced* when that happened. **Resume** refuses while another device's
+  fenced* when that happened. A claim can raise the epoch only by a bounded
+  step, so nobody can jump it to the maximum and freeze the run, and a
+  heartbeat stamped more than 2 minutes in the future is ignored rather than
+  keeping a dead driver's lease alive. **Resume** refuses while another device's
   heartbeat is still arriving.
 - A heartbeat is signed with the driving device's key, so another member
   can't keep a dead device's lease alive and block recovery. In a

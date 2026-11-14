@@ -95,9 +95,9 @@ gate who may connect with tokens. Guide:
 ## 4. Kubernetes for one organisation
 
 !!! warning "Preview"
-    The Helm charts are on review branches and not published. Once merged,
-    they live under `deploy/helm` in this repository and in the relay
-    repository. Expect changes. See [Kubernetes (preview)](kubernetes.md).
+    The Helm charts live under `deploy/helm` in this repository and in the
+    relay repository (v0.2.0), but aren't published to a chart registry yet.
+    Expect changes. See [Kubernetes (preview)](kubernetes.md).
 
 ```mermaid
 flowchart TB

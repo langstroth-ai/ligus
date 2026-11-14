@@ -22,8 +22,10 @@ While it is on:
   member on any device.
 - **New devices need a second approval.** A device a member certifies for
   themselves (say a new `ligus serve` box) only counts once an Admin of
-  another account approves it. Devices already trusted when dearth mode began
-  are unaffected.
+  another account approves it. Until then every device holds its events, in
+  every identity mode, along with any event no certified device vouches for;
+  held events apply once the device is approved. Devices already trusted when
+  dearth mode began are unaffected.
 - **Agents reach only allow-listed MCP servers.** Everything else is closed:
   no web fetch or search, no shell, no MCP server outside the list. Runtimes
   Ligus can't confine from outside (aider, pi, Hermes, Antigravity, Copilot)
@@ -31,7 +33,10 @@ While it is on:
   [the sandbox envelope](../concepts/security.md#the-sandbox-envelope-around-every-agent-turn).
 - **Protected (brood) paths need a human.** A proposal that changes a
   protected path applies only after a human member approves it themself, even
-  if its quorum is met. That includes an alternative in a proposal set: its
+  if its quorum is met. The gate reads the paths in the diff itself, not the
+  file list the proposal declares, and matches case-insensitively (on macOS
+  and Windows `.GitHub/` is `.github/`). If the patch changes after the
+  approval, the approval no longer counts. That includes an alternative in a proposal set: its
   pre-flight and apply wait for the approval, and a low-bar path zone can't
   lower its review bar. The default list covers CI and deployment config
   (`.github/**`, `.gitlab-ci.yml`, `.circleci/**`, `Jenkinsfile`, `deploy/**`,
