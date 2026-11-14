@@ -76,8 +76,10 @@ Ligus answers from your permission tier for CLI agents (Settings, Agents):
 | anything else | **asks a person** | **asks a person** | **asks a person** | **asks a person** |
 
 - "Asks a person" posts the request in the chat as a question (the same one
-  `ligus_ask_human` uses). Anyone in the chat can answer from the desktop or
-  the phone. The turn waits, and its idle timer is paused while it waits.
+  `ligus_ask_human` uses). Because allowing it lets the agent act on this
+  host, only **the host's own person or the agent's owner** can grant it,
+  from the desktop or the phone. If anyone else answers first, the request
+  is denied. The turn waits, and its idle timer is paused while it waits.
   With no answer within 10 minutes (`LIGUS_ACP_ASK_TIMEOUT_SECS`), the
   request is denied.
 - When the message's author is below this host's tool floor (H1), edits and
@@ -87,7 +89,9 @@ Ligus answers from your permission tier for CLI agents (Settings, Agents):
 
 The agent's `fs/write_text_file` requests are written by Ligus only inside
 the turn's worktree, never into `.git`, the protected dirs,
-`ligus.config.toml` or `.envrc`, and only when the tier allows edits.
+`ligus.config.toml` or `.envrc` (matched by name at any depth and ignoring
+case), never through a symbolic link, and only when the tier allows edits.
+`fs/read_text_file` serves regular files of at most 16 MiB.
 
 ## The CLI's own config {#cli-home}
 
@@ -103,7 +107,8 @@ outlives the turn, or runs the next time you start the CLI yourself. Your
 real config directories aren't writable from the sandbox. If the CLI
 refreshes its sign-in token during the turn, Ligus copies the refreshed
 credential file back afterwards. It does that only for the CLI's credential
-files, and only when the result is valid JSON.
+files, only when the result is valid JSON, and never through a symbolic or
+hard link the agent left in its turn home.
 
 On macOS the login keychain stays reachable, so subscription sign-ins keep
 working. If a CLI misbehaves with a per-turn home, `LIGUS_CLI_HOME=shared`

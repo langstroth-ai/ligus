@@ -40,8 +40,11 @@ pane header to close the rail entirely.
   Each card shows what the proposal is and where it came from, as badges:
   its **kind** (file change, command, decision, workflow), its **author**
   (a person, or an agent with "agent-signed" when its own key signed it, or
-  "host-signed (legacy)" when its host signed for it), **Config impact**
-  when it touches configuration, CI, hooks, protected dirs or MCP config,
+  "host-signed (legacy)" when its host signed for it; an author who isn't a
+  member, such as the chat's primary runtime, always shows as an agent),
+  **Config impact** when it touches configuration, CI, hooks, protected dirs
+  or MCP config (paths match ignoring case, and a command that runs inline
+  interpreter code such as `sh -c` is always flagged),
   **Human gate**, **Presence required**, and **No exact command** for a
   command filed without an argv. **Implement…** first shows exactly what
   will run: the argv of a command (run as-is in the chat's worktree,
