@@ -104,6 +104,7 @@ pub struct SyncEngine {
     /// default) trusts the roster's account keys as-is — **current behavior**.
     /// `GithubSigningKeys` (Option C) additionally requires each account key to
     /// be verified against GitHub `ssh_signing_keys` before its events project.
+    #[cfg(test)]
     identity_mode: IdentityMode,
     /// GitHub-identity verdict cache (Option C). Populated out-of-band by an async
     /// task that hits GitHub; read synchronously on ingest. Unused in `Relay` mode.
@@ -128,6 +129,7 @@ enum Decoded {
 impl SyncEngine {
     pub fn new(relay: RelayClient, workspace: impl Into<String>) -> Self {
         let workspace = workspace.into();
+        crate::identity_verifier::warn_if_identity_mode_set();
         let scope = HashSet::from([hive_core::room_workspace_id(&workspace)]);
         Self {
             relay,
@@ -145,9 +147,18 @@ impl SyncEngine {
             loaded: false,
             pending: Vec::new(),
             keyring: BTreeMap::new(),
-            identity_mode: IdentityMode::from_env(),
+            #[cfg(test)]
+            identity_mode: IdentityMode::Relay,
             identity_cache: shared_cache(),
         }
+    }
+
+    /// The ingest identity mode: always `Relay` outside tests (P0.8).
+    fn identity_mode(&self) -> IdentityMode {
+        #[cfg(test)]
+        return self.identity_mode;
+        #[cfg(not(test))]
+        IdentityMode::Relay
     }
 
     /// Scope this room to `workspace_id` instead of the id derived from the room
@@ -177,8 +188,9 @@ impl SyncEngine {
         e
     }
 
-    /// Override the identity-verification mode (default: [`IdentityMode::from_env`]).
-    /// Mainly for tests and explicit opt-in wiring.
+    /// Override the identity-verification mode (tests only; production is
+    /// always [`IdentityMode::Relay`], P0.8).
+    #[cfg(test)]
     pub fn with_identity_mode(mut self, mode: IdentityMode) -> Self {
         self.identity_mode = mode;
         self
@@ -600,7 +612,7 @@ impl SyncEngine {
                 .and_then(|s| s.actor.account_id)
                 .or_else(|| env.signer_device_id.and_then(|d| roster.account_of(d)));
             let account_key = signer_account.and_then(|a| roster.account_signing_key(a));
-            match gate_ingest(self.identity_mode, base, signer_account, account_key, &identity) {
+            match gate_ingest(self.identity_mode(), base, signer_account, account_key, &identity) {
                 IngestAction::Quarantine(reason) => {
                     tracing::warn!(?reason, event_id = %env.event_id, "quarantined a fetched event");
                     let _ = store.record_signal(env.workspace_id, None, &sync_decision(roster, env, false, &format!("{reason:?}")));

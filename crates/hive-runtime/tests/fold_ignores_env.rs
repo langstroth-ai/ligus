@@ -1,0 +1,204 @@
+//! P0.8: nothing that decides which events fold, or how, reads the
+//! environment. Every `compat` environment read in hive-core and hive-runtime
+//! is listed below and reviewed by hand; the test fails when a new one
+//! appears, and checks that setting every listed variable to a non-default
+//! value leaves the fold, the trust roster and ingest unchanged.
+//!
+//! Runs in its own test binary because it sets process environment variables.
+
+use std::path::Path;
+
+use hive_core::crypto::{DeviceCertificate, SigningKeypair};
+use hive_core::{
+    project_authorized, project_config, sign_envelope, workspace_config_session_id, ActionProposal, ActorIdentity,
+    ActorKind, ActorStamp, ChatSession, ProposalApproval, ProposalKind, SessionEvent, SessionEventEnvelope, Timestamp,
+    WorkspaceAuthz, WorkspaceMember, WorkspaceRole,
+};
+use hive_runtime::envelope_verifier::{roster_with_batch, verdict_for};
+use hive_runtime::event_store::EventStore;
+use hive_runtime::relay_client::RelayClient;
+use hive_runtime::sync_engine::SyncEngine;
+use uuid::Uuid;
+
+/// Every environment read (call argument as written) in hive-core and
+/// hive-runtime, with the variable it reads and why it can't affect a fold.
+const FOLD_ENV_DENYLIST: &[(&str, &str, &str)] = &[
+    ("\"LIGUS_IDENTITY_MODE\"", "LIGUS_IDENTITY_MODE", "ignored since P0.8; only logs a warning"),
+    ("\"LIGUS_OLLAMA_WIRE\"", "LIGUS_OLLAMA_WIRE", "provider wire format for a turn"),
+    ("\"LIGUS_LIVE_MODEL\"", "LIGUS_LIVE_MODEL", "live provider tests"),
+    ("\"LIGUS_LIVE_CLI\"", "LIGUS_LIVE_CLI", "live provider tests"),
+    ("\"LIGUS_AGENT_TIMEOUT_SECS\"", "LIGUS_AGENT_TIMEOUT_SECS", "subprocess turn timeout"),
+    ("\"LIGUS_PATCH_LEAVING_CALLS\"", "LIGUS_PATCH_LEAVING_CALLS", "agent tool-loop stall limit"),
+    ("IDLE_TIMEOUT_ENV", "LIGUS_TURN_IDLE_TIMEOUT_SECS", "provider stream idle timeout"),
+    ("PREFLIGHT_TEST_ENV", "LIGUS_PREFLIGHT_TEST", "pre-flight test command (a side effect, recorded as an event)"),
+    ("&WorkspaceCredential::env_var(secret_ref)", "LIGUS_CRED_FOLD_ENV", "a runtime credential for a turn"),
+];
+
+fn rs_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let p = entry.unwrap().path();
+        if p.is_dir() {
+            rs_files(&p, out);
+        } else if p.extension().is_some_and(|e| e == "rs") {
+            out.push(p);
+        }
+    }
+}
+
+/// The argument text of every `compat::{var,var_os,env_opt,is_set}(…)` call.
+fn env_reads() -> Vec<(String, String)> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let mut files = Vec::new();
+    rs_files(&root.join("hive-core/src"), &mut files);
+    rs_files(&root.join("hive-runtime/src"), &mut files);
+    let mut out = Vec::new();
+    for f in files {
+        if f.ends_with("compat.rs") {
+            continue; // the accessors themselves
+        }
+        let src = std::fs::read_to_string(&f).unwrap();
+        for call in ["compat::var(", "compat::var_os(", "compat::env_opt(", "compat::is_set("] {
+            for (i, _) in src.match_indices(call) {
+                let rest = &src[i + call.len()..];
+                // Up to the matching close paren.
+                let mut depth = 1;
+                let mut end = 0;
+                for (j, c) in rest.char_indices() {
+                    match c {
+                        '(' => depth += 1,
+                        ')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                end = j;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                out.push((f.display().to_string(), rest[..end].trim().to_string()));
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn every_env_read_is_reviewed() {
+    let reads = env_reads();
+    assert!(reads.len() >= 5, "the scanner found the known reads");
+    for (file, arg) in reads {
+        assert!(
+            FOLD_ENV_DENYLIST.iter().any(|(a, _, _)| *a == arg),
+            "{file} reads the environment ({arg}); review it and list it in FOLD_ENV_DENYLIST"
+        );
+    }
+}
+
+fn member(id: &str, role: WorkspaceRole, account: Uuid) -> WorkspaceMember {
+    let mut actor = ActorIdentity::new(id, id, ActorKind::Human);
+    actor.account_id = Some(account);
+    WorkspaceMember { id: id.into(), actor, role, title: String::new(), index: 0, joined_at: Timestamp::epoch() }
+}
+
+/// A small signed workspace: config log with the owner and a Contributor,
+/// a chat with a proposal and votes, trust events, and one forged vote.
+fn fixture() -> (Vec<SessionEventEnvelope>, Vec<SessionEventEnvelope>) {
+    let ws = Uuid::from_u128(1);
+    let owner_acct = SigningKeypair::from_seed(&[1; 32]).unwrap();
+    let owner_dev = SigningKeypair::from_seed(&[2; 32]).unwrap();
+    let (owner_id, dev_id) = (Uuid::from_u128(10), Uuid::from_u128(11));
+    let owner = owner_id.to_string();
+    let stamp = |f: Option<hive_core::CfgFrontier>| {
+        let mut a = ActorIdentity::new(owner.clone(), "o", ActorKind::Human);
+        a.account_id = Some(owner_id);
+        Some(ActorStamp { actor: a, recorded_at: Timestamp::epoch(), cfg_frontier: f })
+    };
+    let mut lamport = 0u64;
+    let mut make = |sid: Uuid, payload: SessionEvent, f: Option<hive_core::CfgFrontier>| {
+        lamport += 1;
+        let mut e = SessionEventEnvelope::new(sid, ws, lamport as i64, payload);
+        e.event_id = Uuid::from_u128(1000 + lamport as u128);
+        e.id = Uuid::from_u128(2000 + lamport as u128);
+        e.lamport = lamport;
+        e.timestamp = Timestamp::epoch();
+        e.actor_stamp = stamp(f);
+        sign_envelope(&mut e, dev_id, &owner_dev);
+        e
+    };
+    let cfg_id = workspace_config_session_id(ws);
+    let mut seed = ChatSession::new("", ws, "");
+    seed.id = cfg_id;
+    seed.creator_actor_id = owner.clone();
+    seed.members = vec![member(&owner, WorkspaceRole::Owner, owner_id)];
+    seed.created_at = Timestamp::epoch();
+    let mut cfg = vec![make(cfg_id, SessionEvent::SessionSnapshot { session: Box::new(seed) }, None)];
+    cfg.push(make(cfg_id, SessionEvent::AccountKeyRegistered { account_id: owner_id, signing_public_key: owner_acct.public_key_bytes().to_vec() }, None));
+    let cert = DeviceCertificate::issue(&owner_acct, owner_id, dev_id, &owner_dev.public_key_bytes(), Timestamp::epoch());
+    cfg.push(make(cfg_id, SessionEvent::DeviceCertificateAdded { certificate: cert }, None));
+    cfg.push(make(cfg_id, SessionEvent::MemberAdded { member: member("mara", WorkspaceRole::Contributor, Uuid::from_u128(12)) }, None));
+    let head = Some(hive_core::CfgFrontier { lamport: cfg.last().unwrap().lamport, event_id: cfg.last().unwrap().event_id });
+
+    let sid = Uuid::from_u128(20);
+    let mut chat = ChatSession::new("c", ws, "anthropic");
+    chat.id = sid;
+    chat.creator_actor_id = owner.clone();
+    chat.members = vec![member(&owner, WorkspaceRole::Owner, owner_id)];
+    chat.created_at = Timestamp::epoch();
+    let mut p = ActionProposal::new("p", ProposalKind::Decision, "mara");
+    p.id = Uuid::from_u128(30);
+    p.created_at = Timestamp::epoch();
+    let mut log = vec![make(sid, SessionEvent::SessionSnapshot { session: Box::new(chat) }, head)];
+    log.push(make(sid, SessionEvent::ProposalUpserted { proposal: p }, head));
+    let vote = |actor: &str| SessionEvent::ProposalVoteCast {
+        proposal_id: Uuid::from_u128(30),
+        approval: ProposalApproval { actor_id: actor.into(), role: WorkspaceRole::Owner, approved: true, created_at: Timestamp::epoch(), diff_digest: None },
+    };
+    log.push(make(sid, vote("mara"), head)); // names someone else: refused
+    log.push(make(sid, vote(&owner), head));
+    (cfg, log)
+}
+
+/// Everything ingest and the fold decide, as one comparable string.
+fn decide() -> String {
+    let (cfg, chat) = fixture();
+    let (cfg_state, timeline) = project_config(&cfg, None, None);
+    let chat_state = project_authorized(&chat, None, None, WorkspaceAuthz::Timeline(&timeline)).unwrap();
+    let all: Vec<&SessionEventEnvelope> = cfg.iter().chain(chat.iter()).collect();
+    let roster = roster_with_batch(Vec::new(), &all, None);
+    let verdicts: Vec<String> = all.iter().map(|e| format!("{:?}", verdict_for(&roster, e))).collect();
+
+    // The relay ingest path end to end.
+    let mut store = EventStore::open_in_memory().unwrap();
+    let mut eng = SyncEngine::new(RelayClient::new("http://127.0.0.1:9"), "room").with_room_workspace(Uuid::from_u128(1));
+    let batch: Vec<(u64, serde_json::Value)> =
+        all.iter().enumerate().map(|(i, e)| (i as u64 + 1, serde_json::to_value(e).unwrap())).collect();
+    let applied = eng.apply_fetched(&mut store, &batch).unwrap();
+    let stored = store.list(chat[0].session_id).unwrap().len();
+
+    format!(
+        "{:?}|{:?}|{:?}|{:?}|{:?}|{applied}|{stored}",
+        cfg_state.map(|c| (c.members, c.authz)),
+        chat_state.proposals,
+        chat_state.authz,
+        verdicts,
+        roster.certified_devices(),
+    )
+}
+
+#[test]
+fn fold_ignores_env() {
+    let clean = decide();
+    for (_, var, _) in FOLD_ENV_DENYLIST {
+        for value in ["github-signing-keys", "1", "0", "garbage"] {
+            std::env::set_var(var, value);
+            // The legacy spelling too (compat reads both).
+            std::env::set_var(var.replacen("LIGUS_", "HIVE_", 1), value);
+            assert_eq!(decide(), clean, "{var}={value} changed the fold");
+        }
+    }
+    for (_, var, _) in FOLD_ENV_DENYLIST {
+        std::env::set_var(var, "option-c");
+    }
+    assert_eq!(decide(), clean);
+}

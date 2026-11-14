@@ -170,6 +170,7 @@ pub struct PeerSync {
     workspaces: HashSet<Uuid>,
     /// Same identity policy as the relay path, so P2P isn't a weaker door: under
     /// Option C a not-yet-GitHub-verified event is held, not silently accepted.
+    #[cfg(test)]
     identity_mode: IdentityMode,
     identity_cache: IdentityCache,
 }
@@ -180,7 +181,8 @@ impl PeerSync {
         Self {
             seen: HashSet::new(),
             workspaces: workspaces.into_iter().collect(),
-            identity_mode: IdentityMode::from_env(),
+            #[cfg(test)]
+            identity_mode: IdentityMode::Relay,
             identity_cache: IdentityCache::new(),
         }
     }
@@ -191,7 +193,8 @@ impl PeerSync {
         self.workspaces = workspaces.into_iter().collect();
     }
 
-    /// Override the identity-verification mode (mirrors `SyncEngine`).
+    /// Override the identity-verification mode (tests only, mirrors `SyncEngine`).
+    #[cfg(test)]
     pub fn with_identity_mode(mut self, mode: IdentityMode) -> Self {
         self.identity_mode = mode;
         self
@@ -263,7 +266,13 @@ impl PeerSync {
             .or_else(|| env.signer_device_id.and_then(|d| roster.account_of(d)));
         let account_key = signer_account.and_then(|a| roster.account_signing_key(a));
         match gate_ingest(
-            self.identity_mode,
+            {
+                #[cfg(test)]
+                let mode = self.identity_mode;
+                #[cfg(not(test))]
+                let mode = IdentityMode::Relay;
+                mode
+            },
             base,
             signer_account,
             account_key,

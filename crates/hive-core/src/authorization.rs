@@ -116,13 +116,14 @@ pub fn requires_projection_authz(event: &SessionEvent) -> bool {
     ) || matches!(event, SessionEvent::FlowRecorded { record } if record.is_config())
 }
 
-/// Coordinator leases are deliberately **not** role-gated in projection: a run's
-/// lease rides its chat log, whose own roster holds only the chat's creator.
-/// They are gated by role at authoring and, in projection, bound to the signing
-/// device (`authz::lease_signer_ok`).
+// Coordinator leases are deliberately **not** role-gated in projection: a run's
+// lease rides its chat log, whose own roster holds only the chat's creator.
+// They are gated by role at authoring and, in projection, bound to the signing
+// device (`authz::lease_signer_ok`).
+
 /// Proposal-set events that are **re-authorized while a chat log is folded**,
-/// against the workspace roster hoisted from the config log (see
-/// [`HoistedRoster`]). They ride the chat's own log, whose roster holds only
+/// against the workspace roster on the config log at the event's frontier
+/// (see [`crate::authz`]). They ride the chat's own log, whose roster holds only
 /// the chat's creator, so the generic projection check
 /// ([`requires_projection_authz`]) can't judge them; without this a member
 /// below Contributor, or a keyholder who isn't a member at all, could sign a
