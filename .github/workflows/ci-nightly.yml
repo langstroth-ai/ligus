@@ -1,0 +1,99 @@
+name: ci-nightly
+
+# The slow, exhaustive half of ci.yml, once a day and on demand:
+#   proptest-deep   every test with PROPTEST_CASES=4096 (per-push CI runs
+#                   proptest's default 256), Linux only: the property suites
+#                   are pure logic.
+#   windows-full    the full Windows suite at default cases (PRs run a subset).
+#   release-build   the release profile (thin LTO, codegen-units=1) of the
+#                   desktop shell and CLI on all three OSes, so an optimiser or
+#                   linker break shows up before a tag, not during one.
+on:
+  schedule:
+    - cron: "17 4 * * *" # 04:17 UTC daily (off the top of the hour)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_RETRY: "10"
+  RUST_BACKTRACE: short
+  NEXTEST_VERSION: "0.9.151"
+
+jobs:
+  proptest-deep:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      PROPTEST_CASES: "4096"
+      LIGUS_REQUIRE_SANDBOX: "1"
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Install Linux Tauri system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libsoup-3.0-dev
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Same key as ci.yml's Linux job: restore its cache, never save.
+          key: ubuntu-24.04
+          save-if: false
+      - uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
+        with:
+          tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
+      - name: Tests (nextest, 4096 proptest cases)
+        run: cargo nextest run --locked --workspace --profile ci --slow-timeout 300s
+
+  windows-full:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: windows
+          save-if: false
+      - uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
+        with:
+          tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
+      - name: Tests (nextest, full)
+        run: cargo nextest run --locked --workspace --profile ci
+      - name: Doctests
+        run: cargo test --locked --workspace --doc
+
+  release-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Install Linux Tauri system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libsoup-3.0-dev
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Its own key: release-profile artifacts share nothing with debug.
+          key: release-${{ matrix.os }}
+      - name: Release build (desktop shell + CLI)
+        run: cargo build --locked --release -p Hive -p hive-cli

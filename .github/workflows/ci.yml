@@ -1,15 +1,33 @@
 name: ci
 
-# Cross-platform CI: builds + tests the Rust workspace and the web frontend.
-# Covers crates/, app/, and web/.
+# Per-push / per-PR gate for the Rust workspace (crates/, app/) and the web
+# frontend (web/). Docs-only changes (docs/, docs-site/, mkdocs.yml, root *.md)
+# match none of the paths below and skip this workflow entirely.
+#
+#   web      one Linux job: bun install, vitest, typecheck + vite build (was
+#            repeated on all three OSes).
+#   rust     Linux + macOS: ts-rs bindings check (Linux), nextest over the
+#            whole workspace, doctests, a debug build of every binary.
+#   windows  on PRs: build + every test except the pure-logic property suites
+#            (`*_props` binaries, covered on Linux/macOS), with in-module
+#            property tests at 16 cases. On pushes to main/release branches
+#            and manual runs: the full suite. ci-nightly.yml also runs it.
+#
+# Release-profile (thin LTO, codegen-units=1) builds moved to ci-nightly.yml:
+# they took 3-5 min per OS here and test nothing a debug build doesn't except
+# the optimiser and linker. release.yml / release-cli.yml still build them.
+#
+# Third-party actions are pinned by commit SHA (the comment is the tag).
 on:
   push:
-    branches: [main]
+    branches: [main, "release/**"]
     paths:
       - "crates/**"
       - "app/**"
       - "web/**"
       - "Cargo.toml"
+      - "Cargo.lock"
+      - ".config/nextest.toml"
       - ".github/workflows/ci.yml"
   pull_request:
     paths:
@@ -17,23 +35,66 @@ on:
       - "app/**"
       - "web/**"
       - "Cargo.toml"
+      - "Cargo.lock"
+      - ".config/nextest.toml"
       - ".github/workflows/ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Superseded PR pushes are cancelled; main/release runs always finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_RETRY: "10"
+  RUST_BACKTRACE: short
+  NEXTEST_VERSION: "0.9.151"
 
 jobs:
-  build:
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: latest
+      - name: Install web deps
+        run: bun install --frozen-lockfile
+      - name: Web tests (vitest)
+        run: bun run test
+      - name: Web typecheck + build
+        run: bun run build
+
+  rust:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: macos-latest
-          - os: windows-latest
-          - os: ubuntu-latest
+        # ubuntu-24.04, not ubuntu-latest: -latest moves to 26.04 this month,
+        # which ships an AppArmor profile for bwrap and would silently change
+        # the sandbox tier under test.
+        os: [ubuntu-24.04, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      # The ubuntu-24.04 image (20261101: kernel 7.0.0-azure, Landlock in the
+      # LSM list, AppArmor userns restriction on, no bwrap installed) gets the
+      # landlock tier; macOS has sandbox-exec. Either way the sandbox tests
+      # must run, not print SKIPPED. Windows has no agent sandbox.
+      LIGUS_REQUIRE_SANDBOX: "1"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install Linux Tauri system deps
-        if: matrix.os == 'ubuntu-latest'
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -43,38 +104,73 @@ jobs:
             patchelf \
             libsoup-3.0-dev
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Sandbox facts
+        if: runner.os == 'Linux'
+        run: |
+          uname -r
+          cat /sys/kernel/security/lsm || true
+          sysctl kernel.apparmor_restrict_unprivileged_userns || true
+          command -v bwrap || echo "no bwrap: expecting the landlock tier"
 
-      - uses: Swatinem/rust-cache@v2
-
-      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          bun-version: latest
-
-      - name: Install web deps
-        working-directory: web
-        run: bun install --frozen-lockfile
+          key: ${{ matrix.os }}
+          # Only main/release save (PR caches are invisible to other PRs and
+          # just evict the shared ones); PRs restore the main cache.
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/') }}
+      - uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
+        with:
+          tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
 
       - name: Check ts-rs bindings are in sync
-        shell: bash
+        if: runner.os == 'Linux'
         run: |
-          cargo test -p hive-proto export_bindings
+          cargo test --locked -p hive-proto export_bindings
           if ! git diff --quiet -- web/src/bindings; then
             echo "::error::ts-rs bindings are stale — run 'cargo test -p hive-proto export_bindings' and commit web/src/bindings/"
             git diff -- web/src/bindings
             exit 1
           fi
 
-      - name: Cargo test (workspace)
-        run: cargo test --workspace
+      - name: Tests (nextest)
+        run: cargo nextest run --locked --workspace --profile ci
 
-      - name: Web tests (vitest)
-        working-directory: web
-        run: bun run test
+      # nextest doesn't run doctests.
+      - name: Doctests
+        run: cargo test --locked --workspace --doc
 
-      - name: Web typecheck + build
-        working-directory: web
-        run: bun run build
+      # Debug build of the desktop shell and the CLI. Reuses the test build's
+      # dependency artifacts, so it costs a link, not a rebuild.
+      - name: Build binaries
+        run: cargo build --locked --workspace --bins
 
-      - name: Tauri build
-        run: cargo build -p Hive --release
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: windows
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/') }}
+      - uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
+        with:
+          tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
+
+      - name: Tests (nextest, full)
+        if: github.event_name != 'pull_request'
+        run: cargo nextest run --locked --workspace --profile ci
+
+      - name: Tests (nextest, PR subset)
+        if: github.event_name == 'pull_request'
+        env:
+          PROPTEST_CASES: "16"
+        run: cargo nextest run --locked --workspace --profile ci -E "not binary(/_props$/)"
+
+      - name: Doctests
+        run: cargo test --locked --workspace --doc
+
+      - name: Build binaries
+        run: cargo build --locked --workspace --bins
