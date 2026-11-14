@@ -48,7 +48,9 @@ import { LockdownBar } from "@/components/guards/LockdownBar";
 import { GrowthSuggestions } from "@/components/guards/GrowthSuggestions";
 import { PendingInvitesBanner } from "@/components/PendingInvitesBanner";
 import { DialogHost, promptDialog } from "@/components/Dialog";
-import { IconPencil, IconHexagon } from "@/lib/icons";
+import { IconPencil, IconHexagon, IconAlertTriangle } from "@/lib/icons";
+import { StatusDot } from "@/components/ui";
+import { CanvasLoading, EmptyCanvas } from "@/components/EmptyCanvas";
 import { CommandPalette } from "@/components/CommandPalette";
 import { WorkspaceRail } from "@/components/WorkspaceRail";
 import { FriendsView } from "@/components/FriendsView";
@@ -654,6 +656,19 @@ export function App() {
     },
     [activeWorkspaceId],
   );
+  async function startNewChat() {
+    try {
+      const created = await createChat("");
+      await qc.invalidateQueries({ queryKey: ["chats"] });
+      rememberChat(created.id);
+      setSelectedId(created.id);
+      setView("workspace");
+      setMode("chat");
+    } catch (e) {
+      toast.error(`Couldn't create chat: ${errMsg(e)}`);
+    }
+  }
+
   stepChatRef.current = (dir) => {
     // Follow what the sidebar shows (channels, filters, sort); fall back to
     // recency when the sidebar is hidden.
@@ -943,17 +958,7 @@ export function App() {
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         actions={{
-          newChat: async () => {
-            try {
-              const created = await createChat("");
-              await qc.invalidateQueries({ queryKey: ["chats"] });
-              rememberChat(created.id);
-              setSelectedId(created.id);
-              setView("workspace");
-            } catch (e) {
-              toast.error(`Couldn't create chat: ${errMsg(e)}`);
-            }
-          },
+          newChat: startNewChat,
           openSettings: () => openSettings(),
           selectChat: (id) => {
             rememberChat(id);
@@ -1098,9 +1103,7 @@ export function App() {
                   ) : mode === "diff" ? (
                     <Suspense
                       fallback={
-                        <div className="flex h-full items-center justify-center opacity-50">
-                          Loading diff editor…
-                        </div>
+                        <CanvasLoading label="Loading the diff view" />
                       }
                     >
                       <DiffView
@@ -1111,9 +1114,7 @@ export function App() {
                   ) : mode === "code" ? (
                     <Suspense
                       fallback={
-                        <div className="flex h-full items-center justify-center opacity-50">
-                          Loading code editor…
-                        </div>
+                        <CanvasLoading label="Loading the code editor" />
                       }
                     >
                       <CodeView
@@ -1122,9 +1123,11 @@ export function App() {
                       />
                     </Suspense>
                   ) : (
-                    <div className="flex h-full items-center justify-center opacity-60">
-                      Select or create a chat to begin.
-                    </div>
+                    <EmptyCanvas
+                      workspaceName={workspaceLabel}
+                      onNewChat={() => void startNewChat()}
+                      onOpenPalette={() => setPaletteOpen(true)}
+                    />
                   )}
                 </PaneErrorBoundary>
               </div>
@@ -1199,9 +1202,7 @@ export function App() {
                 {mode === "diff" && !!workspaceFolder && (
                   <Suspense
                     fallback={
-                      <div className="flex h-full items-center justify-center opacity-50">
-                        Loading diff editor…
-                      </div>
+                      <CanvasLoading label="Loading the diff view" />
                     }
                   >
                     <DiffView
@@ -1213,9 +1214,7 @@ export function App() {
                 {mode === "code" && !!workspaceFolder && (
                   <Suspense
                     fallback={
-                      <div className="flex h-full items-center justify-center opacity-50">
-                        Loading code editor…
-                      </div>
+                      <CanvasLoading label="Loading the code editor" />
                     }
                   >
                     <CodeView
@@ -1301,21 +1300,21 @@ function PaneResizeHandle({
 /// The header status pill, driven by real connection health (not just "a relay
 /// URL is set"): live → success tint, error → danger tint (with the failure in
 /// the tooltip), offline → a muted neutral state. All color via --hive-* tokens.
-type SyncPill = { label: string; color: string | null; title?: string; actionable?: boolean };
+type SyncPill = { label: string; color: "success" | "danger" | "warn" | null; title?: string; actionable?: boolean };
 
 function deriveSyncPill(s: SyncStatusDto | undefined): SyncPill {
   const state = s?.connectionState ?? "offline";
   if (state === "live") {
     return {
       label: `Live · room ${s?.room ?? ""}`,
-      color: "var(--hive-success-ink)",
+      color: "success",
       title: "Live — syncing with your team",
     };
   }
   if (state === "error") {
     return {
       label: "Sync error",
-      color: "var(--hive-danger-ink)",
+      color: "danger",
       title: s?.lastError ?? "Sync failed — reconnect or check your key / token",
       actionable: true,
     };
@@ -1325,7 +1324,7 @@ function deriveSyncPill(s: SyncStatusDto | undefined): SyncPill {
   if (state === "needs_key") {
     return {
       label: "Set a passphrase to sync",
-      color: "var(--hive-warn-ink)",
+      color: "warn",
       title:
         s?.lastError ??
         "A relay is configured but this workspace has no encryption key — set a workspace passphrase in Settings → Team to sync encrypted, or clear the relay URL to work local-only.",
@@ -1348,27 +1347,36 @@ function deriveSyncPill(s: SyncStatusDto | undefined): SyncPill {
 function SyncPillChip({ pill, onFix }: { pill: SyncPill; onFix?: () => void }) {
   if (!pill.color) {
     return (
-      <span className="ml-1 hidden shrink-0 text-xs opacity-40 sm:inline" title={pill.title}>
+      <span className="ml-1 hidden shrink-0 items-center gap-1.5 text-xs text-ink-soft sm:inline-flex" title={pill.title}>
+        <StatusDot on={false} size={7} label={pill.label} />
         {pill.label}
       </span>
     );
   }
   const chipStyle: CSSProperties = {
-    color: pill.color,
-    borderColor: `color-mix(in srgb, ${pill.color} 40%, transparent)`,
-    background: `color-mix(in srgb, ${pill.color} 12%, transparent)`,
+    color: `var(--hive-${pill.color}-ink)`,
+    borderColor: `var(--hive-${pill.color}-line)`,
+    background: `var(--hive-${pill.color}-tint)`,
   };
+  const icon =
+    pill.color === "success" ? (
+      <span aria-hidden className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--hive-success)" }} />
+    ) : (
+      <IconAlertTriangle size={11} />
+    );
   const className =
-    "ml-1 hidden shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium sm:inline-flex";
+    "ml-1 hidden shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium sm:inline-flex";
   if (pill.actionable && onFix) {
     return (
-      <button type="button" className={`${className} hover:brightness-110`} style={chipStyle} title={pill.title} onClick={onFix}>
+      <button type="button" className={`${className} hover:brightness-105`} style={chipStyle} title={pill.title} onClick={onFix}>
+        {icon}
         {pill.label}
       </button>
     );
   }
   return (
     <span className={className} style={chipStyle} title={pill.title}>
+      {icon}
       {pill.label}
     </span>
   );
@@ -1404,12 +1412,11 @@ function CanvasModeTabs({
           role="tab"
           aria-selected={mode === t.id}
           onClick={() => onChangeMode(t.id)}
-          className="rounded-[10px] px-3 py-1 text-sm font-medium transition-colors"
+          className="rounded-lg px-3 py-1 text-sm font-medium transition-colors hover:text-ink"
           style={{
             background: mode === t.id ? "var(--hive-panel)" : "transparent",
-            color: "var(--hive-ink)",
-            opacity: mode === t.id ? 1 : 0.55,
-            boxShadow: mode === t.id ? "0 1px 2px color-mix(in srgb, var(--hive-ink) 12%, transparent)" : undefined,
+            color: mode === t.id ? "var(--hive-ink)" : "var(--hive-ink-soft)",
+            boxShadow: mode === t.id ? "var(--hive-shadow-1)" : undefined,
           }}
         >
           {t.label}
@@ -1466,7 +1473,7 @@ function ChatHeaderBar({
         )}
         <h1 className="truncate text-base font-semibold tracking-tight">{title}</h1>
         <button
-          className="shrink-0 rounded-md p-1 opacity-40 transition-opacity hover:opacity-100"
+          className="shrink-0 rounded-md p-1 text-ink-faint transition-colors hover:bg-[color:var(--hive-hover)] hover:text-ink"
           title="Rename chat"
           aria-label="Rename chat"
           onClick={onRename}
