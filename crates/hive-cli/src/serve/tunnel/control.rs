@@ -47,7 +47,7 @@ pub async fn dial(url: &str) -> Result<Ws> {
     req.headers_mut().insert("sec-websocket-protocol", HeaderValue::from_static(SUBPROTOCOL));
     let limit = Some(super::noise::MAX_MSG);
     let config = WebSocketConfig::default().max_message_size(limit).max_frame_size(limit);
-    let (ws, resp) = tokio::time::timeout(HANDSHAKE, tokio_tungstenite::connect_async_with_config(req, Some(config), false))
+    let (ws, resp) = tokio::time::timeout(HANDSHAKE, tokio_tungstenite::connect_async_tls_with_config(req, Some(config), false, Some(tls_connector())))
         .await
         .map_err(|_| anyhow!("connecting to {url} timed out"))?
         .map_err(|e| match e {
@@ -59,6 +59,14 @@ pub async fn dial(url: &str) -> Result<Ws> {
         bail!("relay did not select the {SUBPROTOCOL} subprotocol");
     }
     Ok(ws)
+}
+
+/// The TLS connector for `wss://` relay URLs: the same roots as Ligus's HTTP
+/// clients (the OS trust store, or the bundled Mozilla roots when the OS has
+/// none), so a relay reachable for sync is reachable for remote access too,
+/// including behind a TLS-inspecting proxy whose root the OS trusts.
+fn tls_connector() -> tokio_tungstenite::Connector {
+    tokio_tungstenite::Connector::Rustls(Arc::new(hive_forge::tls_client_config()))
 }
 
 /// ±20 % jitter.
@@ -291,3 +299,19 @@ fn handle(host: &Arc<TunnelHost>, router: &Router, v: &Value, stop: watch::Recei
 fn reject(host: &TunnelHost, sid: &str) {
     host.send_plain(json!({ "t": "reject", "sid": sid, "code": "host_rejected" }));
 }
+
+#[cfg(test)]
+mod tls_tests {
+    /// The tunnel's WebSockets trust what relay HTTP trusts (it used to be
+    /// the bundled Mozilla roots only, so sync worked behind a
+    /// TLS-inspecting proxy and remote access did not).
+    #[test]
+    fn tunnel_tls_uses_the_http_root_policy() {
+        let tokio_tungstenite::Connector::Rustls(cfg) = super::tls_connector() else { panic!("not rustls") };
+        assert_eq!(format!("{:?}", cfg.as_ref()), format!("{:?}", hive_forge::tls_client_config()));
+        if hive_forge::uses_platform_roots() {
+            assert!(format!("{cfg:?}").contains("verifier: Verifier"));
+        }
+    }
+}
+

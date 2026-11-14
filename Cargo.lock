@@ -2551,6 +2551,7 @@ dependencies = [
  "libc",
  "reqwest",
  "rustls",
+ "rustls-platform-verifier",
  "serde",
  "serde_json",
  "tempfile",

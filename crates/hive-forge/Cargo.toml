@@ -21,6 +21,10 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 # Fallback roots when the OS has no CA store (already in the tree via iroh-relay
 # and tokio-tungstenite).
 webpki-roots = "1"
+# The OS trust store verifier reqwest uses, built directly for TLS outside
+# reqwest (the relay tunnel) so both trust the same roots. Already in the
+# tree via reqwest.
+rustls-platform-verifier = "0.7"
 url = "2"
 zeroize = "1"
 toml = "1.2"
