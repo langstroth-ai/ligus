@@ -68,6 +68,8 @@ mod dearth_roster_tests;
 mod ligus_auth_membership_tests;
 #[cfg(test)]
 mod keyring_tests;
+#[cfg(test)]
+mod presence_tests;
 
 pub use builtin_tools::{BuiltinTools, Policy as BuiltinToolPolicy};
 pub use chat_service::{

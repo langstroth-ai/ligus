@@ -44,6 +44,7 @@ pub mod notify;
 pub mod ntfy;
 pub mod pair;
 pub mod people;
+pub mod presence_api;
 pub mod proposal_file;
 pub mod repos_api;
 pub mod sets;
@@ -337,6 +338,8 @@ pub struct Shared {
     pub dashboard_mcp: std::result::Result<hive_runtime::McpRegistry, String>,
     /// Repos from the phone: the GitHub backend, clone jobs, checkout locks.
     pub repos: repos_api::RepoState,
+    /// Events waiting for a phone's passkey (B3 `presence/prepare`).
+    pub presence_drafts: presence_api::Pending,
 }
 
 /// How long a dashboard snapshot of the workspace is reused.
@@ -933,6 +936,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         presence: hive_runtime::HostPresence::new(),
         sync_status: Mutex::new((first_sync, None)),
         busy: Mutex::new(HashSet::new()),
+        presence_drafts: presence_api::Pending::default(),
         hive_snapshot: Mutex::new(None),
         dashboard_mcp: dashboard_mcp_registry(),
         repos: repos_api::RepoState::default(),

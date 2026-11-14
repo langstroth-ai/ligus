@@ -87,6 +87,9 @@ pub struct RosterState {
     /// Each device's own published X25519 key-agreement key (B1): the only
     /// keys a rotation seals to.
     pub ka_keys: BTreeMap<Uuid, Vec<u8>>,
+    /// Each account's registered passkeys and recovery keys, by credential
+    /// id (B3).
+    pub passkeys: BTreeMap<Uuid, BTreeMap<String, crate::presence::PasskeyKey>>,
 }
 
 impl RosterState {
@@ -258,6 +261,21 @@ impl RosterTracker {
             }
             SessionEvent::DeviceKeyAgreementPublished { device_id, ka_public } if allowed => {
                 self.state.ka_keys.insert(*device_id, ka_public.clone());
+            }
+            SessionEvent::PasskeyRegistered { credential } if allowed => {
+                self.state
+                    .passkeys
+                    .entry(credential.account_id)
+                    .or_default()
+                    .insert(credential.credential_id.clone(), crate::presence::PasskeyKey::from(credential));
+            }
+            SessionEvent::PasskeyRemoved { account_id, credential_id } if allowed => {
+                if let Some(m) = self.state.passkeys.get_mut(account_id) {
+                    m.remove(credential_id);
+                    if m.is_empty() {
+                        self.state.passkeys.remove(account_id);
+                    }
+                }
             }
             e if allowed && touches_roster(e) => self.refresh(fold),
             _ => {}

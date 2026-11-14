@@ -32,6 +32,7 @@ mod lockdown_tests;
 mod sec_tests;
 pub mod model_profile;
 pub mod policy;
+pub mod presence;
 pub mod process_util;
 pub mod proposal_sets;
 pub mod proposals;

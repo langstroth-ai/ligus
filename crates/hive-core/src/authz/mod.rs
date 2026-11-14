@@ -35,6 +35,8 @@ pub mod agent;
 pub mod bounds;
 pub mod timeline;
 pub mod votes;
+pub mod passkeys;
+pub mod rules;
 
 use std::collections::BTreeMap;
 
@@ -48,14 +50,17 @@ use crate::events::{SessionEvent, SessionEventEnvelope};
 use crate::identity::{ActorKind, CfgFrontier, WorkspaceRole};
 use crate::session::ChatSession;
 
-/// The workspace rules version: 1 = the 2.0 base rules. Track B's human
-/// presence is version 2; this build does not enforce it yet, so it treats 2
-/// as unknown (read-only) rather than claim rules it would not apply.
+/// The workspace rules version: 1 = the 2.0 base rules; 2 = human presence
+/// (passkeys, Track B) and the Agent tier for host-signed agent output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RulesVersion(pub u32);
 
 /// The highest rules version this build enforces.
-pub const RULES_SUPPORTED: u32 = 1;
+pub const RULES_SUPPORTED: u32 = 2;
+
+/// The refusal of an event that needs its author's passkey presence (B3).
+/// Authoring paths match on it to ask for a passkey confirmation.
+pub const PRESENCE_REQUIRED: &str = "this needs a passkey confirmation from its author";
 
 /// Why an event was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -289,6 +294,25 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             return authorize_agent(env, ctx, roster);
         }
     }
+    // Rules v2 (A3 transition): a host-signed chat event that speaks for an
+    // agent (its reply, its streaming, a proposal it produced) is judged with
+    // the Agent tier, whether or not the host could certify a key for that
+    // agent. Folds use the highest rules this build knows.
+    if ctx.checked && !on_config && ctx.workspace.is_some_and(|at| at.rules.min(RULES_SUPPORTED) >= 2) {
+        let speaks_for = agent::agent_authored(&env.payload).or_else(|| match &env.payload {
+            SessionEvent::MessageChunkReceived { message_id, .. } | SessionEvent::MessageCompleted { message_id, .. } => fold
+                .messages
+                .iter()
+                .find(|m| m.id == *message_id && m.role != crate::chat::MessageRole::User)
+                .and_then(|m| m.responder_id),
+            _ => None,
+        });
+        if let Some(agent_id) = speaks_for {
+            if let Err(why) = agent::tier_allows(&env.payload, agent_id, env.signer_device_id.unwrap_or_default(), fold) {
+                return Decision::deny(why);
+            }
+        }
+    }
     let exempt = is_trust_publication(&env.payload) || matches!(env.payload, SessionEvent::MemberAdded { .. });
     if !exempt {
         let member = if ctx.checked {
@@ -301,6 +325,41 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         if !member {
             return Decision::deny("not a workspace member at this position");
         }
+    }
+
+    // B3: human presence. A stamped assertion must verify; under rules v2
+    // (and for the switch to v2 itself) the events of the presence table
+    // need one. Passkey registrations prove themselves below.
+    let mut present: Option<Uuid> = None;
+    if let Some(roster) = roster_here {
+        if !matches!(env.payload, SessionEvent::PasskeyRegistered { .. }) {
+            match passkeys::verify_stamped(env, roster) {
+                Ok(p) => present = p,
+                Err(why) => return Decision::deny(why),
+            }
+        }
+        let switch_to_v2 = matches!(env.payload, SessionEvent::WorkspaceRulesSet { version: 2 });
+        if (roster.rules.min(RULES_SUPPORTED) >= 2 || switch_to_v2)
+            && rules::requires_presence(&env.payload, author, roster, fold)
+            && present.is_none()
+        {
+            return Decision::deny(PRESENCE_REQUIRED);
+        }
+    }
+    match &env.payload {
+        SessionEvent::PasskeyRegistered { credential } => {
+            return match passkeys::registration_ok(env, credential, on_config, ctx.running) {
+                Ok(()) => Decision::Allow,
+                Err(why) => Decision::deny(why),
+            };
+        }
+        SessionEvent::PasskeyRemoved { account_id, credential_id } => {
+            return match passkeys::removal_ok(env, *account_id, credential_id, on_config, ctx.running, fold, author) {
+                Ok(()) => Decision::Allow,
+                Err(why) => Decision::deny(why),
+            };
+        }
+        _ => {}
     }
 
     if let SessionEvent::DeviceKeyAgreementPublished { device_id, ka_public } = &env.payload {
@@ -375,30 +434,22 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 return Decision::deny("names a config position older than the content it judges");
             }
         }
-        // Rules v2 (A3 transition): a host-signed event that speaks for an
-        // agent is judged with the Agent tier. Folds use the highest rules
-        // this build knows.
-        if at.rules.min(RULES_SUPPORTED) >= 2 {
-            if let Some(agent_id) = agent::agent_authored(&env.payload) {
-                if let Err(why) = agent::tier_allows(&env.payload, agent_id, env.signer_device_id.unwrap_or_default(), fold) {
-                    return Decision::deny(why);
-                }
-            }
-        }
         match &env.payload {
             SessionEvent::ProposalVoteCast { proposal_id, approval } => {
                 if approval.actor_id != author {
                     return Decision::deny("a vote must be cast by the voter it names");
                 }
-                // P0.6: a delegated host (a serve box enrolled as its owner's
-                // device) signs as the owner without the owner being there.
-                // Until Track B's presence proofs, its votes don't count
-                // toward a human gate; `ligus serve` refuses them up front
-                // (403 presence_required).
+                // P0.6 / B3: a delegated host (a serve box enrolled as its
+                // owner's device) signs as the owner without the owner being
+                // there. Its vote counts only with the owner's passkey
+                // presence over it (the phone's `presence/prepare` and
+                // `presence/commit`): the counted human is the credential's
+                // account, which must be the voter's.
                 let account = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id);
                 let signer = env.signer_device_id.and_then(|d| at.devices.get(&d));
-                if signer.zip(account).is_some_and(|(d, a)| d.delegated_for(a)) {
-                    return Decision::deny("a vote signed by a delegated host doesn't count toward the human gate");
+                if signer.zip(account).is_some_and(|(d, a)| d.delegated_for(a)) && (present.is_none() || present != account) {
+                    // A delegated host's vote needs the owner's presence.
+                    return Decision::deny(PRESENCE_REQUIRED);
                 }
                 if let (Some(d), Some(p)) =
                     (&approval.diff_digest, fold.proposals.iter().find(|p| p.id == *proposal_id))
@@ -506,7 +557,7 @@ fn stale_epoch(env: &SessionEventEnvelope, ctx: &Ctx<'_>, on_config: bool) -> Op
 /// The signing device of a key event: certified here (not revoked), certified
 /// for the stamped account when there is one, and its signature verifies
 /// against the certificate's key (defense in depth over ingest).
-fn certified_signer<'r>(env: &SessionEventEnvelope, roster: &'r RosterState) -> Result<&'r timeline::DeviceState, String> {
+pub(crate) fn certified_signer<'r>(env: &SessionEventEnvelope, roster: &'r RosterState) -> Result<&'r timeline::DeviceState, String> {
     let device = env.signer_device_id.ok_or("unsigned")?;
     let d = roster
         .devices

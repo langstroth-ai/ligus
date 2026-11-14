@@ -130,6 +130,11 @@ pub struct ActorStamp {
     /// left out of the JSON when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cfg_frontier: Option<CfgFrontier>,
+    /// A passkey assertion over this event's digest (Phase 0, B3; see
+    /// [`crate::presence`]): a human was there. Inside the preimage, so it
+    /// can't be stripped or moved. Left out when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presence: Option<crate::presence::PresenceAssertion>,
 }
 
 /// A position on a workspace-config log: the canonical key `(lamport,

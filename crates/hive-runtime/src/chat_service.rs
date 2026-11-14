@@ -28,7 +28,9 @@ use crate::provider::ChatTurn;
 mod facts;
 mod guards;
 mod keys;
+mod presence;
 pub use keys::RotationIssued;
+pub use presence::{PresenceDraft, PresenceProvider, PresenceRequest};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ChatError {
@@ -83,6 +85,12 @@ pub struct ChatService {
     /// Where this host keeps the signing keys of agents bound to it (A3). When
     /// unset, the host signs its agents' output itself (the transition).
     agent_vault: Option<Box<dyn crate::identity_store::KeyVault + Send>>,
+    /// Asks a person for a passkey assertion (the desktop, B3).
+    presence_provider: Option<std::sync::Arc<dyn PresenceProvider>>,
+    /// Capture presence-needing drafts instead of refusing (serve, B3).
+    capture_presence: bool,
+    /// The last captured draft.
+    presence_draft: Option<PresenceDraft>,
     /// Assistant messages this host is writing as an agent: message → agent.
     agent_messages: std::collections::HashMap<Uuid, Uuid>,
     /// While set, every append is an agent's effect (Track D): held to the
@@ -119,6 +127,9 @@ impl ChatService {
             delegated: false,
             write_block: None,
             agent_vault: None,
+            presence_provider: None,
+            capture_presence: false,
+            presence_draft: None,
             agent_messages: std::collections::HashMap::new(),
             acting_agent: None,
             stream_hold: std::collections::HashMap::new(),
@@ -204,7 +215,7 @@ impl ChatService {
         env.lamport = self.store.max_lamport(session_id)?.saturating_add(1);
         let mut actor = ActorIdentity::new(agent_id.to_string(), name, hive_core::ActorKind::Agent);
         actor.device_id = Some(key_id);
-        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::now(), cfg_frontier: timeline.head() });
+        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::now(), cfg_frontier: timeline.head(), presence: None });
         sign_envelope(&mut env, key_id, &kp);
         self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
         self.store.append_envelope(&env)?;
@@ -623,6 +634,31 @@ impl ChatService {
                 }
             }
         }
+        let mut env = self.draft_signed(session_id, workspace_id, payload)?;
+        // B3 (serve): the next write waits for its author's passkey.
+        if self.capture_presence && !is_local {
+            self.capture_draft(&env)?;
+            return Err(ChatError::Unauthorized(hive_core::authz::PRESENCE_REQUIRED.into()));
+        }
+        if !is_local {
+            let (config, timeline) =
+                self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+            match self.authorize_as_fold(&env, config.as_ref(), &timeline) {
+                // B3: the fold wants its author's passkey presence.
+                Err(ChatError::Unauthorized(why)) if why == hive_core::authz::PRESENCE_REQUIRED => {
+                    self.with_presence(&mut env)?;
+                    self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
+                }
+                r => r?,
+            }
+        }
+        self.store.append_envelope(&env)?;
+        Ok(env)
+    }
+
+    /// Build and sign an envelope as this device's author would append it
+    /// (not appended, not authorized).
+    fn draft_signed(&mut self, session_id: Uuid, workspace_id: Uuid, payload: SessionEvent) -> Result<SessionEventEnvelope> {
         let next_seq = self.store.max_sequence(session_id)?.unwrap_or(0) + 1;
         let mut env = SessionEventEnvelope::new(session_id, workspace_id, next_seq, payload);
         // Causal Lamport clock: strictly greater than every event this device has
@@ -633,19 +669,16 @@ impl ChatService {
         env.lamport = self.store.max_lamport(session_id)?.saturating_add(1);
         // The config frontier this device has folded: chat events that need the
         // workspace roster are judged at it, on every device (Phase 0 A2).
-        let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
         env.actor_stamp = Some(ActorStamp {
             actor: self.author.clone(),
             recorded_at: Timestamp::now(),
             cfg_frontier: timeline.head(),
+            presence: None,
         });
         // Signed first, so the fold's own signature checks (key events)
         // judge exactly what peers will receive.
         sign_envelope(&mut env, self.device_id, &self.keypair);
-        if !is_local {
-            self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
-        }
-        self.store.append_envelope(&env)?;
         Ok(env)
     }
 
@@ -3729,7 +3762,7 @@ mod tests {
             let seq = con.store.max_sequence(chat_id).unwrap().unwrap_or(0) + 1;
             let mut env = SessionEventEnvelope::new(chat_id, wid, seq, payload);
             env.lamport = con.store.max_lamport(chat_id).unwrap() + 1;
-            env.actor_stamp = Some(ActorStamp { actor: con.author.clone(), recorded_at: Timestamp::now(), cfg_frontier: frontier });
+            env.actor_stamp = Some(ActorStamp { actor: con.author.clone(), recorded_at: Timestamp::now(), cfg_frontier: frontier, presence: None });
             con.store.ingest(&env).unwrap();
         };
         inject(&mut con, rewrite);
@@ -4327,6 +4360,7 @@ mod tests {
             actor: svc.author().clone(),
             recorded_at: Timestamp::now(),
             cfg_frontier: Some(hive_core::CfgFrontier { lamport: 500, event_id: Uuid::new_v4() }),
+            presence: None,
         });
         svc.store().append_envelope(&peer).unwrap();
         let s = svc.load(sid).unwrap().unwrap();

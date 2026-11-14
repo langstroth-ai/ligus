@@ -346,8 +346,15 @@ pub enum SessionEvent {
     /// signed by that device, `signer_device_id == device_id`). Rotations
     /// seal only to keys published this way, never to a relay directory entry.
     DeviceKeyAgreementPublished { device_id: Uuid, ka_public: Vec<u8> },
-    // Phase 0 slots, uncommented by their PRs in merge-queue order:
-    // PasskeyRegistered { .. }, PasskeyRemoved { .. },             // B3
+    /// A passkey (or recovery key) for one account (Phase 0, B3; config log).
+    /// Signed by a certified, non-delegated device of that account. The
+    /// account's first carries its own proof (a `webauthn.create` over this
+    /// event, or the recovery key's signature); every later one needs
+    /// presence from a credential the account already has.
+    PasskeyRegistered { credential: crate::presence::PasskeyCredential },
+    /// Remove one of an account's credentials (the account itself, or an
+    /// Admin; presence under rules v2).
+    PasskeyRemoved { account_id: Uuid, credential_id: String },
     /// Forward-compat catch-all: an event `kind` this build does not recognize
     /// (produced by a newer client). Serde deserializes an unknown tag here
     /// instead of failing the whole stream; it projects as a no-op. The raw
@@ -425,6 +432,8 @@ impl SessionEvent {
             SessionEvent::AgentKeyCertified { .. } => "agentKeyCertified",
             SessionEvent::WorkspaceKeyRotated { .. } => "workspaceKeyRotated",
             SessionEvent::DeviceKeyAgreementPublished { .. } => "deviceKeyAgreementPublished",
+            SessionEvent::PasskeyRegistered { .. } => "passkeyRegistered",
+            SessionEvent::PasskeyRemoved { .. } => "passkeyRemoved",
             SessionEvent::Unknown => "unknown",
         }
     }
@@ -457,7 +466,9 @@ impl SessionEvent {
             | SessionEvent::WorkspaceRulesSet { .. }
             | SessionEvent::AgentKeyCertified { .. }
             | SessionEvent::WorkspaceKeyRotated { .. }
-            | SessionEvent::DeviceKeyAgreementPublished { .. } => EventScope::Workspace,
+            | SessionEvent::DeviceKeyAgreementPublished { .. }
+            | SessionEvent::PasskeyRegistered { .. }
+            | SessionEvent::PasskeyRemoved { .. } => EventScope::Workspace,
             SessionEvent::FlowRecorded { record } if record.is_config() => EventScope::Workspace,
             SessionEvent::WorkflowRunUpserted { .. } => EventScope::Run,
             _ => EventScope::Session,
@@ -695,7 +706,9 @@ impl ChatSession {
             SessionEvent::WorkspaceRulesSet { .. }
             | SessionEvent::AgentKeyCertified { .. }
             | SessionEvent::WorkspaceKeyRotated { .. }
-            | SessionEvent::DeviceKeyAgreementPublished { .. } => {}
+            | SessionEvent::DeviceKeyAgreementPublished { .. }
+            | SessionEvent::PasskeyRegistered { .. }
+            | SessionEvent::PasskeyRemoved { .. } => {}
             SessionEvent::ProposalReverted { proposal_id, .. } => {
                 if let Some(p) = self.proposals.iter_mut().find(|p| p.id == *proposal_id) {
                     p.reverted = p.status == crate::proposals::ProposalStatus::Applied;
@@ -1641,7 +1654,8 @@ mod tests {
     fn by(author: &str, mut e: SessionEventEnvelope) -> SessionEventEnvelope {
         e.actor_stamp = Some(ActorStamp {
             actor: ActorIdentity::new(author, author, ActorKind::Human),
-            recorded_at: Timestamp::epoch(), cfg_frontier: None });
+            recorded_at: Timestamp::epoch(), cfg_frontier: None,
+            presence: None, });
         e
     }
 
@@ -2232,6 +2246,7 @@ mod tests {
                 actor: ActorIdentity::new("u1", "U", ActorKind::Human),
                 recorded_at: Timestamp::epoch(),
                 cfg_frontier: None,
+                presence: None,
             });
         }
         let s = project(&envs).unwrap();
