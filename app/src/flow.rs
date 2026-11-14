@@ -850,7 +850,7 @@ pub(crate) fn flow_home(state: State<'_, AppState>) -> HomeReport {
 
 /// Publish this device's relay, base branch and host as the workspace's home
 /// (admins only). Never carries a token or passphrase.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn flow_publish_beacon(state: State<'_, AppState>, note: String, coordinator: bool) -> Result<(), String> {
     let wid = state.active_workspace_id();
     let previous = state.service.lock().unwrap().flow_config(wid).map_err(map_err)?.beacon;
@@ -1664,7 +1664,7 @@ pub(crate) fn flow_zones(state: State<'_, AppState>) -> Result<Vec<flow::PathZon
 }
 
 /// Add a path zone (admins only — it sets the review bar).
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn flow_set_zone(
     state: State<'_, AppState>,
     pattern: String,
@@ -1695,7 +1695,7 @@ pub(crate) fn flow_set_zone(
         .map_err(map_err)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn flow_remove_zone(state: State<'_, AppState>, zone_id: String) -> Result<(), String> {
     let id = Uuid::parse_str(&zone_id).map_err(map_err)?;
     let wid = state.active_workspace_id();

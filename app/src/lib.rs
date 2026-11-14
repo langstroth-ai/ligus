@@ -44,6 +44,7 @@ mod proposal_sets;
 mod data_migration;
 mod flow;
 mod ligus_auth_ui;
+mod passkey_ui;
 mod agent_iface;
 /// In-app live test support (see `tests/app_live.rs`); not in release builds.
 #[cfg(feature = "e2e")]
@@ -3867,7 +3868,7 @@ fn list_agents(state: State<AppState>, session_id: String) -> Result<Vec<Workspa
         .unwrap_or_default())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn add_agent(
     state: State<AppState>,
     session_id: String,
@@ -3914,7 +3915,7 @@ fn add_agent(
     svc.add_agent(id, state.active_workspace_id(), agent).map_err(map_err)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn remove_agent(state: State<AppState>, session_id: String, agent_id: String) -> Result<(), String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let aid = Uuid::parse_str(&agent_id).map_err(map_err)?;
@@ -4006,7 +4007,7 @@ fn list_workspace_hosts(state: State<AppState>) -> Result<Vec<WorkspaceHostDto>,
 }
 
 /// Bind an agent to a host (empty = owner's device); "run on worker instead".
-#[tauri::command]
+#[tauri::command(async)]
 fn set_agent_host(state: State<AppState>, agent_id: String, host_id: String) -> Result<(), String> {
     let aid = Uuid::parse_str(&agent_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
@@ -4247,7 +4248,7 @@ fn list_membership_audit(state: State<AppState>) -> Result<Vec<MembershipAuditDt
     Ok(out)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn add_member(
     state: State<AppState>,
     session_id: String,
@@ -4320,7 +4321,7 @@ async fn import_github_teams(
     Ok(added)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn remove_member(state: State<AppState>, session_id: String, member_id: String) -> Result<(), String> {
     let id = Uuid::parse_str(&session_id).map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
@@ -4434,7 +4435,7 @@ fn inspect_device_code(state: State<AppState>, code: String) -> Result<DeviceCod
 /// Approve a box as one of your devices: certify its device key under your
 /// account key (only a device holding that key can), then — when asked —
 /// retire the box's own member so it stops counting as a separate person.
-#[tauri::command]
+#[tauri::command(async)]
 fn approve_device(state: State<AppState>, code: String, retire_member: bool) -> Result<ApproveDeviceDto, String> {
     let req = decode_device_code(&code)?;
     let ws = req.workspace_id;
@@ -4513,7 +4514,7 @@ fn list_device_requests(state: State<AppState>) -> Result<Vec<DeviceRequestDto>,
 /// Revoke one of your devices (lost box, re-enrollment): every member stops
 /// accepting its events. Self-service for a device your account certified, at
 /// any role (Phase 0, R5); only those are offered. Never this desktop itself.
-#[tauri::command]
+#[tauri::command(async)]
 fn revoke_my_device(state: State<AppState>, device_id: String) -> Result<(), String> {
     let device = Uuid::parse_str(&device_id).map_err(map_err)?;
     let ws = state.active_workspace_id();
@@ -4646,7 +4647,7 @@ async fn set_relay_user_disabled(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_member_role(
     state: State<AppState>,
     session_id: String,
@@ -5430,7 +5431,7 @@ fn create_proposal(
     svc.upsert_proposal(id, state.active_workspace_id(), proposal).map_err(map_err)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn vote_proposal(
     state: State<AppState>,
     session_id: String,
@@ -10380,7 +10381,7 @@ fn endpoint_is_private(endpoint: String) -> bool {
     hive_core::endpoint::endpoint_is_private(&endpoint)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn add_runtime(
     state: State<AppState>,
     id: String,
@@ -10480,7 +10481,7 @@ fn add_runtime(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn remove_runtime(state: State<AppState>, runtime_id: String) -> Result<(), String> {
     let root = state.workspace_root.lock().unwrap().clone();
     let removed_from_config = remove_runtime_from_config(&state.data_dir, &root, &runtime_id)?;
@@ -10681,7 +10682,7 @@ fn open_external(url: String) -> Result<(), String> {
 
 /// Launch the system default browser at `url`. Shared by `open_external` and the
 /// MCP OAuth flow (which must open the authorization page).
-fn open_url_in_browser(url: &str) -> std::io::Result<()> {
+pub(crate) fn open_url_in_browser(url: &str) -> std::io::Result<()> {
     #[cfg(target_os = "macos")]
     let (program, args): (&str, Vec<&str>) = ("open", vec![url]);
     #[cfg(target_os = "windows")]
@@ -14743,6 +14744,8 @@ pub fn run() {
             app.manage(state);
             // ligus-auth: keep a signed-in session's relay token fresh.
             ligus_auth_ui::start(&app.state::<AppState>());
+            // B3: governance asks for a passkey through the system browser.
+            passkey_ui::install(&app.state::<AppState>(), app.handle());
 
             // Arm the workspace file watcher on the initial root (re-armed later
             // whenever `set_workspace_root` changes it).
@@ -14882,6 +14885,11 @@ pub fn run() {
             ligus_auth_ui::ligus_auth_start,
             ligus_auth_ui::ligus_auth_poll,
             ligus_auth_ui::ligus_auth_sign_out,
+            passkey_ui::security_status,
+            passkey_ui::passkey_register,
+            passkey_ui::recovery_key_create,
+            passkey_ui::workspace_rules_set,
+            passkey_ui::presence_cancel,
             set_relay_user_disabled,
             workflows::list_workflows,
             flow::flow_get_settings,
