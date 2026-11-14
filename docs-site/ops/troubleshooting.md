@@ -150,7 +150,8 @@ relay refusal.
    `LIGUS_WORKER_PERMISSION_MODE` raises it, and a write tier needs the
    agent sandbox (bubblewrap on Linux): without it the turn is refused.
    A tool call that fails with a network error may have hit the egress
-   allow-list: the chat shows a note; add hosts with
+   allow-list: the chat shows a note. For dependency installs set
+   `LIGUS_SANDBOX_EGRESS_PRESETS=package-registries`; for other hosts use
    `LIGUS_SANDBOX_EGRESS_ALLOW`.
 7. **Is it syncing at all?** Look for `sync: … retrying` lines in the log.
 8. **Egress restricted?** In dearth mode or a locked chat, runtimes Ligus

@@ -124,7 +124,9 @@ Choosing happens in two steps, so a stale or broken change can't land:
       repository (not even its git config), so neither a teammate nor a repo
       can make your machine run a command. It runs in the agent sandbox:
       writes only in the scratch worktree, no network unless
-      `LIGUS_SANDBOX_EGRESS_ALLOW` names hosts. With no command set, the
+      `LIGUS_SANDBOX_EGRESS_ALLOW` names hosts or the chat has the
+      `package-registries` [egress preset](../concepts/security.md#egress-presets)
+      on. With no command set, the
       check is skipped.
     - **Base unchanged**: the chat's branch hasn't moved since the set
       opened, and the change still applies cleanly.
