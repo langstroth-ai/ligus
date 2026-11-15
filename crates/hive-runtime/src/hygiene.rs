@@ -80,18 +80,26 @@ pub enum SweepAction {
     RemoveParkedWorktree { path: PathBuf, chat_slug: String },
 }
 
-/// Decide what to clean. `live_turn_slugs`: turns still streaming (by the
-/// slug of their message id); `chats`: the workspace's chats by slug;
-/// `in_use`: whether a turn worktree is in use right now (cut or claimed for a
-/// turn and not yet parked or removed; `git_worktree::is_in_use`).
+/// Decide what to clean. `owned_dir`: the only dir whose worktrees are ours
+/// (`<repo>/.ligus/worktrees`); anything else, e.g. a Hive 1.x checkout under
+/// `.hive/worktrees` on a `hive/chat/*` or `hive/turn-*` branch, is never
+/// touched. `live_turn_slugs`: turns still streaming (by the slug of their
+/// message id); `chats`: the workspace's chats by slug; `in_use`: whether a
+/// turn worktree is in use right now (cut or claimed for a turn and not yet
+/// parked or removed; `git_worktree::is_in_use`).
 pub fn plan_sweep(
+    owned_dir: &Path,
     entries: &[WorktreeEntry],
     live_turn_slugs: &HashSet<String>,
     chats: &HashMap<String, ChatStatus>,
     in_use: &dyn Fn(&Path) -> bool,
 ) -> Vec<SweepAction> {
+    let owned = hive_core::compat::resolve_path(owned_dir);
     let mut out = Vec::new();
     for e in entries {
+        if !hive_core::compat::resolve_path(&e.path).starts_with(&owned) {
+            continue;
+        }
         if in_use(&e.path) {
             continue;
         }
@@ -137,7 +145,7 @@ pub fn apply(repo_root: &Path, action: &SweepAction) -> bool {
                 if let Ok((true, diff)) = git(path, &["diff", "--cached", "HEAD"]) {
                     if !diff.is_empty() {
                         let turn = branch.trim_start_matches("hive/turn-");
-                        let dest = crate::git_worktree::LazyTurnWorktree::stopped_patch_path(repo_root, turn);
+                        let Ok(dest) = crate::git_worktree::LazyTurnWorktree::stopped_patch_path(repo_root, turn) else { return false };
                         if let Some(parent) = dest.parent() {
                             let _ = std::fs::create_dir_all(parent);
                         }
@@ -216,7 +224,7 @@ mod tests {
         let entries = vec![wt("main"), wt("hive/turn-live"), wt("hive/turn-dead"), wt("hive/chat/a"), wt("hive/chat/b"), wt("hive/chat/gone")];
         let live: HashSet<String> = ["live".to_string()].into();
         let chats: HashMap<String, ChatStatus> = [("a".to_string(), ChatStatus::Live), ("b".to_string(), ChatStatus::Archived)].into();
-        let plan = plan_sweep(&entries, &live, &chats, &|_| false);
+        let plan = plan_sweep(Path::new("/r"), &entries, &live, &chats, &|_| false);
         assert_eq!(
             plan,
             vec![
@@ -242,7 +250,7 @@ mod tests {
         ];
         let chats: HashMap<String, ChatStatus> = [(live.clone(), ChatStatus::Live)].into();
         let in_use = |p: &Path| p.ends_with("t3");
-        let plan = plan_sweep(&entries, &HashSet::new(), &chats, &in_use);
+        let plan = plan_sweep(Path::new("/r"), &entries, &HashSet::new(), &chats, &in_use);
         assert_eq!(
             plan,
             vec![SweepAction::RemoveParkedWorktree { path: entries[1].path.clone(), chat_slug: gone.clone() }],
@@ -250,7 +258,7 @@ mod tests {
         );
         // Archived: its pool goes too.
         let archived: HashMap<String, ChatStatus> = [(live.clone(), ChatStatus::Archived)].into();
-        assert_eq!(plan_sweep(&entries[..1], &HashSet::new(), &archived, &|_| false).len(), 1);
+        assert_eq!(plan_sweep(Path::new("/r"), &entries[..1], &HashSet::new(), &archived, &|_| false).len(), 1);
     }
 
     #[test]
@@ -265,7 +273,7 @@ mod tests {
         run(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"]);
         let chat = uuid::Uuid::new_v4().to_string();
         let chats: HashMap<String, ChatStatus> = [(slug(&chat), ChatStatus::Live)].into();
-        let sweep = || plan_sweep(&list_worktrees(&dir), &HashSet::new(), &chats, &crate::git_worktree::is_in_use);
+        let sweep = || plan_sweep(&dir.join(".ligus/worktrees"), &list_worktrees(&dir), &HashSet::new(), &chats, &crate::git_worktree::is_in_use);
         // A turn tree, not streaming (the turn just finished) but not parked yet.
         let wt = crate::git_worktree::cut_turn_worktree_reusing(&dir, &chat, "turn-1").unwrap();
         std::fs::write(wt.path.join("work.txt"), "in progress").unwrap();
@@ -277,7 +285,7 @@ mod tests {
         assert!(sweep().is_empty());
         wt2.park(&chat).unwrap();
         // The chat goes away: its parked tree is a hygienic removal, not an abandoned turn.
-        let plan = plan_sweep(&list_worktrees(&dir), &HashSet::new(), &HashMap::new(), &crate::git_worktree::is_in_use);
+        let plan = plan_sweep(&dir.join(".ligus/worktrees"), &list_worktrees(&dir), &HashSet::new(), &HashMap::new(), &crate::git_worktree::is_in_use);
         assert_eq!(plan.iter().filter(|a| matches!(a, SweepAction::RemoveParkedWorktree { .. })).count(), 1, "{plan:?}");
         assert!(plan.iter().all(|a| !matches!(a, SweepAction::RemoveTurnWorktree { .. })), "nothing counts as abandoned: {plan:?}");
         for a in &plan {
@@ -285,6 +293,57 @@ mod tests {
         }
         prune(&dir);
         assert!(list_worktrees(&dir).iter().all(|e| crate::git_worktree::parked_chat_slug(&e.path).is_none()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Hive 1.x checkouts (`.hive/worktrees/*` on `hive/chat/*` and
+    /// `hive/turn-*` branches) belong to the 1.x install: a 2.0 sweep, which
+    /// knows none of their chats or turns, must leave them and their branches
+    /// exactly as they are.
+    #[test]
+    fn hive1_worktrees_are_never_swept() {
+        let dir = std::env::temp_dir().join(format!("ligus-hygiene-hive1-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = |args: &[&str]| {
+            let o = command("git").arg("-C").arg(&dir).args(args).output().unwrap();
+            assert!(o.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+            String::from_utf8_lossy(&o.stdout).into_owned()
+        };
+        run(&["init", "-q", "-b", "main"]);
+        run(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"]);
+        run(&["worktree", "add", "-q", "-b", "hive/chat/old", ".hive/worktrees/chat-old"]);
+        run(&["worktree", "add", "-q", "-b", "hive/turn-old", ".hive/worktrees/old"]);
+        let pool = format!(".hive/worktrees/pool-{}-x", uuid::Uuid::new_v4());
+        run(&["worktree", "add", "-q", "--detach", &pool]);
+        std::fs::write(dir.join(".hive/worktrees/chat-old/work.txt"), "1.x work").unwrap();
+        std::fs::write(dir.join(".hive/worktrees/old/unsaved.txt"), "1.x turn").unwrap();
+        let snap = |p: &Path| {
+            let mut v: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+            let mut st = vec![p.to_path_buf()];
+            while let Some(d) = st.pop() {
+                for e in std::fs::read_dir(&d).unwrap().flatten() {
+                    let q = e.path();
+                    if q.is_dir() {
+                        st.push(q);
+                    } else {
+                        v.push((q.clone(), std::fs::read(&q).unwrap()));
+                    }
+                }
+            }
+            v.sort();
+            v
+        };
+        let before = snap(&dir.join(".hive"));
+        let branches = run(&["branch", "--list", "hive/*"]);
+        let entries = list_worktrees(&dir);
+        // Unfiltered (the pre-2.0 behaviour) the sweep would remove all three.
+        assert_eq!(plan_sweep(Path::new("/"), &entries, &HashSet::new(), &HashMap::new(), &|_| false).len(), 3);
+        let plan = plan_sweep(&dir.join(".ligus/worktrees"), &entries, &HashSet::new(), &HashMap::new(), &|_| false);
+        assert!(plan.is_empty(), "{plan:?}");
+        prune(&dir);
+        assert_eq!(snap(&dir.join(".hive")), before, "1.x worktrees byte-identical");
+        assert_eq!(run(&["branch", "--list", "hive/*"]), branches, "1.x branches kept");
+        assert!(!dir.join(".ligus").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -311,7 +370,7 @@ mod tests {
         std::fs::write(turn.path.join("work.txt"), "unsaved").unwrap();
 
         // A crash leftover: the process that cut it is gone, so nothing holds it.
-        let plan = plan_sweep(&list_worktrees(&dir), &HashSet::new(), &HashMap::new(), &|_| false);
+        let plan = plan_sweep(&dir.join(".ligus/worktrees"), &list_worktrees(&dir), &HashSet::new(), &HashMap::new(), &|_| false);
         assert_eq!(plan.len(), 2);
         for a in &plan {
             assert!(apply(&dir, a), "{a:?}");
@@ -319,7 +378,7 @@ mod tests {
         prune(&dir);
         assert!(!turn.path.exists() && !chat.exists());
         // The turn's edits were saved, the chat branch kept.
-        let saved = crate::git_worktree::LazyTurnWorktree::stopped_patch_path(&dir, "dead-turn");
+        let saved = crate::git_worktree::LazyTurnWorktree::stopped_patch_path(&dir, "dead-turn").unwrap();
         assert!(std::fs::read_to_string(saved).unwrap().contains("unsaved"));
         let o = command("git").arg("-C").arg(&dir).args(["branch", "--list", "hive/chat/gone-chat"]).output().unwrap();
         assert!(String::from_utf8_lossy(&o.stdout).contains("hive/chat/gone-chat"));

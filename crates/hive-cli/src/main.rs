@@ -63,16 +63,13 @@ fn env_opt(k: &str) -> Option<String> {
     hive_core::compat::env_opt(k)
 }
 
-/// `~/.ligus`, after moving a former `~/.hive` there once (see
-/// `hive_core::compat::home_data_dir`). Exits if that move fails, rather than
-/// starting fresh with a new device identity.
-fn default_home_data_dir(home: &std::path::Path) -> PathBuf {
-    match hive_core::compat::home_data_dir(home) {
-        Ok(dir) => dir,
-        Err(e) => {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        }
+/// Ligus 2.0 starts fresh: refuse a data dir that is, links to, or holds
+/// Hive 1.x data (`~/.hive`, a 1.x serve dir, ...), which is never read or
+/// changed; otherwise create it and mark it as 2.0's. Exits on a refusal.
+fn claim_data_dir_or_exit(data_dir: &std::path::Path) {
+    if let Err(e) = hive_core::compat::claim_data_dir(data_dir, hive_core::compat::home_dir().as_deref()) {
+        eprintln!("error: {e}");
+        std::process::exit(1);
     }
 }
 
@@ -162,8 +159,9 @@ fn load_file_config(data_dir: &std::path::Path) -> FileConfig {
 fn config() -> Config {
     let data_dir = env_opt("LIGUS_DATA_DIR")
         .map(PathBuf::from)
-        .or_else(|| env_opt("HOME").map(|h| default_home_data_dir(std::path::Path::new(&h))))
-        .unwrap_or_else(|| PathBuf::from("./hive-data"));
+        .or_else(|| env_opt("HOME").map(|h| hive_core::compat::home_data_dir(std::path::Path::new(&h))))
+        .unwrap_or_else(|| PathBuf::from("./ligus-data"));
+    claim_data_dir_or_exit(&data_dir);
     // B2: secrets come from the OS secret store from here on.
     hive_runtime::secret_store::init_for_data_dir(&data_dir, None);
     // Env wins; the saved config.toml (from `ligus enroll`) fills the rest.

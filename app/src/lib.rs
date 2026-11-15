@@ -41,7 +41,6 @@ use uuid::Uuid;
 mod workflows;
 mod guards;
 mod proposal_sets;
-mod data_migration;
 mod flow;
 mod forges;
 /// git's credential helper entry for this binary (see `forges`).
@@ -1192,10 +1191,11 @@ fn migrate_catalog_mcp_auth(settings: &mut LiveSettings, managed: &[McpServerSpe
     changed
 }
 
-/// A workspace state file (`.ligus/<name>`, else an existing `.hive/<name>`,
-/// see `hive_core::compat::workspace_state_path`), with its directory created.
+/// A workspace state file (`.ligus/<name>`; a Hive 1.x `.hive/` is never
+/// used, see `hive_core::compat::workspace_state_path`), with its directory
+/// created.
 fn workspace_state_file(workspace_root: &str, name: &str) -> Result<PathBuf, String> {
-    let path = hive_core::compat::workspace_state_path(Path::new(workspace_root), name);
+    let path = hive_core::compat::workspace_state_path(Path::new(workspace_root), name).map_err(map_err)?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(map_err)?;
     }
@@ -1264,7 +1264,7 @@ fn is_shallow_or_system_dir(p: &std::path::Path) -> bool {
 }
 
 /// Whether to auto-adopt the process's current directory as the workspace root.
-/// Only when it's clearly a project we were launched from (a `.git`/`.hive`
+/// Only when it's clearly a project we were launched from (a `.git`/`.ligus`
 /// marker) and not a system/shallow dir. This is what separates a dev launch
 /// (cwd = your repo) from a GUI/updater launch (cwd = `/`, no marker): the latter
 /// must NOT be adopted, or the file watcher recursively walks the entire disk and
@@ -11123,54 +11123,39 @@ const RESET_SENTINEL: &str = ".reset-pending";
 
 fn build_state(app: &AppHandle) -> Result<AppState, String> {
     let data_dir: PathBuf = app.path().app_data_dir().map_err(map_err)?;
-    migrate_legacy_data_dir(&data_dir)?;
+    refuse_hive1_data_dir(&data_dir)?;
     build_state_in(app, data_dir)
 }
 
-/// Set when this launch copied the data dir over from the legacy bundle id.
-static DATA_MIGRATED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// Before anything opens the DB: if the bundle identifier changed, copy the
-/// legacy app-data dir into the new one (see `data_migration`). A no-op while
-/// the identifier is unchanged. On failure, show a blocking error and refuse to
-/// start rather than open an empty DB and mint a new device identity.
-fn migrate_legacy_data_dir(data_dir: &Path) -> Result<(), String> {
-    let Some(legacy) = data_migration::legacy_sibling(data_dir) else { return Ok(()) };
-    match data_migration::migrate(data_dir, &legacy) {
-        Ok(data_migration::Outcome::Migrated { from }) => {
-            tracing::info!(from = %from.display(), to = %data_dir.display(), "copied the legacy data dir");
-            DATA_MIGRATED.store(true, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
-        }
-        Ok(_) => Ok(()),
+/// Ligus 2.0 starts fresh: its data dir must not be, link to, or contain Hive
+/// 1.x data (`com.hive.desktop`, `~/.hive`, ...), which is never read or
+/// changed. On a refusal, show a blocking error and stop before anything is
+/// created or opened.
+fn refuse_hive1_data_dir(data_dir: &Path) -> Result<(), String> {
+    let home = hive_core::compat::home_dir();
+    match hive_core::compat::check_data_dir(data_dir, home.as_deref()) {
+        Ok(()) => Ok(()),
         Err(e) => {
-            let msg = format!(
-                "Your existing data in\n{}\ncould not be copied to\n{}\n\n{e}\n\nNothing was changed or deleted. Free some disk space or fix the folder permissions, then open the app again.",
-                legacy.display(),
-                data_dir.display()
-            );
             rfd::MessageDialog::new()
                 .set_level(rfd::MessageLevel::Error)
-                .set_title("Could not move your data")
-                .set_description(msg)
+                .set_title("Ligus can't use this data folder")
+                .set_description(format!("{e}\n\nNothing was changed."))
                 .set_buttons(rfd::MessageButtons::Ok)
                 .show();
-            Err(format!("data-dir migration failed: {e}"))
+            Err(e)
         }
     }
 }
 
-/// Whether this launch migrated the data dir from the legacy bundle id. The
-/// web UI uses it to skip onboarding (localStorage does not carry over).
-#[tauri::command]
-fn data_dir_migrated() -> bool {
-    DATA_MIGRATED.load(std::sync::atomic::Ordering::SeqCst)
-}
-
 /// [`build_state`] against an explicit data dir. The app uses the OS app-data
 /// dir; the in-app live test (`e2e`) points it at a temp dir.
-fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String> {
-    std::fs::create_dir_all(&data_dir).map_err(map_err)?;
+/// Before anything opens the data dir: refuse a Hive 1.x dir (never read or
+/// changed; see `hive_core::compat::check_data_dir`), create it, run a
+/// pending factory reset, and mark it as a Ligus 2.0 data dir.
+fn prepare_data_dir(data_dir: &Path) -> Result<(), String> {
+    // Never a Hive 1.x dir (also checked by `build_state`, with a dialog).
+    hive_core::compat::check_data_dir(data_dir, hive_core::compat::home_dir().as_deref())?;
+    std::fs::create_dir_all(data_dir).map_err(map_err)?;
 
     // A factory reset was requested last run: the previous process wrote the
     // sentinel and restarted, so the DB/identity files are now closed and safe
@@ -11178,13 +11163,15 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
     // which we remove last), then fall through to a fresh bootstrap below.
     let reset_marker = data_dir.join(RESET_SENTINEL);
     if reset_marker.exists() {
-        if let Ok(entries) = std::fs::read_dir(&data_dir) {
+        if let Ok(entries) = std::fs::read_dir(data_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path == reset_marker {
                     continue;
                 }
-                if path.is_dir() {
+                // `file_type` doesn't follow symlinks: a link is unlinked,
+                // never its target emptied.
+                if entry.file_type().is_ok_and(|t| t.is_dir()) {
                     let _ = std::fs::remove_dir_all(&path);
                 } else {
                     let _ = std::fs::remove_file(&path);
@@ -11193,6 +11180,13 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         }
         let _ = std::fs::remove_file(&reset_marker);
     }
+    // Mark the dir as a Ligus 2.0 data dir (after a reset wipe, too).
+    hive_core::compat::mark_data_dir(data_dir).map_err(map_err)?;
+    Ok(())
+}
+
+fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String> {
+    prepare_data_dir(&data_dir)?;
 
     // B2: Ligus's own secrets (identity seeds, settings secrets) live in the OS
     // secret store from here on: a dedicated keychain on macOS, the Secret
@@ -14069,7 +14063,7 @@ fn init_logging(app: &tauri::App) {
     let log_dir = app
         .path()
         .app_log_dir()
-        .unwrap_or_else(|_| std::env::temp_dir().join("hive-logs"));
+        .unwrap_or_else(|_| std::env::temp_dir().join("ligus-logs"));
     let _ = std::fs::create_dir_all(&log_dir);
     let file = tracing_appender::rolling::daily(&log_dir, "hive.log");
     let (non_blocking, guard) = tracing_appender::non_blocking(file);
@@ -14429,7 +14423,6 @@ pub fn run() {
             set_titlebar_color,
             save_appearance,
             reset_local_data,
-            data_dir_migrated,
             check_for_update,
             install_update,
             check_for_app_update,
@@ -17085,5 +17078,103 @@ mod settings_secret_tests {
         // And they are where they should be.
         assert!(dir.join("secrets/forge").is_dir());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod fresh_start_tests {
+    //! Ligus 2.0 starts fresh: the desktop init path never reads or changes a
+    //! Hive 1.x app-data dir next to its own, and starts with empty data.
+    use super::*;
+
+    fn fingerprint(dir: &Path) -> Vec<(PathBuf, String)> {
+        use std::hash::{Hash, Hasher};
+        let mut out = Vec::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                let rel = p.strip_prefix(dir).unwrap().to_path_buf();
+                let t = e.file_type().unwrap();
+                if t.is_symlink() {
+                    out.push((rel, format!("link:{}", std::fs::read_link(&p).unwrap().display())));
+                } else if t.is_dir() {
+                    out.push((rel, "dir".into()));
+                    stack.push(p);
+                } else {
+                    let bytes = std::fs::read(&p).unwrap();
+                    let mut h = std::collections::hash_map::DefaultHasher::new();
+                    bytes.hash(&mut h);
+                    out.push((rel, format!("{}:{:x}", bytes.len(), h.finish())));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    struct Tmp(PathBuf);
+    impl Tmp {
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+    impl Drop for Tmp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A temp app-data base holding a fake Hive 1.x `com.hive.desktop`.
+    fn hive1_base() -> (Tmp, PathBuf) {
+        let tmp = Tmp(std::env::temp_dir().join(format!("ligus-fresh-{}", Uuid::new_v4())));
+        std::fs::create_dir_all(tmp.path()).unwrap();
+        let legacy = tmp.path().join("com.hive.desktop");
+        std::fs::create_dir_all(legacy.join("keys")).unwrap();
+        std::fs::write(legacy.join("hive.db"), b"1.x sqlite bytes").unwrap();
+        std::fs::write(legacy.join("identity.json"), br#"{"deviceId":"d1"}"#).unwrap();
+        std::fs::write(legacy.join("keys/device.key"), b"secret").unwrap();
+        std::fs::write(legacy.join("appearance.json"), br#"{"palette":"harbor"}"#).unwrap();
+        (tmp, legacy)
+    }
+
+    #[test]
+    fn desktop_init_leaves_hive1_untouched_and_starts_empty() {
+        let (tmp, legacy) = hive1_base();
+        let before = fingerprint(&legacy);
+        let data_dir = tmp.path().join(hive_core::compat::DESKTOP_APP_ID);
+
+        prepare_data_dir(&data_dir).unwrap();
+        hive_runtime::secret_store::set_for_data_dir(&data_dir, std::sync::Arc::new(hive_runtime::secret_store::File0600::new(&data_dir)));
+        let identity = IdentityStore::new(&data_dir, StoreKeyVault::for_data_dir(&data_dir));
+        let stored = identity.bootstrap("You", "you", "This device").unwrap();
+        let store = EventStore::open(data_dir.join("hive.db")).unwrap();
+
+        assert!(store.list_session_ids().unwrap().is_empty(), "no 1.x chats");
+        assert_ne!(stored.device.id.to_string(), "d1", "a new device identity, not the 1.x one");
+        assert!(!data_dir.join("MIGRATED_FROM").exists());
+        assert_eq!(fingerprint(&legacy), before, "the 1.x dir is byte-identical");
+        // A second launch is the same.
+        prepare_data_dir(&data_dir).unwrap();
+        assert_eq!(fingerprint(&legacy), before);
+    }
+
+    #[test]
+    fn desktop_init_refuses_a_hive1_dir_and_writes_nothing() {
+        let (tmp, legacy) = hive1_base();
+        let before = fingerprint(tmp.path());
+        assert!(prepare_data_dir(&legacy).is_err(), "the 1.x dir itself");
+        #[cfg(unix)]
+        {
+            let link = tmp.path().join("linked");
+            std::os::unix::fs::symlink(&legacy, &link).unwrap();
+            assert!(prepare_data_dir(&link).is_err(), "a 2.0 dir that is a symlink to the 1.x dir");
+            std::fs::remove_file(&link).unwrap();
+        }
+        // A pending reset in a 1.x dir must never wipe it.
+        assert_eq!(fingerprint(tmp.path()), before);
+        std::fs::write(legacy.join(RESET_SENTINEL), b"1").unwrap();
+        assert!(prepare_data_dir(&legacy).is_err());
+        assert!(legacy.join("hive.db").is_file() && legacy.join("keys/device.key").is_file());
     }
 }

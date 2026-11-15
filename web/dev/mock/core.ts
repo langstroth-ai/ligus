@@ -209,8 +209,6 @@ function handle(cmd: string, args: Args): unknown {
       return "# Hello\n";
     case "read_recent_logs":
       return "2026-11-13T10:00:00Z INFO ligus: started\n";
-    case "data_dir_migrated":
-      return false;
     case "check_for_update":
     case "check_for_app_update":
       return null;

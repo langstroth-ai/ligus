@@ -8,7 +8,7 @@
 //! approval (the review-gated model). Turns that don't run in a git repo — or
 //! don't mutate files — skip this entirely and run in place.
 //!
-//! Worktrees live under `<repo>/.hive/worktrees/<turn-id>` and are registered in
+//! Worktrees live under `<repo>/.ligus/worktrees/<turn-id>` and are registered in
 //! `.git/worktrees`, so git excludes them from the main tree's status. They are
 //! removed when the turn's changes are merged or discarded.
 
@@ -122,16 +122,15 @@ fn chat_branch(chat_id: &str) -> String {
 }
 
 /// The checkout path of a chat's persistent worktree.
-fn chat_worktree_path(repo_root: &Path, chat_id: &str) -> PathBuf {
-    // An existing checkout keeps the path git recorded (`.hive/worktrees/…`);
-    // new ones go under the current workspace state dir.
+fn chat_worktree_path(repo_root: &Path, chat_id: &str) -> io::Result<PathBuf> {
+    // Always under `.ligus/`; a Hive 1.x `.hive/worktrees/` is never used.
     hive_core::compat::workspace_state_path(repo_root, format!("worktrees/chat-{}", slug(chat_id)))
 }
 
 /// Ensure a chat's **persistent** base worktree exists and return its path.
 ///
 /// Each chat gets a base branch `hive/chat/<chatid>` and a long-lived checkout
-/// at `<repo>/.hive/worktrees/chat-<chatid>` that is the chat's effective code
+/// at `<repo>/.ligus/worktrees/chat-<chatid>` that is the chat's effective code
 /// dir. Idempotent: if the branch already exists it is reused (never removed
 /// between turns); a missing checkout for an existing branch is re-added. A
 /// fresh chat cuts the branch off `HEAD`.
@@ -141,7 +140,7 @@ fn chat_worktree_path(repo_root: &Path, chat_id: &str) -> PathBuf {
 /// callers treat that as "run in the workspace root", exactly as for [`create`].
 pub fn chat_worktree(repo_root: &Path, chat_id: &str) -> io::Result<PathBuf> {
     let branch = chat_branch(chat_id);
-    let path = chat_worktree_path(repo_root, chat_id);
+    let path = chat_worktree_path(repo_root, chat_id)?;
     let path_str = path.to_string_lossy().into_owned();
     let existed = branch_exists(repo_root, &branch);
 
@@ -200,7 +199,7 @@ pub fn chat_base(repo_root: &Path) -> String {
 /// later same-id [`chat_worktree`] clears anyway.
 pub fn remove_chat_worktree(repo_root: &Path, chat_id: &str) -> io::Result<()> {
     let branch = chat_branch(chat_id);
-    let path = chat_worktree_path(repo_root, chat_id);
+    let path = chat_worktree_path(repo_root, chat_id)?;
     let path_str = path.to_string_lossy().into_owned();
     let _ = git(repo_root, &["worktree", "remove", "--force", &path_str]);
     let _ = git(repo_root, &["branch", "-D", &branch]);
@@ -213,7 +212,7 @@ pub fn remove_chat_worktree(repo_root: &Path, chat_id: &str) -> io::Result<()> {
 
 impl Worktree {
     /// Create an isolated worktree for `turn_id`: a fresh branch `hive/turn-<id>`
-    /// off the current `HEAD`, checked out at `<repo>/.hive/worktrees/<id>`.
+    /// off the current `HEAD`, checked out at `<repo>/.ligus/worktrees/<id>`.
     ///
     /// Assumes `repo_root` is a git repo (guard with [`is_git_repo`] first). A
     /// repo with no commits yet has no `HEAD` to branch from — callers should
@@ -231,7 +230,7 @@ impl Worktree {
     pub fn create_from(repo_root: &Path, turn_id: &str, base_ref: &str) -> io::Result<Worktree> {
         let slug = slug(turn_id);
         let branch = format!("hive/turn-{slug}");
-        let path = hive_core::compat::workspace_state_path(repo_root, Path::new("worktrees").join(&slug));
+        let path = hive_core::compat::workspace_state_path(repo_root, Path::new("worktrees").join(&slug))?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -357,7 +356,7 @@ impl LazyTurnWorktree {
     }
 
     /// Where a stopped turn's unfinished edits are saved (see `Drop`).
-    pub fn stopped_patch_path(repo_root: &Path, turn_id: &str) -> PathBuf {
+    pub fn stopped_patch_path(repo_root: &Path, turn_id: &str) -> io::Result<PathBuf> {
         hive_core::compat::workspace_state_path(repo_root, Path::new("stopped-turns").join(format!("{}.patch", slug(turn_id))))
     }
 
@@ -397,7 +396,7 @@ impl crate::builtin_tools::WriteRoot for LazyTurnWorktree {
 /// A turn dropped before [`LazyTurnWorktree::finish`] — the user pressed
 /// Stop, which drops the turn's future — would otherwise leave its worktree
 /// and branch behind with whatever the model had edited. Save those edits as
-/// a patch under `.hive/stopped-turns/` (so nothing is lost silently) and
+/// a patch under `.ligus/stopped-turns/` (so nothing is lost silently) and
 /// remove the worktree.
 impl Drop for LazyTurnWorktree {
     fn drop(&mut self) {
@@ -406,7 +405,13 @@ impl Drop for LazyTurnWorktree {
         let Some(wt) = st.worktree.take() else { return };
         let diff = wt.diff().unwrap_or_default();
         if !diff.trim().is_empty() {
-            let patch = Self::stopped_patch_path(&self.repo_root, &self.turn_id);
+            let patch = match Self::stopped_patch_path(&self.repo_root, &self.turn_id) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!(target: "worktree", path = %wt.path.display(), "turn stopped mid-edit; could not save its patch ({e}), keeping the worktree");
+                    return;
+                }
+            };
             let saved = patch.parent().map(std::fs::create_dir_all).transpose().and_then(|_| std::fs::write(&patch, &diff));
             match saved {
                 Ok(()) => tracing::warn!(target: "worktree", patch = %patch.display(), "turn stopped mid-edit: saved its changes as a patch"),
@@ -432,7 +437,7 @@ impl Drop for LazyTurnWorktree {
 /// Parked worktrees kept per chat.
 pub const POOL_PER_CHAT: usize = 2;
 
-fn pool_dir(repo_root: &Path) -> PathBuf {
+fn pool_dir(repo_root: &Path) -> io::Result<PathBuf> {
     hive_core::compat::workspace_state_path(repo_root, Path::new("worktrees"))
 }
 
@@ -443,7 +448,8 @@ fn pool_prefix(chat_id: &str) -> String {
 /// Parked worktrees for a chat, oldest name first.
 fn pooled(repo_root: &Path, chat_id: &str) -> Vec<PathBuf> {
     let prefix = pool_prefix(chat_id);
-    let mut v: Vec<PathBuf> = std::fs::read_dir(pool_dir(repo_root))
+    let Ok(dir) = pool_dir(repo_root) else { return Vec::new() };
+    let mut v: Vec<PathBuf> = std::fs::read_dir(dir)
         .map(|rd| {
             rd.filter_map(|e| e.ok())
                 .filter(|e| e.file_name().to_string_lossy().starts_with(&prefix))
@@ -471,7 +477,7 @@ impl Worktree {
             git(&self.path, &["reset", "-q", "--hard"])?;
             git(&self.path, &["clean", "-q", "-fd"])?;
             let _ = git(&self.repo_root, &["branch", "-D", &self.branch]);
-            let dest = pool_dir(&self.repo_root).join(format!("{}{}", pool_prefix(chat_id), slug(&uuid_like_suffix(&self.path))));
+            let dest = pool_dir(&self.repo_root)?.join(format!("{}{}", pool_prefix(chat_id), slug(&uuid_like_suffix(&self.path))));
             git(&self.repo_root, &["worktree", "move", &self.path.to_string_lossy(), &dest.to_string_lossy()])?;
             Ok(())
         })();
@@ -512,7 +518,7 @@ pub fn cut_turn_worktree_reusing(repo_root: &Path, chat_id: &str, turn_id: &str)
     for parked in pooled(repo_root, chat_id) {
         let slug_id = slug(turn_id);
         let branch = format!("hive/turn-{slug_id}");
-        let path = hive_core::compat::workspace_state_path(repo_root, Path::new("worktrees").join(&slug_id));
+        let Ok(path) = hive_core::compat::workspace_state_path(repo_root, Path::new("worktrees").join(&slug_id)) else { break };
         // Moving it out of the pool claims it; a concurrent turn that loses
         // the race gets an error and tries the next one.
         if git(repo_root, &["worktree", "move", &parked.to_string_lossy(), &path.to_string_lossy()]).is_err() {

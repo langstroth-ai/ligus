@@ -202,7 +202,7 @@ async fn a_stopped_turn_saves_its_edits_and_removes_its_worktree() {
     drop(tools);
     drop(lazy);
     assert!(turn_worktrees(&repo).is_empty(), "{:?}", turn_worktrees(&repo));
-    let patch = LazyTurnWorktree::stopped_patch_path(&repo, "chat-stop-turn");
+    let patch = LazyTurnWorktree::stopped_patch_path(&repo, "chat-stop-turn").unwrap();
     let saved = std::fs::read_to_string(&patch).expect("patch saved");
     assert!(saved.contains("+    return a + b"), "{saved}");
     assert!(std::fs::read_to_string(repo.join("calc.py")).unwrap().contains("a - b"), "main tree untouched");
@@ -212,6 +212,6 @@ async fn a_stopped_turn_saves_its_edits_and_removes_its_worktree() {
     assert!(!tools.call("read_file", &json!({ "path": "calc.py" })).await.1);
     drop(tools);
     drop(lazy);
-    assert!(!LazyTurnWorktree::stopped_patch_path(&repo, "chat-stop-read-turn").exists());
+    assert!(!LazyTurnWorktree::stopped_patch_path(&repo, "chat-stop-read-turn").unwrap().exists());
     let _ = std::fs::remove_dir_all(&repo);
 }

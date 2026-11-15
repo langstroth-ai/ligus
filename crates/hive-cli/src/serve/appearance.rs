@@ -9,8 +9,8 @@
 //! 1. its own config: `LIGUS_SERVE_PALETTE` and `LIGUS_SERVE_APPEARANCE`, for a
 //!    headless home host with no desktop app;
 //! 2. the desktop app's `appearance.json` on this machine
-//!    (`LIGUS_DESKTOP_DATA_DIR`, else the OS app-data dir for `ai.ligus.desktop`,
-//!    falling back to the original `com.hive.desktop`).
+//!    (`LIGUS_DESKTOP_DATA_DIR`, else the OS app-data dir for `ai.ligus.desktop`).
+//!    A Hive 1.x desktop's `com.hive.desktop` dir is never read.
 //!
 //! Each field resolves on its own, so a box can pin the palette in config and
 //! still follow the desktop's mode. The file is read per request (it is tiny),
@@ -99,8 +99,8 @@ fn default_desktop_dir() -> Option<PathBuf> {
     app_data_base().map(|b| pick_desktop_dir(&b))
 }
 
-/// The desktop data dir under `base` (the app copies its former
-/// `com.hive.desktop` dir here on first launch).
+/// The desktop data dir under `base`. Only the 2.0 bundle id: Ligus 2.0 starts
+/// fresh and never reads a Hive 1.x `com.hive.desktop` dir.
 pub fn pick_desktop_dir(base: &Path) -> PathBuf {
     base.join(hive_core::compat::DESKTOP_APP_ID)
 }
@@ -169,7 +169,7 @@ mod tests {
     #[test]
     fn desktop_file_is_read_and_config_wins_field_by_field() {
         let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join("com.hive.desktop");
+        let dir = tmp.path().join("ai.ligus.desktop");
         write(&dir, r#"{"palette":"harbor","mode":"dark"}"#);
         let desk = AppearanceConfig { desktop_dir: Some(dir.clone()), ..Default::default() };
         assert_eq!(resolve(&desk), json!({"palette": "harbor", "mode": "dark", "source": "desktop"}));
@@ -205,6 +205,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let base = tmp.path();
         write(&base.join("com.hive.desktop"), r#"{"palette":"harbor"}"#);
-        assert_eq!(pick_desktop_dir(base), base.join("ai.ligus.desktop"), "the former dir is not read");
+        assert_eq!(pick_desktop_dir(base), base.join("ai.ligus.desktop"), "the 1.x dir is not read");
+        let cfg = AppearanceConfig { desktop_dir: Some(pick_desktop_dir(base)), ..Default::default() };
+        assert_eq!(resolve(&cfg), json!({"palette": null, "mode": null, "source": "none"}), "no fallback to the 1.x theme");
     }
 }

@@ -1,7 +1,7 @@
 """aider-mcp — expose aider's CLI as MCP tools.
 
 The Hive client treats this as a normal MCP stdio server (configured
-in `hive.config.toml` under `[[mcp_servers]]`). Tools surfaced:
+in `ligus.config.toml` under `[[mcp_servers]]`). Tools surfaced:
 
   - aider_edit: run aider with a prompt against one or more files.
   - aider_review: ask aider to summarize / critique a file.

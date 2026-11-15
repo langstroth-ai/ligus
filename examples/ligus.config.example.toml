@@ -146,13 +146,13 @@ include = ["Docs", "Playbooks"]
 
 [[skills]]
 id = "coding-core"
-source = "~/.hive/skills/coding-core"
+source = "~/.ligus/skills/coding-core"
 autoload = true
 scope = "workspace"
 
 [[skills]]
 id = "obsidian-research"
-source = "~/.hive/skills/obsidian-research"
+source = "~/.ligus/skills/obsidian-research"
 autoload = false
 scope = "chat"
 

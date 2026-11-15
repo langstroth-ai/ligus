@@ -249,12 +249,13 @@ pub fn repo_items(root: &Path) -> Vec<TrustItem> {
         #[serde(default)]
         servers: Vec<McpServerSpec>,
     }
-    let rt_path = hive_core::compat::workspace_state_path(root, "runtimes.json");
+    let Ok(state) = hive_core::compat::workspace_state_dir(root) else { return out };
+    let rt_path = state.join("runtimes.json");
     if let Some(c) = std::fs::read_to_string(&rt_path).ok().and_then(|t| serde_json::from_str::<Runtimes>(&t).ok()) {
         let source = rel(root, &rt_path);
         out.extend(c.runtimes.iter().map(|r| runtime_item(r, &source)));
     }
-    let mcp_path = hive_core::compat::workspace_state_path(root, "mcp-servers.json");
+    let mcp_path = state.join("mcp-servers.json");
     if let Some(c) = std::fs::read_to_string(&mcp_path).ok().and_then(|t| serde_json::from_str::<Servers>(&t).ok()) {
         let source = rel(root, &mcp_path);
         out.extend(c.servers.iter().map(|s| mcp_item(s, &source)));

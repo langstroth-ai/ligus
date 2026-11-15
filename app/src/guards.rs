@@ -620,7 +620,16 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> hive_proto::HygieneReportDt
     let entries = hygiene::list_worktrees(&root);
     let secret = device.as_bytes().to_vec();
     let mut signals = Vec::new();
-    for action in hygiene::plan_sweep(&entries, &live_turns, &chats, &hive_runtime::git_worktree::is_in_use) {
+    // Only worktrees under this workspace's `.ligus/worktrees` are ours; a
+    // Hive 1.x `.hive/worktrees` checkout is never swept.
+    let plan = match hive_core::compat::workspace_state_path(&root, "worktrees") {
+        Ok(owned) => hygiene::plan_sweep(&owned, &entries, &live_turns, &chats, &hive_runtime::git_worktree::is_in_use),
+        Err(e) => {
+            tracing::warn!(target: "worktree", "hygiene sweep skipped: {e}");
+            Vec::new()
+        }
+    };
+    for action in plan {
         if !hygiene::apply(&root, &action) {
             continue;
         }

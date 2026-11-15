@@ -157,21 +157,27 @@ fn host_slot() -> &'static RwLock<HostPaths> {
 }
 
 impl HostPaths {
-    /// The defaults every host has: `~/.ligus` (and the legacy `~/.hive`), a
-    /// `LIGUS_DATA_DIR`, and the device-local widenings from the env.
+    /// The defaults every host has: `~/.ligus`, the desktop app-data dir, a
+    /// `LIGUS_DATA_DIR`, and the device-local widenings from the env. Hive 1.x
+    /// data dirs (`~/.hive`, `com.hive.desktop`, ...) are denied too: 2.0 never
+    /// reads or changes them, but they still hold a 1.x install's identity
+    /// keys, so no agent child may read them either. Deny-listing only; nothing
+    /// is created, swept or deleted there.
     pub fn from_env() -> Self {
         let mut h = HostPaths::default();
         if let Some(home) = home_dir() {
             h.data_dirs.push(home.join(hive_core::compat::HOME_DATA_DIR));
-            h.data_dirs.push(home.join(hive_core::compat::LEGACY_HOME_DATA_DIR));
             #[cfg(target_os = "macos")]
-            for id in ["ai.ligus.desktop", "ai.hive.desktop", "com.hive.desktop"] {
-                h.data_dirs.push(home.join("Library/Application Support").join(id));
-            }
+            h.data_dirs.push(home.join("Library/Application Support").join(hive_core::compat::DESKTOP_APP_ID));
             #[cfg(target_os = "linux")]
-            for id in ["ai.ligus.desktop", "ai.hive.desktop"] {
-                h.data_dirs.push(home.join(".local/share").join(id));
-                h.data_dirs.push(home.join(".config").join(id));
+            {
+                h.data_dirs.push(home.join(".local/share").join(hive_core::compat::DESKTOP_APP_ID));
+                h.data_dirs.push(home.join(".config").join(hive_core::compat::DESKTOP_APP_ID));
+            }
+            for d in hive_core::compat::hive1_locations(Some(&home)) {
+                if !h.data_dirs.contains(&d) {
+                    h.data_dirs.push(d);
+                }
             }
         }
         if let Ok(d) = hive_core::compat::var("LIGUS_DATA_DIR") {
