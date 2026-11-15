@@ -18,13 +18,14 @@ use std::time::{Duration, Instant};
 
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::Json;
+use axum::{Extension, Json};
 use hive_core::presence::{b64url, PresenceAssertion, RP_ID};
 use hive_runtime::chat_service::PresenceDraft;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::api::{find_proposal, load_chat, ApiError, ApiResult};
+use super::tunnel::TunnelPeer;
 use super::Shared;
 
 /// How long a prepared event waits for its passkey.
@@ -77,7 +78,11 @@ pub struct PrepareReq {
 
 /// `POST /v1/presence/prepare {action, target}` →
 /// `{prepareId, challenge, preview}`.
-pub async fn prepare(State(s): State<std::sync::Arc<Shared>>, Json(req): Json<PrepareReq>) -> ApiResult<Json<Value>> {
+pub async fn prepare(
+    State(s): State<std::sync::Arc<Shared>>,
+    peer: Option<Extension<TunnelPeer>>,
+    Json(req): Json<PrepareReq>,
+) -> ApiResult<Json<Value>> {
     let mut preview = json!({});
     let outcome = match req.action.as_str() {
         "approve" | "reject" => {
@@ -109,6 +114,8 @@ pub async fn prepare(State(s): State<std::sync::Arc<Shared>>, Json(req): Json<Pr
             (r, svc.take_presence_draft())
         }
         "invite" => {
+            // The commit answers with the invite code: secure channel only.
+            super::identity_api::require_secret_channel(&s, peer.as_deref())?;
             if let Some(reason) = s.lock().write_block() {
                 return Err(ApiError::new(StatusCode::FORBIDDEN, reason.to_string()));
             }
@@ -156,11 +163,20 @@ struct Assertion {
 }
 
 /// `POST /v1/presence/commit {prepareId, assertion}` → the appended event.
-pub async fn commit(State(s): State<std::sync::Arc<Shared>>, Json(req): Json<CommitReq>) -> ApiResult<Json<Value>> {
+pub async fn commit(
+    State(s): State<std::sync::Arc<Shared>>,
+    peer: Option<Extension<TunnelPeer>>,
+    Json(req): Json<CommitReq>,
+) -> ApiResult<Json<Value>> {
     let draft = s
         .presence_drafts
         .take(&req.prepare_id)
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "unknown or expired prepareId"))?;
+    // An invite prepared over the tunnel and committed over plain HTTP would
+    // hand its code out there: refused before anything is appended.
+    if matches!(&draft.env.payload, hive_core::SessionEvent::JoinApproved { subject } if subject.starts_with("invite:")) {
+        super::identity_api::require_secret_channel(&s, peer.as_deref())?;
+    }
     let a = PresenceAssertion {
         credential_id: req.assertion.credential_id,
         authenticator_data: req.assertion.authenticator_data,

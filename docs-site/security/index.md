@@ -63,6 +63,10 @@ access. `LIGUS_SECRET_BACKEND` (`keychain`, `secret-service`,
   on loopback, LAN or a VPN such as Tailscale (which encrypts). Tunnel path
   is a Noise IK session (`Noise_IK_25519_ChaChaPoly_SHA256`) end to end
   between phone and box; the phone pins the box's key from the pairing QR.
+  Secrets never take the plain-HTTP direct path: code-host tokens, device
+  sign-in codes and invite codes (which carry the workspace passphrase and
+  epoch keys) move only through the tunnel or on a loopback bind; elsewhere
+  the box refuses with 403.
 - **Push** content is sealed (ChaCha20-Poly1305) with a per-phone key agreed
   at pairing; Apple and the relay see a generic alert and ciphertext.
 - **Peer-to-peer** sync between contacts' desktops runs over iroh (QUIC/TLS).

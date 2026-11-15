@@ -278,7 +278,9 @@ each stays on this list until a release fixes it.
     tokens (short-lived ones from [ligus-auth](../deploy/ligus-auth.md), for
     example) or a restart to change an allowlist.
 16. **The direct phone path is plain HTTP.** Use the relay tunnel or a
-    tailnet, or a LAN you trust.
+    tailnet, or a LAN you trust. Invite codes, code-host tokens and device
+    sign-in codes are refused on it (tunnel or loopback only), but chat
+    content and the bearer token still cross it.
 17. **One `serve.token` for every direct-path client.** Revoking one direct
     phone means rotating it for all. Tunnel phones are revoked one by one.
 18. **Revoking a device doesn't rotate the key.** A revoked device's new

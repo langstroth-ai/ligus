@@ -16,6 +16,14 @@
 //! - `POST /v1/dms {accountId}` → open (founding on first use) a DM
 //! - `GET  /v1/chats/{id}/founder` → whether sending waits for the founder
 //!
+//! An invite code carries the workspace passphrase and its epoch keys (a
+//! DM's room key too), so codes travel only over a secure channel: the
+//! end-to-end encrypted tunnel or a loopback bind ([`require_secret_channel`]).
+//! Over plain HTTP on a network bind, `POST /v1/invites`, presence for an
+//! invite, `inspect`, `join` and founding a DM are refused with
+//! [`SECRET_PLAINTEXT_REFUSED`]. Accepting a pending invite moves no code
+//! (it goes by reference) and stays open there.
+//!
 //! Every name is cleaned (`hive_proto::names`). A co-member's name and
 //! safety code in an invite count as theirs only with their device's
 //! signature (R1); an unsigned DM invite is refused.
@@ -289,6 +297,23 @@ pub async fn person_links(State(s): S, Path(account): Path<String>) -> ApiResult
 
 // ── Invites ────────────────────────────────────────────────────────────────
 
+/// Why an invite can't travel over this connection (shown on the phone).
+pub const SECRET_PLAINTEXT_REFUSED: &str = "Invite links carry the workspace's keys, so the host sends and takes them \
+     only over the secure connection: open this over remote access (the end-to-end encrypted tunnel) or on the host \
+     itself. This connection is plain HTTP on the network.";
+
+/// Invite codes go only through the tunnel or on a loopback bind (the same
+/// rule as code-host tokens: [`super::forges_api::secure_channel`]). The API
+/// speaks plain HTTP; https in front of it terminates on this machine only
+/// when the box listens on loopback.
+pub fn require_secret_channel(s: &Shared, peer: Option<&TunnelPeer>) -> ApiResult<()> {
+    if super::forges_api::secure_channel(s, peer) {
+        Ok(())
+    } else {
+        Err(ApiError::new(StatusCode::FORBIDDEN, SECRET_PLAINTEXT_REFUSED))
+    }
+}
+
 fn ensure_can_write(s: &Shared) -> ApiResult<()> {
     if let Some(reason) = s.lock().write_block() {
         return Err(ApiError::new(StatusCode::FORBIDDEN, reason.to_string()));
@@ -372,6 +397,7 @@ pub fn invite_json(s: &Shared, code: &str) -> Value {
 /// passkey path is `POST /v1/presence/prepare {action: "invite"}`), as it
 /// does on any workspace running rules v2.
 pub async fn create_invite(State(s): S, peer: Option<Extension<TunnelPeer>>) -> ApiResult<Json<Value>> {
+    require_secret_channel(&s, peer.as_deref())?;
     ensure_can_write(&s)?;
     super::api::presence_gate(&s, peer.as_deref(), "invite")?;
     let conn = workspace_conn(&s)?;
@@ -434,7 +460,8 @@ fn inspect_json(s: &Shared, conn: &InviteConn) -> Value {
 
 /// `POST /v1/invites/inspect {code}` → who the invite says it's from, and
 /// whether this box can take it. Nothing is stored.
-pub async fn inspect(State(s): S, Json(req): Json<CodeReq>) -> ApiResult<Json<Value>> {
+pub async fn inspect(State(s): S, peer: Option<Extension<TunnelPeer>>, Json(req): Json<CodeReq>) -> ApiResult<Json<Value>> {
+    require_secret_channel(&s, peer.as_deref())?;
     let conn = InviteConn::decode(&req.code).map_err(ApiError::bad_request)?;
     Ok(Json(inspect_json(&s, &conn)))
 }
@@ -473,7 +500,8 @@ fn join_dm(s: &Shared, conn: InviteConn, confirmed: bool) -> ApiResult<Value> {
 
 /// `POST /v1/invites/join {code, confirmSafetyCode}`: a DM invite only
 /// (a box serves one workspace).
-pub async fn join(State(s): S, Json(req): Json<CodeReq>) -> ApiResult<Json<Value>> {
+pub async fn join(State(s): S, peer: Option<Extension<TunnelPeer>>, Json(req): Json<CodeReq>) -> ApiResult<Json<Value>> {
+    require_secret_channel(&s, peer.as_deref())?;
     let conn = InviteConn::decode(&req.code).map_err(ApiError::bad_request)?;
     if !conn.is_dm() {
         return Err(ApiError::new(
@@ -610,7 +638,7 @@ pub struct OpenDm {
 /// random room and key, this box's account as founder (pinned), a signed
 /// invite addressed to them, sealed to their verified devices and dropped
 /// into their contact box when they have one.
-pub async fn open_dm(State(s): S, Json(req): Json<OpenDm>) -> ApiResult<Json<Value>> {
+pub async fn open_dm(State(s): S, peer_ext: Option<Extension<TunnelPeer>>, Json(req): Json<OpenDm>) -> ApiResult<Json<Value>> {
     ensure_can_write(&s)?;
     let peer = Uuid::parse_str(req.account_id.trim()).map_err(|_| ApiError::bad_request("not an account id"))?;
     let me = s.my_account().ok_or_else(|| ApiError::new(StatusCode::CONFLICT, "this box has no account yet"))?;
@@ -645,6 +673,8 @@ pub async fn open_dm(State(s): S, Json(req): Json<OpenDm>) -> ApiResult<Json<Val
             "safetyCode": person.safety_code(),
         })));
     }
+    // Founding returns the DM's invite (its room key): secure channel only.
+    require_secret_channel(&s, peer_ext.as_deref())?;
     if s.lock().is_delegated() {
         return Err(ApiError::new(
             StatusCode::CONFLICT,

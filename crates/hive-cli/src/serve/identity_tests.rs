@@ -217,6 +217,10 @@ async fn two_boxes() -> (Box_, Box_, C, tempfile::TempDir) {
 }
 
 async fn two_boxes_with(b_ntfy: Option<ntfy::Ntfy>) -> (Box_, Box_, C, tempfile::TempDir) {
+    two_boxes_opts(b_ntfy, |_| {}).await
+}
+
+async fn two_boxes_opts(b_ntfy: Option<ntfy::Ntfy>, b_opts: impl FnOnce(&mut ServeOptions)) -> (Box_, Box_, C, tempfile::TempDir) {
     let tmp = tempfile::tempdir().unwrap();
     let (relay, contacts) = spawn_relay().await;
     let room = format!("id-test-{}", Uuid::new_v4());
@@ -238,8 +242,9 @@ async fn two_boxes_with(b_ntfy: Option<ntfy::Ntfy>) -> (Box_, Box_, C, tempfile:
     b_cfg.epoch_keys = conn.ek.clone();
     let mut o = opts(&b_cfg.data_dir, "Bea");
     o.ntfy = b_ntfy;
+    b_opts(&mut o);
     let handle = start(b_cfg, o).await.unwrap();
-    let base = format!("http://{}", handle.addr);
+    let base = format!("http://127.0.0.1:{}", handle.addr.port());
     let token = handle.shared.token();
     let b = Box_ { handle, base, token, client: hive_forge::new_http_client() };
     (a, b, contacts, tmp)
@@ -738,4 +743,56 @@ fn self_pin_never_overrides_an_earlier_founder() {
         }
     }
     assert_eq!(pinned, 1);
+}
+
+/// Invite codes carry the workspace passphrase and epoch keys (a DM's too):
+/// over plain HTTP on a network bind the box hands none out and takes none
+/// in. The tunnel and a loopback bind are the secure channels (A, on
+/// loopback, still works).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn invite_secrets_never_over_plain_http() {
+    let (a, b, _contacts, _tmp) = two_boxes_opts(None, |o| o.listen = "0.0.0.0:0".parse().unwrap()).await;
+    know_each_other(&a, &b).await;
+    let refused = |what: &str, code: u16, v: &Value| {
+        assert_eq!(code, 403, "{what}: {v}");
+        let msg = v["error"].as_str().unwrap_or_default();
+        assert!(msg.contains("secure connection"), "{what}: the phone can show why: {v}");
+    };
+    // A fresh workspace invite: refused before one is issued.
+    let (code, v) = b.call(reqwest::Method::POST, "/v1/invites", Some(json!({}))).await;
+    refused("POST /v1/invites", code, &v);
+    let (code, v) = b.call(reqwest::Method::POST, "/v1/presence/prepare", Some(json!({ "action": "invite", "target": "workspace" }))).await;
+    refused("presence prepare invite", code, &v);
+    // A code sent in (inspect, join) is refused too: it carries the key.
+    let inv = a.post("/v1/invites", json!({})).await;
+    let code_str = inv["code"].as_str().unwrap();
+    let (code, v) = b.call(reqwest::Method::POST, "/v1/invites/inspect", Some(json!({ "code": code_str }))).await;
+    refused("inspect", code, &v);
+    let (code, v) = b.call(reqwest::Method::POST, "/v1/invites/join", Some(json!({ "code": code_str }))).await;
+    refused("join", code, &v);
+    // Founding a DM returns its invite: refused, and nothing was founded.
+    let (code, v) = b.call(reqwest::Method::POST, "/v1/dms", Some(json!({ "accountId": a.account().to_string() }))).await;
+    refused("POST /v1/dms (founding)", code, &v);
+    assert!(b.handle.shared.dms.list().is_empty(), "no DM founded on a refused request");
+    // A (loopback) founds it; B's view of the kept DM carries no secret and
+    // still opens over plain HTTP.
+    let opened = a.post("/v1/dms", json!({ "accountId": b.account().to_string() })).await;
+    assert!(opened["invite"].is_string());
+    let b2 = &b;
+    let pending = until(&[&a, &b], 20, async || {
+        let p = b2.get("/v1/invites/pending").await;
+        (p["invites"].as_array().map(Vec::len) == Some(1)).then_some(p)
+    })
+    .await;
+    let inv = &pending["invites"][0];
+    assert!(inv.get("code").is_none());
+    // Accepting by reference moves no code over the wire.
+    b.post("/v1/invites/pending/accept", json!({ "relay": inv["relay"], "seq": inv["seq"] })).await;
+    let a_acc = a.account();
+    let again = until(&[&a, &b], 30, async || {
+        let (code, v) = b2.call(reqwest::Method::POST, "/v1/dms", Some(json!({ "accountId": a_acc.to_string() }))).await;
+        (code == 200).then_some(v)
+    })
+    .await;
+    assert!(again.get("invite").is_none_or(Value::is_null), "{again}");
 }

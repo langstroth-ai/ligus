@@ -65,6 +65,15 @@ What the box knows about people comes from the config logs it holds with a
 founder pin; names are cleaned (bidi, zero-width and control characters
 removed) and never an identifier: the safety code is.
 
+Invite codes carry the workspace passphrase and epoch keys (a DM's room key),
+so they move **through the tunnel or on a loopback bind only**, like
+code-host tokens. On a plain-HTTP network bind these answer 403 with a message
+to show: `POST /v1/invites`, `presence/prepare {action: "invite"}` (and its
+`commit` when prepared elsewhere), `inspect`, `join`, and a `POST /v1/dms`
+that founds a DM. Listing, opening a kept DM and the pending routes (codes
+stay on the box) work on any path. The phone app sends these calls through
+the tunnel when the host is paired with remote access.
+
 | Method + path | Request | Notes |
 |---|---|---|
 | `GET /v1/profile` | | the box's account, its `safetyCode`, `holdsAccountKey`, `canFoundDm` and its contacts status |

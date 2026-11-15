@@ -348,6 +348,21 @@ Every name is cleaned (`hive_proto::names`: bidi, zero-width, invisible
 format and control characters removed); the app cleans them again. The
 contract is also in `docs-site/reference/serve-api.md`.
 
+**Invite codes travel only over a secure channel.** A code carries the
+workspace passphrase and its epoch keys (a DM's, its room key), so, like a
+code-host token, it goes only through the end-to-end encrypted tunnel or on a
+loopback bind. On a direct LAN or tailnet bind (plain HTTP) the box answers
+403 `{error}` with a message the app shows as is ("…open this over remote
+access…") to `POST /v1/invites`, `POST /v1/presence/prepare {action:
+"invite"}` (and a `commit` of an invite prepared elsewhere),
+`POST /v1/invites/inspect`, `POST /v1/invites/join` and a `POST /v1/dms` that
+would found a DM. Opening a kept DM, listing, and accepting or dismissing a
+pending invite (by reference; the code stays on the box) work on any path.
+The app sends these calls through the tunnel whenever the host is paired with
+remote access, even while the direct path is in use; a host paired for the
+direct path only shows the box's message. The API never terminates TLS
+itself: https in front of it counts only when the box listens on loopback.
+
 | Method | Path | Response |
 |---|---|---|
 | GET | `/v1/profile` | `{accountId, displayName, safetyCode?, holdsAccountKey, canFoundDm, contacts: on\|unsupported\|noRelay\|delegated\|unknown, avatarUrl?}`. `safetyCode` is eight groups of four hex characters (the account fingerprint, the invite's `fk`) |
