@@ -35,11 +35,15 @@ use crate::{env_opt, open_service, sync_once, uuid_of_room, Config};
 
 pub mod api;
 pub mod appearance;
+pub mod contacts_api;
 pub mod dashboard;
 pub mod dashboard_hive;
+pub mod dms;
 pub mod flow_api;
 pub mod forges_api;
 pub mod hub;
+pub mod identity_api;
+pub mod invite_code;
 pub mod lab;
 pub mod notify;
 pub mod ntfy;
@@ -51,6 +55,8 @@ pub mod repos_api;
 pub mod sets;
 pub mod tunnel;
 
+#[cfg(test)]
+mod identity_tests;
 #[cfg(test)]
 mod tests;
 
@@ -341,6 +347,16 @@ pub struct Shared {
     pub repos: repos_api::RepoState,
     /// Events waiting for a phone's passkey (B3 `presence/prepare`).
     pub presence_drafts: presence_api::Pending,
+    /// The box's direct messages (`dms.rs`).
+    pub dms: dms::DmStore,
+    /// Wakes the DM sync loop after a local write.
+    pub dm_kick: Notify,
+    /// One contact publish or drop-box read at a time.
+    pub contact_lock: tokio::sync::Mutex<()>,
+    /// The last contacts status (`contacts_api::status`).
+    pub contact_state: Mutex<String>,
+    /// Drop-box invites from the last listing (codes stay on the box).
+    pub pending_codes: identity_api::PendingCodes,
 }
 
 /// How long a dashboard snapshot of the workspace is reused.
@@ -636,7 +652,7 @@ impl Shared {
         let mut created = Vec::new();
         {
             let mut differ = self.differ.lock().unwrap_or_else(|e| e.into_inner());
-            let sessions = match self.workspace_chats() {
+            let sessions = match self.phone_chats() {
                 Ok(s) => s,
                 Err(e) => {
                     eprintln!("serve: refresh failed: {e}");
@@ -644,6 +660,7 @@ impl Shared {
                 }
             };
             let mut recruit_pushed = false;
+            let mut phone_ctx: Option<api::PhoneChatCtx> = None;
             for change in differ.diff(&sessions) {
                 use hub::Change;
                 match change {
@@ -719,7 +736,8 @@ impl Shared {
                     Change::ChatUpdated { chat } => {
                         let Some(s) = sessions.iter().find(|s| s.id == chat) else { continue };
                         let unread = self.unread(s, &me);
-                        self.hub.emit("chat.updated", hub::wrap("chat", api::chat_dto(s, unread)));
+                        let ctx = phone_ctx.get_or_insert_with(|| api::PhoneChatCtx::new(self));
+                        self.hub.emit("chat.updated", hub::wrap("chat", ctx.dto(self, s, unread)));
                     }
                 }
             }
@@ -730,6 +748,9 @@ impl Shared {
             self.sync_kick.notify_one();
             self.refresh();
         }
+        // A DM never pushes (its text stays between the two people and
+        // this box); only the workspace's chats do.
+        notices.retain(|(n, _)| !self.is_dm_chat(n.chat_id));
         if let Some(t) = &self.tunnel {
             for (_, push) in &notices {
                 t.push_all(push);
@@ -756,6 +777,13 @@ impl Shared {
         self.refresh();
         self.worker_kick.notify_one();
         self.sync_kick.notify_one();
+        self.dm_kick.notify_one();
+    }
+
+    /// Whether `chat` belongs to one of the box's DMs.
+    pub fn is_dm_chat(&self, chat: Uuid) -> bool {
+        let ws = self.lock().store().workspace_of(chat).ok().flatten();
+        ws.is_some_and(|w| w != self.ws && self.dms.get(w).is_some())
     }
 }
 
@@ -950,6 +978,9 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         Standing::Revoked => {}
         Standing::Own => register_own(&mut svc, ws, &host_id, &opts)?,
     }
+    if standing == Standing::Own {
+        pin_own_founding(&svc, ws);
+    }
     if standing != Standing::Revoked {
         crate::publish_key_agreement(&cfg, &mut svc);
     }
@@ -980,6 +1011,11 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         sync_status: Mutex::new((first_sync, None)),
         busy: Mutex::new(HashSet::new()),
         presence_drafts: presence_api::Pending::default(),
+        dms: dms::DmStore::load(&cfg.data_dir),
+        dm_kick: Notify::new(),
+        contact_lock: tokio::sync::Mutex::new(()),
+        contact_state: Mutex::new("unknown".into()),
+        pending_codes: identity_api::PendingCodes::default(),
         hive_snapshot: Mutex::new(None),
         dashboard_mcp: dashboard_mcp_registry(),
         repos: repos_api::RepoState::default(),
@@ -989,7 +1025,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
     // Seed the differ and mark every existing chat read, so a restart neither
     // replays history as events nor shows it all as unread.
     {
-        let chats = shared.workspace_chats()?;
+        let chats = shared.phone_chats()?;
         shared.differ.lock().unwrap_or_else(|e| e.into_inner()).seed(&chats);
         let mut marks = shared.read_marks.lock().unwrap_or_else(|e| e.into_inner());
         for s in &chats {
@@ -1017,7 +1053,9 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
     if shared.cfg.relay_url.is_some() {
         tasks.push(tokio::spawn(sync_loop(shared.clone(), rx.clone())));
         tasks.push(tokio::spawn(presence_loop(shared.clone(), rx.clone())));
+        tasks.push(tokio::spawn(contact_loop(shared.clone(), rx.clone())));
     }
+    tasks.push(tokio::spawn(dms::dm_sync_loop(shared.clone(), rx.clone())));
     tasks.push(tokio::spawn(token_watch(shared.clone(), rx.clone())));
     if let Some(t) = shared.tunnel.clone() {
         tasks.push(tokio::spawn(tunnel::pending_loop(t.clone(), rx.clone())));
@@ -1026,6 +1064,41 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
     let worker = spawn_worker(shared.clone())?;
     shared.sync_kick.notify_one();
     Ok(ServeHandle { addr, shared, shutdown, worker: Mutex::new(Some(worker)), tasks: Mutex::new(tasks) })
+}
+
+/// Pin the box's workspace to its own account when this box founded it (its
+/// account's signed seed is the log's base): co-members, verified keys and
+/// the key-agreement publication all come from pinned logs only. A box that
+/// joined from an invite was pinned to the invite's founder by `ligus enroll`.
+fn pin_own_founding(svc: &ChatService, ws: Uuid) {
+    let store = svc.store();
+    if svc.is_delegated() || !matches!(store.workspace_pin(ws), Ok(None)) {
+        return;
+    }
+    let Some(account) = svc.author().account_id else { return };
+    let fk = hive_runtime::envelope_verifier::FounderPin::fingerprint_hex(&svc.account_public_key());
+    let Some(pin) = hive_runtime::envelope_verifier::FounderPin::parse(&account.to_string(), &fk) else { return };
+    let Ok(envs) = store.list(workspace_config_session_id(ws)) else { return };
+    if hive_runtime::envelope_verifier::founder_seed(&envs, &pin).is_some() {
+        if let Err(e) = store.set_workspace_pin(ws, &account.to_string(), &fk) {
+            eprintln!("serve: pinning this box's own workspace failed: {e}");
+        }
+    }
+}
+
+/// How often the box refreshes its contact record (relays keep one 30 days).
+const CONTACT_EVERY: Duration = Duration::from_secs(15 * 60);
+
+/// Publish the box's contact record and announce its id (`contacts_api`).
+async fn contact_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
+    loop {
+        let on = contacts_api::ensure_contact(&shared).await;
+        shared.set_contact_status(contacts_api::status(&shared, on));
+        tokio::select! {
+            _ = tokio::time::sleep(CONTACT_EVERY) => {}
+            _ = stop.wait_for(|s| *s) => return,
+        }
+    }
 }
 
 /// Pick up a token rotated by `ligus phones revoke` (§13.2 step 4).

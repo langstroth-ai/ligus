@@ -298,6 +298,14 @@ fn open_service(cfg: &Config) -> Result<ChatService> {
 /// room regardless of their workspace (the sync engine now refuses both ways).
 /// The database is backed up next to itself first; nothing is deleted unless
 /// that backup succeeds. A no-op (no backup) once clean.
+/// The workspaces this data dir syncs: its room and the box's own direct
+/// messages (`serve-dms.json`).
+fn kept_workspaces(cfg: &Config) -> HashSet<Uuid> {
+    let mut keep = HashSet::from([uuid_of_room(&cfg.room)]);
+    keep.extend(serve::dms::DmStore::load(&cfg.data_dir).workspace_ids());
+    keep
+}
+
 fn purge_foreign_workspaces(cfg: &Config) -> Result<()> {
     let db = cfg.data_dir.join("hive.db");
     if !db.exists() {
@@ -305,7 +313,7 @@ fn purge_foreign_workspaces(cfg: &Config) -> Result<()> {
     }
     let identity = IdentityStore::new(&cfg.data_dir, StoreKeyVault::for_data_dir(&cfg.data_dir));
     let own_device = identity.bootstrap("hive-cli", "hive-cli", "hive-cli")?.device.id;
-    let keep = HashSet::from([uuid_of_room(&cfg.room)]);
+    let keep = kept_workspaces(cfg);
     let mut store = EventStore::open(&db)?;
     if store.foreign_workspaces(&keep, own_device)?.is_empty() {
         return Ok(());
