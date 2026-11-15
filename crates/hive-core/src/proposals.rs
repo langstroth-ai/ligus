@@ -183,7 +183,9 @@ impl ProposedCommand {
         }
         if let Some(c) = &self.cwd {
             let p = std::path::Path::new(c);
-            if p.is_absolute() || p.components().any(|x| matches!(x, std::path::Component::ParentDir | std::path::Component::Prefix(_))) {
+            // `has_root`: on Windows `/etc` isn't absolute (no drive) but
+            // joining it onto the worktree still lands outside it.
+            if p.is_absolute() || p.has_root() || p.components().any(|x| matches!(x, std::path::Component::ParentDir | std::path::Component::Prefix(_))) {
                 return Err("cwd must be relative to the worktree, without ..".into());
             }
         }

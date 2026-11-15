@@ -623,47 +623,37 @@ impl RefreshLock {
     }
 }
 
-/// Elsewhere: an exclusive-create lock file, taken over only when older than
-/// the longest a refresh can hold it.
+/// Elsewhere (Windows): the OS file lock (`LockFileEx` through
+/// [`std::fs::File::try_lock`]). Like `flock`, the OS drops it when the
+/// holder exits or crashes, so a held lock is never taken over. (An earlier
+/// exclusive-create lock file was deleted once it looked older than five
+/// minutes, the same stale-lock guess E-4 removed on Unix.)
 #[cfg(not(unix))]
-struct RefreshLock(PathBuf);
+struct RefreshLock(#[allow(dead_code)] std::fs::File);
 
 #[cfg(not(unix))]
 impl RefreshLock {
     async fn acquire(dir: &Path) -> Result<Self, AuthError> {
-        let p = dir.join(LOCK_FILE);
+        std::fs::create_dir_all(dir).map_err(|e| AuthError::Io(e.to_string()))?;
+        let f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(dir.join(LOCK_FILE))
+            .map_err(|e| AuthError::Io(e.to_string()))?;
+        // Up to 90 s: longer than one refresh can hold the lock.
         for _ in 0..900 {
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&p)
-            {
-                Ok(_) => return Ok(Self(p)),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    let stale = std::fs::metadata(&p)
-                        .and_then(|m| m.modified())
-                        .ok()
-                        .and_then(|t| t.elapsed().ok())
-                        .is_some_and(|age| age > Duration::from_secs(300));
-                    if stale {
-                        let _ = std::fs::remove_file(&p);
-                        continue;
-                    }
+            match f.try_lock() {
+                Ok(()) => return Ok(Self(f)),
+                Err(std::fs::TryLockError::WouldBlock) => {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
-                Err(e) => return Err(AuthError::Io(e.to_string())),
+                Err(std::fs::TryLockError::Error(e)) => return Err(AuthError::Io(e.to_string())),
             }
         }
         Err(AuthError::Io(
             "timed out waiting for the refresh lock".into(),
         ))
-    }
-}
-
-#[cfg(not(unix))]
-impl Drop for RefreshLock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
     }
 }
 

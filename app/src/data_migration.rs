@@ -113,7 +113,8 @@ fn copy_tree(from: &Path, to: &Path) -> io::Result<()> {
             copy_tree(&src, &dst)?;
         } else if meta.is_file() {
             std::fs::copy(&src, &dst)?;
-            std::fs::File::open(&dst)?.sync_all()?;
+            // Writable: Windows' FlushFileBuffers refuses a read-only handle.
+            std::fs::OpenOptions::new().write(true).open(&dst)?.sync_all()?;
         }
     }
     sync_dir(to);

@@ -574,7 +574,8 @@ fn local_checkouts(repos_dir: &FsPath) -> Vec<(String, PathBuf)> {
 /// component of an absolute path (which is never shown).
 fn binding_name(raw: &str) -> (String, bool) {
     let p = FsPath::new(raw.trim());
-    if p.is_absolute() {
+    // `has_root`: a drive-less `/home/x` on Windows is still a full path.
+    if p.is_absolute() || p.has_root() {
         (p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "checkout".into()), true)
     } else {
         (raw.trim().to_string(), false)
@@ -1485,10 +1486,22 @@ mod tests {
         assert_eq!(parse_progress("fatal: repository not found"), None);
     }
 
+    /// A command that runs for about five seconds (Windows has no `sleep`).
+    fn five_seconds() -> Command {
+        if cfg!(windows) {
+            let mut c = Command::new("ping");
+            c.args(["-n", "6", "127.0.0.1"]);
+            c
+        } else {
+            let mut c = Command::new("sleep");
+            c.arg("5");
+            c
+        }
+    }
+
     #[test]
     fn run_times_out_and_kills() {
-        let mut c = Command::new("sleep");
-        c.arg("5");
+        let c = five_seconds();
         let t = Instant::now();
         let e = run(c, Duration::from_millis(300)).unwrap_err();
         assert!(e.contains("timed out"), "{e}");
@@ -1497,8 +1510,7 @@ mod tests {
 
     #[test]
     fn check_can_stop_a_command() {
-        let mut c = Command::new("sleep");
-        c.arg("5");
+        let c = five_seconds();
         let e = run_watched(c, Duration::from_secs(10), |_| {}, || Some("too big".into())).unwrap_err();
         assert_eq!(e, "too big");
     }

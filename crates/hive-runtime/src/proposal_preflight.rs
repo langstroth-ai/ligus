@@ -285,7 +285,8 @@ mod tests {
             chat_id: "c1",
             diff: Some(DIFF),
             base_commit: Some(&base),
-            test_command: Some("grep -q 'hello world' a.txt".into()),
+            // `cmd /C` on Windows, `sh -c` elsewhere.
+            test_command: Some(if cfg!(windows) { r#"findstr /C:"hello world" a.txt"# } else { "grep -q 'hello world' a.txt" }.into()),
             test_timeout: Some(Duration::from_secs(30)),
             hosts: vec![("this device".into(), true)],
         };
