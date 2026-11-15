@@ -272,6 +272,47 @@ fn proxy_hosts_of(m: &Matcher) -> Vec<String> {
     hosts
 }
 
+/// Whether `raw` would be reached through a configured proxy (env or OS)
+/// and, if so, whether its name resolves here to public addresses only.
+///
+/// Through a proxy, the proxy resolves the target: the public-only resolver
+/// of [`public_only_client_builder`] never sees it. For a server someone
+/// else named (a relay in a DM invite), call this before each connection so
+/// a name that resolves (or was re-pointed) to a loopback, private or
+/// link-local address is refused before the request is handed to the proxy.
+/// A direct request is left to the resolver; a name this machine can't
+/// resolve is left to the proxy (a proxy with its own DNS view can still
+/// reach what it resolves: the documented limitation). Test builds resolve
+/// no names but `localhost`.
+pub async fn check_proxied_target(raw: &str) -> Result<()> {
+    check_proxied_target_with(raw, &proxy_matcher()).await
+}
+
+async fn check_proxied_target_with(raw: &str, proxies: &Matcher) -> Result<()> {
+    let Ok(uri) = raw.parse::<http::Uri>() else { return Ok(()) };
+    if proxies.intercept(&uri).is_none() {
+        return Ok(());
+    }
+    let Ok(u) = url::Url::parse(raw) else { return Ok(()) };
+    let host = match u.host().map(|h| h.to_owned()) {
+        Some(url::Host::Ipv4(ip)) => return if is_public_ip(ip.into()) { Ok(()) } else { Err(internal_refused(&ip.to_string())) },
+        Some(url::Host::Ipv6(ip)) => return if is_public_ip(ip.into()) { Ok(()) } else { Err(internal_refused(&ip.to_string())) },
+        Some(url::Host::Domain(d)) => d.trim_end_matches('.').to_ascii_lowercase(),
+        None => return Ok(()),
+    };
+    if real_hosts_denied() && host != "localhost" {
+        return Ok(());
+    }
+    let port = u.port_or_known_default().unwrap_or(443);
+    let lookup = tokio::time::timeout(Duration::from_secs(5), tokio::net::lookup_host((host.as_str(), port))).await;
+    if let Ok(Ok(addrs)) = lookup {
+        if addrs.into_iter().any(|a| !is_public_ip(a.ip())) {
+            return Err(internal_refused(&host));
+        }
+    }
+    Ok(())
+}
+
 /// A resolver that answers with public addresses only, so a name that
 /// resolves (or is rebound) to an internal address is never connected to.
 struct PublicOnly {
@@ -513,6 +554,24 @@ mod tests {
         assert!(super::check_url_address_with("https://git.example.com/api", false, &m).is_ok());
         let m = proxied("localhost:3128", "");
         assert!(super::check_url_address_with("https://localhost:8443/api", false, &m).is_ok());
+    }
+
+    /// Behind a proxy the proxy resolves the target, so the public-only
+    /// resolver never sees it: a server someone else named (a DM relay) is
+    /// resolved here first and refused when it lands on a non-public address.
+    /// Without a proxy (or excluded by NO_PROXY) the resolver applies, and a
+    /// name this machine can't resolve is left to the proxy.
+    #[tokio::test]
+    async fn a_proxied_target_is_resolved_here_first() {
+        let m = proxied("proxy.example:3128", "");
+        assert!(super::check_proxied_target_with("https://localhost:8443/", &m).await.is_err());
+        assert!(super::check_proxied_target_with("https://127.0.0.1/", &m).await.is_err());
+        assert!(super::check_proxied_target_with("https://[::1]/", &m).await.is_err());
+        assert!(super::check_proxied_target_with("https://relay.example.com/", &m).await.is_ok());
+        let direct = super::Matcher::builder().build();
+        assert!(super::check_proxied_target_with("https://localhost:8443/", &direct).await.is_ok());
+        let excluded = proxied("proxy.example:3128", "localhost");
+        assert!(super::check_proxied_target_with("https://localhost:8443/", &excluded).await.is_ok());
     }
 
     #[test]

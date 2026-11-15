@@ -509,6 +509,7 @@ pub async fn join(State(s): S, peer: Option<Extension<TunnelPeer>>, Json(req): J
             "This is an invite to another workspace. A box serves one workspace: open it on your desktop.",
         ));
     }
+    dms::foreign_relay_check(&s.cfg, &conn.relay_url).await.map_err(|e| ApiError::new(StatusCode::FORBIDDEN, e))?;
     Ok(Json(join_dm(&s, conn, req.confirm_safety_code)?))
 }
 
@@ -549,6 +550,7 @@ pub async fn accept_pending(State(s): S, Json(req): Json<DropRef>) -> ApiResult<
             "This is an invite to another workspace. A box serves one workspace: open it on your desktop.",
         ));
     }
+    dms::foreign_relay_check(&s.cfg, &conn.relay_url).await.map_err(|e| ApiError::new(StatusCode::FORBIDDEN, e))?;
     let out = join_dm(&s, conn, req.confirm_safety_code)?;
     contacts_api::accepted(&s, &req.relay, req.seq);
     s.pending_codes.remove(&req.relay, req.seq);

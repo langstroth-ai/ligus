@@ -83,6 +83,16 @@ access. `LIGUS_SECRET_BACKEND` (`keychain`, `secret-service`,
 - **Proxies**: Ligus uses `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY` and
   `NO_PROXY`, and where those set nothing, the proxy in the macOS or Windows
   network settings. A local proxy works the same way from either source.
+  Through a proxy, the proxy resolves the target, so the connect-time
+  public-address check doesn't see it. For servers someone else named, Ligus
+  resolves the name itself first: a code host must be marked internal to
+  reach a non-public address, and a DM relay from an invite whose name
+  resolves on this machine to a loopback, private or link-local address is
+  refused before each use (when you accept the invite, and before each sync
+  or contact call). A name only the proxy can resolve is left to the proxy,
+  and a proxy that resolves names differently from this machine can still
+  reach what it resolves: keep the proxy from reaching internal addresses
+  if invites from strangers matter to you.
 
 ## Trust boundaries by deployment shape {#trust-boundaries}
 

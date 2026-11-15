@@ -176,6 +176,10 @@ pub async fn ensure_contact(s: &Shared) -> bool {
             continue;
         }
         let Some(record) = own_record(s, &c.cid) else { break };
+        if let Err(e) = super::dms::foreign_relay_check(&s.cfg, relay).await {
+            eprintln!("serve: skipping a relay for the contact record ({e})");
+            continue;
+        }
         let client = super::dms::relay_client_for(&s.cfg, relay);
         let first = !c.published.contains_key(relay);
         match client.contact_put(&c.cid, &c.write_key, &record, first).await {
@@ -253,6 +257,10 @@ pub async fn deliver_invite(s: &Shared, person: &CoMember, invite: &str) -> bool
         s.dms.get(ws).map(|d| d.relay_url)
     };
     let Some(relay) = relay.filter(|r| !r.trim().is_empty()) else { return false };
+    if let Err(e) = super::dms::foreign_relay_check(&s.cfg, &relay).await {
+        eprintln!("serve: their relay was refused ({e}); share the link");
+        return false;
+    }
     let client = super::dms::relay_client_for(&s.cfg, &relay);
     let record = match client.contact_get(&cid).await {
         Ok(Some(r)) => r.record,
@@ -338,6 +346,9 @@ pub async fn pending(s: &Shared) -> (String, Vec<PendingInvite>) {
     let mut out = Vec::new();
     let mut handled_now: BTreeMap<String, Vec<u64>> = BTreeMap::new();
     for relay in contact.published.keys() {
+        if super::dms::foreign_relay_check(&s.cfg, relay).await.is_err() {
+            continue;
+        }
         let client = super::dms::relay_client_for(&s.cfg, relay);
         let Ok(items) = client.contact_drops_all(&contact.cid, &contact.write_key).await else { continue };
         let already = contact.handled.get(relay).cloned().unwrap_or_default();

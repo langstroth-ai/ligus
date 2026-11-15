@@ -231,6 +231,19 @@ pub fn relay_client_for(base: &Config, relay: &str) -> RelayClient {
     }
 }
 
+/// Behind an HTTP(S) proxy the proxy resolves a relay's name, so the
+/// public-only resolver of [`relay_client_for`] never sees it: before each
+/// use of a relay a DM invite named, resolve it here and refuse it when it
+/// lands on a loopback, private or link-local address
+/// (`hive_forge::http::check_proxied_target`). The box's own relay and
+/// direct connections are unaffected. `Err` is why, for the log or the phone.
+pub async fn foreign_relay_check(base: &Config, relay: &str) -> Result<(), String> {
+    if base.relay_url.as_deref().is_some_and(|r| same_relay(r, relay)) {
+        return Ok(());
+    }
+    hive_forge::http::check_proxied_target(relay.trim()).await.map_err(|e| e.to_string())
+}
+
 /// A DM relay URL the box will sync with: http(s), no credentials.
 pub fn valid_relay_url(raw: &str) -> bool {
     let Ok(u) = reqwest::Url::parse(raw.trim()) else { return false };
@@ -381,7 +394,11 @@ pub async fn dm_sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) 
                 engines.insert(conn.room.clone(), SyncEngine::new(client, conn.room.clone()).with_key_source(src));
             }
             let Some(engine) = engines.get_mut(&conn.room) else { continue };
-            match crate::sync_round(engine, &mut store).await {
+            let round = match foreign_relay_check(&shared.cfg, &conn.relay_url).await {
+                Ok(()) => crate::sync_round(engine, &mut store).await,
+                Err(e) => Err(anyhow::anyhow!(e)),
+            };
+            match round {
                 Ok((pushed, pulled)) => {
                     fails.remove(&conn.room);
                     if pulled > 0 || pushed > 0 {
