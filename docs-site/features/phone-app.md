@@ -119,12 +119,50 @@ sent anywhere, and there's no push in the demo.
 You can also move an existing agent to a different host from the phone.
 Creating agents and editing runtimes stay on the desktop.
 
+## Safety codes, invites and direct messages
+
+The **People** button in the chat list (and **Settings → People and safety
+codes**) shows who you are and who you share the workspace with, by safety
+code rather than by name:
+
+- **Your safety code**, eight groups of four characters. People compare it
+  with the one they see for you, in person or on a call.
+- **Everyone else** with their safety code, a **Look-alike name** tag when
+  two names (or someone's and yours) look the same, and their linked accounts
+  as chips (verified, self-asserted, stale, not checked). The chips show what
+  your host last checked; the phone never asks a forge. A handle can't
+  reorder the text around it.
+- **Invites for you** that arrived in your host's contact drop box. An invite
+  is *from* someone only when their device signed it and their code matches
+  ("From Ada: signed by their device…"); anything else only *says* it's from
+  them. An unsigned message invite can't be accepted, and a stranger's needs
+  you to compare safety codes first.
+- **Invite by link or QR code** makes a single-use invite to your host's
+  workspace. A copied link stays on this phone and expires after ten
+  minutes. **Open an invite link** (paste or scan) shows who it's from before
+  anything is joined.
+- **Direct messages** appear at the top of the chat list. **Message** on a
+  person opens your DM with them, or starts one: the invite goes to their
+  drop box, or you get a link to hand over. Agents don't run in DMs and DMs
+  never send a notification.
+
+When you join from an invite, the chat may say **Waiting for Ada's founding
+to sync** until the founder's signed founding reaches your host. Send is off
+and your draft is kept; it clears on its own.
+
+On a host that acts for you (enrolled as your device), an invite needs your
+passkey, and you can't start a DM there (start it on your desktop). Code-host
+changes on such a host need your presence too; make them on the host or the
+desktop.
+
 ## Repos
 
 The repo chip in a chat's header shows which repository and branch the chat
 works in on your home host. Tap it to switch the chat to another checkout,
-clone a GitHub repo, pull the latest, or open a pull request from the chat's
-branch. See [Repos on the home host](../ops/serve-repos.md).
+clone a repo from any code host your host is connected to (GitHub, GitLab,
+Forgejo, Gitea or Codeberg; filter by host), pull the latest, or open a pull
+or merge request from the chat's branch. **Settings → Code hosts** lists
+your host's connections (it holds the tokens, never the phone). See [Repos on the home host](../ops/serve-repos.md).
 
 ## Reviewing proposals
 
@@ -295,6 +333,7 @@ app:
 - switching dearth mode, approving joins, clearing a chat lockdown (the
   phone shows guard state read-only);
 - answering `@hive`: only a desktop runs a chat's primary runtime;
-- inviting, removing or re-roling members.
+- removing or re-roling members (invite links work on the phone);
+- joining another workspace (a host serves one; DMs are the exception).
 
 The full API the phone uses is in the [serve API reference](../reference/serve-api.md).
