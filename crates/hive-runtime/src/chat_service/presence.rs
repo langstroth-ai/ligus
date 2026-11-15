@@ -68,6 +68,10 @@ pub fn summarize(payload: &SessionEvent) -> String {
         }
         SessionEvent::ChatLockdownCleared { .. } => "Clear a chat's lockdown".into(),
         SessionEvent::DearthModeChanged { .. } => "Change dearth mode".into(),
+        SessionEvent::JoinApproved { subject } if subject.starts_with("invite:") => {
+            "Let someone join with a single-use invite".into()
+        }
+        SessionEvent::JoinApproved { subject } => format!("Let {subject} join"),
         other => format!("Confirm {}", other.kind_str()),
     }
 }

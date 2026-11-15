@@ -574,6 +574,7 @@ async fn invites_need_presence_on_a_delegated_box() {
     assert_eq!((code, v["error"].clone()), (403, json!("presence_required")), "{v}");
     let prepared = a.post("/v1/presence/prepare", json!({ "action": "invite", "target": "workspace" })).await;
     assert_eq!(prepared["preview"]["kind"], json!("joinApproved"), "{prepared}");
+    assert_eq!(prepared["preview"]["summary"], json!("Let someone join with a single-use invite"));
     assert!(prepared["challenge"].as_str().is_some_and(|c| c.len() == 43));
     // A delegated box can't found a DM.
     let (code, v) = a.call(reqwest::Method::POST, "/v1/dms", Some(json!({ "accountId": Uuid::new_v4().to_string() }))).await;
