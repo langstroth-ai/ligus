@@ -20,10 +20,13 @@ export function forgeLabel(provider: string, host: string): string {
 }
 
 /// A name without control, bidi or zero-width characters (they can reorder
-/// the text after them or make one name look like another).
+/// the text after them or make one name look like another). The same set
+/// as `hive_proto::names::is_hidden_name_char`, supplementary planes
+/// included (musical format characters, tags and the variation selectors
+/// supplement): checked against the shared display-name vectors.
 export function stripBidi(s: string): string {
-  // eslint-disable-next-line no-control-regex
-  return s.replace(/[\u0000-\u001F\u007F-\u009F\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF9-\uFFFB]/g, "");
+  // eslint-disable-next-line no-control-regex, no-misleading-character-class
+  return s.replace(/[\u0000-\u001F\u007F-\u009F\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF9-\uFFFB\u{1D173}-\u{1D17A}\u{E0000}-\u{E0FFF}]/gu, "");
 }
 
 export type ChipKind = "verified" | "unverified" | "stale" | "claim";
