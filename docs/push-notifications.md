@@ -149,7 +149,7 @@ the same team.
 
 ### 2. Run the relay with the key
 
-Use the open relay ([honeyhive-ai/relay](https://github.com/honeyhive-ai/relay),
+Use the open relay ([ligus-ai/relay](https://github.com/ligus-ai/relay),
 `cmd/hive-relay`) with tunnels on and the APNs settings:
 
 ```sh
@@ -178,7 +178,7 @@ hive remote status          # "push available" once connected to a relay with a 
 
 ### 4. Build the app with push on
 
-In the iOS app's repository (`hive-ios`), set in `Config/Local.xcconfig`:
+In the iOS app's repository (`ligus-ios`), set in `Config/Local.xcconfig`:
 
 ```
 LIGUS_PUSH_NOTIFICATIONS = YES

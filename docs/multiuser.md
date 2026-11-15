@@ -12,7 +12,7 @@ separately; relay forwarding is all you need to test multiuser.)
 cargo run --release -p hive-relay          # binds 0.0.0.0:8443
 # or: LIGUS_RELAY_ADDR=0.0.0.0:9000 cargo run -p hive-relay
 # or containerized:
-docker build -t hive-relay https://github.com/honeyhive-ai/relay.git && \
+docker build -t hive-relay https://github.com/ligus-ai/relay.git && \
   docker run -p 8443:8443 hive-relay
 ```
 

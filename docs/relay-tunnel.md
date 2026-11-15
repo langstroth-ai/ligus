@@ -22,7 +22,7 @@ It covers:
 - §19 the test vectors and the interop test plan, §20 open questions.
 
 Product context, App Store, billing and the threat model live in the iOS
-repository's `docs/DESIGN.md` (private repo `hive-ios`). This document is only
+repository's `docs/DESIGN.md` (private repo `ligus-ios`). This document is only
 the open wire protocol.
 
 **Golden vectors:** [`relay-tunnel/vectors.json`](relay-tunnel/vectors.json),
@@ -54,7 +54,7 @@ content.
 ## 1. Overview
 
 ```
- phone (iOS app)                    relay (Go, honeyhive-ai/relay)            host (hive serve)
+ phone (iOS app)                    relay (Go, ligus-ai/relay)            host (hive serve)
  ───────────────                    ─────────────────────────────             ─────────────────
                                     ◀── WSS /v1/tunnel/host ─────────────────  persistent control
                                         challenge / hello(sig) / welcome        connection (§6.2)
@@ -622,7 +622,7 @@ HTTP status codes inside streams are the API's own ([ios-app.md](ios-app.md)).
 
 ### 12.1 Relay behaviour where v1 was silent
 
-The reference relay ([`honeyhive-ai/relay`](https://github.com/honeyhive-ai/relay),
+The reference relay ([`ligus-ai/relay`](https://github.com/ligus-ai/relay),
 Go) made these choices where the text above didn't decide. Other relays
 SHOULD behave the same, and clients MUST tolerate them:
 
@@ -768,7 +768,7 @@ that key: someone self-hosting builds and signs the app themselves
 
 ## 15. Relay seams and configuration
 
-### 15.1 Seams (Go, `honeyhive-ai/relay`)
+### 15.1 Seams (Go, `ligus-ai/relay`)
 
 ```go
 type HostStatus struct { Active bool; MaxSessions int } // !Active == "pending"
@@ -809,7 +809,7 @@ tunnel provider by upgrading.
 
 ### 15.3 Hosted build
 
-A private downstream binary (`honeyhive-ai/hive-cloud`) imports the relay
+A private downstream binary (`ligus-ai/hive-cloud`) imports the relay
 package and injects:
 
 - a `TunnelPolicy` backed by App Store entitlements. Hosts register as
