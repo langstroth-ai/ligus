@@ -121,8 +121,8 @@ impl Shared {
             confirmed,
             self.holds_room(&conn.room),
         )?;
-        if !dms::valid_relay_url(&conn.relay_url) {
-            return Err("the invite names a relay address this box won't use".into());
+        if !dms::dm_relay_allowed(self.cfg.relay_url.as_deref(), &conn.relay_url) {
+            return Err("the invite names a relay this box won't use (only its own relay, or a public https one)".into());
         }
         if conn.key.as_deref().is_none_or(|k| k.trim().is_empty()) {
             return Err("the invite carries no key for the conversation".into());

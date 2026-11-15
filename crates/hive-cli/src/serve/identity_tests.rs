@@ -213,6 +213,10 @@ async fn until<T>(boxes: &[&Box_], secs: u64, mut f: impl AsyncFnMut() -> Option
 /// Box A founds the workspace; B joins from A's signed invite link, as
 /// `ligus enroll` would (pin, join invite, the key from the code).
 async fn two_boxes() -> (Box_, Box_, C, tempfile::TempDir) {
+    two_boxes_with(None).await
+}
+
+async fn two_boxes_with(b_ntfy: Option<ntfy::Ntfy>) -> (Box_, Box_, C, tempfile::TempDir) {
     let tmp = tempfile::tempdir().unwrap();
     let (relay, contacts) = spawn_relay().await;
     let room = format!("id-test-{}", Uuid::new_v4());
@@ -232,7 +236,12 @@ async fn two_boxes() -> (Box_, Box_, C, tempfile::TempDir) {
     }
     let mut b_cfg = cfg_for(&b_dir, &conn.relay_url, &conn.room, conn.key.clone());
     b_cfg.epoch_keys = conn.ek.clone();
-    let b = Box_::start(b_cfg, "Bea").await;
+    let mut o = opts(&b_cfg.data_dir, "Bea");
+    o.ntfy = b_ntfy;
+    let handle = start(b_cfg, o).await.unwrap();
+    let base = format!("http://{}", handle.addr);
+    let token = handle.shared.token();
+    let b = Box_ { handle, base, token, client: hive_forge::new_http_client() };
     (a, b, contacts, tmp)
 }
 
@@ -576,6 +585,21 @@ async fn invites_need_presence_on_a_delegated_box() {
     assert_eq!(prepared["preview"]["kind"], json!("joinApproved"), "{prepared}");
     assert_eq!(prepared["preview"]["summary"], json!("Let someone join with a single-use invite"));
     assert!(prepared["challenge"].as_str().is_some_and(|c| c.len() == 43));
+    // A made-up assertion is refused: a stamped assertion must verify, so a
+    // bearer can't commit the invite without the owner's passkey.
+    let before = a.handle.shared.lock().store().list(hive_core::workspace_config_session_id(a.handle.shared.ws)).unwrap().len();
+    let (code, v) = a
+        .call(
+            reqwest::Method::POST,
+            "/v1/presence/commit",
+            Some(json!({ "prepareId": prepared["prepareId"], "assertion": {
+                "credentialId": "AAAA", "authenticatorData": "AAAA", "clientDataJSON": "AAAA", "signature": "AAAA" } })),
+        )
+        .await;
+    assert!(code == 403 || code == 400 || code == 500, "{code} {v}");
+    assert!(v.get("invite").is_none());
+    let after = a.handle.shared.lock().store().list(hive_core::workspace_config_session_id(a.handle.shared.ws)).unwrap().len();
+    assert_eq!(before, after, "nothing was appended");
     // A delegated box can't found a DM.
     let (code, v) = a.call(reqwest::Method::POST, "/v1/dms", Some(json!({ "accountId": Uuid::new_v4().to_string() }))).await;
     assert!(code == 404 || code == 409, "{code} {v}");
@@ -608,4 +632,58 @@ fn dms_are_kept_by_the_cleanup() {
     assert!(keep.contains(&hive_core::room_workspace_id(&room)));
     assert!(keep.contains(&hive_core::room_workspace_id("main-room")));
     assert_eq!(keep.len(), 2);
+}
+
+/// DMs never push: a mention of Bea in a DM stays off her ntfy topic (its
+/// text is between the two of them and her box), while the same mention in
+/// a workspace chat is pushed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dm_messages_never_push() {
+    let pushes: Arc<Mutex<Vec<String>>> = Arc::default();
+    let p = pushes.clone();
+    let router = Router::new().route(
+        "/{topic}",
+        axum::routing::post(move |body: String| {
+            let p = p.clone();
+            async move {
+                p.lock().unwrap().push(body);
+                "{}"
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let ntfy = ntfy::Ntfy { url: format!("http://{addr}"), topic: "bea".into(), token: None };
+    let (a, b, _contacts, _tmp) = two_boxes_with(Some(ntfy)).await;
+    know_each_other(&a, &b).await;
+    let b_acc = b.account();
+    let opened = a.post("/v1/dms", json!({ "accountId": b_acc.to_string() })).await;
+    let b2 = &b;
+    let pending = until(&[&a, &b], 30, async || {
+        let p = b2.get("/v1/invites/pending").await;
+        p["invites"].as_array().and_then(|l| l.first().cloned())
+    })
+    .await;
+    b.post("/v1/invites/pending/accept", json!({ "relay": pending["relay"], "seq": pending["seq"] })).await;
+    let chat = opened["chatId"].as_str().unwrap().to_string();
+    a.post(&format!("/v1/chats/{chat}/messages"), json!({ "body": "@Bea secret DM text" })).await;
+    until(&[&a, &b], 30, async || {
+        let (code, m) = b2.call(reqwest::Method::GET, &format!("/v1/chats/{chat}/messages"), None).await;
+        (code == 200 && m.to_string().contains("secret DM text")).then_some(())
+    })
+    .await;
+    // The same mention in a workspace chat.
+    let ws_chat = a.post("/v1/chats", json!({ "title": "plans" })).await["chat"]["id"].as_str().unwrap().to_string();
+    a.post(&format!("/v1/chats/{ws_chat}/messages"), json!({ "body": "@Bea workspace ping" })).await;
+    let pushed = until(&[&a, &b], 30, async || {
+        let all = pushes.lock().unwrap().join("\n");
+        all.contains("plans").then_some(all)
+    })
+    .await;
+    assert!(!pushed.contains("secret DM text"), "{pushed}");
+    // The DM's chat is its #general: nothing was pushed for it.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let all = pushes.lock().unwrap().clone();
+    assert!(all.iter().all(|x| x.contains("plans")), "only the workspace chat pushed: {all:?}");
 }

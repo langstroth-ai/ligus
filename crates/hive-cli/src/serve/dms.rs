@@ -221,6 +221,39 @@ pub fn valid_relay_url(raw: &str) -> bool {
     matches!(u.scheme(), "http" | "https") && u.host_str().is_some() && u.username().is_empty() && u.password().is_none()
 }
 
+/// Whether the box will sync a DM through `relay`, which the invite's sender
+/// chose: its own relay (whatever its address), or a public `https` relay.
+/// A relay on a loopback, private, link-local or local-name address would
+/// turn an invite into a way to make the box send requests inside its
+/// network (and a plain-http one to expose the DM's traffic).
+pub fn dm_relay_allowed(own_relay: Option<&str>, relay: &str) -> bool {
+    if !valid_relay_url(relay) {
+        return false;
+    }
+    if own_relay.is_some_and(|o| same_relay(o, relay)) {
+        return true;
+    }
+    let Ok(u) = reqwest::Url::parse(relay.trim()) else { return false };
+    if u.scheme() != "https" {
+        return false;
+    }
+    let Some(host) = u.host_str() else { return false };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => !(ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified()
+            || ip.is_broadcast() || ip.is_documentation() || (ip.octets()[0] == 100 && (ip.octets()[1] & 0xc0) == 64)),
+        Ok(std::net::IpAddr::V6(ip)) => {
+            let seg0 = ip.segments()[0];
+            !(ip.is_loopback() || ip.is_unspecified() || (seg0 & 0xfe00) == 0xfc00 || (seg0 & 0xffc0) == 0xfe80
+                || ip.to_ipv4_mapped().is_some())
+        }
+        Err(_) => {
+            let d = host.trim_end_matches('.').to_ascii_lowercase();
+            d.contains('.') && d != "localhost" && ![".local", ".internal", ".lan", ".home.arpa", ".localhost"].iter().any(|s| d.ends_with(s))
+        }
+    }
+}
+
 impl Shared {
     /// The live chats of the box's DMs (each DM's own chats), archived DMs
     /// included (read-only).
@@ -384,6 +417,27 @@ mod tests {
         assert!(!valid_relay_url("https://user:pw@relay.example"));
         assert!(!valid_relay_url("file:///etc/passwd"));
         assert!(!valid_relay_url("not a url"));
+        // A DM's relay: the box's own (any address), else public https.
+        let own = Some("http://127.0.0.1:8443");
+        assert!(dm_relay_allowed(own, "http://127.0.0.1:8443/"));
+        assert!(dm_relay_allowed(own, "https://relay.example.org"));
+        for bad in [
+            "http://relay.example.org",
+            "https://127.0.0.1:9",
+            "https://10.0.0.5",
+            "https://169.254.169.254",
+            "https://100.100.100.100",
+            "https://[::1]",
+            "https://[fd00::1]",
+            "https://[::ffff:10.0.0.1]",
+            "https://localhost",
+            "https://printer.local",
+            "https://box.internal",
+            "https://intranet",
+            "https://u:p@relay.example.org",
+        ] {
+            assert!(!dm_relay_allowed(own, bad), "{bad}");
+        }
     }
 
     #[test]
