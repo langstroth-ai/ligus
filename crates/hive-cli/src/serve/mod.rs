@@ -1078,6 +1078,15 @@ fn pin_own_founding(svc: &ChatService, ws: Uuid) {
     let Some(account) = svc.author().account_id else { return };
     let fk = hive_runtime::envelope_verifier::FounderPin::fingerprint_hex(&svc.account_public_key());
     let Some(pin) = hive_runtime::envelope_verifier::FounderPin::parse(&account.to_string(), &fk) else { return };
+    // Only when the unpinned fold already takes this account's seed as its
+    // base, so pinning changes no trust decision: a later seed of this box's
+    // own (written while the real founder's log hadn't synced, or before a
+    // founder pinned itself) must never displace an earlier founder.
+    let base_is_mine =
+        svc.load(workspace_config_session_id(ws)).ok().flatten().is_some_and(|c| c.creator_actor_id == account.to_string());
+    if !base_is_mine {
+        return;
+    }
     let Ok(envs) = store.list(workspace_config_session_id(ws)) else { return };
     if hive_runtime::envelope_verifier::founder_seed(&envs, &pin).is_some() {
         if let Err(e) = store.set_workspace_pin(ws, &account.to_string(), &fk) {
