@@ -135,11 +135,16 @@ fn short(sha: &str) -> &str {
     sha.get(..8).unwrap_or(sha)
 }
 
+/// The shell that runs `cmdline`. On Windows the command line itself is
+/// appended raw after the sandbox has prepared the command (see
+/// [`run_bounded`]): `cmd` parses its own command line, and the standard
+/// argument quoting (`\"`) would mangle any quoted argument in it.
 fn shell(cmdline: &str) -> std::process::Command {
     #[cfg(windows)]
     {
+        let _ = cmdline;
         let mut c = command("cmd");
-        c.args(["/C", cmdline]);
+        c.args(["/D", "/S", "/C"]);
         c
     }
     #[cfg(not(windows))]
@@ -162,6 +167,13 @@ fn run_bounded(dir: &Path, cmdline: &str, timeout: Duration) -> Result<bool, Str
     let spec = crate::executor::SpawnSpec::new(crate::executor::Purpose::Preflight, &program, args).cwd(Some(dir));
     let crate::executor::Prepared { command: mut sh, guard: _sandbox } =
         crate::executor::prepare(spec).map_err(|e| format!("couldn't start the test command: {e}"))?;
+    // `cmd /S /C "<line>"` runs <line> verbatim (Windows has no agent
+    // sandbox, so the prepared command is `cmd` itself and this lands last).
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        sh.raw_arg(format!("\"{cmdline}\""));
+    }
     let mut child = sh
         .stdin(Stdio::null())
         .stdout(Stdio::null())
