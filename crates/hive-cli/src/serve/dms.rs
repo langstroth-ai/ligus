@@ -243,13 +243,7 @@ pub fn dm_relay_allowed(own_relay: Option<&str>, relay: &str) -> bool {
     let Some(host) = u.host_str() else { return false };
     let host = host.trim_start_matches('[').trim_end_matches(']');
     match host.parse::<std::net::IpAddr>() {
-        Ok(std::net::IpAddr::V4(ip)) => !(ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified()
-            || ip.is_broadcast() || ip.is_documentation() || (ip.octets()[0] == 100 && (ip.octets()[1] & 0xc0) == 64)),
-        Ok(std::net::IpAddr::V6(ip)) => {
-            let seg0 = ip.segments()[0];
-            !(ip.is_loopback() || ip.is_unspecified() || (seg0 & 0xfe00) == 0xfc00 || (seg0 & 0xffc0) == 0xfe80
-                || ip.to_ipv4_mapped().is_some())
-        }
+        Ok(ip) => hive_forge::http::is_public_ip(ip),
         Err(_) => {
             let d = host.trim_end_matches('.').to_ascii_lowercase();
             d.contains('.') && d != "localhost" && ![".local", ".internal", ".lan", ".home.arpa", ".localhost"].iter().any(|s| d.ends_with(s))
@@ -438,6 +432,15 @@ mod tests {
             "https://box.internal",
             "https://intranet",
             "https://u:p@relay.example.org",
+            // Literals skip the resolver: every non-public form is refused.
+            "https://0.0.0.1",
+            "https://198.18.0.1",
+            "https://224.0.0.1",
+            "https://240.0.0.1",
+            "https://[64:ff9b::a00:1]",
+            "https://[::a00:1]",
+            "https://[fec0::1]",
+            "https://[ff02::1]",
         ] {
             assert!(!dm_relay_allowed(own, bad), "{bad}");
         }
