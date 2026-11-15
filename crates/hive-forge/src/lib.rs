@@ -37,7 +37,7 @@ pub mod spec;
 pub mod tokens;
 
 pub use conn::{Connection, Connections};
-pub use http::{client_builder as http_client_builder, install_tls_provider, new_client as new_http_client, real_hosts_denied, tls_client_config, uses_platform_roots};
+pub use http::{client_builder as http_client_builder, install_tls_provider, public_only_client_builder, new_client as new_http_client, real_hosts_denied, tls_client_config, uses_platform_roots};
 pub use tokens::{AuthSource, CredentialSource, Purpose, Secret, TokenStore};
 
 /// Environment variables forge CLIs and community MCP servers read tokens

@@ -205,13 +205,16 @@ pub fn same_relay(a: &str, b: &str) -> bool {
 }
 
 /// A client for `relay` with the box's sign-in only when it is the box's own
-/// relay: a relay a DM invite named never sees the workspace token.
+/// relay: a relay a DM invite named never sees the workspace token, and is
+/// reached only at public addresses, checked when each connection is made
+/// (so a name re-pointed inside the box's network after the invite was
+/// checked is refused; [`dm_relay_allowed`] refuses internal literals).
 pub fn relay_client_for(base: &Config, relay: &str) -> RelayClient {
     let own = base.relay_url.as_deref().is_some_and(|r| same_relay(r, relay));
     if own {
         RelayClient::new(relay).with_auth(base.token.clone()).with_auth_cell(crate::auth::cell())
     } else {
-        RelayClient::new(relay)
+        RelayClient::public_only(relay)
     }
 }
 
@@ -438,6 +441,43 @@ mod tests {
         ] {
             assert!(!dm_relay_allowed(own, bad), "{bad}");
         }
+    }
+
+    /// A DM relay the invite's sender chose connects only to public
+    /// addresses, at connect time: a public-looking name that resolves (or
+    /// is re-pointed after the invite was checked) to a loopback or private
+    /// address is never reached. The box's own relay is unaffected.
+    #[tokio::test]
+    async fn a_foreign_dm_relay_never_connects_to_an_internal_address() {
+        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let h = hits.clone();
+        let app = axum::Router::new().fallback(move || {
+            let h = h.clone();
+            async move {
+                h.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                (axum::http::StatusCode::NOT_FOUND, "")
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let cid = hive_runtime::contacts::new_cid();
+        let base = Config {
+            data_dir: std::env::temp_dir(),
+            relay_url: Some(format!("http://127.0.0.1:{port}")),
+            token: None,
+            room: "main".into(),
+            key: None,
+            epoch_keys: Vec::new(),
+        };
+        // The box's own relay: reached.
+        assert!(relay_client_for(&base, &format!("http://127.0.0.1:{port}")).contact_get(&cid).await.is_ok());
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // Another relay whose name resolves to loopback: refused before any
+        // request leaves the box.
+        let foreign = format!("http://localhost:{port}");
+        assert!(relay_client_for(&base, &foreign).contact_get(&cid).await.is_err());
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1, "the internal address was reached");
     }
 
     #[test]
