@@ -300,10 +300,11 @@ fn open_service(cfg: &Config) -> Result<ChatService> {
 /// that backup succeeds. A no-op (no backup) once clean.
 /// The workspaces this data dir syncs: its room and the box's own direct
 /// messages (`serve-dms.json`).
-fn kept_workspaces(cfg: &Config) -> HashSet<Uuid> {
+/// An unreadable `serve-dms.json` is an error (never "no DMs").
+fn kept_workspaces(cfg: &Config) -> Result<HashSet<Uuid>> {
     let mut keep = HashSet::from([uuid_of_room(&cfg.room)]);
-    keep.extend(serve::dms::DmStore::load(&cfg.data_dir).workspace_ids());
-    keep
+    keep.extend(serve::dms::DmStore::workspace_ids_checked(&cfg.data_dir)?);
+    Ok(keep)
 }
 
 fn purge_foreign_workspaces(cfg: &Config) -> Result<()> {
@@ -313,7 +314,13 @@ fn purge_foreign_workspaces(cfg: &Config) -> Result<()> {
     }
     let identity = IdentityStore::new(&cfg.data_dir, StoreKeyVault::for_data_dir(&cfg.data_dir));
     let own_device = identity.bootstrap("hive-cli", "hive-cli", "hive-cli")?.device.id;
-    let keep = kept_workspaces(cfg);
+    let keep = match kept_workspaces(cfg) {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("ligus: serve-dms.json is unreadable ({e}); skipping the foreign-workspace cleanup so no direct message is deleted");
+            return Ok(());
+        }
+    };
     let mut store = EventStore::open(&db)?;
     if store.foreign_workspaces(&keep, own_device)?.is_empty() {
         return Ok(());

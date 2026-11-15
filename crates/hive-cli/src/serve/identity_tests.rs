@@ -628,10 +628,18 @@ fn dms_are_kept_by_the_cleanup() {
         &[],
     )
     .unwrap();
-    let keep = crate::kept_workspaces(&cfg);
+    let keep = crate::kept_workspaces(&cfg).unwrap();
     assert!(keep.contains(&hive_core::room_workspace_id(&room)));
     assert!(keep.contains(&hive_core::room_workspace_id("main-room")));
     assert_eq!(keep.len(), 2);
+    // An unreadable list is never taken as "no DMs": the cleanup would
+    // otherwise delete every DM's history.
+    std::fs::write(tmp.path().join("serve-dms.json"), "{ not json").unwrap();
+    assert!(crate::kept_workspaces(&cfg).is_err());
+    // No file at all: just the room.
+    let empty = tempfile::tempdir().unwrap();
+    let cfg = cfg_for(empty.path(), "http://127.0.0.1:9", "main-room", None);
+    assert_eq!(crate::kept_workspaces(&cfg).unwrap().len(), 1);
 }
 
 /// DMs never push: a mention of Bea in a DM stays off her ntfy topic (its

@@ -101,6 +101,19 @@ impl DmStore {
         Self { data_dir: data_dir.to_path_buf(), file: Mutex::new(file) }
     }
 
+    /// The DM rooms' workspaces as `serve-dms.json` lists them, or an error
+    /// when the file exists but can't be read: a caller deciding what to
+    /// delete (the foreign-workspace cleanup) must not take an unreadable
+    /// list as "no DMs".
+    pub fn workspace_ids_checked(data_dir: &Path) -> Result<Vec<Uuid>> {
+        let f = match std::fs::read_to_string(path(data_dir)) {
+            Ok(t) => serde_json::from_str::<DmFile>(&t)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => DmFile::default(),
+            Err(e) => return Err(e.into()),
+        };
+        Ok(f.dms.iter().map(DmConn::workspace_id).collect())
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, DmFile> {
         self.file.lock().unwrap_or_else(|e| e.into_inner())
     }
