@@ -36,17 +36,30 @@ pub(crate) struct Api {
 
 /// Whether this process is a test build that must never reach a real code
 /// host nor read the host's `gh` login: `cfg(test)`, any cargo test binary
-/// (they run from `target/<profile>/deps/`), or `LIGUS_FORGE_DENY_REAL=1`
-/// (for harnesses that spawn the real binary). Only loopback hosts are
-/// reachable then, and `gh` (from `PATH`) is never run.
+/// (see [`is_cargo_test_binary`]), or `LIGUS_FORGE_DENY_REAL=1` (for
+/// harnesses that spawn the real binary). Only loopback hosts are reachable
+/// then, and `gh` (from `PATH`) is never run.
 pub fn real_hosts_denied() -> bool {
     if cfg!(test) || std::env::var_os("LIGUS_FORGE_DENY_REAL").is_some_and(|v| v == "1") {
         return true;
     }
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().and_then(|d| d.file_name()).map(|n| n == "deps"))
-        .unwrap_or(false)
+    std::env::current_exe().ok().is_some_and(|p| is_cargo_test_binary(&p))
+}
+
+/// A binary cargo built for a test run: it lives in `target/<profile>/deps/`
+/// (the classic layout), or its name ends in cargo's 16-hex-digit metadata
+/// hash (`no_real_hosts-8e27a82306d4d313`), which also covers the newer
+/// build-dir layout (`target/<profile>/build/<pkg>/<hash>/out/`). The
+/// binaries cargo uplifts for people to run (`target/<profile>/ligus`) have
+/// neither.
+pub fn is_cargo_test_binary(exe: &std::path::Path) -> bool {
+    if exe.parent().and_then(|d| d.file_name()).is_some_and(|n| n == "deps") {
+        return true;
+    }
+    let Some(stem) = exe.file_stem().and_then(|s| s.to_str()) else { return false };
+    stem.rsplit_once('-').is_some_and(|(name, hash)| {
+        !name.is_empty() && hash.len() == 16 && hash.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    })
 }
 
 /// Install rustls's ring provider as the process default, once.
@@ -507,6 +520,20 @@ pub(crate) fn id_str(v: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// Test binaries are recognised in both cargo layouts; the binaries
+    /// people run are not.
+    #[test]
+    fn cargo_test_binaries_are_recognised_in_both_layouts() {
+        use std::path::Path;
+        assert!(super::is_cargo_test_binary(Path::new("/w/target/debug/deps/no_real_hosts-8e27a82306d4d313")));
+        assert!(super::is_cargo_test_binary(Path::new("/w/target/debug/build/hive-forge/8e27a82306d4d313/out/no_real_hosts-8e27a82306d4d313")));
+        assert!(super::is_cargo_test_binary(Path::new("C:/t/debug/build/hive-forge/8e27a82306d4d313/out/contract-8e27a82306d4d313.exe")));
+        assert!(!super::is_cargo_test_binary(Path::new("/w/target/debug/ligus")));
+        assert!(!super::is_cargo_test_binary(Path::new("C:/t/release/ligus.exe")));
+        assert!(!super::is_cargo_test_binary(Path::new("/usr/local/bin/ligus-serve")));
+        assert!(!super::is_cargo_test_binary(Path::new("/opt/x/tool-0123456789ABCDEF")));
+    }
+
     /// Non-reqwest TLS trusts the same roots as reqwest: the OS store's
     /// verifier, or the bundled roots when the OS has none.
     #[test]

@@ -23,7 +23,8 @@ pub const LOCK_FILE: &str = ".forges.lock";
 
 /// An exclusive hold on [`LOCK_FILE`] (released on drop). One holder per
 /// data dir at a time, across processes and threads: each acquire opens its
-/// own file description, so `flock` serialises threads of one process too.
+/// own file description (handle on Windows), so `flock` / `LockFileEx`
+/// serialises threads of one process too.
 /// Not reentrant: never acquire it again while holding it.
 pub struct ForgesLock {
     _file: std::fs::File,
@@ -50,6 +51,9 @@ impl ForgesLock {
                 }
             }
         }
+        // Windows: the OS file lock (`LockFileEx`), per handle like `flock`.
+        #[cfg(not(unix))]
+        file.lock().map_err(io)?;
         // Closing the file releases the lock.
         Ok(Self { _file: file })
     }

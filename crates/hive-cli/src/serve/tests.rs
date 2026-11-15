@@ -111,6 +111,9 @@ fn make_repo(dir: &Path, files: &[(&str, &str)]) {
     git(dir, &["init", "-q"]);
     git(dir, &["config", "user.email", "t@t"]);
     git(dir, &["config", "user.name", "t"]);
+    // Byte-exact checkouts whatever the host's git does (Git for Windows
+    // defaults to core.autocrlf=true).
+    git(dir, &["config", "core.autocrlf", "false"]);
     for (name, body) in files {
         std::fs::write(dir.join(name), body).unwrap();
     }

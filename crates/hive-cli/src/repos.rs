@@ -85,7 +85,7 @@ impl RepoBindings {
 
 pub fn resolve_path(repos_dir: &Path, raw: &str) -> PathBuf {
     let p = Path::new(raw.trim());
-    if p.is_absolute() {
+    if p.is_absolute() || p.has_root() {
         p.to_path_buf()
     } else {
         repos_dir.join(p)
@@ -193,6 +193,8 @@ pub fn parse_remote(url: &str) -> Option<RemoteRef> {
     } else {
         (String::new(), url.to_string())
     };
+    // A Windows local path (`C:\remotes\owner\name.git`) separates with `\`.
+    let path = path.replace('\\', "/");
     let path = path.trim_end_matches('/');
     let mut segs = path.rsplit('/');
     let name = segs.next()?;

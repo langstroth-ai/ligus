@@ -1123,10 +1123,10 @@ fn stale_turn_dirs_are_swept_and_live_ones_kept() {
     // No owner file at all (a dir from an older Ligus).
     let ownerless = parent.join("ligus-turn-old");
     std::fs::create_dir_all(&ownerless).unwrap();
-    // Owned by a running process (pid 1).
+    // Owned by a running process (pid 1; on Windows pid 4, the System process).
     let other = parent.join("ligus-turn-other");
     std::fs::create_dir_all(&other).unwrap();
-    std::fs::write(other.join(".ligus-owner"), "1").unwrap();
+    std::fs::write(other.join(".ligus-owner"), if cfg!(windows) { "4" } else { "1" }).unwrap();
     // Not a turn dir.
     let unrelated = parent.join("something-else");
     std::fs::create_dir_all(&unrelated).unwrap();
