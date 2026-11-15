@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { copyWhenReady } from "@/lib/clipboard";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   listWorkspaces,
@@ -83,8 +84,7 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
 
   async function copyInvite(ws: WorkspaceInfoDto) {
     try {
-      const code = await workspaceInvite(ws.id);
-      await navigator.clipboard.writeText(code);
+      await copyWhenReady(workspaceInvite(ws.id));
       toast.success(`Invite for “${ws.name}” copied.`);
     } catch (e) {
       toast.error(errMsg(e));
@@ -93,8 +93,9 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
 
   async function shareShortCode(ws: WorkspaceInfoDto) {
     try {
-      const { code, expiresIn } = await workspaceShareCode(ws.id);
-      await navigator.clipboard.writeText(code);
+      const share = workspaceShareCode(ws.id);
+      const code = await copyWhenReady(share.then((s) => s.code));
+      const { expiresIn } = await share;
       toast.success(`Short code ${code} copied — expires in ${Math.round(expiresIn / 60)} min.`);
     } catch (e) {
       toast.error(errMsg(e));
