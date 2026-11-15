@@ -1,0 +1,5 @@
+# Check out every text file with LF line endings, on every OS. Golden test
+# vectors (SSH signatures, signed statements, wire fixtures) are byte-exact,
+# and Git for Windows' default core.autocrlf=true would otherwise rewrite
+# them to CRLF on checkout. Binary files are detected and left alone.
+* text=auto eol=lf

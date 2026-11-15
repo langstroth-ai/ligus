@@ -965,7 +965,29 @@ fn pid_alive(pid: u32) -> bool {
         let r = unsafe { libc::kill(p, 0) };
         r == 0 || io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ACCESS_DENIED, STILL_ACTIVE};
+        use windows_sys::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+        if pid == 0 {
+            return false;
+        }
+        // SAFETY: OpenProcess/GetExitCodeProcess only query; the handle is
+        // closed before returning.
+        unsafe {
+            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if h.is_null() {
+                // Another user's (or a protected) process exists but can't be
+                // opened; any other failure means there is no such process.
+                return GetLastError() == ERROR_ACCESS_DENIED;
+            }
+            let mut code = 0u32;
+            let queried = GetExitCodeProcess(h, &mut code) != 0;
+            CloseHandle(h);
+            !queried || code == STILL_ACTIVE as u32
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = pid;
         true

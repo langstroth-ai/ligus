@@ -250,7 +250,8 @@ pub fn assess(svc: &mut ChatService, ctx: &EffectCtx, set: Option<Uuid>, a: &Par
 
 /// Leave a workspace mark.
 pub fn mark(svc: &mut ChatService, ctx: &EffectCtx, m: &MarkDirective) -> Result<Uuid, String> {
-    if m.path.trim().is_empty() || m.path.len() > 1024 || std::path::Path::new(&m.path).is_absolute() {
+    let mark_path = std::path::Path::new(&m.path);
+    if m.path.trim().is_empty() || m.path.len() > 1024 || mark_path.is_absolute() || mark_path.has_root() {
         return Err("a mark needs a workspace-relative path".into());
     }
     let now = flow::now_ms();

@@ -235,7 +235,10 @@ fn apply_in_scratch(
         .env("GIT_CEILING_DIRECTORIES", &scratch.0)
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
-        .args(["apply", "--whitespace=nowarn"]);
+        // Bytes in, bytes out: no line-ending conversion from the host's git
+        // config (Git for Windows sets core.autocrlf=true system-wide, which
+        // would hand back the new side with CRLF and the old side without).
+        .args(["-c", "core.autocrlf=false", "-c", "core.eol=lf", "apply", "--whitespace=nowarn"]);
     if reverse {
         cmd.arg("--reverse");
     }

@@ -619,8 +619,7 @@ mod tests {
         assert_eq!(find_config_file(dir), Some(dir.join("ligus.config.toml")));
         assert_eq!(std::fs::read_to_string(dir.join("hive.config.toml")).unwrap(), "b = 2");
         let c = config_candidates(&[Path::new("/nonexistent-w"), Path::new("/nonexistent-d")]);
-        let names: Vec<_> = c.iter().map(|p| p.display().to_string()).collect();
-        assert_eq!(names, ["/nonexistent-w/ligus.config.toml", "/nonexistent-d/ligus.config.toml"]);
+        assert_eq!(c, [Path::new("/nonexistent-w").join("ligus.config.toml"), Path::new("/nonexistent-d").join("ligus.config.toml")]);
     }
 
     #[test]

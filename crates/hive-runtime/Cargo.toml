@@ -59,6 +59,11 @@ seccompiler = "0.5"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# Whether a turn dir's owner process is still running (`executor::pid_alive`).
+# The version Tauri and the app already pull, so no new crate.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
 [features]
 # P2P is ON by default. The Windows *cross-compile* (cargo-xwin) is the one
 # build that must drop it — iroh pulls the `wmi` crate (Windows COM) which can't
