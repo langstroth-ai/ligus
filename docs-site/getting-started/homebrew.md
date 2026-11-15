@@ -41,8 +41,8 @@ then on.
 
 ```bash
 brew uninstall --cask ligus-app          # remove the app
-brew uninstall --zap --cask ligus-app    # also remove local data/settings (both the
-                                         # ai.ligus.desktop and former com.hive.desktop dirs)
+brew uninstall --zap --cask ligus-app    # also remove Ligus's local data/settings
+                                         # (ai.ligus.desktop only; Hive 1.x data is never touched)
 ```
 
 ## The `ligus` CLI / daemon

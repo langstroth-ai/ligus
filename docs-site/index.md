@@ -87,8 +87,8 @@ append-only event log in SQLite; replies stream from your chosen runtime (the
 
 ## Project status
 
-Ligus 2.0 is the current release (it was called Hive until 1.18; see
-[Upgrading from Hive 1.x](deploy/upgrade-from-hive.md)). The macOS app is
+Ligus 2.0 is the current release (it was called Hive until 1.18; 2.0 starts fresh and leaves Hive 1.x data
+untouched, see [Upgrading from Hive 1.x](deploy/upgrade-from-hive.md)). The macOS app is
 signed and notarized and updates itself; Windows and Linux builds are
 unsigned. The headless `ligus` CLI ships for macOS and Linux through
 Homebrew. See [What's new](reference/whats-new.md).

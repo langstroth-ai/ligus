@@ -27,8 +27,8 @@ launch:
 - **Linux**: `chmod +x Ligus_*.AppImage` (add `--appimage-extract-and-run`
   on hosts without FUSE).
 
-**"Could not move your data"** on the first 2.0 launch: copying the Hive 1.x
-data dir failed and nothing was changed. See
+**"Ligus can't use this data folder"** on launch: the data dir is, or links
+to, Hive 1.x data, which 2.0 never uses or changes. Nothing was changed. See
 [Upgrading from Hive 1.x](../deploy/upgrade-from-hive.md#troubleshooting-the-upgrade).
 
 ## Sync is stuck or peers don't see each other

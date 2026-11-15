@@ -56,31 +56,20 @@ Full release notes are on the
 - **Gemini API and MLX presets**, and a [runtime matrix](runtime-matrix.md)
   that's run before every release.
 - **Hive is now Ligus.** Ligus is short for *ligustica* (*Apis mellifera
-  ligustica*, the Italian honeybee). The protocol and your data are unchanged:
-  workspaces, devices, relays and paired phones keep working, and the default
-  agent is still `@hive`.
-- **v2.0 removes the old names; data moves over automatically.** The CLI is
-  `ligus` only (no `hive` command), settings are `LIGUS_*` only, the config
-  file is `ligus.config.toml` and workspace state lives in `.ligus/`. Existing
-  data is migrated once, the first time it is used:
-
-    - the desktop copies its `com.hive.desktop` data folder into
-      `ai.ligus.desktop` and leaves the old one untouched; your device identity
-      and keys come along, so nothing needs re-pairing;
-    - a workspace's `.hive/` becomes `.ligus/` (per-chat git worktrees are
-      re-registered with `git worktree repair`), and `hive.config.toml` becomes
-      `ligus.config.toml`;
-    - the CLI's `~/.hive` becomes `~/.ligus`.
-
-    Environment variables can't be migrated for you: rename `HIVE_*` to
-    `LIGUS_*` in your shell profile, env files and CI. A `HIVE_*` variable that
-    is still set is ignored, with a one-time warning naming the new spelling.
-    See [Configuration](config-toml.md).
-- **Upgrading.** The desktop *copies* its old data dir (a 1.x app still
-  finds its data), while the CLI's `~/.hive`, each repo's `.hive/` and
-  `hive.config.toml` are *renamed*. The relay (v0.2.0) still reads its
-  `HIVE_RELAY_*` names as well; the app and CLI don't. Step by step, with
-  rollback: [Upgrading from Hive 1.x](../deploy/upgrade-from-hive.md).
+  ligustica*, the Italian honeybee). The default agent is still `@hive`, and
+  2.0 clients use the same relays (`/v1` and `hrt1` tokens are unchanged).
+- **v2.0 starts fresh.** The CLI is `ligus` only (no `hive` command), settings
+  are `LIGUS_*` only, the config file is `ligus.config.toml` and workspace
+  state lives in `.ligus/`. Nothing from Hive 1.x is migrated: you create new
+  workspaces, invite teammates again and re-pair phones. In exchange, 2.0
+  never reads, modifies, moves, renames, copies or deletes any 1.x file: the
+  desktop's `com.hive.desktop` folder, the CLI's `~/.hive`, each repo's
+  `.hive/` (with its chat checkouts and `hive/chat/*` branches) and
+  `hive.config.toml` stay exactly where they are, so a 1.x install keeps
+  running side by side. 2.0 refuses a data dir that is, or links to, 1.x
+  data. A `HIVE_*` variable that is still set is ignored, with a one-time
+  warning naming the new spelling. Setting up 2.0 and removing 1.x when you're
+  done: [Upgrading from Hive 1.x](../deploy/upgrade-from-hive.md).
 - **Deployment and security docs.** [Choose a deployment](../deploy/index.md)
   with guides for each supported shape, a [security model](../security/index.md),
   [threat model](../security/threat-model.md) and [runbooks](../security/runbooks.md),

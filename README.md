@@ -24,9 +24,10 @@ relay, end-to-end encrypted. Your code and keys stay on your machine.
 </div>
 
 > **Hive is now Ligus**, short for *ligustica*. Same project, same protocol,
-> new name. The command is `ligus` and settings are `LIGUS_*`; existing data
-> moves over automatically. See
-> [What's new](https://docs.ligus.ai/reference/whats-new/).
+> new name. The command is `ligus` and settings are `LIGUS_*`. Ligus 2.0
+> starts fresh: Hive 1.x data is not migrated and stays where it is,
+> untouched, so 1.x keeps running until you remove it. See
+> [Upgrading from Hive 1.x](https://docs.ligus.ai/deploy/upgrade-from-hive/).
 
 ---
 
@@ -397,8 +398,11 @@ fit together.
 - **The app is config-free to start** — onboarding sets identity, project folder,
   runtime, and relay; there are no required config files.
 - **Repo settings** live in [`ligus.config.toml`](ligus.config.toml) at the root
-  (workspace state lives in `.ligus/`; a `hive.config.toml` or `.hive/` from
-  before v2.0 is renamed on first open).
+  (workspace state lives in `.ligus/`). Ligus 2.0 starts fresh: a Hive 1.x
+  `hive.config.toml`, `.hive/`, `~/.hive` or desktop data dir is never read,
+  moved or changed; see
+  [Upgrading from Hive 1.x](docs-site/deploy/upgrade-from-hive.md) for how to
+  remove 1.x when you're done.
 - **Headless clients** are entirely **environment-driven** so they drop into a
   container or secret mount — see the
   [`ligus` CLI README](crates/hive-cli/README.md) for every `LIGUS_*` variable

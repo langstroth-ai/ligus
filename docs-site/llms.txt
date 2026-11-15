@@ -27,7 +27,7 @@ Documentation site: https://docs.ligus.ai/ — pages below are the canonical ref
 - [Sign in with your IdP (ligus-auth)](https://docs.ligus.ai/deploy/ligus-auth/): Organization sign-in for the relay: device-code login, short-lived relay tokens, `ligus auth`.
 - [ligus-auth with Pocket ID](https://docs.ligus.ai/deploy/ligus-auth-pocket-id/): A passkey-only identity provider, ligus-auth and the relay on one box.
 - [ligus-auth with Dex](https://docs.ligus.ai/deploy/ligus-auth-dex/): ligus-auth behind Dex, which federates GitHub, LDAP, SAML and other identity sources.
-- [Upgrading from Hive 1.x](https://docs.ligus.ai/deploy/upgrade-from-hive/): Env var rename, data migration per component, and rollback.
+- [Upgrading from Hive 1.x](https://docs.ligus.ai/deploy/upgrade-from-hive/): 2.0 starts fresh: where each version keeps its data, setting up 2.0 next to 1.x, and removing 1.x.
 
 ## Security
 

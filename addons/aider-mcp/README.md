@@ -34,7 +34,7 @@ export AIDER_BINARY=/path/to/aider
 
 ## Configure Hive
 
-In your workspace's `hive.config.toml`:
+In your workspace's `ligus.config.toml`:
 
 ```toml
 [[mcp_servers]]

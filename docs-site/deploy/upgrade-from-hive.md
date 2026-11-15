@@ -1,196 +1,154 @@
 # Upgrading from Hive 1.x
 
 Hive became **Ligus** in 2.0. *Ligus* is short for *ligustica*
-(*Apis mellifera ligustica*, the Italian honeybee). The wire protocol and
-your data are unchanged: workspaces, device identities, relays and paired
-phones keep working across the upgrade. What changes is names: the app, the
-CLI, environment variables, directories and the config file.
+(*Apis mellifera ligustica*, the Italian honeybee).
 
-This page is the checklist for every component, in the order to do it, with
-the rollback for each.
+**Ligus 2.0 starts fresh.** Nothing from Hive 1.x is migrated: no chats,
+workspaces, device identity, keys, settings or pairings. You create new
+workspaces, invite your teammates again and re-pair your phones.
 
-## What moves, and how
+In exchange, 2.0 never touches your 1.x data. It does not read, modify, move,
+rename, copy or delete any Hive 1.x file or directory. Your 1.x install keeps
+working exactly as before, side by side with 2.0, until you remove it.
 
-| Thing | Hive 1.x | Ligus 2.0 | Migrated how | Old copy kept? |
-|---|---|---|---|---|
-| Desktop data dir | `com.hive.desktop` | `ai.ligus.desktop` | **copied** on first launch, before the database opens | **Yes**, untouched |
-| CLI data dir (no `LIGUS_DATA_DIR` set) | `~/.hive` | `~/.ligus` | **renamed** on first CLI run | No (renamed) |
-| Workspace state dir in each repo | `<repo>/.hive/` | `<repo>/.ligus/` | **renamed** (or merged) the first time the workspace is used; per-chat worktrees re-registered with `git worktree repair` | No (renamed) |
-| Config file | `hive.config.toml` | `ligus.config.toml` | **renamed** on first read, when only the old one exists | No (renamed) |
-| Environment variables | `HIVE_*` | `LIGUS_*` | **not migrated**: rename them yourself | n/a |
-| CLI binary | `hive` | `ligus` | Homebrew upgrade | n/a |
-| Homebrew | formula `hive-cli`, cask `hive`, tap `honeyhive-ai/hive` | formula `ligus`, cask `ligus-app`, tap `ligus-ai/ligus` | `brew upgrade` | n/a |
-| Phone deep links | `hive://pair?…` | `hive://` still emitted; `ligus://` also accepted | nothing to do | n/a |
+## Where each version keeps its data
 
-Details, from the code:
+| Thing | Hive 1.x (left as it is) | Ligus 2.0 (starts empty) |
+|---|---|---|
+| Desktop data dir (macOS) | `~/Library/Application Support/com.hive.desktop` | `~/Library/Application Support/ai.ligus.desktop` |
+| Desktop data dir (Linux) | `~/.local/share/com.hive.desktop` | `~/.local/share/ai.ligus.desktop` |
+| Desktop data dir (Windows) | `%APPDATA%\com.hive.desktop` | `%APPDATA%\ai.ligus.desktop` |
+| CLI data dir (no data-dir variable set) | `~/.hive` | `~/.ligus` |
+| Workspace state dir in each repo | `<repo>/.hive/` | `<repo>/.ligus/` |
+| Config file | `hive.config.toml` | `ligus.config.toml` |
+| Environment variables | `HIVE_*` | `LIGUS_*` |
+| CLI binary | `hive` | `ligus` |
+| Homebrew | formula `hive-cli`, cask `hive` | formula `ligus`, cask `ligus-app` |
 
-- **Desktop copy.** The app copies the old data dir into a temporary sibling,
-  fsyncs every file, then renames it into place, so a crash leaves either no
-  new dir or a complete one. It writes a `MIGRATED_FROM` file holding the old
-  path. If the copy fails (disk full, permissions) the app shows *Could not
-  move your data* and refuses to start rather than open an empty database and
-  mint a new device identity. The old dir is never modified or deleted
-  (`app/src/data_migration.rs`). If `ai.ligus.desktop` already holds data, the
-  copy is skipped.
-- **CLI rename.** `~/.hive` is renamed to `~/.ligus` only when `~/.ligus`
-  doesn't exist and `~/.hive` holds CLI data (`hive.db` or `identity.json`).
-  A failed rename stops the CLI with an error rather than starting fresh
-  (`crates/hive-core/src/compat.rs`, `home_data_dir`). If you set
-  `LIGUS_DATA_DIR`, nothing is moved.
-- **Workspace dir.** With no `.ligus/` yet, `.hive/` is renamed. If both
-  exist, entries `.ligus/` lacks are moved and clashing ones stay in `.hive/`.
-  Worktrees git can't re-register leave `.hive` as a symlink to `.ligus`
-  (Unix) so git's recorded paths keep resolving. `$HOME/.hive` is never
-  treated as workspace state.
+What 2.0 does with the 1.x names:
+
+- **Data dirs.** 2.0 uses only its own. It refuses to start on a data dir that
+  is a 1.x location, sits inside one, contains one, or is a symlink to one,
+  and on any dir that already holds `hive.db` or `identity.json` that 2.0 did
+  not create (for example a 1.x serve box's `~/.hive-serve`). The error names
+  the dir, and nothing is written. Point `LIGUS_DATA_DIR` at a new, empty dir.
+  2.0 marks the dirs it owns with a `.ligus-data-dir` file.
+- **`~/.hive`.** Left as it is. On the first CLI run with no `~/.ligus` yet,
+  `ligus` prints once:
+  `note: Ligus 2.0 starts fresh in /home/you/.ligus; the Hive 1.x data in /home/you/.hive is left as it is`.
+- **A repo's `.hive/`.** Ignored and never changed. 2.0 keeps its state in
+  `.ligus/` next to it, with its own chat checkouts under `.ligus/worktrees/`.
+  The worktree cleanup only ever looks there, so 1.x checkouts under
+  `.hive/worktrees/` and their `hive/chat/*` and `hive/turn-*` branches are
+  never removed. A `.ligus` that is a symlink into `.hive` is refused.
+- **`hive.config.toml`.** Not read and not renamed: it may be committed and
+  still used by teammates on 1.x, and reading it would carry 1.x relay and
+  runtime settings into a fresh install. When a dir has one and no
+  `ligus.config.toml`, Ligus prints once:
+  `note: <path>/hive.config.toml is a Hive 1.x config and is not read; Ligus 2.0 reads ligus.config.toml (copy the settings you want into it)`.
+  The format is the same, so `cp hive.config.toml ligus.config.toml` is a
+  fine start if you want the same runtimes and MCP servers.
 - **Environment variables.** Only `LIGUS_*` names are read. A `HIVE_X` that is
   set while `LIGUS_X` is not is **ignored**, and Ligus prints once:
   `warning: HIVE_X is set but no longer read; rename it to LIGUS_X`.
-- The file names inside data dirs (`hive.db`, `serve.token`, ...) and the
-  protocol identifiers that contain `hive` (`hivews1:` invites, `hrt1`
-  tokens, `hive-tunnel/1`, the `@hive` agent) keep their names. See
+- **Agents.** The 1.x data dirs stay on the sandbox's deny-read list, because
+  they still hold your 1.x keys: no agent that 2.0 starts can read them.
+- Protocol identifiers that contain `hive` (`hivews1:` invites, `hrt1` relay
+  tokens, `hive-tunnel/1`, `hive://` pairing links, `hive/chat/<id>` branch
+  names) keep their names. See
   [Wire protocols](../reference/wire-protocols.md#legacy-protocol-identifiers).
 
-## Before you start
+## Setting up 2.0
 
-1. **Back up.** Copy each data dir somewhere safe while nothing is running.
-   See [Backups and restore](../ops/operations.md#backups-and-restore).
-
-    ```sh
-    # macOS desktop
-    cp -a ~/Library/Application\ Support/com.hive.desktop ~/hive-desktop-backup
-    # CLI / ligus serve / worker box
-    cp -a ~/.hive ~/hive-cli-backup            # or your HIVE_DATA_DIR
-    ```
-
-2. **List your `HIVE_*` variables** everywhere they are set: shell profile,
-   systemd env files, container specs, CI.
-
-    ```sh
-    env | grep '^HIVE_'
-    grep -rn 'HIVE_' ~/.zshrc ~/.bashrc ~/.profile ~/.config/hive-serve/ 2>/dev/null
-    ```
-
-3. **Upgrade the relay last, or not at all.** A 2.0 client talks to a 1.x
-   relay, and the relay keeps no client data that needs migrating. See
-   [Upgrading the relay](../networking/self-host.md#upgrades).
-
-## Step 1: the desktop app
+### The desktop app
 
 ```sh
 brew update
-brew upgrade --cask ligus-app      # replaces the hive cask
+brew install --cask ligus-app
 ```
 
-A self-updating install updates itself; it may stay at
-`/Applications/Hive.app`, which you can rename to `Ligus.app`.
+`Ligus.app` installs next to `Hive.app`, and both can run. Ligus opens with
+onboarding and an empty workspace list: create or join your workspaces again.
 
-On first launch, the app copies your data. Expected result: your workspaces,
-chats and identity are all there, with no onboarding. Theme and pane layout
-reset once, and macOS asks again for folder and notification access.
+### CLI boxes (`ligus serve`, `ligus worker`)
 
-Check:
-
-```sh
-cat ~/Library/Application\ Support/ai.ligus.desktop/MIGRATED_FROM
-# /Users/you/Library/Application Support/com.hive.desktop
-```
-
-The first time you open each workspace, its `.hive/` becomes `.ligus/`:
+Install `ligus` (the `hive` binary is not replaced) and set the box up as a
+new one, with its own data dir, env file and unit. The 1.x service keeps
+running until you stop it.
 
 ```sh
-ls -a ~/code/myrepo | grep -E '^\.(hive|ligus)$'
-# .ligus
-```
-
-## Step 2: CLI boxes (`ligus serve`, `ligus worker`)
-
-```sh
-brew update && brew upgrade        # hive-cli -> ligus
-ligus --version
-# ligus 2.0.0
-```
-
-Rename every variable in the service's env file and unit. With the shipped
-systemd user unit:
-
-```sh
-systemctl --user stop hive-serve
+brew update && brew install ligus
 mkdir -p ~/.config/ligus-serve
-sed 's/^HIVE_/LIGUS_/' ~/.config/hive-serve/hive-serve.env > ~/.config/ligus-serve/ligus-serve.env
+cp deploy/ligus-serve/ligus-serve.env.example ~/.config/ligus-serve/ligus-serve.env
 chmod 600 ~/.config/ligus-serve/ligus-serve.env
-# install the new unit (deploy/ligus-serve/ligus-serve.service) and point it at the new binary
-systemctl --user disable hive-serve
+# edit it: LIGUS_* names only, a NEW data dir (e.g. LIGUS_DATA_DIR=$HOME/.ligus-serve)
+# and, while the 1.x service still runs, a different listen port
 systemctl --user daemon-reload
 systemctl --user enable --now ligus-serve
-journalctl --user -u ligus-serve -n 50
 ```
 
-Check the log for `warning: HIVE_… is set but no longer read`. Any such line
-names a variable you missed.
+Don't reuse the 1.x data dir as `LIGUS_DATA_DIR`: 2.0 refuses it. See
+[`deploy/ligus-serve/README.md`](https://github.com/ligus-ai/ligus/tree/main/deploy/ligus-serve)
+for the full setup.
 
-If the box used the default data dir, the first run prints:
+### Phones
 
-```text
-note: moved /home/you/.hive to /home/you/.ligus
-```
+Pair again with `ligus pair` on the 2.0 box. A 1.x pairing keeps pointing at
+the 1.x box.
 
-If your env file sets `HIVE_DATA_DIR=/srv/hive`, renaming it to
-`LIGUS_DATA_DIR=/srv/hive` is all you need; the directory is used where it is.
+### The relay
 
-Then check the box is healthy:
+Nothing to do. The relay keeps no client data, and 2.0 clients use the same
+relay API (`/v1` and `hrt1` tokens are unchanged); new 2.0 workspaces get new
+rooms. See [Self-hosting a relay: upgrades](../networking/self-host.md#upgrades).
+Relay v0.2.0 reads both `LIGUS_RELAY_*` and the former `HIVE_RELAY_*` names
+(the `LIGUS_` name wins and a legacy name logs a deprecation warning). Unlike
+the relay, the `ligus` CLI and the desktop app do **not** fall back to
+`HIVE_*` names.
+
+## Removing Hive 1.x when you're done
+
+Only when you no longer need anything in it; 2.0 never needs these files.
+Stop every 1.x process first, and back up anything you want to keep.
 
 ```sh
-ligus whoami                 # same account and device ids as before
-ligus remote status          # same host id; phones stay paired
-curl -s http://<listen>/v1/health -H "Authorization: Bearer $(cat $LIGUS_DATA_DIR/serve.token)"
+# Desktop (macOS): quit Hive, then
+brew uninstall --cask hive            # or drag Hive.app to the Trash
+rm -rf ~/Library/Application\ Support/com.hive.desktop \
+       ~/Library/Caches/com.hive.desktop \
+       ~/Library/Preferences/com.hive.desktop.plist \
+       ~/Library/Saved\ Application\ State/com.hive.desktop.savedState
+# Desktop (Linux): ~/.local/share/com.hive.desktop and ~/.config/com.hive.desktop
+
+# CLI / serve / worker boxes
+systemctl --user disable --now hive-serve 2>/dev/null
+brew uninstall hive-cli               # or remove the hive binary
+rm -rf ~/.hive                        # and any HIVE_DATA_DIR, e.g. ~/.hive-serve
+rm -rf ~/.config/hive-serve
+
+# Each repo: 1.x chat checkouts, state and config
+cd ~/code/myrepo
+git worktree list | grep '/\.hive/worktrees/'      # review first
+git worktree list --porcelain | sed -n 's|^worktree \(.*/\.hive/worktrees/.*\)|\1|p' |
+  while read -r wt; do git worktree remove --force "$wt"; done
+git worktree prune
+rm -rf .hive hive.config.toml        # only once no teammate still uses 1.x
+git branch --list 'hive/chat/*' 'hive/turn-*'      # delete the ones you don't need
 ```
 
-## Step 3: phones
-
-Nothing to do. Pairings, credentials and push keys live in the box's data dir,
-which moved with it, and the `hive://` pairing links keep working.
-
-## Step 4: the relay (optional)
-
-See [Self-hosting a relay: upgrades](../networking/self-host.md#upgrades).
-Relay v0.2.0 reads both `LIGUS_RELAY_*` and the former `HIVE_RELAY_*` names
-(the `LIGUS_` name wins and a legacy name logs a deprecation warning), so
-you can rename its variables at your own pace. Unlike the relay, the `ligus`
-CLI and the desktop app do **not** fall back to `HIVE_*` names.
-
-## Rollback
-
-You can go back to Hive 1.x. The protocol is the same, so a 1.x client keeps
-syncing with 2.0 peers.
-
-| Component | To roll back |
-|---|---|
-| Desktop | Reinstall the 1.x app. Its data dir `com.hive.desktop` was never touched, so it opens as it was **before** the upgrade. Events created after the upgrade come back through sync from the relay or peers; anything that only existed on this device after the upgrade (local settings, unsynced drafts) stays in `ai.ligus.desktop`. |
-| CLI box | Stop the service, reinstall `hive-cli`, and either set `HIVE_DATA_DIR=$HOME/.ligus` or `mv ~/.ligus ~/.hive`. Rename the env file's variables back to `HIVE_*`. |
-| Workspace dir | `mv .ligus .hive` in each repo, then `git worktree repair` there. If `.hive` is a symlink to `.ligus`, remove the symlink first. |
-| Config file | `mv ligus.config.toml hive.config.toml`. |
-
-!!! warning "Don't run both versions on one data dir"
-    Each data dir is one device. Never point a 1.x and a 2.0 process at the
-    same directory at the same time: two writers on one `hive.db` and one
-    device key is the one thing the sync model can't recover from cleanly.
+`brew uninstall --zap --cask ligus-app` removes only Ligus's own
+`ai.ligus.desktop` files. It never removes Hive 1.x data.
 
 ## Troubleshooting the upgrade
 
-**The desktop shows *Could not move your data*.** The copy failed; nothing was
-changed. Free disk space (you need room for a second copy of the data dir) or
-fix permissions, then reopen the app.
+**`... overlaps the Hive 1.x data at ...` or `... holds data Ligus 2.0 did not
+create`.** The data dir in use is, or links to, 1.x data. Nothing was
+changed. Unset `LIGUS_DATA_DIR` or point it at a new, empty dir. On the
+desktop, check that `ai.ligus.desktop` is not a symlink.
 
-**The desktop opened empty / runs onboarding.** `ai.ligus.desktop` already
-held data from an earlier 2.0 trial, so the copy was skipped. Quit the app,
-move `ai.ligus.desktop` aside, and reopen it to copy again.
+**`.ligus ... resolves into Hive 1.x state`.** The repo's `.ligus` is a
+symlink into `.hive`. Remove the link and open the workspace again.
 
-**`error: could not move ~/.hive to ~/.ligus`.** Move it by hand or set
-`LIGUS_DATA_DIR` to the old path.
-
-**A setting seems to have no effect.** It is probably still spelled `HIVE_*`.
-Look for the one-time `warning: … no longer read` line in the output.
-
-**`git worktree` errors in a chat checkout.** Run `git worktree repair` in the
-repository; the migration does this, but a worktree on another volume can
-need it again.
+**A setting seems to have no effect.** It is probably still spelled `HIVE_*`,
+or it lives in `hive.config.toml`. Look for the one-time `warning: … no
+longer read` or `note: … is not read` line in the output.

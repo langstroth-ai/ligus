@@ -124,9 +124,9 @@ A relay backup is a convenience, not your only copy.
 | CLI | `brew upgrade ligus`, then restart services | `ligus --version` |
 | Relay | replace binary/image, restart | `/v1/health` → `ok` |
 
-Devices on different versions sync with each other; the wire protocol is
-kept compatible. Coming from Hive 1.x, follow
-[Upgrading from Hive 1.x](../deploy/upgrade-from-hive.md).
+Devices on different 2.x versions sync with each other; the wire protocol is
+kept compatible. Coming from Hive 1.x: 2.0 starts fresh and leaves 1.x data
+untouched, see [Upgrading from Hive 1.x](../deploy/upgrade-from-hive.md).
 
 ## Housekeeping Ligus does itself
 
