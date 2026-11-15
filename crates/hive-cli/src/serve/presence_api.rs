@@ -65,7 +65,8 @@ impl Pending {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrepareReq {
-    /// `approve`, `reject`, `lockdown_clear` or `agent_host`.
+    /// `approve`, `reject`, `lockdown_clear`, `agent_host` or `invite` (a
+    /// single-use invite to the box's workspace; `target` is ignored).
     action: String,
     /// The proposal, chat or agent id.
     target: String,
@@ -105,6 +106,16 @@ pub async fn prepare(State(s): State<std::sync::Arc<Shared>>, Json(req): Json<Pr
             let mut svc = s.lock();
             svc.capture_presence(true);
             let r = svc.set_agent_host(s.ws, agent, host.trim()).map(|_| ());
+            (r, svc.take_presence_draft())
+        }
+        "invite" => {
+            if let Some(reason) = s.lock().write_block() {
+                return Err(ApiError::new(StatusCode::FORBIDDEN, reason.to_string()));
+            }
+            preview = json!({ "workspaceName": super::identity_api::invite_preview_name(&s) });
+            let mut svc = s.lock();
+            svc.capture_presence(true);
+            let r = svc.issue_invite(s.ws).map(|_| ());
             (r, svc.take_presence_draft())
         }
         _ => return Err(ApiError::bad_request("unknown action")),
@@ -159,7 +170,12 @@ pub async fn commit(State(s): State<std::sync::Arc<Shared>>, Json(req): Json<Com
     let kind = draft.request.kind.clone();
     let env = s.lock().commit_presence(draft, a)?;
     s.after_write();
-    Ok(Json(json!({ "committed": true, "kind": kind, "eventId": env.event_id })))
+    let mut out = json!({ "committed": true, "kind": kind, "eventId": env.event_id });
+    // A confirmed invite: the code to share (only for the box's workspace).
+    if let Some(invite) = super::identity_api::invite_after_commit(&s, &env) {
+        out["invite"] = invite;
+    }
+    Ok(Json(out))
 }
 
 #[cfg(test)]

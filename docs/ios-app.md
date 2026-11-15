@@ -339,6 +339,47 @@ The rows above are unchanged for the shipped app; 2.0 adds:
   tunnel (or on a loopback bind) and need presence; on a direct LAN bind
   they answer 403, and `GET /v1/forges` says `tokenEntry: false`.
 
+#### Identity: safety codes, invites, contacts and DMs (2.0, additive)
+
+The phone is a remote control of the box, and the box is one Ligus device:
+everything below is the box's own account (or, on a box enrolled as its
+owner's device, the owner's), its pinned config logs and its contact.
+Every name is cleaned (`hive_proto::names`: bidi, zero-width, invisible
+format and control characters removed); the app cleans them again. The
+contract is also in `docs-site/reference/serve-api.md`.
+
+| Method | Path | Response |
+|---|---|---|
+| GET | `/v1/profile` | `{accountId, displayName, safetyCode?, holdsAccountKey, canFoundDm, contacts: on\|unsupported\|noRelay\|delegated\|unknown, avatarUrl?}`. `safetyCode` is eight groups of four hex characters (the account fingerprint, the invite's `fk`) |
+| GET | `/v1/people` | Each person also carries `accountId`, `safetyCode` (absent while the shared logs disagree), `keyConflict`, `lookAlike` (another co-member's name, or this box's own, looks like theirs), `devices` (verified key-agreement keys), `links: [LinkChip]` and `dmChatId?` |
+| GET | `/v1/people/{accountId}/links` | `{links: [LinkChip]}` for this box's own account or a co-member (404 otherwise). Cached statuses only: this route never asks a forge. `LinkChip = {provider, host, handle, subjectId, status?}`, `status` the desktop's `LinkStatus` (`verified`, `signatureOnly`, `stale`, `unreachable`, `expired`, `selfAsserted`, `notChecked`); `invalid` links are left out; handles and ids carry no hidden characters |
+| POST | `/v1/invites` | `{code, signed, safetyCode?, workspaceName}`: a single-use invite to the box's workspace (an Admin's `JoinApproved`), signed by the founder's device when this box is the founder's (`ligus-invite-v1`). 403 `presence_required` on a box acting for its owner (interim gate) or a rules-v2 workspace: confirm with `POST /v1/presence/prepare {action: "invite"}` and `commit`, whose answer then carries `invite` |
+| POST | `/v1/invites/inspect` `{code}` | `{workspaceName, isDm, addressedToMe, founderAccount?, founderName?, safetyCode?, trust, alreadyJoined, acceptable, refusal?}`. `trust` is the desktop's: `known` (a co-member's device signed it and their code matches), `claimed` (names a co-member and their code without their signature: only says it's from them), `mismatch`, `unknown` (compare the code out of band), `none`. Nothing is stored |
+| POST | `/v1/invites/join` `{code, confirmSafetyCode}` | `{workspaceId, account}`: joins a DM invite under `hive_runtime::dm::accept_dm_invite` (addressed to this account, signed by the sender's device, key matching the shared logs; a stranger only with `confirmSafetyCode` after comparing codes; never a room the box holds). The relay must be the box's own or a public `https` one; another relay is reached only at public addresses, checked at each connect (a name re-pointed inside the network is refused), with no redirects. A workspace invite answers 409: a box serves one workspace |
+| GET | `/v1/invites/pending` | `{contacts, invites: [{relay, seq, isDm, workspaceName, founderAccount?, founderName?, safetyCode?, trust, acceptable, refusal?}]}`: the box's contact drop box (relay v0.3), read and acknowledged like the desktop's. The codes stay on the box |
+| POST | `/v1/invites/pending/accept` `{relay, seq, confirmSafetyCode}` | `{workspaceId, account}` (by reference to the last listing) |
+| POST | `/v1/invites/pending/dismiss` `{relay, seq}` | `{dismissed: true}` |
+| GET | `/v1/dms` | `{dms: [{workspaceId, account, name, chatId?, safetyCode?, avatarUrl?, archived, waitingForFounder, foundedAt?, updatedAt?}], canFound}` |
+| POST | `/v1/dms` `{accountId}` | `{workspaceId, chatId?, invite?, delivered, safetyCode?}`: opens the kept DM with a co-member, or founds one (random `dm-` room and key, this box's account pinned as founder, a signed invite addressed to them, sealed to their verified devices and dropped into their contact box). `invite` (hand it over yourself) is set on creation; `delivered` says it reached their box. A box acting for its owner can't found one (409) |
+| GET | `/v1/chats/{id}/founder` | `{waiting, founderName?}` |
+
+- **DM chats** are listed by `GET /v1/chats` with `dm: {workspaceId, account,
+  name, archived, safetyCode?}` (the title is the other person's name), and
+  read and written through `/v1/chats/{id}/messages`. No other route takes a
+  DM's chat. Agents never run in a DM, and DM messages never push (ntfy or
+  relay).
+- **Waiting for the founder.** A chat row carries `waitingForFounder: true`
+  (and `founderName`) while writes into its workspace wait for the pinned
+  founder's signed founding; a send then answers 409
+  `{error: "waiting_for_founder", message, founderName?}`. A state, not a
+  failure: keep the draft.
+- Each DM syncs in its own loop on its own relay; the workspace's relay token
+  and sign-in go only to the box's own relay. DMs are device-local
+  (`serve-dms.json`, keys in the secret store) and kept by the
+  foreign-workspace cleanup.
+- The box publishes a contact record (relay v0.3) when it holds its account's
+  key, announcing its id with one host beat when the log doesn't carry it.
+
 ### Events (`GET /v1/events`)
 
 Each event has `id: <n>` (increasing), `event: <name>` and `data: <JSON>`. A
@@ -356,6 +397,7 @@ that falls further behind should refetch.
 | `proposal.updated` | `{proposal}`, when a known proposal's status, votes, thread, revision link or dismissal changes (from this phone or any device) |
 | `turn.status` | `{chatId, agentId, state: "queued"\|"running"\|"done"\|"error", detail?}` |
 | `repo.clone` | `{job}`, a clone or fetch job's progress and its end (see "Repos") |
+| `dms.changed` | `{}`: a DM was opened, joined or synced; refetch `/v1/dms` and `/v1/chats` |
 
 ### Pairing and links
 

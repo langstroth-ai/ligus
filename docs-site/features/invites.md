@@ -70,6 +70,11 @@ compares it with what you know:
 A name on an invite proves nothing, and nor does a code on its own: the
 founder's signature ties the two to the invite.
 
+On the phone, **People → Open an invite link** (paste or scan the QR code)
+shows the same labels, read by your home host. A host serves one workspace,
+so from the phone you can join a direct message invite; a workspace invite is
+for a desktop. See [Ligus on your phone](phone-app.md#safety-codes-invites-and-direct-messages).
+
 ## Invite someone you already share a workspace with
 
 In **People** (left rail), pick the person and **Invite to…** a workspace you

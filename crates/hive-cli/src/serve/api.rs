@@ -70,10 +70,28 @@ impl From<hive_runtime::chat_service::ChatError> for ApiError {
     }
 }
 
+impl ApiError {
+    /// 409 `waiting_for_founder`: writes wait for the founder's signed
+    /// founding (a state the phone shows, not a failure).
+    pub(crate) fn waiting_for_founder(founder_name: Option<String>) -> Self {
+        Self(StatusCode::CONFLICT, format!("{WAITING_FOR_FOUNDER}\u{0}{}", founder_name.unwrap_or_default()))
+    }
+}
+
+/// The error code of [`ApiError::waiting_for_founder`].
+pub(super) const WAITING_FOR_FOUNDER: &str = "waiting_for_founder";
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         if self.0 == StatusCode::FORBIDDEN && self.1 == PRESENCE_REQUIRED {
             return (self.0, Json(json!({ "error": PRESENCE_REQUIRED, "hint": PRESENCE_HINT }))).into_response();
+        }
+        if let Some(name) = self.1.strip_prefix(WAITING_FOR_FOUNDER).and_then(|r| r.strip_prefix('\u{0}')) {
+            let mut v = json!({ "error": WAITING_FOR_FOUNDER, "message": hive_runtime::chat_service::WAITING_FOR_FOUNDER });
+            if !name.is_empty() {
+                v["founderName"] = json!(name);
+            }
+            return (self.0, Json(v)).into_response();
         }
         (self.0, Json(json!({ "error": self.1 }))).into_response()
     }
@@ -473,6 +491,16 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/flow", get(super::flow_api::flow_view))
         .route("/v1/chats/{id}/handoffs", get(super::flow_api::chat_handoffs))
         .route("/v1/people", get(super::people::list_people))
+        .route("/v1/people/{account}/links", get(super::identity_api::person_links))
+        .route("/v1/profile", get(super::identity_api::profile))
+        .route("/v1/invites", post(super::identity_api::create_invite))
+        .route("/v1/invites/inspect", post(super::identity_api::inspect))
+        .route("/v1/invites/join", post(super::identity_api::join))
+        .route("/v1/invites/pending", get(super::identity_api::pending))
+        .route("/v1/invites/pending/accept", post(super::identity_api::accept_pending))
+        .route("/v1/invites/pending/dismiss", post(super::identity_api::dismiss_pending))
+        .route("/v1/dms", get(super::identity_api::list_dms).post(super::identity_api::open_dm))
+        .route("/v1/chats/{id}/founder", get(super::identity_api::chat_founder))
         .route("/v1/channels", get(super::people::list_channels))
         .route("/v1/chats/{id}/details", get(super::people::chat_details))
         .route("/v1/repos", get(super::repos_api::list_repos))
@@ -533,10 +561,56 @@ async fn health(State(s): S, Extension(Authorized(ok)): Extension<Authorized>) -
 
 async fn list_chats(State(s): S) -> ApiResult<Json<Value>> {
     let me = s.my_actor_id();
-    let mut chats = s.workspace_chats()?;
+    let mut chats = s.phone_chats()?;
     chats.sort_by_key(|c| std::cmp::Reverse(updated_at(c)));
-    let list: Vec<Value> = chats.iter().map(|c| chat_dto(c, s.unread(c, &me))).collect();
+    let ctx = PhoneChatCtx::new(&s);
+    let list: Vec<Value> = chats.iter().map(|c| ctx.dto(&s, c, s.unread(c, &me))).collect();
     Ok(Json(json!({ "chats": list })))
+}
+
+/// What the phone's chat rows add to [`chat_dto`]: for a DM's chat, who it
+/// is with (`dm`), and for any chat whether sending waits for the
+/// workspace's founder (`waitingForFounder`, `founderName`).
+pub struct PhoneChatCtx {
+    dms: Vec<Value>,
+    people: Vec<hive_runtime::directory_trust::CoMember>,
+}
+
+impl PhoneChatCtx {
+    pub fn new(s: &Shared) -> Self {
+        let people = s.co_members();
+        let dms = if s.dms.list().is_empty() { Vec::new() } else { s.dm_rows(&people) };
+        Self { dms, people }
+    }
+
+    pub fn dto(&self, s: &Shared, c: &ChatSession, unread: usize) -> Value {
+        let mut v = chat_dto(c, unread);
+        let waiting = s.lock().waiting_for_founder(c.workspace_id).ok().flatten();
+        if let Some(f) = waiting {
+            v["waitingForFounder"] = json!(true);
+            if let Some(p) = self.people.iter().find(|p| p.account_id == f) {
+                v["founderName"] = json!(p.display_name);
+            }
+        }
+        if c.workspace_id != s.ws {
+            if let Some(dm) = self.dms.iter().find(|d| d["workspaceId"] == json!(c.workspace_id)) {
+                let mut d = json!({
+                    "workspaceId": dm["workspaceId"],
+                    "account": dm["account"],
+                    "name": dm["name"],
+                    "archived": dm["archived"],
+                });
+                if let Some(code) = dm.get("safetyCode") {
+                    d["safetyCode"] = code.clone();
+                }
+                v["dm"] = d;
+                // A DM's chat is named for the other person.
+                v["title"] = dm["name"].clone();
+                v["channelId"] = json!("");
+            }
+        }
+        v
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -567,6 +641,17 @@ pub(super) fn load_chat(s: &Shared, raw: &str) -> ApiResult<ChatSession> {
     s.workspace_chats()?.into_iter().find(|c| c.id == id).ok_or_else(|| ApiError::not_found("chat"))
 }
 
+/// A chat the phone may read and post in: the workspace's, or a DM's. Only
+/// the message routes (and the founder status) take a DM's chat; everything
+/// else (agents, proposals, repos, guards) is the workspace's alone.
+pub(super) fn load_phone_chat(s: &Shared, raw: &str) -> ApiResult<ChatSession> {
+    let id = parse_id(raw, "chat")?;
+    if let Some(c) = s.workspace_chats()?.into_iter().find(|c| c.id == id) {
+        return Ok(c);
+    }
+    s.dm_chats().into_iter().find(|c| c.id == id).ok_or_else(|| ApiError::not_found("chat"))
+}
+
 #[derive(Deserialize)]
 struct Page {
     after: Option<String>,
@@ -574,7 +659,7 @@ struct Page {
 }
 
 async fn list_messages(State(s): S, Path(id): Path<String>, Query(page): Query<Page>) -> ApiResult<Json<Value>> {
-    let chat = load_chat(&s, &id)?;
+    let chat = load_phone_chat(&s, &id)?;
     let limit = page.limit.unwrap_or(100).clamp(1, 1000);
     let msgs = &chat.messages;
     let slice = match page.after.as_deref().map(str::trim).filter(|a| !a.is_empty()) {
@@ -606,20 +691,38 @@ fn has_mention(body: &str, chat: &ChatSession) -> bool {
 }
 
 async fn post_message(State(s): S, Path(id): Path<String>, Json(req): Json<NewMessage>) -> ApiResult<Json<Value>> {
-    let chat = load_chat(&s, &id)?;
+    let chat = load_phone_chat(&s, &id)?;
     let mut body = req.body.trim().to_string();
     if body.is_empty() {
         return Err(ApiError::bad_request("message body is empty"));
     }
-    // Opt-in convenience: route an un-addressed phone message to a default agent.
-    if let Some(agent) = &s.opts.default_agent {
+    let in_dm = chat.workspace_id != s.ws;
+    if in_dm && s.dms.is_archived(chat.workspace_id) {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "You both opened a conversation at the same time; this one was archived. Write in the one that was kept.",
+        ));
+    }
+    // Opt-in convenience: route an un-addressed phone message to a default
+    // agent (never in a DM: agents don't run there).
+    if let Some(agent) = s.opts.default_agent.as_ref().filter(|_| !in_dm) {
         if !has_mention(&body, &chat) && chat.workspace_agents.iter().any(|a| a.name.eq_ignore_ascii_case(agent)) {
             body = format!("@{agent} {body}");
         }
     }
-    let message = {
+    let posted = {
         let mut svc = s.lock();
-        svc.post_user_message(chat.id, chat.workspace_id, body)?
+        svc.post_user_message(chat.id, chat.workspace_id, body)
+    };
+    let message = match posted {
+        Ok(m) => m,
+        // Not a failure: the founder's signed founding hasn't synced yet.
+        // The phone keeps the draft and shows the waiting state.
+        Err(hive_runtime::chat_service::ChatError::Unauthorized(m)) if m.starts_with("waiting for the workspace's founder") => {
+            let (_, name) = super::identity_api::founder_wait(&s, chat.workspace_id);
+            return Err(ApiError::waiting_for_founder(name));
+        }
+        Err(e) => return Err(e.into()),
     };
     s.mark_read_after_post(chat.id, message.id);
     s.after_write();

@@ -102,8 +102,9 @@ fn person_dto(m: &WorkspaceMember, me: &str) -> Value {
         "role": camel(&m.role),
         "isSelf": m.actor.id == me,
     });
-    if !m.title.trim().is_empty() {
-        v["title"] = json!(m.title);
+    let title = hive_proto::names::clean_display_name(&m.title);
+    if !title.is_empty() {
+        v["title"] = json!(title);
     }
     if let Some(u) = inline_avatar(m.actor.avatar_url.as_ref()) {
         v["avatarUrl"] = json!(u);
@@ -117,10 +118,43 @@ fn roster(config: &ChatSession) -> impl Iterator<Item = &WorkspaceMember> {
 }
 
 /// `GET /v1/people` → `{people: [...]}`.
+///
+/// Each person also carries what the shared config logs say about their
+/// account (`super::identity_api::person_extras`): `accountId`,
+/// `safetyCode`, `keyConflict`, `lookAlike`, `devices`, `links` and the DM
+/// with them (`dmChatId`). This box's own entry carries its safety code.
 pub async fn list_people(State(s): S) -> ApiResult<Json<Value>> {
     let (_, config) = hosts_and_agents(&s)?;
     let me = s.my_actor_id();
-    let list: Vec<Value> = roster(&config).map(|m| person_dto(m, &me)).collect();
+    let extras = super::identity_api::person_extras(&s);
+    let my_account = s.my_account();
+    let my_code = s.my_fingerprint().as_deref().and_then(hive_runtime::directory_trust::safety_code);
+    let list: Vec<Value> = roster(&config)
+        .map(|m| {
+            let mut v = person_dto(m, &me);
+            match m.actor.account_id {
+                Some(a) if Some(a) == my_account => {
+                    v["accountId"] = json!(a.to_string());
+                    if let Some(code) = &my_code {
+                        v["safetyCode"] = json!(code);
+                    }
+                    let chips = super::identity_api::link_chips(&s, a);
+                    if !chips.is_empty() {
+                        v["links"] = json!(chips);
+                    }
+                }
+                Some(a) => {
+                    if let Some(Value::Object(extra)) = extras.get(&a) {
+                        for (k, x) in extra {
+                            v[k.as_str()] = x.clone();
+                        }
+                    }
+                }
+                None => {}
+            }
+            v
+        })
+        .collect();
     Ok(Json(json!({ "people": list })))
 }
 

@@ -293,6 +293,18 @@ impl reqwest::dns::Resolve for PublicOnly {
     }
 }
 
+/// [`client_builder`] for a server someone else named (a relay in an
+/// invite): every name resolves to public addresses only, checked when the
+/// connection is made, so a name re-pointed at a loopback, private or
+/// link-local address after it was checked is never connected to. Redirects
+/// are not followed (an IP literal in a redirect skips the resolver). The
+/// caller still refuses internal IP literals in the URL itself.
+pub fn public_only_client_builder() -> reqwest::ClientBuilder {
+    client_builder()
+        .dns_resolver(std::sync::Arc::new(PublicOnly { proxies: proxy_hosts() }))
+        .redirect(reqwest::redirect::Policy::none())
+}
+
 /// The client for a connection: [`client`], resolving to public addresses
 /// only unless the connection is marked internal on this device.
 pub(crate) fn client_for(internal: bool) -> reqwest::Client {

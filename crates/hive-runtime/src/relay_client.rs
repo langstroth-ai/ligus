@@ -226,6 +226,20 @@ impl RelayClient {
         }
     }
 
+    /// A client for a relay someone else chose (a DM invite's): like
+    /// [`Self::new`], but it connects to public addresses only (resolved at
+    /// connect time) and follows no redirect
+    /// (`hive_forge::public_only_client_builder`).
+    pub fn public_only(base: impl Into<String>) -> Self {
+        let http = hive_forge::public_only_client_builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .tcp_keepalive(std::time::Duration::from_secs(30))
+            .pool_idle_timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|_| hive_forge::new_http_client());
+        Self { http, base: base.into().trim_end_matches('/').to_string(), auth: None, auth_cell: None }
+    }
+
     /// Set the relay access token (for a gated/paid hosted relay). Empty = none.
     pub fn with_auth(mut self, token: Option<String>) -> Self {
         self.auth = token

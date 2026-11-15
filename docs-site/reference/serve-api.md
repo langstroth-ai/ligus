@@ -52,12 +52,36 @@ $ curl -s http://127.0.0.1:8787/v1/health -H "Authorization: Bearer $(cat ~/.lig
 | `GET /v1/chats/:id/messages` | `?after=<msgId>&limit=` (default 100, 1 to 1000) | also advances this box's read mark |
 | `POST /v1/chats/:id/messages` | `{body}` | with `LIGUS_SERVE_DEFAULT_AGENT`, a message that mentions nobody gets `@agent` prepended |
 | `GET /v1/chats/:id/details` | | the desktop's right-hand panel, read-only |
-| `GET /v1/people` | | human roster with roles and avatars |
+| `GET /v1/people` | | human roster with roles and avatars; each person's `accountId`, `safetyCode`, `keyConflict`, `lookAlike`, `devices`, `links` and `dmChatId` (see [Identity](#identity-safety-codes-invites-and-dms)) |
 | `GET /v1/channels` | | channel tree in sidebar order |
 | `GET /v1/agents` | | agents with runtime and host labels, and `ownerActorId` when the agent has an owner (who, besides the box's person, may grant its permission requests) |
 | `PUT /v1/agents/:id/host` | `{hostId}` (`""` = the owner's device) | moves an agent to another host |
 | `GET /v1/hosts` | | hosts, with `isThis` and `online` |
 | `GET /v1/guards` | | dearth mode, pending members, locked chats, coordinator lease. Read-only |
+
+### Identity: safety codes, invites and DMs
+
+What the box knows about people comes from the config logs it holds with a
+founder pin; names are cleaned (bidi, zero-width and control characters
+removed) and never an identifier: the safety code is.
+
+| Method + path | Request | Notes |
+|---|---|---|
+| `GET /v1/profile` | | the box's account, its `safetyCode`, `holdsAccountKey`, `canFoundDm` and its contacts status |
+| `GET /v1/people/:account/links` | | a co-member's (or the box's own) linked-identity chips with the status this box cached; never asks a forge; 404 for anyone else |
+| `POST /v1/invites` | `{}` | a single-use invite link to the workspace, founder-signed when the box is the founder's. Admin; needs presence on a box acting for its owner and on rules v2 (`presence/prepare {action: "invite"}`) |
+| `POST /v1/invites/inspect` | `{code}` | who it is from: `trust` `known`, `claimed`, `mismatch`, `unknown` or `none`, the founder's safety code, and whether this box can take it |
+| `POST /v1/invites/join` | `{code, confirmSafetyCode}` | DM invites only (a box serves one workspace); an unsigned DM invite is refused; a stranger's needs `confirmSafetyCode`; the relay must be the box's own or public https |
+| `GET /v1/invites/pending` | | invites in the box's contact drop box (relay v0.3); the codes stay on the box |
+| `POST /v1/invites/pending/accept` | `{relay, seq, confirmSafetyCode}` | |
+| `POST /v1/invites/pending/dismiss` | `{relay, seq}` | |
+| `GET /v1/dms` | | the box's direct messages (one kept per person; simultaneous opens archived) |
+| `POST /v1/dms` | `{accountId}` | opens or founds a DM with a co-member; the signed invite is dropped into their contact box (`delivered`) or returned to share. Not on a box acting for its owner |
+| `GET /v1/chats/:id/founder` | | `{waiting, founderName?}`: sends wait for the founder's signed founding (a send answers 409 `waiting_for_founder`) |
+
+A DM's chat is listed by `GET /v1/chats` with a `dm` object and takes
+messages through `/v1/chats/:id/messages`; agents never run there and its
+messages never push.
 
 ### Passkey presence
 
@@ -67,8 +91,8 @@ vote, reject, lockdown clear and agent rebind (see
 
 | Method + path | Request | Notes |
 |---|---|---|
-| `POST /v1/presence/prepare` | `{action: "approve"\|"reject"\|"lockdown_clear"\|"agent_host", target, hostId?}` | drafts the event as the plain endpoint would and writes nothing: `{prepareId, challenge, preview: {kind, summary, digestShort, rpId, allowCredentials, chatTitle?, proposalTitle?, diffDigest?}}`. `challenge` is the base64url event digest the passkey signs (RP `ligus.ai`, user verification required). `digestShort` is the first 16 hex characters (64 bits) of that digest; show it so the person can compare it with the one the passkey page computes from the challenge it signs. `prepareId` is single use and lasts 5 minutes. 409 when there is nothing to confirm |
-| `POST /v1/presence/commit` | `{prepareId, assertion: {credentialId, authenticatorData, clientDataJSON, signature}}` (base64url) | appends the event with the assertion inside its signed stamp: `{committed, kind, eventId}`. 403 when the assertion doesn't verify or the passkey isn't the owner's; 404 for an unknown, expired or used `prepareId` |
+| `POST /v1/presence/prepare` | `{action: "approve"\|"reject"\|"lockdown_clear"\|"agent_host"\|"invite", target, hostId?}` | drafts the event as the plain endpoint would and writes nothing: `{prepareId, challenge, preview: {kind, summary, digestShort, rpId, allowCredentials, chatTitle?, proposalTitle?, diffDigest?}}`. `challenge` is the base64url event digest the passkey signs (RP `ligus.ai`, user verification required). `digestShort` is the first 16 hex characters (64 bits) of that digest; show it so the person can compare it with the one the passkey page computes from the challenge it signs. `prepareId` is single use and lasts 5 minutes. 409 when there is nothing to confirm |
+| `POST /v1/presence/commit` | `{prepareId, assertion: {credentialId, authenticatorData, clientDataJSON, signature}}` (base64url) | appends the event with the assertion inside its signed stamp: `{committed, kind, eventId, invite?}` (`invite`, for `action: "invite"`: the code to share). 403 when the assertion doesn't verify or the passkey isn't the owner's; 404 for an unknown, expired or used `prepareId` |
 
 ### Proposals
 
