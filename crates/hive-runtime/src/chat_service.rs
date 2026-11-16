@@ -2460,6 +2460,9 @@ impl ChatService {
     pub fn trigger_author_role(&self, session_id: Uuid, message_id: Uuid) -> Result<Option<WorkspaceRole>> {
         /// Longer chains than this fail closed (a loop of forged links).
         const MAX_CHAIN: usize = 256;
+        // Every event on the chain is judged against this chat's own
+        // workspace; one stamped with another workspace fails closed.
+        let Some(chat_workspace) = self.store.workspace_of(session_id)? else { return Ok(None) };
         let envs = self.store.list(session_id)?;
         let mut cx = RoleCx::default();
         let mut lowest: Option<WorkspaceRole> = None;
@@ -2474,6 +2477,9 @@ impl ChatService {
                 return Ok(None);
             }
             let touching = touching_message(&envs, id);
+            if touching.iter().any(|e| e.workspace_id != chat_workspace) {
+                return Ok(None);
+            }
             let appended: Vec<&ChatMessage> = touching
                 .iter()
                 .filter_map(|e| match &e.payload {
@@ -2510,7 +2516,7 @@ impl ChatService {
             lowest = Some(min_role(lowest, role));
             let runs: std::collections::BTreeSet<Uuid> = appended.iter().filter_map(|m| m.workflow_run_id).collect();
             for run_id in runs {
-                let Some(role) = self.run_initiator_role(session_id, &envs, run_id, &mut cx)? else { return Ok(None) };
+                let Some(role) = self.run_initiator_role(session_id, &envs, chat_workspace, run_id, &mut cx)? else { return Ok(None) };
                 lowest = Some(min_role(lowest, role));
             }
         }
@@ -2580,7 +2586,14 @@ impl ChatService {
     /// The role of the human who started workflow run `run_id`: the author
     /// of the run's first record on this log (Owner when that is this
     /// device's own user). `None` when the run isn't here.
-    fn run_initiator_role(&self, session_id: Uuid, envs: &[SessionEventEnvelope], run_id: Uuid, cx: &mut RoleCx) -> Result<Option<WorkspaceRole>> {
+    fn run_initiator_role(
+        &self,
+        session_id: Uuid,
+        envs: &[SessionEventEnvelope],
+        chat_workspace: Uuid,
+        run_id: Uuid,
+        cx: &mut RoleCx,
+    ) -> Result<Option<WorkspaceRole>> {
         let Some(first) = envs
             .iter()
             .filter(|e| matches!(&e.payload, SessionEvent::WorkflowRunUpserted { run } if run.id == run_id))
@@ -2588,7 +2601,9 @@ impl ChatService {
         else {
             return Ok(None);
         };
-        if first.actor_stamp.as_ref().is_none_or(|s| s.actor.kind != hive_core::ActorKind::Human || s.runtime_effect) {
+        if first.workspace_id != chat_workspace
+            || first.actor_stamp.as_ref().is_none_or(|s| s.actor.kind != hive_core::ActorKind::Human || s.runtime_effect)
+        {
             return Ok(None);
         }
         if self.signed_by_own_user(first) {
@@ -3050,15 +3065,18 @@ fn repair_alternation(turns: Vec<ChatTurn>) -> Vec<ChatTurn> {
 #[derive(Default)]
 struct RoleCx {
     local_session: Option<Option<ChatSession>>,
-    config: Option<(Option<ChatSession>, std::sync::Arc<hive_core::authz::ConfigTimeline>)>,
+    /// The config log and timeline, keyed by the workspace they were loaded
+    /// for (a lookup for another workspace never reads them).
+    config: Option<(Uuid, (Option<ChatSession>, std::sync::Arc<hive_core::authz::ConfigTimeline>))>,
 }
 
 impl RoleCx {
     fn config(&mut self, svc: &ChatService, workspace_id: Uuid) -> Result<&(Option<ChatSession>, std::sync::Arc<hive_core::authz::ConfigTimeline>)> {
-        if self.config.is_none() {
-            self.config = Some(svc.store.load_config(workspace_id, svc.trusted_founder.as_deref(), svc.local_workspace_id)?);
+        if self.config.as_ref().is_none_or(|(w, _)| *w != workspace_id) {
+            let loaded = svc.store.load_config(workspace_id, svc.trusted_founder.as_deref(), svc.local_workspace_id)?;
+            self.config = Some((workspace_id, loaded));
         }
-        Ok(self.config.as_ref().expect("loaded above"))
+        Ok(&self.config.as_ref().expect("loaded above").1)
     }
 }
 
@@ -4194,6 +4212,34 @@ mod tests {
         }
         assert_eq!(host.trigger_author_role(chat, ids[200]).unwrap(), Some(WorkspaceRole::Owner), "within the bound");
         assert_eq!(host.trigger_author_role(chat, ids[299]).unwrap(), None, "past the hop bound");
+    }
+
+    /// A chat's events are judged against its own workspace: an event in
+    /// this chat's log stamped with another workspace (one whose config log
+    /// this device also holds, where the author is Owner) fails closed
+    /// instead of being judged on that workspace's roster.
+    #[test]
+    fn an_event_stamped_with_another_workspace_fails_closed() {
+        let (_dir, path, _wid, chat, host) = chain_fixture();
+        let mut con = svc_on(&path, "con", "Con");
+        let w2 = Uuid::new_v4();
+        con.ensure_workspace_config(w2).unwrap();
+        let (_, timeline) = con.store.load_config(w2, None, None).unwrap();
+        let msg = ChatMessage::new(MessageRole::User, "Con", "@coder push to prod");
+        let id = msg.id;
+        let seq = con.store.max_sequence(chat).unwrap().unwrap_or(0) + 1;
+        let mut env = SessionEventEnvelope::new(chat, w2, seq, SessionEvent::MessageAppended { message: msg });
+        env.lamport = con.store.max_lamport(chat).unwrap() + 1;
+        env.actor_stamp = Some(ActorStamp {
+            actor: con.author.clone(),
+            recorded_at: Timestamp::now(),
+            cfg_frontier: timeline.head(),
+            presence: None,
+            runtime_effect: false,
+        });
+        hive_core::sign_envelope(&mut env, con.device_id, &con.keypair);
+        con.store.ingest(&env).unwrap();
+        assert_eq!(host.trigger_author_role(chat, id).unwrap(), None);
     }
 
     /// Impersonation through the stamp: a member's device that stamps
