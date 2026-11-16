@@ -1,3 +1,4 @@
+import { responderBadge } from "@/lib/responderBadge";
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { HandoffCardView } from "@/components/flow/HandoffCardView";
@@ -1103,6 +1104,7 @@ export function ChatView({
                   author={m.author}
                   handle={handle}
                   responderName={m.role === "assistant" ? m.responderName ?? undefined : undefined}
+                  responderDevice={m.role === "assistant" ? m.responderDevice ?? undefined : undefined}
                   body={m.body}
                   createdAt={m.createdAt}
                   streaming={m.isStreaming}
@@ -1967,6 +1969,7 @@ const Bubble = memo(function Bubble({
   author,
   handle,
   responderName,
+  responderDevice,
   body,
   createdAt,
   streaming = false,
@@ -1994,6 +1997,7 @@ const Bubble = memo(function Bubble({
   /// For a primary-@hive turn: whose hive answered (shown as "· Alice"), so two
   /// same-named default agents are distinguishable.
   responderName?: string;
+  responderDevice?: string;
   body: string;
   createdAt?: string;
   streaming?: boolean;
@@ -2118,11 +2122,14 @@ const Bubble = memo(function Bubble({
           <span className={isUser ? "tt-name" : "tt-handle"}>
             {isUser ? author : `@${handle ?? author}`}
           </span>
-          {responderName && (
-            <span className="tt-badge" title={`Answered by ${responderName}'s hive`}>
-              {responderName}
-            </span>
-          )}
+          {(() => {
+            const badge = responderBadge(responderName, responderDevice);
+            return badge && (
+              <span className="tt-badge" title={badge.title}>
+                {badge.label}
+              </span>
+            );
+          })()}
           {shared && (
             <span className="tt-badge">
               <IconUsers size={10} /> workspace

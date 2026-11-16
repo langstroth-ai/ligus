@@ -87,6 +87,13 @@ pub struct ChatMessageDto {
     /// named agents (whose own name is the label).
     #[serde(default)]
     pub responder_name: Option<String>,
+    /// Where a primary-`@hive` turn ran, relative to the viewer: "this" (this
+    /// device), "mine" (another device of the viewer's own account), or None
+    /// (someone else's device, or not a primary turn). The UI shows "This
+    /// device" / "Your other device" instead of the viewer's own name, so a
+    /// default name like "You" never reads as the agent's.
+    #[serde(default)]
+    pub responder_device: Option<String>,
     /// The runtime that produced THIS turn (stamped at generation), so the UI
     /// attributes each turn to the model that actually ran it — not the chat's
     /// currently-selected runtime, which retroactively relabels history. None on

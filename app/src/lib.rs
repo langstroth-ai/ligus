@@ -2451,7 +2451,30 @@ fn role_name(role: WorkspaceRole) -> &'static str {
     }
 }
 
-fn message_dto(m: &ChatMessage, agents: &[WorkspaceAgent]) -> ChatMessageDto {
+/// Who is looking at a transcript: this device and its account, so a
+/// primary turn this device (or another of the viewer's devices) answered
+/// can say so instead of showing the viewer's own name.
+#[derive(Clone, Copy, Default)]
+struct Viewer {
+    device: Option<Uuid>,
+    account: Option<Uuid>,
+}
+
+impl Viewer {
+    fn of(svc: &ChatService) -> Self {
+        Self { device: Some(svc.device_id()), account: svc.author().account_id }
+    }
+
+    /// "this" / "mine" / None for the actor that answered a primary turn.
+    fn place_of(&self, actor: &hive_core::ActorIdentity) -> Option<String> {
+        if actor.device_id.is_some() && actor.device_id == self.device {
+            return Some("this".into());
+        }
+        (actor.account_id.is_some() && actor.account_id == self.account).then(|| "mine".into())
+    }
+}
+
+fn message_dto(m: &ChatMessage, agents: &[WorkspaceAgent], viewer: Viewer) -> ChatMessageDto {
     // Resolve the author's avatar. A named agent (in the roster) uses its roster
     // avatar/color. Otherwise — a human, or the primary "hive" (not a roster
     // entry) — use the stamped actor identity's avatar (the generating user's).
@@ -2471,6 +2494,7 @@ fn message_dto(m: &ChatMessage, agents: &[WorkspaceAgent]) -> ChatMessageDto {
     } else {
         None
     };
+    let responder_device = if responder_name.is_some() { m.actor_identity.as_ref().and_then(|a| viewer.place_of(a)) } else { None };
     ChatMessageDto {
         id: m.id.to_string(),
         role: role_str(m.role).to_string(),
@@ -2509,6 +2533,7 @@ fn message_dto(m: &ChatMessage, agents: &[WorkspaceAgent]) -> ChatMessageDto {
         author_avatar_url,
         author_color_hex,
         responder_name,
+        responder_device,
         runtime_id: m.runtime_id.clone(),
         runtime_label: m.runtime_label.clone(),
     }
@@ -2611,12 +2636,12 @@ fn proposal_dto_reviewed(p: &ActionProposal, s: &ChatSession, svc: &ChatService)
     dto
 }
 
-fn session_dto(s: &ChatSession) -> ChatSessionDto {
+fn session_dto(s: &ChatSession, viewer: Viewer) -> ChatSessionDto {
     ChatSessionDto {
         id: s.id.to_string(),
         title: s.title.clone(),
         runtime_id: s.runtime_id.clone(),
-        messages: s.messages.iter().map(|m| message_dto(m, &s.workspace_agents)).collect(),
+        messages: s.messages.iter().map(|m| message_dto(m, &s.workspace_agents, viewer)).collect(),
     }
 }
 
@@ -3762,7 +3787,7 @@ fn create_chat(state: State<AppState>, title: String) -> Result<ChatSessionDto, 
     let session = svc
         .create_chat(title, state.active_workspace_id(), &state.current_default_runtime_id())
         .map_err(map_err)?;
-    Ok(session_dto(&session))
+    Ok(session_dto(&session, Viewer::of(&svc)))
 }
 
 fn channel_dto(c: &hive_core::Channel) -> ChannelDto {
@@ -3857,7 +3882,7 @@ fn create_chat_in_channel(
     let session = svc.create_chat(title, wid, &rt).map_err(map_err)?;
     svc.set_chat_channel(session.id, wid, &channel_id).map_err(map_err)?;
     let session = svc.load(session.id).map_err(map_err)?.unwrap_or(session);
-    Ok(session_dto(&session))
+    Ok(session_dto(&session, Viewer::of(&svc)))
 }
 
 /// Move a (focused) chat into a different channel.
@@ -3876,7 +3901,7 @@ fn get_chat(state: State<AppState>, session_id: String) -> Result<Option<ChatSes
     let Some(mut session) = svc.load(id).map_err(map_err)? else { return Ok(None) };
     let links = device_links_of(&svc, session.workspace_id);
     attribute_linked_devices(&mut session, &links);
-    Ok(Some(session_dto(&session)))
+    Ok(Some(session_dto(&session, Viewer::of(&svc))))
 }
 
 /// Show messages a person's other identity wrote — the separate member their
@@ -17481,5 +17506,35 @@ mod init_recovery_tests {
         let dd = InitFailure::of(&format!("{DATA_DIR_REFUSED}this is a Hive 1.x folder"));
         assert_eq!(dd, InitFailure::DataDir("this is a Hive 1.x folder".into()));
         assert!(!dd.explain().2, "a refused data folder isn't retried");
+    }
+}
+
+#[cfg(test)]
+mod responder_place_tests {
+    use super::*;
+
+    /// A primary `@hive` turn this device answered is labelled by place
+    /// ("this"), never by the viewer's own display name (a fresh desktop is
+    /// called "You", which the UI showed as a "YOU" badge on the agent).
+    #[test]
+    fn primary_turn_answered_here_is_labelled_by_place() {
+        let (device, account) = (Uuid::new_v4(), Uuid::new_v4());
+        let viewer = Viewer { device: Some(device), account: Some(account) };
+        let mut me = hive_core::ActorIdentity::new("me", "You", hive_core::ActorKind::Human);
+        me.account_id = Some(account);
+        me.device_id = Some(device);
+        let mut m = ChatMessage::new(MessageRole::Assistant, "Hive", "hi");
+        m.actor_identity = Some(me.clone());
+        let dto = message_dto(&m, &[], viewer);
+        assert_eq!(dto.responder_device.as_deref(), Some("this"));
+        me.device_id = Some(Uuid::new_v4());
+        m.actor_identity = Some(me.clone());
+        assert_eq!(message_dto(&m, &[], viewer).responder_device.as_deref(), Some("mine"));
+        let mut other = hive_core::ActorIdentity::new("bob", "Bob", hive_core::ActorKind::Human);
+        other.account_id = Some(Uuid::new_v4());
+        m.actor_identity = Some(other);
+        let dto = message_dto(&m, &[], viewer);
+        assert_eq!(dto.responder_device, None);
+        assert_eq!(dto.responder_name.as_deref(), Some("Bob"));
     }
 }
