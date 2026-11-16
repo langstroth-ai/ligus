@@ -31,6 +31,9 @@ both:
 Pair by scanning the QR code `ligus pair` prints (or opening its
 `hive://pair?…` link; `ligus://` works too). A **v2** link carries the relay
 details as well as, when there is a usable direct address, the URL and token.
+A box listening only on loopback (`127.0.0.1`) with remote access off prints
+no link, since the phone can't reach it; see
+[Remote access](../networking/remote-access.md).
 You can also add a host by typing its address; the app assumes
 `http://…:8787`.
 

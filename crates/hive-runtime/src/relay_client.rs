@@ -12,7 +12,7 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum RelayError {
-    #[error("http error: {0}")]
+    #[error("http error: {}", http_error_text(.0))]
     Http(#[from] reqwest::Error),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
@@ -27,6 +27,18 @@ pub enum RelayError {
     /// A local error (e.g. sealing an attachment before upload).
     #[error("{0}")]
     Message(String),
+}
+
+/// A transport error's text. A builder error means the request URL itself
+/// was unusable — almost always an empty or non-http(s) relay URL — so it
+/// says that instead of reqwest's bare "builder error".
+fn http_error_text(e: &reqwest::Error) -> String {
+    if e.is_builder() {
+        let url = e.url().map(|u| u.to_string()).unwrap_or_default();
+        let shown = if url.is_empty() { String::new() } else { format!(" ({url})") };
+        return format!("the relay URL{shown} is missing or not an http(s) address; set the workspace's Relay URL ({e})");
+    }
+    e.to_string()
 }
 
 /// Decode a JSON response, mapping non-2xx to a typed error *before* attempting
@@ -977,5 +989,15 @@ mod tests {
         assert_eq!(got[0].version, 2);
         let opened = hive_core::e2ee::open(&alice, &got[0].sealed["alice"]).unwrap();
         assert_eq!(opened, key_v2);
+    }
+
+    /// An empty or non-http relay URL makes reqwest fail with a bare
+    /// "builder error"; the error names the URL problem instead.
+    #[tokio::test]
+    async fn a_relayless_client_names_the_url_problem() {
+        for base in ["", "relay.example", "ftp://relay.example"] {
+            let err = RelayClient::new(base).fetch_keyring_rows("w").await.unwrap_err().to_string();
+            assert!(err.contains("relay URL"), "{base:?}: {err}");
+        }
     }
 }

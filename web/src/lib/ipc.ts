@@ -114,6 +114,10 @@ export const getWorkspaceDiffs = () =>
   invoke<GitFileDiffDto[]>("get_workspace_diffs");
 
 export const getAppSettings = () => invoke<AppSettingsDto>("get_app_settings");
+/// Record first-run progress in Ligus's data dir (settings.json), so it resets
+/// with the data dir rather than living in the webview's storage.
+export const markOnboarded = () => invoke<void>("mark_onboarded");
+export const markTourSeen = () => invoke<void>("mark_tour_seen");
 
 /// Git branch + dirty count for the active workspace. Separate (lazy) command —
 /// it shells out to git, so it's queried only where the pill is shown.

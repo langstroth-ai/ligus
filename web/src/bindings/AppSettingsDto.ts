@@ -22,4 +22,13 @@ workspaceFolder: string, knownWorkspaces: Array<string>, model: string, gitBranc
 /**
  * The local user's chosen avatar (`data:` URL), or None for initials.
  */
-avatarUrl: string | null, };
+avatarUrl: string | null, 
+/**
+ * First-run onboarding finished on this device's data dir. False on a
+ * fresh or factory-reset data dir, whatever the webview remembers.
+ */
+onboarded: boolean, 
+/**
+ * The feature tour already ran once on this data dir.
+ */
+tourSeen: boolean, };

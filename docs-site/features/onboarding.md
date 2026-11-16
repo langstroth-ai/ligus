@@ -1,11 +1,13 @@
 # Onboarding
 
 Ligus's first-launch wizard — "Four quick steps" — appears
-automatically the first time you open the app, before you've picked a
-name. It's gated on your identity, not on any config file: it shows
-whenever your display name is still unset (or the placeholder `You`)
-**and** the `hive.onboarded` flag in localStorage is absent. Finishing
-(or skipping) the wizard sets that flag so it won't reappear.
+automatically the first time you open the app on a fresh data dir. It
+is gated on the data dir itself: it shows until `settings.json` in
+`ai.ligus.desktop/` records `"onboarded": true`, which finishing the
+wizard writes. Nothing in the webview's own storage counts, and neither
+does a display name, so deleting the data dir (or resetting it) always
+brings the wizard back with a new identity. The feature tour that runs
+after the wizard is tracked the same way (`"tour_seen"`).
 
 | Step           | Captures                                             |
 |----------------|------------------------------------------------------|
@@ -35,19 +37,18 @@ paste). (Key seeds are files, not in the OS keystore — see
 
 ## Re-running onboarding
 
-Because the wizard is gated on your identity plus the `hive.onboarded`
-localStorage flag, it won't return just because you edit or delete a
-config file. The supported way to start over is **Settings → Account →
-Danger zone → "Reset local data"**, which wipes this device's chats,
-identity, keys, settings, and workspaces and relaunches Ligus fresh into
-the wizard.
+The wizard returns whenever the data dir is new. The supported way to
+start over is **Settings → Account → Danger zone → "Reset local data"**,
+which wipes this device's chats, identity, keys, settings, and
+workspaces and relaunches Ligus fresh into the wizard. Quitting Ligus and
+deleting `ai.ligus.desktop/` has the same effect.
 
 ## Headless / pre-seeded config
 
 You can pre-populate runtimes and transport by shipping a
 `ligus.config.toml` in your workspace root; the Settings UI is a GUI
 over the same fields. Note this does **not** skip the wizard on its
-own — onboarding still runs until an identity (display name) exists.
+own — onboarding still runs until it has been finished on this data dir.
 Minimum viable config:
 
 ```toml

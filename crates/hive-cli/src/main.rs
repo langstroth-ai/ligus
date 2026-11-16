@@ -219,11 +219,40 @@ fn decode_hivews_invite_full(
     Ok((c.relay_url, c.room, c.key, c.inv.and_then(|i| Uuid::parse_str(i.trim()).ok()), c.ek, pin))
 }
 
+/// A relay URL a box can sync with: an http(s) address with a host.
+fn usable_relay_url(raw: &str) -> bool {
+    reqwest::Url::parse(raw.trim())
+        .is_ok_and(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some_and(|h| !h.is_empty()))
+}
+
+/// Why this box can't sync, named before any HTTP is tried: no relay URL,
+/// or one that isn't an http(s) address (an invite from a relayless
+/// workspace once enrolled as `relay_url = ""`).
+fn relay_url_problem(relay_url: Option<&str>) -> Option<String> {
+    const FIX: &str = "re-enroll with an invite from a workspace that has one (set it in the desktop app under Settings → Team sync → Relay URL), or set LIGUS_RELAY_URL";
+    match relay_url.map(str::trim) {
+        None | Some("") => Some(format!("this box's workspace has no relay URL; {FIX}")),
+        Some(r) if !usable_relay_url(r) => {
+            Some(format!("this box's workspace has no relay URL it can use ({r:?} is not an http(s) address); {FIX}"))
+        }
+        Some(_) => None,
+    }
+}
+
 /// `ligus enroll <hivews1:…> [--token <access-token>]` — one-command bootstrap:
 /// decode the invite, persist the connection to config.toml, and (with --token)
 /// wire the relay identity. After this a headless box just runs `ligus worker`.
 fn cmd_enroll(cfg: &Config, invite: &str, token: Option<String>) -> Result<()> {
     let (relay_url, room, key, inv, ek, pin) = decode_hivews_invite_full(invite)?;
+    // A box joins through the relay; an invite from a workspace with none
+    // can't be used here. Refuse before writing anything.
+    if !usable_relay_url(&relay_url) {
+        bail!(
+            "this invite can't be used: its workspace has no relay{}. In the desktop app, set one under Settings → Team sync (Relay URL), then copy a new invite.",
+            if relay_url.trim().is_empty() { String::new() } else { format!(" (relay URL {:?} is not an http(s) address)", relay_url.trim()) }
+        );
+    }
+    let relay_url = relay_url.trim().to_string();
     std::fs::create_dir_all(&cfg.data_dir)?;
     let mut f = load_file_config(&cfg.data_dir);
     f.relay_url = Some(relay_url.clone());
@@ -259,11 +288,11 @@ fn cmd_enroll(cfg: &Config, invite: &str, token: Option<String>) -> Result<()> {
 /// `ligus join <invite-code>` — redeem a relay invite code to self-enroll this
 /// box's identity in the configured workspace at the invite's role.
 async fn cmd_join(cfg: &Config, code: &str) -> Result<()> {
-    let relay_url = cfg
-        .relay_url
-        .clone()
-        .ok_or_else(|| anyhow!("no relay — run `ligus enroll <invite>` or set LIGUS_RELAY_URL first"))?;
-    let relay = RelayClient::new(&relay_url)
+    if let Some(problem) = relay_url_problem(cfg.relay_url.as_deref()) {
+        bail!(problem);
+    }
+    let relay_url = cfg.relay_url.as_deref().unwrap_or_default().trim();
+    let relay = RelayClient::new(relay_url)
         .with_auth(cfg.token.clone())
         .with_auth_cell(auth::cell());
     match relay.join_via_invite(&cfg.room, code.trim(), "").await? {
@@ -362,11 +391,11 @@ const SYNC_ONCE_MAX_ROUNDS: usize = 250;
 
 /// The relay client this config syncs through.
 fn relay_client(cfg: &Config) -> Result<RelayClient> {
-    let relay_url = cfg
-        .relay_url
-        .clone()
-        .ok_or_else(|| anyhow!("set LIGUS_RELAY_URL to sync"))?;
-    Ok(RelayClient::new(&relay_url)
+    if let Some(problem) = relay_url_problem(cfg.relay_url.as_deref()) {
+        bail!(problem);
+    }
+    let relay_url = cfg.relay_url.as_deref().unwrap_or_default().trim();
+    Ok(RelayClient::new(relay_url)
         .with_auth(cfg.token.clone())
         .with_auth_cell(auth::cell()))
 }
@@ -1747,6 +1776,46 @@ mod cli_tests {
         assert_eq!(mode, 0o600, "config.toml is {mode:o}");
         let dir = std::fs::metadata(&cfg.data_dir).unwrap().permissions().mode() & 0o077;
         assert_eq!(dir, 0, "data dir is readable by others");
+    }
+
+    fn bare_cfg(dir: &std::path::Path, relay_url: Option<&str>) -> Config {
+        Config {
+            data_dir: dir.join("data"),
+            relay_url: relay_url.map(str::to_string),
+            token: None,
+            room: "r".into(),
+            key: None,
+            epoch_keys: Vec::new(),
+        }
+    }
+
+    /// An invite from a workspace with no relay can't be used by a box:
+    /// enroll refuses it, says where to set one, and writes nothing.
+    #[test]
+    fn enroll_refuses_an_invite_without_a_usable_relay() {
+        use base64::Engine;
+        for relay in ["", "  ", "relay.example", "ftp://relay.example"] {
+            let tmp = tempfile::tempdir().unwrap();
+            let cfg = bare_cfg(tmp.path(), None);
+            let json = serde_json::json!({"relay_url": relay, "room": "r", "key": "k"}).to_string();
+            let body = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json.as_bytes());
+            let err = cmd_enroll(&cfg, &format!("hivews1:{body}"), None).unwrap_err().to_string();
+            assert!(err.contains("Settings → Team sync"), "{relay:?}: {err}");
+            assert!(!cfg.data_dir.exists(), "{relay:?}: enroll wrote {:?}", cfg.data_dir);
+        }
+    }
+
+    /// A box enrolled from a relayless invite (older clients wrote
+    /// relay_url = "") is told so by name, never "builder error".
+    #[tokio::test]
+    async fn sync_names_a_missing_relay_url() {
+        for relay in [Some(""), Some("relay.example"), None] {
+            let tmp = tempfile::tempdir().unwrap();
+            let cfg = bare_cfg(tmp.path(), relay);
+            let err = sync_once(&cfg).await.unwrap_err().to_string();
+            assert!(err.contains("no relay URL"), "{relay:?}: {err}");
+            assert!(!err.contains("builder error"), "{relay:?}: {err}");
+        }
     }
 
     fn argv(a: &[&str]) -> Vec<String> {

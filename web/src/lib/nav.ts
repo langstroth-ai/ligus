@@ -24,3 +24,11 @@ export function flashMessage(messageId: string, tries = 20) {
   void el.offsetWidth;
   el.classList.add("hive-flash");
 }
+
+/// Open the Settings sheet on a tab (e.g. "team-sync") from anywhere; App
+/// owns the sheet and closes any modal in front of it.
+export const OPEN_SETTINGS_EVENT = "hive:open-settings";
+
+export function openSettingsTab(tab: string) {
+  window.dispatchEvent(new CustomEvent<string>(OPEN_SETTINGS_EVENT, { detail: tab }));
+}
