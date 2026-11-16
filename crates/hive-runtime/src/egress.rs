@@ -601,6 +601,66 @@ fn sni_from_hello(b: &[u8]) -> Option<Option<String>> {
     Some(None)
 }
 
+/// What a refused endpoint is, for telling the user whether it mattered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RefusedKind {
+    /// A CLI's own telemetry or error reporting (Claude Code's Datadog log
+    /// intake, Sentry, ...). Never needed for a turn; blocked on purpose.
+    Telemetry,
+    /// Claude Code's claude.ai connectors proxy: the user's claude.ai MCP
+    /// connectors, off unless the `claude-connectors` preset is on. The turn
+    /// and the Ligus tools work without it.
+    ClaudeConnectors,
+    /// Anything else: may be something the agent needed.
+    Other,
+}
+
+/// Classify a refused endpoint (`RefusedKind`).
+pub fn classify_refused(hp: &HostPort) -> RefusedKind {
+    let h = hp.host.trim_end_matches('.').to_ascii_lowercase();
+    let under = |d: &str| h == d || h.ends_with(&format!(".{d}"));
+    if EgressPreset::ClaudeConnectors.host_names().iter().any(|c| h == *c) {
+        return RefusedKind::ClaudeConnectors;
+    }
+    const TELEMETRY: &[&str] = &["datadoghq.com", "datadoghq.eu", "sentry.io", "statsigapi.net", "featuregates.org", "featureassets.org", "prodregistryv2.org"];
+    if TELEMETRY.iter().any(|d| under(d)) {
+        return RefusedKind::Telemetry;
+    }
+    RefusedKind::Other
+}
+
+/// The chat notice for a turn's refused endpoints: `None` when every one is
+/// a known optional host (telemetry, the claude.ai connectors proxy), which
+/// are blocked on purpose and don't affect the turn. Otherwise it names the
+/// hosts that may have mattered, and the optional ones apart.
+pub fn refused_notice(denied: &[HostPort]) -> Option<String> {
+    let mut by: std::collections::BTreeMap<RefusedKind, Vec<String>> = Default::default();
+    for hp in denied {
+        let name = if hp.port == 443 { hp.host.clone() } else { hp.to_string() };
+        let v = by.entry(classify_refused(hp)).or_default();
+        if !v.contains(&name) {
+            v.push(name);
+        }
+    }
+    let other = by.get(&RefusedKind::Other)?;
+    let mut s = format!(
+        "The agent's sandbox blocked {} — not on this chat's allow-list (its model provider, allowed MCP servers and any egress presets). If the agent needed {}, switch on a network preset for this chat in Settings → Guards → Network presets.",
+        other.join(", "),
+        if other.len() == 1 { "it" } else { "them" }
+    );
+    let mut optional = Vec::new();
+    if let Some(t) = by.get(&RefusedKind::Telemetry) {
+        optional.push(format!("telemetry ({})", t.join(", ")));
+    }
+    if let Some(c) = by.get(&RefusedKind::ClaudeConnectors) {
+        optional.push(format!("your claude.ai connectors ({}; the Claude connectors preset allows it)", c.join(", ")));
+    }
+    if !optional.is_empty() {
+        s.push_str(&format!(" Also blocked, which doesn't affect the turn: {}.", optional.join("; ")));
+    }
+    Some(s)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -775,5 +835,22 @@ pub(crate) mod tests {
             let got = tokio::time::timeout(std::time::Duration::from_secs(5), s.read_exact(&mut echoed)).await;
             assert!(!matches!(got, Ok(Ok(_))), "a name resolving to loopback is not spliced");
         }
+    }
+
+    /// A plain Claude Code turn hits exactly these two (live check, Claude
+    /// Code 2.1.x): neither matters, so no chat notice.
+    #[test]
+    fn known_optional_refusals_stay_quiet() {
+        let dd = HostPort::new("http-intake.logs.us5.datadoghq.com", 443);
+        let mcp = HostPort::new("mcp-proxy.anthropic.com", 443);
+        assert_eq!(classify_refused(&dd), RefusedKind::Telemetry);
+        assert_eq!(classify_refused(&mcp), RefusedKind::ClaudeConnectors);
+        assert_eq!(classify_refused(&HostPort::new("evil-datadoghq.com", 443)), RefusedKind::Other);
+        assert_eq!(refused_notice(&[dd.clone(), mcp.clone()]), None);
+        let n = refused_notice(&[dd, mcp, HostPort::new("example.com", 443), HostPort::new("example.com", 443)]).unwrap();
+        assert!(n.contains("blocked example.com —"), "{n}");
+        assert!(!n.contains("example.com, example.com"), "{n}");
+        assert!(n.contains("telemetry (http-intake.logs.us5.datadoghq.com)"), "{n}");
+        assert!(n.contains("claude.ai connectors (mcp-proxy.anthropic.com"), "{n}");
     }
 }

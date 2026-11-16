@@ -8614,7 +8614,7 @@ async fn run_prepared_turn_inner(
             ))),
         },
     };
-    crate::guards::record_sandbox_egress_denials(state, workspace_id, session_id, sandbox_denials.lock().map(|d| d.len()).unwrap_or(0));
+    crate::guards::record_sandbox_egress_denials(state, workspace_id, session_id, &sandbox_denials.lock().map(|d| d.clone()).unwrap_or_default());
     // Patch-leaving: what the tool loop measurably achieved, as signals.
     if let Some(tools) = &http_tools {
         crate::guards::record_progress(state, workspace_id, session_id, tools.progress());

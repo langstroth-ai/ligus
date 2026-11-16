@@ -179,8 +179,10 @@ turns refused, where neither is available. The table shows the first.
   servers this chat may reach. Under dearth mode only the allow-listed MCP
   servers' hosts are added; under a chat lockdown only the model endpoints
   remain. The `CONNECT` host and the TLS server name (SNI) must both match;
-  there is no TLS interception. A refused endpoint shows as a system note in
-  the chat and a content-free decision. A tool that ignores `HTTPS_PROXY`
+  there is no TLS interception. Every refused endpoint is recorded as a
+  content-free decision and logged (host and port). A refused endpoint that
+  may have mattered shows as a system note in the chat naming it; [known
+  optional hosts](#refused-optional) are blocked quietly. A tool that ignores `HTTPS_PROXY`
   simply has no network. To let agents reach more hosts on your device under
   the normal envelope, switch on an [egress preset](#egress-presets) or set
   `LIGUS_SANDBOX_EGRESS_ALLOW`.
@@ -221,6 +223,24 @@ turns refused, where neither is available. The table shows the first.
 - **One control among several.** The sandbox does not replace the author
   gate, the MCP role gate, review of proposals or the human gate, and it is
   not a boundary against kernel bugs.
+
+### What a plain Claude Code turn tries to reach {#refused-optional}
+
+A Claude Code turn (2.1.x) with nothing switched on tries two hosts that
+aren't on its allow-list. Both are blocked on purpose, and neither affects
+the turn or the Ligus tools (checked live under Seatbelt, with and without a
+bound code folder):
+
+| Host | What it is | Matters? |
+|---|---|---|
+| `http-intake.logs.us5.datadoghq.com` | Claude Code's telemetry log intake | No. Telemetry stays blocked. |
+| `mcp-proxy.anthropic.com` | the proxy behind your claude.ai MCP connectors (Drive, Gmail, ...) | Only if you want those connectors in Ligus turns: switch on the `claude-connectors` preset below. |
+
+Ligus treats these, and other known telemetry and error-reporting hosts
+(Datadog, Sentry, Statsig), as *known optional*: they're recorded and
+logged but don't post a chat notice. When a turn is refused anything else,
+the notice names it, says how to allow it, and lists the optional ones
+apart as not affecting the turn.
 
 ### Egress presets {#egress-presets}
 

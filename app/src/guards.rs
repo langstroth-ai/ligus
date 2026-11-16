@@ -958,21 +958,19 @@ fn parse_preset_names(names: &[String]) -> Result<Vec<hive_runtime::egress::Egre
 /// Endpoints the turn's egress proxy refused: one content-free decision per
 /// endpoint count (no host names: a name can itself carry data) and a note
 /// in the chat so members see why a tool call failed.
-pub(crate) fn record_sandbox_egress_denials(state: &AppState, workspace_id: Uuid, session_id: Uuid, denied: usize) {
-    if denied == 0 {
+pub(crate) fn record_sandbox_egress_denials(state: &AppState, workspace_id: Uuid, session_id: Uuid, denied: &[hive_runtime::egress::HostPort]) {
+    if denied.is_empty() {
         return;
     }
+    let hosts: Vec<String> = denied.iter().map(ToString::to_string).collect();
+    tracing::info!(target: "sandbox", refused = %hosts.join(", "), "egress proxy refused endpoints");
     let mut svc = state.service.lock().unwrap();
     let _ = svc.record_signal(workspace_id, Some(session_id), &egress_decision("sandbox_proxy", "endpoint_not_allowed"));
-    let _ = svc.post_system_note(
-        session_id,
-        workspace_id,
-        format!(
-            "The agent's sandbox refused {denied} network endpoint{} that {} not on this chat's allow-list (its model provider, allowed MCP servers and any egress presets).",
-            if denied == 1 { "" } else { "s" },
-            if denied == 1 { "is" } else { "are" }
-        ),
-    );
+    // Known optional hosts (a CLI's telemetry, the claude.ai connectors
+    // proxy) are blocked on purpose and don't affect the turn: no notice.
+    if let Some(note) = hive_runtime::egress::refused_notice(denied) {
+        let _ = svc.post_system_note(session_id, workspace_id, note);
+    }
 }
 
 /// A turn refused because its runtime can't be confined: tell the chat (so
