@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { copyWhenReady } from "@/lib/clipboard";
+import { inviteError } from "@/lib/invites";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   listWorkspaces,
@@ -53,11 +54,17 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
     setBusy(true);
     try {
       const ws = await createWorkspace(n);
-      const code = await workspaceInvite(ws.id);
-      setLastInvite(code);
       setName("");
+      try {
+        setLastInvite(await workspaceInvite(ws.id));
+        toast.success(`Created “${ws.name}”. Share the invite below to add people.`);
+      } catch (e) {
+        // Created, but with no relay there's no invite worth sharing yet.
+        const m = inviteError(e);
+        setLastInvite(null);
+        toast.info(`Created “${ws.name}”. ${m.message}`, m.action);
+      }
       await refresh();
-      toast.success(`Created “${ws.name}”. Share the invite below to add people.`);
     } catch (e) {
       toast.error(errMsg(e));
     } finally {
@@ -84,10 +91,12 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
 
   async function copyInvite(ws: WorkspaceInfoDto) {
     try {
+      // Started inside the click (WebKit); a refused invite copies nothing.
       await copyWhenReady(workspaceInvite(ws.id));
       toast.success(`Invite for “${ws.name}” copied.`);
     } catch (e) {
-      toast.error(errMsg(e));
+      const m = inviteError(e);
+      toast.error(m.message, m.action);
     }
   }
 
@@ -98,7 +107,8 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
       const { expiresIn } = await share;
       toast.success(`Short code ${code} copied — expires in ${Math.round(expiresIn / 60)} min.`);
     } catch (e) {
-      toast.error(errMsg(e));
+      const m = inviteError(e);
+      toast.error(m.message, m.action);
     }
   }
 

@@ -1430,6 +1430,21 @@ async fn fresh_box_with_unreachable_relay_refuses_to_start() {
     assert!(open_service(&cfg).unwrap().load(workspace_config_session_id(ws)).unwrap().is_none(), "no config log seeded");
 }
 
+/// A box enrolled from a relayless invite (relay_url = "") is told it has
+/// no relay URL, before any HTTP, never reqwest's "builder error".
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn box_without_a_relay_url_says_so_by_name() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("serve");
+    let cfg = config(&dir, "", &format!("serve-relayless-{}", Uuid::new_v4()));
+    let mut opts = ServeOptions::from_flags(&cfg, Some("127.0.0.1:0".into()), None, None, None, None, Some("mac-test".into()), None, false)
+        .unwrap();
+    opts.prometheus_url = "http://127.0.0.1:9".into();
+    let err = start(cfg, opts).await.err().expect("must not start").to_string();
+    assert!(err.contains("no relay URL") && err.contains("re-enroll"), "{err}");
+    assert!(!err.contains("builder error"), "{err}");
+}
+
 #[test]
 fn serve_options_refuse_public_binds_and_need_both_ntfy_parts() {
     let cfg = Config {
