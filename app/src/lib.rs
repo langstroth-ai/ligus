@@ -11201,15 +11201,97 @@ fn refuse_hive1_data_dir(data_dir: &Path) -> Result<(), String> {
     let home = hive_core::compat::home_dir();
     match hive_core::compat::check_data_dir(data_dir, home.as_deref()) {
         Ok(()) => Ok(()),
-        Err(e) => {
-            rfd::MessageDialog::new()
-                .set_level(rfd::MessageLevel::Error)
-                .set_title("Ligus can't use this data folder")
-                .set_description(format!("{e}\n\nNothing was changed."))
-                .set_buttons(rfd::MessageButtons::Ok)
-                .show();
-            Err(e)
+        // The startup recovery dialog says so ([`InitFailure::DataDir`]).
+        Err(e) => Err(format!("{DATA_DIR_REFUSED}{e}")),
+    }
+}
+
+/// Marks a [`refuse_hive1_data_dir`] refusal for [`InitFailure::of`].
+const DATA_DIR_REFUSED: &str = "data folder refused: ";
+
+/// Why the backend didn't start, for the startup recovery dialog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum InitFailure {
+    /// The OS keychain (or Secret Service) refused or was cancelled: the
+    /// user can allow it and try again.
+    Keychain(String),
+    /// A Hive 1.x data dir: never used, so trying again won't help.
+    DataDir(String),
+    /// Anything else.
+    Other(String),
+}
+
+impl InitFailure {
+    fn of(e: &str) -> Self {
+        if let Some(rest) = e.strip_prefix(DATA_DIR_REFUSED) {
+            return Self::DataDir(rest.to_string());
         }
+        let l = e.to_ascii_lowercase();
+        if ["keychain", "key vault", "secret service", "secret store", "user canceled", "user cancelled", "interaction is not allowed"].iter().any(|k| l.contains(k)) {
+            return Self::Keychain(e.to_string());
+        }
+        Self::Other(e.to_string())
+    }
+
+    /// Title, text, and whether trying again can help.
+    fn explain(&self) -> (&'static str, String, bool) {
+        match self {
+            Self::Keychain(e) => (
+                "Ligus needs your keychain",
+                format!(
+                    "Ligus keeps its keys in your keychain and couldn't open it ({e}).\n\n\
+                     If you cancelled or denied the keychain prompt, choose Try again and allow access \
+                     (Always Allow keeps it from asking each launch). Nothing was changed."
+                ),
+                true,
+            ),
+            Self::DataDir(e) => ("Ligus can't use this data folder", format!("{e}\n\nNothing was changed."), false),
+            Self::Other(e) => (
+                "Ligus couldn't start",
+                format!("{e}\n\nTry again, or quit and check the log (in the app's log folder)."),
+                true,
+            ),
+        }
+    }
+}
+
+/// What the person chose in the startup recovery dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InitChoice {
+    Retry,
+    Quit,
+}
+
+/// Build the backend, asking what to do on each failure instead of failing
+/// setup (which panics the app): retry until it starts or the person quits.
+/// `None` = quit.
+fn init_with_recovery<T>(mut build: impl FnMut() -> Result<T, String>, mut ask: impl FnMut(&InitFailure) -> InitChoice) -> Option<T> {
+    loop {
+        match build() {
+            Ok(t) => return Some(t),
+            Err(e) => {
+                tracing::error!(target: "startup", "backend init failed: {e}");
+                let failure = InitFailure::of(&e);
+                if ask(&failure) == InitChoice::Quit {
+                    return None;
+                }
+            }
+        }
+    }
+}
+
+/// The native recovery dialog for a startup failure.
+fn ask_init_failure(f: &InitFailure) -> InitChoice {
+    let (title, text, retryable) = f.explain();
+    let dialog = rfd::MessageDialog::new().set_level(rfd::MessageLevel::Error).set_title(title).set_description(text);
+    if !retryable {
+        dialog.set_buttons(rfd::MessageButtons::OkCustom("Quit".into())).show();
+        return InitChoice::Quit;
+    }
+    match dialog.set_buttons(rfd::MessageButtons::OkCancelCustom("Try again".into(), "Quit".into())).show() {
+        rfd::MessageDialogResult::Ok | rfd::MessageDialogResult::Yes => InitChoice::Retry,
+        rfd::MessageDialogResult::Custom(label) if label == "Try again" => InitChoice::Retry,
+        _ => InitChoice::Quit,
     }
 }
 
@@ -14224,8 +14306,13 @@ pub fn run() {
             #[cfg(not(target_os = "windows"))]
             hydrate_process_path();
 
-            let state = build_state(&app.handle())
-                .map_err(|e| Box::<dyn std::error::Error>::from(format!("backend init failed: {e}")))?;
+            // A failure here (a cancelled keychain prompt, say) gets a
+            // recovery dialog, never a setup error: tauri panics on those.
+            let handle = app.handle().clone();
+            let Some(state) = init_with_recovery(|| build_state(&handle), ask_init_failure) else {
+                tracing::info!(target: "startup", "quit from the startup recovery dialog");
+                std::process::exit(0);
+            };
             let settings = state.settings.clone();
             let db_path = state.db_path.clone();
             #[cfg(feature = "p2p")]
@@ -17331,5 +17418,44 @@ mod first_run_tests {
         let after = load_or_seed_settings(&dir, LiveSettings::default());
         assert!(!after.onboarded && !after.tour_seen, "onboarding shows again after a reset");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod init_recovery_tests {
+    use super::*;
+
+    /// A cancelled keychain prompt at startup (the owner's first run) is a
+    /// retryable keychain failure, and retrying starts the app; it never
+    /// becomes a setup error (which tauri turns into a panic).
+    #[test]
+    fn keychain_cancel_is_retried_not_fatal() {
+        let errs = ["key vault: keychain: User canceled the operation.".to_string()];
+        let mut calls = 0;
+        let mut asked = Vec::new();
+        let got = init_with_recovery(
+            || {
+                calls += 1;
+                if calls == 1 { Err(errs[0].clone()) } else { Ok(42) }
+            },
+            |f| {
+                asked.push(f.clone());
+                InitChoice::Retry
+            },
+        );
+        assert_eq!(got, Some(42));
+        assert_eq!(asked, vec![InitFailure::Keychain(errs[0].clone())]);
+        let (title, text, retry) = asked[0].explain();
+        assert!(retry && title.contains("keychain") && text.contains("Try again"));
+    }
+
+    #[test]
+    fn quitting_from_the_dialog_stops_cleanly() {
+        let got: Option<()> = init_with_recovery(|| Err("disk full".into()), |_| InitChoice::Quit);
+        assert_eq!(got, None);
+        assert!(matches!(InitFailure::of("disk full"), InitFailure::Other(_)));
+        let dd = InitFailure::of(&format!("{DATA_DIR_REFUSED}this is a Hive 1.x folder"));
+        assert_eq!(dd, InitFailure::DataDir("this is a Hive 1.x folder".into()));
+        assert!(!dd.explain().2, "a refused data folder isn't retried");
     }
 }
