@@ -10118,7 +10118,9 @@ async fn ollama_list_models(
     endpoint: Option<String>,
 ) -> Result<OllamaModelsDto, String> {
     let base = state.ollama_base(runtime_id.as_deref(), endpoint.as_deref())?;
-    let client = hive_runtime::provider::OllamaClient::new(&base);
+    // A listing answers at once: no reconnect (and no "retrying" warning in
+    // the log) when nothing is listening there.
+    let client = hive_runtime::provider::OllamaClient::new(&base).with_connect_retries(0);
     let installed = client.list_models().await.map_err(|e| e.to_string())?;
     // `/api/ps` is decoration; an old server without it must not hide the list.
     let running = client.list_running().await.unwrap_or_default();

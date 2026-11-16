@@ -579,6 +579,14 @@ function DefaultModelPicker() {
   );
 }
 
+/// Whether the add-runtime form lists an Ollama server's models: only for
+/// the Ollama provider, and only once there's a server to ask (a typed
+/// address, an Ollama runtime already configured, or the user asked to look
+/// on this machine). Never a background probe of localhost:11434.
+export function formOllamaListEnabled(o: { provider: string; endpoint: string; ollamaConfigured: boolean; asked: boolean }): boolean {
+  return o.provider === "ollama" && (o.endpoint.trim() !== "" || o.ollamaConfigured || o.asked);
+}
+
 function RuntimesSection() {
   const qc = useQueryClient();
   const runtimes = useQuery({ queryKey: ["runtimes"], queryFn: listRuntimes });
@@ -773,11 +781,18 @@ function RuntimesSection() {
   });
   // Known-public endpoint: show the opt-in (unknown/empty: nothing to say yet).
   const endpointIsRemote = fileToolsEndpoint !== "" && endpointPrivate.data === false;
+  // Only ask an Ollama server for its models once there is one to ask: an
+  // address typed here, an Ollama runtime already set up, or "look on this
+  // machine" clicked. The form starts on Ollama, so probing by default hit
+  // localhost:11434 for everyone who opened Settings.
+  const [lookForLocalOllama, setLookForLocalOllama] = useState(false);
+  const ollamaConfigured = (runtimes.data ?? []).some((r) => r.provider === "ollama");
   const formModels = useQuery({
     queryKey: ["ollama-models", "form", formEndpoint],
     queryFn: () => listOllamaModels({ endpoint: formEndpoint || null }),
-    enabled: runtimeProvider === "ollama",
+    enabled: formOllamaListEnabled({ provider: runtimeProvider, endpoint: formEndpoint, ollamaConfigured, asked: lookForLocalOllama }),
     retry: false,
+    refetchOnWindowFocus: false,
     staleTime: 30_000,
   });
 
@@ -1017,7 +1032,17 @@ function RuntimesSection() {
                   : `No models installed on ${formModels.data.host} yet — add the runtime, then pull one from its Models panel.`
                 : formModels.isError
                   ? `Couldn't list models: ${errMsg(formModels.error)}`
-                  : "Looking up installed models…"}
+                  : formModels.isFetching
+                    ? "Looking up installed models…"
+                    : (
+                      <>
+                        Type the server's address to see its models, or{" "}
+                        <button type="button" className="underline" onClick={() => setLookForLocalOllama(true)}>
+                          look for Ollama on this machine
+                        </button>
+                        .
+                      </>
+                    )}
             </p>
           </>
         )}
