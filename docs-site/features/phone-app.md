@@ -99,6 +99,17 @@ sent anywhere, and there's no push in the demo.
 - Replies stream live. A reply produced on the `ligus serve` box streams token
   by token; one produced on another device (your desktop, a worker) appears
   once it syncs, a few seconds later.
+- **Typing.** While you write a message, the people in the chat see "<your
+  name> is typing" on their desktops and phones; you see who else is typing,
+  set apart from the agent's own "thinking" row. It shows only that someone
+  is typing, never what, is encrypted for the workspace like everything else,
+  and never sends a notification. A DM's typing goes only to that DM. Turn it
+  off in **Settings → Share typing status** (on by default; the desktop has
+  the same switch under **Settings → Profile → Privacy**). Nothing is sent
+  while a chat waits for its founder.
+- **Which device answered.** A reply from the chat's primary `@hive` says
+  where it ran: "This device" (the box), "Your other device", or "<name>'s
+  device".
 - Unread counts and read marks belong to the box, not to each device:
   opening a chat on the phone marks it read there, and your desktop keeps its
   own read state.

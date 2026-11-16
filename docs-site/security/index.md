@@ -67,6 +67,19 @@ access. `LIGUS_SECRET_BACKEND` (`keychain`, `secret-service`,
   sign-in codes and invite codes (which carry the workspace passphrase and
   epoch keys) move only through the tunnel or on a loopback bind; elsewhere
   the box refuses with 403.
+- **Presence** (who is typing in which chat, and when someone was last
+  active) rides the relay's ephemeral presence slots, sealed under the same
+  keyring as events (ChaCha20-Poly1305 at the authorized head, no separate
+  key or domain string), as host liveness and coordinator lease beats already
+  were. The relay sees a slot name (`human:` and the writing device's id),
+  the blob's size and when it changes; not the chat, the person or their
+  name. Readers ignore plaintext blobs, beats under an older epoch, beats in
+  another device's slot and beats older than 8 s. Beats aren't signed, so a
+  current member could fake another member's typing indicator (cosmetic: no
+  authority rides on it; names come from the reader's own roster where it
+  knows the person). No message text is ever in a beat, and typing never
+  triggers a push. Each person can turn sharing off (**Share typing
+  status**).
 - **Push** content is sealed (ChaCha20-Poly1305) with a per-phone key agreed
   at pairing; Apple and the relay see a generic alert and ciphertext.
 - **Peer-to-peer** sync between contacts' desktops runs over iroh (QUIC/TLS).

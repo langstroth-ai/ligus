@@ -9,6 +9,17 @@ Full release notes are on the
 
 ## 2.0
 
+- **Typing indicators everywhere, now encrypted.** "X is typing" works
+  across the desktop and phones: the phone tells its `ligus serve` box,
+  which publishes for that chat (as you, once the box is your device), and
+  shows who else is typing. Presence blobs on the relay are now sealed under
+  the workspace key, so the relay no longer sees who is typing in which chat.
+  New **Share typing status** switch (on by default) on desktop and phone.
+  See [Phone app](../features/phone-app.md#chats),
+  [Serve API: typing](serve-api.md#typing) and
+  [Security](../security/index.md#encryption).
+- **Phone shows which device answered** a primary `@hive` reply ("This
+  device", "Your other device", "<name>'s device").
 - **Egress presets.** Opt-in sets of hosts for a chat's egress allow-list,
   off by default: `package-registries` (npm, crates.io, PyPI, GitHub) and
   `claude-connectors` (your claude.ai connectors, Claude Code only).

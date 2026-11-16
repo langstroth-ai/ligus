@@ -51,6 +51,8 @@ $ curl -s http://127.0.0.1:8787/v1/health -H "Authorization: Bearer $(cat ~/.lig
 | `POST /v1/chats` | `{title?}` | filed under the first non-archived channel |
 | `GET /v1/chats/:id/messages` | `?after=<msgId>&limit=` (default 100, 1 to 1000) | also advances this box's read mark |
 | `POST /v1/chats/:id/messages` | `{body}` | with `LIGUS_SERVE_DEFAULT_AGENT`, a message that mentions nobody gets `@agent` prepended |
+| `POST /v1/chats/:id/typing` | `{typing}` | the phone is (or stopped) typing in this chat; see [Typing](#typing). Answers `{ok, published}` |
+| `GET /v1/chats/:id/typing` | | `{chatId, typing: [{actorId, name}]}`: who else is typing there now |
 | `GET /v1/chats/:id/details` | | the desktop's right-hand panel, read-only |
 | `GET /v1/people` | | human roster with roles and avatars; each person's `accountId`, `safetyCode`, `keyConflict`, `lookAlike`, `devices`, `links` and `dmChatId` (see [Identity](#identity-safety-codes-invites-and-dms)) |
 | `GET /v1/channels` | | channel tree in sidebar order |
@@ -58,6 +60,33 @@ $ curl -s http://127.0.0.1:8787/v1/health -H "Authorization: Bearer $(cat ~/.lig
 | `PUT /v1/agents/:id/host` | `{hostId}` (`""` = the owner's device) | moves an agent to another host |
 | `GET /v1/hosts` | | hosts, with `isThis` and `online` |
 | `GET /v1/guards` | | dearth mode, pending members, locked chats, coordinator lease. Read-only |
+
+A message object carries `id`, `chatId`, `author`, `role`, `body`,
+`createdAt` and `streaming`; `agentId` on a named agent's reply; `actorId`
+on a person's message; and on a primary `@hive` reply, `responderName` (whose
+hive answered) and, when it was this box or another device of the account the
+box writes as, `responderDevice`: `this` or `mine` (absent otherwise; the
+phone then says "<name>'s device"). Both are left out when unset.
+
+#### Typing {#typing}
+
+The phone sends `POST /v1/chats/:id/typing {"typing": true}` about every
+2.5 s while you edit a non-empty draft, and `{"typing": false}` when you send,
+clear the draft, leave the chat or background the app. The box publishes a
+presence beat for that chat to the chat's own relay room (the workspace's, or
+only that DM's room for a DM), sealed under the workspace key, as the person
+it writes messages as: its owner once [enrolled as the owner's
+device](../ops/serve-box.md), otherwise its own identity. The beat says only
+who is typing in which chat, never what.
+
+- Same bearer or tunnel auth as every route; a chat the box can't see is 404.
+- Throttled: a `true` within 3 s of the last publish only refreshes the
+  expiry (`published: false`); a `false` publishes at once. More than 30
+  requests in 10 s answer 429.
+- Expiry: with no ping for 6 s the box publishes "stopped" itself, and
+  readers drop a beat older than 8 s.
+- A DM still waiting for its founder answers `409 waiting_for_founder`, like
+  posting a message.
 
 ### Identity: safety codes, invites and DMs
 
@@ -171,7 +200,12 @@ events), then streams live, with a keep-alive every 15 s. Event names:
 `message.created`, `message.delta`, `message.done`, `proposal.created`,
 `proposal.updated`, `chat.updated`, `turn.status`, `ask.pending` (an
 agent's question or permission request, with its `kind`, also pushed to
-phones). Through the tunnel, an
+phones), and `typing` (`{chatId, typing: [{actorId, name}]}`, the full
+list of other people typing in that chat, an empty list when they stop; you
+and the person the box writes as are never in it; names are cleaned of
+control and bidi characters). `typing` is live only: it isn't kept for
+`Last-Event-ID` replay and never becomes a push. While a stream is open the
+box reads its rooms' presence every 2 s. Through the tunnel, an
 open stream marks the app as in the foreground, so the box doesn't push to
 that phone.
 
@@ -204,6 +238,7 @@ Service and NetworkPolicies).
 | Tunnel | 8 sessions (or the relay's `maxSessions`), 32 streams per session, 16 KiB frames; handshake 10 s, idle 90 s, session 24 h |
 | Push | see [Push notifications](../features/phone-app.md#push-notifications) |
 | Token rotation | the server re-reads `serve.token` every 2 s |
+| Typing | republish at most every 3 s, expire after 6 s quiet, 30 requests per 10 s, others polled every 2 s while a stream is open |
 
 There is no separate readiness endpoint; use `/v1/health`. Relay sync state
 shows in the dashboard's built-in section and in `ligus remote status`.

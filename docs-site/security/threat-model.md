@@ -23,7 +23,8 @@ A relay operator (or anyone who compromises the relay) **can**:
 - see metadata: workspace ids, envelope counts, sizes and timing, IP
   addresses, device public keys and labels, contact ids and the timing and
   size of drops into contact boxes, which tunnel hosts exist and when phones
-  connect;
+  connect; when a device's presence slot changes (typing activity, but not
+  which chat or who: the presence blob is sealed);
 - drop, delay or replay ciphertext, or refuse service;
 - with membership mode on, see the roster and invite metadata.
 
