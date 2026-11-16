@@ -8,9 +8,9 @@ function CombMark() {
   return (
     <svg width="96" height="84" viewBox="-40 -36 80 72" aria-hidden className="text-accent">
       <g fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round">
-        <path d={cell} transform="translate(-18 -10)" opacity="0.55" />
-        <path d={cell} transform="translate(18 -10)" opacity="0.35" />
-        <path d={cell} transform="translate(0 20)" opacity="0.8" fill="color-mix(in srgb, currentColor 14%, transparent)" />
+        <path d={cell} transform="translate(-18 -15)" opacity="0.55" />
+        <path d={cell} transform="translate(18 -15)" opacity="0.35" />
+        <path d={cell} transform="translate(0 15)" opacity="0.8" fill="color-mix(in srgb, currentColor 14%, transparent)" />
       </g>
     </svg>
   );
