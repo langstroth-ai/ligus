@@ -86,8 +86,8 @@ export function LinkedAccountsSection() {
       }
     >
       <p className="text-xs text-ink-soft">
-        Show the members of a workspace that you are also someone on GitHub, GitLab, Codeberg, Forgejo, Gitea,
-        SourceHut or Tangled. You choose the workspaces; their members and agents can see it. Every device checks it
+        Show the members of a workspace that you are also someone on GitHub, GitLab, Codeberg, Forgejo or
+        Gitea. You choose the workspaces; their members and agents can see it. Every device checks it
         with the forge itself, never through your relay. A link helps people recognize you; it never lets anyone in
         or vouches for their keys.
       </p>
@@ -154,7 +154,7 @@ function LinkFlow({ onDone }: { onDone: () => void }) {
       const d = await identityLinkPrepare({
         provider: forge.provider,
         host: forge.host,
-        handle: normalizeHandle(forge.provider, handle),
+        handle: normalizeHandle(handle),
         workspaceIds: picked,
         method,
         discoverable,

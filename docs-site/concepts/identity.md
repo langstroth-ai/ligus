@@ -55,8 +55,7 @@ code, Ligus says so and won't join it.
 ## Linked accounts
 
 You can optionally show the members of a workspace that you are also someone
-on a code forge (GitHub, GitLab, Codeberg, Forgejo, Gitea, SourceHut,
-Tangled). You prove it by signing a statement with an SSH key the forge
+on a code forge (GitHub, GitLab, Codeberg, Forgejo, Gitea). You prove it by signing a statement with an SSH key the forge
 already lists for you, under the SSHSIG namespace
 `ligus-identity-link-v1@ligus.ai`; the statement names your account, your
 account key, the workspace and the forge's **stable id** for you (not your

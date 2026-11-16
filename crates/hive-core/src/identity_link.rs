@@ -69,12 +69,13 @@ pub struct IdentityLink {
     pub link_id: Uuid,
     /// Must equal the signer's certified account.
     pub account_id: Uuid,
-    /// "github" | "gitlab" | "forgejo" | "gitea" | "sourcehut" | "tangled" | ...
+    /// "github" | "gitlab" | "forgejo" | "gitea" | ... (any lowercase name
+    /// folds; links made by a 2.0 pre-release may say "sourcehut" or "tangled").
     pub provider: String,
-    /// "github.com", "gitlab.example.com", "codeberg.org", "meta.sr.ht",
-    /// "atproto" (Tangled).
+    /// "github.com", "gitlab.example.com", "codeberg.org", ...
     pub host: String,
-    /// The stable id: a numeric id, an atproto DID, or sr.ht's "~user".
+    /// The stable id: the forge's numeric account id (a pre-release SourceHut
+    /// or Tangled link holds a "~user" or an atproto DID).
     pub subject_id: String,
     /// Display only; never used for lookup.
     pub handle_at_link: String,
@@ -96,7 +97,13 @@ pub struct IdentityLink {
 }
 
 /// Providers whose links a forge can verify (key lists anyone may read).
-pub const VERIFIABLE_PROVIDERS: &[&str] = &["github", "gitlab", "forgejo", "gitea", "sourcehut", "tangled"];
+pub const VERIFIABLE_PROVIDERS: &[&str] = &["github", "gitlab", "forgejo", "gitea"];
+
+/// Providers whose verifiers 2.0 dropped (owner decision 2026-11-16). A link
+/// naming one still folds unchanged (the wire shape and the statement are
+/// untouched), but no device checks it: it shows as self-asserted, never as
+/// verified, and no new one is offered.
+pub const DROPPED_PROVIDERS: &[&str] = &["sourcehut", "tangled"];
 
 /// Providers whose forge keeps a separate signing-key list, where the
 /// account key grants no push access (KeyPublished is safe there).

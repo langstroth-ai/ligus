@@ -8,14 +8,20 @@ export const FORGES: { provider: string; host: string; label: string; keyPublish
   { provider: "gitlab", host: "gitlab.com", label: "GitLab", keyPublished: true, hint: "your username" },
   { provider: "forgejo", host: "codeberg.org", label: "Codeberg", keyPublished: false, hint: "your username" },
   { provider: "gitea", host: "gitea.com", label: "Gitea", keyPublished: false, hint: "your username" },
-  { provider: "sourcehut", host: "meta.sr.ht", label: "SourceHut", keyPublished: false, hint: "~username" },
-  { provider: "tangled", host: "atproto", label: "Tangled", keyPublished: false, hint: "your handle or DID" },
+];
+
+/// Forges whose verifiers 2.0 dropped: links made by a 2.0 pre-release still
+/// show (self-asserted), under their name, but none is offered for a new link.
+const DROPPED_FORGES: { provider: string; host: string; label: string }[] = [
+  { provider: "sourcehut", host: "meta.sr.ht", label: "SourceHut" },
+  { provider: "tangled", host: "atproto", label: "Tangled" },
 ];
 
 export function forgeLabel(provider: string, host: string): string {
-  const known = FORGES.find((f) => f.provider === provider && f.host === host);
+  const all = [...FORGES, ...DROPPED_FORGES];
+  const known = all.find((f) => f.provider === provider && f.host === host);
   if (known) return known.label;
-  const p = FORGES.find((f) => f.provider === provider)?.label ?? provider;
+  const p = all.find((f) => f.provider === provider)?.label ?? provider;
   return `${p} (${host})`;
 }
 
@@ -40,10 +46,8 @@ export function chipFor(status: LinkStatus | null | undefined): { kind: ChipKind
     case "verified":
       return {
         kind: "verified",
-        label: status.nameBound ? "verified by name" : "verified",
-        title: status.nameBound
-          ? "The forge lists the signing key for this name. SourceHut has no stable id, so a reused name could match."
-          : "The forge lists the key that signed this link (checked by this device).",
+        label: "verified",
+        title: "The forge lists the key that signed this link (checked by this device).",
       };
     case "stale":
       return { kind: "stale", label: "stale", title: status.reason };
@@ -64,7 +68,7 @@ export function chipFor(status: LinkStatus | null | undefined): { kind: ChipKind
     case "notChecked":
       return { kind: "unverified", label: "not checked", title: status.reason };
     case "selfAsserted":
-      return { kind: "claim", label: "self-asserted", title: "A claim only: this forge has no public key list." };
+      return { kind: "claim", label: "self-asserted", title: "A claim only: Ligus doesn't check this forge's keys." };
     case "invalid":
       return null;
   }
@@ -82,12 +86,9 @@ export function chipColor(kind: ChipKind): { border: string; ink: string } {
   }
 }
 
-/// What a person types, for the forge: a SourceHut name always starts with
-/// "~"; other handles never start with "@".
-export function normalizeHandle(provider: string, handle: string): string {
-  const h = handle.trim().replace(/^@/, "");
-  if (provider === "sourcehut") return h.startsWith("~") ? h : `~${h}`;
-  return h;
+/// What a person types, for the forge: a handle never starts with "@".
+export function normalizeHandle(handle: string): string {
+  return handle.trim().replace(/^@/, "");
 }
 
 /// The shell lines that sign each statement with the user's own key, one

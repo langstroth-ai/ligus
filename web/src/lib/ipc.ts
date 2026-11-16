@@ -756,7 +756,7 @@ export const listCoMembers = () => invoke<CoMemberDto[]>("list_co_members");
 /// A link's status on this device. Never synced: every device asks the forge
 /// itself (no token, never through the relay), at most once a day per link.
 export type LinkStatus =
-  | { state: "verified"; checkedAt: string; handle: string | null; nameBound: boolean }
+  | { state: "verified"; checkedAt: string; handle: string | null }
   | { state: "signatureOnly" }
   | { state: "stale"; checkedAt: string; reason: string }
   | { state: "unreachable"; lastVerifiedAt: string | null; reason: string }
