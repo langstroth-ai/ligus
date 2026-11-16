@@ -508,7 +508,9 @@ The relay operator can do the same without M. This defeats "the key is never on 
 
 ### 4.9 Dispatch
 
-**Invariant.** Each pending turn runs exactly once across the fleet.
+**Invariant.** Each pending turn has at most one committed result across the fleet. (Exactly-once execution isn't achievable with devices that go offline; what must hold is that no turn's result is committed twice.)
+
+**Status (code, 2026-11-16).** Not yet met for chat turns. `TurnClaimed` resolves deterministically (the first claim in canonical fold order wins, `ChatService::claim_turn`), and a device that has synced a competing claim backs off, but two devices that both claim within one sync round trip can both run and post; the streaming placeholder is the second-line guard.
 
 **Hidden assumptions.**
 - Actor id identifies a device (broken by delegation).
@@ -518,7 +520,7 @@ The relay operator can do the same without M. This defeats "the key is never on 
 
 **Fix.** A single `Dispatcher` in `ligus-host`. Ownership is by *device id* plus binding, and claims are always written.
 
-**Test.** `prop_exactly_once_dispatch` across N simulated hosts with random delivery and crash points.
+**Test.** `prop_at_most_one_committed_result` across N simulated hosts with random delivery and crash points.
 
 ### 4.10 Relay
 

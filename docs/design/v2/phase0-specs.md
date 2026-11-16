@@ -18,26 +18,27 @@ Ligus is short for *ligustica*, the Italian honeybee. The product was formerly c
 Unless a path says otherwise, citations are relative to the root of this repo. Relay paths are prefixed `relay/` and refer to the relay repo. Line numbers are as of `534c8d0b`. Re-anchor them when you rebase, because the in-flight merges will shift lines in `app/src/lib.rs`.
 
 
-**Contents:** 0 ground rules and the added wire ids. Tracks A-E (one section each, each implementable in its own worktree). 7 dependency order and merge queue. 8 in 2.0 vs can follow. 9 migration and rollback for the owner's data. 10 proof-test ledger.
+**Contents:** 0 ground rules and the added wire ids. Tracks A-E (one section each, each implementable in its own worktree). 7 dependency order and merge queue. 8 in 2.0 vs can follow. 10 proof-test ledger. (Section 9, migration and rollback of the owner's data, was deleted on 2026-11-16: 2.0 starts fresh, with no data migration.)
 
 ---
 
 ## 0. Ground rules for every track
 
-1. **Frozen wire.** Never change these:
-   - `hive-envelope-v3`, `hive-device-cert-v1`, `hive-device-enroll-v1`, `hive-workspace-key-seal-v1`, `hive-workspace-key-argon2id`;
-   - `hrt1`, `hpc1`, `hive-tunnel/1`, `hive/sync/1`, `X-Hive-*`;
-   - the relay `/v1` paths and bodies;
-   - the config-log UUIDv5 namespace (`crates/hive-core/src/channel.rs:16-20`).
+1. **Frozen wire.** The bytes and meaning of these never change; additions are allowed only as rules 2 and 3 and section 0.1 allow:
+   - the domain strings `hive-envelope-v3\0`, `hive-device-cert-v1\0`, `hive-device-enroll-v1\0` (and the `hivedev1:` code prefix), and the E2EE constants `hive-workspace-key-seal-v1` (HKDF info) and `hive-workspace-key-argon2id` (Argon2 salt), which have no `\0`;
+   - `hrt1`, `hpc1`, `hive-tunnel/1` (and the WebSocket subprotocol `hive-tunnel.1`), `hive/sync/1`, `X-Hive-*`;
+   - the relay `/v1` paths and bodies: what exists stays byte-compatible, and only additive changes (new routes, new optional fields) are allowed;
+   - the UUIDv5 namespaces of the config log and the relay room (`crates/hive-core/src/channel.rs`), and the retired 1.x account and DM namespaces, kept unused so nobody reuses them (`crates/hive-runtime/src/frozen_ns.rs`);
+   - every string in section 0.1, once released.
 
-   The test `signature_contexts_are_frozen` (`crates/hive-core/src/crypto.rs:323`) stays green.
+   The tests that pin them as hex stay green: `signature_contexts_are_frozen` (`crates/hive-core/src/crypto.rs`), `crypto_constants_are_frozen` (`e2ee.rs`), `enroll_constants_are_frozen` (`crates/hive-runtime/src/device_enroll.rs`), `tunnel_identifiers_are_frozen` (`crates/hive-cli/src/serve/tunnel/tests.rs`), and the per-string pins of section 0.1 (`link_namespace_is_frozen`, `context_is_frozen` for the invite signature, and the others next to each constant).
 2. **New strings.** New domain-separation strings use the `ligus-` spelling and end in `\0`. Section 0.1 lists every one Phase 0 adds; nothing else may be added without amending this document.
 3. **New serialized fields** are `#[serde(default, skip_serializing_if = …)]`. New `SessionEvent` kinds get a camelCase tag and must fold as a no-op on an older decoder (`SessionEvent::Unknown`, `events.rs:321-322`).
 4. **No env-dependent fold.** Nothing that changes which events fold, or how, may read an env var or a device-local setting (review RC-8).
 5. **Public code never names the private observability product.** Use "external observability tools".
-6. **One release.** There are no patch releases for shipped versions, and everything here lands in 2.0 unless it is marked **[2.0.x-follow]** or **[2.x]**. Track E is marked separately.
+6. **One release.** There are no patch releases for shipped versions, and everything here lands in 2.0 unless it is marked **[2.0.x-follow]** or **[2.x]**. Track E's client side is in 2.0 (see Track E).
 7. **Tests.** Every property test runs with `proptest` as a dev-dependency (add it to `deny.toml` if needed). If the owner objects to the dependency, use the deterministic `Rng` already in `crates/hive-core/src/sec_tests.rs:11-24`. Default case count is 256; nightly runs 4096.
-8. **Release gate.** Every Phase 0 PR runs the replay harness (A.7) against the owner's real `hive.db` before merge.
+8. **Release gate.** Every Phase 0 PR runs the full test suite and the proof-test ledger (section 10). 2.0 starts fresh, so there is no owner database to replay (A.7).
 
 ### 0.1 Domain strings and wire ids ADDED by Phase 0 (complete list)
 
@@ -50,7 +51,7 @@ Unless a path says otherwise, citations are relative to the root of this repo. R
 | `ligus-recovery-v1\0` | B | Offline recovery-key signature over the presence challenge (B.4.6) |
 | `ligus-mcp-turn-cred-v1\0` | D | HMAC tag of the per-turn MCP credential (device-local, never synced) |
 | `ligus.facts.v1` | C | Facts schema id (device-local export) |
-| `ligus-auth-device-proof-v1\0` | E | Device proof on every ligus-auth token request: Ed25519 over this tag and tenant, grant type, nonce, device id and SHA-256(credential), NUL-separated. Added 2026-11-13 when the owner moved Track E into 2.0 |
+| `ligus-auth-device-proof-v1\0` | E | Device proof on every ligus-auth token request: Ed25519 over this tag and tenant, grant type, nonce, device id and SHA-256(credential), NUL-separated (`crates/hive-runtime/src/ligus_auth.rs`). Added 2026-11-13 when the owner moved Track E's client side into 2.0 |
 | `ligus-invite-v1\0` | F | The founder's device signature over a workspace or DM invite: Ed25519 over this tag, the invite's name, relay, room, DM account, founder account, `fk` and invite id (each NUL-terminated), SHA-256 of the workspace key, SHA-256 of the delivered epoch keys and the signing time; the invite carries the device certificate and account key ([identity-and-forges](identity-and-forges.md) §4). No existing context binds invite fields, and reusing `hive-envelope-v3` would need a new event kind. Added 2026-11-14 (review item R1) |
 | `ligus-identity-link-v1@ligus.ai` (SSHSIG namespace; no `\0` by format: SSHSIG carries the namespace as a length-prefixed string passed on the `ssh-keygen -Y sign -n` command line) | F | Forge-key SSHSIG over an identity-link statement ([identity-and-forges](identity-and-forges.md) §2.4). Added 2026-11-14 (owner decision D1) |
 
@@ -197,8 +198,7 @@ pub enum Signer { HumanDevice { device: Uuid, account: Uuid }, Agent { agent_id:
    - A chat event that needs workspace authz, on a device without that workspace's config log, gives `Hold(NoConfigLog)`. This replaces "`hoist: None` skips" (`events.rs:943-948`).
    - The device-local workspace (`trusted_workspace`, `events.rs:926-939`) keeps its exemption.
 2. **Legacy events (no frontier).** Evaluate against the roster at the config event with the greatest lamport ≤ the event's lamport. Lamports are per-log (`chat_service.rs:459`), so this is deterministic but approximate; that is review residual 2.
-   - The replay harness (A.7) must show zero changed decisions on the owner's real data for legacy events.
-   - If it shows any, they are listed and accepted by the owner before merge.
+   - (2.0 starts fresh, so no pre-2.0 history is replayed; A.6, A.7.)
 3. **Hold is not drop.** The fold leaves held events out of the projected state, and records `session.authz.held: Vec<(Uuid, HoldReason)>`. That field is device-local and never serialized into events.
    - Any side effect is refused for a proposal or set that has a held dependency: Implement, pre-flight, apply-on-approve, workflow stage start.
    - The next refold re-decides. The store already retains the event, and `ChatService::load` refolds from the whole set (`chat_service.rs:1965`).
@@ -396,13 +396,11 @@ Agent turns are stamped and signed as the host's author:
 
 ### A.6 Migration of the owner's data
 
-- No data rewrite.
-- Existing `envelope_json` rows are re-serializations that were already verified at ingest under 2.0-rc code. They keep `raw = None` semantics on load, which is equivalent because they were produced by the same typed serializer.
-- New ingests store raw bytes.
-- `workspace_pins` is seeded on first launch from the current founder pin plus the founder's registered key.
-- Rules stay v1 until Track B's migration step sets v2.
+Superseded (2026-11-16): 2.0 starts fresh, with no data migration. New ingests store raw bytes (A.1), `workspace_pins` is filled as workspaces are founded or joined, and rules stay v1 until an Owner sets v2.
 
 ### A.7 Replay harness (shared by all tracks)
+
+Not built: it existed to replay the owner's pre-2.0 database, and 2.0 starts fresh. The property tests (`crates/hive-core/tests/authz_props.rs`) and the golden envelopes (`raw_bytes.rs`) cover fold stability instead. The original plan, for the record:
 
 - `crates/hive-core/tests/replay_owner_db.rs` (`#[ignore]`, env `LIGUS_REPLAY_DB=/path/to/hive.db`).
 - `ligus doctor refold --db <path> --json` folds every session twice:
@@ -445,7 +443,6 @@ Unit and property tests in `crates/hive-core/tests/authz_props.rs` and `raw_byte
 
 - The two ignored proof tests pass with `#[ignore]` removed.
 - All the property tests above pass at 4096 cases.
-- The replay harness on the owner's `hive.db` shows only owner-accepted differences.
 - `grep -n "hoist: None\|IdentityMode::from_env" crates` is empty.
 - A 2.0 build ingests an envelope produced by a test "2.1 encoder" (extra field and new kind), stores it byte-identically, and re-emits it byte-identically on re-push.
 
@@ -554,9 +551,7 @@ impl KeyringEngine {
 
 #### B.1.5 Legacy epoch pin (migration)
 
-- On first 2.0 launch, before any sync, each device writes the legacy relay epochs it can currently open into device-local `legacy_epochs(workspace_id, version, kid)`. These become seal-eligible only until the first authorized rotation exists.
-- Rows that appear later are never pinned, so junk injected after the upgrade is never sealed under.
-- The owner's migration (Section 9) performs one signed rotation right away, which supersedes the pin.
+Superseded (2026-11-16): 2.0 starts fresh, so there are no legacy relay epochs to pin and no `legacy_epochs` table. A device seals only under an authorized signed rotation, or the passphrase key before the first one.
 
 #### B.1.6 Tests
 
@@ -594,21 +589,21 @@ pub trait SecretStore: Send + Sync {
     fn put(&self, id: &SecretId, value: &[u8]) -> Result<()>;
     fn delete(&self, id: &SecretId) -> Result<()>;
 }
-pub struct SecretId { pub scope: &'static str /* "seed"|"settings"|"serve" */, pub name: String }
+pub struct SecretId { pub scope: &'static str /* "seed"|"settings"|"cli" */, pub name: String }
 ```
 
 `KeyVault` (`identity_store.rs:38`) becomes a thin adapter over `SecretStore`. Implementations:
 
 | Backend | Where | Notes |
 |---|---|---|
-| `MacKeychain` | macOS desktop and CLI | `security-framework` generic password, service `ai.ligus.secrets`, account `<scope>:<name>`, `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. The item ACL trusts only the Ligus binary, so other binaries (agent CLIs) trigger a system prompt. Track C's Seatbelt profile additionally denies `file-read*` of the data dir. |
-| `SecretService` | Linux desktop | `secret-service` crate (D-Bus, the collection unlocked at login). Track C's bwrap profile does not bind the session bus, so sandboxed agents cannot reach it. |
+| `MacKeychain` | macOS desktop and CLI | A **dedicated keychain file inside the data dir** (`secrets/ligus.keychain-db`), never the login keychain and never on the user's keychain search list. Generic passwords, service `ai.ligus.secrets`, account `<scope>:<name>`. The file is unlocked with a random password kept as a login-keychain item whose access list trusts only the Ligus binary: a release app by its designated requirement (Apple anchor, bundle id `ai.ligus.desktop`, team id), a development build or the CLI by its code hash. Subscription CLIs keep login-keychain access (Track C), but every agent sandbox denies `file-read*` of the data dir, so they can't open the keychain file. If the keychain can't be used, macOS refuses to save secrets rather than fall back to files. |
+| `SecretService` | Linux desktop | The session's Secret Service through `secret-tool` (libsecret), values base64 under service `ai.ligus.secrets`. Track C's bwrap profile does not bind the session bus, and `DBUS_SESSION_BUS_ADDRESS` is outside the child env allow-list, so sandboxed agents cannot reach it. |
 | `SystemdCreds` | headless Linux (serve and worker) | `systemd-creds encrypt --with-key=auto` (TPM2 when present, else the host key), files under `$CREDENTIALS_DIRECTORY` or the data dir with mode 0600. |
 | `K8sSecretFile` | chart | Read-only mounted Secret files; `put` is unsupported, and the operator provisions secrets. |
-| `File0600` | fallback | Today's behaviour, with a warning banner and `ligus doctor`. |
+| `File0600` | fallback | Owner-only files under the data dir, with a warning in Settings and `ligus doctor`. On macOS only when chosen explicitly (`LIGUS_SECRET_BACKEND=file`). |
 | Windows Credential Manager | [2.x] | Behind the same trait. |
 
-Backend selection is a device-local setting (`secret_backend`) with OS-appropriate defaults. It never affects the fold.
+Backend selection is device-local (`LIGUS_SECRET_BACKEND`: `keychain`, `secret-service`, `systemd-creds`, `k8s` or `file`; else the OS default). It never affects the fold. Code: `crates/hive-runtime/src/secret_store.rs`.
 
 #### B.2.3 Settings secrets
 
@@ -617,20 +612,17 @@ Backend selection is a device-local setting (`secret_backend`) with OS-appropria
 
 #### B.2.4 Migration
 
-1. On first 2.0 launch: read `settings.json`, `put` each secret, read it back, then rewrite `settings.json` without it.
-2. Move `keys/*.seed` into the store and securely delete the files after read-back.
-3. Keep no plaintext backup. The owner's manual backup (Section 9) covers rollback.
+Superseded (2026-11-16): 2.0 starts fresh, so there is nothing to move out of `settings.json` or `keys/`. Secrets go to the store from the first write.
 
 #### B.2.5 Tests
 
 - `settings_file_is_0600`;
 - `no_secret_values_in_settings_json` (a property test over random secret values);
 - `vault_roundtrip_each_backend` (CI: File0600 and SystemdCreds in a container; the macOS Keychain runs on the macOS runner);
-- `migration_moves_and_verifies` (with induced read-back failure: nothing is deleted).
 
 ### B.3 Workspace rules v2
 
-Rules v2 is the switch that turns on presence. Its migration step is in Section 9.
+Rules v2 is the switch that turns on presence. An Owner turns it on per workspace with `WorkspaceRulesSet { version: 2 }`, which itself needs the Owner's presence.
 
 ### B.4 Passkeys: human presence for admin events (B3)
 
@@ -674,6 +666,8 @@ pub struct PresenceAssertion {
 
 Size cap: the serialized `presence` is ≤ 4 KiB, or the event is denied.
 
+There is no attestation field on the wire. Ligus asks for `attestation: "none"`; the `attestationObject` from `navigator.credentials.create` is used only on the registering device to read the new credential's id and key (`presence::verify_create`, which checks the RP id hash, flags and challenge and never the attestation statement). The `PasskeyRegistered` event carries an ordinary `webauthn.get` assertion (B.4.5).
+
 #### B.4.3 Challenge (the event digest)
 
 ```
@@ -707,7 +701,7 @@ challenge = SHA-256( "ligus-presence-v1\0"
 |---|---|
 | Membership and roles | `MemberAdded` (except the bootstrap self-enroll, `authorization.rs:395-420`), `MemberRemoved`, `MemberRoleChanged`, `JoinApproved` |
 | Devices | `DeviceRevoked` (self-revoke included; any passkey of that account) |
-| Keys | `WorkspaceKeyRotated`, `PasskeyRegistered` (any after the account's first), `PasskeyRemoved`, `AccountKeyRotated` |
+| Keys | `WorkspaceKeyRotated`, `PasskeyRegistered` (an account's first proves itself, B.4.5; every later one needs an existing credential of the account), `PasskeyRemoved`, `AccountKeyRotated` |
 | Guards | `DearthModeChanged`, `ChatLockdownCleared` |
 | Zones | `FlowRecorded{Zone, ZoneRemoved, Beacon}` (the governance set, `flow/mod.rs:337-342`) |
 | Workflows | `WorkflowDefinitionsUpdated`; an approval vote on a proposal that carries `workflow` |
@@ -722,11 +716,11 @@ The table is code, a single `fn requires_presence(&SessionEvent, &RosterState, &
 
 #### B.4.5 Registration and UX
 
-**First passkey.**
-- `PasskeyRegistered` signed by the member's certified device.
-- `client_data_json.type == "webauthn.create"`; the challenge is the B.4.3 digest of the registration event itself.
-- The verifier parses `attestationObject` with `fmt: none` and checks the COSE key.
-- The first registration for an account needs no prior presence (TOFU, bound to the device signature). Every later one needs presence from an existing credential of the same account.
+**First passkey** (code: `crates/hive-core/src/authz/passkeys.rs` `registration_ok`).
+- Two browser ceremonies. `navigator.credentials.create` (attestation `"none"`, a random challenge that binds only that ceremony) makes the key; the desktop reads its id and COSE key from the `attestationObject` (B.4.2). Then `PasskeyRegistered`, signed by the member's certified device (not a delegated host), carries a `webauthn.get` assertion **by the new credential itself** over the B.4.3 digest of the registration event. A `webauthn.create` can't sign that digest, because the new key is part of it.
+- **Rules v1:** the first registration for an account needs no prior presence (trust on first use, bound to the device signature).
+- **Rules v2:** the first registration needs an Admin's grant (`RosterState::passkey_grants`): being added as a new member under v2, or an Admin's presence-confirmed re-grant (`MemberRoleChanged`) after the account's credentials were removed, good for one registration. An account that kept its recovery key registers a new passkey with the recovery key's presence instead.
+- Every later registration needs presence from an existing credential of the same account.
 
 **Desktop: browser hand-off (all OSes, one code path).**
 1. The desktop starts a loopback listener on `127.0.0.1:<random>` with a one-time nonce.
@@ -1454,10 +1448,10 @@ Official docs as of 2026-11: the Agent SDK uses the CLI's credential precedence:
 
 ---
 
-## Track E: identity service (ligus-auth) — **can follow 2.0 (target 2.1); nothing in 2.0 depends on it**
+## Track E: identity service (ligus-auth) — **client side in 2.0; relay tenant enforcement later**
 
 **Size:** M-L.
-**Lives in:** a new repo `github.com/ligus-ai/auth`, in Go to match the relay, or as `cmd/ligus-auth` in the relay repo if the owner prefers one module. It is never inside the relay process.
+**Lives in:** `cmd/ligus-auth` in the relay repo (Go), never inside the relay process. The client side is in this repo and in 2.0: `crates/hive-runtime/src/ligus_auth.rs` (RFC 8628 device-code sign-in, the `ligus-auth-device-proof-v1\0` proof on every token request, refresh tokens bound to the device key, and a refresher for long-running hosts), `ligus auth` (`crates/hive-cli/src/auth.rs`) and the desktop's organization sign-in (`app/src/ligus_auth_ui.rs`). Enforcing the `tid` claim on the relay is review P6. The owner moved the client side into 2.0 on 2026-11-13; this heading said "can follow 2.0" before that.
 
 ### E.1 Goal
 
@@ -1552,7 +1546,7 @@ flowchart LR
 
 ### 7.2 Merge queue
 
-Only one semantic PR merges at a time, in this order. Every merge runs the full test suite, the property tests at 4096 cases, and the replay harness (A.7).
+Only one semantic PR merges at a time, in this order. Every merge runs the full test suite and the property tests at 4096 cases.
 
 | # | Merge | Rebase point after it | Who must rebase |
 |---|---|---|---|
@@ -1569,7 +1563,7 @@ Only one semantic PR merges at a time, in this order. Every merge runs the full 
 | 11 | **B3** (+ iOS PR + site PR) | R5 | D4 (presence badge) |
 | 12 | **D3** | none | n/a |
 | 13 | **D4** (+ iOS PR) | none | n/a |
-| 14 | Release-matrix run + owner migration (§9) on the real data | n/a | n/a |
+| 14 | Release-matrix run | n/a | n/a |
 | 15 | **2.0 cut** | n/a | n/a |
 
 ### 7.3 Conflict hot spots
@@ -1593,100 +1587,10 @@ The other agent's in-flight UI and phone-endpoint merges are **R0**. No Phase 0 
 | D1 ACP for all four CLIs | yes; Claude-over-ACP default only for API-key auth until V2 is confirmed | Claude subscription over ACP after V2 |
 | D2 (incl. agent-signed effects, budgets, audit), D3, D4 | yes | Per-call synced audit (owner decision); resumable asks |
 | Gemini and MLX presets, release matrix | yes | Native Gemini provider |
-| E ligus-auth | no | 2.1 (relay tenant enforcement is review P6, 2.x) |
+| E ligus-auth | client side (device-code sign-in, device proof, refresh) and `cmd/ligus-auth` | relay tenant (`tid`) enforcement (review P6) |
 | Review P1/P2 host extraction, P4/P5 phone device keys, P6 relay split, P8 facts OTLP | no | 2.x. Passkey presence (B3) removes the urgency of P5 for votes, but not for authorship of posts. |
 
 > **"No patch releases" vs "follow" (needs the owner's reading).** "Can follow" items ship in a later *minor* release (2.1, 2.2). "No patch releases" means 2.0.0 is not followed by 2.0.x fixes of 2.0 scope, so everything marked yes above must be done before the cut.
-
-## 9. Migration and rollback for the owner's real data
-
-At the time of writing the owner was the only user. The data lives on:
-- the Mac desktop: Tauri `app_data_dir` for `ai.ligus.desktop`, `app/src/lib.rs:10560`;
-- the serve box: `~/.ligus` or `LIGUS_DATA_DIR`;
-- any worker boxes;
-- the iPhone (only pairing credentials and Keychain; no log).
-
-### 9.1 Before upgrading (once)
-
-1. **Tag the current RC.**
-   `git tag v2.0.0-rc.pre-phase0 <R0 sha>`, and build installable artifacts from it for rollback.
-2. **Stop the sync writers.** Quit the desktop, `systemctl --user stop hive-serve` (or the unit name in use), and stop the workers.
-3. **Back up every host.**
-   - `sqlite3 <dir>/hive.db ".backup '<backup>/hive.db'"`;
-   - tar the whole data dir, including `keys/`, `settings.json`, `config.toml`, `serve.token` and `tunnel/`, into an archive with mode 0600 on an offline or encrypted volume;
-   - record `sha256sum`.
-   - The archive contains plaintext secrets. Treat it as a key backup.
-4. **Export the relay keyring** for the workspace: `GET /v1/workspaces/{ws}/keyring` saved next to the backup. This is evidence for B.1.5 and a rollback aid.
-
-### 9.2 Refold diff (gates the upgrade)
-
-1. Build the Phase 0 candidate, then run `ligus doctor refold --db <backup copy>/hive.db --json > refold.json` for each host's database (A.7).
-2. The owner reviews every difference: newly held, denied or admitted events; status changes; roster changes.
-   - The expected categories are:
-     - self-declared vote roles no longer counting (R1);
-     - retroactive hoist reversals (R2);
-     - workflow upserts without an epoch from non-creator devices (S4);
-     - excess lockdowns (S5);
-     - nothing else.
-   - Anything unexpected blocks the upgrade and goes back to Track A.
-3. Run `ligus doctor keyring --db … --relay-dump keyring.json` to print the legacy epochs that will be pinned (B.1.5).
-
-### 9.3 Upgrade sequence
-
-1. **Desktop first.** On first launch it:
-   - migrates secrets to the Keychain (B2);
-   - pins legacy epochs (B.1.5);
-   - seeds `workspace_pins` (A.6);
-   - publishes `DeviceKeyAgreementPublished`.
-2. **Serve box and workers.** On start they:
-   - migrate secrets (systemd-creds);
-   - generate their own X25519 key;
-   - publish `DeviceKeyAgreementPublished`.
-
-   They read with the legacy ring meanwhile, which works because they share the pinned epochs or the passphrase epoch 0.
-3. **Register passkeys** (desktop: Settings → Security):
-   - Mac Touch ID (iCloud Keychain, which syncs to the iPhone);
-   - a YubiKey;
-   - write down the recovery key (B.4.6).
-4. **One signed rotation**, from the desktop, with presence: `KeyringEngine::rotate`.
-   - The version is `max(legacy) + 1`, sealed to every device, including serve and the workers.
-   - Verify on serve: `ligus doctor keyring` shows `seal = <new version> (authorized)`.
-   - Post from the phone through serve, then read it on the desktop at the new epoch. This is the R4/K4 check.
-5. **Enable rules v2:** `WorkspaceRulesSet { version: 2 }` with presence. Do this per workspace, starting with Home or the local workspace, then the shared ones.
-6. **Phone.**
-   - Install the 2.0 iOS build. Pairing (`hpc1`) is unchanged, so no re-pair is expected.
-   - Confirm a vote with Face ID passkey works (`presence/prepare` and `presence/commit`).
-   - **Re-pair only if** serve's device key was regenerated, which happens only if the serve box was re-enrolled. Then run `ligus serve pair` and scan again.
-7. **Post-checks.**
-   - The refold diff on the live database equals the reviewed one.
-   - `ligus doctor` is all green: sandbox available, no settings secrets, settings 0600, trust table present.
-   - Run the release matrix once on the owner's machines.
-
-### 9.4 Rollback
-
-- **Before step 9.3.4 (rotation):**
-  1. stop everything;
-  2. restore each host's backup archive;
-  3. reinstall the `v2.0.0-rc.pre-phase0` build.
-
-  No log divergence exists, because the new event kinds were only device-key publishes, which old builds fold as `Unknown`.
-- **After the signed rotation:** old builds cannot see the signed epoch, because they only read relay rows, so they cannot read anything sealed at it. Either:
-  - (a) restore the backups and accept the loss of post-rotation events; this is fine during a supervised migration window; or
-  - (b) run `ligus doctor export-legacy-rotation --version N`. It publishes the same sealed blobs as an unsigned legacy relay row, so old builds can open epoch N. This is a deliberate, owner-run downgrade aid, and it re-opens K1 only for the duration of the rollback.
-- **After rules v2:** old builds ignore `WorkspaceRulesSet` (`Unknown`) and fold with old rules. A rollback is safe but loses presence enforcement. Re-upgrading restores it, because enforcement is positional.
-- **Secrets:** the 2.0 build moved them to the Keychain or systemd-creds. A rolled-back build needs `settings.json` and `keys/` from the backup archive (step 9.1.3). Do not try to export them back from the Keychain.
-- **Phone:** the old iOS build keeps working against an old serve. Against a 2.0 serve it gets `presence_required` 403s for votes, which is safe.
-
-### 9.5 Owner data at risk, and checks
-
-| Risk | Check |
-|---|---|
-| A historic vote or set decision flips under A2 | Refold diff, accepted line by line |
-| Legacy events signed by "agents" (host-signed agent output) become Agent tier under rules v2 | Rules v2 applies by position only to *new* history, so old history is untouched |
-| Serve box missing from rotation recipients | Step 9.3.4 verification on serve, before rules v2 |
-| Sole-owner lockout | The recovery key is required before rules v2 is enabled (UI gate) |
-
----
 
 ## 10. Cross-track proof-test ledger (what must be green at the cut)
 
