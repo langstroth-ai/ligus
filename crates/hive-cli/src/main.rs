@@ -1027,12 +1027,18 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
                 // configured. Below it an HTTP model gets no tools, a CLI runs
                 // at its read-only tier, and one with none is refused.
                 // Unresolved author → fail closed.
-                // The author's role when they posted it (config roster at its frontier).
-                let author_role = svc.author_role_at(s.id, last.id).ok().flatten();
+                // The author's role when they posted it (config roster at its
+                // frontier); an agent's message resolves through its chain to
+                // the lowest of the humans behind it (the shared rule).
+                let author_role = svc.trigger_author_role(s.id, last.id).ok().flatten();
                 let mut turn_rt = rt.clone();
                 let plan = hive_runtime::author_gate::gate_turn(turn_rt.provider, &mut turn_rt.args, author_role);
                 let allow_mcp = plan.allows_tools();
                 if let hive_runtime::author_gate::GatePlan::Refuse(reason) = &plan {
+                    println!("refused: {reason}");
+                    continue;
+                }
+                if let Err(reason) = hive_runtime::executor::turn_allowed(turn_rt.provider) {
                     println!("refused: {reason}");
                     continue;
                 }
@@ -1399,7 +1405,12 @@ fn cmd_doctor() {
         println!("  - {n}");
     }
     if s.kind == hive_runtime::executor::ExecutorKind::Unconfined {
-        println!("  write-capable agent turns are refused here; read-only turns still run");
+        println!("  CLI agent turns (any tier), run_command, stdio MCP servers and pre-flight tests are refused here;");
+        println!("  chat with an HTTP model (no local tools) still runs");
+        #[cfg(windows)]
+        println!("  Windows has no agent sandbox: run CLI agents on a macOS or Linux host (ligus worker / ligus serve)");
+        #[cfg(target_os = "linux")]
+        println!("  to fix: install bubblewrap (bwrap) with unprivileged user namespaces, or run Linux 6.7+ for Landlock");
     }
 }
 

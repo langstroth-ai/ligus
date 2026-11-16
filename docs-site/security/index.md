@@ -186,7 +186,10 @@ it names.
   lower value logs a warning). Below it, Ligus's own tool loop runs without
   tools, Claude Code, Antigravity and Copilot run read-only, and Codex,
   aider, pi and Hermes are refused with a note. An author that can't be
-  resolved gets no tools. See [the author gate](../concepts/security.md#author-gate).
+  resolved gets no tools. A turn an agent triggers (a hand-off, an @mention
+  cascade, a workflow stage) runs at the lowest role of the humans who
+  started the chain, never at the tier of the host that signed the agent's
+  reply. See [the author gate](../concepts/security.md#author-gate).
 - **Worker write access** is off by default:
   `LIGUS_WORKER_PERMISSION_MODE` must raise it, and then only Admins' messages
   drive write-capable turns there unless you lower `LIGUS_MCP_MIN_ROLE`.
@@ -257,7 +260,7 @@ that change who can do what need a **passkey** assertion over the event:
 | Guard | What it does | Who can switch it | Details |
 |---|---|---|---|
 | **Sandbox envelope** | per turn: isolated worktree, protected dirs (`.git`, `.ligus`, `.hive`, `.claude`, `.vscode`, config files), egress policy, secret redaction in logged replies; only ever tightens | automatic | [The sandbox envelope](../concepts/security.md#the-sandbox-envelope-around-every-agent-turn) |
-| **OS sandbox** | every agent process: Seatbelt (macOS) or bubblewrap + Landlock + seccomp (Linux; Landlock + seccomp without namespaces where bubblewrap can't run, see [tiers](../ops/linux-sandbox.md)); no reads of Ligus's data, keys or `serve.token`; writes only in the worktree; network only through the turn's egress proxy (plus opt-in [egress presets](../concepts/security.md#egress-presets), off by default); agents can't commit; write-capable turns refused where no sandbox exists | automatic | [The OS sandbox](../concepts/security.md#os-sandbox), [Sandbox defaults](../concepts/security.md#sandbox-defaults), [Linux tiers](../ops/linux-sandbox.md) |
+| **OS sandbox** | every agent process: Seatbelt (macOS) or bubblewrap + Landlock + seccomp (Linux; Landlock + seccomp without namespaces where bubblewrap can't run, see [tiers](../ops/linux-sandbox.md)); no reads of Ligus's data, keys or `serve.token`; writes only in the worktree; network only through the turn's egress proxy (plus opt-in [egress presets](../concepts/security.md#egress-presets), off by default); agents can't commit; where no sandbox exists every agent process is refused (any tier) and HTTP models answer without local tools | automatic | [The OS sandbox](../concepts/security.md#os-sandbox), [Sandbox defaults](../concepts/security.md#sandbox-defaults), [Linux tiers](../ops/linux-sandbox.md) |
 | **Workspace trust** | repo-supplied runtimes and MCP servers stay inert until enabled on this device, per exact command | you, per device | [Trust this workspace](../concepts/security.md#workspace-trust) |
 | **Dearth mode** | two Admins for new members; cross-account approval for new devices; agents limited to allow-listed MCP servers; human approval for protected (brood) paths | Admin | [Dearth mode](../features/guards.md#dearth-mode) |
 | **Chat lockdown** | on an injection marker, a credential in a diff or an unrequested CI change: no network or MCP for that chat's agents, human approval on every proposal | raised by anyone (or automatically); cleared by a human Contributor+ | [Chat lockdown](../features/guards.md#chat-lockdown) |

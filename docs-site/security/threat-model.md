@@ -175,9 +175,11 @@ each stays on this list until a release fixes it.
    bubblewrap + Landlock + seccomp on Linux), which denies the data dir (key
    seeds, workspace keys, `settings.json`, `serve.token`), credential dirs and
    direct network. The sandbox shares your user and kernel: it is not a
-   boundary against kernel bugs, and on a host without it (Windows, Linux
-   without bubblewrap or user namespaces) the data dir is readable to
-   read-only agent turns, while write-capable turns are refused. On Linux a
+   boundary against kernel bugs. A host without it (Windows, Linux without
+   bubblewrap and user namespaces or Landlock, `LIGUS_SANDBOX=off`) runs no
+   agent process at all: CLI agent turns at every tier, commands, pre-flight
+   tests and stdio MCP servers are refused, and HTTP models answer without
+   local tools. Windows is not supported for agent turns. On Linux a
    protected directory that doesn't exist yet is pinned by an empty
    read-only directory for the turn.
 4. **Agent output signed by its host.** Hosts certify a key for each agent
@@ -188,6 +190,10 @@ each stays on this list until a release fixes it.
    signs for the agent itself; under rules version 2 that output, and every
    effect of the chat's primary runtime (stamped `runtime_effect`), is judged
    at the Agent tier too. Under rules v1 it is judged by its host's role.
+   Either way, a host's signature on an agent's output never gives a turn
+   that output triggers the host user's tier: the author gate resolves an
+   agent's message through its reply chain to the lowest role of the humans
+   who started it ([the author gate](../concepts/security.md#author-gate)).
 5. **Invites carry every key, and first contact is trust on first use.** Chat events, attachment blobs, host liveness beats and
    workflow and coordinator lease beats follow signed key rotations on every
    host (readers take beats only at the newest authorized key). An invite
@@ -400,6 +406,8 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 | Agents (Track C/D residuals) | ACP `fs/*` never applied the plan's read denials (the check could not fire) | A plan-denied path inside the worktree (a data dir or token file there) is refused to the host's own reads and writes |
 | Agents (Track C/D residuals) | Turn claims were keyed by the trigger message alone, so when one reply handed off to two agents on two devices, the second receiver never ran | Hand-off receivers claim (trigger, agent); user-message turns keep the plain claim, so older devices still coordinate |
 | Release | `scripts/release-matrix.sh` passed API keys as curl arguments, visible in `ps` | Headers go through a private file |
+| Host (authority) | The author gate read only the immediate trigger's author, and a message every event of which this device signed as its user cleared every floor. An agent reply the host signed for an agent without its own key (the device-local workspace, no agent vault, a key that couldn't be certified) counted as the host user's own message, so a Contributor's request handed to another agent, or an @mention cascade from it, ran at the host's Owner tier. Workflow stage prompts, posted as the driving device's user, ran at that user's tier whoever started the run | An agent's message has no role of its own: every host resolves it through its reply links (hand-offs, cascades) to the lowest role of the humans behind the chain, caps a peer's agent output at that peer's role, and runs a chain with no human read-only. A stage prompt is linked to its run and judged at the lower of its poster's and the run initiator's role. Verified by `handoff_chain_author_role_is_min_of_chain`, `mention_cascade_never_raises_tier`, `host_signed_agent_output_carries_no_role`, `agent_signed_reply_resolves_to_the_chain_human` and `workflow_stage_role_is_the_run_initiators` |
+| Sandbox (unconfined hosts) | Without an OS sandbox only write-capable CLI turns were refused: read-only CLI turns ran with nothing but an env allow-list and could read `hive.db` (not encrypted at rest), keys and tokens; `run_command`, approved commands, pre-flight tests and stdio MCP servers ran unconfined at any tier | Every agent process is refused at any tier, with a note naming the platform and the fix; HTTP models get no built-in file tools and run as plain chat. Verified by `unconfined_refuses_read_only_cli_turns`, `unconfined_refuses_tool_purpose` and `unconfined_allows_toolless_api_chat` |
 
 ### Open {#findings-open}
 

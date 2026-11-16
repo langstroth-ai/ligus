@@ -246,7 +246,7 @@ fn cwd_is_never_home_root_or_data_dir() {
 }
 
 /// `unconfined_refuses_write_tiers`: without an OS sandbox a write-capable
-/// agent turn is refused, and a read-only one still runs.
+/// agent turn is refused.
 #[test]
 fn unconfined_refuses_write_tiers() {
     let wt = tempfile::tempdir().unwrap();
@@ -255,9 +255,64 @@ fn unconfined_refuses_write_tiers() {
     assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
     let codex = SpawnSpec::new(Purpose::Agent(ModelProviderKind::Codex), "true", Vec::<String>::new()).cwd(Some(wt.path()));
     assert!(prepare_with(&Unconfined, codex).is_err());
-    let read = SpawnSpec::new(Purpose::Agent(ModelProviderKind::ClaudeCode), "true", ["--model", "x"]).cwd(Some(wt.path()));
-    let p = prepare_with(&Unconfined, read).expect("a read-only turn runs");
-    assert_eq!(p.guard.kind(), ExecutorKind::Unconfined);
+}
+
+/// Without an OS sandbox a read-only CLI turn is refused too: its read
+/// tools reach everything the user can read, `hive.db` (no at-rest
+/// encryption) and keys included. The refusal names the platform and how
+/// to get a sandbox.
+#[test]
+fn unconfined_refuses_read_only_cli_turns() {
+    let wt = tempfile::tempdir().unwrap();
+    for kind in [ModelProviderKind::ClaudeCode, ModelProviderKind::Copilot, ModelProviderKind::Antigravity] {
+        let ro = crate::author_gate::read_only_args(kind, &[]);
+        let mut spec = SpawnSpec::new(Purpose::Agent(kind), "true", ro).cwd(Some(wt.path()));
+        spec.writes = Some(false);
+        let err = prepare_with(&Unconfined, spec).err().unwrap_or_else(|| panic!("{kind:?} read-only ran unconfined"));
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{kind:?}");
+        let msg = err.to_string();
+        assert!(msg.contains(no_sandbox_platform()), "names the platform: {msg}");
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let msg = no_sandbox_refusal("a CLI agent turn");
+        assert!(msg.contains("bubblewrap") && msg.contains("Landlock"), "{msg}");
+    }
+    #[cfg(windows)]
+    assert!(no_sandbox_refusal("a CLI agent turn").contains("not supported"));
+}
+
+/// `run_command` (`Purpose::Tool`), a proposal's pre-flight test and a
+/// stdio MCP server are refused without an OS sandbox, at any tier: each
+/// runs a model's (or an agent-written) command on this host.
+#[test]
+fn unconfined_refuses_tool_purpose() {
+    let wt = tempfile::tempdir().unwrap();
+    for purpose in [Purpose::Tool, Purpose::Preflight, Purpose::McpServer] {
+        let policy = TurnPolicy { gate: GatePlan::ReadOnly, ..TurnPolicy::baseline(HostKind::Desktop) };
+        let err = with_turn_sync(policy, || prepare_with(&Unconfined, SpawnSpec::new(purpose, "/bin/sh", ["-c", "cat ~/.ssh/id_ed25519"]).cwd(Some(wt.path()))).err())
+            .unwrap_or_else(|| panic!("{purpose:?} ran unconfined"));
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{purpose:?}");
+    }
+}
+
+/// A tool-less HTTP/API turn (pure model chat) still runs without an OS
+/// sandbox: it spawns nothing and gets no local tools. An HTTP turn that
+/// would get local tools (built-in file tools, `run_command`, a stdio MCP
+/// server) and every CLI turn need the sandbox.
+#[test]
+fn unconfined_allows_toolless_api_chat() {
+    for p in [ModelProviderKind::Anthropic, ModelProviderKind::Ollama, ModelProviderKind::OpenAI] {
+        assert!(turn_allowed_on(ExecutorKind::Unconfined, p, false).is_ok(), "{p:?} chat");
+        assert!(turn_allowed_on(ExecutorKind::Unconfined, p, true).is_err(), "{p:?} with local tools");
+        assert!(turn_allowed_on(ExecutorKind::Seatbelt, p, true).is_ok());
+    }
+    for p in [ModelProviderKind::ClaudeCode, ModelProviderKind::Codex, ModelProviderKind::Copilot] {
+        assert!(turn_allowed_on(ExecutorKind::Unconfined, p, false).is_err(), "{p:?}");
+        assert!(turn_allowed_on(ExecutorKind::Bwrap, p, false).is_ok());
+    }
+    assert!(!local_tools_allowed_on(ExecutorKind::Unconfined));
+    assert!(local_tools_allowed_on(ExecutorKind::Landlock));
 }
 
 // ---------------------------------------------------------------------------
@@ -372,12 +427,14 @@ fn sandbox_denies_data_dir_read() {
     assert!(!ok || !out.contains("keys"), "listing the data dir: {out}");
     // Control: the same read outside the sandbox succeeds, so the denial
     // above is the sandbox's doing.
-    let control = with_turn_sync(TurnPolicy { gate: GatePlan::ReadOnly, ..isolated() }, || {
-        let spec = SpawnSpec::new(Purpose::Agent(ModelProviderKind::ClaudeCode), "/bin/sh", ["-c", "cat \"$0\"", f.data.join("settings.json").to_str().unwrap()])
-            .cwd(Some(&f.worktree));
-        let mut p = prepare_with(&Unconfined, spec).expect("prepare");
-        String::from_utf8_lossy(&p.command.output().unwrap().stdout).into_owned()
-    });
+    let control = {
+        let out = std::process::Command::new("/bin/sh")
+            .args(["-c", "cat \"$0\"", f.data.join("settings.json").to_str().unwrap()])
+            .current_dir(&f.worktree)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
     assert!(control.contains("SETTINGS-SECRET"), "control: {control}");
     // The worktree itself is readable.
     let (ok, out) = run_sh(&*e, &f, "cat README.md", isolated());
@@ -1147,7 +1204,7 @@ fn stale_turn_dirs_are_swept_and_live_ones_kept() {
     let dir = rt.block_on(async {
         let (tx, rx) = tokio::sync::oneshot::channel::<PathBuf>();
         let turn = async move {
-            let p = prepare_with(&Unconfined, SpawnSpec::new(Purpose::McpServer, "/bin/sh", ["-c", "sleep 30"])).unwrap();
+            let p = prepare_with(&ScratchOnly, SpawnSpec::new(Purpose::McpServer, "/bin/sh", ["-c", "sleep 30"])).unwrap();
             let tmp = p.guard.plan().tmp.clone();
             let _ = tx.send(tmp);
             let _guard = p.guard;
@@ -1233,8 +1290,8 @@ fn sandbox_default_agents_cannot_commit() {
 }
 
 /// Default 2: where there's no OS sandbox (`LIGUS_SANDBOX=off`, Windows,
-/// Linux without bubblewrap) every write-capable agent turn is refused
-/// before it starts; read-only turns run.
+/// Linux without bubblewrap or Landlock) every agent turn is refused before
+/// it starts, write-capable or read-only.
 #[test]
 fn sandbox_default_write_turns_refused_without_os_sandbox() {
     let wt = tempfile::tempdir().unwrap();
@@ -1254,10 +1311,11 @@ fn sandbox_default_write_turns_refused_without_os_sandbox() {
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{kind:?}");
     }
     for kind in [ModelProviderKind::ClaudeCode, ModelProviderKind::Copilot, ModelProviderKind::Antigravity] {
-        // The CLI at its read-only tier (Copilot's is explicit deny rules).
+        // The CLI at its read-only tier (Copilot's is explicit deny rules)
+        // is refused too: unconfined, its reads reach the Ligus data dir.
         let ro = crate::author_gate::read_only_args(kind, &[]);
         let spec = SpawnSpec::new(Purpose::Agent(kind), "true", ro).cwd(Some(wt.path()));
-        assert!(prepare_with(&Unconfined, spec).is_ok(), "{kind:?} read-only runs");
+        assert!(prepare_with(&Unconfined, spec).is_err(), "{kind:?} read-only is refused");
     }
     // No Seatbelt and no bubblewrap backend on this OS (Windows): the host
     // refuses write turns.
@@ -1305,5 +1363,19 @@ fn home_secret_dirs_cover_forge_cli_logins() {
         for rel in [".config/gh", ".config/glab-cli", ".config/tea", ".config/hub"] {
             assert!(dirs.contains(&home.join(rel)), "{rel} readable by {purpose:?}");
         }
+    }
+}
+
+/// A stand-in OS sandbox for tests of the turn plumbing (scratch dirs,
+/// guards) that don't exercise confinement: it reports a confining kind
+/// and spawns like [`Unconfined`].
+struct ScratchOnly;
+
+impl TurnExecutor for ScratchOnly {
+    fn kind(&self) -> ExecutorKind {
+        ExecutorKind::Seatbelt
+    }
+    fn confine(&self, program: &OsStr, args: &[OsString], cwd: &Path, plan: &EnforcementPlan, proxy: Option<&EgressProxy>) -> io::Result<std::process::Command> {
+        Unconfined.confine(program, args, cwd, plan, proxy)
     }
 }

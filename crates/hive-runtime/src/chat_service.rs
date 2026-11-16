@@ -922,6 +922,24 @@ impl ChatService {
         Ok(stored)
     }
 
+    /// Post a workflow stage's prompt as this device's user, linked to its
+    /// run: the author gate judges the stage at the lower of this user's role
+    /// and the run initiator's ([`Self::trigger_author_role`]).
+    pub fn post_workflow_stage_prompt(
+        &mut self,
+        session_id: Uuid,
+        workspace_id: Uuid,
+        body: impl Into<String>,
+        run_id: Uuid,
+    ) -> Result<ChatMessage> {
+        let mut message = ChatMessage::new(MessageRole::User, &self.author.display_name, body);
+        message.actor_identity = Some(self.author.clone());
+        message.workflow_run_id = Some(run_id);
+        let stored = message.clone();
+        self.append_signed(session_id, workspace_id, SessionEvent::MessageAppended { message })?;
+        Ok(stored)
+    }
+
     /// Record a system note — visible in the transcript, excluded from
     /// provider turns (used for app-level notices like "agent added a
     /// workflow").
@@ -2416,30 +2434,187 @@ impl ChatService {
         Ok(())
     }
 
-    /// The role a turn's trigger is gated at **on this host**: this device's
-    /// own user always clears the gate, decided from the signed envelopes
-    /// (every event shaping the message was signed by this device as its
-    /// user), never from the payload's self-asserted `actor_identity`; anyone
-    /// else's message is [`Self::author_role_at`].
+    /// The role a turn is gated at **on this host**, the one rule every host
+    /// applies (the desktop, `ligus worker`/`serve`, `ligus agent`): the
+    /// **lowest** role among the humans behind the trigger chain.
+    ///
+    /// - A human's message is judged at its author's role when they posted it
+    ///   ([`Self::author_role_at`]); this device's own user clears every
+    ///   floor (Owner), decided from the signed envelopes (every event shaping
+    ///   the message signed by this device as its user, none an agent's or a
+    ///   runtime's effect), never from the payload's `actor_identity`.
+    /// - An agent's output (an assistant/agent/system message, anything with a
+    ///   responder, an agent-signed event or a runtime effect) has **no role
+    ///   of its own**, whoever signed it: it resolves through the message it
+    ///   answers (`reply_to_message_id`), across hand-offs and @mention
+    ///   cascades, back to the human(s) who started the chain. A signer that
+    ///   isn't this device also caps it at that signer's role (an agent key:
+    ///   its host device's member), so a peer can't point its agent's reply at
+    ///   an Owner's message and borrow the Owner's tier. With no human behind
+    ///   it, the chain resolves to `None`: below every floor (read-only).
+    /// - A workflow stage prompt (`workflow_run_id`) is posted by whichever
+    ///   device drives the run, so it is also capped at the role of the human
+    ///   who started the run (the signer of the run's first record).
+    ///
+    /// Anything unresolved fails closed (`None`).
     pub fn trigger_author_role(&self, session_id: Uuid, message_id: Uuid) -> Result<Option<WorkspaceRole>> {
+        /// Longer chains than this fail closed (a loop of forged links).
+        const MAX_CHAIN: usize = 256;
         let envs = self.store.list(session_id)?;
-        let touching: Vec<&SessionEventEnvelope> = envs
-            .iter()
-            .filter(|e| match &e.payload {
-                SessionEvent::MessageAppended { message } => message.id == message_id,
-                SessionEvent::MessageChunkReceived { message_id: id, .. }
-                | SessionEvent::MessageCompleted { message_id: id, .. } => *id == message_id,
-                _ => false,
-            })
-            .collect();
-        let mine = |e: &&SessionEventEnvelope| {
-            e.signer_device_id == Some(self.device_id)
-                && e.actor_stamp.as_ref().is_some_and(|s| s.actor.id == self.author.id)
-        };
-        if !touching.is_empty() && touching.iter().all(mine) {
+        let mut cx = RoleCx::default();
+        let mut lowest: Option<WorkspaceRole> = None;
+        let mut humans = 0usize;
+        let mut seen = std::collections::HashSet::new();
+        let mut queue = vec![message_id];
+        while let Some(id) = queue.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            if seen.len() > MAX_CHAIN {
+                return Ok(None);
+            }
+            let touching = touching_message(&envs, id);
+            let appended: Vec<&ChatMessage> = touching
+                .iter()
+                .filter_map(|e| match &e.payload {
+                    SessionEvent::MessageAppended { message } => Some(message),
+                    _ => None,
+                })
+                .collect();
+            if appended.is_empty() {
+                return Ok(None);
+            }
+            let agent_output = appended.iter().any(|m| m.role != MessageRole::User || m.responder_id.is_some())
+                || touching.iter().any(|e| {
+                    e.actor_stamp.as_ref().is_none_or(|s| s.actor.kind != hive_core::ActorKind::Human || s.runtime_effect)
+                });
+            if agent_output {
+                for env in &touching {
+                    match self.foreign_signer_cap(session_id, env, &mut cx)? {
+                        Cap::Own => {}
+                        Cap::Role(r) => lowest = Some(min_role(lowest, r)),
+                        Cap::Unresolved => return Ok(None),
+                    }
+                }
+                let parents: std::collections::BTreeSet<Uuid> =
+                    appended.iter().filter_map(|m| m.reply_to_message_id).collect();
+                if parents.is_empty() {
+                    // No human behind this output.
+                    return Ok(None);
+                }
+                queue.extend(parents);
+                continue;
+            }
+            humans += 1;
+            let Some(role) = self.human_message_role(session_id, &touching, &mut cx)? else { return Ok(None) };
+            lowest = Some(min_role(lowest, role));
+            let runs: std::collections::BTreeSet<Uuid> = appended.iter().filter_map(|m| m.workflow_run_id).collect();
+            for run_id in runs {
+                let Some(role) = self.run_initiator_role(session_id, &envs, run_id, &mut cx)? else { return Ok(None) };
+                lowest = Some(min_role(lowest, role));
+            }
+        }
+        Ok(if humans == 0 { None } else { lowest })
+    }
+
+    /// A human's message: Owner when every event shaping it was signed by
+    /// this device as its own user, else the lowest role of its authors.
+    fn human_message_role(&self, session_id: Uuid, touching: &[&SessionEventEnvelope], cx: &mut RoleCx) -> Result<Option<WorkspaceRole>> {
+        if !touching.is_empty() && touching.iter().all(|e| self.signed_by_own_user(e)) {
             return Ok(Some(WorkspaceRole::Owner));
         }
-        self.author_role_at(session_id, message_id)
+        let mut lowest = None;
+        for env in touching {
+            let Some(role) = self.envelope_author_role(session_id, env, cx)? else { return Ok(None) };
+            lowest = Some(min_role(lowest, role));
+        }
+        Ok(lowest)
+    }
+
+    /// Signed by this device as its own (human) user, not as an agent's or
+    /// the runtime's effect.
+    fn signed_by_own_user(&self, e: &SessionEventEnvelope) -> bool {
+        e.signer_device_id == Some(self.device_id)
+            && e.actor_stamp.as_ref().is_some_and(|s| {
+                s.actor.id == self.author.id && s.actor.kind == hive_core::ActorKind::Human && !s.runtime_effect
+            })
+    }
+
+    /// The cap an event on an agent's output puts on the chain: none when
+    /// this device signed it (its own reply links are honest), else the
+    /// signer's role (an agent key: its certified host device's member).
+    fn foreign_signer_cap(&self, session_id: Uuid, env: &SessionEventEnvelope, cx: &mut RoleCx) -> Result<Cap> {
+        if env.signer_device_id == Some(self.device_id) {
+            return Ok(Cap::Own);
+        }
+        let Some(stamp) = env.actor_stamp.as_ref() else { return Ok(Cap::Unresolved) };
+        if stamp.actor.kind != hive_core::ActorKind::Agent {
+            return Ok(match self.envelope_author_role(session_id, env, cx)? {
+                Some(r) => Cap::Role(r),
+                None => Cap::Unresolved,
+            });
+        }
+        let (Some(signer), Some(frontier)) = (env.signer_device_id, stamp.cfg_frontier) else { return Ok(Cap::Unresolved) };
+        if self.local_workspace_id == Some(env.workspace_id) {
+            return Ok(Cap::Unresolved);
+        }
+        let (cfg, timeline) = cx.config(self, env.workspace_id)?;
+        if cfg.is_none() {
+            return Ok(Cap::Unresolved);
+        }
+        let Ok(roster) = timeline.at(frontier) else { return Ok(Cap::Unresolved) };
+        let Some(key) = roster.agent_keys.get(&signer) else { return Ok(Cap::Unresolved) };
+        if key.host_device_id == self.device_id {
+            return Ok(Cap::Own);
+        }
+        let Some(device) = roster.devices.get(&key.host_device_id) else { return Ok(Cap::Unresolved) };
+        let mut lowest = None;
+        for m in roster.members.values() {
+            if m.account_id.is_some_and(|a| device.accounts.contains(&a)) {
+                lowest = Some(min_role(lowest, m.role));
+            }
+        }
+        Ok(lowest.map_or(Cap::Unresolved, Cap::Role))
+    }
+
+    /// The role of the human who started workflow run `run_id`: the author
+    /// of the run's first record on this log (Owner when that is this
+    /// device's own user). `None` when the run isn't here.
+    fn run_initiator_role(&self, session_id: Uuid, envs: &[SessionEventEnvelope], run_id: Uuid, cx: &mut RoleCx) -> Result<Option<WorkspaceRole>> {
+        let Some(first) = envs
+            .iter()
+            .filter(|e| matches!(&e.payload, SessionEvent::WorkflowRunUpserted { run } if run.id == run_id))
+            .min_by_key(|e| (e.lamport, e.sequence))
+        else {
+            return Ok(None);
+        };
+        if first.actor_stamp.as_ref().is_none_or(|s| s.actor.kind != hive_core::ActorKind::Human || s.runtime_effect) {
+            return Ok(None);
+        }
+        if self.signed_by_own_user(first) {
+            return Ok(Some(WorkspaceRole::Owner));
+        }
+        self.envelope_author_role(session_id, first, cx)
+    }
+
+    /// The role one event's stamped author held at its position (`None` when
+    /// unresolved). In the device-local workspace it is the folded role.
+    fn envelope_author_role(&self, session_id: Uuid, env: &SessionEventEnvelope, cx: &mut RoleCx) -> Result<Option<WorkspaceRole>> {
+        let Some(stamp) = env.actor_stamp.as_ref().filter(|s| !s.actor.id.is_empty()) else {
+            return Ok(None);
+        };
+        if self.local_workspace_id == Some(env.workspace_id) {
+            if cx.local_session.is_none() {
+                cx.local_session = Some(self.load(session_id)?);
+            }
+            return Ok(cx.local_session.as_ref().and_then(|s| s.as_ref()).map(|s| s.role_of(&stamp.actor.id)));
+        }
+        let Some(frontier) = stamp.cfg_frontier else { return Ok(None) };
+        let (cfg, timeline) = cx.config(self, env.workspace_id)?;
+        if cfg.is_none() {
+            return Ok(None);
+        }
+        Ok(timeline.at(frontier).ok().and_then(|r| r.role_of(&stamp.actor.id)))
     }
 
     /// Project a session. For a chat, the effective agents/skills/vaults are the
@@ -2460,52 +2635,20 @@ impl ChatService {
     /// touches the message (any unresolved one fails closed): a lower-role
     /// member can't rewrite a higher-role member's prompt and inherit their
     /// gate.
+    ///
+    /// This is one message's signers only; a turn's gate is
+    /// [`Self::trigger_author_role`], which follows the chain.
     pub fn author_role_at(&self, session_id: Uuid, message_id: Uuid) -> Result<Option<WorkspaceRole>> {
         let envs = self.store.list(session_id)?;
-        let touching: Vec<&SessionEventEnvelope> = envs
-            .iter()
-            .filter(|e| match &e.payload {
-                SessionEvent::MessageAppended { message } => message.id == message_id,
-                SessionEvent::MessageChunkReceived { message_id: id, .. }
-                | SessionEvent::MessageCompleted { message_id: id, .. } => *id == message_id,
-                _ => false,
-            })
-            .collect();
+        let touching = touching_message(&envs, message_id);
         if !touching.iter().any(|e| matches!(&e.payload, SessionEvent::MessageAppended { .. })) {
             return Ok(None);
         }
+        let mut cx = RoleCx::default();
         let mut lowest: Option<WorkspaceRole> = None;
-        let mut local_session: Option<Option<ChatSession>> = None;
-        let mut config: Option<(Option<ChatSession>, std::sync::Arc<hive_core::authz::ConfigTimeline>)> = None;
         for env in touching {
-            let Some(stamp) = env.actor_stamp.as_ref().filter(|s| !s.actor.id.is_empty()) else {
-                return Ok(None);
-            };
-            let role = if self.local_workspace_id == Some(env.workspace_id) {
-                if local_session.is_none() {
-                    local_session = Some(self.load(session_id)?);
-                }
-                local_session.as_ref().and_then(|s| s.as_ref()).map(|s| s.role_of(&stamp.actor.id))
-            } else {
-                let Some(frontier) = stamp.cfg_frontier else { return Ok(None) };
-                if config.is_none() {
-                    config = Some(self.store.load_config(
-                        env.workspace_id,
-                        self.trusted_founder.as_deref(),
-                        self.local_workspace_id,
-                    )?);
-                }
-                let (cfg, timeline) = config.as_ref().expect("loaded above");
-                if cfg.is_none() {
-                    return Ok(None);
-                }
-                timeline.at(frontier).ok().and_then(|r| r.role_of(&stamp.actor.id))
-            };
-            let Some(role) = role else { return Ok(None) };
-            lowest = Some(match lowest {
-                Some(l) if l.rank() <= role.rank() => l,
-                _ => role,
-            });
+            let Some(role) = self.envelope_author_role(session_id, env, &mut cx)? else { return Ok(None) };
+            lowest = Some(min_role(lowest, role));
         }
         Ok(lowest)
     }
@@ -2886,6 +3029,52 @@ fn repair_alternation(turns: Vec<ChatTurn>) -> Vec<ChatTurn> {
         merged.insert(0, ChatTurn::user("(Continuing the earlier conversation.)".to_string()));
     }
     merged
+}
+
+/// Per-call caches for resolving roles (the device-local fold, the config
+/// log and its timeline).
+#[derive(Default)]
+struct RoleCx {
+    local_session: Option<Option<ChatSession>>,
+    config: Option<(Option<ChatSession>, std::sync::Arc<hive_core::authz::ConfigTimeline>)>,
+}
+
+impl RoleCx {
+    fn config(&mut self, svc: &ChatService, workspace_id: Uuid) -> Result<&(Option<ChatSession>, std::sync::Arc<hive_core::authz::ConfigTimeline>)> {
+        if self.config.is_none() {
+            self.config = Some(svc.store.load_config(workspace_id, svc.trusted_founder.as_deref(), svc.local_workspace_id)?);
+        }
+        Ok(self.config.as_ref().expect("loaded above"))
+    }
+}
+
+/// What one event on an agent's output does to a chain's role.
+enum Cap {
+    /// Written by this device: no cap.
+    Own,
+    /// Capped at the signer's role.
+    Role(WorkspaceRole),
+    /// The signer can't be resolved: the chain fails closed.
+    Unresolved,
+}
+
+/// The lower of `current` (if any) and `role`.
+fn min_role(current: Option<WorkspaceRole>, role: WorkspaceRole) -> WorkspaceRole {
+    match current {
+        Some(l) if l.rank() <= role.rank() => l,
+        _ => role,
+    }
+}
+
+/// Every event that shapes message `id` (its appends, chunks, completion).
+fn touching_message(envs: &[SessionEventEnvelope], id: Uuid) -> Vec<&SessionEventEnvelope> {
+    envs.iter()
+        .filter(|e| match &e.payload {
+            SessionEvent::MessageAppended { message } => message.id == id,
+            SessionEvent::MessageChunkReceived { message_id, .. } | SessionEvent::MessageCompleted { message_id, .. } => *message_id == id,
+            _ => false,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -3789,6 +3978,176 @@ mod tests {
         // The host's own message clears the gate as the device's user.
         let own = host.post_user_message(chat_id, wid, "@hive go").unwrap().id;
         assert_eq!(host.trigger_author_role(chat_id, own).unwrap(), Some(WorkspaceRole::Owner));
+    }
+
+    // ── Authority through a trigger chain ──────────────────────────────────
+
+    /// An agent's reply to `to`, written by `svc` as the agent's host. With
+    /// no agent vault it is host-signed (the A3 fallback).
+    fn agent_reply(svc: &mut ChatService, chat: Uuid, wid: Uuid, agent: Option<Uuid>, to: Option<Uuid>, body: &str) -> Uuid {
+        let id = svc.begin_assistant_message(chat, wid, "coder", "rt", agent, to).unwrap();
+        svc.complete_assistant_message(chat, wid, id, body).unwrap();
+        id
+    }
+
+    /// Owner `u1` (the host, `Ana`), an Admin and a Contributor in one chat.
+    fn chain_fixture() -> (tempfile::TempDir, std::path::PathBuf, Uuid, Uuid, ChatService) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hive.db");
+        let wid = Uuid::new_v4();
+        let mut host = svc_on(&path, "u1", "Ana");
+        let chat = host.create_chat("A", wid, "anthropic").unwrap();
+        host.add_member(chat.id, wid, test_member("adm", "Adm", WorkspaceRole::Admin)).unwrap();
+        host.add_member(chat.id, wid, test_member("con", "Con", WorkspaceRole::Contributor)).unwrap();
+        (dir, path, wid, chat.id, host)
+    }
+
+    /// Authority escalation: a turn an agent hands to another agent runs on
+    /// behalf of the human who started the chain, never at the tier of the
+    /// host that happened to sign the agent's reply. A Contributor's request
+    /// that an Owner's desktop answers and hands on stays at Contributor at
+    /// every hop; an Admin's stays at Admin; the host user's own stays Owner.
+    #[test]
+    fn handoff_chain_author_role_is_min_of_chain() {
+        use crate::author_gate::{gate, GatePlan};
+        use hive_core::ModelProviderKind;
+        let (_dir, path, wid, chat, mut host) = chain_fixture();
+        let (coder, reviewer) = (Some(Uuid::new_v4()), Some(Uuid::new_v4()));
+        let m_con = svc_on(&path, "con", "Con").post_user_message(chat, wid, "@coder fix it, then hand off").unwrap().id;
+        let r1 = agent_reply(&mut host, chat, wid, coder, Some(m_con), "done; @reviewer over to you");
+        let r2 = agent_reply(&mut host, chat, wid, reviewer, Some(r1), "looks fine; @coder push it");
+        let r3 = agent_reply(&mut host, chat, wid, coder, Some(r2), "pushed");
+        let envs = host.store().list(chat).unwrap();
+        assert!(
+            envs.iter()
+                .filter(|e| matches!(&e.payload, SessionEvent::MessageAppended { message } if message.id == r1))
+                .all(|e| e.signer_device_id == Some(host.device_id())),
+            "precondition: the agent's reply is host-signed"
+        );
+        for r in [r1, r2, r3] {
+            let role = host.trigger_author_role(chat, r).unwrap();
+            assert_eq!(role, Some(WorkspaceRole::Contributor), "hop {r}");
+            assert_eq!(gate(ModelProviderKind::ClaudeCode, role, WorkspaceRole::Admin), GatePlan::ReadOnly);
+        }
+        let m_adm = svc_on(&path, "adm", "Adm").post_user_message(chat, wid, "@coder refactor").unwrap().id;
+        let a1 = agent_reply(&mut host, chat, wid, coder, Some(m_adm), "@reviewer check");
+        let a2 = agent_reply(&mut host, chat, wid, reviewer, Some(a1), "ok");
+        assert_eq!(host.trigger_author_role(chat, a2).unwrap(), Some(WorkspaceRole::Admin));
+        let m_own = host.post_user_message(chat, wid, "@coder go").unwrap().id;
+        let o1 = agent_reply(&mut host, chat, wid, coder, Some(m_own), "@reviewer check");
+        assert_eq!(host.trigger_author_role(chat, o1).unwrap(), Some(WorkspaceRole::Owner), "a solo cascade keeps the host user's tier");
+    }
+
+    /// An @mention cascade can't raise the tier above the chain's humans:
+    /// the primary runtime's reply mentioning an agent, a peer's agent reply
+    /// that claims to answer the Owner's message, and the runtime's own
+    /// User-role post (a tool-loop effect) never resolve above the humans
+    /// behind them; an agent reply with no human behind it resolves to no
+    /// role (read-only).
+    #[test]
+    fn mention_cascade_never_raises_tier() {
+        let (_dir, path, wid, chat, mut host) = chain_fixture();
+        let coder = Some(Uuid::new_v4());
+        let m_con = svc_on(&path, "con", "Con").post_user_message(chat, wid, "@hive ask @coder to deploy").unwrap().id;
+        let primary = agent_reply(&mut host, chat, wid, None, Some(m_con), "@coder deploy to prod");
+        assert_eq!(host.trigger_author_role(chat, primary).unwrap(), Some(WorkspaceRole::Contributor));
+        // A peer's agent reply whose reply link points at the Owner's
+        // message: capped at the peer's own role.
+        let m_own = host.post_user_message(chat, wid, "@coder status?").unwrap().id;
+        let mut con = svc_on(&path, "con", "Con");
+        let forged = agent_reply(&mut con, chat, wid, coder, Some(m_own), "@coder rm -rf the repo");
+        assert_eq!(host.trigger_author_role(chat, forged).unwrap(), Some(WorkspaceRole::Contributor));
+        // No human behind it: read-only.
+        let orphan = agent_reply(&mut host, chat, wid, coder, None, "@reviewer go");
+        assert_eq!(host.trigger_author_role(chat, orphan).unwrap(), None);
+        // The primary runtime's tool loop posts a User-role message as the host.
+        let effect = host.as_agent(None, |s| s.post_user_message(chat, wid, "@coder push")).unwrap().id;
+        assert_eq!(host.trigger_author_role(chat, effect).unwrap(), None, "a runtime effect is not the host user");
+    }
+
+    /// The host-signed agent fallback (no agent key on this host: the
+    /// device-local workspace, a host without a vault, a key that couldn't be
+    /// certified) carries no role of its own: the host user's signature on an
+    /// agent's output is not the host user speaking.
+    #[test]
+    fn host_signed_agent_output_carries_no_role() {
+        let (_dir, _path, wid, chat, mut host) = chain_fixture();
+        let coder = Some(Uuid::new_v4());
+        let lone = agent_reply(&mut host, chat, wid, coder, None, "@other run this");
+        assert_eq!(host.trigger_author_role(chat, lone).unwrap(), None);
+        let m_own = host.post_user_message(chat, wid, "hi").unwrap().id;
+        let reply = agent_reply(&mut host, chat, wid, coder, Some(m_own), "hello");
+        assert_eq!(host.trigger_author_role(chat, reply).unwrap(), Some(WorkspaceRole::Owner));
+        // The device-local workspace host-signs every agent output.
+        let (mut solo, _) = service();
+        let local = Uuid::new_v4();
+        solo.set_local_workspace(local);
+        let c = solo.create_chat("solo", local, "rt").unwrap();
+        let r = agent_reply(&mut solo, c.id, local, coder, None, "@x go");
+        assert_eq!(solo.trigger_author_role(c.id, r).unwrap(), None);
+        let m = solo.post_user_message(c.id, local, "@coder go").unwrap().id;
+        let r = agent_reply(&mut solo, c.id, local, coder, Some(m), "@x go");
+        assert_eq!(solo.trigger_author_role(c.id, r).unwrap(), Some(WorkspaceRole::Owner));
+    }
+
+    /// An agent that signs with its own key (A3) is resolved through its
+    /// chain like any other agent output: to the human who started it.
+    #[test]
+    fn agent_signed_reply_resolves_to_the_chain_human() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hive.db");
+        let wid = Uuid::new_v4();
+        let mut svc = svc_on(&path, "x", "Alex");
+        let account = Uuid::new_v4().to_string();
+        svc.set_author_account(account.clone(), "Alex", None);
+        let chat = svc.create_chat("A", wid, "rt").unwrap();
+        svc.set_agent_vault(Box::new(crate::identity_store::FileKeyVault::new(dir.path())));
+        let mut agent = WorkspaceAgent::new("coder", "rt");
+        agent.owner_actor_id = account.clone();
+        let agent_id = agent.id;
+        svc.add_agent(chat.id, wid, agent).unwrap();
+        svc.set_agent_host(wid, agent_id, &svc.device_id().to_string()).unwrap();
+        let m = svc.post_user_message(chat.id, wid, "@coder go").unwrap().id;
+        let r = agent_reply(&mut svc, chat.id, wid, Some(agent_id), Some(m), "@reviewer check");
+        let signer = svc
+            .store()
+            .list(chat.id)
+            .unwrap()
+            .into_iter()
+            .find(|e| matches!(&e.payload, SessionEvent::MessageAppended { message } if message.id == r))
+            .unwrap()
+            .signer_device_id;
+        assert_ne!(signer, Some(svc.device_id()), "precondition: agent-signed");
+        assert_eq!(svc.trigger_author_role(chat.id, r).unwrap(), Some(WorkspaceRole::Owner));
+        let orphan = agent_reply(&mut svc, chat.id, wid, Some(agent_id), None, "@reviewer check");
+        assert_eq!(svc.trigger_author_role(chat.id, orphan).unwrap(), None);
+    }
+
+    /// A workflow stage prompt is posted by whichever device drives the run
+    /// (a recovery or a lease takeover can hand that to another member's
+    /// device), so the stage is judged at the lower of the poster's role and
+    /// the run initiator's, read from the signed event that started the run.
+    #[test]
+    fn workflow_stage_role_is_the_run_initiators() {
+        use hive_core::workflow;
+        let (_dir, path, wid, chat, mut host) = chain_fixture();
+        let def = workflow::preset_fan_out_vote();
+        let run = workflow::new_run(&def, "task", "con");
+        let mut con = svc_on(&path, "con", "Con");
+        con.upsert_workflow_run(chat, wid, run.clone()).unwrap();
+        let stage = host.post_workflow_stage_prompt(chat, wid, "**[Workflow · x → y]**\n\ndeploy", run.id).unwrap().id;
+        assert_eq!(host.trigger_author_role(chat, stage).unwrap(), Some(WorkspaceRole::Contributor));
+        // The stage's reply hands on at the same tier.
+        let reply = agent_reply(&mut host, chat, wid, Some(Uuid::new_v4()), Some(stage), "@next go");
+        assert_eq!(host.trigger_author_role(chat, reply).unwrap(), Some(WorkspaceRole::Contributor));
+        // The host user's own run keeps the host user's tier.
+        let own = workflow::new_run(&def, "task", "u1");
+        host.upsert_workflow_run(chat, wid, own.clone()).unwrap();
+        let stage = host.post_workflow_stage_prompt(chat, wid, "stage", own.id).unwrap().id;
+        assert_eq!(host.trigger_author_role(chat, stage).unwrap(), Some(WorkspaceRole::Owner));
+        // A stage prompt naming a run this log doesn't hold fails closed.
+        let ghost = host.post_workflow_stage_prompt(chat, wid, "stage", Uuid::new_v4()).unwrap().id;
+        assert_eq!(host.trigger_author_role(chat, ghost).unwrap(), None);
     }
 
     /// C1.4: a Ligus secret split across two streamed chunks must not reach

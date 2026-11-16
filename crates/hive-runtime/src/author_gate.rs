@@ -16,9 +16,14 @@
 //!   warning (see [`warn_if_lowered`]).
 //!
 //! The author's role is taken **as of the triggering message**: every host
-//! resolves it with `ChatService::author_role_at`, the config-log roster at
-//! the frontier the message stamped (Track A's `ConfigTimeline`). An author
-//! that can't be resolved is below every floor (fail closed).
+//! resolves it with `ChatService::trigger_author_role`, the config-log roster
+//! at the frontier the message stamped (Track A's `ConfigTimeline`). An
+//! agent's message has no role of its own: it resolves through the message it
+//! answers, across hand-offs and @mention cascades, to the **lowest** role of
+//! the humans behind the chain (a workflow stage also to its run's
+//! initiator), so an agent never lends a turn more authority than the people
+//! who started it. A chain with no human, or an author that can't be
+//! resolved, is below every floor (fail closed).
 
 use hive_core::{ModelProviderKind, WorkspaceRole};
 

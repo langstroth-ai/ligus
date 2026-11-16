@@ -123,8 +123,9 @@ consider:
   `contributor` when read-only): who can make the worker use tools;
 - bubblewrap: agent processes run in the Linux sandbox; without `bwrap` (or
   where it can't create user namespaces) the worker uses the Landlock tier
-  on Linux 6.7+, and refuses write-capable turns with neither (`ligus
-  doctor`; see [The Linux agent sandbox](linux-sandbox.md));
+  on Linux 6.7+, and refuses every CLI agent turn (read-only ones too),
+  command and stdio MCP server with neither (`ligus doctor`; see
+  [The Linux agent sandbox](linux-sandbox.md));
 - `LIGUS_WORKER_PERMISSION_MODE`: off (read-only) unless you want worker
   turns to propose edits;
 - whoever administers the worker box can read the workspace.

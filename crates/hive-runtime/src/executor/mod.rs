@@ -12,8 +12,9 @@
 //!    (`sandbox-exec`) on macOS; on Linux, bubblewrap + Landlock + seccomp,
 //!    or (where bubblewrap can't create namespaces) Landlock + seccomp
 //!    alone ([`ExecutorKind::Landlock`]); or [`Unconfined`] where none is
-//!    available (then write-capable turns are refused; see
-//!    [`refuses_writes`]). [`sandbox_status`] says which, and why.
+//!    available (then nothing is spawned for a model at any tier, and only
+//!    tool-less HTTP model chat runs; see [`refuses_writes`] and
+//!    [`turn_allowed_on`]). [`sandbox_status`] says which, and why.
 //! 3. [`prepare`] is what spawn sites call: it resolves the plan from the
 //!    turn scope ([`with_turn`]) or the safe default, starts the per-turn
 //!    egress proxy ([`crate::egress`]), creates the turn's scratch dir, and
@@ -572,8 +573,9 @@ pub trait TurnExecutor: Send + Sync {
     fn confine(&self, program: &OsStr, args: &[OsString], cwd: &Path, plan: &EnforcementPlan, proxy: Option<&EgressProxy>) -> io::Result<std::process::Command>;
 }
 
-/// No OS confinement: env allow-list and cwd checks only. Write-capable
-/// tiers are refused under it ([`refuses_writes`]).
+/// No OS confinement: env allow-list and cwd checks only. Nothing a model
+/// drives is spawned under it ([`prepare_with`] refuses every purpose); the
+/// host can still serve tool-less HTTP model chat ([`turn_allowed_on`]).
 pub struct Unconfined;
 
 impl TurnExecutor for Unconfined {
@@ -652,10 +654,79 @@ fn select_executor() -> (Arc<dyn TurnExecutor>, SandboxStatus) {
     chosen
 }
 
-/// Whether the host's executor refuses write-capable turns (it can't confine
-/// them). The UI shows a persistent banner while this is true.
+/// Whether the host has no OS sandbox: every CLI agent turn, command,
+/// pre-flight test and stdio MCP server is then refused (any tier), and only
+/// tool-less HTTP model chat runs. The UI shows a persistent banner while
+/// this is true.
 pub fn refuses_writes() -> bool {
     default_executor().kind() == ExecutorKind::Unconfined
+}
+
+/// This platform's name, as the no-sandbox refusal says it.
+pub fn no_sandbox_platform() -> &'static str {
+    if cfg!(target_os = "macos") { "macOS" } else if cfg!(target_os = "linux") { "Linux" } else if cfg!(windows) { "Windows" } else { "this platform" }
+}
+
+/// How to get an agent sandbox on this platform (or why there is none).
+fn sandbox_remedy() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Ligus uses macOS's built-in sandbox-exec (Seatbelt): unset LIGUS_SANDBOX=off if it is set, and check that /usr/bin/sandbox-exec runs"
+    } else if cfg!(target_os = "linux") {
+        "install bubblewrap (bwrap) with unprivileged user namespaces enabled, or run Linux 6.7+ so Ligus can fall back to Landlock, \
+         and unset LIGUS_SANDBOX=off if it is set"
+    } else if cfg!(windows) {
+        "Windows has no agent sandbox Ligus can use, so agent turns that run local programs are not supported on Windows; \
+         run CLI agents on a macOS or Linux host (a `ligus worker` or `ligus serve` box) instead"
+    } else {
+        "this platform has no agent sandbox Ligus can use; run CLI agents on a macOS or Linux host instead"
+    }
+}
+
+/// The refusal for `what` (a CLI agent turn, a command, ...) on a host with
+/// no OS sandbox: names the platform and how to get one.
+pub fn no_sandbox_refusal(what: &str) -> String {
+    format!(
+        "Ligus won't run {what} on this {} host: it has no agent sandbox, and without one the agent could read \
+         everything your user account can, Ligus's own data and keys included. To fix it: {}. `ligus doctor` says what's \
+         missing. Chat with an HTTP model (no local tools) still works here.",
+        no_sandbox_platform(),
+        sandbox_remedy()
+    )
+}
+
+/// Whether a turn may run under executor `kind`: a CLI agent (it brings its
+/// own file and shell tools) and an HTTP model offered local tools
+/// (built-in file tools, `run_command`, a stdio MCP server) need an OS
+/// sandbox; a tool-less HTTP model turn spawns nothing and always may.
+pub fn turn_allowed_on(kind: ExecutorKind, provider: ModelProviderKind, local_tools: bool) -> Result<(), String> {
+    if kind != ExecutorKind::Unconfined {
+        return Ok(());
+    }
+    if provider.is_cli_agent() {
+        return Err(no_sandbox_refusal(&format!("a {provider:?} agent turn")));
+    }
+    if local_tools {
+        return Err(no_sandbox_refusal("an agent turn with local file or shell tools"));
+    }
+    Ok(())
+}
+
+/// [`turn_allowed_on`] for this host, for a turn without Ligus's local
+/// tools (a CLI agent brings its own): the hosts' pre-check, so a refused
+/// turn says why before anything starts.
+pub fn turn_allowed(provider: ModelProviderKind) -> Result<(), String> {
+    turn_allowed_on(default_executor().kind(), provider, false)
+}
+
+/// Whether HTTP models may be offered local tools (Ligus's built-in file
+/// tools, `run_command`, stdio MCP servers) under executor `kind`.
+pub fn local_tools_allowed_on(kind: ExecutorKind) -> bool {
+    kind != ExecutorKind::Unconfined
+}
+
+/// [`local_tools_allowed_on`] for this host.
+pub fn local_tools_allowed() -> bool {
+    local_tools_allowed_on(default_executor().kind())
 }
 
 /// Whether CLI agents run inside Ligus's own OS sandbox. A CLI that would
@@ -1081,6 +1152,20 @@ pub fn prepare(spec: SpawnSpec<'_>) -> io::Result<Prepared> {
 
 /// [`prepare`] with an explicit executor (tests).
 pub fn prepare_with(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>) -> io::Result<Prepared> {
+    // No OS sandbox: nothing a model drives is spawned here, at any tier. A
+    // read-only CLI turn's read tools would reach everything the user can
+    // read (hive.db has no at-rest encryption, keys and tokens too), and a
+    // command, pre-flight test or MCP server is a model's (or an
+    // agent-written) program. Only the env allow-list stood in the way.
+    if executor.kind() == ExecutorKind::Unconfined {
+        let what = match spec.purpose {
+            Purpose::Agent(k) => format!("a {k:?} agent turn"),
+            Purpose::Tool => "a command (run_command or an approved proposal's command)".into(),
+            Purpose::Preflight => "a proposal's pre-flight test".into(),
+            Purpose::McpServer => "a stdio MCP server".into(),
+        };
+        return Err(refuse(no_sandbox_refusal(&what)));
+    }
     let policy = current_turn().unwrap_or_else(|| Arc::new(TurnPolicy::baseline(HostKind::Desktop)));
     let rt = current_runtime().unwrap_or_default();
     let agent = matches!(spec.purpose, Purpose::Agent(_));
@@ -1143,15 +1228,6 @@ pub fn prepare_with(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>) -> io::Res
     };
     let plan = EnvelopeEnforcer::plan(&inputs);
     let kind = executor.kind();
-    // `unconfined_refuses_write_tiers`: without an OS sandbox a CLI agent that
-    // can write is not run at all.
-    if kind == ExecutorKind::Unconfined && matches!(spec.purpose, Purpose::Agent(_)) && write_capable && policy.gate.allows_writes() {
-        return Err(refuse(
-            "this host has no agent sandbox (sandbox-exec on macOS; on Linux, bubblewrap with user namespaces, \
-             or Landlock on Linux 6.7+), so Ligus won't run a write-capable agent turn here; use the read-only tier, \
-             or install the sandbox (`ligus doctor` says why it's missing)",
-        ));
-    }
     let proxy = match &plan.egress {
         EgressPlan::Proxy { allow } => {
             let sock = (kind == ExecutorKind::Bwrap).then(|| tmp.join(".ligus-egress.sock"));
@@ -1193,7 +1269,7 @@ pub struct SandboxStatus {
 
 impl SandboxStatus {
     pub fn unconfined(why: String, notes: Vec<String>) -> Self {
-        SandboxStatus { kind: ExecutorKind::Unconfined, summary: format!("no agent sandbox: {why}; write-capable agent turns are refused"), notes }
+        SandboxStatus { kind: ExecutorKind::Unconfined, summary: format!("no agent sandbox: {why}; CLI agent turns, commands, MCP servers and pre-flight tests are refused (any tier); tool-less HTTP model chat still runs"), notes }
     }
 
     /// The tier's short name: `seatbelt`, `bwrap`, `landlock` or `unconfined`.

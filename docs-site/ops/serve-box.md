@@ -135,9 +135,9 @@ ligus serve enroll --new-device
 - **Install bubblewrap.** The strongest Linux sandbox needs `bwrap` and
   unprivileged user namespaces. Where bubblewrap can't create them, the box
   falls back to the [Landlock tier](linux-sandbox.md) (Linux 6.7+:
-  Landlock + seccomp, no namespaces, with known gaps); with neither it runs
-  read-only agent turns only and refuses write-capable ones
-  (`LIGUS_WORKER_PERMISSION_MODE` has no effect). Run `ligus doctor` to see
+  Landlock + seccomp, no namespaces, with known gaps); with neither it
+  refuses every CLI agent turn, read-only ones too, and every command and
+  stdio MCP server, and HTTP models answer without local tools. Run `ligus doctor` to see
   the tier. On **Ubuntu 24.04** AppArmor blocks bubblewrap's user namespace
   (`kernel.apparmor_restrict_unprivileged_userns=1`, and no bwrap profile
   ships before 24.10): the box uses the Landlock tier until you install the

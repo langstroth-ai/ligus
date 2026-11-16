@@ -492,7 +492,7 @@ async fn prepare_stage(
         );
         let posted = {
             let mut svc = state.service.lock().unwrap();
-            svc.post_user_message(session_id, workspace_id, &prompt).map_err(map_err)?
+            svc.post_workflow_stage_prompt(session_id, workspace_id, &prompt, run.id).map_err(map_err)?
         };
         return Ok(PreparedStage::Remote {
             agent_author: responder.author.clone(),
@@ -509,7 +509,7 @@ async fn prepare_stage(
     );
     {
         let mut svc = state.service.lock().unwrap();
-        svc.post_user_message(session_id, workspace_id, &prompt).map_err(map_err)?;
+        svc.post_workflow_stage_prompt(session_id, workspace_id, &prompt, run.id).map_err(map_err)?;
     }
     let session = {
         let svc = state.service.lock().unwrap();

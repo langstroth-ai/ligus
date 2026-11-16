@@ -14,11 +14,11 @@ agent sandbox: landlock
   - …
 ```
 
-| Tier | Needs | Write-capable turns |
+| Tier | Needs | Agent turns |
 |---|---|---|
 | **bwrap** (strongest) | `bwrap` and unprivileged user namespaces | run |
 | **landlock** | Linux 6.7+ with Landlock (ABI 4+) and seccomp | run, with the limits below |
-| **unconfined** | nothing | refused; read-only turns still run |
+| **unconfined** | nothing | refused at every tier, read-only included, along with `run_command`, pre-flight tests and stdio MCP servers; HTTP models answer without local tools |
 
 `LIGUS_SANDBOX=landlock` skips bubblewrap (to try the Landlock tier on a
 host that has both), `LIGUS_SANDBOX=bwrap` refuses the Landlock fallback,

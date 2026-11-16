@@ -232,7 +232,9 @@ async fn tool_loop_turn(
         .filter(|(_, r)| is_git_repo(r));
     let mut lazy: Option<Arc<LazyTurnWorktree>> = None;
     let builtin = match repo {
-        Some((f, root)) if wants_builtin_tools(rt, settings) => {
+        // Built-in file tools (and run_command) need this host's OS sandbox:
+        // without one an HTTP model gets no local tools (chat only).
+        Some((f, root)) if wants_builtin_tools(rt, settings) && hive_runtime::executor::local_tools_allowed() => {
             let wt = Arc::new(LazyTurnWorktree::new(root, f.chat_id.clone(), f.turn_key.clone()));
             // Read the chat's own base worktree (the tree its turn worktree is
             // cut from), so the model edits what it read.

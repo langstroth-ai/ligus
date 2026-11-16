@@ -9,6 +9,19 @@ Full release notes are on the
 
 ## 2.0
 
+- **Agents can't lend a turn authority.** A turn an agent starts (a
+  hand-off, an @mention cascade, a workflow stage) runs at the lowest role
+  of the humans who started the chain, on every host. Before, an agent's
+  reply your device signed counted as your own message, so a Contributor's
+  request handed on to another agent ran at your Owner tier. Agent replies
+  with no human behind them now run read-only. See
+  [the author gate](../concepts/security.md#author-gate).
+- **No sandbox, no local agents.** A host without an OS sandbox (Windows,
+  Linux without bubblewrap or Landlock, `LIGUS_SANDBOX=off`) now refuses
+  read-only CLI agent turns too, plus `run_command`, pre-flight tests and
+  stdio MCP servers; HTTP models answer there without local tools. Windows
+  isn't supported for agent turns. See
+  [the OS sandbox](../concepts/security.md#os-sandbox).
 - **Typing indicators everywhere, now encrypted.** "X is typing" works
   across the desktop and phones: the phone tells its `ligus serve` box,
   which publishes for that chat (as you, once the box is your device), and

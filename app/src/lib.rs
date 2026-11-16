@@ -6589,7 +6589,7 @@ fn context_snapshot(
     // tool definitions + guidance on an agent-tools runtime, and the
     // retrieved passages appended to the last turn.
     let rt = &responder.runtime;
-    let builtins = wants_builtin_tools(rt, state.settings.lock().unwrap().builtin_tools);
+    let builtins = wants_builtin_tools(rt, state.settings.lock().unwrap().builtin_tools) && hive_runtime::executor::local_tools_allowed();
     let mcp = rt.runs_agent_tools() && state.combined_mcp_servers().iter().any(|s| s.enabled);
     let tools_reserve = hive_runtime::agent_tools::tools_prompt_reserve_tokens(builtins, mcp) as i64;
     let retrieval = retrieval_config(state);
@@ -8425,6 +8425,9 @@ async fn run_prepared_turn_inner(
     // Below it an HTTP model gets no tools, a CLI runs read-only, and a CLI
     // with no read-only tier is refused. The author's role is the one they
     // held when they posted the message (the config roster at its frontier).
+    // An agent's message (a hand-off, an @mention cascade) has no role of its
+    // own: it resolves to the lowest of the humans behind its chain, and a
+    // workflow stage to the lower of its poster and the run's initiator.
     let gate_plan = {
         let trigger = reply_to.and_then(|id| session.messages.iter().find(|m| m.id == id));
         let author_role = {
@@ -8443,6 +8446,13 @@ async fn run_prepared_turn_inner(
         let mut svc = state.service.lock().unwrap();
         let _ = svc.post_system_note(session_id, workspace_id, format!("A {:?} turn was not run: {reason}", responder.runtime.provider));
         return Err(reason.clone());
+    }
+    // No OS sandbox on this host: a CLI agent turn is refused at any tier
+    // (its own tools would read this device's data unconfined).
+    if let Err(reason) = hive_runtime::executor::turn_allowed(responder.runtime.provider) {
+        let mut svc = state.service.lock().unwrap();
+        let _ = svc.post_system_note(session_id, workspace_id, format!("A {:?} turn was not run: {reason}", responder.runtime.provider));
+        return Err(reason);
     }
     let tools_allowed = gate_plan.allows_tools();
 
@@ -8479,7 +8489,11 @@ async fn run_prepared_turn_inner(
         // `run_command` is a shell: off whenever the envelope closes egress.
         (s.builtin_tools, s.builtin_write_in_place, s.builtin_run_command && enforcement.allow_run_command)
     };
-    let builtin_wanted = tools_allowed && wants_builtin_tools(&responder.runtime, builtin_on);
+    // Built-in file tools (and run_command) need this host's OS sandbox:
+    // without one an HTTP model gets no local tools, only chat (stdio MCP
+    // servers are refused at spawn the same way).
+    let builtin_wanted =
+        tools_allowed && wants_builtin_tools(&responder.runtime, builtin_on) && hive_runtime::executor::local_tools_allowed();
 
     // Git commit attribution: credit the human who drove this turn as the
     // commit author (+ other thread participants as co-authors), so commits a

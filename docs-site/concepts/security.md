@@ -193,12 +193,16 @@ turns refused, where neither is available. The table shows the first.
   keychain items are protected by their access lists, not by the profile.
 - **Codex** runs its commands inside Ligus's sandbox instead of its own
   (Seatbelt and bubblewrap sandboxes can't nest).
-- **No sandbox, no writing agents.** Where no sandbox is available
+- **No sandbox, no local agents.** Where no sandbox is available
   (Windows, a Linux host with neither bubblewrap and user namespaces nor
-  Landlock 6.7+, `LIGUS_SANDBOX=off`), Ligus still applies the environment
-  allow-list and cwd rules, but refuses write-capable agent turns.
-  Read-only turns still run. `ligus doctor` says which tier a host uses
-  and why.
+  Landlock 6.7+, `LIGUS_SANDBOX=off`), Ligus spawns nothing on a model's
+  behalf: every CLI agent turn (read-only ones too), `run_command`, an
+  approved proposal's command, a pre-flight test and a stdio MCP server is
+  refused, with a note naming the platform and how to get a sandbox. An
+  HTTP/API model still answers, as plain chat: it gets no built-in file
+  tools, no `run_command` and no stdio MCP servers (the Ligus chat tools,
+  which touch no local files, stay). `ligus doctor` says which tier a host
+  uses and why.
 - **The Landlock tier (Linux without user namespaces)** enforces the same
   reads, writes and egress allow-list without namespaces, with known gaps:
   TCP is limited by port rather than address, other processes are visible,
@@ -366,13 +370,23 @@ when the proposal is applied.
 later, outside the sandbox. Keeping every change as a reviewable diff is
 what makes the review gate and the human gate mean something.
 
-**No OS sandbox, no writing agents.** Where Ligus can't confine an agent
-process (`LIGUS_SANDBOX=off`, Windows, Linux without bubblewrap or user
-namespaces), write-capable agent turns are refused before they start, with
-a note in the chat. Read-only turns still run.
-*Why:* without the sandbox nothing stops a write-capable CLI from editing
-files outside its worktree, reading Ligus's keys or reaching the network
-directly. Refusing is safer than running the agent with your full user
+**No OS sandbox, no local agents.** Where Ligus can't confine an agent
+process (`LIGUS_SANDBOX=off`, Windows, Linux without bubblewrap and user
+namespaces or Landlock), every CLI agent turn is refused before it starts,
+at any tier, with a note in the chat that names the platform and the fix:
+on Linux, install bubblewrap with unprivileged user namespaces enabled, or
+run Linux 6.7+ for the Landlock tier; on macOS, Seatbelt is built in (check
+`LIGUS_SANDBOX` isn't `off`). **Windows isn't supported for agent turns**
+that run local programs: run CLI agents on a macOS or Linux host (a `ligus
+worker` or `ligus serve` box) and chat from Windows. Commands
+(`run_command`, an approved proposal's command), pre-flight tests and stdio
+MCP servers are refused the same way. HTTP/API models still answer, without
+local tools.
+*Why:* without the sandbox nothing stops a CLI from reading everything your
+user account can: Ligus's database (`hive.db` isn't encrypted at rest), its
+keys and tokens, your SSH keys. A read-only tier only stops writes, so
+refusing write-capable turns alone left every read-only turn able to read
+the data dir. Refusing is safer than running the agent with your full user
 rights and hoping its own permission prompts hold.
 
 **On workers, always-writing CLIs need an Admin author.** Codex, aider, pi
@@ -402,10 +416,30 @@ worker`, `ligus agent`) applies the same gate to every runtime:
   tier (and the OS sandbox mounts the worktree read-only), and Codex, aider,
   pi and Hermes are refused with a note in the chat. An author that can't be
   resolved is below every floor. On the desktop, your own messages always
-  clear it.
+  clear it (your own messages, not an agent's reply your device signed).
 - The author's role is the one they held **when they posted the message**
   (the roster at the message's position), so a promotion after the fact
   doesn't widen an old message's reach.
+- **An agent never lends a turn authority.** When the trigger is an
+  agent's message (a hand-off, an @mention cascade, the primary agent
+  mentioning another), it has no role of its own: Ligus follows the
+  message's reply link back through every agent hop to the human who
+  started the chain, and the turn runs at the **lowest** role of the humans
+  behind it. This holds whichever key signed the agent's message (the
+  agent's own key, or the host's when the agent has none: the device-local
+  workspace, a host without an agent vault, a key that couldn't be
+  certified). A peer device's agent message is also capped at that device's
+  own member's role, so pointing a reply link at an Owner's message borrows
+  nothing. A chain with no human behind it runs read-only.
+- **Workflow stages run at the initiator's role.** A stage prompt is posted
+  by whichever device drives the run (after a restart or a lease takeover
+  that can be another member's device), so it is judged at the lower of the
+  poster's role and the role of the member who started the run (read from
+  the signed record that created it). The approver of the workflow
+  definition isn't part of it: approval reviews what the stages say, and
+  the person who starts a run is the one whose authority it uses.
+- One shared function (`ChatService::trigger_author_role`) decides this on
+  the desktop, `ligus worker`, `ligus serve` and `ligus agent`.
 
 ## Trust this workspace {#workspace-trust}
 

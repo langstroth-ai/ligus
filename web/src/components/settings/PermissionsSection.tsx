@@ -123,7 +123,7 @@ export function PermissionsSection() {
           <p className="text-xs" style={{ color: tier === "unconfined" ? "var(--hive-danger-ink)" : "var(--hive-warm-ink)" }}>
             {tier === "landlock"
               ? "Agents run under Landlock and seccomp without bubblewrap's namespaces: a weaker sandbox than bubblewrap. "
-              : "Write-capable agent turns are refused on this device; read-only turns still run. "}
+              : "CLI agent turns (at any tier), commands, MCP servers and pre-flight tests are refused on this device; chat with an HTTP model (no local tools) still runs. "}
             {info.data?.sandboxSummary}
           </p>
           {(info.data?.sandboxNotes ?? []).length > 0 && (

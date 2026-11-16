@@ -117,6 +117,13 @@ pub struct ChatMessage {
     /// truncate a peer's in-flight stream. None on human/legacy messages.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_device_id: Option<Uuid>,
+    /// The workflow run this message is a stage prompt of. The author gate
+    /// judges such a prompt at the lower of its poster's role and the run's
+    /// initiator's (`ChatService::trigger_author_role`), so a device that
+    /// drives or recovers someone else's run can't lend the stages its own
+    /// user's tier. Self-asserted by the poster, so it can only lower a role.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_run_id: Option<Uuid>,
     #[serde(default)]
     pub tool_calls: Vec<ChatToolCall>,
     #[serde(default)]
@@ -147,6 +154,7 @@ impl ChatMessage {
             responder_id: None,
             reply_to_message_id: None,
             origin_device_id: None,
+            workflow_run_id: None,
             tool_calls: Vec::new(),
             tool_results: Vec::new(),
             reactions: Vec::new(),
