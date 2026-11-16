@@ -3664,6 +3664,9 @@ async fn phone_typing_is_published_sealed_and_expires() {
 
     let r = h.send(reqwest::Method::POST, &path, Some(json!({ "typing": true }))).await;
     assert_eq!(r["published"], json!(true));
+    // A second ping right away is throttled (only refreshes the expiry).
+    let r = h.send(reqwest::Method::POST, &path, Some(json!({ "typing": true }))).await;
+    assert_eq!(r["published"], json!(false));
     let (beats, raw) = desktop_beats(&h).await;
     let b = beats.iter().find(|b| b.session_id == chat_id).expect("the desktop sees the phone typing");
     assert!(b.typing);
@@ -3671,9 +3674,6 @@ async fn phone_typing_is_published_sealed_and_expires() {
     for leak in [chat_id.as_str(), box_actor.id.as_str(), box_actor.display_name.as_str(), "sessionId", "actorId"] {
         assert!(!raw.contains(leak), "the relay can read {leak:?}: {raw}");
     }
-    // A second ping right away is throttled (only refreshes the expiry).
-    let r = h.send(reqwest::Method::POST, &path, Some(json!({ "typing": true }))).await;
-    assert_eq!(r["published"], json!(false));
     // Stopped: at once.
     let r = h.send(reqwest::Method::POST, &path, Some(json!({ "typing": false }))).await;
     assert_eq!(r["published"], json!(true));
