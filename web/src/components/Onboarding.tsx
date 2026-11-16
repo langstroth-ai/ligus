@@ -85,7 +85,7 @@ function claudeDefaultModelFor(value: string): string {
 /// First-run wizard: identity → project folder → agent + file access → optional
 /// team. Detects what's installed (Claude Code, Ollama, API keys) to default
 /// well, and supports any OpenAI-compatible API (OpenAI/OpenRouter/local).
-export function Onboarding({ onComplete }: { onComplete: () => void }) {
+export function Onboarding({ onComplete }: { onComplete: () => void | Promise<void> }) {
   const [step, setStep] = useState(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -284,7 +284,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
         await finishStep4();
         setStep(5);
       } else {
-        onComplete();
+        await onComplete();
       }
     } catch (e) {
       setError(String(e));

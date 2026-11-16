@@ -549,6 +549,13 @@ pub struct AppSettingsDto {
     pub git_dirty_count: u32,
     /// The local user's chosen avatar (`data:` URL), or None for initials.
     pub avatar_url: Option<String>,
+    /// First-run onboarding finished on this device's data dir. False on a
+    /// fresh or factory-reset data dir, whatever the webview remembers.
+    #[serde(default)]
+    pub onboarded: bool,
+    /// The feature tour already ran once on this data dir.
+    #[serde(default)]
+    pub tour_seen: bool,
 }
 
 /// A chat opened in the transcript pane.

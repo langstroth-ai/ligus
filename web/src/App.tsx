@@ -5,6 +5,8 @@ import {
   createChat,
   ensureSelfMember,
   getAppSettings,
+  markOnboarded,
+  markTourSeen,
   listWorkspaces,
   getChat,
   listChats,
@@ -58,6 +60,7 @@ import { AddWorkspaceModal } from "@/components/AddWorkspaceModal";
 import { BindWorkspacePrompt } from "@/components/BindWorkspacePrompt";
 import { PaneErrorBoundary } from "@/components/ErrorBoundary";
 import { PANES } from "@/lib/panes";
+import { needsOnboarding as needsFirstRunOnboarding, shouldAutoTour, clearLegacyFirstRunFlags } from "@/lib/firstRun";
 import { OPEN_CHAT_EVENT, flashMessage, type OpenChatDetail } from "@/lib/nav";
 import {
   applyTheme,
@@ -217,15 +220,10 @@ export function App() {
   // labels the space by name, not by its project-folder basename.
   const workspaceList = useQuery({ queryKey: ["workspaces"], queryFn: listWorkspaces });
   const runtimes = useQuery({ queryKey: ["runtimes"], queryFn: listRuntimes });
-  const [onboarded, setOnboarded] = useState(
-    () => typeof window !== "undefined" && window.localStorage.getItem("hive.onboarded") === "1",
-  );
-  // First-run gate: until the user has set a real display name (or explicitly
-  // completed onboarding), block the shell with the onboarding flow.
-  const needsOnboarding =
-    !onboarded &&
-    settings.data != null &&
-    (settings.data.displayName.trim() === "" || settings.data.displayName.trim() === "You");
+  // First-run gate: block the shell with onboarding until the backend says
+  // THIS data dir finished it (settings.json). The webview's localStorage
+  // outlives a deleted or reset data dir, so it is never consulted here.
+  const needsOnboarding = needsFirstRunOnboarding(settings.data);
 
   // Feature tour: a spotlight walk through the shell that DRIVES the UI (it flips
   // the canvas mode and reveals panes as it goes). It's non-destructive — the
@@ -241,7 +239,13 @@ export function App() {
   }
   function endTour() {
     setTourOpen(false);
-    window.localStorage.setItem("hive.tourSeen", "1");
+    if (settings.data && !settings.data.tourSeen) {
+      void markTourSeen()
+        .then(() => qc.invalidateQueries({ queryKey: ["settings"] }))
+        .catch(() => {
+          /* best effort: the tour may auto-run once more next launch */
+        });
+    }
     const snap = tourSnapshot.current;
     if (snap) {
       setMode(snap.mode);
@@ -250,15 +254,14 @@ export function App() {
     }
     tourSnapshot.current = null;
   }
-  // Auto-run once — right after setup, and one time for existing users who
-  // predate the tour (they carry `hive.onboarded` but no `hive.tourSeen`).
+  // Auto-run once per data dir, right after setup.
+  const autoTour = shouldAutoTour(settings.data);
   useEffect(() => {
-    if (needsOnboarding || !onboarded || settings.data == null) return;
-    if (tourOpen || window.localStorage.getItem("hive.tourSeen") === "1") return;
+    if (!autoTour || tourOpen) return;
     const t = window.setTimeout(() => startTour(), 450);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [needsOnboarding, onboarded, settings.data]);
+  }, [autoTour]);
   const sync = useQuery({ queryKey: ["sync-status"], queryFn: syncStatus });
   const activeChat = useQuery({
     queryKey: ["chat", selectedId],
@@ -845,14 +848,16 @@ export function App() {
   if (needsOnboarding) {
     return (
       <Onboarding
-        onComplete={() => {
-          window.localStorage.setItem("hive.onboarded", "1");
+        onComplete={async () => {
+          // Throws into Onboarding, which shows the error on its last step.
+          await markOnboarded();
+          clearLegacyFirstRunFlags();
           // Onboarding's appearance step persisted the theme + mode to
           // localStorage; sync App's state so its own applyTheme effect doesn't
           // revert to the mount-time default.
           setPalette(loadTheme());
           setAppearanceMode(loadMode());
-          setOnboarded(true);
+          await qc.invalidateQueries({ queryKey: ["settings"] });
           refreshWorkspaceShell();
         }}
       />

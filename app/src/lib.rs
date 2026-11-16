@@ -443,6 +443,14 @@ struct LiveSettings {
     /// list = off for this chat). No entry = the workspace's choice.
     #[serde(default)]
     egress_presets_by_chat: std::collections::HashMap<String, Vec<String>>,
+    /// First-run onboarding finished on this data dir. Lives here, not in the
+    /// webview's localStorage, so a fresh (or factory-reset) data dir always
+    /// gets the first-run flow, whatever the webview remembers.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    onboarded: bool,
+    /// The feature tour auto-ran (or was closed) once on this data dir.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    tour_seen: bool,
 }
 
 /// Persisted OAuth state for one remote MCP server (see [`mcp_oauth`] +
@@ -581,6 +589,8 @@ impl Default for LiveSettings {
             workspace_dirs: std::collections::HashMap::new(),
             egress_presets_by_workspace: std::collections::HashMap::new(),
             egress_presets_by_chat: std::collections::HashMap::new(),
+            onboarded: false,
+            tour_seen: false,
         }
     }
 }
@@ -9786,7 +9796,10 @@ fn get_app_settings(state: State<AppState>) -> Result<AppSettingsDto, String> {
         .map(|s| s.account.display_name.clone())
         .unwrap_or_else(|| "You".to_string());
     let avatar_url = loaded.as_ref().and_then(|s| s.account.avatar_url.clone());
-    let git_email = state.settings.lock().unwrap().git_email.clone().unwrap_or_default();
+    let (git_email, onboarded, tour_seen) = {
+        let s = state.settings.lock().unwrap();
+        (s.git_email.clone().unwrap_or_default(), s.onboarded, s.tour_seen)
+    };
     // NB: git status is intentionally NOT computed here — it shells out to `git`
     // (expensive, especially on Windows where process spawn is slow) and was
     // making every settings refetch slow. It moved to `get_git_status`, queried
@@ -9803,7 +9816,25 @@ fn get_app_settings(state: State<AppState>) -> Result<AppSettingsDto, String> {
         git_branch: None,
         git_dirty_count: 0,
         avatar_url,
+        onboarded,
+        tour_seen,
     })
+}
+
+/// Record that first-run onboarding finished on this data dir.
+#[tauri::command]
+fn mark_onboarded(state: State<AppState>) {
+    let mut s = state.settings.lock().unwrap();
+    s.onboarded = true;
+    save_settings(&state.data_dir, &s);
+}
+
+/// Record that the feature tour ran once on this data dir.
+#[tauri::command]
+fn mark_tour_seen(state: State<AppState>) {
+    let mut s = state.settings.lock().unwrap();
+    s.tour_seen = true;
+    save_settings(&state.data_dir, &s);
 }
 
 /// Git branch + dirty-count for the active workspace. Separate from
@@ -11308,6 +11339,8 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         workspace_dirs: std::collections::HashMap::new(),
         egress_presets_by_workspace: std::collections::HashMap::new(),
         egress_presets_by_chat: std::collections::HashMap::new(),
+        onboarded: false,
+        tour_seen: false,
     };
     let settings = Arc::new(Mutex::new(load_or_seed_settings(&data_dir, env_seed)));
     {
@@ -14379,6 +14412,8 @@ pub fn run() {
             reset_chat_dispatch,
             get_workspace_diffs,
             get_app_settings,
+            mark_onboarded,
+            mark_tour_seen,
             get_git_status,
             list_runtimes,
             test_runtime,
@@ -17176,5 +17211,46 @@ mod fresh_start_tests {
         std::fs::write(legacy.join(RESET_SENTINEL), b"1").unwrap();
         assert!(prepare_data_dir(&legacy).is_err());
         assert!(legacy.join("hive.db").is_file() && legacy.join("keys/device.key").is_file());
+    }
+}
+
+#[cfg(test)]
+mod first_run_tests {
+    use super::*;
+
+    /// Onboarding completion and the tour-seen flag live in this data dir's
+    /// settings.json, so a fresh data dir is always a first run (2.0 never
+    /// reads the webview's old `hive.onboarded`/`hive.tourSeen`).
+    #[test]
+    fn first_run_flags_default_off_and_skip_when_false() {
+        let d = LiveSettings::default();
+        assert!(!d.onboarded && !d.tour_seen);
+        let v = serde_json::to_value(&d).unwrap();
+        assert!(v.get("onboarded").is_none(), "false is not written");
+        assert!(v.get("tour_seen").is_none(), "false is not written");
+        // A settings.json that predates the fields is not onboarded.
+        let old: LiveSettings = serde_json::from_str(r#"{"sync_room":"r1"}"#).unwrap();
+        assert!(!old.onboarded && !old.tour_seen);
+    }
+
+    #[test]
+    fn first_run_flags_round_trip_and_factory_reset_clears_them() {
+        let dir = std::env::temp_dir().join(format!("ligus-first-run-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        hive_runtime::secret_store::set_for_data_dir(
+            &dir,
+            std::sync::Arc::new(hive_runtime::secret_store::File0600::new(&dir)),
+        );
+        let s = LiveSettings { onboarded: true, tour_seen: true, ..LiveSettings::default() };
+        save_settings(&dir, &s);
+        let back = load_or_seed_settings(&dir, LiveSettings::default());
+        assert!(back.onboarded && back.tour_seen);
+
+        // A factory reset wipes settings.json: the next launch is a first run.
+        std::fs::write(dir.join(RESET_SENTINEL), b"1").unwrap();
+        prepare_data_dir(&dir).unwrap();
+        let after = load_or_seed_settings(&dir, LiveSettings::default());
+        assert!(!after.onboarded && !after.tour_seen, "onboarding shows again after a reset");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

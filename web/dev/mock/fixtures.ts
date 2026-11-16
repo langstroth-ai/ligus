@@ -13,6 +13,8 @@ export const settings = (onboarding: boolean) => ({
   gitBranch: "main",
   gitDirtyCount: 3,
   avatarUrl: null,
+  onboarded: !onboarding,
+  tourSeen: true,
 });
 
 export const workspaces = [
