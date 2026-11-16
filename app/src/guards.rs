@@ -784,7 +784,9 @@ fn egress_decision(source: &str, reason: &str) -> GuardSignal {
 /// Authenticated HTTP servers are left out: their token would have to ride
 /// the command line, where any local process can read it.
 fn claude_mcp_entries(state: &AppState, egress: &hive_core::sandbox::EgressPolicy) -> Vec<(String, serde_json::Value)> {
-    if !matches!(egress, hive_core::sandbox::EgressPolicy::AllowList { .. }) {
+    // Every turn runs Claude Code with a strict MCP config (open egress
+    // too), so the chat's servers ride it; none while egress is closed.
+    if matches!(egress, hive_core::sandbox::EgressPolicy::Closed) {
         return Vec::new();
     }
     filter_mcp_servers(state, state.combined_mcp_servers(), egress)
@@ -829,6 +831,7 @@ pub(crate) fn turn_sandbox_policy(
     // Opt-in egress presets (device-local). The plan applies them only under
     // an open envelope, so dearth mode and a lockdown override them.
     policy.egress_presets = chat_egress_presets(state, session.workspace_id, session.id);
+    policy.cli_user_config = workspace_cli_user_config(state, session.workspace_id);
     for s in state.combined_mcp_servers().into_iter().filter(|s| s.enabled && envelope.egress.allows_mcp(&s.id)) {
         if let hive_runtime::McpTransport::Http { url } = &s.transport {
             policy.mcp_hosts.extend(hive_runtime::egress::HostPort::from_url(url));
@@ -909,6 +912,34 @@ pub(crate) fn get_egress_presets(state: State<AppState>, session_id: Option<Stri
         host,
         restricted_by,
     })
+}
+
+/// Whether `workspace_id`'s CLI agents run with the user's own CLI setup.
+pub(crate) fn workspace_cli_user_config(state: &AppState, workspace_id: Uuid) -> bool {
+    state.settings.lock().unwrap().cli_user_config_workspaces.contains(&workspace_id.to_string())
+}
+
+/// Whether the active workspace's CLI agents use the user's own CLI setup
+/// (Claude Code: user settings, hooks, plugins, skills). Device-local.
+#[tauri::command]
+pub(crate) fn get_workspace_cli_user_config(state: State<AppState>) -> bool {
+    workspace_cli_user_config(&state, state.active_workspace_id())
+}
+
+/// Opt the active workspace's CLI agents into (or out of) the user's own
+/// CLI setup on this device. The tools that run work outside the turn stay
+/// off either way, and the opt-in is ignored while egress is restricted.
+#[tauri::command]
+pub(crate) fn set_workspace_cli_user_config(state: State<AppState>, enabled: bool) -> Result<(), String> {
+    let ws = state.active_workspace_id().to_string();
+    let mut s = state.settings.lock().unwrap();
+    if enabled {
+        s.cli_user_config_workspaces.insert(ws);
+    } else {
+        s.cli_user_config_workspaces.remove(&ws);
+    }
+    crate::save_settings(&state.data_dir, &s);
+    Ok(())
 }
 
 /// Turn presets on or off for the active workspace (device-local).

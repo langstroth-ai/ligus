@@ -35,6 +35,18 @@ fn extract_agent_message(line: &str) -> Option<String> {
     Some(item.get("text")?.as_str()?.to_string())
 }
 
+/// Codex's share of a turn's confinement: without the workspace's opt-in
+/// (or under restricted egress) `--ignore-user-config`, so the user's
+/// `config.toml` (its MCP servers, `notify` program, web search and
+/// provider settings) doesn't reach a Ligus turn; the sign-in still loads.
+pub fn confine_args(c: super::claude_code::Confine) -> Vec<String> {
+    if c.user_config && c.egress_open {
+        Vec::new()
+    } else {
+        vec!["--ignore-user-config".into()]
+    }
+}
+
 /// Stream a reply from the Codex CLI. `program` is the binary (default `codex`);
 /// `model` maps to `-m`; `extra_args` are appended before the prompt.
 pub async fn stream_reply(
@@ -62,6 +74,7 @@ pub async fn stream_reply(
         "--color".into(),
         "never".into(),
     ];
+    args.extend(confine_args(super::claude_code::Confine::current()));
     if !model.is_empty() {
         args.push("-m".into());
         args.push(model.to_string());
@@ -127,6 +140,15 @@ pub async fn stream_reply(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_codex_config_only_with_opt_in_and_open_egress() {
+        use super::super::claude_code::Confine;
+        let c = Confine { egress_open: true, user_config: false, writes_allowed: true, connectors: false };
+        assert_eq!(confine_args(c), vec!["--ignore-user-config"]);
+        assert!(confine_args(Confine { user_config: true, ..c }).is_empty());
+        assert_eq!(confine_args(Confine { user_config: true, egress_open: false, ..c }), vec!["--ignore-user-config"]);
+    }
 
     #[test]
     fn parses_agent_message_events() {

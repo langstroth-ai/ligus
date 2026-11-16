@@ -21,6 +21,8 @@ vi.mock("@/lib/ipc", () => ({
   getEgressPresets: vi.fn(async () => ({ available: [], workspace: [], chat: null, host: [], restrictedBy: "" })),
   setWorkspaceEgressPresets: vi.fn(async () => {}),
   setChatEgressPresets: vi.fn(async () => {}),
+  getWorkspaceCliUserConfig: vi.fn(async () => false),
+  setWorkspaceCliUserConfig: vi.fn(async () => {}),
   setDearthMode: (...a: unknown[]) => setDearthMode(...(a as [])),
   approveJoin: (...a: unknown[]) => approveJoin(...(a as [])),
 }));

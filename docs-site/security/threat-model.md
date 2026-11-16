@@ -302,6 +302,18 @@ each stays on this list until a release fixes it.
     never applies a plaintext body from the relay, so events a workspace
     stored on a relay before it had a key don't appear on devices that sync
     them later. Devices that already held them keep them.
+21. **A shell-tier Claude Code turn holds your Claude account.** Ligus
+    starts Claude Code without cloud routines, scheduled tasks, background
+    monitors, push, your plugins, hooks or MCP servers
+    ([details](../concepts/security.md#claude-code-turn)), but at the
+    *Edits + shell* tier and above the agent can start its own `claude`
+    with other flags, and your login is reachable from the sandbox. That
+    `claude` can create a cloud routine that runs on Anthropic's side; the
+    egress proxy can't tell it from a model call (same host). Cron,
+    background tasks and workflows stay off through the inherited env. Use
+    a non-shell tier for chats whose input you don't trust. Copilot and
+    Antigravity still load your own MCP servers and plugins (no strict
+    switch), and Codex over ACP isn't confined to Ligus's MCP servers yet.
 
 ## Out of scope {#out-of-scope}
 
@@ -329,6 +341,8 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 | Host | Ligus's own git calls ran repository hooks and fsmonitor | They never do |
 | Host | Agent CLIs, MCP servers, pre-flight and git inherited Ligus's secrets | Child processes start from an allow-listed environment: no Ligus secrets, and only the provider key configured for that runtime |
 | Host | Restricted egress still loaded the repository's Claude Code settings and hooks | Under restricted egress Claude Code loads user settings only, with hooks off |
+| Host | A Claude Code turn inherited the user's whole Claude Code setup: cloud routines and remote triggers (run on Anthropic's side under the user's account and connectors), cron, background monitors, push, cross-session messaging, workflows, user and plugin MCP servers, hooks, plugins and skills | Every turn gets a built-in tool allow-list, the out-of-turn tools denied (by flag, in the turn home's settings, and by env), strict MCP with only Ligus's and the chat's servers, and no settings, hooks, plugins or skills unless the workspace opts in ([details](../concepts/security.md#claude-code-turn)) |
+| Host | Ligus's own MCP tools were refused in non-interactive Claude Code, Copilot and ACP turns (nobody to approve them) | Pre-approved: `--allowedTools mcp__ligus`, `--allow-tool=ligus`, and ACP permission requests for Ligus tools |
 | Host | Chat markdown loaded remote images, an exfiltration channel | Remote images render as links |
 | Host | A keyed workspace accepted plaintext bodies from the relay, so a relay could inject events | Keyed workspaces skip any unsealed body |
 | Host | `ligus enroll` wrote `config.toml` world-readable | `0600`, data dir `0700` |

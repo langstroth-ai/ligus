@@ -688,6 +688,11 @@ pub struct TurnPolicy {
     /// Endpoints the turn's egress proxies refused (host and port only),
     /// collected for the host to record as a content-free decision.
     pub denials: Arc<std::sync::Mutex<Vec<HostPort>>>,
+    /// The workspace opted its CLI agents into the user's own CLI setup
+    /// (Claude Code: user settings, hooks, plugins and skills). Off by
+    /// default; ignored while egress isn't open. See
+    /// `provider::claude_code::confine`.
+    pub cli_user_config: bool,
 }
 
 impl TurnPolicy {
@@ -713,6 +718,7 @@ impl TurnPolicy {
             ligus_mcp_socket: None,
             egress_presets: Vec::new(),
             denials: Default::default(),
+            cli_user_config: false,
         }
     }
 }
@@ -1098,7 +1104,8 @@ pub fn prepare_with(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>) -> io::Res
     let cli_home_dir = match spec.purpose {
         Purpose::Agent(k) if k.is_cli_agent() && cli_home::enabled() => {
             let h = tmp.join("home");
-            cli_home::populate(k, &home, &h)?;
+            let user_config = current_turn().is_some_and(|p| p.cli_user_config && p.envelope.egress.is_open());
+            cli_home::populate_with(k, &home, &h, user_config)?;
             Some((k, h))
         }
         _ => None,

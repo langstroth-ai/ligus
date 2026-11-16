@@ -58,6 +58,9 @@ pub fn build_args(model: &str, extra_args: &[String], prompt: String) -> Vec<Str
         "on".into(),
         // Never pause to ask the (absent) user a question.
         "--no-ask-user".into(),
+        // No built-in GitHub MCP server (it acts on GitHub with the user's
+        // sign-in); a Ligus turn gets only the servers Ligus passes.
+        "--disable-builtin-mcps".into(),
         "--no-color".into(),
     ];
     if !model.trim().is_empty() {
@@ -328,5 +331,6 @@ mod tests {
         assert!(a.windows(2).any(|w| w == ["--model", "gpt-5.3-codex"]));
         assert!(a.windows(2).any(|w| w == ["--output-format", "json"]));
         assert!(a.contains(&"--no-ask-user".to_string()));
+        assert!(a.contains(&"--disable-builtin-mcps".to_string()), "the GitHub MCP server stays off: {a:?}");
     }
 }
