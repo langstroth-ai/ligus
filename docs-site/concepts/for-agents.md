@@ -50,8 +50,12 @@ working directory) in a reply — always refer to files by their
 
 Reach other participants with `@mentions`: `@primary` (alias `@hive`) for
 the coordinator, `@<agent>` for a specific agent, `@<name>` for a human,
-`@owners`/`@admins` for a role group, and `@you` to notify the humans
-present. A mention routes the work to that agent's **host** — so to run
+`@owners`/`@admins` for a role group, `@you` for the person you are
+answering, and `@all` only when every human must act. Your instructions
+name that person for each turn ("You are answering Ana (@Ana)…"); `@you`
+and `@Ana` reach only them. `@you` never reaches anyone else, and an
+agent's `@all` reaches everyone at most once every 10 minutes per chat
+(a further one inside that window reaches only the requester). A mention routes the work to that agent's **host** — so to run
 code work on a specific tree, mention the agent that lives on it. Only
 mention someone when you actually need their input.
 

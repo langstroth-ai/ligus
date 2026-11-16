@@ -76,14 +76,15 @@ impl Me {
         }
     }
 
-    /// `body` mentions the user: by name/handle, `@you` / `@all`, or a role
-    /// group the user is in (`@owners`, …).
-    pub fn mentioned_in(&self, body: &str, s: &ChatSession) -> bool {
-        if !body.contains('@') {
+    /// Message `m` mentions the user: by name/handle, `@all`, a role group the
+    /// user is in (`@owners`, …), or — in an agent's reply — `@you` when the
+    /// user is the person the reply answers (its requester). `@you` never
+    /// reaches anyone else, and means nothing in a person's own message.
+    pub fn mentioned_in(&self, m: &ChatMessage, s: &ChatSession) -> bool {
+        if !m.body.contains('@') {
             return false;
         }
-        let t = hive_runtime::parse_mentions(body, s);
-        t.human_broadcast || t.humans.iter().any(|h| self.ids.contains(h)) || t.roles.iter().any(|r| self.roles.contains(r))
+        hive_runtime::message_mentions(m, s).reaches(|id| self.ids.contains(id), &self.roles, &self.display_name)
     }
 }
 
@@ -110,7 +111,7 @@ pub fn for_message(s: &ChatSession, m: &ChatMessage, done: bool, me: &Me) -> Opt
     let failed = reply && m.body.starts_with("[error]");
     // A name in a notification is shown like anywhere else (S3).
     let author = hive_proto::names::clean_display_name(&m.author);
-    if !failed && me.mentioned_in(&m.body, s) {
+    if !failed && me.mentioned_in(m, s) {
         let notice = ntfy::mention_notice(&author, &s.title, s.id);
         let mut push = base("mention", s, notice.title.clone());
         push.sender = Some(author.clone());
@@ -327,6 +328,118 @@ mod tests {
         assert!(for_message(&f.s, &from(&f.other, "mail zoe@example.com"), false, &me).is_none());
         // Mentioning someone else.
         assert!(for_message(&f.s, &from(&f.me_actor, "@Ana ping"), false, &Me::in_chat(&f.other, &f.s, &f.links)).is_some());
+    }
+
+    /// Three people, each with their own box: Ana asks (contributor), Ben is
+    /// another member (contributor), Olu owns the workspace.
+    fn trio() -> (ChatSession, [ActorIdentity; 3]) {
+        let (ana, ben, olu) = (actor("ana-1", "Ana"), actor("ben-1", "Ben"), actor("olu-1", "Olu"));
+        let mut s = ChatSession::new("Release", Uuid::new_v4(), "rt");
+        s.members = vec![
+            member(&olu, WorkspaceRole::Owner, 1),
+            member(&ana, WorkspaceRole::Contributor, 2),
+            member(&ben, WorkspaceRole::Contributor, 3),
+        ];
+        s.workspace_agents = vec![WorkspaceAgent::new("coder", "rt")];
+        (s, [ana, ben, olu])
+    }
+
+    /// Who of the three gets a `mention` push for message `m`.
+    fn pinged(s: &ChatSession, m: &ChatMessage, people: &[ActorIdentity; 3]) -> Vec<String> {
+        let done = matches!(m.role, MessageRole::Assistant | MessageRole::Agent);
+        people
+            .iter()
+            .filter(|p| {
+                let me = Me::in_chat(p, s, &DeviceLinks::default());
+                for_message(s, m, done, &me).is_some_and(|(_, push)| push.kind == "mention")
+            })
+            .map(|p| p.display_name.clone())
+            .collect()
+    }
+
+    fn answer(s: &mut ChatSession, to: &ChatMessage, body: &str) -> ChatMessage {
+        s.messages.push(to.clone());
+        let mut r = reply(body);
+        r.reply_to_message_id = Some(to.id);
+        s.messages.push(r.clone());
+        r
+    }
+
+    #[test]
+    fn an_agents_at_you_pings_only_the_requester() {
+        let (mut s, people) = trio();
+        let ask = from(&people[0], "@coder fix the build");
+        let r = answer(&mut s, &ask, "Fixed. @you can you confirm on your machine?");
+        assert_eq!(pinged(&s, &r, &people), vec!["Ana"]);
+        // The others still get the ordinary reply notice, not a mention.
+        let ben = Me::in_chat(&people[1], &s, &DeviceLinks::default());
+        assert_eq!(for_message(&s, &r, true, &ben).unwrap().1.kind, "message.done");
+    }
+
+    #[test]
+    fn an_agents_at_all_pings_everyone_but_a_second_one_soon_after_only_the_requester() {
+        let (mut s, people) = trio();
+        let ask = from(&people[0], "@coder ship it");
+        let r = answer(&mut s, &ask, "@all v2 is out");
+        assert_eq!(pinged(&s, &r, &people), vec!["Ana", "Ben", "Olu"]);
+        let again = from(&people[0], "@coder and the notes?");
+        let r2 = answer(&mut s, &again, "@all notes are up");
+        assert_eq!(pinged(&s, &r2, &people), vec!["Ana"]);
+    }
+
+    #[test]
+    fn the_phone_is_told_who_at_you_is_and_whether_it_is_them() {
+        let (mut s, people) = trio();
+        let ask = from(&people[0], "@coder fix it");
+        let r = answer(&mut s, &ask, "@you fixed");
+        for (p, mine) in people.iter().zip([true, false, false]) {
+            let me = Me::in_chat(p, &s, &DeviceLinks::default());
+            let mut v = crate::serve::api::message_dto(s.id, &r, crate::serve::api::Viewer::default());
+            crate::serve::api::add_requester(&mut v, &s, &r, &me);
+            assert_eq!(v["requester"]["name"], "Ana", "{}", p.display_name);
+            assert_eq!(v["requester"]["actorId"], "ana-1");
+            assert_eq!(v["requester"]["isYou"], mine, "{}", p.display_name);
+            assert_eq!(v["body"], "@you fixed", "the body is not rewritten");
+        }
+        // A person's @you carries no requester.
+        let m = from(&people[1], "thanks @you");
+        s.messages.push(m.clone());
+        let mut v = crate::serve::api::message_dto(s.id, &m, crate::serve::api::Viewer::default());
+        crate::serve::api::add_requester(&mut v, &s, &m, &Me::in_chat(&people[0], &s, &DeviceLinks::default()));
+        assert!(v.get("requester").is_none());
+    }
+
+    #[test]
+    fn a_persons_at_you_pings_nobody() {
+        let (mut s, people) = trio();
+        let m = from(&people[1], "thanks @you");
+        s.messages.push(m.clone());
+        assert!(pinged(&s, &m, &people).is_empty());
+        // …while a person's @all still reaches the other two.
+        let all = from(&people[1], "@all standup");
+        s.messages.push(all.clone());
+        assert_eq!(pinged(&s, &all, &people), vec!["Ana", "Olu"]);
+    }
+
+    #[test]
+    fn at_you_with_no_requester_pings_nobody() {
+        let (mut s, people) = trio();
+        let r = reply("@you done");
+        s.messages.push(r.clone());
+        assert!(pinged(&s, &r, &people).is_empty());
+    }
+
+    #[test]
+    fn solo_owner_still_gets_at_you() {
+        // The single-user case tested on the real phone: the owner's box.
+        let f = fixture();
+        let mut s = f.s.clone();
+        let desktop = s.members[0].actor.clone();
+        let ask = from(&desktop, "status?");
+        let r = answer(&mut s, &ask, "@you all green");
+        let me = Me::in_chat(&f.me_actor, &s, &f.links);
+        let (_, p) = for_message(&s, &r, true, &me).unwrap();
+        assert_eq!(p.kind, "mention");
     }
 
     #[test]

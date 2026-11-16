@@ -135,7 +135,7 @@ sequenceDiagram
   end
   C->>S: complete_assistant_message (MessageCompleted)
   C-->>U: emit chat://stream {completed}
-  Note over C: reply mentions another @agent → cascade (bounded);<br/>reply @you-mentions a human → native notification
+  Note over C: reply mentions another @agent → cascade (bounded);<br/>reply @you-mentions its requester → native notification (requester only)
 ```
 
 ---

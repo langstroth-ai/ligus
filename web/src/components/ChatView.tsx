@@ -1104,6 +1104,8 @@ export function ChatView({
                   handle={handle}
                   responderName={m.role === "assistant" ? m.responderName ?? undefined : undefined}
                   responderDevice={m.role === "assistant" ? m.responderDevice ?? undefined : undefined}
+                  requesterName={m.requesterName ?? undefined}
+                  requesterIsViewer={m.requesterIsViewer}
                   body={m.body}
                   createdAt={m.createdAt}
                   streaming={m.isStreaming}
@@ -1725,7 +1727,7 @@ export function extractFileRefs(body: string): string[] {
 /// attachments show an inline thumbnail (loaded from the local file as a data
 /// URL); non-images — and images whose bytes aren't on this device — show a
 /// filename chip.
-function MessageBody({ body }: { body: string }) {
+function MessageBody({ body, youName, youIsMe }: { body: string; youName?: string; youIsMe?: boolean }) {
   const { text, paths, blobs } = splitAttachments(body);
   const fileRefs = extractFileRefs(text);
   const attCtx = useContextMenu();
@@ -1738,7 +1740,7 @@ function MessageBody({ body }: { body: string }) {
   ];
   return (
     <>
-      {text && <Markdown content={text} />}
+      {text && <Markdown content={text} youName={youName} youIsMe={youIsMe} />}
       {fileRefs.length > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-1.5">
           {fileRefs.map((p) => (
@@ -1945,6 +1947,8 @@ const Bubble = memo(function Bubble({
   handle,
   responderName,
   responderDevice,
+  requesterName,
+  requesterIsViewer = false,
   body,
   createdAt,
   streaming = false,
@@ -1973,6 +1977,10 @@ const Bubble = memo(function Bubble({
   /// same-named default agents are distinguishable.
   responderName?: string;
   responderDevice?: string;
+  /// An agent reply's `@you`: the requester it addresses, shown as
+  /// `@<name>`; `requesterIsViewer` marks it as mentioning the viewer.
+  requesterName?: string;
+  requesterIsViewer?: boolean;
   body: string;
   createdAt?: string;
   streaming?: boolean;
@@ -2032,11 +2040,11 @@ const Bubble = memo(function Bubble({
     // content, so each delta re-parses the accumulated text once; partial/unclosed
     // markup (an open ``` fence) renders gracefully. The caret trails the content.
     <div className="hive-stream">
-      <MessageBody body={body} />
+      <MessageBody body={body} youName={requesterName} youIsMe={requesterIsViewer} />
       <span className="tt-caret" />
     </div>
   ) : body ? (
-    <MessageBody body={body} />
+    <MessageBody body={body} youName={requesterName} youIsMe={requesterIsViewer} />
   ) : toolCalls && toolCalls.length > 0 ? null : (
     <span className="opacity-50">…</span>
   );

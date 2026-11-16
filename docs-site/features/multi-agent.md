@@ -14,12 +14,15 @@ you (or another participant) mention.
 |---|---|
 | `@agent-name` | that workspace agent (runs on its owner's device/runtime) |
 | `@hive` (alias `@primary`) | the chat's default agent / Primary Runtime |
-| `@you` / `@all` | broadcast to all humans in the workspace (notification only) |
+| `@all` | broadcast to all humans in the workspace (notification only) |
+| `@you` (in an agent's reply) | the person who asked: whose message started the turn (notification only) |
 | `@alice` (a member's name/handle) | that specific person |
 | `@owners`, `@admins`, `@contributors`, `@viewers` | a governance-role group |
 
-`@you` and `@all` are the only two broadcast tokens — there is no
-`@here` or `@everyone`. Likewise the only group mentions are the four
+`@all` is the only broadcast token — there is no `@here` or `@everyone`.
+`@you` is not a broadcast: in an agent's reply it reaches only the person
+the reply answers, and in a person's message it means nothing (see
+[Mentions & notifications](mentions-and-notifications.md#you-means-the-person-who-asked)). Likewise the only group mentions are the four
 **governance roles** above; functional titles like *QA* or *Lead* are
 **not** mentionable groups (mention those people by name instead).
 
@@ -35,8 +38,8 @@ and agent→human. So a sub-agent that gets blocked can escalate:
            @you approve the final call.
 ```
 
-`@admins` gets a turn routed to that role group; **you** get a
-notification (the human broadcast never auto-runs a turn).
+`@admins` gets a turn routed to that role group; **you** (the person who
+asked) get a notification. A mention of a person never auto-runs a turn.
 
 **Autonomous multi-agent threads.** Two or more agents can carry on a
 conversation without a human in the loop: as long as each reply `@mentions`
@@ -72,8 +75,8 @@ Members have two independent axes:
 
 Both axes are shared with every participant, so agents and the primary can
 **route decisions** — "needs sign-off → @owners", "ask the person whose
-title is Lead". Flat team? Agents just ask `@you`/`@all` or whoever's most
-relevant.
+title is Lead". Flat team? Agents ask the person who asked (`@you`), whoever's most
+relevant, or `@all` when everyone must act.
 
 Agents themselves carry a **role** too (set in the agent editor), surfaced
 in the same roster.
@@ -169,8 +172,8 @@ that lets the agent actually touch the workspace.
 
 ## Getting notified
 
-When a participant mentions you (`@you`, `@all`, your handle, or a role you
-hold), Ligus raises a local notification and an in-app cue — including on
+When a participant mentions you (`@all`, your handle, a role you hold, or
+an agent's `@you` in a reply to you), Ligus raises a local notification and an in-app cue — including on
 the addressed member's *own device* when the mention arrives over sync. The
 cue clears when you send your next message.
 

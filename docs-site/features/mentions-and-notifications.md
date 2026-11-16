@@ -14,9 +14,46 @@ A message pings you when it isn't yours and it carries any of:
 
 | Mention | Reaches you because… |
 |---|---|
-| `@you` / `@all` | the two human-broadcast tokens |
+| `@all` | the human broadcast: every member |
+| `@you` in an **agent's** reply | you are the person the reply answers (see below) |
 | `@yourname` / `@name#N` | it names you by handle (the `#N` disambiguates duplicates) |
 | `@owners` `@admins` `@contributors` `@viewers` | it names the governance role you hold |
+
+### `@you` means the person who asked
+
+When an agent writes `@you`, it means the **requester**: the person whose
+message started the turn. Ligus follows the reply back to the message it
+answers, through any hand-offs between agents, to the first message a
+person wrote; for a workflow stage that is the person who started the run.
+Only that person is pinged — on the desktop, in the sidebar, and on their
+phone. Everyone else in the chat sees the reply but gets no mention.
+
+- In the chat, an agent's `@you` is shown as `@<requester's name>` with
+  mention styling, highlighted as "mentions you" only for the requester.
+  The message itself still says `@you`: signed messages are never
+  rewritten, only displayed differently.
+- If no person started the chain (an agent started it, or a reply from
+  before Ligus 2.0 has no link to what it answered), `@you` reaches nobody.
+  It never falls back to everyone.
+- `@you` in a **person's** message means nothing: it doesn't ping you or
+  anyone else.
+- Alone in a workspace, you are always the requester, so an agent's `@you`
+  reaches you exactly as before.
+
+Each agent's instructions name the requester for the turn ("You are
+answering Ana (@Ana)…") and tell it to use `@you` or their handle to
+address them, and `@all` only when every person must act.
+
+### `@all` from an agent
+
+`@all` is the only broadcast; there is no `@here` or `@everyone`. A
+person's `@all` always reaches everyone. An agent's `@all` reaches
+everyone too, but at most **once every 10 minutes per chat**: a further
+agent `@all` in the same chat inside that window reaches only its
+requester. The rule is worked out from the chat itself, so your desktop,
+your phone's host and every other member's devices agree on it without
+coordinating. It caps the noise an agent can make without asking anyone
+to configure which agents may broadcast.
 
 Agent mentions (`@agent-name`) never ping a human — they route a turn
 to that agent. An *unanswered* agent mention is **queued work**, shown
@@ -33,7 +70,8 @@ or arrived over sync, the trigger is the same.
 
 With a `ligus serve` host set up for the phone app, a mention of you (and a
 workflow waiting at an approval gate) can also reach your phone as a push
-notification. Previews are plain text, cut to a short line, and each phone
+notification. The same rules apply: an agent's `@you` pushes only to the
+requester's phone, and the phone shows it as `@<name>` too. Previews are plain text, cut to a short line, and each phone
 can turn previews off. See [Ligus on your phone](phone-app.md).
 
 ## Sidebar highlights

@@ -1052,6 +1052,11 @@ async fn cmd_agent(cfg: &Config, name: String, runtime_id: Option<String>) -> Re
                 turn_rt.args.extend(enforcement.extra_args);
                 let allow_mcp = allow_mcp && enforcement.allow_run_command;
                 let sandbox = hive_runtime::executor::TurnPolicy::new(hive_runtime::executor::HostKind::Agent, envelope, plan.clone());
+                // Who the turn answers (what the reply's `@you` means).
+                let system = match hive_runtime::prompt::requester_guidance(&s, Some(last.id)) {
+                    g if g.is_empty() => system.clone(),
+                    g => format!("{system}\n\n{g}"),
+                };
                 let reply = hive_runtime::executor::with_turn(sandbox, reply::generate_reply(&turn_rt, &system, &turns, allow_mcp, None)).await?;
                 let mid = svc.begin_assistant_message(s.id, s.workspace_id, name.clone(), rt_label.clone(), None, Some(last.id))?;
                 svc.complete_assistant_message(s.id, s.workspace_id, mid, reply)?;

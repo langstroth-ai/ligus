@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { detectMention, filterMentions, type MentionCandidate } from "./mentions";
+import { cleanName, detectMention, filterMentions, splitYouMentions, type MentionCandidate } from "./mentions";
 
 describe("detectMention", () => {
   it("detects a bare @ at the caret", () => {
@@ -56,5 +56,20 @@ describe("filterMentions", () => {
   it("respects the limit", () => {
     const many = Array.from({ length: 20 }, (_, i) => ({ handle: `a${i}`, kind: "x" }));
     expect(filterMentions(many, "a", 5)).toHaveLength(5);
+  });
+});
+
+describe("splitYouMentions", () => {
+  it("splits around @you with the parser's boundaries", () => {
+    expect(splitYouMentions("@you can you check?")).toEqual([null, " can you check?"]);
+    expect(splitYouMentions("Done, @You.")).toEqual(["Done, ", null, "."]);
+    expect(splitYouMentions("mail me@you.io or @young")).toEqual(["mail me@you.io or @young"]);
+    expect(splitYouMentions("@you-know-who")).toEqual(["@you-know-who"]);
+  });
+});
+
+describe("cleanName", () => {
+  it("drops hidden characters and collapses whitespace", () => {
+    expect(cleanName(" A‮na​  B ")).toBe("Ana B");
   });
 });

@@ -78,8 +78,14 @@ Rules:
   in yet).
 - **"You"** is this host's identity (the one the phone posts as) and any
   member that shares its account or its display name, such as your desktop.
-  A mention is `@<your name>` (or `@<name>#<n>`), `@you` / `@all`, or a role
-  group you're in (`@owners`, `@admins`, …). Your own messages never notify.
+  A mention is `@<your name>` (or `@<name>#<n>`), `@all`, a role group you're
+  in (`@owners`, `@admins`, …), or `@you` in an agent's reply whose requester
+  (the person whose message started the turn) is you. A person's `@you` is
+  nothing; an agent's `@you` with no requester reaches nobody; an agent's
+  `@all` within 10 minutes of another agent `@all` in the chat reaches only
+  its requester. Your own messages never notify. Message JSON for an agent
+  reply with `@you` carries `requester {name, actorId, isYou}` so the phone
+  renders `@you` as `@<name>`.
 - **Only news.** Replies, proposals and gates created more than 10 minutes
   before `hive serve` started (history that synced in late) don't push, and a
   restart never replays.

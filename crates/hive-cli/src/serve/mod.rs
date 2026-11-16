@@ -685,11 +685,13 @@ impl Shared {
                         let Some(s) = sessions.iter().find(|s| s.id == chat) else { continue };
                         let Some(m) = s.messages.iter().find(|m| m.id == message) else { continue };
                         let name = if done { "message.done" } else { "message.created" };
-                        self.hub.emit(name, hub::wrap("message", api::message_dto(chat, m, viewer)));
+                        let me = notify::Me::in_chat(&author, s, &links);
+                        let mut dto = api::message_dto(chat, m, viewer);
+                        api::add_requester(&mut dto, s, m, &me);
+                        self.hub.emit(name, hub::wrap("message", dto));
                         // Agent replies notify when done; other members'
                         // messages when they appear (only if they mention you).
                         if self.fresh(m.created_at) {
-                            let me = notify::Me::in_chat(&author, s, &links);
                             notices.extend(notify::for_message(s, m, done, &me));
                         }
                     }

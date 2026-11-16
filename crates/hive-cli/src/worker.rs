@@ -436,6 +436,11 @@ async fn run_turn(
         // every turn: the phone can switch a chat's repo between turns.
         crate::repos::turn_context(&ctx.cfg.data_dir, s.id)
     );
+    // Who the turn answers (what the reply's `@you` means).
+    let system = match hive_runtime::prompt::requester_guidance(&s, Some(pm.message_id)) {
+        g if g.is_empty() => system,
+        g => format!("{system}\n\n{g}"),
+    };
     // H1 gate: resolve the triggering message's author + role. At or above
     // this host's floor (Admin for a write-capable tier, Contributor for a
     // read-only one; LIGUS_MCP_MIN_ROLE overrides) the turn runs at its

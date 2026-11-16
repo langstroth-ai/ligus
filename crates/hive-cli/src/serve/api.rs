@@ -232,6 +232,23 @@ pub fn message_dto(chat: Uuid, m: &ChatMessage, viewer: Viewer) -> Value {
     v
 }
 
+/// An agent reply that writes `@you`: who it addresses — `requester`
+/// `{ name, actorId, isYou }`, the person whose message started the turn —
+/// so the phone shows `@you` as `@<name>` and highlights it only for them.
+/// Rendering only: `body` keeps `@you`. Absent otherwise.
+pub fn add_requester(v: &mut Value, chat: &ChatSession, m: &ChatMessage, me: &super::notify::Me) {
+    if !hive_runtime::parse_mentions(&m.body, chat).you {
+        return;
+    }
+    let Some(r) = hive_runtime::requester_of(chat, m) else { return };
+    let name = hive_proto::names::clean_display_name(&r.display_name);
+    if name.is_empty() {
+        return;
+    }
+    let is_you = me.is(&r.actor_id) || r.member_id.as_deref().is_some_and(|id| me.is(id));
+    v["requester"] = json!({ "name": name, "actorId": r.actor_id, "isYou": is_you });
+}
+
 /// [`message_dto`], with a message by a person's other identity — the separate
 /// member this box used before it was enrolled as its owner's device — shown as
 /// theirs: `author` "Alex via Phone", `actorId` the owner's (for the avatar),
@@ -717,11 +734,19 @@ async fn list_messages(State(s): S, Path(id): Path<String>, Query(page): Query<P
     if let Some(last) = slice.last() {
         s.mark_read(&chat, last.id);
     }
-    let (links, viewer) = {
+    let (links, viewer, author) = {
         let svc = s.lock();
-        (svc.device_links(s.ws).unwrap_or_default(), Viewer::of(&svc))
+        (svc.device_links(s.ws).unwrap_or_default(), Viewer::of(&svc), svc.author().clone())
     };
-    let list: Vec<Value> = slice.iter().map(|m| linked_message_dto(&chat, m, &links, viewer)).collect();
+    let me = super::notify::Me::in_chat(&author, &chat, &links);
+    let list: Vec<Value> = slice
+        .iter()
+        .map(|m| {
+            let mut v = linked_message_dto(&chat, m, &links, viewer);
+            add_requester(&mut v, &chat, m, &me);
+            v
+        })
+        .collect();
     Ok(Json(json!({ "messages": list })))
 }
 

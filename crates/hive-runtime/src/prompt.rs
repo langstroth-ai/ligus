@@ -170,7 +170,7 @@ pub fn workspace_roster(session: &ChatSession) -> String {
             format!(", {}", member.title)
         };
         lines.push(format!(
-            "- @{} — human, role: {:?}{} (reach all humans with @you).",
+            "- @{} — human, role: {:?}{}.",
             member.actor.display_name, member.role, title
         ));
     }
@@ -220,11 +220,29 @@ fn with_skills(base: String, session: &ChatSession, responder: Option<Uuid>) -> 
 fn mention_guidance() -> &'static str {
     "You can address other participants with @mentions: @primary for the \
 coordinator, @<agent name> for a specific agent, @<name> for a specific human, \
-@owners/@admins for a role group, and @you to notify the humans present. Only \
-mention someone when you need their input. Writing @<agent name> hands the \
+@owners/@admins for a role group, @you for the person you are answering, \
+and @all only when every human must act. Only mention someone when you need \
+their input. Writing @<agent name> hands the \
 conversation to that agent at once: it replies next. So @mention one agent, and \
 only when you are handing it work now; when you only refer to agents (listing \
 who is here, offering options), write their names without the @."
+}
+
+/// Who this turn answers (the human whose message started it) and how to
+/// address them, for the end of the system prompt; empty when no person
+/// started the turn. Appended per turn (like the commit attribution note), so
+/// the shared prompt above it stays byte-stable.
+pub fn requester_guidance(session: &ChatSession, trigger: Option<Uuid>) -> String {
+    let Some(r) = crate::mentions::requester_from(session, trigger) else { return String::new() };
+    let name = hive_proto::names::clean_display_name(&r.display_name);
+    if name.is_empty() {
+        return String::new();
+    }
+    let handle = hive_proto::names::clean_display_name(&r.handle(session));
+    format!(
+        "You are answering {name} (@{handle}). Use @you or @{handle} to address them; \
+use @all only when every human must act. Don't @mention people who aren't needed."
+    )
 }
 
 fn workflow_guidance() -> &'static str {
@@ -399,6 +417,48 @@ mod tests {
         assert_eq!(primary_system_prompt(&s), primary_system_prompt(&renamed));
         assert_eq!(agent_system_prompt(&s, &agent), agent_system_prompt(&renamed, &agent));
         assert!(!primary_system_prompt(&s).contains("Launch"));
+    }
+
+    #[test]
+    fn mention_guidance_reserves_at_all_and_points_at_you_to_the_requester() {
+        let p = primary_system_prompt(&session());
+        assert!(p.contains("@you for the person you are answering, and @all only when every human must act."));
+        assert!(!p.contains("reach all humans with @you"));
+        assert!(!p.contains("@you to notify the humans present"));
+        assert!(workspace_roster(&session()).contains("- @Mara — human, role: Owner, PM."));
+    }
+
+    fn with_request(s: &mut ChatSession, member: usize, body: &str) -> Uuid {
+        let actor = s.members[member].actor.clone();
+        let mut m = hive_core::ChatMessage::new(hive_core::MessageRole::User, actor.display_name.clone(), body);
+        m.actor_identity = Some(actor);
+        let id = m.id;
+        s.messages.push(m);
+        id
+    }
+
+    #[test]
+    fn requester_guidance_names_the_requester() {
+        let mut s = session();
+        let q = with_request(&mut s, 0, "@Scout look into it");
+        assert_eq!(
+            requester_guidance(&s, Some(q)),
+            "You are answering Mara (@Mara). Use @you or @Mara to address them; use @all only when every human must act. Don't @mention people who aren't needed."
+        );
+        // A shared name gets the precise handle; hidden characters are dropped.
+        s.members.push(WorkspaceMember {
+            id: "m2".into(),
+            actor: ActorIdentity::new("u2", "Ma\u{200B}ra", ActorKind::Human),
+            role: WorkspaceRole::Contributor,
+            title: String::new(),
+            index: 2,
+            joined_at: Default::default(),
+        });
+        s.members[1].actor.display_name = "Mara".into();
+        let q = with_request(&mut s, 1, "hi");
+        assert!(requester_guidance(&s, Some(q)).starts_with("You are answering Mara (@Mara#2). Use @you or @Mara#2"));
+        // No person started the turn → nothing.
+        assert_eq!(requester_guidance(&s, None), "");
     }
 
     #[test]

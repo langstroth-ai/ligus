@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { highlightCode } from "@/lib/highlight";
+import { remarkYouMention } from "@/lib/mentions";
 
 /// Pull the fence language ("language-ts" → "ts") off the inner <code> element
 /// that react-markdown puts inside <pre>, so the block can label + highlight it.
@@ -61,11 +62,25 @@ function hostOf(url: string): string | null {
 /// markdown would reflow those into one run-on paragraph — which also made text
 /// visibly re-wrap the moment a streaming bubble (rendered `whitespace-pre-wrap`)
 /// retired into its persisted copy.
-export const Markdown = memo(function Markdown({ content }: { content: string }) {
+///
+/// `youName`: for an agent's reply that writes `@you`, the requester it
+/// addresses — each `@you` is shown as `@<youName>` (mention styling; marked
+/// "mentions you" when `youIsMe`). Display only; `content` is not changed.
+export const Markdown = memo(function Markdown({
+  content,
+  youName,
+  youIsMe = false,
+}: {
+  content: string;
+  youName?: string;
+  youIsMe?: boolean;
+}) {
   return (
     <div className="hive-md text-[length:var(--hive-text-md)] leading-[1.6]">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkBreaks]}
+        remarkPlugins={
+          youName ? [remarkGfm, remarkBreaks, remarkYouMention({ name: youName, me: youIsMe })] : [remarkGfm, remarkBreaks]
+        }
         components={{
           a: ({ href, children }) => {
             const safe = safeHref(href);

@@ -6,8 +6,8 @@
 //! OpenAI-compatible / subprocess). The system prompt is assembled from the
 //! roster, history is windowed + summarized to the model budget, a single
 //! `@agent` mention answers in that agent's identity, replies that mention
-//! another agent cascade (bounded), and a reply that `@you`-mentions the human
-//! fires a native notification.
+//! another agent cascade (bounded), and a reply that `@you`-mentions its requester
+//! (the person whose message started the turn) fires a native notification for them.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -2559,7 +2559,23 @@ fn message_dto(m: &ChatMessage, agents: &[WorkspaceAgent], viewer: Viewer) -> Ch
         responder_device,
         runtime_id: m.runtime_id.clone(),
         runtime_label: m.runtime_label.clone(),
+        requester_name: None,
+        requester_is_viewer: false,
     }
+}
+
+/// [`message_dto`] in its chat, for viewer `me` (an actor id): an agent reply's
+/// `@you` names its requester, and says whether that's the viewer.
+fn message_dto_in(s: &ChatSession, m: &ChatMessage, viewer: Viewer, me: &str) -> ChatMessageDto {
+    let mut dto = message_dto(m, &s.workspace_agents, viewer);
+    if let Some(r) = hive_runtime::parse_mentions(&m.body, s).you.then(|| hive_runtime::requester_of(s, m)).flatten() {
+        let name = hive_proto::names::clean_display_name(&r.display_name);
+        if !name.is_empty() {
+            dto.requester_is_viewer = r.is(me) || (r.account_id.is_some() && r.account_id == viewer.account);
+            dto.requester_name = Some(name);
+        }
+    }
+    dto
 }
 
 fn proposal_dto(p: &ActionProposal, members: &[hive_core::identity::WorkspaceMember]) -> ProposalDto {
@@ -2659,12 +2675,12 @@ fn proposal_dto_reviewed(p: &ActionProposal, s: &ChatSession, svc: &ChatService)
     dto
 }
 
-fn session_dto(s: &ChatSession, viewer: Viewer) -> ChatSessionDto {
+fn session_dto(s: &ChatSession, viewer: Viewer, me: &str) -> ChatSessionDto {
     ChatSessionDto {
         id: s.id.to_string(),
         title: s.title.clone(),
         runtime_id: s.runtime_id.clone(),
-        messages: s.messages.iter().map(|m| message_dto(m, &s.workspace_agents, viewer)).collect(),
+        messages: s.messages.iter().map(|m| message_dto_in(s, m, viewer, me)).collect(),
     }
 }
 
@@ -3810,7 +3826,7 @@ fn create_chat(state: State<AppState>, title: String) -> Result<ChatSessionDto, 
     let session = svc
         .create_chat(title, state.active_workspace_id(), &state.current_default_runtime_id())
         .map_err(map_err)?;
-    Ok(session_dto(&session, Viewer::of(&svc)))
+    Ok(session_dto(&session, Viewer::of(&svc), &svc.author().id))
 }
 
 fn channel_dto(c: &hive_core::Channel) -> ChannelDto {
@@ -3905,7 +3921,7 @@ fn create_chat_in_channel(
     let session = svc.create_chat(title, wid, &rt).map_err(map_err)?;
     svc.set_chat_channel(session.id, wid, &channel_id).map_err(map_err)?;
     let session = svc.load(session.id).map_err(map_err)?.unwrap_or(session);
-    Ok(session_dto(&session, Viewer::of(&svc)))
+    Ok(session_dto(&session, Viewer::of(&svc), &svc.author().id))
 }
 
 /// Move a (focused) chat into a different channel.
@@ -3924,7 +3940,7 @@ fn get_chat(state: State<AppState>, session_id: String) -> Result<Option<ChatSes
     let Some(mut session) = svc.load(id).map_err(map_err)? else { return Ok(None) };
     let links = device_links_of(&svc, session.workspace_id);
     attribute_linked_devices(&mut session, &links);
-    Ok(Some(session_dto(&session, Viewer::of(&svc))))
+    Ok(Some(session_dto(&session, Viewer::of(&svc), &svc.author().id)))
 }
 
 /// Show messages a person's other identity wrote — the separate member their
@@ -4202,19 +4218,134 @@ fn set_agent_host(state: State<AppState>, agent_id: String, host_id: String) -> 
     svc.set_agent_host(state.active_workspace_id(), aid, &host_id).map_err(map_err)
 }
 
-/// True if `body` `@`-mentions the local user — broadcast (`@you`/`@all`), by
-/// handle, or by their role group. The single predicate behind both desktop
-/// mention notifications and the sidebar's channel highlights.
+/// True if message `m` `@`-mentions the local user (`me`, an actor id) — an
+/// `@all` broadcast, by handle, by their role group, or (in an agent's reply)
+/// `@you` when they are the person the reply answers. `@you` reaches no one
+/// else. The single predicate behind both desktop mention notifications and
+/// the sidebar's channel highlights.
 fn message_mentions_me(
-    body: &str,
+    m: &ChatMessage,
     session: &hive_core::ChatSession,
     me: &str,
     my_role: Option<hive_core::WorkspaceRole>,
 ) -> bool {
-    let m = parse_mentions(body, session);
-    m.human_broadcast
-        || m.humans.iter().any(|h| h == me)
-        || my_role.map(|r| m.roles.contains(&r)).unwrap_or(false)
+    let mine = session.members.iter().find(|x| x.actor.id == me);
+    let my_member = mine.map(|x| x.id.as_str());
+    let my_name = mine.map(|x| x.actor.display_name.as_str()).unwrap_or("");
+    let roles: Vec<_> = my_role.into_iter().collect();
+    hive_runtime::message_mentions(m, session).reaches(|id| id == me || Some(id) == my_member, &roles, my_name)
+}
+
+#[cfg(test)]
+mod at_you_desktop_tests {
+    use super::*;
+
+    fn person(id: &str, name: &str, role: hive_core::WorkspaceRole, index: u32) -> WorkspaceMember {
+        WorkspaceMember {
+            id: id.into(),
+            actor: ActorIdentity::new(id, name, ActorKind::Human),
+            role,
+            title: String::new(),
+            index,
+            joined_at: Default::default(),
+        }
+    }
+
+    /// Ana asks, Ben is another member, Olu owns the workspace; each runs a
+    /// desktop whose local actor is themselves.
+    fn trio() -> ChatSession {
+        let mut s = ChatSession::new("Release", Uuid::new_v4(), "rt");
+        s.members = vec![
+            person("olu", "Olu", hive_core::WorkspaceRole::Owner, 1),
+            person("ana", "Ana", hive_core::WorkspaceRole::Contributor, 2),
+            person("ben", "Ben", hive_core::WorkspaceRole::Contributor, 3),
+        ];
+        s
+    }
+
+    fn post(s: &mut ChatSession, who: &str, body: &str) -> ChatMessage {
+        let a = s.members.iter().find(|m| m.actor.id == who).unwrap().actor.clone();
+        let mut m = ChatMessage::new(MessageRole::User, a.display_name.clone(), body);
+        m.actor_identity = Some(a);
+        s.messages.push(m.clone());
+        m
+    }
+
+    fn agent_reply(s: &mut ChatSession, to: &ChatMessage, body: &str) -> ChatMessage {
+        let mut r = ChatMessage::new(MessageRole::Assistant, "Hive", body);
+        r.reply_to_message_id = Some(to.id);
+        s.messages.push(r.clone());
+        r
+    }
+
+    /// Whose desktop raises a mention for `m` (and highlights the chat).
+    fn pinged(s: &ChatSession, m: &ChatMessage) -> Vec<&'static str> {
+        ["ana", "ben", "olu"]
+            .into_iter()
+            .filter(|me| {
+                let role = s.members.iter().find(|x| x.actor.id == *me).map(|x| x.role);
+                let by_me = m.actor_identity.as_ref().is_some_and(|a| a.id == *me);
+                !by_me && message_mentions_me(m, s, me, role)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn agent_at_you_reaches_only_the_requesters_desktop() {
+        let mut s = trio();
+        let ask = post(&mut s, "ana", "@hive what broke?");
+        let r = agent_reply(&mut s, &ask, "The cache. @you want me to fix it?");
+        assert_eq!(pinged(&s, &r), vec!["ana"]);
+        // The sidebar highlight follows the same rule.
+        assert!(mention_state_for(&s, "ana").is_some());
+        assert!(mention_state_for(&s, "ben").is_none());
+        assert!(mention_state_for(&s, "olu").is_none());
+    }
+
+    #[test]
+    fn agent_at_all_reaches_every_desktop() {
+        let mut s = trio();
+        let ask = post(&mut s, "ana", "@hive ship");
+        let r = agent_reply(&mut s, &ask, "@all shipped");
+        assert_eq!(pinged(&s, &r), vec!["ana", "ben", "olu"]);
+    }
+
+    #[test]
+    fn a_persons_at_you_is_not_a_broadcast() {
+        let mut s = trio();
+        let m = post(&mut s, "ben", "nice one @you");
+        assert!(pinged(&s, &m).is_empty());
+    }
+
+    #[test]
+    fn at_you_renders_as_the_requester_for_every_viewer_highlighted_only_for_them() {
+        let mut s = trio();
+        let ask = post(&mut s, "ana", "@hive check");
+        let r = agent_reply(&mut s, &ask, "@you done");
+        for me in ["ana", "ben", "olu"] {
+            let dto = message_dto_in(&s, &r, Viewer::default(), me);
+            assert_eq!(dto.requester_name.as_deref(), Some("Ana"), "{me}");
+            assert_eq!(dto.requester_is_viewer, me == "ana", "{me}");
+            assert_eq!(dto.body, "@you done", "the signed body is never rewritten");
+        }
+        // A person's @you, and a reply without @you, carry no requester.
+        let human = post(&mut s, "ben", "thanks @you");
+        assert!(message_dto_in(&s, &human, Viewer::default(), "ana").requester_name.is_none());
+        let plain = agent_reply(&mut s, &ask, "done");
+        assert!(message_dto_in(&s, &plain, Viewer::default(), "ana").requester_name.is_none());
+        // Hidden characters in the name are dropped, as everywhere else.
+        s.members[1].actor.display_name = "A\u{202E}na".into();
+        assert_eq!(message_dto_in(&s, &r, Viewer::default(), "ben").requester_name.as_deref(), Some("Ana"));
+    }
+
+    #[test]
+    fn solo_owner_still_gets_at_you() {
+        let mut s = ChatSession::new("Solo", Uuid::new_v4(), "rt");
+        s.members = vec![person("me", "Zaz", hive_core::WorkspaceRole::Owner, 1)];
+        let ask = post(&mut s, "me", "status?");
+        let r = agent_reply(&mut s, &ask, "@you all green");
+        assert!(message_mentions_me(&r, &s, "me", Some(hive_core::WorkspaceRole::Owner)));
+    }
 }
 
 /// Every chat in the active workspace where the local user has been
@@ -4263,7 +4394,7 @@ fn mention_state_for(session: &hive_core::ChatSession, me: &str) -> Option<(u32,
     for (i, msg) in session.messages.iter().enumerate() {
         // A message you wrote never highlights against you.
         let by_me = msg.actor_identity.as_ref().map(|a| a.id == me).unwrap_or(false);
-        if !by_me && message_mentions_me(&msg.body, session, me, my_role) {
+        if !by_me && message_mentions_me(msg, session, me, my_role) {
             last_ordinal = (i + 1) as u32;
         }
     }
@@ -8263,6 +8394,8 @@ async fn run_prepared_turn_inner(
     // key so two concurrent tasks to the SAME agent don't collapse onto one reply
     // (see ChatMessage::reply_to_message_id / pending_mentions).
     let reply_to = session.messages.iter().rev().find(|m| !m.is_streaming).map(|m| m.id);
+    // Who the turn answers (what the reply's `@you` means), named per turn.
+    let system = join_system(&system, &prompt::requester_guidance(session, reply_to));
 
     // The workspace's sandbox envelope for this turn (isolation, egress,
     // redaction, human gate), enforced below for whatever runtime answers.
@@ -9145,8 +9278,9 @@ async fn send_message(
         let reply = tokio::select! {
             biased;
             _ = stop.notified() => break,
-            r = run_turn(&app, &state, sid, workspace_id, &responder) => r?.body,
+            r = run_turn(&app, &state, sid, workspace_id, &responder) => r?,
         };
+        let (reply_id, reply) = (reply.message_id, reply.body);
         if first_reply.is_none() {
             first_reply = Some(reply.clone());
         }
@@ -9167,7 +9301,12 @@ async fn send_message(
             .iter()
             .find(|m| m.id == local_actor_id)
             .map(|m| m.role);
-        if message_mentions_me(&reply, &reloaded, &local_actor_id, my_role) {
+        let pinged = reloaded
+            .messages
+            .iter()
+            .find(|m| m.id == reply_id)
+            .is_some_and(|m| message_mentions_me(m, &reloaded, &local_actor_id, my_role));
+        if pinged {
             let _ = app
                 .notification()
                 .builder()
@@ -9563,7 +9702,8 @@ fn ensure_self_member(state: State<AppState>, session_id: String) -> Result<(), 
 }
 
 /// Raise a local notification if the chat's newest message (from someone else)
-/// `@`-mentions the local user — directly, via `@you`/`@all`, or by role group.
+/// `@`-mentions the local user — directly, via `@all`, by role group, or by an
+/// agent's `@you` when the local user is the requester.
 /// Humans `@`-mentioning humans never triggers a runtime; this is the ping.
 /// Called by the frontend on sync; deduped by message id.
 #[tauri::command]
@@ -9595,7 +9735,7 @@ fn notify_mentions(
                 .iter()
                 .find(|mem| mem.actor.id == me)
                 .map(|mem| mem.role);
-            let mentioned = message_mentions_me(&last.body, &session, &me, my_role);
+            let mentioned = message_mentions_me(last, &session, &me, my_role);
             mentioned.then(|| (last.id, last.author.clone()))
         }
     };

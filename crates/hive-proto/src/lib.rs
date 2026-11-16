@@ -103,6 +103,15 @@ pub struct ChatMessageDto {
     /// A human label for that runtime (e.g. "claude-code / opus"), when stamped.
     #[serde(default)]
     pub runtime_label: Option<String>,
+    /// For an agent's reply that writes `@you`: the display name of the person
+    /// it addresses (whose message started the turn), shown as `@<name>` in
+    /// place of `@you`. Rendering only: the signed body keeps `@you`. None for
+    /// other messages, or when no person started the turn.
+    #[serde(default)]
+    pub requester_name: Option<String>,
+    /// The viewer is that person: `@you` is highlighted as mentioning them.
+    #[serde(default)]
+    pub requester_is_viewer: bool,
 }
 
 /// A tool invocation an assistant turn made (MCP or built-in).

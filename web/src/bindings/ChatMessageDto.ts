@@ -57,4 +57,15 @@ runtimeId: string | null,
 /**
  * A human label for that runtime (e.g. "claude-code / opus"), when stamped.
  */
-runtimeLabel: string | null, };
+runtimeLabel: string | null, 
+/**
+ * For an agent's reply that writes `@you`: the display name of the person
+ * it addresses (whose message started the turn), shown as `@<name>` in
+ * place of `@you`. Rendering only: the signed body keeps `@you`. None for
+ * other messages, or when no person started the turn.
+ */
+requesterName: string | null, 
+/**
+ * The viewer is that person: `@you` is highlighted as mentioning them.
+ */
+requesterIsViewer: boolean, };

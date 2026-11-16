@@ -157,7 +157,8 @@ same way and stay **inert until you explicitly enable them**.
 Emoji **reactions** are a first-class, low-cost channel for people *and* agents
 (agents emit `[[react: 👍]]` / `[[vote: 👍 👎]]` directives), and they sync as
 commutative add/remove events so concurrent votes never clobber each other. When
-a mention names you — by handle, a role you hold, or a `@you` / `@all` broadcast —
+a mention names you — by handle, a role you hold, an `@all` broadcast, or an agent's
+`@you` in a reply to you —
 Ligus raises a native notification and an in-app cue, **including on the addressed
 member's own device** when the mention arrives over sync.
 

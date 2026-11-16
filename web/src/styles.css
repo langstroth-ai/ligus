@@ -338,6 +338,15 @@ body {
   }
 }
 
+/* An agent reply's @you, shown as @<requester>; tinted when it's the viewer. */
+.hive-mention { font-weight: 600; color: var(--hive-accent-ink, var(--hive-accent-cool)); }
+.hive-mention-me {
+  background: var(--tint-cool);
+  box-shadow: inset 0 0 0 1px var(--tint-cool-line);
+  border-radius: 4px;
+  padding: 0 0.2em;
+}
+
 /* Markdown rendering for chat messages (Tailwind preflight strips these). */
 .hive-md > :first-child { margin-top: 0; }
 .hive-md > :last-child { margin-bottom: 0; }

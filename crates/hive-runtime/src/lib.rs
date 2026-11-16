@@ -89,7 +89,7 @@ pub use context::{Compactor, CompactionResult, Summarizer};
 pub use mcp::{
     normalize_bearer_token, resolve_bearer, McpRegistry, McpServerSpec, McpTool, McpTransport,
 };
-pub use mentions::{parse_mentions, MentionTargets};
+pub use mentions::{message_mentions, parse_mentions, requester_from, requester_of, MentionTargets, Requester};
 pub use relay_client::{
     EnvelopePage, FetchedEnvelope, InviteEntry, IssuedInvite, IssuedRelayToken, MemberEntry, RelayClient,
     RelayError, RelayProbe, RelayTokenEntry, RelayUserEntry, ENVELOPE_PAGE_LIMIT,

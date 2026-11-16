@@ -245,7 +245,7 @@ ciphertext.
 
 | Notification | When |
 |---|---|
-| *Name* mentioned you | a message from an agent or another member `@mentions` you, `@you`, `@all` or a role group you're in |
+| *Name* mentioned you | a message from an agent or another member `@mentions` you, `@all`, a role group you're in, or an agent's `@you` in a reply to you |
 | *Workflow* needs approval | a workflow run's approval gate is waiting (again on each rerouted attempt) |
 | *Agent* replied / hit an error | an agent reply finished (not your own messages, and not a reply that already notified you as a mention) |
 | Change ready for review | a proposal is waiting for review (a workflow gate is announced once, as an approval, not also here) |

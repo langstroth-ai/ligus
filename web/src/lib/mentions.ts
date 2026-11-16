@@ -24,3 +24,79 @@ export function filterMentions(
   const q = query.toLowerCase();
   return cands.filter((c) => c.handle.toLowerCase().startsWith(q)).slice(0, limit);
 }
+
+/// Split `text` around each `@you` mention (case-insensitive), with the same
+/// boundaries the runtime's mention parser uses: the `@` must not follow a
+/// word character (so `me@you.io` is an address) and `you` must not run on
+/// into a longer word (`@young`). Returns the text pieces with `null` where a
+/// mention stood.
+export function splitYouMentions(text: string): (string | null)[] {
+  const out: (string | null)[] = [];
+  const re = /@you(?![\p{L}\p{N}_-])/giu;
+  let last = 0;
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    const before = m.index > 0 ? text[m.index - 1] : "";
+    if (before && /[\p{L}\p{N}_]/u.test(before)) continue;
+    out.push(text.slice(last, m.index), null);
+    last = m.index + m[0].length;
+  }
+  out.push(text.slice(last));
+  return out.filter((p) => p !== "");
+}
+
+/// Hidden and control characters removed, whitespace runs collapsed, trimmed
+/// — the display-name rule used for every name the UI shows.
+export function cleanName(name: string): string {
+  return name
+    .replace(/[\p{Cc}\p{Cf}͏ᅟᅠ឴឵᠋-᠏ㅤ︀-️ﾠ]/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+interface MdNode {
+  type: string;
+  value?: string;
+  children?: MdNode[];
+  data?: Record<string, unknown>;
+}
+
+/// A remark plugin that renders an agent reply's `@you` as `@<requester>`
+/// with mention styling (`hive-mention`, plus `hive-mention-me` when the
+/// viewer is the requester). Display only: the message body is not changed.
+/// Code spans, code blocks and links are left alone.
+export function remarkYouMention(opts: { name: string; me: boolean }) {
+  const name = cleanName(opts.name);
+  return () => (tree: MdNode) => {
+    if (!name) return;
+    const walk = (node: MdNode) => {
+      if (!node.children) return;
+      const next: MdNode[] = [];
+      for (const child of node.children) {
+        if (child.type === "text" && child.value && /@you/i.test(child.value)) {
+          for (const part of splitYouMentions(child.value)) {
+            if (part === null) {
+              next.push({
+                type: "youMention",
+                data: {
+                  hName: "span",
+                  hProperties: {
+                    className: opts.me ? ["hive-mention", "hive-mention-me"] : ["hive-mention"],
+                    title: opts.me ? "Mentions you" : `Mentions ${name}`,
+                  },
+                  hChildren: [{ type: "text", value: `@${name}` }],
+                },
+              });
+            } else {
+              next.push({ type: "text", value: part });
+            }
+          }
+        } else {
+          if (child.type !== "link" && child.type !== "linkReference") walk(child);
+          next.push(child);
+        }
+      }
+      node.children = next;
+    };
+    walk(tree);
+  };
+}
