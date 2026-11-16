@@ -48,6 +48,11 @@ for a paste-free path that keeps the key off the relay.
 You can **Copy invite** (the full `hivews1:` code) or **Leave** a
 workspace from the *Your team workspaces* list.
 
+An invite needs a relay: a workspace created while **Settings → Team sync →
+Relay URL** was empty has none, so Ligus copies no invite for it and offers a
+link to Team sync instead. Set the Relay URL there (it applies to the
+workspace you're syncing), then copy a new invite.
+
 ## Check who sent an invite
 
 Every invite carries its founder's **safety code** (the fingerprint of the

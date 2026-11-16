@@ -852,6 +852,41 @@ mod workspace_invite_tests {
         assert_eq!(back.founder_actor_id, None);
     }
 
+    /// A workspace with no http(s) relay gets no invite (and none is joined):
+    /// the typed error the web UI maps to its Settings → Team sync message.
+    #[test]
+    fn relayless_invites_are_refused_with_a_typed_error() {
+        for bad in ["", "  ", "relay.example", "ftp://relay.example"] {
+            let e = invite_relay_problem(bad).unwrap_or_else(|| panic!("{bad:?} accepted"));
+            assert!(e.starts_with(NO_RELAY_ERR), "{e}");
+            assert!(e.contains("Settings → Team sync"), "{e}");
+        }
+        for good in ["https://relay.example", "http://127.0.0.1:8443", " https://relay.example/ "] {
+            assert_eq!(invite_relay_problem(good), None, "{good:?}");
+        }
+    }
+
+    /// Setting the relay in Settings → Team sync while a relayless workspace
+    /// is the synced room gives that workspace the relay (so its next invite
+    /// carries it); clearing the field leaves the workspace's relay alone.
+    #[test]
+    fn team_sync_relay_reaches_the_synced_workspace() {
+        let conn = |room: &str, relay: &str| WorkspaceConn { name: room.into(), relay_url: relay.into(), room: room.into(), key: None, icon: None, dm_account: None, founder_actor_id: None, fk: None, inv: None, ek: Vec::new(), sig: None };
+        let mut s = LiveSettings {
+            sync_room: "mine".into(),
+            relay_url: Some("https://relay.example".into()),
+            workspaces: vec![conn("mine", ""), conn("other", "")],
+            ..LiveSettings::default()
+        };
+        mirror_relay_into_synced_workspace(&mut s);
+        assert_eq!(s.workspaces[0].relay_url, "https://relay.example");
+        assert_eq!(s.workspaces[1].relay_url, "", "only the synced room changes");
+        assert_eq!(invite_relay_problem(&s.workspaces[0].relay_url), None);
+        s.relay_url = None;
+        mirror_relay_into_synced_workspace(&mut s);
+        assert_eq!(s.workspaces[0].relay_url, "https://relay.example", "clearing only disconnects");
+    }
+
     #[test]
     fn same_room_shares_workspace_id() {
         let a = WorkspaceConn { name: "A".into(), relay_url: "x".into(), room: "shared".into(), key: None, icon: None, dm_account: None, founder_actor_id: None, fk: None, inv: None, ek: Vec::new(), sig: None };
@@ -12436,6 +12471,12 @@ fn create_workspace(state: State<AppState>, name: String) -> Result<WorkspaceInf
 #[tauri::command]
 fn join_workspace(state: State<AppState>, invite: String) -> Result<WorkspaceInfoDto, String> {
     let mut conn = decode_workspace_invite(&invite)?;
+    // A relayless invite would add a workspace that never syncs.
+    if conn.dm_account.is_none() && invite_relay_problem(&conn.relay_url).is_some() {
+        return Err("This invite's workspace has no relay, so it can't be joined. Ask whoever sent it to set a \
+                    Relay URL under Settings → Team sync, then send a new invite."
+            .to_string());
+    }
     // A DM invite is accepted only under the DM rule (addressed to this
     // account, from a founder whose key the shared logs confirm).
     if conn.dm_account.is_some() {
@@ -12472,6 +12513,39 @@ fn join_workspace_conn(state: State<AppState>, mut conn: WorkspaceConn) -> Resul
     })
 }
 
+/// The typed error `workspace_invite` returns for a workspace with no usable
+/// relay; the web UI matches this prefix and shows its own message with a
+/// link to Settings → Team sync.
+const NO_RELAY_ERR: &str = "workspace-no-relay";
+
+/// Why an invite for a workspace at `relay_url` couldn't be used, if it
+/// couldn't. Joining needs the relay: a box (`ligus enroll`) refuses an
+/// invite without one, and a desktop that joined one would never sync (direct
+/// P2P only carries a room that also has a relay, see `peer_sync_workspaces`).
+/// So no invite is issued, and none is joined, without an http(s) relay.
+fn invite_relay_problem(relay_url: &str) -> Option<String> {
+    let ok = reqwest::Url::parse(relay_url.trim())
+        .is_ok_and(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some_and(|h| !h.is_empty()));
+    (!ok).then(|| {
+        format!(
+            "{NO_RELAY_ERR}: This workspace has no relay, so an invite to it can't be used. \
+             Set one under Settings → Team sync (Relay URL), then copy a new invite."
+        )
+    })
+}
+
+/// Settings → Team sync edits the live relay of the room being synced; keep
+/// that room's saved workspace in step, so its invites carry the relay and
+/// re-selecting it doesn't put the old (empty) one back. Clearing the field
+/// only disconnects: the workspace keeps the relay it had.
+fn mirror_relay_into_synced_workspace(s: &mut LiveSettings) {
+    let Some(url) = s.relay_url.clone().filter(|u| !u.trim().is_empty()) else { return };
+    let room = s.sync_room.clone();
+    if let Some(w) = s.workspaces.iter_mut().find(|w| w.room == room && w.dm_account.is_none()) {
+        w.relay_url = url;
+    }
+}
+
 /// Shareable invite code for a workspace (bundles relay + room + key).
 #[tauri::command]
 fn workspace_invite(state: State<AppState>, workspace_id: String) -> Result<String, String> {
@@ -12480,6 +12554,10 @@ fn workspace_invite(state: State<AppState>, workspace_id: String) -> Result<Stri
         let s = state.settings.lock().unwrap();
         s.workspaces.iter().find(|w| w.id() == id).cloned().ok_or_else(|| "unknown workspace".to_string())?
     };
+    // Refuse before issuing the single-use invite on the config log.
+    if let Some(problem) = invite_relay_problem(&conn.relay_url) {
+        return Err(problem);
+    }
     // Each code carries a fresh single-use invite an Admin issues on the
     // workspace's config log: only an Admin can let someone in.
     let invite = state
@@ -12605,6 +12683,7 @@ async fn update_connection_settings(
             let room = s.sync_room.clone();
             s.joined_rooms.push(room);
         }
+        mirror_relay_into_synced_workspace(&mut s);
         save_settings(&state.data_dir, &s);
     }
     Ok(get_connection_settings(state))

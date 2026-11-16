@@ -114,6 +114,38 @@ pub fn is_loopback_url(server_url: &str) -> bool {
     host.eq_ignore_ascii_case("localhost") || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
+/// Which pairing link to print.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PairPlan {
+    /// The direct link (with the relay's v2 fields too when remote access is on).
+    Direct,
+    /// A relay-only link: no direct URL or token in it.
+    RelayOnly,
+}
+
+/// Decide the pairing link for a server at `server_url`. A loopback URL is
+/// the phone itself on the phone, so it is never offered: with remote access
+/// the link goes relay-only, and without it there is no link to print, only
+/// the reason and the ways to get one (the `Err` text).
+pub fn pair_plan(server_url: &str, remote: bool, relay_only: bool) -> Result<PairPlan, String> {
+    const ENABLE: &str = "`ligus remote enable --relay <url>`";
+    if relay_only && !remote {
+        return Err(format!("--relay-only needs remote access: turn it on with {ENABLE} first"));
+    }
+    if relay_only || (remote && is_loopback_url(server_url)) {
+        return Ok(PairPlan::RelayOnly);
+    }
+    if is_loopback_url(server_url) {
+        return Err(format!(
+            "no pairing link: this server is at {server_url}, which on a phone is the phone itself, and remote access is off. \
+             Either turn on remote access with {ENABLE} and pair again, \
+             or listen on a LAN or tailnet address (--listen <ip:port> or LIGUS_SERVE_LISTEN) \
+             or set the address the phone should use (--public-url <url> or LIGUS_SERVE_PUBLIC_URL)."
+        ));
+    }
+    Ok(PairPlan::Direct)
+}
+
 /// Render `text` as a QR code for a terminal: two module rows per text line
 /// with half-block characters, explicit black-on-white ANSI colors (so it
 /// scans on dark and light terminal themes alike) and a 2-module quiet zone.
@@ -176,6 +208,29 @@ mod tests {
         for u in ["http://100.101.102.104:8787", "http://192.168.1.20:8787", "https://hive.example.ts.net", "http://[fd7a:115c:a1e0::1]:8787"] {
             assert!(!is_loopback_url(u), "{u}");
         }
+    }
+
+    /// A loopback direct URL never reaches the phone: with no relay the
+    /// link isn't printed (the reason and the ways out are); with one, the
+    /// link goes relay-only.
+    #[test]
+    fn a_loopback_direct_url_is_never_offered_to_the_phone() {
+        for u in ["http://127.0.0.1:8787", "http://localhost:8787", "http://[::1]:8787"] {
+            match pair_plan(u, false, false) {
+                Err(msg) => {
+                    assert!(msg.contains("ligus remote enable --relay"), "{msg}");
+                    assert!(msg.contains("LIGUS_SERVE_PUBLIC_URL"), "{msg}");
+                    assert!(msg.contains(u), "{msg}");
+                }
+                Ok(p) => panic!("{u}: {p:?}"),
+            }
+            assert_eq!(pair_plan(u, true, false), Ok(PairPlan::RelayOnly), "{u}");
+        }
+        let lan = "http://192.168.1.20:8787";
+        assert_eq!(pair_plan(lan, false, false), Ok(PairPlan::Direct));
+        assert_eq!(pair_plan(lan, true, false), Ok(PairPlan::Direct));
+        assert_eq!(pair_plan(lan, true, true), Ok(PairPlan::RelayOnly));
+        assert!(pair_plan(lan, false, true).unwrap_err().contains("ligus remote enable --relay"));
     }
 
     #[test]
