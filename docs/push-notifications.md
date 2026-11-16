@@ -102,14 +102,18 @@ On top of the relay's limits (§11), `hive serve` drops a push to a phone when:
 
 | Rule | Limit |
 |---|---|
-| Foreground | the phone has an open `/v1/events` stream through the tunnel. The app keeps that stream open only while it's in the foreground and sees the event live. The stream counts until the phone cancels it (RESET), the session ends, or the relay drops the connection |
+| Foreground | the phone has an open `/v1/events` stream through the tunnel and sent a frame (a request, PING or WINDOW) within the last 40 s. The app keeps that stream open only while it's in the foreground, PINGs after 25 s without traffic, and closes the session (RESET, GOAWAY) when it goes to the background. A phone iOS suspended before that close left goes quiet, so its stale stream stops counting after 40 s |
 | Coalescing | one push per (phone, kind, chat) per 10 s: the first of a burst goes, the rest are dropped |
 | Per phone | 20 per minute, 500 per day |
 | Host-wide | 1 per second sustained, burst of 5 (the relay's "pushes ≤ 1/s") |
 
-A dropped push doesn't count against any limit. Drops are logged at debug
-level only: set `LIGUS_PUSH_DEBUG=1` to print each drop and relay refusal on
-stderr.
+A dropped push doesn't count against any limit. Every push decision is
+printed as a `push:` line (kind, phone name and the start of its pid; never
+content): sent, not sent and why (app open, notifications off on that phone,
+coalesced, rate-limited, holding after a refusal, push unavailable), and the
+relay's answer. `ligus remote push-test` sends a `test` push with
+`"diag": true`, past the host's own gates, and prints each hop including the
+relay's `detail` (APNs env, topic, status, reason).
 
 The relay acks each push. On `ok:false` the host:
 
@@ -194,9 +198,12 @@ host. **Settings → Notifications** in the app toggles previews.
 - `GET /v1/tunnel/info` says `"push": false`: the relay has no APNs key
   configured, or failed to load it (check its log). The host then turns push
   off and falls back to ntfy if configured.
-- **`DeviceTokenNotForTopic`** in the relay log: `LIGUS_RELAY_APNS_TOPIC` isn't
-  the bundle id of the build on the phone. The relay forgets that token; fix
-  the topic, then open the app so it registers again.
+- **`DeviceTokenNotForTopic`** in the relay log: the topic used isn't the
+  bundle id of the build on the phone. Current apps report their bundle id
+  (`apns.topic`) and a v0.3 relay pushes with it when it is allow-listed
+  (`LIGUS_RELAY_APNS_TOPIC` / `LIGUS_RELAY_APNS_TOPICS`); `topic not allowed`
+  means add it there. For an older app (no topic) the relay keeps the token;
+  fix the default topic.
 - **`BadDeviceToken`**: sandbox vs production mismatch, e.g. an Xcode build
   sent to the production endpoint. Use `LIGUS_RELAY_APNS_ENV=auto`, or match it
   to the build.
@@ -204,8 +211,8 @@ host. **Settings → Notifications** in the app toggles previews.
   suppresses pushes. Background the app and try again.
 - Nothing arrives at all: check that the phone is paired and active
   (`hive phones list`), that notifications are allowed for the app in iOS
-  Settings, and run `hive serve` with `LIGUS_PUSH_DEBUG=1` to see dropped pushes
-  and relay refusals.
+  Settings, and run `ligus remote push-test`; the `push:` lines in the serve
+  log show every decision and relay refusal.
 
 ## Limitation: other people's setups
 
