@@ -2471,12 +2471,22 @@ impl Viewer {
         Self { device: Some(svc.device_id()), account: svc.author().account_id }
     }
 
-    /// "this" / "mine" / None for the actor that answered a primary turn.
-    fn place_of(&self, actor: &hive_core::ActorIdentity) -> Option<String> {
-        if actor.device_id.is_some() && actor.device_id == self.device {
+    /// "this" / "mine" / None for a primary turn `m`, answered by `actor`.
+    ///
+    /// The device that ran the turn is the message's `origin_device_id`
+    /// (stamped by `begin_assistant_message`). The stamped actor is the
+    /// account's identity, whose `device_id` is never set for a person, so
+    /// comparing it to this device called every turn this device ran
+    /// "Your other device". The device only counts when the account matches
+    /// too: `origin_device_id` is the writer's claim, and another person's
+    /// reply naming this device must not read as "This device".
+    fn place_of(&self, m: &ChatMessage, actor: &hive_core::ActorIdentity) -> Option<String> {
+        let mine = actor.account_id.is_some() && actor.account_id == self.account;
+        let ran_on = m.origin_device_id.or(actor.device_id);
+        if mine && ran_on.is_some() && ran_on == self.device {
             return Some("this".into());
         }
-        (actor.account_id.is_some() && actor.account_id == self.account).then(|| "mine".into())
+        mine.then(|| "mine".into())
     }
 }
 
@@ -2500,7 +2510,7 @@ fn message_dto(m: &ChatMessage, agents: &[WorkspaceAgent], viewer: Viewer) -> Ch
     } else {
         None
     };
-    let responder_device = if responder_name.is_some() { m.actor_identity.as_ref().and_then(|a| viewer.place_of(a)) } else { None };
+    let responder_device = if responder_name.is_some() { m.actor_identity.as_ref().and_then(|a| viewer.place_of(m, a)) } else { None };
     ChatMessageDto {
         id: m.id.to_string(),
         role: role_str(m.role).to_string(),
@@ -9116,8 +9126,10 @@ async fn send_message(
         if depth == 0 {
             let mut svc = state.service.lock().unwrap();
             if !svc.claim_turn(sid, workspace_id, trigger_id).map_err(map_err)? {
+                tracing::info!(target: "dispatch", session = %sid, "send_message: another device claimed the turn, backing off");
                 break;
             }
+            tracing::info!(target: "dispatch", session = %sid, "send_message: claimed turn");
         }
 
         // Race the turn against the Stop signal. On stop we break out of the
@@ -17626,6 +17638,72 @@ mod responder_place_tests {
         other.account_id = Some(Uuid::new_v4());
         m.actor_identity = Some(other);
         let dto = message_dto(&m, &[], viewer);
+        assert_eq!(dto.responder_device, None);
+        assert_eq!(dto.responder_name.as_deref(), Some("Bob"));
+    }
+
+    /// The owner's identity as production stamps it: `HumanAccount::actor()`,
+    /// which never carries a device id.
+    fn owner_account() -> hive_core::crypto::HumanAccount {
+        hive_core::crypto::HumanAccount {
+            id: Uuid::new_v4(),
+            display_name: "You".into(),
+            handle: "you".into(),
+            signing_public_key: Vec::new(),
+            avatar_url: None,
+            created_at: hive_core::Timestamp::now(),
+        }
+    }
+
+    fn device(author: hive_core::ActorIdentity) -> ChatService {
+        use hive_core::crypto::SigningKeypair;
+        let store = hive_runtime::EventStore::open_in_memory().unwrap();
+        ChatService::new(store, Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author)
+    }
+
+    /// The owner's device answers an `@hive` turn in a new chat, in a
+    /// workspace where the owner also has a `ligus serve` box enrolled as
+    /// their device (delegated). The reply reads "This device" on the
+    /// desktop and "Your other device" from the box. It read "Your other
+    /// device" on the desktop too: the stamped actor (the account) has no
+    /// device id, so the device that ran the turn was never recognised.
+    #[test]
+    fn owner_desktop_turn_is_this_device_there_and_other_device_on_the_box() {
+        let account = owner_account();
+        let mut desktop = device(account.actor());
+        let mut serve_box = device(hive_core::ActorIdentity::new("box", "Box", hive_core::ActorKind::Human));
+        serve_box.act_as_owner_device(account.actor());
+        let ws = Uuid::new_v4();
+        let chat = desktop.create_chat("new chat", ws, "claude-code").unwrap();
+        let ask = desktop.post_user_message(chat.id, ws, "@hive hi").unwrap();
+        let reply = desktop.begin_assistant_message(chat.id, ws, "Hive", "claude-code", None, Some(ask.id)).unwrap();
+        desktop.complete_assistant_message(chat.id, ws, reply, "hello").unwrap();
+        let session = desktop.load(chat.id).unwrap().unwrap();
+        let m = session.messages.iter().find(|m| m.id == reply).unwrap();
+
+        let on_desktop = message_dto(m, &[], Viewer::of(&desktop));
+        assert_eq!(on_desktop.responder_device.as_deref(), Some("this"), "the desktop ran it");
+        let on_box = message_dto(m, &[], Viewer::of(&serve_box));
+        assert_eq!(on_box.responder_device.as_deref(), Some("mine"), "the box sees the owner's other device");
+
+        // Another of the owner's devices that really answered is "mine" here
+        // and "this" there.
+        let mut laptop = device(account.actor());
+        let chat2 = laptop.create_chat("elsewhere", ws, "claude-code").unwrap();
+        let r2 = laptop.begin_assistant_message(chat2.id, ws, "Hive", "claude-code", None, None).unwrap();
+        laptop.complete_assistant_message(chat2.id, ws, r2, "hi").unwrap();
+        let s2 = laptop.load(chat2.id).unwrap().unwrap();
+        let m2 = s2.messages.iter().find(|m| m.id == r2).unwrap();
+        assert_eq!(message_dto(m2, &[], Viewer::of(&desktop)).responder_device.as_deref(), Some("mine"));
+        assert_eq!(message_dto(m2, &[], Viewer::of(&laptop)).responder_device.as_deref(), Some("this"));
+
+        // Someone else's reply that names this device as its origin is still
+        // theirs, never "This device".
+        let mut forged = m.clone();
+        let mut bob = hive_core::ActorIdentity::new("bob", "Bob", hive_core::ActorKind::Human);
+        bob.account_id = Some(Uuid::new_v4());
+        forged.actor_identity = Some(bob);
+        let dto = message_dto(&forged, &[], Viewer::of(&desktop));
         assert_eq!(dto.responder_device, None);
         assert_eq!(dto.responder_name.as_deref(), Some("Bob"));
     }
