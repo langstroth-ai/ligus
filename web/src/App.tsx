@@ -58,7 +58,7 @@ import { AddWorkspaceModal } from "@/components/AddWorkspaceModal";
 import { BindWorkspacePrompt } from "@/components/BindWorkspacePrompt";
 import { PaneErrorBoundary } from "@/components/ErrorBoundary";
 import { PANES } from "@/lib/panes";
-import { OPEN_CHAT_EVENT, flashMessage, type OpenChatDetail } from "@/lib/nav";
+import { OPEN_CHAT_EVENT, OPEN_SETTINGS_EVENT, flashMessage, type OpenChatDetail } from "@/lib/nav";
 import {
   applyTheme,
   loadMode,
@@ -492,6 +492,19 @@ export function App() {
       unlisten.then((fn) => fn());
     };
   }, [qc]);
+
+  // In-app links to a Settings tab (e.g. a refused invite's "Open Team
+  // sync"): close the modal they came from and open the sheet.
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      setAddWsOpen(false);
+      openSettings((e as CustomEvent<string>).detail);
+    };
+    window.addEventListener(OPEN_SETTINGS_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, onOpen);
+    // openSettings is stable (only touches setState setters).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // System-tray navigation: the native menu emits a route string and we switch
   // the in-window view to match (Settings/Friends are views, not OS windows).

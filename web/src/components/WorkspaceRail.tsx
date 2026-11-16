@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { copyWhenReady } from "@/lib/clipboard";
+import { inviteError } from "@/lib/invites";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   listWorkspaces,
@@ -133,15 +134,18 @@ export function WorkspaceRail({
       const { expiresIn } = await share;
       toast.success(`Short code ${code} copied — expires in ${Math.round(expiresIn / 60)} min.`);
     } catch (e) {
-      toast.error(errMsg(e));
+      const m = inviteError(e);
+      toast.error(m.message, m.action);
     }
   }
   async function copyInvite(ws: WorkspaceInfoDto) {
     try {
+      // Started inside the click (WebKit); a refused invite copies nothing.
       await copyWhenReady(workspaceInvite(ws.id));
       toast.success(`Invite for “${ws.name}” copied.`);
     } catch (e) {
-      toast.error(errMsg(e));
+      const m = inviteError(e);
+      toast.error(m.message, m.action);
     }
   }
   function leave(ws: WorkspaceInfoDto) {

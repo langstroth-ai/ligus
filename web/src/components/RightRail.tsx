@@ -66,6 +66,7 @@ import { Avatar } from "@/components/Avatar";
 import { fileToAvatarDataUrl } from "@/lib/avatar";
 import { PRIMARY_NAME, PRIMARY_HANDLE } from "@/lib/agent";
 import { toast, errMsg } from "@/components/Toast";
+import { inviteError } from "@/lib/invites";
 import { confirmThen } from "@/lib/confirm";
 import {
   Button,
@@ -1873,7 +1874,10 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
       void navigator.clipboard.writeText(code).catch(() => {});
       toast.success("Invite link copied. It works once.");
     },
-    onError: (e) => toast.error(`Couldn't create an invite: ${errMsg(e)}`),
+    onError: (e) => {
+      const m = inviteError(e);
+      toast.error(m.action ? m.message : `Couldn't create an invite: ${m.message}`, m.action);
+    },
   });
 
   // Server-side membership (enforced by paid/enterprise relays). Distinct from
