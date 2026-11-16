@@ -83,8 +83,8 @@ Two config-log events (frozen in 2.0; an older decoder folds them as
 
 `statement`, `proof`, `keyFingerprint` and `nonce` are left out when empty
 (the `keyPublished` method has none). `method` is `sshSig` or `keyPublished`
-in 2.0; `atprotoRecord`, `oidcAttestation` and `selfAsserted` are reserved,
-and a method a build doesn't know folds as a claim it shows as "not checked".
+in 2.0; `selfAsserted` is reserved, and a method a build doesn't know folds
+as a claim it shows as "not checked".
 
 What the fold enforces (every device, offline, no network):
 

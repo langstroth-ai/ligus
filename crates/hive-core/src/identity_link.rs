@@ -48,13 +48,10 @@ pub enum LinkMethod {
     /// (GitHub, GitLab only; owner decision D15: a fallback, with a
     /// disclosure that it links the accounts publicly).
     KeyPublished,
-    /// [2.x] A record in the subject's atproto repo.
-    AtprotoRecord,
-    /// [2.1] An attestation by a ligus-auth tenant.
-    OidcAttestation,
     /// [2.x] Bitbucket, Azure DevOps: no public key list. Never "verified".
     SelfAsserted,
-    /// A method this build doesn't know (a newer client's): folded as a
+    /// A method this build doesn't know (a newer client's, or the reserved
+    /// `atprotoRecord` and `oidcAttestation`, never emitted): folded as a
     /// claim, shown as "not checked".
     #[serde(other)]
     Unknown,
@@ -381,6 +378,24 @@ mod tests {
         assert!(check_statement(&l, Uuid::from_u128(8), Some(&[1u8; 32])).is_err(), "another workspace");
         assert!(check_statement(&l, Uuid::from_u128(7), Some(&[2u8; 32])).is_err(), "another account key");
         assert!(check_statement(&l, Uuid::from_u128(7), None).is_err());
+    }
+
+    /// The reserved `atprotoRecord` and `oidcAttestation` methods were never
+    /// emitted and are no longer variants: an event carrying either still
+    /// parses, as a method this build doesn't know.
+    #[test]
+    fn retired_methods_parse_as_unknown() {
+        for m in ["atprotoRecord", "oidcAttestation"] {
+            let mut v = serde_json::to_value(sample()).unwrap();
+            v["method"] = serde_json::json!(m);
+            let l: IdentityLink = serde_json::from_value(v).unwrap();
+            assert_eq!(l.method, LinkMethod::Unknown, "{m}");
+        }
+        let names: Vec<String> = [LinkMethod::SshSig, LinkMethod::KeyPublished, LinkMethod::SelfAsserted]
+            .iter()
+            .map(|m| serde_json::to_value(m).unwrap().as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(names, ["sshSig", "keyPublished", "selfAsserted"], "wire ids unchanged");
     }
 
     #[test]

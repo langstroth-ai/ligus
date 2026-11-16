@@ -903,7 +903,7 @@ pub struct EnforcementPlan {            // a pure function of (SandboxEnvelope, 
 }
 pub trait TurnExecutor: Send + Sync {
     fn spawn(&self, cmd: std::process::Command, plan: &EnforcementPlan) -> io::Result<tokio::process::Child>;
-    fn kind(&self) -> ExecutorKind;   // Unconfined | Seatbelt | Bwrap | Gvisor | AppleContainer | K8sJob
+    fn kind(&self) -> ExecutorKind;   // Unconfined | Seatbelt | Bwrap | Landlock (code: executor/mod.rs)
 }
 pub fn default_executor() -> Arc<dyn TurnExecutor>;   // macOS: Seatbelt; Linux: Bwrap (falls back to Unconfined + loud banner + refuse write tiers)
 ```
@@ -975,6 +975,8 @@ pub fn default_executor() -> Arc<dyn TurnExecutor>;   // macOS: Seatbelt; Linux:
 - **Runtimes that ignore `HTTPS_PROXY` fail closed.** The network is denied at the OS layer anyway. Verify for each of the four CLIs in the D.3 matrix.
 
 #### C.4.5 Optional executors [2.0.x-follow; behind settings]
+
+None of these exists in code. Their `ExecutorKind` placeholder variants were removed in the 2.0 Phase A cleanup (2026-11-16); an executor gets its variant when it is implemented.
 
 - `Gvisor` (Linux strong mode): `runsc --network=none do …` with the same mounts and the proxy socket bound in.
 - `AppleContainer` (macOS 26+ local VM): Apple's `container` CLI, with the worktree bind-mounted and the proxy over vsock or a published port.

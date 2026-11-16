@@ -52,9 +52,6 @@ pub enum ExecutorKind {
     /// Linux without usable user namespaces: Landlock (filesystem, TCP
     /// ports, scoping) and seccomp, no namespaces.
     Landlock,
-    Gvisor,
-    AppleContainer,
-    K8sJob,
 }
 
 /// Where a child may connect.
@@ -1279,9 +1276,6 @@ impl SandboxStatus {
             ExecutorKind::Bwrap => "bwrap",
             ExecutorKind::Landlock => "landlock",
             ExecutorKind::Unconfined => "unconfined",
-            ExecutorKind::Gvisor => "gvisor",
-            ExecutorKind::AppleContainer => "apple-container",
-            ExecutorKind::K8sJob => "k8s-job",
         }
     }
 
