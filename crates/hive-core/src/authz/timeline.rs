@@ -102,6 +102,9 @@ pub struct RosterState {
     /// §2.2). Claims only: they grant nothing here, and whether one verifies
     /// is device-local.
     pub links: BTreeMap<Uuid, BTreeMap<Uuid, crate::identity_link::IdentityLink>>,
+    /// The workspace's WebAuthn relying party (`WorkspaceRulesSet.presence`;
+    /// `ligus.ai` until one is set). Every presence check uses it.
+    pub presence_policy: crate::presence::PresencePolicy,
 }
 
 impl RosterState {
@@ -271,8 +274,11 @@ impl RosterTracker {
                     },
                 );
             }
-            SessionEvent::WorkspaceRulesSet { version } if allowed => {
+            SessionEvent::WorkspaceRulesSet { version, presence } if allowed => {
                 self.state.rules = *version;
+                if let Some(p) = presence {
+                    self.state.presence_policy = p.clone();
+                }
             }
             SessionEvent::WorkspaceKeyRotated { rotation } if allowed => {
                 self.state.key_epochs.push(rotation, env.canonical_key());

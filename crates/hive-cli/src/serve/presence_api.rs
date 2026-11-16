@@ -7,7 +7,7 @@
 //! event's digest. `prepare` drafts the event exactly as the plain endpoint
 //! would (same payload, frontier, lamport and event id; nothing is written)
 //! and returns its challenge and a preview; the phone runs
-//! `ASAuthorization` (RP `ligus.ai`) over the challenge; `commit` attaches
+//! `ASAuthorization` (the workspace RP, `ligus.ai` by default) over the challenge; `commit` attaches
 //! the assertion inside the stamp, signs with this box's key and appends.
 //! The fold counts the vote as the account that owns the credential, which
 //! must be the voter's; a passkey of any other account is refused.
@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::{Extension, Json};
-use hive_core::presence::{b64url, PresenceAssertion, RP_ID};
+use hive_core::presence::{b64url, PresenceAssertion};
 use hive_runtime::chat_service::PresenceDraft;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -137,7 +137,8 @@ pub async fn prepare(
     preview["kind"] = json!(r.kind);
     preview["summary"] = json!(r.summary);
     preview["digestShort"] = json!(r.digest_short);
-    preview["rpId"] = json!(RP_ID);
+    preview["rpId"] = json!(r.policy.rp_id);
+    preview["origins"] = json!(r.policy.origins);
     preview["allowCredentials"] = json!(r.credential_ids);
     let challenge = b64url(&r.challenge);
     let id = s.presence_drafts.put(draft).map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("no OS randomness: {e}")))?;

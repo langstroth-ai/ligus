@@ -636,7 +636,7 @@ Rules v2 is the switch that turns on presence. Its migration step is in Section 
 
 #### B.4.1 Decision recap
 
-- Credentials are WebAuthn passkeys under RP ID `ligus.ai`. Any authenticator works: iCloud Keychain on Mac and iPhone, Windows Hello, Android/Google Password Manager, YubiKey or other FIDO2 keys, and hybrid (QR) passkeys.
+- Credentials are WebAuthn passkeys under the **workspace's** RP ID (Phase A, item 5). The genesis `WorkspaceRulesSet { version: 2, presence: { rpId, origins } }` names it, the fold keeps it in `RosterState.presence_policy`, and every presence check verifies against it (never a device setting). A workspace whose log names none uses `ligus.ai` / `https://ligus.ai`, the owner's deployment. The RP id can't change once a (non-recovery) passkey is registered; origins can change, with presence. The desktop hand-off page is `<first https origin>/presence`, and serve's `presence/prepare` returns `rpId` and `origins` to the phone. Any authenticator works: iCloud Keychain on Mac and iPhone, Windows Hello, Android/Google Password Manager, YubiKey or other FIDO2 keys, and hybrid (QR) passkeys.
 - Supported algorithms: ES256 (COSE -7) and EdDSA (COSE -8).
 - Secure Enclave-only keys are **not** required.
 - Verification is offline on every peer, inside the fold.

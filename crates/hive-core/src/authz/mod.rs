@@ -338,6 +338,21 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         }
     }
 
+    // The workspace's relying party: well formed, on the config log, and
+    // fixed once any passkey is registered (they'd all stop verifying; a
+    // recovery key doesn't depend on the relying party).
+    if let SessionEvent::WorkspaceRulesSet { presence: Some(p), .. } = &env.payload {
+        if !on_config {
+            return Decision::deny("the presence policy is set on the workspace config log");
+        }
+        if let Err(e) = p.well_formed() {
+            return Decision::deny(format!("presence policy: {}", e.0));
+        }
+        if p.rp_id != ctx.running.presence_policy.rp_id && ctx.running.passkeys.values().any(|m| m.values().any(|k| !k.recovery)) {
+            return Decision::deny("the relying party can't change once a passkey is registered");
+        }
+    }
+
     // B3: human presence. A stamped assertion must verify; under rules v2
     // (and for any switch to v2 or later, a version this build doesn't know
     // included) the events of the presence table need one. Passkey
@@ -350,7 +365,7 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 Err(why) => return Decision::deny(why),
             }
         }
-        let switch_up = matches!(env.payload, SessionEvent::WorkspaceRulesSet { version } if version >= 2);
+        let switch_up = matches!(env.payload, SessionEvent::WorkspaceRulesSet { version, .. } if version >= 2);
         if (roster.rules.min(RULES_SUPPORTED) >= 2 || switch_up) && rules::requires_presence(&env.payload, author, roster, fold) {
             // A device is added with its own account's presence, whoever
             // publishes the certificate.

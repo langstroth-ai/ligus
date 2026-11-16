@@ -49,6 +49,8 @@ pub mod vault;
 pub mod workflow;
 pub mod workspace_host;
 pub mod workspace_runtime;
+#[doc(hidden)]
+pub mod testkit;
 
 // Flat re-exports of the core domain types for ergonomic downstream use.
 pub use agent::WorkspaceAgent;

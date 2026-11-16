@@ -301,7 +301,7 @@ fn requires_presence_exhaustive() {
         SessionEvent::WorkflowDefinitionsUpdated { definitions: vec![] },
         SessionEvent::AgentRemoved { agent_id: Uuid::nil() },
         SessionEvent::WorkspaceRuntimeRemoved { runtime_id: "r".into() },
-        SessionEvent::WorkspaceRulesSet { version: 2 },
+        SessionEvent::WorkspaceRulesSet { version: 2, presence: None },
         SessionEvent::MemberAdded { member: member("someone-else", WorkspaceRole::Viewer), invite: None },
     ];
     for e in &yes {
@@ -538,7 +538,7 @@ fn downgrading_from_v2_needs_presence() {
     forged.clear_raw();
     forged.event_id = Uuid::new_v4();
     forged.lamport += 100;
-    forged.payload = SessionEvent::WorkspaceRulesSet { version: 1 };
+    forged.payload = SessionEvent::WorkspaceRulesSet { version: 1, presence: None };
     forged.actor_stamp.as_mut().unwrap().presence = None;
     forged.signature = None;
     svc.sign_for_test(&mut forged);
@@ -818,7 +818,7 @@ fn switching_to_any_later_rules_version_needs_presence() {
     forged.event_id = Uuid::new_v4();
     forged.lamport += 100;
     forged.sequence += 100;
-    forged.payload = SessionEvent::WorkspaceRulesSet { version: unknown };
+    forged.payload = SessionEvent::WorkspaceRulesSet { version: unknown, presence: None };
     forged.actor_stamp.as_mut().unwrap().presence = None;
     forged.signature = None;
     svc.sign_for_test(&mut forged);

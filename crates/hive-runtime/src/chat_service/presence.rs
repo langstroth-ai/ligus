@@ -34,6 +34,9 @@ pub struct PresenceRequest {
     pub digest_short: String,
     /// What is being authorized, in words.
     pub summary: String,
+    /// The workspace's relying party (its `WorkspaceRulesSet.presence`), which
+    /// the ceremony must use and the fold verifies against.
+    pub policy: presence::PresencePolicy,
 }
 
 /// Obtains a passkey assertion for a request (the desktop's browser
@@ -62,7 +65,7 @@ pub fn summarize(payload: &SessionEvent) -> String {
         }
         SessionEvent::PasskeyRegistered { credential } => format!("Register passkey \"{}\"", credential.label),
         SessionEvent::PasskeyRemoved { .. } => "Remove a passkey".into(),
-        SessionEvent::WorkspaceRulesSet { version } => format!("Switch the workspace to rules version {version}"),
+        SessionEvent::WorkspaceRulesSet { version, .. } => format!("Switch the workspace to rules version {version}"),
         SessionEvent::ProposalVoteCast { approval, .. } => {
             if approval.approved { "Approve a proposal".into() } else { "Reject a proposal".into() }
         }
@@ -115,6 +118,7 @@ impl ChatService {
             .unwrap_or_default();
         let challenge = presence::challenge(env);
         Ok(PresenceRequest {
+            policy: timeline.current().presence_policy.clone(),
             challenge,
             kind: env.payload.kind_str().to_string(),
             account_id,
@@ -261,6 +265,20 @@ impl ChatService {
         Ok(true)
     }
 
+    /// The relying party `workspace_id`'s passkeys are under (its signed
+    /// `WorkspaceRulesSet.presence`, `ligus.ai` until one is set).
+    pub fn workspace_presence_policy(&self, workspace_id: Uuid) -> Result<presence::PresencePolicy> {
+        let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        Ok(timeline.current().presence_policy.clone())
+    }
+
+    /// The relying party this device writes into a workspace it founds (the
+    /// deployment's setting; `ligus.ai` by default). Authoring only: the fold
+    /// reads the policy from the log, never from here.
+    pub fn set_deployment_presence_policy(&mut self, policy: presence::PresencePolicy) {
+        self.deployment_presence = policy;
+    }
+
     /// This device's account's credentials on `workspace_id`.
     pub fn passkeys_of(&self, workspace_id: Uuid, account_id: Uuid) -> Result<Vec<(String, bool)>> {
         let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
@@ -286,7 +304,7 @@ impl ChatService {
                 ));
             }
         }
-        self.append_signed(workspace_config_session_id(workspace_id), workspace_id, SessionEvent::WorkspaceRulesSet { version })
+        self.append_signed(workspace_config_session_id(workspace_id), workspace_id, SessionEvent::WorkspaceRulesSet { version, presence: None })
     }
 
     /// Re-sign a test envelope with this device's key.

@@ -125,6 +125,93 @@ impl Policy<'static> {
     }
 }
 
+/// Most origins a workspace's presence policy may list.
+pub const MAX_ORIGINS: usize = 8;
+
+/// A workspace's WebAuthn relying party (Phase A): carried by the genesis
+/// `WorkspaceRulesSet` and folded into the roster, so every peer verifies
+/// presence under the workspace's own RP and never under a device-local or
+/// hardcoded one. A workspace whose log never names one uses
+/// [`PresencePolicy::ligus`] (`ligus.ai`, the owner's deployment).
+///
+/// The RP id can't change once any credential is registered on the
+/// workspace (they'd all stop verifying); the origins can, with presence
+/// verified under the policy in force before the change.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresencePolicy {
+    /// The WebAuthn RP id (a registrable domain, lowercase ASCII).
+    pub rp_id: String,
+    /// The origins a `clientDataJSON` may name (`https://<host>[:port]`, or an
+    /// Android app origin `android:apk-key-hash:<b64url>`).
+    pub origins: Vec<String>,
+}
+
+impl Default for PresencePolicy {
+    fn default() -> Self {
+        Self::ligus()
+    }
+}
+
+impl PresencePolicy {
+    /// The owner's deployment: RP `ligus.ai`, origin `https://ligus.ai`.
+    pub fn ligus() -> Self {
+        Self { rp_id: RP_ID.into(), origins: DEFAULT_ORIGINS.iter().map(|o| (*o).to_string()).collect() }
+    }
+
+    /// A policy for `rp_id` with its own `https://` origin.
+    pub fn for_rp(rp_id: &str) -> Self {
+        Self { rp_id: rp_id.to_string(), origins: vec![format!("https://{rp_id}")] }
+    }
+
+    /// Well formed: a lowercase ASCII domain RP id, and 1 to 8 origins that
+    /// are `https://` URLs on that domain (or a subdomain of it) or Android
+    /// app origins.
+    pub fn well_formed(&self) -> Result<(), PresenceError> {
+        let rp = &self.rp_id;
+        let host_ok = |h: &str| {
+            !h.is_empty()
+                && h.len() <= 253
+                && h.split('.').all(|l| !l.is_empty() && l.len() <= 63 && l.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'))
+        };
+        if !host_ok(rp) {
+            return Err(err("bad relying party id"));
+        }
+        if self.origins.is_empty() || self.origins.len() > MAX_ORIGINS {
+            return Err(err("a presence policy names 1 to 8 origins"));
+        }
+        for o in &self.origins {
+            if o.len() > 256 {
+                return Err(err("origin too long"));
+            }
+            if let Some(hash) = o.strip_prefix("android:apk-key-hash:") {
+                if hash.is_empty() || unb64url(hash).is_err() {
+                    return Err(err("bad Android origin"));
+                }
+                continue;
+            }
+            let Some(rest) = o.strip_prefix("https://") else { return Err(err("an origin is https")) };
+            let host = rest.split_once(':').map(|(h, port)| (h, port.parse::<u16>().is_ok())).unwrap_or((rest, true));
+            if !host.1 || !host_ok(host.0) || !(host.0 == rp || host.0.ends_with(&format!(".{rp}"))) {
+                return Err(err("an origin must be on the relying party's domain"));
+            }
+        }
+        Ok(())
+    }
+
+    /// The URL of this deployment's hand-off page (`<first https origin>/presence`).
+    pub fn page_url(&self) -> String {
+        let origin = self.origins.iter().find(|o| o.starts_with("https://")).cloned().unwrap_or_else(|| format!("https://{}", self.rp_id));
+        format!("{origin}/presence")
+    }
+
+    /// Run `f` with the verifier [`Policy`] for this workspace.
+    pub fn with<R>(&self, f: impl FnOnce(&Policy<'_>) -> R) -> R {
+        let origins: Vec<&str> = self.origins.iter().map(String::as_str).collect();
+        f(&Policy { rp_id: &self.rp_id, origins: &origins, require_uv: true })
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The challenge (B.4.3)
 // ---------------------------------------------------------------------------

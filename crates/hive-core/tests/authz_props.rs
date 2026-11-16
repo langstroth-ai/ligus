@@ -711,11 +711,11 @@ fn unknown_rules_version_needs_presence_to_make_workspace_read_only() {
     assert_eq!(w.config().authz.rules, 1, "workspaces start at rules v1");
     assert!(!w.config().authz.read_only());
     // Only the Owner sets rules.
-    let by_admin = w.cfg_push("ada", SessionEvent::WorkspaceRulesSet { version: 9 });
+    let by_admin = w.cfg_push("ada", SessionEvent::WorkspaceRulesSet { version: 9, presence: None });
     assert_eq!(w.verdicts()[&by_admin], Verdict::Denied);
     assert!(!w.config().authz.read_only());
     // The Owner's device key alone can't switch to an unknown version.
-    let by_owner = w.cfg_push("owner", SessionEvent::WorkspaceRulesSet { version: hive_core::authz::RULES_SUPPORTED + 1 });
+    let by_owner = w.cfg_push("owner", SessionEvent::WorkspaceRulesSet { version: hive_core::authz::RULES_SUPPORTED + 1, presence: None });
     assert_eq!(w.verdicts()[&by_owner], Verdict::Denied);
     assert!(!w.config().authz.read_only(), "a switch without presence froze the workspace");
     w.chat_push("mara", SessionEvent::ProposalUpserted { proposal: proposal(Uuid::from_u128(0xF1), 1, ProposalStatus::Open) });
@@ -1018,7 +1018,7 @@ fn agent_tier_cannot_emit_admin_events() {
     // Config-log governance signed by the agent key: refused too.
     for e in [
         SessionEvent::MemberAdded { member: member("ghost", WorkspaceRole::Admin), invite: None },
-        SessionEvent::WorkspaceRulesSet { version: 1 },
+        SessionEvent::WorkspaceRulesSet { version: 1, presence: None },
         SessionEvent::ChatLockdownCleared { chat_id: w.sid },
     ] {
         let id = w.cfg_push("x", e);

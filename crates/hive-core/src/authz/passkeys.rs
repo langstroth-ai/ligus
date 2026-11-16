@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::events::SessionEventEnvelope;
 use crate::identity::WorkspaceRole;
-use crate::presence::{self, PasskeyCredential, PasskeyKey, Policy};
+use crate::presence::{self, PasskeyCredential, PasskeyKey};
 use crate::session::ChatSession;
 
 use super::RosterState;
@@ -30,7 +30,7 @@ pub fn verify_stamped(env: &SessionEventEnvelope, roster: &RosterState) -> Resul
         .get(&account)
         .and_then(|m| m.get(&a.credential_id))
         .ok_or("the presence credential isn't registered to the stamped account here")?;
-    presence::verify_get(a, key, &presence::challenge(env), &Policy::ligus()).map_err(|e| format!("presence: {}", e.0))?;
+    roster.presence_policy.with(|p| presence::verify_get(a, key, &presence::challenge(env), p)).map_err(|e| format!("presence: {}", e.0))?;
     Ok(Some(account))
 }
 
@@ -79,7 +79,7 @@ pub fn registration_ok(
     match existing {
         Some(m) => {
             let key = m.get(&a.credential_id).ok_or("another passkey needs presence from one the account already has")?;
-            presence::verify_get(a, key, &challenge, &Policy::ligus()).map_err(|e| format!("presence: {}", e.0))
+            roster.presence_policy.with(|p| presence::verify_get(a, key, &challenge, p)).map_err(|e| format!("presence: {}", e.0))
         }
         None if c.recovery => {
             if a.credential_id != c.credential_id {
@@ -94,7 +94,7 @@ pub fn registration_ok(
             if a.credential_id != c.credential_id {
                 return Err("the first passkey proves itself".into());
             }
-            presence::verify_get(a, &PasskeyKey::from(c), &challenge, &Policy::ligus()).map_err(|e| format!("registration proof: {}", e.0))
+            roster.presence_policy.with(|p| presence::verify_get(a, &PasskeyKey::from(c), &challenge, p)).map_err(|e| format!("registration proof: {}", e.0))
         }
     }
 }

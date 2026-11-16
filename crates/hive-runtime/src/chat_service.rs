@@ -97,6 +97,9 @@ pub struct ChatService {
     runtime_effect: bool,
     /// Asks a person for a passkey assertion (the desktop, B3).
     presence_provider: Option<std::sync::Arc<dyn PresenceProvider>>,
+    /// The relying party this device writes into a workspace it founds
+    /// (deployment setting; authoring only, never read by the fold).
+    deployment_presence: hive_core::presence::PresencePolicy,
     /// Capture presence-needing drafts instead of refusing (serve, B3).
     capture_presence: bool,
     /// The last captured draft.
@@ -139,6 +142,7 @@ impl ChatService {
             agent_vault: None,
             runtime_effect: false,
             presence_provider: None,
+            deployment_presence: hive_core::presence::PresencePolicy::ligus(),
             capture_presence: false,
             presence_draft: None,
             agent_messages: std::collections::HashMap::new(),
@@ -4819,7 +4823,7 @@ mod tests {
         let cfg = svc.ensure_workspace_config(wid).unwrap();
         svc.post_user_message(sid, wid, "before").unwrap();
         let err = svc
-            .append_signed(cfg, wid, SessionEvent::WorkspaceRulesSet { version: hive_core::authz::RULES_SUPPORTED + 1 })
+            .append_signed(cfg, wid, SessionEvent::WorkspaceRulesSet { version: hive_core::authz::RULES_SUPPORTED + 1, presence: None })
             .unwrap_err()
             .to_string();
         assert!(err.contains("passkey"), "{err}");

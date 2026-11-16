@@ -323,7 +323,13 @@ pub enum SessionEvent {
     /// Set the workspace rules version (config log; Owner only). The fold picks
     /// rules by config position; a version this build doesn't enforce makes
     /// the workspace read-only here (see [`crate::authz::RULES_SUPPORTED`]).
-    WorkspaceRulesSet { version: u32 },
+    /// `presence` sets the workspace's WebAuthn relying party (written at
+    /// genesis; absent = keep the one in force, `ligus.ai` by default).
+    WorkspaceRulesSet {
+        version: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        presence: Option<crate::presence::PresencePolicy>,
+    },
     /// A proposal's change was carried out. The only way a proposal becomes
     /// `Applied`: a human member (Contributor+) applies exactly the content
     /// that was approved (`diff_digest`, see [`crate::authz::votes::diff_digest`]).
