@@ -75,7 +75,10 @@ judged by the roster in force when it was made, so a later promotion doesn't
 validate an earlier step and a later demotion doesn't undo one. After removal
 they can't come back: joining needs a single-use invite an Admin issued, and
 a removed account also needs an Admin to re-add it; a removed member's new
-events are refused on every device. After removal with key rotation they can't read new
+events are refused on every device (but see the backdated-frontier
+limitation below). They can't post as another member: an event whose stamp
+names an account its signing device isn't certified for is quarantined, and
+the author gate gives it no role. After removal with key rotation they can't read new
 traffic or attachments on any host, old-key writes from them are refused,
 and a box enrolled for them (even one still hosting an agent) gets no new
 key.
@@ -117,7 +120,8 @@ repo, a teammate's message) can try to steer it. Defences:
   above the floor (Admin for a write-capable turn, Contributor for a
   read-only one; `LIGUS_MCP_MIN_ROLE`). Below it, Claude Code, Antigravity
   and Copilot run read-only and Codex, aider, pi and Hermes are refused with
-  a note.
+  a note; an automatic board pickup, whose text someone else filed, runs
+  below every floor.
 
 These reduce risk; they don't make an agent safe to run with broad
 permissions on an untrusted repository. Runtimes Ligus can't confine from
@@ -320,6 +324,28 @@ each stays on this list until a release fixes it.
     a non-shell tier for chats whose input you don't trust. Copilot and
     Antigravity still load your own MCP servers and plugins (no strict
     switch), and Codex over ACP isn't confined to Ligus's MCP servers yet.
+22. **A backdated config frontier keeps an old role.** Each event stamps
+    the config-log position its author had seen, and is judged at that
+    position. Nothing yet stops a demoted or removed member from naming a
+    position from before the change, so their new events are judged at
+    their old role until a per-member watermark exists. Votes and applies
+    are contained (one can't name a position older than the content it
+    judges, so a proposal filed after the demotion reached them isn't
+    swayed), and rotating the key after a removal cuts off a removed
+    member's new traffic.
+23. **A human click runs others' text at the clicker's tier.** Some
+    actions place text someone else wrote into a prompt that runs as the
+    person who clicked: **Send back to revise** (the review thread),
+    **Implement** on an approved instruction proposal (the agent is sent
+    the proposal's instruction text), and picking up a board item by hand
+    (its title).
+    That is a prompt-injection surface at your role; read what you are
+    sending before you click. Automatic board pickup doesn't have this
+    problem: it runs below every floor.
+24. **LSP servers and the terminal panel run unconfined.** They are your
+    own tools, started for you, and run outside the agent sandbox with your
+    OS user's access, by design. A repository's language-server config or a
+    command you paste into the terminal runs with everything you can reach.
 
 ## Out of scope {#out-of-scope}
 
@@ -408,6 +434,9 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 | Release | `scripts/release-matrix.sh` passed API keys as curl arguments, visible in `ps` | Headers go through a private file |
 | Host (authority) | The author gate read only the immediate trigger's author, and a message every event of which this device signed as its user cleared every floor. An agent reply the host signed for an agent without its own key (the device-local workspace, no agent vault, a key that couldn't be certified) counted as the host user's own message, so a Contributor's request handed to another agent, or an @mention cascade from it, ran at the host's Owner tier. Workflow stage prompts, posted as the driving device's user, ran at that user's tier whoever started the run | An agent's message has no role of its own: every host resolves it through its reply links (hand-offs, cascades) to the lowest role of the humans behind the chain, caps a peer's agent output at that peer's role, and runs a chain with no human read-only. A stage prompt is linked to its run and judged at the lower of its poster's and the run initiator's role. Verified by `handoff_chain_author_role_is_min_of_chain`, `mention_cascade_never_raises_tier`, `host_signed_agent_output_carries_no_role`, `agent_signed_reply_resolves_to_the_chain_human` and `workflow_stage_role_is_the_run_initiators` |
 | Sandbox (unconfined hosts) | Without an OS sandbox only write-capable CLI turns were refused: read-only CLI turns ran with nothing but an env allow-list and could read `hive.db` (not encrypted at rest), keys and tokens; `run_command`, approved commands, pre-flight tests and stdio MCP servers ran unconfined at any tier | Every agent process is refused at any tier, with a note naming the platform and the fix; HTTP models get no built-in file tools and run as plain chat. Verified by `unconfined_refuses_read_only_cli_turns`, `unconfined_refuses_tool_purpose` and `unconfined_allows_toolless_api_chat` |
+| Core (identity binding) | Ingest checked a stamp's account against the signing device only when the stamp carried one, so a member's device could stamp another member's actor id (their account id) with no account: the fold judged a `MemberRoleChanged` as that member (a Contributor could promote themselves to Owner) and the author gate gave the turn their role | A stamp whose actor id is a known account the signer doesn't sign for is quarantined as impersonation, and held from an uncertified device. The author gate counts a member with an account only when the stamp names that account and the signer is certified for it and unrevoked at the stamped position. Verified by `a_stamp_naming_another_member_without_their_account_gets_no_role` and `chain_loops_and_overlong_chains_fail_closed` |
+| Host (board pickup) | Automatic board pickup posted the item's task (a proposal's or failed stage's title, written by whoever filed it) as the host's own user, so the author gate's own-user rule ran it at Owner: anyone could title a proposal with instructions an Owner's desktop then ran at full tier | An automatic pickup is posted as a runtime effect with no role, below every floor; a manual pickup is unchanged. Verified by `auto_pickup_is_not_the_host_user_speaking` |
+| Core (chain workspace) | The trigger chain judged each event on the config log of the workspace that event named, so an event in a chat stamped with another workspace its author owned was judged as Owner there; the chain's config cache answered every workspace with the first one it loaded | Events stamped with a workspace other than the chat's fail the chain closed, a workflow run's first record must name the chat's workspace, and the cache is keyed by workspace. Hardening: such an event doesn't fold into the chat today. Verified by `an_event_stamped_with_another_workspace_fails_closed` |
 
 ### Open {#findings-open}
 
@@ -416,6 +445,8 @@ release fixes them: invite codes carrying every epoch key, directory keys
 for people you share no workspace with (unverified, sealed only after a
 warning), rules v1 as the default (presence only once an Owner turns rules v2 on),
 devices without a founder pin keeping the passphrase key, and ingest-time
-decisions that depend on arrival order. On Kubernetes, DNS tunnelling through
+decisions that depend on arrival order, backdated config frontiers, human
+clicks that run others' text at the clicker's tier, and unconfined LSP
+servers and terminal. On Kubernetes, DNS tunnelling through
 the cluster resolver remains possible (see
 [Kubernetes](../deploy/kubernetes.md#residual-risks)).

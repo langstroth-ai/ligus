@@ -416,7 +416,8 @@ worker`, `ligus agent`) applies the same gate to every runtime:
   tier (and the OS sandbox mounts the worktree read-only), and Codex, aider,
   pi and Hermes are refused with a note in the chat. An author that can't be
   resolved is below every floor. On the desktop, your own messages always
-  clear it (your own messages, not an agent's reply your device signed).
+  clear it (your own messages, not an agent's reply your device signed,
+  and not a task the board posts for you by automatic pickup; see below).
 - The author's role is the one they held **when they posted the message**
   (the roster at the message's position), so a promotion after the fact
   doesn't widen an old message's reach.
@@ -438,6 +439,26 @@ worker`, `ligus agent`) applies the same gate to every runtime:
   the signed record that created it). The approver of the workflow
   definition isn't part of it: approval reviews what the stages say, and
   the person who starts a run is the one whose authority it uses.
+- **The stamped member must be the signer.** A message's actor stamp names
+  a member, and a member's actor id is their account id. The gate counts
+  that member's role only when the stamp names their account and the
+  device that signed the event is certified for that account and not
+  revoked at the stamped position; anything else gets no role. Ingest
+  enforces the same binding first: an event whose stamp names a known
+  account (by its account field or by its actor id) that the signing device
+  doesn't sign for is quarantined as impersonation on every device, so a
+  Contributor can't post as the Owner or promote themselves with a
+  `MemberRoleChanged` stamped with the Owner's id.
+- **One workspace per chain.** Every event on the chain is judged against
+  the chat's own workspace. An event in the chat's log stamped with another
+  workspace (even one where its author is Owner and this device also holds
+  the config log) makes the chain resolve to no role, and so does a workflow
+  run whose first record names another workspace.
+- **Automatic board pickup has no author.** With auto pickup on, the task
+  the board posts (a proposal's or a failed stage's title, written by
+  whoever filed it) is posted as the runtime's effect, not as you: it has no
+  human behind it and runs below every floor. Picking an item up yourself
+  still posts it as your message, at your role.
 - One shared function (`ChatService::trigger_author_role`) decides this on
   the desktop, `ligus worker`, `ligus serve` and `ligus agent`.
 

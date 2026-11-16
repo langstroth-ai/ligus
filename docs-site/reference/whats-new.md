@@ -16,6 +16,20 @@ Full release notes are on the
   request handed on to another agent ran at your Owner tier. Agent replies
   with no human behind them now run read-only. See
   [the author gate](../concepts/security.md#author-gate).
+- **Nobody can post as another member.** An event whose actor stamp names
+  a member's account from a device not certified for that account is now
+  quarantined everywhere, and the author gate gives it no role. Before, a
+  Contributor could stamp the Owner's id and act as the Owner, including
+  promoting themselves. Trigger chains are also judged only against the
+  chat's own workspace. See
+  [the author gate](../concepts/security.md#author-gate).
+- **Automatic board pickup runs with no role.** A task the board picks up
+  on its own (a proposal's or failed stage's title, written by whoever
+  filed it) no longer runs as you at your Owner tier; it runs below every
+  floor. Picking an item up yourself is unchanged. See
+  [the author gate](../concepts/security.md#author-gate) and the
+  [threat model](../security/threat-model.md#known-limitations) for what
+  human-clicked actions still carry.
 - **No sandbox, no local agents.** A host without an OS sandbox (Windows,
   Linux without bubblewrap or Landlock, `LIGUS_SANDBOX=off`) now refuses
   read-only CLI agent turns too, plus `run_command`, pre-flight tests and
