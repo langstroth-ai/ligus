@@ -278,6 +278,11 @@ where
                     Some(Err(e)) => { result = Err(anyhow!("websocket: {e}")); break 'session; }
                 };
                 last_activity = Instant::now();
+                // The phone is awake (it PINGs while the app is open): the
+                // push gate's "app open" expires without this.
+                if pending.is_none() {
+                    host.phone_heard(&pid);
+                }
                 // P2: any decrypt failure ends the session.
                 let n = match ts.lock().unwrap_or_else(|e| e.into_inner()).read_message(&bytes, &mut buf) {
                     Ok(n) => n,

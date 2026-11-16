@@ -296,6 +296,10 @@ pub struct RelayState {
     pub revoked: Mutex<HashSet<String>>,
     /// Every JSON message a host sent on its control connection.
     pub log: Mutex<Vec<Value>>,
+    /// How the relay answers a `push`: `ok`, `code` and `detail` (the
+    /// detail only when the host asked with `diag`). `None` = ok, and
+    /// "fake apns: 200" for a `diag` push.
+    pub push_reply: Mutex<Option<Value>>,
 }
 
 pub struct FakeRelay {
@@ -432,7 +436,20 @@ async fn control_conn(mut ws: WebSocketStream<TcpStream>, st: Arc<RelayState>, l
                     _ => {}
                 }
                 if let Some(id) = m["id"].as_str() {
-                    ws.send(Message::Text(json!({ "t": "ack", "id": id, "ok": true }).to_string().into())).await?;
+                    let mut ack = json!({ "t": "ack", "id": id, "ok": true });
+                    if m["t"] == "push" {
+                        let reply = st.push_reply.lock().unwrap().clone().unwrap_or_else(|| json!({ "ok": true, "detail": "fake apns: 200" }));
+                        ack["ok"] = reply["ok"].clone();
+                        if let Some(code) = reply.get("code") {
+                            ack["code"] = code.clone();
+                        }
+                        if m["diag"] == json!(true) {
+                            if let Some(d) = reply.get("detail") {
+                                ack["detail"] = d.clone();
+                            }
+                        }
+                    }
+                    ws.send(Message::Text(ack.to_string().into())).await?;
                 }
                 st.log.lock().unwrap().push(m.clone());
                 let _ = log_tx.send(m);

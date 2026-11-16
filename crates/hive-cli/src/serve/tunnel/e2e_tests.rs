@@ -321,6 +321,105 @@ async fn pushes_reach_the_relay_encrypted_and_skip_a_foreground_phone() {
     h.handle.shutdown();
 }
 
+/// A paired phone with push on, through the fake relay: (relay, harness,
+/// host, phone session, pid, push key).
+async fn push_phone() -> (FakeRelay, Harness, Arc<tun::TunnelHost>, testkit::PhoneConn<testkit::ClientWs>, String, [u8; 32]) {
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let t = h.handle.shared.tunnel.clone().unwrap();
+    let (_, _, _, ps) = parse_link(&pair_link(&h));
+    relay.wait_for("enroll", |m| m["eid"] == ps.eid, Duration::from_secs(5)).await.unwrap();
+    let info = host_info(&h, &relay.url);
+    let phone = PhoneKeys::generate();
+    let (_c, pid, credential) = testkit::phone_enroll(&info, &phone, &ps, "Push phone").await.unwrap();
+    drop(_c);
+    let mut c = testkit::phone_session(&info, &phone, &credential).await.unwrap();
+    assert_eq!(c.request("PUT", "/v1/tunnel/push", Some(json!({ "enabled": true }))).await.unwrap().status, 200);
+    t.push_available.store(true, std::sync::atomic::Ordering::SeqCst);
+    let key: [u8; 32] = tun::b64u_fixed(&t.registry.get(&pid).unwrap().push_key).unwrap();
+    (relay, h, t, c, pid, key)
+}
+
+/// iOS suspends the app (screen locked) before the RESET for its events
+/// stream leaves, and the relay keeps the dead phone connection up for up to
+/// a minute: the stream stays "open" on the box. Once the phone has been
+/// quiet for FOREGROUND_QUIET it is in the background, and pushes go again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_suspended_phones_stale_events_stream_stops_suppressing_pushes() {
+    let (relay, h, t, mut c, pid, key) = push_phone().await;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    let _sse = c.open("GET", "/v1/events", &[("accept", "text/event-stream")], None, true).await.unwrap();
+    let _ = c.recv_timeout(Duration::from_secs(5)).await.unwrap();
+    assert_eq!(t.foreground_streams(&pid), 1);
+    let content = tun::PushContent { kind: "message.done".into(), chat_id: Some(chat_id.clone()), title: "coder replied".into(), ..Default::default() };
+    // While the phone is talking, the app is open: no push.
+    assert_eq!(t.push_all_at(&content, std::time::Instant::now()), 0);
+    // The phone goes silent (suspended, no RESET): the stream is still open…
+    assert_eq!(t.foreground_streams(&pid), 1);
+    // …but past the quiet window the push goes out.
+    let later = std::time::Instant::now() + tun::push::FOREGROUND_QUIET + Duration::from_secs(1);
+    assert_eq!(t.push_all_at(&content, later), 1, "a quiet phone's stale stream must not suppress pushes");
+    let m = relay.wait_for("push", |m| m["pid"] == json!(pid), Duration::from_secs(5)).await.unwrap();
+    let pt = testkit::open_push(&key, t.host_id(), &pid, &tun::b64u_decode(m["ct"].as_str().unwrap()).unwrap());
+    assert_eq!(pt["kind"], "message.done");
+    assert!(m.get("diag").is_none(), "a real push never asks for diagnostics");
+    t.push_available.store(false, std::sync::atomic::Ordering::SeqCst);
+    h.handle.shutdown();
+}
+
+/// `ligus remote push-test`: the CLI hands the request to the running serve
+/// through `pending/`, serve sends a `test` push (even with the app open)
+/// asking the relay for details, and the CLI reports each hop; a refusal
+/// fails the command with the reason.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn push_test_reports_each_hop_through_the_running_serve() {
+    let (relay, h, t, mut c, pid, key) = push_phone().await;
+    let _sse = c.open("GET", "/v1/events", &[("accept", "text/event-stream")], None, true).await.unwrap();
+    let _ = c.recv_timeout(Duration::from_secs(5)).await.unwrap();
+    *relay.state.push_reply.lock().unwrap() =
+        Some(json!({ "ok": true, "detail": "apns sandbox topic com.zazulam.ligus.lab: 200 (apns-id A1)" }));
+
+    // In process: the report.
+    let r = t.push_test(None, Duration::from_secs(5)).await;
+    assert!(r.connected && r.push_available && r.error.is_none(), "{r:?}");
+    let p = &r.phones[0];
+    assert!(p.push_enabled && p.app_open && p.sent, "{p:?}");
+    let ack = p.relay.as_ref().expect("relay answered");
+    assert!(ack.ok && ack.detail.as_deref() == Some("apns sandbox topic com.zazulam.ligus.lab: 200 (apns-id A1)"), "{ack:?}");
+    let m = relay.wait_for("push", |m| m["pid"] == json!(pid) && m["diag"] == json!(true), Duration::from_secs(5)).await.unwrap();
+    let pt = testkit::open_push(&key, t.host_id(), &pid, &tun::b64u_decode(m["ct"].as_str().unwrap()).unwrap());
+    assert_eq!((pt["kind"].as_str(), pt["title"].as_str()), (Some("test"), Some("Test notification")));
+
+    // Through the CLI and pending/, as `ligus remote push-test` runs it.
+    let data_dir = h.handle.shared.cfg.data_dir.clone();
+    let dd = data_dir.clone();
+    tokio::task::spawn_blocking(move || tun::cli::remote_push_test(&dd, None)).await.unwrap().expect("push-test succeeds");
+    // A refusal: the command fails, and names the hop and the fix.
+    *relay.state.push_reply.lock().unwrap() =
+        Some(json!({ "ok": false, "code": "push_failed", "detail": "apns production topic com.zazulam.ligus: 400 BadDeviceToken" }));
+    let r = t.push_test(Some("Push phone"), Duration::from_secs(5)).await;
+    let ack = r.phones[0].relay.clone().unwrap();
+    assert_eq!((ack.ok, ack.code.as_deref()), (false, Some("push_failed")));
+    let (text, ok) = tun::cli::describe_push_test(&r);
+    assert!(!ok && text.contains("BadDeviceToken") && text.contains("sandbox (development) token"), "{text}");
+    let dd = data_dir.clone();
+    let err = tokio::task::spawn_blocking(move || tun::cli::remote_push_test(&dd, Some("Push phone"))).await.unwrap().unwrap_err();
+    assert!(err.to_string().contains("didn't get through"), "{err}");
+    // Push-tests never trip the host's gates or real pushes' limits.
+    assert_eq!(t.foreground_streams(&pid), 1);
+    // A phone that never turned notifications on isn't sent anything.
+    c.request("PUT", "/v1/tunnel/push", Some(json!({ "enabled": false }))).await.unwrap();
+    let before = relay.messages("push").len();
+    let r = t.push_test(None, Duration::from_secs(2)).await;
+    assert!(!r.phones[0].push_enabled && !r.phones[0].sent);
+    assert_eq!(relay.messages("push").len(), before);
+    assert!(tun::cli::describe_push_test(&r).0.contains("notifications OFF"));
+    t.push_available.store(false, std::sync::atomic::Ordering::SeqCst);
+    h.handle.shutdown();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tunnel_request_after_revocation_on_open_session_gets_401() {
     // The per-request re-check (§9), independent of the GOAWAY: a request

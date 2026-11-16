@@ -393,9 +393,28 @@ pub struct TunnelPeer {
 enum Pending {
     Enroll(String),
     Revoke(String),
-    /// A push to this pid.
-    Push(String),
+    /// A push: the phone, the notification kind, and (for `ligus remote
+    /// push-test`) where the relay's answer goes.
+    Push { pid: String, kind: String, report: Option<tokio::sync::oneshot::Sender<RelayAck>> },
     Other,
+}
+
+/// The relay's answer to one push (for `ligus remote push-test`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayAck {
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    /// What the push service said (only from a relay that supports `diag`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// A short, log-safe name for a phone: its name and the start of its pid.
+fn phone_label(rec: &PhoneRecord) -> String {
+    let short: String = rec.pid.chars().take(6).collect();
+    format!("\"{}\" ({short}…)", rec.name)
 }
 
 /// Everything the control connection, the sessions and the API share.
@@ -520,9 +539,23 @@ impl TunnelHost {
         Self::lock(&self.status).clone()
     }
 
-    /// The relay answered a host request.
-    pub(crate) fn on_ack(&self, id: &str, ok: bool, code: Option<&str>) {
-        let Some(p) = Self::lock(&self.acks).remove(id) else { return };
+    /// The relay answered a host request (`detail`: a `diag` push's ack).
+    pub(crate) fn on_ack(&self, id: &str, ok: bool, code: Option<&str>, detail: Option<&str>) {
+        let Some(mut p) = Self::lock(&self.acks).remove(id) else { return };
+        if let Pending::Push { pid, kind, report } = &mut p {
+            // Every push's fate, at info (never its content or a token).
+            let who = self.registry.get(pid).map(|r| phone_label(&r)).unwrap_or_else(|| pid.clone());
+            let extra = detail.map(|d| format!(" [{d}]")).unwrap_or_default();
+            if ok {
+                println!("push: {kind} to {who}: relay accepted it{extra}");
+            } else {
+                let c = code.unwrap_or("?");
+                println!("push: {kind} to {who}: relay refused it: {c}{extra}{}", refusal_hint(c));
+            }
+            if let Some(tx) = report.take() {
+                let _ = tx.send(RelayAck { ok, code: code.map(str::to_string), detail: detail.map(str::to_string) });
+            }
+        }
         match p {
             Pending::Revoke(pid) if ok => {
                 Self::lock(&self.revocations).remove(&pid);
@@ -537,7 +570,7 @@ impl TunnelHost {
             Pending::Enroll(eid) if !ok => {
                 eprintln!("remote: relay refused enrollment window {eid} ({})", code.unwrap_or("?"));
             }
-            Pending::Push(pid) if !ok => {
+            Pending::Push { pid, .. } if !ok => {
                 let code = code.unwrap_or("?");
                 if code == "push_unavailable" {
                     // Off until the next `welcome` says otherwise; no retry.
@@ -546,7 +579,6 @@ impl TunnelHost {
                         self.update_status(|s| s.push = false);
                     }
                 } else {
-                    push::debug(format_args!("relay refused a push to {pid}: {code}"));
                     Self::lock(&self.push_gate).refused(&pid, code, Instant::now());
                 }
             }
@@ -737,27 +769,114 @@ impl TunnelHost {
     }
 
     pub fn push_all_at(&self, content: &PushContent, at: Instant) -> usize {
+        let phones: Vec<PhoneRecord> = self.registry.list().into_iter().filter(|r| r.is_active()).collect();
+        if phones.is_empty() {
+            return 0;
+        }
         if !self.push_available.load(Ordering::SeqCst) {
+            println!("push: {} not sent: the relay can't deliver pushes (push unavailable; see `ligus remote status`)", content.kind);
             return 0;
         }
         let mut sent = 0;
-        for rec in self.registry.list().into_iter().filter(|r| r.is_active() && r.push_enabled) {
-            let verdict = Self::lock(&self.push_gate).check(&rec.pid, &content.kind, content.chat_id.as_deref(), at);
-            if verdict != push::Verdict::Send {
-                push::debug(format_args!("{} push to {} not sent: {verdict:?}", content.kind, rec.pid));
+        for rec in phones {
+            let who = phone_label(&rec);
+            if !rec.push_enabled {
+                println!("push: {} to {who} not sent: notifications are off on that phone (the app hasn't turned them on for this host)", content.kind);
                 continue;
             }
-            let Some((seq, key)) = self.registry.next_push_seq(&rec.pid) else { continue };
-            let ct = seal_push(&key, self.host_id(), &rec.pid, content, rec.push_previews, seq, now());
-            let mut msg = json!({ "t": "push", "pid": rec.pid, "ct": b64u(ct), "prio": "high" });
-            if let Some(c) = &content.chat_id {
-                msg["collapse"] = json!(push_collapse(&key, c));
+            let verdict = Self::lock(&self.push_gate).check(&rec.pid, &content.kind, content.chat_id.as_deref(), at);
+            if verdict != push::Verdict::Send {
+                println!("push: {} to {who} {}", content.kind, verdict.describe());
+                continue;
             }
-            if self.send_request(msg, Pending::Push(rec.pid.clone())) {
+            if self.send_push(&rec, content, false, None) {
                 sent += 1;
+            } else {
+                println!("push: {} to {who} not sent: not connected to the relay", content.kind);
             }
         }
         sent
+    }
+
+    /// Seal and queue one push to `rec`; `diag` asks the relay for the push
+    /// service's answer, delivered to `report`.
+    fn send_push(&self, rec: &PhoneRecord, content: &PushContent, diag: bool, report: Option<tokio::sync::oneshot::Sender<RelayAck>>) -> bool {
+        let Some((seq, key)) = self.registry.next_push_seq(&rec.pid) else { return false };
+        let ct = seal_push(&key, self.host_id(), &rec.pid, content, rec.push_previews, seq, now());
+        let mut msg = json!({ "t": "push", "pid": rec.pid, "ct": b64u(ct), "prio": "high" });
+        if let Some(c) = &content.chat_id {
+            msg["collapse"] = json!(push_collapse(&key, c));
+        }
+        if diag {
+            msg["diag"] = json!(true);
+        }
+        self.send_request(msg, Pending::Push { pid: rec.pid.clone(), kind: content.kind.clone(), report })
+    }
+
+    /// `ligus remote push-test`: a `test` push to each active phone (or the
+    /// one named), past the host's own gates (the app being open, the
+    /// limits), asking the relay what APNs said. Waits up to `wait` for the
+    /// relay's answers.
+    pub async fn push_test(&self, only: Option<&str>, wait: Duration) -> PushTestReport {
+        let status = self.live_status();
+        let mut report = PushTestReport {
+            relay: self.settings.relay.clone(),
+            host_id: self.host_id().to_string(),
+            connected: status.connected,
+            push_available: self.push_available.load(Ordering::SeqCst),
+            phones: Vec::new(),
+            error: None,
+        };
+        let phones: Vec<PhoneRecord> = match only {
+            Some(who) => match self.registry.resolve(who) {
+                Some(p) => vec![p],
+                None => {
+                    report.error = Some(format!("no phone '{who}' (see `ligus phones list`)"));
+                    return report;
+                }
+            },
+            None => self.registry.list().into_iter().filter(|r| r.is_active()).collect(),
+        };
+        let mut waits = Vec::new();
+        for rec in phones {
+            let mut hop = PhoneHop {
+                pid: rec.pid.clone(),
+                name: rec.name.clone(),
+                active: rec.is_active(),
+                push_enabled: rec.push_enabled,
+                previews: rec.push_previews,
+                app_open: Self::lock(&self.push_gate).is_foreground(&rec.pid, Instant::now()),
+                last_seen: rec.last_seen,
+                ..Default::default()
+            };
+            if !hop.active || !hop.push_enabled || !report.connected {
+                report.phones.push(hop);
+                continue;
+            }
+            let content = PushContent {
+                kind: "test".into(),
+                title: "Test notification".into(),
+                fixed_body: "Sent by ligus remote push-test. Notifications work.".into(),
+                ..Default::default()
+            };
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            hop.sent = self.send_push(&rec, &content, true, Some(tx));
+            if hop.sent {
+                println!("push: test to {} sent to the relay (push-test)", phone_label(&rec));
+                waits.push((report.phones.len(), rx));
+            }
+            report.phones.push(hop);
+        }
+        let deadline = tokio::time::Instant::now() + wait;
+        for (i, rx) in waits {
+            report.phones[i].relay = tokio::time::timeout_at(deadline, rx).await.ok().and_then(Result::ok);
+        }
+        report
+    }
+
+    /// The phone `pid` sent a frame: it is awake (see [`push::FOREGROUND_QUIET`]).
+    pub fn phone_heard(&self, pid: &str) {
+        Self::lock(&self.push_gate).heard(pid, Instant::now());
     }
 
     /// Count an open `/v1/events` stream from `pid` (the app is in the
@@ -785,6 +904,53 @@ impl Drop for ForegroundGuard {
     fn drop(&mut self) {
         TunnelHost::lock(&self.host.push_gate).foreground_close(&self.pid);
     }
+}
+
+/// What one refusal code means for the person reading the log.
+pub fn refusal_hint(code: &str) -> &'static str {
+    match code {
+        "no_push_token" => " (the relay has no APNs token for this phone: open the app with notifications allowed so it registers one)",
+        "push_failed" => " (APNs refused it or was unreachable: see the relay's `tunnel push` log line, or run `ligus remote push-test`)",
+        "rate_limited" => " (the relay's push rate for this host; holding pushes for a minute)",
+        "revoked" => " (the relay has this phone as revoked)",
+        "push_unavailable" => " (the relay has no APNs configured)",
+        _ => "",
+    }
+}
+
+/// One phone in a `ligus remote push-test` report.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhoneHop {
+    pub pid: String,
+    pub name: String,
+    pub active: bool,
+    /// The phone asked this host for pushes (`PUT /v1/tunnel/push`).
+    pub push_enabled: bool,
+    pub previews: bool,
+    /// An events stream is open and the phone is talking: a real push would
+    /// be skipped as "app open".
+    pub app_open: bool,
+    #[serde(default)]
+    pub last_seen: Option<u64>,
+    /// Handed to the relay connection.
+    pub sent: bool,
+    /// The relay's answer (`None`: no answer in time).
+    #[serde(default)]
+    pub relay: Option<RelayAck>,
+}
+
+/// What `ligus remote push-test` found, hop by hop.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PushTestReport {
+    pub relay: String,
+    pub host_id: String,
+    pub connected: bool,
+    pub push_available: bool,
+    pub phones: Vec<PhoneHop>,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 /// The spec's cap on the raw encrypted push (nonce ‖ ciphertext ‖ tag).
@@ -926,10 +1092,62 @@ pub async fn stopped(stop: &mut tokio::sync::watch::Receiver<bool>) {
     let _ = stop.wait_for(|s| *s).await;
 }
 
+/// `pending/pushtest-<id>.req.json`, written by `ligus remote push-test`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PushTestRequest {
+    /// A phone's pid or name; `None` = every active phone.
+    #[serde(default)]
+    pub phone: Option<String>,
+    pub exp: u64,
+}
+
+pub fn push_test_request_file(dir: &Path, id: &str) -> PathBuf {
+    pending_dir(dir).join(format!("pushtest-{id}.req.json"))
+}
+
+pub fn push_test_result_file(dir: &Path, id: &str) -> PathBuf {
+    pending_dir(dir).join(format!("pushtest-{id}.result.json"))
+}
+
+/// How long a push test waits for the relay's answers.
+pub const PUSH_TEST_WAIT: Duration = Duration::from_secs(15);
+
+impl TunnelHost {
+    /// Push-test requests left in `pending/` (each taken once).
+    fn take_push_tests(&self) -> Vec<(String, PushTestRequest)> {
+        let Ok(entries) = std::fs::read_dir(pending_dir(&self.dir)) else { return Vec::new() };
+        let mut out = Vec::new();
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some(id) = name.strip_prefix("pushtest-").and_then(|n| n.strip_suffix(".req.json")) else { continue };
+            let req = read_json::<PushTestRequest>(&entry.path()).ok().flatten();
+            let _ = std::fs::remove_file(entry.path());
+            match req {
+                Some(r) if r.exp > now() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') => {
+                    out.push((id.to_string(), r))
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+}
+
+/// Run one `ligus remote push-test` and leave the report for the CLI.
+async fn run_push_test(host: Arc<TunnelHost>, id: String, req: PushTestRequest) {
+    let report = host.push_test(req.phone.as_deref(), PUSH_TEST_WAIT).await;
+    if let Err(e) = write_json(&push_test_result_file(&host.dir, &id), &report) {
+        eprintln!("remote: writing the push-test result: {e:#}");
+    }
+}
+
 /// Background loop: poll `pending/` while `ligus serve` runs.
 pub async fn pending_loop(host: Arc<TunnelHost>, mut stop: tokio::sync::watch::Receiver<bool>) {
     loop {
         host.poll_pending();
+        for (id, req) in host.take_push_tests() {
+            tokio::spawn(run_push_test(host.clone(), id, req));
+        }
         tokio::select! {
             _ = tokio::time::sleep(PENDING_POLL) => {}
             _ = stopped(&mut stop) => return,
