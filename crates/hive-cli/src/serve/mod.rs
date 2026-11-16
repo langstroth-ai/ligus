@@ -646,9 +646,9 @@ impl Shared {
     /// slow caller diff a stale snapshot after a newer one, rolling the differ
     /// back and re-emitting `message.done` (and its ntfy push).
     pub fn refresh(&self) {
-        let (author, links) = {
+        let (author, links, viewer) = {
             let svc = self.lock();
-            (svc.author().clone(), svc.device_links(self.ws).unwrap_or_default())
+            (svc.author().clone(), svc.device_links(self.ws).unwrap_or_default(), api::Viewer::of(&svc))
         };
         let me = author.id.clone();
         let mut notices = Vec::new();
@@ -685,7 +685,7 @@ impl Shared {
                         let Some(s) = sessions.iter().find(|s| s.id == chat) else { continue };
                         let Some(m) = s.messages.iter().find(|m| m.id == message) else { continue };
                         let name = if done { "message.done" } else { "message.created" };
-                        self.hub.emit(name, hub::wrap("message", api::message_dto(chat, m)));
+                        self.hub.emit(name, hub::wrap("message", api::message_dto(chat, m, viewer)));
                         // Agent replies notify when done; other members'
                         // messages when they appear (only if they mention you).
                         if self.fresh(m.created_at) {

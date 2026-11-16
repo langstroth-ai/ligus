@@ -1804,11 +1804,11 @@ fn retired_box_messages_read_as_the_owner_via_the_box() {
     assert!(links.link_retired(&chat, "box-1", "owner-1"));
     let mut old = ChatMessage::new(MessageRole::User, "Phone", "from the box");
     old.actor_identity = Some(ActorIdentity::new("box-1", "Phone", ActorKind::Human));
-    let v = api::linked_message_dto(&chat, &old, &links);
+    let v = api::linked_message_dto(&chat, &old, &links, api::Viewer::default());
     assert_eq!((v["author"].as_str(), v["via"].as_str(), v["actorId"].as_str()), (Some("Alex via Phone"), Some("Phone"), Some("owner-1")));
     let mut mine = ChatMessage::new(MessageRole::User, "Alex", "from the desktop");
     mine.actor_identity = Some(owner);
-    let v = api::linked_message_dto(&chat, &mine, &links);
+    let v = api::linked_message_dto(&chat, &mine, &links, api::Viewer::default());
     assert_eq!(v["author"], "Alex");
     assert!(v.get("via").is_none());
 }

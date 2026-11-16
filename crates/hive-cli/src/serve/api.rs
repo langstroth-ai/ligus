@@ -168,7 +168,35 @@ fn role_str(m: &ChatMessage) -> &'static str {
     }
 }
 
-pub fn message_dto(chat: Uuid, m: &ChatMessage) -> Value {
+/// Who is looking: this box's device and the account it writes as (its
+/// owner's once enrolled as the owner's device). Places a primary @hive turn
+/// the way the desktop's `Viewer::place_of` does.
+#[derive(Clone, Copy, Default, Debug)]
+pub struct Viewer {
+    pub device: Option<Uuid>,
+    pub account: Option<Uuid>,
+}
+
+impl Viewer {
+    pub fn of(svc: &hive_runtime::ChatService) -> Self {
+        Self { device: Some(svc.device_id()), account: svc.author().account_id }
+    }
+
+    /// "this" (the box ran it), "mine" (another device of the same account)
+    /// or none, for turn `m` answered by `actor`. The device that ran the turn
+    /// is the message's `origin_device_id`; it only counts when the account
+    /// matches too (the device id is the writer's claim).
+    pub fn place_of(&self, m: &ChatMessage, actor: &hive_core::ActorIdentity) -> Option<&'static str> {
+        let mine = actor.account_id.is_some() && actor.account_id == self.account;
+        let ran_on = m.origin_device_id.or(actor.device_id);
+        if mine && ran_on.is_some() && ran_on == self.device {
+            return Some("this");
+        }
+        mine.then_some("mine")
+    }
+}
+
+pub fn message_dto(chat: Uuid, m: &ChatMessage, viewer: Viewer) -> Value {
     let mut v = json!({
         "id": m.id,
         "chatId": chat,
@@ -186,6 +214,21 @@ pub fn message_dto(chat: Uuid, m: &ChatMessage) -> Value {
     if let Some(actor) = m.actor_identity.as_ref().filter(|_| m.role == MessageRole::User) {
         v["actorId"] = json!(actor.id);
     }
+    // A primary @hive turn (an assistant reply by no roster agent): whose hive
+    // answered (`responderName`) and, when it was this box or another of the
+    // same person's devices, `responderDevice` "this" / "mine" (absent
+    // otherwise: the phone says "<name>'s device").
+    if m.role == MessageRole::Assistant && m.responder_id.is_none() {
+        if let Some(actor) = m.actor_identity.as_ref() {
+            let name = hive_proto::names::clean_display_name(&actor.display_name);
+            if !name.trim().is_empty() {
+                v["responderName"] = json!(name);
+                if let Some(place) = viewer.place_of(m, actor) {
+                    v["responderDevice"] = json!(place);
+                }
+            }
+        }
+    }
     v
 }
 
@@ -193,8 +236,8 @@ pub fn message_dto(chat: Uuid, m: &ChatMessage) -> Value {
 /// member this box used before it was enrolled as its owner's device — shown as
 /// theirs: `author` "Alex via Phone", `actorId` the owner's (for the avatar),
 /// `via` the old name.
-pub fn linked_message_dto(chat: &ChatSession, m: &ChatMessage, links: &hive_core::DeviceLinks) -> Value {
-    let mut v = message_dto(chat.id, m);
+pub fn linked_message_dto(chat: &ChatSession, m: &ChatMessage, links: &hive_core::DeviceLinks, viewer: Viewer) -> Value {
+    let mut v = message_dto(chat.id, m, viewer);
     if m.role != MessageRole::User {
         return v;
     }
@@ -674,8 +717,11 @@ async fn list_messages(State(s): S, Path(id): Path<String>, Query(page): Query<P
     if let Some(last) = slice.last() {
         s.mark_read(&chat, last.id);
     }
-    let links = s.lock().device_links(s.ws).unwrap_or_default();
-    let list: Vec<Value> = slice.iter().map(|m| linked_message_dto(&chat, m, &links)).collect();
+    let (links, viewer) = {
+        let svc = s.lock();
+        (svc.device_links(s.ws).unwrap_or_default(), Viewer::of(&svc))
+    };
+    let list: Vec<Value> = slice.iter().map(|m| linked_message_dto(&chat, m, &links, viewer)).collect();
     Ok(Json(json!({ "messages": list })))
 }
 
@@ -727,7 +773,7 @@ async fn post_message(State(s): S, Path(id): Path<String>, Json(req): Json<NewMe
     };
     s.mark_read_after_post(chat.id, message.id);
     s.after_write();
-    Ok(Json(json!({ "message": message_dto(chat.id, &message) })))
+    Ok(Json(json!({ "message": message_dto(chat.id, &message, Viewer::of(&s.lock())) })))
 }
 
 impl Shared {
@@ -1237,7 +1283,7 @@ async fn request_changes(State(s): S, Path(id): Path<String>, body: Bytes) -> Ap
     let updated = chat.proposals.iter().find(|q| q.id == p.id).cloned().unwrap_or(current);
     Ok(Json(json!({
         "proposal": proposal_dto_as(&chat, &updated, &s.my_actor_id()),
-        "message": message_dto(chat.id, &message),
+        "message": message_dto(chat.id, &message, Viewer::of(&s.lock())),
     })))
 }
 
@@ -1468,5 +1514,46 @@ mod ask_kind_tests {
         assert_eq!(super::ask_dto(chat, &p)["kind"], "permission");
         let old: hive_core::flow::HumanAsk = serde_json::from_value(serde_json::json!({"askId": chat, "turnId": chat, "agentKey": "a", "question": "q", "atMs": 1})).unwrap();
         assert_eq!(super::ask_dto(chat, &old)["kind"], "question");
+    }
+}
+
+#[cfg(test)]
+mod responder_device_tests {
+    use super::{message_dto, Viewer};
+    use hive_core::{ChatMessage, MessageRole};
+    use uuid::Uuid;
+
+    /// A primary @hive turn reads "this" when this box ran it for its own
+    /// account, "mine" when another device of that account did, and carries
+    /// no place for someone else's (even one naming this box's device). A
+    /// named agent's reply and a person's message carry neither field.
+    #[test]
+    fn primary_turns_are_placed_from_the_boxs_point_of_view() {
+        let (box_dev, other_dev, acct) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let viewer = Viewer { device: Some(box_dev), account: Some(acct) };
+        let turn = |account: Option<Uuid>, ran_on: Option<Uuid>| {
+            let mut a = hive_core::ActorIdentity::new("actor", "Olive\u{202E}", hive_core::ActorKind::Human);
+            a.account_id = account;
+            let mut m = ChatMessage::new(MessageRole::Assistant, "hive", "ok");
+            m.actor_identity = Some(a);
+            m.origin_device_id = ran_on;
+            m
+        };
+        let chat = Uuid::new_v4();
+        let v = message_dto(chat, &turn(Some(acct), Some(box_dev)), viewer);
+        assert_eq!(v["responderDevice"], "this");
+        assert_eq!(v["responderName"], "Olive");
+        assert_eq!(message_dto(chat, &turn(Some(acct), Some(other_dev)), viewer)["responderDevice"], "mine");
+        let theirs = message_dto(chat, &turn(Some(Uuid::new_v4()), Some(box_dev)), viewer);
+        assert!(theirs.get("responderDevice").is_none(), "{theirs}");
+        assert_eq!(theirs["responderName"], "Olive");
+
+        let mut agent = turn(Some(acct), Some(box_dev));
+        agent.responder_id = Some(Uuid::new_v4());
+        let v = message_dto(chat, &agent, viewer);
+        assert!(v.get("responderDevice").is_none() && v.get("responderName").is_none());
+        let mut person = turn(Some(acct), Some(box_dev));
+        person.role = MessageRole::User;
+        assert!(message_dto(chat, &person, viewer).get("responderDevice").is_none());
     }
 }
