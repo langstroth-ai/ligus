@@ -1506,6 +1506,14 @@ export type { EgressPresetDto } from "@/bindings/EgressPresetDto";
 export const getEgressPresets = (sessionId?: string | null) =>
   invoke<import("@/bindings/EgressPresetsDto").EgressPresetsDto>("get_egress_presets", { sessionId: sessionId ?? null });
 
+/// Whether the active workspace's CLI agents use the user's own CLI setup
+/// (Claude Code: user settings, hooks, plugins, skills) on this device.
+export const getWorkspaceCliUserConfig = () => invoke<boolean>("get_workspace_cli_user_config");
+
+/// Opt the active workspace's CLI agents into (or out of) the user's own
+/// CLI setup on this device. Off by default.
+export const setWorkspaceCliUserConfig = (enabled: boolean) => invoke<void>("set_workspace_cli_user_config", { enabled });
+
 /// Turn presets on for the active workspace on this device (`[]` = off).
 export const setWorkspaceEgressPresets = (presets: string[]) =>
   invoke<void>("set_workspace_egress_presets", { presets });

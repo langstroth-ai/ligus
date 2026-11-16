@@ -224,6 +224,178 @@ fn ligus_mcp_status(line: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Built-in Claude Code tools a Ligus turn may use: file and shell tools,
+/// in-process sub-agents (they inherit this same tool set, sandbox and
+/// flags) and the deferred-tool loader. An allow-list (`--tools`), so a tool
+/// a newer Claude Code adds is off until Ligus reviews it.
+pub const TURN_TOOLS: &[&str] = &["Task", "Agent", "Bash", "Read", "Edit", "Write", "Glob", "Grep", "NotebookEdit", "TodoWrite", "ToolSearch", "LSP"];
+
+/// Web tools, offered only while the turn's egress is open. `WebSearch` is
+/// a server-side tool (Anthropic runs the search), so the turn's egress
+/// proxy never sees it; it follows the egress policy here instead.
+pub const WEB_TOOLS: &[&str] = &["WebFetch", "WebSearch"];
+
+/// Tools that schedule or run work outside the turn, or reach other
+/// sessions: cloud routines (`RemoteTrigger`, which run on Anthropic's side
+/// under the user's account and connectors), cron and wake-ups, background
+/// monitors and tasks, push notifications, messaging other Claude Code
+/// sessions, multi-agent workflows, design sync to claude.ai, and worktree
+/// switching (Ligus owns the turn's directory). Denied in every turn, even
+/// when the workspace opted into the user's own setup.
+pub const OUT_OF_TURN_TOOLS: &[&str] = &[
+    "RemoteTrigger",
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "ScheduleWakeup",
+    "Monitor",
+    "TaskStop",
+    "PushNotification",
+    "SendMessage",
+    "ListAgents",
+    "Workflow",
+    "DesignSync",
+    "EnterWorktree",
+    "ExitWorktree",
+];
+
+/// Env for every Ligus-run `claude`, inherited by anything it starts (a
+/// nested `claude` from the shell too): no cron, no background tasks, no
+/// workflows.
+pub const CONFINE_ENV: &[(&str, &str)] = &[
+    ("CLAUDE_CODE_DISABLE_CRON", "1"),
+    ("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1"),
+    ("CLAUDE_CODE_DISABLE_WORKFLOWS", "1"),
+];
+
+/// What a turn's confinement depends on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Confine {
+    /// The turn's egress is open.
+    pub egress_open: bool,
+    /// The workspace opted into the user's own Claude Code setup.
+    pub user_config: bool,
+    /// The author gate allows writes (else only Ligus's own MCP server is
+    /// pre-approved).
+    pub writes_allowed: bool,
+    /// The chat turned the `claude-connectors` egress preset on (open egress
+    /// only): the user's claude.ai connectors load, which Claude Code offers
+    /// only without `--strict-mcp-config`.
+    pub connectors: bool,
+}
+
+impl Confine {
+    /// From the turn in scope (the baseline policy when there is none).
+    pub fn current() -> Self {
+        let p = crate::executor::current_turn();
+        let open = p.as_ref().is_none_or(|p| p.envelope.egress.is_open());
+        Self {
+            egress_open: open,
+            user_config: p.as_ref().is_some_and(|p| p.cli_user_config),
+            writes_allowed: p.as_ref().is_none_or(|p| p.gate.allows_writes()),
+            connectors: open && {
+                let c = crate::egress::EgressPreset::ClaudeConnectors;
+                p.as_ref().is_some_and(|p| p.egress_presets.contains(&c)) || crate::executor::host_paths().egress_presets.contains(&c)
+            },
+        }
+    }
+}
+
+/// MCP server ids named in `--mcp-config` values that are inline JSON (the
+/// envelope's allow-list); config files are Ligus's own attach file.
+fn inline_mcp_servers(args: &[String]) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--mcp-config" {
+            i += 1;
+            while i < args.len() && !args[i].starts_with("--") {
+                if let Ok(v) = serde_json::from_str::<Value>(&args[i]) {
+                    if let Some(m) = v.get("mcpServers").and_then(Value::as_object) {
+                        ids.extend(m.keys().cloned());
+                    }
+                }
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    ids
+}
+
+/// Confine a Ligus-run `claude -p` to the turn: `args` (the runtime's tier
+/// and model, the envelope's flags, the Ligus MCP attach) plus the flags
+/// below, and the env to add.
+///
+/// - `--strict-mcp-config` (and `ENABLE_CLAUDEAI_MCP_SERVERS=false`): only
+///   the servers Ligus passed (its own and the chat's allow-listed ones),
+///   never `~/.claude.json`, project `.mcp.json`, plugin servers or claude.ai
+///   connectors. Left off only when the chat turned the `claude-connectors`
+///   preset on (open egress): Claude Code loads connectors only without it,
+///   so the user's own MCP servers load with them.
+/// - `--setting-sources ""`, `disableAllHooks`, `--disable-slash-commands`:
+///   no user, project or local settings (their hooks, permission rules,
+///   enabled plugins, env), no skills or commands. With the workspace's
+///   opt-in and open egress: the user's own settings (`user` only, never the
+///   repo's), hooks, plugins and skills.
+/// - `--tools`: the built-in allow-list ([`TURN_TOOLS`], plus [`WEB_TOOLS`]
+///   while egress is open, plus `Skill` with the opt-in).
+/// - `--disallowedTools`: [`OUT_OF_TURN_TOOLS`] always; the web tools and
+///   the shell under restricted egress.
+/// - `--allowedTools mcp__<id>`: pre-approves Ligus's own server (its tools
+///   are authorized by Ligus per call) and, when the author gate allows
+///   writes, the chat's allow-listed servers. Without it every MCP call is
+///   refused in `-p` mode.
+pub fn confine(args: &[String], c: Confine) -> (Vec<String>, Vec<(String, String)>) {
+    let mut out = args.to_vec();
+    let user = c.user_config && c.egress_open;
+    let connectors = c.connectors && c.egress_open;
+    let mut env: Vec<(String, String)> = CONFINE_ENV.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    if connectors {
+        out.retain(|a| a != "--strict-mcp-config");
+    } else {
+        if !out.iter().any(|a| a == "--strict-mcp-config") {
+            out.push("--strict-mcp-config".into());
+        }
+        // Also for a `claude` the agent starts from its shell.
+        env.push(("ENABLE_CLAUDEAI_MCP_SERVERS".into(), "false".into()));
+    }
+    out.push("--setting-sources".into());
+    out.push(if user { "user".into() } else { String::new() });
+    if !user {
+        out.push("--settings".into());
+        out.push(serde_json::json!({ "disableAllHooks": true }).to_string());
+        out.push("--disable-slash-commands".into());
+    }
+    let mut tools: Vec<&str> = TURN_TOOLS.iter().copied().filter(|t| c.egress_open || *t != "Bash").collect();
+    if c.egress_open {
+        tools.extend(WEB_TOOLS);
+    }
+    if user {
+        tools.push("Skill");
+    }
+    out.push("--tools".into());
+    out.push(tools.join(","));
+    out.push("--disallowedTools".into());
+    out.extend(OUT_OF_TURN_TOOLS.iter().map(|s| s.to_string()));
+    if !c.egress_open {
+        out.extend(WEB_TOOLS.iter().map(|s| s.to_string()));
+        out.push("Bash".into());
+    }
+    let mut approve = vec![crate::executor::LIGUS_MCP_ID.to_string()];
+    if c.writes_allowed {
+        for id in inline_mcp_servers(args) {
+            if !approve.contains(&id) {
+                approve.push(id);
+            }
+        }
+    }
+    out.push("--allowedTools".into());
+    out.extend(approve.iter().map(|id| format!("mcp__{id}")));
+    (out, env)
+}
+
 /// Stream a reply from the Claude Code CLI. `program` is the binary (default
 /// `claude`); `extra_args` are appended; `working_dir` is added via `--add-dir`
 /// and used as the process cwd.
@@ -252,7 +424,14 @@ pub async fn stream_reply(
         args.push("--add-dir".into());
         args.push(dir.to_string());
     }
-    args.extend(extra_args.iter().cloned());
+    let (confined, confine_env) = confine(extra_args, Confine::current());
+    args.extend(confined);
+    let mut env: Vec<(String, String)> = extra_env.to_vec();
+    for (k, v) in confine_env {
+        env.retain(|(x, _)| *x != k);
+        env.push((k, v));
+    }
+    let extra_env = &env[..];
 
     // Confined to the turn's sandbox plan (see `executor`): its worktree,
     // the egress proxy, an allow-listed env (extra_env carries GIT_AUTHOR_*
@@ -390,6 +569,151 @@ pub async fn stream_reply(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The command line a Ligus turn launches `claude` with, end to end
+    /// through `stream_reply` (a fake `claude` that records its argv).
+    #[cfg(unix)]
+    async fn launched_argv(policy: crate::executor::TurnPolicy, args: &[String]) -> (Vec<String>, String) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("out")).unwrap();
+        let out = dir.path().join("out/argv.txt");
+        let envf = dir.path().join("out/env.txt");
+        let fake = dir.path().join("claude");
+        std::fs::write(&fake, format!("#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > '{}'\nenv > '{}'\n", out.display(), envf.display())).unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut a = vec!["--permission-mode".to_string(), "acceptEdits".to_string()];
+        a.extend(args.iter().cloned());
+        let policy = crate::executor::TurnPolicy { worktree_is_isolated: true, ..policy };
+        let wd = dir.path().to_string_lossy().into_owned();
+        let _ = crate::executor::with_turn(policy, stream_reply(fake.to_str().unwrap(), &a, Some(&wd), &[], None, &[], |_| {}, |_| {})).await;
+        let argv = std::fs::read_to_string(&out).unwrap_or_default().lines().map(str::to_string).collect();
+        (argv, std::fs::read_to_string(&envf).unwrap_or_default())
+    }
+
+    fn values_after(argv: &[String], flag: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < argv.len() {
+            if argv[i] == flag {
+                i += 1;
+                while i < argv.len() && !argv[i].starts_with("--") {
+                    out.extend(argv[i].split(',').map(str::to_string));
+                    i += 1;
+                }
+            } else {
+                i += 1;
+            }
+        }
+        out
+    }
+
+    /// A Ligus turn gets only what the turn should have: no user or repo
+    /// settings, hooks, plugins or skills, no MCP server Ligus didn't pass,
+    /// and none of the tools that schedule or run work outside the turn
+    /// (cloud routines, cron, background monitors, push, cross-session
+    /// messaging, workflows).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn default_turn_is_confined_to_the_turn() {
+        if crate::executor::skip_without_sandbox("default_turn_is_confined_to_the_turn") {
+            return;
+        }
+        let (argv, env) = launched_argv(crate::executor::TurnPolicy::baseline(crate::executor::HostKind::Desktop), &[]).await;
+        assert!(argv.contains(&"--strict-mcp-config".to_string()), "{argv:?}");
+        assert!(argv.windows(2).any(|w| w[0] == "--setting-sources" && w[1].is_empty()), "{argv:?}");
+        let i = argv.iter().rposition(|a| a == "--settings").expect("--settings");
+        let v: Value = serde_json::from_str(&argv[i + 1]).unwrap();
+        assert_eq!(v["disableAllHooks"], serde_json::json!(true));
+        assert!(argv.contains(&"--disable-slash-commands".to_string()), "{argv:?}");
+        let tools = values_after(&argv, "--tools");
+        for t in ["Bash", "Read", "Edit", "Write", "Task", "WebSearch", "WebFetch"] {
+            assert!(tools.contains(&t.to_string()), "{t} missing from {tools:?}");
+        }
+        let denied = values_after(&argv, "--disallowedTools");
+        for t in ["RemoteTrigger", "CronCreate", "ScheduleWakeup", "Monitor", "PushNotification", "SendMessage", "Workflow", "DesignSync"] {
+            assert!(!tools.contains(&t.to_string()), "{t} offered: {tools:?}");
+            assert!(denied.contains(&t.to_string()), "{t} not denied: {denied:?}");
+        }
+        assert!(!tools.contains(&"Skill".to_string()));
+        for var in ["CLAUDE_CODE_DISABLE_CRON=1", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1", "CLAUDE_CODE_DISABLE_WORKFLOWS=1"] {
+            assert!(env.lines().any(|l| l == var), "{var} not set");
+        }
+    }
+
+    /// A workspace that opted in gets the user's own settings, hooks,
+    /// plugins and skills back, never the out-of-turn tools; and only while
+    /// egress is open.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn opt_in_restores_user_setup_but_not_out_of_turn_tools() {
+        if crate::executor::skip_without_sandbox("opt_in_restores_user_setup_but_not_out_of_turn_tools") {
+            return;
+        }
+        let base = crate::executor::TurnPolicy::baseline(crate::executor::HostKind::Desktop);
+        let (argv, _) = launched_argv(crate::executor::TurnPolicy { cli_user_config: true, ..base.clone() }, &[]).await;
+        assert!(argv.windows(2).any(|w| w == ["--setting-sources", "user"]), "{argv:?}");
+        assert!(!argv.contains(&"--disable-slash-commands".to_string()) && !argv.contains(&"--settings".to_string()), "{argv:?}");
+        assert!(argv.contains(&"--strict-mcp-config".to_string()));
+        assert!(values_after(&argv, "--tools").contains(&"Skill".to_string()));
+        assert!(values_after(&argv, "--disallowedTools").contains(&"RemoteTrigger".to_string()));
+
+        // Restricted egress: the opt-in is ignored and the web tools and the
+        // shell go too.
+        let env = hive_core::sandbox::SandboxEnvelope::workspace_default().tighten(hive_core::sandbox::TightenedBy::Dearth, hive_core::sandbox::EgressPolicy::Closed, false);
+        let (argv, _) = launched_argv(crate::executor::TurnPolicy { envelope: env, cli_user_config: true, ..base }, &[]).await;
+        assert!(argv.windows(2).any(|w| w[0] == "--setting-sources" && w[1].is_empty()), "{argv:?}");
+        let tools = values_after(&argv, "--tools");
+        let denied = values_after(&argv, "--disallowedTools");
+        for t in ["WebSearch", "WebFetch", "Bash", "Skill"] {
+            assert!(!tools.contains(&t.to_string()), "{t} offered under restriction: {tools:?}");
+        }
+        for t in ["WebSearch", "WebFetch", "Bash"] {
+            assert!(denied.contains(&t.to_string()), "{t} not denied under restriction");
+        }
+    }
+
+    /// The `claude-connectors` preset is the one way claude.ai connectors
+    /// reach a turn, and only under open egress.
+    #[test]
+    fn connectors_preset_lifts_strict_mcp_only_when_open() {
+        let strict = vec!["--strict-mcp-config".to_string(), "--mcp-config".into(), r#"{"mcpServers":{}}"#.into()];
+        let c = Confine { egress_open: true, user_config: false, writes_allowed: true, connectors: false };
+        let (a, env) = confine(&strict, c);
+        assert_eq!(a.iter().filter(|x| *x == "--strict-mcp-config").count(), 1);
+        assert!(env.contains(&("ENABLE_CLAUDEAI_MCP_SERVERS".to_string(), "false".to_string())));
+        let (a, env) = confine(&strict, Confine { connectors: true, ..c });
+        assert!(!a.contains(&"--strict-mcp-config".to_string()));
+        assert!(!env.iter().any(|(k, _)| k == "ENABLE_CLAUDEAI_MCP_SERVERS"));
+        assert!(values_after(&a, "--disallowedTools").contains(&"RemoteTrigger".to_string()));
+        let (a, _) = confine(&strict, Confine { connectors: true, egress_open: false, ..c });
+        assert!(a.contains(&"--strict-mcp-config".to_string()));
+    }
+
+    /// The owner's live test: the Ligus MCP server connected, but every
+    /// call was refused in `-p` mode ("Claude requested permissions to use
+    /// mcp__ligus__ligus_list_chats, but you haven't granted it yet").
+    /// Ligus pre-approves its own server (its tools are gated by Ligus
+    /// authz), and the chat's allow-listed servers, and nothing else.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ligus_and_chat_mcp_servers_are_pre_approved() {
+        if crate::executor::skip_without_sandbox("ligus_and_chat_mcp_servers_are_pre_approved") {
+            return;
+        }
+        let strict = vec!["--strict-mcp-config".to_string(), "--mcp-config".into(), r#"{"mcpServers":{"docs":{"type":"http","url":"https://docs.example"}}}"#.into()];
+        let (argv, _) = launched_argv(crate::executor::TurnPolicy::baseline(crate::executor::HostKind::Desktop), &strict).await;
+        let allowed = values_after(&argv, "--allowedTools");
+        assert!(allowed.contains(&"mcp__ligus".to_string()), "{argv:?}");
+        assert!(allowed.contains(&"mcp__docs".to_string()), "{argv:?}");
+        assert!(!allowed.iter().any(|t| t == "mcp__*" || t == "*"), "{argv:?}");
+        // A read-only author gate (its worktree is read-only, so checked on
+        // the constructed args): only Ligus's own server, whose tools Ligus
+        // authorizes per call.
+        let (argv, _) = confine(&strict, Confine { egress_open: true, user_config: false, writes_allowed: false, connectors: false });
+        let allowed = values_after(&argv, "--allowedTools");
+        assert_eq!(allowed, vec!["mcp__ligus".to_string()], "{argv:?}");
+    }
 
     #[cfg(unix)]
     #[tokio::test]

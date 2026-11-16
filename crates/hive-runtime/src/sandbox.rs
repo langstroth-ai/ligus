@@ -10,7 +10,7 @@
 //!
 //! | Runtime | How egress is closed |
 //! |---|---|
-//! | Claude Code | `--disallowedTools WebFetch WebSearch Bash`, user settings only with hooks off, `--strict-mcp-config` with only the allow-listed servers |
+//! | Claude Code | `--disallowedTools WebFetch WebSearch Bash`, `--strict-mcp-config` with only the allow-listed servers (every turn, open too); no settings, hooks or plugins (`provider::claude_code::confine`) |
 //! | Codex | its own `workspace-write` sandbox with `network_access=false`, no MCP servers |
 //! | API models (Anthropic, OpenAI wire, Ollama) | Ligus runs the tools: MCP filtered to the allow-list, `run_command` off |
 //! | aider, pi, Hermes, Antigravity, Copilot | can't be confined from outside: refused while egress is not open |
@@ -40,29 +40,28 @@ pub type McpConfigEntries = Vec<(String, Value)>;
 pub fn enforce(provider: ModelProviderKind, envelope: &SandboxEnvelope, allowed_mcp: &McpConfigEntries) -> Enforcement {
     let open = envelope.egress.is_open();
     let mut out = Enforcement { allow_run_command: open, ..Default::default() };
+    if provider == ModelProviderKind::ClaudeCode {
+        // Every turn, open or not: only the MCP servers this chat may use
+        // (the Ligus server joins at dispatch). The rest of Claude Code's
+        // confinement (settings sources, hooks, plugins, the tool
+        // allow-list, out-of-turn tools) is applied at launch for every
+        // caller: `provider::claude_code::confine`.
+        if !open {
+            out.extra_args.extend(["--disallowedTools".into(), "WebFetch".into(), "WebSearch".into(), "Bash".into()]);
+        }
+        let servers: serde_json::Map<String, Value> = match &envelope.egress {
+            EgressPolicy::Closed => Default::default(),
+            _ => allowed_mcp.iter().cloned().collect(),
+        };
+        out.extra_args.push("--strict-mcp-config".into());
+        out.extra_args.push("--mcp-config".into());
+        out.extra_args.push(json!({ "mcpServers": servers }).to_string());
+        return out;
+    }
     if open {
         return out;
     }
     match provider {
-        ModelProviderKind::ClaudeCode => {
-            out.extra_args.extend(["--disallowedTools".into(), "WebFetch".into(), "WebSearch".into(), "Bash".into()]);
-            // Repo-shipped `.claude/settings*.json` hooks run shell commands
-            // with full network; load only the user's own settings and run
-            // no hooks at all while egress is restricted.
-            out.extra_args.extend([
-                "--setting-sources".into(),
-                "user".into(),
-                "--settings".into(),
-                json!({ "disableAllHooks": true }).to_string(),
-            ]);
-            let servers: serde_json::Map<String, Value> = match &envelope.egress {
-                EgressPolicy::AllowList { .. } => allowed_mcp.iter().cloned().collect(),
-                _ => Default::default(),
-            };
-            out.extra_args.push("--strict-mcp-config".into());
-            out.extra_args.push("--mcp-config".into());
-            out.extra_args.push(json!({ "mcpServers": servers }).to_string());
-        }
         ModelProviderKind::Codex => {
             out.extra_args.extend([
                 "-c".into(),
@@ -109,10 +108,23 @@ mod tests {
 
     #[test]
     fn open_envelope_changes_nothing() {
-        for p in [ModelProviderKind::ClaudeCode, ModelProviderKind::Aider, ModelProviderKind::Codex] {
+        for p in [ModelProviderKind::Aider, ModelProviderKind::Codex] {
             let e = enforce(p, &SandboxEnvelope::workspace_default(), &Vec::new());
             assert!(e.extra_args.is_empty() && e.refuse.is_none() && e.allow_run_command);
         }
+    }
+
+    /// Claude Code under an open envelope still gets only the chat's MCP
+    /// servers, never the user's own (`~/.claude.json`, plugins, claude.ai
+    /// connectors).
+    #[test]
+    fn claude_code_open_envelope_is_strict_mcp() {
+        let allowed = vec![("docs".to_string(), json!({"type": "http", "url": "https://docs.example"}))];
+        let e = enforce(ModelProviderKind::ClaudeCode, &SandboxEnvelope::workspace_default(), &allowed);
+        assert!(e.refuse.is_none() && e.allow_run_command);
+        assert!(e.extra_args.contains(&"--strict-mcp-config".to_string()));
+        assert!(e.extra_args.last().unwrap().contains("docs.example"));
+        assert!(!e.extra_args.contains(&"--disallowedTools".to_string()));
     }
 
     #[test]
@@ -130,16 +142,18 @@ mod tests {
     }
 
     /// A repo can ship `.claude/settings.json` (or an earlier turn can write
-    /// the gitignored `settings.local.json`) with hooks, which Claude Code runs
-    /// as shell commands with full network in `-p` mode. Under a restricted
-    /// envelope those must not load, or the egress rule is moot.
+    /// the gitignored `settings.local.json`) with hooks and permission rules.
+    /// Under a restricted envelope those must not load even with the
+    /// workspace's opt-in, or the egress rule is moot.
     #[test]
     fn claude_code_ignores_repo_settings_and_hooks_under_restriction() {
+        use crate::provider::claude_code::{confine, Confine};
         for egress in [EgressPolicy::Closed, EgressPolicy::AllowList { mcp_servers: vec![] }] {
-            let e = enforce(ModelProviderKind::ClaudeCode, &tight(egress), &Vec::new());
-            assert!(e.extra_args.windows(2).any(|w| w == ["--setting-sources", "user"]), "{:?}", e.extra_args);
-            let i = e.extra_args.iter().position(|a| a == "--settings").expect("--settings");
-            let v: Value = serde_json::from_str(&e.extra_args[i + 1]).unwrap();
+            let e = enforce(ModelProviderKind::ClaudeCode, &tight(egress.clone()), &Vec::new());
+            let (args, _) = confine(&e.extra_args, Confine { egress_open: egress.is_open(), user_config: true, writes_allowed: true, connectors: true });
+            assert!(args.windows(2).any(|w| w[0] == "--setting-sources" && w[1].is_empty()), "{args:?}");
+            let i = args.iter().position(|a| a == "--settings").expect("--settings");
+            let v: Value = serde_json::from_str(&args[i + 1]).unwrap();
             assert_eq!(v["disableAllHooks"], json!(true));
         }
     }

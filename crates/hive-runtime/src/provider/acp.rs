@@ -66,7 +66,9 @@ pub const PINS: [AcpPin; 4] = [
         package: "@github/copilot",
         version: "1.0.112",
         program: None,
-        args: &["--acp"],
+        // No built-in GitHub MCP server: it acts on GitHub with the user's
+        // sign-in, and a Ligus turn gets only the servers Ligus passes.
+        args: &["--acp", "--disable-builtin-mcps"],
         min_cli_version: Some("1.0.112"),
         install: "brew upgrade copilot-cli (or: npm install -g @github/copilot@1.0.112)",
     },
@@ -235,6 +237,39 @@ pub fn judge_permission(tool_kind: &str, mode: &str, writes_allowed: bool, egres
         // switch_mode, other, unknown kinds: a person decides.
         _ => PermDecision::Escalate,
     }
+}
+
+/// Whether an ACP permission request is for one of Ligus's own MCP tools.
+/// Those are pre-approved: Ligus authorizes each call itself (the turn's
+/// credential, its chat, its author), so asking a person adds nothing, and
+/// with no one to answer the call was refused. Only an `other` (or
+/// unlabelled) tool kind whose name is exactly a Ligus tool behind the
+/// Ligus server's prefix (`mcp__ligus__`, `mcp_ligus_`, `ligus-`,
+/// `ligus/`, `ligus.`, `ligus:`) matches; a bare name (another server could
+/// offer a tool of the same name), a shell command or an edit never does.
+pub fn is_ligus_tool_call(tool: &Value) -> bool {
+    if !matches!(tool.get("kind").and_then(Value::as_str), None | Some("other")) {
+        return false;
+    }
+    let id = crate::executor::LIGUS_MCP_ID;
+    let prefixes = [format!("mcp__{id}__"), format!("mcp_{id}_"), format!("{id}-"), format!("{id}/"), format!("{id}."), format!("{id}:")];
+    let names = crate::ligus_mcp::tools::TOOLS.iter().map(|(n, _)| *n);
+    let is_ligus = |c: &str| {
+        let c = c.trim();
+        names.clone().any(|n| prefixes.iter().any(|p| c.strip_prefix(p.as_str()) == Some(n)))
+    };
+    let title = tool.get("title").and_then(Value::as_str).map(|t| {
+        // `Run <tool>` (agy) or the bare tool name; anything longer is not
+        // a tool name.
+        let t = t.trim();
+        t.strip_prefix("Run ").unwrap_or(t)
+    });
+    let candidates = [
+        tool.get("name").and_then(Value::as_str),
+        title,
+        tool.pointer("/_meta/claudeCode/toolName").and_then(Value::as_str),
+    ];
+    candidates.into_iter().flatten().any(is_ligus)
 }
 
 /// Pick the option id for a decision: `allow_once` (else `allow_always`) to
@@ -577,7 +612,11 @@ impl<D: FnMut(String), A: FnMut(StreamActivity)> Handler<'_, D, A> {
                 let options: Vec<Value> = params.get("options").and_then(Value::as_array).cloned().unwrap_or_default();
                 let tool = params.get("toolCall").cloned().unwrap_or(Value::Null);
                 let tool_kind = tool.get("kind").and_then(Value::as_str).unwrap_or("other");
-                let decision = judge_permission(tool_kind, self.mode, self.writes_allowed, self.egress_open);
+                let decision = if is_ligus_tool_call(&tool) {
+                    PermDecision::Allow
+                } else {
+                    judge_permission(tool_kind, self.mode, self.writes_allowed, self.egress_open)
+                };
                 let allow = match decision {
                     PermDecision::Allow => true,
                     PermDecision::Deny => false,
@@ -897,6 +936,39 @@ pub async fn stream_reply(
 mod tests {
     use super::*;
 
+    /// A Ligus tool call is pre-approved (Ligus authorizes it per call);
+    /// without that, an ACP agent's permission request for it went to a
+    /// person and was denied when no one answered. Shapes: `agy acp`
+    /// (observed: `name: "mcp_t_ping"`, `title: "Run mcp_t_ping"`,
+    /// `kind: "other"`), Claude Code (`mcp__ligus__…`), Copilot
+    /// (`ligus-…`, `ligus/…`).
+    #[test]
+    fn ligus_tool_calls_are_pre_approved() {
+        for tc in [
+            json!({"kind": "other", "name": "mcp_ligus_ligus_list_chats", "title": "Run mcp_ligus_ligus_list_chats"}),
+            json!({"kind": "other", "title": "Run mcp_ligus_ligus_list_chats"}),
+            json!({"kind": "other", "title": "mcp__ligus__ligus_report"}),
+            json!({"title": "ligus-ligus_read_chat"}),
+            json!({"kind": "other", "title": "ligus/ligus_ask_human"}),
+            json!({"kind": "other", "title": "x", "_meta": {"claudeCode": {"toolName": "mcp__ligus__ligus_mark"}}}),
+        ] {
+            assert!(is_ligus_tool_call(&tc), "{tc}");
+        }
+        for tc in [
+            // Another server's tool, a made-up Ligus name, and a shell
+            // command that only mentions a Ligus tool.
+            json!({"kind": "other", "name": "mcp_t_ping", "title": "Run mcp_t_ping"}),
+            json!({"kind": "other", "title": "mcp__evil__ligus_list_chats"}),
+            json!({"kind": "other", "title": "mcp_ligus_ligus_delete_everything"}),
+            json!({"kind": "other", "title": "ligus_list_chats"}),
+            json!({"kind": "execute", "title": "Run mcp_ligus_ligus_list_chats"}),
+            json!({"kind": "edit", "name": "mcp_ligus_ligus_report"}),
+            json!({"kind": "other", "title": "Run echo mcp_ligus_ligus_list_chats now"}),
+        ] {
+            assert!(!is_ligus_tool_call(&tc), "{tc}");
+        }
+    }
+
     #[test]
     fn permission_tier_mapping() {
         use PermDecision::*;
@@ -995,7 +1067,9 @@ mod tests {
         std::fs::write(&bin, "#!/bin/sh\n").unwrap();
         let r = resolve(&rt(ModelProviderKind::Copilot, None, Driver::Auto, bin.to_str().unwrap()), false).unwrap();
         assert_eq!(r.program, bin.to_str().unwrap());
-        assert_eq!(r.args, vec!["--acp"]);
+        // The built-in GitHub MCP server acts on GitHub with the user's
+        // sign-in; a Ligus turn gets only the servers Ligus passes.
+        assert_eq!(r.args, vec!["--acp", "--disable-builtin-mcps"]);
         let agy = dir.path().join("agy");
         std::fs::write(&agy, "#!/bin/sh\n").unwrap();
         let r = resolve(&rt(ModelProviderKind::Antigravity, None, Driver::Auto, agy.to_str().unwrap()), false).unwrap();

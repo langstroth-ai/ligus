@@ -9,6 +9,16 @@ Full release notes are on the
 
 ## 2.0
 
+- **Claude Code turns get only what the turn needs.** Ligus starts Claude
+  Code without cloud routines, remote triggers, scheduled tasks, background
+  monitors, push notifications, cross-session messaging or workflows, and
+  without your settings, hooks, plugins, skills and MCP servers; Ligus's own
+  tools and the chat's MCP servers are pre-approved, so they work in
+  non-interactive turns. Turn your own setup back on per workspace in
+  **Settings → Guards → Your own agent setup**. Codex turns skip your
+  `config.toml` the same way, and Copilot turns run without the built-in
+  GitHub MCP server. See
+  [What a Claude Code turn can and can't do](../concepts/security.md#claude-code-turn).
 - **Egress presets.** Opt-in sets of hosts for a chat's egress allow-list,
   off by default: `package-registries` (npm, crates.io, PyPI, GitHub) and
   `claude-connectors` (your claude.ai connectors, Claude Code only).

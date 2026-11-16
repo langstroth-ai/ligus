@@ -121,8 +121,9 @@ an API model calling MCP tools:
   replies and proposal titles, bodies and diffs.
 - **No repository code run by Ligus.** Ligus's own git calls (worktrees,
   diffs, apply, the hygiene sweep) never run the repository's hooks or
-  fsmonitor, and while egress is restricted Claude Code loads no settings or
-  hooks from the repository, only your user settings.
+  fsmonitor, and Claude Code loads no settings, hooks or plugins from the
+  repository in any Ligus turn (nor your own, unless you
+  [opt in](#claude-code-turn)).
 - **An allow-listed environment.** Agent CLIs, MCP servers, `run_command`
   and pre-flight tests start with an empty environment plus an allow-list:
   `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TERM`,
@@ -250,7 +251,7 @@ allow-list. Every preset is **off by default**.
 | Preset | Adds (port 443 only) | For |
 |---|---|---|
 | `package-registries` | npm: `registry.npmjs.org`; crates.io: `crates.io`, `static.crates.io`, `index.crates.io`; PyPI: `pypi.org`, `files.pythonhosted.org`; GitHub: `github.com`, `api.github.com`, `codeload.github.com`, `objects.githubusercontent.com`, `raw.githubusercontent.com` | agents, `run_command` and pre-flight tests that install dependencies (`npm install`, `cargo build`, `pip install`, git dependencies) |
-| `claude-connectors` | `mcp-proxy.anthropic.com` | Claude Code turns only. Lets Claude Code use your claude.ai MCP connectors inside Ligus turns. **This lets the agent reach every service you connected there** (Google Drive, Gmail, and so on) with your access, so switch it on only for chats where you want that. Claude Code's telemetry hosts stay blocked |
+| `claude-connectors` | `mcp-proxy.anthropic.com` | Claude Code turns only. Lets Claude Code use your claude.ai MCP connectors inside Ligus turns. **This lets the agent reach every service you connected there** (Google Drive, Gmail, and so on) with your access, so switch it on only for chats where you want that. Claude Code loads connectors only without its strict MCP mode, so with this preset on your own Claude Code MCP servers load too ([details](#claude-code-turn)). Claude Code's telemetry hosts stay blocked |
 
 Where to switch them on:
 
@@ -277,6 +278,80 @@ only the model endpoints. **Settings → Guards** shows *ignored* on the chat
 while that is the case. Preset hosts go through the same proxy as
 everything else: exact host and port match, and the TLS server name must
 equal the `CONNECT` host.
+
+### What a Claude Code turn can and can't do inside Ligus {#claude-code-turn}
+
+Ligus runs Claude Code with your Claude login, but not with your personal
+Claude Code setup. Claude Code has features that act outside a turn or
+outside the machine: cloud routines that run on Anthropic's servers under
+your account and connectors, scheduled tasks, background monitors, push
+notifications, messages to your other Claude Code sessions, and your own
+plugins, hooks, skills and MCP servers. A turn confined to its worktree and
+egress allow-list could otherwise use them to start work that the sandbox
+never sees. So every Claude Code turn Ligus starts (desktop, `ligus serve`,
+`ligus worker`, `ligus agent`) gets only what the turn needs:
+
+| Feature | In a Ligus turn | How |
+|---|---|---|
+| Read, edit, write, search files; in-process sub-agents | **Yes**, at the chat's permission tier | `--tools` allow-list. Sub-agents run in the same process, sandbox and tool set. |
+| Shell (`Bash`) | At the *Edits + shell* tier and up, while egress is open | `--tools`; denied under dearth mode or a lockdown |
+| Ligus's own tools (`mcp__ligus__*`) | **Yes**, pre-approved | `--allowedTools mcp__ligus`. Ligus authorizes each call itself. |
+| The chat's MCP servers (Settings → MCP, filtered by the envelope) | **Yes**; pre-approved when the author may write | `--strict-mcp-config` with only those servers, `--allowedTools mcp__<id>` |
+| Web search and web fetch | Only while the chat's egress is open | Web search runs on Anthropic's side, so the egress proxy never sees it; Ligus follows the chat's egress policy instead and removes both tools when egress is restricted. |
+| Cloud routines and remote triggers (`RemoteTrigger`) | **No** | `--disallowedTools`, denied again in the turn home's settings |
+| Scheduled tasks and wake-ups (`CronCreate`, `CronList`, `CronDelete`, `ScheduleWakeup`) | **No** | `--disallowedTools`, `CLAUDE_CODE_DISABLE_CRON=1` |
+| Background tasks and monitors (`Monitor`, `TaskStop`, background shells) | **No** | `--disallowedTools`, `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` |
+| Push notifications (`PushNotification`) | **No** | `--disallowedTools` |
+| Messaging other Claude Code sessions (`SendMessage`, `ListAgents`) | **No** | `--disallowedTools`; the OS sandbox also refuses their local sockets |
+| Multi-agent workflows (`Workflow`), design sync (`DesignSync`) | **No** | `--disallowedTools`, `CLAUDE_CODE_DISABLE_WORKFLOWS=1` |
+| Worktree switching (`EnterWorktree`, `ExitWorktree`) | **No**: Ligus owns the turn's directory | `--disallowedTools` |
+| Your MCP servers (`~/.claude.json`), the repo's `.mcp.json`, plugin MCP servers | **No** | `--strict-mcp-config` |
+| claude.ai connectors | **No**, unless the chat turns on the `claude-connectors` [preset](#egress-presets) | `--strict-mcp-config`, `ENABLE_CLAUDEAI_MCP_SERVERS=false`, and the egress proxy refuses `mcp-proxy.anthropic.com` |
+| Your settings, hooks, plugins, skills, slash commands | **No**, unless the workspace opts in (below) | `--setting-sources ""`, `disableAllHooks`, `--disable-slash-commands` |
+| The repository's `.claude/settings*.json` (hooks, permission rules) | **No**, even with the opt-in | never a setting source |
+| Any tool a newer Claude Code adds | **No** until Ligus lists it | `--tools` is an allow-list |
+
+The tools and env above also hold for a `claude` the agent starts from its
+own shell: the turn's copy of your user settings denies the same tools, and
+the env variables are inherited. Your Claude login keeps working: Claude
+Code reads it from your keychain (macOS) or its credentials file, not from
+settings.
+
+**Opting your own setup back in.** **Settings → Guards → Your own agent
+setup**, *Use my Claude Code settings, plugins and skills in this
+workspace*. With it on, that workspace's Claude Code turns load your user
+settings (`--setting-sources user`; never the repository's), run your
+hooks, and get your plugins and skills (your `~/.claude/plugins`, `skills`,
+`agents` and `commands` folders are linked read-only into the turn's
+home). Hooks and plugins then run inside the turn's OS sandbox, under its
+write, read and egress rules. The opt-in is off by default, stored on this
+device only (`cli_user_config_workspaces` in `settings.json`), and ignored
+while a chat is locked down or the workspace is in dearth mode. It never
+brings back the tools in the *No* rows above, and MCP stays strict (use
+Settings → MCP to give a chat a server). The same switch lets Codex turns
+load your `~/.codex/config.toml` (below). Turns on `ligus serve`,
+`ligus worker` and `ligus agent` don't have the switch yet and always run
+without your setup.
+
+**What this does not stop.** At the *Edits + shell* tier and above the
+agent runs commands as you, inside the sandbox, and your Claude login is
+reachable from there (it has to be, for Claude Code to run). A command that
+starts a fresh `claude` with its own flags (for example
+`claude -p --setting-sources ""`) gets Claude Code's full tool set back,
+cloud routines included, and the egress proxy can't tell those calls from
+model calls because both go to `api.anthropic.com`. Cron, background tasks
+and workflows stay off through the inherited env. Treat the shell tiers as
+handing the agent your Claude account, and use the read-only or *Accept
+edits* tier for chats whose input you don't trust.
+
+**The other subscription CLIs.**
+
+| Runtime | What Ligus does | Still loads |
+|---|---|---|
+| Codex (`codex exec`) | `--ignore-user-config` unless the workspace opted in: your `config.toml` MCP servers, `notify` program and web search settings stay out; the sign-in still loads. Under restricted egress also `network_access=false` and no MCP servers. | Codex over ACP (`codex-acp`) is not covered yet. |
+| Copilot (`copilot -p`, `copilot --acp`) | `--disable-builtin-mcps` (the built-in GitHub MCP server acts on GitHub with your sign-in), `--allow-tool=ligus` so Ligus's tools aren't refused in `-p` mode | your `~/.copilot/mcp-config.json` servers, plugins and skills (Copilot has no strict MCP switch). Refused while egress is restricted. |
+| Antigravity (`agy`) | `--disable-slash-commands` | your MCP servers and plugins (no strict switch). Refused while egress is restricted. |
+| Any CLI over ACP | Ligus's own tool calls are pre-approved; every other permission request follows the chat's tier | |
 
 ## Sandbox defaults {#sandbox-defaults}
 

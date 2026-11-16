@@ -15,6 +15,7 @@ import { toast, errMsg } from "@/components/Toast";
 import { Badge, Button, EmptyHint, ErrorState, Field, LoadingState, Section, type Tone } from "@/components/ui";
 import { IconLock } from "@/lib/icons";
 import { EgressPresetsPanel } from "./EgressPresetsPanel";
+import { CliUserConfigPanel } from "./CliUserConfigPanel";
 
 const STATE_TONE: Record<string, Tone> = {
   open: "neutral",
@@ -42,6 +43,7 @@ export function GuardsSection({ chat }: { chat?: { id: string; title: string } |
       {q.isPending && <LoadingState rows={2} label="Loading guards" />}
       {d && <DearthPanel d={d} onChanged={() => qc.invalidateQueries({ queryKey: ["dearth-state"] })} />}
       <EgressPresetsPanel chat={chat} />
+      <CliUserConfigPanel />
       <ThrottlePanel />
       <HygienePanel />
     </div>

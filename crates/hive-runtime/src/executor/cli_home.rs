@@ -107,8 +107,20 @@ fn copy_file(from: &Path, to: &Path) {
     }
 }
 
+/// Claude Code subdirectories a workspace that opted into the user's own
+/// setup reaches (read-only: symlinks to the real dirs, which the profile
+/// keeps unwritable).
+pub const CLAUDE_USER_DIRS: &[&str] = &["plugins", "skills", "agents", "commands"];
+
 /// Build the turn home for `kind` at `home` from `real_home`.
 pub fn populate(kind: ModelProviderKind, real_home: &Path, home: &Path) -> std::io::Result<()> {
+    populate_with(kind, real_home, home, false)
+}
+
+/// [`populate`]; `user_config` = the workspace opted its CLI agents into the
+/// user's own setup (Claude Code's plugins, skills, agents and commands are
+/// then linked in).
+pub fn populate_with(kind: ModelProviderKind, real_home: &Path, home: &Path, user_config: bool) -> std::io::Result<()> {
     std::fs::create_dir_all(home)?;
     for d in config_dirs(kind) {
         let src = real_path(kind, real_home, d);
@@ -123,6 +135,18 @@ pub fn populate(kind: ModelProviderKind, real_home: &Path, home: &Path) -> std::
     for f in config_files(kind) {
         copy_file(&real_path(kind, real_home, f), &home.join(f));
     }
+    if kind == ModelProviderKind::ClaudeCode {
+        harden_claude_settings(&home.join(".claude/settings.json"));
+        #[cfg(unix)]
+        if user_config {
+            for d in CLAUDE_USER_DIRS {
+                let src = real_path(kind, real_home, &format!(".claude/{d}"));
+                if src.is_dir() {
+                    let _ = std::os::unix::fs::symlink(&src, home.join(".claude").join(d));
+                }
+            }
+        }
+    }
     #[cfg(target_os = "macos")]
     {
         // The login keychain and its search list, reached through the real
@@ -135,6 +159,37 @@ pub fn populate(kind: ModelProviderKind, real_home: &Path, home: &Path) -> std::
         }
     }
     Ok(())
+}
+
+/// The turn home's copy of Claude Code's user settings, with the tools that
+/// schedule or run work outside the turn denied
+/// ([`crate::provider::claude_code::OUT_OF_TURN_TOOLS`]). The turn's own
+/// `claude` already has them off by flag; this holds them off for a
+/// `claude` the agent starts from its shell, which reads these settings.
+/// A file that isn't a JSON object is replaced.
+fn harden_claude_settings(path: &Path) {
+    use serde_json::{json, Value};
+    let mut v: Value = std::fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok()).filter(Value::is_object).unwrap_or_else(|| json!({}));
+    let deny = v
+        .as_object_mut()
+        .map(|m| m.entry("permissions").or_insert_with(|| json!({})))
+        .filter(|p| p.is_object())
+        .and_then(|p| p.as_object_mut())
+        .map(|p| p.entry("deny").or_insert_with(|| json!([])));
+    let Some(deny) = deny else { return };
+    if !deny.is_array() {
+        *deny = json!([]);
+    }
+    let arr = deny.as_array_mut().expect("array");
+    for t in crate::provider::claude_code::OUT_OF_TURN_TOOLS {
+        if !arr.iter().any(|x| x.as_str() == Some(t)) {
+            arr.push(json!(t));
+        }
+    }
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = crate::private_file::write_private_atomic(path, v.to_string().as_bytes());
 }
 
 /// The env a CLI child gets for its turn home: `HOME`, the XDG dirs, and
@@ -312,8 +367,35 @@ mod tests {
         assert!(home.join(".claude/settings.json").is_file());
         assert!(home.join(".claude.json").is_file());
         assert!(!home.join(".claude/hooks").exists());
+        // The settings copy denies the out-of-turn tools (a nested `claude`
+        // from the agent's shell reads it).
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(home.join(".claude/settings.json")).unwrap()).unwrap();
+        let deny: Vec<&str> = v["permissions"]["deny"].as_array().unwrap().iter().filter_map(|x| x.as_str()).collect();
+        assert!(deny.contains(&"RemoteTrigger") && deny.contains(&"CronCreate"), "{deny:?}");
         let e = env(ModelProviderKind::ClaudeCode, &home);
         assert!(e.iter().any(|(k, v)| k == "HOME" && *v == home.as_os_str()));
+    }
+
+    /// The user's plugins and skills reach a turn only with the workspace's
+    /// opt-in, and then as links to the real (unwritable) dirs.
+    #[cfg(unix)]
+    #[test]
+    fn user_plugin_dirs_only_with_opt_in() {
+        let real = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(real.path().join(".claude/plugins")).unwrap();
+        std::fs::create_dir_all(real.path().join(".claude/skills/s")).unwrap();
+        std::fs::write(real.path().join(".claude/settings.json"), r#"{"permissions":{"deny":["Bash(rm *)"]},"model":"x"}"#).unwrap();
+        let turn = tempfile::tempdir().unwrap();
+        let off = turn.path().join("off");
+        populate(ModelProviderKind::ClaudeCode, real.path(), &off).unwrap();
+        assert!(!off.join(".claude/plugins").exists() && !off.join(".claude/skills").exists());
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(off.join(".claude/settings.json")).unwrap()).unwrap();
+        assert_eq!(v["model"], "x");
+        assert_eq!(v["permissions"]["deny"][0], "Bash(rm *)");
+        let on = turn.path().join("on");
+        populate_with(ModelProviderKind::ClaudeCode, real.path(), &on, true).unwrap();
+        assert!(std::fs::symlink_metadata(on.join(".claude/plugins")).unwrap().file_type().is_symlink());
+        assert!(on.join(".claude/skills/s").is_dir());
     }
 
     fn jwt(claims: serde_json::Value) -> String {
