@@ -443,6 +443,12 @@ struct LiveSettings {
     /// list = off for this chat). No entry = the workspace's choice.
     #[serde(default)]
     egress_presets_by_chat: std::collections::HashMap<String, Vec<String>>,
+    /// Workspaces (UUID strings) whose CLI agents run with the user's own
+    /// CLI setup: Claude Code's user settings, hooks, plugins and skills.
+    /// Off by default (a turn gets only what Ligus passes); device-local,
+    /// like the presets above, and ignored while egress is restricted.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    cli_user_config_workspaces: std::collections::BTreeSet<String>,
     /// First-run onboarding finished on this data dir. Lives here, not in the
     /// webview's localStorage, so a fresh (or factory-reset) data dir always
     /// gets the first-run flow, whatever the webview remembers.
@@ -589,6 +595,7 @@ impl Default for LiveSettings {
             workspace_dirs: std::collections::HashMap::new(),
             egress_presets_by_workspace: std::collections::HashMap::new(),
             egress_presets_by_chat: std::collections::HashMap::new(),
+        cli_user_config_workspaces: Default::default(),
             onboarded: false,
             tour_seen: false,
         }
@@ -11483,6 +11490,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         workspace_dirs: std::collections::HashMap::new(),
         egress_presets_by_workspace: std::collections::HashMap::new(),
         egress_presets_by_chat: std::collections::HashMap::new(),
+        cli_user_config_workspaces: Default::default(),
         onboarded: false,
         tour_seen: false,
     };
@@ -14490,6 +14498,8 @@ pub fn run() {
             guards::get_dearth_state,
             guards::get_egress_presets,
             guards::set_workspace_egress_presets,
+            guards::get_workspace_cli_user_config,
+            guards::set_workspace_cli_user_config,
             guards::set_chat_egress_presets,
             guards::set_dearth_mode,
             guards::approve_join,

@@ -101,7 +101,20 @@ const PLATFORM: &[&str] = &["SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "TEMP", "TMP"
 #[cfg(not(any(target_os = "linux", windows)))]
 const PLATFORM: &[&str] = &[];
 /// Caller-supplied names that may pass.
-const EXTRA_ALLOWED: &[&str] = &["GIT_AUTHOR_*", "GIT_COMMITTER_*", "PI_CODING_AGENT_DIR", "LIGUS_TURN_CRED", "LIGUS_MCP_SOCKET", "LIGUS_MCP_TCP"];
+const EXTRA_ALLOWED: &[&str] = &[
+    "GIT_AUTHOR_*",
+    "GIT_COMMITTER_*",
+    "PI_CODING_AGENT_DIR",
+    "LIGUS_TURN_CRED",
+    "LIGUS_MCP_SOCKET",
+    "LIGUS_MCP_TCP",
+    // Claude Code's confinement toggles (hive-runtime `claude_code::confine`):
+    // they only turn features off.
+    "CLAUDE_CODE_DISABLE_CRON",
+    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS",
+    "CLAUDE_CODE_DISABLE_WORKFLOWS",
+    "ENABLE_CLAUDEAI_MCP_SERVERS",
+];
 
 fn name_matches(name: &str, pats: &[&str]) -> bool {
     pats.iter().any(|p| match p.strip_suffix('*') {

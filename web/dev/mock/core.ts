@@ -98,7 +98,10 @@ function handle(cmd: string, args: Args): unknown {
       };
     case "set_workspace_egress_presets":
     case "set_chat_egress_presets":
+    case "set_workspace_cli_user_config":
       return null;
+    case "get_workspace_cli_user_config":
+      return false;
     case "get_chat_lockdown":
       return fx.lockdown(flags.lockdown);
     case "list_guard_signals":

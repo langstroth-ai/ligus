@@ -60,7 +60,13 @@ fn agent_cannot_persist_cli_config() {
             out
         });
         let stdout = String::from_utf8_lossy(&out.stdout);
-        assert!(stdout.contains("ORIGINAL"), "{kind:?}: the turn reads a copy of its config: {stdout}");
+        if kind == ModelProviderKind::ClaudeCode {
+            // Claude Code's copy is hardened: a settings file that isn't a
+            // JSON object is replaced by one that denies the out-of-turn tools.
+            assert!(stdout.contains("RemoteTrigger"), "{kind:?}: the turn reads a hardened copy of its settings: {stdout}");
+        } else {
+            assert!(stdout.contains("ORIGINAL"), "{kind:?}: the turn reads a copy of its config: {stdout}");
+        }
         assert_eq!(std::fs::read_to_string(&cfg_real).unwrap(), "ORIGINAL", "{kind:?}: real config untouched");
         assert!(!extra_real.exists(), "{kind:?}: no hook or MCP file in the real config");
         assert!(!real.join(".claude/hooks").exists(), "{kind:?}: no hooks dir");

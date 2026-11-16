@@ -38,6 +38,9 @@ pub fn legacy_args(kind: ModelProviderKind, a: &McpAttach, args: &mut Vec<String
             let Ok(path) = a.write_config_file("copilot-mcp.json", &Default::default()) else { return };
             args.push("--additional-mcp-config".into());
             args.push(format!("@{}", path.to_string_lossy()));
+            // `copilot -p` denies any tool that would prompt; Ligus's own
+            // tools are authorized by Ligus per call.
+            args.push(format!("--allow-tool={}", a.name));
         }
         _ => {}
     }
@@ -78,6 +81,9 @@ mod tests {
         legacy_args(ModelProviderKind::Copilot, &a, &mut c);
         assert_eq!(c[0], "--additional-mcp-config");
         assert!(c[1].starts_with('@'));
+        // `copilot -p` denies a tool that would prompt: Ligus's own server is
+        // pre-approved (its tools are authorized by Ligus per call).
+        assert!(c.contains(&"--allow-tool=ligus".to_string()), "{c:?}");
         let mut g = vec![];
         legacy_args(ModelProviderKind::Antigravity, &a, &mut g);
         assert!(g.is_empty());
