@@ -31,6 +31,15 @@ and timing. The full protocol is
   key, so move it to the box over a channel you trust, such as SSH. The
   workspace needs a relay (**Settings → Team sync → Relay URL**); `ligus
   enroll` refuses an invite without one.
+- **A personal box? Make it your own device.** Joined with a plain invite,
+  the box is a separate member: everything you send from the phone shows
+  under the box's name (its `--label`, else its host name), and `@hive` in
+  chats the phone creates isn't answered by your desktop. For your own box,
+  also run `ligus serve enroll` once and approve it on your desktop (see
+  [Running ligus serve as your own device](../ops/serve-box.md)); the phone
+  then writes as you. Keep it a separate member only for a box several
+  people share. `ligus pair` and `ligus serve --pair` print a reminder on a
+  box that isn't enrolled as anyone's device.
 - For the relay tunnel: a relay with the tunnel turned on. It is **off by
   default**; see [Using your own relay](#using-your-own-relay).
 
@@ -52,7 +61,11 @@ ligus serve --listen 127.0.0.1:8787 --label home-box
   anyone on the network can read the token.
   With the relay tunnel only, loopback is fine: the phone never connects to
   this port directly.
-- `--label` / `LIGUS_SERVE_LABEL` is the host name other members see.
+- `--label` / `LIGUS_SERVE_LABEL` is the host name other members see
+  (default: the machine's host name). A box that is its own member also
+  uses it as its display name unless `--name` / `LIGUS_SERVE_NAME` sets one
+  (a box that still shows as "hive-cli", from before 2.0, takes it on its
+  next start).
 - `LIGUS_SERVE_PUBLIC_URL` is the URL the phone should use for the direct path
   when it differs from `http://<listen>` (a DNS name, say).
 

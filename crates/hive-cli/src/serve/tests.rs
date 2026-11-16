@@ -1551,8 +1551,8 @@ async fn approve_on_desktop(desktop: &Config, code: &str) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn phone_box_enrolled_as_the_owners_device() {
     let (endpoint, _model) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
-    // The desktop's identity is named "hive-cli" (the CLI test identity).
-    let h = harness_with(&endpoint, "gpt-4o", &[("README.md", "# demo\n")], |o| o.owner = Some("hive-cli".into())).await;
+    // The desktop's identity is a CLI test identity, named like a new box.
+    let h = harness_with(&endpoint, "gpt-4o", &[("README.md", "# demo\n")], |o| o.owner = Some(cli_identity_name())).await;
     let ws = crate::uuid_of_room(&h.handle.shared.cfg.room);
     let cfg_id = workspace_config_session_id(ws);
     let desktop_actor = open_service(&h.desktop).unwrap().author().id.clone();
@@ -1571,7 +1571,7 @@ async fn phone_box_enrolled_as_the_owners_device() {
     approve_on_desktop(&h.desktop, &code).await;
     let id = wait_identity(&h, "owner").await;
     assert_eq!(id["actorId"], json!(desktop_actor));
-    assert_eq!(id["displayName"], "hive-cli");
+    assert_eq!(id["displayName"], cli_identity_name());
 
     // The phone's chat, message, vote and comment are the owner's.
     let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "from the phone" }))).await;
@@ -1705,7 +1705,7 @@ async fn phone_chat_primary_availability_follows_the_owners_desktop() {
     let serve_cfg = h0.handle.shared.cfg.clone();
     let mut opts = h0.handle.shared.opts.clone();
     assert!(h0.handle.stop(Duration::from_secs(5)).await);
-    opts.owner = Some("hive-cli".into());
+    opts.owner = Some(cli_identity_name());
     let handle = start(serve_cfg, opts).await.unwrap();
     let h = Harness { base: format!("http://{}", handle.addr), token: handle.shared.token(), handle, ..h0 };
     assert_eq!(h.get("/v1/health").await["identity"]["mode"], "pending");
@@ -3601,4 +3601,38 @@ async fn gh_default_only_for_exact_github_com() {
         let (c, v) = status_of(&h, reqwest::Method::POST, "/v1/forges", Some(json!({"kind": "github", "baseUrl": base}))).await;
         assert!(c != 200 || v["forge"]["authSource"] != "gh", "{base}: {v}");
     }
+}
+
+/// Who the phone's messages show as. A box that joined with a workspace
+/// invite is its own member: the phone writes as the box (right for a shared
+/// box), under the box's own name, never the pre-2.0 "hive-cli". A box
+/// enrolled as its owner's device (`ligus serve enroll`) writes as the owner.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn phone_messages_show_as_the_box_or_its_owner() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))], vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    let box_actor = h.handle.shared.lock().author().clone();
+    assert_ne!(box_actor.display_name, crate::LEGACY_BOX_NAME);
+    let posted = h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "Hello" }))).await;
+    let as_box = Uuid::parse_str(posted["message"]["id"].as_str().unwrap()).unwrap();
+
+    let owner = open_service(&h.desktop).unwrap().author().clone();
+    h.handle.shared.lock().act_as_owner_device(owner.clone());
+    let posted = h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "Hello again" }))).await;
+    let as_owner = Uuid::parse_str(posted["message"]["id"].as_str().unwrap()).unwrap();
+
+    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    let m = |id| s.messages.iter().find(|m| m.id == id).unwrap();
+    assert_eq!(m(as_box).author, box_actor.display_name);
+    assert_eq!(m(as_box).actor_identity.as_ref().map(|a| a.id.clone()), Some(box_actor.id.clone()));
+    assert_eq!(m(as_owner).author, owner.display_name, "a delegated box writes as its owner");
+    assert_eq!(m(as_owner).actor_identity.as_ref().map(|a| a.id.clone()), Some(owner.id.clone()));
+    h.handle.shutdown();
+}
+
+/// The display name a CLI test identity gets (`crate::bootstrap_identity`).
+fn cli_identity_name() -> String {
+    crate::box_name(crate::env_opt("LIGUS_SERVE_LABEL"), hive_runtime::machine_hostname())
 }

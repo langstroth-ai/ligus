@@ -26,7 +26,7 @@ pub fn cell() -> Option<TokenCell> {
 fn signer(data_dir: &Path) -> Result<Arc<dyn DeviceSigner>> {
     std::fs::create_dir_all(data_dir)?;
     let identity = IdentityStore::new(data_dir, StoreKeyVault::for_data_dir(data_dir));
-    let stored = identity.bootstrap("hive-cli", "hive-cli", "hive-cli")?;
+    let stored = crate::bootstrap_identity(&identity)?;
     let kp = identity.device_keypair(stored.device.id)?;
     Ok(Arc::new(DeviceKey::new(stored.device.id, kp)))
 }

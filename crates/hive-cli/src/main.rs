@@ -304,12 +304,47 @@ async fn cmd_join(cfg: &Config, code: &str) -> Result<()> {
     }
 }
 
+/// The display name every box got before 2.0 (a rebrand leftover). A box
+/// still carrying it is renamed to its label when it serves.
+pub(crate) const LEGACY_BOX_NAME: &str = "hive-cli";
+
+/// The name a new box identity starts with: its label (`--label` /
+/// `LIGUS_SERVE_LABEL`), else the machine's host name — never "hive-cli".
+pub(crate) fn box_name(label: Option<String>, hostname: Option<String>) -> String {
+    label
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .or(hostname)
+        .unwrap_or_else(|| "Ligus box".into())
+}
+
+/// This data dir's identity, created on first use with [`box_name`].
+pub(crate) fn bootstrap_identity(identity: &IdentityStore<impl hive_runtime::KeyVault>) -> Result<hive_runtime::StoredIdentity> {
+    let name = box_name(env_opt("LIGUS_SERVE_LABEL"), hive_runtime::machine_hostname());
+    Ok(identity.bootstrap(&name, &name, &name)?)
+}
+
+/// Give a box's identity its label `name` when it still carries a name
+/// nobody chose: the pre-2.0 [`LEGACY_BOX_NAME`], or `auto` (the host name
+/// it was created with before a label was known, e.g. by `ligus enroll`).
+/// Returns the new name when it changed.
+pub(crate) fn adopt_box_name(identity: &IdentityStore<impl hive_runtime::KeyVault>, name: &str, auto: Option<&str>) -> Result<Option<String>> {
+    let name = name.trim();
+    let current = bootstrap_identity(identity)?;
+    let unchosen = current.account.display_name == LEGACY_BOX_NAME || auto.is_some_and(|a| current.account.display_name == a);
+    if !unchosen || name.is_empty() || name == LEGACY_BOX_NAME || name == current.account.display_name {
+        return Ok(None);
+    }
+    identity.update_display_name(name)?;
+    Ok(Some(name.to_string()))
+}
+
 /// Open the local identity + event store and build a ChatService. Bootstraps a
 /// fresh identity on first run (idempotent thereafter).
 fn open_service(cfg: &Config) -> Result<ChatService> {
     std::fs::create_dir_all(&cfg.data_dir)?;
     let identity = IdentityStore::new(&cfg.data_dir, StoreKeyVault::for_data_dir(&cfg.data_dir));
-    let stored = identity.bootstrap("hive-cli", "hive-cli", "hive-cli")?;
+    let stored = bootstrap_identity(&identity)?;
     let device_kp = identity.device_keypair(stored.device.id)?;
     let account_kp = identity.account_keypair(stored.account.id)?;
     let store = EventStore::open(cfg.data_dir.join("hive.db"))?;
@@ -340,7 +375,7 @@ fn purge_foreign_workspaces(cfg: &Config) -> Result<()> {
         return Ok(());
     }
     let identity = IdentityStore::new(&cfg.data_dir, StoreKeyVault::for_data_dir(&cfg.data_dir));
-    let own_device = identity.bootstrap("hive-cli", "hive-cli", "hive-cli")?.device.id;
+    let own_device = bootstrap_identity(&identity)?.device.id;
     let keep = match kept_workspaces(cfg) {
         Ok(k) => k,
         Err(e) => {
@@ -420,7 +455,7 @@ fn sync_engine(cfg: &Config) -> Result<SyncEngine> {
 /// What this box holds for the keyring (B1).
 fn key_source(cfg: &Config) -> Result<hive_runtime::keyring::KeySource> {
     let identity = IdentityStore::new(&cfg.data_dir, StoreKeyVault::for_data_dir(&cfg.data_dir));
-    let device = identity.bootstrap("hive-cli", "hive-cli", "hive-cli")?.device.id;
+    let device = bootstrap_identity(&identity)?.device.id;
     let ka = identity.key_agreement(device)?;
     Ok(hive_runtime::keyring::KeySource::for_device(device, ka, cfg.key.as_deref(), &cfg.epoch_keys))
 }
@@ -478,7 +513,7 @@ async fn materialize_turns(cfg: &Config, turns: &mut [ChatTurn]) {
 
 fn cmd_whoami(cfg: &Config) -> Result<()> {
     let identity = IdentityStore::new(&cfg.data_dir, StoreKeyVault::for_data_dir(&cfg.data_dir));
-    let stored = identity.bootstrap("hive-cli", "hive-cli", "hive-cli")?;
+    let stored = bootstrap_identity(&identity)?;
     println!("account : {}", stored.account.id);
     println!("device  : {}", stored.device.id);
     println!("name    : {}", stored.account.display_name);
@@ -1678,7 +1713,7 @@ fn run() -> Result<()> {
                 flag_val("--reg-token"),
                 has("--insecure-relay"),
             )?;
-            serve::cmd_pair(&cfg.data_dir, &opts, has("--relay-only"))
+            serve::cmd_pair(&cfg, &opts, has("--relay-only"))
         }
         "remote" => {
             use serve::tunnel::cli;
@@ -1753,6 +1788,37 @@ fn run() -> Result<()> {
 #[cfg(test)]
 mod cli_tests {
     use super::*;
+
+    /// A box enrolled with `ligus enroll` is named after its label or host,
+    /// never the pre-2.0 "hive-cli" (which every author line showed).
+    #[test]
+    fn a_new_box_is_named_after_its_label_or_host() {
+        assert_eq!(box_name(Some("mac-test".into()), Some("zaz-mbp".into())), "mac-test");
+        assert_eq!(box_name(Some("  ".into()), Some("zaz-mbp".into())), "zaz-mbp");
+        assert_eq!(box_name(None, None), "Ligus box");
+        let tmp = tempfile::tempdir().unwrap();
+        let identity = IdentityStore::new(tmp.path(), StoreKeyVault::for_data_dir(tmp.path()));
+        let name = bootstrap_identity(&identity).unwrap().account.display_name;
+        assert_ne!(name, LEGACY_BOX_NAME);
+        assert!(!name.trim().is_empty());
+    }
+
+    /// A box that carries "hive-cli" (or the host name it got before a label
+    /// was known) takes its label when it serves; a name someone chose is kept.
+    #[test]
+    fn a_legacy_box_name_is_replaced_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let identity = IdentityStore::new(tmp.path(), StoreKeyVault::for_data_dir(tmp.path()));
+        identity.bootstrap(LEGACY_BOX_NAME, LEGACY_BOX_NAME, LEGACY_BOX_NAME).unwrap();
+        assert_eq!(adopt_box_name(&identity, "mac-test", None).unwrap().as_deref(), Some("mac-test"));
+        assert_eq!(bootstrap_identity(&identity).unwrap().account.display_name, "mac-test");
+        assert_eq!(adopt_box_name(&identity, "other", Some("zaz-mbp")).unwrap(), None, "a chosen name stays");
+        // Created under its host name (by `ligus enroll`), then served with a label.
+        let tmp = tempfile::tempdir().unwrap();
+        let identity = IdentityStore::new(tmp.path(), StoreKeyVault::for_data_dir(tmp.path()));
+        identity.bootstrap("zaz-mbp", "zaz-mbp", "zaz-mbp").unwrap();
+        assert_eq!(adopt_box_name(&identity, "mac-test", Some("zaz-mbp")).unwrap().as_deref(), Some("mac-test"));
+    }
 
     /// config.toml holds the workspace E2EE key and relay token.
     #[cfg(unix)]

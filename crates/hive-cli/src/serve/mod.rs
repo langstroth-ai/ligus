@@ -146,7 +146,7 @@ impl ServeOptions {
             public_url: public_url.or_else(|| env_opt("LIGUS_SERVE_PUBLIC_URL")),
             label: label
                 .or_else(|| env_opt("LIGUS_SERVE_LABEL"))
-                .or_else(|| env_opt("HOSTNAME"))
+                .or_else(hive_runtime::machine_hostname)
                 .unwrap_or_else(|| "home host".into()),
             name: name.or_else(|| env_opt("LIGUS_SERVE_NAME")),
             pair,
@@ -961,6 +961,20 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         Standing::Own => {
             if let Some(name) = &opts.name {
                 svc.set_author_display_name(name.clone());
+            } else {
+                // A box still called "hive-cli" (enrolled before 2.0), or by
+                // the host name `ligus enroll` gave it, takes its label so the
+                // phone's messages show the name the box was given.
+                let identity = hive_runtime::IdentityStore::new(&cfg.data_dir, hive_runtime::secret_store::StoreKeyVault::for_data_dir(&cfg.data_dir));
+                let was = svc.author().display_name.clone();
+                match crate::adopt_box_name(&identity, &opts.label, hive_runtime::machine_hostname().as_deref()) {
+                    Ok(Some(name)) => {
+                        println!("ligus serve: this box's name is now '{name}' (was '{was}').");
+                        svc.set_author_display_name(name);
+                    }
+                    Ok(None) => {}
+                    Err(e) => eprintln!("serve: renaming this box failed: {e}"),
+                }
             }
         }
     }
@@ -1474,6 +1488,9 @@ pub fn cmd_serve(cfg: Config, opts: ServeOptions) -> Result<()> {
                     }
                     let direct = (plan == pair::PairPlan::Direct).then_some((server_url.as_str(), token.as_str()));
                     print_pairing(&handle.shared.cfg.data_dir, direct, remote)?;
+                    if let Some(hint) = pair::member_hint(&handle.shared.standing()) {
+                        println!("{hint}");
+                    }
                 }
                 // Keep serving: only the link is withheld.
                 Err(why) => eprintln!("ligus serve: {why}"),
@@ -1494,7 +1511,8 @@ pub fn cmd_serve(cfg: Config, opts: ServeOptions) -> Result<()> {
 
 /// `ligus pair` — show the pairing code for a configured (possibly already
 /// running) `ligus serve`, without starting one.
-pub fn cmd_pair(data_dir: &std::path::Path, opts: &ServeOptions, relay_only: bool) -> Result<()> {
+pub fn cmd_pair(cfg: &Config, opts: &ServeOptions, relay_only: bool) -> Result<()> {
+    let data_dir = cfg.data_dir.as_path();
     let url = opts.server_url();
     let remote = opts.remote.as_ref();
     match pair::pair_plan(&url, remote.is_some(), relay_only).map_err(anyhow::Error::msg)? {
@@ -1502,11 +1520,17 @@ pub fn cmd_pair(data_dir: &std::path::Path, opts: &ServeOptions, relay_only: boo
             if !relay_only {
                 println!("(The direct URL {url} is loopback; printing a relay-only link.)");
             }
-            print_pairing(data_dir, None, remote)
+            print_pairing(data_dir, None, remote)?;
         }
         pair::PairPlan::Direct => {
             let token = pair::load_existing_token(&opts.token_file)?;
-            print_pairing(data_dir, Some((&url, &token)), remote)
+            print_pairing(data_dir, Some((&url, &token)), remote)?;
         }
     }
+    // Best effort: a box whose store can't be read yet just gets no hint.
+    let standing = open_service(cfg).ok().and_then(|svc| svc.device_standing(uuid_of_room(&cfg.room), opts.owner.as_deref()).ok());
+    if let Some(hint) = standing.as_ref().and_then(pair::member_hint) {
+        println!("{hint}");
+    }
+    Ok(())
 }

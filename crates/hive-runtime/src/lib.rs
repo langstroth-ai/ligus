@@ -138,3 +138,35 @@ mod tests {
         assert_eq!(info.core_version, hive_core::VERSION);
     }
 }
+
+/// This machine's host name, for a friendly default label ("mac-mini", not
+/// "mac-mini.local"): the OS's own name, else `$HOSTNAME`/`$COMPUTERNAME`.
+pub fn machine_hostname() -> Option<String> {
+    let clean = |s: String| {
+        let s = s.trim().trim_end_matches(".local").trim_end_matches(".lan").to_string();
+        (!s.is_empty() && s != "localhost").then_some(s)
+    };
+    #[cfg(unix)]
+    {
+        let mut buf = [0u8; 256];
+        // SAFETY: the buffer is valid for its length; gethostname NUL-terminates
+        // within it on success (we also cap at the first NUL).
+        if unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } == 0 {
+            let end = buf.iter().position(|b| *b == 0).unwrap_or(buf.len());
+            if let Some(h) = std::str::from_utf8(&buf[..end]).ok().map(str::to_string).and_then(clean) {
+                return Some(h);
+            }
+        }
+    }
+    std::env::var("HOSTNAME").ok().or_else(|| std::env::var("COMPUTERNAME").ok()).and_then(clean)
+}
+
+#[cfg(test)]
+mod hostname_tests {
+    #[test]
+    fn machine_hostname_is_a_plain_name() {
+        if let Some(h) = super::machine_hostname() {
+            assert!(!h.is_empty() && !h.ends_with(".local") && h != "localhost", "{h}");
+        }
+    }
+}

@@ -5,6 +5,13 @@ talks to. Out of the box it joins the workspace as **its own member**. Since
 v1.16 you can instead enroll it as **one of your own devices**, so everything
 you do from the phone is authored as you.
 
+!!! tip "For a box that's yours alone, enroll it as your device"
+    A personal setup (your Mac or home server, your phone) should use
+    `ligus serve enroll`: otherwise the phone's messages show under the box's
+    name, not yours, and your desktop doesn't answer `@hive` in chats the
+    phone starts. Keep the box a separate member only when several people
+    share it.
+
 This page covers that enrollment, how the box's online status works, applying
 approved changes on the box, and the v1.16 sync change every upgrading
 workspace should know about. For reaching the box from the phone, see
@@ -14,7 +21,7 @@ workspace should know about. For reaching the box from the phone, see
 
 | | Its own member (default) | Your device (`LIGUS_SERVE_OWNER`, approved) |
 |---|---|---|
-| Phone messages show as | `LIGUS_SERVE_NAME` (for example "Phone") | you |
+| Phone messages show as | the box: `LIGUS_SERVE_NAME`, else its label (`--label` / `LIGUS_SERVE_LABEL`), else its host name | you |
 | Votes and review notes | a second voter, at the box's role (Contributor when it enrolled itself) | yours: one person, one vote |
 | Chats the phone creates | owned by the box; nobody answers `@hive` in them | owned by you; your desktop answers `@hive` |
 | Who signs events | the box's own account | the box's device key, under a certificate from your account |

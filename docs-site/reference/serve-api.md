@@ -40,7 +40,7 @@ There are two ways in, and both reach the same router:
 $ curl -s http://127.0.0.1:8787/v1/health
 {"ok":true,"version":"2.0.0"}
 $ curl -s http://127.0.0.1:8787/v1/health -H "Authorization: Bearer $(cat ~/.ligus/serve.token)"
-{"deviceLabel":"home-box","identity":{"actorId":"db65…","deviceFingerprint":"DFD0-62BD-5D2F","displayName":"hive-cli","mode":"member"},"ok":true,"version":"2.0.0","workspace":"acme"}
+{"deviceLabel":"home-box","identity":{"actorId":"db65…","deviceFingerprint":"DFD0-62BD-5D2F","displayName":"home-box","mode":"member"},"ok":true,"version":"2.0.0","workspace":"acme"}
 ```
 
 ### Chats and people

@@ -146,6 +146,17 @@ pub fn pair_plan(server_url: &str, remote: bool, relay_only: bool) -> Result<Pai
     Ok(PairPlan::Direct)
 }
 
+/// A one-line hint for pairing a phone to a box that is its own workspace
+/// member (joined with a plain invite): the phone then writes as the box.
+/// Right for a shared box; for a personal one, `ligus serve enroll` makes the
+/// box your own device so the phone writes as you. `None` otherwise.
+pub fn member_hint(standing: &hive_runtime::device_enroll::Standing) -> Option<&'static str> {
+    matches!(standing, hive_runtime::device_enroll::Standing::Own).then_some(
+        "Note: this box is its own workspace member, so the phone's messages show under the box's name. \
+         If it's your personal box, run `ligus serve enroll` once (and approve it on your desktop) so they show as you.",
+    )
+}
+
 /// Render `text` as a QR code for a terminal: two module rows per text line
 /// with half-block characters, explicit black-on-white ANSI colors (so it
 /// scans on dark and light terminal themes alike) and a 2-module quiet zone.
@@ -176,6 +187,15 @@ pub fn render_qr(text: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn member_hint_only_for_a_separate_member() {
+        use hive_runtime::device_enroll::Standing;
+        assert!(member_hint(&Standing::Own).is_some_and(|h| h.contains("ligus serve enroll")));
+        let owner = hive_core::ActorIdentity::new("a", "Alex", hive_core::ActorKind::Human);
+        assert!(member_hint(&Standing::OwnerDevice(owner)).is_none());
+        assert!(member_hint(&Standing::Revoked).is_none());
+    }
 
     #[test]
     fn pairing_url_has_the_contract_shape() {

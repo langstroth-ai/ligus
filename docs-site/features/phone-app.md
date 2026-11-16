@@ -13,9 +13,11 @@ through it.
 > so any client can implement them.
 
 To set up the box and pair a phone, see
-[Remote access for your phone](../networking/remote-access.md). To make the
-box act as you rather than as a separate member, see
-[Running ligus serve as your own device](../ops/serve-box.md). For the whole
+[Remote access for your phone](../networking/remote-access.md). If the box
+is yours alone, enroll it as your own device with `ligus serve enroll`
+([Running ligus serve as your own device](../ops/serve-box.md)): otherwise
+it's a separate member and what you send from the phone shows under the
+box's name rather than yours. For the whole
 setup end to end, see [Personal fleet](../deploy/personal-fleet.md).
 
 ## Pairing: direct or through the relay
