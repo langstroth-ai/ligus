@@ -64,8 +64,13 @@ pub struct PasskeyCredential {
 }
 
 /// A WebAuthn assertion (or recovery signature) carried in the actor stamp.
-/// For a registration's own proof, `authenticator_data` holds the whole
-/// `attestationObject` and `signature` is empty (see [`verify_create`]).
+/// Every stamped assertion is a sign-in (`webauthn.get`) assertion, a
+/// `PasskeyRegistered` event's own proof included: the account's first
+/// passkey proves itself with a `get` by the new credential over the
+/// registration event's digest (a `create` can't sign that digest, because
+/// the new key is part of it). The `create` ceremony's attestation object
+/// never rides an event; [`verify_create`] only reads the new key out of it
+/// on the registering device.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PresenceAssertion {
@@ -514,10 +519,11 @@ pub fn verify_recovery(a: &PresenceAssertion, key: &PasskeyKey, challenge: &[u8]
     verify_signature(EDDSA, &key.public_key, &msg, &unb64url(&a.signature)?)
 }
 
-/// Verify a registration's own proof (`webauthn.create` over the registration
-/// event's digest; `authenticator_data` is the `attestationObject`, whose
-/// statement is not checked: Ligus asks for `attestation: "none"`). Returns the
-/// attested credential: (credential id, alg, public key).
+/// Read the new credential out of a `webauthn.create` result on the
+/// registering device (`authenticator_data` holds the `attestationObject`,
+/// whose statement is not checked: Ligus asks for `attestation: "none"`).
+/// Device-local: it never verifies an event. Returns the attested credential:
+/// (credential id, alg, public key).
 pub fn verify_create(a: &PresenceAssertion, challenge: &[u8], policy: &Policy<'_>) -> Result<(Vec<u8>, i32, Vec<u8>), PresenceError> {
     let att = unb64url(&a.authenticator_data)?;
     let client_data = unb64url(&a.client_data_json)?;
