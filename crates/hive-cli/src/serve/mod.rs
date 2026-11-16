@@ -1466,8 +1466,18 @@ pub fn cmd_serve(cfg: Config, opts: ServeOptions) -> Result<()> {
         }
         if pair_now {
             let token = handle.shared.token();
-            let direct = (!pair::is_loopback_url(&server_url) || handle.shared.tunnel.is_none()).then_some((server_url.as_str(), token.as_str()));
-            print_pairing(&handle.shared.cfg.data_dir, direct, handle.shared.opts.remote.as_ref())?;
+            let remote = handle.shared.opts.remote.as_ref();
+            match pair::pair_plan(&server_url, remote.is_some(), false) {
+                Ok(plan) => {
+                    if plan == pair::PairPlan::RelayOnly {
+                        println!("(The direct URL {server_url} is loopback; printing a relay-only link.)");
+                    }
+                    let direct = (plan == pair::PairPlan::Direct).then_some((server_url.as_str(), token.as_str()));
+                    print_pairing(&handle.shared.cfg.data_dir, direct, remote)?;
+                }
+                // Keep serving: only the link is withheld.
+                Err(why) => eprintln!("ligus serve: {why}"),
+            }
         } else {
             println!("Run `ligus pair` to show the phone pairing code.");
         }
@@ -1486,27 +1496,17 @@ pub fn cmd_serve(cfg: Config, opts: ServeOptions) -> Result<()> {
 /// running) `ligus serve`, without starting one.
 pub fn cmd_pair(data_dir: &std::path::Path, opts: &ServeOptions, relay_only: bool) -> Result<()> {
     let url = opts.server_url();
-    if let Some(remote) = &opts.remote {
-        // A loopback direct URL is useless on the phone: the link goes relay-only.
-        if relay_only || pair::is_loopback_url(&url) {
+    let remote = opts.remote.as_ref();
+    match pair::pair_plan(&url, remote.is_some(), relay_only).map_err(anyhow::Error::msg)? {
+        pair::PairPlan::RelayOnly => {
             if !relay_only {
                 println!("(The direct URL {url} is loopback; printing a relay-only link.)");
             }
-            return print_pairing(data_dir, None, Some(remote));
+            print_pairing(data_dir, None, remote)
         }
-        let token = pair::load_existing_token(&opts.token_file)?;
-        return print_pairing(data_dir, Some((&url, &token)), Some(remote));
+        pair::PairPlan::Direct => {
+            let token = pair::load_existing_token(&opts.token_file)?;
+            print_pairing(data_dir, Some((&url, &token)), remote)
+        }
     }
-    if relay_only {
-        bail!("--relay-only needs remote access: `ligus remote enable --relay <url>` first");
-    }
-    if pair::is_loopback_url(&url) {
-        anyhow::bail!(
-            "the pairing link would point the phone at {url}, which on the phone is the phone itself. \
-             Run with the server's settings (LIGUS_SERVE_LISTEN / LIGUS_DATA_DIR, e.g. from its env file), \
-             or pass --listen <tailnet-ip:port> or --public-url <url>"
-        );
-    }
-    let token = pair::load_existing_token(&opts.token_file)?;
-    print_pairing(data_dir, Some((&url, &token)), None)
 }

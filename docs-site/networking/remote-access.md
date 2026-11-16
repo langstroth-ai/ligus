@@ -103,8 +103,12 @@ box's host id, its public key, the relay URL and a one-time pairing secret.
   point `LIGUS_DATA_DIR` / `--token-file` at the server's data dir.
 - **It won't send the phone to loopback.** A direct URL such as
   `http://127.0.0.1:8787` would point the phone at itself. With remote access
-  on, `ligus pair` prints a relay-only link instead. Without it, `ligus pair`
-  refuses and asks for `--listen <address:port>` or `--public-url <url>`.
+  on, `ligus pair` and `ligus serve --pair` print a relay-only link instead.
+  Without it they print no link: turn on remote access with
+  `ligus remote enable --relay <url>` and pair again, or listen on a LAN or
+  tailnet address (`--listen` / `LIGUS_SERVE_LISTEN`), or set the address the
+  phone should use (`--public-url` / `LIGUS_SERVE_PUBLIC_URL`).
+  (`ligus serve --pair` keeps serving; only the link is withheld.)
 - `--relay-only` leaves the direct URL and token out of the link even when a
   direct path exists.
 - The pairing secret works **once, for 10 minutes**, and only while
