@@ -1716,8 +1716,10 @@ async fn a_desktop_reply_synced_to_the_owners_box_notifies() {
     let chat = {
         let mut svc = open_service(&h.desktop).unwrap();
         let chat = svc.create_chat("desk chat", ws, "gw").unwrap();
-        svc.post_user_message(chat.id, ws, "@hive say hi".to_string()).unwrap();
-        let mid = svc.begin_assistant_message(chat.id, ws, "Hive", "gw", None, None).unwrap();
+        // The desktop stamps the reply with the message it answers: the owner's
+        // request, which makes the owner (this box) its requester.
+        let ask = svc.post_user_message(chat.id, ws, "@hive say hi".to_string()).unwrap();
+        let mid = svc.begin_assistant_message(chat.id, ws, "Hive", "gw", None, Some(ask.id)).unwrap();
         svc.complete_assistant_message(chat.id, ws, mid, "hi").unwrap();
         chat.id
     };
@@ -1735,8 +1737,8 @@ async fn a_desktop_reply_synced_to_the_owners_box_notifies() {
     // 2. The reply syncs in while still streaming, then finishes.
     let mid = {
         let mut svc = open_service(&h.desktop).unwrap();
-        svc.post_user_message(chat, ws, "@hive and again".to_string()).unwrap();
-        svc.begin_assistant_message(chat, ws, "Hive", "gw", None, None).unwrap()
+        let ask = svc.post_user_message(chat, ws, "@hive and again".to_string()).unwrap();
+        svc.begin_assistant_message(chat, ws, "Hive", "gw", None, Some(ask.id)).unwrap()
     };
     sync_once(&h.desktop).await.unwrap();
     tokio::time::sleep(Duration::from_millis(1200)).await;

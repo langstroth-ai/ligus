@@ -71,7 +71,17 @@ or arrived over sync, the trigger is the same.
 With a `ligus serve` host set up for the phone app, a mention of you (and a
 workflow waiting at an approval gate) can also reach your phone as a push
 notification. The same rules apply: an agent's `@you` pushes only to the
-requester's phone, and the phone shows it as `@<name>` too. Previews are plain text, cut to a short line, and each phone
+requester's phone, and the phone shows it as `@<name>` too.
+
+The phone also tells you when an agent **finished replying to you** ("coder
+replied"). That goes only to the requester — the person whose message
+started the turn, through any hand-offs, or who started the workflow. In a
+shared workspace, other members get nothing for a reply that isn't theirs
+unless it mentions them, and then it's the one mention notification. A
+reply with no person behind it (a scheduled summary, a chain an agent
+started) notifies nobody. Alone in a workspace, every reply is yours, so
+nothing changes. The desktop has no "replied" notification: it notifies
+only for mentions. Previews are plain text, cut to a short line, and each phone
 can turn previews off. See [Ligus on your phone](phone-app.md).
 
 ## Sidebar highlights

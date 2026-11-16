@@ -3,8 +3,9 @@
 //! fields are listed in `docs/push-notifications.md`).
 //!
 //! - an agent reply finished → `message.done` ("coder replied" / "coder hit
-//!   an error"), or `mention` when the reply `@mentions` the user (one
-//!   notification, never both);
+//!   an error") for its requester only (the person whose message started the
+//!   turn; none found → nobody), or `mention` when the reply `@mentions` the
+//!   user (one notification, never both);
 //! - a message from another member that `@mentions` the user → `mention`;
 //! - a proposal waiting for review → `proposal.created`, except a workflow
 //!   gate's proposal, which is announced as `workflow.approval` instead;
@@ -86,6 +87,19 @@ impl Me {
         }
         hive_runtime::message_mentions(m, s).reaches(|id| self.ids.contains(id), &self.roles, &self.display_name)
     }
+
+    /// The user is the requester of agent reply `m`: the person whose message
+    /// started its turn (through hand-offs; a workflow stage's is whoever
+    /// started the run). No requester → nobody.
+    pub fn asked_for(&self, m: &ChatMessage, s: &ChatSession) -> bool {
+        hive_runtime::requester_of(s, m).is_some_and(|r| {
+            if r.actor_id.is_empty() {
+                !self.display_name.is_empty() && r.display_name == self.display_name
+            } else {
+                self.is(&r.actor_id) || r.member_id.as_deref().is_some_and(|id| self.is(id))
+            }
+        })
+    }
 }
 
 fn is_reply(role: MessageRole) -> bool {
@@ -118,7 +132,9 @@ pub fn for_message(s: &ChatSession, m: &ChatMessage, done: bool, me: &Me) -> Opt
         push.preview = Some(m.body.clone());
         return Some((notice, push));
     }
-    if !reply {
+    // "Replied" goes only to the person the reply answers: other members
+    // hear about it only when it @mentions them (above).
+    if !reply || !me.asked_for(m, s) {
         return None;
     }
     let notice = ntfy::reply_notice(&author, &s.title, s.id, failed);
@@ -277,9 +293,17 @@ mod tests {
 
     #[test]
     fn finished_agent_reply_is_message_done_with_preview_only_when_on() {
-        let f = fixture();
+        let mut f = fixture();
         let me = f.me();
-        let (notice, p) = for_message(&f.s, &reply("Done: the build is green."), true, &me).unwrap();
+        // The box's own user asked, so the reply is theirs.
+        let ask = from(&f.me_actor, "@coder fix the build");
+        f.s.messages.push(ask.clone());
+        let mine = |body: &str| {
+            let mut r = reply(body);
+            r.reply_to_message_id = Some(ask.id);
+            r
+        };
+        let (notice, p) = for_message(&f.s, &mine("Done: the build is green."), true, &me).unwrap();
         assert_eq!((p.kind.as_str(), p.title.as_str(), p.sender.as_deref()), ("message.done", "coder replied", Some("coder")));
         assert_eq!(p.chat_id, Some(f.s.id.to_string()));
         assert_eq!(notice.title, "coder replied");
@@ -289,7 +313,7 @@ mod tests {
         assert_eq!(off["body"], "");
         assert!(!off.to_string().contains("green"));
         // Errored turn.
-        let (_, p) = for_message(&f.s, &reply("[error] model unreachable"), true, &me).unwrap();
+        let (_, p) = for_message(&f.s, &mine("[error] model unreachable"), true, &me).unwrap();
         assert_eq!((p.kind.as_str(), p.title.as_str()), ("message.done", "coder hit an error"));
         // Not on creation (still streaming / not done), never for a streaming one.
         assert!(for_message(&f.s, &reply("x"), false, &me).is_none());
@@ -371,9 +395,51 @@ mod tests {
         let ask = from(&people[0], "@coder fix the build");
         let r = answer(&mut s, &ask, "Fixed. @you can you confirm on your machine?");
         assert_eq!(pinged(&s, &r, &people), vec!["Ana"]);
-        // The others still get the ordinary reply notice, not a mention.
-        let ben = Me::in_chat(&people[1], &s, &DeviceLinks::default());
-        assert_eq!(for_message(&s, &r, true, &ben).unwrap().1.kind, "message.done");
+        // The others get nothing: not a mention, not a "replied".
+        assert_eq!(notified(&s, &r, &people), vec![("Ana".to_string(), "mention".to_string())]);
+    }
+
+    /// Every notification each of the three gets for message `m`.
+    fn notified(s: &ChatSession, m: &ChatMessage, people: &[ActorIdentity; 3]) -> Vec<(String, String)> {
+        let done = matches!(m.role, MessageRole::Assistant | MessageRole::Agent);
+        people
+            .iter()
+            .filter_map(|p| {
+                let me = Me::in_chat(p, s, &DeviceLinks::default());
+                for_message(s, m, done, &me).map(|(_, push)| (p.display_name.clone(), push.kind))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn replied_goes_only_to_the_requester() {
+        let (mut s, people) = trio();
+        let ask = from(&people[0], "@coder fix the build");
+        let r = answer(&mut s, &ask, "Fixed.");
+        assert_eq!(notified(&s, &r, &people), vec![("Ana".to_string(), "message.done".to_string())]);
+        // An errored turn too.
+        let err = answer(&mut s, &ask, "[error] model unreachable");
+        assert_eq!(notified(&s, &err, &people), vec![("Ana".to_string(), "message.done".to_string())]);
+        // A hand-off's reply is still Ana's.
+        let first = answer(&mut s, &ask, "@coder over to you");
+        let mut second = reply("All done.");
+        second.reply_to_message_id = Some(first.id);
+        s.messages.push(second.clone());
+        assert_eq!(notified(&s, &second, &people), vec![("Ana".to_string(), "message.done".to_string())]);
+        // Mentioning someone else: Ana gets "replied", Ben one mention, Olu nothing.
+        let cc = answer(&mut s, &ask, "Fixed. @Ben FYI");
+        assert_eq!(
+            notified(&s, &cc, &people),
+            vec![("Ana".to_string(), "message.done".to_string()), ("Ben".to_string(), "mention".to_string())]
+        );
+    }
+
+    #[test]
+    fn no_requester_means_no_replied_for_anyone() {
+        let (mut s, people) = trio();
+        let r = reply("Nightly summary.");
+        s.messages.push(r.clone());
+        assert!(notified(&s, &r, &people).is_empty());
     }
 
     #[test]

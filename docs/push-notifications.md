@@ -61,7 +61,7 @@ Unknown fields and kinds must be ignored by the app (an unknown kind shows
 
 | `kind` | When | `title` | `body` (previews on) |
 |---|---|---|---|
-| `message.done` | an agent reply finished (not your messages, not a reply that mentions you) | `coder replied`, or `coder hit an error` for a failed turn | first 120 characters of the reply |
+| `message.done` | an agent reply to **you** finished: you are its requester, the person whose message started the turn (through hand-offs; a workflow stage's is whoever started the run). Other members get nothing for it unless it mentions them (then one `mention`). No requester found → nobody. Not a reply that mentions you (that is the `mention`) | `coder replied`, or `coder hit an error` for a failed turn | first 120 characters of the reply |
 | `mention` | a message from an agent or another member `@mentions` you | `Ana mentioned you` | first 120 characters of the message |
 | `proposal.created` | a proposal is waiting for review (not a workflow gate's) | `Change ready for review` | the proposal title, cut the same way |
 | `workflow.approval` | a workflow run's approval gate is waiting (again on each rerouted attempt) | `<workflow name> needs approval` | the gate's stage name |

@@ -247,7 +247,7 @@ ciphertext.
 |---|---|
 | *Name* mentioned you | a message from an agent or another member `@mentions` you, `@all`, a role group you're in, or an agent's `@you` in a reply to you |
 | *Workflow* needs approval | a workflow run's approval gate is waiting (again on each rerouted attempt) |
-| *Agent* replied / hit an error | an agent reply finished (not your own messages, and not a reply that already notified you as a mention) |
+| *Agent* replied / hit an error | an agent reply **to you** finished: one answering a message you wrote (or a hand-off or workflow you started). Replies to other people don't notify you unless they mention you. Not a reply that already notified you as a mention |
 | Change ready for review | a proposal is waiting for review (a workflow gate is announced once, as an approval, not also here) |
 | The review queue needs you | the review queue backed up and a desktop with *Recruit reviewers* on asked you to help; tapping opens the proposal that has waited longest for you |
 | New phone paired | a new phone was paired with the box |
@@ -343,7 +343,8 @@ push: message.done to "iPhone" (Ab3dE9…): relay refused it: no_push_token (…
 - **No `push:` line at all** for an agent reply: the box never saw a finished
   reply to notify about. Replies and mentions that synced in late (older than
   10 minutes when `ligus serve` started) don't notify, nor does your own
-  message, nor anything in a direct message.
+  message, nor anything in a direct message, nor a reply to someone else
+  (one that answers another member's message and doesn't mention you).
 
 On the relay, every push is one `tunnel push` log line with `result` (`sent`,
 `no_push_token`, `push_failed`, `rate_limited`, `revoked`, `push_unavailable`)

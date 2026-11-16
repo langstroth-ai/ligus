@@ -4311,6 +4311,19 @@ mod at_you_desktop_tests {
     }
 
     #[test]
+    fn a_plain_reply_raises_nothing_on_any_desktop() {
+        // The desktop has no generic "replied" notification: the asker sees
+        // the reply in the chat they're in; a desktop notifies only for a
+        // mention, so a reply to Ana that names no one reaches no desktop.
+        let mut s = trio();
+        let ask = post(&mut s, "ana", "@hive fix it");
+        let r = agent_reply(&mut s, &ask, "Fixed.");
+        assert!(pinged(&s, &r).is_empty());
+        let cc = agent_reply(&mut s, &ask, "Fixed. @Ben FYI");
+        assert_eq!(pinged(&s, &cc), vec!["ben"]);
+    }
+
+    #[test]
     fn a_persons_at_you_is_not_a_broadcast() {
         let mut s = trio();
         let m = post(&mut s, "ben", "nice one @you");
