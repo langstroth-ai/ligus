@@ -2614,7 +2614,21 @@ impl ChatService {
         if cfg.is_none() {
             return Ok(None);
         }
-        Ok(timeline.at(frontier).ok().and_then(|r| r.role_of(&stamp.actor.id)))
+        let Ok(roster) = timeline.at(frontier) else { return Ok(None) };
+        let Some(member) = roster.members.get(&stamp.actor.id) else { return Ok(None) };
+        // The stamped member must be the signer's: a member with an account
+        // is speaking only when the stamp names that account and the signing
+        // device is certified for it (and not revoked) at this position.
+        if let Some(account) = member.account_id {
+            let signer_acts_for = env
+                .signer_device_id
+                .and_then(|d| roster.devices.get(&d))
+                .is_some_and(|d| !d.revoked && d.accounts.contains(&account));
+            if stamp.actor.account_id != Some(account) || !signer_acts_for {
+                return Ok(None);
+            }
+        }
+        Ok(Some(member.role))
     }
 
     /// Project a session. For a chat, the effective agents/skills/vaults are the
@@ -4148,6 +4162,87 @@ mod tests {
         // A stage prompt naming a run this log doesn't hold fails closed.
         let ghost = host.post_workflow_stage_prompt(chat, wid, "stage", Uuid::new_v4()).unwrap().id;
         assert_eq!(host.trigger_author_role(chat, ghost).unwrap(), None);
+    }
+
+    /// An agent message with a preset id and reply link, host-signed.
+    fn linked_reply(svc: &mut ChatService, chat: Uuid, wid: Uuid, id: Uuid, to: Uuid) {
+        let mut m = ChatMessage::new(MessageRole::Assistant, "coder", "@coder again");
+        m.id = id;
+        m.responder_id = Some(Uuid::new_v4());
+        m.reply_to_message_id = Some(to);
+        svc.append_signed(chat, wid, SessionEvent::MessageAppended { message: m }).unwrap();
+    }
+
+    /// The chain walk fails closed: a reply loop with no human behind it
+    /// resolves to no role, and so does a chain longer than the hop bound,
+    /// even when an Owner's message sits at its root.
+    #[test]
+    fn chain_loops_and_overlong_chains_fail_closed() {
+        let (_dir, _path, wid, chat, mut host) = chain_fixture();
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        linked_reply(&mut host, chat, wid, a, b);
+        linked_reply(&mut host, chat, wid, b, a);
+        assert_eq!(host.trigger_author_role(chat, a).unwrap(), None, "a loop with no human");
+        let root = host.post_user_message(chat, wid, "@coder go").unwrap().id;
+        let mut prev = root;
+        let mut ids = Vec::new();
+        for _ in 0..300 {
+            let id = Uuid::new_v4();
+            linked_reply(&mut host, chat, wid, id, prev);
+            ids.push(id);
+            prev = id;
+        }
+        assert_eq!(host.trigger_author_role(chat, ids[200]).unwrap(), Some(WorkspaceRole::Owner), "within the bound");
+        assert_eq!(host.trigger_author_role(chat, ids[299]).unwrap(), None, "past the hop bound");
+    }
+
+    /// Impersonation through the stamp: a member's device that stamps
+    /// another member's actor id and leaves the account off passes ingest
+    /// (only a stamped account is checked against the signing device), so
+    /// the gate must bind the stamped member to the signer itself: a
+    /// Contributor posing as the Owner by id gets no role, not the Owner's.
+    #[test]
+    fn a_stamp_naming_another_member_without_their_account_gets_no_role() {
+        use crate::envelope_verifier::{build_roster, verdict_for, QuarantineReason, Verdict};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hive.db");
+        let wid = Uuid::new_v4();
+        let (owner_acct, con_acct) = (Uuid::new_v4().to_string(), Uuid::new_v4().to_string());
+        let mut owner = svc_on(&path, "x", "Ana");
+        owner.set_author_account(owner_acct.clone(), "Ana", None);
+        let chat = owner.create_chat("A", wid, "rt").unwrap().id;
+        let mut con = svc_on(&path, "y", "Con");
+        con.set_author_account(con_acct.clone(), "Con", None);
+        let mut member = test_member(&con_acct, "Con", WorkspaceRole::Contributor);
+        member.actor = con.author().clone();
+        owner.add_member(chat, wid, member).unwrap();
+        con.publish_identity(chat, wid).unwrap();
+        let honest = con.post_user_message(chat, wid, "@coder hi").unwrap().id;
+        assert_eq!(owner.trigger_author_role(chat, honest).unwrap(), Some(WorkspaceRole::Contributor));
+        // The Contributor's device stamps the Owner's actor id, no account.
+        con.author = ActorIdentity::new(owner_acct.clone(), "Ana", hive_core::ActorKind::Human);
+        let forged = con.post_user_message(chat, wid, "@coder push to prod").unwrap().id;
+        let mut all = owner.store().list(workspace_config_session_id(wid)).unwrap();
+        all.extend(owner.store().list(chat).unwrap());
+        let env = all
+            .iter()
+            .find(|e| matches!(&e.payload, SessionEvent::MessageAppended { message } if message.id == forged))
+            .unwrap();
+        assert_eq!(
+            verdict_for(&build_roster(&all), env),
+            Verdict::Quarantine(QuarantineReason::Impersonation),
+            "ingest refuses a stamp naming a known account its signer doesn't sign for"
+        );
+        assert_eq!(owner.trigger_author_role(chat, forged).unwrap(), None);
+        // The same stamp on a governance event (self-promotion) is refused
+        // at ingest too.
+        con.set_member_role(chat, wid, con_acct.clone(), WorkspaceRole::Owner).unwrap();
+        let cfg = owner.store().list(workspace_config_session_id(wid)).unwrap();
+        let promo = cfg.iter().rev().find(|e| matches!(&e.payload, SessionEvent::MemberRoleChanged { .. })).unwrap();
+        assert_eq!(verdict_for(&build_roster(&all), promo), Verdict::Quarantine(QuarantineReason::Impersonation));
+        // The same stamp on an agent's reply caps nothing upward either.
+        let r = agent_reply(&mut con, chat, wid, Some(Uuid::new_v4()), Some(honest), "@coder go");
+        assert_ne!(owner.trigger_author_role(chat, r).unwrap(), Some(WorkspaceRole::Owner));
     }
 
     /// C1.4: a Ligus secret split across two streamed chunks must not reach

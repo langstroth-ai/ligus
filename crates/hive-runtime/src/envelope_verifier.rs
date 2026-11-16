@@ -907,7 +907,7 @@ pub fn verdict_for(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verd
         let claims_known = env
             .actor_stamp
             .as_ref()
-            .and_then(|s| s.actor.account_id)
+            .and_then(|s| s.actor.account_id.or_else(|| Uuid::parse_str(&s.actor.id).ok()))
             .is_some_and(|a| {
                 roster.account_signing_key(a).is_some() || roster.is_disputed(a) || roster.removed_accounts.contains(&a)
             });
@@ -936,6 +936,17 @@ pub fn verdict_for(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verd
                 return Verdict::Quarantine(QuarantineReason::DisputedAccountKey);
             }
             if !roster.device_signs_for(device_id, claimed) {
+                return Verdict::Quarantine(QuarantineReason::Impersonation);
+            }
+        } else if let Ok(named) = Uuid::parse_str(&stamp.actor.id) {
+            // No account on the stamp, but its actor id *is* a known account
+            // (a member's actor id is their account id): the signer must sign
+            // for it, or a member could leave the account off and act under
+            // anyone's id (the fold and the author gate read the actor id).
+            let known = roster.account_signing_key(named).is_some()
+                || roster.is_disputed(named)
+                || roster.removed_accounts.contains(&named);
+            if known && !roster.device_signs_for(device_id, named) {
                 return Verdict::Quarantine(QuarantineReason::Impersonation);
             }
         }
