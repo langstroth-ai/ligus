@@ -54,6 +54,10 @@ function handle(cmd: string, args: Args): unknown {
       return fx.serverMembers;
     case "presence_list":
       return fx.presence;
+    case "get_share_typing":
+      return true;
+    case "set_share_typing":
+      return null;
     case "list_proposals":
       return flags.empty ? [] : fx.proposals;
     case "list_proposal_sets":

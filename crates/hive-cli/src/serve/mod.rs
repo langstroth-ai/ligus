@@ -54,6 +54,7 @@ pub mod proposal_file;
 pub mod repos_api;
 pub mod sets;
 pub mod tunnel;
+pub mod typing_api;
 
 #[cfg(test)]
 mod identity_tests;
@@ -357,6 +358,8 @@ pub struct Shared {
     pub contact_state: Mutex<String>,
     /// Drop-box invites from the last listing (codes stay on the box).
     pub pending_codes: identity_api::PendingCodes,
+    /// The phone's typing and who else is typing (`typing_api`).
+    pub typing: typing_api::Typing,
 }
 
 /// How long a dashboard snapshot of the workspace is reused.
@@ -1034,6 +1037,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         contact_lock: tokio::sync::Mutex::new(()),
         contact_state: Mutex::new("unknown".into()),
         pending_codes: identity_api::PendingCodes::default(),
+        typing: typing_api::Typing::default(),
         hive_snapshot: Mutex::new(None),
         dashboard_mcp: dashboard_mcp_registry(),
         repos: repos_api::RepoState::default(),
@@ -1074,6 +1078,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         tasks.push(tokio::spawn(contact_loop(shared.clone(), rx.clone())));
     }
     tasks.push(tokio::spawn(dms::dm_sync_loop(shared.clone(), rx.clone())));
+    tasks.push(tokio::spawn(typing_api::typing_loop(shared.clone(), rx.clone())));
     tasks.push(tokio::spawn(token_watch(shared.clone(), rx.clone())));
     if let Some(t) = shared.tunnel.clone() {
         tasks.push(tokio::spawn(tunnel::pending_loop(t.clone(), rx.clone())));

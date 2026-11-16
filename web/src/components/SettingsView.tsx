@@ -59,7 +59,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     cap: "You",
     items: [
-      { id: "account", label: "Profile", icon: <IconUsers size={16} />, keywords: ["profile", "identity", "name", "avatar", "safety code", "fingerprint", "devices", "git email"] },
+      { id: "account", label: "Profile", icon: <IconUsers size={16} />, keywords: ["profile", "identity", "name", "avatar", "safety code", "fingerprint", "devices", "git email", "privacy", "typing", "presence"] },
       { id: "appearance", label: "Appearance", icon: <IconSparkle size={16} />, keywords: ["theme", "dark mode", "light", "color", "font"] },
     ],
   },

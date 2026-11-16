@@ -80,6 +80,7 @@ import { detectSlash } from "@/lib/slash";
 import { confirmThen } from "@/lib/confirm";
 import { promptDialog } from "@/components/Dialog";
 import { loadTemplates } from "@/lib/templates";
+import { PeopleTyping, TypingDots } from "@/components/TypingDots";
 
 // Clickable starter prompts shown in an empty chat — concrete examples of what
 // to do, spanning understand / change / git / docs. Clicking fills the composer.
@@ -249,13 +250,11 @@ export function ChatView({
     enabled: relayConfigured,
     refetchInterval: relayConfigured ? 3000 : false,
   });
-  const typingNames = (presence.data ?? [])
-    .filter((p) => p.typing && p.sessionId === sessionId)
-    .map((p) => p.name || "Someone");
 
   // Heartbeat "typing" (throttled), then auto-clear shortly after the last key.
   function pingTyping() {
-    if (!relayConfigured) return;
+    // Nothing can be sent while waiting for the founder: no typing either.
+    if (!relayConfigured || waitingForFounder) return;
     const now = Date.now();
     if (now - lastTypingPing.current > 1500) {
       lastTypingPing.current = now;
@@ -1231,7 +1230,7 @@ export function ChatView({
               </div>
             </div>
           )}
-          {typingNames.length > 0 && <TypingDots label={typingLabel(typingNames)} />}
+          <PeopleTyping presence={presence.data} sessionId={sessionId} />
           {waitingForFounder && (
             <div className="tt-note" role="status" aria-live="polite">
               <span aria-hidden className="shrink-0" style={{ flex: "0 0 auto" }}>
@@ -1665,30 +1664,6 @@ export function ChatView({
           onClose={() => setFilePicker(null)}
         />
       )}
-    </div>
-  );
-}
-
-function typingLabel(names: string[]): string {
-  if (names.length === 1) return `${names[0]} is typing`;
-  if (names.length === 2) return `${names[0]} and ${names[1]} are typing`;
-  return "Several people are typing";
-}
-
-/// Animated "… is typing"/"is thinking" row, shown as a lightweight pending
-/// bubble so it reads as an in-flight turn rather than floating text.
-function TypingDots({ label }: { label: string }) {
-  return (
-    <div
-      className="inline-flex items-center gap-2 rounded-2xl border px-3.5 py-2.5 text-sm"
-      style={{ borderColor: "color-mix(in srgb, var(--hive-accent-cool) 26%, transparent)", background: "color-mix(in srgb, var(--hive-accent-cool) 10%, transparent)" }}
-    >
-      <span className="opacity-70">{label}</span>
-      <span className="inline-flex gap-0.5">
-        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current opacity-60 [animation-delay:-0.2s]" />
-        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current opacity-60 [animation-delay:-0.1s]" />
-        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current opacity-60" />
-      </span>
     </div>
   );
 }

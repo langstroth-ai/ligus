@@ -3636,3 +3636,143 @@ async fn phone_messages_show_as_the_box_or_its_owner() {
 fn cli_identity_name() -> String {
     crate::box_name(crate::env_opt("LIGUS_SERVE_LABEL"), hive_runtime::machine_hostname())
 }
+
+// ── Typing indicators (typing_api) ─────────────────────────────────────────
+
+/// The desktop's view of the room's live human beats, plus the raw listing
+/// the relay holds.
+async fn desktop_beats(h: &Harness) -> (Vec<hive_runtime::human_presence::HumanBeat>, String) {
+    let relay = crate::relay_client(&h.desktop).unwrap();
+    let raw = relay.list_presence(&h.desktop.room).await.unwrap();
+    let ring = crate::box_ring(&h.desktop).unwrap();
+    let beats = hive_runtime::human_presence::open_human_beats(&raw, &ring, hive_runtime::human_presence::now_ms());
+    (beats, serde_json::to_string(&raw).unwrap())
+}
+
+/// The phone types: the box publishes a beat for that chat, sealed (the relay
+/// sees no chat id, actor or name), attributed like its messages (the box, or
+/// its owner once enrolled as the owner's device); "stopped" goes out at
+/// once, and a phone that goes quiet is expired by the box.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn phone_typing_is_published_sealed_and_expires() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    let box_actor = h.handle.shared.lock().author().clone();
+    let path = format!("/v1/chats/{chat_id}/typing");
+
+    let r = h.send(reqwest::Method::POST, &path, Some(json!({ "typing": true }))).await;
+    assert_eq!(r["published"], json!(true));
+    let (beats, raw) = desktop_beats(&h).await;
+    let b = beats.iter().find(|b| b.session_id == chat_id).expect("the desktop sees the phone typing");
+    assert!(b.typing);
+    assert_eq!(b.actor_id, box_actor.id);
+    for leak in [chat_id.as_str(), box_actor.id.as_str(), box_actor.display_name.as_str(), "sessionId", "actorId"] {
+        assert!(!raw.contains(leak), "the relay can read {leak:?}: {raw}");
+    }
+    // A second ping right away is throttled (only refreshes the expiry).
+    let r = h.send(reqwest::Method::POST, &path, Some(json!({ "typing": true }))).await;
+    assert_eq!(r["published"], json!(false));
+    // Stopped: at once.
+    let r = h.send(reqwest::Method::POST, &path, Some(json!({ "typing": false }))).await;
+    assert_eq!(r["published"], json!(true));
+    assert!(!desktop_beats(&h).await.0.iter().any(|b| b.typing));
+
+    // Enrolled as the owner's device: typing shows as the owner.
+    let owner = open_service(&h.desktop).unwrap().author().clone();
+    h.handle.shared.lock().act_as_owner_device(owner.clone());
+    h.send(reqwest::Method::POST, &path, Some(json!({ "typing": true }))).await;
+    let (beats, _) = desktop_beats(&h).await;
+    assert!(beats.iter().any(|b| b.typing && b.actor_id == owner.id && b.session_id == chat_id));
+
+    // The phone goes quiet: the box publishes "stopped" on its own.
+    let deadline = tokio::time::Instant::now() + super::typing_api::EXPIRE_AFTER + Duration::from_secs(4);
+    loop {
+        if !desktop_beats(&h).await.0.iter().any(|b| b.typing) {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "quiet typing never expired");
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    h.handle.shutdown();
+}
+
+/// The typing route takes the bearer like every route, only chats the box
+/// can see, and refuses a flood.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn typing_route_is_authed_scoped_and_rate_limited() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    let url = format!("{}/v1/chats/{chat_id}/typing", h.base);
+
+    let r = h.client.post(&url).json(&json!({ "typing": true })).send().await.unwrap();
+    assert_eq!(r.status(), 401);
+    let r = h.client.post(&url).bearer_auth("wrong").json(&json!({ "typing": true })).send().await.unwrap();
+    assert_eq!(r.status(), 401);
+    let other = format!("{}/v1/chats/{}/typing", h.base, Uuid::new_v4());
+    let r = h.client.post(&other).bearer_auth(&h.token).json(&json!({ "typing": true })).send().await.unwrap();
+    assert_eq!(r.status(), 404);
+    let r = h.client.get(&other).bearer_auth(&h.token).send().await.unwrap();
+    assert_eq!(r.status(), 404);
+
+    let mut limited = false;
+    for _ in 0..(super::typing_api::MAX_REQUESTS + 5) {
+        let r = h.client.post(&url).bearer_auth(&h.token).json(&json!({ "typing": false })).send().await.unwrap();
+        if r.status() == 429 {
+            limited = true;
+            break;
+        }
+        assert_eq!(r.status(), 200);
+    }
+    assert!(limited, "a flood of typing pings is refused");
+    h.handle.shutdown();
+}
+
+/// Someone types on the desktop: a phone holding the event stream gets a
+/// live `typing` event naming them (from the roster), and GET agrees; when
+/// they stop, an empty list follows. The event is not replayed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn others_typing_reaches_the_phone_as_a_live_event() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
+    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
+    let mut rx = h.events(None).await;
+
+    let (desk_actor, desk_device) = {
+        let svc = open_service(&h.desktop).unwrap();
+        (svc.author().clone(), svc.device_id().to_string())
+    };
+    let relay = crate::relay_client(&h.desktop).unwrap();
+    let ring = crate::box_ring(&h.desktop).unwrap();
+    let beat = |typing: bool| hive_runtime::human_presence::HumanBeat {
+        actor_id: desk_actor.id.clone(),
+        name: "Forged\u{202E}name".into(),
+        device_id: desk_device.clone(),
+        session_id: chat_id.clone(),
+        typing,
+        ts: hive_runtime::human_presence::now_ms(),
+    };
+    hive_runtime::human_presence::publish_human_beat(&relay, &h.desktop.room, &ring, &beat(true)).await.unwrap();
+    let seen = collect_until(&mut rx, 10, |evs| evs.iter().any(|(n, d, _)| n == "typing" && d["typing"].as_array().is_some_and(|a| !a.is_empty()))).await;
+    let (_, d, id) = seen.iter().find(|(n, _, _)| n == "typing").expect("a typing event").clone();
+    assert_eq!(d["chatId"], json!(chat_id));
+    assert_eq!(d["typing"][0]["actorId"], json!(desk_actor.id));
+    let name = d["typing"][0]["name"].as_str().unwrap();
+    assert!(!name.contains('\u{202E}'), "names are cleaned: {name:?}");
+    let got = h.get(&format!("/v1/chats/{chat_id}/typing")).await;
+    assert_eq!(got["typing"][0]["actorId"], json!(desk_actor.id));
+
+    // Not replayed to a stream resuming from before it.
+    let mut again = h.events(Some(id - 1)).await;
+    let replay = collect_until(&mut again, 1, |_| false).await;
+    assert!(!replay.iter().any(|(n, _, _)| n == "typing"), "{replay:?}");
+
+    hive_runtime::human_presence::publish_human_beat(&relay, &h.desktop.room, &ring, &beat(false)).await.unwrap();
+    let seen = collect_until(&mut rx, 10, |evs| evs.iter().any(|(n, d, _)| n == "typing" && d["typing"] == json!([]))).await;
+    assert!(seen.iter().any(|(n, d, _)| n == "typing" && d["typing"] == json!([])), "{seen:?}");
+    h.handle.shutdown();
+}

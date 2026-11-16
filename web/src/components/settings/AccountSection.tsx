@@ -11,10 +11,13 @@ import {
   listMyDevices,
   listDeviceRequests,
   revokeMyDevice,
+  getShareTyping,
+  setShareTyping,
   type DeviceCodeDto,
 } from "@/lib/ipc";
 import { confirmDialog } from "@/components/Dialog";
-import { Button, Section, fieldStyle } from "@/components/ui";
+import { Button, Section, Switch, fieldStyle } from "@/components/ui";
+import { Row } from "@/components/settings/FlowSection";
 import { toast, errMsg } from "@/components/Toast";
 import { Avatar } from "@/components/Avatar";
 import { fileToAvatarDataUrl } from "@/lib/avatar";
@@ -30,7 +33,34 @@ export function AccountSection() {
       <SafetyCodeSection />
       <LinkedAccountsSection />
       <DevicesSection />
+      <PrivacySection />
     </>
+  );
+}
+
+/// What this device tells others about you while you're in a chat.
+export function PrivacySection() {
+  const qc = useQueryClient();
+  const share = useQuery({ queryKey: ["share-typing"], queryFn: getShareTyping });
+  return (
+    <Section title="Privacy">
+      <Row
+        label="Share typing status"
+        hint="Show people in a chat when you're typing. Only that you're typing is shared, encrypted for the workspace; never what you type."
+      >
+        <Switch
+          on={share.data ?? true}
+          disabled={share.isLoading}
+          label="Share typing status"
+          onChange={(v) => {
+            qc.setQueryData(["share-typing"], v);
+            void setShareTyping(v)
+              .catch((e) => toast.error(errMsg(e)))
+              .finally(() => void qc.invalidateQueries({ queryKey: ["share-typing"] }));
+          }}
+        />
+      </Row>
+    </Section>
   );
 }
 

@@ -62,6 +62,21 @@ impl Hub {
         ring.0
     }
 
+    /// Emit an ephemeral event (typing): numbered like any other so ids stay
+    /// monotonic, but not kept for `Last-Event-ID` replay (a stale "is
+    /// typing" must not come back, nor push real events out of the ring).
+    pub fn emit_live(&self, name: &'static str, data: Value) -> u64 {
+        let mut ring = self.ring.lock().unwrap_or_else(|e| e.into_inner());
+        ring.0 += 1;
+        let _ = self.tx.send(SseEvent { id: ring.0, name, data });
+        ring.0
+    }
+
+    /// Open event streams right now.
+    pub fn listeners(&self) -> usize {
+        self.tx.receiver_count()
+    }
+
     /// Subscribe, first returning the buffered events after `last_id` (all of
     /// them are dropped if `last_id` is older than the buffer — best effort).
     pub fn subscribe(&self, last_id: Option<u64>) -> (Vec<SseEvent>, broadcast::Receiver<SseEvent>) {

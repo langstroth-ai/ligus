@@ -301,6 +301,11 @@ struct LiveSettings {
     /// only takes effect where edits are allowed.
     #[serde(default)]
     builtin_run_command: bool,
+    /// Tell the people in a chat when you're typing (Settings → Privacy). Only
+    /// that you're typing, sealed under the workspace key; never what. Off:
+    /// this device publishes "not typing" only.
+    #[serde(default = "default_true")]
+    share_typing: bool,
     /// Vault retrieval (Settings → Models). Empty embeddings URL/model = off:
     /// vaults are pasted into the system prompt as before.
     #[serde(default)]
@@ -558,6 +563,7 @@ impl Default for LiveSettings {
             builtin_tools: true,
             builtin_write_in_place: false,
             builtin_run_command: false,
+            share_typing: true,
             retrieval_embed_url: String::new(),
             retrieval_embed_model: String::new(),
             retrieval_rerank_url: String::new(),
@@ -9598,87 +9604,170 @@ struct PresenceDto {
     session_id: String,
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+/// The active workspace's relay, room and keyring, when presence can be
+/// published there: a relay is configured and this device holds a seal key.
+/// Presence is never published in the clear.
+fn presence_transport(state: &AppState) -> Option<(String, String, hive_runtime::keyring::KeyringEngine)> {
+    let (url, room, conn) = {
+        let s = state.settings.lock().unwrap();
+        let url = s.relay_url.clone().filter(|u| !u.trim().is_empty())?;
+        let room = s.sync_room.clone();
+        let conn = s.workspaces.iter().find(|w| w.room == room).cloned();
+        (url, room, conn)
+    };
+    let ring = workspace_ring(state, &room, conn.as_ref());
+    ring.seal_key()?;
+    Some((url, room, ring))
 }
 
-/// Presence is considered live for this long after the last ping.
-const PRESENCE_TTL_MS: u64 = 8000;
-
 /// Heartbeat the local user's ephemeral presence (online + whether they're
-/// typing in `session_id`) to the relay. No-op when relay-less (solo). Best
-/// effort — relay hiccups are swallowed.
+/// typing in `session_id`) to the active workspace's relay, sealed under the
+/// workspace key (`hive_runtime::human_presence`). No-op when relay-less, when
+/// no seal key is held, or when `session_id` isn't a chat of the active
+/// workspace (a DM's typing goes only to that DM's room). With "Share typing
+/// status" off, only "not typing" is published. Best effort — relay hiccups
+/// are swallowed.
 #[tauri::command]
 async fn presence_ping(
     state: State<'_, AppState>,
     session_id: String,
     typing: bool,
 ) -> Result<(), String> {
-    let (relay, room) = {
-        let s = state.settings.lock().unwrap();
-        (s.relay_url.clone(), s.sync_room.clone())
-    };
-    let Some(relay) = relay.filter(|r| !r.is_empty()) else {
+    let Some((relay, room, ring)) = presence_transport(&state) else {
         return Ok(());
     };
-    let (me, name) = {
-        let svc = state.service.lock().unwrap();
-        let a = svc.author();
-        (a.id.clone(), a.display_name.clone())
+    let Ok(sid) = Uuid::parse_str(session_id.trim()) else {
+        return Ok(());
     };
-    let data = serde_json::json!({
-        "actorId": me,
-        "name": name,
-        "sessionId": session_id,
-        "typing": typing,
-        "ts": now_ms(),
-    });
-    let _ = state
-        .relay_client(&relay)
-        .publish_presence(&room, &me, &data)
-        .await;
+    let share = state.settings.lock().unwrap().share_typing;
+    let beat = {
+        let svc = state.service.lock().unwrap();
+        match svc.load(sid) {
+            Ok(Some(s)) if s.workspace_id == room_workspace_id(&room) => {}
+            _ => return Ok(()),
+        }
+        let a = svc.author();
+        hive_runtime::human_presence::HumanBeat {
+            actor_id: a.id.clone(),
+            name: a.display_name.clone(),
+            device_id: svc.device_id().to_string(),
+            session_id: sid.to_string(),
+            typing: typing && share,
+            ts: hive_runtime::human_presence::now_ms(),
+        }
+    };
+    let _ = hive_runtime::human_presence::publish_human_beat(&state.relay_client(&relay), &room, &ring, &beat).await;
     Ok(())
 }
 
-/// Live presence for the workspace (excludes self + stale entries). The UI uses
-/// `typing` + `sessionId` for "X is typing…" and the rest for online status.
+/// Live presence for the active workspace (excludes self + stale entries; one
+/// entry per person, typing if any of their devices is). The UI uses `typing`
+/// + `sessionId` for "X is typing…" and the rest for online status. Names come
+/// from this device's roster for that chat when the person is on it, else the
+/// beat's (cleaned) name.
 #[tauri::command]
 async fn presence_list(state: State<'_, AppState>) -> Result<Vec<PresenceDto>, String> {
-    let (relay, room) = {
-        let s = state.settings.lock().unwrap();
-        (s.relay_url.clone(), s.sync_room.clone())
-    };
-    let Some(relay) = relay.filter(|r| !r.is_empty()) else {
+    let Some((relay, room, ring)) = presence_transport(&state) else {
         return Ok(Vec::new());
     };
     let me = state.local_actor_id();
-    let map = state
-        .relay_client(&relay)
-        .list_presence(&room)
-        .await
-        .map_err(map_err)?;
-    let now = now_ms();
-    let mut out = Vec::new();
-    for (_device, data) in map {
-        let actor_id = data.get("actorId").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        if actor_id.is_empty() || actor_id == me {
+    let beats = hive_runtime::human_presence::fetch_human_beats(
+        &state.relay_client(&relay),
+        &room,
+        &ring,
+        hive_runtime::human_presence::now_ms(),
+    )
+    .await
+    .map_err(map_err)?;
+    Ok(presence_dtos(&state, beats, &me))
+}
+
+/// Fold beats into one [`PresenceDto`] per person, naming them from the roster.
+fn presence_dtos(state: &AppState, beats: Vec<hive_runtime::human_presence::HumanBeat>, me: &str) -> Vec<PresenceDto> {
+    let svc = state.service.lock().unwrap();
+    let mut sessions: HashMap<String, Option<hive_core::ChatSession>> = HashMap::new();
+    fold_presence(beats, me, |session_id, actor_id| {
+        let session = sessions
+            .entry(session_id.to_string())
+            .or_insert_with(|| Uuid::parse_str(session_id).ok().and_then(|id| svc.load(id).ok().flatten()));
+        session.as_ref().and_then(|s| s.members.iter().find(|m| m.actor.id == actor_id).map(|m| m.actor.display_name.clone()))
+    })
+}
+
+/// One entry per person other than `me` (typing if any of their devices is,
+/// else their newest beat), named by `roster_name(session, actor)` when the
+/// roster knows them, else by the beat's name; always cleaned.
+fn fold_presence(
+    beats: Vec<hive_runtime::human_presence::HumanBeat>,
+    me: &str,
+    mut roster_name: impl FnMut(&str, &str) -> Option<String>,
+) -> Vec<PresenceDto> {
+    let mut by_actor: std::collections::BTreeMap<String, hive_runtime::human_presence::HumanBeat> = Default::default();
+    for b in beats {
+        if b.actor_id == me {
             continue;
         }
-        let ts = data.get("ts").and_then(serde_json::Value::as_u64).unwrap_or(0);
-        if now.saturating_sub(ts) > PRESENCE_TTL_MS {
-            continue;
+        let keep_prev = by_actor
+            .get(&b.actor_id)
+            .is_some_and(|prev| (prev.typing && !b.typing) || (prev.typing == b.typing && prev.ts >= b.ts));
+        if !keep_prev {
+            by_actor.insert(b.actor_id.clone(), b);
         }
-        out.push(PresenceDto {
-            actor_id,
-            name: data.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            typing: data.get("typing").and_then(serde_json::Value::as_bool).unwrap_or(false),
-            session_id: data.get("sessionId").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        });
     }
-    Ok(out)
+    by_actor
+        .into_values()
+        .map(|b| {
+            let name = roster_name(&b.session_id, &b.actor_id).unwrap_or(b.name);
+            let name = hive_runtime::human_presence::clean_display_name(&name);
+            PresenceDto { actor_id: b.actor_id, name, typing: b.typing, session_id: b.session_id }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod presence_fold_tests {
+    use super::fold_presence;
+    use hive_runtime::human_presence::HumanBeat;
+
+    fn beat(actor: &str, dev: &str, typing: bool, ts: i64, name: &str) -> HumanBeat {
+        HumanBeat { actor_id: actor.into(), name: name.into(), device_id: dev.into(), session_id: "s".into(), typing, ts }
+    }
+
+    /// A box typing for its owner shows the owner's roster name, not whatever
+    /// the beat claims; several devices of one person are one entry, typing
+    /// if any is; you never see yourself.
+    #[test]
+    fn one_entry_per_person_named_from_the_roster() {
+        let beats = vec![
+            beat("owner", "desk", false, 10, "Owner"),
+            beat("owner", "box", true, 5, "Spoofed\u{202E}Name"),
+            beat("me", "mine", true, 10, "Me"),
+            beat("guest", "g", true, 10, "Guest\nName"),
+        ];
+        let out = fold_presence(beats, "me", |_, actor| (actor == "owner").then(|| "Olive Owner".to_string()));
+        assert_eq!(out.len(), 2);
+        let owner = out.iter().find(|p| p.actor_id == "owner").unwrap();
+        assert!(owner.typing);
+        assert_eq!(owner.name, "Olive Owner");
+        let guest = out.iter().find(|p| p.actor_id == "guest").unwrap();
+        assert_eq!(guest.name, "Guest Name");
+        assert!(out.iter().all(|p| p.actor_id != "me"));
+    }
+}
+
+/// Whether this device tells others when you're typing.
+#[tauri::command]
+fn get_share_typing(state: State<AppState>) -> bool {
+    state.settings.lock().unwrap().share_typing
+}
+
+/// Turn "Share typing status" on or off (off also clears any typing beat on
+/// the next ping: only "not typing" is published).
+#[tauri::command]
+fn set_share_typing(state: State<AppState>, enabled: bool) {
+    let mut s = state.settings.lock().unwrap();
+    s.share_typing = enabled;
+    save_settings(&state.data_dir, &s);
 }
 
 // ---------------------------------------------------------------------------
@@ -11452,6 +11541,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
             builtin_tools: true,
             builtin_write_in_place: false,
             builtin_run_command: false,
+            share_typing: true,
             retrieval_embed_url: String::new(),
             retrieval_embed_model: String::new(),
             retrieval_rerank_url: String::new(),
@@ -14768,7 +14858,9 @@ pub fn run() {
             ensure_self_member,
             notify_mentions,
             presence_ping,
-            presence_list
+            presence_list,
+            get_share_typing,
+            set_share_typing
         ])
         .run(app_context())
         .expect("error while running Ligus");

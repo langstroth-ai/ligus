@@ -480,6 +480,7 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/presence/commit", post(super::presence_api::commit))
         .route("/v1/chats", get(list_chats).post(create_chat))
         .route("/v1/chats/{id}/messages", get(list_messages).post(post_message))
+        .route("/v1/chats/{id}/typing", get(super::typing_api::get_typing).post(super::typing_api::post_typing))
         .route("/v1/agents", get(list_agents))
         .route("/v1/agents/{id}/host", put(set_agent_host))
         .route("/v1/hosts", get(list_hosts))

@@ -337,12 +337,18 @@ export interface PresenceDto {
 }
 
 /// Heartbeat the local user's presence (online + typing in `sessionId`) to the
-/// relay. No-op when relay-less.
+/// relay, sealed under the workspace key. No-op when relay-less or keyless, and
+/// only "not typing" is sent while "Share typing status" is off.
 export const presencePing = (sessionId: string, typing: boolean) =>
   invoke<void>("presence_ping", { sessionId, typing });
 
 /// Live presence for the workspace (excludes self + stale entries).
 export const presenceList = () => invoke<PresenceDto[]>("presence_list");
+
+/// Whether this device tells others when you're typing (Settings → Profile →
+/// Privacy). Only that you're typing, sealed under the workspace key; never what.
+export const getShareTyping = () => invoke<boolean>("get_share_typing");
+export const setShareTyping = (enabled: boolean) => invoke<void>("set_share_typing", { enabled });
 
 export const setWorkspaceRoot = (path: string) =>
   invoke<void>("set_workspace_root", { path });
