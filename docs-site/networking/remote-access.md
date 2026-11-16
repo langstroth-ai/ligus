@@ -168,7 +168,12 @@ relay:     https://<relay-url> (enabled)
 host id:   <host id>
 serve:     connected for 6h 33m (status active, push available, checked 12s ago)
 phones:    1 active, 0 revoked
+  iPhone: notifications on (previews on), last seen 2m ago
 ```
+
+Each active phone gets a line saying whether it asked this box for
+notifications. `notifications OFF` means the app never turned them on for this
+host (in the app: **Settings → Notifications**), and the box sends it nothing.
 
 The `serve:` line comes from a status file that a running `ligus serve`
 refreshes every 30 seconds:
@@ -185,6 +190,9 @@ There is no `serve:` line until `ligus serve` has run with remote access on.
 
 Other commands:
 
+- `ligus remote push-test [--phone <pid|name>]`: send a test notification
+  to the paired phones and print what happened at each hop. See
+  [Troubleshooting push](../features/phone-app.md#troubleshooting-push).
 - `ligus remote disable`: stop using the relay. Keys and phones are kept, so
   enabling it again needs no re-pairing. Restart `ligus serve` afterwards.
 - `ligus remote reset`: new host keys, so a new host id. **Every phone must
@@ -244,11 +252,16 @@ yourself under the same team.
     LIGUS_RELAY_APNS_KEY_ID=<Key ID>
     LIGUS_RELAY_APNS_TEAM_ID=<Team ID>
     LIGUS_RELAY_APNS_TOPIC=<the app's bundle id>
+    LIGUS_RELAY_APNS_TOPICS=<more bundle ids, comma-separated>   # optional, e.g. a dev build
     LIGUS_RELAY_APNS_ENV=auto        # optional: auto (default) | sandbox | production
     ```
 
+    A dev build and an App Store build have different bundle ids. The app
+    tells the relay its bundle id with its push token, and the relay pushes
+    with that topic when it is `LIGUS_RELAY_APNS_TOPIC` or listed in
+    `LIGUS_RELAY_APNS_TOPICS` (relay v0.3 and later); any other is refused.
     `auto` uses the environment each phone reports: sandbox for development
-    builds, production for TestFlight and App Store builds. Keep the `.p8`
+    builds (run from Xcode), production for TestFlight and App Store builds. Keep the `.p8`
     readable only by the relay's user and out of version control.
     `/v1/tunnel/info` then reports `"push": true`.
 3. **Point the box at the relay and pair**, as in steps 2 and 3 above.
@@ -303,11 +316,8 @@ with `ligus pair`. A revoked phone stays revoked in `ligus phones list`.
 rotated `serve.token`, so phones on the direct path must pair again. Use
 `--keep-token` next time if that isn't what you want.
 
-**No notifications.** Check, in order: `ligus remote status` shows
-`push available`; the phone is listed `active` in `ligus phones list`;
-notifications are allowed for the app in iOS Settings; and you've backgrounded
-the app (the box doesn't push while the app is open and live). Run
-`ligus serve` with `LIGUS_PUSH_DEBUG=1` to print each dropped push and relay
-refusal. Relay-side APNs errors (a wrong topic or a sandbox/production
-mismatch) are covered in
-[`docs/push-notifications.md`](https://github.com/ligus-ai/ligus/blob/main/docs/push-notifications.md).
+**No notifications.** Run `ligus remote push-test` on the box: it sends a
+test notification and prints each hop (box → relay → APNs) with the reason
+and the fix when one fails. `ligus serve` logs every push decision (`push:`
+lines) and the relay logs every APNs answer (`tunnel push`). See
+[Troubleshooting push](../features/phone-app.md#troubleshooting-push).

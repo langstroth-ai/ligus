@@ -6,7 +6,11 @@
 //!
 //! - the app is in the foreground on that phone: it holds an open
 //!   `/v1/events` stream through the tunnel and sees the event live (the app
-//!   cancels the stream when it goes to the background);
+//!   cancels the stream when it goes to the background), and the phone was
+//!   heard from within [`FOREGROUND_QUIET`]. iOS can suspend the app before
+//!   its RESET leaves, and the relay keeps the dead connection up for up to a
+//!   minute; a foreground phone pings at least every ~30 s, so a quiet one is
+//!   in the background whatever its streams say;
 //! - the relay recently said it can't deliver to that phone (`no_push_token`,
 //!   `revoked`) or asked the host to slow down (`rate_limited`);
 //! - the [`PushLimiter`] says so: one push per `(phone, kind, chat)` per 10 s
@@ -19,17 +23,6 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
-
-/// Log a push decision at debug level: a `tracing` debug event, and a stderr
-/// line only when `LIGUS_PUSH_DEBUG=1` (the CLI installs no tracing
-/// subscriber, and drops are routine, so they're silent by default).
-pub fn debug(msg: std::fmt::Arguments<'_>) {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    tracing::debug!("{msg}");
-    if *ON.get_or_init(|| crate::reply::env_flag("LIGUS_PUSH_DEBUG", false)) {
-        eprintln!("push: {msg}");
-    }
-}
 
 /// The limiter's knobs.
 #[derive(Debug, Clone, Copy)]
@@ -150,12 +143,36 @@ pub fn phone_backoff(code: &str) -> Option<Duration> {
 /// How long to hold all pushes after `rate_limited` from the relay.
 pub const RELAY_BACKOFF: Duration = Duration::from_secs(60);
 
+/// A phone with an open events stream that hasn't sent a frame for this long
+/// is not in the foreground. The app PINGs after 25 s without traffic
+/// (checked every 5 s), so a live foreground phone is heard at least every
+/// ~30 s.
+pub const FOREGROUND_QUIET: Duration = Duration::from_secs(40);
+
+impl Verdict {
+    /// Why a push wasn't sent, for the log line (`Send` → "sent").
+    pub fn describe(self) -> &'static str {
+        match self {
+            Verdict::Send => "sent",
+            Verdict::Foreground => "not sent: the app is open on the phone",
+            Verdict::PhoneBackoff => "not sent: the relay recently said it can't deliver to this phone (holding)",
+            Verdict::RelayBackoff => "not sent: the relay asked to slow down (holding)",
+            Verdict::Coalesced => "not sent: coalesced with the same notification less than 10 s ago",
+            Verdict::PerMinute => "not sent: rate-limited (20 per minute per phone)",
+            Verdict::PerDay => "not sent: rate-limited (500 per day per phone)",
+            Verdict::HostRate => "not sent: rate-limited (this host's 1 per second)",
+        }
+    }
+}
+
 /// Everything that decides whether a push to one phone goes out now.
 #[derive(Debug, Default)]
 pub struct PushGate {
     pub limiter: PushLimiter,
     /// pid → open `/v1/events` streams through the tunnel.
     foreground: HashMap<String, usize>,
+    /// pid → when the phone last sent a frame on any session.
+    heard: HashMap<String, Instant>,
     /// pid → hold pushes until.
     phone_hold: HashMap<String, Instant>,
     relay_hold: Option<Instant>,
@@ -163,7 +180,7 @@ pub struct PushGate {
 
 impl PushGate {
     pub fn check(&mut self, pid: &str, kind: &str, chat: Option<&str>, now: Instant) -> Verdict {
-        if self.foreground.get(pid).is_some_and(|n| *n > 0) {
+        if self.is_foreground(pid, now) {
             return Verdict::Foreground;
         }
         if self.relay_hold.is_some_and(|t| now < t) {
@@ -175,10 +192,33 @@ impl PushGate {
         self.limiter.check(pid, kind, chat, now)
     }
 
+    /// Whether the app counts as open on `pid` at `now`: an events stream
+    /// is open and the phone was heard from within [`FOREGROUND_QUIET`].
+    pub fn is_foreground(&self, pid: &str, now: Instant) -> bool {
+        self.foreground.get(pid).is_some_and(|n| *n > 0)
+            && self.heard.get(pid).is_some_and(|t| now.saturating_duration_since(*t) < FOREGROUND_QUIET)
+    }
+
+    /// The phone sent a frame (any frame: a request, a PING, a WINDOW).
+    pub fn heard(&mut self, pid: &str, at: Instant) {
+        match self.heard.get_mut(pid) {
+            Some(t) if *t >= at => {}
+            Some(t) => *t = at,
+            None => {
+                self.heard.insert(pid.to_string(), at);
+            }
+        }
+    }
+
     /// An events stream for `pid` opened: the app is in the foreground, and
     /// it just connected (and registered its push token, if it has one).
     pub fn foreground_open(&mut self, pid: &str) {
+        self.foreground_open_at(pid, Instant::now());
+    }
+
+    pub fn foreground_open_at(&mut self, pid: &str, at: Instant) {
         *self.foreground.entry(pid.to_string()).or_default() += 1;
+        self.heard(pid, at);
         self.phone_hold.remove(pid);
     }
 
@@ -290,5 +330,29 @@ mod tests {
         assert_eq!(g.check("q", "k3", None, secs(t0, 63.0)), Verdict::Send);
         g.refused("p", "push_failed", secs(t0, 64.0));
         assert_eq!(g.check("p", "k4", None, secs(t0, 65.0)), Verdict::Send, "a one-off failure holds nothing");
+    }
+
+    /// iOS suspended the app before its RESET left, and the relay still holds
+    /// the dead connection: the stream stays "open", but the phone went quiet.
+    /// It is foreground only while it keeps talking (its PINGs).
+    #[test]
+    fn an_open_stream_from_a_quiet_phone_is_not_foreground() {
+        let t0 = Instant::now();
+        let mut g = PushGate::default();
+        g.foreground_open_at("p", t0);
+        assert_eq!(g.check("p", "k", None, secs(t0, 10.0)), Verdict::Foreground);
+        // A PING at 30 s keeps it in the foreground…
+        g.heard("p", secs(t0, 30.0));
+        assert_eq!(g.check("p", "k", None, secs(t0, 60.0)), Verdict::Foreground);
+        // …silence past FOREGROUND_QUIET means the app is suspended.
+        let quiet = secs(t0, 30.0) + FOREGROUND_QUIET;
+        assert_eq!(g.check("p", "k", None, quiet), Verdict::Send);
+        assert!(!g.is_foreground("p", quiet));
+        // An older frame never moves "heard" backwards.
+        g.heard("p", secs(t0, 1.0));
+        assert!(!g.is_foreground("p", quiet + Duration::from_secs(1)));
+        // The phone speaks again: foreground again.
+        g.heard("p", quiet + Duration::from_secs(2));
+        assert_eq!(g.check("p", "k2", None, quiet + Duration::from_secs(3)), Verdict::Foreground);
     }
 }

@@ -286,6 +286,70 @@ within 20 seconds is queued.
 Mentions also work on the desktop; see
 [Mentions & notifications](mentions-and-notifications.md).
 
+### Troubleshooting push
+
+Start with a test notification from the box:
+
+```sh
+ligus remote push-test            # every paired phone; --phone <pid|name> for one
+```
+
+```text
+Sending a test notification through https://<relay-url> …
+1. this box:  host id <host id>
+2. relay:     https://<relay-url> (connected, push available)
+3. phone "iPhone" (<pid>):
+   on this box: notifications on (previews on); app open right now: no
+   box → relay: sent (encrypted for this phone)
+   relay → APNs: apns sandbox topic com.example.ligus.dev: 200 (apns-id …)
+   => APNs accepted it. …
+```
+
+The test goes out even while the app is open (real notifications don't), and
+the command exits non-zero when any phone's push didn't get through. What the
+failures mean:
+
+| `push-test` says | Cause | Fix |
+|---|---|---|
+| `relay: … NOT connected` | the box can't reach the relay | `ligus remote status`, and the box's log |
+| `push UNAVAILABLE` | the relay has no APNs key | [Push through your own relay](../networking/remote-access.md#push-through-your-own-relay) |
+| `notifications OFF` | the app never asked this box for notifications: push is off in the app, iOS permission was never given, or the app was reinstalled (or its bundle id changed) and hasn't asked again | in the app, **Settings → Notifications** on, and allow notifications when iOS asks |
+| `refused: no_push_token` | the relay has no APNs token for the phone: it never registered one, the relay restarted without durable storage, or APNs said the token was dead | open the app with notifications allowed; it registers its token every time it connects |
+| `topic not allowed on this relay` | the app's bundle id isn't one the relay pushes to | add it to `LIGUS_RELAY_APNS_TOPICS` on the relay and restart it |
+| `BadDeviceToken` | environment mismatch: a build run from Xcode has a sandbox token, an App Store or TestFlight build a production one | `LIGUS_RELAY_APNS_ENV=auto` (the default) on the relay; open the app again |
+| `DeviceTokenNotForTopic` / `TopicDisallowed` | the topic the relay used isn't the app on the phone | set `LIGUS_RELAY_APNS_TOPIC` / `LIGUS_RELAY_APNS_TOPICS` to the build's bundle id, and update the app (current builds report their bundle id) |
+| `InvalidProviderToken` | the relay's APNs key, Key ID or Team ID is wrong, or from another team than the app | fix the relay's `LIGUS_RELAY_APNS_KEY*` / `TEAM_ID` |
+| `Unregistered` (410) | the app was uninstalled or reinstalled | open the app so it registers a new token |
+| `no answer from the relay` | the relay didn't ack within 15 s | the relay's log (`tunnel push` lines) |
+| `accepted` but nothing on the phone | APNs took it; the phone didn't show it | iOS **Settings → Notifications → Ligus**, Focus modes, and open the app once since installing (it stores the key its notification extension decrypts with) |
+
+If the test arrives but real notifications don't, read the box's log. Every
+notification is logged once per phone, without its content:
+
+```text
+push: message.done to "iPhone" (Ab3dE9…) sent
+push: message.done to "iPhone" (Ab3dE9…): relay accepted it
+push: mention to "iPhone" (Ab3dE9…) not sent: the app is open on the phone
+push: message.done to "iPhone" (Ab3dE9…): relay refused it: no_push_token (…)
+```
+
+- **`the app is open on the phone`** means the phone has the app's live event
+  stream open and has talked to the box in the last 40 seconds. The app closes
+  its stream when it goes to the background; if iOS suspends it first (screen
+  locked at once), the box stops counting it as open after 40 seconds of
+  silence. Older app builds could leave it counted for up to a minute more.
+- **`coalesced` / `rate-limited`**: bursts in one chat collapse to one
+  notification per 10 seconds; 20 a minute and 500 a day per phone.
+- **No `push:` line at all** for an agent reply: the box never saw a finished
+  reply to notify about. Replies and mentions that synced in late (older than
+  10 minutes when `ligus serve` started) don't notify, nor does your own
+  message, nor anything in a direct message.
+
+On the relay, every push is one `tunnel push` log line with `result` (`sent`,
+`no_push_token`, `push_failed`, `rate_limited`, `revoked`, `push_unavailable`)
+and, for APNs, `env`, `topic`, `status`, `reason` and `apns_id`. It never
+logs the device token or the notification.
+
 ## Workspace guards
 
 The box exposes the workspace's guard state at `GET /v1/guards`: whether

@@ -1693,6 +1693,70 @@ async fn phone_box_enrolled_as_the_owners_device() {
     h2.handle.shutdown();
 }
 
+/// The owner's setup: the box is enrolled as the owner's own device, the
+/// owner writes `@hive say hi` on the desktop, the desktop's `@hive` answers
+/// there, and the reply reaches the box by sync. The box must notify for it:
+/// it didn't run the turn, the trigger was "the owner's own" message, and the
+/// reply arrives already finished (or streams in and finishes later).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_desktop_reply_synced_to_the_owners_box_notifies() {
+    let (endpoint, _model) = spawn_model(vec![]).await;
+    let h = harness_with(&endpoint, "gpt-4o", &[("README.md", "# demo\n")], |o| o.owner = Some(cli_identity_name())).await;
+    let ws = crate::uuid_of_room(&h.handle.shared.cfg.room);
+    wait_identity(&h, "pending").await;
+    let code = h.handle.shared.lock().enrollment_request(ws, "mac-test").encode();
+    approve_on_desktop(&h.desktop, &code).await;
+    wait_identity(&h, "owner").await;
+    let replied = |h: &Harness, n: usize| {
+        let pushes = h.ntfy.lock().unwrap();
+        pushes.iter().filter(|(hd, _)| hd["title"].to_str().unwrap() == "Hive replied").count() >= n
+    };
+
+    // 1. The reply lands on the box already finished (one sync after the turn).
+    let chat = {
+        let mut svc = open_service(&h.desktop).unwrap();
+        let chat = svc.create_chat("desk chat", ws, "gw").unwrap();
+        svc.post_user_message(chat.id, ws, "@hive say hi".to_string()).unwrap();
+        let mid = svc.begin_assistant_message(chat.id, ws, "Hive", "gw", None, None).unwrap();
+        svc.complete_assistant_message(chat.id, ws, mid, "hi").unwrap();
+        chat.id
+    };
+    sync_once(&h.desktop).await.unwrap();
+    let mut ok = false;
+    for _ in 0..100 {
+        if replied(&h, 1) {
+            ok = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(ok, "no notification for a finished desktop reply: {:?}", h.ntfy.lock().unwrap().iter().map(|(hd, _)| hd["title"].clone()).collect::<Vec<_>>());
+
+    // 2. The reply syncs in while still streaming, then finishes.
+    let mid = {
+        let mut svc = open_service(&h.desktop).unwrap();
+        svc.post_user_message(chat, ws, "@hive and again".to_string()).unwrap();
+        svc.begin_assistant_message(chat, ws, "Hive", "gw", None, None).unwrap()
+    };
+    sync_once(&h.desktop).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert!(!replied(&h, 2), "a reply still streaming must not notify yet");
+    open_service(&h.desktop).unwrap().complete_assistant_message(chat, ws, mid, "hi again").unwrap();
+    sync_once(&h.desktop).await.unwrap();
+    let mut ok = false;
+    for _ in 0..100 {
+        if replied(&h, 2) {
+            ok = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(ok, "no notification once the streamed desktop reply finished");
+    // The owner's own messages never notified.
+    assert!(!h.ntfy.lock().unwrap().iter().any(|(_, b)| b.contains("say hi")));
+    h.handle.shutdown();
+}
+
 /// A box that was its own member before `LIGUS_SERVE_OWNER` keeps the dispatch
 /// stopgap until its owner approves it: the owner's desktop answers `@hive` in
 /// chats the phone creates once the box is an Admin, and details say whether

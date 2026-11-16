@@ -1433,6 +1433,7 @@ fn usage() -> ! {
          ligus pair [--listen ADDR] [--public-url URL] [--relay-only]   show the phone pairing QR code\n  \
          ligus remote enable --relay URL [--reg-token T] | status | disable | reset\n                                       \
          phone remote access through a relay tunnel (off by default)\n  \
+         ligus remote push-test [--phone <pid|name>]   send a test notification and show each hop\n  \
          ligus phones list | revoke <pid|name> [--keep-token]   phones paired over the relay\n  \
          ligus trust list | enable <digest> | enable-all [--repo PATH]   repo-supplied runtimes and MCP servers this device runs\n  \
          ligus facts export --jsonl [--since MS]   this device's measurement facts (ligus.facts.v1), for external observability tools\n  \
@@ -1722,7 +1723,8 @@ fn run() -> Result<()> {
                 Some("disable") => cli::remote_disable(&cfg.data_dir),
                 Some("status") | None => cli::remote_status(&cfg.data_dir),
                 Some("reset") => cli::remote_reset(&cfg.data_dir),
-                Some(other) => bail!("unknown `ligus remote {other}`: use enable|status|disable|reset"),
+                Some("push-test") => cli::remote_push_test(&cfg.data_dir, flag_val("--phone").as_deref()),
+                Some(other) => bail!("unknown `ligus remote {other}`: use enable|status|push-test|disable|reset"),
             }
         }
         "facts" => {

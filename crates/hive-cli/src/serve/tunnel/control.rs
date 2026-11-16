@@ -289,7 +289,7 @@ fn handle(host: &Arc<TunnelHost>, router: &Router, v: &Value, stop: watch::Recei
             host.update_status(|s| s.status = status);
         }
         Some("ack") => {
-            host.on_ack(v["id"].as_str().unwrap_or_default(), v["ok"].as_bool().unwrap_or(false), v["code"].as_str());
+            host.on_ack(v["id"].as_str().unwrap_or_default(), v["ok"].as_bool().unwrap_or(false), v["code"].as_str(), v["detail"].as_str());
         }
         Some("error") => eprintln!("remote: relay error: {} {}", v["code"], v["message"]),
         _ => {}

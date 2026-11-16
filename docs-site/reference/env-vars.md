@@ -113,7 +113,6 @@ first time it is created; after that, Settings is the source of truth.
 | `LIGUS_REMOTE_RELAY` | from `tunnel/relay.json` | relay for the phone tunnel; `off` disables it for this run |
 | `LIGUS_REMOTE_REG_TOKEN` | from `relay.json` | registration token for a gated relay |
 | `LIGUS_REMOTE_INSECURE_RELAY` | off | allow an `http://` relay (tests, loopback) |
-| `LIGUS_PUSH_DEBUG` | off | print each dropped push and relay refusal |
 | `LIGUS_NTFY_URL` / `LIGUS_NTFY_TOPIC` / `LIGUS_NTFY_TOKEN` | unset | notifications through a self-hosted ntfy (URL and topic both, or neither) |
 | `LIGUS_DASHBOARD_FILE` | `<data dir>/dashboard.toml` | dashboard config |
 | `LIGUS_PROMETHEUS_URL` | `http://127.0.0.1:9090` | Prometheus for dashboard panels; when set and no `dashboard.toml` exists, a lab section is generated |

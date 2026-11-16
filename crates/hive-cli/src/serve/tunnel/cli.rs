@@ -6,8 +6,8 @@ use std::path::Path;
 use anyhow::{bail, Result};
 
 use super::{
-    ensure_private_dir, pending_dir, read_json, tunnel_dir, write_json, HostKeys, LiveStatus, Registry, RelaySettings,
-    RevokeFile,
+    ensure_private_dir, pending_dir, push_test_request_file, push_test_result_file, random_id, read_json, tunnel_dir, write_json,
+    HostKeys, LiveStatus, PhoneHop, PushTestReport, PushTestRequest, Registry, RelaySettings, RevokeFile,
 };
 
 /// `ligus remote enable --relay <url> [--reg-token T] [--insecure-relay]`.
@@ -53,7 +53,166 @@ pub fn remote_status(data_dir: &Path) -> Result<()> {
     }
     let phones = Registry::load(&dir)?.list();
     println!("phones:    {} active, {} revoked", phones.iter().filter(|p| p.is_active()).count(), phones.iter().filter(|p| !p.is_active()).count());
+    let now = super::now();
+    for p in phones.iter().filter(|p| p.is_active()) {
+        let push = match (p.push_enabled, p.push_previews) {
+            (true, true) => "notifications on (previews on)",
+            (true, false) => "notifications on (previews off)",
+            (false, _) => "notifications OFF (the app hasn't turned them on for this host)",
+        };
+        let seen = p.last_seen.map(|t| format!(", last seen {} ago", short_age(now.saturating_sub(t)))).unwrap_or_default();
+        println!("  {}: {push}{seen}", p.name);
+    }
     Ok(())
+}
+
+/// `ligus remote push-test [--phone <pid|name>]`: asks the running `ligus
+/// serve` to send a test notification to the paired phones, and prints what
+/// happened at each hop (box → relay → APNs).
+pub fn remote_push_test(data_dir: &Path, phone: Option<&str>) -> Result<()> {
+    let dir = tunnel_dir(data_dir);
+    // relay.json (`ligus remote enable`) or LIGUS_REMOTE_RELAY, as serve reads it.
+    let relay = RelaySettings::resolve(data_dir, None, None, false).ok().flatten().map(|s| s.relay);
+    let now = super::now();
+    let st = read_json::<LiveStatus>(&dir.join("status.json"))?;
+    let running = st.as_ref().is_some_and(|s| s.heartbeat > 0 && now.saturating_sub(s.heartbeat) <= 3 * super::STATUS_HEARTBEAT.as_secs());
+    if !running {
+        match relay {
+            None => bail!("remote access isn't enabled here (ligus remote enable --relay <url>), so there is no push path to test"),
+            Some(r) => bail!(
+                "ligus serve doesn't seem to be running with remote access (relay {r}): start it, check `ligus remote status`, then run this again"
+            ),
+        }
+    }
+    let id = random_id();
+    write_json(&push_test_request_file(&dir, &id), &PushTestRequest { phone: phone.map(str::to_string), exp: now + 60 })?;
+    println!("Sending a test notification through {} …", relay.as_deref().unwrap_or("the relay"));
+    let result = push_test_result_file(&dir, &id);
+    let deadline = std::time::Instant::now() + super::PUSH_TEST_WAIT + super::PENDING_POLL + std::time::Duration::from_secs(5);
+    let report = loop {
+        if let Some(r) = read_json::<PushTestReport>(&result).ok().flatten() {
+            let _ = std::fs::remove_file(&result);
+            break r;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = std::fs::remove_file(push_test_request_file(&dir, &id));
+            bail!("ligus serve didn't pick up the test (it checks every 2 s): is it running from this data dir ({})?", data_dir.display());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    };
+    let (text, ok) = describe_push_test(&report);
+    print!("{text}");
+    if !ok {
+        bail!("the test notification didn't get through (see above)");
+    }
+    Ok(())
+}
+
+/// The push-test report as text, and whether every phone's push was
+/// accepted by APNs (or at least by the relay, for an older relay).
+pub(crate) fn describe_push_test(r: &PushTestReport) -> (String, bool) {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let mut ok = true;
+    let _ = writeln!(out, "1. this box:  host id {}", r.host_id);
+    if let Some(e) = &r.error {
+        let _ = writeln!(out, "   {e}");
+        return (out, false);
+    }
+    let _ = writeln!(
+        out,
+        "2. relay:     {} ({}, push {})",
+        r.relay,
+        if r.connected { "connected" } else { "NOT connected" },
+        if r.push_available { "available" } else { "UNAVAILABLE" }
+    );
+    if !r.connected {
+        let _ = writeln!(out, "   => ligus serve isn't connected to the relay: see `ligus remote status` and its log.");
+        return (out, false);
+    }
+    if !r.push_available {
+        let _ = writeln!(out, "   => the relay has no APNs configured (its LIGUS_RELAY_APNS_* settings); it can't push to any phone.");
+        ok = false;
+    }
+    if r.phones.is_empty() {
+        let _ = writeln!(out, "3. phones:    none paired (ligus pair)");
+        return (out, false);
+    }
+    for p in &r.phones {
+        let (line, good) = describe_hop(p);
+        let _ = write!(out, "{line}");
+        ok &= good;
+    }
+    (out, ok)
+}
+
+fn describe_hop(p: &PhoneHop) -> (String, bool) {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let _ = writeln!(out, "3. phone \"{}\" ({}):", p.name, p.pid);
+    if !p.active {
+        let _ = writeln!(out, "   revoked: no pushes");
+        return (out, false);
+    }
+    let _ = writeln!(
+        out,
+        "   on this box: notifications {}{}; app open right now: {}",
+        if p.push_enabled { "on" } else { "OFF" },
+        if p.push_enabled { if p.previews { " (previews on)" } else { " (previews off)" } } else { "" },
+        if p.app_open { "yes (a real push would be skipped while it is)" } else { "no" },
+    );
+    if !p.push_enabled {
+        let _ = writeln!(
+            out,
+            "   => the phone never asked this box for pushes. In the app: Settings → Notifications → on (and allow notifications when iOS asks). Nothing was sent."
+        );
+        return (out, false);
+    }
+    if !p.sent {
+        let _ = writeln!(out, "   box → relay: NOT sent (the relay connection dropped)");
+        return (out, false);
+    }
+    let _ = writeln!(out, "   box → relay: sent (encrypted for this phone)");
+    let Some(a) = &p.relay else {
+        let _ = writeln!(out, "   relay → APNs: no answer from the relay within {} s", super::PUSH_TEST_WAIT.as_secs());
+        return (out, false);
+    };
+    let detail = a.detail.as_deref().unwrap_or("");
+    if a.ok {
+        if detail.is_empty() {
+            let _ = writeln!(out, "   relay → APNs: accepted (this relay doesn't report APNs details; check its `tunnel push` log)");
+        } else {
+            let _ = writeln!(out, "   relay → APNs: {detail}");
+        }
+        let _ = writeln!(
+            out,
+            "   => APNs accepted it. If the phone shows nothing: check iOS Settings → Notifications → Ligus, Focus, and that the app was opened once since installing (it stores the key the notification extension decrypts with)."
+        );
+        return (out, true);
+    }
+    let code = a.code.as_deref().unwrap_or("?");
+    let _ = writeln!(out, "   relay → APNs: refused: {code}{}", if detail.is_empty() { String::new() } else { format!(" — {detail}") });
+    let _ = writeln!(out, "   => {}", push_failure_advice(code, detail));
+    (out, false)
+}
+
+/// What to do about a refused push, from the relay's code and APNs reason.
+pub(crate) fn push_failure_advice(code: &str, detail: &str) -> &'static str {
+    let has = |s: &str| detail.contains(s);
+    match code {
+        "no_push_token" => "the relay has no APNs token for this phone. Open the app (notifications allowed); it registers its token with the relay when it connects. If the relay restarted without durable storage, it forgot the token: opening the app fixes that too.",
+        "push_unavailable" => "the relay has no APNs configured (LIGUS_RELAY_APNS_*).",
+        "rate_limited" => "the relay's push rate for this host is used up; try again in a minute.",
+        "revoked" => "the relay has this phone as revoked; pair it again (ligus pair).",
+        "push_failed" if has("not allowed") => "the phone's app (its bundle id) isn't one this relay pushes to: add it to LIGUS_RELAY_APNS_TOPICS on the relay and restart it.",
+        "push_failed" if has("BadDeviceToken") => "APNs says the token doesn't fit: usually the environment. A build run from Xcode has a sandbox (development) token; the relay must use LIGUS_RELAY_APNS_ENV=auto or sandbox for it. Open the app again so it re-registers.",
+        "push_failed" if has("DeviceTokenNotForTopic") || has("TopicDisallowed") => "APNs says the token belongs to another app than the topic used: set LIGUS_RELAY_APNS_TOPIC / LIGUS_RELAY_APNS_TOPICS to the bundle id of the build on the phone (and update the app so it reports its bundle id).",
+        "push_failed" if has("InvalidProviderToken") || has("MissingProviderToken") || has("ExpiredProviderToken") => "APNs rejected the relay's key: check LIGUS_RELAY_APNS_KEY_ID, LIGUS_RELAY_APNS_TEAM_ID and the .p8 key (same Apple team as the app).",
+        "push_failed" if has("Unregistered") || has(": 410") => "APNs says the app is no longer registered on that phone (uninstalled or reinstalled). Open the app so it registers a new token.",
+        "push_failed" if has("unreachable") => "the relay couldn't reach APNs; check its network and try again.",
+        "push_failed" => "APNs refused it or was unreachable; the relay's `tunnel push` log line has the APNs status and reason.",
+        _ => "see the relay's log (`tunnel push` lines).",
+    }
 }
 
 /// `secs` as a short age: `45s`, `12m`, `6h 33m`, `3d 4h`.
@@ -155,6 +314,61 @@ pub fn phones_revoke(data_dir: &Path, who: Option<&str>, token_file: &Path, keep
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod push_test_tests {
+    use super::super::RelayAck;
+    use super::*;
+
+    fn report(phones: Vec<PhoneHop>) -> PushTestReport {
+        PushTestReport { relay: "https://relay.example".into(), host_id: "hid".into(), connected: true, push_available: true, phones, error: None }
+    }
+
+    fn hop(enabled: bool, relay: Option<RelayAck>) -> PhoneHop {
+        PhoneHop { pid: "pid1".into(), name: "iPhone".into(), active: true, push_enabled: enabled, previews: true, sent: relay.is_some(), relay, ..Default::default() }
+    }
+
+    #[test]
+    fn delivered_reads_as_each_hop_and_succeeds() {
+        let detail = "apns sandbox topic com.zazulam.ligus.lab: 200 (apns-id X)";
+        let (text, ok) = describe_push_test(&report(vec![hop(true, Some(RelayAck { ok: true, code: None, detail: Some(detail.into()) }))]));
+        assert!(ok, "{text}");
+        assert!(text.contains("relay:     https://relay.example (connected, push available)"), "{text}");
+        assert!(text.contains("notifications on (previews on)"), "{text}");
+        assert!(text.contains("box → relay: sent"), "{text}");
+        assert!(text.contains(detail), "{text}");
+    }
+
+    #[test]
+    fn each_failure_names_its_hop_and_the_fix() {
+        let (text, ok) = describe_push_test(&report(vec![hop(false, None)]));
+        assert!(!ok && text.contains("notifications OFF") && text.contains("Settings → Notifications"), "{text}");
+        let refused = |code: &str, detail: &str| {
+            describe_push_test(&report(vec![hop(true, Some(RelayAck { ok: false, code: Some(code.into()), detail: Some(detail.into()) }))]))
+        };
+        let (text, ok) = refused("no_push_token", "no push token");
+        assert!(!ok && text.contains("refused: no_push_token") && text.contains("Open the app"), "{text}");
+        let (text, _) = refused("push_failed", "apns production topic com.zazulam.ligus: 400 BadDeviceToken");
+        assert!(text.contains("sandbox (development) token"), "{text}");
+        let (text, _) = refused("push_failed", "apns sandbox topic com.x: topic not allowed on this relay");
+        assert!(text.contains("LIGUS_RELAY_APNS_TOPICS"), "{text}");
+        let (text, _) = refused("push_failed", "apns sandbox topic com.x: 403 InvalidProviderToken");
+        assert!(text.contains("LIGUS_RELAY_APNS_KEY_ID"), "{text}");
+        // No answer at all.
+        let mut h = hop(true, None);
+        h.sent = true;
+        let (text, ok) = describe_push_test(&report(vec![h]));
+        assert!(!ok && text.contains("no answer from the relay"), "{text}");
+        // Relay down / no APNs.
+        let mut r = report(vec![]);
+        r.connected = false;
+        assert!(describe_push_test(&r).0.contains("NOT connected"));
+        let mut r = report(vec![hop(true, Some(RelayAck { ok: false, code: Some("push_unavailable".into()), detail: None }))]);
+        r.push_available = false;
+        let (text, ok) = describe_push_test(&r);
+        assert!(!ok && text.contains("UNAVAILABLE"), "{text}");
+    }
 }
 
 #[cfg(test)]

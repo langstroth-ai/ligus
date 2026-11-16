@@ -118,13 +118,14 @@ More: [Remote access](../networking/remote-access.md#troubleshooting).
 
 ## No push notifications
 
-Check in order: the app build has push enabled (stock builds ship with push
-off; see [Ligus on your phone](../features/phone-app.md#push-notifications));
-`ligus remote status` shows `push available`; the phone is `active` in
-`ligus phones list`; notifications are allowed in iOS Settings; the app is in
-the background (the box doesn't push while the app is open and live). Run
-`ligus serve` with `LIGUS_PUSH_DEBUG=1` to print every dropped push and
-relay refusal.
+Run `ligus remote push-test` on the box. It sends a test notification to each
+paired phone and prints every hop: whether the phone asked this box for
+notifications, whether the box handed the push to the relay, and what APNs
+answered (environment, topic, status and reason), with the fix for the usual
+failures. Then read the `push:` lines in the `ligus serve` log for real
+notifications (each one says sent, skipped because the app is open,
+rate-limited, or refused by the relay and why). The full checklist is in
+[Troubleshooting push](../features/phone-app.md#troubleshooting-push).
 
 ## A worker (or serve box) doesn't pick up turns
 
