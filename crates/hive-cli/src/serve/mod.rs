@@ -929,6 +929,10 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
     // log instead of seeding a competing one.
     let mut first_sync = None;
     if cfg.relay_url.is_some() {
+        // Name a relay URL this box can't use before trying HTTP.
+        if let Some(problem) = crate::relay_url_problem(cfg.relay_url.as_deref()) {
+            bail!("{problem}");
+        }
         if let Err(e) = sync_once(&cfg).await.inspect(|_| first_sync = Some(time::OffsetDateTime::now_utc())) {
             // With no local copy of the workspace config yet, registering would
             // seed a competing config log naming this box Owner. Fail instead;
