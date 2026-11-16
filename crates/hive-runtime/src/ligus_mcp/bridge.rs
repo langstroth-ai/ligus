@@ -57,6 +57,31 @@ pub fn with_credential(line: &str, cred: &str) -> String {
     }
 }
 
+/// Adds the credential to the first `initialize` the agent sends, wherever
+/// it comes: MCP clients from the 2026-07 spec on open with a
+/// `server/discover` probe first. Every other line passes through as is.
+pub struct Crediting<'a> {
+    cred: &'a str,
+    sent: bool,
+}
+
+impl<'a> Crediting<'a> {
+    pub fn new(cred: &'a str) -> Self {
+        Self { cred, sent: false }
+    }
+
+    pub fn line(&mut self, line: &str) -> String {
+        if self.sent {
+            return line.trim_end().to_string();
+        }
+        let out = with_credential(line, self.cred);
+        if out.contains("ligusTurnCred") {
+            self.sent = true;
+        }
+        out
+    }
+}
+
 /// Run the bridge on this process's stdio. Returns the exit code.
 #[cfg(unix)]
 pub fn run_stdio() -> i32 {
@@ -113,14 +138,13 @@ where
         std::process::exit(0);
     });
     let stdin = std::io::stdin();
-    let mut first = true;
+    let mut crediting = Crediting::new(cred);
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         if line.trim().is_empty() {
             continue;
         }
-        let msg = if first { with_credential(&line, cred) } else { line };
-        first = false;
+        let msg = crediting.line(&line);
         if writeln!(to_server, "{msg}").and_then(|_| to_server.flush()).is_err() {
             break;
         }

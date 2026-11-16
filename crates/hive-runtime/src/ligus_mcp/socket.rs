@@ -21,6 +21,10 @@ use crate::agent_turn::McpAttach;
 /// connection.
 pub const MAX_LINE_BYTES: usize = 4 * 1024 * 1024;
 
+/// Messages a connection may send before its credentialed `initialize`
+/// (discovery probes, notifications) before the server hangs up.
+pub const MAX_BEFORE_INIT: usize = 4;
+
 /// The MCP protocol versions the server answers with.
 pub const MCP_PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
@@ -181,10 +185,18 @@ async fn serve_conn<S: tokio::io::AsyncRead + tokio::io::AsyncWrite>(mcp: Arc<Li
     let (r, mut w) = tokio::io::split(stream);
     let mut reader = BufReader::new(r);
     let mut cred: Option<String> = None;
+    let mut before_init = 0usize;
     while let Some(line) = read_bounded_line(&mut reader).await? {
         let Ok(msg) = serde_json::from_slice::<Value>(&line) else { continue };
         let reply = handle(&mcp, &mut cred, &msg).await;
-        let close = cred.is_none();
+        // Before a credentialed `initialize`: a newer client's discovery
+        // probe (or a notification) is answered and the connection kept, a
+        // few times; a refused `initialize` hangs up at once.
+        let refused_init = msg.get("method").and_then(Value::as_str) == Some("initialize");
+        if cred.is_none() {
+            before_init += 1;
+        }
+        let close = cred.is_none() && (refused_init || before_init > MAX_BEFORE_INIT);
         if let Some(r) = reply {
             let mut b = serde_json::to_vec(&r)?;
             b.push(b'\n');
@@ -232,7 +244,10 @@ pub async fn handle(mcp: &LigusMcp, cred: &mut Option<String>, msg: &Value) -> O
     let ok = |result: Value| id.clone().map(|id| json!({"jsonrpc": "2.0", "id": id, "result": result}));
     if cred.is_none() {
         if method != "initialize" {
-            return err(-32001, "the first message must be initialize with a Ligus turn credential".into());
+            // `server/discover` and anything else before `initialize`:
+            // "method not found", so a client that probes first falls back
+            // to `initialize` (MCP 2026-07). Nothing is served before it.
+            return err(-32601, format!("method not found before initialize: {method}"));
         }
         let presented = msg.pointer("/params/_meta/ligusTurnCred").and_then(Value::as_str).unwrap_or("");
         return match mcp.authorize(presented) {

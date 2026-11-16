@@ -205,6 +205,25 @@ fn tool_result_text(content: Option<&Value>) -> String {
     }
 }
 
+/// The Ligus MCP server's status in Claude Code's stream-json `init` line
+/// (`connected`, `failed`, `pending`, ...); `None` for any other line or
+/// when the server isn't attached.
+fn ligus_mcp_status(line: &str) -> Option<String> {
+    if !line.contains("\"init\"") || !line.contains("mcp_servers") {
+        return None;
+    }
+    let v: Value = serde_json::from_str(line).ok()?;
+    if v.get("subtype").and_then(Value::as_str) != Some("init") {
+        return None;
+    }
+    v.get("mcp_servers")?
+        .as_array()?
+        .iter()
+        .find(|s| s.get("name").and_then(Value::as_str) == Some(crate::executor::LIGUS_MCP_ID))
+        .and_then(|s| s.get("status").and_then(Value::as_str))
+        .map(str::to_string)
+}
+
 /// Stream a reply from the Claude Code CLI. `program` is the binary (default
 /// `claude`); `extra_args` are appended; `working_dir` is added via `--add-dir`
 /// and used as the process cwd.
@@ -316,6 +335,12 @@ pub async fn stream_reply(
         if is_text_block_start(&line) && !assembled.is_empty() && !assembled.ends_with('\n') {
             assembled.push('\n');
             on_delta("\n".to_string());
+        }
+        if let Some(status) = ligus_mcp_status(&line).filter(|s| s != "connected") {
+            // The prompt taught the Ligus tools; say in the log why the agent
+            // doesn't have them (the bridge's own stderr goes to the CLI).
+            tracing::warn!(target: "ligus_mcp", %status, "Claude Code did not connect the Ligus MCP server this turn");
+            crate::agent_turn::note(format!("ligus_mcp_{status}:claude-code"));
         }
         if let Some(text) = extract_text_delta(&line) {
             assembled.push_str(&text);
@@ -467,6 +492,11 @@ mod tests {
     #[test]
     fn ignores_non_delta_events() {
         assert!(extract_text_delta(r#"{"type":"system","subtype":"init"}"#).is_none());
+        assert_eq!(
+            ligus_mcp_status(r#"{"type":"system","subtype":"init","mcp_servers":[{"name":"ligus","status":"failed","source":"dynamic"}]}"#).as_deref(),
+            Some("failed")
+        );
+        assert_eq!(ligus_mcp_status(r#"{"type":"system","subtype":"init","mcp_servers":[]}"#), None);
         assert!(extract_text_delta(
             r#"{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}"#
         )

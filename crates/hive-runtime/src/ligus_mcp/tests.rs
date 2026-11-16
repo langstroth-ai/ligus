@@ -1019,3 +1019,48 @@ async fn forge_reads_have_their_own_budget() {
     // Other tools still work.
     assert!(!turn.call("ligus_read_board", &json!({})).await.is_error);
 }
+
+/// MCP clients from the 2026-07 spec on (Claude Code 2.1.x) open with a
+/// `server/discover` probe before `initialize`. The server must answer it
+/// "method not found" (so the client falls back to `initialize`) and keep
+/// the connection, instead of hanging up and leaving the agent with no Ligus
+/// tools. Nothing is granted before a credentialed `initialize`.
+#[cfg(unix)]
+#[tokio::test]
+async fn socket_answers_a_discovery_probe_then_initializes() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let w = world();
+    let turn = w.mcp.begin_turn(spec(&w, Budgets::default()));
+    let path = turn.listen().unwrap();
+    let s = tokio::net::UnixStream::connect(&path).await.unwrap();
+    let (r, mut wr) = tokio::io::split(s);
+    let mut lines = BufReader::new(r).lines();
+    macro_rules! send {
+        ($v:expr) => {
+            wr.write_all(format!("{}\n", $v).as_bytes()).await.unwrap()
+        };
+    }
+    send!(json!({"jsonrpc": "2.0", "id": "probe", "method": "server/discover", "params": {}}));
+    let probe: Value = serde_json::from_str(&tokio::time::timeout(Duration::from_secs(5), lines.next_line()).await.unwrap().unwrap().unwrap()).unwrap();
+    assert_eq!(probe["error"]["code"], -32601, "method not found: {probe}");
+    // Before initialize, tools stay out of reach.
+    send!(json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}));
+    let early: Value = serde_json::from_str(&tokio::time::timeout(Duration::from_secs(5), lines.next_line()).await.unwrap().unwrap().unwrap()).unwrap();
+    assert!(early.get("result").is_none(), "no tools before initialize: {early}");
+    send!(json!({"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {"protocolVersion": "2025-11-25", "_meta": {"ligusTurnCred": turn.credential()}}}));
+    let init: Value = serde_json::from_str(&tokio::time::timeout(Duration::from_secs(5), lines.next_line()).await.unwrap().unwrap().unwrap()).unwrap();
+    assert_eq!(init["result"]["serverInfo"]["name"], "ligus", "{init}");
+}
+
+/// The bridge credits the `initialize` message wherever it comes, not just
+/// the first line (a discovery probe may precede it).
+#[test]
+fn bridge_credits_initialize_after_a_probe() {
+    let mut b = super::bridge::Crediting::new("CRED");
+    let probe = b.line(r#"{"jsonrpc":"2.0","id":"p","method":"server/discover"}"#);
+    assert!(!probe.contains("CRED"));
+    let init = b.line(r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}"#);
+    assert!(init.contains("CRED"));
+    let later = b.line(r#"{"jsonrpc":"2.0","id":3,"method":"initialize","params":{}}"#);
+    assert!(!later.contains("CRED"), "the credential goes out once");
+}
