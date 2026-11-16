@@ -11248,7 +11248,7 @@ impl InitFailure {
             Self::DataDir(e) => ("Ligus can't use this data folder", format!("{e}\n\nNothing was changed."), false),
             Self::Other(e) => (
                 "Ligus couldn't start",
-                format!("{e}\n\nTry again, or quit and check the log (in the app's log folder)."),
+                format!("{e}\n\nTry again, or quit and check the log (ligus.log in the app's log folder)."),
                 true,
             ),
         }
@@ -14229,19 +14229,28 @@ fn login_shell_path() -> Option<std::ffi::OsString> {
     }
 }
 
+/// The desktop's daily log file prefix (`ligus.log.<date>`).
+const LOG_FILE_PREFIX: &str = "ligus.log";
+
+/// A desktop log file: `ligus.log*`, or a pre-rename `hive.log*` still in
+/// the folder (read until the new day's file is newer).
+fn is_log_file(name: &str) -> bool {
+    name.starts_with(LOG_FILE_PREFIX) || name.starts_with("hive.log")
+}
+
 /// The active log directory (set once at startup), so `read_recent_logs` can
 /// find today's file.
 static LOG_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
 /// Today's rolling log file path (matches tracing_appender's `daily` naming:
-/// `hive.log.YYYY-MM-DD`), or the base path if the dated one isn't present yet.
+/// `ligus.log.YYYY-MM-DD`), or the base path if the dated one isn't present yet.
 fn current_log_file() -> Option<PathBuf> {
     let dir = LOG_DIR.get()?;
-    // Pick the most recently modified hive.log* so we always tail the live file.
+    // Pick the most recently modified log file so we always tail the live one.
     std::fs::read_dir(dir)
         .ok()?
         .filter_map(|e| e.ok())
-        .filter(|e| e.file_name().to_string_lossy().starts_with("hive.log"))
+        .filter(|e| is_log_file(&e.file_name().to_string_lossy()))
         .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
         .map(|e| e.path())
 }
@@ -14259,7 +14268,7 @@ fn init_logging(app: &tauri::App) {
         .app_log_dir()
         .unwrap_or_else(|_| std::env::temp_dir().join("ligus-logs"));
     let _ = std::fs::create_dir_all(&log_dir);
-    let file = tracing_appender::rolling::daily(&log_dir, "hive.log");
+    let file = tracing_appender::rolling::daily(&log_dir, LOG_FILE_PREFIX);
     let (non_blocking, guard) = tracing_appender::non_blocking(file);
     // Keep the flush guard alive for the whole process.
     Box::leak(Box::new(guard));
@@ -17418,6 +17427,19 @@ mod first_run_tests {
         let after = load_or_seed_settings(&dir, LiveSettings::default());
         assert!(!after.onboarded && !after.tour_seen, "onboarding shows again after a reset");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod log_file_tests {
+    /// The desktop writes `ligus.log.<date>`; Settings → Diagnostics still
+    /// finds a pre-rename `hive.log.<date>` in the same folder.
+    #[test]
+    fn log_files_are_named_ligus() {
+        assert_eq!(super::LOG_FILE_PREFIX, "ligus.log");
+        assert!(super::is_log_file("ligus.log.2026-11-15"));
+        assert!(super::is_log_file("hive.log.2026-11-14"));
+        assert!(!super::is_log_file("other.txt"));
     }
 }
 

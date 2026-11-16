@@ -78,7 +78,7 @@ and [Git integration](../features/git.md).
 | Identity and keys | `identity.json` in the app data dir; private keys in the OS secret store |
 | Settings | `settings.json` in the app data dir (API keys and tokens in the OS secret store) |
 | Per-chat worktrees, interrupted-turn patches | `<repo>/.ligus/` |
-| Logs | the OS log dir for `ai.ligus.desktop`, file `hive.log.<date>` |
+| Logs | the OS log dir for `ai.ligus.desktop`, file `ligus.log.<date>` |
 
 App data dir: `~/Library/Application Support/ai.ligus.desktop` (macOS),
 `%APPDATA%\ai.ligus.desktop` (Windows), `~/.local/share/ai.ligus.desktop`

@@ -30,7 +30,7 @@ For a home box, a cron job is enough:
 
 | Component | Where | Level |
 |---|---|---|
-| Desktop | daily file `hive.log.<date>` in the OS log dir for `ai.ligus.desktop` (macOS `~/Library/Logs/ai.ligus.desktop/`), also stderr. **Settings → Diagnostics** links to it | `LIGUS_LOG` (default `info`; `tracing` filter syntax) |
+| Desktop | daily file `ligus.log.<date>` (earlier builds wrote `hive.log.<date>`) in the OS log dir for `ai.ligus.desktop` (macOS `~/Library/Logs/ai.ligus.desktop/`), also stderr. **Settings → Diagnostics** links to it | `LIGUS_LOG` (default `info`; `tracing` filter syntax) |
 | `ligus serve`, `ligus worker` | stdout/stderr; with the shipped unit, `journalctl --user -u ligus-serve` | fixed |
 | `ligus serve` push decisions | stderr, with `LIGUS_PUSH_DEBUG=1` | |
 | Relay | stdout/stderr | fixed |
