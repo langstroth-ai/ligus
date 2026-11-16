@@ -16,3 +16,24 @@ code moves. When a document and the code disagree, the code wins.
 
 The iOS-side notes for passkey presence and ligus-auth sign-in live with
 the iOS app.
+
+## Owner decisions, 2026-11-16
+
+These postdate the documents above; where a document says otherwise, these
+win (and, once built, the code).
+
+- **`ligus serve` becomes its own member** of the workspace, rather than
+  an enrolled device that signs as its owner.
+- **Hardened phone keys.** A phone holds its own key in the Secure Enclave,
+  used with Face ID; no self-enrollment; capped to a limited tier; revocable
+  on its own.
+- **Configurable passkey RP.** The WebAuthn relying party (today `ligus.ai`,
+  hard-coded as `presence::Policy::ligus()`) becomes configurable, so a
+  self-hosted deployment can use its own domain.
+- **SourceHut and Tangled identity-link verifiers dropped.** Links of
+  either kind fold unchanged and show as self-asserted, never verified
+  (`hive_core::identity_link::DROPPED_PROVIDERS`); neither forge is offered
+  for a new link.
+- **Everything in 2.0.** All of the above ships in 2.0.0, not in a later
+  release; security fixes found before the cut are bundled into 2.0.0 too
+  ([SECURITY.md](../../../SECURITY.md)).
