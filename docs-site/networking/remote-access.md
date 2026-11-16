@@ -28,7 +28,9 @@ and timing. The full protocol is
   with `ligus --version`.
 - The box joined to your workspace with `ligus enroll "hivews1:…"`, using the
   invite from the desktop's **Copy invite**. The invite carries the workspace
-  key, so move it to the box over a channel you trust, such as SSH.
+  key, so move it to the box over a channel you trust, such as SSH. The
+  workspace needs a relay (**Settings → Team sync → Relay URL**); `ligus
+  enroll` refuses an invite without one.
 - For the relay tunnel: a relay with the tunnel turned on. It is **off by
   default**; see [Using your own relay](#using-your-own-relay).
 

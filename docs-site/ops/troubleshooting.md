@@ -71,6 +71,7 @@ Notes:
 |---|---|---|
 | desktop: `sync paused: the relay rejected this device's access token` | the relay is gated and this device has no token, or a wrong, expired or revoked one | paste a valid token in **Settings → Team sync → Relay access token** |
 | CLI: an unauthorized (401) error from the relay | same, for `ligus` | `ligus enroll <invite> --token <hrt1…>` or `LIGUS_RELAY_ACCESS_TOKEN` |
+| `ligus enroll`: "this invite can't be used: its workspace has no relay", or `ligus serve`/`sync`: "this box's workspace has no relay URL" | the invite came from a workspace with no relay set | in the desktop, set **Settings → Team sync → Relay URL**, copy a new invite, and run `ligus enroll` with it again |
 | People says "your relay doesn't support contacts yet" | the relay is older than v0.3 (or contacts are turned off) | nothing breaks: send invite links instead, or upgrade the relay |
 | writes or reads refused on a membership relay | the workspace is claimed and you're not on its relay roster | an Admin adds you, or redeem an invite code with `ligus join` |
 
