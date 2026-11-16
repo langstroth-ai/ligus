@@ -3138,8 +3138,13 @@ mod tests {
         let reply = svc.post_user_message(chat.id, wid, "hand-off reply stands in here").unwrap().id;
         let (first, second) = (Uuid::new_v4(), Uuid::new_v4());
         let device_a = Uuid::new_v4();
-        // Device A's claim for the first receiver, synced in.
-        svc.append_signed(chat.id, wid, SessionEvent::TurnClaimed { trigger_id: hive_core::turn_claim_key(reply, Some(first)), device_id: device_a }).unwrap();
+        // Device A's claim for the first receiver, signed by device A and
+        // synced in (this device can't claim on A's behalf).
+        let claim = SessionEvent::TurnClaimed { trigger_id: hive_core::turn_claim_key(reply, Some(first)), device_id: device_a };
+        assert!(svc.append_signed(chat.id, wid, claim.clone()).is_err(), "a claim names its own signer");
+        let mut env = svc.draft_signed(chat.id, wid, claim).unwrap();
+        hive_core::crypto::sign_envelope(&mut env, device_a, &SigningKeypair::generate().unwrap());
+        assert!(svc.store.ingest(&env).unwrap());
         assert!(svc.claim_turn_for(chat.id, wid, reply, Some(second)).unwrap(), "the second receiver runs here");
         assert!(!svc.claim_turn_for(chat.id, wid, reply, Some(first)).unwrap(), "the first receiver is device A's");
         assert!(svc.claim_turn_for(chat.id, wid, reply, Some(second)).unwrap(), "re-claiming our own is idempotent");

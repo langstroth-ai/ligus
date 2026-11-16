@@ -1434,3 +1434,21 @@ fn agent_cannot_post_as_a_user() {
     let v = w.verdicts();
     assert_eq!((v[&user_turn], v[&human_identity], v[&ok], v[&host_user]), (Verdict::Denied, Verdict::Denied, Verdict::Allowed, Verdict::Allowed));
 }
+
+/// A turn claim speaks only for the device that signed it: a claim naming
+/// another device (to steal a turn, or to keep that device from answering)
+/// is refused, and the honest claim that sorts after it still wins.
+#[test]
+fn a_turn_claim_counts_only_from_the_device_it_names() {
+    let mut w = World::new();
+    let (a, b) = (Uuid::from_u128(0xDA), Uuid::from_u128(0xDB));
+    let trigger = Uuid::from_u128(0x77);
+    let forged = w.chat_push("mara", SessionEvent::TurnClaimed { trigger_id: trigger, device_id: a });
+    w.chat.iter_mut().find(|e| e.event_id == forged).unwrap().signer_device_id = Some(b);
+    let honest = w.chat_push("owner", SessionEvent::TurnClaimed { trigger_id: trigger, device_id: b });
+    w.chat.iter_mut().find(|e| e.event_id == honest).unwrap().signer_device_id = Some(b);
+    let v = w.verdicts();
+    assert_eq!(v[&forged], Verdict::Denied);
+    assert_eq!(v[&honest], Verdict::Allowed);
+    assert_eq!(w.state().turn_claims.get(&trigger), Some(&b));
+}

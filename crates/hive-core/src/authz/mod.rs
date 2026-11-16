@@ -740,7 +740,8 @@ fn agent_change_floor(
     }
 }
 
-/// Coordinator leases and run writes are bound to devices:
+/// Turn claims, coordinator leases and run writes are bound to devices:
+///   * a `TurnClaimed` must be signed by the device it names;
 ///   * a `CoordinatorLeaseClaimed` must be signed by the device it names;
 ///   * a `CoordinatorLeaseReleased` by the holder it names;
 ///   * a `WorkflowRunUpserted` under a lease epoch must match the run's
@@ -751,6 +752,13 @@ fn agent_change_floor(
 pub(crate) fn lease_signer_ok(env: &SessionEventEnvelope, fold: &ChatSession) -> bool {
     let signer = env.signer_device_id;
     match &env.payload {
+        // A turn claim speaks for the device it names: another device can't
+        // claim a turn for it (or claim one to keep it from answering).
+        // (An agent-signed claim names its key's host device; the Agent tier
+        // checks that binding.)
+        SessionEvent::TurnClaimed { device_id, .. } => {
+            signer == Some(*device_id) || env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == ActorKind::Agent)
+        }
         SessionEvent::CoordinatorLeaseClaimed { lease } => signer == Some(lease.holder),
         SessionEvent::CoordinatorLeaseReleased { release } => signer == Some(release.holder),
         SessionEvent::WorkflowRunUpserted { run } => {
