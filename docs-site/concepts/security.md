@@ -492,6 +492,44 @@ observability tools read facts with `ligus facts export --jsonl` (schema
 `ligus.facts.v1`: ids, enums, numbers and timestamps only; any string that
 isn't an id or looks like a secret is exported as `redacted`).
 
+The export is the one supported way for another tool to watch Ligus: it
+never needs to open the database or decrypt the log. Each line is
+`{"schema","seq","timeUnixMs","kind","attributes"}`, and it carries:
+
+- **Measurements** (`turn`, `touch`, `progress`, `edgeWait`, `routeStop`,
+  `toolCall`): the facts above, from this device only.
+- **Guard signals** (`guardSignal`): this device's lease heartbeats and
+  receipts, boundary decisions, tool selection, hygiene catches, worktree
+  states and throttles, one `ligus.signal.<field>` attribute per field.
+- **State facts**, observed from this device's projection of the signed log
+  for every chat whose log changed since the last export: `reply` (agent and
+  assistant replies: ids, role, kind, runtime, trigger, claim, streaming,
+  tool-call count, output size in bytes), `proposal` (kind, the status
+  Ligus's fold derived, vote, change-request and comment counts, diff line
+  and file counts, version chain), `workflowRun` and `workflowStage` (status,
+  attempts, dependencies), `agent` and `host` (the roster, from the
+  workspace config log) and `lease`. A chat is also observed again when its
+  fold changed without a row in its own log: an equivocating copy of one of
+  its events arrived (both copies are denied), or the workspace's config log
+  gained a trust event (membership, revocation, rules, agents).
+  `timeUnixMs` is when the export looked; `seq` is the event-log row it
+  looked at, shared by every state line of one export.
+
+Titles, bodies, names, prompts, diffs and paths never appear, and neither
+do identifiers an author chose: a workflow stage is named by its position
+in the definition (`s0`, `s1`, …) rather than its slug, a task class is one
+of the classes Ligus assigns or `other`, and MCP server names and phone ids
+in guard signals are hashed (`ligus.signal.server_hash`,
+`ligus.signal.source_hash`). Device ids are exported as a short hash;
+workspaces as `ligus.workspace.id_hash`. These hashes are unkeyed, so they
+are pseudonyms for correlation, not secrets: anyone who can guess a value
+can confirm it. Sizes (`ligus.turn.output_bytes`, diff line counts) are
+exact. The
+last line has kind `cursor`; pass its `ligus.cursor` value as the next
+`--since` to read only what is new (`--since` also takes unix milliseconds,
+which observes every chat again). Readers should reject lines whose
+`schema` they don't know and ignore kinds they don't.
+
 ## Dearth mode: a tighter entrance on demand
 
 An Admin can put the workspace in [dearth mode](../features/guards.md#dearth-mode)

@@ -162,7 +162,7 @@ worker 5b1c… online — draining queued mentions for its agents. Ctrl-C to sto
 | `ligus dashboard default` | prints the generated default dashboard as TOML |
 | `ligus dashboard metrics` | lists the built-in Ligus metrics panels can show |
 | `ligus trust list \| enable <digest> \| enable-all [--repo PATH]` | the runtimes and MCP servers a repository ships, and which this host trusts ([Trust this workspace](../concepts/security.md#workspace-trust)); `enable` takes a digest prefix |
-| `ligus facts export --jsonl [--since MS]` | this host's measurement facts as `ligus.facts.v1` JSON lines, for external observability tools ([Telemetry](../concepts/security.md#facts)) |
+| `ligus facts export --jsonl [--since C]` | this host's content-free facts as `ligus.facts.v1` JSON lines (measurements, guard signals, and state facts from its projection), for external observability tools; the last line carries the cursor to pass as the next `--since` (unix milliseconds also work) ([Telemetry](../concepts/security.md#facts)) |
 
 ```console
 $ ligus serve --listen 127.0.0.1:8787 --label home-box
