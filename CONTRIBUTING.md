@@ -1,8 +1,12 @@
 # Contributing to Ligus
 
 Ligus is a **Tauri v2** app: a Rust backend with a React/TypeScript frontend, plus
-a small relay. This is the quick orientation for contributors — deeper docs live
-in [`docs/`](docs/README.md).
+the `ligus` CLI. The relay lives in its own repository,
+[langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay).
+This is the quick orientation for contributors — deeper docs live in
+[`docs/`](docs/README.md). Questions go to
+[Discussions](https://github.com/langstroth-ai/ligus/discussions); bugs to
+[Issues](https://github.com/langstroth-ai/ligus/issues).
 
 ## Layout
 
@@ -11,7 +15,8 @@ crates/
   hive-core      pure domain: models, config, crypto, events/projector, authz
   hive-runtime   IO/orchestration: SQLite event store, providers, MCP, sync
   hive-proto     IPC DTOs shared with the frontend (ts-rs generates web/src/bindings)
-  langstroth-relay     the axum relay (envelope forwarding)
+  hive-forge     code hosts (GitHub, GitLab, Forgejo, Gitea)
+  hive-cli       the ligus CLI and ligus serve
 app/       the Tauri shell: commands/events, app wiring
 web/             React + TypeScript frontend (Vite + Bun)
 docs/            developer/maintainer docs (this audience)

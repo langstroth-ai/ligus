@@ -445,7 +445,8 @@ our [Code of Conduct](CODE_OF_CONDUCT.md). Questions and ideas go to
 [GitHub issues](https://github.com/langstroth-ai/ligus/issues) and
 [discussions](https://github.com/langstroth-ai/ligus/discussions) on
 langstroth-ai/ligus, and relay matters to
-[langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay/issues). Developer and architecture docs live
+[langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay/issues)
+(issues) or its [discussions](https://github.com/langstroth-ai/langstroth-relay/discussions). Developer and architecture docs live
 in [`docs/`](docs/README.md). To report a vulnerability, follow
 [`SECURITY.md`](SECURITY.md) (please don't open a public issue for security bugs).
 

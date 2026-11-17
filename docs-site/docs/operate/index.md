@@ -46,6 +46,6 @@ one-line summary.
 
 Ask on GitHub: [issues](https://github.com/langstroth-ai/ligus/issues) and
 [discussions](https://github.com/langstroth-ai/ligus/discussions) on
-langstroth-ai/ligus, or
-[langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay/issues)
-for the relay.
+langstroth-ai/ligus, or the relay's
+[issues](https://github.com/langstroth-ai/langstroth-relay/issues) and
+[discussions](https://github.com/langstroth-ai/langstroth-relay/discussions).
