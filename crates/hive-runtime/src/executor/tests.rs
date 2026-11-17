@@ -633,18 +633,21 @@ fn sandbox_landlock_tier_closes_namespace_gaps() {
     }
     let f = Fixture::new();
     let py = |code: &str| format!("python3 -I -c '{code}'");
+    // Each probe prints OPENED only if its call succeeded. The marker is split
+    // in the source (adjacent string literals) because Python 3.13 quotes a
+    // failing -c line in its traceback.
     for (what, code) in [
-        ("udp socket", "import socket; socket.socket(socket.AF_INET, socket.SOCK_DGRAM); print(\"OPENED\")"),
-        ("udp6 socket", "import socket; socket.socket(socket.AF_INET6, socket.SOCK_DGRAM); print(\"OPENED\")"),
-        ("raw socket", "import socket; socket.socket(socket.AF_INET, socket.SOCK_RAW, 1); print(\"OPENED\")"),
-        ("sctp socket", "import socket; socket.socket(socket.AF_INET, socket.SOCK_STREAM, 132); print(\"OPENED\")"),
-        ("packet socket", "import socket; socket.socket(17, socket.SOCK_RAW, 0); print(\"OPENED\")"),
-        ("tcp bind", "import socket; s=socket.socket(); s.bind((\"127.0.0.1\", 0)); print(\"OPENED\")"),
-        ("tcp listen", "import socket; s=socket.socket(); s.listen(1); print(\"OPENED\")"),
-        ("fast open", "import socket; s=socket.socket(); s.sendto(b\"x\", 0x20000000, (\"1.1.1.1\", 80)); print(\"OPENED\")"),
-        ("dns", "import socket; socket.getaddrinfo(\"example.com\", 443); print(\"OPENED\")"),
-        ("unshare net", "import os; os.unshare(os.CLONE_NEWNET); print(\"OPENED\")"),
-        ("io_uring", "import ctypes; r=ctypes.CDLL(None).syscall(425, 8, ctypes.create_string_buffer(120)); print(\"OPENED\" if r >= 0 else \"refused\")"),
+        ("udp socket", "import socket; socket.socket(socket.AF_INET, socket.SOCK_DGRAM); print(\"OPEN\" \"ED\")"),
+        ("udp6 socket", "import socket; socket.socket(socket.AF_INET6, socket.SOCK_DGRAM); print(\"OPEN\" \"ED\")"),
+        ("raw socket", "import socket; socket.socket(socket.AF_INET, socket.SOCK_RAW, 1); print(\"OPEN\" \"ED\")"),
+        ("sctp socket", "import socket; socket.socket(socket.AF_INET, socket.SOCK_STREAM, 132); print(\"OPEN\" \"ED\")"),
+        ("packet socket", "import socket; socket.socket(17, socket.SOCK_RAW, 0); print(\"OPEN\" \"ED\")"),
+        ("tcp bind", "import socket; s=socket.socket(); s.bind((\"127.0.0.1\", 0)); print(\"OPEN\" \"ED\")"),
+        ("tcp listen", "import socket; s=socket.socket(); s.listen(1); print(\"OPEN\" \"ED\")"),
+        ("fast open", "import socket; s=socket.socket(); s.sendto(b\"x\", 0x20000000, (\"1.1.1.1\", 80)); print(\"OPEN\" \"ED\")"),
+        ("dns", "import socket; socket.getaddrinfo(\"example.com\", 443); print(\"OPEN\" \"ED\")"),
+        ("unshare net", "import os; os.unshare(os.CLONE_NEWNET); print(\"OPEN\" \"ED\")"),
+        ("io_uring", "import ctypes; r=ctypes.CDLL(None).syscall(425, 8, ctypes.create_string_buffer(120)); print(\"OPEN\" \"ED\" if r >= 0 else \"refused\")"),
     ] {
         let (_, out) = run_sh(&*e, &f, &py(code), isolated());
         assert!(!out.contains("OPENED"), "{what} was allowed: {out}");
