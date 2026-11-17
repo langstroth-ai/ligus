@@ -504,7 +504,8 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         // (Phase A, item 2) also judges its subject's history, so an Admin
         // revoking the founder's device with an empty watermark would
         // otherwise erase the workspace's genesis.
-        if let Some(why) = above_author(&env.payload, author, role, fold, ctx.running) {
+        let ranks = if on_config { ctx.running } else { ctx.workspace.unwrap_or(ctx.running) };
+        if let Some(why) = rank_rules(&env.payload, author, role, ranks) {
             return Decision::deny(why);
         }
         // A3: a host certifies a key for an agent bound to it (or, unbound,
@@ -888,37 +889,66 @@ fn service_member_refusal(
     }
 }
 
-/// The rank ceiling on membership and device governance: a grant above the
-/// author's own role, or a removal, demotion or device revocation of a
-/// member ranked above the author.
-fn above_author(e: &SessionEvent, author: &str, role: WorkspaceRole, fold: &ChatSession, running: &RosterState) -> Option<String> {
-    let rank_of = |id: &str| fold.members.iter().find(|m| m.id == id).map(|m| m.role.rank());
-    match e {
+/// The rank rules on membership and device governance (review P-A2b, P-A2d):
+///
+/// * no one grants a role above their own, or changes the role of a member
+///   above them;
+/// * a cut (a removal, a demotion, a revocation of another member's device)
+///   goes strictly **down** the ranks: an Admin cuts only roles below Admin,
+///   an Owner cuts an Admin, and with several Owners only the founder (the
+///   config seed's creator) cuts an Owner; nobody cuts the founder. Leaving
+///   yourself, demoting yourself and revoking your own device stay open.
+///
+/// Because the subject of a cut can never cut its author, a removed member
+/// can't undo their removal with a backdated counter-cut.
+fn rank_rules(e: &SessionEvent, author: &str, role: WorkspaceRole, roster: &RosterState) -> Option<String> {
+    let role_of = |id: &str| roster.members.get(id).map(|m| m.role);
+    let targets: Vec<String> = match e {
         // (Self-enrollment is judged by its invite: `self_enroll_allowance`.)
         SessionEvent::MemberAdded { member, .. } if member.id != author && member.role.rank() > role.rank() => {
-            Some("no one grants a role above their own".into())
+            return Some("no one grants a role above their own".into());
         }
         SessionEvent::MemberRoleChanged { change, .. } => {
             if change.new_role.rank() > role.rank() {
                 return Some("no one grants a role above their own".into());
             }
-            rank_of(&change.member_id).filter(|r| *r > role.rank()).map(|_| "no one changes the role of a member above them".into())
+            let current = role_of(&change.member_id);
+            if change.member_id != author && current.is_some_and(|r| r.rank() > role.rank()) {
+                return Some("no one changes the role of a member above them".into());
+            }
+            if change.member_id != author && current.is_some_and(|r| change.new_role.rank() < r.rank()) {
+                vec![change.member_id.clone()]
+            } else {
+                Vec::new()
+            }
         }
-        SessionEvent::MemberRemoved { member_id, .. } => {
-            rank_of(member_id).filter(|r| *r > role.rank()).map(|_| "no one removes a member above them".into())
-        }
+        SessionEvent::MemberRemoved { member_id, .. } if member_id != author => vec![member_id.clone()],
         SessionEvent::DeviceRevoked { device_id, .. } => {
-            let accounts = running.devices.get(device_id).map(|d| d.accounts.clone()).unwrap_or_default();
-            let top = fold
+            let accounts = roster.devices.get(device_id).map(|d| d.accounts.clone()).unwrap_or_default();
+            roster
                 .members
                 .iter()
-                .filter(|m| m.actor.account_id.is_some_and(|a| accounts.contains(&a)))
-                .map(|m| m.role.rank())
-                .max();
-            top.filter(|r| *r > role.rank()).map(|_| "no one revokes a device of a member above them".into())
+                .filter(|(id, m)| id.as_str() != author && m.account_id.is_some_and(|a| accounts.contains(&a)))
+                .map(|(id, _)| id.clone())
+                .collect()
         }
-        _ => None,
+        _ => Vec::new(),
+    };
+    let founder = roster.founder.as_str();
+    for t in targets {
+        if !founder.is_empty() && t == founder {
+            return Some("nobody cuts the workspace's founder".into());
+        }
+        let Some(r) = role_of(&t) else { continue };
+        if r == WorkspaceRole::Owner {
+            if author != founder || role != WorkspaceRole::Owner {
+                return Some("only the founder cuts an Owner".into());
+            }
+        } else if r.rank() >= role.rank() {
+            return Some("a cut goes strictly down the ranks".into());
+        }
     }
+    None
 }
 
 /// Whether `env` is signed by a device of its stamped author's own account:
@@ -980,7 +1010,7 @@ fn repo_event_ok(e: &SessionEvent, on_config: bool, roster: &RosterState) -> Res
 
 /// Account keys and device certificates: self-validating (the roster checks
 /// the chain), published by members and joiners alike.
-fn is_trust_publication(e: &SessionEvent) -> bool {
+pub(crate) fn is_trust_publication(e: &SessionEvent) -> bool {
     matches!(
         e,
         SessionEvent::AccountKeyRegistered { .. }

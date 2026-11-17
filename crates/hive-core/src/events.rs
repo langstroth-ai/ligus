@@ -1237,7 +1237,7 @@ fn fold(
     }
     let mut first = crate::authz::ConfigTimeline::default();
     let pass1 = fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, Some(&mut first), None, &none);
-    let deny = config_cut_denials(envelopes, &first);
+    let deny = config_denials_with_rejudged_cuts(envelopes, trusted_founder, trusted_workspace, workspace, &first);
     if deny.is_empty() && decisions.is_none() {
         if let Some(t) = timeline {
             *t = first;
@@ -1256,17 +1256,127 @@ fn config_cut_denials(envelopes: &[SessionEventEnvelope], t: &crate::authz::Conf
     }
     let all: Vec<&SessionEventEnvelope> = envelopes.iter().collect();
     let chains = crate::watermark::Chains::of(&all);
-    let log = envelopes[0].session_id;
     for cut in t.cuts() {
-        let covered = cut.covered(log, &chains);
-        for e in envelopes {
-            let before = e.canonical_key() < cut.key || matches!(cut.kind, crate::authz::CutKind::Revoked(_));
-            if before && e.canonical_key() != cut.key && cut.applies(e) && !covered.contains(&e.event_id) {
-                out.insert(e.event_id);
+        out.extend(cut_exclusion(envelopes, &chains, cut));
+    }
+    out
+}
+
+/// One cut's subject's config events it denies: sorting before it (any
+/// position for a revocation), not covered by its watermark.
+fn cut_exclusion(
+    envelopes: &[SessionEventEnvelope],
+    chains: &crate::watermark::Chains,
+    cut: &crate::authz::Cut,
+) -> std::collections::BTreeSet<Uuid> {
+    let mut out = std::collections::BTreeSet::new();
+    let Some(log) = envelopes.first().map(|e| e.session_id) else { return out };
+    let covered = cut.covered(log, chains);
+    for e in envelopes {
+        let before = e.canonical_key() < cut.key || matches!(cut.kind, crate::authz::CutKind::Revoked(_));
+        // Judged as of the cut, not erased: a removed or demoted member's
+        // self-validating publications (keys, certificates, passkeys) stand,
+        // as they would after the cut. Any other uncovered config event of
+        // theirs is denied (fail closed; for a demotion that over-applies to
+        // acts the new role could do, review P-A2e).
+        let still_ok = match &cut.kind {
+            crate::authz::CutKind::Removed(_) | crate::authz::CutKind::Demoted(..) => {
+                crate::authz::is_trust_publication(&e.payload) || matches!(e.payload, SessionEvent::PasskeyRegistered { .. })
             }
+            // A revoked device's own certificate stands (the revocation is
+            // of a certified device); nothing else it signed uncovered does.
+            crate::authz::CutKind::Revoked(d) => {
+                matches!(&e.payload, SessionEvent::DeviceCertificateAdded { certificate } if certificate.device_id == *d)
+            }
+        };
+        if before && !still_ok && e.canonical_key() != cut.key && cut.applies(e) && !covered.contains(&e.event_id) {
+            out.insert(e.event_id);
         }
     }
     out
+}
+
+/// The cut a config event would make if allowed (none for leaving or
+/// demoting yourself, or a device revoking itself; a role change counts
+/// when the payload says it lowers the role, which the re-judging pass
+/// confirms against the roster).
+fn candidate_cut(env: &SessionEventEnvelope, roster: &crate::authz::RosterState) -> Option<crate::authz::Cut> {
+    use crate::authz::CutKind;
+    let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
+    let (kind, agent_keys, watermark) = match &env.payload {
+        SessionEvent::MemberRemoved { member_id, watermark } if member_id != author => (
+            CutKind::Removed(member_id.clone()),
+            roster
+                .agent_keys
+                .iter()
+                .filter(|(_, k)| roster.agents.get(&k.agent_id).is_some_and(|a| a.owner == *member_id))
+                .map(|(id, _)| *id)
+                .collect(),
+            watermark.clone(),
+        ),
+        SessionEvent::MemberRoleChanged { change, watermark }
+            if change.member_id != author && change.new_role.rank() < change.old_role.rank() =>
+        {
+            (CutKind::Demoted(change.member_id.clone()), Default::default(), watermark.clone())
+        }
+        SessionEvent::DeviceRevoked { device_id, watermark } if env.signer_device_id != Some(*device_id) => {
+            (CutKind::Revoked(*device_id), Default::default(), watermark.clone())
+        }
+        _ => return None,
+    };
+    Some(crate::authz::Cut { key: env.canonical_key(), kind, agent_keys, watermark })
+}
+
+/// Phase A, item 2 (review P-A2b): a cut is judged without its subject's
+/// uncovered earlier events. Those are, by the watermark, after the cut, so
+/// a backdated event of the subject (a relying-party change, a revocation,
+/// anything that would make the cut fail) can't decide it. Cuts go strictly
+/// down the ranks, so two cuts never exclude each other. Returns the final
+/// denial set: every config event an allowed cut denies.
+fn config_denials_with_rejudged_cuts(
+    envelopes: &[SessionEventEnvelope],
+    trusted_founder: Option<&str>,
+    trusted_workspace: Option<Uuid>,
+    workspace: WorkspaceAuthz<'_>,
+    first: &crate::authz::ConfigTimeline,
+) -> std::collections::BTreeSet<Uuid> {
+    let all: Vec<&SessionEventEnvelope> = envelopes.iter().collect();
+    let chains = crate::watermark::Chains::of(&all);
+    let mut deny = config_cut_denials(envelopes, first);
+    let mut accepted: std::collections::BTreeSet<(u64, Uuid)> = first.cuts().iter().map(|c| c.key).collect();
+    // Candidates the positional pass refused whose subject has uncovered
+    // earlier events (the only ones re-judging can change).
+    let mut candidates: Vec<(crate::authz::Cut, std::collections::BTreeSet<Uuid>)> = envelopes
+        .iter()
+        .filter(|e| !accepted.contains(&e.canonical_key()))
+        .filter_map(|e| candidate_cut(e, first.current()))
+        .map(|c| {
+            let x = cut_exclusion(envelopes, &chains, &c);
+            (c, x)
+        })
+        .filter(|(_, x)| !x.is_empty())
+        .collect();
+    candidates.sort_by_key(|(c, _)| c.key);
+    for _ in 0..=candidates.len() {
+        let mut changed = false;
+        for (c, x) in &candidates {
+            if accepted.contains(&c.key) {
+                continue;
+            }
+            let trial: std::collections::BTreeSet<Uuid> = deny.union(x).copied().collect();
+            let mut t = crate::authz::ConfigTimeline::default();
+            fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, Some(&mut t), None, &trial);
+            if t.cuts().iter().any(|k| k.key == c.key) {
+                accepted.extend(t.cuts().iter().map(|k| k.key));
+                deny = trial.union(&config_cut_denials(envelopes, &t)).copied().collect();
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    deny
 }
 
 fn fold_pass(
@@ -1420,7 +1530,22 @@ fn fold_pass(
             allowed = true;
             // Phase A, item 2: record a removal, demotion or revocation.
             if let Some(t) = timeline.as_deref_mut() {
+                // Leaving or demoting yourself is not a cut: its watermark
+                // would be the subject's own word, and an empty one would
+                // retroactively deny everything they did (members they
+                // added included). What they could backdate afterwards they
+                // could have done before leaving.
+                let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
                 let cut = match &env.payload {
+                    SessionEvent::MemberRemoved { member_id, .. } | SessionEvent::MemberRoleChanged { change: MemberRoleChange { member_id, .. }, .. }
+                        if member_id == author =>
+                    {
+                        None
+                    }
+                    // Nor is a device revoking itself (its watermark would be
+                    // its own word; another device of the account revoking it
+                    // is a cut).
+                    SessionEvent::DeviceRevoked { device_id, .. } if env.signer_device_id == Some(*device_id) => None,
                     SessionEvent::MemberRemoved { member_id, watermark } => Some((
                         authz::CutKind::Removed(member_id.clone()),
                         tracker

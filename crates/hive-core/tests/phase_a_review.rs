@@ -38,38 +38,124 @@ fn lamport_of(w: &SignedWorld, id: Uuid) -> u64 {
     w.cfg.iter().find(|e| e.event_id == id).unwrap().lamport
 }
 
-/// Claim 2: a removed Admin who has seen their removal backdates a removal
-/// of the remover just below it. Their event isn't covered by the removal's
-/// watermark, so it must be judged as of the removal (not a member) and the
-/// removal must stand.
-///
-/// OPEN (review P-A2b): watermark coverage is the cut author's own claim, so
-/// a counter-cut that names a low watermark is indistinguishable from an
-/// honest concurrent one, and a pure position rule either lets the backdated
-/// counter-cut win (today) or lets a forward-dated one with a lying watermark
-/// win. Needs a policy decision: cuts strictly downward in rank (only an
-/// Owner cuts an Admin), or "revocation wins" (both subjects cut). Neither
-/// changes the wire.
+/// Claim 2: a removed Admin who has seen their removal backdates a cut of
+/// the remover just below it. Cuts go strictly down the ranks (owner
+/// decision, review P-A2b), so the subject of a cut can never cut its
+/// author: an Admin can't remove another Admin, and the removed Admin's
+/// backdated counter-cut of the Owner who removed them is refused.
 #[test]
-#[ignore = "review P-A2b: open; equal-rank mutual cuts need a policy decision (see the doc comment)"]
 fn a_removed_admin_cannot_undo_their_removal_by_backdating_a_counter_removal() {
-    let mut w = SignedWorld::genesis(&["owner", "ada", "mal"], None);
-    w.admit("owner", "ada", WorkspaceRole::Admin);
-    w.admit("owner", "mal", WorkspaceRole::Admin);
+    let mut w = SignedWorld::genesis(&["founder", "olga", "ada", "mal"], None);
+    w.admit("founder", "olga", WorkspaceRole::Owner);
+    w.admit("founder", "ada", WorkspaceRole::Admin);
+    w.admit("founder", "mal", WorkspaceRole::Admin);
     // Unrelated config traffic, so there's room below the removal.
-    w.push("owner", SessionEvent::WorkspaceRulesSet { version: 2, presence: None });
-    w.push("owner", SessionEvent::WorkspaceRulesSet { version: 2, presence: None });
+    w.push("founder", SessionEvent::WorkspaceRulesSet { version: 2, presence: None });
+    w.push("founder", SessionEvent::WorkspaceRulesSet { version: 2, presence: None });
+    // Equal rank: an Admin never cuts an Admin.
+    let peer = w.push("ada", SessionEvent::MemberRemoved { member_id: "mal".into(), watermark: honest_watermark(&w, "mal") });
+    assert_eq!(w.verdict(peer), Verdict::Denied, "an Admin removes an Admin");
     let wm = honest_watermark(&w, "mal");
-    let removal = w.push("ada", SessionEvent::MemberRemoved { member_id: "mal".into(), watermark: wm });
+    let removal = w.push("olga", SessionEvent::MemberRemoved { member_id: "mal".into(), watermark: wm });
     assert_eq!(w.verdict(removal), Verdict::Allowed);
     let below = lamport_of(&w, removal) - 1;
-    // Mal names a low watermark for Ada (as if concurrent).
-    let counter = cfg_at(&mut w, "mal", SessionEvent::MemberRemoved { member_id: "ada".into(), watermark: vec![] }, below);
+    // Mal names a low watermark for the remover (as if concurrent).
+    let counter = cfg_at(&mut w, "mal", SessionEvent::MemberRemoved { member_id: "olga".into(), watermark: vec![] }, below);
+    let counter_peer = cfg_at(&mut w, "mal", SessionEvent::MemberRemoved { member_id: "ada".into(), watermark: vec![] }, below);
     let v = w.verdicts();
     assert_eq!(v[&removal], Verdict::Allowed, "the removal stands");
-    assert_eq!(v[&counter], Verdict::Denied, "the removed member's backdated counter-removal is judged as of their removal");
+    assert_eq!(v[&counter], Verdict::Denied, "the removed Admin's backdated cut of the Owner");
+    assert_eq!(v[&counter_peer], Verdict::Denied, "the removed Admin's backdated cut of another Admin");
     let members: Vec<String> = w.config().members.iter().map(|m| m.id.clone()).collect();
-    assert!(members.contains(&"ada".to_string()) && !members.contains(&"mal".to_string()), "{members:?}");
+    assert!(members.contains(&"olga".to_string()) && members.contains(&"ada".to_string()) && !members.contains(&"mal".to_string()), "{members:?}");
+}
+
+/// Several Owners: the founder outranks the others and is the only one who
+/// cuts an Owner; nobody cuts the founder; a removed Owner's backdated cut
+/// of the founder is refused; leaving and self-revocation stay open.
+#[test]
+fn only_the_founder_cuts_an_owner_and_nobody_cuts_the_founder() {
+    let mut w = SignedWorld::genesis(&["founder", "olga", "oscar", "ada"], None);
+    w.admit("founder", "olga", WorkspaceRole::Owner);
+    w.admit("founder", "oscar", WorkspaceRole::Owner);
+    w.admit("founder", "ada", WorkspaceRole::Admin);
+    let change = |m: &str, old, new| SessionEvent::MemberRoleChanged {
+        change: hive_core::MemberRoleChange { member_id: m.into(), old_role: old, new_role: new },
+        watermark: vec![],
+    };
+    let founders_device = w.people["founder"].device_id;
+    let oscars_device = w.people["oscar"].device_id;
+    let refused = [
+        w.push("olga", SessionEvent::MemberRemoved { member_id: "oscar".into(), watermark: vec![] }),
+        w.push("olga", change("oscar", WorkspaceRole::Owner, WorkspaceRole::Admin)),
+        w.push("olga", SessionEvent::DeviceRevoked { device_id: oscars_device, watermark: vec![] }),
+        w.push("olga", SessionEvent::MemberRemoved { member_id: "founder".into(), watermark: vec![] }),
+        w.push("olga", change("founder", WorkspaceRole::Owner, WorkspaceRole::Admin)),
+        w.push("olga", SessionEvent::DeviceRevoked { device_id: founders_device, watermark: vec![] }),
+    ];
+    // A non-founder Owner still cuts an Admin.
+    let olga_cuts_ada = w.push("olga", change("ada", WorkspaceRole::Admin, WorkspaceRole::Contributor));
+    let v = w.verdicts();
+    for id in refused {
+        assert_eq!(v[&id], Verdict::Denied);
+    }
+    assert_eq!(v[&olga_cuts_ada], Verdict::Allowed);
+    // The founder removes Olga; Olga backdates cuts of the founder.
+    w.push("founder", SessionEvent::WorkspaceRulesSet { version: 2, presence: None });
+    let removal = w.push("founder", SessionEvent::MemberRemoved { member_id: "olga".into(), watermark: honest_watermark(&w, "olga") });
+    let below = lamport_of(&w, removal) - 1;
+    let back = [
+        cfg_at(&mut w, "olga", SessionEvent::MemberRemoved { member_id: "founder".into(), watermark: vec![] }, below),
+        cfg_at(&mut w, "olga", SessionEvent::DeviceRevoked { device_id: founders_device, watermark: vec![] }, below),
+        cfg_at(&mut w, "olga", change("founder", WorkspaceRole::Owner, WorkspaceRole::Viewer), below),
+    ];
+    let v = w.verdicts();
+    assert_eq!(v[&removal], Verdict::Allowed, "the founder's removal of an Owner stands");
+    for id in back {
+        assert_eq!(v[&id], Verdict::Denied);
+    }
+    // Leaving yourself and revoking your own device stay open.
+    let leave = w.push("oscar", SessionEvent::MemberRemoved { member_id: "oscar".into(), watermark: vec![] });
+    let own = w.push("ada", SessionEvent::DeviceRevoked { device_id: w.people["ada"].device_id, watermark: vec![] });
+    let v = w.verdicts();
+    assert_eq!((v[&leave], v[&own]), (Verdict::Allowed, Verdict::Allowed));
+    let r = w.roster();
+    assert_eq!(r.role_of("founder"), Some(WorkspaceRole::Owner));
+    assert!(r.role_of("olga").is_none() && r.role_of("oscar").is_none());
+}
+
+/// An indirect counter-cut: an Owner the founder demotes backdates a change
+/// of the relying party below the demotion, so the founder's presence on
+/// it no longer verifies. The demoted Owner's uncovered events must not
+/// decide the cut.
+#[test]
+fn a_cut_owner_cannot_void_the_cut_by_backdating_a_relying_party_change() {
+    let mut w = SignedWorld::genesis(&["founder", "olga"], None);
+    w.admit("founder", "olga", WorkspaceRole::Owner);
+    w.push("founder", SessionEvent::WorkspaceRulesSet { version: 2, presence: None });
+    w.push("founder", SessionEvent::WorkspaceRulesSet { version: 2, presence: None });
+    // The founder confirms with a passkey under the workspace's RP (a
+    // recovery key doesn't depend on the RP, so it would hide the attack).
+    let mut auth = hive_core::presence::soft::SoftAuthenticator::es256();
+    auth.rp_id = "ligus.ai".into();
+    auth.origin = "https://ligus.ai".into();
+    let cred = auth.credential(w.people["founder"].account_id, "key");
+    w.push("founder", SessionEvent::PasskeyRegistered { credential: cred });
+    let wm = honest_watermark(&w, "olga");
+    let mut env = w.draft("founder", None, SessionEvent::MemberRoleChanged {
+        change: hive_core::MemberRoleChange { member_id: "olga".into(), old_role: WorkspaceRole::Owner, new_role: WorkspaceRole::Viewer },
+        watermark: wm,
+    }, None);
+    let a = auth.get(&hive_core::presence::challenge(&env));
+    w.finish(&mut env, "founder", Some(a));
+    let demote = w.push_env(None, env);
+    assert_eq!(w.verdict(demote), Verdict::Allowed);
+    let below = lamport_of(&w, demote) - 1;
+    let rp = cfg_at(&mut w, "olga", SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(PresencePolicy::for_rp("evil.example")) }, below);
+    let v = w.verdicts();
+    assert_eq!(v[&demote], Verdict::Allowed, "the demotion stands");
+    assert_eq!(v[&rp], Verdict::Denied, "the demoted Owner's backdated RP change is judged as of the demotion");
+    assert_eq!(w.roster().presence_policy, PresencePolicy::ligus());
 }
 
 /// Claim 2, the sole-Owner variant: the removed Admin backdates a revocation

@@ -112,6 +112,9 @@ pub struct RosterState {
     /// Whether an allowed `WorkspaceRulesSet` is on the log (the genesis one
     /// is presence-free once, never again).
     pub rules_written: bool,
+    /// The workspace's founder (the config seed's creator): outranks every
+    /// other Owner and is the only one who cuts an Owner (review P-A2b).
+    pub founder: String,
     /// The workspace's repositories by id (a removed one is a tombstone).
     pub repos: BTreeMap<Uuid, crate::workspace_repo::RepoEntry>,
 }
@@ -214,6 +217,7 @@ impl RosterTracker {
     pub fn seeded(session: &ChatSession) -> Self {
         let mut t = Self::default();
         t.state.rules = super::RULES_GENESIS;
+        t.state.founder = session.creator_actor_id.clone();
         if let Some(a) = session
             .members
             .iter()
