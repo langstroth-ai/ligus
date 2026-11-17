@@ -41,7 +41,9 @@ use uuid::Uuid;
 
 mod auth;
 mod forge_cmd;
+mod hardening;
 mod mcp_config;
+mod selftest;
 mod reply;
 mod repos;
 mod serve;
@@ -1205,8 +1207,14 @@ fn cmd_set_agent_host(cfg: &Config, agent_name: &str, host_id: &str) -> Result<(
 /// reassigned to it) is answered via that agent's workspace runtime and synced
 /// back. A failing turn is isolated and not retried in a tight loop. See
 /// `worker.rs` for the turn itself (tool loop, worktrees, proposals).
-async fn cmd_worker(cfg: &Config, label: Option<String>) -> Result<()> {
+async fn cmd_worker(cfg: &Config, label: Option<String>, health_listen: Option<String>) -> Result<()> {
     let ws = uuid_of_room(&cfg.room);
+    // Probes for an orchestrator (Kubernetes): live while the process serves,
+    // ready once the worker has registered and finished its first tick.
+    let ready = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if let Some(addr) = health_listen {
+        worker::spawn_health(&addr, ready.clone()).await?;
+    }
     if let Err(e) = purge_foreign_workspaces(cfg) {
         eprintln!("worker: foreign-workspace cleanup skipped: {e}");
     }
@@ -1269,6 +1277,7 @@ async fn cmd_worker(cfg: &Config, label: Option<String>) -> Result<()> {
         if let Err(e) = worker::drain_tick(&ctx, &svc, &mut failed, &worker::NoSink).await {
             eprintln!("worker: tick failed (retrying): {e}");
         }
+        ready.store(true, std::sync::atomic::Ordering::Relaxed);
         if cfg.relay_url.is_some() {
             let _ = sync_once(cfg).await;
         }
@@ -1397,14 +1406,22 @@ fn truncate(s: &str, n: usize) -> String {
 
 /// `ligus doctor`: the agent sandbox tier this device uses, why, and what
 /// it leaves open (the same text as the Settings banner and the logs).
-fn cmd_doctor() {
+///
+/// As a preflight (a Kubernetes init container, a CI step) it returns a
+/// non-zero exit code: `--require-confined` exits 3 without an agent
+/// sandbox, `--expect-tier <tier>` exits 4 on any other tier, and
+/// `--turn-test` (exit 5 on failure) runs one real headless agent turn
+/// against an in-process stub model whose `run_command` probes the sandbox
+/// (see selftest.rs).
+fn cmd_doctor(require_confined: bool, expect_tier: Option<String>, turn_test: bool, cfg: &Config) -> Result<i32> {
     let s = hive_runtime::executor::sandbox_status();
     println!("agent sandbox: {}", s.tier());
     println!("  {}", s.summary);
     for n in &s.notes {
         println!("  - {n}");
     }
-    if s.kind == hive_runtime::executor::ExecutorKind::Unconfined {
+    let unconfined = s.kind == hive_runtime::executor::ExecutorKind::Unconfined;
+    if unconfined {
         println!("  CLI agent turns (any tier), run_command, stdio MCP servers and pre-flight tests are refused here;");
         println!("  chat with an HTTP model (no local tools) still runs");
         #[cfg(windows)]
@@ -1412,6 +1429,40 @@ fn cmd_doctor() {
         #[cfg(target_os = "linux")]
         println!("  to fix: install bubblewrap (bwrap) with unprivileged user namespaces, or run Linux 6.7+ for Landlock");
     }
+    if let Some(d) = hardening::dumpable() {
+        println!("process dumpable: {}", if d { "yes" } else { "no" });
+    }
+    if (require_confined || turn_test) && unconfined {
+        eprintln!("error: no agent sandbox on this host: every agent turn that runs local programs would be refused");
+        return Ok(hardening::EXIT_UNCONFINED);
+    }
+    if let Some(want) = expect_tier.map(|t| t.trim().to_ascii_lowercase()) {
+        if want != s.tier() {
+            eprintln!("error: expected agent sandbox tier {want}, this host uses {}", s.tier());
+            return Ok(4);
+        }
+    }
+    if turn_test {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+        let report = rt.block_on(selftest::turn_test(&cfg.data_dir));
+        match report {
+            Ok(r) => {
+                for line in &r.lines {
+                    println!("turn test: {line}");
+                }
+                if !r.passed() {
+                    eprintln!("error: turn test failed");
+                    return Ok(5);
+                }
+                println!("turn test: passed (tier {})", r.tier);
+            }
+            Err(e) => {
+                eprintln!("error: turn test could not run: {e:#}");
+                return Ok(5);
+            }
+        }
+    }
+    Ok(0)
 }
 
 fn usage() -> ! {
@@ -1420,7 +1471,7 @@ fn usage() -> ! {
          USAGE:\n  \
          ligus --version\n  \
          ligus whoami\n  \
-         ligus doctor                    this device's agent sandbox tier and what it leaves open\n  \
+         ligus doctor [--require-confined] [--expect-tier <tier>] [--turn-test]\n                                       this device's agent sandbox tier and what it leaves open;\n                                       the flags make it a preflight (non-zero exit on failure)\n  \
          ligus chats\n  \
          ligus new [title]\n  \
          ligus tail <chat-id> [--watch]\n  \
@@ -1436,7 +1487,7 @@ fn usage() -> ! {
          ligus register-worker [--label <name>]   register this box as a worker host\n  \
          ligus set-agent-host <agent> <host-id>   bind an agent to a host\n  \
          ligus proposals                 list the workspace's proposals with status + votes\n  \
-         ligus worker [--label <name>]   run the worker daemon (host detached agents, §12.4)\n  \
+         ligus worker [--label <name>] [--health-listen <addr>]\n                                       run the worker daemon (host detached agents, §12.4);\n                                       --health-listen serves GET /v1/health and /v1/ready\n  \
          ligus queue                     show queued work (unanswered mentions + host status)\n  \
          ligus serve [--listen ADDR] [--pair] [--token-file PATH] [--label NAME]\n                                       \
          run the home host for the iOS app (sync + worker + HTTP/SSE API);\n                                       \
@@ -1500,10 +1551,19 @@ fn run() -> Result<()> {
         println!("ligus {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    // Also before any thread starts: `*_FILE` secrets and LIGUS_WS_SECRET_DIR
+    // become this process's environment (see hardening.rs).
+    let secret_paths = hardening::load_secret_files();
+    // Long-running hosts hold the workspace key in memory: no other process
+    // of this user may read their memory or environ.
+    if matches!(args.first().map(String::as_str), Some("serve" | "worker" | "doctor")) {
+        hardening::set_not_dumpable();
+    }
     let cfg = config();
     // Agent processes this host spawns never read its data dir (keys,
-    // database, serve token); checked-out repos under it stay readable.
-    hive_runtime::executor::configure_host(&cfg.data_dir, &[], &[repos::repos_dir(&cfg.data_dir)]);
+    // database, serve token) or its secret files; checked-out repos under
+    // the data dir stay readable.
+    hive_runtime::executor::configure_host(&cfg.data_dir, &secret_paths, &[repos::repos_dir(&cfg.data_dir)]);
     // Turn scratch dirs a killed turn or host left behind are swept (now and
     // every ten minutes) once older than the longest turn.
     hive_runtime::executor::start_turn_dir_sweeper(worker::turn_timeout());
@@ -1549,6 +1609,8 @@ fn run() -> Result<()> {
         "--since",
         "--auth",
         "--client-id",
+        "--expect-tier",
+        "--health-listen",
     ];
     let mut positional: Vec<&String> = Vec::new();
     let mut skip = false;
@@ -1584,7 +1646,10 @@ fn run() -> Result<()> {
         "auth" => auth::cmd_auth(&cfg.data_dir, &positional, flag_val("--label")),
         "whoami" => cmd_whoami(&cfg),
         "doctor" => {
-            cmd_doctor();
+            let code = cmd_doctor(has("--require-confined"), flag_val("--expect-tier"), has("--turn-test"), &cfg)?;
+            if code != 0 {
+                std::process::exit(code);
+            }
             Ok(())
         }
         "chats" => cmd_chats(&cfg),
@@ -1674,7 +1739,11 @@ fn run() -> Result<()> {
             }
             cmd_set_agent_host(&cfg, positional[0], positional[1])
         }
-        "worker" => rt()?.block_on(cmd_worker(&cfg, flag_val("--label"))),
+        "worker" => {
+            hardening::require_sandbox_or_exit("this worker");
+            let health = flag_val("--health-listen").or_else(|| env_opt("LIGUS_WORKER_HEALTH_LISTEN"));
+            rt()?.block_on(cmd_worker(&cfg, flag_val("--label"), health))
+        }
         "queue" => cmd_queue(&cfg),
         "serve" if positional.first().map(|s| s.as_str()) == Some("enroll") => {
             let opts = serve::ServeOptions::from_flags(
@@ -1691,6 +1760,7 @@ fn run() -> Result<()> {
             serve::cmd_enroll(&cfg, &opts, has("--new-device"))
         }
         "serve" => {
+            hardening::require_sandbox_or_exit("this serve host");
             let opts = serve::ServeOptions::from_flags(
                 &cfg,
                 flag_val("--listen"),
