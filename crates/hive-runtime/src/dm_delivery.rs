@@ -504,7 +504,7 @@ pub async fn run_pass<H: Host>(host: &H, store: &HeldInvites, now: i64) -> Vec<H
     if !items.iter().any(|h| matches!(h.state, HeldState::Waiting | HeldState::Warning)) {
         return changed;
     }
-    let people = host.co_members();
+    let mut people = host.co_members();
     for item in items {
         let person = people.iter().find(|p| p.account_id == item.account_id);
         let step = decide(&item, person, host.dm_exists(item.workspace_id), now);
@@ -544,7 +544,12 @@ pub async fn run_pass<H: Host>(host: &H, store: &HeldInvites, now: i64) -> Vec<H
                     }
                     continue;
                 };
-                match host.deliver(person, &plan, &invite).await {
+                let out = host.deliver(person, &plan, &invite).await;
+                // A drop can take a while (a slow or unreachable relay): the
+                // next item is decided on what the logs say now, so a device
+                // revoked or a key changed meanwhile isn't sealed to.
+                people = host.co_members();
+                match out {
                     Delivery::Delivered => {
                         if let Some(h) = store.transition(item.workspace_id, &[HeldState::Sending], HeldState::Delivered, |h| {
                             h.delivered_at = Some(now);

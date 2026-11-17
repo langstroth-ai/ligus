@@ -38,6 +38,9 @@ struct Fake {
     outcome: Mutex<Delivery>,
     /// Every drop: (recipient keys, invite).
     drops: Mutex<Vec<(Vec<[u8; 32]>, String)>>,
+    /// Runs once, while the first drop is in flight (what the logs learn
+    /// meanwhile).
+    during_drop: Mutex<Option<Box<dyn FnOnce(&mut Vec<CoMember>) + Send>>>,
 }
 
 impl Fake {
@@ -48,6 +51,7 @@ impl Fake {
             ka: KeyAgreementKeypair::from_seed(&[9; 32]).unwrap(),
             outcome: Mutex::new(Delivery::Delivered),
             drops: Mutex::new(Vec::new()),
+            during_drop: Mutex::new(None),
         }
     }
     fn set(&self, f: impl FnOnce(&mut CoMember)) {
@@ -70,6 +74,9 @@ impl Host for Fake {
     }
     fn deliver(&self, _person: &CoMember, plan: &SealPlan, invite: &str) -> impl Future<Output = Delivery> + Send {
         let out = self.outcome.lock().unwrap().clone();
+        if let Some(f) = self.during_drop.lock().unwrap().take() {
+            f(&mut self.people.lock().unwrap());
+        }
         if out == Delivery::Delivered {
             self.drops.lock().unwrap().push((plan.recipients.iter().map(|r| r.ka_public).collect(), invite.to_string()));
         }
@@ -338,4 +345,29 @@ fn concurrent_holds_cannot_pass_the_cap() {
     assert_eq!(ok, held, "every accepted hold is on the list");
     let secrets = std::fs::read_dir(tmp.path().join("secrets").join(SCOPE)).map(|d| d.count()).unwrap_or(0);
     assert_eq!(secrets, held, "no secret without an entry");
+}
+
+#[tokio::test]
+async fn a_device_revoked_during_a_pass_is_not_sealed_to() {
+    // Two held invites. While the first drop is in flight (a slow relay),
+    // the second peer revokes a device: the second drop leaves it out.
+    let tmp = tempfile::tempdir().unwrap();
+    let store = HeldInvites::new(tmp.path(), Arc::new(File0600::new(tmp.path())));
+    let a = person(Uuid::new_v4(), vec![device(1)], true);
+    let b = person(Uuid::new_v4(), vec![device(2), device(3)], true);
+    let host = Fake::new(a.clone());
+    host.people.lock().unwrap().push(b.clone());
+    let own = host.ka.public_key_bytes();
+    store.hold(Uuid::new_v4(), &a, &a.seal_plan().unwrap(), INVITE, &own, NOW).unwrap();
+    store.hold(Uuid::new_v4(), &b, &b.seal_plan().unwrap(), INVITE, &own, NOW).unwrap();
+    let b_acc = b.account_id;
+    *host.during_drop.lock().unwrap() = Some(Box::new(move |people: &mut Vec<CoMember>| {
+        let b = people.iter_mut().find(|p| p.account_id == b_acc).unwrap();
+        b.devices.retain(|d| d.ka_public != device(3).ka_public);
+        b.revoked_devices.push(Uuid::from_bytes([3; 16]));
+    }));
+    run_pass(&host, &store, NOW + 1).await;
+    let drops = host.drops.lock().unwrap().clone();
+    assert_eq!(drops.len(), 2);
+    assert_eq!(drops[1].0, vec![device(2).ka_public], "the revoked device got the invite");
 }

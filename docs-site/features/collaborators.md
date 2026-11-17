@@ -85,7 +85,7 @@ the line says they got it.
   **Deliver anyway** (to their current verified devices) or share the link.
   Deliver anyway is tied to the safety code it showed you: if their key
   changes again before you click, it is refused and you compare again. A
-  device revoked since is simply left out.
+  device revoked since, even during a delivery pass, is left out.
 - **Bounded.** At most 20 invites wait at once, and each waits 7 days. An
   invite link has no expiry of its own (it is single-use), so the 7 days are
   the delivery's: after that the held copy is forgotten and you send the link
