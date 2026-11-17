@@ -61,3 +61,35 @@ fn a_service_member_cannot_answer_as_a_human_by_stamping_itself_human() {
     assert_eq!(v[&honest], Verdict::Denied);
     assert_eq!(v[&lying], Verdict::Denied, "the member record (Service), not the stamp, decides who is human");
 }
+
+/// Claim 5: the relying party decides which page every member's desktop
+/// opens for each passkey ceremony (`PresencePolicy::page_url`), and what a
+/// re-registration under it binds. Only the Owner may change it.
+#[test]
+fn only_the_owner_changes_the_relying_party() {
+    let mut w = SignedWorld::genesis(&["owner", "ada"], None);
+    w.admit("owner", "ada", WorkspaceRole::Admin);
+    let evil = PresencePolicy::for_rp("evil.example");
+    assert_eq!(evil.page_url(), "https://evil.example/presence");
+    let by_admin = w.push("ada", SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(evil.clone()) });
+    assert_eq!(w.verdict(by_admin), Verdict::Denied, "an Admin can't point every member's passkey page elsewhere");
+    assert_eq!(w.roster().presence_policy, PresencePolicy::ligus());
+    let by_owner = w.push("owner", SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(PresencePolicy::for_rp("example.org")) });
+    assert_eq!(w.verdict(by_owner), Verdict::Allowed);
+}
+
+/// Claim 1: the genesis `WorkspaceRulesSet` is the only presence-free rules
+/// set. Before anyone holds a credential (a CLI-founded workspace), a second
+/// presence-free one must not re-point the relying party.
+#[test]
+fn there_is_one_presence_free_genesis_rules_set() {
+    let mut w = SignedWorld::genesis(&["owner"], None);
+    // Keep the seed and the founder's identity only: no credential yet.
+    w.cfg.truncate(3);
+    let genesis = w.push_bare("owner", SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(PresencePolicy::ligus()) });
+    let second = w.push_bare("owner", SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(PresencePolicy::for_rp("example.org")) });
+    let v = w.verdicts();
+    assert_eq!(v[&genesis], Verdict::Allowed);
+    assert_eq!(v[&second], Verdict::Denied, "a second genesis");
+    assert_eq!(w.roster().presence_policy, PresencePolicy::ligus());
+}

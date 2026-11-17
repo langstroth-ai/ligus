@@ -139,7 +139,7 @@ pub const MAX_ORIGINS: usize = 8;
 /// hardcoded one. A workspace whose log never names one uses
 /// [`PresencePolicy::ligus`] (`ligus.ai`, the owner's deployment).
 ///
-/// An Admin changes it with presence verified under the policy in force
+/// The Owner changes it with presence verified under the policy in force
 /// before the change (the old RP). A new RP id leaves the workspace's
 /// passkeys unverifiable until they are registered again under it (recovery
 /// keys don't depend on the RP and keep working, so a new passkey can be

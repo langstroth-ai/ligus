@@ -67,7 +67,19 @@ pub fn summarize(payload: &SessionEvent) -> String {
         }
         SessionEvent::PasskeyRegistered { credential } => format!("Register passkey \"{}\"", credential.label),
         SessionEvent::PasskeyRemoved { .. } => "Remove a passkey".into(),
+        // The relying party decides where every later passkey ceremony
+        // happens: the sheet names it, never just the version.
+        SessionEvent::WorkspaceRulesSet { version, presence: Some(p) } => {
+            format!("Set rules version {version} with passkeys on {} ({})", p.rp_id, p.origins.join(", "))
+        }
         SessionEvent::WorkspaceRulesSet { version, .. } => format!("Switch the workspace to rules version {version}"),
+        SessionEvent::DeviceCertificateAdded { certificate } if certificate.alg == hive_core::crypto::SigAlg::P256 => {
+            format!("Enroll phone {} as one of your devices", certificate.device_id)
+        }
+        SessionEvent::DeviceCertificateAdded { certificate } => format!("Add device {} to your account", certificate.device_id),
+        SessionEvent::ProposalApplyRequested { request } => {
+            format!("Ask host {} to apply a proposal", request.host_device_id)
+        }
         SessionEvent::ProposalVoteCast { approval, .. } => {
             if approval.approved { "Approve a proposal".into() } else { "Reject a proposal".into() }
         }
@@ -388,5 +400,20 @@ impl ChatService {
     #[cfg(test)]
     pub(crate) fn sign_for_test(&self, env: &mut SessionEventEnvelope) {
         sign_envelope(env, self.device_id, &self.keypair);
+    }
+}
+
+#[cfg(test)]
+mod summary_tests {
+    use super::summarize;
+    use hive_core::SessionEvent;
+
+    /// Review P-A5: confirming a relying-party change shows the new RP,
+    /// not only the version (the sheet is what the person consents to).
+    #[test]
+    fn a_relying_party_change_names_the_relying_party() {
+        let e = SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(hive_core::presence::PresencePolicy::for_rp("evil.example")) };
+        let s = summarize(&e);
+        assert!(s.contains("evil.example"), "{s}");
     }
 }

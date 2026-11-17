@@ -246,7 +246,7 @@ it.
    its presence too (a stolen device and account key can't add devices or
    re-pin the key; a new laptop of yours shows **Confirm this device** in
    **Settings → Passkeys & keys** and counts once you confirm it), and any
-   change of the rules (the relying party, an Admin's; the version, the
+   change of the rules (the relying party or the version, both the
    Owner's) needs presence, verified under the relying party in force before
    the change. An Admin can't clear the passkeys of a member above them.
    Until someone registers a passkey, their account is only as strong as

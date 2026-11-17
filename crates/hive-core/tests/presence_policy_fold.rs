@@ -101,18 +101,23 @@ fn a_malformed_policy_is_refused() {
     assert_eq!(w.roster().presence_policy, PresencePolicy::ligus());
 }
 
-/// An Admin sets the relying party (with presence); only the Owner changes
-/// the rules version; a Contributor does neither.
+/// Only the Owner changes the relying party (it decides which page every
+/// member's desktop opens for a passkey ceremony) or the rules version; an
+/// Admin or a Contributor does neither.
 #[test]
-fn an_admin_sets_the_policy_only_the_owner_the_version() {
+fn only_the_owner_sets_the_policy_or_the_version() {
     let mut w = SignedWorld::genesis(&["owner", "ada", "mara"], None);
     w.admit("owner", "ada", WorkspaceRole::Admin);
     w.admit("owner", "mara", WorkspaceRole::Contributor);
     let policy = w.push("ada", SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(PresencePolicy::for_rp("example.org")) });
-    assert_eq!(w.verdict(policy), Verdict::Allowed);
+    assert_eq!(w.verdict(policy), Verdict::Denied);
+    let same = w.push("ada", SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(PresencePolicy::ligus()) });
+    assert_eq!(w.verdict(same), Verdict::Allowed, "restating the policy in force changes nothing");
+    let by_owner_rp = w.push("owner", SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(PresencePolicy::for_rp("example.org")) });
+    assert_eq!(w.verdict(by_owner_rp), Verdict::Allowed);
     let version = w.push("ada", SessionEvent::WorkspaceRulesSet { version: 3, presence: None });
     assert_eq!(w.verdict(version), Verdict::Denied);
-    let by_contributor = w.push("mara", SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(PresencePolicy::ligus()) });
+    let by_contributor = w.push("mara", SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(PresencePolicy::for_rp("example.org")) });
     assert_eq!(w.verdict(by_contributor), Verdict::Denied);
     let by_owner = w.push("owner", SessionEvent::WorkspaceRulesSet { version: 3, presence: None });
     assert_eq!(w.verdict(by_owner), Verdict::Allowed);

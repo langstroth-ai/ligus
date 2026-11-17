@@ -109,6 +109,9 @@ pub struct RosterState {
     /// The workspace's WebAuthn relying party (`WorkspaceRulesSet.presence`;
     /// `ligus.ai` until one is set). Every presence check uses it.
     pub presence_policy: crate::presence::PresencePolicy,
+    /// Whether an allowed `WorkspaceRulesSet` is on the log (the genesis one
+    /// is presence-free once, never again).
+    pub rules_written: bool,
     /// The workspace's repositories by id (a removed one is a tombstone).
     pub repos: BTreeMap<Uuid, crate::workspace_repo::RepoEntry>,
 }
@@ -297,6 +300,7 @@ impl RosterTracker {
             }
             SessionEvent::WorkspaceRulesSet { version, presence } if allowed => {
                 self.state.rules = *version;
+                self.state.rules_written = true;
                 if let Some(p) = presence {
                     self.state.presence_policy = p.clone();
                 }
