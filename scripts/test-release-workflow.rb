@@ -333,3 +333,44 @@ class ReleaseJob < Minitest::Test
     assert_match(/\^\[0-9\]\+\$/, run, "the id must be checked to be numeric")
   end
 end
+
+class ReleaseConfig < Minitest::Test
+  SCRIPT = File.expand_path("check-release-config.sh", __dir__)
+  CONF = File.expand_path("../app/tauri.conf.json", __dir__)
+
+  def run_check(tag, conf = CONF)
+    out, _err, status = Open3.capture3(SCRIPT, tag, conf)
+    [status.success?, out]
+  end
+
+  def test_release_job_runs_the_check_before_creating_the_release
+    run = steps(RELEASE, "release").map { |s| s["run"].to_s }.join("\n")
+    assert_operator run.index("check-release-config.sh"), :<, run.index("ensure-release.sh")
+  end
+
+  def test_committed_config_passes_for_its_own_plain_tag
+    version = JSON.parse(File.read(CONF))["version"]
+    ok, out = run_check("v#{version}")
+    assert ok, out
+  end
+
+  def test_placeholder_pubkey_fails
+    Dir.mktmpdir do |dir|
+      conf = JSON.parse(File.read(CONF))
+      conf["plugins"]["updater"]["pubkey"] = "REPLACE_WITH_LIGUS_UPDATER_PUBKEY"
+      path = File.join(dir, "tauri.conf.json")
+      File.write(path, JSON.generate(conf))
+      ok, out = run_check("v#{conf["version"]}", path)
+      refute ok
+      assert_includes out, "placeholder"
+    end
+  end
+
+  def test_tag_must_match_the_app_version
+    ok, out = run_check("v9.9.9")
+    refute ok
+    assert_includes out, "does not match"
+    ok, _out = run_check("ligus-v0.1.0")
+    refute ok
+  end
+end

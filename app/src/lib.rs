@@ -15629,21 +15629,23 @@ mod model_profile_dto_tests {
 mod update_version_tests {
     use super::parse_release_version;
 
-    /// The updater checks the ligus-ai repo's `latest.json` (1.19 clients
-    /// found this release through the same URL), with the signing key unchanged.
+    /// The updater checks the langstroth-ai/ligus repo's `latest.json` and
+    /// verifies against the Ligus updater key (new for 0.1.0; never the
+    /// placeholder, which release CI also refuses).
     #[test]
     fn updater_checks_the_ligus_latest_json() {
         let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-        // The identifier names the data dir the first-launch migration copies into.
+        // The identifier names the desktop data dir.
         assert_eq!(conf["identifier"], hive_core::compat::DESKTOP_APP_ID);
         let updater = &conf["plugins"]["updater"];
         let endpoints: Vec<&str> = updater["endpoints"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
         assert_eq!(
             endpoints,
-            ["https://github.com/ligus-ai/ligus/releases/latest/download/latest.json"]
+            ["https://github.com/langstroth-ai/ligus/releases/latest/download/latest.json"]
         );
-        // Same minisign key across the rename: never rotate it.
-        assert!(updater["pubkey"].as_str().unwrap().starts_with("dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhFQjA3RDUyRjVBRUM3QjQK"));
+        let key = updater["pubkey"].as_str().unwrap();
+        assert!(!key.contains("REPLACE_WITH"), "the updater pubkey is still the placeholder");
+        assert!(key.starts_with("dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDMxNUQ2QTdCMjAyQThENzkK"));
         assert_eq!(super::VERSION_MANIFEST_URLS, ["https://docs.langstroth.ai/version.json", "https://docs.ligus.ai/version.json"]);
     }
 
@@ -15715,11 +15717,11 @@ mod update_version_tests {
     async fn manifest_is_size_capped_and_timed_out() {
         let client = hive_forge::new_http_client();
         let huge: &'static str = Box::leak(format!(r#"{{"tag":"v9.0.0","notes":"{}"}}"#, "x".repeat(super::MAX_MANIFEST_BYTES)).into_boxed_str());
-        let ok = r#"{"tag":"v2.0.0"}"#;
+        let ok = r#"{"tag":"v0.1.0"}"#;
         let base = serve(vec![("/huge.json", 200, huge), ("/ok.json", 200, ok)]);
         let (huge_url, ok_url) = (format!("{base}/huge.json"), format!("{base}/ok.json"));
         assert!(super::fetch_update_manifest(&client, &[&huge_url], super::MANIFEST_TIMEOUT).await.is_none());
-        assert_eq!(super::fetch_update_manifest(&client, &[&huge_url, &ok_url], super::MANIFEST_TIMEOUT).await.unwrap().tag, "v2.0.0");
+        assert_eq!(super::fetch_update_manifest(&client, &[&huge_url, &ok_url], super::MANIFEST_TIMEOUT).await.unwrap().tag, "v0.1.0");
 
         // Headers, then silence.
         let stall = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -15736,7 +15738,7 @@ mod update_version_tests {
         });
         let started = std::time::Instant::now();
         let got = super::fetch_update_manifest(&client, &[&stall_url, &ok_url], std::time::Duration::from_millis(300)).await;
-        assert_eq!(got.unwrap().tag, "v2.0.0");
+        assert_eq!(got.unwrap().tag, "v0.1.0");
         let took = started.elapsed();
         assert!(took >= std::time::Duration::from_millis(300) && took < std::time::Duration::from_secs(5), "{took:?}");
     }
@@ -15746,7 +15748,7 @@ mod update_version_tests {
         let client = hive_forge::new_http_client();
         let base = serve(vec![
             ("/old.json", 200, r#"{"tag":"v1.19.0","url":"old"}"#),
-            ("/new.json", 200, r#"{"tag":"v2.0.0","url":"new"}"#),
+            ("/new.json", 200, r#"{"tag":"v0.1.0","url":"new"}"#),
             ("/garbage.json", 200, "not json"),
         ]);
         let u = |p: &str| format!("{base}{p}");
@@ -15758,7 +15760,7 @@ mod update_version_tests {
         assert_eq!(got.tag, "v1.19.0");
         // Both up: the new one wins.
         let got = super::fetch_update_manifest(&client, &[&new, &old], super::MANIFEST_TIMEOUT).await.unwrap();
-        assert_eq!(got.tag, "v2.0.0");
+        assert_eq!(got.tag, "v0.1.0");
         // Nothing answers: quiet None. (Port 9 on localhost is closed.)
         assert!(super::fetch_update_manifest(&client, &[&missing, "http://127.0.0.1:9/x.json"], super::MANIFEST_TIMEOUT).await.is_none());
     }
@@ -15769,7 +15771,7 @@ mod update_version_tests {
     #[tokio::test]
     async fn manifest_fetch_follows_a_cross_host_redirect() {
         let client = hive_forge::http_client_builder().timeout(super::MANIFEST_TIMEOUT).build().unwrap();
-        let target = serve(vec![("/version.json", 200, r#"{"tag":"v2.0.0"}"#)]);
+        let target = serve(vec![("/version.json", 200, r#"{"tag":"v0.1.0"}"#)]);
         let port = target.rsplit(':').next().unwrap().to_string();
         let location = format!("http://localhost:{port}/version.json");
         let redirector = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -15783,7 +15785,7 @@ mod update_version_tests {
             }
         });
         let got = super::fetch_update_manifest(&client, &[&from], super::MANIFEST_TIMEOUT).await;
-        assert_eq!(got.unwrap().tag, "v2.0.0");
+        assert_eq!(got.unwrap().tag, "v0.1.0");
     }
 
     #[test]

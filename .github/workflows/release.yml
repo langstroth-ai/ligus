@@ -6,7 +6,7 @@ name: Release (desktop app)
 # build pulls the latest assets at deploy time (see that repo's
 # scripts/fetch-downloads.sh).
 #
-# Trigger: push a tag like `v0.1.1`, or run manually (workflow_dispatch).
+# Trigger: push a plain tag like `v0.1.0` (it must match the app version), or run manually (workflow_dispatch).
 #
 # Release ownership: the `release` job (scripts/ensure-release.sh, shared with
 # release-cli.yml) finds or creates the one release for the tag, and
@@ -78,6 +78,9 @@ jobs:
         # fail the step, and an empty releaseId makes tauri-action skip every
         # upload while still reporting success.
         run: |
+          # Refuse a placeholder updater key, a foreign endpoint, or a tag that
+          # isn't v<app version> (plain tags like v0.1.0).
+          scripts/check-release-config.sh "$TAG"
           id=$(scripts/ensure-release.sh "$GITHUB_REPOSITORY" "$TAG")
           [[ "$id" =~ ^[0-9]+$ ]] || { echo "::error::no release id for $TAG"; exit 1; }
           echo "id=$id" >> "$GITHUB_OUTPUT"
@@ -176,10 +179,10 @@ jobs:
           LIGUS_RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
           # APPLE_* (when present) come from the "Configure macOS signing" step
           # via $GITHUB_ENV. tauri-action signs + notarizes + staples on macOS.
-          # Auto-updater signing (scaffolded, #144): inert until these secrets
-          # exist AND bundle.createUpdaterArtifacts is enabled + the conf pubkey
-          # is set. When all three are in place, tauri-action emits the signed
-          # update artifacts + latest.json onto the release.
+          # Auto-updater signing: the Ligus updater key's private half (repo
+          # secrets) must match the pubkey in app/tauri.conf.json, which the
+          # release job checks is not the placeholder. tauri-action emits the
+          # signed update artifacts + latest.json onto the release.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
