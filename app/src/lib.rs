@@ -15667,7 +15667,7 @@ mod update_version_tests {
         use super::release_page_url as r;
         for ok in [
             "https://github.com/langstroth-ai/ligus/releases/latest",
-            "https://github.com/langstroth-ai/ligus/releases/tag/v2.0.0",
+            "https://github.com/langstroth-ai/ligus/releases/tag/v0.1.0",
             "https://github.com/langstroth-ai/ligus/releases",
         ] {
             assert_eq!(r(ok), ok);
