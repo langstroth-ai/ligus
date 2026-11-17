@@ -14,10 +14,19 @@ struct Who {
     id: String,
     account: Uuid,
     kp: SigningKeypair,
+    /// The device this person signs with (certified at setup).
+    device: Uuid,
+    dk: SigningKeypair,
 }
 
 fn who(name: &str) -> Who {
-    Who { id: name.into(), account: Uuid::new_v4(), kp: SigningKeypair::generate().unwrap() }
+    Who {
+        id: name.into(),
+        account: Uuid::new_v4(),
+        kp: SigningKeypair::generate().unwrap(),
+        device: Uuid::new_v4(),
+        dk: SigningKeypair::generate().unwrap(),
+    }
 }
 
 fn actor(w: &Who) -> ActorIdentity {
@@ -26,19 +35,50 @@ fn actor(w: &Who) -> ActorIdentity {
     a
 }
 
+/// A config log written by each person's signing device; people whose test
+/// recovery key is registered stamp its presence (rules v2 from the seed).
 struct Log {
     ws: Uuid,
     lamport: u64,
     envs: Vec<SessionEventEnvelope>,
+    present: std::collections::BTreeSet<Uuid>,
+    signing_devices: Vec<Uuid>,
 }
 
 impl Log {
-    fn push(&mut self, by: &Who, payload: SessionEvent) {
+    fn draft(&mut self, by: &Who, payload: SessionEvent) -> SessionEventEnvelope {
         self.lamport += 1;
         let mut e = SessionEventEnvelope::new(workspace_config_session_id(self.ws), self.ws, self.lamport as i64, payload);
         e.lamport = self.lamport;
-        e.actor_stamp = Some(ActorStamp { actor: actor(by), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false });
+        e.actor_stamp = Some(ActorStamp { actor: actor(by), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+        hive_core::sign_envelope(&mut e, by.device, &by.dk);
+        if self.present.contains(&by.account) {
+            hive_core::testkit::prove_recovery(&mut e, by.account, by.device, &by.dk);
+        }
+        e
+    }
+    fn push(&mut self, by: &Who, mut payload: SessionEvent) {
+        // Switching dearth mode on admits everyone's signing device (the
+        // setup's), as the tests' `admitted` lists did before they existed.
+        if let SessionEvent::DearthModeChanged { dearth } = &mut payload {
+            if dearth.enabled {
+                dearth.admitted_devices.extend(self.signing_devices.iter().copied());
+            }
+        }
+        let e = self.draft(by, payload);
         self.envs.push(e);
+    }
+    /// `w` publishes their account key and signing device, and registers
+    /// their test recovery key.
+    fn identity(&mut self, w: &Who) {
+        self.push(w, SessionEvent::AccountKeyRegistered { account_id: w.account, signing_public_key: w.kp.public_key_bytes().to_vec() });
+        let c = DeviceCertificate::issue(&w.kp, w.account, w.device, &w.dk.public_key_bytes(), Timestamp::epoch());
+        self.push(w, SessionEvent::DeviceCertificateAdded { certificate: c });
+        let mut e = self.draft(w, hive_core::testkit::recovery_registration(w.account));
+        hive_core::testkit::prove_recovery(&mut e, w.account, w.device, &w.dk);
+        self.envs.push(e);
+        self.present.insert(w.account);
+        self.signing_devices.push(w.device);
     }
     fn cert(&mut self, owner: &Who, device: Uuid) -> SigningKeypair {
         let dk = SigningKeypair::generate().unwrap();
@@ -68,13 +108,14 @@ fn setup() -> (Log, Who, Who, Who, Uuid) {
     let mut cfg = ChatSession::new("", ws, "");
     cfg.id = workspace_config_session_id(ws);
     cfg.creator_actor_id = owner.id.clone();
-    for (w, role) in [(&owner, WorkspaceRole::Owner), (&admin2, WorkspaceRole::Admin), (&alice, WorkspaceRole::Contributor)] {
-        cfg.members.push(WorkspaceMember { id: w.id.clone(), actor: actor(w), role, title: String::new(), index: 0, joined_at: Timestamp::epoch() });
-    }
-    let mut log = Log { ws, lamport: 0, envs: Vec::new() };
+    cfg.members.push(WorkspaceMember { id: owner.id.clone(), actor: actor(&owner), role: WorkspaceRole::Owner, title: String::new(), index: 0, joined_at: Timestamp::epoch() });
+    let mut log = Log { ws, lamport: 0, envs: Vec::new(), present: Default::default(), signing_devices: Vec::new() };
     log.push(&owner, SessionEvent::SessionSnapshot { session: Box::new(cfg) });
-    for w in [&owner, &admin2, &alice] {
-        log.push(w, SessionEvent::AccountKeyRegistered { account_id: w.account, signing_public_key: w.kp.public_key_bytes().to_vec() });
+    log.identity(&owner);
+    for (w, role) in [(&admin2, WorkspaceRole::Admin), (&alice, WorkspaceRole::Contributor)] {
+        let m = WorkspaceMember { id: w.id.clone(), actor: actor(w), role, title: String::new(), index: 0, joined_at: Timestamp::epoch() };
+        log.push(&owner, SessionEvent::MemberAdded { member: m, invite: None });
+        log.identity(w);
     }
     let laptop = Uuid::new_v4();
     log.cert(&owner, laptop);
@@ -141,7 +182,7 @@ fn a_pending_device_is_not_accepted_in_relay_mode() {
     // The pending device signs a chat message as the owner's account.
     let mut e = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 99, SessionEvent::SessionTitleChanged { title: "x".into() });
     e.lamport = 99;
-    e.actor_stamp = Some(ActorStamp { actor: actor(&owner), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false });
+    e.actor_stamp = Some(ActorStamp { actor: actor(&owner), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
     hive_core::sign_envelope(&mut e, new_box, &dk);
     let mut envs = log.envs.clone();
     envs.push(e.clone());
@@ -195,8 +236,8 @@ fn a_removed_member_cannot_reenter_the_roster_with_a_fresh_device() {
     let (mut log, owner, _admin2, alice, _laptop) = setup();
     let alice_laptop = Uuid::new_v4();
     log.cert(&alice, alice_laptop);
-    log.push(&owner, SessionEvent::MemberRemoved { member_id: alice.id.clone() });
-    log.push(&owner, SessionEvent::DeviceRevoked { device_id: alice_laptop });
+    log.push(&owner, SessionEvent::MemberRemoved { member_id: alice.id.clone(), watermark: Vec::new() });
+    log.push(&owner, SessionEvent::DeviceRevoked { device_id: alice_laptop, watermark: Vec::new() });
     // Alice comes back on her own.
     let fresh = Uuid::new_v4();
     let fk = log.cert(&alice, fresh);
@@ -211,7 +252,7 @@ fn a_removed_member_cannot_reenter_the_roster_with_a_fresh_device() {
     let roster = build_roster(&log.envs);
     let mut e = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 99, SessionEvent::SessionTitleChanged { title: "x".into() });
     e.lamport = 99;
-    e.actor_stamp = Some(ActorStamp { actor: actor(&alice), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false });
+    e.actor_stamp = Some(ActorStamp { actor: actor(&alice), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
     hive_core::sign_envelope(&mut e, fresh, &fk);
     assert_ne!(verdict_for(&roster, &e), Verdict::Valid, "the removed member's fresh device is trusted again");
 }
@@ -230,9 +271,9 @@ fn an_unauthorized_removal_does_not_revoke_the_victims_devices() {
         let d = Uuid::new_v4();
         (d, log.cert(&owner, d))
     };
-    log.push(&alice, SessionEvent::MemberRemoved { member_id: owner.id.clone() });
+    log.push(&alice, SessionEvent::MemberRemoved { member_id: owner.id.clone(), watermark: Vec::new() });
     // Same thing, unsigned and unstamped, on a chat log.
-    let mut chat_rm = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 70, SessionEvent::MemberRemoved { member_id: owner.id.clone() });
+    let mut chat_rm = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 70, SessionEvent::MemberRemoved { member_id: owner.id.clone(), watermark: Vec::new() });
     chat_rm.lamport = 70;
     log.envs.push(chat_rm);
     let cfg = hive_core::project(&log.envs).unwrap();
@@ -241,7 +282,7 @@ fn an_unauthorized_removal_does_not_revoke_the_victims_devices() {
     assert!(!crate::envelope_verifier::DeviceKeyResolver::is_revoked(&roster, laptop), "the owner's laptop was revoked by an unauthorized removal");
     let mut e = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 99, SessionEvent::SessionTitleChanged { title: "x".into() });
     e.lamport = 99;
-    e.actor_stamp = Some(ActorStamp { actor: actor(&owner), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false });
+    e.actor_stamp = Some(ActorStamp { actor: actor(&owner), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
     hive_core::sign_envelope(&mut e, owner_dk.0, &owner_dk.1);
     assert_eq!(verdict_for(&roster, &e), Verdict::Valid);
 }
@@ -253,15 +294,19 @@ fn an_unauthorized_removal_does_not_revoke_the_victims_devices() {
 fn an_unauthorized_device_revocation_is_ignored() {
     use crate::envelope_verifier::DeviceKeyResolver;
     let (mut log, owner, admin2, alice, laptop) = setup();
-    log.push(&alice, SessionEvent::DeviceRevoked { device_id: laptop });
-    let mut chat_rv = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 70, SessionEvent::DeviceRevoked { device_id: laptop });
+    log.push(&alice, SessionEvent::DeviceRevoked { device_id: laptop, watermark: Vec::new() });
+    let mut chat_rv = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 70, SessionEvent::DeviceRevoked { device_id: laptop, watermark: Vec::new() });
     chat_rv.lamport = 70;
     log.envs.push(chat_rv);
     assert!(!build_roster(&log.envs).is_revoked(laptop), "a Contributor revoked the owner's laptop");
-    // An Admin's revocation still works.
-    log.push(&admin2, SessionEvent::DeviceRevoked { device_id: laptop });
+    // Nor does an Admin's (never above you: an Admin revoking the Owner's
+    // device would cut the Owner off, and its watermark would judge the
+    // Owner's history; review P-A2d).
+    log.push(&admin2, SessionEvent::DeviceRevoked { device_id: laptop, watermark: Vec::new() });
+    assert!(!build_roster(&log.envs).is_revoked(laptop), "an Admin revoked the Owner's laptop");
+    // The Owner's own revocation works.
+    log.push(&owner, SessionEvent::DeviceRevoked { device_id: laptop, watermark: Vec::new() });
     assert!(build_roster(&log.envs).is_revoked(laptop));
-    let _ = owner;
 }
 
 /// Dearth mode under a founder pin (B2 residual): a member who forges a
@@ -272,7 +317,7 @@ fn an_unauthorized_device_revocation_is_ignored() {
 #[test]
 fn a_forged_seed_cannot_switch_dearth_off_under_a_founder_pin() {
     use crate::envelope_verifier::{build_roster_pinned, FounderPin};
-    let owner = Who { id: String::new(), account: Uuid::new_v4(), kp: SigningKeypair::generate().unwrap() };
+    let owner = who("");
     let owner = Who { id: owner.account.to_string(), ..owner };
     let alice = who("alice");
     let ws = Uuid::new_v4();
@@ -285,18 +330,17 @@ fn a_forged_seed_cannot_switch_dearth_off_under_a_founder_pin() {
         }
         SessionEvent::SessionSnapshot { session: Box::new(cfg) }
     };
-    let mut log = Log { ws, lamport: 0, envs: Vec::new() };
+    let mut log = Log { ws, lamport: 0, envs: Vec::new(), present: Default::default(), signing_devices: Vec::new() };
     log.push(&owner, seed(&owner, &[(&owner, WorkspaceRole::Owner), (&alice, WorkspaceRole::Contributor)]));
-    for w in [&owner, &alice] {
-        log.push(w, SessionEvent::AccountKeyRegistered { account_id: w.account, signing_public_key: w.kp.public_key_bytes().to_vec() });
-    }
+    log.identity(&owner);
+    log.push(&alice, SessionEvent::AccountKeyRegistered { account_id: alice.account, signing_public_key: alice.kp.public_key_bytes().to_vec() });
     let laptop = Uuid::new_v4();
     log.cert(&owner, laptop);
     log.push(&owner, dearth(true, vec![laptop]));
     // Alice forges a seed below the founder's, naming herself Owner.
     let mut forged = SessionEventEnvelope::new(workspace_config_session_id(ws), ws, 0, seed(&alice, &[(&alice, WorkspaceRole::Owner)]));
     forged.lamport = 0;
-    forged.actor_stamp = Some(ActorStamp { actor: actor(&alice), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false });
+    forged.actor_stamp = Some(ActorStamp { actor: actor(&alice), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
     log.envs.push(forged);
     let new_box = Uuid::new_v4();
     log.cert(&alice, new_box);

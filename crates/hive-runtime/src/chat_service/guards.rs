@@ -376,7 +376,7 @@ mod tests {
         {
             let mut env = hive_core::SessionEventEnvelope::new(cfg, ws, 100 + i as i64, e);
             env.lamport = 100 + i as u64;
-            env.actor_stamp = Some(hive_core::ActorStamp { actor: actor.clone(), recorded_at: Timestamp::now(), cfg_frontier: None, presence: None, runtime_effect: false });
+            env.actor_stamp = Some(hive_core::ActorStamp { actor: actor.clone(), recorded_at: Timestamp::now(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
             hive_core::sign_envelope(&mut env, eve_dev, &dev_kp);
             svc.store.ingest(&env).unwrap();
         }

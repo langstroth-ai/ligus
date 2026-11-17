@@ -39,6 +39,7 @@ fn founder() -> (ChatService, Uuid) {
     let mut author = ActorIdentity::new(account.to_string(), "Ana", ActorKind::Human);
     author.account_id = Some(account);
     let mut svc = ChatService::new(store, Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
+    svc.disable_test_presence();
     let wid = Uuid::new_v4();
     svc.ensure_workspace_config(wid).unwrap();
     (svc, wid)
@@ -127,35 +128,55 @@ fn second_passkey_needs_existing_presence() {
     assert_eq!(svc.passkeys_of(wid, account(&svc)).unwrap().len(), 2);
 }
 
+/// Phase A: a workspace is on rules v2 from its seed. The genesis
+/// `WorkspaceRulesSet` names the relying party without presence (nobody has a
+/// credential yet); governance needs the founder's passkey from the first
+/// event on; there is no rules v1 to switch to.
 #[test]
-fn rules_v1_needs_no_presence_v2_does() {
+fn a_new_workspace_is_on_rules_v2_from_its_seed() {
     let (mut svc, wid) = founder();
     let cfg = workspace_config_session_id(wid);
-    svc.add_member(cfg, wid, member("bea", WorkspaceRole::Contributor)).unwrap();
-    let before = svc.set_member_role(cfg, wid, "bea", WorkspaceRole::Viewer);
-    assert!(before.is_ok(), "rules v1: no presence needed");
-    // v2 can't be turned on without a passkey and a recovery key.
-    assert!(svc.set_workspace_rules(wid, 2).is_err());
+    let log = config_log(&svc, wid);
+    assert!(
+        log.iter().any(|e| matches!(&e.payload, SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(p) } if p.rp_id == "ligus.ai")),
+        "genesis writes rules v2 with the deployment's relying party"
+    );
+    assert_eq!(svc.load(cfg).unwrap().unwrap().authz.rules, 2);
+    // Without a passkey the founder can't admit anyone.
+    let err = svc.add_member(cfg, wid, member("bea", WorkspaceRole::Contributor)).unwrap_err().to_string();
+    assert!(err.contains(hive_core::authz::PRESENCE_REQUIRED), "{err}");
+    // There is no rules v1.
+    assert!(svc.set_workspace_rules(wid, 1).is_err());
+    // The founder's first passkey registers with the seed's grant.
     let key = Arc::new(SoftAuthenticator::es256());
     register(&mut svc, wid, &key, None).unwrap();
+    assert!(!svc.workspace_secured(wid).unwrap(), "a passkey without a recovery key isn't secured yet");
     let rec = RecoveryKey::generate().unwrap();
     let k = key.clone();
     svc.register_passkey(wid, rec.credential(account(&svc), "Recovery"), &move |req| Ok(k.get(&req.challenge))).unwrap();
-    let err = svc.set_workspace_rules(wid, 2).unwrap_err().to_string();
-    assert!(err.contains(hive_core::authz::PRESENCE_REQUIRED), "the switch itself needs presence: {err}");
-    svc.set_presence_provider(Some(Arc::new(Soft(key.clone()))));
-    let switch = svc.set_workspace_rules(wid, 2).unwrap();
-    svc.set_presence_provider(None);
-    assert!(switch.actor_stamp.as_ref().unwrap().presence.is_some());
-    // Under v2 a role change needs presence.
-    let err = svc.set_member_role(cfg, wid, "bea", WorkspaceRole::Contributor).unwrap_err().to_string();
-    assert!(err.contains(hive_core::authz::PRESENCE_REQUIRED), "{err}");
+    assert!(svc.workspace_secured(wid).unwrap());
     svc.set_presence_provider(Some(Arc::new(Soft(key))));
-    svc.set_member_role(cfg, wid, "bea", WorkspaceRole::Contributor).unwrap();
-    // Prefix-stable: everything before the switch is still allowed.
+    svc.add_member(cfg, wid, member("bea", WorkspaceRole::Contributor)).unwrap();
     let log = config_log(&svc, wid);
     let v = fold_decisions(&log, None, None, WorkspaceAuthz::Unchecked);
     assert!(log.iter().filter(|e| v.contains_key(&e.event_id)).all(|e| v[&e.event_id] == Verdict::Allowed));
+}
+
+/// A forged `WorkspaceRulesSet { version: 1 }` (signed, with the Owner's
+/// presence) still doesn't fold: version 1 doesn't exist.
+#[test]
+fn rules_v1_is_refused_by_the_fold() {
+    let (mut svc, wid, key, _rec) = on_rules_v2();
+    let mut env = svc.draft_signed(workspace_config_session_id(wid), wid, SessionEvent::WorkspaceRulesSet { version: 1, presence: None }).unwrap();
+    let a = key.get(&presence::challenge(&env));
+    env.actor_stamp.as_mut().unwrap().presence = Some(a);
+    env.clear_raw();
+    svc.sign_for_test(&mut env);
+    let mut log = config_log(&svc, wid);
+    log.push(env.clone());
+    assert_eq!(fold_decisions(&log, None, None, WorkspaceAuthz::Unchecked)[&env.event_id], Verdict::Denied);
+    let (cfg, _) = hive_core::project_config(&log, None, None);
+    assert_eq!(cfg.unwrap().authz.rules, 2);
 }
 
 #[test]
@@ -290,19 +311,20 @@ fn requires_presence_exhaustive() {
     let roster = RosterState::default();
     let fold = hive_core::ChatSession::new("c", Uuid::nil(), "x");
     let yes = [
-        SessionEvent::MemberRemoved { member_id: "x".into() },
+        SessionEvent::MemberRemoved { member_id: "x".into(), watermark: Vec::new() },
         SessionEvent::MemberRoleChanged {
-            change: MemberRoleChange { member_id: "x".into(), old_role: WorkspaceRole::Viewer, new_role: WorkspaceRole::Admin },
+            change: MemberRoleChange { member_id: "x".into(), old_role: WorkspaceRole::Viewer, new_role: WorkspaceRole::Admin }, watermark: Vec::new(),
         },
         SessionEvent::JoinApproved { subject: "x".into() },
-        SessionEvent::DeviceRevoked { device_id: Uuid::nil() },
+        SessionEvent::DeviceRevoked { device_id: Uuid::nil(), watermark: Vec::new() },
         SessionEvent::PasskeyRemoved { account_id: Uuid::nil(), credential_id: "c".into() },
         SessionEvent::ChatLockdownCleared { chat_id: Uuid::nil() },
         SessionEvent::WorkflowDefinitionsUpdated { definitions: vec![] },
         SessionEvent::AgentRemoved { agent_id: Uuid::nil() },
         SessionEvent::WorkspaceRuntimeRemoved { runtime_id: "r".into() },
-        SessionEvent::WorkspaceRulesSet { version: 2 },
+        SessionEvent::WorkspaceRulesSet { version: 2, presence: None },
         SessionEvent::MemberAdded { member: member("someone-else", WorkspaceRole::Viewer), invite: None },
+        SessionEvent::WorkspaceRepoRemoved { repo_id: Uuid::nil() },
     ];
     for e in &yes {
         assert!(requires_presence(e, "me", &roster, &fold), "{} needs presence", e.kind_str());
@@ -312,6 +334,9 @@ fn requires_presence_exhaustive() {
         SessionEvent::MessageRemoved { message_id: Uuid::nil() },
         SessionEvent::TurnClaimed { trigger_id: Uuid::nil(), device_id: Uuid::nil() },
         SessionEvent::DeviceKeyAgreementPublished { device_id: Uuid::nil(), ka_public: vec![] },
+        SessionEvent::WorkspaceRepoUpdated { repo_id: Uuid::nil(), display_name: "x".into(), default_branch: String::new() },
+        SessionEvent::ChatRepoSet { repo_id: None, base_branch: String::new() },
+        SessionEvent::ChatBasePinned { repo_id: Uuid::nil(), commit: String::new() },
         SessionEvent::ProposalUpserted { proposal: ActionProposal::new("p", hive_core::ProposalKind::Decision, "a") },
         SessionEvent::Unknown,
     ];
@@ -363,10 +388,12 @@ fn phone_presence_vote_counts_as_credential_owner_not_serve() {
         SigningKeypair::from_seed(&account_seed).unwrap(),
         author.clone(),
     );
+    desk.disable_test_presence();
     let wid = Uuid::new_v4();
     desk.ensure_workspace_config(wid).unwrap();
-    let key = SoftAuthenticator::es256();
+    let key = Arc::new(SoftAuthenticator::es256());
     register(&mut desk, wid, &key, None).unwrap();
+    desk.set_presence_provider(Some(Arc::new(Soft(key.clone()))));
     let chat = desk.create_chat("c", wid, "anthropic").unwrap().id;
     let p = ActionProposal::new("Ship", hive_core::ProposalKind::Decision, "agent");
     let pid = p.id;
@@ -383,6 +410,7 @@ fn phone_presence_vote_counts_as_credential_owner_not_serve() {
         SigningKeypair::generate().unwrap(),
         author,
     );
+    serve.disable_test_presence();
     serve.act_as_owner_device(desk.author().clone());
 
     // Without presence: refused (the fold would not count it either).
@@ -486,10 +514,12 @@ fn an_admin_cannot_remove_an_owners_passkey() {
     let mut ana_author = ActorIdentity::new(ana_account.to_string(), "Ana", ActorKind::Human);
     ana_author.account_id = Some(ana_account);
     let mut ana = ChatService::new(EventStore::open(&db).unwrap(), Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), ana_author);
+    ana.disable_test_presence();
     let wid = Uuid::new_v4();
     ana.ensure_workspace_config(wid).unwrap();
-    let key = SoftAuthenticator::es256();
+    let key = Arc::new(SoftAuthenticator::es256());
     register(&mut ana, wid, &key, None).unwrap();
+    ana.set_presence_provider(Some(Arc::new(Soft(key.clone()))));
     let cfg = workspace_config_session_id(wid);
     let bea_account = Uuid::new_v4();
     let mut bea_author = ActorIdentity::new(bea_account.to_string(), "Bea", ActorKind::Human);
@@ -501,6 +531,7 @@ fn an_admin_cannot_remove_an_owners_passkey() {
     let bea_dev_id = Uuid::new_v4();
     let bea_acct_key = SigningKeypair::generate().unwrap();
     let mut bea = ChatService::new(EventStore::open(&db).unwrap(), bea_dev_id, bea_dev, bea_acct_key, bea_author);
+    bea.disable_test_presence();
     bea.ensure_workspace_config(wid).unwrap();
     let id = key.credential(ana_account, "").credential_id;
     let r = bea.remove_passkey(wid, ana_account, &id);
@@ -526,29 +557,17 @@ fn digest_short_id_is_64_bits_of_the_challenge() {
 /// doesn't know) is itself presence-gated: a device key alone can't switch
 /// presence off.
 #[test]
-fn downgrading_from_v2_needs_presence() {
+fn rules_below_v2_are_refused_and_a_raise_needs_presence() {
     let (mut svc, wid, key, _rec) = on_rules_v2();
-    for v in [1, 0, hive_core::authz::RULES_SUPPORTED + 1] {
+    for v in [1, 0] {
         let err = svc.set_workspace_rules(wid, v).unwrap_err().to_string();
-        assert!(err.contains(hive_core::authz::PRESENCE_REQUIRED), "v{v}: {err}");
+        assert!(err.contains("doesn't exist"), "v{v}: {err}");
     }
-    // A forged switch back to v1 without presence is denied by the fold.
-    let cfg = workspace_config_session_id(wid);
-    let mut forged = config_log(&svc, wid).into_iter().rev().find(|e| matches!(e.payload, SessionEvent::WorkspaceRulesSet { .. })).unwrap();
-    forged.clear_raw();
-    forged.event_id = Uuid::new_v4();
-    forged.lamport += 100;
-    forged.payload = SessionEvent::WorkspaceRulesSet { version: 1 };
-    forged.actor_stamp.as_mut().unwrap().presence = None;
-    forged.signature = None;
-    svc.sign_for_test(&mut forged);
-    let mut log = config_log(&svc, wid);
-    log.push(forged.clone());
-    assert_eq!(fold_decisions(&log, None, None, WorkspaceAuthz::Unchecked)[&forged.event_id], Verdict::Denied);
-    // With the passkey it goes through.
+    let err = svc.set_workspace_rules(wid, hive_core::authz::RULES_SUPPORTED + 1).unwrap_err().to_string();
+    assert!(err.contains(hive_core::authz::PRESENCE_REQUIRED), "{err}");
     svc.set_presence_provider(Some(Arc::new(Soft(key))));
-    svc.set_workspace_rules(wid, 1).unwrap();
-    let _ = cfg;
+    svc.set_workspace_rules(wid, hive_core::authz::RULES_SUPPORTED + 1).unwrap();
+    assert!(svc.load(workspace_config_session_id(wid)).unwrap().unwrap().authz.read_only());
 }
 
 /// Ana (founder, actor id = account id) on rules v2 with a passkey and a
@@ -561,6 +580,7 @@ fn on_rules_v2_with_account_key() -> (ChatService, Uuid, Arc<SoftAuthenticator>,
     let mut author = ActorIdentity::new(account.to_string(), "Ana", ActorKind::Human);
     author.account_id = Some(account);
     let mut svc = ChatService::new(store, Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::from_seed(&seed).unwrap(), author);
+    svc.disable_test_presence();
     let wid = Uuid::new_v4();
     svc.ensure_workspace_config(wid).unwrap();
     let key = Arc::new(SoftAuthenticator::es256());
@@ -682,6 +702,7 @@ fn second_person(dir: &std::path::Path, add: bool) -> (ChatService, ChatService,
     let mut ana_author = ActorIdentity::new(ana_account.to_string(), "Ana", ActorKind::Human);
     ana_author.account_id = Some(ana_account);
     let mut ana = ChatService::new(EventStore::open(&db).unwrap(), Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), ana_author);
+    ana.disable_test_presence();
     let wid = Uuid::new_v4();
     ana.ensure_workspace_config(wid).unwrap();
     let key = Arc::new(SoftAuthenticator::es256());
@@ -695,18 +716,17 @@ fn second_person(dir: &std::path::Path, add: bool) -> (ChatService, ChatService,
     bea_author.account_id = Some(bea_account);
     let mut m = member(&bea_account.to_string(), WorkspaceRole::Contributor);
     m.actor = bea_author.clone();
-    if !add {
-        // Bea joins under rules v1, before the switch.
-        ana.add_member(cfg, wid, m.clone()).unwrap();
-    }
+    // (`add == false`: Bea published her identity but was never let in.)
     ana.set_presence_provider(Some(Arc::new(Soft(key.clone()))));
-    ana.set_workspace_rules(wid, 2).unwrap();
     if add {
         ana.add_member(cfg, wid, m).unwrap();
     }
     ana.set_presence_provider(None);
     let mut bea = ChatService::new(EventStore::open(&db).unwrap(), Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), bea_author);
-    bea.publish_identity(cfg, wid).unwrap();
+    bea.disable_test_presence();
+    if add {
+        bea.publish_identity(cfg, wid).unwrap();
+    }
     (ana, bea, wid, key, bea_account)
 }
 
@@ -728,7 +748,7 @@ fn first_passkey_after_all_credentials_removed_needs_a_regrant() {
     // Bea's device alone (a thief) can't register a new first passkey.
     let thief = SoftAuthenticator::es256();
     let err = register(&mut bea, wid, &thief, None).unwrap_err().to_string();
-    assert!(err.contains("re-grant"), "{err}");
+    assert!(err.contains("grants it"), "{err}");
     // A refused registration crafted by hand doesn't fold either.
     // Ana re-grants (her presence), then a new first passkey registers once.
     ana.regrant_passkey(wid, &bea_account.to_string()).unwrap();
@@ -769,26 +789,17 @@ fn recovery_key_re_registers_after_passkeys_are_removed() {
 /// credential (a member from before the switch) registers its first passkey
 /// only after an Admin's re-grant; under rules v1 it stays trust on first use.
 #[test]
-fn first_passkey_under_v2_needs_a_grant() {
+fn an_outsider_cannot_register_a_passkey_without_a_grant() {
     let dir = tempfile::tempdir().unwrap();
     let (mut ana, mut bea, wid, ana_key, bea_account) = second_person(dir.path(), false);
     let k = SoftAuthenticator::es256();
-    let err = register(&mut bea, wid, &k, None).unwrap_err().to_string();
-    assert!(err.contains("re-grant"), "{err}");
-    // A hand-made registration is refused by the fold too.
-    let mut log = config_log(&bea, wid);
-    let mut env = log.iter().rev().find(|e| matches!(e.payload, SessionEvent::DeviceCertificateAdded { .. })).unwrap().clone();
-    env.clear_raw();
-    env.event_id = Uuid::new_v4();
-    env.lamport += 1000;
-    env.payload = SessionEvent::PasskeyRegistered { credential: k.credential(bea_account, "k") };
-    env.actor_stamp.as_mut().unwrap().presence = Some(k.get(&presence::challenge(&env)));
-    env.signature = None;
-    bea.sign_for_test(&mut env);
-    log.push(env.clone());
-    assert_eq!(fold_decisions(&log, None, None, WorkspaceAuthz::Unchecked)[&env.event_id], Verdict::Denied);
+    assert!(register(&mut bea, wid, &k, None).is_err(), "an outsider registered a passkey");
+    // Letting her in (Ana's presence) is her grant.
     ana.set_presence_provider(Some(Arc::new(Soft(ana_key))));
-    ana.regrant_passkey(wid, &bea_account.to_string()).unwrap();
+    let mut m = member(&bea_account.to_string(), WorkspaceRole::Contributor);
+    m.actor = bea.author().clone();
+    ana.add_member(workspace_config_session_id(wid), wid, m).unwrap();
+    bea.publish_identity(workspace_config_session_id(wid), wid).unwrap();
     register(&mut bea, wid, &k, None).unwrap();
 }
 
@@ -818,7 +829,7 @@ fn switching_to_any_later_rules_version_needs_presence() {
     forged.event_id = Uuid::new_v4();
     forged.lamport += 100;
     forged.sequence += 100;
-    forged.payload = SessionEvent::WorkspaceRulesSet { version: unknown };
+    forged.payload = SessionEvent::WorkspaceRulesSet { version: unknown, presence: None };
     forged.actor_stamp.as_mut().unwrap().presence = None;
     forged.signature = None;
     svc.sign_for_test(&mut forged);
@@ -857,6 +868,7 @@ fn a_new_device_is_confirmed_explicitly_never_from_a_background_publication() {
     let mut author = ActorIdentity::new(account.to_string(), "Ana", ActorKind::Human);
     author.account_id = Some(account);
     let mut desk = ChatService::new(EventStore::open(&db).unwrap(), Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::from_seed(&account_seed).unwrap(), author.clone());
+    desk.disable_test_presence();
     let wid = Uuid::new_v4();
     desk.ensure_workspace_config(wid).unwrap();
     let key = Arc::new(SoftAuthenticator::es256());
@@ -869,6 +881,7 @@ fn a_new_device_is_confirmed_explicitly_never_from_a_background_publication() {
 
     // Ana's second laptop: same account key, its own device key.
     let mut laptop = ChatService::new(EventStore::open(&db).unwrap(), Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::from_seed(&account_seed).unwrap(), author);
+    laptop.disable_test_presence();
     laptop.set_presence_provider(Some(Arc::new(NeverAsk)));
     let cfg = workspace_config_session_id(wid);
     assert!(!laptop.publish_identity(cfg, wid).unwrap(), "published a device that needs a passkey");

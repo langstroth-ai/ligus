@@ -25,7 +25,9 @@
 //!   derived from counted votes; `Applied` comes only from `ProposalApplied`.
 //! * **Rules** are versioned on the config log (`WorkspaceRulesSet`); a version
 //!   this build doesn't know makes the workspace read-only on this device.
-//!   Any switch to version 2 or later needs its author's presence.
+//!   Every workspace starts at version 2; a `WorkspaceRulesSet` needs its
+//!   author's presence once the workspace holds any credential (the genesis
+//!   one, written before the founder's first passkey, can't).
 //! * **Bounds** (S5 lockdowns, S6 flow state) and the run-write rule (S4) are
 //!   fold rules too.
 //!
@@ -38,13 +40,14 @@ pub mod timeline;
 pub mod votes;
 pub mod passkeys;
 pub mod links;
+pub mod phone;
 pub mod rules;
 
 use std::collections::BTreeMap;
 
 use uuid::Uuid;
 
-pub use timeline::{AgentKeyState, AgentState, ConfigTimeline, DeviceState, MemberState, RosterState, RosterTracker};
+pub use timeline::{AgentKeyState, AgentState, ConfigTimeline, Cut, CutKind, DeviceState, MemberState, RosterState, RosterTracker};
 
 use crate::agent::WorkspaceAgent;
 use crate::authorization::{evaluate, requires_projection_authz};
@@ -52,13 +55,18 @@ use crate::events::{SessionEvent, SessionEventEnvelope};
 use crate::identity::{ActorKind, CfgFrontier, WorkspaceRole};
 use crate::session::ChatSession;
 
-/// The workspace rules version: 1 = the 2.0 base rules; 2 = human presence
-/// (passkeys, Track B) and the Agent tier for host-signed agent output.
+/// The workspace rules version. 2.0 starts every workspace at version 2
+/// (human presence for governance, the Agent tier for host-signed agent
+/// output); there is no version 1 (Phase A: 2.0 starts fresh, so the rules
+/// without presence were deleted rather than kept behind a switch).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RulesVersion(pub u32);
 
 /// The highest rules version this build enforces.
 pub const RULES_SUPPORTED: u32 = 2;
+/// The rules every workspace starts at (the seed's roster), and the lowest
+/// version a `WorkspaceRulesSet` may name.
+pub const RULES_GENESIS: u32 = 2;
 
 /// The refusal of an event that needs its author's passkey presence (B3).
 /// Authoring paths match on it to ask for a passkey confirmation.
@@ -175,7 +183,14 @@ impl AuthzState {
 /// Chat events judged against the workspace roster at their position.
 pub fn needs_workspace_authz(event: &SessionEvent) -> bool {
     crate::authorization::requires_hoisted_authz(event)
-        || matches!(event, SessionEvent::ProposalVoteCast { .. } | SessionEvent::ProposalApplied { .. })
+        || matches!(
+            event,
+            SessionEvent::ProposalVoteCast { .. }
+                | SessionEvent::ProposalApplied { .. }
+                | SessionEvent::ProposalApplyRequested { .. }
+                | SessionEvent::ChatRepoSet { .. }
+                | SessionEvent::ChatBasePinned { .. }
+        )
 }
 
 /// The proposal and set an event concerns (for holds and side-effect blocks).
@@ -184,6 +199,7 @@ pub fn subject_of(event: &SessionEvent) -> (Option<Uuid>, Option<Uuid>) {
         SessionEvent::ProposalVoteCast { proposal_id, .. }
         | SessionEvent::ProposalApplied { proposal_id, .. }
         | SessionEvent::ProposalReverted { proposal_id, .. } => (Some(*proposal_id), None),
+        SessionEvent::ProposalApplyRequested { request } => (Some(request.proposal_id), None),
         SessionEvent::ProposalSetOpened { set } => (None, Some(set.id)),
         SessionEvent::ProposalSetAlternativeAdded { set_id, proposal_id, .. }
         | SessionEvent::ProposalSetQuorumReached { set_id, proposal_id, .. }
@@ -295,12 +311,38 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         if env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == ActorKind::Agent) {
             return authorize_agent(env, ctx, roster);
         }
+        // A phone's own key: the phone tier (Phase A, item 6).
+        if let Some(device) = env.signer_device_id.filter(|d| roster.devices.get(d).is_some_and(|x| x.phone)) {
+            if let Err(why) = phone::phone_tier_allows(&env.payload, device) {
+                return Decision::deny(why);
+            }
+        }
     }
-    // Rules v2 (A3 transition): a host-signed chat event that speaks for an
-    // agent (its reply, its streaming, a proposal it produced) is judged with
-    // the Agent tier, whether or not the host could certify a key for that
-    // agent. Folds use the highest rules this build knows.
-    if ctx.checked && !on_config && ctx.workspace.is_some_and(|at| at.rules.min(RULES_SUPPORTED) >= 2) {
+    // A service member (Phase A, item 6) is capped at Contributor, never
+    // decides a proposal set, and never has presence.
+    if let Some(why) = service_member_refusal(env, author, roster_here, on_config, fold) {
+        return Decision::deny(why);
+    }
+    // A phone is enrolled on the config log by a trusted device of its own
+    // account (certified, not revoked, not delegated, not a phone), with that
+    // account's passkey presence (the presence table).
+    if let SessionEvent::DeviceCertificateAdded { certificate } = &env.payload {
+        if certificate.alg == crate::crypto::SigAlg::P256 && !ctx.running.account_certified(certificate.account_id, certificate.device_id) {
+            if !on_config {
+                return Decision::deny("a phone is enrolled on the workspace config log");
+            }
+            let enroller_ok = certified_signer(env, ctx.running).is_ok_and(|d| {
+                d.accounts.contains(&certificate.account_id) && !d.delegated_for(certificate.account_id) && !d.phone
+            });
+            if !enroller_ok || env.signer_device_id == Some(certificate.device_id) {
+                return Decision::deny("a phone is enrolled by a trusted device of its own account");
+            }
+        }
+    }
+    // A host-signed chat event that speaks for an agent (its reply, its
+    // streaming, a proposal it produced) is judged with the Agent tier,
+    // whether or not the host could certify a key for that agent.
+    if ctx.checked && !on_config && ctx.workspace.is_some() {
         let speaks_for = agent::agent_authored(&env.payload).or_else(|| match &env.payload {
             SessionEvent::MessageChunkReceived { message_id, .. } | SessionEvent::MessageCompleted { message_id, .. } => fold
                 .messages
@@ -315,11 +357,9 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             }
         }
     }
-    // Rules v2: an effect of the chat's primary runtime (host-signed, no
-    // agent identity) is judged at the Agent tier too.
-    if env.actor_stamp.as_ref().is_some_and(|s| s.runtime_effect)
-        && roster_here.is_some_and(|r| r.rules.min(RULES_SUPPORTED) >= 2)
-    {
+    // An effect of the chat's primary runtime (host-signed, no agent
+    // identity) is judged at the Agent tier too.
+    if env.actor_stamp.as_ref().is_some_and(|s| s.runtime_effect) && roster_here.is_some() {
         if let Err(why) = agent::runtime_tier_allows(&env.payload) {
             return Decision::deny(why);
         }
@@ -338,11 +378,39 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         }
     }
 
-    // B3: human presence. A stamped assertion must verify; under rules v2
-    // (and for any switch to v2 or later, a version this build doesn't know
-    // included) the events of the presence table need one. Passkey
-    // registrations prove themselves below.
+    // The workspace rules: the relying party is well formed and on the
+    // config log; only the Owner changes it (with presence verified under
+    // the policy in force before the change) or the version.
+    if let SessionEvent::WorkspaceRulesSet { version, presence } = &env.payload {
+        if !on_config {
+            return Decision::deny("the workspace rules are set on the workspace config log");
+        }
+        if let Some(p) = presence {
+            if let Err(e) = p.well_formed() {
+                return Decision::deny(format!("presence policy: {}", e.0));
+            }
+        }
+        if *version != ctx.running.rules && fold.role_of(author) != WorkspaceRole::Owner {
+            return Decision::deny("only the Owner changes the rules version");
+        }
+        // The relying party decides which page every member's desktop opens
+        // for each passkey ceremony and what a re-registration under it binds:
+        // the Owner's call, like the version.
+        if presence.as_ref().is_some_and(|p| *p != ctx.running.presence_policy) && fold.role_of(author) != WorkspaceRole::Owner {
+            return Decision::deny("only the Owner changes the relying party");
+        }
+    }
+
+    // B3: human presence. A stamped assertion must verify, and the events of
+    // the presence table need one. Passkey registrations prove themselves
+    // below. Rules: every workspace is on version 2 from its seed; a version
+    // below that doesn't exist.
     let mut present: Option<Uuid> = None;
+    if let SessionEvent::WorkspaceRulesSet { version, .. } = &env.payload {
+        if *version < RULES_GENESIS {
+            return Decision::deny("rules version 1 doesn't exist: every workspace is on version 2 or later");
+        }
+    }
     if let Some(roster) = roster_here {
         if !matches!(env.payload, SessionEvent::PasskeyRegistered { .. }) {
             match passkeys::verify_stamped(env, roster) {
@@ -350,8 +418,16 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 Err(why) => return Decision::deny(why),
             }
         }
-        let switch_up = matches!(env.payload, SessionEvent::WorkspaceRulesSet { version } if version >= 2);
-        if (roster.rules.min(RULES_SUPPORTED) >= 2 || switch_up) && rules::requires_presence(&env.payload, author, roster, fold) {
+        // The genesis rules set (version 2 and the relying party, before
+        // anyone holds a credential) can't carry presence; any other one
+        // needs it.
+        // Once: the first rules set on the log, never a second one written
+        // while the workspace still holds no credential.
+        let genesis_rules = matches!(env.payload, SessionEvent::WorkspaceRulesSet { version, .. } if version == RULES_GENESIS)
+            && on_config
+            && !roster.rules_written
+            && roster.passkeys.values().all(|m| m.is_empty());
+        if !genesis_rules && rules::requires_presence(&env.payload, author, roster, fold) {
             // A device is added with its own account's presence, whoever
             // publishes the certificate.
             let whose = match &env.payload {
@@ -417,11 +493,20 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             }
         }
         // R5: revoking a device your own account certified is self-service.
-        if let SessionEvent::DeviceRevoked { device_id } = &env.payload {
+        if let SessionEvent::DeviceRevoked { device_id, .. } = &env.payload {
             let account = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id);
             if account.is_some_and(|a| ctx.running.account_certified(a, *device_id)) {
                 return Decision::Allow;
             }
+        }
+        // Never above you: no one grants a role above their own, or removes,
+        // demotes or revokes a device of a member ranked above them. A cut
+        // (Phase A, item 2) also judges its subject's history, so an Admin
+        // revoking the founder's device with an empty watermark would
+        // otherwise erase the workspace's genesis.
+        let ranks = if on_config { ctx.running } else { ctx.workspace.unwrap_or(ctx.running) };
+        if let Some(why) = rank_rules(&env.payload, author, role, ranks) {
+            return Decision::deny(why);
         }
         // A3: a host certifies a key for an agent bound to it (or, unbound,
         // owned by an account that certified the host), signing with its own
@@ -430,6 +515,10 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             if let Err(why) = agent_cert_ok(env, cert, ctx.running) {
                 return Decision::deny(why);
             }
+        }
+        // Workspace repos (repos-and-checkouts 3.1, review F5/F17).
+        if let Err(why) = repo_event_ok(&env.payload, on_config, ctx.running) {
+            return Decision::deny(why);
         }
         // S2: binding an agent to a host or runtime is an Admin action.
         let ws_agents = if ctx.checked && !on_config { ctx.workspace } else { None };
@@ -488,11 +577,48 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                     }
                 }
             }
-            SessionEvent::ProposalApplied { proposal_id, diff_digest, .. } => {
-                let human = env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == ActorKind::Human)
-                    && at.members.get(author).is_some_and(|m| m.kind == ActorKind::Human);
-                if !human {
-                    return Decision::deny("only a human member applies a proposal");
+            SessionEvent::ProposalApplied {
+                proposal_id, diff_digest, repo_id, applied_on, base_commit, applied_tree_hash, request_id, ..
+            } => {
+                if env.actor_stamp.as_ref().is_some_and(|s| s.runtime_effect) {
+                    return Decision::deny("a runtime never applies a proposal");
+                }
+                let signer = env.signer_device_id;
+                if applied_on.is_some() && *applied_on != signer {
+                    return Decision::deny("an apply names the device that applied it, which signs it");
+                }
+                if [base_commit, applied_tree_hash].into_iter().flatten().any(|c| !crate::workspace_repo::is_commit_id(c)) {
+                    return Decision::deny("malformed commit or tree id");
+                }
+                match request_id {
+                    // Fulfilling a person's request: only the host they named,
+                    // for the digest and base they saw.
+                    Some(rid) => {
+                        let Some(req) = fold.apply_requests.get(rid) else {
+                            return Decision::deny("no such apply request");
+                        };
+                        if req.proposal_id != *proposal_id || req.diff_digest != *diff_digest {
+                            return Decision::deny("the apply doesn't match its request");
+                        }
+                        if signer != Some(req.host_device_id) || applied_on.is_none() {
+                            return Decision::deny("only the host a request names fulfils it");
+                        }
+                        if req.expected_base_commit.is_some() && *base_commit != req.expected_base_commit {
+                            return Decision::deny("applied onto another base than the person saw");
+                        }
+                    }
+                    // Applying yourself: a human member, through their own
+                    // device (not a host acting for them).
+                    None => {
+                        let human = env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == ActorKind::Human)
+                            && at.members.get(author).is_some_and(|m| m.kind == ActorKind::Human);
+                        if !human {
+                            return Decision::deny("only a human member applies a proposal");
+                        }
+                        if !own_device(env, at) {
+                            return Decision::deny("a person applies through their own device");
+                        }
+                    }
                 }
                 let Some(p) = fold.proposals.iter().find(|p| p.id == *proposal_id) else {
                     return Decision::deny("unknown proposal");
@@ -500,11 +626,64 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 if votes::diff_digest(p) != *diff_digest {
                     return Decision::deny("applied content differs from the approved content");
                 }
+                if p.repo_id.is_some() && *repo_id != p.repo_id {
+                    return Decision::deny("applied to another repository than the proposal's");
+                }
                 if !p.ready_to_apply() {
                     return Decision::deny("the proposal is not approved");
                 }
                 if let Some(why) = crate::guard::human_gate_reason(fold, p) {
                     return Decision::deny(why);
+                }
+            }
+            SessionEvent::ProposalApplyRequested { request } => {
+                if env.actor_stamp.as_ref().is_some_and(|s| s.runtime_effect) {
+                    return Decision::deny("a runtime never asks for an apply");
+                }
+                let human = env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == ActorKind::Human)
+                    && at.members.get(author).is_some_and(|m| m.kind == ActorKind::Human);
+                if !human || !own_device(env, at) {
+                    return Decision::deny("a person asks for an apply through their own device");
+                }
+                if fold.apply_requests.contains_key(&request.id) {
+                    return Decision::deny("that apply request already exists");
+                }
+                let Some(p) = fold.proposals.iter().find(|p| p.id == request.proposal_id) else {
+                    return Decision::deny("unknown proposal");
+                };
+                if votes::diff_digest(p) != request.diff_digest {
+                    return Decision::deny("the request names other content than the approved content");
+                }
+                if !p.ready_to_apply() {
+                    return Decision::deny("the proposal is not approved");
+                }
+                if request.repo_id != p.repo_id {
+                    return Decision::deny("the request names another repository than the proposal's");
+                }
+                if request.expected_base_commit.as_deref().is_some_and(|c| !crate::workspace_repo::is_commit_id(c)) {
+                    return Decision::deny("malformed base commit");
+                }
+                if !at.device_trusted(request.host_device_id) {
+                    return Decision::deny("the host isn't a trusted device here");
+                }
+                if let Some(why) = crate::guard::human_gate_reason(fold, p) {
+                    return Decision::deny(why);
+                }
+            }
+            SessionEvent::ChatRepoSet { repo_id, base_branch } => {
+                if repo_id.is_some_and(|r| !at.repo_live(r)) {
+                    return Decision::deny("not a live workspace repository at this position");
+                }
+                if base_branch.len() > 255 || base_branch.chars().any(char::is_control) {
+                    return Decision::deny("bad base branch");
+                }
+            }
+            SessionEvent::ChatBasePinned { repo_id, commit } => {
+                if !crate::workspace_repo::is_commit_id(commit) {
+                    return Decision::deny("malformed commit id");
+                }
+                if fold.repo.as_ref().and_then(|r| r.repo_id) != Some(*repo_id) || !at.repo_live(*repo_id) {
+                    return Decision::deny("pins a base for a repository this chat doesn't use");
                 }
             }
             _ => {}
@@ -665,9 +844,173 @@ fn caps_by_workspace_role(e: &SessionEvent) -> bool {
     !matches!(e, SessionEvent::SessionArchivedChanged { .. })
 }
 
+/// The service-member rules (Phase A, item 6): a `Service` member holds at
+/// most Contributor, can't decide a proposal set (a person's call), never
+/// registers a passkey and never carries presence. Its votes count by its
+/// role but never as a human's (`guard::has_human_approval` counts humans
+/// only), and it applies a proposal only to fulfil a person's request.
+fn service_member_refusal(
+    env: &SessionEventEnvelope,
+    author: &str,
+    roster: Option<&RosterState>,
+    on_config: bool,
+    fold: &ChatSession,
+) -> Option<String> {
+    let cap = WorkspaceRole::Contributor;
+    let service_kind = |id: &str| -> bool {
+        roster.and_then(|r| r.members.get(id)).map(|m| m.kind == ActorKind::Service).unwrap_or(false)
+            || (on_config && fold.members.iter().any(|m| m.id == id && m.actor.kind == ActorKind::Service))
+    };
+    match &env.payload {
+        SessionEvent::MemberAdded { member, .. } if member.actor.kind == ActorKind::Service && member.role.rank() > cap.rank() => {
+            return Some("a service member holds at most Contributor".into());
+        }
+        SessionEvent::MemberRoleChanged { change, .. } if service_kind(&change.member_id) && change.new_role.rank() > cap.rank() => {
+            return Some("a service member holds at most Contributor".into());
+        }
+        _ => {}
+    }
+    if !service_kind(author) {
+        return None;
+    }
+    // Every human check that reads the stamp's kind (answering an agent's
+    // question, identity links, applying) would otherwise take the service's
+    // own word for it: a service member's stamp says Service.
+    if env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind != ActorKind::Service) {
+        return Some("a service member signs as a service".into());
+    }
+    if env.actor_stamp.as_ref().is_some_and(|s| s.presence.is_some()) {
+        return Some("a service member carries no presence".into());
+    }
+    match &env.payload {
+        SessionEvent::PasskeyRegistered { .. } => Some("a service member holds no passkey".into()),
+        SessionEvent::ProposalSetDecided { .. } => Some("a person decides a proposal set, not a service".into()),
+        _ => None,
+    }
+}
+
+/// The rank rules on membership and device governance (review P-A2b, P-A2d):
+///
+/// * no one grants a role above their own, or changes the role of a member
+///   above them;
+/// * a cut (a removal, a demotion, a revocation of another member's device)
+///   goes strictly **down** the ranks: an Admin cuts only roles below Admin,
+///   an Owner cuts an Admin, and with several Owners only the founder (the
+///   config seed's creator) cuts an Owner; nobody cuts the founder. Leaving
+///   yourself, demoting yourself and revoking your own device stay open.
+///
+/// Because the subject of a cut can never cut its author, a removed member
+/// can't undo their removal with a backdated counter-cut.
+fn rank_rules(e: &SessionEvent, author: &str, role: WorkspaceRole, roster: &RosterState) -> Option<String> {
+    let role_of = |id: &str| roster.members.get(id).map(|m| m.role);
+    let targets: Vec<String> = match e {
+        // (Self-enrollment is judged by its invite: `self_enroll_allowance`.)
+        SessionEvent::MemberAdded { member, .. } if member.id != author && member.role.rank() > role.rank() => {
+            return Some("no one grants a role above their own".into());
+        }
+        SessionEvent::MemberRoleChanged { change, .. } => {
+            if change.new_role.rank() > role.rank() {
+                return Some("no one grants a role above their own".into());
+            }
+            let current = role_of(&change.member_id);
+            if change.member_id != author && current.is_some_and(|r| r.rank() > role.rank()) {
+                return Some("no one changes the role of a member above them".into());
+            }
+            if change.member_id != author && current.is_some_and(|r| change.new_role.rank() < r.rank()) {
+                vec![change.member_id.clone()]
+            } else {
+                Vec::new()
+            }
+        }
+        SessionEvent::MemberRemoved { member_id, .. } if member_id != author => vec![member_id.clone()],
+        SessionEvent::DeviceRevoked { device_id, .. } => {
+            let accounts = roster.devices.get(device_id).map(|d| d.accounts.clone()).unwrap_or_default();
+            roster
+                .members
+                .iter()
+                .filter(|(id, m)| id.as_str() != author && m.account_id.is_some_and(|a| accounts.contains(&a)))
+                .map(|(id, _)| id.clone())
+                .collect()
+        }
+        _ => Vec::new(),
+    };
+    let founder = roster.founder.as_str();
+    for t in targets {
+        if !founder.is_empty() && t == founder {
+            return Some("nobody cuts the workspace's founder".into());
+        }
+        let Some(r) = role_of(&t) else { continue };
+        if r == WorkspaceRole::Owner {
+            if author != founder || role != WorkspaceRole::Owner {
+                return Some("only the founder cuts an Owner".into());
+            }
+        } else if r.rank() >= role.rank() {
+            return Some("a cut goes strictly down the ranks".into());
+        }
+    }
+    None
+}
+
+/// Whether `env` is signed by a device of its stamped author's own account:
+/// certified for that account here, not revoked, and not a host acting for
+/// it (a delegated device).
+fn own_device(env: &SessionEventEnvelope, at: &RosterState) -> bool {
+    let Some(account) = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) else { return false };
+    let author = author_of(env);
+    if at.members.get(author).and_then(|m| m.account_id).is_some_and(|a| a != account) {
+        return false;
+    }
+    env.signer_device_id
+        .and_then(|d| at.devices.get(&d))
+        .is_some_and(|d| !d.revoked && d.accounts.contains(&account) && !d.delegated_for(account))
+}
+
+/// The config-log checks of the workspace repo events (repos-and-checkouts
+/// 3.1): on the config log; an add is well formed (normal-form canonical,
+/// derived id), not already live, within the bound; an update or a removal
+/// names a live repo.
+fn repo_event_ok(e: &SessionEvent, on_config: bool, roster: &RosterState) -> Result<(), String> {
+    use crate::workspace_repo as wr;
+    let live = |id: &Uuid| roster.repo_live(*id);
+    match e {
+        SessionEvent::WorkspaceRepoAdded { .. } | SessionEvent::WorkspaceRepoUpdated { .. } | SessionEvent::WorkspaceRepoRemoved { .. }
+            if !on_config =>
+        {
+            Err("workspace repositories live on the workspace config log".into())
+        }
+        SessionEvent::WorkspaceRepoAdded { repo } => {
+            wr::repo_well_formed(repo)?;
+            if live(&repo.id) {
+                return Err("that repository is already in the workspace".into());
+            }
+            if roster.repos.values().filter(|r| !r.removed).count() >= wr::MAX_LIVE_REPOS {
+                return Err("too many repositories".into());
+            }
+            Ok(())
+        }
+        SessionEvent::WorkspaceRepoUpdated { repo_id, display_name, default_branch } => {
+            if !live(repo_id) {
+                return Err("no such repository".into());
+            }
+            if !wr::display_name_ok(display_name) || default_branch.len() > 255 || default_branch.chars().any(char::is_control) {
+                return Err("bad repository name or branch".into());
+            }
+            Ok(())
+        }
+        SessionEvent::WorkspaceRepoRemoved { repo_id } => {
+            if live(repo_id) {
+                Ok(())
+            } else {
+                Err("no such repository".into())
+            }
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Account keys and device certificates: self-validating (the roster checks
 /// the chain), published by members and joiners alike.
-fn is_trust_publication(e: &SessionEvent) -> bool {
+pub(crate) fn is_trust_publication(e: &SessionEvent) -> bool {
     matches!(
         e,
         SessionEvent::AccountKeyRegistered { .. }
@@ -740,7 +1083,8 @@ fn agent_change_floor(
     }
 }
 
-/// Coordinator leases and run writes are bound to devices:
+/// Turn claims, coordinator leases and run writes are bound to devices:
+///   * a `TurnClaimed` must be signed by the device it names;
 ///   * a `CoordinatorLeaseClaimed` must be signed by the device it names;
 ///   * a `CoordinatorLeaseReleased` by the holder it names;
 ///   * a `WorkflowRunUpserted` under a lease epoch must match the run's
@@ -751,6 +1095,13 @@ fn agent_change_floor(
 pub(crate) fn lease_signer_ok(env: &SessionEventEnvelope, fold: &ChatSession) -> bool {
     let signer = env.signer_device_id;
     match &env.payload {
+        // A turn claim speaks for the device it names: another device can't
+        // claim a turn for it (or claim one to keep it from answering).
+        // (An agent-signed claim names its key's host device; the Agent tier
+        // checks that binding.)
+        SessionEvent::TurnClaimed { device_id, .. } => {
+            signer == Some(*device_id) || env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == ActorKind::Agent)
+        }
         SessionEvent::CoordinatorLeaseClaimed { lease } => signer == Some(lease.holder),
         SessionEvent::CoordinatorLeaseReleased { release } => signer == Some(release.holder),
         SessionEvent::WorkflowRunUpserted { run } => {

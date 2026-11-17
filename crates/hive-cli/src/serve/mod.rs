@@ -319,6 +319,10 @@ pub struct Shared {
     pub sync_kick: Notify,
     pub worker_kick: Notify,
     stopping: AtomicBool,
+    /// Tests only: treat a bearer request as confirmed by the owner's
+    /// presence (the HTTP tests have no phone or passkey).
+    #[cfg(test)]
+    pub test_presence: AtomicBool,
     /// When this process started (see [`Shared::fresh`]).
     started_at: Timestamp,
     pub http: reqwest::Client,
@@ -599,6 +603,31 @@ impl Shared {
         }
         *self.standing.lock().unwrap_or_else(|e| e.into_inner()) = next;
         true
+    }
+
+    /// Phone revocation is three-part (Phase A, item 6): a workspace
+    /// `DeviceRevoked` of a phone's device (its own key never signs again;
+    /// the fold refuses it) also revokes that phone's tunnel pairing here
+    /// (the relay drops its sessions through the existing tunnel revocation,
+    /// and pushes to it stop). Its ligus-auth session is revoked by the same
+    /// signed `DeviceRevoked` when organization sign-in lands (Phase D).
+    /// Returns the pairings revoked.
+    pub fn revoke_phones_of_revoked_devices(&self) -> Vec<String> {
+        let Some(tunnel) = self.tunnel.as_ref() else { return Vec::new() };
+        let revoked: std::collections::BTreeSet<Uuid> = {
+            let svc = self.lock();
+            match svc.store().load_config(self.ws, None, None) {
+                Ok((_, t)) => t.current().devices.iter().filter(|(_, d)| d.revoked).map(|(id, _)| *id).collect(),
+                Err(_) => return Vec::new(),
+            }
+        };
+        let pids = tunnel.registry.pairings_of_revoked(&revoked);
+        for pid in &pids {
+            if let Err(e) = tunnel.revoke(pid) {
+                eprintln!("serve: revoking a revoked phone's pairing failed: {e}");
+            }
+        }
+        pids
     }
 
     /// The actor id this box writes as.
@@ -1024,6 +1053,8 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         sync_kick: Notify::new(),
         worker_kick: Notify::new(),
         stopping: AtomicBool::new(false),
+        #[cfg(test)]
+        test_presence: AtomicBool::new(false),
         started_at: Timestamp::now(),
         http: hive_forge::http_client_builder().connect_timeout(Duration::from_secs(3)).build()?,
         dashboard_cache: dashboard::Cache::default(),
@@ -1201,6 +1232,7 @@ async fn sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
                 shared.sync_ok();
                 if pulled > 0 {
                     shared.refresh_standing();
+                    shared.revoke_phones_of_revoked_devices();
                     shared.refresh();
                     shared.worker_kick.notify_one();
                 }

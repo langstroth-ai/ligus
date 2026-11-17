@@ -115,6 +115,9 @@ pub fn requires_projection_authz(event: &SessionEvent) -> bool {
             | SessionEvent::WorkspaceRulesSet { .. }
             | SessionEvent::AgentKeyCertified { .. }
             | SessionEvent::WorkspaceKeyRotated { .. }
+            | SessionEvent::WorkspaceRepoAdded { .. }
+            | SessionEvent::WorkspaceRepoUpdated { .. }
+            | SessionEvent::WorkspaceRepoRemoved { .. }
     ) || matches!(event, SessionEvent::FlowRecorded { record } if record.is_config())
 }
 
@@ -281,10 +284,19 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         // Raising one only tightens, so any keyholder (a worker host, a
         // Viewer's device) may: the floor.
         SessionEvent::ChatLockdownRaised { .. } => WorkspaceRole::Viewer,
-        // Changing the rules everyone folds by is the owner's call.
-        SessionEvent::WorkspaceRulesSet { .. } => WorkspaceRole::Owner,
+        // The rules everyone folds by: only the Owner changes the relying
+        // party or the version (`authz::authorize`); an Admin may restate
+        // them unchanged.
+        SessionEvent::WorkspaceRulesSet { .. } => WorkspaceRole::Admin,
         // Applying is a member's act (and a human's, see `authz::authorize`).
-        SessionEvent::ProposalApplied { .. } => WorkspaceRole::Contributor,
+        SessionEvent::ProposalApplied { .. } | SessionEvent::ProposalApplyRequested { .. } => WorkspaceRole::Contributor,
+        // Workspace repos steer what hosts clone and what chats default to:
+        // an Admin's (add and remove also need presence).
+        SessionEvent::WorkspaceRepoAdded { .. }
+        | SessionEvent::WorkspaceRepoUpdated { .. }
+        | SessionEvent::WorkspaceRepoRemoved { .. } => WorkspaceRole::Admin,
+        // Using a listed repo in a chat is a member's.
+        SessionEvent::ChatRepoSet { .. } | SessionEvent::ChatBasePinned { .. } => WorkspaceRole::Contributor,
         // A host certifying an agent key: a member's act, plus the
         // certificate's own checks (`authz::authorize`).
         SessionEvent::AgentKeyCertified { .. } => WorkspaceRole::Contributor,
@@ -479,7 +491,7 @@ pub fn evaluate(
 
     // Last-owner protection: can't remove or demote the only remaining owner.
     match event {
-        SessionEvent::MemberRemoved { member_id } => {
+        SessionEvent::MemberRemoved { member_id, .. } => {
             let removing_owner = session
                 .members
                 .iter()
@@ -492,7 +504,7 @@ pub fn evaluate(
             }
         }
         SessionEvent::MemberRoleChanged {
-            change: MemberRoleChange { member_id, new_role, .. },
+            change: MemberRoleChange { member_id, new_role, .. }, ..
         } => {
             let demoting_owner = *new_role != WorkspaceRole::Owner
                 && session
@@ -622,7 +634,7 @@ mod tests {
     #[test]
     fn cannot_remove_or_demote_last_owner() {
         let s = session_with_members(vec![("o1", WorkspaceRole::Owner)]);
-        let remove = SessionEvent::MemberRemoved { member_id: "o1".into() };
+        let remove = SessionEvent::MemberRemoved { member_id: "o1".into(), watermark: Vec::new() };
         assert_eq!(
             evaluate(&remove, "o1", WorkspaceRole::Owner, &s).reason,
             AuthzReason::TargetIsLastOwner
@@ -632,7 +644,7 @@ mod tests {
                 member_id: "o1".into(),
                 old_role: WorkspaceRole::Owner,
                 new_role: WorkspaceRole::Admin,
-            },
+            }, watermark: Vec::new(),
         };
         assert!(!evaluate(&demote, "o1", WorkspaceRole::Owner, &s).allowed);
     }
@@ -643,7 +655,7 @@ mod tests {
             ("o1", WorkspaceRole::Owner),
             ("o2", WorkspaceRole::Owner),
         ]);
-        let remove = SessionEvent::MemberRemoved { member_id: "o1".into() };
+        let remove = SessionEvent::MemberRemoved { member_id: "o1".into(), watermark: Vec::new() };
         assert!(evaluate(&remove, "o2", WorkspaceRole::Owner, &s).allowed);
     }
 
@@ -713,14 +725,14 @@ mod tests {
             ("owner", WorkspaceRole::Owner),
             ("victim", WorkspaceRole::Contributor),
         ]);
-        let remove = SessionEvent::MemberRemoved { member_id: "victim".into() };
+        let remove = SessionEvent::MemberRemoved { member_id: "victim".into(), watermark: Vec::new() };
         assert!(!evaluate(&remove, "outsider", WorkspaceRole::Viewer, &s).allowed);
         let demote = SessionEvent::MemberRoleChanged {
             change: MemberRoleChange {
                 member_id: "victim".into(),
                 old_role: WorkspaceRole::Contributor,
                 new_role: WorkspaceRole::Viewer,
-            },
+            }, watermark: Vec::new(),
         };
         assert!(!evaluate(&demote, "outsider", WorkspaceRole::Viewer, &s).allowed);
     }

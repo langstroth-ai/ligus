@@ -72,12 +72,12 @@ fn require_secure(s: &Shared, peer: Option<&TunnelPeer>) -> ApiResult<()> {
     }
 }
 
-/// Whether the forges API needs presence on this box: it acts for its owner
-/// (it signs as the owner, so a bearer's request would pass for the owner's),
-/// or the workspace runs rules v2 (IDENTITY-AND-FORGES 5.7: adding a code
-/// host or handing it a credential gives the box write access to code).
-pub fn forge_presence_applies(delegated: bool, rules: u32) -> bool {
-    delegated || rules.min(hive_core::authz::RULES_SUPPORTED) >= 2
+/// Whether the forges API needs presence on this box: always (IDENTITY-AND-
+/// FORGES 5.7: adding a code host or handing it a credential gives the box
+/// write access to code). Every 2.0 workspace is on rules v2 from its seed,
+/// so there is no rules-v1 box that skips it.
+pub fn forge_presence_applies(_delegated: bool, _rules: u32) -> bool {
+    true
 }
 
 /// [`super::api::presence_gate`] for the forges API: on every host where presence
@@ -420,15 +420,14 @@ mod tests {
         assert!(super::token_channel_ok("[::1]:8787".parse().unwrap(), false));
     }
 
-    /// 5.7: presence applies to the forges API on a box acting for its
-    /// owner and on any box whose workspace runs rules v2 (or later), not
-    /// only on a delegated one.
+    /// 5.7: presence applies to the forges API on every box (every
+    /// workspace is on rules v2 from its seed), delegated or not.
     #[test]
-    fn forge_changes_need_presence_on_delegated_and_rules_v2_hosts() {
-        assert!(!super::forge_presence_applies(false, 1));
-        assert!(!super::forge_presence_applies(false, 0));
-        assert!(super::forge_presence_applies(true, 1));
-        assert!(super::forge_presence_applies(false, 2));
-        assert!(super::forge_presence_applies(false, hive_core::authz::RULES_SUPPORTED + 1));
+    fn forge_changes_need_presence_on_every_host() {
+        for delegated in [false, true] {
+            for rules in [2, hive_core::authz::RULES_SUPPORTED + 1] {
+                assert!(super::forge_presence_applies(delegated, rules));
+            }
+        }
     }
 }

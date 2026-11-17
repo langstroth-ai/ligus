@@ -64,8 +64,13 @@ pub struct PasskeyCredential {
 }
 
 /// A WebAuthn assertion (or recovery signature) carried in the actor stamp.
-/// For a registration's own proof, `authenticator_data` holds the whole
-/// `attestationObject` and `signature` is empty (see [`verify_create`]).
+/// Every stamped assertion is a sign-in (`webauthn.get`) assertion, a
+/// `PasskeyRegistered` event's own proof included: the account's first
+/// passkey proves itself with a `get` by the new credential over the
+/// registration event's digest (a `create` can't sign that digest, because
+/// the new key is part of it). The `create` ceremony's attestation object
+/// never rides an event; [`verify_create`] only reads the new key out of it
+/// on the registering device.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PresenceAssertion {
@@ -122,6 +127,95 @@ pub struct Policy<'a> {
 impl Policy<'static> {
     pub const fn ligus() -> Self {
         Self { rp_id: RP_ID, origins: DEFAULT_ORIGINS, require_uv: true }
+    }
+}
+
+/// Most origins a workspace's presence policy may list.
+pub const MAX_ORIGINS: usize = 8;
+
+/// A workspace's WebAuthn relying party (Phase A): carried by the genesis
+/// `WorkspaceRulesSet` and folded into the roster, so every peer verifies
+/// presence under the workspace's own RP and never under a device-local or
+/// hardcoded one. A workspace whose log never names one uses
+/// [`PresencePolicy::ligus`] (`ligus.ai`, the owner's deployment).
+///
+/// The Owner changes it with presence verified under the policy in force
+/// before the change (the old RP). A new RP id leaves the workspace's
+/// passkeys unverifiable until they are registered again under it (recovery
+/// keys don't depend on the RP and keep working, so a new passkey can be
+/// registered with one).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresencePolicy {
+    /// The WebAuthn RP id (a registrable domain, lowercase ASCII).
+    pub rp_id: String,
+    /// The origins a `clientDataJSON` may name (`https://<host>[:port]`, or an
+    /// Android app origin `android:apk-key-hash:<b64url>`).
+    pub origins: Vec<String>,
+}
+
+impl Default for PresencePolicy {
+    fn default() -> Self {
+        Self::ligus()
+    }
+}
+
+impl PresencePolicy {
+    /// The owner's deployment: RP `ligus.ai`, origin `https://ligus.ai`.
+    pub fn ligus() -> Self {
+        Self { rp_id: RP_ID.into(), origins: DEFAULT_ORIGINS.iter().map(|o| (*o).to_string()).collect() }
+    }
+
+    /// A policy for `rp_id` with its own `https://` origin.
+    pub fn for_rp(rp_id: &str) -> Self {
+        Self { rp_id: rp_id.to_string(), origins: vec![format!("https://{rp_id}")] }
+    }
+
+    /// Well formed: a lowercase ASCII domain RP id, and 1 to 8 origins that
+    /// are `https://` URLs on that domain (or a subdomain of it) or Android
+    /// app origins.
+    pub fn well_formed(&self) -> Result<(), PresenceError> {
+        let rp = &self.rp_id;
+        let host_ok = |h: &str| {
+            !h.is_empty()
+                && h.len() <= 253
+                && h.split('.').all(|l| !l.is_empty() && l.len() <= 63 && l.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'))
+        };
+        if !host_ok(rp) {
+            return Err(err("bad relying party id"));
+        }
+        if self.origins.is_empty() || self.origins.len() > MAX_ORIGINS {
+            return Err(err("a presence policy names 1 to 8 origins"));
+        }
+        for o in &self.origins {
+            if o.len() > 256 {
+                return Err(err("origin too long"));
+            }
+            if let Some(hash) = o.strip_prefix("android:apk-key-hash:") {
+                if hash.is_empty() || unb64url(hash).is_err() {
+                    return Err(err("bad Android origin"));
+                }
+                continue;
+            }
+            let Some(rest) = o.strip_prefix("https://") else { return Err(err("an origin is https")) };
+            let host = rest.split_once(':').map(|(h, port)| (h, port.parse::<u16>().is_ok())).unwrap_or((rest, true));
+            if !host.1 || !host_ok(host.0) || !(host.0 == rp || host.0.ends_with(&format!(".{rp}"))) {
+                return Err(err("an origin must be on the relying party's domain"));
+            }
+        }
+        Ok(())
+    }
+
+    /// The URL of this deployment's hand-off page (`<first https origin>/presence`).
+    pub fn page_url(&self) -> String {
+        let origin = self.origins.iter().find(|o| o.starts_with("https://")).cloned().unwrap_or_else(|| format!("https://{}", self.rp_id));
+        format!("{origin}/presence")
+    }
+
+    /// Run `f` with the verifier [`Policy`] for this workspace.
+    pub fn with<R>(&self, f: impl FnOnce(&Policy<'_>) -> R) -> R {
+        let origins: Vec<&str> = self.origins.iter().map(String::as_str).collect();
+        f(&Policy { rp_id: &self.rp_id, origins: &origins, require_uv: true })
     }
 }
 
@@ -427,10 +521,11 @@ pub fn verify_recovery(a: &PresenceAssertion, key: &PasskeyKey, challenge: &[u8]
     verify_signature(EDDSA, &key.public_key, &msg, &unb64url(&a.signature)?)
 }
 
-/// Verify a registration's own proof (`webauthn.create` over the registration
-/// event's digest; `authenticator_data` is the `attestationObject`, whose
-/// statement is not checked: Ligus asks for `attestation: "none"`). Returns the
-/// attested credential: (credential id, alg, public key).
+/// Read the new credential out of a `webauthn.create` result on the
+/// registering device (`authenticator_data` holds the `attestationObject`,
+/// whose statement is not checked: Ligus asks for `attestation: "none"`).
+/// Device-local: it never verifies an event. Returns the attested credential:
+/// (credential id, alg, public key).
 pub fn verify_create(a: &PresenceAssertion, challenge: &[u8], policy: &Policy<'_>) -> Result<(Vec<u8>, i32, Vec<u8>), PresenceError> {
     let att = unb64url(&a.authenticator_data)?;
     let client_data = unb64url(&a.client_data_json)?;
@@ -498,6 +593,10 @@ impl RecoveryKey {
         let mut seed = [0u8; 32];
         getrandom::fill(&mut seed).map_err(|_| err("random source"))?;
         Ok(Self { seed })
+    }
+    /// From a 32-byte seed (the 24 words' entropy).
+    pub fn from_seed(seed: [u8; 32]) -> Self {
+        Self { seed }
     }
     /// The 24 words (shown once).
     pub fn words(&self) -> String {

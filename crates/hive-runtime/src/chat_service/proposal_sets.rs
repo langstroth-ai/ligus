@@ -439,7 +439,7 @@ mod tests {
         let forged = |by: &ActorIdentity, seq: i64, payload: SessionEvent| {
             let mut env = hive_core::SessionEventEnvelope::new(sid, wid, seq, payload);
             env.lamport = 1_000 + seq as u64;
-            env.actor_stamp = Some(hive_core::ActorStamp { actor: by.clone(), recorded_at: Timestamp::now(), cfg_frontier: None, presence: None, runtime_effect: false });
+            env.actor_stamp = Some(hive_core::ActorStamp { actor: by.clone(), recorded_at: Timestamp::now(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
             env
         };
         let eve = ActorIdentity::new("eve", "Eve", hive_core::ActorKind::Human);

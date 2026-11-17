@@ -190,10 +190,9 @@ it.
    with it, judged by the capped Agent tier (never a vote, an apply or an
    admin change) and retired when the agent moves to another host. A host
    that can't certify a key (not yet certified, or the device-local Home)
-   signs for the agent itself; under rules version 2 that output, and every
-   effect of the chat's primary runtime (stamped `runtime_effect`), is judged
-   at the Agent tier too. Under rules v1 it is judged by its host's role.
-   Either way, a host's signature on an agent's output never gives a turn
+   signs for the agent itself; that output, and every effect of the chat's
+   primary runtime (stamped `runtime_effect`), is judged at the Agent tier
+   too. Either way, a host's signature on an agent's output never gives a turn
    that output triggers the host user's tier: the author gate resolves an
    agent's message through its reply chain to the lowest role of the humans
    who started it ([the author gate](../concepts/security.md#author-gate)).
@@ -222,33 +221,44 @@ it.
    rotation and keeps sealing under the passphrase
    key. A device that isn't a recipient of the newest rotation doesn't write
    until the next rotation includes it.
-7. **Presence needs rules v2, and a passkey on every workspace.** Under
-   rules version 2 membership and role changes, device revocation, key
-   rotation, passkey removal, dearth mode, lockdown clears, path zones,
-   workflow definitions, agent host or runtime changes, lowered gates and
-   human-gated votes need a passkey assertion over the event inside its
-   signed stamp, verified on every device. Under rules v1 (the default until
-   an Owner turns v2 on) they need signature and role only. Passkeys are
-   registered per workspace (on its config log). The desktop runs WebAuthn
-   in your browser on `https://ligus.ai/presence`; a compromised page there
+7. **Presence needs a passkey on every workspace.** Every workspace is on
+   rules version 2 from its first event: membership and role changes, device
+   revocation, key rotation, passkey removal, dearth mode, lockdown clears,
+   path zones, workflow definitions, agent host or runtime changes, lowered
+   gates and human-gated votes need a passkey assertion over the event inside
+   its signed stamp, verified on every device. Passkeys are registered per
+   workspace (on its config log), under the workspace's relying party
+   (`ligus.ai` unless a self-hosted deployment set its own at creation). The
+   desktop runs WebAuthn in your browser on that origin's `/presence` page; a
+   compromised page there
    can't forge a device signature, but it could ask your authenticator to
    sign a different event during a gesture you started. The desktop checks
    the returned challenge is its own, and the sheet shows the first 64 bits
    of the digest; the page computes the same id from the challenge it signs
    (never from the link), so compare the two. A person who lost every
-   passkey confirms with the recovery key's 24 words in the same sheet. Under
-   rules v2 an account's **first** passkey needs an Admin's grant: being
-   added as a new member under v2, or an Admin's re-grant with their own
-   passkey (**People → Allow new passkey**), good for one registration; an
-   account that kept its recovery key re-registers with it. Under rules v1 a
-   first passkey is trust on first use from the device. Once an account has
+   passkey confirms with the recovery key's 24 words in the same sheet. An
+   account's **first** passkey needs a grant, good for one registration: the
+   founder's, from the workspace's first event, or an Admin's: being added as
+   a new member, or a re-grant with the Admin's own passkey (**People → Allow
+   new passkey**); an account that kept its recovery key re-registers with
+   it. There is no trust on first use from a device. Once an account has
    a passkey, a new device of that account and an account-key rotation need
    its presence too (a stolen device and account key can't add devices or
    re-pin the key; a new laptop of yours shows **Confirm this device** in
-   **Settings → Passkeys & keys** and counts once you confirm it), and any switch to rules v2 or later, an unknown version
-   included, needs the switcher's presence. An Admin can't clear the
-   passkeys of a member above them. Until someone registers a passkey, their
-   account is only as strong as their devices.
+   **Settings → Passkeys & keys** and counts once you confirm it), and any
+   change of the rules (the relying party or the version, both the
+   Owner's) needs presence, verified under the relying party in force before
+   the change. An Admin can't clear the passkeys of a member above them or grant a role
+   above their own. Removals, demotions and device revocations go strictly
+   down the ranks: an Admin cuts only roles below Admin, only an Owner cuts
+   an Admin, only the founder cuts another Owner, and nobody cuts the
+   founder; so a removed member can't undo their removal with a backdated
+   counter-removal.
+   Until someone registers a passkey, their account is only as strong as
+   their devices: a workspace founded from the CLI stays unsecured (nobody
+   can join, nothing can be governed) until its founder adds a passkey from
+   the desktop, and until then a thief of the founder's device key could
+   register one first.
 8. **Phone approvals through a box carry your passkey.** A `ligus serve`
    box enrolled as your device signs as you, so votes, lockdown clears and
    agent rebinds from the phone go through `presence/prepare` and
@@ -329,16 +339,35 @@ it.
     a non-shell tier for chats whose input you don't trust. Copilot and
     Antigravity still load your own MCP servers and plugins (no strict
     switch), and Codex over ACP isn't confined to Ligus's MCP servers yet.
-24. **A backdated config frontier keeps an old role.** Each event stamps
-    the config-log position its author had seen, and is judged at that
-    position. Nothing yet stops a demoted or removed member from naming a
-    position from before the change, so their new events are judged at
-    their old role until a per-member watermark exists. Votes and applies
-    are contained (one can't name a position older than the content it
-    judges, so a proposal filed after the demotion reached them isn't
-    swayed), and rotating the key after a removal cuts off a removed
-    member's new traffic.
-25. **A human click runs others' text at the clicker's tier.** Some
+24. **A cut is only as complete as its author's view.** A removal,
+    demotion or revocation carries a watermark of the member's (or
+    device's) events its author held, and every later event of theirs is
+    judged as of the cut, whatever config position it names, in any
+    delivery order. Two consequences, both by design (review P-A2e,
+    P-A2f):
+    - **The watermark is its author's word.** Peers can't check it. A
+      remover who names too little (an empty watermark, or old heads) has
+      the member's later-looking history judged as of the cut: on the
+      config log their uncovered acts (members they added, roles they
+      changed) are denied, and on chats their uncovered posts are judged
+      as a non-member's. Their own keys, certificates and passkeys stand.
+      Ranks bound who can do this: a cut goes strictly down the ranks, so
+      only someone above the member can.
+    - **Chats the remover never synced.** Events the remover's device
+      doesn't hold (a chat it never synced) are cut too, so sync before
+      removing someone whose recent history matters.
+
+    Leaving yourself, demoting yourself and a device revoking itself are not
+    cuts; what such a member could backdate afterwards they could have done
+    before.
+25. **Equivocation is caught where both copies meet.** Event ids are
+    chosen by their author, so a signer can publish two different envelopes
+    under one id. A device that holds both denies both, whatever order they
+    came in, and coverage never passes through that id; but a device only
+    learns of it when the second copy reaches it (the relay keeps the first
+    one it saw), so devices can disagree until both copies have reached
+    them.
+26. **A human click runs others' text at the clicker's tier.** Some
     actions place text someone else wrote into a prompt that runs as the
     person who clicked: **Send back to revise** (the review thread),
     **Implement** on an approved instruction proposal (the agent is sent
@@ -347,7 +376,7 @@ it.
     That is a prompt-injection surface at your role; read what you are
     sending before you click. Automatic board pickup doesn't have this
     problem: it runs below every floor.
-26. **LSP servers and the terminal panel run unconfined.** They are your
+27. **LSP servers and the terminal panel run unconfined.** They are your
     own tools, started for you, and run outside the agent sandbox with your
     OS user's access, by design. A repository's language-server config or a
     command you paste into the terminal runs with everything you can reach.
@@ -448,9 +477,11 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 These are in [Known limitations](#known-limitations) and stay there until a
 release fixes them: invite codes carrying every epoch key, directory keys
 for people you share no workspace with (unverified, sealed only after a
-warning), rules v1 as the default (presence only once an Owner turns rules v2 on),
+warning), a CLI-founded workspace staying unsecured until its founder adds a passkey,
 devices without a founder pin keeping the passphrase key, and ingest-time
-decisions that depend on arrival order, backdated config frontiers, human
+decisions that depend on arrival order, the reach of a removal's watermark (its
+author's word, and chats the remover never synced), equivocations seen only
+where both copies meet, human
 clicks that run others' text at the clicker's tier, and unconfined LSP
 servers and terminal. On Kubernetes, DNS tunnelling through
 the cluster resolver remains possible (see

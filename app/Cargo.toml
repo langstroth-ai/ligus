@@ -75,3 +75,7 @@ e2e = []
 [[test]]
 name = "app_live"
 harness = false
+
+[dev-dependencies]
+# Tests answer passkey prompts with a test recovery key (never in a real build).
+hive-runtime = { workspace = true, features = ["test-presence"] }

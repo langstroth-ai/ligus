@@ -462,6 +462,11 @@ struct LiveSettings {
     /// The feature tour auto-ran (or was closed) once on this data dir.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     tour_seen: bool,
+    /// This deployment's passkey relying party (a self-hosted Ligus): written
+    /// into the genesis rules of every workspace this device founds. Absent =
+    /// `ligus.ai`. Authoring only: the fold reads each workspace's own rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    passkey_policy: Option<hive_core::presence::PresencePolicy>,
 }
 
 /// Persisted OAuth state for one remote MCP server (see [`mcp_oauth`] +
@@ -604,6 +609,7 @@ impl Default for LiveSettings {
         cli_user_config_workspaces: Default::default(),
             onboarded: false,
             tour_seen: false,
+            passkey_policy: None,
         }
     }
 }
@@ -4569,7 +4575,7 @@ fn list_membership_audit(state: State<AppState>) -> Result<Vec<MembershipAuditDt
                     at,
                 });
             }
-            hive_core::SessionEvent::MemberRemoved { member_id } => {
+            hive_core::SessionEvent::MemberRemoved { member_id, .. } => {
                 let member = names.get(member_id).cloned().unwrap_or_else(|| member_id.clone());
                 out.push(MembershipAuditDto { action: "removed".into(), member, role: None, by, at });
             }
@@ -11762,12 +11768,20 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
         cli_user_config_workspaces: Default::default(),
         onboarded: false,
         tour_seen: false,
+        passkey_policy: None,
     };
     let settings = Arc::new(Mutex::new(load_or_seed_settings(&data_dir, env_seed)));
     {
         let mut s = settings.lock().unwrap();
         if migrate_catalog_mcp_auth(&mut s, &managed_mcp) {
             save_settings(&data_dir, &s);
+        }
+        // A self-hosted deployment's relying party for the workspaces this
+        // device founds (a malformed one is ignored: the default stands).
+        match s.passkey_policy.clone().map(|p| p.well_formed().map(|_| p)) {
+            Some(Ok(p)) => service.set_deployment_presence_policy(p),
+            Some(Err(e)) => tracing::warn!(target: "presence", "ignoring the configured passkey relying party: {}", e.0),
+            None => {}
         }
     }
 
@@ -16366,7 +16380,9 @@ mod finalize_proposal_tests {
         let kp = SigningKeypair::generate().unwrap();
         let account_kp = SigningKeypair::generate().unwrap();
         let author = ActorIdentity::new("u1", "Mara", ActorKind::Human);
-        ChatService::new(store, Uuid::new_v4(), kp, account_kp, author)
+        let mut svc = ChatService::new(store, Uuid::new_v4(), kp, account_kp, author);
+        svc.enable_test_presence();
+        svc
     }
 
     #[test]
@@ -17835,7 +17851,9 @@ mod responder_place_tests {
     fn device(author: hive_core::ActorIdentity) -> ChatService {
         use hive_core::crypto::SigningKeypair;
         let store = hive_runtime::EventStore::open_in_memory().unwrap();
-        ChatService::new(store, Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author)
+        let mut svc = ChatService::new(store, Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
+        svc.enable_test_presence();
+        svc
     }
 
     /// The owner's device answers an `@hive` turn in a new chat, in a

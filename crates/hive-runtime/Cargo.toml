@@ -73,6 +73,10 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_
 default = ["p2p"]
 # Direct peer-to-peer transport (iroh).
 p2p = ["dep:iroh"]
+# Tests only (other crates' dev-dependencies): exposes
+# `ChatService::enable_test_presence`, a recovery key that confirms every
+# presence prompt. Never enabled by a normal or release build.
+test-presence = []
 
 [dev-dependencies]
 tempfile = "3"

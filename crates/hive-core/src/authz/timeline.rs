@@ -52,6 +52,10 @@ pub struct DeviceState {
     /// signs for one of these accounts doesn't count toward a human gate (see
     /// `authz::authorize`).
     pub delegated_for: BTreeSet<Uuid>,
+    /// A phone: its key is a P-256 Secure Enclave key (the certificate's
+    /// `alg`, inside the account's signature). Capped to the phone tier
+    /// (`authz::phone`).
+    pub phone: bool,
 }
 
 impl DeviceState {
@@ -78,7 +82,7 @@ pub struct RosterState {
     /// Agent keys by `key_id` (an agent-signed envelope's `signer_device_id`).
     pub agent_keys: BTreeMap<Uuid, AgentKeyState>,
     pub dearth: bool,
-    /// The workspace rules version in force (1 when never set).
+    /// The workspace rules version in force (2 from the seed).
     pub rules: u32,
     /// The path zones (Admin-set review bars) in force.
     pub zones: Vec<crate::flow::PathZone>,
@@ -90,10 +94,10 @@ pub struct RosterState {
     /// Each account's registered passkeys and recovery keys, by credential
     /// id (B3).
     pub passkeys: BTreeMap<Uuid, BTreeMap<String, crate::presence::PasskeyKey>>,
-    /// Accounts without a credential that an Admin's presence-confirmed act
-    /// under rules v2 lets register a first passkey, once (B.4.6): adding
-    /// them as a new member, or re-granting their role after their
-    /// credentials were removed.
+    /// Accounts without a credential that may register a first passkey,
+    /// once (B.4.6): the founder (from the seed), and anyone an Admin's
+    /// presence-confirmed act lets in: adding them as a new member, or
+    /// re-granting their role after their credentials were removed.
     pub passkey_grants: BTreeSet<Uuid>,
     /// Each account's signing key as this log registers it, undisputed only.
     /// A link statement names the key in force at its position.
@@ -102,11 +106,27 @@ pub struct RosterState {
     /// §2.2). Claims only: they grant nothing here, and whether one verifies
     /// is device-local.
     pub links: BTreeMap<Uuid, BTreeMap<Uuid, crate::identity_link::IdentityLink>>,
+    /// The workspace's WebAuthn relying party (`WorkspaceRulesSet.presence`;
+    /// `ligus.ai` until one is set). Every presence check uses it.
+    pub presence_policy: crate::presence::PresencePolicy,
+    /// Whether an allowed `WorkspaceRulesSet` is on the log (the genesis one
+    /// is presence-free once, never again).
+    pub rules_written: bool,
+    /// The workspace's founder (the config seed's creator): outranks every
+    /// other Owner and is the only one who cuts an Owner (review P-A2b).
+    pub founder: String,
+    /// The workspace's repositories by id (a removed one is a tombstone).
+    pub repos: BTreeMap<Uuid, crate::workspace_repo::RepoEntry>,
 }
 
 impl RosterState {
     pub fn role_of(&self, actor_id: &str) -> Option<WorkspaceRole> {
         self.members.get(actor_id).map(|m| m.role)
+    }
+
+    /// Whether `repo_id` names a live (not removed) workspace repo here.
+    pub fn repo_live(&self, repo_id: Uuid) -> bool {
+        self.repos.get(&repo_id).is_some_and(|r| !r.removed)
     }
 
     /// Whether `account` certified `device` (and the device is not revoked).
@@ -191,10 +211,21 @@ pub struct RosterTracker {
 }
 
 impl RosterTracker {
-    /// Seed from the base snapshot.
+    /// Seed from the base snapshot: rules v2, and the founder's one grant to
+    /// register a first passkey (the workspace's only bootstrap; every other
+    /// account's first credential needs an Admin's presence-confirmed grant).
     pub fn seeded(session: &ChatSession) -> Self {
         let mut t = Self::default();
-        t.state.rules = 1;
+        t.state.rules = super::RULES_GENESIS;
+        t.state.founder = session.creator_actor_id.clone();
+        if let Some(a) = session
+            .members
+            .iter()
+            .find(|m| m.id == session.creator_actor_id && m.role == WorkspaceRole::Owner)
+            .and_then(|m| m.actor.account_id)
+        {
+            t.state.passkey_grants.insert(a);
+        }
         t.refresh(session);
         t
     }
@@ -204,7 +235,7 @@ impl RosterTracker {
     /// roster side read back from the fold. Returns whether the state changed.
     pub fn observe(&mut self, env: &SessionEventEnvelope, allowed: bool, fold: &ChatSession) -> bool {
         let before = self.state.clone();
-        if allowed && self.state.rules.min(super::RULES_SUPPORTED) >= 2 {
+        if allowed {
             self.note_grant(&env.payload);
         }
         match &env.payload {
@@ -271,8 +302,12 @@ impl RosterTracker {
                     },
                 );
             }
-            SessionEvent::WorkspaceRulesSet { version } if allowed => {
+            SessionEvent::WorkspaceRulesSet { version, presence } if allowed => {
                 self.state.rules = *version;
+                self.state.rules_written = true;
+                if let Some(p) = presence {
+                    self.state.presence_policy = p.clone();
+                }
             }
             SessionEvent::WorkspaceKeyRotated { rotation } if allowed => {
                 self.state.key_epochs.push(rotation, env.canonical_key());
@@ -296,6 +331,20 @@ impl RosterTracker {
                     }
                 }
             }
+            SessionEvent::WorkspaceRepoAdded { repo } if allowed => {
+                self.state.repos.insert(repo.id, crate::workspace_repo::RepoEntry { repo: repo.clone(), removed: false });
+            }
+            SessionEvent::WorkspaceRepoUpdated { repo_id, display_name, default_branch } if allowed => {
+                if let Some(r) = self.state.repos.get_mut(repo_id) {
+                    r.repo.display_name = display_name.clone();
+                    r.repo.default_branch = default_branch.clone();
+                }
+            }
+            SessionEvent::WorkspaceRepoRemoved { repo_id } if allowed => {
+                if let Some(r) = self.state.repos.get_mut(repo_id) {
+                    r.removed = true;
+                }
+            }
             SessionEvent::IdentityLinkPublished { link } if allowed => {
                 let m = self.state.links.entry(link.account_id).or_default();
                 m.retain(|_, l| l.subject_key() != link.subject_key());
@@ -315,15 +364,15 @@ impl RosterTracker {
         self.state != before
     }
 
-    /// Rules v2 (B.4.6): an allowed act that lets an account without a
-    /// credential register a first passkey. Under rules v2 both need an
-    /// Admin's presence, except a self-enrollment through an invite an Admin
-    /// issued (which itself needed presence when issued under v2). An
-    /// idempotent self re-add of an existing member grants nothing.
+    /// B.4.6: an allowed act that lets an account without a credential
+    /// register a first passkey. Both need an Admin's presence, except a
+    /// self-enrollment through an invite an Admin issued (which itself needed
+    /// presence when issued). An idempotent self re-add of an existing member
+    /// grants nothing.
     fn note_grant(&mut self, e: &SessionEvent) {
         let account = match e {
             SessionEvent::MemberAdded { member, .. } if !self.state.members.contains_key(&member.id) => member.actor.account_id,
-            SessionEvent::MemberRoleChanged { change } => self.state.members.get(&change.member_id).and_then(|m| m.account_id),
+            SessionEvent::MemberRoleChanged { change, .. } => self.state.members.get(&change.member_id).and_then(|m| m.account_id),
             _ => None,
         };
         if let Some(a) = account.filter(|a| self.state.passkeys.get(a).is_none_or(|m| m.is_empty())) {
@@ -358,8 +407,13 @@ impl RosterTracker {
                 let d = devices.entry(cert.device_id).or_default();
                 d.accounts.insert(cert.account_id);
                 d.public_key = cert.device_public_key.clone();
+                let phone = cert.alg == crate::crypto::SigAlg::P256;
+                d.phone |= phone;
                 let key = (cert.device_id, cert.account_id);
-                if !self.self_published.contains(&key) || self.enrolled_by_other.contains(&key) {
+                // A phone holds its own key and signs only as its person (the
+                // laptop enrolls it, but it never acts *for* them): not a
+                // delegated host.
+                if !phone && (!self.self_published.contains(&key) || self.enrolled_by_other.contains(&key)) {
                     d.delegated_for.insert(cert.account_id);
                 }
             }
@@ -414,7 +468,60 @@ pub struct ConfigTimeline {
     /// open from these are read-only candidates (B1; never sealed under
     /// unless authorized).
     rotations: Vec<crate::keys::SignedRotation>,
+    /// Every allowed removal, demotion and revocation, with its watermark
+    /// (Phase A, item 2; see [`Cut`]).
+    cuts: Vec<Cut>,
     fingerprint: u64,
+}
+
+/// What a cut cuts.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CutKind {
+    /// `MemberRemoved`: the member's later events are judged as of the
+    /// removal (not a member).
+    Removed(String),
+    /// A demoting `MemberRoleChanged`: judged with the new role.
+    Demoted(String),
+    /// `DeviceRevoked`: the device's later events never fold.
+    Revoked(Uuid),
+}
+
+/// An allowed removal, demotion or revocation on the config log and the
+/// watermark it carried ([`crate::watermark`]).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Cut {
+    /// The cut event's canonical key (a config position).
+    pub key: (u64, Uuid),
+    pub kind: CutKind,
+    /// For a removal: the agent keys of agents the member owned there.
+    pub agent_keys: BTreeSet<Uuid>,
+    pub watermark: Vec<crate::watermark::Watermark>,
+}
+
+impl Cut {
+    /// Whether this cut concerns `env` (see [`crate::watermark`]).
+    pub fn applies(&self, env: &SessionEventEnvelope) -> bool {
+        let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
+        match &self.kind {
+            CutKind::Removed(m) => author == m || env.signer_device_id.is_some_and(|k| self.agent_keys.contains(&k)),
+            CutKind::Demoted(m) => author == m,
+            CutKind::Revoked(d) => env.signer_device_id == Some(*d),
+        }
+    }
+
+    /// The events of one log this cut's watermark covers (held by its author).
+    pub fn covered(&self, log: Uuid, chains: &crate::watermark::Chains) -> BTreeSet<Uuid> {
+        let mut out = BTreeSet::new();
+        for w in self.watermark.iter().filter(|w| w.log == log) {
+            out.extend(chains.ancestors(w.signer, &w.heads, &w.gaps));
+        }
+        out
+    }
+
+    /// The config position the cut's later events are judged at.
+    pub fn frontier(&self) -> CfgFrontier {
+        CfgFrontier { lamport: self.key.0, event_id: self.key.1 }
+    }
 }
 
 impl ConfigTimeline {
@@ -438,6 +545,16 @@ impl ConfigTimeline {
     /// Every rotation body seen on the log, authorized or not.
     pub fn rotation_candidates(&self) -> &[crate::keys::SignedRotation] {
         &self.rotations
+    }
+
+    /// Record an allowed cut.
+    pub fn push_cut(&mut self, cut: Cut) {
+        self.cuts.push(cut);
+    }
+
+    /// Every allowed removal, demotion and revocation, in canonical order.
+    pub fn cuts(&self) -> &[Cut] {
+        &self.cuts
     }
 
     /// Record the state after the folded event `key` (`changed` = a new state).
@@ -471,6 +588,7 @@ impl ConfigTimeline {
             }
         }
         self.states[0].fingerprint().hash(&mut h);
+        self.cuts.hash(&mut h);
         self.fingerprint = h.finish().max(1);
         self
     }

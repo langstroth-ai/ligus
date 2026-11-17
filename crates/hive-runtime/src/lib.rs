@@ -5,6 +5,13 @@
 //! Phase 1 lands the SQLite event store and a file-based identity store.
 //! Crypto/signing, providers, MCP, and transports arrive in later phases.
 
+// `test-presence` answers every passkey prompt with a recovery key derived
+// from the account id. Tests reach it through dev-dependencies only; an
+// optimized build that has it is a mistake this refuses to compile
+// (scripts/check-no-test-presence.sh checks the shipped graphs in CI).
+#[cfg(all(feature = "test-presence", not(debug_assertions)))]
+compile_error!("hive-runtime's `test-presence` feature must never be in an optimized (release) build");
+
 pub mod agent_tools;
 pub mod agent_turn;
 pub mod attachment_blob;

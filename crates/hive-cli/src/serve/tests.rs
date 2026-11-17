@@ -3344,19 +3344,24 @@ async fn phone_confirms_a_vote_with_a_passkey() {
     let owner = {
         let mut d = open_service(&h.desktop).unwrap();
         let account = d.author().account_id.unwrap();
-        d.register_passkey(ws, key.credential(account, "phone"), &|req| Ok(key.get(&req.challenge))).unwrap();
+        // (The desktop already holds its test recovery key, which confirms a
+        // second credential.)
+        let rec = hive_core::testkit::test_recovery_key(account);
+        d.register_passkey(ws, key.credential(account, "phone"), &|req| Ok(rec.assert(&req.challenge))).unwrap();
         d.author().clone()
     };
     sync_once(&h.desktop).await.unwrap();
     let account = owner.account_id.unwrap();
+    let cred = key.credential(account, "").credential_id;
+    let synced = || h.handle.shared.lock().passkeys_of(ws, account).unwrap().iter().any(|(id, _)| *id == cred);
     for _ in 0..100 {
         h.handle.shared.sync_kick.notify_one();
-        if !h.handle.shared.lock().passkeys_of(ws, account).unwrap().is_empty() {
+        if synced() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    assert!(!h.handle.shared.lock().passkeys_of(ws, account).unwrap().is_empty(), "the passkey synced to the box");
+    assert!(synced(), "the passkey synced to the box");
     h.handle.shared.lock().act_as_owner_device(owner.clone());
 
     let prepare = || async {
@@ -3433,6 +3438,8 @@ fn files_containing(dir: &Path, needle: &str) -> Vec<PathBuf> {
 async fn forge_tokens_stay_in_the_boxs_secret_store() {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
     let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    // Forge changes need the owner's presence on every box (5.7).
+    h.handle.shared.test_presence.store(true, std::sync::atomic::Ordering::SeqCst);
     let v = h.get("/v1/forges").await;
     assert_eq!(v["forges"][0]["id"], "github:github.com", "the gh login is the default: {v}");
     assert_eq!(v["forges"][0]["authSource"], "gh");
@@ -3490,6 +3497,8 @@ async fn forge_tokens_stay_in_the_boxs_secret_store() {
 async fn forge_endpoints_need_the_bearer_and_a_box_that_can_write() {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
     let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    // Forge changes need the owner's presence on every box (5.7).
+    h.handle.shared.test_presence.store(true, std::sync::atomic::Ordering::SeqCst);
     for (m, p) in [
         (reqwest::Method::GET, "/v1/forges"),
         (reqwest::Method::POST, "/v1/forges/github:github.com/test"),
@@ -3599,6 +3608,8 @@ async fn device_poll_after_remove_stores_nothing() {
 
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
     let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    // Forge changes need the owner's presence on every box (5.7).
+    h.handle.shared.test_presence.store(true, std::sync::atomic::Ordering::SeqCst);
     h.handle.shared.repos.offline.store(false, std::sync::atomic::Ordering::SeqCst);
     let add = json!({"kind": "gitlab", "baseUrl": base, "auth": "token", "clientId": "app-123", "internal": true});
     let added = h.send(reqwest::Method::POST, "/v1/forges", Some(add.clone())).await;
@@ -3636,6 +3647,8 @@ async fn forge_test_is_gated_internal_marked_and_status_only() {
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "ok"}))]]).await;
     let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    // Forge changes need the owner's presence on every box (5.7).
+    h.handle.shared.test_presence.store(true, std::sync::atomic::Ordering::SeqCst);
     h.handle.shared.repos.offline.store(false, std::sync::atomic::Ordering::SeqCst);
     for bad in [base.clone(), "https://169.254.169.254".into(), "https://10.0.0.7".into()] {
         let (c, v) = status_of(&h, reqwest::Method::POST, "/v1/forges", Some(json!({"kind": "gitea", "baseUrl": bad, "auth": "token"}))).await;

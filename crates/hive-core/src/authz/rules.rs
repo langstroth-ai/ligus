@@ -24,9 +24,12 @@ pub fn requires_presence(event: &SessionEvent, author: &str, roster: &RosterStat
         // (a device-key thief would otherwise add devices of their own); the
         // presence must be that account's (`authz::authorize`). Re-publishing a
         // certificate already in force here needs nothing.
+        // A phone (P-256 key) is enrolled only with its person's passkey,
+        // always.
         SessionEvent::DeviceCertificateAdded { certificate: c } => {
-            roster.passkeys.get(&c.account_id).is_some_and(|m| !m.is_empty())
-                && !roster.account_certified(c.account_id, c.device_id)
+            (c.alg == crate::crypto::SigAlg::P256 && !roster.account_certified(c.account_id, c.device_id))
+                || (roster.passkeys.get(&c.account_id).is_some_and(|m| !m.is_empty())
+                    && !roster.account_certified(c.account_id, c.device_id))
         }
         // Keys. A passkey registration has its own rule (`authz::passkeys`):
         // the account's first proves itself, every later one needs presence
@@ -78,9 +81,19 @@ pub fn requires_presence(event: &SessionEvent, author: &str, roster: &RosterStat
         SessionEvent::ProposalSetDecided { .. } => {
             roster.members.get(author).is_some_and(|m| m.kind == ActorKind::Human)
         }
+        // A host fulfilling a person's apply request carries no presence of
+        // its own: the request carried the person's.
+        SessionEvent::ProposalApplied { request_id: Some(_), .. } => false,
         SessionEvent::ProposalApplied { proposal_id, .. } => {
             fold.proposals.iter().find(|p| p.id == *proposal_id).is_some_and(|p| human_gated(fold, p))
         }
+        SessionEvent::ProposalApplyRequested { request } => {
+            fold.proposals.iter().find(|p| p.id == request.proposal_id).is_some_and(|p| human_gated(fold, p))
+        }
+        // Repos: adding or removing one steers clones and chats (repos
+        // review F7); renaming is cosmetic; using one in a chat is content.
+        SessionEvent::WorkspaceRepoAdded { .. } | SessionEvent::WorkspaceRepoRemoved { .. } => true,
+        SessionEvent::WorkspaceRepoUpdated { .. } | SessionEvent::ChatRepoSet { .. } | SessionEvent::ChatBasePinned { .. } => false,
         // Everything else is content, coordination or a self-validating
         // publication.
         SessionEvent::SessionSnapshot { .. }

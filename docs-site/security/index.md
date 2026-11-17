@@ -213,9 +213,9 @@ it names.
 ## Passkey presence {#presence}
 
 Signatures prove which device made an event, not that its person was there.
-Under **workspace rules v2** (Settings → Passkeys & keys → Turn on rules v2,
-an Owner's call, after registering a passkey and a recovery key) the events
-that change who can do what need a **passkey** assertion over the event:
+Every workspace is on **rules v2** from its first event: creating one asks
+for your passkey and a recovery key, and the events that change who can do
+what need a **passkey** assertion over the event:
 
 | Category | Events |
 |---|---|
@@ -226,7 +226,7 @@ that change who can do what need a **passkey** assertion over the event:
 | Zones | path zones and the home beacon |
 | Workflows | workflow definitions; votes on a proposal that carries a workflow |
 | Agents and runtimes | an agent's host or runtime changing, removing an agent, workspace runtimes, someone else's host |
-| Gates | tuning a proposal set, lowering a proposal's approvals or role floor, the rules version |
+| Gates | tuning a proposal set, lowering a proposal's approvals or role floor, the workspace rules (version and relying party; not the one written at creation) |
 | Human-gated decisions | votes on a human-gated proposal (lockdown, dearth over brood paths), a person deciding a proposal set, applying a human-gated proposal |
 
 - **What is signed.** The WebAuthn challenge is SHA-256 of
@@ -236,14 +236,16 @@ that change who can do what need a **passkey** assertion over the event:
   signature covers, so it can't be stripped, moved or replayed onto another
   event.
 - **Verified everywhere, offline.** Every device checks it while folding:
-  relying party `ligus.ai`, user presence **and** user verification, origin
-  `https://ligus.ai`, a passkey registered to the event's author on the
+  the workspace's relying party (`ligus.ai` and origin `https://ligus.ai`
+  unless a self-hosted deployment named its own when the workspace was
+  created), user presence **and** user verification, a passkey registered to
+  the event's author on the
   config log at that position, ES256 or EdDSA. Signature counters aren't
   used (synced passkeys report 0).
 - **Any passkey.** Touch ID and iCloud Keychain, Windows Hello, Google
   Password Manager, phones over QR, YubiKeys. Secure Enclave-only keys aren't
-  required. The desktop runs the ceremony in your browser on
-  `https://ligus.ai/presence` and checks the result is for its own challenge;
+  required. The desktop runs the ceremony in your browser on the relying
+  party's `/presence` page and checks the result is for its own challenge;
   the iPhone app uses `ASAuthorization` directly.
 - **Registration.** A passkey is registered per workspace on its config log.
   The account's first proves itself (its own assertion over the
@@ -251,7 +253,7 @@ that change who can do what need a **passkey** assertion over the event:
   two, plus the **recovery key**: 24 words, an Ed25519 key accepted wherever
   a passkey is (`ligus-recovery-v1`). See [Lost a
   passkey](runbooks.md#lost-passkey).
-- **Agents never satisfy presence.** Under rules v2, host-signed agent output
+- **Agents never satisfy presence.** Host-signed agent output
   and every effect of a chat's primary runtime are judged at the Agent tier,
   which can't vote or administer.
 
@@ -345,7 +347,7 @@ list with status is in
   only with the owner's passkey over them.
 - [Signed key rotations](#encryption) and one keyring on every host;
   [secrets in the OS secret store](#components); [passkey presence](#presence)
-  under rules v2.
+  on every workspace from its first event (rules v2; no rules v1).
 - Organization sign-in: [ligus-auth](../deploy/ligus-auth.md) issues
   short-lived relay tokens from your identity provider.
 - Still open: see [Known limitations](threat-model.md#known-limitations).

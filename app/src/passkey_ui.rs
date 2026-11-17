@@ -2,11 +2,12 @@
 //!
 //! WebAuthn in the Tauri webview is unreliable, so every OS uses one path:
 //! the desktop listens on `127.0.0.1:<random>` with a one-time nonce and opens
-//! `https://ligus.ai/presence#c=<challenge>&p=<port>&n=<nonce>&op=get|create…`
-//! (through a private redirect page under the data dir, so the nonce is never
-//! in a command line).
+//! `<workspace origin>/presence#rp=<rp id>&c=<challenge>&p=<port>&n=<nonce>&op=get|create…`
+//! (`https://ligus.ai/presence` for the owner's deployment), through a
+//! private redirect page under the data dir, so the nonce is never in a
+//! command line.
 //! That static page (strict CSP, no third-party script) runs
-//! `navigator.credentials.get/create` with `rpId: "ligus.ai"` and
+//! `navigator.credentials.get/create` with the workspace's `rpId` and
 //! `userVerification: "required"`, then submits the result to the loopback
 //! (a top-level form POST, so no CORS or mixed-content rules apply). The
 //! desktop checks the returned challenge is its own before using it, and the
@@ -28,8 +29,6 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::AppState;
 
-/// Where the hand-off page lives (the ligus.ai site repo serves it).
-pub const PRESENCE_PAGE: &str = "https://ligus.ai/presence";
 /// How long the desktop waits for the browser.
 const WAIT: Duration = Duration::from_secs(180);
 
@@ -103,14 +102,14 @@ fn urldecode(s: &str) -> String {
 }
 
 /// Run one ceremony in the system browser and wait for its result.
-fn hand_off(app: &AppHandle, prompt: PresencePrompt, fragment: String) -> Result<Outcome, String> {
+fn hand_off(app: &AppHandle, page_url: &str, prompt: PresencePrompt, fragment: String) -> Result<Outcome, String> {
     let recovery_ok = prompt.op == "get";
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     // A v4 UUID is 122 random bits from the OS generator.
     let nonce = b64url(uuid::Uuid::new_v4().as_bytes());
-    let url = format!("{PRESENCE_PAGE}#{fragment}&p={port}&n={nonce}");
+    let url = format!("{page_url}#{fragment}&p={port}&n={nonce}");
     CANCEL.store(false, Ordering::SeqCst);
     let _ = take_recovery();
     let _ = app.emit("presence://requested", &prompt);
@@ -267,14 +266,15 @@ fn returned_challenge(client_data_b64: &str) -> Option<Vec<u8>> {
 /// `navigator.credentials.get` over `challenge` in the browser.
 pub fn browser_get(app: &AppHandle, req: &PresenceRequest) -> Result<PresenceAssertion, String> {
     let fragment = format!(
-        "op=get&c={}&cred={}&k={}&s={}",
+        "op=get&rp={}&c={}&cred={}&k={}&s={}",
+        urlencode(&req.policy.rp_id),
         b64url(&req.challenge),
         urlencode(&req.credential_ids.join(",")),
         urlencode(&req.kind),
         urlencode(&req.summary),
     );
     let prompt = PresencePrompt { kind: req.kind.clone(), summary: req.summary.clone(), digest_short: req.digest_short.clone(), op: "get".into() };
-    let r = match hand_off(app, prompt, fragment)? {
+    let r = match hand_off(app, &req.policy.page_url(), prompt, fragment)? {
         Outcome::Browser(r) => r,
         // The recovery key signs the very challenge requested, here.
         Outcome::Recovery(k) => return Ok(k.assert(&req.challenge)),
@@ -294,7 +294,8 @@ pub fn browser_get(app: &AppHandle, req: &PresenceRequest) -> Result<PresenceAss
 /// its proof (the attestation object rides in `authenticator_data`).
 fn browser_create(app: &AppHandle, req: &PresenceRequest, user_name: &str) -> Result<PresenceAssertion, String> {
     let fragment = format!(
-        "op=create&c={}&u={}&un={}&x={}",
+        "op=create&rp={}&c={}&u={}&un={}&x={}",
+        urlencode(&req.policy.rp_id),
         b64url(&req.challenge),
         b64url(req.account_id.as_bytes()),
         urlencode(user_name),
@@ -306,7 +307,7 @@ fn browser_create(app: &AppHandle, req: &PresenceRequest, user_name: &str) -> Re
         digest_short: req.digest_short.clone(),
         op: "create".into(),
     };
-    let Outcome::Browser(r) = hand_off(app, prompt, fragment)? else {
+    let Outcome::Browser(r) = hand_off(app, &req.policy.page_url(), prompt, fragment)? else {
         return Err("a recovery key doesn't create a passkey".into());
     };
     if returned_challenge(&r.client_data_json).as_deref() != Some(&req.challenge[..]) {
@@ -365,7 +366,7 @@ pub fn security_status(state: State<'_, AppState>) -> Result<SecurityStatusDto, 
         .map(|(credential_id, recovery)| PasskeyDto { credential_id, recovery })
         .collect();
     let cfg = svc.load(hive_core::workspace_config_session_id(ws)).ok().flatten();
-    let rules = cfg.as_ref().map(|c| c.authz.rules).unwrap_or(1);
+    let rules = cfg.as_ref().map(|c| c.authz.rules).unwrap_or(hive_core::authz::RULES_GENESIS);
     let (_, timeline) = svc.store().load_config(ws, None, None).map_err(|e| e.to_string())?;
     Ok(SecurityStatusDto {
         passkeys,
@@ -399,11 +400,12 @@ pub async fn passkey_register(app: AppHandle, label: String) -> Result<(), Strin
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let ws = state.active_workspace_id();
-        let (account, name, existing) = {
+        let (account, name, existing, policy) = {
             let svc = state.service.lock().unwrap();
             let account = svc.author().account_id.ok_or("this device has no account")?;
             let existing: Vec<String> = svc.passkeys_of(ws, account).map_err(|e| e.to_string())?.into_iter().map(|(id, _)| id).collect();
-            (account, svc.author().display_name.clone(), existing)
+            let policy = svc.workspace_presence_policy(ws).map_err(|e| e.to_string())?;
+            (account, svc.author().display_name.clone(), existing, policy)
         };
         // 1. Create the key (its challenge only binds this ceremony).
         let mut challenge = [0u8; 32];
@@ -416,9 +418,10 @@ pub async fn passkey_register(app: AppHandle, label: String) -> Result<(), Strin
             credential_ids: existing.clone(),
             digest_short: hive_core::keys::hex(&challenge[..8]),
             summary: "Create a Ligus passkey".into(),
+            policy: policy.clone(),
         };
         let att = browser_create(&app, &create_req, &name)?;
-        let (id, alg, pk) = presence::verify_create(&att, &challenge, &presence::Policy::ligus()).map_err(|e| e.0)?;
+        let (id, alg, pk) = policy.with(|p| presence::verify_create(&att, &challenge, p)).map_err(|e| e.0)?;
         let new_id = b64url(&id);
         let credential = PasskeyCredential {
             account_id: account,
@@ -586,7 +589,7 @@ mod tests {
     #[test]
     fn the_nonce_stays_off_the_command_line() {
         let dir = std::env::temp_dir().join(format!("ligus-presence-test-{}", uuid::Uuid::new_v4().simple()));
-        let url = format!("{PRESENCE_PAGE}#op=get&c=abc&p=4242&n=secret-nonce-123");
+        let url = format!("{}#op=get&c=abc&p=4242&n=secret-nonce-123", hive_core::presence::PresencePolicy::ligus().page_url());
         let page = redirect_page(&dir.join("presence"), &url).unwrap();
         assert!(!page.to_string_lossy().contains("secret-nonce-123"), "the nonce is in the path");
         let html = std::fs::read_to_string(&page).unwrap();

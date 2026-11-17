@@ -848,7 +848,9 @@ mod tests {
     fn service() -> ChatService {
         let store = EventStore::open_in_memory().unwrap();
         let author = ActorIdentity::new("u1", "Mara", ActorKind::Human);
-        ChatService::new(store, Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author)
+        let mut svc = ChatService::new(store, Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
+        svc.enable_test_presence();
+        svc
     }
 
     const ALTS: &str = r#"Here are three. [[alternatives: {"question": "Which cache?", "taskClass": "design", "options": [{"title": "Redis"}, {"title": "In-process LRU"}, {"title": "No cache"}]}]]"#;
@@ -914,12 +916,15 @@ mod tests {
         svc.post_user_message(sid, wid, "@coder @local explore options for the retry logic").unwrap();
         let mut p1 = ActionProposal::new("Exponential backoff", ProposalKind::Decision, "coder");
         p1.producing_agent_id = Some(a1);
+        // (An agent files a proposal as itself: the Agent tier.)
+        p1.author_actor_id = a1.to_string();
         let id1 = p1.id;
         svc.upsert_proposal(sid, wid, p1).unwrap();
         group_same_trigger(&mut svc, sid, wid, id1);
         assert!(svc.load(sid).unwrap().unwrap().proposal_sets.is_empty(), "one producer: no set yet");
         let mut p2 = ActionProposal::new("Circuit breaker", ProposalKind::Decision, "local");
         p2.producing_agent_id = Some(a2);
+        p2.author_actor_id = a2.to_string();
         let id2 = p2.id;
         svc.upsert_proposal(sid, wid, p2).unwrap();
         group_same_trigger(&mut svc, sid, wid, id2);
@@ -932,7 +937,9 @@ mod tests {
         svc.post_user_message(sid2, wid, "@coder fix the bug and @docs update the readme").unwrap();
         for who in ["coder", "docs"] {
             let mut p = ActionProposal::new(who, ProposalKind::Decision, who);
-            p.producing_agent_id = Some(Uuid::new_v4());
+            let agent = Uuid::new_v4();
+            p.producing_agent_id = Some(agent);
+            p.author_actor_id = agent.to_string();
             let id = p.id;
             svc.upsert_proposal(sid2, wid, p).unwrap();
             group_same_trigger(&mut svc, sid2, wid, id);

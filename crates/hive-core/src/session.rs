@@ -101,6 +101,15 @@ pub struct ChatSession {
     /// serializes exactly as before (snapshots are signed over that form).
     #[serde(default, skip_serializing_if = "crate::flow::FlowState::is_empty")]
     pub flow: crate::flow::FlowState,
+    /// This chat's repository and pinned base (`ChatRepoSet`,
+    /// `ChatBasePinned`). Skipped when unset (snapshots are signed over that
+    /// form).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<crate::workspace_repo::ChatRepo>,
+    /// Apply requests (`ProposalApplyRequested`) by id: a human asked a host
+    /// to apply an approved proposal. Skipped when empty.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub apply_requests: BTreeMap<Uuid, crate::workspace_repo::ApplyRequest>,
     #[serde(default)]
     pub created_at: Timestamp,
     #[serde(default)]
@@ -176,6 +185,8 @@ impl ChatSession {
             workspace_hosts: Vec::new(),
             guards: Default::default(),
             flow: crate::flow::FlowState::default(),
+            repo: None,
+            apply_requests: BTreeMap::new(),
             created_at: now,
             updated_at: now,
             authz: Default::default(),

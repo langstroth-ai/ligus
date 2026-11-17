@@ -78,8 +78,23 @@ pub enum SessionEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         invite: Option<Uuid>,
     },
-    MemberRemoved { member_id: String },
-    MemberRoleChanged { change: MemberRoleChange },
+    /// Remove a member. `watermark` names, per signing device (and agent
+    /// key) of the member and per log, the newest of their events the remover
+    /// held ([`crate::watermark`]): their later events (any not reachable
+    /// back from those heads) are judged as of this removal, whatever config
+    /// frontier they claim. Left out when empty.
+    MemberRemoved {
+        member_id: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        watermark: Vec<crate::watermark::Watermark>,
+    },
+    /// Change a member's role. A demotion carries a `watermark` like a
+    /// removal: the member's later events are judged with the new role.
+    MemberRoleChanged {
+        change: MemberRoleChange,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        watermark: Vec<crate::watermark::Watermark>,
+    },
     AgentRosterUpdated { agents: Vec<WorkspaceAgent> },
     /// Upsert a single workspace agent (by id) — the per-item delta that
     /// supersedes the whole-list `AgentRosterUpdated`. Two admins each adding a
@@ -244,8 +259,12 @@ pub enum SessionEvent {
     /// whole account. Folded into the roster's revoked set, so the device can no
     /// longer sign events — even though its account is still a member. Pair with a
     /// `WorkspaceKeyRotation` that excludes the device to also cut its read access.
+    /// `watermark` names the device's newest events (per log) the revoker
+    /// held; its later events never fold.
     DeviceRevoked {
         device_id: Uuid,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        watermark: Vec<crate::watermark::Watermark>,
     },
     /// Create (or upsert by id) a channel. Rides the workspace-config log
     /// (spec §11); folded into `ChatSession.channels`. Workspace-scoped.
@@ -323,7 +342,13 @@ pub enum SessionEvent {
     /// Set the workspace rules version (config log; Owner only). The fold picks
     /// rules by config position; a version this build doesn't enforce makes
     /// the workspace read-only here (see [`crate::authz::RULES_SUPPORTED`]).
-    WorkspaceRulesSet { version: u32 },
+    /// `presence` sets the workspace's WebAuthn relying party (written at
+    /// genesis; absent = keep the one in force, `ligus.ai` by default).
+    WorkspaceRulesSet {
+        version: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        presence: Option<crate::presence::PresencePolicy>,
+    },
     /// A proposal's change was carried out. The only way a proposal becomes
     /// `Applied`: a human member (Contributor+) applies exactly the content
     /// that was approved (`diff_digest`, see [`crate::authz::votes::diff_digest`]).
@@ -333,7 +358,53 @@ pub enum SessionEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         commit: Option<String>,
         at: Timestamp,
+        /// The proposal's repo (must equal it when the proposal has one).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        repo_id: Option<Uuid>,
+        /// The host device that applied it (must be the signer).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        applied_on: Option<Uuid>,
+        /// The commit the change was applied onto (40/64 hex).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        base_commit: Option<String>,
+        /// The git tree hash after applying (40/64 hex): lets every device
+        /// check a replay produced the same tree.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        applied_tree_hash: Option<String>,
+        /// The `ProposalApplyRequested` this fulfils (a host applying on a
+        /// person's request), if any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_id: Option<Uuid>,
     },
+    /// A person asks a host to apply an approved proposal (chat log; a human
+    /// Contributor+ through their own device; never an agent; presence when
+    /// the proposal is human-gated). See
+    /// [`crate::workspace_repo::ApplyRequest`].
+    ProposalApplyRequested { request: crate::workspace_repo::ApplyRequest },
+    /// Add a repository to the workspace (config log; Admin, presence).
+    WorkspaceRepoAdded { repo: crate::workspace_repo::WorkspaceRepo },
+    /// Edit a live repo's display name and default branch (config log;
+    /// Admin, no presence: cosmetic). Its canonical name and id never change.
+    WorkspaceRepoUpdated {
+        repo_id: Uuid,
+        display_name: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        default_branch: String,
+    },
+    /// Remove a repository (config log; Admin, presence). A tombstone until a
+    /// later add of the same id.
+    WorkspaceRepoRemoved { repo_id: Uuid },
+    /// Pick this chat's repository (chat log; Contributor; never an agent).
+    /// `None` = no repo. Must name a live repo at the author's position.
+    ChatRepoSet {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        repo_id: Option<Uuid>,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        base_branch: String,
+    },
+    /// Pin the commit this chat's branch was cut from, for its repo (chat
+    /// log; Contributor; never an agent).
+    ChatBasePinned { repo_id: Uuid, commit: String },
     /// A host device certifies an agent's own signing key (config log;
     /// Contributor, plus the certificate's own checks in `authz`). Agent-signed
     /// events are judged with the capped Agent tier (`authz::agent`).
@@ -446,6 +517,12 @@ impl SessionEvent {
             SessionEvent::PasskeyRemoved { .. } => "passkeyRemoved",
             SessionEvent::IdentityLinkPublished { .. } => "identityLinkPublished",
             SessionEvent::IdentityLinkRemoved { .. } => "identityLinkRemoved",
+            SessionEvent::ProposalApplyRequested { .. } => "proposalApplyRequested",
+            SessionEvent::WorkspaceRepoAdded { .. } => "workspaceRepoAdded",
+            SessionEvent::WorkspaceRepoUpdated { .. } => "workspaceRepoUpdated",
+            SessionEvent::WorkspaceRepoRemoved { .. } => "workspaceRepoRemoved",
+            SessionEvent::ChatRepoSet { .. } => "chatRepoSet",
+            SessionEvent::ChatBasePinned { .. } => "chatBasePinned",
             SessionEvent::Unknown => "unknown",
         }
     }
@@ -482,7 +559,10 @@ impl SessionEvent {
             | SessionEvent::PasskeyRegistered { .. }
             | SessionEvent::PasskeyRemoved { .. }
             | SessionEvent::IdentityLinkPublished { .. }
-            | SessionEvent::IdentityLinkRemoved { .. } => EventScope::Workspace,
+            | SessionEvent::IdentityLinkRemoved { .. }
+            | SessionEvent::WorkspaceRepoAdded { .. }
+            | SessionEvent::WorkspaceRepoUpdated { .. }
+            | SessionEvent::WorkspaceRepoRemoved { .. } => EventScope::Workspace,
             SessionEvent::FlowRecorded { record } if record.is_config() => EventScope::Workspace,
             SessionEvent::WorkflowRunUpserted { .. } => EventScope::Run,
             _ => EventScope::Session,
@@ -630,13 +710,13 @@ impl ChatSession {
                     self.members.push(member.clone());
                 }
             }
-            SessionEvent::MemberRemoved { member_id } => {
+            SessionEvent::MemberRemoved { member_id, .. } => {
                 if self.members.iter().any(|m| &m.id == member_id) {
                     self.guards.removed_members.insert(member_id.clone());
                 }
                 self.members.retain(|m| &m.id != member_id);
             }
-            SessionEvent::MemberRoleChanged { change } => {
+            SessionEvent::MemberRoleChanged { change, .. } => {
                 if let Some(m) = self.members.iter_mut().find(|m| m.id == change.member_id) {
                     m.role = change.new_role;
                 }
@@ -672,20 +752,22 @@ impl ChatSession {
                 self.loaded_skills = skills.clone();
             }
             SessionEvent::ProposalUpserted { proposal } => {
+                // The repo is derived, not asserted (repos review F1): from
+                // the chat's repo when the proposal is created, and never
+                // changed by a later upsert.
+                let mut proposal = proposal.clone();
                 if let Some(slot) = self.proposals.iter_mut().find(|p| p.id == proposal.id) {
+                    proposal.repo_id = slot.repo_id;
                     // A verified human approval is for the change that was
-                    // reviewed: a re-upsert that swaps what would be applied
-                    // (patch, files, kind, workflow) drops it, so the human
-                    // gate re-arms for the new content.
-                    if slot.diff != proposal.diff
-                        || slot.changed_files != proposal.changed_files
-                        || slot.kind != proposal.kind
-                        || slot.workflow != proposal.workflow
-                    {
+                    // reviewed: a re-upsert that changes what would be
+                    // applied (patch, files, kind, workflow, command, base)
+                    // drops it, so the human gate re-arms for the new content.
+                    if crate::authz::votes::diff_digest(slot) != crate::authz::votes::diff_digest(&proposal) {
                         self.guards.verified_approvals.remove(&proposal.id);
                     }
                     *slot = proposal.clone();
                 } else {
+                    proposal.repo_id = self.repo.as_ref().and_then(|r| r.repo_id);
                     self.proposals.push(proposal.clone());
                 }
                 crate::proposal_sets::restamp(&self.proposal_sets, &mut self.proposals, proposal.id);
@@ -716,6 +798,23 @@ impl ChatSession {
                     }
                 }
             }
+            SessionEvent::ProposalApplyRequested { request } => {
+                self.apply_requests.entry(request.id).or_insert_with(|| request.clone());
+            }
+            SessionEvent::ChatRepoSet { repo_id, base_branch } => {
+                let same = self.repo.as_ref().is_some_and(|r| r.repo_id == *repo_id);
+                let base_commit = if same { self.repo.as_ref().and_then(|r| r.base_commit.clone()) } else { None };
+                self.repo = Some(crate::workspace_repo::ChatRepo { repo_id: *repo_id, base_branch: base_branch.clone(), base_commit });
+            }
+            SessionEvent::ChatBasePinned { repo_id, commit } => {
+                if let Some(r) = self.repo.as_mut().filter(|r| r.repo_id == Some(*repo_id)) {
+                    r.base_commit = Some(commit.clone());
+                }
+            }
+            // Read by the roster tracker (authz::timeline), not the session.
+            SessionEvent::WorkspaceRepoAdded { .. }
+            | SessionEvent::WorkspaceRepoUpdated { .. }
+            | SessionEvent::WorkspaceRepoRemoved { .. } => {}
             // Read by the roster tracker (authz::timeline), not the session.
             SessionEvent::WorkspaceRulesSet { .. }
             | SessionEvent::AgentKeyCertified { .. }
@@ -865,7 +964,7 @@ impl ChatSession {
             | SessionEvent::DeviceCertificateAdded { .. } => {}
             // Recorded once authorized (Admin+, checked on ingest), so the
             // trust roster can tell a real revocation from a forged one.
-            SessionEvent::DeviceRevoked { device_id } => {
+            SessionEvent::DeviceRevoked { device_id, .. } => {
                 self.guards.revoked_devices.insert(*device_id);
             }
             SessionEvent::CoordinatorLeaseClaimed { lease } => {
@@ -1115,13 +1214,241 @@ pub fn fold_decisions(
     out
 }
 
+/// Fold one log. A workspace-config log is folded twice when it holds a cut
+/// (Phase A, item 2): the first pass finds the allowed removals, demotions
+/// and revocations; the second denies the cut members' and devices' events
+/// that sort before their cut and aren't covered by its watermark (a
+/// backdated config event), then is the result. Both passes are functions of
+/// the event set, so the result is the same in any delivery order.
 fn fold(
+    envelopes: &[SessionEventEnvelope],
+    trusted_founder: Option<&str>,
+    trusted_workspace: Option<Uuid>,
+    workspace: WorkspaceAuthz<'_>,
+    timeline: Option<&mut crate::authz::ConfigTimeline>,
+    mut decisions: Option<&mut std::collections::BTreeMap<Uuid, Verdict>>,
+) -> Option<ChatSession> {
+    // Equivocation (review P-A2c, owner decision): two envelopes under one
+    // event id with different signed content both drop out before anything
+    // else, so neither folds, coverage never passes through the id, and the
+    // result doesn't depend on which one a device saw first.
+    let (envelopes, equivocated) = split_equivocations(envelopes);
+    let out = fold_log(&envelopes, trusted_founder, trusted_workspace, workspace, timeline, decisions.as_deref_mut());
+    if let Some(d) = decisions {
+        for id in equivocated {
+            d.insert(id, Verdict::Denied);
+        }
+    }
+    out
+}
+
+/// What makes two envelopes under one id the same event: the signer, the
+/// signature and the signed preimage (a copy that only travelled, or was
+/// re-sealed, keeps all three).
+fn equivocation_key(e: &SessionEventEnvelope) -> (Option<Uuid>, Option<Vec<u8>>, Vec<u8>) {
+    (e.signer_device_id, e.signature.clone(), crate::crypto::envelope_preimage(e))
+}
+
+/// Whether `a` and `b` (one event id) are different events: an equivocation.
+pub fn equivocates(a: &SessionEventEnvelope, b: &SessionEventEnvelope) -> bool {
+    a.event_id == b.event_id && a.session_id == b.session_id && equivocation_key(a) != equivocation_key(b)
+}
+
+/// The log without its equivocated ids (and with exact duplicates folded
+/// into one), and the equivocated ids.
+fn split_equivocations(envelopes: &[SessionEventEnvelope]) -> (std::borrow::Cow<'_, [SessionEventEnvelope]>, std::collections::BTreeSet<Uuid>) {
+    let mut count: std::collections::HashMap<Uuid, usize> = std::collections::HashMap::new();
+    for e in envelopes {
+        *count.entry(e.event_id).or_default() += 1;
+    }
+    if count.values().all(|c| *c == 1) {
+        return (std::borrow::Cow::Borrowed(envelopes), Default::default());
+    }
+    let mut keys: std::collections::HashMap<Uuid, Vec<(Option<Uuid>, Option<Vec<u8>>, Vec<u8>)>> = std::collections::HashMap::new();
+    for e in envelopes.iter().filter(|e| count[&e.event_id] > 1) {
+        let k = equivocation_key(e);
+        let v = keys.entry(e.event_id).or_default();
+        if !v.contains(&k) {
+            v.push(k);
+        }
+    }
+    let equivocated: std::collections::BTreeSet<Uuid> = keys.iter().filter(|(_, v)| v.len() > 1).map(|(id, _)| *id).collect();
+    let mut seen = std::collections::HashSet::new();
+    let kept = envelopes
+        .iter()
+        .filter(|e| !equivocated.contains(&e.event_id) && seen.insert(e.event_id))
+        .cloned()
+        .collect();
+    (std::borrow::Cow::Owned(kept), equivocated)
+}
+
+fn fold_log(
+    envelopes: &[SessionEventEnvelope],
+    trusted_founder: Option<&str>,
+    trusted_workspace: Option<Uuid>,
+    workspace: WorkspaceAuthz<'_>,
+    timeline: Option<&mut crate::authz::ConfigTimeline>,
+    decisions: Option<&mut std::collections::BTreeMap<Uuid, Verdict>>,
+) -> Option<ChatSession> {
+    let none = std::collections::BTreeSet::new();
+    let is_config = envelopes
+        .first()
+        .is_some_and(|e| e.session_id == crate::channel::workspace_config_session_id(e.workspace_id));
+    if !is_config {
+        return fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, timeline, decisions, &none);
+    }
+    let mut first = crate::authz::ConfigTimeline::default();
+    let pass1 = fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, Some(&mut first), None, &none);
+    let deny = config_denials_with_rejudged_cuts(envelopes, trusted_founder, trusted_workspace, workspace, &first);
+    if deny.is_empty() && decisions.is_none() {
+        if let Some(t) = timeline {
+            *t = first;
+        }
+        return pass1;
+    }
+    fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, timeline, decisions, &deny)
+}
+
+/// The config events a cut denies outright: by a cut member or device,
+/// sorting before the cut, not covered by its watermark (Phase A, item 2).
+fn config_cut_denials(envelopes: &[SessionEventEnvelope], t: &crate::authz::ConfigTimeline) -> std::collections::BTreeSet<Uuid> {
+    let mut out = std::collections::BTreeSet::new();
+    if t.cuts().is_empty() {
+        return out;
+    }
+    let all: Vec<&SessionEventEnvelope> = envelopes.iter().collect();
+    let chains = crate::watermark::Chains::of(&all);
+    for cut in t.cuts() {
+        out.extend(cut_exclusion(envelopes, &chains, cut));
+    }
+    out
+}
+
+/// One cut's subject's config events it denies: sorting before it (any
+/// position for a revocation), not covered by its watermark.
+fn cut_exclusion(
+    envelopes: &[SessionEventEnvelope],
+    chains: &crate::watermark::Chains,
+    cut: &crate::authz::Cut,
+) -> std::collections::BTreeSet<Uuid> {
+    let mut out = std::collections::BTreeSet::new();
+    let Some(log) = envelopes.first().map(|e| e.session_id) else { return out };
+    let covered = cut.covered(log, chains);
+    for e in envelopes {
+        let before = e.canonical_key() < cut.key || matches!(cut.kind, crate::authz::CutKind::Revoked(_));
+        // Judged as of the cut, not erased: a removed or demoted member's
+        // self-validating publications (keys, certificates, passkeys) stand,
+        // as they would after the cut. Any other uncovered config event of
+        // theirs is denied (fail closed; for a demotion that over-applies to
+        // acts the new role could do, review P-A2e).
+        let still_ok = match &cut.kind {
+            crate::authz::CutKind::Removed(_) | crate::authz::CutKind::Demoted(..) => {
+                crate::authz::is_trust_publication(&e.payload) || matches!(e.payload, SessionEvent::PasskeyRegistered { .. })
+            }
+            // A revoked device's own certificate stands (the revocation is
+            // of a certified device); nothing else it signed uncovered does.
+            crate::authz::CutKind::Revoked(d) => {
+                matches!(&e.payload, SessionEvent::DeviceCertificateAdded { certificate } if certificate.device_id == *d)
+            }
+        };
+        if before && !still_ok && e.canonical_key() != cut.key && cut.applies(e) && !covered.contains(&e.event_id) {
+            out.insert(e.event_id);
+        }
+    }
+    out
+}
+
+/// The cut a config event would make if allowed (none for leaving or
+/// demoting yourself, or a device revoking itself; a role change counts
+/// when the payload says it lowers the role, which the re-judging pass
+/// confirms against the roster).
+fn candidate_cut(env: &SessionEventEnvelope, roster: &crate::authz::RosterState) -> Option<crate::authz::Cut> {
+    use crate::authz::CutKind;
+    let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
+    let (kind, agent_keys, watermark) = match &env.payload {
+        SessionEvent::MemberRemoved { member_id, watermark } if member_id != author => (
+            CutKind::Removed(member_id.clone()),
+            roster
+                .agent_keys
+                .iter()
+                .filter(|(_, k)| roster.agents.get(&k.agent_id).is_some_and(|a| a.owner == *member_id))
+                .map(|(id, _)| *id)
+                .collect(),
+            watermark.clone(),
+        ),
+        SessionEvent::MemberRoleChanged { change, watermark }
+            if change.member_id != author && change.new_role.rank() < change.old_role.rank() =>
+        {
+            (CutKind::Demoted(change.member_id.clone()), Default::default(), watermark.clone())
+        }
+        SessionEvent::DeviceRevoked { device_id, watermark } if env.signer_device_id != Some(*device_id) => {
+            (CutKind::Revoked(*device_id), Default::default(), watermark.clone())
+        }
+        _ => return None,
+    };
+    Some(crate::authz::Cut { key: env.canonical_key(), kind, agent_keys, watermark })
+}
+
+/// Phase A, item 2 (review P-A2b): a cut is judged without its subject's
+/// uncovered earlier events. Those are, by the watermark, after the cut, so
+/// a backdated event of the subject (a relying-party change, a revocation,
+/// anything that would make the cut fail) can't decide it. Cuts go strictly
+/// down the ranks, so two cuts never exclude each other. Returns the final
+/// denial set: every config event an allowed cut denies.
+fn config_denials_with_rejudged_cuts(
+    envelopes: &[SessionEventEnvelope],
+    trusted_founder: Option<&str>,
+    trusted_workspace: Option<Uuid>,
+    workspace: WorkspaceAuthz<'_>,
+    first: &crate::authz::ConfigTimeline,
+) -> std::collections::BTreeSet<Uuid> {
+    let all: Vec<&SessionEventEnvelope> = envelopes.iter().collect();
+    let chains = crate::watermark::Chains::of(&all);
+    let mut deny = config_cut_denials(envelopes, first);
+    let mut accepted: std::collections::BTreeSet<(u64, Uuid)> = first.cuts().iter().map(|c| c.key).collect();
+    // Candidates the positional pass refused whose subject has uncovered
+    // earlier events (the only ones re-judging can change).
+    let mut candidates: Vec<(crate::authz::Cut, std::collections::BTreeSet<Uuid>)> = envelopes
+        .iter()
+        .filter(|e| !accepted.contains(&e.canonical_key()))
+        .filter_map(|e| candidate_cut(e, first.current()))
+        .map(|c| {
+            let x = cut_exclusion(envelopes, &chains, &c);
+            (c, x)
+        })
+        .filter(|(_, x)| !x.is_empty())
+        .collect();
+    candidates.sort_by_key(|(c, _)| c.key);
+    for _ in 0..=candidates.len() {
+        let mut changed = false;
+        for (c, x) in &candidates {
+            if accepted.contains(&c.key) {
+                continue;
+            }
+            let trial: std::collections::BTreeSet<Uuid> = deny.union(x).copied().collect();
+            let mut t = crate::authz::ConfigTimeline::default();
+            fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, Some(&mut t), None, &trial);
+            if t.cuts().iter().any(|k| k.key == c.key) {
+                accepted.extend(t.cuts().iter().map(|k| k.key));
+                deny = trial.union(&config_cut_denials(envelopes, &t)).copied().collect();
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    deny
+}
+
+fn fold_pass(
     envelopes: &[SessionEventEnvelope],
     trusted_founder: Option<&str>,
     trusted_workspace: Option<Uuid>,
     workspace: WorkspaceAuthz<'_>,
     mut timeline: Option<&mut crate::authz::ConfigTimeline>,
     mut decisions: Option<&mut std::collections::BTreeMap<Uuid, Verdict>>,
+    cut_denied: &std::collections::BTreeSet<Uuid>,
 ) -> Option<ChatSession> {
     use crate::authz::{self, Decision, HeldEvent, HoldReason};
 
@@ -1179,12 +1506,25 @@ fn fold(
         t.push(ordered[base].canonical_key(), &tracker.state, false);
     }
     let checked = !matches!(workspace, WorkspaceAuthz::Unchecked);
+    // Phase A, item 2: on a chat log, the events each cut covers (its
+    // watermark's chains on this log).
+    let cut_cover: Vec<std::collections::BTreeSet<Uuid>> = match workspace {
+        WorkspaceAuthz::Timeline(t) if !t.cuts().is_empty() => {
+            let chains = crate::watermark::Chains::of(&ordered);
+            let log = ordered[base].session_id;
+            t.cuts().iter().map(|c| c.covered(log, &chains)).collect()
+        }
+        _ => Vec::new(),
+    };
     for env in &ordered[base + 1..] {
         let trusted = trusted_workspace == Some(env.workspace_id);
         let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
         let mut allowed = false;
         let mut held = false;
         'judge: {
+            if cut_denied.contains(&env.event_id) {
+                break 'judge;
+            }
             if let SessionEvent::SessionSnapshot { session: snap } = &env.payload {
                 // A non-seed snapshot is a full-state overwrite folded mid-stream (a
                 // compaction checkpoint). Gate it like governance: its author must be
@@ -1207,9 +1547,24 @@ fn fold(
                     WorkspaceAuthz::Timeline(t) => {
                         // Every 2.0 author stamps the frontier; one without it
                         // can't be placed and is refused.
-                        let Some(f) = env.actor_stamp.as_ref().and_then(|s| s.cfg_frontier) else {
+                        let Some(mut f) = env.actor_stamp.as_ref().and_then(|s| s.cfg_frontier) else {
                             break 'judge;
                         };
+                        // A cut member's or device's event its cut's
+                        // watermark doesn't cover is judged as of the cut,
+                        // whatever frontier it claims; a revoked device's
+                        // never folds (Phase A, item 2).
+                        for (cut, covered) in t.cuts().iter().zip(&cut_cover) {
+                            if !cut.applies(env) || covered.contains(&env.event_id) {
+                                continue;
+                            }
+                            if matches!(cut.kind, authz::CutKind::Revoked(_)) {
+                                break 'judge;
+                            }
+                            if cut.frontier() > f {
+                                f = cut.frontier();
+                            }
+                        }
                         match t.at(f) {
                             Ok(r) => {
                                 at = Some(r);
@@ -1235,6 +1590,49 @@ fn fold(
                 break 'judge;
             }
             allowed = true;
+            // Phase A, item 2: record a removal, demotion or revocation.
+            if let Some(t) = timeline.as_deref_mut() {
+                // Leaving or demoting yourself is not a cut: its watermark
+                // would be the subject's own word, and an empty one would
+                // retroactively deny everything they did (members they
+                // added included). What they could backdate afterwards they
+                // could have done before leaving.
+                let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
+                let cut = match &env.payload {
+                    SessionEvent::MemberRemoved { member_id, .. } | SessionEvent::MemberRoleChanged { change: MemberRoleChange { member_id, .. }, .. }
+                        if member_id == author =>
+                    {
+                        None
+                    }
+                    // Nor is a device revoking itself (its watermark would be
+                    // its own word; another device of the account revoking it
+                    // is a cut).
+                    SessionEvent::DeviceRevoked { device_id, .. } if env.signer_device_id == Some(*device_id) => None,
+                    SessionEvent::MemberRemoved { member_id, watermark } => Some((
+                        authz::CutKind::Removed(member_id.clone()),
+                        tracker
+                            .state
+                            .agent_keys
+                            .iter()
+                            .filter(|(_, k)| tracker.state.agents.get(&k.agent_id).is_some_and(|a| a.owner == *member_id))
+                            .map(|(id, _)| *id)
+                            .collect(),
+                        watermark.clone(),
+                    )),
+                    SessionEvent::MemberRoleChanged { change, watermark }
+                        if change.new_role.rank() < session.role_of(&change.member_id).rank() =>
+                    {
+                        Some((authz::CutKind::Demoted(change.member_id.clone()), Default::default(), watermark.clone()))
+                    }
+                    SessionEvent::DeviceRevoked { device_id, watermark } => {
+                        Some((authz::CutKind::Revoked(*device_id), Default::default(), watermark.clone()))
+                    }
+                    _ => None,
+                };
+                if let Some((kind, agent_keys, watermark)) = cut {
+                    t.push_cut(authz::Cut { key: env.canonical_key(), kind, agent_keys, watermark });
+                }
+            }
             // Checked-fold rewrites: votes carry the signer's real role, and an
             // upsert never asserts votes or status.
             let rewritten;
@@ -1520,10 +1918,10 @@ mod tests {
                     member_id: "mallory".into(),
                     old_role: WorkspaceRole::Viewer,
                     new_role: WorkspaceRole::Owner,
-                },
+                }, watermark: Vec::new(),
             })),
             // Eviction of the real owner (forged MemberRemoved → also a trust DoS).
-            by("mallory", env(sid, wid, 3, SessionEvent::MemberRemoved { member_id: "owner".into() })),
+            by("mallory", env(sid, wid, 3, SessionEvent::MemberRemoved { member_id: "owner".into(), watermark: Vec::new() })),
         ];
         let s = project(&forged).unwrap();
         assert_eq!(s.role_of("mallory"), WorkspaceRole::Viewer, "forged self-promotion must be dropped");
@@ -1539,7 +1937,7 @@ mod tests {
                     member_id: "mallory".into(),
                     old_role: WorkspaceRole::Viewer,
                     new_role: WorkspaceRole::Contributor,
-                },
+                }, watermark: Vec::new(),
             })),
         ];
         assert_eq!(
@@ -1589,7 +1987,7 @@ mod tests {
                             member_id: "m1".into(),
                             old_role: WorkspaceRole::Contributor,
                             new_role: WorkspaceRole::Admin,
-                        },
+                        }, watermark: Vec::new(),
                     },
                 ),
             ),
@@ -1602,7 +2000,7 @@ mod tests {
         // membership events are workspace-scoped
         assert_eq!(
             SessionEvent::MemberRemoved {
-                member_id: "m1".into()
+                member_id: "m1".into(), watermark: Vec::new()
             }
             .scope(),
             EventScope::Workspace
@@ -1671,7 +2069,7 @@ mod tests {
         e.actor_stamp = Some(ActorStamp {
             actor: ActorIdentity::new(author, author, ActorKind::Human),
             recorded_at: Timestamp::epoch(), cfg_frontier: None,
-            presence: None, runtime_effect: false, });
+            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
         e
     }
 
@@ -1744,8 +2142,8 @@ mod tests {
             by("owner", env(sid, wid, 4, SessionEvent::MemberAdded { invite: None, member: member("m2", "u2", WorkspaceRole::Contributor) })),
             env(sid, wid, 5, SessionEvent::SessionTitleChanged { title: "Foo".into() }),
             env(sid, wid, 6, SessionEvent::MessageReactionAdded { message_id: mid, reaction: reaction("u1", "👍") }),
-            by("owner", env(sid, wid, 7, SessionEvent::MemberRoleChanged { change: MemberRoleChange { member_id: "m1".into(), old_role: WorkspaceRole::Contributor, new_role: WorkspaceRole::Admin } })),
-            by("owner", env(sid, wid, 8, SessionEvent::MemberRemoved { member_id: "m2".into() })),
+            by("owner", env(sid, wid, 7, SessionEvent::MemberRoleChanged { change: MemberRoleChange { member_id: "m1".into(), old_role: WorkspaceRole::Contributor, new_role: WorkspaceRole::Admin }, watermark: Vec::new() })),
+            by("owner", env(sid, wid, 8, SessionEvent::MemberRemoved { member_id: "m2".into(), watermark: Vec::new() })),
             env(sid, wid, 9, SessionEvent::SessionTitleChanged { title: "Bar".into() }),
             env(sid, wid, 10, SessionEvent::MessageReactionRemoved { message_id: mid, actor_id: "u1".into(), emoji: "👍".into() }),
             env(sid, wid, 11, SessionEvent::MessageReactionAdded { message_id: mid, reaction: reaction("u2", "🎉") }),
@@ -2017,7 +2415,9 @@ mod tests {
         // Hand-craft an envelope carrying a future "kind".
         let mut future = serde_json::to_value(&known).unwrap();
         future["sequence"] = serde_json::json!(2);
-        future["event_id"] = serde_json::json!(Uuid::new_v4());
+        // (the wire name is `eventId`: two kinds under one id would be an
+        // equivocation, and both would be denied)
+        future["eventId"] = serde_json::json!(Uuid::new_v4());
         future["payload"] = serde_json::json!({ "kind": "somethingFromTheFuture", "extra": 42 });
         let future: SessionEventEnvelope = serde_json::from_value(future).unwrap();
         assert!(matches!(future.payload, SessionEvent::Unknown));
@@ -2262,8 +2662,7 @@ mod tests {
                 actor: ActorIdentity::new("u1", "U", ActorKind::Human),
                 recorded_at: Timestamp::epoch(),
                 cfg_frontier: None,
-                presence: None, runtime_effect: false,
-            });
+                presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
         }
         let s = project(&envs).unwrap();
         assert_eq!(s.workflow_definitions.len(), 1);
