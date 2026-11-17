@@ -1,5 +1,16 @@
 # Kubernetes as a deployment option
 
+> **2.0 status (2026-11-16).** What ships in 2.0 is the preview Helm charts
+> described in `docs-site/deploy/kubernetes.md`: serve and named workers run
+> agent turns in their own pods under Landlock (fail-closed preflight),
+> secrets as files, closed egress, single replicas. The executor/controller
+> split, PR-test sandboxes, OTLP export, keys off the cluster, multi-tenant
+> clusters and relay/auth HA below are **not** in 2.0 (see that page's
+> "Explicitly unsupported" list). Serve enrollment as an owner's device
+> (`serve enroll`, `LIGUS_SERVE_OWNER`) is being replaced by serve joining as
+> its own member. This document is the longer design and keeps the older
+> Hive names.
+
 Status: **design, not built.** Phase 0 (this document, a container image for
 the `hive` binary and `deploy/kubernetes/README.md`) is in the tree. Everything
 else is a proposal with acceptance tests per phase. Claims about third-party
