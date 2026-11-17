@@ -183,6 +183,7 @@ pub async fn turn_test(data_dir: &Path) -> Result<TurnReport> {
             max_tool_rounds: Some(3),
             allow_remote_file_tools: false,
             driver: Default::default(),
+            gateway: None,
         };
         let settings = ToolSettings { run_command: true, ..ToolSettings::default() };
         let files = TurnFiles {

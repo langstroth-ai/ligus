@@ -267,8 +267,11 @@ pub fn agent_workspace_runtime(
             agent.runtime_id
         )
     })?;
-    let api_key = resolve_workspace_credential(&wr.credential);
-    if api_key.is_none() && !keyless_ok(wr) {
+    let gateway = Some(wr.gateway.trim()).filter(|g| !g.is_empty()).map(hive_runtime::model_gateway::GatewaySelection::named);
+    // Through a gateway the runtime's own key is never sent: the gateway's
+    // credential (this host's operator config) is.
+    let api_key = if gateway.is_some() { None } else { resolve_workspace_credential(&wr.credential) };
+    if api_key.is_none() && gateway.is_none() && !keyless_ok(wr) {
         bail!("workspace runtime '{}' has no secret on this box (provision LIGUS_WS_SECRET_…)", wr.name);
     }
     // claude-code / agy / copilot take the worker's permission tier; other
@@ -290,6 +293,7 @@ pub fn agent_workspace_runtime(
         max_tool_rounds: None,
         allow_remote_file_tools: false,
         driver: wr.driver,
+        gateway,
     };
     Ok((rt, wr.id.clone()))
 }
@@ -467,7 +471,12 @@ async fn run_turn(
         sink.status(pm.session_id, pm.agent_id, TurnState::Done, Some("agent no longer exists"));
         return Ok(());
     };
-    let (rt, rt_label) = agent_workspace_runtime(runtimes, &agent)?;
+    let (mut rt, rt_label) = agent_workspace_runtime(runtimes, &agent)?;
+    // The gateway's attribution (when its operator turned it on) hashes these.
+    if let Some(g) = rt.gateway.as_mut() {
+        g.workspace_id = Some(s.workspace_id);
+        g.agent_id = Some(agent.id);
+    }
     let mut turns = turns_for(&through_trigger(&s, pm.message_id), Some(agent.id), &agent.name);
     crate::materialize_turns(ctx.cfg, &mut turns).await;
     let system = format!(
