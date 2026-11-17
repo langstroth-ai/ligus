@@ -263,6 +263,19 @@ mod tests {
             eprintln!("SKIPPED: no agent sandbox on this host");
             return;
         }
+        // Linux: the sandbox re-executes a Ligus binary as its pre-exec
+        // helper, and this test harness isn't one. Use the `ligus` or
+        // `ligus-sandbox-helper` binary cargo built next to it (a workspace
+        // test run builds both); without either, skip.
+        #[cfg(target_os = "linux")]
+        {
+            let dir = std::env::current_exe().ok().and_then(|e| Some(e.parent()?.parent()?.to_path_buf()));
+            let Some(helper) = dir.and_then(|d| ["ligus", "ligus-sandbox-helper"].iter().map(|n| d.join(n)).find(|p| p.exists())) else {
+                eprintln!("SKIPPED: no ligus or ligus-sandbox-helper binary next to the test harness (run the workspace tests)");
+                return;
+            };
+            hive_runtime::executor::set_helper_exe(helper);
+        }
         let data = tempfile::tempdir().unwrap();
         std::fs::write(data.path().join("hive.db"), "secret").unwrap();
         hive_runtime::executor::configure_host(data.path(), &[], &[]);
