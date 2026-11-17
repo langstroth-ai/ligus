@@ -1,6 +1,8 @@
 # Ligus on Kubernetes
 
-Status: **Phase 1.** The Helm chart is in
+Status: **preview** (charts and images not published). The operator guide,
+including supported nodes, backups, upgrades and what 2.0 does not support, is
+[`docs-site/deploy/kubernetes.md`](../../docs-site/deploy/kubernetes.md). The Helm chart is in
 [`../helm/ligus`](../helm/ligus) and its README is the install guide. The
 design, and the phases still to come, are in
 [`docs/design/kubernetes.md`](../../docs/design/kubernetes.md). The container
@@ -13,8 +15,7 @@ image for the `ligus` binary is in
 |---|---|---|---|
 | Relay (separate repo, `ligus-ai/relay`) | Deployment + Postgres (external or an in-cluster operator); the tunnel part pinned to one replica | Postgres | **No**, ciphertext only |
 | `ligus serve` (one per workspace) | StatefulSet, 1 replica, PVC for `LIGUS_DATA_DIR` | PVC (identity, `hive.db`, tunnel keys, checkouts) | Yes |
-| `ligus worker` (today) | StatefulSet, one identity per replica, agents sharded across replicas by host binding | PVC per replica | Yes |
-| Turn executors (planned) | Job or agent-sandbox `Sandbox` per turn, hardened, optional gVisor/Kata | none (ephemeral) | **No** |
+| `ligus worker` | One single-replica StatefulSet per named host (`worker.instances[]`); agents bound by host | PVCs per host | Yes |
 | MCP servers | Deployment + Service (or ToolHive / kagent CRDs); stdio servers run inside the turn | per server | No |
 | Local models | vLLM / KServe / llm-d behind an OpenAI-compatible Service | model cache | No |
 
@@ -23,7 +24,7 @@ Two rules follow from Ligus's design and shape everything here:
 1. **One identity, one writer.** A `ligus serve` or `ligus worker` process is a
    Ligus *device*: its keys and its SQLite event log live in its data dir. Never
    run two pods on the same data dir, and never put `hive.db` on a network
-   filesystem (NFS, SMB, RWX volumes). Use a `ReadWriteOnce` PVC and a
+   filesystem (NFS, SMB, RWX volumes). Use a `ReadWriteOncePod` PVC and a
    StatefulSet.
 2. **Keys stay out of the relay.** The workspace key, device keys and model or
    git credentials live only in the namespace of the workspace that owns them.
@@ -56,17 +57,25 @@ env:
   - { name: LIGUS_SERVE_LISTEN, value: "0.0.0.0:8787" }
   - { name: LIGUS_SERVE_ALLOW_ANY_BIND, value: "1" }
   - { name: LIGUS_SERVE_LABEL, value: k8s-serve }
-  - { name: LIGUS_RELAY_URL, valueFrom: { secretKeyRef: { name: ligus-workspace, key: relay-url } } }
+  - { name: LIGUS_RELAY_URL, value: "https://relay.example.com" }
   - { name: LIGUS_WORKSPACE, valueFrom: { secretKeyRef: { name: ligus-workspace, key: room } } }
-  - { name: LIGUS_WORKSPACE_KEY, valueFrom: { secretKeyRef: { name: ligus-workspace, key: key } } }
+  # The key is a file, never env: the Secret is mounted with key -> cli.key
+  # at this path for Ligus's k8s secret store (or set LIGUS_WORKSPACE_KEY_FILE).
+  - { name: LIGUS_SECRET_BACKEND, value: k8s }
+  - { name: LIGUS_SECRETS_DIR, value: /etc/ligus/secrets/store }
+  # Fail closed without an agent sandbox (Landlock in a restricted pod).
+  - { name: LIGUS_REQUIRE_SANDBOX, value: "1" }
+  - { name: LIGUS_SANDBOX, value: landlock }
 ```
 
 Then, from your own terminal (never in a Job whose logs are kept):
 
 ```sh
-kubectl -n ligus-ws-acme exec -it ligus-serve-0 -- ligus serve enroll   # optional: make it your device
 kubectl -n ligus-ws-acme exec -it ligus-serve-0 -- ligus pair --relay-only
 ```
+
+(`ligus serve enroll`, which made the pod one member's device, is being
+replaced in 2.0 by serve joining as its own member; see the operator guide.)
 
 `ligus pair` prints a secret. Prefer the relay tunnel (`ligus remote enable`)
 for the phone over exposing the serve API through an Ingress.

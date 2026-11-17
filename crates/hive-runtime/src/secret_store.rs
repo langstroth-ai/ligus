@@ -203,6 +203,10 @@ impl SecretStore for File0600 {
 // K8sSecretFile
 // ---------------------------------------------------------------------------
 
+/// Where [`K8sSecretFile`] looks when `LIGUS_SECRETS_DIR` is unset (with
+/// `LIGUS_SECRET_BACKEND=k8s`). Hosts deny it to agent processes.
+pub const K8S_SECRETS_DIR_DEFAULT: &str = "/var/run/secrets/ligus";
+
 /// Read-only Secret files mounted by the operator (`<dir>/<scope>.<name>`);
 /// anything not provisioned there (a fresh pod's identity seeds) is kept in
 /// [`File0600`] under the data dir.
@@ -850,7 +854,7 @@ pub fn open(data_dir: &Path, choice: Option<&str>) -> Arc<dyn SecretStore> {
     match choice.as_deref() {
         Some("file") => return Arc::new(File0600::new(data_dir)),
         Some("k8s") => {
-            let mount = hive_core::compat::var_os("LIGUS_SECRETS_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/var/run/secrets/ligus"));
+            let mount = hive_core::compat::var_os("LIGUS_SECRETS_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(K8S_SECRETS_DIR_DEFAULT));
             return Arc::new(K8sSecretFile::new(mount, data_dir));
         }
         Some("secret-service") => {

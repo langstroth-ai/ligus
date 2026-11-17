@@ -96,7 +96,8 @@ gate who may connect with tokens. Guide:
 
 !!! warning "Preview"
     The Helm charts live under `deploy/helm` in this repository and in the
-    relay repository (v0.2.0), but aren't published to a chart registry yet.
+    relay repository (v0.3.0), but aren't published to a chart registry, and
+    no images are published.
     Expect changes. See [Kubernetes (preview)](kubernetes.md).
 
 ```mermaid

@@ -5,7 +5,7 @@ name: kind-e2e
 # (from the relay repository) with Postgres, one serve StatefulSet on a
 # throwaway workspace, sync between two client identities through the relay,
 # no plaintext in the relay database, restart on the same identity, Pod
-# Security "restricted", NetworkPolicy isolation and the sandbox hardening Job.
+# Security "restricted" and NetworkPolicy isolation.
 # The chart sets LIGUS_* variables and the test pod runs `ligus`, so this
 # needs a tree at 2.0 or later (the Ligus rename; 2.0 ignores HIVE_*).
 # Runs on release branches and tags, on PRs that touch the chart, the
@@ -31,9 +31,11 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Repository and ref holding the ligus-relay chart and image.
+  # Repository and commit holding the ligus-relay chart and image: pinned to
+  # a tested commit (relay v0.3.0), never a moving branch. Bump it together
+  # with the ligus chart's ligus-relay dependency.
   RELAY_REPO: ligus-ai/relay
-  RELAY_REF: main
+  RELAY_REF: 2faab5ee9f8a41e986aee92b1165c4515bf0a583
 
 jobs:
   e2e:
@@ -78,15 +80,16 @@ jobs:
           mkdir -p deploy/helm/ligus/charts
           helm package -d deploy/helm/ligus/charts _relay/deploy/helm/ligus-relay
           helm lint --strict deploy/helm/ligus -f deploy/helm/ligus/ci/kind-values.yaml
-          helm template t deploy/helm/ligus --set workspace.generate=true --set relay.enabled=true \
-            --set relay.postgres.enabled=true --set remote.enabled=true --set remote.insecureRelay=true \
-            --set worker.enabled=true --set worker.replicas=2 >/dev/null
-          # Must refuse: PR tests on the default runtime, and no workspace.
+          helm template t deploy/helm/ligus --set workspace.existingSecret=ws --set relay.enabled=true \
+            --set relay.postgres.enabled=true --set relay.postgres.existingSecret=pg --set relay.tunnel.mode=open \
+            --set remote.enabled=true --set remote.insecureRelay=true \
+            --set worker.enabled=true --set 'worker.instances[0].name=a' --set 'worker.instances[1].name=b' >/dev/null
+          # Must refuse: the removed executor template, and no workspace.
           # (`if`, not a bare `!`: bash's errexit ignores a negated command,
           # so `! cmd` mid-script never failed the step.)
-          if helm template t deploy/helm/ligus --set relayUrl=x --set workspace.generate=true \
-              --set sandbox.enabled=true --set sandbox.profile=pr-test >/dev/null 2>&1; then
-            echo "::error::chart rendered pr-test sandbox on the default runtime"; exit 1
+          if helm template t deploy/helm/ligus --set relayUrl=x --set workspace.existingSecret=ws \
+              --set networkPolicy.relayNamespace=r --set sandbox.enabled=true >/dev/null 2>&1; then
+            echo "::error::chart rendered the removed sandbox.* values"; exit 1
           fi
           if helm template t deploy/helm/ligus --set relayUrl=x >/dev/null 2>&1; then
             echo "::error::chart rendered without a workspace"; exit 1
@@ -104,20 +107,59 @@ jobs:
           # The relay chart's tunnel is off by default since relay 0.2.0. Open
           # is fine for this throwaway in-cluster relay; never without a token
           # gate on a reachable one.
+          # The dev Postgres reads its password and DSN from a Secret the
+          # operator creates: relay charts after v0.3.0 generate none and
+          # refuse postgres.enabled without it (v0.3.0 ignores both).
+          PW=$(openssl rand -hex 24)
+          kubectl -n ligus-relay create secret generic relay-dev-postgres \
+            --from-literal=password="$PW" \
+            --from-literal=DATABASE_URL="postgres://relay:$PW@ligus-relay-postgres:5432/relay?sslmode=disable"
           helm install ligus-relay _relay/deploy/helm/ligus-relay -n ligus-relay \
             --set image.repository=ligus-relay --set image.tag=dev \
-            --set postgres.enabled=true --set postgres.persistence.size=256Mi \
+            --set postgres.enabled=true --set postgres.existingSecret=relay-dev-postgres \
+            --set postgres.persistence.size=256Mi \
             --set tunnel.mode=open --wait --timeout 5m
           helm test ligus-relay -n ligus-relay --logs
       - name: install workspace (throwaway)
         run: |
           kubectl create namespace ligus-ws-smoke
           kubectl label namespace ligus-ws-smoke pod-security.kubernetes.io/enforce=restricted
+          # A throwaway workspace: nobody outside the cluster holds this key.
+          kubectl -n ligus-ws-smoke create secret generic ws-smoke \
+            --from-literal=room="k8s-test-$(cat /proc/sys/kernel/random/uuid)" \
+            --from-literal=key="$(openssl rand -base64 36)"
           helm install smoke deploy/helm/ligus -n ligus-ws-smoke \
             -f deploy/helm/ligus/ci/kind-values.yaml --wait --timeout 5m
-          kubectl -n ligus-ws-smoke logs job/smoke-ligus-sandbox-smoke
-      - name: sync through the relay (helm test)
+      - name: sync and a sandboxed agent turn (helm test)
         run: helm test smoke -n ligus-ws-smoke --logs | tee /tmp/test.log
+      - name: agent turn inside the serve container is confined by Landlock
+        run: |
+          set -euo pipefail
+          # One real headless turn (stub model, run_command) in the serve
+          # container itself: the tier must be landlock, the command must run,
+          # and it must not read PID 1's environ (the pod's env), serve's own
+          # environ, the data dir or the mounted secret files.
+          kubectl -n ligus-ws-smoke exec smoke-ligus-serve-0 -c serve -- \
+            ligus doctor --require-confined --expect-tier landlock --turn-test | tee /tmp/turn.log
+          grep -q 'turn test: agent sandbox: landlock' /tmp/turn.log
+          grep -q 'turn test: run_command ran: yes' /tmp/turn.log
+          grep -q 'turn test: DENIED_ENVIRON_1$' /tmp/turn.log
+          grep -q 'turn test: passed (tier landlock)' /tmp/turn.log
+          if grep -q LIGUS_PROBE_LEAK /tmp/turn.log; then echo "::error::the turn read something it must not"; exit 1; fi
+          # serve itself is not dumpable: its /proc entries belong to root.
+          kubectl -n ligus-ws-smoke exec smoke-ligus-serve-0 -c serve -- bash -c '
+            for p in /proc/[0-9]*; do
+              case "$(tr "\0" " " <"$p/cmdline" 2>/dev/null)" in
+                "/usr/local/bin/ligus serve"*)
+                  owner=$(stat -c %u "$p/environ"); echo "serve pid ${p#/proc/} environ owner uid $owner"; test "$owner" = 0; exit $? ;;
+              esac
+            done; echo "serve process not found"; exit 1'
+          # The preflight ran before serve started.
+          kubectl -n ligus-ws-smoke logs smoke-ligus-serve-0 -c sandbox-preflight | grep -q 'turn test: passed'
+      - name: worker probes
+        run: |
+          kubectl -n ligus-ws-smoke wait --for=condition=Ready pod -l app.kubernetes.io/component=worker --timeout=180s
+          kubectl -n ligus-ws-smoke get pods -l app.kubernetes.io/component=worker
       - name: tunnel host connected
         run: |
           for _ in $(seq 30); do

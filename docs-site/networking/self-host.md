@@ -8,7 +8,7 @@ team; every device in a workspace points at the same relay URL and room.
 
 It lives in its own repository,
 **[github.com/ligus-ai/relay](https://github.com/ligus-ai/relay)** (MIT).
-This page covers relay **v0.2.0**: the binary `ligus-relay` and settings
+This page covers relay **v0.3.0**: the binary `ligus-relay` and settings
 named `LIGUS_RELAY_*`.
 
 !!! note "Older relay builds use the Hive names"
@@ -107,7 +107,7 @@ curl -s localhost:8443/v1/health                # → ok
 
 ### Kubernetes
 
-Relay v0.2.0 ships a Helm chart (`deploy/helm/ligus-relay`); see
+Relay v0.3.0 ships Helm charts for the relay and ligus-auth (`deploy/helm/`); see
 [Kubernetes](../deploy/kubernetes.md#relay).
 
 ## Listen address

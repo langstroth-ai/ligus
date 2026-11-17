@@ -1,25 +1,25 @@
 {{- $fullname := include "ligus.fullname" . -}}
-Ligus workspace release {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
+Ligus workspace release {{ .Release.Name }} in namespace {{ .Release.Namespace }} (preview chart).
   Relay: {{ include "ligus.relayUrl" . }}
 {{- if .Values.serve.enabled }}
-  serve: statefulset/{{ $fullname }}-serve (1 replica, PVC data-{{ $fullname }}-serve-0)
+  serve: statefulset/{{ $fullname }}-serve (1 replica, PVCs data- and home-{{ $fullname }}-serve-0)
 {{- end }}
 {{- if .Values.worker.enabled }}
-  workers: statefulset/{{ $fullname }}-worker ({{ .Values.worker.replicas }} host identities)
+  workers: {{ range .Values.worker.instances }}statefulset/{{ $fullname }}-worker-{{ .name }} {{ end }}
 {{- end }}
-{{- if .Values.workspace.generate }}
+{{- if .Values.agentSandbox.preflight.enabled }}
 
-TEST WORKSPACE: a throwaway room and key were generated into secret/{{ include "ligus.workspaceSecretName" . }}.
-Do not put real work in it.
-{{- end }}
-{{- if and .Values.sandbox.enabled (not .Values.sandbox.runtimeClassName) }}
-
-WARNING: sandbox.runtimeClassName is empty: executors run on the default runtime (runc), which is not a security boundary.
+Each pod starts with a sandbox preflight. A pod stuck in Init means its node
+can't confine agent turns (Landlock needs Linux 6.7+); see why with
+  kubectl -n {{ .Release.Namespace }} logs {{ $fullname }}-serve-0 -c sandbox-preflight
 {{- end }}
 
-Pair the phone or enroll the device from your own terminal (these print secrets; never run them as Jobs):
-  kubectl -n {{ .Release.Namespace }} exec -it {{ $fullname }}-serve-0 -- ligus serve enroll
+Pair the phone from your own terminal (it prints a secret; never run it as a Job):
   kubectl -n {{ .Release.Namespace }} exec -it {{ $fullname }}-serve-0 -- ligus pair --relay-only
+
+Changing in 2.0: `ligus serve enroll` and serve.owner (serve acting for an
+owner) are being replaced by serve joining as its own member, approved by an
+Admin. Until that lands they still work; see the deploy docs.
 
 Health:
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ $fullname }}-serve 8787:{{ .Values.serve.service.port }}

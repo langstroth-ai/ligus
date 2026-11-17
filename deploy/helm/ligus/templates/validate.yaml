@@ -1,0 +1,2 @@
+{{- /* Validation runs once per render from here; the chart creates no Secret. */ -}}
+{{- include "ligus.validate" . -}}
