@@ -343,12 +343,31 @@ it.
     demotion or revocation carries a watermark of the member's (or
     device's) events its author held, and every later event of theirs is
     judged as of the cut, whatever config position it names, in any
-    delivery order. Events the remover never held (a chat log their device
-    doesn't hold) are cut too, so sync before removing someone whose recent
-    history matters. On the config log itself, a removed Admin's event that
-    races the removal is decided by canonical order, like any two Admins
-    acting at once.
-25. **A human click runs others' text at the clicker's tier.** Some
+    delivery order. Two consequences, both by design (review P-A2e,
+    P-A2f):
+    - **The watermark is its author's word.** Peers can't check it. A
+      remover who names too little (an empty watermark, or old heads) has
+      the member's later-looking history judged as of the cut: on the
+      config log their uncovered acts (members they added, roles they
+      changed) are denied, and on chats their uncovered posts are judged
+      as a non-member's. Their own keys, certificates and passkeys stand.
+      Ranks bound who can do this: a cut goes strictly down the ranks, so
+      only someone above the member can.
+    - **Chats the remover never synced.** Events the remover's device
+      doesn't hold (a chat it never synced) are cut too, so sync before
+      removing someone whose recent history matters.
+
+    Leaving yourself, demoting yourself and a device revoking itself are not
+    cuts; what such a member could backdate afterwards they could have done
+    before.
+25. **Equivocation is caught where both copies meet.** Event ids are
+    chosen by their author, so a signer can publish two different envelopes
+    under one id. A device that holds both denies both, whatever order they
+    came in, and coverage never passes through that id; but a device only
+    learns of it when the second copy reaches it (the relay keeps the first
+    one it saw), so devices can disagree until both copies have reached
+    them.
+26. **A human click runs others' text at the clicker's tier.** Some
     actions place text someone else wrote into a prompt that runs as the
     person who clicked: **Send back to revise** (the review thread),
     **Implement** on an approved instruction proposal (the agent is sent
@@ -357,7 +376,7 @@ it.
     That is a prompt-injection surface at your role; read what you are
     sending before you click. Automatic board pickup doesn't have this
     problem: it runs below every floor.
-26. **LSP servers and the terminal panel run unconfined.** They are your
+27. **LSP servers and the terminal panel run unconfined.** They are your
     own tools, started for you, and run outside the agent sandbox with your
     OS user's access, by design. A repository's language-server config or a
     command you paste into the terminal runs with everything you can reach.
@@ -460,7 +479,9 @@ release fixes them: invite codes carrying every epoch key, directory keys
 for people you share no workspace with (unverified, sealed only after a
 warning), a CLI-founded workspace staying unsecured until its founder adds a passkey,
 devices without a founder pin keeping the passphrase key, and ingest-time
-decisions that depend on arrival order, the reach of a removal's watermark, human
+decisions that depend on arrival order, the reach of a removal's watermark (its
+author's word, and chats the remover never synced), equivocations seen only
+where both copies meet, human
 clicks that run others' text at the clicker's tier, and unconfined LSP
 servers and terminal. On Kubernetes, DNS tunnelling through
 the cluster resolver remains possible (see
