@@ -47,7 +47,7 @@ pub async fn run(workspace: Option<Uuid>, only: Option<String>, model: String) -
                 println!("  hosted: FAILED: {e}");
             }
         }
-        match cli(g, &sel).await {
+        match cli(g, &sel, &model).await {
             Ok(()) => println!("  cli: ok (credential injected by the proxy; the child never saw it)"),
             Err(e) => {
                 failed += 1;
@@ -108,11 +108,11 @@ async fn hosted(sel: &GatewaySelection, api: Api, model: &str) -> Result<usize> 
     Ok(reply.len())
 }
 
-async fn cli(g: &model_gateway::Gateway, sel: &GatewaySelection) -> Result<()> {
+async fn cli(g: &model_gateway::Gateway, sel: &GatewaySelection, model: &str) -> Result<()> {
     let exe = std::env::current_exe()?;
     let secrets: Vec<String> = g.secret_files().iter().map(|p| p.display().to_string()).collect();
     let target = gateway_host_port(g);
-    let mut args: Vec<String> = vec![PROBE_ARG.into(), "--api".into(), g.api().as_str().into(), "--direct".into(), target];
+    let mut args: Vec<String> = vec![PROBE_ARG.into(), "--api".into(), g.api().as_str().into(), "--model".into(), model.into(), "--direct".into(), target];
     for s in &secrets {
         args.push("--secret".into());
         args.push(s.clone());
@@ -178,12 +178,13 @@ pub fn maybe_run_probe() {
         println!("probe: read {s} {}", if r.is_ok() { "READABLE" } else { "denied" });
     }
     let api = val("--api").unwrap_or_else(|| "openai".into());
+    let model = val("--model").unwrap_or_else(|| "ligus-gateway-check".into());
     let (url, body) = if api == "anthropic" {
         let base = std::env::var("ANTHROPIC_BASE_URL").unwrap_or_default();
-        (format!("{base}/v1/messages"), r#"{"model":"ligus-check","max_tokens":16,"messages":[{"role":"user","content":"ping"}]}"#)
+        (format!("{base}/v1/messages"), serde_json::json!({"model": model, "max_tokens": 16, "messages": [{"role": "user", "content": "ping"}]}).to_string())
     } else {
         let base = std::env::var("OPENAI_BASE_URL").unwrap_or_default();
-        (format!("{base}/chat/completions"), r#"{"model":"ligus-check","messages":[{"role":"user","content":"ping"}]}"#)
+        (format!("{base}/chat/completions"), serde_json::json!({"model": model, "messages": [{"role": "user", "content": "ping"}]}).to_string())
     };
     println!("probe: base url is the proxy route: {}", url.contains("/ligus-gw/"));
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime");

@@ -302,8 +302,26 @@ construction, and the chart's `security_test.py` cases (catch-all CIDR,
 metadata overlap, missing selectors, plaintext without opt-in all refused;
 projected volume has audience and expiry; NetworkPolicy rule per gateway).
 
-End-to-end on a local Kubernetes (OrbStack), throwaway namespaces:
-kgateway (primary, if it installs cleanly) with JWT auth against the
-cluster's OIDC JWKS, a stub OpenAI-compatible backend, Ligus serve with
-`modelGateways`; a second, lighter run with LiteLLM or the stub in `apiKey`
-mode. Results are recorded in the PR.
+End-to-end: `deploy/helm/ligus/ci/model-gateway-e2e/run.sh` installs, in
+throwaway namespaces, Gateway API v1.7.0 and kgateway v2.5.1 (JWT
+`GatewayExtension` with the cluster's JWKS inlined, the `ligus-llm-gw`
+audience, an RBAC CEL rule on the subject, a local rate limit, TLS with a
+private CA), LiteLLM v1.108.9 (`apiKey` mode), a stub OpenAI-compatible model
+behind both, a throwaway relay and Ligus serve with both gateways, then runs
+`ligus gateway-check` in the serve pod, token checks against kgateway, and a
+NetworkPolicy probe from the serve pod's network; it deletes everything,
+CRDs included, on exit.
+
+Result on OrbStack Kubernetes v1.36.5 (2026-11-17), all passing:
+
+| Check | Result |
+|---|---|
+| Hosted-API turn through kgateway with the projected SA token (pinned CA) | ok |
+| Hosted-API turn through LiteLLM with the API key | ok |
+| CLI-style child through the proxy route, both gateways | 200; credential absent from env, argv and output; credential files unreadable; direct connection to the gateway blocked |
+| Unlisted endpoint on the exclusive host | refused before any connection |
+| Token from another namespace / another audience | 403 / 403 |
+| No token / tampered signature | 401 / 401 |
+| Local rate limit (40 per minute) | 429 past the bucket |
+| What the model saw | `x-k8s-sub: system:serviceaccount:ligus-gw-e2e:ligus-serve` (set by kgateway), no `Authorization` (kgateway strips it after verifying), `X-Ligus-Workspace` / `X-Ligus-Agent` as 32-hex keyed hashes matching an independent HMAC computation |
+| NetworkPolicy from the serve pod | listed gateways reachable; unlisted stub, kube-apiserver, 169.254.169.254 and the internet refused |

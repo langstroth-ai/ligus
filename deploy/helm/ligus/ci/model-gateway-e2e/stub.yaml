@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: stub, namespace: gw-test, labels: {app: stub}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: stub}}
+  template:
+    metadata: {labels: {app: stub}}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 65534, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: stub
+          image: python@sha256:c5ba3deef00c7758561a0f03c26f44f10589263d40e732b8748e0d1f38f6dd89
+          command: ["python", "-u", "/stub/stub.py"]
+          ports: [{containerPort: 8080}]
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: stub, mountPath: /stub}]
+      volumes: [{name: stub, configMap: {name: stub}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: stub, namespace: gw-test}
+spec: {selector: {app: stub}, ports: [{port: 8080, targetPort: 8080}]}
