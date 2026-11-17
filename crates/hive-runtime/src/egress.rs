@@ -638,6 +638,10 @@ async fn gateway_route<S: AsyncRead + AsyncWrite + Unpin>(
         respond_text(&mut client, "404 Not Found", "no such model gateway for this turn").await;
         return Ok(());
     };
+    if !crate::model_gateway::route_path_allowed(route.gateway.api(), method, &path) {
+        respond_text(&mut client, "403 Forbidden", "only the model API is reachable through a gateway route").await;
+        return Ok(());
+    }
     let Ok(m) = reqwest::Method::from_bytes(method.as_bytes()) else {
         respond_text(&mut client, "405 Method Not Allowed", "bad method").await;
         return Ok(());

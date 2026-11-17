@@ -310,7 +310,45 @@ async fn gateway_route_injects_and_strips() {
     assert!(raw_request(pp, format!("GET {wrong}/v1/models HTTP/1.1\r\n\r\n")).await.starts_with("HTTP/1.1 403"));
     let other = path.replace("/test-gw", "/other-gw");
     assert!(raw_request(pp, format!("GET {other}/v1/models HTTP/1.1\r\n\r\n")).await.starts_with("HTTP/1.1 404"));
+    // Only the model API: the gateway's admin routes (LiteLLM's key minting,
+    // say) never get the credential, and no path climbs out of a prefix.
+    for (m, bad) in [
+        ("POST", "/key/generate"),
+        ("GET", "/v1/chat/completions/../../key/list"),
+        ("POST", "/v1/chat/%2e%2e/%2e%2e/key/generate"),
+        ("POST", "/v1//chat/completions"),
+        ("DELETE", "/v1/models/x"),
+        ("POST", "/v1/messages"),
+    ] {
+        let resp = raw_request(pp, format!("{m} {path}{bad} HTTP/1.1\r\nContent-Length: 0\r\n\r\n")).await;
+        assert!(resp.starts_with("HTTP/1.1 403"), "{m} {bad}: {resp}");
+    }
     assert_eq!(seen.lock().unwrap().heads.len(), 2);
+}
+
+#[test]
+fn route_paths_are_the_model_api_only() {
+    for (api, m, p) in [
+        (Api::Openai, "POST", "/v1/chat/completions"),
+        (Api::Openai, "POST", "/v1/chat/completions?x=1"),
+        (Api::Openai, "POST", "/v1/responses"),
+        (Api::Openai, "GET", "/v1/models"),
+        (Api::Anthropic, "POST", "/v1/messages?beta=true"),
+        (Api::Anthropic, "POST", "/v1/messages/count_tokens"),
+    ] {
+        assert!(route_path_allowed(api, m, p), "{m} {p}");
+    }
+    for (api, m, p) in [
+        (Api::Openai, "POST", "/v1/messages"),
+        (Api::Anthropic, "POST", "/v1/chat/completions"),
+        (Api::Openai, "POST", "/key/generate"),
+        (Api::Openai, "GET", "/v1/chat/completions"),
+        (Api::Openai, "POST", "/v1/chat/completions/../../key/generate"),
+        (Api::Openai, "POST", "/v1/%2E%2E/key"),
+        (Api::Openai, "POST", "v1/chat/completions"),
+    ] {
+        assert!(!route_path_allowed(api, m, p), "{m} {p}");
+    }
 }
 
 /// A hosted-API turn (Ligus makes the call) sends the same credential, never

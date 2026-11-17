@@ -360,6 +360,38 @@ impl Gateway {
     }
 }
 
+/// Whether a CLI child may send `method path` to a gateway through the
+/// proxy's route: only the model API of the gateway's wire (chat,
+/// completions, responses, embeddings, messages, token counts, the model
+/// list). Anything else on the gateway host (LiteLLM's key and user admin
+/// routes, a health or metrics page) never gets the injected credential.
+/// Dot segments, encoded dots or slashes, backslashes and empty segments are
+/// refused outright, so a path can't climb out of an allowed prefix.
+pub fn route_path_allowed(api: Api, method: &str, path_and_query: &str) -> bool {
+    let path = path_and_query.split('?').next().unwrap_or_default();
+    let lower = path.to_ascii_lowercase();
+    if !path.starts_with('/')
+        || path.contains("//")
+        || path.contains('\\')
+        || lower.contains("%2e")
+        || lower.contains("%2f")
+        || lower.contains("%5c")
+        || path.split('/').any(|seg| seg == "." || seg == "..")
+    {
+        return false;
+    }
+    let p = path.trim_end_matches('/');
+    let get = method.eq_ignore_ascii_case("GET");
+    let post = method.eq_ignore_ascii_case("POST");
+    let models = p == "/v1/models" || p.starts_with("/v1/models/");
+    match api {
+        Api::Openai => {
+            (post && matches!(p, "/v1/chat/completions" | "/v1/completions" | "/v1/responses" | "/v1/embeddings")) || (get && models)
+        }
+        Api::Anthropic => (post && matches!(p, "/v1/messages" | "/v1/messages/count_tokens")) || (get && models),
+    }
+}
+
 /// Request headers a client may never pass to a gateway: credentials, and
 /// the attribution ids (only Ligus sets those).
 pub fn is_client_credential_header(name: &str) -> bool {
@@ -599,6 +631,9 @@ pub fn cli_unsupported(provider: ModelProviderKind, api: Api) -> Option<String> 
         | ModelProviderKind::Ollama
         | ModelProviderKind::HiveDaemon => api == Api::Openai,
     };
+    if matches!(provider, ModelProviderKind::Pi | ModelProviderKind::Antigravity | ModelProviderKind::Copilot) {
+        return Some(format!("the {provider:?} CLI has no base-URL setting Ligus can point at a model gateway; use another CLI or an HTTP model runtime"));
+    }
     (!ok).then(|| format!("a {provider:?} runtime can't use a model gateway that speaks the {} wire", api.as_str()))
 }
 

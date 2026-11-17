@@ -159,17 +159,16 @@ which hosts offer it; binding the agent to a host that doesn't is allowed
 `Gateway::auth_headers()` is called for **every** request (the proxy route
 and the HTTP clients), so rotation needs no restart:
 
-- `serviceAccountToken`: reads the projected token file; cached by
-  (mtime, length) and re-read when either changes or after 60 s. Sent as
-  `Authorization: Bearer <jwt>`. The kubelet refreshes the file at 80 % of
+- `serviceAccountToken`: reads the projected token file on every request
+  (a small file; no cache to go stale). Sent as `Authorization: Bearer <jwt>`. The kubelet refreshes the file at 80 % of
   its lifetime.
 - `apiKey`: reads the key file the same way. Sent as
   `Authorization: Bearer <key>` by default, or as a named header
   (`x-api-key` for an Anthropic-wire gateway that wants it, `api-key`).
 - `mtls`: no header. `Gateway::client()` builds a reqwest client with the
   identity (cert chain + key PEM) and **only** the pinned CA as trust root
-  (`tls_certs_only`). Rebuilt when the cert or key file changes
-  (cert-manager rotation).
+  (`tls_certs_only`). Built per turn and per proxied request, so a rotated
+  certificate (cert-manager) is picked up.
 - `caFile` (any https mode): trust only that CA.
 - `none`: no credential (a gateway that authenticates by mesh identity or
   network position only).
@@ -193,9 +192,9 @@ and a dummy key:
 | CLI | Variables |
 |---|---|
 | Claude Code (`api: anthropic`) | `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY=ligus-gateway` |
-| Codex, Hermes, Aider, pi (`api: openai`) | `OPENAI_BASE_URL`, `OPENAI_API_BASE`, `OPENAI_API_KEY=ligus-gateway` |
+| Codex, Hermes, Aider (`api: openai`) | `OPENAI_BASE_URL`, `OPENAI_API_BASE`, `OPENAI_API_KEY=ligus-gateway` |
 | Aider, Hermes (`api: anthropic`) | `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY=ligus-gateway` |
-| Antigravity, Copilot | refused: these CLIs have no base-URL setting |
+| pi, Antigravity, Copilot | refused: Antigravity and Copilot have no base-URL setting; pi reads its base URL from a provider file Ligus writes before the proxy (and so the route) exists |
 
 The route is `http://127.0.0.1:<port>/ligus-gw/<proxy-token>/<name>`. The
 proxy token is the per-turn token the child already holds in `HTTPS_PROXY`,
@@ -206,8 +205,12 @@ helper's forwarder).
 
 On a gateway route the proxy:
 
-1. checks the token (constant time) and that `<name>` is one of the turn's
-   gateways;
+1. checks the token (constant time), that `<name>` is one of the turn's
+   gateways, and that the request is the gateway wire's model API only
+   (`model_gateway::route_path_allowed`: chat/completions, completions,
+   responses, embeddings, messages, count_tokens, `GET /v1/models`; no dot
+   segments, encoded dots or slashes), so a child can't use the injected
+   credential on the gateway's admin routes (LiteLLM key minting);
 2. reads the request head and body (`Content-Length` or chunked; at most
    32 MiB);
 3. drops hop-by-hop headers and every credential a client could supply:

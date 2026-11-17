@@ -159,28 +159,34 @@ gateway = "litellm"
 
 ## CLI agents: what the agent process sees
 
-A CLI agent (Claude Code, Codex, Aider, pi, Hermes) on a gateway runtime gets
+A CLI agent (Claude Code, Codex, Aider, Hermes) on a gateway runtime gets
 a loopback base URL and a dummy key, nothing else:
 
 | CLI | Variables set |
 |---|---|
 | Claude Code (`api: anthropic`) | `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY=ligus-gateway` |
-| Codex, Hermes, Aider, pi (`api: openai`) | `OPENAI_BASE_URL`, `OPENAI_API_BASE`, `OPENAI_API_KEY=ligus-gateway` |
+| Codex, Hermes, Aider (`api: openai`) | `OPENAI_BASE_URL`, `OPENAI_API_BASE`, `OPENAI_API_KEY=ligus-gateway` |
 | Aider, Hermes (`api: anthropic`) | `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY=ligus-gateway` |
-| Antigravity, Copilot | refused: these CLIs have no base-URL setting |
+| pi, Antigravity, Copilot | refused: Antigravity and Copilot have no base-URL setting, and pi reads its base URL from a provider file written before the route exists |
 
 The base URL is `http://127.0.0.1:<port>/ligus-gw/<turn token>/<name>`, a
 route on the turn's own egress proxy. On each request the proxy:
 
 1. checks the turn token and that the gateway is the turn's;
-2. drops every credential the client sent (`Authorization`,
+2. accepts only the model API of the gateway's wire (`POST
+   /v1/chat/completions`, `/v1/completions`, `/v1/responses`,
+   `/v1/embeddings` for `openai`; `POST /v1/messages` and
+   `/v1/messages/count_tokens` for `anthropic`; `GET /v1/models`), and
+   refuses dot segments and encoded slashes, so the credential never reaches
+   the gateway's admin routes;
+3. drops every credential the client sent (`Authorization`,
    `Proxy-Authorization`, `X-Api-Key`, `Api-Key`, `Cookie`, any
    `X-Ligus-*`);
-3. adds the gateway's credential and, if enabled, the attribution headers;
-4. sends the request over its own TLS client (client certificate and pinned
+4. adds the gateway's credential and, if enabled, the attribution headers;
+5. sends the request over its own TLS client (client certificate and pinned
    CA where configured) to an address it resolved and checked itself (never
    loopback-by-rebinding, link-local or metadata);
-5. streams the response back.
+6. streams the response back.
 
 The agent can't read the credential files (they are on the sandbox's deny
 list), and the credential is never in its environment, argv or files. Its
@@ -197,8 +203,8 @@ to a gateway.
 ### ServiceAccount tokens
 
 `serviceAccountToken` mounts a projected token for the pod's ServiceAccount,
-bound to the audience you set. Ligus re-reads the file when it changes (and
-at least every minute) and sends it as `Authorization: Bearer <jwt>`. The
+bound to the audience you set. Ligus reads the file for every request and
+sends it as `Authorization: Bearer <jwt>`. The
 kubelet replaces it at 80 % of its lifetime, so rotation needs no restart.
 
 The gateway must verify, on every request:
@@ -282,15 +288,26 @@ the model above.
 
 | Gateway | Notes | Status |
 |---|---|---|
-| [kgateway](https://kgateway.dev) | CNCF Envoy and Gateway API project with AI backends. | TODO-E2E |
-| [Envoy AI Gateway](https://aigateway.envoyproxy.io) | Envoy Gateway extension for LLM traffic. | TODO-E2E |
-| [LiteLLM](https://docs.litellm.ai) | Python proxy with keys, budgets and per-key spend. | TODO-E2E |
-| [Gateway API Inference Extension](https://gateway-api-inference-extension.sigs.k8s.io) | Routes to self-hosted vLLM or KServe model pools behind a Gateway API implementation; Ligus talks to the gateway in front of it. | TODO-E2E |
+| [kgateway](https://kgateway.dev) | CNCF Envoy and Gateway API project. Verifies ServiceAccount tokens with a JWT `GatewayExtension` against the cluster's JWKS, restricts the subject with an RBAC CEL expression, and rate-limits with a `TrafficPolicy`. | Tested: v2.5.1, Gateway API v1.7.0, `serviceAccountToken` mode with a pinned CA (example below) |
+| [LiteLLM](https://docs.litellm.ai) | Python proxy with keys, budgets and per-key spend. | Tested: v1.108.9, `apiKey` mode |
+| [Envoy AI Gateway](https://aigateway.envoyproxy.io) | Envoy Gateway extension for LLM traffic. | Known compatible (OpenAI-compatible endpoint); not tested by Ligus |
+| [Gateway API Inference Extension](https://gateway-api-inference-extension.sigs.k8s.io) | Routes to self-hosted vLLM or KServe model pools behind a Gateway API implementation; Ligus talks to the gateway in front of the pool, never to the pool. | Known compatible through the gateway in front of it; not tested by Ligus |
+
+"Tested" means the Ligus end-to-end run on a local Kubernetes cluster
+(`ligus gateway-check` from the serve pod, a stub model behind the gateway):
+a hosted-API turn and a sandboxed CLI child both succeeded, the child never
+saw the credential, a token from another namespace and a token for another
+audience were rejected (403), a missing or tampered token was rejected (401),
+and the NetworkPolicy refused every private destination but the listed one.
+kgateway 2.5.1's API has no AI-specific backend type; a plain `HTTPRoute`
+to the model service is enough, because Ligus speaks the model's wire.
 
 ### Example: LiteLLM with an API key
 
-Adapt this example to your setup. LiteLLM's master key (or a virtual key)
-goes in a Secret Ligus mounts as a file:
+Adapt this example to your setup. Give Ligus a LiteLLM **virtual key**
+scoped to the models it may use, never the master key: Ligus only sends model
+API requests, but a host compromise would expose whatever the key can do. The
+key goes in a Secret Ligus mounts as a file:
 
 ```yaml
 # litellm config.yaml (in the gateway's namespace)
@@ -325,9 +342,68 @@ modelGateways:
       ports: [4000]
 ```
 
-### Example: ServiceAccount tokens at the gateway
+### Example: kgateway verifying ServiceAccount tokens
 
-Adapt this to your gateway's JWT validation. The values side:
+This is the configuration of the tested run (kgateway v2.5.1). The JWKS is
+the cluster's own (`kubectl get --raw /openid/v1/jwks`), inlined because
+the API server's discovery endpoints usually require authentication; refresh
+it when the cluster rotates its signing key, or point `jwks.remote` at a
+copy the gateway can fetch.
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata: { name: llm-gw, namespace: gw }
+spec:
+  gatewayClassName: kgateway
+  listeners:
+    - name: https
+      protocol: HTTPS
+      port: 8443
+      tls: { mode: Terminate, certificateRefs: [{ kind: Secret, name: llm-gw-tls }] }
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: { name: models, namespace: gw }
+spec:
+  parentRefs: [{ name: llm-gw }]
+  rules:
+    - matches: [{ path: { type: PathPrefix, value: /v1/ } }]
+      backendRefs: [{ name: my-model, port: 8080 }]
+---
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: GatewayExtension
+metadata: { name: k8s-sa-jwt, namespace: gw }
+spec:
+  type: JWT
+  jwt:
+    providers:
+      - name: ligus-cluster
+        issuer: https://kubernetes.default.svc.cluster.local   # your cluster's issuer
+        audiences: [ligus-llm-gw]                              # modelGateways[].auth.audience
+        claimsToHeaders: [{ name: sub, header: x-k8s-sub }]
+        jwks:
+          local:
+            inline: '<output of kubectl get --raw /openid/v1/jwks>'
+---
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: TrafficPolicy
+metadata: { name: llm-auth, namespace: gw }
+spec:
+  targetRefs: [{ group: gateway.networking.k8s.io, kind: HTTPRoute, name: models }]
+  jwtAuth: { extensionRef: { name: k8s-sa-jwt } }
+  rbac:
+    policy:
+      matchExpressions:
+        - "metadata.filter_metadata['envoy.filters.http.jwt_authn']['payload']['sub'] == 'system:serviceaccount:ligus-ws-acme:ligus-serve'"
+  rateLimit:
+    local:
+      tokenBucket: { maxTokens: 40, tokensPerFill: 40, fillInterval: 60s }
+```
+
+kgateway removes the `Authorization` header after verifying it (the model
+behind it never sees the token) and passes the verified subject in
+`x-k8s-sub`. The values side:
 
 ```yaml
 modelGateways:
@@ -348,13 +424,25 @@ The gateway side validates issuer, audience (`team-gw`), subject
 (`system:serviceaccount:ligus-ws-acme:<release ServiceAccount>`) and expiry
 against the cluster's JWKS, as above.
 
+## Checking a host: `ligus gateway-check`
+
+Run it on a gateway host (for example `kubectl exec <serve pod> -- ligus
+gateway-check`). For each listed gateway it makes a hosted-API call through
+the same code path as an agent turn, then starts a sandboxed child that is
+given the proxy route as its base URL. The child prints its environment,
+tries to read the credential files, sends a request with a credential of its
+own and tries the gateway directly. The check fails when the child saw the
+credential, read a credential file, reached the gateway around the proxy, or
+got no answer. On an exclusive host it also checks that an unlisted endpoint
+is refused. It prints no secret; exit status 0 means every check passed.
+
 ## Troubleshooting
 
 | Message (in the chat or the host log) | Meaning |
 |---|---|
-| this host doesn't offer gateway `X` | The agent's runtime names a gateway this host's operator didn't list. Bind the agent to a host that offers it, or add it to that host's `modelGateways`. |
-| this host only runs agents through its model gateways | Exclusive mode: the runtime has no gateway and its endpoint isn't a listed gateway. Set the runtime's gateway, or set `modelGatewaysExclusive: false`. |
-| `<CLI>` has no base-URL setting, so it can't use a gateway | Antigravity and Copilot can't be pointed at a gateway. Use another CLI or a hosted-API runtime. |
+| this runtime uses the model gateway '`X`', which this host doesn't offer | The agent's runtime names a gateway this host's operator didn't list. Bind the agent to a host that offers it, or add it to that host's `modelGateways`. |
+| this host sends model traffic only through its operator's model gateways | Exclusive mode: the runtime has no gateway and its endpoint isn't a listed gateway. Set the runtime's gateway, or set `modelGatewaysExclusive: false`. |
+| the `<CLI>` CLI has no base-URL setting Ligus can point at a model gateway | pi, Antigravity and Copilot can't be pointed at a gateway. Use Claude Code (Anthropic-wire gateway), Codex, Aider or Hermes, or an HTTP model runtime. |
 | startup error naming `LIGUS_MODEL_GATEWAYS_FILE` | The allow-list file is missing, unreadable or invalid; the host won't start without it. |
 | 401 or 403 from the gateway | The gateway rejected the credential: check the audience, issuer and subject it expects, or the key. |
 | the turn hangs, then times out connecting | NetworkPolicy doesn't open the gateway: check the selectors or CIDRs and ports in `modelGateways[].networkPolicy`. |
