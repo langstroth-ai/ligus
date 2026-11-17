@@ -2,7 +2,7 @@
 
 Runs the server side of one Ligus workspace on Kubernetes: an always-on
 `ligus serve` device, optional sharded `ligus worker` hosts, optional MCP
-servers and a hardened Job template for sandboxed turn executors. The design
+servers. The design
 and its reasoning are in
 [`docs/design/kubernetes.md`](../../../docs/design/kubernetes.md).
 
@@ -22,7 +22,6 @@ Requires a CLI image of 2.0 or later: the chart sets `LIGUS_*` variables, and
 | serve Service | ClusterIP 8787 | Health, phone API. Reach it from the phone through the relay tunnel, not an Ingress |
 | worker | StatefulSet, N replicas, PVC each | Optional. Each replica is its own host (`--label <pod name>`); bind agents with `ligus set-agent-host`. Sharding, not autoscaling |
 | MCP servers | Deployment + Service + NetworkPolicy each | Optional HTTP MCP servers, reachable only from this workspace's pods |
-| sandbox | ConfigMap with the hardened executor Job, executor NetworkPolicy, optional smoke Job | Template for the controller/executor split (Phase 3) and PR tests |
 | relay | `ligus-relay` dependency | Optional, `relay.enabled` |
 
 Every pod runs as UID 65532 with a read-only root filesystem, no capabilities,
@@ -89,11 +88,6 @@ outside the cluster can read the workspace. Use it for CI and trials only.
 | `serve.persistence.*` | 5Gi | Use an encrypted StorageClass: the volume is as sensitive as the workspace key |
 | `worker.enabled` / `replicas` / `permissionMode` | off, 1 | Sharded hosts |
 | `mcp.servers[]` | `[]` | `name`, `image` (pinned by digest; a tag needs `allowUnpinned: true`), `args`, `port`, `env`, `secretEnv`, `resources` |
-| `sandbox.enabled` / `profile` | off, `agent-turn` | `pr-test` has no egress at all and refuses to render without `runtimeClassName` unless `allowDefaultRuntime` |
-| `sandbox.runtimeClassName` | empty | `gvisor`, a Kata class, ...; empty means runc, which is not a security boundary |
-| `sandbox.egress` | `[]` | Extra egress rules for agent-turn executors (model endpoint, granted MCP Services) |
-| `sandbox.policyGate.probe` / `timeoutSeconds` | cluster DNS metrics port, 60 | Executors start only once a connection their NetworkPolicy must block fails (pr-test also waits for DNS to fail); the Job fails if that never happens |
-| `sandbox.smokeJob.enabled` | `false` | Post-install Job that verifies the executor hardening |
 | `networkPolicy.serveIngressFrom` | this release's own pods | Who reaches serve:8787; MCP server pods and other pods in the namespace are excluded by default |
 | `networkPolicy.restrictEgress` / `relayNamespace` / `extraEgress` | off | Lock serve and worker egress down to DNS, the relay and listed peers |
 | `networkPolicy.dns` | kube-system `k8s-app=kube-dns` | The only DNS peer any policy allows; change it if your cluster DNS is labelled differently |
@@ -109,13 +103,10 @@ outside the cluster can read the workspace. Use it for CI and trials only.
   only by their full `*.svc.cluster.local` name today.
 - NetworkPolicy is programmed asynchronously for a new pod on some CNIs (kind's
   kindnet among them): a pod's first second or two of traffic can precede its
-  policy. Executor Jobs therefore start with a `netpol-gate` init container
-  that waits until the policy demonstrably blocks traffic, and fail closed if it
-  never does. On kindnet, egress to the `kubernetes` Service VIP
-  was also observed to bypass an egress policy in some runs; executors have no
-  service account token, so only anonymous API access is possible.
-- The sandbox Job template expects the controller to add the turn bundle
-  volume (`/in`); `ligus exec-turn` is Phase 3 work.
+  policy.
+- Kubernetes per-turn executors, PR-test sandboxes and OpenTelemetry export are
+  not supported in 2.0: agent turns run inside the serve and worker pods under
+  Ligus's own sandbox (Landlock in a restricted pod).
 
 ## CI
 
@@ -123,4 +114,4 @@ outside the cluster can read the workspace. Use it for CI and trials only.
 relay (Postgres) and a throwaway workspace on kind, and checks: sync between
 two client identities through the relay, the tunnel host connection, no
 plaintext in the relay database, restart on the same identity, Pod Security
-`restricted`, NetworkPolicy isolation of serve, and the sandbox hardening Job.
+`restricted`, and NetworkPolicy isolation of serve.

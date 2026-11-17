@@ -5,7 +5,7 @@ name: kind-e2e
 # (from the relay repository) with Postgres, one serve StatefulSet on a
 # throwaway workspace, sync between two client identities through the relay,
 # no plaintext in the relay database, restart on the same identity, Pod
-# Security "restricted", NetworkPolicy isolation and the sandbox hardening Job.
+# Security "restricted" and NetworkPolicy isolation.
 # The chart sets LIGUS_* variables and the test pod runs `ligus`, so this
 # needs a tree at 2.0 or later (the Ligus rename; 2.0 ignores HIVE_*).
 # Runs on release branches and tags, on PRs that touch the chart, the
@@ -81,12 +81,12 @@ jobs:
           helm template t deploy/helm/ligus --set workspace.generate=true --set relay.enabled=true \
             --set relay.postgres.enabled=true --set remote.enabled=true --set remote.insecureRelay=true \
             --set worker.enabled=true --set worker.replicas=2 >/dev/null
-          # Must refuse: PR tests on the default runtime, and no workspace.
+          # Must refuse: the removed executor template, and no workspace.
           # (`if`, not a bare `!`: bash's errexit ignores a negated command,
           # so `! cmd` mid-script never failed the step.)
           if helm template t deploy/helm/ligus --set relayUrl=x --set workspace.generate=true \
-              --set sandbox.enabled=true --set sandbox.profile=pr-test >/dev/null 2>&1; then
-            echo "::error::chart rendered pr-test sandbox on the default runtime"; exit 1
+              --set sandbox.enabled=true >/dev/null 2>&1; then
+            echo "::error::chart rendered the removed sandbox.* values"; exit 1
           fi
           if helm template t deploy/helm/ligus --set relayUrl=x >/dev/null 2>&1; then
             echo "::error::chart rendered without a workspace"; exit 1
@@ -115,7 +115,6 @@ jobs:
           kubectl label namespace ligus-ws-smoke pod-security.kubernetes.io/enforce=restricted
           helm install smoke deploy/helm/ligus -n ligus-ws-smoke \
             -f deploy/helm/ligus/ci/kind-values.yaml --wait --timeout 5m
-          kubectl -n ligus-ws-smoke logs job/smoke-ligus-sandbox-smoke
       - name: sync through the relay (helm test)
         run: helm test smoke -n ligus-ws-smoke --logs | tee /tmp/test.log
       - name: tunnel host connected

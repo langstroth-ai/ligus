@@ -71,7 +71,7 @@ def check(name, cond, detail=""):
 # --- DNS egress must go to the cluster resolver only ------------------------
 
 def test_dns_egress_is_scoped():
-    docs = render("--set", "sandbox.enabled=true", "--set", "networkPolicy.restrictEgress=true",
+    docs = render("--set", "networkPolicy.restrictEgress=true",
                   "--set", "networkPolicy.relayNamespace=ligus-relay")
     for np in policies(docs):
         for rule in np["spec"].get("egress") or []:
@@ -87,8 +87,7 @@ def test_dns_egress_is_scoped():
 # --- Only Ligus pods reach serve ------------------------------------------
 
 def test_serve_ingress_excludes_foreign_pods():
-    docs = render("--set", "sandbox.enabled=true",
-                  "--set", "mcp.servers[0].name=linear",
+    docs = render("--set", "mcp.servers[0].name=linear",
                   "--set", "mcp.servers[0].image=registry.example/mcp@sha256:" + "0" * 64,
                   "--set", "mcp.servers[0].allowUnpinned=true")
     ctrl = [p for p in policies(docs) if p["metadata"]["name"].endswith("-controller")][0]
@@ -102,33 +101,19 @@ def test_serve_ingress_excludes_foreign_pods():
     check("MCP server pods cannot reach serve:8787", not admitted(mcp["metadata"]["labels"]),
           "a third-party MCP image in the namespace can call the serve API")
     check("an unlabelled pod in the namespace cannot reach serve:8787", not admitted({"app": "other"}))
-    executor = [t for k, n, t in pod_templates(docs) if k == "JobTemplate"][0]
-    check("executors still reach serve:8787", admitted(executor["metadata"]["labels"]))
-    test_pod = [t for k, n, t in pod_templates(docs) if k == "Pod"][0]
+    test_pod = [t for k, n, t in pod_templates(docs) if k == "Pod" and n.endswith("-test-sync")][0]
     check("the helm test pod still reaches serve:8787", admitted(test_pod["metadata"]["labels"]))
 
 
-# --- Executors wait for their NetworkPolicy before untrusted work ----------
+# --- The cut executor/PR-test template and otel placeholders stay gone ----
 
-def test_executor_waits_for_network_policy():
-    for profile in ("agent-turn", "pr-test"):
-        docs = render("--set", "sandbox.enabled=true", "--set", "sandbox.profile=" + profile,
-                      "--set", "sandbox.allowDefaultRuntime=true", "--set", "sandbox.smokeJob.enabled=true")
-        for kind, name, tpl in pod_templates(docs):
-            if (tpl["metadata"].get("labels") or {}).get("ligus.ai/role") != "executor":
-                continue
-            inits = tpl["spec"].get("initContainers") or []
-            gate = [c for c in inits if c["name"] == "netpol-gate"]
-            check("%s %s (%s) gates on its NetworkPolicy before the turn starts" % (kind, name, profile),
-                  len(gate) == 1, "CNIs program policy asynchronously; the first seconds are unfiltered")
-            if gate:
-                script = gate[0]["args"][-1] if gate[0].get("args") else ""
-                check("%s %s (%s) gate fails closed" % (kind, name, profile), "exit 1" in script)
-                if profile == "pr-test":
-                    check("%s %s pr-test gate requires DNS to be blocked" % (kind, name), "getent" in script)
-                sc = gate[0].get("securityContext") or {}
-                check("%s %s gate is hardened" % (kind, name),
-                      sc.get("readOnlyRootFilesystem") and sc.get("allowPrivilegeEscalation") is False)
+def test_removed_values_refuse():
+    for v in ("sandbox.enabled=true", "otel.endpoint=http://collector:4317"):
+        p = render("--set", v, ok=False)
+        check("%s is refused (unsupported in 2.0)" % v.split("=")[0], p.returncode != 0)
+    docs = render()
+    check("no executor Job template renders",
+          not any(d["kind"] == "ConfigMap" and "job.yaml" in (d.get("data") or {}) for d in docs))
 
 
 # --- Third-party MCP images are pinned by digest ---------------------------
@@ -148,7 +133,7 @@ def test_mcp_images_pinned():
 
 
 TESTS = [test_dns_egress_is_scoped, test_serve_ingress_excludes_foreign_pods,
-         test_executor_waits_for_network_policy, test_mcp_images_pinned]
+         test_removed_values_refuse, test_mcp_images_pinned]
 
 if __name__ == "__main__":
     for t in TESTS:

@@ -12,10 +12,6 @@ Ligus workspace release {{ .Release.Name }} in namespace {{ .Release.Namespace }
 TEST WORKSPACE: a throwaway room and key were generated into secret/{{ include "ligus.workspaceSecretName" . }}.
 Do not put real work in it.
 {{- end }}
-{{- if and .Values.sandbox.enabled (not .Values.sandbox.runtimeClassName) }}
-
-WARNING: sandbox.runtimeClassName is empty: executors run on the default runtime (runc), which is not a security boundary.
-{{- end }}
 
 Pair the phone or enroll the device from your own terminal (these print secrets; never run them as Jobs):
   kubectl -n {{ .Release.Namespace }} exec -it {{ $fullname }}-serve-0 -- ligus serve enroll

@@ -79,7 +79,7 @@ spec:
           emptyDir:
             sizeLimit: 256Mi
 ---
-# Only this workspace's serve/worker/executor pods may call this MCP server.
+# Only this workspace's serve and worker pods may call this MCP server.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -98,7 +98,7 @@ spec:
             matchExpressions:
               - key: ligus.ai/role
                 operator: In
-                values: [controller, executor]
+                values: [controller]
       ports:
         - port: http
 {{- end }}

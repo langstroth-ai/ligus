@@ -46,18 +46,6 @@ app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 {{- end -}}
 
-{{- define "ligus.sandboxImage" -}}
-{{- $s := .Values.sandbox.image -}}
-{{- $repo := default .Values.image.repository $s.repository -}}
-{{- if $s.digest -}}
-{{- printf "%s@%s" $repo $s.digest -}}
-{{- else if $s.tag -}}
-{{- printf "%s:%s" $repo $s.tag -}}
-{{- else -}}
-{{- include "ligus.image" . -}}
-{{- end -}}
-{{- end -}}
-
 {{- define "ligus.workspaceSecretName" -}}
 {{- if .Values.workspace.existingSecret -}}
 {{- .Values.workspace.existingSecret -}}
@@ -121,11 +109,11 @@ app.kubernetes.io/component: {{ .component }}
 {{- if and .Values.remote.enabled (not (include "ligus.remoteRelayUrl" .)) -}}
 {{- fail "remote.enabled needs remote.relayUrl (or relay.enabled=true)" -}}
 {{- end -}}
-{{- if and .Values.sandbox.enabled (eq .Values.sandbox.profile "pr-test") (not .Values.sandbox.runtimeClassName) (not .Values.sandbox.allowDefaultRuntime) -}}
-{{- fail "sandbox.profile=pr-test runs untrusted code: set sandbox.runtimeClassName (gvisor, kata, ...) or, for kind/CI only, sandbox.allowDefaultRuntime=true" -}}
+{{- if hasKey .Values "sandbox" -}}
+{{- fail "sandbox.* was removed: Kubernetes per-turn executors and PR-test sandboxes are not supported in 2.0 (agent turns run in the serve/worker pod under Ligus's own sandbox; see deploy/kubernetes.md, Explicitly unsupported)" -}}
 {{- end -}}
-{{- if not (has .Values.sandbox.profile (list "agent-turn" "pr-test")) -}}
-{{- fail "sandbox.profile must be agent-turn or pr-test" -}}
+{{- if hasKey .Values "otel" -}}
+{{- fail "otel.* was removed: Ligus does not export OpenTelemetry in 2.0" -}}
 {{- end -}}
 {{- end -}}
 
@@ -159,14 +147,6 @@ app.kubernetes.io/component: {{ .component }}
       name: {{ include "ligus.workspaceSecretName" . }}
       key: {{ .Values.workspace.secretKeys.relayAccessToken }}
       optional: true
-{{- with .Values.otel.endpoint }}
-- name: OTEL_EXPORTER_OTLP_ENDPOINT
-  value: {{ . | quote }}
-{{- end }}
-{{- with .Values.otel.resourceAttributes }}
-- name: OTEL_RESOURCE_ATTRIBUTES
-  value: {{ . | quote }}
-{{- end }}
 {{- end -}}
 
 {{- define "ligus.podSpecCommon" -}}
@@ -213,116 +193,4 @@ affinity:
     - name: runtimes
       mountPath: /etc/ligus/runtimes
       readOnly: true
-{{- end -}}
-
-{{/*
-Hardened executor Job. Args: dict root name command [entrypoint]
-entrypoint=true replaces the image entrypoint with command[0].
-*/}}
-{{- define "ligus.sandboxJob" -}}
-{{- $root := .root -}}
-{{- $s := $root.Values.sandbox -}}
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: {{ .name }}
-  labels:
-    {{- include "ligus.labels" $root | nindent 4 }}
-    app.kubernetes.io/component: sandbox
-    ligus.ai/role: executor
-    ligus.ai/sandbox-profile: {{ $s.profile }}
-spec:
-  backoffLimit: 0
-  activeDeadlineSeconds: {{ $s.activeDeadlineSeconds }}
-  ttlSecondsAfterFinished: {{ $s.ttlSecondsAfterFinished }}
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/instance: {{ $root.Release.Name }}
-        app.kubernetes.io/component: sandbox
-        ligus.ai/role: executor
-        ligus.ai/sandbox-profile: {{ $s.profile }}
-    spec:
-      restartPolicy: Never
-      automountServiceAccountToken: false
-      enableServiceLinks: false
-      hostNetwork: false
-      hostPID: false
-      hostIPC: false
-      {{- with $s.runtimeClassName }}
-      runtimeClassName: {{ . }}
-      {{- end }}
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 65532
-        runAsGroup: 65532
-        fsGroup: 65532
-        seccompProfile: { type: RuntimeDefault }
-      # CNIs program NetworkPolicy for a new pod asynchronously (kindnet takes
-      # a second or two), so nothing untrusted runs until a connection the
-      # policy must block actually fails. Fails closed after the timeout.
-      initContainers:
-        - name: netpol-gate
-          image: {{ include "ligus.sandboxImage" $root }}
-          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
-          command: ["/bin/bash", "-c"]
-          args:
-            - |
-              probe={{ $s.policyGate.probe | quote }}
-              deadline=$((SECONDS + {{ int $s.policyGate.timeoutSeconds }}))
-              blocked() {
-                {{- if eq $s.profile "pr-test" }}
-                timeout 3 getent hosts kubernetes.default.svc.cluster.local >/dev/null 2>&1 && return 1
-                {{- end }}
-                [ -z "$probe" ] && return 0
-                ! timeout 3 bash -c "exec 3<>/dev/tcp/${probe%:*}/${probe##*:}" 2>/dev/null
-              }
-              until blocked; do
-                if [ "$SECONDS" -ge "$deadline" ]; then
-                  echo "network policy not in force after {{ int $s.policyGate.timeoutSeconds }}s; refusing to start"
-                  exit 1
-                fi
-                sleep 1
-              done
-              echo "network policy in force"
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities: { drop: ["ALL"] }
-          resources:
-            requests: { cpu: 10m, memory: 16Mi }
-            limits: { cpu: 100m, memory: 64Mi }
-      containers:
-        - name: turn
-          image: {{ include "ligus.sandboxImage" $root }}
-          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
-          {{- if .entrypoint }}
-          command: [{{ first .command | quote }}]
-          args:
-            {{- range rest .command }}
-            - {{ . | quote }}
-            {{- end }}
-          {{- else }}
-          args:
-            {{- range .command }}
-            - {{ . | quote }}
-            {{- end }}
-          {{- end }}
-          env:
-            - { name: HOME, value: /work }
-            - { name: TMPDIR, value: /tmp }
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities: { drop: ["ALL"] }
-          resources:
-            {{- toYaml $s.resources | nindent 12 }}
-          volumeMounts:
-            - { name: work, mountPath: /work }
-            - { name: tmp, mountPath: /tmp }
-      volumes:
-        - name: work
-          emptyDir: { sizeLimit: {{ $s.workSizeLimit }} }
-        - name: tmp
-          emptyDir: { sizeLimit: 1Gi }
 {{- end -}}

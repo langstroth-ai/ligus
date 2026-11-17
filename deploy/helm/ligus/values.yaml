@@ -142,51 +142,12 @@ mcp:
   #   resources: {}
   # Ligus's config then points at http://mcp-linear.<ns>.svc.cluster.local:8080/mcp
 
-# --- Sandbox: hardened Job template for turn executors and PR tests ----------
-
-sandbox:
-  enabled: false
-  # gvisor, kata, ... (kubectl get runtimeclass). Empty = the default runtime
-  # (runc), which is not a security boundary.
-  runtimeClassName: ""
-  # pr-test refuses to render without a sandboxed runtimeClassName unless
-  # allowDefaultRuntime is set (kind and CI only).
-  profile: agent-turn   # agent-turn | pr-test
-  allowDefaultRuntime: false
-  image:
-    repository: ""      # defaults to .image.repository
-    tag: ""
-    digest: ""
-  activeDeadlineSeconds: 900
-  ttlSecondsAfterFinished: 300
-  resources:
-    requests: { cpu: 500m, memory: 1Gi, ephemeral-storage: 2Gi }
-    limits: { cpu: "2", memory: 4Gi, ephemeral-storage: 8Gi }
-  workSizeLimit: 8Gi
-  # Egress for agent-turn executors besides DNS: model endpoints, granted MCP
-  # Services (list of NetworkPolicyEgressRule). pr-test gets no egress at all.
-  egress: []
-  # Init container that holds the executor until its NetworkPolicy is in
-  # force: it waits for a connection to `probe` (host:port that the executor
-  # policy must block but that is reachable without it) to fail, and for
-  # pr-test also for DNS to fail, then exits; after timeoutSeconds it fails the
-  # Job. The default probe is the cluster DNS metrics port, which the policy
-  # never allows. If the probe is unreachable even without policy, the gate
-  # passes at once (pr-test still waits for DNS to be blocked).
-  policyGate:
-    probe: kube-dns.kube-system.svc.cluster.local:9153
-    timeoutSeconds: 60
-  # Render a one-shot Job that checks the hardening (no service account
-  # token, read-only root, no secrets in env, network as the profile says).
-  smokeJob:
-    enabled: false
-
 # --- Network policies --------------------------------------------------------
 
 networkPolicy:
   enabled: true
   # Sources allowed to reach serve:8787. Empty = this release's serve, worker,
-  # executor and test pods only (not MCP servers or other pods in the namespace).
+  # and test pods only (not MCP servers or other pods in the namespace).
   # Add the tailnet proxy or ingress controller here if you expose the API.
   serveIngressFrom: []
   # Restrict serve/worker egress to DNS, the relay and extraEgress. Off by
@@ -232,12 +193,6 @@ podLabels: {}
 nodeSelector: {}
 tolerations: []
 affinity: {}
-
-# Telemetry for the pods (standard OTel variables; Ligus does not export
-# OTLP yet, see docs/design/kubernetes.md section 11).
-otel:
-  endpoint: ""
-  resourceAttributes: ""
 
 tests:
   # Image for `helm test` client pods; defaults to the chart image.
