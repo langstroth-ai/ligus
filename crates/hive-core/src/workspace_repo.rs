@@ -322,6 +322,25 @@ mod tests {
         assert!(repo_well_formed(&WorkspaceRepo { root_commit: Some("abc".into()), ..r }).is_err());
     }
 
+    /// The beat's wire bytes: a coverage-less beat is exactly the 1.x/2.0
+    /// beat; coverage adds `seq` and `coverage` (frozen).
+    #[test]
+    fn host_beat_wire_is_frozen() {
+        let plain = HostBeat { host_id: "h".into(), at: 1, seq: 0, coverage: vec![] };
+        assert_eq!(serde_json::to_string(&plain).unwrap(), r#"{"hostId":"h","at":1}"#);
+        let full = HostBeat {
+            host_id: "h".into(),
+            at: 1,
+            seq: 7,
+            coverage: vec![CoverageEntry { repo_id: Uuid::nil(), state: "error".into(), code: "clone_failed".into(), via_fork: true }],
+        };
+        assert_eq!(
+            serde_json::to_string(&full).unwrap(),
+            r#"{"hostId":"h","at":1,"seq":7,"coverage":[{"repoId":"00000000-0000-0000-0000-000000000000","state":"error","code":"clone_failed","viaFork":true}]}"#
+        );
+        assert!(full.coverage_ok());
+    }
+
     #[test]
     fn unknown_coverage_state_reads_as_unknown() {
         let e: CoverageEntry = serde_json::from_str(r#"{"repoId":"00000000-0000-0000-0000-000000000000","state":"quantum"}"#).unwrap();
