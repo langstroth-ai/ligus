@@ -765,8 +765,8 @@ fn held_ws(s: &Shared, id: &str) -> ApiResult<Uuid> {
 /// `GET /v1/dms/{workspaceId}/invite` → `{invite, inviteDelivery}`: the held
 /// invite's link, to share by hand while it waits (secure channel only).
 pub async fn held_invite(State(s): S, peer_ext: Option<Extension<TunnelPeer>>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
-    let ws = held_ws(&s, &id)?;
     require_secret_channel(&s, peer_ext.as_deref())?;
+    let ws = held_ws(&s, &id)?;
     let ka = contacts_api::own_ka(&s).ok_or_else(|| ApiError::new(StatusCode::CONFLICT, "this box has no key-agreement key"))?;
     let invite = s
         .held
