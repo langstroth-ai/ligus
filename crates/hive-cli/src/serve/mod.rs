@@ -217,7 +217,7 @@ fn register_own(svc: &mut ChatService, ws: Uuid, host_id: &str, opts: &ServeOpti
         if let Err(e) = svc.ensure_self_member(workspace_config_session_id(ws), ws) {
             eprintln!("serve: joining the workspace roster failed: {e}");
         }
-        let host = WorkspaceHost::new(host_id.to_string(), HostKind::Worker, opts.label.clone());
+        let host = crate::with_gateways(WorkspaceHost::new(host_id.to_string(), HostKind::Worker, opts.label.clone()));
         return svc.ensure_host(ws, host).map(|_| ()).context("registering this box as a workspace host");
     };
     print_enrollment(svc, ws, &opts.label, Some(wanted));
@@ -229,7 +229,7 @@ fn register_own(svc: &mut ChatService, ws: Uuid, host_id: &str, opts: &ServeOpti
     if let Err(e) = svc.ensure_self_member(workspace_config_session_id(ws), ws) {
         eprintln!("serve: refreshing this box's identity failed: {e}");
     }
-    let mut host = WorkspaceHost::new(host_id.to_string(), HostKind::Worker, opts.label.clone());
+    let mut host = crate::with_gateways(WorkspaceHost::new(host_id.to_string(), HostKind::Worker, opts.label.clone()));
     match resolve_owner(svc, ws, wanted) {
         Ok((owner, admin)) => {
             if !admin {
@@ -590,7 +590,7 @@ impl Shared {
                     svc.set_write_block(None);
                     if first {
                         println!("ligus serve: approved as {}'s device; the phone now acts as {0}.", owner.display_name);
-                        let host = WorkspaceHost::new(self.host_id.clone(), HostKind::Worker, self.opts.label.clone());
+                        let host = crate::with_gateways(WorkspaceHost::new(self.host_id.clone(), HostKind::Worker, self.opts.label.clone()));
                         if let Err(e) = svc.ensure_host(self.ws, host) {
                             eprintln!("serve: re-registering this host as the owner's failed: {e}");
                         }
@@ -1028,7 +1028,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
     match &standing {
         Standing::OwnerDevice(_) => {
             // The owner is already a member; this box only (re)registers its host.
-            let host = WorkspaceHost::new(host_id.clone(), HostKind::Worker, opts.label.clone());
+            let host = crate::with_gateways(WorkspaceHost::new(host_id.clone(), HostKind::Worker, opts.label.clone()));
             svc.ensure_host(ws, host).context("registering this box as a workspace host")?;
         }
         Standing::Revoked => {}

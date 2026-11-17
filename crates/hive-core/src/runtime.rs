@@ -175,6 +175,11 @@ pub struct RuntimeTarget {
     /// How a subscription CLI runtime is driven (ACP or the legacy adapter).
     #[serde(default, skip_serializing_if = "Driver::is_auto")]
     pub driver: Driver,
+    /// An operator-listed model gateway this runtime goes through (by name;
+    /// the host's mounted config holds its URL and credential). `None` = the
+    /// runtime's own endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway: Option<String>,
     #[serde(default)]
     pub estimated_performance_score: f64,
     #[serde(default)]
@@ -236,6 +241,7 @@ mod tests {
             max_tool_rounds: None,
             allow_remote_file_tools: false,
             driver: Driver::Auto,
+            gateway: None,
             estimated_performance_score: 0.0,
             estimated_cost_per_1m_input_tokens_usd: 0.0,
             capabilities: RuntimeCapabilities::default(),

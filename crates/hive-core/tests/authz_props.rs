@@ -1935,3 +1935,106 @@ fn a_removed_admins_backdated_config_event_is_denied() {
     assert_eq!(w.verdicts()[&id], Verdict::Denied);
     assert!(!w.config().members.iter().any(|m| m.id == "eve"));
 }
+
+// ---- Model gateways (docs/design/v2/model-gateways.md §9) ----
+
+fn gw_runtime() -> hive_core::WorkspaceRuntime {
+    let mut rt = hive_core::WorkspaceRuntime::new("team-gw", "Team gateway", hive_core::ModelProviderKind::Custom, "m");
+    rt.endpoint = "https://models.example.com/v1/chat/completions".into();
+    rt
+}
+
+/// Assigning or changing a runtime's model gateway, or its endpoint, rides
+/// the existing runtime events: Admin, and passkey presence (rules v2). No
+/// new event kind; an agent's binding to that runtime is gated the same way
+/// (`contributor_cannot_rebind_agent_host_or_runtime`).
+#[test]
+fn authz_gateway_change_needs_admin_and_presence() {
+    let mut w = World::new();
+    let base = w.cfg_push("ada", SessionEvent::WorkspaceRuntimeUpserted { runtime: gw_runtime() });
+    let mut via_gw = gw_runtime();
+    via_gw.gateway = "litellm".into();
+    let mut redirected = gw_runtime();
+    redirected.endpoint = "https://attacker.example/v1/chat/completions".into();
+    let by_contributor = w.cfg_push("mara", SessionEvent::WorkspaceRuntimeUpserted { runtime: via_gw.clone() });
+    let admin_no_presence = w.cfg_push_bare("ada", SessionEvent::WorkspaceRuntimeUpserted { runtime: via_gw.clone() });
+    let endpoint_no_presence = w.cfg_push_bare("ada", SessionEvent::WorkspaceRuntimeUpserted { runtime: redirected.clone() });
+    let endpoint_by_contributor = w.cfg_push("mara", SessionEvent::WorkspaceRuntimesUpdated { runtimes: vec![redirected] });
+    let admin = w.cfg_push("ada", SessionEvent::WorkspaceRuntimeUpserted { runtime: via_gw.clone() });
+    // Dropping the gateway (back to the raw endpoint) is a change too.
+    let cleared = w.cfg_push("mara", SessionEvent::WorkspaceRuntimeUpserted { runtime: gw_runtime() });
+    let v = w.verdicts();
+    assert_eq!(v[&base], Verdict::Allowed);
+    assert_eq!(v[&by_contributor], Verdict::Denied);
+    assert_eq!(v[&admin_no_presence], Verdict::Denied);
+    assert_eq!(v[&endpoint_no_presence], Verdict::Denied);
+    assert_eq!(v[&endpoint_by_contributor], Verdict::Denied);
+    assert_eq!(v[&admin], Verdict::Allowed);
+    assert_eq!(v[&cleared], Verdict::Denied);
+    let cfg = w.config();
+    let rt = cfg.workspace_runtimes.iter().find(|r| r.id == "team-gw").unwrap();
+    assert_eq!((rt.gateway.as_str(), rt.endpoint.as_str()), ("litellm", "https://models.example.com/v1/chat/completions"));
+}
+
+/// The new fields are left out when empty, so every existing event and
+/// host record serializes byte-identically (and an older decoder ignores
+/// them when set).
+#[test]
+fn gateway_fields_skip_when_empty() {
+    let rt = gw_runtime();
+    let json = serde_json::to_string(&rt).unwrap();
+    assert!(!json.contains("\"gateway\""), "{json}");
+    let mut with = rt.clone();
+    with.gateway = "litellm".into();
+    assert!(serde_json::to_string(&with).unwrap().contains("\"gateway\":\"litellm\""));
+    let host = hive_core::WorkspaceHost::new("h", hive_core::HostKind::Worker, "box");
+    assert!(!serde_json::to_string(&host).unwrap().contains("modelGateways"));
+    let mut offering = host.clone();
+    offering.model_gateways = vec![hive_core::HostModelGateway { name: "litellm".into(), api: "openai".into() }];
+    let j = serde_json::to_string(&offering).unwrap();
+    assert!(j.contains("\"modelGateways\":[{\"name\":\"litellm\",\"api\":\"openai\"}]"), "{j}");
+    assert!(offering.offers_gateway("litellm") && !offering.offers_gateway("other"));
+    let back: hive_core::WorkspaceHost = serde_json::from_str(&j).unwrap();
+    assert_eq!(back, offering);
+}
+
+proptest! {
+    /// Any change to a runtime's route (gateway or endpoint), by anyone,
+    /// with or without presence, folds only when an Admin or the Owner
+    /// confirmed it with presence.
+    #[test]
+    fn prop_runtime_route_change_requires_admin_presence(
+        gateway in "[a-z0-9-]{0,12}",
+        host in "[a-z]{1,8}",
+        who in 0usize..4,
+        presence in any::<bool>(),
+    ) {
+        let mut w = World::new();
+        w.cfg_push("owner", SessionEvent::WorkspaceRuntimeUpserted { runtime: gw_runtime() });
+        let mut changed = gw_runtime();
+        changed.gateway = gateway;
+        changed.endpoint = format!("https://{host}.example/v1/chat/completions");
+        let by = PEOPLE[who];
+        let id = if presence {
+            w.cfg_push(by, SessionEvent::WorkspaceRuntimeUpserted { runtime: changed.clone() })
+        } else {
+            w.cfg_push_bare(by, SessionEvent::WorkspaceRuntimeUpserted { runtime: changed.clone() })
+        };
+        let admin = matches!(by, "owner" | "ada");
+        let expect = if admin && presence { Verdict::Allowed } else { Verdict::Denied };
+        prop_assert_eq!(w.verdicts()[&id], expect);
+        let cfg = w.config();
+        let rt = cfg.workspace_runtimes.iter().find(|r| r.id == "team-gw").unwrap();
+        if expect == Verdict::Denied {
+            prop_assert_eq!(rt, &gw_runtime_at(rt));
+        } else {
+            prop_assert_eq!(&rt.gateway, &changed.gateway);
+            prop_assert_eq!(&rt.endpoint, &changed.endpoint);
+        }
+    }
+}
+
+/// `gw_runtime()` with `rt`'s timestamp (the projection keeps each event's).
+fn gw_runtime_at(rt: &hive_core::WorkspaceRuntime) -> hive_core::WorkspaceRuntime {
+    hive_core::WorkspaceRuntime { created_at: rt.created_at, ..gw_runtime() }
+}

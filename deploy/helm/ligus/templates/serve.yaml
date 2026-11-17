@@ -63,6 +63,7 @@ spec:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
         checksum/secrets: {{ include "ligus.secretsChecksum" (dict "root" . "v" $v "component" "serve") }}
+        {{- include "ligus.modelGatewayAnnotations" . | nindent 8 }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -138,6 +139,7 @@ spec:
             {{- end }}
             {{- end }}
             {{- include "ligus.hostSecretEnv" (dict "root" . "v" $v "component" "serve") | nindent 12 }}
+            {{- include "ligus.modelGatewayEnv" . | nindent 12 }}
             {{- with $v.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -158,8 +160,10 @@ spec:
             {{- toYaml $v.resources | nindent 12 }}
           volumeMounts:
             {{- include "ligus.serveMounts" . | nindent 12 }}
+            {{- include "ligus.modelGatewayMounts" . | nindent 12 }}
       volumes:
         {{- include "ligus.secretVolumes" (dict "root" . "v" $v "component" "serve") | nindent 8 }}
+        {{- include "ligus.modelGatewayVolumes" . | nindent 8 }}
         - name: tmp
           emptyDir:
             sizeLimit: 1Gi

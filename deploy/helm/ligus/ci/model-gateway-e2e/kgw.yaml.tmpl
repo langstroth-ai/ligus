@@ -1,0 +1,52 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata: {name: llm-gw, namespace: gw-test}
+spec:
+  gatewayClassName: kgateway
+  listeners:
+    - name: https
+      protocol: HTTPS
+      port: 8443
+      tls:
+        mode: Terminate
+        certificateRefs: [{kind: Secret, name: llm-gw-tls}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: stub-route, namespace: gw-test}
+spec:
+  parentRefs: [{name: llm-gw}]
+  rules:
+    - matches: [{path: {type: PathPrefix, value: /v1/}}]
+      backendRefs: [{name: stub, port: 8080}]
+---
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: GatewayExtension
+metadata: {name: k8s-sa-jwt, namespace: gw-test}
+spec:
+  type: JWT
+  jwt:
+    providers:
+      - name: ligus-cluster
+        issuer: __ISSUER__
+        audiences: [ligus-llm-gw]
+        claimsToHeaders:
+          - {name: sub, header: x-k8s-sub}
+        jwks:
+          local:
+            inline: '__JWKS__'
+---
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: TrafficPolicy
+metadata: {name: llm-auth, namespace: gw-test}
+spec:
+  targetRefs: [{group: gateway.networking.k8s.io, kind: HTTPRoute, name: stub-route}]
+  jwtAuth:
+    extensionRef: {name: k8s-sa-jwt}
+  rbac:
+    policy:
+      matchExpressions:
+        - "metadata.filter_metadata['envoy.filters.http.jwt_authn']['payload']['sub'] == 'system:serviceaccount:__LIGUS_NS__:__LIGUS_SA__'"
+  rateLimit:
+    local:
+      tokenBucket: {maxTokens: 40, tokensPerFill: 40, fillInterval: 60s}

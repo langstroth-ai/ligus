@@ -38,6 +38,39 @@ pub struct WorkspaceHost {
     pub last_seen: Timestamp,
     #[serde(default)]
     pub created_at: Timestamp,
+    /// Model gateways this host's operator lists (names and wire only; the
+    /// URL and credentials stay in the host's own mounted config). An agent
+    /// whose runtime names a gateway runs only on a host that offers it.
+    /// Omitted when empty (docs/design/v2/model-gateways.md §5).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_gateways: Vec<HostModelGateway>,
+}
+
+/// A model gateway a host offers: its operator-given name and the wire it
+/// speaks. Never a URL, path or secret.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostModelGateway {
+    pub name: String,
+    /// `openai` or `anthropic`.
+    pub api: String,
+}
+
+/// At most this many gateways are taken from one host record (a reader
+/// ignores the rest), and each name at most this long.
+pub const MAX_HOST_GATEWAYS: usize = 32;
+pub const MAX_GATEWAY_NAME: usize = 63;
+
+impl HostModelGateway {
+    /// Whether `name` is a well-formed gateway name (`[a-z0-9-]{1,63}`, not
+    /// starting or ending with `-`).
+    pub fn valid_name(name: &str) -> bool {
+        !name.is_empty()
+            && name.len() <= MAX_GATEWAY_NAME
+            && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            && !name.starts_with('-')
+            && !name.ends_with('-')
+    }
 }
 
 impl WorkspaceHost {
@@ -50,6 +83,7 @@ impl WorkspaceHost {
             owner_actor_id: String::new(),
             last_seen: now,
             created_at: now,
+            model_gateways: Vec::new(),
         }
     }
 
@@ -57,5 +91,16 @@ impl WorkspaceHost {
     /// Presence for the queue/offline handoff.
     pub fn is_online(&self, now: &Timestamp, window_secs: i64) -> bool {
         now.inner().unix_timestamp() - self.last_seen.inner().unix_timestamp() <= window_secs
+    }
+
+    /// The well-formed gateways this host offers (bounded; malformed names
+    /// dropped).
+    pub fn offered_gateways(&self) -> impl Iterator<Item = &HostModelGateway> {
+        self.model_gateways.iter().take(MAX_HOST_GATEWAYS).filter(|g| HostModelGateway::valid_name(&g.name))
+    }
+
+    /// Whether this host offers gateway `name`.
+    pub fn offers_gateway(&self, name: &str) -> bool {
+        self.offered_gateways().any(|g| g.name == name)
     }
 }

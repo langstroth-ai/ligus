@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: litellm-config, namespace: gw-test}
+data:
+  config.yaml: |
+    model_list:
+      # Any model name goes to the stub (LiteLLM's wildcard route).
+      - model_name: "*"
+        litellm_params:
+          model: openai/*
+          api_base: http://stub.gw-test.svc.cluster.local:8080/v1
+          api_key: not-a-real-key
+    general_settings:
+      master_key: os.environ/LITELLM_MASTER_KEY
+    litellm_settings:
+      telemetry: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: litellm, namespace: gw-test, labels: {app: litellm}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: litellm}}
+  template:
+    metadata: {labels: {app: litellm}}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: litellm
+          image: ghcr.io/berriai/litellm@sha256:d817e8e4d6698aad9f3d40b6ccbcaa1cde6c8256cb59867553f07383da3d6608
+          args: ["--config", "/config/config.yaml", "--port", "4000"]
+          env:
+            - {name: LITELLM_TELEMETRY, value: "False"}
+            - {name: LITELLM_LOCAL_MODEL_COST_MAP, value: "True"}
+          envFrom: [{secretRef: {name: litellm-master}}]
+          ports: [{containerPort: 4000}]
+          volumeMounts: [{name: config, mountPath: /config}]
+          readinessProbe: {httpGet: {path: /health/liveliness, port: 4000}, periodSeconds: 5, failureThreshold: 60}
+      volumes: [{name: config, configMap: {name: litellm-config}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: litellm, namespace: gw-test}
+spec: {selector: {app: litellm}, ports: [{port: 4000, targetPort: 4000}]}

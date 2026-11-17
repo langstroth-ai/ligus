@@ -23,6 +23,7 @@ Documentation site: https://docs.ligus.ai/ — pages below are the canonical ref
 - [Personal fleet](https://docs.ligus.ai/deploy/personal-fleet/): Laptop plus an always-on `ligus serve` home server and the phone, directly over Tailscale or through the relay tunnel.
 - [Team on a relay](https://docs.ligus.ai/ops/deployment/): Deploying and gating a relay, creating a workspace, inviting teammates, a shared worker, and a security checklist.
 - [Kubernetes (preview)](https://docs.ligus.ai/deploy/kubernetes/): The relay and ligus Helm charts (preview, unpublished), what each pod holds, and known limits.
+- [Deploying with an LLM gateway](https://docs.ligus.ai/deploy/model-gateways/): Route serve and worker agents through an operator-listed LLM gateway (LiteLLM, kgateway, Envoy AI Gateway, Inference Extension pools): chart allow-list, ServiceAccount-token, API-key and mTLS auth, credential injection, attribution headers.
 - [Keys off the cluster (design)](https://docs.ligus.ai/deploy/keys-off-cluster/): A cluster that runs only the relay and executors; not shipped.
 - [Multi-tenant (design)](https://docs.ligus.ai/deploy/multi-tenant/): Three authorization layers for hosting many organisations; not implemented.
 - [Sign in with your IdP (ligus-auth)](https://docs.ligus.ai/deploy/ligus-auth/): Organization sign-in for the relay: device-code login, short-lived relay tokens, `ligus auth`.

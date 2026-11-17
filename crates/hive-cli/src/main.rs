@@ -41,6 +41,7 @@ use uuid::Uuid;
 
 mod auth;
 mod forge_cmd;
+mod gateway_check;
 mod hardening;
 mod mcp_config;
 mod selftest;
@@ -726,6 +727,7 @@ fn resolve_runtime_from_env() -> Result<(ResolvedRuntime, String)> {
         max_tool_rounds: None,
         allow_remote_file_tools: false,
         driver: Default::default(),
+        gateway: None,
     };
     Ok((rt, format!("{provider_str}/{model}")))
 }
@@ -953,8 +955,17 @@ fn resolve_agent_runtime(cfg: &Config, runtime_id: Option<&str>) -> Result<(Reso
         .into_iter()
         .find(|r| r.id == id)
         .ok_or_else(|| anyhow!("no workspace runtime '{id}' (run `ligus runtimes`, or define one in the app)"))?;
-    let api_key = resolve_workspace_credential(&wr.credential);
-    let rt = ResolvedRuntime {
+    Ok((workspace_runtime_resolved(&wr), format!("workspace:{}", wr.name)))
+}
+
+/// `ligus agent`'s runtime from a workspace runtime. A runtime that names a
+/// model gateway goes through it (dispatch refuses it where this host
+/// doesn't offer it), without the runtime's own key, as on serve and workers
+/// ([`worker::agent_workspace_runtime`]).
+fn workspace_runtime_resolved(wr: &hive_core::WorkspaceRuntime) -> ResolvedRuntime {
+    let gateway = Some(wr.gateway.trim()).filter(|g| !g.is_empty()).map(hive_runtime::model_gateway::GatewaySelection::named);
+    let api_key = if gateway.is_some() { None } else { resolve_workspace_credential(&wr.credential) };
+    ResolvedRuntime {
         provider: wr.provider,
         model: wr.model.clone(),
         endpoint: wr.endpoint.clone(),
@@ -969,8 +980,8 @@ fn resolve_agent_runtime(cfg: &Config, runtime_id: Option<&str>) -> Result<(Reso
         max_tool_rounds: None,
         allow_remote_file_tools: false,
         driver: Default::default(),
-    };
-    Ok((rt, format!("workspace:{}", wr.name)))
+        gateway,
+    }
 }
 
 /// v1 — act as an agent. After each sync, reply (as the primary responder) to
@@ -1202,11 +1213,17 @@ fn cmd_hosts(cfg: &Config) -> Result<()> {
     Ok(())
 }
 
+/// `h` with the model gateways this host's operator lists (names only).
+pub(crate) fn with_gateways(mut h: WorkspaceHost) -> WorkspaceHost {
+    h.model_gateways = hive_runtime::model_gateway::host().offers();
+    h
+}
+
 fn cmd_register_worker(cfg: &Config, label: Option<String>) -> Result<String> {
     let mut svc = open_service(cfg)?;
     let id = svc.device_id().to_string();
     let label = label.or_else(|| env_opt("HOSTNAME")).unwrap_or_else(|| "worker".into());
-    svc.ensure_host(uuid_of_room(&cfg.room), WorkspaceHost::new(id.clone(), HostKind::Worker, label))?;
+    svc.ensure_host(uuid_of_room(&cfg.room), crate::with_gateways(WorkspaceHost::new(id.clone(), HostKind::Worker, label)))?;
     Ok(id)
 }
 
@@ -1499,6 +1516,7 @@ fn usage() -> ! {
          USAGE:\n  \
          ligus --version\n  \
          ligus whoami\n  \
+         ligus gateway-check [--gateway <name>] [--model <id>]\n                                       prove this host's model gateways: a hosted-API turn and a\n                                       sandboxed CLI child through the egress proxy's route\n  \
          ligus doctor [--require-confined] [--expect-tier <tier>] [--turn-test]\n                                       this device's agent sandbox tier and what it leaves open;\n                                       the flags make it a preflight (non-zero exit on failure)\n  \
          ligus chats\n  \
          ligus new [title]\n  \
@@ -1572,6 +1590,8 @@ fn run() -> Result<()> {
     // `ligus mcp-bridge`: inside an agent's sandbox, pipe its MCP stdio to
     // the turn's Ligus MCP socket (Track D). No config, no data dir.
     hive_runtime::ligus_mcp::bridge::maybe_run_bridge();
+    // `ligus gateway-check`'s child: inside the agent sandbox, no config.
+    gateway_check::maybe_run_probe();
     // Before any thread starts: the only time Linux lets us read it.
     serve::dashboard_hive::init_local_offset();
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -1592,6 +1612,13 @@ fn run() -> Result<()> {
     // database, serve token) or its secret files; checked-out repos under
     // the data dir stay readable.
     hive_runtime::executor::configure_host(&cfg.data_dir, &secret_paths, &[repos::repos_dir(&cfg.data_dir)]);
+    // The operator's model gateways (LIGUS_MODEL_GATEWAYS_FILE): their
+    // credential files join the deny list. A listed file that can't be used
+    // stops the host rather than running without the gateways.
+    if let Err(e) = hive_runtime::model_gateway::init_host(&cfg.data_dir) {
+        eprintln!("ligus: {e}");
+        std::process::exit(2);
+    }
     // Turn scratch dirs a killed turn or host left behind are swept (now and
     // every ten minutes) once older than the longest turn.
     hive_runtime::executor::start_turn_dir_sweeper(worker::turn_timeout());
@@ -1615,6 +1642,8 @@ fn run() -> Result<()> {
     // Positional args exclude flags and any value immediately after a known
     // value-flag (so `agent bot --runtime ws1` → positional = [bot]).
     let value_flags = [
+        "--gateway",
+        "--model",
         "--runtime",
         "--endpoint",
         "--secret-ref",
@@ -1675,6 +1704,15 @@ fn run() -> Result<()> {
         "whoami" => cmd_whoami(&cfg),
         "doctor" => {
             let code = cmd_doctor(has("--require-confined"), flag_val("--expect-tier"), has("--turn-test"), &cfg)?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
+        "gateway-check" => {
+            let ws = (!cfg.room.is_empty()).then(|| uuid_of_room(&cfg.room));
+            let model = flag_val("--model").unwrap_or_else(|| "ligus-gateway-check".into());
+            let code = rt()?.block_on(gateway_check::run(ws, flag_val("--gateway"), model))?;
             if code != 0 {
                 std::process::exit(code);
             }
@@ -1908,6 +1946,22 @@ fn run() -> Result<()> {
 #[cfg(test)]
 mod cli_tests {
     use super::*;
+
+    /// `ligus agent` honors a workspace runtime's model gateway like serve and
+    /// workers do: the turn goes through the gateway (or is refused where it
+    /// isn't offered), and the runtime's own key is never sent along.
+    #[test]
+    fn ligus_agent_keeps_the_runtimes_gateway() {
+        let mut wr = hive_core::WorkspaceRuntime::new("gw", "Gateway", hive_core::ModelProviderKind::Custom, "m");
+        wr.endpoint = "https://api.example.com/v1/chat/completions".into();
+        wr.credential = hive_core::WorkspaceCredential::Inline { secret: "sk-RUNTIME-OWN".into() };
+        wr.gateway = "litellm".into();
+        let rt = workspace_runtime_resolved(&wr);
+        assert_eq!(rt.gateway.as_ref().map(|g| g.name.as_str()), Some("litellm"));
+        assert!(rt.api_key.is_none(), "the runtime's key rides along to a gateway turn");
+        wr.gateway.clear();
+        assert!(workspace_runtime_resolved(&wr).gateway.is_none());
+    }
 
     /// A box enrolled with `ligus enroll` is named after its label or host,
     /// never the pre-2.0 "hive-cli" (which every author line showed).

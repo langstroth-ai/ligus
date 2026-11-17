@@ -87,6 +87,7 @@ async fn claude_code_turn_gets_ligus_tools_in_seatbelt() {
         max_tool_rounds: None,
         allow_remote_file_tools: false,
         driver: hive_core::Driver::parse(&std::env::var("LIGUS_LIVE_DRIVER").unwrap_or_default()),
+        gateway: None,
     };
     let bound = tempfile::tempdir().unwrap();
     let working_dir = (std::env::var("LIGUS_LIVE_BOUND").ok().as_deref() == Some("1")).then(|| bound.path().to_string_lossy().into_owned());

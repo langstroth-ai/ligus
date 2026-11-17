@@ -2875,6 +2875,9 @@ fn runtime_to_toml(runtime: &RuntimeTarget) -> toml::Value {
     if let Some(rounds) = runtime.max_tool_rounds {
         table.insert("max_tool_rounds".into(), toml::Value::Integer(rounds.into()));
     }
+    if let Some(g) = runtime.gateway.as_deref().filter(|g| !g.is_empty()) {
+        table.insert("gateway".into(), toml::Value::String(g.to_string()));
+    }
     if runtime.capabilities.supports_embeddings {
         table.insert("supports_embeddings".into(), toml::Value::Boolean(true));
     }
@@ -3120,6 +3123,7 @@ fn runtime_dto(rt: &RuntimeTarget, is_default: bool) -> RuntimeSummaryDto {
         think: rt.think,
         max_tool_rounds: rt.max_tool_rounds,
         allow_remote_file_tools: rt.allow_remote_file_tools.then_some(true),
+        gateway: rt.gateway.clone().filter(|g| !g.is_empty()),
     }
 }
 
@@ -3461,6 +3465,10 @@ impl AppState {
                     // "Allow workspace file tools for this endpoint".
                     allow_remote_file_tools: rt.allow_remote_file_tools,
                     driver: rt.driver,
+                    // A device-local runtime may name a model gateway this
+                    // device's operator lists (LIGUS_MODEL_GATEWAYS_FILE);
+                    // dispatch refuses it when this device offers none.
+                    gateway: rt.gateway.clone().filter(|g| !g.is_empty()).map(hive_runtime::model_gateway::GatewaySelection::named),
                 };
             }
         }
@@ -3482,6 +3490,7 @@ impl AppState {
             max_tool_rounds: None,
             allow_remote_file_tools: false,
             driver: Default::default(),
+            gateway: None,
         }
     }
 }
@@ -4212,6 +4221,10 @@ fn list_workspace_hosts(state: State<AppState>) -> Result<Vec<WorkspaceHostDto>,
             label: h.label.clone(),
             online: state.host_presence.is_online(h, &now),
             last_seen: rfc3339(state.host_presence.last_seen(h)),
+            model_gateways: h
+                .offered_gateways()
+                .map(|g| hive_proto::HostModelGatewayDto { name: g.name.clone(), api: g.api.clone() })
+                .collect(),
         })
         .collect())
 }
@@ -10700,6 +10713,7 @@ async fn probe_provider(
         max_tool_rounds: None,
         allow_remote_file_tools: false,
         driver: Default::default(),
+        gateway: None,
     };
     let workspace_root = {
         let r = state.workspace_root.lock().unwrap().clone();
@@ -10768,6 +10782,7 @@ fn list_runtimes(state: State<AppState>) -> Result<Vec<RuntimeSummaryDto>, Strin
                 think: None,
                 max_tool_rounds: None,
                 allow_remote_file_tools: None,
+                gateway: None,
             },
         );
     }
@@ -10795,6 +10810,7 @@ fn list_runtimes(state: State<AppState>) -> Result<Vec<RuntimeSummaryDto>, Strin
             think: None,
             max_tool_rounds: None,
             allow_remote_file_tools: None,
+            gateway: None,
         });
     }
 
@@ -10853,8 +10869,17 @@ fn add_runtime(
     think: Option<bool>,
     max_tool_rounds: Option<u32>,
     allow_remote_file_tools: Option<bool>,
+    gateway: Option<String>,
 ) -> Result<(), String> {
     let provider_kind = parse_provider_kind(&provider)?;
+    // A model gateway is picked by name from what hosts offer; its URL and
+    // credential stay in that host's operator config.
+    let gateway = gateway.map(|g| g.trim().to_string()).filter(|g| !g.is_empty());
+    if let Some(g) = &gateway {
+        if !hive_core::HostModelGateway::valid_name(g) {
+            return Err(format!("'{g}' is not a model gateway name"));
+        }
+    }
     let model_base_url = model_base_url
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
@@ -10896,7 +10921,8 @@ fn add_runtime(
         // Built-in file tools against a non-local endpoint: the explicit
         // opt-in lives in this device's settings (below), never in config.
         allow_remote_file_tools: false,
-            driver: Default::default(),
+        driver: Default::default(),
+        gateway,
         estimated_performance_score: 0.0,
         estimated_cost_per_1m_input_tokens_usd: 0.0,
         capabilities: hive_core::RuntimeCapabilities {
@@ -14112,6 +14138,9 @@ fn import_config(state: State<AppState>, toml_text: String) -> Result<String, St
             // Never from a shared config: sending files to a non-local endpoint
             // is this device's user's call.
             None,
+            // The portable format carries no model gateway (a host-offered
+            // name, picked in Settings).
+            None,
         ) {
             Ok(()) => runtimes += 1,
             Err(e) => warnings.push(format!("runtime {}: {e}", r.id)),
@@ -16862,6 +16891,7 @@ mod utility_runtime_tests {
             max_tool_rounds: None,
             allow_remote_file_tools: false,
             driver: Default::default(),
+            gateway: None,
         }
     }
 
@@ -16955,6 +16985,7 @@ mod agentic_turn_tests {
             max_tool_rounds: None,
             allow_remote_file_tools: false,
             driver: Default::default(),
+            gateway: None,
         }
     }
 

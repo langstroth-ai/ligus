@@ -227,6 +227,9 @@ struct RawRuntime {
     /// is driven (Track D1).
     #[serde(default)]
     driver: String,
+    /// An operator-listed model gateway, by name (`gateway = "litellm"`).
+    #[serde(default)]
+    gateway: String,
     #[serde(default)]
     supports_embeddings: bool,
     #[serde(default)]
@@ -476,6 +479,7 @@ impl RawRuntime {
             // Device-local consent, never taken from a config file.
             allow_remote_file_tools: false,
             driver: crate::runtime::Driver::parse(&self.driver),
+            gateway: Some(self.gateway.trim().to_string()).filter(|g| !g.is_empty()),
             estimated_performance_score: self.performance_score,
             estimated_cost_per_1m_input_tokens_usd: self.cost_per_1m_input_tokens_usd,
             capabilities: RuntimeCapabilities {

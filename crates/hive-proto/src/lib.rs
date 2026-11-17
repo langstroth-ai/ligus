@@ -423,6 +423,11 @@ pub struct RuntimeSummaryDto {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub allow_remote_file_tools: Option<bool>,
+    /// The operator-listed model gateway this runtime goes through (by
+    /// name). None = the runtime's own endpoint.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub gateway: Option<String>,
 }
 
 /// Actual context-budget telemetry computed by the backend planner.
@@ -801,6 +806,20 @@ pub struct WorkspaceHostDto {
     /// Last heartbeat as an RFC 3339 string, so the presence UI can render a
     /// relative "last seen 3m ago".
     pub last_seen: String,
+    /// Model gateways this host's operator lists (names and wire only; the
+    /// URL and credentials stay on the host).
+    #[serde(default)]
+    pub model_gateways: Vec<HostModelGatewayDto>,
+}
+
+/// A model gateway a host offers: its operator-given name and wire
+/// (`openai` | `anthropic`). Never a URL or a secret.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct HostModelGatewayDto {
+    pub name: String,
+    pub api: String,
 }
 
 /// Where the local user was last `@`-mentioned in a chat, so the sidebar can
@@ -891,6 +910,7 @@ mod tests {
         IssuedRelayTokenDto::export_all(&cfg).unwrap();
         QueuedWorkDto::export_all(&cfg).unwrap();
         WorkspaceHostDto::export_all(&cfg).unwrap();
+        HostModelGatewayDto::export_all(&cfg).unwrap();
         MentionStateDto::export_all(&cfg).unwrap();
         LspServerDto::export_all(&cfg).unwrap();
         ProposalSetDto::export_all(&cfg).unwrap();

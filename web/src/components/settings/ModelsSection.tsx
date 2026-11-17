@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { RuntimeSummaryDto } from "@/bindings/RuntimeSummaryDto";
+import { GatewayPicker } from "./GatewayPicker";
 import {
   addRuntime,
+  listWorkspaceHosts,
   endpointIsPrivate,
   getAppSettings,
   getClaudeCodeModel,
@@ -615,6 +617,10 @@ function RuntimesSection() {
   const [runtimeMaxToolRounds, setRuntimeMaxToolRounds] = useState("");
   // Offer the built-in file tools to an endpoint that isn't local/private.
   const [runtimeAllowRemoteFileTools, setRuntimeAllowRemoteFileTools] = useState(false);
+  // An operator-listed model gateway, picked by name from what hosts offer
+  // ("" = the runtime's own endpoint).
+  const [runtimeGateway, setRuntimeGateway] = useState("");
+  const hosts = useQuery({ queryKey: ["workspace-hosts"], queryFn: listWorkspaceHosts, retry: false });
   const thinkProviders = ["ollama", "custom", "hive-daemon"];
   const httpProviders = ["ollama", "openAI", "openRouter", "azure", "custom", "hive-daemon"];
   // Providers whose "Supports tools" runs Hive's agent tool loop (MCP + file
@@ -657,6 +663,7 @@ function RuntimesSection() {
     setRuntimeThink(false);
     setRuntimeMaxToolRounds("");
     setRuntimeAllowRemoteFileTools(false);
+    setRuntimeGateway("");
     setRuntimeSupportsTools(true);
     setRuntimeSupportsEmbeddings(false);
   }
@@ -674,6 +681,7 @@ function RuntimesSection() {
     setRuntimeThink(runtime.think ?? false);
     setRuntimeMaxToolRounds(runtime.maxToolRounds ? String(runtime.maxToolRounds) : "");
     setRuntimeAllowRemoteFileTools(runtime.allowRemoteFileTools ?? false);
+    setRuntimeGateway(runtime.gateway ?? "");
     setRuntimeSupportsTools(runtime.supportsTools);
     setRuntimeSupportsEmbeddings(runtime.supportsEmbeddings);
     formRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -686,11 +694,11 @@ function RuntimesSection() {
         runtimeName.trim(),
         runtimeProvider,
         deriveLocation(),
-        runtimeEndpoint.trim(),
+        runtimeGateway ? "" : runtimeEndpoint.trim(),
         runtimeModel.trim(),
         runtimeSupportsTools,
         runtimeSupportsEmbeddings,
-        runtimeBaseUrl.trim() || null,
+        runtimeGateway ? null : runtimeBaseUrl.trim() || null,
         // pi targets an OpenAI-compatible provider; default that id to "ollama".
         runtimeBaseUrl.trim() && runtimeProvider === "pi" ? "ollama" : null,
         Number(runtimeContextWindow) > 0 ? Number(runtimeContextWindow) : null,
@@ -700,6 +708,7 @@ function RuntimesSection() {
           ? Number(runtimeMaxToolRounds)
           : null,
         agentToolProviders.includes(runtimeProvider) && runtimeAllowRemoteFileTools ? true : null,
+        runtimeGateway || null,
       ),
     onSuccess: () => {
       resetRuntimeForm();
@@ -741,6 +750,7 @@ function RuntimesSection() {
         runtime.think ?? null,
         runtime.maxToolRounds ?? null,
         runtime.allowRemoteFileTools ?? null,
+        runtime.gateway ?? null,
       ),
     onSuccess: (_d, { model }) => {
       toast.success(`Runtime now uses ${model}.`);
@@ -815,7 +825,7 @@ function RuntimesSection() {
                 <div className="font-medium">{runtime.label}</div>
                 <div className="text-xs text-ink-soft">
                   {runtime.location} · {runtime.provider}
-                  {runtime.endpoint ? ` · ${runtime.endpoint}` : ""}
+                  {runtime.gateway ? ` · via gateway ${runtime.gateway}` : runtime.endpoint ? ` · ${runtime.endpoint}` : ""}
                 </div>
                 {runtime.provider === "claude-code" && !runtime.isManaged && <ClaudeCodeRowModel />}
               </div>
@@ -967,6 +977,8 @@ function RuntimesSection() {
             <option value="copilot">GitHub Copilot CLI</option>
           </select>
         </div>
+        <GatewayPicker hosts={hosts.data ?? []} value={runtimeGateway} onChange={setRuntimeGateway} style={fieldStyle} />
+        {!runtimeGateway && (
         <input
           value={runtimeEndpoint}
           onChange={(e) => setRuntimeEndpoint(e.target.value)}
@@ -978,12 +990,13 @@ function RuntimesSection() {
           className="w-full rounded-xl border px-3 py-2 font-mono text-sm"
           style={fieldStyle}
         />
-        {runtimeEndpoint.includes("<host>") && (
+        )}
+        {!runtimeGateway && runtimeEndpoint.includes("<host>") && (
           <p className="text-xs text-ink-soft">
             Replace <code>&lt;host&gt;</code> with your gateway's address (e.g. its Tailscale IP).
           </p>
         )}
-        {runtimeProvider === "pi" && (
+        {runtimeProvider === "pi" && !runtimeGateway && (
           <>
             <input
               value={runtimeBaseUrl}

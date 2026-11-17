@@ -1,0 +1,58 @@
+{{- include "ligus.modelGatewaysValidate" . -}}
+{{- if .Values.modelGateways }}
+{{- $fullname := include "ligus.fullname" . -}}
+# The model gateways this release's serve and workers offer: names, URLs,
+# auth modes and the paths of their credential files. No secrets.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-model-gateways
+  labels:
+    {{- include "ligus.labels" . | nindent 4 }}
+data:
+  model-gateways.json: |
+    {{- include "ligus.modelGatewaysJson" . | nindent 4 }}
+{{- $np := .Values.networkPolicy -}}
+{{- if and $np.enabled $np.restrictEgress }}
+---
+# Egress from serve and workers to exactly the listed gateways. Policies are
+# a union: this only adds to <release>-controller. It renders only when that
+# policy restricts egress (otherwise a second Egress policy would isolate
+# pods that were open).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-model-gateways
+  labels:
+    {{- include "ligus.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      ligus.ai/role: controller
+  policyTypes:
+    - Egress
+  egress:
+    {{- range $g := .Values.modelGateways }}
+    {{- $gnp := $g.networkPolicy }}
+    # {{ $g.name }}
+    - to:
+        {{- if or $gnp.namespaceSelector $gnp.podSelector }}
+        {{- $peer := dict }}
+        {{- with $gnp.namespaceSelector }}{{- $_ := set $peer "namespaceSelector" . }}{{- end }}
+        {{- with $gnp.podSelector }}{{- $_ := set $peer "podSelector" . }}{{- end }}
+        - {{ toYaml $peer | indent 10 | trim }}
+        {{- end }}
+        {{- with $gnp.ipBlock }}
+        {{- range .cidrs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+        {{- end }}
+      ports:
+        {{- range $gnp.ports }}
+        - { port: {{ int . }}, protocol: TCP }
+        {{- end }}
+    {{- end }}
+{{- end }}
+{{- end }}

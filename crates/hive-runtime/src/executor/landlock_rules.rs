@@ -305,6 +305,7 @@ mod tests {
             args: vec![],
             mcp: vec![],
             ligus_mcp_socket: None,
+            gateway: None,
         }
     }
 

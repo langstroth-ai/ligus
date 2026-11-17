@@ -51,6 +51,10 @@ pub enum ProviderError {
     /// spend can't be counted.
     #[error("{0}")]
     Budget(String),
+    /// The turn's model gateway route was refused or is unusable on this
+    /// host (not offered, exclusive host, unreadable credential).
+    #[error("{0}")]
+    Gateway(String),
 }
 
 impl From<crate::agent_turn::SpendError> for ProviderError {
@@ -206,6 +210,8 @@ struct MessagesRequest<'a> {
 pub struct AnthropicClient {
     http: reqwest::Client,
     endpoint: String,
+    /// An operator-listed model gateway: its credential replaces the key.
+    gateway: Option<(std::sync::Arc<crate::model_gateway::Gateway>, Option<crate::model_gateway::Attribution>)>,
 }
 
 impl Default for AnthropicClient {
@@ -213,6 +219,7 @@ impl Default for AnthropicClient {
         Self {
             http: hive_forge::new_http_client(),
             endpoint: DEFAULT_ENDPOINT.to_string(),
+            gateway: None,
         }
     }
 }
@@ -220,6 +227,22 @@ impl Default for AnthropicClient {
 impl AnthropicClient {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Send through model gateway `gw` (its TLS client `http`, its
+    /// endpoint): the gateway's credential is sent, never a key.
+    pub fn with_gateway(mut self, gw: std::sync::Arc<crate::model_gateway::Gateway>, attribution: Option<crate::model_gateway::Attribution>, http: reqwest::Client) -> Self {
+        self.endpoint = gw.chat_endpoint();
+        self.http = http;
+        self.gateway = Some((gw, attribution));
+        self
+    }
+
+    fn authorize(&self, req: reqwest::RequestBuilder, api_key: &str) -> reqwest::RequestBuilder {
+        match &self.gateway {
+            Some((gw, attr)) => gw.apply_or_warn(req, attr.as_ref()),
+            None => req.header("x-api-key", api_key),
+        }
     }
 
     /// Override the endpoint (custom gateway / test server).
@@ -251,15 +274,13 @@ impl AnthropicClient {
             messages,
         };
 
-        let resp = self
+        let req = self
             .http
             .post(&self.endpoint)
-            .header("x-api-key", api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
             .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
+            .json(&body);
+        let resp = self.authorize(req, api_key).send().await?;
 
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
@@ -348,15 +369,13 @@ impl AnthropicClient {
             messages,
             tools,
         };
-        let resp = self
+        let req = self
             .http
             .post(&self.endpoint)
-            .header("x-api-key", api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
             .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
+            .json(&body);
+        let resp = self.authorize(req, api_key).send().await?;
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();

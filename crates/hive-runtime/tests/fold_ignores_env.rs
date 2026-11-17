@@ -25,6 +25,9 @@ use uuid::Uuid;
 const FOLD_ENV_DENYLIST: &[(&str, &str, &str)] = &[
     ("\"LIGUS_IDENTITY_MODE\"", "LIGUS_IDENTITY_MODE", "ignored since P0.8; only logs a warning"),
     ("\"LIGUS_OLLAMA_WIRE\"", "LIGUS_OLLAMA_WIRE", "provider wire format for a turn"),
+    ("GATEWAYS_FILE_ENV", "LIGUS_MODEL_GATEWAYS_FILE", "the host operator's model gateways (a turn's model route, never the fold)"),
+    ("EXCLUSIVE_ENV", "LIGUS_MODEL_GATEWAYS_EXCLUSIVE", "whether a gateway host refuses other model routes"),
+    ("ATTRIBUTION_KEY_ENV", "LIGUS_MODEL_GATEWAY_ATTRIBUTION_KEY_FILE", "the key of the pseudonymous gateway attribution ids"),
     ("\"LIGUS_LIVE_MODEL\"", "LIGUS_LIVE_MODEL", "live provider tests"),
     ("\"LIGUS_LIVE_CLI\"", "LIGUS_LIVE_CLI", "live provider tests"),
     ("\"LIGUS_LIVE_DRIVER\"", "LIGUS_LIVE_DRIVER", "live provider tests"),

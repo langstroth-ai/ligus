@@ -115,6 +115,10 @@ pub fn runtime_item(r: &RuntimeTarget, source: &str) -> TrustItem {
     if !r.driver.is_auto() {
         extra.push(format!("driver={}", r.driver.as_str()));
     }
+    // A model gateway reroutes the runtime's traffic: part of what was trusted.
+    if let Some(g) = r.gateway.as_deref().filter(|s| !s.is_empty()) {
+        extra.push(format!("gateway={g}"));
+    }
     TrustItem {
         kind: ItemKind::Runtime,
         id: r.id.clone(),
@@ -315,6 +319,7 @@ mod tests {
             max_tool_rounds: None,
             allow_remote_file_tools: false,
             driver: hive_core::Driver::Auto,
+            gateway: None,
             estimated_performance_score: 0.0,
             estimated_cost_per_1m_input_tokens_usd: 0.0,
             capabilities: Default::default(),
@@ -325,7 +330,8 @@ mod tests {
         let with_id = hive_core::RuntimeTarget { model_provider_id: Some("openrouter".into()), ..base.clone() };
         let with_metrics = hive_core::RuntimeTarget { metrics_endpoint: Some("http://evil:9090".into()), ..base.clone() };
         let with_driver = hive_core::RuntimeTarget { driver: hive_core::Driver::Acp, ..base.clone() };
-        let all = [plain, d(&with_id), d(&with_metrics), d(&with_driver)];
+        let with_gateway = hive_core::RuntimeTarget { gateway: Some("litellm".into()), ..base.clone() };
+        let all = [plain, d(&with_id), d(&with_metrics), d(&with_driver), d(&with_gateway)];
         for i in 0..all.len() {
             for j in i + 1..all.len() {
                 assert_ne!(all[i], all[j]);

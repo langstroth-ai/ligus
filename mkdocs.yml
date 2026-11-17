@@ -91,6 +91,7 @@ nav:
       - ligus-auth with Pocket ID: deploy/ligus-auth-pocket-id.md
       - ligus-auth with Dex: deploy/ligus-auth-dex.md
       - Kubernetes (preview): deploy/kubernetes.md
+      - Deploying with an LLM gateway: deploy/model-gateways.md
       - Keys off the cluster (design): deploy/keys-off-cluster.md
       - Multi-tenant (design): deploy/multi-tenant.md
       - Upgrading from Hive 1.x: deploy/upgrade-from-hive.md

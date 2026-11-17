@@ -137,9 +137,18 @@ pub fn tls_client_config() -> rustls::ClientConfig {
 /// verified against the OS trust store, or the bundled Mozilla roots when the
 /// OS has none (the same choice as [`tls_client_config`]).
 pub fn client_builder() -> reqwest::ClientBuilder {
+    client_builder_with_roots(uses_platform_roots())
+}
+
+/// [`client_builder`] for a host with (`platform_roots`) or without a usable
+/// OS trust store. Without one the builder carries a preconfigured rustls
+/// config (the bundled roots), which overrides every later TLS setting on
+/// the builder (`tls_certs_only`, `identity`): a caller that pins a CA or
+/// presents a client certificate must not start from it.
+pub fn client_builder_with_roots(platform_roots: bool) -> reqwest::ClientBuilder {
     install_tls_provider();
     let b = reqwest::Client::builder();
-    if uses_platform_roots() {
+    if platform_roots {
         b
     } else {
         b.tls_backend_preconfigured(bundled_roots_tls())

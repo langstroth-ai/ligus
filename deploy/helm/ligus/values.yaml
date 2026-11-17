@@ -281,6 +281,48 @@ networkPolicy:
       matchLabels:
         k8s-app: kube-dns
 
+# --- Model gateways (LLM gateways) -----------------------------------------
+
+# Dedicated LLM gateways serve and workers route model traffic through
+# (LiteLLM, kgateway, Envoy AI Gateway, vLLM/KServe pools behind the Gateway
+# API Inference Extension, or any OpenAI- or Anthropic-compatible endpoint).
+# Optional: no gateway is required. Each entry is offered to the workspace by
+# name only (never its URL or credentials); an Admin picks it for a runtime,
+# with passkey presence. The chart renders the allow-list file the binary
+# reads (LIGUS_MODEL_GATEWAYS_FILE), the credential volumes, and a
+# NetworkPolicy that opens exactly the listed peers and ports (only with
+# networkPolicy.restrictEgress). See README.md, "Model gateways".
+modelGateways: []
+# - name: litellm                 # 1-60 of a-z 0-9 -; what the workspace sees
+#   url: https://litellm.gw.svc.cluster.local:4000   # base URL; Ligus appends the API path
+#   api: openai                   # openai | anthropic (the wire it speaks)
+#   auth:
+#     mode: serviceAccountToken   # serviceAccountToken | apiKey | mtls | none
+#     audience: litellm           # serviceAccountToken; defaults to name; one per gateway
+#     expirationSeconds: 3600     # serviceAccountToken; 600-86400
+#     # apiKey: secretName, secretKey, header (authorization | x-api-key | api-key)
+#     # mtls:   secretName (keys tls.crt, tls.key, ca.crt; the CA is pinned)
+#   caSecret: { name: "", key: ca.crt }   # optional: pin a private CA for https
+#   allowPlaintext: false         # http:// only inside a mesh with mTLS
+#   attribution: false            # X-Ligus-Workspace / X-Ligus-Agent keyed hashes
+#   networkPolicy:                # peers serve and workers may reach
+#     namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: gw } }
+#     podSelector: { matchLabels: { app.kubernetes.io/name: litellm } }
+#     # or: ipBlock: { cidrs: [203.0.113.10/32] }   # never /0, link-local or metadata
+#     ports: [4000]
+
+# With a non-empty modelGateways, every agent turn on these hosts must go
+# through a listed gateway (LIGUS_MODEL_GATEWAYS_EXCLUSIVE). false also
+# allows runtimes that reach other endpoints directly.
+modelGatewaysExclusive: true
+
+# Key for the pseudonymous attribution headers (HMAC). Use the same Secret
+# for serve and every worker so the ids agree across hosts; empty = each host
+# generates its own key in its data dir.
+modelGatewayAttribution:
+  secretName: ""
+  secretKey: key
+
 serviceAccount:
   create: true
   name: ""

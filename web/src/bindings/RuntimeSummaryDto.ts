@@ -33,4 +33,9 @@ maxToolRounds?: number | null,
  * Offer the built-in workspace file tools even though the endpoint isn't
  * local or private. None = off.
  */
-allowRemoteFileTools?: boolean | null, };
+allowRemoteFileTools?: boolean | null, 
+/**
+ * The operator-listed model gateway this runtime goes through (by
+ * name). None = the runtime's own endpoint.
+ */
+gateway?: string | null, };

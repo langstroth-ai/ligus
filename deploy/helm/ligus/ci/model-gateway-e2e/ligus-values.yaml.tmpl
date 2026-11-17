@@ -1,0 +1,35 @@
+image: {repository: ligus, tag: __TAG__, pullPolicy: Never}
+relayUrl: http://ligus-relay.ligus-relay-gwe2e.svc.cluster.local:8443
+workspace: {existingSecret: ws-gwe2e}
+serviceAccount: {create: true, name: ligus-serve}
+serve:
+  persistence: {size: 1Gi, accessMode: ReadWriteOnce}
+  home: {size: 256Mi}
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: "1", memory: 512Mi, ephemeral-storage: 1Gi}
+networkPolicy:
+  restrictEgress: true
+  relayNamespace: ligus-relay-gwe2e
+  namespaceDefaultDeny: true
+modelGateways:
+  - name: kgw
+    url: https://llm-gw.gw-test.svc.cluster.local:8443
+    api: openai
+    auth: {mode: serviceAccountToken, audience: ligus-llm-gw, expirationSeconds: 600}
+    caSecret: {name: llm-gw-ca, key: ca.crt}
+    attribution: true
+    networkPolicy:
+      namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: gw-test}}
+      podSelector: {matchLabels: {gateway.networking.k8s.io/gateway-name: llm-gw}}
+      ports: [8443]
+  - name: litellm
+    url: http://litellm.gw-test.svc.cluster.local:4000
+    api: openai
+    allowPlaintext: true
+    auth: {mode: apiKey, secretName: litellm-key, secretKey: key}
+    networkPolicy:
+      namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: gw-test}}
+      podSelector: {matchLabels: {app: litellm}}
+      ports: [4000]
+modelGatewayAttribution: {secretName: gw-attr, secretKey: key}

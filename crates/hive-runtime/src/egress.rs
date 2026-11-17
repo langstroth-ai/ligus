@@ -21,6 +21,14 @@
 //! Loopback entries (a local Ollama for `pi`) skip the SNI check: they are
 //! plain HTTP on this machine.
 //!
+//! **Gateway routes** (docs/design/v2/model-gateways.md §7): a turn whose
+//! runtime uses an operator-listed model gateway reaches it only as plain
+//! HTTP to this proxy, `http://127.0.0.1:<port>/ligus-gw/<token>/<name>/...`.
+//! The proxy strips every credential the client sent, adds the gateway's own
+//! ([`crate::model_gateway::Gateway::injected_headers`], the same headers a
+//! hosted-API turn sends) and forwards over the gateway's TLS client. The
+//! child never holds the credential.
+//!
 //! The proxy runs on its own thread with a current-thread Tokio runtime, so
 //! synchronous callers (pre-flight) and async ones share it; dropping the
 //! [`EgressProxy`] stops it.
@@ -30,6 +38,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+
+use crate::model_gateway::ResolvedGateway;
 
 /// One allowed endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
@@ -202,6 +212,11 @@ impl EgressProxy {
     /// unix socket `unix_socket` when given (the Linux sandbox reaches the
     /// host only through a bind-mounted socket).
     pub fn start(allow: Vec<HostPort>, unix_socket: Option<&Path>) -> std::io::Result<Self> {
+        Self::start_with(allow, unix_socket, Vec::new())
+    }
+
+    /// [`Self::start`] with gateway routes (one per gateway the turn may use).
+    pub fn start_with(allow: Vec<HostPort>, unix_socket: Option<&Path>, routes: Vec<ResolvedGateway>) -> std::io::Result<Self> {
         let std_listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
         std_listener.set_nonblocking(true)?;
         let port = std_listener.local_addr()?.port();
@@ -220,7 +235,7 @@ impl EgressProxy {
         let token: String = raw.iter().map(|b| format!("{b:02x}")).collect();
         let denials = Arc::new(Mutex::new(Vec::new()));
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
-        let shared = Arc::new(Shared { allow, token: token.clone(), denials: denials.clone() });
+        let shared = Arc::new(Shared { allow, token: token.clone(), denials: denials.clone(), routes });
         let thread = std::thread::Builder::new().name("ligus-egress".into()).spawn(move || {
             let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build() else { return };
             rt.block_on(async move {
@@ -271,6 +286,12 @@ impl EgressProxy {
         proxy_url(self.port, &self.token)
     }
 
+    /// The loopback base URL of gateway `name`'s route (what a CLI is given
+    /// as its base URL).
+    pub fn gateway_url(&self, name: &str) -> String {
+        gateway_route_url(self.port, &self.token, name)
+    }
+
     /// Endpoints refused so far.
     pub fn denials(&self) -> Vec<HostPort> {
         self.denials.lock().map(|d| d.clone()).unwrap_or_default()
@@ -284,6 +305,11 @@ impl EgressProxy {
 /// The proxy URL a child is given.
 pub fn proxy_url(port: u16, token: &str) -> String {
     format!("http://ligus:{token}@127.0.0.1:{port}")
+}
+
+/// `http://127.0.0.1:<port>/ligus-gw/<token>/<name>`.
+pub fn gateway_route_url(port: u16, token: &str, name: &str) -> String {
+    format!("http://127.0.0.1:{port}{}{token}/{name}", crate::model_gateway::ROUTE_PREFIX)
 }
 
 /// The proxy env a child gets: both spellings of `HTTPS_PROXY`/`HTTP_PROXY`,
@@ -348,6 +374,7 @@ struct Shared {
     allow: Vec<HostPort>,
     token: String,
     denials: Arc<Mutex<Vec<HostPort>>>,
+    routes: Vec<ResolvedGateway>,
 }
 
 impl Shared {
@@ -422,6 +449,11 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(mut client: S, sh: &Shared) -
     let mut parts = first.split_whitespace();
     let method = parts.next().unwrap_or_default().to_string();
     let target = parts.next().unwrap_or_default().to_string();
+    // A gateway route authenticates by the token in its path (the CLI talks
+    // to it directly, not as a proxy).
+    if target.starts_with(crate::model_gateway::ROUTE_PREFIX) {
+        return gateway_route(client, &method, &target, &head_str, rest, sh).await;
+    }
     if !authorized(&head_str, &sh.token) {
         respond(&mut client, "407 Proxy Authentication Required").await;
         return Ok(());
@@ -494,6 +526,200 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(mut client: S, sh: &Shared) -
     upstream.write_all(out.as_bytes()).await?;
     upstream.write_all(&rest).await?;
     let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Gateway routes
+// ---------------------------------------------------------------------------
+
+/// The most a gateway route request body may be.
+const MAX_ROUTE_BODY: usize = 32 * 1024 * 1024;
+
+/// Hop-by-hop headers, never forwarded either way.
+fn hop_by_hop(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "connection" | "keep-alive" | "proxy-connection" | "te" | "trailer" | "transfer-encoding" | "upgrade" | "host" | "content-length" | "expect"
+    )
+}
+
+async fn respond_text<S: AsyncWrite + Unpin>(s: &mut S, status: &str, msg: &str) {
+    let body = format!("{{\"error\":{{\"message\":{}}}}}", serde_json::Value::String(msg.to_string()));
+    let _ = s
+        .write_all(format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes())
+        .await;
+    let _ = s.flush().await;
+}
+
+/// Read a request body: `Content-Length`, or chunked; `buf` holds what was
+/// read past the head.
+async fn read_body<S: AsyncRead + Unpin>(s: &mut S, headers: &[(String, String)], mut buf: Vec<u8>) -> std::io::Result<Vec<u8>> {
+    let get = |n: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(n)).map(|(_, v)| v.trim().to_string());
+    let chunked = get("transfer-encoding").is_some_and(|v| v.to_ascii_lowercase().contains("chunked"));
+    let mut chunk = [0u8; 16 * 1024];
+    if !chunked {
+        let len: usize = match get("content-length") {
+            Some(v) => v.parse().map_err(|_| std::io::Error::other("bad content-length"))?,
+            None => 0,
+        };
+        if len > MAX_ROUTE_BODY {
+            return Err(std::io::Error::other("request body too large"));
+        }
+        while buf.len() < len {
+            let n = s.read(&mut chunk).await?;
+            if n == 0 {
+                return Err(std::io::Error::other("eof in request body"));
+            }
+            buf.extend_from_slice(&chunk[..n]);
+        }
+        buf.truncate(len);
+        return Ok(buf);
+    }
+    // Chunked: decode as it arrives.
+    let mut out = Vec::new();
+    let mut pos = 0usize;
+    loop {
+        // Need a full size line.
+        let line_end = loop {
+            if let Some(i) = buf[pos..].windows(2).position(|w| w == b"\r\n") {
+                break pos + i;
+            }
+            if buf.len() - pos > 1024 {
+                return Err(std::io::Error::other("bad chunk header"));
+            }
+            let n = s.read(&mut chunk).await?;
+            if n == 0 {
+                return Err(std::io::Error::other("eof in chunked body"));
+            }
+            buf.extend_from_slice(&chunk[..n]);
+        };
+        let size_str = String::from_utf8_lossy(&buf[pos..line_end]).to_string();
+        let size = usize::from_str_radix(size_str.split(';').next().unwrap_or("").trim(), 16).map_err(|_| std::io::Error::other("bad chunk size"))?;
+        pos = line_end + 2;
+        if size == 0 {
+            // Trailers end with an empty line; don't wait for them.
+            return Ok(out);
+        }
+        if out.len() + size > MAX_ROUTE_BODY {
+            return Err(std::io::Error::other("request body too large"));
+        }
+        while buf.len() < pos + size + 2 {
+            let n = s.read(&mut chunk).await?;
+            if n == 0 {
+                return Err(std::io::Error::other("eof in chunk"));
+            }
+            buf.extend_from_slice(&chunk[..n]);
+        }
+        out.extend_from_slice(&buf[pos..pos + size]);
+        pos += size + 2;
+    }
+}
+
+/// Serve one request on a gateway route: check the path token, strip the
+/// client's credentials, add the gateway's, forward, stream the answer back.
+async fn gateway_route<S: AsyncRead + AsyncWrite + Unpin>(
+    mut client: S,
+    method: &str,
+    target: &str,
+    head_str: &str,
+    rest: Vec<u8>,
+    sh: &Shared,
+) -> std::io::Result<()> {
+    let tail = &target[crate::model_gateway::ROUTE_PREFIX.len()..];
+    let (tok, tail) = tail.split_once('/').unwrap_or((tail, ""));
+    if !constant_eq(tok.as_bytes(), sh.token.as_bytes()) {
+        respond_text(&mut client, "403 Forbidden", "bad route token").await;
+        return Ok(());
+    }
+    let (name, path) = tail.split_once('/').map(|(n, p)| (n, format!("/{p}"))).unwrap_or((tail, "/".to_string()));
+    let name = name.split('?').next().unwrap_or_default();
+    let Some(route) = sh.routes.iter().find(|r| r.gateway.name() == name) else {
+        respond_text(&mut client, "404 Not Found", "no such model gateway for this turn").await;
+        return Ok(());
+    };
+    if !crate::model_gateway::route_path_allowed(route.gateway.api(), method, &path) {
+        respond_text(&mut client, "403 Forbidden", "only the model API is reachable through a gateway route").await;
+        return Ok(());
+    }
+    let Ok(m) = reqwest::Method::from_bytes(method.as_bytes()) else {
+        respond_text(&mut client, "405 Method Not Allowed", "bad method").await;
+        return Ok(());
+    };
+    let headers: Vec<(String, String)> = head_str
+        .split("\r\n")
+        .skip(1)
+        .filter_map(|l| l.split_once(':').map(|(k, v)| (k.trim().to_string(), v.trim().to_string())))
+        .filter(|(k, _)| !k.is_empty())
+        .collect();
+    if headers.iter().any(|(k, v)| k.eq_ignore_ascii_case("expect") && v.eq_ignore_ascii_case("100-continue")) {
+        client.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").await?;
+    }
+    let body = match read_body(&mut client, &headers, rest).await {
+        Ok(b) => b,
+        Err(e) => {
+            respond_text(&mut client, "400 Bad Request", &e.to_string()).await;
+            return Ok(());
+        }
+    };
+    let gw = &route.gateway;
+    let http = match gw.client().await {
+        Ok(c) => c,
+        Err(e) => {
+            respond_text(&mut client, "502 Bad Gateway", &e.to_string()).await;
+            return Ok(());
+        }
+    };
+    let injected = match gw.injected_headers(route.attribution.as_ref()) {
+        Ok(h) => h,
+        Err(e) => {
+            respond_text(&mut client, "502 Bad Gateway", &e.to_string()).await;
+            return Ok(());
+        }
+    };
+    let mut req = http.request(m, gw.join(&path));
+    for (k, v) in &headers {
+        if hop_by_hop(k) || crate::model_gateway::is_client_credential_header(k) {
+            continue;
+        }
+        req = req.header(k.as_str(), v.as_str());
+    }
+    for (k, v) in &injected {
+        req = req.header(k.as_str(), v.as_str());
+    }
+    let resp = match req.body(body).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            respond_text(&mut client, "502 Bad Gateway", &format!("model gateway '{}' unreachable: {}", gw.name(), crate::provider::http::root_cause(&e))).await;
+            return Ok(());
+        }
+    };
+    let status = resp.status();
+    let mut out = format!("HTTP/1.1 {} {}\r\n", status.as_u16(), status.canonical_reason().unwrap_or(""));
+    for (k, v) in resp.headers() {
+        if hop_by_hop(k.as_str()) {
+            continue;
+        }
+        if let Ok(v) = v.to_str() {
+            out.push_str(&format!("{}: {v}\r\n", k.as_str()));
+        }
+    }
+    out.push_str("Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n");
+    client.write_all(out.as_bytes()).await?;
+    use futures_util::StreamExt;
+    let mut stream = resp.bytes_stream();
+    while let Some(next) = stream.next().await {
+        let Ok(bytes) = next else { break };
+        if bytes.is_empty() {
+            continue;
+        }
+        client.write_all(format!("{:x}\r\n", bytes.len()).as_bytes()).await?;
+        client.write_all(&bytes).await?;
+        client.write_all(b"\r\n").await?;
+        client.flush().await?;
+    }
+    client.write_all(b"0\r\n\r\n").await?;
+    client.flush().await?;
     Ok(())
 }
 

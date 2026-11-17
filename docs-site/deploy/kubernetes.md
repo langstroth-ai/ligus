@@ -282,6 +282,9 @@ the chart's
     keys in `agentEnv` (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, ...) pass
     through to CLI agents, which need them. An agent with a shell can print
     them. Give the pods keys you can rotate and limit with the provider.
+    To keep provider keys off the pods entirely, route agents through an
+    LLM gateway: the egress proxy adds the gateway credential and agents
+    never see it. See [Deploying with an LLM gateway](model-gateways.md).
 
 !!! warning "Workers with write access"
     `worker.permissionMode` (`acceptEdits`, `runCommands`,
