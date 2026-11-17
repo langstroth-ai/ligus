@@ -1,13 +1,15 @@
 # Hive developer & maintainer docs
 
 Docs for people working **on** Hive (architecture, internals, contributing).
-If you're looking for how to **use** or **self-host** Hive, that's the user site
-built from [`docs-site/`](../docs-site/) (the published MkDocs site).
+If you're looking for how to **use** or **self-host** it, that's one of the two
+published MkDocs sites built from [`docs-site/`](../docs-site/README.md).
 
-> **Audience split.** `docs-site/` = usage + relay deployment (users/admins).
-> `docs/` (here) = implementation, internals, release engineering (contributors).
-> Rule of thumb: *"how do I use/run/deploy it"* → user site; *"how is it built /
-> how do I change it"* → here.
+> **Audience split.** `docs-site/user/` = using the Ligus apps (docs.ligus.ai).
+> `docs-site/operator/` = self-hosting and deploying the Langstroth platform
+> (docs.langstroth.ai). `docs/` (here) = implementation, internals, release
+> engineering (contributors). Rule of thumb: *"how do I use it"* → user site;
+> *"how do I run/deploy it"* → operator site; *"how is it built / how do I
+> change it"* → here.
 
 ## Start here
 
@@ -17,14 +19,14 @@ built from [`docs-site/`](../docs-site/) (the published MkDocs site).
 | [multiuser.md](multiuser.md) | Relay-forwarded sync, E2EE, testing multiuser across machines. |
 | [relay-deploy.md](relay-deploy.md) | Cloud-hosting the `hive-relay` binary. |
 | [packaging.md](packaging.md) | Bundling + signing/notarization per OS. |
-| [hive-server-side-membership.md](../docs-site/ops/server-side-membership.md) | Server-enforced workspace membership (the `WriteGuard` seam + the private enterprise crate). |
+| [hive-server-side-membership.md](../docs-site/operator/docs/ops/server-side-membership.md) | Server-enforced workspace membership (the `WriteGuard` seam + the private enterprise crate). |
 
 ## Product & tiers
 
 | Doc | What it covers |
 |-----|----------------|
-| [tiering.md](../docs-site/ops/tiering.md) | OSS core vs paid/enterprise — how features gate (entitlements vs build) and where they live. |
-| [managed-service-plan.md](../docs-site/ops/managed-service.md) | GitHub-account identity, hosted relay, signed entitlement tokens, RBAC/GHEC roadmap. |
+| [tiering.md](../docs-site/operator/docs/ops/tiering.md) | OSS core vs paid/enterprise — how features gate (entitlements vs build) and where they live. |
+| [managed-service-plan.md](../docs-site/operator/docs/ops/managed-service.md) | GitHub-account identity, hosted relay, signed entitlement tokens, RBAC/GHEC roadmap. |
 | [hive-social-graph-plan.md](hive-social-graph-plan.md) | Add-friend-by-GitHub-username, presence, P2P bootstrap; GitHub Teams for Enterprise; the prosumer paid tier. |
 | [hive-issue-trackers.md](hive-issue-trackers.md) | Per-workspace issue/ticket integration via MCP (GitHub Issues/PRs, Linear, …). |
 
@@ -40,8 +42,9 @@ with the code, the code wins.
 - Ligus 2.0: [`design/v2/`](design/v2/README.md) — architecture review, Phase 0 track specs, identity without GitHub and many forges, relay-directory trust.
 - Branding: [`hive-logo-system.md`](hive-logo-system.md) — logo/brand assets.
 
-The user-facing tiering / managed-service / pricing docs live on the published
-site under [`docs-site/ops/`](../docs-site/ops/).
+The tiering and managed-service docs live on the operator site under
+[`docs-site/operator/docs/ops/`](../docs-site/operator/docs/ops/); pricing is on
+the user site at [`docs-site/user/docs/help/pricing.md`](../docs-site/user/docs/help/pricing.md).
 
 ## Building & running
 

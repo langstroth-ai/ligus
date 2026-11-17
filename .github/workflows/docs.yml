@@ -1,11 +1,16 @@
 name: Docs
 
+# Publishes the USER docs site (docs-site/user, docs.ligus.ai) to GitHub Pages.
+# The docs now live on Netlify as two sites (docs-site/user -> docs.ligus.ai,
+# docs-site/operator -> docs.langstroth.ai; see docs-site/README.md). Keep this
+# workflow until docs.ligus.ai's DNS points at Netlify, then delete it and
+# turn off GitHub Pages for the repository.
+
 on:
   push:
     branches: [main]
     paths:
       - "docs-site/**"
-      - "mkdocs.yml"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 
@@ -27,17 +32,21 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install mkdocs
-        # Pin to the 9.x line — mkdocs-material 2.0 rewrote the theming system
-        # and breaks our overrides.
-        run: pip install "mkdocs-material>=9,<10"
+        # Same pinned versions Netlify installs (mkdocs-material 9.x).
+        run: pip install -r docs-site/requirements.txt
       - name: Build site
-        # Not --strict: several pages link screenshots that haven't been captured
-        # yet (see docs-site images/CAPTURE_GUIDE.md). Warnings stay visible
-        # without failing the build; re-enable --strict once the images land.
-        run: mkdocs build
+        env:
+          NO_MKDOCS_2_WARNING: "1"
+        run: mkdocs build --strict -f docs-site/user/mkdocs.yml
+      - name: Build the operator site (checked here, published by Netlify)
+        env:
+          NO_MKDOCS_2_WARNING: "1"
+        run: mkdocs build --strict -f docs-site/operator/mkdocs.yml
+      - name: Check every old docs path is redirected
+        run: python3 docs-site/tools/redirects.py check --built
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
-          path: site
+          path: docs-site/user/site
 
   deploy:
     needs: build

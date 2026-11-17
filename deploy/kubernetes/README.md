@@ -2,7 +2,7 @@
 
 Status: **preview** (charts and images not published). The operator guide,
 including supported nodes, backups, upgrades and what 2.0 does not support, is
-[`docs-site/deploy/kubernetes.md`](../../docs-site/deploy/kubernetes.md). The Helm chart is in
+[`docs-site/operator/docs/deploy/kubernetes.md`](../../docs-site/operator/docs/deploy/kubernetes.md). The Helm chart is in
 [`../helm/ligus`](../helm/ligus) and its README is the install guide. The
 design, and the phases still to come, are in
 [`docs/design/kubernetes.md`](../../docs/design/kubernetes.md). The container

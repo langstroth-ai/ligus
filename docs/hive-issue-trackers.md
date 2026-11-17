@@ -14,7 +14,7 @@ not new infrastructure.
 Hive already:
 
 - runs **MCP servers** per workspace (stdio + http), **inert until enabled**,
-  with **per-tool trust toggles** (see [MCP servers](../docs-site/addons/mcp.md));
+  with **per-tool trust toggles** (see [MCP servers](../docs-site/user/docs/addons/mcp.md));
 - has a **multi-turn tool loop** so an agent can call a tool, read the result,
   and continue;
 - holds a **GitHub OAuth token** already (the directory/identity work).
@@ -65,7 +65,7 @@ the rest of the admin model:
 
 - **Per-tool MCP trust** (already built) — writes (`create`/`update`/
   `transition`) start untrusted; a human approves the tool, per workspace.
-- **Capability gate** — once the [RBAC capabilities](../docs-site/ops/managed-service.md)
+- **Capability gate** — once the [RBAC capabilities](../docs-site/operator/docs/ops/managed-service.md)
   land, `issues.create`/`transition`/etc. require a `manage_integrations` (or a
   finer `issues.write`) capability; `Viewer`s get read-only tools.
 - **Consent-on-demand** — the existing built-in-tool consent flow surfaces "Agent
@@ -95,4 +95,4 @@ The connectors themselves are **free/core** (they're just MCP integrations).
 What's **paid** is the *governance* around agent writes to a shared tracker —
 capability-based RBAC, org policy ("agents may file but not close"), and the
 audit trail of agent-made changes — which sits in the same managed/enterprise
-relay surface as the rest of [`tiering.md`](../docs-site/ops/tiering.md).
+relay surface as the rest of [`tiering.md`](../docs-site/operator/docs/ops/tiering.md).

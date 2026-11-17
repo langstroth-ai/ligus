@@ -1,0 +1,62 @@
+# Langstroth operator documentation: https://docs.langstroth.ai/
+# Self-hosting and deploying the platform behind the Ligus apps.
+# Build: mkdocs build --strict -f docs-site/operator/mkdocs.yml  (see docs-site/README.md)
+INHERIT: ../mkdocs-base.yml
+site_name: Langstroth
+site_description: Langstroth operator docs — self-host and deploy the end-to-end-encrypted relay, sign-in, Helm charts and Ligus hosts.
+site_url: https://docs.langstroth.ai/
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - Deploy:
+      - Choose a deployment: deploy/index.md
+      - Deploying with an agent: deploy/with-an-agent.md
+      - Solo laptop: deploy/solo.md
+      - Personal fleet (laptop, home server, phone): deploy/personal-fleet.md
+      - Team on a relay: ops/deployment.md
+      - Kubernetes (preview): deploy/kubernetes.md
+      - Deploying with an LLM gateway: deploy/model-gateways.md
+      - Keys off the cluster (design): deploy/keys-off-cluster.md
+      - Multi-tenant (design): deploy/multi-tenant.md
+  - Relay & auth:
+      - Self-hosting a relay: networking/self-host.md
+      - Sign in with your IdP (ligus-auth): deploy/ligus-auth.md
+      - ligus-auth with Pocket ID: deploy/ligus-auth-pocket-id.md
+      - ligus-auth with Dex: deploy/ligus-auth-dex.md
+      - Server-side membership: ops/server-side-membership.md
+  - Hosts:
+      - Running ligus serve as your own device: ops/serve-box.md
+      - Headless agents & setups: concepts/headless-agents.md
+      - Repos on the home host: ops/serve-repos.md
+      - Remote access for your phone: networking/remote-access.md
+      - The Linux agent sandbox: ops/linux-sandbox.md
+  - Operations:
+      - Health, logs, backups: ops/operations.md
+      - Upgrading from Hive 1.x: deploy/upgrade-from-hive.md
+      - Building the dist: ops/build.md
+      - Troubleshooting (docs.ligus.ai): https://docs.ligus.ai/help/troubleshooting/
+  - Security:
+      - Security model: security/index.md
+      - Threat model: security/threat-model.md
+      - Runbooks: security/runbooks.md
+      - Security & trust for users (docs.ligus.ai): https://docs.ligus.ai/concepts/security/
+  - Reference:
+      - Environment variables: reference/env-vars.md
+      - Configuration (TOML): reference/config-toml.md
+      - Serve HTTP API: reference/serve-api.md
+      - Invite payload format: reference/invite-payload.md
+      - Identity link statement: reference/identity-link-statement.md
+      - Wire protocols: reference/wire-protocols.md
+      - CLI (docs.ligus.ai): https://docs.ligus.ai/reference/cli/
+  - Networking roadmap:
+      - LAN discovery: networking/lan.md
+      - Rendezvous relay: networking/rendezvous.md
+      - TURN fallback: networking/turn.md
+  - Business model:
+      - Tiering (open-core model): ops/tiering.md
+      - Managed service plan: ops/managed-service.md
+      - Pricing tiers (docs.ligus.ai): https://docs.ligus.ai/help/pricing/
+  - Ligus user docs: https://docs.ligus.ai/

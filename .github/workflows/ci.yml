@@ -1,7 +1,7 @@
 name: ci
 
 # Per-push / per-PR gate for the Rust workspace (crates/, app/) and the web
-# frontend (web/). Docs-only changes (docs/, docs-site/, mkdocs.yml, root *.md)
+# frontend (web/). Docs-only changes (docs/, docs-site/, root *.md)
 # match none of the paths below and skip this workflow entirely.
 #
 #   web      one Linux job: bun install, vitest, typecheck + vite build (was

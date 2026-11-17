@@ -27,7 +27,7 @@
 # namespaces through it, exactly as on a distro without the restriction or
 # with Ubuntu's own profile. Processes bwrap starts get no capabilities, not
 # even inside their own namespace, and can't create further user namespaces.
-# See https://docs.ligus.ai/ops/linux-sandbox/#apparmor-profile
+# See https://docs.langstroth.ai/ops/linux-sandbox/#apparmor-profile
 
 abi <abi/4.0>,
 

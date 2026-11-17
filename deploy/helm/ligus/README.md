@@ -10,7 +10,7 @@ servers. The design and its reasoning are in
 [`docs/design/kubernetes.md`](../../../docs/design/kubernetes.md); the
 operator guide (supported nodes, install, backups, upgrades, what 2.0 does
 not support) is the docs site's
-[Kubernetes page](../../../docs-site/deploy/kubernetes.md).
+[Kubernetes page](../../../docs-site/operator/docs/deploy/kubernetes.md).
 
 **One release per workspace, in that workspace's own namespace.** The relay is
 shared by many workspaces and normally lives in its own namespace and release
@@ -149,8 +149,8 @@ serve and workers can route every agent's model traffic through a dedicated
 LLM gateway: LiteLLM, kgateway or Envoy AI Gateway (Envoy and the Gateway
 API), vLLM or KServe pools behind the Gateway API Inference Extension, or any
 other OpenAI- or Anthropic-compatible endpoint. None is required and none is
-bundled. Design: `docs/design/v2/model-gateways.md`; operator guide: the docs
-site's "Deploying with an LLM gateway". A full example is in
+bundled. Design: `docs/design/v2/model-gateways.md`; operator guide:
+[Deploying with an LLM gateway](https://docs.langstroth.ai/deploy/model-gateways/). A full example is in
 [`examples/model-gateway-values.yaml`](examples/model-gateway-values.yaml).
 
 ```yaml

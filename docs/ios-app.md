@@ -93,7 +93,7 @@ and public addresses unless `LIGUS_SERVE_ALLOW_ANY_BIND=1`.
 | GET | `/v1/proposals/{id}/comments` | `{comments: [Comment]}`, the refinement thread, oldest first |
 | POST | `/v1/proposals/{id}/comments` `{text, requestChanges?}` | `{comment, proposal}`. `requestChanges: true` marks it a change request |
 | POST | `/v1/proposals/{id}/request-changes` `{note?}` | `{proposal, message}`. The desktop's "Send to agent to revise"; `note` is added first as a change request |
-| GET | `/v1/proposal-sets?status=open\|all` | `{sets: [ProposalSet]}`, every [proposal set](../docs-site/features/proposal-sets.md) in the workspace, newest first (open by default). Read-only |
+| GET | `/v1/proposal-sets?status=open\|all` | `{sets: [ProposalSet]}`, every [proposal set](../docs-site/user/docs/features/proposal-sets.md) in the workspace, newest first (open by default). Read-only |
 | GET | `/v1/proposal-sets/{id}` | `{set: ProposalSet}` |
 | GET | `/v1/chats/{id}/proposal-sets?status=open\|all` | `{sets: [ProposalSet]}`, one chat's sets (all by default) |
 | GET | `/v1/guards` | `{dearth: {reason, broodPaths, allowedMcpServers, setBy, setAt}?, pendingMembers, lockedChats: [{chatId, chatTitle, signals: [{signal, detail, raisedAt, messageId?}]}], coordinator: {holder, epoch, leaseMs, released, isThis}?, myRole, canClearLockdown}` |
@@ -335,7 +335,7 @@ The rows above are unchanged for the shipped app; 2.0 adds:
 - `Forge = {id, kind, flavor, displayName, baseUrl, authSource: gh|token|oauth|none, user?, available, reason?, hasRead, hasWrite, deviceFlow, openLabel, changeRequestKind, holder}`.
 - `GET|POST /v1/forges`, `DELETE /v1/forges/{id}`, `POST /v1/forges/{id}/test`,
   `PUT|DELETE /v1/forges/{id}/token`, `POST|GET /v1/forges/{id}/auth/device`:
-  see `docs-site/reference/serve-api.md`. The phone never stores a forge
+  see `docs-site/operator/docs/reference/serve-api.md`. The phone never stores a forge
   token. `PUT …/token` and `POST …/auth/device` are accepted only through the
   tunnel (or on a loopback bind) and need presence; on a direct LAN bind
   they answer 403, and `GET /v1/forges` says `tokenEntry: false`.
@@ -347,7 +347,7 @@ everything below is the box's own account (or, on a box enrolled as its
 owner's device, the owner's), its pinned config logs and its contact.
 Every name is cleaned (`hive_proto::names`: bidi, zero-width, invisible
 format and control characters removed); the app cleans them again. The
-contract is also in `docs-site/reference/serve-api.md`.
+contract is also in `docs-site/operator/docs/reference/serve-api.md`.
 
 **Invite codes travel only over a secure channel.** A code carries the
 workspace passphrase and its epoch keys (a DM's, its room key), so, like a

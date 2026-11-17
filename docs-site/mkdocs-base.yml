@@ -1,0 +1,80 @@
+# Settings shared by both documentation sites. Each site's mkdocs.yml pulls
+# this in with INHERIT and adds its own name, URL, nav and plugins:
+#   user/mkdocs.yml      -> https://docs.ligus.ai/       (Ligus apps)
+#   operator/mkdocs.yml  -> https://docs.langstroth.ai/  (self-hosting and deploying)
+repo_url: https://github.com/langstroth-ai/ligus
+repo_name: langstroth-ai/ligus
+copyright: MIT-licensed
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  # Shared logo, favicon and stylesheet live in docs-site/theme and are
+  # copied into each built site at the same paths.
+  custom_dir: ../theme
+  logo: images/hive-logo.svg
+  favicon: images/hive-favicon.png
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.indexes
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  # Material icon/emoji shortcodes (:material-…:, :octicons-…:) → inline SVGs.
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - tables
+  - toc:
+      permalink: true
+
+extra_css:
+  - stylesheets/brand.css
+
+extra_javascript:
+  - https://unpkg.com/mermaid@10/dist/mermaid.min.js
+
+validation:
+  # Cross-site links are absolute URLs; relative links must resolve inside
+  # the site. Anchors are checked too.
+  anchors: warn

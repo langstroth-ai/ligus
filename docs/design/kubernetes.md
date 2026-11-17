@@ -1,7 +1,7 @@
 # Kubernetes as a deployment option
 
 > **2.0 status (2026-11-16).** What ships in 2.0 is the preview Helm charts
-> described in `docs-site/deploy/kubernetes.md`: serve and named workers run
+> described in `docs-site/operator/docs/deploy/kubernetes.md`: serve and named workers run
 > agent turns in their own pods under Landlock (fail-closed preflight),
 > secrets as files, closed egress, single replicas. The executor/controller
 > split, PR-test sandboxes, OTLP export, keys off the cluster, multi-tenant

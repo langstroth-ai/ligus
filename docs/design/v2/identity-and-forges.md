@@ -76,7 +76,7 @@ There are 117 findings in total. The tables below cover everything that matters 
 | I23 | `crates/hive-core/src/events.rs:214-222` | The `AccountKeyRegistered` doc says "GitHub-anchored". Only the comment is GitHub-specific; the wire isn't. |
 | I24-I27 | `envelope_verifier.rs:28-32,150-160,…`; `identity_verifier.rs:1-72,301-330`; `sync_engine.rs:127-132,704-760` | Dormant "Option C" `GithubSigningKeys` mode, which checks account keys against `api.github.com/users/{login}/ssh_signing_keys`. Enabled only in tests; the env switch is ignored (P0.8). |
 | I28 | `app/src/lib.rs:602-623` | `WorkspaceConn.dm_account` (`github:<id>`) and `founder_actor_id` (`github:<id>` for DMs) inside `hivews1:` invites. |
-| I29 | `crates/hive-runtime/src/relay_client.rs:353-366` **[V]** | `authed()` attaches `X-Hive-Github-Token` to **every** relay request, not only directory calls. The relay operator can read it (`docs-site/networking/self-host.md:293-300`). |
+| I29 | `crates/hive-runtime/src/relay_client.rs:353-366` **[V]** | `authed()` attaches `X-Hive-Github-Token` to **every** relay request, not only directory calls. The relay operator can read it (`docs-site/operator/docs/networking/self-host.md:293-300`). |
 | I30 | `app/src/lib.rs:6421-6434, 11645-11908, 12089-12160` | Every relay client, the sync loop and probes carry the token. |
 | I31 | `crates/hive-cli/src/main.rs:14,55,176,273,362,428` | The headless CLI forwards env `LIGUS_RELAY_GITHUB_TOKEN` the same way. |
 | I32 | `web/src/lib/ipc.ts:508-536`; `web/src/components/settings/AccountSection.tsx:8-320`; `web/src/components/Onboarding.tsx:15-19,202-290,520-600,913` | The sign-in UI. Onboarding step 1 offers GitHub. The git email is locked while signed in. |
@@ -146,9 +146,9 @@ Repo work uses the **host's `gh` login**. The desktop never shells out to `gh`, 
 
 ### 1.6 Docs to rewrite
 
-- **Identity and discovery:** `README.md`, `SECURITY.md`, `docs-site/concepts/identity.md`, `concepts/security.md`, `concepts/headless-agents.md`, `deploy/solo.md`, `features/{collaborators,invites,onboarding,settings}.md`, `getting-started/first-launch.md`, `networking/self-host.md`, `ops/{deployment,managed-service,server-side-membership,tiering,troubleshooting}.md`, `reference/{env-vars,invite-payload,settings,wire-protocols}.md`, `security/{index,runbooks,threat-model}.md`, `docs/hive-relay-api.md`, `docs/hive-social-graph-plan.md`, `docs/security-hardening-plan.md`.
+- **Identity and discovery:** `README.md`, `SECURITY.md`, `docs-site/user/docs/concepts/identity.md`, `concepts/security.md`, `concepts/headless-agents.md`, `deploy/solo.md`, `features/{collaborators,invites,onboarding,settings}.md`, `getting-started/first-launch.md`, `networking/self-host.md`, `ops/{deployment,managed-service,server-side-membership,tiering,troubleshooting}.md`, `reference/{env-vars,invite-payload,settings,wire-protocols}.md`, `security/{index,runbooks,threat-model}.md`, `docs/hive-relay-api.md`, `docs/hive-social-graph-plan.md`, `docs/security-hardening-plan.md`.
   - `docs/hive-relay-api.md:68-75` still says the relay falls back to the bearer. That fallback was removed in relay v0.2.0 (`relay/CHANGELOG.md:44-50`).
-- **Repos:** `docs-site/ops/serve-repos.md`, `docs-site/reference/serve-api.md`, `docs/ios-app.md`, `docs/design/pr-test-sandbox.md`.
+- **Repos:** `docs-site/operator/docs/ops/serve-repos.md`, `docs-site/operator/docs/reference/serve-api.md`, `docs/ios-app.md`, `docs/design/pr-test-sandbox.md`.
 
 ---
 
