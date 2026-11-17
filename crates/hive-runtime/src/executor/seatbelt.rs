@@ -28,10 +28,14 @@
 //! (allow network-outbound (remote unix-socket (path-literal "<ligus mcp socket>")))
 //! ```
 //!
-//! Keychain: agent CLIs keep Keychain *service* access (mach lookups to
-//! `securityd`), because Claude Code's subscription login lives there; the
-//! keychain *files* are unreadable. Ligus's own items are protected by their
-//! item ACLs, not by this profile.
+//! Keychain: the login keychain's files are unreadable (so it can't be
+//! opened) except to a subscription CLI whose sign-in still lives there
+//! (Copilot, Antigravity, Claude Code with a custom config dir). Claude
+//! Code's keychain sign-in is bridged into the turn home as a credentials
+//! file (`cli_home`), and Codex signs in from `auth.json`, so their turns run
+//! without it: any process that can run `/usr/bin/security` reads every item
+//! that trusts it (the gh token, git's osxkeychain credentials) with no
+//! prompt. Ligus's own items trust only the Ligus binaries.
 
 use std::ffi::{OsStr, OsString};
 use std::io;

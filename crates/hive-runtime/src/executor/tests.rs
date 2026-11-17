@@ -879,6 +879,50 @@ fn run_purpose(e: &dyn TurnExecutor, f: &Fixture, purpose: Purpose, script: &str
     })
 }
 
+/// macOS: an agent whose sign-in doesn't live in the login keychain can't
+/// search it. Items stored with `/usr/bin/security` in their ACL (the gh
+/// token, git's osxkeychain credentials, other CLIs' logins) are readable
+/// without a prompt by anything that can run `security`, so a turn that
+/// reaches the keychain reads them although `~/.config/gh` is denied. The
+/// probe only opens the keychain's settings, never an item.
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_denies_login_keychain_search() {
+    let Some(e) = real_executor() else { return };
+    let f = Fixture::new();
+    let Some(home) = home_dir() else { return };
+    let login = home.join("Library/Keychains/login.keychain-db");
+    // `show-keychain-info` opens the keychain (the client reads the file);
+    // it doesn't unlock it or read any item.
+    let probe = format!("/usr/bin/security show-keychain-info '{}' 2>&1; echo rc=$?", login.display());
+    let reached = |out: &str| out.contains("no-timeout") || out.contains("lock-on-sleep") || out.contains("rc=0");
+    // Control: outside the sandbox the login keychain opens.
+    let control = std::process::Command::new("/bin/sh").args(["-c", &probe]).output().unwrap();
+    let control = String::from_utf8_lossy(&control.stdout).into_owned();
+    if !reached(&control) {
+        eprintln!("skipped: no login keychain to open ({control})");
+        return;
+    }
+    // A hosted-key turn (no subscription sign-in) and a tool child never
+    // need the keychain.
+    for (purpose, key) in [(Purpose::Agent(ModelProviderKind::ClaudeCode), Some("sk-ant-test")), (Purpose::Agent(ModelProviderKind::Codex), Some("sk-test")), (Purpose::Tool, None), (Purpose::McpServer, None)] {
+        let (_, out) = run_purpose(&*e, &f, purpose, &probe, key);
+        assert!(!reached(&out), "{purpose:?} opened the login keychain: {out}");
+    }
+    // A Claude Code subscription sign-in is bridged into the turn home as
+    // its credentials file, and the turn then runs without the keychain.
+    let has_item = std::process::Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-s", "Claude Code-credentials"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if has_item && std::env::var_os("CLAUDE_CONFIG_DIR").is_none() && !home.join(".claude/.credentials.json").exists() {
+        let (_, out) = run_purpose(&*e, &f, Purpose::Agent(ModelProviderKind::ClaudeCode), &format!("test -s \"$HOME/.claude/.credentials.json\" && echo BRIDGED; {probe}"), None);
+        assert!(out.contains("BRIDGED") && !reached(&out), "the subscription sign-in wasn't bridged, or the keychain stayed open: {out}");
+    }
+}
+
 /// macOS: under open egress (a stdio MCP server) a confined child can't
 /// connect to the user's unix sockets. A Docker or OrbStack socket is root
 /// on the VM with the user's home mounted (a full escape), and ssh-agent or
