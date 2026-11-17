@@ -809,9 +809,10 @@ pub(crate) fn held_dm_invite(state: State<AppState>, workspace_id: String) -> Re
 }
 
 /// After the unverified-recipient warning (their keys changed since the DM
-/// was opened): deliver to their current verified devices.
+/// was opened): deliver to their current verified devices. `safety_code` is
+/// the code the opener compared; refused unless it is theirs now.
 #[tauri::command]
-pub(crate) fn confirm_dm_invite(state: State<AppState>, workspace_id: String) -> Result<serde_json::Value, String> {
+pub(crate) fn confirm_dm_invite(state: State<AppState>, workspace_id: String, safety_code: String) -> Result<serde_json::Value, String> {
     let ws = held_ws(&state, &workspace_id)?;
     let store = held(&state);
     let account = store.get(ws).map(|h| h.account_id).ok_or("no invite waits for delivery in this DM")?;
@@ -819,7 +820,7 @@ pub(crate) fn confirm_dm_invite(state: State<AppState>, workspace_id: String) ->
         .into_iter()
         .find(|c| c.account_id == account)
         .ok_or("You no longer share a workspace with them.")?;
-    let h = store.confirm(ws, &person, unix_now())?;
+    let h = store.confirm(ws, &person, &safety_code, unix_now())?;
     HELD_KICK.notify_one();
     Ok(h.status_json())
 }

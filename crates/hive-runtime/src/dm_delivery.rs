@@ -427,10 +427,20 @@ impl HeldInvites {
 
     /// After a warning, the opener confirmed `person`'s current keys: they
     /// become the approved recipients and delivery resumes. Still only to
-    /// keys their account signed on the config logs.
-    pub fn confirm(&self, ws: Uuid, person: &CoMember, now: i64) -> Result<HeldInvite, String> {
+    /// keys their account signed on the config logs. `safety_code` is the
+    /// code the opener compared: refused unless it is `person`'s now, so a
+    /// key that changed again between the warning and the click is never
+    /// approved unseen.
+    pub fn confirm(&self, ws: Uuid, person: &CoMember, safety_code: &str, now: i64) -> Result<HeldInvite, String> {
         let plan = person.seal_plan()?;
         let fingerprint = person.fingerprint.clone().ok_or_else(|| format!("{UNVERIFIED_RECIPIENT}: no account key for them"))?;
+        let norm = |c: &str| c.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_ascii_lowercase();
+        if person.safety_code().map(|c| norm(&c)) != Some(norm(safety_code)).filter(|c| !c.is_empty()) {
+            return Err(format!(
+                "{UNVERIFIED_RECIPIENT}: {}'s safety code isn't the one you compared (their keys changed again); compare it again",
+                person.display_name
+            ));
+        }
         self.transition(ws, &[HeldState::Warning], HeldState::Waiting, |h| {
             h.fingerprint = fingerprint;
             h.keys = plan.recipients.iter().map(|r| hex(&r.ka_public)).collect();

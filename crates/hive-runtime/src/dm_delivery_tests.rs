@@ -206,7 +206,8 @@ async fn a_changed_key_warns_and_is_not_sealed_to_silently() {
     }
     assert_eq!(host.drops(), 0, "held for the opener, never sealed to the new key");
     // The opener confirms: sent to the current verified devices.
-    store.confirm(ws, &host.co_members()[0], NOW + 5).unwrap();
+    let code = host.co_members()[0].safety_code().unwrap();
+    store.confirm(ws, &host.co_members()[0], &code, NOW + 5).unwrap();
     run_pass(&host, &store, NOW + 6).await;
     let drops = host.drops.lock().unwrap().clone();
     assert_eq!(drops.len(), 1);
@@ -223,7 +224,8 @@ async fn a_changed_account_key_warns() {
     assert_eq!(host.drops(), 0);
     // A key conflict, too, holds it (and confirming is refused).
     host.set(|p| p.key_conflict = true);
-    assert!(store.confirm(ws, &host.co_members()[0], NOW + 2).is_err());
+    let code = host.co_members()[0].safety_code().unwrap();
+    assert!(store.confirm(ws, &host.co_members()[0], &code, NOW + 2).is_err());
     assert_eq!(host.drops(), 0);
 }
 
@@ -288,4 +290,27 @@ async fn dismissing_forgets_the_secret() {
     run_pass(&host, &store, NOW + 1).await;
     assert_eq!(host.drops(), 0);
     assert!(store.open_invite(ws, &host.ka).is_none());
+}
+
+#[tokio::test]
+async fn confirming_is_bound_to_the_safety_code_the_opener_compared() {
+    // Warned about one account key; it changes again before the click. The
+    // opener compared the first one: the second is never approved unseen.
+    let (_tmp, store, host, ws) = setup(true);
+    host.set(|p| p.fingerprint = Some("ffeeddccbbaa99887766554433221100".into()));
+    run_pass(&host, &store, NOW + 1).await;
+    assert_eq!(store.get(ws).unwrap().state, HeldState::Warning);
+    let compared = host.co_members()[0].safety_code().unwrap();
+    host.set(|p| p.fingerprint = Some("abababababababababababababababab".into()));
+    let err = store.confirm(ws, &host.co_members()[0], &compared, NOW + 2).unwrap_err();
+    assert!(err.starts_with(UNVERIFIED_RECIPIENT), "{err}");
+    assert!(store.confirm(ws, &host.co_members()[0], "", NOW + 2).is_err(), "no code, no confirmation");
+    run_pass(&host, &store, NOW + 3).await;
+    assert_eq!(host.drops(), 0);
+    assert_eq!(store.get(ws).unwrap().state, HeldState::Warning);
+    // The code shown now (spacing and case as typed don't matter).
+    let now_code = host.co_members()[0].safety_code().unwrap().to_uppercase().replace(' ', "");
+    store.confirm(ws, &host.co_members()[0], &now_code, NOW + 4).unwrap();
+    run_pass(&host, &store, NOW + 5).await;
+    assert_eq!(host.drops(), 1);
 }

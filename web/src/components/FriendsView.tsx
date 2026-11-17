@@ -263,13 +263,20 @@ export function FriendsView({
   }
 
   async function deliverAnyway(d: DmDto) {
+    // Bound to the code shown here: the host refuses it if theirs changed
+    // again before the click.
+    const code = d.safetyCode;
+    if (!code) {
+      toast.error(`${d.name} has no safety code to compare yet; send the link yourself.`);
+      return;
+    }
     const ok = await confirmDialog(
-      `${d.inviteDelivery?.warning ?? "Their keys changed."} Deliver the invite to ${d.name}'s current devices only if their safety code still matches what they tell you (${d.safetyCode ?? "none yet"}).`,
+      `${d.inviteDelivery?.warning ?? "Their keys changed."} Deliver the invite to ${d.name}'s current devices only if their safety code still matches what they tell you (${code}).`,
       { title: "Unverified recipient", confirmLabel: "Deliver anyway", danger: true },
     );
     if (!ok) return;
     try {
-      await confirmDmInvite(d.workspaceId);
+      await confirmDmInvite(d.workspaceId, code);
       await qc.invalidateQueries({ queryKey: ["dms"] });
     } catch (e) {
       toast.error(errMsg(e));

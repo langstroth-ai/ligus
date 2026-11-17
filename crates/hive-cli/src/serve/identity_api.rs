@@ -775,10 +775,19 @@ pub async fn held_invite(State(s): S, peer_ext: Option<Extension<TunnelPeer>>, P
     Ok(Json(json!({ "invite": invite.as_str(), "inviteDelivery": s.held.get(ws).map(|h| h.status_json()) })))
 }
 
-/// `POST /v1/dms/{workspaceId}/invite/confirm` → `{inviteDelivery}`: after
-/// the unverified-recipient warning (their keys changed since the DM was
-/// opened), deliver to their current verified devices.
-pub async fn confirm_held_invite(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfirmHeld {
+    /// The safety code the opener compared with them.
+    safety_code: String,
+}
+
+/// `POST /v1/dms/{workspaceId}/invite/confirm {safetyCode}` →
+/// `{inviteDelivery}`: after the unverified-recipient warning (their keys
+/// changed since the DM was opened), deliver to their current verified
+/// devices. 409 unless `safetyCode` is theirs now (it changed again since
+/// it was shown).
+pub async fn confirm_held_invite(State(s): S, Path(id): Path<String>, Json(req): Json<ConfirmHeld>) -> ApiResult<Json<Value>> {
     ensure_can_write(&s)?;
     let ws = held_ws(&s, &id)?;
     let h = s.held.get(ws).expect("checked");
@@ -787,7 +796,7 @@ pub async fn confirm_held_invite(State(s): S, Path(id): Path<String>) -> ApiResu
         .into_iter()
         .find(|c| c.account_id == h.account_id)
         .ok_or_else(|| ApiError::new(StatusCode::CONFLICT, "you no longer share a workspace with them"))?;
-    let h = s.held.confirm(ws, &person, contacts_api::unix_now()).map_err(|e| ApiError::new(StatusCode::CONFLICT, e))?;
+    let h = s.held.confirm(ws, &person, &req.safety_code, contacts_api::unix_now()).map_err(|e| ApiError::new(StatusCode::CONFLICT, e))?;
     s.held_kick.notify_one();
     s.hub.emit("dms.changed", json!({}));
     Ok(Json(json!({ "inviteDelivery": h.status_json() })))

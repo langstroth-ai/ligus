@@ -876,7 +876,10 @@ export const openDm = (accountId: string) => invoke<OpenDmDto>("open_dm", { acco
 /// The link of a DM invite held for delivery (to send it yourself meanwhile).
 export const heldDmInvite = (workspaceId: string) => invoke<string>("held_dm_invite", { workspaceId });
 /// After the unverified-recipient warning: deliver to their current keys.
-export const confirmDmInvite = (workspaceId: string) => invoke<InviteDelivery>("confirm_dm_invite", { workspaceId });
+/// `safetyCode` is the code shown and compared; refused if theirs changed
+/// since.
+export const confirmDmInvite = (workspaceId: string, safetyCode: string) =>
+  invoke<InviteDelivery>("confirm_dm_invite", { workspaceId, safetyCode });
 /// Stop waiting to deliver (the link still works by hand).
 export const dismissDmInvite = (workspaceId: string) => invoke<InviteDelivery | null>("dismiss_dm_invite", { workspaceId });
 /// A held DM invite changed (delivered, expired, warning…).
