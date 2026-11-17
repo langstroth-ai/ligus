@@ -842,18 +842,46 @@ export interface DmDto {
   /// Earlier DMs with the same person, archived (read-only) because both of
   /// you opened one at the same time.
   archived: string[];
+  /// The DM's invite while this device holds it for delivery.
+  inviteDelivery: InviteDelivery | null;
 }
 export const listDms = () => invoke<DmDto[]>("list_dms");
+
+/// A DM invite this device holds until the other person's contact id is
+/// known, then delivers once. `waiting` (no contact id yet), `warning` (their
+/// keys changed since: held until you confirm), `sending`, `delivered`,
+/// `joined` (they used the link you shared), `expired`, `dismissed`, `failed`.
+export interface InviteDelivery {
+  state: "waiting" | "warning" | "sending" | "delivered" | "joined" | "expired" | "dismissed" | "failed";
+  pending: boolean;
+  delivered: boolean;
+  deliveredAt: number | null;
+  expiresAt: number;
+  /// For `warning`: why, starting with "unverified recipient".
+  warning: string | null;
+}
 
 export interface OpenDmDto {
   workspaceId: string;
   /// The DM invite, on creation. Hand it over yourself unless `delivered`.
   invite: string | null;
   delivered: boolean;
+  /// Not delivered yet, but held: delivered once their device is reachable.
+  pending: boolean;
+  inviteDelivery: InviteDelivery | null;
   safetyCode: string | null;
 }
 /// Open (creating on first use) the DM with a co-member and switch to it.
 export const openDm = (accountId: string) => invoke<OpenDmDto>("open_dm", { accountId });
+/// The link of a DM invite held for delivery (to send it yourself meanwhile).
+export const heldDmInvite = (workspaceId: string) => invoke<string>("held_dm_invite", { workspaceId });
+/// After the unverified-recipient warning: deliver to their current keys.
+export const confirmDmInvite = (workspaceId: string) => invoke<InviteDelivery>("confirm_dm_invite", { workspaceId });
+/// Stop waiting to deliver (the link still works by hand).
+export const dismissDmInvite = (workspaceId: string) => invoke<InviteDelivery | null>("dismiss_dm_invite", { workspaceId });
+/// A held DM invite changed (delivered, expired, warning…).
+export const onDmInviteChanged = (cb: (e: { workspaceId: string; inviteDelivery: InviteDelivery }) => void): Promise<UnlistenFn> =>
+  listen<{ workspaceId: string; inviteDelivery: InviteDelivery }>("dm-invite-changed", (evt) => cb(evt.payload));
 
 export interface CoMemberInviteDto {
   invite: string;

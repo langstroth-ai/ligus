@@ -14742,6 +14742,8 @@ pub fn run() {
             // the phone (via `ligus serve`) can tell whether @hive can answer now.
             tauri::async_runtime::spawn(run_device_host_loop(app.handle().clone()));
             tauri::async_runtime::spawn(flow::run_tick(app.handle().clone()));
+            // DM invites held for a peer whose contact id wasn't known yet.
+            tauri::async_runtime::spawn(crate::people::run_held_dm_loop(app.handle().clone()));
 
             // Coordinator leases: publish our heartbeats, read others', and
             // succeed a lapsed holder's workflow runs.
@@ -15016,6 +15018,9 @@ pub fn run() {
             people::list_pending_invites,
             people::accept_pending_invite,
             people::dismiss_pending_invite,
+            people::held_dm_invite,
+            people::confirm_dm_invite,
+            people::dismiss_dm_invite,
             detect_environment,
             detect_providers,
             has_issuer_key,
