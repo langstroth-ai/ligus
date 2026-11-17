@@ -83,9 +83,18 @@ serve:
       name: ""
       key: token
   # The data dir: identity, device keys, hive.db, serve.token, tunnel keys,
-  # checkouts. Secret material: use an encrypted StorageClass. Never RWX or NFS.
+  # checkouts. Secret material: use an encrypted StorageClass. Never RWX or
+  # NFS. ReadWriteOncePod (Kubernetes 1.29+, CSI volumes) guarantees a single
+  # pod; ReadWriteOnce still allows two pods on one node. Don't back it up
+  # (see the deploy docs, Backups): a lost volume means revoke and re-enrol.
   persistence:
     size: 5Gi
+    storageClass: ""
+    accessMode: ReadWriteOncePod
+  # HOME (/home/ligus): agent CLIs' logins and caches, its own volume so the
+  # data dir and HOME never share one.
+  home:
+    size: 2Gi
     storageClass: ""
   resources:
     requests: { cpu: 100m, memory: 256Mi }
@@ -93,8 +102,8 @@ serve:
   service:
     type: ClusterIP
     port: 8787
-  # runtimes.toml is read from the data dir today, so an init container copies
-  # this into the PVC on every start (it is overwritten, not merged).
+  # Host-local runtimes (runtimes.toml), mounted read-only from a ConfigMap
+  # (LIGUS_RUNTIMES_FILE).
   runtimesToml: ""
   # Mounted read-only; LIGUS_MCP_CONFIG points at it.
   mcpToml: ""
@@ -119,14 +128,25 @@ serve:
 
 worker:
   enabled: false
-  # Each replica is its own host; agents are bound to one replica with
-  # `ligus set-agent-host`. Never autoscale this StatefulSet.
-  replicas: 1
+  # One entry per worker host. Each is its own StatefulSet (one replica), its
+  # own identity and its own volumes; the name is its host label (bind agents
+  # with `ligus set-agent-host`). Removing an entry stops that host but keeps
+  # its PVCs; delete them, and revoke the host, once its agents are rebound.
+  # Never autoscale workers. (Admin enrollment of each worker as a member
+  # arrives with the 2.0 member-bootstrap work; see the deploy docs.)
+  instances: []
+  # - name: build-1
+  #   permissionMode: acceptEdits   # overrides worker.permissionMode
+  #   resources: {}                 # overrides worker.resources
   # LIGUS_WORKER_PERMISSION_MODE for CLI agents (for example acceptEdits).
   permissionMode: ""
   terminationGracePeriodSeconds: 60
   persistence:
     size: 5Gi
+    storageClass: ""
+    accessMode: ReadWriteOncePod
+  home:
+    size: 2Gi
     storageClass: ""
   resources:
     requests: { cpu: 100m, memory: 256Mi }

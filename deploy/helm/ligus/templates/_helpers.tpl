@@ -135,6 +135,11 @@ app.kubernetes.io/component: {{ .component }}
 
 {{- define "ligus.validate" -}}
 {{- $np := .Values.networkPolicy -}}
+{{- range $c := list "serve" "worker" -}}
+{{- if not (has (index $.Values $c).persistence.accessMode (list "ReadWriteOncePod" "ReadWriteOnce")) -}}
+{{- fail (printf "%s.persistence.accessMode must be ReadWriteOncePod or ReadWriteOnce (one identity, one writer; never RWX)" $c) -}}
+{{- end -}}
+{{- end -}}
 {{- if and $np.enabled $np.restrictEgress (not .Values.relay.enabled) (not $np.relayNamespace) (not $np.allowInternetHttps) (not $np.extraEgress) -}}
 {{- fail "networkPolicy.restrictEgress is on but nothing lets serve reach the relay: set networkPolicy.relayNamespace (relay in this cluster), allowInternetHttps (relay behind https outside), or extraEgress" -}}
 {{- end -}}
@@ -155,6 +160,22 @@ app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 {{- include "ligus.validateAgentEnv" (dict "root" . "v" .Values.serve "component" "serve") -}}
 {{- include "ligus.validateAgentEnv" (dict "root" . "v" .Values.worker "component" "worker") -}}
+{{- if hasKey .Values.worker "replicas" -}}
+{{- fail "worker.replicas was replaced by worker.instances: one named entry per worker host (each is its own identity, never a scaled replica)" -}}
+{{- end -}}
+{{- if and .Values.worker.enabled (not .Values.worker.instances) -}}
+{{- fail "worker.enabled needs at least one worker.instances entry ({name: ...})" -}}
+{{- end -}}
+{{- $seen := dict -}}
+{{- range .Values.worker.instances -}}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]{0,30}[a-z0-9])?$" (toString .name)) -}}
+{{- fail (printf "worker.instances[].name %q must be a DNS label of at most 32 characters" (toString .name)) -}}
+{{- end -}}
+{{- if hasKey $seen .name -}}
+{{- fail (printf "worker.instances: %s is listed twice" .name) -}}
+{{- end -}}
+{{- $_ := set $seen .name true -}}
+{{- end -}}
 {{- if hasKey .Values "otel" -}}
 {{- fail "otel.* was removed: Ligus does not export OpenTelemetry in 2.0" -}}
 {{- end -}}
@@ -387,36 +408,21 @@ the worker will).
     {{- .mounts | nindent 4 }}
 {{- end -}}
 
-{{/* Init container that copies runtimes.toml from a ConfigMap into the data dir. */}}
-{{- define "ligus.runtimesInit" -}}
-- name: runtimes
-  image: {{ include "ligus.image" .root }}
-  imagePullPolicy: {{ .root.Values.image.pullPolicy }}
-  command: ["/bin/sh", "-c", "install -m 0600 /etc/ligus/runtimes/runtimes.toml /var/lib/ligus/runtimes.toml"]
-  securityContext:
-    {{- toYaml .root.Values.securityContext | nindent 4 }}
-  resources:
-    requests: { cpu: 10m, memory: 16Mi }
-    limits: { cpu: 100m, memory: 64Mi }
-  volumeMounts:
-    - name: data
-      mountPath: /var/lib/ligus
-    - name: runtimes
-      mountPath: /etc/ligus/runtimes
-      readOnly: true
-{{- end -}}
 
 {{/* serve's volume mounts (also the preflight's). */}}
 {{- define "ligus.serveMounts" -}}
 - name: data
   mountPath: /var/lib/ligus
-# Same volume, its own subdirectory: CLI logins persist, outside the data
-# dir agents can't read.
-- name: data
+# Its own volume: CLI logins persist, outside the data dir agents can't read.
+- name: home
   mountPath: /home/ligus
-  subPath: home
 - name: tmp
   mountPath: /tmp
+{{- if .Values.serve.runtimesToml }}
+- name: runtimes
+  mountPath: /etc/ligus/runtimes
+  readOnly: true
+{{- end }}
 {{ include "ligus.secretMounts" (dict "root" . "v" .Values.serve "component" "serve") }}
 {{- if or .Values.serve.mcpToml .Values.serve.dashboardToml }}
 - name: config
@@ -429,10 +435,42 @@ the worker will).
 {{- define "ligus.workerMounts" -}}
 - name: data
   mountPath: /var/lib/ligus
-- name: data
+- name: home
   mountPath: /home/ligus
-  subPath: home
 - name: tmp
   mountPath: /tmp
+{{- if .Values.worker.runtimesToml }}
+- name: runtimes
+  mountPath: /etc/ligus/runtimes
+  readOnly: true
+{{- end }}
 {{ include "ligus.secretMounts" (dict "root" . "v" .Values.worker "component" "worker") }}
+{{- end -}}
+
+{{/* volumeClaimTemplates for a host: data (the identity) and home. Args: dict root v component. */}}
+{{- define "ligus.claimTemplates" -}}
+- metadata:
+    name: data
+    labels:
+      {{- include "ligus.selectorLabels" (dict "root" .root "component" .component) | nindent 6 }}
+  spec:
+    accessModes: [{{ .v.persistence.accessMode | quote }}]
+    {{- with .v.persistence.storageClass }}
+    storageClassName: {{ . }}
+    {{- end }}
+    resources:
+      requests:
+        storage: {{ .v.persistence.size }}
+- metadata:
+    name: home
+    labels:
+      {{- include "ligus.selectorLabels" (dict "root" .root "component" .component) | nindent 6 }}
+  spec:
+    accessModes: [{{ .v.persistence.accessMode | quote }}]
+    {{- with .v.home.storageClass }}
+    storageClassName: {{ . }}
+    {{- end }}
+    resources:
+      requests:
+        storage: {{ .v.home.size }}
 {{- end -}}

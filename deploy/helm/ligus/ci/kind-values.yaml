@@ -15,13 +15,23 @@ remote:
 serve:
   persistence:
     size: 1Gi
+    accessMode: ReadWriteOnce
+  home:
+    size: 256Mi
   resources:
     requests: { cpu: 50m, memory: 64Mi }
     limits: { cpu: "1", memory: 512Mi, ephemeral-storage: 1Gi }
 worker:
   enabled: true
+  instances:
+    - name: w1
+  # kind's local-path provisioner is not CSI; ReadWriteOncePod needs a CSI
+  # driver, so CI uses ReadWriteOnce.
   persistence:
     size: 1Gi
+    accessMode: ReadWriteOnce
+  home:
+    size: 256Mi
   resources:
     requests: { cpu: 50m, memory: 64Mi }
     limits: { cpu: "1", memory: 512Mi, ephemeral-storage: 1Gi }

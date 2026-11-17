@@ -147,7 +147,8 @@ def test_removed_values_refuse():
 # --- Ligus's own secrets are files, never environment variables -----------
 
 def test_secrets_are_files():
-    docs = render("--set", "worker.enabled=true", "--set", "serve.workspaceSecrets.existingSecret=ws",
+    docs = render("--set", "worker.enabled=true", "--set", "worker.instances[0].name=w1",
+                  "--set", "serve.workspaceSecrets.existingSecret=ws",
                   "--set", "serve.ntfy.url=https://ntfy.example", "--set", "serve.ntfy.topic=t",
                   "--set", "serve.ntfy.tokenSecret.name=ntfy", "--set", "remote.enabled=true",
                   "--set", "remote.relayUrl=https://relay.example", "--set", "remote.regTokenSecret.name=reg",
@@ -176,6 +177,28 @@ def test_secrets_are_files():
     check("the removed serve.secretEnv (envFrom) is refused", p.returncode != 0)
 
 
+# --- One identity, one writer ---------------------------------------------
+
+def test_single_writer_volumes():
+    docs = render("--set", "worker.enabled=true", "--set", "worker.instances[0].name=a",
+                  "--set", "worker.instances[1].name=b")
+    sets = [d for d in docs if d["kind"] == "StatefulSet" and d["metadata"]["labels"].get("app.kubernetes.io/name") == "ligus"]
+    check("serve plus one StatefulSet per worker instance", len(sets) == 3, str([d["metadata"]["name"] for d in sets]))
+    for d in sets:
+        n = d["metadata"]["name"]
+        check("%s has exactly one replica" % n, d["spec"]["replicas"] == 1)
+        claims = {c["metadata"]["name"]: c["spec"]["accessModes"] for c in d["spec"]["volumeClaimTemplates"]}
+        check("%s data volume is ReadWriteOncePod" % n, claims.get("data") == ["ReadWriteOncePod"])
+        check("%s HOME is its own volume" % n, "home" in claims)
+        mounts = d["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]
+        check("%s never mounts the data volume twice (no HOME subPath)" % n,
+              sum(1 for m in mounts if m["name"] == "data") == 1)
+    for bad in (["--set", "worker.enabled=true", "--set", "worker.replicas=3"],
+                ["--set", "worker.enabled=true"],
+                ["--set", "serve.persistence.accessMode=ReadWriteMany"]):
+        check("refused: %s" % " ".join(bad[1::2]), render(*bad, ok=False).returncode != 0)
+
+
 # --- Third-party MCP images are pinned by digest ---------------------------
 
 def test_mcp_images_pinned():
@@ -193,7 +216,8 @@ def test_mcp_images_pinned():
 
 
 TESTS = [test_dns_egress_is_scoped, test_egress_closed_and_metadata_blocked, test_serve_ingress_excludes_foreign_pods,
-         test_removed_values_refuse, test_secrets_are_files, test_mcp_images_pinned]
+         test_removed_values_refuse, test_secrets_are_files, test_single_writer_volumes,
+         test_mcp_images_pinned]
 
 if __name__ == "__main__":
     for t in TESTS:

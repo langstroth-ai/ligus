@@ -5,7 +5,7 @@ Ligus workspace release {{ .Release.Name }} in namespace {{ .Release.Namespace }
   serve: statefulset/{{ $fullname }}-serve (1 replica, PVC data-{{ $fullname }}-serve-0)
 {{- end }}
 {{- if .Values.worker.enabled }}
-  workers: statefulset/{{ $fullname }}-worker ({{ .Values.worker.replicas }} host identities)
+  workers: {{ range .Values.worker.instances }}statefulset/{{ $fullname }}-worker-{{ .name }} {{ end }}
 {{- end }}
 {{- if .Values.workspace.generate }}
 

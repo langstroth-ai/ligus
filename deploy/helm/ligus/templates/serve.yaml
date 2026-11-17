@@ -35,7 +35,7 @@ spec:
     {{- include "ligus.selectorLabels" (dict "root" . "component" "serve") | nindent 4 }}
 ---
 # One identity, one writer: replicas is fixed at 1 and the data dir is a
-# ReadWriteOnce PVC. Never scale this, never share the volume.
+# ReadWriteOncePod PVC. Never scale this, never share the volume.
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -69,11 +69,8 @@ spec:
     spec:
       {{- include "ligus.podSpecCommon" . | nindent 6 }}
       terminationGracePeriodSeconds: {{ $v.terminationGracePeriodSeconds }}
-      {{- if or $v.runtimesToml .Values.agentSandbox.preflight.enabled }}
+      {{- if .Values.agentSandbox.preflight.enabled }}
       initContainers:
-        {{- if $v.runtimesToml }}
-        {{- include "ligus.runtimesInit" (dict "root" .) | nindent 8 }}
-        {{- end }}
         {{- if .Values.agentSandbox.preflight.enabled }}
         {{- include "ligus.preflightInit" (dict "root" . "env" (print (include "ligus.commonEnv" .) "\n" (include "ligus.hostSecretEnv" (dict "root" . "v" $v "component" "serve"))) "mounts" (include "ligus.serveMounts" .)) | nindent 8 }}
         {{- end }}
@@ -113,6 +110,10 @@ spec:
             {{- if $v.applyOnApprove }}
             - name: LIGUS_SERVE_APPLY_ON_APPROVE
               value: "1"
+            {{- end }}
+            {{- if $v.runtimesToml }}
+            - name: LIGUS_RUNTIMES_FILE
+              value: /etc/ligus/runtimes/runtimes.toml
             {{- end }}
             {{- if $v.mcpToml }}
             - name: LIGUS_MCP_CONFIG
@@ -182,17 +183,6 @@ spec:
               - { key: runtimes.toml, path: runtimes.toml }
         {{- end }}
   volumeClaimTemplates:
-    - metadata:
-        name: data
-        labels:
-          {{- include "ligus.selectorLabels" (dict "root" . "component" "serve") | nindent 10 }}
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        {{- with $v.persistence.storageClass }}
-        storageClassName: {{ . }}
-        {{- end }}
-        resources:
-          requests:
-            storage: {{ $v.persistence.size }}
+    {{- include "ligus.claimTemplates" (dict "root" . "v" $v "component" "serve") | nindent 4 }}
 {{- end }}
 

@@ -12,64 +12,71 @@ spec:
   clusterIP: None
   selector:
     {{- include "ligus.selectorLabels" (dict "root" . "component" "worker") | nindent 4 }}
+{{- range $inst := $v.instances }}
 ---
-# Sharding, not autoscaling: each replica is its own host identity with its
-# own PVC. Scaling down strands the agents bound to the removed replicas.
+# Worker host {{ $inst.name }}: its own identity and volumes, exactly one
+# pod. Hosts are listed, never scaled: a replica count would mint host
+# identities nobody approved.
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ $fullname }}-worker
+  name: {{ $fullname }}-worker-{{ $inst.name }}
   labels:
-    {{- include "ligus.labels" . | nindent 4 }}
+    {{- include "ligus.labels" $ | nindent 4 }}
     app.kubernetes.io/component: worker
+    ligus.ai/worker: {{ $inst.name | quote }}
 spec:
   serviceName: {{ $fullname }}-worker
-  replicas: {{ $v.replicas }}
-  podManagementPolicy: Parallel
+  replicas: 1
+  podManagementPolicy: OrderedReady
   selector:
     matchLabels:
-      {{- include "ligus.selectorLabels" (dict "root" . "component" "worker") | nindent 6 }}
+      {{- include "ligus.selectorLabels" (dict "root" $ "component" "worker") | nindent 6 }}
+      ligus.ai/worker: {{ $inst.name | quote }}
   template:
     metadata:
       labels:
-        {{- include "ligus.selectorLabels" (dict "root" . "component" "worker") | nindent 8 }}
+        {{- include "ligus.selectorLabels" (dict "root" $ "component" "worker") | nindent 8 }}
+        ligus.ai/worker: {{ $inst.name | quote }}
         ligus.ai/role: controller
-        {{- with .Values.podLabels }}
+        {{- with $.Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
       annotations:
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
-        checksum/secrets: {{ include "ligus.secretsChecksum" (dict "root" . "v" $v "component" "worker") }}
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") $ | sha256sum }}
+        checksum/secrets: {{ include "ligus.secretsChecksum" (dict "root" $ "v" $v "component" "worker") }}
+        {{- with $.Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
-      {{- include "ligus.podSpecCommon" . | nindent 6 }}
+      {{- include "ligus.podSpecCommon" $ | nindent 6 }}
       terminationGracePeriodSeconds: {{ $v.terminationGracePeriodSeconds }}
-      {{- if or $v.runtimesToml .Values.agentSandbox.preflight.enabled }}
+      {{- if $.Values.agentSandbox.preflight.enabled }}
       initContainers:
-        {{- if $v.runtimesToml }}
-        {{- include "ligus.runtimesInit" (dict "root" .) | nindent 8 }}
-        {{- end }}
-        {{- if .Values.agentSandbox.preflight.enabled }}
-        {{- include "ligus.preflightInit" (dict "root" . "env" (print (include "ligus.commonEnv" .) "\n" (include "ligus.hostSecretEnv" (dict "root" . "v" $v "component" "worker"))) "mounts" (include "ligus.workerMounts" .)) | nindent 8 }}
-        {{- end }}
+        {{- include "ligus.preflightInit" (dict "root" $ "env" (print (include "ligus.commonEnv" $) "\n" (include "ligus.hostSecretEnv" (dict "root" $ "v" $v "component" "worker"))) "mounts" (include "ligus.workerMounts" $)) | nindent 8 }}
       {{- end }}
       containers:
         - name: worker
-          image: {{ include "ligus.image" . }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          args: ["worker", "--label", "$(POD_NAME)", "--health-listen", "0.0.0.0:8788"]
+          image: {{ include "ligus.image" $ }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          args: ["worker", "--label", {{ $inst.name | quote }}, "--health-listen", "0.0.0.0:8788"]
           securityContext:
-            {{- toYaml .Values.securityContext | nindent 12 }}
+            {{- toYaml $.Values.securityContext | nindent 12 }}
           # Probes only: the NetworkPolicy admits no other pod to this port.
           ports:
             - name: health
               containerPort: 8788
           env:
-            {{- include "ligus.commonEnv" . | nindent 12 }}
-            {{- with $v.permissionMode }}
+            {{- include "ligus.commonEnv" $ | nindent 12 }}
+            {{- with (default $v.permissionMode $inst.permissionMode) }}
             - name: LIGUS_WORKER_PERMISSION_MODE
               value: {{ . | quote }}
             {{- end }}
-            {{- include "ligus.hostSecretEnv" (dict "root" . "v" $v "component" "worker") | nindent 12 }}
+            {{- if $v.runtimesToml }}
+            - name: LIGUS_RUNTIMES_FILE
+              value: /etc/ligus/runtimes/runtimes.toml
+            {{- end }}
+            {{- include "ligus.hostSecretEnv" (dict "root" $ "v" $v "component" "worker") | nindent 12 }}
             {{- with $v.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -88,11 +95,11 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 3
           resources:
-            {{- toYaml $v.resources | nindent 12 }}
+            {{- toYaml (default $v.resources $inst.resources) | nindent 12 }}
           volumeMounts:
-            {{- include "ligus.workerMounts" . | nindent 12 }}
+            {{- include "ligus.workerMounts" $ | nindent 12 }}
       volumes:
-        {{- include "ligus.secretVolumes" (dict "root" . "v" $v "component" "worker") | nindent 8 }}
+        {{- include "ligus.secretVolumes" (dict "root" $ "v" $v "component" "worker") | nindent 8 }}
         - name: tmp
           emptyDir:
             sizeLimit: 1Gi
@@ -100,16 +107,10 @@ spec:
         - name: runtimes
           configMap:
             name: {{ $fullname }}-worker
+            items:
+              - { key: runtimes.toml, path: runtimes.toml }
         {{- end }}
   volumeClaimTemplates:
-    - metadata:
-        name: data
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        {{- with $v.persistence.storageClass }}
-        storageClassName: {{ . }}
-        {{- end }}
-        resources:
-          requests:
-            storage: {{ $v.persistence.size }}
+    {{- include "ligus.claimTemplates" (dict "root" $ "v" $v "component" "worker") | nindent 4 }}
+{{- end }}
 {{- end }}
