@@ -15,6 +15,7 @@
 //!   (regex #"^<worktree>/(.*/)?[.][gG][iI][tT](/.*)?$") …)  ; each name, any depth, any case
 //! (deny file-read* file-write* (subpath "<data dir>") (subpath "~/.ssh") (literal "<serve.token>") …)
 //! (allow file-read* (subpath "<worktree>") <readable dirs inside a denied one>)
+//! (deny mach-lookup) (allow mach-lookup <MACH_ALLOW> [keychain services])  ; default-deny lookups
 //! (deny mach-lookup (global-name-prefix "com.apple.coreservices.") (global-name "com.apple.runningboard"))
 //!                                                    ; no LaunchServices launches (not even suspended)
 //! (deny mach-lookup (xpc-service-name-regex #"."))   ; no bundled XPC services (launchd spawns them)
@@ -113,6 +114,45 @@ fn protected_filters(plan: &EnforcementPlan) -> String {
     p
 }
 
+/// The launchd services a confined child may look up: user and group
+/// lookups, logging and notifications, preference reads (writes are denied
+/// below), TLS trust, DNS and network configuration, file events, the
+/// per-user temp dir, and power assertions.
+const MACH_ALLOW: &[&str] = &[
+    "com.apple.system.opendirectoryd.libinfo",
+    "com.apple.system.opendirectoryd.membership",
+    "com.apple.system.DirectoryService.libinfo_v1",
+    "com.apple.system.DirectoryService.membership_v1",
+    "com.apple.system.notification_center",
+    "com.apple.system.logger",
+    "com.apple.logd",
+    "com.apple.logd.events",
+    "com.apple.diagnosticd",
+    "com.apple.cfprefsd.agent",
+    "com.apple.cfprefsd.daemon",
+    "com.apple.trustd",
+    "com.apple.trustd.agent",
+    "com.apple.ocspd",
+    "com.apple.SystemConfiguration.configd",
+    "com.apple.SystemConfiguration.DNSConfiguration",
+    "com.apple.dnssd.service",
+    "com.apple.networkd",
+    "com.apple.FSEvents",
+    "com.apple.bsd.dirhelper",
+    "com.apple.distributed_notifications@Uv3",
+    "com.apple.distributed_notifications@1v3",
+    "com.apple.PowerManagement.control",
+];
+
+/// The keychain services, for a child that keeps the login keychain.
+const MACH_ALLOW_KEYCHAIN: &[&str] = &["com.apple.SecurityServer", "com.apple.securityd.xpc"];
+
+/// Whether `plan` leaves the login keychain readable (a subscription CLI
+/// whose sign-in lives there).
+fn keychain_reachable(plan: &EnforcementPlan) -> bool {
+    !plan.deny_read.iter().any(|d| d.ends_with("Library/Keychains"))
+}
+
 /// The SBPL profile for `plan` (`proxy_port`: the egress proxy's port).
 pub fn profile(plan: &EnforcementPlan, proxy_port: Option<u16>) -> String {
     let mut p = String::from("(version 1)\n(allow default)\n");
@@ -169,6 +209,23 @@ pub fn profile(plan: &EnforcementPlan, proxy_port: Option<u16>) -> String {
     // resumed, and the user's own processes can't be killed), and no XPC
     // service lookups (an XPC service embedded in a bundle the agent wrote
     // is spawned by launchd, outside this profile).
+    //
+    // Beyond those, mach-lookup is default-deny: a default-allow profile
+    // leaves hundreds of launchd services reachable (the Dock, login items,
+    // the window server, TCC, …), each a way to get work done outside the
+    // profile. CLIs, compilers and runtimes need only [`MACH_ALLOW`]
+    // (`sandbox_mach_lookup_is_allow_listed`; measured with claude, codex,
+    // git, cargo/clang, swift, node and python).
+    p.push_str("(deny mach-lookup)\n(allow mach-lookup");
+    for s in MACH_ALLOW {
+        p.push_str(&format!(" (global-name \"{s}\")"));
+    }
+    if keychain_reachable(plan) {
+        for s in MACH_ALLOW_KEYCHAIN {
+            p.push_str(&format!(" (global-name \"{s}\")"));
+        }
+    }
+    p.push_str(")\n");
     p.push_str("(deny mach-lookup (global-name-prefix \"com.apple.coreservices.\") (global-name \"com.apple.runningboard\"))\n");
     p.push_str("(deny mach-lookup (xpc-service-name-regex #\".\"))\n");
     p.push_str("(deny signal)\n(allow signal (target same-sandbox))\n");

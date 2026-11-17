@@ -971,6 +971,53 @@ fn sandbox_denies_unix_sockets_under_open_egress() {
     assert!(ok && out.contains("RESOLVED"), "{out}");
 }
 
+/// macOS: mach-lookup is default-deny with an allow-list. The default-allow
+/// profile left hundreds of launchd services reachable (the Dock, login
+/// items, the window server, TCC, ...), each one a way to get work done
+/// outside the profile. A probe (compiled here, run inside) looks services
+/// up by name: the ones a CLI needs answer, the rest don't.
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_mach_lookup_is_allow_listed() {
+    let Some(e) = real_executor() else { return };
+    if !Path::new("/usr/bin/clang").exists() {
+        eprintln!("skipped: clang is needed to build the mach probe");
+        return;
+    }
+    let f = Fixture::new();
+    let src = f.outside.join("mp.c");
+    std::fs::write(
+        &src,
+        "#include <servers/bootstrap.h>\n#include <stdio.h>\nint main(int c,char**v){for(int i=1;i<c;i++){mach_port_t p=MACH_PORT_NULL;\
+         printf(\"%s %s\\n\",bootstrap_look_up(bootstrap_port,v[i],&p)==KERN_SUCCESS?\"OPEN\":\"SHUT\",v[i]);}return 0;}\n",
+    )
+    .unwrap();
+    let exe = f.worktree.join("mp");
+    let st = std::process::Command::new("/usr/bin/clang").arg("-o").arg(&exe).arg(&src).status().unwrap();
+    assert!(st.success(), "clang mp.c");
+    let shut = [
+        "com.apple.windowserver.active",
+        "com.apple.tccd",
+        "com.apple.backgroundtaskmanagementagent",
+        "com.apple.dock.server",
+        "com.apple.replayd",
+        "com.apple.SecurityServer",
+    ];
+    let open = ["com.apple.system.opendirectoryd.libinfo", "com.apple.trustd", "com.apple.system.notification_center", "com.apple.cfprefsd.agent"];
+    // Control: all of them answer outside the sandbox.
+    let control = std::process::Command::new(&exe).args(shut).args(open).output().unwrap();
+    let control = String::from_utf8_lossy(&control.stdout).into_owned();
+    let names: Vec<&str> = shut.iter().chain(open.iter()).copied().filter(|n| control.contains(&format!("OPEN {n}\n"))).collect();
+    let (_, out) = run_purpose(&*e, &f, Purpose::Agent(ModelProviderKind::ClaudeCode), &format!("'{}' {}", exe.display(), names.join(" ")), Some("sk-ant-test"));
+    for n in names {
+        let want = if shut.contains(&n) { "SHUT" } else { "OPEN" };
+        assert!(out.contains(&format!("{want} {n}\n")), "{n} should be {want}: {out}");
+    }
+    // User lookups (libinfo) work: `whoami` prints a name, not a uid.
+    let (ok, out) = run_purpose(&*e, &f, Purpose::Tool, "/usr/bin/whoami", None);
+    assert!(ok && out.trim().parse::<u32>().is_err(), "{out}");
+}
+
 /// Kills whatever runs out of a probe app bundle (matched by its unique
 /// path) and removes the bundle, so a LaunchServices or XPC launch can't
 /// leak a process past the test. Bounded: gives up after a few seconds.
