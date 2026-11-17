@@ -190,8 +190,11 @@ bump `podAnnotations`.
 ## CI
 
 `.github/workflows/kind-e2e.yml` builds the CLI and relay images (the relay at a
-pinned commit), installs the relay (Postgres) and a throwaway workspace with
-one worker on kind, and checks: sync between two client identities through the
+pinned commit), installs the relay (Postgres), a throwaway workspace served by
+serve, and one worker on a second throwaway workspace of its own on kind (2.0
+admits a box to a workspace only through an Admin's invite, which CI cannot
+issue headlessly yet, so serve and a worker can't share a fresh workspace), and
+checks: the runner kernel has Landlock (the job fails, saying so, if not), sync between two client identities through the
 relay, a stub-model agent turn under Landlock in the serve container (tier,
 `/proc/1/environ` denied, serve not dumpable), worker readiness, the tunnel
 host connection, no plaintext in the relay database, restart on the same
