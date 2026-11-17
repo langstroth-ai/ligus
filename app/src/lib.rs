@@ -11241,9 +11241,10 @@ fn open_file_access_settings() -> Result<(), String> {
 
 /// Public version manifest — a small JSON the docs site serves, holding the
 /// latest published release. Fetched in Rust (no webview CORS); maintained
-/// alongside each release. A list, tried in order, so a host move can ship
-/// the new and old URLs side by side.
-const VERSION_MANIFEST_URLS: [&str; 1] = ["https://docs.ligus.ai/version.json"];
+/// alongside each release. A list, tried in order: the docs site's own host
+/// first, then docs.ligus.ai, which earlier builds read and which keeps
+/// serving the same file (without a redirect) as an alias of that site.
+const VERSION_MANIFEST_URLS: [&str; 2] = ["https://docs.langstroth.ai/version.json", "https://docs.ligus.ai/version.json"];
 
 /// Largest version-manifest body read, in bytes. The real one is a few
 /// hundred bytes; a bigger answer is refused rather than buffered.
@@ -15757,7 +15758,7 @@ mod update_version_tests {
         );
         // Same minisign key across the rename: never rotate it.
         assert!(updater["pubkey"].as_str().unwrap().starts_with("dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhFQjA3RDUyRjVBRUM3QjQK"));
-        assert_eq!(super::VERSION_MANIFEST_URLS, ["https://docs.ligus.ai/version.json"]);
+        assert_eq!(super::VERSION_MANIFEST_URLS, ["https://docs.langstroth.ai/version.json", "https://docs.ligus.ai/version.json"]);
     }
 
     /// The banner opens the manifest's `url` in the browser. HTTPS now trusts
@@ -15874,6 +15875,29 @@ mod update_version_tests {
         assert_eq!(got.tag, "v2.0.0");
         // Nothing answers: quiet None. (Port 9 on localhost is closed.)
         assert!(super::fetch_update_manifest(&client, &[&missing, "http://127.0.0.1:9/x.json"], super::MANIFEST_TIMEOUT).await.is_none());
+    }
+
+    /// The update check's client follows a 301 to another host, so a docs
+    /// host that redirects version.json elsewhere still answers. (The docs
+    /// site serves it on docs.ligus.ai without a redirect anyway.)
+    #[tokio::test]
+    async fn manifest_fetch_follows_a_cross_host_redirect() {
+        let client = hive_forge::http_client_builder().timeout(super::MANIFEST_TIMEOUT).build().unwrap();
+        let target = serve(vec![("/version.json", 200, r#"{"tag":"v2.0.0"}"#)]);
+        let port = target.rsplit(':').next().unwrap().to_string();
+        let location = format!("http://localhost:{port}/version.json");
+        let redirector = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let from = format!("http://{}/version.json", redirector.local_addr().unwrap());
+        std::thread::spawn(move || {
+            use std::io::Write;
+            for mut s in redirector.incoming().flatten() {
+                let mut req = [0u8; 4096];
+                let _ = std::io::Read::read(&mut s, &mut req);
+                let _ = write!(s, "HTTP/1.1 301 Moved Permanently\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            }
+        });
+        let got = super::fetch_update_manifest(&client, &[&from], super::MANIFEST_TIMEOUT).await;
+        assert_eq!(got.unwrap().tag, "v2.0.0");
     }
 
     #[test]

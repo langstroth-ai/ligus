@@ -59,7 +59,7 @@ first:
    mints*. Claims carry `sub`, `exp`, optional `workspaces`, RBAC `caps`, and the
    informational `plan`, `max_members`, `retention_days` and `turn`. Verified
    claims are passed to the guard seams. See `token.go` in the relay and
-   [Self-hosting a relay](../docs-site/operator/docs/networking/self-host.md#access-control).
+   [Self-hosting a relay](../docs-site/docs/operate/networking/self-host.md#access-control).
 2. **`LIGUS_RELAY_ACCESS_TOKENS`** (comma-separated) ⇒ a static **allowlist**
    (coarse on/off).
 3. otherwise ⇒ **open** (self-host default).

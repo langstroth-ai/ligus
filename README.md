@@ -15,11 +15,11 @@ relay, end-to-end encrypted. Your code and keys stay on your machine.
 
 [![CI](https://github.com/ligus-ai/ligus/actions/workflows/ci.yml/badge.svg)](https://github.com/ligus-ai/ligus/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/ligus-ai/ligus?include_prereleases&sort=semver&label=release)](https://github.com/ligus-ai/ligus/releases/latest)
-[![Docs](https://img.shields.io/badge/docs-docs.ligus.ai-4c8bf5)](https://docs.ligus.ai/)
+[![Docs](https://img.shields.io/badge/docs-docs.langstroth.ai-4c8bf5)](https://docs.langstroth.ai/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
-[**Download**](#install) · [**Documentation**](https://docs.ligus.ai/) · [**Build from source**](#build-from-source) · [**Contributing**](CONTRIBUTING.md)
+[**Download**](#install) · [**Documentation**](https://docs.langstroth.ai/ligus/) · [**Build from source**](#build-from-source) · [**Contributing**](CONTRIBUTING.md)
 
 </div>
 
@@ -27,7 +27,7 @@ relay, end-to-end encrypted. Your code and keys stay on your machine.
 > new name. The command is `ligus` and settings are `LIGUS_*`. Ligus 2.0
 > starts fresh: Hive 1.x data is not migrated and stays where it is,
 > untouched, so 1.x keeps running until you remove it. See
-> [Upgrading from Hive 1.x](https://docs.langstroth.ai/deploy/upgrade-from-hive/).
+> [Upgrading from Hive 1.x](https://docs.langstroth.ai/operate/deploy/upgrade-from-hive/).
 
 ---
 
@@ -62,7 +62,7 @@ without handing their source to a SaaS; and anyone who wants an always-on agent
 that keeps working while their laptop is closed — on infrastructure they control.
 
 <div align="center">
-<img src="docs-site/user/docs/images/overview.png" alt="Ligus — a shared LLM workspace" width="820">
+<img src="docs-site/docs/ligus/images/overview.png" alt="Ligus — a shared LLM workspace" width="820">
 </div>
 
 ## Features
@@ -137,7 +137,7 @@ waits, and the worker answers the whole backlog when it comes up. The desktop ap
 surfaces the same queue and offers a **Run on worker** handoff for an offline
 agent. Run **several workers** to drain the backlog in parallel — each claims
 distinct turns, and per-turn worktrees keep their file edits from colliding. See
-[Headless agents & setups](https://docs.langstroth.ai/concepts/headless-agents/)
+[Headless agents & setups](https://docs.langstroth.ai/operate/concepts/headless-agents/)
 for the four topologies.
 
 ### Skills & vaults
@@ -202,7 +202,7 @@ everything after their cursor; it never sees plaintext and never holds a key.
 | `addons/` | Optional agent shims (e.g. `aider-mcp`). |
 | `deploy/` | Homebrew cask + distribution. |
 | `docs/` | Developer & maintainer docs. |
-| `docs-site/` | The two published docs sites (MkDocs): `user/` is docs.ligus.ai, `operator/` is docs.langstroth.ai. |
+| `docs-site/` | The published docs site (MkDocs), docs.langstroth.ai: Using Ligus (`docs/ligus/`) and Operating Langstroth (`docs/operate/`). |
 
 The **production relay is a separate repo**,
 **[github.com/ligus-ai/relay](https://github.com/ligus-ai/relay)** (Go) —
@@ -213,7 +213,7 @@ content-blind, hardened, and self-hostable. See
 
 Ligus is local-first, and anything that leaves the device is end-to-end encrypted.
 The full model is documented in
-[Security & trust](https://docs.ligus.ai/concepts/security/).
+[Security & trust](https://docs.langstroth.ai/ligus/concepts/security/).
 
 - **E2EE is mandatory for relay sync.** Every envelope is sealed with
   ChaCha20-Poly1305 before it leaves the device; the relay only ever holds sealed
@@ -298,20 +298,21 @@ see [Configure a worker](#run-a-headless-worker) below.
    worker daemon on a spare box so an agent keeps answering while your laptop is
    closed.
 
-Docs for using Ligus live at **[docs.ligus.ai](https://docs.ligus.ai/)**;
+The docs are at **[docs.langstroth.ai](https://docs.langstroth.ai/)**, in two
+sections: **[Using Ligus](https://docs.langstroth.ai/ligus/)**, and
+**[Operating Langstroth](https://docs.langstroth.ai/operate/)** for
 self-hosting and deploying (the relay, sign-in, Kubernetes, always-on hosts,
-the security model) live at **[docs.langstroth.ai](https://docs.langstroth.ai/)**
-(source for both in [`docs-site/`](docs-site/README.md)):
+the security model). The source is in [`docs-site/`](docs-site/README.md):
 
-- [First launch](https://docs.ligus.ai/getting-started/first-launch/) ·
-  [Configuring a runtime](https://docs.ligus.ai/getting-started/configuring-a-runtime/) ·
-  [First chat](https://docs.ligus.ai/getting-started/first-chat/)
-- [Multi-agent](https://docs.ligus.ai/features/multi-agent/) ·
-  [Workflows](https://docs.ligus.ai/features/workflows/) ·
-  [Collaboration](https://docs.ligus.ai/features/collaboration/)
-- [Choose a deployment](https://docs.langstroth.ai/deploy/) ·
-  [Self-hosting a relay](https://docs.langstroth.ai/networking/self-host/) ·
-  [Security model](https://docs.langstroth.ai/security/)
+- [First launch](https://docs.langstroth.ai/ligus/getting-started/first-launch/) ·
+  [Configuring a runtime](https://docs.langstroth.ai/ligus/getting-started/configuring-a-runtime/) ·
+  [First chat](https://docs.langstroth.ai/ligus/getting-started/first-chat/)
+- [Multi-agent](https://docs.langstroth.ai/ligus/features/multi-agent/) ·
+  [Workflows](https://docs.langstroth.ai/ligus/features/workflows/) ·
+  [Collaboration](https://docs.langstroth.ai/ligus/features/collaboration/)
+- [Choose a deployment](https://docs.langstroth.ai/operate/deploy/) ·
+  [Self-hosting a relay](https://docs.langstroth.ai/operate/networking/self-host/) ·
+  [Security model](https://docs.langstroth.ai/operate/security/)
 
 ## Run a headless worker
 
@@ -359,7 +360,7 @@ and [`.claude/skills/ligus-deploy-local`](.claude/skills/ligus-deploy-local/SKIL
 the tools are [`deploy/kubernetes/ligus-k8s`](deploy/kubernetes/ligus-k8s)
 and [`deploy/local/ligus-local`](deploy/local/ligus-local) (non-interactive,
 idempotent, `--json`). See also
-[Deploying with an agent](https://docs.langstroth.ai/deploy/with-an-agent/).
+[Deploying with an agent](https://docs.langstroth.ai/operate/deploy/with-an-agent/).
 
 ## Self-hosting the relay
 
@@ -385,7 +386,7 @@ Bind address and bounds are env-driven:
 | `LIGUS_RELAY_ACCESS_TOKENS` | unset (open) | Optional comma-separated allowlist gating *who can connect*. |
 
 `/v1/health` round-trips the store, so it reports real liveness. See
-[Self-hosting a relay](https://docs.langstroth.ai/networking/self-host/) for a full
+[Self-hosting a relay](https://docs.langstroth.ai/operate/networking/self-host/) for a full
 VM/PaaS deploy, TLS, and access management.
 
 ## Build from source
@@ -417,7 +418,7 @@ fit together.
   (workspace state lives in `.ligus/`). Ligus 2.0 starts fresh: a Hive 1.x
   `hive.config.toml`, `.hive/`, `~/.hive` or desktop data dir is never read,
   moved or changed; see
-  [Upgrading from Hive 1.x](https://docs.langstroth.ai/deploy/upgrade-from-hive/) for how to
+  [Upgrading from Hive 1.x](https://docs.langstroth.ai/operate/deploy/upgrade-from-hive/) for how to
   remove 1.x when you're done.
 - **Headless clients** are entirely **environment-driven** so they drop into a
   container or secret mount — see the
@@ -432,9 +433,9 @@ fit together.
 The desktop app (this repo) and the relay (the standalone
 [Go service](https://github.com/ligus-ai/relay)) are both open source. You run
 the relay, ligus-auth and any always-on hosts yourself: see the
-[operator docs](https://docs.langstroth.ai/). Relay-side membership, access
+[operator docs](https://docs.langstroth.ai/operate/). Relay-side membership, access
 tokens and sign-in with your own identity provider are all part of the open
-relay; see [Self-hosting a relay](https://docs.langstroth.ai/networking/self-host/).
+relay; see [Self-hosting a relay](https://docs.langstroth.ai/operate/networking/self-host/).
 
 ## Contributing & security
 

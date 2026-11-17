@@ -1,14 +1,16 @@
 name: Docs
 
-# Publishes the USER docs site (docs-site/user, docs.ligus.ai) to GitHub Pages.
-# The docs now live on Netlify as two sites (docs-site/user -> docs.ligus.ai,
-# docs-site/operator -> docs.langstroth.ai; see docs-site/README.md). Keep this
-# workflow until docs.ligus.ai's DNS points at Netlify, then delete it and
-# turn off GitHub Pages for the repository.
+# Builds the documentation site (docs-site, https://docs.langstroth.ai/) and
+# checks that every old docs URL is redirected. Netlify publishes the site
+# (see docs-site/README.md); this workflow only checks it.
 
 on:
   push:
-    branches: [main]
+    branches: [main, "release/**"]
+    paths:
+      - "docs-site/**"
+      - ".github/workflows/docs.yml"
+  pull_request:
     paths:
       - "docs-site/**"
       - ".github/workflows/docs.yml"
@@ -16,44 +18,24 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The redirect check reads the pre-2.0 sites from git history.
+          fetch-depth: 0
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - name: Install mkdocs
         # Same pinned versions Netlify installs (mkdocs-material 9.x).
         run: pip install -r docs-site/requirements.txt
-      - name: Build site
+      - name: Build the site
         env:
           NO_MKDOCS_2_WARNING: "1"
-        run: mkdocs build --strict -f docs-site/user/mkdocs.yml
-      - name: Build the operator site (checked here, published by Netlify)
-        env:
-          NO_MKDOCS_2_WARNING: "1"
-        run: mkdocs build --strict -f docs-site/operator/mkdocs.yml
-      - name: Check every old docs path is redirected
-        run: python3 docs-site/tools/redirects.py check --built
-      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
-        with:
-          path: docs-site/user/site
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+        run: mkdocs build --strict -f docs-site/mkdocs.yml
+      - name: Check every old docs URL is redirected
+        run: python3 docs-site/tools/redirects.py check --refs --built

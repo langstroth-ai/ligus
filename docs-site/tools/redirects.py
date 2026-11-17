@@ -1,25 +1,35 @@
 #!/usr/bin/env python3
-"""Redirects for the docs split, generated from tools/page-map.tsv.
+"""Redirects for the single docs site, generated from tools/page-map.tsv.
 
-Before 2.0 there was one docs site (docs.apiaryhq.ai, then docs.ligus.ai).
-It is now two sites:
+There is one docs site, https://docs.langstroth.ai/, built from docs-site/:
 
-  user      docs-site/user      https://docs.ligus.ai/
-  operator  docs-site/operator  https://docs.langstroth.ai/
+  /ligus/    Using Ligus            (docs-site/docs/ligus/)
+  /operate/  Operating Langstroth   (docs-site/docs/operate/)
 
-page-map.tsv lists every page of the old site and where it lives now.
+Before it, three sites served pages at other paths:
+
+  1x          https://docs.apiaryhq.ai/    the 1.x site (main, v1.18.0)
+  ligus       https://docs.ligus.ai/       the 2.0 user site
+  langstroth  https://docs.langstroth.ai/  the 2.0 operator site
+
+page-map.tsv lists every old page and where it lives now. docs.ligus.ai and
+docs.apiaryhq.ai are domain aliases of the single Netlify site.
 
   python3 docs-site/tools/redirects.py generate
-      Rewrite the generated blocks in user/mkdocs.yml (mkdocs-redirects stub
-      pages), user/netlify.toml and operator/netlify.toml.
+      Rewrite the generated blocks in mkdocs.yml (mkdocs-redirects stub
+      pages at every old path) and netlify.toml (the 301s).
 
-  python3 docs-site/tools/redirects.py check [--ref GIT_REF ...] [--built]
-      Assert every old page has a working new home: a redirect on
-      docs.ligus.ai (or the same path still there), a host rule for
-      docs.apiaryhq.ai, and a target page that exists. --ref also lists the
-      pages (nav entries and files) of the old site at that git ref and
-      asserts each is in the map. --built checks the built sites in
-      user/site and operator/site too.
+  python3 docs-site/tools/redirects.py check [--refs] [--built]
+      Assert every old URL has a working new home. Without --built it checks
+      the map and the generated config. --built also checks the built site
+      in docs-site/site and runs every old URL of the three old sites (in
+      the /page/, /page and /page/index.html forms), plus version.json and
+      llms.txt on every host, through an emulation of Netlify's rules (first
+      match wins, force, shadowing, host-prefixed rules) until it lands on a
+      file: none may 404, every page must land on its mapped target in one
+      301, and version.json must be served without a redirect. --refs reads
+      the old sites' pages and files from git (needs full history), asserts
+      each page is in the map, and with --built emulates the old files too.
 """
 import os
 import re
@@ -27,9 +37,19 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DOCS = os.path.dirname(HERE)
-BASE = {"user": "https://docs.ligus.ai/", "operator": "https://docs.langstroth.ai/"}
-OLD_HOST = "https://docs.apiaryhq.ai"
+DOCS = os.path.dirname(HERE)  # docs-site/
+SRC = os.path.join(DOCS, "docs")
+SITE = os.path.join(DOCS, "site")
+PRIMARY = "docs.langstroth.ai"
+ALIASES = ("docs.ligus.ai", "docs.apiaryhq.ai")
+HOSTS = {"1x": "docs.apiaryhq.ai", "ligus": "docs.ligus.ai", "langstroth": PRIMARY}
+# The commits the old sites were built from (for --refs).
+REF_1X = "4a51d44b"  # main at v1.18.0: root mkdocs.yml, docs_dir docs-site
+REF_SPLIT = "71e1084c"  # release/v2.0.0 before the merge: docs-site/{user,operator}
+# Files served on the alias hosts as they are, without a redirect: shipped
+# desktop builds read https://docs.ligus.ai/version.json (and 1.x builds
+# https://docs.apiaryhq.ai/version.json) for their update check.
+SERVED_ON_ALIASES = ("/version.json",)
 BEGIN = "# BEGIN generated"
 END = "# END generated"
 
@@ -40,9 +60,10 @@ def load_map():
         for line in f:
             if line.startswith("#") or not line.strip():
                 continue
-            old, site, new = line.rstrip("\n").split("\t")
-            assert site in BASE, line
-            rows.append((old, site, new))
+            old, new, sources = line.rstrip("\n").split("\t")
+            srcs = tuple(sources.split(","))
+            assert all(s in HOSTS for s in srcs), line
+            rows.append((old, new, srcs))
     return rows
 
 
@@ -56,74 +77,59 @@ def url_path(md):
     return "/" + md[:-3] + "/"
 
 
-def target(site, new):
-    return BASE[site].rstrip("/") + url_path(new)
+def absolute(new):
+    return f"https://{PRIMARY}{url_path(new)}"
 
 
-def rule(frm, to, force, comment=None):
-    out = []
-    if comment:
-        out.append(f"# {comment}")
-    out += ["[[redirects]]", f'  from = "{frm}"', f'  to = "{to}"', "  status = 301"]
+def rule(frm, to, status=301, force=True):
+    out = ["[[redirects]]", f'  from = "{frm}"', f'  to = "{to}"', f"  status = {status}"]
     if force:
         out.append("  force = true")
     return "\n".join(out)
 
 
-def page_rules(frm_prefix, old, to, force):
-    """Two rules per page: the directory URL (Netlify matches it with and
-    without the trailing slash) and its index.html."""
+def page_rules(prefix, old, to):
+    """The directory URL (Netlify matches it with and without the trailing
+    slash) and its index.html."""
     p = url_path(old)
-    rules = [rule(frm_prefix + p, to, force)]
+    out = [rule(prefix + p, to)]
     if p != "/":
-        rules.append(rule(frm_prefix + p + "index.html", to, force))
-    return rules
+        out.append(rule(prefix + p + "index.html", to))
+    return out
 
 
-def moved(rows):
-    return [(o, s, n) for o, s, n in rows if s != "user" or o != n]
-
-
-def user_rules(rows):
-    out = [
-        "# docs.apiaryhq.ai (the 1.x docs domain) points at this site as a domain",
-        "# alias. Every page of the old site goes straight to its new home; anything",
-        "# else falls through to the same path on docs.ligus.ai.",
-    ]
-    for o, s, n in rows:
-        out += page_rules(OLD_HOST, o, target(s, n), True)
-    out.append(rule(OLD_HOST + "/*", BASE["user"] + ":splat", True))
-    out.append("# Pages that left this site or moved within it. force = true because")
-    out.append("# mkdocs-redirects also writes a stub page at each of these paths for")
-    out.append("# GitHub Pages; on Netlify the 301 wins.")
-    for o, s, n in moved(rows):
-        out += page_rules("", o, target(s, n), True)
-    return "\n\n".join(out)
-
-
-def operator_rules(rows):
-    out = ["# User-site pages asked for on this host go to docs.ligus.ai."]
-    for o, s, n in rows:
-        if s == "user":
-            out += page_rules("", o, target(s, n), False)
-            if o != n:
-                out += page_rules("", n, target(s, n), False)
-    out.append("# Pages removed or moved within this site go to their new home.")
-    for o, s, n in rows:
-        if s == "operator" and o != n:
-            out += page_rules("", o, target(s, n), False)
+def netlify_rules(rows):
+    out = []
+    for host in ALIASES:
+        pre = f"https://{host}"
+        out.append(f"# {host}: a domain alias of this site.")
+        for path in SERVED_ON_ALIASES:
+            out.append(f"# {path} is served here as it is (200, no redirect) for the desktop update check.")
+            out.append(rule(pre + path, path, status=200))
+        out.append("# Every old page goes straight to its new page.")
+        for old, new, _ in rows:
+            out += page_rules(pre, old, absolute(new))
+        out.append(f"# Anything else: the same path on {PRIMARY}, where the rules below")
+        out.append("# answer it.")
+        out.append(rule(pre + "/*", f"https://{PRIMARY}/:splat"))
+    out.append(f"# {PRIMARY}: old paths of the pre-2.0 sites. force = true because")
+    out.append("# mkdocs-redirects also writes a stub page at each of these paths; on")
+    out.append("# Netlify the 301 wins.")
+    for old, new, _ in rows:
+        if old == "index.md":
+            continue  # the home page itself
+        out += page_rules("", old, url_path(new))
+    out.append("# Old screenshot URLs (/images/...). Not forced: the theme's own files")
+    out.append("# under /images/ are served as they are.")
+    out.append(rule("/images/*", "/ligus/images/:splat", force=False))
     return "\n\n".join(out)
 
 
 def mkdocs_maps(rows):
-    lines = []
-    for o, s, n in moved(rows):
-        to = n if s == "user" else target(s, n)
-        lines.append(f"        {o}: {to}")
-    return "\n".join(lines)
+    return "\n".join(f"        {old}: {new}" for old, new, _ in rows if old != "index.md")
 
 
-def splice(path, name, body, indent=""):
+def splice(path, name, body):
     with open(path) as f:
         text = f.read()
     pat = re.compile(
@@ -138,22 +144,119 @@ def splice(path, name, body, indent=""):
 
 def generate():
     rows = load_map()
-    splice(os.path.join(DOCS, "user/mkdocs.yml"), "redirect_maps", mkdocs_maps(rows))
-    splice(os.path.join(DOCS, "user/netlify.toml"), "redirects", user_rules(rows))
-    splice(os.path.join(DOCS, "operator/netlify.toml"), "redirects", operator_rules(rows))
-    print(f"generated redirects for {len(rows)} old pages ({len(moved(rows))} moved)")
+    splice(os.path.join(DOCS, "mkdocs.yml"), "redirect_maps", mkdocs_maps(rows))
+    splice(os.path.join(DOCS, "netlify.toml"), "redirects", netlify_rules(rows))
+    print(f"generated redirects for {len(rows)} old pages")
 
 
-def old_pages_at(ref):
-    """Pages of the pre-split site at a git ref: every nav entry in
-    mkdocs.yml plus every .md file under docs-site/."""
+# ---------------------------------------------------------------- old sites
+
+
+def git(*args):
     root = subprocess.check_output(["git", "-C", DOCS, "rev-parse", "--show-toplevel"], text=True).strip()
-    cfg = subprocess.check_output(["git", "-C", root, "show", f"{ref}:mkdocs.yml"], text=True)
-    nav = cfg.split("\nnav:", 1)[1]
+    return subprocess.check_output(["git", "-C", root, *args], text=True)
+
+
+def old_sites_from_git():
+    """{source: (pages, files)} for the three old sites. pages are page
+    paths (.md) and "url:/path/" for each path the old host answered with a
+    redirect; files are the other files it served (images, llms.txt,
+    version.json, stylesheets)."""
+    import tomllib
+
+    out = {}
+    tree = git("ls-tree", "-r", "--name-only", REF_1X, "docs-site/").split()
+    nav = git("show", f"{REF_1X}:mkdocs.yml").split("\nnav:", 1)[1]
     pages = set(re.findall(r":\s*([\w./-]+\.md)\s*$", nav, re.M))
-    files = subprocess.check_output(["git", "-C", root, "ls-tree", "-r", "--name-only", ref, "docs-site/"], text=True)
-    pages |= {f[len("docs-site/"):] for f in files.split() if f.endswith(".md")}
-    return pages
+    pages |= {f[len("docs-site/"):] for f in tree if f.endswith(".md")}
+    files = {f[len("docs-site/"):] for f in tree if not f.endswith(".md") and not f.endswith("CNAME")}
+    out["1x"] = (pages, files)
+    for src, d in (("ligus", "user"), ("langstroth", "operator")):
+        pre = f"docs-site/{d}/docs/"
+        tree = git("ls-tree", "-r", "--name-only", REF_SPLIT, pre).split()
+        pages = {f[len(pre):] for f in tree if f.endswith(".md")}
+        files = {f[len(pre):] for f in tree if not f.endswith(".md") and not f.endswith("CNAME")}
+        toml = tomllib.loads(git("show", f"{REF_SPLIT}:docs-site/{d}/netlify.toml"))
+        for r in toml.get("redirects", []):
+            u = r["from"]
+            if u.startswith("/"):
+                pages.add("url:" + (u[: -len("index.html")] if u.endswith("index.html") else u))
+        if d == "user":
+            cfg = git("show", f"{REF_SPLIT}:docs-site/user/mkdocs.yml")
+            pages |= set(re.findall(r"^\s+([\w./-]+\.md): ", cfg, re.M))
+        out[src] = (pages, files)
+    return out
+
+
+# ---------------------------------------------------------- Netlify emulator
+
+
+def norm(path):
+    """Netlify matches a rule with and without the trailing slash."""
+    return path.rstrip("/") or "/"
+
+
+def built_file(path):
+    """The built file a path serves, or None (pretty URLs: /a and /a/ serve
+    a/index.html)."""
+    p = path.lstrip("/")
+    cands = [p] if p and not p.endswith("/") else []
+    cands.append(os.path.join(p, "index.html"))
+    for c in cands:
+        f = os.path.join(SITE, c)
+        if os.path.isfile(f):
+            return f
+    return None
+
+
+def match(rule_from, host, path):
+    """The splat ("" when none) if `rule_from` matches host+path, else None."""
+    if rule_from.startswith("https://"):
+        rhost, _, rpath = rule_from[len("https://"):].partition("/")
+        if rhost != host:
+            return None
+        rpath = "/" + rpath
+    else:
+        rpath = rule_from
+    if rpath.endswith("/*"):
+        base = rpath[:-2]
+        if path == base or path.startswith(base + "/"):
+            return path[len(base) + 1:]
+        return None
+    return "" if norm(rpath) == norm(path) else None
+
+
+def resolve(rules, host, path, limit=6):
+    """Follow the rules from https://host/path like Netlify does. Returns
+    (statuses of the rules applied, final host, final path, served file or
+    None)."""
+    hops = []
+    for _ in range(limit):
+        hit = None
+        for r in rules:
+            splat = match(r["from"], host, path)
+            if splat is None:
+                continue
+            if not r.get("force") and built_file(path):
+                continue  # shadowed by a file that exists
+            hit = (r, splat)
+            break
+        if not hit:
+            return hops, host, path, built_file(path)
+        r, splat = hit
+        to = r["to"].replace(":splat", splat)
+        hops.append(r["status"])
+        if r["status"] == 200:
+            return hops, host, path, built_file(to)
+        if to.startswith("https://"):
+            host, _, rest = to[len("https://"):].partition("/")
+            path = "/" + rest
+        else:
+            path = to
+    return hops, host, path, None
+
+
+# -------------------------------------------------------------------- check
 
 
 def load_toml(path):
@@ -163,82 +266,115 @@ def load_toml(path):
         return tomllib.load(f)
 
 
-def check(refs, built):
-    rows = load_map()
-    errors = []
-    olds = {o for o, _, _ in rows}
-    for ref in refs:
-        pages = old_pages_at(ref)
-        missing = sorted(pages - olds)
-        print(f"{ref}: {len(pages)} old pages, {len(missing)} not in page-map.tsv")
-        errors += [f"{ref}: old page {p} has no entry in page-map.tsv" for p in missing]
-
-    user = load_toml(os.path.join(DOCS, "user/netlify.toml"))
-    operator = load_toml(os.path.join(DOCS, "operator/netlify.toml"))
-    ur = {(r["from"]): r for r in user.get("redirects", [])}
-    orr = {(r["from"]): r for r in operator.get("redirects", [])}
+def load_mkdocs_maps():
     import yaml  # PyYAML ships with mkdocs
 
     class Loader(yaml.SafeLoader):
         pass
 
     Loader.add_multi_constructor("tag:yaml.org,2002:python/name:", lambda l, s, n: None)
-    mk = yaml.load(open(os.path.join(DOCS, "user/mkdocs.yml")), Loader=Loader)
-    maps = {}
+    with open(os.path.join(DOCS, "mkdocs.yml")) as f:
+        mk = yaml.load(f, Loader=Loader)
     for p in mk["plugins"]:
         if isinstance(p, dict) and "redirects" in p:
-            maps = p["redirects"]["redirect_maps"] or {}
+            return p["redirects"]["redirect_maps"] or {}
+    return {}
 
-    for o, s, n in rows:
-        dest = target(s, n)
-        if not os.path.isfile(os.path.join(DOCS, s, "docs", n)):
-            errors.append(f"{o}: target {s}/docs/{n} does not exist")
-        for frm in (OLD_HOST + url_path(o),) + ((OLD_HOST + url_path(o) + "index.html",) if url_path(o) != "/" else ()):
-            r = ur.get(frm)
-            if not r or r["to"] != dest or r["status"] != 301 or not r.get("force"):
-                errors.append(f"{o}: no forced 301 {frm} -> {dest} in user/netlify.toml")
-        if s == "user" and o == n:
-            if o != "index.md" and os.path.exists(os.path.join(DOCS, "operator/docs", n)):
-                errors.append(f"{o}: present in both sites")
-            continue
-        for frm in (url_path(o), url_path(o) + "index.html"):
-            r = ur.get(frm)
-            if not r or r["to"] != dest or r["status"] != 301 or not r.get("force"):
-                errors.append(f"{o}: no forced 301 {frm} -> {dest} on docs.ligus.ai")
-        want = n if s == "user" else dest
-        if maps.get(o) != want:
-            errors.append(f"{o}: mkdocs redirect_maps has {maps.get(o)!r}, want {want!r}")
-        if os.path.exists(os.path.join(DOCS, "user/docs", o)):
-            errors.append(f"{o}: moved, but a page still exists at the old path on the user site")
-        if built:
-            stub = os.path.join(DOCS, "user/site", url_path(o).lstrip("/"), "index.html")
-            if not os.path.isfile(stub) or "refresh" not in open(stub).read():
-                errors.append(f"{o}: built user site has no redirect stub at {stub}")
-    catch = ur.get(OLD_HOST + "/*")
-    if not catch or catch["to"] != BASE["user"] + ":splat" or not catch.get("force"):
-        errors.append("no docs.apiaryhq.ai catch-all rule")
-    for o, s, n in rows:
-        if s == "user" or o != n:
-            r = orr.get(url_path(o))
-            if not r or r["to"] != target(s, n):
-                errors.append(f"{o}: docs.langstroth.ai has no rule to {target(s, n)}")
-        if s == "operator" and o != n and os.path.exists(os.path.join(DOCS, "operator/docs", o)):
-            errors.append(f"{o}: moved, but a page still exists at the old path on the operator site")
+
+def check(refs, built):
+    rows = load_map()
+    errors = []
+    by_old = {o: s for o, _, s in rows}
+    by_url = {url_path(o): s for o, _, s in rows}
+
+    old_files = {}
+    if refs:
+        for src, (pages, files) in old_sites_from_git().items():
+            missing = []
+            for p in sorted(pages):
+                srcs = by_url.get(p[4:]) if p.startswith("url:") else by_old.get(p)
+                if srcs is None:
+                    missing.append(p)
+                elif src not in srcs:
+                    missing.append(f"{p} (source {src} not listed)")
+            print(f"{src} ({HOSTS[src]}): {len(pages)} old pages and redirected paths, "
+                  f"{len(files)} other files, {len(missing)} not in page-map.tsv")
+            errors += [f"{src}: old page {m} has no entry in page-map.tsv" for m in missing]
+            old_files[src] = files
+
+    rules = load_toml(os.path.join(DOCS, "netlify.toml")).get("redirects", [])
+    maps = load_mkdocs_maps()
+
+    for o, n, srcs in rows:
+        if not os.path.isfile(os.path.join(SRC, n)):
+            errors.append(f"{o}: target docs/{n} does not exist")
+        if n.split("/")[0] not in ("ligus", "operate"):
+            errors.append(f"{o}: target {n} is outside /ligus/ and /operate/")
+        if o != "index.md":
+            if os.path.exists(os.path.join(SRC, o)):
+                errors.append(f"{o}: a page still exists at the old path")
+            if maps.get(o) != n:
+                errors.append(f"{o}: mkdocs redirect_maps has {maps.get(o)!r}, want {n!r}")
+
+    allowed_200 = {f"https://{h}{p}" for h in ALIASES for p in SERVED_ON_ALIASES}
+    for r in rules:
+        if r["status"] not in (200, 301):
+            errors.append(f"rule {r['from']} has status {r['status']}")
+        if r["status"] == 200 and r["from"] not in allowed_200:
+            errors.append(f"unexpected 200 rule {r['from']}")
+
+    checked = 0
+    if built and not os.path.isdir(SITE):
+        errors.append(f"{SITE} is missing: build the site first")
+    elif built:
+        for o, n, _ in rows:
+            if not built_file(url_path(n)):
+                errors.append(f"{n}: not built in site/")
+            if o != "index.md":
+                stub = os.path.join(SITE, url_path(o).lstrip("/"), "index.html")
+                if not os.path.isfile(stub) or "refresh" not in open(stub).read():
+                    errors.append(f"{o}: no redirect stub at {stub}")
+        # Every old page URL, on every host, in every form.
+        for host in (PRIMARY,) + ALIASES:
+            for o, n, _ in rows:
+                want = "/" if (o == "index.md" and host == PRIMARY) else url_path(n)
+                p = url_path(o)
+                for form in ([p] if p == "/" else [p, p.rstrip("/"), p + "index.html"]):
+                    checked += 1
+                    hops, fhost, fpath, f = resolve(rules, host, form)
+                    where = f"https://{host}{form}"
+                    if f is None:
+                        errors.append(f"{where}: 404 after {hops} at https://{fhost}{fpath}")
+                    elif fhost != PRIMARY or norm(fpath) != norm(want):
+                        errors.append(f"{where}: lands on https://{fhost}{fpath}, want {want}")
+                    elif hops != ([] if (host == PRIMARY and want == "/") else [301]):
+                        errors.append(f"{where}: rules applied {hops}, want exactly one 301")
+            # Files every host serves.
+            for path in SERVED_ON_ALIASES + ("/llms.txt",):
+                checked += 1
+                hops, fhost, fpath, f = resolve(rules, host, path)
+                if f is None:
+                    errors.append(f"https://{host}{path}: 404")
+                elif path in SERVED_ON_ALIASES and fhost != host:
+                    errors.append(f"https://{host}{path}: redirected ({hops}); it must be served as it is")
+        # Other files of the old sites (images, stylesheets, llms.txt, version.json).
+        for src, files in old_files.items():
+            for fpath in sorted(files):
+                checked += 1
+                hops, fhost, final, f = resolve(rules, HOSTS[src], "/" + fpath)
+                if f is None:
+                    errors.append(f"https://{HOSTS[src]}/{fpath}: 404 after {hops} at https://{fhost}{final}")
+
+    count = lambda s: sum(1 for r in rows if s in r[2])
+    print(f"{len(rows)} old pages: {count('1x')} from docs.apiaryhq.ai, {count('ligus')} from docs.ligus.ai, "
+          f"{count('langstroth')} from docs.langstroth.ai")
+    print(f"netlify.toml: {len(rules)} redirect rules; mkdocs redirect stubs: {len(maps)}")
     if built:
-        for s in BASE:
-            for o, ss, n in rows:
-                if ss == s and not os.path.isfile(os.path.join(DOCS, s, "site", url_path(n).lstrip("/"), "index.html")):
-                    errors.append(f"{n}: not built in {s}/site")
-
-    n_moved = len(moved(rows))
-    print(f"{len(rows)} old pages: {sum(1 for r in rows if r[1] == 'user')} on docs.ligus.ai "
-          f"({sum(1 for o, s, n in rows if s == 'user' and o != n)} at a new path), "
-          f"{sum(1 for r in rows if r[1] == 'operator')} on docs.langstroth.ai; {n_moved} moved")
-    print(f"user/netlify.toml: {len(ur)} redirect rules; operator/netlify.toml: {len(orr)}")
+        print(f"emulated {checked} old URLs and files across {1 + len(ALIASES)} hosts")
     if errors:
         print("\n".join("FAIL " + e for e in errors))
         sys.exit(1)
-    print("OK: every old page has a 301 or still lives at its path, and every docs.apiaryhq.ai path is mapped")
+    print("OK: every old URL on docs.apiaryhq.ai, docs.ligus.ai and docs.langstroth.ai reaches its page")
 
 
 if __name__ == "__main__":
@@ -246,8 +382,7 @@ if __name__ == "__main__":
     if args[:1] == ["generate"]:
         generate()
     elif args[:1] == ["check"]:
-        refs = [args[i + 1] for i, a in enumerate(args) if a == "--ref"]
-        check(refs, "--built" in args)
+        check("--refs" in args, "--built" in args)
     else:
         print(__doc__)
         sys.exit(2)

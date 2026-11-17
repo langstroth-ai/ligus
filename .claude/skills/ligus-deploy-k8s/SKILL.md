@@ -96,7 +96,7 @@ file (`--values`) by Secret name only.
 
 2.0 note: a box joins an existing workspace only through an invite an Admin
 issued; the chart's headless join for serve is still being built (see
-`docs-site/operator/docs/deploy/kubernetes.md`, "Changing in 2.0"). If serve on a real
+`docs-site/docs/operate/deploy/kubernetes.md`, "Changing in 2.0"). If serve on a real
 workspace exits with a membership or role refusal, **stop** and hand over.
 On a fresh throwaway workspace, serve and workers started together race to
 found it (see `deploy/helm/ligus/ci/kind-values.yaml`); if one restarts with a

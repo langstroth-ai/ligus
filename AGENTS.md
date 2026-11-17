@@ -121,8 +121,8 @@ $L uninstall --role serve --data-dir ~/.ligus-serve [--delete-data]
   `ligus-k8s preflight --probe --image ...` measures it (OrbStack: ABI 10).
 - `helm template` errors are the chart refusing an unsafe or incomplete
   combination on purpose; fix the input it names.
-- Reference: [docs-site/operator/docs/deploy/kubernetes.md](docs-site/operator/docs/deploy/kubernetes.md),
+- Reference: [docs-site/docs/operate/deploy/kubernetes.md](docs-site/docs/operate/deploy/kubernetes.md),
   [deploy/helm/ligus/README.md](deploy/helm/ligus/README.md),
   [deploy/ligus-serve/README.md](deploy/ligus-serve/README.md),
-  [docs-site/operator/docs/deploy/with-an-agent.md](docs-site/operator/docs/deploy/with-an-agent.md).
+  [docs-site/docs/operate/deploy/with-an-agent.md](docs-site/docs/operate/deploy/with-an-agent.md).
 - Tests for this tooling: `bash deploy/tests/agent-deploy-test.sh`.

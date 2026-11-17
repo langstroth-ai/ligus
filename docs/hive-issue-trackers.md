@@ -14,7 +14,7 @@ not new infrastructure.
 Hive already:
 
 - runs **MCP servers** per workspace (stdio + http), **inert until enabled**,
-  with **per-tool trust toggles** (see [MCP servers](../docs-site/user/docs/addons/mcp.md));
+  with **per-tool trust toggles** (see [MCP servers](../docs-site/docs/ligus/addons/mcp.md));
 - has a **multi-turn tool loop** so an agent can call a tool, read the result,
   and continue;
 - holds a **GitHub OAuth token** already (the directory/identity work).
