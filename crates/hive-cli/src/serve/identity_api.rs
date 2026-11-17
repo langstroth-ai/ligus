@@ -37,6 +37,7 @@ use axum::{Extension, Json};
 use hive_core::workspace_config_session_id;
 use hive_runtime::directory_trust::{self, CoMember};
 use hive_runtime::dm::{self, FounderTrust};
+use hive_runtime::dm_delivery::Delivery;
 use hive_runtime::envelope_verifier::FounderPin;
 use hive_runtime::identity_links::LinkCheckCache;
 use serde::Deserialize;
@@ -606,6 +607,9 @@ impl Shared {
             if let Some(t) = founded {
                 v["foundedAt"] = json!(iso(t));
             }
+            if let Some(h) = self.held.get(ws) {
+                v["inviteDelivery"] = h.status_json();
+            }
             if let Some(p) = person {
                 if let Some(code) = p.safety_code().filter(|_| !p.key_conflict) {
                     v["safetyCode"] = json!(code);
@@ -636,7 +640,9 @@ pub struct OpenDm {
 }
 
 /// `POST /v1/dms {accountId}` → `{workspaceId, chatId?, invite?, delivered,
-/// safetyCode}`. Opens the kept DM with a co-member, or founds one: a
+/// pending, inviteDelivery?, safetyCode}`. `pending`: not delivered yet
+/// (their contact id isn't known here), held sealed on the box and
+/// delivered once it is. Opens the kept DM with a co-member, or founds one: a
 /// random room and key, this box's account as founder (pinned), a signed
 /// invite addressed to them, sealed to their verified devices and dropped
 /// into their contact box when they have one.
@@ -668,10 +674,13 @@ pub async fn open_dm(State(s): S, peer_ext: Option<Extension<TunnelPeer>>, Json(
     if let Some(d) = existing {
         let rows = s.dm_rows(&[person.clone()]);
         let row = rows.into_iter().find(|r| r["workspaceId"] == json!(d.workspace_id())).unwrap_or(Value::Null);
+        let held = s.held.get(d.workspace_id());
         return Ok(Json(json!({
             "workspaceId": d.workspace_id(),
             "chatId": row["chatId"].clone(),
             "delivered": false,
+            "pending": held.as_ref().is_some_and(|h| h.status_json()["pending"] == json!(true)),
+            "inviteDelivery": held.map(|h| h.status_json()),
             "safetyCode": person.safety_code(),
         })));
     }
@@ -722,7 +731,11 @@ pub async fn open_dm(State(s): S, peer_ext: Option<Extension<TunnelPeer>>, Json(
     };
     let dm_cfg = s.dms.config_for(&s.cfg, &dm_conn);
     let invite = finish_invite(&s, conn, inv, &dm_cfg);
-    let delivered = contacts_api::deliver_invite(&s, &person, &invite).await;
+    // Delivered now, or held (sealed on this box) and delivered once their
+    // contact id arrives.
+    let plan = person.seal_plan().map_err(|e| ApiError::new(StatusCode::CONFLICT, e))?;
+    let delivered = contacts_api::deliver_invite(&s, &person, &plan, &invite).await == Delivery::Delivered;
+    let held = if delivered { None } else { contacts_api::hold_invite(&s, ws, &person, &plan, &invite) };
     s.dm_kick.notify_one();
     s.refresh();
     s.hub.emit("dms.changed", json!({}));
@@ -735,8 +748,68 @@ pub async fn open_dm(State(s): S, peer_ext: Option<Extension<TunnelPeer>>, Json(
         "chatId": chat,
         "invite": invite,
         "delivered": delivered,
+        "pending": held.is_some(),
+        "inviteDelivery": held.map(|h| h.status_json()),
         "safetyCode": person.safety_code(),
     })))
+}
+
+fn held_ws(s: &Shared, id: &str) -> ApiResult<Uuid> {
+    let ws = Uuid::parse_str(id.trim()).map_err(|_| ApiError::bad_request("not a workspace id"))?;
+    if s.held.get(ws).is_none() {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "no invite waits for delivery in this DM"));
+    }
+    Ok(ws)
+}
+
+/// `GET /v1/dms/{workspaceId}/invite` → `{invite, inviteDelivery}`: the held
+/// invite's link, to share by hand while it waits (secure channel only).
+pub async fn held_invite(State(s): S, peer_ext: Option<Extension<TunnelPeer>>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    require_secret_channel(&s, peer_ext.as_deref())?;
+    let ws = held_ws(&s, &id)?;
+    let ka = contacts_api::own_ka(&s).ok_or_else(|| ApiError::new(StatusCode::CONFLICT, "this box has no key-agreement key"))?;
+    let invite = s
+        .held
+        .open_invite(ws, &ka)
+        .ok_or_else(|| ApiError::new(StatusCode::GONE, "the invite no longer waits here (delivered, joined or expired)"))?;
+    Ok(Json(json!({ "invite": invite.as_str(), "inviteDelivery": s.held.get(ws).map(|h| h.status_json()) })))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfirmHeld {
+    /// The safety code the opener compared with them.
+    safety_code: String,
+}
+
+/// `POST /v1/dms/{workspaceId}/invite/confirm {safetyCode}` →
+/// `{inviteDelivery}`: after the unverified-recipient warning (their keys
+/// changed since the DM was opened), deliver to their current verified
+/// devices. 409 unless `safetyCode` is theirs now (it changed again since
+/// it was shown).
+pub async fn confirm_held_invite(State(s): S, Path(id): Path<String>, Json(req): Json<ConfirmHeld>) -> ApiResult<Json<Value>> {
+    ensure_can_write(&s)?;
+    let ws = held_ws(&s, &id)?;
+    let h = s.held.get(ws).expect("checked");
+    let person = s
+        .co_members()
+        .into_iter()
+        .find(|c| c.account_id == h.account_id)
+        .ok_or_else(|| ApiError::new(StatusCode::CONFLICT, "you no longer share a workspace with them"))?;
+    let h = s.held.confirm(ws, &person, &req.safety_code, contacts_api::unix_now()).map_err(|e| ApiError::new(StatusCode::CONFLICT, e))?;
+    s.held_kick.notify_one();
+    s.hub.emit("dms.changed", json!({}));
+    Ok(Json(json!({ "inviteDelivery": h.status_json() })))
+}
+
+/// `DELETE /v1/dms/{workspaceId}/invite` → `{inviteDelivery}`: stop
+/// waiting (share the link instead). The sealed invite is forgotten.
+pub async fn dismiss_held_invite(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    ensure_can_write(&s)?;
+    let ws = held_ws(&s, &id)?;
+    s.held.dismiss(ws);
+    s.hub.emit("dms.changed", json!({}));
+    Ok(Json(json!({ "inviteDelivery": s.held.get(ws).map(|h| h.status_json()) })))
 }
 
 // ── Waiting for the founder ────────────────────────────────────────────────

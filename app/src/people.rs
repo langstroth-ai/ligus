@@ -9,7 +9,10 @@
 //! (`hive_runtime::dm`). An invite to a co-member is sealed to their verified
 //! key-agreement keys and dropped into their contact drop box (relay v0.3,
 //! `hive_runtime::contacts`); on a relay without contacts, or for someone
-//! who hasn't published one, it is a link or QR code you hand over.
+//! who hasn't published one, it is a link or QR code you hand over. A DM's
+//! invite for someone whose contact id isn't known yet is held, sealed to
+//! this device's key, and delivered once when it arrives
+//! (`hive_runtime::dm_delivery`, the same code `ligus serve` runs).
 //!
 //! Contacts are per device: each device keeps its own contact id and write
 //! key, publishes its record to the relays of its workspaces, announces the
@@ -21,8 +24,9 @@ use std::collections::BTreeMap;
 
 use hive_core::Timestamp;
 use hive_proto::WorkspaceInfoDto;
-use hive_runtime::directory_trust::{self, CoMember};
+use hive_runtime::directory_trust::{self, CoMember, SealPlan};
 use hive_runtime::dm;
+use hive_runtime::dm_delivery::{self, Delivery, HeldInvites};
 use tauri::State;
 use uuid::Uuid;
 
@@ -200,6 +204,10 @@ pub(crate) struct DmDto {
     /// Earlier DMs with the same person that the simultaneous-open rule
     /// archived (read-only), oldest first.
     archived: Vec<String>,
+    /// The DM's invite while this device holds it for delivery (and a day
+    /// after it finished): `{state, pending, delivered, deliveredAt,
+    /// expiresAt, warning}` (`hive_runtime::dm_delivery`).
+    invite_delivery: Option<serde_json::Value>,
 }
 
 /// Owner decision D12 over this device's DMs: for every peer with more than
@@ -284,6 +292,7 @@ pub(crate) fn list_dms(state: State<AppState>) -> Vec<DmDto> {
             safety_code: person.and_then(|p| p.safety_code()),
             account: peer,
             archived: archived.into_iter().map(|(_, id)| id).collect(),
+            invite_delivery: held(&state).get(w.id()).map(|h| h.status_json()),
         });
     }
     out
@@ -299,6 +308,11 @@ pub(crate) struct OpenDmDto {
     invite: Option<String>,
     /// The invite reached their drop box, sealed to their verified devices.
     delivered: bool,
+    /// Not delivered yet (their contact id isn't known here): held sealed on
+    /// this device and delivered once it is. The link still works by hand.
+    pending: bool,
+    /// The held invite's state (as [`DmDto::invite_delivery`]).
+    invite_delivery: Option<serde_json::Value>,
     /// Their safety code, so they can check yours and you theirs.
     safety_code: Option<String>,
 }
@@ -320,7 +334,7 @@ pub(crate) async fn open_dm(state: State<'_, AppState>, account_id: String) -> R
         .into_iter()
         .find(|c| c.account_id == peer)
         .ok_or("You can open a DM with someone you share a workspace with. Otherwise send them an invite link.")?;
-    person.seal_plan()?;
+    let plan = person.seal_plan()?;
     let peer_s = peer.to_string();
     let existing = {
         let s = state.settings.lock().unwrap();
@@ -338,7 +352,15 @@ pub(crate) async fn open_dm(state: State<'_, AppState>, account_id: String) -> R
     };
     if let Some(id) = existing {
         set_active_workspace(state.clone(), id.to_string())?;
-        return Ok(OpenDmDto { workspace_id: id.to_string(), invite: None, delivered: false, safety_code: person.safety_code() });
+        let held = held(&state).get(id);
+        return Ok(OpenDmDto {
+            workspace_id: id.to_string(),
+            invite: None,
+            delivered: false,
+            pending: held.as_ref().is_some_and(|h| h.status_json()["pending"] == serde_json::json!(true)),
+            invite_delivery: held.map(|h| h.status_json()),
+            safety_code: person.safety_code(),
+        });
     }
     let my_fk = my_fk.ok_or("this device acts for an account without its key and can't found a DM")?;
     let conn = {
@@ -364,8 +386,18 @@ pub(crate) async fn open_dm(state: State<'_, AppState>, account_id: String) -> R
     set_active_workspace(state.clone(), ws_id.to_string())?;
     let inv = state.service.lock().unwrap().issue_invite(ws_id).map_err(map_err)?;
     let invite = encode_workspace_invite(&sign_invite(&state, with_epoch_keys(&state, WorkspaceConn { inv: Some(inv.to_string()), ..conn })));
-    let delivered = deliver_invite(&state, &person, &invite).await;
-    Ok(OpenDmDto { workspace_id: ws_id.to_string(), invite: Some(invite), delivered, safety_code: person.safety_code() })
+    // Delivered now, or held (sealed on this device) and delivered once their
+    // contact id arrives.
+    let delivered = deliver_invite(&state, &person, &plan, &invite).await == Delivery::Delivered;
+    let held = if delivered { None } else { hold_invite(&state, ws_id, &person, &plan, &invite) };
+    Ok(OpenDmDto {
+        workspace_id: ws_id.to_string(),
+        invite: Some(invite),
+        delivered,
+        pending: held.is_some(),
+        invite_delivery: held.map(|h| h.status_json()),
+        safety_code: person.safety_code(),
+    })
 }
 
 #[derive(serde::Serialize)]
@@ -504,7 +536,7 @@ pub(crate) async fn co_member_invite(
         .issue_invite(ws)
         .map_err(|e| format!("Only a workspace Admin can invite people ({e})."))?;
     let invite = encode_workspace_invite(&sign_invite(&state, with_epoch_keys(&state, WorkspaceConn { inv: Some(inv.to_string()), ..conn })));
-    let delivered = deliver_invite(&state, &person, &invite).await;
+    let delivered = deliver_invite(&state, &person, &plan, &invite).await == Delivery::Delivered;
     Ok(CoMemberInviteDto {
         invite,
         name: person.display_name.clone(),
@@ -655,56 +687,151 @@ pub(crate) async fn ensure_contact(state: &AppState) -> bool {
     announced.is_some()
 }
 
-/// Drop an invite into a co-member's box, sealed to their verified devices,
-/// through the relay of the workspace their contact id was seen in. `false`
-/// when they have no contact, their relay has no contact routes, or the
-/// drop failed: the caller shows the link instead.
-async fn deliver_invite(state: &AppState, person: &CoMember, invite: &str) -> bool {
-    let Ok(plan) = person.seal_plan() else { return false };
-    let Some((cid, ws)) = person.contact.clone() else { return false };
+/// Drop an invite into a co-member's box, sealed to `plan` (their verified
+/// devices), through the relay of the workspace their contact id was seen
+/// in ([`dm_delivery::drop_to_box`], shared with `ligus serve`). `NotYet`
+/// when they have no contact, their relay has no contact routes, their
+/// record isn't theirs, or the drop failed: the caller shows the link (and
+/// holds a DM's invite for a retry).
+async fn deliver_invite(state: &AppState, person: &CoMember, plan: &SealPlan, invite: &str) -> Delivery {
+    let Some((cid, ws)) = person.contact.clone() else { return Delivery::NotYet("no contact id for them yet".into()) };
     let relay = {
         let s = state.settings.lock().unwrap();
         s.workspaces.iter().find(|w| w.id() == ws).map(|w| w.relay_url.trim().to_string()).filter(|r| !r.is_empty())
     };
-    let Some(relay) = relay else { return false };
+    let Some(relay) = relay else { return Delivery::NotYet("no relay for their contact".into()) };
     // The drop box must be theirs: their record at that cid verifies under
     // the account key the shared logs register for them, is no older than
     // the newest one seen for it, and lists a device not revoked (S4). A cid
     // someone else stamped, or a relay serving a stale record, gets nothing.
     let client = state.relay_client(&relay);
-    let record = match client.contact_get(&cid).await {
-        Ok(Some(r)) => r.record,
-        Ok(None) => return false,
-        Err(e) => {
-            tracing::info!(target: "contacts", error = %e, "contact record not readable; share the link");
-            return false;
-        }
-    };
-    let checked = {
+    let out = dm_delivery::drop_to_box(&client, &cid, person, plan, invite, |record| {
         let svc = state.service.lock().unwrap();
-        contacts::accept_contact_record(svc.store(), &cid, &record, person.fingerprint.as_deref(), &|d| {
+        contacts::accept_contact_record(svc.store(), &cid, record, person.fingerprint.as_deref(), &|d| {
             person.revoked_devices.contains(&d)
         })
-    };
-    match checked {
-        Ok(v) if v.anchored && v.account_id == person.account_id => {}
-        Ok(_) => {
-            tracing::warn!(target: "contacts", "a co-member's contact id holds someone else's record; not delivering");
-            return false;
+    })
+    .await;
+    if let Delivery::NotYet(why) = &out {
+        tracing::info!(target: "contacts", reason = %why, "invite not delivered to the drop box yet");
+    }
+    out
+}
+
+// ── Held DM invites (hive_runtime::dm_delivery) ───────────────────────────
+
+/// This device's held DM invites, one store per data dir.
+fn held(state: &AppState) -> std::sync::Arc<HeldInvites> {
+    static STORES: std::sync::OnceLock<std::sync::Mutex<BTreeMap<std::path::PathBuf, std::sync::Arc<HeldInvites>>>> =
+        std::sync::OnceLock::new();
+    let mut m = STORES.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    m.entry(state.data_dir.clone()).or_insert_with(|| std::sync::Arc::new(HeldInvites::for_data_dir(&state.data_dir))).clone()
+}
+
+/// Wakes the held-invite loop.
+static HELD_KICK: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// Hold a DM invite that couldn't be delivered yet, sealed to this device's
+/// key-agreement key. `None` when it can't be held (no key, too many
+/// waiting): the link is the way.
+fn hold_invite(state: &AppState, ws: Uuid, person: &CoMember, plan: &SealPlan, invite: &str) -> Option<dm_delivery::HeldInvite> {
+    let ka = ka_keypair(state)?;
+    match held(state).hold(ws, person, plan, invite, &ka.public_key_bytes(), unix_now()) {
+        Ok(h) => {
+            HELD_KICK.notify_one();
+            Some(h)
         }
         Err(e) => {
-            tracing::warn!(target: "contacts", error = %e, "contact record refused; share the link");
-            return false;
+            tracing::warn!(target: "contacts", error = %e, "a DM invite can't wait for delivery; share the link");
+            None
         }
     }
-    let Ok(blob) = contacts::seal_drop(invite.as_bytes(), &plan.recipients) else { return false };
-    match client.contact_drop(&cid, &blob).await {
-        Ok(()) => true,
-        Err(e) => {
-            tracing::info!(target: "contacts", error = %e, "invite not delivered to the drop box; share the link");
-            false
+}
+
+/// [`dm_delivery::Host`] for the desktop.
+struct DesktopHost<'a>(&'a AppState);
+
+impl dm_delivery::Host for DesktopHost<'_> {
+    fn co_members(&self) -> Vec<CoMember> {
+        co_members_of(self.0)
+    }
+    fn dm_exists(&self, ws: Uuid) -> bool {
+        let s = self.0.settings.lock().unwrap();
+        s.workspaces.iter().any(|w| w.id() == ws && w.dm_account.is_some() && !s.archived_dms.contains(&w.room))
+    }
+    fn own_ka(&self) -> Option<hive_core::e2ee::KeyAgreementKeypair> {
+        ka_keypair(self.0)
+    }
+    fn deliver(&self, person: &CoMember, plan: &SealPlan, invite: &str) -> impl std::future::Future<Output = Delivery> + Send {
+        deliver_invite(self.0, person, plan, invite)
+    }
+}
+
+/// While one waits, look every few seconds (co-members come from the
+/// synced logs, so a contact id or a join that arrived is seen at the next
+/// pass); otherwise only check now and then for a new one.
+const HELD_EVERY: std::time::Duration = std::time::Duration::from_secs(3);
+const HELD_IDLE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Deliver held DM invites once their peer's contact id is known; emits
+/// `dm-invite-changed` (`{workspaceId, inviteDelivery}`) for each change.
+pub(crate) async fn run_held_dm_loop(app: tauri::AppHandle) {
+    use tauri::{Emitter, Manager};
+    loop {
+        let state = app.state::<AppState>();
+        let store = held(&state);
+        let changed = dm_delivery::run_pass(&DesktopHost(&state), &store, unix_now()).await;
+        for h in &changed {
+            let _ = app.emit("dm-invite-changed", serde_json::json!({ "workspaceId": h.workspace_id, "inviteDelivery": h.status_json() }));
+        }
+        let wait = if store.any_open() { HELD_EVERY } else { HELD_IDLE };
+        tokio::select! {
+            _ = tokio::time::sleep(wait) => {}
+            _ = HELD_KICK.notified() => {}
         }
     }
+}
+
+fn held_ws(state: &AppState, workspace_id: &str) -> Result<Uuid, String> {
+    let ws = Uuid::parse_str(workspace_id.trim()).map_err(map_err)?;
+    held(state).get(ws).map(|_| ws).ok_or_else(|| "no invite waits for delivery in this DM".to_string())
+}
+
+/// The held invite's link, to share by hand while it waits.
+#[tauri::command]
+pub(crate) fn held_dm_invite(state: State<AppState>, workspace_id: String) -> Result<String, String> {
+    let ws = held_ws(&state, &workspace_id)?;
+    let ka = ka_keypair(&state).ok_or("this device has no key-agreement key")?;
+    held(&state)
+        .open_invite(ws, &ka)
+        .map(|z| z.to_string())
+        .ok_or_else(|| "The invite no longer waits here (delivered, joined or expired).".to_string())
+}
+
+/// After the unverified-recipient warning (their keys changed since the DM
+/// was opened): deliver to their current verified devices. `safety_code` is
+/// the code the opener compared; refused unless it is theirs now.
+#[tauri::command]
+pub(crate) fn confirm_dm_invite(state: State<AppState>, workspace_id: String, safety_code: String) -> Result<serde_json::Value, String> {
+    let ws = held_ws(&state, &workspace_id)?;
+    let store = held(&state);
+    let account = store.get(ws).map(|h| h.account_id).ok_or("no invite waits for delivery in this DM")?;
+    let person = co_members_of(&state)
+        .into_iter()
+        .find(|c| c.account_id == account)
+        .ok_or("You no longer share a workspace with them.")?;
+    let h = store.confirm(ws, &person, &safety_code, unix_now())?;
+    HELD_KICK.notify_one();
+    Ok(h.status_json())
+}
+
+/// Stop waiting (share the link instead); the sealed invite is forgotten.
+#[tauri::command]
+pub(crate) fn dismiss_dm_invite(state: State<AppState>, workspace_id: String) -> Result<Option<serde_json::Value>, String> {
+    let ws = held_ws(&state, &workspace_id)?;
+    let store = held(&state);
+    store.dismiss(ws);
+    Ok(store.get(ws).map(|h| h.status_json()))
 }
 
 #[derive(serde::Serialize, Clone)]

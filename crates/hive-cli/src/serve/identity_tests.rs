@@ -33,6 +33,10 @@ struct Contacts {
     seq: u64,
     /// Every header a contact route saw (to check what the box sends).
     auth_seen: Vec<String>,
+    /// While set, record writes fail (503): no box gets a contact id.
+    hold_records: bool,
+    /// cid → every drop ever posted (acks don't lower it).
+    posted: HashMap<String, usize>,
 }
 
 type C = Arc<Mutex<Contacts>>;
@@ -45,6 +49,9 @@ async fn put_rec(State(c): State<C>, Path(cid): Path<String>, h: HeaderMap, Json
     let mut c = c.lock().unwrap();
     if let Some(a) = h.get("authorization").and_then(|v| v.to_str().ok()) {
         c.auth_seen.push(a.to_string());
+    }
+    if c.hold_records {
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({})));
     }
     let key = key_of(&h);
     let created = match c.records.get(&cid) {
@@ -75,6 +82,7 @@ async fn post_drop(State(c): State<C>, Path(cid): Path<String>, Json(b): Json<Va
     }
     c.seq += 1;
     let seq = c.seq;
+    *c.posted.entry(cid.clone()).or_default() += 1;
     c.drops.entry(cid).or_default().push((seq, b["blob"].clone()));
     StatusCode::OK
 }
@@ -221,8 +229,15 @@ async fn two_boxes_with(b_ntfy: Option<ntfy::Ntfy>) -> (Box_, Box_, C, tempfile:
 }
 
 async fn two_boxes_opts(b_ntfy: Option<ntfy::Ntfy>, b_opts: impl FnOnce(&mut ServeOptions)) -> (Box_, Box_, C, tempfile::TempDir) {
+    two_boxes_on(spawn_relay().await, b_ntfy, b_opts).await
+}
+
+async fn two_boxes_on(
+    (relay, contacts): (String, C),
+    b_ntfy: Option<ntfy::Ntfy>,
+    b_opts: impl FnOnce(&mut ServeOptions),
+) -> (Box_, Box_, C, tempfile::TempDir) {
     let tmp = tempfile::tempdir().unwrap();
-    let (relay, contacts) = spawn_relay().await;
     let room = format!("id-test-{}", Uuid::new_v4());
     let a = Box_::start(cfg_for(&tmp.path().join("a"), &relay, &room, Some("ws-passphrase".into())), "Ada").await;
     let inv = a.post("/v1/invites", json!({})).await;
@@ -813,4 +828,82 @@ async fn invite_secrets_never_over_plain_http() {
     })
     .await;
     assert!(again.get("invite").is_none_or(Value::is_null), "{again}");
+}
+
+/// A DM opened before this box knows the peer's contact id: the invite is
+/// held (sealed, on the box), reported as pending, and delivered once, only
+/// once, when the id arrives.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dm_invite_held_until_the_contact_id_arrives_and_delivered_once() {
+    let (relay, contacts) = spawn_relay().await;
+    contacts.lock().unwrap().hold_records = true;
+    let (a, b, contacts, _tmp) = two_boxes_on((relay, contacts), None, |_| {}).await;
+    let b_acc = b.account();
+    know_each_other(&a, &b).await;
+    assert!(
+        a.handle.shared.co_members().iter().any(|c| c.account_id == b_acc && c.contact.is_none()),
+        "B has no contact id yet"
+    );
+
+    // Opened now: not delivered, but held.
+    let opened = a.post("/v1/dms", json!({ "accountId": b_acc.to_string() })).await;
+    assert_eq!(opened["delivered"], json!(false), "{opened}");
+    assert_eq!(opened["pending"], json!(true), "{opened}");
+    assert_eq!(opened["inviteDelivery"]["state"], json!("waiting"), "{opened}");
+    let invite = opened["invite"].as_str().unwrap().to_string();
+    let ws = opened["workspaceId"].as_str().unwrap().to_string();
+    let row = a.get("/v1/dms").await["dms"].as_array().unwrap().iter().find(|d| d["workspaceId"] == json!(ws)).unwrap().clone();
+    assert_eq!(row["inviteDelivery"]["pending"], json!(true), "{row}");
+
+    // At rest: the held list and its secret hold no part of the invite.
+    let a_dir = a.handle.shared.cfg.data_dir.clone();
+    let mut held_files = vec![a_dir.join("held-dm-invites.json")];
+    held_files.extend(std::fs::read_dir(a_dir.join("secrets").join("dm-invite")).unwrap().flatten().map(|e| e.path()));
+    assert_eq!(held_files.len(), 2, "{held_files:?}");
+    let conn = InviteConn::decode(&invite).unwrap();
+    for f in &held_files {
+        let text = String::from_utf8_lossy(&std::fs::read(f).unwrap()).to_string();
+        for needle in [invite.as_str(), "hivews1:", conn.key.as_deref().unwrap(), conn.room.as_str()] {
+            assert!(!text.contains(needle), "{} holds part of the invite", f.display());
+        }
+    }
+
+    // B's relay takes records again: B publishes, announces, A learns the
+    // id and delivers. B finds it in its drop box.
+    contacts.lock().unwrap().hold_records = false;
+    let b2 = &b;
+    let pending = until(&[&a, &b], 60, async || {
+        let p = b2.get("/v1/invites/pending").await;
+        (p["invites"].as_array().map(Vec::len) == Some(1)).then_some(p)
+    })
+    .await;
+    assert_eq!(pending["invites"][0]["isDm"], json!(true));
+    assert_eq!(pending["invites"][0]["acceptable"], json!(true), "{pending}");
+    let a2 = &a;
+    let delivered = until(&[&a, &b], 30, async || {
+        let d = a2.get("/v1/dms").await;
+        let row = d["dms"].as_array()?.iter().find(|r| r["workspaceId"] == json!(ws))?.clone();
+        (row["inviteDelivery"]["state"] == json!("delivered")).then_some(row)
+    })
+    .await;
+    assert_eq!(delivered["inviteDelivery"]["delivered"], json!(true));
+    assert_eq!(delivered["inviteDelivery"]["pending"], json!(false));
+
+    // Never twice: more passes, B accepts, more passes.
+    for _ in 0..5 {
+        a.handle.shared.held_kick.notify_one();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let inv = &pending["invites"][0];
+    let accepted = b.post("/v1/invites/pending/accept", json!({ "relay": inv["relay"], "seq": inv["seq"] })).await;
+    assert_eq!(accepted["workspaceId"], json!(ws));
+    for _ in 0..5 {
+        a.kick();
+        a.handle.shared.held_kick.notify_one();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let c = contacts.lock().unwrap();
+    assert_eq!(c.posted.values().sum::<usize>(), 1, "one drop in all: {:?}", c.posted);
+    drop(c);
+    assert!(!a_dir.join("secrets").join("dm-invite").read_dir().unwrap().any(|_| true), "the sealed invite is forgotten once delivered");
 }

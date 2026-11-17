@@ -358,6 +358,10 @@ pub struct Shared {
     pub dm_kick: Notify,
     /// One contact publish or drop-box read at a time.
     pub contact_lock: tokio::sync::Mutex<()>,
+    /// DM invites waiting for the peer's contact id (`hive_runtime::dm_delivery`).
+    pub held: hive_runtime::dm_delivery::HeldInvites,
+    /// Wakes the held-invite loop (after a pull, or a new held invite).
+    pub held_kick: Notify,
     /// The last contacts status (`contacts_api::status`).
     pub contact_state: Mutex<String>,
     /// Drop-box invites from the last listing (codes stay on the box).
@@ -1068,6 +1072,8 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         dms: dms::DmStore::load(&cfg.data_dir),
         dm_kick: Notify::new(),
         contact_lock: tokio::sync::Mutex::new(()),
+        held: hive_runtime::dm_delivery::HeldInvites::for_data_dir(&cfg.data_dir),
+        held_kick: Notify::new(),
         contact_state: Mutex::new("unknown".into()),
         pending_codes: identity_api::PendingCodes::default(),
         typing: typing_api::Typing::default(),
@@ -1111,6 +1117,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         tasks.push(tokio::spawn(contact_loop(shared.clone(), rx.clone())));
     }
     tasks.push(tokio::spawn(dms::dm_sync_loop(shared.clone(), rx.clone())));
+    tasks.push(tokio::spawn(contacts_api::held_loop(shared.clone(), rx.clone())));
     tasks.push(tokio::spawn(typing_api::typing_loop(shared.clone(), rx.clone())));
     tasks.push(tokio::spawn(token_watch(shared.clone(), rx.clone())));
     if let Some(t) = shared.tunnel.clone() {
@@ -1235,6 +1242,8 @@ async fn sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
                     shared.revoke_phones_of_revoked_devices();
                     shared.refresh();
                     shared.worker_kick.notify_one();
+                    // A peer's contact id may have arrived: deliver what waits.
+                    shared.held_kick.notify_one();
                 }
                 if engine.is_behind() {
                     // Mid catch-up (a large room): next round of pages now.

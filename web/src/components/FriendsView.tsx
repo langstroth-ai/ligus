@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   identityLinkStatuses,
@@ -13,9 +13,16 @@ import {
   joinDm,
   joinWorkspace,
   setActiveWorkspace,
+  heldDmInvite,
+  confirmDmInvite,
+  dismissDmInvite,
+  onDmInviteChanged,
   type CoMemberDto,
+  type DmDto,
+  type InviteDelivery,
   type InviteInfoDto,
 } from "@/lib/ipc";
+import { confirmDialog } from "@/components/Dialog";
 import { toast, errMsg } from "@/components/Toast";
 import { Avatar } from "@/components/Avatar";
 import { IconUsers } from "@/lib/icons";
@@ -71,11 +78,43 @@ export function contactsNote(status: string | undefined): string | null {
   }
 }
 
+/// What a DM's held invite means, in words (null when nothing waits).
+/// Exported for unit testing.
+export function inviteDeliveryNote(d: InviteDelivery | null | undefined, name: string): string | null {
+  if (!d) return null;
+  switch (d.state) {
+    case "waiting":
+    case "sending":
+      return `Your invite will be delivered when ${name}'s device is reachable. You can also send them the link yourself.`;
+    case "warning":
+      return `${name}'s keys changed since you opened this DM, so the invite wasn't sent. Compare safety codes, then deliver it to their current devices or send the link yourself.`;
+    case "delivered":
+      return `${name} got your invite.`;
+    case "expired":
+      return `Your invite wasn't delivered within 7 days. If you kept the link, send it to ${name}; otherwise ask them to open a DM with you.`;
+    default:
+      return null;
+  }
+}
+
 /// A link to hand over, shown when an invite couldn't be delivered in the app.
-function LinkBox({ title, link, code, onClose }: { title: string; link: string; code: string | null; onClose: () => void }) {
+function LinkBox({
+  title,
+  link,
+  code,
+  note,
+  onClose,
+}: {
+  title: string;
+  link: string;
+  code: string | null;
+  note?: string | null;
+  onClose: () => void;
+}) {
   return (
     <div className="rounded-2xl border p-4 text-sm" style={{ borderColor: "var(--hive-accent-cool)", background: "var(--hive-panel)" }}>
       <div className="font-semibold">{title}</div>
+      {note && <p className="mt-1 text-xs">{note}</p>}
       <p className="mt-1 text-xs text-ink-soft">
         Send this link over a channel you trust. It works once. They will see your safety code; if they ask, read it to
         them{code ? <>. Theirs is <code className="font-mono">{code}</code></> : null}.
@@ -116,7 +155,22 @@ export function FriendsView({
   const dms = useQuery({ queryKey: ["dms"], queryFn: listDms, refetchInterval: 30_000 });
   const workspaces = useQuery({ queryKey: ["workspaces"], queryFn: listWorkspaces });
   const pending = useQuery({ queryKey: ["pending-invites"], queryFn: listPendingInvites, refetchInterval: 20_000 });
-  const [link, setLink] = useState<{ title: string; link: string; code: string | null } | null>(null);
+  const [link, setLink] = useState<{ title: string; link: string; code: string | null; note?: string | null } | null>(null);
+
+  // A held DM invite was delivered (or expired, or needs a decision).
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    void onDmInviteChanged((e) => {
+      void qc.invalidateQueries({ queryKey: ["dms"] });
+      if (e.inviteDelivery.state === "delivered") {
+        const name = dms.data?.find((d) => d.workspaceId === e.workspaceId)?.name ?? "They";
+        toast.success(`${name} got your DM invite.`);
+      }
+    })
+      .then((u) => (off = u))
+      .catch(() => {});
+    return () => off?.();
+  }, [qc, dms.data]);
   const [paste, setPaste] = useState("");
   const [info, setInfo] = useState<InviteInfoDto | null>(null);
 
@@ -131,7 +185,12 @@ export function FriendsView({
       const r = await openDm(p.accountId);
       await afterJoin();
       if (r.invite && !r.delivered) {
-        setLink({ title: `Your DM with ${p.displayName}`, link: r.invite, code: r.safetyCode });
+        setLink({
+          title: `Your DM with ${p.displayName}`,
+          link: r.invite,
+          code: r.safetyCode,
+          note: r.pending ? inviteDeliveryNote(r.inviteDelivery, p.displayName) : null,
+        });
       } else {
         if (r.delivered) toast.success(`${p.displayName} got your invite.`);
         onOpenDm?.();
@@ -189,6 +248,45 @@ export function FriendsView({
       await setActiveWorkspace(workspaceId);
       await afterJoin();
       onOpenDm?.();
+    } catch (e) {
+      toast.error(errMsg(e));
+    }
+  }
+
+  async function shareHeld(d: DmDto) {
+    try {
+      const l = await heldDmInvite(d.workspaceId);
+      setLink({ title: `Your DM with ${d.name}`, link: l, code: d.safetyCode, note: inviteDeliveryNote(d.inviteDelivery, d.name) });
+    } catch (e) {
+      toast.error(errMsg(e));
+    }
+  }
+
+  async function deliverAnyway(d: DmDto) {
+    // Bound to the code shown here: the host refuses it if theirs changed
+    // again before the click.
+    const code = d.safetyCode;
+    if (!code) {
+      toast.error(`${d.name} has no safety code to compare yet; send the link yourself.`);
+      return;
+    }
+    const ok = await confirmDialog(
+      `${d.inviteDelivery?.warning ?? "Their keys changed."} Deliver the invite to ${d.name}'s current devices only if their safety code still matches what they tell you (${code}).`,
+      { title: "Unverified recipient", confirmLabel: "Deliver anyway", danger: true },
+    );
+    if (!ok) return;
+    try {
+      await confirmDmInvite(d.workspaceId, code);
+      await qc.invalidateQueries({ queryKey: ["dms"] });
+    } catch (e) {
+      toast.error(errMsg(e));
+    }
+  }
+
+  async function stopWaiting(d: DmDto) {
+    try {
+      await dismissDmInvite(d.workspaceId);
+      await qc.invalidateQueries({ queryKey: ["dms"] });
     } catch (e) {
       toast.error(errMsg(e));
     }
@@ -255,24 +353,49 @@ export function FriendsView({
       {(dms.data?.length ?? 0) > 0 && (
         <section className="flex flex-col gap-2">
           <h2 className="text-[11px] font-semibold uppercase tracking-wider text-ink-soft">Direct messages</h2>
-          {dms.data!.map((d) => (
-            <button
-              key={d.workspaceId}
-              onClick={() => void openExistingDm(d.workspaceId)}
-              className="flex items-center justify-between rounded-lg border px-3 py-2 text-left"
-              style={{ borderColor: "var(--hive-line)", background: "var(--hive-panel)" }}
-            >
-              <span className="flex items-center gap-2 text-sm">
-                <Avatar name={d.name} url={d.avatarUrl} kind="human" size={22} />
-                {d.name}
-              </span>
-              {d.archived.length > 0 && (
-                <span className="text-[11px] text-ink-soft" title="You both opened a DM at the same time; the older one was kept">
-                  +{d.archived.length} archived
-                </span>
-              )}
-            </button>
-          ))}
+          {dms.data!.map((d) => {
+            const note = d.inviteDelivery?.pending || d.inviteDelivery?.state === "expired" ? inviteDeliveryNote(d.inviteDelivery, d.name) : null;
+            const warn = d.inviteDelivery?.state === "warning";
+            return (
+              <div key={d.workspaceId} className="flex flex-col gap-1">
+                <button
+                  onClick={() => void openExistingDm(d.workspaceId)}
+                  className="flex items-center justify-between rounded-lg border px-3 py-2 text-left"
+                  style={{ borderColor: warn ? "var(--hive-danger-ink)" : "var(--hive-line)", background: "var(--hive-panel)" }}
+                >
+                  <span className="flex items-center gap-2 text-sm">
+                    <Avatar name={d.name} url={d.avatarUrl} kind="human" size={22} />
+                    {d.name}
+                  </span>
+                  {d.archived.length > 0 && (
+                    <span className="text-[11px] text-ink-soft" title="You both opened a DM at the same time; the older one was kept">
+                      +{d.archived.length} archived
+                    </span>
+                  )}
+                </button>
+                {note && (
+                  <div className="flex flex-wrap items-center gap-2 px-3 text-[11px]" style={{ color: warn ? "var(--hive-danger-ink)" : undefined }}>
+                    <span className={warn ? "" : "text-ink-soft"}>{note}</span>
+                    {d.inviteDelivery?.pending && (
+                      <>
+                        <button className="underline" onClick={() => void shareHeld(d)}>
+                          Share link
+                        </button>
+                        {warn && (
+                          <button className="underline" onClick={() => void deliverAnyway(d)}>
+                            Deliver anyway
+                          </button>
+                        )}
+                        <button className="opacity-60 hover:opacity-100" onClick={() => void stopWaiting(d)}>
+                          Stop waiting
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </section>
       )}
 

@@ -59,6 +59,42 @@ only ever sees ciphertext.
   then the smaller room id) and archive the other; the archived one stays
   readable and is linked from the one you keep.
 
+### When their device isn't reachable yet
+
+The DM's invite is dropped into the other person's contact box (below). Right
+after someone joins a workspace you share, your device often knows their keys
+but not their contact id yet, so the drop can't happen. Ligus then **holds the
+invite** and delivers it on its own once their contact id reaches you (it
+rides their next sync of a workspace you share). The DM list shows **Your
+invite will be delivered when <name>'s device is reachable**, with **Share
+link** to send it yourself meanwhile and **Stop waiting**. Once delivered,
+the line says they got it.
+
+- **Sealed at rest.** The held invite is sealed to your device's own
+  key-agreement key and kept in the device's secret store. The list of held
+  invites (`held-dm-invites.json` in the data dir) holds no secret.
+- **Sent once.** Each held invite is marked as sending on disk before it is
+  dropped, so a second pass, a restart or a crash never sends it again. If
+  they already joined from a link you shared yourself, it is never sent.
+- **Their keys are checked again.** At delivery the invite goes only to
+  device keys their account signed on your shared workspaces' logs, and only
+  to devices you had when you opened the DM, under the same account key. If
+  their account key changed, the workspaces you share disagree about it, or a
+  device key appeared that you didn't have then, nothing is sent: the DM
+  list shows the unverified-recipient warning. Compare safety codes, then
+  **Deliver anyway** (to their current verified devices) or share the link.
+  Deliver anyway is tied to the safety code it showed you: if their key
+  changes again before you click, it is refused and you compare again. A
+  device revoked since, even during a delivery pass, is left out.
+- **Bounded.** At most 20 invites wait at once, and each waits 7 days. An
+  invite link has no expiry of its own (it is single-use), so the 7 days are
+  the delivery's: after that the held copy is forgotten and you send the link
+  yourself if you kept it, or they open a DM with you.
+
+The desktop and `ligus serve` run the same code for this. On a box the phone
+sees `pending` and a later `inviteDelivery` (see the
+[serve API](../reference/serve-api.md)).
+
 ## Contacts (relay v0.3)
 
 Each of your devices keeps a **contact** on its relays: a random id and a

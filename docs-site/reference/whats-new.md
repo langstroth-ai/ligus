@@ -9,6 +9,15 @@ Full release notes are on the
 
 ## 2.0
 
+- **A DM invite waits for their device.** Opening a DM with someone whose
+  contact id your device doesn't know yet (often right after they joined, or
+  from the phone) used to hand you a link and never try again. Ligus now
+  holds the invite, sealed to your device's key, and delivers it once their
+  contact id arrives: once, only to the devices you had when you opened the
+  DM (a changed key shows the unverified-recipient warning instead), for up
+  to 7 days. The DM list says it will be delivered when their device is
+  reachable, with the link as a fallback. See
+  [People, contacts & DMs](../features/collaborators.md#when-their-device-isnt-reachable-yet).
 - **Agents can't lend a turn authority.** A turn an agent starts (a
   hand-off, an @mention cascade, a workflow stage) runs at the lowest role
   of the humans who started the chain, on every host. Before, an agent's
