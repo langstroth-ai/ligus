@@ -1749,7 +1749,7 @@ fn a_watermark_covers_only_the_chain_it_names() {
     let first = w.chat_push("mara", message("mara", "one"));
     let second = w.chat_push("mara", message("mara", "two"));
     // The remover held only `first`.
-    let wm = vec![hive_core::watermark::Watermark { signer: device_of("mara").0, log: w.sid, heads: vec![first] }];
+    let wm = vec![hive_core::watermark::Watermark { signer: device_of("mara").0, log: w.sid, heads: vec![first], gaps: vec![] }];
     w.cfg_push_raw("owner", SessionEvent::MemberRemoved { member_id: "mara".into(), watermark: wm });
     // A forged event that names `first` as its prev: a fork, not an ancestor.
     let old = w.back(6);

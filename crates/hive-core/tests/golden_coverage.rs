@@ -151,7 +151,8 @@ fn cases() -> Vec<(&'static str, Uuid, SessionEvent)> {
     let cfg = hive_core::workspace_config_session_id(ws);
     let chat = u(3);
     let acct_kp = SigningKeypair::from_seed(&[0x6b; 32]).unwrap();
-    let wm = vec![Watermark { signer: u(0x51), log: chat, heads: vec![u(0x61), u(0x62)] }];
+    let wm = vec![Watermark { signer: u(0x51), log: chat, heads: vec![u(0x61), u(0x62)], gaps: vec![] }];
+    let wm_gaps = vec![Watermark { signer: u(0x51), log: chat, heads: vec![u(0x61)], gaps: vec![u(0x63)] }];
     let repo = WorkspaceRepo {
         id: repo_id("github.com/zazulam/wefit"),
         canonical: "github.com/zazulam/wefit".into(),
@@ -267,6 +268,7 @@ fn cases() -> Vec<(&'static str, Uuid, SessionEvent)> {
         ("deviceCertificateAdded/phone-p256", cfg, SessionEvent::DeviceCertificateAdded {
             certificate: DeviceCertificate::issue_p256(&acct_kp, u(9), u(0x52), &hive_core::crypto::p256_public_key(&phone_key), Timestamp::epoch()),
         }),
+        ("memberRemoved/watermark-gaps", cfg, SessionEvent::MemberRemoved { member_id: u(9).to_string(), watermark: wm_gaps }),
     ]
 }
 

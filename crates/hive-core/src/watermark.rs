@@ -42,6 +42,12 @@ pub struct Watermark {
     /// The log (session id).
     pub log: Uuid,
     pub heads: Vec<Uuid>,
+    /// The ids the signer's held events name as `prev` that the author did
+    /// not hold. Coverage stops there: an id a member names but never
+    /// publishes is not a covered slot they can fill after the cut (review
+    /// P-A2c). Left out when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gaps: Vec<Uuid>,
 }
 
 /// At most this many entries in one watermark (a removal event stays small:
@@ -66,11 +72,15 @@ impl Chains {
     }
 
     /// Every event of `signer` reachable back from `heads` through `prev`
-    /// links (heads included), staying on that signer's events.
-    pub fn ancestors(&self, signer: Uuid, heads: &[Uuid]) -> BTreeSet<Uuid> {
+    /// links (heads included), staying on that signer's events and never
+    /// entering one of `gaps` (an id the watermark's author didn't hold).
+    pub fn ancestors(&self, signer: Uuid, heads: &[Uuid], gaps: &[Uuid]) -> BTreeSet<Uuid> {
         let mut out = BTreeSet::new();
-        let mut stack: Vec<Uuid> = heads.to_vec();
+        let mut stack: Vec<Uuid> = heads.iter().filter(|h| !gaps.contains(h)).copied().collect();
         while let Some(id) = stack.pop() {
+            if gaps.contains(&id) {
+                continue;
+            }
             let Some((s, prev)) = self.links.get(&id) else { continue };
             if *s != Some(signer) || !out.insert(id) {
                 continue;
@@ -85,7 +95,12 @@ impl Chains {
 
 /// The heads of every signer in `signers` on one log: their events no other
 /// event of the same signer names as `prev` (what a watermark records).
+///
+/// Each entry also lists its gaps: the `prev` ids its signer's events name
+/// that aren't on the log here. An entry with more than [`MAX_HEADS`] gaps
+/// is left out (it covers nothing: fail closed).
 pub fn heads_of(envelopes: &[SessionEventEnvelope], log: Uuid, signers: &BTreeSet<Uuid>) -> Vec<Watermark> {
+    let held: BTreeSet<Uuid> = envelopes.iter().filter(|e| e.session_id == log).map(|e| e.event_id).collect();
     let mut by_signer: BTreeMap<Uuid, (BTreeSet<Uuid>, BTreeSet<Uuid>)> = BTreeMap::new();
     for e in envelopes.iter().filter(|e| e.session_id == log) {
         let Some(s) = e.signer_device_id.filter(|s| signers.contains(s)) else { continue };
@@ -97,10 +112,11 @@ pub fn heads_of(envelopes: &[SessionEventEnvelope], log: Uuid, signers: &BTreeSe
     }
     by_signer
         .into_iter()
-        .map(|(signer, (all, named))| {
+        .filter_map(|(signer, (all, named))| {
             let mut heads: Vec<Uuid> = all.difference(&named).copied().collect();
             heads.truncate(MAX_HEADS);
-            Watermark { signer, log, heads }
+            let gaps: Vec<Uuid> = named.difference(&held).copied().collect();
+            (gaps.len() <= MAX_HEADS).then_some(Watermark { signer, log, heads, gaps })
         })
         .collect()
 }

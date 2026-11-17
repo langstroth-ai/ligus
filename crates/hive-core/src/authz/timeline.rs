@@ -509,7 +509,7 @@ impl Cut {
     pub fn covered(&self, log: Uuid, chains: &crate::watermark::Chains) -> BTreeSet<Uuid> {
         let mut out = BTreeSet::new();
         for w in self.watermark.iter().filter(|w| w.log == log) {
-            out.extend(chains.ancestors(w.signer, &w.heads));
+            out.extend(chains.ancestors(w.signer, &w.heads, &w.gaps));
         }
         out
     }

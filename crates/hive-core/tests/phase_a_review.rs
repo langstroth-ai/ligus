@@ -38,6 +38,37 @@ fn lamport_of(w: &SignedWorld, id: Uuid) -> u64 {
     w.cfg.iter().find(|e| e.event_id == id).unwrap().lamport
 }
 
+/// Claim 2: a member names, as their event's `prev`, an id they never
+/// publish. The remover's watermark reaches it through the chain, so after
+/// the removal the member publishes an event under that id (any content,
+/// any frontier) and it counts as covered. A watermark must cover only the
+/// events its author held.
+#[test]
+fn a_reserved_prev_id_is_not_a_covered_slot_after_removal() {
+    let mut w = SignedWorld::genesis(&["owner", "con"], None);
+    w.admit("owner", "con", WorkspaceRole::Contributor);
+    let chat = w.chat("owner", "c");
+    let old_frontier = w.head();
+    // Con's post names a reserved, never-published prev.
+    let reserved = Uuid::new_v4();
+    let mut env = w.draft("con", Some(chat), SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "con", "hi") }, None);
+    env.actor_stamp.as_mut().unwrap().prev = Some(reserved);
+    w.finish(&mut env, "con", None);
+    let honest = w.push_env(Some(chat), env);
+    let wm = honest_watermark(&w, "con");
+    let removal = w.push("owner", SessionEvent::MemberRemoved { member_id: "con".into(), watermark: wm });
+    assert_eq!(w.verdict(removal), Verdict::Allowed);
+    // After the removal: an event under the reserved id, backdated.
+    let mut late = w.draft("con", Some(chat), SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "con", "after removal") }, old_frontier);
+    late.event_id = reserved;
+    late.actor_stamp.as_mut().unwrap().prev = None;
+    w.finish(&mut late, "con", None);
+    let late = w.push_env(Some(chat), late);
+    let v = w.verdicts();
+    assert_eq!(v[&honest], Verdict::Allowed, "the post the remover held stands");
+    assert_eq!(v[&late], Verdict::Denied, "an event the remover never held is not covered");
+}
+
 /// Claim 8: a service member never satisfies a human gate. Answering an
 /// agent's question is one; the check reads only the stamp's self-declared
 /// kind, which the service's device signs itself.
