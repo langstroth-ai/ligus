@@ -15,7 +15,12 @@
 //!   (regex #"^<worktree>/(.*/)?[.][gG][iI][tT](/.*)?$") …)  ; each name, any depth, any case
 //! (deny file-read* file-write* (subpath "<data dir>") (subpath "~/.ssh") (literal "<serve.token>") …)
 //! (allow file-read* (subpath "<worktree>") <readable dirs inside a denied one>)
-//! (deny mach-lookup (global-name-prefix "com.apple.coreservices."))   ; no LaunchServices launches
+//! (deny mach-lookup (global-name-prefix "com.apple.coreservices.") (global-name "com.apple.runningboard"))
+//!                                                    ; no LaunchServices launches (not even suspended)
+//! (deny mach-lookup (xpc-service-name-regex #"."))   ; no bundled XPC services (launchd spawns them)
+//! (deny signal) (allow signal (target same-sandbox)) ; can't resume or kill outside processes
+//! (deny user-preference-write)                       ; no cfprefsd writes on the agent's behalf
+//! (deny mach-lookup (global-name-prefix "com.apple.siri."))  ; no `shortcuts run`
 //! (deny appleevent-send) (deny mach-lookup … "com.apple.pasteboard…")  ; no Apple Events, no pasteboard
 //! (deny network*)
 //! (allow network-outbound (remote ip "localhost:<proxy port>"))
@@ -149,7 +154,26 @@ pub fn profile(plan: &EnforcementPlan, proxy_port: Option<u16>) -> String {
     // launchd, and the launched app runs outside this profile (an agent could
     // write an app bundle into its worktree and `open` it to read the data
     // dir; `sandbox_denies_launchservices_escape`).
-    p.push_str("(deny mach-lookup (global-name-prefix \"com.apple.coreservices.\"))\n");
+    //
+    // Denying launchservicesd alone is not enough: `LSOpen*` asks RunningBoard
+    // to spawn the app *before* it checks in with launchservicesd, so the
+    // app is created (suspended, under launchd) and the open then fails; a
+    // `kill -CONT` from inside the turn would resume it unconfined. So:
+    // no RunningBoard (no LaunchServices spawn at all), no signals to
+    // processes outside this sandbox (nothing suspended out there can be
+    // resumed, and the user's own processes can't be killed), and no XPC
+    // service lookups (an XPC service embedded in a bundle the agent wrote
+    // is spawned by launchd, outside this profile).
+    p.push_str("(deny mach-lookup (global-name-prefix \"com.apple.coreservices.\") (global-name \"com.apple.runningboard\"))\n");
+    p.push_str("(deny mach-lookup (xpc-service-name-regex #\".\"))\n");
+    p.push_str("(deny signal)\n(allow signal (target same-sandbox))\n");
+    // No preference writes through cfprefsd: it writes the plist outside
+    // this profile (e.g. a Terminal profile's start-up command, run unconfined
+    // the next time the user opens Terminal). Reads still work.
+    p.push_str("(deny user-preference-write)\n");
+    // No Shortcuts (`shortcuts run` executes the user's shortcuts, which may
+    // run shell scripts, in a helper outside this profile).
+    p.push_str("(deny mach-lookup (global-name-prefix \"com.apple.siri.\"))\n");
     // C-13: no Apple Events to other apps (AppleScript driving Terminal or
     // Finder runs outside this profile), and no pasteboard (it can hold a
     // password or token the user just copied).
