@@ -157,6 +157,33 @@ protect the node, not serve's keys from the agent process next to them.
 - `deploy/helm/ligus/ci/security_test.py` and the relay's
   `helm_chart_test.go` check these properties on the rendered charts.
 
+## Where the relay runs {#where-the-relay-runs}
+
+Hosts in the cluster (serve and workers) only ever dial out to the relay. Pick
+one of three patterns. In all three, the relay URL is typed once, by whoever
+creates the workspace (on the desktop) or sets up the hosts (the chart's
+`relayUrl`), and then travels in every invite, so people who join never
+enter it.
+
+1. **External relay, nothing exposed.** The hosts dial out to a relay outside
+   the cluster: [the community relay](../networking/community-relay.md)
+   (`https://relay.langstroth.ai`, best-effort), or one you
+   [run elsewhere](../networking/self-host.md). Set `relayUrl` to it and leave
+   `relay.enabled=false`. The cluster needs egress to the relay and no
+   Ingress, Gateway or LoadBalancer at all.
+2. **In-cluster relay, public.** Install the `langstroth-relay` chart (below)
+   and expose it with an Ingress (`ingress.*`) or a Gateway API route
+   (`httpRoute.*`), with TLS and a DNS name such as `relay.example.com`.
+   Desktops and phones reach it over the internet; hosts in the cluster can
+   use the in-cluster Service (`langstroth-relay-sync`) or the public URL. The
+   relay chart's public-exposure guards apply; give it a token gate or
+   server-side membership.
+3. **In-cluster relay, private.** Install the relay chart without a public
+   route and reach it only over a VPN or a tailnet, for example by exposing
+   its Service with the Tailscale Kubernetes operator. Every device that syncs
+   must be on that network, and the URL in invites is the private one (a
+   tailnet name or VPN address), so it works only for people on it.
+
 ## Install
 
 Build the images yourself:

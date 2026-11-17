@@ -29,6 +29,7 @@ import { Button, Section, fieldStyle } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
 import { confirmThen } from "@/lib/confirm";
 import { OrgSignInSection } from "./OrgSignInSection";
+import { COMMUNITY_RELAY_URL } from "@/lib/communityRelay";
 
 /// Team sync: the relay connection (E2EE), organization sign-in, and direct
 /// peer (P2P) contacts. Connection fields write through on blur (D18).
@@ -109,10 +110,10 @@ function SyncSection() {
   // Write the whole connection record through on any field blur. Blank secret
   // fields map to null (keep existing); permissionMode is preserved untouched —
   // it now lives on the Permissions page.
-  async function commit() {
+  async function commit(over?: { relayUrl?: string }) {
     try {
       await updateConnectionSettings({
-        relayUrl,
+        relayUrl: over?.relayUrl ?? relayUrl,
         room,
         workspaceKey: workspaceKey === "" ? null : workspaceKey,
         apiKey: null,
@@ -232,7 +233,26 @@ function SyncSection() {
         className={inputClass}
         style={fieldStyle}
       />
-      <p className="text-xs text-ink-soft">Use the same relay URL on every device that should sync.</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="flex-1 text-xs text-ink-soft">Use the same relay URL on every device that should sync.</p>
+        {relayUrl.trim() !== COMMUNITY_RELAY_URL && (
+          <Button
+            size="sm"
+            onClick={() => {
+              setRelayUrl(COMMUNITY_RELAY_URL);
+              void commit({ relayUrl: COMMUNITY_RELAY_URL });
+            }}
+          >
+            Use the community relay
+          </Button>
+        )}
+      </div>
+      {relayUrl.trim() === COMMUNITY_RELAY_URL && (
+        <p className="text-xs text-ink-soft">
+          The community relay is free and best-effort: no uptime guarantee, and it may be reset with
+          notice. It sees only ciphertext. Self-host a relay for anything important.
+        </p>
+      )}
 
       <label className="block text-sm text-ink-soft">Relay access token</label>
       <div className="flex items-center gap-2">

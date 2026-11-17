@@ -249,6 +249,7 @@ nav:
           - Keys off the cluster (design): operate/deploy/keys-off-cluster.md
           - Multi-tenant (design): operate/deploy/multi-tenant.md
       - Relay & auth:
+          - The community relay: operate/networking/community-relay.md
           - Self-hosting a relay: operate/networking/self-host.md
           - Sign in with your IdP (langstroth-auth): operate/deploy/ligus-auth.md
           - langstroth-auth with Pocket ID: operate/deploy/ligus-auth-pocket-id.md

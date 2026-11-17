@@ -1200,8 +1200,10 @@ export const setWorkspaceIcon = (workspaceId: string, icon: string | null) =>
   invoke<void>("set_workspace_icon", { workspaceId, icon });
 
 /// Create a new team workspace (generates a room + E2EE key), switch to it.
-export const createWorkspace = (name: string) =>
-  invoke<WorkspaceInfoDto>("create_workspace", { name });
+/// `relayUrl`: the relay the creator picked ("" = none); omitted keeps the
+/// currently configured relay.
+export const createWorkspace = (name: string, relayUrl?: string) =>
+  invoke<WorkspaceInfoDto>("create_workspace", { name, relayUrl: relayUrl ?? null });
 
 /// Join a team workspace from an invite code (`hivews1:…`).
 export const joinWorkspace = (invite: string) =>

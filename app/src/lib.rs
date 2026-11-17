@@ -12765,10 +12765,18 @@ fn random_token(len: usize) -> String {
 /// the rail, switches to it, and (if a relay is configured) starts syncing it.
 /// Returns the new workspace; use `workspace_invite` to share it.
 #[tauri::command]
-fn create_workspace(state: State<AppState>, name: String) -> Result<WorkspaceInfoDto, String> {
+fn create_workspace(state: State<AppState>, name: String, relay_url: Option<String>) -> Result<WorkspaceInfoDto, String> {
     let display = name.trim();
     if display.is_empty() {
         return Err("workspace name can't be empty".to_string());
+    }
+    // The relay the creator picked (the community relay, their own, or none);
+    // None keeps the currently configured relay. Never a silent default.
+    let picked = relay_url.map(|u| u.trim().to_string());
+    if let Some(u) = picked.as_deref().filter(|u| !u.is_empty()) {
+        if invite_relay_problem(u).is_some() {
+            return Err(format!("{u} isn't a relay URL (expected an http(s) origin)"));
+        }
     }
     // This device is founding the workspace, so its account is the founder — pin
     // it in the invite so every joiner (and this device) selects this creator's
@@ -12789,10 +12797,10 @@ fn create_workspace(state: State<AppState>, name: String) -> Result<WorkspaceInf
         let room = random_token(32);
         let conn = WorkspaceConn {
             name: display.to_string(),
-            // Inherit the currently-configured relay so the new room syncs
-            // immediately; if none is set the workspace is created local-until a
-            // relay is added (Settings) or a peer is linked.
-            relay_url: s.relay_url.clone().unwrap_or_default(),
+            // The picked relay, else inherit the currently-configured one so
+            // the new room syncs immediately; with neither, the workspace is
+            // local until a relay is added (Settings) or a peer is linked.
+            relay_url: picked.clone().unwrap_or_else(|| s.relay_url.clone().unwrap_or_default()),
             room,
             key: Some(random_token(24)),
             icon: None,

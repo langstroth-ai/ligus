@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Onboarding } from "./Onboarding";
 import * as ipc from "@/lib/ipc";
+import { COMMUNITY_RELAY_URL } from "@/lib/communityRelay";
 
 // Mock the IPC boundary — this is what makes a full UI flow testable headlessly.
 vi.mock("@/lib/ipc", () => ({
@@ -256,8 +257,9 @@ describe("Onboarding wizard flow", () => {
     await clickByName("Next"); // runtime → step 4
     await screen.findByText("Team & sync");
 
-    // Choose "Connect to a relay", enter a URL, test → unauthorized.
-    await clickByName(/Connect to a relay/);
+    // Choose "Sync through a relay" → "Your own relay", enter a URL, test → unauthorized.
+    await clickByName(/Sync through a relay/);
+    await userEvent.click(screen.getByRole("radio", { name: /Your own relay/ }));
     await userEvent.type(
       screen.getByPlaceholderText(/Relay URL/),
       "https://relay.example",
@@ -273,4 +275,52 @@ describe("Onboarding wizard flow", () => {
     await screen.findByText("✓ Connected");
     expect(screen.getByRole("button", { name: "Next" })).toBeEnabled();
   });
+
+  async function toTeamStep() {
+    await screen.findByPlaceholderText("Your name");
+    await clickByName("Next"); // identity
+    await clickByName("Next"); // project
+    await screen.findByText("Choose your agent");
+    await clickByName("Next"); // agent (Claude Code)
+    await screen.findByText("Team & sync");
+  }
+
+  it("offers the community relay preselected, probes it and saves it", async () => {
+    render(<Onboarding onComplete={vi.fn()} />);
+    await toTeamStep();
+    expect(screen.getByRole("button", { name: /Just me \(no sync\)/ })).toBeTruthy();
+    await clickByName(/Sync through a relay/);
+    const community = screen.getByRole("radio", { name: /Community relay \(relay\.langstroth\.ai, best-effort\)/ });
+    expect(community.getAttribute("aria-checked")).toBe("true");
+    // No relay URL field for the community relay.
+    expect(screen.queryByLabelText("Relay URL")).toBeNull();
+    await clickByName("Test connection");
+    await waitFor(() => expect(ipc.probeRelayAt).toHaveBeenCalledWith(COMMUNITY_RELAY_URL, null));
+    await screen.findByText(/Connected/);
+    await clickByName("Next");
+    await screen.findByText("Make it yours");
+    expect(ipc.updateConnectionSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ relayUrl: COMMUNITY_RELAY_URL, relayAccessToken: "" }),
+    );
+  });
+
+  it("uses a typed URL and token for your own relay", async () => {
+    render(<Onboarding onComplete={vi.fn()} />);
+    await toTeamStep();
+    await clickByName(/Sync through a relay/);
+    await userEvent.click(screen.getByRole("radio", { name: /Your own relay/ }));
+    // Test connection waits for a URL.
+    expect((screen.getByRole("button", { name: "Test connection" }) as HTMLButtonElement).disabled).toBe(true);
+    await userEvent.type(screen.getByLabelText("Relay URL"), "https://relay.acme.example");
+    await userEvent.type(screen.getByPlaceholderText(/Access token/), "tok-1");
+    await clickByName("Test connection");
+    await waitFor(() => expect(ipc.probeRelayAt).toHaveBeenCalledWith("https://relay.acme.example", "tok-1"));
+    await screen.findByText(/Connected/);
+    await clickByName("Next");
+    await screen.findByText("Make it yours");
+    expect(ipc.updateConnectionSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ relayUrl: "https://relay.acme.example", relayAccessToken: "tok-1" }),
+    );
+  });
 });
+

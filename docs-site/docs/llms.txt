@@ -88,6 +88,7 @@ Documentation: https://docs.langstroth.ai/ — pages below are the canonical ref
 
 ## Operating Langstroth: Relay and auth
 
+- [The community relay](https://docs.langstroth.ai/operate/networking/community-relay/): The free, best-effort relay at relay.langstroth.ai: what its operator can see (ciphertext, sizes, timing, room ids, never content) and when to self-host instead.
 - [Self-hosting a relay](https://docs.langstroth.ai/operate/networking/self-host/): Building and running the relay, storage (Postgres or snapshot), TLS, token modes, membership, tunnel and APNs push, rate limits, monitoring, backups and upgrades.
 - [Sign in with your IdP (langstroth-auth)](https://docs.langstroth.ai/operate/deploy/ligus-auth/): Organization sign-in for the relay: device-code login, short-lived relay tokens, `ligus auth`.
 - [langstroth-auth with Pocket ID](https://docs.langstroth.ai/operate/deploy/ligus-auth-pocket-id/): A passkey-only identity provider, langstroth-auth and the relay on one box.

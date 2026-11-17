@@ -10,6 +10,11 @@ Full release notes are on the
 
 ## 0.1.0
 
+- **A community relay to start with.** Onboarding, **Add workspace → Create**
+  (when no relay is set) and **Settings → Team sync** offer
+  `relay.langstroth.ai`, a free, best-effort relay, next to your own relay
+  and no relay. It is only used when you pick it, and it sees only
+  ciphertext. See [The community relay](../../operate/networking/community-relay.md).
 - **A DM invite waits for their device.** Opening a DM with someone whose
   contact id your device doesn't know yet (often right after they joined, or
   from the phone) used to hand you a link and never try again. Ligus now

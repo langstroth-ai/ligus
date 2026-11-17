@@ -58,7 +58,7 @@ elements).
   1. **Identity** ("Who are you?" — GitHub sign-in or display name)
   2. **Workspace** (pick/confirm a folder)
   3. **Model** (Claude Code / OpenAI / Anthropic / Ollama)
-  4. **Team & sync** (Just me · Join a team · Connect to a relay)
+  4. **Team & sync** (Just me (no sync) · Join a team · Sync through a relay)
   5. **Appearance** ("Make it yours" — palette + light/dark)
 - **Right-rail panes** (icon rail, left→right): **Tools · Context · Review ·
   People · Vaults · Skills · Workflows · Activity**. *(There is no longer a
@@ -139,13 +139,14 @@ Ollama), the relevant field (API key, or the Ollama localhost endpoint), and
 **State.** Onboarding **step 4** ("Team & sync"), the collaboration choice added
 in 1.0.
 
-**Recipe.** From step 3 click **Next**. Step 4 offers three modes: **Just me**
-(local-only), **Join a team** (invite / short code), **Connect to a relay**
-(relay URL + token). Select **Connect to a relay** so the URL + access-token
-fields and the **Test connection** button show; capture before finishing.
+**Recipe.** From step 3 click **Next**. Step 4 offers three modes: **Just me
+(no sync)** (local-only), **Join a team** (invite / short code), **Sync through
+a relay**. Select **Sync through a relay** so the relay picker (community
+relay preselected, or your own relay) and the **Test connection** button
+show; capture before finishing.
 
 **Must be visible.** The three mode options with their descriptions, the
-relay-URL / access-token fields for the selected mode, and **Test connection**.
+relay picker with the community relay selected, and **Test connection**.
 Use a demo relay URL — **no real tokens** (blur if present).
 
 > This page (`features/onboarding.md`) currently embeds only

@@ -79,7 +79,9 @@ relay configuration:
 
 - **Relay URL** — peers on the same relay + room converge. Blank =
   local-only. Use the **https base origin** (e.g. `https://relay.example`)
-  — no `/v1` suffix, no `wss://`.
+  — no `/v1` suffix, no `wss://`. **Use the community relay** fills in
+  `https://relay.langstroth.ai`, the free, best-effort
+  [community relay](../../operate/networking/community-relay.md).
 - **Relay access token** — needed **only** for a relay that gates access
   with tokens; leave blank for an open relay (the default).
   Sent as a bearer on every relay request; never echoed back. If your

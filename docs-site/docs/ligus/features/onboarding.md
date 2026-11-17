@@ -14,7 +14,7 @@ after the wizard is tracked the same way (`"tour_seen"`).
 | Identity       | Display name, optional picture; shows your safety code |
 | Project folder | The workspace folder agents work in                  |
 | Runtime        | One agent (Claude Code / OpenAI-compatible / Anthropic API key / Ollama) + "let agents edit files" |
-| Team           | Optional relay URL + team name for sync              |
+| Team & sync    | **Just me (no sync)**, **Join a team** (an invite or short code), or **Sync through a relay**: the [community relay](../../operate/networking/community-relay.md) (preselected, best-effort) or your own relay URL and token |
 
 ![Onboarding identity step](../images/onboarding-identity.png){ width="700" }
 
