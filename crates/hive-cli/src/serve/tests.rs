@@ -2837,9 +2837,14 @@ async fn lockdown_clear_needs_a_human_contributor() {
     let (code, _) = status_of(&h, reqwest::Method::POST, &format!("/v1/chats/{chat_id}/lockdown/clear"), None).await;
     assert_eq!(code, 409);
 
-    // As a Viewer: refused, and the lockdown stays.
+    // As a Viewer: refused, and the lockdown stays. The desktop may demote
+    // the box before it has synced this lock, so the demotion's watermark
+    // may not cover it; a demotion never lifts a lockdown either way
+    // (hive-core `prop_a_demotion_never_lifts_a_lockdown`).
     lock(chat_id);
     demote_box_to_viewer(&h, chat_id).await;
+    let g = h.get("/v1/guards").await;
+    assert_eq!(g["lockedChats"][0]["chatId"], json!(chat_id), "the demotion left the lockdown in place: {g}");
     let g = h.get("/v1/guards").await;
     assert_eq!(g["canClearLockdown"], false, "{g}");
     assert_eq!(g["myRole"], "viewer");

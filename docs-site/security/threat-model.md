@@ -350,7 +350,10 @@ it.
       the member's later-looking history judged as of the cut: on the
       config log their uncovered acts (members they added, roles they
       changed) are denied, and on chats their uncovered posts are judged
-      as a non-member's. Their own keys, certificates and passkeys stand.
+      as a non-member's. Their own keys, certificates and passkeys stand,
+      and so do a demoted member's lockdowns: a demotion never lifts a
+      lockdown (only a human Contributor's clear, with presence, does). A
+      removed member's or revoked device's uncovered lockdowns are denied.
       Ranks bound who can do this: a cut goes strictly down the ranks, so
       only someone above the member can.
     - **Chats the remover never synced.** Events the remover's device

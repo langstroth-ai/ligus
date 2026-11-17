@@ -1340,10 +1340,20 @@ fn cut_exclusion(
         // self-validating publications (keys, certificates, passkeys) stand,
         // as they would after the cut. Any other uncovered config event of
         // theirs is denied (fail closed; for a demotion that over-applies to
-        // acts the new role could do, review P-A2e).
+        // acts the new role could do, review P-A2e), except a demoted
+        // member's lockdowns (below).
         let still_ok = match &cut.kind {
-            crate::authz::CutKind::Removed(_) | crate::authz::CutKind::Demoted(..) => {
+            crate::authz::CutKind::Removed(_) => {
                 crate::authz::is_trust_publication(&e.payload) || matches!(e.payload, SessionEvent::PasskeyRegistered { .. })
+            }
+            // A demoted member stays a member, and every role may raise a
+            // lockdown (it only tightens), so their uncovered lockdowns stand
+            // as they would after the cut. Denying them would let a demotion
+            // whose watermark is stale or empty lift a lockdown with no
+            // `ChatLockdownCleared`, no human Contributor and no presence.
+            crate::authz::CutKind::Demoted(..) => {
+                crate::authz::is_trust_publication(&e.payload)
+                    || matches!(e.payload, SessionEvent::PasskeyRegistered { .. } | SessionEvent::ChatLockdownRaised { .. })
             }
             // A revoked device's own certificate stands (the revocation is
             // of a certified device); nothing else it signed uncovered does.
