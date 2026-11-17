@@ -955,8 +955,17 @@ fn resolve_agent_runtime(cfg: &Config, runtime_id: Option<&str>) -> Result<(Reso
         .into_iter()
         .find(|r| r.id == id)
         .ok_or_else(|| anyhow!("no workspace runtime '{id}' (run `ligus runtimes`, or define one in the app)"))?;
-    let api_key = resolve_workspace_credential(&wr.credential);
-    let rt = ResolvedRuntime {
+    Ok((workspace_runtime_resolved(&wr), format!("workspace:{}", wr.name)))
+}
+
+/// `ligus agent`'s runtime from a workspace runtime. A runtime that names a
+/// model gateway goes through it (dispatch refuses it where this host
+/// doesn't offer it), without the runtime's own key, as on serve and workers
+/// ([`worker::agent_workspace_runtime`]).
+fn workspace_runtime_resolved(wr: &hive_core::WorkspaceRuntime) -> ResolvedRuntime {
+    let gateway = Some(wr.gateway.trim()).filter(|g| !g.is_empty()).map(hive_runtime::model_gateway::GatewaySelection::named);
+    let api_key = if gateway.is_some() { None } else { resolve_workspace_credential(&wr.credential) };
+    ResolvedRuntime {
         provider: wr.provider,
         model: wr.model.clone(),
         endpoint: wr.endpoint.clone(),
@@ -971,9 +980,8 @@ fn resolve_agent_runtime(cfg: &Config, runtime_id: Option<&str>) -> Result<(Reso
         max_tool_rounds: None,
         allow_remote_file_tools: false,
         driver: Default::default(),
-        gateway: None,
-    };
-    Ok((rt, format!("workspace:{}", wr.name)))
+        gateway,
+    }
 }
 
 /// v1 — act as an agent. After each sync, reply (as the primary responder) to
@@ -1938,6 +1946,22 @@ fn run() -> Result<()> {
 #[cfg(test)]
 mod cli_tests {
     use super::*;
+
+    /// `ligus agent` honors a workspace runtime's model gateway like serve and
+    /// workers do: the turn goes through the gateway (or is refused where it
+    /// isn't offered), and the runtime's own key is never sent along.
+    #[test]
+    fn ligus_agent_keeps_the_runtimes_gateway() {
+        let mut wr = hive_core::WorkspaceRuntime::new("gw", "Gateway", hive_core::ModelProviderKind::Custom, "m");
+        wr.endpoint = "https://api.example.com/v1/chat/completions".into();
+        wr.credential = hive_core::WorkspaceCredential::Inline { secret: "sk-RUNTIME-OWN".into() };
+        wr.gateway = "litellm".into();
+        let rt = workspace_runtime_resolved(&wr);
+        assert_eq!(rt.gateway.as_ref().map(|g| g.name.as_str()), Some("litellm"));
+        assert!(rt.api_key.is_none(), "the runtime's key rides along to a gateway turn");
+        wr.gateway.clear();
+        assert!(workspace_runtime_resolved(&wr).gateway.is_none());
+    }
 
     /// A box enrolled with `ligus enroll` is named after its label or host,
     /// never the pre-2.0 "hive-cli" (which every author line showed).
