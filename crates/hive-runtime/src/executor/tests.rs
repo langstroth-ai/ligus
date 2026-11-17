@@ -713,6 +713,9 @@ fn sandbox_denies_launchservices_escape() {
     let loot = f.outside.join("escaped");
     let id = format!("ai.ligus.sandbox-probe.{}.{}", std::process::id(), f.outside.display().to_string().len());
     let app = f.worktree.join("Probe.app");
+    // If launchd does start the probe it outlives this test (often stopped,
+    // never exiting): reap it on every exit path, panics included.
+    let _reaper = ProbeReaper(app.clone());
     let script = format!(
         "mkdir -p '{app}/Contents/MacOS' && \
          printf '%s' '<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>CFBundleExecutable</key><string>run</string><key>CFBundleIdentifier</key><string>{id}</string><key>LSBackgroundOnly</key><true/></dict></plist>' > '{app}/Contents/Info.plist' && \
@@ -732,6 +735,54 @@ fn sandbox_denies_launchservices_escape() {
     }
     let leaked = std::fs::read_to_string(&loot).unwrap_or_default();
     assert!(!leaked.contains("SETTINGS-SECRET") && !loot.exists(), "an app launched via LaunchServices ran outside the sandbox: {out}");
+}
+
+/// Kills whatever runs out of a probe app bundle (matched by its unique
+/// path) and removes the bundle, so a LaunchServices launch can't leak a
+/// process past the test. Bounded: gives up after a few seconds.
+#[cfg(target_os = "macos")]
+struct ProbeReaper(PathBuf);
+
+#[cfg(target_os = "macos")]
+impl ProbeReaper {
+    fn pids(&self) -> Vec<i32> {
+        let Ok(out) = std::process::Command::new("/usr/bin/pgrep").arg("-f").arg(self.0.join("Contents/MacOS").as_os_str()).output() else {
+            return Vec::new();
+        };
+        String::from_utf8_lossy(&out.stdout).split_whitespace().filter_map(|p| p.parse().ok()).collect()
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for ProbeReaper {
+    fn drop(&mut self) {
+        // Unregister and remove the bundle first, so a launch still in
+        // flight has nothing to exec and LaunchServices keeps no record.
+        let _ = std::process::Command::new("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister")
+            .arg("-u")
+            .arg(&self.0)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        let _ = std::fs::remove_dir_all(&self.0);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        // Keep sweeping briefly after the last kill: launchd may start it late.
+        let mut quiet_since = std::time::Instant::now();
+        while std::time::Instant::now() < deadline {
+            let pids = self.pids();
+            if pids.is_empty() {
+                if quiet_since.elapsed() >= std::time::Duration::from_millis(500) {
+                    break;
+                }
+            } else {
+                for pid in pids {
+                    unsafe { libc::kill(pid, libc::SIGKILL) };
+                }
+                quiet_since = std::time::Instant::now();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
 }
 
 /// A confined child runs in a session of its own, without the parent's
