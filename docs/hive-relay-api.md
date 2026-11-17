@@ -28,14 +28,14 @@ polling `GET .../envelopes?after=`.
 ## Auth
 
 The relay uses **two independent** credentials, on **separate headers**, so a
-gated/paid relay and a directory identity never collide:
+token-gated relay and a directory identity never collide:
 
 ```http
-Authorization: Bearer <relay-access-token>      # entitlement: may I connect?
+Authorization: Bearer <relay-access-token>      # access: may I connect?
 X-Hive-Github-Token: <github-oauth-token>        # identity: who am I (directory)?
 ```
 
-### Entitlement (`Authorization: Bearer`)
+### Access token (`Authorization: Bearer`)
 
 Controls *whether a client may use the relay at all*. The server's policy comes
 from the `LIGUS_RELAY_ACCESS_TOKENS` env var:
@@ -47,20 +47,19 @@ from the `LIGUS_RELAY_ACCESS_TOKENS` env var:
 
 The desktop client sends this from `relay_access_token` (Settings → Team sync, or
 `LIGUS_RELAY_ACCESS_TOKEN`); `RelayClient::with_auth(token)` attaches it to every
-request. It is intentionally transport-agnostic — a billing system issues/revokes
-tokens without changing the relay surface.
+request. It is intentionally transport-agnostic — an operator (or ligus-auth)
+issues and revokes tokens without changing the relay surface.
 
 The relay's `EntitlementPolicy` resolves from the environment, most specific
 first:
 
 1. **`LIGUS_RELAY_TOKEN_PUBKEY`** (hex/base64 Ed25519 public key) ⇒ **signed
    tokens**. The bearer is a compact `hrt1.<b64url(claims)>.<b64url(sig)>` minted
-   by a billing/license backend holding the matching private key; the relay
-   *verifies but never mints*. Claims carry `sub`, `plan`, `exp`, `max_members`,
-   `retention_days`, `turn`, and RBAC `caps`. Verified claims are stashed in the
-   request extensions for handlers to enforce per-plan limits. See
-   `crates/hive-relay/src/token.rs` and
-   [`managed-service`](../docs-site/operator/docs/ops/managed-service.md).
+   by an issuer holding the matching private key; the relay *verifies but never
+   mints*. Claims carry `sub`, `exp`, optional `workspaces`, RBAC `caps`, and the
+   informational `plan`, `max_members`, `retention_days` and `turn`. Verified
+   claims are passed to the guard seams. See `token.go` in the relay and
+   [Self-hosting a relay](../docs-site/operator/docs/networking/self-host.md#access-control).
 2. **`LIGUS_RELAY_ACCESS_TOKENS`** (comma-separated) ⇒ a static **allowlist**
    (coarse on/off).
 3. otherwise ⇒ **open** (self-host default).
@@ -69,15 +68,15 @@ first:
 
 Used **only** by the directory endpoints (register / lookup), where the relay
 calls GitHub `/user` to bind a request to a GitHub account. It rides its own
-header so it doesn't consume `Authorization` (which carries the entitlement). For
+header so it doesn't consume `Authorization` (which carries the access token). For
 backward compatibility the relay falls back to the bearer if the header is
 absent.
 
 ## Admin APIs (user/token management)
 
 `/v1/admin/*` manages durable relay access users + tokens. These routes bypass
-the entitlement gate and are instead authorized by an **admin authorizer** seam
-(the reference relay leaves it disabled → `404`; a downstream build enables it,
+the access gate and are instead authorized by an **admin authorizer** seam
+(the reference relay leaves it disabled → `404`; a build that supplies one enables it,
 e.g. gated on a GitHub-admin allowlist authenticated by `x-hive-github-token`).
 Tokens are stored only as SHA-256 hashes; the raw value is returned once at
 issue time.
@@ -90,7 +89,7 @@ issue time.
 | `POST /v1/admin/users/{id}/disabled` | `{"disabled": bool}` | `{"ok":true}` |
 | `DELETE /v1/admin/tokens/{id}` | — | `204` |
 
-A token issued here resolves to entitlement claims (`sub` = the user, `plan` =
+A token issued here resolves to access claims (`sub` = the user, `plan` =
 `team`); revoking a token or disabling its user takes effect immediately.
 
 ## Envelope APIs

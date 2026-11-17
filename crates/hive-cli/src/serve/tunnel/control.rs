@@ -203,7 +203,7 @@ async fn connect_once(host: &Arc<TunnelHost>, router: &Router, stop: &mut watch:
     host.push_available.store(push, Ordering::SeqCst);
     println!("remote: connected to {} as host {} (status {status})", host.settings.relay, host.host_id());
     if status == "pending" {
-        println!("remote: the relay registered this host as pending: pairing works, sessions wait for entitlement.");
+        println!("remote: the relay registered this host as pending: pairing works, sessions wait until the relay operator admits it.");
     }
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
     host.set_control(Some(tx));

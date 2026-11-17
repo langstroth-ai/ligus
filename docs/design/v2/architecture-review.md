@@ -36,7 +36,7 @@ Not Approve-with-risks either. Three defects become permanent once 2.0 devices e
 
 **Gate for cutting 2.0 (all required):**
 
-1. **K1: key rotations are authenticated.** Today any relay-entitled caller can inject a workspace-key epoch that every honest device then seals new traffic under. Section 4.1 gives the counterexample; this is new in this review.
+1. **K1: key rotations are authenticated.** Today any caller the relay admits can inject a workspace-key epoch that every honest device then seals new traffic under. Section 4.1 gives the counterexample; this is new in this review.
 2. **S7: verification survives unknown data.** Signatures must verify over the *received* payload bytes, not re-serialized typed structs. Otherwise any non-empty field added in 2.x is permanently lost on 2.0 devices, so the "skip when empty" rule protects only the empty case.
 3. **One authorization engine for every fold-time check.** It evaluates the signer's role in the workspace roster *as of the event's causal position*. Votes are bound to the signer, with role capped and status recomputed (covers R1, R2, S1 and the missing-config-log case). The engine carries a **rules version**, so 2.x can change rules without splitting the fleet.
 4. **One keyring engine shared by every host** (covers R4 / symptom 1), and **per-workspace trust rosters** (R3).
@@ -158,7 +158,7 @@ Their properties:
 ### RC-3: Keys are managed outside the signed log. (new K1; R3, R4)
 
 - `WorkspaceKeyRotation` is an unsigned `{version, sealed}` (`crates/hive-core/src/e2ee.rs:142-146`), sealed with anonymous ECDH (`e2ee.rs:85-128`, which has no sender authentication).
-- It is published to a relay side table that any entitled writer can append to (`relay/server.go:239, 709-726`; open by default).
+- It is published to a relay side table that any admitted writer can append to (`relay/server.go:239, 709-726`; open by default).
 - Each device accepts **every rotation it can open** and seals at the highest version (`lib.rs:10939-10962`, `sync_engine.rs:216-228`).
 - The version is chosen as `relay max + 1` at four call sites, so it races. The relay also trims the keyring (`relay/memory.go:442-448`).
 
@@ -339,7 +339,7 @@ Notation: `C:` is the config log, `X:` is a chat log, and `@n` is lamport. Every
 
 **Counterexample K1 (injection).**
 1. `C: MemberRemoved(M)`; the Admin publishes `rot{v2: sealed to A, B}`.
-2. M is still relay-entitled (open relay, or token not yet revoked) and knows B's X25519 public key. M has it from roster history; outsiders can get it from the relay directory's `ka_public`.
+2. M is still admitted by the relay (open relay, or token not yet revoked) and knows B's X25519 public key. M has it from roster history; outsiders can get it from the relay directory's `ka_public`.
 3. M POSTs `rot{v3: {B: seal(pk_B, K_m)}}` to `/v1/workspaces/{ws}/keyring`.
 4. B's `build_keyring` inserts `3 → K_m` (`lib.rs:10949-10961`) and `encode` seals at the highest epoch (`sync_engine.rs:218`).
 5. M decrypts all of B's new traffic.

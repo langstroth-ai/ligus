@@ -63,7 +63,6 @@ Documentation for using Ligus (desktop app, phone app, `ligus` CLI): https://doc
 ## Help
 
 - [Troubleshooting](https://docs.ligus.ai/help/troubleshooting/): Problems by symptom: sync stuck, relay 401s, phone can't connect, worker not picking up turns, plan windows, hygiene sweep.
-- [Pricing tiers](https://docs.ligus.ai/help/pricing/): The tiers, told apart by which relay you connect to.
 
 ## Reference
 

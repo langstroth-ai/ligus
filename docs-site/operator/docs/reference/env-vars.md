@@ -20,7 +20,7 @@ column says which. The relay's own variables are on
 |---|---|---|---|
 | `LIGUS_DATA_DIR` | `~/.ligus` | CLI | the CLI's data dir: identity, keys, `hive.db`, `config.toml`, serve and tunnel state. The desktop always uses its OS app-data dir (`ai.ligus.desktop`) |
 | `LIGUS_RELAY_URL` | from `config.toml` | CLI; desktop on first launch only | relay base URL |
-| `LIGUS_RELAY_ACCESS_TOKEN` | from `config.toml` | CLI; desktop on first launch only | relay entitlement token (`hrt1.…` or opaque). A `name:token` form is accepted and the `name:` dropped |
+| `LIGUS_RELAY_ACCESS_TOKEN` | from `config.toml` | CLI; desktop on first launch only | relay access token (`hrt1.…` or opaque). A `name:token` form is accepted and the `name:` dropped |
 | `LIGUS_WORKSPACE` | `default` | CLI; desktop on first launch only | relay room |
 | `LIGUS_WORKSPACE_KEY` | from `config.toml` | CLI; desktop on first launch only | E2EE workspace passphrase. Sync refuses to run without one |
 | `LIGUS_RELAY_ISSUER_KEY` | unset | desktop, first launch only | relay issuer seed for minting agent tokens from the People pane (local only, never synced) |

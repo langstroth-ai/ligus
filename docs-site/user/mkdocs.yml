@@ -34,13 +34,13 @@ plugins:
         ops/build.md: https://docs.langstroth.ai/ops/build/
         ops/deployment.md: https://docs.langstroth.ai/ops/deployment/
         ops/linux-sandbox.md: https://docs.langstroth.ai/ops/linux-sandbox/
-        ops/managed-service.md: https://docs.langstroth.ai/ops/managed-service/
+        ops/managed-service.md: https://docs.langstroth.ai/networking/self-host/
         ops/operations.md: https://docs.langstroth.ai/ops/operations/
-        ops/pricing.md: help/pricing.md
+        ops/pricing.md: https://docs.langstroth.ai/networking/self-host/
         ops/serve-box.md: https://docs.langstroth.ai/ops/serve-box/
         ops/serve-repos.md: https://docs.langstroth.ai/ops/serve-repos/
         ops/server-side-membership.md: https://docs.langstroth.ai/ops/server-side-membership/
-        ops/tiering.md: https://docs.langstroth.ai/ops/tiering/
+        ops/tiering.md: https://docs.langstroth.ai/networking/self-host/
         ops/troubleshooting.md: help/troubleshooting.md
         reference/config-toml.md: https://docs.langstroth.ai/reference/config-toml/
         reference/env-vars.md: https://docs.langstroth.ai/reference/env-vars/
@@ -51,6 +51,7 @@ plugins:
         security/index.md: https://docs.langstroth.ai/security/
         security/runbooks.md: https://docs.langstroth.ai/security/runbooks/
         security/threat-model.md: https://docs.langstroth.ai/security/threat-model/
+        help/pricing.md: https://docs.langstroth.ai/networking/self-host/
         # END generated redirect_maps
 
 nav:
@@ -102,7 +103,6 @@ nav:
       - Linear & remote MCP (OAuth): addons/linear.md
   - Help:
       - Troubleshooting: help/troubleshooting.md
-      - Pricing tiers: help/pricing.md
   - Reference:
       - What's new: reference/whats-new.md
       - CLI: reference/cli.md

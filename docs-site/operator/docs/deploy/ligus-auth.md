@@ -278,7 +278,7 @@ workspaces. ligus-auth keeps them apart:
   tenant are rejected by another;
 - with `LIGUS_RELAY_TENANTS`, the relay itself refuses other tenants' tokens.
 
-A hosted, many-tenant service is on the roadmap; see
+Tenant-aware relay authorization beyond this is a design; see
 [multi-tenant](multi-tenant.md).
 
 ## Security notes

@@ -249,7 +249,7 @@ impl Default for ConnHealth {
 struct LiveSettings {
     #[serde(default)]
     relay_url: Option<String>,
-    /// Access token for a gated/paid hosted relay (entitlement). Sent as
+    /// Access token for a token-gated relay. Sent as
     /// `Authorization: Bearer` on every relay request. Self-hosted/open relays
     /// leave this blank.
     #[serde(default)]
@@ -4836,7 +4836,7 @@ fn revoke_my_device(state: State<AppState>, device_id: String) -> Result<(), Str
 }
 
 // ── Relay access user management (Settings → Team) ──────────────────────────
-// These drive the enterprise relay's /v1/admin/* API, authenticated by the
+// These drive the relay's /v1/admin/* API (off unless the relay enables it), authenticated by the
 // signed-in GitHub token; the relay admits only its configured admin logins.
 
 /// The configured relay URL, or a friendly error when sync isn't set up.
@@ -6694,14 +6694,14 @@ impl AppState {
         self.service.lock().unwrap().device_id().to_string()
     }
 
-    /// Relay access token (entitlement) for a gated/paid hosted relay. `None`
+    /// Relay access token for a token-gated relay. `None`
     /// for self-hosted/open relays. Attached as a bearer to every relay call.
     fn relay_token(&self) -> Option<String> {
         let s = self.settings.lock().unwrap();
         ligus_auth_ui::effective(s.relay_url.as_deref(), s.relay_access_token.clone())
     }
 
-    /// A relay client for `url` carrying the entitlement bearer. No forge
+    /// A relay client for `url` carrying the access-token bearer. No forge
     /// token ever goes to a relay.
     fn relay_client(&self, url: &str) -> hive_runtime::RelayClient {
         hive_runtime::RelayClient::new(url).with_auth(self.relay_token())
@@ -13072,7 +13072,7 @@ struct ConnectionSettings {
     room: String,
     has_workspace_key: bool,
     has_api_key: bool,
-    /// Whether a relay access token (for a gated/paid hosted relay) is set.
+    /// Whether a relay access token (for a token-gated relay) is set.
     /// Self-hosted/open relays leave this off.
     has_relay_access_token: bool,
     permission_mode: String,

@@ -1,12 +1,13 @@
 # Multi-tenant hosting (design)
 
 !!! danger "Not yet implemented"
-    This page describes a design for one operator hosting Langstroth for many
-    unrelated organisations (tenants). None of the tenant-aware parts below
-    exist in 2.0. Today a relay is tenant-blind: an entitlement token admits
-    a caller to the relay, not to a tenant, and the open-source relay has no
-    per-tenant authorization. Don't run a relay for mutually distrusting
-    organisations and rely on anything on this page.
+    This page describes a design for one self-hosted deployment serving
+    several unrelated organisations (tenants). Most of the tenant-aware parts
+    below don't exist in 2.0: an access token admits a caller to the relay,
+    not to a tenant, and beyond ligus-auth's tenant claims and
+    `LIGUS_RELAY_TENANTS` the relay has no per-tenant authorization. Don't
+    run a relay for mutually distrusting organisations and rely on anything
+    on this page.
 
 ## Three layers of authorization
 
@@ -30,7 +31,7 @@ layers below only decide who may reach the relay. See the
 
 ### 2. Relay tokens with tenant and workspace claims (design)
 
-Today's signed `hrt1` tokens carry a subject, plan, expiry and caps. The
+Today's signed `hrt1` tokens carry a subject, expiry, caps and optional workspaces. The
 design adds **tenant** and **workspace** claims, so the relay can refuse a
 token from tenant A on a room of tenant B, scope rate limits and retention
 per tenant, and revoke a tenant's access as a whole. The relay's existing

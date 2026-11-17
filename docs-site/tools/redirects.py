@@ -108,6 +108,10 @@ def operator_rules(rows):
             out += page_rules("", o, target(s, n), False)
             if o != n:
                 out += page_rules("", n, target(s, n), False)
+    out.append("# Pages removed or moved within this site go to their new home.")
+    for o, s, n in rows:
+        if s == "operator" and o != n:
+            out += page_rules("", o, target(s, n), False)
     return "\n\n".join(out)
 
 
@@ -214,10 +218,12 @@ def check(refs, built):
     if not catch or catch["to"] != BASE["user"] + ":splat" or not catch.get("force"):
         errors.append("no docs.apiaryhq.ai catch-all rule")
     for o, s, n in rows:
-        if s == "user":
+        if s == "user" or o != n:
             r = orr.get(url_path(o))
             if not r or r["to"] != target(s, n):
                 errors.append(f"{o}: docs.langstroth.ai has no rule to {target(s, n)}")
+        if s == "operator" and o != n and os.path.exists(os.path.join(DOCS, "operator/docs", o)):
+            errors.append(f"{o}: moved, but a page still exists at the old path on the operator site")
     if built:
         for s in BASE:
             for o, ss, n in rows:

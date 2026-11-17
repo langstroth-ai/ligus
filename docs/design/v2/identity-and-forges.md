@@ -392,7 +392,7 @@ A contact has a **contact id `cid`**: 16 random bytes, base64url, chosen by the 
 
 ### 3.3 Relay changes (relay v0.3, additive)
 
-**New routes** under the new prefix `/v1/contacts/`. They go through the entitlement gate. Add the prefix to `relayPrefixes` (`relay/extension.go:51-54`); a downstream extension already using `/v1/contacts/` would collide, which is a check for the owner.
+**New routes** under the new prefix `/v1/contacts/`. They go through the access gate. Add the prefix to `relayPrefixes` (`relay/extension.go:51-54`); a downstream extension already using `/v1/contacts/` would collide, which is a check for the owner.
 
 | Method | Path | Auth | Body or response |
 |---|---|---|---|
@@ -902,7 +902,7 @@ DOC-1 last
 | D11 | Contact card: a new `ligusc1:` prefix, or reuse `hivews1:` with an empty room | Reuse `hivews1:` (no new wire id) unless the UI needs a distinct prefix |
 | D12 | Simultaneous-DM rule: keep the smaller `(created_at, room)` and archive the other | Yes |
 | D13 | Default of "Contact forges to check linked identities" | On, with the 24 h cache |
-| D14 | Relay GitHub routes: off by default in v0.3, deleted in v0.4 | Yes. The hosted relay deployment must redeploy the open base, never the gated binary. |
+| D14 | Relay GitHub routes: off by default in v0.3, deleted in v0.4 | Yes. A public relay deployment must run the open base, never a fail-closed gated binary. |
 | D15 | KeyPublished method on GitHub and GitLab (puts the account key publicly on the forge) | Offer it as the fallback only, with the disclosure copy |
 
 ## 10. Corrections to the brief

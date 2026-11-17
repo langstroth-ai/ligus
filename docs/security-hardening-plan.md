@@ -84,7 +84,7 @@ The directory binding **trusts the relay** to assert "this key belongs to @alice
 - **Option B — GitHub-hosted proof (relay untrusted, more friction).** The user posts a signed `@alice ↔ key K` statement to a GitHub-controlled location (gist/repo/signed commit); verifiers fetch it straight from `github.com` and check it's hosted under `@alice` **and** signed by K. GitHub becomes the CA; the relay is bypassed for identity. Keybase-style.
 - **Option C — GitHub's native signing-key directory (relay untrusted, moderate friction).** Register the account public key as one of the user's GitHub **SSH signing keys**; verifiers fetch `api.github.com/users/<login>/ssh_signing_keys`. Reuses a first-class GitHub feature (also makes signed commits show "Verified"); one-time key-add friction.
 
-**Recommended split:** Option **A** for trusted/enterprise relays (reuse the shipped directory), Options **B/C** as the relay-untrusted path for self-hosters who need identity to survive a hostile relay. In all cases **authorization** (who is a member, in what role) stays in Hive events (S2), and **device→account** stays the existing `DeviceCertificate` — GitHub only answers *identity*.
+**Recommended split:** Option **A** for trusted relays (reuse the shipped directory), Options **B/C** as the relay-untrusted path for self-hosters who need identity to survive a hostile relay. In all cases **authorization** (who is a member, in what role) stays in Hive events (S2), and **device→account** stays the existing `DeviceCertificate` — GitHub only answers *identity*.
 
 > **Status — Option C implemented in `hive-runtime` (default OFF).** A
 > `LIGUS_IDENTITY_MODE` toggle (`relay` = Option A, the default & byte-for-byte
@@ -180,7 +180,7 @@ Do this **first** among the security items, but the one decision to make before 
 
 **Design.** After a successful `workspace_remove_member`, trigger a workspace-level key rotation sealed to the remaining members' devices — reusing `remove_and_revoke`'s rotation logic, but gathering recipients from the **workspace** roster (all members' `key_agreement_public`) rather than a single session's. Requires a workspace-level member/device directory (overlaps S1's roster). Until then, surface the gap in the UI: the relay-remove action should warn that it does not rotate the key.
 
-**Risk.** Couples enterprise membership to E2EE rotation; low individually but depends on the workspace roster (S1).
+**Risk.** Couples relay-side membership to E2EE rotation; low individually but depends on the workspace roster (S1).
 
 ---
 

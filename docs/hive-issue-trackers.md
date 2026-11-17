@@ -58,15 +58,15 @@ Connectors map these onto the tracker's native API (GitHub issues, Linear
 mutations, Jira transitions). Reads can also feed **context/vaults** so an agent
 "knows the backlog" without an explicit tool call.
 
-## RBAC gating (ties into the entitlement work)
+## RBAC gating
 
 CRUD on someone's real backlog is privileged, so it rides the same controls as
 the rest of the admin model:
 
 - **Per-tool MCP trust** (already built) — writes (`create`/`update`/
   `transition`) start untrusted; a human approves the tool, per workspace.
-- **Capability gate** — once the [RBAC capabilities](../docs-site/operator/docs/ops/managed-service.md)
-  land, `issues.create`/`transition`/etc. require a `manage_integrations` (or a
+- **Capability gate** — once RBAC capabilities (per-capability grants such as
+  `invite`, `remove_member`, `manage_integrations`) land, `issues.create`/`transition`/etc. require a `manage_integrations` (or a
   finer `issues.write`) capability; `Viewer`s get read-only tools.
 - **Consent-on-demand** — the existing built-in-tool consent flow surfaces "Agent
   wants to create issue *X* in *repo*" for approval, with the agreement-gated
@@ -89,10 +89,10 @@ your tracker.
 5. **Backlog-as-context.** Optionally surface open items into the agent's context
    budget so planning sees the live backlog.
 
-## Tier placement
+## Governance
 
-The connectors themselves are **free/core** (they're just MCP integrations).
-What's **paid** is the *governance* around agent writes to a shared tracker —
-capability-based RBAC, org policy ("agents may file but not close"), and the
-audit trail of agent-made changes — which sits in the same managed/enterprise
-relay surface as the rest of [`tiering.md`](../docs-site/operator/docs/ops/tiering.md).
+The connectors themselves are core (they're just MCP integrations). The
+*governance* around agent writes to a shared tracker — capability-based RBAC,
+workspace policy ("agents may file but not close"), and the audit trail of
+agent-made changes — is planned alongside the relay-side membership and
+capability work.

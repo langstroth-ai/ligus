@@ -155,5 +155,4 @@ Workspaces with headless workers need more; follow
 
 There's no shared inference bill: each member uses their own runtime, and
 workers use the keys you give them. The relay is small: a `shared-cpu-1x`
-machine with 256 to 512 MB handles a small team. See
-[Pricing tiers](https://docs.ligus.ai/help/pricing/) for hosted options.
+machine with 256 to 512 MB handles a small team.

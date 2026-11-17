@@ -467,26 +467,6 @@
   status = 301
 
 [[redirects]]
-  from = "/ops/pricing/"
-  to = "https://docs.ligus.ai/help/pricing/"
-  status = 301
-
-[[redirects]]
-  from = "/ops/pricing/index.html"
-  to = "https://docs.ligus.ai/help/pricing/"
-  status = 301
-
-[[redirects]]
-  from = "/help/pricing/"
-  to = "https://docs.ligus.ai/help/pricing/"
-  status = 301
-
-[[redirects]]
-  from = "/help/pricing/index.html"
-  to = "https://docs.ligus.ai/help/pricing/"
-  status = 301
-
-[[redirects]]
   from = "/ops/troubleshooting/"
   to = "https://docs.ligus.ai/help/troubleshooting/"
   status = 301
@@ -544,5 +524,47 @@
 [[redirects]]
   from = "/reference/whats-new/index.html"
   to = "https://docs.ligus.ai/reference/whats-new/"
+  status = 301
+
+# Pages removed or moved within this site go to their new home.
+
+[[redirects]]
+  from = "/ops/managed-service/"
+  to = "https://docs.langstroth.ai/networking/self-host/"
+  status = 301
+
+[[redirects]]
+  from = "/ops/managed-service/index.html"
+  to = "https://docs.langstroth.ai/networking/self-host/"
+  status = 301
+
+[[redirects]]
+  from = "/ops/pricing/"
+  to = "https://docs.langstroth.ai/networking/self-host/"
+  status = 301
+
+[[redirects]]
+  from = "/ops/pricing/index.html"
+  to = "https://docs.langstroth.ai/networking/self-host/"
+  status = 301
+
+[[redirects]]
+  from = "/ops/tiering/"
+  to = "https://docs.langstroth.ai/networking/self-host/"
+  status = 301
+
+[[redirects]]
+  from = "/ops/tiering/index.html"
+  to = "https://docs.langstroth.ai/networking/self-host/"
+  status = 301
+
+[[redirects]]
+  from = "/help/pricing/"
+  to = "https://docs.langstroth.ai/networking/self-host/"
+  status = 301
+
+[[redirects]]
+  from = "/help/pricing/index.html"
+  to = "https://docs.langstroth.ai/networking/self-host/"
   status = 301
 # END generated redirects

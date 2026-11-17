@@ -816,13 +816,13 @@
 
 [[redirects]]
   from = "https://docs.apiaryhq.ai/ops/managed-service/"
-  to = "https://docs.langstroth.ai/ops/managed-service/"
+  to = "https://docs.langstroth.ai/networking/self-host/"
   status = 301
   force = true
 
 [[redirects]]
   from = "https://docs.apiaryhq.ai/ops/managed-service/index.html"
-  to = "https://docs.langstroth.ai/ops/managed-service/"
+  to = "https://docs.langstroth.ai/networking/self-host/"
   status = 301
   force = true
 
@@ -840,13 +840,13 @@
 
 [[redirects]]
   from = "https://docs.apiaryhq.ai/ops/pricing/"
-  to = "https://docs.ligus.ai/help/pricing/"
+  to = "https://docs.langstroth.ai/networking/self-host/"
   status = 301
   force = true
 
 [[redirects]]
   from = "https://docs.apiaryhq.ai/ops/pricing/index.html"
-  to = "https://docs.ligus.ai/help/pricing/"
+  to = "https://docs.langstroth.ai/networking/self-host/"
   status = 301
   force = true
 
@@ -888,13 +888,13 @@
 
 [[redirects]]
   from = "https://docs.apiaryhq.ai/ops/tiering/"
-  to = "https://docs.langstroth.ai/ops/tiering/"
+  to = "https://docs.langstroth.ai/networking/self-host/"
   status = 301
   force = true
 
 [[redirects]]
   from = "https://docs.apiaryhq.ai/ops/tiering/index.html"
-  to = "https://docs.langstroth.ai/ops/tiering/"
+  to = "https://docs.langstroth.ai/networking/self-host/"
   status = 301
   force = true
 
@@ -1063,6 +1063,18 @@
 [[redirects]]
   from = "https://docs.apiaryhq.ai/security/threat-model/index.html"
   to = "https://docs.langstroth.ai/security/threat-model/"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "https://docs.apiaryhq.ai/help/pricing/"
+  to = "https://docs.langstroth.ai/networking/self-host/"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "https://docs.apiaryhq.ai/help/pricing/index.html"
+  to = "https://docs.langstroth.ai/networking/self-host/"
   status = 301
   force = true
 
@@ -1332,13 +1344,13 @@
 
 [[redirects]]
   from = "/ops/managed-service/"
-  to = "https://docs.langstroth.ai/ops/managed-service/"
+  to = "https://docs.langstroth.ai/networking/self-host/"
   status = 301
   force = true
 
 [[redirects]]
   from = "/ops/managed-service/index.html"
-  to = "https://docs.langstroth.ai/ops/managed-service/"
+  to = "https://docs.langstroth.ai/networking/self-host/"
   status = 301
   force = true
 
@@ -1356,13 +1368,13 @@
 
 [[redirects]]
   from = "/ops/pricing/"
-  to = "https://docs.ligus.ai/help/pricing/"
+  to = "https://docs.langstroth.ai/networking/self-host/"
   status = 301
   force = true
 
 [[redirects]]
   from = "/ops/pricing/index.html"
-  to = "https://docs.ligus.ai/help/pricing/"
+  to = "https://docs.langstroth.ai/networking/self-host/"
   status = 301
   force = true
 
@@ -1404,13 +1416,13 @@
 
 [[redirects]]
   from = "/ops/tiering/"
-  to = "https://docs.langstroth.ai/ops/tiering/"
+  to = "https://docs.langstroth.ai/networking/self-host/"
   status = 301
   force = true
 
 [[redirects]]
   from = "/ops/tiering/index.html"
-  to = "https://docs.langstroth.ai/ops/tiering/"
+  to = "https://docs.langstroth.ai/networking/self-host/"
   status = 301
   force = true
 
@@ -1531,6 +1543,18 @@
 [[redirects]]
   from = "/security/threat-model/index.html"
   to = "https://docs.langstroth.ai/security/threat-model/"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/help/pricing/"
+  to = "https://docs.langstroth.ai/networking/self-host/"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/help/pricing/index.html"
+  to = "https://docs.langstroth.ai/networking/self-host/"
   status = 301
   force = true
 # END generated redirects

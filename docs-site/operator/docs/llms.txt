@@ -61,8 +61,3 @@ Operator documentation: https://docs.langstroth.ai/ — pages below are the cano
 - [LAN discovery](https://docs.langstroth.ai/networking/lan/): Peer discovery on a local network.
 - [Rendezvous relay](https://docs.langstroth.ai/networking/rendezvous/): How peers find each other over the internet.
 - [TURN fallback](https://docs.langstroth.ai/networking/turn/): Relayed connectivity when P2P fails.
-
-## Business model
-
-- [Tiering (open-core)](https://docs.langstroth.ai/ops/tiering/): The open-core model.
-- [Managed service plan](https://docs.langstroth.ai/ops/managed-service/): The hosted option.

@@ -55,8 +55,4 @@ nav:
       - LAN discovery: networking/lan.md
       - Rendezvous relay: networking/rendezvous.md
       - TURN fallback: networking/turn.md
-  - Business model:
-      - Tiering (open-core model): ops/tiering.md
-      - Managed service plan: ops/managed-service.md
-      - Pricing tiers (docs.ligus.ai): https://docs.ligus.ai/help/pricing/
   - Ligus user docs: https://docs.ligus.ai/

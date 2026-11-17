@@ -248,7 +248,7 @@ function SyncSection() {
           value={relayAccessToken}
           onChange={(e) => setRelayAccessToken(e.target.value)}
           onBlur={() => void commit()}
-          placeholder={c?.hasRelayAccessToken ? "configured — blank to keep" : "only for a hosted/paid relay"}
+          placeholder={c?.hasRelayAccessToken ? "configured — blank to keep" : "only for a relay that requires tokens"}
           className={"flex-1 " + inputClass}
           style={fieldStyle}
         />
@@ -263,7 +263,7 @@ function SyncSection() {
         )}
       </div>
       <p className="text-xs text-ink-soft">
-        Needed only for a gated/paid hosted relay. Leave blank for a relay you host yourself.
+        Needed only for a relay that gates access with tokens. Leave blank for an open relay.
         Paste only the token value — if yours looks like <code>name:abc123</code>, drop the
         <code> name:</code> prefix.
       </p>
@@ -349,7 +349,7 @@ function SyncSection() {
   );
 }
 
-/// Relay access-user management, driven by the enterprise relay's admin API.
+/// Relay access-user management, driven by the relay's admin API (when the relay enables it).
 /// Only rendered meaningfully when the signed-in user is a relay admin; for
 /// everyone else the list query fails and we show a quiet hint instead.
 function RelayUsersSection() {
