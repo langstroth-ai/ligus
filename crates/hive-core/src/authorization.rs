@@ -281,8 +281,9 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         // Raising one only tightens, so any keyholder (a worker host, a
         // Viewer's device) may: the floor.
         SessionEvent::ChatLockdownRaised { .. } => WorkspaceRole::Viewer,
-        // Changing the rules everyone folds by is the owner's call.
-        SessionEvent::WorkspaceRulesSet { .. } => WorkspaceRole::Owner,
+        // The rules everyone folds by: an Admin sets the relying party, only
+        // the Owner changes the version (`authz::authorize`).
+        SessionEvent::WorkspaceRulesSet { .. } => WorkspaceRole::Admin,
         // Applying is a member's act (and a human's, see `authz::authorize`).
         SessionEvent::ProposalApplied { .. } => WorkspaceRole::Contributor,
         // A host certifying an agent key: a member's act, plus the

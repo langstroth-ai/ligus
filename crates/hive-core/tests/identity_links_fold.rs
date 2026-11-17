@@ -31,6 +31,9 @@ struct World {
     clock: u64,
     cfg: Vec<SessionEventEnvelope>,
     people: std::sync::Arc<BTreeMap<&'static str, Person>>,
+    /// People whose test recovery key is registered (their events carry its
+    /// presence: rules v2 from the seed).
+    present: std::collections::BTreeSet<&'static str>,
 }
 
 const NAMES: [&str; 4] = ["owner", "ada", "mara", "eve"];
@@ -61,7 +64,7 @@ impl World {
                 )
             })
             .collect();
-        let mut w = Self { wid: Uuid::new_v4(), clock: 0, cfg: Vec::new(), people: std::sync::Arc::new(people) };
+        let mut w = Self { wid: Uuid::new_v4(), clock: 0, cfg: Vec::new(), people: std::sync::Arc::new(people), present: Default::default() };
         let mut seed = ChatSession::new("", w.wid, "");
         seed.id = workspace_config_session_id(w.wid);
         seed.creator_actor_id = "owner".into();
@@ -74,15 +77,26 @@ impl World {
             w.push(name, SessionEvent::AccountKeyRegistered { account_id, signing_public_key: pk });
             w.push(name, SessionEvent::DeviceCertificateAdded { certificate: cert });
         }
+        w.register_recovery("owner");
         for (name, role) in [("ada", WorkspaceRole::Admin), ("mara", WorkspaceRole::Viewer)] {
             let m = member(name, &w.people[name], role);
             w.push("owner", SessionEvent::MemberAdded { member: m, invite: None });
+            w.register_recovery(name);
         }
         for name in NAMES {
             let device_id = w.people[name].device_id;
             w.push(name, SessionEvent::DeviceKeyAgreementPublished { device_id, ka_public: vec![name.len() as u8; 32] });
         }
         w
+    }
+
+    fn register_recovery(&mut self, name: &'static str) {
+        let account = self.people[name].account_id;
+        let mut env = self.draft(name, hive_core::testkit::recovery_registration(account));
+        let p = &self.people[name];
+        hive_core::testkit::prove_recovery(&mut env, account, p.device_id, &p.device);
+        self.cfg.push(env);
+        self.present.insert(name);
     }
 
     fn draft(&mut self, by: &str, payload: SessionEvent) -> SessionEventEnvelope {
@@ -94,6 +108,9 @@ impl World {
         actor.account_id = Some(p.account_id);
         env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false });
         sign_envelope(&mut env, p.device_id, &p.device);
+        if self.present.contains(by) {
+            hive_core::testkit::prove_recovery(&mut env, p.account_id, p.device_id, &p.device);
+        }
         env
     }
 
@@ -338,7 +355,7 @@ fn links_absent_from_unselected_workspaces() {
     let mut a = World::new();
     let id = a.push("mara", publish(a.link("mara", "100")));
     assert_eq!(a.verdict(id), Verdict::Allowed);
-    let b = World { wid: Uuid::new_v4(), clock: 0, cfg: Vec::new(), people: a.people.clone() };
+    let b = World { wid: Uuid::new_v4(), clock: 0, cfg: Vec::new(), people: a.people.clone(), present: Default::default() };
     assert!(b.roster().links.is_empty());
     assert!(project_config(&b.cfg, None, None).1.current().links.is_empty());
 }

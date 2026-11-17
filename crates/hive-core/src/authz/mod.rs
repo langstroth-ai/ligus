@@ -25,7 +25,9 @@
 //!   derived from counted votes; `Applied` comes only from `ProposalApplied`.
 //! * **Rules** are versioned on the config log (`WorkspaceRulesSet`); a version
 //!   this build doesn't know makes the workspace read-only on this device.
-//!   Any switch to version 2 or later needs its author's presence.
+//!   Every workspace starts at version 2; a `WorkspaceRulesSet` needs its
+//!   author's presence once the workspace holds any credential (the genesis
+//!   one, written before the founder's first passkey, can't).
 //! * **Bounds** (S5 lockdowns, S6 flow state) and the run-write rule (S4) are
 //!   fold rules too.
 //!
@@ -52,13 +54,18 @@ use crate::events::{SessionEvent, SessionEventEnvelope};
 use crate::identity::{ActorKind, CfgFrontier, WorkspaceRole};
 use crate::session::ChatSession;
 
-/// The workspace rules version: 1 = the 2.0 base rules; 2 = human presence
-/// (passkeys, Track B) and the Agent tier for host-signed agent output.
+/// The workspace rules version. 2.0 starts every workspace at version 2
+/// (human presence for governance, the Agent tier for host-signed agent
+/// output); there is no version 1 (Phase A: 2.0 starts fresh, so the rules
+/// without presence were deleted rather than kept behind a switch).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RulesVersion(pub u32);
 
 /// The highest rules version this build enforces.
 pub const RULES_SUPPORTED: u32 = 2;
+/// The rules every workspace starts at (the seed's roster), and the lowest
+/// version a `WorkspaceRulesSet` may name.
+pub const RULES_GENESIS: u32 = 2;
 
 /// The refusal of an event that needs its author's passkey presence (B3).
 /// Authoring paths match on it to ask for a passkey confirmation.
@@ -296,11 +303,10 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             return authorize_agent(env, ctx, roster);
         }
     }
-    // Rules v2 (A3 transition): a host-signed chat event that speaks for an
-    // agent (its reply, its streaming, a proposal it produced) is judged with
-    // the Agent tier, whether or not the host could certify a key for that
-    // agent. Folds use the highest rules this build knows.
-    if ctx.checked && !on_config && ctx.workspace.is_some_and(|at| at.rules.min(RULES_SUPPORTED) >= 2) {
+    // A host-signed chat event that speaks for an agent (its reply, its
+    // streaming, a proposal it produced) is judged with the Agent tier,
+    // whether or not the host could certify a key for that agent.
+    if ctx.checked && !on_config && ctx.workspace.is_some() {
         let speaks_for = agent::agent_authored(&env.payload).or_else(|| match &env.payload {
             SessionEvent::MessageChunkReceived { message_id, .. } | SessionEvent::MessageCompleted { message_id, .. } => fold
                 .messages
@@ -315,11 +321,9 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             }
         }
     }
-    // Rules v2: an effect of the chat's primary runtime (host-signed, no
-    // agent identity) is judged at the Agent tier too.
-    if env.actor_stamp.as_ref().is_some_and(|s| s.runtime_effect)
-        && roster_here.is_some_and(|r| r.rules.min(RULES_SUPPORTED) >= 2)
-    {
+    // An effect of the chat's primary runtime (host-signed, no agent
+    // identity) is judged at the Agent tier too.
+    if env.actor_stamp.as_ref().is_some_and(|s| s.runtime_effect) && roster_here.is_some() {
         if let Err(why) = agent::runtime_tier_allows(&env.payload) {
             return Decision::deny(why);
         }
@@ -338,26 +342,33 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         }
     }
 
-    // The workspace's relying party: well formed, on the config log, and
-    // fixed once any passkey is registered (they'd all stop verifying; a
-    // recovery key doesn't depend on the relying party).
-    if let SessionEvent::WorkspaceRulesSet { presence: Some(p), .. } = &env.payload {
+    // The workspace rules: the relying party is well formed and on the
+    // config log; an Admin may change it (with presence verified under the
+    // policy in force before the change), only the Owner changes the version.
+    if let SessionEvent::WorkspaceRulesSet { version, presence } = &env.payload {
         if !on_config {
-            return Decision::deny("the presence policy is set on the workspace config log");
+            return Decision::deny("the workspace rules are set on the workspace config log");
         }
-        if let Err(e) = p.well_formed() {
-            return Decision::deny(format!("presence policy: {}", e.0));
+        if let Some(p) = presence {
+            if let Err(e) = p.well_formed() {
+                return Decision::deny(format!("presence policy: {}", e.0));
+            }
         }
-        if p.rp_id != ctx.running.presence_policy.rp_id && ctx.running.passkeys.values().any(|m| m.values().any(|k| !k.recovery)) {
-            return Decision::deny("the relying party can't change once a passkey is registered");
+        if *version != ctx.running.rules && fold.role_of(author) != WorkspaceRole::Owner {
+            return Decision::deny("only the Owner changes the rules version");
         }
     }
 
-    // B3: human presence. A stamped assertion must verify; under rules v2
-    // (and for any switch to v2 or later, a version this build doesn't know
-    // included) the events of the presence table need one. Passkey
-    // registrations prove themselves below.
+    // B3: human presence. A stamped assertion must verify, and the events of
+    // the presence table need one. Passkey registrations prove themselves
+    // below. Rules: every workspace is on version 2 from its seed; a version
+    // below that doesn't exist.
     let mut present: Option<Uuid> = None;
+    if let SessionEvent::WorkspaceRulesSet { version, .. } = &env.payload {
+        if *version < RULES_GENESIS {
+            return Decision::deny("rules version 1 doesn't exist: every workspace is on version 2 or later");
+        }
+    }
     if let Some(roster) = roster_here {
         if !matches!(env.payload, SessionEvent::PasskeyRegistered { .. }) {
             match passkeys::verify_stamped(env, roster) {
@@ -365,8 +376,13 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 Err(why) => return Decision::deny(why),
             }
         }
-        let switch_up = matches!(env.payload, SessionEvent::WorkspaceRulesSet { version, .. } if version >= 2);
-        if (roster.rules.min(RULES_SUPPORTED) >= 2 || switch_up) && rules::requires_presence(&env.payload, author, roster, fold) {
+        // The genesis rules set (version 2 and the relying party, before
+        // anyone holds a credential) can't carry presence; any other one
+        // needs it.
+        let genesis_rules = matches!(env.payload, SessionEvent::WorkspaceRulesSet { version, .. } if version == RULES_GENESIS)
+            && on_config
+            && roster.passkeys.values().all(|m| m.is_empty());
+        if !genesis_rules && rules::requires_presence(&env.payload, author, roster, fold) {
             // A device is added with its own account's presence, whoever
             // publishes the certificate.
             let whose = match &env.payload {

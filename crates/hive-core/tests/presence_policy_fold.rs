@@ -57,22 +57,33 @@ fn a_workspace_without_a_policy_uses_ligus_ai() {
     assert_eq!(w.verdict(wrong), Verdict::Denied);
 }
 
+/// Changing the RP needs presence verified under the OLD relying party:
+/// not none, and not an assertion made under the new one.
 #[test]
-fn the_rp_is_fixed_once_a_passkey_is_registered() {
-    let mut w = SignedWorld::genesis(&["owner"], Some(PresencePolicy::for_rp("example.org")));
-    // Only the recovery key so far: the RP may still move.
-    let early = w.push("owner", SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(PresencePolicy::for_rp("corp.example")) });
-    assert_eq!(w.verdict(early), Verdict::Allowed);
-    let key = soft_for("corp.example");
-    register(&mut w, "owner", &key);
-    let moved = w.push("owner", SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(PresencePolicy::for_rp("example.org")) });
-    assert_eq!(w.verdict(moved), Verdict::Denied);
-    // More origins on the same RP are fine.
-    let mut more = PresencePolicy::for_rp("corp.example");
-    more.origins.push("https://id.corp.example".into());
-    let added = w.push("owner", SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(more) });
-    assert_eq!(w.verdict(added), Verdict::Allowed);
-    assert_eq!(w.roster().presence_policy.origins.len(), 2);
+fn the_rp_changes_only_with_presence_under_the_old_rp() {
+    let mut w = SignedWorld::genesis(&["owner"], Some(PresencePolicy::for_rp("corp.example")));
+    let old = soft_for("corp.example");
+    let new = soft_for("example.org");
+    register(&mut w, "owner", &old);
+    register(&mut w, "owner", &new);
+    let to_new = SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(PresencePolicy::for_rp("example.org")) };
+    let bare = w.push_bare("owner", to_new.clone());
+    assert_eq!(w.verdict(bare), Verdict::Denied, "no presence");
+    let confirm = |w: &mut SignedWorld, auth: &SoftAuthenticator| {
+        let mut env = w.draft("owner", None, to_new.clone(), None);
+        let a = auth.get(&hive_core::presence::challenge(&env));
+        w.finish(&mut env, "owner", Some(a));
+        w.push_env(None, env)
+    };
+    let under_new = confirm(&mut w, &new);
+    assert_eq!(w.verdict(under_new), Verdict::Denied, "presence under the new RP doesn't authorize the switch");
+    assert_eq!(w.roster().presence_policy.rp_id, "corp.example");
+    let under_old = confirm(&mut w, &old);
+    assert_eq!(w.verdict(under_old), Verdict::Allowed);
+    assert_eq!(w.roster().presence_policy.rp_id, "example.org");
+    // From here the new RP's passkey verifies and the old one doesn't.
+    let (a, b) = (confirm_with(&mut w, &new), confirm_with(&mut w, &old));
+    assert_eq!((w.verdict(a), w.verdict(b)), (Verdict::Allowed, Verdict::Denied));
 }
 
 #[test]
@@ -90,10 +101,19 @@ fn a_malformed_policy_is_refused() {
     assert_eq!(w.roster().presence_policy, PresencePolicy::ligus());
 }
 
+/// An Admin sets the relying party (with presence); only the Owner changes
+/// the rules version; a Contributor does neither.
 #[test]
-fn only_the_owner_sets_the_policy() {
-    let mut w = SignedWorld::genesis(&["owner", "ada"], None);
+fn an_admin_sets_the_policy_only_the_owner_the_version() {
+    let mut w = SignedWorld::genesis(&["owner", "ada", "mara"], None);
     w.admit("owner", "ada", WorkspaceRole::Admin);
-    let id = w.push("ada", SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(PresencePolicy::for_rp("example.org")) });
-    assert_eq!(w.verdict(id), Verdict::Denied);
+    w.admit("owner", "mara", WorkspaceRole::Contributor);
+    let policy = w.push("ada", SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(PresencePolicy::for_rp("example.org")) });
+    assert_eq!(w.verdict(policy), Verdict::Allowed);
+    let version = w.push("ada", SessionEvent::WorkspaceRulesSet { version: 3, presence: None });
+    assert_eq!(w.verdict(version), Verdict::Denied);
+    let by_contributor = w.push("mara", SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(PresencePolicy::ligus()) });
+    assert_eq!(w.verdict(by_contributor), Verdict::Denied);
+    let by_owner = w.push("owner", SessionEvent::WorkspaceRulesSet { version: 3, presence: None });
+    assert_eq!(w.verdict(by_owner), Verdict::Allowed);
 }

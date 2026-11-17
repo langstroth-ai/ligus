@@ -14,10 +14,19 @@ struct Who {
     id: String,
     account: Uuid,
     kp: SigningKeypair,
+    /// The device this person signs with (certified at setup).
+    device: Uuid,
+    dk: SigningKeypair,
 }
 
 fn who(name: &str) -> Who {
-    Who { id: name.into(), account: Uuid::new_v4(), kp: SigningKeypair::generate().unwrap() }
+    Who {
+        id: name.into(),
+        account: Uuid::new_v4(),
+        kp: SigningKeypair::generate().unwrap(),
+        device: Uuid::new_v4(),
+        dk: SigningKeypair::generate().unwrap(),
+    }
 }
 
 fn actor(w: &Who) -> ActorIdentity {
@@ -26,19 +35,50 @@ fn actor(w: &Who) -> ActorIdentity {
     a
 }
 
+/// A config log written by each person's signing device; people whose test
+/// recovery key is registered stamp its presence (rules v2 from the seed).
 struct Log {
     ws: Uuid,
     lamport: u64,
     envs: Vec<SessionEventEnvelope>,
+    present: std::collections::BTreeSet<Uuid>,
+    signing_devices: Vec<Uuid>,
 }
 
 impl Log {
-    fn push(&mut self, by: &Who, payload: SessionEvent) {
+    fn draft(&mut self, by: &Who, payload: SessionEvent) -> SessionEventEnvelope {
         self.lamport += 1;
         let mut e = SessionEventEnvelope::new(workspace_config_session_id(self.ws), self.ws, self.lamport as i64, payload);
         e.lamport = self.lamport;
         e.actor_stamp = Some(ActorStamp { actor: actor(by), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false });
+        hive_core::sign_envelope(&mut e, by.device, &by.dk);
+        if self.present.contains(&by.account) {
+            hive_core::testkit::prove_recovery(&mut e, by.account, by.device, &by.dk);
+        }
+        e
+    }
+    fn push(&mut self, by: &Who, mut payload: SessionEvent) {
+        // Switching dearth mode on admits everyone's signing device (the
+        // setup's), as the tests' `admitted` lists did before they existed.
+        if let SessionEvent::DearthModeChanged { dearth } = &mut payload {
+            if dearth.enabled {
+                dearth.admitted_devices.extend(self.signing_devices.iter().copied());
+            }
+        }
+        let e = self.draft(by, payload);
         self.envs.push(e);
+    }
+    /// `w` publishes their account key and signing device, and registers
+    /// their test recovery key.
+    fn identity(&mut self, w: &Who) {
+        self.push(w, SessionEvent::AccountKeyRegistered { account_id: w.account, signing_public_key: w.kp.public_key_bytes().to_vec() });
+        let c = DeviceCertificate::issue(&w.kp, w.account, w.device, &w.dk.public_key_bytes(), Timestamp::epoch());
+        self.push(w, SessionEvent::DeviceCertificateAdded { certificate: c });
+        let mut e = self.draft(w, hive_core::testkit::recovery_registration(w.account));
+        hive_core::testkit::prove_recovery(&mut e, w.account, w.device, &w.dk);
+        self.envs.push(e);
+        self.present.insert(w.account);
+        self.signing_devices.push(w.device);
     }
     fn cert(&mut self, owner: &Who, device: Uuid) -> SigningKeypair {
         let dk = SigningKeypair::generate().unwrap();
@@ -68,13 +108,14 @@ fn setup() -> (Log, Who, Who, Who, Uuid) {
     let mut cfg = ChatSession::new("", ws, "");
     cfg.id = workspace_config_session_id(ws);
     cfg.creator_actor_id = owner.id.clone();
-    for (w, role) in [(&owner, WorkspaceRole::Owner), (&admin2, WorkspaceRole::Admin), (&alice, WorkspaceRole::Contributor)] {
-        cfg.members.push(WorkspaceMember { id: w.id.clone(), actor: actor(w), role, title: String::new(), index: 0, joined_at: Timestamp::epoch() });
-    }
-    let mut log = Log { ws, lamport: 0, envs: Vec::new() };
+    cfg.members.push(WorkspaceMember { id: owner.id.clone(), actor: actor(&owner), role: WorkspaceRole::Owner, title: String::new(), index: 0, joined_at: Timestamp::epoch() });
+    let mut log = Log { ws, lamport: 0, envs: Vec::new(), present: Default::default(), signing_devices: Vec::new() };
     log.push(&owner, SessionEvent::SessionSnapshot { session: Box::new(cfg) });
-    for w in [&owner, &admin2, &alice] {
-        log.push(w, SessionEvent::AccountKeyRegistered { account_id: w.account, signing_public_key: w.kp.public_key_bytes().to_vec() });
+    log.identity(&owner);
+    for (w, role) in [(&admin2, WorkspaceRole::Admin), (&alice, WorkspaceRole::Contributor)] {
+        let m = WorkspaceMember { id: w.id.clone(), actor: actor(w), role, title: String::new(), index: 0, joined_at: Timestamp::epoch() };
+        log.push(&owner, SessionEvent::MemberAdded { member: m, invite: None });
+        log.identity(w);
     }
     let laptop = Uuid::new_v4();
     log.cert(&owner, laptop);
@@ -272,7 +313,7 @@ fn an_unauthorized_device_revocation_is_ignored() {
 #[test]
 fn a_forged_seed_cannot_switch_dearth_off_under_a_founder_pin() {
     use crate::envelope_verifier::{build_roster_pinned, FounderPin};
-    let owner = Who { id: String::new(), account: Uuid::new_v4(), kp: SigningKeypair::generate().unwrap() };
+    let owner = who("");
     let owner = Who { id: owner.account.to_string(), ..owner };
     let alice = who("alice");
     let ws = Uuid::new_v4();
@@ -285,11 +326,10 @@ fn a_forged_seed_cannot_switch_dearth_off_under_a_founder_pin() {
         }
         SessionEvent::SessionSnapshot { session: Box::new(cfg) }
     };
-    let mut log = Log { ws, lamport: 0, envs: Vec::new() };
+    let mut log = Log { ws, lamport: 0, envs: Vec::new(), present: Default::default(), signing_devices: Vec::new() };
     log.push(&owner, seed(&owner, &[(&owner, WorkspaceRole::Owner), (&alice, WorkspaceRole::Contributor)]));
-    for w in [&owner, &alice] {
-        log.push(w, SessionEvent::AccountKeyRegistered { account_id: w.account, signing_public_key: w.kp.public_key_bytes().to_vec() });
-    }
+    log.identity(&owner);
+    log.push(&alice, SessionEvent::AccountKeyRegistered { account_id: alice.account, signing_public_key: alice.kp.public_key_bytes().to_vec() });
     let laptop = Uuid::new_v4();
     log.cert(&owner, laptop);
     log.push(&owner, dearth(true, vec![laptop]));

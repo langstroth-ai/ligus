@@ -21,6 +21,9 @@ struct Principal {
     account_id: Uuid,
     device: SigningKeypair,
     device_id: Uuid,
+    /// Registered a test recovery key (as a workspace founder): its events
+    /// carry that key's presence (rules v2 from the seed).
+    present: std::cell::Cell<bool>,
 }
 
 impl Principal {
@@ -31,6 +34,7 @@ impl Principal {
             account_id: Uuid::new_v4(),
             device: SigningKeypair::generate().unwrap(),
             device_id: Uuid::new_v4(),
+            present: std::cell::Cell::new(false),
         }
     }
     fn actor(&self) -> ActorIdentity {
@@ -48,6 +52,16 @@ impl Principal {
         e.lamport = lamport;
         e.actor_stamp = Some(ActorStamp { actor: self.actor(), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false });
         sign_envelope(&mut e, self.device_id, &self.device);
+        if self.present.get() {
+            hive_core::testkit::prove_recovery(&mut e, self.account_id, self.device_id, &self.device);
+        }
+        e
+    }
+    /// Register this principal's test recovery key (the founder's grant).
+    fn recovery(&self, ws: Uuid, lamport: u64) -> SessionEventEnvelope {
+        let mut e = self.sign(ws, lamport, hive_core::testkit::recovery_registration(self.account_id));
+        hive_core::testkit::prove_recovery(&mut e, self.account_id, self.device_id, &self.device);
+        self.present.set(true);
         e
     }
     fn trust(&self, ws: Uuid, lamport: u64) -> Vec<SessionEventEnvelope> {
@@ -73,6 +87,7 @@ impl Principal {
 fn workspace(ws: Uuid, owner: &Principal, others: &[&Principal]) -> Vec<SessionEventEnvelope> {
     let mut out = vec![owner.seed(ws, 1)];
     out.extend(owner.trust(ws, 2));
+    out.push(owner.recovery(ws, 4));
     let mut l = 10;
     for p in others {
         out.push(owner.sign(ws, l, SessionEvent::MemberAdded { invite: None, member: p.member(WorkspaceRole::Contributor) }));

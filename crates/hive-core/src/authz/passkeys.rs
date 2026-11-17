@@ -12,7 +12,7 @@ use super::RosterState;
 
 /// The refusal of a first passkey under rules v2 without an Admin's grant.
 pub const REGRANT_REQUIRED: &str =
-    "under rules v2 an account without a passkey registers one only after an Admin re-grants it (or with its recovery key)";
+    "an account without a passkey registers one only after an Admin grants it (or with its recovery key)";
 
 /// The account whose passkey the stamped presence proves, if the stamp
 /// carries one. A presence that doesn't verify is an error, never ignored:
@@ -39,8 +39,8 @@ pub fn verify_stamped(env: &SessionEventEnvelope, roster: &RosterState) -> Resul
 /// host), well formed, new; the account's first credential proves itself (an
 /// assertion by the new passkey, or the recovery key's own signature, over
 /// this event's digest), every later one needs presence from a credential the
-/// account already has. Under rules v2 a first credential also needs an
-/// Admin's grant ([`RosterState::passkey_grants`]).
+/// account already has. A first credential also needs a grant (the
+/// founder's, or an Admin's: [`RosterState::passkey_grants`]).
 pub fn registration_ok(
     env: &SessionEventEnvelope,
     c: &PasskeyCredential,
@@ -63,15 +63,13 @@ pub fn registration_ok(
     if existing.is_some_and(|m| m.contains_key(&c.credential_id)) {
         return Err("that credential is already registered".into());
     }
-    // Rules v2 (B.4.6): an account without a credential registers its first
-    // one only after an Admin's presence-confirmed grant (added as a new
-    // member, or re-granted after its credentials were removed); trust on
-    // first use from the device key alone is a rules v1 thing. With the
-    // recovery key kept, a new passkey registers with its presence below.
-    if existing.is_none()
-        && roster.rules.min(super::RULES_SUPPORTED) >= 2
-        && !roster.passkey_grants.contains(&c.account_id)
-    {
+    // B.4.6: an account without a credential registers its first one only
+    // with a grant: the founder's (from the seed), or an Admin's
+    // presence-confirmed one (added as a new member, or re-granted after its
+    // credentials were removed). There is no trust on first use from a device
+    // key alone. With the recovery key kept, a new passkey registers with its
+    // presence below.
+    if existing.is_none() && !roster.passkey_grants.contains(&c.account_id) {
         return Err(REGRANT_REQUIRED.into());
     }
     let a = presence::presence_of(env).map_err(|e| e.0)?.ok_or("a passkey registration carries its proof")?;

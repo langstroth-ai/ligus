@@ -10,6 +10,8 @@ import {
   removeWorkspace,
   workspaceShareCode,
   redeemShortCode,
+  passkeyRegister,
+  recoveryKeyCreate,
   type WorkspaceInfoDto,
 } from "@/lib/ipc";
 import { toast, errMsg } from "@/components/Toast";
@@ -29,6 +31,12 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
   const [joinCode, setJoinCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [lastInvite, setLastInvite] = useState<string | null>(null);
+  // A new workspace is secured before anything else: the founder's passkey
+  // and recovery key (rules v2 from the first event; nobody can be let in,
+  // and nothing governed, until the founder's passkey exists).
+  const [securing, setSecuring] = useState<WorkspaceInfoDto | null>(null);
+  const [hasPasskey, setHasPasskey] = useState(false);
+  const [words, setWords] = useState<string | null>(null);
 
   const workspaces = useQuery({
     queryKey: ["workspaces"],
@@ -55,21 +63,57 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
     try {
       const ws = await createWorkspace(n);
       setName("");
-      try {
-        setLastInvite(await workspaceInvite(ws.id));
-        toast.success(`Created “${ws.name}”. Share the invite below to add people.`);
-      } catch (e) {
-        // Created, but with no relay there's no invite worth sharing yet.
-        const m = inviteError(e);
-        setLastInvite(null);
-        toast.info(`Created “${ws.name}”. ${m.message}`, m.action);
-      }
+      setHasPasskey(false);
+      setWords(null);
+      setSecuring(ws);
       await refresh();
     } catch (e) {
       toast.error(errMsg(e));
     } finally {
       setBusy(false);
     }
+  }
+
+  async function onAddPasskey() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await passkeyRegister("Passkey");
+      setHasPasskey(true);
+    } catch (e) {
+      toast.error(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onRecoveryKey() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      setWords(await recoveryKeyCreate());
+    } catch (e) {
+      toast.error(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /// Secured: show the invite (it needs a relay to be worth sharing).
+  async function onSecured() {
+    const ws = securing;
+    setSecuring(null);
+    setWords(null);
+    if (!ws) return;
+    try {
+      setLastInvite(await workspaceInvite(ws.id));
+      toast.success(`“${ws.name}” is ready. Share the invite below to add people.`);
+    } catch (e) {
+      const m = inviteError(e);
+      setLastInvite(null);
+      toast.info(`“${ws.name}” is ready. ${m.message}`, m.action);
+    }
+    await qc.invalidateQueries({ queryKey: ["security-status"] });
   }
 
   async function onJoin() {
@@ -172,7 +216,47 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
         ))}
       </div>
 
-      {tab === "create" ? (
+      {securing ? (
+        <div className="space-y-3" data-testid="secure-workspace">
+          <p className="text-sm font-semibold">Secure “{securing.name}”</p>
+          <p className="text-xs text-ink-soft">
+            Every change to who's in this workspace, their roles, devices and keys needs your passkey. Create one
+            now, then write down a recovery key: it stands in for a lost passkey, and without it a sole owner who
+            loses their passkeys can't govern the workspace again.
+          </p>
+          <button
+            onClick={onAddPasskey}
+            disabled={busy || hasPasskey}
+            className="w-full rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-40"
+            style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
+          >
+            {hasPasskey ? "Passkey created ✓" : busy ? "Waiting for your passkey…" : "1. Create a passkey"}
+          </button>
+          {words ? (
+            <div className="space-y-2 rounded-lg border p-2" style={{ borderColor: "var(--hive-line)" }}>
+              <code className="block whitespace-pre-wrap text-xs" data-testid="new-workspace-recovery-words">
+                {words}
+              </code>
+              <button
+                onClick={onSecured}
+                className="w-full rounded-lg px-3 py-2 text-sm font-semibold"
+                style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
+              >
+                I wrote them down
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={onRecoveryKey}
+              disabled={busy || !hasPasskey}
+              className="w-full rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-40"
+              style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
+            >
+              2. Create a recovery key
+            </button>
+          )}
+        </div>
+      ) : tab === "create" ? (
         <div className="space-y-3">
           <p className="text-xs text-ink-soft">
             Creates a private, end-to-end-encrypted team room. You become the owner and get an

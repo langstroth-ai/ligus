@@ -139,9 +139,11 @@ pub const MAX_ORIGINS: usize = 8;
 /// hardcoded one. A workspace whose log never names one uses
 /// [`PresencePolicy::ligus`] (`ligus.ai`, the owner's deployment).
 ///
-/// The RP id can't change once any credential is registered on the
-/// workspace (they'd all stop verifying); the origins can, with presence
-/// verified under the policy in force before the change.
+/// An Admin changes it with presence verified under the policy in force
+/// before the change (the old RP). A new RP id leaves the workspace's
+/// passkeys unverifiable until they are registered again under it (recovery
+/// keys don't depend on the RP and keep working, so a new passkey can be
+/// registered with one).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PresencePolicy {
@@ -591,6 +593,10 @@ impl RecoveryKey {
         let mut seed = [0u8; 32];
         getrandom::fill(&mut seed).map_err(|_| err("random source"))?;
         Ok(Self { seed })
+    }
+    /// From a 32-byte seed (the 24 words' entropy).
+    pub fn from_seed(seed: [u8; 32]) -> Self {
+        Self { seed }
     }
     /// The 24 words (shown once).
     pub fn words(&self) -> String {

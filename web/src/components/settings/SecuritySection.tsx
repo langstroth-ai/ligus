@@ -9,12 +9,12 @@ import {
   recoveryKeyCreate,
   rotateWorkspaceKey,
   securityStatus,
-  workspaceRulesSet,
 } from "@/lib/ipc";
 
-/// Passkeys, the recovery key, workspace rules v2 and the workspace key.
-/// Admin actions in a rules-v2 workspace need a passkey confirmation; this is
-/// where a person registers theirs (at least two, plus a recovery key).
+/// Passkeys, the recovery key and the workspace key. Every workspace is on
+/// rules v2 from its first event, so admin actions need a passkey
+/// confirmation; this is where a person registers theirs (at least two, plus
+/// a recovery key).
 export function SecuritySection() {
   const qc = useQueryClient();
   const status = useQuery({ queryKey: ["security-status"], queryFn: securityStatus });
@@ -46,14 +46,6 @@ export function SecuritySection() {
     },
     onError: (e) => toast.error(errMsg(e)),
   });
-  const rules = useMutation({
-    mutationFn: () => workspaceRulesSet(2),
-    onSuccess: () => {
-      refresh();
-      toast.success("Rules v2 is on: admin actions now need a passkey.");
-    },
-    onError: (e) => toast.error(errMsg(e)),
-  });
   const confirmDevice = useMutation({
     mutationFn: deviceConfirm,
     onSuccess: () => {
@@ -77,11 +69,11 @@ export function SecuritySection() {
 
   return (
     <>
-      {st && st.rules >= 2 && !st.deviceConfirmed && (
+      {st && !st.deviceConfirmed && (
         <Section title="This device">
           <p className="text-xs" style={{ color: "var(--hive-warn-ink)" }}>
-            This device isn't confirmed for this workspace yet. Under rules v2 a new device of an account with a
-            passkey counts only after that passkey confirms it; until then other devices don't accept its changes.
+            This device isn't confirmed for this workspace yet. A new device of an account with a passkey counts
+            only after that passkey confirms it; until then other devices don't accept its changes.
           </p>
           <Button variant="primary" size="md" disabled={confirmDevice.isPending} onClick={() => confirmDevice.mutate()}>
             Confirm this device
@@ -150,19 +142,12 @@ export function SecuritySection() {
           </Button>
         )}
       </Section>
-      <Section title="Workspace rules">
-        <p className="text-xs text-ink-soft">
-          Rules v2 makes membership, roles, device revocation, key rotation, guards, zones, workflows, agent hosts and
-          human-gated approvals need a passkey. It needs a passkey and a recovery key first.
+      {st && (passkeys.length === 0 || !hasRecovery) && (
+        <p className="text-xs" style={{ color: "var(--hive-warn-ink)" }} data-testid="finish-securing">
+          Finish securing this workspace: membership, roles, devices and keys need your passkey, and a recovery key
+          keeps a lost passkey from locking you out.
         </p>
-        <div className="text-sm">Rules version: {st?.rules ?? "…"}</div>
-        <Button
-          disabled={!st || st.rules >= 2 || passkeys.length === 0 || !hasRecovery || rules.isPending}
-          onClick={() => rules.mutate()}
-        >
-          Turn on rules v2
-        </Button>
-      </Section>
+      )}
       <Section title="Workspace key">
         <p className="text-xs text-ink-soft">
           Rotating seals a new key to every current member's devices, including the serve and worker boxes enrolled

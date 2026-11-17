@@ -57,6 +57,18 @@ pub const WAITING_FOR_FOUNDER: &str =
 
 /// Drives a single workspace's chat sessions over an [`EventStore`], signing
 /// every appended event with this device's key.
+/// This crate's unit tests: the account an account-less test actor gets
+/// (deterministic, so a member record built in a test names the same
+/// account as that actor's own service).
+#[cfg(test)]
+pub(crate) fn test_account_for(actor_id: &str) -> Uuid {
+    use sha2::Digest;
+    let h = sha2::Sha256::digest(format!("ligus-test-account:{actor_id}").as_bytes());
+    let mut b = [0u8; 16];
+    b.copy_from_slice(&h[..16]);
+    uuid::Builder::from_random_bytes(b).into_uuid()
+}
+
 pub struct ChatService {
     store: EventStore,
     device_id: Uuid,
@@ -100,6 +112,10 @@ pub struct ChatService {
     /// The relying party this device writes into a workspace it founds
     /// (deployment setting; authoring only, never read by the fold).
     deployment_presence: hive_core::presence::PresencePolicy,
+    /// Tests only ([`ChatService::enable_test_presence`]): answer presence
+    /// prompts with a recovery key derived from the account, when no provider
+    /// is set. Never on otherwise.
+    test_presence: bool,
     /// Capture presence-needing drafts instead of refusing (serve, B3).
     capture_presence: bool,
     /// The last captured draft.
@@ -129,6 +145,16 @@ impl ChatService {
         account_keypair: SigningKeypair,
         author: ActorIdentity,
     ) -> Self {
+        // This crate's unit tests: every author holds an account, since rules
+        // v2 governance needs an account's presence.
+        #[cfg(test)]
+        let author = {
+            let mut author = author;
+            if author.account_id.is_none() && author.kind == hive_core::ActorKind::Human {
+                author.account_id = Some(test_account_for(&author.id));
+            }
+            author
+        };
         Self {
             store,
             device_id,
@@ -143,6 +169,10 @@ impl ChatService {
             runtime_effect: false,
             presence_provider: None,
             deployment_presence: hive_core::presence::PresencePolicy::ligus(),
+            // This crate's own unit tests run every service with a test
+            // recovery key (rules v2 everywhere); a test of the refusal path
+            // turns it off with `disable_test_presence`.
+            test_presence: cfg!(test),
             capture_presence: false,
             presence_draft: None,
             agent_messages: std::collections::HashMap::new(),
@@ -666,6 +696,9 @@ impl ChatService {
                 // B3: the fold wants its author's passkey presence.
                 Err(ChatError::Unauthorized(why)) if why == hive_core::authz::PRESENCE_REQUIRED => {
                     self.with_presence(&mut env)?;
+                    // (A confirmation may have registered a credential first.)
+                    let (config, timeline) =
+                        self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
                     self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
                 }
                 r => r?,
@@ -677,7 +710,7 @@ impl ChatService {
 
     /// Build and sign an envelope as this device's author would append it
     /// (not appended, not authorized).
-    fn draft_signed(&mut self, session_id: Uuid, workspace_id: Uuid, payload: SessionEvent) -> Result<SessionEventEnvelope> {
+    pub(crate) fn draft_signed(&mut self, session_id: Uuid, workspace_id: Uuid, payload: SessionEvent) -> Result<SessionEventEnvelope> {
         let next_seq = self.store.max_sequence(session_id)?.unwrap_or(0) + 1;
         let mut env = SessionEventEnvelope::new(session_id, workspace_id, next_seq, payload);
         // Causal Lamport clock: strictly greater than every event this device has
@@ -1439,6 +1472,21 @@ impl ChatService {
                 self.store.set_workspace_pin(workspace_id, &self.author.id, &fk)?;
             }
             self.publish_identity(config_id, workspace_id)?;
+            // Genesis rules (Phase A): every workspace starts on rules v2 under
+            // this deployment's passkey relying party. Written before anyone
+            // holds a credential, so it carries no presence; the founder then
+            // registers a passkey and a recovery key with the seed's one grant
+            // (the desktop's create flow does it right away). Until then the
+            // workspace can't admit anyone or change governance: every such
+            // event needs the founder's presence.
+            self.append_signed(
+                config_id,
+                workspace_id,
+                SessionEvent::WorkspaceRulesSet {
+                    version: hive_core::authz::RULES_GENESIS,
+                    presence: Some(self.deployment_presence.clone()),
+                },
+            )?;
         }
         Ok(config_id)
     }
@@ -3532,6 +3580,15 @@ mod tests {
 
     // ── Member config-hoist (§11) ──────────────────────────────────────────
 
+    /// A member record with the account its own test service will hold, for
+    /// a member who governs (presence is an account's, and an Admin's grant
+    /// names the account it lets register a first credential).
+    fn test_member_acct(id: &str, name: &str, role: WorkspaceRole) -> WorkspaceMember {
+        let mut m = test_member(id, name, role);
+        m.actor.account_id = Some(super::test_account_for(id));
+        m
+    }
+
     fn test_member(id: &str, name: &str, role: WorkspaceRole) -> WorkspaceMember {
         WorkspaceMember {
             id: id.into(),
@@ -4291,7 +4348,12 @@ mod tests {
         assert_eq!(owner.trigger_author_role(chat, forged).unwrap(), None);
         // The same stamp on a governance event (self-promotion) is refused
         // at ingest too.
-        con.set_member_role(chat, wid, con_acct.clone(), WorkspaceRole::Owner).unwrap();
+        // (Authoring refuses it for lack of presence; a peer that skips the
+        // check publishes it anyway.)
+        assert!(con.set_member_role(chat, wid, con_acct.clone(), WorkspaceRole::Owner).is_err());
+        let change = MemberRoleChange { member_id: con_acct.clone(), old_role: WorkspaceRole::Contributor, new_role: WorkspaceRole::Owner };
+        let env = con.draft_signed(workspace_config_session_id(wid), wid, SessionEvent::MemberRoleChanged { change }).unwrap();
+        con.store.ingest(&env).unwrap();
         let cfg = owner.store().list(workspace_config_session_id(wid)).unwrap();
         let promo = cfg.iter().rev().find(|e| matches!(&e.payload, SessionEvent::MemberRoleChanged { .. })).unwrap();
         assert_eq!(verdict_for(&build_roster(&all), promo), Verdict::Quarantine(QuarantineReason::Impersonation));
@@ -4344,7 +4406,7 @@ mod tests {
             let mut a = svc_on(&path, "u1", "Ana");
             let chat = a.create_chat("A", wid, "anthropic").unwrap();
             a.add_member(chat.id, wid, test_member("con", "Con", WorkspaceRole::Contributor)).unwrap();
-            a.add_member(chat.id, wid, test_member("adm", "Adm", WorkspaceRole::Admin)).unwrap();
+            a.add_member(chat.id, wid, test_member_acct("adm", "Adm", WorkspaceRole::Admin)).unwrap();
             chat.id
         };
         let mut con = svc_on(&path, "con", "Con");
@@ -4818,6 +4880,7 @@ mod tests {
     #[test]
     fn unknown_rules_version_needs_presence_to_take_effect() {
         let (mut svc, _) = service();
+        svc.disable_test_presence();
         let chat = svc.create_chat("Demo", Uuid::new_v4(), "anthropic").unwrap();
         let (sid, wid) = (chat.id, chat.workspace_id);
         let cfg = svc.ensure_workspace_config(wid).unwrap();

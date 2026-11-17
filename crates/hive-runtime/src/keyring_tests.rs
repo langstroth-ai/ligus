@@ -59,6 +59,9 @@ struct World {
     clock: u64,
     cfg: Vec<SessionEventEnvelope>,
     people: BTreeMap<&'static str, Person>,
+    /// People whose test recovery key is registered: their events carry
+    /// its presence (rules v2 from the seed).
+    present: std::collections::BTreeSet<&'static str>,
 }
 
 fn member(name: &str, p: &Person, role: WorkspaceRole) -> WorkspaceMember {
@@ -79,7 +82,7 @@ impl World {
         let wid = Uuid::new_v4();
         let mut people: BTreeMap<&'static str, Person> = NAMES.iter().map(|n| (*n, Person::new())).collect();
         edit(&mut people);
-        let mut w = Self { wid, clock: 0, cfg: Vec::new(), people };
+        let mut w = Self { wid, clock: 0, cfg: Vec::new(), people, present: Default::default() };
         let mut seed = ChatSession::new("", wid, "");
         seed.id = workspace_config_session_id(wid);
         let owner = w.aid("owner");
@@ -89,9 +92,11 @@ impl World {
         for name in NAMES {
             w.publish_identity(name);
         }
+        w.register_recovery("owner");
         for (name, role) in [("ada", WorkspaceRole::Admin), ("mara", WorkspaceRole::Contributor)] {
             let m = member(name, &w.people[name], role);
             w.push("owner", SessionEvent::MemberAdded { member: m, invite: None });
+            w.register_recovery(name);
         }
         for name in NAMES {
             let ka = w.people[name].ka().public_key_bytes().to_vec();
@@ -99,6 +104,17 @@ impl World {
             w.push(name, SessionEvent::DeviceKeyAgreementPublished { device_id, ka_public: ka });
         }
         w
+    }
+
+    /// `name` registers their test recovery key (it proves itself; the
+    /// founder's grant or the Admin's who added them lets it register).
+    fn register_recovery(&mut self, name: &'static str) {
+        let account = self.people[name].account_id;
+        let mut env = self.draft(name, hive_core::testkit::recovery_registration(account));
+        let p = &self.people[name];
+        hive_core::testkit::prove_recovery(&mut env, account, p.device_id, &p.device);
+        self.cfg.push(env);
+        self.present.insert(name);
     }
 
     fn publish_identity(&mut self, name: &'static str) {
@@ -133,6 +149,9 @@ impl World {
         actor.account_id = Some(p.account_id);
         env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: self.head(), presence: None, runtime_effect: false });
         sign_envelope(&mut env, p.device_id, &p.device);
+        if self.present.contains(by) {
+            hive_core::testkit::prove_recovery(&mut env, p.account_id, p.device_id, &p.device);
+        }
         env
     }
 
@@ -365,7 +384,8 @@ proptest! {
         for (env, l, p) in [(&mut ea, lamports.0, "owner"), (&mut eb, lamports.1, "ada")] {
             env.lamport = base + 1 + l;
             env.actor_stamp.as_mut().unwrap().cfg_frontier = f;
-            sign_envelope(env, w.people[p].device_id, &w.people[p].device);
+            let who = &w.people[p];
+            hive_core::testkit::prove_recovery(env, who.account_id, who.device_id, &who.device);
         }
         let winner = if ea.canonical_key() < eb.canonical_key() { (&ra, ka) } else { (&rb, kb) };
         let loser = if ea.canonical_key() < eb.canonical_key() { (&rb, kb) } else { (&ra, ka) };

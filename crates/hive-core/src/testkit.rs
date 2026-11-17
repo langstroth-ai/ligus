@@ -38,8 +38,14 @@ impl Person {
             account: SigningKeypair::generate().unwrap(),
             device_id: Uuid::new_v4(),
             device: SigningKeypair::generate().unwrap(),
-            recovery: RecoveryKey::generate().unwrap(),
+            recovery: RecoveryKey::from_seed([0; 32]),
         }
+        .with_test_recovery()
+    }
+
+    fn with_test_recovery(mut self) -> Self {
+        self.recovery = test_recovery_key(self.account_id);
+        self
     }
 
     pub fn actor(&self) -> ActorIdentity {
@@ -244,4 +250,32 @@ impl SignedWorld {
     pub fn verdict(&self, id: Uuid) -> crate::events::Verdict {
         self.verdicts()[&id]
     }
+}
+
+/// The recovery key a test account confirms with: derived from the account,
+/// so every test device and world of one person holds the same one.
+pub fn test_recovery_key(account: Uuid) -> RecoveryKey {
+    use sha2::Digest;
+    let h = sha2::Sha256::digest(format!("ligus-test-recovery:{account}").as_bytes());
+    RecoveryKey::from_seed(h.into())
+}
+
+/// The payload that registers `account`'s test recovery key. Draft it, then
+/// [`prove_recovery`] it.
+pub fn recovery_registration(account: Uuid) -> SessionEvent {
+    let mut credential = test_recovery_key(account).credential(account, "Recovery key");
+    credential.registered_at = Timestamp::epoch();
+    SessionEvent::PasskeyRegistered { credential }
+}
+
+/// Stamp `account`'s test recovery-key presence over `env` (the event's own
+/// digest) and re-sign it with `device`. Works for a recovery registration's
+/// self-proof and for any presence-gated event once the key is registered.
+pub fn prove_recovery(env: &mut SessionEventEnvelope, account: Uuid, device_id: Uuid, device: &SigningKeypair) {
+    let a = test_recovery_key(account).assert(&crate::presence::challenge(env));
+    if let Some(s) = env.actor_stamp.as_mut() {
+        s.presence = Some(a);
+    }
+    env.clear_raw();
+    sign_envelope(env, device_id, device);
 }

@@ -78,7 +78,7 @@ pub struct RosterState {
     /// Agent keys by `key_id` (an agent-signed envelope's `signer_device_id`).
     pub agent_keys: BTreeMap<Uuid, AgentKeyState>,
     pub dearth: bool,
-    /// The workspace rules version in force (1 when never set).
+    /// The workspace rules version in force (2 from the seed).
     pub rules: u32,
     /// The path zones (Admin-set review bars) in force.
     pub zones: Vec<crate::flow::PathZone>,
@@ -90,10 +90,10 @@ pub struct RosterState {
     /// Each account's registered passkeys and recovery keys, by credential
     /// id (B3).
     pub passkeys: BTreeMap<Uuid, BTreeMap<String, crate::presence::PasskeyKey>>,
-    /// Accounts without a credential that an Admin's presence-confirmed act
-    /// under rules v2 lets register a first passkey, once (B.4.6): adding
-    /// them as a new member, or re-granting their role after their
-    /// credentials were removed.
+    /// Accounts without a credential that may register a first passkey,
+    /// once (B.4.6): the founder (from the seed), and anyone an Admin's
+    /// presence-confirmed act lets in: adding them as a new member, or
+    /// re-granting their role after their credentials were removed.
     pub passkey_grants: BTreeSet<Uuid>,
     /// Each account's signing key as this log registers it, undisputed only.
     /// A link statement names the key in force at its position.
@@ -194,10 +194,20 @@ pub struct RosterTracker {
 }
 
 impl RosterTracker {
-    /// Seed from the base snapshot.
+    /// Seed from the base snapshot: rules v2, and the founder's one grant to
+    /// register a first passkey (the workspace's only bootstrap; every other
+    /// account's first credential needs an Admin's presence-confirmed grant).
     pub fn seeded(session: &ChatSession) -> Self {
         let mut t = Self::default();
-        t.state.rules = 1;
+        t.state.rules = super::RULES_GENESIS;
+        if let Some(a) = session
+            .members
+            .iter()
+            .find(|m| m.id == session.creator_actor_id && m.role == WorkspaceRole::Owner)
+            .and_then(|m| m.actor.account_id)
+        {
+            t.state.passkey_grants.insert(a);
+        }
         t.refresh(session);
         t
     }
@@ -207,7 +217,7 @@ impl RosterTracker {
     /// roster side read back from the fold. Returns whether the state changed.
     pub fn observe(&mut self, env: &SessionEventEnvelope, allowed: bool, fold: &ChatSession) -> bool {
         let before = self.state.clone();
-        if allowed && self.state.rules.min(super::RULES_SUPPORTED) >= 2 {
+        if allowed {
             self.note_grant(&env.payload);
         }
         match &env.payload {
@@ -321,11 +331,11 @@ impl RosterTracker {
         self.state != before
     }
 
-    /// Rules v2 (B.4.6): an allowed act that lets an account without a
-    /// credential register a first passkey. Under rules v2 both need an
-    /// Admin's presence, except a self-enrollment through an invite an Admin
-    /// issued (which itself needed presence when issued under v2). An
-    /// idempotent self re-add of an existing member grants nothing.
+    /// B.4.6: an allowed act that lets an account without a credential
+    /// register a first passkey. Both need an Admin's presence, except a
+    /// self-enrollment through an invite an Admin issued (which itself needed
+    /// presence when issued). An idempotent self re-add of an existing member
+    /// grants nothing.
     fn note_grant(&mut self, e: &SessionEvent) {
         let account = match e {
             SessionEvent::MemberAdded { member, .. } if !self.state.members.contains_key(&member.id) => member.actor.account_id,

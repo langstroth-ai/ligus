@@ -319,6 +319,10 @@ pub struct Shared {
     pub sync_kick: Notify,
     pub worker_kick: Notify,
     stopping: AtomicBool,
+    /// Tests only: treat a bearer request as confirmed by the owner's
+    /// presence (the HTTP tests have no phone or passkey).
+    #[cfg(test)]
+    pub test_presence: AtomicBool,
     /// When this process started (see [`Shared::fresh`]).
     started_at: Timestamp,
     pub http: reqwest::Client,
@@ -1024,6 +1028,8 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         sync_kick: Notify::new(),
         worker_kick: Notify::new(),
         stopping: AtomicBool::new(false),
+        #[cfg(test)]
+        test_presence: AtomicBool::new(false),
         started_at: Timestamp::now(),
         http: hive_forge::http_client_builder().connect_timeout(Duration::from_secs(3)).build()?,
         dashboard_cache: dashboard::Cache::default(),

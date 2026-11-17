@@ -2,11 +2,12 @@
 //!
 //! WebAuthn in the Tauri webview is unreliable, so every OS uses one path:
 //! the desktop listens on `127.0.0.1:<random>` with a one-time nonce and opens
-//! `https://ligus.ai/presence#c=<challenge>&p=<port>&n=<nonce>&op=get|create…`
-//! (through a private redirect page under the data dir, so the nonce is never
-//! in a command line).
+//! `<workspace origin>/presence#rp=<rp id>&c=<challenge>&p=<port>&n=<nonce>&op=get|create…`
+//! (`https://ligus.ai/presence` for the owner's deployment), through a
+//! private redirect page under the data dir, so the nonce is never in a
+//! command line.
 //! That static page (strict CSP, no third-party script) runs
-//! `navigator.credentials.get/create` with `rpId: "ligus.ai"` and
+//! `navigator.credentials.get/create` with the workspace's `rpId` and
 //! `userVerification: "required"`, then submits the result to the loopback
 //! (a top-level form POST, so no CORS or mixed-content rules apply). The
 //! desktop checks the returned challenge is its own before using it, and the
@@ -28,10 +29,6 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::AppState;
 
-/// Where the owner's deployment serves the hand-off page (the ligus.ai site
-/// repo). A workspace under another relying party uses its own origin's
-/// `/presence` ([`hive_core::presence::PresencePolicy::page_url`]).
-pub const PRESENCE_PAGE: &str = "https://ligus.ai/presence";
 /// How long the desktop waits for the browser.
 const WAIT: Duration = Duration::from_secs(180);
 
@@ -369,7 +366,7 @@ pub fn security_status(state: State<'_, AppState>) -> Result<SecurityStatusDto, 
         .map(|(credential_id, recovery)| PasskeyDto { credential_id, recovery })
         .collect();
     let cfg = svc.load(hive_core::workspace_config_session_id(ws)).ok().flatten();
-    let rules = cfg.as_ref().map(|c| c.authz.rules).unwrap_or(1);
+    let rules = cfg.as_ref().map(|c| c.authz.rules).unwrap_or(hive_core::authz::RULES_GENESIS);
     let (_, timeline) = svc.store().load_config(ws, None, None).map_err(|e| e.to_string())?;
     Ok(SecurityStatusDto {
         passkeys,
@@ -592,7 +589,7 @@ mod tests {
     #[test]
     fn the_nonce_stays_off_the_command_line() {
         let dir = std::env::temp_dir().join(format!("ligus-presence-test-{}", uuid::Uuid::new_v4().simple()));
-        let url = format!("{PRESENCE_PAGE}#op=get&c=abc&p=4242&n=secret-nonce-123");
+        let url = format!("{}#op=get&c=abc&p=4242&n=secret-nonce-123", hive_core::presence::PresencePolicy::ligus().page_url());
         let page = redirect_page(&dir.join("presence"), &url).unwrap();
         assert!(!page.to_string_lossy().contains("secret-nonce-123"), "the nonce is in the path");
         let html = std::fs::read_to_string(&page).unwrap();

@@ -507,6 +507,8 @@ async fn interop_against_a_real_relay() {
 async fn forge_tokens_can_be_set_through_the_tunnel() {
     let relay = FakeRelay::start().await;
     let h = serve_with_relay(&relay.url).await;
+    // Forge changes need the owner's presence on every box (5.7).
+    h.handle.shared.test_presence.store(true, std::sync::atomic::Ordering::SeqCst);
     relay.wait_connected(Duration::from_secs(10)).await.unwrap();
     h.send(reqwest::Method::POST, "/v1/forges", Some(json!({"kind": "gitlab", "baseUrl": "https://gitlab.example.com", "auth": "token"}))).await;
     let t = h.handle.shared.tunnel.clone().unwrap();

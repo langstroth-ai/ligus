@@ -33,7 +33,10 @@ fn role_from(n: u8) -> WorkspaceRole {
     [WorkspaceRole::Owner, WorkspaceRole::Admin, WorkspaceRole::Contributor, WorkspaceRole::Viewer][n as usize % 4]
 }
 
-/// One workspace: its config log and one chat log.
+/// One workspace: its config log and one chat log. Every person signs with
+/// their own certified device; the members (owner, ada, mara, val) hold a
+/// registered test recovery key, so their config events and their gated chat
+/// events carry its presence (rules v2 from the seed). `eve` is a stranger.
 #[derive(Clone)]
 struct World {
     wid: Uuid,
@@ -42,6 +45,35 @@ struct World {
     clock: u64,
     cfg: Vec<SessionEventEnvelope>,
     chat: Vec<SessionEventEnvelope>,
+    present: std::collections::BTreeSet<String>,
+}
+
+/// `who`'s account key (deterministic, as `trust_events` publishes it).
+fn account_key(who: &str) -> hive_core::SigningKeypair {
+    hive_core::SigningKeypair::from_seed(&[who.len() as u8 + 1; 32]).unwrap()
+}
+
+/// `who`'s own signing device.
+fn device_of(who: &str) -> (Uuid, hive_core::SigningKeypair) {
+    let id = Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("device:{who}").as_bytes());
+    let mut seed = [0u8; 32];
+    for (i, b) in who.bytes().enumerate() {
+        seed[i % 32] ^= b;
+    }
+    seed[31] = 0x5a;
+    (id, hive_core::SigningKeypair::from_seed(&seed).unwrap())
+}
+
+/// Chat kinds a test author confirms with presence (the gated ones).
+fn gated_on_chat(e: &SessionEvent) -> bool {
+    matches!(
+        e,
+        SessionEvent::ProposalVoteCast { .. }
+            | SessionEvent::ProposalApplied { .. }
+            | SessionEvent::ProposalSetDecided { .. }
+            | SessionEvent::ProposalSetTuned { .. }
+            | SessionEvent::WorkflowDefinitionsUpdated { .. }
+    )
 }
 
 impl World {
@@ -55,13 +87,64 @@ impl World {
         chat.creator_actor_id = "owner".into();
         chat.members = vec![member("owner", WorkspaceRole::Owner)];
         let sid = chat.id;
-        let mut w = Self { wid, sid, clock: 0, cfg: Vec::new(), chat: Vec::new() };
+        let mut w = Self { wid, sid, clock: 0, cfg: Vec::new(), chat: Vec::new(), present: Default::default() };
         w.cfg_push("owner", SessionEvent::SessionSnapshot { session: Box::new(seed) });
+        w.identity("owner");
         w.chat_push("owner", SessionEvent::SessionSnapshot { session: Box::new(chat) });
         for (id, role) in [("ada", WorkspaceRole::Admin), ("mara", WorkspaceRole::Contributor), ("val", WorkspaceRole::Viewer)] {
             w.cfg_push("owner", SessionEvent::MemberAdded { invite: None, member: member(id, role) });
+            w.identity(id);
         }
         w
+    }
+
+    /// `who` publishes their account key and device, and registers their
+    /// test recovery key (the founder's grant, or the Admin's who added them).
+    fn identity(&mut self, who: &str) {
+        let (device, dk) = device_of(who);
+        let acct = account_key(who);
+        self.cfg_push(who, SessionEvent::AccountKeyRegistered { account_id: account(who), signing_public_key: acct.public_key_bytes().to_vec() });
+        let cert = hive_core::DeviceCertificate::issue(&acct, account(who), device, &dk.public_key_bytes(), Timestamp::epoch());
+        self.cfg_push(who, SessionEvent::DeviceCertificateAdded { certificate: cert });
+        let id = self.cfg_push(who, hive_core::testkit::recovery_registration(account(who)));
+        let env = self.cfg.iter_mut().find(|e| e.event_id == id).unwrap();
+        hive_core::testkit::prove_recovery(env, account(who), device, &dk);
+        self.present.insert(who.to_string());
+    }
+
+    /// Sign `env` as `by`'s device, with their presence when `gated` and
+    /// they hold a registered recovery key.
+    fn seal(&self, env: &mut SessionEventEnvelope, by: &str, gated: bool) {
+        let (device, dk) = device_of(by);
+        if let Some(s) = env.actor_stamp.as_mut() {
+            s.actor.device_id = Some(device);
+        }
+        hive_core::sign_envelope(env, device, &dk);
+        if gated && self.present.contains(by) {
+            hive_core::testkit::prove_recovery(env, account(by), device, &dk);
+        }
+    }
+
+    /// Re-seal an event a test changed after writing it (its presence and
+    /// signature cover what changed).
+    fn reseal(&mut self, id: Uuid) {
+        let (on_cfg, idx) = match self.cfg.iter().position(|e| e.event_id == id) {
+            Some(i) => (true, i),
+            None => (false, self.chat.iter().position(|e| e.event_id == id).unwrap()),
+        };
+        let mut env = if on_cfg { self.cfg[idx].clone() } else { self.chat[idx].clone() };
+        env.clear_raw();
+        let by = env.actor_stamp.as_ref().map(|s| s.actor.id.clone()).unwrap_or_default();
+        let gated = on_cfg || gated_on_chat(&env.payload);
+        if let Some(s) = env.actor_stamp.as_mut() {
+            s.presence = None;
+        }
+        self.seal(&mut env, &by, gated);
+        if on_cfg {
+            self.cfg[idx] = env;
+        } else {
+            self.chat[idx] = env;
+        }
     }
 
     fn stamp(by: &str, frontier: Option<CfgFrontier>) -> Option<ActorStamp> {
@@ -74,11 +157,32 @@ impl World {
         self.cfg.iter().map(|e| CfgFrontier { lamport: e.lamport, event_id: e.event_id }).max()
     }
 
+    /// A chat event by `by` at the head, without presence.
+    fn chat_push_bare(&mut self, by: &str, e: SessionEvent) -> Uuid {
+        let present = self.present.remove(by);
+        let id = self.chat_push(by, e);
+        if present {
+            self.present.insert(by.to_string());
+        }
+        id
+    }
+
+    /// A config event by `by`'s device without presence.
+    fn cfg_push_bare(&mut self, by: &str, e: SessionEvent) -> Uuid {
+        let present = self.present.remove(by);
+        let id = self.cfg_push(by, e);
+        if present {
+            self.present.insert(by.to_string());
+        }
+        id
+    }
+
     fn cfg_push(&mut self, by: &str, e: SessionEvent) -> Uuid {
         self.clock += 1;
         let mut env = SessionEventEnvelope::new(workspace_config_session_id(self.wid), self.wid, self.clock as i64, e);
         env.lamport = self.clock;
         env.actor_stamp = Self::stamp(by, self.head());
+        self.seal(&mut env, by, true);
         let id = env.event_id;
         self.cfg.push(env);
         id
@@ -95,6 +199,8 @@ impl World {
         let mut env = SessionEventEnvelope::new(self.sid, self.wid, self.clock as i64, e);
         env.lamport = self.clock;
         env.actor_stamp = Self::stamp(by, frontier);
+        let gated = gated_on_chat(&env.payload);
+        self.seal(&mut env, by, gated);
         let id = env.event_id;
         self.chat.push(env);
         id
@@ -276,10 +382,16 @@ proptest! {
         // Same ids and seeds; only the declared roles differ.
         lying.cfg = honest.cfg.clone();
         lying.chat = honest.chat.clone();
+        let mut changed = Vec::new();
         for e in &mut lying.chat {
             if let SessionEvent::ProposalVoteCast { approval, .. } = &mut e.payload {
                 approval.role = role_from(salt.wrapping_add(approval.actor_id.len() as u8));
+                changed.push(e.event_id);
             }
+        }
+        // (Each liar signs and confirms what they claim.)
+        for id in changed {
+            lying.reseal(id);
         }
         prop_assert_eq!(honest.state().proposals, lying.state().proposals);
     }
@@ -708,20 +820,27 @@ fn glob_semantics_are_unchanged() {
 #[test]
 fn unknown_rules_version_needs_presence_to_make_workspace_read_only() {
     let mut w = World::new();
-    assert_eq!(w.config().authz.rules, 1, "workspaces start at rules v1");
+    assert_eq!(w.config().authz.rules, 2, "workspaces start at rules v2");
     assert!(!w.config().authz.read_only());
     // Only the Owner sets rules.
     let by_admin = w.cfg_push("ada", SessionEvent::WorkspaceRulesSet { version: 9, presence: None });
     assert_eq!(w.verdicts()[&by_admin], Verdict::Denied);
     assert!(!w.config().authz.read_only());
     // The Owner's device key alone can't switch to an unknown version.
-    let by_owner = w.cfg_push("owner", SessionEvent::WorkspaceRulesSet { version: hive_core::authz::RULES_SUPPORTED + 1, presence: None });
+    let by_owner = w.cfg_push_bare("owner", SessionEvent::WorkspaceRulesSet { version: hive_core::authz::RULES_SUPPORTED + 1, presence: None });
     assert_eq!(w.verdicts()[&by_owner], Verdict::Denied);
     assert!(!w.config().authz.read_only(), "a switch without presence froze the workspace");
     w.chat_push("mara", SessionEvent::ProposalUpserted { proposal: proposal(Uuid::from_u128(0xF1), 1, ProposalStatus::Open) });
     let s = w.state();
     assert_eq!(s.proposals.len(), 1);
     assert!(!s.authz.read_only());
+    // Version 1 doesn't exist, even with the Owner's presence.
+    let v1 = w.cfg_push("owner", SessionEvent::WorkspaceRulesSet { version: 1, presence: None });
+    assert_eq!(w.verdicts()[&v1], Verdict::Denied);
+    // With presence, an unknown version makes this build read-only.
+    let ok = w.cfg_push("owner", SessionEvent::WorkspaceRulesSet { version: hive_core::authz::RULES_SUPPORTED + 1, presence: None });
+    assert_eq!(w.verdicts()[&ok], Verdict::Allowed);
+    assert!(w.config().authz.read_only());
 }
 
 // ---- upgrade refold ----
@@ -902,7 +1021,7 @@ struct AgentSetup {
 fn agent_world(owner_name: &str) -> (World, AgentSetup) {
     use hive_core::crypto::{DeviceCertificate, SigningKeypair};
     let mut w = World::new();
-    let acct = SigningKeypair::from_seed(&[owner_name.len() as u8 + 40; 32]).unwrap();
+    let acct = account_key(owner_name);
     let dev = SigningKeypair::from_seed(&[owner_name.len() as u8 + 80; 32]).unwrap();
     let host = Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("{owner_name}-device").as_bytes());
     w.cfg_push(owner_name, SessionEvent::AccountKeyRegistered { account_id: account(owner_name), signing_public_key: acct.public_key_bytes().to_vec() });
@@ -1106,7 +1225,7 @@ fn delegated_host_vote_not_counted_for_human_gate() {
     use hive_core::crypto::{DeviceCertificate, SigningKeypair};
     let mut w = World::new();
     let owner_acct = account("owner");
-    let owner_key = SigningKeypair::generate().unwrap();
+    let owner_key = account_key("owner");
     let (desk_key, box_key, box_acct_key) =
         (SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap());
     let (desk, bx, box_acct) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
@@ -1140,7 +1259,8 @@ fn delegated_host_vote_not_counted_for_human_gate() {
     let pid = Uuid::from_u128(0xD1);
     w.chat_push("owner", SessionEvent::ProposalUpserted { proposal: proposal(pid, 1, ProposalStatus::Open) });
     let digest = Some(diff_digest(&proposal(pid, 1, ProposalStatus::Open)));
-    let from_box = w.chat_push("owner", vote("owner", pid, WorkspaceRole::Owner, true, digest.clone()));
+    // (No presence: the owner isn't there; the box signs alone.)
+    let from_box = w.chat_push_bare("owner", vote("owner", pid, WorkspaceRole::Owner, true, digest.clone()));
     w.chat.last_mut().unwrap().signer_device_id = Some(bx);
     let p = w.state().proposals.into_iter().find(|p| p.id == pid).unwrap();
     assert!(p.approvals.is_empty(), "the delegated host's vote counted: {:?}", p.approvals);
@@ -1165,7 +1285,7 @@ fn delegated_host_republishing_its_cert_stays_delegated() {
     use hive_core::crypto::{DeviceCertificate, SigningKeypair};
     let mut w = World::new();
     let owner_acct = account("owner");
-    let owner_key = SigningKeypair::generate().unwrap();
+    let owner_key = account_key("owner");
     let (desk_key, box_key) = (SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap());
     let (desk, bx) = (Uuid::new_v4(), Uuid::new_v4());
     let box_cert = DeviceCertificate::issue(&owner_key, owner_acct, bx, &box_key.public_key_bytes(), Timestamp::epoch());
@@ -1190,7 +1310,7 @@ fn delegated_host_republishing_its_cert_stays_delegated() {
     let pid = Uuid::from_u128(0xD7);
     w.chat_push("owner", SessionEvent::ProposalUpserted { proposal: proposal(pid, 1, ProposalStatus::Open) });
     let digest = Some(diff_digest(&proposal(pid, 1, ProposalStatus::Open)));
-    w.chat_push("owner", vote("owner", pid, WorkspaceRole::Owner, true, digest));
+    w.chat_push_bare("owner", vote("owner", pid, WorkspaceRole::Owner, true, digest));
     w.chat.last_mut().unwrap().signer_device_id = Some(bx);
     let p = w.state().proposals.into_iter().find(|p| p.id == pid).unwrap();
     assert!(p.approvals.is_empty(), "the delegated host's vote counted: {:?}", p.approvals);

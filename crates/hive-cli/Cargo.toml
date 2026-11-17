@@ -49,6 +49,8 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = ["c
 tower = { version = "0.5", default-features = false, features = ["util"] }
 
 [dev-dependencies]
+# Tests answer passkey prompts with a test recovery key (never in a real build).
+hive-runtime = { path = "../hive-runtime", features = ["test-presence"] }
 async-trait = "0.1"
 tempfile = "3"
 hex = "0.4"

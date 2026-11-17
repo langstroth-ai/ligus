@@ -352,6 +352,10 @@ fn open_service(cfg: &Config) -> Result<ChatService> {
     // Agents bound to this host sign their own output with keys this device
     // certifies (A3); the keys live with this host's other keys.
     svc.set_agent_vault(Box::new(StoreKeyVault::for_data_dir(&cfg.data_dir)));
+    // Tests: a person's passkey prompts are answered by their test recovery
+    // key (rules v2 governance needs presence; a test has no browser).
+    #[cfg(test)]
+    svc.enable_test_presence();
     Ok(svc)
 }
 
@@ -648,8 +652,20 @@ async fn cmd_sync(cfg: &Config, watch: bool) -> Result<()> {
 fn cmd_new(cfg: &Config, title: String) -> Result<()> {
     let mut svc = open_service(cfg)?;
     let ws = uuid_of_room(&cfg.room);
+    let founded = svc.load(hive_core::workspace_config_session_id(ws))?.is_none();
     let session = svc.create_chat(title, ws, "")?;
     println!("{}", session.id);
+    // Phase A: the CLI can found a workspace (rules v2 from its seed) but has
+    // no passkey ceremony. Until the founder registers a passkey and a
+    // recovery key from the desktop app (or the phone, once it has its own
+    // device key), nobody can be let in and nothing governed.
+    if founded && !svc.workspace_secured(ws).unwrap_or(false) {
+        eprintln!(
+            "This workspace isn't secured yet: open it in the Ligus desktop app and create a passkey and a \
+             recovery key (Settings → Passkeys & keys). Until then nobody can join it and its membership, \
+             roles, devices and keys can't change."
+        );
+    }
     Ok(())
 }
 
