@@ -97,6 +97,96 @@ run "$TMP/l5" env HOME="$TMP/home" LIGUS_BIN=/usr/bin/true "$LOCAL" uninstall --
 check_json "ligus-local never deletes a data dir it did not create" "$TMP/l5" 4 "$RC" data
 if [ -f "$TMP/notours/keep" ]; then pass "foreign data dir kept"; else fail "foreign data dir deleted"; fi
 
+# ligus-k8s never falls back to the current kube context.
+run "$TMP/c1" "$K8S" verify --json --namespace x --release r
+check_json "ligus-k8s without --context is a usage error" "$TMP/c1" 2 "$RC"
+
+# Flag values reach a generated values file: a quote or newline is refused
+# before anything is rendered (it would inject YAML past the fail-closed check).
+run "$TMP/i1" "$K8S" install --json --context c --namespace x --scenario trial --image-tag 'dev"
+agentSandbox: {preflight: {turnTest: false}}
+x: "'
+check_json "ligus-k8s refuses YAML in --image-tag" "$TMP/i1" 2 "$RC"
+run "$TMP/i2" "$K8S" install --json --context c --namespace x --scenario team-external-relay --relay-url 'https://r.example"
+networkPolicy: {restrictEgress: false}
+y: "'
+check_json "ligus-k8s refuses YAML in --relay-url" "$TMP/i2" 2 "$RC"
+
+# The rendered-manifest check catches every fail-closed default it promises.
+cat >"$TMP/good.yaml" <<'EOF'
+---
+kind: NetworkPolicy
+metadata:
+  name: t-ligus-controller
+spec:
+  policyTypes:
+    - Ingress
+    - Egress
+---
+kind: StatefulSet
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: sandbox-preflight
+          args:
+            - doctor
+            - --turn-test
+          env:
+            - name: LIGUS_REQUIRE_SANDBOX
+              value: "1"
+      containers:
+        - name: serve
+          env:
+            - name: LIGUS_REQUIRE_SANDBOX
+              value: "1"
+EOF
+run "$TMP/r0" "$K8S" check-rendered "$TMP/good.yaml" --json
+check_json "check-rendered passes the defaults" "$TMP/r0" 0 "$RC" fail-closed
+sed '/^    - Egress$/d' "$TMP/good.yaml" >"$TMP/r1.yaml"
+run "$TMP/r1" "$K8S" check-rendered "$TMP/r1.yaml" --json
+check_json "check-rendered: restrictEgress off stops for the human" "$TMP/r1" 4 "$RC" fail-closed
+sed '/- --turn-test/d' "$TMP/good.yaml" >"$TMP/r2.yaml"
+run "$TMP/r2" "$K8S" check-rendered "$TMP/r2.yaml" --json
+check_json "check-rendered: turn test off stops for the human" "$TMP/r2" 4 "$RC" fail-closed
+awk '/value: "1"/ && ++n == 2 { sub(/"1"/, "\"0\"") } { print }' "$TMP/good.yaml" >"$TMP/r3.yaml"
+run "$TMP/r3" "$K8S" check-rendered "$TMP/r3.yaml" --json
+check_json "check-rendered: one workload without LIGUS_REQUIRE_SANDBOX=1 stops for the human" "$TMP/r3" 4 "$RC" fail-closed
+
+# ligus-local: the env file is sourced, so its values must never run as code.
+run "$TMP/l6" env HOME="$TMP/home" LIGUS_BIN=/usr/bin/true "$LOCAL" configure --json --role serve \
+  --data-dir "$TMP/d6" --env-file "$TMP/e6" --label 'box;touch '"$TMP"'/pwned'
+check_json "ligus-local refuses shell in --label" "$TMP/l6" 2 "$RC"
+if [ ! -e "$TMP/d6" ] && [ ! -e "$TMP/pwned" ]; then pass "refused label created nothing"; else fail "refused label left files"; fi
+run "$TMP/l7" env HOME="$TMP/home" LIGUS_BIN=/usr/bin/true "$LOCAL" configure --json --role serve \
+  --data-dir "$TMP/d 7" --env-file "$TMP/e7" --label 'My Box'
+check_json "ligus-local configure with spaces" "$TMP/l7" 4 "$RC" workspace
+# shellcheck disable=SC2016  # $1 and the variables expand in the child shell
+if [ "$(env -i bash -c 'set -a; . "$1"; set +a; printf "%s|%s" "$LIGUS_SERVE_LABEL" "$LIGUS_DATA_DIR"' _ "$TMP/e7" 2>&1)" = "My Box|$TMP/d 7" ]; then
+  pass "env file with spaces sources cleanly"
+else
+  fail "env file with spaces does not source cleanly"
+fi
+
+# ligus-local uninstall deletes only an env file it wrote.
+printf 'precious\n' >"$TMP/foreign.env"
+run "$TMP/l8" env HOME="$TMP/home" LIGUS_BIN=/usr/bin/true "$LOCAL" uninstall --json --role serve \
+  --data-dir "$TMP/d 7" --env-file "$TMP/foreign.env" --delete-data
+check_json "ligus-local uninstall with a foreign env file" "$TMP/l8" 0 "$RC" data
+if [ -f "$TMP/foreign.env" ] && [ ! -e "$TMP/d 7" ]; then pass "foreign env file kept, own data dir deleted"; else fail "uninstall removed a file it did not write"; fi
+
+# Only the deploy skills' SKILL.md files under .claude/ can be committed.
+if command -v git >/dev/null 2>&1 && git -C "$ROOT" rev-parse >/dev/null 2>&1; then
+  gi_ok=1
+  for f in .claude/skills/ligus-deploy-k8s/SKILL.md .claude/skills/ligus-deploy-local/SKILL.md; do
+    git -C "$ROOT" check-ignore -q --no-index "$f" && gi_ok=0
+  done
+  for f in .claude/settings.local.json .claude/skills/private/SKILL.md .claude/skills/ligus-deploy-k8s/notes.md .claude/worktrees/x/y; do
+    git -C "$ROOT" check-ignore -q --no-index "$f" || gi_ok=0
+  done
+  if [ $gi_ok = 1 ]; then pass "gitignore: only the deploy skills under .claude/ are tracked"; else fail "gitignore under .claude/"; fi
+fi
+
 # Scenario values files parse and keep the fail-closed defaults on.
 if python3 -I - "$ROOT/deploy/kubernetes/scenarios" <<'EOF'
 import os, sys

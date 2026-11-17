@@ -37,7 +37,9 @@ StorageClass to use and whether any worker hosts are wanted (`--workers a,b`).
   `docker build -f deploy/container/Dockerfile -t ligus:dev .` (kind: then
   `kind load docker-image ligus:dev --name <cluster>`; OrbStack and Docker
   Desktop see local images directly). The trial also needs a relay image
-  built in a relay checkout (`--relay-image-repository/--relay-image-tag`).
+  built in a relay checkout, passed as `--relay-image-repository R
+  --relay-image-tag T`: without it the relay pod sits in ImagePullBackOff
+  (install warns `relay.image`).
 - The chart needs the relay chart packaged: pass
   `--relay-chart <relay-checkout>/deploy/helm/ligus-relay` (a full checkout:
   the chart links `../ligus-postgres`) or `--fetch-relay-chart` (git clone of
@@ -146,6 +148,8 @@ $K teardown --context $CTX -n $NS --release $R --json                       # ke
 $K teardown --context $CTX -n $NS --release $R --delete-data --delete-secrets --delete-namespace --json
 ```
 
-`--delete-namespace` only deletes namespaces ligus-k8s created. Deleting
+`--delete-secrets` deletes only this release's Secrets. `--delete-namespace`
+only deletes namespaces ligus-k8s created and refuses while other Helm
+releases remain in it. Deleting
 data is irreversible: confirm with the human unless it is a throwaway
 trial. Then remind them that uninstalling is not revoking.

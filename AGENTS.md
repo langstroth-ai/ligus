@@ -32,25 +32,27 @@ exactly one JSON object on stdout (schema `ligus.agent-deploy.v1`: `ok`,
 `exitCode`, `checks[]` of `{id, status, detail, fix}`, `next[]`). No command
 prints a secret.
 
-Kubernetes (always pass `--context`; one namespace per workspace):
+Kubernetes (`--context` is required, never the current context; one namespace per workspace):
 
 ```sh
 K=deploy/kubernetes/ligus-k8s
-$K preflight --context CTX -n NS --probe --image REPO:TAG --json   # read-only, plus a temporary probe namespace
+$K preflight --context CTX -n NS --release R --probe --image REPO:TAG --json   # read-only, plus a temporary probe namespace
 $K secrets workspace --throwaway --context CTX -n NS --release R   # trial only
 $K secrets workspace --from-dir DIR --context CTX -n NS --release R   # real workspace: DIR prepared by the human
-$K install --scenario trial --context CTX -n NS --release R --image REPO:TAG --relay-chart RELAY/deploy/helm/ligus-relay --dry-run --json
-$K install --scenario trial --context CTX -n NS --release R --image REPO:TAG --json
+$K install --scenario trial --context CTX -n NS --release R --image REPO:TAG \
+   --relay-image-repository RREPO --relay-image-tag RTAG --relay-chart RELAY/deploy/helm/ligus-relay --dry-run --json
+$K install ...the same flags without --dry-run... --json   # waits for readiness (--timeout, default 10m)
 $K verify --context CTX -n NS --release R --json                   # pods, sandbox preflight, health, NetworkPolicies, helm test
 $K teardown --context CTX -n NS --release R [--delete-data --delete-secrets --delete-namespace] --json
 ```
 
-This machine (always pass `--data-dir`; never the desktop app's):
+This machine (always pass `--data-dir`; never the desktop app's. If you pass
+`--env-file`, pass the same one to every command):
 
 ```sh
 L=deploy/local/ligus-local
 $L preflight --role serve --data-dir ~/.ligus-serve --json
-$L install-cli [--version vX.Y.Z | --from-source]
+$L install-cli [--version vX.Y.Z | --from-source] [--bin-dir DIR]   # until 2.0 is released: --from-source
 $L configure --role serve --data-dir ~/.ligus-serve [--listen ADDR] [--label NAME] --json
 #   then the HUMAN enrolls (configure prints the exact command)
 $L start --role serve --data-dir ~/.ligus-serve [--systemd] --json

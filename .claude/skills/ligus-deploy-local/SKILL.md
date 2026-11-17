@@ -36,7 +36,7 @@ the app yourself.
 
 ```sh
 L=deploy/local/ligus-local
-$L install-cli --json                     # latest release into ~/.local/bin; --version vX.Y.Z; --from-source builds it
+$L install-cli --json                     # latest release into ~/.local/bin; --version vX.Y.Z; --from-source builds it; --bin-dir DIR
 $L preflight --role serve --data-dir ~/.ligus-serve --json
 ```
 
@@ -70,7 +70,12 @@ ligus enroll 'hivews1:...'        # add --token <hrt1...> if the relay needs one
 ```
 
 For a quick test with nothing real at stake: `configure --throwaway-workspace
---relay-url URL --force` makes a random workspace nobody else holds.
+--relay-url URL --force` makes a random workspace nobody else holds. It needs
+a running relay: for a local one, follow the relay repository's
+`relay-run-local` skill and pass its `http://127.0.0.1:<port>`.
+
+If you chose a non-default `--env-file`, pass it to every later command
+(the `next` lines repeat it).
 
 ## 6. Start and verify
 

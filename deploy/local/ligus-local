@@ -26,7 +26,7 @@ AC_TOOL=ligus-local
 MARKER=.ligus-local
 
 usage() {
-  sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
   cat <<'EOF'
 
 configure flags:
@@ -48,7 +48,7 @@ CMD=${1:-}
 [ $# -gt 0 ] && shift
 case $CMD in -h|--help|help|"") usage; exit 0 ;; esac
 
-ROLE="" DATA="${LIGUS_DATA_DIR:-}" ENVF="" LISTEN="" LABEL="" RELAY_URL="" BACKEND="" THROWAWAY=0 FORCE=0
+ROLE="" DATA="${LIGUS_DATA_DIR:-}" ENVF="" ENVF_GIVEN="" LISTEN="" LABEL="" RELAY_URL="" BACKEND="" THROWAWAY=0 FORCE=0
 SYSTEMD=0 DEL_DATA=0 VERSION="" BIN_DIR="" FROM_SOURCE=0
 need() { [ $# -ge 2 ] && [ -n "$2" ] || ac_usage_error "$1 needs a value"; }
 while [ $# -gt 0 ]; do
@@ -75,6 +75,19 @@ while [ $# -gt 0 ]; do
 done
 
 case $ROLE in ""|serve|worker) ;; *) ac_usage_error "--role must be serve or worker" ;; esac
+# These values end up in an env file that start (and the human) source with
+# `set -a; . FILE`: anything but a plain token would run as shell code.
+valid() { # flag value regex
+  [ -z "$2" ] && return 0
+  printf '%s' "$2" | LC_ALL=C grep -Eq "^($3)\$" && [ "$(printf '%s' "$2" | wc -l | tr -d ' ')" = 0 ] \
+    || ac_usage_error "$1: invalid value (allowed: $3)"
+}
+valid --data-dir "$DATA" '[A-Za-z0-9._/~+ -]+'
+valid --env-file "$ENVF" '[A-Za-z0-9._/~+-]+'
+valid --listen "$LISTEN" '[A-Za-z0-9.:_%-]+|\[[0-9A-Fa-f:.%]+\]:[0-9]+'
+valid --label "$LABEL" '[A-Za-z0-9._ -]+'
+valid --relay-url "$RELAY_URL" 'https?://[A-Za-z0-9.:_/%@-]+'
+valid --version "$VERSION" 'v?[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.]+)?'
 case $BACKEND in ""|file|keychain|secret-service) ;; *) ac_usage_error "--secret-backend must be file, keychain or secret-service" ;; esac
 
 OS=$(uname -s)
@@ -86,6 +99,8 @@ find_bin() {
 }
 BIN=$(find_bin || true)
 
+# The flags that name this instance, for the commands we print.
+inst() { printf -- '--role %s --data-dir %q' "$ROLE" "$DATA"; [ -n "$ENVF_GIVEN" ] && printf -- ' --env-file %q' "$ENVF"; return 0; }
 json_extra() { printf ',"role":%s,"dataDir":%s,"envFile":%s,"bin":%s' "$(ac_jstr "$ROLE")" "$(ac_jstr "$DATA")" "$(ac_jstr "$ENVF")" "$(ac_jstr "$BIN")"; }
 require_role() { [ -n "$ROLE" ] || ac_usage_error "--role serve|worker is required"; }
 
@@ -107,6 +122,7 @@ require_data() {
   done <<EOF
 $(app_dirs)
 EOF
+  ENVF_GIVEN=$ENVF
   ENVF=${ENVF:-${XDG_CONFIG_HOME:-$HOME/.config}/ligus-$ROLE/ligus-$ROLE.env}
 }
 PIDF() { printf '%s/ligus-local-%s.pid' "$DATA" "$ROLE"; }
@@ -114,7 +130,7 @@ LOGF() { printf '%s/ligus-local-%s.log' "$DATA" "$ROLE"; }
 
 env_get() { # key: from the env file (values of non-secret settings only)
   [ -f "$ENVF" ] || return 0
-  sed -n "s/^$1=//p" "$ENVF" | tail -1
+  sed -n "s/^$1=//p" "$ENVF" | tail -1 | sed "s/^'\\(.*\\)'\$/\\1/"
 }
 
 running_pid() {
@@ -122,6 +138,8 @@ running_pid() {
   [ -f "$(PIDF)" ] || return 1
   p=$(cat "$(PIDF)")
   kill -0 "$p" 2>/dev/null || return 1
+  # A stale pid file can name an unrelated process now: never signal that.
+  case $(ps -p "$p" -o command= 2>/dev/null) in *ligus*" $ROLE"*) ;; *) return 1 ;; esac
   printf '%s' "$p"
 }
 
@@ -204,6 +222,7 @@ cmd_install_cli() {
   else
     if LIGUS_VERSION="${VERSION:-latest}" LIGUS_INSTALL_DIR="${BIN_DIR:-$HOME/.local/bin}" sh "$ROOT/install.sh" >&2; then
       ac_check install pass "installed ${BIN_DIR:-$HOME/.local/bin}/ligus (${VERSION:-latest})"
+      ac_check install.integrity warn "the release binary was downloaded over https without a published checksum or signature to verify it against${VERSION:+}${VERSION:- (and 'latest' is not pinned)}" "pin --version, or install the Homebrew formula (its sha256 is pinned): brew install ligus-ai/ligus/ligus"
     else
       ac_check install fail "install.sh failed" "check the release exists for this platform, or use --from-source"
     fi
@@ -233,23 +252,23 @@ cmd_configure() {
     {
       echo "# Written by deploy/local/ligus-local configure. No secret values here:"
       echo "# the workspace connection is saved by 'ligus enroll' in LIGUS_DATA_DIR."
-      echo "LIGUS_DATA_DIR=$DATA"
+      echo "LIGUS_DATA_DIR='$DATA'"
       echo "LIGUS_REQUIRE_SANDBOX=1"
-      [ -n "$BACKEND" ] && echo "LIGUS_SECRET_BACKEND=$BACKEND"
-      [ -n "$RELAY_URL" ] && echo "LIGUS_RELAY_URL=$RELAY_URL"
+      [ -n "$BACKEND" ] && echo "LIGUS_SECRET_BACKEND='$BACKEND'"
+      [ -n "$RELAY_URL" ] && echo "LIGUS_RELAY_URL='$RELAY_URL'"
       if [ "$ROLE" = serve ]; then
-        echo "LIGUS_SERVE_LISTEN=$listen"
-        echo "LIGUS_SERVE_LABEL=$label"
+        echo "LIGUS_SERVE_LISTEN='$listen'"
+        echo "LIGUS_SERVE_LABEL='$label'"
       else
-        echo "LIGUS_WORKER_HEALTH_LISTEN=$listen"
-        echo "LIGUS_WORKER_LABEL=$label"
+        echo "LIGUS_WORKER_HEALTH_LISTEN='$listen'"
+        echo "LIGUS_WORKER_LABEL='$label'"
       fi
       if [ $THROWAWAY = 1 ]; then
         local key="$DATA/throwaway-workspace.key"
         (umask 077; ac_rand_b64 36 >"$key")
         echo "# THROWAWAY workspace (trials and tests only; nobody else holds the key)"
-        echo "LIGUS_WORKSPACE=local-trial-$(ac_uuid)"
-        echo "LIGUS_WORKSPACE_KEY_FILE=$key"
+        echo "LIGUS_WORKSPACE='local-trial-$(ac_uuid)'"
+        echo "LIGUS_WORKSPACE_KEY_FILE='$key'"
       fi
     } >"$tmpf"
     mv "$tmpf" "$ENVF"
@@ -258,10 +277,10 @@ cmd_configure() {
   fi
   if [ -f "$DATA/config.toml" ] || [ -n "$(env_get LIGUS_WORKSPACE)" ]; then
     ac_check workspace pass "a workspace connection is configured"
-    ac_next "ligus-local start --role $ROLE --data-dir $DATA"
+    ac_next "ligus-local start $(inst)"
   else
     ac_check workspace warn "no workspace connection yet" "HUMAN STEP (below)"
-    ac_next "HUMAN STEP: in their own terminal: set -a; . $ENVF; set +a; $BIN enroll 'hivews1:...' [--token <hrt1...>] (copy the invite from the desktop app: workspace > Copy invite). Then: ligus-local start --role $ROLE --data-dir $DATA"
+    ac_next "HUMAN STEP: in their own terminal: set -a; . $ENVF; set +a; $BIN enroll 'hivews1:...' [--token <hrt1...>] (copy the invite from the desktop app: workspace > Copy invite). Then: ligus-local start $(inst)"
     ac_raise 4
   fi
   ac_finish "$AC_TOOL" configure "$(json_extra)"
@@ -271,7 +290,7 @@ cmd_configure() {
 cmd_start() {
   require_role; require_data
   [ -n "$BIN" ] || { ac_check cli.binary fail "ligus CLI not found" "ligus-local install-cli"; ac_raise 3; ac_finish "$AC_TOOL" start "$(json_extra)"; }
-  [ -f "$ENVF" ] || { ac_check env.file fail "$ENVF not found" "ligus-local configure --role $ROLE --data-dir $DATA"; ac_raise 3; ac_finish "$AC_TOOL" start "$(json_extra)"; }
+  [ -f "$ENVF" ] || { ac_check env.file fail "$ENVF not found" "ligus-local configure $(inst) (with the same flags as before)"; ac_raise 3; ac_finish "$AC_TOOL" start "$(json_extra)"; }
   if [ ! -f "$DATA/config.toml" ] && [ -z "$(env_get LIGUS_WORKSPACE)" ]; then
     ac_check workspace fail "no workspace connection" "HUMAN STEP: ligus enroll with the invite, in the human's own terminal (ligus-local configure prints the command)"; ac_raise 4; ac_finish "$AC_TOOL" start "$(json_extra)"
   fi
@@ -279,7 +298,7 @@ cmd_start() {
     if [ "$OS" != Linux ] || ! ac_have systemctl; then ac_check systemd fail "--systemd needs Linux with systemd" "drop --systemd"; ac_raise 3; ac_finish "$AC_TOOL" start "$(json_extra)"; fi
     local unit="$HOME/.config/systemd/user/ligus-$ROLE.service"
     mkdir -p "$(dirname "$unit")"
-    sed -e "s|^EnvironmentFile=.*|EnvironmentFile=$ENVF|" -e "s|^ExecStart=.*|ExecStart=$BIN $ROLE$( [ "$ROLE" = worker ] && printf ' --label %s' "$(env_get LIGUS_WORKER_LABEL)")|" \
+    sed -e "s|^EnvironmentFile=.*|EnvironmentFile=$ENVF|" -e "s|^ExecStart=.*|ExecStart=$BIN $ROLE$( [ "$ROLE" = worker ] && printf ' --label "%s"' "$(env_get LIGUS_WORKER_LABEL)")|" \
         -e "s|^Description=.*|Description=Ligus $ROLE (ligus-local)|" "$ROOT/deploy/ligus-serve/ligus-serve.service" >"$unit"
     systemctl --user daemon-reload
     if systemctl --user enable --now "ligus-$ROLE" >/dev/null 2>&1; then
@@ -302,7 +321,7 @@ cmd_start() {
   sleep 2
   if p=$(running_pid); then
     ac_check start pass "$ROLE started (pid $p, log $(LOGF))"
-    ac_next "ligus-local verify --role $ROLE --data-dir $DATA --json"
+    ac_next "ligus-local verify $(inst) --json"
   else
     ac_check start fail "$ROLE exited at once: $(tail -3 "$(LOGF)" | tr '\n' ' ')" "read $(LOGF); exit code 3 means no agent sandbox (never disable it)"
   fi
@@ -317,7 +336,7 @@ cmd_verify() {
     if systemctl --user is-active --quiet "ligus-$ROLE"; then ac_check process pass "systemd unit ligus-$ROLE active"
     else ac_check process fail "systemd unit ligus-$ROLE not active" "journalctl --user -u ligus-$ROLE -n 50"; fi
   elif p=$(running_pid); then ac_check process pass "$ROLE running (pid $p)"
-  else ac_check process fail "$ROLE not running" "ligus-local start --role $ROLE --data-dir $DATA; if it exits, read $(LOGF)"; fi
+  else ac_check process fail "$ROLE not running" "ligus-local start $(inst); if it exits, read $(LOGF)"; fi
   if [ "$ROLE" = serve ]; then listen=$(env_get LIGUS_SERVE_LISTEN); else listen=$(env_get LIGUS_WORKER_HEALTH_LISTEN); fi
   if [ -n "$listen" ]; then
     local code=""
@@ -357,7 +376,10 @@ cmd_stop() {
 cmd_uninstall() {
   require_role; require_data
   ( AC_JSON=0; cmd_stop ) >/dev/null 2>&1 || true
-  if [ "$OS" = Linux ] && [ -f "$HOME/.config/systemd/user/ligus-$ROLE.service" ]; then
+  local unit="$HOME/.config/systemd/user/ligus-$ROLE.service"
+  # Only a unit start --systemd wrote for this env file (a hand-installed
+  # ligus-serve.service belongs to someone else's data dir).
+  if [ "$OS" = Linux ] && [ -f "$unit" ] && grep -q '^Description=.*(ligus-local)' "$unit" && grep -qx "EnvironmentFile=$ENVF" "$unit"; then
     systemctl --user disable --now "ligus-$ROLE" >/dev/null 2>&1 || true
     rm -f "$HOME/.config/systemd/user/ligus-$ROLE.service"; systemctl --user daemon-reload || true
     ac_check unit pass "removed systemd user unit ligus-$ROLE"
@@ -365,8 +387,12 @@ cmd_uninstall() {
   ac_check stop pass "$ROLE stopped"
   if [ $DEL_DATA = 1 ]; then
     if [ -f "$DATA/$MARKER" ]; then
-      rm -rf "$DATA"; rm -f "$ENVF"
-      ac_check data pass "deleted $DATA and $ENVF (this device's identity is gone)"
+      rm -rf "$DATA"
+      if [ -f "$ENVF" ] && head -1 "$ENVF" | grep -q '^# Written by deploy/local/ligus-local configure'; then
+        rm -f "$ENVF"; ac_check data pass "deleted $DATA and $ENVF (this device's identity is gone)"
+      else
+        ac_check data pass "deleted $DATA (this device's identity is gone); kept $ENVF: ligus-local did not write it"
+      fi
     elif [ -d "$DATA" ]; then
       ac_check data fail "$DATA was not created by ligus-local; refusing to delete it" "a human deletes it if that is really intended"; ac_raise 4
     else

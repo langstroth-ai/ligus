@@ -19,9 +19,16 @@ site/
 /dist-windows/
 /dist-linux/
 
-# Agent + editor state (the agent deploy skills in .claude/skills are committed)
+# Agent + editor state. Only the two deploy skills' SKILL.md files are
+# committed; everything else under .claude/ (settings, other skills, notes,
+# worktrees) stays private, even inside those skill directories.
 .claude/*
 !.claude/skills/
+.claude/skills/*
+!.claude/skills/ligus-deploy-k8s/
+!.claude/skills/ligus-deploy-local/
+.claude/skills/ligus-deploy-*/*
+!.claude/skills/ligus-deploy-*/SKILL.md
 .vscode/
 RESUME.md
 
