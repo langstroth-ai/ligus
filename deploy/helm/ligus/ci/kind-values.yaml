@@ -1,4 +1,5 @@
-# Values for a kind/CI smoke install: a throwaway workspace against a relay
+# Values for a kind/CI smoke install: a throwaway workspace (Secret ws-smoke,
+# created by the workflow) against a relay
 # installed separately in namespace ligus-relay (release name ligus-relay,
 # Postgres enabled), the tunnel over in-cluster http and egress locked down.
 image:
@@ -7,7 +8,8 @@ image:
   pullPolicy: IfNotPresent
 relayUrl: http://ligus-relay-sync.ligus-relay.svc.cluster.local:8443
 workspace:
-  generate: true
+  # Created by the workflow (kubectl create secret, a throwaway room and key).
+  existingSecret: ws-smoke
 remote:
   enabled: true
   relayUrl: http://ligus-relay-tunnel.ligus-relay.svc.cluster.local:8443

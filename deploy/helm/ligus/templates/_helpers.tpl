@@ -47,17 +47,27 @@ app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 
 {{- define "ligus.workspaceSecretName" -}}
-{{- if .Values.workspace.existingSecret -}}
-{{- .Values.workspace.existingSecret -}}
-{{- else -}}
-{{- printf "%s-workspace" (include "ligus.fullname" .) -}}
-{{- end -}}
+{{- required "workspace.existingSecret is required: create the workspace connection Secret first (values.yaml shows how)" .Values.workspace.existingSecret -}}
 {{- end -}}
 
-{{/* The in-release relay's Services, mirroring ligus-relay's topology rule. */}}
+{{/*
+The in-release relay's Services, mirroring ligus-relay.fullname (the
+subchart's name is its alias, "relay", unless nameOverride is set) and its
+topology rule.
+*/}}
 {{- define "ligus.relayBase" -}}
 {{- $r := .Values.relay -}}
-{{- $name := default (printf "%s-ligus-relay" .Release.Name) $r.fullnameOverride -}}
+{{- $name := "" -}}
+{{- if $r.fullnameOverride -}}
+{{- $name = $r.fullnameOverride | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- $chart := default "relay" $r.nameOverride -}}
+{{- if contains $chart .Release.Name -}}
+{{- $name = .Release.Name | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- $name = printf "%s-%s" .Release.Name $chart | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}
 {{- $hasDb := or (dig "postgres" "enabled" false $r) (dig "externalDatabase" "url" "" $r) (dig "externalDatabase" "existingSecret" "" $r) -}}
 {{- $topology := default "auto" $r.topology -}}
 {{- if eq $topology "auto" }}{{ $topology = ternary "split" "single" (not (empty $hasDb)) }}{{ end -}}
@@ -146,8 +156,14 @@ app.kubernetes.io/component: {{ .component }}
 {{- if not (include "ligus.relayUrl" .) -}}
 {{- fail "set relayUrl (or relay.enabled=true for an in-release relay)" -}}
 {{- end -}}
-{{- if and (not .Values.workspace.existingSecret) (not .Values.workspace.generate) -}}
-{{- fail "set workspace.existingSecret (the workspace connection), or workspace.generate=true for a throwaway test workspace" -}}
+{{- if hasKey .Values.workspace "generate" -}}
+{{- fail "workspace.generate was removed (it used lookup, which regenerates the key under helm template and GitOps): create the Secret with kubectl first; values.yaml shows the command" -}}
+{{- end -}}
+{{- if not .Values.workspace.existingSecret -}}
+{{- fail "set workspace.existingSecret (the workspace connection Secret: room, key; values.yaml shows how to make a throwaway one)" -}}
+{{- end -}}
+{{- if and .Values.remote.enabled .Values.relay.enabled (not .Values.remote.relayUrl) (eq (dig "tunnel" "mode" "off" .Values.relay) "off") -}}
+{{- fail "remote.enabled with the in-release relay needs relay.tunnel.mode (allowlist, or open behind a token gate): the relay chart's tunnel is off by default" -}}
 {{- end -}}
 {{- if and .Values.remote.enabled (not (include "ligus.remoteRelayUrl" .)) -}}
 {{- fail "remote.enabled needs remote.relayUrl (or relay.enabled=true)" -}}

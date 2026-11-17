@@ -27,6 +27,10 @@ relayUrl: ""
 # under this key.
 relay:
   enabled: false
+  # With the alias "relay" the subchart would otherwise name itself and label
+  # its pods "relay"; these keep the names the ligus-relay chart documents
+  # (Services ligus-relay-sync / -tunnel, label app.kubernetes.io/name=ligus-relay).
+  nameOverride: ligus-relay
   fullnameOverride: ligus-relay
 
 # --- Workspace connection ----------------------------------------------------
@@ -43,10 +47,12 @@ workspace:
   # The Secret holds secretKeys.relayAccessToken: mount it as
   # LIGUS_RELAY_ACCESS_TOKEN_FILE.
   relayAccessToken: false
-  # TEST ONLY: generate a throwaway workspace (random room and key) in a
-  # Secret owned by this release and kept across upgrades. Nobody else holds
-  # the key, so nothing outside the cluster can read this workspace.
-  generate: false
+  # Create the Secret yourself before installing (never commit it). The chart
+  # generates nothing, so `helm template`, Argo CD and Flux render the same
+  # thing every time. A throwaway test workspace (nobody else holds its key):
+  #   kubectl -n <ns> create secret generic ws-test \
+  #     --from-literal=room=k8s-test-$(uuidgen | tr A-Z a-z) \
+  #     --from-literal=key=$(openssl rand -base64 36)
 
 # --- Remote access through the relay tunnel ----------------------------------
 

@@ -31,9 +31,11 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Repository and ref holding the ligus-relay chart and image.
+  # Repository and commit holding the ligus-relay chart and image: pinned to
+  # a tested commit (relay v0.3.0), never a moving branch. Bump it together
+  # with the ligus chart's ligus-relay dependency.
   RELAY_REPO: ligus-ai/relay
-  RELAY_REF: main
+  RELAY_REF: 2faab5ee9f8a41e986aee92b1165c4515bf0a583
 
 jobs:
   e2e:
@@ -78,14 +80,14 @@ jobs:
           mkdir -p deploy/helm/ligus/charts
           helm package -d deploy/helm/ligus/charts _relay/deploy/helm/ligus-relay
           helm lint --strict deploy/helm/ligus -f deploy/helm/ligus/ci/kind-values.yaml
-          helm template t deploy/helm/ligus --set workspace.generate=true --set relay.enabled=true \
+          helm template t deploy/helm/ligus --set workspace.existingSecret=ws --set relay.enabled=true \
             --set relay.postgres.enabled=true --set remote.enabled=true --set remote.insecureRelay=true \
             --set worker.enabled=true --set 'worker.instances[0].name=a' --set 'worker.instances[1].name=b' >/dev/null
           # Must refuse: the removed executor template, and no workspace.
           # (`if`, not a bare `!`: bash's errexit ignores a negated command,
           # so `! cmd` mid-script never failed the step.)
-          if helm template t deploy/helm/ligus --set relayUrl=x --set workspace.generate=true \
-              --set sandbox.enabled=true >/dev/null 2>&1; then
+          if helm template t deploy/helm/ligus --set relayUrl=x --set workspace.existingSecret=ws \
+              --set networkPolicy.relayNamespace=r --set sandbox.enabled=true >/dev/null 2>&1; then
             echo "::error::chart rendered the removed sandbox.* values"; exit 1
           fi
           if helm template t deploy/helm/ligus --set relayUrl=x >/dev/null 2>&1; then
@@ -113,6 +115,10 @@ jobs:
         run: |
           kubectl create namespace ligus-ws-smoke
           kubectl label namespace ligus-ws-smoke pod-security.kubernetes.io/enforce=restricted
+          # A throwaway workspace: nobody outside the cluster holds this key.
+          kubectl -n ligus-ws-smoke create secret generic ws-smoke \
+            --from-literal=room="k8s-test-$(cat /proc/sys/kernel/random/uuid)" \
+            --from-literal=key="$(openssl rand -base64 36)"
           helm install smoke deploy/helm/ligus -n ligus-ws-smoke \
             -f deploy/helm/ligus/ci/kind-values.yaml --wait --timeout 5m
       - name: sync and a sandboxed agent turn (helm test)

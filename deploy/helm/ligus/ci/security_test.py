@@ -13,7 +13,7 @@ import yaml
 
 CHART = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KUBE = "1.30.0"
-BASE = ["--set", "relayUrl=http://relay.example:8443", "--set", "workspace.generate=true",
+BASE = ["--set", "relayUrl=http://relay.example:8443", "--set", "workspace.existingSecret=ws",
         "--set", "networkPolicy.relayNamespace=ligus-relay"]
 
 
@@ -177,6 +177,20 @@ def test_secrets_are_files():
     check("the removed serve.secretEnv (envFrom) is refused", p.returncode != 0)
 
 
+# --- No lookup-generated Secrets (helm template / GitOps safe) -------------
+
+def test_no_generated_secrets():
+    docs = render()
+    check("the chart renders no Secret", not any(d["kind"] == "Secret" for d in docs))
+    check("workspace.generate is refused", render("--set", "workspace.generate=true", ok=False).returncode != 0)
+    p = subprocess.run(["helm", "template", "t", CHART, "--kube-version", KUBE, "--set", "relayUrl=x",
+                        "--set", "networkPolicy.relayNamespace=r"], capture_output=True, text=True)
+    check("no workspace Secret is refused", p.returncode != 0)
+    a = subprocess.run(["helm", "template", "t", CHART, "--kube-version", KUBE, *BASE], capture_output=True, text=True).stdout
+    b = subprocess.run(["helm", "template", "t", CHART, "--kube-version", KUBE, *BASE], capture_output=True, text=True).stdout
+    check("two renders are identical", a == b and a != "")
+
+
 # --- One identity, one writer ---------------------------------------------
 
 def test_single_writer_volumes():
@@ -215,7 +229,7 @@ def test_mcp_images_pinned():
     check("allowUnpinned opts out explicitly", any(d["kind"] == "Deployment" for d in docs))
 
 
-TESTS = [test_dns_egress_is_scoped, test_egress_closed_and_metadata_blocked, test_serve_ingress_excludes_foreign_pods,
+TESTS = [test_no_generated_secrets, test_dns_egress_is_scoped, test_egress_closed_and_metadata_blocked, test_serve_ingress_excludes_foreign_pods,
          test_removed_values_refuse, test_secrets_are_files, test_single_writer_volumes,
          test_mcp_images_pinned]
 
