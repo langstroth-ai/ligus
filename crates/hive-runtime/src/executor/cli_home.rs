@@ -107,6 +107,92 @@ fn copy_file(from: &Path, to: &Path) {
     }
 }
 
+/// Claude Code's credentials file (relative to home).
+const CLAUDE_CREDENTIALS: &str = ".claude/.credentials.json";
+
+/// The login-keychain item Claude Code keeps its sign-in in (with no
+/// `CLAUDE_CONFIG_DIR`; a custom config dir names another item, which is
+/// left alone and keeps the keychain reachable for that turn).
+#[cfg(target_os = "macos")]
+const CLAUDE_KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
+
+/// Whether `real_home` is this user's own home with Claude Code's default
+/// config dir (the only case whose keychain item is bridged).
+#[cfg(target_os = "macos")]
+fn is_user_home(real_home: &Path) -> bool {
+    std::env::var_os("CLAUDE_CONFIG_DIR").is_none_or(|v| v.is_empty())
+        && super::home_dir().is_some_and(|h| super::canonical(&h) == super::canonical(real_home))
+}
+
+fn is_json_object(b: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(b).is_ok_and(|v| v.is_object())
+}
+
+/// Whether `kind`'s sign-in is a file in the turn home `home` (so the turn
+/// doesn't need the login keychain).
+pub fn signed_in_by_file(kind: ModelProviderKind, home: &Path) -> bool {
+    let f = match kind {
+        ModelProviderKind::ClaudeCode => CLAUDE_CREDENTIALS,
+        ModelProviderKind::Codex => ".codex/auth.json",
+        _ => return false,
+    };
+    std::fs::symlink_metadata(home.join(f)).is_ok_and(|m| m.is_file())
+}
+
+/// The login keychain through `/usr/bin/security` (the tool Claude Code
+/// stores its item with, so the item's ACL trusts it and no prompt shows).
+#[cfg(target_os = "macos")]
+mod keychain {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    const SECURITY: &str = "/usr/bin/security";
+
+    /// The item's account and secret.
+    pub fn read(service: &str) -> Option<(String, Vec<u8>)> {
+        let attrs = Command::new(SECURITY).args(["find-generic-password", "-s", service]).stderr(Stdio::null()).output().ok()?;
+        if !attrs.status.success() {
+            return None;
+        }
+        let acct = account(&String::from_utf8_lossy(&attrs.stdout))?;
+        let out = Command::new(SECURITY).args(["find-generic-password", "-s", service, "-a", &acct, "-w"]).stderr(Stdio::null()).output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let mut secret = out.stdout;
+        while secret.last() == Some(&b'\n') {
+            secret.pop();
+        }
+        Some((acct, secret))
+    }
+
+    /// The `acct` attribute of `security find-generic-password` output.
+    pub fn account(attrs: &str) -> Option<String> {
+        let line = attrs.lines().find(|l| l.trim_start().starts_with("\"acct\"<blob>=\""))?;
+        let v = line.trim().strip_prefix("\"acct\"<blob>=\"")?.strip_suffix('"')?;
+        (!v.is_empty() && !v.contains(['"', '\\', '\n'])).then(|| v.to_string())
+    }
+
+    /// The `security -i` command that updates the item (the secret as hex,
+    /// so it never sits on a command line).
+    pub fn update_command(service: &str, acct: &str, secret: &[u8]) -> Option<String> {
+        if [service, acct].iter().any(|s| s.contains(['"', '\\', '\n'])) {
+            return None;
+        }
+        let hex: String = secret.iter().map(|b| format!("{b:02x}")).collect();
+        Some(format!("add-generic-password -U -a \"{acct}\" -s \"{service}\" -X {hex}\n"))
+    }
+
+    pub fn write(service: &str, acct: &str, secret: &[u8]) -> bool {
+        let Some(cmd) = update_command(service, acct, secret) else { return false };
+        let Ok(mut child) = Command::new(SECURITY).arg("-i").stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() else {
+            return false;
+        };
+        let ok = child.stdin.take().is_some_and(|mut i| i.write_all(cmd.as_bytes()).is_ok());
+        child.wait().is_ok_and(|s| s.success()) && ok
+    }
+}
+
 /// Claude Code subdirectories a workspace that opted into the user's own
 /// setup reaches (read-only: symlinks to the real dirs, which the profile
 /// keeps unwritable).
@@ -134,6 +220,19 @@ pub fn populate_with(kind: ModelProviderKind, real_home: &Path, home: &Path, use
     }
     for f in config_files(kind) {
         copy_file(&real_path(kind, real_home, f), &home.join(f));
+    }
+    // macOS: Claude Code keeps its sign-in in the login keychain. Bridge it
+    // into the turn home as the credentials file Claude Code also reads, so
+    // the turn runs without the keychain (which would hand it every item
+    // that trusts `/usr/bin/security`; `EnvelopeEnforcer::plan`).
+    #[cfg(target_os = "macos")]
+    if kind == ModelProviderKind::ClaudeCode && is_user_home(real_home) {
+        let dst = home.join(CLAUDE_CREDENTIALS);
+        if !dst.exists() {
+            if let Some((_, secret)) = keychain::read(CLAUDE_KEYCHAIN_SERVICE).filter(|(_, s)| is_json_object(s)) {
+                let _ = crate::private_file::write_private_atomic(&dst, &secret);
+            }
+        }
     }
     if kind == ModelProviderKind::ClaudeCode {
         harden_claude_settings(&home.join(".claude/settings.json"));
@@ -340,6 +439,24 @@ pub fn copy_back(kind: ModelProviderKind, real_home: &Path, home: &Path) {
         // and only a refresh of that same sign-in: an agent can write a valid
         // sign-in for another account into its turn home, and copying it
         // back would sign the user's CLI into that account.
+        #[cfg(target_os = "macos")]
+        if old.is_none() && kind == ModelProviderKind::ClaudeCode && *f == CLAUDE_CREDENTIALS && is_user_home(real_home) {
+            // Bridged in from the keychain (`populate_with`): a refresh of
+            // that same sign-in goes back there.
+            if let Some((acct, kc)) = keychain::read(CLAUDE_KEYCHAIN_SERVICE) {
+                let kc_v = serde_json::from_slice::<serde_json::Value>(&kc).unwrap_or(serde_json::Value::Null);
+                match same_sign_in(&kc_v, &new_v) {
+                    Ok(()) if kc != new => {
+                        if !keychain::write(CLAUDE_KEYCHAIN_SERVICE, &acct, &new) {
+                            tracing::warn!(target: "sandbox", "couldn't write a refreshed Claude Code sign-in back to the keychain");
+                        }
+                    }
+                    Ok(()) => {}
+                    Err(why) => tracing::warn!(target: "sandbox", cli = ?kind, "not copying back a changed CLI sign-in: {why}"),
+                }
+            }
+            continue;
+        }
         let Some(old) = old else { continue };
         let old_v = serde_json::from_slice::<serde_json::Value>(&old).unwrap_or(serde_json::Value::Null);
         if let Err(why) = same_sign_in(&old_v, &new_v) {
@@ -353,6 +470,27 @@ pub fn copy_back(kind: ModelProviderKind, real_home: &Path, home: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn keychain_bridge_parses_and_quotes() {
+        let attrs = "keychain: \"/x\"\nattributes:\n    \"acct\"<blob>=\"me\"\n    \"svce\"<blob>=\"Claude Code-credentials\"\n";
+        assert_eq!(keychain::account(attrs).as_deref(), Some("me"));
+        assert_eq!(keychain::account("    \"acct\"<blob>=<NULL>\n"), None);
+        let cmd = keychain::update_command("Claude Code-credentials", "me", b"{\"a\":\" \"}").unwrap();
+        assert_eq!(cmd, "add-generic-password -U -a \"me\" -s \"Claude Code-credentials\" -X 7b2261223a2220227d\n");
+        assert!(keychain::update_command("s", "a\" -s x", b"{}").is_none());
+    }
+
+    #[test]
+    fn signed_in_by_file_needs_the_cli_sign_in_file() {
+        let t = tempfile::tempdir().unwrap();
+        assert!(!signed_in_by_file(ModelProviderKind::ClaudeCode, t.path()));
+        std::fs::create_dir_all(t.path().join(".claude")).unwrap();
+        std::fs::write(t.path().join(".claude/.credentials.json"), "{}").unwrap();
+        assert!(signed_in_by_file(ModelProviderKind::ClaudeCode, t.path()));
+        assert!(!signed_in_by_file(ModelProviderKind::Copilot, t.path()));
+    }
 
     #[test]
     fn copies_top_level_config_and_never_subdirs() {

@@ -703,53 +703,354 @@ fn sandbox_denies_unix_socket_connect() {
 /// macOS: a confined agent must not escape through LaunchServices. Writing
 /// an app bundle into a writable dir and `open`ing it hands the launch to
 /// launchd, so the app would run outside the profile (reading the data dir,
-/// with unrestricted network). The profile denies the CoreServices mach
-/// services `open` and `LSOpen*` need.
+/// with unrestricted network).
+///
+/// Denying launchservicesd is not enough on its own: `LSOpen*` asks
+/// RunningBoard to spawn the app (suspended, under launchd) before it checks
+/// in with launchservicesd, so the open "fails" but the process exists, and a
+/// `kill -CONT` from inside the turn resumes it unconfined. The probe tries
+/// that whole chain, for a background-only and a UI-element bundle, and
+/// fails if any process from the bundle starts at all, not only if it
+/// manages to write.
 #[cfg(target_os = "macos")]
 #[test]
 fn sandbox_denies_launchservices_escape() {
     let Some(e) = real_executor() else { return };
     let f = Fixture::new();
-    let loot = f.outside.join("escaped");
-    let id = format!("ai.ligus.sandbox-probe.{}.{}", std::process::id(), f.outside.display().to_string().len());
-    let app = f.worktree.join("Probe.app");
-    // If launchd does start the probe it outlives this test (often stopped,
-    // never exiting): reap it on every exit path, panics included.
-    let _reaper = ProbeReaper(app.clone());
-    let script = format!(
-        "mkdir -p '{app}/Contents/MacOS' && \
-         printf '%s' '<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>CFBundleExecutable</key><string>run</string><key>CFBundleIdentifier</key><string>{id}</string><key>LSBackgroundOnly</key><true/></dict></plist>' > '{app}/Contents/Info.plist' && \
-         printf '#!/bin/sh\\ncat \"%s\" > \"%s\"\\n' '{secret}' '{loot}' > '{app}/Contents/MacOS/run' && \
-         chmod +x '{app}/Contents/MacOS/run' && /usr/bin/open -g -j '{app}'",
-        app = app.display(),
-        secret = f.data.join("settings.json").display(),
-        loot = loot.display(),
-    );
-    let (_ok, out) = run_sh(&*e, &f, &script, isolated());
-    assert!(app.join("Contents/MacOS/run").exists(), "the probe bundle was written: {out}");
-    for _ in 0..30 {
-        if loot.exists() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
+    for (n, (open, key)) in [("/usr/bin/open -g -j", "LSBackgroundOnly"), ("/usr/bin/open", "LSUIElement")].into_iter().enumerate() {
+        let loot = f.outside.join(format!("escaped-{n}"));
+        let id = format!("ai.ligus.sandbox-probe.{}.{n}.{}", std::process::id(), f.outside.display().to_string().len());
+        let app = f.worktree.join(format!("Probe{n}.app"));
+        // If launchd does start the probe it outlives this test (often
+        // stopped, never exiting): reap it on every exit path, panics included.
+        let reaper = ProbeReaper(app.clone());
+        let script = format!(
+            "mkdir -p '{app}/Contents/MacOS' && \
+             printf '%s' '<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>CFBundleExecutable</key><string>run</string><key>CFBundleIdentifier</key><string>{id}</string><key>{key}</key><true/></dict></plist>' > '{app}/Contents/Info.plist' && \
+             printf '#!/bin/sh\\ncat \"%s\" > \"%s\"\\n' '{secret}' '{loot}' > '{app}/Contents/MacOS/run' && \
+             chmod +x '{app}/Contents/MacOS/run'; {open} '{app}'; sleep 1; \
+             for p in $(/usr/bin/pgrep -f '{app}/Contents/MacOS'); do kill -CONT $p; done; true",
+            app = app.display(),
+            secret = f.data.join("settings.json").display(),
+            loot = loot.display(),
+        );
+        let (_ok, out) = run_sh(&*e, &f, &script, isolated());
+        assert!(app.join("Contents/MacOS/run").exists(), "the probe bundle was written: {out}");
+        let started = reaper.watch(std::time::Duration::from_secs(3), &loot);
+        let leaked = std::fs::read_to_string(&loot).unwrap_or_default();
+        assert!(!leaked.contains("SETTINGS-SECRET") && !loot.exists(), "an app launched via LaunchServices ran outside the sandbox ({open}): {out}");
+        assert!(started.is_empty(), "LaunchServices started the probe outside the sandbox ({open}, pids {started:?}): {out}");
     }
-    let leaked = std::fs::read_to_string(&loot).unwrap_or_default();
-    assert!(!leaked.contains("SETTINGS-SECRET") && !loot.exists(), "an app launched via LaunchServices ran outside the sandbox: {out}");
+}
+
+/// macOS: an XPC service embedded in a bundle the agent wrote is spawned by
+/// launchd, not by the agent, so it would run outside the profile. The
+/// probe (compiled here, outside the sandbox, and run inside it) connects to
+/// its own bundled service; the service must never start.
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_denies_bundled_xpc_service_escape() {
+    let Some(e) = real_executor() else { return };
+    if !Path::new("/usr/bin/clang").exists() || !Path::new("/usr/bin/codesign").exists() {
+        eprintln!("skipped: clang and codesign are needed to build the XPC probe");
+        return;
+    }
+    let f = Fixture::new();
+    let loot = f.outside.join("xpc-escaped");
+    let app = f.worktree.join("XpcProbe.app");
+    let reaper = ProbeReaper(app.clone());
+    let name = format!("ai.ligus.sandbox-xpc-probe.{}", std::process::id());
+    let svc = app.join(format!("Contents/XPCServices/{name}.xpc"));
+    std::fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+    std::fs::create_dir_all(svc.join("Contents/MacOS")).unwrap();
+    let src = f.outside.join("xpc-src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(
+        src.join("main.c"),
+        format!(
+            "#include <xpc/xpc.h>\n#include <stdio.h>\nint main(void){{xpc_connection_t c=xpc_connection_create(\"{name}\",NULL);\
+             xpc_connection_set_event_handler(c,^(xpc_object_t e){{(void)e;}});xpc_connection_resume(c);\
+             xpc_object_t r=xpc_connection_send_message_with_reply_sync(c,xpc_dictionary_create(NULL,NULL,0));\
+             printf(\"reply:%s\\n\",xpc_copy_description(r));return 0;}}\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        src.join("svc.c"),
+        "#include <stdio.h>\nint main(int c,char**v){(void)c;(void)v;FILE*s=fopen(SECRET,\"r\"),*o=fopen(LOOT,\"w\");\
+         if(o){int ch;fputs(\"svc-ran\\n\",o);while(s&&(ch=fgetc(s))!=EOF)fputc(ch,o);fclose(o);}return 0;}\n",
+    )
+    .unwrap();
+    let clang = |out: &Path, file: &str, defs: &[String]| {
+        let st = std::process::Command::new("/usr/bin/clang").args(defs).arg("-o").arg(out).arg(src.join(file)).status().unwrap();
+        assert!(st.success(), "clang {file}");
+    };
+    clang(&app.join("Contents/MacOS/main"), "main.c", &[]);
+    clang(
+        &svc.join("Contents/MacOS/svc"),
+        "svc.c",
+        &[format!("-DSECRET=\"{}\"", f.data.join("settings.json").display()), format!("-DLOOT=\"{}\"", loot.display())],
+    );
+    let plist = |exe: &str, id: &str, kind: &str, extra: &str| {
+        format!("<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>CFBundleExecutable</key><string>{exe}</string><key>CFBundleIdentifier</key><string>{id}</string><key>CFBundlePackageType</key><string>{kind}</string>{extra}</dict></plist>")
+    };
+    std::fs::write(app.join("Contents/Info.plist"), plist("main", &format!("{name}.app"), "APPL", "")).unwrap();
+    std::fs::write(svc.join("Contents/Info.plist"), plist("svc", &name, "XPC!", "<key>XPCService</key><dict><key>ServiceType</key><string>Application</string></dict>")).unwrap();
+    for b in [&svc, &app] {
+        let st = std::process::Command::new("/usr/bin/codesign").args(["-s", "-", "--force"]).arg(b).stderr(std::process::Stdio::null()).status().unwrap();
+        assert!(st.success(), "codesign {}", b.display());
+    }
+    let (_ok, out) = run_sh(&*e, &f, &format!("'{}'", app.join("Contents/MacOS/main").display()), isolated());
+    assert!(out.contains("reply:"), "the probe ran: {out}");
+    let started = reaper.watch(std::time::Duration::from_secs(2), &loot);
+    assert!(!loot.exists(), "a bundled XPC service ran outside the sandbox: {out}");
+    assert!(started.is_empty(), "launchd started the bundled XPC service (pids {started:?}): {out}");
+}
+
+/// macOS: other ways a confined turn could get work done outside its
+/// profile. Signals to processes outside the sandbox (resuming a suspended
+/// launch, or killing the user's processes), preference writes through
+/// cfprefsd (which writes `~/Library/Preferences` on the agent's behalf),
+/// Shortcuts (run by a helper outside the profile) and launchd job
+/// submission. Each is checked for denial; a regression that let one through
+/// is cleaned up (the preference domain and the launchd job are removed).
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_denies_out_of_profile_helpers() {
+    let Some(e) = real_executor() else { return };
+    let f = Fixture::new();
+    // Signals: the test process is outside the sandbox.
+    let me = std::process::id();
+    let (_, out) = run_sh(&*e, &f, &format!("kill -0 {me} && echo SIGNALED"), isolated());
+    assert!(!out.contains("SIGNALED"), "signaled a process outside the sandbox: {out}");
+    // ...while the turn's own children can still be signaled.
+    let (ok, out) = run_sh(&*e, &f, "sleep 5 & kill $! && wait $!; echo rc=$?", isolated());
+    assert!(ok && out.contains("rc=143"), "couldn't signal its own child: {out}");
+    // Preference writes through cfprefsd.
+    let domain = format!("ai.ligus.sandbox-prefs-probe.{me}");
+    struct PrefGuard(String);
+    impl Drop for PrefGuard {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("/usr/bin/defaults").args(["delete", &self.0]).stderr(std::process::Stdio::null()).status();
+            if let Some(home) = std::env::var_os("HOME") {
+                let _ = std::fs::remove_file(PathBuf::from(home).join(format!("Library/Preferences/{}.plist", self.0)));
+            }
+        }
+    }
+    let _pref = PrefGuard(domain.clone());
+    let (_, out) = run_sh(&*e, &f, &format!("/usr/bin/defaults write {domain} k v 2>&1; /usr/bin/defaults read {domain} k 2>&1"), isolated());
+    let read = std::process::Command::new("/usr/bin/defaults").args(["read", &domain, "k"]).output().unwrap();
+    assert!(!read.status.success(), "cfprefsd wrote a preference for the agent: {out}");
+    // Preference reads still work (CLIs read their defaults).
+    let (ok, out) = run_sh(&*e, &f, "/usr/bin/defaults domains >/dev/null && echo READ-OK", isolated());
+    assert!(ok && out.contains("READ-OK"), "preference reads broke: {out}");
+    // Shortcuts: listing needs the same service running one does.
+    if Path::new("/usr/bin/shortcuts").exists() {
+        let (ok, out) = run_sh(&*e, &f, "/usr/bin/shortcuts list >/dev/null 2>&1 && echo REACHED", isolated());
+        assert!(!ok || !out.contains("REACHED"), "Shortcuts was reachable: {out}");
+    }
+    // launchd job submission (launchd itself refuses sandboxed callers).
+    let label = format!("ai.ligus.sandbox-launchd-probe.{me}");
+    struct JobGuard(String);
+    impl Drop for JobGuard {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("/bin/launchctl").args(["remove", &self.0]).stderr(std::process::Stdio::null()).status();
+        }
+    }
+    let _job = JobGuard(label.clone());
+    let loot = f.outside.join("launchd-escaped");
+    let (_, out) = run_sh(&*e, &f, &format!("/bin/launchctl submit -l {label} -- /bin/sh -c 'echo x > \"{}\"'", loot.display()), isolated());
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let listed = std::process::Command::new("/bin/launchctl").args(["list", &label]).output().unwrap();
+    assert!(!listed.status.success() && !loot.exists(), "launchd accepted a job from the sandbox: {out}");
+}
+
+/// Run `script` under `purpose` in the fixture's worktree (`provider_key`:
+/// the turn's configured API key, as a hosted-key turn has).
+#[cfg(target_os = "macos")]
+fn run_purpose(e: &dyn TurnExecutor, f: &Fixture, purpose: Purpose, script: &str, provider_key: Option<&str>) -> (bool, String) {
+    with_turn_sync(isolated(), || {
+        let mut spec = SpawnSpec::new(purpose, "/bin/sh", ["-c", script]).cwd(Some(&f.worktree));
+        spec.provider_key = provider_key;
+        let mut p = prepare_with(e, spec).expect("prepare");
+        let out = p.command.output().expect("spawn");
+        drop(p.guard);
+        (out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+    })
+}
+
+/// macOS: an agent whose sign-in doesn't live in the login keychain can't
+/// search it. Items stored with `/usr/bin/security` in their ACL (the gh
+/// token, git's osxkeychain credentials, other CLIs' logins) are readable
+/// without a prompt by anything that can run `security`, so a turn that
+/// reaches the keychain reads them although `~/.config/gh` is denied. The
+/// probe only opens the keychain's settings, never an item.
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_denies_login_keychain_search() {
+    let Some(e) = real_executor() else { return };
+    let f = Fixture::new();
+    let Some(home) = home_dir() else { return };
+    let login = home.join("Library/Keychains/login.keychain-db");
+    // `show-keychain-info` opens the keychain (the client reads the file);
+    // it doesn't unlock it or read any item.
+    let probe = format!("/usr/bin/security show-keychain-info '{}' 2>&1; echo rc=$?", login.display());
+    let reached = |out: &str| out.contains("no-timeout") || out.contains("lock-on-sleep") || out.contains("rc=0");
+    // Control: outside the sandbox the login keychain opens.
+    let control = std::process::Command::new("/bin/sh").args(["-c", &probe]).output().unwrap();
+    let control = String::from_utf8_lossy(&control.stdout).into_owned();
+    if !reached(&control) {
+        eprintln!("skipped: no login keychain to open ({control})");
+        return;
+    }
+    // A hosted-key turn (no subscription sign-in) and a tool child never
+    // need the keychain.
+    for (purpose, key) in [(Purpose::Agent(ModelProviderKind::ClaudeCode), Some("sk-ant-test")), (Purpose::Agent(ModelProviderKind::Codex), Some("sk-test")), (Purpose::Tool, None), (Purpose::McpServer, None)] {
+        let (_, out) = run_purpose(&*e, &f, purpose, &probe, key);
+        assert!(!reached(&out), "{purpose:?} opened the login keychain: {out}");
+    }
+    // A Claude Code subscription sign-in is bridged into the turn home as
+    // its credentials file, and the turn then runs without the keychain.
+    let has_item = std::process::Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-s", "Claude Code-credentials"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if has_item && std::env::var_os("CLAUDE_CONFIG_DIR").is_none() && !home.join(".claude/.credentials.json").exists() {
+        let (_, out) = run_purpose(&*e, &f, Purpose::Agent(ModelProviderKind::ClaudeCode), &format!("test -s \"$HOME/.claude/.credentials.json\" && echo BRIDGED; {probe}"), None);
+        assert!(out.contains("BRIDGED") && !reached(&out), "the subscription sign-in wasn't bridged, or the keychain stayed open: {out}");
+    }
+}
+
+/// macOS: under open egress (a stdio MCP server) a confined child can't
+/// connect to the user's unix sockets. A Docker or OrbStack socket is root
+/// on the VM with the user's home mounted (a full escape), and ssh-agent or
+/// gpg-agent sign with the user's keys.
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_denies_unix_sockets_under_open_egress() {
+    let Some(e) = real_executor() else { return };
+    let f = Fixture::new();
+    let dir = tempfile::Builder::new().prefix("lsk").tempdir_in("/tmp").unwrap();
+    let path = dir.path().join("svc.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let probe = format!(
+        "/usr/bin/python3 -I -c 'import socket,sys\ns=socket.socket(socket.AF_UNIX)\ns.connect(sys.argv[1])\nprint(\"CONNECTED\")' '{}'",
+        canonical(&path).display()
+    );
+    let plan = EnvelopeEnforcer::plan(&PlanInputs {
+        host: HostKind::Desktop,
+        envelope: &SandboxEnvelope::workspace_default(),
+        purpose: Purpose::McpServer,
+        gate: &GatePlan::Full,
+        worktree: Path::new("/repo"),
+        worktree_is_isolated: true,
+        write_capable: false,
+        tmp: Path::new("/tmp/t"),
+        home: Path::new("/home/u"),
+        host_paths: &HostPaths::default(),
+        mcp_hosts: &[],
+        mcp_ids: &[],
+        model_base_url: None,
+        extra_env: &[],
+        provider_key: None,
+        model_provider_id: None,
+        envelope_args: &[],
+        ligus_mcp_socket: None,
+        egress_presets: &[],
+        cli_home: None,
+    });
+    assert_eq!(plan.egress, EgressPlan::Open, "the probe needs an open-egress child");
+    let (_, out) = run_purpose(&*e, &f, Purpose::McpServer, &probe, None);
+    assert!(!out.contains("CONNECTED"), "an open-egress child reached a host unix socket: {out}");
+    assert!(listener.accept().is_err(), "the host socket saw a connection");
+    // Name resolution (mDNSResponder's socket) still works.
+    let (ok, out) = run_purpose(&*e, &f, Purpose::McpServer, "/usr/bin/python3 -I -c 'import socket; socket.getaddrinfo(\"localhost\", 80); print(\"RESOLVED\")'", None);
+    assert!(ok && out.contains("RESOLVED"), "{out}");
+}
+
+/// macOS: mach-lookup is default-deny with an allow-list. The default-allow
+/// profile left hundreds of launchd services reachable (the Dock, login
+/// items, the window server, TCC, ...), each one a way to get work done
+/// outside the profile. A probe (compiled here, run inside) looks services
+/// up by name: the ones a CLI needs answer, the rest don't.
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_mach_lookup_is_allow_listed() {
+    let Some(e) = real_executor() else { return };
+    if !Path::new("/usr/bin/clang").exists() {
+        eprintln!("skipped: clang is needed to build the mach probe");
+        return;
+    }
+    let f = Fixture::new();
+    let src = f.outside.join("mp.c");
+    std::fs::write(
+        &src,
+        "#include <servers/bootstrap.h>\n#include <stdio.h>\nint main(int c,char**v){for(int i=1;i<c;i++){mach_port_t p=MACH_PORT_NULL;\
+         printf(\"%s %s\\n\",bootstrap_look_up(bootstrap_port,v[i],&p)==KERN_SUCCESS?\"OPEN\":\"SHUT\",v[i]);}return 0;}\n",
+    )
+    .unwrap();
+    let exe = f.worktree.join("mp");
+    let st = std::process::Command::new("/usr/bin/clang").arg("-o").arg(&exe).arg(&src).status().unwrap();
+    assert!(st.success(), "clang mp.c");
+    let shut = [
+        "com.apple.windowserver.active",
+        "com.apple.tccd",
+        "com.apple.backgroundtaskmanagementagent",
+        "com.apple.dock.server",
+        "com.apple.replayd",
+        "com.apple.SecurityServer",
+    ];
+    let open = ["com.apple.system.opendirectoryd.libinfo", "com.apple.trustd", "com.apple.system.notification_center", "com.apple.cfprefsd.agent"];
+    // Control: all of them answer outside the sandbox.
+    let control = std::process::Command::new(&exe).args(shut).args(open).output().unwrap();
+    let control = String::from_utf8_lossy(&control.stdout).into_owned();
+    let names: Vec<&str> = shut.iter().chain(open.iter()).copied().filter(|n| control.contains(&format!("OPEN {n}\n"))).collect();
+    let (_, out) = run_purpose(&*e, &f, Purpose::Agent(ModelProviderKind::ClaudeCode), &format!("'{}' {}", exe.display(), names.join(" ")), Some("sk-ant-test"));
+    for n in names {
+        let want = if shut.contains(&n) { "SHUT" } else { "OPEN" };
+        assert!(out.contains(&format!("{want} {n}\n")), "{n} should be {want}: {out}");
+    }
+    // User lookups (libinfo) work: `whoami` prints a name, not a uid.
+    let (ok, out) = run_purpose(&*e, &f, Purpose::Tool, "/usr/bin/whoami", None);
+    assert!(ok && out.trim().parse::<u32>().is_err(), "{out}");
 }
 
 /// Kills whatever runs out of a probe app bundle (matched by its unique
-/// path) and removes the bundle, so a LaunchServices launch can't leak a
-/// process past the test. Bounded: gives up after a few seconds.
+/// path) and removes the bundle, so a LaunchServices or XPC launch can't
+/// leak a process past the test. Bounded: gives up after a few seconds.
 #[cfg(target_os = "macos")]
 struct ProbeReaper(PathBuf);
 
 #[cfg(target_os = "macos")]
 impl ProbeReaper {
     fn pids(&self) -> Vec<i32> {
-        let Ok(out) = std::process::Command::new("/usr/bin/pgrep").arg("-f").arg(self.0.join("Contents/MacOS").as_os_str()).output() else {
+        let Ok(out) = std::process::Command::new("/usr/bin/pgrep").arg("-f").arg(self.0.join("Contents/").as_os_str()).output() else {
             return Vec::new();
         };
         String::from_utf8_lossy(&out.stdout).split_whitespace().filter_map(|p| p.parse().ok()).collect()
+    }
+
+    /// Every pid seen running from the bundle over `for` (stopping early
+    /// once `loot` appears). Call it after the sandboxed run returned, so
+    /// the only matches are processes something else started.
+    fn watch(&self, r#for: std::time::Duration, loot: &Path) -> Vec<i32> {
+        let mut seen = Vec::new();
+        let deadline = std::time::Instant::now() + r#for;
+        while std::time::Instant::now() < deadline {
+            for p in self.pids() {
+                if !seen.contains(&p) {
+                    seen.push(p);
+                }
+            }
+            if loot.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        seen
     }
 }
 

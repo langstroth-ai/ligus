@@ -433,6 +433,22 @@ impl EnvelopeEnforcer {
         let mut deny_read: Vec<PathBuf> = host_paths.data_dirs.clone();
         deny_read.extend(host_paths.secret_files.iter().cloned());
         deny_read.extend(home_secret_dirs(i.home, i.purpose).into_iter().filter(|p| !host_paths.home_read_allow.contains(p)));
+        // macOS: a subscription CLI keeps the login keychain only while its
+        // sign-in lives there. Anything that can run `/usr/bin/security`
+        // reads every item that trusts it (the gh token, git's osxkeychain
+        // credentials, other CLIs' logins) without a prompt, so a turn whose
+        // sign-in is a file in its turn home (Claude Code's is bridged in
+        // from the keychain, `cli_home::populate`) or that runs on a hosted
+        // key loses the keychain (`sandbox_denies_login_keychain_search`).
+        #[cfg(target_os = "macos")]
+        if let Purpose::Agent(k) = i.purpose {
+            let kc = i.home.join("Library/Keychains");
+            let by_file = i.cli_home.is_some_and(|h| cli_home::signed_in_by_file(k, h));
+            let hosted_key = i.provider_key.is_some_and(|x| !x.is_empty()) && provider_key_var(k, i.model_provider_id).is_some();
+            if (by_file || hosted_key) && !deny_read.contains(&kc) && !host_paths.home_read_allow.contains(&kc) {
+                deny_read.push(kc);
+            }
+        }
         let mut allow_read = host_paths.allow_read.clone();
         allow_read.push(i.worktree.to_path_buf());
         // Never write where reading is denied.

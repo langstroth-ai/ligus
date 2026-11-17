@@ -15,17 +15,28 @@
 //!   (regex #"^<worktree>/(.*/)?[.][gG][iI][tT](/.*)?$") …)  ; each name, any depth, any case
 //! (deny file-read* file-write* (subpath "<data dir>") (subpath "~/.ssh") (literal "<serve.token>") …)
 //! (allow file-read* (subpath "<worktree>") <readable dirs inside a denied one>)
-//! (deny mach-lookup (global-name-prefix "com.apple.coreservices."))   ; no LaunchServices launches
+//! (deny mach-lookup) (allow mach-lookup <MACH_ALLOW> [keychain services])  ; default-deny lookups
+//! (deny mach-lookup (global-name-prefix "com.apple.coreservices.") (global-name "com.apple.runningboard"))
+//!                                                    ; no LaunchServices launches (not even suspended)
+//! (deny mach-lookup (xpc-service-name-regex #"."))   ; no bundled XPC services (launchd spawns them)
+//! (deny signal) (allow signal (target same-sandbox)) ; can't resume or kill outside processes
+//! (deny user-preference-write)                       ; no cfprefsd writes on the agent's behalf
+//! (deny mach-lookup (global-name-prefix "com.apple.siri."))  ; no `shortcuts run`
 //! (deny appleevent-send) (deny mach-lookup … "com.apple.pasteboard…")  ; no Apple Events, no pasteboard
-//! (deny network*)
+//! (deny network*)                                   ; proxied/closed egress
+//! (deny network-outbound (remote unix-socket)) …     ; open egress: no host unix sockets (but DNS)
 //! (allow network-outbound (remote ip "localhost:<proxy port>"))
 //! (allow network-outbound (remote unix-socket (path-literal "<ligus mcp socket>")))
 //! ```
 //!
-//! Keychain: agent CLIs keep Keychain *service* access (mach lookups to
-//! `securityd`), because Claude Code's subscription login lives there; the
-//! keychain *files* are unreadable. Ligus's own items are protected by their
-//! item ACLs, not by this profile.
+//! Keychain: the login keychain's files are unreadable (so it can't be
+//! opened) except to a subscription CLI whose sign-in still lives there
+//! (Copilot, Antigravity, Claude Code with a custom config dir). Claude
+//! Code's keychain sign-in is bridged into the turn home as a credentials
+//! file (`cli_home`), and Codex signs in from `auth.json`, so their turns run
+//! without it: any process that can run `/usr/bin/security` reads every item
+//! that trusts it (the gh token, git's osxkeychain credentials) with no
+//! prompt. Ligus's own items trust only the Ligus binaries.
 
 use std::ffi::{OsStr, OsString};
 use std::io;
@@ -103,6 +114,45 @@ fn protected_filters(plan: &EnforcementPlan) -> String {
     p
 }
 
+/// The launchd services a confined child may look up: user and group
+/// lookups, logging and notifications, preference reads (writes are denied
+/// below), TLS trust, DNS and network configuration, file events, the
+/// per-user temp dir, and power assertions.
+const MACH_ALLOW: &[&str] = &[
+    "com.apple.system.opendirectoryd.libinfo",
+    "com.apple.system.opendirectoryd.membership",
+    "com.apple.system.DirectoryService.libinfo_v1",
+    "com.apple.system.DirectoryService.membership_v1",
+    "com.apple.system.notification_center",
+    "com.apple.system.logger",
+    "com.apple.logd",
+    "com.apple.logd.events",
+    "com.apple.diagnosticd",
+    "com.apple.cfprefsd.agent",
+    "com.apple.cfprefsd.daemon",
+    "com.apple.trustd",
+    "com.apple.trustd.agent",
+    "com.apple.ocspd",
+    "com.apple.SystemConfiguration.configd",
+    "com.apple.SystemConfiguration.DNSConfiguration",
+    "com.apple.dnssd.service",
+    "com.apple.networkd",
+    "com.apple.FSEvents",
+    "com.apple.bsd.dirhelper",
+    "com.apple.distributed_notifications@Uv3",
+    "com.apple.distributed_notifications@1v3",
+    "com.apple.PowerManagement.control",
+];
+
+/// The keychain services, for a child that keeps the login keychain.
+const MACH_ALLOW_KEYCHAIN: &[&str] = &["com.apple.SecurityServer", "com.apple.securityd.xpc"];
+
+/// Whether `plan` leaves the login keychain readable (a subscription CLI
+/// whose sign-in lives there).
+fn keychain_reachable(plan: &EnforcementPlan) -> bool {
+    !plan.deny_read.iter().any(|d| d.ends_with("Library/Keychains"))
+}
+
 /// The SBPL profile for `plan` (`proxy_port`: the egress proxy's port).
 pub fn profile(plan: &EnforcementPlan, proxy_port: Option<u16>) -> String {
     let mut p = String::from("(version 1)\n(allow default)\n");
@@ -149,14 +199,58 @@ pub fn profile(plan: &EnforcementPlan, proxy_port: Option<u16>) -> String {
     // launchd, and the launched app runs outside this profile (an agent could
     // write an app bundle into its worktree and `open` it to read the data
     // dir; `sandbox_denies_launchservices_escape`).
-    p.push_str("(deny mach-lookup (global-name-prefix \"com.apple.coreservices.\"))\n");
+    //
+    // Denying launchservicesd alone is not enough: `LSOpen*` asks RunningBoard
+    // to spawn the app *before* it checks in with launchservicesd, so the
+    // app is created (suspended, under launchd) and the open then fails; a
+    // `kill -CONT` from inside the turn would resume it unconfined. So:
+    // no RunningBoard (no LaunchServices spawn at all), no signals to
+    // processes outside this sandbox (nothing suspended out there can be
+    // resumed, and the user's own processes can't be killed), and no XPC
+    // service lookups (an XPC service embedded in a bundle the agent wrote
+    // is spawned by launchd, outside this profile).
+    //
+    // Beyond those, mach-lookup is default-deny: a default-allow profile
+    // leaves hundreds of launchd services reachable (the Dock, login items,
+    // the window server, TCC, …), each a way to get work done outside the
+    // profile. CLIs, compilers and runtimes need only [`MACH_ALLOW`]
+    // (`sandbox_mach_lookup_is_allow_listed`; measured with claude, codex,
+    // git, cargo/clang, swift, node and python).
+    p.push_str("(deny mach-lookup)\n(allow mach-lookup");
+    for s in MACH_ALLOW {
+        p.push_str(&format!(" (global-name \"{s}\")"));
+    }
+    if keychain_reachable(plan) {
+        for s in MACH_ALLOW_KEYCHAIN {
+            p.push_str(&format!(" (global-name \"{s}\")"));
+        }
+    }
+    p.push_str(")\n");
+    p.push_str("(deny mach-lookup (global-name-prefix \"com.apple.coreservices.\") (global-name \"com.apple.runningboard\"))\n");
+    p.push_str("(deny mach-lookup (xpc-service-name-regex #\".\"))\n");
+    p.push_str("(deny signal)\n(allow signal (target same-sandbox))\n");
+    // No preference writes through cfprefsd: it writes the plist outside
+    // this profile (e.g. a Terminal profile's start-up command, run unconfined
+    // the next time the user opens Terminal). Reads still work.
+    p.push_str("(deny user-preference-write)\n");
+    // No Shortcuts (`shortcuts run` executes the user's shortcuts, which may
+    // run shell scripts, in a helper outside this profile).
+    p.push_str("(deny mach-lookup (global-name-prefix \"com.apple.siri.\"))\n");
     // C-13: no Apple Events to other apps (AppleScript driving Terminal or
     // Finder runs outside this profile), and no pasteboard (it can hold a
     // password or token the user just copied).
     p.push_str("(deny appleevent-send)\n");
     p.push_str("(deny mach-lookup (global-name \"com.apple.coreservices.appleevents\") (global-name-prefix \"com.apple.pasteboard\"))\n");
     match (&plan.egress, proxy_port) {
-        (EgressPlan::Open, _) => {}
+        // Open egress is the network, not the user's unix sockets: a
+        // Docker/OrbStack socket is root on a VM with the home dir mounted,
+        // and ssh-agent signs with the user's keys
+        // (`sandbox_denies_unix_sockets_under_open_egress`). Name resolution
+        // (mDNSResponder) and syslog stay reachable.
+        (EgressPlan::Open, _) => {
+            p.push_str("(deny network-outbound (remote unix-socket))\n");
+            p.push_str("(allow network-outbound (remote unix-socket (path-literal \"/private/var/run/mDNSResponder\") (path-literal \"/private/var/run/syslog\")))\n");
+        }
         (EgressPlan::Proxy { .. }, Some(port)) => {
             p.push_str("(deny network*)\n");
             p.push_str(&format!("(allow network-outbound (remote ip \"localhost:{port}\"))\n"));

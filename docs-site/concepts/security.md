@@ -212,8 +212,11 @@ turns refused, where neither is available. The table shows the first.
 - **Why the macOS profile is default-allow.** The Seatbelt profile allows
   by default and then denies what matters: every file write outside the
   turn's paths, reads of Ligus's data and your credential dirs, all network
-  except the proxy and the Ligus MCP socket, LaunchServices, Apple Events and
-  the pasteboard. A default-deny profile would also have to allow, by name,
+  except the proxy and the Ligus MCP socket, LaunchServices and RunningBoard
+  (no app launches, not even suspended ones), XPC services bundled in an
+  app the agent could write (launchd would start them outside the profile),
+  signals to processes outside the sandbox, preference writes through
+  `cfprefsd`, Shortcuts, Apple Events and the pasteboard. A default-deny profile would also have to allow, by name,
   every Mach service, sysctl, IOKit class and file the agent CLIs and the
   tools they run need: `securityd` and `trustd` (the subscription logins and
   TLS), `opendirectoryd`, `notifyd`, `logd`, `cfprefsd`, POSIX shared memory
