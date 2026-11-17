@@ -143,6 +143,79 @@ referenced Secret changed. It uses `lookup`, which is a constant under `helm
 template`; with GitOps use [Reloader](https://github.com/stakater/Reloader) or
 bump `podAnnotations`.
 
+## Model gateways
+
+serve and workers can route every agent's model traffic through a dedicated
+LLM gateway: LiteLLM, kgateway or Envoy AI Gateway (Envoy and the Gateway
+API), vLLM or KServe pools behind the Gateway API Inference Extension, or any
+other OpenAI- or Anthropic-compatible endpoint. None is required and none is
+bundled. Design: `docs/design/v2/model-gateways.md`; operator guide: the docs
+site's "Deploying with an LLM gateway". A full example is in
+[`examples/model-gateway-values.yaml`](examples/model-gateway-values.yaml).
+
+```yaml
+modelGateways:
+  - name: team-gw                       # what the workspace sees (names only)
+    url: https://llm-gateway.gw.svc.cluster.local:8443
+    api: openai                         # openai | anthropic
+    auth:
+      mode: serviceAccountToken         # serviceAccountToken | apiKey | mtls | none
+      audience: llm-gateway
+      expirationSeconds: 3600
+    networkPolicy:
+      namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: gw } }
+      podSelector: { matchLabels: { app.kubernetes.io/name: llm-gateway } }
+      ports: [8443]
+```
+
+What the chart renders for a non-empty `modelGateways`:
+
+- **The allow-list file.** ConfigMap `<release>-model-gateways`
+  (`model-gateways.json`: name, URL, wire, auth mode and the paths of the
+  credential files; no secrets), mounted read-only and named by
+  `LIGUS_MODEL_GATEWAYS_FILE`. The host advertises the gateway names (never
+  URLs or credentials) to the workspace; an Admin picks one for a runtime,
+  with passkey presence. With `modelGatewaysExclusive: true` (the default)
+  every agent turn on these hosts must go through a listed gateway, and a
+  runtime pointing anywhere else is refused.
+- **Credentials as files, one projected volume per gateway**, under
+  `/etc/ligus/model-gateways/<name>/`, never in the environment:
+  - `serviceAccountToken`: a projected ServiceAccount token with the given
+    `audience` (default: the gateway name) and `expirationSeconds` (default
+    3600, at least 600). The pods keep `automountServiceAccountToken: false`,
+    so this audience-bound token is the only one mounted. The kubelet rotates
+    it and Ligus re-reads it on every request.
+  - `apiKey`: `auth.secretName` / `auth.secretKey`, sent as
+    `Authorization: Bearer` or the header in `auth.header`
+    (`x-api-key`, `api-key`).
+  - `mtls`: `auth.secretName`, a `kubernetes.io/tls` Secret with `tls.crt`,
+    `tls.key` and `ca.crt` (cert-manager's shape); the CA is pinned.
+  - `caSecret: {name, key}` pins a private CA for any https gateway.
+  Agent processes never see these files (Ligus keeps them off its sandbox's
+  read list) and never get the credential: the egress proxy adds it to their
+  requests.
+- **NetworkPolicy `<release>-model-gateways`**: egress from serve and
+  workers to exactly each gateway's `namespaceSelector`/`podSelector` or
+  `ipBlock.cidrs`, on its `ports`. Policies are a union, so this only adds to
+  `<release>-controller`, and it renders only with
+  `networkPolicy.restrictEgress` (without it, egress isn't restricted). A
+  gateway in another cluster is an `ipBlock` of its load balancer's
+  addresses.
+- `modelGatewayAttribution.secretName`: the key for the opt-in
+  `attribution` headers (`X-Ligus-Workspace`, `X-Ligus-Agent`: keyed hashes,
+  no names or content). Use one Secret for serve and every worker so the ids
+  agree across hosts.
+
+The chart refuses: names outside `[a-z0-9-]` (1-60), duplicates, an
+`http://` URL without `allowPlaintext` (only inside a mesh with mTLS), a URL
+with `user:pass@`, `mtls` over `http://`, an unknown `api` or `auth.mode`,
+`apiKey`/`mtls` without a Secret, an SA token shorter than 600 s, a gateway
+with no peers or no ports, an `ipBlock` broader than /8 (IPv4) or /16
+(IPv6), and any CIDR that overlaps link-local or cloud metadata
+(169.254.0.0/16, 100.100.100.200/32, fe80::/10, fd00:ec2::254/128). A
+private-range CIDR is allowed, but only exactly as listed. `extraEnv` can't
+set `LIGUS_MODEL_GATEWAY*`.
+
 ## Values
 
 | Key | Default | Notes |
@@ -162,6 +235,9 @@ bump `podAnnotations`.
 | `worker.enabled` / `instances[]` / `permissionMode` | off, `[]` | Named worker hosts: `{name, permissionMode?, resources?}` |
 | `agentSandbox.require` / `tier` / `preflight.*` | on, `landlock`, on | The agent sandbox, above |
 | `mcp.servers[]` | `[]` | `name`, `image` (pinned by digest; a tag needs `allowUnpinned: true`), `args`, `port`, `env`, `internetHttps` (default on), `egress`, `resources`, `podSecurityContext` / `securityContext` (replace the chart's UID 65532 and read-only root for images that need it) |
+| `modelGateways[]` | `[]` | LLM gateways serve and workers may use: `name`, `url`, `api`, `auth`, `caSecret`, `allowPlaintext`, `attribution`, `networkPolicy` (Model gateways, above) |
+| `modelGatewaysExclusive` | `true` | With gateways listed, every agent turn must use one (`LIGUS_MODEL_GATEWAYS_EXCLUSIVE`) |
+| `modelGatewayAttribution.secretName` / `secretKey` | empty, `key` | HMAC key for the opt-in attribution headers |
 | `networkPolicy.restrictEgress` | `true` | serve/worker egress: DNS, the relay, MCP servers, plus what you allow |
 | `networkPolicy.relayNamespace` | empty | A relay in this cluster |
 | `networkPolicy.allowInternetHttps` / `internetExcept` | off, metadata + private ranges | 443 to the internet, never cloud metadata (169.254.0.0/16, 100.100.100.200) or private ranges |

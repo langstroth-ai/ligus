@@ -1,0 +1,52 @@
+# Example values: serve (and optional workers) routing every agent's model
+# traffic through LLM gateways. Install alongside your usual values:
+#   helm install acme deploy/helm/ligus -n ligus-ws-acme \
+#     -f my-values.yaml -f deploy/helm/ligus/examples/model-gateway-values.yaml
+# See README.md, "Model gateways", and the docs page "Deploying with an LLM
+# gateway" (docs-site/deploy/model-gateways.md).
+modelGateways:
+  # In-cluster gateway (LiteLLM, kgateway, Envoy AI Gateway, ...) that
+  # verifies Kubernetes ServiceAccount tokens: a projected token with this
+  # audience, rotated by the kubelet and re-read by Ligus on every request.
+  - name: team-gw
+    url: https://llm-gateway.gw.svc.cluster.local:8443
+    api: openai
+    auth:
+      mode: serviceAccountToken
+      audience: llm-gateway
+      expirationSeconds: 3600
+    # The gateway's serving certificate is issued by a private CA.
+    caSecret: { name: llm-gateway-ca, key: ca.crt }
+    attribution: true
+    networkPolicy:
+      namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: gw } }
+      podSelector: { matchLabels: { app.kubernetes.io/name: llm-gateway } }
+      ports: [8443]
+  # An Anthropic-wire gateway in another network, by fixed address, with a
+  # key from a Secret (mounted as a file, never in env).
+  - name: anthropic-gw
+    url: https://anthropic-gw.example.internal
+    api: anthropic
+    auth:
+      mode: apiKey
+      secretName: anthropic-gw-key
+      secretKey: key
+      header: x-api-key
+    networkPolicy:
+      ipBlock: { cidrs: [10.20.30.40/32] }
+      ports: [443]
+  # mTLS: a client certificate (for example from cert-manager) and its CA.
+  - name: mesh-gw
+    url: https://mesh-gw.gw.svc.cluster.local
+    api: openai
+    auth:
+      mode: mtls
+      secretName: ligus-gw-client-tls
+    networkPolicy:
+      namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: gw } }
+      podSelector: { matchLabels: { app.kubernetes.io/name: mesh-gw } }
+      ports: [443]
+modelGatewaysExclusive: true
+modelGatewayAttribution:
+  secretName: ligus-gw-attribution
+  secretKey: key

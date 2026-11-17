@@ -133,6 +133,139 @@ def test_serve_ingress_excludes_foreign_pods():
     check("the helm test pod still reaches serve:8787", admitted(test_pod["metadata"]["labels"]))
 
 
+# --- Model gateways: allow-list file, credentials as files, exact egress -----
+
+def _gw(i=0, **kv):
+    """--set args for modelGateways[i]; kv maps dotted keys to values."""
+    base = {"name": "team-gw", "url": "https://gw.gw.svc.cluster.local:8443",
+            "auth.mode": "serviceAccountToken", "auth.audience": "llm-gw",
+            "networkPolicy.namespaceSelector.matchLabels.kubernetes\\.io/metadata\\.name": "gw",
+            "networkPolicy.ports[0]": "8443"}
+    base.update(kv)
+    out = []
+    for k, v in base.items():
+        if v is None:
+            continue
+        out += ["--set-string" if k in ("name", "url", "auth.mode", "auth.audience", "auth.secretName",
+                                         "auth.secretKey", "auth.header") else "--set",
+                "modelGateways[%d].%s=%s" % (i, k, v)]
+    return out
+
+
+def test_model_gateways():
+    import json
+    docs = render(*_gw(**{"auth.expirationSeconds": "1800", "attribution": "true"}))
+    cms = [d for d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"].endswith("-model-gateways")]
+    check("model gateways ConfigMap renders", len(cms) == 1)
+    cfg = json.loads(cms[0]["data"]["model-gateways.json"]) if cms else {}
+    g = (cfg.get("gateways") or [{}])[0]
+    check("allow-list JSON names the gateway, URL and wire",
+          g.get("name") == "team-gw" and g.get("url") == "https://gw.gw.svc.cluster.local:8443" and g.get("api") == "openai")
+    check("allow-list JSON points at the projected token file, no secret inline",
+          g.get("auth") == {"mode": "serviceAccountToken", "tokenFile": "/etc/ligus/model-gateways/team-gw/token"}
+          and g.get("attribution") is True and "caFile" not in g, str(g))
+    hosts = [(n, t) for k, n, t in pod_templates(docs) if k == "StatefulSet"]
+    for n, t in hosts:
+        spec = t["spec"]
+        check("%s keeps automountServiceAccountToken false" % n, spec.get("automountServiceAccountToken") is False)
+        vols = {v["name"]: v for v in spec.get("volumes") or []}
+        src = ((vols.get("mg-team-gw") or {}).get("projected") or {}).get("sources") or []
+        sat = [s_["serviceAccountToken"] for s_ in src if "serviceAccountToken" in s_]
+        check("%s mounts an audience-bound, expiring SA token" % n,
+              sat == [{"audience": "llm-gw", "expirationSeconds": 1800, "path": "token"}], str(sat))
+        c = [c for c in spec["containers"] if c["name"] in ("serve", "worker")][0]
+        env = {e["name"]: e.get("value") for e in c.get("env") or []}
+        check("%s gets LIGUS_MODEL_GATEWAYS_FILE" % n,
+              env.get("LIGUS_MODEL_GATEWAYS_FILE") == "/etc/ligus/model-gateways-config/model-gateways.json")
+        check("%s is gateway-exclusive by default" % n, "LIGUS_MODEL_GATEWAYS_EXCLUSIVE" not in env)
+        mounts = {m["name"]: m for m in c.get("volumeMounts") or []}
+        check("%s mounts gateway credentials read-only under /etc/ligus/model-gateways" % n,
+              mounts.get("mg-team-gw", {}).get("mountPath") == "/etc/ligus/model-gateways/team-gw"
+              and mounts["mg-team-gw"].get("readOnly") is True)
+        check("%s puts no gateway credential in env" % n,
+              not any("valueFrom" in e and "MODEL_GATEWAY" in e["name"] for e in c.get("env") or []))
+    nps = [p for p in policies(docs) if p["metadata"]["name"].endswith("-model-gateways")]
+    check("model gateway NetworkPolicy renders", len(nps) == 1)
+    if nps:
+        sp = nps[0]["spec"]
+        check("it selects the controller pods only",
+              sp["podSelector"]["matchLabels"].get("ligus.ai/role") == "controller" and sp["policyTypes"] == ["Egress"])
+        rules = sp.get("egress") or []
+        check("one rule, exactly the listed peer and port",
+              len(rules) == 1 and rules[0]["ports"] == [{"port": 8443, "protocol": "TCP"}]
+              and rules[0]["to"] == [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "gw"}}}],
+              str(rules))
+    # ipBlock: exactly the listed private CIDR.
+    docs = render(*_gw(**{"networkPolicy.namespaceSelector.matchLabels.kubernetes\\.io/metadata\\.name": None,
+                          "networkPolicy.ipBlock.cidrs[0]": "10.20.30.40/32"}))
+    np_ = [p for p in policies(docs) if p["metadata"]["name"].endswith("-model-gateways")][0]
+    check("a private-range gateway opens only its listed CIDR",
+          np_["spec"]["egress"][0]["to"] == [{"ipBlock": {"cidr": "10.20.30.40/32"}}])
+    # No policy without restricted egress (it would isolate open pods).
+    docs = render(*_gw(), "--set", "networkPolicy.restrictEgress=false")
+    check("no model gateway policy when egress isn't restricted",
+          not [p for p in policies(docs) if p["metadata"]["name"].endswith("-model-gateways")])
+    # Exclusive off, apiKey and mtls shapes.
+    docs = render(*_gw(**{"auth.mode": "apiKey", "auth.secretName": "k", "auth.secretKey": "key", "auth.header": "x-api-key"}),
+                  "--set", "modelGatewaysExclusive=false")
+    serve = [t for k, n, t in pod_templates(docs) if n.endswith("-serve")][0]
+    env = {e["name"]: e.get("value") for e in serve["spec"]["containers"][0]["env"]}
+    check("modelGatewaysExclusive=false sets LIGUS_MODEL_GATEWAYS_EXCLUSIVE=0", env.get("LIGUS_MODEL_GATEWAYS_EXCLUSIVE") == "0")
+    vols = {v["name"]: v for v in serve["spec"]["volumes"]}
+    check("apiKey comes from the Secret as a file",
+          vols["mg-team-gw"]["projected"]["sources"] == [{"secret": {"name": "k", "items": [{"key": "key", "path": "api-key"}]}}])
+    cm = [d for d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"].endswith("-model-gateways")][0]
+    g = json.loads(cm["data"]["model-gateways.json"])["gateways"][0]
+    check("apiKey JSON names the key file and header",
+          g["auth"] == {"mode": "apiKey", "keyFile": "/etc/ligus/model-gateways/team-gw/api-key", "header": "x-api-key"})
+    docs = render(*_gw(**{"auth.mode": "mtls", "auth.secretName": "client-tls"}))
+    cm = [d for d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"].endswith("-model-gateways")][0]
+    g = json.loads(cm["data"]["model-gateways.json"])["gateways"][0]
+    check("mtls JSON pins the CA and names cert and key",
+          g.get("caFile", "").endswith("/ca.crt") and g["auth"].get("certFile", "").endswith("/tls.crt")
+          and g["auth"].get("clientKeyFile", "").endswith("/tls.key"))
+    # Refusals.
+    bad = {
+        "a catch-all IPv4 CIDR": dict(**{"networkPolicy.ipBlock.cidrs[0]": "0.0.0.0/0"}),
+        "a /4 IPv4 CIDR": dict(**{"networkPolicy.ipBlock.cidrs[0]": "16.0.0.0/4"}),
+        "a catch-all IPv6 CIDR": dict(**{"networkPolicy.ipBlock.cidrs[0]": "::/0"}),
+        "a CIDR overlapping link-local metadata": dict(**{"networkPolicy.ipBlock.cidrs[0]": "169.0.0.0/8"}),
+        "a CIDR inside link-local": dict(**{"networkPolicy.ipBlock.cidrs[0]": "169.254.1.0/24"}),
+        "a CIDR covering Alibaba metadata": dict(**{"networkPolicy.ipBlock.cidrs[0]": "100.100.0.0/16"}),
+        "a CIDR covering AWS IPv6 metadata": dict(**{"networkPolicy.ipBlock.cidrs[0]": "fd00::/16"}),
+        "an IPv6 link-local CIDR": dict(**{"networkPolicy.ipBlock.cidrs[0]": "fe80::/64"}),
+        "a gateway with no peers": dict(**{"networkPolicy.namespaceSelector.matchLabels.kubernetes\\.io/metadata\\.name": None}),
+        "a gateway with no ports": dict(**{"networkPolicy.ports[0]": None}),
+        "plaintext http without allowPlaintext": dict(url="http://gw.gw.svc:4000"),
+        "a URL with credentials": dict(url="https://u:p@gw.example"),
+        "mtls over http": dict(url="http://gw.gw.svc:4000", allowPlaintext="true",
+                               **{"auth.mode": "mtls", "auth.secretName": "c"}),
+        "apiKey without a Secret": dict(**{"auth.mode": "apiKey"}),
+        "mtls without a Secret": dict(**{"auth.mode": "mtls"}),
+        "an unknown auth mode": dict(**{"auth.mode": "basic"}),
+        "a short-lived SA token below the kubelet minimum": dict(**{"auth.expirationSeconds": "60"}),
+        "a bad name": dict(name="Team_GW"),
+        "an unknown wire": dict(api="gemini"),
+    }
+    for what, kv in bad.items():
+        p = render(*_gw(**kv), ok=False)
+        check("modelGateways refuses %s" % what, p.returncode != 0, p.stdout[-200:])
+    p = render(*_gw(), *_gw(1), ok=False)
+    check("modelGateways refuses duplicate names", p.returncode != 0)
+    p = render(*_gw(), "--set", "serve.extraEnv[0].name=LIGUS_MODEL_GATEWAYS_FILE", "--set", "serve.extraEnv[0].value=/x", ok=False)
+    check("extraEnv can't override the gateway allow-list", p.returncode != 0)
+    for ok_cidr in ("10.0.0.0/8", "2001:db8::/32", "fd00:ec3::/32", "100.101.0.0/16"):
+        p = render(*_gw(**{"networkPolicy.ipBlock.cidrs[0]": ok_cidr}), ok=False)
+        check("modelGateways accepts %s" % ok_cidr, p.returncode == 0, p.stderr[-300:])
+    p = render(*_gw(url="http://gw.gw.svc:4000", allowPlaintext="true"), ok=False)
+    check("allowPlaintext opts into an in-mesh http:// gateway", p.returncode == 0, p.stderr[-300:])
+    docs = render("-f", os.path.join(CHART, "examples", "model-gateway-values.yaml"))
+    check("the example values render", any(d["metadata"]["name"].endswith("-model-gateways") for d in docs))
+    docs = render()
+    check("no model gateway objects by default",
+          not any(d["metadata"]["name"].endswith("-model-gateways") for d in docs))
+
+
 # --- The cut executor/PR-test template and otel placeholders stay gone ----
 
 def test_removed_values_refuse():
@@ -337,7 +470,8 @@ def test_test_pods_kept_for_logs():
 TESTS = [test_test_pods_kept_for_logs, test_no_generated_secrets, test_test_pods_hold_no_workspace_key, test_dns_egress_is_scoped, test_egress_closed_and_metadata_blocked, test_serve_ingress_excludes_foreign_pods,
          test_removed_values_refuse, test_secrets_are_files, test_single_writer_volumes,
          test_mcp_images_pinned, test_metadata_stays_blocked_when_internet_except_is_overridden,
-         test_extra_env_cannot_override_secrets_or_sandbox, test_dockerfile_bases_pinned_by_digest]
+         test_extra_env_cannot_override_secrets_or_sandbox, test_dockerfile_bases_pinned_by_digest,
+         test_model_gateways]
 
 if __name__ == "__main__":
     for t in TESTS:
