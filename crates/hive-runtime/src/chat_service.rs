@@ -3462,6 +3462,14 @@ mod tests {
         assert!(svc.ensure_host(wid, WorkspaceHost::new(hid.clone(), HostKind::Worker, "Alex's box")).unwrap());
         assert_eq!(svc.store().list(config).unwrap().len(), rows + 1);
         assert_eq!(svc.list_hosts(wid).unwrap()[0].label, "Alex's box");
+        // The operator lists a model gateway: the record is rewritten once,
+        // carrying the name (never a URL); unchanged offers write nothing.
+        let mut offering = WorkspaceHost::new(hid.clone(), HostKind::Worker, "Alex's box");
+        offering.model_gateways = vec![hive_core::HostModelGateway { name: "kgw".into(), api: "openai".into() }];
+        assert!(svc.ensure_host(wid, offering.clone()).unwrap());
+        assert!(!svc.ensure_host(wid, offering).unwrap());
+        assert_eq!(svc.store().list(config).unwrap().len(), rows + 2);
+        assert!(svc.list_hosts(wid).unwrap()[0].offers_gateway("kgw"));
     }
 
     #[test]

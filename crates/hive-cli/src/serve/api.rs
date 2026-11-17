@@ -981,12 +981,19 @@ async fn list_hosts(State(s): S) -> ApiResult<Json<Value>> {
         .iter()
         .map(|h| {
             let is_this = h.id == s.host_id;
-            json!({
+            let mut v = json!({
                 "id": h.id,
                 "label": h.label,
                 "isThis": is_this,
                 "online": is_this || s.presence.is_online(h, &now),
-            })
+            });
+            // The model gateways the host offers (names and wire only),
+            // left out when none.
+            let gws: Vec<Value> = h.offered_gateways().map(|g| json!({ "name": g.name, "api": g.api })).collect();
+            if !gws.is_empty() {
+                v["modelGateways"] = Value::Array(gws);
+            }
+            v
         })
         .collect();
     Ok(Json(json!({ "hosts": list })))
