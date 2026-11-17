@@ -22,7 +22,8 @@
 //! (deny user-preference-write)                       ; no cfprefsd writes on the agent's behalf
 //! (deny mach-lookup (global-name-prefix "com.apple.siri."))  ; no `shortcuts run`
 //! (deny appleevent-send) (deny mach-lookup … "com.apple.pasteboard…")  ; no Apple Events, no pasteboard
-//! (deny network*)
+//! (deny network*)                                   ; proxied/closed egress
+//! (deny network-outbound (remote unix-socket)) …     ; open egress: no host unix sockets (but DNS)
 //! (allow network-outbound (remote ip "localhost:<proxy port>"))
 //! (allow network-outbound (remote unix-socket (path-literal "<ligus mcp socket>")))
 //! ```
@@ -180,7 +181,15 @@ pub fn profile(plan: &EnforcementPlan, proxy_port: Option<u16>) -> String {
     p.push_str("(deny appleevent-send)\n");
     p.push_str("(deny mach-lookup (global-name \"com.apple.coreservices.appleevents\") (global-name-prefix \"com.apple.pasteboard\"))\n");
     match (&plan.egress, proxy_port) {
-        (EgressPlan::Open, _) => {}
+        // Open egress is the network, not the user's unix sockets: a
+        // Docker/OrbStack socket is root on a VM with the home dir mounted,
+        // and ssh-agent signs with the user's keys
+        // (`sandbox_denies_unix_sockets_under_open_egress`). Name resolution
+        // (mDNSResponder) and syslog stay reachable.
+        (EgressPlan::Open, _) => {
+            p.push_str("(deny network-outbound (remote unix-socket))\n");
+            p.push_str("(allow network-outbound (remote unix-socket (path-literal \"/private/var/run/mDNSResponder\") (path-literal \"/private/var/run/syslog\")))\n");
+        }
         (EgressPlan::Proxy { .. }, Some(port)) => {
             p.push_str("(deny network*)\n");
             p.push_str(&format!("(allow network-outbound (remote ip \"localhost:{port}\"))\n"));

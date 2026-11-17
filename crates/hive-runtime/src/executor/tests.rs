@@ -865,6 +865,68 @@ fn sandbox_denies_out_of_profile_helpers() {
     assert!(!listed.status.success() && !loot.exists(), "launchd accepted a job from the sandbox: {out}");
 }
 
+/// Run `script` under `purpose` in the fixture's worktree (`provider_key`:
+/// the turn's configured API key, as a hosted-key turn has).
+#[cfg(target_os = "macos")]
+fn run_purpose(e: &dyn TurnExecutor, f: &Fixture, purpose: Purpose, script: &str, provider_key: Option<&str>) -> (bool, String) {
+    with_turn_sync(isolated(), || {
+        let mut spec = SpawnSpec::new(purpose, "/bin/sh", ["-c", script]).cwd(Some(&f.worktree));
+        spec.provider_key = provider_key;
+        let mut p = prepare_with(e, spec).expect("prepare");
+        let out = p.command.output().expect("spawn");
+        drop(p.guard);
+        (out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+    })
+}
+
+/// macOS: under open egress (a stdio MCP server) a confined child can't
+/// connect to the user's unix sockets. A Docker or OrbStack socket is root
+/// on the VM with the user's home mounted (a full escape), and ssh-agent or
+/// gpg-agent sign with the user's keys.
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_denies_unix_sockets_under_open_egress() {
+    let Some(e) = real_executor() else { return };
+    let f = Fixture::new();
+    let dir = tempfile::Builder::new().prefix("lsk").tempdir_in("/tmp").unwrap();
+    let path = dir.path().join("svc.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let probe = format!(
+        "/usr/bin/python3 -I -c 'import socket,sys\ns=socket.socket(socket.AF_UNIX)\ns.connect(sys.argv[1])\nprint(\"CONNECTED\")' '{}'",
+        canonical(&path).display()
+    );
+    let plan = EnvelopeEnforcer::plan(&PlanInputs {
+        host: HostKind::Desktop,
+        envelope: &SandboxEnvelope::workspace_default(),
+        purpose: Purpose::McpServer,
+        gate: &GatePlan::Full,
+        worktree: Path::new("/repo"),
+        worktree_is_isolated: true,
+        write_capable: false,
+        tmp: Path::new("/tmp/t"),
+        home: Path::new("/home/u"),
+        host_paths: &HostPaths::default(),
+        mcp_hosts: &[],
+        mcp_ids: &[],
+        model_base_url: None,
+        extra_env: &[],
+        provider_key: None,
+        model_provider_id: None,
+        envelope_args: &[],
+        ligus_mcp_socket: None,
+        egress_presets: &[],
+        cli_home: None,
+    });
+    assert_eq!(plan.egress, EgressPlan::Open, "the probe needs an open-egress child");
+    let (_, out) = run_purpose(&*e, &f, Purpose::McpServer, &probe, None);
+    assert!(!out.contains("CONNECTED"), "an open-egress child reached a host unix socket: {out}");
+    assert!(listener.accept().is_err(), "the host socket saw a connection");
+    // Name resolution (mDNSResponder's socket) still works.
+    let (ok, out) = run_purpose(&*e, &f, Purpose::McpServer, "/usr/bin/python3 -I -c 'import socket; socket.getaddrinfo(\"localhost\", 80); print(\"RESOLVED\")'", None);
+    assert!(ok && out.contains("RESOLVED"), "{out}");
+}
+
 /// Kills whatever runs out of a probe app bundle (matched by its unique
 /// path) and removes the bundle, so a LaunchServices or XPC launch can't
 /// leak a process past the test. Bounded: gives up after a few seconds.
