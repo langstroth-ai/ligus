@@ -59,7 +59,7 @@ pub use agent::WorkspaceAgent;
 pub use authorization::{evaluate as authorize, AuthzDecision, AuthzReason};
 pub use channel::{room_workspace_id, workspace_config_session_id, Channel};
 pub use device_link::DeviceLinks;
-pub use workspace_host::{HostKind, WorkspaceHost};
+pub use workspace_host::{HostKind, HostModelGateway, WorkspaceHost};
 pub use workspace_runtime::{WorkspaceCredential, WorkspaceRuntime};
 pub use chat::{
     ChatMessage, ChatToolCall, ChatToolResult, MessageReaction, MessageRole, TranscriptEventKind,

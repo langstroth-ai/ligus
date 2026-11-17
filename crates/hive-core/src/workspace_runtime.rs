@@ -65,6 +65,13 @@ pub struct WorkspaceRuntime {
     /// `auto`, so existing events stay byte-identical.
     #[serde(default, skip_serializing_if = "crate::runtime::Driver::is_auto")]
     pub driver: crate::runtime::Driver,
+    /// The operator-listed model gateway this runtime's turns go through
+    /// (a name a host offers, `WorkspaceHost::model_gateways`; never a URL).
+    /// Empty = the runtime's own endpoint. Rides the Admin + presence
+    /// runtime events like `endpoint`. Omitted when empty, so existing
+    /// events stay byte-identical (docs/design/v2/model-gateways.md §5).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub gateway: String,
 }
 
 impl WorkspaceRuntime {
@@ -83,6 +90,7 @@ impl WorkspaceRuntime {
             credential: WorkspaceCredential::None,
             created_at: Timestamp::now(),
             driver: crate::runtime::Driver::Auto,
+            gateway: String::new(),
         }
     }
 }
