@@ -206,6 +206,13 @@ pub async fn spawn_health(addr: &str, ready: std::sync::Arc<std::sync::atomic::A
     Ok(())
 }
 
+/// Where this host's local runtimes come from: `LIGUS_RUNTIMES_FILE` (a
+/// read-only mounted file, e.g. a Kubernetes ConfigMap), else
+/// `<data>/runtimes.toml`.
+pub fn local_runtimes_path(data_dir: &std::path::Path) -> std::path::PathBuf {
+    crate::env_opt("LIGUS_RUNTIMES_FILE").map(std::path::PathBuf::from).unwrap_or_else(|| data_dir.join(LOCAL_RUNTIMES_FILE))
+}
+
 /// The host-local runtimes file inside the data dir.
 pub const LOCAL_RUNTIMES_FILE: &str = "runtimes.toml";
 
@@ -225,7 +232,7 @@ struct LocalRuntimesToml {
 /// `id = "*"` catches every agent sent to this host whose runtime isn't known.
 /// It is the box owner's own config, never synced. Workspace runtimes win.
 pub fn local_runtimes(data_dir: &std::path::Path) -> Vec<WorkspaceRuntime> {
-    let path = data_dir.join(LOCAL_RUNTIMES_FILE);
+    let path = local_runtimes_path(data_dir);
     let Ok(text) = std::fs::read_to_string(&path) else {
         return Vec::new();
     };
