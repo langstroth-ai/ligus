@@ -80,6 +80,8 @@ jobs:
           mkdir -p deploy/helm/ligus/charts
           helm package -d deploy/helm/ligus/charts _relay/deploy/helm/ligus-relay
           helm lint --strict deploy/helm/ligus -f deploy/helm/ligus/ci/kind-values.yaml
+          helm lint --strict deploy/helm/ligus -f deploy/helm/ligus/ci/kind-values.yaml \
+            --set serve.enabled=false --set worker.enabled=true --set workspace.existingSecret=ws-worker
           helm template t deploy/helm/ligus --set workspace.existingSecret=ws --set relay.enabled=true \
             --set relay.postgres.enabled=true --set relay.postgres.existingSecret=pg --set relay.tunnel.mode=open \
             --set remote.enabled=true --set remote.insecureRelay=true \
@@ -120,6 +122,21 @@ jobs:
             --set postgres.persistence.size=256Mi \
             --set tunnel.mode=open --wait --timeout 5m
           helm test ligus-relay -n ligus-relay --logs
+      - name: runner kernel has Landlock
+        run: |
+          # serve and the worker refuse agent turns without confinement
+          # (agentSandbox.require), and under Pod Security "restricted" the
+          # only tier is Landlock, which the kind node shares with this runner's
+          # kernel. This job runs the confined path only: if the runner has no
+          # Landlock, fail here, saying so, rather than at a helm timeout. It
+          # never falls back to an unconfined install.
+          uname -r
+          lsm=$(cat /sys/kernel/security/lsm 2>/dev/null || true)
+          echo "LSMs: ${lsm:-unreadable}"
+          case ",$lsm," in
+            *,landlock,*) echo "Landlock is enabled on the runner kernel" ;;
+            *) echo "::error::this runner's kernel has no Landlock in its LSM list, so the confined path (agentSandbox tier landlock) cannot run here; use a runner with Landlock (Linux 6.7+, landlock in lsm=)"; exit 1 ;;
+          esac
       - name: install workspace (throwaway)
         run: |
           kubectl create namespace ligus-ws-smoke
@@ -128,8 +145,26 @@ jobs:
           kubectl -n ligus-ws-smoke create secret generic ws-smoke \
             --from-literal=room="k8s-test-$(cat /proc/sys/kernel/random/uuid)" \
             --from-literal=key="$(openssl rand -base64 36)"
+          # serve alone (kind-values has the worker off), so serve founds this
+          # workspace as its Owner; the worker gets its own workspace below.
           helm install smoke deploy/helm/ligus -n ligus-ws-smoke \
             -f deploy/helm/ligus/ci/kind-values.yaml --wait --timeout 5m
+      - name: install worker (own throwaway workspace)
+        run: |
+          # 2.0 admits a box to a workspace only through an Admin's invite, and
+          # nothing here can issue one headlessly yet, so the worker cannot
+          # join serve's workspace (it would found a competing one or be
+          # refused). It runs the same chart, sandbox preflight and Pod
+          # Security as serve, as the sole member of a workspace of its own.
+          kubectl create namespace ligus-ws-worker
+          kubectl label namespace ligus-ws-worker pod-security.kubernetes.io/enforce=restricted
+          kubectl -n ligus-ws-worker create secret generic ws-worker \
+            --from-literal=room="k8s-test-$(cat /proc/sys/kernel/random/uuid)" \
+            --from-literal=key="$(openssl rand -base64 36)"
+          helm install wk deploy/helm/ligus -n ligus-ws-worker \
+            -f deploy/helm/ligus/ci/kind-values.yaml \
+            --set serve.enabled=false --set worker.enabled=true --set workspace.existingSecret=ws-worker \
+            --wait --timeout 5m
       - name: sync and a sandboxed agent turn (helm test)
         run: helm test smoke -n ligus-ws-smoke --logs | tee /tmp/test.log
       - name: agent turn inside the serve container is confined by Landlock
@@ -158,8 +193,9 @@ jobs:
           kubectl -n ligus-ws-smoke logs smoke-ligus-serve-0 -c sandbox-preflight | grep -q 'turn test: passed'
       - name: worker probes
         run: |
-          kubectl -n ligus-ws-smoke wait --for=condition=Ready pod -l app.kubernetes.io/component=worker --timeout=180s
-          kubectl -n ligus-ws-smoke get pods -l app.kubernetes.io/component=worker
+          kubectl -n ligus-ws-worker wait --for=condition=Ready pod -l app.kubernetes.io/component=worker --timeout=180s
+          kubectl -n ligus-ws-worker get pods -l app.kubernetes.io/component=worker
+          kubectl -n ligus-ws-worker logs wk-ligus-worker-w1-0 -c sandbox-preflight | grep -q 'turn test: passed (tier landlock)'
       - name: tunnel host connected
         run: |
           for _ in $(seq 30); do
@@ -197,8 +233,25 @@ jobs:
       - name: diagnostics
         if: failure()
         run: |
-          kubectl get pods -A
-          for ns in ligus-relay ligus-ws-smoke; do
-            kubectl -n $ns describe pods
-            kubectl -n $ns logs --all-containers --prefix -l app.kubernetes.io/part-of=ligus --tail=200 || true
+          # Pods, events and logs from both namespaces. Never prints Secret
+          # values: describe shows only key names, and nothing reads a Secret.
+          # Pods carry only the selector labels, so walk them by name.
+          kubectl get pods,pvc,svc,networkpolicy -A -o wide || true
+          kubectl get storageclass || true
+          for ns in ligus-relay ligus-ws-smoke ligus-ws-worker; do
+            echo "::group::$ns events"
+            kubectl -n "$ns" get events --sort-by=.lastTimestamp || true
+            echo "::endgroup::"
+            echo "::group::$ns describe pods"
+            kubectl -n "$ns" describe pods || true
+            echo "::endgroup::"
+            for pod in $(kubectl -n "$ns" get pods -o name 2>/dev/null); do
+              for c in $(kubectl -n "$ns" get "$pod" -o jsonpath='{.spec.initContainers[*].name} {.spec.containers[*].name}'); do
+                echo "::group::$ns $pod container $c"
+                kubectl -n "$ns" logs "$pod" -c "$c" --tail=300 || true
+                echo "--- previous instance ---"
+                kubectl -n "$ns" logs "$pod" -c "$c" --previous --tail=300 2>/dev/null || echo "(none)"
+                echo "::endgroup::"
+              done
+            done
           done

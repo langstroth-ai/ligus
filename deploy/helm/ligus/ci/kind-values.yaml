@@ -23,8 +23,16 @@ serve:
   resources:
     requests: { cpu: 50m, memory: 64Mi }
     limits: { cpu: "1", memory: 512Mi, ephemeral-storage: 1Gi }
+# Off here: the workflow installs the worker as its own release on its own
+# throwaway workspace (worker.enabled=true, serve.enabled=false). In 2.0 a box
+# joins a workspace only through an invite an Admin issued (key possession
+# never admits anyone), and nothing in CI can issue one headlessly yet (the
+# member-bootstrap work). With serve and a worker started together on one
+# fresh workspace, whichever box touches the config log first founds it as
+# Owner and the other is refused (role Viewer cannot perform memberAdded):
+# serve then exits 1 and the install never becomes ready.
 worker:
-  enabled: true
+  enabled: false
   instances:
     - name: w1
   # kind's local-path provisioner is not CSI; ReadWriteOncePod needs a CSI
