@@ -109,15 +109,51 @@ topology rule.
     - { port: 53, protocol: TCP }
 {{- end -}}
 
+{{/*
+Cloud metadata endpoints, excluded from every internet egress rule whatever
+networkPolicy.internetExcept says (a list value replaces the default, so an
+override that only meant to change the private ranges would drop them).
+*/}}
+{{- define "ligus.metadataExcept" -}}
+{{- toJson (list "169.254.0.0/16" "100.100.100.200/32") -}}
+{{- end -}}
+
 {{/* HTTPS to the internet, never cloud metadata or private ranges. */}}
 {{- define "ligus.internetHttpsEgress" -}}
+{{- $except := concat (include "ligus.metadataExcept" . | fromJsonArray) (.Values.networkPolicy.internetExcept | default list) | uniq -}}
 - to:
     - ipBlock:
         cidr: 0.0.0.0/0
         except:
-          {{- toYaml .Values.networkPolicy.internetExcept | nindent 10 }}
+          {{- toYaml $except | nindent 10 }}
   ports:
     - { port: 443, protocol: TCP }
+{{- end -}}
+
+{{/*
+Refuse free-form egress rules (extraEgress, mcp.servers[].egress) that open
+every address without excluding cloud metadata: 169.254.169.254 (and
+Alibaba's 100.100.100.200) for 0.0.0.0/0, AWS's fd00:ec2::254 for ::/0.
+Args: dict rules what.
+*/}}
+{{- define "ligus.validateEgressRules" -}}
+{{- $what := .what -}}
+{{- range $rule := .rules -}}
+{{- range $peer := (default list $rule.to) -}}
+{{- with $peer.ipBlock -}}
+{{- $exc := default list .except -}}
+{{- if eq (toString .cidr) "0.0.0.0/0" -}}
+{{- if not (and (or (has "169.254.0.0/16" $exc) (has "169.254.169.254/32" $exc)) (or (has "100.100.100.200/32" $exc) (has "100.64.0.0/10" $exc))) -}}
+{{- fail (printf "%s: an ipBlock of 0.0.0.0/0 must list 169.254.0.0/16 (or 169.254.169.254/32) and 100.100.100.200/32 in except: cloud metadata hands out node credentials" $what) -}}
+{{- end -}}
+{{- else if eq (toString .cidr) "::/0" -}}
+{{- if not (or (has "fd00:ec2::254/128" $exc) (has "fd00:ec2::/32" $exc) (has "fd00::/8" $exc) (has "fc00::/7" $exc)) -}}
+{{- fail (printf "%s: an ipBlock of ::/0 must list fd00:ec2::254/128 (or fc00::/7) in except: AWS instance metadata over IPv6" $what) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/* Egress to the relay's pods (in this release, or relayNamespace). */}}
@@ -191,6 +227,10 @@ topology rule.
 {{- fail (printf "worker.instances: %s is listed twice" .name) -}}
 {{- end -}}
 {{- $_ := set $seen .name true -}}
+{{- end -}}
+{{- include "ligus.validateEgressRules" (dict "rules" $np.extraEgress "what" "networkPolicy.extraEgress") -}}
+{{- range .Values.mcp.servers -}}
+{{- include "ligus.validateEgressRules" (dict "rules" .egress "what" (printf "mcp.servers[%s].egress" .name)) -}}
 {{- end -}}
 {{- if hasKey .Values "otel" -}}
 {{- fail "otel.* was removed: Ligus does not export OpenTelemetry in 2.0" -}}

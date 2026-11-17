@@ -253,6 +253,10 @@ networkPolicy:
   # Never reachable through allowInternetHttps (nor by MCP servers' internet
   # egress): cloud metadata endpoints and private ranges (the cluster's own
   # pod and Service networks are usually among them; add yours if not).
+  # 169.254.0.0/16 and 100.100.100.200/32 are always excluded, even when you
+  # replace this list. extraEgress and mcp.servers[].egress rules that open
+  # 0.0.0.0/0 or ::/0 must exclude metadata themselves (the chart refuses
+  # them otherwise; IPv6: fd00:ec2::254/128).
   internetExcept:
     - 169.254.0.0/16       # link-local: AWS/GCP/Azure/OCI instance metadata
     - 100.100.100.200/32   # Alibaba Cloud metadata

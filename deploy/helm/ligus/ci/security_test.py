@@ -244,9 +244,46 @@ def test_mcp_images_pinned():
     check("allowUnpinned opts out explicitly", any(d["kind"] == "Deployment" for d in docs))
 
 
+# --- Overriding internetExcept never reopens cloud metadata ----------------
+
+def test_metadata_stays_blocked_when_internet_except_is_overridden():
+    # A list value replaces the default list: someone narrowing the private
+    # ranges must not silently drop the metadata exclusions with them.
+    docs = render("--set", "networkPolicy.allowInternetHttps=true",
+                  "--set", "networkPolicy.internetExcept={10.0.0.0/8}",
+                  "--set", "mcp.servers[0].name=linear",
+                  "--set", "mcp.servers[0].image=registry.example/mcp@sha256:" + "0" * 64)
+    seen = 0
+    for np in policies(docs):
+        for rule in np["spec"].get("egress") or []:
+            for peer in rule.get("to") or []:
+                block = peer.get("ipBlock")
+                if block and block.get("cidr") == "0.0.0.0/0":
+                    seen += 1
+                    exc = block.get("except") or []
+                    check("%s keeps 169.254.0.0/16 out with internetExcept overridden" % np["metadata"]["name"],
+                          "169.254.0.0/16" in exc, str(exc))
+                    check("%s keeps 100.100.100.200/32 out with internetExcept overridden" % np["metadata"]["name"],
+                          "100.100.100.200/32" in exc, str(exc))
+    check("internet egress rules rendered", seen >= 2, str(seen))
+    # Free-form egress (extraEgress, mcp.servers[].egress) that opens every
+    # address must exclude metadata too, IPv4 and IPv6 (AWS fd00:ec2::254).
+    for args, what in (
+        (["--set", "networkPolicy.extraEgress[0].to[0].ipBlock.cidr=0.0.0.0/0"], "extraEgress 0.0.0.0/0"),
+        (["--set", "networkPolicy.extraEgress[0].to[0].ipBlock.cidr=::/0"], "extraEgress ::/0"),
+        (["--set", "mcp.servers[0].name=x", "--set", "mcp.servers[0].image=r/m@sha256:" + "0" * 64,
+          "--set", "mcp.servers[0].egress[0].to[0].ipBlock.cidr=::/0"], "mcp egress ::/0"),
+    ):
+        p = render(*args, ok=False)
+        check("%s without a metadata exclusion is refused" % what, p.returncode != 0)
+    docs = render("--set", "networkPolicy.extraEgress[0].to[0].ipBlock.cidr=::/0",
+                  "--set", "networkPolicy.extraEgress[0].to[0].ipBlock.except={fd00:ec2::254/128}")
+    check("extraEgress ::/0 excluding fd00:ec2::254 renders", any(d["kind"] == "NetworkPolicy" for d in docs))
+
+
 TESTS = [test_no_generated_secrets, test_test_pods_hold_no_workspace_key, test_dns_egress_is_scoped, test_egress_closed_and_metadata_blocked, test_serve_ingress_excludes_foreign_pods,
          test_removed_values_refuse, test_secrets_are_files, test_single_writer_volumes,
-         test_mcp_images_pinned]
+         test_mcp_images_pinned, test_metadata_stays_blocked_when_internet_except_is_overridden]
 
 if __name__ == "__main__":
     for t in TESTS:
