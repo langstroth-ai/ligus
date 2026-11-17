@@ -855,6 +855,12 @@ fn service_member_refusal(
     if !service_kind(author) {
         return None;
     }
+    // Every human check that reads the stamp's kind (answering an agent's
+    // question, identity links, applying) would otherwise take the service's
+    // own word for it: a service member's stamp says Service.
+    if env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind != ActorKind::Service) {
+        return Some("a service member signs as a service".into());
+    }
     if env.actor_stamp.as_ref().is_some_and(|s| s.presence.is_some()) {
         return Some("a service member carries no presence".into());
     }
