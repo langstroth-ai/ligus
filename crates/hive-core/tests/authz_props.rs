@@ -457,24 +457,21 @@ fn world(ops: &[Op]) -> World {
 
 proptest! {
     #[test]
-    /// Review P-A2b (owner decision): cuts go strictly down the ranks, so of
-    /// any two allowed cuts, the subject of one is never the author of a cut
-    /// of that cut's author.
+    /// Review P-A2b (owner decision 1a): cuts go strictly down the ranks.
+    /// Every allowed cut's author outranks its subject in the roster just
+    /// before the cut (only the founder cuts an Owner; nobody cuts the
+    /// founder). So two members never cut each other on the same roster: of
+    /// any two allowed cuts where the subject of each authored the other,
+    /// the two members' roles differ between the cuts' positions (an allowed
+    /// role change came between, such as the founder promoting the earlier
+    /// cut's subject). A later counter-cut by a member whose rank was
+    /// legitimately raised is not a mutual cut; a backdated one is judged at
+    /// its own position, where its author is still outranked.
     fn prop_no_mutual_cuts(ops in prop::collection::vec(arb_op(), 0..24)) {
         let w = world(&ops);
         let t = w.timeline();
-        let by_key: BTreeMap<(u64, Uuid), String> =
-            w.cfg.iter().map(|e| (e.canonical_key(), e.actor_stamp.as_ref().map(|s| s.actor.id.clone()).unwrap_or_default())).collect();
-        let subject = |c: &hive_core::authz::Cut| match &c.kind {
-            hive_core::authz::CutKind::Removed(m) | hive_core::authz::CutKind::Demoted(m) => Some(m.clone()),
-            hive_core::authz::CutKind::Revoked(d) => PEOPLE.iter().find(|p| device_of(p).0 == *d).map(|p| p.to_string()),
-        };
-        for a in t.cuts() {
-            for b in t.cuts() {
-                let (Some(sa), Some(sb)) = (subject(a), subject(b)) else { continue };
-                let (aa, ab) = (&by_key[&a.key], &by_key[&b.key]);
-                prop_assert!(!(sa == *ab && sb == *aa && aa != ab), "mutual cuts {:?} {:?}", a, b);
-            }
+        if let Err(m) = cuts_go_down_the_ranks(&w, &t) {
+            prop_assert!(false, "{}", m);
         }
     }
 
@@ -1934,4 +1931,90 @@ fn a_removed_admins_backdated_config_event_is_denied() {
     w.reseal(id);
     assert_eq!(w.verdicts()[&id], Verdict::Denied);
     assert!(!w.config().members.iter().any(|m| m.id == "eve"));
+}
+
+/// The roster just before the config position `key` (after the newest
+/// config event sorting before it).
+fn roster_before(w: &World, t: &ConfigTimeline, key: (u64, Uuid)) -> hive_core::authz::RosterState {
+    let prev = w.cfg.iter().map(|e| e.canonical_key()).filter(|k| *k < key).max().expect("a cut follows the seed");
+    t.at(CfgFrontier { lamport: prev.0, event_id: prev.1 }).expect("the cut's predecessor is held").clone()
+}
+
+/// Decision 1a, checked on the fold's own timeline: every allowed cut of
+/// another member goes strictly down the ranks of the roster just before
+/// it, and two members who cut each other did so on different rosters.
+fn cuts_go_down_the_ranks(w: &World, t: &ConfigTimeline) -> Result<(), String> {
+    let author: BTreeMap<(u64, Uuid), String> =
+        w.cfg.iter().map(|e| (e.canonical_key(), e.actor_stamp.as_ref().map(|s| s.actor.id.clone()).unwrap_or_default())).collect();
+    let subject = |c: &hive_core::authz::Cut| match &c.kind {
+        hive_core::authz::CutKind::Removed(m) | hive_core::authz::CutKind::Demoted(m) => Some(m.clone()),
+        hive_core::authz::CutKind::Revoked(d) => PEOPLE.iter().find(|p| device_of(p).0 == *d).map(|p| p.to_string()),
+    };
+    let cuts: Vec<(&hive_core::authz::Cut, String, String)> =
+        t.cuts().iter().filter_map(|c| Some((c, author[&c.key].clone(), subject(c)?))).filter(|(_, a, s)| a != s).collect();
+    for (c, a, s) in &cuts {
+        let at = roster_before(w, t, c.key);
+        let Some(sr) = at.role_of(s) else { continue };
+        let ar = at.role_of(a).ok_or_else(|| format!("{c:?}: author {a} is no member"))?;
+        let ok = if *s == at.founder {
+            false
+        } else if sr == WorkspaceRole::Owner {
+            *a == at.founder && ar == WorkspaceRole::Owner
+        } else {
+            ar.rank() > sr.rank()
+        };
+        if !ok {
+            return Err(format!("{a} ({ar:?}) cut {s} ({sr:?}) against the ranks: {c:?}"));
+        }
+    }
+    for (x, xa, xs) in &cuts {
+        for (y, ya, ys) in &cuts {
+            if x.key < y.key && xs == ya && ys == xa {
+                let (rx, ry) = (roster_before(w, t, x.key), roster_before(w, t, y.key));
+                let pair = |r: &hive_core::authz::RosterState| (r.role_of(xa), r.role_of(xs));
+                if pair(&rx) == pair(&ry) {
+                    return Err(format!("mutual cuts on one roster: {x:?} {y:?}"));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The shrunk case of `prop_no_mutual_cuts` at 1024 cases (seed 35aa59f3):
+/// ada (Admin) demotes mara (Contributor) to Viewer; the founder then
+/// promotes mara to Owner; mara, now an Owner, removes ada. Each cut goes
+/// down the ranks of its own roster, so both stand: it is a sequence, not a
+/// mutual cut. What must still fail is mara's counter-cut backdated before
+/// the promotion, or written without it.
+#[test]
+fn a_counter_cut_after_a_founders_promotion_is_not_mutual() {
+    let ops = vec![
+        Op::Cut { by: 1, who: 2, kind: 1, back: 0 },
+        Op::SetRole { who: 2, role: 0 },
+        Op::Cut { by: 2, who: 1, kind: 0, back: 0 },
+    ];
+    let w = world(&ops);
+    let t = w.timeline();
+    let kinds: Vec<_> = t.cuts().iter().map(|c| c.kind.clone()).collect();
+    assert_eq!(kinds, vec![hive_core::authz::CutKind::Demoted("mara".into()), hive_core::authz::CutKind::Removed("ada".into())]);
+    assert_eq!(cuts_go_down_the_ranks(&w, &t), Ok(()));
+
+    // Without the founder's promotion, mara (a Viewer) can't cut ada.
+    let w = world(&[Op::Cut { by: 1, who: 2, kind: 1, back: 0 }, Op::Cut { by: 2, who: 1, kind: 0, back: 0 }]);
+    let t = w.timeline();
+    assert_eq!(t.cuts().iter().map(|c| c.kind.clone()).collect::<Vec<_>>(), vec![hive_core::authz::CutKind::Demoted("mara".into())]);
+
+    // Backdated before the promotion (and before her demotion), mara is a
+    // Contributor there and ada an Admin: denied, and ada's demotion stands.
+    for back in 2..=3 {
+        let w = world(&[
+            Op::Cut { by: 1, who: 2, kind: 1, back: 0 },
+            Op::SetRole { who: 2, role: 0 },
+            Op::Cut { by: 2, who: 1, kind: 0, back },
+        ]);
+        let t = w.timeline();
+        assert!(!t.cuts().iter().any(|c| c.kind == hive_core::authz::CutKind::Removed("ada".into())), "back {back}");
+        assert_eq!(cuts_go_down_the_ranks(&w, &t), Ok(()));
+    }
 }
