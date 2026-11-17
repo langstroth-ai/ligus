@@ -52,6 +52,10 @@ pub struct DeviceState {
     /// signs for one of these accounts doesn't count toward a human gate (see
     /// `authz::authorize`).
     pub delegated_for: BTreeSet<Uuid>,
+    /// A phone: its key is a P-256 Secure Enclave key (the certificate's
+    /// `alg`, inside the account's signature). Capped to the phone tier
+    /// (`authz::phone`).
+    pub phone: bool,
 }
 
 impl DeviceState {
@@ -395,8 +399,13 @@ impl RosterTracker {
                 let d = devices.entry(cert.device_id).or_default();
                 d.accounts.insert(cert.account_id);
                 d.public_key = cert.device_public_key.clone();
+                let phone = cert.alg == crate::crypto::SigAlg::P256;
+                d.phone |= phone;
                 let key = (cert.device_id, cert.account_id);
-                if !self.self_published.contains(&key) || self.enrolled_by_other.contains(&key) {
+                // A phone holds its own key and signs only as its person (the
+                // laptop enrolls it, but it never acts *for* them): not a
+                // delegated host.
+                if !phone && (!self.self_published.contains(&key) || self.enrolled_by_other.contains(&key)) {
                     d.delegated_for.insert(cert.account_id);
                 }
             }

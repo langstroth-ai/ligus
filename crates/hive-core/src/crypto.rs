@@ -198,17 +198,37 @@ pub fn sign_envelope(env: &mut SessionEventEnvelope, device_id: Uuid, keypair: &
 /// so nothing unsigned can ride along.
 pub fn verify_envelope(env: &SessionEventEnvelope, device_public_key: &[u8]) -> Result<(), CryptoError> {
     let signature = env.signature.as_ref().ok_or(CryptoError::Unsigned)?;
-    match verify(device_public_key, &envelope_preimage(env), signature) {
+    // The stamp names the signer's algorithm (inside the preimage); absent =
+    // Ed25519. A P-256 key never verifies an Ed25519 signature or vice versa
+    // (the key lengths differ).
+    let check: fn(&[u8], &[u8], &[u8]) -> Result<(), CryptoError> =
+        match env.actor_stamp.as_ref().map(|s| s.sig_alg).unwrap_or_default() {
+            SigAlg::Ed25519 => verify,
+            SigAlg::P256 => verify_p256,
+        };
+    match check(device_public_key, &envelope_preimage(env), signature) {
         Ok(()) => Ok(()),
         Err(e) if env.raw().is_none() => Err(e),
         Err(e) => {
             if received_matches_typed(env) {
-                verify(device_public_key, &typed_preimage(env), signature)
+                check(device_public_key, &typed_preimage(env), signature)
             } else {
                 Err(e)
             }
         }
     }
+}
+
+/// Sign an envelope with a phone's P-256 key: tags the stamp `sigAlg:
+/// p256` (inside the preimage) first. The envelope needs an actor stamp.
+pub fn sign_envelope_p256(env: &mut SessionEventEnvelope, device_id: Uuid, key: &p256::ecdsa::SigningKey) {
+    if let Some(s) = env.actor_stamp.as_mut() {
+        s.sig_alg = SigAlg::P256;
+    }
+    env.clear_raw();
+    let sig = sign_p256(key, &envelope_preimage(env));
+    env.signer_device_id = Some(device_id);
+    env.signature = Some(sig.to_vec());
 }
 
 // ---------------------------------------------------------------------------
@@ -281,6 +301,63 @@ impl HumanAccount {
     }
 }
 
+/// A device signing key's algorithm (Phase A). Ed25519 is every desktop,
+/// serve and worker key; P-256 is a phone's Secure Enclave key (ECDSA over
+/// SHA-256, a fixed 64-byte `r || s` signature with low S, a 65-byte SEC1
+/// uncompressed public key). The tag rides inside each signed preimage: in
+/// the device certificate (`hive-device-cert-v1` plus a trailing
+/// `\0alg=p256`) and in the envelope's actor stamp (`sigAlg`). Absent =
+/// Ed25519, so every Ed25519 preimage is byte-identical to before.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SigAlg {
+    #[default]
+    Ed25519,
+    P256,
+}
+
+impl SigAlg {
+    pub fn is_ed25519(&self) -> bool {
+        *self == SigAlg::Ed25519
+    }
+}
+
+/// Verify a P-256 (Secure Enclave) signature: ECDSA-SHA256 over `message`,
+/// `signature` the fixed 64-byte `r || s` with low S (a high-S twin is
+/// refused, so a signature has one encoding), `public_key` 65-byte SEC1
+/// uncompressed.
+pub fn verify_p256(public_key: &[u8], message: &[u8], signature: &[u8]) -> Result<(), CryptoError> {
+    use p256::ecdsa::signature::Verifier;
+    if public_key.len() != 65 || public_key[0] != 0x04 {
+        return Err(CryptoError::BadKey);
+    }
+    let key = p256::ecdsa::VerifyingKey::from_sec1_bytes(public_key).map_err(|_| CryptoError::BadKey)?;
+    if signature.len() != 64 {
+        return Err(CryptoError::BadSignature);
+    }
+    let sig = p256::ecdsa::Signature::from_slice(signature).map_err(|_| CryptoError::BadSignature)?;
+    if sig.normalize_s() != sig {
+        return Err(CryptoError::BadSignature);
+    }
+    key.verify(message, &sig).map_err(|_| CryptoError::VerifyFailed)
+}
+
+/// Sign with a P-256 key the way a phone must: ECDSA-SHA256, low S, 64-byte
+/// `r || s` (tests and the reference for the iOS signer).
+pub fn sign_p256(key: &p256::ecdsa::SigningKey, message: &[u8]) -> [u8; 64] {
+    use p256::ecdsa::signature::Signer;
+    let s: p256::ecdsa::Signature = key.sign(message);
+    let s = s.normalize_s();
+    let mut out = [0u8; 64];
+    out.copy_from_slice(&s.to_bytes());
+    out
+}
+
+/// The 65-byte SEC1 uncompressed public key of a P-256 signing key.
+pub fn p256_public_key(key: &p256::ecdsa::SigningKey) -> Vec<u8> {
+    key.verifying_key().to_sec1_point(false).as_bytes().to_vec()
+}
+
 /// A certificate binding a device key to an account, signed by the account key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -291,6 +368,11 @@ pub struct DeviceCertificate {
     #[serde(default)]
     pub issued_at: Timestamp,
     pub signature: Vec<u8>,
+    /// The device key's algorithm (inside the signed preimage when P-256).
+    /// A P-256 device is a phone: capped to the phone tier, enrolled only
+    /// with its account's passkey presence (`authz`). Left out for Ed25519.
+    #[serde(default, skip_serializing_if = "SigAlg::is_ed25519")]
+    pub alg: SigAlg,
 }
 
 impl DeviceCertificate {
@@ -300,7 +382,17 @@ impl DeviceCertificate {
         account_id: Uuid,
         issued_at: Timestamp,
     ) -> Vec<u8> {
-        let mut out = Vec::with_capacity(96);
+        Self::preimage_alg(device_id, device_public_key, account_id, issued_at, SigAlg::Ed25519)
+    }
+
+    fn preimage_alg(
+        device_id: Uuid,
+        device_public_key: &[u8],
+        account_id: Uuid,
+        issued_at: Timestamp,
+        alg: SigAlg,
+    ) -> Vec<u8> {
+        let mut out = Vec::with_capacity(112);
         // FROZEN signature context: never rename with the product.
         out.extend_from_slice(b"hive-device-cert-v1\0");
         out.extend_from_slice(device_id.as_bytes());
@@ -311,7 +403,26 @@ impl DeviceCertificate {
             .and_then(|v| v.as_str().map(str::to_owned))
             .unwrap_or_default();
         out.extend_from_slice(issued.as_bytes());
+        // The algorithm tag (Phase A): only a non-Ed25519 key adds bytes, so
+        // the Ed25519 preimage is unchanged.
+        if alg == SigAlg::P256 {
+            out.extend_from_slice(b"\0alg=p256");
+        }
         out
+    }
+
+    /// Issue a certificate for a phone's P-256 (Secure Enclave) key, signed
+    /// by the account keypair.
+    pub fn issue_p256(
+        account_keypair: &SigningKeypair,
+        account_id: Uuid,
+        device_id: Uuid,
+        device_public_key: &[u8],
+        issued_at: Timestamp,
+    ) -> Self {
+        let preimage = Self::preimage_alg(device_id, device_public_key, account_id, issued_at, SigAlg::P256);
+        let signature = account_keypair.sign(&preimage).to_vec();
+        Self { device_id, device_public_key: device_public_key.to_vec(), account_id, issued_at, signature, alg: SigAlg::P256 }
     }
 
     /// Issue a certificate for `device_id`/`device_public_key`, signed by the
@@ -331,17 +442,21 @@ impl DeviceCertificate {
             account_id,
             issued_at,
             signature,
+            alg: SigAlg::Ed25519,
         }
     }
 
-    /// Verify the certificate against the account's public key.
+    /// Verify the certificate against the account's public key (and that a
+    /// P-256 certificate carries a well-formed P-256 key).
     pub fn verify(&self, account_public_key: &[u8]) -> Result<(), CryptoError> {
-        let preimage = Self::preimage(
-            self.device_id,
-            &self.device_public_key,
-            self.account_id,
-            self.issued_at,
-        );
+        if self.alg == SigAlg::P256
+            && (self.device_public_key.len() != 65
+                || p256::ecdsa::VerifyingKey::from_sec1_bytes(&self.device_public_key).is_err())
+        {
+            return Err(CryptoError::BadKey);
+        }
+        let preimage =
+            Self::preimage_alg(self.device_id, &self.device_public_key, self.account_id, self.issued_at, self.alg);
         verify(account_public_key, &preimage, &self.signature)
     }
 }
@@ -502,7 +617,7 @@ mod tests {
         spoofed.actor_stamp = Some(crate::identity::ActorStamp {
             actor: crate::identity::ActorIdentity::new("mallory", "Mallory", crate::identity::ActorKind::Human),
             recorded_at: crate::time_util::Timestamp::epoch(), cfg_frontier: None,
-            presence: None, runtime_effect: false, prev: None });
+            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
         assert!(verify_envelope(&spoofed, &kp.public_key_bytes()).is_err());
 
         // wrong key -> fails

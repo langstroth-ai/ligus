@@ -260,7 +260,7 @@ impl ChatService {
         env.lamport = self.store.max_lamport(session_id)?.saturating_add(1);
         let mut actor = ActorIdentity::new(agent_id.to_string(), name, hive_core::ActorKind::Agent);
         actor.device_id = Some(key_id);
-        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::now(), cfg_frontier: timeline.head(), presence: None, runtime_effect: false, prev: self.store.last_signed_by(session_id, key_id)? });
+        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::now(), cfg_frontier: timeline.head(), presence: None, runtime_effect: false, prev: self.store.last_signed_by(session_id, key_id)?, sig_alg: Default::default() });
         sign_envelope(&mut env, key_id, &kp);
         self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
         self.store.append_envelope(&env)?;
@@ -726,7 +726,7 @@ impl ChatService {
             actor: self.author.clone(),
             recorded_at: Timestamp::now(),
             cfg_frontier: timeline.head(),
-            presence: None, runtime_effect: self.runtime_effect, prev: self.store.last_signed_by(session_id, self.device_id)? });
+            presence: None, runtime_effect: self.runtime_effect, prev: self.store.last_signed_by(session_id, self.device_id)?, sig_alg: Default::default() });
         // Signed first, so the fold's own signature checks (key events)
         // judge exactly what peers will receive.
         sign_envelope(&mut env, self.device_id, &self.keypair);
@@ -4130,7 +4130,7 @@ mod tests {
             let seq = con.store.max_sequence(chat_id).unwrap().unwrap_or(0) + 1;
             let mut env = SessionEventEnvelope::new(chat_id, wid, seq, payload);
             env.lamport = con.store.max_lamport(chat_id).unwrap() + 1;
-            env.actor_stamp = Some(ActorStamp { actor: con.author.clone(), recorded_at: Timestamp::now(), cfg_frontier: frontier, presence: None, runtime_effect: false, prev: None });
+            env.actor_stamp = Some(ActorStamp { actor: con.author.clone(), recorded_at: Timestamp::now(), cfg_frontier: frontier, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
             con.store.ingest(&env).unwrap();
         };
         inject(&mut con, rewrite);
@@ -4402,7 +4402,7 @@ mod tests {
             recorded_at: Timestamp::now(),
             cfg_frontier: timeline.head(),
             presence: None,
-            runtime_effect: false, prev: None });
+            runtime_effect: false, prev: None, sig_alg: Default::default() });
         hive_core::sign_envelope(&mut env, con.device_id, &con.keypair);
         con.store.ingest(&env).unwrap();
         assert_eq!(host.trigger_author_role(chat, id).unwrap(), None);
@@ -5055,7 +5055,7 @@ mod tests {
             actor: svc.author().clone(),
             recorded_at: Timestamp::now(),
             cfg_frontier: Some(hive_core::CfgFrontier { lamport: 500, event_id: Uuid::new_v4() }),
-            presence: None, runtime_effect: false, prev: None
+            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default()
         });
         svc.store().append_envelope(&peer).unwrap();
         let s = svc.load(sid).unwrap().unwrap();

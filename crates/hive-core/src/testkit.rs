@@ -73,6 +73,8 @@ pub struct SignedWorld {
     pub cfg: Vec<SessionEventEnvelope>,
     pub chats: BTreeMap<Uuid, Vec<SessionEventEnvelope>>,
     pub people: Arc<BTreeMap<String, Person>>,
+    /// People who aren't humans (a service member), by name.
+    pub kinds: BTreeMap<String, ActorKind>,
 }
 
 /// How an event is stamped.
@@ -91,7 +93,7 @@ impl SignedWorld {
     /// members; add them with [`SignedWorld::admit`].
     pub fn genesis(names: &[&str], policy: Option<PresencePolicy>) -> Self {
         let people: BTreeMap<String, Person> = names.iter().map(|n| (n.to_string(), Person::new(n))).collect();
-        let mut w = Self { wid: Uuid::new_v4(), clock: 0, cfg: Vec::new(), chats: BTreeMap::new(), people: Arc::new(people) };
+        let mut w = Self { wid: Uuid::new_v4(), clock: 0, cfg: Vec::new(), chats: BTreeMap::new(), people: Arc::new(people), kinds: BTreeMap::new() };
         let founder = names[0];
         let mut seed = ChatSession::new("", w.wid, "");
         seed.id = workspace_config_session_id(w.wid);
@@ -125,10 +127,17 @@ impl SignedWorld {
     /// The Owner (`by`, with presence) adds `name` at `role`; `name` then
     /// publishes their identity and registers their recovery key.
     pub fn admit(&mut self, by: &str, name: &str, role: WorkspaceRole) {
-        let m = self.people[name].member(role);
+        let m = self.member_of(name, role);
         self.push(by, SessionEvent::MemberAdded { member: m, invite: None });
         self.publish_identity(name);
         self.register_recovery(name);
+    }
+
+    /// `name`'s member record (with their kind).
+    pub fn member_of(&self, name: &str, role: WorkspaceRole) -> WorkspaceMember {
+        let mut m = self.people[name].member(role);
+        m.actor.kind = self.kinds.get(name).copied().unwrap_or(ActorKind::Human);
+        m
     }
 
     /// The newest config event: the frontier an honest author stamps.
@@ -146,6 +155,7 @@ impl SignedWorld {
         env.lamport = self.clock;
         let p = &self.people[by];
         let mut actor = p.actor();
+        actor.kind = self.kinds.get(by).copied().unwrap_or(ActorKind::Human);
         actor.device_id = Some(p.device_id);
         let cfg_frontier = frontier.or_else(|| self.head());
         // The device's previous event on this log (its chain, for removal
@@ -155,7 +165,7 @@ impl SignedWorld {
             Some(c) => self.chats.get(&c).map(Vec::as_slice).unwrap_or(&[]),
         };
         let prev = log.iter().rev().find(|e| e.signer_device_id == Some(p.device_id)).map(|e| e.event_id);
-        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier, presence: None, runtime_effect: false, prev });
+        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier, presence: None, runtime_effect: false, prev, sig_alg: Default::default() });
         sign_envelope(&mut env, p.device_id, &p.device);
         env
     }
@@ -285,4 +295,54 @@ pub fn prove_recovery(env: &mut SessionEventEnvelope, account: Uuid, device_id: 
     }
     env.clear_raw();
     sign_envelope(env, device_id, device);
+}
+
+/// A phone: a P-256 (Secure Enclave) key and its workspace device id.
+pub struct Phone {
+    pub device_id: Uuid,
+    pub key: p256::ecdsa::SigningKey,
+}
+
+impl Phone {
+    pub fn new() -> Self {
+        let mut b = [0u8; 32];
+        loop {
+            getrandom::fill(&mut b).expect("randomness");
+            if let Ok(key) = p256::ecdsa::SigningKey::from_slice(&b) {
+                return Self { device_id: Uuid::new_v4(), key };
+            }
+        }
+    }
+    pub fn public_key(&self) -> Vec<u8> {
+        crate::crypto::p256_public_key(&self.key)
+    }
+}
+
+impl Default for Phone {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SignedWorld {
+    /// `owner`'s certificate for `phone` (P-256, signed by their account key).
+    pub fn phone_certificate(&self, owner: &str, phone: &Phone) -> DeviceCertificate {
+        let p = &self.people[owner];
+        DeviceCertificate::issue_p256(&p.account, p.account_id, phone.device_id, &phone.public_key(), Timestamp::epoch())
+    }
+
+    /// An event by `by`, signed by their phone's P-256 key (no presence).
+    pub fn phone_write(&mut self, by: &str, phone: &Phone, chat: Option<Uuid>, payload: SessionEvent) -> Uuid {
+        let mut env = self.draft(by, chat, payload, None);
+        if let Some(s) = env.actor_stamp.as_mut() {
+            s.actor.device_id = Some(phone.device_id);
+            let log = match chat {
+                None => &self.cfg,
+                Some(c) => self.chats.get(&c).map(Vec::as_slice).unwrap_or(&[]),
+            };
+            s.prev = log.iter().rev().find(|e| e.signer_device_id == Some(phone.device_id)).map(|e| e.event_id);
+        }
+        crate::crypto::sign_envelope_p256(&mut env, phone.device_id, &phone.key);
+        self.push_env(chat, env)
+    }
 }

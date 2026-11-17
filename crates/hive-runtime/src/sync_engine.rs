@@ -1443,7 +1443,7 @@ mod tests {
             actor: member.actor.clone(),
             recorded_at: hive_core::Timestamp::epoch(),
             cfg_frontier: None,
-            presence: None, runtime_effect: false, prev: None });
+            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
         hive_core::sign_envelope(&mut e, device_id, device);
         e
     }
@@ -1505,7 +1505,7 @@ mod tests {
                     contact: None,
                 },
                 recorded_at: Timestamp::epoch(), cfg_frontier: None,
-                presence: None, runtime_effect: false, prev: None });
+                presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
             hive_core::sign_envelope(&mut e, device_id, &device);
             e
         };
@@ -1527,7 +1527,7 @@ mod tests {
                     account_id,
                     signing_public_key: account.public_key_bytes().to_vec(),
                 });
-                e.actor_stamp = Some(ActorStamp { actor: member.actor.clone(), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None });
+                e.actor_stamp = Some(ActorStamp { actor: member.actor.clone(), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
                 hive_core::sign_envelope(&mut e, device_id, &device);
                 e
             },
@@ -1823,7 +1823,7 @@ mod tests {
                 actor: member.actor.clone(),
                 recorded_at: Timestamp::epoch(),
                 cfg_frontier: None,
-                presence: None, runtime_effect: false, prev: None });
+                presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
             hive_core::sign_envelope(&mut e, device_id, &device);
             e
         };
@@ -1869,7 +1869,7 @@ mod tests {
                 contact: None,
             },
             recorded_at: Timestamp::epoch(), cfg_frontier: None,
-            presence: None, runtime_effect: false, prev: None });
+            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
         hive_core::sign_envelope(&mut e, p.device_id, &p.device_kp);
         e
     }

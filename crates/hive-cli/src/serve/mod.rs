@@ -605,6 +605,31 @@ impl Shared {
         true
     }
 
+    /// Phone revocation is three-part (Phase A, item 6): a workspace
+    /// `DeviceRevoked` of a phone's device (its own key never signs again;
+    /// the fold refuses it) also revokes that phone's tunnel pairing here
+    /// (the relay drops its sessions through the existing tunnel revocation,
+    /// and pushes to it stop). Its ligus-auth session is revoked by the same
+    /// signed `DeviceRevoked` when organization sign-in lands (Phase D).
+    /// Returns the pairings revoked.
+    pub fn revoke_phones_of_revoked_devices(&self) -> Vec<String> {
+        let Some(tunnel) = self.tunnel.as_ref() else { return Vec::new() };
+        let revoked: std::collections::BTreeSet<Uuid> = {
+            let svc = self.lock();
+            match svc.store().load_config(self.ws, None, None) {
+                Ok((_, t)) => t.current().devices.iter().filter(|(_, d)| d.revoked).map(|(id, _)| *id).collect(),
+                Err(_) => return Vec::new(),
+            }
+        };
+        let pids = tunnel.registry.pairings_of_revoked(&revoked);
+        for pid in &pids {
+            if let Err(e) = tunnel.revoke(pid) {
+                eprintln!("serve: revoking a revoked phone's pairing failed: {e}");
+            }
+        }
+        pids
+    }
+
     /// The actor id this box writes as.
     pub fn my_actor_id(&self) -> String {
         self.lock().author().id.clone()
@@ -1207,6 +1232,7 @@ async fn sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
                 shared.sync_ok();
                 if pulled > 0 {
                     shared.refresh_standing();
+                    shared.revoke_phones_of_revoked_devices();
                     shared.refresh();
                     shared.worker_kick.notify_one();
                 }

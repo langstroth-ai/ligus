@@ -24,9 +24,12 @@ pub fn requires_presence(event: &SessionEvent, author: &str, roster: &RosterStat
         // (a device-key thief would otherwise add devices of their own); the
         // presence must be that account's (`authz::authorize`). Re-publishing a
         // certificate already in force here needs nothing.
+        // A phone (P-256 key) is enrolled only with its person's passkey,
+        // always.
         SessionEvent::DeviceCertificateAdded { certificate: c } => {
-            roster.passkeys.get(&c.account_id).is_some_and(|m| !m.is_empty())
-                && !roster.account_certified(c.account_id, c.device_id)
+            (c.alg == crate::crypto::SigAlg::P256 && !roster.account_certified(c.account_id, c.device_id))
+                || (roster.passkeys.get(&c.account_id).is_some_and(|m| !m.is_empty())
+                    && !roster.account_certified(c.account_id, c.device_id))
         }
         // Keys. A passkey registration has its own rule (`authz::passkeys`):
         // the account's first proves itself, every later one needs presence

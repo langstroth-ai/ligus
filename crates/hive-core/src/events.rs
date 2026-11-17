@@ -1882,7 +1882,7 @@ mod tests {
         e.actor_stamp = Some(ActorStamp {
             actor: ActorIdentity::new(author, author, ActorKind::Human),
             recorded_at: Timestamp::epoch(), cfg_frontier: None,
-            presence: None, runtime_effect: false, prev: None });
+            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
         e
     }
 
@@ -2473,7 +2473,7 @@ mod tests {
                 actor: ActorIdentity::new("u1", "U", ActorKind::Human),
                 recorded_at: Timestamp::epoch(),
                 cfg_frontier: None,
-                presence: None, runtime_effect: false, prev: None });
+                presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
         }
         let s = project(&envs).unwrap();
         assert_eq!(s.workflow_definitions.len(), 1);

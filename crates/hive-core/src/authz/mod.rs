@@ -40,6 +40,7 @@ pub mod timeline;
 pub mod votes;
 pub mod passkeys;
 pub mod links;
+pub mod phone;
 pub mod rules;
 
 use std::collections::BTreeMap;
@@ -309,6 +310,33 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
     if let Some(roster) = roster_here {
         if env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == ActorKind::Agent) {
             return authorize_agent(env, ctx, roster);
+        }
+        // A phone's own key: the phone tier (Phase A, item 6).
+        if let Some(device) = env.signer_device_id.filter(|d| roster.devices.get(d).is_some_and(|x| x.phone)) {
+            if let Err(why) = phone::phone_tier_allows(&env.payload, device) {
+                return Decision::deny(why);
+            }
+        }
+    }
+    // A service member (Phase A, item 6) is capped at Contributor, never
+    // decides a proposal set, and never has presence.
+    if let Some(why) = service_member_refusal(env, author, roster_here, on_config, fold) {
+        return Decision::deny(why);
+    }
+    // A phone is enrolled on the config log by a trusted device of its own
+    // account (certified, not revoked, not delegated, not a phone), with that
+    // account's passkey presence (the presence table).
+    if let SessionEvent::DeviceCertificateAdded { certificate } = &env.payload {
+        if certificate.alg == crate::crypto::SigAlg::P256 && !ctx.running.account_certified(certificate.account_id, certificate.device_id) {
+            if !on_config {
+                return Decision::deny("a phone is enrolled on the workspace config log");
+            }
+            let enroller_ok = certified_signer(env, ctx.running).is_ok_and(|d| {
+                d.accounts.contains(&certificate.account_id) && !d.delegated_for(certificate.account_id) && !d.phone
+            });
+            if !enroller_ok || env.signer_device_id == Some(certificate.device_id) {
+                return Decision::deny("a phone is enrolled by a trusted device of its own account");
+            }
         }
     }
     // A host-signed chat event that speaks for an agent (its reply, its
@@ -796,6 +824,45 @@ fn agent_cert_ok(
 /// creator keeps).
 fn caps_by_workspace_role(e: &SessionEvent) -> bool {
     !matches!(e, SessionEvent::SessionArchivedChanged { .. })
+}
+
+/// The service-member rules (Phase A, item 6): a `Service` member holds at
+/// most Contributor, can't decide a proposal set (a person's call), never
+/// registers a passkey and never carries presence. Its votes count by its
+/// role but never as a human's (`guard::has_human_approval` counts humans
+/// only), and it applies a proposal only to fulfil a person's request.
+fn service_member_refusal(
+    env: &SessionEventEnvelope,
+    author: &str,
+    roster: Option<&RosterState>,
+    on_config: bool,
+    fold: &ChatSession,
+) -> Option<String> {
+    let cap = WorkspaceRole::Contributor;
+    let service_kind = |id: &str| -> bool {
+        roster.and_then(|r| r.members.get(id)).map(|m| m.kind == ActorKind::Service).unwrap_or(false)
+            || (on_config && fold.members.iter().any(|m| m.id == id && m.actor.kind == ActorKind::Service))
+    };
+    match &env.payload {
+        SessionEvent::MemberAdded { member, .. } if member.actor.kind == ActorKind::Service && member.role.rank() > cap.rank() => {
+            return Some("a service member holds at most Contributor".into());
+        }
+        SessionEvent::MemberRoleChanged { change, .. } if service_kind(&change.member_id) && change.new_role.rank() > cap.rank() => {
+            return Some("a service member holds at most Contributor".into());
+        }
+        _ => {}
+    }
+    if !service_kind(author) {
+        return None;
+    }
+    if env.actor_stamp.as_ref().is_some_and(|s| s.presence.is_some()) {
+        return Some("a service member carries no presence".into());
+    }
+    match &env.payload {
+        SessionEvent::PasskeyRegistered { .. } => Some("a service member holds no passkey".into()),
+        SessionEvent::ProposalSetDecided { .. } => Some("a person decides a proposal set, not a service".into()),
+        _ => None,
+    }
 }
 
 /// Whether `env` is signed by a device of its stamped author's own account:

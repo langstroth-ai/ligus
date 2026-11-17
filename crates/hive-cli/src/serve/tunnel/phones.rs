@@ -47,6 +47,11 @@ pub struct PhoneRecord {
     /// phone vote until passkey presence lands.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub owner_phone: bool,
+    /// The phone's own workspace device (its P-256 Secure Enclave key,
+    /// certified on the config log; Phase A, item 6). A `DeviceRevoked` of
+    /// it revokes this pairing too: the tunnel is cut and pushes stop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<uuid::Uuid>,
 }
 
 fn default_true() -> bool {
@@ -142,6 +147,24 @@ impl Registry {
             self.save(&phones)?;
         }
         Ok(Some(exp))
+    }
+
+    /// Bind a pairing to the phone's workspace device id.
+    pub fn bind_device(&self, pid: &str, device_id: uuid::Uuid) -> Result<bool> {
+        let mut phones = self.lock();
+        let Some(r) = phones.iter_mut().find(|r| r.pid == pid) else { return Ok(false) };
+        r.device_id = Some(device_id);
+        self.save(&phones)?;
+        Ok(true)
+    }
+
+    /// The active pairings of phones whose workspace device is in `revoked`.
+    pub fn pairings_of_revoked(&self, revoked: &std::collections::BTreeSet<uuid::Uuid>) -> Vec<String> {
+        self.lock()
+            .iter()
+            .filter(|r| r.is_active() && r.device_id.is_some_and(|d| revoked.contains(&d)))
+            .map(|r| r.pid.clone())
+            .collect()
     }
 
     /// Record a newly issued credential `exp` (never moves backwards).

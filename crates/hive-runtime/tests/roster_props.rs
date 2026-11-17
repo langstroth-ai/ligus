@@ -50,7 +50,7 @@ impl Principal {
     fn sign(&self, ws: Uuid, lamport: u64, payload: SessionEvent) -> SessionEventEnvelope {
         let mut e = SessionEventEnvelope::new(workspace_config_session_id(ws), ws, lamport as i64, payload);
         e.lamport = lamport;
-        e.actor_stamp = Some(ActorStamp { actor: self.actor(), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None });
+        e.actor_stamp = Some(ActorStamp { actor: self.actor(), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
         sign_envelope(&mut e, self.device_id, &self.device);
         if self.present.get() {
             hive_core::testkit::prove_recovery(&mut e, self.account_id, self.device_id, &self.device);
@@ -137,7 +137,7 @@ fn roster_ignores_unverified_batch_membership() {
     let stored = workspace(ws, &owner, &[]);
     // Eve signs with her own device but stamps the owner as author.
     let mut forged = eve.sign(ws, 100, SessionEvent::MemberAdded { invite: None, member: eve.member(WorkspaceRole::Admin) });
-    forged.actor_stamp = Some(ActorStamp { actor: owner.actor(), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None });
+    forged.actor_stamp = Some(ActorStamp { actor: owner.actor(), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
     forged.clear_raw();
     sign_envelope(&mut forged, eve.device_id, &eve.device);
     let mut batch = eve.trust(ws, 101);
@@ -259,7 +259,7 @@ proptest! {
         let in_chat = |p: &Principal, l: u64, payload: SessionEvent| {
             let mut e = SessionEventEnvelope::new(sid, ws, l as i64, payload);
             e.lamport = l;
-            e.actor_stamp = Some(ActorStamp { actor: p.actor(), recorded_at: Timestamp::epoch(), cfg_frontier: f, presence: None, runtime_effect: false, prev: None });
+            e.actor_stamp = Some(ActorStamp { actor: p.actor(), recorded_at: Timestamp::epoch(), cfg_frontier: f, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
             sign_envelope(&mut e, p.device_id, &p.device);
             e
         };

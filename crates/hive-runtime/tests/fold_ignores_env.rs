@@ -141,7 +141,7 @@ fn fixture() -> (Vec<SessionEventEnvelope>, Vec<SessionEventEnvelope>) {
     let stamp = |f: Option<hive_core::CfgFrontier>| {
         let mut a = ActorIdentity::new(owner.clone(), "o", ActorKind::Human);
         a.account_id = Some(owner_id);
-        Some(ActorStamp { actor: a, recorded_at: Timestamp::epoch(), cfg_frontier: f, presence: None, runtime_effect: false, prev: None })
+        Some(ActorStamp { actor: a, recorded_at: Timestamp::epoch(), cfg_frontier: f, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() })
     };
     let mut lamport = 0u64;
     let mut make = |sid: Uuid, payload: SessionEvent, f: Option<hive_core::CfgFrontier>| {

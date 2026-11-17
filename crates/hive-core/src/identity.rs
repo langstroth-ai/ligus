@@ -16,6 +16,12 @@ pub enum ActorKind {
     Assistant,
     Agent,
     System,
+    /// A service member (Phase A, item 6): `ligus serve` (or another
+    /// headless host) enrolled as its own member, with its own account and
+    /// device, instead of signing as its owner. Capped at Contributor; its
+    /// votes and approvals never satisfy a human gate, and it never holds a
+    /// passkey or carries presence.
+    Service,
 }
 
 impl ActorKind {
@@ -154,6 +160,10 @@ pub struct ActorStamp {
     /// event there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prev: Option<uuid::Uuid>,
+    /// The signing key's algorithm ([`crate::crypto::SigAlg`]): `p256` for a
+    /// phone's Secure Enclave key. Inside the preimage. Left out for Ed25519.
+    #[serde(default, skip_serializing_if = "crate::crypto::SigAlg::is_ed25519")]
+    pub sig_alg: crate::crypto::SigAlg,
 }
 
 /// A position on a workspace-config log: the canonical key `(lamport,

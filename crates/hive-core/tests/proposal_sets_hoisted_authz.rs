@@ -25,7 +25,7 @@ fn member(id: &str, role: WorkspaceRole) -> WorkspaceMember {
 }
 
 fn stamp(by: &str, frontier: Option<CfgFrontier>) -> Option<ActorStamp> {
-    Some(ActorStamp { actor: ActorIdentity::new(by, by, ActorKind::Human), recorded_at: Timestamp::epoch(), cfg_frontier: frontier, presence: None, runtime_effect: false, prev: None })
+    Some(ActorStamp { actor: ActorIdentity::new(by, by, ActorKind::Human), recorded_at: Timestamp::epoch(), cfg_frontier: frontier, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() })
 }
 
 /// The workspace-config log: `owner` founded it, then added `mara` as a
