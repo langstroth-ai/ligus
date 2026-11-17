@@ -306,12 +306,27 @@ impl Gateway {
     /// addresses, and never follows a redirect. Built per turn (or per
     /// proxied request), so a rotated certificate is picked up.
     pub async fn client(&self) -> Result<reqwest::Client, GatewayError> {
+        self.client_with_roots(hive_forge::uses_platform_roots()).await
+    }
+
+    /// [`Self::client`], for a host with (`platform_roots`) or without
+    /// system CA certificates.
+    pub(crate) async fn client_with_roots(&self, platform_roots: bool) -> Result<reqwest::Client, GatewayError> {
         let addrs = self.vetted_addrs().await?;
+        // A pinned CA replaces the roots, so the builder must not carry the
+        // preconfigured bundled-roots TLS a host without system CAs gets: it
+        // would silently override `tls_certs_only` and `identity`. An mTLS
+        // identity without a pinned CA there can't be presented: refused.
+        let mtls = matches!(self.cfg.auth, AuthConfig::Mtls { .. });
+        if mtls && self.cfg.ca_file.is_none() && !platform_roots {
+            return Err(gw_err(self.name(), "mtls needs caFile on a host without system CA certificates"));
+        }
+        let platform_roots = platform_roots || self.cfg.ca_file.is_some();
         // Never follow a redirect: the credential would ride along (reqwest
         // keeps `x-api-key`/`api-key` across origins and `Authorization` on
         // the same host), to an address that was never vetted. A 3xx goes
         // back to the caller as is.
-        let mut b = hive_forge::http_client_builder()
+        let mut b = hive_forge::http_client_builder_with_roots(platform_roots)
             .connect_timeout(crate::provider::HTTP_CONNECT_TIMEOUT)
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none());

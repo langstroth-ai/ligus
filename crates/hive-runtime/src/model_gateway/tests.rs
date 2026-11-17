@@ -556,3 +556,100 @@ async fn context_probe_respects_the_gateway_route() {
     let got = tokio::time::timeout(std::time::Duration::from_millis(300), l.accept()).await;
     assert!(got.is_err(), "the probe connected to an unlisted endpoint on an exclusive host");
 }
+
+/// `openssl` for the TLS tests (skipped without it).
+fn openssl() -> Option<&'static str> {
+    ["/opt/homebrew/bin/openssl", "/usr/bin/openssl", "/usr/local/bin/openssl"].into_iter().find(|p| Path::new(p).exists())
+}
+
+fn run_openssl(bin: &str, dir: &Path, args: &[&str]) {
+    let o = std::process::Command::new(bin).current_dir(dir).args(args).output().unwrap();
+    assert!(o.status.success(), "openssl {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+}
+
+/// A CA (`<ca>.crt`/`<ca>.key`) and a `localhost` server cert it signed
+/// (`<ca>-srv.crt`/`<ca>-srv.key`), all decoys in `dir`.
+fn ca_and_server_cert(bin: &str, dir: &Path, ca: &str) {
+    run_openssl(bin, dir, &["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", &format!("/CN={ca}"), "-keyout", &format!("{ca}.key"), "-out", &format!("{ca}.crt")]);
+    run_openssl(bin, dir, &["req", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=localhost", "-keyout", &format!("{ca}-srv.key"), "-out", &format!("{ca}-srv.csr")]);
+    std::fs::write(dir.join("ext.cnf"), "subjectAltName=DNS:localhost\nbasicConstraints=CA:FALSE\n").unwrap();
+    run_openssl(bin, dir, &["x509", "-req", "-in", &format!("{ca}-srv.csr"), "-CA", &format!("{ca}.crt"), "-CAkey", &format!("{ca}.key"), "-CAcreateserial", "-days", "2", "-extfile", "ext.cnf", "-out", &format!("{ca}-srv.crt")]);
+}
+
+/// A TLS server (`openssl s_server -www`) on localhost with `cert`/`key`.
+struct TlsServer(std::process::Child, u16);
+impl Drop for TlsServer {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+fn tls_server(bin: &str, dir: &Path, cert: &str, key: &str) -> TlsServer {
+    let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+    let child = std::process::Command::new(bin)
+        .current_dir(dir)
+        .args(["s_server", "-quiet", "-www", "-accept", &port.to_string(), "-cert", cert, "-key", key])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    for _ in 0..100 {
+        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    TlsServer(child, port)
+}
+
+/// The pinned CA holds whichever roots the host has: on a host without
+/// system CA certificates (Ligus then preconfigures reqwest with its bundled
+/// Mozilla roots, which overrides every other TLS setting) a gateway with a
+/// `caFile` must still trust exactly that CA, and nothing else.
+#[tokio::test]
+async fn pinned_ca_holds_without_system_roots() {
+    let Some(bin) = openssl() else {
+        eprintln!("SKIPPED pinned_ca_holds_without_system_roots: no openssl");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    ca_and_server_cert(bin, dir.path(), "ca-a");
+    ca_and_server_cert(bin, dir.path(), "ca-b");
+    let gw = |port: u16| {
+        Gateway::new(GatewayConfig {
+            name: "pinned".into(),
+            url: format!("https://localhost:{port}"),
+            api: Api::Openai,
+            allow_plaintext: false,
+            attribution: false,
+            auth: AuthConfig::None,
+            ca_file: Some(dir.path().join("ca-a.crt")),
+        })
+        .unwrap()
+    };
+    let good = tls_server(bin, dir.path(), "ca-a-srv.crt", "ca-a-srv.key");
+    let bad = tls_server(bin, dir.path(), "ca-b-srv.crt", "ca-b-srv.key");
+    for platform_roots in [true, false] {
+        let g = gw(good.1);
+        let c = g.client_with_roots(platform_roots).await.unwrap();
+        let r = c.get(g.join("/")).send().await;
+        assert!(r.is_ok(), "platform_roots={platform_roots}: the pinned CA wasn't trusted: {r:?}");
+        let g = gw(bad.1);
+        let c = g.client_with_roots(platform_roots).await.unwrap();
+        assert!(c.get(g.join("/")).send().await.is_err(), "platform_roots={platform_roots}: a cert from another CA was accepted");
+    }
+    // An mTLS identity would be dropped the same way: without a pinned CA
+    // on such a host the gateway is refused, not dialed without it.
+    let m = Gateway::new(GatewayConfig {
+        name: "mtls".into(),
+        url: format!("https://localhost:{}", good.1),
+        api: Api::Openai,
+        allow_plaintext: false,
+        attribution: false,
+        auth: AuthConfig::Mtls { cert_file: dir.path().join("ca-a-srv.crt"), client_key_file: dir.path().join("ca-a-srv.key") },
+        ca_file: None,
+    })
+    .unwrap();
+    assert!(m.client_with_roots(false).await.is_err());
+}
