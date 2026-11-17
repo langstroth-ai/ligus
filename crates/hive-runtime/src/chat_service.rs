@@ -115,6 +115,7 @@ pub struct ChatService {
     /// Tests only ([`ChatService::enable_test_presence`]): answer presence
     /// prompts with a recovery key derived from the account, when no provider
     /// is set. Never on otherwise.
+    #[cfg_attr(not(any(test, feature = "test-presence")), allow(dead_code))]
     test_presence: bool,
     /// Capture presence-needing drafts instead of refusing (serve, B3).
     capture_presence: bool,

@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 use super::{ChatError, ChatService, Result};
 
+#[cfg(any(test, feature = "test-presence"))]
 pub use hive_core::testkit::test_recovery_key;
 
 /// What a person confirms: the event and the digest their passkey signs.
@@ -145,6 +146,9 @@ impl ChatService {
     /// `append_signed`'s answer to a presence refusal: ask the provider, or
     /// capture the draft, or refuse.
     pub(super) fn with_presence(&mut self, env: &mut SessionEventEnvelope) -> Result<()> {
+        // Compiled only into tests (this crate's, or a dev-dependency's
+        // `test-presence`); a normal build has no path to it.
+        #[cfg(any(test, feature = "test-presence"))]
         if self.presence_provider.is_none() && self.test_presence {
             return self.test_presence(env);
         }
@@ -166,6 +170,7 @@ impl ChatService {
     /// ([`test_recovery_key`]), registering it first when the workspace
     /// doesn't hold it (with the founder's or an Admin's grant, like a person
     /// would), then re-stamping `env` after that registration.
+    #[cfg(any(test, feature = "test-presence"))]
     fn test_presence(&mut self, env: &mut SessionEventEnvelope) -> Result<()> {
         let wid = env.workspace_id;
         if self.delegated {

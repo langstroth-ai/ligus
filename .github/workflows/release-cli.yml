@@ -47,6 +47,12 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      # The test-only passkey shortcut (hive-runtime `test-presence`) must
+      # never be in a shipped binary's build graph.
+      - name: No test-presence in shipped builds
+        shell: bash
+        run: scripts/check-no-test-presence.sh
+
       - name: Build ligus CLI
         run: cargo build --release --locked -p hive-cli --target ${{ matrix.target }}
 
