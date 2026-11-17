@@ -3855,3 +3855,15 @@ async fn others_typing_reaches_the_phone_as_a_live_event() {
     assert!(seen.iter().any(|(n, d, _)| n == "typing" && d["typing"] == json!([])), "{seen:?}");
     h.handle.shutdown();
 }
+
+/// `ligus facts export` against a data dir with no database fails and
+/// creates nothing: no identity, no keys, no database.
+#[test]
+fn facts_export_never_creates_a_data_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("typo");
+    let cfg = config(&dir, "http://127.0.0.1:1", "room");
+    let err = crate::cmd_facts_export(&cfg, hive_runtime::facts::Since::UnixMs(0), 0).unwrap_err().to_string();
+    assert!(err.contains("never creates"), "{err}");
+    assert!(!dir.exists(), "facts export created {}", dir.display());
+}

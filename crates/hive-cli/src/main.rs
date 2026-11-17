@@ -361,6 +361,17 @@ fn open_service(cfg: &Config) -> Result<ChatService> {
     Ok(svc)
 }
 
+/// `ligus facts export`: read-only, so it never creates a data dir, an
+/// identity or a database. An observability tool polling a mistyped
+/// `LIGUS_DATA_DIR` gets an error, not a fresh empty device.
+fn cmd_facts_export(cfg: &Config, since: hive_runtime::facts::Since, now_ms: i64) -> Result<Vec<String>> {
+    let db = cfg.data_dir.join("hive.db");
+    if !db.is_file() {
+        bail!("no Ligus database at {}: facts export reads an existing data dir and never creates one", db.display());
+    }
+    Ok(open_service(cfg)?.export_facts_since(since, now_ms)?)
+}
+
 /// One-time cleanup: drop events of any workspace other than this config's
 /// room that this box never wrote in — events older clients pushed into the
 /// room regardless of their workspace (the sync engine now refuses both ways).
@@ -1839,8 +1850,7 @@ fn run() -> Result<()> {
                 Some(v) => hive_runtime::facts::Since::parse(&v)
                     .ok_or_else(|| anyhow!("--since takes the cursor from a previous export's last line, or unix milliseconds"))?,
             };
-            let now_ms = hive_core::flow::now_ms();
-            for line in open_service(&cfg)?.export_facts_since(since, now_ms)? {
+            for line in cmd_facts_export(&cfg, since, hive_core::flow::now_ms())? {
                 println!("{line}");
             }
             Ok(())
