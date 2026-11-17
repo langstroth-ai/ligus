@@ -154,8 +154,12 @@ gateway = "litellm"
 |---|---|---|
 | names a gateway this host lists | refused: the host doesn't offer it | runs through that gateway |
 | names a gateway this host doesn't list | refused | refused |
-| no gateway, endpoint is a listed gateway's URL | runs directly | runs through that gateway, credential added |
+| no gateway, endpoint is a listed gateway's model API (`/v1/chat/completions`, `/v1/messages`, ...) | runs directly | runs through that gateway, credential added |
+| no gateway, endpoint is elsewhere on a listed gateway (an admin route, its root) | runs directly | refused |
 | no gateway, any other endpoint, or a CLI's own vendor endpoint | runs directly | refused (exclusive, the default); runs directly with `modelGatewaysExclusive: false` |
+
+On an exclusive host the one exception is a `hive-daemon` runtime whose
+endpoint is on this host (`localhost` or a loopback address).
 
 ## CLI agents: what the agent process sees
 

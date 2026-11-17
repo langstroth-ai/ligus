@@ -114,8 +114,8 @@ silently runs without them). It validates the same rules as the chart
 |---|---|---|
 | `gateway` names a listed gateway | refused: "this host doesn't offer gateway X" | via that gateway |
 | `gateway` names an unlisted one | refused | refused |
-| no `gateway`, endpoint equals a listed gateway URL (prefix match on the base URL) | direct (unchanged) | via that gateway (credential injected) |
-| no `gateway`, any other endpoint or a CLI's vendor endpoint | direct (unchanged) | refused when exclusive; direct otherwise |
+| no `gateway`, endpoint equals a listed gateway URL (prefix match on the base URL) and its path is the wire's model API (`route_path_allowed`) | direct (unchanged) | via that gateway (credential injected); elsewhere on the gateway: refused |
+| no `gateway`, any other endpoint or a CLI's vendor endpoint | direct (unchanged) | refused when exclusive (except a `hive-daemon` runtime on a loopback endpoint); direct otherwise |
 
 A desktop or a plain custom base URL is unaffected: without a gateways file
 nothing changes.

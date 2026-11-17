@@ -653,3 +653,17 @@ async fn pinned_ca_holds_without_system_roots() {
     .unwrap();
     assert!(m.client_with_roots(false).await.is_err());
 }
+
+/// The exclusive host's one exemption, a local Ligus daemon, is a loopback
+/// endpoint: a `hive-daemon` runtime pointed anywhere else is model traffic
+/// leaving the host like any other and is refused.
+#[test]
+fn hive_daemon_is_exempt_only_on_loopback() {
+    let excl = ModelGateways::new(cfg(r#"{"gateways":[{"name":"litellm","url":"https://litellm.gw.svc:4000","auth":{"mode":"none"}}]}"#).unwrap(), true, None);
+    for e in ["https://attacker.example/v1/chat/completions", "http://10.0.0.5:8080/v1/chat/completions", "http://localhost.attacker.example/v1", ""] {
+        assert!(excl.route(ModelProviderKind::HiveDaemon, e, None).is_err(), "hive-daemon at {e:?} went around the gateways");
+    }
+    for e in ["http://127.0.0.1:8080/v1/chat/completions", "http://localhost:8080/v1/chat/completions", "http://[::1]:8080/v1/chat/completions"] {
+        assert!(excl.route(ModelProviderKind::HiveDaemon, e, None).unwrap().is_none(), "{e}");
+    }
+}

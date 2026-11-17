@@ -652,7 +652,11 @@ impl ModelGateways {
                 return Ok(Some(ResolvedGateway { gateway: g.clone(), attribution }));
             }
         }
-        if self.exclusive && provider != ModelProviderKind::HiveDaemon {
+        // The one exemption, a Ligus daemon on this host, holds only for a
+        // loopback endpoint: a `hive-daemon` runtime pointed anywhere else
+        // is model traffic leaving the host like any other.
+        let local_daemon = provider == ModelProviderKind::HiveDaemon && endpoint_is_loopback(endpoint);
+        if self.exclusive && !local_daemon {
             let names: Vec<&str> = self.gateways.iter().map(|g| g.name()).collect();
             return Err(format!(
                 "this host sends model traffic only through its operator's model gateways ({}); set the runtime's gateway to one of them",
@@ -660,6 +664,16 @@ impl ModelGateways {
             ));
         }
         Ok(None)
+    }
+}
+
+/// Whether `endpoint` names this host: `localhost` or a loopback address.
+fn endpoint_is_loopback(endpoint: &str) -> bool {
+    match url::Url::parse(endpoint.trim()).ok().and_then(|u| u.host().map(|h| h.to_owned())) {
+        Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
     }
 }
 
