@@ -1226,6 +1226,68 @@ fn fold(
     trusted_workspace: Option<Uuid>,
     workspace: WorkspaceAuthz<'_>,
     timeline: Option<&mut crate::authz::ConfigTimeline>,
+    mut decisions: Option<&mut std::collections::BTreeMap<Uuid, Verdict>>,
+) -> Option<ChatSession> {
+    // Equivocation (review P-A2c, owner decision): two envelopes under one
+    // event id with different signed content both drop out before anything
+    // else, so neither folds, coverage never passes through the id, and the
+    // result doesn't depend on which one a device saw first.
+    let (envelopes, equivocated) = split_equivocations(envelopes);
+    let out = fold_log(&envelopes, trusted_founder, trusted_workspace, workspace, timeline, decisions.as_deref_mut());
+    if let Some(d) = decisions {
+        for id in equivocated {
+            d.insert(id, Verdict::Denied);
+        }
+    }
+    out
+}
+
+/// What makes two envelopes under one id the same event: the signer, the
+/// signature and the signed preimage (a copy that only travelled, or was
+/// re-sealed, keeps all three).
+fn equivocation_key(e: &SessionEventEnvelope) -> (Option<Uuid>, Option<Vec<u8>>, Vec<u8>) {
+    (e.signer_device_id, e.signature.clone(), crate::crypto::envelope_preimage(e))
+}
+
+/// Whether `a` and `b` (one event id) are different events: an equivocation.
+pub fn equivocates(a: &SessionEventEnvelope, b: &SessionEventEnvelope) -> bool {
+    a.event_id == b.event_id && a.session_id == b.session_id && equivocation_key(a) != equivocation_key(b)
+}
+
+/// The log without its equivocated ids (and with exact duplicates folded
+/// into one), and the equivocated ids.
+fn split_equivocations(envelopes: &[SessionEventEnvelope]) -> (std::borrow::Cow<'_, [SessionEventEnvelope]>, std::collections::BTreeSet<Uuid>) {
+    let mut count: std::collections::HashMap<Uuid, usize> = std::collections::HashMap::new();
+    for e in envelopes {
+        *count.entry(e.event_id).or_default() += 1;
+    }
+    if count.values().all(|c| *c == 1) {
+        return (std::borrow::Cow::Borrowed(envelopes), Default::default());
+    }
+    let mut keys: std::collections::HashMap<Uuid, Vec<(Option<Uuid>, Option<Vec<u8>>, Vec<u8>)>> = std::collections::HashMap::new();
+    for e in envelopes.iter().filter(|e| count[&e.event_id] > 1) {
+        let k = equivocation_key(e);
+        let v = keys.entry(e.event_id).or_default();
+        if !v.contains(&k) {
+            v.push(k);
+        }
+    }
+    let equivocated: std::collections::BTreeSet<Uuid> = keys.iter().filter(|(_, v)| v.len() > 1).map(|(id, _)| *id).collect();
+    let mut seen = std::collections::HashSet::new();
+    let kept = envelopes
+        .iter()
+        .filter(|e| !equivocated.contains(&e.event_id) && seen.insert(e.event_id))
+        .cloned()
+        .collect();
+    (std::borrow::Cow::Owned(kept), equivocated)
+}
+
+fn fold_log(
+    envelopes: &[SessionEventEnvelope],
+    trusted_founder: Option<&str>,
+    trusted_workspace: Option<Uuid>,
+    workspace: WorkspaceAuthz<'_>,
+    timeline: Option<&mut crate::authz::ConfigTimeline>,
     decisions: Option<&mut std::collections::BTreeMap<Uuid, Verdict>>,
 ) -> Option<ChatSession> {
     let none = std::collections::BTreeSet::new();
@@ -2353,7 +2415,9 @@ mod tests {
         // Hand-craft an envelope carrying a future "kind".
         let mut future = serde_json::to_value(&known).unwrap();
         future["sequence"] = serde_json::json!(2);
-        future["event_id"] = serde_json::json!(Uuid::new_v4());
+        // (the wire name is `eventId`: two kinds under one id would be an
+        // equivocation, and both would be denied)
+        future["eventId"] = serde_json::json!(Uuid::new_v4());
         future["payload"] = serde_json::json!({ "kind": "somethingFromTheFuture", "extra": 42 });
         let future: SessionEventEnvelope = serde_json::from_value(future).unwrap();
         assert!(matches!(future.payload, SessionEvent::Unknown));
