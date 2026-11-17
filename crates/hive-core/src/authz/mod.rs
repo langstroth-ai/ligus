@@ -899,8 +899,12 @@ fn service_member_refusal(
 ///   config seed's creator) cuts an Owner; nobody cuts the founder. Leaving
 ///   yourself, demoting yourself and revoking your own device stay open.
 ///
-/// Because the subject of a cut can never cut its author, a removed member
-/// can't undo their removal with a backdated counter-cut.
+/// Ranks are judged at each cut's own position, so the subject of a cut
+/// never cuts its author on the roster the cut was judged on: a removed
+/// member can't undo their removal with a backdated counter-cut. A subject
+/// whose rank an allowed role change later raises (the founder promoting a
+/// demoted member to Owner) may cut the earlier author after it; that is a
+/// sequence, not a mutual cut.
 fn rank_rules(e: &SessionEvent, author: &str, role: WorkspaceRole, roster: &RosterState) -> Option<String> {
     let role_of = |id: &str| roster.members.get(id).map(|m| m.role);
     let targets: Vec<String> = match e {

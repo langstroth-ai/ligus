@@ -377,8 +377,11 @@ it.
       and so do a demoted member's lockdowns: a demotion never lifts a
       lockdown (only a human Contributor's clear, with presence, does). A
       removed member's or revoked device's uncovered lockdowns are denied.
-      Ranks bound who can do this: a cut goes strictly down the ranks, so
-      only someone above the member can.
+      Ranks bound who can do this: a cut goes strictly down the ranks of
+      the roster at its own position, so only someone above the member
+      there can, and a backdated counter-cut by the subject is denied. Only
+      a later, allowed role change (the founder promoting the member) lets
+      them cut the earlier author afterwards.
     - **Chats the remover never synced.** Events the remover's device
       doesn't hold (a chat it never synced) are cut too, so sync before
       removing someone whose recent history matters.
