@@ -298,8 +298,8 @@ modelGateways: []
 #   api: openai                   # openai | anthropic (the wire it speaks)
 #   auth:
 #     mode: serviceAccountToken   # serviceAccountToken | apiKey | mtls | none
-#     audience: litellm           # serviceAccountToken; defaults to name
-#     expirationSeconds: 3600     # serviceAccountToken; >= 600
+#     audience: litellm           # serviceAccountToken; defaults to name; one per gateway
+#     expirationSeconds: 3600     # serviceAccountToken; 600-86400
 #     # apiKey: secretName, secretKey, header (authorization | x-api-key | api-key)
 #     # mtls:   secretName (keys tls.crt, tls.key, ca.crt; the CA is pinned)
 #   caSecret: { name: "", key: ca.crt }   # optional: pin a private CA for https

@@ -244,6 +244,10 @@ def test_model_gateways():
         "mtls without a Secret": dict(**{"auth.mode": "mtls"}),
         "an unknown auth mode": dict(**{"auth.mode": "basic"}),
         "a short-lived SA token below the kubelet minimum": dict(**{"auth.expirationSeconds": "60"}),
+        "an SA token that lives longer than a day": dict(**{"auth.expirationSeconds": "604800"}),
+        "an SA token for the kube-apiserver's audience":
+            dict(**{"auth.audience": "https://kubernetes.default.svc.cluster.local"}),
+        "an SA token for the kube-apiserver's short audience": dict(**{"auth.audience": "kubernetes.default.svc"}),
         "a bad name": dict(name="Team_GW"),
         "an unknown wire": dict(api="gemini"),
     }
@@ -252,6 +256,12 @@ def test_model_gateways():
         check("modelGateways refuses %s" % what, p.returncode != 0, p.stdout[-200:])
     p = render(*_gw(), *_gw(1), ok=False)
     check("modelGateways refuses duplicate names", p.returncode != 0)
+    # One audience per gateway: a gateway must not be able to replay the
+    # token it was sent to another gateway (or to the API server).
+    p = render(*_gw(), *_gw(1, name="other-gw"), ok=False)
+    check("modelGateways refuses two gateways sharing an SA token audience", p.returncode != 0)
+    p = render(*_gw(), *_gw(1, name="other-gw", **{"auth.audience": "other-aud"}), ok=False)
+    check("modelGateways accepts distinct audiences", p.returncode == 0, p.stderr[-300:])
     p = render(*_gw(), "--set", "serve.extraEnv[0].name=LIGUS_MODEL_GATEWAYS_FILE", "--set", "serve.extraEnv[0].value=/x", ok=False)
     check("extraEnv can't override the gateway allow-list", p.returncode != 0)
     for ok_cidr in ("10.0.0.0/8", "2001:db8::/32", "fd00:ec3::/32", "100.101.0.0/16"):

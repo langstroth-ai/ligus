@@ -181,8 +181,9 @@ What the chart renders for a non-empty `modelGateways`:
 - **Credentials as files, one projected volume per gateway**, under
   `/etc/ligus/model-gateways/<name>/`, never in the environment:
   - `serviceAccountToken`: a projected ServiceAccount token with the given
-    `audience` (default: the gateway name) and `expirationSeconds` (default
-    3600, at least 600). The pods keep `automountServiceAccountToken: false`,
+    `audience` (default: the gateway name; each gateway's must differ and
+    never be the API server's) and `expirationSeconds` (default 3600,
+    600 to 86400). The pods keep `automountServiceAccountToken: false`,
     so this audience-bound token is the only one mounted. The kubelet rotates
     it and Ligus re-reads it on every request.
   - `apiKey`: `auth.secretName` / `auth.secretKey`, sent as

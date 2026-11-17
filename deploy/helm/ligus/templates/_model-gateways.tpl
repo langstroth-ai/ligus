@@ -96,6 +96,7 @@ their first min(prefix) bits are equal. Args: dict a b (strings "addr/len").
 {{/* Refuse anything unsafe or ambiguous in .Values.modelGateways. */}}
 {{- define "ligus.modelGatewaysValidate" -}}
 {{- $seen := dict -}}
+{{- $seenAud := dict -}}
 {{- $refused := list "169.254.0.0/16" "100.100.100.200/32" "fd00:ec2::254/128" "fe80::/10" -}}
 {{- range $i, $g := .Values.modelGateways -}}
 {{- $n := toString $g.name -}}
@@ -124,6 +125,15 @@ their first min(prefix) bits are equal. Args: dict a b (strings "addr/len").
 {{- if eq $mode "serviceAccountToken" -}}
 {{- $exp := int (default 3600 $auth.expirationSeconds) -}}
 {{- if lt $exp 600 -}}{{- fail (printf "%s: auth.expirationSeconds must be at least 600 (the kubelet's minimum)" $where) -}}{{- end -}}
+{{- if gt $exp 86400 -}}{{- fail (printf "%s: auth.expirationSeconds must be at most 86400 (a day): the gateway holds a replayable token that long" $where) -}}{{- end -}}
+{{- /* One audience per gateway, never the API server's: a gateway that
+       receives the token can replay it wherever its audience is accepted. */ -}}
+{{- $aud := toString (default $n $auth.audience) -}}
+{{- if or (contains "kubernetes.default" (lower $aud)) (eq (lower $aud) "api") -}}
+{{- fail (printf "%s: auth.audience %q is the Kubernetes API server's; the gateway could use the token against the cluster. Use the gateway's own audience" $where $aud) -}}
+{{- end -}}
+{{- if hasKey $seenAud $aud -}}{{- fail (printf "%s: auth.audience %q is also another gateway's; each gateway needs its own, so one can't replay the token it was sent to the other" $where $aud) -}}{{- end -}}
+{{- $_ := set $seenAud $aud true -}}
 {{- end -}}
 {{- if eq $mode "apiKey" -}}
 {{- if or (not $auth.secretName) (not $auth.secretKey) -}}{{- fail (printf "%s: auth.mode apiKey needs auth.secretName and auth.secretKey" $where) -}}{{- end -}}

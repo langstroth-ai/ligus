@@ -223,8 +223,10 @@ The gateway must verify, on every request:
   token from another namespace or another workload is rejected;
 - **expiry** (`exp`, `nbf`).
 
-Use one audience per gateway. A gateway that is compromised can then replay
-the tokens it receives only to itself.
+Use one audience per gateway, and never the API server's. A gateway that is
+compromised can then replay the tokens it receives only to itself. The chart
+refuses two gateways with the same audience, an audience naming
+`kubernetes.default`, and an `expirationSeconds` outside 600 to 86400.
 
 ### API keys
 
