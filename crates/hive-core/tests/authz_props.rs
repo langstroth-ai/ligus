@@ -880,6 +880,85 @@ fn lockdown_bounds_s5() {
     assert_eq!(w.config().guards.lockdowns_of(chat).len(), 1);
 }
 
+// ---- A demotion never lifts a lockdown ----
+
+/// The lockdowns active on `chat` in `w`'s config fold.
+fn active_lockdowns(w: &hive_core::testkit::SignedWorld, chat: Uuid) -> std::collections::BTreeSet<Uuid> {
+    w.config().guards.lockdowns_of(chat).iter().map(|l| l.id).collect()
+}
+
+proptest! {
+    /// A Contributor raises a lockdown (after, optionally, raising and
+    /// clearing one), and the Owner then cuts them. The cut's watermark is
+    /// empty, stale (taken before the raise, as a device that hadn't synced
+    /// it would write) or honest, and the raise may sort after the cut
+    /// (backdated below it). A demotion never lifts a lockdown: every
+    /// lockdown active without the cut stays active with it, so lifting one
+    /// still takes a `ChatLockdownCleared` by a human Contributor with
+    /// presence. A removal or a revocation keeps failing closed: the raise
+    /// stands only if the watermark covers it.
+    #[test]
+    fn prop_a_demotion_never_lifts_a_lockdown(kind in 0u8..3, wm in 0u8..3, backdate in any::<bool>(), cleared_first in any::<bool>()) {
+        use hive_core::testkit::SignedWorld;
+        let mut w = SignedWorld::genesis(&["founder", "cara"], None);
+        w.admit("founder", "cara", WorkspaceRole::Contributor);
+        let chat = Uuid::new_v4();
+        let cara_heads = |w: &SignedWorld| {
+            let signers = [w.people["cara"].device_id].into_iter().collect();
+            hive_core::watermark::heads_of(&w.cfg, workspace_config_session_id(w.wid), &signers)
+        };
+        let raise = |id: u128| SessionEvent::ChatLockdownRaised { chat_id: chat, lockdown: lockdown(id, "cara") };
+        if cleared_first {
+            w.push_bare("cara", raise(1));
+            w.push("cara", SessionEvent::ChatLockdownCleared { chat_id: chat });
+        }
+        let stale = cara_heads(&w);
+        if !backdate {
+            w.push_bare("cara", raise(2));
+        }
+        let watermark = match wm {
+            0 => vec![],
+            1 => stale,
+            _ => cara_heads(&w),
+        };
+        let covered = !backdate && wm == 2;
+        let cut = match kind {
+            0 => SessionEvent::MemberRoleChanged {
+                change: MemberRoleChange { member_id: "cara".into(), old_role: WorkspaceRole::Contributor, new_role: WorkspaceRole::Viewer },
+                watermark,
+            },
+            1 => SessionEvent::MemberRemoved { member_id: "cara".into(), watermark },
+            _ => SessionEvent::DeviceRevoked { device_id: w.people["cara"].device_id, watermark },
+        };
+        // What is active without the cut.
+        let mut without = w.clone();
+        if backdate {
+            without.push_bare("cara", raise(2));
+        }
+        let before = active_lockdowns(&without, chat);
+        prop_assert!(before.contains(&Uuid::from_u128(2)));
+        // Unrelated traffic, so a backdated raise sorts after the clear.
+        w.push("founder", SessionEvent::WorkspaceRulesSet { version: 2, presence: None });
+        let cut_id = w.push("founder", cut);
+        prop_assert_eq!(w.verdict(cut_id), Verdict::Allowed);
+        if backdate {
+            // Written after the cut, sorting just below it.
+            let lamport = w.cfg.iter().find(|e| e.event_id == cut_id).unwrap().lamport - 1;
+            let mut env = w.draft("cara", None, raise(2), None);
+            env.lamport = lamport;
+            env.clear_raw();
+            w.finish(&mut env, "cara", None);
+            w.push_env(None, env);
+        }
+        let after = active_lockdowns(&w, chat);
+        if kind == 0 {
+            prop_assert!(after.is_superset(&before), "a demotion lifted a lockdown: {:?} -> {:?}", before, after);
+        } else {
+            prop_assert_eq!(after.contains(&Uuid::from_u128(2)), covered, "{:?}", after);
+        }
+    }
+}
+
 // ---- S6 flow bounds ----
 
 fn zone(i: u128, pattern: &str) -> FlowRecord {
