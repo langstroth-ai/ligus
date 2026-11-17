@@ -276,5 +276,5 @@ host id with the new one in `LIGUS_RELAY_TUNNEL_HOSTS`.
 
 - Check each device's guard log (the `guard_signals` table in `hive.db`) for
   ingest rejections around the time of the incident.
-- Consider turning on [dearth mode](../features/guards.md#dearth-mode) while
+- Consider turning on [dearth mode](https://docs.ligus.ai/features/guards/#dearth-mode) while
   you clean up: new members and devices then need two Admins.

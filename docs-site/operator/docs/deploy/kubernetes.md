@@ -9,7 +9,7 @@
     change. The design they implement is
     [`docs/design/kubernetes.md`](https://github.com/ligus-ai/ligus/blob/main/docs/design/kubernetes.md).
 
-This shape runs the always-on parts of Ligus for **one trusted
+This shape runs the always-on parts of the Langstroth platform for **one trusted
 organisation** on a cluster: the relay (and optionally ligus-auth), and per
 workspace a `ligus serve` device, optional named workers and MCP servers.
 Members still use the desktop app and the phone app as usual.

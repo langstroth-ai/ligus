@@ -99,7 +99,7 @@ A workspace invite code (`hivews1:…`) is base64url-encoded JSON of the
 workspace connection: its display name, the relay URL, the room, **the
 workspace key (the E2EE passphrase)**, the founder's account id and safety
 code (`fk`), a single-use invite id and, for a direct message, the account
-it is addressed to. See the [invite code reference](../reference/invite-payload.md).
+it is addressed to. See the [invite code reference](https://docs.langstroth.ai/reference/invite-payload/).
 
 So an invite code **is** a secret: anyone holding it can sync and read the
 workspace. Share it only over a channel you trust. An invite to a co-member
@@ -152,4 +152,4 @@ device, over [iroh](https://www.iroh.computer/) (QUIC), falling back to the
 relay when no direct connection can be made (**Settings → Team sync →
 Direct peers**). Events on a direct link are the same signed events as on
 the relay, verified the same way; set `LIGUS_DISABLE_P2P` to turn direct
-sync off. See [Security model](../security/index.md#encryption).
+sync off. See [Security model](https://docs.langstroth.ai/security/#encryption).

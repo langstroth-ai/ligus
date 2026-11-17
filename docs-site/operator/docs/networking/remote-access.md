@@ -1,6 +1,6 @@
 # Remote access for your phone
 
-The [phone app](../features/phone-app.md) talks to **`ligus serve`**, a Ligus
+The [phone app](https://docs.ligus.ai/features/phone-app/) talks to **`ligus serve`**, a Ligus
 device you run on an always-on box (a home server, a small PC, a VM). This
 page covers getting the phone to that box, from anywhere, and keeping the
 link healthy.
@@ -192,7 +192,7 @@ Other commands:
 
 - `ligus remote push-test [--phone <pid|name>]`: send a test notification
   to the paired phones and print what happened at each hop. See
-  [Troubleshooting push](../features/phone-app.md#troubleshooting-push).
+  [Troubleshooting push](https://docs.ligus.ai/features/phone-app/#troubleshooting-push).
 - `ligus remote disable`: stop using the relay. Keys and phones are kept, so
   enabling it again needs no re-pairing. Restart `ligus serve` afterwards.
 - `ligus remote reset`: new host keys, so a new host id. **Every phone must
@@ -270,7 +270,7 @@ yourself under the same team.
    install it, and allow notifications when the app asks.
 
 What gets pushed, and the per-phone previews setting, are on
-[Ligus on your phone](../features/phone-app.md#push-notifications). The
+[Ligus on your phone](https://docs.ligus.ai/features/phone-app/#push-notifications). The
 details, including the host-side rate limits, are in
 [`docs/push-notifications.md`](https://github.com/ligus-ai/ligus/blob/main/docs/push-notifications.md).
 
@@ -320,4 +320,4 @@ rotated `serve.token`, so phones on the direct path must pair again. Use
 test notification and prints each hop (box → relay → APNs) with the reason
 and the fix when one fails. `ligus serve` logs every push decision (`push:`
 lines) and the relay logs every APNs answer (`tunnel push`). See
-[Troubleshooting push](../features/phone-app.md#troubleshooting-push).
+[Troubleshooting push](https://docs.ligus.ai/features/phone-app/#troubleshooting-push).

@@ -102,7 +102,7 @@ checked, and the turn's id is revoked when the turn ends, is stopped or
 times out. The credential never leaves the device and isn't synced.
 
 The socket the bridge connects to lives in a fresh `0700` directory. It's
-the one extra path the [agent sandbox](../security/index.md#guards) allows,
+the one extra path the [agent sandbox](https://docs.langstroth.ai/security/#guards) allows,
 under Seatbelt and bubblewrap alike. The Ligus server is local, so it's
 available even when a chat's egress is closed.
 

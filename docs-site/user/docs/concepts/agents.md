@@ -103,7 +103,7 @@ online status). You pick the host when creating an agent, and can
 reassign it later. The host determines which machine — and therefore
 which code directory — the agent's turns touch, so routing code work to a
 specific tree is a matter of `@mention`-ing the agent on the right host.
-See [Headless agents](headless-agents.md).
+See [Headless agents](https://docs.langstroth.ai/concepts/headless-agents/).
 
 ## Reviewing agent changes
 

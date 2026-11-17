@@ -174,7 +174,7 @@ vote, reject, lockdown clear and agent rebind (see
 
 ### Code hosts
 
-The box's code-host connections ([Code hosts](../features/code-hosts.md)).
+The box's code-host connections ([Code hosts](https://docs.ligus.ai/features/code-hosts/)).
 No answer ever carries a token.
 
 | Method + path | Request | Notes |
@@ -193,13 +193,13 @@ Connection ids are `<kind>:<host>`, for example `github:github.com`,
 names the GitHub connection.
 
 What the phone may touch on disk is limited; see
-[Host path policy](../features/phone-app.md#host-path-policy).
+[Host path policy](https://docs.ligus.ai/features/phone-app/#host-path-policy).
 
 ### Host extras
 
 | Method + path | Notes |
 |---|---|
-| `GET /v1/dashboard` | the host dashboard; see [Host dashboard](../features/dashboard.md) |
+| `GET /v1/dashboard` | the host dashboard; see [Host dashboard](https://docs.ligus.ai/features/dashboard/) |
 | `GET /v1/lab/status` | **deprecated**; answers with `Deprecation: true` and a `Link` to `/v1/dashboard` |
 | `GET /v1/appearance` | `{palette, mode, source}` for *Match host* |
 
@@ -247,7 +247,7 @@ Service and NetworkPolicies).
 | Turn on shutdown | up to 15 s to finish; otherwise marked interrupted |
 | Clone jobs | 2 at once; `LIGUS_REPOS_MAX_CLONE_MB` (2048) and `LIGUS_REPOS_CLONE_TIMEOUT_SECS` (900) |
 | Tunnel | 8 sessions (or the relay's `maxSessions`), 32 streams per session, 16 KiB frames; handshake 10 s, idle 90 s, session 24 h |
-| Push | see [Push notifications](../features/phone-app.md#push-notifications) |
+| Push | see [Push notifications](https://docs.ligus.ai/features/phone-app/#push-notifications) |
 | Token rotation | the server re-reads `serve.token` every 2 s |
 | Typing | republish at most every 3 s, expire after 6 s quiet, 30 requests per 10 s, others polled every 2 s while a stream is open |
 

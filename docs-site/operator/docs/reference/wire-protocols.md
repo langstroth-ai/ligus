@@ -33,7 +33,7 @@ keys:
 `agentRosterUpdated`, `proposalUpserted`, `messageReactionAdded`. The projector
 folds them in order; a `sessionSnapshot` seeds/bounds replay.
 
-[Proposal sets](../features/proposal-sets.md) (2.0) add `proposalSetOpened`,
+[Proposal sets](https://docs.ligus.ai/features/proposal-sets/) (2.0) add `proposalSetOpened`,
 `proposalSetAlternativeAdded`, `scoutAssessmentPosted`,
 `proposalSetRoundAdvanced`, `proposalSetQuorumReached`,
 `proposalSetAlternativeStopped`, `proposalSetTuned`,
@@ -131,7 +131,7 @@ every paired phone runs a build that registers `ligus://`.
 | `hive://` | Phone deep-link scheme (`hive://pair`, `hive://chat/<id>`) | `ligus serve`, phone app |
 
 Strings added in 2.0 use the `ligus` spelling. Among them, the SSHSIG
-namespace of a [linked account](../features/linked-identities.md),
+namespace of a [linked account](https://docs.ligus.ai/features/linked-identities/),
 `ligus-identity-link-v1@ligus.ai` (`hive-core/src/identity_link.rs`, pinned by
 `link_namespace_is_frozen`), is a length-prefixed SSHSIG field passed to
 `ssh-keygen -Y sign -n`, so unlike the signature contexts above it has no

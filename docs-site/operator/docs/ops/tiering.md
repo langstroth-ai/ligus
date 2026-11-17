@@ -1,8 +1,8 @@
 # Tiering: open-source core, paid, and enterprise
 
-How Ligus's free / paid / enterprise features are drawn, **where each feature
+How Langstroth's free / paid / enterprise features are drawn, **where each feature
 lives**, and how it ships. This is the engineering model; the user-facing tier
-summary is [`docs-site/ops/pricing.md`](pricing.md).
+summary is [Pricing tiers](https://docs.ligus.ai/help/pricing/).
 
 ## Principles
 

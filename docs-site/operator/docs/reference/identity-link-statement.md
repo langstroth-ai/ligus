@@ -1,6 +1,6 @@
 # Identity link statement
 
-The exact bytes a [linked account](../features/linked-identities.md) signs,
+The exact bytes a [linked account](https://docs.ligus.ai/features/linked-identities/) signs,
 the signature format, and the events that carry it.
 
 ## Statement

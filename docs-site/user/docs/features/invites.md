@@ -26,7 +26,7 @@ the workspace **roster immediately** on joining — no need to open a
 chat first before the rest of the team sees you.
 
 Invite codes look like `hivews1:…` (see the
-[invite code reference](../reference/invite-payload.md) for the
+[invite code reference](https://docs.langstroth.ai/reference/invite-payload/) for the
 format). Because the code embeds the workspace key, treat it like a
 secret — share it over a channel you trust.
 
@@ -104,7 +104,7 @@ has no directory to look anyone up in.
 Zero-config nearby discovery on the same network — synthesizing an
 invite from a local announcement so peers can join without pasting a
 code — is a tracked follow-up and **not in the current build**. See
-[LAN discovery](../networking/lan.md). For now, share an invite code
+[LAN discovery](https://docs.langstroth.ai/networking/lan/). For now, share an invite code
 (above) or point both peers at a relay.
 
 ## Cross-network sync
@@ -112,7 +112,7 @@ code — is a tracked follow-up and **not in the current build**. See
 Peers on different networks converge through a shared **relay**: set
 the same **Relay URL** and join the same room + key (an invite code
 does this automatically). Configure the relay under
-**Settings → Team sync**. See [Self-hosting a relay](../networking/self-host.md)
+**Settings → Team sync**. See [Self-hosting a relay](https://docs.langstroth.ai/networking/self-host/)
 for how to run one.
 
 ## Revocation

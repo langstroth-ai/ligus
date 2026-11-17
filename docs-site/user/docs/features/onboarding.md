@@ -92,5 +92,5 @@ show_context_panel = true
 show_activity_panel = true
 ```
 
-See the [Configuration reference](../reference/config-toml.md) for
+See the [Configuration reference](https://docs.langstroth.ai/reference/config-toml/) for
 the full schema.

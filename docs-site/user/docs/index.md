@@ -9,6 +9,11 @@ keep your data local-first.
 honeybee). The project was called Hive until v2.0; old links to
 docs.apiaryhq.ai redirect here.
 
+This site covers using Ligus: the desktop and phone apps, workspaces,
+agents, the `ligus` CLI. Self-hosting and deploying (the relay, sign-in,
+Kubernetes, always-on `ligus serve` hosts) is on the operator site,
+**[docs.langstroth.ai](https://docs.langstroth.ai/)**.
+
 ![The Ligus workspace](images/overview.png){ width="900" }
 
 ---
@@ -43,17 +48,20 @@ machine. Ligus flips that:
 
     [:octicons-arrow-right-24: Start here](getting-started/first-launch.md)
 
--   :material-server-network:{ .lg } **Deploy**
+-   :material-server-network:{ .lg } **Self-host and deploy**
 
-    Solo, personal fleet with a phone, a team on a relay, Kubernetes.
+    Solo, personal fleet with a phone, a team on a relay, Kubernetes. On the
+    operator site, docs.langstroth.ai.
 
-    [:octicons-arrow-right-24: Choose a deployment](deploy/index.md)
+    [:octicons-arrow-right-24: Choose a deployment](https://docs.langstroth.ai/deploy/)
 
 -   :material-shield-lock:{ .lg } **Security**
 
-    What each component holds, the threat model, incident runbooks.
+    What each component holds, the threat model, incident runbooks (on
+    docs.langstroth.ai). For the short version, see
+    [Security & trust](concepts/security.md).
 
-    [:octicons-arrow-right-24: Security model](security/index.md)
+    [:octicons-arrow-right-24: Security model](https://docs.langstroth.ai/security/)
 
 -   :material-graph:{ .lg } **Concepts**
 
@@ -61,11 +69,12 @@ machine. Ligus flips that:
 
     [:octicons-arrow-right-24: Read the model](concepts/workspaces.md)
 
--   :material-server-network:{ .lg } **Networking & relay**
+-   :material-cellphone:{ .lg } **Ligus on your phone**
 
-    How peers find each other; setting up your own relay.
+    Chats, proposals and approvals from the iPhone app, through your own
+    always-on host.
 
-    [:octicons-arrow-right-24: Networking](networking/rendezvous.md)
+    [:octicons-arrow-right-24: Phone app](features/phone-app.md)
 
 -   :material-puzzle:{ .lg } **Addon agents**
 
@@ -88,14 +97,14 @@ append-only event log in SQLite; replies stream from your chosen runtime (the
 ## Project status
 
 Ligus 2.0 is the current release (it was called Hive until 1.18; 2.0 starts fresh and leaves Hive 1.x data
-untouched, see [Upgrading from Hive 1.x](deploy/upgrade-from-hive.md)). The macOS app is
+untouched, see [Upgrading from Hive 1.x](https://docs.langstroth.ai/deploy/upgrade-from-hive/)). The macOS app is
 signed and notarized and updates itself; Windows and Linux builds are
 unsigned. The headless `ligus` CLI ships for macOS and Linux through
 Homebrew. See [What's new](reference/whats-new.md).
 
 The reference relay is MIT-licensed and lives in its own repository,
 [github.com/ligus-ai/relay](https://github.com/ligus-ai/relay) (a small Go
-service); see [Self-hosting a relay](networking/self-host.md). Desktops that
+service); see [Self-hosting a relay](https://docs.langstroth.ai/networking/self-host/). Desktops that
 are contacts also sync directly peer to peer over **iroh**, falling back to
 the relay. Kubernetes support is in preview
-([Kubernetes](deploy/kubernetes.md)).
+([Kubernetes](https://docs.langstroth.ai/deploy/kubernetes/)).

@@ -18,7 +18,7 @@ DevOps are on request.
 ## Where tokens live
 
 - **Only on the device that does the git work.** On the desktop, that's the
-  desktop. For a [`ligus serve` box](../ops/serve-repos.md), it's the box. A
+  desktop. For a [`ligus serve` box](https://docs.langstroth.ai/ops/serve-repos/), it's the box. A
   phone never holds a code-host token: it drives the box.
 - **Only in the OS secret store**: the Ligus keychain on macOS, the Secret
   Service on a Linux desktop, `systemd-creds` on a headless box, a mounted
@@ -104,7 +104,7 @@ repository into a folder; Ligus then offers it as the workspace folder.
 
 The phone manages the box's connections through the box. A token or a device
 sign-in goes from the phone to the box only through
-[remote access](../networking/remote-access.md), which is end-to-end
+[remote access](https://docs.langstroth.ai/networking/remote-access/), which is end-to-end
 encrypted between the phone and the box. On a plain LAN or tailnet address
 the box refuses them; set the token on the box itself instead:
 
@@ -114,5 +114,5 @@ ligus forge token gitlab:gitlab.example.com write   # paste the token, then Ente
 ligus forge test gitlab:gitlab.example.com
 ```
 
-See [Repos on the home host](../ops/serve-repos.md) and the
-[serve API](../reference/serve-api.md#code-hosts).
+See [Repos on the home host](https://docs.langstroth.ai/ops/serve-repos/) and the
+[serve API](https://docs.langstroth.ai/reference/serve-api/#code-hosts).

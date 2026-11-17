@@ -197,7 +197,7 @@ it.
    every authorized epoch key the inviter holds, so the joiner can read the
    history. Treat it like a password and send it over a trusted channel.
 3. **Agents run as your OS user, inside a sandbox.** Agent processes run in
-   the [OS sandbox](../concepts/security.md#os-sandbox) (Seatbelt on macOS,
+   the [OS sandbox](https://docs.ligus.ai/concepts/security/#os-sandbox) (Seatbelt on macOS,
    bubblewrap + Landlock + seccomp on Linux), which denies the data dir (key
    seeds, workspace keys, `settings.json`, `serve.token`), credential dirs and
    direct network. The sandbox shares your user and kernel: it is not a
@@ -218,7 +218,7 @@ it.
    too. Either way, a host's signature on an agent's output never gives a turn
    that output triggers the host user's tier: the author gate resolves an
    agent's message through its reply chain to the lowest role of the humans
-   who started it ([the author gate](../concepts/security.md#author-gate)).
+   who started it ([the author gate](https://docs.ligus.ai/concepts/security/#author-gate)).
 5. **Invites carry every key, and first contact is trust on first use.** Chat events, attachment blobs, host liveness beats and
    workflow and coordinator lease beats follow signed key rotations on every
    host (readers take beats only at the newest authorized key). An invite
@@ -289,8 +289,8 @@ it.
    and the vote counts as the passkey's account. Without it the box answers
    `403 presence_required` and every device's fold drops such a vote.
 9. **Some agents still ask for actions in reply text.** Agents with tool use
-   get the typed [Ligus tools](../addons/ligus-mcp.md). Copilot and
-   Antigravity run over [ACP](../addons/acp.md); Codex and Claude Code do
+   get the typed [Ligus tools](https://docs.ligus.ai/addons/ligus-mcp/). Copilot and
+   Antigravity run over [ACP](https://docs.ligus.ai/addons/acp/); Codex and Claude Code do
    when their ACP adapter is installed, and Claude Code only with an API key
    set in Ligus and outside restricted-egress chats: a Claude subscription
    stays on `claude -p`. A turn whose ACP start fails falls back to the
@@ -345,7 +345,7 @@ it.
     is cached on a device for up to 24 hours, so a key removed from the forge
     keeps a link verified that long. SourceHut and Tangled links from a 2.0
     pre-release are shown as self-asserted and never verified. Checking a link tells the forge
-    that your device looked. See [Linked accounts](../features/linked-identities.md#privacy).
+    that your device looked. See [Linked accounts](https://docs.ligus.ai/features/linked-identities/#privacy).
 22. **Pre-encryption history isn't shown.** A device with a workspace key
     never applies a plaintext body from the relay, so events a workspace
     stored on a relay before it had a key don't appear on devices that sync
@@ -353,7 +353,7 @@ it.
 23. **A shell-tier Claude Code turn holds your Claude account.** Ligus
     starts Claude Code without cloud routines, scheduled tasks, background
     monitors, push, your plugins, hooks or MCP servers
-    ([details](../concepts/security.md#claude-code-turn)), but at the
+    ([details](https://docs.ligus.ai/concepts/security/#claude-code-turn)), but at the
     *Edits + shell* tier and above the agent can start its own `claude`
     with other flags, and your login is reachable from the sandbox. That
     `claude` can create a cloud routine that runs on Anthropic's side; the
@@ -433,7 +433,7 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 | Host | Ligus's own git calls ran repository hooks and fsmonitor | They never do |
 | Host | Agent CLIs, MCP servers, pre-flight and git inherited Ligus's secrets | Child processes start from an allow-listed environment: no Ligus secrets, and only the provider key configured for that runtime |
 | Host | Restricted egress still loaded the repository's Claude Code settings and hooks | Under restricted egress Claude Code loads user settings only, with hooks off |
-| Host | A Claude Code turn inherited the user's whole Claude Code setup: cloud routines and remote triggers (run on Anthropic's side under the user's account and connectors), cron, background monitors, push, cross-session messaging, workflows, user and plugin MCP servers, hooks, plugins and skills | Every turn gets a built-in tool allow-list, the out-of-turn tools denied (by flag, in the turn home's settings, and by env), strict MCP with only Ligus's and the chat's servers, and no settings, hooks, plugins or skills unless the workspace opts in ([details](../concepts/security.md#claude-code-turn)) |
+| Host | A Claude Code turn inherited the user's whole Claude Code setup: cloud routines and remote triggers (run on Anthropic's side under the user's account and connectors), cron, background monitors, push, cross-session messaging, workflows, user and plugin MCP servers, hooks, plugins and skills | Every turn gets a built-in tool allow-list, the out-of-turn tools denied (by flag, in the turn home's settings, and by env), strict MCP with only Ligus's and the chat's servers, and no settings, hooks, plugins or skills unless the workspace opts in ([details](https://docs.ligus.ai/concepts/security/#claude-code-turn)) |
 | Host | Ligus's own MCP tools were refused in non-interactive Claude Code, Copilot and ACP turns (nobody to approve them) | Pre-approved: `--allowedTools mcp__ligus`, `--allow-tool=ligus`, and ACP permission requests for Ligus tools |
 | Host | Chat markdown loaded remote images, an exfiltration channel | Remote images render as links |
 | Host | A keyed workspace accepted plaintext bodies from the relay, so a relay could inject events | Keyed workspaces skip any unsealed body |
@@ -470,7 +470,7 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 | Keys (Track B residuals) | Lease beats stayed on the passphrase key; a flood of junk bodies could evict parked bodies waiting for an authorized rotation (B-11); invite and DM codes were sealed to whatever keys the relay directory listed | Lease beats follow the keyring; parked bodies are ranked and junk goes first; codes go to signed directory keys, or after an Unverified recipient warning |
 | Secrets (Track B residuals) | The keychain unlock item trusted whichever process created it; an unusable keychain silently moved secrets to plain files; the passkey loopback read unbounded lines and its nonce was on the browser's command line (B-12) | An explicit access list for the Ligus binary (designated requirement for release apps); macOS refuses without `LIGUS_SECRET_BACKEND=file`; the loopback caps what it reads and the browser opens a private redirect page |
 | Relay (E-5) | The ligus-auth access token was sent to any configured relay, an invite's included | Only to the relay origin its session was signed in for |
-| Host (C-9) | An agent could write hooks or MCP servers into `~/.claude`, `~/.codex` and the other CLIs' config, which ran unsandboxed on the user's next CLI start | CLI agents run with a per-turn home seeded with the top-level config files; their real config dirs aren't writable, and only refreshed sign-in files are copied back ([details](../addons/acp.md#cli-home)) |
+| Host (C-9) | An agent could write hooks or MCP servers into `~/.claude`, `~/.codex` and the other CLIs' config, which ran unsandboxed on the user's next CLI start | CLI agents run with a per-turn home seeded with the top-level config files; their real config dirs aren't writable, and only refreshed sign-in files are copied back ([details](https://docs.ligus.ai/addons/acp/#cli-home)) |
 | Host (C-13) | A macOS agent could drive other apps with Apple Events or read the pasteboard | The Seatbelt profile denies Apple Events and the pasteboard services |
 | Host (C-14) | A runtime's trust digest didn't cover its provider id or metrics endpoint | It covers both, and a non-default driver |
 | Agents | Agents filed actions through reply text, and every host but the desktop ignored it | Typed Ligus tools with a per-turn credential, budgets, an audit trail and agent-signed effects; one directive parser on every host |
@@ -483,7 +483,7 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 | Agents (Track C/D residuals) | An ACP adapter or legacy CLI adapter could write an unbounded stdout line (or endless output, or stderr) and grow the app's memory | Agent stdout lines are capped at 8 MiB and a turn's output at 256 MiB (`LIGUS_AGENT_MAX_LINE_BYTES`, `LIGUS_AGENT_MAX_OUTPUT_BYTES`); past either the turn ends with an error and the agent is stopped. 256 KiB of stderr is kept for error messages |
 | Agents (Track C/D residuals) | ACP `fs/*`, the built-in file tools and the CLI-home copy-back checked a path and then opened it by name, so a directory swapped for a symlink in between redirected the host's read or write outside the worktree | Files are opened beneath the turn's directory one component at a time with `openat` (`O_NOFOLLOW` on every component, `O_DIRECTORY` for parents); a symlink anywhere on the way fails the open (macOS and Linux; Windows keeps the path checks only) |
 | Agents (Track C/D residuals) | An agent could write a valid sign-in for a different account into its turn home, and the copy-back installed it as the user's CLI sign-in | Copy-back requires the same keys and the same account fields (account id, email, user, API key, `id_token` claims) as the file it replaces; otherwise it is dropped and logged. Claude Code's file has no account field, so only its plan and shape are checked |
-| Sandbox (Track C/D residuals) | The Seatbelt profile protected `.git`, `.claude`, `.vscode`, `ligus.config.toml` and the other protected names only at the worktree's top level and only in their exact case | The profile also denies writes to each protected name at any depth and in any case (`sub/.claude/`, `.CLAUDE/`). The profile stays default-allow in 2.0; see [the OS sandbox](../concepts/security.md#os-sandbox) for why and what that leaves open |
+| Sandbox (Track C/D residuals) | The Seatbelt profile protected `.git`, `.claude`, `.vscode`, `ligus.config.toml` and the other protected names only at the worktree's top level and only in their exact case | The profile also denies writes to each protected name at any depth and in any case (`sub/.claude/`, `.CLAUDE/`). The profile stays default-allow in 2.0; see [the OS sandbox](https://docs.ligus.ai/concepts/security/#os-sandbox) for why and what that leaves open |
 | Agents (Track C/D residuals) | `maxSpendUsd` only refused Ligus tool calls, counted only ACP `usage_update` (whatever its currency, and only upward deltas), and never stopped a turn | Reaching the budget ends the turn (ACP `session/cancel`, API streams closed); ACP reports must be USD and non-decreasing or a budgeted turn ends; Anthropic, OpenAI, OpenRouter and Azure turns are charged from the API's token usage at list prices (unknown models at the highest rate). An agent that under-reports over ACP is still only held to what it reports |
 | Agents (Track C/D residuals) | Budgets were per turn only, so one human message could fan out through hand-offs to about 24 turns of 8 proposals each; ACP permission escalations asked people without counting against `maxAsks` | A cascade budget (tool calls, proposals, hand-offs, questions) is shared by every turn descended from the same human message on a device; permission escalations count as questions and are denied past either question budget |
 | Sandbox (C-12) | On Linux the egress proxy's token was an argument of the sandbox helper, readable by every user on the host with `ps` | It reaches the helper in its environment (`LIGUS_SANDBOX_PROXY_TOKEN`, readable only by your user), and the helper removes it before running the agent |

@@ -4,8 +4,8 @@ Ligus is local-first: every device (a desktop app, a `ligus serve` box, a
 `ligus worker`) keeps its own copy of the workspace and its own keys. The
 only shared service is an optional **relay** that forwards end-to-end
 encrypted events between devices and, if you want, tunnels your phone to
-your home box. So "deploying Ligus" means deciding which devices you run and
-whether, and where, you run a relay.
+your home box. So deploying Ligus on the Langstroth platform means deciding
+which devices you run and whether, and where, you run a relay.
 
 There are five shapes. The first three ship today, the fourth is in preview,
 and the fifth is a design.

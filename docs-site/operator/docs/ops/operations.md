@@ -1,7 +1,7 @@
 # Operations
 
 Running Ligus day to day: health checks, logs, backups and restores, and
-upgrades. For problems by symptom, see [Troubleshooting](troubleshooting.md).
+upgrades. For problems by symptom, see [Troubleshooting](https://docs.ligus.ai/help/troubleshooting/).
 
 ## What to monitor
 
@@ -59,7 +59,7 @@ any events it hadn't synced yet.
 |---|---|---|---|
 | `hive.db` (+ `-wal`, `-shm`) | yes | yes | all events (SQLite, WAL mode) |
 | `identity.json` | yes | yes | public identity |
-| `secrets/` (`ligus.keychain-db` on macOS), `credentials/` (systemd-creds), or `keys/` (file fallback) | yes | yes | **private key seeds**, workspace keys, API keys and tokens (see [Key storage](../concepts/identity.md#key-storage)) |
+| `secrets/` (`ligus.keychain-db` on macOS), `credentials/` (systemd-creds), or `keys/` (file fallback) | yes | yes | **private key seeds**, workspace keys, API keys and tokens (see [Key storage](https://docs.ligus.ai/concepts/identity/#key-storage)) |
 | `settings.json` | yes | | settings; secrets only as `{"set": true}` |
 | `config.toml` | | yes | relay URL and room (the workspace key and relay token are in the secret store) |
 | `serve.token`, `serve-state.json` | | serve | direct-path token, read marks |
@@ -136,10 +136,10 @@ untouched, see [Upgrading from Hive 1.x](../deploy/upgrade-from-hive.md).
   `.ligus/stopped-turns/`), checkouts of deleted or archived chats (their
   `hive/chat/…` branches are kept), and marks proposals whose diff no longer
   applies as stale. **Settings → Guards → Sweep now** runs it at once. See
-  [Hygiene](../features/guards.md#hygiene).
+  [Hygiene](https://docs.ligus.ai/features/guards/#hygiene).
 - **Foreign-workspace purge**: a worker removes events of other workspaces
   that older clients pushed into its room, after a `hive.db.bak-foreign-purge-<time>`
   backup next to the database.
 - **Plan-window throttles** pause scheduled runs, then workflow stages and
   hand-offs, near a subscription's usage limit. See
-  [Plan windows](../features/guards.md#plan-windows-staggered-throttles).
+  [Plan windows](https://docs.ligus.ai/features/guards/#plan-windows-staggered-throttles).

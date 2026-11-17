@@ -82,5 +82,5 @@ $L stop --role serve --data-dir ~/.ligus-serve
 
 `--role worker` runs a worker instead; `--systemd` (Linux) installs a user
 unit. The desktop app itself is installed with Homebrew and opened by you:
-see [Install with Homebrew](../getting-started/homebrew.md). More on the
+see [Install with Homebrew](https://docs.ligus.ai/getting-started/homebrew/). More on the
 home box: [Personal fleet](personal-fleet.md).

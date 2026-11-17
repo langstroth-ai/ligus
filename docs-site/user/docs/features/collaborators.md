@@ -93,7 +93,7 @@ the line says they got it.
 
 The desktop and `ligus serve` run the same code for this. On a box the phone
 sees `pending` and a later `inviteDelivery` (see the
-[serve API](../reference/serve-api.md)).
+[serve API](https://docs.langstroth.ai/reference/serve-api/)).
 
 ## Contacts (relay v0.3)
 

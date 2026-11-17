@@ -9,7 +9,7 @@ the 2.0.0 code. For what each Settings tab does in the app, see
 | `settings.json` in the desktop's app data dir | this desktop | no | the Settings window |
 | `ligus.config.toml` (workspace root, then app data dir) | this device | no | you, and the app when you add runtimes or MCP servers |
 | `config.toml` in a CLI data dir | one `ligus` device | no | `ligus enroll` |
-| Environment variables | one process | no | you; see [Environment variables](env-vars.md) |
+| Environment variables | one process | no | you; see [Environment variables](https://docs.langstroth.ai/reference/env-vars/) |
 | The workspace config log | the workspace | **yes**, E2EE | Admins and members, through the app and CLI |
 | `<repo>/.ligus/runtimes.json`, `mcp-servers.json` | one workspace folder on this device | no | the app |
 
@@ -87,7 +87,7 @@ See [Flow](../features/flow.md).
 
 ## `ligus.config.toml`
 
-See [Configuration (TOML)](config-toml.md). Note that the parser ignores
+See [Configuration (TOML)](https://docs.langstroth.ai/reference/config-toml/). Note that the parser ignores
 sections it doesn't know (for example `[retrieval]` and `[[runtime_pools]]`
 in older examples) without a warning, and that `[[mcp_servers]]` entries
 default to `enabled = false` there, while the CLI's `LIGUS_MCP_CONFIG` file

@@ -38,7 +38,7 @@ Settings → **Profile** → **Linked accounts** → **Link an account**:
    device's contact card (people who have your card see it).
 3. Ligus drafts one **statement** per workspace. Each names your account,
    your account key, that workspace, the forge, the stable id and a validity
-   of one year. See [the statement reference](../reference/identity-link-statement.md).
+   of one year. See [the statement reference](https://docs.langstroth.ai/reference/identity-link-statement/).
 4. Sign each statement with an SSH key the forge lists for you:
     - **With your ssh-agent:** Ligus lists the agent's keys that the forge
       also lists; pick one (a hardware key asks for a touch).

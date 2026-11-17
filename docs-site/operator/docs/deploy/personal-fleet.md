@@ -213,7 +213,7 @@ set -a; . ~/.config/ligus-serve/ligus-serve.env; set +a
     name for "from anywhere" access.
 
 See [Remote access for your phone](../networking/remote-access.md) and
-[Ligus on your phone](../features/phone-app.md).
+[Ligus on your phone](https://docs.ligus.ai/features/phone-app/).
 
 ## 9. Optional: a worker for heavy agents
 

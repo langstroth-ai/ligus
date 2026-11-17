@@ -1,4 +1,4 @@
-# Ligus as a managed service (GitHub-account identity)
+# Langstroth as a managed service (GitHub-account identity)
 
 Status: planning + P1 in progress. This captures the target and the staged path,
 including the **one account, many devices** model (e.g. the same person on a
@@ -80,7 +80,7 @@ zero-friction (no token ⇒ open).
 TURN-forwarding flag) embedded in a signed token; relay-side enforcement of those
 limits; durable storage; Stripe → token issue/revoke; rate limits. See
 [`tiering.md`](tiering.md) for the gate-placement model and
-[`docs-site/ops/pricing.md`](pricing.md) for the tier shape.
+[Pricing tiers](https://docs.ligus.ai/help/pricing/) for the tier shape.
 
 ## Fine-grained admin controls (RBAC) — needed for a paid "team management" tier
 
@@ -244,7 +244,7 @@ resolved from the org directory at connect time.
 **Placement:** SSO, org/team sync, audit export, membership enforcement are
 **relay/server** capabilities (the OSS client is unchanged). Custom-role and
 policy-template *editors* are runtime-entitlement client UI. See
-[`docs-site/ops/pricing.md`](pricing.md) for the tier shape and
+[Pricing tiers](https://docs.ligus.ai/help/pricing/) for the tier shape and
 [`hive-issue-trackers.md`](https://github.com/ligus-ai/ligus/blob/main/docs/hive-issue-trackers.md) for the per-workspace issue/PR
 integration (also capability-gated).
 

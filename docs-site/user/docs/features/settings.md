@@ -32,12 +32,12 @@ the app data dir; the theme is stored locally per device.
 - **My devices** — devices that act as you in this workspace. **Add a
   device** takes the enrollment code a `ligus serve` box prints, so what you
   do from your phone through that box is authored as you rather than as a
-  separate member. See [Running ligus serve as your own device](../ops/serve-box.md).
+  separate member. See [Running ligus serve as your own device](https://docs.langstroth.ai/ops/serve-box/).
 - **Privacy → Share typing status** (on by default) — show people in a chat
   when you're typing. Only that you're typing is shared, sealed under the
   workspace key; never what you type. Off, this device only ever says "not
   typing". The phone app has the same switch. See
-  [Security](../security/index.md#encryption).
+  [Security](https://docs.langstroth.ai/security/#encryption).
 
 ## Appearance
 
@@ -101,9 +101,9 @@ Under **Advanced — set room & key by hand**:
   field shows `✓ set` once configured (enter a new value to replace it).
   See [Remote agents](#remote-agents-people-pane).
 
-See [Self-hosting a relay](../networking/self-host.md), the
-[team deployment guide](../ops/deployment.md), and the
-[pricing tiers](../ops/pricing.md).
+See [Self-hosting a relay](https://docs.langstroth.ai/networking/self-host/), the
+[team deployment guide](https://docs.langstroth.ai/ops/deployment/), and the
+[pricing tiers](../help/pricing.md).
 
 ### Team members
 
@@ -127,7 +127,7 @@ Tokens are stored on the relay only as hashes — Ligus shows the raw value
 once and never again. This panel appears only when you're an **admin**
 on a relay that supports user management (the relay operator made you an
 admin); everyone else sees a short explanatory note instead. See
-[The user and token admin API](../networking/self-host.md#the-user-and-token-admin-api).
+[The user and token admin API](https://docs.langstroth.ai/networking/self-host/#the-user-and-token-admin-api).
 The open-source relay build doesn't include that API, so the panel only
 appears against a relay that adds it.
 
@@ -300,7 +300,7 @@ Ligus **generates the exact command** — with the relay URL, room, a
 minted agent token, and workspace credentials filled in — for a
 developer to copy and run on the agent's box. Detached agents run on
 **workspace credentials**, never a personal API key. See
-[Headless agents](../concepts/headless-agents.md).
+[Headless agents](https://docs.langstroth.ai/concepts/headless-agents/).
 
 ## Notes
 
@@ -318,4 +318,4 @@ developer to copy and run on the agent's box. Detached agents run on
 - Workspace config round-trips through the TOML encoder, so hand-edited
   and GUI-edited `ligus.config.toml` files stay compatible (comments
   aren't preserved). See
-  [`ligus.config.toml` reference](../reference/config-toml.md).
+  [`ligus.config.toml` reference](https://docs.langstroth.ai/reference/config-toml/).

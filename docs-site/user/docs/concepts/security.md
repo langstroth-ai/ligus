@@ -23,7 +23,7 @@ The key is exchanged **out-of-band**:
 
 - The `hivews1:` invite code carries the key *inside the code itself*, so share
   the code over a channel you trust — paste it directly to the joiner. See the
-  [invite code format](../reference/invite-payload.md).
+  [invite code format](https://docs.langstroth.ai/reference/invite-payload/).
 - [Inviting a co-member](../features/invites.md#invite-someone-you-already-share-a-workspace-with)
   seals the code to their verified devices instead, so nothing sensitive is
   copy-pasted; the relay only stores the sealed drop.
@@ -72,7 +72,7 @@ same authorization engine, so authoring and folding can't disagree:
   votes. Proposal status is derived from counted votes, and *Applied* comes
   only from a human member's apply event for the approved content. A vote
   signed by a `ligus serve` box enrolled as its owner's device doesn't count
-  (see [Phone and serve approvals](../security/index.md#roles)).
+  (see [Phone and serve approvals](https://docs.langstroth.ai/security/#roles)).
 - **Agents.** An agent can sign with its own key, certified by the host it
   is bound to and retired when it moves; such events are judged by a capped
   Agent tier that never votes, applies or administers.
@@ -147,7 +147,7 @@ Every process Ligus starts for a turn (a CLI agent, a stdio MCP server,
 envelope, the runtime and the author gate. The plan is the same on the
 desktop, `ligus serve`, `ligus worker` and `ligus agent`.
 
-On Linux this is the strongest of [three tiers](../ops/linux-sandbox.md):
+On Linux this is the strongest of [three tiers](https://docs.langstroth.ai/ops/linux-sandbox/):
 bubblewrap + Landlock + seccomp where bubblewrap can create a user
 namespace; Landlock + seccomp without namespaces where it can't (Ubuntu
 24.04, whose AppArmor restricts user namespaces); none, with write-capable
@@ -207,7 +207,7 @@ turns refused, where neither is available. The table shows the first.
   reads, writes and egress allow-list without namespaces, with known gaps:
   TCP is limited by port rather than address, other processes are visible,
   and nothing can be created at the worktree's top level. See
-  [The Linux agent sandbox](../ops/linux-sandbox.md), including the
+  [The Linux agent sandbox](https://docs.langstroth.ai/ops/linux-sandbox/), including the
   optional AppArmor profile that restores bubblewrap on Ubuntu 24.04.
 - **Why the macOS profile is default-allow.** The Seatbelt profile allows
   by default and then denies what matters: every file write outside the
@@ -567,16 +567,42 @@ human member clears it. The lock is an event on the workspace config log, so
 every device applies it; clearing it is re-checked on ingest (a non-member,
 Viewer or agent account can't).
 
+## Passkeys: proving you were there {#passkeys}
+
+A device signature proves which device made an event, not that you were at
+it. So the changes that decide who can do what in a workspace also need a
+**passkey** from you:
+
+- **Creating a workspace** asks for a passkey and gives you a **recovery
+  key** (24 words). Keep the recovery key somewhere safe and register a
+  second passkey in **Settings → Passkeys & keys**; see
+  [Lost a passkey](https://docs.langstroth.ai/security/runbooks/#lost-passkey)
+  if you lose one.
+- **What asks for it:** adding or removing people and changing roles,
+  approving joins, revoking a device, rotating keys, guard changes such as
+  dearth mode or clearing a lockdown, workflow definitions, changing an
+  agent's host or runtime, and votes on proposals a person has to decide.
+- **Any passkey works:** Touch ID and iCloud Keychain, Windows Hello, Google
+  Password Manager, a phone over QR, a YubiKey. The desktop opens the
+  passkey prompt in your browser; the iPhone app asks directly.
+- **Agents never count as you.** An agent's output can't vote, approve or
+  administer, whatever it says.
+
+Every device checks these assertions itself, offline. The full list of
+events, what exactly is signed and how it is verified are in
+[Passkey presence](https://docs.langstroth.ai/security/#presence) on the
+operator site.
+
 ## What this page does not cover
 
-The full [security model](../security/index.md), the
-[threat model and known limitations](../security/threat-model.md), and the
-[incident runbooks](../security/runbooks.md) have their own section.
+The full [security model](https://docs.langstroth.ai/security/), the
+[threat model and known limitations](https://docs.langstroth.ai/security/threat-model/), and the
+[incident runbooks](https://docs.langstroth.ai/security/runbooks/) have their own section.
 
 Private key seeds live in the OS secret store: on macOS a dedicated
 keychain file inside the data dir, on a Linux desktop the Secret Service
 (through `secret-tool`), on a headless Linux box `systemd-creds`; owner-only
 files are a stated fallback only where no store works. See
 [Identity & devices](identity.md#key-storage) for what protects them and
-[Self-hosting a relay](../networking/self-host.md) for connection-level access
+[Self-hosting a relay](https://docs.langstroth.ai/networking/self-host/) for connection-level access
 control.

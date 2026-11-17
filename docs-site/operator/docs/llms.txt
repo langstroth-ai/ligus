@@ -1,0 +1,68 @@
+# Langstroth operator documentation
+
+> Langstroth is the platform behind Ligus (short for *ligustica*, the Italian honeybee): the end-to-end-encrypted relay, organization sign-in (ligus-auth), the Helm charts, and always-on Ligus hosts (`ligus serve` and `ligus worker`). The relay is content-blind: it stores and forwards encrypted event envelopes and never holds workspace keys. This site covers self-hosting, deploying, securing and operating it.
+
+Operator documentation: https://docs.langstroth.ai/ — pages below are the canonical reference. Using the Ligus apps (desktop, phone, CLI basics, workspaces, agents, workflows) is documented at https://docs.ligus.ai/ (see https://docs.ligus.ai/llms.txt).
+
+## Start here
+
+- [Choose a deployment](https://docs.langstroth.ai/deploy/): The five deployment shapes (solo, personal fleet, team on a relay, Kubernetes preview, keys-off-cluster design) with architecture diagrams.
+- [Deploying with an agent](https://docs.langstroth.ai/deploy/with-an-agent/): AGENTS.md, the ligus-deploy-k8s and ligus-deploy-local skills, and the non-interactive ligus-k8s / ligus-local tools with --json output; which steps stay with the human.
+
+## Deployment shapes
+
+- [Solo laptop](https://docs.langstroth.ai/deploy/solo/): The desktop app alone, no relay.
+- [Personal fleet](https://docs.langstroth.ai/deploy/personal-fleet/): Laptop plus an always-on `ligus serve` home server and the phone, directly over Tailscale or through the relay tunnel.
+- [Team on a relay](https://docs.langstroth.ai/ops/deployment/): Deploying and gating a relay, creating a workspace, inviting teammates, a shared worker, and a security checklist.
+- [Kubernetes (preview)](https://docs.langstroth.ai/deploy/kubernetes/): The relay and ligus Helm charts (preview, unpublished), what each pod holds, and known limits.
+- [Keys off the cluster (design)](https://docs.langstroth.ai/deploy/keys-off-cluster/): A cluster that runs only the relay and executors; not shipped.
+- [Multi-tenant (design)](https://docs.langstroth.ai/deploy/multi-tenant/): Three authorization layers for hosting many organisations; not implemented.
+- [Deploying with an LLM gateway](https://docs.langstroth.ai/deploy/model-gateways/): Route serve and worker agents through an operator-listed LLM gateway (LiteLLM, kgateway, Envoy AI Gateway, Inference Extension pools): chart allow-list, ServiceAccount-token, API-key and mTLS auth, credential injection, attribution headers.
+
+## Relay and auth
+
+- [Self-hosting a relay](https://docs.langstroth.ai/networking/self-host/): Building and running the relay, storage (Postgres or snapshot), TLS, token modes, membership, tunnel and APNs push, rate limits, monitoring, backups and upgrades.
+- [Sign in with your IdP (ligus-auth)](https://docs.langstroth.ai/deploy/ligus-auth/): Organization sign-in for the relay: device-code login, short-lived relay tokens, `ligus auth`.
+- [ligus-auth with Pocket ID](https://docs.langstroth.ai/deploy/ligus-auth-pocket-id/): A passkey-only identity provider, ligus-auth and the relay on one box.
+- [ligus-auth with Dex](https://docs.langstroth.ai/deploy/ligus-auth-dex/): ligus-auth behind Dex, which federates GitHub, LDAP, SAML and other identity sources.
+- [Server-side membership](https://docs.langstroth.ai/ops/server-side-membership/): Relay-managed team membership.
+
+## Hosts: ligus serve and worker
+
+- [Running ligus serve as your own device](https://docs.langstroth.ai/ops/serve-box/): `ligus serve enroll`, host liveness, apply-on-approve, and the 1.16 sync privacy upgrade note.
+- [Headless agents & setups](https://docs.langstroth.ai/concepts/headless-agents/): Enrolling a headless agent/worker on a remote box via the CLI.
+- [Repos on the home host](https://docs.langstroth.ai/ops/serve-repos/): The git checkouts agents on a `ligus serve` box work on, picked from the phone.
+- [Remote access for your phone](https://docs.langstroth.ai/networking/remote-access/): The relay tunnel, `ligus pair`, `ligus phones`, `ligus remote`, self-hosted relays and push.
+- [The Linux agent sandbox](https://docs.langstroth.ai/ops/linux-sandbox/): The three sandbox tiers for agent processes on Linux and the optional AppArmor profile for bubblewrap.
+
+## Operations
+
+- [Operations](https://docs.langstroth.ai/ops/operations/): Health endpoints, logs, backups and restore of data dirs, upgrades.
+- [Upgrading from Hive 1.x](https://docs.langstroth.ai/deploy/upgrade-from-hive/): 2.0 starts fresh: where each version keeps its data, setting up 2.0 next to 1.x, and removing 1.x.
+- [Building the dist](https://docs.langstroth.ai/ops/build/): Building the desktop app.
+
+## Security
+
+- [Security model](https://docs.langstroth.ai/security/): What each component holds, trust boundaries per deployment shape, encryption, roles, and the 2.0 guards.
+- [Threat model](https://docs.langstroth.ai/security/threat-model/): Attackers, what they can and can't do, and known limitations.
+- [Runbooks](https://docs.langstroth.ai/security/runbooks/): Device revocation, lost phone, compromised device, offboarding, key and token rotation.
+
+## Reference
+
+- [Environment variables](https://docs.langstroth.ai/reference/env-vars/): Every `LIGUS_*` variable, its default and who reads it.
+- [Configuration (TOML)](https://docs.langstroth.ai/reference/config-toml/): The `ligus.config.toml` reference.
+- [Serve HTTP API](https://docs.langstroth.ai/reference/serve-api/): Every `ligus serve` route, auth, limits and the SSE stream.
+- [Invite payload format](https://docs.langstroth.ai/reference/invite-payload/): The invite/enroll payload structure.
+- [Identity link statement](https://docs.langstroth.ai/reference/identity-link-statement/): The exact bytes a linked account signs, the signature format and the events that carry it.
+- [Wire protocols](https://docs.langstroth.ai/reference/wire-protocols/): The `/v1` relay wire contract and token format.
+
+## Networking roadmap
+
+- [LAN discovery](https://docs.langstroth.ai/networking/lan/): Peer discovery on a local network.
+- [Rendezvous relay](https://docs.langstroth.ai/networking/rendezvous/): How peers find each other over the internet.
+- [TURN fallback](https://docs.langstroth.ai/networking/turn/): Relayed connectivity when P2P fails.
+
+## Business model
+
+- [Tiering (open-core)](https://docs.langstroth.ai/ops/tiering/): The open-core model.
+- [Managed service plan](https://docs.langstroth.ai/ops/managed-service/): The hosted option.

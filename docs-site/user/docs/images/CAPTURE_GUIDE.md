@@ -41,7 +41,7 @@ elements).
    `osascript -e 'tell app "Ligus" to set bounds of window 1 to {0,0,1440,900}'`.
 6. **Capture:** `Cmd+Shift+4` then `Space` → click a window for a tight crop, or
    `Cmd+Shift+4` + drag for a region. PNGs land on the Desktop.
-7. **Output dir:** `docs-site/images/`. Rename + move each capture after taking it.
+7. **Output dir:** `docs-site/user/docs/images/`. Rename + move each capture after taking it.
 
 ### Conventions
 
@@ -368,7 +368,7 @@ The docs **build** needs the shots embedded by real pages. Nine are still
 missing (two — `onboarding-welcome`, `onboarding-identity` — already exist):
 
 ```bash
-cd docs-site/images && ls -1 *.png
+cd docs-site/user/docs/images && ls -1 *.png
 
 # Referenced by docs pages (11 total; ✅ = already captured):
 #   agents-pane.png            collaborators.png        first-chat-empty.png
@@ -386,8 +386,8 @@ for f in *.png; do pngquant --quality=70-90 --skip-if-larger --strip --output "$
 Preview against the docs, then commit:
 
 ```bash
-bash scripts/serve-docs.sh && open http://127.0.0.1:8000/hive/
-git add docs-site/images/*.png
+bash scripts/serve-docs.sh user && open http://127.0.0.1:8000/
+git add docs-site/user/docs/images/*.png
 git commit -m "docs: refresh UI screenshots for the 1.0 app"
 ```
 

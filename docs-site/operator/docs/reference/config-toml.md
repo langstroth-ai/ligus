@@ -19,7 +19,7 @@ round-trip cleanly.
 > API key, and Claude permission mode are edited at runtime in
 > Settings → Team sync and persist to a `settings.json` in the app data
 > dir (not this file); the `[transport]` keys below only *seed* them on first
-> launch. The theme is stored per-device. See [Settings](../features/settings.md).
+> launch. The theme is stored per-device. See [Settings](https://docs.ligus.ai/features/settings/).
 
 > **Managed in-app, not in this file.** Vaults, skills, and the
 > install-from-the-internet MCP catalog are managed through the right-rail
@@ -157,7 +157,7 @@ network access. Each named preset carries the boolean capability flags
 ### `[[runtimes]]`
 
 One block per LLM or CLI agent. See
-[Configuring a runtime](../getting-started/configuring-a-runtime.md).
+[Configuring a runtime](https://docs.ligus.ai/getting-started/configuring-a-runtime/).
 
 | Key                             | Type     | Notes                                             |
 |---------------------------------|----------|---------------------------------------------------|
@@ -174,7 +174,7 @@ One block per LLM or CLI agent. See
 | `keep_alive`                    | string   | Optional keep-alive hint                          |
 | `think`                         | bool     | Optional thinking switch (Ollama)                 |
 | `max_tool_rounds`               | int      | Tool-loop rounds per turn (default 24, max 100)   |
-| `driver`                        | string   | Subscription CLIs: `auto` (default), `acp` or `legacy`; see [ACP](../addons/acp.md#driver) |
+| `driver`                        | string   | Subscription CLIs: `auto` (default), `acp` or `legacy`; see [ACP](https://docs.ligus.ai/addons/acp/#driver) |
 | `supports_embeddings`           | bool     | Whether the runtime can embed                     |
 | `supports_tools`                | bool     | Whether the runtime accepts tool calls            |
 | `context_window`                | int      | Optional context-window size                      |
@@ -187,7 +187,7 @@ One block per LLM or CLI agent. See
 
 ### `[[mcp_servers]]`
 
-Model Context Protocol servers. See [MCP servers](../addons/mcp.md).
+Model Context Protocol servers. See [MCP servers](https://docs.ligus.ai/addons/mcp/).
 
 | Key         | Type     | Notes                                            |
 |-------------|----------|--------------------------------------------------|

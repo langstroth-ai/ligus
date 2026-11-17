@@ -10,7 +10,7 @@ where its protection stops. It has three pages:
 - [Runbooks](runbooks.md): device revocation, key rotation, a lost phone,
   offboarding someone, a compromised box.
 
-[Security & trust](../concepts/security.md) is the short list of guarantees;
+[Security & trust](https://docs.ligus.ai/concepts/security/) is the short list of guarantees;
 these pages explain them and their edges. Report vulnerabilities as
 described in
 [`SECURITY.md`](https://github.com/ligus-ai/ligus/blob/main/SECURITY.md).
@@ -189,14 +189,14 @@ it names.
   resolved gets no tools. A turn an agent triggers (a hand-off, an @mention
   cascade, a workflow stage) runs at the lowest role of the humans who
   started the chain, never at the tier of the host that signed the agent's
-  reply. See [the author gate](../concepts/security.md#author-gate).
+  reply. See [the author gate](https://docs.ligus.ai/concepts/security/#author-gate).
 - **Worker write access** is off by default:
   `LIGUS_WORKER_PERMISSION_MODE` must raise it, and then only Admins' messages
   drive write-capable turns there unless you lower `LIGUS_MCP_MIN_ROLE`.
 - **Agent processes are sandboxed.** No agent process can read Ligus's keys,
   settings, database or `serve.token`, write outside its worktree, or reach
   the network except through a per-chat allow-list. See [the OS
-  sandbox](../concepts/security.md#os-sandbox).
+  sandbox](https://docs.ligus.ai/concepts/security/#os-sandbox).
 - **Phone and serve approvals.** A `ligus serve` box enrolled as your device
   signs as you, so a vote, reject, lockdown clear or agent rebind from the
   phone carries **your passkey** over that event (`POST v1/presence/prepare`,
@@ -205,7 +205,7 @@ it names.
   a vote such a box signs without your passkey.
 - **Agents** sign with their own host-certified keys, judged by a capped
   Agent tier that never votes, applies or administers. They act through the
-  [Ligus tools](../addons/ligus-mcp.md): proposals only, behind a per-turn
+  [Ligus tools](https://docs.ligus.ai/addons/ligus-mcp/): proposals only, behind a per-turn
   credential, with budgets and an audit trail. A host that can't certify a
   key signs for the agent (see
   [Known limitations](threat-model.md#known-limitations)).
@@ -261,15 +261,15 @@ what need a **passkey** assertion over the event:
 
 | Guard | What it does | Who can switch it | Details |
 |---|---|---|---|
-| **Sandbox envelope** | per turn: isolated worktree, protected dirs (`.git`, `.ligus`, `.hive`, `.claude`, `.vscode`, config files), egress policy, secret redaction in logged replies; only ever tightens | automatic | [The sandbox envelope](../concepts/security.md#the-sandbox-envelope-around-every-agent-turn) |
-| **OS sandbox** | every agent process: Seatbelt (macOS) or bubblewrap + Landlock + seccomp (Linux; Landlock + seccomp without namespaces where bubblewrap can't run, see [tiers](../ops/linux-sandbox.md)); no reads of Ligus's data, keys or `serve.token`; writes only in the worktree; network only through the turn's egress proxy (plus opt-in [egress presets](../concepts/security.md#egress-presets), off by default); agents can't commit; where no sandbox exists every agent process is refused (any tier) and HTTP models answer without local tools | automatic | [The OS sandbox](../concepts/security.md#os-sandbox), [Sandbox defaults](../concepts/security.md#sandbox-defaults), [Linux tiers](../ops/linux-sandbox.md) |
-| **Workspace trust** | repo-supplied runtimes and MCP servers stay inert until enabled on this device, per exact command | you, per device | [Trust this workspace](../concepts/security.md#workspace-trust) |
-| **Dearth mode** | two Admins for new members; cross-account approval for new devices; agents limited to allow-listed MCP servers; human approval for protected (brood) paths | Admin | [Dearth mode](../features/guards.md#dearth-mode) |
-| **Chat lockdown** | on an injection marker, a credential in a diff or an unrequested CI change: no network or MCP for that chat's agents, human approval on every proposal | raised by anyone (or automatically); cleared by a human Contributor+ | [Chat lockdown](../features/guards.md#chat-lockdown) |
-| **Leases** | exactly one device drives a workflow run or the workspace coordinator role; signed heartbeats over relay presence; epoch fencing | Contributor (signed by the holder device) | [Which device drives a run](../features/workflows.md#which-device-drives-a-run) |
-| **Ligus tools** | agents act through typed tools bound to one turn (an HMAC credential that expires with it): proposals only, never votes, applies or admin changes; budgets per turn; a device-local audit per call and a synced summary per turn | automatic; budgets per device (`LIGUS_MCP_MAX_*`) | [Ligus tools for agents](../addons/ligus-mcp.md) |
-| **Exfiltration guard** | once a turn has read project files, MCP calls are refused | on by default; CLI can disable with `LIGUS_MCP_AFTER_READS` | [MCP servers](../addons/mcp.md) |
-| **Hygiene sweep** | removes leftover worktrees (saving patches), marks un-appliable proposals stale | automatic | [Hygiene](../features/guards.md#hygiene) |
+| **Sandbox envelope** | per turn: isolated worktree, protected dirs (`.git`, `.ligus`, `.hive`, `.claude`, `.vscode`, config files), egress policy, secret redaction in logged replies; only ever tightens | automatic | [The sandbox envelope](https://docs.ligus.ai/concepts/security/#the-sandbox-envelope-around-every-agent-turn) |
+| **OS sandbox** | every agent process: Seatbelt (macOS) or bubblewrap + Landlock + seccomp (Linux; Landlock + seccomp without namespaces where bubblewrap can't run, see [tiers](../ops/linux-sandbox.md)); no reads of Ligus's data, keys or `serve.token`; writes only in the worktree; network only through the turn's egress proxy (plus opt-in [egress presets](https://docs.ligus.ai/concepts/security/#egress-presets), off by default); agents can't commit; where no sandbox exists every agent process is refused (any tier) and HTTP models answer without local tools | automatic | [The OS sandbox](https://docs.ligus.ai/concepts/security/#os-sandbox), [Sandbox defaults](https://docs.ligus.ai/concepts/security/#sandbox-defaults), [Linux tiers](../ops/linux-sandbox.md) |
+| **Workspace trust** | repo-supplied runtimes and MCP servers stay inert until enabled on this device, per exact command | you, per device | [Trust this workspace](https://docs.ligus.ai/concepts/security/#workspace-trust) |
+| **Dearth mode** | two Admins for new members; cross-account approval for new devices; agents limited to allow-listed MCP servers; human approval for protected (brood) paths | Admin | [Dearth mode](https://docs.ligus.ai/features/guards/#dearth-mode) |
+| **Chat lockdown** | on an injection marker, a credential in a diff or an unrequested CI change: no network or MCP for that chat's agents, human approval on every proposal | raised by anyone (or automatically); cleared by a human Contributor+ | [Chat lockdown](https://docs.ligus.ai/features/guards/#chat-lockdown) |
+| **Leases** | exactly one device drives a workflow run or the workspace coordinator role; signed heartbeats over relay presence; epoch fencing | Contributor (signed by the holder device) | [Which device drives a run](https://docs.ligus.ai/features/workflows/#which-device-drives-a-run) |
+| **Ligus tools** | agents act through typed tools bound to one turn (an HMAC credential that expires with it): proposals only, never votes, applies or admin changes; budgets per turn; a device-local audit per call and a synced summary per turn | automatic; budgets per device (`LIGUS_MCP_MAX_*`) | [Ligus tools for agents](https://docs.ligus.ai/addons/ligus-mcp/) |
+| **Exfiltration guard** | once a turn has read project files, MCP calls are refused | on by default; CLI can disable with `LIGUS_MCP_AFTER_READS` | [MCP servers](https://docs.ligus.ai/addons/mcp/) |
+| **Hygiene sweep** | removes leftover worktrees (saving patches), marks un-appliable proposals stale | automatic | [Hygiene](https://docs.ligus.ai/features/guards/#hygiene) |
 
 All guard switches are events on the workspace config log and are
 re-checked on ingest by every device.

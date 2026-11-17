@@ -26,7 +26,7 @@ column says which. The relay's own variables are on
 | `LIGUS_RELAY_ISSUER_KEY` | unset | desktop, first launch only | relay issuer seed for minting agent tokens from the People pane (local only, never synced) |
 | `LIGUS_IDENTITY_MODE` | ignored | desktop and CLI | ignored since 2.0: every device verifies and folds by the same rules (a set value logs one warning). The founder's account key is pinned from the invite instead |
 | `LIGUS_DISABLE_P2P` | unset | desktop | any value turns off direct peer-to-peer sync (iroh) |
-| `LIGUS_SECRET_BACKEND` | the OS default | desktop, CLI | where secrets live: `keychain`, `secret-service`, `systemd-creds`, `k8s` or `file`. On macOS a keychain that can't be used is an error; `file` is the explicit opt-in to owner-only files ([key storage](../concepts/identity.md#key-storage)) |
+| `LIGUS_SECRET_BACKEND` | the OS default | desktop, CLI | where secrets live: `keychain`, `secret-service`, `systemd-creds`, `k8s` or `file`. On macOS a keychain that can't be used is an error; `file` is the explicit opt-in to owner-only files ([key storage](https://docs.ligus.ai/concepts/identity/#key-storage)) |
 
 On the desktop, the connection variables only **seed** `settings.json` the
 first time it is created; after that, Settings is the source of truth.
@@ -44,11 +44,11 @@ first time it is created; after that, Settings is the source of truth.
 | `LIGUS_MCP_AFTER_READS` | off | CLI | **turns off** the exfiltration guard that refuses MCP calls once a turn has read project files |
 | `LIGUS_MCP_CONFIG` | unset | CLI | path to a TOML file of MCP servers for headless turns and dashboard panels |
 | `LIGUS_MCP_MIN_ROLE` | `admin` for a write-capable turn, `contributor` for a read-only one | desktop, CLI | `viewer`, `contributor`, `admin` or `owner`: the minimum role of a message's author before its turn runs at its configured tier. Below it, Ligus's own tool loop replies tool-free, Claude Code, Antigravity and Copilot run read-only, and Codex, aider, pi and Hermes are refused with a note; an unknown author fails closed. A value below the default logs a warning at startup |
-| `LIGUS_SANDBOX` | on | desktop, CLI | `off` runs agent processes without the OS sandbox; write-capable agent turns are then refused (see [Sandbox defaults](../concepts/security.md#sandbox-defaults)). Linux: `landlock` skips bubblewrap and uses the [Landlock tier](../ops/linux-sandbox.md); `bwrap` refuses the Landlock fallback |
+| `LIGUS_SANDBOX` | on | desktop, CLI | `off` runs agent processes without the OS sandbox; write-capable agent turns are then refused (see [Sandbox defaults](https://docs.ligus.ai/concepts/security/#sandbox-defaults)). Linux: `landlock` skips bubblewrap and uses the [Landlock tier](../ops/linux-sandbox.md); `bwrap` refuses the Landlock fallback |
 | `LIGUS_REQUIRE_SANDBOX` | unset | serve, worker, tests | `1`: `ligus serve` and `ligus worker` exit with code 3 instead of starting on a host without an agent sandbox, and the sandbox tests fail instead of printing `SKIPPED`. Any value other than empty, `0`, `false`, `no` or `off` (any case) counts as on, so a typo never turns the guard off |
 | `LIGUS_SANDBOX_UNIX_SOCKETS` | unset | desktop and CLI (Linux) | `allow` lets sandboxed agents create unix sockets again (known host sockets stay masked) |
 | `LIGUS_SANDBOX_EGRESS_ALLOW` | unset | desktop, CLI | comma-separated `host[:port]` agents may also reach through the egress proxy under the normal envelope (not under dearth mode or a lockdown); `run_command` and pre-flight get only these |
-| `LIGUS_SANDBOX_EGRESS_PRESETS` | unset (off) | desktop, CLI | comma-separated [egress presets](../concepts/security.md#egress-presets) on for every turn on this host: `package-registries` (npm, crates.io, PyPI, GitHub) and `claude-connectors` (`mcp-proxy.anthropic.com`, Claude Code turns only; lets the agent reach the services you connected to claude.ai). Ignored under dearth mode or a lockdown. On the desktop you can also switch presets per workspace and per chat in **Settings → Guards → Network presets** |
+| `LIGUS_SANDBOX_EGRESS_PRESETS` | unset (off) | desktop, CLI | comma-separated [egress presets](https://docs.ligus.ai/concepts/security/#egress-presets) on for every turn on this host: `package-registries` (npm, crates.io, PyPI, GitHub) and `claude-connectors` (`mcp-proxy.anthropic.com`, Claude Code turns only; lets the agent reach the services you connected to claude.ai). Ignored under dearth mode or a lockdown. On the desktop you can also switch presets per workspace and per chat in **Settings → Guards → Network presets** |
 | `LIGUS_SANDBOX_WRITE_ALLOW` | unset | desktop, CLI | comma-separated extra paths agent processes may write (e.g. `~/.cargo/registry`) |
 | `LIGUS_SANDBOX_READ_ALLOW` | unset | desktop, CLI | credential dirs under `~` an agent process may read after all (e.g. `~/.aws`) |
 | `LIGUS_AGENT_TIMEOUT_SECS` | `300` | desktop and CLI | wall-clock budget for one subprocess agent turn (aider, pi, ...) |
@@ -63,10 +63,10 @@ first time it is created; after that, Settings is the source of truth.
 | `LIGUS_PROVIDER_API_KEY` | unset | desktop and CLI | a provider key that overrides the provider's own variable |
 | `LIGUS_RUNTIME_TEST_TIMEOUT_SECS` | `45` | desktop | timeout of the runtime **Test** button |
 | `LIGUS_LOG` | `info` | desktop | log filter (`tracing` syntax, for example `debug` or `hive_runtime=debug`) |
-| `LIGUS_CLI_HOME` | per-turn | desktop, CLI | `shared` lets CLI agents write their real config dirs again. By default each turn gets a throwaway home ([details](../addons/acp.md#cli-home)) |
+| `LIGUS_CLI_HOME` | per-turn | desktop, CLI | `shared` lets CLI agents write their real config dirs again. By default each turn gets a throwaway home ([details](https://docs.ligus.ai/addons/acp/#cli-home)) |
 | `LIGUS_ACP_INIT_TIMEOUT_SECS` | `60` | desktop, CLI | how long an ACP agent may take to answer `initialize` before the turn falls back to the headless adapter |
 | `LIGUS_ACP_ASK_TIMEOUT_SECS` | `600` | desktop, CLI | how long an ACP permission request waits for a person before it's denied |
-| `LIGUS_MCP_MAX_TOOL_CALLS` | `64` | desktop, CLI | per-turn budget of [Ligus tool](../addons/ligus-mcp.md#budgets) calls |
+| `LIGUS_MCP_MAX_TOOL_CALLS` | `64` | desktop, CLI | per-turn budget of [Ligus tool](https://docs.ligus.ai/addons/ligus-mcp/#budgets) calls |
 | `LIGUS_MCP_MAX_PROPOSALS` | `8` | desktop, CLI | proposals per turn |
 | `LIGUS_MCP_MAX_HANDOFFS` | `2` | desktop, CLI | hand-offs per turn |
 | `LIGUS_MCP_MAX_ASKS` | `3` | desktop, CLI | questions to the chat per turn |
@@ -76,7 +76,7 @@ first time it is created; after that, Settings is the source of truth.
 | `LIGUS_MCP_MAX_CASCADE_PROPOSALS` | `12` | desktop, CLI | proposals per cascade |
 | `LIGUS_MCP_MAX_CASCADE_HANDOFFS` | `6` | desktop, CLI | hand-offs per cascade |
 | `LIGUS_MCP_MAX_CASCADE_ASKS` | `6` | desktop, CLI | questions and permission requests per cascade |
-| `LIGUS_MCP_MAX_SPEND_USD` | unset | desktop, CLI | spend per turn; reaching it ends the turn ([what is counted](../addons/ligus-mcp.md#spend)) |
+| `LIGUS_MCP_MAX_SPEND_USD` | unset | desktop, CLI | spend per turn; reaching it ends the turn ([what is counted](https://docs.ligus.ai/addons/ligus-mcp/#spend)) |
 | `LIGUS_MODEL_PRICES` | unset | desktop, CLI | `prefix=in/out,…` USD per million tokens, for pricing API turns against the spend budget |
 | `LIGUS_MCP_BRIDGE` | this binary | desktop, CLI | the program agents run as `ligus mcp-bridge` |
 

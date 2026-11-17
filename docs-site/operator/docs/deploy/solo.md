@@ -14,7 +14,7 @@ flowchart LR
 - macOS (Apple Silicon), Windows or Linux.
 - A runtime: the Claude Code CLI signed in to your subscription (the
   default), Codex, a local Ollama, or an API key. See
-  [Configuring a runtime](../getting-started/configuring-a-runtime.md).
+  [Configuring a runtime](https://docs.ligus.ai/getting-started/configuring-a-runtime/).
 - A git repository to work in (agents edit isolated git worktrees).
 
 ## 1. Install
@@ -31,7 +31,7 @@ flowchart LR
 
     Download the installer, `.AppImage`, `.deb` or `.rpm` from the
     [releases page](https://github.com/ligus-ai/ligus/releases). These
-    builds are unsigned; see [First launch](../getting-started/first-launch.md#install).
+    builds are unsigned; see [First launch](https://docs.ligus.ai/getting-started/first-launch/#install).
 
 Make sure your runtime works in a terminal first:
 
@@ -43,7 +43,7 @@ claude --version        # or: codex --version, ollama list
 
 Open **Ligus**. The five-step wizard asks for a name (and shows your safety code),
 the project folder, a runtime, an optional relay (**skip it**) and a theme.
-See [First launch](../getting-started/first-launch.md#wizard-steps).
+See [First launch](https://docs.ligus.ai/getting-started/first-launch/#wizard-steps).
 
 Expected result: an empty workspace with your folder bound and the runtime
 you picked as the chat's primary runtime. **Settings → Team sync** shows no
@@ -54,8 +54,8 @@ relay.
 Click **+** next to **Chats**, type a request and press Enter. The reply
 streams in. If the agent changes files, the changes arrive as a
 **proposal** in the Review pane; nothing touches your working tree until you
-click **Implement**. See [Your first chat](../getting-started/first-chat.md)
-and [Git integration](../features/git.md).
+click **Implement**. See [Your first chat](https://docs.ligus.ai/getting-started/first-chat/)
+and [Git integration](https://docs.ligus.ai/features/git/).
 
 ## 4. Keep it safe
 
@@ -67,7 +67,7 @@ and [Git integration](../features/git.md).
   your keys and every chat; see
   [Backups and restore](../ops/operations.md#backups-and-restore).
 - Private keys and tokens are in the OS secret store (a Ligus keychain on
-  macOS); see [Key storage](../concepts/identity.md#key-storage). Use
+  macOS); see [Key storage](https://docs.ligus.ai/concepts/identity/#key-storage). Use
   full-disk encryption anyway.
 
 ## Where things live

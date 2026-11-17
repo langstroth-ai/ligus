@@ -13,12 +13,12 @@ through it.
 > so any client can implement them.
 
 To set up the box and pair a phone, see
-[Remote access for your phone](../networking/remote-access.md). If the box
+[Remote access for your phone](https://docs.langstroth.ai/networking/remote-access/). If the box
 is yours alone, enroll it as your own device with `ligus serve enroll`
-([Running ligus serve as your own device](../ops/serve-box.md)): otherwise
+([Running ligus serve as your own device](https://docs.langstroth.ai/ops/serve-box/)): otherwise
 it's a separate member and what you send from the phone shows under the
 box's name rather than yours. For the whole
-setup end to end, see [Personal fleet](../deploy/personal-fleet.md).
+setup end to end, see [Personal fleet](https://docs.langstroth.ai/deploy/personal-fleet/).
 
 ## Pairing: direct or through the relay
 
@@ -35,7 +35,7 @@ Pair by scanning the QR code `ligus pair` prints (or opening its
 details as well as, when there is a usable direct address, the URL and token.
 A box listening only on loopback (`127.0.0.1`) with remote access off prints
 no link, since the phone can't reach it; see
-[Remote access](../networking/remote-access.md).
+[Remote access](https://docs.langstroth.ai/networking/remote-access/).
 You can also add a host by typing its address; the app assumes
 `http://…:8787`.
 
@@ -79,7 +79,7 @@ pairing. Choose when it locks again: immediately, after 1 minute or after 5
 minutes in the background. A privacy cover hides content in the app
 switcher. Networking keeps running while the app is locked. The lock protects
 the app on an unlocked phone; it isn't a substitute for
-[revoking a lost phone](../security/runbooks.md#lost-phone).
+[revoking a lost phone](https://docs.langstroth.ai/security/runbooks/#lost-phone).
 
 ## Demo mode
 
@@ -130,7 +130,7 @@ sent anywhere, and there's no push in the demo.
     whether your desktop is available. If it's closed, the turn waits and is
     answered when the desktop opens. For chats the phone creates to be
     answered by your desktop, enroll the box as
-    [your own device](../ops/serve-box.md).
+    [your own device](https://docs.langstroth.ai/ops/serve-box/).
 
 You can also move an existing agent to a different host from the phone.
 Creating agents and editing runtimes stay on the desktop.
@@ -178,7 +178,7 @@ works in on your home host. Tap it to switch the chat to another checkout,
 clone a repo from any code host your host is connected to (GitHub, GitLab,
 Forgejo, Gitea or Codeberg; filter by host), pull the latest, or open a pull
 or merge request from the chat's branch. **Settings → Code hosts** lists
-your host's connections (it holds the tokens, never the phone). See [Repos on the home host](../ops/serve-repos.md).
+your host's connections (it holds the tokens, never the phone). See [Repos on the home host](https://docs.langstroth.ai/ops/serve-repos/).
 
 ## Reviewing proposals
 
@@ -225,7 +225,7 @@ set view: an alternative is applied only after a passing pre-flight, never on
 approval.
 
 Approving a file-diff proposal from the phone doesn't apply it, unless the
-box is set to (see [`LIGUS_SERVE_APPLY_ON_APPROVE`](../ops/serve-box.md#apply-on-approve)).
+box is set to (see [`LIGUS_SERVE_APPLY_ON_APPROVE`](https://docs.langstroth.ai/ops/serve-box/#apply-on-approve)).
 As on the desktop, **Implement** applies it.
 
 ## Workflow approvals
@@ -238,7 +238,7 @@ the stages as its text. See [Workflows](workflows.md).
 
 ## Push notifications
 
-With [remote access through a relay](../networking/remote-access.md) set up,
+With [remote access through a relay](https://docs.langstroth.ai/networking/remote-access/) set up,
 `ligus serve` can wake the phone with a notification. The content is end-to-end
 encrypted between the box and the phone: the relay and Apple see only
 ciphertext.
@@ -281,7 +281,7 @@ within 20 seconds is queued.
     Apple accepts a push only when it is signed with a key from the team that
     signed the app. With a self-hosted relay, that means running the relay
     with your own APNs key and building the app under the same Apple team. See
-    [Remote access → Push through your own relay](../networking/remote-access.md#push-through-your-own-relay).
+    [Remote access → Push through your own relay](https://docs.langstroth.ai/networking/remote-access/#push-through-your-own-relay).
 
 Mentions also work on the desktop; see
 [Mentions & notifications](mentions-and-notifications.md).
@@ -312,7 +312,7 @@ failures mean:
 | `push-test` says | Cause | Fix |
 |---|---|---|
 | `relay: … NOT connected` | the box can't reach the relay | `ligus remote status`, and the box's log |
-| `push UNAVAILABLE` | the relay has no APNs key | [Push through your own relay](../networking/remote-access.md#push-through-your-own-relay) |
+| `push UNAVAILABLE` | the relay has no APNs key | [Push through your own relay](https://docs.langstroth.ai/networking/remote-access/#push-through-your-own-relay) |
 | `notifications OFF` | the app never asked this box for notifications: push is off in the app, iOS permission was never given, or the app was reinstalled (or its bundle id changed) and hasn't asked again | in the app, **Settings → Notifications** on, and allow notifications when iOS asks |
 | `refused: no_push_token` | the relay has no APNs token for the phone: it never registered one, the relay restarted without durable storage, or APNs said the token was dead | open the app with notifications allowed; it registers its token every time it connects |
 | `topic not allowed on this relay` | the app's bundle id isn't one the relay pushes to | add it to `LIGUS_RELAY_APNS_TOPICS` on the relay and restart it |
@@ -417,4 +417,4 @@ app:
 - removing or re-roling members (invite links work on the phone);
 - joining another workspace (a host serves one; DMs are the exception).
 
-The full API the phone uses is in the [serve API reference](../reference/serve-api.md).
+The full API the phone uses is in the [serve API reference](https://docs.langstroth.ai/reference/serve-api/).

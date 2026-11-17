@@ -1,7 +1,7 @@
 # Repos on the home host
 
 The agents on your `ligus serve` box work on git checkouts on that box. From
-the [phone](../features/phone-app.md) you can pick which repository a chat
+the [phone](https://docs.ligus.ai/features/phone-app/) you can pick which repository a chat
 works in, clone a new one from GitHub, GitLab, Codeberg, Forgejo or Gitea,
 pull the latest, and open a pull or merge request, all without leaving the
 chat.
@@ -27,7 +27,7 @@ other code host; GitLab subgroups are joined with `__`).
 
 Listing your repos, cloning private ones, and opening pull or merge requests
 use the box's own code-host connections. Tokens stay in the box's secret
-store; see [Code hosts](../features/code-hosts.md). Other code hosts:
+store; see [Code hosts](https://docs.ligus.ai/features/code-hosts/). Other code hosts:
 
 ```sh
 ligus forge add gitlab https://gitlab.example.com

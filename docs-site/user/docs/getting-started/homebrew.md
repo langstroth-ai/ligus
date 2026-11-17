@@ -57,7 +57,7 @@ brew upgrade ligus                  # track releases
 
 This is the same runtime as the desktop app without the window — for running
 agents on a server, scripting Ligus, or connecting a remote agent to a workspace.
-See [Headless agents & setups](../concepts/headless-agents.md) for the full
+See [Headless agents & setups](https://docs.langstroth.ai/concepts/headless-agents/) for the full
 workflow (`ligus enroll` → `ligus worker`).
 
 ## Other platforms
@@ -65,4 +65,4 @@ workflow (`ligus enroll` → `ligus worker`).
 Homebrew installs the **CLI formula** on both macOS and Linux (above). The
 **desktop app** is a macOS-only cask; on Linux it's distributed as
 `.AppImage` / `.deb` / `.rpm`, and on Windows as an installer. See
-[Building the dist](../ops/build.md) for all the bundle formats.
+[Building the dist](https://docs.langstroth.ai/ops/build/) for all the bundle formats.

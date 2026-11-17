@@ -1,7 +1,7 @@
 # Multi-tenant hosting (design)
 
 !!! danger "Not yet implemented"
-    This page describes a design for one operator hosting Ligus for many
+    This page describes a design for one operator hosting Langstroth for many
     unrelated organisations (tenants). None of the tenant-aware parts below
     exist in 2.0. Today a relay is tenant-blind: an entitlement token admits
     a caller to the relay, not to a tenant, and the open-source relay has no
@@ -10,7 +10,7 @@
 
 ## Three layers of authorization
 
-Multi-tenant Ligus keeps three independent layers, each answering a
+Multi-tenant Langstroth keeps three independent layers, each answering a
 different question. A request must pass all three.
 
 ```mermaid

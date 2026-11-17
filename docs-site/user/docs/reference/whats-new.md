@@ -37,7 +37,7 @@ Full release notes are on the
   filed it) no longer runs as you at your Owner tier; it runs below every
   floor. Picking an item up yourself is unchanged. See
   [the author gate](../concepts/security.md#author-gate) and the
-  [threat model](../security/threat-model.md#known-limitations) for what
+  [threat model](https://docs.langstroth.ai/security/threat-model/#known-limitations) for what
   human-clicked actions still carry.
 - **No sandbox, no local agents.** A host without an OS sandbox (Windows,
   Linux without bubblewrap or Landlock, `LIGUS_SANDBOX=off`) now refuses
@@ -52,8 +52,8 @@ Full release notes are on the
   the workspace key, so the relay no longer sees who is typing in which chat.
   New **Share typing status** switch (on by default) on desktop and phone.
   See [Phone app](../features/phone-app.md#chats),
-  [Serve API: typing](serve-api.md#typing) and
-  [Security](../security/index.md#encryption).
+  [Serve API: typing](https://docs.langstroth.ai/reference/serve-api/#typing) and
+  [Security](https://docs.langstroth.ai/security/#encryption).
 - **Phone shows which device answered** a primary `@hive` reply ("This
   device", "Your other device", "<name>'s device").
 - **Claude Code turns get only what the turn needs.** Ligus starts Claude
@@ -77,7 +77,7 @@ Full release notes are on the
   create a user namespace (Ubuntu 24.04's AppArmor restriction), agent
   turns now run in a Landlock + seccomp tier instead of being refused, and
   an optional AppArmor profile restores bubblewrap. `ligus doctor` shows
-  the tier. See [The Linux agent sandbox](../ops/linux-sandbox.md).
+  the tier. See [The Linux agent sandbox](https://docs.langstroth.ai/ops/linux-sandbox/).
 - **Passkeys for admin changes.** On every workspace, from its first event, membership and
   role changes, device revocation, key rotation, guards, zones, workflow
   definitions, agent hosts and human-gated approvals need a passkey (Touch
@@ -86,7 +86,7 @@ Full release notes are on the
   **Settings → Passkeys & keys**); a self-hosted deployment can name its
   own relying party for the workspaces it creates; the phone
   confirms votes through your box with Face ID. See
-  [Passkey presence](../security/index.md#presence).
+  [Passkey presence](../concepts/security.md#passkeys).
 - **Signed key rotations on every host.** Rotating the workspace key is a
   signed event on the workspace log, sealed to keys each device published
   itself; `ligus serve`, `ligus worker` and the CLI follow rotations too.
@@ -128,13 +128,13 @@ Full release notes are on the
   running side by side. 2.0 refuses a data dir that is, or links to, 1.x
   data. A `HIVE_*` variable that is still set is ignored, with a one-time
   warning naming the new spelling. Setting up 2.0 and removing 1.x when you're
-  done: [Upgrading from Hive 1.x](../deploy/upgrade-from-hive.md).
-- **Deployment and security docs.** [Choose a deployment](../deploy/index.md)
-  with guides for each supported shape, a [security model](../security/index.md),
-  [threat model](../security/threat-model.md) and [runbooks](../security/runbooks.md),
-  [Operations](../ops/operations.md), and references for the
-  [CLI](cli.md), [environment variables](env-vars.md),
-  [serve API](serve-api.md) and [settings](settings.md).
+  done: [Upgrading from Hive 1.x](https://docs.langstroth.ai/deploy/upgrade-from-hive/).
+- **Deployment and security docs.** [Choose a deployment](https://docs.langstroth.ai/deploy/)
+  with guides for each supported shape, a [security model](https://docs.langstroth.ai/security/),
+  [threat model](https://docs.langstroth.ai/security/threat-model/) and [runbooks](https://docs.langstroth.ai/security/runbooks/),
+  [Operations](https://docs.langstroth.ai/ops/operations/), and references for the
+  [CLI](cli.md), [environment variables](https://docs.langstroth.ai/reference/env-vars/),
+  [serve API](https://docs.langstroth.ai/reference/serve-api/) and [settings](settings.md).
 - **Every device judges history the same way.** One authorization engine
   judges each event at its position on the workspace config log: votes count
   at the voter's role when cast, for the exact content they name; proposal
@@ -164,11 +164,11 @@ Full release notes are on the
 - **Phone approvals carry your passkey.** A `ligus serve` box enrolled as
   your device takes votes, rejects and lockdown clears from the phone only
   with your passkey over them (`presence/prepare`, `presence/commit`); folds
-  drop its votes without one. [Securing the box](../ops/serve-box.md)
+  drop its votes without one. [Securing the box](https://docs.langstroth.ai/ops/serve-box/)
 - **Organization sign-in.** `ligus auth login` and Settings → Team sync sign
-  in through [ligus-auth](../deploy/ligus-auth.md) with your identity
-  provider (setups for [Pocket ID](../deploy/ligus-auth-pocket-id.md) and
-  [Dex](../deploy/ligus-auth-dex.md)) and keep a short-lived relay token
+  in through [ligus-auth](https://docs.langstroth.ai/deploy/ligus-auth/) with your identity
+  provider (setups for [Pocket ID](https://docs.langstroth.ai/deploy/ligus-auth-pocket-id/) and
+  [Dex](https://docs.langstroth.ai/deploy/ligus-auth-dex/)) and keep a short-lived relay token
   fresh.
 - **Desktop.** The app is `Ligus.app`. Theme and pane layout reset once, and
   macOS asks again for folder and notification access. An auto-updated app
@@ -178,7 +178,7 @@ Full release notes are on the
 - **Repos from the phone.** `ligus serve` lists the host's checkouts and your
   GitHub repos, clones on demand, switches a chat's repo, pulls, and opens a
   pull request from the chat branch. See
-  [Repos on the home host](../ops/serve-repos.md).
+  [Repos on the home host](https://docs.langstroth.ai/ops/serve-repos/).
 - **Fork-aware pull requests.** For a fork with an `upstream` remote, chat
   branches start from upstream's default branch, pulls come from upstream,
   and PRs are pushed to your fork under a readable branch and opened upstream
@@ -190,8 +190,10 @@ Full release notes are on the
   `ligus serve` and sandboxed turn executors on Kubernetes, and a Dockerfile
   for the `ligus` binary (`deploy/container`).
 - **New addresses.** The project lives at github.com/ligus-ai/ligus and the
-  docs at docs.ligus.ai. Old links redirect. Protocol identifiers that contain
-  `hive` keep their names; see [Wire protocols](wire-protocols.md#legacy-protocol-identifiers).
+  docs at docs.ligus.ai (using the apps) and
+  [docs.langstroth.ai](https://docs.langstroth.ai/) (self-hosting and
+  deploying, on Langstroth, the platform behind the apps). Old links redirect. Protocol identifiers that contain
+  `hive` keep their names; see [Wire protocols](https://docs.langstroth.ai/reference/wire-protocols/#legacy-protocol-identifiers).
 - **Workspace guards.** A new Settings → Guards page collects the controls
   that keep a workspace inside safe bounds.
   [Workspace guards](../features/guards.md)
@@ -270,7 +272,7 @@ Full release notes are on the
 - Push previews are plain text.
 - `hive remote status` shows how long the relay link has been up and
   notices a `hive serve` that stopped; `hive --version` prints the version.
-  See [Troubleshooting](../ops/troubleshooting.md).
+  See [Troubleshooting](../help/troubleshooting.md).
 
 ## 1.16
 
@@ -278,18 +280,18 @@ Full release notes are on the
   gives the phone app remote access without a VPN: `hive pair` prints the
   pairing link, `hive phones` lists and revokes phones, `hive remote`
   manages the link. A self-hosted relay can run the tunnel and send push
-  with its own APNs key. See [Remote access for your phone](../networking/remote-access.md).
+  with its own APNs key. See [Remote access for your phone](https://docs.langstroth.ai/networking/remote-access/).
 - **On the phone:** people, channels and chat details; proposal review
   with votes (who and role), a refinement thread and *request changes*;
   push for mentions and workflow approvals; the host's theme through
   *Match host*. See [Hive on your phone](../features/phone-app.md).
 - **The serve box as your own device.** `hive serve enroll` makes the box
   one of your devices instead of a separate member. See
-  [Running hive serve as your own device](../ops/serve-box.md).
+  [Running hive serve as your own device](https://docs.langstroth.ai/ops/serve-box/).
 - **Sync privacy fix.** A relay room now carries only its own workspace;
   events from other workspaces are dropped and purged on upgrade. Read the
-  [upgrade note](../ops/serve-box.md#what-to-expect-and-do-when-upgrading-from-115-or-earlier)
+  [upgrade note](https://docs.langstroth.ai/ops/serve-box/#what-to-expect-and-do-when-upgrading-from-115-or-earlier)
   if you're coming from 1.15 or earlier.
 - **Presence-based host liveness.** Whether a host is online rides the
   relay's presence channel instead of heartbeat events in the log. See
-  [Host liveness](../ops/serve-box.md#host-liveness).
+  [Host liveness](https://docs.langstroth.ai/ops/serve-box/#host-liveness).

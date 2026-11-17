@@ -63,13 +63,13 @@ pane header to close the rail entirely.
   live status (online / offline / owner-device). If an agent's host is
   offline, a **Run on worker** button reassigns it to an online worker
   so the backlog drains without waiting for that laptop to wake. See
-  [Headless agents](../concepts/headless-agents.md).
+  [Headless agents](https://docs.langstroth.ai/concepts/headless-agents/).
 - **People**: members, online status, invites, cross-network
   rendezvous status, nearby-on-LAN peers. On a membership-enforcing relay it also
   manages the server-side roster + issues join codes, and — for an admin with a
   relay issuer key (Settings → Team sync) — a **Remote agents** section that
   enrolls a headless agent and generates the one copy-paste command to run on its
-  box. See [Headless agents](../concepts/headless-agents.md).
+  box. See [Headless agents](https://docs.langstroth.ai/concepts/headless-agents/).
 
 - **Flow**: when work is piling up or nobody picked something up. The
   Board lists unassigned work and who would take it; Queue shows the

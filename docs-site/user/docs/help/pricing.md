@@ -16,8 +16,8 @@ entitlement on your org).
 ## Self-host (free, MIT)
 
 Run `ligus-relay` yourself — the full source is at [github.com/ligus-ai/relay](https://github.com/ligus-ai/relay). See
-[Self-hosting a relay](../networking/self-host.md) and the
-[small-team deployment guide](deployment.md).
+[Self-hosting a relay](https://docs.langstroth.ai/networking/self-host/) and the
+[small-team deployment guide](https://docs.langstroth.ai/ops/deployment/).
 
 ## Ligus Cloud
 
@@ -62,7 +62,7 @@ the relay can replay events to a brand-new device). Plans meter those.
 Numbers above are indicative, not a committed price sheet. The Team tier's admin
 controls (fine-grained roles, server-enforced membership, audit trail) are the
 main paid surface and are still being built — see the
-[managed-service plan](managed-service.md).
+[managed-service plan](https://docs.langstroth.ai/ops/managed-service/).
 
 ## Enterprise
 
@@ -96,4 +96,4 @@ A team that never touches Ligus Cloud can run its own relay forever.
 ---
 
 *For the engineering model — how each feature gates (server capability vs runtime
-entitlement vs build flag) and where it lives — see [tiering](tiering.md).*
+entitlement vs build flag) and where it lives — see [tiering](https://docs.langstroth.ai/ops/tiering/).*

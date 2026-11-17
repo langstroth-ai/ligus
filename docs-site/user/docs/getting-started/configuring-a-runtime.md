@@ -92,7 +92,7 @@ preferred_model = "gpt-4o"
 supports_tools = true
 ```
 
-See the [Configuration reference](../reference/config-toml.md) for
+See the [Configuration reference](https://docs.langstroth.ai/reference/config-toml/) for
 every field.
 
 ## API providers — environment variables

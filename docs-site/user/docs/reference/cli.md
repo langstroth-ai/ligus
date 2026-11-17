@@ -16,7 +16,7 @@ command); it prints to stderr and exits with status 2.
 - **Data dir.** Every command works on one data dir: `LIGUS_DATA_DIR`, else
   `~/.ligus`, else `./ligus-data` when `HOME` is unset. A Hive 1.x `~/.hive`
   is never read or changed, and a data dir that is (or links to) 1.x data is
-  refused (see [Upgrading from Hive 1.x](../deploy/upgrade-from-hive.md)). The dir is one Ligus **device**: its
+  refused (see [Upgrading from Hive 1.x](https://docs.langstroth.ai/deploy/upgrade-from-hive/)). The dir is one Ligus **device**: its
   identity (`identity.json`, `keys/`), its event log (`hive.db`) and, for
   `ligus serve`, the phone credentials. Never run two processes that write
   to one data dir.
@@ -35,7 +35,7 @@ command); it prints to stderr and exits with status 2.
 |---|---|
 | `ligus --version` (`-V`, `version`) | prints `ligus <version>` |
 | `ligus whoami` | prints account id, device id, name, data dir and room |
-| `ligus doctor` | prints this device's agent sandbox tier (`seatbelt`, `bwrap`, `landlock` or `unconfined`), why, and what it leaves open; see [The Linux agent sandbox](../ops/linux-sandbox.md) |
+| `ligus doctor` | prints this device's agent sandbox tier (`seatbelt`, `bwrap`, `landlock` or `unconfined`), why, and what it leaves open; see [The Linux agent sandbox](https://docs.langstroth.ai/ops/linux-sandbox/) |
 
 ```console
 $ ligus whoami
@@ -69,7 +69,7 @@ Next: `ligus sync` then `ligus worker` to bring the agent online.
 
 ## Signing in to an organization's relay
 
-For a relay behind [ligus-auth](../deploy/ligus-auth.md):
+For a relay behind [ligus-auth](https://docs.langstroth.ai/deploy/ligus-auth/):
 
 | Command | What it does |
 |---|---|
@@ -136,7 +136,7 @@ channel, backs off on relay errors (6 s doubling to 120 s), finishes replies a
 previous run was streaming when it stopped, and exits cleanly on SIGTERM or
 Ctrl-C. Worker turns are read-only for Claude Code unless
 `LIGUS_WORKER_PERMISSION_MODE` raises them. See
-[Headless agents](../concepts/headless-agents.md).
+[Headless agents](https://docs.langstroth.ai/concepts/headless-agents/).
 
 ```console
 $ ligus worker --label prod-box
@@ -170,10 +170,10 @@ ligus serve: listening on http://127.0.0.1:8787 â€” workspace 'acme', host 63f2â
 Run `ligus pair` to show the phone pairing code.
 ```
 
-See [Remote access for your phone](../networking/remote-access.md),
-[Running ligus serve as your own device](../ops/serve-box.md) and the
-[serve API reference](serve-api.md).
+See [Remote access for your phone](https://docs.langstroth.ai/networking/remote-access/),
+[Running ligus serve as your own device](https://docs.langstroth.ai/ops/serve-box/) and the
+[serve API reference](https://docs.langstroth.ai/reference/serve-api/).
 
 ## Environment variables
 
-Every variable the CLI reads is in [Environment variables](env-vars.md).
+Every variable the CLI reads is in [Environment variables](https://docs.langstroth.ai/reference/env-vars/).

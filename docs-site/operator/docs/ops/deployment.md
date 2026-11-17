@@ -83,12 +83,12 @@ Each teammate installs the app and pastes **their own** relay token in
 - **Invite code**: send the `hivews1:…` code over a trusted channel (it
   contains the workspace key); they use **＋ → Add workspace → Join**.
 
-See [Invites & joining](../features/invites.md). Then set roles in the
+See [Invites & joining](https://docs.ligus.ai/features/invites/). Then set roles in the
 **People** pane: Owner, Admin, Contributor or Viewer. Roles limit what a
 member can change, not what they can read. Keep Admins few.
 
 Each teammate configures their own runtime; see
-[Configuring a runtime](../getting-started/configuring-a-runtime.md).
+[Configuring a runtime](https://docs.ligus.ai/getting-started/configuring-a-runtime/).
 
 ## 5. Optional: a shared worker
 
@@ -156,4 +156,4 @@ Workspaces with headless workers need more; follow
 There's no shared inference bill: each member uses their own runtime, and
 workers use the keys you give them. The relay is small: a `shared-cpu-1x`
 machine with 256 to 512 MB handles a small team. See
-[Pricing tiers](pricing.md) for hosted options.
+[Pricing tiers](https://docs.ligus.ai/help/pricing/) for hosted options.

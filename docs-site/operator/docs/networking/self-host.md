@@ -1,6 +1,6 @@
 # Self-hosting a relay
 
-The relay is a small Go service that stores and forwards **end-to-end
+The Langstroth relay is a small Go service that stores and forwards **end-to-end
 encrypted** event envelopes between the devices of a workspace, and
 optionally tunnels the phone app to a `ligus serve` box. It never holds a
 workspace key, so it can't read what it stores. You run one relay for a

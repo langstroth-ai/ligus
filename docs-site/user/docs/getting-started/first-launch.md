@@ -18,7 +18,7 @@ cargo tauri build        # bundles for the current OS → target/release/bundle/
 cargo tauri dev
 ```
 
-See [Building the dist](../ops/build.md) for per-OS details and cross-builds.
+See [Building the dist](https://docs.langstroth.ai/ops/build/) for per-OS details and cross-builds.
 Release DMGs for macOS (and the Homebrew cask) are signed and notarized, so
 they open normally. Windows and Linux release builds, and anything you build
 from source, are unsigned, so first launch needs a nudge:
@@ -123,4 +123,4 @@ data directory is:
 
 - [Configure additional runtimes](configuring-a-runtime.md)
 - [Start your first chat](first-chat.md)
-- [Set up a relay so peers can find you](../networking/self-host.md)
+- [Set up a relay so peers can find you](https://docs.langstroth.ai/networking/self-host/)

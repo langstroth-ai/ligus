@@ -18,4 +18,4 @@ is identical to invites today.
 
 For sharing a workspace — whether peers are on the same LAN or across the
 internet — use the **relay**: same trust model, works everywhere. See
-[Self-hosting a relay](self-host.md) and [Invites & joining](../features/invites.md).
+[Self-hosting a relay](self-host.md) and [Invites & joining](https://docs.ligus.ai/features/invites/).

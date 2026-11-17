@@ -1,7 +1,7 @@
 # Troubleshooting
 
 Problems by symptom. Each section starts with the quickest check. For
-health endpoints and logs, see [Operations](operations.md).
+health endpoints and logs, see [Operations](https://docs.langstroth.ai/ops/operations/).
 
 ## Which version am I running?
 
@@ -29,7 +29,7 @@ launch:
 
 **"Ligus can't use this data folder"** on launch: the data dir is, or links
 to, Hive 1.x data, which 2.0 never uses or changes. Nothing was changed. See
-[Upgrading from Hive 1.x](../deploy/upgrade-from-hive.md#troubleshooting-the-upgrade).
+[Upgrading from Hive 1.x](https://docs.langstroth.ai/deploy/upgrade-from-hive/#troubleshooting-the-upgrade).
 
 ## Sync is stuck or peers don't see each other
 
@@ -58,7 +58,7 @@ Notes:
   skipped and logged.
 - A headless box (`ligus serve`, `ligus worker`) stops seeing new messages
   from desktops after an Admin used **Remove & revoke**: it can't follow a
-  key rotation. See [Offboarding](../security/runbooks.md#offboarding).
+  key rotation. See [Offboarding](https://docs.langstroth.ai/security/runbooks/#offboarding).
 - Relays with a snapshot or Postgres store keep queued events across
   restarts; a relay with neither (pure memory) loses them.
 - On a CLI box, `ligus sync` prints `pushed N, pulled M`; errors print
@@ -114,7 +114,7 @@ curl -s http://<listen>/v1/health
 | phone: revoked or credential expired | revoked, or unused for 90 days | pair again |
 | writes fail with 403 | the box's role doesn't allow it, or it is `pending`/`revoked` as your device | `/v1/health` with the token shows `identity.mode` |
 
-More: [Remote access](../networking/remote-access.md#troubleshooting).
+More: [Remote access](https://docs.langstroth.ai/networking/remote-access/#troubleshooting).
 
 ## No push notifications
 
@@ -152,7 +152,7 @@ rate-limited, or refused by the relay and why). The full checklist is in
    `LIGUS_WORKER_PERMISSION_MODE` raises it, and a write tier needs the
    agent sandbox (bubblewrap, or the Landlock tier, on Linux): without one
    the turn is refused. `ligus doctor` says which tier the box has and why;
-   see [The Linux agent sandbox](linux-sandbox.md).
+   see [The Linux agent sandbox](https://docs.langstroth.ai/ops/linux-sandbox/).
    A tool call that fails with a network error may have hit the egress
    allow-list: the chat shows a note. For dependency installs set
    `LIGUS_SANDBOX_EGRESS_PRESETS=package-registries`; for other hosts use
@@ -244,7 +244,7 @@ has read project files, MCP calls are refused (the exfiltration guard). See
 
 2.0 reads only `LIGUS_*` names. Look for
 `warning: HIVE_X is set but no longer read; rename it to LIGUS_X`. See
-[Upgrading from Hive 1.x](../deploy/upgrade-from-hive.md).
+[Upgrading from Hive 1.x](https://docs.langstroth.ai/deploy/upgrade-from-hive/).
 
 ## Tests fail after pulling main
 

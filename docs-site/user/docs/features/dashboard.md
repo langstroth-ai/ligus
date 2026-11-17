@@ -12,7 +12,7 @@ serves, so the tab is useful with no setup at all. Anything more is
 described in a `dashboard.toml` file on the host.
 
 See [Ligus on your phone](phone-app.md) for the app, and
-[Running ligus serve as your own device](../ops/serve-box.md) for setting up `ligus serve`.
+[Running ligus serve as your own device](https://docs.langstroth.ai/ops/serve-box/) for setting up `ligus serve`.
 
 ## The built-in Ligus section
 

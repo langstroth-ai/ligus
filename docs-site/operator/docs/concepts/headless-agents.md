@@ -119,7 +119,7 @@ issuer key** (local-only, never synced). Then the **People pane → Remote
 agents** section takes a role and a box label, mints the box its own random relay
 identity (`ligus:<id>`), enrolls it, and shows the
 same copy-paste command in a box — no terminal needed on the admin side. See
-[Right Rail — People](../features/right-rail.md).
+[Right Rail — People](https://docs.ligus.ai/features/right-rail/).
 
 **Manual path.** Or wire it by hand. Instead of hand-exporting four env vars,
 paste the workspace's `hivews1:` invite (the same one the app shares) —
@@ -173,7 +173,7 @@ The **desktop app** surfaces the same queue without the CLI: the **Review**
 pane lists every unanswered agent mention with its host's live status, and an
 offline or device-bound agent gets a **Run on worker** button that reassigns it
 to an online worker — the GUI equivalent of `ligus set-agent-host`. See
-[Right Rail — Review](../features/right-rail.md).
+[Right Rail — Review](https://docs.ligus.ai/features/right-rail/).
 
 **Give the worker tools.** A worker (or `ligus agent`) can reach external boards
 like **Linear** or **GitHub** through MCP tools: point `LIGUS_MCP_CONFIG` at a TOML
@@ -188,7 +188,7 @@ can write, `contributor` when it is read-only). Below that bar the agent still
 replies, tool-free or at the CLI's read-only tier (Codex, aider, pi and Hermes
 are refused), so a Viewer can't provoke a write to Linear or GitHub through a
 headless agent. The same gate applies to `ligus agent` and the desktop. Every
-agent process also runs in the [OS sandbox](security.md#os-sandbox). See the
+agent process also runs in the [OS sandbox](https://docs.ligus.ai/concepts/security/#os-sandbox). See the
 [CLI README — requester-role gate](https://github.com/ligus-ai/ligus/blob/main/crates/hive-cli/README.md#requester-role-gate-ligus_mcp_min_role).
 
 Do **not** try to substitute a network filesystem (SSHFS/NFS) for the relay —

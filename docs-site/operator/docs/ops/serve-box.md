@@ -1,6 +1,6 @@
 # Running ligus serve as your own device
 
-`ligus serve` is the always-on Ligus device your [phone](../features/phone-app.md)
+`ligus serve` is the always-on Ligus device your [phone](https://docs.ligus.ai/features/phone-app/)
 talks to. Out of the box it joins the workspace as **its own member**. Since
 v1.16 you can instead enroll it as **one of your own devices**, so everything
 you do from the phone is authored as you.
@@ -122,7 +122,7 @@ ligus serve enroll --new-device
   `run_command` and pre-flight tests start with an allow-listed environment
   (no workspace key, relay or tunnel tokens, ntfy tokens, `LIGUS_WS_SECRET_*`,
   and no provider key unless that runtime was given one in Ligus), and run
-  in the [OS sandbox](../concepts/security.md#os-sandbox): bubblewrap,
+  in the [OS sandbox](https://docs.ligus.ai/concepts/security/#os-sandbox): bubblewrap,
   Landlock and seccomp on Linux. The data dir, `serve.token` (also a
   `--token-file` elsewhere), `~/.ssh` and the other credential dirs are
   unreadable; writes land only in the turn's worktree; the network is a
@@ -194,7 +194,7 @@ serves the same workspace, it leaves the role to the first while that one
 beats, and takes it over (with a higher lease epoch) only after the holder has
 been silent for two lease periods (three minutes). `GET /v1/guards` reports
 the current holder and epoch, along with dearth mode and locked chats. See
-[Workspace guards](../features/guards.md).
+[Workspace guards](https://docs.ligus.ai/features/guards/).
 
 ### What the phone reads from the box (2.0)
 
