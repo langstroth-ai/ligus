@@ -159,8 +159,8 @@ the same team.
 
 ### 2. Run the relay with the key
 
-Use the open relay ([ligus-ai/relay](https://github.com/ligus-ai/relay),
-`cmd/hive-relay`) with tunnels on and the APNs settings:
+Use the open relay ([langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay),
+`cmd/langstroth-relay`) with tunnels on and the APNs settings:
 
 ```sh
 LIGUS_RELAY_TUNNEL=open                      # or allowlist + LIGUS_RELAY_TUNNEL_HOSTS=<host id>

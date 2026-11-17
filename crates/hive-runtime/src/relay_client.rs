@@ -165,7 +165,7 @@ pub struct RelayClient {
     /// Relay access token. Attached as `Authorization: Bearer` to
     /// every request; `None` for open/self-hosted relays.
     auth: Option<String>,
-    /// A ligus-auth access token kept fresh in the background. When it holds
+    /// A langstroth-auth access token kept fresh in the background. When it holds
     /// a value it is sent instead of `auth` (see `with_auth_cell`).
     auth_cell: Option<crate::ligus_auth::TokenCell>,
 }
@@ -217,7 +217,7 @@ impl RelayClient {
         self
     }
 
-    /// Read the bearer from a ligus-auth token cell on every request, so a
+    /// Read the bearer from a langstroth-auth token cell on every request, so a
     /// long-lived client picks up refreshed tokens. An empty cell falls back
     /// to the static token from `with_auth`.
     pub fn with_auth_cell(mut self, cell: Option<crate::ligus_auth::TokenCell>) -> Self {
@@ -239,7 +239,7 @@ impl RelayClient {
     /// live only in the OS secret store of the device doing git work and are
     /// used only between that device and the forge.
     pub(crate) fn authed(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        // A ligus-auth token goes only to the relay its session is bound to
+        // A langstroth-auth token goes only to the relay its session is bound to
         // (E-5); any other relay gets the static token, if one is configured.
         let fresh = self.auth_cell.as_ref().and_then(|c| c.get_for(&self.base)).filter(|t| !t.is_empty());
         match fresh.as_ref().or(self.auth.as_ref()) {

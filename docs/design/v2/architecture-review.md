@@ -10,7 +10,7 @@ Scope reviewed (read-only, 2026-11-13):
 |---|---|---|
 | Core, runtime, proto, CLI (serve, worker), desktop, web | this repo | `release/v2.0.0` @ `d7632c73` |
 | Core security fixes (input) | this repo | `sec/core-hardening`, 13 commits on `d7632c73` |
-| Relay (Go) and its chart | relay repo (`ligus-ai/relay`) | `sec/relay-hardening` |
+| Relay (Go) and its chart | relay repo (`langstroth-ai/langstroth-relay`) | `sec/relay-hardening` |
 | iOS | iOS app repo (private) | `rebrand/ligus` |
 | Workspace chart (serve, worker, sandbox) | this repo, `deploy/helm/ligus` | `feat/k8s-phase1` |
 | Vision | an internal deployments deck, and [`docs/design/kubernetes.md`](../kubernetes.md) | |

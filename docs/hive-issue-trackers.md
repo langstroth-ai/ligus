@@ -40,7 +40,7 @@ that *expands into* an MCP server config, so there's one execution path):
 ```toml
 [[issue_source]]
 kind   = "github"          # github | linear | jira | mcp
-repo    = "honeyhive-ai/hive"   # github: owner/repo
+repo    = "langstroth-ai/ligus"   # github: owner/repo
 # auth: github reuses the signed-in account token; others take a key ref
 # token_env = "LINEAR_API_KEY"  # for linear/jira
 enabled = false            # inert until enabled, like every MCP server

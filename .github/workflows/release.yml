@@ -217,7 +217,7 @@ jobs:
   # `brew upgrade --cask ligus-app` tracks releases with no manual edits. Runs in the
   # tag's context (no cross-workflow tag ambiguity) after `build` uploads assets.
   # Needs HOMEBREW_TAP_TOKEN — a fine-grained PAT with Contents:write on
-  # ligus-ai/homebrew-ligus (the default GITHUB_TOKEN can't push cross-repo).
+  # langstroth-ai/homebrew-ligus (the default GITHUB_TOKEN can't push cross-repo).
   # Skips cleanly when the secret is absent. NOTE: kept here rather than in a
   # `release: published` workflow because releases created by GITHUB_TOKEN do not
   # fire the `release` event (GitHub's recursion guard), so that trigger never ran.
@@ -248,7 +248,7 @@ jobs:
           done
           SHA=$(shasum -a 256 ligus.dmg | awk '{print $1}')
           echo "sha256=$SHA"
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/ligus-ai/homebrew-ligus.git" tap
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/langstroth-ai/homebrew-ligus.git" tap
           cd tap
           # The desktop cask is ligus-app. Never recreate the old Casks/hive.rb:
           # the tap's cask_renames.json maps hive to ligus-app.

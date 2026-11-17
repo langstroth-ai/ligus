@@ -5,7 +5,7 @@ cloud VM, a spare box, or as a background process on your own machine. This page
 covers the ways to wire that up and which one fits your situation.
 
 > The command reference for the CLI lives in
-> [`crates/hive-cli/README.md`](https://github.com/ligus-ai/ligus/blob/main/crates/hive-cli/README.md).
+> [`crates/hive-cli/README.md`](https://github.com/langstroth-ai/ligus/blob/main/crates/hive-cli/README.md).
 > This page is about **topology** — where the agent runs and how it reaches your
 > workspace.
 
@@ -15,13 +15,13 @@ macOS + Linux, Apple Silicon and x86_64. **Homebrew** (recommended — tracks
 releases with `brew upgrade`):
 
 ```sh
-brew install ligus-ai/ligus/ligus
+brew install langstroth-ai/ligus/ligus
 ```
 
 Or the one-line installer:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ligus-ai/ligus/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/langstroth-ai/ligus/main/install.sh | sh
 ```
 
 Both put the prebuilt `ligus` binary on your `PATH` (the installer honors
@@ -91,12 +91,12 @@ while your laptop is closed: the relay's **store-and-forward** holds the agent's
 events, and your app catches up when it next comes online.
 
 **The easy path — generate the whole command.** On the machine that holds the
-relay issuer key (where you ran `ligus-relay keygen`), one command mints the
+relay issuer key (where you ran `langstroth-relay keygen`), one command mints the
 agent's token, enrolls it in the workspace roster, and prints the exact line the
 developer pastes on the remote box:
 
 ```sh
-ligus-relay bootstrap-agent --key "$(cat ~/.ligus/issuer_ed25519.key)" \
+langstroth-relay bootstrap-agent --key "$(cat ~/.ligus/issuer_ed25519.key)" \
   --relay https://your-relay --room acme --ws-key <e2ee-passphrase> \
   --sub github:<agent-id> --admin-sub github:<your-id> --label prod-box
 ```
@@ -105,7 +105,7 @@ It outputs a single copy-paste line — the developer runs it verbatim and the
 agent is live:
 
 ```sh
-brew install ligus-ai/ligus/ligus && \
+brew install langstroth-ai/ligus/ligus && \
   ligus enroll "hivews1:…" --token "hrt1.…" && \
   ligus worker --label prod-box
 ```
@@ -148,7 +148,7 @@ ligus worker --label prod-box                 # always-on; @reviewer is now answ
 
 **On a membership-enforcing relay**, the box needs an *identified* token whose
 subject is enrolled in the workspace roster. Either an admin adds the agent's
-account + hands it a token minted with `ligus-relay issue --sub github:<agent-id>`
+account + hands it a token minted with `langstroth-relay issue --sub github:<agent-id>`
 (used as `--token` above), or — if they shared an **invite code** — the box
 self-enrolls:
 
@@ -166,7 +166,7 @@ it was down. `ligus queue` shows what's waiting and whether each agent's host is
 online; if a member's device host is offline, `ligus set-agent-host <agent>
 <worker>` reassigns the agent to a worker to drain it ("run on worker instead").
 See the
-[CLI README](https://github.com/ligus-ai/ligus/blob/main/crates/hive-cli/README.md#the-worker-daemon-spec-124)
+[CLI README](https://github.com/langstroth-ai/ligus/blob/main/crates/hive-cli/README.md#the-worker-daemon-spec-124)
 for the full daemon behaviour.
 
 The **desktop app** surfaces the same queue without the CLI: the **Review**
@@ -179,7 +179,7 @@ to an online worker — the GUI equivalent of `ligus set-agent-host`. See
 like **Linear** or **GitHub** through MCP tools: point `LIGUS_MCP_CONFIG` at a TOML
 listing MCP servers and provision each server's token via the environment (never
 in the file). With no config it runs tool-free, exactly as before. See the
-[CLI README — MCP tools for headless agents](https://github.com/ligus-ai/ligus/blob/main/crates/hive-cli/README.md#mcp-tools-for-headless-agents).
+[CLI README — MCP tools for headless agents](https://github.com/langstroth-ai/ligus/blob/main/crates/hive-cli/README.md#mcp-tools-for-headless-agents).
 
 **Tools are gated on the requester's role.** A synced message only drives the
 worker's tools if its author holds at least `LIGUS_MCP_MIN_ROLE`
@@ -189,7 +189,7 @@ replies, tool-free or at the CLI's read-only tier (Codex, aider, pi and Hermes
 are refused), so a Viewer can't provoke a write to Linear or GitHub through a
 headless agent. The same gate applies to `ligus agent` and the desktop. Every
 agent process also runs in the [OS sandbox](../../ligus/concepts/security.md#os-sandbox). See the
-[CLI README — requester-role gate](https://github.com/ligus-ai/ligus/blob/main/crates/hive-cli/README.md#requester-role-gate-ligus_mcp_min_role).
+[CLI README — requester-role gate](https://github.com/langstroth-ai/ligus/blob/main/crates/hive-cli/README.md#requester-role-gate-ligus_mcp_min_role).
 
 Do **not** try to substitute a network filesystem (SSHFS/NFS) for the relay —
 SQLite over a network mount is corruption-prone. Use the relay.

@@ -11,7 +11,7 @@ workspace folder, and configures a runtime.
 Grab a bundle for your OS, or build from source:
 
 ```bash
-git clone https://github.com/ligus-ai/ligus.git
+git clone https://github.com/langstroth-ai/ligus.git
 cd ligus
 cargo tauri build        # bundles for the current OS → target/release/bundle/
 # or a fast dev loop without bundling:

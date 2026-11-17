@@ -83,7 +83,7 @@ ships no AppArmor profile for `bwrap` (Ubuntu 24.10 and later ship
 `bwrap-userns-restrict`), so bubblewrap fails with
 `setting up uid map: Permission denied` and Ligus uses the landlock tier.
 To get the bubblewrap tier back, install the optional profile from the
-repository, [`deploy/linux/apparmor/ligus-bwrap`](https://github.com/ligus-ai/ligus/blob/main/deploy/linux/apparmor/ligus-bwrap),
+repository, [`deploy/linux/apparmor/ligus-bwrap`](https://github.com/langstroth-ai/ligus/blob/main/deploy/linux/apparmor/ligus-bwrap),
 modelled on Ubuntu 24.10's: it lets `/usr/bin/bwrap` create user namespaces
 and moves everything bwrap runs into a stacked profile without
 capabilities.

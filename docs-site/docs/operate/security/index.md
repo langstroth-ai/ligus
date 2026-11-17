@@ -13,7 +13,7 @@ where its protection stops. It has three pages:
 [Security & trust](../../ligus/concepts/security.md) is the short list of guarantees;
 these pages explain them and their edges. Report vulnerabilities as
 described in
-[`SECURITY.md`](https://github.com/ligus-ai/ligus/blob/main/SECURITY.md).
+[`SECURITY.md`](https://github.com/langstroth-ai/ligus/blob/main/SECURITY.md).
 
 ## Components and what they hold {#components}
 
@@ -348,6 +348,6 @@ list with status is in
 - [Signed key rotations](#encryption) and one keyring on every host;
   [secrets in the OS secret store](#components); [passkey presence](#presence)
   on every workspace from its first event (rules v2; no rules v1).
-- Organization sign-in: [ligus-auth](../deploy/ligus-auth.md) issues
+- Organization sign-in: [langstroth-auth](../deploy/ligus-auth.md) issues
   short-lived relay tokens from your identity provider.
 - Still open: see [Known limitations](threat-model.md#known-limitations).

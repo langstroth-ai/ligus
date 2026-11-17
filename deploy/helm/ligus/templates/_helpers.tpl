@@ -51,7 +51,7 @@ app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 
 {{/*
-The in-release relay's Services, mirroring ligus-relay.fullname (the
+The in-release relay's Services, mirroring langstroth-relay.fullname (the
 subchart's name is its alias, "relay", unless nameOverride is set) and its
 topology rule.
 */}}
@@ -163,7 +163,7 @@ Args: dict rules what.
 - to:
     - podSelector:
         matchLabels:
-          app.kubernetes.io/name: ligus-relay
+          app.kubernetes.io/name: langstroth-relay
   ports:
     - port: 8443
 {{- else if $np.relayNamespace }}
@@ -173,7 +173,7 @@ Args: dict rules what.
           kubernetes.io/metadata.name: {{ $np.relayNamespace }}
       podSelector:
         matchLabels:
-          app.kubernetes.io/name: ligus-relay
+          app.kubernetes.io/name: langstroth-relay
   ports:
     - port: 8443
 {{- end }}

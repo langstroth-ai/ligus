@@ -3,7 +3,7 @@
 
 image:
   # Built from deploy/container/Dockerfile.
-  repository: ghcr.io/ligus-ai/ligus
+  repository: ghcr.io/langstroth-ai/ligus
   # Defaults to the chart's appVersion.
   tag: ""
   # Pin by digest in production (sha256:...). Overrides tag when set.
@@ -21,17 +21,17 @@ fullnameOverride: ""
 # https://; in-cluster http:// is fine for sync.
 relayUrl: ""
 
-# The ligus-relay chart as a dependency. Off by default: a relay is shared by
+# The langstroth-relay chart as a dependency. Off by default: a relay is shared by
 # many workspaces and belongs in its own namespace and release. Turn it on for
-# an all-in-one install (kind, k3d, a demo). Any ligus-relay value can be set
+# an all-in-one install (kind, k3d, a demo). Any langstroth-relay value can be set
 # under this key.
 relay:
   enabled: false
   # With the alias "relay" the subchart would otherwise name itself and label
-  # its pods "relay"; these keep the names the ligus-relay chart documents
-  # (Services ligus-relay-sync / -tunnel, label app.kubernetes.io/name=ligus-relay).
-  nameOverride: ligus-relay
-  fullnameOverride: ligus-relay
+  # its pods "relay"; these keep the names the langstroth-relay chart documents
+  # (Services langstroth-relay-sync / -tunnel, label app.kubernetes.io/name=langstroth-relay).
+  nameOverride: langstroth-relay
+  fullnameOverride: langstroth-relay
 
 # --- Workspace connection ----------------------------------------------------
 
@@ -245,7 +245,7 @@ networkPolicy:
   # ntfy need allowInternetHttps or ipBlock rules in extraEgress.
   restrictEgress: true
   # Namespace of a relay in this cluster (pods labelled
-  # app.kubernetes.io/name=ligus-relay), for the relay egress rule. Leave
+  # app.kubernetes.io/name=langstroth-relay), for the relay egress rule. Leave
   # empty for a relay outside the cluster (then allowInternetHttps or
   # extraEgress must reach it).
   relayNamespace: ""

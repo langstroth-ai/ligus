@@ -250,9 +250,9 @@ nav:
           - Multi-tenant (design): operate/deploy/multi-tenant.md
       - Relay & auth:
           - Self-hosting a relay: operate/networking/self-host.md
-          - Sign in with your IdP (ligus-auth): operate/deploy/ligus-auth.md
-          - ligus-auth with Pocket ID: operate/deploy/ligus-auth-pocket-id.md
-          - ligus-auth with Dex: operate/deploy/ligus-auth-dex.md
+          - Sign in with your IdP (langstroth-auth): operate/deploy/ligus-auth.md
+          - langstroth-auth with Pocket ID: operate/deploy/ligus-auth-pocket-id.md
+          - langstroth-auth with Dex: operate/deploy/ligus-auth-dex.md
           - Server-side membership: operate/ops/server-side-membership.md
       - Hosts:
           - Running ligus serve as your own device: operate/ops/serve-box.md

@@ -92,10 +92,10 @@ See `docs/packaging.md` in the repo for the full matrix.
 The relay lives in its own repository (Go):
 
 ```bash
-git clone https://github.com/ligus-ai/relay.git && cd relay
-go build -o ligus-relay ./cmd/ligus-relay
+git clone https://github.com/langstroth-ai/langstroth-relay.git && cd relay
+go build -o langstroth-relay ./cmd/langstroth-relay
 # or run it directly:
-go run ./cmd/ligus-relay
+go run ./cmd/langstroth-relay
 ```
 
 See [Self-hosting a relay](../networking/self-host.md).

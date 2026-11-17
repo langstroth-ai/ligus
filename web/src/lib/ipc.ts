@@ -526,7 +526,7 @@ export interface ProfileDto {
 }
 export const myProfile = () => invoke<ProfileDto>("my_profile");
 
-/// Organization sign-in through ligus-auth (device code). The session's
+/// Organization sign-in through langstroth-auth (device code). The session's
 /// short-lived relay token replaces the static relay access token while it is
 /// valid. It grants relay access only, never workspace membership.
 export interface LigusAuthStatusDto {

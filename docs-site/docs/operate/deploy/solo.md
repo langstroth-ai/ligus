@@ -22,15 +22,15 @@ flowchart LR
 === "macOS (Homebrew)"
 
     ```sh
-    brew install --cask ligus-ai/ligus/ligus-app
+    brew install --cask langstroth-ai/ligus/ligus-app
     ```
 
-    If Homebrew refuses to load the tap: `brew trust --tap ligus-ai/ligus`.
+    If Homebrew refuses to load the tap: `brew trust --tap langstroth-ai/ligus`.
 
 === "Windows / Linux"
 
     Download the installer, `.AppImage`, `.deb` or `.rpm` from the
-    [releases page](https://github.com/ligus-ai/ligus/releases). These
+    [releases page](https://github.com/langstroth-ai/ligus/releases). These
     builds are unsigned; see [First launch](../../ligus/getting-started/first-launch.md#install).
 
 Make sure your runtime works in a terminal first:

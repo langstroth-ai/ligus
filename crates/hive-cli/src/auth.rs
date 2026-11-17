@@ -1,9 +1,9 @@
 //! `ligus auth`: sign this box in to an organization's relay through
-//! ligus-auth (device code), and keep its relay token fresh.
+//! langstroth-auth (device code), and keep its relay token fresh.
 //!
 //! The session lives in `<data dir>/ligus-auth.json` (0600). While it exists
 //! and `LIGUS_RELAY_ACCESS_TOKEN` is not set, every relay client this process
-//! builds sends the ligus-auth access token, refreshed in the background.
+//! builds sends the langstroth-auth access token, refreshed in the background.
 //! Signing in gives relay access only: joining a workspace still needs an
 //! Admin to add this identity as a member.
 
@@ -18,7 +18,7 @@ use hive_runtime::IdentityStore;
 
 static CELL: OnceLock<TokenCell> = OnceLock::new();
 
-/// The ligus-auth token cell, when this process has a session.
+/// The langstroth-auth token cell, when this process has a session.
 pub fn cell() -> Option<TokenCell> {
     CELL.get().cloned()
 }
@@ -51,7 +51,7 @@ pub fn init(data_dir: &Path) {
         Ok(()) => {
             let _ = CELL.set(cell);
         }
-        Err(e) => eprintln!("ligus-auth: {e} (run `ligus auth status`)"),
+        Err(e) => eprintln!("langstroth-auth: {e} (run `ligus auth status`)"),
     }
 }
 
@@ -72,7 +72,7 @@ pub fn cmd_auth(data_dir: &Path, args: &[&String], label: Option<String>) -> Res
                 .enable_all()
                 .build()?;
             rt.block_on(ligus_auth::sign_out(&ligus_auth::http_client(), data_dir));
-            println!("Signed out of ligus-auth on this box.");
+            println!("Signed out of langstroth-auth on this box.");
             Ok(())
         }
         _ => bail!("usage: ligus auth login <url> [--label NAME] | status | logout"),
@@ -149,14 +149,14 @@ fn login(data_dir: &Path, url: &str, label: Option<String>) -> Result<()> {
 
 fn status(data_dir: &Path) -> Result<()> {
     let Some(s) = ligus_auth::load_session(data_dir) else {
-        println!("Not signed in to ligus-auth. (`ligus auth login <url>`)");
+        println!("Not signed in to langstroth-auth. (`ligus auth login <url>`)");
         return Ok(());
     };
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    println!("ligus-auth: {}", s.auth_url);
+    println!("langstroth-auth: {}", s.auth_url);
     println!("  tenant:     {}", s.tenant);
     println!("  subject:    {}", s.sub);
     println!("  workspaces: {}", s.workspaces.join(", "));

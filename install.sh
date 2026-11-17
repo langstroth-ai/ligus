@@ -1,7 +1,7 @@
 #!/bin/sh
 # Ligus CLI installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/ligus-ai/ligus/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/langstroth-ai/ligus/main/install.sh | sh
 #
 # Downloads the prebuilt `ligus` binary for your platform from the latest GitHub
 # Release and installs it. Override with env vars:
@@ -9,7 +9,7 @@
 #   LIGUS_INSTALL_DIR  install directory (default: $HOME/.local/bin)
 set -eu
 
-REPO="ligus-ai/ligus"
+REPO="langstroth-ai/ligus"
 BIN="ligus"
 
 os="$(uname -s)"

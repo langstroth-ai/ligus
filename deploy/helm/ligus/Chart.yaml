@@ -15,8 +15,8 @@ dependencies:
   # The relay chart lives in the relay repository (relay v0.3.0). It is not
   # published yet: package it from a relay checkout into charts/ (README).
   # Most installs point at an existing relay (relayUrl) instead.
-  - name: ligus-relay
+  - name: langstroth-relay
     alias: relay
     version: 0.3.0
-    repository: oci://ghcr.io/ligus-ai/charts
+    repository: oci://ghcr.io/langstroth-ai/charts
     condition: relay.enabled

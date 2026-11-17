@@ -444,7 +444,7 @@ async fn tunnel_request_after_revocation_on_open_session_gets_401() {
     assert_eq!(resp.status(), 401);
 }
 
-/// Interop with a real relay (the Go `honeyhive-ai/relay` with
+/// Interop with a real relay (the Go `langstroth-ai/langstroth-relay` with
 /// `LIGUS_RELAY_TUNNEL=open`). Ignored unless `LIGUS_TUNNEL_INTEROP_RELAY` is set.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn interop_against_a_real_relay() {

@@ -88,7 +88,7 @@ systemctl --user enable --now ligus-serve
 ```
 
 Don't reuse the 1.x data dir as `LIGUS_DATA_DIR`: 0.1 refuses it. See
-[`deploy/ligus-serve/README.md`](https://github.com/ligus-ai/ligus/tree/main/deploy/ligus-serve)
+[`deploy/ligus-serve/README.md`](https://github.com/langstroth-ai/ligus/tree/main/deploy/ligus-serve)
 for the full setup.
 
 ### Phones

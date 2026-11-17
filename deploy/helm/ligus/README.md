@@ -1,6 +1,6 @@
 # ligus Helm chart (preview)
 
-> **Preview.** Neither this chart nor the `ligus-relay` chart is published to a
+> **Preview.** Neither this chart nor the `langstroth-relay` chart is published to a
 > chart registry, and no container images are published: build them yourself
 > (below). Values may still change before they are.
 
@@ -14,7 +14,7 @@ not support) is the docs site's
 
 **One release per workspace, in that workspace's own namespace.** The relay is
 shared by many workspaces and normally lives in its own namespace and release
-(the `ligus-relay` chart in the relay repository, v0.3.0); this chart can also
+(the `langstroth-relay` chart in the relay repository, v0.3.0); this chart can also
 pull it in as a dependency for an all-in-one install.
 
 Requires a CLI image of 0.1 or later.
@@ -28,7 +28,7 @@ Requires a CLI image of 0.1 or later.
 | workers | One StatefulSet (one replica) per `worker.instances[]` entry | Optional. Each is its own host (`--label <name>`); bind agents with `ligus set-agent-host` |
 | MCP servers | Deployment + Service + NetworkPolicy each | Optional HTTP MCP servers, reachable only from this workspace's serve and workers |
 | NetworkPolicies | serve/workers, tests, MCP servers, optional namespace default-deny | Egress closed by default |
-| relay | `ligus-relay` dependency | Optional, `relay.enabled` |
+| relay | `langstroth-relay` dependency | Optional, `relay.enabled` |
 
 Every pod runs as UID 65532 with a read-only root filesystem, no capabilities,
 `RuntimeDefault` seccomp, no service account token and no `hostNetwork`, so the
@@ -69,7 +69,7 @@ checkout at v0.3.0:
 
 ```sh
 mkdir -p deploy/helm/ligus/charts
-helm package -d deploy/helm/ligus/charts <relay-checkout>/deploy/helm/ligus-relay
+helm package -d deploy/helm/ligus/charts <relay-checkout>/deploy/helm/langstroth-relay
 ```
 
 Create the workspace connection Secret from a desktop invite (the chart
@@ -221,9 +221,9 @@ set `LIGUS_MODEL_GATEWAY*`.
 
 | Key | Default | Notes |
 |---|---|---|
-| `image.repository` / `tag` / `digest` | `ghcr.io/ligus-ai/ligus`, appVersion | Built from `deploy/container/Dockerfile`; pin by digest |
+| `image.repository` / `tag` / `digest` | `ghcr.io/langstroth-ai/ligus`, appVersion | Built from `deploy/container/Dockerfile`; pin by digest |
 | `relayUrl` | empty | `LIGUS_RELAY_URL`; required unless `relay.enabled` |
-| `relay.enabled` | `false` | In-release relay (any `ligus-relay` value under `relay.`) |
+| `relay.enabled` | `false` | In-release relay (any `langstroth-relay` value under `relay.`) |
 | `workspace.existingSecret` / `secretKeys` / `relayAccessToken` | required | Workspace connection |
 | `remote.enabled` / `relayUrl` / `insecureRelay` / `regTokenSecret` | off | Phone access through the relay tunnel; `insecureRelay` only for in-cluster http |
 | `serve.label`, `name`, `owner`, `defaultAgent`, `applyOnApprove` | | `LIGUS_SERVE_*` (`owner` is changing in 0.1, above) |

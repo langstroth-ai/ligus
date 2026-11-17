@@ -45,7 +45,7 @@ whether two people have a DM: rooms and invite ids are random. It never sees
 a forge (GitHub, GitLab, ...) token: the client can't send one. It can't inject plaintext: a device that holds a workspace key skips
 any body from the relay that isn't sealed. In the tunnel it can't read or
 alter phone traffic (Noise, with the box's key pinned from the QR code). A
-ligus-auth token goes only to the relay the session was signed in for.
+langstroth-auth token goes only to the relay the session was signed in for.
 
 Each invite carries a fingerprint of the founder's account key, and a device
 pins it when it joins, so a hostile relay can't substitute the founder's key.
@@ -175,7 +175,7 @@ it.
 
 1. **Secrets in the OS secret store, with a file fallback.** Account,
    device and key-agreement seeds, the workspace passphrase and epoch keys,
-   relay and provider tokens and the ligus-auth session live in the OS secret
+   relay and provider tokens and the langstroth-auth session live in the OS secret
    store: on macOS a dedicated keychain file inside the data dir, the Secret
    Service on a Linux desktop, `systemd-creds` on a headless Linux box.
    `settings.json` and `config.toml` hold only `{"set": true}`
@@ -325,7 +325,7 @@ it.
 17. **The relay sees metadata** (above), including which contact ids get
     drops and when. The relay's admin
     API isn't in the open-source build, so per-person relay tokens need signed
-    tokens (short-lived ones from [ligus-auth](../deploy/ligus-auth.md), for
+    tokens (short-lived ones from [langstroth-auth](../deploy/ligus-auth.md), for
     example) or a restart to change an allowlist.
 18. **The direct phone path is plain HTTP.** Use the relay tunnel or a
     tailnet, or a LAN you trust. Invite codes, code-host tokens and device
@@ -472,7 +472,7 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 | Presence (Track B residuals) | Under rules v2 a device-key thief could certify new devices, rotate the account key (refused by the fold but still applied to the rosters) and, once an account's credentials were cleared or before it had any, register a "first" passkey; switching to an unknown rules version needed no presence | New devices and account-key rotations of an account with a passkey need its presence, and both rosters apply only allowed ones; a first passkey under v2 needs an Admin's grant; every switch to v2 or later needs presence |
 | Keys (Track B residuals) | Lease beats stayed on the passphrase key; a flood of junk bodies could evict parked bodies waiting for an authorized rotation (B-11); invite and DM codes were sealed to whatever keys the relay directory listed | Lease beats follow the keyring; parked bodies are ranked and junk goes first; codes go to signed directory keys, or after an Unverified recipient warning |
 | Secrets (Track B residuals) | The keychain unlock item trusted whichever process created it; an unusable keychain silently moved secrets to plain files; the passkey loopback read unbounded lines and its nonce was on the browser's command line (B-12) | An explicit access list for the Ligus binary (designated requirement for release apps); macOS refuses without `LIGUS_SECRET_BACKEND=file`; the loopback caps what it reads and the browser opens a private redirect page |
-| Relay (E-5) | The ligus-auth access token was sent to any configured relay, an invite's included | Only to the relay origin its session was signed in for |
+| Relay (E-5) | The langstroth-auth access token was sent to any configured relay, an invite's included | Only to the relay origin its session was signed in for |
 | Host (C-9) | An agent could write hooks or MCP servers into `~/.claude`, `~/.codex` and the other CLIs' config, which ran unsandboxed on the user's next CLI start | CLI agents run with a per-turn home seeded with the top-level config files; their real config dirs aren't writable, and only refreshed sign-in files are copied back ([details](../../ligus/addons/acp.md#cli-home)) |
 | Host (C-13) | A macOS agent could drive other apps with Apple Events or read the pasteboard | The Seatbelt profile denies Apple Events and the pasteboard services |
 | Host (C-14) | A runtime's trust digest didn't cover its provider id or metrics endpoint | It covers both, and a non-default driver |

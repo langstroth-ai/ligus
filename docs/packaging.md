@@ -48,6 +48,6 @@ per-language `register` imports (monaco-editor 0.56+), or a Vite `manualChunks` 
 ## Relay
 
 The relay deploys independently of the desktop app and lives in its own repo,
-[github.com/ligus-ai/relay](https://github.com/ligus-ai/relay)
-(`docker build -t hive-relay https://github.com/ligus-ai/relay.git`), bind via
+[github.com/langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay)
+(`docker build -t langstroth-relay https://github.com/langstroth-ai/langstroth-relay.git`), bind via
 `LIGUS_RELAY_ADDR`. See that repo's README + `deploy/fly.toml` for hosting.

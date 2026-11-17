@@ -49,7 +49,7 @@ quarantined, not applied.
 
 ## 2. Relay sync (HTTP/JSON)
 
-The relay ([ligus-ai/relay](https://github.com/ligus-ai/relay)) is a per-workspace forwarding mailbox keyed by
+The relay ([langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay)) is a per-workspace forwarding mailbox keyed by
 a **room id**. Devices on the same relay URL + room converge.
 
 - `GET  /v1/health` → `ok`

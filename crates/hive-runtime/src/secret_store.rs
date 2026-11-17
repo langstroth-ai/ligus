@@ -2,7 +2,7 @@
 //!
 //! Identity seeds, this device's key-agreement key, the workspace passphrase
 //! and delivered epoch keys, relay tokens, the relay issuer key, provider API
-//! keys, MCP tokens and the ligus-auth refresh token all live behind
+//! keys, MCP tokens and the langstroth-auth refresh token all live behind
 //! [`SecretStore`]; `settings.json` and `config.toml` keep only `{"set": true}`
 //! placeholders.
 //!

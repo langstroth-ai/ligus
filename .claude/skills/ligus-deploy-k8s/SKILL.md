@@ -23,7 +23,7 @@ IMG=<repository:tag of the Ligus image, 0.1+>
 | Scenario | When | Needs |
 |---|---|---|
 | `trial` | a local or throwaway cluster, to see it work | nothing from the human if the cluster is local |
-| `team-in-cluster-relay` | a team's workspace; relay in this cluster (namespace, default `ligus-relay`) | relay installed first (relay repository's AGENTS.md); the workspace Secret files |
+| `team-in-cluster-relay` | a team's workspace; relay in this cluster (namespace, default `langstroth-relay`) | relay installed first (relay repository's AGENTS.md); the workspace Secret files |
 | `team-external-relay` | a team's workspace; relay elsewhere at `https://` | `--relay-url https://...`; the workspace Secret files |
 
 **Stop and confirm with the human**: the context `$CTX` (unless it is a local
@@ -41,9 +41,9 @@ StorageClass to use and whether any worker hosts are wanted (`--workers a,b`).
   --relay-image-tag T`: without it the relay pod sits in ImagePullBackOff
   (install warns `relay.image`).
 - The chart needs the relay chart packaged: pass
-  `--relay-chart <relay-checkout>/deploy/helm/ligus-relay` (a full checkout:
-  the chart links `../ligus-postgres`) or `--fetch-relay-chart` (git clone of
-  `ligus-ai/relay` at the commit CI pins) to the first install.
+  `--relay-chart <relay-checkout>/deploy/helm/langstroth-relay` (a full checkout:
+  the chart links `../langstroth-postgres`) or `--fetch-relay-chart` (git clone of
+  `langstroth-ai/langstroth-relay` at the commit CI pins) to the first install.
 
 ## 3. Preflight
 

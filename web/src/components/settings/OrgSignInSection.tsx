@@ -12,7 +12,7 @@ import { Button, Section, fieldStyle } from "@/components/ui";
 import { toast, errMsg } from "@/components/Toast";
 
 /// Organization sign-in: sign this device in at your organization's identity
-/// provider through ligus-auth. The relay token it gets is short-lived and
+/// provider through langstroth-auth. The relay token it gets is short-lived and
 /// refreshed automatically. It reaches the relay only; a workspace Admin still
 /// adds people as members.
 export function OrgSignInSection() {
@@ -126,7 +126,7 @@ export function OrgSignInSection() {
       ) : (
         <div className="space-y-2">
           <p className="text-xs text-ink-soft">
-            If your organization runs ligus-auth, sign in with your company account instead of
+            If your organization runs langstroth-auth, sign in with your company account instead of
             pasting a relay token. Paste the address your admin gave you.
           </p>
           <div className="flex gap-2">

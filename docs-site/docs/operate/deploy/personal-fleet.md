@@ -8,7 +8,7 @@ carry the phone's traffic.
 
 ```mermaid
 flowchart LR
-  Desk["Laptop: Ligus desktop"] <-->|"E2EE events"| Relay["ligus-relay"]
+  Desk["Laptop: Ligus desktop"] <-->|"E2EE events"| Relay["langstroth-relay"]
   Serve["Home server: ligus serve"] <-->|"E2EE events"| Relay
   Phone["Phone app"] -->|"direct over Tailscale/LAN"| Serve
   Phone -.->|"or through the relay tunnel"| Relay
@@ -36,12 +36,12 @@ Skip this if you already have one. The simplest place is the home server
 itself, in Docker:
 
 ```sh
-docker build -t ligus-relay https://github.com/ligus-ai/relay.git
-docker run -d --name ligus-relay --restart unless-stopped \
-  -p 127.0.0.1:8443:8443 -v ligus-relay:/data \
+docker build -t langstroth-relay https://github.com/langstroth-ai/langstroth-relay.git
+docker run -d --name langstroth-relay --restart unless-stopped \
+  -p 127.0.0.1:8443:8443 -v langstroth-relay:/data \
   -e LIGUS_RELAY_DATA_DIR=/data \
   -e LIGUS_RELAY_TUNNEL=open \
-  ligus-relay
+  langstroth-relay
 curl -s localhost:8443/v1/health
 # ok
 ```
@@ -86,7 +86,7 @@ encrypted.
 ## 3. Install `ligus` on the home server
 
 ```sh
-brew install ligus-ai/ligus/ligus      # macOS or Linux with Homebrew
+brew install langstroth-ai/ligus/ligus      # macOS or Linux with Homebrew
 ligus --version
 # ligus 0.1.0
 ```
@@ -110,7 +110,7 @@ ligus chats                          # the laptop's chats are here
 ## 5. Run `ligus serve` as a service
 
 The repository ships a systemd user unit and an env file in
-[`deploy/ligus-serve/`](https://github.com/ligus-ai/ligus/tree/main/deploy/ligus-serve).
+[`deploy/ligus-serve/`](https://github.com/langstroth-ai/ligus/tree/main/deploy/ligus-serve).
 
 ```sh
 install -Dm644 ligus-serve.service ~/.config/systemd/user/ligus-serve.service

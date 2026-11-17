@@ -7,17 +7,18 @@ workspace key, so it can't read what it stores. You run one relay for a
 team; every device in a workspace points at the same relay URL and room.
 
 It lives in its own repository,
-**[github.com/ligus-ai/relay](https://github.com/ligus-ai/relay)** (MIT).
-This page covers relay **v0.3.0**: the binary `ligus-relay` and settings
+**[github.com/langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay)** (MIT).
+This page covers relay **v0.3.0**: the binary `langstroth-relay` and settings
 named `LIGUS_RELAY_*`.
 
-!!! note "Older relay builds use the Hive names"
+!!! note "Older relay builds use older names"
     Relay builds before v0.2.0 ship the binary as `hive-relay`
     (`./cmd/hive-relay`) and read only `HIVE_RELAY_*` settings. v0.2.0 reads
     both spellings (the `LIGUS_RELAY_*` name wins, and a legacy name logs a
-    one-time deprecation warning) and keeps `hive-relay` as an alias. If
-    `./cmd/ligus-relay` doesn't exist in your checkout, use the `hive-relay`
-    and `HIVE_RELAY_*` names in everything below.
+    one-time deprecation warning) and keeps `hive-relay` as an alias. Builds
+    from before the Langstroth rename call the binary `ligus-relay`
+    (`./cmd/ligus-relay`). If `./cmd/langstroth-relay` doesn't exist in your
+    checkout, use the binary name your checkout has in everything below.
 
 ## What the relay holds
 
@@ -43,18 +44,18 @@ GitHub logins that use the directory, and tunnel timing. See the
 ### Build
 
 ```sh
-git clone https://github.com/ligus-ai/relay.git && cd relay
-go build -o ligus-relay ./cmd/ligus-relay       # Go 1.25+ (see go.mod)
-./ligus-relay                                   # listens on 0.0.0.0:8443
+git clone https://github.com/langstroth-ai/langstroth-relay.git && cd relay
+go build -o langstroth-relay ./cmd/langstroth-relay       # Go 1.25+ (see go.mod)
+./langstroth-relay                                   # listens on 0.0.0.0:8443
 curl -s localhost:8443/v1/health                # → ok
 ```
 
 ### Docker
 
 ```sh
-docker build -t ligus-relay https://github.com/ligus-ai/relay.git
-docker run -d --name ligus-relay --restart unless-stopped \
-  -p 8443:8443 -v ligus-data:/data -e LIGUS_RELAY_DATA_DIR=/data ligus-relay
+docker build -t langstroth-relay https://github.com/langstroth-ai/langstroth-relay.git
+docker run -d --name langstroth-relay --restart unless-stopped \
+  -p 8443:8443 -v ligus-data:/data -e LIGUS_RELAY_DATA_DIR=/data langstroth-relay
 curl -s localhost:8443/v1/health                # → ok
 ```
 
@@ -78,17 +79,17 @@ curl -s https://<app>.fly.dev/v1/health          # → ok
 ### systemd
 
 ```ini
-# /etc/systemd/system/ligus-relay.service
+# /etc/systemd/system/langstroth-relay.service
 [Unit]
 Description=Ligus relay
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/ligus-relay
-EnvironmentFile=/etc/ligus-relay.env
-User=ligus-relay
-Group=ligus-relay
+ExecStart=/usr/local/bin/langstroth-relay
+EnvironmentFile=/etc/langstroth-relay.env
+User=langstroth-relay
+Group=langstroth-relay
 UMask=0077
 Restart=always
 NoNewPrivileges=yes
@@ -98,16 +99,16 @@ WantedBy=multi-user.target
 ```
 
 ```sh
-sudo useradd --system --home /var/lib/ligus-relay --create-home ligus-relay
-printf 'LIGUS_RELAY_ADDR=127.0.0.1:8443\nLIGUS_RELAY_DATA_DIR=/var/lib/ligus-relay\n' | sudo tee /etc/ligus-relay.env
-sudo chmod 600 /etc/ligus-relay.env
-sudo systemctl daemon-reload && sudo systemctl enable --now ligus-relay
+sudo useradd --system --home /var/lib/langstroth-relay --create-home langstroth-relay
+printf 'LIGUS_RELAY_ADDR=127.0.0.1:8443\nLIGUS_RELAY_DATA_DIR=/var/lib/langstroth-relay\n' | sudo tee /etc/langstroth-relay.env
+sudo chmod 600 /etc/langstroth-relay.env
+sudo systemctl daemon-reload && sudo systemctl enable --now langstroth-relay
 curl -s localhost:8443/v1/health                # → ok
 ```
 
 ### Kubernetes
 
-Relay v0.3.0 ships Helm charts for the relay and ligus-auth (`deploy/helm/`); see
+Relay v0.3.0 ships Helm charts for the relay and langstroth-auth (`deploy/helm/`); see
 [Kubernetes](../deploy/kubernetes.md#relay).
 
 ## Listen address
@@ -223,11 +224,11 @@ Mint signed tokens with the relay binary, **on a machine other than the
 relay**:
 
 ```console
-$ ligus-relay keygen
+$ langstroth-relay keygen
 # Ed25519 issuer keypair
 private_key=3f9c…   # SECRET — keep on the issuer only (never on the relay)
 public_key=a1b2…    # set as HIVE_RELAY_TOKEN_PUBKEY on the relay
-$ ligus-relay issue --key 3f9c… --sub ligus:6f1c2d3e-8a7b-4c1d-9e0f-112233445566 --exp-days 365
+$ langstroth-relay issue --key 3f9c… --sub ligus:6f1c2d3e-8a7b-4c1d-9e0f-112233445566 --exp-days 365
 hrt1.eyJzdWIiOiJnaXRodWI6YWxpY2UiLC…
 ```
 
@@ -235,7 +236,7 @@ hrt1.eyJzdWIiOiJnaXRodWI6YWxpY2UiLC…
 setting.) `issue` takes `--sub <id>` and optionally `--exp-days N` (no
 expiry if omitted), `--workspace <id>` (see below), `--cap X`, and the
 informational `--plan`, `--max-members N`, `--retention-days N` and `--turn`
-(see the claims table below). `ligus-relay bootstrap-agent`
+(see the claims table below). `langstroth-relay bootstrap-agent`
 mints a token for a headless agent and prints the one-line
 `ligus enroll … && ligus worker` command; see
 [Headless agents](../concepts/headless-agents.md#3-remote-agent-always-on-worker).
@@ -275,13 +276,13 @@ verify tokens but never mint them.
 | `caps` | capability strings; forward-compatible, the relay ignores ones it doesn't act on |
 | `plan`, `max_members`, `retention_days`, `turn` | informational fields kept for wire compatibility; the relay doesn't act on them |
 
-ligus-auth adds `tid`, `uid` and `did`; see [ligus-auth](../deploy/ligus-auth.md).
+langstroth-auth adds `tid`, `uid` and `did`; see [langstroth-auth](../deploy/ligus-auth.md).
 
 ### Per-workspace token scope {#per-workspace-token-scope}
 
 The token gate is coarse: by default any admitted caller may read and write
 any workspace whose id it knows. Signed tokens can carry a `workspaces`
-claim (`ligus-relay issue … --workspace <id> [--workspace <id>]`, `*` = any),
+claim (`langstroth-relay issue … --workspace <id> [--workspace <id>]`, `*` = any),
 and `LIGUS_RELAY_WORKSPACE_SCOPE` decides what the relay does with it:
 
 | Value | Behaviour |
@@ -426,8 +427,8 @@ up for convenience, not as your only copy.
   replaced atomically, so a copy is always consistent.
 
     ```sh
-    install -d -m 700 /var/backups/ligus-relay
-    cp /var/lib/ligus-relay/relay-state.json /var/backups/ligus-relay/relay-state-$(date +%F).json
+    install -d -m 700 /var/backups/langstroth-relay
+    cp /var/lib/langstroth-relay/relay-state.json /var/backups/langstroth-relay/relay-state-$(date +%F).json
     ```
 
 - **Postgres:** `pg_dump` on your normal schedule.

@@ -4,7 +4,7 @@
 (`hive-core` + `hive-runtime`) wired to flags and environment variables
 instead of a window. It runs workers, the phone's home host
 (`ligus serve`) and scripts. Install it with
-`brew install ligus-ai/ligus/ligus` (macOS and Linux) or build the container
+`brew install langstroth-ai/ligus/ligus` (macOS and Linux) or build the container
 image in `deploy/container/`.
 
 This page is checked against `crates/hive-cli/src/main.rs` for 0.1.0. The
@@ -69,13 +69,13 @@ Next: `ligus sync` then `ligus worker` to bring the agent online.
 
 ## Signing in to an organization's relay
 
-For a relay behind [ligus-auth](../../operate/deploy/ligus-auth.md):
+For a relay behind [langstroth-auth](../../operate/deploy/ligus-auth.md):
 
 | Command | What it does |
 |---|---|
 | `ligus auth login <url> [--label NAME]` | device-code sign-in at `https://auth.example.com/t/<tenant>`: prints a code to enter in a browser, then saves the session to `<data dir>/ligus-auth.json` (0600) |
 | `ligus auth status` | the tenant, subject, granted workspaces and access-token lifetime (never the tokens) |
-| `ligus auth logout` | revokes the session at ligus-auth and deletes the file |
+| `ligus auth logout` | revokes the session at langstroth-auth and deletes the file |
 
 While a session exists, every `ligus` command uses its short-lived relay
 token and refreshes it in the background (the refresh token only works with

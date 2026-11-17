@@ -2,7 +2,7 @@
 
 `Casks/ligus-app.rb` is the Homebrew cask for installing the desktop app. It
 lives here as a staging copy; Homebrew discovers casks from a **tap repo**,
-`github.com/ligus-ai/homebrew-ligus`, which holds the live copy.
+`github.com/langstroth-ai/homebrew-ligus`, which holds the live copy.
 
 The tap has two entries:
 
@@ -12,13 +12,13 @@ The tap has two entries:
 | `ligus-app` | cask | `Ligus.app`, the desktop app |
 
 The cask is `ligus-app` rather than `ligus` because a formula and a cask with the
-same name in one tap make `brew install ligus-ai/ligus/ligus` ambiguous.
+same name in one tap make `brew install langstroth-ai/ligus/ligus` ambiguous.
 
 Users install with:
 
 ```bash
-brew install --cask ligus-ai/ligus/ligus-app   # desktop app
-brew install ligus-ai/ligus/ligus              # CLI
+brew install --cask langstroth-ai/ligus/ligus-app   # desktop app
+brew install langstroth-ai/ligus/ligus              # CLI
 ```
 
 `brew upgrade --cask ligus-app` picks up new releases (the `livecheck` block

@@ -20,7 +20,7 @@ non-interactively with `--json`. See [`AGENTS.md`](../../AGENTS.md).
 
 | Component | Kubernetes shape | State | Holds E2EE keys? |
 |---|---|---|---|
-| Relay (separate repo, `ligus-ai/relay`) | Deployment + Postgres (external or an in-cluster operator); the tunnel part pinned to one replica | Postgres | **No**, ciphertext only |
+| Relay (separate repo, `langstroth-ai/langstroth-relay`) | Deployment + Postgres (external or an in-cluster operator); the tunnel part pinned to one replica | Postgres | **No**, ciphertext only |
 | `ligus serve` (one per workspace) | StatefulSet, 1 replica, PVC for `LIGUS_DATA_DIR` | PVC (identity, `hive.db`, tunnel keys, checkouts) | Yes |
 | `ligus worker` | One single-replica StatefulSet per named host (`worker.instances[]`); agents bound by host | PVCs per host | Yes |
 | MCP servers | Deployment + Service (or ToolHive / kagent CRDs); stdio servers run inside the turn | per server | No |

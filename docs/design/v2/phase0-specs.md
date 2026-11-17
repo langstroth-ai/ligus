@@ -14,7 +14,7 @@ Ligus is short for *ligustica*, the Italian honeybee. The product was formerly c
 | Repo | Location | Branch / commit |
 |---|---|---|
 | Core, app and CLI | this repo | `release/v2.0.0` @ `534c8d0b`. sec/core-, host- and chart-hardening are merged (a79ac18e, 45c84abe, 7548ec42). The UI and phone-endpoint merges are in progress. |
-| Relay | relay repo (`ligus-ai/relay`) | `release/v0.2.0` @ `3c22559` |
+| Relay | relay repo (`langstroth-ai/langstroth-relay`) | `release/v0.2.0` @ `3c22559` |
 | iOS | iOS app repo (private) | `feat/ligus-2.0` @ `aaa679c` |
 
 Unless a path says otherwise, citations are relative to the root of this repo. Relay paths are prefixed `relay/` and refer to the relay repo. Line numbers are as of `534c8d0b`. Re-anchor them when you rebase, because the in-flight merges will shift lines in `app/src/lib.rs`.

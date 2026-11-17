@@ -152,7 +152,7 @@ export function PermissionsSection() {
             <p className="text-xs" style={{ color: "var(--hive-danger-ink)" }}>
               Ligus is running from a temporary location (App Translocation), so permission grants
               won't stick. Move Ligus to <code>/Applications</code> and reopen it — or install via{" "}
-              <code>brew install --cask ligus-ai/ligus/ligus-app</code>.
+              <code>brew install --cask langstroth-ai/ligus/ligus-app</code>.
             </p>
           )}
           {health.data?.quarantined && !health.data?.translocated && (

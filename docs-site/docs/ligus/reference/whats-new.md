@@ -6,7 +6,7 @@ releases and keep its name.
 
 Changes since 1.15, newest first, with links to where each is documented.
 Full release notes are on the
-[GitHub releases page](https://github.com/ligus-ai/ligus/releases).
+[GitHub releases page](https://github.com/langstroth-ai/ligus/releases).
 
 ## 0.1.0
 
@@ -167,14 +167,14 @@ Full release notes are on the
   with your passkey over them (`presence/prepare`, `presence/commit`); folds
   drop its votes without one. [Securing the box](../../operate/ops/serve-box.md)
 - **Organization sign-in.** `ligus auth login` and Settings → Team sync sign
-  in through [ligus-auth](../../operate/deploy/ligus-auth.md) with your identity
+  in through [langstroth-auth](../../operate/deploy/ligus-auth.md) with your identity
   provider (setups for [Pocket ID](../../operate/deploy/ligus-auth-pocket-id.md) and
   [Dex](../../operate/deploy/ligus-auth-dex.md)) and keep a short-lived relay token
   fresh.
 - **Desktop.** The app is `Ligus.app`. Theme and pane layout reset once, and
   macOS asks again for folder and notification access. An auto-updated app
   may still be at `/Applications/Hive.app`; you can rename it to `Ligus.app`.
-- **Homebrew.** Formula `ligus`, cask `ligus-app`, tap `ligus-ai/ligus`;
+- **Homebrew.** Formula `ligus`, cask `ligus-app`, tap `langstroth-ai/ligus`;
   existing `hive-cli` and `hive` installs upgrade to them.
 - **Repos from the phone.** `ligus serve` lists the host's checkouts and your
   GitHub repos, clones on demand, switches a chat's repo, pulls, and opens a
@@ -190,7 +190,7 @@ Full release notes are on the
 - **Kubernetes design and a container image.** A design for running the relay,
   `ligus serve` and sandboxed turn executors on Kubernetes, and a Dockerfile
   for the `ligus` binary (`deploy/container`).
-- **New addresses.** The project lives at github.com/ligus-ai/ligus and the
+- **New addresses.** The project lives at github.com/langstroth-ai/ligus and the
   docs at docs.langstroth.ai, in two sections:
   [Using Ligus](../index.md) and
   [Operating Langstroth](../../operate/index.md) (self-hosting and

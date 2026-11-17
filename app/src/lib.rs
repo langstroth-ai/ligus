@@ -11188,13 +11188,13 @@ struct UpdateInfo {
     notes: String,
 }
 
-/// The manifest's `url` if it is the ligus-ai/ligus GitHub releases page,
+/// The manifest's `url` if it is the langstroth-ai/ligus GitHub releases page,
 /// else empty (the banner then opens its built-in releases link). The banner
 /// hands this to the system browser, and HTTPS trusts the OS store, so a
 /// store-installed root or a compromised docs host must not be able to point
 /// people at an arbitrary download.
 fn release_page_url(raw: &str) -> String {
-    const PAGE: &str = "https://github.com/ligus-ai/ligus/releases";
+    const PAGE: &str = "https://github.com/langstroth-ai/ligus/releases";
     let Some(rest) = raw.strip_prefix(PAGE) else { return String::new() };
     let tail_ok = rest.is_empty() || rest.starts_with('/');
     let chars_ok = rest.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | '_' | '.'));
@@ -13454,7 +13454,7 @@ async fn workspace_join_via_invite(state: State<'_, AppState>, code: String) -> 
 
 /// The Ligus account id (as a string) a relay membership subject names:
 /// `ligus:<account id>` for a desktop-minted token. Anything else (a
-/// ligus-auth `<tenant>:<user>` subject) names no account this device can
+/// langstroth-auth `<tenant>:<user>` subject) names no account this device can
 /// map, and `None` leaves the roster alone. Lets us exclude a relay-removed
 /// member from the E2EE rotation recipient set.
 fn hive_account_id_for(account: &str) -> Option<String> {
@@ -14079,7 +14079,7 @@ fn import_config(state: State<AppState>, toml_text: String) -> Result<String, St
 // who holds the Ed25519 issuer key (Settings → Team sync) can mint an agent
 // identity token locally, enroll it in the workspace roster, and produce the
 // single copy-paste line a developer runs on the remote box. Mirrors the
-// `hive-relay bootstrap-agent` CLI; the issuer PRIVATE key never leaves here.
+// `langstroth-relay bootstrap-agent` CLI; the issuer PRIVATE key never leaves here.
 // ---------------------------------------------------------------------------
 
 /// Mint an `hrt1` token signed by the issuer seed, byte-compatible with the Go
@@ -14148,7 +14148,7 @@ fn has_issuer_key(state: State<AppState>) -> bool {
 fn set_relay_issuer_key(state: State<AppState>, key: String) -> Result<(), String> {
     let k = key.trim();
     if !k.is_empty() && hex_decode_32(k).is_none() {
-        return Err("Issuer key must be a 64-character hex Ed25519 seed (from `hive-relay keygen`).".to_string());
+        return Err("Issuer key must be a 64-character hex Ed25519 seed (from `langstroth-relay keygen`).".to_string());
     }
     let mut s = state.settings.lock().unwrap();
     s.relay_issuer_key = if k.is_empty() { None } else { Some(k.to_string()) };
@@ -14198,7 +14198,7 @@ async fn generate_agent_bootstrap(
 
     let mut block = String::new();
     block.push_str("# Run on the remote agent box:\n");
-    block.push_str("brew install ligus-ai/ligus/ligus && \\\n");
+    block.push_str("brew install langstroth-ai/ligus/ligus && \\\n");
     block.push_str(&format!("  ligus enroll \"{invite}\" --token \"{token}\" && \\\n"));
     block.push_str(&format!("  ligus worker --label {label}\n"));
     if !enrolled {
@@ -14566,7 +14566,7 @@ pub fn run() {
             #[cfg(feature = "p2p")]
             let p2p = (ensure_p2p_secret(&state), state.data_dir.clone(), state.db_path.clone());
             app.manage(state);
-            // ligus-auth: keep a signed-in session's relay token fresh.
+            // langstroth-auth: keep a signed-in session's relay token fresh.
             ligus_auth_ui::start(&app.state::<AppState>());
             // B3: governance asks for a passkey through the system browser.
             passkey_ui::install(&app.state::<AppState>(), app.handle());
@@ -15652,30 +15652,30 @@ mod update_version_tests {
     /// The banner opens the manifest's `url` in the browser. HTTPS now trusts
     /// the OS store (reqwest 0.13), so a store-installed root (or a
     /// compromised docs host) must not be able to send people to an arbitrary
-    /// download: only the ligus-ai/ligus releases page is kept, else the UI's
+    /// download: only the langstroth-ai/ligus releases page is kept, else the UI's
     /// default.
     #[test]
     fn update_banner_url_is_the_ligus_releases_page_only() {
         use super::release_page_url as r;
         for ok in [
-            "https://github.com/ligus-ai/ligus/releases/latest",
-            "https://github.com/ligus-ai/ligus/releases/tag/v2.0.0",
-            "https://github.com/ligus-ai/ligus/releases",
+            "https://github.com/langstroth-ai/ligus/releases/latest",
+            "https://github.com/langstroth-ai/ligus/releases/tag/v2.0.0",
+            "https://github.com/langstroth-ai/ligus/releases",
         ] {
             assert_eq!(r(ok), ok);
         }
         for bad in [
             "",
             "https://evil.example/ligus.dmg",
-            "http://github.com/ligus-ai/ligus/releases/latest",
-            "https://github.com/ligus-ai/ligus/releasesX",
-            "https://github.com/ligus-ai/ligus/releases/../../../evil/repo/releases",
-            "https://github.com/ligus-ai/ligus/releases/%2e%2e/%2e%2e/evil",
-            "https://github.com.evil.example/ligus-ai/ligus/releases",
-            "https://github.com@evil.example/ligus-ai/ligus/releases",
-            "https://github.com/ligus-ai/ligus/releases\\@evil.example",
-            "https://github.com/ligus-ai/ligus/releases latest",
-            "javascript:alert(1)//https://github.com/ligus-ai/ligus/releases",
+            "http://github.com/langstroth-ai/ligus/releases/latest",
+            "https://github.com/langstroth-ai/ligus/releasesX",
+            "https://github.com/langstroth-ai/ligus/releases/../../../evil/repo/releases",
+            "https://github.com/langstroth-ai/ligus/releases/%2e%2e/%2e%2e/evil",
+            "https://github.com.evil.example/langstroth-ai/ligus/releases",
+            "https://github.com@evil.example/langstroth-ai/ligus/releases",
+            "https://github.com/langstroth-ai/ligus/releases\\@evil.example",
+            "https://github.com/langstroth-ai/ligus/releases latest",
+            "javascript:alert(1)//https://github.com/langstroth-ai/ligus/releases",
         ] {
             assert_eq!(r(bad), "", "{bad}");
         }

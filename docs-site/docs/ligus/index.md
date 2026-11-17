@@ -104,7 +104,7 @@ unsigned. The headless `ligus` CLI ships for macOS and Linux through
 Homebrew. See [What's new](reference/whats-new.md).
 
 The reference relay is MIT-licensed and lives in its own repository,
-[github.com/ligus-ai/relay](https://github.com/ligus-ai/relay) (a small Go
+[github.com/langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay) (a small Go
 service); see [Self-hosting a relay](../operate/networking/self-host.md). Desktops that
 are contacts also sync directly peer to peer over **iroh**, falling back to
 the relay. Kubernetes support is in preview

@@ -6,7 +6,7 @@ and served at **<https://docs.langstroth.ai/>**. It has two sections:
 | Section | Directory | URL prefix | Audience |
 |---|---|---|---|
 | Using Ligus | `docs/ligus/` | <https://docs.langstroth.ai/ligus/> | People using the Ligus desktop app, phone app and `ligus` CLI |
-| Operating Langstroth | `docs/operate/` | <https://docs.langstroth.ai/operate/> | People self-hosting and deploying: relay, ligus-auth, Helm charts, `ligus serve` and worker hosts, security model, operator reference |
+| Operating Langstroth | `docs/operate/` | <https://docs.langstroth.ai/operate/> | People self-hosting and deploying: relay, langstroth-auth, Helm charts, `ligus serve` and worker hosts, security model, operator reference |
 
 *Ligus* is short for *ligustica*, the Italian honeybee, and is the app;
 Langstroth is the platform behind it. The home page (`docs/index.md`)

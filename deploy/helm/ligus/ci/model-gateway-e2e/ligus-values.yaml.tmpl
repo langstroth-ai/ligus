@@ -1,5 +1,5 @@
 image: {repository: ligus, tag: __TAG__, pullPolicy: Never}
-relayUrl: http://ligus-relay.ligus-relay-gwe2e.svc.cluster.local:8443
+relayUrl: http://langstroth-relay.langstroth-relay-gwe2e.svc.cluster.local:8443
 workspace: {existingSecret: ws-gwe2e}
 serviceAccount: {create: true, name: ligus-serve}
 serve:
@@ -10,7 +10,7 @@ serve:
     limits: {cpu: "1", memory: 512Mi, ephemeral-storage: 1Gi}
 networkPolicy:
   restrictEgress: true
-  relayNamespace: ligus-relay-gwe2e
+  relayNamespace: langstroth-relay-gwe2e
   namespaceDefaultDeny: true
 modelGateways:
   - name: kgw

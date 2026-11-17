@@ -5,10 +5,10 @@ cask "ligus-app" do
   version "0.1.0"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
 
-  url "https://github.com/ligus-ai/ligus/releases/download/v#{version}/Ligus_#{version}_aarch64.dmg"
+  url "https://github.com/langstroth-ai/ligus/releases/download/v#{version}/Ligus_#{version}_aarch64.dmg"
   name "Ligus"
   desc "Shared LLM workspace for developers (formerly Hive)"
-  homepage "https://github.com/ligus-ai/ligus"
+  homepage "https://github.com/langstroth-ai/ligus"
 
   livecheck do
     url :url

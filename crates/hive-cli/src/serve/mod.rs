@@ -613,7 +613,7 @@ impl Shared {
     /// `DeviceRevoked` of a phone's device (its own key never signs again;
     /// the fold refuses it) also revokes that phone's tunnel pairing here
     /// (the relay drops its sessions through the existing tunnel revocation,
-    /// and pushes to it stop). Its ligus-auth session is revoked by the same
+    /// and pushes to it stop). Its langstroth-auth session is revoked by the same
     /// signed `DeviceRevoked` when organization sign-in lands (Phase D).
     /// Returns the pairings revoked.
     pub fn revoke_phones_of_revoked_devices(&self) -> Vec<String> {

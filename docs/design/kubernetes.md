@@ -102,7 +102,7 @@ binary, configured by environment variables, content-blind, with a health
 endpoint that round-trips the store (`GET /v1/health`, `503` if the backend is
 down) and a Prometheus-style `/metrics` endpoint (optionally gated by
 `LIGUS_RELAY_METRICS_TOKEN`). It lives in its own repository
-(`ligus-ai/relay`), and its chart should live there too and be pulled into
+(`langstroth-ai/langstroth-relay`), and its chart should live there too and be pulled into
 the Hive umbrella chart as a dependency.
 
 **Store.** Always Postgres on Kubernetes (`DATABASE_URL` from a Secret, plus

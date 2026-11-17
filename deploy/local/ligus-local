@@ -222,7 +222,7 @@ cmd_install_cli() {
   else
     if LIGUS_VERSION="${VERSION:-latest}" LIGUS_INSTALL_DIR="${BIN_DIR:-$HOME/.local/bin}" sh "$ROOT/install.sh" >&2; then
       ac_check install pass "installed ${BIN_DIR:-$HOME/.local/bin}/ligus (${VERSION:-latest})"
-      ac_check install.integrity warn "the release binary was downloaded over https without a published checksum or signature to verify it against${VERSION:+}${VERSION:- (and 'latest' is not pinned)}" "pin --version, or install the Homebrew formula (its sha256 is pinned): brew install ligus-ai/ligus/ligus"
+      ac_check install.integrity warn "the release binary was downloaded over https without a published checksum or signature to verify it against${VERSION:+}${VERSION:- (and 'latest' is not pinned)}" "pin --version, or install the Homebrew formula (its sha256 is pinned): brew install langstroth-ai/ligus/ligus"
     else
       ac_check install fail "install.sh failed" "check the release exists for this platform, or use --from-source"
     fi

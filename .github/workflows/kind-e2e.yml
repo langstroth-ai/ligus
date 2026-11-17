@@ -31,10 +31,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Repository and commit holding the ligus-relay chart and image: pinned to
+  # Repository and commit holding the langstroth-relay chart and image: pinned to
   # a tested commit (relay v0.3.0), never a moving branch. Bump it together
-  # with the ligus chart's ligus-relay dependency.
-  RELAY_REPO: ligus-ai/relay
+  # with the ligus chart's langstroth-relay dependency.
+  RELAY_REPO: langstroth-ai/langstroth-relay
   RELAY_REF: 50451173b28a78c4845a38107429aaf0cc6d02bf
 
 jobs:
@@ -67,10 +67,10 @@ jobs:
         with:
           context: _relay
           file: _relay/deploy/container/Dockerfile
-          tags: ligus-relay:dev
+          tags: langstroth-relay:dev
           load: true
-          cache-from: type=gha,scope=ligus-relay
-          cache-to: type=gha,scope=ligus-relay,mode=max
+          cache-from: type=gha,scope=langstroth-relay
+          cache-to: type=gha,scope=langstroth-relay,mode=max
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v3.19.0
@@ -78,7 +78,7 @@ jobs:
         run: |
           set -e
           mkdir -p deploy/helm/ligus/charts
-          helm package -d deploy/helm/ligus/charts _relay/deploy/helm/ligus-relay
+          helm package -d deploy/helm/ligus/charts _relay/deploy/helm/langstroth-relay
           helm lint --strict deploy/helm/ligus -f deploy/helm/ligus/ci/kind-values.yaml
           helm lint --strict deploy/helm/ligus -f deploy/helm/ligus/ci/kind-values.yaml \
             --set serve.enabled=false --set worker.enabled=true --set workspace.existingSecret=ws-worker
@@ -103,11 +103,11 @@ jobs:
         with:
           cluster_name: ligus-e2e
       - name: load images
-        run: kind load docker-image ligus:dev ligus-relay:dev --name ligus-e2e
+        run: kind load docker-image ligus:dev langstroth-relay:dev --name ligus-e2e
       - name: install relay
         run: |
-          kubectl create namespace ligus-relay
-          kubectl label namespace ligus-relay pod-security.kubernetes.io/enforce=restricted
+          kubectl create namespace langstroth-relay
+          kubectl label namespace langstroth-relay pod-security.kubernetes.io/enforce=restricted
           # The relay chart's tunnel is off by default since relay 0.2.0. Open
           # is fine for this throwaway in-cluster relay; never without a token
           # gate on a reachable one.
@@ -115,15 +115,15 @@ jobs:
           # operator creates: relay charts after v0.3.0 generate none and
           # refuse postgres.enabled without it (v0.3.0 ignores both).
           PW=$(openssl rand -hex 24)
-          kubectl -n ligus-relay create secret generic relay-dev-postgres \
+          kubectl -n langstroth-relay create secret generic relay-dev-postgres \
             --from-literal=password="$PW" \
-            --from-literal=DATABASE_URL="postgres://relay:$PW@ligus-relay-postgres:5432/relay?sslmode=disable"
-          helm install ligus-relay _relay/deploy/helm/ligus-relay -n ligus-relay \
-            --set image.repository=ligus-relay --set image.tag=dev \
+            --from-literal=DATABASE_URL="postgres://relay:$PW@langstroth-relay-postgres:5432/relay?sslmode=disable"
+          helm install langstroth-relay _relay/deploy/helm/langstroth-relay -n langstroth-relay \
+            --set image.repository=langstroth-relay --set image.tag=dev \
             --set postgres.enabled=true --set postgres.existingSecret=relay-dev-postgres \
             --set postgres.persistence.size=256Mi \
             --set tunnel.mode=open --wait --timeout 5m
-          helm test ligus-relay -n ligus-relay --logs
+          helm test langstroth-relay -n langstroth-relay --logs
       - name: runner kernel has Landlock
         run: |
           # serve and the worker refuse agent turns without confinement
@@ -209,7 +209,7 @@ jobs:
         run: |
           marker=$(grep -o 'k8s-smoke-[0-9]*-[0-9]*' /tmp/test.log | tail -1)
           test -n "$marker"
-          if kubectl -n ligus-relay exec ligus-relay-postgres-0 -- pg_dump -U relay -d relay --data-only | grep -q "$marker"; then
+          if kubectl -n langstroth-relay exec langstroth-relay-postgres-0 -- pg_dump -U relay -d relay --data-only | grep -q "$marker"; then
             echo "::error::plaintext marker found in the relay database"; exit 1
           fi
       - name: restart keeps the identity
@@ -240,7 +240,7 @@ jobs:
           # Pods carry only the selector labels, so walk them by name.
           kubectl get pods,pvc,svc,networkpolicy -A -o wide || true
           kubectl get storageclass || true
-          for ns in ligus-relay ligus-ws-smoke ligus-ws-worker; do
+          for ns in langstroth-relay ligus-ws-smoke ligus-ws-worker; do
             echo "::group::$ns events"
             kubectl -n "$ns" get events --sort-by=.lastTimestamp || true
             echo "::endgroup::"

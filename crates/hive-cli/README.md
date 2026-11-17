@@ -10,9 +10,9 @@ spec §12 (D21–D23).
 ## Build / install
 
 ```sh
-brew install ligus-ai/ligus/ligus   # macOS + Linux; tracks releases
+brew install langstroth-ai/ligus/ligus   # macOS + Linux; tracks releases
 # or the one-line installer (prebuilt binary onto your PATH):
-curl -fsSL https://raw.githubusercontent.com/ligus-ai/ligus/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/langstroth-ai/ligus/main/install.sh | sh
 # or from source:
 cargo build --release -p hive-cli         # → target/release/ligus
 cargo run -p hive-cli -- <command>        # run in place

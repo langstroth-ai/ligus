@@ -1,6 +1,6 @@
 # Scenario "team-in-cluster-relay": one workspace of a team, against a relay
 # already running in this cluster in its own namespace (installed with the
-# ligus-relay chart from the relay repository, release name ligus-relay).
+# langstroth-relay chart from the relay repository, release name langstroth-relay).
 # ligus-k8s sets relayUrl and networkPolicy.relayNamespace from
 # --relay-namespace. Volumes default to ReadWriteOncePod (needs a CSI
 # StorageClass; `ligus-k8s preflight` says whether yours is one).

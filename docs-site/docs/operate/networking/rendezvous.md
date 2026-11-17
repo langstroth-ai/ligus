@@ -2,7 +2,7 @@
 
 !!! note "Roadmap — not in the current build"
     Direct peer-to-peer (STUN candidate exchange + UDP hole-punch) is a tracked
-    follow-up. Today the relay ([ligus-ai/relay](https://github.com/ligus-ai/relay)) **forwards encrypted event
+    follow-up. Today the relay ([langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay)) **forwards encrypted event
     envelopes** between peers instead of brokering a direct connection — see
     [Self-hosting a relay](self-host.md). This page documents the planned
     rendezvous design.
@@ -43,7 +43,7 @@ sequenceDiagram
 ## The protocol
 
 Three endpoints. Full `/v1` spec in the relay repo,
-[github.com/ligus-ai/relay](https://github.com/ligus-ai/relay):
+[github.com/langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay):
 
 ### `POST /v1/rendezvous`
 

@@ -27,7 +27,7 @@ AC_TOOL=ligus-k8s
 
 # The relay chart the ligus chart depends on (optional dependency, but Helm
 # needs it present to render). Same pin as .github/workflows/kind-e2e.yml.
-RELAY_REPO_URL=${LIGUS_RELAY_REPO_URL:-https://github.com/ligus-ai/relay.git}
+RELAY_REPO_URL=${LIGUS_RELAY_REPO_URL:-https://github.com/langstroth-ai/langstroth-relay.git}
 RELAY_REF=${LIGUS_RELAY_REF:-50451173b28a78c4845a38107429aaf0cc6d02bf}
 RELAY_CHART_VERSION=0.3.0
 MANAGED_LABEL=ligus.ai/managed-by
@@ -43,7 +43,7 @@ install flags:
   --image REPO:TAG | --image-repository R --image-tag T | --image-digest sha256:...
   --relay-image-repository R --relay-image-tag T   (trial: the in-release relay's image)
   --relay-url URL               (team-external-relay; https:// only)
-  --relay-namespace NS          (team-in-cluster-relay; default ligus-relay)
+  --relay-namespace NS          (team-in-cluster-relay; default langstroth-relay)
   --workspace-secret NAME       (default <release>-workspace)
   --relay-access-token          the workspace Secret holds relay-access-token
   --workers a,b                 named worker hosts (worker.instances)
@@ -395,8 +395,8 @@ EOF
   else ac_check operator.cnpg info "CloudNativePG CRDs absent (only matters for a relay with database.mode=cnpg; the ligus chart never needs them)"; fi
 
   # The relay chart dependency.
-  if ls "$CHART"/charts/ligus-relay-*.tgz >/dev/null 2>&1; then ac_check chart.dependency pass "relay chart packaged in deploy/helm/ligus/charts"
-  else ac_check chart.dependency warn "relay chart not packaged yet (Helm needs it to render even when relay.enabled=false)" "install does it with --relay-chart <relay-checkout>/deploy/helm/ligus-relay or --fetch-relay-chart"; fi
+  if ls "$CHART"/charts/langstroth-relay-*.tgz >/dev/null 2>&1; then ac_check chart.dependency pass "relay chart packaged in deploy/helm/ligus/charts"
+  else ac_check chart.dependency warn "relay chart not packaged yet (Helm needs it to render even when relay.enabled=false)" "install does it with --relay-chart <relay-checkout>/deploy/helm/langstroth-relay or --fetch-relay-chart"; fi
 
   if [ $PROBE = 1 ]; then run_probe; probe_cleanup; trap - EXIT
   else ac_check probe skip "measured checks (Pod Security, NetworkPolicy, Landlock ABI) not run" "rerun with --probe --image <ligus image> (creates and deletes a temporary namespace)"; fi
@@ -526,12 +526,12 @@ cmd_secrets() {
 
 # ------------------------------------------------------------------- install
 ensure_relay_chart() {
-  if ls "$CHART"/charts/ligus-relay-*.tgz >/dev/null 2>&1; then return 0; fi
+  if ls "$CHART"/charts/langstroth-relay-*.tgz >/dev/null 2>&1; then return 0; fi
   mkdir -p "$CHART/charts"
   if [ -n "$RELAY_CHART_DIR" ]; then
-    [ -f "$RELAY_CHART_DIR/Chart.yaml" ] || { ac_check chart.dependency fail "$RELAY_CHART_DIR has no Chart.yaml" "pass <relay-checkout>/deploy/helm/ligus-relay"; ac_raise 3; return 1; }
+    [ -f "$RELAY_CHART_DIR/Chart.yaml" ] || { ac_check chart.dependency fail "$RELAY_CHART_DIR has no Chart.yaml" "pass <relay-checkout>/deploy/helm/langstroth-relay"; ac_raise 3; return 1; }
     if ! helm package -d "$CHART/charts" "$RELAY_CHART_DIR" >/dev/null 2>"$CHART/charts/.err"; then
-      ac_check chart.dependency fail "helm package $RELAY_CHART_DIR failed: $(head -1 "$CHART/charts/.err")" "pass the chart inside a full relay checkout (it links ../ligus-postgres)"
+      ac_check chart.dependency fail "helm package $RELAY_CHART_DIR failed: $(head -1 "$CHART/charts/.err")" "pass the chart inside a full relay checkout (it links ../langstroth-postgres)"
       rm -f "$CHART/charts/.err"; ac_raise 3; return 1
     fi
     rm -f "$CHART/charts/.err"
@@ -542,12 +542,12 @@ ensure_relay_chart() {
         && git -C "$tmp" fetch -q --depth 1 origin "$RELAY_REF" && git -C "$tmp" checkout -q FETCH_HEAD; }; then
       rm -rf "$tmp"; ac_check chart.dependency fail "could not fetch $RELAY_REPO_URL at $RELAY_REF" "check network access, or use --relay-chart with a local relay checkout"; ac_raise 3; return 1
     fi
-    if ! helm package -d "$CHART/charts" "$tmp/deploy/helm/ligus-relay" >/dev/null 2>&1; then
+    if ! helm package -d "$CHART/charts" "$tmp/deploy/helm/langstroth-relay" >/dev/null 2>&1; then
       rm -rf "$tmp"; ac_check chart.dependency fail "helm package of the fetched relay chart failed" "use --relay-chart with a local relay checkout"; ac_raise 3; return 1
     fi
     rm -rf "$tmp"
   else
-    ac_check chart.dependency fail "the relay chart (ligus-relay $RELAY_CHART_VERSION) is not packaged in deploy/helm/ligus/charts" "rerun with --relay-chart <relay-checkout>/deploy/helm/ligus-relay, or --fetch-relay-chart"
+    ac_check chart.dependency fail "the relay chart (langstroth-relay $RELAY_CHART_VERSION) is not packaged in deploy/helm/ligus/charts" "rerun with --relay-chart <relay-checkout>/deploy/helm/langstroth-relay, or --fetch-relay-chart"
     ac_raise 3; return 1
   fi
   ac_check chart.dependency pass "relay chart packaged into deploy/helm/ligus/charts"
@@ -569,7 +569,7 @@ write_overrides() {
     case $SCENARIO in
       team-external-relay) echo "relayUrl: \"$RELAY_URL\"" ;;
       team-in-cluster-relay)
-        echo "relayUrl: \"http://${RELAY_SVC:-ligus-relay-sync}.$RELAY_NS.svc.cluster.local:8443\""
+        echo "relayUrl: \"http://${RELAY_SVC:-langstroth-relay-sync}.$RELAY_NS.svc.cluster.local:8443\""
         echo "networkPolicy:"; echo "  relayNamespace: \"$RELAY_NS\"" ;;
       trial)
         if [ -n "$RELAY_IMG_REPO$RELAY_IMG_TAG" ]; then
@@ -668,20 +668,20 @@ cmd_install() {
       *) ac_check relay.url fail "--relay-url must be https:// for a relay outside the cluster" "use the relay's https URL; plain http would expose sync metadata and tokens"; ac_raise 4; ac_finish "$AC_TOOL" install "$(json_ctx)" ;;
     esac
   fi
-  [ "$SCENARIO" = team-in-cluster-relay ] && RELAY_NS=${RELAY_NS:-ligus-relay}
+  [ "$SCENARIO" = team-in-cluster-relay ] && RELAY_NS=${RELAY_NS:-langstroth-relay}
   if [ "$SCENARIO" = trial ] && [ -z "$RELAY_IMG_REPO$RELAY_IMG_TAG" ]; then
-    ac_check relay.image warn "no --relay-image-repository/--relay-image-tag: the trial's relay uses the chart default (ghcr.io/ligus-ai/ligus-relay), which is not published yet, so its pod will sit in ImagePullBackOff" "build the relay image in a relay checkout and pass --relay-image-repository R --relay-image-tag T"
+    ac_check relay.image warn "no --relay-image-repository/--relay-image-tag: the trial's relay uses the chart default (ghcr.io/langstroth-ai/langstroth-relay), which is not published yet, so its pod will sit in ImagePullBackOff" "build the relay image in a relay checkout and pass --relay-image-repository R --relay-image-tag T"
   fi
   base_tools || ac_finish "$AC_TOOL" install "$(json_ctx)"
   check_extra_values || ac_finish "$AC_TOOL" install "$(json_ctx)"
   ensure_relay_chart || ac_finish "$AC_TOOL" install "$(json_ctx)"
   if [ "$SCENARIO" = team-in-cluster-relay ]; then
-    # split topology: ligus-relay-sync; single topology: ligus-relay.
-    if k -n "$RELAY_NS" get service ligus-relay-sync >/dev/null 2>&1; then RELAY_SVC=ligus-relay-sync
-    elif k -n "$RELAY_NS" get service ligus-relay >/dev/null 2>&1; then RELAY_SVC=ligus-relay
+    # split topology: langstroth-relay-sync; single topology: langstroth-relay.
+    if k -n "$RELAY_NS" get service langstroth-relay-sync >/dev/null 2>&1; then RELAY_SVC=langstroth-relay-sync
+    elif k -n "$RELAY_NS" get service langstroth-relay >/dev/null 2>&1; then RELAY_SVC=langstroth-relay
     else RELAY_SVC=""; fi
     if [ -n "$RELAY_SVC" ]; then ac_check relay.service pass "relay Service $RELAY_SVC found in $RELAY_NS"
-    else ac_check relay.service fail "no Service ligus-relay-sync (or ligus-relay) in namespace $RELAY_NS" "install the relay first (ligus-relay chart, release name ligus-relay; see the relay repository's AGENTS.md), or pass --relay-namespace"; ac_raise 3; ac_finish "$AC_TOOL" install "$(json_ctx)"; fi
+    else ac_check relay.service fail "no Service langstroth-relay-sync (or langstroth-relay) in namespace $RELAY_NS" "install the relay first (langstroth-relay chart, release name langstroth-relay; see the relay repository's AGENTS.md), or pass --relay-namespace"; ac_raise 3; ac_finish "$AC_TOOL" install "$(json_ctx)"; fi
   fi
 
   VALUES_FILE=$(mktemp "${TMPDIR:-/tmp}/ligus-k8s-values.XXXXXX")

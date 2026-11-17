@@ -58,7 +58,7 @@ flowchart LR
   subgraph Home["Home server (always on)"]
     Serve["ligus serve<br/>own device key, hive.db,<br/>serve.token, tunnel keys"]
     Worker["ligus worker (optional)"]
-    Relay["ligus-relay (optional here)<br/>ciphertext only"]
+    Relay["langstroth-relay (optional here)<br/>ciphertext only"]
   end
   Phone["Phone app<br/>no workspace key"]
   Desk <-->|"E2EE events"| Relay
@@ -79,7 +79,7 @@ home box itself or anywhere else. Phones reach the box either directly
 
 ```mermaid
 flowchart LR
-  A["Alice: desktop"] <-->|"E2EE"| R["ligus-relay<br/>(Postgres or snapshot)<br/>ciphertext + metadata"]
+  A["Alice: desktop"] <-->|"E2EE"| R["langstroth-relay<br/>(Postgres or snapshot)<br/>ciphertext + metadata"]
   B["Bob: desktop"] <-->|"E2EE"| R
   C["Carol: desktop"] <-->|"E2EE"| R
   W["Shared worker box<br/>ligus worker<br/>workspace runtime secrets"] <-->|"E2EE"| R
@@ -102,7 +102,7 @@ gate who may connect with tokens. Guide:
 
 ```mermaid
 flowchart TB
-  subgraph RelayNS["namespace: ligus-relay (no workspace keys)"]
+  subgraph RelayNS["namespace: langstroth-relay (no workspace keys)"]
     Sync["relay sync pods (1..N)"]
     Tun["relay tunnel pod (exactly 1)"]
     PG[("Postgres")]

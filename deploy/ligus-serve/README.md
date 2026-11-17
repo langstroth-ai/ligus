@@ -31,7 +31,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profil
 . "$HOME/.cargo/env"
 sudo apt-get install -y build-essential pkg-config git   # C toolchain for bundled SQLite
 
-git clone https://github.com/ligus-ai/ligus.git ~/src/ligus   # or pull your branch
+git clone https://github.com/langstroth-ai/ligus.git ~/src/ligus   # or pull your branch
 cd ~/src/ligus
 cargo build --release -p hive-cli
 install -Dm755 target/release/ligus ~/.local/bin/ligus

@@ -4,7 +4,7 @@
 The phone app is its main client, but any client can use it. This page lists
 every route in 0.1.0, checked against the router in
 `crates/hive-cli/src/serve/api.rs`. The contract the phone implements is in
-[`docs/ios-app.md`](https://github.com/ligus-ai/ligus/blob/main/docs/ios-app.md).
+[`docs/ios-app.md`](https://github.com/langstroth-ai/ligus/blob/main/docs/ios-app.md).
 
 ## Reaching the API
 

@@ -14,7 +14,7 @@ import yaml
 CHART = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KUBE = "1.30.0"
 BASE = ["--set", "relayUrl=http://relay.example:8443", "--set", "workspace.existingSecret=ws",
-        "--set", "networkPolicy.relayNamespace=ligus-relay"]
+        "--set", "networkPolicy.relayNamespace=langstroth-relay"]
 
 
 def render(*args, ok=True):

@@ -26,5 +26,5 @@ here. Where `hive-core` is pure domain logic, this is the layer the desktop
 ## Notes
 
 - Depends on `hive-core`; the desktop app and CLI depend on this crate.
-- Uses [`ligus-relay`](../ligus-relay/README.md) as a **dev-dependency** in-process
+- Uses [`langstroth-relay`](../ligus-relay/README.md) as a **dev-dependency** in-process
   fixture for sync tests — the production relay is the separate Go repo.

@@ -13,12 +13,12 @@ Step-by-step skills: [`.claude/skills/ligus-deploy-k8s`](.claude/skills/ligus-de
 
 | Goal | Deploy | Tool | Human-only parts |
 |---|---|---|---|
-| One person, one machine | The desktop app only | none: `brew install --cask ligus-ai/ligus/ligus-app` | First launch, passkey and sign-in, creating the workspace |
+| One person, one machine | The desktop app only | none: `brew install --cask langstroth-ai/ligus/ligus-app` | First launch, passkey and sign-in, creating the workspace |
 | Agents keep working while the laptop sleeps (a home box, a spare Linux machine) | `ligus serve` (and optionally `ligus worker`) next to the desktop | `deploy/local/ligus-local` | `ligus enroll` with the invite, pairing the phone, exposure (LAN, tailnet) |
 | Try the Kubernetes shape on a local cluster (OrbStack, kind, k3d) | relay + serve in one namespace, throwaway workspace | `deploy/kubernetes/ligus-k8s`, scenario `trial` | none, unless the cluster is shared |
 | A team's always-on parts on a cluster, relay in the same cluster | one `ligus` release per workspace | `ligus-k8s`, scenario `team-in-cluster-relay` (relay installed first from the relay repository) | the workspace connection (Secret files), the cluster and context, storage class, exposure |
 | The same, relay outside the cluster (https) | one `ligus` release per workspace | `ligus-k8s`, scenario `team-external-relay` | as above, plus DNS and TLS for the relay |
-| Self-host the relay | the relay | the relay repository (`github.com/ligus-ai/relay`) and its AGENTS.md | DNS, TLS, cloud credentials |
+| Self-host the relay | the relay | the relay repository (`github.com/langstroth-ai/langstroth-relay`) and its AGENTS.md | DNS, TLS, cloud credentials |
 
 Kubernetes is a **preview**: the charts and images are not published. Build
 the image from `deploy/container/Dockerfile`; the relay chart comes from a
@@ -40,7 +40,7 @@ $K preflight --context CTX -n NS --release R --probe --image REPO:TAG --json   #
 $K secrets workspace --throwaway --context CTX -n NS --release R   # trial only
 $K secrets workspace --from-dir DIR --context CTX -n NS --release R   # real workspace: DIR prepared by the human
 $K install --scenario trial --context CTX -n NS --release R --image REPO:TAG \
-   --relay-image-repository RREPO --relay-image-tag RTAG --relay-chart RELAY/deploy/helm/ligus-relay --dry-run --json
+   --relay-image-repository RREPO --relay-image-tag RTAG --relay-chart RELAY/deploy/helm/langstroth-relay --dry-run --json
 $K install ...the same flags without --dry-run... --json   # waits for readiness (--timeout, default 10m)
 $K verify --context CTX -n NS --release R --json                   # pods, sandbox preflight, health, NetworkPolicies, helm test
 $K teardown --context CTX -n NS --release R [--delete-data --delete-secrets --delete-namespace] --json
@@ -101,7 +101,7 @@ $L uninstall --role serve --data-dir ~/.ligus-serve [--delete-data]
 
 ## Human-only steps
 
-- **Passkeys and sign-in** on the desktop app (first launch, ligus-auth
+- **Passkeys and sign-in** on the desktop app (first launch, langstroth-auth
   device-code logins).
 - **Invites and enrollment**: copying a workspace invite, `ligus enroll`,
   `ligus join`, approving a device on the desktop, and preparing the

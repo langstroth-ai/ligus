@@ -1556,7 +1556,7 @@ fn usage() -> ! {
          Setup:\n  \
          ligus enroll <hivews1:invite> [--token <hrt1>]   one-shot: save the workspace connection\n  \
          ligus join <invite-code>        redeem a relay invite to self-enroll this box's identity\n  \
-         ligus auth login <url> [--label NAME]   sign in through ligus-auth (device code); the relay\n                                       \
+         ligus auth login <url> [--label NAME]   sign in through langstroth-auth (device code); the relay\n                                       \
          token is then refreshed automatically | ligus auth status | ligus auth logout\n  \
          ligus setup [--apply]           detect providers; --apply defines keyless runtimes\n  \
          ligus config <export|import <file>>   round-trip the workspace runtime set\n\n\
@@ -1693,7 +1693,7 @@ fn run() -> Result<()> {
             .build()?)
     };
 
-    // A ligus-auth sign-in (see `ligus auth`) supplies the relay token and
+    // A langstroth-auth sign-in (see `ligus auth`) supplies the relay token and
     // keeps it fresh in the background for the life of this process.
     if !matches!(cmd, "auth" | "") {
         auth::init(&cfg.data_dir);
