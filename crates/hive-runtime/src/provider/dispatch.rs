@@ -178,7 +178,19 @@ pub fn tool_loop_context_window(rt: &ResolvedRuntime) -> u32 {
 /// can use it. Only for runtimes that may front a local server (Custom,
 /// HiveDaemon) and have no explicit override; a no-op otherwise. Never fails.
 pub async fn warm_context_probe(rt: &ResolvedRuntime) {
+    warm_context_probe_on(&crate::model_gateway::host(), rt).await
+}
+
+/// [`warm_context_probe`] against the gateway list `gws`. Only a direct
+/// route is probed: a turn through a gateway (the probe would go around its
+/// TLS client and credential), or one an exclusive host refuses (the probe
+/// would reach an unlisted endpoint, with the runtime's key, before the turn
+/// is refused), is not.
+pub async fn warm_context_probe_on(gws: &crate::model_gateway::ModelGateways, rt: &ResolvedRuntime) {
     if !rt.probes_server_props() || rt.context_window_tokens.is_some_and(|n| n > 0) {
+        return;
+    }
+    if !matches!(gws.route(rt.provider, &rt.endpoint, rt.gateway.as_ref()), Ok(None)) {
         return;
     }
     OpenAiClient::new(&rt.endpoint)

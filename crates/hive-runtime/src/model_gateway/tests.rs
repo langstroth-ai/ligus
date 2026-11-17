@@ -527,3 +527,32 @@ fn covered_endpoint_must_be_the_model_api() {
     assert!(gws.route(ModelProviderKind::Anthropic, "https://ai.example.com/anthropic/v1/messages", None).unwrap().is_some());
 }
 
+/// On a gateway-exclusive host, the `/props` context probe of a Custom
+/// runtime must not reach an endpoint that isn't a gateway (with the
+/// runtime's own key) before the turn is refused.
+#[tokio::test]
+async fn context_probe_respects_the_gateway_route() {
+    let l = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port = l.local_addr().unwrap().port();
+    let excl = ModelGateways::new(cfg(r#"{"gateways":[{"name":"litellm","url":"https://litellm.gw.svc:4000","auth":{"mode":"none"}}]}"#).unwrap(), true, None);
+    let rt = crate::provider::ResolvedRuntime {
+        provider: ModelProviderKind::Custom,
+        model: "m".into(),
+        endpoint: format!("http://127.0.0.1:{port}/v1/chat/completions"),
+        api_key: Some("sk-RUNTIME".into()),
+        args: Vec::new(),
+        model_provider_id: None,
+        model_base_url: None,
+        context_window_tokens: None,
+        keep_alive: None,
+        think: None,
+        tools: false,
+        max_tool_rounds: None,
+        allow_remote_file_tools: false,
+        driver: Default::default(),
+        gateway: None,
+    };
+    crate::provider::dispatch::warm_context_probe_on(&excl, &rt).await;
+    let got = tokio::time::timeout(std::time::Duration::from_millis(300), l.accept()).await;
+    assert!(got.is_err(), "the probe connected to an unlisted endpoint on an exclusive host");
+}
