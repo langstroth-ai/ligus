@@ -733,20 +733,22 @@ impl ChatSession {
                 self.loaded_skills = skills.clone();
             }
             SessionEvent::ProposalUpserted { proposal } => {
+                // The repo is derived, not asserted (repos review F1): from
+                // the chat's repo when the proposal is created, and never
+                // changed by a later upsert.
+                let mut proposal = proposal.clone();
                 if let Some(slot) = self.proposals.iter_mut().find(|p| p.id == proposal.id) {
+                    proposal.repo_id = slot.repo_id;
                     // A verified human approval is for the change that was
-                    // reviewed: a re-upsert that swaps what would be applied
-                    // (patch, files, kind, workflow) drops it, so the human
-                    // gate re-arms for the new content.
-                    if slot.diff != proposal.diff
-                        || slot.changed_files != proposal.changed_files
-                        || slot.kind != proposal.kind
-                        || slot.workflow != proposal.workflow
-                    {
+                    // reviewed: a re-upsert that changes what would be
+                    // applied (patch, files, kind, workflow, command, base)
+                    // drops it, so the human gate re-arms for the new content.
+                    if crate::authz::votes::diff_digest(slot) != crate::authz::votes::diff_digest(&proposal) {
                         self.guards.verified_approvals.remove(&proposal.id);
                     }
                     *slot = proposal.clone();
                 } else {
+                    proposal.repo_id = self.repo.as_ref().and_then(|r| r.repo_id);
                     self.proposals.push(proposal.clone());
                 }
                 crate::proposal_sets::restamp(&self.proposal_sets, &mut self.proposals, proposal.id);

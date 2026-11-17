@@ -182,3 +182,102 @@ fn nobody_asks_to_apply_an_unapproved_proposal() {
     let id = w.write("ada", Some(chat), SessionEvent::ProposalApplyRequested { request }, None, Proof::None);
     assert_eq!(w.verdict(id), Verdict::Denied);
 }
+
+// ---- the vote digest binds proposal, repo and base; the repo is sticky ----
+
+use proptest::prelude::*;
+
+/// A chat on WeFit, with a proposal filed there.
+fn chat_on_wefit(w: &mut SignedWorld) -> (Uuid, Uuid) {
+    w.push("ada", SessionEvent::WorkspaceRepoAdded { repo: repo(WEFIT) });
+    w.push("ada", SessionEvent::WorkspaceRepoAdded { repo: repo("github.com/zazulam/infra") });
+    let chat = w.chat("owner", "c");
+    w.say(chat, "mara", SessionEvent::ChatRepoSet { repo_id: Some(repo_id(WEFIT)), base_branch: String::new() });
+    let mut p = ActionProposal::file_diff("p", "mara", "diff --git a/f b/f\n+1\n".into(), vec!["f".into()]);
+    p.created_at = Timestamp::epoch();
+    // Whatever the author claims, the repo comes from the chat.
+    p.repo_id = Some(repo_id("github.com/zazulam/infra"));
+    p.base_commit = Some(SHA.into());
+    let pid = p.id;
+    w.say(chat, "mara", SessionEvent::ProposalUpserted { proposal: p });
+    (chat, pid)
+}
+
+/// Repos review F1: an approved proposal can't be re-pointed at another
+/// repo by a re-upsert (an agent's own, or anyone's): the repo is the
+/// chat's at creation and stays, and the votes stay with it.
+#[test]
+fn agent_reupsert_changing_repo_id_keeps_original_repo() {
+    let mut w = world();
+    let (chat, pid) = chat_on_wefit(&mut w);
+    let p = w.state(chat).proposals[0].clone();
+    assert_eq!(p.repo_id, Some(repo_id(WEFIT)), "derived from the chat, not the payload");
+    let d = diff_digest(&p);
+    let vote = ProposalApproval { actor_id: "ada".into(), role: WorkspaceRole::Admin, approved: true, created_at: Timestamp::epoch(), diff_digest: Some(d) };
+    w.say(chat, "ada", SessionEvent::ProposalVoteCast { proposal_id: pid, approval: vote });
+    assert_eq!(w.state(chat).proposals[0].status, ProposalStatus::Approved);
+    let mut repoint = w.state(chat).proposals[0].clone();
+    repoint.repo_id = Some(repo_id("github.com/zazulam/infra"));
+    repoint.status = ProposalStatus::Open;
+    repoint.approvals.clear();
+    repoint.title = "same diff, new title".into();
+    w.say(chat, "mara", SessionEvent::ProposalUpserted { proposal: repoint });
+    let p = w.state(chat).proposals[0].clone();
+    assert_eq!(p.repo_id, Some(repo_id(WEFIT)));
+    assert_eq!(p.status, ProposalStatus::Approved, "a title edit keeps the votes");
+}
+
+#[test]
+fn base_commit_change_clears_votes() {
+    let mut w = world();
+    let (chat, pid) = chat_on_wefit(&mut w);
+    let d = diff_digest(&w.state(chat).proposals[0]);
+    let vote = ProposalApproval { actor_id: "ada".into(), role: WorkspaceRole::Admin, approved: true, created_at: Timestamp::epoch(), diff_digest: Some(d.clone()) };
+    w.say(chat, "ada", SessionEvent::ProposalVoteCast { proposal_id: pid, approval: vote.clone() });
+    let mut rebased = w.state(chat).proposals[0].clone();
+    rebased.base_commit = Some(SHA2.into());
+    rebased.status = ProposalStatus::Open;
+    rebased.approvals.clear();
+    w.say(chat, "mara", SessionEvent::ProposalUpserted { proposal: rebased });
+    let p = w.state(chat).proposals[0].clone();
+    assert!(p.approvals.is_empty() && p.status == ProposalStatus::Open, "a re-based proposal needs new votes");
+    // The old vote, replayed, names the old digest and doesn't count.
+    w.say(chat, "ada", SessionEvent::ProposalVoteCast { proposal_id: pid, approval: vote });
+    assert_eq!(w.state(chat).proposals[0].status, ProposalStatus::Open);
+}
+
+#[test]
+fn a_vote_for_one_proposal_never_counts_for_a_twin() {
+    let mut w = world();
+    let chat = w.chat("owner", "c");
+    let a = ActionProposal::file_diff("a", "mara", "diff --git a/f b/f\n+1\n".into(), vec!["f".into()]);
+    let mut b = a.clone();
+    b.id = Uuid::new_v4();
+    w.say(chat, "mara", SessionEvent::ProposalUpserted { proposal: a.clone() });
+    w.say(chat, "mara", SessionEvent::ProposalUpserted { proposal: b.clone() });
+    let s = w.state(chat);
+    let da = diff_digest(s.proposals.iter().find(|p| p.id == a.id).unwrap());
+    let vote = ProposalApproval { actor_id: "ada".into(), role: WorkspaceRole::Admin, approved: true, created_at: Timestamp::epoch(), diff_digest: Some(da) };
+    let wrong = w.say(chat, "ada", SessionEvent::ProposalVoteCast { proposal_id: b.id, approval: vote });
+    assert_eq!(w.verdict(wrong), Verdict::Denied);
+}
+
+proptest! {
+    /// Any sequence of upserts (by the author, re-pointing, re-basing,
+    /// retitling) never changes a proposal's repo after creation.
+    #[test]
+    fn prop_repo_is_sticky(steps in prop::collection::vec((0u8..3, any::<bool>(), any::<bool>()), 1..8)) {
+        let mut w = world();
+        let (chat, _pid) = chat_on_wefit(&mut w);
+        for (repo_pick, rebase, retitle) in steps {
+            let mut p = w.state(chat).proposals[0].clone();
+            p.repo_id = [None, Some(repo_id(WEFIT)), Some(repo_id("github.com/zazulam/infra"))][repo_pick as usize];
+            if rebase { p.base_commit = Some(SHA2.into()); }
+            if retitle { p.title.push('!'); }
+            p.status = ProposalStatus::Open;
+            p.approvals.clear();
+            w.say(chat, "mara", SessionEvent::ProposalUpserted { proposal: p });
+            prop_assert_eq!(w.state(chat).proposals[0].repo_id, Some(repo_id(WEFIT)));
+        }
+    }
+}
