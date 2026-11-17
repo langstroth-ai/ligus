@@ -23,6 +23,7 @@ pub mod context;
 pub mod device_enroll;
 pub mod directory_trust;
 pub mod dm;
+pub mod dm_delivery;
 pub mod contacts;
 pub mod directives;
 pub mod effects;
