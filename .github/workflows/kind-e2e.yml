@@ -81,7 +81,8 @@ jobs:
           helm package -d deploy/helm/ligus/charts _relay/deploy/helm/ligus-relay
           helm lint --strict deploy/helm/ligus -f deploy/helm/ligus/ci/kind-values.yaml
           helm template t deploy/helm/ligus --set workspace.existingSecret=ws --set relay.enabled=true \
-            --set relay.postgres.enabled=true --set remote.enabled=true --set remote.insecureRelay=true \
+            --set relay.postgres.enabled=true --set relay.postgres.existingSecret=pg --set relay.tunnel.mode=open \
+            --set remote.enabled=true --set remote.insecureRelay=true \
             --set worker.enabled=true --set 'worker.instances[0].name=a' --set 'worker.instances[1].name=b' >/dev/null
           # Must refuse: the removed executor template, and no workspace.
           # (`if`, not a bare `!`: bash's errexit ignores a negated command,
