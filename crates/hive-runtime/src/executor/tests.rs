@@ -103,6 +103,7 @@ fn prop_enforcement_plan_host_independent() {
                 ligus_mcp_socket: None,
                 egress_presets: &presets,
                 cli_home: None,
+                gateway: None,
             })
         };
         let desktop = plan_for(HostKind::Desktop);
@@ -165,6 +166,7 @@ fn prop_every_envelope_field_consumed() {
             ligus_mcp_socket: None,
             egress_presets: &[],
                 cli_home: None,
+                gateway: None,
         })
     };
     let base = SandboxEnvelope::workspace_default();
@@ -219,6 +221,7 @@ fn provider_key_only_when_configured_in_ligus() {
             ligus_mcp_socket: None,
             egress_presets: &[],
                 cli_home: None,
+                gateway: None,
         })
     };
     let p = env_for(Some("sk-configured"), ModelProviderKind::Aider, Some("anthropic"));
@@ -963,6 +966,7 @@ fn sandbox_denies_unix_sockets_under_open_egress() {
         ligus_mcp_socket: None,
         egress_presets: &[],
         cli_home: None,
+        gateway: None,
     });
     assert_eq!(plan.egress, EgressPlan::Open, "the probe needs an open-egress child");
     let (_, out) = run_purpose(&*e, &f, Purpose::McpServer, &probe, None);
@@ -1145,6 +1149,7 @@ fn sandbox_denies_apple_events_and_pasteboard() {
         ligus_mcp_socket: None,
         egress_presets: &[],
         cli_home: None,
+        gateway: None,
     }), None);
     assert!(prof.contains("(deny appleevent-send)") && prof.contains("com.apple.pasteboard"));
 }
@@ -1179,6 +1184,7 @@ fn ligus_server_present_under_closed_egress() {
             ligus_mcp_socket: Some(sock),
             egress_presets: &[],
             cli_home: None,
+            gateway: None,
         });
         assert_eq!(plan.mcp.first().map(String::as_str), Some(LIGUS_MCP_ID), "{egress:?}");
         assert_eq!(plan.ligus_mcp_socket.as_deref(), Some(sock));
@@ -1248,6 +1254,7 @@ fn agent_env_has_no_session_bus() {
         ligus_mcp_socket: None,
         egress_presets: &[],
         cli_home: None,
+        gateway: None,
     });
     assert!(plan.env.iter().all(|(k, _)| !k.to_string_lossy().starts_with("DBUS")), "{:?}", plan.env);
 }
@@ -1278,6 +1285,7 @@ fn preset_plan(envelope: &SandboxEnvelope, purpose: Purpose, host: &HostPaths, p
         ligus_mcp_socket: None,
         egress_presets: presets,
         cli_home: None,
+        gateway: None,
     })
 }
 
@@ -1488,6 +1496,7 @@ fn claude_code_tmpdir_is_the_turn_scratch_dir() {
         ligus_mcp_socket: None,
         egress_presets: &[],
         cli_home: Some(Path::new("/tmp/ligus-turn-cc/home")),
+        gateway: None,
     });
     assert_eq!(get(&with_home), Some(PathBuf::from("/tmp/ligus-turn-cc")));
     assert_eq!(with_home.env.iter().filter(|(k, _)| k == "CLAUDE_CODE_TMPDIR").count(), 1);
@@ -1608,6 +1617,7 @@ fn sandbox_default_agents_cannot_commit() {
                 ligus_mcp_socket: None,
                 egress_presets: &[],
                 cli_home: None,
+                gateway: None,
             });
             assert!(plan.read_only.contains(&PathBuf::from("/repo/.git")), "{kind:?} {gate:?}");
         }
@@ -1734,5 +1744,59 @@ impl TurnExecutor for ScratchOnly {
     }
     fn confine(&self, program: &OsStr, args: &[OsString], cwd: &Path, plan: &EnforcementPlan, proxy: Option<&EgressProxy>) -> io::Result<std::process::Command> {
         Unconfined.confine(program, args, cwd, plan, proxy)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Model gateways (docs/design/v2/model-gateways.md §7)
+// ---------------------------------------------------------------------------
+
+/// Through a gateway, an agent child gets no vendor endpoint, no base URL
+/// host, no provider key and no caller-set model variables: the proxy's
+/// route is its only model endpoint, even under a closed envelope.
+#[test]
+fn gateway_plan_has_no_vendor_endpoints_or_keys() {
+    let host = HostPaths::default();
+    let extra = vec![
+        ("ANTHROPIC_BASE_URL".to_string(), "https://evil.example".to_string()),
+        ("ANTHROPIC_API_KEY".to_string(), "sk-caller".to_string()),
+        ("GIT_AUTHOR_NAME".to_string(), "a".to_string()),
+    ];
+    for envelope in [SandboxEnvelope::workspace_default(), SandboxEnvelope { egress: EgressPolicy::Closed, ..SandboxEnvelope::workspace_default() }] {
+        let mk = |gateway| {
+            EnvelopeEnforcer::plan(&PlanInputs {
+                host: HostKind::Serve,
+                envelope: &envelope,
+                purpose: Purpose::Agent(ModelProviderKind::ClaudeCode),
+                gate: &GatePlan::Full,
+                worktree: Path::new("/repo"),
+                worktree_is_isolated: true,
+                write_capable: true,
+                tmp: Path::new("/tmp/t"),
+                home: Path::new("/home/u"),
+                host_paths: &host,
+                mcp_hosts: &[],
+                mcp_ids: &[],
+                model_base_url: Some("https://other.example/v1"),
+                extra_env: &extra,
+                provider_key: Some("sk-runtime"),
+                model_provider_id: None,
+                envelope_args: &[],
+                ligus_mcp_socket: None,
+                egress_presets: &[],
+                cli_home: None,
+                gateway,
+            })
+        };
+        let direct = mk(None);
+        assert!(allow_of(&direct).contains(&HostPort::new("api.anthropic.com", 443)));
+        let gw = mk(Some(("claude-gw", crate::model_gateway::Api::Anthropic)));
+        assert!(matches!(gw.egress, EgressPlan::Proxy { .. }), "the proxy runs for the route");
+        let allow = allow_of(&gw);
+        assert!(!allow.iter().any(|h| h.host.contains("anthropic") || h.host.contains("example")), "{allow:?}");
+        let env: Vec<String> = gw.env.iter().map(|(k, v)| format!("{}={}", k.to_string_lossy(), v.to_string_lossy())).collect();
+        assert!(!env.iter().any(|e| e.contains("sk-runtime") || e.contains("sk-caller") || e.contains("evil.example")), "{env:?}");
+        assert!(env.iter().any(|e| e == "GIT_AUTHOR_NAME=a"), "other caller env stays: {env:?}");
+        assert_eq!(gw.gateway.as_ref().map(|g| g.name.as_str()), Some("claude-gw"));
     }
 }

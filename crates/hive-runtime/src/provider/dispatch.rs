@@ -53,6 +53,11 @@ pub struct ResolvedRuntime {
     /// How a subscription CLI is driven: ACP or its legacy headless adapter
     /// (Track D1). Ignored by every other provider.
     pub driver: hive_core::Driver,
+    /// The operator-listed model gateway this turn goes through (with the
+    /// ids its attribution hashes). `None` = the runtime's own endpoint; on
+    /// a gateway-exclusive host such a turn is refused
+    /// (docs/design/v2/model-gateways.md §4).
+    pub gateway: Option<crate::model_gateway::GatewaySelection>,
 }
 
 /// Tools to offer a turn: neutral definitions (`{name, description,
@@ -346,6 +351,7 @@ pub async fn stream_with_tools<E: ToolExecutor>(
         provider_key: rt.api_key.clone().filter(|_| rt.provider.is_cli_agent()),
         model_provider_id: rt.model_provider_id.clone(),
         model_base_url: rt.model_base_url.clone().filter(|s| !s.is_empty()),
+        gateway: rt.gateway.clone(),
     };
     crate::executor::with_runtime(
         scope,
@@ -366,6 +372,9 @@ async fn stream_with_tools_inner<E: ToolExecutor>(
     on_delta: impl FnMut(String),
     mut on_activity: impl FnMut(StreamActivity),
 ) -> Result<String, ProviderError> {
+    // The model route: an operator-listed gateway, direct, or refused (a
+    // gateway host is exclusive). CLI children re-resolve it in `prepare`.
+    let route = model_route(rt)?;
     // Subscription CLIs: over ACP when the runtime's driver resolves to it
     // (Track D1); an ACP start failure falls back to the legacy adapter once.
     if matches!(
@@ -426,11 +435,18 @@ async fn stream_with_tools_inner<E: ToolExecutor>(
     match rt.provider {
         ModelProviderKind::Anthropic => {
             let key = rt.api_key.as_deref().unwrap_or_default();
-            AnthropicClient::new()
-                .stream_reply(key, &rt.model, system, turns, max_tokens, on_delta)
-                .await
+            let client = match &route {
+                Some(r) => {
+                    let http = r.gateway.client().await.map_err(|e| ProviderError::Gateway(e.to_string()))?;
+                    let c = AnthropicClient::new().with_gateway(r.gateway.clone(), r.attribution.clone(), http);
+                    // A runtime that named an endpoint on the gateway keeps it.
+                    if rt.gateway.is_none() && !rt.endpoint.is_empty() { c.with_endpoint(&rt.endpoint) } else { c }
+                }
+                None => AnthropicClient::new(),
+            };
+            client.stream_reply(key, &rt.model, system, turns, max_tokens, on_delta).await
         }
-        ModelProviderKind::Ollama if !ollama_uses_openai_shim() => {
+        ModelProviderKind::Ollama if !ollama_uses_openai_shim() && route.is_none() => {
             // Native API: carries num_ctx / keep_alive / think, which the `/v1`
             // shim drops. The endpoint may be stored in either spelling.
             let client = OllamaClient::new(&rt.endpoint);
@@ -484,7 +500,15 @@ async fn stream_with_tools_inner<E: ToolExecutor>(
         | ModelProviderKind::Azure => {
             // Azure OpenAI speaks the same wire format but authenticates with an
             // `api-key` header instead of a bearer token.
-            let client = OpenAiClient::new(&rt.endpoint)
+            let client = match &route {
+                Some(r) => {
+                    let http = r.gateway.client().await.map_err(|e| ProviderError::Gateway(e.to_string()))?;
+                    let endpoint = if rt.gateway.is_some() || rt.endpoint.is_empty() { r.gateway.chat_endpoint() } else { rt.endpoint.clone() };
+                    OpenAiClient::new(endpoint).with_gateway(r.gateway.clone(), r.attribution.clone(), http)
+                }
+                None => OpenAiClient::new(&rt.endpoint),
+            };
+            let client = client
                 .with_api_key_header(rt.provider == ModelProviderKind::Azure)
                 .with_provider_label(provider_label(rt.provider))
                 .with_extra_body(openai_request_extras(rt))
@@ -624,6 +648,27 @@ async fn stream_with_tools_inner<E: ToolExecutor>(
             .await
         }
     }
+}
+
+/// The turn's model route on this host ([`crate::model_gateway::ModelGateways::route`]),
+/// with the gateway's credential checked up front so a missing or unreadable
+/// token fails the turn with a clear message instead of a gateway 401.
+pub fn model_route(rt: &ResolvedRuntime) -> Result<Option<crate::model_gateway::ResolvedGateway>, ProviderError> {
+    let endpoint = if rt.provider.is_cli_agent() {
+        String::new()
+    } else if rt.endpoint.is_empty() {
+        match rt.provider {
+            ModelProviderKind::Anthropic => "https://api.anthropic.com/v1/messages".to_string(),
+            p => default_endpoint(p).to_string(),
+        }
+    } else {
+        rt.endpoint.clone()
+    };
+    let route = crate::model_gateway::host().route(rt.provider, &endpoint, rt.gateway.as_ref()).map_err(ProviderError::Gateway)?;
+    if let Some(r) = &route {
+        r.gateway.auth_headers().map_err(|e| ProviderError::Gateway(e.to_string()))?;
+    }
+    Ok(route)
 }
 
 /// The legacy headless adapters of the subscription CLIs (`claude -p`,
@@ -814,6 +859,7 @@ mod tests {
             max_tool_rounds: None,
             allow_remote_file_tools: false,
             driver: Default::default(),
+            gateway: None,
         }
     }
 
@@ -893,6 +939,7 @@ mod tests {
             max_tool_rounds: None,
             allow_remote_file_tools: false,
             driver: Default::default(),
+            gateway: None,
         };
         assert!(rt.is_subprocess());
         rt.provider = ModelProviderKind::Anthropic;
@@ -919,6 +966,7 @@ mod tests {
             max_tool_rounds: None,
             allow_remote_file_tools: false,
             driver: Default::default(),
+            gateway: None,
         };
         // Name-based guess for a qwen model.
         assert_eq!(rt.context_window(), 32_768);
@@ -1118,6 +1166,7 @@ mod live_cli {
             max_tool_rounds: None,
             allow_remote_file_tools: false,
             driver,
+            gateway: None,
         };
         if driver == hive_core::Driver::Acp {
             match super::super::acp::resolve(&rt, false) {

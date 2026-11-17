@@ -169,6 +169,7 @@ fn runtime(endpoint: &str, model: &str) -> ResolvedRuntime {
         max_tool_rounds: None,
         allow_remote_file_tools: false,
         driver: Default::default(),
+        gateway: None,
     }
 }
 
@@ -799,6 +800,7 @@ async fn pi_smoke_fixes_a_planted_bug() {
         max_tool_rounds: None,
         allow_remote_file_tools: false,
         driver: Default::default(),
+        gateway: None,
     };
     let repo = planted_repo("pi");
     assert!(!check_passes(&repo).0, "the planted bug must fail first");

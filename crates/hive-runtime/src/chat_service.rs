@@ -1756,7 +1756,7 @@ impl ChatService {
     }
 
     /// Register `host` only when the durable record would change: missing, or a
-    /// different kind, label, or owner. Liveness is not a change — it rides the
+    /// different kind, label, owner or offered model gateways. Liveness is not a change — it rides the
     /// relay's presence channel ([`crate::host_presence`]), so a restart or a
     /// heartbeat never appends to the log. Returns whether it wrote.
     pub fn ensure_host(&mut self, workspace_id: Uuid, mut host: WorkspaceHost) -> Result<bool> {
@@ -1765,7 +1765,7 @@ impl ChatService {
         }
         let current = self.list_hosts(workspace_id)?.into_iter().find(|h| h.id == host.id);
         if let Some(h) = current {
-            if h.kind == host.kind && h.label == host.label && h.owner_actor_id == host.owner_actor_id {
+            if h.kind == host.kind && h.label == host.label && h.owner_actor_id == host.owner_actor_id && h.model_gateways == host.model_gateways {
                 return Ok(false);
             }
             host.created_at = h.created_at;

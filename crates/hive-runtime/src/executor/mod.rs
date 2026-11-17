@@ -102,6 +102,19 @@ pub struct EnforcementPlan {
     /// The turn's Ligus MCP unix socket: the one extra path an agent child
     /// may connect to (D.3.2).
     pub ligus_mcp_socket: Option<PathBuf>,
+    /// The operator-listed model gateway an agent child reaches its model
+    /// through: only via the proxy's gateway route, which adds the
+    /// credential (docs/design/v2/model-gateways.md §7).
+    pub gateway: Option<GatewayRoute>,
+}
+
+/// A CLI agent's model gateway route: which gateway, its wire, and the CLI
+/// (which base-URL variables it reads).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewayRoute {
+    pub name: String,
+    pub api: crate::model_gateway::Api,
+    pub kind: ModelProviderKind,
 }
 
 /// The MCP server id the Ligus server holds in a plan's MCP list.
@@ -222,6 +235,17 @@ pub fn configure_host(data_dir: &Path, secret_files: &[PathBuf], allow_read: &[P
     }
 }
 
+/// Add files (or dirs) no agent child may read: a model gateway's token,
+/// API key, client key and CA (`model_gateway::install`).
+pub fn configure_secret_files(paths: &[PathBuf]) {
+    let mut h = host_slot().write().unwrap_or_else(|e| e.into_inner());
+    for f in paths {
+        if !h.secret_files.contains(f) {
+            h.secret_files.push(f.clone());
+        }
+    }
+}
+
 /// Use `exe` as the Linux pre-exec helper (tests; a host whose own binary
 /// doesn't carry it).
 pub fn set_helper_exe(exe: PathBuf) {
@@ -291,6 +315,9 @@ pub struct PlanInputs<'a> {
     /// A CLI agent's per-turn home (C-9): its real state dirs are then not
     /// writable, and `HOME` points here.
     pub cli_home: Option<&'a Path>,
+    /// The model gateway the agent's model traffic goes through (name and
+    /// wire). Its vendor endpoints and key are then left out.
+    pub gateway: Option<(&'a str, crate::model_gateway::Api)>,
 }
 
 /// Model endpoints each subscription CLI must reach (its API, its sign-in
@@ -457,7 +484,14 @@ impl EnvelopeEnforcer {
         // Egress: provider endpoints plus the chat's MCP hosts; lockdown
         // keeps only the provider (the model must be reachable for the turn
         // to run at all; MCP and everything else are cut).
+        let gateway = match (i.purpose, i.gateway) {
+            (Purpose::Agent(k), Some((name, api))) => Some(GatewayRoute { name: name.to_string(), api, kind: k }),
+            _ => None,
+        };
         let model_hosts: Vec<HostPort> = match i.purpose {
+            // Through a gateway the model is reached only via the proxy's
+            // route: no vendor endpoint, no base URL, no gateway host.
+            Purpose::Agent(_) if gateway.is_some() => Vec::new(),
             Purpose::Agent(k) => {
                 let mut v = provider_endpoints(k);
                 v.extend(i.model_base_url.and_then(HostPort::from_url));
@@ -503,7 +537,7 @@ impl EnvelopeEnforcer {
                 }
                 allow.sort();
                 allow.dedup();
-                if allow.is_empty() {
+                if allow.is_empty() && gateway.is_none() {
                     EgressPlan::Closed
                 } else {
                     EgressPlan::Proxy { allow }
@@ -512,17 +546,30 @@ impl EnvelopeEnforcer {
         };
 
         let provider_key = match i.purpose {
+            // A gateway turn never carries a provider key.
+            Purpose::Agent(_) if gateway.is_some() => None,
             Purpose::Agent(k) => i.provider_key.filter(|k| !k.is_empty()).and_then(|key| {
                 provider_key_var(k, i.model_provider_id).map(|var| (var.to_string(), key.to_string()))
             }),
             _ => None,
         };
+        // Through a gateway the caller can't set the model URL or a key: the
+        // route (added with the proxy, `plan_env`) is the only model endpoint.
+        let extra: Vec<(String, String)> = i
+            .extra_env
+            .iter()
+            .filter(|(k, _)| gateway.is_none() || !crate::model_gateway::CLI_ENV_KEYS.contains(&k.as_str()))
+            .cloned()
+            .collect();
         let mut env = hive_core::process_util::child_env(&hive_core::process_util::ChildEnvSpec {
             tmpdir: Some(i.tmp.to_path_buf()),
             proxy: Vec::new(),
-            extra: i.extra_env.to_vec(),
+            extra,
             provider_key,
         });
+        if gateway.is_some() {
+            env.retain(|(k, _)| !crate::model_gateway::CLI_ENV_KEYS.iter().any(|g| k.as_os_str() == *g));
+        }
         if let (Purpose::Agent(k), Some(home)) = (i.purpose, i.cli_home) {
             for (key, val) in cli_home::env(k, home) {
                 env.retain(|(x, _)| *x != key);
@@ -564,6 +611,7 @@ impl EnvelopeEnforcer {
             args: i.envelope_args.to_vec(),
             mcp,
             ligus_mcp_socket,
+            gateway,
         }
     }
 }
@@ -630,6 +678,12 @@ pub fn plan_env(plan: &EnforcementPlan, proxy: Option<&EgressProxy>) -> Vec<(OsS
         for (k, v) in crate::egress::proxy_env(&p.url()) {
             env.retain(|(x, _)| x != k.as_str());
             env.push((k.into(), v.into()));
+        }
+        if let Some(g) = &plan.gateway {
+            for (k, v) in crate::model_gateway::cli_env(g.kind, g.api, &p.gateway_url(&g.name)) {
+                env.retain(|(x, _)| x != k.as_str());
+                env.push((k.into(), v.into()));
+            }
         }
     }
     env
@@ -814,6 +868,9 @@ pub struct RuntimeScope {
     pub provider_key: Option<String>,
     pub model_provider_id: Option<String>,
     pub model_base_url: Option<String>,
+    /// The model gateway the turn uses (already checked against this host's
+    /// list by dispatch; re-resolved here).
+    pub gateway: Option<crate::model_gateway::GatewaySelection>,
 }
 
 tokio::task_local! {
@@ -824,6 +881,11 @@ tokio::task_local! {
 /// Run `fut` with `rt` as the runtime scope for CLI children spawned in it.
 pub async fn with_runtime<F: std::future::Future>(rt: RuntimeScope, fut: F) -> F::Output {
     RUNTIME.scope(Arc::new(rt), fut).await
+}
+
+/// Run `f` (synchronous) with `rt` as the runtime scope.
+pub fn with_runtime_sync<R>(rt: RuntimeScope, f: impl FnOnce() -> R) -> R {
+    RUNTIME.sync_scope(Arc::new(rt), f)
 }
 
 fn current_runtime() -> Option<Arc<RuntimeScope>> {
@@ -1185,6 +1247,12 @@ pub fn prepare_with(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>) -> io::Res
     let provider_key = spec.provider_key.or(rt.provider_key.as_deref().filter(|_| agent));
     let model_provider_id = spec.model_provider_id.or(rt.model_provider_id.as_deref().filter(|_| agent));
     let model_base_url = spec.model_base_url.or(rt.model_base_url.as_deref().filter(|_| agent));
+    // A CLI agent's model route: a gateway this host lists, or (on a
+    // gateway-exclusive host) nothing at all.
+    let gateway: Option<crate::model_gateway::ResolvedGateway> = match spec.purpose {
+        Purpose::Agent(k) => crate::model_gateway::host().route(k, "", rt.gateway.as_ref()).map_err(refuse)?,
+        _ => None,
+    };
     let host = host_paths();
     let home = home_dir().unwrap_or_else(|| PathBuf::from("/nonexistent"));
     // Removed on every early return below, and with the guard when the
@@ -1238,13 +1306,14 @@ pub fn prepare_with(executor: &dyn TurnExecutor, spec: SpawnSpec<'_>) -> io::Res
         ligus_mcp_socket: policy.ligus_mcp_socket.as_deref(),
         egress_presets: &policy.egress_presets,
         cli_home: cli_home_dir.as_ref().map(|(_, h)| h.as_path()),
+        gateway: gateway.as_ref().map(|g| (g.gateway.name(), g.gateway.api())),
     };
     let plan = EnvelopeEnforcer::plan(&inputs);
     let kind = executor.kind();
     let proxy = match &plan.egress {
         EgressPlan::Proxy { allow } => {
             let sock = (kind == ExecutorKind::Bwrap).then(|| tmp.join(".ligus-egress.sock"));
-            Some(EgressProxy::start(allow.clone(), sock.as_deref())?)
+            Some(EgressProxy::start_with(allow.clone(), sock.as_deref(), gateway.into_iter().collect())?)
         }
         _ => None,
     };
@@ -1333,4 +1402,4 @@ pub fn skip_without_sandbox(test: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

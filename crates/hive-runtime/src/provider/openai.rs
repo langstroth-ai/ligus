@@ -91,6 +91,9 @@ pub struct OpenAiClient {
     /// Charge the rounds' reported token usage to the turn's spend meter
     /// (hosted APIs: OpenAI, OpenRouter, Azure).
     metered: bool,
+    /// An operator-listed model gateway: its credential replaces any key
+    /// (`Gateway::apply`, the same headers the egress proxy's route adds).
+    gateway: Option<(std::sync::Arc<crate::model_gateway::Gateway>, Option<crate::model_gateway::Attribution>)>,
 }
 
 /// The assembled result of a chat with tools on offer.
@@ -517,6 +520,7 @@ impl OpenAiClient {
             final_tool_choice: true,
             echo_reasoning: true,
             metered: false,
+            gateway: None,
         }
     }
 
@@ -564,6 +568,27 @@ impl OpenAiClient {
     pub fn with_api_key_header(mut self, yes: bool) -> Self {
         self.api_key_header = yes;
         self
+    }
+
+    /// Send every request through model gateway `gw` with its TLS client
+    /// `http` (from `Gateway::client`): no key of the runtime is sent, the
+    /// gateway's credential (and attribution, when on) is.
+    pub fn with_gateway(mut self, gw: std::sync::Arc<crate::model_gateway::Gateway>, attribution: Option<crate::model_gateway::Attribution>, http: reqwest::Client) -> Self {
+        self.http = http;
+        self.gateway = Some((gw, attribution));
+        self
+    }
+
+    /// Add the credential: the gateway's, or the runtime's key.
+    fn authorize(&self, req: reqwest::RequestBuilder, api_key: Option<&str>) -> reqwest::RequestBuilder {
+        if let Some((gw, attr)) = &self.gateway {
+            return gw.apply_or_warn(req, attr.as_ref());
+        }
+        match api_key {
+            Some(key) if self.api_key_header => req.header("api-key", key),
+            Some(key) => req.header("authorization", format!("Bearer {key}")),
+            None => req,
+        }
     }
 
     /// Label used in error messages (defaults to "openai").
@@ -987,14 +1012,8 @@ impl OpenAiClient {
 
     async fn fetch_props_n_ctx(&self, api_key: Option<&str>, model: &str) -> Option<u32> {
         let url = format!("{}/props", server_base(&self.endpoint));
-        let mut req = self.http.get(&url).query(&[("model", model)]).timeout(PROBE_TIMEOUT);
-        if let Some(key) = api_key {
-            req = if self.api_key_header {
-                req.header("api-key", key)
-            } else {
-                req.header("authorization", format!("Bearer {key}"))
-            };
-        }
+        let req = self.http.get(&url).query(&[("model", model)]).timeout(PROBE_TIMEOUT);
+        let req = self.authorize(req, api_key);
         let resp = req.send().await.ok()?;
         if !resp.status().is_success() {
             return None;
@@ -1004,19 +1023,12 @@ impl OpenAiClient {
     }
 
     fn request(&self, api_key: Option<&str>, body: &[u8]) -> reqwest::RequestBuilder {
-        let mut req = self
+        let req = self
             .http
             .post(&self.endpoint)
             .header("content-type", "application/json")
             .body(body.to_vec());
-        if let Some(key) = api_key {
-            req = if self.api_key_header {
-                req.header("api-key", key)
-            } else {
-                req.header("authorization", format!("Bearer {key}"))
-            };
-        }
-        req
+        self.authorize(req, api_key)
     }
 
     fn peer(&self) -> Peer<'_> {
