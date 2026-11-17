@@ -45,3 +45,45 @@ hive-forge = { path = "crates/hive-forge" }
 strip = true
 lto = "thin"
 codegen-units = 1
+
+# Optimise the crypto crates in debug and test builds. Unoptimised, they
+# dominate every signed-log test, and on x86_64 curve25519-dalek picks its
+# AVX2 backend at run time, whose intrinsics are out-of-line calls at
+# opt-level 0: the authz property suites ran about 20x slower on the Linux and
+# Windows runners than on Apple silicon (prop_authz_is_prefix_stable: 1403s
+# against 72s at 256 cases). Same code, same backends, same results; only
+# the codegen of these dependencies changes.
+[profile.dev.package.curve25519-dalek]
+opt-level = 3
+[profile.dev.package.ed25519-dalek]
+opt-level = 3
+[profile.dev.package.x25519-dalek]
+opt-level = 3
+[profile.dev.package.p256]
+opt-level = 3
+[profile.dev.package.primeorder]
+opt-level = 3
+[profile.dev.package.elliptic-curve]
+opt-level = 3
+[profile.dev.package.ecdsa]
+opt-level = 3
+[profile.dev.package.crypto-bigint]
+opt-level = 3
+[profile.dev.package.sha2]
+opt-level = 3
+[profile.dev.package.sha1]
+opt-level = 3
+[profile.dev.package.hmac]
+opt-level = 3
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
+[profile.dev.package.chacha20]
+opt-level = 3
+[profile.dev.package.poly1305]
+opt-level = 3
+[profile.dev.package.rsa]
+opt-level = 3
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
