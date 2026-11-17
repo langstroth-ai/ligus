@@ -20,6 +20,7 @@ plugins:
         deploy/ligus-auth-dex.md: https://docs.langstroth.ai/deploy/ligus-auth-dex/
         deploy/ligus-auth-pocket-id.md: https://docs.langstroth.ai/deploy/ligus-auth-pocket-id/
         deploy/ligus-auth.md: https://docs.langstroth.ai/deploy/ligus-auth/
+        deploy/model-gateways.md: https://docs.langstroth.ai/deploy/model-gateways/
         deploy/multi-tenant.md: https://docs.langstroth.ai/deploy/multi-tenant/
         deploy/personal-fleet.md: https://docs.langstroth.ai/deploy/personal-fleet/
         deploy/solo.md: https://docs.langstroth.ai/deploy/solo/

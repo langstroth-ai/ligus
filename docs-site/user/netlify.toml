@@ -293,6 +293,18 @@
   force = true
 
 [[redirects]]
+  from = "https://docs.apiaryhq.ai/deploy/model-gateways/"
+  to = "https://docs.langstroth.ai/deploy/model-gateways/"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "https://docs.apiaryhq.ai/deploy/model-gateways/index.html"
+  to = "https://docs.langstroth.ai/deploy/model-gateways/"
+  status = 301
+  force = true
+
+[[redirects]]
   from = "https://docs.apiaryhq.ai/deploy/multi-tenant/"
   to = "https://docs.langstroth.ai/deploy/multi-tenant/"
   status = 301
@@ -1147,6 +1159,18 @@
 [[redirects]]
   from = "/deploy/ligus-auth/index.html"
   to = "https://docs.langstroth.ai/deploy/ligus-auth/"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/deploy/model-gateways/"
+  to = "https://docs.langstroth.ai/deploy/model-gateways/"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/deploy/model-gateways/index.html"
+  to = "https://docs.langstroth.ai/deploy/model-gateways/"
   status = 301
   force = true
 

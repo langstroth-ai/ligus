@@ -20,6 +20,7 @@ deploy/kubernetes.md	operator	deploy/kubernetes.md
 deploy/ligus-auth-dex.md	operator	deploy/ligus-auth-dex.md
 deploy/ligus-auth-pocket-id.md	operator	deploy/ligus-auth-pocket-id.md
 deploy/ligus-auth.md	operator	deploy/ligus-auth.md
+deploy/model-gateways.md	operator	deploy/model-gateways.md
 deploy/multi-tenant.md	operator	deploy/multi-tenant.md
 deploy/personal-fleet.md	operator	deploy/personal-fleet.md
 deploy/solo.md	operator	deploy/solo.md

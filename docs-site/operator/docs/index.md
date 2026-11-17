@@ -34,6 +34,7 @@ honeybee). Commands, chart names and environment variables still use the
 | Run a relay (Docker, Fly.io, systemd), pick its storage, gate access | [Self-hosting a relay](networking/self-host.md) |
 | Let people sign in with your identity provider | [ligus-auth](deploy/ligus-auth.md), with [Pocket ID](deploy/ligus-auth-pocket-id.md) or [Dex](deploy/ligus-auth-dex.md) |
 | Run the relay and Ligus hosts on a cluster | [Kubernetes (preview)](deploy/kubernetes.md) |
+| Route agents through your LLM gateway (LiteLLM, kgateway, Envoy AI Gateway) | [Deploying with an LLM gateway](deploy/model-gateways.md) |
 | Run an always-on host for your phone and agents | [ligus serve as your own device](ops/serve-box.md), [Headless agents](concepts/headless-agents.md), [Remote access](networking/remote-access.md) |
 | Monitor, back up, restore, upgrade | [Operations](ops/operations.md), [Upgrading from Hive 1.x](deploy/upgrade-from-hive.md) |
 | Understand what an attacker can do | [Threat model](security/threat-model.md), [Runbooks](security/runbooks.md) |
