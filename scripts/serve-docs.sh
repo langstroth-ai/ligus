@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
 #
-# Serve one of the two documentation sites locally with live-reload.
-#
-#   user      docs-site/user      -> docs.ligus.ai       (default)
-#   operator  docs-site/operator  -> docs.langstroth.ai
+# Serve the documentation site (docs-site, https://docs.langstroth.ai/)
+# locally with live-reload: Using Ligus under /ligus/, Operating Langstroth
+# under /operate/.
 #
 # First time: installs the pinned docs dependencies into a venv at ./.venv-docs/.
 # Subsequent runs: reuses the venv.
 #
 # Usage:
-#   bash scripts/serve-docs.sh [user|operator] [port]
+#   bash scripts/serve-docs.sh [port]
 #   open http://127.0.0.1:8000
 
 set -euo pipefail
@@ -17,11 +16,9 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
-site="${1:-user}"
-port="${2:-8000}"
-case "$site" in
-    user|operator) ;;
-    *) echo "usage: $0 [user|operator] [port]" >&2; exit 2 ;;
+port="${1:-8000}"
+case "$port" in
+    ''|*[!0-9]*) echo "usage: $0 [port]" >&2; exit 2 ;;
 esac
 
 venv_dir="$repo_root/.venv-docs"
@@ -33,4 +30,4 @@ if [[ ! -d "$venv_dir" ]]; then
 fi
 "$venv_dir/bin/pip" install --quiet -r docs-site/requirements.txt
 
-exec "$venv_dir/bin/mkdocs" serve -f "docs-site/$site/mkdocs.yml" --dev-addr "127.0.0.1:$port"
+exec "$venv_dir/bin/mkdocs" serve -f docs-site/mkdocs.yml --dev-addr "127.0.0.1:$port"

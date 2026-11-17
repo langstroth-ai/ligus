@@ -1,0 +1,323 @@
+# Remote access for your phone
+
+The [phone app](../../ligus/features/phone-app.md) talks to **`ligus serve`**, a Ligus
+device you run on an always-on box (a home server, a small PC, a VM). This
+page covers getting the phone to that box, from anywhere, and keeping the
+link healthy.
+
+There are two ways in, and you can use both:
+
+| Path | How the phone reaches the box | Needs |
+|---|---|---|
+| **Direct** | plain HTTP to the box's address, with a bearer token | the phone on the same LAN, or both on a VPN such as Tailscale |
+| **Relay tunnel** | through your relay, end-to-end encrypted (`hive-tunnel/1`) | a relay with the tunnel turned on; no VPN and no inbound port on the box |
+
+The relay tunnel is the "works from anywhere" option. The box keeps one
+outbound WebSocket to the relay. The phone connects to the relay, the relay
+checks that it holds a valid credential for that box, and then splices the
+two connections together. Inside, the phone and the box run a Noise
+handshake: the phone pins the box's key from the pairing QR code, so the relay
+can't read, alter or impersonate either end. It sees only ciphertext, sizes
+and timing. The full protocol is
+[`docs/relay-tunnel.md`](https://github.com/ligus-ai/ligus/blob/main/docs/relay-tunnel.md).
+
+## Before you start
+
+- The `ligus` CLI on the box (`brew install ligus-ai/ligus/ligus`, or see
+  [Headless agents](../concepts/headless-agents.md#install-the-cli)). Check it
+  with `ligus --version`.
+- The box joined to your workspace with `ligus enroll "hivews1:…"`, using the
+  invite from the desktop's **Copy invite**. The invite carries the workspace
+  key, so move it to the box over a channel you trust, such as SSH. The
+  workspace needs a relay (**Settings → Team sync → Relay URL**); `ligus
+  enroll` refuses an invite without one.
+- **A personal box? Make it your own device.** Joined with a plain invite,
+  the box is a separate member: everything you send from the phone shows
+  under the box's name (its `--label`, else its host name), and `@hive` in
+  chats the phone creates isn't answered by your desktop. For your own box,
+  also run `ligus serve enroll` once and approve it on your desktop (see
+  [Running ligus serve as your own device](../ops/serve-box.md)); the phone
+  then writes as you. Keep it a separate member only for a box several
+  people share. `ligus pair` and `ligus serve --pair` print a reminder on a
+  box that isn't enrolled as anyone's device.
+- For the relay tunnel: a relay with the tunnel turned on. It is **off by
+  default**; see [Using your own relay](#using-your-own-relay).
+
+A ready-made systemd unit and env file are in
+[`deploy/ligus-serve/`](https://github.com/ligus-ai/ligus/tree/main/deploy/ligus-serve).
+
+## 1. Run `ligus serve`
+
+```sh
+ligus serve --listen 127.0.0.1:8787 --label home-box
+```
+
+- `--listen` / `LIGUS_SERVE_LISTEN` (default `127.0.0.1:8787`). The box binds
+  only to loopback, a private LAN address or a VPN address, and refuses
+  `0.0.0.0` and public addresses unless `LIGUS_SERVE_ALLOW_ANY_BIND=1`,
+  which removes that guard; set it only where a firewall or a private
+  network namespace decides who connects. Prefer the relay tunnel or a
+  tailnet address to a LAN bind: the direct path is plain HTTP, so on a LAN
+  anyone on the network can read the token.
+  With the relay tunnel only, loopback is fine: the phone never connects to
+  this port directly.
+- `--label` / `LIGUS_SERVE_LABEL` is the host name other members see
+  (default: the machine's host name). A box that is its own member also
+  uses it as its display name unless `--name` / `LIGUS_SERVE_NAME` sets one
+  (a box that still shows as "hive-cli", from before 2.0, takes it on its
+  next start).
+- `LIGUS_SERVE_PUBLIC_URL` is the URL the phone should use for the direct path
+  when it differs from `http://<listen>` (a DNS name, say).
+
+On its first run, `ligus serve` creates the direct-path bearer token in
+`<LIGUS_DATA_DIR>/serve.token` (mode 0600).
+
+## 2. Turn on the relay tunnel
+
+```sh
+ligus remote enable --relay https://<relay-url>
+# restart ligus serve, e.g. systemctl --user restart ligus-serve
+```
+
+This creates the box's host keys and saves the relay in
+`<LIGUS_DATA_DIR>/tunnel/relay.json`. The relay URL must be `https`.
+
+| Option | Use |
+|---|---|
+| `--reg-token <token>` / `LIGUS_REMOTE_REG_TOKEN` | a relay that only admits hosts with an access token |
+| `ligus serve --remote-relay <url>` / `LIGUS_REMOTE_RELAY` | use a relay for this run only, without `relay.json` |
+| `LIGUS_REMOTE_RELAY=off` | turn remote access off for this run even when `relay.json` enables it |
+| `--insecure-relay` / `LIGUS_REMOTE_INSECURE_RELAY=1` | allow an `http` relay URL. For tests and a relay on loopback only |
+
+## 3. Pair the phone
+
+```sh
+ligus pair
+```
+
+`ligus pair` prints a QR code and the `hive://pair?…` link. Scan it with the
+phone's camera or from the app. With remote access on, it's a **v2 link**: it
+carries the direct URL and token (when there's a usable direct path) plus the
+box's host id, its public key, the relay URL and a one-time pairing secret.
+
+- **Run it with the server's settings.** `ligus pair` is a separate process
+  from `ligus serve`. Load the same environment (`LIGUS_DATA_DIR`,
+  `LIGUS_SERVE_LISTEN` or `LIGUS_SERVE_PUBLIC_URL`), for example from the
+  service's env file:
+
+    ```sh
+    set -a; . ~/.config/ligus-serve/ligus-serve.env; set +a
+    ligus pair
+    ```
+
+- **It never creates a token of its own.** It reads the token `ligus serve`
+  created, so it can't hand the phone one the server doesn't accept. With no
+  `serve.token` yet, it stops and tells you to start `ligus serve` first or
+  point `LIGUS_DATA_DIR` / `--token-file` at the server's data dir.
+- **It won't send the phone to loopback.** A direct URL such as
+  `http://127.0.0.1:8787` would point the phone at itself. With remote access
+  on, `ligus pair` and `ligus serve --pair` print a relay-only link instead.
+  Without it they print no link: turn on remote access with
+  `ligus remote enable --relay <url>` and pair again, or listen on a LAN or
+  tailnet address (`--listen` / `LIGUS_SERVE_LISTEN`), or set the address the
+  phone should use (`--public-url` / `LIGUS_SERVE_PUBLIC_URL`).
+  (`ligus serve --pair` keeps serving; only the link is withheld.)
+- `--relay-only` leaves the direct URL and token out of the link even when a
+  direct path exists.
+- The pairing secret works **once, for 10 minutes**, and only while
+  `ligus serve` is running (it picks up the new pairing window within 2
+  seconds). Run `ligus pair` again for a fresh one.
+- `ligus serve --pair` prints the same code when the server starts. Use it
+  only in a terminal: under systemd the link, direct-path token included,
+  lands in journald and stays there.
+
+!!! warning "The link is a key"
+    A link with a direct URL also carries the box's API token. Share it only
+    with your own phone, and don't paste it into a chat or a ticket.
+
+After pairing, the phone holds its own credential for this box. It is valid
+for 90 days and the app renews it every day while you use it, so you only
+re-pair a phone that has been unused for 90 days.
+
+## Manage phones
+
+```sh
+ligus phones list
+ligus phones revoke <pid|name> [--keep-token]
+```
+
+`ligus phones list` shows each phone paired over the relay: its id, name,
+state (`active` or `revoked`), the day it was paired and the day it was last
+seen.
+
+`ligus phones revoke` takes effect at once. A running `ligus serve` ends the
+phone's live sessions, refuses its requests and handshakes, and tells the
+relay, which then rejects that phone before it reaches the box. By default it
+also **rotates the direct-path token** (`serve.token`), because a lost phone
+holds that too; every phone that uses the direct path must then pair again.
+`--keep-token` skips the rotation.
+
+## Check the link
+
+```sh
+ligus remote status
+```
+
+```text
+relay:     https://<relay-url> (enabled)
+host id:   <host id>
+serve:     connected for 6h 33m (status active, push available, checked 12s ago)
+phones:    1 active, 0 revoked
+  iPhone: notifications on (previews on), last seen 2m ago
+```
+
+Each active phone gets a line saying whether it asked this box for
+notifications. `notifications OFF` means the app never turned them on for this
+host (in the app: **Settings → Notifications**), and the box sends it nothing.
+
+The `serve:` line comes from a status file that a running `ligus serve`
+refreshes every 30 seconds:
+
+| `serve:` says | Meaning |
+|---|---|
+| `connected for …` | the box is connected to the relay; the time is how long the current connection has been up |
+| `not connected (…, since … ago)` | the box is running but can't reach the relay, or the relay refused it; a `last error` follows when there is one |
+| `unknown: ligus serve last reported … ago … — is it running?` | the status file hasn't been refreshed for over 90 seconds: `ligus serve` stopped or crashed |
+| `status pending` | the relay registered the box but hasn't activated it yet, so phones can't connect through it |
+| `push unavailable` | the relay has no APNs key; see [Push through your own relay](#push-through-your-own-relay) |
+
+There is no `serve:` line until `ligus serve` has run with remote access on.
+
+Other commands:
+
+- `ligus remote push-test [--phone <pid|name>]`: send a test notification
+  to the paired phones and print what happened at each hop. See
+  [Troubleshooting push](../../ligus/features/phone-app.md#troubleshooting-push).
+- `ligus remote disable`: stop using the relay. Keys and phones are kept, so
+  enabling it again needs no re-pairing. Restart `ligus serve` afterwards.
+- `ligus remote reset`: new host keys, so a new host id. **Every phone must
+  pair again.** Use it if the box's keys may have leaked.
+- `ligus --version`: the CLI's version. The phone sees the same version on the
+  box's `/v1/health`.
+
+## Using your own relay
+
+The tunnel is part of the open relay,
+[ligus-ai/relay](https://github.com/ligus-ai/relay) (`cmd/ligus-relay`),
+and is free to self-host. It is **off by default**: a relay you upgrade does
+not become a public tunnel provider on its own. Turn it on in the relay's
+environment, not on the box:
+
+| Relay env | Meaning |
+|---|---|
+| `LIGUS_RELAY_TUNNEL=off` | default. The tunnel routes answer 404 |
+| `LIGUS_RELAY_TUNNEL=open` | any host may register and is active at once |
+| `LIGUS_RELAY_TUNNEL=allowlist` | only the host ids in `LIGUS_RELAY_TUNNEL_HOSTS` (comma-separated; get a box's id from `ligus remote status`) |
+
+If the relay also gates access with tokens (`LIGUS_RELAY_ACCESS_TOKENS` or
+`LIGUS_RELAY_TOKEN_PUBKEY`), a box must present one to register: pass it with
+`ligus remote enable --reg-token`.
+
+Check the relay with `GET https://<relay-url>/v1/tunnel/info`. A relay with
+the tunnel on answers `{"versions":[1],"push":…,"billing":"none"}`; one with
+it off answers 404. The open-source relay always reports `"billing":"none"`
+(a field kept for wire compatibility), and the app needs nothing more.
+
+!!! note "Run one relay instance"
+    The relay keeps each box's control connection in memory, so a phone's
+    connection must reach the same relay process as the box's. Run a single
+    instance (or route by host yourself).
+
+See [Self-hosting a relay](self-host.md) for deploying the relay itself.
+
+## Push through your own relay
+
+Push notifications travel `ligus serve` → relay → Apple (APNs) → phone,
+encrypted end to end with a key the box and the phone agree on at pairing.
+Apple accepts a push only when it is signed with an APNs key from the same
+Apple developer team that signed the app. So with your own relay, push works
+when you run the relay with **your** APNs key and build and sign the app
+yourself under the same team.
+
+1. **Create an APNs key.** In the Apple Developer portal, under
+   **Certificates, Identifiers & Profiles → Keys**, create a key with Apple
+   Push Notifications service enabled. Download the `.p8` file (Apple lets you
+   download it once; treat it like a password) and note the Key ID and your
+   Team ID. Enable the Push Notifications capability on the app's identifier.
+2. **Give the relay the key.**
+
+    ```sh
+    LIGUS_RELAY_TUNNEL=open
+    LIGUS_RELAY_APNS_KEY_FILE=/path/to/AuthKey_<KEYID>.p8   # or LIGUS_RELAY_APNS_KEY=<inline PEM>
+    LIGUS_RELAY_APNS_KEY_ID=<Key ID>
+    LIGUS_RELAY_APNS_TEAM_ID=<Team ID>
+    LIGUS_RELAY_APNS_TOPIC=<the app's bundle id>
+    LIGUS_RELAY_APNS_TOPICS=<more bundle ids, comma-separated>   # optional, e.g. a dev build
+    LIGUS_RELAY_APNS_ENV=auto        # optional: auto (default) | sandbox | production
+    ```
+
+    A dev build and an App Store build have different bundle ids. The app
+    tells the relay its bundle id with its push token, and the relay pushes
+    with that topic when it is `LIGUS_RELAY_APNS_TOPIC` or listed in
+    `LIGUS_RELAY_APNS_TOPICS` (relay v0.3 and later); any other is refused.
+    `auto` uses the environment each phone reports: sandbox for development
+    builds (run from Xcode), production for TestFlight and App Store builds. Keep the `.p8`
+    readable only by the relay's user and out of version control.
+    `/v1/tunnel/info` then reports `"push": true`.
+3. **Point the box at the relay and pair**, as in steps 2 and 3 above.
+   `ligus remote status` shows `push available` once the box is connected.
+4. **Build the app with push turned on**, signed with your team and bundle id,
+   install it, and allow notifications when the app asks.
+
+What gets pushed, and the per-phone previews setting, are on
+[Ligus on your phone](../../ligus/features/phone-app.md#push-notifications). The
+details, including the host-side rate limits, are in
+[`docs/push-notifications.md`](https://github.com/ligus-ai/ligus/blob/main/docs/push-notifications.md).
+
+## Troubleshooting
+
+**`ligus pair` says the link would point the phone at the phone itself.**
+It's reading the default loopback address. Load the server's environment
+first, or pass `--listen <address:port>` / `--public-url <url>`, or turn on
+remote access so it prints a relay-only link.
+
+**`ligus pair` says there's no serve token.** It's looking in the wrong data
+dir, or `ligus serve` has never run there. Set `LIGUS_DATA_DIR` to the server's
+data dir (or pass `--token-file`), or start `ligus serve` first.
+
+**`ligus pair` says remote access is enabled but there are no host keys.**
+Run `ligus remote enable --relay …` (or start `ligus serve` once) in the same
+data dir.
+
+**The phone can't pair: the link expired or was already used.** Pairing
+secrets are one-time and last 10 minutes, and `ligus serve` must be running to
+accept them. Run `ligus pair` again.
+
+**`ligus remote status` says `unknown: … is it running?`** `ligus serve` has
+stopped. Check the service (`systemctl --user status ligus-serve`) and its log.
+
+**`ligus remote status` says `not connected`.** Check the `last error`. Common
+causes:
+
+- the relay's tunnel is off: `/v1/tunnel/info` answers 404. Set
+  `LIGUS_RELAY_TUNNEL` on the relay;
+- the relay URL is wrong or isn't `https`;
+- the relay requires a registration token: pass `--reg-token`;
+- the box was replaced by a newer connection with the same keys (two
+  `ligus serve` processes on one data dir). Stop one.
+
+**The phone says the host is offline.** The relay has no live connection from
+the box. Check `ligus remote status` on the box.
+
+**The phone says it was revoked, or its credential expired.** Pair it again
+with `ligus pair`. A revoked phone stays revoked in `ligus phones list`.
+
+**The phone can't reach the box after `ligus phones revoke`.** Revoking also
+rotated `serve.token`, so phones on the direct path must pair again. Use
+`--keep-token` next time if that isn't what you want.
+
+**No notifications.** Run `ligus remote push-test` on the box: it sends a
+test notification and prints each hop (box → relay → APNs) with the reason
+and the fix when one fails. `ligus serve` logs every push decision (`push:`
+lines) and the relay logs every APNs answer (`tunnel push`). See
+[Troubleshooting push](../../ligus/features/phone-app.md#troubleshooting-push).

@@ -1,5 +1,5 @@
-# Pinned build dependencies for both documentation sites (docs-site/user and
-# docs-site/operator), installed by Netlify and .github/workflows/docs.yml.
+# Pinned build dependencies for the documentation site (docs-site), installed
+# by Netlify and .github/workflows/docs.yml.
 # Stay on mkdocs-material 9.x: 2.0 rewrote the theming system. To update,
 # install the three top-level packages in a fresh venv and paste pip freeze:
 #   pip install "mkdocs==1.6.*" "mkdocs-material>=9,<10" "mkdocs-redirects==1.2.2"

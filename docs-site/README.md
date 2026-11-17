@@ -1,109 +1,169 @@
-# Documentation sites
+# Documentation site
 
-The published docs are two MkDocs (Material) sites built from this directory.
+The published docs are one MkDocs (Material) site built from this directory
+and served at **<https://docs.langstroth.ai/>**. It has two sections:
 
-| Site | Directory | Domain | Audience |
+| Section | Directory | URL prefix | Audience |
 |---|---|---|---|
-| Ligus user docs | `user/` | <https://docs.ligus.ai/> | People using the Ligus desktop app, phone app and `ligus` CLI |
-| Langstroth operator docs | `operator/` | <https://docs.langstroth.ai/> | People self-hosting and deploying: relay, ligus-auth, Helm charts, `ligus serve` and worker hosts, security model, operator reference |
+| Using Ligus | `docs/ligus/` | <https://docs.langstroth.ai/ligus/> | People using the Ligus desktop app, phone app and `ligus` CLI |
+| Operating Langstroth | `docs/operate/` | <https://docs.langstroth.ai/operate/> | People self-hosting and deploying: relay, ligus-auth, Helm charts, `ligus serve` and worker hosts, security model, operator reference |
 
-*Ligus* is short for *ligustica*, the Italian honeybee; Langstroth is the
-platform behind the apps. Developer and maintainer docs are in
-[`../docs/`](../docs/README.md), not here.
+*Ligus* is short for *ligustica*, the Italian honeybee, and is the app;
+Langstroth is the platform behind it. The home page (`docs/index.md`)
+introduces both and links to each section. Developer and maintainer docs are
+in [`../docs/`](../docs/README.md), not here.
 
 ```
 docs-site/
-  mkdocs-base.yml     settings both sites share (theme, Markdown extensions)
-  requirements.txt    pinned build dependencies for both sites
-  theme/              shared logo, favicon and stylesheet (theme custom_dir)
-  user/               docs.ligus.ai: mkdocs.yml, netlify.toml, docs/
-  operator/           docs.langstroth.ai: mkdocs.yml, netlify.toml, docs/
-  tools/page-map.tsv  where every page of the old single site went
+  mkdocs.yml          the site: theme, Markdown extensions, nav, redirect stubs
+  netlify.toml        build, headers and the 301s (Netlify base directory)
+  requirements.txt    pinned build dependencies
+  theme/              logo, favicon and stylesheet (theme custom_dir)
+  docs/index.md       the home page
+  docs/ligus/         Using Ligus
+  docs/operate/       Operating Langstroth
+  docs/llms.txt       every page with a one-line summary, for agents
+  docs/version.json   the desktop app's update manifest
+  tools/page-map.tsv  every page of the pre-2.0 sites and where it lives now
   tools/redirects.py  generates and checks the redirects
 ```
 
-## Which site a page belongs on
+## Which section a page belongs in
 
 Using the apps (workspaces, agents and runtimes, people and DMs, workflows,
 proposals, passkeys as users see them, the CLI basics, what's new) goes in
-`user/`. Running the platform (deployment shapes, the relay and auth,
+`docs/ligus/`. Running the platform (deployment shapes, the relay and auth,
 Kubernetes, always-on hosts, backups, security and the threat model, the
-serve API, env and config reference, upgrade notes) goes in `operator/`.
+serve API, env and config reference, upgrade notes) goes in `docs/operate/`.
 
-A page lives on one site only. When the other audience needs it, give them a
-short summary and an absolute link (`https://docs.ligus.ai/...` or
-`https://docs.langstroth.ai/...`). Relative links must stay inside their own
-site; `mkdocs build --strict` fails on any that don't resolve.
+A page lives in one section only. Link between sections with relative links
+(`../../operate/deploy/index.md`), never absolute docs URLs;
+`mkdocs build --strict` fails on any relative link that doesn't resolve.
 
 ## Build and preview locally
+
+The build needs Python 3.10 or later (the redirect check needs 3.11).
 
 ```bash
 python3 -m venv .venv-docs
 .venv-docs/bin/pip install -r docs-site/requirements.txt
 
 # live preview (installs the requirements on first run)
-bash scripts/serve-docs.sh user        # http://127.0.0.1:8000
-bash scripts/serve-docs.sh operator 8001
+bash scripts/serve-docs.sh            # http://127.0.0.1:8000
 
 # what CI and Netlify run
-.venv-docs/bin/mkdocs build --strict -f docs-site/user/mkdocs.yml
-.venv-docs/bin/mkdocs build --strict -f docs-site/operator/mkdocs.yml
-.venv-docs/bin/python docs-site/tools/redirects.py check --built
+.venv-docs/bin/mkdocs build --strict -f docs-site/mkdocs.yml
+.venv-docs/bin/python docs-site/tools/redirects.py check --refs --built
 ```
 
-Each site builds into its own `site/` directory (ignored by git).
+Or, without a venv:
+
+```bash
+uv run --python 3.12 --with-requirements docs-site/requirements.txt --no-project -- \
+  mkdocs build --strict -f docs-site/mkdocs.yml
+```
+
+The site builds into `site/` (ignored by git).
 
 ## Moving or renaming a page
 
 Old URLs must keep working. After you move a page:
 
-1. Update `tools/page-map.tsv` (old path, site, new path). Never delete a
-   row: the old path is still out there. To remove a page, point its row
-   (or a new row, for a page added after the split) at the page that
+1. Update `tools/page-map.tsv` (old path, new path, sources). Never delete a
+   row: the old URL is still out there. Moving a page that is already a
+   target means updating every row that points at it, and adding a row for
+   its current path. To remove a page, point its rows at the page that
    replaces it.
 2. Run `python3 docs-site/tools/redirects.py generate`. It rewrites the
-   generated blocks in `user/mkdocs.yml` (stub pages for GitHub Pages),
-   `user/netlify.toml` and `operator/netlify.toml`.
-3. Run `python3 docs-site/tools/redirects.py check --built` after building
-   both sites.
+   generated blocks in `mkdocs.yml` (stub pages at the old paths) and
+   `netlify.toml` (the 301s).
+3. Build, then run `python3 docs-site/tools/redirects.py check --refs --built`.
 
-## Netlify settings
+The check reads the three pre-2.0 sites from git (`--refs`, needs full
+history): docs.apiaryhq.ai (the 1.x site, at v1.18.0 on main),
+docs.ligus.ai and docs.langstroth.ai (the two 2.0 sites before they were
+merged). Every old page, every path an old host redirected and every old
+file must be covered. With `--built` it runs every old URL on all three hosts
+through an emulation of the Netlify rules and fails on any that doesn't land
+on its page in one 301, and on `version.json` being redirected on any host.
 
-Create two Netlify sites from this repository. Everything else comes from the
-`netlify.toml` in each base directory.
+## How old URLs are answered
 
-| | User docs | Operator docs |
-|---|---|---|
-| Base directory | `docs-site/user` | `docs-site/operator` |
-| Build command | from `netlify.toml` | from `netlify.toml` |
-| Publish directory | `docs-site/user/site` (`site` in the toml) | `docs-site/operator/site` (`site` in the toml) |
-| Python | 3.12 (`PYTHON_VERSION` in the toml) | 3.12 |
-| Primary domain | `docs.ligus.ai` | `docs.langstroth.ai` |
-| Domain aliases | `docs.apiaryhq.ai` (the 1.x docs domain) | none |
+- **docs.langstroth.ai** (the primary domain): every old path of the three
+  old sites answers a forced 301 to its new page under `/ligus/` or
+  `/operate/`. The old home (`/`) is the new home. Old screenshot URLs
+  (`/images/...`) go to `/ligus/images/...`.
+- **docs.ligus.ai** and **docs.apiaryhq.ai** (domain aliases of the same
+  site): every old page answers a forced 301 straight to its new page on
+  docs.langstroth.ai, and the old home goes to Using Ligus (`/ligus/`).
+  Any other path goes to the same path on docs.langstroth.ai, where the
+  rules above answer it.
+- **version.json** is the exception: on both aliases it is served as it is
+  (a 200 rewrite listed before the redirects), so update checks in shipped
+  desktop builds (`https://docs.ligus.ai/version.json`, and
+  `https://docs.apiaryhq.ai/version.json` in 1.x) never depend on following a
+  redirect. Its headers (`Cache-Control: max-age=300`,
+  `Access-Control-Allow-Origin: *`) apply on every host. Builds from 2.0 on
+  read `https://docs.langstroth.ai/version.json` first and fall back to the
+  docs.ligus.ai URL.
+- The built site also has a meta-refresh stub page at every old path
+  (mkdocs-redirects), so an old link lands on its page even where the
+  Netlify rules don't run.
 
-Each toml sets the build command
-(`pip install -r ../requirements.txt && mkdocs build --strict`), the publish
-directory, security headers (HSTS, CSP, frame and referrer policy), an
-`ignore` command that skips a deploy when nothing the site is built from
-changed, and the 301 redirects.
+## Netlify setup
 
-- **docs.ligus.ai** answers every page that moved to the operator site, the
-  page that moved to `help/`, and every removed page, with a 301 to the new
-  address.
-- **docs.apiaryhq.ai** must be attached to the user site as a domain alias.
-  Host-specific rules in `user/netlify.toml` send every page of the old site
-  straight to its new home on either site, and any other path to the same
-  path on docs.ligus.ai, so no old link 404s.
-- **docs.langstroth.ai** sends user-site paths asked for on it to
-  docs.ligus.ai, and its own removed pages to their replacement.
+One Netlify site, **`langstroth-docs`**, builds and serves everything.
+Everything except the domains comes from `netlify.toml`.
 
-The desktop app's update check reads `https://docs.ligus.ai/version.json`,
-so that file stays on the user site.
+| Setting | Value |
+|---|---|
+| Base directory | `docs-site` |
+| Build command | from `netlify.toml` (`pip install -r requirements.txt && mkdocs build --strict`) |
+| Publish directory | `docs-site/site` (`site` in the toml) |
+| Python | 3.12 (`PYTHON_VERSION` in the toml) |
+| Primary domain | `docs.langstroth.ai` |
+| Domain aliases | `docs.ligus.ai` now; `docs.apiaryhq.ai` at the 2.0 release |
 
-## GitHub Pages (until DNS moves)
+### Owner steps
 
-`.github/workflows/docs.yml` still publishes the user site to GitHub Pages
-(with `user/docs/CNAME`). While Pages serves docs.ligus.ai, moved pages are
-answered by the meta-refresh stubs that mkdocs-redirects writes. Once
-docs.ligus.ai and docs.apiaryhq.ai point at Netlify, delete the workflow,
-turn off Pages for the repository and remove `user/docs/CNAME`.
+Do these in order. None of them needs a code change.
+
+1. **Point `langstroth-docs` at the single site.** In the Netlify UI, open
+   `langstroth-docs` → Site configuration → Build & deploy → Build settings.
+   Set **Base directory** to `docs-site` (it was `docs-site/operator`), and
+   leave the build command and publish directory empty so `netlify.toml`
+   supplies them. Set the production branch to the branch that carries this
+   layout (`release/v2.0.0` until 2.0 merges, then `main`). Deploy, then
+   check `https://docs.langstroth.ai/`, `/ligus/`, `/operate/`,
+   `/version.json`, and that `/deploy/` answers 301 to `/operate/deploy/`.
+2. **Move docs.ligus.ai to `langstroth-docs`.** On `ligus-docs` → Domain
+   management, remove `docs.ligus.ai`. On `langstroth-docs` → Domain
+   management → Add domain alias, add `docs.ligus.ai`. If docs.ligus.ai's
+   DNS record is a CNAME to `ligus-docs.netlify.app`, change it to
+   `langstroth-docs.netlify.app` (with Netlify DNS this is done for you).
+   Wait for the certificate (HTTPS → Verify DNS configuration; provision it
+   if it doesn't start). Then check:
+   - `curl -sI https://docs.ligus.ai/version.json` answers **200** (not a
+     301) with `access-control-allow-origin: *`;
+   - `curl -sI https://docs.ligus.ai/features/git/` answers **301** to
+     `https://docs.langstroth.ai/ligus/features/git/`;
+   - `curl -sI https://docs.ligus.ai/deploy/` answers **301** to
+     `https://docs.langstroth.ai/operate/deploy/`.
+3. **Retire `ligus-docs`.** Once step 2 checks out, delete the `ligus-docs`
+   site (Site configuration → General → Danger zone → Delete this site), or
+   at least stop its builds (Build & deploy → Stop builds).
+4. **At the 2.0 release, move docs.apiaryhq.ai.** Until then it stays on
+   GitHub Pages, published from `main` by the 1.x docs workflow. Once 2.0 is
+   on `main` (whose docs workflow no longer publishes to Pages): on
+   `langstroth-docs`, add the domain alias `docs.apiaryhq.ai`; change its DNS
+   record from GitHub Pages to a CNAME for `langstroth-docs.netlify.app`;
+   wait for the certificate; then turn off GitHub Pages for the repository
+   (Settings → Pages: remove the custom domain and unpublish). Check that
+   `curl -sI https://docs.apiaryhq.ai/version.json` answers 200 and
+   `curl -sI https://docs.apiaryhq.ai/ops/deployment/` answers 301 to
+   `https://docs.langstroth.ai/operate/ops/deployment/`.
+5. In Domain management, confirm `docs.langstroth.ai` is the primary domain
+   and HTTPS is forced (the default once a certificate exists).
+
+The rules for docs.apiaryhq.ai are already in `netlify.toml`; they do
+nothing until the alias is added.

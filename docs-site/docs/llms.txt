@@ -1,0 +1,130 @@
+# Langstroth and Ligus
+
+> Ligus is a local-first, end-to-end-encrypted desktop app for collaborating with AI agents. Workspaces and chats sync over an E2EE relay (or peer-to-peer); each device holds its own copy of the data and its own local code folder. Agents run on a host (your device or a headless worker), edit an isolated per-chat git worktree, and surface changes as reviewable proposals. The name is short for *ligustica* (Apis mellifera ligustica, the Italian honeybee); the project was called Hive until 2.0. Langstroth is the platform behind Ligus: the end-to-end-encrypted relay, organization sign-in (ligus-auth), the Helm charts, and always-on Ligus hosts (`ligus serve` and `ligus worker`). The relay is content-blind: it stores and forwards encrypted event envelopes and never holds workspace keys.
+
+Documentation: https://docs.langstroth.ai/ — pages below are the canonical reference. It has two sections: Using Ligus (https://docs.langstroth.ai/ligus/: desktop app, phone app, `ligus` CLI, workspaces, agents, workflows) and Operating Langstroth (https://docs.langstroth.ai/operate/: self-hosting and deploying the relay, auth, Kubernetes, `ligus serve` and worker hosts, security model, operator reference).
+
+## Using Ligus: Start here (for agents)
+
+- [For agents: operating in Ligus](https://docs.langstroth.ai/ligus/concepts/for-agents/): The operating rules an AI agent should assume — where you run and which files you can touch, that edits are reviewable proposals (not live changes), repo-relative-path rules, and how @mentions route work.
+
+## Using Ligus: Getting started
+
+- [Install with Homebrew](https://docs.langstroth.ai/ligus/getting-started/homebrew/): Installing the Ligus desktop app and CLI.
+- [First launch](https://docs.langstroth.ai/ligus/getting-started/first-launch/): First run, data directories, and resetting local data.
+- [Configuring a runtime](https://docs.langstroth.ai/ligus/getting-started/configuring-a-runtime/): Setting up LLM providers and CLI coding agents (claude, aider, pi, codex, Google Antigravity, GitHub Copilot).
+- [Offline setup with local models](https://docs.langstroth.ai/ligus/getting-started/offline-local-models/): llama.cpp behind an OpenAI-compatible gateway, which model for which job, tools and MCP, compaction and retrieval for small local models.
+- [Your first chat](https://docs.langstroth.ai/ligus/getting-started/first-chat/): Sending a message and getting a first agent reply.
+
+## Using Ligus: Concepts
+
+- [Workspaces & chats](https://docs.langstroth.ai/ligus/concepts/workspaces/): The event-sourced workspace model, multiple workspaces, per-workspace device-local code directories, and per-chat isolated worktrees.
+- [Agents (built-in vs BYO)](https://docs.langstroth.ai/ligus/concepts/agents/): What a workspace agent is, the dispatch model, and an agent's host (this device vs a worker).
+- [Tools & permissions](https://docs.langstroth.ai/ligus/concepts/tools-and-consent/): How tool access and file/command permissions are gated.
+- [Vaults & knowledge sources](https://docs.langstroth.ai/ligus/concepts/vaults/): Attaching knowledge to a workspace.
+- [Identity & devices](https://docs.langstroth.ai/ligus/concepts/identity/): GitHub-based identity, one member across multiple devices.
+- [Security & trust](https://docs.langstroth.ai/ligus/concepts/security/): The E2EE model, what the relay can and cannot see.
+
+## Using Ligus: Features
+
+- [Settings](https://docs.langstroth.ai/ligus/features/settings/): Every settings section — Account, Appearance, Folder & Git (per-workspace folder), Team sync, Schedules, Models & runtimes, Tools & MCP, Permissions, Updates, Diagnostics.
+- [Right Rail](https://docs.langstroth.ai/ligus/features/right-rail/): The tools/review/people/context panes.
+- [Multi-agent collaboration](https://docs.langstroth.ai/ligus/features/multi-agent/): Multiple agents in one chat and how they interact.
+- [Exploring options (proposal sets)](https://docs.langstroth.ai/ligus/features/proposal-sets/): Competing alternatives assessed blind by agent scouts, quorum and stop signals, and a person's decision after a pre-flight.
+- [Mentions & notifications](https://docs.langstroth.ai/ligus/features/mentions-and-notifications/): Addressing participants and how notifications work.
+- [Agentic workflows](https://docs.langstroth.ai/ligus/features/workflows/): Multi-stage agent pipelines and human-approval gates, including gate-routes-back loops. Agents author definitions as reviewable proposals; people approve, run and pause them.
+- [Flow](https://docs.langstroth.ai/ligus/features/flow/): Hand-off cards and context parcels, outcome-weighted routing of un-addressed work (shadow mode first) with adaptive exploration and cool-downs, review-queue backpressure, the threshold task board, careers, workspace marks, path zones, worktree reuse and the home beacon.
+- [Ligus on your phone](https://docs.langstroth.ai/ligus/features/phone-app/): The phone app over `ligus serve`: pairing direct or through the relay, host path policy, Face ID lock, demo mode, chats, proposal review, workflow approvals, push (off in standard builds), Match host, and what stays desktop-only.
+- [Host dashboard](https://docs.langstroth.ai/ligus/features/dashboard/): The dashboard `ligus serve` shows on the phone: built-in Ligus section, dashboard.toml panels, MCP tool panels, tables.
+- [Scheduled agents](https://docs.langstroth.ai/ligus/features/scheduling/): Recurring, cron-like agent runs.
+- [Managing context](https://docs.langstroth.ai/ligus/features/voice-and-slash/): /summarize, /compact, and the context planner.
+- [Git integration](https://docs.langstroth.ai/ligus/features/git/): The Diff canvas, worktree isolation, and applying proposals.
+- [Invites & joining](https://docs.langstroth.ai/ligus/features/invites/): Inviting teammates and joining a workspace.
+- [Collaborative editing](https://docs.langstroth.ai/ligus/features/collaboration/): Real-time collaboration behavior.
+- [Onboarding](https://docs.langstroth.ai/ligus/features/onboarding/): The first-run onboarding flow.
+- [Workspace guards](https://docs.langstroth.ai/ligus/features/guards/): Guards that keep a workspace inside safe bounds, whatever runtime the agents use.
+- [People, contacts & DMs](https://docs.langstroth.ai/ligus/features/collaborators/): Reaching people through shared workspaces or a contact card, presence, and direct messages.
+- [Linked accounts](https://docs.langstroth.ai/ligus/features/linked-identities/): Telling workspace members which forge account is also you.
+
+## Using Ligus: Code hosts
+
+- [Code hosts](https://docs.langstroth.ai/ligus/features/code-hosts/): Connecting GitHub, GitLab, Codeberg, Forgejo or Gitea for repository work.
+- [GitHub](https://docs.langstroth.ai/ligus/forges/github/), [GitLab](https://docs.langstroth.ai/ligus/forges/gitlab/), [Forgejo, Gitea and Codeberg](https://docs.langstroth.ai/ligus/forges/forgejo-gitea-codeberg/): Per-forge setup.
+
+## Using Ligus: Add-ons
+
+- [Bring-your-own agents](https://docs.langstroth.ai/ligus/addons/byo-agents/): Wiring any stdin-driven CLI as a Ligus runtime.
+- [Subscription CLIs over ACP](https://docs.langstroth.ai/ligus/addons/acp/): Driving the subscription coding CLIs (Claude Code, Codex, Antigravity, Copilot) through the Agent Client Protocol, with the headless modes as fallback.
+- [Skills](https://docs.langstroth.ai/ligus/addons/skills/): Reusable instruction sets applied to agents.
+- [MCP servers](https://docs.langstroth.ai/ligus/addons/mcp/): Installing and enabling Model Context Protocol servers.
+- [Ligus tools for agents (MCP)](https://docs.langstroth.ai/ligus/addons/ligus-mcp/): Ligus's own typed tools for filing proposals, handing off and reading the workspace.
+- [Linear & remote MCP (OAuth)](https://docs.langstroth.ai/ligus/addons/linear/): Connecting OAuth-based remote MCP servers.
+
+## Using Ligus: Help
+
+- [Troubleshooting](https://docs.langstroth.ai/ligus/help/troubleshooting/): Problems by symptom: sync stuck, relay 401s, phone can't connect, worker not picking up turns, plan windows, hygiene sweep.
+
+## Using Ligus: Reference
+
+- [What's new](https://docs.langstroth.ai/ligus/reference/whats-new/): Changes since 1.15 with links.
+- [CLI](https://docs.langstroth.ai/ligus/reference/cli/): Every `ligus` command and flag.
+- [Settings](https://docs.langstroth.ai/ligus/reference/settings/): `settings.json` keys, CLI `config.toml`, and what the workspace config log carries.
+- [Runtime matrix](https://docs.langstroth.ai/ligus/reference/runtime-matrix/): The first-class runtimes and how each is tested before a release.
+
+## Operating Langstroth: Start here
+
+- [Choose a deployment](https://docs.langstroth.ai/operate/deploy/): The five deployment shapes (solo, personal fleet, team on a relay, Kubernetes preview, keys-off-cluster design) with architecture diagrams.
+- [Deploying with an agent](https://docs.langstroth.ai/operate/deploy/with-an-agent/): AGENTS.md, the ligus-deploy-k8s and ligus-deploy-local skills, and the non-interactive ligus-k8s / ligus-local tools with --json output; which steps stay with the human.
+
+## Operating Langstroth: Deployment shapes
+
+- [Solo laptop](https://docs.langstroth.ai/operate/deploy/solo/): The desktop app alone, no relay.
+- [Personal fleet](https://docs.langstroth.ai/operate/deploy/personal-fleet/): Laptop plus an always-on `ligus serve` home server and the phone, directly over Tailscale or through the relay tunnel.
+- [Team on a relay](https://docs.langstroth.ai/operate/ops/deployment/): Deploying and gating a relay, creating a workspace, inviting teammates, a shared worker, and a security checklist.
+- [Kubernetes (preview)](https://docs.langstroth.ai/operate/deploy/kubernetes/): The relay and ligus Helm charts (preview, unpublished), what each pod holds, and known limits.
+- [Keys off the cluster (design)](https://docs.langstroth.ai/operate/deploy/keys-off-cluster/): A cluster that runs only the relay and executors; not shipped.
+- [Multi-tenant (design)](https://docs.langstroth.ai/operate/deploy/multi-tenant/): Three authorization layers for hosting many organisations; not implemented.
+- [Deploying with an LLM gateway](https://docs.langstroth.ai/operate/deploy/model-gateways/): Route serve and worker agents through an operator-listed LLM gateway (LiteLLM, kgateway, Envoy AI Gateway, Inference Extension pools): chart allow-list, ServiceAccount-token, API-key and mTLS auth, credential injection, attribution headers.
+
+## Operating Langstroth: Relay and auth
+
+- [Self-hosting a relay](https://docs.langstroth.ai/operate/networking/self-host/): Building and running the relay, storage (Postgres or snapshot), TLS, token modes, membership, tunnel and APNs push, rate limits, monitoring, backups and upgrades.
+- [Sign in with your IdP (ligus-auth)](https://docs.langstroth.ai/operate/deploy/ligus-auth/): Organization sign-in for the relay: device-code login, short-lived relay tokens, `ligus auth`.
+- [ligus-auth with Pocket ID](https://docs.langstroth.ai/operate/deploy/ligus-auth-pocket-id/): A passkey-only identity provider, ligus-auth and the relay on one box.
+- [ligus-auth with Dex](https://docs.langstroth.ai/operate/deploy/ligus-auth-dex/): ligus-auth behind Dex, which federates GitHub, LDAP, SAML and other identity sources.
+- [Server-side membership](https://docs.langstroth.ai/operate/ops/server-side-membership/): Relay-managed team membership.
+
+## Operating Langstroth: Hosts: ligus serve and worker
+
+- [Running ligus serve as your own device](https://docs.langstroth.ai/operate/ops/serve-box/): `ligus serve enroll`, host liveness, apply-on-approve, and the 1.16 sync privacy upgrade note.
+- [Headless agents & setups](https://docs.langstroth.ai/operate/concepts/headless-agents/): Enrolling a headless agent/worker on a remote box via the CLI.
+- [Repos on the home host](https://docs.langstroth.ai/operate/ops/serve-repos/): The git checkouts agents on a `ligus serve` box work on, picked from the phone.
+- [Remote access for your phone](https://docs.langstroth.ai/operate/networking/remote-access/): The relay tunnel, `ligus pair`, `ligus phones`, `ligus remote`, self-hosted relays and push.
+- [The Linux agent sandbox](https://docs.langstroth.ai/operate/ops/linux-sandbox/): The three sandbox tiers for agent processes on Linux and the optional AppArmor profile for bubblewrap.
+
+## Operating Langstroth: Operations
+
+- [Operations](https://docs.langstroth.ai/operate/ops/operations/): Health endpoints, logs, backups and restore of data dirs, upgrades.
+- [Upgrading from Hive 1.x](https://docs.langstroth.ai/operate/deploy/upgrade-from-hive/): 2.0 starts fresh: where each version keeps its data, setting up 2.0 next to 1.x, and removing 1.x.
+- [Building the dist](https://docs.langstroth.ai/operate/ops/build/): Building the desktop app.
+
+## Operating Langstroth: Security
+
+- [Security model](https://docs.langstroth.ai/operate/security/): What each component holds, trust boundaries per deployment shape, encryption, roles, and the 2.0 guards.
+- [Threat model](https://docs.langstroth.ai/operate/security/threat-model/): Attackers, what they can and can't do, and known limitations.
+- [Runbooks](https://docs.langstroth.ai/operate/security/runbooks/): Device revocation, lost phone, compromised device, offboarding, key and token rotation.
+
+## Operating Langstroth: Reference
+
+- [Environment variables](https://docs.langstroth.ai/operate/reference/env-vars/): Every `LIGUS_*` variable, its default and who reads it.
+- [Configuration (TOML)](https://docs.langstroth.ai/operate/reference/config-toml/): The `ligus.config.toml` reference.
+- [Serve HTTP API](https://docs.langstroth.ai/operate/reference/serve-api/): Every `ligus serve` route, auth, limits and the SSE stream.
+- [Invite payload format](https://docs.langstroth.ai/operate/reference/invite-payload/): The invite/enroll payload structure.
+- [Identity link statement](https://docs.langstroth.ai/operate/reference/identity-link-statement/): The exact bytes a linked account signs, the signature format and the events that carry it.
+- [Wire protocols](https://docs.langstroth.ai/operate/reference/wire-protocols/): The `/v1` relay wire contract and token format.
+
+## Operating Langstroth: Networking roadmap
+
+- [LAN discovery](https://docs.langstroth.ai/operate/networking/lan/): Peer discovery on a local network.
+- [Rendezvous relay](https://docs.langstroth.ai/operate/networking/rendezvous/): How peers find each other over the internet.
+- [TURN fallback](https://docs.langstroth.ai/operate/networking/turn/): Relayed connectivity when P2P fails.
