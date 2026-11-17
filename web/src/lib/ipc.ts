@@ -145,6 +145,7 @@ export const addRuntime = (
   think?: boolean | null,
   maxToolRounds?: number | null,
   allowRemoteFileTools?: boolean | null,
+  gateway?: string | null,
 ) =>
   invoke<void>("add_runtime", {
     id,
@@ -162,6 +163,7 @@ export const addRuntime = (
     think: think ?? null,
     maxToolRounds: maxToolRounds ?? null,
     allowRemoteFileTools: allowRemoteFileTools ?? null,
+    gateway: gateway ?? null,
   });
 
 /// Whether an endpoint's host is local or private (loopback, LAN, Tailscale,

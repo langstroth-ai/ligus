@@ -105,6 +105,7 @@ import { FlowPane } from "@/components/flow/FlowPane";
 import { ProposalBadges } from "@/components/ReviewBadges";
 import { ImplementPreview } from "@/components/ImplementPreview";
 import { AgentAsks } from "@/components/AgentAsks";
+import { hostGatewaysLabel } from "@/components/settings/GatewayPicker";
 
 // Re-exported from the shared pane source so existing
 // `import type { UtilityPane } from "@/components/RightRail"` keeps working.
@@ -1051,7 +1052,7 @@ function RunOnWorkerMenu({
             workers.map((w) => (
               <PopoverItem
                 key={w.id}
-                label={w.label || w.id}
+                label={hostGatewaysLabel(w) ? `${w.label || w.id} · gateways: ${hostGatewaysLabel(w)}` : w.label || w.id}
                 onSelect={() => {
                   setOpen(false);
                   onReassign(w.id);
@@ -2329,8 +2330,10 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
 /// A single registered device/worker: label, a kind chip, an online/offline
 /// status dot, and a relative "last seen".
 function HostRow({ host }: { host: WorkspaceHostDto }) {
+  const gateways = hostGatewaysLabel(host);
   return (
-    <Card className="flex items-center justify-between gap-2 px-3 py-2">
+    <Card className="px-3 py-2">
+    <div className="flex items-center justify-between gap-2">
       <div className="flex min-w-0 items-center gap-2">
         <StatusDot on={host.online} size={9} label={host.online ? "Online" : "Offline"} />
         <span className="truncate font-medium">{host.label || "Unnamed host"}</span>
@@ -2347,6 +2350,12 @@ function HostRow({ host }: { host: WorkspaceHostDto }) {
       <span className="shrink-0 text-[11px]" style={{ color: "var(--hive-ink-soft)" }}>
         {host.online ? "online" : relativeAgo(host.lastSeen)}
       </span>
+    </div>
+    {gateways && (
+      <div className="mt-1 truncate text-[11px]" style={{ color: "var(--hive-ink-soft)" }} title="Model gateways this host's operator lists">
+        Gateways: {gateways}
+      </div>
+    )}
     </Card>
   );
 }
