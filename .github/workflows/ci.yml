@@ -104,6 +104,8 @@ jobs:
       # landlock tier; macOS has sandbox-exec. Either way the sandbox tests
       # must run, not print SKIPPED. Windows has no agent sandbox.
       LIGUS_REQUIRE_SANDBOX: "1"
+      # Proptest's default, stated: ci-nightly.yml runs 4096.
+      PROPTEST_CASES: "256"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -181,6 +183,8 @@ jobs:
 
       - name: Tests (nextest, full)
         if: github.event_name != 'pull_request'
+        env:
+          PROPTEST_CASES: "256"
         run: cargo nextest run --locked --workspace --profile ci
 
       - name: Tests (nextest, PR subset)
