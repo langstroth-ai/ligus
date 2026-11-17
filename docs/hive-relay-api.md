@@ -60,7 +60,7 @@ first:
    `retention_days`, `turn`, and RBAC `caps`. Verified claims are stashed in the
    request extensions for handlers to enforce per-plan limits. See
    `crates/hive-relay/src/token.rs` and
-   [`managed-service`](../docs-site/ops/managed-service.md).
+   [`managed-service`](../docs-site/operator/docs/ops/managed-service.md).
 2. **`LIGUS_RELAY_ACCESS_TOKENS`** (comma-separated) ⇒ a static **allowlist**
    (coarse on/off).
 3. otherwise ⇒ **open** (self-host default).

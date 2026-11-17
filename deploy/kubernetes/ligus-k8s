@@ -313,7 +313,7 @@ EOF
     PROBE_ABI=${abi:-}
   elif [ -n "$phase" ] && [ "$phase" != Pending ]; then
     local why; why=$(printf '%s\n' "$out" | grep -iE 'error|landlock|abi' | head -2 | tr '\n' ' ')
-    ac_check sandbox.landlock.probe fail "measured on node $node: no usable Landlock sandbox (ABI ${abi:-0}). ${why}" "use nodes with Linux 6.7+ and landlock in the LSM list (docs-site/deploy/kubernetes.md, Supported nodes); never set agentSandbox.require=false to get past this"
+    ac_check sandbox.landlock.probe fail "measured on node $node: no usable Landlock sandbox (ABI ${abi:-0}). ${why}" "use nodes with Linux 6.7+ and landlock in the LSM list (docs-site/operator/docs/deploy/kubernetes.md, Supported nodes); never set agentSandbox.require=false to get past this"
   else
     ac_check sandbox.landlock.probe warn "the Landlock probe pod did not run (phase ${phase:-unknown})" "check the image can be pulled: kubectl -n <ns> describe pod; for a local image on kind, kind load docker-image first"
   fi

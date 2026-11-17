@@ -15,7 +15,7 @@ crates/
 app/       the Tauri shell: commands/events, app wiring
 web/             React + TypeScript frontend (Vite + Bun)
 docs/            developer/maintainer docs (this audience)
-docs-site/       the published user docs (MkDocs Material)
+docs-site/       the published docs: user/ (docs.ligus.ai) and operator/ (docs.langstroth.ai)
 ```
 
 ## Build & test
@@ -48,7 +48,9 @@ CI fails if `web/src/bindings/` is out of sync with the Rust types.
 
 ## Docs
 
-- User-facing changes → update [`docs-site/`](docs-site/) (the published site).
+- User-facing changes → update [`docs-site/user/`](docs-site/README.md) (docs.ligus.ai).
+- Self-hosting, deployment, security and operator reference changes → update
+  [`docs-site/operator/`](docs-site/README.md) (docs.langstroth.ai).
 - Internals / architecture / release → update [`docs/`](docs/README.md).
 
 See [`docs/README.md`](docs/README.md) for the full developer doc map.

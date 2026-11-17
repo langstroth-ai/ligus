@@ -10,7 +10,7 @@ servers. The design and its reasoning are in
 [`docs/design/kubernetes.md`](../../../docs/design/kubernetes.md); the
 operator guide (supported nodes, install, backups, upgrades, what 2.0 does
 not support) is the docs site's
-[Kubernetes page](../../../docs-site/deploy/kubernetes.md).
+[Kubernetes page](../../../docs-site/operator/docs/deploy/kubernetes.md).
 
 **One release per workspace, in that workspace's own namespace.** The relay is
 shared by many workspaces and normally lives in its own namespace and release

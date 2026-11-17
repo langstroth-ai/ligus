@@ -131,7 +131,7 @@ export function PermissionsSection() {
               {info.data?.sandboxNotes.map((n) => <li key={n}>{n}</li>)}
             </ul>
           )}
-          <Button size="sm" onClick={() => void openExternal("https://docs.ligus.ai/ops/linux-sandbox/")}>
+          <Button size="sm" onClick={() => void openExternal("https://docs.langstroth.ai/ops/linux-sandbox/")}>
             About the Linux sandbox tiers
           </Button>
         </div>

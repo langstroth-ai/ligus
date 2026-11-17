@@ -215,7 +215,7 @@ P2–P3.
 
 ## 7. Tiering: where each piece lives
 
-Following [`tiering.md`](../docs-site/ops/tiering.md)'s decision tree — the social graph is
+Following [`tiering.md`](../docs-site/operator/docs/ops/tiering.md)'s decision tree — the social graph is
 **stateful server state**, so it's a relay/cloud capability; the client UI and
 protocol are free.
 
@@ -292,7 +292,7 @@ team-derived membership on top. Nobody re-onboards.
 
 ## 10. Relationship to existing docs
 
-- Identity & hosted-relay roadmap: [`managed-service-plan.md`](../docs-site/ops/managed-service.md)
-- Tier placement rules: [`tiering.md`](../docs-site/ops/tiering.md)
-- Server-side membership & the `WriteGuard` seam: [`hive-server-side-membership.md`](../docs-site/ops/server-side-membership.md)
+- Identity & hosted-relay roadmap: [`managed-service-plan.md`](../docs-site/operator/docs/ops/managed-service.md)
+- Tier placement rules: [`tiering.md`](../docs-site/operator/docs/ops/tiering.md)
+- Server-side membership & the `WriteGuard` seam: [`hive-server-side-membership.md`](../docs-site/operator/docs/ops/server-side-membership.md)
 - P2P transport internals: [`architecture.md`](architecture.md), [`multiuser.md`](multiuser.md)

@@ -172,7 +172,7 @@ jobs:
           LIGUS_GITHUB_CLIENT_ID: ${{ secrets.LIGUS_GITHUB_CLIENT_ID }}
           # Bake the release tag so the app can detect a newer published version
           # (the "update available" banner). Local/dev builds get "dev" and never
-          # prompt. Bump docs-site/version.json to this tag when publishing.
+          # prompt. Bump docs-site/user/docs/version.json to this tag when publishing.
           LIGUS_RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
           # APPLE_* (when present) come from the "Configure macOS signing" step
           # via $GITHUB_ENV. tauri-action signs + notarizes + staples on macOS.

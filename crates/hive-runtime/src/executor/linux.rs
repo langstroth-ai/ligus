@@ -102,7 +102,7 @@ pub const HELPER_ARG: &str = "__ligus-sandbox-exec-linux";
 pub const PROXY_TOKEN_ENV: &str = "LIGUS_SANDBOX_PROXY_TOKEN";
 
 /// Where the docs explain the optional AppArmor profile for bubblewrap.
-pub const APPARMOR_DOCS: &str = "https://docs.ligus.ai/ops/linux-sandbox/#apparmor-profile";
+pub const APPARMOR_DOCS: &str = "https://docs.langstroth.ai/ops/linux-sandbox/#apparmor-profile";
 
 pub struct Bwrap {
     bwrap: PathBuf,
