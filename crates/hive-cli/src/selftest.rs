@@ -265,13 +265,16 @@ mod tests {
         }
         // Linux: the sandbox re-executes a Ligus binary as its pre-exec
         // helper, and this test harness isn't one. Use the `ligus` or
-        // `ligus-sandbox-helper` binary cargo built next to it (a workspace
-        // test run builds both); without either, skip.
+        // `ligus-sandbox-helper` binary cargo built for this run (a workspace
+        // test run builds the latter); without either, skip, or fail under
+        // LIGUS_REQUIRE_SANDBOX=1.
         #[cfg(target_os = "linux")]
         {
-            let dir = std::env::current_exe().ok().and_then(|e| Some(e.parent()?.parent()?.to_path_buf()));
-            let Some(helper) = dir.and_then(|d| ["ligus", "ligus-sandbox-helper"].iter().map(|n| d.join(n)).find(|p| p.exists())) else {
-                eprintln!("SKIPPED: no ligus or ligus-sandbox-helper binary next to the test harness (run the workspace tests)");
+            let exe = std::env::current_exe().ok();
+            let Some(helper) = exe.as_deref().and_then(|e| hive_runtime::executor::linux::find_built_helper(e, &["ligus", "ligus-sandbox-helper"])) else {
+                let why = "no ligus or ligus-sandbox-helper binary built near the test harness (run the workspace tests)";
+                assert!(std::env::var("LIGUS_REQUIRE_SANDBOX").map_or(true, |v| v.trim() != "1"), "LIGUS_REQUIRE_SANDBOX=1 but {why}");
+                eprintln!("SKIPPED: {why}");
                 return;
             };
             hive_runtime::executor::set_helper_exe(helper);

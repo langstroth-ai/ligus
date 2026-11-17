@@ -100,10 +100,13 @@ jobs:
     timeout-minutes: 45
     env:
       # The ubuntu-24.04 image (20261101: kernel 7.0.0-azure, Landlock in the
-      # LSM list, AppArmor userns restriction on, no bwrap installed) gets the
+      # LSM list, AppArmor userns restriction on, /usr/bin/bwrap present but
+      # with no AppArmor profile, so it can't create namespaces) gets the
       # landlock tier; macOS has sandbox-exec. Either way the sandbox tests
       # must run, not print SKIPPED. Windows has no agent sandbox.
       LIGUS_REQUIRE_SANDBOX: "1"
+      # Proptest's default, stated: ci-nightly.yml runs 4096.
+      PROPTEST_CASES: "256"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -124,7 +127,7 @@ jobs:
           uname -r
           cat /sys/kernel/security/lsm || true
           sysctl kernel.apparmor_restrict_unprivileged_userns || true
-          command -v bwrap || echo "no bwrap: expecting the landlock tier"
+          command -v bwrap || echo "no bwrap"; echo "expecting the landlock tier"
 
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -181,6 +184,8 @@ jobs:
 
       - name: Tests (nextest, full)
         if: github.event_name != 'pull_request'
+        env:
+          PROPTEST_CASES: "256"
         run: cargo nextest run --locked --workspace --profile ci
 
       - name: Tests (nextest, PR subset)

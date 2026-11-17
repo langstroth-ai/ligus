@@ -723,7 +723,10 @@ async fn phone_message_to_hosted_agent_streams_reply_and_files_a_proposal() {
     assert_eq!(posted["message"]["author"], "Phone");
     assert_eq!(posted["message"]["chatId"], json!(chat_id));
 
-    let seen = collect_until(&mut rx, 30, |evs| {
+    // A deadline, not a delay: this returns as soon as all three arrive. The
+    // proposal comes from a git diff after the turn, which took over 30s on a
+    // loaded Windows runner.
+    let seen = collect_until(&mut rx, 120, |evs| {
         evs.iter().any(|(n, _, _)| n == "proposal.created")
             && evs.iter().any(|(n, d, _)| n == "turn.status" && d["state"] == "done")
             && evs.iter().any(|(n, d, _)| n == "message.done" && d["message"]["role"] == "agent")

@@ -51,7 +51,7 @@ jobs:
         with:
           tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
       - name: Tests (nextest, 4096 proptest cases)
-        run: cargo nextest run --locked --workspace --profile ci --slow-timeout 300s
+        run: cargo nextest run --locked --workspace --profile ci-nightly
 
   windows-full:
     runs-on: windows-latest
