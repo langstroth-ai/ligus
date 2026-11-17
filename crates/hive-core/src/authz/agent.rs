@@ -68,8 +68,8 @@ pub fn tier_allows(event: &SessionEvent, agent_id: Uuid, host_device: Uuid, fold
 
 /// The agent a host-signed event speaks for, when its payload is
 /// agent-authored: a message an agent's turn produced, or a proposal with a
-/// producing agent. Under rules v2 such events are judged with the Agent tier
-/// even before the host certified a key for that agent (A3 transition).
+/// producing agent. Such events are judged with the Agent tier even before
+/// the host certified a key for that agent (A3 transition).
 pub fn agent_authored(event: &SessionEvent) -> Option<Uuid> {
     match event {
         SessionEvent::MessageAppended { message } if message.role != crate::chat::MessageRole::User => message.responder_id,

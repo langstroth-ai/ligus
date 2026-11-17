@@ -123,6 +123,8 @@ pub(super) fn presence_gate_always(s: &Shared, peer: Option<&TunnelPeer>, action
     let owner_phone = peer
         .and_then(|p| s.tunnel.as_ref().and_then(|t| t.registry.get(&p.pid)))
         .is_some_and(|r| r.is_active() && r.owner_phone);
+    #[cfg(test)]
+    let owner_phone = owner_phone || s.test_presence.load(std::sync::atomic::Ordering::SeqCst);
     let source = peer.map(|p| p.pid.clone()).unwrap_or_else(|| "bearer".into());
     let (verdict, reason) = if owner_phone {
         (hive_core::signal::GuardVerdict::Accept, format!("delegated_{action}"))

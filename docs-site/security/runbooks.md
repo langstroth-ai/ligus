@@ -12,8 +12,7 @@ says what the step achieves and what it doesn't. Background:
     workspace key** rotates on its own. A rotation is a signed event on the
     workspace's config log, sealed to the key-agreement keys every remaining
     member's devices published themselves, `ligus serve` and `ligus worker`
-    boxes included. Under [rules v2](index.md#presence) both need a passkey
-    confirmation.
+    boxes included. Both need a [passkey confirmation](index.md#presence).
 
 ## Revoke one of your devices {#revoke-device}
 
@@ -110,7 +109,7 @@ can act as that device and read everything it could.
 5. A compromised `ligus serve` also held phone credentials:
    `ligus remote reset` on its replacement gives new host keys; pair phones
    again.
-6. Under rules v2, if your account has a passkey, the stolen device can't
+6. If your account has a passkey, the stolen device can't
    add a device for you or rotate your account key without that passkey, and
    if your credentials were cleared it can't register a passkey of its own
    without an Admin's re-grant. Don't approve a passkey confirmation you
@@ -123,8 +122,8 @@ can act as that device and read everything it could.
    removes them from the roster and rotates the workspace key, sealed to
    every remaining member's devices (desktops, `ligus serve` and `ligus
    worker` boxes). The toast says whether the key was rotated ("No relay
-   configured, so the key wasn't rotated" means it wasn't). Under rules v2
-   your browser asks for a passkey for each of the two events.
+   configured, so the key wasn't rotated" means it wasn't). Your browser
+   asks for a passkey for each of the two events.
 2. If the relay enforces membership, also remove them in **Settings → Team
    sync → Team members** (or the relay roster). That alone doesn't rotate
    the key; step 1 does.
@@ -157,7 +156,7 @@ The complete way to cut someone's reading, including on headless devices.
 ## Rotate the workspace key {#rotate-workspace-key}
 
 1. An Admin opens **Settings → Passkeys & keys → Rotate workspace key**
-   (under rules v2, confirm with a passkey). The new key is sealed to every
+   (confirm with a passkey). The new key is sealed to every
    current member's devices that published a key-agreement key, including
    the serve and worker boxes enrolled for a current member (a box enrolled
    for someone who was removed gets no new key, even while an agent is still
@@ -177,10 +176,10 @@ The complete way to cut someone's reading, including on headless devices.
    rotation includes it. Invites carry every authorized epoch key, so a
    fresh invite avoids that.
 
-## A new device on a rules v2 workspace {#confirm-device}
+## A new device on a workspace {#confirm-device}
 
 When your account has a passkey, a new device of yours (a second laptop
-signed in with the same account) doesn't count on a rules v2 workspace until
+signed in with the same account) doesn't count on a workspace until
 that passkey confirms it: other devices don't accept its changes, and it
 gets no new workspace keys. Open **Settings → Passkeys & keys** on it and
 choose **Confirm this device**. Ligus never asks for this on its own in the
@@ -203,15 +202,16 @@ enrollment on your desktop (also with your passkey).
 4. Lost everything: another Owner (or, for an Admin or below, an Admin)
    removes your passkeys (with their own passkey), then **re-grants** you in
    the **People** pane (**Allow new passkey**, confirmed with their passkey),
-   and you register a new first passkey. Under rules v2 your device alone
-   can't register one without that grant (so a stolen device can't either),
-   and a grant is good for one registration. **A sole Owner without a
-   recovery key can't make admin changes under rules v2, by design.** That
-   is why Ligus asks for the recovery key before it turns rules v2 on.
-5. Never had a passkey on a rules v2 workspace (you were a member before an
-   Owner turned it on): ask an Admin for **Allow new passkey**, then register
-   one. Someone added after the switch can register their first passkey
-   right away.
+   and you register a new first passkey. Your device alone can't register
+   one without that grant (so a stolen device can't either), and a grant is
+   good for one registration. **A sole Owner without a recovery key can't
+   make admin changes, by design.** That is why creating a workspace asks
+   for the recovery key right after the passkey.
+5. A workspace founded from the CLI has no passkey yet: open it in the
+   desktop app and create one and a recovery key (Settings → Passkeys &
+   keys). The founder's first passkey needs no one else's grant; until it
+   exists nobody can join. Someone an Admin adds can register their first
+   passkey right away.
 
 ## The Ligus keychain on macOS {#mac-keychain}
 

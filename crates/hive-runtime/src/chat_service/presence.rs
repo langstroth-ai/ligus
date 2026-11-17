@@ -19,6 +19,9 @@ use uuid::Uuid;
 
 use super::{ChatError, ChatService, Result};
 
+#[cfg(any(test, feature = "test-presence"))]
+pub use hive_core::testkit::test_recovery_key;
+
 /// What a person confirms: the event and the digest their passkey signs.
 #[derive(Debug, Clone)]
 pub struct PresenceRequest {
@@ -34,6 +37,9 @@ pub struct PresenceRequest {
     pub digest_short: String,
     /// What is being authorized, in words.
     pub summary: String,
+    /// The workspace's relying party (its `WorkspaceRulesSet.presence`), which
+    /// the ceremony must use and the fold verifies against.
+    pub policy: presence::PresencePolicy,
 }
 
 /// Obtains a passkey assertion for a request (the desktop's browser
@@ -54,15 +60,27 @@ pub struct PresenceDraft {
 pub fn summarize(payload: &SessionEvent) -> String {
     match payload {
         SessionEvent::MemberAdded { member, .. } => format!("Add {} as {:?}", member.actor.display_name, member.role),
-        SessionEvent::MemberRemoved { member_id } => format!("Remove member {member_id}"),
-        SessionEvent::MemberRoleChanged { change } => format!("Change {}'s role to {:?}", change.member_id, change.new_role),
-        SessionEvent::DeviceRevoked { device_id } => format!("Revoke device {device_id}"),
+        SessionEvent::MemberRemoved { member_id, .. } => format!("Remove member {member_id}"),
+        SessionEvent::MemberRoleChanged { change, .. } => format!("Change {}'s role to {:?}", change.member_id, change.new_role),
+        SessionEvent::DeviceRevoked { device_id, .. } => format!("Revoke device {device_id}"),
         SessionEvent::WorkspaceKeyRotated { rotation } => {
             format!("Rotate the workspace key to version {} ({} devices)", rotation.version, rotation.sealed.len())
         }
         SessionEvent::PasskeyRegistered { credential } => format!("Register passkey \"{}\"", credential.label),
         SessionEvent::PasskeyRemoved { .. } => "Remove a passkey".into(),
-        SessionEvent::WorkspaceRulesSet { version } => format!("Switch the workspace to rules version {version}"),
+        // The relying party decides where every later passkey ceremony
+        // happens: the sheet names it, never just the version.
+        SessionEvent::WorkspaceRulesSet { version, presence: Some(p) } => {
+            format!("Set rules version {version} with passkeys on {} ({})", p.rp_id, p.origins.join(", "))
+        }
+        SessionEvent::WorkspaceRulesSet { version, .. } => format!("Switch the workspace to rules version {version}"),
+        SessionEvent::DeviceCertificateAdded { certificate } if certificate.alg == hive_core::crypto::SigAlg::P256 => {
+            format!("Enroll phone {} as one of your devices", certificate.device_id)
+        }
+        SessionEvent::DeviceCertificateAdded { certificate } => format!("Add device {} to your account", certificate.device_id),
+        SessionEvent::ProposalApplyRequested { request } => {
+            format!("Ask host {} to apply a proposal", request.host_device_id)
+        }
         SessionEvent::ProposalVoteCast { approval, .. } => {
             if approval.approved { "Approve a proposal".into() } else { "Reject a proposal".into() }
         }
@@ -115,6 +133,7 @@ impl ChatService {
             .unwrap_or_default();
         let challenge = presence::challenge(env);
         Ok(PresenceRequest {
+            policy: timeline.current().presence_policy.clone(),
             challenge,
             kind: env.payload.kind_str().to_string(),
             account_id,
@@ -127,6 +146,12 @@ impl ChatService {
     /// `append_signed`'s answer to a presence refusal: ask the provider, or
     /// capture the draft, or refuse.
     pub(super) fn with_presence(&mut self, env: &mut SessionEventEnvelope) -> Result<()> {
+        // Compiled only into tests (this crate's, or a dev-dependency's
+        // `test-presence`); a normal build has no path to it.
+        #[cfg(any(test, feature = "test-presence"))]
+        if self.presence_provider.is_none() && self.test_presence {
+            return self.test_presence(env);
+        }
         let request = self.presence_request(env)?;
         if let Some(provider) = self.presence_provider.clone() {
             let assertion = provider.assert(&request).map_err(|e| ChatError::Unauthorized(format!("passkey confirmation: {e}")))?;
@@ -139,6 +164,69 @@ impl ChatService {
         }
         let _ = request;
         Err(ChatError::Unauthorized(PRESENCE_REQUIRED.into()))
+    }
+
+    /// Tests only: confirm `env` with this account's test recovery key
+    /// ([`test_recovery_key`]), registering it first when the workspace
+    /// doesn't hold it (with the founder's or an Admin's grant, like a person
+    /// would), then re-stamping `env` after that registration.
+    #[cfg(any(test, feature = "test-presence"))]
+    fn test_presence(&mut self, env: &mut SessionEventEnvelope) -> Result<()> {
+        let wid = env.workspace_id;
+        if self.delegated {
+            return Err(ChatError::Unauthorized(PRESENCE_REQUIRED.into()));
+        }
+        // Presence is an account's: an account-less test author gets one.
+        if self.author.account_id.is_none() {
+            self.author.account_id = Some(Uuid::new_v4());
+            if let Some(s) = env.actor_stamp.as_mut() {
+                s.actor.account_id = self.author.account_id;
+            }
+        }
+        let account = self.author.account_id.unwrap_or_default();
+        let key = test_recovery_key(account);
+        let config_id = workspace_config_session_id(wid);
+        let cred_id = key.credential(account, "").credential_id;
+        let held = self.passkeys_of(wid, account)?.iter().any(|(id, _)| *id == cred_id);
+        if !held {
+            self.test_presence = false;
+            let r = self
+                .publish_identity(config_id, wid)
+                .and_then(|_| self.register_passkey(wid, key.credential(account, "Test recovery key"), &|req| Ok(key.assert(&req.challenge))));
+            self.test_presence = true;
+            r?;
+            // Sort after the registration, at the new head.
+            env.sequence = self.store.max_sequence(env.session_id)?.unwrap_or(0) + 1;
+            env.lamport = self.store.max_lamport(env.session_id)?.saturating_add(1);
+            let (_, timeline) = self.store.load_config(wid, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+            if let Some(s) = env.actor_stamp.as_mut() {
+                s.cfg_frontier = timeline.head();
+            }
+        }
+        let a = key.assert(&presence::challenge(env));
+        if let Some(stamp) = env.actor_stamp.as_mut() {
+            stamp.presence = Some(a);
+        }
+        env.clear_raw();
+        sign_envelope(env, self.device_id, &self.keypair);
+        Ok(())
+    }
+
+    /// Tests only: answer presence prompts with this account's test recovery
+    /// key (registered on first use). Also gives an account-less test author
+    /// an account, since presence is an account's.
+    #[cfg(any(test, feature = "test-presence"))]
+    pub fn enable_test_presence(&mut self) {
+        if self.author.account_id.is_none() {
+            self.author.account_id = Some(Uuid::new_v4());
+        }
+        self.test_presence = true;
+    }
+
+    /// Tests only: no automatic presence (the refusal paths).
+    #[cfg(any(test, feature = "test-presence"))]
+    pub fn disable_test_presence(&mut self) {
+        self.test_presence = false;
     }
 
     /// Keep `env` as the draft a passkey will confirm (capture mode), and
@@ -182,7 +270,9 @@ impl ChatService {
         if self.delegated {
             return Err(ChatError::Unauthorized("a delegated host can't register its owner's passkeys".into()));
         }
-        let config_id = workspace_config_session_id(workspace_id);
+        // The founder's first passkey can be the workspace's first act (the
+        // desktop's create flow): found the config log first.
+        let config_id = self.ensure_workspace_config(workspace_id)?;
         let mut env = self.draft_signed(config_id, workspace_id, SessionEvent::PasskeyRegistered { credential })?;
         let request = self.presence_request(&env)?;
         let proof = prove(&request).map_err(|e| ChatError::Unauthorized(format!("passkey: {e}")))?;
@@ -220,7 +310,7 @@ impl ChatService {
             config_id,
             workspace_id,
             SessionEvent::MemberRoleChanged {
-                change: hive_core::events::MemberRoleChange { member_id: member_id.to_string(), old_role: role, new_role: role },
+                change: hive_core::events::MemberRoleChange { member_id: member_id.to_string(), old_role: role, new_role: role }, watermark: Vec::new(),
             },
         )
     }
@@ -261,6 +351,20 @@ impl ChatService {
         Ok(true)
     }
 
+    /// The relying party `workspace_id`'s passkeys are under (its signed
+    /// `WorkspaceRulesSet.presence`, `ligus.ai` until one is set).
+    pub fn workspace_presence_policy(&self, workspace_id: Uuid) -> Result<presence::PresencePolicy> {
+        let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        Ok(timeline.current().presence_policy.clone())
+    }
+
+    /// The relying party this device writes into a workspace it founds (the
+    /// deployment's setting; `ligus.ai` by default). Authoring only: the fold
+    /// reads the policy from the log, never from here.
+    pub fn set_deployment_presence_policy(&mut self, policy: presence::PresencePolicy) {
+        self.deployment_presence = policy;
+    }
+
     /// This device's account's credentials on `workspace_id`.
     pub fn passkeys_of(&self, workspace_id: Uuid, account_id: Uuid) -> Result<Vec<(String, bool)>> {
         let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
@@ -272,26 +376,49 @@ impl ChatService {
             .unwrap_or_default())
     }
 
-    /// Set the workspace rules version (Owner). Turning on rules v2 needs
-    /// this device's account to hold a recovery key and a passkey first, so a
-    /// sole Owner can't lock themself out (the fold itself only needs the
-    /// switch to carry presence).
+    /// Set the workspace rules version (Owner, with presence). Every
+    /// workspace starts on version 2 (genesis); there is no version 1. The
+    /// account must hold a passkey and a recovery key first, so a sole Owner
+    /// can't lock themself out.
     pub fn set_workspace_rules(&mut self, workspace_id: Uuid, version: u32) -> Result<SessionEventEnvelope> {
-        if version >= 2 {
-            let account = self.author.account_id.ok_or_else(|| ChatError::Unauthorized("rules v2 needs an account".into()))?;
-            let creds = self.passkeys_of(workspace_id, account)?;
-            if !creds.iter().any(|(_, recovery)| *recovery) || !creds.iter().any(|(_, recovery)| !*recovery) {
-                return Err(ChatError::Unauthorized(
-                    "register a passkey and write down a recovery key before turning on rules v2".into(),
-                ));
-            }
+        if version < hive_core::authz::RULES_GENESIS {
+            return Err(ChatError::Unauthorized("rules version 1 doesn't exist in Ligus 2.0".into()));
         }
-        self.append_signed(workspace_config_session_id(workspace_id), workspace_id, SessionEvent::WorkspaceRulesSet { version })
+        let account = self.author.account_id.ok_or_else(|| ChatError::Unauthorized("changing the rules needs an account".into()))?;
+        let creds = self.passkeys_of(workspace_id, account)?;
+        if !creds.iter().any(|(_, recovery)| *recovery) || !creds.iter().any(|(_, recovery)| !*recovery) {
+            return Err(ChatError::Unauthorized("register a passkey and write down a recovery key first".into()));
+        }
+        self.append_signed(workspace_config_session_id(workspace_id), workspace_id, SessionEvent::WorkspaceRulesSet { version, presence: None })
+    }
+
+    /// Whether `workspace_id` is secured for its founder: this account holds
+    /// a passkey and a recovery key there (the desktop's create flow asks for
+    /// both; a workspace founded elsewhere shows "finish securing").
+    pub fn workspace_secured(&self, workspace_id: Uuid) -> Result<bool> {
+        let Some(account) = self.author.account_id else { return Ok(false) };
+        let creds = self.passkeys_of(workspace_id, account)?;
+        Ok(creds.iter().any(|(_, r)| *r) && creds.iter().any(|(_, r)| !*r))
     }
 
     /// Re-sign a test envelope with this device's key.
     #[cfg(test)]
     pub(crate) fn sign_for_test(&self, env: &mut SessionEventEnvelope) {
         sign_envelope(env, self.device_id, &self.keypair);
+    }
+}
+
+#[cfg(test)]
+mod summary_tests {
+    use super::summarize;
+    use hive_core::SessionEvent;
+
+    /// Review P-A5: confirming a relying-party change shows the new RP,
+    /// not only the version (the sheet is what the person consents to).
+    #[test]
+    fn a_relying_party_change_names_the_relying_party() {
+        let e = SessionEvent::WorkspaceRulesSet { version: 2, presence: Some(hive_core::presence::PresencePolicy::for_rp("evil.example")) };
+        let s = summarize(&e);
+        assert!(s.contains("evil.example"), "{s}");
     }
 }

@@ -151,6 +151,24 @@ pub struct ActionProposal {
     /// sandbox; no model reinterprets it). Bound into the vote digest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<ProposedCommand>,
+    /// The workspace repo the diff is against. Derived by the fold from the
+    /// chat's `ChatRepoSet` when the proposal is created and never changed
+    /// afterwards (repos review F1): an upsert can't re-point it. Bound into
+    /// the vote digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_id: Option<Uuid>,
+    /// The commit the producing turn's worktree was cut from (40 or 64
+    /// lowercase hex). Bound into the vote digest, so changing it clears the
+    /// votes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_commit: Option<String>,
+    /// The chat's base branch when the turn ran (display and rebase).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub base_ref: String,
+    /// The host device that produced it (display; the signer is
+    /// authoritative).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub produced_on: Option<Uuid>,
 }
 
 /// A structured command proposal (Track D4).
@@ -235,6 +253,10 @@ impl ActionProposal {
             command: None,
             reverted: false,
             own_gate: None,
+            repo_id: None,
+            base_commit: None,
+            base_ref: String::new(),
+            produced_on: None,
         }
     }
 

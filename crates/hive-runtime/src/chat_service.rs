@@ -57,6 +57,18 @@ pub const WAITING_FOR_FOUNDER: &str =
 
 /// Drives a single workspace's chat sessions over an [`EventStore`], signing
 /// every appended event with this device's key.
+/// This crate's unit tests: the account an account-less test actor gets
+/// (deterministic, so a member record built in a test names the same
+/// account as that actor's own service).
+#[cfg(test)]
+pub(crate) fn test_account_for(actor_id: &str) -> Uuid {
+    use sha2::Digest;
+    let h = sha2::Sha256::digest(format!("ligus-test-account:{actor_id}").as_bytes());
+    let mut b = [0u8; 16];
+    b.copy_from_slice(&h[..16]);
+    uuid::Builder::from_random_bytes(b).into_uuid()
+}
+
 pub struct ChatService {
     store: EventStore,
     device_id: Uuid,
@@ -97,6 +109,14 @@ pub struct ChatService {
     runtime_effect: bool,
     /// Asks a person for a passkey assertion (the desktop, B3).
     presence_provider: Option<std::sync::Arc<dyn PresenceProvider>>,
+    /// The relying party this device writes into a workspace it founds
+    /// (deployment setting; authoring only, never read by the fold).
+    deployment_presence: hive_core::presence::PresencePolicy,
+    /// Tests only ([`ChatService::enable_test_presence`]): answer presence
+    /// prompts with a recovery key derived from the account, when no provider
+    /// is set. Never on otherwise.
+    #[cfg_attr(not(any(test, feature = "test-presence")), allow(dead_code))]
+    test_presence: bool,
     /// Capture presence-needing drafts instead of refusing (serve, B3).
     capture_presence: bool,
     /// The last captured draft.
@@ -126,6 +146,16 @@ impl ChatService {
         account_keypair: SigningKeypair,
         author: ActorIdentity,
     ) -> Self {
+        // This crate's unit tests: every author holds an account, since rules
+        // v2 governance needs an account's presence.
+        #[cfg(test)]
+        let author = {
+            let mut author = author;
+            if author.account_id.is_none() && author.kind == hive_core::ActorKind::Human {
+                author.account_id = Some(test_account_for(&author.id));
+            }
+            author
+        };
         Self {
             store,
             device_id,
@@ -139,6 +169,11 @@ impl ChatService {
             agent_vault: None,
             runtime_effect: false,
             presence_provider: None,
+            deployment_presence: hive_core::presence::PresencePolicy::ligus(),
+            // This crate's own unit tests run every service with a test
+            // recovery key (rules v2 everywhere); a test of the refusal path
+            // turns it off with `disable_test_presence`.
+            test_presence: cfg!(test),
             capture_presence: false,
             presence_draft: None,
             agent_messages: std::collections::HashMap::new(),
@@ -226,7 +261,7 @@ impl ChatService {
         env.lamport = self.store.max_lamport(session_id)?.saturating_add(1);
         let mut actor = ActorIdentity::new(agent_id.to_string(), name, hive_core::ActorKind::Agent);
         actor.device_id = Some(key_id);
-        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::now(), cfg_frontier: timeline.head(), presence: None, runtime_effect: false });
+        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::now(), cfg_frontier: timeline.head(), presence: None, runtime_effect: false, prev: self.store.last_signed_by(session_id, key_id)?, sig_alg: Default::default() });
         sign_envelope(&mut env, key_id, &kp);
         self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
         self.store.append_envelope(&env)?;
@@ -662,6 +697,9 @@ impl ChatService {
                 // B3: the fold wants its author's passkey presence.
                 Err(ChatError::Unauthorized(why)) if why == hive_core::authz::PRESENCE_REQUIRED => {
                     self.with_presence(&mut env)?;
+                    // (A confirmation may have registered a credential first.)
+                    let (config, timeline) =
+                        self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
                     self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
                 }
                 r => r?,
@@ -673,7 +711,7 @@ impl ChatService {
 
     /// Build and sign an envelope as this device's author would append it
     /// (not appended, not authorized).
-    fn draft_signed(&mut self, session_id: Uuid, workspace_id: Uuid, payload: SessionEvent) -> Result<SessionEventEnvelope> {
+    pub(crate) fn draft_signed(&mut self, session_id: Uuid, workspace_id: Uuid, payload: SessionEvent) -> Result<SessionEventEnvelope> {
         let next_seq = self.store.max_sequence(session_id)?.unwrap_or(0) + 1;
         let mut env = SessionEventEnvelope::new(session_id, workspace_id, next_seq, payload);
         // Causal Lamport clock: strictly greater than every event this device has
@@ -689,8 +727,7 @@ impl ChatService {
             actor: self.author.clone(),
             recorded_at: Timestamp::now(),
             cfg_frontier: timeline.head(),
-            presence: None, runtime_effect: self.runtime_effect,
-        });
+            presence: None, runtime_effect: self.runtime_effect, prev: self.store.last_signed_by(session_id, self.device_id)?, sig_alg: Default::default() });
         // Signed first, so the fold's own signature checks (key events)
         // judge exactly what peers will receive.
         sign_envelope(&mut env, self.device_id, &self.keypair);
@@ -1435,6 +1472,21 @@ impl ChatService {
                 self.store.set_workspace_pin(workspace_id, &self.author.id, &fk)?;
             }
             self.publish_identity(config_id, workspace_id)?;
+            // Genesis rules (Phase A): every workspace starts on rules v2 under
+            // this deployment's passkey relying party. Written before anyone
+            // holds a credential, so it carries no presence; the founder then
+            // registers a passkey and a recovery key with the seed's one grant
+            // (the desktop's create flow does it right away). Until then the
+            // workspace can't admit anyone or change governance: every such
+            // event needs the founder's presence.
+            self.append_signed(
+                config_id,
+                workspace_id,
+                SessionEvent::WorkspaceRulesSet {
+                    version: hive_core::authz::RULES_GENESIS,
+                    presence: Some(self.deployment_presence.clone()),
+                },
+            )?;
         }
         Ok(config_id)
     }
@@ -1974,12 +2026,83 @@ impl ChatService {
             return Err(ChatError::Unauthorized("a vote or decision on this proposal is still waiting to sync".into()));
         }
         let diff_digest = hive_core::authz::votes::diff_digest(proposal);
+        let repo_id = proposal.repo_id;
         self.append_signed(
             session_id,
             workspace_id,
-            SessionEvent::ProposalApplied { proposal_id, diff_digest, commit, at: Timestamp::now() },
+            SessionEvent::ProposalApplied {
+                proposal_id,
+                diff_digest,
+                commit,
+                at: Timestamp::now(),
+                repo_id,
+                applied_on: Some(self.device_id),
+                base_commit: None,
+                applied_tree_hash: None,
+                request_id: None,
+            },
         )?;
         Ok(self.load(session_id)?.and_then(|s| s.proposals.into_iter().find(|p| p.id == proposal_id)))
+    }
+
+    /// Ask `host_device_id` to apply an approved proposal (the phone's
+    /// "Apply on <host>", separate from approving): records the digest and,
+    /// when known, the base the person saw. Returns the request id.
+    pub fn request_apply(
+        &mut self,
+        session_id: Uuid,
+        workspace_id: Uuid,
+        proposal_id: Uuid,
+        host_device_id: Uuid,
+        expected_base_commit: Option<String>,
+    ) -> Result<Uuid> {
+        let session = self.load(session_id)?.ok_or_else(|| ChatError::Unauthorized("unknown chat".into()))?;
+        let p = session.proposals.iter().find(|p| p.id == proposal_id).ok_or_else(|| ChatError::Unauthorized("unknown proposal".into()))?;
+        let request = hive_core::workspace_repo::ApplyRequest {
+            id: Uuid::new_v4(),
+            proposal_id,
+            diff_digest: hive_core::authz::votes::diff_digest(p),
+            host_device_id,
+            expected_base_commit,
+            repo_id: p.repo_id,
+        };
+        let id = request.id;
+        self.append_signed(session_id, workspace_id, SessionEvent::ProposalApplyRequested { request })?;
+        Ok(id)
+    }
+
+    /// The host's side of [`ChatService::request_apply`]: record that this
+    /// device applied the request's content onto `base_commit`, giving
+    /// `applied_tree_hash` (both 40/64 hex).
+    pub fn fulfil_apply_request(
+        &mut self,
+        session_id: Uuid,
+        workspace_id: Uuid,
+        request_id: Uuid,
+        commit: Option<String>,
+        base_commit: Option<String>,
+        applied_tree_hash: Option<String>,
+    ) -> Result<SessionEventEnvelope> {
+        let session = self.load(session_id)?.ok_or_else(|| ChatError::Unauthorized("unknown chat".into()))?;
+        let req = session.apply_requests.get(&request_id).cloned().ok_or_else(|| ChatError::Unauthorized("no such apply request".into()))?;
+        if req.host_device_id != self.device_id {
+            return Err(ChatError::Unauthorized("that apply request is for another host".into()));
+        }
+        self.append_signed(
+            session_id,
+            workspace_id,
+            SessionEvent::ProposalApplied {
+                proposal_id: req.proposal_id,
+                diff_digest: req.diff_digest,
+                commit,
+                at: Timestamp::now(),
+                repo_id: req.repo_id,
+                applied_on: Some(self.device_id),
+                base_commit,
+                applied_tree_hash,
+                request_id: Some(request_id),
+            },
+        )
     }
 
     /// Persist a workflow run snapshot (create or update by id).
@@ -2028,13 +2151,9 @@ impl ChatService {
         // Member hoist (§11): route to the workspace-config log so the removal
         // propagates workspace-wide.
         let session_id = self.ensure_workspace_config(workspace_id)?;
-        self.append_signed(
-            session_id,
-            workspace_id,
-            SessionEvent::MemberRemoved {
-                member_id: member_id.into(),
-            },
-        )?;
+        let member_id = member_id.into();
+        let watermark = self.cut_watermark(workspace_id, Some(&member_id), None)?;
+        self.append_signed(session_id, workspace_id, SessionEvent::MemberRemoved { member_id, watermark })?;
         Ok(())
     }
 
@@ -2068,7 +2187,8 @@ impl ChatService {
         device_id: Uuid,
     ) -> Result<()> {
         let session_id = self.ensure_workspace_config(workspace_id)?;
-        self.append_signed(session_id, workspace_id, SessionEvent::DeviceRevoked { device_id })?;
+        let watermark = self.cut_watermark(workspace_id, None, Some(device_id))?;
+        self.append_signed(session_id, workspace_id, SessionEvent::DeviceRevoked { device_id, watermark })?;
         Ok(())
     }
 
@@ -2088,18 +2208,52 @@ impl ChatService {
             .load(session_id)?
             .and_then(|s| s.members.iter().find(|m| m.id == member_id).map(|m| m.role))
             .unwrap_or(WorkspaceRole::Contributor);
+        // A demotion cuts like a removal: the member's later events are
+        // judged with the new role (Phase A, item 2).
+        let watermark =
+            if new_role.rank() < old_role.rank() { self.cut_watermark(workspace_id, Some(&member_id), None)? } else { Vec::new() };
         self.append_signed(
             session_id,
             workspace_id,
-            SessionEvent::MemberRoleChanged {
-                change: MemberRoleChange {
-                    member_id,
-                    old_role,
-                    new_role,
-                },
-            },
+            SessionEvent::MemberRoleChanged { change: MemberRoleChange { member_id, old_role, new_role }, watermark },
         )?;
         Ok(())
+    }
+
+    /// The watermark a removal, demotion or revocation carries (Phase A,
+    /// item 2; [`hive_core::watermark`]): for every signer it cuts (the
+    /// device; or the member's devices, agent keys and any device that
+    /// signed as them here) and every log of the workspace this device holds,
+    /// the newest of that signer's events here.
+    pub fn cut_watermark(&self, workspace_id: Uuid, member: Option<&str>, device: Option<Uuid>) -> Result<Vec<hive_core::watermark::Watermark>> {
+        let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let roster = timeline.current();
+        let sessions = self.store.sessions_of_workspace(workspace_id)?;
+        let mut logs = Vec::new();
+        for sid in sessions {
+            logs.push((sid, self.store.list(sid)?));
+        }
+        let mut signers: std::collections::BTreeSet<Uuid> = device.into_iter().collect();
+        if let Some(m) = member {
+            let account = config.as_ref().and_then(|c| c.members.iter().find(|x| x.id == m)).and_then(|x| x.actor.account_id);
+            if let Some(a) = account {
+                signers.extend(roster.devices.iter().filter(|(_, d)| d.accounts.contains(&a)).map(|(id, _)| *id));
+            }
+            signers.extend(roster.agent_keys.iter().filter(|(_, k)| roster.agents.get(&k.agent_id).is_some_and(|ag| ag.owner == m)).map(|(id, _)| *id));
+            for (_, envs) in &logs {
+                signers.extend(
+                    envs.iter()
+                        .filter(|e| e.actor_stamp.as_ref().is_some_and(|s| s.actor.id == m))
+                        .filter_map(|e| e.signer_device_id),
+                );
+            }
+        }
+        let mut out = Vec::new();
+        for (sid, envs) in &logs {
+            out.extend(hive_core::watermark::heads_of(envs, *sid, &signers));
+        }
+        out.truncate(hive_core::watermark::MAX_WATERMARK_ENTRIES);
+        Ok(out)
     }
 
     /// Device-local workspace only: make the current actor the sole human OWNER.
@@ -3138,8 +3292,13 @@ mod tests {
         let reply = svc.post_user_message(chat.id, wid, "hand-off reply stands in here").unwrap().id;
         let (first, second) = (Uuid::new_v4(), Uuid::new_v4());
         let device_a = Uuid::new_v4();
-        // Device A's claim for the first receiver, synced in.
-        svc.append_signed(chat.id, wid, SessionEvent::TurnClaimed { trigger_id: hive_core::turn_claim_key(reply, Some(first)), device_id: device_a }).unwrap();
+        // Device A's claim for the first receiver, signed by device A and
+        // synced in (this device can't claim on A's behalf).
+        let claim = SessionEvent::TurnClaimed { trigger_id: hive_core::turn_claim_key(reply, Some(first)), device_id: device_a };
+        assert!(svc.append_signed(chat.id, wid, claim.clone()).is_err(), "a claim names its own signer");
+        let mut env = svc.draft_signed(chat.id, wid, claim).unwrap();
+        hive_core::crypto::sign_envelope(&mut env, device_a, &SigningKeypair::generate().unwrap());
+        assert!(svc.store.ingest(&env).unwrap());
         assert!(svc.claim_turn_for(chat.id, wid, reply, Some(second)).unwrap(), "the second receiver runs here");
         assert!(!svc.claim_turn_for(chat.id, wid, reply, Some(first)).unwrap(), "the first receiver is device A's");
         assert!(svc.claim_turn_for(chat.id, wid, reply, Some(second)).unwrap(), "re-claiming our own is idempotent");
@@ -3522,6 +3681,15 @@ mod tests {
     }
 
     // ── Member config-hoist (§11) ──────────────────────────────────────────
+
+    /// A member record with the account its own test service will hold, for
+    /// a member who governs (presence is an account's, and an Admin's grant
+    /// names the account it lets register a first credential).
+    fn test_member_acct(id: &str, name: &str, role: WorkspaceRole) -> WorkspaceMember {
+        let mut m = test_member(id, name, role);
+        m.actor.account_id = Some(super::test_account_for(id));
+        m
+    }
 
     fn test_member(id: &str, name: &str, role: WorkspaceRole) -> WorkspaceMember {
         WorkspaceMember {
@@ -3963,7 +4131,7 @@ mod tests {
             let seq = con.store.max_sequence(chat_id).unwrap().unwrap_or(0) + 1;
             let mut env = SessionEventEnvelope::new(chat_id, wid, seq, payload);
             env.lamport = con.store.max_lamport(chat_id).unwrap() + 1;
-            env.actor_stamp = Some(ActorStamp { actor: con.author.clone(), recorded_at: Timestamp::now(), cfg_frontier: frontier, presence: None, runtime_effect: false });
+            env.actor_stamp = Some(ActorStamp { actor: con.author.clone(), recorded_at: Timestamp::now(), cfg_frontier: frontier, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
             con.store.ingest(&env).unwrap();
         };
         inject(&mut con, rewrite);
@@ -4235,8 +4403,7 @@ mod tests {
             recorded_at: Timestamp::now(),
             cfg_frontier: timeline.head(),
             presence: None,
-            runtime_effect: false,
-        });
+            runtime_effect: false, prev: None, sig_alg: Default::default() });
         hive_core::sign_envelope(&mut env, con.device_id, &con.keypair);
         con.store.ingest(&env).unwrap();
         assert_eq!(host.trigger_author_role(chat, id).unwrap(), None);
@@ -4282,7 +4449,12 @@ mod tests {
         assert_eq!(owner.trigger_author_role(chat, forged).unwrap(), None);
         // The same stamp on a governance event (self-promotion) is refused
         // at ingest too.
-        con.set_member_role(chat, wid, con_acct.clone(), WorkspaceRole::Owner).unwrap();
+        // (Authoring refuses it for lack of presence; a peer that skips the
+        // check publishes it anyway.)
+        assert!(con.set_member_role(chat, wid, con_acct.clone(), WorkspaceRole::Owner).is_err());
+        let change = MemberRoleChange { member_id: con_acct.clone(), old_role: WorkspaceRole::Contributor, new_role: WorkspaceRole::Owner };
+        let env = con.draft_signed(workspace_config_session_id(wid), wid, SessionEvent::MemberRoleChanged { change, watermark: Vec::new() }).unwrap();
+        con.store.ingest(&env).unwrap();
         let cfg = owner.store().list(workspace_config_session_id(wid)).unwrap();
         let promo = cfg.iter().rev().find(|e| matches!(&e.payload, SessionEvent::MemberRoleChanged { .. })).unwrap();
         assert_eq!(verdict_for(&build_roster(&all), promo), Verdict::Quarantine(QuarantineReason::Impersonation));
@@ -4324,6 +4496,44 @@ mod tests {
         assert!(!body.contains(secret) && body.contains(crate::secret_redact::MARK), "{body}");
     }
 
+    /// Phase A, item 2: a removal carries a watermark of the member's
+    /// events this device held, so a removed member's later post never
+    /// folds, even backdated to a frontier from before the removal; their
+    /// earlier posts stand.
+    #[test]
+    fn a_removed_members_backdated_post_never_folds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hive.db");
+        let wid = Uuid::new_v4();
+        let mut owner = svc_on(&path, "u1", "Ana");
+        let chat = owner.create_chat("A", wid, "anthropic").unwrap().id;
+        owner.add_member(chat, wid, test_member_acct("con", "Con", WorkspaceRole::Contributor)).unwrap();
+        let mut con = svc_on(&path, "con", "Con");
+        con.publish_identity(workspace_config_session_id(wid), wid).unwrap();
+        let early = con.post_user_message(chat, wid, "while a member").unwrap().id;
+        let old_frontier = {
+            let (_, t) = con.store.load_config(wid, None, None).unwrap();
+            t.head()
+        };
+        owner.remove_member(chat, wid, "con").unwrap();
+        let removal = owner.store().list(workspace_config_session_id(wid)).unwrap().into_iter().rev()
+            .find(|e| matches!(e.payload, SessionEvent::MemberRemoved { .. })).unwrap();
+        let SessionEvent::MemberRemoved { watermark, .. } = &removal.payload else { unreachable!() };
+        assert!(watermark.iter().any(|w| w.log == chat), "the removal names the member's chain on the chat");
+        // Con's device still holds its key: it signs a post stamped with the
+        // pre-removal frontier and the peer stores it.
+        let msg = ChatMessage::new(MessageRole::User, "Con", "backdated");
+        let late = msg.id;
+        let mut env = con.draft_signed(chat, wid, SessionEvent::MessageAppended { message: msg }).unwrap();
+        env.actor_stamp.as_mut().unwrap().cfg_frontier = old_frontier;
+        env.clear_raw();
+        sign_envelope(&mut env, con.device_id, &con.keypair);
+        con.store.ingest(&env).unwrap();
+        let s = svc_on(&path, "u1", "Ana").load(chat).unwrap().unwrap();
+        assert!(s.messages.iter().any(|m| m.id == early), "the removal took back a post its author held");
+        assert!(!s.messages.iter().any(|m| m.id == late), "a removed member's backdated post folded");
+    }
+
     #[test]
     fn contributor_denied_governance_admin_allowed() {
         // Role gating on the hoisted roster: a Contributor member can't govern; an
@@ -4335,7 +4545,7 @@ mod tests {
             let mut a = svc_on(&path, "u1", "Ana");
             let chat = a.create_chat("A", wid, "anthropic").unwrap();
             a.add_member(chat.id, wid, test_member("con", "Con", WorkspaceRole::Contributor)).unwrap();
-            a.add_member(chat.id, wid, test_member("adm", "Adm", WorkspaceRole::Admin)).unwrap();
+            a.add_member(chat.id, wid, test_member_acct("adm", "Adm", WorkspaceRole::Admin)).unwrap();
             chat.id
         };
         let mut con = svc_on(&path, "con", "Con");
@@ -4809,12 +5019,13 @@ mod tests {
     #[test]
     fn unknown_rules_version_needs_presence_to_take_effect() {
         let (mut svc, _) = service();
+        svc.disable_test_presence();
         let chat = svc.create_chat("Demo", Uuid::new_v4(), "anthropic").unwrap();
         let (sid, wid) = (chat.id, chat.workspace_id);
         let cfg = svc.ensure_workspace_config(wid).unwrap();
         svc.post_user_message(sid, wid, "before").unwrap();
         let err = svc
-            .append_signed(cfg, wid, SessionEvent::WorkspaceRulesSet { version: hive_core::authz::RULES_SUPPORTED + 1 })
+            .append_signed(cfg, wid, SessionEvent::WorkspaceRulesSet { version: hive_core::authz::RULES_SUPPORTED + 1, presence: None })
             .unwrap_err()
             .to_string();
         assert!(err.contains("passkey"), "{err}");
@@ -4845,7 +5056,7 @@ mod tests {
             actor: svc.author().clone(),
             recorded_at: Timestamp::now(),
             cfg_frontier: Some(hive_core::CfgFrontier { lamport: 500, event_id: Uuid::new_v4() }),
-            presence: None, runtime_effect: false,
+            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default()
         });
         svc.store().append_envelope(&peer).unwrap();
         let s = svc.load(sid).unwrap().unwrap();

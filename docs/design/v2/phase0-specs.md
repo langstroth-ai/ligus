@@ -63,6 +63,34 @@ New `FlowRecord` kinds:
 
 `humanAsk`, `humanAnswered`, `turnToolSummary`, `agentOutcomeSummary`.
 
+Phase A (2026-11-16) adds these `SessionEvent` kinds: `proposalApplyRequested`, `workspaceRepoAdded`, `workspaceRepoUpdated`, `workspaceRepoRemoved`, `chatRepoSet`, `chatBasePinned`. It adds **no** domain string. `ligus-proposal-digest-v1\0` is redefined before its first release (section 0.2). A P-256 device certificate appends `\0alg=p256` to the frozen `hive-device-cert-v1` preimage; that is an algorithm tag inside the existing context, not a new context, and the Ed25519 preimage is unchanged. `LIGUS_REPO_NS` (`crates/hive-core/src/workspace_repo.rs`) is a UUIDv5 namespace for repo ids, not a domain string, and joins the frozen namespaces of rule 1.
+
+### 0.2 The 2.0 wire freeze (Phase A, 2026-11-16)
+
+Everything that changes signed or wire semantics before 2.0 landed in Phase A (branch `phaseA/protocol`). From here, the 2.0 wire is frozen: rule 1 applies to every kind, field and preimage below, and later changes are additive only (rule 3).
+
+**Pinned by tests.**
+- `golden/envelopes_v3.jsonl`: a signed vector for **every** `SessionEvent` kind, and the Phase A field shapes. `golden_coverage.rs` fails the build when a variant has no tag (an exhaustive match) and the tests when a known kind has no vector; `raw_bytes.rs` checks every line verifies byte for byte.
+- `golden/p256_cryptokit.jsonl`: phone signatures from Apple CryptoKit `P256.Signing` (`scripts/p256-vectors/sign.swift`), verified over the exact envelope preimage.
+- `digest_vector` (the proposal digest, cross-checked with an independent Python computation), `host_beat_wire_is_frozen`, the presence vectors, and the relay's `TestContactRoutesMatchGolden` (`testdata/golden_v03_contacts.json`, relay repo, next to the `/v1` route goldens).
+
+**What Phase A froze.**
+
+| Area | Wire | Fold rule |
+|---|---|---|
+| Rules (item 1) | Every workspace is on rules v2 from its seed; `ensure_workspace_config` writes `WorkspaceRulesSet { version: 2, presence }` at genesis | No rules v1. The genesis rules set is the only one without presence. Only the Owner changes the RP or the version. The seed grants the founder one first-credential registration; there is no TOFU |
+| Relying party (item 5) | `WorkspaceRulesSet.presence: { rpId, origins }` | Presence verifies under the workspace's RP (default `ligus.ai`); a change needs presence under the old RP |
+| Watermarks (item 2) | `ActorStamp.prev` (the signer's previous event on the log); `watermark: [{signer, log, heads, gaps}]` (`gaps`, left out when empty: `prev` ids the author didn't hold; coverage never enters one, so a `prev` a member names but withholds is not a slot they can fill after the cut; an entry with more than 8 gaps is left out) on `MemberRemoved`, `MemberRoleChanged`, `DeviceRevoked` | An event a cut concerns that isn't reachable back from its heads (without entering a gap or an equivocated id) is judged at max(its frontier, the cut); a revoked device's never folds; on the config log such events before the cut are denied (self-validating publications excepted). Cuts go strictly down the ranks (the founder outranks other Owners; nobody cuts the founder); a cut is judged without its subject's uncovered earlier events; leaving, self-demotion and a device revoking itself are not cuts |
+| Vote digest (item 3) | `diff_digest` preimage adds proposal id, repo id, base commit (length-prefixed, empty when absent) | `repo_id` derived from the chat's repo at creation and sticky; a base change clears votes |
+| Turn claims (item 4) | (no change) | A `TurnClaimed` counts only from the device it names |
+| Repos (item 6) | `WorkspaceRepoAdded/Updated/Removed`, `ChatRepoSet`, `ChatBasePinned`, `ActionProposal.{repoId, baseCommit, baseRef, producedOn}`, host beat `seq` and `coverage` | Admin (+presence for add/remove); normal-form canonical and derived id; a chat repo must be live; never an agent's or a runtime's choice |
+| Apply (item 6) | `ProposalApplyRequested { request }`; `ProposalApplied.{repoId, appliedOn, baseCommit, appliedTreeHash, requestId}` | A person asks through their own device for an Approved proposal at its digest; only the named host fulfils it, on the base the person saw; a direct apply is a human member's, through their own device; never an agent |
+| Phones (item 6) | `DeviceCertificate.alg` (`p256`), `ActorStamp.sigAlg` | ECDSA-SHA256, fixed 64-byte low-S signatures; an Ed25519 certificate names a 32-byte key; a P-256 device is a phone, capped to the phone tier, enrolled only by a trusted device of its person with that person's presence. Revocation's other two parts (cutting the tunnel pairing and pushes) are **Phase B** (review P-A6): serve's `revoke_phones_of_revoked_devices` exists, but nothing binds a pairing to its phone's device yet (`Registry::bind_device` is only called from tests), and the cut runs only after a sync round that pulled events, so a phone's self-revocation sent through serve doesn't cut its pairing until then |
+| Service members (item 6) | `ActorKind::Service` | At most Contributor; no passkey, no presence, no set decisions; applies only on request; never a human approval; its stamp must say Service |
+| Equivocation (review P-A2c) | (no change) | Two envelopes under one event id on one log with different signer, signature or signed preimage are both denied, in any arrival order (`events::split_equivocations`); the store keeps the second as evidence (`equivocations` table, never pushed) |
+
+**Deliberately additive later.** Repo aliases and `WorkspaceHostAliasesSet` (repos review R2: a new kind with presence and disjointness; an older client ignores it and matches less). A non-Secure-Enclave phone key type or another certificate algorithm (a new `SigAlg` value; an older client then doesn't trust that device, which fails closed). The ligus-auth side of phone revocation (Phase D: the signed `DeviceRevoked` is the notice it honours).
+
 ---
 
 ## Track A: protocol and authorization
@@ -506,7 +534,7 @@ pub kid: Option<String>,   // first 8 bytes (16 hex) of key_commitment
 - **Ties.** Two valid-looking rotations with the same `prev_version`: the lower canonical key wins, and the loser is ignored. The loser's issuer sees `lost_rotation` and re-rotates automatically.
   - Events already sealed under the loser's key stay readable: readers keep every **openable** key by `(version, kid)`, and `decode` picks the key by `kid`.
   - This closes K2, where today the AEAD failure is classified `Malformed` and skipped forever (`sync_engine.rs:250-256`).
-- **Recipients** are every non-revoked certified device of every current member with a `DeviceKeyAgreementPublished`, plus every host device (serve or worker) bound in the roster.
+- **Recipients** are every non-revoked certified device of a current member's account with a `DeviceKeyAgreementPublished` (`RosterState::rotation_recipients`). A serve or worker box gets the key only as a device of a member (its owner's enrolled device, or its own service member's device); a host an agent is merely bound to is **not** a recipient, or a removed member's box still hosting an agent would get every later key. Regression tests: `rotations_seal_only_to_current_members_devices` (core) and `removed_members_device_is_not_a_recipient_through_an_agent_host` (keyring).
   - Recipients are no longer looked up in the relay directory `ka_public`, which was the K1 outsider vector (review §7.9).
   - `DeviceKeyAgreementPublished` is emitted once per device on first 2.0 launch, and by `ligus serve enroll` and `ligus worker` on startup. CLI hosts get their own X25519 keypair in the vault (B.2).
 - **Sealing epoch.** Sealing uses `seal_epoch = highest authorized version`. If there is none, sealing falls back as follows:
@@ -622,13 +650,21 @@ Superseded (2026-11-16): 2.0 starts fresh, so there is nothing to move out of `s
 
 ### B.3 Workspace rules v2
 
-Rules v2 is the switch that turns on presence. An Owner turns it on per workspace with `WorkspaceRulesSet { version: 2 }`, which itself needs the Owner's presence.
+**Phase A (item 1): every workspace is on rules v2 from its seed.** 2.0 starts fresh, so rules v1 (governance without presence, trust-on-first-use passkeys) was deleted rather than kept behind a switch.
+
+- The roster tracker seeds `rules = 2` from the base snapshot (`authz::RULES_GENESIS`). A `WorkspaceRulesSet` below 2 never folds; one above `RULES_SUPPORTED` makes this build read-only (unchanged).
+- `ensure_workspace_config` writes the **genesis rules set** `WorkspaceRulesSet { version: 2, presence: <deployment RP> }` right after the seed and the founder's identity. It is the only rules set that needs no presence: version 2, no credential exists in the workspace yet, and no rules set is on the log yet (`RosterState.rules_written`), so a second presence-free one can't re-point the RP before the founder secures the workspace. Every other rules set needs presence.
+- Ranks (review P-A2d, owner decision P-A2b, `authz::rank_rules`): no one grants a role above their own or changes the role of a member above them. A **cut** (a removal, a demotion, a revocation of another member's device) goes strictly **down** the ranks: an Admin cuts only roles below Admin; only an Owner cuts an Admin; with several Owners the **founder** (the config seed's creator, `RosterState.founder`) outranks the others and is the only one who cuts an Owner; nobody cuts the founder. Leaving or demoting yourself and revoking your own device stay open, and are not cuts (no watermark semantics: their watermark would be the subject's own word, and an empty one would retroactively deny everything they did). Because a cut's subject can never cut its author, a removed member can't undo the removal with a backdated counter-cut.
+- A cut is judged without its subject's uncovered earlier events (`config_denials_with_rejudged_cuts`): by the watermark those are after the cut, so a backdated event of the subject (a relying-party change that voids the remover's passkey presence, for example) can't decide it. On the config log an uncovered event of a cut subject is denied, except self-validating publications (account keys, certificates, passkeys; for a revocation, the device's own certificate), which stand as they would after the cut.
+- Who may write it: only the **Owner** changes the relying party or the version (`authz::authorize`). The RP decides which page every member's desktop opens for each passkey ceremony (`<first https origin>/presence`) and what a re-registration under it binds, so it is not an Admin's call (review P-A5).
+- **Creating a workspace requires a passkey and a recovery key.** The desktop's Add workspace flow registers the founder's passkey and then shows a recovery key before it shows the invite. The fold enforces the consequence rather than the ceremony: until the founder holds a credential nobody can be admitted (every `MemberAdded` of someone else, and every invite approval, needs the founder's presence) and nothing can be governed.
+- **CLI-created workspaces** (decision): allowed, because `ligus new` and serve's first touch found the config log lazily, but they stay *unsecured* and the CLI says so: a single-member workspace that can't admit anyone or change governance until the founder registers a passkey and a recovery key from the desktop app (any of the founder's own, non-delegated devices; the seed's grant is per account). A delegated serve box can never register its owner's passkeys. Phase B's phone device key adds the phone as a place to do it.
 
 ### B.4 Passkeys: human presence for admin events (B3)
 
 #### B.4.1 Decision recap
 
-- Credentials are WebAuthn passkeys under RP ID `ligus.ai`. Any authenticator works: iCloud Keychain on Mac and iPhone, Windows Hello, Android/Google Password Manager, YubiKey or other FIDO2 keys, and hybrid (QR) passkeys.
+- Credentials are WebAuthn passkeys under the **workspace's** RP ID (Phase A, item 5). The genesis `WorkspaceRulesSet { version: 2, presence: { rpId, origins } }` names it, the fold keeps it in `RosterState.presence_policy`, and every presence check verifies against it (never a device setting). A workspace whose log names none uses `ligus.ai` / `https://ligus.ai`, the owner's deployment. The Owner may change the policy, with presence verified under the policy in force before the change (the **old** RP); a new RP id leaves the workspace's passkeys unverifiable until they are registered again (recovery keys don't depend on the RP, so one of them confirms the new registrations). The desktop writes its deployment's policy (`settings.json` `passkey_policy`, default `ligus.ai`) into the genesis rules set; the fold never reads that setting. The desktop hand-off page is `<first https origin>/presence`, and serve's `presence/prepare` returns `rpId` and `origins` to the phone. Any authenticator works: iCloud Keychain on Mac and iPhone, Windows Hello, Android/Google Password Manager, YubiKey or other FIDO2 keys, and hybrid (QR) passkeys.
 - Supported algorithms: ES256 (COSE -7) and EdDSA (COSE -8).
 - Secure Enclave-only keys are **not** required.
 - Verification is offline on every peer, inside the fold.
@@ -718,8 +754,7 @@ The table is code, a single `fn requires_presence(&SessionEvent, &RosterState, &
 
 **First passkey** (code: `crates/hive-core/src/authz/passkeys.rs` `registration_ok`).
 - Two browser ceremonies. `navigator.credentials.create` (attestation `"none"`, a random challenge that binds only that ceremony) makes the key; the desktop reads its id and COSE key from the `attestationObject` (B.4.2). Then `PasskeyRegistered`, signed by the member's certified device (not a delegated host), carries a `webauthn.get` assertion **by the new credential itself** over the B.4.3 digest of the registration event. A `webauthn.create` can't sign that digest, because the new key is part of it.
-- **Rules v1:** the first registration for an account needs no prior presence (trust on first use, bound to the device signature).
-- **Rules v2:** the first registration needs an Admin's grant (`RosterState::passkey_grants`): being added as a new member under v2, or an Admin's presence-confirmed re-grant (`MemberRoleChanged`) after the account's credentials were removed, good for one registration. An account that kept its recovery key registers a new passkey with the recovery key's presence instead.
+- There is no trust on first use. The first registration for an account needs a grant (`RosterState::passkey_grants`), good for one registration: the **founder's**, from the seed; or an Admin's presence-confirmed act: being added as a new member, or a re-grant (`MemberRoleChanged`) after the account's credentials were removed. An account that kept its recovery key registers a new passkey with the recovery key's presence instead. An outsider who only published an identity can't register a credential.
 - Every later registration needs presence from an existing credential of the same account.
 
 **Desktop: browser hand-off (all OSes, one code path).**
@@ -790,7 +825,7 @@ The counted human is the **account that owns the credential**, which must equal 
 - **Lockout** for a sole Owner without a recovery key.
 - **Platform quirks.** WebAuthn in Tauri webviews is unreliable, which is why the browser hand-off exists. Hybrid flows need Bluetooth.
 - **Apple review** for associated domains; it needs the domain live first.
-- **Policy timing.** Turning rules v2 on is an owner action. Nothing forces it on existing workspaces; new workspaces default to v2 when the founder registers a passkey during creation.
+- **Unsecured workspaces.** A workspace founded where no passkey ceremony runs (the CLI) is on rules v2 but can't admit anyone until its founder adds a passkey from the desktop; the founder's one-use grant stays open until then, so a thief of the founder's device key in that window can register a passkey first. The window closes at the first registration, and the desktop's create flow leaves none.
 
 ---
 ## Track C: host, sandbox and agents
@@ -899,7 +934,7 @@ pub trait TurnExecutor: Send + Sync {
     fn spawn(&self, cmd: std::process::Command, plan: &EnforcementPlan) -> io::Result<tokio::process::Child>;
     fn kind(&self) -> ExecutorKind;   // Unconfined | Seatbelt | Bwrap | Landlock (code: executor/mod.rs)
 }
-pub fn default_executor() -> Arc<dyn TurnExecutor>;   // macOS: Seatbelt; Linux: Bwrap (falls back to Unconfined + loud banner + refuse write tiers)
+pub fn default_executor() -> Arc<dyn TurnExecutor>;   // macOS: Seatbelt; Linux: Bwrap, else Landlock; else Unconfined, which refuses every agent process (only tool-less HTTP model chat runs)
 ```
 
 - `EnvelopeEnforcer::plan(envelope, runtime, gate)` replaces the two compositions in `app/src/guards.rs:789` and `worker.rs:447-465`.
@@ -974,7 +1009,7 @@ None of these exists in code. Their `ExecutorKind` placeholder variants were rem
 
 - `Gvisor` (Linux strong mode): `runsc --network=none do …` with the same mounts and the proxy socket bound in.
 - `AppleContainer` (macOS 26+ local VM): Apple's `container` CLI, with the worktree bind-mounted and the proxy over vsock or a published port.
-- `K8sJob`: the existing chart template `deploy/helm/ligus/templates/sandbox.yaml:1-18` and `_helpers.tpl:220-262` (gVisor or Kata `runtimeClassName`, agent-sandbox). This needs `exec-turn` and `TurnBundle` (review P3/P7) and stays [2.x].
+- `K8sJob`: **cut** (owner decision, 2026-11-16): no Kubernetes executor is planned; the chart's sandbox template is not an executor.
 
 #### C.4.6 Tests
 
@@ -1529,7 +1564,8 @@ flowchart LR
   D3 --> CUT
   D4 --> CUT
   C3 --> CUT
-  E[Track E ligus-auth] -.-> R21((2.1))
+  E[Track E ligus-auth client side] --> CUT
+  E -.-> R21((2.1: relay tenant enforcement))
 ```
 
 ### 7.1 Worktrees
@@ -1583,12 +1619,13 @@ The other agent's in-flight UI and phone-endpoint merges are **R0**. No Phase 0 
 |---|---|---|
 | A1, A2, A3; B1, B2 (macOS Keychain, Secret Service, systemd-creds, File0600) | yes | Windows Credential Manager [2.x] |
 | B3 passkeys: browser hand-off, iOS native, rules v2, recovery key | yes | macOS native ASAuthorization (if not done), Android app origins |
-| C1, C2 (Seatbelt, bwrap+Landlock+seccomp, egress proxy), C3, C7 interim + final | yes | gVisor, Apple `container`, K8s executors (C.4.5; [2.0.x-follow] for gVisor and container, [2.x] for K8s), OTLP export |
+| C1, C2 (Seatbelt, bwrap+Landlock+seccomp, egress proxy), C3, C7 interim + final | yes | gVisor, Apple `container` (C.4.5, [2.0.x-follow]), OTLP export. K8s executors are cut. |
 | D1 ACP for all four CLIs | yes; Claude-over-ACP default only for API-key auth until V2 is confirmed | Claude subscription over ACP after V2 |
 | D2 (incl. agent-signed effects, budgets, audit), D3, D4 | yes | Per-call synced audit (owner decision); resumable asks |
 | Gemini and MLX presets, release matrix | yes | Native Gemini provider |
 | E ligus-auth | client side (device-code sign-in, device proof, refresh) and `cmd/ligus-auth` | relay tenant (`tid`) enforcement (review P6) |
-| Review P1/P2 host extraction, P4/P5 phone device keys, P6 relay split, P8 facts OTLP | no | 2.x. Passkey presence (B3) removes the urgency of P5 for votes, but not for authorship of posts. |
+| P4 serve as its own (service) member, P5 phone device keys (P-256 Secure Enclave) | yes (owner decision, 2026-11-16): the wire is frozen in Phase A (section 0.2); the clients are Phase B | |
+| Review P1/P2 host extraction, P6 relay split, P8 facts OTLP | no | 2.x |
 
 > **"No patch releases" vs "follow" (needs the owner's reading).** "Can follow" items ship in a later *minor* release (2.1, 2.2). "No patch releases" means 2.0.0 is not followed by 2.0.x fixes of 2.0 scope, so everything marked yes above must be done before the cut.
 

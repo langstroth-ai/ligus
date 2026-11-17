@@ -69,11 +69,13 @@ Full release notes are on the
   turns now run in a Landlock + seccomp tier instead of being refused, and
   an optional AppArmor profile restores bubblewrap. `ligus doctor` shows
   the tier. See [The Linux agent sandbox](../ops/linux-sandbox.md).
-- **Passkeys for admin changes.** Under workspace rules v2, membership and
+- **Passkeys for admin changes.** On every workspace, from its first event, membership and
   role changes, device revocation, key rotation, guards, zones, workflow
   definitions, agent hosts and human-gated approvals need a passkey (Touch
   ID, Windows Hello, a phone, a YubiKey), verified on every device. Register
-  passkeys and a recovery key in **Settings → Passkeys & keys**; the phone
+  passkeys and a recovery key when you create a workspace (or in
+  **Settings → Passkeys & keys**); a self-hosted deployment can name its
+  own relying party for the workspaces it creates; the phone
   confirms votes through your box with Face ID. See
   [Passkey presence](../security/index.md#presence).
 - **Signed key rotations on every host.** Rotating the workspace key is a

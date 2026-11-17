@@ -7,7 +7,7 @@
 use hive_core::authz::ConfigTimeline;
 use hive_core::proposal_sets::{CheckOutcome, PreflightReport, ProposalSet, ScoutAssessment, SetPhase};
 use hive_core::{
-    project, project_authorized, project_config, workspace_config_session_id, ActionProposal, ActorIdentity, ActorKind,
+    project, project_authorized, ActionProposal, ActorIdentity, ActorKind,
     ActorStamp, CfgFrontier, ChatSession, MemberRoleChange, ProposalApproval, ProposalKind, SessionEvent,
     SessionEventEnvelope, Timestamp, WorkspaceAuthz, WorkspaceMember, WorkspaceRole,
 };
@@ -25,48 +25,30 @@ fn member(id: &str, role: WorkspaceRole) -> WorkspaceMember {
 }
 
 fn stamp(by: &str, frontier: Option<CfgFrontier>) -> Option<ActorStamp> {
-    Some(ActorStamp { actor: ActorIdentity::new(by, by, ActorKind::Human), recorded_at: Timestamp::epoch(), cfg_frontier: frontier, presence: None, runtime_effect: false })
+    Some(ActorStamp { actor: ActorIdentity::new(by, by, ActorKind::Human), recorded_at: Timestamp::epoch(), cfg_frontier: frontier, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() })
 }
 
 /// The workspace-config log: `owner` founded it, then added `mara` as a
-/// Contributor, `ada` as an Admin and `val` as a Viewer. `eve` holds a device
-/// key but was never added.
+/// Contributor, `ada` as an Admin and `val` as a Viewer (each with their
+/// passkey presence, rules v2 from the seed). `eve` holds a device key but
+/// was never added.
 struct Config {
-    wid: Uuid,
-    lamport: u64,
-    envs: Vec<SessionEventEnvelope>,
+    w: hive_core::testkit::SignedWorld,
 }
 
 impl Config {
-    fn new(wid: Uuid) -> Self {
-        let sid = workspace_config_session_id(wid);
-        let mut seed = ChatSession::new("", wid, "");
-        seed.id = sid;
-        seed.creator_actor_id = "owner".into();
-        seed.members = vec![member("owner", WorkspaceRole::Owner)];
-        let mut c = Self { wid, lamport: 0, envs: Vec::new() };
-        c.push("owner", SessionEvent::SessionSnapshot { session: Box::new(seed) });
+    fn new() -> Self {
+        let mut w = hive_core::testkit::SignedWorld::genesis(&["owner", "mara", "ada", "val", "eve"], None);
         for (id, role) in [("mara", WorkspaceRole::Contributor), ("ada", WorkspaceRole::Admin), ("val", WorkspaceRole::Viewer)] {
-            c.push("owner", SessionEvent::MemberAdded { invite: None, member: member(id, role) });
+            w.admit("owner", id, role);
         }
-        c
-    }
-    fn push(&mut self, by: &str, e: SessionEvent) {
-        self.lamport += 1;
-        let frontier = self.head();
-        let mut env = SessionEventEnvelope::new(workspace_config_session_id(self.wid), self.wid, self.lamport as i64, e);
-        env.lamport = self.lamport;
-        env.actor_stamp = stamp(by, frontier);
-        self.envs.push(env);
-    }
-    fn set_role(&mut self, id: &str, old_role: WorkspaceRole, new_role: WorkspaceRole) {
-        self.push("owner", SessionEvent::MemberRoleChanged { change: MemberRoleChange { member_id: id.into(), old_role, new_role } });
+        Self { w }
     }
     fn head(&self) -> Option<CfgFrontier> {
-        self.envs.last().map(|e| CfgFrontier { lamport: e.lamport, event_id: e.event_id })
+        self.w.head()
     }
     fn timeline(&self) -> ConfigTimeline {
-        project_config(&self.envs, None, None).1
+        self.w.timeline()
     }
 }
 
@@ -82,21 +64,54 @@ impl Log {
     /// A chat created by `owner`: its own roster holds only the creator, as a
     /// real chat log does (members live on the config log).
     fn new() -> Self {
-        let mut base = ChatSession::new("Cache", Uuid::new_v4(), "anthropic");
+        let cfg = Config::new();
+        let mut base = ChatSession::new("Cache", cfg.w.wid, "anthropic");
         base.creator_actor_id = "owner".into();
         base.members = vec![member("owner", WorkspaceRole::Owner)];
         let (sid, wid) = (base.id, base.workspace_id);
-        let mut log = Self { sid, wid, lamport: 0, envs: Vec::new(), cfg: Config::new(wid) };
+        let mut log = Self { sid, wid, lamport: 0, envs: Vec::new(), cfg };
         log.push("owner", SessionEvent::SessionSnapshot { session: Box::new(base) });
         log
     }
     /// An honest author stamps the config head it has folded.
     fn push(&mut self, by: &str, e: SessionEvent) {
         self.lamport += 1;
+        // A human's decision, tuning or vote carries their passkey presence
+        // (rules v2), signed by their device; the rest stays a bare stamp.
+        let gated = matches!(
+            e,
+            SessionEvent::ProposalSetDecided { .. } | SessionEvent::ProposalSetTuned { .. } | SessionEvent::ProposalVoteCast { .. }
+        );
+        if gated && self.cfg.w.people.contains_key(by) && by != "eve" {
+            let head = self.cfg.head();
+            let mut env = self.cfg.w.draft(by, Some(self.sid), e, head);
+            env.sequence = self.lamport as i64;
+            env.lamport = self.lamport;
+            let p = &self.cfg.w.people[by];
+            hive_core::testkit::prove_recovery(&mut env, p.account_id, p.device_id, &p.device);
+            self.envs.push(env);
+            return;
+        }
         let mut env = SessionEventEnvelope::new(self.sid, self.wid, self.lamport as i64, e);
         env.lamport = self.lamport;
         env.actor_stamp = stamp(by, self.cfg.head());
         self.envs.push(env);
+    }
+    /// The owner changes `id`'s role; a demotion carries the honest
+    /// watermark (every event `id` signed here, on both logs).
+    fn set_role(&mut self, id: &str, old_role: WorkspaceRole, new_role: WorkspaceRole) {
+        let signers: std::collections::BTreeSet<Uuid> = self
+            .envs
+            .iter()
+            .chain(&self.cfg.w.cfg)
+            .filter(|e| e.actor_stamp.as_ref().is_some_and(|s| s.actor.id == id))
+            .filter_map(|e| e.signer_device_id)
+            .collect();
+        let cfg_log = self.cfg.w.cfg[0].session_id;
+        let mut watermark = hive_core::watermark::heads_of(&self.envs, self.sid, &signers);
+        watermark.extend(hive_core::watermark::heads_of(&self.cfg.w.cfg, cfg_log, &signers));
+        let change = MemberRoleChange { member_id: id.into(), old_role, new_role };
+        self.cfg.w.push("owner", SessionEvent::MemberRoleChanged { change, watermark });
     }
     fn hoisted(&self) -> ChatSession {
         let t = self.cfg.timeline();
@@ -244,7 +259,7 @@ fn a_demotion_on_the_config_log_is_what_counts_not_the_chats_stale_roster() {
     // add); the workspace demoted her to Viewer before she acted.
     let mut log = Log::new();
     log.push("owner", SessionEvent::MemberAdded { invite: None, member: member("mara", WorkspaceRole::Contributor) });
-    log.cfg.set_role("mara", WorkspaceRole::Contributor, WorkspaceRole::Viewer);
+    log.set_role("mara", WorkspaceRole::Contributor, WorkspaceRole::Viewer);
     let (set_id, _, _) = piping_set(&mut log, WorkspaceRole::Contributor);
     let s = log.hoisted();
     assert!(s.proposal_sets.iter().all(|x| x.id != set_id), "a Viewer can't open a set");
@@ -331,7 +346,7 @@ fn hoisted_authorization_is_not_retroactive() {
     let before = log.hoisted();
     assert_eq!(before.proposal_sets.iter().find(|x| x.id == set_id).unwrap().phase, SetPhase::Piping, "control");
     // Later, val is promoted. Her old, refused close must stay refused.
-    log.cfg.set_role("val", WorkspaceRole::Viewer, WorkspaceRole::Admin);
+    log.set_role("val", WorkspaceRole::Viewer, WorkspaceRole::Admin);
     let after = log.hoisted();
     assert_eq!(after.proposal_sets.iter().find(|x| x.id == set_id).unwrap().phase, SetPhase::Piping, "a refused close became valid retroactively");
 
@@ -339,7 +354,7 @@ fn hoisted_authorization_is_not_retroactive() {
     // decision stands.
     log.push("ada", SessionEvent::ProposalSetDecided { set_id, winner: Some(a), at: Timestamp::epoch() });
     assert_eq!(log.hoisted().proposal_sets.iter().find(|x| x.id == set_id).unwrap().winner, Some(a));
-    log.cfg.set_role("ada", WorkspaceRole::Admin, WorkspaceRole::Viewer);
+    log.set_role("ada", WorkspaceRole::Admin, WorkspaceRole::Viewer);
     let demoted = log.hoisted();
     let set = demoted.proposal_sets.iter().find(|x| x.id == set_id).unwrap();
     assert_eq!((set.phase, set.winner), (SetPhase::Decided, Some(a)), "a later demotion undid a decision");

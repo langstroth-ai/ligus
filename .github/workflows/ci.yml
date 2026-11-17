@@ -137,6 +137,12 @@ jobs:
         with:
           tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
 
+      # The test-only passkey shortcut (hive-runtime `test-presence`) must
+      # never be in a shipped binary's build graph.
+      - name: No test-presence in shipped builds
+        shell: bash
+        run: scripts/check-no-test-presence.sh
+
       - name: Check ts-rs bindings are in sync
         if: runner.os == 'Linux'
         run: |

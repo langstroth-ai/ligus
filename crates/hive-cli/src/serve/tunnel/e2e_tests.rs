@@ -507,6 +507,8 @@ async fn interop_against_a_real_relay() {
 async fn forge_tokens_can_be_set_through_the_tunnel() {
     let relay = FakeRelay::start().await;
     let h = serve_with_relay(&relay.url).await;
+    // Forge changes need the owner's presence on every box (5.7).
+    h.handle.shared.test_presence.store(true, std::sync::atomic::Ordering::SeqCst);
     relay.wait_connected(Duration::from_secs(10)).await.unwrap();
     h.send(reqwest::Method::POST, "/v1/forges", Some(json!({"kind": "gitlab", "baseUrl": "https://gitlab.example.com", "auth": "token"}))).await;
     let t = h.handle.shared.tunnel.clone().unwrap();
@@ -533,4 +535,49 @@ async fn forge_tokens_can_be_set_through_the_tunnel() {
     let id = hive_forge::ForgeId::parse("gitlab:gitlab.example.com").unwrap();
     assert_eq!(store.get(&id, hive_forge::Purpose::Write).unwrap().unwrap().expose(), "glpat-tunnel-0123456789");
     h.handle.shutdown();
+}
+
+/// Phase A, item 6: phone revocation is three-part. A workspace
+/// `DeviceRevoked` of the phone's own device, synced to the box, also
+/// revokes the phone's tunnel pairing: the relay is told to drop it and a
+/// request on its session gets 401.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_revoked_phone_device_cuts_its_tunnel() {
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let t = h.handle.shared.tunnel.clone().unwrap();
+    let (_, _, _, ps) = parse_link(&pair_link(&h));
+    relay.wait_for("enroll", |m| m["eid"] == ps.eid, Duration::from_secs(5)).await.unwrap();
+    let info = host_info(&h, &relay.url);
+    let phone = PhoneKeys::generate();
+    let (_c, pid, _) = testkit::phone_enroll(&info, &phone, &ps, "p").await.unwrap();
+    let phone_device = Uuid::new_v4();
+    assert!(t.registry.bind_device(&pid, phone_device).unwrap());
+    // Nothing revoked yet: the hook cuts nothing.
+    assert!(h.handle.shared.revoke_phones_of_revoked_devices().is_empty());
+    // The workspace owner revokes the phone's device on their desktop.
+    {
+        let mut owner = crate::open_service(&h.desktop).unwrap();
+        let ws = h.handle.shared.ws;
+        owner.revoke_device(ws, ws, phone_device).unwrap();
+    }
+    crate::sync_once(&h.desktop).await.unwrap();
+    // The box pulls it and revokes the pairing.
+    let mut cut = false;
+    for _ in 0..100 {
+        h.handle.shared.sync_kick.notify_one();
+        if !t.registry.is_active(&pid) {
+            cut = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(cut, "the revoked phone's pairing stayed active");
+    relay.wait_for("revoke", |m| m["pid"] == json!(pid), Duration::from_secs(5)).await.unwrap();
+    let mut req = axum::http::Request::builder().uri("/v1/chats").body(axum::body::Body::empty()).unwrap();
+    req.extensions_mut().insert(tun::TunnelPeer { pid });
+    use tower::ServiceExt;
+    let resp = crate::serve::api::router(h.handle.shared.clone()).oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 401);
 }

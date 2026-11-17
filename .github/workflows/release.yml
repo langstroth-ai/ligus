@@ -155,6 +155,12 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "macOS signing + notarization configured."
 
+      # The test-only passkey shortcut (hive-runtime `test-presence`) must
+      # never be in a shipped binary's build graph.
+      - name: No test-presence in shipped builds
+        shell: bash
+        run: scripts/check-no-test-presence.sh
+
       - name: Build + release
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:

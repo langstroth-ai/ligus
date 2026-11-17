@@ -304,7 +304,7 @@ pub fn devices_of(trust: &[SessionEventEnvelope], account: Uuid) -> Vec<OwnDevic
     let revoked: HashSet<Uuid> = trust
         .iter()
         .filter_map(|e| match &e.payload {
-            SessionEvent::DeviceRevoked { device_id } => Some(*device_id),
+            SessionEvent::DeviceRevoked { device_id, .. } => Some(*device_id),
             _ => None,
         })
         .collect();

@@ -231,6 +231,23 @@ impl EventStore {
                 checked_ms  INTEGER NOT NULL,
                 check_json  TEXT NOT NULL
             );
+
+            -- Review P-A2c: a verified envelope that arrived under an event id
+            -- this store already holds, on the same log, with different
+            -- signed content (an equivocation). Kept as evidence and folded
+            -- with the log, so both copies are denied whichever came first.
+            -- Never pushed.
+            CREATE TABLE IF NOT EXISTS equivocations (
+                row_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id      TEXT NOT NULL,
+                session_id    TEXT NOT NULL,
+                workspace_id  TEXT NOT NULL,
+                kind          TEXT NOT NULL,
+                envelope_json TEXT NOT NULL,
+                sealed_epoch  INTEGER,
+                UNIQUE (event_id, envelope_json)
+            );
+            CREATE INDEX IF NOT EXISTS idx_equivocations_session ON equivocations (session_id);
             "#,
         )?;
         // B1: the key epoch each relay body arrived sealed under (device-local,
@@ -394,7 +411,8 @@ impl EventStore {
     /// out.
     pub fn roster_envelopes(&self) -> Result<Vec<SessionEventEnvelope>> {
         self.query_envelopes(
-            "SELECT envelope_json FROM events \
+            "SELECT envelope_json FROM (SELECT row_id, kind, envelope_json FROM events \
+             UNION ALL SELECT row_id + 9000000000000, kind, envelope_json FROM equivocations) \
              WHERE kind IN ('accountKeyRegistered','accountKeyRotated','deviceCertificateAdded','deviceRevoked',\
              'memberAdded','memberRemoved','sessionSnapshot','memberRoleChanged','dearthModeChanged','joinApproved',\
              'agentKeyCertified','agentUpserted','agentRosterUpdated','agentRemoved',\
@@ -410,7 +428,9 @@ impl EventStore {
     /// [`crate::envelope_verifier::WorkspaceRoster`] without the rest of the log.
     pub fn trust_envelopes(&self, workspace_id: Uuid) -> Result<Vec<SessionEventEnvelope>> {
         self.query_envelopes(
-            "SELECT envelope_json FROM events WHERE workspace_id = ?1 \
+            "SELECT envelope_json FROM (SELECT row_id, workspace_id, kind, envelope_json FROM events \
+             UNION ALL SELECT row_id + 9000000000000, workspace_id, kind, envelope_json FROM equivocations) \
+             WHERE workspace_id = ?1 \
              AND kind IN ('accountKeyRegistered','accountKeyRotated','deviceCertificateAdded','deviceRevoked',\
              'memberAdded','memberRemoved','sessionSnapshot','memberRoleChanged','dearthModeChanged','joinApproved',\
              'agentKeyCertified','agentUpserted','agentRosterUpdated','agentRemoved',\
@@ -519,6 +539,34 @@ impl EventStore {
     }
 
     /// Whether an envelope with this `event_id` is already stored (dedup).
+    /// Keep `env` as evidence when the stored envelope under its id, on the
+    /// same log, is a different event (review P-A2c). A copy that only
+    /// travelled or was re-sealed is not one.
+    fn note_equivocation(&mut self, env: &SessionEventEnvelope, sealed_epoch: Option<u32>) -> Result<()> {
+        let stored: Option<String> = self
+            .conn
+            .query_row("SELECT envelope_json FROM events WHERE event_id = ?1", [env.event_id.to_string()], |r| r.get(0))
+            .optional()?;
+        let Some(stored) = stored.and_then(|j| serde_json::from_str::<SessionEventEnvelope>(&j).ok()) else { return Ok(()) };
+        if !hive_core::events::equivocates(&stored, env) {
+            return Ok(());
+        }
+        self.conn.execute(
+            "INSERT OR IGNORE INTO equivocations (event_id, session_id, workspace_id, kind, envelope_json, sealed_epoch) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                env.event_id.to_string(),
+                env.session_id.to_string(),
+                env.workspace_id.to_string(),
+                env.payload.kind_str(),
+                serde_json::to_string(env)?,
+                sealed_epoch.map(i64::from),
+            ],
+        )?;
+        tracing::warn!(event_id = %env.event_id, "two different envelopes under one event id: both are denied");
+        Ok(())
+    }
+
     pub fn has_event(&self, event_id: Uuid) -> Result<bool> {
         let n: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM events WHERE event_id = ?1",
@@ -543,6 +591,7 @@ impl EventStore {
     /// holder only repeats its `event_id`.
     pub fn ingest_sealed(&mut self, env: &SessionEventEnvelope, sealed_epoch: Option<u32>) -> Result<bool> {
         if self.has_event(env.event_id)? {
+            self.note_equivocation(env, sealed_epoch)?;
             return Ok(false);
         }
         let tx = self.conn.transaction()?;
@@ -991,6 +1040,34 @@ impl EventStore {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    /// The newest event `signer` put on `session_id` here (by local row
+    /// order): what a new event of that signer names as `ActorStamp::prev`.
+    pub fn last_signed_by(&self, session_id: Uuid, signer: Uuid) -> Result<Option<Uuid>> {
+        let id: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT event_id FROM events WHERE session_id = ?1 AND json_extract(envelope_json, '$.signerDeviceId') = ?2 \
+                 ORDER BY row_id DESC LIMIT 1",
+                rusqlite::params![session_id.to_string(), signer.to_string()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(id.and_then(|s| Uuid::parse_str(&s).ok()))
+    }
+
+    /// The session ids of one workspace.
+    pub fn sessions_of_workspace(&self, workspace_id: Uuid) -> Result<Vec<Uuid>> {
+        let mut stmt = self.conn.prepare("SELECT DISTINCT session_id FROM events WHERE workspace_id = ?1")?;
+        let rows = stmt.query_map([workspace_id.to_string()], |row| row.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for s in rows {
+            if let Ok(id) = Uuid::parse_str(&s?) {
+                out.push(id);
+            }
+        }
+        Ok(out)
+    }
+
     /// Distinct session ids known to the store, in first-seen order.
     pub fn list_session_ids(&self) -> Result<Vec<Uuid>> {
         let mut stmt = self.conn.prepare(
@@ -1045,7 +1122,7 @@ impl EventStore {
         // base deterministically, so the result is independent of this
         // device's ingestion order.
         let sig: RowsSig = self.conn.query_row(
-            "SELECT COUNT(*), COALESCE(MAX(row_id), 0) FROM events WHERE session_id = ?1",
+            "SELECT COUNT(*) + (SELECT COUNT(*) FROM equivocations WHERE session_id = ?1), COALESCE(MAX(row_id), 0) FROM events WHERE session_id = ?1",
             [session_id.to_string()],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
@@ -1062,7 +1139,8 @@ impl EventStore {
             }
         }
         let envelopes = self.query_envelopes_sealed(
-            "SELECT envelope_json, sealed_epoch FROM events WHERE session_id = ?1 ORDER BY row_id ASC",
+            "SELECT envelope_json, sealed_epoch FROM events WHERE session_id = ?1 \
+             UNION ALL SELECT envelope_json, sealed_epoch FROM equivocations WHERE session_id = ?1",
             [session_id.to_string()],
         )?;
         let session = project_authorized(&envelopes, trusted_founder, trusted_workspace, ws);
@@ -1084,7 +1162,7 @@ impl EventStore {
     ) -> Result<(Option<ChatSession>, Arc<ConfigTimeline>)> {
         let config_id = hive_core::workspace_config_session_id(workspace_id);
         let sig: RowsSig = self.conn.query_row(
-            "SELECT COUNT(*), COALESCE(MAX(row_id), 0) FROM events WHERE session_id = ?1",
+            "SELECT COUNT(*) + (SELECT COUNT(*) FROM equivocations WHERE session_id = ?1), COALESCE(MAX(row_id), 0) FROM events WHERE session_id = ?1",
             [config_id.to_string()],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
@@ -1095,7 +1173,8 @@ impl EventStore {
             }
         }
         let envelopes = self.query_envelopes_sealed(
-            "SELECT envelope_json, sealed_epoch FROM events WHERE session_id = ?1 ORDER BY row_id ASC",
+            "SELECT envelope_json, sealed_epoch FROM events WHERE session_id = ?1 \
+             UNION ALL SELECT envelope_json, sealed_epoch FROM equivocations WHERE session_id = ?1",
             [config_id.to_string()],
         )?;
         let (session, timeline) = project_config(&envelopes, trusted_founder, trusted_workspace);
@@ -1494,6 +1573,39 @@ mod tests {
     }
 
     #[test]
+    /// Review P-A2c (owner decision): two envelopes under one event id with
+    /// different content are both denied on every device, whichever arrived
+    /// first; the store keeps the second as evidence instead of dropping it.
+    fn an_equivocated_event_id_is_denied_whichever_copy_arrives_first() {
+        let base = ChatSession::new("Demo", Uuid::nil(), "anthropic");
+        let (sid, wid) = (base.id, base.workspace_id);
+        let seed = SessionEventEnvelope::new(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(base) });
+        let first = SessionEventEnvelope::new(sid, wid, 2, SessionEvent::SessionTitleChanged { title: "First".into() });
+        let mut a_side = SessionEventEnvelope::new(sid, wid, 3, SessionEvent::SessionTitleChanged { title: "Told to A".into() });
+        a_side.lamport = 3;
+        let mut b_side = a_side.clone();
+        b_side.payload = SessionEvent::SessionTitleChanged { title: "Told to B".into() };
+        b_side.clear_raw();
+        let load = |order: &[&SessionEventEnvelope]| {
+            let mut st = EventStore::open_in_memory().unwrap();
+            for e in order {
+                st.ingest(e).unwrap();
+            }
+            let s = st.load_session(sid).unwrap().unwrap();
+            // A second load hits the cache: it must agree.
+            assert_eq!(st.load_session(sid).unwrap().unwrap(), s);
+            s
+        };
+        let x = load(&[&seed, &first, &a_side, &b_side]);
+        let y = load(&[&seed, &first, &b_side, &a_side]);
+        assert_eq!(x, y, "stores diverged under different arrival order");
+        assert_eq!(x.title, "First", "neither side of the equivocation folds");
+        // An identical copy is not an equivocation.
+        let z = load(&[&seed, &first, &a_side, &a_side]);
+        assert_eq!(z.title, "Told to A");
+    }
+
+    #[test]
     fn load_session_converges_regardless_of_ingest_order() {
         use hive_core::identity::{ActorIdentity, ActorKind, WorkspaceMember, WorkspaceRole};
         use hive_core::time_util::Timestamp;
@@ -1513,7 +1625,7 @@ mod tests {
             SessionEventEnvelope::new(sid, wid, 2, SessionEvent::SessionTitleChanged { title: "First".into() }),
             SessionEventEnvelope::new(sid, wid, 3, SessionEvent::MemberAdded { member, invite: None }),
             SessionEventEnvelope::new(sid, wid, 4, SessionEvent::SessionTitleChanged { title: "Second".into() }),
-            SessionEventEnvelope::new(sid, wid, 5, SessionEvent::MemberRemoved { member_id: "m1".into() }),
+            SessionEventEnvelope::new(sid, wid, 5, SessionEvent::MemberRemoved { member_id: "m1".into(), watermark: Vec::new() }),
         ];
 
         // Device A ingests forward; device B ingests in reverse — so B stores the

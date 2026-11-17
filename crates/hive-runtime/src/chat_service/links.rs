@@ -129,8 +129,7 @@ impl ChatService {
             recorded_at: Timestamp::now(),
             cfg_frontier: None,
             presence: None,
-            runtime_effect: false,
-        });
+            runtime_effect: false, prev: None, sig_alg: Default::default() });
         hive_core::crypto::sign_envelope(&mut env, self.device_id, &self.keypair);
         env
     }
