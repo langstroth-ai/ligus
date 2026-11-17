@@ -115,6 +115,9 @@ pub fn requires_projection_authz(event: &SessionEvent) -> bool {
             | SessionEvent::WorkspaceRulesSet { .. }
             | SessionEvent::AgentKeyCertified { .. }
             | SessionEvent::WorkspaceKeyRotated { .. }
+            | SessionEvent::WorkspaceRepoAdded { .. }
+            | SessionEvent::WorkspaceRepoUpdated { .. }
+            | SessionEvent::WorkspaceRepoRemoved { .. }
     ) || matches!(event, SessionEvent::FlowRecorded { record } if record.is_config())
 }
 
@@ -285,7 +288,14 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         // the Owner changes the version (`authz::authorize`).
         SessionEvent::WorkspaceRulesSet { .. } => WorkspaceRole::Admin,
         // Applying is a member's act (and a human's, see `authz::authorize`).
-        SessionEvent::ProposalApplied { .. } => WorkspaceRole::Contributor,
+        SessionEvent::ProposalApplied { .. } | SessionEvent::ProposalApplyRequested { .. } => WorkspaceRole::Contributor,
+        // Workspace repos steer what hosts clone and what chats default to:
+        // an Admin's (add and remove also need presence).
+        SessionEvent::WorkspaceRepoAdded { .. }
+        | SessionEvent::WorkspaceRepoUpdated { .. }
+        | SessionEvent::WorkspaceRepoRemoved { .. } => WorkspaceRole::Admin,
+        // Using a listed repo in a chat is a member's.
+        SessionEvent::ChatRepoSet { .. } | SessionEvent::ChatBasePinned { .. } => WorkspaceRole::Contributor,
         // A host certifying an agent key: a member's act, plus the
         // certificate's own checks (`authz::authorize`).
         SessionEvent::AgentKeyCertified { .. } => WorkspaceRole::Contributor,

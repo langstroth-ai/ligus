@@ -182,7 +182,14 @@ impl AuthzState {
 /// Chat events judged against the workspace roster at their position.
 pub fn needs_workspace_authz(event: &SessionEvent) -> bool {
     crate::authorization::requires_hoisted_authz(event)
-        || matches!(event, SessionEvent::ProposalVoteCast { .. } | SessionEvent::ProposalApplied { .. })
+        || matches!(
+            event,
+            SessionEvent::ProposalVoteCast { .. }
+                | SessionEvent::ProposalApplied { .. }
+                | SessionEvent::ProposalApplyRequested { .. }
+                | SessionEvent::ChatRepoSet { .. }
+                | SessionEvent::ChatBasePinned { .. }
+        )
 }
 
 /// The proposal and set an event concerns (for holds and side-effect blocks).
@@ -191,6 +198,7 @@ pub fn subject_of(event: &SessionEvent) -> (Option<Uuid>, Option<Uuid>) {
         SessionEvent::ProposalVoteCast { proposal_id, .. }
         | SessionEvent::ProposalApplied { proposal_id, .. }
         | SessionEvent::ProposalReverted { proposal_id, .. } => (Some(*proposal_id), None),
+        SessionEvent::ProposalApplyRequested { request } => (Some(request.proposal_id), None),
         SessionEvent::ProposalSetOpened { set } => (None, Some(set.id)),
         SessionEvent::ProposalSetAlternativeAdded { set_id, proposal_id, .. }
         | SessionEvent::ProposalSetQuorumReached { set_id, proposal_id, .. }
@@ -462,6 +470,10 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 return Decision::deny(why);
             }
         }
+        // Workspace repos (repos-and-checkouts 3.1, review F5/F17).
+        if let Err(why) = repo_event_ok(&env.payload, on_config, ctx.running) {
+            return Decision::deny(why);
+        }
         // S2: binding an agent to a host or runtime is an Admin action.
         let ws_agents = if ctx.checked && !on_config { ctx.workspace } else { None };
         if let Some(floor) = agent_change_floor(&env.payload, author, fold, ws_agents) {
@@ -519,11 +531,48 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                     }
                 }
             }
-            SessionEvent::ProposalApplied { proposal_id, diff_digest, .. } => {
-                let human = env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == ActorKind::Human)
-                    && at.members.get(author).is_some_and(|m| m.kind == ActorKind::Human);
-                if !human {
-                    return Decision::deny("only a human member applies a proposal");
+            SessionEvent::ProposalApplied {
+                proposal_id, diff_digest, repo_id, applied_on, base_commit, applied_tree_hash, request_id, ..
+            } => {
+                if env.actor_stamp.as_ref().is_some_and(|s| s.runtime_effect) {
+                    return Decision::deny("a runtime never applies a proposal");
+                }
+                let signer = env.signer_device_id;
+                if applied_on.is_some() && *applied_on != signer {
+                    return Decision::deny("an apply names the device that applied it, which signs it");
+                }
+                if [base_commit, applied_tree_hash].into_iter().flatten().any(|c| !crate::workspace_repo::is_commit_id(c)) {
+                    return Decision::deny("malformed commit or tree id");
+                }
+                match request_id {
+                    // Fulfilling a person's request: only the host they named,
+                    // for the digest and base they saw.
+                    Some(rid) => {
+                        let Some(req) = fold.apply_requests.get(rid) else {
+                            return Decision::deny("no such apply request");
+                        };
+                        if req.proposal_id != *proposal_id || req.diff_digest != *diff_digest {
+                            return Decision::deny("the apply doesn't match its request");
+                        }
+                        if signer != Some(req.host_device_id) || applied_on.is_none() {
+                            return Decision::deny("only the host a request names fulfils it");
+                        }
+                        if req.expected_base_commit.is_some() && *base_commit != req.expected_base_commit {
+                            return Decision::deny("applied onto another base than the person saw");
+                        }
+                    }
+                    // Applying yourself: a human member, through their own
+                    // device (not a host acting for them).
+                    None => {
+                        let human = env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == ActorKind::Human)
+                            && at.members.get(author).is_some_and(|m| m.kind == ActorKind::Human);
+                        if !human {
+                            return Decision::deny("only a human member applies a proposal");
+                        }
+                        if !own_device(env, at) {
+                            return Decision::deny("a person applies through their own device");
+                        }
+                    }
                 }
                 let Some(p) = fold.proposals.iter().find(|p| p.id == *proposal_id) else {
                     return Decision::deny("unknown proposal");
@@ -531,11 +580,64 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 if votes::diff_digest(p) != *diff_digest {
                     return Decision::deny("applied content differs from the approved content");
                 }
+                if p.repo_id.is_some() && *repo_id != p.repo_id {
+                    return Decision::deny("applied to another repository than the proposal's");
+                }
                 if !p.ready_to_apply() {
                     return Decision::deny("the proposal is not approved");
                 }
                 if let Some(why) = crate::guard::human_gate_reason(fold, p) {
                     return Decision::deny(why);
+                }
+            }
+            SessionEvent::ProposalApplyRequested { request } => {
+                if env.actor_stamp.as_ref().is_some_and(|s| s.runtime_effect) {
+                    return Decision::deny("a runtime never asks for an apply");
+                }
+                let human = env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == ActorKind::Human)
+                    && at.members.get(author).is_some_and(|m| m.kind == ActorKind::Human);
+                if !human || !own_device(env, at) {
+                    return Decision::deny("a person asks for an apply through their own device");
+                }
+                if fold.apply_requests.contains_key(&request.id) {
+                    return Decision::deny("that apply request already exists");
+                }
+                let Some(p) = fold.proposals.iter().find(|p| p.id == request.proposal_id) else {
+                    return Decision::deny("unknown proposal");
+                };
+                if votes::diff_digest(p) != request.diff_digest {
+                    return Decision::deny("the request names other content than the approved content");
+                }
+                if !p.ready_to_apply() {
+                    return Decision::deny("the proposal is not approved");
+                }
+                if request.repo_id != p.repo_id {
+                    return Decision::deny("the request names another repository than the proposal's");
+                }
+                if request.expected_base_commit.as_deref().is_some_and(|c| !crate::workspace_repo::is_commit_id(c)) {
+                    return Decision::deny("malformed base commit");
+                }
+                if !at.device_trusted(request.host_device_id) {
+                    return Decision::deny("the host isn't a trusted device here");
+                }
+                if let Some(why) = crate::guard::human_gate_reason(fold, p) {
+                    return Decision::deny(why);
+                }
+            }
+            SessionEvent::ChatRepoSet { repo_id, base_branch } => {
+                if repo_id.is_some_and(|r| !at.repo_live(r)) {
+                    return Decision::deny("not a live workspace repository at this position");
+                }
+                if base_branch.len() > 255 || base_branch.chars().any(char::is_control) {
+                    return Decision::deny("bad base branch");
+                }
+            }
+            SessionEvent::ChatBasePinned { repo_id, commit } => {
+                if !crate::workspace_repo::is_commit_id(commit) {
+                    return Decision::deny("malformed commit id");
+                }
+                if fold.repo.as_ref().and_then(|r| r.repo_id) != Some(*repo_id) || !at.repo_live(*repo_id) {
+                    return Decision::deny("pins a base for a repository this chat doesn't use");
                 }
             }
             _ => {}
@@ -694,6 +796,63 @@ fn agent_cert_ok(
 /// creator keeps).
 fn caps_by_workspace_role(e: &SessionEvent) -> bool {
     !matches!(e, SessionEvent::SessionArchivedChanged { .. })
+}
+
+/// Whether `env` is signed by a device of its stamped author's own account:
+/// certified for that account here, not revoked, and not a host acting for
+/// it (a delegated device).
+fn own_device(env: &SessionEventEnvelope, at: &RosterState) -> bool {
+    let Some(account) = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) else { return false };
+    let author = author_of(env);
+    if at.members.get(author).and_then(|m| m.account_id).is_some_and(|a| a != account) {
+        return false;
+    }
+    env.signer_device_id
+        .and_then(|d| at.devices.get(&d))
+        .is_some_and(|d| !d.revoked && d.accounts.contains(&account) && !d.delegated_for(account))
+}
+
+/// The config-log checks of the workspace repo events (repos-and-checkouts
+/// 3.1): on the config log; an add is well formed (normal-form canonical,
+/// derived id), not already live, within the bound; an update or a removal
+/// names a live repo.
+fn repo_event_ok(e: &SessionEvent, on_config: bool, roster: &RosterState) -> Result<(), String> {
+    use crate::workspace_repo as wr;
+    let live = |id: &Uuid| roster.repo_live(*id);
+    match e {
+        SessionEvent::WorkspaceRepoAdded { .. } | SessionEvent::WorkspaceRepoUpdated { .. } | SessionEvent::WorkspaceRepoRemoved { .. }
+            if !on_config =>
+        {
+            Err("workspace repositories live on the workspace config log".into())
+        }
+        SessionEvent::WorkspaceRepoAdded { repo } => {
+            wr::repo_well_formed(repo)?;
+            if live(&repo.id) {
+                return Err("that repository is already in the workspace".into());
+            }
+            if roster.repos.values().filter(|r| !r.removed).count() >= wr::MAX_LIVE_REPOS {
+                return Err("too many repositories".into());
+            }
+            Ok(())
+        }
+        SessionEvent::WorkspaceRepoUpdated { repo_id, display_name, default_branch } => {
+            if !live(repo_id) {
+                return Err("no such repository".into());
+            }
+            if !wr::display_name_ok(display_name) || default_branch.len() > 255 || default_branch.chars().any(char::is_control) {
+                return Err("bad repository name or branch".into());
+            }
+            Ok(())
+        }
+        SessionEvent::WorkspaceRepoRemoved { repo_id } => {
+            if live(repo_id) {
+                Ok(())
+            } else {
+                Err("no such repository".into())
+            }
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Account keys and device certificates: self-validating (the roster checks

@@ -339,7 +339,53 @@ pub enum SessionEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         commit: Option<String>,
         at: Timestamp,
+        /// The proposal's repo (must equal it when the proposal has one).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        repo_id: Option<Uuid>,
+        /// The host device that applied it (must be the signer).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        applied_on: Option<Uuid>,
+        /// The commit the change was applied onto (40/64 hex).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        base_commit: Option<String>,
+        /// The git tree hash after applying (40/64 hex): lets every device
+        /// check a replay produced the same tree.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        applied_tree_hash: Option<String>,
+        /// The `ProposalApplyRequested` this fulfils (a host applying on a
+        /// person's request), if any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_id: Option<Uuid>,
     },
+    /// A person asks a host to apply an approved proposal (chat log; a human
+    /// Contributor+ through their own device; never an agent; presence when
+    /// the proposal is human-gated). See
+    /// [`crate::workspace_repo::ApplyRequest`].
+    ProposalApplyRequested { request: crate::workspace_repo::ApplyRequest },
+    /// Add a repository to the workspace (config log; Admin, presence).
+    WorkspaceRepoAdded { repo: crate::workspace_repo::WorkspaceRepo },
+    /// Edit a live repo's display name and default branch (config log;
+    /// Admin, no presence: cosmetic). Its canonical name and id never change.
+    WorkspaceRepoUpdated {
+        repo_id: Uuid,
+        display_name: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        default_branch: String,
+    },
+    /// Remove a repository (config log; Admin, presence). A tombstone until a
+    /// later add of the same id.
+    WorkspaceRepoRemoved { repo_id: Uuid },
+    /// Pick this chat's repository (chat log; Contributor; never an agent).
+    /// `None` = no repo. Must name a live repo at the author's position.
+    ChatRepoSet {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        repo_id: Option<Uuid>,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        base_branch: String,
+    },
+    /// Pin the commit this chat's branch was cut from, for its repo (chat
+    /// log; Contributor; never an agent).
+    ChatBasePinned { repo_id: Uuid, commit: String },
     /// A host device certifies an agent's own signing key (config log;
     /// Contributor, plus the certificate's own checks in `authz`). Agent-signed
     /// events are judged with the capped Agent tier (`authz::agent`).
@@ -452,6 +498,12 @@ impl SessionEvent {
             SessionEvent::PasskeyRemoved { .. } => "passkeyRemoved",
             SessionEvent::IdentityLinkPublished { .. } => "identityLinkPublished",
             SessionEvent::IdentityLinkRemoved { .. } => "identityLinkRemoved",
+            SessionEvent::ProposalApplyRequested { .. } => "proposalApplyRequested",
+            SessionEvent::WorkspaceRepoAdded { .. } => "workspaceRepoAdded",
+            SessionEvent::WorkspaceRepoUpdated { .. } => "workspaceRepoUpdated",
+            SessionEvent::WorkspaceRepoRemoved { .. } => "workspaceRepoRemoved",
+            SessionEvent::ChatRepoSet { .. } => "chatRepoSet",
+            SessionEvent::ChatBasePinned { .. } => "chatBasePinned",
             SessionEvent::Unknown => "unknown",
         }
     }
@@ -488,7 +540,10 @@ impl SessionEvent {
             | SessionEvent::PasskeyRegistered { .. }
             | SessionEvent::PasskeyRemoved { .. }
             | SessionEvent::IdentityLinkPublished { .. }
-            | SessionEvent::IdentityLinkRemoved { .. } => EventScope::Workspace,
+            | SessionEvent::IdentityLinkRemoved { .. }
+            | SessionEvent::WorkspaceRepoAdded { .. }
+            | SessionEvent::WorkspaceRepoUpdated { .. }
+            | SessionEvent::WorkspaceRepoRemoved { .. } => EventScope::Workspace,
             SessionEvent::FlowRecorded { record } if record.is_config() => EventScope::Workspace,
             SessionEvent::WorkflowRunUpserted { .. } => EventScope::Run,
             _ => EventScope::Session,
@@ -722,6 +777,23 @@ impl ChatSession {
                     }
                 }
             }
+            SessionEvent::ProposalApplyRequested { request } => {
+                self.apply_requests.entry(request.id).or_insert_with(|| request.clone());
+            }
+            SessionEvent::ChatRepoSet { repo_id, base_branch } => {
+                let same = self.repo.as_ref().is_some_and(|r| r.repo_id == *repo_id);
+                let base_commit = if same { self.repo.as_ref().and_then(|r| r.base_commit.clone()) } else { None };
+                self.repo = Some(crate::workspace_repo::ChatRepo { repo_id: *repo_id, base_branch: base_branch.clone(), base_commit });
+            }
+            SessionEvent::ChatBasePinned { repo_id, commit } => {
+                if let Some(r) = self.repo.as_mut().filter(|r| r.repo_id == Some(*repo_id)) {
+                    r.base_commit = Some(commit.clone());
+                }
+            }
+            // Read by the roster tracker (authz::timeline), not the session.
+            SessionEvent::WorkspaceRepoAdded { .. }
+            | SessionEvent::WorkspaceRepoUpdated { .. }
+            | SessionEvent::WorkspaceRepoRemoved { .. } => {}
             // Read by the roster tracker (authz::timeline), not the session.
             SessionEvent::WorkspaceRulesSet { .. }
             | SessionEvent::AgentKeyCertified { .. }

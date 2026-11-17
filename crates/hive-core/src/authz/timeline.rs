@@ -105,11 +105,18 @@ pub struct RosterState {
     /// The workspace's WebAuthn relying party (`WorkspaceRulesSet.presence`;
     /// `ligus.ai` until one is set). Every presence check uses it.
     pub presence_policy: crate::presence::PresencePolicy,
+    /// The workspace's repositories by id (a removed one is a tombstone).
+    pub repos: BTreeMap<Uuid, crate::workspace_repo::RepoEntry>,
 }
 
 impl RosterState {
     pub fn role_of(&self, actor_id: &str) -> Option<WorkspaceRole> {
         self.members.get(actor_id).map(|m| m.role)
+    }
+
+    /// Whether `repo_id` names a live (not removed) workspace repo here.
+    pub fn repo_live(&self, repo_id: Uuid) -> bool {
+        self.repos.get(&repo_id).is_some_and(|r| !r.removed)
     }
 
     /// Whether `account` certified `device` (and the device is not revoked).
@@ -310,6 +317,20 @@ impl RosterTracker {
                     if m.is_empty() {
                         self.state.passkeys.remove(account_id);
                     }
+                }
+            }
+            SessionEvent::WorkspaceRepoAdded { repo } if allowed => {
+                self.state.repos.insert(repo.id, crate::workspace_repo::RepoEntry { repo: repo.clone(), removed: false });
+            }
+            SessionEvent::WorkspaceRepoUpdated { repo_id, display_name, default_branch } if allowed => {
+                if let Some(r) = self.state.repos.get_mut(repo_id) {
+                    r.repo.display_name = display_name.clone();
+                    r.repo.default_branch = default_branch.clone();
+                }
+            }
+            SessionEvent::WorkspaceRepoRemoved { repo_id } if allowed => {
+                if let Some(r) = self.state.repos.get_mut(repo_id) {
+                    r.removed = true;
                 }
             }
             SessionEvent::IdentityLinkPublished { link } if allowed => {

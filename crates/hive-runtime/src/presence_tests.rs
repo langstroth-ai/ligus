@@ -324,6 +324,7 @@ fn requires_presence_exhaustive() {
         SessionEvent::WorkspaceRuntimeRemoved { runtime_id: "r".into() },
         SessionEvent::WorkspaceRulesSet { version: 2, presence: None },
         SessionEvent::MemberAdded { member: member("someone-else", WorkspaceRole::Viewer), invite: None },
+        SessionEvent::WorkspaceRepoRemoved { repo_id: Uuid::nil() },
     ];
     for e in &yes {
         assert!(requires_presence(e, "me", &roster, &fold), "{} needs presence", e.kind_str());
@@ -333,6 +334,9 @@ fn requires_presence_exhaustive() {
         SessionEvent::MessageRemoved { message_id: Uuid::nil() },
         SessionEvent::TurnClaimed { trigger_id: Uuid::nil(), device_id: Uuid::nil() },
         SessionEvent::DeviceKeyAgreementPublished { device_id: Uuid::nil(), ka_public: vec![] },
+        SessionEvent::WorkspaceRepoUpdated { repo_id: Uuid::nil(), display_name: "x".into(), default_branch: String::new() },
+        SessionEvent::ChatRepoSet { repo_id: None, base_branch: String::new() },
+        SessionEvent::ChatBasePinned { repo_id: Uuid::nil(), commit: String::new() },
         SessionEvent::ProposalUpserted { proposal: ActionProposal::new("p", hive_core::ProposalKind::Decision, "a") },
         SessionEvent::Unknown,
     ];

@@ -2026,12 +2026,83 @@ impl ChatService {
             return Err(ChatError::Unauthorized("a vote or decision on this proposal is still waiting to sync".into()));
         }
         let diff_digest = hive_core::authz::votes::diff_digest(proposal);
+        let repo_id = proposal.repo_id;
         self.append_signed(
             session_id,
             workspace_id,
-            SessionEvent::ProposalApplied { proposal_id, diff_digest, commit, at: Timestamp::now() },
+            SessionEvent::ProposalApplied {
+                proposal_id,
+                diff_digest,
+                commit,
+                at: Timestamp::now(),
+                repo_id,
+                applied_on: Some(self.device_id),
+                base_commit: None,
+                applied_tree_hash: None,
+                request_id: None,
+            },
         )?;
         Ok(self.load(session_id)?.and_then(|s| s.proposals.into_iter().find(|p| p.id == proposal_id)))
+    }
+
+    /// Ask `host_device_id` to apply an approved proposal (the phone's
+    /// "Apply on <host>", separate from approving): records the digest and,
+    /// when known, the base the person saw. Returns the request id.
+    pub fn request_apply(
+        &mut self,
+        session_id: Uuid,
+        workspace_id: Uuid,
+        proposal_id: Uuid,
+        host_device_id: Uuid,
+        expected_base_commit: Option<String>,
+    ) -> Result<Uuid> {
+        let session = self.load(session_id)?.ok_or_else(|| ChatError::Unauthorized("unknown chat".into()))?;
+        let p = session.proposals.iter().find(|p| p.id == proposal_id).ok_or_else(|| ChatError::Unauthorized("unknown proposal".into()))?;
+        let request = hive_core::workspace_repo::ApplyRequest {
+            id: Uuid::new_v4(),
+            proposal_id,
+            diff_digest: hive_core::authz::votes::diff_digest(p),
+            host_device_id,
+            expected_base_commit,
+            repo_id: p.repo_id,
+        };
+        let id = request.id;
+        self.append_signed(session_id, workspace_id, SessionEvent::ProposalApplyRequested { request })?;
+        Ok(id)
+    }
+
+    /// The host's side of [`ChatService::request_apply`]: record that this
+    /// device applied the request's content onto `base_commit`, giving
+    /// `applied_tree_hash` (both 40/64 hex).
+    pub fn fulfil_apply_request(
+        &mut self,
+        session_id: Uuid,
+        workspace_id: Uuid,
+        request_id: Uuid,
+        commit: Option<String>,
+        base_commit: Option<String>,
+        applied_tree_hash: Option<String>,
+    ) -> Result<SessionEventEnvelope> {
+        let session = self.load(session_id)?.ok_or_else(|| ChatError::Unauthorized("unknown chat".into()))?;
+        let req = session.apply_requests.get(&request_id).cloned().ok_or_else(|| ChatError::Unauthorized("no such apply request".into()))?;
+        if req.host_device_id != self.device_id {
+            return Err(ChatError::Unauthorized("that apply request is for another host".into()));
+        }
+        self.append_signed(
+            session_id,
+            workspace_id,
+            SessionEvent::ProposalApplied {
+                proposal_id: req.proposal_id,
+                diff_digest: req.diff_digest,
+                commit,
+                at: Timestamp::now(),
+                repo_id: req.repo_id,
+                applied_on: Some(self.device_id),
+                base_commit,
+                applied_tree_hash,
+                request_id: Some(request_id),
+            },
+        )
     }
 
     /// Persist a workflow run snapshot (create or update by id).

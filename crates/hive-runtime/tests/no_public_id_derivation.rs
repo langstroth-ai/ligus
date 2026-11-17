@@ -25,6 +25,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "turn-claim key: input is a random message id and an agent id",
     ),
     (
+        "crates/hive-core/src/workspace_repo.rs",
+        "Uuid::new_v5(&LIGUS_REPO_NS, canonical.as_bytes())",
+        "workspace repo id: names a repository (deliberately public and shared), not a room, chat or invite",
+    ),
+    (
         "crates/hive-core/src/crypto.rs",
         "Uuid::new_v5(&agent_id, signing_public_key)",
         "agent key id: names an agent signing key, not a room, chat or invite",

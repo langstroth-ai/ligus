@@ -21,7 +21,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use hive_core::{open_symmetric, seal_symmetric_kid, SealedEnvelope, Timestamp, WorkspaceHost};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::keyring::KeyringEngine;
@@ -39,19 +38,16 @@ pub fn host_presence_slot(host_id: &str) -> String {
     format!("host:{host_id}")
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Beat {
-    host_id: String,
-    /// Unix seconds.
-    at: i64,
-}
+/// A beat's plaintext: [`hive_core::workspace_repo::HostBeat`] (`hostId`,
+/// `at`, and, reserved for repo coverage, `seq` and `coverage`, both left
+/// out when empty, so a coverage-less beat is byte-identical to before).
+type Beat = hive_core::workspace_repo::HostBeat;
 
 /// Seal a beat for `host_id` at `at` (unix seconds) under `ring`'s seal key
 /// (none when this device may not seal).
 pub fn seal_host_beat(ring: &KeyringEngine, host_id: &str, at: i64) -> Option<Value> {
     let k = ring.seal_key()?;
-    let plain = serde_json::to_vec(&Beat { host_id: host_id.to_string(), at }).ok()?;
+    let plain = serde_json::to_vec(&Beat { host_id: host_id.to_string(), at, seq: 0, coverage: Vec::new() }).ok()?;
     let sealed = seal_symmetric_kid(&k.key, k.version, &k.kid, &plain).ok()?;
     Some(serde_json::json!({ "hostBeat": sealed }))
 }

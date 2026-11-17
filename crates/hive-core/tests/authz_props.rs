@@ -314,7 +314,7 @@ fn play(w: &mut World, ops: &[Op], declared: &dyn Fn(u8) -> WorkspaceRole, statu
                 let pid = Uuid::from_u128(PROPS[prop as usize]);
                 let Some(c) = content.get(&prop) else { continue };
                 let d = diff_digest(&proposal(pid, *c, ProposalStatus::Open));
-                w.chat_push(PEOPLE[by as usize], SessionEvent::ProposalApplied { proposal_id: pid, diff_digest: d, commit: None, at: Timestamp::epoch() });
+                w.chat_push(PEOPLE[by as usize], SessionEvent::ProposalApplied { proposal_id: pid, diff_digest: d, commit: None, at: Timestamp::epoch(), repo_id: None, applied_on: None, base_commit: None, applied_tree_hash: None, request_id: None });
             }
         }
     }
@@ -556,7 +556,7 @@ fn applied_only_from_a_human_member_for_the_approved_content() {
     let p = proposal(pid, 1, ProposalStatus::Open);
     let d = diff_digest(&p);
     w.chat_push("mara", SessionEvent::ProposalUpserted { proposal: p });
-    let applied = |d: &str| SessionEvent::ProposalApplied { proposal_id: pid, diff_digest: d.into(), commit: None, at: Timestamp::epoch() };
+    let applied = |d: &str| SessionEvent::ProposalApplied { proposal_id: pid, diff_digest: d.into(), commit: None, at: Timestamp::epoch(), repo_id: None, applied_on: None, base_commit: None, applied_tree_hash: None, request_id: None };
     // Not approved yet: refused.
     let early = w.chat_push("ada", applied(&d));
     w.chat_push("owner", vote("owner", pid, WorkspaceRole::Owner, true, Some(d.clone())));
@@ -856,7 +856,7 @@ fn upgrade_refold_recovers_unknown_events() {
     let d = diff_digest(&p);
     w.chat_push("mara", SessionEvent::ProposalUpserted { proposal: p });
     w.chat_push("owner", vote("owner", pid, WorkspaceRole::Owner, true, Some(d.clone())));
-    let applied = w.chat_push("ada", SessionEvent::ProposalApplied { proposal_id: pid, diff_digest: d, commit: Some("abc".into()), at: Timestamp::epoch() });
+    let applied = w.chat_push("ada", SessionEvent::ProposalApplied { proposal_id: pid, diff_digest: d, commit: Some("abc".into()), at: Timestamp::epoch(), repo_id: None, applied_on: None, base_commit: None, applied_tree_hash: None, request_id: None });
     let wire = serde_json::to_string(w.chat.iter().find(|e| e.event_id == applied).unwrap()).unwrap();
 
     // An older build: the kind is unknown, and the event folds as a no-op.
@@ -1113,7 +1113,7 @@ fn agent_tier_never_applies() {
     let d = diff_digest(&p);
     w.chat_push("mara", SessionEvent::ProposalUpserted { proposal: p });
     w.chat_push("owner", vote("owner", pid, WorkspaceRole::Owner, true, Some(d.clone())));
-    let applied = w.agent_push(&a, SessionEvent::ProposalApplied { proposal_id: pid, diff_digest: d, commit: None, at: Timestamp::epoch() });
+    let applied = w.agent_push(&a, SessionEvent::ProposalApplied { proposal_id: pid, diff_digest: d, commit: None, at: Timestamp::epoch(), repo_id: None, applied_on: None, base_commit: None, applied_tree_hash: None, request_id: None });
     assert_eq!(w.verdicts()[&applied], Verdict::Denied);
     assert_eq!(w.state().proposals[0].status, ProposalStatus::Approved);
 }

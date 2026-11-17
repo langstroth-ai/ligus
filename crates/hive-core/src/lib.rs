@@ -48,6 +48,7 @@ pub mod time_util;
 pub mod vault;
 pub mod workflow;
 pub mod workspace_host;
+pub mod workspace_repo;
 pub mod workspace_runtime;
 #[doc(hidden)]
 pub mod testkit;
