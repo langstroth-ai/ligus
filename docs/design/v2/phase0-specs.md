@@ -622,13 +622,19 @@ Superseded (2026-11-16): 2.0 starts fresh, so there is nothing to move out of `s
 
 ### B.3 Workspace rules v2
 
-Rules v2 is the switch that turns on presence. An Owner turns it on per workspace with `WorkspaceRulesSet { version: 2 }`, which itself needs the Owner's presence.
+**Phase A (item 1): every workspace is on rules v2 from its seed.** 2.0 starts fresh, so rules v1 (governance without presence, trust-on-first-use passkeys) was deleted rather than kept behind a switch.
+
+- The roster tracker seeds `rules = 2` from the base snapshot (`authz::RULES_GENESIS`). A `WorkspaceRulesSet` below 2 never folds; one above `RULES_SUPPORTED` makes this build read-only (unchanged).
+- `ensure_workspace_config` writes the **genesis rules set** `WorkspaceRulesSet { version: 2, presence: <deployment RP> }` right after the seed and the founder's identity. It is the only rules set that needs no presence: version 2, and no credential exists in the workspace yet. Every other rules set needs presence.
+- Who may write it: an **Admin** may change the relying party; only the **Owner** changes the version (`authz::authorize`).
+- **Creating a workspace requires a passkey and a recovery key.** The desktop's Add workspace flow registers the founder's passkey and then shows a recovery key before it shows the invite. The fold enforces the consequence rather than the ceremony: until the founder holds a credential nobody can be admitted (every `MemberAdded` of someone else, and every invite approval, needs the founder's presence) and nothing can be governed.
+- **CLI-created workspaces** (decision): allowed, because `ligus new` and serve's first touch found the config log lazily, but they stay *unsecured* and the CLI says so: a single-member workspace that can't admit anyone or change governance until the founder registers a passkey and a recovery key from the desktop app (any of the founder's own, non-delegated devices; the seed's grant is per account). A delegated serve box can never register its owner's passkeys. Phase B's phone device key adds the phone as a place to do it.
 
 ### B.4 Passkeys: human presence for admin events (B3)
 
 #### B.4.1 Decision recap
 
-- Credentials are WebAuthn passkeys under the **workspace's** RP ID (Phase A, item 5). The genesis `WorkspaceRulesSet { version: 2, presence: { rpId, origins } }` names it, the fold keeps it in `RosterState.presence_policy`, and every presence check verifies against it (never a device setting). A workspace whose log names none uses `ligus.ai` / `https://ligus.ai`, the owner's deployment. The RP id can't change once a (non-recovery) passkey is registered; origins can change, with presence. The desktop hand-off page is `<first https origin>/presence`, and serve's `presence/prepare` returns `rpId` and `origins` to the phone. Any authenticator works: iCloud Keychain on Mac and iPhone, Windows Hello, Android/Google Password Manager, YubiKey or other FIDO2 keys, and hybrid (QR) passkeys.
+- Credentials are WebAuthn passkeys under the **workspace's** RP ID (Phase A, item 5). The genesis `WorkspaceRulesSet { version: 2, presence: { rpId, origins } }` names it, the fold keeps it in `RosterState.presence_policy`, and every presence check verifies against it (never a device setting). A workspace whose log names none uses `ligus.ai` / `https://ligus.ai`, the owner's deployment. An Admin may change the policy, with presence verified under the policy in force before the change (the **old** RP); a new RP id leaves the workspace's passkeys unverifiable until they are registered again (recovery keys don't depend on the RP, so one of them confirms the new registrations). The desktop writes its deployment's policy (`settings.json` `passkey_policy`, default `ligus.ai`) into the genesis rules set; the fold never reads that setting. The desktop hand-off page is `<first https origin>/presence`, and serve's `presence/prepare` returns `rpId` and `origins` to the phone. Any authenticator works: iCloud Keychain on Mac and iPhone, Windows Hello, Android/Google Password Manager, YubiKey or other FIDO2 keys, and hybrid (QR) passkeys.
 - Supported algorithms: ES256 (COSE -7) and EdDSA (COSE -8).
 - Secure Enclave-only keys are **not** required.
 - Verification is offline on every peer, inside the fold.
@@ -718,8 +724,7 @@ The table is code, a single `fn requires_presence(&SessionEvent, &RosterState, &
 
 **First passkey** (code: `crates/hive-core/src/authz/passkeys.rs` `registration_ok`).
 - Two browser ceremonies. `navigator.credentials.create` (attestation `"none"`, a random challenge that binds only that ceremony) makes the key; the desktop reads its id and COSE key from the `attestationObject` (B.4.2). Then `PasskeyRegistered`, signed by the member's certified device (not a delegated host), carries a `webauthn.get` assertion **by the new credential itself** over the B.4.3 digest of the registration event. A `webauthn.create` can't sign that digest, because the new key is part of it.
-- **Rules v1:** the first registration for an account needs no prior presence (trust on first use, bound to the device signature).
-- **Rules v2:** the first registration needs an Admin's grant (`RosterState::passkey_grants`): being added as a new member under v2, or an Admin's presence-confirmed re-grant (`MemberRoleChanged`) after the account's credentials were removed, good for one registration. An account that kept its recovery key registers a new passkey with the recovery key's presence instead.
+- There is no trust on first use. The first registration for an account needs a grant (`RosterState::passkey_grants`), good for one registration: the **founder's**, from the seed; or an Admin's presence-confirmed act: being added as a new member, or a re-grant (`MemberRoleChanged`) after the account's credentials were removed. An account that kept its recovery key registers a new passkey with the recovery key's presence instead. An outsider who only published an identity can't register a credential.
 - Every later registration needs presence from an existing credential of the same account.
 
 **Desktop: browser hand-off (all OSes, one code path).**
@@ -790,7 +795,7 @@ The counted human is the **account that owns the credential**, which must equal 
 - **Lockout** for a sole Owner without a recovery key.
 - **Platform quirks.** WebAuthn in Tauri webviews is unreliable, which is why the browser hand-off exists. Hybrid flows need Bluetooth.
 - **Apple review** for associated domains; it needs the domain live first.
-- **Policy timing.** Turning rules v2 on is an owner action. Nothing forces it on existing workspaces; new workspaces default to v2 when the founder registers a passkey during creation.
+- **Unsecured workspaces.** A workspace founded where no passkey ceremony runs (the CLI) is on rules v2 but can't admit anyone until its founder adds a passkey from the desktop; the founder's one-use grant stays open until then, so a thief of the founder's device key in that window can register a passkey first. The window closes at the first registration, and the desktop's create flow leaves none.
 
 ---
 ## Track C: host, sandbox and agents

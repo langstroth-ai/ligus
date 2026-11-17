@@ -190,10 +190,9 @@ it.
    with it, judged by the capped Agent tier (never a vote, an apply or an
    admin change) and retired when the agent moves to another host. A host
    that can't certify a key (not yet certified, or the device-local Home)
-   signs for the agent itself; under rules version 2 that output, and every
-   effect of the chat's primary runtime (stamped `runtime_effect`), is judged
-   at the Agent tier too. Under rules v1 it is judged by its host's role.
-   Either way, a host's signature on an agent's output never gives a turn
+   signs for the agent itself; that output, and every effect of the chat's
+   primary runtime (stamped `runtime_effect`), is judged at the Agent tier
+   too. Either way, a host's signature on an agent's output never gives a turn
    that output triggers the host user's tier: the author gate resolves an
    agent's message through its reply chain to the lowest role of the humans
    who started it ([the author gate](../concepts/security.md#author-gate)).
@@ -222,33 +221,39 @@ it.
    rotation and keeps sealing under the passphrase
    key. A device that isn't a recipient of the newest rotation doesn't write
    until the next rotation includes it.
-7. **Presence needs rules v2, and a passkey on every workspace.** Under
-   rules version 2 membership and role changes, device revocation, key
-   rotation, passkey removal, dearth mode, lockdown clears, path zones,
-   workflow definitions, agent host or runtime changes, lowered gates and
-   human-gated votes need a passkey assertion over the event inside its
-   signed stamp, verified on every device. Under rules v1 (the default until
-   an Owner turns v2 on) they need signature and role only. Passkeys are
-   registered per workspace (on its config log). The desktop runs WebAuthn
-   in your browser on `https://ligus.ai/presence`; a compromised page there
+7. **Presence needs a passkey on every workspace.** Every workspace is on
+   rules version 2 from its first event: membership and role changes, device
+   revocation, key rotation, passkey removal, dearth mode, lockdown clears,
+   path zones, workflow definitions, agent host or runtime changes, lowered
+   gates and human-gated votes need a passkey assertion over the event inside
+   its signed stamp, verified on every device. Passkeys are registered per
+   workspace (on its config log), under the workspace's relying party
+   (`ligus.ai` unless a self-hosted deployment set its own at creation). The
+   desktop runs WebAuthn in your browser on that origin's `/presence` page; a
+   compromised page there
    can't forge a device signature, but it could ask your authenticator to
    sign a different event during a gesture you started. The desktop checks
    the returned challenge is its own, and the sheet shows the first 64 bits
    of the digest; the page computes the same id from the challenge it signs
    (never from the link), so compare the two. A person who lost every
-   passkey confirms with the recovery key's 24 words in the same sheet. Under
-   rules v2 an account's **first** passkey needs an Admin's grant: being
-   added as a new member under v2, or an Admin's re-grant with their own
-   passkey (**People → Allow new passkey**), good for one registration; an
-   account that kept its recovery key re-registers with it. Under rules v1 a
-   first passkey is trust on first use from the device. Once an account has
+   passkey confirms with the recovery key's 24 words in the same sheet. An
+   account's **first** passkey needs a grant, good for one registration: the
+   founder's, from the workspace's first event, or an Admin's: being added as
+   a new member, or a re-grant with the Admin's own passkey (**People → Allow
+   new passkey**); an account that kept its recovery key re-registers with
+   it. There is no trust on first use from a device. Once an account has
    a passkey, a new device of that account and an account-key rotation need
    its presence too (a stolen device and account key can't add devices or
    re-pin the key; a new laptop of yours shows **Confirm this device** in
-   **Settings → Passkeys & keys** and counts once you confirm it), and any switch to rules v2 or later, an unknown version
-   included, needs the switcher's presence. An Admin can't clear the
-   passkeys of a member above them. Until someone registers a passkey, their
-   account is only as strong as their devices.
+   **Settings → Passkeys & keys** and counts once you confirm it), and any
+   change of the rules (the relying party, an Admin's; the version, the
+   Owner's) needs presence, verified under the relying party in force before
+   the change. An Admin can't clear the passkeys of a member above them.
+   Until someone registers a passkey, their account is only as strong as
+   their devices: a workspace founded from the CLI stays unsecured (nobody
+   can join, nothing can be governed) until its founder adds a passkey from
+   the desktop, and until then a thief of the founder's device key could
+   register one first.
 8. **Phone approvals through a box carry your passkey.** A `ligus serve`
    box enrolled as your device signs as you, so votes, lockdown clears and
    agent rebinds from the phone go through `presence/prepare` and
@@ -448,7 +453,7 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 These are in [Known limitations](#known-limitations) and stay there until a
 release fixes them: invite codes carrying every epoch key, directory keys
 for people you share no workspace with (unverified, sealed only after a
-warning), rules v1 as the default (presence only once an Owner turns rules v2 on),
+warning), a CLI-founded workspace staying unsecured until its founder adds a passkey,
 devices without a founder pin keeping the passphrase key, and ingest-time
 decisions that depend on arrival order, backdated config frontiers, human
 clicks that run others' text at the clicker's tier, and unconfined LSP

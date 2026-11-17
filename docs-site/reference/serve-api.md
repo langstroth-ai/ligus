@@ -107,7 +107,7 @@ the tunnel when the host is paired with remote access.
 |---|---|---|
 | `GET /v1/profile` | | the box's account, its `safetyCode`, `holdsAccountKey`, `canFoundDm` and its contacts status |
 | `GET /v1/people/:account/links` | | a co-member's (or the box's own) linked-identity chips with the status this box cached; never asks a forge; 404 for anyone else |
-| `POST /v1/invites` | `{}` | a single-use invite link to the workspace, founder-signed when the box is the founder's. Admin; needs presence on a box acting for its owner and on rules v2 (`presence/prepare {action: "invite"}`) |
+| `POST /v1/invites` | `{}` | a single-use invite link to the workspace, founder-signed when the box is the founder's. Admin; needs presence (`presence/prepare {action: "invite"}`) |
 | `POST /v1/invites/inspect` | `{code}` | who it is from: `trust` `known`, `claimed`, `mismatch`, `unknown` or `none`, the founder's safety code, and whether this box can take it |
 | `POST /v1/invites/join` | `{code, confirmSafetyCode}` | DM invites only (a box serves one workspace); an unsigned DM invite is refused; a stranger's needs `confirmSafetyCode`; the relay must be the box's own or public https, and behind a proxy its name must resolve to public addresses on the box (checked again before each use) |
 | `GET /v1/invites/pending` | | invites in the box's contact drop box (relay v0.3); the codes stay on the box |
