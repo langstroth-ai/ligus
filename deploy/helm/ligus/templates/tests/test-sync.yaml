@@ -3,8 +3,9 @@
 # serve answers, and sync works end to end through the relay: two fresh
 # client identities (each its own data dir, standing in for desktops) on a
 # THROWAWAY workspace this pod makes up, so a chat created by one arrives at
-# the other. The pod never holds the real workspace key (a failed test pod is
-# kept for its logs). It needs a relay that admits a new room: with
+# the other. The pod never holds the real workspace key, so it is kept after
+# the run (the next helm test replaces it) for `helm test --logs`, which reads
+# the logs once the whole suite is done. It needs a relay that admits a new room: with
 # workspace-scoped relay tokens set tests.sync.enabled=false.
 apiVersion: v1
 kind: Pod
@@ -16,7 +17,7 @@ metadata:
     ligus.ai/role: test
   annotations:
     helm.sh/hook: test
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-delete-policy: before-hook-creation
 spec:
   restartPolicy: Never
   {{- include "ligus.podSpecCommon" . | nindent 2 }}

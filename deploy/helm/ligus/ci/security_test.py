@@ -319,7 +319,22 @@ def test_dockerfile_bases_pinned_by_digest():
         check("base image %s is pinned by digest" % img, "@sha256:" in img)
 
 
-TESTS = [test_no_generated_secrets, test_test_pods_hold_no_workspace_key, test_dns_egress_is_scoped, test_egress_closed_and_metadata_blocked, test_serve_ingress_excludes_foreign_pods,
+# --- helm test pods outlive success so `helm test --logs` can read them -------
+
+def test_test_pods_kept_for_logs():
+    # `helm test --logs` reads every test pod's log after the whole suite
+    # finishes; a hook-succeeded pod is gone by then, so the command errors and
+    # its output (the sync marker the plaintext check greps for) is lost.
+    docs = render()
+    tests = [d for d in docs if d["kind"] == "Pod"
+             and (d["metadata"].get("annotations") or {}).get("helm.sh/hook") == "test"]
+    check("the chart renders helm test pods", len(tests) >= 2, str([d["metadata"]["name"] for d in tests]))
+    for d in tests:
+        pol = d["metadata"]["annotations"].get("helm.sh/hook-delete-policy", "")
+        check("test pod %s is not deleted on success" % d["metadata"]["name"], "hook-succeeded" not in pol, pol)
+
+
+TESTS = [test_test_pods_kept_for_logs, test_no_generated_secrets, test_test_pods_hold_no_workspace_key, test_dns_egress_is_scoped, test_egress_closed_and_metadata_blocked, test_serve_ingress_excludes_foreign_pods,
          test_removed_values_refuse, test_secrets_are_files, test_single_writer_volumes,
          test_mcp_images_pinned, test_metadata_stays_blocked_when_internet_except_is_overridden,
          test_extra_env_cannot_override_secrets_or_sandbox, test_dockerfile_bases_pinned_by_digest]
