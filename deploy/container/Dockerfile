@@ -27,10 +27,12 @@
 # --turn-test` checks a node (the Helm chart runs it as an init container). Agent CLIs (claude, codex, ...) are NOT included: extend this image
 # with the ones you use. See docs/design/kubernetes.md.
 
+# Base images are pinned by tag and index digest (multi-arch); bump the
+# version ARGs and both digests together.
 ARG RUST_VERSION=1.91
 ARG DEBIAN_RELEASE=bookworm
 
-FROM rust:${RUST_VERSION}-${DEBIAN_RELEASE} AS build
+FROM rust:${RUST_VERSION}-${DEBIAN_RELEASE}@sha256:c1e5f19e773b7878c3f7a805dd00a495e747acbdc76fb2337a4ebf0418896b33 AS build
 WORKDIR /src
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
@@ -38,7 +40,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release --locked -p hive-cli \
  && install -Dm755 target/release/ligus /out/ligus
 
-FROM debian:${DEBIAN_RELEASE}-slim
+FROM debian:${DEBIAN_RELEASE}-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 RUN apt-get update \
  && apt-get install -y --no-install-recommends bubblewrap ca-certificates git tini \
  && rm -rf /var/lib/apt/lists/* \

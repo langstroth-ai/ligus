@@ -307,10 +307,22 @@ def test_extra_env_cannot_override_secrets_or_sandbox():
     check("agentEnvAllowList can't be widened to Ligus's own variables", p.returncode != 0)
 
 
+# --- The image's base layers are pinned ---------------------------------------
+
+def test_dockerfile_bases_pinned_by_digest():
+    import re
+    path = os.path.join(CHART, "..", "..", "container", "Dockerfile")
+    with open(path) as f:
+        froms = [l.split()[1] for l in f if re.match(r"^FROM\s", l)]
+    check("the Dockerfile has FROM lines", len(froms) >= 2, str(froms))
+    for img in froms:
+        check("base image %s is pinned by digest" % img, "@sha256:" in img)
+
+
 TESTS = [test_no_generated_secrets, test_test_pods_hold_no_workspace_key, test_dns_egress_is_scoped, test_egress_closed_and_metadata_blocked, test_serve_ingress_excludes_foreign_pods,
          test_removed_values_refuse, test_secrets_are_files, test_single_writer_volumes,
          test_mcp_images_pinned, test_metadata_stays_blocked_when_internet_except_is_overridden,
-         test_extra_env_cannot_override_secrets_or_sandbox]
+         test_extra_env_cannot_override_secrets_or_sandbox, test_dockerfile_bases_pinned_by_digest]
 
 if __name__ == "__main__":
     for t in TESTS:
