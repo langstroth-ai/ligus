@@ -15,8 +15,7 @@ vertical icon strip you click to switch contents. Nine sections:
 | Flow      | The task board, review queue and hand-off waits, workspace marks, routing, careers, path zones and the home beacon. See [Flow](flow.md) |
 | Activity  | Streaming runtime activity for the workspace                    |
 
-![Right rail with the Tools pane active](../images/right-rail.png){ width="800" }
-
+<!-- Screenshot pending (Right rail with the Tools pane active): images/right-rail.png. See images/CAPTURE_GUIDE.md; restore the image line once it is captured. -->
 Switching panes preserves the visible width. Click the `×` in the
 pane header to close the rail entirely.
 

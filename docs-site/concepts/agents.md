@@ -17,8 +17,7 @@ message to runtime `aider-runtime` on Alice's device."
 
 Configure agents from the right-rail **Tools** pane → **Workspace Agents**.
 
-![Workspace Agents pane](../images/agents-pane.png){ width="700" }
-
+<!-- Screenshot pending (Workspace Agents pane): images/agents-pane.png. See images/CAPTURE_GUIDE.md; restore the image line once it is captured. -->
 ## Why no built-in personas?
 
 Two reasons:

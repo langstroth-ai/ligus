@@ -102,7 +102,7 @@ id = "gateway-gpt-oss"
 name = "gpt-oss 20B (gateway)"
 provider = "custom"
 kind = "local"
-endpoint = "http://100.64.0.10:8080/v1/chat/completions"
+endpoint = "http://10.0.0.10:8080/v1/chat/completions"
 preferred_model = "gpt-oss:20b"
 supports_tools = true
 # context_window = 32768   # only if the server can't report it
@@ -228,7 +228,7 @@ A useful MCP server for offline work offers:
 | `remember`, `recall` | Long-term memory across chats |
 | `index_document`, `list_collections` | Add documents to the index and list collections |
 
-Ligus's lab uses a server of this shape (rdnamcp), served over
+Ligus's lab uses a server of this shape, served over
 Streamable HTTP. Add it as an `http` MCP server; see
 [MCP servers](../addons/mcp.md).
 

@@ -6,8 +6,7 @@ sync: the relay, the room, and the end-to-end-encryption key. No provider
 or directory is involved: you hand over a link, or invite someone you
 already share a workspace with.
 
-![Invite controls in the People pane](../images/invite-pane.png){ width="800" }
-
+<!-- Screenshot pending (Invite controls in the People pane): images/invite-pane.png. See images/CAPTURE_GUIDE.md; restore the image line once it is captured. -->
 ## Create / join a team (the ＋ button)
 
 ![Creating a team â the invite code is redacted here](../images/team-invite.png){ width="760" }

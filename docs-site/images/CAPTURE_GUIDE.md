@@ -391,8 +391,10 @@ git add docs-site/images/*.png
 git commit -m "docs: refresh UI screenshots for the 1.0 app"
 ```
 
-Once the nine referenced shots exist, the docs build can return to strict mode
-(re-add `--strict` to `mkdocs build` in `.github/workflows/docs.yml`).
+The docs build runs in strict mode, so a page can't embed an image that doesn't
+exist yet. Shots still to capture sit in their page as an HTML comment
+(`<!-- Screenshot pending ... -->`); once you add the PNG, turn the comment back
+into an image line.
 
 ## Notes for an AI agent (e.g. Codex driving the desktop)
 

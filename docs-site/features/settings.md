@@ -107,8 +107,7 @@ See [Self-hosting a relay](../networking/self-host.md), the
 
 ### Team members
 
-![Team members panel](../images/settings-team-members.png){ width="800" }
-
+<!-- Screenshot pending (Team members panel): images/settings-team-members.png. See images/CAPTURE_GUIDE.md; restore the image line once it is captured. -->
 On a relay that supports it, the Team sync tab also has a **Team
 members** panel for managing who may sync — durable, with no redeploy and
 instant revocation:

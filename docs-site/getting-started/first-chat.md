@@ -3,8 +3,7 @@
 After onboarding, Ligus opens to an empty workspace. Click the `+` next
 to **Chats** in the sidebar to start a new chat.
 
-![Empty chat ready for input](../images/first-chat-empty.png){ width="800" }
-
+<!-- Screenshot pending (Empty chat ready for input): images/first-chat-empty.png. See images/CAPTURE_GUIDE.md; restore the image line once it is captured. -->
 ## Type a message
 
 The composer is at the bottom. A few affordances worth knowing:
