@@ -114,4 +114,60 @@ impl ChatService {
         }
         Ok(out)
     }
+
+    /// The full export for `ligus facts export --jsonl --since …`: measurement
+    /// facts, guard signals and state facts (see [`crate::facts::state_lines`])
+    /// after `since`, closed by a cursor line naming where the next export
+    /// resumes. Unix-millisecond `since` filters facts and signals by time
+    /// and observes every chat; a cursor reads only rows after it and the
+    /// chats whose logs changed since. A cursor ahead of a table (the data
+    /// dir was recreated) reads that table from the start.
+    pub fn export_facts_since(&self, since: crate::facts::Since, now_ms: i64) -> Result<Vec<String>> {
+        use crate::facts::{Cursor, Since};
+        let (mut from, since_ms) = match since {
+            Since::UnixMs(ms) => (Cursor::default(), ms),
+            Since::Cursor(c) => (c, i64::MIN),
+        };
+        // Read the log's high-water mark first: anything written after it is
+        // picked up again by the next export.
+        let events_max = self.store.max_row_id()?;
+        // A cursor ahead of a table (a recreated data dir) starts that table over.
+        if from.facts > self.store.max_fact_row()? {
+            from.facts = 0;
+        }
+        if from.signals > self.store.max_signal_row()? {
+            from.signals = 0;
+        }
+        if from.events > events_max {
+            from.events = 0;
+        }
+        let mut next = from;
+        next.events = events_max;
+        let mut out = Vec::new();
+        for (row, ws, sid, at_ms, kind, json) in self.store.facts_after(from.facts, since_ms)? {
+            next.facts = next.facts.max(row);
+            if kind == SUMMARY_MARK {
+                continue;
+            }
+            if kind == crate::facts::TOOL_CALL_KIND {
+                out.extend(crate::facts::tool_call_line(row, &ws, &sid, at_ms, &json));
+                continue;
+            }
+            let Ok(record) = serde_json::from_str::<FlowRecord>(&json) else { continue };
+            out.extend(crate::facts::export_line(row, &ws, &sid, at_ms, &record));
+        }
+        for (row, ws, sid, at_ms, json) in self.store.signals_after(from.signals, since_ms)? {
+            next.signals = next.signals.max(row);
+            out.extend(crate::facts::signal_line(row, &ws, sid.as_deref(), at_ms, &json));
+        }
+        if next.events > from.events {
+            for sid in self.store.sessions_changed_after(from.events)? {
+                let Ok(Some(session)) = self.load(sid) else { continue };
+                let config = sid == hive_core::workspace_config_session_id(session.workspace_id);
+                out.extend(crate::facts::state_lines(next.events, now_ms, &session, config));
+            }
+        }
+        out.push(crate::facts::cursor_line(now_ms, &next));
+        Ok(out)
+    }
 }

@@ -1504,7 +1504,7 @@ fn usage() -> ! {
          ligus remote push-test [--phone <pid|name>]   send a test notification and show each hop\n  \
          ligus phones list | revoke <pid|name> [--keep-token]   phones paired over the relay\n  \
          ligus trust list | enable <digest> | enable-all [--repo PATH]   repo-supplied runtimes and MCP servers this device runs\n  \
-         ligus facts export --jsonl [--since MS]   this device's measurement facts (ligus.facts.v1), for external observability tools\n  \
+         ligus facts export --jsonl [--since C]    content-free facts (ligus.facts.v1) for external observability tools; the last line's cursor is the next --since\n  \
          ligus dashboard check [--file PATH]   validate dashboard.toml and evaluate it once\n  \
          ligus dashboard default         print the generated default dashboard as TOML\n  \
          ligus dashboard metrics         list the built-in hive metrics panels can show\n\n\
@@ -1816,10 +1816,15 @@ fn run() -> Result<()> {
         }
         "facts" => {
             if positional.first().map(|s| s.as_str()) != Some("export") || !has("--jsonl") {
-                bail!("usage: ligus facts export --jsonl [--since <unix ms>]");
+                bail!("usage: ligus facts export --jsonl [--since <cursor | unix ms>]");
             }
-            let since: i64 = flag_val("--since").map(|v| v.parse()).transpose().map_err(|_| anyhow!("--since takes unix milliseconds"))?.unwrap_or(0);
-            for line in open_service(&cfg)?.export_facts(since)? {
+            let since = match flag_val("--since") {
+                None => hive_runtime::facts::Since::UnixMs(0),
+                Some(v) => hive_runtime::facts::Since::parse(&v)
+                    .ok_or_else(|| anyhow!("--since takes the cursor from a previous export's last line, or unix milliseconds"))?,
+            };
+            let now_ms = hive_core::flow::now_ms();
+            for line in open_service(&cfg)?.export_facts_since(since, now_ms)? {
                 println!("{line}");
             }
             Ok(())

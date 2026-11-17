@@ -991,6 +991,51 @@ impl EventStore {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    /// Facts after row `after_row` and at or after `since_ms` (all
+    /// workspaces), oldest first: the facts export's incremental read.
+    #[allow(clippy::type_complexity)]
+    pub fn facts_after(&self, after_row: i64, since_ms: i64) -> Result<Vec<(i64, String, String, i64, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT row_id, workspace_id, session_id, at_ms, kind, record_json FROM facts \
+             WHERE row_id > ?1 AND at_ms >= ?2 ORDER BY row_id ASC",
+        )?;
+        let rows = stmt.query_map([after_row, since_ms], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Guard signals after row `after_row` and at or after `since_ms` (all
+    /// workspaces), oldest first: (row, workspace, session, at_ms, signal_json).
+    #[allow(clippy::type_complexity)]
+    pub fn signals_after(&self, after_row: i64, since_ms: i64) -> Result<Vec<(i64, String, Option<String>, i64, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT row_id, workspace_id, session_id, at_ms, signal_json FROM guard_signals \
+             WHERE row_id > ?1 AND at_ms >= ?2 ORDER BY row_id ASC",
+        )?;
+        let rows = stmt.query_map([after_row, since_ms], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Highest guard-signal row (0 when none).
+    pub fn max_signal_row(&self) -> Result<i64> {
+        Ok(self.conn.query_row("SELECT COALESCE(MAX(row_id), 0) FROM guard_signals", [], |row| row.get(0))?)
+    }
+
+    /// Sessions with an event after row `after`, in first-changed order: what
+    /// the facts export observes again.
+    pub fn sessions_changed_after(&self, after: i64) -> Result<Vec<Uuid>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT session_id FROM events WHERE row_id > ?1 GROUP BY session_id ORDER BY MIN(row_id)")?;
+        let rows = stmt.query_map([after], |row| row.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for s in rows {
+            if let Ok(id) = Uuid::parse_str(&s?) {
+                out.push(id);
+            }
+        }
+        Ok(out)
+    }
+
     /// Distinct session ids known to the store, in first-seen order.
     pub fn list_session_ids(&self) -> Result<Vec<Uuid>> {
         let mut stmt = self.conn.prepare(

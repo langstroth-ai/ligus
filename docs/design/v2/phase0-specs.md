@@ -1027,6 +1027,9 @@ None of these exists in code. Their `ExecutorKind` placeholder variants were rem
   - It is emitted at most once per agent, per UTC day, per host device. `score.rs` reads the summaries and local facts.
   - The fold caps it at 400 per agent.
 - **Export.** The schema is `ligus.facts.v1`: ids, enums, numbers and timestamps only. OTel GenAI attribute names are given in review §4.7. `ligus facts export --jsonl [--since]`. OTLP export is [2.x] (review P8).
+  - The export also carries guard signals (`guardSignal`) and **state facts** observed from this device's projection for chats whose logs changed: `reply`, `proposal` (the fold's derived status), `workflowRun`, `workflowStage`, `agent`, `host`, `lease` (`facts::state_lines`). External tools consume only this export, never `hive.db`.
+  - `--since` takes the cursor from the previous export's last line (`kind: "cursor"`, `c1.<facts row>.<signals row>.<events row>`) or unix milliseconds.
+  - Tests: `state_facts_schema_golden`; `facts_are_content_free` covers state facts and signals; `facts_export_cursor_resumes_and_observes_changed_chats`.
 
 **Tests:**
 - `facts_are_content_free`: a property test where random turns with secret-looking content never put content bytes in facts.

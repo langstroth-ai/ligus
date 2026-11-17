@@ -146,7 +146,10 @@ Full release notes are on the
   [Trust this workspace](../concepts/security.md#workspace-trust)
 - **Telemetry stays on your device.** Turn measurements are device-local
   facts (`ligus facts export --jsonl`); only a bounded daily outcome summary
-  syncs. [Telemetry](../concepts/security.md#facts)
+  syncs. The export also carries guard signals and content-free state facts
+  (reply, proposal, workflow, roster, host and lease state as this device's
+  fold derived it) with a resumable cursor, so an observability tool never
+  needs to open the database. [Telemetry](../concepts/security.md#facts)
 - **Phone approvals carry your passkey.** A `ligus serve` box enrolled as
   your device takes votes, rejects and lockdown clears from the phone only
   with your passkey over them (`presence/prepare`, `presence/commit`); folds

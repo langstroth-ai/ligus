@@ -492,6 +492,33 @@ observability tools read facts with `ligus facts export --jsonl` (schema
 `ligus.facts.v1`: ids, enums, numbers and timestamps only; any string that
 isn't an id or looks like a secret is exported as `redacted`).
 
+The export is the one supported way for another tool to watch Ligus: it
+never needs to open the database or decrypt the log. Each line is
+`{"schema","seq","timeUnixMs","kind","attributes"}`, and it carries:
+
+- **Measurements** (`turn`, `touch`, `progress`, `edgeWait`, `routeStop`,
+  `toolCall`): the facts above, from this device only.
+- **Guard signals** (`guardSignal`): this device's lease heartbeats and
+  receipts, boundary decisions, tool selection, hygiene catches, worktree
+  states and throttles, one `ligus.signal.<field>` attribute per field.
+- **State facts**, observed from this device's projection of the signed log
+  for every chat whose log changed since the last export: `reply` (agent and
+  assistant replies: ids, role, kind, runtime, trigger, claim, streaming,
+  tool-call count, output size in bytes), `proposal` (kind, the status
+  Ligus's fold derived, vote, change-request and comment counts, diff line
+  and file counts, version chain), `workflowRun` and `workflowStage` (status,
+  attempts, dependencies by node id), `agent` and `host` (the roster, from
+  the workspace config log) and `lease`. `timeUnixMs` is when the export
+  looked; `seq` is the event-log row it looked at, shared by every state
+  line of one export.
+
+Titles, bodies, names, prompts, diffs and paths never appear. Device ids
+are exported as a short hash; workspaces as `ligus.workspace.id_hash`. The
+last line has kind `cursor`; pass its `ligus.cursor` value as the next
+`--since` to read only what is new (`--since` also takes unix milliseconds,
+which observes every chat again). Readers should reject lines whose
+`schema` they don't know and ignore kinds they don't.
+
 ## Dearth mode: a tighter entrance on demand
 
 An Admin can put the workspace in [dearth mode](../features/guards.md#dearth-mode)

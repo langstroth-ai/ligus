@@ -5085,6 +5085,59 @@ mod flow_tests {
         assert!(lines.iter().all(|l| l.contains("\"schema\":\"ligus.facts.v1\"")));
     }
 
+    /// The full facts export: state facts for chats whose logs changed, guard
+    /// signals, and a cursor that resumes exactly where it stopped.
+    #[test]
+    fn facts_export_cursor_resumes_and_observes_changed_chats() {
+        use crate::facts::{Cursor, Since};
+        let mut svc = service();
+        let wid = Uuid::new_v4();
+        let chat = svc.create_chat("Secret plan title", wid, "rt").unwrap();
+        let user = svc.post_user_message(chat.id, wid, "please read the private notes").unwrap();
+        let reply = svc.begin_assistant_message(chat.id, wid, "Bot", "rt", None, Some(user.id)).unwrap();
+        svc.complete_assistant_message(chat.id, wid, reply, "the private answer body").unwrap();
+        let mut p = ActionProposal::new("Secret proposal title", hive_core::ProposalKind::Decision, "me");
+        p.body = "secret proposal body".into();
+        svc.upsert_proposal(chat.id, wid, p.clone()).unwrap();
+        svc.record_signal(wid, Some(chat.id), &hive_core::signal::GuardSignal::Hygiene { hygiene_kind: hive_core::signal::HygieneKind::Redaction, count: 2 })
+            .unwrap();
+
+        let parse = |lines: &[String]| -> Vec<serde_json::Value> { lines.iter().map(|l| serde_json::from_str(l).unwrap()).collect() };
+        let first = svc.export_facts_since(Since::UnixMs(0), 1_000).unwrap();
+        for l in &first {
+            for text in ["Secret plan", "private notes", "private answer", "Secret proposal", "secret proposal body", "Bot"] {
+                assert!(!l.contains(text), "{text} leaked into {l}");
+            }
+        }
+        let v = parse(&first);
+        let kinds: Vec<&str> = v.iter().map(|l| l["kind"].as_str().unwrap()).collect();
+        assert!(kinds.contains(&"reply") && kinds.contains(&"proposal") && kinds.contains(&"guardSignal"), "{kinds:?}");
+        let r = v.iter().find(|l| l["kind"] == "reply").unwrap();
+        assert_eq!(r["attributes"]["ligus.turn.id"], reply.to_string());
+        assert_eq!(r["attributes"]["ligus.turn.streaming"], false);
+        let pr = v.iter().find(|l| l["kind"] == "proposal").unwrap();
+        assert_eq!(pr["attributes"]["ligus.proposal.status"], "open");
+        let last = v.last().unwrap();
+        assert_eq!(last["kind"], "cursor");
+        let cursor = Cursor::parse(last["attributes"]["ligus.cursor"].as_str().unwrap()).unwrap();
+
+        // Nothing new: only the cursor, unchanged.
+        let again = svc.export_facts_since(Since::Cursor(cursor), 2_000).unwrap();
+        assert_eq!(again.len(), 1, "{again:?}");
+        assert!(again[0].contains(&cursor.encode()));
+
+        // A vote changes the chat: it is observed again, with the fold's status.
+        svc.vote_on_proposal(chat.id, wid, p.id, true).unwrap();
+        let next = parse(&svc.export_facts_since(Since::Cursor(cursor), 3_000).unwrap());
+        assert!(next.iter().any(|l| l["kind"] == "proposal" && l["attributes"]["ligus.proposal.id"] == p.id.to_string()), "{next:?}");
+        assert!(next.iter().all(|l| l["kind"] != "guardSignal"), "signals already exported");
+
+        // A cursor from a recreated data dir (ahead of every table) starts over.
+        let ahead = Cursor { facts: 1 << 40, signals: 1 << 40, events: 1 << 40 };
+        let over = parse(&svc.export_facts_since(Since::Cursor(ahead), 4_000).unwrap());
+        assert!(over.iter().any(|l| l["kind"] == "guardSignal") && over.iter().any(|l| l["kind"] == "reply"), "{over:?}");
+    }
+
     /// P0.5 `route_decision_still_synced`: other devices follow the first
     /// decision per trigger, so route decisions stay signed log events.
     #[test]
