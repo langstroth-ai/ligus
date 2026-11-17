@@ -204,7 +204,7 @@ Postgres does **not** mean unbounded history: set
 The relay has independent layers. Pick the ones you need; the content is
 end-to-end encrypted whatever you choose.
 
-### Entitlement: who may use the relay at all
+### Access tokens: who may use the relay at all
 
 Chosen in this order:
 
@@ -232,9 +232,10 @@ hrt1.eyJzdWIiOiJnaXRodWI6YWxpY2UiLC…
 ```
 
 (`LIGUS_RELAY_TOKEN_PUBKEY` and `HIVE_RELAY_TOKEN_PUBKEY` are the same
-setting.) `issue` takes `--sub <id>` and optionally `--plan`,
-`--exp-days N` (no expiry if omitted), `--max-members N`,
-`--retention-days N`, `--turn` and `--cap X`. `ligus-relay bootstrap-agent`
+setting.) `issue` takes `--sub <id>` and optionally `--exp-days N` (no
+expiry if omitted), `--workspace <id>` (see below), `--cap X`, and the
+informational `--plan`, `--max-members N`, `--retention-days N` and `--turn`
+(see the claims table below). `ligus-relay bootstrap-agent`
 mints a token for a headless agent and prints the one-line
 `ligus enroll … && ligus worker` command; see
 [Headless agents](../concepts/headless-agents.md#3-remote-agent-always-on-worker).
@@ -254,9 +255,31 @@ Its output contains the workspace key, so treat it as a secret.
 Each client sets its token in **Settings → Team sync → Relay access token**
 (desktop), `ligus enroll … --token` or `LIGUS_RELAY_ACCESS_TOKEN` (CLI).
 
+#### The `hrt1` token format
+
+A signed token is three `.`-separated parts:
+
+```text
+hrt1.<b64url(claims_json)>.<b64url(ed25519_sig)>
+```
+
+The signature covers `hrt1.<b64url(claims_json)>`, so the claims can't be
+edited without the issuer key. The relay holds only the public key: it can
+verify tokens but never mint them.
+
+| Claim | Meaning |
+|---|---|
+| `sub` | the account or device the token identifies (relay-side membership keys on it) |
+| `exp` | unix-seconds expiry (`0` = never); short expiries plus reissue are the revocation story |
+| `workspaces` | optional workspace ids the token is confined to (see [Per-workspace token scope](#per-workspace-token-scope)) |
+| `caps` | capability strings; forward-compatible, the relay ignores ones it doesn't act on |
+| `plan`, `max_members`, `retention_days`, `turn` | informational fields kept for wire compatibility; the relay doesn't act on them |
+
+ligus-auth adds `tid`, `uid` and `did`; see [ligus-auth](../deploy/ligus-auth.md).
+
 ### Per-workspace token scope {#per-workspace-token-scope}
 
-The token gate is coarse: by default any entitled caller may read and write
+The token gate is coarse: by default any admitted caller may read and write
 any workspace whose id it knows. Signed tokens can carry a `workspaces`
 claim (`ligus-relay issue … --workspace <id> [--workspace <id>]`, `*` = any),
 and `LIGUS_RELAY_WORKSPACE_SCOPE` decides what the relay does with it:
@@ -282,13 +305,13 @@ has been **claimed** keeps a roster and invite codes on the relay, and only
 its members may read or write it. Unclaimed workspaces are unaffected. The
 relay needs to know who is calling: either a signed token (its `sub`) or
 `LIGUS_RELAY_MEMBERSHIP_PUBKEY`, which reads identity from an `hrt1` token
-while leaving entitlement open. See
+while leaving relay access open. See
 [Server-side membership](../ops/server-side-membership.md).
 
 ### The user and token admin API
 
 `/v1/admin/*` (create users, issue and revoke tokens) is **disabled in the
-open-source binary**: it answers 404 unless a downstream build supplies an
+open-source binary**: it answers 404 unless the relay is built with an
 admin authorizer in code. No environment variable enables it. The desktop's
 **Team members** panel works only against a relay that has one.
 
@@ -310,10 +333,10 @@ Off by default.
 
 | Setting | Values |
 |---|---|
-| `LIGUS_RELAY_TUNNEL` | `off` (default; `/v1/tunnel/*` answers 404), `open` (any host may register), `allowlist`. Use `open` only together with an entitlement gate, so that a host's first registration needs a token; otherwise anyone can relay phone sessions through you |
+| `LIGUS_RELAY_TUNNEL` | `off` (default; `/v1/tunnel/*` answers 404), `open` (any host may register), `allowlist`. Use `open` only together with an access gate, so that a host's first registration needs a token; otherwise anyone can relay phone sessions through you |
 | `LIGUS_RELAY_TUNNEL_HOSTS` | comma-separated host ids for `allowlist` (from `ligus remote status`). `allowlist` with no hosts leaves the tunnel off |
 
-If an entitlement gate is configured, a host must present a token that
+If an access gate is configured, a host must present a token that
 passes it to register (`ligus remote enable --reg-token`). The tunnel's
 control connections live in one process, so the tunnel must run on **one
 instance**.
@@ -437,9 +460,9 @@ changes have no down migration.
 - [ ] TLS in front; `LIGUS_RELAY_TRUSTED_PROXIES` set to your proxy's addresses
 - [ ] `DATABASE_URL` or `LIGUS_RELAY_DATA_DIR` set; `LIGUS_RELAY_REQUIRE_DB=1` with Postgres
 - [ ] `LIGUS_RELAY_MAX_STORE_BYTES` set on a memory or snapshot store
-- [ ] an entitlement gate (`LIGUS_RELAY_TOKEN_PUBKEY` or `LIGUS_RELAY_ACCESS_TOKENS`) unless you want a public relay, verified with an unauthenticated request
+- [ ] an access gate (`LIGUS_RELAY_TOKEN_PUBKEY` or `LIGUS_RELAY_ACCESS_TOKENS`) unless you want a public relay, verified with an unauthenticated request
 - [ ] `LIGUS_RELAY_WORKSPACE_SCOPE=claims` (or `strict`) with workspace-scoped signed tokens
 - [ ] issuer private key kept off the relay host
 - [ ] `LIGUS_RELAY_METRICS_TOKEN` set
-- [ ] tunnel `off` unless you use the phone app; `allowlist` if only your boxes should register, `open` only with an entitlement gate
+- [ ] tunnel `off` unless you use the phone app; `allowlist` if only your boxes should register, `open` only with an access gate
 - [ ] backups scheduled

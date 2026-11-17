@@ -504,7 +504,7 @@ Unit and property tests in `crates/hive-core/tests/authz_props.rs` and `raw_byte
 
 - **Accept anything openable.** The desktop accepts every rotation it can open (`build_keyring`, `lib.rs:10971-10995`, used at `:11407-11452`).
 - **Epoch 0 only on CLI hosts.** Every CLI host uses epoch 0 only (`crates/hive-cli/src/main.rs:274-280`; `serve/mod.rs:988`), which is R4 and K4.
-- **K3 is now refusal, not eviction.** Relay v0.2.0 refuses rotations past its caps (relay repo 79886f7; `memory.go:435-462`, 507 `ErrKeyringFull`). It still accepts any well-sized body from any entitled writer, so junk can **fill** the caps (2000 rows/ws, `hardening.go:46-52`) and block real publishes.
+- **K3 is now refusal, not eviction.** Relay v0.2.0 refuses rotations past its caps (relay repo 79886f7; `memory.go:435-462`, 507 `ErrKeyringFull`). It still accepts any well-sized body from any admitted writer, so junk can **fill** the caps (2000 rows/ws, `hardening.go:46-52`) and block real publishes.
 
 #### B.1.2 Wire
 

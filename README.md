@@ -52,12 +52,9 @@ and the relay is deliberately **content-blind**: it stores and forwards sealed
 ciphertext and never holds the key, so it can't read your traffic. That relay is
 a single small binary you can **self-host** yourself.
 
-That last part is the wedge. Plenty of tools let a team share AI coding sessions
-— but they tend to charge per seat for the cloud sync and team features, and the
-sync runs through *their* servers. Ligus's collaboration layer is **free,
-open-source, and self-hostable**, and it's built so the party that relays your
-traffic mathematically can't see it. You keep your code, your keys, and your
-history; the network only ever sees noise.
+The collaboration layer is **open source and self-hosted**, and it's built so
+the party that relays your traffic mathematically can't see it. You keep your
+code, your keys, and your history; the network only ever sees noise.
 
 **Who it's for:** developers who want to drive coding agents from a real desktop
 app instead of a terminal; small teams who want to review agent changes together
@@ -430,20 +427,23 @@ fit together.
   TypeScript bindings in `web/src/bindings/`; regenerate with
   `cargo test -p hive-proto export_bindings`.
 
-## Editions
+## Running the infrastructure
 
-The desktop app (this repo) and the production relay (the standalone
-[Go service](https://github.com/ligus-ai/relay)) are both open source and
-self-hostable. A managed / enterprise tier adds server-side membership & RBAC,
-hosted relays, and org (GHEC) integration — those paid controls live outside this
-repo and attach via a small `WriteGuard` extension seam, so self-hosters keep a
-fully functional, content-blind relay. See
-[the tiering model](https://docs.langstroth.ai/ops/tiering/).
+The desktop app (this repo) and the relay (the standalone
+[Go service](https://github.com/ligus-ai/relay)) are both open source. You run
+the relay, ligus-auth and any always-on hosts yourself: see the
+[operator docs](https://docs.langstroth.ai/). Relay-side membership, access
+tokens and sign-in with your own identity provider are all part of the open
+relay; see [Self-hosting a relay](https://docs.langstroth.ai/networking/self-host/).
 
 ## Contributing & security
 
 Issues and PRs are welcome — start with [`CONTRIBUTING.md`](CONTRIBUTING.md) and
-our [Code of Conduct](CODE_OF_CONDUCT.md). Developer and architecture docs live
+our [Code of Conduct](CODE_OF_CONDUCT.md). Questions and ideas go to
+[GitHub issues](https://github.com/langstroth-ai/ligus/issues) and
+[discussions](https://github.com/langstroth-ai/ligus/discussions) on
+langstroth-ai/ligus, and relay matters to
+[langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay/issues). Developer and architecture docs live
 in [`docs/`](docs/README.md). To report a vulnerability, follow
 [`SECURITY.md`](SECURITY.md) (please don't open a public issue for security bugs).
 

@@ -8,8 +8,7 @@ A plan for **adding a collaborator by GitHub username**: send a request, accept
 it on any of your devices (dismissing it everywhere else), see each other's
 online status, and have the accepted relationship **bootstrap a direct P2P link**
 between the participating devices. It also lays out how the *same* identity
-primitive scales up to **GitHub Teams** for the Enterprise tier, and how the
-hosted version of the friend graph becomes a **lower paid (prosumer) tier**.
+primitive scales up to **GitHub Teams** (org/team-derived rosters).
 
 > One-line framing: *a friendship is a private, 2-person, GitHub-identified
 > workspace.* We reuse the workspace/roster/peer-link machinery rather than
@@ -27,7 +26,7 @@ hosted version of the friend graph becomes a **lower paid (prosumer) tier**.
 - **Direct link.** Accepting establishes a P2P path between the device that sent
   the request and the device(s) that accepted, partially seeding the existing
   peer-link/iroh transport.
-- **(Enterprise) Team-derived.** An org admin connects GitHub; org/team
+- **(Planned) Team-derived.** An org admin connects GitHub; org/team
   membership *auto-populates* the roster with roles — no manual add-friend.
 
 ---
@@ -41,7 +40,7 @@ hosted version of the friend graph becomes a **lower paid (prosumer) tier**.
 | Per-device keypairs; X25519 key-agreement pubkey published in the roster | runtime | sealing/auth between specific devices |
 | Rendezvous + peer-link (iroh node-ids, UDP hole-punch, relay fallback) | `hive-runtime` transports | the actual direct data path once friends accept |
 | Workspace = relay room + optional E2EE key + roster | runtime + relay | model a friendship as a 2-person workspace |
-| `EntitlementPolicy` (Open/Tokens/SignedKey) + `WriteGuard` seam | `hive-relay` (+ private enterprise crate) | gate paid/enterprise behavior server-side |
+| `EntitlementPolicy` (Open/Tokens/SignedKey) + `WriteGuard` seam | `hive-relay` | access tokens and server-side authorization |
 
 The gap is **stateful, account-scoped social state** (who knows whom, which of my
 devices are online) and a **realtime account channel** to fan requests/presence
@@ -128,8 +127,7 @@ events: `friend_request_received`, `friend_request_resolved`, `friend_presence`.
 - **Abuse controls.** Rate-limit outbound requests; block / report; a hard cap on
   pending requests; requests expire.
 - **Self-host parity.** The endpoints are part of the open relay *protocol* so a
-  self-hosted relay can implement them; the hosted convenience is the paid wedge
-  (§7), not a locked protocol.
+  self-hosted relay can implement them; nothing is a locked protocol.
 
 ---
 
@@ -145,7 +143,7 @@ integration-test style: two clients against a local relay).
   the account channel — the idiomatic fit here (everything else polls), delivering
   the same fan-out/dismiss behavior; a websocket push layer can sit over the same
   inbox later. Endpoints: `POST /v1/account/{register,heartbeat}`,
-  `GET /v1/account/{inbox,devices}` (GitHub-token auth, behind the entitlement
+  `GET /v1/account/{inbox,devices}` (GitHub-token auth, behind the access
   gate). `RelayClient::account_*` mirror them. Unit-tested in `social.rs`
   (shared inbox across two devices, monotonic seq, heartbeat, empties).
   *Deferred to P3:* wiring the app to call `account_register` on GitHub sign-in
@@ -153,13 +151,13 @@ integration-test style: two clients against a local relay).
 - **P2 — Friend request lifecycle.** ✅ *Relay + client SDK done (2026-06-20).*
   `hive-relay::social` friend graph: `create/accept/close(reject|cancel)` +
   `remove` + `list_friends`/`incoming_requests`; canonical-ordered edges;
-  idempotent duplicate requests; self/already-friends guards; **free-tier cap
+  idempotent duplicate requests; self/already-friends guards; **optional collaborator cap
   via `with_friend_cap(Some(5))`** (unlimited when unset = self-host). Origin is
   GitHub-vouched (relay stamps `from` from the verified token); target resolved
   by `@username` against the login index (404 if they haven't signed in →
   username-only discovery). Accept/reject push a `friendResolved` event to *both*
   accounts' inboxes, so the pending UI dismisses on every device. Endpoints under
-  `/v1/friends*`; `CapReached` → HTTP 402 (upgrade prompt). `RelayClient`
+  `/v1/friends*`; `CapReached` → HTTP 402. `RelayClient`
   friend_* methods + `FriendRequestOutcome`/`Friend`/`IncomingFriendRequest`.
   13 unit tests in `social.rs` (symmetric edge, recipient-only accept, idempotency,
   reject vs cancel, remove, cap blocks request *and* accept, event shape).
@@ -213,61 +211,47 @@ P2–P3.
 
 ---
 
-## 7. Tiering: where each piece lives
+## 7. Where each piece lives
 
-Following [`tiering.md`](../docs-site/operator/docs/ops/tiering.md)'s decision tree — the social graph is
-**stateful server state**, so it's a relay/cloud capability; the client UI and
-protocol are free.
+The social graph is **stateful server state**, so it lives in the relay; the
+client UI and the protocol live in the open client. Everything below is part
+of the open relay and client, and is run by whoever self-hosts the relay.
 
-| Layer | Tier | Notes |
+| Layer | Where | Notes |
 |---|---|---|
-| Friend/presence **protocol** + client UI | **Free / OSS** | shipped in the one OSS client + reference-relay endpoints; self-hosters get it by running their own relay |
-| **Hosted** friend graph (sign in with GitHub, add anyone, no relay setup), capped | **Cloud (free)** | the on-ramp; **≤ 5** active collaborators, presence, 1:1 only |
-| Unlimited collaborators, **friend groups**, persistent presence/history, priority P2P relays (TURN) | **Cloud (paid) — the lower/prosumer tier** | individual/prosumer monetization *before* an org needs full RBAC; driven by the existing signed-entitlement token (member cap / TURN flag already modeled) |
-| **GitHub Teams → roster + roles** (org/team auto-membership, GHEC SSO) | **Enterprise** | the same identity primitive at org scale — see §8; lives in the private `hive-relay-enterprise` crate behind `--features enterprise` |
-
-Why this is clean: **one primitive, three price points.** "Add a person by their
-GitHub identity" is free as a protocol; *hosted+unlimited* is the prosumer paid
-wedge; *org/team-derived+RBAC* is enterprise. No crippleware — self-host always
-works; paying buys hosting, scale, and org automation.
-
-The entitlement token already carries `max_members` and capability flags
-(`token.rs`), so the paid-tier caps (collaborator count, TURN access) are
-enforced server-side with the mechanism that exists — no new gate type.
+| Friend/presence **protocol** + client UI | client + relay | self-hosters get it by running their own relay |
+| Collaborator caps, **friend groups**, persistent presence/history, TURN forwarding | relay (planned) | operator-configured limits; a signed token can carry `max_members` and capability flags |
+| **GitHub Teams → roster + roles** (org/team auto-membership) | relay (planned) | the same identity primitive at org scale — see §8 |
 
 ---
 
-## 8. Leveraging GitHub Teams for Enterprise
+## 8. GitHub Teams → roster and roles (planned)
 
-The consumer flow is "I name one friend." The enterprise flow inverts it: **the
-org's GitHub structure *is* the roster**, no manual adds.
+The person-to-person flow is "I name one friend." The org flow inverts it:
+**the org's GitHub structure *is* the roster**, no manual adds.
 
-- **Org/team sync.** With GHEC SSO, the enterprise relay reads `GET /orgs/{org}/teams`
-  and team membership (GitHub App / OAuth with `read:org`). Each GitHub **team**
-  maps to a Hive **role group**; each member's `github:<id>` is auto-enrolled into
-  the workspaces that team owns. Joining/leaving the GitHub team adds/removes the
-  Hive collaborator automatically (webhook `membership`/`team` events → roster
+- **Org/team sync.** The relay reads `GET /orgs/{org}/teams` and team
+  membership (GitHub App / OAuth with `read:org`). Each GitHub **team** maps to
+  a role group; each member's `github:<id>` is auto-enrolled into the
+  workspaces that team owns. Joining/leaving the GitHub team adds/removes the
+  collaborator automatically (webhook `membership`/`team` events → roster
   delta).
 - **Team → role mapping.** A config maps `@org/eng-leads → admin`,
-  `@org/contractors → contributor (read+propose, no merge)`, etc. This is the
-  "GHEC org/team → role mapping" row already anticipated in `tiering.md`, realized
-  on top of the same `friend_edge`/membership store — an edge whose *source* is a
-  team rule rather than a hand-sent request.
+  `@org/contractors → contributor (read+propose, no merge)`, etc., on top of the
+  same `friend_edge`/membership store — an edge whose *source* is a team rule
+  rather than a hand-sent request.
 - **Presence at org scale.** The same presence channel shows "who on the team is
   online", scoped by team visibility rules.
 - **Governance.** Because membership derives from GitHub, deprovisioning is
-  automatic (offboard in GitHub → access revoked in Hive), which is the audit/SOC2
-  story enterprises want. Pairs with the existing audit-export / `WriteGuard`
-  enforcement.
+  automatic (offboard in GitHub → access revoked). Pairs with the relay's
+  membership and `WriteGuard` enforcement.
 - **Where it lives.** The GitHub-org connector (App, webhook handler, team→role
-  policy) is the kind of proprietary integration that belongs in the private
-  `hive-relay-enterprise` crate (`--features enterprise`), depending on the OSS
-  `hive-relay` membership/`WriteGuard` seam. The OSS relay keeps the manual
-  friend flow; enterprise adds the automatic team-derived one.
+  policy) would sit on the relay's membership/`WriteGuard` seam, next to the
+  manual friend flow.
 
-**Migration story:** a solo user on the prosumer tier who later joins/forms an
-org keeps the same `github:<id>` identity and friend graph; the org simply layers
-team-derived membership on top. Nobody re-onboards.
+**Migration story:** a person who later joins or forms an org keeps the same
+`github:<id>` identity and friend graph; the org layers team-derived membership
+on top. Nobody re-onboards.
 
 ---
 
@@ -279,9 +263,9 @@ team-derived membership on top. Nobody re-onboards.
 2. **Friendship model → reuse-as-workspace.** A friendship is provisioned as a
    private 2-person workspace (room + E2EE key), so "message a friend" reuses the
    existing chat/roster/sync/E2EE stack (§6 P6) — no parallel DM stack.
-3. **Free-cloud cap → 5 active collaborators.** Cloud-free allows up to **5**
-   accepted collaborators; the prosumer paid tier lifts the cap (and adds groups /
-   persistent presence / TURN). Enforced via the entitlement token's `max_members`.
+3. **Collaborator cap → operator-configured.** A relay operator may cap
+   accepted collaborators (for example via a signed token's `max_members`);
+   the open relay sets no cap.
 4. **Discovery → username-only.** You can only reach someone by their exact
    GitHub username; no email/handle enumeration. (Revisit if there's demand.)
 5. **Self-host store → same `hive-relay` process, feature-flagged off.** The
@@ -292,7 +276,5 @@ team-derived membership on top. Nobody re-onboards.
 
 ## 10. Relationship to existing docs
 
-- Identity & hosted-relay roadmap: [`managed-service-plan.md`](../docs-site/operator/docs/ops/managed-service.md)
-- Tier placement rules: [`tiering.md`](../docs-site/operator/docs/ops/tiering.md)
 - Server-side membership & the `WriteGuard` seam: [`hive-server-side-membership.md`](../docs-site/operator/docs/ops/server-side-membership.md)
 - P2P transport internals: [`architecture.md`](architecture.md), [`multiuser.md`](multiuser.md)

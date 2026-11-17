@@ -42,3 +42,11 @@ honeybee). Commands, chart names and environment variables still use the
 
 For agents reading this site: [llms.txt](llms.txt) lists every page with a
 one-line summary.
+
+## Questions
+
+Ask on GitHub: [issues](https://github.com/langstroth-ai/ligus/issues) and
+[discussions](https://github.com/langstroth-ai/ligus/discussions) on
+langstroth-ai/ligus, or
+[langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay/issues)
+for the relay.

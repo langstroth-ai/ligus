@@ -1,8 +1,8 @@
 //! E2EE file-attachment blobs over the relay.
 //!
 //! An attachment is sealed with the workspace key (`seal_symmetric`) and framed
-//! self-describingly, then uploaded to the relay's blob channel (an
-//! enterprise-relay capability). The message that syncs carries only a
+//! self-describingly, then uploaded to the relay's blob channel (not yet
+//! served by the open relay). The message that syncs carries only a
 //! `[Attached-blob: …]` reference — never a local path — so every member can
 //! fetch + open the file. The relay stores ciphertext; only key-holders decrypt.
 //!

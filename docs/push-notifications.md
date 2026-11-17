@@ -226,6 +226,4 @@ Because APNs ties pushes to the publisher's key, a self-hosted relay can push
 only to builds of the app signed by the same Apple team as the relay's key.
 Someone running their own relay can't push to the App Store build of the app;
 they need to build and sign the app themselves with their own team, bundle id
-and key (steps 1–4). A hosted push gateway that self-hosted relays could
-forward ciphertext to is described in §14 as a possible later addition and is
-not built.
+and key (steps 1–4).

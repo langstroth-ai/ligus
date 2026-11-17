@@ -1881,7 +1881,7 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
     },
   });
 
-  // Server-side membership (enforced by paid/enterprise relays). Distinct from
+  // Server-side membership (enforced by a relay with membership on). Distinct from
   // the roster above: this is who the *relay* will accept writes from.
   const relayOn = Boolean(sync.data?.relayConfigured);
   const srvMembers = useQuery({
@@ -2135,8 +2135,8 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
         ) : (
           <>
             <p className="text-xs text-ink-soft">
-              Who the relay accepts writes from. Requires a membership-enforcing (paid/enterprise)
-              relay; on an open relay this stays empty and everyone can write.
+              Who the relay accepts writes from. Requires a relay with membership turned on
+              (LIGUS_RELAY_MEMBERSHIP=1); otherwise this stays empty and everyone can write.
             </p>
             {(srvMembers.data ?? []).map((m) => (
               <Card key={m.account} className="flex items-center justify-between px-3 py-2">

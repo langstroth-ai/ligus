@@ -669,7 +669,7 @@ export const addAgentTemplate = (
 export const removeAgentTemplate = (id: string) =>
   invoke<void>("remove_agent_template", { id });
 
-/// A server-side workspace member (membership-enforcing / paid relays only).
+/// A server-side workspace member (relays with membership turned on only).
 export interface MemberEntry {
   account: string; // the relay subject: "ligus:<account id>" or "<tenant>:<user>"
   login: string;
@@ -1266,7 +1266,7 @@ export interface ConnectionSettingsDto {
   room: string;
   hasWorkspaceKey: boolean;
   hasApiKey: boolean;
-  /// Whether a relay access token (for a gated/paid hosted relay) is set.
+  /// Whether a relay access token (for a token-gated relay) is set.
   hasRelayAccessToken: boolean;
   permissionMode: ClaudePermissionMode;
 }
@@ -1417,7 +1417,7 @@ export interface UpdateProgress {
 export const onUpdateProgress = (cb: (p: UpdateProgress) => void): Promise<UnlistenFn> =>
   listen<UpdateProgress>("update://progress", (e) => cb(e.payload));
 
-/// Enterprise (#143): import a GitHub org's Teams as workspace members + roles.
+/// GitHub Teams import (#143): a GitHub org's Teams as workspace members + roles.
 /// Returns the count added. Needs a signed-in GitHub token with read:org.
 
 
@@ -1597,7 +1597,7 @@ export const onWorkflowRun = (
 ): Promise<UnlistenFn> =>
   listen<WorkflowRunEvent>("workflow://run", (evt) => cb(evt.payload));
 
-// --- Relay access user management (Settings → Team; enterprise relay) --------
+// --- Relay access user management (Settings → Team; relay admin API) ---------
 
 export type { RelayUserDto } from "@/bindings/RelayUserDto";
 export type { RelayTokenDto } from "@/bindings/RelayTokenDto";

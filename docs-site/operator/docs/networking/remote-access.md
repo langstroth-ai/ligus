@@ -220,8 +220,8 @@ If the relay also gates access with tokens (`LIGUS_RELAY_ACCESS_TOKENS` or
 
 Check the relay with `GET https://<relay-url>/v1/tunnel/info`. A relay with
 the tunnel on answers `{"versions":[1],"push":…,"billing":"none"}`; one with
-it off answers 404. A self-hosted relay always reports `"billing":"none"`, so
-the app shows no subscription screen for it.
+it off answers 404. The open-source relay always reports `"billing":"none"`
+(a field kept for wire compatibility), and the app needs nothing more.
 
 !!! note "Run one relay instance"
     The relay keeps each box's control connection in memory, so a phone's

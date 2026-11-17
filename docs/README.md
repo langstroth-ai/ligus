@@ -19,15 +19,13 @@ published MkDocs sites built from [`docs-site/`](../docs-site/README.md).
 | [multiuser.md](multiuser.md) | Relay-forwarded sync, E2EE, testing multiuser across machines. |
 | [relay-deploy.md](relay-deploy.md) | Cloud-hosting the `hive-relay` binary. |
 | [packaging.md](packaging.md) | Bundling + signing/notarization per OS. |
-| [hive-server-side-membership.md](../docs-site/operator/docs/ops/server-side-membership.md) | Server-enforced workspace membership (the `WriteGuard` seam + the private enterprise crate). |
+| [hive-server-side-membership.md](../docs-site/operator/docs/ops/server-side-membership.md) | Relay-side workspace membership in the open relay (`LIGUS_RELAY_MEMBERSHIP=1`). |
 
-## Product & tiers
+## Feature plans
 
 | Doc | What it covers |
 |-----|----------------|
-| [tiering.md](../docs-site/operator/docs/ops/tiering.md) | OSS core vs paid/enterprise — how features gate (entitlements vs build) and where they live. |
-| [managed-service-plan.md](../docs-site/operator/docs/ops/managed-service.md) | GitHub-account identity, hosted relay, signed entitlement tokens, RBAC/GHEC roadmap. |
-| [hive-social-graph-plan.md](hive-social-graph-plan.md) | Add-friend-by-GitHub-username, presence, P2P bootstrap; GitHub Teams for Enterprise; the prosumer paid tier. |
+| [hive-social-graph-plan.md](hive-social-graph-plan.md) | Add-friend-by-GitHub-username, presence, P2P bootstrap; GitHub Teams → roster and roles. |
 | [hive-issue-trackers.md](hive-issue-trackers.md) | Per-workspace issue/ticket integration via MCP (GitHub Issues/PRs, Linear, …). |
 
 ## Design intent & internals
@@ -37,14 +35,13 @@ with the code, the code wins.
 
 - Agent model: [`hive-agent-architecture-matrix.md`](hive-agent-architecture-matrix.md) — agent modes, execution/state/tool/permission shape.
 - Relay protocol: [`hive-relay-api.md`](hive-relay-api.md) — the `/v1` wire contract (client ↔ relay).
-- Phone remote access: [`relay-tunnel.md`](relay-tunnel.md) — the open `hive-tunnel/1` protocol (host registration, phone credentials, Noise end-to-end session, stream mux, push). Golden vectors and their Go generator and Rust cross-checker are in [`relay-tunnel/`](relay-tunnel/). Where it's built: relay endpoints in [ligus-ai/relay](https://github.com/ligus-ai/relay), the host connector in `crates/hive-cli/src/serve/tunnel/`, the phone client in the private `ligus-ios` repo, and billing/APNs in the private `ligus-ai/hive-cloud`.
+- Phone remote access: [`relay-tunnel.md`](relay-tunnel.md) — the open `hive-tunnel/1` protocol (host registration, phone credentials, Noise end-to-end session, stream mux, push). Golden vectors and their Go generator and Rust cross-checker are in [`relay-tunnel/`](relay-tunnel/). Where it's built: relay endpoints in [ligus-ai/relay](https://github.com/ligus-ai/relay), the host connector in `crates/hive-cli/src/serve/tunnel/`, the phone client in the `ligus-ios` repo, and APNs push in the relay.
 - Kubernetes: [`design/kubernetes.md`](design/kubernetes.md) — relay, `ligus serve` and agent runners on Kubernetes, sandboxed turn executors, security model, phased plan (design; Phase 1 chart in `deploy/helm/ligus/`, image in `deploy/container/`).
 - Ligus 2.0: [`design/v2/`](design/v2/README.md) — architecture review, Phase 0 track specs, identity without GitHub and many forges, relay-directory trust.
 - Branding: [`hive-logo-system.md`](hive-logo-system.md) — logo/brand assets.
 
-The tiering and managed-service docs live on the operator site under
-[`docs-site/operator/docs/ops/`](../docs-site/operator/docs/ops/); pricing is on
-the user site at [`docs-site/user/docs/help/pricing.md`](../docs-site/user/docs/help/pricing.md).
+Operator docs (self-hosting the relay, ligus-auth, hosts) live under
+[`docs-site/operator/docs/`](../docs-site/operator/docs/).
 
 ## Building & running
 

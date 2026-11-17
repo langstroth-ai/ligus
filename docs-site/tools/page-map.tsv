@@ -64,13 +64,13 @@ networking/turn.md	operator	networking/turn.md
 ops/build.md	operator	ops/build.md
 ops/deployment.md	operator	ops/deployment.md
 ops/linux-sandbox.md	operator	ops/linux-sandbox.md
-ops/managed-service.md	operator	ops/managed-service.md
+ops/managed-service.md	operator	networking/self-host.md
 ops/operations.md	operator	ops/operations.md
-ops/pricing.md	user	help/pricing.md
+ops/pricing.md	operator	networking/self-host.md
 ops/serve-box.md	operator	ops/serve-box.md
 ops/serve-repos.md	operator	ops/serve-repos.md
 ops/server-side-membership.md	operator	ops/server-side-membership.md
-ops/tiering.md	operator	ops/tiering.md
+ops/tiering.md	operator	networking/self-host.md
 ops/troubleshooting.md	user	help/troubleshooting.md
 reference/cli.md	user	reference/cli.md
 reference/config-toml.md	operator	reference/config-toml.md
@@ -85,3 +85,7 @@ reference/wire-protocols.md	operator	reference/wire-protocols.md
 security/index.md	operator	security/index.md
 security/runbooks.md	operator	security/runbooks.md
 security/threat-model.md	operator	security/threat-model.md
+# Pages removed after the split (old_path is a path on the 2.0 user site). The
+# 2.0 docs have no pricing or hosted-service pages: the infrastructure is
+# self-hosted, so these point at Self-hosting a relay.
+help/pricing.md	operator	networking/self-host.md

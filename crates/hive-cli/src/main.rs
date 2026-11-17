@@ -10,7 +10,7 @@
 //! Config (all via env; a persistent data dir keeps a stable identity):
 //!   LIGUS_DATA_DIR            where identity + hive.db live (default: $HOME/.ligus)
 //!   LIGUS_RELAY_URL           relay base URL (needed for `sync`/`send --push`)
-//!   LIGUS_RELAY_ACCESS_TOKEN  relay entitlement token (hrt1/hex), provisioned out-of-band
+//!   LIGUS_RELAY_ACCESS_TOKEN  relay access token (hrt1/hex), provisioned out-of-band
 //!   LIGUS_WORKSPACE           relay room / workspace (default: "default")
 //!   LIGUS_WORKSPACE_KEY       E2EE passphrase; omit for a plaintext relay
 //!

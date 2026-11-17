@@ -58,7 +58,9 @@ Each site builds into its own `site/` directory (ignored by git).
 Old URLs must keep working. After you move a page:
 
 1. Update `tools/page-map.tsv` (old path, site, new path). Never delete a
-   row: the old path is still out there.
+   row: the old path is still out there. To remove a page, point its row
+   (or a new row, for a page added after the split) at the page that
+   replaces it.
 2. Run `python3 docs-site/tools/redirects.py generate`. It rewrites the
    generated blocks in `user/mkdocs.yml` (stub pages for GitHub Pages),
    `user/netlify.toml` and `operator/netlify.toml`.
@@ -85,14 +87,15 @@ directory, security headers (HSTS, CSP, frame and referrer policy), an
 `ignore` command that skips a deploy when nothing the site is built from
 changed, and the 301 redirects.
 
-- **docs.ligus.ai** answers every page that moved to the operator site, and
-  the two pages that moved to `help/`, with a 301 to the new address.
+- **docs.ligus.ai** answers every page that moved to the operator site, the
+  page that moved to `help/`, and every removed page, with a 301 to the new
+  address.
 - **docs.apiaryhq.ai** must be attached to the user site as a domain alias.
   Host-specific rules in `user/netlify.toml` send every page of the old site
   straight to its new home on either site, and any other path to the same
   path on docs.ligus.ai, so no old link 404s.
 - **docs.langstroth.ai** sends user-site paths asked for on it to
-  docs.ligus.ai.
+  docs.ligus.ai, and its own removed pages to their replacement.
 
 The desktop app's update check reads `https://docs.ligus.ai/version.json`,
 so that file stays on the user site.

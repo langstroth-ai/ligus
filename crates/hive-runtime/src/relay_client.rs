@@ -205,7 +205,7 @@ pub struct FetchedEnvelope {
 pub struct RelayClient {
     http: reqwest::Client,
     base: String,
-    /// Relay access token (entitlement). Attached as `Authorization: Bearer` to
+    /// Relay access token. Attached as `Authorization: Bearer` to
     /// every request; `None` for open/self-hosted relays.
     auth: Option<String>,
     /// A ligus-auth access token kept fresh in the background. When it holds
@@ -252,7 +252,7 @@ impl RelayClient {
         Self { http, base: base.into().trim_end_matches('/').to_string(), auth: None, auth_cell: None }
     }
 
-    /// Set the relay access token (for a gated/paid hosted relay). Empty = none.
+    /// Set the relay access token (for a token-gated relay). Empty = none.
     pub fn with_auth(mut self, token: Option<String>) -> Self {
         self.auth = token
             .map(|t| normalize_access_token(&t))
@@ -277,7 +277,7 @@ impl RelayClient {
         &self.http
     }
 
-    /// Attach the entitlement bearer (if any) to a request. Nothing else: no
+    /// Attach the access-token bearer (if any) to a request. Nothing else: no
     /// forge (GitHub, GitLab, ...) token ever reaches a relay. Forge tokens
     /// live only in the OS secret store of the device doing git work and are
     /// used only between that device and the forge.
@@ -316,8 +316,8 @@ impl RelayClient {
 
     /// Upload an opaque file blob (a sealed attachment) to a workspace. The relay
     /// is content-blind: `bytes` is ciphertext the caller sealed with the
-    /// workspace key. `id` is a client-chosen opaque key (a UUID). Only the
-    /// enterprise relay serves this route; an open relay returns 404/405.
+    /// workspace key. `id` is a client-chosen opaque key (a UUID). The open
+    /// relay doesn't serve this route yet and returns 404/405.
     pub async fn put_blob(
         &self,
         workspace: &str,
@@ -726,7 +726,7 @@ impl RelayClient {
         Ok(Some(jr.role))
     }
 
-    // ── Relay access user/token administration (enterprise relay) ──────────
+    // ── Relay access user/token administration (relay admin API) ───────────
     // Gated server-side by the relay's admin authorizer, authenticated by the
     // relay bearer. `Ok(None)` when the relay has no admin API (open/OSS) or
     // the caller isn't an admin.

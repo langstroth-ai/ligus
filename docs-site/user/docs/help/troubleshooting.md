@@ -252,3 +252,12 @@ has read project files, MCP calls are refused (the exfiltration guard). See
 cargo test --workspace      # Rust
 cd web && bun run build     # frontend typecheck + build
 ```
+
+## Questions, ideas and bug reports
+
+Ask on GitHub: open an [issue](https://github.com/langstroth-ai/ligus/issues)
+for a bug, or start a [discussion](https://github.com/langstroth-ai/ligus/discussions)
+for a question or an idea. Relay matters go to
+[langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay/issues).
+Report security problems privately, as `SECURITY.md` in the repository
+describes.

@@ -111,7 +111,7 @@ pub enum SseConnectError {
     /// The endpoint returned 404 — an older relay that predates SSE push. The
     /// caller should fall back to polling and stop re-attempting the stream.
     Unsupported,
-    /// The relay rejected the bearer/entitlement (401/403).
+    /// The relay rejected the access token (401/403).
     Unauthorized,
     /// Any other non-2xx status.
     Status(u16),
