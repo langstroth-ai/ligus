@@ -563,6 +563,8 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/invites/pending/accept", post(super::identity_api::accept_pending))
         .route("/v1/invites/pending/dismiss", post(super::identity_api::dismiss_pending))
         .route("/v1/dms", get(super::identity_api::list_dms).post(super::identity_api::open_dm))
+        .route("/v1/dms/{id}/invite", get(super::identity_api::held_invite).delete(super::identity_api::dismiss_held_invite))
+        .route("/v1/dms/{id}/invite/confirm", post(super::identity_api::confirm_held_invite))
         .route("/v1/chats/{id}/founder", get(super::identity_api::chat_founder))
         .route("/v1/channels", get(super::people::list_channels))
         .route("/v1/chats/{id}/details", get(super::people::chat_details))

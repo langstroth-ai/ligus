@@ -422,6 +422,8 @@ pub async fn dm_sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) 
             shared.resolve_concurrent_dms();
             shared.refresh();
             shared.hub.emit("dms.changed", serde_json::json!({}));
+            // A DM's log can carry a peer's contact id (or their join).
+            shared.held_kick.notify_one();
         }
         tokio::select! {
             _ = tokio::time::sleep(DM_SYNC_EVERY) => {}

@@ -18,7 +18,8 @@ use std::collections::BTreeMap;
 
 use hive_core::Timestamp;
 use hive_runtime::contacts::{self, ContactsError};
-use hive_runtime::directory_trust::CoMember;
+use hive_runtime::directory_trust::{CoMember, SealPlan};
+use hive_runtime::dm_delivery::{self, Delivery};
 use hive_runtime::secret_store::SecretId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -91,7 +92,7 @@ impl OwnContact {
     }
 }
 
-fn unix_now() -> i64 {
+pub fn unix_now() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
 }
 
@@ -244,55 +245,96 @@ fn announce(s: &Shared, cid: Option<String>) {
     }
 }
 
-/// Drop `invite` into `person`'s box, sealed to their verified devices,
-/// through the relay of the workspace their contact id was seen in. `false`
-/// when they have no contact, their relay has no contact routes, their
-/// record doesn't verify for them, or the drop failed: share the link.
-pub async fn deliver_invite(s: &Shared, person: &CoMember, invite: &str) -> bool {
-    let Ok(plan) = person.seal_plan() else { return false };
-    let Some((cid, ws)) = person.contact.clone() else { return false };
+/// Drop `invite` into `person`'s box, sealed to `plan` (their verified
+/// devices), through the relay of the workspace their contact id was seen
+/// in ([`dm_delivery::drop_to_box`], shared with the desktop). `NotYet` when
+/// they have no contact, their relay has no contact routes, their record
+/// doesn't verify for them, or the drop failed: share the link, or hold it
+/// for a retry ([`dm_delivery`]).
+pub async fn deliver_invite(s: &Shared, person: &CoMember, plan: &SealPlan, invite: &str) -> Delivery {
+    let Some((cid, ws)) = person.contact.clone() else { return Delivery::NotYet("no contact id for them yet".into()) };
     let relay = if ws == s.ws {
         s.cfg.relay_url.clone()
     } else {
         s.dms.get(ws).map(|d| d.relay_url)
     };
-    let Some(relay) = relay.filter(|r| !r.trim().is_empty()) else { return false };
+    let Some(relay) = relay.filter(|r| !r.trim().is_empty()) else { return Delivery::NotYet("no relay for their contact".into()) };
     if let Err(e) = super::dms::foreign_relay_check(&s.cfg, &relay).await {
         eprintln!("serve: their relay was refused ({e}); share the link");
-        return false;
+        return Delivery::NotYet("their relay was refused".into());
     }
     let client = super::dms::relay_client_for(&s.cfg, &relay);
-    let record = match client.contact_get(&cid).await {
-        Ok(Some(r)) => r.record,
-        Ok(None) => return false,
-        Err(e) => {
-            eprintln!("serve: a contact record wasn't readable ({e}); share the link");
-            return false;
-        }
-    };
-    let checked = {
+    dm_delivery::drop_to_box(&client, &cid, person, plan, invite, |record| {
         let svc = s.lock();
-        contacts::accept_contact_record(svc.store(), &cid, &record, person.fingerprint.as_deref(), &|d| {
+        contacts::accept_contact_record(svc.store(), &cid, record, person.fingerprint.as_deref(), &|d| {
             person.revoked_devices.contains(&d)
         })
-    };
-    match checked {
-        Ok(v) if v.anchored && v.account_id == person.account_id => {}
-        Ok(_) => {
-            eprintln!("serve: a co-member's contact id holds someone else's record; not delivering");
-            return false;
+    })
+    .await
+}
+
+/// [`dm_delivery::Host`] for the box.
+pub struct BoxHost<'a>(pub &'a Shared);
+
+impl dm_delivery::Host for BoxHost<'_> {
+    fn co_members(&self) -> Vec<CoMember> {
+        self.0.co_members()
+    }
+    fn dm_exists(&self, ws: Uuid) -> bool {
+        self.0.dms.get(ws).is_some() && !self.0.dms.is_archived(ws)
+    }
+    fn own_ka(&self) -> Option<hive_core::e2ee::KeyAgreementKeypair> {
+        own_ka(self.0)
+    }
+    fn deliver(&self, person: &CoMember, plan: &SealPlan, invite: &str) -> impl std::future::Future<Output = Delivery> + Send {
+        deliver_invite(self.0, person, plan, invite)
+    }
+}
+
+/// This box's key-agreement key (what held invites are sealed to).
+pub fn own_ka(s: &Shared) -> Option<hive_core::e2ee::KeyAgreementKeypair> {
+    let identity = hive_runtime::IdentityStore::new(&s.cfg.data_dir, hive_runtime::secret_store::StoreKeyVault::for_data_dir(&s.cfg.data_dir));
+    let device = s.lock().device_id();
+    identity.key_agreement(device).ok()
+}
+
+/// Hold a DM invite that couldn't be delivered yet; `None` when it can't be
+/// held (no key, too many waiting): share the link.
+pub fn hold_invite(s: &Shared, ws: Uuid, person: &CoMember, plan: &SealPlan, invite: &str) -> Option<dm_delivery::HeldInvite> {
+    let ka = own_ka(s)?;
+    match s.held.hold(ws, person, plan, invite, &ka.public_key_bytes(), unix_now()) {
+        Ok(h) => {
+            s.held_kick.notify_one();
+            Some(h)
         }
         Err(e) => {
-            eprintln!("serve: a contact record was refused ({e}); share the link");
-            return false;
+            eprintln!("serve: a DM invite can't wait for delivery ({e}); share the link");
+            None
         }
     }
-    let Ok(blob) = contacts::seal_drop(invite.as_bytes(), &plan.recipients) else { return false };
-    match client.contact_drop(&cid, &blob).await {
-        Ok(()) => true,
-        Err(e) => {
-            eprintln!("serve: an invite didn't reach the drop box ({e}); share the link");
-            false
+}
+
+/// How often the box looks at held invites while any waits (and the
+/// longest it idles otherwise).
+const HELD_EVERY: std::time::Duration = std::time::Duration::from_secs(3);
+const HELD_IDLE: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Deliver held DM invites once their peer's contact id is known: after
+/// every sync that pulled something, and every few seconds while any waits.
+pub async fn held_loop(s: std::sync::Arc<Shared>, mut stop: tokio::sync::watch::Receiver<bool>) {
+    loop {
+        let changed = dm_delivery::run_pass(&BoxHost(&s), &s.held, unix_now()).await;
+        if !changed.is_empty() {
+            for h in &changed {
+                s.hub.emit("dm.invite", serde_json::json!({ "workspaceId": h.workspace_id, "inviteDelivery": h.status_json() }));
+            }
+            s.hub.emit("dms.changed", serde_json::json!({}));
+        }
+        let wait = if s.held.any_open() { HELD_EVERY } else { HELD_IDLE };
+        tokio::select! {
+            _ = tokio::time::sleep(wait) => {}
+            _ = s.held_kick.notified() => {}
+            _ = stop.wait_for(|x| *x) => return,
         }
     }
 }
