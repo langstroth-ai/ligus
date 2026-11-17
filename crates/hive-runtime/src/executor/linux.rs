@@ -294,45 +294,100 @@ pub fn select_executor() -> (std::sync::Arc<dyn TurnExecutor>, super::SandboxSta
     }
 }
 
-/// The binary that runs the helper: an explicit one, else a
-/// `ligus-sandbox-helper` installed next to this executable (or one level
-/// up), else this executable (the `ligus` CLI and the desktop app both carry
-/// it).
-///
-/// In this crate's own unit tests the executable is a libtest harness, which
-/// doesn't carry the helper (it would reject the helper's options as its
-/// own), so those look for the `ligus-sandbox-helper` bin cargo built and
-/// fail, saying so, when there is none.
+/// Set once `maybe_run_helper` has run in this process and returned: this
+/// executable's `main` dispatches the helper, so it can be re-executed as one.
+/// A libtest harness (unit or integration tests) never sets it.
+static DISPATCHES_HELPER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The helper binary's name, for a host that ships it on its own.
+pub const HELPER_BIN: &str = "ligus-sandbox-helper";
+
+/// The binary that runs the helper. See [`resolve_helper_exe`].
 fn helper_exe() -> io::Result<PathBuf> {
-    if let Some(p) = host_paths().helper_exe {
+    let me = std::env::current_exe()?;
+    resolve_helper_exe(HelperLookup {
+        explicit: host_paths().helper_exe,
+        me: &me,
+        dispatches_helper: DISPATCHES_HELPER.load(std::sync::atomic::Ordering::Relaxed),
+        env: &|k| std::env::var_os(k),
+    })
+}
+
+/// What [`resolve_helper_exe`] looks at (split out so it is testable).
+pub struct HelperLookup<'a> {
+    /// `set_helper_exe`.
+    pub explicit: Option<PathBuf>,
+    /// This process's executable.
+    pub me: &'a Path,
+    /// Whether this process's `main` ran [`maybe_run_helper`].
+    pub dispatches_helper: bool,
+    pub env: &'a dyn Fn(&str) -> Option<OsString>,
+}
+
+/// The binary the sandbox re-executes as its pre-exec helper:
+///
+/// 1. an explicit one (`set_helper_exe`);
+/// 2. a `ligus-sandbox-helper` installed next to this executable (or one
+///    level up);
+/// 3. this executable, but only when it can be one: its `main` ran
+///    [`maybe_run_helper`] (the `ligus` CLI, so `serve`, `worker` and the
+///    container's `/usr/local/bin/ligus`, and the desktop app), or it is
+///    `ligus-sandbox-helper` itself;
+/// 4. otherwise this process is a test harness (or a host that doesn't carry
+///    the helper): the `ligus-sandbox-helper` or `ligus` binary cargo built
+///    for the run, from nextest's / cargo's `*_BIN_EXE_*` variables or found
+///    near the harness ([`find_built_helper`]);
+/// 5. else an error saying so. A test harness is never run as the helper: it
+///    would take the helper's options as its own and every confined spawn
+///    would fail with "Unrecognized option".
+pub fn resolve_helper_exe(l: HelperLookup<'_>) -> io::Result<PathBuf> {
+    if let Some(p) = l.explicit {
         return Ok(p);
     }
-    let me = std::env::current_exe()?;
-    if cfg!(test) {
-        return find_built_helper(&me, &["ligus-sandbox-helper"]).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("no ligus-sandbox-helper binary built near the test harness {} (cargo builds it for a package or workspace test run)", me.display()),
-            )
-        });
-    }
+    let me = l.me;
     for dir in [me.parent(), me.parent().and_then(Path::parent)].into_iter().flatten() {
-        let sibling = dir.join("ligus-sandbox-helper");
-        if sibling.is_file() {
+        let sibling = dir.join(HELPER_BIN);
+        if sibling.is_file() && !same_file(&sibling, me) {
             return Ok(sibling);
         }
     }
-    Ok(me)
+    if l.dispatches_helper || me.file_stem().is_some_and(|s| s == HELPER_BIN) {
+        return Ok(me.to_path_buf());
+    }
+    let names = [HELPER_BIN, "ligus"];
+    let from_env = names.iter().find_map(|n| {
+        let vars = [format!("NEXTEST_BIN_EXE_{n}"), format!("NEXTEST_BIN_EXE_{}", n.replace('-', "_")), format!("CARGO_BIN_EXE_{n}")];
+        vars.iter().filter_map(|v| (l.env)(v)).map(PathBuf::from).find(|p| p.is_file() && !same_file(p, me))
+    });
+    if let Some(p) = from_env.or_else(|| find_built_helper(me, &names)) {
+        return Ok(p);
+    }
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        format!(
+            "{} doesn't carry Ligus's Linux sandbox helper and there is no {HELPER_BIN} or ligus binary near it; \
+             a test run needs cargo to build the {HELPER_BIN} bin (a hive-runtime or workspace test run does), \
+             and a host needs {HELPER_BIN} installed next to its executable",
+            me.display()
+        ),
+    ))
+}
+
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
 }
 
 /// For tests: the first of `names` among the binaries cargo built for the
 /// test harness `exe`. Cargo puts bins in the profile's artifact dir
 /// (`target/debug`), and the harness either in `target/debug/deps/` or, with
-/// cargo's build-dir layout (the default from cargo 1.9x),
-/// `target/debug/build/<package>/<hash>/out/`; so look up to five levels
-/// above the harness.
+/// cargo's build-dir layout (cargo 1.9x and later),
+/// `target/debug/build/<package>/<hash>/out/` (or `.../<hash>/deps/`); so
+/// look up to five levels above the harness. Never returns `exe` itself.
 pub fn find_built_helper(exe: &Path, names: &[&str]) -> Option<PathBuf> {
-    exe.ancestors().skip(1).take(5).find_map(|dir| names.iter().map(|n| dir.join(n)).find(|p| p.is_file()))
+    exe.ancestors().skip(1).take(5).find_map(|dir| names.iter().map(|n| dir.join(n)).find(|p| p.is_file() && !same_file(p, exe)))
 }
 
 /// The bwrap arguments for `plan` (everything before the helper).
@@ -504,6 +559,7 @@ pub fn maybe_run_helper() {
     let mut args = std::env::args_os();
     let _ = args.next();
     if args.next().as_deref() != Some(OsStr::new(HELPER_ARG)) {
+        DISPATCHES_HELPER.store(true, std::sync::atomic::Ordering::Relaxed);
         return;
     }
     let rest: Vec<OsString> = args.collect();
@@ -927,6 +983,104 @@ mod tests {
             args: vec![],
             mcp: vec![],
             ligus_mcp_socket: None,
+        }
+    }
+
+    fn touch(p: &Path) -> PathBuf {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, b"").unwrap();
+        p.to_path_buf()
+    }
+
+    fn lookup(me: &Path, dispatches_helper: bool, env: &dyn Fn(&str) -> Option<OsString>) -> io::Result<PathBuf> {
+        resolve_helper_exe(HelperLookup { explicit: None, me, dispatches_helper, env })
+    }
+
+    const NO_ENV: &dyn Fn(&str) -> Option<OsString> = &|_| None;
+
+    /// The shipped hosts re-execute themselves: the `ligus` CLI (which is
+    /// also `ligus serve` and `ligus worker`), the container image's
+    /// `/usr/local/bin/ligus`, and the desktop app's binary all run
+    /// `maybe_run_helper` first thing in `main`. A helper installed next to
+    /// them wins.
+    #[test]
+    fn product_binaries_carry_the_helper() {
+        let t = tempfile::tempdir().unwrap();
+        for exe in ["usr/local/bin/ligus", "home/u/.local/bin/ligus", "usr/bin/ligus-desktop", "opt/Ligus/ligus-app"] {
+            let me = touch(&t.path().join(exe));
+            assert_eq!(lookup(&me, true, NO_ENV).unwrap(), me, "{exe}");
+        }
+        let me = touch(&t.path().join("opt/x/bin/ligus"));
+        let helper = touch(&t.path().join("opt/x/bin").join(HELPER_BIN));
+        assert_eq!(lookup(&me, true, NO_ENV).unwrap(), helper);
+        // `ligus-sandbox-helper` itself.
+        let solo = touch(&t.path().join("solo").join(HELPER_BIN));
+        assert_eq!(lookup(&solo, false, NO_ENV).unwrap(), solo);
+        // An explicit helper always wins.
+        let explicit = t.path().join("explicit");
+        let got = resolve_helper_exe(HelperLookup { explicit: Some(explicit.clone()), me: &me, dispatches_helper: true, env: NO_ENV }).unwrap();
+        assert_eq!(got, explicit);
+    }
+
+    /// A libtest harness (unit or integration tests, either cargo layout)
+    /// is never the helper: it gets the helper bin cargo built, or an error.
+    #[test]
+    fn a_test_harness_is_never_the_helper() {
+        let t = tempfile::tempdir().unwrap();
+        let debug = t.path().join("target/debug");
+        let harnesses = [
+            debug.join("deps/hive_runtime-0123456789abcdef"),
+            debug.join("deps/acp_stub-0123456789abcdef"),
+            debug.join("build/hive-runtime/0123456789abcdef/out/acp_stub-0123456789abcdef"),
+            debug.join("build/hive-runtime/0123456789abcdef/deps/acp_stub-0123456789abcdef"),
+            debug.join("build/hive-cli/0123456789abcdef/out/ligus-0123456789abcdef"),
+        ];
+        for h in &harnesses {
+            touch(h);
+            let err = lookup(h, false, NO_ENV).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::NotFound);
+            assert!(err.to_string().contains(HELPER_BIN), "{err}");
+        }
+        // Only `ligus` built (a hive-cli test run): that, since it carries the helper.
+        let ligus = touch(&debug.join("ligus"));
+        for h in &harnesses {
+            assert_eq!(lookup(h, false, NO_ENV).unwrap(), ligus, "{}", h.display());
+        }
+        // The helper bin, once built, is preferred.
+        let helper = touch(&debug.join(HELPER_BIN));
+        for h in &harnesses {
+            assert_eq!(lookup(h, false, NO_ENV).unwrap(), helper, "{}", h.display());
+        }
+    }
+
+    /// A separate build dir (`CARGO_BUILD_BUILD_DIR`) puts the harness far
+    /// from the bins: nextest's `NEXTEST_BIN_EXE_*` (or cargo's
+    /// `CARGO_BIN_EXE_*`) names them.
+    #[test]
+    fn bin_exe_variables_name_the_helper() {
+        let t = tempfile::tempdir().unwrap();
+        let harness = touch(&t.path().join("build-dir/debug/build/hive-runtime/0123456789abcdef/out/mcp_stdio-0123456789abcdef"));
+        let helper = touch(&t.path().join("artifacts/debug").join(HELPER_BIN));
+        assert!(lookup(&harness, false, NO_ENV).is_err());
+        for var in ["NEXTEST_BIN_EXE_ligus-sandbox-helper", "NEXTEST_BIN_EXE_ligus_sandbox_helper", "CARGO_BIN_EXE_ligus-sandbox-helper"] {
+            let h = helper.clone();
+            let env = move |k: &str| (k == var).then(|| h.clone().into_os_string());
+            assert_eq!(lookup(&harness, false, &env).unwrap(), helper, "{var}");
+        }
+        // A variable naming the harness itself is ignored.
+        let me = harness.clone();
+        let env = move |k: &str| (k == "NEXTEST_BIN_EXE_ligus").then(|| me.clone().into_os_string());
+        assert!(lookup(&harness, false, &env).is_err());
+    }
+
+    /// This very process is a test harness: whatever the lookup returns, it
+    /// isn't this executable.
+    #[test]
+    fn this_harness_is_not_its_own_helper() {
+        let me = std::env::current_exe().unwrap();
+        assert!(!DISPATCHES_HELPER.load(std::sync::atomic::Ordering::Relaxed));
+        if let Ok(p) = helper_exe() {
+            assert!(!same_file(&p, &me), "{} would run the test harness as the helper", p.display());
         }
     }
 

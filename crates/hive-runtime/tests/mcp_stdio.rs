@@ -19,9 +19,24 @@ fn fixture_spec(enabled: bool) -> McpServerSpec {
     }
 }
 
+/// A stdio MCP server runs in the agent sandbox. A host without one
+/// (Windows) refuses to start it, fail closed, and says why: `true` when
+/// that is this host (after checking the refusal).
+async fn refused_without_sandbox(registry: &McpRegistry) -> bool {
+    if !hive_runtime::executor::skip_without_sandbox("stdio MCP round trip") {
+        return false;
+    }
+    let err = registry.list_tools("fixture").await.expect_err("no sandbox, no stdio MCP server");
+    assert!(matches!(&err, McpError::Transport(m) if m.contains("no agent sandbox")), "{err:?}");
+    true
+}
+
 #[tokio::test]
 async fn stdio_list_tools_round_trip() {
     let registry = McpRegistry::new(vec![fixture_spec(true)]);
+    if refused_without_sandbox(&registry).await {
+        return;
+    }
     let tools = registry.list_tools("fixture").await.expect("tools/list");
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0].name, "echo");
@@ -32,6 +47,9 @@ async fn stdio_list_tools_round_trip() {
 #[tokio::test]
 async fn stdio_call_tool_round_trip() {
     let registry = McpRegistry::new(vec![fixture_spec(true)]);
+    if refused_without_sandbox(&registry).await {
+        return;
+    }
     let text = registry
         .call_tool("fixture", "echo", &json!({ "msg": "hi hive" }))
         .await

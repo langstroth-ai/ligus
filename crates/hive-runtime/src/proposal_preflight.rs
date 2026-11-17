@@ -304,6 +304,15 @@ mod tests {
         };
         let r = run(&inputs, "pf-pass");
         assert_eq!(r.base_unchanged.status, CheckStatus::Passed, "{r:?}");
+        // The test command runs in the agent sandbox. A host without one
+        // (Windows) refuses it, fail closed, and says why.
+        if crate::executor::skip_without_sandbox("preflight test command") {
+            assert_eq!(r.tests.status, CheckStatus::Failed, "{r:?}");
+            assert!(r.tests.note.contains("no agent sandbox"), "{r:?}");
+            assert!(!r.passed());
+            let _ = std::fs::remove_dir_all(&repo);
+            return;
+        }
         assert_eq!(r.tests.status, CheckStatus::Passed, "the diff is applied in the scratch tree: {r:?}");
         assert!(r.passed());
         // The scratch tree is gone and the chat tree is untouched.

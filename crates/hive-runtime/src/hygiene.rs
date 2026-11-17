@@ -336,8 +336,10 @@ mod tests {
         let before = snap(&dir.join(".hive"));
         let branches = run(&["branch", "--list", "hive/*"]);
         let entries = list_worktrees(&dir);
-        // Unfiltered (the pre-2.0 behaviour) the sweep would remove all three.
-        assert_eq!(plan_sweep(Path::new("/"), &entries, &HashSet::new(), &HashMap::new(), &|_| false).len(), 3);
+        // Unfiltered (the pre-2.0 behaviour: everything under the repo) the
+        // sweep would remove all three. (Not `/`: on Windows that is the
+        // current drive's root, and the temp dir may be on another drive.)
+        assert_eq!(plan_sweep(&dir, &entries, &HashSet::new(), &HashMap::new(), &|_| false).len(), 3);
         let plan = plan_sweep(&dir.join(".ligus/worktrees"), &entries, &HashSet::new(), &HashMap::new(), &|_| false);
         assert!(plan.is_empty(), "{plan:?}");
         prune(&dir);
