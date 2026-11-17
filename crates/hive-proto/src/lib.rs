@@ -739,40 +739,6 @@ impl WorkflowRunEvent {
     pub const EVENT: &'static str = "workflow://run";
 }
 
-/// One issued relay access token's metadata (never the raw value/hash).
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct RelayTokenDto {
-    pub id: String,
-    pub label: String,
-    /// RFC-3339 or empty; "" when never used.
-    pub last_used: String,
-    pub revoked: bool,
-}
-
-/// A relay access user + their tokens, for the Team management panel.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct RelayUserDto {
-    pub id: String,
-    pub name: String,
-    pub login: String,
-    pub disabled: bool,
-    pub tokens: Vec<RelayTokenDto>,
-}
-
-/// A freshly issued token: the `raw` value is shown ONCE, never retrievable again.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct IssuedRelayTokenDto {
-    pub user_id: String,
-    pub user_name: String,
-    pub raw: String,
-}
-
 /// One unit of queued work: an unanswered agent mention, tagged with the host
 /// its agent is bound to and that host's live status. Surfaces the CLI's `hive
 /// queue` in the desktop Review pane so offline/detached work is visible and
@@ -905,9 +871,6 @@ mod tests {
         WorkflowNodeRunDto::export_all(&cfg).unwrap();
         WorkflowRunDto::export_all(&cfg).unwrap();
         WorkflowRunEvent::export_all(&cfg).unwrap();
-        RelayTokenDto::export_all(&cfg).unwrap();
-        RelayUserDto::export_all(&cfg).unwrap();
-        IssuedRelayTokenDto::export_all(&cfg).unwrap();
         QueuedWorkDto::export_all(&cfg).unwrap();
         WorkspaceHostDto::export_all(&cfg).unwrap();
         HostModelGatewayDto::export_all(&cfg).unwrap();

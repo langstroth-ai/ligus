@@ -312,8 +312,8 @@ while leaving relay access open. See
 
 `/v1/admin/*` (create users, issue and revoke tokens) is **disabled in the
 open-source binary**: it answers 404 unless the relay is built with an
-admin authorizer in code. No environment variable enables it. The desktop's
-**Team members** panel works only against a relay that has one.
+admin authorizer in code. No environment variable enables it. Ligus has no
+UI for it: operators issue relay access tokens on the relay side.
 
 ### GitHub-backed routes (1.x only)
 

@@ -60,7 +60,6 @@ vi.mock("@/lib/ipc", () => ({
   redeemShortCode: vi.fn(async () => ({ kind: "workspace", label: "Acme" })),
   probeRelay: vi.fn(async () => ({ status: "ok", detail: "" })),
   probeRelayAt: vi.fn(async () => ({ status: "ok", detail: "" })),
-  createRelayUser: vi.fn(async () => ({ userId: "u", userName: "Sam", raw: "tok" })),
 }));
 
 beforeEach(() => vi.clearAllMocks());

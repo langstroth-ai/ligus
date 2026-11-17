@@ -19,7 +19,6 @@ import {
   redeemShortCode,
   probeRelay,
   probeRelayAt,
-  createRelayUser,
   probeProvider,
   type RuntimeTestResult,
   type EnvDetectDto,
@@ -161,7 +160,6 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
   const [accessToken, setAccessToken] = useState("");
   const [probe, setProbe] = useState<RelayProbeDto | null>(null);
   const [testing, setTesting] = useState(false);
-  const [issuing, setIssuing] = useState(false);
   // A connection is "good enough to finish" only when the last probe was ok.
   const connectionOk = probe?.status === "ok";
 
@@ -367,33 +365,6 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
       setError(String(e));
     } finally {
       setTesting(false);
-    }
-  }
-
-  /// Host path, unauthorized + you're a relay admin: mint yourself a token.
-  async function issueMyToken() {
-    setError(null);
-    setIssuing(true);
-    try {
-      // Save the URL first so the admin call targets it.
-      const c = await getConnectionSettings();
-      await updateConnectionSettings({
-        relayUrl: relayUrl.trim(),
-        room: c.room,
-        workspaceKey: null,
-        apiKey: null,
-        relayAccessToken: null,
-        permissionMode: permMode,
-      });
-      const issued = await createRelayUser(name.trim() || "me", "");
-      setAccessToken(issued.raw);
-      setProbe(await probeRelayAt(relayUrl.trim(), issued.raw));
-    } catch (e) {
-      setError(
-        `Couldn't issue a token — you may not be an admin on this relay. Ask your relay admin for one. (${String(e)})`,
-      );
-    } finally {
-      setIssuing(false);
     }
   }
 
@@ -691,18 +662,6 @@ export function Onboarding({ onComplete }: { onComplete: () => void | Promise<vo
                   </span>
                 )}
               </div>
-            )}
-
-            {/* Host + unauthorized: an admin of this relay can mint their own token. */}
-            {teamMode === "host" && probe?.status === "unauthorized" && (
-              <button
-                onClick={issueMyToken}
-                disabled={issuing}
-                className="text-xs underline opacity-80 hover:opacity-100"
-                style={{ color: "var(--hive-accent-ink)" }}
-              >
-                {issuing ? "Creating…" : "I'm an admin on this relay — create my access token"}
-              </button>
             )}
           </div>
         )}

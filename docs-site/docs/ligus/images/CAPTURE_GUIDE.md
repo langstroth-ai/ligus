@@ -285,25 +285,6 @@ incoming request, and connected friends with presence dots.
 
 ---
 
-## 14. `settings-team-members.png` — used by `features/settings.md`
-
-**State.** Settings → **Team sync** tab, scrolled to the **Team members** panel,
-as a relay admin so the management UI is shown (not the "needs an admin" hint).
-
-**Recipe.**
-1. Point Ligus at a relay whose admin list includes your GitHub login
-   (`LIGUS_RELAY_ADMIN_LOGINS`), and sign in with GitHub (Settings → Account).
-2. Open **Settings → Team sync**, scroll to **Team members**.
-3. Add one member so the list has a row (and, optionally, capture the one-time
-   token reveal callout in a second shot — but redact/blur the token).
-
-**Must be visible.** The **Add member** row (name + GitHub login fields + Add
-button) and at least one member row with its token count and the Add token /
-Disable / Revoke actions. **Do not show a real token** — blur it if the
-one-time reveal is visible.
-
----
-
 ## New 1.0 surfaces (capture so we can wire them into their pages)
 
 These shipped in 1.0 and their docs pages exist but don't embed a screenshot

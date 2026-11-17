@@ -124,8 +124,8 @@ can act as that device and read everything it could.
    worker` boxes). The toast says whether the key was rotated ("No relay
    configured, so the key wasn't rotated" means it wasn't). Your browser
    asks for a passkey for each of the two events.
-2. If the relay enforces membership, also remove them in **Settings → Team
-   sync → Team members** (or the relay roster). That alone doesn't rotate
+2. If the relay enforces membership, also remove them from the relay
+   roster. That alone doesn't rotate
    the key; step 1 does.
 3. Revoke their relay token ([below](#relay-token)).
 4. If they had access to shared worker or serve boxes, remove their logins

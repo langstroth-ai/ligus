@@ -13,14 +13,8 @@ import {
   p2pRemoveContact,
   p2pShareCode,
   redeemShortCode,
-  listRelayUsers,
-  createRelayUser,
-  issueRelayToken,
-  revokeRelayToken,
-  setRelayUserDisabled,
   hasIssuerKey,
   setRelayIssuerKey,
-  type RelayUserDto,
 } from "@/lib/ipc";
 import {
   IconCheck,
@@ -36,14 +30,13 @@ import { toast, errMsg } from "@/components/Toast";
 import { confirmThen } from "@/lib/confirm";
 import { OrgSignInSection } from "./OrgSignInSection";
 
-/// Team sync: the relay connection (E2EE), the relay's team-member tokens, and
-/// direct peer (P2P) contacts. Connection fields write through on blur (D18).
+/// Team sync: the relay connection (E2EE), organization sign-in, and direct
+/// peer (P2P) contacts. Connection fields write through on blur (D18).
 export function TeamSyncSection() {
   return (
     <>
       <SyncSection />
       <OrgSignInSection />
-      <RelayUsersSection />
       <PeersSection />
     </>
   );
@@ -317,7 +310,7 @@ function SyncSection() {
             Relay issuer key {issuerSet.data ? "✓ set" : "(for adding remote agents)"}
           </label>
           <p className="text-xs text-ink-soft">
-            The Ed25519 seed from <code>hive-relay keygen</code> (whose public half is on the relay).
+            The Ed25519 seed from <code>langstroth-relay keygen</code> (whose public half is on the relay).
             Lets you mint agent tokens locally for the People pane’s “Add a remote agent”. Stays on
             this device — never synced.
           </p>
@@ -345,190 +338,6 @@ function SyncSection() {
           </div>
         </div>
       )}
-    </Section>
-  );
-}
-
-/// Relay access-user management, driven by the relay's admin API (when the relay enables it).
-/// Only rendered meaningfully when the signed-in user is a relay admin; for
-/// everyone else the list query fails and we show a quiet hint instead.
-function RelayUsersSection() {
-  const qc = useQueryClient();
-  const users = useQuery({ queryKey: ["relay-users"], queryFn: listRelayUsers, retry: false });
-
-  const [name, setName] = useState("");
-  const [login, setLogin] = useState("");
-  const [creating, setCreating] = useState(false);
-  // The one-time raw token to surface after create/issue.
-  const [issued, setIssued] = useState<{ who: string; raw: string } | null>(null);
-
-  const refresh = () => qc.invalidateQueries({ queryKey: ["relay-users"] });
-
-  async function create() {
-    const n = name.trim();
-    if (!n || creating) return;
-    setCreating(true);
-    try {
-      const res = await createRelayUser(n, login.trim());
-      setIssued({ who: res.userName, raw: res.raw });
-      setName("");
-      setLogin("");
-      refresh();
-    } catch (e) {
-      toast.error(errMsg(e));
-    } finally {
-      setCreating(false);
-    }
-  }
-
-  async function addToken(u: RelayUserDto) {
-    try {
-      const res = await issueRelayToken(u.id, "");
-      setIssued({ who: res.userName, raw: res.raw });
-      refresh();
-    } catch (e) {
-      toast.error(errMsg(e));
-    }
-  }
-
-  async function act(fn: () => Promise<void>) {
-    try {
-      await fn();
-      refresh();
-    } catch (e) {
-      toast.error(errMsg(e));
-    }
-  }
-
-  // Not an admin / relay has no admin API: keep the panel quiet, not alarming.
-  if (users.isError) {
-    return (
-      <Section title="Team members">
-        <p className="text-xs text-ink-soft">
-          Managing relay access here needs an admin account on a relay that supports user
-          management. Ask your relay operator to make you an admin.
-        </p>
-      </Section>
-    );
-  }
-
-  return (
-    <Section title="Team members">
-      <p className="text-xs text-ink-soft">
-        Give a teammate their own relay access token — no redeploy, and revoking is instant.
-        The token is shown once; paste it into their Ligus under Settings → Team sync.
-      </p>
-
-      {/* One-time token reveal */}
-      {issued && (
-        <div className="rounded-2xl border p-3" style={{ borderColor: "var(--hive-accent-cool)", background: "var(--hive-mist)" }}>
-          <div className="text-xs font-semibold">
-            New token for {issued.who} — copy it now, it won’t be shown again
-          </div>
-          <div className="mt-2 flex items-center gap-2">
-            <code className="min-w-0 flex-1 truncate rounded-lg border px-2 py-1 text-xs" style={fieldStyle}>
-              {issued.raw}
-            </code>
-            <Button
-              size="sm"
-              onClick={() => {
-                navigator.clipboard.writeText(issued.raw);
-                toast.success("Token copied.");
-              }}
-            >
-              Copy
-            </Button>
-            <Button size="sm" onClick={() => setIssued(null)}>
-              Done
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {/* Create */}
-      <div className="flex flex-wrap items-end gap-2">
-        <div className="min-w-0 flex-1">
-          <label className="block text-xs text-ink-soft">Name</label>
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && create()}
-            placeholder="Teammate name"
-            className="w-full rounded-xl border px-3 py-2 text-sm"
-            style={fieldStyle}
-          />
-        </div>
-        <div className="min-w-0 flex-1">
-          <label className="block text-xs text-ink-soft">Relay login (optional)</label>
-          <input
-            value={login}
-            onChange={(e) => setLogin(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && create()}
-            placeholder="a name the relay shows"
-            className="w-full rounded-xl border px-3 py-2 text-sm"
-            style={fieldStyle}
-          />
-        </div>
-        <Button variant="primary" disabled={!name.trim() || creating} onClick={create}>
-          {creating ? "Adding…" : "Add member"}
-        </Button>
-      </div>
-
-      {/* List */}
-      <div className="space-y-1.5">
-        {(users.data ?? []).map((u) => (
-          <div key={u.id} className="rounded-2xl border px-3 py-2.5" style={fieldStyle}>
-            <div className="flex items-center justify-between gap-2">
-              <div className="min-w-0">
-                <span className="text-sm font-medium">{u.name}</span>
-                {u.login && <span className="ml-1.5 text-xs text-ink-soft">@{u.login}</span>}
-                {u.disabled && (
-                  <span className="ml-1.5 text-[10px] uppercase tracking-wider" style={{ color: "var(--hive-danger-ink)" }}>
-                    disabled
-                  </span>
-                )}
-                <div className="text-xs text-ink-soft">
-                  {u.tokens.length} active token{u.tokens.length === 1 ? "" : "s"}
-                </div>
-              </div>
-              <div className="flex shrink-0 gap-1 text-xs">
-                <Button size="sm" onClick={() => addToken(u)}>
-                  Add token
-                </Button>
-                <Button size="sm" onClick={() => act(() => setRelayUserDisabled(u.id, !u.disabled))}>
-                  {u.disabled ? "Enable" : "Disable"}
-                </Button>
-              </div>
-            </div>
-            {u.tokens.length > 0 && (
-              <div className="mt-2 space-y-1 border-t pt-2" style={{ borderColor: "var(--hive-line)" }}>
-                {u.tokens.map((t) => (
-                  <div key={t.id} className="flex items-center justify-between gap-2 text-xs">
-                    <span className="min-w-0 truncate text-ink-soft">
-                      {t.label || "token"}
-                      {t.lastUsed ? ` · last used ${new Date(t.lastUsed).toLocaleDateString()}` : " · never used"}
-                    </span>
-                    <button
-                      className="shrink-0 underline opacity-70 hover:opacity-100"
-                      style={{ color: "var(--hive-danger-ink)" }}
-                      onClick={() =>
-                        confirmThen("Revoke this token? The device using it stops syncing.", () =>
-                          act(() => revokeRelayToken(t.id)),
-                        )
-                      }
-                    >
-                      Revoke
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        ))}
-        {!users.isLoading && (users.data ?? []).length === 0 && (
-          <p className="text-xs text-ink-soft">No team members yet — add one above.</p>
-        )}
-      </div>
     </Section>
   );
 }

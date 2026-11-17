@@ -22,7 +22,7 @@ use hive_core::{ActorIdentity, ActorKind, MountedVault, VaultSource, WorkspaceMe
 use hive_proto::{
     ApprovalDto, AppInfo, AppSettingsDto, ChannelDto, ChatMessageDto, ChatSessionDto,
     ChatActivityEvent, ChatStreamEvent, ChatSummaryDto, ContextTelemetryDto, FsEntryDto, GitFileDiffDto, LspServerDto, McpServerDto, ProposalDto,
-    IssuedRelayTokenDto, MentionStateDto, QueuedWorkDto, ReactionDto, RelayTokenDto, RelayUserDto,
+    MentionStateDto, QueuedWorkDto, ReactionDto,
     RuntimeSummaryDto, SkillDto, VaultSourceDto, WorkspaceAgentDto, WorkspaceHostDto,
     WorkspaceInfoDto, WorkspaceMemberDto,
 };
@@ -4833,123 +4833,6 @@ fn revoke_my_device(state: State<AppState>, device_id: String) -> Result<(), Str
     svc.revoke_device(hive_core::workspace_config_session_id(ws), ws, device).map_err(map_err)?;
     tracing::info!(target: "identity", device = %device, "revoked one of this account's devices");
     Ok(())
-}
-
-// ── Relay access user management (Settings → Team) ──────────────────────────
-// These drive the relay's /v1/admin/* API (off unless the relay enables it), authenticated by the
-// signed-in GitHub token; the relay admits only its configured admin logins.
-
-/// The configured relay URL, or a friendly error when sync isn't set up.
-fn relay_url_or_err(state: &AppState) -> Result<String, String> {
-    state
-        .settings
-        .lock()
-        .unwrap()
-        .relay_url
-        .clone()
-        .filter(|u| !u.trim().is_empty())
-        .ok_or_else(|| "set a relay URL in Settings → Team sync first".into())
-}
-
-fn relay_token_dto(t: &hive_runtime::RelayTokenEntry) -> RelayTokenDto {
-    RelayTokenDto {
-        id: t.id.clone(),
-        label: t.label.clone(),
-        last_used: if t.last_used == 0 {
-            String::new()
-        } else {
-            rfc3339(hive_core::Timestamp::from_unix_seconds(t.last_used as i64))
-        },
-        revoked: t.revoked_at.is_some(),
-    }
-}
-
-#[tauri::command]
-async fn list_relay_users(state: State<'_, AppState>) -> Result<Vec<RelayUserDto>, String> {
-    let url = relay_url_or_err(&state)?;
-    let users = state
-        .relay_client(&url)
-        .admin_list_users()
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or("this relay has no user-management API, or you're not an admin")?;
-    Ok(users
-        .into_iter()
-        .map(|u| RelayUserDto {
-            id: u.id,
-            name: u.name,
-            login: u.login,
-            disabled: u.disabled,
-            tokens: u
-                .tokens
-                .iter()
-                .filter(|t| t.revoked_at.is_none())
-                .map(relay_token_dto)
-                .collect(),
-        })
-        .collect())
-}
-
-#[tauri::command]
-async fn create_relay_user(
-    state: State<'_, AppState>,
-    name: String,
-    login: String,
-) -> Result<IssuedRelayTokenDto, String> {
-    let url = relay_url_or_err(&state)?;
-    let issued = state
-        .relay_client(&url)
-        .admin_create_user(name.trim(), login.trim(), "")
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(IssuedRelayTokenDto {
-        user_id: issued.user.id,
-        user_name: issued.user.name,
-        raw: issued.raw,
-    })
-}
-
-#[tauri::command]
-async fn issue_relay_token(
-    state: State<'_, AppState>,
-    user_id: String,
-    label: String,
-) -> Result<IssuedRelayTokenDto, String> {
-    let url = relay_url_or_err(&state)?;
-    let issued = state
-        .relay_client(&url)
-        .admin_issue_token(&user_id, label.trim())
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(IssuedRelayTokenDto {
-        user_id: issued.user.id,
-        user_name: issued.user.name,
-        raw: issued.raw,
-    })
-}
-
-#[tauri::command]
-async fn revoke_relay_token(state: State<'_, AppState>, token_id: String) -> Result<(), String> {
-    let url = relay_url_or_err(&state)?;
-    state
-        .relay_client(&url)
-        .admin_revoke_token(&token_id)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn set_relay_user_disabled(
-    state: State<'_, AppState>,
-    user_id: String,
-    disabled: bool,
-) -> Result<(), String> {
-    let url = relay_url_or_err(&state)?;
-    state
-        .relay_client(&url)
-        .admin_set_user_disabled(&user_id, disabled)
-        .await
-        .map_err(|e| e.to_string())
 }
 
 #[tauri::command(async)]
@@ -14826,10 +14709,6 @@ pub fn run() {
             guards::growth_suggestions,
             guards::get_hygiene_report,
             get_app_info,
-            list_relay_users,
-            create_relay_user,
-            issue_relay_token,
-            revoke_relay_token,
             ligus_auth_ui::ligus_auth_status,
             ligus_auth_ui::ligus_auth_start,
             ligus_auth_ui::ligus_auth_poll,
@@ -14843,7 +14722,6 @@ pub fn run() {
             passkey_ui::workspace_rules_set,
             passkey_ui::presence_cancel,
             passkey_ui::presence_use_recovery,
-            set_relay_user_disabled,
             workflows::list_workflows,
             flow::flow_get_settings,
             flow::flow_set_settings,
