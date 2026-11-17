@@ -499,3 +499,31 @@ async fn gateway_redirects_are_not_followed() {
     assert!(s.heads.is_empty(), "a redirect was followed with the gateway's credential: {:?}", s.heads);
 }
 
+/// An HTTP runtime whose endpoint is on a gateway goes through it only for
+/// the gateway wire's model API: an endpoint on the gateway's admin routes
+/// (LiteLLM's key minting) would otherwise get the injected credential, and
+/// the reply would come back to whoever set the endpoint.
+#[test]
+fn covered_endpoint_must_be_the_model_api() {
+    let gws = ModelGateways::new(
+        cfg(r#"{"gateways":[{"name":"litellm","url":"https://litellm.gw.svc:4000","auth":{"mode":"none"}},
+            {"name":"claude-gw","url":"https://ai.example.com/anthropic","api":"anthropic","auth":{"mode":"none"}}]}"#)
+        .unwrap(),
+        false,
+        None,
+    );
+    for (p, e) in [
+        (ModelProviderKind::Custom, "https://litellm.gw.svc:4000/key/generate"),
+        (ModelProviderKind::OpenAI, "https://litellm.gw.svc:4000/user/new"),
+        (ModelProviderKind::Custom, "https://litellm.gw.svc:4000/v1/chat/completions/../../key/generate"),
+        (ModelProviderKind::Custom, "https://litellm.gw.svc:4000/v1/%2e%2e/key/generate"),
+        (ModelProviderKind::Custom, "https://litellm.gw.svc:4000"),
+        (ModelProviderKind::Anthropic, "https://ai.example.com/anthropic/admin/keys"),
+        (ModelProviderKind::Anthropic, "https://litellm.gw.svc:4000/v1/chat/completions"),
+    ] {
+        assert!(gws.route(p, e, None).is_err(), "{p:?} {e} got the gateway's credential");
+    }
+    assert!(gws.route(ModelProviderKind::Custom, "https://litellm.gw.svc:4000/v1/chat/completions", None).unwrap().is_some());
+    assert!(gws.route(ModelProviderKind::Anthropic, "https://ai.example.com/anthropic/v1/messages", None).unwrap().is_some());
+}
+

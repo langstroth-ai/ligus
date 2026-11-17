@@ -220,6 +220,22 @@ impl Gateway {
         prefix.is_empty() || p == prefix || p.starts_with(&format!("{prefix}/"))
     }
 
+    /// The path (and query) of `endpoint` below this gateway's base path,
+    /// starting with `/`, when [`Self::covers`] it. Taken from the raw string
+    /// (the URL parser would resolve dot segments and hide them).
+    pub fn relative_path(&self, endpoint: &str) -> Option<String> {
+        if !self.covers(endpoint) {
+            return None;
+        }
+        let e = endpoint.trim();
+        let after_scheme = &e[e.find("://")? + 3..];
+        let raw_path = after_scheme.find(['/', '?']).map(|i| &after_scheme[i..]).unwrap_or("");
+        let raw_path = raw_path.split('#').next().unwrap_or_default();
+        let prefix = self.base.path().trim_end_matches('/');
+        let rest = raw_path.strip_prefix(prefix).unwrap_or(raw_path);
+        Some(if rest.starts_with('/') { rest.to_string() } else { format!("/{rest}") })
+    }
+
     /// Every file holding this gateway's credential material (for the
     /// sandbox's deny list).
     pub fn secret_files(&self) -> Vec<PathBuf> {
@@ -603,6 +619,20 @@ impl ModelGateways {
         }
         if !provider.is_cli_agent() && !endpoint.trim().is_empty() {
             if let Some(g) = self.gateways.iter().find(|g| g.covers(endpoint)) {
+                // The credential goes to the gateway wire's model API only
+                // (as on the proxy route): an endpoint on its admin routes,
+                // its root or the other wire is refused, not sent.
+                if let Some(why) = cli_unsupported(provider, g.api()) {
+                    return Err(why);
+                }
+                let model_api = g.relative_path(endpoint).is_some_and(|p| route_path_allowed(g.api(), "POST", &p));
+                if !model_api {
+                    return Err(format!(
+                        "this runtime's endpoint is on the model gateway '{}' but isn't its model API; set the runtime's gateway to '{}' instead of an endpoint",
+                        g.name(),
+                        g.name()
+                    ));
+                }
                 let attribution = self.attribution_for(g, &GatewaySelection::default());
                 return Ok(Some(ResolvedGateway { gateway: g.clone(), attribution }));
             }
