@@ -124,7 +124,8 @@ fn tool_output(bodies: &[Value]) -> Option<String> {
     })
 }
 
-/// The secret files this process loaded (`*_FILE`, `LIGUS_WS_SECRET_DIR`),
+/// The secret files this process loaded (`*_FILE`, `LIGUS_WS_SECRET_DIR`,
+/// the secret-store mount `LIGUS_SECRETS_DIR`),
 /// which the turn must not read.
 fn secret_files() -> Vec<PathBuf> {
     let mut v: Vec<PathBuf> = crate::hardening::FILE_SECRETS
@@ -132,7 +133,8 @@ fn secret_files() -> Vec<PathBuf> {
         .filter_map(|n| crate::env_opt(&format!("{n}_FILE")))
         .map(PathBuf::from)
         .collect();
-    if let Some(d) = crate::env_opt(crate::hardening::WS_SECRET_DIR) {
+    for var in [crate::hardening::WS_SECRET_DIR, crate::hardening::SECRETS_DIR] {
+        let Some(d) = crate::env_opt(var) else { continue };
         if let Ok(rd) = std::fs::read_dir(&d) {
             v.extend(rd.flatten().map(|e| e.path()).filter(|p| p.file_name().is_some_and(|n| !n.to_string_lossy().starts_with('.'))));
         }

@@ -9,7 +9,9 @@
 //!   volume then never appears in the pod spec's environment, in
 //!   `/proc/<pid>/environ` or in `kubectl describe`. The values are loaded into
 //!   this process only (agent processes never inherit Ligus's secrets), and the
-//!   files are added to the paths agent processes can't read.
+//!   files are added to the paths agent processes can't read. The k8s
+//!   secret-store backend's mount (`LIGUS_SECRETS_DIR`, where the Helm chart
+//!   puts the workspace key as `cli.key`) is denied to agents the same way.
 //! - **Not dumpable.** `PR_SET_DUMPABLE=0` on Linux, so no other process of
 //!   the same user (an agent turn that escaped its sandbox, a debugging shell)
 //!   can read this process's memory or `/proc/<pid>/environ`.
@@ -27,6 +29,9 @@ pub const FILE_SECRETS: &[&str] = &[
     "LIGUS_REMOTE_REG_TOKEN",
     "LIGUS_NTFY_TOKEN",
 ];
+
+/// The k8s secret-store backend's mount (see `hive_runtime::secret_store`).
+pub const SECRETS_DIR: &str = "LIGUS_SECRETS_DIR";
 
 /// Directory of workspace runtime secrets, one file per `secret_ref`.
 pub const WS_SECRET_DIR: &str = "LIGUS_WS_SECRET_DIR";
@@ -90,6 +95,18 @@ pub fn resolve_secret_files(get: impl Fn(&str) -> Option<String>) -> SecretFiles
             Ok(_) => out.errors.push(format!("{name}_FILE {} is empty", path.display())),
             Err(e) => out.errors.push(format!("{name}_FILE {}: {e}", path.display())),
         }
+    }
+    // The k8s secret-store backend's mount (`LIGUS_SECRETS_DIR`, read by
+    // `secret_store::K8sSecretFile` as `<dir>/<scope>.<name>`): Ligus's own
+    // items, so agents never read it.
+    if let Some(dir) = get(SECRETS_DIR) {
+        let dir = PathBuf::from(dir.trim());
+        if let Ok(c) = std::fs::canonicalize(&dir) {
+            if c != dir {
+                out.deny.push(c);
+            }
+        }
+        out.deny.push(dir);
     }
     if let Some(dir) = get(WS_SECRET_DIR) {
         let dir = PathBuf::from(dir.trim());
@@ -245,6 +262,15 @@ mod tests {
         let got = resolve_secret_files(lookup(&env));
         assert_eq!(got.vars, vec![("LIGUS_WS_SECRET_anthropic".to_string(), "sk-ant".to_string())]);
         assert_eq!(got.errors.len(), 1, "{:?}", got.errors);
+        assert!(got.deny.contains(&dir.path().to_path_buf()));
+    }
+
+    #[test]
+    fn the_secret_store_mount_is_denied_to_agents() {
+        let dir = tempfile::tempdir().unwrap();
+        let env: HashMap<String, String> = [(SECRETS_DIR.into(), dir.path().display().to_string())].into();
+        let got = resolve_secret_files(lookup(&env));
+        assert!(got.vars.is_empty());
         assert!(got.deny.contains(&dir.path().to_path_buf()));
     }
 
