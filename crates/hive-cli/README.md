@@ -69,7 +69,7 @@ Chat ids come from `ligus chats` (or `ligus sync` then `ligus chats` to pull a
 workspace the app created).
 
 > **Where should the agent run?** See
-> [Headless agents & setups](../../docs-site/operator/docs/concepts/headless-agents.md) for the
+> [Headless agents & setups](../../docs-site/docs/operate/concepts/headless-agents.md) for the
 > four topologies (shared data dir · local relay · remote worker · team) and how
 > to pick one.
 

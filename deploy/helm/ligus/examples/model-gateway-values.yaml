@@ -3,8 +3,8 @@
 #   helm install acme deploy/helm/ligus -n ligus-ws-acme \
 #     -f my-values.yaml -f deploy/helm/ligus/examples/model-gateway-values.yaml
 # See README.md, "Model gateways", and the docs page "Deploying with an LLM
-# gateway" (https://docs.langstroth.ai/deploy/model-gateways/,
-# source docs-site/operator/docs/deploy/model-gateways.md).
+# gateway" (https://docs.langstroth.ai/operate/deploy/model-gateways/,
+# source docs-site/docs/operate/deploy/model-gateways.md).
 modelGateways:
   # In-cluster gateway (LiteLLM, kgateway, Envoy AI Gateway, ...) that
   # verifies Kubernetes ServiceAccount tokens: a projected token with this

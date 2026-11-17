@@ -1,15 +1,16 @@
 # Hive developer & maintainer docs
 
 Docs for people working **on** Hive (architecture, internals, contributing).
-If you're looking for how to **use** or **self-host** it, that's one of the two
-published MkDocs sites built from [`docs-site/`](../docs-site/README.md).
+If you're looking for how to **use** or **self-host** it, that's the published
+MkDocs site, docs.langstroth.ai, built from [`docs-site/`](../docs-site/README.md).
 
-> **Audience split.** `docs-site/user/` = using the Ligus apps (docs.ligus.ai).
-> `docs-site/operator/` = self-hosting and deploying the Langstroth platform
-> (docs.langstroth.ai). `docs/` (here) = implementation, internals, release
-> engineering (contributors). Rule of thumb: *"how do I use it"* → user site;
-> *"how do I run/deploy it"* → operator site; *"how is it built / how do I
-> change it"* → here.
+> **Audience split.** `docs-site/docs/ligus/` = using the Ligus apps (Using
+> Ligus, docs.langstroth.ai/ligus/). `docs-site/docs/operate/` = self-hosting
+> and deploying the Langstroth platform (Operating Langstroth,
+> docs.langstroth.ai/operate/). `docs/` (here) = implementation, internals,
+> release engineering (contributors). Rule of thumb: *"how do I use it"* →
+> Using Ligus; *"how do I run/deploy it"* → Operating Langstroth; *"how is it
+> built / how do I change it"* → here.
 
 ## Start here
 
@@ -19,7 +20,7 @@ published MkDocs sites built from [`docs-site/`](../docs-site/README.md).
 | [multiuser.md](multiuser.md) | Relay-forwarded sync, E2EE, testing multiuser across machines. |
 | [relay-deploy.md](relay-deploy.md) | Cloud-hosting the `hive-relay` binary. |
 | [packaging.md](packaging.md) | Bundling + signing/notarization per OS. |
-| [hive-server-side-membership.md](../docs-site/operator/docs/ops/server-side-membership.md) | Relay-side workspace membership in the open relay (`LIGUS_RELAY_MEMBERSHIP=1`). |
+| [hive-server-side-membership.md](../docs-site/docs/operate/ops/server-side-membership.md) | Relay-side workspace membership in the open relay (`LIGUS_RELAY_MEMBERSHIP=1`). |
 
 ## Feature plans
 
@@ -41,7 +42,7 @@ with the code, the code wins.
 - Branding: [`hive-logo-system.md`](hive-logo-system.md) — logo/brand assets.
 
 Operator docs (self-hosting the relay, ligus-auth, hosts) live under
-[`docs-site/operator/docs/`](../docs-site/operator/docs/).
+[`docs-site/docs/operate/`](../docs-site/docs/operate/).
 
 ## Building & running
 

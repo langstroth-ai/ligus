@@ -167,4 +167,4 @@ new one next to the 1.x service rather than converting it:
 The 1.x service, its data dir and each checkout's `.hive/` (with its chat
 worktrees and `hive/chat/*` branches) are left exactly as they are. 2.0 keeps
 its own state in `.ligus/`. To remove 1.x when you're done, see
-[Upgrading from Hive 1.x](../../docs-site/operator/docs/deploy/upgrade-from-hive.md#removing-hive-1x-when-youre-done).
+[Upgrading from Hive 1.x](../../docs-site/docs/operate/deploy/upgrade-from-hive.md#removing-hive-1x-when-youre-done).

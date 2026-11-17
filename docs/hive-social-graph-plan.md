@@ -276,5 +276,5 @@ on top. Nobody re-onboards.
 
 ## 10. Relationship to existing docs
 
-- Server-side membership & the `WriteGuard` seam: [`hive-server-side-membership.md`](../docs-site/operator/docs/ops/server-side-membership.md)
+- Server-side membership & the `WriteGuard` seam: [`hive-server-side-membership.md`](../docs-site/docs/operate/ops/server-side-membership.md)
 - P2P transport internals: [`architecture.md`](architecture.md), [`multiuser.md`](multiuser.md)

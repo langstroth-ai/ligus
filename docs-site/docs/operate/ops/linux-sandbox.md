@@ -10,7 +10,7 @@ strongest, and `ligus doctor` prints it:
 $ ligus doctor
 agent sandbox: landlock
   Landlock (ABI 8) + seccomp, without namespaces, because bubblewrap can't create a user namespace: AppArmor restricts unprivileged user namespaces on this host (kernel.apparmor_restrict_unprivileged_userns=1) and there is no AppArmor profile for bwrap (Ubuntu 24.04 ships none; 24.10 and later do)
-  - to restore the bubblewrap tier, install the optional AppArmor profile for bwrap: https://docs.langstroth.ai/ops/linux-sandbox/#apparmor-profile
+  - to restore the bubblewrap tier, install the optional AppArmor profile for bwrap: https://docs.langstroth.ai/operate/ops/linux-sandbox/#apparmor-profile
   - …
 ```
 
