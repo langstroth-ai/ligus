@@ -113,9 +113,20 @@ the tunnel when the host is paired with remote access.
 | `GET /v1/invites/pending` | | invites in the box's contact drop box (relay v0.3); the codes stay on the box |
 | `POST /v1/invites/pending/accept` | `{relay, seq, confirmSafetyCode}` | |
 | `POST /v1/invites/pending/dismiss` | `{relay, seq}` | |
-| `GET /v1/dms` | | the box's direct messages (one kept per person; simultaneous opens archived) |
-| `POST /v1/dms` | `{accountId}` | opens or founds a DM with a co-member; the signed invite is dropped into their contact box (`delivered`) or returned to share. Not on a box acting for its owner |
+| `GET /v1/dms` | | the box's direct messages (one kept per person; simultaneous opens archived); a row whose invite is held carries `inviteDelivery` |
+| `POST /v1/dms` | `{accountId}` | opens or founds a DM with a co-member; the signed invite is dropped into their contact box (`delivered`), or, when their contact id isn't known yet, held and delivered once it is (`delivered: false, pending: true, inviteDelivery`); `invite` is returned to share either way. Not on a box acting for its owner |
+| `GET /v1/dms/:workspaceId/invite` | | `{invite, inviteDelivery}`: a held invite's link, to share by hand while it waits. Tunnel or loopback only; 410 once it is no longer held |
+| `POST /v1/dms/:workspaceId/invite/confirm` | `{}` | after the unverified-recipient warning (`inviteDelivery.state: "warning"`), deliver to their current verified devices |
+| `DELETE /v1/dms/:workspaceId/invite` | | stop waiting; the held copy is forgotten |
 | `GET /v1/chats/:id/founder` | | `{waiting, founderName?}`: sends wait for the founder's signed founding (a send answers 409 `waiting_for_founder`) |
+
+`inviteDelivery` is `{state, pending, delivered, deliveredAt, expiresAt,
+warning}`. `state` is `waiting` (no contact id yet, or retrying after a
+failed drop), `warning` (their keys changed since the DM was opened: held
+until confirmed), `sending`, `delivered`, `joined` (they joined from a link
+you shared), `expired` (7 days), `dismissed` or `failed`. A change is also
+sent on the event stream as `dm.invite` `{workspaceId, inviteDelivery}`,
+followed by `dms.changed`.
 
 A DM's chat is listed by `GET /v1/chats` with a `dm` object and takes
 messages through `/v1/chats/:id/messages`; agents never run there and its
