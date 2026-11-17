@@ -382,7 +382,7 @@ impl ChatService {
     /// can't lock themself out.
     pub fn set_workspace_rules(&mut self, workspace_id: Uuid, version: u32) -> Result<SessionEventEnvelope> {
         if version < hive_core::authz::RULES_GENESIS {
-            return Err(ChatError::Unauthorized("rules version 1 doesn't exist in Ligus 2.0".into()));
+            return Err(ChatError::Unauthorized("rules version 1 doesn't exist in Ligus".into()));
         }
         let account = self.author.account_id.ok_or_else(|| ChatError::Unauthorized("changing the rules needs an account".into()))?;
         let creds = self.passkeys_of(workspace_id, account)?;

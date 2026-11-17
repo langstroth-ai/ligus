@@ -205,7 +205,7 @@ Args: dict rules what.
 {{- fail "remote.enabled needs remote.relayUrl (or relay.enabled=true)" -}}
 {{- end -}}
 {{- if hasKey .Values "sandbox" -}}
-{{- fail "sandbox.* was removed: Kubernetes per-turn executors and PR-test sandboxes are not supported in 2.0 (agent turns run in the serve/worker pod under Ligus's own sandbox; see deploy/kubernetes.md, Explicitly unsupported)" -}}
+{{- fail "sandbox.* was removed: Kubernetes per-turn executors and PR-test sandboxes are not supported in 0.1 (agent turns run in the serve/worker pod under Ligus's own sandbox; see deploy/kubernetes.md, Explicitly unsupported)" -}}
 {{- end -}}
 {{- if or (hasKey .Values.serve "secretEnv") (hasKey .Values.worker "secretEnv") -}}
 {{- fail "serve.secretEnv / worker.secretEnv (envFrom of a whole Secret) was removed: put workspace runtime credentials in <host>.workspaceSecrets.existingSecret (mounted as files, LIGUS_WS_SECRET_DIR) and provider keys CLI agents need in <host>.agentEnv (allow-listed)" -}}
@@ -235,7 +235,7 @@ Args: dict rules what.
 {{- include "ligus.validateEgressRules" (dict "rules" .egress "what" (printf "mcp.servers[%s].egress" .name)) -}}
 {{- end -}}
 {{- if hasKey .Values "otel" -}}
-{{- fail "otel.* was removed: Ligus does not export OpenTelemetry in 2.0" -}}
+{{- fail "otel.* was removed: Ligus does not export OpenTelemetry in 0.1" -}}
 {{- end -}}
 {{- end -}}
 

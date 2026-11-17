@@ -1298,7 +1298,7 @@ mod tests {
         assert_eq!(eng.cursor(), 2, "skipped for good, not retried");
     }
 
-    /// A 2.0 build receives a signed envelope a newer "2.1 encoder" made (an
+    /// A 0.1 build receives a signed envelope a newer "0.2 encoder" made (an
     /// extra top-level field, a new event kind with nested data): it verifies,
     /// is stored byte for byte, and goes back out byte for byte on re-push.
     #[test]

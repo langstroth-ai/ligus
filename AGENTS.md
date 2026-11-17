@@ -52,7 +52,7 @@ This machine (always pass `--data-dir`; never the desktop app's. If you pass
 ```sh
 L=deploy/local/ligus-local
 $L preflight --role serve --data-dir ~/.ligus-serve --json
-$L install-cli [--version vX.Y.Z | --from-source] [--bin-dir DIR]   # until 2.0 is released: --from-source
+$L install-cli [--version vX.Y.Z | --from-source] [--bin-dir DIR]   # until 0.1.0 is released: --from-source
 $L configure --role serve --data-dir ~/.ligus-serve [--listen ADDR] [--label NAME] --json
 #   then the HUMAN enrolls (configure prints the exact command)
 $L start --role serve --data-dir ~/.ligus-serve [--systemd] --json

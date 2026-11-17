@@ -7,7 +7,7 @@ name: kind-e2e
 # no plaintext in the relay database, restart on the same identity, Pod
 # Security "restricted" and NetworkPolicy isolation.
 # The chart sets LIGUS_* variables and the test pod runs `ligus`, so this
-# needs a tree at 2.0 or later (the Ligus rename; 2.0 ignores HIVE_*).
+# needs a tree at 0.1 or later (the Ligus rename; 0.1 ignores HIVE_*).
 # Runs on release branches and tags, on PRs that touch the chart, the
 # container image or this workflow, and on manual dispatch. It takes ~15-25
 # min (two image builds plus a kind cluster), so ordinary crate changes no
@@ -153,7 +153,7 @@ jobs:
             -f deploy/helm/ligus/ci/kind-values.yaml --wait --timeout 5m
       - name: install worker (own throwaway workspace)
         run: |
-          # 2.0 admits a box to a workspace only through an Admin's invite, and
+          # 0.1 admits a box to a workspace only through an Admin's invite, and
           # nothing here can issue one headlessly yet, so the worker cannot
           # join serve's workspace (it would found a competing one or be
           # refused). It runs the same chart, sandbox preflight and Pod

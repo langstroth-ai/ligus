@@ -8,7 +8,7 @@
 //! holds with a founder pin (the same form rotations seal to, B1). Inviting a
 //! co-member to another workspace, or opening a DM with one, needs no
 //! directory: the invite is sealed to those keys. There is no relay
-//! directory in 2.0 and no lookup by handle; a display name is never an
+//! directory in 0.1 and no lookup by handle; a display name is never an
 //! identifier (two co-members may share one), so everything here is keyed by
 //! the random account id and shown with the account's safety code.
 //!

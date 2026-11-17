@@ -710,7 +710,7 @@ mod tests {
         assert_eq!(items.last().unwrap().blob, serde_json::json!({ "real": true }));
     }
 
-    /// S15: a 2.0 client against a relay without the contact routes (v0.2)
+    /// S15: a 0.1 client against a relay without the contact routes (v0.2)
     /// finds out on its first write and degrades to links and QR codes.
     #[tokio::test]
     async fn client_degrades_without_contacts_routes() {

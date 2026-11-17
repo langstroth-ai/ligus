@@ -7,7 +7,7 @@ instead of a window. It runs workers, the phone's home host
 `brew install ligus-ai/ligus/ligus` (macOS and Linux) or build the container
 image in `deploy/container/`.
 
-This page is checked against `crates/hive-cli/src/main.rs` for 2.0.0. The
+This page is checked against `crates/hive-cli/src/main.rs` for 0.1.0. The
 built-in help is `ligus --help` (also `-h`, `help`, or `--help` after any
 command); it prints to stderr and exits with status 2.
 

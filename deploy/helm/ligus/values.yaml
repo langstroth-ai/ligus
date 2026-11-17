@@ -140,7 +140,7 @@ worker:
   # with `ligus set-agent-host`). Removing an entry stops that host but keeps
   # its PVCs; delete them, and revoke the host, once its agents are rebound.
   # Never autoscale workers. (Admin enrollment of each worker as a member
-  # arrives with the 2.0 member-bootstrap work; see the deploy docs.)
+  # arrives with the 0.1 member-bootstrap work; see the deploy docs.)
   instances: []
   # - name: build-1
   #   permissionMode: acceptEdits   # overrides worker.permissionMode

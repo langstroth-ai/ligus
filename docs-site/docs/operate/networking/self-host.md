@@ -317,7 +317,7 @@ UI for it: operators issue relay access tokens on the relay side.
 
 ### GitHub-backed routes (1.x only)
 
-Ligus 2.0 doesn't use these routes and never sends a GitHub (or any forge)
+Ligus 0.1 doesn't use these routes and never sends a GitHub (or any forge)
 token to a relay. From relay v0.3 they are off unless the operator turns them
 on for 1.x clients. Directory, account and friends routes identify the caller by a GitHub token
 sent in `X-Hive-Github-Token` (or `X-Ligus-Github-Token`), verified against

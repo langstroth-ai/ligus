@@ -38,7 +38,7 @@ with the code, the code wins.
 - Relay protocol: [`hive-relay-api.md`](hive-relay-api.md) — the `/v1` wire contract (client ↔ relay).
 - Phone remote access: [`relay-tunnel.md`](relay-tunnel.md) — the open `hive-tunnel/1` protocol (host registration, phone credentials, Noise end-to-end session, stream mux, push). Golden vectors and their Go generator and Rust cross-checker are in [`relay-tunnel/`](relay-tunnel/). Where it's built: relay endpoints in [ligus-ai/relay](https://github.com/ligus-ai/relay), the host connector in `crates/hive-cli/src/serve/tunnel/`, the phone client in the `ligus-ios` repo, and APNs push in the relay.
 - Kubernetes: [`design/kubernetes.md`](design/kubernetes.md) — relay, `ligus serve` and agent runners on Kubernetes, sandboxed turn executors, security model, phased plan (design; Phase 1 chart in `deploy/helm/ligus/`, image in `deploy/container/`).
-- Ligus 2.0: [`design/v2/`](design/v2/README.md) — architecture review, Phase 0 track specs, identity without GitHub and many forges, relay-directory trust.
+- Ligus 0.1: [`design/v2/`](design/v2/README.md) — architecture review, Phase 0 track specs, identity without GitHub and many forges, relay-directory trust.
 - Branding: [`hive-logo-system.md`](hive-logo-system.md) — logo/brand assets.
 
 Operator docs (self-hosting the relay, ligus-auth, hosts) live under

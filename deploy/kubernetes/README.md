@@ -1,7 +1,7 @@
 # Ligus on Kubernetes
 
 Status: **preview** (charts and images not published). The operator guide,
-including supported nodes, backups, upgrades and what 2.0 does not support, is
+including supported nodes, backups, upgrades and what 0.1 does not support, is
 [`docs-site/docs/operate/deploy/kubernetes.md`](../../docs-site/docs/operate/deploy/kubernetes.md). The Helm chart is in
 [`../helm/ligus`](../helm/ligus) and its README is the install guide. The
 design, and the phases still to come, are in
@@ -82,7 +82,7 @@ kubectl -n ligus-ws-acme exec -it ligus-serve-0 -- ligus pair --relay-only
 ```
 
 (`ligus serve enroll`, which made the pod one member's device, is being
-replaced in 2.0 by serve joining as its own member; see the operator guide.)
+replaced in 0.1 by serve joining as its own member; see the operator guide.)
 
 `ligus pair` prints a secret. Prefer the relay tunnel (`ligus remote enable`)
 for the phone over exposing the serve API through an Ingress.

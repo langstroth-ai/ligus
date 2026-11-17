@@ -3,7 +3,7 @@
 !!! danger "Not yet implemented"
     This page describes a design for one self-hosted deployment serving
     several unrelated organisations (tenants). Most of the tenant-aware parts
-    below don't exist in 2.0: an access token admits a caller to the relay,
+    below don't exist in 0.1: an access token admits a caller to the relay,
     not to a tenant, and beyond ligus-auth's tenant claims and
     `LIGUS_RELAY_TENANTS` the relay has no per-tenant authorization. Don't
     run a relay for mutually distrusting organisations and rely on anything

@@ -4,7 +4,7 @@ This section is the reference for what Ligus protects, against whom, and
 where its protection stops. It has three pages:
 
 - **Security model** (this page): the components, what each holds, the trust
-  boundaries in each deployment shape, encryption, roles and the 2.0 guards.
+  boundaries in each deployment shape, encryption, roles and the 0.1 guards.
 - [Threat model](threat-model.md): attackers, what they can and can't do, and
   the known limitations stated plainly.
 - [Runbooks](runbooks.md): device revocation, key rotation, a lost phone,
@@ -257,7 +257,7 @@ what need a **passkey** assertion over the event:
   and every effect of a chat's primary runtime are judged at the Agent tier,
   which can't vote or administer.
 
-## The 2.0 guards {#guards}
+## The 0.1 guards {#guards}
 
 | Guard | What it does | Who can switch it | Details |
 |---|---|---|---|
@@ -286,7 +286,7 @@ list with status is in
 - [Roles](#roles): agents bound to a host sign their replies and tool
   effects with their own certified keys; the Ligus MCP server checks the
   Agent tier before signing.
-- [The 2.0 guards](#guards): the OS sandbox allows exactly one extra path, the
+- [The 0.1 guards](#guards): the OS sandbox allows exactly one extra path, the
   turn's Ligus MCP socket. CLI agents run with a per-turn home, so they can't
   persist hooks or MCP servers into your real CLI config (C-9). On macOS the
   profile also denies Apple Events and the pasteboard (C-13).
@@ -298,7 +298,7 @@ list with status is in
 - [Roles](#roles): revoking a device needs Admin, and both ingest and the
   trust roster ignore anyone below it. A removed member can't enroll
   themselves back; only an Admin's re-add lifts the removal.
-- [The 2.0 guards](#guards): dearth mode holds devices awaiting their second
+- [The 0.1 guards](#guards): dearth mode holds devices awaiting their second
   approval, and events no certified device vouches for, in every identity
   mode. The human gate for protected paths reads the paths in the diff
   itself, case-insensitively, and an approval is void if the patch changes
@@ -338,7 +338,7 @@ list with status is in
   re-sent as the bytes received. Trust rosters are per workspace, with the
   founder pinned from the invite, and nothing in a fold reads the
   environment (`LIGUS_IDENTITY_MODE` is ignored).
-- [The 2.0 guards](#guards): agent processes run in the OS sandbox with a
+- [The 0.1 guards](#guards): agent processes run in the OS sandbox with a
   per-turn egress proxy and an allow-listed environment; repository-supplied
   runtimes and MCP servers are inert until trusted on the device; the author
   gate applies on every host at the author's role when they posted. Turn

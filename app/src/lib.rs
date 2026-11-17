@@ -11419,7 +11419,7 @@ fn build_state(app: &AppHandle) -> Result<AppState, String> {
     build_state_in(app, data_dir)
 }
 
-/// Ligus 2.0 starts fresh: its data dir must not be, link to, or contain Hive
+/// Ligus 0.1 starts fresh: its data dir must not be, link to, or contain Hive
 /// 1.x data (`com.hive.desktop`, `~/.hive`, ...), which is never read or
 /// changed. On a refusal, show a blocking error and stop before anything is
 /// created or opened.
@@ -11525,7 +11525,7 @@ fn ask_init_failure(f: &InitFailure) -> InitChoice {
 /// dir; the in-app live test (`e2e`) points it at a temp dir.
 /// Before anything opens the data dir: refuse a Hive 1.x dir (never read or
 /// changed; see `hive_core::compat::check_data_dir`), create it, run a
-/// pending factory reset, and mark it as a Ligus 2.0 data dir.
+/// pending factory reset, and mark it as a Ligus 0.1 data dir.
 fn prepare_data_dir(data_dir: &Path) -> Result<(), String> {
     // Never a Hive 1.x dir (also checked by `build_state`, with a dialog).
     hive_core::compat::check_data_dir(data_dir, hive_core::compat::home_dir().as_deref())?;
@@ -11554,7 +11554,7 @@ fn prepare_data_dir(data_dir: &Path) -> Result<(), String> {
         }
         let _ = std::fs::remove_file(&reset_marker);
     }
-    // Mark the dir as a Ligus 2.0 data dir (after a reset wipe, too).
+    // Mark the dir as a Ligus 0.1 data dir (after a reset wipe, too).
     hive_core::compat::mark_data_dir(data_dir).map_err(map_err)?;
     Ok(())
 }
@@ -17565,7 +17565,7 @@ mod settings_secret_tests {
 
 #[cfg(test)]
 mod fresh_start_tests {
-    //! Ligus 2.0 starts fresh: the desktop init path never reads or changes a
+    //! Ligus 0.1 starts fresh: the desktop init path never reads or changes a
     //! Hive 1.x app-data dir next to its own, and starts with empty data.
     use super::*;
 
@@ -17650,7 +17650,7 @@ mod fresh_start_tests {
         {
             let link = tmp.path().join("linked");
             std::os::unix::fs::symlink(&legacy, &link).unwrap();
-            assert!(prepare_data_dir(&link).is_err(), "a 2.0 dir that is a symlink to the 1.x dir");
+            assert!(prepare_data_dir(&link).is_err(), "a Ligus dir that is a symlink to the 1.x dir");
             std::fs::remove_file(&link).unwrap();
         }
         // A pending reset in a 1.x dir must never wipe it.
@@ -17666,7 +17666,7 @@ mod first_run_tests {
     use super::*;
 
     /// Onboarding completion and the tour-seen flag live in this data dir's
-    /// settings.json, so a fresh data dir is always a first run (2.0 never
+    /// settings.json, so a fresh data dir is always a first run (0.1 never
     /// reads the webview's old `hive.onboarded`/`hive.tourSeen`).
     #[test]
     fn first_run_flags_default_off_and_skip_when_false() {

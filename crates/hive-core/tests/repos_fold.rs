@@ -1,5 +1,5 @@
 //! Workspace repositories, chat repos and the explicit apply request (Phase
-//! A, item 6: wire frozen in 2.0; UI later). Every case is signed by real
+//! A, item 6: wire frozen in 0.1; UI later). Every case is signed by real
 //! devices in a rules-v2 workspace.
 
 use hive_core::authz::votes::diff_digest;

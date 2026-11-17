@@ -28,7 +28,7 @@ launch:
   on hosts without FUSE).
 
 **"Ligus can't use this data folder"** on launch: the data dir is, or links
-to, Hive 1.x data, which 2.0 never uses or changes. Nothing was changed. See
+to, Hive 1.x data, which 0.1 never uses or changes. Nothing was changed. See
 [Upgrading from Hive 1.x](../../operate/deploy/upgrade-from-hive.md#troubleshooting-the-upgrade).
 
 ## Sync is stuck or peers don't see each other
@@ -47,7 +47,7 @@ reason) or **offline**. Then, on every device:
    rather than silently dropping events.
 4. **The relay accepts the device's token**: see [Relay 401s](#relay-401s).
 5. **Only one process per data dir.** Two `ligus` processes (or a 1.x and a
-   2.0) on one data dir fight over one device identity.
+   0.1) on one data dir fight over one device identity.
 6. **A device offline for a long time** catches up from the relay only as
    far back as the relay retains (by default the newest 50,000 envelopes per
    workspace); older events come from a peer that still has them.
@@ -242,7 +242,7 @@ has read project files, MCP calls are refused (the exfiltration guard). See
 
 ## A `HIVE_*` setting has no effect
 
-2.0 reads only `LIGUS_*` names. Look for
+0.1 reads only `LIGUS_*` names. Look for
 `warning: HIVE_X is set but no longer read; rename it to LIGUS_X`. See
 [Upgrading from Hive 1.x](../../operate/deploy/upgrade-from-hive.md).
 

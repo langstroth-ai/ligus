@@ -7,7 +7,8 @@
 **A collaborative, multi-agent workspace for developers.**
 
 Ligus (LEE-gus) is short for *ligustica*, as in *Apis mellifera ligustica*,
-the Italian honeybee. It was called Hive until v2.0.
+the Italian honeybee. Ligus 0.1.0 is a new application; its predecessor was
+called Hive (1.x).
 
 Chat with one or many coding agents, review their proposed changes, and sync the
 whole workspace across your devices and teammates — peer-to-peer or through a
@@ -23,8 +24,8 @@ relay, end-to-end encrypted. Your code and keys stay on your machine.
 
 </div>
 
-> **Hive is now Ligus**, short for *ligustica*. Same project, same protocol,
-> new name. The command is `ligus` and settings are `LIGUS_*`. Ligus 2.0
+> **Ligus 0.1.0 is a new application** that succeeds Hive (*Ligus* is short
+> for *ligustica*). The command is `ligus` and settings are `LIGUS_*`. Ligus
 > starts fresh: Hive 1.x data is not migrated and stays where it is,
 > untouched, so 1.x keeps running until you remove it. See
 > [Upgrading from Hive 1.x](https://docs.langstroth.ai/operate/deploy/upgrade-from-hive/).
@@ -415,7 +416,7 @@ fit together.
 - **The app is config-free to start** — onboarding sets identity, project folder,
   runtime, and relay; there are no required config files.
 - **Repo settings** live in [`ligus.config.toml`](ligus.config.toml) at the root
-  (workspace state lives in `.ligus/`). Ligus 2.0 starts fresh: a Hive 1.x
+  (workspace state lives in `.ligus/`). Ligus starts fresh: a Hive 1.x
   `hive.config.toml`, `.hive/`, `~/.hive` or desktop data dir is never read,
   moved or changed; see
   [Upgrading from Hive 1.x](https://docs.langstroth.ai/operate/deploy/upgrade-from-hive/) for how to

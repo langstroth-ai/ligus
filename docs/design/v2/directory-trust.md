@@ -1,5 +1,7 @@
 # Relay-directory trust for invites and DMs
 
+> Version note: "2.0" in this document means the Ligus 0.1.0 release (the version was reset before release).
+
 Status: Ligus 2.0, Track B residual 7. Part implemented (verification against
 signed key publications this device already holds, plus an explicit
 "unverified recipient" confirmation). Signed directory records are designed

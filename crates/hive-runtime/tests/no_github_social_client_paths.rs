@@ -1,4 +1,4 @@
-//! 2.0 removed the GitHub directory, account, friends and inbox routes and the
+//! 0.1 removed the GitHub directory, account, friends and inbox routes and the
 //! app's GitHub device-flow login (spec IDENTITY-AND-FORGES §3.3, §5.4). No
 //! client path to them may come back: no relay call to those prefixes, no
 //! GitHub-token header, no web call to a removed command, and no baked-in

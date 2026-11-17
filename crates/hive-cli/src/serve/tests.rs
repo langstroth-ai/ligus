@@ -2671,7 +2671,7 @@ async fn tick_coordinator(shared: &Arc<Shared>) {
     WorkspaceLease::default().tick(shared, &relay, &shared.cfg.room, &ring).await;
 }
 
-// ── Phone 2.0: proposal sets, lockdown clear, Flow, reviewer recruits ──────
+// ── Phone 0.1: proposal sets, lockdown clear, Flow, reviewer recruits ──────
 
 /// Demote this box's identity to Viewer on the desktop and wait until the box
 /// has synced the demotion into `chat_id`'s roster.
@@ -3712,7 +3712,7 @@ async fn gh_default_only_for_exact_github_com() {
 
 /// Who the phone's messages show as. A box that joined with a workspace
 /// invite is its own member: the phone writes as the box (right for a shared
-/// box), under the box's own name, never the pre-2.0 "hive-cli". A box
+/// box), under the box's own name, never the Hive 1.x "hive-cli". A box
 /// enrolled as its owner's device (`ligus serve enroll`) writes as the owner.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn phone_messages_show_as_the_box_or_its_owner() {

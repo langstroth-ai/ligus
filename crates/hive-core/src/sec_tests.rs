@@ -1,4 +1,4 @@
-//! Adversarial regression tests from the 2.0 core security review. Each test
+//! Adversarial regression tests from the 0.1 core security review. Each test
 //! reproduces one finding; see the commit that introduced it.
 
 use uuid::Uuid;

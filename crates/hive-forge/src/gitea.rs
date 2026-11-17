@@ -8,7 +8,7 @@
 //! - A cross-repo head is `owner:branch`; an existing PR answers 409
 //!   ("pull request already exists for these targets").
 //! - No device sign-in exists on these forges, and Forgejo's OAuth tokens
-//!   carry no scopes: a scoped personal access token is the 2.0 path.
+//!   carry no scopes: a scoped personal access token is the 0.1 path.
 
 use std::sync::Arc;
 

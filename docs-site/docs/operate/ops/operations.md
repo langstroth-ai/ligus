@@ -10,7 +10,7 @@ upgrades. For problems by symptom, see [Troubleshooting](../../ligus/help/troubl
 | Relay | `curl -fsS https://relay.example.com/v1/health` | `ok` (200). `503` = the relay runs but its store doesn't answer |
 | Relay | `GET /metrics` (bearer `LIGUS_RELAY_METRICS_TOKEN` if set) | `hive_relay_requests_total`, `hive_relay_requests_by_class`, `hive_relay_requests_in_flight` |
 | Relay tunnel | `curl -s https://relay.example.com/v1/tunnel/info` | `{"versions":[1],…}`; 404 = tunnel off |
-| `ligus serve` | `curl -s http://<listen>/v1/health` | `{"ok":true,"version":"2.0.0"}`; with the bearer token also `identity.mode` (`owner`, `member`; `pending` or `revoked` means it can't write) |
+| `ligus serve` | `curl -s http://<listen>/v1/health` | `{"ok":true,"version":"0.1.0"}`; with the bearer token also `identity.mode` (`owner`, `member`; `pending` or `revoked` means it can't write) |
 | `ligus serve` relay link | `ligus remote status` (server's env) | `serve: connected for …` |
 | `ligus serve` sync | the dashboard's built-in Ligus section (relay and push status, turns) | |
 | `ligus worker` | the process is running; its host shows **online** in `ligus queue` / the desktop's Review pane | there is no health endpoint |
@@ -126,7 +126,7 @@ A relay backup is a convenience, not your only copy.
 | Relay | replace binary/image, restart | `/v1/health` → `ok` |
 
 Devices on different 2.x versions sync with each other; the wire protocol is
-kept compatible. Coming from Hive 1.x: 2.0 starts fresh and leaves 1.x data
+kept compatible. Coming from Hive 1.x: 0.1 starts fresh and leaves 1.x data
 untouched, see [Upgrading from Hive 1.x](../deploy/upgrade-from-hive.md).
 
 ## Housekeeping Ligus does itself

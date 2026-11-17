@@ -24,7 +24,7 @@ docs-site/
   docs/operate/       Operating Langstroth
   docs/llms.txt       every page with a one-line summary, for agents
   docs/version.json   the desktop app's update manifest
-  tools/page-map.tsv  every page of the pre-2.0 sites and where it lives now
+  tools/page-map.tsv  every page of the older sites and where it lives now
   tools/redirects.py  generates and checks the redirects
 ```
 
@@ -79,9 +79,9 @@ Old URLs must keep working. After you move a page:
    `netlify.toml` (the 301s).
 3. Build, then run `python3 docs-site/tools/redirects.py check --refs --built`.
 
-The check reads the three pre-2.0 sites from git (`--refs`, needs full
+The check reads the three older sites from git (`--refs`, needs full
 history): docs.apiaryhq.ai (the 1.x site, at v1.18.0 on main),
-docs.ligus.ai and docs.langstroth.ai (the two 2.0 sites before they were
+docs.ligus.ai and docs.langstroth.ai (the two 0.1 sites before they were
 merged). Every old page, every path an old host redirected and every old
 file must be covered. With `--built` it runs every old URL on all three hosts
 through an emulation of the Netlify rules and fails on any that doesn't land
@@ -103,7 +103,7 @@ on its page in one 301, and on `version.json` being redirected on any host.
   desktop builds (`https://docs.ligus.ai/version.json`, and
   `https://docs.apiaryhq.ai/version.json` in 1.x) never depend on following a
   redirect. Its headers (`Cache-Control: max-age=300`,
-  `Access-Control-Allow-Origin: *`) apply on every host. Builds from 2.0 on
+  `Access-Control-Allow-Origin: *`) apply on every host. Builds from 0.1 on
   read `https://docs.langstroth.ai/version.json` first and fall back to the
   docs.ligus.ai URL.
 - The built site also has a meta-refresh stub page at every old path
@@ -122,7 +122,7 @@ Everything except the domains comes from `netlify.toml`.
 | Publish directory | `docs-site/site` (`site` in the toml) |
 | Python | 3.12 (`PYTHON_VERSION` in the toml) |
 | Primary domain | `docs.langstroth.ai` |
-| Domain aliases | `docs.ligus.ai` now; `docs.apiaryhq.ai` at the 2.0 release |
+| Domain aliases | `docs.ligus.ai` now; `docs.apiaryhq.ai` at the 0.1 release |
 
 ### Owner steps
 
@@ -133,7 +133,7 @@ Do these in order. None of them needs a code change.
    Set **Base directory** to `docs-site` (it was `docs-site/operator`), and
    leave the build command and publish directory empty so `netlify.toml`
    supplies them. Set the production branch to the branch that carries this
-   layout (`release/v2.0.0` until 2.0 merges, then `main`). Deploy, then
+   layout (`release/v2.0.0`, the 0.1.0 release branch, until it merges, then `main`). Deploy, then
    check `https://docs.langstroth.ai/`, `/ligus/`, `/operate/`,
    `/version.json`, and that `/deploy/` answers 301 to `/operate/deploy/`.
 2. **Move docs.ligus.ai to `langstroth-docs`.** On `ligus-docs` → Domain
@@ -152,8 +152,8 @@ Do these in order. None of them needs a code change.
 3. **Retire `ligus-docs`.** Once step 2 checks out, delete the `ligus-docs`
    site (Site configuration → General → Danger zone → Delete this site), or
    at least stop its builds (Build & deploy → Stop builds).
-4. **At the 2.0 release, move docs.apiaryhq.ai.** Until then it stays on
-   GitHub Pages, published from `main` by the 1.x docs workflow. Once 2.0 is
+4. **At the 0.1 release, move docs.apiaryhq.ai.** Until then it stays on
+   GitHub Pages, published from `main` by the 1.x docs workflow. Once 0.1 is
    on `main` (whose docs workflow no longer publishes to Pages): on
    `langstroth-docs`, add the domain alias `docs.apiaryhq.ai`; change its DNS
    record from GitHub Pages to a CNAME for `langstroth-docs.netlify.app`;

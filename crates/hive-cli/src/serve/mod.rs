@@ -1000,7 +1000,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
             if let Some(name) = &opts.name {
                 svc.set_author_display_name(name.clone());
             } else {
-                // A box still called "hive-cli" (enrolled before 2.0), or by
+                // A box still called "hive-cli" (enrolled under Hive 1.x), or by
                 // the host name `ligus enroll` gave it, takes its label so the
                 // phone's messages show the name the box was given.
                 let identity = hive_runtime::IdentityStore::new(&cfg.data_dir, hive_runtime::secret_store::StoreKeyVault::for_data_dir(&cfg.data_dir));

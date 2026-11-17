@@ -157,7 +157,7 @@ class AssetNames < Minitest::Test
     run = steps(RELEASE, "cask").map { |s| s["run"].to_s }.join("\n")
     pattern = run[/DMG="([^"]+)"/, 1]
     refute_nil pattern
-    assert_equal v1_names("2.0.0")[:dmg], pattern.gsub("${VERSION}", "2.0.0")
+    assert_equal v1_names("0.1.0")[:dmg], pattern.gsub("${VERSION}", "0.1.0")
   end
 
   def test_latest_json_is_verified_after_every_build
@@ -176,19 +176,19 @@ class EnsureRelease < Minitest::Test
     # Fake gh: state in $STATE (none|published|draft|race), calls logged to $LOG.
     echo "$*" >> "$LOG"
     case "$1 $2" in
-      "api repos/o/r/releases/tags/v2.0.0")
+      "api repos/o/r/releases/tags/v0.1.0")
         if [ "$STATE" = published ] || [ -f "$STATE_DIR/created" ]; then echo 41; exit 0; fi
         echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;
       "api --paginate")
         if [ "$STATE" = draft ]; then echo 42; fi; exit 0 ;;
       "release create")
         if [ "$STATE" = race ]; then touch "$STATE_DIR/created"; echo "already_exists" >&2; exit 1; fi
-        touch "$STATE_DIR/created"; echo "https://github.com/o/r/releases/tag/v2.0.0"; exit 0 ;;
+        touch "$STATE_DIR/created"; echo "https://github.com/o/r/releases/tag/v0.1.0"; exit 0 ;;
     esac
     echo "unexpected gh call: $*" >&2; exit 99
   SH
 
-  def run_ensure(state, tag = "v2.0.0")
+  def run_ensure(state, tag = "v0.1.0")
     Dir.mktmpdir do |dir|
       File.write(File.join(dir, "gh"), FAKE_GH)
       File.chmod(0o755, File.join(dir, "gh"))
@@ -232,7 +232,7 @@ class EnsureRelease < Minitest::Test
   end
 
   def test_rejects_a_malformed_tag
-    _out, _err, status, log = run_ensure("published", "v2.0.0\"; rm -rf /")
+    _out, _err, status, log = run_ensure("published", "v0.1.0\"; rm -rf /")
     refute status.success?
     assert_equal "", log
   end
@@ -252,12 +252,12 @@ class VerifyLatestJson < Minitest::Test
   VERIFY = File.join(ROOT, "scripts/verify-latest-json.py")
   API = "https://api.github.com/repos/o/r/releases/assets"
 
-  def release(mac_name: "Ligus_2.0.0_aarch64.app.tar.gz", drop: nil, mac_sig: "SIG-MAC", version: "2.0.0")
+  def release(mac_name: "Ligus_0.1.0_aarch64.app.tar.gz", drop: nil, mac_sig: "SIG-MAC", version: "0.1.0")
     assets = [
       { "id" => 1, "name" => mac_name }, { "id" => 2, "name" => "#{mac_name}.sig" },
-      { "id" => 3, "name" => "Ligus_2.0.0_x64_en-US.msi" }, { "id" => 4, "name" => "Ligus_2.0.0_x64_en-US.msi.sig" },
-      { "id" => 5, "name" => "Ligus_2.0.0_amd64.AppImage" }, { "id" => 6, "name" => "Ligus_2.0.0_amd64.AppImage.sig" },
-      { "id" => 7, "name" => "Ligus_2.0.0_aarch64.dmg" }, { "id" => 9, "name" => "latest.json" },
+      { "id" => 3, "name" => "Ligus_0.1.0_x64_en-US.msi" }, { "id" => 4, "name" => "Ligus_0.1.0_x64_en-US.msi.sig" },
+      { "id" => 5, "name" => "Ligus_0.1.0_amd64.AppImage" }, { "id" => 6, "name" => "Ligus_0.1.0_amd64.AppImage.sig" },
+      { "id" => 7, "name" => "Ligus_0.1.0_aarch64.dmg" }, { "id" => 9, "name" => "latest.json" },
     ]
     platforms = {
       "darwin-aarch64" => { "url" => "#{API}/1", "signature" => mac_sig },
@@ -265,8 +265,8 @@ class VerifyLatestJson < Minitest::Test
       "linux-x86_64" => { "url" => "#{API}/5", "signature" => "SIG-LIN" },
     }
     platforms.delete(drop) if drop
-    sigs = { "#{mac_name}.sig" => "SIG-MAC", "Ligus_2.0.0_x64_en-US.msi.sig" => "SIG-WIN",
-             "Ligus_2.0.0_amd64.AppImage.sig" => "SIG-LIN" }
+    sigs = { "#{mac_name}.sig" => "SIG-MAC", "Ligus_0.1.0_x64_en-US.msi.sig" => "SIG-WIN",
+             "Ligus_0.1.0_amd64.AppImage.sig" => "SIG-LIN" }
     [{ "version" => version, "notes" => "", "platforms" => platforms }, assets, sigs]
   end
 
@@ -275,7 +275,7 @@ class VerifyLatestJson < Minitest::Test
       File.write(File.join(dir, "latest.json"), JSON.dump(latest))
       File.write(File.join(dir, "assets.json"), JSON.dump(assets))
       sigs.each { |n, v| File.write(File.join(dir, n), v) }
-      out, _err, status = Open3.capture3("python3", "-I", VERIFY, "--from-dir", dir, "--tag", "v2.0.0",
+      out, _err, status = Open3.capture3("python3", "-I", VERIFY, "--from-dir", dir, "--tag", "v0.1.0",
                                          "--platforms", platforms)
       [status.success?, out]
     end

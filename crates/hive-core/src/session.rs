@@ -233,7 +233,7 @@ mod serialized_form_tests {
     use uuid::Uuid;
 
     /// A session that never used guard or flow state must serialize with
-    /// the same keys as 2.0, because snapshots are signed over that form.
+    /// the same keys as 0.1, because snapshots are signed over that form.
     #[test]
     fn empty_guard_and_flow_state_are_left_out() {
         let session = ChatSession::new("t", Uuid::nil(), "claude-code");

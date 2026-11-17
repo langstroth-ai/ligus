@@ -74,7 +74,7 @@ fn require_secure(s: &Shared, peer: Option<&TunnelPeer>) -> ApiResult<()> {
 
 /// Whether the forges API needs presence on this box: always (IDENTITY-AND-
 /// FORGES 5.7: adding a code host or handing it a credential gives the box
-/// write access to code). Every 2.0 workspace is on rules v2 from its seed,
+/// write access to code). Every 0.1 workspace is on rules v2 from its seed,
 /// so there is no rules-v1 box that skips it.
 pub fn forge_presence_applies(_delegated: bool, _rules: u32) -> bool {
     true

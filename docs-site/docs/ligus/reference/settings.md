@@ -1,7 +1,7 @@
 # Settings reference
 
 Where Ligus keeps its settings and every key in each place, checked against
-the 2.0.0 code. For what each Settings tab does in the app, see
+the 0.1.0 code. For what each Settings tab does in the app, see
 [Settings](../features/settings.md).
 
 | Store | Scope | Synced? | Edited by |

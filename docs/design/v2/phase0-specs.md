@@ -1,5 +1,7 @@
 # Ligus 2.0 Phase 0: implementation specs
 
+> Version note: "2.0" in this document means the Ligus 0.1.0 release (the version was reset before release).
+
 Ligus is short for *ligustica*, the Italian honeybee. The product was formerly called Hive.
 
 **Inputs:**

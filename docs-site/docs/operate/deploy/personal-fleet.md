@@ -88,7 +88,7 @@ encrypted.
 ```sh
 brew install ligus-ai/ligus/ligus      # macOS or Linux with Homebrew
 ligus --version
-# ligus 2.0.0
+# ligus 0.1.0
 ```
 
 Or build the container image (`deploy/container/Dockerfile`) and run
@@ -159,7 +159,7 @@ Check:
 ```sh
 curl -s http://100.101.102.103:8787/v1/health \
   -H "Authorization: Bearer $(cat ~/.ligus-serve/serve.token)"
-# {…,"identity":{…,"mode":"owner"},"ok":true,"version":"2.0.0",…}
+# {…,"identity":{…,"mode":"owner"},"ok":true,"version":"0.1.0",…}
 ```
 
 ## 7. Bind a repository

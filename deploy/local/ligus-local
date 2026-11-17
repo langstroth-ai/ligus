@@ -155,8 +155,8 @@ cmd_preflight() {
   else
     local v; v=$("$BIN" --version 2>/dev/null || true)
     case $v in
-      "ligus "[2-9]*) ac_check cli.binary pass "$BIN: $v" ;;
-      *) ac_check cli.binary fail "$BIN: ${v:-no version} (2.0 or later needed)" "ligus-local install-cli --version <v2 tag>"; ac_raise 3 ;;
+      "ligus 0."[1-9]*|"ligus "[2-9]*) ac_check cli.binary pass "$BIN: $v" ;;
+      *) ac_check cli.binary fail "$BIN: ${v:-no version} (0.1.0 or later needed)" "ligus-local install-cli --version v0.1.0"; ac_raise 3 ;;
     esac
   fi
   if ac_have curl; then ac_check tool.curl pass "curl present"; else ac_check tool.curl fail "curl not found" "install curl"; ac_raise 3; fi

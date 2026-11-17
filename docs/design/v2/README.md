@@ -1,5 +1,7 @@
 # Ligus 2.0 design documents
 
+> Version note: "2.0" in this document means the Ligus 0.1.0 release (the version was reset before release).
+
 Design records for the 2.0 release (Ligus is short for *ligustica*, the
 Italian honeybee; the product was formerly called Hive). They were written
 in November 2026 against the `release/v2.0.0` branch. Citations are

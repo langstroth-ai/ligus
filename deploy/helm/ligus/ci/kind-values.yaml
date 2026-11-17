@@ -24,7 +24,7 @@ serve:
     requests: { cpu: 50m, memory: 64Mi }
     limits: { cpu: "1", memory: 512Mi, ephemeral-storage: 1Gi }
 # Off here: the workflow installs the worker as its own release on its own
-# throwaway workspace (worker.enabled=true, serve.enabled=false). In 2.0 a box
+# throwaway workspace (worker.enabled=true, serve.enabled=false). In 0.1 a box
 # joins a workspace only through an invite an Admin issued (key possession
 # never admits anyone), and nothing in CI can issue one headlessly yet (the
 # member-bootstrap work). With serve and a worker started together on one

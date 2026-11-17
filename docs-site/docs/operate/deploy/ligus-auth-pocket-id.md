@@ -6,7 +6,7 @@ passwords to leak. It suits a home lab or a family relay. This page sets up
 Pocket ID, [ligus-auth](ligus-auth.md) and the relay together.
 
 Pocket ID's passkeys and the passkeys Ligus will use for presence on admin
-actions (Phase 0, Track B; not in 2.0.0) can be the same physical
+actions (Phase 0, Track B; not in 0.1.0) can be the same physical
 authenticator, but nothing in the code ties them together: Pocket ID gates
 the relay, while Ligus presence will gate admin events in a workspace.
 

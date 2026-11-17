@@ -1,7 +1,7 @@
 # Relay and executors only, keys off the cluster (design)
 
 !!! danger "Design, not shipped"
-    Nothing here is implemented in 2.0. It describes a target shape so it
+    Nothing here is implemented in 0.1. It describes a target shape so it
     can be reviewed and planned. Today, every Ligus process that runs agent
     turns (desktop, `ligus serve`, `ligus worker`) holds the workspace key.
     The [Kubernetes preview](kubernetes.md) puts `ligus serve`, and therefore

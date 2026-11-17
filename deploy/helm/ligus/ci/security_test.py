@@ -281,7 +281,7 @@ def test_model_gateways():
 def test_removed_values_refuse():
     for v in ("sandbox.enabled=true", "otel.endpoint=http://collector:4317"):
         p = render("--set", v, ok=False)
-        check("%s is refused (unsupported in 2.0)" % v.split("=")[0], p.returncode != 0)
+        check("%s is refused (unsupported in 0.1)" % v.split("=")[0], p.returncode != 0)
     docs = render()
     check("no executor Job template renders",
           not any(d["kind"] == "ConfigMap" and "job.yaml" in (d.get("data") or {}) for d in docs))

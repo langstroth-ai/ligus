@@ -1,13 +1,13 @@
 //! Names after the product rename (Hive -> Ligus, short for ligustica), and
-//! the rule that Ligus 2.0 starts fresh.
+//! the rule that Ligus 0.1 starts fresh.
 //!
-//! Ligus 2.0 reads and writes only the new names: `LIGUS_*` environment
+//! Ligus 0.1 reads and writes only the new names: `LIGUS_*` environment
 //! variables, `.ligus/` workspace state, `ligus.config.toml`, `~/.ligus` and
 //! the `ai.ligus.desktop` app-data dir. Nothing from Hive 1.x is migrated:
 //! a 1.x `~/.hive`, `com.hive.desktop` / `ai.hive.desktop` app-data dir,
 //! repo `.hive/` or `hive.config.toml` is never read, modified, moved,
 //! renamed, copied or deleted, so a 1.x install keeps running side by side.
-//! [`check_data_dir`] refuses a 2.0 data dir that is (or links to, or
+//! [`check_data_dir`] refuses a 0.1 data dir that is (or links to, or
 //! contains) 1.x data, and [`workspace_state_dir`] refuses a `.ligus` that
 //! links into 1.x state. The 1.x names survive only in [`hive1_locations`]
 //! and the `HIVE1_*` constants, which exist to keep agents out of them
@@ -225,23 +225,23 @@ fn overlaps(a: &Path, b: &Path) -> bool {
     a.starts_with(&b) || b.starts_with(&a)
 }
 
-/// A marker 2.0 writes into each data dir it owns (see [`claim_data_dir`]).
+/// A marker 0.1 writes into each data dir it owns (see [`claim_data_dir`]).
 pub const DATA_DIR_MARKER: &str = ".ligus-data-dir";
 
 /// Files that mean a dir already holds event/identity data.
 const DATA_FILES: [&str; 2] = ["hive.db", "identity.json"];
-/// Entries only Ligus 2.0 creates in a data dir (a dir from a 2.0 release
+/// Entries only Ligus 0.1 creates in a data dir (a dir from a 0.1 release
 /// candidate predates [`DATA_DIR_MARKER`]): the macOS keychain dir and the
 /// systemd-creds dir of the OS secret store.
 const V2_ONLY_ENTRIES: [&str; 2] = ["secrets", "credentials"];
 
-/// Refuse `dir` as a Ligus 2.0 data dir when it would touch Hive 1.x data:
+/// Refuse `dir` as a Ligus 0.1 data dir when it would touch Hive 1.x data:
 ///
 /// * it is, is inside, or contains a known 1.x location (`~/.hive`, the 1.x
 ///   desktop app-data dirs, or a 1.x app id next to `dir`), symlinks
-///   resolved, so a 2.0 dir that is a symlink to a 1.x dir is refused too;
+///   resolved, so a 0.1 dir that is a symlink to a 1.x dir is refused too;
 /// * it already holds `hive.db` or `identity.json` but was never claimed by
-///   2.0 (no marker, not a 2.0 default location, no 2.0-only entries): that
+///   0.1 (no marker, not a 0.1 default location, no 0.1-only entries): that
 ///   is a 1.x data dir under some other name (e.g. a serve box's
 ///   `~/.hive-serve`).
 ///
@@ -254,7 +254,7 @@ pub fn check_data_dir(dir: &Path, home: Option<&Path>) -> Result<(), String> {
     for loc in &known {
         if std::fs::symlink_metadata(loc).is_ok() && overlaps(dir, loc) {
             return Err(format!(
-                "{} overlaps the Hive 1.x data at {}. Ligus 2.0 starts fresh and never uses or changes Hive 1.x data; choose another data dir (LIGUS_DATA_DIR).",
+                "{} overlaps the Hive 1.x data at {}. Ligus starts fresh and never uses or changes Hive 1.x data; choose another data dir (LIGUS_DATA_DIR).",
                 dir.display(),
                 loc.display()
             ));
@@ -262,21 +262,21 @@ pub fn check_data_dir(dir: &Path, home: Option<&Path>) -> Result<(), String> {
     }
     let real = resolve_path(dir);
     let has_data = DATA_FILES.iter().any(|f| real.join(f).exists());
-    // 2.0's own default locations (resolved, so a link named like one doesn't
-    // count) were never written by 1.x: a dir there from a 2.0 release
-    // candidate is 2.0's even without the marker.
+    // 0.1's own default locations (resolved, so a link named like one doesn't
+    // count) were never written by 1.x: a dir there from a 0.1 release
+    // candidate is 0.1's even without the marker.
     let v2_location = real.file_name().is_some_and(|n| n == DESKTOP_APP_ID) || home.is_some_and(|h| real == resolve_path(&h.join(HOME_DATA_DIR)));
     let claimed = v2_location || real.join(DATA_DIR_MARKER).is_file() || V2_ONLY_ENTRIES.iter().any(|e| real.join(e).is_dir());
     if has_data && !claimed {
         return Err(format!(
-            "{} holds data Ligus 2.0 did not create (it looks like a Hive 1.x data dir). Ligus 2.0 starts fresh and leaves Hive 1.x data as it is; point LIGUS_DATA_DIR at a new, empty dir.",
+            "{} holds data Ligus did not create (it looks like a Hive 1.x data dir). Ligus starts fresh and leaves Hive 1.x data as it is; point LIGUS_DATA_DIR at a new, empty dir.",
             dir.display()
         ));
     }
     Ok(())
 }
 
-/// [`check_data_dir`], then create `dir` and mark it as a 2.0 data dir.
+/// [`check_data_dir`], then create `dir` and mark it as a 0.1 data dir.
 pub fn claim_data_dir(dir: &Path, home: Option<&Path>) -> Result<(), String> {
     check_data_dir(dir, home)?;
     mark_data_dir(dir).map_err(|e| format!("could not set up {}: {e}", dir.display()))
@@ -307,7 +307,7 @@ fn refuse_hive1_state(root: &Path, path: &Path) -> io::Result<()> {
     for loc in &legacy {
         if std::fs::symlink_metadata(loc).is_ok() && overlaps(path, loc) {
             return Err(io::Error::other(format!(
-                "{} resolves into Hive 1.x state ({}); Ligus 2.0 never writes there. Remove the link and try again.",
+                "{} resolves into Hive 1.x state ({}); Ligus never writes there. Remove the link and try again.",
                 path.display(),
                 loc.display()
             )));
@@ -349,13 +349,13 @@ pub fn has_workspace_dir(dir: &Path) -> bool {
 pub const CONFIG_FILE: &str = "ligus.config.toml";
 
 /// When `dir` has a 1.x `hive.config.toml` but no `ligus.config.toml`, say once
-/// that it is not read. Nothing is renamed or copied: 2.0 starts fresh, and the
+/// that it is not read. Nothing is renamed or copied: 0.1 starts fresh, and the
 /// file may be committed and still used by teammates on 1.x.
 fn note_hive1_config(dir: &Path) {
     let old = dir.join(HIVE1_CONFIG_FILE);
     if old.is_file() && !dir.join(CONFIG_FILE).exists() {
         note_once(&format!(
-            "note: {} is a Hive 1.x config and is not read; Ligus 2.0 reads {CONFIG_FILE} (copy the settings you want into it)",
+            "note: {} is a Hive 1.x config and is not read; Ligus reads {CONFIG_FILE} (copy the settings you want into it)",
             old.display()
         ));
     }
@@ -399,7 +399,7 @@ pub fn home_data_dir(home: &Path) -> PathBuf {
     let old = home.join(HIVE1_HOME_DATA_DIR);
     if std::fs::symlink_metadata(&new).is_err() && std::fs::symlink_metadata(&old).is_ok() {
         note_once(&format!(
-            "note: Ligus 2.0 starts fresh in {}; the Hive 1.x data in {} is left as it is",
+            "note: Ligus starts fresh in {}; the Hive 1.x data in {} is left as it is",
             new.display(),
             old.display()
         ));
@@ -559,15 +559,15 @@ mod tests {
         assert_eq!(check_data_dir(&data, Some(&home)), Ok(()));
         // Workspace open: state paths, the workspace marker and config lookup.
         assert_eq!(workspace_state_path(&repo, "mcp-servers.json").unwrap(), repo.join(".ligus/mcp-servers.json"));
-        assert!(!has_workspace_dir(&repo), "a 1.x .hive/ is not a 2.0 workspace");
+        assert!(!has_workspace_dir(&repo), "a 1.x .hive/ is not a Ligus workspace");
         assert_eq!(find_config_file(&repo), None, "hive.config.toml is not read");
         assert_eq!(config_file_for_write(&repo), repo.join("ligus.config.toml"));
         assert_eq!(config_candidates(&[&repo, &data]), [repo.join("ligus.config.toml"), data.join("ligus.config.toml")]);
 
         assert_eq!(fingerprint(tmp.path()), before, "every 1.x file byte-identical, nothing created");
-        assert!(!home.join(".ligus").exists() && !repo.join(".ligus").exists(), "2.0 starts empty");
+        assert!(!home.join(".ligus").exists() && !repo.join(".ligus").exists(), "Ligus starts empty");
 
-        // Claiming the fresh dir creates only 2.0's own dir.
+        // Claiming the fresh dir creates only 0.1's own dir.
         claim_data_dir(&data, Some(&home)).unwrap();
         assert_eq!(std::fs::read_dir(&data).unwrap().count(), 1, "only the marker");
         let after: Vec<_> = fingerprint(tmp.path()).into_iter().filter(|(p, _)| !p.starts_with("home/.ligus")).collect();
@@ -584,7 +584,7 @@ mod tests {
             assert!(e.contains("Hive 1.x"), "{e}");
             assert!(claim_data_dir(&bad, Some(&home)).is_err());
         }
-        // A 1.x app id next to the 2.0 dir counts even under a base we don't list.
+        // A 1.x app id next to the 0.1 dir counts even under a base we don't list.
         let odd = tmp.path().join("base");
         std::fs::create_dir_all(odd.join("com.hive.desktop")).unwrap();
         assert!(check_data_dir(&odd.join("ai.ligus.desktop"), Some(&home)).is_ok(), "siblings are fine");
@@ -595,15 +595,15 @@ mod tests {
         std::fs::create_dir_all(&serve).unwrap();
         std::fs::write(serve.join("hive.db"), "x").unwrap();
         assert!(check_data_dir(&serve, Some(&home)).unwrap_err().contains("did not create"));
-        // ...but a 2.0-claimed dir with data, or a 2.0 RC dir, is fine.
+        // ...but a 0.1-claimed dir with data, or a 0.1 RC dir, is fine.
         let ok = home.join("claimed");
         mark_data_dir(&ok).unwrap();
-        std::fs::write(ok.join("hive.db"), "2.0").unwrap();
+        std::fs::write(ok.join("hive.db"), "ligus").unwrap();
         assert_eq!(check_data_dir(&ok, Some(&home)), Ok(()));
-        // A 2.0 RC dir at a 2.0 default location, without the marker.
+        // A 0.1 RC dir at a 0.1 default location, without the marker.
         let rc_default = tmp.path().join("base").join(DESKTOP_APP_ID);
         std::fs::create_dir_all(&rc_default).unwrap();
-        std::fs::write(rc_default.join("hive.db"), "2.0 rc").unwrap();
+        std::fs::write(rc_default.join("hive.db"), "ligus rc").unwrap();
         assert_eq!(check_data_dir(&rc_default, Some(&home)), Ok(()));
         #[cfg(unix)]
         {

@@ -64,7 +64,7 @@ ligus serve --listen 127.0.0.1:8787 --label home-box
 - `--label` / `LIGUS_SERVE_LABEL` is the host name other members see
   (default: the machine's host name). A box that is its own member also
   uses it as its display name unless `--name` / `LIGUS_SERVE_NAME` sets one
-  (a box that still shows as "hive-cli", from before 2.0, takes it on its
+  (a box that still shows as "hive-cli", from before 0.1, takes it on its
   next start).
 - `LIGUS_SERVE_PUBLIC_URL` is the URL the phone should use for the direct path
   when it differs from `http://<listen>` (a DNS name, say).

@@ -43,7 +43,7 @@ Only the newest release is supported. Please test against it (or the latest
 `main`) before reporting.
 
 **Policy:** security fixes ship inside the next release; there are no patch
-releases of older versions. Fixes found before 2.0.0 are bundled into 2.0.0.
+releases of older versions. Fixes found before 0.1.0 are bundled into 0.1.0, the first Ligus release.
 
 ## Handling
 

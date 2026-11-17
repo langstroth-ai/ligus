@@ -1,5 +1,7 @@
 # Ligus 2.0 RC: architecture review and refactor plan
 
+> Version note: "2.0" in this document means the Ligus 0.1.0 release (the version was reset before release).
+
 Reviewer stance: adversarial. A claim counts only when an executable test can show it. Anything that is merely plausible is marked as an open risk.
 
 Scope reviewed (read-only, 2026-11-13):

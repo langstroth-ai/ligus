@@ -2,7 +2,7 @@
 
 `ligus serve` exposes a small JSON + Server-Sent Events API under `/v1/`.
 The phone app is its main client, but any client can use it. This page lists
-every route in 2.0.0, checked against the router in
+every route in 0.1.0, checked against the router in
 `crates/hive-cli/src/serve/api.rs`. The contract the phone implements is in
 [`docs/ios-app.md`](https://github.com/ligus-ai/ligus/blob/main/docs/ios-app.md).
 
@@ -34,13 +34,13 @@ There are two ways in, and both reach the same router:
 
 | Method + path | Notes |
 |---|---|
-| `GET /v1/health` | `{"ok":true,"version":"2.0.0"}`. With a valid token it adds `workspace`, `deviceLabel` and `identity` (`mode`: `owner`, `member`, `pending` or `revoked`; `actorId`, `displayName`, `deviceFingerprint`) |
+| `GET /v1/health` | `{"ok":true,"version":"0.1.0"}`. With a valid token it adds `workspace`, `deviceLabel` and `identity` (`mode`: `owner`, `member`, `pending` or `revoked`; `actorId`, `displayName`, `deviceFingerprint`) |
 
 ```console
 $ curl -s http://127.0.0.1:8787/v1/health
-{"ok":true,"version":"2.0.0"}
+{"ok":true,"version":"0.1.0"}
 $ curl -s http://127.0.0.1:8787/v1/health -H "Authorization: Bearer $(cat ~/.ligus/serve.token)"
-{"deviceLabel":"home-box","identity":{"actorId":"db65…","deviceFingerprint":"DFD0-62BD-5D2F","displayName":"home-box","mode":"member"},"ok":true,"version":"2.0.0","workspace":"acme"}
+{"deviceLabel":"home-box","identity":{"actorId":"db65…","deviceFingerprint":"DFD0-62BD-5D2F","displayName":"home-box","mode":"member"},"ok":true,"version":"0.1.0","workspace":"acme"}
 ```
 
 ### Chats and people

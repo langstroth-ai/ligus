@@ -164,8 +164,8 @@ Build the images yourself:
 ```sh
 # in a relay checkout at v0.3.0
 docker build -f deploy/container/Dockerfile -t registry.example.com/ligus-relay:0.3.0 .
-# in a ligus checkout at 2.0
-docker build -f deploy/container/Dockerfile -t registry.example.com/ligus:2.0.0 .
+# in a ligus checkout at 0.1
+docker build -f deploy/container/Dockerfile -t registry.example.com/ligus:0.1.0 .
 ```
 
 ### Relay
@@ -237,7 +237,7 @@ kubectl -n ligus-ws-acme create secret generic acme-workspace \
   --from-literal=room=<room> --from-literal=key=<workspace key> \
   --from-literal=relay-access-token=<hrt1 token>
 helm install acme deploy/helm/ligus -n ligus-ws-acme \
-  --set image.repository=registry.example.com/ligus --set image.tag=2.0.0 \
+  --set image.repository=registry.example.com/ligus --set image.tag=0.1.0 \
   --set relayUrl=https://relay.example.com \
   --set workspace.existingSecret=acme-workspace \
   --set workspace.relayAccessToken=true \
@@ -260,7 +260,7 @@ recorded by audit logging):
 kubectl -n ligus-ws-acme exec -it acme-ligus-serve-0 -- ligus pair --relay-only  # needs remote.enabled
 ```
 
-!!! note "Changing in 2.0: serve's identity"
+!!! note "Changing in 0.1: serve's identity"
     `ligus serve enroll` and `serve.owner` make the pod act as one member's
     device. They are being replaced by serve joining the workspace as its
     own member: a service member an Admin approves, capped below Admin, whose
@@ -349,7 +349,7 @@ if the cluster should lose access, then delete the Secrets and the PVCs
 Rotating the workspace key or revoking a device follows the normal
 [runbooks](../security/runbooks.md); update the workspace Secret afterwards.
 
-## Explicitly unsupported in 2.0
+## Explicitly unsupported in 0.1
 
 - Mutually distrusting tenants on a shared relay, ligus-auth or cluster.
 - HA of relay-sync, the relay tunnel or ligus-auth (each runs exactly one

@@ -1,4 +1,4 @@
-//! Adversarial review of the Phase A protocol before the 2.0 wire freeze:
+//! Adversarial review of the Phase A protocol before the 0.1 wire freeze:
 //! each test is a counterexample to a Phase A claim, written to fail on the
 //! branch as reviewed and pass once the fix that follows it lands.
 

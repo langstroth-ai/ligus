@@ -857,7 +857,7 @@ async fn fold_ignores_forge_answers() {
 }
 
 // ---------------------------------------------------------------------------
-// Adversarial review (linked identities, 2.0 residuals)
+// Adversarial review (linked identities, 0.1 residuals)
 
 /// A forge is not trusted to hand back a clean name: a GitLab username
 /// carrying bidi overrides or zero-width characters is shown without them.
@@ -942,8 +942,8 @@ fn cached_chip_status_is_only_shown_while_it_holds() {
     assert_eq!(cached_status(None, &l, ctx(), soon, true), None);
 }
 
-/// 2.0 dropped the SourceHut and Tangled verifiers (owner decision
-/// 2026-11-16). A link of either kind made by a 2.0 pre-release still folds
+/// 0.1 dropped the SourceHut and Tangled verifiers (owner decision
+/// 2026-11-16). A link of either kind made by a 0.1 pre-release still folds
 /// (the wire shape is unchanged), but it is shown as self-asserted: never
 /// verified, never checked against a forge, never served from a cached
 /// "verified", and no new one can be prepared.

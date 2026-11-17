@@ -474,7 +474,7 @@ impl Junk {
         let sealed = BTreeMap::from([(owner.device_id.to_string(), blob)]);
         match self {
             Junk::Garbage(s) => json!({ "kind": s, "sealed": s }),
-            // A pre-2.0 unsigned rotation sealed to us at a higher version.
+            // A Hive 1.x unsigned rotation sealed to us at a higher version.
             Junk::Legacy => json!({ "version": 9, "sealed": sealed }),
             Junk::BadCommitment => {
                 serde_json::to_value(SignedRotation { version: 2, prev_version: 1, sealed, key_commitment: "0".repeat(64) }).unwrap()
@@ -608,7 +608,7 @@ fn outsider_with_directory_ka_cannot_inject_epoch() {
 
 #[test]
 fn legacy_unsigned_rows_are_never_read_or_sealed() {
-    // 2.0 starts from scratch: an unsigned `WorkspaceKeyRotation` row sealed
+    // 0.1 starts from scratch: an unsigned `WorkspaceKeyRotation` row sealed
     // to this device is ignored entirely.
     let w = World::new();
     let owner = &w.people["owner"];

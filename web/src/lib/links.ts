@@ -10,7 +10,7 @@ export const FORGES: { provider: string; host: string; label: string; keyPublish
   { provider: "gitea", host: "gitea.com", label: "Gitea", keyPublished: false, hint: "your username" },
 ];
 
-/// Forges whose verifiers 2.0 dropped: links made by a 2.0 pre-release still
+/// Forges whose verifiers 0.1 dropped: links made by a 0.1 pre-release still
 /// show (self-asserted), under their name, but none is offered for a new link.
 const DROPPED_FORGES: { provider: string; host: string; label: string }[] = [
   { provider: "sourcehut", host: "meta.sr.ht", label: "SourceHut" },

@@ -50,7 +50,7 @@ ligus-auth token goes only to the relay the session was signed in for.
 Each invite carries a fingerprint of the founder's account key, and a device
 pins it when it joins, so a hostile relay can't substitute the founder's key.
 Every device verifies and folds by the same rules whatever its environment:
-`LIGUS_IDENTITY_MODE` is ignored since 2.0 (a set value logs a warning).
+`LIGUS_IDENTITY_MODE` is ignored since 0.1 (a set value logs a warning).
 
 ### A network attacker {#network}
 
@@ -170,7 +170,7 @@ encryption and OS account separation are the protection; see
 
 ## Known limitations {#known-limitations}
 
-Stated plainly, as of 2.0.0. Each stays on this list until a release fixes
+Stated plainly, as of 0.1.0. Each stays on this list until a release fixes
 it.
 
 1. **Secrets in the OS secret store, with a file fallback.** Account,
@@ -185,7 +185,7 @@ it.
    id), and it won't create the item unless it satisfies it; a development
    build or the CLI by its code hash, so each rebuild or upgrade of those
    asks once for your login keychain password. An unlock item created by a
-   build before 2.0.0's review fixes keeps its original access list. If the
+   build before 0.1.0's review fixes keeps its original access list. If the
    keychain can't be used, macOS refuses to save secrets (Settings says why)
    rather than move them to files; `LIGUS_SECRET_BACKEND=file` is the
    explicit opt-in to `0600` files. Elsewhere, where no store works (Windows,
@@ -309,7 +309,7 @@ it.
     an ACP permission request keeps its process and chat until someone
     answers or its timeout passes (at most an hour; 10 minutes for permission
     requests). Stop the turn to release it. A restart cancels it; questions
-    can't be resumed in 2.0.
+    can't be resumed in 0.1.
 12. **Sign counters aren't checked.** Synced passkeys report a signature
     counter of 0, so Ligus doesn't use it to detect cloned authenticators.
 13. **No account-key rotation.** The core supports rotating an account key,
@@ -343,7 +343,7 @@ it.
     can list any key for any of its users, so it can make a link verify.
     Links never grant membership, roles or sealing trust. A verified status
     is cached on a device for up to 24 hours, so a key removed from the forge
-    keeps a link verified that long. SourceHut and Tangled links from a 2.0
+    keeps a link verified that long. SourceHut and Tangled links from a 0.1
     pre-release are shown as self-asserted and never verified. Checking a link tells the forge
     that your device looked. See [Linked accounts](../../ligus/features/linked-identities.md#privacy).
 22. **Pre-encryption history isn't shown.** A device with a workspace key
@@ -422,7 +422,7 @@ Security review findings that add to or change this threat model are listed
 here with their status. The review of November 2026 covered the core, the
 host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 
-### Fixed in 2.0.0 {#findings-fixed}
+### Fixed in 0.1.0 {#findings-fixed}
 
 | Area | Finding | Now |
 |---|---|---|
@@ -486,7 +486,7 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 | Agents (Track C/D residuals) | An ACP adapter or legacy CLI adapter could write an unbounded stdout line (or endless output, or stderr) and grow the app's memory | Agent stdout lines are capped at 8 MiB and a turn's output at 256 MiB (`LIGUS_AGENT_MAX_LINE_BYTES`, `LIGUS_AGENT_MAX_OUTPUT_BYTES`); past either the turn ends with an error and the agent is stopped. 256 KiB of stderr is kept for error messages |
 | Agents (Track C/D residuals) | ACP `fs/*`, the built-in file tools and the CLI-home copy-back checked a path and then opened it by name, so a directory swapped for a symlink in between redirected the host's read or write outside the worktree | Files are opened beneath the turn's directory one component at a time with `openat` (`O_NOFOLLOW` on every component, `O_DIRECTORY` for parents); a symlink anywhere on the way fails the open (macOS and Linux; Windows keeps the path checks only) |
 | Agents (Track C/D residuals) | An agent could write a valid sign-in for a different account into its turn home, and the copy-back installed it as the user's CLI sign-in | Copy-back requires the same keys and the same account fields (account id, email, user, API key, `id_token` claims) as the file it replaces; otherwise it is dropped and logged. Claude Code's file has no account field, so only its plan and shape are checked |
-| Sandbox (Track C/D residuals) | The Seatbelt profile protected `.git`, `.claude`, `.vscode`, `ligus.config.toml` and the other protected names only at the worktree's top level and only in their exact case | The profile also denies writes to each protected name at any depth and in any case (`sub/.claude/`, `.CLAUDE/`). The profile stays default-allow in 2.0; see [the OS sandbox](../../ligus/concepts/security.md#os-sandbox) for why and what that leaves open |
+| Sandbox (Track C/D residuals) | The Seatbelt profile protected `.git`, `.claude`, `.vscode`, `ligus.config.toml` and the other protected names only at the worktree's top level and only in their exact case | The profile also denies writes to each protected name at any depth and in any case (`sub/.claude/`, `.CLAUDE/`). The profile stays default-allow in 0.1; see [the OS sandbox](../../ligus/concepts/security.md#os-sandbox) for why and what that leaves open |
 | Agents (Track C/D residuals) | `maxSpendUsd` only refused Ligus tool calls, counted only ACP `usage_update` (whatever its currency, and only upward deltas), and never stopped a turn | Reaching the budget ends the turn (ACP `session/cancel`, API streams closed); ACP reports must be USD and non-decreasing or a budgeted turn ends; Anthropic, OpenAI, OpenRouter and Azure turns are charged from the API's token usage at list prices (unknown models at the highest rate). An agent that under-reports over ACP is still only held to what it reports |
 | Agents (Track C/D residuals) | Budgets were per turn only, so one human message could fan out through hand-offs to about 24 turns of 8 proposals each; ACP permission escalations asked people without counting against `maxAsks` | A cascade budget (tool calls, proposals, hand-offs, questions) is shared by every turn descended from the same human message on a device; permission escalations count as questions and are denied past either question budget |
 | Sandbox (C-12) | On Linux the egress proxy's token was an argument of the sandbox helper, readable by every user on the host with `ps` | It reaches the helper in its environment (`LIGUS_SANDBOX_PROXY_TOKEN`, readable only by your user), and the helper removes it before running the agent |

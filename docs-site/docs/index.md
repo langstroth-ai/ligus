@@ -8,8 +8,8 @@ hide:
 
 **Langstroth** is the open, self-hostable platform behind **Ligus**, a
 shared LLM workspace for developers. *Ligus* is short for *ligustica*
-(*Apis mellifera ligustica*, the Italian honeybee); the project was called
-Hive until 2.0.
+(*Apis mellifera ligustica*, the Italian honeybee). Ligus 0.1.0 is a new
+application; its predecessor was called Hive (1.x).
 
 - **Ligus** is the app: the desktop app, the phone app and the `ligus` CLI.
   You bring your own subscription and your own agents, and work with people

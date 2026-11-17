@@ -9,8 +9,8 @@ There is one docs site, https://docs.langstroth.ai/, built from docs-site/:
 Before it, three sites served pages at other paths:
 
   1x          https://docs.apiaryhq.ai/    the 1.x site (main, v1.18.0)
-  ligus       https://docs.ligus.ai/       the 2.0 user site
-  langstroth  https://docs.langstroth.ai/  the 2.0 operator site
+  ligus       https://docs.ligus.ai/       the 0.1 user site
+  langstroth  https://docs.langstroth.ai/  the 0.1 operator site
 
 page-map.tsv lists every old page and where it lives now. docs.ligus.ai and
 docs.apiaryhq.ai are domain aliases of the single Netlify site.
@@ -45,7 +45,7 @@ ALIASES = ("docs.ligus.ai", "docs.apiaryhq.ai")
 HOSTS = {"1x": "docs.apiaryhq.ai", "ligus": "docs.ligus.ai", "langstroth": PRIMARY}
 # The commits the old sites were built from (for --refs).
 REF_1X = "4a51d44b"  # main at v1.18.0: root mkdocs.yml, docs_dir docs-site
-REF_SPLIT = "71e1084c"  # release/v2.0.0 before the merge: docs-site/{user,operator}
+REF_SPLIT = "71e1084c"  # release/v2.0.0 (the 0.1.0 release branch) before the merge: docs-site/{user,operator}
 # Files served on the alias hosts as they are, without a redirect: shipped
 # desktop builds read https://docs.ligus.ai/version.json (and 1.x builds
 # https://docs.apiaryhq.ai/version.json) for their update check.
@@ -112,7 +112,7 @@ def netlify_rules(rows):
         out.append(f"# Anything else: the same path on {PRIMARY}, where the rules below")
         out.append("# answer it.")
         out.append(rule(pre + "/*", f"https://{PRIMARY}/:splat"))
-    out.append(f"# {PRIMARY}: old paths of the pre-2.0 sites. force = true because")
+    out.append(f"# {PRIMARY}: old paths of the older sites. force = true because")
     out.append("# mkdocs-redirects also writes a stub page at each of these paths; on")
     out.append("# Netlify the 301 wins.")
     for old, new, _ in rows:

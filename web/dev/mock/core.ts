@@ -23,7 +23,7 @@ function handle(cmd: string, args: Args): unknown {
   const sid = (args?.sessionId as string) ?? "";
   switch (cmd) {
     case "get_app_info":
-      return { name: "Ligus", coreVersion: "2.0.0", buildProfile: "debug" };
+      return { name: "Ligus", coreVersion: "0.1.0", buildProfile: "debug" };
     case "get_app_settings":
       return fx.settings(scenario === "onboarding");
     case "list_workspaces":

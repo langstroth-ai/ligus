@@ -223,7 +223,7 @@ turns refused, where neither is available. The table shows the first.
   for Node, ttys, and the toolchains agents call (`cargo`, `npm`, `python`,
   `go`, `git`). Those differ per CLI and per macOS release, and a missing one
   fails a turn in ways that look like CLI bugs. That is too much risk for
-  2.0, so it stays a planned change. What default-allow leaves open:
+  0.1, so it stays a planned change. What default-allow leaves open:
   agents can look up other Mach/XPC services (one that acts on their behalf
   runs outside the profile), read files outside the denied dirs, and run any
   program, all as your user and still under the write, read and network
@@ -362,7 +362,7 @@ edits* tier for chats whose input you don't trust.
 
 ## Sandbox defaults {#sandbox-defaults}
 
-These defaults are deliberate and stay on in 2.0.
+These defaults are deliberate and stay on in 0.1.
 
 **Agents can't commit inside a turn.** `.git` is read-only to every agent
 process, at every tier and on every host. An agent edits files in its

@@ -290,7 +290,7 @@ EOF
   # Landlock: run ligus doctor in a restricted pod, as the chart's init container does.
   local img=""
   if [ -n "$IMG_REPO" ]; then
-    img=$IMG_REPO; [ -n "$IMG_DIGEST" ] && img="$img@$IMG_DIGEST" || img="$img:${IMG_TAG:-2.0.0}"
+    img=$IMG_REPO; [ -n "$IMG_DIGEST" ] && img="$img@$IMG_DIGEST" || img="$img:${IMG_TAG:-0.1.0}"
   fi
   if [ -z "$img" ]; then
     ac_check sandbox.landlock.probe skip "no Ligus image given, so the Landlock probe did not run" "rerun with --probe --image <repository:tag> (the image you will install)"

@@ -152,19 +152,19 @@ box's label.
 
 ## Moving a box from Hive 1.x
 
-Ligus 2.0 starts fresh and never touches Hive 1.x data, so set the box up as a
+Ligus 0.1 starts fresh and never touches Hive 1.x data, so set the box up as a
 new one next to the 1.x service rather than converting it:
 
 1. Install `ligus` (the old `hive` binary is not replaced by it).
 2. Create a new env file from `ligus-serve.env.example` with `LIGUS_*` names
-   and a **new, empty** `LIGUS_DATA_DIR` (for example `~/.ligus-serve`). 2.0
+   and a **new, empty** `LIGUS_DATA_DIR` (for example `~/.ligus-serve`). 0.1
    refuses a 1.x data dir such as `~/.hive` or `~/.hive-serve`, and a dir
-   that links to one. While the 1.x service still runs, give 2.0 a different
+   that links to one. While the 1.x service still runs, give 0.1 a different
    listen port. A `HIVE_` key is ignored, with a one-time warning on stderr.
 3. Install `ligus-serve.service`, `systemctl --user daemon-reload`, enable it,
    then pair phones again with `ligus pair`.
 
 The 1.x service, its data dir and each checkout's `.hive/` (with its chat
-worktrees and `hive/chat/*` branches) are left exactly as they are. 2.0 keeps
+worktrees and `hive/chat/*` branches) are left exactly as they are. 0.1 keeps
 its own state in `.ligus/`. To remove 1.x when you're done, see
 [Upgrading from Hive 1.x](../../docs-site/docs/operate/deploy/upgrade-from-hive.md#removing-hive-1x-when-youre-done).

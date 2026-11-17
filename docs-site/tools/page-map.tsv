@@ -1,4 +1,4 @@
-# Every page of the pre-2.0 docs sites and where it lives now on the single
+# Every page of the older docs sites and where it lives now on the single
 # site, docs.langstroth.ai. The redirects are generated from this file; see
 # tools/redirects.py and docs-site/README.md. Never delete a row: the old
 # URL is still out there.
@@ -8,8 +8,8 @@
 #   new_path  page path under docs-site/docs/
 #   sources   where the old URL was served (comma list):
 #               1x          docs.apiaryhq.ai, the 1.x site (main, v1.18.0)
-#               ligus       docs.ligus.ai, the 2.0 user site before the merge
-#               langstroth  docs.langstroth.ai, the 2.0 operator site before the merge
+#               ligus       docs.ligus.ai, the 0.1 user site before the merge
+#               langstroth  docs.langstroth.ai, the 0.1 operator site before the merge
 #   Every row is redirected on every host, whatever its sources.
 #   index.md is the home page on docs.langstroth.ai; on docs.ligus.ai and
 #   docs.apiaryhq.ai the old home goes to Using Ligus.
