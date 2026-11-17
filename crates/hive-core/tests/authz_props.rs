@@ -224,6 +224,20 @@ impl World {
         }
     }
 
+    /// A config event exactly as given, `back` lamports below the next one
+    /// (a backdated write; at least just after the seed).
+    fn cfg_at(&mut self, by: &str, e: SessionEvent, back: u64) -> Uuid {
+        self.clock += 1;
+        let mut env = SessionEventEnvelope::new(workspace_config_session_id(self.wid), self.wid, self.clock as i64, e);
+        env.lamport = self.clock.saturating_sub(back).max(2);
+        env.actor_stamp = Self::stamp(by, self.head());
+        self.chain(&mut env, by);
+        self.seal(&mut env, by, true);
+        let id = env.event_id;
+        self.cfg.push(env);
+        id
+    }
+
     /// A config event exactly as given (no honest watermark filled in).
     fn cfg_push_raw(&mut self, by: &str, e: SessionEvent) -> Uuid {
         self.clock += 1;
@@ -319,6 +333,10 @@ enum Op {
     /// A message stamped with a frontier `back` config events old (a lagging
     /// author, or a removed one backdating).
     Backdate { by: u8, back: u8 },
+    /// Anyone cuts anyone (`kind`: remove, demote to Viewer, revoke their
+    /// device), `back` lamports below the head; backdated cuts name an empty
+    /// watermark (the counter-cut of review P-A2b).
+    Cut { by: u8, who: u8, kind: u8, back: u8 },
 }
 
 fn arb_op() -> impl Strategy<Value = Op> {
@@ -331,6 +349,7 @@ fn arb_op() -> impl Strategy<Value = Op> {
         (0u8..5, 0u8..3).prop_map(|(by, prop)| Op::Applied { by, prop }),
         (1u8..4).prop_map(|who| Op::Remove { who }),
         (0u8..5, 0u8..8).prop_map(|(by, back)| Op::Backdate { by, back }),
+        (0u8..4, 0u8..4, 0u8..3, 0u8..4).prop_map(|(by, who, kind, back)| Op::Cut { by, who, kind, back }),
     ]
 }
 
@@ -394,6 +413,22 @@ fn play(w: &mut World, ops: &[Op], declared: &dyn Fn(u8) -> WorkspaceRole, statu
                 let by = PEOPLE[by as usize];
                 w.chat_at(by, message(by, "backdated"), Some(f));
             }
+            Op::Cut { by, who, kind, back } => {
+                let (by, who) = (PEOPLE[by as usize], PEOPLE[who as usize]);
+                let e = match kind {
+                    0 => SessionEvent::MemberRemoved { member_id: who.into(), watermark: Vec::new() },
+                    1 => SessionEvent::MemberRoleChanged {
+                        change: MemberRoleChange { member_id: who.into(), old_role: w.config().role_of(who), new_role: WorkspaceRole::Viewer },
+                        watermark: Vec::new(),
+                    },
+                    _ => SessionEvent::DeviceRevoked { device_id: device_of(who).0, watermark: Vec::new() },
+                };
+                if back == 0 {
+                    w.cfg_push(by, e);
+                } else {
+                    w.cfg_at(by, e, back as u64);
+                }
+            }
         }
     }
 }
@@ -421,21 +456,61 @@ fn world(ops: &[Op]) -> World {
 }
 
 proptest! {
+    #[test]
+    /// Review P-A2b (owner decision): cuts go strictly down the ranks, so of
+    /// any two allowed cuts, the subject of one is never the author of a cut
+    /// of that cut's author.
+    fn prop_no_mutual_cuts(ops in prop::collection::vec(arb_op(), 0..24)) {
+        let w = world(&ops);
+        let t = w.timeline();
+        let by_key: BTreeMap<(u64, Uuid), String> =
+            w.cfg.iter().map(|e| (e.canonical_key(), e.actor_stamp.as_ref().map(|s| s.actor.id.clone()).unwrap_or_default())).collect();
+        let subject = |c: &hive_core::authz::Cut| match &c.kind {
+            hive_core::authz::CutKind::Removed(m) | hive_core::authz::CutKind::Demoted(m) => Some(m.clone()),
+            hive_core::authz::CutKind::Revoked(d) => PEOPLE.iter().find(|p| device_of(p).0 == *d).map(|p| p.to_string()),
+        };
+        for a in t.cuts() {
+            for b in t.cuts() {
+                let (Some(sa), Some(sb)) = (subject(a), subject(b)) else { continue };
+                let (aa, ab) = (&by_key[&a.key], &by_key[&b.key]);
+                prop_assert!(!(sa == *ab && sb == *aa && aa != ab), "mutual cuts {:?} {:?}", a, b);
+            }
+        }
+    }
+
     /// Appending events never changes the verdict on an event already
     /// decided: for any history L and suffix S, every event of L that L
     /// allowed (denied) is allowed (denied) in L·S. Only a held event may be
-    /// decided later.
+    /// decided later, and an event of the subject of a cut S brings.
     #[test]
     fn prop_authz_is_prefix_stable(ops in prop::collection::vec(arb_op(), 0..24), cut in 0usize..24) {
         let cut = cut.min(ops.len());
         let prefix = world(&ops[..cut]);
         let mut whole = prefix.clone();
-        play(&mut whole, &ops[cut..], &honest_roles, &honest_status);
+        // The suffix's cuts carry honest watermarks: a cut that names too
+        // little (a backdated one with an empty watermark) re-judges its
+        // subject's history and whatever depended on it, by design (a
+        // known limitation, review P-A2e).
+        let suffix: Vec<Op> = ops[cut..]
+            .iter()
+            .map(|o| match o.clone() {
+                Op::Cut { by, who, kind, .. } => Op::Cut { by, who, kind, back: 0 },
+                o => o,
+            })
+            .collect();
+        play(&mut whole, &suffix, &honest_roles, &honest_status);
         let before = prefix.verdicts();
         let after = whole.verdicts();
+        let old: std::collections::BTreeSet<(u64, Uuid)> = prefix.cfg.iter().map(|e| e.canonical_key()).collect();
+        let new_cuts: Vec<hive_core::authz::Cut> = whole.timeline().cuts().iter().filter(|c| !old.contains(&c.key)).cloned().collect();
+        let cut_subject = |id: &Uuid| {
+            whole.cfg.iter().chain(&whole.chat).filter(|e| e.event_id == *id).any(|e| new_cuts.iter().any(|c| c.applies(e)))
+        };
         for (id, v) in &before {
-            if *v != Verdict::Held {
-                prop_assert_eq!(after.get(id), Some(v), "event {} changed verdict", id);
+            if *v != Verdict::Held && !cut_subject(id) {
+                let e = whole.cfg.iter().chain(&whole.chat).find(|e| e.event_id == *id).unwrap();
+                let who = e.actor_stamp.as_ref().map(|s| s.actor.id.clone()).unwrap_or_default();
+                prop_assert_eq!(after.get(id), Some(v), "event {} ({} by {}) changed verdict", id, e.payload.kind_str(), who);
             }
         }
     }
@@ -1674,7 +1749,8 @@ proptest! {
     ) {
         let mut w = world(&ops);
         let name = PEOPLE[who as usize];
-        let member_before = w.config().members.iter().any(|m| m.id == name);
+        let member_before = w.config().members.iter().any(|m| m.id == name)
+            && !w.timeline().current().devices.get(&device_of(name).0).is_some_and(|d| d.revoked);
         let before = w.chat_push(name, message(name, "before"));
         let removal = w.cfg_push("owner", SessionEvent::MemberRemoved { member_id: name.into(), watermark: Vec::new() });
         let mut later = Vec::new();
