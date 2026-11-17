@@ -676,7 +676,14 @@ async fn appearance_follows_the_desktop_file_and_config() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn phone_message_to_hosted_agent_streams_reply_and_files_a_proposal() {
-    let mut rounds = vec![streamed_call("call_1", "write_file", r#"{"path":"hello.txt","content":"hello from the phone\n"}"#)];
+    // The built-in file tools need this host's OS sandbox. A host without one
+    // (Windows) offers the model none: there the hosted agent is chat only,
+    // files no proposal, and this checks that instead.
+    let tools_here = hive_runtime::executor::local_tools_allowed();
+    let mut rounds = Vec::new();
+    if tools_here {
+        rounds.push(streamed_call("call_1", "write_file", r#"{"path":"hello.txt","content":"hello from the phone\n"}"#));
+    }
     rounds.push(vec![delta(json!({"content": "Done: "})), delta(json!({"content": "added hello.txt"}))]);
     let (endpoint, model) = spawn_model(rounds).await;
     let h = harness(&endpoint, "gemma4:12b", &[("README.md", "# demo\n")]).await;
@@ -727,7 +734,7 @@ async fn phone_message_to_hosted_agent_streams_reply_and_files_a_proposal() {
     // proposal comes from a git diff after the turn, which took over 30s on a
     // loaded Windows runner.
     let seen = collect_until(&mut rx, 120, |evs| {
-        evs.iter().any(|(n, _, _)| n == "proposal.created")
+        (!tools_here || evs.iter().any(|(n, _, _)| n == "proposal.created"))
             && evs.iter().any(|(n, d, _)| n == "turn.status" && d["state"] == "done")
             && evs.iter().any(|(n, d, _)| n == "message.done" && d["message"]["role"] == "agent")
     })
@@ -764,6 +771,19 @@ async fn phone_message_to_hosted_agent_streams_reply_and_files_a_proposal() {
     assert!(names.contains(&"chat.updated"));
     // Event ids increase.
     assert!(seen.windows(2).all(|w| w[0].2 < w[1].2));
+
+    if !tools_here {
+        assert!(!names.contains(&"proposal.created"), "{names:?}");
+        {
+            let bodies = model.bodies.lock().unwrap();
+            let offered: Vec<&str> =
+                bodies[0]["tools"].as_array().into_iter().flatten().filter_map(|t| t["function"]["name"].as_str()).collect();
+            assert!(!offered.iter().any(|t| ["write_file", "read_file", "run_command"].contains(t)), "{offered:?}");
+        }
+        assert!(h.get("/v1/proposals").await["proposals"].as_array().unwrap().is_empty());
+        h.handle.shutdown();
+        return;
+    }
 
     let proposal = find("proposal.created").unwrap()["proposal"].clone();
     assert_eq!(proposal["kind"], "fileDiff");
