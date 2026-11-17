@@ -147,7 +147,7 @@ impl World {
         env.lamport = self.clock;
         let mut actor = ActorIdentity::new(self.aid(by), by, ActorKind::Human);
         actor.account_id = Some(p.account_id);
-        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: self.head(), presence: None, runtime_effect: false });
+        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: self.head(), presence: None, runtime_effect: false, prev: None });
         sign_envelope(&mut env, p.device_id, &p.device);
         if self.present.contains(by) {
             hive_core::testkit::prove_recovery(&mut env, p.account_id, p.device_id, &p.device);
@@ -340,7 +340,7 @@ proptest! {
                 }
                 Op::RemoveMara => {
                     if mara_member {
-                        w.push("owner", SessionEvent::MemberRemoved { member_id: "mara".into() });
+                        w.push("owner", SessionEvent::MemberRemoved { member_id: "mara".into(), watermark: Vec::new() });
                         mara_member = false;
                     }
                 }
@@ -507,7 +507,7 @@ impl Junk {
 fn removed_member_cannot_read_later_attachments() {
     use crate::attachment_blob::{open_framed, open_with_ring, seal_framed, seal_with_ring};
     let mut w = World::new();
-    w.push("owner", SessionEvent::MemberRemoved { member_id: "mara".into() });
+    w.push("owner", SessionEvent::MemberRemoved { member_id: "mara".into(), watermark: Vec::new() });
     w.rotate("owner");
     let data = b"quarterly numbers";
     // Control: the passphrase epoch is exactly what mara kept.
@@ -531,7 +531,7 @@ fn removed_member_cannot_read_later_attachments() {
 #[test]
 fn removed_members_device_is_not_a_recipient_through_an_agent_host() {
     let mut w = World::new();
-    w.push("owner", SessionEvent::MemberRemoved { member_id: "mara".into() });
+    w.push("owner", SessionEvent::MemberRemoved { member_id: "mara".into(), watermark: Vec::new() });
     let mut agent = hive_core::WorkspaceAgent::new("helper", "rt");
     agent.host_id = w.people["mara"].device_id.to_string();
     agent.owner_actor_id = "ada".into();
@@ -548,7 +548,7 @@ fn removed_members_device_is_not_a_recipient_through_an_agent_host() {
 fn removed_member_cannot_forge_or_read_host_beats() {
     use crate::host_presence::{host_presence_slot, open_host_beats, seal_host_beat};
     let mut w = World::new();
-    w.push("owner", SessionEvent::MemberRemoved { member_id: "mara".into() });
+    w.push("owner", SessionEvent::MemberRemoved { member_id: "mara".into(), watermark: Vec::new() });
     w.rotate("owner");
     let owner = w.engine("owner", &[]);
     // mara seals with what she still has: the passphrase epoch.
@@ -568,7 +568,7 @@ fn removed_member_cannot_inject_epoch() {
     // of her own (signed by her still-certified device) and posts a body
     // sealed to everyone to the relay keyring route.
     let mut w = World::new();
-    w.push("owner", SessionEvent::MemberRemoved { member_id: "mara".into() });
+    w.push("owner", SessionEvent::MemberRemoved { member_id: "mara".into(), watermark: Vec::new() });
     let (r, key) = w.rotate("owner");
     assert!(!r.sealed.contains_key(&w.people["mara"].device_id.to_string()), "the removed member isn't a recipient");
     let mara = w.engine("mara", &[]);
@@ -648,7 +648,7 @@ fn stale_epoch_write_refused_after_frontier() {
         env.lamport = clock as u64;
         let mut actor = ActorIdentity::new(w.aid(by), by, ActorKind::Human);
         actor.account_id = Some(p.account_id);
-        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: f, presence: None, runtime_effect: false });
+        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: f, presence: None, runtime_effect: false, prev: None });
         sign_envelope(&mut env, p.device_id, &p.device);
         env.set_sealed_epoch(sealed);
         let id = env.event_id;
@@ -712,7 +712,7 @@ fn ingest_refuses_old_key_writes_from_non_members() {
     // A removed member keeps the old key; once this device knows of the
     // removal and the rotation, their writes under the old key are refused.
     let mut w = World::new();
-    w.push("owner", SessionEvent::MemberRemoved { member_id: "mara".into() });
+    w.push("owner", SessionEvent::MemberRemoved { member_id: "mara".into(), watermark: Vec::new() });
     w.rotate("owner");
     let head = w.timeline().current().clone();
     let mut env = w.draft("mara", SessionEvent::ChannelCreated { channel: hive_core::Channel::new("x", "x") });
@@ -922,7 +922,7 @@ fn removed_member_cannot_read_lease_beats_after_rotation() {
     use crate::lease_presence::{lease_presence_slot, open_lease_beats, seal_lease_beat, LeaseBeat};
     use hive_core::lease::LeaseScope;
     let mut w = World::new();
-    w.push("owner", SessionEvent::MemberRemoved { member_id: "mara".into() });
+    w.push("owner", SessionEvent::MemberRemoved { member_id: "mara".into(), watermark: Vec::new() });
     w.rotate("owner");
     let owner = w.engine("owner", &[]);
     let mara = KeyringEngine::passphrase(w.wid, pass_key());
@@ -1031,7 +1031,7 @@ fn co_member_keys_verified_only_from_a_certified_devices_publication() {
     assert!(signed_ka_keys(&unpinned, ada).is_empty(), "keys from an unpinned fold");
     // Revoked: no longer vouched for.
     let device = w.people["ada"].device_id;
-    w.push("owner", SessionEvent::DeviceRevoked { device_id: device });
+    w.push("owner", SessionEvent::DeviceRevoked { device_id: device, watermark: Vec::new() });
     assert!(!signed_ka_keys(&pinned_store(&w), ada).contains(&ada_ka), "a revoked device's key");
 }
 

@@ -4575,7 +4575,7 @@ fn list_membership_audit(state: State<AppState>) -> Result<Vec<MembershipAuditDt
                     at,
                 });
             }
-            hive_core::SessionEvent::MemberRemoved { member_id } => {
+            hive_core::SessionEvent::MemberRemoved { member_id, .. } => {
                 let member = names.get(member_id).cloned().unwrap_or_else(|| member_id.clone());
                 out.push(MembershipAuditDto { action: "removed".into(), member, role: None, by, at });
             }

@@ -260,7 +260,7 @@ impl ChatService {
         env.lamport = self.store.max_lamport(session_id)?.saturating_add(1);
         let mut actor = ActorIdentity::new(agent_id.to_string(), name, hive_core::ActorKind::Agent);
         actor.device_id = Some(key_id);
-        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::now(), cfg_frontier: timeline.head(), presence: None, runtime_effect: false });
+        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::now(), cfg_frontier: timeline.head(), presence: None, runtime_effect: false, prev: self.store.last_signed_by(session_id, key_id)? });
         sign_envelope(&mut env, key_id, &kp);
         self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
         self.store.append_envelope(&env)?;
@@ -726,8 +726,7 @@ impl ChatService {
             actor: self.author.clone(),
             recorded_at: Timestamp::now(),
             cfg_frontier: timeline.head(),
-            presence: None, runtime_effect: self.runtime_effect,
-        });
+            presence: None, runtime_effect: self.runtime_effect, prev: self.store.last_signed_by(session_id, self.device_id)? });
         // Signed first, so the fold's own signature checks (key events)
         // judge exactly what peers will receive.
         sign_envelope(&mut env, self.device_id, &self.keypair);
@@ -2151,13 +2150,9 @@ impl ChatService {
         // Member hoist (§11): route to the workspace-config log so the removal
         // propagates workspace-wide.
         let session_id = self.ensure_workspace_config(workspace_id)?;
-        self.append_signed(
-            session_id,
-            workspace_id,
-            SessionEvent::MemberRemoved {
-                member_id: member_id.into(),
-            },
-        )?;
+        let member_id = member_id.into();
+        let watermark = self.cut_watermark(workspace_id, Some(&member_id), None)?;
+        self.append_signed(session_id, workspace_id, SessionEvent::MemberRemoved { member_id, watermark })?;
         Ok(())
     }
 
@@ -2191,7 +2186,8 @@ impl ChatService {
         device_id: Uuid,
     ) -> Result<()> {
         let session_id = self.ensure_workspace_config(workspace_id)?;
-        self.append_signed(session_id, workspace_id, SessionEvent::DeviceRevoked { device_id })?;
+        let watermark = self.cut_watermark(workspace_id, None, Some(device_id))?;
+        self.append_signed(session_id, workspace_id, SessionEvent::DeviceRevoked { device_id, watermark })?;
         Ok(())
     }
 
@@ -2211,18 +2207,52 @@ impl ChatService {
             .load(session_id)?
             .and_then(|s| s.members.iter().find(|m| m.id == member_id).map(|m| m.role))
             .unwrap_or(WorkspaceRole::Contributor);
+        // A demotion cuts like a removal: the member's later events are
+        // judged with the new role (Phase A, item 2).
+        let watermark =
+            if new_role.rank() < old_role.rank() { self.cut_watermark(workspace_id, Some(&member_id), None)? } else { Vec::new() };
         self.append_signed(
             session_id,
             workspace_id,
-            SessionEvent::MemberRoleChanged {
-                change: MemberRoleChange {
-                    member_id,
-                    old_role,
-                    new_role,
-                },
-            },
+            SessionEvent::MemberRoleChanged { change: MemberRoleChange { member_id, old_role, new_role }, watermark },
         )?;
         Ok(())
+    }
+
+    /// The watermark a removal, demotion or revocation carries (Phase A,
+    /// item 2; [`hive_core::watermark`]): for every signer it cuts (the
+    /// device; or the member's devices, agent keys and any device that
+    /// signed as them here) and every log of the workspace this device holds,
+    /// the newest of that signer's events here.
+    pub fn cut_watermark(&self, workspace_id: Uuid, member: Option<&str>, device: Option<Uuid>) -> Result<Vec<hive_core::watermark::Watermark>> {
+        let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let roster = timeline.current();
+        let sessions = self.store.sessions_of_workspace(workspace_id)?;
+        let mut logs = Vec::new();
+        for sid in sessions {
+            logs.push((sid, self.store.list(sid)?));
+        }
+        let mut signers: std::collections::BTreeSet<Uuid> = device.into_iter().collect();
+        if let Some(m) = member {
+            let account = config.as_ref().and_then(|c| c.members.iter().find(|x| x.id == m)).and_then(|x| x.actor.account_id);
+            if let Some(a) = account {
+                signers.extend(roster.devices.iter().filter(|(_, d)| d.accounts.contains(&a)).map(|(id, _)| *id));
+            }
+            signers.extend(roster.agent_keys.iter().filter(|(_, k)| roster.agents.get(&k.agent_id).is_some_and(|ag| ag.owner == m)).map(|(id, _)| *id));
+            for (_, envs) in &logs {
+                signers.extend(
+                    envs.iter()
+                        .filter(|e| e.actor_stamp.as_ref().is_some_and(|s| s.actor.id == m))
+                        .filter_map(|e| e.signer_device_id),
+                );
+            }
+        }
+        let mut out = Vec::new();
+        for (sid, envs) in &logs {
+            out.extend(hive_core::watermark::heads_of(envs, *sid, &signers));
+        }
+        out.truncate(hive_core::watermark::MAX_WATERMARK_ENTRIES);
+        Ok(out)
     }
 
     /// Device-local workspace only: make the current actor the sole human OWNER.
@@ -4100,7 +4130,7 @@ mod tests {
             let seq = con.store.max_sequence(chat_id).unwrap().unwrap_or(0) + 1;
             let mut env = SessionEventEnvelope::new(chat_id, wid, seq, payload);
             env.lamport = con.store.max_lamport(chat_id).unwrap() + 1;
-            env.actor_stamp = Some(ActorStamp { actor: con.author.clone(), recorded_at: Timestamp::now(), cfg_frontier: frontier, presence: None, runtime_effect: false });
+            env.actor_stamp = Some(ActorStamp { actor: con.author.clone(), recorded_at: Timestamp::now(), cfg_frontier: frontier, presence: None, runtime_effect: false, prev: None });
             con.store.ingest(&env).unwrap();
         };
         inject(&mut con, rewrite);
@@ -4372,8 +4402,7 @@ mod tests {
             recorded_at: Timestamp::now(),
             cfg_frontier: timeline.head(),
             presence: None,
-            runtime_effect: false,
-        });
+            runtime_effect: false, prev: None });
         hive_core::sign_envelope(&mut env, con.device_id, &con.keypair);
         con.store.ingest(&env).unwrap();
         assert_eq!(host.trigger_author_role(chat, id).unwrap(), None);
@@ -4423,7 +4452,7 @@ mod tests {
         // check publishes it anyway.)
         assert!(con.set_member_role(chat, wid, con_acct.clone(), WorkspaceRole::Owner).is_err());
         let change = MemberRoleChange { member_id: con_acct.clone(), old_role: WorkspaceRole::Contributor, new_role: WorkspaceRole::Owner };
-        let env = con.draft_signed(workspace_config_session_id(wid), wid, SessionEvent::MemberRoleChanged { change }).unwrap();
+        let env = con.draft_signed(workspace_config_session_id(wid), wid, SessionEvent::MemberRoleChanged { change, watermark: Vec::new() }).unwrap();
         con.store.ingest(&env).unwrap();
         let cfg = owner.store().list(workspace_config_session_id(wid)).unwrap();
         let promo = cfg.iter().rev().find(|e| matches!(&e.payload, SessionEvent::MemberRoleChanged { .. })).unwrap();
@@ -4464,6 +4493,44 @@ mod tests {
         svc.complete_assistant_message(chat.id, wid, id, format!("the serve token is {secret} - done.")).unwrap();
         let body = svc.load(chat.id).unwrap().unwrap().messages.into_iter().find(|m| m.id == id).unwrap().body;
         assert!(!body.contains(secret) && body.contains(crate::secret_redact::MARK), "{body}");
+    }
+
+    /// Phase A, item 2: a removal carries a watermark of the member's
+    /// events this device held, so a removed member's later post never
+    /// folds, even backdated to a frontier from before the removal; their
+    /// earlier posts stand.
+    #[test]
+    fn a_removed_members_backdated_post_never_folds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hive.db");
+        let wid = Uuid::new_v4();
+        let mut owner = svc_on(&path, "u1", "Ana");
+        let chat = owner.create_chat("A", wid, "anthropic").unwrap().id;
+        owner.add_member(chat, wid, test_member_acct("con", "Con", WorkspaceRole::Contributor)).unwrap();
+        let mut con = svc_on(&path, "con", "Con");
+        con.publish_identity(workspace_config_session_id(wid), wid).unwrap();
+        let early = con.post_user_message(chat, wid, "while a member").unwrap().id;
+        let old_frontier = {
+            let (_, t) = con.store.load_config(wid, None, None).unwrap();
+            t.head()
+        };
+        owner.remove_member(chat, wid, "con").unwrap();
+        let removal = owner.store().list(workspace_config_session_id(wid)).unwrap().into_iter().rev()
+            .find(|e| matches!(e.payload, SessionEvent::MemberRemoved { .. })).unwrap();
+        let SessionEvent::MemberRemoved { watermark, .. } = &removal.payload else { unreachable!() };
+        assert!(watermark.iter().any(|w| w.log == chat), "the removal names the member's chain on the chat");
+        // Con's device still holds its key: it signs a post stamped with the
+        // pre-removal frontier and the peer stores it.
+        let msg = ChatMessage::new(MessageRole::User, "Con", "backdated");
+        let late = msg.id;
+        let mut env = con.draft_signed(chat, wid, SessionEvent::MessageAppended { message: msg }).unwrap();
+        env.actor_stamp.as_mut().unwrap().cfg_frontier = old_frontier;
+        env.clear_raw();
+        sign_envelope(&mut env, con.device_id, &con.keypair);
+        con.store.ingest(&env).unwrap();
+        let s = svc_on(&path, "u1", "Ana").load(chat).unwrap().unwrap();
+        assert!(s.messages.iter().any(|m| m.id == early), "the removal took back a post its author held");
+        assert!(!s.messages.iter().any(|m| m.id == late), "a removed member's backdated post folded");
     }
 
     #[test]
@@ -4988,7 +5055,7 @@ mod tests {
             actor: svc.author().clone(),
             recorded_at: Timestamp::now(),
             cfg_frontier: Some(hive_core::CfgFrontier { lamport: 500, event_id: Uuid::new_v4() }),
-            presence: None, runtime_effect: false,
+            presence: None, runtime_effect: false, prev: None
         });
         svc.store().append_envelope(&peer).unwrap();
         let s = svc.load(sid).unwrap().unwrap();

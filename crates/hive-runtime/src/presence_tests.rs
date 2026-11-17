@@ -311,12 +311,12 @@ fn requires_presence_exhaustive() {
     let roster = RosterState::default();
     let fold = hive_core::ChatSession::new("c", Uuid::nil(), "x");
     let yes = [
-        SessionEvent::MemberRemoved { member_id: "x".into() },
+        SessionEvent::MemberRemoved { member_id: "x".into(), watermark: Vec::new() },
         SessionEvent::MemberRoleChanged {
-            change: MemberRoleChange { member_id: "x".into(), old_role: WorkspaceRole::Viewer, new_role: WorkspaceRole::Admin },
+            change: MemberRoleChange { member_id: "x".into(), old_role: WorkspaceRole::Viewer, new_role: WorkspaceRole::Admin }, watermark: Vec::new(),
         },
         SessionEvent::JoinApproved { subject: "x".into() },
-        SessionEvent::DeviceRevoked { device_id: Uuid::nil() },
+        SessionEvent::DeviceRevoked { device_id: Uuid::nil(), watermark: Vec::new() },
         SessionEvent::PasskeyRemoved { account_id: Uuid::nil(), credential_id: "c".into() },
         SessionEvent::ChatLockdownCleared { chat_id: Uuid::nil() },
         SessionEvent::WorkflowDefinitionsUpdated { definitions: vec![] },

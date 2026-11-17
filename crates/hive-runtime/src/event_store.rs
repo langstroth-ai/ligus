@@ -991,6 +991,34 @@ impl EventStore {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    /// The newest event `signer` put on `session_id` here (by local row
+    /// order): what a new event of that signer names as `ActorStamp::prev`.
+    pub fn last_signed_by(&self, session_id: Uuid, signer: Uuid) -> Result<Option<Uuid>> {
+        let id: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT event_id FROM events WHERE session_id = ?1 AND json_extract(envelope_json, '$.signerDeviceId') = ?2 \
+                 ORDER BY row_id DESC LIMIT 1",
+                rusqlite::params![session_id.to_string(), signer.to_string()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(id.and_then(|s| Uuid::parse_str(&s).ok()))
+    }
+
+    /// The session ids of one workspace.
+    pub fn sessions_of_workspace(&self, workspace_id: Uuid) -> Result<Vec<Uuid>> {
+        let mut stmt = self.conn.prepare("SELECT DISTINCT session_id FROM events WHERE workspace_id = ?1")?;
+        let rows = stmt.query_map([workspace_id.to_string()], |row| row.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for s in rows {
+            if let Ok(id) = Uuid::parse_str(&s?) {
+                out.push(id);
+            }
+        }
+        Ok(out)
+    }
+
     /// Distinct session ids known to the store, in first-seen order.
     pub fn list_session_ids(&self) -> Result<Vec<Uuid>> {
         let mut stmt = self.conn.prepare(
@@ -1513,7 +1541,7 @@ mod tests {
             SessionEventEnvelope::new(sid, wid, 2, SessionEvent::SessionTitleChanged { title: "First".into() }),
             SessionEventEnvelope::new(sid, wid, 3, SessionEvent::MemberAdded { member, invite: None }),
             SessionEventEnvelope::new(sid, wid, 4, SessionEvent::SessionTitleChanged { title: "Second".into() }),
-            SessionEventEnvelope::new(sid, wid, 5, SessionEvent::MemberRemoved { member_id: "m1".into() }),
+            SessionEventEnvelope::new(sid, wid, 5, SessionEvent::MemberRemoved { member_id: "m1".into(), watermark: Vec::new() }),
         ];
 
         // Device A ingests forward; device B ingests in reverse — so B stores the

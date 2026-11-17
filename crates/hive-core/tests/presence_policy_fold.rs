@@ -16,7 +16,7 @@ fn register(w: &mut SignedWorld, who: &str, auth: &SoftAuthenticator) -> uuid::U
 /// A presence-gated event by the Owner, confirmed with `auth`.
 fn confirm_with(w: &mut SignedWorld, auth: &SoftAuthenticator) -> uuid::Uuid {
     let change = MemberRoleChange { member_id: "owner".into(), old_role: WorkspaceRole::Owner, new_role: WorkspaceRole::Owner };
-    let mut env = w.draft("owner", None, SessionEvent::MemberRoleChanged { change }, None);
+    let mut env = w.draft("owner", None, SessionEvent::MemberRoleChanged { change, watermark: Vec::new() }, None);
     let a = auth.get(&hive_core::presence::challenge(&env));
     w.finish(&mut env, "owner", Some(a));
     w.push_env(None, env)

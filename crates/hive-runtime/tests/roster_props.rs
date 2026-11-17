@@ -50,7 +50,7 @@ impl Principal {
     fn sign(&self, ws: Uuid, lamport: u64, payload: SessionEvent) -> SessionEventEnvelope {
         let mut e = SessionEventEnvelope::new(workspace_config_session_id(ws), ws, lamport as i64, payload);
         e.lamport = lamport;
-        e.actor_stamp = Some(ActorStamp { actor: self.actor(), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false });
+        e.actor_stamp = Some(ActorStamp { actor: self.actor(), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None });
         sign_envelope(&mut e, self.device_id, &self.device);
         if self.present.get() {
             hive_core::testkit::prove_recovery(&mut e, self.account_id, self.device_id, &self.device);
@@ -107,7 +107,7 @@ proptest! {
         let mut all = workspace(w1, &o1, &[&a]);
         all.extend(workspace(w2, &o2, &[&a]));
         let (wr, owner) = if remove_in_first { (w1, &o1) } else { (w2, &o2) };
-        all.push(owner.sign(wr, 500, SessionEvent::MemberRemoved { member_id: a.account_id.to_string() }));
+        all.push(owner.sign(wr, 500, SessionEvent::MemberRemoved { member_id: a.account_id.to_string(), watermark: Vec::new() }));
         for i in 0..noise {
             let (w, o) = if i % 2 == 0 { (w1, &o1) } else { (w2, &o2) };
             all.push(o.content(w, 600 + i as u64));
@@ -137,7 +137,7 @@ fn roster_ignores_unverified_batch_membership() {
     let stored = workspace(ws, &owner, &[]);
     // Eve signs with her own device but stamps the owner as author.
     let mut forged = eve.sign(ws, 100, SessionEvent::MemberAdded { invite: None, member: eve.member(WorkspaceRole::Admin) });
-    forged.actor_stamp = Some(ActorStamp { actor: owner.actor(), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false });
+    forged.actor_stamp = Some(ActorStamp { actor: owner.actor(), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None });
     forged.clear_raw();
     sign_envelope(&mut forged, eve.device_id, &eve.device);
     let mut batch = eve.trust(ws, 101);
@@ -230,7 +230,7 @@ fn an_ex_members_events_are_refused_at_ingest() {
     let (owner, mara) = (Principal::new("owner"), Principal::new("mara"));
     let ws = Uuid::new_v4();
     let mut events = workspace(ws, &owner, &[&mara]);
-    events.push(owner.sign(ws, 100, SessionEvent::MemberRemoved { member_id: mara.account_id.to_string() }));
+    events.push(owner.sign(ws, 100, SessionEvent::MemberRemoved { member_id: mara.account_id.to_string(), watermark: Vec::new() }));
     let roster = build_roster(&events);
     assert!(matches!(verdict_for(&roster, &mara.content(ws, 120)), Verdict::Quarantine(QuarantineReason::RevokedDevice)));
     let mut fresh = mara.content(ws, 121);
@@ -259,7 +259,7 @@ proptest! {
         let in_chat = |p: &Principal, l: u64, payload: SessionEvent| {
             let mut e = SessionEventEnvelope::new(sid, ws, l as i64, payload);
             e.lamport = l;
-            e.actor_stamp = Some(ActorStamp { actor: p.actor(), recorded_at: Timestamp::epoch(), cfg_frontier: f, presence: None, runtime_effect: false });
+            e.actor_stamp = Some(ActorStamp { actor: p.actor(), recorded_at: Timestamp::epoch(), cfg_frontier: f, presence: None, runtime_effect: false, prev: None });
             sign_envelope(&mut e, p.device_id, &p.device);
             e
         };
@@ -365,8 +365,8 @@ fn a_forged_low_lamport_seed_cannot_lock_out_the_founder() {
         let forged = eve.sign(ws, 0, SessionEvent::SessionSnapshot { session: Box::new(seed) });
         let attack = [
             forged,
-            eve.sign(ws, 103, SessionEvent::DeviceRevoked { device_id: owner.device_id }),
-            eve.sign(ws, 104, SessionEvent::MemberRemoved { member_id: owner.account_id.to_string() }),
+            eve.sign(ws, 103, SessionEvent::DeviceRevoked { device_id: owner.device_id, watermark: Vec::new() }),
+            eve.sign(ws, 104, SessionEvent::MemberRemoved { member_id: owner.account_id.to_string(), watermark: Vec::new() }),
         ];
         let refs: Vec<&SessionEventEnvelope> = attack.iter().collect();
         let roster = roster_with_batch(held.clone(), &refs, Some(&pin));

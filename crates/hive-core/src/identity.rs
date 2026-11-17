@@ -148,6 +148,12 @@ pub struct ActorStamp {
     /// when false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub runtime_effect: bool,
+    /// The previous event this envelope's signer put on the same log (Phase
+    /// A, item 2): a signer's events on one log form a chain a removal
+    /// watermark cuts ([`crate::watermark`]). Left out on a signer's first
+    /// event there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prev: Option<uuid::Uuid>,
 }
 
 /// A position on a workspace-config log: the canonical key `(lamport,

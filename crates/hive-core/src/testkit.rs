@@ -148,7 +148,14 @@ impl SignedWorld {
         let mut actor = p.actor();
         actor.device_id = Some(p.device_id);
         let cfg_frontier = frontier.or_else(|| self.head());
-        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier, presence: None, runtime_effect: false });
+        // The device's previous event on this log (its chain, for removal
+        // watermarks).
+        let log = match chat {
+            None => &self.cfg,
+            Some(c) => self.chats.get(&c).map(Vec::as_slice).unwrap_or(&[]),
+        };
+        let prev = log.iter().rev().find(|e| e.signer_device_id == Some(p.device_id)).map(|e| e.event_id);
+        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier, presence: None, runtime_effect: false, prev });
         sign_envelope(&mut env, p.device_id, &p.device);
         env
     }

@@ -46,7 +46,7 @@ use std::collections::BTreeMap;
 
 use uuid::Uuid;
 
-pub use timeline::{AgentKeyState, AgentState, ConfigTimeline, DeviceState, MemberState, RosterState, RosterTracker};
+pub use timeline::{AgentKeyState, AgentState, ConfigTimeline, Cut, CutKind, DeviceState, MemberState, RosterState, RosterTracker};
 
 use crate::agent::WorkspaceAgent;
 use crate::authorization::{evaluate, requires_projection_authz};
@@ -456,7 +456,7 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             }
         }
         // R5: revoking a device your own account certified is self-service.
-        if let SessionEvent::DeviceRevoked { device_id } = &env.payload {
+        if let SessionEvent::DeviceRevoked { device_id, .. } = &env.payload {
             let account = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id);
             if account.is_some_and(|a| ctx.running.account_certified(a, *device_id)) {
                 return Decision::Allow;

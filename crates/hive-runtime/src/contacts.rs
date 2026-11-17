@@ -867,7 +867,7 @@ mod tests {
             let mut e = SessionEventEnvelope::new(ws, ws, 1, SessionEvent::IdentityLinkPublished { link: l });
             let mut actor = ActorIdentity::new(account_id.to_string(), "Ana", ActorKind::Human);
             actor.account_id = Some(account_id);
-            e.actor_stamp = Some(ActorStamp { actor, recorded_at: now(), cfg_frontier: None, presence: None, runtime_effect: false });
+            e.actor_stamp = Some(ActorStamp { actor, recorded_at: now(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None });
             hive_core::crypto::sign_envelope(&mut e, device_id, key);
             e
         };

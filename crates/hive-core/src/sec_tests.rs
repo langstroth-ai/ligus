@@ -232,7 +232,7 @@ fn a_removed_member_cannot_self_enroll_back() {
     use crate::identity::WorkspaceRole;
     use crate::lease_projection_tests::member;
     let s = base();
-    let removed = SessionEvent::MemberRemoved { member_id: "alice".into() };
+    let removed = SessionEvent::MemberRemoved { member_id: "alice".into(), watermark: Vec::new() };
     let rejoin = SessionEvent::MemberAdded { invite: None, member: member("alice", WorkspaceRole::Contributor) };
     let noise = |n: u64| SessionEvent::SessionTitleChanged { title: format!("t{n}") };
     let mut rng = Rng::new(77);

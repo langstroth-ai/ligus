@@ -25,7 +25,7 @@ fn member(id: &str, role: WorkspaceRole) -> WorkspaceMember {
 }
 
 fn stamp(by: &str, frontier: Option<CfgFrontier>) -> Option<ActorStamp> {
-    Some(ActorStamp { actor: ActorIdentity::new(by, by, ActorKind::Human), recorded_at: Timestamp::epoch(), cfg_frontier: frontier, presence: None, runtime_effect: false })
+    Some(ActorStamp { actor: ActorIdentity::new(by, by, ActorKind::Human), recorded_at: Timestamp::epoch(), cfg_frontier: frontier, presence: None, runtime_effect: false, prev: None })
 }
 
 /// The workspace-config log: `owner` founded it, then added `mara` as a
@@ -43,9 +43,6 @@ impl Config {
             w.admit("owner", id, role);
         }
         Self { w }
-    }
-    fn set_role(&mut self, id: &str, old_role: WorkspaceRole, new_role: WorkspaceRole) {
-        self.w.push("owner", SessionEvent::MemberRoleChanged { change: MemberRoleChange { member_id: id.into(), old_role, new_role } });
     }
     fn head(&self) -> Option<CfgFrontier> {
         self.w.head()
@@ -99,6 +96,22 @@ impl Log {
         env.lamport = self.lamport;
         env.actor_stamp = stamp(by, self.cfg.head());
         self.envs.push(env);
+    }
+    /// The owner changes `id`'s role; a demotion carries the honest
+    /// watermark (every event `id` signed here, on both logs).
+    fn set_role(&mut self, id: &str, old_role: WorkspaceRole, new_role: WorkspaceRole) {
+        let signers: std::collections::BTreeSet<Uuid> = self
+            .envs
+            .iter()
+            .chain(&self.cfg.w.cfg)
+            .filter(|e| e.actor_stamp.as_ref().is_some_and(|s| s.actor.id == id))
+            .filter_map(|e| e.signer_device_id)
+            .collect();
+        let cfg_log = self.cfg.w.cfg[0].session_id;
+        let mut watermark = hive_core::watermark::heads_of(&self.envs, self.sid, &signers);
+        watermark.extend(hive_core::watermark::heads_of(&self.cfg.w.cfg, cfg_log, &signers));
+        let change = MemberRoleChange { member_id: id.into(), old_role, new_role };
+        self.cfg.w.push("owner", SessionEvent::MemberRoleChanged { change, watermark });
     }
     fn hoisted(&self) -> ChatSession {
         let t = self.cfg.timeline();
@@ -246,7 +259,7 @@ fn a_demotion_on_the_config_log_is_what_counts_not_the_chats_stale_roster() {
     // add); the workspace demoted her to Viewer before she acted.
     let mut log = Log::new();
     log.push("owner", SessionEvent::MemberAdded { invite: None, member: member("mara", WorkspaceRole::Contributor) });
-    log.cfg.set_role("mara", WorkspaceRole::Contributor, WorkspaceRole::Viewer);
+    log.set_role("mara", WorkspaceRole::Contributor, WorkspaceRole::Viewer);
     let (set_id, _, _) = piping_set(&mut log, WorkspaceRole::Contributor);
     let s = log.hoisted();
     assert!(s.proposal_sets.iter().all(|x| x.id != set_id), "a Viewer can't open a set");
@@ -333,7 +346,7 @@ fn hoisted_authorization_is_not_retroactive() {
     let before = log.hoisted();
     assert_eq!(before.proposal_sets.iter().find(|x| x.id == set_id).unwrap().phase, SetPhase::Piping, "control");
     // Later, val is promoted. Her old, refused close must stay refused.
-    log.cfg.set_role("val", WorkspaceRole::Viewer, WorkspaceRole::Admin);
+    log.set_role("val", WorkspaceRole::Viewer, WorkspaceRole::Admin);
     let after = log.hoisted();
     assert_eq!(after.proposal_sets.iter().find(|x| x.id == set_id).unwrap().phase, SetPhase::Piping, "a refused close became valid retroactively");
 
@@ -341,7 +354,7 @@ fn hoisted_authorization_is_not_retroactive() {
     // decision stands.
     log.push("ada", SessionEvent::ProposalSetDecided { set_id, winner: Some(a), at: Timestamp::epoch() });
     assert_eq!(log.hoisted().proposal_sets.iter().find(|x| x.id == set_id).unwrap().winner, Some(a));
-    log.cfg.set_role("ada", WorkspaceRole::Admin, WorkspaceRole::Viewer);
+    log.set_role("ada", WorkspaceRole::Admin, WorkspaceRole::Viewer);
     let demoted = log.hoisted();
     let set = demoted.proposal_sets.iter().find(|x| x.id == set_id).unwrap();
     assert_eq!((set.phase, set.winner), (SetPhase::Decided, Some(a)), "a later demotion undid a decision");

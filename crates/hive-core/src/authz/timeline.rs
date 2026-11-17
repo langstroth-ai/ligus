@@ -360,7 +360,7 @@ impl RosterTracker {
     fn note_grant(&mut self, e: &SessionEvent) {
         let account = match e {
             SessionEvent::MemberAdded { member, .. } if !self.state.members.contains_key(&member.id) => member.actor.account_id,
-            SessionEvent::MemberRoleChanged { change } => self.state.members.get(&change.member_id).and_then(|m| m.account_id),
+            SessionEvent::MemberRoleChanged { change, .. } => self.state.members.get(&change.member_id).and_then(|m| m.account_id),
             _ => None,
         };
         if let Some(a) = account.filter(|a| self.state.passkeys.get(a).is_none_or(|m| m.is_empty())) {
@@ -451,7 +451,60 @@ pub struct ConfigTimeline {
     /// open from these are read-only candidates (B1; never sealed under
     /// unless authorized).
     rotations: Vec<crate::keys::SignedRotation>,
+    /// Every allowed removal, demotion and revocation, with its watermark
+    /// (Phase A, item 2; see [`Cut`]).
+    cuts: Vec<Cut>,
     fingerprint: u64,
+}
+
+/// What a cut cuts.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CutKind {
+    /// `MemberRemoved`: the member's later events are judged as of the
+    /// removal (not a member).
+    Removed(String),
+    /// A demoting `MemberRoleChanged`: judged with the new role.
+    Demoted(String),
+    /// `DeviceRevoked`: the device's later events never fold.
+    Revoked(Uuid),
+}
+
+/// An allowed removal, demotion or revocation on the config log and the
+/// watermark it carried ([`crate::watermark`]).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Cut {
+    /// The cut event's canonical key (a config position).
+    pub key: (u64, Uuid),
+    pub kind: CutKind,
+    /// For a removal: the agent keys of agents the member owned there.
+    pub agent_keys: BTreeSet<Uuid>,
+    pub watermark: Vec<crate::watermark::Watermark>,
+}
+
+impl Cut {
+    /// Whether this cut concerns `env` (see [`crate::watermark`]).
+    pub fn applies(&self, env: &SessionEventEnvelope) -> bool {
+        let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
+        match &self.kind {
+            CutKind::Removed(m) => author == m || env.signer_device_id.is_some_and(|k| self.agent_keys.contains(&k)),
+            CutKind::Demoted(m) => author == m,
+            CutKind::Revoked(d) => env.signer_device_id == Some(*d),
+        }
+    }
+
+    /// The events of one log this cut's watermark covers (held by its author).
+    pub fn covered(&self, log: Uuid, chains: &crate::watermark::Chains) -> BTreeSet<Uuid> {
+        let mut out = BTreeSet::new();
+        for w in self.watermark.iter().filter(|w| w.log == log) {
+            out.extend(chains.ancestors(w.signer, &w.heads));
+        }
+        out
+    }
+
+    /// The config position the cut's later events are judged at.
+    pub fn frontier(&self) -> CfgFrontier {
+        CfgFrontier { lamport: self.key.0, event_id: self.key.1 }
+    }
 }
 
 impl ConfigTimeline {
@@ -475,6 +528,16 @@ impl ConfigTimeline {
     /// Every rotation body seen on the log, authorized or not.
     pub fn rotation_candidates(&self) -> &[crate::keys::SignedRotation] {
         &self.rotations
+    }
+
+    /// Record an allowed cut.
+    pub fn push_cut(&mut self, cut: Cut) {
+        self.cuts.push(cut);
+    }
+
+    /// Every allowed removal, demotion and revocation, in canonical order.
+    pub fn cuts(&self) -> &[Cut] {
+        &self.cuts
     }
 
     /// Record the state after the folded event `key` (`changed` = a new state).
@@ -508,6 +571,7 @@ impl ConfigTimeline {
             }
         }
         self.states[0].fingerprint().hash(&mut h);
+        self.cuts.hash(&mut h);
         self.fingerprint = h.finish().max(1);
         self
     }

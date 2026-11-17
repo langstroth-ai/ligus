@@ -59,9 +59,9 @@ pub struct PresenceDraft {
 pub fn summarize(payload: &SessionEvent) -> String {
     match payload {
         SessionEvent::MemberAdded { member, .. } => format!("Add {} as {:?}", member.actor.display_name, member.role),
-        SessionEvent::MemberRemoved { member_id } => format!("Remove member {member_id}"),
-        SessionEvent::MemberRoleChanged { change } => format!("Change {}'s role to {:?}", change.member_id, change.new_role),
-        SessionEvent::DeviceRevoked { device_id } => format!("Revoke device {device_id}"),
+        SessionEvent::MemberRemoved { member_id, .. } => format!("Remove member {member_id}"),
+        SessionEvent::MemberRoleChanged { change, .. } => format!("Change {}'s role to {:?}", change.member_id, change.new_role),
+        SessionEvent::DeviceRevoked { device_id, .. } => format!("Revoke device {device_id}"),
         SessionEvent::WorkspaceKeyRotated { rotation } => {
             format!("Rotate the workspace key to version {} ({} devices)", rotation.version, rotation.sealed.len())
         }
@@ -293,7 +293,7 @@ impl ChatService {
             config_id,
             workspace_id,
             SessionEvent::MemberRoleChanged {
-                change: hive_core::events::MemberRoleChange { member_id: member_id.to_string(), old_role: role, new_role: role },
+                change: hive_core::events::MemberRoleChange { member_id: member_id.to_string(), old_role: role, new_role: role }, watermark: Vec::new(),
             },
         )
     }

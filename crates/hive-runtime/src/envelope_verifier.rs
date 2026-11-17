@@ -501,7 +501,7 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
             }
             // On a config log, only a removal its projection accepted counts
             // (applied below, sticky); a raw one could come from anyone.
-            SessionEvent::MemberRemoved { member_id }
+            SessionEvent::MemberRemoved { member_id, .. }
                 if env.session_id != hive_core::workspace_config_session_id(env.workspace_id) =>
             {
                 if let Some(aid) = member_account.get(member_id) {
@@ -512,7 +512,7 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
                 certs.push(certificate.clone());
                 cert_ws.push(env.workspace_id);
             }
-            SessionEvent::DeviceRevoked { device_id } => {
+            SessionEvent::DeviceRevoked { device_id, .. } => {
                 raw_revocations.push((env.workspace_id, *device_id));
             }
             _ => {}
@@ -550,7 +550,7 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
         // Only removals this projection accepted are sticky; a raw one it
         // refused (anyone "removing" the founder) removes no one.
         for e in &cfg_envs {
-            if let SessionEvent::MemberRemoved { member_id } = &e.payload {
+            if let SessionEvent::MemberRemoved { member_id, .. } = &e.payload {
                 if decisions.get(&e.event_id) == Some(&hive_core::Verdict::Allowed) {
                     removed_by_ws.entry(ws).or_default().insert(member_id.clone());
                 }
@@ -1134,7 +1134,7 @@ mod tests {
                 contact: None,
             },
             recorded_at: Timestamp::epoch(), cfg_frontier: None,
-            presence: None, runtime_effect: false, });
+            presence: None, runtime_effect: false, prev: None });
         hive_core::sign_envelope(&mut e, signer_device, signer_kp);
         e
     }
@@ -1208,7 +1208,7 @@ mod tests {
         assert_eq!(verdict_for(&before, &signed), Verdict::Valid);
 
         // Revoke the device; now the same signed event is quarantined.
-        events.push(env(20, SessionEvent::DeviceRevoked { device_id: p.device_id }));
+        events.push(env(20, SessionEvent::DeviceRevoked { device_id: p.device_id, watermark: Vec::new() }));
         let after = build_roster(&events);
         assert_eq!(
             verdict_for(&after, &signed),
@@ -1273,7 +1273,7 @@ mod tests {
                     member_id: owner.account_id.to_string(),
                     old_role: WorkspaceRole::Contributor,
                     new_role: WorkspaceRole::Owner,
-                },
+                }, watermark: Vec::new(),
             },
         );
         forged.actor_stamp = Some(ActorStamp {
@@ -1289,7 +1289,7 @@ mod tests {
                 contact: None,
             },
             recorded_at: Timestamp::epoch(), cfg_frontier: None,
-            presence: None, runtime_effect: false, });
+            presence: None, runtime_effect: false, prev: None });
         assert!(forged.signer_device_id.is_none(), "PoC envelope must be unsigned");
 
         // The verdict must be Quarantine, and Relay-mode ingest must DROP it.
@@ -1460,7 +1460,7 @@ mod tests {
     fn removed_member_devices_are_revoked() {
         let alice = principal();
         let mut events = trust_events(&alice, 1);
-        events.push(env(50, SessionEvent::MemberRemoved { member_id: alice.account_id.to_string() }));
+        events.push(env(50, SessionEvent::MemberRemoved { member_id: alice.account_id.to_string(), watermark: Vec::new() }));
         let roster = build_roster(&events);
 
         assert!(roster.is_revoked(alice.device_id), "removed account's device is revoked");

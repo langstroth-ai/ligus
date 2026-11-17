@@ -78,8 +78,23 @@ pub enum SessionEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         invite: Option<Uuid>,
     },
-    MemberRemoved { member_id: String },
-    MemberRoleChanged { change: MemberRoleChange },
+    /// Remove a member. `watermark` names, per signing device (and agent
+    /// key) of the member and per log, the newest of their events the remover
+    /// held ([`crate::watermark`]): their later events (any not reachable
+    /// back from those heads) are judged as of this removal, whatever config
+    /// frontier they claim. Left out when empty.
+    MemberRemoved {
+        member_id: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        watermark: Vec<crate::watermark::Watermark>,
+    },
+    /// Change a member's role. A demotion carries a `watermark` like a
+    /// removal: the member's later events are judged with the new role.
+    MemberRoleChanged {
+        change: MemberRoleChange,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        watermark: Vec<crate::watermark::Watermark>,
+    },
     AgentRosterUpdated { agents: Vec<WorkspaceAgent> },
     /// Upsert a single workspace agent (by id) — the per-item delta that
     /// supersedes the whole-list `AgentRosterUpdated`. Two admins each adding a
@@ -244,8 +259,12 @@ pub enum SessionEvent {
     /// whole account. Folded into the roster's revoked set, so the device can no
     /// longer sign events — even though its account is still a member. Pair with a
     /// `WorkspaceKeyRotation` that excludes the device to also cut its read access.
+    /// `watermark` names the device's newest events (per log) the revoker
+    /// held; its later events never fold.
     DeviceRevoked {
         device_id: Uuid,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        watermark: Vec<crate::watermark::Watermark>,
     },
     /// Create (or upsert by id) a channel. Rides the workspace-config log
     /// (spec §11); folded into `ChatSession.channels`. Workspace-scoped.
@@ -691,13 +710,13 @@ impl ChatSession {
                     self.members.push(member.clone());
                 }
             }
-            SessionEvent::MemberRemoved { member_id } => {
+            SessionEvent::MemberRemoved { member_id, .. } => {
                 if self.members.iter().any(|m| &m.id == member_id) {
                     self.guards.removed_members.insert(member_id.clone());
                 }
                 self.members.retain(|m| &m.id != member_id);
             }
-            SessionEvent::MemberRoleChanged { change } => {
+            SessionEvent::MemberRoleChanged { change, .. } => {
                 if let Some(m) = self.members.iter_mut().find(|m| m.id == change.member_id) {
                     m.role = change.new_role;
                 }
@@ -945,7 +964,7 @@ impl ChatSession {
             | SessionEvent::DeviceCertificateAdded { .. } => {}
             // Recorded once authorized (Admin+, checked on ingest), so the
             // trust roster can tell a real revocation from a forged one.
-            SessionEvent::DeviceRevoked { device_id } => {
+            SessionEvent::DeviceRevoked { device_id, .. } => {
                 self.guards.revoked_devices.insert(*device_id);
             }
             SessionEvent::CoordinatorLeaseClaimed { lease } => {
@@ -1195,13 +1214,69 @@ pub fn fold_decisions(
     out
 }
 
+/// Fold one log. A workspace-config log is folded twice when it holds a cut
+/// (Phase A, item 2): the first pass finds the allowed removals, demotions
+/// and revocations; the second denies the cut members' and devices' events
+/// that sort before their cut and aren't covered by its watermark (a
+/// backdated config event), then is the result. Both passes are functions of
+/// the event set, so the result is the same in any delivery order.
 fn fold(
+    envelopes: &[SessionEventEnvelope],
+    trusted_founder: Option<&str>,
+    trusted_workspace: Option<Uuid>,
+    workspace: WorkspaceAuthz<'_>,
+    timeline: Option<&mut crate::authz::ConfigTimeline>,
+    decisions: Option<&mut std::collections::BTreeMap<Uuid, Verdict>>,
+) -> Option<ChatSession> {
+    let none = std::collections::BTreeSet::new();
+    let is_config = envelopes
+        .first()
+        .is_some_and(|e| e.session_id == crate::channel::workspace_config_session_id(e.workspace_id));
+    if !is_config {
+        return fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, timeline, decisions, &none);
+    }
+    let mut first = crate::authz::ConfigTimeline::default();
+    let pass1 = fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, Some(&mut first), None, &none);
+    let deny = config_cut_denials(envelopes, &first);
+    if deny.is_empty() && decisions.is_none() {
+        if let Some(t) = timeline {
+            *t = first;
+        }
+        return pass1;
+    }
+    fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, timeline, decisions, &deny)
+}
+
+/// The config events a cut denies outright: by a cut member or device,
+/// sorting before the cut, not covered by its watermark (Phase A, item 2).
+fn config_cut_denials(envelopes: &[SessionEventEnvelope], t: &crate::authz::ConfigTimeline) -> std::collections::BTreeSet<Uuid> {
+    let mut out = std::collections::BTreeSet::new();
+    if t.cuts().is_empty() {
+        return out;
+    }
+    let all: Vec<&SessionEventEnvelope> = envelopes.iter().collect();
+    let chains = crate::watermark::Chains::of(&all);
+    let log = envelopes[0].session_id;
+    for cut in t.cuts() {
+        let covered = cut.covered(log, &chains);
+        for e in envelopes {
+            let before = e.canonical_key() < cut.key || matches!(cut.kind, crate::authz::CutKind::Revoked(_));
+            if before && e.canonical_key() != cut.key && cut.applies(e) && !covered.contains(&e.event_id) {
+                out.insert(e.event_id);
+            }
+        }
+    }
+    out
+}
+
+fn fold_pass(
     envelopes: &[SessionEventEnvelope],
     trusted_founder: Option<&str>,
     trusted_workspace: Option<Uuid>,
     workspace: WorkspaceAuthz<'_>,
     mut timeline: Option<&mut crate::authz::ConfigTimeline>,
     mut decisions: Option<&mut std::collections::BTreeMap<Uuid, Verdict>>,
+    cut_denied: &std::collections::BTreeSet<Uuid>,
 ) -> Option<ChatSession> {
     use crate::authz::{self, Decision, HeldEvent, HoldReason};
 
@@ -1259,12 +1334,25 @@ fn fold(
         t.push(ordered[base].canonical_key(), &tracker.state, false);
     }
     let checked = !matches!(workspace, WorkspaceAuthz::Unchecked);
+    // Phase A, item 2: on a chat log, the events each cut covers (its
+    // watermark's chains on this log).
+    let cut_cover: Vec<std::collections::BTreeSet<Uuid>> = match workspace {
+        WorkspaceAuthz::Timeline(t) if !t.cuts().is_empty() => {
+            let chains = crate::watermark::Chains::of(&ordered);
+            let log = ordered[base].session_id;
+            t.cuts().iter().map(|c| c.covered(log, &chains)).collect()
+        }
+        _ => Vec::new(),
+    };
     for env in &ordered[base + 1..] {
         let trusted = trusted_workspace == Some(env.workspace_id);
         let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
         let mut allowed = false;
         let mut held = false;
         'judge: {
+            if cut_denied.contains(&env.event_id) {
+                break 'judge;
+            }
             if let SessionEvent::SessionSnapshot { session: snap } = &env.payload {
                 // A non-seed snapshot is a full-state overwrite folded mid-stream (a
                 // compaction checkpoint). Gate it like governance: its author must be
@@ -1287,9 +1375,24 @@ fn fold(
                     WorkspaceAuthz::Timeline(t) => {
                         // Every 2.0 author stamps the frontier; one without it
                         // can't be placed and is refused.
-                        let Some(f) = env.actor_stamp.as_ref().and_then(|s| s.cfg_frontier) else {
+                        let Some(mut f) = env.actor_stamp.as_ref().and_then(|s| s.cfg_frontier) else {
                             break 'judge;
                         };
+                        // A cut member's or device's event its cut's
+                        // watermark doesn't cover is judged as of the cut,
+                        // whatever frontier it claims; a revoked device's
+                        // never folds (Phase A, item 2).
+                        for (cut, covered) in t.cuts().iter().zip(&cut_cover) {
+                            if !cut.applies(env) || covered.contains(&env.event_id) {
+                                continue;
+                            }
+                            if matches!(cut.kind, authz::CutKind::Revoked(_)) {
+                                break 'judge;
+                            }
+                            if cut.frontier() > f {
+                                f = cut.frontier();
+                            }
+                        }
                         match t.at(f) {
                             Ok(r) => {
                                 at = Some(r);
@@ -1315,6 +1418,34 @@ fn fold(
                 break 'judge;
             }
             allowed = true;
+            // Phase A, item 2: record a removal, demotion or revocation.
+            if let Some(t) = timeline.as_deref_mut() {
+                let cut = match &env.payload {
+                    SessionEvent::MemberRemoved { member_id, watermark } => Some((
+                        authz::CutKind::Removed(member_id.clone()),
+                        tracker
+                            .state
+                            .agent_keys
+                            .iter()
+                            .filter(|(_, k)| tracker.state.agents.get(&k.agent_id).is_some_and(|a| a.owner == *member_id))
+                            .map(|(id, _)| *id)
+                            .collect(),
+                        watermark.clone(),
+                    )),
+                    SessionEvent::MemberRoleChanged { change, watermark }
+                        if change.new_role.rank() < session.role_of(&change.member_id).rank() =>
+                    {
+                        Some((authz::CutKind::Demoted(change.member_id.clone()), Default::default(), watermark.clone()))
+                    }
+                    SessionEvent::DeviceRevoked { device_id, watermark } => {
+                        Some((authz::CutKind::Revoked(*device_id), Default::default(), watermark.clone()))
+                    }
+                    _ => None,
+                };
+                if let Some((kind, agent_keys, watermark)) = cut {
+                    t.push_cut(authz::Cut { key: env.canonical_key(), kind, agent_keys, watermark });
+                }
+            }
             // Checked-fold rewrites: votes carry the signer's real role, and an
             // upsert never asserts votes or status.
             let rewritten;
@@ -1600,10 +1731,10 @@ mod tests {
                     member_id: "mallory".into(),
                     old_role: WorkspaceRole::Viewer,
                     new_role: WorkspaceRole::Owner,
-                },
+                }, watermark: Vec::new(),
             })),
             // Eviction of the real owner (forged MemberRemoved → also a trust DoS).
-            by("mallory", env(sid, wid, 3, SessionEvent::MemberRemoved { member_id: "owner".into() })),
+            by("mallory", env(sid, wid, 3, SessionEvent::MemberRemoved { member_id: "owner".into(), watermark: Vec::new() })),
         ];
         let s = project(&forged).unwrap();
         assert_eq!(s.role_of("mallory"), WorkspaceRole::Viewer, "forged self-promotion must be dropped");
@@ -1619,7 +1750,7 @@ mod tests {
                     member_id: "mallory".into(),
                     old_role: WorkspaceRole::Viewer,
                     new_role: WorkspaceRole::Contributor,
-                },
+                }, watermark: Vec::new(),
             })),
         ];
         assert_eq!(
@@ -1669,7 +1800,7 @@ mod tests {
                             member_id: "m1".into(),
                             old_role: WorkspaceRole::Contributor,
                             new_role: WorkspaceRole::Admin,
-                        },
+                        }, watermark: Vec::new(),
                     },
                 ),
             ),
@@ -1682,7 +1813,7 @@ mod tests {
         // membership events are workspace-scoped
         assert_eq!(
             SessionEvent::MemberRemoved {
-                member_id: "m1".into()
+                member_id: "m1".into(), watermark: Vec::new()
             }
             .scope(),
             EventScope::Workspace
@@ -1751,7 +1882,7 @@ mod tests {
         e.actor_stamp = Some(ActorStamp {
             actor: ActorIdentity::new(author, author, ActorKind::Human),
             recorded_at: Timestamp::epoch(), cfg_frontier: None,
-            presence: None, runtime_effect: false, });
+            presence: None, runtime_effect: false, prev: None });
         e
     }
 
@@ -1824,8 +1955,8 @@ mod tests {
             by("owner", env(sid, wid, 4, SessionEvent::MemberAdded { invite: None, member: member("m2", "u2", WorkspaceRole::Contributor) })),
             env(sid, wid, 5, SessionEvent::SessionTitleChanged { title: "Foo".into() }),
             env(sid, wid, 6, SessionEvent::MessageReactionAdded { message_id: mid, reaction: reaction("u1", "👍") }),
-            by("owner", env(sid, wid, 7, SessionEvent::MemberRoleChanged { change: MemberRoleChange { member_id: "m1".into(), old_role: WorkspaceRole::Contributor, new_role: WorkspaceRole::Admin } })),
-            by("owner", env(sid, wid, 8, SessionEvent::MemberRemoved { member_id: "m2".into() })),
+            by("owner", env(sid, wid, 7, SessionEvent::MemberRoleChanged { change: MemberRoleChange { member_id: "m1".into(), old_role: WorkspaceRole::Contributor, new_role: WorkspaceRole::Admin }, watermark: Vec::new() })),
+            by("owner", env(sid, wid, 8, SessionEvent::MemberRemoved { member_id: "m2".into(), watermark: Vec::new() })),
             env(sid, wid, 9, SessionEvent::SessionTitleChanged { title: "Bar".into() }),
             env(sid, wid, 10, SessionEvent::MessageReactionRemoved { message_id: mid, actor_id: "u1".into(), emoji: "👍".into() }),
             env(sid, wid, 11, SessionEvent::MessageReactionAdded { message_id: mid, reaction: reaction("u2", "🎉") }),
@@ -2342,8 +2473,7 @@ mod tests {
                 actor: ActorIdentity::new("u1", "U", ActorKind::Human),
                 recorded_at: Timestamp::epoch(),
                 cfg_frontier: None,
-                presence: None, runtime_effect: false,
-            });
+                presence: None, runtime_effect: false, prev: None });
         }
         let s = project(&envs).unwrap();
         assert_eq!(s.workflow_definitions.len(), 1);

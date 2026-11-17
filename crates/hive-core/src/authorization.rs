@@ -490,7 +490,7 @@ pub fn evaluate(
 
     // Last-owner protection: can't remove or demote the only remaining owner.
     match event {
-        SessionEvent::MemberRemoved { member_id } => {
+        SessionEvent::MemberRemoved { member_id, .. } => {
             let removing_owner = session
                 .members
                 .iter()
@@ -503,7 +503,7 @@ pub fn evaluate(
             }
         }
         SessionEvent::MemberRoleChanged {
-            change: MemberRoleChange { member_id, new_role, .. },
+            change: MemberRoleChange { member_id, new_role, .. }, ..
         } => {
             let demoting_owner = *new_role != WorkspaceRole::Owner
                 && session
@@ -633,7 +633,7 @@ mod tests {
     #[test]
     fn cannot_remove_or_demote_last_owner() {
         let s = session_with_members(vec![("o1", WorkspaceRole::Owner)]);
-        let remove = SessionEvent::MemberRemoved { member_id: "o1".into() };
+        let remove = SessionEvent::MemberRemoved { member_id: "o1".into(), watermark: Vec::new() };
         assert_eq!(
             evaluate(&remove, "o1", WorkspaceRole::Owner, &s).reason,
             AuthzReason::TargetIsLastOwner
@@ -643,7 +643,7 @@ mod tests {
                 member_id: "o1".into(),
                 old_role: WorkspaceRole::Owner,
                 new_role: WorkspaceRole::Admin,
-            },
+            }, watermark: Vec::new(),
         };
         assert!(!evaluate(&demote, "o1", WorkspaceRole::Owner, &s).allowed);
     }
@@ -654,7 +654,7 @@ mod tests {
             ("o1", WorkspaceRole::Owner),
             ("o2", WorkspaceRole::Owner),
         ]);
-        let remove = SessionEvent::MemberRemoved { member_id: "o1".into() };
+        let remove = SessionEvent::MemberRemoved { member_id: "o1".into(), watermark: Vec::new() };
         assert!(evaluate(&remove, "o2", WorkspaceRole::Owner, &s).allowed);
     }
 
@@ -724,14 +724,14 @@ mod tests {
             ("owner", WorkspaceRole::Owner),
             ("victim", WorkspaceRole::Contributor),
         ]);
-        let remove = SessionEvent::MemberRemoved { member_id: "victim".into() };
+        let remove = SessionEvent::MemberRemoved { member_id: "victim".into(), watermark: Vec::new() };
         assert!(!evaluate(&remove, "outsider", WorkspaceRole::Viewer, &s).allowed);
         let demote = SessionEvent::MemberRoleChanged {
             change: MemberRoleChange {
                 member_id: "victim".into(),
                 old_role: WorkspaceRole::Contributor,
                 new_role: WorkspaceRole::Viewer,
-            },
+            }, watermark: Vec::new(),
         };
         assert!(!evaluate(&demote, "outsider", WorkspaceRole::Viewer, &s).allowed);
     }

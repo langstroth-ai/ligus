@@ -46,6 +46,7 @@ pub mod skills;
 pub mod throttle;
 pub mod time_util;
 pub mod vault;
+pub mod watermark;
 pub mod workflow;
 pub mod workspace_host;
 pub mod workspace_repo;
