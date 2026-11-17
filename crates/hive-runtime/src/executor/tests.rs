@@ -1497,6 +1497,9 @@ fn claude_code_tmpdir_is_the_turn_scratch_dir() {
     assert!(env.iter().any(|(k, v)| k == "CLAUDE_CODE_TMPDIR" && Path::new(v) == plan.tmp));
     #[cfg(target_os = "macos")]
     {
+        // confine writes the profile into the turn scratch dir, which a real
+        // turn creates first; on a clean machine nothing else has made it.
+        std::fs::create_dir_all(&plan.tmp).unwrap();
         let cmd = seatbelt::Seatbelt.confine(OsStr::new("/usr/bin/true"), &[], Path::new("/tmp"), &plan, None).unwrap();
         assert!(cmd.get_envs().any(|(k, v)| k == "CLAUDE_CODE_TMPDIR" && v.map(Path::new) == Some(plan.tmp.as_path())));
     }
