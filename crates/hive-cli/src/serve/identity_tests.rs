@@ -262,6 +262,17 @@ async fn know_each_other(a: &Box_, b: &Box_) {
     .await;
 }
 
+/// Wait until `a` knows `b`'s drop box (the contact id `b` announces once a
+/// relay holds its record). Opening a DM delivers its invite there only when
+/// it is known; before that the opener gets the link to share instead.
+async fn knows_contact(a: &Box_, b: &Box_) {
+    let b_acc = b.account();
+    until(&[a, b], 30, async || {
+        a.handle.shared.co_members().iter().any(|c| c.account_id == b_acc && !c.devices.is_empty() && c.contact.is_some()).then_some(())
+    })
+    .await;
+}
+
 /// The whole flow: safety codes on People, a DM through the drop box, a
 /// message each way.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -670,8 +681,13 @@ async fn dm_messages_never_push() {
     let ntfy = ntfy::Ntfy { url: format!("http://{addr}"), topic: "bea".into(), token: None };
     let (a, b, _contacts, _tmp) = two_boxes_with(Some(ntfy)).await;
     know_each_other(&a, &b).await;
+    // The invite goes to B's drop box, so A must have seen B's contact id
+    // first (B announces it after its first sync, which can trail the device
+    // keys on a loaded machine).
+    knows_contact(&a, &b).await;
     let b_acc = b.account();
     let opened = a.post("/v1/dms", json!({ "accountId": b_acc.to_string() })).await;
+    assert_eq!(opened["delivered"], json!(true), "{opened}");
     let b2 = &b;
     let pending = until(&[&a, &b], 30, async || {
         let p = b2.get("/v1/invites/pending").await;
@@ -776,8 +792,10 @@ async fn invite_secrets_never_over_plain_http() {
     assert!(b.handle.shared.dms.list().is_empty(), "no DM founded on a refused request");
     // A (loopback) founds it; B's view of the kept DM carries no secret and
     // still opens over plain HTTP.
+    knows_contact(&a, &b).await;
     let opened = a.post("/v1/dms", json!({ "accountId": b.account().to_string() })).await;
     assert!(opened["invite"].is_string());
+    assert_eq!(opened["delivered"], json!(true), "{opened}");
     let b2 = &b;
     let pending = until(&[&a, &b], 20, async || {
         let p = b2.get("/v1/invites/pending").await;
