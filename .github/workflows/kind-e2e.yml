@@ -107,9 +107,17 @@ jobs:
           # The relay chart's tunnel is off by default since relay 0.2.0. Open
           # is fine for this throwaway in-cluster relay; never without a token
           # gate on a reachable one.
+          # The dev Postgres reads its password and DSN from a Secret the
+          # operator creates: relay charts after v0.3.0 generate none and
+          # refuse postgres.enabled without it (v0.3.0 ignores both).
+          PW=$(openssl rand -hex 24)
+          kubectl -n ligus-relay create secret generic relay-dev-postgres \
+            --from-literal=password="$PW" \
+            --from-literal=DATABASE_URL="postgres://relay:$PW@ligus-relay-postgres:5432/relay?sslmode=disable"
           helm install ligus-relay _relay/deploy/helm/ligus-relay -n ligus-relay \
             --set image.repository=ligus-relay --set image.tag=dev \
-            --set postgres.enabled=true --set postgres.persistence.size=256Mi \
+            --set postgres.enabled=true --set postgres.existingSecret=relay-dev-postgres \
+            --set postgres.persistence.size=256Mi \
             --set tunnel.mode=open --wait --timeout 5m
           helm test ligus-relay -n ligus-relay --logs
       - name: install workspace (throwaway)
