@@ -1210,7 +1210,7 @@ fn cmd_set_agent_host(cfg: &Config, agent_name: &str, host_id: &str) -> Result<(
 async fn cmd_worker(cfg: &Config, label: Option<String>, health_listen: Option<String>) -> Result<()> {
     let ws = uuid_of_room(&cfg.room);
     // Probes for an orchestrator (Kubernetes): live while the process serves,
-    // ready once the worker has registered and finished its first tick.
+    // ready once the worker has registered and opened its store.
     let ready = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     if let Some(addr) = health_listen {
         worker::spawn_health(&addr, ready.clone()).await?;
@@ -1247,6 +1247,8 @@ async fn cmd_worker(cfg: &Config, label: Option<String>, health_listen: Option<S
         settings: reply::ToolSettings::from_env(),
         ligus: Some(worker::ligus_server(svc.clone())),
     };
+    // Registered, store open, interrupted turns recovered: ready for work.
+    ready.store(true, std::sync::atomic::Ordering::Relaxed);
     // Mentions whose reply hard-failed, so we don't retry them every tick.
     let mut failed: HashSet<Uuid> = HashSet::new();
     // Exponential backoff on repeated relay-sync failures, so a relay outage
@@ -1277,7 +1279,6 @@ async fn cmd_worker(cfg: &Config, label: Option<String>, health_listen: Option<S
         if let Err(e) = worker::drain_tick(&ctx, &svc, &mut failed, &worker::NoSink).await {
             eprintln!("worker: tick failed (retrying): {e}");
         }
-        ready.store(true, std::sync::atomic::Ordering::Relaxed);
         if cfg.relay_url.is_some() {
             let _ = sync_once(cfg).await;
         }

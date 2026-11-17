@@ -131,6 +131,14 @@ app.kubernetes.io/component: {{ .component }}
       fieldPath: metadata.name
 - name: LIGUS_RELAY_URL
   value: {{ include "ligus.relayUrl" . | quote }}
+{{- if .Values.agentSandbox.require }}
+- name: LIGUS_REQUIRE_SANDBOX
+  value: "1"
+{{- end }}
+{{- with .Values.agentSandbox.tier }}
+- name: LIGUS_SANDBOX
+  value: {{ . | quote }}
+{{- end }}
 - name: LIGUS_WORKSPACE
   valueFrom:
     secretKeyRef:
@@ -176,6 +184,38 @@ affinity:
 {{- end }}
 {{- end -}}
 
+{{/*
+Sandbox preflight init container: the pod is never Ready on a node where
+agent turns can't be confined. Args: dict root env mounts (YAML strings of
+the main container's env and volumeMounts, so the check sees what serve or
+the worker will).
+*/}}
+{{- define "ligus.preflightInit" -}}
+{{- $p := .root.Values.agentSandbox.preflight -}}
+- name: sandbox-preflight
+  image: {{ include "ligus.image" .root }}
+  imagePullPolicy: {{ .root.Values.image.pullPolicy }}
+  args:
+    - doctor
+    - --require-confined
+    {{- with .root.Values.agentSandbox.tier }}
+    - --expect-tier
+    - {{ . | quote }}
+    {{- end }}
+    {{- if $p.turnTest }}
+    - --turn-test
+    {{- end }}
+  securityContext:
+    {{- toYaml .root.Values.securityContext | nindent 4 }}
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+  env:
+    {{- .env | nindent 4 }}
+  volumeMounts:
+    {{- .mounts | nindent 4 }}
+{{- end -}}
+
 {{/* Init container that copies runtimes.toml from a ConfigMap into the data dir. */}}
 {{- define "ligus.runtimesInit" -}}
 - name: runtimes
@@ -193,4 +233,33 @@ affinity:
     - name: runtimes
       mountPath: /etc/ligus/runtimes
       readOnly: true
+{{- end -}}
+
+{{/* serve's volume mounts (also the preflight's). */}}
+{{- define "ligus.serveMounts" -}}
+- name: data
+  mountPath: /var/lib/ligus
+# Same volume, its own subdirectory: CLI logins persist, outside the data
+# dir agents can't read.
+- name: data
+  mountPath: /home/ligus
+  subPath: home
+- name: tmp
+  mountPath: /tmp
+{{- if or .Values.serve.mcpToml .Values.serve.dashboardToml }}
+- name: config
+  mountPath: /etc/ligus/config
+  readOnly: true
+{{- end }}
+{{- end -}}
+
+{{/* A worker's volume mounts (also the preflight's). */}}
+{{- define "ligus.workerMounts" -}}
+- name: data
+  mountPath: /var/lib/ligus
+- name: data
+  mountPath: /home/ligus
+  subPath: home
+- name: tmp
+  mountPath: /tmp
 {{- end -}}

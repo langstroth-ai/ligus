@@ -13,11 +13,18 @@
 #     -f deploy/container/Dockerfile -t <registry>/ligus:<version> --push .
 #
 # Runtime contents: the ligus binary, git (agent turns cut per-turn git
-# worktrees by shelling out to git), CA certificates, bubblewrap (the agent
-# sandbox; it needs user namespaces, so run the container with a seccomp
-# profile that allows them, or agent turns that write are refused), and tini
-# as PID 1 so subprocesses an agent turn starts (git, CLI agents, MCP stdio
-# servers) are reaped. Agent CLIs (claude, codex, ...) are NOT included: extend this image
+# worktrees by shelling out to git), CA certificates, bubblewrap, and tini as
+# PID 1 so subprocesses an agent turn starts (git, CLI agents, MCP stdio
+# servers) are reaped.
+#
+# The agent sandbox: bubblewrap needs unprivileged user namespaces, which a
+# Kubernetes Pod Security "restricted" pod (RuntimeDefault seccomp, no
+# capabilities) does not give it. There Ligus uses Landlock instead, which
+# needs Linux 6.7+ with landlock in the node's LSM list and a runtime seccomp
+# profile that allows the landlock_* syscalls. With no confinement at all
+# Ligus refuses every agent turn that runs a local program (CLI agents,
+# run_command, stdio MCP servers); `ligus doctor --require-confined
+# --turn-test` checks a node (the Helm chart runs it as an init container). Agent CLIs (claude, codex, ...) are NOT included: extend this image
 # with the ones you use. See docs/design/kubernetes.md.
 
 ARG RUST_VERSION=1.91

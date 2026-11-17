@@ -115,8 +115,36 @@ jobs:
           kubectl label namespace ligus-ws-smoke pod-security.kubernetes.io/enforce=restricted
           helm install smoke deploy/helm/ligus -n ligus-ws-smoke \
             -f deploy/helm/ligus/ci/kind-values.yaml --wait --timeout 5m
-      - name: sync through the relay (helm test)
+      - name: sync and a sandboxed agent turn (helm test)
         run: helm test smoke -n ligus-ws-smoke --logs | tee /tmp/test.log
+      - name: agent turn inside the serve container is confined by Landlock
+        run: |
+          set -euo pipefail
+          # One real headless turn (stub model, run_command) in the serve
+          # container itself: the tier must be landlock, the command must run,
+          # and it must not read PID 1's environ (the pod's env), serve's own
+          # environ, the data dir or the mounted secret files.
+          kubectl -n ligus-ws-smoke exec smoke-ligus-serve-0 -c serve -- \
+            ligus doctor --require-confined --expect-tier landlock --turn-test | tee /tmp/turn.log
+          grep -q 'turn test: agent sandbox: landlock' /tmp/turn.log
+          grep -q 'turn test: run_command ran: yes' /tmp/turn.log
+          grep -q 'turn test: DENIED_ENVIRON_1$' /tmp/turn.log
+          grep -q 'turn test: passed (tier landlock)' /tmp/turn.log
+          if grep -q LIGUS_PROBE_LEAK /tmp/turn.log; then echo "::error::the turn read something it must not"; exit 1; fi
+          # serve itself is not dumpable: its /proc entries belong to root.
+          kubectl -n ligus-ws-smoke exec smoke-ligus-serve-0 -c serve -- bash -c '
+            for p in /proc/[0-9]*; do
+              case "$(tr "\0" " " <"$p/cmdline" 2>/dev/null)" in
+                "/usr/local/bin/ligus serve"*)
+                  owner=$(stat -c %u "$p/environ"); echo "serve pid ${p#/proc/} environ owner uid $owner"; test "$owner" = 0; exit $? ;;
+              esac
+            done; echo "serve process not found"; exit 1'
+          # The preflight ran before serve started.
+          kubectl -n ligus-ws-smoke logs smoke-ligus-serve-0 -c sandbox-preflight | grep -q 'turn test: passed'
+      - name: worker probes
+        run: |
+          kubectl -n ligus-ws-smoke wait --for=condition=Ready pod -l app.kubernetes.io/component=worker --timeout=180s
+          kubectl -n ligus-ws-smoke get pods -l app.kubernetes.io/component=worker
       - name: tunnel host connected
         run: |
           for _ in $(seq 30); do

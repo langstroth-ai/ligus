@@ -142,6 +142,33 @@ mcp:
   #   resources: {}
   # Ligus's config then points at http://mcp-linear.<ns>.svc.cluster.local:8080/mcp
 
+# --- Agent sandbox ----------------------------------------------------------
+
+# serve and workers run agent processes (CLI agents, run_command, stdio MCP
+# servers) inside their own pod, confined by Ligus's sandbox. In a Pod
+# Security "restricted" pod bubblewrap can't create namespaces, so the tier is
+# Landlock, which needs Linux 6.7+ with landlock in the node's LSM list (see
+# the supported-node matrix in the deploy docs). With no confinement Ligus
+# refuses every agent turn that runs a local program, so the chart fails
+# closed instead of running a pod that is Ready but refuses all work.
+agentSandbox:
+  # LIGUS_REQUIRE_SANDBOX=1: serve and workers exit (code 3) instead of
+  # starting without a sandbox.
+  require: true
+  # LIGUS_SANDBOX: the tier to use. "landlock" skips the bubblewrap probe
+  # (which can't work in a restricted pod); "" lets Ligus pick.
+  tier: landlock
+  preflight:
+    # Init container `ligus doctor --require-confined --expect-tier <tier>`:
+    # the pod never starts (Init:CrashLoopBackOff, never Ready) on a node
+    # without the sandbox.
+    enabled: true
+    # Also run one real agent turn against an in-process stub model whose
+    # run_command probes the sandbox (`ligus doctor --turn-test`): the command
+    # must run, and must not read /proc/1/environ, the data dir or the secret
+    # files.
+    turnTest: true
+
 # --- Network policies --------------------------------------------------------
 
 networkPolicy:

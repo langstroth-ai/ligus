@@ -1,0 +1,54 @@
+{{- if .Values.serve.enabled }}
+{{- $fullname := include "ligus.fullname" . -}}
+# One real agent turn under this chart's pod settings: an in-process stub
+# model calls run_command, which must run confined (tier agentSandbox.tier)
+# and must not read /proc/1/environ, the data dir or the secret files. The
+# kind workflow runs the same check inside the serve container itself.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ $fullname }}-test-sandbox
+  labels:
+    {{- include "ligus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: test
+    ligus.ai/role: test
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  {{- include "ligus.podSpecCommon" . | nindent 2 }}
+  containers:
+    - name: turn
+      image: {{ default (include "ligus.image" .) .Values.tests.image }}
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      args:
+        - doctor
+        - --require-confined
+        {{- with .Values.agentSandbox.tier }}
+        - --expect-tier
+        - {{ . | quote }}
+        {{- end }}
+        - --turn-test
+      env:
+        - { name: LIGUS_DATA_DIR, value: /work/data }
+        - { name: HOME, value: /work/home }
+        {{- with .Values.agentSandbox.tier }}
+        - { name: LIGUS_SANDBOX, value: {{ . | quote }} }
+        {{- end }}
+        # A canary in PID 1's environment: the turn must not read it.
+        - { name: LIGUS_TURN_TEST_CANARY, value: "not-for-agents" }
+      securityContext:
+        {{- toYaml .Values.securityContext | nindent 8 }}
+      resources:
+        requests: { cpu: 50m, memory: 64Mi }
+        limits: { cpu: "1", memory: 512Mi }
+      volumeMounts:
+        - { name: work, mountPath: /work }
+        - { name: tmp, mountPath: /tmp }
+  volumes:
+    - name: work
+      emptyDir: {}
+    - name: tmp
+      emptyDir: {}
+{{- end }}
