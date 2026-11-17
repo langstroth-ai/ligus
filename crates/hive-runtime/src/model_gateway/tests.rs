@@ -433,3 +433,69 @@ fn gateway_credential_absent_from_child() {
     assert_eq!(header(&s.heads[0], "authorization"), vec!["Bearer sk-CHILD-MUST-NOT-SEE"]);
     assert!(!s.heads[0].contains("FORGED"));
 }
+
+/// A server that answers every request with `307` to `location` and counts
+/// the requests it got.
+fn redirecting_server(location: String) -> (u16, Arc<Mutex<usize>>) {
+    let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = l.local_addr().unwrap().port();
+    let hits = Arc::new(Mutex::new(0usize));
+    let h2 = hits.clone();
+    std::thread::spawn(move || {
+        for conn in l.incoming() {
+            let Ok(mut c) = conn else { continue };
+            *h2.lock().unwrap() += 1;
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                match c.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                }
+            }
+            let _ = c.write_all(format!("HTTP/1.1 307 Temporary Redirect\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes());
+        }
+    });
+    (port, hits)
+}
+
+/// A gateway that answers with a redirect never gets its credential carried
+/// to the redirect target: not through the proxy route, not from a hosted
+/// turn. `x-api-key` and `api-key` are not among the headers reqwest drops on
+/// a cross-origin redirect, and the target is never vetted (it could be a
+/// metadata address or plain HTTP).
+#[tokio::test]
+async fn gateway_redirects_are_not_followed() {
+    let (elsewhere, seen) = fake_gateway();
+    let (gw_port, hits) = redirecting_server(format!("http://127.0.0.1:{elsewhere}/v1/chat/completions"));
+    let dir = tempfile::tempdir().unwrap();
+    let key = dir.path().join("api-key");
+    std::fs::write(&key, "sk-MUST-STAY-ON-THE-GATEWAY").unwrap();
+    let g = Arc::new(
+        Gateway::new(GatewayConfig {
+            name: "redir-gw".into(),
+            url: format!("http://127.0.0.1:{gw_port}"),
+            api: Api::Openai,
+            allow_plaintext: true,
+            attribution: false,
+            auth: AuthConfig::ApiKey { key_file: key.clone(), header: Some("x-api-key".into()) },
+            ca_file: None,
+        })
+        .unwrap(),
+    );
+    // Through the proxy route.
+    let proxy = crate::egress::EgressProxy::start_with(Vec::new(), None, vec![ResolvedGateway { gateway: g.clone(), attribution: None }]).unwrap();
+    let pp = proxy.port();
+    let path = proxy.gateway_url("redir-gw").strip_prefix(&format!("http://127.0.0.1:{pp}")).unwrap().to_string();
+    let body = r#"{"model":"m","messages":[]}"#;
+    let resp = raw_request(pp, format!("POST {path}/v1/chat/completions HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}", body.len())).await;
+    assert!(resp.starts_with("HTTP/1.1 307"), "the redirect goes back to the client, unfollowed: {resp}");
+    // A hosted-API turn.
+    let http = g.client().await.unwrap();
+    let client = crate::provider::OpenAiClient::new(g.chat_endpoint()).with_gateway(g.clone(), None, http);
+    let _ = client.stream_reply(None, "m", None, &[crate::provider::ChatTurn::user("ping")], |_| {}).await;
+    assert!(*hits.lock().unwrap() >= 2, "both requests reached the gateway");
+    let s = seen.lock().unwrap();
+    assert!(s.heads.is_empty(), "a redirect was followed with the gateway's credential: {:?}", s.heads);
+}
+

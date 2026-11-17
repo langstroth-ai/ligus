@@ -287,11 +287,18 @@ impl Gateway {
 
     /// A TLS client for this gateway: trusts only `caFile` when set (else the
     /// platform roots), presents the mTLS identity, and dials the vetted
-    /// addresses. Built per turn (or per proxied request), so a rotated
-    /// certificate is picked up.
+    /// addresses, and never follows a redirect. Built per turn (or per
+    /// proxied request), so a rotated certificate is picked up.
     pub async fn client(&self) -> Result<reqwest::Client, GatewayError> {
         let addrs = self.vetted_addrs().await?;
-        let mut b = hive_forge::http_client_builder().connect_timeout(crate::provider::HTTP_CONNECT_TIMEOUT).no_proxy();
+        // Never follow a redirect: the credential would ride along (reqwest
+        // keeps `x-api-key`/`api-key` across origins and `Authorization` on
+        // the same host), to an address that was never vetted. A 3xx goes
+        // back to the caller as is.
+        let mut b = hive_forge::http_client_builder()
+            .connect_timeout(crate::provider::HTTP_CONNECT_TIMEOUT)
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none());
         if let Some(host) = self.base.host_str() {
             let host = host.trim_start_matches('[').trim_end_matches(']');
             if host.parse::<IpAddr>().is_err() {
