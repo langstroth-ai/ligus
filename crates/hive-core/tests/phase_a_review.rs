@@ -38,6 +38,61 @@ fn lamport_of(w: &SignedWorld, id: Uuid) -> u64 {
     w.cfg.iter().find(|e| e.event_id == id).unwrap().lamport
 }
 
+/// Claim 2: a removed Admin who has seen their removal backdates a removal
+/// of the remover just below it. Their event isn't covered by the removal's
+/// watermark, so it must be judged as of the removal (not a member) and the
+/// removal must stand.
+///
+/// OPEN (review P-A2b): watermark coverage is the cut author's own claim, so
+/// a counter-cut that names a low watermark is indistinguishable from an
+/// honest concurrent one, and a pure position rule either lets the backdated
+/// counter-cut win (today) or lets a forward-dated one with a lying watermark
+/// win. Needs a policy decision: cuts strictly downward in rank (only an
+/// Owner cuts an Admin), or "revocation wins" (both subjects cut). Neither
+/// changes the wire.
+#[test]
+#[ignore = "review P-A2b: open; equal-rank mutual cuts need a policy decision (see the doc comment)"]
+fn a_removed_admin_cannot_undo_their_removal_by_backdating_a_counter_removal() {
+    let mut w = SignedWorld::genesis(&["owner", "ada", "mal"], None);
+    w.admit("owner", "ada", WorkspaceRole::Admin);
+    w.admit("owner", "mal", WorkspaceRole::Admin);
+    // Unrelated config traffic, so there's room below the removal.
+    w.push("owner", SessionEvent::WorkspaceRulesSet { version: 2, presence: None });
+    w.push("owner", SessionEvent::WorkspaceRulesSet { version: 2, presence: None });
+    let wm = honest_watermark(&w, "mal");
+    let removal = w.push("ada", SessionEvent::MemberRemoved { member_id: "mal".into(), watermark: wm });
+    assert_eq!(w.verdict(removal), Verdict::Allowed);
+    let below = lamport_of(&w, removal) - 1;
+    // Mal names a low watermark for Ada (as if concurrent).
+    let counter = cfg_at(&mut w, "mal", SessionEvent::MemberRemoved { member_id: "ada".into(), watermark: vec![] }, below);
+    let v = w.verdicts();
+    assert_eq!(v[&removal], Verdict::Allowed, "the removal stands");
+    assert_eq!(v[&counter], Verdict::Denied, "the removed member's backdated counter-removal is judged as of their removal");
+    let members: Vec<String> = w.config().members.iter().map(|m| m.id.clone()).collect();
+    assert!(members.contains(&"ada".to_string()) && !members.contains(&"mal".to_string()), "{members:?}");
+}
+
+/// Claim 2, the sole-Owner variant: the removed Admin backdates a revocation
+/// of the Owner's device, so the removal (signed by that device) would be
+/// refused.
+#[test]
+fn a_removed_admin_cannot_undo_their_removal_by_backdating_a_revocation_of_the_removers_device() {
+    let mut w = SignedWorld::genesis(&["owner", "mal"], None);
+    w.admit("owner", "mal", WorkspaceRole::Admin);
+    w.push("owner", SessionEvent::WorkspaceRulesSet { version: 2, presence: None });
+    w.push("owner", SessionEvent::WorkspaceRulesSet { version: 2, presence: None });
+    let wm = honest_watermark(&w, "mal");
+    let removal = w.push("owner", SessionEvent::MemberRemoved { member_id: "mal".into(), watermark: wm });
+    assert_eq!(w.verdict(removal), Verdict::Allowed);
+    let below = lamport_of(&w, removal) - 1;
+    let owners_device = w.people["owner"].device_id;
+    let revoke = cfg_at(&mut w, "mal", SessionEvent::DeviceRevoked { device_id: owners_device, watermark: vec![] }, below);
+    let v = w.verdicts();
+    assert_eq!(v[&removal], Verdict::Allowed, "the removal stands");
+    assert_eq!(v[&revoke], Verdict::Denied, "the removed member's backdated revocation is judged as of their removal");
+    assert!(!w.roster().devices[&owners_device].revoked);
+}
+
 /// Claim 2: a member names, as their event's `prev`, an id they never
 /// publish. The remover's watermark reaches it through the chain, so after
 /// the removal the member publishes an event under that id (any content,
