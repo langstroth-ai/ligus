@@ -369,12 +369,11 @@ fn default_executor_for_tests() -> Option<Arc<dyn TurnExecutor>> {
 /// none.
 pub(crate) fn real_executor() -> Option<Arc<dyn TurnExecutor>> {
     // The test harness isn't a Ligus binary: point the Linux helper at the
-    // `ligus-sandbox-helper` bin cargo built next to it.
+    // `ligus-sandbox-helper` bin cargo built for this run (`helper_exe` looks
+    // for it too, and fails a confined spawn, saying so, without one).
     #[cfg(target_os = "linux")]
-    if let Some(exe) = std::env::current_exe().ok().and_then(|e| Some(e.parent()?.parent()?.join("ligus-sandbox-helper"))) {
-        if exe.exists() {
-            set_helper_exe(exe);
-        }
+    if let Some(exe) = std::env::current_exe().ok().and_then(|e| super::linux::find_built_helper(&e, &["ligus-sandbox-helper"])) {
+        set_helper_exe(exe);
     }
     let e = default_executor();
     // Linux: bubblewrap, else the Landlock tier; neither (or macOS without

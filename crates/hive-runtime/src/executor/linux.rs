@@ -296,13 +296,26 @@ pub fn select_executor() -> (std::sync::Arc<dyn TurnExecutor>, super::SandboxSta
 
 /// The binary that runs the helper: an explicit one, else a
 /// `ligus-sandbox-helper` installed next to this executable (or one level
-/// up, where cargo puts bins beside test harnesses), else this executable
-/// (the `ligus` CLI and the desktop app both carry it).
+/// up), else this executable (the `ligus` CLI and the desktop app both carry
+/// it).
+///
+/// In this crate's own unit tests the executable is a libtest harness, which
+/// doesn't carry the helper (it would reject the helper's options as its
+/// own), so those look for the `ligus-sandbox-helper` bin cargo built and
+/// fail, saying so, when there is none.
 fn helper_exe() -> io::Result<PathBuf> {
     if let Some(p) = host_paths().helper_exe {
         return Ok(p);
     }
     let me = std::env::current_exe()?;
+    if cfg!(test) {
+        return find_built_helper(&me, &["ligus-sandbox-helper"]).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("no ligus-sandbox-helper binary built near the test harness {} (cargo builds it for a package or workspace test run)", me.display()),
+            )
+        });
+    }
     for dir in [me.parent(), me.parent().and_then(Path::parent)].into_iter().flatten() {
         let sibling = dir.join("ligus-sandbox-helper");
         if sibling.is_file() {
@@ -310,6 +323,16 @@ fn helper_exe() -> io::Result<PathBuf> {
         }
     }
     Ok(me)
+}
+
+/// For tests: the first of `names` among the binaries cargo built for the
+/// test harness `exe`. Cargo puts bins in the profile's artifact dir
+/// (`target/debug`), and the harness either in `target/debug/deps/` or, with
+/// cargo's build-dir layout (the default from cargo 1.9x),
+/// `target/debug/build/<package>/<hash>/out/`; so look up to five levels
+/// above the harness.
+pub fn find_built_helper(exe: &Path, names: &[&str]) -> Option<PathBuf> {
+    exe.ancestors().skip(1).take(5).find_map(|dir| names.iter().map(|n| dir.join(n)).find(|p| p.is_file()))
 }
 
 /// The bwrap arguments for `plan` (everything before the helper).
