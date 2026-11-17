@@ -133,8 +133,14 @@ fn secret_files() -> Vec<PathBuf> {
         .filter_map(|n| crate::env_opt(&format!("{n}_FILE")))
         .map(PathBuf::from)
         .collect();
-    for var in [crate::hardening::WS_SECRET_DIR, crate::hardening::SECRETS_DIR] {
-        let Some(d) = crate::env_opt(var) else { continue };
+    let k8s_default = crate::env_opt("LIGUS_SECRET_BACKEND")
+        .filter(|b| b.trim().eq_ignore_ascii_case("k8s"))
+        .map(|_| hive_runtime::secret_store::K8S_SECRETS_DIR_DEFAULT.to_string());
+    let dirs = [
+        crate::env_opt(crate::hardening::WS_SECRET_DIR),
+        crate::env_opt(crate::hardening::SECRETS_DIR).or(k8s_default),
+    ];
+    for d in dirs.into_iter().flatten() {
         if let Ok(rd) = std::fs::read_dir(&d) {
             v.extend(rd.flatten().map(|e| e.path()).filter(|p| p.file_name().is_some_and(|n| !n.to_string_lossy().starts_with('.'))));
         }

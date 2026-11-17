@@ -99,7 +99,12 @@ pub fn resolve_secret_files(get: impl Fn(&str) -> Option<String>) -> SecretFiles
     // The k8s secret-store backend's mount (`LIGUS_SECRETS_DIR`, read by
     // `secret_store::K8sSecretFile` as `<dir>/<scope>.<name>`): Ligus's own
     // items, so agents never read it.
-    if let Some(dir) = get(SECRETS_DIR) {
+    // With the k8s backend and no LIGUS_SECRETS_DIR the store reads its
+    // default mount; that one is Ligus's too.
+    let k8s_backend = get("LIGUS_SECRET_BACKEND").is_some_and(|b| b.trim().eq_ignore_ascii_case("k8s"));
+    let store_dir = get(SECRETS_DIR)
+        .or_else(|| k8s_backend.then(|| hive_runtime::secret_store::K8S_SECRETS_DIR_DEFAULT.to_string()));
+    if let Some(dir) = store_dir {
         let dir = PathBuf::from(dir.trim());
         if let Ok(c) = std::fs::canonicalize(&dir) {
             if c != dir {
@@ -187,7 +192,17 @@ pub fn dumpable() -> Option<bool> {
 
 /// `LIGUS_REQUIRE_SANDBOX=1`: refuse to run a host without an agent sandbox.
 pub fn sandbox_required() -> bool {
-    hive_core::compat::env_opt("LIGUS_REQUIRE_SANDBOX").is_some_and(|v| matches!(v.trim(), "1" | "true" | "yes" | "on"))
+    require_sandbox_value(hive_core::compat::env_opt("LIGUS_REQUIRE_SANDBOX").as_deref())
+}
+
+/// Fail closed: any value but empty or an explicit off (`0`, `false`, `no`,
+/// `off`, any case) requires the sandbox, so `TRUE` or a typo never quietly
+/// turns the guard off.
+fn require_sandbox_value(v: Option<&str>) -> bool {
+    let Some(v) = v.map(|v| v.trim().to_ascii_lowercase()).filter(|v| !v.is_empty()) else {
+        return false;
+    };
+    !matches!(v.as_str(), "0" | "false" | "no" | "off")
 }
 
 /// With [`sandbox_required`], exit with [`EXIT_UNCONFINED`] when this host
@@ -281,6 +296,28 @@ mod tests {
         let f = dir.path().join("key");
         std::fs::write(&f, "k").unwrap();
         assert!(deny_paths(&f).contains(&dir.path().to_path_buf()));
+    }
+
+    #[test]
+    fn require_sandbox_fails_closed_on_any_truthy_spelling() {
+        for v in ["1", "true", "TRUE", "True", "yes", "Yes", "on", "ON", "2", "enabled", " 1 "] {
+            assert!(require_sandbox_value(Some(v)), "{v:?} must require the sandbox");
+        }
+        for v in ["", " ", "0", "false", "FALSE", "no", "off", "Off"] {
+            assert!(!require_sandbox_value(Some(v)), "{v:?} must not require the sandbox");
+        }
+        assert!(!require_sandbox_value(None));
+    }
+
+    #[test]
+    fn the_default_k8s_secret_mount_is_denied_when_the_backend_is_k8s() {
+        let env: HashMap<String, String> = [("LIGUS_SECRET_BACKEND".into(), " K8s ".into())].into();
+        let got = resolve_secret_files(lookup(&env));
+        assert!(
+            got.deny.contains(&PathBuf::from(hive_runtime::secret_store::K8S_SECRETS_DIR_DEFAULT)),
+            "{:?}",
+            got.deny
+        );
     }
 
     #[cfg(target_os = "linux")]
