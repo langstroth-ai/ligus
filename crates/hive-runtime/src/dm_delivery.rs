@@ -362,24 +362,33 @@ impl HeldInvites {
             delivered_at: None,
             note: None,
         };
-        let (removed, full) = self.update(|items| {
-            let (removed, _) = prune(items, now);
-            let open = items.iter().filter(|h| h.state.is_open() && h.workspace_id != ws).count();
-            let changed = !removed.is_empty();
-            ((removed, open >= MAX_HELD), changed)
-        });
-        self.forget_all(&removed);
-        if full {
-            return Err(format!("{MAX_HELD} DM invites are already waiting for delivery; share this one's link"));
-        }
+        // Sealed first, then the cap is checked and the entry added in one
+        // step under the file lock: concurrent holds can't pass the cap
+        // between a check and an insert.
         let sealed = hive_core::e2ee::seal(own_ka_public, invite.as_bytes()).map_err(|e| e.to_string())?;
         let blob = serde_json::to_vec(&sealed).map_err(|e| e.to_string())?;
-        self.secrets.put(&secret_id(ws), &blob).map_err(|e| e.to_string())?;
-        self.update(|items| {
+        let (removed, added) = self.update(|items| {
+            let (mut removed, _) = prune(items, now);
+            // An old finished entry of the same DM must not take the new
+            // secret with it.
+            removed.retain(|w| *w != ws);
+            let open = items.iter().filter(|h| h.state.is_open() && h.workspace_id != ws).count();
+            if open >= MAX_HELD {
+                let changed = !removed.is_empty();
+                return ((removed, Ok(false)), changed);
+            }
+            if let Err(e) = self.secrets.put(&secret_id(ws), &blob) {
+                let changed = !removed.is_empty();
+                return ((removed, Err(e.to_string())), changed);
+            }
             items.retain(|h| h.workspace_id != ws);
             items.push(item.clone());
-            ((), true)
+            ((removed, Ok(true)), true)
         });
+        self.forget_all(&removed);
+        if !added? {
+            return Err(format!("{MAX_HELD} DM invites are already waiting for delivery; share this one's link"));
+        }
         Ok(item)
     }
 

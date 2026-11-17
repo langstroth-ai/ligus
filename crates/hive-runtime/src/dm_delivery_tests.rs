@@ -314,3 +314,28 @@ async fn confirming_is_bound_to_the_safety_code_the_opener_compared() {
     run_pass(&host, &store, NOW + 5).await;
     assert_eq!(host.drops(), 1);
 }
+
+#[test]
+fn concurrent_holds_cannot_pass_the_cap() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Arc::new(HeldInvites::new(tmp.path(), Arc::new(File0600::new(tmp.path()))));
+    let p = person(Uuid::new_v4(), vec![device(1)], false);
+    let ka = KeyAgreementKeypair::from_seed(&[9; 32]).unwrap().public_key_bytes();
+    let n = MAX_HELD * 3;
+    let gate = Arc::new(std::sync::Barrier::new(n));
+    let threads: Vec<_> = (0..n)
+        .map(|_| {
+            let (store, p, gate) = (store.clone(), p.clone(), gate.clone());
+            std::thread::spawn(move || {
+                gate.wait();
+                store.hold(Uuid::new_v4(), &p, &p.seal_plan().unwrap(), INVITE, &ka, NOW).is_ok()
+            })
+        })
+        .collect();
+    let ok = threads.into_iter().map(|t| t.join().unwrap()).filter(|x| *x).count();
+    let held = store.list().iter().filter(|h| h.state.is_open()).count();
+    assert!(held <= MAX_HELD, "{held} held, cap {MAX_HELD}");
+    assert_eq!(ok, held, "every accepted hold is on the list");
+    let secrets = std::fs::read_dir(tmp.path().join("secrets").join(SCOPE)).map(|d| d.count()).unwrap_or(0);
+    assert_eq!(secrets, held, "no secret without an entry");
+}
