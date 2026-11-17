@@ -455,6 +455,12 @@ impl DeviceCertificate {
         {
             return Err(CryptoError::BadKey);
         }
+        // An Ed25519 certificate names a 32-byte key: a P-256 key certified
+        // without the `alg=p256` tag would verify P-256 envelopes (the stamp
+        // picks the algorithm) while escaping the phone tier (review P-A7).
+        if self.alg == SigAlg::Ed25519 && self.device_public_key.len() != 32 {
+            return Err(CryptoError::BadKey);
+        }
         let preimage =
             Self::preimage_alg(self.device_id, &self.device_public_key, self.account_id, self.issued_at, self.alg);
         verify(account_public_key, &preimage, &self.signature)

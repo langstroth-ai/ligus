@@ -62,6 +62,29 @@ fn a_service_member_cannot_answer_as_a_human_by_stamping_itself_human() {
     assert_eq!(v[&lying], Verdict::Denied, "the member record (Service), not the stamp, decides who is human");
 }
 
+/// Claim 7: a P-256 phone key certified under the Ed25519 tag (no
+/// `\0alg=p256` in the account's signature) verifies P-256 envelopes (the
+/// stamp picks the algorithm) but is not marked a phone, so it escapes the
+/// phone tier and the always-presence enrollment. An Ed25519 certificate
+/// must carry a 32-byte key, and the stamp's algorithm must be the
+/// certificate's.
+#[test]
+fn a_p256_key_under_an_ed25519_certificate_is_refused() {
+    let mut w = SignedWorld::genesis(&["owner", "mara"], None);
+    w.admit("owner", "mara", WorkspaceRole::Contributor);
+    let phone = Phone::new();
+    let p = &w.people["mara"];
+    let cert = DeviceCertificate::issue(&p.account, p.account_id, phone.device_id, &phone.public_key(), Timestamp::epoch());
+    assert!(cert.verify(&p.account.public_key_bytes()).is_err(), "an Ed25519 certificate names a 32-byte key");
+    w.push("mara", SessionEvent::DeviceCertificateAdded { certificate: cert });
+    assert!(!w.roster().devices.contains_key(&phone.device_id), "the key is never certified");
+    // So it can't sign at all: a device revocation of the owner's laptop
+    // signed by the P-256 key is refused.
+    let laptop = w.people["owner"].device_id;
+    let gov = w.phone_write("mara", &phone, None, SessionEvent::DeviceRevoked { device_id: laptop, watermark: vec![] });
+    assert_eq!(w.verdict(gov), Verdict::Denied);
+}
+
 /// Claim 5: the relying party decides which page every member's desktop
 /// opens for each passkey ceremony (`PresencePolicy::page_url`), and what a
 /// re-registration under it binds. Only the Owner may change it.
