@@ -165,6 +165,11 @@ mcp:
   #   port: 8080
   #   env: []                     # list of EnvVar; secrets one by one
   #                               # with valueFrom.secretKeyRef (no envFrom)
+  #   internetHttps: true         # 443 to any address outside
+  #                               # networkPolicy.internetExcept (never cloud
+  #                               # metadata or private ranges); false = none
+  #   egress: []                  # extra NetworkPolicyEgressRules (an API
+  #                               # in the cluster, a fixed IP range)
   #   resources: {}
   # Ligus's config then points at http://mcp-linear.<ns>.svc.cluster.local:8080/mcp
 
@@ -199,17 +204,38 @@ agentSandbox:
 
 networkPolicy:
   enabled: true
-  # Sources allowed to reach serve:8787. Empty = this release's serve, worker,
+  # Sources allowed to reach serve:8787. Empty = this release's serve, worker
   # and test pods only (not MCP servers or other pods in the namespace).
-  # Add the tailnet proxy or ingress controller here if you expose the API.
+  # Add the tailnet proxy here if you expose the API (never a public Ingress).
   serveIngressFrom: []
-  # Restrict serve/worker egress to DNS, the relay and extraEgress. Off by
-  # default because model providers, forges and ntfy are usually outside the
-  # cluster and NetworkPolicy cannot match host names.
-  restrictEgress: false
-  # Namespace of the relay, for the egress rule when restrictEgress is on.
+  # Restrict serve/worker egress to DNS, the relay and what is listed below.
+  # On by default: these pods hold the workspace key and run agent processes.
+  # NetworkPolicy can't match host names, so hosted model APIs, forges and
+  # ntfy need allowInternetHttps or ipBlock rules in extraEgress.
+  restrictEgress: true
+  # Namespace of a relay in this cluster (pods labelled
+  # app.kubernetes.io/name=ligus-relay), for the relay egress rule. Leave
+  # empty for a relay outside the cluster (then allowInternetHttps or
+  # extraEgress must reach it).
   relayNamespace: ""
+  # HTTPS (443) to any address outside internetExcept: hosted model APIs, an
+  # external relay, forges, ntfy.
+  allowInternetHttps: false
+  # Never reachable through allowInternetHttps (nor by MCP servers' internet
+  # egress): cloud metadata endpoints and private ranges (the cluster's own
+  # pod and Service networks are usually among them; add yours if not).
+  internetExcept:
+    - 169.254.0.0/16       # link-local: AWS/GCP/Azure/OCI instance metadata
+    - 100.100.100.200/32   # Alibaba Cloud metadata
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - 100.64.0.0/10
   extraEgress: []
+  # A namespace-wide default-deny policy (every pod, ingress and egress), so
+  # anything else installed in the workspace namespace starts closed. The
+  # chart's own pods get their own allow rules.
+  namespaceDefaultDeny: false
   # The cluster DNS resolver. Every policy that allows DNS allows it to these
   # pods only: port 53 to any address is a direct exfiltration channel.
   dns:

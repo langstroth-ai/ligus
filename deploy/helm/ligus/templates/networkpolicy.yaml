@@ -7,7 +7,8 @@ metadata:
   labels:
     {{- include "ligus.labels" . | nindent 4 }}
 spec:
-  # serve and worker pods (they hold the workspace key and device keys).
+  # serve and worker pods (they hold the workspace key and device keys, and
+  # run agent processes).
   podSelector:
     matchLabels:
       app.kubernetes.io/instance: {{ .Release.Name }}
@@ -37,23 +38,63 @@ spec:
   {{- if $np.restrictEgress }}
   egress:
     {{- include "ligus.dnsEgress" . | nindent 4 }}
+    {{- include "ligus.relayEgress" . | nindent 4 }}
+    {{- if .Values.mcp.servers }}
+    # This release's MCP servers.
     - to:
-        {{- if .Values.relay.enabled }}
         - podSelector:
             matchLabels:
-              app.kubernetes.io/name: ligus-relay
-        {{- else }}
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ required "networkPolicy.relayNamespace is required with restrictEgress (or list the relay in extraEgress)" $np.relayNamespace }}
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: ligus-relay
-        {{- end }}
-      ports:
-        - port: 8443
+              {{- include "ligus.selectorLabels" (dict "root" . "component" "mcp") | nindent 14 }}
+    {{- end }}
+    {{- if $np.allowInternetHttps }}
+    {{- include "ligus.internetHttpsEgress" . | nindent 4 }}
+    {{- end }}
     {{- with $np.extraEgress }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
   {{- end }}
+---
+# helm test pods: DNS, serve, the relay and extraEgress only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ligus.fullname" . }}-tests
+  labels:
+    {{- include "ligus.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      ligus.ai/role: test
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    {{- include "ligus.dnsEgress" . | nindent 4 }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "ligus.selectorLabels" (dict "root" . "component" "serve") | nindent 14 }}
+      ports:
+        - port: 8787
+    {{- include "ligus.relayEgress" . | nindent 4 }}
+    {{- if $np.allowInternetHttps }}
+    {{- include "ligus.internetHttpsEgress" . | nindent 4 }}
+    {{- end }}
+    {{- with $np.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- if $np.namespaceDefaultDeny }}
+---
+# Everything in this namespace starts closed; the policies above (and the
+# MCP servers' own) open what the chart's pods need.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ligus.fullname" . }}-default-deny
+  labels:
+    {{- include "ligus.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+{{- end }}
 {{- end }}

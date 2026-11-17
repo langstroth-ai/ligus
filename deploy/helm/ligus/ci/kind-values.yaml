@@ -28,3 +28,4 @@ worker:
 networkPolicy:
   restrictEgress: true
   relayNamespace: ligus-relay
+  namespaceDefaultDeny: true

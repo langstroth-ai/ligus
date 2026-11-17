@@ -99,7 +99,45 @@ app.kubernetes.io/component: {{ .component }}
     - { port: 53, protocol: TCP }
 {{- end -}}
 
+{{/* HTTPS to the internet, never cloud metadata or private ranges. */}}
+{{- define "ligus.internetHttpsEgress" -}}
+- to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+          {{- toYaml .Values.networkPolicy.internetExcept | nindent 10 }}
+  ports:
+    - { port: 443, protocol: TCP }
+{{- end -}}
+
+{{/* Egress to the relay's pods (in this release, or relayNamespace). */}}
+{{- define "ligus.relayEgress" -}}
+{{- $np := .Values.networkPolicy -}}
+{{- if .Values.relay.enabled }}
+- to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: ligus-relay
+  ports:
+    - port: 8443
+{{- else if $np.relayNamespace }}
+- to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: {{ $np.relayNamespace }}
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: ligus-relay
+  ports:
+    - port: 8443
+{{- end }}
+{{- end -}}
+
 {{- define "ligus.validate" -}}
+{{- $np := .Values.networkPolicy -}}
+{{- if and $np.enabled $np.restrictEgress (not .Values.relay.enabled) (not $np.relayNamespace) (not $np.allowInternetHttps) (not $np.extraEgress) -}}
+{{- fail "networkPolicy.restrictEgress is on but nothing lets serve reach the relay: set networkPolicy.relayNamespace (relay in this cluster), allowInternetHttps (relay behind https outside), or extraEgress" -}}
+{{- end -}}
 {{- if not (include "ligus.relayUrl" .) -}}
 {{- fail "set relayUrl (or relay.enabled=true for an in-release relay)" -}}
 {{- end -}}

@@ -77,7 +77,9 @@ spec:
           emptyDir:
             sizeLimit: 256Mi
 ---
-# Only this workspace's serve and worker pods may call this MCP server.
+# Only this workspace's serve and worker pods may call this MCP server; it
+# may reach DNS and, unless internetHttps is false, HTTPS outside cloud
+# metadata and private ranges, plus its own egress rules.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -89,14 +91,21 @@ spec:
     matchLabels:
       {{- include "ligus.selectorLabels" (dict "root" $ "component" "mcp") | nindent 6 }}
       ligus.ai/mcp: {{ $s.name | quote }}
-  policyTypes: [Ingress]
+  policyTypes: [Ingress, Egress]
   ingress:
     - from:
         - podSelector:
-            matchExpressions:
-              - key: ligus.ai/role
-                operator: In
-                values: [controller]
+            matchLabels:
+              app.kubernetes.io/instance: {{ $.Release.Name }}
+              ligus.ai/role: controller
       ports:
         - port: http
+  egress:
+    {{- include "ligus.dnsEgress" $ | nindent 4 }}
+    {{- if (ternary true $s.internetHttps (kindIs "invalid" $s.internetHttps)) }}
+    {{- include "ligus.internetHttpsEgress" $ | nindent 4 }}
+    {{- end }}
+    {{- with $s.egress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 {{- end }}

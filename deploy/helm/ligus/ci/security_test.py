@@ -13,7 +13,8 @@ import yaml
 
 CHART = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KUBE = "1.30.0"
-BASE = ["--set", "relayUrl=http://relay.example:8443", "--set", "workspace.generate=true"]
+BASE = ["--set", "relayUrl=http://relay.example:8443", "--set", "workspace.generate=true",
+        "--set", "networkPolicy.relayNamespace=ligus-relay"]
 
 
 def render(*args, ok=True):
@@ -71,8 +72,9 @@ def check(name, cond, detail=""):
 # --- DNS egress must go to the cluster resolver only ------------------------
 
 def test_dns_egress_is_scoped():
-    docs = render("--set", "networkPolicy.restrictEgress=true",
-                  "--set", "networkPolicy.relayNamespace=ligus-relay")
+    docs = render("--set", "networkPolicy.allowInternetHttps=true", "--set", "networkPolicy.namespaceDefaultDeny=true",
+                  "--set", "mcp.servers[0].name=linear",
+                  "--set", "mcp.servers[0].image=registry.example/mcp@sha256:" + "0" * 64)
     for np in policies(docs):
         for rule in np["spec"].get("egress") or []:
             ports = [p.get("port") for p in rule.get("ports") or []]
@@ -82,6 +84,32 @@ def test_dns_egress_is_scoped():
                     peer.get("namespaceSelector") and peer.get("podSelector") for peer in to)
                 check("DNS egress of %s is limited to the cluster resolver" % np["metadata"]["name"],
                       scoped, "port 53 open to any address: a direct exfiltration channel")
+
+
+# --- Egress is closed by default; HTTPS never reaches cloud metadata --------
+
+def test_egress_closed_and_metadata_blocked():
+    docs = render("--set", "networkPolicy.allowInternetHttps=true",
+                  "--set", "mcp.servers[0].name=linear",
+                  "--set", "mcp.servers[0].image=registry.example/mcp@sha256:" + "0" * 64)
+    for np in policies(docs):
+        types = np["spec"].get("policyTypes") or []
+        name = np["metadata"]["name"]
+        if name.endswith("-controller") or name.startswith("mcp-"):
+            check("%s restricts egress by default" % name, "Egress" in types)
+        for rule in np["spec"].get("egress") or []:
+            for peer in rule.get("to") or []:
+                block = peer.get("ipBlock")
+                if block and block.get("cidr") == "0.0.0.0/0":
+                    exc = block.get("except") or []
+                    check("%s internet egress excludes cloud metadata" % name, "169.254.0.0/16" in exc)
+                    check("%s internet egress excludes private ranges" % name, "10.0.0.0/8" in exc)
+    p = render("--set", "networkPolicy.relayNamespace=", ok=False)
+    check("restrictEgress with no path to the relay is refused", p.returncode != 0)
+    docs = render("--set", "networkPolicy.namespaceDefaultDeny=true")
+    deny = [n for n in policies(docs) if n["metadata"]["name"].endswith("-default-deny")]
+    check("namespaceDefaultDeny renders an empty-selector deny-all",
+          len(deny) == 1 and deny[0]["spec"]["podSelector"] == {} and not deny[0]["spec"].get("egress"))
 
 
 # --- Only Ligus pods reach serve ------------------------------------------
@@ -164,7 +192,7 @@ def test_mcp_images_pinned():
     check("allowUnpinned opts out explicitly", any(d["kind"] == "Deployment" for d in docs))
 
 
-TESTS = [test_dns_egress_is_scoped, test_serve_ingress_excludes_foreign_pods,
+TESTS = [test_dns_egress_is_scoped, test_egress_closed_and_metadata_blocked, test_serve_ingress_excludes_foreign_pods,
          test_removed_values_refuse, test_secrets_are_files, test_mcp_images_pinned]
 
 if __name__ == "__main__":
