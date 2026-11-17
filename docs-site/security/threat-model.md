@@ -128,6 +128,29 @@ permissions on an untrusted repository. Runtimes Ligus can't confine from
 outside (aider, pi, Hermes, Antigravity, Copilot) are refused whenever
 egress is restricted, but run with their own permissions otherwise.
 
+### Endpoint redirection (model gateways) {#endpoint-redirection}
+
+Where an operator routes agents through an LLM gateway
+([Deploying with an LLM gateway](../deploy/model-gateways.md)), the prize is
+redirecting an agent's model traffic: to read prompts and code, or to
+collect the gateway credential.
+
+| Threat | Mitigation |
+|---|---|
+| A member points an agent at an endpoint they control | Setting a runtime's gateway or endpoint, and an agent's host or runtime binding, needs an Admin and passkey presence. A host with a gateway allow-list is exclusive by default: it runs agents only through gateways its operator listed. A gateway credential is attached only by the host, only for the URL the operator listed under that name. |
+| An agent (prompt injection) rewrites its CLI's base URL or config | The CLI's only route to a model is the turn's egress proxy. The proxy adds the credential only on the gateway route, for the listed URL; the agent's allow-list holds no other model host, and NetworkPolicy opens only the listed gateways. |
+| The agent reads or forges the credential | Credential files are on the sandbox deny list and are never in the agent's environment, argv or files. The proxy strips every credential header the agent sends before adding the gateway's. |
+| A forged host record advertises a gateway | Host records carry names only. The host running the turn checks its own operator file; a name it doesn't list is refused. |
+| DNS rebinding of the gateway's name to loopback or metadata | The proxy and the HTTP clients resolve and check addresses themselves and dial the checked address; NetworkPolicy refuses metadata ranges, and the chart refuses CIDRs that overlap them. |
+| Token replay by the gateway | ServiceAccount tokens are projected, short-lived and bound to one audience per gateway, so a gateway can replay a token only to itself. |
+| A token from another namespace or workload | The gateway checks issuer, audience and subject (`system:serviceaccount:<ns>:<sa>`); the docs say how. |
+| Plain HTTP | Refused unless the operator sets `allowPlaintext`; never for mTLS. |
+
+Residual risks: the gateway operator sees all model traffic, by design;
+`allowPlaintext` without a mesh exposes bearer tokens to the node network; a
+compromised serve or worker process (not an agent child) holds the gateway
+credentials; a stolen token works for its own audience until it expires.
+
 ### Someone with your phone {#lost-phone}
 
 The phone app holds a credential that lets it act through your box with the
