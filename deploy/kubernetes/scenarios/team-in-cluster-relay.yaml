@@ -1,0 +1,15 @@
+# Scenario "team-in-cluster-relay": one workspace of a team, against a relay
+# already running in this cluster in its own namespace (installed with the
+# ligus-relay chart from the relay repository, release name ligus-relay).
+# ligus-k8s sets relayUrl and networkPolicy.relayNamespace from
+# --relay-namespace. Volumes default to ReadWriteOncePod (needs a CSI
+# StorageClass; `ligus-k8s preflight` says whether yours is one).
+# Used by: deploy/kubernetes/ligus-k8s install --scenario team-in-cluster-relay
+serve:
+  persistence:
+    size: 5Gi
+    accessMode: ReadWriteOncePod
+networkPolicy:
+  enabled: true
+  restrictEgress: true
+  namespaceDefaultDeny: true

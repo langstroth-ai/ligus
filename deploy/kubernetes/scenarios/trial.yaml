@@ -1,0 +1,38 @@
+# Scenario "trial": everything in one namespace on a local or throwaway
+# cluster (OrbStack, kind, k3d, minikube). An in-release relay with the
+# in-memory store (one pod, no database), one serve on a THROWAWAY workspace
+# (`ligus-k8s secrets workspace --throwaway`), ReadWriteOnce volumes (local
+# provisioners are not CSI, so ReadWriteOncePod would never bind).
+# Nothing here is fit for real data: the relay forgets everything on restart.
+# Used by: deploy/kubernetes/ligus-k8s install --scenario trial
+relay:
+  enabled: true
+  topology: single
+  tunnel:
+    mode: "off"
+  singlePod:
+    resources:
+      requests: { cpu: 25m, memory: 32Mi }
+      limits: { cpu: "1", memory: 256Mi }
+serve:
+  persistence:
+    size: 1Gi
+    accessMode: ReadWriteOnce
+  home:
+    size: 256Mi
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: "1", memory: 512Mi, ephemeral-storage: 1Gi }
+worker:
+  persistence:
+    size: 1Gi
+    accessMode: ReadWriteOnce
+  home:
+    size: 256Mi
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: "1", memory: 512Mi, ephemeral-storage: 1Gi }
+networkPolicy:
+  enabled: true
+  restrictEgress: true
+  namespaceDefaultDeny: true

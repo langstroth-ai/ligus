@@ -1,0 +1,417 @@
+#!/usr/bin/env bash
+# ligus-local: run Ligus's headless processes on this machine (a laptop, a
+# home server, a CI box), non-interactively, for a person or a coding agent.
+#
+#   ligus-local preflight  [--role serve|worker]   check this machine; changes nothing
+#   ligus-local install-cli [--version vX.Y.Z] [--bin-dir DIR] [--from-source]
+#   ligus-local configure  --role serve|worker     write the env file (no secrets)
+#   ligus-local start      --role serve|worker     start in the background (or --systemd)
+#   ligus-local verify     --role serve|worker     process, health endpoint, sandbox
+#   ligus-local stop       --role serve|worker
+#   ligus-local uninstall  --role serve|worker [--delete-data]
+#
+# Common flags: --data-dir DIR (required: this device's identity and event
+# log) --env-file FILE --json. The desktop app is installed and first opened
+# by the human (Homebrew cask ligus-app); see AGENTS.md. Joining a real
+# workspace (`ligus enroll` with the invite) is a human step: the invite
+# carries the workspace key.
+# shellcheck source-path=SCRIPTDIR
+set -euo pipefail
+
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+ROOT=$(cd "$HERE/../.." && pwd)
+# shellcheck source=../lib/agent-common.sh
+. "$ROOT/deploy/lib/agent-common.sh"
+AC_TOOL=ligus-local
+MARKER=.ligus-local
+
+usage() {
+  sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  cat <<'EOF'
+
+configure flags:
+  --listen ADDR            serve: loopback, LAN or tailnet address:port (default 127.0.0.1:8787;
+                           0.0.0.0 is refused by serve). worker: health address (default 127.0.0.1:8788)
+  --label NAME             host label other members see (default: the hostname)
+  --relay-url URL          override the relay from the enrolled connection
+  --secret-backend file    keep device secrets in owner-only files (default: the OS store;
+                           macOS keychain prompts must be answered by the human)
+  --throwaway-workspace    a random workspace nobody else holds (trials and tests only;
+                           needs --relay-url)
+  --force                  rewrite an existing env file
+start flags:   --systemd (Linux: install and start a systemd user unit instead)
+Environment:   LIGUS_BIN (default: ligus on PATH, else ~/.local/bin/ligus)
+EOF
+}
+
+CMD=${1:-}
+[ $# -gt 0 ] && shift
+case $CMD in -h|--help|help|"") usage; exit 0 ;; esac
+
+ROLE="" DATA="${LIGUS_DATA_DIR:-}" ENVF="" ENVF_GIVEN="" LISTEN="" LABEL="" RELAY_URL="" BACKEND="" THROWAWAY=0 FORCE=0
+SYSTEMD=0 DEL_DATA=0 VERSION="" BIN_DIR="" FROM_SOURCE=0
+need() { [ $# -ge 2 ] && [ -n "$2" ] || ac_usage_error "$1 needs a value"; }
+while [ $# -gt 0 ]; do
+  case $1 in
+    --json) AC_JSON=1 ;;
+    --role) need "$@"; ROLE=$2; shift ;;
+    --data-dir) need "$@"; DATA=$2; shift ;;
+    --env-file) need "$@"; ENVF=$2; shift ;;
+    --listen) need "$@"; LISTEN=$2; shift ;;
+    --label) need "$@"; LABEL=$2; shift ;;
+    --relay-url) need "$@"; RELAY_URL=$2; shift ;;
+    --secret-backend) need "$@"; BACKEND=$2; shift ;;
+    --throwaway-workspace) THROWAWAY=1 ;;
+    --force) FORCE=1 ;;
+    --systemd) SYSTEMD=1 ;;
+    --delete-data) DEL_DATA=1 ;;
+    --version) need "$@"; VERSION=$2; shift ;;
+    --bin-dir) need "$@"; BIN_DIR=$2; shift ;;
+    --from-source) FROM_SOURCE=1 ;;
+    -h|--help) usage; exit 0 ;;
+    *) ac_usage_error "unknown argument: $1" ;;
+  esac
+  shift
+done
+
+case $ROLE in ""|serve|worker) ;; *) ac_usage_error "--role must be serve or worker" ;; esac
+# These values end up in an env file that start (and the human) source with
+# `set -a; . FILE`: anything but a plain token would run as shell code.
+valid() { # flag value regex
+  [ -z "$2" ] && return 0
+  printf '%s' "$2" | LC_ALL=C grep -Eq "^($3)\$" && [ "$(printf '%s' "$2" | wc -l | tr -d ' ')" = 0 ] \
+    || ac_usage_error "$1: invalid value (allowed: $3)"
+}
+valid --data-dir "$DATA" '[A-Za-z0-9._/~+ -]+'
+valid --env-file "$ENVF" '[A-Za-z0-9._/~+-]+'
+valid --listen "$LISTEN" '[A-Za-z0-9.:_%-]+|\[[0-9A-Fa-f:.%]+\]:[0-9]+'
+valid --label "$LABEL" '[A-Za-z0-9._ -]+'
+valid --relay-url "$RELAY_URL" 'https?://[A-Za-z0-9.:_/%@-]+'
+valid --version "$VERSION" 'v?[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.]+)?'
+case $BACKEND in ""|file|keychain|secret-service) ;; *) ac_usage_error "--secret-backend must be file, keychain or secret-service" ;; esac
+
+OS=$(uname -s)
+find_bin() {
+  if [ -n "${LIGUS_BIN:-}" ]; then printf '%s' "$LIGUS_BIN"
+  elif ac_have ligus; then command -v ligus
+  elif [ -x "$HOME/.local/bin/ligus" ]; then printf '%s' "$HOME/.local/bin/ligus"
+  fi
+}
+BIN=$(find_bin || true)
+
+# The flags that name this instance, for the commands we print.
+inst() { printf -- '--role %s --data-dir %q' "$ROLE" "$DATA"; [ -n "$ENVF_GIVEN" ] && printf -- ' --env-file %q' "$ENVF"; return 0; }
+json_extra() { printf ',"role":%s,"dataDir":%s,"envFile":%s,"bin":%s' "$(ac_jstr "$ROLE")" "$(ac_jstr "$DATA")" "$(ac_jstr "$ENVF")" "$(ac_jstr "$BIN")"; }
+require_role() { [ -n "$ROLE" ] || ac_usage_error "--role serve|worker is required"; }
+
+# The desktop app's own data dir is one device; a headless process must never share it.
+app_dirs() {
+  printf '%s\n' "$HOME/Library/Application Support/ai.ligus.desktop" \
+    "${XDG_DATA_HOME:-$HOME/.local/share}/ai.ligus.desktop" "$HOME/.ligus"
+}
+require_data() {
+  [ -n "$DATA" ] || ac_usage_error "--data-dir is required (a directory only this process uses, for example ~/.ligus-serve)"
+  case $DATA in /*) ;; *) DATA="$PWD/$DATA" ;; esac
+  DATA=${DATA%/}
+  local d
+  while IFS= read -r d; do
+    if [ "$DATA" = "$d" ]; then
+      ac_check data.dir fail "$DATA is the desktop app's data dir; one data dir is one device" "pick another directory, for example ~/.ligus-$ROLE"
+      ac_raise 4; ac_finish "$AC_TOOL" "$CMD" "$(json_extra)"
+    fi
+  done <<EOF
+$(app_dirs)
+EOF
+  ENVF_GIVEN=$ENVF
+  ENVF=${ENVF:-${XDG_CONFIG_HOME:-$HOME/.config}/ligus-$ROLE/ligus-$ROLE.env}
+}
+PIDF() { printf '%s/ligus-local-%s.pid' "$DATA" "$ROLE"; }
+LOGF() { printf '%s/ligus-local-%s.log' "$DATA" "$ROLE"; }
+
+env_get() { # key: from the env file (values of non-secret settings only)
+  [ -f "$ENVF" ] || return 0
+  sed -n "s/^$1=//p" "$ENVF" | tail -1 | sed "s/^'\\(.*\\)'\$/\\1/"
+}
+
+running_pid() {
+  local p
+  [ -f "$(PIDF)" ] || return 1
+  p=$(cat "$(PIDF)")
+  kill -0 "$p" 2>/dev/null || return 1
+  # A stale pid file can name an unrelated process now: never signal that.
+  case $(ps -p "$p" -o command= 2>/dev/null) in *ligus*" $ROLE"*) ;; *) return 1 ;; esac
+  printf '%s' "$p"
+}
+
+http_status() { # url -> status code or empty
+  curl -s -o /dev/null -m 3 -w '%{http_code}' "$1" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------- preflight
+cmd_preflight() {
+  ac_check os info "$OS $(uname -r) $(uname -m)"
+  if [ -z "$BIN" ]; then
+    ac_check cli.binary fail "ligus CLI not found (PATH, ~/.local/bin, LIGUS_BIN)" "ligus-local install-cli (or set LIGUS_BIN)"; ac_raise 3
+  else
+    local v; v=$("$BIN" --version 2>/dev/null || true)
+    case $v in
+      "ligus "[2-9]*) ac_check cli.binary pass "$BIN: $v" ;;
+      *) ac_check cli.binary fail "$BIN: ${v:-no version} (2.0 or later needed)" "ligus-local install-cli --version <v2 tag>"; ac_raise 3 ;;
+    esac
+  fi
+  if ac_have curl; then ac_check tool.curl pass "curl present"; else ac_check tool.curl fail "curl not found" "install curl"; ac_raise 3; fi
+
+  # The agent sandbox, measured in a scratch data dir (never the real one).
+  if [ -n "$BIN" ]; then
+    local tmp out tier
+    tmp=$(mktemp -d)
+    out=$(LIGUS_DATA_DIR="$tmp/data" LIGUS_SECRET_BACKEND=file HOME="$tmp" "$BIN" doctor 2>&1 || true)
+    rm -rf "$tmp"
+    tier=$(printf '%s\n' "$out" | sed -n 's/^agent sandbox: *//p' | head -1)
+    case $tier in
+      ""|none*) ac_check sandbox fail "no agent sandbox on this machine (${tier:-unknown}); Ligus would refuse every agent turn that runs a local program" "Linux: kernel 6.7+ with Landlock, or bubblewrap; macOS: Seatbelt is built in. Never set LIGUS_REQUIRE_SANDBOX=0 to get past this" ;;
+      *) ac_check sandbox pass "agent sandbox: $tier ($(printf '%s\n' "$out" | sed -n '2p' | sed 's/^ *//'))" ;;
+    esac
+  fi
+  if [ "$OS" = Linux ]; then
+    if [ -r /sys/kernel/security/lsm ]; then
+      case ",$(cat /sys/kernel/security/lsm)," in *,landlock,*) ac_check landlock.lsm pass "landlock is in the kernel's LSM list" ;; *) ac_check landlock.lsm warn "landlock is not in the kernel's LSM list" "add lsm=...,landlock to the kernel command line, or rely on bubblewrap" ;; esac
+    fi
+    ac_have systemctl && ac_check systemd info "systemd present (start --systemd installs a user unit)"
+  fi
+
+  if [ -n "$ROLE" ]; then
+    require_data
+    if [ -d "$DATA" ]; then
+      if [ -f "$DATA/$MARKER" ]; then ac_check data.dir pass "$DATA exists (made by ligus-local)"
+      elif [ -n "$(ls -A "$DATA" 2>/dev/null)" ]; then ac_check data.dir warn "$DATA exists and is not empty, and ligus-local did not create it" "make sure no other Ligus process uses it (one data dir is one device)"
+      else ac_check data.dir pass "$DATA exists and is empty"; fi
+    else
+      ac_check data.dir info "$DATA does not exist yet (configure creates it, mode 0700)"
+    fi
+    if running_pid >/dev/null; then ac_check process info "$ROLE already running (pid $(running_pid))"; fi
+    local l=${LISTEN:-$(env_get "$( [ "$ROLE" = serve ] && echo LIGUS_SERVE_LISTEN || echo LIGUS_WORKER_HEALTH_LISTEN)")}
+    l=${l:-$( [ "$ROLE" = serve ] && echo 127.0.0.1:8787 || echo 127.0.0.1:8788)}
+    if ! running_pid >/dev/null && [ -n "$(http_status "http://$l/v1/health")" ] && [ "$(http_status "http://$l/v1/health")" != 000 ]; then
+      ac_check listen fail "$l is already answering HTTP" "pick another --listen address"
+    else
+      ac_check listen pass "$l is free (or ours)"
+    fi
+    case $l in 0.0.0.0:*|"[::]":*) ac_check listen.exposure fail "$l listens on every interface" "use 127.0.0.1, a LAN or a tailnet address; exposing serve wider is a human decision" ; ac_raise 4 ;; esac
+    if [ -f "$DATA/config.toml" ] || [ -n "$(env_get LIGUS_WORKSPACE)" ]; then
+      ac_check workspace pass "a workspace connection is configured"
+    else
+      ac_check workspace warn "no workspace connection yet" "HUMAN STEP: in their own terminal, the human runs: set -a; . $ENVF; set +a; $BIN enroll 'hivews1:...' (the invite carries the workspace key; never paste it into chat). Trials: configure --throwaway-workspace"
+    fi
+  fi
+  ac_finish "$AC_TOOL" preflight "$(json_extra)"
+}
+
+# -------------------------------------------------------------- install-cli
+cmd_install_cli() {
+  if [ $FROM_SOURCE = 1 ]; then
+    ac_have cargo || { ac_check cargo fail "cargo not found" "install Rust (https://rustup.rs), or drop --from-source"; ac_raise 3; ac_finish "$AC_TOOL" install-cli; }
+    local dir=${BIN_DIR:-$HOME/.local/bin}
+    if (cd "$ROOT" && cargo build --release -p hive-cli >&2); then
+      mkdir -p "$dir"
+      install -m 0755 "${CARGO_TARGET_DIR:-$ROOT/target}/release/ligus" "$dir/ligus"
+      ac_check install pass "built and installed $dir/ligus"
+    else
+      ac_check install fail "cargo build failed" "read the build output above"
+    fi
+  else
+    if LIGUS_VERSION="${VERSION:-latest}" LIGUS_INSTALL_DIR="${BIN_DIR:-$HOME/.local/bin}" sh "$ROOT/install.sh" >&2; then
+      ac_check install pass "installed ${BIN_DIR:-$HOME/.local/bin}/ligus (${VERSION:-latest})"
+      ac_check install.integrity warn "the release binary was downloaded over https without a published checksum or signature to verify it against${VERSION:+}${VERSION:- (and 'latest' is not pinned)}" "pin --version, or install the Homebrew formula (its sha256 is pinned): brew install ligus-ai/ligus/ligus"
+    else
+      ac_check install fail "install.sh failed" "check the release exists for this platform, or use --from-source"
+    fi
+  fi
+  ac_finish "$AC_TOOL" install-cli
+}
+
+# ---------------------------------------------------------------- configure
+cmd_configure() {
+  require_role; require_data
+  [ -n "$BIN" ] || { ac_check cli.binary fail "ligus CLI not found" "ligus-local install-cli"; ac_raise 3; ac_finish "$AC_TOOL" configure "$(json_extra)"; }
+  if [ $THROWAWAY = 1 ] && [ -z "$RELAY_URL" ]; then ac_usage_error "--throwaway-workspace needs --relay-url"; fi
+  local listen=${LISTEN:-$( [ "$ROLE" = serve ] && echo 127.0.0.1:8787 || echo 127.0.0.1:8788)}
+  case $listen in 0.0.0.0:*|"[::]":*) ac_check listen.exposure fail "$listen listens on every interface" "use 127.0.0.1, a LAN or a tailnet address; exposure is a human decision"; ac_raise 4; ac_finish "$AC_TOOL" configure "$(json_extra)" ;; esac
+  local label=${LABEL:-$(hostname -s 2>/dev/null || echo local)-$ROLE}
+
+  (umask 077; mkdir -p "$DATA")
+  chmod 700 "$DATA"
+  [ -f "$DATA/$MARKER" ] || printf 'created by ligus-local for %s\n' "$ROLE" >"$DATA/$MARKER"
+  ac_check data.dir pass "$DATA (mode 0700)"
+
+  if [ -f "$ENVF" ] && [ $FORCE = 0 ]; then
+    ac_check env.file pass "$ENVF exists (left unchanged; --force rewrites it)"
+  else
+    (umask 077; mkdir -p "$(dirname "$ENVF")")
+    local tmpf; tmpf=$(umask 077; mktemp "$ENVF.XXXXXX")
+    {
+      echo "# Written by deploy/local/ligus-local configure. No secret values here:"
+      echo "# the workspace connection is saved by 'ligus enroll' in LIGUS_DATA_DIR."
+      echo "LIGUS_DATA_DIR='$DATA'"
+      echo "LIGUS_REQUIRE_SANDBOX=1"
+      [ -n "$BACKEND" ] && echo "LIGUS_SECRET_BACKEND='$BACKEND'"
+      [ -n "$RELAY_URL" ] && echo "LIGUS_RELAY_URL='$RELAY_URL'"
+      if [ "$ROLE" = serve ]; then
+        echo "LIGUS_SERVE_LISTEN='$listen'"
+        echo "LIGUS_SERVE_LABEL='$label'"
+      else
+        echo "LIGUS_WORKER_HEALTH_LISTEN='$listen'"
+        echo "LIGUS_WORKER_LABEL='$label'"
+      fi
+      if [ $THROWAWAY = 1 ]; then
+        local key="$DATA/throwaway-workspace.key"
+        (umask 077; ac_rand_b64 36 >"$key")
+        echo "# THROWAWAY workspace (trials and tests only; nobody else holds the key)"
+        echo "LIGUS_WORKSPACE='local-trial-$(ac_uuid)'"
+        echo "LIGUS_WORKSPACE_KEY_FILE='$key'"
+      fi
+    } >"$tmpf"
+    mv "$tmpf" "$ENVF"
+    chmod 600 "$ENVF"
+    ac_check env.file pass "wrote $ENVF (mode 0600, no secret values)"
+  fi
+  if [ -f "$DATA/config.toml" ] || [ -n "$(env_get LIGUS_WORKSPACE)" ]; then
+    ac_check workspace pass "a workspace connection is configured"
+    ac_next "ligus-local start $(inst)"
+  else
+    ac_check workspace warn "no workspace connection yet" "HUMAN STEP (below)"
+    ac_next "HUMAN STEP: in their own terminal: set -a; . $ENVF; set +a; $BIN enroll 'hivews1:...' [--token <hrt1...>] (copy the invite from the desktop app: workspace > Copy invite). Then: ligus-local start $(inst)"
+    ac_raise 4
+  fi
+  ac_finish "$AC_TOOL" configure "$(json_extra)"
+}
+
+# -------------------------------------------------------------------- start
+cmd_start() {
+  require_role; require_data
+  [ -n "$BIN" ] || { ac_check cli.binary fail "ligus CLI not found" "ligus-local install-cli"; ac_raise 3; ac_finish "$AC_TOOL" start "$(json_extra)"; }
+  [ -f "$ENVF" ] || { ac_check env.file fail "$ENVF not found" "ligus-local configure $(inst) (with the same flags as before)"; ac_raise 3; ac_finish "$AC_TOOL" start "$(json_extra)"; }
+  if [ ! -f "$DATA/config.toml" ] && [ -z "$(env_get LIGUS_WORKSPACE)" ]; then
+    ac_check workspace fail "no workspace connection" "HUMAN STEP: ligus enroll with the invite, in the human's own terminal (ligus-local configure prints the command)"; ac_raise 4; ac_finish "$AC_TOOL" start "$(json_extra)"
+  fi
+  if [ $SYSTEMD = 1 ]; then
+    if [ "$OS" != Linux ] || ! ac_have systemctl; then ac_check systemd fail "--systemd needs Linux with systemd" "drop --systemd"; ac_raise 3; ac_finish "$AC_TOOL" start "$(json_extra)"; fi
+    local unit="$HOME/.config/systemd/user/ligus-$ROLE.service"
+    mkdir -p "$(dirname "$unit")"
+    sed -e "s|^EnvironmentFile=.*|EnvironmentFile=$ENVF|" -e "s|^ExecStart=.*|ExecStart=$BIN $ROLE$( [ "$ROLE" = worker ] && printf ' --label "%s"' "$(env_get LIGUS_WORKER_LABEL)")|" \
+        -e "s|^Description=.*|Description=Ligus $ROLE (ligus-local)|" "$ROOT/deploy/ligus-serve/ligus-serve.service" >"$unit"
+    systemctl --user daemon-reload
+    if systemctl --user enable --now "ligus-$ROLE" >/dev/null 2>&1; then
+      ac_check start pass "systemd user unit ligus-$ROLE enabled and started"
+      ac_next "for start at boot without a login session, the human runs: sudo loginctl enable-linger $USER"
+    else
+      ac_check start fail "systemctl --user enable --now ligus-$ROLE failed" "journalctl --user -u ligus-$ROLE -n 50"
+    fi
+    ac_finish "$AC_TOOL" start "$(json_extra)"
+  fi
+  local p
+  if p=$(running_pid); then ac_check start pass "$ROLE already running (pid $p)"; ac_finish "$AC_TOOL" start "$(json_extra)"; fi
+  (umask 077; : >>"$(LOGF)")
+  # The log never gets a pairing link: start never passes --pair.
+  # shellcheck disable=SC1090  # the env file configure wrote
+  ( set -a; . "$ENVF"; set +a; umask 077
+    if [ "$ROLE" = worker ]; then exec nohup "$BIN" worker --label "${LIGUS_WORKER_LABEL:-worker}" >>"$(LOGF)" 2>&1 </dev/null
+    else exec nohup "$BIN" serve >>"$(LOGF)" 2>&1 </dev/null; fi ) &
+  echo $! >"$(PIDF)"
+  sleep 2
+  if p=$(running_pid); then
+    ac_check start pass "$ROLE started (pid $p, log $(LOGF))"
+    ac_next "ligus-local verify $(inst) --json"
+  else
+    ac_check start fail "$ROLE exited at once: $(tail -3 "$(LOGF)" | tr '\n' ' ')" "read $(LOGF); exit code 3 means no agent sandbox (never disable it)"
+  fi
+  ac_finish "$AC_TOOL" start "$(json_extra)"
+}
+
+# ------------------------------------------------------------------- verify
+cmd_verify() {
+  require_role; require_data
+  local p="" listen
+  if [ $SYSTEMD = 1 ]; then
+    if systemctl --user is-active --quiet "ligus-$ROLE"; then ac_check process pass "systemd unit ligus-$ROLE active"
+    else ac_check process fail "systemd unit ligus-$ROLE not active" "journalctl --user -u ligus-$ROLE -n 50"; fi
+  elif p=$(running_pid); then ac_check process pass "$ROLE running (pid $p)"
+  else ac_check process fail "$ROLE not running" "ligus-local start $(inst); if it exits, read $(LOGF)"; fi
+  if [ "$ROLE" = serve ]; then listen=$(env_get LIGUS_SERVE_LISTEN); else listen=$(env_get LIGUS_WORKER_HEALTH_LISTEN); fi
+  if [ -n "$listen" ]; then
+    local code=""
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      code=$(http_status "http://$listen/v1/health"); [ "$code" = 200 ] && break; sleep 1
+    done
+    if [ "$code" = 200 ]; then ac_check health pass "GET http://$listen/v1/health: 200"
+    else ac_check health fail "GET http://$listen/v1/health: ${code:-no answer}" "read $(LOGF)"; fi
+  fi
+  if [ "$(env_get LIGUS_REQUIRE_SANDBOX)" = 1 ]; then ac_check sandbox pass "LIGUS_REQUIRE_SANDBOX=1: the process exits rather than run agents unconfined"
+  else ac_check sandbox fail "LIGUS_REQUIRE_SANDBOX is not 1 in $ENVF" "a human decides that; ligus-local configure sets it to 1"; fi
+  [ "$AC_WORST" = 0 ] && [ "$ROLE" = serve ] && ac_next "HUMAN STEP: pair the phone in their own terminal (it prints a secret): set -a; . $ENVF; set +a; $BIN pair"
+  ac_finish "$AC_TOOL" verify "$(json_extra)"
+}
+
+# --------------------------------------------------------------------- stop
+cmd_stop() {
+  require_role; require_data
+  if [ $SYSTEMD = 1 ]; then
+    systemctl --user disable --now "ligus-$ROLE" >/dev/null 2>&1 || true
+    ac_check stop pass "systemd unit ligus-$ROLE stopped and disabled"
+    ac_finish "$AC_TOOL" stop "$(json_extra)"
+  fi
+  local p
+  if p=$(running_pid); then
+    kill -TERM "$p" 2>/dev/null || true
+    # serve gives a turn in flight up to 15 s.
+    for _ in $(seq 1 25); do kill -0 "$p" 2>/dev/null || break; sleep 1; done
+    if kill -0 "$p" 2>/dev/null; then ac_check stop fail "pid $p still running after 25 s" "kill -TERM $p again, or kill -KILL $p as a last resort"
+    else rm -f "$(PIDF)"; ac_check stop pass "$ROLE stopped (pid $p)"; fi
+  else
+    rm -f "$(PIDF)"; ac_check stop pass "$ROLE not running"
+  fi
+  ac_finish "$AC_TOOL" stop "$(json_extra)"
+}
+
+cmd_uninstall() {
+  require_role; require_data
+  ( AC_JSON=0; cmd_stop ) >/dev/null 2>&1 || true
+  local unit="$HOME/.config/systemd/user/ligus-$ROLE.service"
+  # Only a unit start --systemd wrote for this env file (a hand-installed
+  # ligus-serve.service belongs to someone else's data dir).
+  if [ "$OS" = Linux ] && [ -f "$unit" ] && grep -q '^Description=.*(ligus-local)' "$unit" && grep -qx "EnvironmentFile=$ENVF" "$unit"; then
+    systemctl --user disable --now "ligus-$ROLE" >/dev/null 2>&1 || true
+    rm -f "$HOME/.config/systemd/user/ligus-$ROLE.service"; systemctl --user daemon-reload || true
+    ac_check unit pass "removed systemd user unit ligus-$ROLE"
+  fi
+  ac_check stop pass "$ROLE stopped"
+  if [ $DEL_DATA = 1 ]; then
+    if [ -f "$DATA/$MARKER" ]; then
+      rm -rf "$DATA"
+      if [ -f "$ENVF" ] && head -1 "$ENVF" | grep -q '^# Written by deploy/local/ligus-local configure'; then
+        rm -f "$ENVF"; ac_check data pass "deleted $DATA and $ENVF (this device's identity is gone)"
+      else
+        ac_check data pass "deleted $DATA (this device's identity is gone); kept $ENVF: ligus-local did not write it"
+      fi
+    elif [ -d "$DATA" ]; then
+      ac_check data fail "$DATA was not created by ligus-local; refusing to delete it" "a human deletes it if that is really intended"; ac_raise 4
+    else
+      ac_check data pass "$DATA does not exist"
+    fi
+  else
+    ac_check data info "kept $DATA and $ENVF (--delete-data removes them)"
+  fi
+  ac_next "uninstalling is not revoking: if this device joined a real workspace, the human revokes it from a desktop (Settings > Account > My devices, or the host list)"
+  ac_finish "$AC_TOOL" uninstall "$(json_extra)"
+}
+
+case $CMD in
+  preflight) cmd_preflight ;;
+  install-cli) cmd_install_cli ;;
+  configure) cmd_configure ;;
+  start) cmd_start ;;
+  verify|status) cmd_verify ;;
+  stop) cmd_stop ;;
+  uninstall) cmd_uninstall ;;
+  *) ac_usage_error "unknown command: $CMD (preflight, install-cli, configure, start, verify, stop, uninstall)" ;;
+esac

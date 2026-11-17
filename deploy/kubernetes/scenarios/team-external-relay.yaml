@@ -1,0 +1,15 @@
+# Scenario "team-external-relay": one workspace of a team, against a relay
+# outside the cluster at an https:// URL (--relay-url). serve and workers
+# may then reach 443 on public addresses (never cloud metadata or private
+# ranges, networkPolicy.internetExcept), which also covers hosted model APIs.
+# Volumes default to ReadWriteOncePod (needs a CSI StorageClass).
+# Used by: deploy/kubernetes/ligus-k8s install --scenario team-external-relay
+serve:
+  persistence:
+    size: 5Gi
+    accessMode: ReadWriteOncePod
+networkPolicy:
+  enabled: true
+  restrictEgress: true
+  allowInternetHttps: true
+  namespaceDefaultDeny: true

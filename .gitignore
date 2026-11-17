@@ -19,11 +19,17 @@ site/
 /dist-windows/
 /dist-linux/
 
-# Agent + editor state
-.claude/
+# Agent + editor state. Only the two deploy skills' SKILL.md files are
+# committed; everything else under .claude/ (settings, other skills, notes,
+# worktrees) stays private, even inside those skill directories.
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/ligus-deploy-k8s/
+!.claude/skills/ligus-deploy-local/
+.claude/skills/ligus-deploy-*/*
+!.claude/skills/ligus-deploy-*/SKILL.md
 .vscode/
-CLAUDE.md
-AGENTS.md
 RESUME.md
 
 # Tauri-generated schemas/permissions
@@ -38,3 +44,6 @@ app/github_client_id
 
 # Local workspace runtime state (new name)
 .ligus/
+
+# The relay chart, packaged for the ligus chart's optional dependency
+deploy/helm/ligus/charts/
