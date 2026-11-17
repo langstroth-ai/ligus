@@ -191,6 +191,21 @@ def test_no_generated_secrets():
     check("two renders are identical", a == b and a != "")
 
 
+# --- Test pods never hold the workspace key --------------------------------
+
+def test_test_pods_hold_no_workspace_key():
+    docs = render("--set", "workspace.relayAccessToken=true")
+    tests = [d for d in docs if d["kind"] == "Pod"
+             and (d["metadata"].get("annotations") or {}).get("helm.sh/hook") == "test"
+             and d["metadata"]["labels"].get("app.kubernetes.io/name") == "ligus"]
+    check("two ligus test pods", len(tests) == 2, str([t["metadata"]["name"] for t in tests]))
+    for t in tests:
+        items = [i for v in t["spec"].get("volumes") or [] if "secret" in v for i in v["secret"].get("items") or [{"key": "*"}]]
+        check("%s mounts no workspace key" % t["metadata"]["name"], all(i["key"] != "key" and i["key"] != "*" for i in items), str(items))
+        envs = [e for c in t["spec"]["containers"] for e in c.get("env") or []]
+        check("%s has no Secret in env" % t["metadata"]["name"], not any("valueFrom" in e and "secretKeyRef" in e["valueFrom"] for e in envs))
+
+
 # --- One identity, one writer ---------------------------------------------
 
 def test_single_writer_volumes():
@@ -229,7 +244,7 @@ def test_mcp_images_pinned():
     check("allowUnpinned opts out explicitly", any(d["kind"] == "Deployment" for d in docs))
 
 
-TESTS = [test_no_generated_secrets, test_dns_egress_is_scoped, test_egress_closed_and_metadata_blocked, test_serve_ingress_excludes_foreign_pods,
+TESTS = [test_no_generated_secrets, test_test_pods_hold_no_workspace_key, test_dns_egress_is_scoped, test_egress_closed_and_metadata_blocked, test_serve_ingress_excludes_foreign_pods,
          test_removed_values_refuse, test_secrets_are_files, test_single_writer_volumes,
          test_mcp_images_pinned]
 

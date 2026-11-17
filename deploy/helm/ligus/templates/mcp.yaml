@@ -50,7 +50,7 @@ spec:
       automountServiceAccountToken: false
       enableServiceLinks: false
       securityContext:
-        {{- toYaml $.Values.podSecurityContext | nindent 8 }}
+        {{- toYaml (default $.Values.podSecurityContext $s.podSecurityContext) | nindent 8 }}
       containers:
         - name: mcp
           image: {{ required "mcp.servers[].image is required" $s.image }}
@@ -59,7 +59,7 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           securityContext:
-            {{- toYaml $.Values.securityContext | nindent 12 }}
+            {{- toYaml (default $.Values.securityContext $s.securityContext) | nindent 12 }}
           ports:
             - name: http
               containerPort: {{ default 8080 $s.port }}

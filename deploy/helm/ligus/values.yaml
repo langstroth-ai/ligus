@@ -44,8 +44,7 @@ workspace:
     key: key
     # For relays that require an access token (hrt1...).
     relayAccessToken: relay-access-token
-  # The Secret holds secretKeys.relayAccessToken: mount it as
-  # LIGUS_RELAY_ACCESS_TOKEN_FILE.
+  # The Secret holds secretKeys.relayAccessToken: mount it too.
   relayAccessToken: false
   # Create the Secret yourself before installing (never commit it). The chart
   # generates nothing, so `helm template`, Argo CD and Flux render the same
@@ -143,7 +142,11 @@ worker:
   instances: []
   # - name: build-1
   #   permissionMode: acceptEdits   # overrides worker.permissionMode
-  #   resources: {}                 # overrides worker.resources
+  #   resources: {}
+  #   podSecurityContext: {}      # replaces the chart's (UID 65532, ...) for
+  #   securityContext: {}         # images that need another UID or a
+  #                               # writable root; keep Pod Security
+  #                               # "restricted" (non-root, no caps)                 # overrides worker.resources
   # LIGUS_WORKER_PERMISSION_MODE for CLI agents (for example acceptEdits).
   permissionMode: ""
   terminationGracePeriodSeconds: 60
@@ -302,3 +305,8 @@ affinity: {}
 tests:
   # Image for `helm test` client pods; defaults to the chart image.
   image: ""
+  # test-sync: sync through the relay on a throwaway workspace (test pods
+  # never hold the real workspace key). Turn off for a relay that admits only
+  # workspace-scoped tokens.
+  sync:
+    enabled: true

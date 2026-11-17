@@ -50,7 +50,10 @@ that runs a local program, so the chart fails closed:
   agent turn against an in-process stub model whose `run_command` must run and
   must not read `/proc/1/environ`, the data dir or the secret files. On a node
   that can't do it the pod stays in `Init` and is never Ready.
-- `helm test` runs the same turn (`test-sandbox`).
+- `helm test` runs the same turn (`test-sandbox`). Test pods never hold the
+  workspace key: `test-sync` checks sync through the relay on a throwaway
+  workspace it makes up (`tests.sync.enabled=false` for relays that admit only
+  workspace-scoped tokens).
 
 ## Install
 
@@ -115,12 +118,15 @@ that lands they still work, but don't build automation on them.
 
 Ligus's own secrets are files, never environment variables. They are mounted
 `0400` (with `fsGroup` the kubelet adds group read, so they end up `0440`
-`root:65532`) under `/etc/ligus/secrets`, passed as `LIGUS_*_FILE`, and denied
-to agent processes:
+`root:65532`) under `/etc/ligus/secrets`, and denied to agent processes. The
+workspace key goes through Ligus's k8s secret-store backend, so no environment
+variable overrides it on restart; the rest are `LIGUS_*_FILE` variables
+(the CLI also accepts `LIGUS_WORKSPACE_KEY_FILE` and
+`LIGUS_RELAY_ACCESS_TOKEN_FILE` outside the chart):
 
 | Secret | Value | Variable |
 |---|---|---|
-| workspace key (and relay access token) | `workspace.existingSecret` | `LIGUS_WORKSPACE_KEY_FILE`, `LIGUS_RELAY_ACCESS_TOKEN_FILE` |
+| workspace key (and relay access token) | `workspace.existingSecret` | Ligus's k8s secret store: `LIGUS_SECRET_BACKEND=k8s`, mounted as `cli.key` / `cli.token` in `LIGUS_SECRETS_DIR` |
 | workspace runtime credentials (one key per `secret_ref`) | `serve.workspaceSecrets.existingSecret`, `worker.workspaceSecrets.existingSecret` | `LIGUS_WS_SECRET_DIR` |
 | tunnel registration token | `remote.regTokenSecret` | `LIGUS_REMOTE_REG_TOKEN_FILE` |
 | ntfy token | `serve.ntfy.tokenSecret` | `LIGUS_NTFY_TOKEN_FILE` |
@@ -155,7 +161,7 @@ bump `podAnnotations`.
 | `serve.home.*` | 2Gi | `HOME`, its own volume |
 | `worker.enabled` / `instances[]` / `permissionMode` | off, `[]` | Named worker hosts: `{name, permissionMode?, resources?}` |
 | `agentSandbox.require` / `tier` / `preflight.*` | on, `landlock`, on | The agent sandbox, above |
-| `mcp.servers[]` | `[]` | `name`, `image` (pinned by digest; a tag needs `allowUnpinned: true`), `args`, `port`, `env`, `internetHttps` (default on), `egress`, `resources` |
+| `mcp.servers[]` | `[]` | `name`, `image` (pinned by digest; a tag needs `allowUnpinned: true`), `args`, `port`, `env`, `internetHttps` (default on), `egress`, `resources`, `podSecurityContext` / `securityContext` (replace the chart's UID 65532 and read-only root for images that need it) |
 | `networkPolicy.restrictEgress` | `true` | serve/worker egress: DNS, the relay, MCP servers, plus what you allow |
 | `networkPolicy.relayNamespace` | empty | A relay in this cluster |
 | `networkPolicy.allowInternetHttps` / `internetExcept` | off, metadata + private ranges | 443 to the internet, never cloud metadata (169.254.0.0/16, 100.100.100.200) or private ranges |

@@ -226,13 +226,14 @@ topology rule.
       key: {{ .Values.workspace.secretKeys.room }}
 # Secrets are files (mounted 0400), never environment variables: they stay
 # out of the pod spec, `kubectl describe` and /proc/<pid>/environ, and
-# Ligus denies the files to agent processes.
-- name: LIGUS_WORKSPACE_KEY_FILE
-  value: /etc/ligus/secrets/workspace/workspace-key
-{{- if .Values.workspace.relayAccessToken }}
-- name: LIGUS_RELAY_ACCESS_TOKEN_FILE
-  value: /etc/ligus/secrets/workspace/relay-access-token
-{{- end }}
+# Ligus denies the files to agent processes. The workspace key and relay
+# token are read through Ligus's k8s secret store (cli.key, cli.token in
+# LIGUS_SECRETS_DIR), the same place `ligus enroll` would keep them, so no
+# environment variable overrides them on restart.
+- name: LIGUS_SECRET_BACKEND
+  value: k8s
+- name: LIGUS_SECRETS_DIR
+  value: /etc/ligus/secrets/store
 {{- end -}}
 
 {{/*
@@ -270,7 +271,7 @@ values) component.
 {{/* Secret volume mounts for a host. Args: dict root v component. */}}
 {{- define "ligus.secretMounts" -}}
 - name: workspace-secret
-  mountPath: /etc/ligus/secrets/workspace
+  mountPath: /etc/ligus/secrets/store
   readOnly: true
 {{- if .v.workspaceSecrets.existingSecret }}
 - name: ws-secrets
@@ -302,9 +303,9 @@ Args: dict root v component.
     secretName: {{ include "ligus.workspaceSecretName" .root }}
     defaultMode: 0400
     items:
-      - { key: {{ .root.Values.workspace.secretKeys.key }}, path: workspace-key }
+      - { key: {{ .root.Values.workspace.secretKeys.key }}, path: cli.key }
       {{- if .root.Values.workspace.relayAccessToken }}
-      - { key: {{ .root.Values.workspace.secretKeys.relayAccessToken }}, path: relay-access-token }
+      - { key: {{ .root.Values.workspace.secretKeys.relayAccessToken }}, path: cli.token }
       {{- end }}
 {{- if .v.workspaceSecrets.existingSecret }}
 - name: ws-secrets
