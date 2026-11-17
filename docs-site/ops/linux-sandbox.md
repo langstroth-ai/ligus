@@ -20,6 +20,15 @@ agent sandbox: landlock
 | **landlock** | Linux 6.7+ with Landlock (ABI 4+) and seccomp | run, with the limits below |
 | **unconfined** | nothing | refused at every tier, read-only included, along with `run_command`, pre-flight tests and stdio MCP servers; HTTP models answer without local tools |
 
+In a Kubernetes Pod Security `restricted` pod (`RuntimeDefault` seccomp, no
+capabilities) bubblewrap can't create its namespaces, so **Landlock is the only
+tier there**; the Helm chart sets `LIGUS_SANDBOX=landlock` and
+`LIGUS_REQUIRE_SANDBOX=1` (serve and workers exit instead of starting
+unconfined) and checks the node with `ligus doctor --require-confined
+--expect-tier landlock --turn-test`, which runs one real turn against a stub
+model and exits non-zero if it isn't confined. See
+[Kubernetes](../deploy/kubernetes.md#supported-nodes-the-agent-sandbox).
+
 `LIGUS_SANDBOX=landlock` skips bubblewrap (to try the Landlock tier on a
 host that has both), `LIGUS_SANDBOX=bwrap` refuses the Landlock fallback,
 and `LIGUS_SANDBOX=off` runs unconfined.

@@ -1,14 +1,15 @@
-# Values for a kind/CI smoke install: a throwaway workspace against a relay
+# Values for a kind/CI smoke install: a throwaway workspace (Secret ws-smoke,
+# created by the workflow) against a relay
 # installed separately in namespace ligus-relay (release name ligus-relay,
-# Postgres enabled), the tunnel over in-cluster http, egress locked down and
-# the sandbox hardening Job.
+# Postgres enabled), the tunnel over in-cluster http and egress locked down.
 image:
   repository: ligus
   tag: dev
   pullPolicy: IfNotPresent
 relayUrl: http://ligus-relay-sync.ligus-relay.svc.cluster.local:8443
 workspace:
-  generate: true
+  # Created by the workflow (kubectl create secret, a throwaway room and key).
+  existingSecret: ws-smoke
 remote:
   enabled: true
   relayUrl: http://ligus-relay-tunnel.ligus-relay.svc.cluster.local:8443
@@ -16,17 +17,27 @@ remote:
 serve:
   persistence:
     size: 1Gi
+    accessMode: ReadWriteOnce
+  home:
+    size: 256Mi
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: "1", memory: 512Mi, ephemeral-storage: 1Gi }
+worker:
+  enabled: true
+  instances:
+    - name: w1
+  # kind's local-path provisioner is not CSI; ReadWriteOncePod needs a CSI
+  # driver, so CI uses ReadWriteOnce.
+  persistence:
+    size: 1Gi
+    accessMode: ReadWriteOnce
+  home:
+    size: 256Mi
   resources:
     requests: { cpu: 50m, memory: 64Mi }
     limits: { cpu: "1", memory: 512Mi, ephemeral-storage: 1Gi }
 networkPolicy:
   restrictEgress: true
   relayNamespace: ligus-relay
-sandbox:
-  enabled: true
-  smokeJob:
-    enabled: true
-  resources:
-    requests: { cpu: 50m, memory: 32Mi, ephemeral-storage: 64Mi }
-    limits: { cpu: 500m, memory: 256Mi, ephemeral-storage: 512Mi }
-  workSizeLimit: 256Mi
+  namespaceDefaultDeny: true

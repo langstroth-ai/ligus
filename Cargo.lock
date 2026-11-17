@@ -2500,6 +2500,7 @@ dependencies = [
  "hive-runtime",
  "hkdf",
  "hmac 0.13.0",
+ "libc",
  "qrcodegen",
  "reqwest",
  "serde",

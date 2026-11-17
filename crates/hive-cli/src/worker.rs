@@ -171,6 +171,48 @@ fn keyless_ok(wr: &WorkspaceRuntime) -> bool {
             && hive_core::endpoint::endpoint_is_local_server(&wr.endpoint))
 }
 
+/// Serve `GET /v1/health` (always 200 while the process runs, with the
+/// sandbox tier) and `GET /v1/ready` (200 once `ready` is set, else 503) on
+/// `addr`, for an orchestrator's liveness and readiness probes. Nothing else
+/// is served there and nothing secret is returned.
+pub async fn spawn_health(addr: &str, ready: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
+    use axum::{http::StatusCode, routing::get, Json, Router};
+    let tier = hive_runtime::executor::sandbox_status().tier();
+    let r = ready.clone();
+    let app = Router::new()
+        .route(
+            "/v1/health",
+            get(move || async move {
+                Json(serde_json::json!({ "ok": true, "version": env!("CARGO_PKG_VERSION"), "role": "worker", "sandbox": tier }))
+            }),
+        )
+        .route(
+            "/v1/ready",
+            get(move || {
+                let ok = r.load(std::sync::atomic::Ordering::Relaxed);
+                async move {
+                    let code = if ok { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
+                    (code, Json(serde_json::json!({ "ready": ok })))
+                }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| anyhow!("worker health listener {addr}: {e}"))?;
+    println!("worker: health on http://{}/v1/health", listener.local_addr()?);
+    tokio::spawn(async move {
+        if let Err(e) = axum::serve(listener, app).await {
+            eprintln!("worker: health listener stopped: {e}");
+        }
+    });
+    Ok(())
+}
+
+/// Where this host's local runtimes come from: `LIGUS_RUNTIMES_FILE` (a
+/// read-only mounted file, e.g. a Kubernetes ConfigMap), else
+/// `<data>/runtimes.toml`.
+pub fn local_runtimes_path(data_dir: &std::path::Path) -> std::path::PathBuf {
+    crate::env_opt("LIGUS_RUNTIMES_FILE").map(std::path::PathBuf::from).unwrap_or_else(|| data_dir.join(LOCAL_RUNTIMES_FILE))
+}
+
 /// The host-local runtimes file inside the data dir.
 pub const LOCAL_RUNTIMES_FILE: &str = "runtimes.toml";
 
@@ -190,7 +232,7 @@ struct LocalRuntimesToml {
 /// `id = "*"` catches every agent sent to this host whose runtime isn't known.
 /// It is the box owner's own config, never synced. Workspace runtimes win.
 pub fn local_runtimes(data_dir: &std::path::Path) -> Vec<WorkspaceRuntime> {
-    let path = data_dir.join(LOCAL_RUNTIMES_FILE);
+    let path = local_runtimes_path(data_dir);
     let Ok(text) = std::fs::read_to_string(&path) else {
         return Vec::new();
     };

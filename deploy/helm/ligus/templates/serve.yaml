@@ -35,7 +35,7 @@ spec:
     {{- include "ligus.selectorLabels" (dict "root" . "component" "serve") | nindent 4 }}
 ---
 # One identity, one writer: replicas is fixed at 1 and the data dir is a
-# ReadWriteOnce PVC. Never scale this, never share the volume.
+# ReadWriteOncePod PVC. Never scale this, never share the volume.
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -62,15 +62,18 @@ spec:
         {{- end }}
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secrets: {{ include "ligus.secretsChecksum" (dict "root" . "v" $v "component" "serve") }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
       {{- include "ligus.podSpecCommon" . | nindent 6 }}
       terminationGracePeriodSeconds: {{ $v.terminationGracePeriodSeconds }}
-      {{- if $v.runtimesToml }}
+      {{- if .Values.agentSandbox.preflight.enabled }}
       initContainers:
-        {{- include "ligus.runtimesInit" (dict "root" .) | nindent 8 }}
+        {{- if .Values.agentSandbox.preflight.enabled }}
+        {{- include "ligus.preflightInit" (dict "root" . "env" (print (include "ligus.commonEnv" .) "\n" (include "ligus.hostSecretEnv" (dict "root" . "v" $v "component" "serve"))) "mounts" (include "ligus.serveMounts" .)) | nindent 8 }}
+        {{- end }}
       {{- end }}
       containers:
         - name: serve
@@ -108,6 +111,10 @@ spec:
             - name: LIGUS_SERVE_APPLY_ON_APPROVE
               value: "1"
             {{- end }}
+            {{- if $v.runtimesToml }}
+            - name: LIGUS_RUNTIMES_FILE
+              value: /etc/ligus/runtimes/runtimes.toml
+            {{- end }}
             {{- if $v.mcpToml }}
             - name: LIGUS_MCP_CONFIG
               value: /etc/ligus/config/mcp.toml
@@ -121,13 +128,6 @@ spec:
               value: {{ $v.ntfy.url | quote }}
             - name: LIGUS_NTFY_TOPIC
               value: {{ $v.ntfy.topic | quote }}
-            {{- if $v.ntfy.tokenSecret.name }}
-            - name: LIGUS_NTFY_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ $v.ntfy.tokenSecret.name }}
-                  key: {{ $v.ntfy.tokenSecret.key }}
-            {{- end }}
             {{- end }}
             {{- if .Values.remote.enabled }}
             - name: LIGUS_REMOTE_RELAY
@@ -136,22 +136,11 @@ spec:
             - name: LIGUS_REMOTE_INSECURE_RELAY
               value: "1"
             {{- end }}
-            {{- if .Values.remote.regTokenSecret.name }}
-            - name: LIGUS_REMOTE_REG_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.remote.regTokenSecret.name }}
-                  key: {{ .Values.remote.regTokenSecret.key }}
             {{- end }}
-            {{- end }}
+            {{- include "ligus.hostSecretEnv" (dict "root" . "v" $v "component" "serve") | nindent 12 }}
             {{- with $v.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- with $v.secretEnv.existingSecret }}
-          envFrom:
-            - secretRef:
-                name: {{ . }}
-          {{- end }}
           startupProbe:
             httpGet: { path: /v1/health, port: http }
             periodSeconds: {{ $v.startupProbe.periodSeconds }}
@@ -168,21 +157,9 @@ spec:
           resources:
             {{- toYaml $v.resources | nindent 12 }}
           volumeMounts:
-            - name: data
-              mountPath: /var/lib/ligus
-            # Same volume, its own subdirectory: CLI logins persist, outside
-            # the data dir agents can't read.
-            - name: data
-              mountPath: /home/ligus
-              subPath: home
-            - name: tmp
-              mountPath: /tmp
-            {{- if or $v.mcpToml $v.dashboardToml }}
-            - name: config
-              mountPath: /etc/ligus/config
-              readOnly: true
-            {{- end }}
+            {{- include "ligus.serveMounts" . | nindent 12 }}
       volumes:
+        {{- include "ligus.secretVolumes" (dict "root" . "v" $v "component" "serve") | nindent 8 }}
         - name: tmp
           emptyDir:
             sizeLimit: 1Gi
@@ -206,16 +183,6 @@ spec:
               - { key: runtimes.toml, path: runtimes.toml }
         {{- end }}
   volumeClaimTemplates:
-    - metadata:
-        name: data
-        labels:
-          {{- include "ligus.selectorLabels" (dict "root" . "component" "serve") | nindent 10 }}
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        {{- with $v.persistence.storageClass }}
-        storageClassName: {{ . }}
-        {{- end }}
-        resources:
-          requests:
-            storage: {{ $v.persistence.size }}
+    {{- include "ligus.claimTemplates" (dict "root" . "v" $v "component" "serve") | nindent 4 }}
 {{- end }}
+

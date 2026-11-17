@@ -1,8 +1,12 @@
-{{- if .Values.serve.enabled }}
+{{- if and .Values.serve.enabled .Values.tests.sync.enabled }}
 {{- $fullname := include "ligus.fullname" . -}}
-# End-to-end check through the relay with two fresh client identities (each
-# its own data dir, standing in for desktops): the serve host is visible, and
-# a chat created by one client arrives at the other.
+# serve answers, and sync works end to end through the relay: two fresh
+# client identities (each its own data dir, standing in for desktops) on a
+# THROWAWAY workspace this pod makes up, so a chat created by one arrives at
+# the other. The pod never holds the real workspace key, so it is kept after
+# the run (the next helm test replaces it) for `helm test --logs`, which reads
+# the logs once the whole suite is done. It needs a relay that admits a new room: with
+# workspace-scoped relay tokens set tests.sync.enabled=false.
 apiVersion: v1
 kind: Pod
 metadata:
@@ -13,7 +17,7 @@ metadata:
     ligus.ai/role: test
   annotations:
     helm.sh/hook: test
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-delete-policy: before-hook-creation
 spec:
   restartPolicy: Never
   {{- include "ligus.podSpecCommon" . | nindent 2 }}
@@ -28,22 +32,31 @@ spec:
           curl_health() { exec 3<>/dev/tcp/{{ $fullname }}-serve/{{ .Values.serve.service.port }}; printf 'GET /v1/health HTTP/1.0\r\nHost: x\r\n\r\n' >&3; head -1 <&3; }
           echo "serve health: $(curl_health)"
           curl_health | grep -q ' 200 '
+          # A throwaway workspace: nobody else holds this key.
+          export LIGUS_WORKSPACE="k8s-test-$(cat /proc/sys/kernel/random/uuid)"
+          export LIGUS_WORKSPACE_KEY="$(head -c 36 /dev/urandom | base64)"
           marker="k8s-smoke-$(date +%s)-$RANDOM"
-          unset LIGUS_DATA_DIR
           mkdir -p /work/a /work/b
           export LIGUS_DATA_DIR=/work/a
           ligus sync
           ligus new "$marker" >/work/chat-id
           ligus sync
-          echo "hosts seen by client A:"
-          ligus hosts | tee /work/hosts
-          grep -q '{{ $fullname }}-serve-0\|serve' /work/hosts
           export LIGUS_DATA_DIR=/work/b
           for i in 1 2 3 4 5; do ligus sync >/dev/null; ligus chats | grep -q "$marker" && break; sleep 2; done
           ligus chats | grep "$marker"
           echo "sync OK: chat created by client A arrived at client B through the relay"
       env:
-        {{- include "ligus.commonEnv" . | nindent 8 }}
+        - name: HOME
+          value: /work
+        - name: LIGUS_RELAY_URL
+          value: {{ include "ligus.relayUrl" . | quote }}
+        {{- if .Values.workspace.relayAccessToken }}
+        # Only the relay access token, from the same Secret; never the key.
+        - name: LIGUS_SECRET_BACKEND
+          value: k8s
+        - name: LIGUS_SECRETS_DIR
+          value: /etc/ligus/secrets/store
+        {{- end }}
       securityContext:
         {{- toYaml .Values.securityContext | nindent 8 }}
       resources:
@@ -52,9 +65,20 @@ spec:
       volumeMounts:
         - { name: work, mountPath: /work }
         - { name: tmp, mountPath: /tmp }
+        {{- if .Values.workspace.relayAccessToken }}
+        - { name: relay-token, mountPath: /etc/ligus/secrets/store, readOnly: true }
+        {{- end }}
   volumes:
     - name: work
       emptyDir: {}
     - name: tmp
       emptyDir: {}
+    {{- if .Values.workspace.relayAccessToken }}
+    - name: relay-token
+      secret:
+        secretName: {{ include "ligus.workspaceSecretName" . }}
+        defaultMode: 0400
+        items:
+          - { key: {{ .Values.workspace.secretKeys.relayAccessToken }}, path: cli.token }
+    {{- end }}
 {{- end }}

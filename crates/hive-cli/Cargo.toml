@@ -48,6 +48,10 @@ chacha20poly1305 = "0.11"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 tower = { version = "0.5", default-features = false, features = ["util"] }
 
+# prctl(PR_SET_DUMPABLE) for the long-running hosts (src/hardening.rs).
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 # Tests answer passkey prompts with a test recovery key (never in a real build).
 hive-runtime = { path = "../hive-runtime", features = ["test-presence"] }
