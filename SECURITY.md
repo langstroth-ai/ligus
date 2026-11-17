@@ -35,16 +35,19 @@ In scope:
 - **Tauri IPC / desktop app** boundaries.
 
 Out of scope: vulnerabilities in third-party model providers or MCP servers you
-choose to run; social-engineering; issues requiring a already-compromised device.
+choose to run; social-engineering; issues requiring an already-compromised device.
 
 ## Supported versions
 
-Ligus is pre-1.0 and moves fast — fixes land on `main`. Please test against the
-latest `main` (or the newest release) before reporting.
+Only the newest release is supported. Please test against it (or the latest
+`main`) before reporting.
+
+**Policy:** security fixes ship inside the next release; there are no patch
+releases of older versions. Fixes found before 2.0.0 are bundled into 2.0.0.
 
 ## Handling
 
-Valid reports are fixed on `main` with a GitHub Security Advisory and credit to
+Valid reports are fixed in the next release, with a GitHub Security Advisory and credit to
 the reporter (unless you prefer to remain anonymous). Because the desktop client
 is a single OSS binary and the relay is self-hostable, please note in your report
 whether the issue affects self-hosted deployments so we can advise operators.

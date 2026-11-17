@@ -17,22 +17,22 @@ only from the workspace's own signed log and your safety code.
 | GitHub (and GitHub Enterprise added on your device) | `GET /user/{id}` → login, `/users/{login}/keys` and `/ssh_signing_keys`, then `/user/{id}` again: the login must not change during the check | numeric user id | add your Ligus key as a **signing key** |
 | GitLab (gitlab.com and self-managed) | `GET /users/{id}/keys`, by id | numeric user id | add your Ligus key with usage type **Signing** |
 | Codeberg, Forgejo, Gitea | `GET /api/v1/users/search?uid={id}` → login, `{base}/{login}.keys`, then the uid search again | numeric user id | none: keys there grant push access |
-| SourceHut | `https://meta.sr.ht/~{user}.keys` | none public: links are **bound to the name** | none |
-| Tangled | DID document (`plc.directory` or `did:web`) → its PDS → `com.atproto.repo.listRecords` of `org.tangled.key.sshKey` (and, best effort, the legacy `sh.tangled.publicKey`) | atproto DID | none |
 
 Every request is anonymous (no token, no cookie), goes straight to the
 forge (never through your relay), follows no redirect, gives up after 10
 seconds or 256 KiB, and goes only to the forges listed above or the
-self-managed ones you added on that device. Tangled support follows the
-`org.tangled.*` lexicon that replaced `sh.tangled.*` on 2026-10-30; it is best
-effort while that lexicon settles.
+self-managed ones you added on that device. Ligus never contacts a host
+that a link names.
+
+2.0 no longer checks SourceHut or Tangled links. A link of either kind made
+by a 2.0 pre-release still shows, as **self-asserted** (a claim, never
+verified), and neither forge is offered for a new link.
 
 ## Link an account
 
 Settings → **Profile** → **Linked accounts** → **Link an account**:
 
-1. Pick the forge and type your username (SourceHut: `~name`; Tangled: your
-   handle or DID). Ligus asks the forge for your stable id and shows
+1. Pick the forge and type your username. Ligus asks the forge for your stable id and shows
    "alice (id 1234567)".
 2. Tick the workspaces to show it in. Optionally also put it on this
    device's contact card (people who have your card see it).
@@ -72,7 +72,7 @@ the signing list, not the SSH (push) keys, so it grants no access. But it
 puts your Ligus key on your public forge profile: **anyone can see that your
 Ligus account and that forge account are the same person**, for as long as
 the key stays there. The app says this before you choose it. It is not
-offered on Codeberg, Forgejo, Gitea or SourceHut, where a listed key can push.
+offered on Codeberg, Forgejo or Gitea, where a listed key can push.
 
 ## What people see
 
@@ -81,11 +81,10 @@ Links show as chips beside a person on **People**, and in your own list:
 | Chip | Meaning |
 |---|---|
 | **verified** | This device asked the forge (within the last 24 hours) and it lists the key that signed the link, under the stable id. The chip shows the forge's *current* handle with the id beside it. |
-| **verified by name** | SourceHut: the forge lists the key under that name, but SourceHut has no public stable id, so a reused name could match. |
 | **stale** | The forge no longer lists the key (removed or rotated), the forge account is gone, or your account key changed since you signed. Re-link to fix it. |
 | **expired** | The link's year ran out. |
 | **unverified** | Not checked yet, the forge couldn't be reached, forge checks are off on this device ("signature valid"), or the forge isn't one this device asks. |
-| **self-asserted** | A forge without a public key list (2.x). Never shown as verified. |
+| **self-asserted** | A claim only: a forge Ligus doesn't check (a SourceHut or Tangled link from a 2.0 pre-release, or a forge without a public key list). Never shown as verified. |
 
 A link whose statement or signature doesn't check out isn't shown at all.
 

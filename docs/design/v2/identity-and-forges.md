@@ -2,6 +2,8 @@
 
 Status: design spec, written 2026-11-14. Nothing was implemented. All repositories were opened read-only. Ligus is short for *ligustica*.
 
+**Amendment 2026-11-16 (owner decision; the code wins).** 2.0 dropped the SourceHut and Tangled identity-link verifiers. The rows for them in §2.3, the sr.ht "verified by name" residual in S1, the atproto PDS/DID fetching and the reserved `AtprotoRecord` and `OidcAttestation` methods below are superseded. A link naming `sourcehut` or `tangled` still folds unchanged (the wire shape, the statement and `ligus-identity-link-v1@ligus.ai` are untouched) and is shown as self-asserted, never verified (`hive_core::identity_link::DROPPED_PROVIDERS`). A method this build doesn't know, `atprotoRecord` and `oidcAttestation` included, folds through the `#[serde(other)]` arm and shows as "not checked".
+
 **Scope.**
 
 | What | Where | Branch |

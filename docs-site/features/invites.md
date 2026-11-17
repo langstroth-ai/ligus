@@ -86,8 +86,10 @@ In **People** (left rail), pick the person and **Invite to…** a workspace you
 administer. Ligus:
 
 1. Takes their devices' encryption keys from the signed logs of a workspace
-   you share (never from a server), and refuses if your workspaces disagree
-   about their account key.
+   you share (never from a server). If your workspaces disagree about their
+   account key, the earliest-pinned one stands and the others are marked as
+   disputing them; Ligus refuses only when every workspace that registers a
+   key for them disputes it.
 2. Issues a single-use invite on the target workspace's log.
 3. **Seals it to their devices** and drops it into their contact box on the
    relay (relay v0.3). It shows up for them as a banner they accept or dismiss.

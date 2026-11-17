@@ -170,11 +170,11 @@ function handle(cmd: string, args: Args): unknown {
       return [];
     case "my_identity_links":
       return [
-        { linkId: "l-1", provider: "github", host: "github.com", handle: "zaz", subjectId: "1234567", method: "sshSig", issuedAt: "2026-11-14T12:00:00Z", expiresAt: "2027-11-14T12:00:00Z", workspaces: [{ id: "w-bees", name: "Bees" }], discoverable: false, status: { state: "verified", checkedAt: "2026-11-14T12:00:00Z", handle: "zaz", nameBound: false } },
+        { linkId: "l-1", provider: "github", host: "github.com", handle: "zaz", subjectId: "1234567", method: "sshSig", issuedAt: "2026-11-14T12:00:00Z", expiresAt: "2027-11-14T12:00:00Z", workspaces: [{ id: "w-bees", name: "Bees" }], discoverable: false, status: { state: "verified", checkedAt: "2026-11-14T12:00:00Z", handle: "zaz" } },
       ];
     case "identity_link_statuses":
       return [
-        { linkId: "l-2", provider: "forgejo", host: "codeberg.org", handle: "maya", subjectId: "48213", method: "sshSig", issuedAt: "2026-11-01T12:00:00Z", expiresAt: "2027-11-01T12:00:00Z", workspaces: [{ id: "w-bees", name: "Bees" }], discoverable: false, status: { state: "verified", checkedAt: "2026-11-14T12:00:00Z", handle: "maya", nameBound: false } },
+        { linkId: "l-2", provider: "forgejo", host: "codeberg.org", handle: "maya", subjectId: "48213", method: "sshSig", issuedAt: "2026-11-01T12:00:00Z", expiresAt: "2027-11-01T12:00:00Z", workspaces: [{ id: "w-bees", name: "Bees" }], discoverable: false, status: { state: "verified", checkedAt: "2026-11-14T12:00:00Z", handle: "maya" } },
       ];
     case "identity_link_settings":
       return { checkForges: true, forges: [] };

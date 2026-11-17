@@ -532,7 +532,10 @@ The full [security model](../security/index.md), the
 [threat model and known limitations](../security/threat-model.md), and the
 [incident runbooks](../security/runbooks.md) have their own section.
 
-Private key seeds live as files on disk, not in an OS keystore — see
+Private key seeds live in the OS secret store: on macOS a dedicated
+keychain file inside the data dir, on a Linux desktop the Secret Service
+(through `secret-tool`), on a headless Linux box `systemd-creds`; owner-only
+files are a stated fallback only where no store works. See
 [Identity & devices](identity.md#key-storage) for what protects them and
 [Self-hosting a relay](../networking/self-host.md) for connection-level access
 control.

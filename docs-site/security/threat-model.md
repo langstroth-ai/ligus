@@ -147,9 +147,8 @@ encryption and OS account separation are the protection; see
 
 ## Known limitations {#known-limitations}
 
-Stated plainly, as of 2.0.0. Items marked **(Phase 0, Track B)** or
-**(Phase 0, Track D)** are planned for the rest of the Phase 0 refactor;
-each stays on this list until a release fixes it.
+Stated plainly, as of 2.0.0. Each stays on this list until a release fixes
+it.
 
 1. **Secrets in the OS secret store, with a file fallback.** Account,
    device and key-agreement seeds, the workspace passphrase and epoch keys,
@@ -207,8 +206,11 @@ each stays on this list until a release fixes it.
    invite to a co-member and a new DM are sealed only to keys published,
    signed, by devices certified for that account on a workspace you share.
    That is as strong as that shared workspace's binding of the account key
-   (first registration wins there); two workspaces that disagree block
-   sealing. Someone you share no workspace with is anchored only by the
+   (first registration wins there). When two workspaces disagree about the
+   key, the one a founder pin names, else the earliest-pinned workspace's,
+   stands; the other workspace is marked as disputing that person and
+   nothing from it is used for them. Sealing is refused only when every
+   workspace that registers a key for them disputes it. Someone you share no workspace with is anchored only by the
    safety code you compare out of band: skip the comparison and the first
    contact is trust on first use. Display names are not identity; an invite
    that names a co-member but carries another key is refused.
@@ -254,65 +256,68 @@ each stays on this list until a release fixes it.
    and the vote counts as the passkey's account. Without it the box answers
    `403 presence_required` and every device's fold drops such a vote.
 9. **Some agents still ask for actions in reply text.** Agents with tool use
-   get the typed [Ligus tools](../addons/ligus-mcp.md), and the subscription
-   CLIs run over [ACP](../addons/acp.md). aider, pi, Hermes, and Codex and
-   Antigravity on their headless adapters still use the `[[…]]` directives,
+   get the typed [Ligus tools](../addons/ligus-mcp.md). Copilot and
+   Antigravity run over [ACP](../addons/acp.md); Codex and Claude Code do
+   when their ACP adapter is installed, and Claude Code only with an API key
+   set in Ligus and outside restricted-egress chats: a Claude subscription
+   stays on `claude -p`. A turn whose ACP start fails falls back to the
+   headless adapter. aider, pi, Hermes, and Codex and Antigravity on their
+   headless adapters still use the `[[…]]` directives,
    which every host (desktop, worker, serve) now parses the same way. A
    directive can file only what the matching tool can.
-12. **Agents can read every chat in the workspace.** `ligus_read_chat` reads
+10. **Agents can read every chat in the workspace.** `ligus_read_chat` reads
     any chat of the workspace the agent runs in (by design), so a prompt
     injection planted in one chat can reach agents working in another. Read
     results are marked as data, every read is in the device-local audit with
     the chat it read, and reads are budgeted (500 messages per turn). A
     locked-down or allow-listed chat can't be read from a chat with wider
     egress.
-13. **A paused turn holds its host.** A turn waiting on `ligus_ask_human` or
+11. **A paused turn holds its host.** A turn waiting on `ligus_ask_human` or
     an ACP permission request keeps its process and chat until someone
     answers or its timeout passes (at most an hour; 10 minutes for permission
     requests). Stop the turn to release it. A restart cancels it; questions
     can't be resumed in 2.0.
-10. **Sign counters aren't checked.** Synced passkeys report a signature
+12. **Sign counters aren't checked.** Synced passkeys report a signature
     counter of 0, so Ligus doesn't use it to detect cloned authenticators.
-11. **No account-key rotation.** The core supports rotating an account key,
+13. **No account-key rotation.** The core supports rotating an account key,
     but nothing in the app or CLI exposes it. A leaked account key means a new
     account.
-12. **Removal is not erasure.** A removed member keeps everything they already
+14. **Removal is not erasure.** A removed member keeps everything they already
     synced. Rotation protects only what comes after.
-13. **Roles don't limit reading.** Every member can read the whole workspace.
-14. **The relay's open mode is open.** Without a token gate, anyone who knows
+15. **Roles don't limit reading.** Every member can read the whole workspace.
+16. **The relay's open mode is open.** Without a token gate, anyone who knows
     the URL can store ciphertext on it and read ciphertext of workspaces whose
     ids they know. On an open relay that keeps state in memory, set
     `LIGUS_RELAY_MAX_STORE_BYTES` so writes can't exhaust its memory.
-15. **The relay sees metadata** (above), including which contact ids get
+17. **The relay sees metadata** (above), including which contact ids get
     drops and when. The relay's admin
     API isn't in the open-source build, so per-person relay tokens need signed
     tokens (short-lived ones from [ligus-auth](../deploy/ligus-auth.md), for
     example) or a restart to change an allowlist.
-16. **The direct phone path is plain HTTP.** Use the relay tunnel or a
+18. **The direct phone path is plain HTTP.** Use the relay tunnel or a
     tailnet, or a LAN you trust. Invite codes, code-host tokens and device
     sign-in codes are refused on it (tunnel or loopback only), but chat
     content and the bearer token still cross it.
-17. **One `serve.token` for every direct-path client.** Revoking one direct
+19. **One `serve.token` for every direct-path client.** Revoking one direct
     phone means rotating it for all. Tunnel phones are revoked one by one.
-18. **Revoking a device doesn't rotate the key.** A revoked device's new
+20. **Revoking a device doesn't rotate the key.** A revoked device's new
     events are refused, but it still holds every key it had until an Admin
     rotates ([Rotate the workspace key](runbooks.md#rotate-workspace-key)).
     A removed member who writes with an old key is refused once a device
     knows of the removal; an event already accepted before that stays (the
     choice of what was accepted depends on arrival, like revocation).
-19. **A linked account proves "the forge says so", nothing more.** A forge
-    (or, for Tangled, a PDS or the PLC directory) can list any key for any
-    of its users, so it can make a link verify. Links never grant
-    membership, roles or sealing trust. A verified status is cached on a
-    device for up to 24 hours, so a key removed from the forge keeps a link
-    verified that long. SourceHut has no public stable id, so its links are
-    bound to a name that could be reused. Checking a link tells the forge
+21. **A linked account proves "the forge says so", nothing more.** A forge
+    can list any key for any of its users, so it can make a link verify.
+    Links never grant membership, roles or sealing trust. A verified status
+    is cached on a device for up to 24 hours, so a key removed from the forge
+    keeps a link verified that long. SourceHut and Tangled links from a 2.0
+    pre-release are shown as self-asserted and never verified. Checking a link tells the forge
     that your device looked. See [Linked accounts](../features/linked-identities.md#privacy).
-20. **Pre-encryption history isn't shown.** A device with a workspace key
+22. **Pre-encryption history isn't shown.** A device with a workspace key
     never applies a plaintext body from the relay, so events a workspace
     stored on a relay before it had a key don't appear on devices that sync
     them later. Devices that already held them keep them.
-21. **A shell-tier Claude Code turn holds your Claude account.** Ligus
+23. **A shell-tier Claude Code turn holds your Claude account.** Ligus
     starts Claude Code without cloud routines, scheduled tasks, background
     monitors, push, your plugins, hooks or MCP servers
     ([details](../concepts/security.md#claude-code-turn)), but at the
@@ -324,7 +329,7 @@ each stays on this list until a release fixes it.
     a non-shell tier for chats whose input you don't trust. Copilot and
     Antigravity still load your own MCP servers and plugins (no strict
     switch), and Codex over ACP isn't confined to Ligus's MCP servers yet.
-22. **A backdated config frontier keeps an old role.** Each event stamps
+24. **A backdated config frontier keeps an old role.** Each event stamps
     the config-log position its author had seen, and is judged at that
     position. Nothing yet stops a demoted or removed member from naming a
     position from before the change, so their new events are judged at
@@ -333,7 +338,7 @@ each stays on this list until a release fixes it.
     judges, so a proposal filed after the demotion reached them isn't
     swayed), and rotating the key after a removal cuts off a removed
     member's new traffic.
-23. **A human click runs others' text at the clicker's tier.** Some
+25. **A human click runs others' text at the clicker's tier.** Some
     actions place text someone else wrote into a prompt that runs as the
     person who clicked: **Send back to revise** (the review thread),
     **Implement** on an approved instruction proposal (the agent is sent
@@ -342,7 +347,7 @@ each stays on this list until a release fixes it.
     That is a prompt-injection surface at your role; read what you are
     sending before you click. Automatic board pickup doesn't have this
     problem: it runs below every floor.
-24. **LSP servers and the terminal panel run unconfined.** They are your
+26. **LSP servers and the terminal panel run unconfined.** They are your
     own tools, started for you, and run outside the agent sandbox with your
     OS user's access, by design. A repository's language-server config or a
     command you paste into the terminal runs with everything you can reach.
