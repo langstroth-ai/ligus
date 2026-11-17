@@ -378,10 +378,9 @@ export const exportChat = (sessionId: string) =>
 export const saveAttachment = (name: string, dataBase64: string) =>
   invoke<string>("save_attachment", { name, dataBase64 });
 
-/// Share an attachment so other workspace members can receive it: uploads the
-/// sealed file to the relay's blob channel and returns the `[Attached-blob: …]`
-/// marker to embed. Falls back to a local `[Attached: <path>]` marker when no
-/// relay is configured (only this device can open it).
+/// Turn a composer attachment into the marker to embed. Relay upload is off in
+/// this release (a code-only guard in the backend, no setting), so this returns
+/// a device-local `[Attached: <path>]` marker (only this device can open it).
 export const shareAttachment = (sessionId: string, path: string) =>
   invoke<string>("share_attachment", { sessionId, path });
 

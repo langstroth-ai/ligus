@@ -130,8 +130,18 @@ pub fn open_with_ring(ring: &KeyringEngine, framed: &[u8]) -> Option<Vec<u8>> {
     ring.keys_for(version, None).into_iter().find_map(|k| open_framed(k, framed))
 }
 
+/// The one switch for uploading attachments to the relay blob channel. It is
+/// off in 0.1.0: the sealing, framing, download and marker code stays in the
+/// tree but dormant until secure attachments ship
+/// (https://github.com/langstroth-ai/ligus/issues/118). There is deliberately
+/// no setting, environment variable or UI control for it; while it is `false`,
+/// [`upload`] refuses before sealing or contacting the relay, and the desktop
+/// keeps attachments as device-local `[Attached: <path>]` markers.
+pub const RELAY_ATTACHMENT_UPLOAD_ENABLED: bool = false;
+
 /// Seal `plaintext`, upload it to the workspace's relay blob channel, and return
 /// the reference to embed in the message. `id` is caller-chosen (a UUID).
+/// Refused while [`RELAY_ATTACHMENT_UPLOAD_ENABLED`] is off.
 pub async fn upload(
     client: &RelayClient,
     workspace: &str,
@@ -141,6 +151,11 @@ pub async fn upload(
     content_type: &str,
     plaintext: &[u8],
 ) -> Result<BlobRef, RelayError> {
+    if !RELAY_ATTACHMENT_UPLOAD_ENABLED {
+        return Err(RelayError::Message(
+            "attachment upload to the relay is off in this release (see https://github.com/langstroth-ai/ligus/issues/118)".into(),
+        ));
+    }
     let framed = seal_with_ring(ring, plaintext)?;
     client.put_blob(workspace, id, framed).await?;
     Ok(BlobRef {
@@ -223,6 +238,32 @@ pub async fn materialize_body(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// While the guard is off, `upload` refuses and never opens a connection
+    /// to the relay: no ciphertext leaves the device.
+    #[tokio::test]
+    async fn upload_is_refused_while_the_guard_is_off() {
+        if RELAY_ATTACHMENT_UPLOAD_ENABLED {
+            return; // the guard was turned on deliberately; nothing to prove here
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let contacted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = contacted.clone();
+        let server = tokio::spawn(async move {
+            if listener.accept().await.is_ok() {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+        let client = RelayClient::new(format!("http://{addr}"));
+        let ring = KeyringEngine::passphrase(uuid::Uuid::new_v4(), [9u8; 32]);
+        let res = upload(&client, "room", &ring, "blob-1", "a.txt", "text/plain", b"secret bytes").await;
+        let err = res.expect_err("upload must be refused while the guard is off");
+        assert!(err.to_string().contains("off in this release"), "{err}");
+        tokio::task::yield_now().await;
+        assert!(!contacted.load(std::sync::atomic::Ordering::SeqCst), "the relay was contacted");
+        server.abort();
+    }
 
     #[test]
     fn seal_open_round_trip() {

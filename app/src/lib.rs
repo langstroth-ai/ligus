@@ -3727,7 +3727,9 @@ pub(crate) fn workspace_ring(state: &AppState, room: &str, conn: Option<&Workspa
     hive_runtime::keyring::KeyringEngine::from_store(svc.store(), room_workspace_id(room), &src)
 }
 
-/// Share a composer attachment so every workspace member can receive it: seal the
+/// Share a composer attachment. Relay upload is off in this release
+/// (`RELAY_ATTACHMENT_UPLOAD_ENABLED`), so this returns the device-local
+/// `[Attached: <path>]` marker. With the guard on: seal the
 /// file with the workspace key, upload the ciphertext to the relay's blob channel,
 /// and return the `[Attached-blob: …]` marker to embed in the message. When no
 /// relay is configured, falls back to today's local-only `[Attached: <path>]`
@@ -3756,6 +3758,12 @@ async fn share_attachment(
         }
     }
 
+    // Relay attachment upload is off in this release (one guard, no setting):
+    // keep the device-local path marker. See
+    // hive_runtime::attachment_blob::RELAY_ATTACHMENT_UPLOAD_ENABLED.
+    if !hive_runtime::attachment_blob::RELAY_ATTACHMENT_UPLOAD_ENABLED {
+        return Ok(format!("[Attached: {}]", p.display()));
+    }
     let Some((url, room, ring)) = blob_transport(&state) else {
         // Local-only: no relay, so keep the path marker (unchanged behavior).
         return Ok(format!("[Attached: {}]", p.display()));
