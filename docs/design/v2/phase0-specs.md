@@ -63,6 +63,33 @@ New `FlowRecord` kinds:
 
 `humanAsk`, `humanAnswered`, `turnToolSummary`, `agentOutcomeSummary`.
 
+Phase A (2026-11-16) adds these `SessionEvent` kinds: `proposalApplyRequested`, `workspaceRepoAdded`, `workspaceRepoUpdated`, `workspaceRepoRemoved`, `chatRepoSet`, `chatBasePinned`. It adds **no** domain string. `ligus-proposal-digest-v1\0` is redefined before its first release (section 0.2). A P-256 device certificate appends `\0alg=p256` to the frozen `hive-device-cert-v1` preimage; that is an algorithm tag inside the existing context, not a new context, and the Ed25519 preimage is unchanged. `LIGUS_REPO_NS` (`crates/hive-core/src/workspace_repo.rs`) is a UUIDv5 namespace for repo ids, not a domain string, and joins the frozen namespaces of rule 1.
+
+### 0.2 The 2.0 wire freeze (Phase A, 2026-11-16)
+
+Everything that changes signed or wire semantics before 2.0 landed in Phase A (branch `phaseA/protocol`). From here, the 2.0 wire is frozen: rule 1 applies to every kind, field and preimage below, and later changes are additive only (rule 3).
+
+**Pinned by tests.**
+- `golden/envelopes_v3.jsonl`: a signed vector for **every** `SessionEvent` kind, and the Phase A field shapes. `golden_coverage.rs` fails the build when a variant has no tag (an exhaustive match) and the tests when a known kind has no vector; `raw_bytes.rs` checks every line verifies byte for byte.
+- `golden/p256_cryptokit.jsonl`: phone signatures from Apple CryptoKit `P256.Signing` (`scripts/p256-vectors/sign.swift`), verified over the exact envelope preimage.
+- `digest_vector` (the proposal digest, cross-checked with an independent Python computation), `host_beat_wire_is_frozen`, the presence vectors, and the relay's `TestContactRoutesMatchGolden` (`testdata/golden_v03_contacts.json`, relay repo, next to the `/v1` route goldens).
+
+**What Phase A froze.**
+
+| Area | Wire | Fold rule |
+|---|---|---|
+| Rules (item 1) | Every workspace is on rules v2 from its seed; `ensure_workspace_config` writes `WorkspaceRulesSet { version: 2, presence }` at genesis | No rules v1. The genesis rules set is the only one without presence. An Admin sets the RP; only the Owner changes the version. The seed grants the founder one first-credential registration; there is no TOFU |
+| Relying party (item 5) | `WorkspaceRulesSet.presence: { rpId, origins }` | Presence verifies under the workspace's RP (default `ligus.ai`); a change needs presence under the old RP |
+| Watermarks (item 2) | `ActorStamp.prev` (the signer's previous event on the log); `watermark: [{signer, log, heads}]` on `MemberRemoved`, `MemberRoleChanged`, `DeviceRevoked` | An event a cut concerns that isn't reachable back from its heads is judged at max(its frontier, the cut); a revoked device's never folds; on the config log such events before the cut are denied |
+| Vote digest (item 3) | `diff_digest` preimage adds proposal id, repo id, base commit (length-prefixed, empty when absent) | `repo_id` derived from the chat's repo at creation and sticky; a base change clears votes |
+| Turn claims (item 4) | (no change) | A `TurnClaimed` counts only from the device it names |
+| Repos (item 6) | `WorkspaceRepoAdded/Updated/Removed`, `ChatRepoSet`, `ChatBasePinned`, `ActionProposal.{repoId, baseCommit, baseRef, producedOn}`, host beat `seq` and `coverage` | Admin (+presence for add/remove); normal-form canonical and derived id; a chat repo must be live; never an agent's or a runtime's choice |
+| Apply (item 6) | `ProposalApplyRequested { request }`; `ProposalApplied.{repoId, appliedOn, baseCommit, appliedTreeHash, requestId}` | A person asks through their own device for an Approved proposal at its digest; only the named host fulfils it, on the base the person saw; a direct apply is a human member's, through their own device; never an agent |
+| Phones (item 6) | `DeviceCertificate.alg` (`p256`), `ActorStamp.sigAlg` | ECDSA-SHA256, fixed 64-byte low-S signatures; a P-256 device is a phone, capped to the phone tier, enrolled only by a trusted device of its person with that person's presence; revocation also cuts its tunnel pairing |
+| Service members (item 6) | `ActorKind::Service` | At most Contributor; no passkey, no presence, no set decisions; applies only on request; never a human approval |
+
+**Deliberately additive later.** Repo aliases and `WorkspaceHostAliasesSet` (repos review R2: a new kind with presence and disjointness; an older client ignores it and matches less). A non-Secure-Enclave phone key type or another certificate algorithm (a new `SigAlg` value; an older client then doesn't trust that device, which fails closed). The ligus-auth side of phone revocation (Phase D: the signed `DeviceRevoked` is the notice it honours).
+
 ---
 
 ## Track A: protocol and authorization
@@ -506,7 +533,7 @@ pub kid: Option<String>,   // first 8 bytes (16 hex) of key_commitment
 - **Ties.** Two valid-looking rotations with the same `prev_version`: the lower canonical key wins, and the loser is ignored. The loser's issuer sees `lost_rotation` and re-rotates automatically.
   - Events already sealed under the loser's key stay readable: readers keep every **openable** key by `(version, kid)`, and `decode` picks the key by `kid`.
   - This closes K2, where today the AEAD failure is classified `Malformed` and skipped forever (`sync_engine.rs:250-256`).
-- **Recipients** are every non-revoked certified device of every current member with a `DeviceKeyAgreementPublished`, plus every host device (serve or worker) bound in the roster.
+- **Recipients** are every non-revoked certified device of a current member's account with a `DeviceKeyAgreementPublished` (`RosterState::rotation_recipients`). A serve or worker box gets the key only as a device of a member (its owner's enrolled device, or its own service member's device); a host an agent is merely bound to is **not** a recipient, or a removed member's box still hosting an agent would get every later key. Regression tests: `rotations_seal_only_to_current_members_devices` (core) and `removed_members_device_is_not_a_recipient_through_an_agent_host` (keyring).
   - Recipients are no longer looked up in the relay directory `ka_public`, which was the K1 outsider vector (review §7.9).
   - `DeviceKeyAgreementPublished` is emitted once per device on first 2.0 launch, and by `ligus serve enroll` and `ligus worker` on startup. CLI hosts get their own X25519 keypair in the vault (B.2).
 - **Sealing epoch.** Sealing uses `seal_epoch = highest authorized version`. If there is none, sealing falls back as follows:
@@ -904,7 +931,7 @@ pub trait TurnExecutor: Send + Sync {
     fn spawn(&self, cmd: std::process::Command, plan: &EnforcementPlan) -> io::Result<tokio::process::Child>;
     fn kind(&self) -> ExecutorKind;   // Unconfined | Seatbelt | Bwrap | Landlock (code: executor/mod.rs)
 }
-pub fn default_executor() -> Arc<dyn TurnExecutor>;   // macOS: Seatbelt; Linux: Bwrap (falls back to Unconfined + loud banner + refuse write tiers)
+pub fn default_executor() -> Arc<dyn TurnExecutor>;   // macOS: Seatbelt; Linux: Bwrap, else Landlock; else Unconfined, which refuses every agent process (only tool-less HTTP model chat runs)
 ```
 
 - `EnvelopeEnforcer::plan(envelope, runtime, gate)` replaces the two compositions in `app/src/guards.rs:789` and `worker.rs:447-465`.
@@ -979,7 +1006,7 @@ None of these exists in code. Their `ExecutorKind` placeholder variants were rem
 
 - `Gvisor` (Linux strong mode): `runsc --network=none do …` with the same mounts and the proxy socket bound in.
 - `AppleContainer` (macOS 26+ local VM): Apple's `container` CLI, with the worktree bind-mounted and the proxy over vsock or a published port.
-- `K8sJob`: the existing chart template `deploy/helm/ligus/templates/sandbox.yaml:1-18` and `_helpers.tpl:220-262` (gVisor or Kata `runtimeClassName`, agent-sandbox). This needs `exec-turn` and `TurnBundle` (review P3/P7) and stays [2.x].
+- `K8sJob`: **cut** (owner decision, 2026-11-16): no Kubernetes executor is planned; the chart's sandbox template is not an executor.
 
 #### C.4.6 Tests
 
@@ -1534,7 +1561,8 @@ flowchart LR
   D3 --> CUT
   D4 --> CUT
   C3 --> CUT
-  E[Track E ligus-auth] -.-> R21((2.1))
+  E[Track E ligus-auth client side] --> CUT
+  E -.-> R21((2.1: relay tenant enforcement))
 ```
 
 ### 7.1 Worktrees
@@ -1588,12 +1616,13 @@ The other agent's in-flight UI and phone-endpoint merges are **R0**. No Phase 0 
 |---|---|---|
 | A1, A2, A3; B1, B2 (macOS Keychain, Secret Service, systemd-creds, File0600) | yes | Windows Credential Manager [2.x] |
 | B3 passkeys: browser hand-off, iOS native, rules v2, recovery key | yes | macOS native ASAuthorization (if not done), Android app origins |
-| C1, C2 (Seatbelt, bwrap+Landlock+seccomp, egress proxy), C3, C7 interim + final | yes | gVisor, Apple `container`, K8s executors (C.4.5; [2.0.x-follow] for gVisor and container, [2.x] for K8s), OTLP export |
+| C1, C2 (Seatbelt, bwrap+Landlock+seccomp, egress proxy), C3, C7 interim + final | yes | gVisor, Apple `container` (C.4.5, [2.0.x-follow]), OTLP export. K8s executors are cut. |
 | D1 ACP for all four CLIs | yes; Claude-over-ACP default only for API-key auth until V2 is confirmed | Claude subscription over ACP after V2 |
 | D2 (incl. agent-signed effects, budgets, audit), D3, D4 | yes | Per-call synced audit (owner decision); resumable asks |
 | Gemini and MLX presets, release matrix | yes | Native Gemini provider |
 | E ligus-auth | client side (device-code sign-in, device proof, refresh) and `cmd/ligus-auth` | relay tenant (`tid`) enforcement (review P6) |
-| Review P1/P2 host extraction, P4/P5 phone device keys, P6 relay split, P8 facts OTLP | no | 2.x. Passkey presence (B3) removes the urgency of P5 for votes, but not for authorship of posts. |
+| P4 serve as its own (service) member, P5 phone device keys (P-256 Secure Enclave) | yes (owner decision, 2026-11-16): the wire is frozen in Phase A (section 0.2); the clients are Phase B | |
+| Review P1/P2 host extraction, P6 relay split, P8 facts OTLP | no | 2.x |
 
 > **"No patch releases" vs "follow" (needs the owner's reading).** "Can follow" items ship in a later *minor* release (2.1, 2.2). "No patch releases" means 2.0.0 is not followed by 2.0.x fixes of 2.0 scope, so everything marked yes above must be done before the cut.
 

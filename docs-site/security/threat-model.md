@@ -334,15 +334,15 @@ it.
     a non-shell tier for chats whose input you don't trust. Copilot and
     Antigravity still load your own MCP servers and plugins (no strict
     switch), and Codex over ACP isn't confined to Ligus's MCP servers yet.
-24. **A backdated config frontier keeps an old role.** Each event stamps
-    the config-log position its author had seen, and is judged at that
-    position. Nothing yet stops a demoted or removed member from naming a
-    position from before the change, so their new events are judged at
-    their old role until a per-member watermark exists. Votes and applies
-    are contained (one can't name a position older than the content it
-    judges, so a proposal filed after the demotion reached them isn't
-    swayed), and rotating the key after a removal cuts off a removed
-    member's new traffic.
+24. **A cut is only as complete as its author's view.** A removal,
+    demotion or revocation carries a watermark of the member's (or
+    device's) events its author held, and every later event of theirs is
+    judged as of the cut, whatever config position it names, in any
+    delivery order. Events the remover never held (a chat log their device
+    doesn't hold) are cut too, so sync before removing someone whose recent
+    history matters. On the config log itself, a removed Admin's event that
+    races the removal is decided by canonical order, like any two Admins
+    acting at once.
 25. **A human click runs others' text at the clicker's tier.** Some
     actions place text someone else wrote into a prompt that runs as the
     person who clicked: **Send back to revise** (the review thread),
@@ -455,7 +455,7 @@ release fixes them: invite codes carrying every epoch key, directory keys
 for people you share no workspace with (unverified, sealed only after a
 warning), a CLI-founded workspace staying unsecured until its founder adds a passkey,
 devices without a founder pin keeping the passphrase key, and ingest-time
-decisions that depend on arrival order, backdated config frontiers, human
+decisions that depend on arrival order, the reach of a removal's watermark, human
 clicks that run others' text at the clicker's tier, and unconfined LSP
 servers and terminal. On Kubernetes, DNS tunnelling through
 the cluster resolver remains possible (see
