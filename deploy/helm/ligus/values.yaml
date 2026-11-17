@@ -114,7 +114,9 @@ serve:
   mcpToml: ""
   # Mounted read-only; LIGUS_DASHBOARD_FILE points at it.
   dashboardToml: ""
-  # Plain extra environment variables (list of EnvVar).
+  # Plain extra environment variables (list of EnvVar). Not the variables
+  # the chart sets (secrets, sandbox, data dir, relay) and never from a
+  # Secret: the chart refuses those.
   extraEnv: []
   # Workspace runtime credentials: a Secret whose keys are secret_ref names,
   # mounted as files (LIGUS_WS_SECRET_DIR) and never put in the environment.

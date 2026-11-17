@@ -210,6 +210,8 @@ Args: dict rules what.
 {{- if or (hasKey .Values.serve "secretEnv") (hasKey .Values.worker "secretEnv") -}}
 {{- fail "serve.secretEnv / worker.secretEnv (envFrom of a whole Secret) was removed: put workspace runtime credentials in <host>.workspaceSecrets.existingSecret (mounted as files, LIGUS_WS_SECRET_DIR) and provider keys CLI agents need in <host>.agentEnv (allow-listed)" -}}
 {{- end -}}
+{{- include "ligus.validateExtraEnv" (dict "v" .Values.serve "component" "serve") -}}
+{{- include "ligus.validateExtraEnv" (dict "v" .Values.worker "component" "worker") -}}
 {{- include "ligus.validateAgentEnv" (dict "root" . "v" .Values.serve "component" "serve") -}}
 {{- include "ligus.validateAgentEnv" (dict "root" . "v" .Values.worker "component" "worker") -}}
 {{- if hasKey .Values.worker "replicas" -}}
@@ -396,9 +398,35 @@ component.
 {{- toJson $data | sha256sum -}}
 {{- end -}}
 
+{{/*
+extraEnv may not set what the chart decides: Kubernetes keeps the last of
+two entries with one name, and Ligus prefers LIGUS_WORKSPACE_KEY from the
+environment over the mounted cli.key, so extraEnv would silently undo the
+secret files and the fail-closed sandbox settings. Nor may it read a
+Secret: secrets are files. Args: dict v component.
+*/}}
+{{- define "ligus.validateExtraEnv" -}}
+{{- $chart := list "LIGUS_DATA_DIR" "HOME" "LIGUS_RELAY_URL" "LIGUS_WORKSPACE" "LIGUS_REQUIRE_SANDBOX" "LIGUS_SANDBOX" "LIGUS_SECRET_BACKEND" "LIGUS_SECRETS_DIR" "LIGUS_WS_SECRET_DIR" -}}
+{{- range .v.extraEnv -}}
+{{- $n := toString .name -}}
+{{- $base := regexReplaceAll "^HIVE_" $n "LIGUS_" -}}
+{{- if or (has $base $chart) (regexMatch "^LIGUS_(WORKSPACE_KEY|RELAY_ACCESS_TOKEN|REMOTE_REG_TOKEN|NTFY_TOKEN)(_FILE)?$" $base) (hasPrefix "LIGUS_WS_SECRET_" $base) -}}
+{{- fail (printf "%s.extraEnv: %s is set by the chart (secrets are mounted files, the sandbox settings come from agentSandbox.*); remove it" $.component $n) -}}
+{{- end -}}
+{{- if and .valueFrom (or .valueFrom.secretKeyRef) -}}
+{{- fail (printf "%s.extraEnv: %s reads a Secret; secrets are files (workspaceSecrets.existingSecret) or allow-listed agentEnv entries, never extraEnv" $.component $n) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Agent env names must be on the allow-list (no Ligus secrets in env). */}}
 {{- define "ligus.validateAgentEnv" -}}
 {{- $allow := .root.Values.agentEnvAllowList -}}
+{{- range $allow -}}
+{{- if regexMatch "^(LIGUS|HIVE)_" (toString .) -}}
+{{- fail (printf "agentEnvAllowList: %s is one of Ligus's own variables; only model provider and forge keys belong there" (toString .)) -}}
+{{- end -}}
+{{- end -}}
 {{- range .v.agentEnv -}}
 {{- if not (has .name $allow) -}}
 {{- fail (printf "%s.agentEnv: %s is not in agentEnvAllowList; model provider keys only (Ligus's own secrets go in files)" $.component .name) -}}

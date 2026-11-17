@@ -281,9 +281,36 @@ def test_metadata_stays_blocked_when_internet_except_is_overridden():
     check("extraEgress ::/0 excluding fd00:ec2::254 renders", any(d["kind"] == "NetworkPolicy" for d in docs))
 
 
+# --- extraEnv can't put secrets in env or undo the fail-closed settings -----
+
+def test_extra_env_cannot_override_secrets_or_sandbox():
+    # Kubernetes keeps the last of two env entries with one name, and Ligus
+    # prefers LIGUS_WORKSPACE_KEY from env over the mounted cli.key: extraEnv
+    # would silently override the chart's secret files and sandbox settings.
+    for comp in ("serve", "worker"):
+        extra = ["--set", "worker.enabled=true", "--set", "worker.instances[0].name=a"] if comp == "worker" else []
+        for name, val in (("LIGUS_REQUIRE_SANDBOX", "0"), ("LIGUS_SANDBOX", "unconfined"),
+                          ("LIGUS_WORKSPACE_KEY", "k"), ("LIGUS_SECRETS_DIR", "/tmp"),
+                          ("LIGUS_RELAY_ACCESS_TOKEN_FILE", "/tmp/t"), ("LIGUS_SECRET_BACKEND", "file")):
+            p = render(*extra, "--set", "%s.extraEnv[0].name=%s" % (comp, name),
+                       "--set", "%s.extraEnv[0].value=%s" % (comp, val), ok=False)
+            check("%s.extraEnv %s is refused" % (comp, name), p.returncode != 0)
+        p = render(*extra, "--set", "%s.extraEnv[0].name=SOMETHING" % comp,
+                   "--set", "%s.extraEnv[0].valueFrom.secretKeyRef.name=ws" % comp,
+                   "--set", "%s.extraEnv[0].valueFrom.secretKeyRef.key=key" % comp, ok=False)
+        check("%s.extraEnv from a Secret is refused (secrets are files)" % comp, p.returncode != 0)
+        docs = render(*extra, "--set", "%s.extraEnv[0].name=RUST_LOG" % comp, "--set", "%s.extraEnv[0].value=info" % comp)
+        check("%s.extraEnv of a plain setting renders" % comp, bool(docs))
+    p = render("--set", "agentEnvAllowList[0]=LIGUS_WORKSPACE_KEY",
+               "--set", "serve.agentEnv[0].name=LIGUS_WORKSPACE_KEY",
+               "--set", "serve.agentEnv[0].secretName=ws", "--set", "serve.agentEnv[0].secretKey=key", ok=False)
+    check("agentEnvAllowList can't be widened to Ligus's own variables", p.returncode != 0)
+
+
 TESTS = [test_no_generated_secrets, test_test_pods_hold_no_workspace_key, test_dns_egress_is_scoped, test_egress_closed_and_metadata_blocked, test_serve_ingress_excludes_foreign_pods,
          test_removed_values_refuse, test_secrets_are_files, test_single_writer_volumes,
-         test_mcp_images_pinned, test_metadata_stays_blocked_when_internet_except_is_overridden]
+         test_mcp_images_pinned, test_metadata_stays_blocked_when_internet_except_is_overridden,
+         test_extra_env_cannot_override_secrets_or_sandbox]
 
 if __name__ == "__main__":
     for t in TESTS:
