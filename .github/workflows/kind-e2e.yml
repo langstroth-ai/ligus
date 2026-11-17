@@ -35,7 +35,7 @@ env:
   # a tested commit (relay v0.3.0), never a moving branch. Bump it together
   # with the ligus chart's ligus-relay dependency.
   RELAY_REPO: ligus-ai/relay
-  RELAY_REF: 2faab5ee9f8a41e986aee92b1165c4515bf0a583
+  RELAY_REF: b8b2528e7f76185156b8bd5867e77bea52798371
 
 jobs:
   e2e:
