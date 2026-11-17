@@ -116,3 +116,42 @@ fn there_is_one_presence_free_genesis_rules_set() {
     assert_eq!(v[&second], Verdict::Denied, "a second genesis");
     assert_eq!(w.roster().presence_policy, PresencePolicy::ligus());
 }
+
+/// Claims 2 and 5 rest on rank: "only the Owner" changes the version and
+/// the relying party, and a cut must never reach above its author. An Admin
+/// must not make anyone an Owner, nor revoke, demote or remove an Owner; and
+/// a revocation must never erase the history of the device it revokes (here
+/// the founder's, whose events are the workspace's genesis).
+#[test]
+fn an_admin_cannot_cut_above_them_or_erase_the_founders_history() {
+    let mut w = SignedWorld::genesis(&["owner", "ada", "mara"], None);
+    w.admit("owner", "ada", WorkspaceRole::Admin);
+    w.admit("owner", "mara", WorkspaceRole::Contributor);
+    let change = |m: &str, old, new| SessionEvent::MemberRoleChanged {
+        change: hive_core::MemberRoleChange { member_id: m.into(), old_role: old, new_role: new },
+        watermark: vec![],
+    };
+    let owners_device = w.people["owner"].device_id;
+    let attempts = [
+        w.push("ada", change("ada", WorkspaceRole::Admin, WorkspaceRole::Owner)),
+        w.push("ada", change("mara", WorkspaceRole::Contributor, WorkspaceRole::Owner)),
+        w.push("ada", change("owner", WorkspaceRole::Owner, WorkspaceRole::Viewer)),
+        w.push("ada", SessionEvent::MemberRemoved { member_id: "owner".into(), watermark: vec![] }),
+        // An empty watermark: "I held none of the founder's events".
+        w.push("ada", SessionEvent::DeviceRevoked { device_id: owners_device, watermark: vec![] }),
+    ];
+    let v = w.verdicts();
+    for id in attempts {
+        assert_eq!(v[&id], Verdict::Denied);
+    }
+    // Not vacuous: the workspace is intact and Ada is still an Admin.
+    let genesis_ids: Vec<Uuid> = w.cfg.iter().take(6).map(|e| e.event_id).collect();
+    for id in genesis_ids.iter().skip(1) {
+        assert_eq!(v[id], Verdict::Allowed, "the founder's genesis events stand");
+    }
+    let roster = w.roster();
+    assert!(!roster.devices[&owners_device].revoked);
+    assert_eq!(roster.role_of("owner"), Some(WorkspaceRole::Owner));
+    assert_eq!(roster.role_of("ada"), Some(WorkspaceRole::Admin));
+    assert_eq!(roster.role_of("mara"), Some(WorkspaceRole::Contributor));
+}

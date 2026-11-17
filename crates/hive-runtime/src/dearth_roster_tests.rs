@@ -299,10 +299,14 @@ fn an_unauthorized_device_revocation_is_ignored() {
     chat_rv.lamport = 70;
     log.envs.push(chat_rv);
     assert!(!build_roster(&log.envs).is_revoked(laptop), "a Contributor revoked the owner's laptop");
-    // An Admin's revocation still works.
+    // Nor does an Admin's (never above you: an Admin revoking the Owner's
+    // device would cut the Owner off, and its watermark would judge the
+    // Owner's history; review P-A2d).
     log.push(&admin2, SessionEvent::DeviceRevoked { device_id: laptop, watermark: Vec::new() });
+    assert!(!build_roster(&log.envs).is_revoked(laptop), "an Admin revoked the Owner's laptop");
+    // The Owner's own revocation works.
+    log.push(&owner, SessionEvent::DeviceRevoked { device_id: laptop, watermark: Vec::new() });
     assert!(build_roster(&log.envs).is_revoked(laptop));
-    let _ = owner;
 }
 
 /// Dearth mode under a founder pin (B2 residual): a member who forges a

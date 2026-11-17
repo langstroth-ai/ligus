@@ -499,6 +499,14 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 return Decision::Allow;
             }
         }
+        // Never above you: no one grants a role above their own, or removes,
+        // demotes or revokes a device of a member ranked above them. A cut
+        // (Phase A, item 2) also judges its subject's history, so an Admin
+        // revoking the founder's device with an empty watermark would
+        // otherwise erase the workspace's genesis.
+        if let Some(why) = above_author(&env.payload, author, role, fold, ctx.running) {
+            return Decision::deny(why);
+        }
         // A3: a host certifies a key for an agent bound to it (or, unbound,
         // owned by an account that certified the host), signing with its own
         // device key, which must be the envelope's signer.
@@ -876,6 +884,39 @@ fn service_member_refusal(
     match &env.payload {
         SessionEvent::PasskeyRegistered { .. } => Some("a service member holds no passkey".into()),
         SessionEvent::ProposalSetDecided { .. } => Some("a person decides a proposal set, not a service".into()),
+        _ => None,
+    }
+}
+
+/// The rank ceiling on membership and device governance: a grant above the
+/// author's own role, or a removal, demotion or device revocation of a
+/// member ranked above the author.
+fn above_author(e: &SessionEvent, author: &str, role: WorkspaceRole, fold: &ChatSession, running: &RosterState) -> Option<String> {
+    let rank_of = |id: &str| fold.members.iter().find(|m| m.id == id).map(|m| m.role.rank());
+    match e {
+        // (Self-enrollment is judged by its invite: `self_enroll_allowance`.)
+        SessionEvent::MemberAdded { member, .. } if member.id != author && member.role.rank() > role.rank() => {
+            Some("no one grants a role above their own".into())
+        }
+        SessionEvent::MemberRoleChanged { change, .. } => {
+            if change.new_role.rank() > role.rank() {
+                return Some("no one grants a role above their own".into());
+            }
+            rank_of(&change.member_id).filter(|r| *r > role.rank()).map(|_| "no one changes the role of a member above them".into())
+        }
+        SessionEvent::MemberRemoved { member_id, .. } => {
+            rank_of(member_id).filter(|r| *r > role.rank()).map(|_| "no one removes a member above them".into())
+        }
+        SessionEvent::DeviceRevoked { device_id, .. } => {
+            let accounts = running.devices.get(device_id).map(|d| d.accounts.clone()).unwrap_or_default();
+            let top = fold
+                .members
+                .iter()
+                .filter(|m| m.actor.account_id.is_some_and(|a| accounts.contains(&a)))
+                .map(|m| m.role.rank())
+                .max();
+            top.filter(|r| *r > role.rank()).map(|_| "no one revokes a device of a member above them".into())
+        }
         _ => None,
     }
 }

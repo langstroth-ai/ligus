@@ -248,7 +248,9 @@ it.
    **Settings → Passkeys & keys** and counts once you confirm it), and any
    change of the rules (the relying party or the version, both the
    Owner's) needs presence, verified under the relying party in force before
-   the change. An Admin can't clear the passkeys of a member above them.
+   the change. An Admin can't clear the passkeys of a member above them, grant a role
+   above their own, or remove, demote or revoke a device of a member above
+   them.
    Until someone registers a passkey, their account is only as strong as
    their devices: a workspace founded from the CLI stays unsecured (nobody
    can join, nothing can be governed) until its founder adds a passkey from
