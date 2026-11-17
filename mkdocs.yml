@@ -83,6 +83,7 @@ nav:
       - Your first chat: getting-started/first-chat.md
   - Deploy:
       - Choose a deployment: deploy/index.md
+      - Deploying with an agent: deploy/with-an-agent.md
       - Solo laptop: deploy/solo.md
       - Personal fleet (laptop, home server, phone): deploy/personal-fleet.md
       - Team on a relay: ops/deployment.md

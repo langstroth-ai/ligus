@@ -346,6 +346,20 @@ ceiling (a loop backstop, not a conversation limit).
 > personal credential; it refuses to start unless `LIGUS_ALLOW_PERSONAL_AGENT=1`
 > is set. For anything unattended or shared, use `ligus worker`.
 
+## Deploying with an agent
+
+A coding agent can deploy Ligus for you, on Kubernetes or on this machine.
+[`AGENTS.md`](AGENTS.md) has the decision table, the exact commands and the
+rules it follows (no secret values in chat or files, never weakening the
+sandbox, NetworkPolicies or TLS, stopping for passkeys, invites, exposure and
+DNS/TLS). The step-by-step skills are
+[`.claude/skills/ligus-deploy-k8s`](.claude/skills/ligus-deploy-k8s/SKILL.md)
+and [`.claude/skills/ligus-deploy-local`](.claude/skills/ligus-deploy-local/SKILL.md);
+the tools are [`deploy/kubernetes/ligus-k8s`](deploy/kubernetes/ligus-k8s)
+and [`deploy/local/ligus-local`](deploy/local/ligus-local) (non-interactive,
+idempotent, `--json`). See also
+[Deploying with an agent](https://docs.ligus.ai/deploy/with-an-agent/).
+
 ## Self-hosting the relay
 
 Collaboration never requires *our* servers. The relay is a single small,

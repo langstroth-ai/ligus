@@ -7,6 +7,10 @@ gives the iPhone app a small HTTP + Server-Sent Events API on the box's
 Tailscale address. The phone holds only a bearer token. The workspace key and
 the device keys stay on the box. Design and API contract: [`docs/ios-app.md`](../../docs/ios-app.md).
 
+[`deploy/local/ligus-local`](../local/ligus-local) scripts steps 2 and 5 below
+(configure, start, verify, stop) for a person or a coding agent; see
+[`AGENTS.md`](../../AGENTS.md). Joining the workspace (step 3) stays yours.
+
 Files here:
 
 | File | Goes to |

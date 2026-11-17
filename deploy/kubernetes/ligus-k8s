@@ -1,0 +1,810 @@
+#!/usr/bin/env bash
+# ligus-k8s: deploy one Ligus workspace (the deploy/helm/ligus chart) on
+# Kubernetes, non-interactively, for a person or a coding agent.
+#
+#   ligus-k8s preflight [--probe] [--image REF]   check the cluster; changes nothing
+#                                                 (--probe: a temporary namespace,
+#                                                 deleted afterwards)
+#   ligus-k8s secrets workspace --throwaway | --from-dir DIR
+#   ligus-k8s secrets generic --name NAME --from-dir DIR
+#   ligus-k8s install --scenario S [--dry-run]    render + server dry-run, then helm upgrade --install --wait
+#   ligus-k8s verify                              helm status, pods, sandbox, health, helm test
+#   ligus-k8s teardown [--delete-data] [--delete-secrets] [--delete-namespace]
+#
+# Common flags: --context CTX  --namespace NS  --release NAME  --json
+# Every command is idempotent and never prints a secret. AGENTS.md at the
+# repository root has the decision table, exit codes and the hard rules.
+# shellcheck source-path=SCRIPTDIR
+set -euo pipefail
+
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+ROOT=$(cd "$HERE/../.." && pwd)
+CHART="$ROOT/deploy/helm/ligus"
+SCEN_DIR="$HERE/scenarios"
+# shellcheck source=../lib/agent-common.sh
+. "$ROOT/deploy/lib/agent-common.sh"
+AC_TOOL=ligus-k8s
+
+# The relay chart the ligus chart depends on (optional dependency, but Helm
+# needs it present to render). Same pin as .github/workflows/kind-e2e.yml.
+RELAY_REPO_URL=${LIGUS_RELAY_REPO_URL:-https://github.com/ligus-ai/relay.git}
+RELAY_REF=${LIGUS_RELAY_REF:-50451173b28a78c4845a38107429aaf0cc6d02bf}
+RELAY_CHART_VERSION=0.3.0
+MANAGED_LABEL=ligus.ai/managed-by
+MANAGED_VALUE=ligus-k8s
+
+usage() {
+  sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  cat <<'EOF'
+
+install flags:
+  --scenario trial|team-in-cluster-relay|team-external-relay   (required)
+  --image-repository R --image-tag T | --image-digest sha256:...
+  --relay-image-repository R --relay-image-tag T   (trial: the in-release relay's image)
+  --relay-url URL               (team-external-relay; https:// only)
+  --relay-namespace NS          (team-in-cluster-relay; default ligus-relay)
+  --workspace-secret NAME       (default <release>-workspace)
+  --relay-access-token          the workspace Secret holds relay-access-token
+  --workers a,b                 named worker hosts (worker.instances)
+  --no-serve                    workers only (serve.enabled=false)
+  --access-mode ReadWriteOnce|ReadWriteOncePod   override the scenario's
+  --storage-class NAME
+  --values FILE                 extra values (never secrets), applied last
+  --relay-chart DIR             package the relay chart from a relay checkout
+  --fetch-relay-chart           git clone the relay repo at the pinned commit
+  --dry-run                     render and server-side dry-run only
+  --timeout DUR                 helm --wait timeout (default 10m)
+verify flags:   --skip-helm-test
+preflight flags: --probe [--image REF] [--probe-image busybox:1.37]
+teardown flags: --delete-data --delete-secrets --delete-namespace
+EOF
+}
+
+# ---------------------------------------------------------------- arguments
+CMD=${1:-}
+[ $# -gt 0 ] && shift
+SUB=""
+case $CMD in
+  -h|--help|help|"") usage; exit 0 ;;
+  secrets) SUB=${1:-}; [ $# -gt 0 ] && shift ;;
+esac
+
+CTX="" NS="" REL="" SCENARIO="" DRY=0 PROBE=0
+IMG_REPO="" IMG_TAG="" IMG_DIGEST="" RELAY_IMG_REPO="" RELAY_IMG_TAG=""
+RELAY_URL="" RELAY_NS="" RELAY_SVC="" NO_SERVE=0 WS_SECRET="" RELAY_TOKEN=0 WORKERS="" ACCESS_MODE="" SC=""
+EXTRA_VALUES="" RELAY_CHART_DIR="${LIGUS_RELAY_CHART:-}" FETCH_RELAY=0 TIMEOUT=10m
+SKIP_TEST=0 DEL_DATA=0 DEL_SECRETS=0 DEL_NS=0 THROWAWAY=0 FROM_DIR="" SECRET_NAME=""
+PROBE_IMAGE=busybox:1.37 REPLACE=0
+
+need() { [ $# -ge 2 ] && [ -n "$2" ] || ac_usage_error "$1 needs a value"; }
+while [ $# -gt 0 ]; do
+  case $1 in
+    --json) AC_JSON=1 ;;
+    --context) need "$@"; CTX=$2; shift ;;
+    --namespace|-n) need "$@"; NS=$2; shift ;;
+    --release) need "$@"; REL=$2; shift ;;
+    --scenario) need "$@"; SCENARIO=$2; shift ;;
+    --dry-run) DRY=1 ;;
+    --probe) PROBE=1 ;;
+    --probe-image) need "$@"; PROBE_IMAGE=$2; shift ;;
+    --image) need "$@"; IMG_REPO=${2%:*}; IMG_TAG=${2##*:}; [ "$IMG_REPO" = "$2" ] && IMG_TAG=""; shift ;;
+    --image-repository) need "$@"; IMG_REPO=$2; shift ;;
+    --image-tag) need "$@"; IMG_TAG=$2; shift ;;
+    --image-digest) need "$@"; IMG_DIGEST=$2; shift ;;
+    --relay-image-repository) need "$@"; RELAY_IMG_REPO=$2; shift ;;
+    --relay-image-tag) need "$@"; RELAY_IMG_TAG=$2; shift ;;
+    --relay-url) need "$@"; RELAY_URL=$2; shift ;;
+    --relay-namespace) need "$@"; RELAY_NS=$2; shift ;;
+    --workspace-secret) need "$@"; WS_SECRET=$2; shift ;;
+    --relay-access-token) RELAY_TOKEN=1 ;;
+    --workers) need "$@"; WORKERS=$2; shift ;;
+    --no-serve) NO_SERVE=1 ;;
+    --access-mode) need "$@"; ACCESS_MODE=$2; shift ;;
+    --storage-class) need "$@"; SC=$2; shift ;;
+    --values) need "$@"; EXTRA_VALUES=$2; shift ;;
+    --relay-chart) need "$@"; RELAY_CHART_DIR=$2; shift ;;
+    --fetch-relay-chart) FETCH_RELAY=1 ;;
+    --timeout) need "$@"; TIMEOUT=$2; shift ;;
+    --skip-helm-test) SKIP_TEST=1 ;;
+    --delete-data) DEL_DATA=1 ;;
+    --delete-secrets) DEL_SECRETS=1 ;;
+    --delete-namespace) DEL_NS=1 ;;
+    --throwaway) THROWAWAY=1 ;;
+    --from-dir) need "$@"; FROM_DIR=$2; shift ;;
+    --name) need "$@"; SECRET_NAME=$2; shift ;;
+    --replace) REPLACE=1 ;;
+    -h|--help) usage; exit 0 ;;
+    *) ac_usage_error "unknown argument: $1" ;;
+  esac
+  shift
+done
+
+NS=${NS:-${LIGUS_NAMESPACE:-}}
+REL=${REL:-${LIGUS_RELEASE:-ligus}}
+WS_SECRET=${WS_SECRET:-$REL-workspace}
+
+# Pin every kubectl and helm call to one context, resolved once.
+if [ -z "$CTX" ] && ac_have kubectl; then CTX=$(kubectl config current-context 2>/dev/null || true); fi
+k() { kubectl --context "$CTX" "$@"; }
+h() { helm --kube-context "$CTX" "$@"; }
+
+json_ctx() { printf ',"context":%s,"namespace":%s,"release":%s' "$(ac_jstr "$CTX")" "$(ac_jstr "$NS")" "$(ac_jstr "$REL")"; }
+
+require_ns() { [ -n "$NS" ] || ac_usage_error "--namespace is required (one namespace per workspace, for example ligus-ws-acme)"; }
+
+base_tools() {
+  local ok=0
+  for t in kubectl helm openssl; do
+    if ac_have "$t"; then :; else ac_check "tool.$t" fail "$t not found on PATH" "install $t, then rerun"; ok=1; fi
+  done
+  [ $ok = 0 ] || { ac_raise 3; return 1; }
+  if [ -z "$CTX" ]; then
+    ac_check kube.context fail "no current kube context" "pass --context <name> (kubectl config get-contexts lists them)"; ac_raise 3; return 1
+  fi
+  if ! k version -o json >/dev/null 2>&1; then
+    ac_check kube.reachable fail "context $CTX: API server not reachable" "check the cluster is running and the credentials are valid (kubectl --context $CTX get nodes)"; ac_raise 3; return 1
+  fi
+  return 0
+}
+
+# ----------------------------------------------------------------- preflight
+kernel_ge_67() { # "6.8.0-1012-aws" -> 0 when >= 6.7
+  local v=${1%%-*}; ac_version_ge "$v" 6.7
+}
+
+netpol_heuristic() {
+  local ds node_args itype
+  ds=$(k get ds -A -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+  case $ds in
+    *calico-node*|*cilium*|*antrea-agent*|*kube-router*|*weave-net*|*canal*|*anetd*|*azure-npm*)
+      local n; n=$(printf '%s\n' "$ds" | grep -E 'calico-node|cilium|antrea-agent|kube-router|weave-net|canal|anetd|azure-npm' | head -1)
+      ac_check cni.networkpolicy pass "a NetworkPolicy-enforcing CNI is installed ($n)"; return ;;
+  esac
+  itype=$(k get nodes -o jsonpath='{.items[0].metadata.labels.node\.kubernetes\.io/instance-type}' 2>/dev/null || true)
+  if [ "$itype" = k3s ]; then
+    node_args=$(k get nodes -o jsonpath='{.items[0].metadata.annotations.k3s\.io/node-args}' 2>/dev/null || true)
+    case $node_args in
+      *disable-network-policy*) ac_check cni.networkpolicy fail "k3s with --disable-network-policy: NetworkPolicies are not enforced" "use a cluster that enforces NetworkPolicy; the chart's isolation depends on it" ;;
+      *) ac_check cni.networkpolicy pass "k3s embedded network policy controller (kube-router) is on (OrbStack, k3d and k3s use it)" ;;
+    esac
+    return
+  fi
+  case $ds in
+    *kindnet*) ac_check cni.networkpolicy warn "kindnet: enforces NetworkPolicy only in kind v0.24+ (kindnetd 2024-08 or later)" "rerun with --probe to measure it" ;;
+    *aws-node*) ac_check cni.networkpolicy warn "Amazon VPC CNI: NetworkPolicy only with its network policy agent enabled" "enable it (enableNetworkPolicy) or rerun with --probe" ;;
+    *) ac_check cni.networkpolicy warn "could not tell whether this cluster's CNI enforces NetworkPolicy" "rerun with --probe to measure it" ;;
+  esac
+}
+
+restricted_pod_json() { # name image label args-json [env-json]
+  local env=${5:-[]}
+  cat <<EOF
+{"apiVersion":"v1","kind":"Pod","metadata":{"name":"$1","labels":{"app":"$3"}},
+ "spec":{"restartPolicy":"Never","automountServiceAccountToken":false,
+  "securityContext":{"runAsNonRoot":true,"runAsUser":65532,"runAsGroup":65532,"seccompProfile":{"type":"RuntimeDefault"}},
+  "containers":[{"name":"c","image":"$2","args":$4,"env":$env,
+    "securityContext":{"allowPrivilegeEscalation":false,"readOnlyRootFilesystem":true,"capabilities":{"drop":["ALL"]}},
+    "resources":{"requests":{"cpu":"10m","memory":"16Mi"},"limits":{"cpu":"500m","memory":"256Mi"}},
+    "volumeMounts":[{"name":"tmp","mountPath":"/tmp"}]}],
+  "volumes":[{"name":"tmp","emptyDir":{"sizeLimit":"256Mi"}}]}}
+EOF
+}
+
+PROBE_NS=""
+probe_cleanup() {
+  if [ -n "$PROBE_NS" ]; then
+    k delete namespace "$PROBE_NS" --wait=false >/dev/null 2>&1 || true
+    ac_log "probe: deleted namespace $PROBE_NS"
+    PROBE_NS=""
+  fi
+}
+
+run_probe() {
+  PROBE_NS="${LIGUS_PROBE_NS_PREFIX:-ligus-preflight-}$(openssl rand -hex 3)"
+  trap probe_cleanup EXIT
+  ac_log "probe: temporary namespace $PROBE_NS (deleted at the end)"
+  if ! k create namespace "$PROBE_NS" >/dev/null 2>&1; then
+    ac_check probe.namespace fail "could not create a temporary namespace" "grant create on namespaces, or run preflight without --probe"
+    return
+  fi
+  k label namespace "$PROBE_NS" pod-security.kubernetes.io/enforce=restricted "$MANAGED_LABEL=$MANAGED_VALUE" >/dev/null
+
+  # Pod Security admission: a privileged pod must be refused.
+  if k -n "$PROBE_NS" run psa-check --image="$PROBE_IMAGE" --restart=Never --dry-run=server \
+      --overrides='{"spec":{"containers":[{"name":"p","image":"'"$PROBE_IMAGE"'","securityContext":{"privileged":true}}]}}' >/dev/null 2>&1; then
+    ac_check psa.enforced fail "Pod Security admission admitted a privileged pod in a namespace labelled restricted" "enable the PodSecurity admission plugin (Kubernetes 1.25+ has it on by default)"
+  else
+    ac_check psa.enforced pass "Pod Security admission refuses a privileged pod under enforce=restricted"
+  fi
+
+  # NetworkPolicy: reach a server, then deny ingress to it and try again.
+  restricted_pod_json srv "$PROBE_IMAGE" srv '["httpd","-f","-p","8080","-h","/tmp"]' | k -n "$PROBE_NS" apply -f - >/dev/null
+  restricted_pod_json cli "$PROBE_IMAGE" cli '["sleep","300"]' | k -n "$PROBE_NS" apply -f - >/dev/null
+  if k -n "$PROBE_NS" wait --for=condition=Ready pod/srv pod/cli --timeout=120s >/dev/null 2>&1; then
+    local ip before after
+    ip=$(k -n "$PROBE_NS" get pod srv -o jsonpath='{.status.podIP}')
+    before=1; k -n "$PROBE_NS" exec cli -- wget -q -T 3 -O /dev/null "http://$ip:8080/" >/dev/null 2>&1 && before=0
+    # busybox httpd answers 404 for an empty dir: wget exits 1 but connected.
+    if [ $before -ne 0 ]; then
+      k -n "$PROBE_NS" exec cli -- sh -c "wget -T 3 -O /dev/null http://$ip:8080/ 2>&1 | grep -q '404'" >/dev/null 2>&1 && before=0
+    fi
+    k -n "$PROBE_NS" apply -f - >/dev/null <<EOF
+{"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicy","metadata":{"name":"deny-srv"},
+ "spec":{"podSelector":{"matchLabels":{"app":"srv"}},"policyTypes":["Ingress"],"ingress":[]}}
+EOF
+    after=0
+    local i
+    for i in 1 2 3 4 5 6; do
+      sleep 2
+      if k -n "$PROBE_NS" exec cli -- sh -c "wget -T 3 -O /dev/null http://$ip:8080/ 2>&1 | grep -qE '404|200'" >/dev/null 2>&1; then
+        after=0
+      else
+        after=1; break
+      fi
+    done
+    if [ $before -ne 0 ]; then
+      ac_check cni.networkpolicy.probe warn "probe pods could not reach each other even without a policy" "check pod networking (kubectl -n kube-system get pods)"
+    elif [ $after -eq 1 ]; then
+      ac_check cni.networkpolicy.probe pass "measured: a deny-all ingress NetworkPolicy blocked pod-to-pod traffic"
+    else
+      ac_check cni.networkpolicy.probe fail "measured: traffic still flowed through a deny-all NetworkPolicy, so this CNI does not enforce NetworkPolicy" "use a CNI that enforces NetworkPolicy (Calico, Cilium, ...); never install with networkPolicy.enabled=false to get past this"
+    fi
+  else
+    ac_check cni.networkpolicy.probe warn "probe pods ($PROBE_IMAGE) did not start" "pass --probe-image with an image your cluster can pull (busybox with httpd and wget)"
+  fi
+
+  # Landlock: run ligus doctor in a restricted pod, as the chart's init container does.
+  local img=""
+  if [ -n "$IMG_REPO" ]; then
+    img=$IMG_REPO; [ -n "$IMG_DIGEST" ] && img="$img@$IMG_DIGEST" || img="$img:${IMG_TAG:-2.0.0}"
+  fi
+  if [ -z "$img" ]; then
+    ac_check sandbox.landlock.probe skip "no Ligus image given, so the Landlock probe did not run" "rerun with --probe --image <repository:tag> (the image you will install)"
+    return
+  fi
+  local env='[{"name":"LIGUS_DATA_DIR","value":"/tmp/ligus"},{"name":"LIGUS_SECRET_BACKEND","value":"file"},{"name":"LIGUS_SANDBOX","value":"landlock"},{"name":"HOME","value":"/tmp"}]'
+  restricted_pod_json landlock "$img" landlock '["doctor","--require-confined","--expect-tier","landlock","--turn-test"]' "$env" | k -n "$PROBE_NS" apply -f - >/dev/null
+  local phase=""
+  for _ in $(seq 1 90); do
+    phase=$(k -n "$PROBE_NS" get pod landlock -o jsonpath='{.status.phase}' 2>/dev/null || true)
+    case $phase in Succeeded|Failed) break ;; esac
+    sleep 2
+  done
+  local out abi node
+  out=$(k -n "$PROBE_NS" logs landlock 2>/dev/null || true)
+  node=$(k -n "$PROBE_NS" get pod landlock -o jsonpath='{.spec.nodeName}' 2>/dev/null || true)
+  abi=$(printf '%s\n' "$out" | sed -n 's/.*Landlock (ABI \([0-9][0-9]*\)).*/\1/p' | head -1)
+  if [ "$phase" = Succeeded ] && printf '%s' "$out" | grep -q 'turn test: passed (tier landlock)'; then
+    ac_check sandbox.landlock.probe pass "measured on node $node: Landlock available (ABI ${abi:-?}); a sandboxed agent turn passed"
+    PROBE_ABI=${abi:-}
+  elif [ -n "$phase" ] && [ "$phase" != Pending ]; then
+    local why; why=$(printf '%s\n' "$out" | grep -iE 'error|landlock|abi' | head -2 | tr '\n' ' ')
+    ac_check sandbox.landlock.probe fail "measured on node $node: no usable Landlock sandbox (ABI ${abi:-0}). ${why}" "use nodes with Linux 6.7+ and landlock in the LSM list (docs-site/deploy/kubernetes.md, Supported nodes); never set agentSandbox.require=false to get past this"
+  else
+    ac_check sandbox.landlock.probe warn "the Landlock probe pod did not run (phase ${phase:-unknown})" "check the image can be pulled: kubectl -n <ns> describe pod; for a local image on kind, kind load docker-image first"
+  fi
+}
+
+cmd_preflight() {
+  PROBE_ABI=""
+  base_tools || ac_finish "$AC_TOOL" preflight "$(json_ctx)"
+  local sv cv
+  ac_check kube.context info "context $CTX (confirm with the human that this is the intended cluster)"
+  sv=$(k version -o json 2>/dev/null | sed -n 's/.*"gitVersion": *"\(v[0-9.]*\).*/\1/p' | tail -1)
+  if ac_version_ge "${sv:-0}" 1.27; then ac_check kube.version pass "server $sv (chart needs 1.27+)"
+  else ac_check kube.version fail "server ${sv:-unknown}; the chart needs Kubernetes 1.27+" "upgrade the cluster"; fi
+  cv=$(helm version --template '{{.Version}}' 2>/dev/null || true)
+  if ac_version_ge "${cv:-0}" 3.14; then ac_check tool.helm pass "helm $cv"
+  else ac_check tool.helm fail "helm ${cv:-unknown}; need 3.14+" "install a current helm (https://helm.sh/docs/intro/install/)"; ac_raise 3; fi
+
+  # Permissions in the target namespace.
+  local where=""; [ -n "$NS" ] && where="-n $NS"
+  local verb missing=""
+  for verb in "create namespaces" "create secrets" "create statefulsets.apps" "create networkpolicies.networking.k8s.io" "create persistentvolumeclaims" "create pods/exec"; do
+    # shellcheck disable=SC2086
+    if [ "$(k auth can-i $verb $where 2>/dev/null || true)" != yes ]; then missing="$missing, $verb"; fi
+  done
+  if [ -z "$missing" ]; then ac_check rbac pass "can create namespaces, secrets, statefulsets, networkpolicies, PVCs and exec"
+  else ac_check rbac warn "missing permission:${missing#,}" "ask a cluster admin for these verbs in the workspace namespace"; fi
+
+  # Namespace and Pod Security.
+  if [ -n "$NS" ]; then
+    if k get namespace "$NS" >/dev/null 2>&1; then
+      local psa; psa=$(k get namespace "$NS" -o jsonpath='{.metadata.labels.pod-security\.kubernetes\.io/enforce}')
+      if [ "$psa" = restricted ]; then ac_check psa.namespace pass "namespace $NS enforces Pod Security restricted"
+      else ac_check psa.namespace warn "namespace $NS exists with enforce=${psa:-unset}" "a human decides whether to label it restricted (it applies to every pod in it); install labels only namespaces it created"; fi
+      if h status "$REL" -n "$NS" >/dev/null 2>&1; then ac_check release.exists info "release $REL already in $NS (install upgrades it in place)"; fi
+    else
+      ac_check psa.namespace info "namespace $NS does not exist yet; install creates it with enforce=restricted"
+    fi
+  fi
+
+  # NetworkPolicy enforcement.
+  netpol_heuristic
+
+  # Storage: a default class, and whether it is CSI (ReadWriteOncePod needs CSI).
+  local dsc prov csis
+  dsc=$(k get storageclass -o jsonpath='{range .items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{" "}{.provisioner}{"\n"}{end}' 2>/dev/null | head -1)
+  [ -n "$SC" ] && dsc="$SC $(k get storageclass "$SC" -o jsonpath='{.provisioner}' 2>/dev/null)"
+  if [ -z "$dsc" ]; then
+    ac_check storage.class fail "no default StorageClass" "pass --storage-class NAME, or have an admin set a default"
+  else
+    prov=${dsc#* }; dsc=${dsc%% *}
+    csis=$(k get csidrivers -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+    if printf '%s\n' "$csis" | grep -qx "$prov"; then
+      ac_check storage.rwop pass "StorageClass $dsc ($prov) is CSI: ReadWriteOncePod works (team scenarios use it)"
+    else
+      ac_check storage.rwop warn "StorageClass $dsc ($prov) is not a CSI driver: Kubernetes documents ReadWriteOncePod for CSI volumes only (some non-CSI provisioners bind it anyway; single-pod enforcement is then not guaranteed)" "trial: fine (uses ReadWriteOnce). Team: prefer a CSI class (--storage-class). If a claim stays Pending, --access-mode ReadWriteOnce allows two pods on one node: a human decision"
+    fi
+  fi
+
+  # Landlock: from the node kernels (static); --probe measures it.
+  local nodes bad="" n kv count=0
+  nodes=$(k get nodes -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.nodeInfo.kernelVersion}{" "}{.status.nodeInfo.osImage}{"\n"}{end}' 2>/dev/null || true)
+  while read -r n kv _; do
+    [ -n "$n" ] || continue
+    count=$((count+1))
+    kernel_ge_67 "$kv" || bad="$bad $n($kv)"
+  done <<EOF
+$nodes
+EOF
+  if [ -n "$bad" ]; then
+    ac_check sandbox.kernel fail "nodes with a kernel older than 6.7 (no Landlock network rules):$bad" "use node images with Linux 6.7+; never disable agentSandbox to get past this"
+  else
+    ac_check sandbox.kernel pass "all $count node kernels are 6.7+ (Landlock ABI 4+ possible; the LSM list is only visible from a pod: --probe)"
+  fi
+
+  # Operators: CloudNativePG / cert-manager are needed only by the relay
+  # chart's database.mode=cnpg (installed from the relay repository).
+  local apis; apis=$(k api-versions 2>/dev/null || true)
+  if printf '%s\n' "$apis" | grep -q '^postgresql.cnpg.io/'; then ac_check operator.cnpg info "CloudNativePG CRDs present (relay database.mode=cnpg is possible)"
+  else ac_check operator.cnpg info "CloudNativePG CRDs absent (only matters for a relay with database.mode=cnpg; the ligus chart never needs them)"; fi
+
+  # The relay chart dependency.
+  if ls "$CHART"/charts/ligus-relay-*.tgz >/dev/null 2>&1; then ac_check chart.dependency pass "relay chart packaged in deploy/helm/ligus/charts"
+  else ac_check chart.dependency warn "relay chart not packaged yet (Helm needs it to render even when relay.enabled=false)" "install does it with --relay-chart <relay-checkout>/deploy/helm/ligus-relay or --fetch-relay-chart"; fi
+
+  if [ $PROBE = 1 ]; then run_probe; probe_cleanup; trap - EXIT
+  else ac_check probe skip "measured checks (Pod Security, NetworkPolicy, Landlock ABI) not run" "rerun with --probe --image <ligus image> (creates and deletes a temporary namespace)"; fi
+
+  local extra; extra="$(json_ctx),\"landlockAbi\":$(ac_jstr "${PROBE_ABI:-}")"
+  [ "$AC_WORST" = 0 ] && ac_next "create the workspace Secret: ligus-k8s secrets workspace ... (throwaway for a trial; from a human-prepared directory for a real workspace)"
+  ac_finish "$AC_TOOL" preflight "$extra"
+}
+
+# ------------------------------------------------------------------- secrets
+ensure_namespace() { # create with restricted PSA if absent; never relabel someone else's
+  if k get namespace "$NS" >/dev/null 2>&1; then
+    local psa owner
+    psa=$(k get namespace "$NS" -o jsonpath='{.metadata.labels.pod-security\.kubernetes\.io/enforce}')
+    owner=$(k get namespace "$NS" -o jsonpath="{.metadata.labels.ligus\.ai/managed-by}")
+    if [ "$psa" != restricted ]; then
+      if [ "$owner" = "$MANAGED_VALUE" ]; then
+        k label namespace "$NS" pod-security.kubernetes.io/enforce=restricted --overwrite >/dev/null
+      else
+        ac_check namespace.psa fail "namespace $NS exists without pod-security.kubernetes.io/enforce=restricted, and ligus-k8s did not create it" "ask the human: label it (kubectl label namespace $NS pod-security.kubernetes.io/enforce=restricted) if nothing else in it needs more, or pick a new --namespace"
+        ac_raise 4; return 1
+      fi
+    fi
+    ac_check namespace pass "namespace $NS exists (enforce=restricted)"
+  else
+    k create namespace "$NS" >/dev/null
+    k label namespace "$NS" pod-security.kubernetes.io/enforce=restricted pod-security.kubernetes.io/warn=restricted "$MANAGED_LABEL=$MANAGED_VALUE" >/dev/null
+    ac_check namespace pass "created namespace $NS (enforce=restricted, $MANAGED_LABEL=$MANAGED_VALUE)"
+  fi
+}
+
+# shellcheck disable=SC2016  # a Go template, not shell
+secret_keys() { k -n "$NS" get secret "$1" -o go-template='{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}' 2>/dev/null; }
+secret_has_keys() { # name key... (key names only; values are never read)
+  local name=$1 list; shift
+  list=$(secret_keys "$name") || return 1
+  local want
+  for want in "$@"; do printf '%s\n' "$list" | grep -qx "$want" || return 1; done
+}
+
+# Create a generic Secret from files in a private temp dir (never argv, never stdout).
+create_secret_from_dir() { # name dir [--replace]
+  local name=$1 dir=$2 args="" f
+  for f in "$dir"/*; do
+    [ -f "$f" ] || continue
+    args="$args --from-file=$(basename "$f")=$f"
+  done
+  [ -n "$args" ] || return 1
+  if [ "$REPLACE" = 1 ]; then
+    # shellcheck disable=SC2086
+    k -n "$NS" create secret generic "$name" $args --dry-run=client -o yaml | k -n "$NS" apply -f - >/dev/null
+  else
+    # shellcheck disable=SC2086
+    k -n "$NS" create secret generic "$name" $args >/dev/null
+  fi
+  k -n "$NS" label secret "$name" "$MANAGED_LABEL=$MANAGED_VALUE" --overwrite >/dev/null
+}
+
+check_source_dir() { # dir required-files...
+  local dir=$1; shift
+  [ -d "$dir" ] || { ac_check secret.source fail "$dir is not a directory" "the human creates it (umask 077; one file per key) and passes its path"; ac_raise 3; return 1; }
+  local perm; perm=$(stat -c %a "$dir" 2>/dev/null || stat -f %Lp "$dir")
+  case $perm in *00) perm=ok ;; esac
+  if [ "$perm" != ok ]; then
+    ac_check secret.source fail "$dir is readable by group or others ($perm)" "chmod 700 $dir and chmod 600 the files in it, then rerun"; ac_raise 3; return 1
+  fi
+  local f
+  for f in "$@"; do
+    [ -s "$dir/$f" ] || { ac_check secret.source fail "$dir/$f is missing or empty" "the human writes it (never pasted into chat); then rerun"; ac_raise 4; return 1; }
+  done
+}
+
+cmd_secrets() {
+  require_ns
+  base_tools || ac_finish "$AC_TOOL" "secrets $SUB" "$(json_ctx)"
+  case $SUB in
+    workspace)
+      local name=${SECRET_NAME:-$WS_SECRET}
+      ensure_namespace || ac_finish "$AC_TOOL" "secrets workspace" "$(json_ctx)"
+      if k -n "$NS" get secret "$name" >/dev/null 2>&1 && [ "$REPLACE" = 0 ]; then
+        local keys; keys=$(secret_keys "$name" | tr '\n' ' ')
+        if secret_has_keys "$name" room key; then ac_check secret.workspace pass "Secret $name exists with keys: $keys(left unchanged)"
+        else ac_check secret.workspace fail "Secret $name exists but lacks room and key (has: $keys)" "the human fixes or deletes it; ligus-k8s never overwrites a workspace Secret without --replace"; ac_raise 4; fi
+        ac_finish "$AC_TOOL" "secrets workspace" "$(json_ctx),\"secret\":$(ac_jstr "$name")"
+      fi
+      if [ $THROWAWAY = 1 ]; then
+        local tmp; tmp=$(umask 077; mktemp -d)
+        # shellcheck disable=SC2064
+        trap "rm -rf '$tmp'" EXIT
+        (umask 077
+         printf 'k8s-trial-%s' "$(ac_uuid)" >"$tmp/room"
+         ac_rand_b64 36 >"$tmp/key")
+        create_secret_from_dir "$name" "$tmp"
+        k -n "$NS" label secret "$name" ligus.ai/throwaway=true --overwrite >/dev/null
+        rm -rf "$tmp"; trap - EXIT
+        ac_check secret.workspace pass "created Secret $name: a THROWAWAY workspace (random room and key, never shown). Nobody else holds this key; for trials and tests only"
+      elif [ -n "$FROM_DIR" ]; then
+        check_source_dir "$FROM_DIR" room key || ac_finish "$AC_TOOL" "secrets workspace" "$(json_ctx)"
+        local f
+        for f in "$FROM_DIR"/*; do
+          case $(basename "$f") in room|key|relay-access-token) ;; *) ac_check secret.source fail "unexpected file $(basename "$f") in $FROM_DIR (allowed: room, key, relay-access-token)" "remove it and rerun"; ac_raise 3; ac_finish "$AC_TOOL" "secrets workspace" "$(json_ctx)" ;; esac
+        done
+        create_secret_from_dir "$name" "$FROM_DIR"
+        ac_check secret.workspace pass "created Secret $name from $FROM_DIR (values not shown)"
+        ac_next "the human deletes $FROM_DIR now (rm -rf $FROM_DIR); the Secret is the only copy the cluster needs"
+        [ -s "$FROM_DIR/relay-access-token" ] && ac_next "install with --relay-access-token (the Secret holds relay-access-token)"
+      else
+        ac_check secret.workspace fail "Secret $name does not exist" "a trial: rerun with --throwaway. A real workspace: STOP and ask the human to write room, key (and relay-access-token) as files in a private directory, then rerun with --from-dir DIR"
+        ac_raise 4
+      fi
+      ac_finish "$AC_TOOL" "secrets workspace" "$(json_ctx),\"secret\":$(ac_jstr "$name")" ;;
+    generic)
+      [ -n "$SECRET_NAME" ] || ac_usage_error "secrets generic needs --name"
+      [ -n "$FROM_DIR" ] || ac_usage_error "secrets generic needs --from-dir (one file per key)"
+      ensure_namespace || ac_finish "$AC_TOOL" "secrets generic" "$(json_ctx)"
+      if k -n "$NS" get secret "$SECRET_NAME" >/dev/null 2>&1 && [ "$REPLACE" = 0 ]; then
+        ac_check secret.generic pass "Secret $SECRET_NAME exists with keys: $(secret_keys "$SECRET_NAME" | tr '\n' ' ')(left unchanged; --replace updates it)"
+      else
+        check_source_dir "$FROM_DIR" || ac_finish "$AC_TOOL" "secrets generic" "$(json_ctx)"
+        create_secret_from_dir "$SECRET_NAME" "$FROM_DIR" || { ac_check secret.generic fail "$FROM_DIR has no files" "one file per key"; ac_raise 3; }
+        [ "$AC_WORST" = 0 ] && ac_check secret.generic pass "Secret $SECRET_NAME created or updated from $FROM_DIR (values not shown)"
+      fi
+      ac_finish "$AC_TOOL" "secrets generic" "$(json_ctx),\"secret\":$(ac_jstr "$SECRET_NAME")" ;;
+    *) ac_usage_error "secrets needs a kind: workspace or generic" ;;
+  esac
+}
+
+# ------------------------------------------------------------------- install
+ensure_relay_chart() {
+  if ls "$CHART"/charts/ligus-relay-*.tgz >/dev/null 2>&1; then return 0; fi
+  mkdir -p "$CHART/charts"
+  if [ -n "$RELAY_CHART_DIR" ]; then
+    [ -f "$RELAY_CHART_DIR/Chart.yaml" ] || { ac_check chart.dependency fail "$RELAY_CHART_DIR has no Chart.yaml" "pass <relay-checkout>/deploy/helm/ligus-relay"; ac_raise 3; return 1; }
+    if ! helm package -d "$CHART/charts" "$RELAY_CHART_DIR" >/dev/null 2>"$CHART/charts/.err"; then
+      ac_check chart.dependency fail "helm package $RELAY_CHART_DIR failed: $(head -1 "$CHART/charts/.err")" "pass the chart inside a full relay checkout (it links ../ligus-postgres)"
+      rm -f "$CHART/charts/.err"; ac_raise 3; return 1
+    fi
+    rm -f "$CHART/charts/.err"
+  elif [ $FETCH_RELAY = 1 ]; then
+    ac_have git || { ac_check chart.dependency fail "git not found" "install git or use --relay-chart"; ac_raise 3; return 1; }
+    local tmp; tmp=$(mktemp -d)
+    if ! { git -C "$tmp" init -q && git -C "$tmp" remote add origin "$RELAY_REPO_URL" \
+        && git -C "$tmp" fetch -q --depth 1 origin "$RELAY_REF" && git -C "$tmp" checkout -q FETCH_HEAD; }; then
+      rm -rf "$tmp"; ac_check chart.dependency fail "could not fetch $RELAY_REPO_URL at $RELAY_REF" "check network access, or use --relay-chart with a local relay checkout"; ac_raise 3; return 1
+    fi
+    if ! helm package -d "$CHART/charts" "$tmp/deploy/helm/ligus-relay" >/dev/null 2>&1; then
+      rm -rf "$tmp"; ac_check chart.dependency fail "helm package of the fetched relay chart failed" "use --relay-chart with a local relay checkout"; ac_raise 3; return 1
+    fi
+    rm -rf "$tmp"
+  else
+    ac_check chart.dependency fail "the relay chart (ligus-relay $RELAY_CHART_VERSION) is not packaged in deploy/helm/ligus/charts" "rerun with --relay-chart <relay-checkout>/deploy/helm/ligus-relay, or --fetch-relay-chart"
+    ac_raise 3; return 1
+  fi
+  ac_check chart.dependency pass "relay chart packaged into deploy/helm/ligus/charts"
+}
+
+VALUES_FILE=""
+write_overrides() {
+  {
+    echo "# Generated by ligus-k8s install (no secrets)."
+    if [ -n "$IMG_REPO$IMG_TAG$IMG_DIGEST" ]; then
+      echo "image:"
+      if [ -n "$IMG_REPO" ]; then echo "  repository: \"$IMG_REPO\""; fi
+      if [ -n "$IMG_TAG" ]; then echo "  tag: \"$IMG_TAG\""; fi
+      if [ -n "$IMG_DIGEST" ]; then echo "  digest: \"$IMG_DIGEST\""; fi
+    fi
+    echo "workspace:"
+    echo "  existingSecret: \"$WS_SECRET\""
+    if [ $RELAY_TOKEN = 1 ]; then echo "  relayAccessToken: true"; fi
+    case $SCENARIO in
+      team-external-relay) echo "relayUrl: \"$RELAY_URL\"" ;;
+      team-in-cluster-relay)
+        echo "relayUrl: \"http://${RELAY_SVC:-ligus-relay-sync}.$RELAY_NS.svc.cluster.local:8443\""
+        echo "networkPolicy:"; echo "  relayNamespace: \"$RELAY_NS\"" ;;
+      trial)
+        if [ -n "$RELAY_IMG_REPO$RELAY_IMG_TAG" ]; then
+          echo "relay:"; echo "  image:"
+          if [ -n "$RELAY_IMG_REPO" ]; then echo "    repository: \"$RELAY_IMG_REPO\""; fi
+          if [ -n "$RELAY_IMG_TAG" ]; then echo "    tag: \"$RELAY_IMG_TAG\""; fi
+        fi ;;
+    esac
+    if [ -n "$WORKERS" ] || [ -n "$ACCESS_MODE$SC" ]; then
+      echo "worker:"
+      if [ -n "$WORKERS" ]; then
+        echo "  enabled: true"; echo "  instances:"
+        local w IFS=,
+        for w in $WORKERS; do echo "    - name: \"$w\""; done
+      fi
+      if [ -n "$ACCESS_MODE$SC" ]; then
+        echo "  persistence:"
+        if [ -n "$ACCESS_MODE" ]; then echo "    accessMode: \"$ACCESS_MODE\""; fi
+        if [ -n "$SC" ]; then echo "    storageClass: \"$SC\""; fi
+        if [ -n "$SC" ]; then echo "  home:"; echo "    storageClass: \"$SC\""; fi
+      fi
+    fi
+    if [ $NO_SERVE = 1 ]; then echo "serve:"; echo "  enabled: false"; fi
+    if [ -n "$ACCESS_MODE$SC" ] && [ $NO_SERVE = 0 ]; then
+      echo "serve:"; echo "  persistence:"
+      if [ -n "$ACCESS_MODE" ]; then echo "    accessMode: \"$ACCESS_MODE\""; fi
+      if [ -n "$SC" ]; then echo "    storageClass: \"$SC\""; fi
+      if [ -n "$SC" ]; then echo "  home:"; echo "    storageClass: \"$SC\""; fi
+    fi
+  } >"$VALUES_FILE"
+}
+
+values_args() {
+  printf '%s\n' -f "$SCEN_DIR/$SCENARIO.yaml" -f "$VALUES_FILE"
+  [ -n "$EXTRA_VALUES" ] && printf '%s\n' -f "$EXTRA_VALUES"
+  return 0
+}
+
+# Secret values never go in values files: refuse a file that looks like it holds one.
+check_extra_values() {
+  [ -n "$EXTRA_VALUES" ] || return 0
+  [ -f "$EXTRA_VALUES" ] || { ac_check values.extra fail "$EXTRA_VALUES not found" "pass an existing file"; ac_raise 2; return 1; }
+  if grep -nEi '(key|token|password|passwd|secret|dsn|database_url)[A-Za-z_]*[[:space:]]*:[[:space:]]*["'"'"']?[A-Za-z0-9+/=_.:-]{16,}' "$EXTRA_VALUES" \
+      | grep -viE 'existingSecret|secretName|secretKey|regTokenSecret|tokenSecret|secretRef' >/dev/null; then
+    ac_check values.extra fail "$EXTRA_VALUES looks like it contains a secret value" "secrets go in Secrets (ligus-k8s secrets ...), referenced by name; remove the value from the file"
+    ac_raise 4; return 1
+  fi
+  ac_check values.extra pass "$EXTRA_VALUES holds no secret values"
+}
+
+# The fail-closed defaults must survive every values file: check the rendered
+# manifest, not the inputs. Turning any of these off is a human's decision.
+check_fail_closed() { # rendered-file
+  local f=$1 bad=""
+  local sts; sts=$(grep -c '^kind: StatefulSet' "$f" || true)
+  if [ "$sts" -gt 0 ]; then
+    [ "$(grep -c 'name: sandbox-preflight' "$f" || true)" -ge "$sts" ] || bad="$bad sandbox preflight init container off (agentSandbox.preflight.enabled);"
+    grep -A1 'name: LIGUS_REQUIRE_SANDBOX' "$f" | grep -q 'value: "1"' || bad="$bad LIGUS_REQUIRE_SANDBOX not 1 (agentSandbox.require);"
+  fi
+  grep -q '^kind: NetworkPolicy' "$f" || bad="$bad no NetworkPolicy (networkPolicy.enabled);"
+  grep -qE 'type: (LoadBalancer|NodePort)' "$f" && bad="$bad a LoadBalancer/NodePort Service (exposure);"
+  grep -qE 'hostNetwork: true|privileged: true|allowPrivilegeEscalation: true' "$f" && bad="$bad a privileged or host-network pod;"
+  grep -q 'name: LIGUS_REMOTE_INSECURE_RELAY' "$f" && bad="$bad an http:// tunnel relay (remote.insecureRelay);"
+  if [ -n "$bad" ]; then
+    ac_check fail-closed fail "the values turn off fail-closed defaults:$bad" "stop and ask the human; they make and own that change. ligus-k8s will not install it"
+    ac_raise 4; return 1
+  fi
+  ac_check fail-closed pass "sandbox required and preflighted, NetworkPolicies present, nothing exposed or privileged"
+}
+
+cmd_install() {
+  require_ns
+  case $SCENARIO in
+    trial|team-in-cluster-relay|team-external-relay) ;;
+    "") ac_usage_error "--scenario is required: trial, team-in-cluster-relay or team-external-relay" ;;
+    *) ac_usage_error "unknown scenario $SCENARIO" ;;
+  esac
+  case $ACCESS_MODE in ""|ReadWriteOnce|ReadWriteOncePod) ;; *) ac_usage_error "--access-mode must be ReadWriteOnce or ReadWriteOncePod" ;; esac
+  if [ "$SCENARIO" = team-external-relay ]; then
+    case $RELAY_URL in
+      https://*) ;;
+      "") ac_usage_error "team-external-relay needs --relay-url https://..." ;;
+      *) ac_check relay.url fail "--relay-url must be https:// for a relay outside the cluster" "use the relay's https URL; plain http would expose sync metadata and tokens"; ac_raise 4; ac_finish "$AC_TOOL" install "$(json_ctx)" ;;
+    esac
+  fi
+  [ "$SCENARIO" = team-in-cluster-relay ] && RELAY_NS=${RELAY_NS:-ligus-relay}
+  base_tools || ac_finish "$AC_TOOL" install "$(json_ctx)"
+  check_extra_values || ac_finish "$AC_TOOL" install "$(json_ctx)"
+  ensure_relay_chart || ac_finish "$AC_TOOL" install "$(json_ctx)"
+  if [ "$SCENARIO" = team-in-cluster-relay ]; then
+    # split topology: ligus-relay-sync; single topology: ligus-relay.
+    if k -n "$RELAY_NS" get service ligus-relay-sync >/dev/null 2>&1; then RELAY_SVC=ligus-relay-sync
+    elif k -n "$RELAY_NS" get service ligus-relay >/dev/null 2>&1; then RELAY_SVC=ligus-relay
+    else RELAY_SVC=""; fi
+    if [ -n "$RELAY_SVC" ]; then ac_check relay.service pass "relay Service $RELAY_SVC found in $RELAY_NS"
+    else ac_check relay.service fail "no Service ligus-relay-sync (or ligus-relay) in namespace $RELAY_NS" "install the relay first (ligus-relay chart, release name ligus-relay; see the relay repository's AGENTS.md), or pass --relay-namespace"; ac_raise 3; ac_finish "$AC_TOOL" install "$(json_ctx)"; fi
+  fi
+
+  VALUES_FILE=$(mktemp "${TMPDIR:-/tmp}/ligus-k8s-values.XXXXXX")
+  # shellcheck disable=SC2064
+  trap "rm -f '$VALUES_FILE'" EXIT
+  write_overrides
+  local vargs=() line
+  while IFS= read -r line; do vargs+=("$line"); done < <(values_args)
+
+  # 1. Render (the chart validates its values here).
+  local rendered; rendered=$(mktemp "${TMPDIR:-/tmp}/ligus-k8s-rendered.XXXXXX")
+  local kv; kv=$(k version -o json 2>/dev/null | sed -n 's/.*"gitVersion": *"v\([0-9.]*\).*/\1/p' | tail -1)
+  if ! h template "$REL" "$CHART" -n "$NS" --skip-tests "${vargs[@]}" ${kv:+--kube-version "$kv"} >"$rendered" 2>"$rendered.err"; then
+    ac_check render fail "helm template failed: $(grep -m1 -E 'Error|error' "$rendered.err" || head -1 "$rendered.err")" "fix the flags or values it names; the chart refuses unsafe combinations on purpose"
+    rm -f "$rendered" "$rendered.err"; ac_finish "$AC_TOOL" install "$(json_ctx)"
+  fi
+  rm -f "$rendered.err"
+  ac_check render pass "helm template rendered $(grep -c '^kind:' "$rendered") objects"
+  check_fail_closed "$rendered" || { rm -f "$rendered"; ac_finish "$AC_TOOL" install "$(json_ctx)"; }
+
+  # 2. Server-side dry run (admission, Pod Security, schema), in an existing namespace.
+  if [ "$DRY" = 1 ] && ! k get namespace "$NS" >/dev/null 2>&1; then
+    ac_check dryrun.server skip "namespace $NS does not exist yet, so no server-side dry run (it would need the namespace)" "run 'ligus-k8s secrets workspace' first (it creates the namespace), then --dry-run again"
+  else
+    [ "$DRY" = 1 ] || ensure_namespace || ac_finish "$AC_TOOL" install "$(json_ctx)"
+    if k -n "$NS" apply --dry-run=server -f "$rendered" >/dev/null 2>"$rendered.err"; then
+      ac_check dryrun.server pass "the API server accepts every object (Pod Security restricted included)"
+    else
+      ac_check dryrun.server fail "server-side dry run refused: $(grep -m1 . "$rendered.err")" "read the message; never relax Pod Security or the chart's security context to pass it"
+      rm -f "$rendered" "$rendered.err"; ac_finish "$AC_TOOL" install "$(json_ctx)"
+    fi
+    rm -f "$rendered.err"
+  fi
+  if [ "$DRY" = 1 ]; then
+    ac_check install skip "dry run only; the rendered manifest is at $rendered (contains no secrets)"
+    ac_next "install for real: the same command without --dry-run"
+    ac_finish "$AC_TOOL" install "$(json_ctx),\"scenario\":$(ac_jstr "$SCENARIO"),\"rendered\":$(ac_jstr "$rendered")"
+  fi
+  rm -f "$rendered"
+
+  # 3. The workspace Secret must exist (created by `secrets workspace`).
+  if secret_has_keys "$WS_SECRET" room key; then
+    ac_check secret.workspace pass "Secret $WS_SECRET has room and key"
+    if [ $RELAY_TOKEN = 1 ] && ! secret_has_keys "$WS_SECRET" relay-access-token; then
+      ac_check secret.relay-token fail "--relay-access-token given but Secret $WS_SECRET has no relay-access-token" "the human adds it (secrets workspace --from-dir with a relay-access-token file, --replace)"; ac_raise 4; ac_finish "$AC_TOOL" install "$(json_ctx)"
+    fi
+  else
+    ac_check secret.workspace fail "Secret $WS_SECRET with keys room and key not found in $NS" "trial: ligus-k8s secrets workspace --throwaway -n $NS --release $REL. Real workspace: STOP; the human prepares the files and you run secrets workspace --from-dir"
+    ac_raise 4; ac_finish "$AC_TOOL" install "$(json_ctx)"
+  fi
+
+  # 4. Install or upgrade, and wait.
+  ac_log "helm upgrade --install $REL (scenario $SCENARIO), waiting up to $TIMEOUT ..."
+  local out
+  if out=$(h upgrade --install "$REL" "$CHART" -n "$NS" "${vargs[@]}" --wait --timeout "$TIMEOUT" 2>&1); then
+    ac_check install pass "release $REL deployed in $NS (scenario $SCENARIO)"
+    ac_next "ligus-k8s verify -n $NS --release $REL --json"
+  else
+    ac_check install fail "helm upgrade --install failed: $(printf '%s\n' "$out" | grep -m1 -iE 'error|timed out' || printf '%s' "$out" | tail -1)" "run ligus-k8s verify -n $NS --release $REL to see which pod is not Ready; a pod stuck in Init means its node cannot sandbox agents (kubectl -n $NS logs $REL-ligus-serve-0 -c sandbox-preflight)"
+  fi
+  ac_finish "$AC_TOOL" install "$(json_ctx),\"scenario\":$(ac_jstr "$SCENARIO")"
+}
+
+# -------------------------------------------------------------------- verify
+cmd_verify() {
+  require_ns
+  base_tools || ac_finish "$AC_TOOL" verify "$(json_ctx)"
+  local st
+  st=$(h status "$REL" -n "$NS" -o json 2>/dev/null | sed -n 's/.*"status":"\([a-z-]*\)".*/\1/p' | head -1)
+  if [ "$st" = deployed ]; then ac_check release.status pass "release $REL is deployed"
+  else ac_check release.status fail "release $REL status: ${st:-not found}" "install it: ligus-k8s install ... ; or helm history $REL -n $NS"; ac_finish "$AC_TOOL" verify "$(json_ctx)"; fi
+
+  local psa; psa=$(k get namespace "$NS" -o jsonpath='{.metadata.labels.pod-security\.kubernetes\.io/enforce}' 2>/dev/null || true)
+  if [ "$psa" = restricted ]; then ac_check psa.namespace pass "namespace enforces Pod Security restricted"
+  else ac_check psa.namespace warn "namespace enforce=${psa:-unset}" "ask the human whether to label it restricted"; fi
+
+  local pods p ready phase
+  pods=$(k -n "$NS" get pods -l "app.kubernetes.io/instance=$REL" -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.phase}{" "}{.status.conditions[?(@.type=="Ready")].status}{" "}{.metadata.labels.app\.kubernetes\.io/component}{"\n"}{end}' 2>/dev/null || true)
+  local comp n=0
+  while read -r p phase ready comp; do
+    [ -n "$p" ] || continue
+    [ "$comp" = test ] && continue
+    [ "$phase" = Succeeded ] && continue
+    n=$((n+1))
+    if [ "$ready" = True ]; then ac_check "pod.$p" pass "Ready"
+    else ac_check "pod.$p" fail "not Ready (phase $phase)" "kubectl -n $NS describe pod $p; kubectl -n $NS logs $p --all-containers --tail=50"; fi
+    case $comp in
+      serve|worker)
+        if k -n "$NS" logs "$p" -c sandbox-preflight 2>/dev/null | grep -q 'turn test: passed (tier landlock)'; then
+          local abi; abi=$(k -n "$NS" logs "$p" -c sandbox-preflight 2>/dev/null | sed -n 's/.*Landlock (ABI \([0-9][0-9]*\)).*/\1/p' | head -1)
+          ac_check "sandbox.$p" pass "sandbox preflight passed: Landlock${abi:+ ABI $abi}, a confined agent turn ran"
+        else
+          ac_check "sandbox.$p" fail "sandbox preflight did not pass" "kubectl -n $NS logs $p -c sandbox-preflight; the node needs Linux 6.7+ with Landlock. Never disable agentSandbox"
+        fi ;;
+    esac
+  done <<EOF
+$pods
+EOF
+  [ $n -gt 0 ] || ac_check pods fail "no pods for release $REL" "kubectl -n $NS get all"
+
+  # serve's own health endpoint, from inside its container (NetworkPolicy keeps others out).
+  local serve; serve=$(k -n "$NS" get pods -l "app.kubernetes.io/instance=$REL,app.kubernetes.io/component=serve" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+  if [ -n "$serve" ]; then
+    local code
+    code=$(k -n "$NS" exec "$serve" -c serve -- bash -c 'exec 3<>/dev/tcp/127.0.0.1/8787; printf "GET /v1/health HTTP/1.0\r\nHost: x\r\n\r\n" >&3; head -1 <&3' 2>/dev/null | tr -d '\r' || true)
+    case $code in *" 200"*) ac_check serve.health pass "GET /v1/health: $code" ;; *) ac_check serve.health fail "GET /v1/health: ${code:-no answer}" "kubectl -n $NS logs $serve -c serve --tail=50" ;; esac
+  fi
+
+  local np; np=$(k -n "$NS" get networkpolicy -l "app.kubernetes.io/instance=$REL" -o name 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$np" -gt 0 ]; then ac_check networkpolicy pass "$np NetworkPolicies in place"
+  else ac_check networkpolicy fail "no NetworkPolicies for $REL" "networkPolicy.enabled must stay true; ask the human if someone turned it off"; fi
+
+  if [ $SKIP_TEST = 1 ]; then
+    ac_check helm.test skip "skipped (--skip-helm-test)"
+  else
+    local tout
+    if tout=$(h test "$REL" -n "$NS" --timeout 5m 2>&1); then
+      local nt; nt=$(printf '%s\n' "$tout" | grep -c 'Phase: *Succeeded' || true)
+      if [ "$nt" -gt 0 ]; then ac_check helm.test pass "helm test passed: $nt test pods succeeded (with serve: a sandboxed agent turn, and sync through the relay on a throwaway workspace)"
+      else ac_check helm.test info "this release has no test pods (helm tests need serve)"; fi
+    else
+      ac_check helm.test fail "helm test failed: $(printf '%s\n' "$tout" | grep -m1 -iE 'error|failed' || true)" "helm test $REL -n $NS --logs (test pods hold no real key, so their logs are safe to read)"
+    fi
+  fi
+  [ "$AC_WORST" = 0 ] && ac_next "hand over to the human for the steps only they can do (AGENTS.md, Human-only steps)"
+  ac_finish "$AC_TOOL" verify "$(json_ctx)"
+}
+
+# ------------------------------------------------------------------ teardown
+cmd_teardown() {
+  require_ns
+  base_tools || ac_finish "$AC_TOOL" teardown "$(json_ctx)"
+  if ! k get namespace "$NS" >/dev/null 2>&1; then
+    ac_check namespace pass "namespace $NS does not exist; nothing to do"
+    ac_finish "$AC_TOOL" teardown "$(json_ctx)"
+  fi
+  if h status "$REL" -n "$NS" >/dev/null 2>&1; then
+    if h uninstall "$REL" -n "$NS" --wait --timeout 5m >/dev/null 2>&1; then ac_check helm.uninstall pass "release $REL uninstalled"
+    else ac_check helm.uninstall fail "helm uninstall $REL failed" "helm uninstall $REL -n $NS --debug"; fi
+  else
+    ac_check helm.uninstall pass "release $REL not installed"
+  fi
+  if [ $DEL_DATA = 1 ]; then
+    k -n "$NS" delete pvc -l "app.kubernetes.io/instance=$REL" --wait=true --timeout=120s >/dev/null 2>&1 || true
+    ac_check data pass "deleted PVCs of $REL (the identities are gone; revoke them from a desktop if they ever joined a real workspace)"
+  else
+    local left; left=$(k -n "$NS" get pvc -l "app.kubernetes.io/instance=$REL" -o name 2>/dev/null | wc -l | tr -d ' ')
+    ac_check data info "kept $left PVCs (identity, event log); --delete-data removes them"
+  fi
+  if [ $DEL_SECRETS = 1 ]; then
+    k -n "$NS" delete secret -l "$MANAGED_LABEL=$MANAGED_VALUE" >/dev/null 2>&1 || true
+    ac_check secrets pass "deleted Secrets created by ligus-k8s in $NS"
+  fi
+  if [ $DEL_NS = 1 ]; then
+    local owner; owner=$(k get namespace "$NS" -o jsonpath="{.metadata.labels.ligus\.ai/managed-by}")
+    if [ "$owner" = "$MANAGED_VALUE" ]; then
+      if k delete namespace "$NS" --wait=true --timeout=180s >/dev/null 2>&1; then ac_check namespace pass "deleted namespace $NS"
+      else ac_check namespace fail "namespace $NS did not finish deleting" "kubectl get namespace $NS -o yaml (look for finalizers)"; fi
+    else
+      ac_check namespace fail "namespace $NS was not created by ligus-k8s; refusing to delete it" "a human deletes it if that is really intended"
+      ac_raise 4
+    fi
+  fi
+  ac_next "uninstalling is not revoking: if this install ever joined a real workspace, a human revokes its device or member from a desktop and decides whether to rotate the workspace key"
+  ac_finish "$AC_TOOL" teardown "$(json_ctx)"
+}
+
+case $CMD in
+  preflight) cmd_preflight ;;
+  secrets) cmd_secrets ;;
+  install) cmd_install ;;
+  render) DRY=1; cmd_install ;;
+  verify) cmd_verify ;;
+  teardown|uninstall) cmd_teardown ;;
+  *) ac_usage_error "unknown command: $CMD (preflight, secrets, install, verify, teardown)" ;;
+esac

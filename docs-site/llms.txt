@@ -18,6 +18,7 @@ Documentation site: https://docs.ligus.ai/ — pages below are the canonical ref
 ## Deploy
 
 - [Choose a deployment](https://docs.ligus.ai/deploy/): The five deployment shapes (solo, personal fleet, team on a relay, Kubernetes preview, keys-off-cluster design) with architecture diagrams.
+- [Deploying with an agent](https://docs.ligus.ai/deploy/with-an-agent/): AGENTS.md, the ligus-deploy-k8s and ligus-deploy-local skills, and the non-interactive ligus-k8s / ligus-local tools with --json output; which steps stay with the human.
 - [Solo laptop](https://docs.ligus.ai/deploy/solo/): The desktop app alone, no relay.
 - [Personal fleet](https://docs.ligus.ai/deploy/personal-fleet/): Laptop plus an always-on `ligus serve` home server and the phone, directly over Tailscale or through the relay tunnel.
 - [Team on a relay](https://docs.ligus.ai/ops/deployment/): Deploying and gating a relay, creating a workspace, inviting teammates, a shared worker, and a security checklist.

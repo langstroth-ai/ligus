@@ -97,6 +97,8 @@ jobs:
             echo "::error::chart rendered without a workspace"; exit 1
           fi
           python3 deploy/helm/ligus/ci/security_test.py
+      - name: agent deploy tooling (shellcheck, exit codes, --json schema)
+        run: bash deploy/tests/agent-deploy-test.sh
       - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           cluster_name: ligus-e2e

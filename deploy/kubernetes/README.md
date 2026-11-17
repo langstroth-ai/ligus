@@ -9,6 +9,13 @@ design, and the phases still to come, are in
 image for the `ligus` binary is in
 [`../container/Dockerfile`](../container/Dockerfile).
 
+## With an agent, or scripted
+
+[`ligus-k8s`](ligus-k8s) runs preflight (with a `--probe` that measures Pod
+Security, NetworkPolicy enforcement and Landlock), secret bootstrap, install
+from a scenario in [`scenarios/`](scenarios), verify and teardown,
+non-interactively with `--json`. See [`AGENTS.md`](../../AGENTS.md).
+
 ## What runs where
 
 | Component | Kubernetes shape | State | Holds E2EE keys? |
