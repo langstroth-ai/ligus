@@ -116,6 +116,38 @@ def test_removed_values_refuse():
           not any(d["kind"] == "ConfigMap" and "job.yaml" in (d.get("data") or {}) for d in docs))
 
 
+# --- Ligus's own secrets are files, never environment variables -----------
+
+def test_secrets_are_files():
+    docs = render("--set", "worker.enabled=true", "--set", "serve.workspaceSecrets.existingSecret=ws",
+                  "--set", "serve.ntfy.url=https://ntfy.example", "--set", "serve.ntfy.topic=t",
+                  "--set", "serve.ntfy.tokenSecret.name=ntfy", "--set", "remote.enabled=true",
+                  "--set", "remote.relayUrl=https://relay.example", "--set", "remote.regTokenSecret.name=reg",
+                  "--set", "workspace.relayAccessToken=true",
+                  "--set", "serve.agentEnv[0].name=ANTHROPIC_API_KEY", "--set", "serve.agentEnv[0].secretName=keys",
+                  "--set", "serve.agentEnv[0].secretKey=anthropic")
+    for kind, name, tpl in pod_templates(docs):
+        if (tpl["metadata"].get("labels") or {}).get("app.kubernetes.io/name") != "ligus":
+            continue
+        spec = tpl["spec"]
+        for c in (spec.get("initContainers") or []) + spec["containers"]:
+            check("%s %s/%s has no envFrom Secret" % (kind, name, c["name"]),
+                  not any("secretRef" in e for e in c.get("envFrom") or []))
+            for e in c.get("env") or []:
+                ref = (e.get("valueFrom") or {}).get("secretKeyRef")
+                if ref:
+                    check("%s %s/%s: only the room and allow-listed agent keys come from a Secret in env (%s)"
+                          % (kind, name, c["name"], e["name"]), e["name"] in ("LIGUS_WORKSPACE", "ANTHROPIC_API_KEY"))
+        for v in spec.get("volumes") or []:
+            if "secret" in v:
+                check("%s %s secret volume %s is 0400" % (kind, name, v["name"]), v["secret"].get("defaultMode") == 0o400)
+    p = render("--set", "serve.agentEnv[0].name=LIGUS_WORKSPACE_KEY", "--set", "serve.agentEnv[0].secretName=a",
+               "--set", "serve.agentEnv[0].secretKey=b", ok=False)
+    check("agentEnv refuses names outside the allow-list", p.returncode != 0)
+    p = render("--set", "serve.secretEnv.existingSecret=all", ok=False)
+    check("the removed serve.secretEnv (envFrom) is refused", p.returncode != 0)
+
+
 # --- Third-party MCP images are pinned by digest ---------------------------
 
 def test_mcp_images_pinned():
@@ -133,7 +165,7 @@ def test_mcp_images_pinned():
 
 
 TESTS = [test_dns_egress_is_scoped, test_serve_ingress_excludes_foreign_pods,
-         test_removed_values_refuse, test_mcp_images_pinned]
+         test_removed_values_refuse, test_secrets_are_files, test_mcp_images_pinned]
 
 if __name__ == "__main__":
     for t in TESTS:

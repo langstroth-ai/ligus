@@ -112,6 +112,11 @@ app.kubernetes.io/component: {{ .component }}
 {{- if hasKey .Values "sandbox" -}}
 {{- fail "sandbox.* was removed: Kubernetes per-turn executors and PR-test sandboxes are not supported in 2.0 (agent turns run in the serve/worker pod under Ligus's own sandbox; see deploy/kubernetes.md, Explicitly unsupported)" -}}
 {{- end -}}
+{{- if or (hasKey .Values.serve "secretEnv") (hasKey .Values.worker "secretEnv") -}}
+{{- fail "serve.secretEnv / worker.secretEnv (envFrom of a whole Secret) was removed: put workspace runtime credentials in <host>.workspaceSecrets.existingSecret (mounted as files, LIGUS_WS_SECRET_DIR) and provider keys CLI agents need in <host>.agentEnv (allow-listed)" -}}
+{{- end -}}
+{{- include "ligus.validateAgentEnv" (dict "root" . "v" .Values.serve "component" "serve") -}}
+{{- include "ligus.validateAgentEnv" (dict "root" . "v" .Values.worker "component" "worker") -}}
 {{- if hasKey .Values "otel" -}}
 {{- fail "otel.* was removed: Ligus does not export OpenTelemetry in 2.0" -}}
 {{- end -}}
@@ -144,17 +149,145 @@ app.kubernetes.io/component: {{ .component }}
     secretKeyRef:
       name: {{ include "ligus.workspaceSecretName" . }}
       key: {{ .Values.workspace.secretKeys.room }}
-- name: LIGUS_WORKSPACE_KEY
+# Secrets are files (mounted 0400), never environment variables: they stay
+# out of the pod spec, `kubectl describe` and /proc/<pid>/environ, and
+# Ligus denies the files to agent processes.
+- name: LIGUS_WORKSPACE_KEY_FILE
+  value: /etc/ligus/secrets/workspace/workspace-key
+{{- if .Values.workspace.relayAccessToken }}
+- name: LIGUS_RELAY_ACCESS_TOKEN_FILE
+  value: /etc/ligus/secrets/workspace/relay-access-token
+{{- end }}
+{{- end -}}
+
+{{/*
+Per-host secrets (serve or worker). Args: dict root v (the serve or worker
+values) component.
+*/}}
+{{- define "ligus.hostSecretEnv" -}}
+{{- $root := .root -}}
+{{- if .v.workspaceSecrets.existingSecret }}
+# Workspace runtime credentials: each key of the Secret is a secret_ref
+# (LIGUS_WS_SECRET_<key>).
+- name: LIGUS_WS_SECRET_DIR
+  value: /etc/ligus/secrets/ws
+{{- end }}
+{{- if eq .component "serve" }}
+{{- if and .v.ntfy.url .v.ntfy.topic .v.ntfy.tokenSecret.name }}
+- name: LIGUS_NTFY_TOKEN_FILE
+  value: /etc/ligus/secrets/ntfy/token
+{{- end }}
+{{- if and $root.Values.remote.enabled $root.Values.remote.regTokenSecret.name }}
+- name: LIGUS_REMOTE_REG_TOKEN_FILE
+  value: /etc/ligus/secrets/remote/reg-token
+{{- end }}
+{{- end }}
+{{- range .v.agentEnv }}
+# Passed to agent processes (CLI agents need their provider key in env).
+- name: {{ .name }}
   valueFrom:
     secretKeyRef:
-      name: {{ include "ligus.workspaceSecretName" . }}
-      key: {{ .Values.workspace.secretKeys.key }}
-- name: LIGUS_RELAY_ACCESS_TOKEN
-  valueFrom:
-    secretKeyRef:
-      name: {{ include "ligus.workspaceSecretName" . }}
-      key: {{ .Values.workspace.secretKeys.relayAccessToken }}
-      optional: true
+      name: {{ required "agentEnv[].secretName is required" .secretName }}
+      key: {{ required "agentEnv[].secretKey is required" .secretKey }}
+{{- end }}
+{{- end -}}
+
+{{/* Secret volume mounts for a host. Args: dict root v component. */}}
+{{- define "ligus.secretMounts" -}}
+- name: workspace-secret
+  mountPath: /etc/ligus/secrets/workspace
+  readOnly: true
+{{- if .v.workspaceSecrets.existingSecret }}
+- name: ws-secrets
+  mountPath: /etc/ligus/secrets/ws
+  readOnly: true
+{{- end }}
+{{- if eq .component "serve" }}
+{{- if and .v.ntfy.url .v.ntfy.topic .v.ntfy.tokenSecret.name }}
+- name: ntfy-token
+  mountPath: /etc/ligus/secrets/ntfy
+  readOnly: true
+{{- end }}
+{{- if and .root.Values.remote.enabled .root.Values.remote.regTokenSecret.name }}
+- name: remote-token
+  mountPath: /etc/ligus/secrets/remote
+  readOnly: true
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{/*
+Secret volumes for a host. 0400: with fsGroup the kubelet adds group read,
+so the files end up 0440 root:65532, readable by the Ligus user only.
+Args: dict root v component.
+*/}}
+{{- define "ligus.secretVolumes" -}}
+- name: workspace-secret
+  secret:
+    secretName: {{ include "ligus.workspaceSecretName" .root }}
+    defaultMode: 0400
+    items:
+      - { key: {{ .root.Values.workspace.secretKeys.key }}, path: workspace-key }
+      {{- if .root.Values.workspace.relayAccessToken }}
+      - { key: {{ .root.Values.workspace.secretKeys.relayAccessToken }}, path: relay-access-token }
+      {{- end }}
+{{- if .v.workspaceSecrets.existingSecret }}
+- name: ws-secrets
+  secret:
+    secretName: {{ .v.workspaceSecrets.existingSecret }}
+    defaultMode: 0400
+{{- end }}
+{{- if eq .component "serve" }}
+{{- if and .v.ntfy.url .v.ntfy.topic .v.ntfy.tokenSecret.name }}
+- name: ntfy-token
+  secret:
+    secretName: {{ .v.ntfy.tokenSecret.name }}
+    defaultMode: 0400
+    items:
+      - { key: {{ .v.ntfy.tokenSecret.key }}, path: token }
+{{- end }}
+{{- if and .root.Values.remote.enabled .root.Values.remote.regTokenSecret.name }}
+- name: remote-token
+  secret:
+    secretName: {{ .root.Values.remote.regTokenSecret.name }}
+    defaultMode: 0400
+    items:
+      - { key: {{ .root.Values.remote.regTokenSecret.key }}, path: reg-token }
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{/*
+checksum/secrets: rolls the pods when a referenced Secret changes. Uses
+lookup, so under `helm template` (Argo CD and other GitOps tools) it is a
+constant; there, use Reloader or bump podAnnotations. Args: dict root v
+component.
+*/}}
+{{- define "ligus.secretsChecksum" -}}
+{{- $root := .root -}}
+{{- $names := list (include "ligus.workspaceSecretName" $root) -}}
+{{- with .v.workspaceSecrets.existingSecret }}{{ $names = append $names . }}{{ end -}}
+{{- range .v.agentEnv }}{{ $names = append $names .secretName }}{{ end -}}
+{{- if eq .component "serve" -}}
+{{- with .v.ntfy.tokenSecret.name }}{{ $names = append $names . }}{{ end -}}
+{{- with $root.Values.remote.regTokenSecret.name }}{{ $names = append $names . }}{{ end -}}
+{{- end -}}
+{{- $data := dict -}}
+{{- range $n := ($names | uniq | sortAlpha) -}}
+{{- $s := lookup "v1" "Secret" $root.Release.Namespace $n -}}
+{{- $_ := set $data $n (dig "data" (dict) $s) -}}
+{{- end -}}
+{{- toJson $data | sha256sum -}}
+{{- end -}}
+
+{{/* Agent env names must be on the allow-list (no Ligus secrets in env). */}}
+{{- define "ligus.validateAgentEnv" -}}
+{{- $allow := .root.Values.agentEnvAllowList -}}
+{{- range .v.agentEnv -}}
+{{- if not (has .name $allow) -}}
+{{- fail (printf "%s.agentEnv: %s is not in agentEnvAllowList; model provider keys only (Ligus's own secrets go in files)" $.component .name) -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "ligus.podSpecCommon" -}}
@@ -246,6 +379,7 @@ the worker will).
   subPath: home
 - name: tmp
   mountPath: /tmp
+{{ include "ligus.secretMounts" (dict "root" . "v" .Values.serve "component" "serve") }}
 {{- if or .Values.serve.mcpToml .Values.serve.dashboardToml }}
 - name: config
   mountPath: /etc/ligus/config
@@ -262,4 +396,5 @@ the worker will).
   subPath: home
 - name: tmp
   mountPath: /tmp
+{{ include "ligus.secretMounts" (dict "root" . "v" .Values.worker "component" "worker") }}
 {{- end -}}
