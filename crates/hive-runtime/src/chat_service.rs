@@ -5344,9 +5344,47 @@ mod flow_tests {
         assert!(next.iter().all(|l| l["kind"] != "guardSignal"), "signals already exported");
 
         // A cursor from a recreated data dir (ahead of every table) starts over.
-        let ahead = Cursor { facts: 1 << 40, signals: 1 << 40, events: 1 << 40 };
+        let ahead = Cursor { facts: 1 << 40, signals: 1 << 40, events: 1 << 40, equivocations: 1 << 40 };
         let over = parse(&svc.export_facts_since(Since::Cursor(ahead), 4_000).unwrap());
         assert!(over.iter().any(|l| l["kind"] == "guardSignal") && over.iter().any(|l| l["kind"] == "reply"), "{over:?}");
+    }
+
+    /// A chat whose fold changes without a new row in its own log is observed
+    /// again: an equivocating copy of one of its events (both copies are
+    /// denied), or a trust change on its workspace's config log.
+    #[test]
+    fn facts_export_reobserves_chats_whose_fold_changed_elsewhere() {
+        use crate::facts::{Cursor, Since};
+        let mut svc = service();
+        let wid = Uuid::new_v4();
+        let chat = svc.create_chat("A", wid, "rt").unwrap();
+        let user = svc.post_user_message(chat.id, wid, "q").unwrap();
+        let reply = svc.begin_assistant_message(chat.id, wid, "Bot", "rt", None, Some(user.id)).unwrap();
+        svc.complete_assistant_message(chat.id, wid, reply, "a").unwrap();
+        let cursor_of = |lines: &[String]| {
+            let v: serde_json::Value = serde_json::from_str(lines.last().unwrap()).unwrap();
+            Cursor::parse(v["attributes"]["ligus.cursor"].as_str().unwrap()).unwrap()
+        };
+        let observed = |lines: &[String]| lines.iter().any(|l| l.contains(&chat.id.to_string()) && l.contains("\"kind\":\"reply\""));
+        let first = svc.export_facts_since(Since::UnixMs(0), 1_000).unwrap();
+        let c1 = cursor_of(&first);
+
+        // An equivocating copy of the reply's completion lands in the
+        // evidence table, not the log: the chat's fold changed all the same.
+        let (_, envs) = svc.store.envelopes_after_row(0).unwrap();
+        let mut forged = envs.iter().filter(|e| e.session_id == chat.id).last().unwrap().clone();
+        forged.payload = SessionEvent::SessionTitleChanged { title: "other".into() };
+        forged.clear_raw();
+        svc.store.ingest(&forged).unwrap();
+        let after = svc.export_facts_since(Since::Cursor(c1), 2_000).unwrap();
+        assert!(observed(&after), "equivocation not re-observed: {after:?}");
+        let c2 = cursor_of(&after);
+        assert_eq!(svc.export_facts_since(Since::Cursor(c2), 3_000).unwrap().len(), 1, "observed once");
+
+        // A trust change on the config log re-observes every chat of the workspace.
+        svc.issue_invite(wid).unwrap();
+        let after = svc.export_facts_since(Since::Cursor(c2), 4_000).unwrap();
+        assert!(observed(&after), "config trust change not re-observed: {after:?}");
     }
 
     /// P0.5 `route_decision_still_synced`: other devices follow the first

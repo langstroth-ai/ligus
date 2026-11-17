@@ -141,8 +141,13 @@ impl ChatService {
         if from.events > events_max {
             from.events = 0;
         }
+        let equivocations_max = self.store.max_equivocation_row()?;
+        if from.equivocations > equivocations_max {
+            from.equivocations = 0;
+        }
         let mut next = from;
         next.events = events_max;
+        next.equivocations = equivocations_max;
         let mut out = Vec::new();
         for (row, ws, sid, at_ms, kind, json) in self.store.facts_after(from.facts, since_ms)? {
             next.facts = next.facts.max(row);
@@ -160,8 +165,20 @@ impl ChatService {
             next.signals = next.signals.max(row);
             out.extend(crate::facts::signal_line(row, &ws, sid.as_deref(), at_ms, &json));
         }
-        if next.events > from.events {
-            for sid in self.store.sessions_changed_after(from.events)? {
+        if next.events > from.events || next.equivocations > from.equivocations {
+            // A chat's fold also changes without a row in its own log: an
+            // equivocating copy denies an event it held, and a trust change on
+            // the config log (membership, revocation, rules, agents) re-judges
+            // every chat of the workspace. Observe those chats again so a
+            // reader never keeps a state the fold has since withdrawn.
+            let mut changed = self.store.sessions_changed_after(from.events)?;
+            changed.extend(self.store.sessions_equivocated_after(from.equivocations)?);
+            for ws in self.store.trust_changed_workspaces_after(from.events, from.equivocations)? {
+                changed.extend(self.store.sessions_of_workspace(ws)?);
+            }
+            let mut seen = std::collections::HashSet::new();
+            changed.retain(|sid| seen.insert(*sid));
+            for sid in changed {
                 let Ok(Some(session)) = self.load(sid) else { continue };
                 let config = sid == hive_core::workspace_config_session_id(session.workspace_id);
                 out.extend(crate::facts::state_lines(next.events, now_ms, &session, config));

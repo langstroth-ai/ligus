@@ -9,7 +9,7 @@
 //! ```json
 //! {"schema":"ligus.facts.v1","seq":7,"timeUnixMs":1760000000000,"kind":"turn",
 //!  "attributes":{"ligus.workspace.id_hash":"…","ligus.chat.id":"…","ligus.turn.id":"…",
-//!                "ligus.agent.key":"…","ligus.runtime.id":"…","ligus.task.class":"code",
+//!                "ligus.agent.key":"…","ligus.runtime.id":"…","ligus.task.class":"feature",
 //!                "ligus.turn.error":false,"ligus.turn.tool_calls":3, …}}
 //! ```
 //!
@@ -81,6 +81,23 @@ pub fn clean(v: &str) -> String {
     }
 }
 
+/// A task class as exported: one of the classes this build assigns, or
+/// `other`. A proposal's class is the agent's own word and a route
+/// decision's comes from the signed log, so neither is trusted to be a
+/// class name rather than text.
+pub fn export_class(v: &str) -> &str {
+    if v.is_empty() {
+        ""
+    } else if hive_core::flow::task_class::CLASSES.contains(&v) {
+        v
+    } else {
+        "other"
+    }
+}
+
+/// Guard-signal sources that are fixed words, not names.
+const BUILTIN_SOURCES: &[&str] = &["relay", "worker", "bearer"];
+
 fn id_hash(v: &str) -> String {
     Sha256::digest(v.as_bytes()).iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
@@ -113,25 +130,41 @@ pub const KIND_CURSOR: &str = "cursor";
 /// Replies observed per chat per export (newest first).
 pub const MAX_REPLIES_PER_CHAT: usize = 256;
 
-/// Where an incremental export resumes: the last facts row, guard-signal row
-/// and event-log row it covered. Written as `c1.<facts>.<signals>.<events>`.
+/// Where an incremental export resumes: the last facts row, guard-signal
+/// row, event-log row and equivocation-evidence row it covered. Written as
+/// `c1.<facts>.<signals>.<events>.<equivocations>`; the three-number form of
+/// earlier exports reads as no evidence seen yet.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Cursor {
     pub facts: i64,
     pub signals: i64,
     pub events: i64,
+    /// Rows of the equivocation evidence table: an equivocating copy changes
+    /// a chat's fold (both copies are denied) without adding a log row.
+    pub equivocations: i64,
 }
 
 impl Cursor {
     pub fn encode(&self) -> String {
-        format!("c1.{}.{}.{}", self.facts, self.signals, self.events)
+        format!("c1.{}.{}.{}.{}", self.facts, self.signals, self.events, self.equivocations)
     }
 
     pub fn parse(s: &str) -> Option<Self> {
-        let mut it = s.strip_prefix("c1.")?.split('.');
-        let mut n = || it.next()?.parse::<i64>().ok().filter(|v| *v >= 0);
-        let c = Cursor { facts: n()?, signals: n()?, events: n()? };
-        it.next().is_none().then_some(c)
+        let parts: Vec<&str> = s.strip_prefix("c1.")?.split('.').collect();
+        if !(3..=4).contains(&parts.len()) {
+            return None;
+        }
+        // Digits only: no sign, no whitespace, no overflow.
+        let n = |p: &str| (!p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())).then(|| p.parse::<i64>().ok()).flatten();
+        Some(Cursor {
+            facts: n(parts[0])?,
+            signals: n(parts[1])?,
+            events: n(parts[2])?,
+            equivocations: match parts.get(3) {
+                Some(p) => n(p)?,
+                None => 0,
+            },
+        })
     }
 }
 
@@ -289,7 +322,7 @@ pub fn state_lines(seq: i64, at_ms: i64, s: &hive_core::ChatSession, config: boo
         a.s("ligus.agent.key", &agent_key(p.producing_agent_id));
         a.id("ligus.proposal.parent_id", p.parent_id).id("ligus.proposal.superseded_by", p.superseded_by);
         a.id("ligus.proposal_set.id", p.set_id);
-        a.s("ligus.task.class", p.task_class.as_deref().unwrap_or(""));
+        a.s("ligus.task.class", export_class(p.task_class.as_deref().unwrap_or("")));
         let yes = p.approvals.iter().filter(|v| v.approved).count();
         let revises = p.refinements.iter().filter(|r| r.request_changes).count();
         let (added, removed) = p.diff.as_deref().map(diff_line_counts).unwrap_or((0, 0));
@@ -318,9 +351,12 @@ pub fn state_lines(seq: i64, at_ms: i64, s: &hive_core::ChatSession, config: boo
             a.v("ligus.workflow.lease_epoch", json!(e));
         }
         push(KIND_WORKFLOW_RUN, a);
+        // Stage ids are the author's slugs ("draft-q3-memo"): export each
+        // stage by its position in the definition instead.
+        let key = |id: &str| r.definition.nodes.iter().position(|n| n.id == id).map(|i| format!("s{i}"));
         for n in &r.definition.nodes {
             let mut a = Attrs::new(&ws);
-            a.s("ligus.chat.id", &chat).s("ligus.workflow.run_id", &run).s("ligus.stage.id", &n.id);
+            a.s("ligus.chat.id", &chat).s("ligus.workflow.run_id", &run).s("ligus.stage.id", &key(&n.id).unwrap_or_default());
             match &n.kind {
                 hive_core::workflow::WorkflowNodeKind::Agent { agent_id, .. } => {
                     a.s("ligus.stage.kind", "agent").s("ligus.agent.key", &agent_key(*agent_id));
@@ -329,7 +365,7 @@ pub fn state_lines(seq: i64, at_ms: i64, s: &hive_core::ChatSession, config: boo
                     a.s("ligus.stage.kind", "gate");
                 }
             }
-            let deps: Vec<Value> = n.depends_on.iter().map(|d| clean(d)).filter(|d| !d.is_empty()).map(Value::String).collect();
+            let deps: Vec<Value> = n.depends_on.iter().filter_map(|d| key(d)).map(Value::String).collect();
             a.v("ligus.stage.depends_on", Value::Array(deps));
             let st = r.node_state(&n.id);
             a.s("ligus.stage.status", &st.map(|x| enum_str(&x.status)).unwrap_or_else(|| "pending".into()));
@@ -344,7 +380,14 @@ pub fn state_lines(seq: i64, at_ms: i64, s: &hive_core::ChatSession, config: boo
     for l in s.guards.leases.values() {
         let c = &l.current;
         let mut a = Attrs::new(&ws);
-        a.s("ligus.lease.scope", &enum_str(&c.scope)).s("ligus.lease.scope_id", &c.scope_id).s("ligus.lease.reason", &enum_str(&c.reason));
+        a.s("ligus.lease.scope", &enum_str(&c.scope)).s("ligus.lease.reason", &enum_str(&c.reason));
+        // A workspace lease's scope is the workspace itself: hashed, like
+        // every other workspace reference.
+        if c.scope == hive_core::lease::LeaseScope::Workspace {
+            a.hashed("ligus.lease.scope_id_hash", &c.scope_id);
+        } else {
+            a.s("ligus.lease.scope_id", &c.scope_id);
+        }
         a.hashed("ligus.lease.holder_hash", &c.holder.to_string());
         a.v("ligus.lease.epoch", json!(c.epoch)).v("ligus.lease.lease_ms", json!(c.lease_ms));
         a.v("ligus.lease.claimed_at_ms", ts(&c.claimed_at)).v("ligus.lease.released", json!(l.released));
@@ -356,7 +399,8 @@ pub fn state_lines(seq: i64, at_ms: i64, s: &hive_core::ChatSession, config: boo
 
 /// One guard signal row as a `ligus.facts.v1` line. Each field of the signal
 /// becomes `ligus.signal.<field>`: numbers and flags as they are, device ids
-/// (`holder`, `member`, a device `source`) as `…_hash`, other strings
+/// (`holder`, `member`), MCP server names (`server`) and any `source` but
+/// a built-in word (`relay`, `worker`, `bearer`) as `…_hash`, other strings
 /// cleaned.
 pub fn signal_line(seq: i64, workspace_id: &str, session_id: Option<&str>, at_ms: i64, json: &str) -> Option<String> {
     let v: Value = serde_json::from_str(json).ok()?;
@@ -365,10 +409,19 @@ pub fn signal_line(seq: i64, workspace_id: &str, session_id: Option<&str>, at_ms
     if let Some(sid) = session_id {
         a.s("ligus.chat.id", sid);
     }
+    let workspace_scope = obj.get("scope").and_then(Value::as_str) == Some("workspace");
     for (k, val) in obj {
         let key = format!("ligus.signal.{}", snake(k));
         match val {
-            Value::String(s) if matches!(k.as_str(), "holder" | "member") || (k == "source" && uuid::Uuid::parse_str(s).is_ok()) => {
+            Value::String(s) if k == "scopeId" && workspace_scope => {
+                a.hashed(&format!("{key}_hash"), s);
+            }
+            // Device ids, configured MCP server names and phone ids leave as
+            // hashes; only built-in source words stay readable.
+            Value::String(s)
+                if matches!(k.as_str(), "holder" | "member" | "server")
+                    || (k == "source" && !BUILTIN_SOURCES.contains(&s.as_str())) =>
+            {
                 a.hashed(&format!("{key}_hash"), s);
             }
             Value::String(s) => {
@@ -415,7 +468,7 @@ pub fn export_line(seq: i64, workspace_id: &str, chat_id: &str, at_ms: i64, r: &
             s("ligus.agent.key", &t.agent);
             s("ligus.runtime.id", &t.runtime_id);
             s("ligus.host.id_hash", &if t.host_id.is_empty() { String::new() } else { id_hash(&t.host_id) });
-            s("ligus.task.class", &t.task_class);
+            s("ligus.task.class", export_class(&t.task_class));
             s("ligus.agent.role", &t.role);
             s("ligus.route.arm", &t.arm);
             s("ligus.route.upstream_arm", &t.upstream_arm);
@@ -500,10 +553,10 @@ mod tests {
     /// `facts_schema_golden`: the exported shape is stable.
     #[test]
     fn facts_schema_golden() {
-        let line = export_line(7, "00000000-0000-0000-0000-00000000000a", "00000000-0000-0000-0000-00000000000b", 1_760_000_000_000, &FlowRecord::TurnTagged(tag("primary", "code", ""))).unwrap();
+        let line = export_line(7, "00000000-0000-0000-0000-00000000000a", "00000000-0000-0000-0000-00000000000b", 1_760_000_000_000, &FlowRecord::TurnTagged(tag("primary", "feature", ""))).unwrap();
         assert_eq!(
             line,
-            r#"{"attributes":{"gen_ai.operation.name":"chat","ligus.agent.key":"primary","ligus.agent.role":"builder","ligus.chat.id":"00000000-0000-0000-0000-00000000000b","ligus.host.id_hash":"0388fb626ca89a12","ligus.runtime.id":"claude-code","ligus.task.class":"code","ligus.turn.cost_usd":0.25,"ligus.turn.duration_ms":4200,"ligus.turn.error":false,"ligus.turn.handoff_parcel":false,"ligus.turn.id":"00000000-0000-0000-0000-000000000001","ligus.turn.proposals":1,"ligus.turn.tests_passed":true,"ligus.turn.tool_calls":3,"ligus.turn.trigger_id":"00000000-0000-0000-0000-000000000002","ligus.workspace.id_hash":"39d3159fe171bad3"},"kind":"turn","schema":"ligus.facts.v1","seq":7,"timeUnixMs":1760000000000}"#
+            r#"{"attributes":{"gen_ai.operation.name":"chat","ligus.agent.key":"primary","ligus.agent.role":"builder","ligus.chat.id":"00000000-0000-0000-0000-00000000000b","ligus.host.id_hash":"0388fb626ca89a12","ligus.runtime.id":"claude-code","ligus.task.class":"feature","ligus.turn.cost_usd":0.25,"ligus.turn.duration_ms":4200,"ligus.turn.error":false,"ligus.turn.handoff_parcel":false,"ligus.turn.id":"00000000-0000-0000-0000-000000000001","ligus.turn.proposals":1,"ligus.turn.tests_passed":true,"ligus.turn.tool_calls":3,"ligus.turn.trigger_id":"00000000-0000-0000-0000-000000000002","ligus.workspace.id_hash":"39d3159fe171bad3"},"kind":"turn","schema":"ligus.facts.v1","seq":7,"timeUnixMs":1760000000000}"#
         );
         // Non-facts export nothing.
         assert!(export_line(1, "w", "c", 0, &FlowRecord::MarkCleared { mark_id: Uuid::nil() }).is_none());
@@ -684,6 +737,73 @@ mod tests {
         s
     }
 
+    /// Author-chosen identifiers are text, not ids: a workflow stage slug, an
+    /// agent-declared task class and a configured MCP server name all pass
+    /// the id/enum shape check, so they must not leave as written.
+    #[test]
+    fn author_chosen_identifiers_do_not_leave() {
+        let mut fixed = || "x".to_string();
+        let mut s = content_session(&mut fixed, false);
+        let run = &mut s.workflow_runs[0];
+        run.definition.nodes[0].id = "draft-acme-layoff-memo".into();
+        run.definition.nodes[1].depends_on = vec!["draft-acme-layoff-memo".into()];
+        run.nodes[0].node_id = "draft-acme-layoff-memo".into();
+        s.proposals[0].task_class = Some("acme-acquisition".into());
+        let mut lines = state_lines(1, 0, &s, false);
+        lines.push(export_line(1, "w", "c", 0, &FlowRecord::TurnTagged(tag("primary", "acme-acquisition", ""))).unwrap());
+        for json in [
+            json!({"kind": "toolsSelected", "server": "acme-payroll-db", "offered": 3, "droppedCap": 0, "droppedCollision": 0}),
+            json!({"kind": "guardDecision", "gate": "toolCall", "verdict": "reject", "subject": "stranger", "source": "acme-payroll-db", "reason": "role_floor"}),
+        ] {
+            lines.push(signal_line(1, "w", None, 0, &json.to_string()).unwrap());
+        }
+        for l in &lines {
+            assert!(!l.contains("acme"), "author text leaked: {l}");
+        }
+        let all = lines.join("\n");
+        assert!(all.contains(r#""ligus.task.class":"other""#), "{all}");
+        assert!(all.contains(r#""ligus.stage.id":"s0""#) && all.contains(r#""ligus.stage.depends_on":["s0"]"#), "{all}");
+        assert!(all.contains("ligus.signal.server_hash") && all.contains("ligus.signal.source_hash"), "{all}");
+        // Built-in sources and known classes stay readable.
+        let known = signal_line(1, "w", None, 0, r#"{"kind":"guardDecision","gate":"toolCall","verdict":"reject","subject":"unknown","source":"worker","reason":"role_floor"}"#).unwrap();
+        assert!(known.contains(r#""ligus.signal.source":"worker""#), "{known}");
+        assert!(export_line(1, "w", "c", 0, &FlowRecord::TurnTagged(tag("primary", "bugfix", ""))).unwrap().contains(r#""ligus.task.class":"bugfix""#));
+    }
+
+    /// A workspace-scope lease names the workspace itself: its scope id
+    /// leaves as the workspace hash, like every other workspace reference.
+    #[test]
+    fn workspace_lease_scope_is_hashed() {
+        let ws = "00000000-0000-0000-0000-00000000000a";
+        let mut fixed = || "x".to_string();
+        let mut s = content_session(&mut fixed, false);
+        let lease = hive_core::lease::CoordinatorLease {
+            scope: hive_core::lease::LeaseScope::Workspace,
+            scope_id: ws.into(),
+            holder: Uuid::from_u128(41),
+            epoch: 1,
+            lease_ms: 30_000,
+            reason: Default::default(),
+            claimed_at: hive_core::Timestamp::from_unix_seconds(1_760_000_000),
+        };
+        s.guards.leases.clear();
+        s.guards.leases.insert(
+            hive_core::lease::lease_key(lease.scope, &lease.scope_id),
+            hive_core::lease::LeaseState { current: lease, released: false, handover_to: None, fenced: vec![] },
+        );
+        let mut lines = state_lines(1, 0, &s, false);
+        lines.push(
+            signal_line(1, ws, None, 0, &json!({"kind": "coordinatorHeartbeat", "scope": "workspace", "scopeId": ws, "holder": Uuid::from_u128(41).to_string(), "leaseMs": 1, "epoch": 1, "beat": 1}).to_string())
+                .unwrap(),
+        );
+        for l in &lines {
+            assert!(!l.contains(ws), "raw workspace id leaked: {l}");
+        }
+        let all = lines.join("\n");
+        assert!(all.contains(&format!(r#""ligus.lease.scope_id_hash":"{}""#, id_hash(ws))), "{all}");
+        assert!(all.contains(&format!(r#""ligus.signal.scope_id_hash":"{}""#, id_hash(ws))), "{all}");
+    }
+
     /// `state_facts_schema_golden`: the state and signal shapes are stable.
     #[test]
     fn state_facts_schema_golden() {
@@ -699,10 +819,10 @@ mod tests {
         let tail = r#","schema":"ligus.facts.v1","seq":9,"timeUnixMs":1760000100000}"#;
         let expect = [
             (&chat[0], r#"{"attributes":{"ligus.agent.key":"00000000-0000-0000-0000-00000000001e","ligus.chat.id":"00000000-0000-0000-0000-00000000000b","ligus.host.id_hash":"DEV41","ligus.message.kind":"message","ligus.message.role":"agent","ligus.runtime.id":"x","ligus.turn.claimed":true,"ligus.turn.created_at_ms":1760000000000,"ligus.turn.id":"00000000-0000-0000-0000-000000000015","ligus.turn.output_bytes":1,"ligus.turn.streaming":false,"ligus.turn.tool_calls":1,"ligus.turn.trigger_id":"00000000-0000-0000-0000-000000000014","ligus.turn.trigger_role":"user","ligus.turn.triggered_at_ms":1760000000000,"ligus.workspace.id_hash":"WS"},"kind":"reply"#),
-            (&chat[1], r#"{"attributes":{"ligus.agent.key":"00000000-0000-0000-0000-00000000001e","ligus.chat.id":"00000000-0000-0000-0000-00000000000b","ligus.diff.files_changed":2,"ligus.diff.lines_added":2,"ligus.diff.lines_removed":1,"ligus.proposal.approvals":0,"ligus.proposal.comments":0,"ligus.proposal.created_at_ms":1760000000000,"ligus.proposal.dismissed":false,"ligus.proposal.id":"00000000-0000-0000-0000-000000000032","ligus.proposal.kind":"fileDiff","ligus.proposal.rejections":0,"ligus.proposal.required_approvals":1,"ligus.proposal.reverted":false,"ligus.proposal.revisions_requested":1,"ligus.proposal.stale":false,"ligus.proposal.status":"open","ligus.task.class":"x","ligus.workspace.id_hash":"WS"},"kind":"proposal"#),
+            (&chat[1], r#"{"attributes":{"ligus.agent.key":"00000000-0000-0000-0000-00000000001e","ligus.chat.id":"00000000-0000-0000-0000-00000000000b","ligus.diff.files_changed":2,"ligus.diff.lines_added":2,"ligus.diff.lines_removed":1,"ligus.proposal.approvals":0,"ligus.proposal.comments":0,"ligus.proposal.created_at_ms":1760000000000,"ligus.proposal.dismissed":false,"ligus.proposal.id":"00000000-0000-0000-0000-000000000032","ligus.proposal.kind":"fileDiff","ligus.proposal.rejections":0,"ligus.proposal.required_approvals":1,"ligus.proposal.reverted":false,"ligus.proposal.revisions_requested":1,"ligus.proposal.stale":false,"ligus.proposal.status":"open","ligus.task.class":"other","ligus.workspace.id_hash":"WS"},"kind":"proposal"#),
             (&chat[2], r#"{"attributes":{"ligus.chat.id":"00000000-0000-0000-0000-00000000000b","ligus.workflow.definition_id":"00000000-0000-0000-0000-00000000003c","ligus.workflow.run_id":"00000000-0000-0000-0000-00000000003d","ligus.workflow.stages":2,"ligus.workflow.started_at_ms":1760000000000,"ligus.workflow.status":"running","ligus.workflow.updated_at_ms":1760000000000,"ligus.workspace.id_hash":"WS"},"kind":"workflowRun"#),
-            (&chat[3], r#"{"attributes":{"ligus.agent.key":"00000000-0000-0000-0000-00000000001e","ligus.chat.id":"00000000-0000-0000-0000-00000000000b","ligus.stage.attempts":1,"ligus.stage.depends_on":[],"ligus.stage.id":"build","ligus.stage.kind":"agent","ligus.stage.status":"pending","ligus.turn.id":"00000000-0000-0000-0000-000000000015","ligus.workflow.run_id":"00000000-0000-0000-0000-00000000003d","ligus.workspace.id_hash":"WS"},"kind":"workflowStage"#),
-            (&chat[4], r#"{"attributes":{"ligus.chat.id":"00000000-0000-0000-0000-00000000000b","ligus.stage.attempts":0,"ligus.stage.depends_on":["build","x"],"ligus.stage.id":"review","ligus.stage.kind":"gate","ligus.stage.status":"pending","ligus.workflow.run_id":"00000000-0000-0000-0000-00000000003d","ligus.workspace.id_hash":"WS"},"kind":"workflowStage"#),
+            (&chat[3], r#"{"attributes":{"ligus.agent.key":"00000000-0000-0000-0000-00000000001e","ligus.chat.id":"00000000-0000-0000-0000-00000000000b","ligus.stage.attempts":1,"ligus.stage.depends_on":[],"ligus.stage.id":"s0","ligus.stage.kind":"agent","ligus.stage.status":"pending","ligus.turn.id":"00000000-0000-0000-0000-000000000015","ligus.workflow.run_id":"00000000-0000-0000-0000-00000000003d","ligus.workspace.id_hash":"WS"},"kind":"workflowStage"#),
+            (&chat[4], r#"{"attributes":{"ligus.chat.id":"00000000-0000-0000-0000-00000000000b","ligus.stage.attempts":0,"ligus.stage.depends_on":["s0"],"ligus.stage.id":"s1","ligus.stage.kind":"gate","ligus.stage.status":"pending","ligus.workflow.run_id":"00000000-0000-0000-0000-00000000003d","ligus.workspace.id_hash":"WS"},"kind":"workflowStage"#),
             (&chat[5], r#"{"attributes":{"ligus.lease.claimed_at_ms":1760000000000,"ligus.lease.epoch":2,"ligus.lease.fenced_claims":0,"ligus.lease.holder_hash":"DEV41","ligus.lease.lease_ms":30000,"ligus.lease.reason":"initial","ligus.lease.released":false,"ligus.lease.scope":"workflowRun","ligus.lease.scope_id":"00000000-0000-0000-0000-00000000003d","ligus.workspace.id_hash":"WS"},"kind":"lease"#),
             (&config[0], r#"{"attributes":{"ligus.agent.created_at_ms":1760000000000,"ligus.agent.key":"00000000-0000-0000-0000-00000000001e","ligus.host.id_hash":"WORKER","ligus.runtime.id":"x","ligus.workspace.id_hash":"WS"},"kind":"agent"#),
             (&config[1], r#"{"attributes":{"ligus.host.id_hash":"WORKER","ligus.host.kind":"worker","ligus.host.last_seen_ms":1760000000000,"ligus.workspace.id_hash":"WS"},"kind":"host"#),
@@ -722,15 +842,29 @@ mod tests {
             sig,
             golden(r#"{"attributes":{"ligus.signal.beat":7,"ligus.signal.epoch":2,"ligus.signal.holder_hash":"DEV41","ligus.signal.kind":"coordinatorHeartbeat","ligus.signal.lease_ms":30000,"ligus.signal.scope":"workflowRun","ligus.signal.scope_id":"run-1","ligus.workspace.id_hash":"WS"},"kind":"guardSignal","schema":"ligus.facts.v1","seq":3,"timeUnixMs":1760000000000}"#)
         );
-        let c = Cursor { facts: 1, signals: 3, events: 9 };
+        let c = Cursor { facts: 1, signals: 3, events: 9, equivocations: 2 };
         assert_eq!(
             cursor_line(1_760_000_100_000, &c),
-            r#"{"attributes":{"ligus.cursor":"c1.1.3.9"},"kind":"cursor","schema":"ligus.facts.v1","seq":9,"timeUnixMs":1760000100000}"#
+            r#"{"attributes":{"ligus.cursor":"c1.1.3.9.2"},"kind":"cursor","schema":"ligus.facts.v1","seq":9,"timeUnixMs":1760000100000}"#
         );
         assert_eq!(Cursor::parse(&c.encode()), Some(c));
-        assert_eq!(Since::parse("c1.1.3.9"), Some(Since::Cursor(c)));
+        assert_eq!(Since::parse("c1.1.3.9.2"), Some(Since::Cursor(c)));
+        assert_eq!(Since::parse("c1.1.3.9"), Some(Since::Cursor(Cursor { equivocations: 0, ..c })));
         assert_eq!(Since::parse("1760000000000"), Some(Since::UnixMs(1_760_000_000_000)));
-        for bad in ["c1.1.3", "c1.1.3.9.4", "c2.1.3.9", "c1.-1.3.9", "c1.a.3.9", "", "x"] {
+        for bad in [
+            "c1.1.3",
+            "c1.1.3.9.4.5",
+            "c2.1.3.9",
+            "c1.-1.3.9",
+            "c1.+1.3.9",
+            "c1. 1.3.9",
+            "c1.1..9",
+            "c1.a.3.9",
+            "c1.99999999999999999999.3.9",
+            "c1.1.3.9.",
+            "",
+            "x",
+        ] {
             assert_eq!(Since::parse(bad), None, "{bad}");
         }
     }

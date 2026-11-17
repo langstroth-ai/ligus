@@ -1113,6 +1113,51 @@ impl EventStore {
         Ok(out)
     }
 
+    /// Highest equivocation-evidence row (0 when none).
+    pub fn max_equivocation_row(&self) -> Result<i64> {
+        Ok(self.conn.query_row("SELECT COALESCE(MAX(row_id), 0) FROM equivocations", [], |row| row.get(0))?)
+    }
+
+    /// Sessions that gained equivocation evidence after row `after`.
+    pub fn sessions_equivocated_after(&self, after: i64) -> Result<Vec<Uuid>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT session_id FROM equivocations WHERE row_id > ?1 GROUP BY session_id ORDER BY MIN(row_id)")?;
+        let rows = stmt.query_map([after], |row| row.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for s in rows {
+            if let Ok(id) = Uuid::parse_str(&s?) {
+                out.push(id);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Workspaces whose config log gained a trust event (the kinds of
+    /// [`Self::trust_envelopes`]) after event row `after_event` or
+    /// equivocation row `after_equivocation`: every chat of those
+    /// workspaces is judged against a changed roster.
+    pub fn trust_changed_workspaces_after(&self, after_event: i64, after_equivocation: i64) -> Result<Vec<Uuid>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT workspace_id, session_id FROM events WHERE row_id > ?1 AND kind IN (\
+             'accountKeyRegistered','accountKeyRotated','deviceCertificateAdded','deviceRevoked',\
+             'memberAdded','memberRemoved','sessionSnapshot','memberRoleChanged','dearthModeChanged','joinApproved',\
+             'agentKeyCertified','agentUpserted','agentRosterUpdated','agentRemoved',\
+             'workspaceRulesSet','passkeyRegistered','passkeyRemoved') \
+             UNION SELECT workspace_id, session_id FROM equivocations WHERE row_id > ?2",
+        )?;
+        let rows = stmt.query_map([after_event, after_equivocation], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let mut out: Vec<Uuid> = Vec::new();
+        for row in rows {
+            let (ws, sid) = row?;
+            let (Ok(ws), Ok(sid)) = (Uuid::parse_str(&ws), Uuid::parse_str(&sid)) else { continue };
+            if sid == hive_core::workspace_config_session_id(ws) && !out.contains(&ws) {
+                out.push(ws);
+            }
+        }
+        Ok(out)
+    }
+
     /// Distinct session ids known to the store, in first-seen order.
     pub fn list_session_ids(&self) -> Result<Vec<Uuid>> {
         let mut stmt = self.conn.prepare(
