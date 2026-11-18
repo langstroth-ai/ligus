@@ -596,6 +596,9 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/events", get(events))
         .route("/v1/tunnel/credential", post(tunnel_credential))
         .route("/v1/tunnel/push", put(tunnel_push))
+        .route("/v1/tunnel/device", put(tunnel_device))
+        .route("/v1/revocations", get(list_revocations))
+        .route("/v1/revocations/{device}/retry", post(retry_revocation))
         .layer(middleware::from_fn_with_state(shared.clone(), auth))
         .with_state(shared)
 }
@@ -1493,6 +1496,71 @@ async fn tunnel_push(State(s): S, peer: Option<Extension<TunnelPeer>>, body: Byt
     let pref: PushPref = serde_json::from_slice(&body).map_err(|e| ApiError::bad_request(format!("invalid JSON body: {e}")))?;
     let (enabled, previews) = t.registry.set_push(&rec.pid, pref.enabled, pref.previews)?.ok_or_else(|| ApiError::not_found("phone"))?;
     Ok(Json(json!({ "enabled": enabled, "previews": previews })))
+}
+
+/// `PUT /v1/tunnel/device {"id": uuid, "sig": b64u}`: bind this pairing to
+/// the phone's workspace device (see `tunnel::device_bind`). `200 {bound:
+/// true}`; `202 {bound: false}` while the device isn't on this box's roster
+/// yet (retry after it syncs); `403` for a revoked device (the pairing is
+/// revoked too); `400` for a bad signature or a non-phone device.
+async fn tunnel_device(State(s): S, peer: Option<Extension<TunnelPeer>>, body: Bytes) -> ApiResult<Response> {
+    use super::tunnel::device_bind::{BindCheck, DeviceClaim};
+    let (t, rec) = tunnel_phone(&s, peer)?;
+    let claim: DeviceClaim = serde_json::from_slice(&body).map_err(|e| ApiError::bad_request(format!("invalid JSON body: {e}")))?;
+    let st = rec.static_key().ok_or_else(|| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "pairing has no static key"))?;
+    // The roster lookup folds the config log: off the async workers.
+    let pid = rec.pid.clone();
+    let check = tokio::task::spawn_blocking(move || t.apply_device_claim(&pid, &st, &claim))
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    Ok(match check {
+        BindCheck::Bind(d) => Json(json!({ "bound": true, "deviceId": d })).into_response(),
+        BindCheck::Unknown => (StatusCode::ACCEPTED, Json(json!({ "bound": false, "reason": "this box doesn't know that device yet; retry after it syncs" }))).into_response(),
+        BindCheck::Revoked(d) => {
+            // Let the 403 reach the phone, then end the session and tell the relay.
+            if let Some(t) = s.tunnel.clone() {
+                let pid = rec.pid.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    if let Err(e) = t.revoke_device(d, &[pid]) {
+                        eprintln!("remote: revoking a pairing that claimed a revoked device failed: {e:#}");
+                    }
+                });
+            }
+            return Err(ApiError::new(StatusCode::FORBIDDEN, format!("workspace device {d} is revoked; this pairing is revoked too")));
+        }
+        BindCheck::Invalid(why) => return Err(ApiError::bad_request(why)),
+    })
+}
+
+/// `GET /v1/revocations`: what this box did about each revoked phone device
+/// (tunnel cut, push removed, session ended), with per-step status.
+async fn list_revocations(State(s): S) -> Json<Value> {
+    let list: Vec<Value> = match s.tunnel.as_ref() {
+        Some(t) => t
+            .ledger
+            .list()
+            .into_iter()
+            .map(|e| {
+                let mut v = serde_json::to_value(&e.status).unwrap_or_default();
+                v["summary"] = json!(e.status.summary());
+                v["complete"] = json!(e.status.complete());
+                v
+            })
+            .collect(),
+        None => Vec::new(),
+    };
+    Json(json!({ "revocations": list }))
+}
+
+/// `POST /v1/revocations/{device}/retry`: try the unfinished steps now.
+async fn retry_revocation(State(s): S, Path(device): Path<String>) -> ApiResult<Json<Value>> {
+    let device = parse_id(&device, "revocation")?;
+    let t = s.tunnel.as_ref().ok_or_else(|| ApiError::not_found("revocation"))?;
+    if !t.retry_revocation(device) {
+        return Err(ApiError::not_found("revocation"));
+    }
+    Ok(Json(json!({ "retrying": true })))
 }
 
 /// Deprecated: kept for app builds older than `/v1/dashboard`.

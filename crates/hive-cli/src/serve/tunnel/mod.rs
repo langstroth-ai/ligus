@@ -34,12 +34,14 @@ use tokio::sync::{broadcast, mpsc};
 pub mod cli;
 pub mod control;
 pub mod cred;
+pub mod device_bind;
 pub mod frame;
 pub mod keys;
 pub mod noise;
 pub mod phones;
 pub mod plain;
 pub mod push;
+pub mod revocation;
 pub mod session;
 
 #[cfg(test)]
@@ -437,7 +439,20 @@ pub struct TunnelHost {
     /// Host-side push limits, foreground suppression and relay refusals.
     push_gate: Mutex<push::PushGate>,
     status: Mutex<LiveStatus>,
+    /// Per-device revocation status (`revocations.json`, [`revocation`]).
+    pub ledger: revocation::Ledger,
+    /// Wakes the revocation executor.
+    pub revocation_kick: tokio::sync::Notify,
+    /// For the relay's HTTP revoke route and langstroth-auth.
+    pub http: reqwest::Client,
+    auth_admin: Mutex<Option<revocation::AuthAdmin>>,
+    /// The workspace roster, as far as a phone's device is concerned (set by
+    /// `ligus serve`; tests set their own).
+    device_lookup: Mutex<Option<DeviceLookupFn>>,
 }
+
+/// Looks a workspace device up on this box's roster.
+pub type DeviceLookupFn = Arc<dyn Fn(uuid::Uuid) -> device_bind::DeviceLookup + Send + Sync>;
 
 impl TunnelHost {
     /// Load (or create) the host keys and the phone registry under `data_dir`.
@@ -448,6 +463,7 @@ impl TunnelHost {
         ensure_private_dir(&pending_dir(&dir))?;
         let keys = HostKeys::load_or_create(&dir)?;
         let registry = Registry::load(&dir)?;
+        let ledger = revocation::Ledger::load(&dir);
         let (revoked, _) = broadcast::channel(64);
         Ok(Arc::new(Self {
             dir,
@@ -464,6 +480,11 @@ impl TunnelHost {
             push_available: AtomicBool::new(false),
             push_gate: Mutex::new(push::PushGate::default()),
             status: Mutex::new(LiveStatus::default()),
+            ledger,
+            revocation_kick: tokio::sync::Notify::new(),
+            http: hive_forge::http_client_builder().connect_timeout(Duration::from_secs(3)).build()?,
+            auth_admin: Mutex::new(revocation::AuthAdmin::from_env()),
+            device_lookup: Mutex::new(None),
         }))
     }
 
@@ -560,6 +581,9 @@ impl TunnelHost {
             Pending::Revoke(pid) if ok => {
                 Self::lock(&self.revocations).remove(&pid);
                 let _ = std::fs::remove_file(pending_dir(&self.dir).join(format!("revoke-{pid}.json")));
+                // The relay's control `revoke` drops the push token and
+                // closes the sessions too: it confirms both steps.
+                self.ledger.relay_confirmed(&pid, None, None);
             }
             Pending::Revoke(pid) => {
                 eprintln!("remote: relay refused revoking {pid} ({}); retrying", code.unwrap_or("?"));
@@ -697,6 +721,86 @@ impl TunnelHost {
                 }
             }
         }
+    }
+
+    /// Revoke every pairing of the workspace device `device` (it was revoked
+    /// on the roster): the local cut happens now (sessions end, requests and
+    /// new sessions are refused, pushes stop); the relay and langstroth-auth
+    /// steps run in the background with per-step status ([`revocation`]).
+    pub fn revoke_device(&self, device: uuid::Uuid, pids: &[String]) -> Result<()> {
+        let name = pids.iter().find_map(|p| self.registry.get(p)).map(|r| r.name).unwrap_or_default();
+        for pid in pids {
+            self.revoke(pid)?;
+        }
+        let session = self.auth_admin().is_none().then_some((hive_runtime::revocation_status::StepState::NotApplicable, revocation::NO_AUTH_ADMIN));
+        self.ledger.begin(device, &name, pids, session);
+        println!("remote: phone {name:?} revoked (device {device}); cutting its relay pairing and push registration");
+        self.revocation_kick.notify_one();
+        Ok(())
+    }
+
+    /// The expiry a revocation of `pid` must last until (its latest credential).
+    pub fn revocation_exp(&self, pid: &str) -> u64 {
+        let rec = self.registry.get(pid).map(|r| r.cred_exp).unwrap_or(0);
+        let pending = Self::lock(&self.revocations).get(pid).map(|r| r.0).unwrap_or(0);
+        rec.max(pending).max(now() + CRED_LIFETIME_SECS)
+    }
+
+    /// Retry `device`'s unfinished revocation steps now.
+    pub fn retry_revocation(&self, device: uuid::Uuid) -> bool {
+        let found = self.ledger.retry(device);
+        if found {
+            self.revocation_kick.notify_one();
+        }
+        found
+    }
+
+    pub fn auth_admin(&self) -> Option<revocation::AuthAdmin> {
+        Self::lock(&self.auth_admin).clone()
+    }
+
+    pub fn set_auth_admin(&self, a: Option<revocation::AuthAdmin>) {
+        *Self::lock(&self.auth_admin) = a;
+    }
+
+    pub fn set_device_lookup(&self, f: DeviceLookupFn) {
+        *Self::lock(&self.device_lookup) = Some(f);
+    }
+
+    pub fn lookup_device(&self, id: uuid::Uuid) -> device_bind::DeviceLookup {
+        let f = Self::lock(&self.device_lookup).clone();
+        f.map(|f| f(id)).unwrap_or(device_bind::DeviceLookup::Unknown)
+    }
+
+    /// Why a new enrollment from this Noise static / auth key must be refused:
+    /// it belonged to a pairing of a device that is now revoked.
+    pub fn enroll_refusal(&self, static_pub: &[u8; 32], auth_pub: &[u8; 32]) -> Option<String> {
+        let (st, pk) = (b64u(static_pub), b64u(auth_pub));
+        self.registry
+            .list()
+            .into_iter()
+            .filter(|r| r.static_pub == st || r.auth_pub == pk)
+            .filter_map(|r| r.device_id)
+            .find(|d| self.lookup_device(*d) == device_bind::DeviceLookup::Revoked)
+            .map(|d| format!("this phone's workspace device {d} is revoked"))
+    }
+
+    /// `PUT /v1/tunnel/device` and enrollment: apply a device claim to `pid`.
+    pub fn apply_device_claim(&self, pid: &str, static_pub: &[u8; 32], claim: &device_bind::DeviceClaim) -> Result<device_bind::BindCheck> {
+        let check = device_bind::check(claim, self.host_id(), static_pub, |d| self.lookup_device(d));
+        match &check {
+            device_bind::BindCheck::Bind(d) => {
+                self.registry.bind_device(pid, *d)?;
+            }
+            device_bind::BindCheck::Revoked(d) => {
+                // Refused from the next request on; the caller finishes the
+                // cut (`revoke_device`) once its answer is on the way.
+                self.registry.bind_device(pid, *d)?;
+                self.registry.revoke(pid)?;
+            }
+            _ => {}
+        }
+        Ok(check)
     }
 
     pub fn pending_revocations(&self) -> Vec<String> {

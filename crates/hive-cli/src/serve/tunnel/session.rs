@@ -66,6 +66,10 @@ struct EnrollHello {
     #[serde(default)]
     name: String,
     pk: String,
+    /// The phone's workspace device and its proof (optional; see
+    /// [`super::device_bind`]).
+    #[serde(default)]
+    device: Option<super::device_bind::DeviceClaim>,
 }
 
 #[derive(Deserialize)]
@@ -147,6 +151,28 @@ where
                 if hello.v != 1 {
                     bail!("unsupported enrollment version {}", hello.v);
                 }
+                // A phone whose workspace device was revoked can't pair again,
+                // with a claim or with the keys of its revoked pairing.
+                if let Some(why) = host.enroll_refusal(&rs, &pk) {
+                    host.window_failed(eid);
+                    bail!("enrollment refused: {why}");
+                }
+                let mut device_id = None;
+                if let Some(claim) = &hello.device {
+                    use super::device_bind::BindCheck;
+                    match super::device_bind::check(claim, keys.host_id(), &rs, |d| host.lookup_device(d)) {
+                        BindCheck::Bind(d) => device_id = Some(d),
+                        BindCheck::Unknown => {}
+                        BindCheck::Revoked(d) => {
+                            host.window_failed(eid);
+                            bail!("enrollment refused: workspace device {d} is revoked");
+                        }
+                        BindCheck::Invalid(why) => {
+                            host.window_failed(eid);
+                            bail!("enrollment refused: {why}");
+                        }
+                    }
+                }
                 let name: String = hello.name.trim().chars().filter(|c| !c.is_control()).take(64).collect();
                 // E3: same static as an active phone → keep its pid.
                 let pid = host.registry.active_by_static(&rs).map(|r| r.pid).unwrap_or_else(random_id);
@@ -174,7 +200,7 @@ where
                     push_seq: 0,
                     last_seen: None,
                     owner_phone: false,
-                    device_id: None,
+                    device_id,
                 };
                 Ok((ts, pid, Some(PendingEnroll { rec, eid: eid.clone() })))
             }
