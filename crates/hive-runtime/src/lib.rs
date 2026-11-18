@@ -39,6 +39,7 @@ pub mod git_worktree;
 pub mod frozen_ns;
 pub mod guard_scan;
 pub mod host_presence;
+pub mod revocation_status;
 pub mod human_presence;
 pub mod hygiene;
 pub mod identity_links;
