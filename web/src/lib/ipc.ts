@@ -1093,6 +1093,33 @@ export const listDeviceRequests = () => invoke<DeviceRequestDto[]>("list_device_
 /// Revoke one of your devices: every member stops accepting its events.
 export const revokeMyDevice = (deviceId: string) => invoke<void>("revoke_my_device", { deviceId });
 
+export type RevocationStepState = "pending" | "done" | "failed" | "not_applicable";
+export interface RevocationStep {
+  state: RevocationStepState;
+  detail?: string;
+  at: number;
+  attempts: number;
+}
+/// What one serve box did about a revoked phone device (its sealed report).
+export interface DeviceRevocationDto {
+  hostId: string;
+  hostLabel: string;
+  reportedAt: number;
+  /** "revoked: tunnel cut, push removed, session ended" (or what's left). */
+  summary: string;
+  complete: boolean;
+  deviceId: string;
+  name: string;
+  revokedAt: number;
+  tunnel: RevocationStep;
+  push: RevocationStep;
+  session: RevocationStep;
+}
+/// Phone revocation status reported by the boxes the phone was paired with.
+export const listDeviceRevocations = () => invoke<DeviceRevocationDto[]>("list_device_revocations");
+/// Ask those boxes to retry the unfinished steps now.
+export const retryDeviceRevocation = (deviceId: string) => invoke<void>("retry_device_revocation", { deviceId });
+
 export const setMemberRole = (sessionId: string, memberId: string, role: string) =>
   invoke<void>("set_member_role", { sessionId, memberId, role });
 

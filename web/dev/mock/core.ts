@@ -198,6 +198,10 @@ function handle(cmd: string, args: Args): unknown {
       return [{ deviceId: "d1", label: "MacBook Pro", fingerprint: "a1b2-c3d4", thisDevice: true, revoked: false, lastSeen: null }];
     case "list_device_requests":
       return [];
+    case "list_device_revocations":
+      return [];
+    case "retry_device_revocation":
+      return null;
     case "has_issuer_key":
       return false;
     case "p2p_my_code":
