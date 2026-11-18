@@ -403,3 +403,44 @@ fn a_withheld_clear_lifts_only_what_its_author_saw() {
     assert_eq!(w.verdict(inflated.event_id), Verdict::Denied);
     assert_eq!(active(&w), vec![r1, r2]);
 }
+
+/// Two votes of one person on one proposal at one lamport (from two of
+/// their devices, neither holding the other's) are concurrent, and their
+/// order is their event ids, which a box drafting its phone's vote picks.
+/// Between them a rejection wins, whichever id sorts last.
+#[test]
+fn between_concurrent_votes_of_one_person_a_rejection_wins() {
+    use hive_core::testkit::{Proof, SignedWorld};
+    use hive_core::{ActionProposal, ProposalApproval, ProposalKind, ProposalStatus, WorkspaceRole};
+    for approve_sorts_last in [true, false] {
+        let mut w = SignedWorld::genesis(&["owner", "mara"], None);
+        w.admit("owner", "mara", WorkspaceRole::Admin);
+        let chat = w.chat("owner", "c");
+        let mut p = ActionProposal::new("ship", ProposalKind::Decision, "planner");
+        p.approval_role_floor = WorkspaceRole::Admin;
+        let pid = p.id;
+        w.say(chat, "owner", SessionEvent::ProposalUpserted { proposal: p });
+        let vote = |approved: bool| SessionEvent::ProposalVoteCast {
+            proposal_id: pid,
+            approval: ProposalApproval { actor_id: "mara".into(), role: WorkspaceRole::Admin, approved, created_at: Timestamp::epoch(), diff_digest: None },
+        };
+        let (hi, lo) = (Uuid::from_u128(u128::MAX), Uuid::from_u128(1));
+        let mut drafts = Vec::new();
+        for (approved, id) in [(true, if approve_sorts_last { hi } else { lo }), (false, if approve_sorts_last { lo } else { hi })] {
+            let mut e = w.draft("mara", Some(chat), vote(approved), None);
+            e.event_id = id;
+            let a = w.recovery_presence("mara", &e);
+            w.finish(&mut e, "mara", Some(a));
+            drafts.push(e);
+        }
+        assert_eq!(drafts[0].lamport, drafts[1].lamport, "concurrent");
+        for e in drafts {
+            w.push_env(Some(chat), e);
+        }
+        let status = w.state(chat).proposals.iter().find(|p| p.id == pid).unwrap().status;
+        assert_ne!(status, ProposalStatus::Approved, "approve sorting last: {approve_sorts_last}");
+        // A later approval (drafted holding both) does count.
+        w.write("mara", Some(chat), vote(true), None, Proof::Recovery);
+        assert_eq!(w.state(chat).proposals.iter().find(|p| p.id == pid).unwrap().status, ProposalStatus::Approved);
+    }
+}

@@ -1629,6 +1629,9 @@ fn fold_pass(
         }
     }
     let mut tracker = authz::RosterTracker::seeded(&session);
+    // Each voter's last folded vote per proposal: its lamport and whether it
+    // approved (see the concurrent-vote rule below).
+    let mut last_vote: std::collections::HashMap<(Uuid, String), (u64, bool)> = std::collections::HashMap::new();
     if let Some(t) = timeline.as_deref_mut() {
         *t = authz::ConfigTimeline::begin(tracker.state.clone());
         for e in ordered.iter().filter(|e| bounds.of_env(e) != Plausibility::Implausible) {
@@ -1845,9 +1848,27 @@ fn fold_pass(
                     }
                 }
             }
+            // Concurrent votes of one voter on one proposal (one lamport: two
+            // of their devices, neither holding the other's vote) are ordered
+            // by event id, which whoever drafts a vote picks (a box drafting
+            // its phone's). So between them a rejection wins, whatever the
+            // ids: an approval at the lamport of the voter's folded rejection
+            // doesn't supersede it. A later vote (a higher lamport, which its
+            // author drafted after holding the earlier one) still does.
+            let superseded = match payload {
+                SessionEvent::ProposalVoteCast { proposal_id, approval } => {
+                    let key = (*proposal_id, approval.actor_id.clone());
+                    let tie = last_vote.get(&key).is_some_and(|(l, approved)| *l == env.lamport && !approved && approval.approved);
+                    if !tie {
+                        last_vote.insert(key, (env.lamport, approval.approved));
+                    }
+                    tie
+                }
+                _ => false,
+            };
             // Guard folds that need the signed author (dearth-mode joins, verified
             // votes). Deterministic over the canonical fold like everything above.
-            if !crate::guard::fold_authored(&mut session, payload, author) {
+            if !superseded && !crate::guard::fold_authored(&mut session, payload, author) {
                 session.apply(payload);
             }
             session.updated_at = env.timestamp;
