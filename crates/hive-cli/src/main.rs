@@ -1272,10 +1272,7 @@ async fn cmd_worker(cfg: &Config, label: Option<String>, health_listen: Option<S
         .clone()
         .or_else(|| env_opt("HOSTNAME"))
         .unwrap_or_else(|| "worker".into());
-    let admission = match env_opt(admit::ADMISSION_FILE_ENV) {
-        Some(path) => Some(admit::read_code_file(std::path::Path::new(&path))?),
-        None => None,
-    };
+    let admission = admit::admission_from_file(env_opt(admit::ADMISSION_FILE_ENV))?;
     let mut cfg = cfg.clone();
     let (mut svc, my_host) = worker_start(&mut cfg, &host_label, admission).await?;
     let cfg = &cfg;

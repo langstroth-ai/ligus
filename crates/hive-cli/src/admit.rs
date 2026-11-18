@@ -139,6 +139,22 @@ pub fn read_code_file(path: &Path) -> Result<String> {
     Ok(std::fs::read_to_string(path)?.trim().to_string())
 }
 
+/// The admission code in the file `LIGUS_ADMISSION_FILE` names, if any. A
+/// missing or empty file is no admission: the chart mounts the Secret as
+/// optional so it can be deleted once the box has joined, and a restart
+/// after that must not fail.
+pub fn admission_from_file(path: Option<String>) -> Result<Option<String>> {
+    let Some(path) = path else { return Ok(None) };
+    let path = Path::new(path.trim());
+    match std::fs::metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("ligus: {ADMISSION_FILE_ENV} names {} but it is gone (deleted once the box joined): no admission", path.display());
+            Ok(None)
+        }
+        _ => Ok(Some(read_code_file(path)?).filter(|c| !c.is_empty())),
+    }
+}
+
 /// Whether this box is already a member of `ws` in its local copy.
 fn is_member(svc: &ChatService, ws: Uuid) -> Result<bool> {
     let me = svc.author().id.clone();
@@ -385,6 +401,22 @@ mod tests {
         std::fs::write(&f, "hivews1:secret\n").unwrap();
         assert_eq!(redeem_code(None, Some(f.to_string_lossy().into_owned()), no_stdin).unwrap(), "hivews1:secret");
         assert!(redeem_code(None, None, no_stdin).is_err());
+    }
+
+    #[test]
+    fn a_deleted_admission_secret_is_no_admission() {
+        // Review R4: the chart mounts the admission Secret as optional and
+        // says to delete it once the box joined, but a missing file made
+        // serve and the worker refuse to start, so the Secret (which holds
+        // the workspace key) had to stay.
+        let dir = tempfile::tempdir().unwrap();
+        let gone = dir.path().join("admission");
+        assert_eq!(admission_from_file(Some(gone.to_string_lossy().into_owned())).unwrap(), None);
+        std::fs::write(&gone, "\n").unwrap();
+        assert_eq!(admission_from_file(Some(gone.to_string_lossy().into_owned())).unwrap(), None);
+        std::fs::write(&gone, "ligusadmit1:x\n").unwrap();
+        assert_eq!(admission_from_file(Some(gone.to_string_lossy().into_owned())).unwrap().as_deref(), Some("ligusadmit1:x"));
+        assert_eq!(admission_from_file(None).unwrap(), None);
     }
 
     #[test]

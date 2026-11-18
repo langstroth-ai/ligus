@@ -856,10 +856,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
     // Phase B: sync first, never found a workspace, join only as this box's
     // own service member through an admission (`crate::admit::prepare_box`).
     let mut cfg = cfg;
-    let admission = match crate::env_opt(crate::admit::ADMISSION_FILE_ENV) {
-        Some(path) => Some(crate::admit::read_code_file(std::path::Path::new(&path))?),
-        None => None,
-    };
+    let admission = crate::admit::admission_from_file(crate::env_opt(crate::admit::ADMISSION_FILE_ENV))?;
     #[cfg(test)]
     let person = opts.test_person;
     #[cfg(not(test))]
