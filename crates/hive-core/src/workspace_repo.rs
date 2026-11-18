@@ -290,6 +290,162 @@ impl HostBeat {
     }
 }
 
+
+// ── Canonical identity (repos review F5) ─────────────────────────────────
+
+/// Why a remote has no canonical identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CanonError {
+    /// A local path, a `file://` URL or no remote at all: the repo can only
+    /// be matched by its root commit (`local:<root>`).
+    NoRemote,
+    /// A transport or character Ligus never treats as an identity (`ext::`,
+    /// non-ASCII hosts, encoded separators, spaces, `..`).
+    Refused(&'static str),
+}
+
+impl std::fmt::Display for CanonError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CanonError::NoRemote => f.write_str("no forge remote"),
+            CanonError::Refused(why) => f.write_str(why),
+        }
+    }
+}
+
+/// Whether `forge_kind` (a repo entry's hint) or the host's place in the
+/// fixed table makes owner/name lookups case-insensitive.
+pub fn folds_case(host: &str, forge_kind: &str) -> bool {
+    CASE_INSENSITIVE_HOSTS.contains(&host) || CASE_INSENSITIVE_KINDS.contains(&forge_kind)
+}
+
+/// The canonical identity (`host/owner/name`) of a git remote URL.
+///
+/// A pure function of its inputs (review F5): the remote string as git
+/// config stores it (never after `insteadOf`), the case hint of the repo
+/// entry it is compared with (`forge_kind`, "" for none), and this device's
+/// own SSH host aliases (`github-work` → `github.com`; device-local, never
+/// synced). No DNS, no IDNA, no forge settings, so every device computing it
+/// from the same inputs gets the same string, and the result always passes
+/// [`canonical_is_normal`].
+///
+/// Accepted: `https://`, `http://`, `ssh://`, `git://`, `git+ssh://` URLs and
+/// scp-style `[user@]host:path`. Userinfo, port, a trailing `.git` and
+/// trailing slashes are dropped; the host is lowercased, `www.` and a
+/// trailing dot are stripped and `ssh.github.com` is `github.com`. Refused:
+/// non-ASCII hosts, IPv6 literals, `%`, `\`, `?`, `#`, spaces, control
+/// characters, `.`/`..` segments, more than 20 segments, and every other
+/// transport (`ext::`, `fd::`, `file://` and bare paths give [`CanonError::NoRemote`]).
+pub fn canonical_repo(
+    remote: &str,
+    forge_kind: &str,
+    ssh_aliases: &std::collections::BTreeMap<String, String>,
+) -> Result<String, CanonError> {
+    let url = remote.trim();
+    if url.is_empty() {
+        return Err(CanonError::NoRemote);
+    }
+    if url.len() > 1024 || url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(CanonError::Refused("spaces or control characters in a remote"));
+    }
+    if !url.is_ascii() {
+        return Err(CanonError::Refused("a non-ASCII remote (write the host in punycode)"));
+    }
+    if url.contains("::") {
+        return Err(CanonError::Refused("a git remote-helper transport is never an identity"));
+    }
+    let (authority, path, scp) = if let Some((scheme, rest)) = url.split_once("://") {
+        match scheme.to_ascii_lowercase().as_str() {
+            "https" | "http" | "ssh" | "git" | "git+ssh" | "ssh+git" => {}
+            "file" => return Err(CanonError::NoRemote),
+            _ => return Err(CanonError::Refused("an unknown transport")),
+        }
+        let (auth, path) = rest.split_once('/').ok_or(CanonError::Refused("a remote without a path"))?;
+        (auth, path, false)
+    } else if let Some((left, path)) = url.split_once(':').filter(|(l, _)| !l.contains('/') && l.len() > 1) {
+        (left, path, true)
+    } else {
+        return Err(CanonError::NoRemote);
+    };
+    let host_port = authority.rsplit('@').next().unwrap_or(authority);
+    if host_port.starts_with('[') {
+        return Err(CanonError::Refused("an IP literal host"));
+    }
+    let host = if scp { host_port } else { host_port.split(':').next().unwrap_or(host_port) };
+    let mut host = host.to_ascii_lowercase();
+    while host.ends_with('.') {
+        host.pop();
+    }
+    if let Some(h) = host.strip_prefix("www.") {
+        host = h.to_string();
+    }
+    if host == "ssh.github.com" {
+        host = "github.com".into();
+    }
+    if let Some(mapped) = ssh_aliases.get(&host) {
+        host = mapped.to_ascii_lowercase();
+    }
+    if !valid_host(&host) {
+        return Err(CanonError::Refused("not a valid host name"));
+    }
+    if path.contains(['%', '\\', '?', '#']) {
+        return Err(CanonError::Refused("an encoded or reserved character in the path"));
+    }
+    let path = path.trim_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let path = path.trim_end_matches('/');
+    let segs: Vec<&str> = path.split('/').collect();
+    if segs.len() < 2 || segs.len() > MAX_SEGMENTS || !segs.iter().all(|s| valid_segment(s)) {
+        return Err(CanonError::Refused("not an owner/name path"));
+    }
+    let path = if folds_case(&host, forge_kind) { path.to_ascii_lowercase() } else { path.to_string() };
+    let canonical = format!("{host}/{path}");
+    if canonical.len() > 300 || !canonical_is_normal(&canonical, forge_kind) {
+        return Err(CanonError::Refused("not a normal-form repository name"));
+    }
+    Ok(canonical)
+}
+
+/// The host and path of a forge canonical (`None` for `local:`).
+pub fn split_canonical(canonical: &str) -> Option<(&str, &str)> {
+    if canonical.starts_with("local:") {
+        return None;
+    }
+    canonical.split_once('/')
+}
+
+// ── The chat ledger (repos review F3) ────────────────────────────────────
+
+/// One applied proposal in a chat's ledger for a repo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LedgerEntry {
+    pub proposal_id: Uuid,
+    /// The exactly-approved patch.
+    pub diff: String,
+    /// Reverted after it was applied (`ProposalReverted`): a replay takes it
+    /// back out.
+    pub reverted: bool,
+}
+
+/// The commit trailer naming the proposal a Ligus apply commit carries.
+pub const PROPOSAL_TRAILER: &str = "Ligus-Proposal";
+/// The commit trailer naming the proposal a Ligus revert commit takes out.
+pub const REVERT_TRAILER: &str = "Ligus-Revert";
+
+/// A chat's ledger for `repo_id`: its file-diff proposals for that repo in
+/// the order the fold first saw each applied (`ChatSession::applied_order`,
+/// so a proposal applied on two devices at once appears once), each with
+/// the approved bytes and whether it was reverted since.
+pub fn ledger(session: &crate::session::ChatSession, repo_id: Uuid) -> Vec<LedgerEntry> {
+    session
+        .applied_order
+        .iter()
+        .filter_map(|id| session.proposals.iter().find(|p| p.id == *id))
+        .filter(|p| p.repo_id == Some(repo_id) && p.kind == crate::proposals::ProposalKind::FileDiff)
+        .filter_map(|p| p.diff.as_ref().map(|d| LedgerEntry { proposal_id: p.id, diff: d.clone(), reverted: p.reverted }))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

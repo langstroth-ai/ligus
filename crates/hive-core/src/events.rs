@@ -843,6 +843,9 @@ impl ChatSession {
                 if let Some(p) = self.proposals.iter_mut().find(|p| p.id == *proposal_id) {
                     if p.ready_to_apply() && crate::authz::votes::diff_digest(p) == *diff_digest {
                         p.status = crate::proposals::ProposalStatus::Applied;
+                        if !self.applied_order.contains(proposal_id) {
+                            self.applied_order.push(*proposal_id);
+                        }
                     }
                 }
                 if let Some(rid) = request_id.filter(|r| self.apply_requests.contains_key(r)) {
