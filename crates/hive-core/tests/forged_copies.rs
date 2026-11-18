@@ -535,3 +535,74 @@ fn a_re_encoded_copy_is_the_same_event_not_an_equivocation() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Property (review of fix/forged-equivocation): devices that differ in which
+// certificates have reached them. While some are missing, an honest chat
+// event whose signer's certificate a device holds keeps its verdict and
+// body; once every certificate is delivered (in any order), every device
+// folds exactly as the reference does.
+// ---------------------------------------------------------------------------
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: std::env::var("PROPTEST_CASES").ok().and_then(|v| v.parse().ok()).unwrap_or(64), ..ProptestConfig::default() })]
+
+    #[test]
+    fn prop_certificate_arrival_never_decides_an_honest_event(p in plan(), missing in any::<u8>()) {
+        let (mut w, _) = world();
+        // A chat (and frontiers) at a config position that isn't a
+        // certificate: one a device lacks is a frontier it waits for.
+        w.push("owner", SessionEvent::WorkspaceRulesSet { version: 2, presence: None });
+        let chat = w.chat("owner", "d");
+        let mut honest: Vec<Uuid> = Vec::new();
+        for i in 0..p.n_chat {
+            let by = if i % 3 == 0 { "owner" } else { "con" };
+            let e = if i % 2 == 0 { title(&format!("t{i}")) } else { msg(by, &format!("m{i}")) };
+            honest.push(w.say(chat, by, e));
+        }
+        let mut forged: Vec<SessionEventEnvelope> = Vec::new();
+        for (target, how, same_lamport, _) in &p.forgeries {
+            let id = honest[*target as usize % honest.len()];
+            let orig = find(&w, Some(chat), id);
+            let how = FORGERIES[*how as usize];
+            forged.push(forge(&mut w, Some(chat), &orig, forged_payload(how), how, *same_lamport));
+        }
+        let mut log = w.chats[&chat].clone();
+        log.extend(forged);
+        let reference = outcome(&w.cfg, &log);
+        // Which people's certificates a device lacks (never the Owner's).
+        let people = ["con", "mal", "eve"];
+        let lacks: BTreeSet<Uuid> = people.iter().enumerate().filter(|(i, _)| missing & (1 << i) != 0).map(|(_, n)| w.people[*n].device_id).collect();
+        let is_lacked = |e: &SessionEventEnvelope| matches!(&e.payload, SessionEvent::DeviceCertificateAdded { certificate } if lacks.contains(&certificate.device_id));
+        let partial: Vec<SessionEventEnvelope> = w.cfg.iter().filter(|e| !is_lacked(e)).cloned().collect();
+        let late: Vec<SessionEventEnvelope> = w.cfg.iter().filter(|e| is_lacked(e)).cloned().collect();
+        let during = outcome(&partial, &log);
+        for id in &honest {
+            let e = find(&w, Some(chat), *id);
+            if e.signer_device_id.is_some_and(|d| lacks.contains(&d)) {
+                continue;
+            }
+            prop_assert_eq!(during.of(&e), reference.of(&e), "an honest event's verdict depends on someone else's certificate arriving");
+        }
+        for id in &honest {
+            let e = find(&w, Some(chat), *id);
+            if let SessionEvent::MessageAppended { message } = &e.payload {
+                if e.signer_device_id.is_some_and(|d| !lacks.contains(&d)) && reference.bodies.get(&message.id) == Some(&message.body) {
+                    prop_assert_eq!(during.bodies.get(&message.id), Some(&message.body), "an honest message moved while a certificate was missing");
+                }
+            }
+        }
+        for (d, (_, order)) in p.devices.iter().enumerate() {
+            let mut cfg = partial.clone();
+            let mut more = late.clone();
+            shuffle(&mut more, *order);
+            cfg.extend(more);
+            shuffle(&mut cfg, order.rotate_left(7));
+            let mut l = log.clone();
+            shuffle(&mut l, order.rotate_left(13));
+            let after = outcome(&cfg, &l);
+            prop_assert_eq!(&after.verdicts, &reference.verdicts, "device {}: delivered late, the verdicts differ", d);
+            prop_assert_eq!(&after.whole, &reference.whole, "device {}: delivered late, the fold differs", d);
+        }
+    }
+}
