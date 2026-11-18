@@ -1837,6 +1837,37 @@ impl EventStore {
     }
 }
 
+/// Tests only: the device id every fixture event is signed by.
+#[cfg(test)]
+pub(crate) const FIXTURE_DEVICE: Uuid = Uuid::from_u128(0x6669_7874_7572_6500_0000_0000_0000_0001);
+
+/// Tests only: `env` as the next event of its log after `log_head`: an
+/// authorless stamp (a `System` actor with an empty id, no account) naming
+/// the head, the lamport one past it (`hive_core::lamport`), signed by the
+/// fixture device (a genuine event is always signed, and an unsigned one
+/// can't carry a stamp past ingest).
+#[cfg(test)]
+pub(crate) fn fixture_next(env: &SessionEventEnvelope, log_head: Option<hive_core::CfgFrontier>) -> SessionEventEnvelope {
+    let mut env = env.clone();
+    env.clear_raw();
+    if env.actor_stamp.is_none() {
+        env.actor_stamp = Some(hive_core::ActorStamp {
+            actor: hive_core::ActorIdentity::new("", "", hive_core::ActorKind::System),
+            recorded_at: hive_core::Timestamp::epoch(),
+            cfg_frontier: None,
+            presence: None,
+            runtime_effect: false,
+            prev: None,
+            sig_alg: Default::default(),
+            log_head: None,
+        });
+    }
+    hive_core::lamport::stamp_next(&mut env, log_head);
+    let kp = hive_core::SigningKeypair::from_seed(&[0x46; 32]).expect("fixture key");
+    hive_core::sign_envelope(&mut env, FIXTURE_DEVICE, &kp);
+    env
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2375,35 +2406,4 @@ mod tests {
         assert!(store.purge_foreign_workspaces(&keep, me, Some(&dir.path().join("again"))).unwrap().is_empty());
         assert!(!dir.path().join("again").exists());
     }
-}
-
-/// Tests only: the device id every fixture event is signed by.
-#[cfg(test)]
-pub(crate) const FIXTURE_DEVICE: Uuid = Uuid::from_u128(0x6669_7874_7572_6500_0000_0000_0000_0001);
-
-/// Tests only: `env` as the next event of its log after `log_head`: an
-/// authorless stamp (a `System` actor with an empty id, no account) naming
-/// the head, the lamport one past it (`hive_core::lamport`), signed by the
-/// fixture device (a genuine event is always signed, and an unsigned one
-/// can't carry a stamp past ingest).
-#[cfg(test)]
-pub(crate) fn fixture_next(env: &SessionEventEnvelope, log_head: Option<hive_core::CfgFrontier>) -> SessionEventEnvelope {
-    let mut env = env.clone();
-    env.clear_raw();
-    if env.actor_stamp.is_none() {
-        env.actor_stamp = Some(hive_core::ActorStamp {
-            actor: hive_core::ActorIdentity::new("", "", hive_core::ActorKind::System),
-            recorded_at: hive_core::Timestamp::epoch(),
-            cfg_frontier: None,
-            presence: None,
-            runtime_effect: false,
-            prev: None,
-            sig_alg: Default::default(),
-            log_head: None,
-        });
-    }
-    hive_core::lamport::stamp_next(&mut env, log_head);
-    let kp = hive_core::SigningKeypair::from_seed(&[0x46; 32]).expect("fixture key");
-    hive_core::sign_envelope(&mut env, FIXTURE_DEVICE, &kp);
-    env
 }
