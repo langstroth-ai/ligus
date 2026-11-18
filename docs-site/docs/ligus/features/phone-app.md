@@ -377,8 +377,10 @@ the device coordinating it.
 you are a human member at Contributor or above. The phone signs the same
 `chatLockdownCleared` event the desktop's *Clear lockdown* writes, as you,
 with its own key and always with your passkey (the `clearLockdown` phone
-action); anyone else gets an error and nothing is written. Switching dearth
-mode and approving joins stay on the desktop.
+action); anyone else gets an error and nothing is written. The clear names
+the lockdown signals the bar showed you: a signal raised after you looked
+stays in force until someone clears it too, however long the box holds the
+clear. Switching dearth mode and approving joins stay on the desktop.
 
 ## Flow
 

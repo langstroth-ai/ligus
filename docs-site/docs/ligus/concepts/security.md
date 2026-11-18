@@ -77,6 +77,13 @@ same authorization engine, so authoring and folding can't disagree:
 - **Agents.** An agent can sign with its own key, certified by the host it
   is bound to and retired when it moves; such events are judged by a capped
   Agent tier that never votes, applies or administers.
+- **Clocks that can't run ahead.** Every event names the newest event of its
+  log its author held, and its order number (its lamport) must be exactly one
+  past it. An event held back after it was written (by its author, or by a
+  box holding a phone's action) therefore sorts where it was written, never
+  after events written later, and a made-up clock is refused on every
+  device (see [the threat model](../../operate/security/threat-model.md#lamport-bounds)
+  for what an author can still choose).
 - **Versioned rules.** The rules are versioned on the config log; a version
   this build doesn't know makes the workspace read-only on this device.
 - **Bytes as received.** Envelopes are verified, stored and re-sent as the
@@ -566,7 +573,8 @@ credential to a diff, or changes CI configuration nobody asked about, Ligus
 MCP access for its agents and a human approval on every proposal, until a
 human member clears it. The lock is an event on the workspace config log, so
 every device applies it; clearing it is re-checked on ingest (a non-member,
-Viewer or agent account can't).
+Viewer or agent account can't), and a clear lifts only the locks it names,
+the ones its author saw.
 
 ## Passkeys: proving you were there {#passkeys}
 

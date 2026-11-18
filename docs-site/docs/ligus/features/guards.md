@@ -77,7 +77,10 @@ transcript saying what tripped it. Until a member clears it:
 
 Only a **human member** (Contributor or above) can clear a lockdown, with
 **Clear lockdown** on the bar. A non-member, a Viewer, or an agent's account
-clearing it is refused on every device. Anyone may lock a chat by hand.
+clearing it is refused on every device. A clear lifts exactly the signals the
+bar showed: one raised after you looked (by another device, or while your
+clear was on its way) stays in force until it is cleared too. Anyone may lock
+a chat by hand.
 The detectors only record what kind of thing they found (a credential type, a
 marker name, a count), never the content.
 

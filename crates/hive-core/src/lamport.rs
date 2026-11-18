@@ -36,7 +36,8 @@
 //! never newer than the head. The rule is structural: it reads only ids and
 //! lamports, never signatures or roles, so a device judges it the same way
 //! whatever it thinks of the events' authors, and every event on the log
-//! (denied or not) is a witness for the events after it.
+//! within bounds (whatever its authorization verdict) is a witness for the
+//! events after it.
 
 use std::collections::{HashMap, HashSet};
 

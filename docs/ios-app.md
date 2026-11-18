@@ -95,7 +95,7 @@ and public addresses unless `LIGUS_SERVE_ALLOW_ANY_BIND=1`.
 | GET | `/v1/proposal-sets?status=open\|all` | `{sets: [ProposalSet]}`, every [proposal set](../docs-site/docs/ligus/features/proposal-sets.md) in the workspace, newest first (open by default). Read-only |
 | GET | `/v1/proposal-sets/{id}` | `{set: ProposalSet}` |
 | GET | `/v1/chats/{id}/proposal-sets?status=open\|all` | `{sets: [ProposalSet]}`, one chat's sets (all by default) |
-| GET | `/v1/guards` | `{dearth: {reason, broodPaths, allowedMcpServers, setBy, setAt}?, pendingMembers, lockedChats: [{chatId, chatTitle, signals: [{signal, detail, raisedAt, messageId?}]}], coordinator: {holder, epoch, leaseMs, released, isThis}?, myRole, canClearLockdown}` |
+| GET | `/v1/guards` | `{dearth: {reason, broodPaths, allowedMcpServers, setBy, setAt}?, pendingMembers, lockedChats: [{chatId, chatTitle, signals: [{signal, detail, raisedAt, messageId?, raiseEventId}]}], coordinator: {holder, epoch, leaseMs, released, isThis}?, myRole, canClearLockdown}` |
 | POST | `/v1/chats/{id}/lockdown/clear` | **410 Gone**. Clear with the `clearLockdown` phone action (below) |
 | GET | `/v1/flow` | `{board: [BoardItem], queue: Queue, marks: [Mark], routing: Routing}`, the desktop's Flow pane, read-only; see below |
 | GET | `/v1/chats/{id}/handoffs` | `{handoffs: [Handoff]}`, oldest first |
@@ -426,7 +426,9 @@ box drafts and relays it. Reference implementation:
 Errors: 403 (not an enrolled phone of a human member, pairing bound to
 another device, the fold refuses, bad signature), 409 (presence missing,
 `clearLockdown` on an unlocked chat, a stale draft: "prepare again" when this
-phone signed something else on that log since the draft), 404 (unknown,
+phone signed something else on that log since the draft), 403 for a
+`clearLockdown` naming a lockdown no longer in force on the box (refresh
+`GET /v1/guards` and prepare again), 404 (unknown,
 expired after 5 minutes, or used `prepareId`), 400/422 (unknown `kind` or
 field). Keep one action in flight per chat to avoid stale drafts.
 
@@ -437,7 +439,7 @@ field). Keep one action in flight per chat to avoid stale drafts.
 | `post` | `chatId`, `text` (1 to 16 000 characters, not blank) | no |
 | `vote` | `chatId`, `proposalId`, `diffDigest`, `approved` | workflow or human-gated proposals |
 | `answer` | `chatId`, `askId`, `answer`, `optionIndex?` (send the option's text as `answer` when one is picked) | no |
-| `clearLockdown` | `chatId` | always |
+| `clearLockdown` | `chatId`, `raises`: the `raiseEventId` of each signal the lockdown bar shows (from `GET /v1/guards`; 1 to 16, each once). A signal raised after the bar was drawn isn't named, so it stays in force | always |
 | `requestApply` | `chatId`, `proposalId`, `diffDigest`, `hostDeviceId`, `expectedBaseCommit?`, `repoId?` | human-gated proposals |
 | `withdrawApply` | `chatId`, `proposalId`, `requestId` | no |
 
@@ -463,7 +465,12 @@ digest is what binds.
    otherwise).
 4. Stamp: `actor.deviceId` = this phone, `sigAlg` = `"p256"`, `actor.kind` =
    `"human"`, `runtimeEffect` absent (it is only written when true), `actor.accountId` = the
-   account your certificate names.
+   account your certificate names. Lamport bounds: `lamport` equals
+   `stamp.logHead.l + 1` (the stamp's `logHead`, `{"l": lamport, "e":
+   eventId}`, is the newest event of the log the box held), or `1` when
+   `logHead` is absent; and `logHead.l` is below 2^64 − 1. Every fold refuses any other lamport,
+   so you can trust that the event sorts no later than one past what the box
+   held when it drafted, however long it is kept back.
 5. Presence: if you ran the passkey, `stamp.presence` equals the assertion
    you produced, field for field, and the presence digest equals the
    challenge you signed: `SHA-256("ligus-presence-v1\0" ‖ workspaceId ‖ sessionId
@@ -482,13 +489,17 @@ digest is what binds.
       `actor.id`, `approval.approved`, `approval.diffDigest` as asked;
     - `answer` → `flowRecorded` with `humanAnswered`: `askId`, `answer`,
       `optionIndex` as asked, `by` = `actor.displayName`;
-    - `clearLockdown` → `chatLockdownCleared`: `chatId` as asked;
+    - `clearLockdown` → `chatLockdownCleared`: `chatId` as asked, and
+      `raises` exactly the list you asked to clear (same ids, same order).
+      Show those signals (match each id against the `GET /v1/guards`
+      signals you drew the bar from) on the confirmation sheet;
     - `requestApply` → `proposalApplyRequested`: `request.proposalId`,
       `diffDigest`, `hostDeviceId`, `expectedBaseCommit`, `repoId` as asked;
     - `withdrawApply` → `proposalApplyWithdrawn`: `requestId`, `proposalId`
       as asked.
 
-The box may choose only: eventId, sequence, lamport, timestamps, the stamp's
+The box may choose only: eventId, sequence, the stamp's `logHead` (and so
+the lamport, one past it), timestamps, the stamp's
 `recordedAt`, `cfgFrontier` and `prev`, a message's `id` and `createdAt`, a
 vote's `createdAt` and `role`, an answer's `atMs`, a request's `id`.
 None of these grants anything the fold doesn't re-check: a post's `id` that
@@ -498,8 +509,12 @@ yourself when you know the id); a vote's `role` is replaced by your role at
 the event's position; `cfgFrontier` older than a removal, demotion or
 revocation is judged as of that cut. `hostDeviceId` is never a phone (the
 fold refuses it): pick it from `GET /v1/hosts`. What a box can still do is
-withhold an event you signed, and choose its `lamport`, which orders it
-among the log's events: keep one action in flight, and treat a `committed`
+withhold an event you signed: it then sorts where it was drafted, before
+anything written after the draft (a later vote of yours supersedes it, a
+lockdown raised since stays in force), never later. It can also name an
+older `logHead` (backdate within what it held), and it picks the event id
+that orders events at one lamport (between two concurrent votes of yours a
+rejection wins anyway). Keep one action in flight, and treat a `committed`
 answer as the box's claim until the event stream shows it.
 
 **UI.**
