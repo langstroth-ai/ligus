@@ -72,6 +72,7 @@ fn removal_watermark(w: &SignedWorld, chat: Uuid) -> Vec<hive_core::watermark::W
 
 /// mal's message under `orig`'s id and position, judged at `frontier`,
 /// naming `prev`, signed by `device` with `key`.
+#[allow(clippy::too_many_arguments)]
 fn copy_under(
     w: &mut SignedWorld,
     chat: Uuid,

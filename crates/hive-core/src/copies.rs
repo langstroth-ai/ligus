@@ -105,7 +105,9 @@ impl SignerDirectory {
         // A rotation counts once a key of its account signed it (rotations
         // chain): each newly known key is checked against the rotations
         // still pending for its account, once.
-        let mut pending: BTreeMap<Uuid, Vec<(&[u8], &[u8])>> = BTreeMap::new();
+        // Account → (new key, succession signature) of each rotation.
+        type Rotations<'r> = Vec<(&'r [u8], &'r [u8])>;
+        let mut pending: BTreeMap<Uuid, Rotations<'_>> = BTreeMap::new();
         for e in &ordered {
             if let SessionEvent::AccountKeyRotated { account_id, new_signing_public_key, succession_signature } = &e.payload {
                 pending.entry(*account_id).or_default().push((new_signing_public_key, succession_signature));
