@@ -49,8 +49,8 @@ impl Log {
     fn draft(&mut self, by: &Who, payload: SessionEvent) -> SessionEventEnvelope {
         self.lamport += 1;
         let mut e = SessionEventEnvelope::new(workspace_config_session_id(self.ws), self.ws, self.lamport as i64, payload);
-        e.lamport = self.lamport;
-        e.actor_stamp = Some(ActorStamp { actor: actor(by), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+        e.actor_stamp = Some(ActorStamp { actor: actor(by), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
+        hive_core::lamport::stamp_after(&mut e, &self.envs);
         hive_core::sign_envelope(&mut e, by.device, &by.dk);
         if self.present.contains(&by.account) {
             hive_core::testkit::prove_recovery(&mut e, by.account, by.device, &by.dk);
@@ -182,7 +182,7 @@ fn a_pending_device_is_not_accepted_in_relay_mode() {
     // The pending device signs a chat message as the owner's account.
     let mut e = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 99, SessionEvent::SessionTitleChanged { title: "x".into() });
     e.lamport = 99;
-    e.actor_stamp = Some(ActorStamp { actor: actor(&owner), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+    e.actor_stamp = Some(ActorStamp { actor: actor(&owner), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
     hive_core::sign_envelope(&mut e, new_box, &dk);
     let mut envs = log.envs.clone();
     envs.push(e.clone());
@@ -252,7 +252,7 @@ fn a_removed_member_cannot_reenter_the_roster_with_a_fresh_device() {
     let roster = build_roster(&log.envs);
     let mut e = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 99, SessionEvent::SessionTitleChanged { title: "x".into() });
     e.lamport = 99;
-    e.actor_stamp = Some(ActorStamp { actor: actor(&alice), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+    e.actor_stamp = Some(ActorStamp { actor: actor(&alice), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
     hive_core::sign_envelope(&mut e, fresh, &fk);
     assert_ne!(verdict_for(&roster, &e), Verdict::Valid, "the removed member's fresh device is trusted again");
 }
@@ -282,7 +282,7 @@ fn an_unauthorized_removal_does_not_revoke_the_victims_devices() {
     assert!(!crate::envelope_verifier::DeviceKeyResolver::is_revoked(&roster, laptop), "the owner's laptop was revoked by an unauthorized removal");
     let mut e = SessionEventEnvelope::new(Uuid::new_v4(), log.ws, 99, SessionEvent::SessionTitleChanged { title: "x".into() });
     e.lamport = 99;
-    e.actor_stamp = Some(ActorStamp { actor: actor(&owner), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+    e.actor_stamp = Some(ActorStamp { actor: actor(&owner), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
     hive_core::sign_envelope(&mut e, owner_dk.0, &owner_dk.1);
     assert_eq!(verdict_for(&roster, &e), Verdict::Valid);
 }
@@ -337,10 +337,11 @@ fn a_forged_seed_cannot_switch_dearth_off_under_a_founder_pin() {
     let laptop = Uuid::new_v4();
     log.cert(&owner, laptop);
     log.push(&owner, dearth(true, vec![laptop]));
-    // Alice forges a seed below the founder's, naming herself Owner.
-    let mut forged = SessionEventEnvelope::new(workspace_config_session_id(ws), ws, 0, seed(&alice, &[(&alice, WorkspaceRole::Owner)]));
-    forged.lamport = 0;
-    forged.actor_stamp = Some(ActorStamp { actor: actor(&alice), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+    // Alice forges a seed beside the founder's (lamport 1, the lowest a
+    // seed can claim), naming herself Owner.
+    let mut forged = SessionEventEnvelope::new(workspace_config_session_id(ws), ws, 1, seed(&alice, &[(&alice, WorkspaceRole::Owner)]));
+    forged.lamport = 1;
+    forged.actor_stamp = Some(ActorStamp { actor: actor(&alice), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
     log.envs.push(forged);
     let new_box = Uuid::new_v4();
     log.cert(&alice, new_box);

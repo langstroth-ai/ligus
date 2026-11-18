@@ -3947,6 +3947,20 @@ async fn a_redeemed_admission_is_closed_by_the_admins_device() {
 
 // ── What a person does from the phone (Phase B) ────────────────────────────
 
+/// The `raiseEventId` of each lockdown signal `GET /v1/guards` lists for
+/// `chat` (what a `clearLockdown` names).
+async fn locked_raises(h: &Harness, chat: Uuid) -> Vec<Uuid> {
+    let g = h.send(reqwest::Method::GET, "/v1/guards", None).await;
+    g["lockedChats"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|c| c["chatId"] == json!(chat))
+        .flat_map(|c| c["signals"].as_array().cloned().unwrap_or_default())
+        .filter_map(|s| s["raiseEventId"].as_str().and_then(|r| Uuid::parse_str(r).ok()))
+        .collect()
+}
+
 /// A phone certified on the desktop for the founder, seen by the box.
 async fn certified_phone(h: &Harness) -> (hive_core::testkit::Phone, Uuid) {
     let ws = h.handle.shared.ws;
@@ -4097,15 +4111,31 @@ async fn the_phone_posts_votes_answers_clears_and_asks_this_box_to_apply() {
     let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": answer }))).await;
     assert_eq!(code, 403);
 
-    // Clear a lockdown: always with the passkey.
+    // Clear a lockdown: always with the passkey, naming the raises the phone
+    // shows (`GET /v1/guards` lists each signal's `raiseEventId`).
     h.handle.shared.lock().self_medicate(ws, chat_id, None, &[(hive_core::guard::LockdownSignal::InjectionDetected, "ignore-previous".into())]).unwrap();
-    let (code, prep) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": PhoneAction::ClearLockdown { chat_id } }))).await;
+    let raises = locked_raises(&h, chat_id).await;
+    assert_eq!(raises.len(), 1, "one signal, named by its raise");
+    let clear = PhoneAction::ClearLockdown { chat_id, raises: raises.clone() };
+    let (code, prep) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": clear }))).await;
     assert_eq!((code, prep["presenceRequired"].clone()), (200, json!(true)), "{prep}");
-    let (code, done) = phone_act(&h, &phone, account, &PhoneAction::ClearLockdown { chat_id }).await;
+    assert_eq!(prep["preview"]["lockdowns"][0]["raiseEventId"], json!(raises[0]), "{prep}");
+    // A raise that isn't in force (a stale view, or made up): refused before the phone signs.
+    let stale = PhoneAction::ClearLockdown { chat_id, raises: vec![Uuid::new_v4()] };
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": stale }))).await;
+    assert_eq!(code, 403);
+    // A signal raised after the phone's view: the clear doesn't name it, so it stays.
+    h.handle.shared.lock().self_medicate(ws, chat_id, None, &[(hive_core::guard::LockdownSignal::SecretInDiff, "aws_access_key".into())]).unwrap();
+    let (code, done) = phone_act(&h, &phone, account, &clear).await;
+    assert_eq!(code, 200, "{done}");
+    let left = locked_raises(&h, chat_id).await;
+    assert_eq!(left.len(), 1, "the newer signal stays in force");
+    assert!(!left.contains(&raises[0]));
+    let (code, done) = phone_act(&h, &phone, account, &PhoneAction::ClearLockdown { chat_id, raises: left }).await;
     assert_eq!(code, 200, "{done}");
     assert!(!h.handle.shared.lock().load(chat_id).unwrap().unwrap().guards.lockdown_active());
     // Not locked any more: 409.
-    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": PhoneAction::ClearLockdown { chat_id } }))).await;
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": clear }))).await;
     assert_eq!(code, 409);
     h.handle.shutdown();
 }
@@ -4154,7 +4184,8 @@ async fn the_box_refuses_phone_actions_it_cant_stand_behind() {
     }
     // A passkey-gated action committed without its passkey: 409.
     h.handle.shared.lock().self_medicate(ws, chat_id, None, &[(hive_core::guard::LockdownSignal::InjectionDetected, "x".into())]).unwrap();
-    let (_, prep) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": PhoneAction::ClearLockdown { chat_id } }))).await;
+    let raises = locked_raises(&h, chat_id).await;
+    let (_, prep) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": PhoneAction::ClearLockdown { chat_id, raises } }))).await;
     let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/commit", Some(json!({ "prepareId": prep["prepareId"], "signature": "AAAA" }))).await;
     assert_eq!(code, 409);
     // A draft is single use.

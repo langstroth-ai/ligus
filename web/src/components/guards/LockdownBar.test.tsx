@@ -18,13 +18,21 @@ const wrap = (ui: React.ReactNode) =>
   render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>{ui}</QueryClientProvider>);
 
 describe("LockdownBar", () => {
-  it("explains the lockdown and lets a human member clear it", async () => {
-    state.d = { active: true, signals: [{ signal: "secretInDiff", detail: "aws_access_key", raisedAt: "" }], canClear: true };
+  it("explains the lockdown and lets a human member clear the signals shown", async () => {
+    state.d = {
+      active: true,
+      signals: [
+        { signal: "secretInDiff", detail: "aws_access_key", raisedAt: "", raiseEventId: "r1" },
+        { signal: "manual", detail: "", raisedAt: "", raiseEventId: "r2" },
+      ],
+      canClear: true,
+    };
     wrap(<LockdownBar sessionId="s1" />);
     await waitFor(() => expect(screen.getByTestId("lockdown-bar")).toBeInTheDocument());
     expect(screen.getByText(/credential in an agent's changes \(aws_access_key\)/)).toBeInTheDocument();
     await userEvent.click(screen.getByText("Clear lockdown"));
-    expect(clear).toHaveBeenCalledWith("s1");
+    // Exactly the raises it showed: one raised since stays in force.
+    expect(clear).toHaveBeenCalledWith("s1", ["r1", "r2"]);
   });
 
   it("offers no clear button to someone who can't clear it", async () => {

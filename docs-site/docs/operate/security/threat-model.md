@@ -116,8 +116,15 @@ box, at its role. What they **can't** do, on any device's fold:
   asked for, in this workspace and log, stamped as that person for that
   phone, with the passkey assertion the phone itself produced (or none): the
   box can withhold or delay an action, choose the fields that grant nothing
-  (ids, clocks, its frontier and chain link), and show a misleading preview,
-  but it can't alter or forge what is signed.
+  (ids, its frontier and chain link, the log head it counts from), and show a
+  misleading preview, but it can't alter or forge what is signed. The clock
+  is no longer the box's to choose: an event's lamport is exactly one past the
+  log head its stamp names, which every fold checks (and the phone before it
+  signs), so an action the box withholds sorts where it was drafted, before
+  anything written after it, unless the box first writes and publishes a
+  chain of its own events as long as the gap it wants to jump. A delayed
+  lockdown clear lifts only the raises it names, never one raised since
+  ([Lamport bounds](#lamport-bounds)).
 
 The remedy is the one for any member: an Admin removes the box (or revokes its
 device) and rotates the workspace key, and the box gets no later key. An
@@ -519,6 +526,54 @@ it.
     own tools, started for you, and run outside the agent sandbox with your
     OS user's access, by design. A repository's language-server config or a
     command you paste into the terminal runs with everything you can reach.
+28. <a id="lamport-bounds"></a>**Lamport bounds stop a forward-dated clock, not a backdated one.**
+    Every event names the newest event of its log its author held
+    (`logHead`) and its lamport is exactly one past it, so a lamport is
+    never more than the longest chain of real events on its log (a lamport
+    near `u64::MAX` is refused and moves no one's clock), and an event can
+    sort after events written after it only by counting from a chain of
+    real events that long. What stays an author's choice:
+    - **Chains of their own events.** The bound counts every real event,
+      whoever wrote it and whatever its verdict. An author, or a box with
+      its own key drafting a phone's action, can write `k` events of its
+      own, each one past the last, and have the withheld action name the
+      last: released later, it sorts after up to `k` events written after
+      it was drafted (a stale approve can beat a later reject from another
+      device). It costs `k` signed events that every device stores and
+      that show in the log (`k` events released at once is the sign), not
+      a single forged number. The phone refuses a lamport below the last
+      one it signed on the log, so a box can't sort a phone's new action
+      before the phone's earlier one.
+    - **Backdating within what they held.** An author can name an older
+      head (an offline device does this honestly), so a race that "the
+      first in canonical order wins" goes to whoever drafts earliest or
+      backdates: concurrent lease successions, turn claims, admission
+      redemptions (an Admin's close decides those), and two concurrent votes
+      of one person (there a rejection wins whatever the ids).
+    - **Concurrent writes that apply to everything before them.** Switching
+      dearth mode off lands every pending member that sorts before the
+      switch, including one added concurrently that its author never saw.
+      Whole-list updates (skills, vault sources, workflow definitions, the
+      channel order) are last-writer-wins and can drop a concurrent edit.
+      A lockdown clear no longer has this problem: it names its raises.
+    - **Holds.** An event whose log head hasn't reached a device is held
+      there until it does. Whether a device refuses an event at ingest
+      depends on its roster when the event arrives (a revocation, a removed
+      member, a rebound agent key, a certificate the relay delivered late),
+      so a device keeps every event it refuses, for any reason, as an inert
+      witness (its id, lamport, log head and chain link, kept by that whole
+      structure, so a forged copy of an id never shadows the genuine one),
+      and every chunk it prunes too: whatever another device accepted and
+      counted from, this one counts from as well. A device never counts its
+      own next event from a witness (it doesn't push the events it
+      refuses). What can still hold: a relay or peer that withholds an
+      event from one device holds there the events that count from it,
+      until it arrives; once every device has every body, every device
+      judges the log alike. A forged head the author never publishes holds
+      that author's event for good, within 4096 of the newest event; past
+      that it is refused.
+    - **Ties.** Events at one lamport sort by event id, which their drafter
+      picks (a box drafting a phone's action included).
 
 ## Out of scope {#out-of-scope}
 
@@ -609,6 +664,7 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 | Sandbox (unconfined hosts) | Without an OS sandbox only write-capable CLI turns were refused: read-only CLI turns ran with nothing but an env allow-list and could read `hive.db` (not encrypted at rest), keys and tokens; `run_command`, approved commands, pre-flight tests and stdio MCP servers ran unconfined at any tier | Every agent process is refused at any tier, with a note naming the platform and the fix; HTTP models get no built-in file tools and run as plain chat. Verified by `unconfined_refuses_read_only_cli_turns`, `unconfined_refuses_tool_purpose` and `unconfined_allows_toolless_api_chat` |
 | Core (identity binding) | Ingest checked a stamp's account against the signing device only when the stamp carried one, so a member's device could stamp another member's actor id (their account id) with no account: the fold judged a `MemberRoleChanged` as that member (a Contributor could promote themselves to Owner) and the author gate gave the turn their role | A stamp whose actor id is a known account the signer doesn't sign for is quarantined as impersonation, and held from an uncertified device. The author gate counts a member with an account only when the stamp names that account and the signer is certified for it and unrevoked at the stamped position. Verified by `a_stamp_naming_another_member_without_their_account_gets_no_role` and `chain_loops_and_overlong_chains_fail_closed` |
 | Host (board pickup) | Automatic board pickup posted the item's task (a proposal's or failed stage's title, written by whoever filed it) as the host's own user, so the author gate's own-user rule ran it at Owner: anyone could title a proposal with instructions an Owner's desktop then ran at full tier | An automatic pickup is posted as a runtime effect with no role, below every floor; a manual pickup is unchanged. Verified by `auto_pickup_is_not_the_host_user_speaking` |
+| Core (event clocks) | An author chose an event's lamport, so an event drafted early and withheld (by its author, or by a box holding a phone-signed action) could be given a huge lamport and sort after genuinely newer events: a stale approve beat a later reject, a delayed `ChatLockdownCleared` lifted a newer lockdown (it cleared every lockdown on the chat), and a lamport near `u64::MAX` dragged every honest clock after it | A stamp names its log head and the lamport is one past it, checked by every fold and by the phone before it signs; an event out of bounds is refused and is no position. A clear names the raises it lifts. Between one person's concurrent votes a rejection wins. Verified by `prop_no_honest_history_is_denied`, `prop_an_inflated_lamport_changes_nothing_else`, `a_withheld_vote_sorts_where_it_was_drafted`, `a_withheld_clear_lifts_only_what_its_author_saw` and `between_concurrent_votes_of_one_person_a_rejection_wins` |
 | Core (chain workspace) | The trigger chain judged each event on the config log of the workspace that event named, so an event in a chat stamped with another workspace its author owned was judged as Owner there; the chain's config cache answered every workspace with the first one it loaded | Events stamped with a workspace other than the chat's fail the chain closed, a workflow run's first record must name the chat's workspace, and the cache is keyed by workspace. Hardening: such an event doesn't fold into the chat today. Verified by `an_event_stamped_with_another_workspace_fails_closed` |
 
 ### Open {#findings-open}
@@ -620,7 +676,8 @@ warning), a CLI-founded workspace staying unsecured until its founder adds a pas
 devices without a founder pin keeping the passphrase key, and ingest-time
 decisions that depend on arrival order, the reach of a removal's watermark (its
 author's word, and chats the remover never synced), equivocations seen only
-where both copies meet, human
+where both copies meet, what lamport bounds leave to an author (backdating,
+concurrent writes that apply to everything before them, holds), human
 clicks that run others' text at the clicker's tier, and unconfined LSP
 servers and terminal. On Kubernetes, DNS tunnelling through
 the cluster resolver remains possible (see

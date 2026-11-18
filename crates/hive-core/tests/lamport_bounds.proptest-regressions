@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 8c28ae865d9ceb039b5fd335a82a97679f8a5aed95f823ec8e0984e33fbd98f6 # shrinks to devices = 2, ops = [Write { d: 0, title: false }, Write { d: 0, title: false }, Write { d: 0, title: false }, Write { d: 0, title: false }, Write { d: 0, title: false }, Write { d: 0, title: false }, Write { d: 0, title: false }, Write { d: 0, title: false }, Write { d: 0, title: false }, Write { d: 0, title: false }, Write { d: 0, title: false }, Write { d: 0, title: false }], refusals = [608322586674627668, 1522457250045548240, 0], forged = [(13703256556765634197, 915261184630665262, 2)], seed = 96776097396033692

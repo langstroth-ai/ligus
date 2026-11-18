@@ -59,7 +59,7 @@ $ curl -s http://127.0.0.1:8787/v1/health -H "Authorization: Bearer $(cat ~/.lig
 | `GET /v1/agents` | | agents with runtime and host labels, and `ownerActorId` when the agent has an owner (who, besides the box's person, may grant its permission requests) |
 | `PUT /v1/agents/:id/host` | `{hostId}` (`""` = the owner's device) | moves an agent to another host: an Admin's act, so a box (a service member, at most Contributor) is refused; rebind from the desktop |
 | `GET /v1/hosts` | | hosts, with `isThis` and `online` |
-| `GET /v1/guards` | | dearth mode, pending members, locked chats, coordinator lease. Read-only |
+| `GET /v1/guards` | | dearth mode, pending members, locked chats (`lockedChats: [{chatId, chatTitle, signals: [{signal, detail, raisedAt, messageId?, raiseEventId}]}]`; a lockdown clear names each signal by its `raiseEventId`), coordinator lease. Read-only |
 
 A message object carries `id`, `chatId`, `author`, `role`, `body`,
 `createdAt` and `streaming`; `agentId` on a named agent's reply; `actorId`
@@ -160,7 +160,7 @@ every fold will, stores and syncs it.
 
 | Method + path | Request | Notes |
 |---|---|---|
-| `POST /v1/phone-actions/prepare` | `{deviceId, action}` | `deviceId`: the phone's workspace device id (its P-256 certificate's). Through the tunnel it must be the device the pairing proved it holds (403 otherwise). Drafts the event, writes nothing, and judges the unsigned draft as the fold will: a refusal is a 403 here, before the phone signs anything. Answers `{prepareId, kind, eventKind, presenceRequired, preview}` plus **either** `challenge` (base64url; `presenceRequired: true`, the passkey signs it) **or** `preimage` (base64url; no passkey needed). With presence, `preview` adds `digestShort`, `rpId`, `origins`, `allowCredentials`. 409 for `clearLockdown` on a chat that isn't locked down; 403 when the box can't write, the device isn't an enrolled, unrevoked phone of a human member, or the fold would refuse the action |
+| `POST /v1/phone-actions/prepare` | `{deviceId, action}` | `deviceId`: the phone's workspace device id (its P-256 certificate's). Through the tunnel it must be the device the pairing proved it holds (403 otherwise). Drafts the event, writes nothing, and judges the unsigned draft as the fold will: a refusal is a 403 here, before the phone signs anything. Answers `{prepareId, kind, eventKind, presenceRequired, preview}` plus **either** `challenge` (base64url; `presenceRequired: true`, the passkey signs it) **or** `preimage` (base64url; no passkey needed). With presence, `preview` adds `digestShort`, `rpId`, `origins`, `allowCredentials`. 409 for `clearLockdown` on a chat that isn't locked down; for `clearLockdown`, `preview.lockdowns` lists the lockdowns it names (`{raiseEventId, signal, detail, raisedAt}`), and a raise that isn't in force on the box (a stale view: refresh and prepare again) is a 403; 403 when the box can't write, the device isn't an enrolled, unrevoked phone of a human member, or the fold would refuse the action |
 | `POST /v1/phone-actions/presence` | `{prepareId, assertion: {credentialId, authenticatorData, clientDataJSON, signature}}` | only when `presenceRequired`: puts the assertion into the stamp and answers `{preimage}`. 409 when the action needs no passkey or was already confirmed; 404 unknown or expired `prepareId` |
 | `POST /v1/phone-actions/commit` | `{prepareId, signature}` | `signature`: the phone's ECDSA P-256 / SHA-256 signature over the preimage, 64 bytes (r‖s, low-S), base64url. Answers `{committed, eventId, kind}`, plus `messageId` (post) or `requestId` (requestApply). 403 when the signature doesn't verify against the phone's certificate or the fold refuses the event; 409 before `presence` when it is required; 409 when the phone signed something else on that log since the draft (its chain link went stale: prepare again); 404 unknown, expired or used `prepareId` |
 
@@ -175,7 +175,7 @@ the box doesn't know is refused before anything is drafted (400 or 422).
 | `post` | `chatId`, `text` (not blank, at most 16 000 characters) | `messageAppended`, a user message | the chat | never |
 | `vote` | `chatId`, `proposalId`, `diffDigest` (64 lowercase hex), `approved` | `proposalVoteCast`, bound to `diffDigest` | the chat | when the proposal is a workflow proposal or human-gated (a lockdown, dearth-mode brood paths) |
 | `answer` | `chatId`, `askId`, `answer` (not blank), `optionIndex?` | `flowRecorded` / `humanAnswered` | the chat | never |
-| `clearLockdown` | `chatId` | `chatLockdownCleared` | the workspace config log | always |
+| `clearLockdown` | `chatId`, `raises` (the `raiseEventId` of each lockdown to lift, as `GET /v1/guards` lists them; at least one, at most 16, each once) | `chatLockdownCleared`, naming those raises | the workspace config log | always |
 | `requestApply` | `chatId`, `proposalId`, `diffDigest`, `hostDeviceId`, `expectedBaseCommit?` (40/64 hex), `repoId?` | `proposalApplyRequested` ("Apply on ‹host›") | the chat | when the proposal is human-gated |
 | `withdrawApply` | `chatId`, `proposalId`, `requestId` | `proposalApplyWithdrawn` | the chat | never |
 
@@ -201,7 +201,12 @@ word until the phone has read it; refuse to sign unless all of these hold:
    event's own (`workspace` for `chatLockdownCleared`, `session` otherwise).
 4. The stamp: `actor.deviceId` is this phone, `sigAlg` is `p256`,
    `actor.kind` is `human`, `runtimeEffect` is absent (false), and `actor.accountId`
-   is the account the phone's certificate names.
+   is the account the phone's certificate names. The `lamport` is exactly one
+   past the stamp's `logHead.l` (the newest event of the log the box held
+   when it drafted), or `1` when there is no `logHead`; every fold refuses
+   any other lamport, so the event sorts where it was drafted however long
+   the box keeps it (what the box held includes its own events: a chain of
+   them it publishes moves the draft's lamport with it).
 5. Presence: if the phone ran the passkey, the stamp carries presence, it is
    **exactly the assertion the phone produced**, and the presence digest
    (`presence::challenge`, over workspace, session, event id, lamport, the
@@ -216,13 +221,15 @@ word until the phone has read it; refuse to sign unless all of these hold:
       `approved` as asked, `diffDigest` as asked;
     - `answer`: `askId`, `answer` and `optionIndex` as asked, `by` the
       stamped person's display name;
-    - `clearLockdown`: `chatId` as asked;
+    - `clearLockdown`: `chatId` as asked, and `raises` exactly the list
+      the phone asked to clear (same ids, same order);
     - `requestApply`: `proposalId`, `diffDigest`, `hostDeviceId`,
       `expectedBaseCommit` and `repoId` as asked;
     - `withdrawApply`: `requestId` and `proposalId` as asked.
 
-The box may choose only what grants nothing: the event id, sequence, lamport
-clock, timestamps, its config frontier and chain link (`prev`), a new
+The box may choose only what grants nothing: the event id, sequence, the log
+head it counts from (and so the lamport, one past it), timestamps, its config
+frontier and chain link (`prev`), a new
 message's `id` and `createdAt`, a vote's `createdAt` and `role` (the fold
 counts the signer's real role), an answer's `atMs`, and a new request's `id`.
 Show the person what you parsed from the preimage, not the box's `preview`.

@@ -25,7 +25,7 @@ fn member(id: &str, role: WorkspaceRole) -> WorkspaceMember {
 }
 
 fn stamp(by: &str, frontier: Option<CfgFrontier>) -> Option<ActorStamp> {
-    Some(ActorStamp { actor: ActorIdentity::new(by, by, ActorKind::Human), recorded_at: Timestamp::epoch(), cfg_frontier: frontier, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() })
+    Some(ActorStamp { actor: ActorIdentity::new(by, by, ActorKind::Human), recorded_at: Timestamp::epoch(), cfg_frontier: frontier, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None })
 }
 
 /// The workspace-config log: `owner` founded it, then added `mara` as a
@@ -86,15 +86,15 @@ impl Log {
             let head = self.cfg.head();
             let mut env = self.cfg.w.draft(by, Some(self.sid), e, head);
             env.sequence = self.lamport as i64;
-            env.lamport = self.lamport;
+            hive_core::lamport::stamp_after(&mut env, &self.envs);
             let p = &self.cfg.w.people[by];
             hive_core::testkit::prove_recovery(&mut env, p.account_id, p.device_id, &p.device);
             self.envs.push(env);
             return;
         }
         let mut env = SessionEventEnvelope::new(self.sid, self.wid, self.lamport as i64, e);
-        env.lamport = self.lamport;
         env.actor_stamp = stamp(by, self.cfg.head());
+        hive_core::lamport::stamp_after(&mut env, &self.envs);
         self.envs.push(env);
     }
     /// The owner changes `id`'s role; a demotion carries the honest

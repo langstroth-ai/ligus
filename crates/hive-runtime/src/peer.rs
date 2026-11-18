@@ -283,6 +283,8 @@ impl PeerSync {
             }
             IngestAction::Quarantine(reason) => {
                 tracing::warn!(?reason, event_id = %env.event_id, "rejected a quarantined peer event");
+                // A lamport witness, as on the relay path (`SyncEngine::apply_fetched`).
+                store.note_lamport_witness(&env).map_err(|e| PeerError::Store(e.to_string()))?;
                 Ok(false)
             }
             IngestAction::Hold(reason) => {
@@ -477,7 +479,7 @@ mod tests {
                     contact: None,
                 },
                 recorded_at: Timestamp::epoch(), cfg_frontier: None,
-                presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+                presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
             hive_core::sign_envelope(&mut e, device_id, &device);
             e
         };

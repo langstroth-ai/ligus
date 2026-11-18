@@ -16,4 +16,9 @@ detail: string, raisedAt: string,
  * The reply whose turn raised it, for a jump to the cause (absent for a
  * manual lockdown).
  */
-messageId?: string, };
+messageId?: string, 
+/**
+ * The event that raised it: what a clear names to lift it (the clear
+ * lifts exactly the signals it names, the ones this person was shown).
+ */
+raiseEventId?: string, };

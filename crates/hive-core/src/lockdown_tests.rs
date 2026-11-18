@@ -3,7 +3,8 @@
 
 use uuid::Uuid;
 
-use crate::events::{project, SessionEvent};
+use crate::events::SessionEvent;
+use crate::testkit::project_honest as project;
 use crate::guard::{human_gate_reason, ChatLockdown, LockdownSignal};
 use crate::identity::{ActorIdentity, ActorKind, WorkspaceMember, WorkspaceRole};
 use crate::lease_projection_tests::{base, ev, seed};
@@ -21,12 +22,14 @@ fn raise(chat: Uuid) -> SessionEvent {
             raised_by: "worker".into(),
             raised_at: Timestamp::epoch(),
             message_id: None,
+            raise_event_id: None,
         },
     }
 }
 
-fn clear(chat: Uuid) -> SessionEvent {
-    SessionEvent::ChatLockdownCleared { chat_id: chat }
+/// A clear of the raises `raised` (their event ids).
+fn clear(chat: Uuid, raised: &[&crate::SessionEventEnvelope]) -> SessionEvent {
+    SessionEvent::ChatLockdownCleared { chat_id: chat, raises: raised.iter().map(|e| e.event_id).collect() }
 }
 
 /// Project the config log, then look at it as chat `chat` would (the overlay
@@ -54,17 +57,21 @@ fn with_bot() -> crate::ChatSession {
 fn anyone_with_the_key_can_raise_only_a_human_member_can_clear() {
     let s = with_bot();
     let chat = Uuid::new_v4();
-    let mut envs = vec![seed(&s), ev(&s, 1, "some-worker-host", None, raise(chat))];
+    let r = ev(&s, 1, "some-worker-host", None, raise(chat));
+    let mut envs = vec![seed(&s), r.clone()];
     assert!(as_chat(&envs, chat).guards.lockdown_active(), "a non-member worker host may tighten");
+    assert_eq!(as_chat(&envs, chat).guards.lockdowns_of(chat)[0].raise_event_id, Some(r.event_id), "known by its raise");
     // A non-member clearing it: dropped.
-    envs.push(ev(&s, 2, "stranger", None, clear(chat)));
+    envs.push(ev(&s, 2, "stranger", None, clear(chat, &[&r])));
     // A Viewer: dropped.
-    envs.push(ev(&s, 3, "victor", None, clear(chat)));
+    envs.push(ev(&s, 3, "victor", None, clear(chat, &[&r])));
     // An agent-kind member, even an Admin: dropped.
-    envs.push(ev(&s, 4, "bot", None, clear(chat)));
+    envs.push(ev(&s, 4, "bot", None, clear(chat, &[&r])));
+    // A clear that names no raise clears nothing.
+    envs.push(ev(&s, 5, "alice", None, clear(chat, &[])));
     assert!(as_chat(&envs, chat).guards.lockdown_active());
     // A human Contributor clears it.
-    envs.push(ev(&s, 5, "alice", None, clear(chat)));
+    envs.push(ev(&s, 5, "alice", None, clear(chat, &[&r])));
     assert!(!as_chat(&envs, chat).guards.lockdown_active());
     // A later signal locks it again.
     envs.push(ev(&s, 6, "owner", None, raise(chat)));
@@ -118,4 +125,34 @@ fn lockdown_message_id_is_left_out_when_absent_and_kept_through_projection() {
         ev(&s, 1, "some-worker-host", None, SessionEvent::ChatLockdownRaised { chat_id: chat, lockdown: with }),
     ];
     assert_eq!(as_chat(&envs, chat).guards.lockdowns_of(chat)[0].message_id, Some(reply));
+}
+
+/// A clear lifts exactly the raises it names: one it doesn't name (raised
+/// since, which its author wasn't shown) stays in force, and so does one
+/// that sorts after it, which its author can't have held.
+#[test]
+fn a_clear_lifts_only_the_raises_it_names() {
+    let s = base();
+    let chat = Uuid::new_v4();
+    let (r1, r2) = (ev(&s, 1, "owner", None, raise(chat)), ev(&s, 2, "owner", None, raise(chat)));
+    let envs = vec![seed(&s), r1.clone(), r2.clone(), ev(&s, 3, "alice", None, clear(chat, &[&r1]))];
+    let left: Vec<Option<Uuid>> = as_chat(&envs, chat).guards.lockdowns_of(chat).iter().map(|l| l.raise_event_id).collect();
+    assert_eq!(left, vec![Some(r2.event_id)], "the raise it doesn't name stays");
+    // Named, but raised after the clear (it sorts later): stays.
+    let late = ev(&s, 5, "owner", None, raise(chat));
+    let envs = vec![seed(&s), r1.clone(), ev(&s, 3, "alice", None, clear(chat, &[&r1, &late])), late.clone()];
+    let left: Vec<Option<Uuid>> = as_chat(&envs, chat).guards.lockdowns_of(chat).iter().map(|l| l.raise_event_id).collect();
+    assert_eq!(left, vec![Some(late.event_id)]);
+}
+
+/// A raise can't pick the id a clear names it by: the fold sets it from the
+/// raise's own event id, and a raise claiming one is refused.
+#[test]
+fn a_raise_claiming_its_raise_id_is_refused() {
+    let s = base();
+    let chat = Uuid::new_v4();
+    let SessionEvent::ChatLockdownRaised { lockdown, .. } = raise(chat) else { unreachable!() };
+    let forged = ChatLockdown { raise_event_id: Some(Uuid::new_v4()), ..lockdown };
+    let envs = vec![seed(&s), ev(&s, 1, "owner", None, SessionEvent::ChatLockdownRaised { chat_id: chat, lockdown: forged })];
+    assert!(!as_chat(&envs, chat).guards.lockdown_active());
 }

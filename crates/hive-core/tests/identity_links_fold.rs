@@ -103,10 +103,10 @@ impl World {
         self.clock += 1;
         let p = &self.people[by];
         let mut env = SessionEventEnvelope::new(workspace_config_session_id(self.wid), self.wid, self.clock as i64, payload);
-        env.lamport = self.clock;
         let mut actor = ActorIdentity::new(by, by, ActorKind::Human);
         actor.account_id = Some(p.account_id);
-        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
+        hive_core::lamport::stamp_after(&mut env, &self.cfg);
         sign_envelope(&mut env, p.device_id, &p.device);
         if self.present.contains(by) {
             hive_core::testkit::prove_recovery(&mut env, p.account_id, p.device_id, &p.device);
@@ -251,7 +251,7 @@ fn agent_cannot_publish_a_link() {
     let mut env = w.draft("owner", publish(l.clone()));
     let mut actor = ActorIdentity::new(agent_id.to_string(), "coder", ActorKind::Agent);
     actor.account_id = Some(w.account("owner"));
-    env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+    env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
     env.clear_raw();
     sign_envelope(&mut env, key_id, &akp);
     let id = w.push_env(env);

@@ -438,8 +438,7 @@ mod tests {
         // failing pre-flight and tune, and a stranger closing the set.
         let forged = |by: &ActorIdentity, seq: i64, payload: SessionEvent| {
             let mut env = hive_core::SessionEventEnvelope::new(sid, wid, seq, payload);
-            env.lamport = 1_000 + seq as u64;
-            env.actor_stamp = Some(hive_core::ActorStamp { actor: by.clone(), recorded_at: Timestamp::now(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+            env.actor_stamp = Some(hive_core::ActorStamp { actor: by.clone(), recorded_at: Timestamp::now(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
             env
         };
         let eve = ActorIdentity::new("eve", "Eve", hive_core::ActorKind::Human);
@@ -450,6 +449,8 @@ mod tests {
             forged(&val, 9_002, SessionEvent::ProposalSetTuned { set_id, agent_quorum: 1, required_approvals: 1, quality_bar: 1 }),
             forged(&eve, 9_003, SessionEvent::ProposalSetDecided { set_id, winner: None, at: Timestamp::now() }),
         ] {
+            let mut env = env;
+            hive_core::lamport::stamp_next(&mut env, svc.store().lamport_head(sid).unwrap());
             svc.store().append_envelope(&env).unwrap();
         }
         // The raw fold (no workspace roster) would take them.

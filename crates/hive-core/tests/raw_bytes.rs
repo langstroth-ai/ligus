@@ -117,10 +117,20 @@ fn sample_events() -> Vec<SessionEvent> {
 /// Sign `payload` (arbitrary JSON) the way a newer encoder would: over the
 /// bytes it puts on the wire. Returns the wire text.
 fn newer_encoder(kp: &SigningKeypair, sid: Uuid, payload: &Value, top_extra: &Value, lamport: u64) -> String {
+    newer_encoder_after(kp, sid, payload, top_extra, lamport, None)
+}
+
+/// [`newer_encoder`] for an event that names `head` as its log head (an
+/// unstamped event can only be a log's first, at lamport 1).
+fn newer_encoder_after(kp: &SigningKeypair, sid: Uuid, payload: &Value, top_extra: &Value, lamport: u64, head: Option<&SessionEventEnvelope>) -> String {
     let base = SessionEventEnvelope::new(sid, Uuid::nil(), lamport as i64, SessionEvent::SessionTitleChanged { title: String::new() });
     let mut v = serde_json::to_value(&base).unwrap();
     v["payload"] = payload.clone();
     v["lamport"] = json!(lamport);
+    if let Some(h) = head {
+        v["actorStamp"] = json!({"actor": {"id": "", "displayName": "", "kind": "system"}, "logHead": {"l": h.lamport, "e": h.event_id}});
+        v["lamport"] = json!(h.lamport + 1);
+    }
     v["zzTopLevel"] = top_extra.clone();
     let mut env: SessionEventEnvelope = serde_json::from_str(&v.to_string()).unwrap();
     sign_envelope(&mut env, Uuid::from_u128(5), kp);
@@ -140,7 +150,7 @@ proptest! {
         let kp = SigningKeypair::from_seed(&[7u8; 32]).unwrap();
         let session = ChatSession::new("p", Uuid::nil(), "anthropic");
         let sid = session.id;
-        let seed = SessionEventEnvelope::new(sid, Uuid::nil(), 0, SessionEvent::SessionSnapshot { session: Box::new(session) });
+        let seed = SessionEventEnvelope::new(sid, Uuid::nil(), 1, SessionEvent::SessionSnapshot { session: Box::new(session) });
         let events = sample_events();
         let (mut payload, plain) = if which < events.len() {
             let p = serde_json::to_value(&events[which]).unwrap();
@@ -150,7 +160,7 @@ proptest! {
         };
         let mut pick = picks.iter().copied().cycle().take(64);
         inject(&mut payload, &extra, &mut pick, 0);
-        let wire = newer_encoder(&kp, sid, &payload, &extra, 1);
+        let wire = newer_encoder_after(&kp, sid, &payload, &extra, 2, Some(&seed));
 
         let env: SessionEventEnvelope = serde_json::from_str(&wire).unwrap();
         prop_assert!(verify_envelope(&env, &kp.public_key_bytes()).is_ok());
@@ -169,7 +179,7 @@ proptest! {
                 prop_assert_eq!(folded.proposals, alone.proposals);
             }
             Some(p) => {
-                let wire_plain = newer_encoder(&kp, sid, &p, &Value::Null, 1);
+                let wire_plain = newer_encoder_after(&kp, sid, &p, &Value::Null, 2, Some(&seed));
                 let env_plain: SessionEventEnvelope = serde_json::from_str(&wire_plain).unwrap();
                 let expected = hive_core::project(&[seed, env_plain]).unwrap();
                 prop_assert_eq!(folded.messages, expected.messages);

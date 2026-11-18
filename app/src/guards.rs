@@ -1218,6 +1218,7 @@ pub(crate) fn get_chat_lockdown(state: State<AppState>, session_id: String) -> R
             detail: l.detail.clone(),
             raised_at: crate::rfc3339(l.raised_at),
             message_id: l.message_id.map(|m| m.to_string()),
+            raise_event_id: l.raise_event_id.map(|r| r.to_string()),
         })
         .collect::<Vec<_>>();
     Ok(hive_proto::ChatLockdownDto {
@@ -1227,14 +1228,16 @@ pub(crate) fn get_chat_lockdown(state: State<AppState>, session_id: String) -> R
     })
 }
 
-/// Clear this chat's lockdown (a human member, Contributor+; re-checked on
-/// every device's ingest).
+/// Clear the lockdown signals of this chat the person was shown, each named
+/// by its `raiseEventId` (a human member, Contributor+; re-checked on every
+/// device's ingest). A signal raised since, which they weren't shown, stays.
 #[tauri::command(async)]
-pub(crate) fn clear_chat_lockdown(app: AppHandle, state: State<AppState>, session_id: String) -> Result<(), String> {
+pub(crate) fn clear_chat_lockdown(app: AppHandle, state: State<AppState>, session_id: String, raise_ids: Vec<String>) -> Result<(), String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
+    let raises = raise_ids.iter().map(|r| Uuid::parse_str(r)).collect::<Result<Vec<_>, _>>().map_err(map_err)?;
     let mut svc = state.service.lock().unwrap();
     let ws = svc.load(sid).map_err(map_err)?.ok_or("unknown chat")?.workspace_id;
-    svc.clear_lockdown(ws, sid).map_err(map_err)?;
+    svc.clear_lockdown(ws, sid, raises).map_err(map_err)?;
     drop(svc);
     let _ = tauri::Emitter::emit(&app, "workspace://synced", 1);
     Ok(())

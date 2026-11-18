@@ -3,7 +3,8 @@
 
 use uuid::Uuid;
 
-use crate::events::{project, SessionEvent, SessionEventEnvelope};
+use crate::events::{SessionEvent, SessionEventEnvelope};
+use crate::testkit::project_honest as project;
 use crate::identity::{ActorIdentity, ActorKind, ActorStamp, WorkspaceMember, WorkspaceRole};
 use crate::lease::{lease_key, CoordinatorLease, LeaseClaimReason, LeaseRelease, LeaseScope, DEFAULT_LEASE_MS};
 use crate::session::ChatSession;
@@ -44,7 +45,7 @@ pub(crate) fn ev(s: &ChatSession, lamport: u64, author: &str, device: Option<Uui
 }
 
 fn stamp(mut e: SessionEventEnvelope, author: &str, device: Option<Uuid>) -> SessionEventEnvelope {
-    e.actor_stamp = Some(ActorStamp { actor: ActorIdentity::new(author, author, ActorKind::Human), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+    e.actor_stamp = Some(ActorStamp { actor: ActorIdentity::new(author, author, ActorKind::Human), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
     e.signer_device_id = device;
     e
 }

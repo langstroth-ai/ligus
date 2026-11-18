@@ -9,7 +9,7 @@ use hive_core::signal::{GuardSignal, GuardSignalRecord};
 use hive_core::{SessionEvent, Timestamp};
 use uuid::Uuid;
 
-use super::{ChatService, Result};
+use super::{ChatError, ChatService, Result};
 use crate::envelope_verifier::{build_roster, DeviceKeyResolver};
 use crate::lease_presence::LeaseBeat;
 
@@ -211,6 +211,7 @@ impl ChatService {
                 raised_by: self.author.id.clone(),
                 raised_at: Timestamp::now(),
                 message_id,
+                raise_event_id: None,
             };
             self.append_signed(config_id, workspace_id, SessionEvent::ChatLockdownRaised { chat_id, lockdown })?;
             let (kind, text) = match signal {
@@ -240,10 +241,18 @@ impl ChatService {
         Ok(findings.len())
     }
 
-    /// Clear a chat's lockdown (a human member, Contributor+).
-    pub fn clear_lockdown(&mut self, workspace_id: Uuid, chat_id: Uuid) -> Result<()> {
+    /// Clear lockdowns of a chat (a human member, Contributor+): exactly the
+    /// `raises` named (the `raise_event_id` of each lockdown the person was
+    /// shown), each in force here. A lockdown raised since, which they
+    /// weren't shown, stays in force.
+    pub fn clear_lockdown(&mut self, workspace_id: Uuid, chat_id: Uuid, raises: Vec<Uuid>) -> Result<()> {
+        let active: Vec<Uuid> = self.workspace_guards(workspace_id)?.lockdowns_of(chat_id).iter().filter_map(|l| l.raise_event_id).collect();
+        if raises.iter().any(|r| !active.contains(r)) {
+            return Err(ChatError::Unauthorized("a lockdown it names isn't in force here: refresh and try again".into()));
+        }
+        hive_core::authz::bounds::clear_names_raises(&raises).map_err(|e| ChatError::Unauthorized(e.into()))?;
         let config_id = self.ensure_workspace_config(workspace_id)?;
-        self.append_signed(config_id, workspace_id, SessionEvent::ChatLockdownCleared { chat_id })?;
+        self.append_signed(config_id, workspace_id, SessionEvent::ChatLockdownCleared { chat_id, raises })?;
         if self.load(chat_id)?.is_some() {
             let who = self.author.display_name.clone();
             self.post_system_note(chat_id, workspace_id, format!("{who} cleared this chat's lockdown."))?;
@@ -400,7 +409,7 @@ mod tests {
         {
             let mut env = hive_core::SessionEventEnvelope::new(cfg, ws, 100 + i as i64, e);
             env.lamport = 100 + i as u64;
-            env.actor_stamp = Some(hive_core::ActorStamp { actor: actor.clone(), recorded_at: Timestamp::now(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+            env.actor_stamp = Some(hive_core::ActorStamp { actor: actor.clone(), recorded_at: Timestamp::now(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
             hive_core::sign_envelope(&mut env, eve_dev, &dev_kp);
             svc.store.ingest(&env).unwrap();
         }
@@ -441,7 +450,19 @@ mod tests {
         // Other chats are untouched.
         let other = svc.create_chat("o", ws, "anthropic").unwrap();
         assert!(!svc.load(other.id).unwrap().unwrap().guards.lockdown_active());
-        svc.clear_lockdown(ws, chat.id).unwrap();
+        // A clear names the raises it lifts: a stale view (a raise that isn't
+        // in force) and an empty one are refused, and a raise it doesn't name
+        // stays in force.
+        let shown: Vec<Uuid> = s.guards.lockdowns_of(chat.id).iter().filter_map(|l| l.raise_event_id).collect();
+        assert_eq!(shown.len(), 1);
+        assert!(svc.clear_lockdown(ws, chat.id, vec![Uuid::new_v4()]).is_err());
+        assert!(svc.clear_lockdown(ws, chat.id, Vec::new()).is_err());
+        svc.self_medicate(ws, chat.id, None, &[(LockdownSignal::CiConfigChanged, ".github/workflows".into())]).unwrap();
+        svc.clear_lockdown(ws, chat.id, shown).unwrap();
+        let s = svc.load(chat.id).unwrap().unwrap();
+        assert_eq!(s.guards.lockdowns_of(chat.id).len(), 1, "the raise the clear didn't name stays");
+        let rest: Vec<Uuid> = s.guards.lockdowns_of(chat.id).iter().filter_map(|l| l.raise_event_id).collect();
+        svc.clear_lockdown(ws, chat.id, rest).unwrap();
         assert!(!svc.load(chat.id).unwrap().unwrap().guards.lockdown_active());
         assert!(!svc.list_signals(ws, 0, Some("hygiene"), 10).unwrap().is_empty());
     }

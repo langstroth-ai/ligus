@@ -302,7 +302,7 @@ fn phase_a_goldens() {
             presence: None,
             runtime_effect: false,
             prev: Some(u(0x2fff)),
-            sig_alg: SigAlg::Ed25519,
+            sig_alg: SigAlg::Ed25519, log_head: None,
         });
         sign_envelope(&mut e, u(1), &kp);
         let line = format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}", serde_json::to_string(&e).unwrap());
@@ -358,7 +358,7 @@ fn phase_b_goldens() {
             presence: None,
             runtime_effect: false,
             prev: Some(u(0x3001)),
-            sig_alg: SigAlg::Ed25519,
+            sig_alg: SigAlg::Ed25519, log_head: None,
         });
         sign_envelope(&mut e, u(1), &kp);
         out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
@@ -402,8 +402,54 @@ fn phase_b_apply_goldens() {
             presence: None,
             runtime_effect: false,
             prev: Some(u(0x4002)),
-            sig_alg: SigAlg::Ed25519,
+            sig_alg: SigAlg::Ed25519, log_head: None,
         });
+        sign_envelope(&mut e, u(1), &kp);
+        out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
+    }
+    std::fs::write(path, out).unwrap();
+}
+
+/// Writes the lamport-bounds lines (`hive_core::lamport`): an event whose
+/// stamp names its log head (`logHead`, `{l, e}`), its lamport one past it,
+/// and a lockdown clear naming the raises it clears.
+/// Run with `LIGUS_GOLDEN_OUT=<path> --ignored`, then append the lines.
+#[test]
+#[ignore]
+fn lamport_bounds_goldens() {
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let kp = device();
+    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let ws = u(2);
+    let chat = u(3);
+    let mut m = hive_core::ChatMessage::new(hive_core::MessageRole::User, "Mara", "after the head");
+    m.id = u(0x5004);
+    m.created_at = Timestamp::epoch();
+    let cfg = hive_core::workspace_config_session_id(ws);
+    let cases = [
+        ("messageAppended/logHead", 0u64, chat, SessionEvent::MessageAppended { message: m }),
+        ("chatLockdownCleared/raises", 1, cfg, SessionEvent::ChatLockdownCleared { chat_id: chat, raises: vec![u(0x5020), u(0x5021)] }),
+    ];
+    let mut out = String::new();
+    for (label, i, sid, payload) in cases {
+        let mut e = SessionEventEnvelope::new(sid, ws, 401 + i as i64, payload);
+        e.id = u(0x5010 + 2 * i as u128);
+        e.event_id = u(0x5011 + 2 * i as u128);
+        e.timestamp = Timestamp::epoch();
+        let mut actor = ActorIdentity::new(u(9).to_string(), "Mara", ActorKind::Human);
+        actor.account_id = Some(u(9));
+        actor.device_id = Some(u(1));
+        e.actor_stamp = Some(ActorStamp {
+            actor,
+            recorded_at: Timestamp::epoch(),
+            cfg_frontier: Some(CfgFrontier { lamport: 800, event_id: u(0x5001) }),
+            presence: None,
+            runtime_effect: false,
+            prev: Some(u(0x5002)),
+            sig_alg: SigAlg::Ed25519,
+            log_head: None,
+        });
+        hive_core::lamport::stamp_next(&mut e, Some(CfgFrontier { lamport: 41, event_id: u(0x5003) }));
         sign_envelope(&mut e, u(1), &kp);
         out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
     }

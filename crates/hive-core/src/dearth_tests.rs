@@ -4,7 +4,8 @@
 
 use uuid::Uuid;
 
-use crate::events::{project, SessionEvent};
+use crate::events::SessionEvent;
+use crate::testkit::project_honest as project;
 use crate::guard::{human_gate_reason, DearthMode, DEFAULT_BROOD_PATHS};
 use crate::identity::{ActorIdentity, ActorKind, WorkspaceMember, WorkspaceRole};
 use crate::lease_projection_tests::{base, ev, member, seed};

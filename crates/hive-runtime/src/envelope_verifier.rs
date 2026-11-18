@@ -740,7 +740,22 @@ pub fn roster_with_batch(
     // victim's account disputed for this very batch.
     let boot: Vec<_> = boot.into_iter().filter(|e| key_publication_ok(e)).collect();
     stored.extend(boot.into_iter().cloned());
-    let mut roster = build_roster_pinned(&stored, pin);
+    // The batch's config-log events that haven't joined (yet) still count as
+    // lamport witnesses, inert: the trust events after them count from them
+    // (`hive_core::lamport`), and a roster folded from part of the log would
+    // otherwise hold those.
+    let with_witnesses = |stored: &[SessionEventEnvelope]| -> Vec<SessionEventEnvelope> {
+        let have: HashSet<Uuid> = stored.iter().map(|e| e.event_id).collect();
+        let mut all = stored.to_vec();
+        all.extend(
+            batch
+                .iter()
+                .filter(|e| e.session_id == hive_core::workspace_config_session_id(e.workspace_id) && !have.contains(&e.event_id))
+                .map(|e| hive_core::lamport::inert_witness(e)),
+        );
+        all
+    };
+    let mut roster = build_roster_pinned(&with_witnesses(&stored), pin);
     while !pending.is_empty() {
         let (ok, rest): (Vec<_>, Vec<_>) = pending
             .into_iter()
@@ -750,7 +765,7 @@ pub fn roster_with_batch(
             break;
         }
         stored.extend(ok.into_iter().cloned());
-        roster = build_roster_pinned(&stored, pin);
+        roster = build_roster_pinned(&with_witnesses(&stored), pin);
     }
     roster
 }
@@ -1134,7 +1149,7 @@ mod tests {
                 contact: None,
             },
             recorded_at: Timestamp::epoch(), cfg_frontier: None,
-            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
         hive_core::sign_envelope(&mut e, signer_device, signer_kp);
         e
     }
@@ -1289,7 +1304,7 @@ mod tests {
                 contact: None,
             },
             recorded_at: Timestamp::epoch(), cfg_frontier: None,
-            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
         assert!(forged.signer_device_id.is_none(), "PoC envelope must be unsigned");
 
         // The verdict must be Quarantine, and Relay-mode ingest must DROP it.
