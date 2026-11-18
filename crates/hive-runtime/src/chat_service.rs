@@ -33,7 +33,7 @@ pub use links::{links_for_account, LinkDraft, ShownLink, WorkspaceLinks};
 mod phone_sign;
 mod presence;
 pub use keys::RotationIssued;
-pub use phone_sign::PhoneDraft;
+pub use phone_sign::{PhoneDraft, STALE_DRAFT};
 pub use presence::{PresenceDraft, PresenceProvider, PresenceRequest};
 
 #[derive(Debug, thiserror::Error)]
@@ -2129,6 +2129,38 @@ impl ChatService {
                 request_id: Some(request_id),
             },
         )
+    }
+
+    /// The host's side of a request it couldn't fulfil: record why, which
+    /// closes the request (a person may ask again).
+    pub fn fail_apply_request(&mut self, session_id: Uuid, workspace_id: Uuid, request_id: Uuid, reason: &str) -> Result<SessionEventEnvelope> {
+        let session = self.load(session_id)?.ok_or_else(|| ChatError::Unauthorized("unknown chat".into()))?;
+        let req = session.apply_requests.get(&request_id).cloned().ok_or_else(|| ChatError::Unauthorized("no such apply request".into()))?;
+        if req.host_device_id != self.device_id {
+            return Err(ChatError::Unauthorized("that apply request is for another host".into()));
+        }
+        let reason: String = reason.chars().take(hive_core::workspace_repo::MAX_APPLY_FAILURE_CHARS).collect();
+        self.append_signed(session_id, workspace_id, SessionEvent::ProposalApplyFailed { request_id, proposal_id: req.proposal_id, reason })
+    }
+
+    /// Withdraw an open apply request (its requester, or an Admin).
+    pub fn withdraw_apply_request(&mut self, session_id: Uuid, workspace_id: Uuid, request_id: Uuid) -> Result<SessionEventEnvelope> {
+        let session = self.load(session_id)?.ok_or_else(|| ChatError::Unauthorized("unknown chat".into()))?;
+        let req = session.apply_requests.get(&request_id).cloned().ok_or_else(|| ChatError::Unauthorized("no such apply request".into()))?;
+        self.append_signed(session_id, workspace_id, SessionEvent::ProposalApplyWithdrawn { request_id, proposal_id: req.proposal_id })
+    }
+
+    /// Whether this device could append `payload` on `session_id` now, judged
+    /// exactly as every fold will (nothing is written, no passkey is asked
+    /// for). A side effect that ends in such an event (a host applying a
+    /// request) checks first, so it never acts on what the fold would refuse.
+    pub fn would_allow(&mut self, session_id: Uuid, workspace_id: Uuid, payload: SessionEvent) -> Result<()> {
+        if let Some(reason) = &self.write_block {
+            return Err(ChatError::Unauthorized(reason.clone()));
+        }
+        let env = self.draft_signed(session_id, workspace_id, payload)?;
+        let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        self.authorize_as_fold(&env, config.as_ref(), &timeline)
     }
 
     /// Persist a workflow run snapshot (create or update by id).

@@ -10,6 +10,25 @@ Full release notes are on the
 
 ## 0.1.0
 
+- **The phone acts as you with its own key; one host applies.** Since the
+  box is its own service member, what you do as yourself from the phone
+  (post, approve or reject, answer an agent's question, clear a lockdown,
+  ask a host to apply, withdraw that request) is signed by the phone's own
+  Secure Enclave key, with your passkey where the rules need it; the box
+  drafts the event, the phone checks every byte before signing, and the box
+  can't change it. **Apply on ‹host›** (phone and desktop) asks one named
+  host to apply an approved proposal: only that host applies it, once, and
+  reports the commit or why it couldn't; nobody else applies it while the
+  request is open. Auto-apply on approval (`LIGUS_SERVE_APPLY_ON_APPROVE`,
+  the chart's `serve.applyOnApprove`) is removed. The desktop's People pane
+  disables what the rank rules refuse (an Admin cutting an Admin, a
+  non-founder cutting an Owner, anyone cutting the founder, a box above
+  Contributor) and says why. The box's own person-action routes (`/v1/proposals/{id}/approve` and
+  `/reject`, `/v1/chats/{id}/lockdown/clear`, `/v1/asks/{id}/answer`, and
+  `presence/prepare` for a vote or a clear) answer 410 and name the phone
+  action to use. See
+  [Phone actions](../../operate/reference/serve-api.md#phone-actions) and
+  [Apply on a host](../../operate/ops/serve-box.md#apply-on-a-host).
 - **serve and worker boxes are their own members.** A `ligus serve` or
   `ligus worker` box joins a workspace as its own **service member**, never as
   a person's device: at most Contributor, its votes never count as a person's

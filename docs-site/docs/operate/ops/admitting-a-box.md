@@ -13,7 +13,7 @@ headless Admin. The box then joins by itself, with no person at the box.
 | Votes | Count at its role, but **never** as a person's approval: a human gate (dearth mode, a locked-down chat, an agent's own proposal) still needs a person. |
 | Passkeys | It holds none and never carries presence, so nothing that needs a passkey can come from it. |
 | Membership | It removes, demotes and admits no one, and revokes no device but its own. |
-| Applying | Only to fulfil a person's apply request (not wired up on serve in 0.1). `LIGUS_SERVE_APPLY_ON_APPROVE` doesn't apply anything on a box. |
+| Applying | Only to fulfil a person's apply request naming it ([Apply on a host](serve-box.md#apply-on-a-host)), once. There is no auto-apply. |
 | Questions and lockdowns | Only a person answers an agent's question or clears a lockdown. |
 | Revocation | An Admin revokes its device or removes it like any member. Once revoked it gets no later workspace key. |
 

@@ -382,6 +382,41 @@ pub async fn drain_tick(
     Ok(())
 }
 
+/// Apply every open request that names this host (Phase B, "Apply on
+/// ‹host›"): once each, in the chat's worktree of this host's checkout, with
+/// the result written back. Never on this host's own approval: only a
+/// person's `ProposalApplyRequested` names a host.
+pub fn apply_tick(ctx: &WorkerCtx<'_>, svc: &Mutex<ChatService>) -> Vec<(Uuid, hive_runtime::apply_host::Outcome)> {
+    let jobs = {
+        let s = lock(svc);
+        if s.write_block().is_some() {
+            return Vec::new();
+        }
+        match hive_runtime::apply_host::pending(&s, ctx.ws) {
+            Ok(j) => j,
+            Err(e) => {
+                eprintln!("apply: listing requests failed: {e}");
+                return Vec::new();
+            }
+        }
+    };
+    let mut out = Vec::new();
+    for job in jobs {
+        let repo = RepoBindings::load(&ctx.cfg.data_dir).resolve(&repos_dir(&ctx.cfg.data_dir), job.chat_id);
+        if let Some(r) = repo.as_deref() {
+            crate::repos::ensure_chat_base(r);
+        }
+        match hive_runtime::apply_host::fulfil(svc, &job, repo.as_deref()) {
+            Ok(o) => {
+                eprintln!("apply: request {} on proposal {}: {o:?}", job.request.id, job.proposal.id);
+                out.push((job.request.id, o));
+            }
+            Err(e) => eprintln!("apply: request {} failed: {e}", job.request.id),
+        }
+    }
+    out
+}
+
 /// The note a reply cut off by a restart ends with.
 pub const INTERRUPTED_NOTE: &str = "[interrupted: the host restarted before this reply finished. Ask again to retry.]";
 

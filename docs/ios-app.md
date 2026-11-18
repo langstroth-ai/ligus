@@ -86,8 +86,7 @@ and public addresses unless `LIGUS_SERVE_ALLOW_ANY_BIND=1`.
 | GET | `/v1/hosts` | `{hosts: [{id, label, isThis: bool, online: bool}]}` |
 | PUT | `/v1/agents/{id}/host` `{hostId}` | `{agent}`. `hostId` must be a registered host. `""` hands the agent back to its owner's device |
 | GET | `/v1/proposals?status=open\|all` | `{proposals: [{id, chatId, title, body, kind, diff?, status, createdAt, author}]}` |
-| POST | `/v1/proposals/{id}/approve` | `{proposal}` |
-| POST | `/v1/proposals/{id}/reject` `{reason?}` | `{proposal}` |
+| POST | `/v1/proposals/{id}/approve`, `/reject` | **410 Gone** `{error: "gone", message, use}`. Vote with the `vote` phone action (below) |
 | GET | `/v1/proposals/{id}` | `{proposal}` |
 | GET | `/v1/proposals/{id}/file?path=&side=old\|new` | `{path, side, content, size, base, applied}`: one file of the proposal's diff, whole, before (`old`) or after (`new`, the default) the change. Read from the chat's bound checkout (branch `hive/chat/<id>`, else `HEAD`) with the file's patch applied in a scratch directory, never in the checkout; `applied` means the base already carries the change and `old` was recovered by reversing it. `400`: `path` isn't a plain relative path or isn't in the diff, or a bad `side`. `404`: no diff, no checkout bound here, or that side doesn't exist (a new file has no `old`, a deleted one no `new`). `409`: the diff applies to neither base. `413` over 512 KB, `415` not UTF-8. The app uses it to render a changed Markdown file |
 | GET | `/v1/proposals/{id}/comments` | `{comments: [Comment]}`, the refinement thread, oldest first |
@@ -97,7 +96,7 @@ and public addresses unless `LIGUS_SERVE_ALLOW_ANY_BIND=1`.
 | GET | `/v1/proposal-sets/{id}` | `{set: ProposalSet}` |
 | GET | `/v1/chats/{id}/proposal-sets?status=open\|all` | `{sets: [ProposalSet]}`, one chat's sets (all by default) |
 | GET | `/v1/guards` | `{dearth: {reason, broodPaths, allowedMcpServers, setBy, setAt}?, pendingMembers, lockedChats: [{chatId, chatTitle, signals: [{signal, detail, raisedAt, messageId?}]}], coordinator: {holder, epoch, leaseMs, released, isThis}?, myRole, canClearLockdown}` |
-| POST | `/v1/chats/{id}/lockdown/clear` | `{chatId, cleared: true}`. Writes the same signed `ChatLockdownCleared` the desktop's *Clear lockdown* does. `403` unless this box's identity is a human member at Contributor or above; `409` when the chat isn't locked |
+| POST | `/v1/chats/{id}/lockdown/clear` | **410 Gone**. Clear with the `clearLockdown` phone action (below) |
 | GET | `/v1/flow` | `{board: [BoardItem], queue: Queue, marks: [Mark], routing: Routing}`, the desktop's Flow pane, read-only; see below |
 | GET | `/v1/chats/{id}/handoffs` | `{handoffs: [Handoff]}`, oldest first |
 | GET | `/v1/dashboard` | `{title, source, refreshSeconds, sections: [{title, panels: [Panel]}], updatedAt, error?}`. Defined by the host's `dashboard.toml`; see [dashboard.md](dashboard.md) |
@@ -143,7 +142,7 @@ check `{status: "passed"|"failed"|"skipped"|"unknown", note}`. `support` is
 the decayed sum over counting scouts; an assessment by the alternative's own
 producer is listed with `isSelf` and never counts. Assessments are blind until
 posted: only posted ones exist, so a scout in flight is never shown. Vote on an
-alternative with `POST /v1/proposals/{proposalId}/approve|reject`; tuning,
+alternative with the `vote` phone action; tuning,
 pre-flight, apply and the decision are desktop-only (`decideOn`).
 
 `BoardItem = {id, kind: "failingTests"|"unreviewedProposal"|"failedStage"|"needsReview",
@@ -314,9 +313,10 @@ checkouts are named, and an absolute binding shows only its last component.
   branch a fork PR from this chat was pushed as. `GET /v1/chats/{id}/details` carries the same object as
   `repo`.
 
-Approved proposals reach `hive/chat/<id>` only when the box applies them
-(`LIGUS_SERVE_APPLY_ON_APPROVE=1`). Otherwise the chat branch has nothing to
-open a pull request for.
+Approved proposals reach `hive/chat/<id>` only when a host applies them: the
+desktop's Implement, or the host a person names with **Apply on ‹host›**
+(the `requestApply` phone action below). Until then the chat branch has
+nothing to open a pull request for.
 
 #### Code hosts (0.1, additive)
 
@@ -395,6 +395,133 @@ itself: https in front of it counts only when the box listens on loopback.
   foreign-workspace cleanup.
 - The box publishes a contact record (relay v0.3) when it holds its account's
   key, announcing its id with one host beat when the log doesn't carry it.
+
+### Phone actions: implementation spec (0.1)
+
+The box is its own service member and never acts as the person. What the
+person does from the phone, the phone signs with its own P-256 Secure Enclave
+key (the device its certificate names on the workspace config log), and the
+box drafts and relays it. Reference implementation:
+`hive_core::phone_action` (`PhoneAction`, `check_phone_action_preimage`,
+`parse_phone_preimage`); golden vectors in
+`crates/hive-core/tests/golden/phone_actions_v1.jsonl`.
+
+**Endpoints.**
+
+1. `POST /v1/phone-actions/prepare {deviceId, action}` →
+   `{prepareId, kind, eventKind, presenceRequired, preview}` plus `challenge`
+   (when `presenceRequired`) or `preimage` (when not). Through the tunnel,
+   `deviceId` must be the device this pairing proved at enrollment.
+2. Only when `presenceRequired`: run `ASAuthorization` over `challenge` (the
+   workspace RP from `preview.rpId` / `origins`, `allowCredentials` from
+   the preview, user verification required), then
+   `POST /v1/phone-actions/presence {prepareId, assertion: {credentialId,
+   authenticatorData, clientDataJSON, signature}}` → `{preimage}`.
+3. Check the preimage (below). If it fails, don't sign; show the error.
+4. Sign the preimage bytes with the Secure Enclave key (ECDSA P-256,
+   SHA-256), encode r‖s (64 bytes, low-S: replace s with n − s when s > n/2),
+   base64url, and `POST /v1/phone-actions/commit {prepareId, signature}` →
+   `{committed, eventId, kind, messageId?, requestId?}`.
+
+Errors: 403 (not an enrolled phone of a human member, pairing bound to
+another device, the fold refuses, bad signature), 409 (presence missing,
+`clearLockdown` on an unlocked chat, a stale draft: "prepare again" when this
+phone signed something else on that log since the draft), 404 (unknown,
+expired after 5 minutes, or used `prepareId`), 400/422 (unknown `kind` or
+field). Keep one action in flight per chat to avoid stale drafts.
+
+**Actions** (`{"kind": …, camelCase fields}`, no other fields):
+
+| kind | fields | presence |
+|---|---|---|
+| `post` | `chatId`, `text` (1 to 16 000 characters, not blank) | no |
+| `vote` | `chatId`, `proposalId`, `diffDigest`, `approved` | workflow or human-gated proposals |
+| `answer` | `chatId`, `askId`, `answer`, `optionIndex?` (send the option's text as `answer` when one is picked) | no |
+| `clearLockdown` | `chatId` | always |
+| `requestApply` | `chatId`, `proposalId`, `diffDigest`, `hostDeviceId`, `expectedBaseCommit?`, `repoId?` | human-gated proposals |
+| `withdrawApply` | `chatId`, `proposalId`, `requestId` | no |
+
+`diffDigest` comes from `GET /v1/proposals/{id}`; recompute it from the
+content you show when you can (`authz::votes::diff_digest`:
+`SHA-256("ligus-proposal-digest-v1\0" ‖ for each part u32le(len) ‖ part)`
+over kind, diff, changed-files JSON, workflow JSON, command JSON, proposal id,
+repo id, base commit), and refuse to vote if it differs. For a workflow or
+command proposal whose JSON you can't reproduce byte for byte, the box's
+digest is what binds.
+
+**Preimage checks (all MUST hold before signing).**
+
+1. Layout: `"hive-envelope-v3\0"` ‖ workspaceId(16) ‖ sessionId(16) ‖
+   sequence(i64 LE) ‖ lamport(u64 LE) ‖ eventId(16) ‖ four fields, each
+   u32 LE length + bytes (scope, timestamp, stamp, payload), nothing after.
+2. workspaceId = this workspace. sessionId = `chatId`, or for `clearLockdown`
+   the workspace config log id (UUIDv5 of the workspace id,
+   `workspace_config_session_id`).
+3. Each JSON field decodes and re-encodes to the same JSON value under the
+   types you implement: an unknown field anywhere is a refusal. The scope is
+   the event's own (`"workspace"` for `chatLockdownCleared`, `"session"`
+   otherwise).
+4. Stamp: `actor.deviceId` = this phone, `sigAlg` = `"p256"`, `actor.kind` =
+   `"human"`, `runtimeEffect` absent (it is only written when true), `actor.accountId` = the
+   account your certificate names.
+5. Presence: if you ran the passkey, `stamp.presence` equals the assertion
+   you produced, field for field, and the presence digest equals the
+   challenge you signed: `SHA-256("ligus-presence-v1\0" ‖ workspaceId ‖ sessionId
+   ‖ eventId ‖ u64le(lamport) ‖ u32le(len(payload)) ‖ payload ‖
+   u32le(len(frontier)) ‖ frontier ‖ accountId)`, where `payload` is the
+   payload field's exact bytes and `frontier` the JSON of
+   `stamp.cfgFrontier` (empty when absent). If you didn't, `stamp.presence`
+   is absent.
+6. Payload, per kind:
+    - `post` → `messageAppended`: `message.role` `user`, `body` = `text`,
+      `author` = `actor.displayName`, `actorIdentity` = the stamp's actor,
+      `kind` `message`, every other field default (not streaming, no
+      related proposal or agent, no runtime, responder, reply-to, origin
+      device, workflow run, tool calls, results, reactions);
+    - `vote` → `proposalVoteCast`: `proposalId`, `approval.actorId` =
+      `actor.id`, `approval.approved`, `approval.diffDigest` as asked;
+    - `answer` → `flowRecorded` with `humanAnswered`: `askId`, `answer`,
+      `optionIndex` as asked, `by` = `actor.displayName`;
+    - `clearLockdown` → `chatLockdownCleared`: `chatId` as asked;
+    - `requestApply` → `proposalApplyRequested`: `request.proposalId`,
+      `diffDigest`, `hostDeviceId`, `expectedBaseCommit`, `repoId` as asked;
+    - `withdrawApply` → `proposalApplyWithdrawn`: `requestId`, `proposalId`
+      as asked.
+
+The box may choose only: eventId, sequence, lamport, timestamps, the stamp's
+`recordedAt`, `cfgFrontier` and `prev`, a message's `id` and `createdAt`, a
+vote's `createdAt` and `role`, an answer's `atMs`, a request's `id`.
+None of these grants anything the fold doesn't re-check: a post's `id` that
+is already in the chat (one of your earlier messages) is refused by every
+fold, so a box can't make a post rewrite an older message (refuse it
+yourself when you know the id); a vote's `role` is replaced by your role at
+the event's position; `cfgFrontier` older than a removal, demotion or
+revocation is judged as of that cut. `hostDeviceId` is never a phone (the
+fold refuses it): pick it from `GET /v1/hosts`. What a box can still do is
+withhold an event you signed, and choose its `lamport`, which orders it
+among the log's events: keep one action in flight, and treat a `committed`
+answer as the box's claim until the event stream shows it.
+
+**UI.**
+
+- The confirmation sheet shows what the phone parsed from the preimage
+  (kind, chat, the text, the vote and digest prefix, the host), never the
+  box's `preview`. The preview may decorate (titles) but the decision rests
+  on the parsed bytes.
+- Voting and Apply on ‹host› are offered from the proposal detail:
+  `canVote`, `canRequestApply` and `applyRequests` come from
+  `GET /v1/proposals/{id}`. The host picker lists `GET /v1/hosts` (id =
+  `hostDeviceId`, label, online, `isThis`); hosts offline are shown but
+  marked.
+- Request states: `open` (waiting for the host; offer **Withdraw**),
+  `applied` (show the short commit), `failed` (show `reason`; offer Apply
+  again), `withdrawn`. Refresh on the event stream.
+- Clear lockdown: offered when `GET /v1/guards` lists the chat and you are a
+  human member at Contributor or above; it always asks for the passkey.
+- Answer: from `GET /v1/chats/{id}/asks`, open asks only; an option sends
+  its text and its index.
+- Not on the phone: rebinding an agent to a host, inviting a person, DMs as
+  the person.
 
 ### Events (`GET /v1/events`)
 
@@ -516,9 +643,9 @@ hive remote disable | reset   # reset = new host keys: every phone re-pairs
     this off. MCP results are labelled as untrusted data.
   - **Role gate.** Tools of either kind run only when the triggering
     message's author has at least `LIGUS_MCP_MIN_ROLE` (default Contributor).
-  - `LIGUS_SERVE_APPLY_ON_APPROVE=1` no longer applies anything: a service
-    member applies only to fulfil a person's apply request (not wired up on
-    serve in 0.1); apply from the desktop.
+  - There is no auto-apply (`LIGUS_SERVE_APPLY_ON_APPROVE` is removed): the
+    box applies a proposal only to fulfil a person's apply request naming
+    it, once, in the chat's worktree of its checkout.
   - A file-writing subprocess agent (aider, pi, codex, hermes, or Claude Code
     in an edit mode) runs only in a per-turn worktree of a bound repository.
     Without one the turn fails instead of writing in place.
@@ -543,10 +670,11 @@ hive remote disable | reset   # reset = new host keys: every phone re-pairs
   start-up). `LIGUS_SERVE_OWNER` and `ligus serve enroll` were removed and stop
   with a migration error; `identity.mode` is `member` or `revoked`. What only a
   person may do from the phone is signed by the phone's own P-256 device key
-  with the person's passkey and relayed by the box: box admissions use
-  `POST /v1/admissions/prepare`, `/presence` and `/commit` (the operator
-  docs' serve API reference has the shapes). Votes, asks and lockdown clears
-  that need a person are made on the desktop until the phone signs those too.
+  (with the person's passkey where the rules need it) and relayed by the box:
+  box admissions (`POST /v1/admissions/prepare`, `/presence`, `/commit`) and
+  the phone actions (`POST /v1/phone-actions/prepare`, `/presence`,
+  `/commit`; spec below). Rebinding an agent, issuing a person's invite and
+  DMs as the person stay on the desktop.
 - Agents run one at a time on the worker thread. A long turn delays the next
   one, but the API and sync keep running.
 - Deltas are pushed only for turns that run on this box. A reply streamed on
@@ -561,8 +689,9 @@ hive remote disable | reset   # reset = new host keys: every phone re-pairs
   retries), so it never seeds a workspace config of its own.
 - Read marks are per box, not per device, and persist in
   `serve-state.json`.
-- Creating agents and editing runtimes aren't in the API. Assigning existing
-  agents to hosts is.
+- Creating agents and editing runtimes aren't in the API. `PUT
+  /v1/agents/{id}/host` exists but is an Admin's act a box (a service member)
+  can't do, and the phone tier doesn't include it: rebind from the desktop.
 - New agents created on the desktop default to their owner's device. Send them
   here explicitly. Once an agent is sent to a host, only that host answers its
   mentions; the desktop defers to it (and answers after 25 s only if the host
@@ -570,8 +699,8 @@ hive remote disable | reset   # reset = new host keys: every phone re-pairs
 - A pending "send to agent to revise" is remembered in memory: if the box
   restarts before the revision arrives, the new version isn't linked to the
   old one (both stay listed).
-- Approving doesn't apply a diff by default; the desktop's Implement does that.
-  Set `LIGUS_SERVE_APPLY_ON_APPROVE=1` to apply on the home host.
+- Approving never applies a diff. Apply on ‹host› asks one host to apply an
+  approved proposal; only that host applies it, once, and reports back.
 
 ## Running and testing
 

@@ -201,6 +201,26 @@ pub struct ApplyRequest {
     pub repo_id: Option<Uuid>,
 }
 
+/// The longest failure reason a host writes (`ProposalApplyFailed`).
+pub const MAX_APPLY_FAILURE_CHARS: usize = 500;
+
+/// How a closed apply request ended (folded from `ProposalApplied`,
+/// `ProposalApplyFailed` and `ProposalApplyWithdrawn`; the first in canonical
+/// order wins, and the fold allows only one).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "camelCase")]
+pub enum ApplyOutcome {
+    /// The named host applied it (`commit`, when it made one).
+    Applied {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        commit: Option<String>,
+    },
+    /// The named host couldn't, and said why.
+    Failed { reason: String },
+    /// Its requester (or an Admin) withdrew it.
+    Withdrawn,
+}
+
 /// One host's coverage of one workspace repo, as it rides the host's sealed
 /// presence beat (`host_presence`; never the log). Advisory: dispatch may
 /// show it, but the host that runs a turn re-checks its own checkout.

@@ -2678,6 +2678,39 @@ fn proposal_dto_reviewed(p: &ActionProposal, s: &ChatSession, svc: &ChatService)
     dto.human_gate = hive_core::guard::human_gate_reason(s, p).is_some();
     dto.presence_required = s.authz.rules >= 2;
     dto.legacy_command = p.kind == ProposalKind::Command && p.command.is_none();
+    // Apply on a host (Phase B): the requests and how they ended.
+    let hosts = svc.list_hosts(s.workspace_id).unwrap_or_default();
+    let me = svc.author().id.clone();
+    dto.apply_requests = s
+        .apply_requests
+        .values()
+        .filter(|r| r.proposal_id == p.id)
+        .map(|r| {
+            let host = r.host_device_id.to_string();
+            let mut d = hive_proto::ApplyRequestDto {
+                id: r.id.to_string(),
+                host_label: hosts.iter().find(|h| h.id == host).map(|h| h.label.clone()),
+                host_device_id: host,
+                state: "open".into(),
+                mine: s.authz.apply_requesters.get(&r.id).is_some_and(|a| *a == me),
+                ..Default::default()
+            };
+            match s.apply_outcomes.get(&r.id) {
+                Some(hive_core::workspace_repo::ApplyOutcome::Applied { commit }) => {
+                    d.state = "applied".into();
+                    d.commit = commit.clone();
+                }
+                Some(hive_core::workspace_repo::ApplyOutcome::Failed { reason }) => {
+                    d.state = "failed".into();
+                    d.reason = Some(reason.clone());
+                }
+                Some(hive_core::workspace_repo::ApplyOutcome::Withdrawn) => d.state = "withdrawn".into(),
+                None => {}
+            }
+            d
+        })
+        .collect();
+    dto.can_request_apply = p.ready_to_apply() && s.open_apply_request(p.id).is_none() && !proposal_sets::guarded_by_open_set(s, p.id);
     dto
 }
 
@@ -3146,6 +3179,43 @@ fn member_dto(m: &WorkspaceMember, self_actor_id: &str) -> WorkspaceMemberDto {
         index: m.index,
         is_self: m.actor.id == self_actor_id,
         avatar_url: m.actor.avatar_url.clone(),
+        kind: match m.actor.kind {
+            ActorKind::Human => "human",
+            ActorKind::Agent | ActorKind::Assistant => "agent",
+            ActorKind::Service => "service",
+            ActorKind::System => "system",
+        }
+        .to_string(),
+        is_founder: false,
+        remove_refusal: None,
+        role_options: Vec::new(),
+        regrant_refusal: None,
+    }
+}
+
+/// What the local person may do to `dto`'s member, by the fold's own rules
+/// (`hive_core::authz::member_action_refusal`): the People pane hides or
+/// disables what the fold would refuse and says why.
+fn gate_member_actions(dto: &mut WorkspaceMemberDto, me: &str, roster: &hive_core::authz::RosterState, config: &ChatSession) {
+    use hive_core::authz::{member_action_refusal, MemberAction};
+    dto.is_founder = !roster.founder.is_empty() && roster.founder == dto.id;
+    if dto.is_self {
+        return;
+    }
+    dto.remove_refusal = member_action_refusal(roster, config, me, &MemberAction::Remove { member_id: dto.id.clone() });
+    dto.role_options = [WorkspaceRole::Owner, WorkspaceRole::Admin, WorkspaceRole::Contributor, WorkspaceRole::Viewer]
+        .into_iter()
+        .map(|role| hive_proto::MemberRoleOptionDto {
+            role: role_name(role).to_string(),
+            refusal: if role_name(role) == dto.role {
+                None
+            } else {
+                member_action_refusal(roster, config, me, &MemberAction::SetRole { member_id: dto.id.clone(), role })
+            },
+        })
+        .collect();
+    if dto.kind == "service" {
+        dto.regrant_refusal = Some("a service member holds no passkey".into());
     }
 }
 
@@ -4536,6 +4606,13 @@ fn list_members(state: State<AppState>, session_id: String) -> Result<Vec<Worksp
         .filter(|m| roster.contains(&m.id) || links.owner_of(&m.actor.id).is_none())
         .collect();
     let mut out: Vec<WorkspaceMemberDto> = members.iter().map(|m| member_dto(m, &me)).collect();
+    if !local {
+        if let Ok((Some(config), timeline)) = svc.store().load_config(s.workspace_id, None, None) {
+            for dto in out.iter_mut() {
+                gate_member_actions(dto, &me, timeline.current(), &config);
+            }
+        }
+    }
     if local {
         for (dto, m) in out.iter_mut().zip(members.iter()) {
             if m.actor.kind == ActorKind::Human {
@@ -6150,6 +6227,11 @@ async fn implement_proposal_targeted(
     if proposal.superseded_by.is_some() {
         return Err("a newer version of this proposal superseded it".into());
     }
+    // One applier per proposal: while a person's request names a host, only
+    // that host applies it (withdraw the request to apply it here).
+    if let Some(r) = session.open_apply_request(pid) {
+        return Err(format!("an apply of this proposal is already requested on host {}; withdraw that request to apply it here", r.host_device_id));
+    }
     // The folded status, not quorum alone: `is_quorum_met` stays true after a
     // qualifying reject, and Applied is terminal, so it would override it.
     if !proposal.ready_to_apply() {
@@ -6293,6 +6375,57 @@ async fn implement_proposal_targeted(
     }
     let _ = app.emit("workspace://synced", 1);
     Ok(())
+}
+
+/// "Apply on ‹host›" (Phase B): ask one host to apply an approved proposal.
+/// That host, and only that host, applies it once and reports back; nobody
+/// applies it meanwhile. Returns the request id.
+#[tauri::command]
+fn request_apply_on_host(state: State<AppState>, session_id: String, proposal_id: String, host_device_id: String) -> Result<String, String> {
+    let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
+    let pid = Uuid::parse_str(&proposal_id).map_err(map_err)?;
+    let host = Uuid::parse_str(&host_device_id).map_err(|_| "that host has no device id".to_string())?;
+    let mut svc = state.service.lock().unwrap();
+    let id = svc.request_apply(sid, state.active_workspace_id(), pid, host, None).map_err(map_err)?;
+    Ok(id.to_string())
+}
+
+/// Withdraw an open apply request (yours, or any as an Admin).
+#[tauri::command]
+fn withdraw_apply_request(state: State<AppState>, session_id: String, request_id: String) -> Result<(), String> {
+    let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
+    let rid = Uuid::parse_str(&request_id).map_err(map_err)?;
+    let mut svc = state.service.lock().unwrap();
+    svc.withdraw_apply_request(sid, state.active_workspace_id(), rid).map_err(map_err)?;
+    Ok(())
+}
+
+/// This desktop's side of "Apply on ‹host›": apply every open request that
+/// names this device, once each, in the chat's worktree of the workspace's
+/// checkout, and report the result. Off the sync task (git runs here).
+fn fulfil_apply_requests(app: &AppHandle) {
+    static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if RUNNING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let ws = state.active_workspace_id();
+        let jobs = hive_runtime::apply_host::pending(&state.service.lock().unwrap(), ws).unwrap_or_default();
+        if !jobs.is_empty() {
+            let root = state.workspace_repo_root();
+            let repo = (!root.trim().is_empty()).then(|| std::path::PathBuf::from(root));
+            for job in jobs {
+                match hive_runtime::apply_host::fulfil(&state.service, &job, repo.as_deref()) {
+                    Ok(o) => tracing::info!(target: "apply", request = %job.request.id, "{o:?}"),
+                    Err(e) => tracing::warn!(target: "apply", request = %job.request.id, "{e}"),
+                }
+            }
+            let _ = app.emit("workspace://synced", 1);
+        }
+        RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
+    });
 }
 
 #[tauri::command]
@@ -12210,6 +12343,7 @@ async fn sync_pull_once(
                 if let Err(e) = closed {
                     tracing::warn!(target: "sync", "closing settled box admissions: {e}");
                 }
+                fulfil_apply_requests(app);
             }
             if pulled > 0 {
                 let _ = app.emit("workspace://synced", pulled);
@@ -15149,6 +15283,8 @@ pub fn run() {
             test_retrieval_settings,
             set_default_model,
             maybe_respond,
+            request_apply_on_host,
+            withdraw_apply_request,
             regenerate,
             ensure_self_member,
             notify_mentions,

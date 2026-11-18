@@ -51,6 +51,15 @@ pane header to close the rail entirely.
   an agent receives, and which agent (by default the one that produced the
   proposal), on which runtime and driver, in which sandbox, with which
   network. The preview and the run come from the same function.
+  **Apply on ‹host›** asks one host (a `ligus serve` box, a worker, or a
+  desktop) to apply an approved proposal instead; that host applies it
+  once, in the chat's worktree of its checkout, and the card shows the
+  request as *open*, *applied* (with the commit), *failed* (with the
+  host's reason) or *withdrawn*. While a request is open, nobody else
+  applies the proposal (Implement says so) and no second request is taken;
+  its requester or an Admin can **Withdraw** it. Approving never applies
+  anything on its own. See
+  [Apply on a host](../../operate/ops/serve-box.md#apply-on-a-host).
   **Questions from agents** (`ligus_ask_human`, and ACP permission requests
   that need a person) appear at the top of the pane with their options; the
   asking turn waits for your answer. See
@@ -65,7 +74,13 @@ pane header to close the rail entirely.
   so the backlog drains without waiting for that laptop to wake. See
   [Headless agents](../../operate/concepts/headless-agents.md).
 - **People**: members, online status, invites, cross-network
-  rendezvous status, nearby-on-LAN peers. On a membership-enforcing relay it also
+  rendezvous status, nearby-on-LAN peers. A member's role picker,
+  **Remove**, **Remove & revoke** and **Allow new passkey** are disabled
+  where the workspace would refuse them, with the reason on hover: an
+  Admin can't remove or demote another Admin, only the founder cuts an
+  Owner, nobody cuts the founder, a service member (a box) is never raised
+  above Contributor and holds no passkey. The pane asks the same rule
+  function every device's fold uses. On a membership-enforcing relay it also
   manages the server-side roster + issues join codes, and — for an admin with a
   relay issuer key (Settings → Team sync) — a **Remote agents** section that
   enrolls a headless agent and generates the one copy-paste command to run on its

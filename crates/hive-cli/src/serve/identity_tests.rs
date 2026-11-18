@@ -151,7 +151,6 @@ fn opts(dir: &std::path::Path, name: &str) -> ServeOptions {
         prometheus_configured: false,
         dashboard_file: dir.join("dashboard.toml"),
         default_agent: None,
-        apply_on_approve: false,
         sync_every: Duration::from_millis(200),
         remote: None,
         appearance: Default::default(),

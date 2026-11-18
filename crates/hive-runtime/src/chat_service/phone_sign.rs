@@ -8,12 +8,16 @@
 //! against the phone's certificate, judges the event exactly as every fold
 //! will, and appends it. The box can withhold such an event; it can't forge
 //! or alter one as long as the phone reads the preimage before signing it
-//! (`hive_core::admission::check_phone_admission_preimage`): the bytes come
-//! from the box. Today this carries box admissions (the phone tier allows
-//! nothing else about membership).
+//! (`hive_core::admission::check_phone_admission_preimage`,
+//! `hive_core::phone_action::check_phone_action_preimage`): the bytes come
+//! from the box. It carries box admissions (the phone tier allows nothing
+//! else about membership) and the typed phone actions
+//! ([`hive_core::phone_action::PhoneAction`]: post, vote, answer, clear a
+//! lockdown, ask a host to apply and withdraw that request).
 
 use hive_core::crypto::{DeviceCertificate, SigAlg};
 use hive_core::presence::PresenceAssertion;
+use hive_core::phone_action::PhoneAction;
 use hive_core::{workspace_config_session_id, ActorStamp, SessionEvent, SessionEventEnvelope, Timestamp};
 use uuid::Uuid;
 
@@ -60,7 +64,13 @@ impl ChatService {
     /// Draft `payload` on `workspace_id`'s config log as the person phone
     /// `phone` is certified for, to be signed by that phone.
     pub fn draft_for_phone(&mut self, workspace_id: Uuid, phone: Uuid, payload: SessionEvent) -> Result<PhoneDraft> {
-        let config_id = workspace_config_session_id(workspace_id);
+        self.draft_for_phone_on(workspace_config_session_id(workspace_id), workspace_id, phone, payload)
+    }
+
+    /// The member phone `phone` is certified for here (its actor, stamped
+    /// with the phone as its device). Refused for a revoked or unknown
+    /// phone, or one whose person isn't a member.
+    pub fn phone_person(&self, workspace_id: Uuid, phone: Uuid) -> Result<hive_core::ActorIdentity> {
         let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
         let config = config.ok_or_else(|| ChatError::Unauthorized("the workspace configuration hasn't synced to this box yet".into()))?;
         let roster = timeline.current();
@@ -72,23 +82,123 @@ impl ChatService {
         let member = config
             .members
             .iter()
-            .find(|m| m.actor.account_id.is_some_and(|a| device.accounts.contains(&a)))
+            .find(|m| m.actor.kind == hive_core::ActorKind::Human && m.actor.account_id.is_some_and(|a| device.accounts.contains(&a)))
             .ok_or_else(|| ChatError::Unauthorized("that phone's person isn't a member here".into()))?;
         let mut actor = member.actor.clone();
         actor.device_id = Some(phone);
-        let mut env = SessionEventEnvelope::new(config_id, workspace_id, self.store.max_sequence(config_id)?.unwrap_or(0) + 1, payload);
-        env.lamport = self.store.max_lamport(config_id)?.saturating_add(1);
+        Ok(actor)
+    }
+
+    /// Draft `payload` on `session_id` (a chat of `workspace_id`, or its
+    /// config log) as the person phone `phone` is certified for, to be signed
+    /// by that phone, at this box's head. Nothing is written.
+    pub fn draft_for_phone_on(&mut self, session_id: Uuid, workspace_id: Uuid, phone: Uuid, payload: SessionEvent) -> Result<PhoneDraft> {
+        let actor = self.phone_person(workspace_id, phone)?;
+        let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let mut env = SessionEventEnvelope::new(session_id, workspace_id, self.store.max_sequence(session_id)?.unwrap_or(0) + 1, payload);
+        env.lamport = self.store.max_lamport(session_id)?.saturating_add(1);
         env.actor_stamp = Some(ActorStamp {
             actor,
             recorded_at: Timestamp::now(),
             cfg_frontier: timeline.head(),
             presence: None,
             runtime_effect: false,
-            prev: self.store.last_signed_by(config_id, phone)?,
+            prev: self.store.last_signed_by(session_id, phone)?,
             sig_alg: SigAlg::P256,
         });
         let request = self.presence_request(&env)?;
         Ok(PhoneDraft { env, request })
+    }
+
+    /// Draft the event a phone asked for (`action`), as its person, and say
+    /// whether the rules need the person's passkey presence for it: the box
+    /// judges the unsigned draft as every fold will, so anything the fold
+    /// would refuse for another reason is refused here, before the phone
+    /// signs anything. Nothing is written.
+    pub fn draft_phone_action(&mut self, workspace_id: Uuid, phone: Uuid, action: &PhoneAction) -> Result<(PhoneDraft, bool)> {
+        if let Some(why) = action.malformed() {
+            return Err(ChatError::Unauthorized(why.into()));
+        }
+        let actor = self.phone_person(workspace_id, phone)?;
+        let chat = self
+            .load(action.chat_id())?
+            .filter(|c| c.workspace_id == workspace_id)
+            .ok_or_else(|| ChatError::Unauthorized("no such chat in this workspace".into()))?;
+        let payload = match action {
+            PhoneAction::Post { text, .. } => {
+                let mut m = hive_core::ChatMessage::new(hive_core::MessageRole::User, actor.display_name.clone(), text.clone());
+                m.actor_identity = Some(actor.clone());
+                SessionEvent::MessageAppended { message: m }
+            }
+            PhoneAction::Vote { proposal_id, diff_digest, approved, .. } => {
+                if !chat.proposals.iter().any(|p| p.id == *proposal_id) {
+                    return Err(ChatError::Unauthorized("no such proposal in this chat".into()));
+                }
+                SessionEvent::ProposalVoteCast {
+                    proposal_id: *proposal_id,
+                    approval: hive_core::ProposalApproval {
+                        actor_id: actor.id.clone(),
+                        role: chat.role_of(&actor.id),
+                        approved: *approved,
+                        created_at: Timestamp::now(),
+                        diff_digest: Some(diff_digest.clone()),
+                    },
+                }
+            }
+            PhoneAction::Answer { ask_id, answer, option_index, .. } => {
+                if !chat.flow.asks.get(ask_id).is_some_and(|a| a.is_open()) {
+                    return Err(ChatError::Unauthorized("that question is already answered or closed".into()));
+                }
+                SessionEvent::FlowRecorded {
+                    record: hive_core::flow::FlowRecord::HumanAnswered(hive_core::flow::HumanAnswered {
+                        ask_id: *ask_id,
+                        answer: answer.clone(),
+                        option_index: *option_index,
+                        by: actor.display_name.clone(),
+                        at_ms: hive_core::flow::now_ms(),
+                    }),
+                }
+            }
+            PhoneAction::ClearLockdown { chat_id } => SessionEvent::ChatLockdownCleared { chat_id: *chat_id },
+            PhoneAction::RequestApply { proposal_id, diff_digest, host_device_id, expected_base_commit, repo_id, .. } => {
+                SessionEvent::ProposalApplyRequested {
+                    request: hive_core::workspace_repo::ApplyRequest {
+                        id: Uuid::new_v4(),
+                        proposal_id: *proposal_id,
+                        diff_digest: diff_digest.clone(),
+                        host_device_id: *host_device_id,
+                        expected_base_commit: expected_base_commit.clone(),
+                        repo_id: *repo_id,
+                    },
+                }
+            }
+            PhoneAction::WithdrawApply { proposal_id, request_id, .. } => {
+                SessionEvent::ProposalApplyWithdrawn { request_id: *request_id, proposal_id: *proposal_id }
+            }
+        };
+        let session_id = action.session_id(workspace_id);
+        let draft = self.draft_for_phone_on(session_id, workspace_id, phone, payload)?;
+        // Judge the unsigned draft as the phone's (the phone tier, the
+        // presence table, the action's own rules).
+        let mut probe = draft.env.clone();
+        probe.signer_device_id = Some(phone);
+        let (config, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
+        let presence = match self.authorize_as_fold(&probe, config.as_ref(), &timeline) {
+            Ok(()) => false,
+            Err(ChatError::Unauthorized(why)) if why == hive_core::authz::PRESENCE_REQUIRED => true,
+            Err(e) => return Err(e),
+        };
+        Ok((draft, presence))
+    }
+
+    /// The preimage of `draft` without presence (an action the rules don't
+    /// need a passkey for), for the phone to check and sign.
+    pub fn phone_unconfirmed_preimage(draft: &mut PhoneDraft) -> Vec<u8> {
+        if let Some(s) = draft.env.actor_stamp.as_mut() {
+            s.presence = None;
+        }
+        draft.env.clear_raw();
+        hive_core::crypto::envelope_preimage(&draft.env)
     }
 
     /// Stamp the person's passkey assertion into `draft` and return the
@@ -103,12 +213,18 @@ impl ChatService {
 
     /// Append `draft` with the phone's signature (64 bytes, P-256), after
     /// checking it against the phone's certificate here and judging it as
-    /// every fold will. The box's own key never signs it.
+    /// every fold will. The box's own key never signs it. Stored under a
+    /// fresh local sequence (the phone signed the draft's own), and refused
+    /// when this phone signed something else on that log since the draft
+    /// (its chain link would fork): prepare again.
     pub fn append_phone_signed(&mut self, draft: PhoneDraft, signature: Vec<u8>) -> Result<SessionEventEnvelope> {
         let mut env = draft.env;
         let phone = env.actor_stamp.as_ref().and_then(|s| s.actor.device_id).ok_or_else(|| ChatError::Unauthorized("no phone".into()))?;
         if self.store.has_event(env.event_id)? {
             return Err(ChatError::Unauthorized("already committed".into()));
+        }
+        if env.actor_stamp.as_ref().and_then(|s| s.prev) != self.store.last_signed_by(env.session_id, phone)? {
+            return Err(ChatError::Unauthorized(STALE_DRAFT.into()));
         }
         env.signer_device_id = Some(phone);
         env.signature = Some(signature);
@@ -122,7 +238,10 @@ impl ChatService {
             .ok_or_else(|| ChatError::Unauthorized("that isn't an enrolled phone of this workspace".into()))?;
         hive_core::crypto::verify_envelope(&env, &key).map_err(|_| ChatError::Unauthorized("the phone's signature doesn't verify".into()))?;
         self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
-        self.store.append_envelope(&env)?;
+        self.store.ingest(&env)?;
         Ok(env)
     }
 }
+
+/// The refusal of a phone draft whose chain link went stale.
+pub const STALE_DRAFT: &str = "this phone signed something else here since the draft; prepare it again";

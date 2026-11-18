@@ -153,6 +153,8 @@ pub struct AuthzState {
     /// The signed author who first appended each message: only they continue
     /// or rewrite it (and only they or an Admin remove it).
     pub message_authors: BTreeMap<Uuid, String>,
+    /// The signed author of each apply request: they (or an Admin) withdraw it.
+    pub apply_requesters: BTreeMap<Uuid, String>,
 }
 
 impl AuthzState {
@@ -188,6 +190,8 @@ pub fn needs_workspace_authz(event: &SessionEvent) -> bool {
             SessionEvent::ProposalVoteCast { .. }
                 | SessionEvent::ProposalApplied { .. }
                 | SessionEvent::ProposalApplyRequested { .. }
+                | SessionEvent::ProposalApplyFailed { .. }
+                | SessionEvent::ProposalApplyWithdrawn { .. }
                 | SessionEvent::ChatRepoSet { .. }
                 | SessionEvent::ChatBasePinned { .. }
         )
@@ -200,6 +204,9 @@ pub fn subject_of(event: &SessionEvent) -> (Option<Uuid>, Option<Uuid>) {
         | SessionEvent::ProposalApplied { proposal_id, .. }
         | SessionEvent::ProposalReverted { proposal_id, .. } => (Some(*proposal_id), None),
         SessionEvent::ProposalApplyRequested { request } => (Some(request.proposal_id), None),
+        SessionEvent::ProposalApplyFailed { proposal_id, .. } | SessionEvent::ProposalApplyWithdrawn { proposal_id, .. } => {
+            (Some(*proposal_id), None)
+        }
         SessionEvent::ProposalSetOpened { set } => (None, Some(set.id)),
         SessionEvent::ProposalSetAlternativeAdded { set_id, proposal_id, .. }
         | SessionEvent::ProposalSetQuorumReached { set_id, proposal_id, .. }
@@ -315,6 +322,14 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         if let Some(device) = env.signer_device_id.filter(|d| roster.devices.get(d).is_some_and(|x| x.phone)) {
             if let Err(why) = phone::phone_tier_allows(&env.payload, device) {
                 return Decision::deny(why);
+            }
+            // A phone posts new messages only: its box picks the message id,
+            // and the phone can't tell a fresh id from one of its person's
+            // earlier messages, which the post would otherwise rewrite.
+            if let SessionEvent::MessageAppended { message } = &env.payload {
+                if fold.authz.message_authors.contains_key(&message.id) || fold.messages.iter().any(|m| m.id == message.id) {
+                    return Decision::deny("a phone posts new messages only");
+                }
             }
         }
     }
@@ -584,6 +599,14 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 if approval.actor_id != author {
                     return Decision::deny("a vote must be cast by the voter it names");
                 }
+                // Phase B: a vote counts as its voter's only when a device
+                // certified for the voter's account at this position (not
+                // revoked) signed it: a phone votes for its own person and
+                // nobody else, and an uncertified key votes for no one.
+                // (Ingest already quarantines both; the fold doesn't rely on it.)
+                if !voter_signed(env, at) {
+                    return Decision::deny("a vote is signed by a certified device of its voter");
+                }
                 // P0.6 / B3: a delegated host (a serve box enrolled as its
                 // owner's device) signs as the owner without the owner being
                 // there. Its vote counts only with the owner's passkey
@@ -633,6 +656,11 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                         if req.expected_base_commit.is_some() && *base_commit != req.expected_base_commit {
                             return Decision::deny("applied onto another base than the person saw");
                         }
+                        // Once: a retry, or the same host applying again,
+                        // never fulfils a closed request.
+                        if fold.apply_outcomes.contains_key(rid) {
+                            return Decision::deny("that apply request is already closed");
+                        }
                     }
                     // Applying yourself: a human member, through their own
                     // device (not a host acting for them).
@@ -644,6 +672,11 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                         }
                         if !own_device(env, at) {
                             return Decision::deny("a person applies through their own device");
+                        }
+                        // One applier per proposal: while a request names a
+                        // host, only that host applies it.
+                        if fold.open_apply_request(*proposal_id).is_some() {
+                            return Decision::deny("an apply of this proposal is already requested on a host");
                         }
                     }
                 }
@@ -675,6 +708,11 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 if fold.apply_requests.contains_key(&request.id) {
                     return Decision::deny("that apply request already exists");
                 }
+                // One applier per proposal: a second request waits until the
+                // open one is applied, fails or is withdrawn.
+                if fold.open_apply_request(request.proposal_id).is_some() {
+                    return Decision::deny("an apply of this proposal is already requested on a host");
+                }
                 let Some(p) = fold.proposals.iter().find(|p| p.id == request.proposal_id) else {
                     return Decision::deny("unknown proposal");
                 };
@@ -693,8 +731,50 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 if !at.device_trusted(request.host_device_id) {
                     return Decision::deny("the host isn't a trusted device here");
                 }
+                // A phone applies nothing (its tier): a request naming one
+                // would only hold the proposal's single applier slot.
+                if at.devices.get(&request.host_device_id).is_some_and(|d| d.phone) {
+                    return Decision::deny("a phone isn't a host");
+                }
                 if let Some(why) = crate::guard::human_gate_reason(fold, p) {
                     return Decision::deny(why);
+                }
+            }
+            SessionEvent::ProposalApplyFailed { request_id, proposal_id, reason } => {
+                if env.actor_stamp.as_ref().is_some_and(|s| s.runtime_effect) {
+                    return Decision::deny("a runtime never reports an apply");
+                }
+                let Some(req) = fold.apply_requests.get(request_id).filter(|r| r.proposal_id == *proposal_id) else {
+                    return Decision::deny("no such apply request");
+                };
+                if env.signer_device_id != Some(req.host_device_id) {
+                    return Decision::deny("only the host a request names reports on it");
+                }
+                if fold.apply_outcomes.contains_key(request_id) {
+                    return Decision::deny("that apply request is already closed");
+                }
+                if reason.chars().count() > crate::workspace_repo::MAX_APPLY_FAILURE_CHARS {
+                    return Decision::deny("the failure reason is too long");
+                }
+            }
+            SessionEvent::ProposalApplyWithdrawn { request_id, proposal_id } => {
+                if env.actor_stamp.as_ref().is_some_and(|s| s.runtime_effect) {
+                    return Decision::deny("a runtime never withdraws an apply");
+                }
+                let human = env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == ActorKind::Human)
+                    && at.members.get(author).is_some_and(|m| m.kind == ActorKind::Human);
+                if !human || !own_device(env, at) {
+                    return Decision::deny("a person withdraws an apply through their own device");
+                }
+                if fold.apply_requests.get(request_id).is_none_or(|r| r.proposal_id != *proposal_id) {
+                    return Decision::deny("no such apply request");
+                }
+                if fold.apply_outcomes.contains_key(request_id) {
+                    return Decision::deny("that apply request is already closed");
+                }
+                let requester = fold.authz.apply_requesters.get(request_id).map(String::as_str);
+                if requester != Some(author) && role.rank() < WorkspaceRole::Admin.rank() {
+                    return Decision::deny("only its requester or an Admin withdraws an apply request");
                 }
             }
             SessionEvent::ChatRepoSet { repo_id, base_branch } => {
@@ -930,6 +1010,63 @@ fn service_member_refusal(
     }
 }
 
+/// A membership change a person may try from a desktop: what the UI asks
+/// [`member_action_refusal`] about before offering it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MemberAction {
+    /// Remove `member_id` (a cut, unless it is yourself).
+    Remove { member_id: String },
+    /// Give `member_id` the role `role` (a cut when it is lower).
+    SetRole { member_id: String, role: WorkspaceRole },
+}
+
+/// Why the fold would refuse `author` doing `action` against the workspace
+/// roster `roster` and its config fold `config` (both at the head), or
+/// `None` when it would allow it (with the author's passkey presence, which
+/// the desktop asks for). The UI hides or disables what this refuses and
+/// shows the reason; it runs the very rules [`authorize`] runs for these
+/// kinds (the role floor, the rank rules, the service-member rules), so the
+/// two never disagree (`tests/member_action_parity.rs`).
+pub fn member_action_refusal(roster: &RosterState, config: &ChatSession, author: &str, action: &MemberAction) -> Option<String> {
+    let Some(me) = config.members.iter().find(|m| m.id == author) else {
+        return Some("you aren't a member of this workspace".into());
+    };
+    let payload = match action {
+        MemberAction::Remove { member_id } => SessionEvent::MemberRemoved { member_id: member_id.clone(), watermark: vec![] },
+        MemberAction::SetRole { member_id, role } => {
+            let Some(target) = config.members.iter().find(|m| m.id == *member_id) else {
+                return Some("not a member".into());
+            };
+            if target.role == *role {
+                return Some("already that role".into());
+            }
+            SessionEvent::MemberRoleChanged {
+                change: crate::events::MemberRoleChange { member_id: member_id.clone(), old_role: target.role, new_role: *role },
+                watermark: vec![],
+            }
+        }
+    };
+    let mut env = SessionEventEnvelope::new(crate::channel::workspace_config_session_id(config.workspace_id), config.workspace_id, 0, payload);
+    env.actor_stamp = Some(crate::identity::ActorStamp {
+        actor: me.actor.clone(),
+        recorded_at: crate::Timestamp::epoch(),
+        cfg_frontier: None,
+        presence: None,
+        runtime_effect: false,
+        prev: None,
+        sig_alg: Default::default(),
+    });
+    let role = config.role_of(author);
+    if let Some(why) = service_member_refusal(&env, author, Some(roster), true, config) {
+        return Some(why);
+    }
+    if let Some(why) = rank_rules(&env.payload, author, role, roster) {
+        return Some(why);
+    }
+    let d = evaluate(&env.payload, author, role, config);
+    (!d.allowed).then_some(d.summary)
+}
+
 /// The rank rules on membership and device governance (review P-A2b, P-A2d):
 ///
 /// * no one grants a role above their own, or changes the role of a member
@@ -994,6 +1131,20 @@ fn rank_rules(e: &SessionEvent, author: &str, role: WorkspaceRole, roster: &Rost
         }
     }
     None
+}
+
+/// Whether `env` is signed by a device certified here (not revoked) for its
+/// stamped account, which is its author's member account. Unlike
+/// [`own_device`], a host acting for the account (a delegated device) counts;
+/// its votes need the owner's presence on top.
+fn voter_signed(env: &SessionEventEnvelope, at: &RosterState) -> bool {
+    let Some(account) = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) else { return false };
+    if at.members.get(author_of(env)).and_then(|m| m.account_id).is_some_and(|a| a != account) {
+        return false;
+    }
+    env.signer_device_id
+        .and_then(|d| at.devices.get(&d))
+        .is_some_and(|d| !d.revoked && d.accounts.contains(&account))
 }
 
 /// Whether `env` is signed by a device of its stamped author's own account:

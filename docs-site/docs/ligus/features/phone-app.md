@@ -15,9 +15,13 @@ through it.
 To set up the box and pair a phone, see
 [Remote access for your phone](../../operate/networking/remote-access.md). The box
 is its own service member, admitted once with your passkey
-([Admitting a box](../../operate/ops/admitting-a-box.md)): what you send from the
-phone shows under the box's name, and its votes never count as your
-approval ([Running ligus serve](../../operate/ops/serve-box.md)). For the whole
+([Admitting a box](../../operate/ops/admitting-a-box.md)). The box never acts
+as you: what only you may do (post as you, approve or reject, answer an
+agent's question, clear a lockdown, Apply on ‹host›) the phone signs with
+**its own device key**, and your passkey where the rules need it; the box
+drafts the event and relays it ([Phone-signed actions](#phone-signed-actions)).
+The box's own votes never count as your approval
+([Running ligus serve](../../operate/ops/serve-box.md)). For the whole
 setup end to end, see [Personal fleet](../../operate/deploy/personal-fleet.md).
 
 ## Pairing: direct or through the relay
@@ -153,22 +157,21 @@ code rather than by name:
   ("From Ada: signed by their device…"); anything else only *says* it's from
   them. An unsigned message invite can't be accepted, and a stranger's needs
   you to compare safety codes first.
-- **Invite by link or QR code** makes a single-use invite to your host's
-  workspace. A copied link stays on this phone and expires after ten
-  minutes. **Open an invite link** (paste or scan) shows who it's from before
-  anything is joined.
-- **Direct messages** appear at the top of the chat list. **Message** on a
-  person opens your DM with them, or starts one: the invite goes to their
-  drop box, or you get a link to hand over. Agents don't run in DMs and DMs
-  never send a notification.
+- **Invite by link or QR code**: inviting a person is an Admin's act with
+  a passkey, which a box (its own service member) can't do and the phone
+  tier doesn't include; make the invite on your desktop. **Open an invite
+  link** (paste or scan) shows who it's from before anything is joined.
+- **Direct messages** appear at the top of the chat list. A DM is a
+  workspace of its own where the phone's key isn't certified, so what the
+  phone sends there goes as the box, not as you; hold DMs as yourself from
+  your desktop. Agents don't run in DMs and DMs never send a notification.
 
 When you join from an invite, the chat may say **Waiting for Ada's founding
 to sync** until the founder's signed founding reaches your host. Send is off
 and your draft is kept; it clears on its own.
 
-On a host that acts for you (enrolled as your device), an invite needs your
-passkey, and you can't start a DM there (start it on your desktop). Code-host
-changes on such a host need your presence too; make them on the host or the
+A box is never your device since 0.1, so person invites and DMs as you
+start on your desktop. Code-host changes are made on the host or the
 desktop.
 
 ## Repos
@@ -188,10 +191,16 @@ phone with the same collaboration state as the desktop's Review card:
 - **Votes, with who and role.** Each member's latest vote shows their name and
   workspace role, alongside the required approvals, the qualifying approvals
   so far and whether quorum is met.
-- **Approve or reject.** The phone votes through the same core call as the
-  desktop, at the box's real roster role. Quorum, the role floor and the
-  no-self-approval rule apply unchanged; a role below the floor gets an error
-  and nothing is written.
+- **Approve or reject.** The phone signs the vote as you with its own key,
+  bound to the content digest it shows; it counts at your role, as your
+  approval. A workflow proposal or a human-gated one (a lockdown, dearth-mode
+  brood paths) asks for your passkey first. Quorum, the role floor and the
+  no-self-approval rule apply unchanged; a refused vote gets an error before
+  the phone signs anything.
+- **Apply on ‹host›.** Once approved, pick a host (from the host list) to
+  apply it. The request shows as *open* until that host reports *applied*
+  (with its commit) or *failed* (with the reason); you can **Withdraw** it
+  while it is open. One request at a time per proposal.
 - **Refinement thread.** Read the proposal's notes and add your own. Mark a
   note as a change request.
 - **Request changes.** *Send to agent to revise* bundles the change requests
@@ -224,9 +233,13 @@ other proposal. Pre-flight, apply and the set's decision stay on the desktop's
 set view: an alternative is applied only after a passing pre-flight, never on
 approval.
 
-Approving a file-diff proposal from the phone doesn't apply it, unless the
-box is set to (see [`LIGUS_SERVE_APPLY_ON_APPROVE`](../../operate/ops/serve-box.md#apply-on-approve)).
-As on the desktop, **Implement** applies it.
+Approving a proposal from the phone never applies it: there is no
+auto-apply. Once it is approved, **Apply on ‹host›** asks one host (your
+`ligus serve` box, a worker, or a desktop) to apply it; that host, and only
+that host, applies it once and reports the commit or the reason it couldn't
+(see [Apply on a host](../../operate/ops/serve-box.md#apply-on-a-host)).
+While the request is open nobody else applies the proposal; you can
+**Withdraw** it. As on the desktop, **Implement** still applies it there.
 
 ## Workflow approvals
 
@@ -360,11 +373,12 @@ host holds the workspace coordinator lease. The app shows a dearth-mode banner
 and a lockdown bar on a locked chat. A workflow run in the chat's details names
 the device coordinating it.
 
-**Clearing a lockdown from the phone.** If the identity the phone acts as is a
-human member at Contributor or above, the lockdown bar has **Clear**. It writes
-the same signed event the desktop's *Clear lockdown* does
-(`POST /v1/chats/{id}/lockdown/clear`); anyone else gets an error and nothing
-is written. Switching dearth mode and approving joins stay on the desktop.
+**Clearing a lockdown from the phone.** The lockdown bar has **Clear** when
+you are a human member at Contributor or above. The phone signs the same
+`chatLockdownCleared` event the desktop's *Clear lockdown* writes, as you,
+with its own key and always with your passkey (the `clearLockdown` phone
+action); anyone else gets an error and nothing is written. Switching dearth
+mode and approving joins stay on the desktop.
 
 ## Flow
 
@@ -400,21 +414,46 @@ define in `dashboard.toml` on the box. The app hides its dashboard tab when
 the dashboard is empty. Format and examples:
 [`docs/dashboard.md`](https://github.com/langstroth-ai/ligus/blob/main/docs/dashboard.md).
 
+## Phone-signed actions {#phone-signed-actions}
+
+The phone has its own P-256 key in the Secure Enclave, certified by your
+desktop with your passkey. What you do as yourself from the phone goes
+through it:
+
+| On the phone | Signed event | Passkey |
+|---|---|---|
+| Post a message | a user message, as you | no |
+| Approve or reject | a vote bound to the content digest | for a workflow proposal or a human-gated one |
+| Answer an agent's question | the answer, as you | no |
+| Clear a lockdown | `chatLockdownCleared` | always |
+| Apply on ‹host› | an apply request naming that host | when the proposal is human-gated |
+| Withdraw an apply request | the withdrawal | no |
+
+For each, the box drafts the exact event and the phone reads it before
+signing: it signs only if the bytes are exactly what you asked for, in this
+workspace and chat, as you, from this phone, with the passkey confirmation
+you just gave (or none, when none was asked for). The confirmation sheet
+shows what the phone read from those bytes. The box can delay or drop an
+action; it can't change one. A phone signs nothing else: no roles, removals,
+invites, rules or agent moves (admitting a box is the one membership change,
+see [Admitting a box](../../operate/ops/admitting-a-box.md)). The wire is in
+the [serve API reference](../../operate/reference/serve-api.md#phone-actions).
+
 ## What stays on the desktop
 
 The phone is for following, deciding and steering. These need the desktop
 app:
 
-- creating agents and editing runtimes (moving an agent to another host
-  works on the phone);
+- creating agents and editing runtimes, and moving an agent to another
+  host (an Admin's act the phone tier doesn't include);
 - managing skills, vaults, MCP servers and settings;
 - applying a proposal-set alternative (you can vote on it from the phone);
-- applying a file-diff proposal, unless the box sets
-  `LIGUS_SERVE_APPLY_ON_APPROVE=1`;
-- switching dearth mode, approving joins, clearing a chat lockdown (the
-  phone shows guard state read-only);
+- switching dearth mode and approving joins (the phone clears a chat
+  lockdown with your passkey);
 - answering `@hive`: only a desktop runs a chat's primary runtime;
-- removing or re-roling members (invite links work on the phone);
+- removing or re-roling members, and issuing invite links to people (the
+  phone admits a box, nothing else about membership);
+- direct messages: the phone's key isn't certified in a DM's own workspace;
 - joining another workspace (a host serves one; DMs are the exception).
 
 The full API the phone uses is in the [serve API reference](../../operate/reference/serve-api.md).

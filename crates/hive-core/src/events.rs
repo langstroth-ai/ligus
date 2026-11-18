@@ -404,6 +404,19 @@ pub enum SessionEvent {
     /// the proposal is human-gated). See
     /// [`crate::workspace_repo::ApplyRequest`].
     ProposalApplyRequested { request: crate::workspace_repo::ApplyRequest },
+    /// The host an open apply request named couldn't apply it (chat log;
+    /// signed by that very host; Phase B). Closes the request, so a person
+    /// may ask again (on this host or another): one applier per proposal.
+    ProposalApplyFailed {
+        request_id: Uuid,
+        proposal_id: Uuid,
+        /// Why, in words (at most [`crate::workspace_repo::MAX_APPLY_FAILURE_CHARS`]).
+        reason: String,
+    },
+    /// A person withdraws an open apply request (chat log; its requester or
+    /// an Admin, a human through their own device; Phase B). Closes the
+    /// request; a host that sees it no longer applies it.
+    ProposalApplyWithdrawn { request_id: Uuid, proposal_id: Uuid },
     /// Add a repository to the workspace (config log; Admin, presence).
     WorkspaceRepoAdded { repo: crate::workspace_repo::WorkspaceRepo },
     /// Edit a live repo's display name and default branch (config log;
@@ -542,6 +555,8 @@ impl SessionEvent {
             SessionEvent::IdentityLinkPublished { .. } => "identityLinkPublished",
             SessionEvent::IdentityLinkRemoved { .. } => "identityLinkRemoved",
             SessionEvent::ProposalApplyRequested { .. } => "proposalApplyRequested",
+            SessionEvent::ProposalApplyFailed { .. } => "proposalApplyFailed",
+            SessionEvent::ProposalApplyWithdrawn { .. } => "proposalApplyWithdrawn",
             SessionEvent::WorkspaceRepoAdded { .. } => "workspaceRepoAdded",
             SessionEvent::WorkspaceRepoUpdated { .. } => "workspaceRepoUpdated",
             SessionEvent::WorkspaceRepoRemoved { .. } => "workspaceRepoRemoved",
@@ -816,15 +831,32 @@ impl ChatSession {
                     p.add_refinement(refinement.clone());
                 }
             }
-            SessionEvent::ProposalApplied { proposal_id, diff_digest, .. } => {
+            SessionEvent::ProposalApplied { proposal_id, diff_digest, request_id, commit, .. } => {
                 if let Some(p) = self.proposals.iter_mut().find(|p| p.id == *proposal_id) {
                     if p.ready_to_apply() && crate::authz::votes::diff_digest(p) == *diff_digest {
                         p.status = crate::proposals::ProposalStatus::Applied;
                     }
                 }
+                if let Some(rid) = request_id.filter(|r| self.apply_requests.contains_key(r)) {
+                    self.apply_outcomes
+                        .entry(rid)
+                        .or_insert_with(|| crate::workspace_repo::ApplyOutcome::Applied { commit: commit.clone() });
+                }
             }
             SessionEvent::ProposalApplyRequested { request } => {
                 self.apply_requests.entry(request.id).or_insert_with(|| request.clone());
+            }
+            SessionEvent::ProposalApplyFailed { request_id, reason, .. } => {
+                if self.apply_requests.contains_key(request_id) {
+                    self.apply_outcomes
+                        .entry(*request_id)
+                        .or_insert_with(|| crate::workspace_repo::ApplyOutcome::Failed { reason: reason.clone() });
+                }
+            }
+            SessionEvent::ProposalApplyWithdrawn { request_id, .. } => {
+                if self.apply_requests.contains_key(request_id) {
+                    self.apply_outcomes.entry(*request_id).or_insert(crate::workspace_repo::ApplyOutcome::Withdrawn);
+                }
             }
             SessionEvent::ChatRepoSet { repo_id, base_branch } => {
                 let same = self.repo.as_ref().is_some_and(|r| r.repo_id == *repo_id);
@@ -1718,6 +1750,9 @@ fn fold_pass(
                 if let SessionEvent::MessageAppended { message } = payload {
                     session.authz.message_authors.entry(message.id).or_insert_with(|| author.to_string());
                 }
+            }
+            if let SessionEvent::ProposalApplyRequested { request } = payload {
+                session.authz.apply_requesters.entry(request.id).or_insert_with(|| author.to_string());
             }
             // Where content was filed (see `AuthzState::content_frontier`).
             if checked && !trusted {

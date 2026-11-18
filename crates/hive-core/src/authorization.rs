@@ -293,7 +293,10 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         // them unchanged.
         SessionEvent::WorkspaceRulesSet { .. } => WorkspaceRole::Admin,
         // Applying is a member's act (and a human's, see `authz::authorize`).
-        SessionEvent::ProposalApplied { .. } | SessionEvent::ProposalApplyRequested { .. } => WorkspaceRole::Contributor,
+        SessionEvent::ProposalApplied { .. }
+        | SessionEvent::ProposalApplyRequested { .. }
+        | SessionEvent::ProposalApplyFailed { .. }
+        | SessionEvent::ProposalApplyWithdrawn { .. } => WorkspaceRole::Contributor,
         // Workspace repos steer what hosts clone and what chats default to:
         // an Admin's (add and remove also need presence).
         SessionEvent::WorkspaceRepoAdded { .. }

@@ -114,8 +114,9 @@ git branch -u upstream/master master
 
 Every chat has its own branch, `hive/chat/<chat-id>`, in each repo it works
 in. An agent's edits come back as a proposal, applied to that branch by the
-desktop's **Implement**; a box is a service member and never applies on its
-own approval (see [Running ligus serve](serve-box.md#apply-on-approve)). Because the
+desktop's **Implement**, or by one host a person asks with **Apply on
+‹host›**; a box never applies on its own approval (see
+[Apply on a host](serve-box.md#apply-on-a-host)). Because the
 branch is per repo, moving a chat to another repo and back resumes where it
 left off.
 

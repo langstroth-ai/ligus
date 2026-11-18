@@ -24,6 +24,8 @@ import {
   addVault,
   getContextTelemetry,
   implementProposal,
+  requestApplyOnHost,
+  withdrawApplyRequest,
   installMcpServer,
   installSkill,
   listAgents,
@@ -52,6 +54,7 @@ import {
   requestProposalChanges,
   dismissProposals,
   type ProposalDto,
+  type ApplyRequestDto,
   type RuntimeSummaryDto,
   type McpServerDto,
   type QueuedWorkDto,
@@ -1277,6 +1280,34 @@ function ProposalCard({
     },
     onError: (e) => toast.error(`Couldn't implement: ${errMsg(e)}`),
   });
+  // Apply on a host (Phase B): one named host applies it, once.
+  const openRequest = proposal.applyRequests?.find((r) => r.state === "open");
+  const hosts = useQuery({
+    queryKey: ["workspace-hosts"],
+    queryFn: listWorkspaceHosts,
+    enabled: Boolean(proposal.canRequestApply),
+  });
+  const applyHosts = (hosts.data ?? []).filter((h) => UUID_RE.test(h.id));
+  const [applyHost, setApplyHost] = useState<string>("");
+  const pickedHost = applyHosts.find((h) => h.id === applyHost) ?? applyHosts[0];
+  const requestApply = useMutation({
+    mutationFn: (hostId: string) => requestApplyOnHost(sessionId, proposal.id, hostId),
+    onSuccess: () => {
+      toast.success(`Asked ${pickedHost?.label ?? "the host"} to apply it.`);
+      onChanged();
+    },
+    onError: (e) => toast.error(`Couldn't ask the host: ${errMsg(e)}`),
+  });
+  const withdraw = useMutation({
+    mutationFn: (requestId: string) => withdrawApplyRequest(sessionId, requestId),
+    onSuccess: () => {
+      toast.success("Withdrawn.");
+      onChanged();
+    },
+    onError: (e) => toast.error(`Couldn't withdraw: ${errMsg(e)}`),
+  });
+  const hostName = (r: ApplyRequestDto) => r.hostLabel ?? r.hostDeviceId.slice(0, 8);
+
   // Implement shows exactly what will run first (Track D4).
   const [previewOpen, setPreviewOpen] = useState(false);
 
@@ -1310,7 +1341,12 @@ function ProposalCard({
 
   // Any in-flight action disables the others so a card can't be double-driven.
   const busy =
-    vote.isPending || implement.isPending || refine.isPending || sendBack.isPending;
+    vote.isPending ||
+    implement.isPending ||
+    refine.isPending ||
+    sendBack.isPending ||
+    requestApply.isPending ||
+    withdraw.isPending;
 
   return (
     <Card className="px-4 py-4">
@@ -1470,7 +1506,12 @@ function ProposalCard({
           <Button
             variant="primary"
             className="ml-auto"
-            disabled={busy}
+            disabled={busy || Boolean(openRequest)}
+            title={
+              openRequest
+                ? `${hostName(openRequest)} was asked to apply it. One applier per proposal: withdraw that request to implement it here.`
+                : undefined
+            }
             onClick={() => setPreviewOpen(true)}
           >
             {implement.isPending ? "Implementing…" : "Implement…"}
@@ -1480,6 +1521,70 @@ function ProposalCard({
           <span className="ml-auto self-center text-xs text-ink-soft">Implemented</span>
         )}
       </div>
+
+      {/* Apply on a host: the requests a person filed, and how each ended. */}
+      {(proposal.applyRequests?.length ?? 0) > 0 && (
+        <div className="mt-2 flex flex-col gap-1 text-xs">
+          {proposal.applyRequests!.map((r) => (
+            <div key={r.id} className="flex items-center gap-2 text-ink-soft">
+              {r.state === "open" && <span>Waiting for {hostName(r)} to apply it</span>}
+              {r.state === "applied" && (
+                <span style={{ color: "var(--hive-success-ink)" }}>
+                  Applied on {hostName(r)}
+                  {r.commit ? ` (${r.commit.slice(0, 12)})` : ""}
+                </span>
+              )}
+              {r.state === "failed" && (
+                <span style={{ color: "var(--hive-danger-ink)" }}>
+                  {hostName(r)} couldn't apply it: {r.reason ?? "no reason given"}
+                </span>
+              )}
+              {r.state === "withdrawn" && <span>Withdrawn</span>}
+              {r.state === "open" && r.mine && (
+                <button
+                  className="rounded text-xs hover:underline disabled:opacity-50"
+                  style={{ color: "var(--hive-accent-ink)" }}
+                  disabled={busy}
+                  onClick={() => withdraw.mutate(r.id)}
+                >
+                  Withdraw
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {proposal.canRequestApply && applyHosts.length > 0 && (
+        <div className="mt-2 flex items-center gap-2">
+          {applyHosts.length > 1 && (
+            <select
+              aria-label="Host to apply on"
+              className="min-w-0 rounded-lg border bg-transparent px-2 py-1 text-xs"
+              style={{ borderColor: "var(--hive-line)" }}
+              value={pickedHost?.id ?? ""}
+              onChange={(e) => setApplyHost(e.target.value)}
+            >
+              {applyHosts.map((h) => (
+                <option key={h.id} value={h.id}>
+                  {h.label} {h.online ? "(online)" : "(offline)"}
+                </option>
+              ))}
+            </select>
+          )}
+          <button
+            className="rounded-xl px-3 py-1.5 text-xs font-medium transition-opacity disabled:opacity-50"
+            style={{ border: "1px solid var(--hive-line)", color: "var(--hive-accent-ink)" }}
+            disabled={busy || !pickedHost}
+            title="That host applies it once, on its checkout, and reports the result. Nobody else applies it meanwhile."
+            onClick={() => pickedHost && requestApply.mutate(pickedHost.id)}
+          >
+            {requestApply.isPending ? "Asking…" : `Apply on ${pickedHost?.label ?? "host"}`}
+          </button>
+          {applyHosts.length === 1 && (
+            <span className="text-xs text-ink-soft">{pickedHost?.online ? "online" : "offline"}</span>
+          )}
+        </div>
+      )}
 
       {/* Send-back-to-agent: available while the proposal is still live and there's
           feedback to act on. The agent produces a linked new version. */}
@@ -1773,6 +1878,8 @@ function ReviewPane({ sessionId }: { sessionId: string }) {
 }
 
 const MEMBER_ROLES = ["owner", "admin", "contributor", "viewer"];
+/// A host a person can name in "Apply on ‹host›": one with a workspace device id.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function PeoplePane({ sessionId }: { sessionId: string }) {
   const qc = useQueryClient();
@@ -2028,47 +2135,73 @@ function PeoplePane({ sessionId }: { sessionId: string }) {
                   </span>
                 )}
                 {member.title && <span className="text-xs text-ink-soft">· {member.title}</span>}
+                {member.isFounder && (
+                  <Badge title="The workspace's founder: nobody can remove or demote them">founder</Badge>
+                )}
+                {member.kind === "service" && (
+                  <Badge title="A box (ligus serve or a worker): its own member, at most Contributor">service</Badge>
+                )}
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                <SubtleSelectField
-                  label="Role"
-                  value={member.role}
-                  onChange={(r) => setRoleMutation.mutate({ id: member.id, role: r })}
-                >
-                  {MEMBER_ROLES.map((r) => (
-                    <option key={r} value={r}>
-                      {r}
-                    </option>
-                  ))}
-                </SubtleSelectField>
+                {(() => {
+                  // The backend computes each refusal with the fold's own rules
+                  // (an older backend sends none: everything stays offered).
+                  const refusalOf = (r: string) => member.roleOptions?.find((o) => o.role === r)?.refusal ?? null;
+                  const others = MEMBER_ROLES.filter((r) => r !== member.role);
+                  const allRefused = (member.roleOptions?.length ?? 0) > 0 && others.every((r) => refusalOf(r));
+                  return (
+                    <SubtleSelectField
+                      label="Role"
+                      value={member.role}
+                      disabled={allRefused}
+                      title={allRefused ? `You can't change ${member.displayName}'s role: ${refusalOf(others[0])}` : undefined}
+                      onChange={(r) => setRoleMutation.mutate({ id: member.id, role: r })}
+                    >
+                      {MEMBER_ROLES.map((r) => {
+                        const why = r === member.role ? null : refusalOf(r);
+                        return (
+                          <option key={r} value={r} disabled={Boolean(why)} title={why ?? undefined}>
+                            {r}
+                          </option>
+                        );
+                      })}
+                    </SubtleSelectField>
+                  );
+                })()}
                 <button
-                  className="shrink-0 rounded text-xs text-ink-soft hover:text-ink hover:underline"
+                  className="shrink-0 rounded text-xs text-ink-soft hover:text-ink hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline"
+                  disabled={Boolean(member.removeRefusal)}
                   onClick={() =>
                     confirmThen("Remove this member from the roster?", () =>
                       removeMutation.mutate(member.id),
                     )
                   }
-                  title="Remove from the member list only"
+                  title={member.removeRefusal ?? "Remove from the member list only"}
                 >
                   Remove
                 </button>
                 <button
-                  className="shrink-0 rounded text-xs text-ink-soft hover:text-ink hover:underline"
+                  className="shrink-0 rounded text-xs text-ink-soft hover:text-ink hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline"
+                  disabled={Boolean(member.regrantRefusal)}
                   onClick={() => regrantMutation.mutate(member.id)}
-                  title="Under rules v2, let them register a first passkey (after theirs were removed). Confirmed with your passkey."
+                  title={
+                    member.regrantRefusal ??
+                    "Under rules v2, let them register a first passkey (after theirs were removed). Confirmed with your passkey."
+                  }
                 >
                   Allow new passkey
                 </button>
                 <button
-                  className="shrink-0 text-xs font-medium hover:opacity-80"
+                  className="shrink-0 text-xs font-medium hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
                   style={{ color: "var(--hive-danger-ink)" }}
+                  disabled={Boolean(member.removeRefusal)}
                   onClick={() =>
                     confirmThen(
                       `Remove ${member.displayName} and revoke their access? The workspace key will be rotated so they can't read new messages.`,
                       () => revokeMutation.mutate(member.id),
                     )
                   }
-                  title="Remove and rotate the key so they lose access (for a bad actor)"
+                  title={member.removeRefusal ?? "Remove and rotate the key so they lose access (for a bad actor)"}
                 >
                   Remove &amp; revoke
                 </button>
@@ -2871,22 +3004,28 @@ export function SubtleSelectField({
   value,
   onChange,
   children,
+  disabled,
+  title,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   children: ReactNode;
+  disabled?: boolean;
+  title?: string;
 }) {
   return (
     <label
       className="inline-flex w-full min-w-0 items-center gap-2.5 rounded-xl border px-2.5 py-1.5"
-      style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)" }}
+      style={{ borderColor: "var(--hive-line)", background: "var(--hive-mist)", opacity: disabled ? 0.6 : 1 }}
+      title={title}
     >
       <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.12em] text-ink-soft">
         {label}
       </span>
       <select
         value={value}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
         className="min-w-0 flex-1 appearance-none bg-transparent text-sm font-medium outline-none"
         style={{ color: "var(--hive-ink)", fontFamily: "inherit", backgroundImage: "none", paddingRight: 4 }}

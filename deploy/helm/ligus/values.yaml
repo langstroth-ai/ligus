@@ -89,7 +89,6 @@ serve:
     existingSecret: ""
     secretKey: admission
   defaultAgent: ""
-  applyOnApprove: false
   # Above serve's 15 s turn grace.
   terminationGracePeriodSeconds: 30
   ntfy:

@@ -93,8 +93,21 @@ impl IntoResponse for ApiError {
             }
             return (self.0, Json(v)).into_response();
         }
+        if self.0 == StatusCode::GONE {
+            return (self.0, Json(json!({ "error": "gone", "message": self.1, "use": "POST /v1/phone-actions/prepare" }))).into_response();
+        }
         (self.0, Json(json!({ "error": self.1 }))).into_response()
     }
+}
+
+/// Phase B: what a person does from the phone (vote, clear a lockdown,
+/// answer an agent's question) is signed by the phone's own key through
+/// `/v1/phone-actions`. The box never does it as itself (a service member's
+/// vote or answer would look like a person's on the phone that asked) nor,
+/// enrolled for its owner, as them: these routes answer 410 with the
+/// phone action to use. 0.1 has no older client to keep.
+pub(super) fn gone_to_phone_action(kind: &str) -> ApiError {
+    ApiError(StatusCode::GONE, format!("a person does this from the phone with its own key: phone action \"{kind}\""))
 }
 
 /// P0.6: the 403 a human-only action gets from a host that can't tell a
@@ -485,6 +498,43 @@ fn collab_fields(v: &mut Value, s: &ChatSession, p: &ActionProposal) {
 /// `ProposalRefined`, so a viewer sees disabled controls instead of a 403).
 pub fn proposal_dto_as(s: &ChatSession, p: &ActionProposal, me: &str) -> Value {
     let mut v = proposal_dto(s, p);
+    // What a vote or an apply request binds (the phone recomputes it from
+    // the content it shows when it can; Phase B).
+    v["diffDigest"] = json!(hive_core::authz::votes::diff_digest(p));
+    if let Some(b) = &p.base_commit {
+        v["baseCommit"] = json!(b);
+    }
+    if let Some(r) = p.repo_id {
+        v["repoId"] = json!(r);
+    }
+    // Apply on a host (Phase B): every request for this proposal and how it
+    // ended (`open` while its host hasn't answered; one open at a time).
+    let requests: Vec<Value> = s
+        .apply_requests
+        .values()
+        .filter(|r| r.proposal_id == p.id)
+        .map(|r| {
+            let mut x = json!({ "id": r.id, "hostDeviceId": r.host_device_id, "state": "open" });
+            if let Some(b) = &r.expected_base_commit {
+                x["expectedBaseCommit"] = json!(b);
+            }
+            match s.apply_outcomes.get(&r.id) {
+                Some(hive_core::workspace_repo::ApplyOutcome::Applied { commit }) => {
+                    x["state"] = json!("applied");
+                    x["commit"] = json!(commit);
+                }
+                Some(hive_core::workspace_repo::ApplyOutcome::Failed { reason }) => {
+                    x["state"] = json!("failed");
+                    x["reason"] = json!(reason);
+                }
+                Some(hive_core::workspace_repo::ApplyOutcome::Withdrawn) => x["state"] = json!("withdrawn"),
+                None => {}
+            }
+            x
+        })
+        .collect();
+    v["applyRequests"] = json!(requests);
+    v["canRequestApply"] = json!(p.ready_to_apply() && s.open_apply_request(p.id).is_none());
     let role = s.role_of(me);
     v["myRole"] = json!(role_name(role));
     v["myVote"] = match p.approvals.iter().find(|a| a.actor_id == me) {
@@ -543,6 +593,9 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/admissions/prepare", post(super::admissions_api::prepare))
         .route("/v1/admissions/presence", post(super::admissions_api::presence))
         .route("/v1/admissions/commit", post(super::admissions_api::commit))
+        .route("/v1/phone-actions/prepare", post(super::phone_actions_api::prepare))
+        .route("/v1/phone-actions/presence", post(super::phone_actions_api::presence))
+        .route("/v1/phone-actions/commit", post(super::phone_actions_api::commit))
         .route("/v1/chats", get(list_chats).post(create_chat))
         .route("/v1/chats/{id}/messages", get(list_messages).post(post_message))
         .route("/v1/chats/{id}/typing", get(super::typing_api::get_typing).post(super::typing_api::post_typing))
@@ -959,27 +1012,10 @@ pub(super) fn can_clear_lockdown(members: &[hive_core::WorkspaceMember], me: &st
     hive_core::guard::is_human_member(members, me) && role.rank() >= WorkspaceRole::Contributor.rank()
 }
 
-/// `POST /v1/chats/:id/lockdown/clear`: clear a chat's lockdown as this box's
-/// identity, through the same signed `ChatLockdownCleared` event (on the
-/// workspace-config log) the desktop's *Clear lockdown* writes. Only a human
-/// member at Contributor or above may: anyone else gets 403 and nothing is
-/// written (the core re-checks when the event is authored and on every peer
-/// that folds it). A chat that isn't locked answers 409.
-async fn clear_lockdown(State(s): S, peer: Option<axum::Extension<TunnelPeer>>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
-    let chat = load_chat(&s, &id)?;
-    presence_gate(&s, peer.as_deref(), "lockdown_clear")?;
-    let me = s.my_actor_id();
-    let (_, allowed) = my_standing(&s, &me)?;
-    if !allowed {
-        return Err(ApiError(StatusCode::FORBIDDEN, "only a human member (Contributor or above) can clear a lockdown".into()));
-    }
-    let locked = !s.lock().workspace_guards(s.ws)?.lockdowns_of(chat.id).is_empty();
-    if !locked {
-        return Err(ApiError(StatusCode::CONFLICT, "this chat isn't locked down".into()));
-    }
-    s.lock().clear_lockdown(s.ws, chat.id)?;
-    s.after_write();
-    Ok(Json(json!({ "chatId": chat.id, "cleared": true })))
+/// `POST /v1/chats/:id/lockdown/clear`: gone (410). The phone clears a
+/// lockdown with the `clearLockdown` phone action and its person's passkey.
+async fn clear_lockdown(Path(_id): Path<String>) -> ApiResult<Json<Value>> {
+    Err(gone_to_phone_action("clearLockdown"))
 }
 
 async fn list_hosts(State(s): S) -> ApiResult<Json<Value>> {
@@ -1083,62 +1119,14 @@ pub(super) fn find_proposal(s: &Shared, raw: &str) -> ApiResult<(ChatSession, Ac
     Err(ApiError::not_found("proposal"))
 }
 
-/// Cast this box's vote — the same `ProposalVoteCast` delta the desktop's
-/// Review pane emits, at this identity's real roster role, so the proposal's
-/// quorum and role floor apply unchanged.
-fn vote(s: &Shared, chat: &ChatSession, pid: Uuid, approved: bool) -> ApiResult<ActionProposal> {
-    let mut svc = s.lock();
-    svc.vote_on_proposal(chat.id, chat.workspace_id, pid, approved)?
-        .ok_or_else(|| ApiError::not_found("proposal"))
+/// `POST /v1/proposals/:id/approve` and `/reject`: gone (410). The phone
+/// votes with the `vote` phone action, signed by its own key.
+async fn approve_proposal(Path(_id): Path<String>) -> ApiResult<Json<Value>> {
+    Err(gone_to_phone_action("vote"))
 }
 
-async fn approve_proposal(State(s): S, peer: Option<axum::Extension<TunnelPeer>>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
-    let (chat, p) = find_proposal(&s, &id)?;
-    presence_gate(&s, peer.as_deref(), "approve")?;
-    let mut updated = vote(&s, &chat, p.id, true)?;
-    // Only a proposal whose folded status is Approved: quorum alone stays met
-    // after a qualifying reject, and Applied is terminal on every peer, so
-    // applying on quorum would override a rejection for good. Dismissed and
-    // superseded versions aren't open work either.
-    // An alternative in an open proposal set is applied only through the
-    // set's two-phase commit (pre-flight first), never on approval here.
-    let in_open_set = chat.proposal_sets.iter().any(|set| set.is_open() && set.contains(updated.id));
-    // A service member (every real box, Phase B) applies only to fulfil a
-    // person's request, never on its own approval.
-    let service = s.lock().author().kind == hive_core::ActorKind::Service;
-    if s.opts.apply_on_approve && !service && updated.ready_to_apply() && !updated.dismissed && !in_open_set {
-        if let Some(applied) = apply_on_this_host(&s, &chat, &updated)? {
-            updated = applied;
-        }
-    }
-    s.after_write();
-    let chat = load_chat(&s, &chat.id.to_string()).unwrap_or(chat);
-    Ok(Json(json!({ "proposal": proposal_dto_as(&chat, &updated, &s.my_actor_id()) })))
-}
-
-#[derive(Deserialize, Default)]
-struct RejectReq {
-    #[serde(default)]
-    reason: Option<String>,
-}
-
-async fn reject_proposal(State(s): S, peer: Option<axum::Extension<TunnelPeer>>, Path(id): Path<String>, body: Bytes) -> ApiResult<Json<Value>> {
-    let req: RejectReq = optional_json(&body)?;
-    let (chat, p) = find_proposal(&s, &id)?;
-    presence_gate(&s, peer.as_deref(), "reject")?;
-    // A reason rides the proposal's refinement thread as a comment, the way a
-    // reviewer's note does on the desktop.
-    if let Some(reason) = req.reason.map(|r| r.trim().to_string()).filter(|r| !r.is_empty()) {
-        let mut svc = s.lock();
-        let actor = svc.author().id.clone();
-        let role = chat.role_of(&actor);
-        svc.refine_proposal(chat.id, chat.workspace_id, p.id, actor, role, reason, false)?;
-    }
-    let updated = vote(&s, &chat, p.id, false)?;
-    s.after_write();
-    let chat = load_chat(&s, &chat.id.to_string()).unwrap_or(chat);
-    let updated = chat.proposals.iter().find(|q| q.id == updated.id).cloned().unwrap_or(updated);
-    Ok(Json(json!({ "proposal": proposal_dto_as(&chat, &updated, &s.my_actor_id()) })))
+async fn reject_proposal(Path(_id): Path<String>) -> ApiResult<Json<Value>> {
+    Err(gone_to_phone_action("vote"))
 }
 
 // ── Proposal collaboration: thread + request changes (desktop parity) ─────
@@ -1198,52 +1186,11 @@ async fn list_asks(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>
     Ok(Json(json!({ "asks": asks.into_iter().take(50).map(|a| ask_state_dto(&chat, a)).collect::<Vec<_>>() })))
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AnswerReq {
-    #[serde(default)]
-    answer: String,
-    #[serde(default)]
-    option_index: Option<u32>,
-}
-
-/// `POST v1/asks/{id}/answer` (D.4.2): a person answers an agent's question
-/// from the phone. Answering authorizes nothing by itself, so it needs no
-/// presence; the first answer in canonical order wins.
-async fn answer_ask(State(s): S, Path(id): Path<String>, Json(req): Json<AnswerReq>) -> ApiResult<Json<Value>> {
-    let ask_id = parse_id(&id, "question")?;
-    let chat = s
-        .workspace_chats()?
-        .into_iter()
-        .find(|c| c.flow.asks.contains_key(&ask_id))
-        .ok_or_else(|| ApiError::not_found("question"))?;
-    let st = chat.flow.asks.get(&ask_id).cloned().ok_or_else(|| ApiError::not_found("question"))?;
-    if !st.is_open() {
-        return Err(ApiError::bad_request("that question is already answered or closed"));
-    }
-    let text = match req.option_index.and_then(|i| st.ask.options.get(i as usize)) {
-        Some(o) if req.answer.trim().is_empty() => o.clone(),
-        _ => req.answer.trim().to_string(),
-    };
-    if text.is_empty() {
-        return Err(ApiError::bad_request("an answer is required"));
-    }
-    {
-        let mut svc = s.lock();
-        let by = svc.author().display_name.clone();
-        let rec = hive_core::flow::FlowRecord::HumanAnswered(hive_core::flow::HumanAnswered {
-            ask_id,
-            answer: text.chars().take(hive_core::flow::MAX_ANSWER_CHARS).collect(),
-            option_index: req.option_index,
-            by,
-            at_ms: hive_core::flow::now_ms(),
-        });
-        svc.record_flow(chat.id, chat.workspace_id, rec)?;
-    }
-    s.after_write();
-    let chat = load_chat(&s, &chat.id.to_string())?;
-    let st = chat.flow.asks.get(&ask_id).ok_or_else(|| ApiError::not_found("question"))?;
-    Ok(Json(json!({ "ask": ask_state_dto(&chat, st) })))
+/// `POST v1/asks/{id}/answer`: gone (410). A person answers an agent's
+/// question with the `answer` phone action, signed by the phone's own key
+/// (the box's own answer would be a service member's, recorded as a human's).
+async fn answer_ask(Path(_id): Path<String>) -> ApiResult<Json<Value>> {
+    Err(gone_to_phone_action("answer"))
 }
 
 /// A "Send to agent to revise" waiting for the agent's new version.
@@ -1376,92 +1323,6 @@ impl Shared {
         }
         wrote
     }
-}
-
-/// Opt-in (`LIGUS_SERVE_APPLY_ON_APPROVE=1`): carry out an approved file-diff
-/// proposal on this box, as the desktop's Implement does — apply it into the
-/// chat's base worktree of the bound checkout, commit (advancing
-/// `hive/chat/<id>`), and mark it Applied. `Ok(None)` when there is nothing to
-/// apply here (not a diff, or no checkout bound).
-fn apply_on_this_host(s: &Shared, chat: &ChatSession, p: &ActionProposal) -> ApiResult<Option<ActionProposal>> {
-    let (ProposalKind::FileDiff, Some(diff)) = (p.kind, p.diff.as_deref()) else {
-        return Ok(None);
-    };
-    // Workspace guards (dearth-mode brood paths, a chat lockdown): never apply
-    // automatically without a human member's own signed approval. Re-read the
-    // chat so the vote just cast is folded in.
-    if let Some(fresh) = s.lock().load(chat.id)? {
-        if let Some(reason) = hive_core::guard::human_gate_reason(&fresh, p) {
-            eprintln!("serve: not applying proposal {}: {reason}", p.id);
-            return Ok(None);
-        }
-        // A held vote or decision (its config frontier hasn't synced): wait.
-        if fresh.authz.blocks(p.id, p.set_id) {
-            eprintln!("serve: not applying proposal {}: a vote on it is still waiting to sync", p.id);
-            return Ok(None);
-        }
-    }
-    let repos = crate::repos::repos_dir(&s.cfg.data_dir);
-    let Some(repo) = crate::repos::RepoBindings::load(&s.cfg.data_dir).resolve(&repos, chat.id) else {
-        return Ok(None);
-    };
-    if !hive_runtime::git_worktree::is_git_repo(&repo) {
-        return Ok(None);
-    }
-    crate::repos::ensure_chat_base(&repo);
-    let wt = hive_runtime::git_worktree::chat_worktree(&repo, &chat.id.to_string())
-        .map_err(|e| ApiError(StatusCode::CONFLICT, format!("chat worktree unavailable: {e}")))?;
-    git_apply(&wt, diff).map_err(|e| ApiError(StatusCode::CONFLICT, e))?;
-    git_commit(&wt, &format!("Apply proposal: {}", p.title)).map_err(|e| ApiError(StatusCode::CONFLICT, e))?;
-    Ok(s.lock().mark_proposal_applied(chat.id, chat.workspace_id, p.id, None)?)
-}
-
-fn git_apply(dir: &std::path::Path, diff: &str) -> Result<(), String> {
-    use std::io::Write;
-    use std::process::Stdio;
-    let mut child = hive_core::process_util::git()
-        .arg("-C")
-        .arg(dir)
-        .args(["apply", "--whitespace=nowarn"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("git apply: {e}"))?;
-    child
-        .stdin
-        .take()
-        .ok_or("git apply: no stdin")?
-        .write_all(diff.as_bytes())
-        .map_err(|e| format!("write patch: {e}"))?;
-    let out = child.wait_with_output().map_err(|e| format!("git apply: {e}"))?;
-    if !out.status.success() {
-        return Err(format!(
-            "couldn't apply the change — the checkout may have moved since it was proposed ({})",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    Ok(())
-}
-
-fn git_commit(dir: &std::path::Path, message: &str) -> Result<(), String> {
-    let run = |args: &[&str]| {
-        hive_core::process_util::git().arg("-C").arg(dir).args(args).output().map_err(|e| e.to_string())
-    };
-    let add = run(&["add", "-A"])?;
-    if !add.status.success() {
-        return Err(format!("git add: {}", String::from_utf8_lossy(&add.stderr).trim()));
-    }
-    // A headless box may have no git identity configured; give the commit one.
-    let out = run(&["-c", "user.name=Ligus", "-c", "user.email=ligus@localhost", "commit", "-m", message])?;
-    if !out.status.success() {
-        let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-        if text.contains("nothing to commit") {
-            return Ok(());
-        }
-        return Err(format!("git commit: {}", text.trim()));
-    }
-    Ok(())
 }
 
 /// The host's theme for a phone set to "Match host" (`appearance.rs`).

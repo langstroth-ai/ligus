@@ -38,6 +38,7 @@ export type { WorkspaceAgentDto } from "@/bindings/WorkspaceAgentDto";
 export type { SkillDto } from "@/bindings/SkillDto";
 export type { McpServerDto } from "@/bindings/McpServerDto";
 export type { ProposalDto } from "@/bindings/ProposalDto";
+export type { ApplyRequestDto } from "@/bindings/ApplyRequestDto";
 export type { ImplementPreviewDto } from "@/bindings/ImplementPreviewDto";
 import type { ImplementPreviewDto } from "@/bindings/ImplementPreviewDto";
 export type { ReactionDto } from "@/bindings/ReactionDto";
@@ -1412,6 +1413,16 @@ export const authorizeMcpServer = (serverId: string, scope?: string) =>
 /// `targetAgentId`) as the exact instruction the preview shows.
 export const implementProposal = (sessionId: string, proposalId: string, targetAgentId?: string | null) =>
   invoke<void>("implement_proposal", { sessionId, proposalId, targetAgentId: targetAgentId ?? null });
+
+/// "Apply on ‹host›": ask one host to apply an approved proposal. That host
+/// applies it once and reports back; nobody else applies it meanwhile.
+/// Returns the request id.
+export const requestApplyOnHost = (sessionId: string, proposalId: string, hostDeviceId: string) =>
+  invoke<string>("request_apply_on_host", { sessionId, proposalId, hostDeviceId });
+
+/// Withdraw an open apply request (yours, or any as an Admin).
+export const withdrawApplyRequest = (sessionId: string, requestId: string) =>
+  invoke<void>("withdraw_apply_request", { sessionId, requestId });
 
 /// What Implement will do, exactly (built by the same function that runs it).
 export const getImplementPlan = (sessionId: string, proposalId: string, targetAgentId?: string | null) =>

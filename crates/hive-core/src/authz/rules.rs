@@ -94,6 +94,8 @@ pub fn requires_presence(event: &SessionEvent, author: &str, roster: &RosterStat
         SessionEvent::ProposalApplyRequested { request } => {
             fold.proposals.iter().find(|p| p.id == request.proposal_id).is_some_and(|p| human_gated(fold, p))
         }
+        // A host's failure report and a withdrawal only close a request.
+        SessionEvent::ProposalApplyFailed { .. } | SessionEvent::ProposalApplyWithdrawn { .. } => false,
         // Repos: adding or removing one steers clones and chats (repos
         // review F7); renaming is cosmetic; using one in a chat is content.
         SessionEvent::WorkspaceRepoAdded { .. } | SessionEvent::WorkspaceRepoRemoved { .. } => true,
