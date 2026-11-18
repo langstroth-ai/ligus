@@ -735,7 +735,15 @@ confirms. When the host has langstroth-auth operator access
 (pending, done, failed and retrying, not applicable) is kept in
 `tunnel/revocations.json` and shown by `GET /v1/revocations`,
 `POST /v1/revocations/{device}/retry`, `ligus phones list`, and on the
-desktop (a sealed presence slot `revocations:<host_id>`).
+desktop (a sealed presence slot `revocations:<host_id>`, where `host_id` is
+the box's workspace device id). Both presence blobs are also signed with a
+device key, so a workspace-key holder can neither fake a box's status nor
+trigger its retries: the report by the box's device key (Ed25519 over
+`"ligus-revocation-report-v1\0" ‖ JSON`, verified by the desktop against the
+box's certified, unrevoked device), and a retry request
+(`revocation-retry:<device>`) by the asking desktop's device key (Ed25519
+over `"ligus-revocation-retry-v1\0" ‖ JSON`, with `requester`; the box takes
+it only from a certified, unrevoked, non-phone device of a current member).
 
 `hive remote reset` generates new host keys, so a new `host_id`: every phone
 must re-pair. Use it if the host key may have leaked.

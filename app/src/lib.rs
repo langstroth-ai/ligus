@@ -4877,7 +4877,13 @@ struct DeviceRevocationDto {
 #[tauri::command]
 async fn list_device_revocations(state: State<'_, AppState>) -> Result<Vec<DeviceRevocationDto>, String> {
     let Some((relay, room, ring)) = active_presence_conn(&state) else { return Ok(Vec::new()) };
-    let reports = hive_runtime::revocation_status::fetch_reports(&relay, &room, &ring).await.map_err(map_err)?;
+    // Only a box's own signed report counts (its certified, unrevoked device key).
+    let ws = room_workspace_id(&room);
+    let blobs = relay.list_presence(&room).await.map_err(map_err)?;
+    let reports = {
+        let svc = state.service.lock().unwrap();
+        hive_runtime::revocation_status::open_reports(&blobs, &ring, |d| svc.certified_device_key(ws, d).ok().flatten())
+    };
     let hosts = {
         let svc = state.service.lock().unwrap();
         svc.list_hosts(room_workspace_id(&room)).unwrap_or_default()
@@ -4901,7 +4907,12 @@ async fn retry_device_revocation(state: State<'_, AppState>, device_id: String) 
     let Some((relay, room, ring)) = active_presence_conn(&state) else {
         return Err("No relay connection for this workspace.".into());
     };
-    hive_runtime::revocation_status::request_retry(&relay, &room, &ring, &device.to_string()).await.map_err(map_err)
+    // Signed by this device: a box takes a retry only from a member's device.
+    let req = {
+        let svc = state.service.lock().unwrap();
+        svc.sign_revocation_retry(hive_runtime::revocation_status::retry_request(&device.to_string(), svc.device_id()))
+    };
+    hive_runtime::revocation_status::request_retry(&relay, &room, &ring, &req).await.map_err(map_err)
 }
 
 #[tauri::command(async)]

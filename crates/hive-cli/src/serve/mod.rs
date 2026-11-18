@@ -1418,8 +1418,8 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
         if let Ok(beats) = fetch_host_beats(&relay, &room, &ring).await {
             shared.presence.merge(beats);
         }
-        if let Some(t) = shared.tunnel.as_ref() {
-            revocation_presence(t, &relay, &room, &ring, &mut retry_seen).await;
+        if shared.tunnel.is_some() {
+            revocation_presence(&shared, &relay, &room, &ring, &mut retry_seen).await;
         }
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(HOST_BEAT_EVERY_SECS as u64)) => {}
@@ -1432,22 +1432,30 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
 /// retry requests they left (sealed presence slots; display and "try now"
 /// only, see [`hive_runtime::revocation_status`]).
 async fn revocation_presence(
-    t: &tunnel::TunnelHost,
+    shared: &Arc<Shared>,
     relay: &hive_runtime::RelayClient,
     room: &str,
     ring: &hive_runtime::keyring::KeyringEngine,
     retry_seen: &mut i64,
 ) {
     use hive_runtime::revocation_status as rs;
-    let report = t.ledger.report(t.host_id());
+    let Some(t) = shared.tunnel.as_ref() else { return };
+    // Under this box's workspace device id (its host id), signed with its key.
+    let report = t.ledger.report(&shared.host_id);
     if !report.devices.is_empty() {
+        let report = shared.lock().sign_revocation_report(report);
         if let Err(e) = rs::publish_report(relay, room, ring, &report).await {
             eprintln!("presence: publishing the revocation status failed: {e}");
         }
     }
     if let Ok(blobs) = relay.list_presence(room).await {
         let now = Timestamp::now().inner().unix_timestamp();
-        for r in rs::open_retries(&blobs, ring, *retry_seen, now) {
+        let ws = shared.ws;
+        let retries = {
+            let svc = shared.lock();
+            rs::open_retries(&blobs, ring, *retry_seen, now, |d| svc.retry_requester_key(ws, d))
+        };
+        for r in retries {
             *retry_seen = (*retry_seen).max(r.at);
             if let Ok(d) = Uuid::parse_str(&r.device_id) {
                 t.retry_revocation(d);

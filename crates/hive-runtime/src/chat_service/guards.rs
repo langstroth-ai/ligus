@@ -71,6 +71,30 @@ impl ChatService {
         Ok(())
     }
 
+    /// Sign a phone-revocation report with this device's key.
+    pub fn sign_revocation_report(&self, r: crate::revocation_status::RevocationReport) -> crate::revocation_status::RevocationReport {
+        r.sign(&self.keypair)
+    }
+
+    /// Sign a phone-revocation retry request with this device's key.
+    pub fn sign_revocation_retry(&self, r: crate::revocation_status::RetryRequest) -> crate::revocation_status::RetryRequest {
+        r.sign(&self.keypair)
+    }
+
+    /// The key of `device` when it may ask the boxes to retry a phone
+    /// revocation: certified, unrevoked, not a phone, and a device of a
+    /// current member of `workspace_id`.
+    pub fn retry_requester_key(&self, workspace_id: Uuid, device: Uuid) -> Option<Vec<u8>> {
+        let (_, t) = self.store.load_config(workspace_id, None, None).ok()?;
+        let roster = t.current();
+        let d = roster.devices.get(&device).filter(|d| !d.revoked && !d.phone)?;
+        let member = roster.members.values().any(|m| m.account_id.is_some_and(|a| d.accounts.contains(&a)));
+        if !member {
+            return None;
+        }
+        self.certified_device_key(workspace_id, device).ok().flatten()
+    }
+
     /// Sign a lease heartbeat with this device's key.
     pub fn sign_lease_beat(&self, beat: LeaseBeat) -> LeaseBeat {
         beat.sign(&self.keypair)

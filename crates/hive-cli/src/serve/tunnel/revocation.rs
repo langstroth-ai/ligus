@@ -289,6 +289,7 @@ impl Ledger {
             host_id: host_id.to_string(),
             at: now() as i64,
             devices: self.list().into_iter().take(MAX_REPORTED).map(|e| e.status).collect(),
+            signature: Vec::new(),
         }
     }
 }

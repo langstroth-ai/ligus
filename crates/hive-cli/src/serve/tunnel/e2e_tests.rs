@@ -1009,3 +1009,58 @@ async fn revoking_a_phone_device_rotates_the_direct_token() {
     assert_eq!(h.handle.shared.token(), now);
     h.handle.shutdown();
 }
+
+/// Residual 3, end to end on the real roster: the box signs its report with
+/// its device key and the desktop verifies it; the box takes a retry only
+/// from a member's certified desktop device, never from a mere key holder,
+/// a revoked device or a phone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn revocation_presence_is_signed_and_checked_against_the_roster() {
+    use hive_runtime::revocation_status as rs;
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let (t, _, _, _, _, phone) = pair_bound(&h, &relay).await;
+    revoke_on_desktop(&h, phone.device_id);
+    crate::sync_once(&h.desktop).await.unwrap();
+    wait_until("ledger entry", Duration::from_secs(10), || !t.ledger.list().is_empty()).await;
+    let ws = h.handle.shared.ws;
+    let k = hive_runtime::keyring::KeyringEngine::passphrase(ws, hive_core::derive_workspace_key("serve-test"));
+
+    // The box's report, as the presence loop seals it.
+    let report = h.handle.shared.lock().sign_revocation_report(t.ledger.report(&h.handle.shared.host_id));
+    let mut blobs = std::collections::HashMap::new();
+    blobs.insert(rs::report_slot(&report.host_id), rs::seal_report(&k, &report).unwrap());
+    crate::sync_once(&h.desktop).await.unwrap();
+    let desk = crate::open_service(&h.desktop).unwrap();
+    let shown = rs::open_reports(&blobs, &k, |d| desk.certified_device_key(ws, d).ok().flatten());
+    assert_eq!(shown.len(), 1, "the desktop rejected the box's own signed report");
+    // The same report, tampered by a key holder: dropped.
+    let mut forged = report.clone();
+    forged.devices[0].tunnel.state = hive_runtime::revocation_status::StepState::Done;
+    forged.devices[0].tunnel.detail = "all good".into();
+    blobs.insert(rs::report_slot(&report.host_id), rs::seal_report(&k, &forged).unwrap());
+    assert!(rs::open_reports(&blobs, &k, |d| desk.certified_device_key(ws, d).ok().flatten()).is_empty());
+
+    // Retries: the box accepts the desktop's device, nothing else.
+    crate::sync_once(&h.desktop).await.unwrap();
+    h.handle.shared.sync_kick.notify_one();
+    let desk_id = desk.device_id();
+    let shared = h.handle.shared.clone();
+    wait_until("box knows the desktop device", Duration::from_secs(10), || shared.lock().retry_requester_key(ws, desk_id).is_some()).await;
+    let svc = h.handle.shared.lock();
+    assert!(svc.retry_requester_key(ws, Uuid::new_v4()).is_none(), "an unknown device");
+    assert!(svc.retry_requester_key(ws, phone.device_id).is_none(), "a revoked phone");
+    drop(svc);
+    let now = Timestamp::now().inner().unix_timestamp();
+    let good = desk.sign_revocation_retry(rs::retry_request(&phone.device_id.to_string(), desk_id));
+    let holder = hive_core::SigningKeypair::generate().unwrap();
+    let bad = rs::retry_request(&phone.device_id.to_string(), desk_id).sign(&holder);
+    for (req, want) in [(good, 1usize), (bad, 0)] {
+        let mut b = std::collections::HashMap::new();
+        b.insert(rs::retry_slot(&req.device_id), rs::seal_retry(&k, &req).unwrap());
+        let svc = h.handle.shared.lock();
+        assert_eq!(rs::open_retries(&b, &k, 0, now + 1, |d| svc.retry_requester_key(ws, d)).len(), want);
+    }
+    h.handle.shutdown();
+}
