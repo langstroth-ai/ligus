@@ -265,7 +265,7 @@ pub fn parse_ttl(s: &str) -> Result<i64> {
         "d" => n * 86_400_000,
         _ => bail!("--ttl takes a duration like 1h, 90m or 2d"),
     };
-    if ms < 60_000 || ms > hive_core::admission::MAX_ADMISSION_TTL_MS - 60_000 {
+    if !(60_000..=hive_core::admission::MAX_ADMISSION_TTL_MS - 60_000).contains(&ms) {
         bail!("--ttl must be between a minute and just under 7 days");
     }
     Ok(ms)
