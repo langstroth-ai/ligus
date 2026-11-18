@@ -1296,8 +1296,11 @@ fn fold(
     // event id with different signed content both drop out before anything
     // else, so neither folds, coverage never passes through the id, and the
     // result doesn't depend on which one a device saw first.
+    // Lamport bounds (see [`crate::lamport`]): judged over every envelope
+    // the log holds, equivocated copies included (any event is a witness).
+    let bounds = crate::lamport::Bounds::of(envelopes);
     let (envelopes, equivocated) = split_equivocations(envelopes);
-    let out = fold_log(&envelopes, trusted_founder, trusted_workspace, workspace, timeline, decisions.as_deref_mut());
+    let out = fold_log(&envelopes, trusted_founder, trusted_workspace, workspace, timeline, decisions.as_deref_mut(), &bounds);
     if let Some(d) = decisions {
         for id in equivocated {
             d.insert(id, Verdict::Denied);
@@ -1353,17 +1356,18 @@ fn fold_log(
     workspace: WorkspaceAuthz<'_>,
     timeline: Option<&mut crate::authz::ConfigTimeline>,
     decisions: Option<&mut std::collections::BTreeMap<Uuid, Verdict>>,
+    bounds: &crate::lamport::Bounds,
 ) -> Option<ChatSession> {
     let none = std::collections::BTreeSet::new();
     let is_config = envelopes
         .first()
         .is_some_and(|e| e.session_id == crate::channel::workspace_config_session_id(e.workspace_id));
     if !is_config {
-        return fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, timeline, decisions, &none);
+        return fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, timeline, decisions, LeftOut { cut: &none, bounds });
     }
     let mut first = crate::authz::ConfigTimeline::default();
-    let pass1 = fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, Some(&mut first), None, &none);
-    let mut deny = config_denials_with_rejudged_cuts(envelopes, trusted_founder, trusted_workspace, workspace, &first);
+    let pass1 = fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, Some(&mut first), None, LeftOut { cut: &none, bounds });
+    let mut deny = config_denials_with_rejudged_cuts(envelopes, trusted_founder, trusted_workspace, workspace, &first, bounds);
     // Closed box admissions (Phase B): the redemptions no allowed closure
     // names, wherever they sort. The closures are read from the fold the
     // denials so far leave, never from the first pass alone: a denial can
@@ -1382,7 +1386,7 @@ fn fold_log(
             let closed = if deny.is_empty() {
                 pass1.as_ref().map(|s| s.guards.closed_admissions.clone()).unwrap_or_default()
             } else {
-                fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, None, None, &deny)
+                fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, None, None, LeftOut { cut: &deny, bounds })
                     .map(|s| s.guards.closed_admissions)
                     .unwrap_or_default()
             };
@@ -1399,7 +1403,7 @@ fn fold_log(
         }
         return pass1;
     }
-    fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, timeline, decisions, &deny)
+    fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, timeline, decisions, LeftOut { cut: &deny, bounds })
 }
 
 /// The config events a cut denies outright: by a cut member or device,
@@ -1504,6 +1508,7 @@ fn config_denials_with_rejudged_cuts(
     trusted_workspace: Option<Uuid>,
     workspace: WorkspaceAuthz<'_>,
     first: &crate::authz::ConfigTimeline,
+    bounds: &crate::lamport::Bounds,
 ) -> std::collections::BTreeSet<Uuid> {
     let all: Vec<&SessionEventEnvelope> = envelopes.iter().collect();
     let chains = crate::watermark::Chains::of(&all);
@@ -1530,7 +1535,7 @@ fn config_denials_with_rejudged_cuts(
             }
             let trial: std::collections::BTreeSet<Uuid> = deny.union(x).copied().collect();
             let mut t = crate::authz::ConfigTimeline::default();
-            fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, Some(&mut t), None, &trial);
+            fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, Some(&mut t), None, LeftOut { cut: &trial, bounds });
             if t.cuts().iter().any(|k| k.key == c.key) {
                 accepted.extend(t.cuts().iter().map(|k| k.key));
                 deny = trial.union(&config_cut_denials(envelopes, &t)).copied().collect();
@@ -1544,6 +1549,14 @@ fn config_denials_with_rejudged_cuts(
     deny
 }
 
+/// What a fold pass leaves out of the judging: the events an allowed cut
+/// denies, and the lamports out of bounds (`crate::lamport`).
+#[derive(Clone, Copy)]
+struct LeftOut<'a> {
+    cut: &'a std::collections::BTreeSet<Uuid>,
+    bounds: &'a crate::lamport::Bounds,
+}
+
 fn fold_pass(
     envelopes: &[SessionEventEnvelope],
     trusted_founder: Option<&str>,
@@ -1551,9 +1564,11 @@ fn fold_pass(
     workspace: WorkspaceAuthz<'_>,
     mut timeline: Option<&mut crate::authz::ConfigTimeline>,
     mut decisions: Option<&mut std::collections::BTreeMap<Uuid, Verdict>>,
-    cut_denied: &std::collections::BTreeSet<Uuid>,
+    left_out: LeftOut<'_>,
 ) -> Option<ChatSession> {
     use crate::authz::{self, Decision, HeldEvent, HoldReason};
+    let LeftOut { cut: cut_denied, bounds } = left_out;
+    use crate::lamport::Plausibility;
 
     let mut ordered: Vec<&SessionEventEnvelope> = envelopes.iter().collect();
     ordered.sort_by_key(|e| e.canonical_key());
@@ -1565,13 +1580,17 @@ fn fold_pass(
     //   2. The earliest self-consistent creation seed (the no-pin B2 behavior; and
     //      the pre-sync fallback when the founder's own seed hasn't arrived yet).
     //   3. The earliest snapshot of any kind (compaction tail / legacy).
+    //   A base is a plausible event (its lamport within bounds, see
+    //   `crate::lamport`): a seed is lamport 1 with no head, so a forged
+    //   lamport-0 seed is no candidate at all.
+    let plausible = |e: &SessionEventEnvelope| bounds.of_env(e) == Plausibility::Plausible;
     let base = trusted_founder
-        .and_then(|founder| ordered.iter().position(|e| is_founder_seed(e, founder)))
-        .or_else(|| ordered.iter().position(|e| is_self_consistent_seed(e)))
+        .and_then(|founder| ordered.iter().position(|e| plausible(e) && is_founder_seed(e, founder)))
+        .or_else(|| ordered.iter().position(|e| plausible(e) && is_self_consistent_seed(e)))
         .or_else(|| {
             ordered
                 .iter()
-                .position(|e| matches!(e.payload, SessionEvent::SessionSnapshot { .. }))
+                .position(|e| plausible(e) && matches!(e.payload, SessionEvent::SessionSnapshot { .. }))
         })?;
     let mut session = match &ordered[base].payload {
         SessionEvent::SessionSnapshot { session } => (**session).clone(),
@@ -1599,7 +1618,7 @@ fn fold_pass(
     let mut tracker = authz::RosterTracker::seeded(&session);
     if let Some(t) = timeline.as_deref_mut() {
         *t = authz::ConfigTimeline::begin(tracker.state.clone());
-        for e in &ordered {
+        for e in ordered.iter().filter(|e| bounds.of_env(e) != Plausibility::Implausible) {
             t.note_held(e.event_id, e.lamport);
             if let SessionEvent::WorkspaceKeyRotated { rotation } = &e.payload {
                 t.note_rotation(rotation);
@@ -1620,12 +1639,28 @@ fn fold_pass(
         _ => Vec::new(),
     };
     for env in &ordered[base + 1..] {
+        // A lamport its log can't account for (see `crate::lamport`): denied,
+        // and not a position anything can name.
+        let plausibility = bounds.of_env(env);
+        if plausibility == Plausibility::Implausible {
+            if let Some(d) = decisions.as_deref_mut() {
+                d.insert(env.event_id, Verdict::Denied);
+            }
+            continue;
+        }
         let trusted = trusted_workspace == Some(env.workspace_id);
         let author = env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
         let mut allowed = false;
         let mut held = false;
         'judge: {
             if cut_denied.contains(&env.event_id) {
+                break 'judge;
+            }
+            // Its log head isn't here yet: held until it arrives.
+            if plausibility == Plausibility::Unresolved {
+                let (proposal_id, set_id) = authz::subject_of(&env.payload);
+                session.authz.held.push(HeldEvent { event_id: env.event_id, reason: HoldReason::LogHeadAhead, proposal_id, set_id });
+                held = true;
                 break 'judge;
             }
             if let SessionEvent::SessionSnapshot { session: snap } = &env.payload {
@@ -1881,6 +1916,15 @@ mod tests {
     use super::*;
     use crate::chat::{ChatMessage, MessageRole};
     use crate::identity::{ActorIdentity, ActorKind};
+
+    // These fixtures are written with intended lamports; the fold judges
+    // them as the honest history they describe (see `crate::lamport`).
+    fn project(envelopes: &[SessionEventEnvelope]) -> Option<ChatSession> {
+        super::project(&crate::testkit::honest_chain(envelopes))
+    }
+    fn project_with_founder(envelopes: &[SessionEventEnvelope], founder: Option<&str>) -> Option<ChatSession> {
+        super::project_with_founder(&crate::testkit::honest_chain(envelopes), founder)
+    }
 
     fn snapshot_env(session: ChatSession, seq: i64) -> SessionEventEnvelope {
         let wid = session.workspace_id;
@@ -2175,7 +2219,7 @@ mod tests {
         e.actor_stamp = Some(ActorStamp {
             actor: ActorIdentity::new(author, author, ActorKind::Human),
             recorded_at: Timestamp::epoch(), cfg_frontier: None,
-            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
         e
     }
 
@@ -2768,7 +2812,7 @@ mod tests {
                 actor: ActorIdentity::new("u1", "U", ActorKind::Human),
                 recorded_at: Timestamp::epoch(),
                 cfg_frontier: None,
-                presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+                presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
         }
         let s = project(&envs).unwrap();
         assert_eq!(s.workflow_definitions.len(), 1);

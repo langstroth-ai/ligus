@@ -85,6 +85,9 @@ pub enum HoldReason {
     NoConfigLog,
     /// Its signer isn't known yet.
     SignerUnknownYet,
+    /// Its `log_head` names an event of its own log this device doesn't
+    /// hold yet ([`crate::lamport`]).
+    LogHeadAhead,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1054,7 +1057,7 @@ pub fn member_action_refusal(roster: &RosterState, config: &ChatSession, author:
         presence: None,
         runtime_effect: false,
         prev: None,
-        sig_alg: Default::default(),
+        sig_alg: Default::default(), log_head: None,
     });
     let role = config.role_of(author);
     if let Some(why) = service_member_refusal(&env, author, Some(roster), true, config) {

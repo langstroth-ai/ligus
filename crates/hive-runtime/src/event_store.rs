@@ -57,6 +57,9 @@ pub struct EventStore {
     projections: Mutex<HashMap<ProjectionKey, ProjectionEntry>>,
     /// Folded config logs with their roster timelines (see [`EventStore::load_config`]).
     configs: Mutex<HashMap<ConfigKey, ConfigEntry>>,
+    /// Each log's lamport head ([`EventStore::lamport_head`]), by session,
+    /// with the rows it was computed over.
+    heads: Mutex<HashMap<Uuid, (RowsSig, Option<hive_core::CfgFrontier>)>>,
 }
 
 /// A cached chat projection: its rows, the config events held when it was
@@ -263,6 +266,25 @@ impl EventStore {
                 UNIQUE (event_id, envelope_json)
             );
             CREATE INDEX IF NOT EXISTS idx_equivocations_session ON equivocations (session_id);
+
+            -- Device-local, never synced: an event this device refused at
+            -- ingest (signed by a revoked device, or sealed under an old key
+            -- by a non-member) is kept only as a lamport witness: its id,
+            -- lamport, log head and chain link (hive_core::lamport). Another
+            -- author may have held it and counted from it; without it, that
+            -- author's later events would be held here for good. Folded as an
+            -- inert event (no payload), and left out once the id is stored.
+            CREATE TABLE IF NOT EXISTS lamport_witnesses (
+                row_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id      TEXT NOT NULL,
+                session_id    TEXT NOT NULL,
+                workspace_id  TEXT NOT NULL,
+                lamport       INTEGER NOT NULL,
+                log_head      TEXT,
+                prev          TEXT,
+                UNIQUE (event_id, lamport)
+            );
+            CREATE INDEX IF NOT EXISTS idx_lamport_witnesses_session ON lamport_witnesses (session_id);
             "#,
         )?;
         // B1: the key epoch each relay body arrived sealed under (device-local,
@@ -281,7 +303,7 @@ impl EventStore {
         if !has_priority {
             conn.execute_batch("ALTER TABLE parked_bodies ADD COLUMN priority INTEGER NOT NULL DEFAULT 0")?;
         }
-        Ok(Self { conn, projections: Mutex::new(HashMap::new()), configs: Mutex::new(HashMap::new()) })
+        Ok(Self { conn, projections: Mutex::new(HashMap::new()), configs: Mutex::new(HashMap::new()), heads: Mutex::new(HashMap::new()) })
     }
 
     /// A cached identity-link check (device-local).
@@ -323,27 +345,117 @@ impl EventStore {
         Ok(seq)
     }
 
-    /// The highest Lamport timestamp among a session's stored events (0 if none),
-    /// read from the envelope JSON. Used to assign a **causal** clock to newly
-    /// authored events: strictly greater than everything this device has seen —
-    /// locally authored *or* ingested from a peer — so causal order is preserved
-    /// across devices, not just a per-device authoring count.
-    pub fn max_lamport(&self, session_id: Uuid) -> Result<u64> {
-        let max: Option<i64> = self
-            .conn
-            .query_row(
-                "SELECT MAX(json_extract(envelope_json, '$.lamport')) FROM events WHERE session_id = ?1",
-                [session_id.to_string()],
-                |row| row.get::<_, Option<i64>>(0),
-            )
-            .optional()?
-            .flatten();
-        Ok(max.unwrap_or(0).max(0) as u64)
+    /// The rows a session's projections are computed over (its events and
+    /// equivocated copies): a cache key.
+    fn rows_sig(&self, session_id: Uuid) -> Result<RowsSig> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) + (SELECT COUNT(*) FROM equivocations WHERE session_id = ?1) \
+             + (SELECT COUNT(*) FROM lamport_witnesses WHERE session_id = ?1), COALESCE(MAX(row_id), 0) FROM events WHERE session_id = ?1",
+            [session_id.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?)
+    }
+
+    /// Every envelope of a log this device holds (equivocated copies
+    /// included) plus its lamport witnesses as inert events: what a fold of
+    /// the log reads.
+    fn log_with_witnesses(&self, session_id: Uuid) -> Result<Vec<SessionEventEnvelope>> {
+        let mut envelopes = self.query_envelopes_sealed(
+            "SELECT envelope_json, sealed_epoch FROM events WHERE session_id = ?1 \
+             UNION ALL SELECT envelope_json, sealed_epoch FROM equivocations WHERE session_id = ?1",
+            [session_id.to_string()],
+        )?;
+        envelopes.extend(self.witnesses_of(session_id)?);
+        Ok(envelopes)
+    }
+
+    /// A log's lamport witnesses (events refused here at ingest, see the
+    /// `lamport_witnesses` table) whose id the log doesn't hold, each as an
+    /// inert envelope: no payload (`Unknown`, a no-op in every fold), no
+    /// author or signer, only its id, lamport, log head and chain link.
+    fn witnesses_of(&self, session_id: Uuid) -> Result<Vec<SessionEventEnvelope>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT event_id, workspace_id, lamport, log_head, prev FROM lamport_witnesses w WHERE session_id = ?1 \
+             AND NOT EXISTS (SELECT 1 FROM events e WHERE e.event_id = w.event_id) ORDER BY row_id ASC",
+        )?;
+        let rows = stmt.query_map([session_id.to_string()], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, Option<String>>(3)?, r.get::<_, Option<String>>(4)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, ws, lamport, head, prev) = row?;
+            let (Ok(id), Ok(ws)) = (Uuid::parse_str(&id), Uuid::parse_str(&ws)) else { continue };
+            let mut env = SessionEventEnvelope::new(session_id, ws, 0, SessionEvent::Unknown);
+            env.event_id = id;
+            env.lamport = lamport as u64;
+            env.actor_stamp = Some(hive_core::ActorStamp {
+                actor: hive_core::ActorIdentity::new("", "", hive_core::ActorKind::System),
+                recorded_at: hive_core::Timestamp::epoch(),
+                cfg_frontier: None,
+                presence: None,
+                runtime_effect: false,
+                prev: prev.and_then(|p| Uuid::parse_str(&p).ok()),
+                sig_alg: Default::default(),
+                log_head: head.and_then(|h| serde_json::from_str(&h).ok()),
+            });
+            let env = hive_core::lamport::inert_witness(&env);
+            out.push(env);
+        }
+        Ok(out)
+    }
+
+    /// Keep `env`, which this device refused at ingest, as a lamport witness
+    /// of its log (see the `lamport_witnesses` table). Only its id, lamport,
+    /// log head and chain link are kept; never pushed, never folded as
+    /// itself.
+    pub fn note_lamport_witness(&self, env: &SessionEventEnvelope) -> Result<()> {
+        let stamp = env.actor_stamp.as_ref();
+        let head = stamp.and_then(|s| s.log_head).map(|h| serde_json::to_string(&h)).transpose()?;
+        let prev = stamp.and_then(|s| s.prev).map(|p| p.to_string());
+        self.conn.execute(
+            "INSERT OR IGNORE INTO lamport_witnesses (event_id, session_id, workspace_id, lamport, log_head, prev) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                env.event_id.to_string(),
+                env.session_id.to_string(),
+                env.workspace_id.to_string(),
+                env.lamport.min(i64::MAX as u64) as i64,
+                head,
+                prev
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// The newest event of a session's log whose lamport is within bounds
+    /// (`hive_core::lamport`), over every envelope this device holds for it
+    /// (authored here or ingested, equivocated copies included): what this
+    /// device's next event on the log names as its `log_head`, its lamport
+    /// one past it. An event past the bounds (a lamport no real event
+    /// accounts for) never moves it. Cached per log; an event appended here
+    /// after the head moves it without a rescan.
+    pub fn lamport_head(&self, session_id: Uuid) -> Result<Option<hive_core::CfgFrontier>> {
+        let sig = self.rows_sig(session_id)?;
+        if let Some((cached, head)) = self.heads.lock().unwrap_or_else(|e| e.into_inner()).get(&session_id) {
+            if *cached == sig {
+                return Ok(*head);
+            }
+        }
+        let envelopes = self.log_with_witnesses(session_id)?;
+        let head = hive_core::lamport::head(&envelopes);
+        let mut cache = self.heads.lock().unwrap_or_else(|e| e.into_inner());
+        if cache.len() >= PROJECTION_CACHE_MAX && !cache.contains_key(&session_id) {
+            cache.clear();
+        }
+        cache.insert(session_id, (sig, head));
+        Ok(head)
     }
 
     /// Append a pre-built envelope verbatim. Fails if its
     /// `(session_id, sequence)` already exists (the append-only invariant).
     pub fn append_envelope(&self, env: &SessionEventEnvelope) -> Result<()> {
+        // The cached head, if it is current: an event that names it moves it.
+        let before = self.rows_sig(env.session_id)?;
+        let cached = self.heads.lock().unwrap_or_else(|e| e.into_inner()).get(&env.session_id).copied();
         let json = serde_json::to_string(env)?;
         let timestamp = serde_json::to_value(env.timestamp)?
             .as_str()
@@ -366,17 +478,33 @@ impl EventStore {
                 json,
             ],
         )?;
+        if let Some((sig, head)) = cached {
+            let names_head = env.actor_stamp.as_ref().map(|s| s.log_head) == Some(head)
+                && env.lamport == hive_core::lamport::next(head);
+            let mut cache = self.heads.lock().unwrap_or_else(|e| e.into_inner());
+            if sig == before && names_head {
+                let key = hive_core::CfgFrontier { lamport: env.lamport, event_id: env.event_id };
+                cache.insert(env.session_id, (self.rows_sig(env.session_id)?, Some(key)));
+            } else {
+                cache.remove(&env.session_id);
+            }
+        }
         Ok(())
     }
 
-    /// Append an event for a session, assigning the next sequence atomically,
-    /// and return the stored envelope. This is the common write path.
+    /// Tests only: append an event for a session as the fixture device
+    /// ([`fixture_next`]), assigning the next sequence atomically, and return
+    /// the stored envelope. Products author through `ChatService`.
+    #[cfg(test)]
     pub fn append(
         &mut self,
         session_id: Uuid,
         workspace_id: Uuid,
         payload: SessionEvent,
     ) -> Result<SessionEventEnvelope> {
+        // An authorless stamp naming the log's head, so the lamport is one the
+        // fold accounts for (`hive_core::lamport`).
+        let log_head = self.lamport_head(session_id)?;
         let tx = self.conn.transaction()?;
         let next_seq = tx
             .query_row(
@@ -389,7 +517,7 @@ impl EventStore {
             .map(|s| s + 1)
             .unwrap_or(1);
 
-        let env = SessionEventEnvelope::new(session_id, workspace_id, next_seq, payload);
+        let env = fixture_next(&SessionEventEnvelope::new(session_id, workspace_id, next_seq, payload), log_head);
         let json = serde_json::to_string(&env)?;
         let timestamp = serde_json::to_value(env.timestamp)?
             .as_str()
@@ -440,19 +568,24 @@ impl EventStore {
     /// A workspace's whole trust history — account keys (registered/rotated),
     /// device certificates and revocations, membership, and the rules and
     /// passkeys that gate new devices under rules v2 — for folding its
-    /// [`crate::envelope_verifier::WorkspaceRoster`] without the rest of the log.
+    /// [`crate::envelope_verifier::WorkspaceRoster`] without the rest of the
+    /// chats. Its config log comes whole: every event there is a lamport
+    /// witness for the ones after it (`hive_core::lamport`), so a subset of
+    /// it would hold the trust events that count from the rest.
     pub fn trust_envelopes(&self, workspace_id: Uuid) -> Result<Vec<SessionEventEnvelope>> {
-        self.query_envelopes(
-            "SELECT envelope_json FROM (SELECT row_id, workspace_id, kind, envelope_json FROM events \
-             UNION ALL SELECT row_id + 9000000000000, workspace_id, kind, envelope_json FROM equivocations) \
+        let mut out = self.query_envelopes(
+            "SELECT envelope_json FROM (SELECT row_id, workspace_id, session_id, kind, envelope_json FROM events \
+             UNION ALL SELECT row_id + 9000000000000, workspace_id, session_id, kind, envelope_json FROM equivocations) \
              WHERE workspace_id = ?1 \
-             AND kind IN ('accountKeyRegistered','accountKeyRotated','deviceCertificateAdded','deviceRevoked',\
+             AND (session_id = ?2 OR kind IN ('accountKeyRegistered','accountKeyRotated','deviceCertificateAdded','deviceRevoked',\
              'memberAdded','memberRemoved','sessionSnapshot','memberRoleChanged','dearthModeChanged','joinApproved',\
              'agentKeyCertified','agentUpserted','agentRosterUpdated','agentRemoved',\
-             'workspaceRulesSet','passkeyRegistered','passkeyRemoved') \
+             'workspaceRulesSet','passkeyRegistered','passkeyRemoved')) \
              ORDER BY row_id ASC",
-            [workspace_id.to_string()],
-        )
+            [workspace_id.to_string(), hive_core::workspace_config_session_id(workspace_id).to_string()],
+        )?;
+        out.extend(self.witnesses_of(hive_core::workspace_config_session_id(workspace_id))?);
+        Ok(out)
     }
 
     /// A workspace's account keys and device certificates (registrations,
@@ -650,6 +783,18 @@ impl EventStore {
     /// converge across peers.
     pub fn ingest(&mut self, env: &SessionEventEnvelope) -> Result<bool> {
         self.ingest_sealed(env, env.sealed_epoch())
+    }
+
+    /// Tests only: [`EventStore::ingest`] an **unsigned** fixture as the next
+    /// event of its log here ([`fixture_next`]). A signed envelope is
+    /// ingested as is.
+    #[cfg(test)]
+    pub(crate) fn ingest_next(&mut self, env: &SessionEventEnvelope) -> Result<bool> {
+        if env.signature.is_some() {
+            return self.ingest(env);
+        }
+        let env = fixture_next(env, self.lamport_head(env.session_id)?);
+        self.ingest(&env)
     }
 
     /// [`EventStore::ingest`], recording the key epoch the body arrived sealed
@@ -1111,14 +1256,16 @@ impl EventStore {
     }
 
     /// The newest event `signer` put on `session_id` here (by local row
-    /// order): what a new event of that signer names as `ActorStamp::prev`.
-    pub fn last_signed_by(&self, session_id: Uuid, signer: Uuid) -> Result<Option<Uuid>> {
+    /// order) with a lamport below `below`: what a new event of that signer at
+    /// lamport `below` names as `ActorStamp::prev` (a chain link is always
+    /// older than the event, `hive_core::lamport`).
+    pub fn last_signed_by(&self, session_id: Uuid, signer: Uuid, below: u64) -> Result<Option<Uuid>> {
         let id: Option<String> = self
             .conn
             .query_row(
                 "SELECT event_id FROM events WHERE session_id = ?1 AND json_extract(envelope_json, '$.signerDeviceId') = ?2 \
-                 ORDER BY row_id DESC LIMIT 1",
-                rusqlite::params![session_id.to_string(), signer.to_string()],
+                 AND json_extract(envelope_json, '$.lamport') < ?3 ORDER BY row_id DESC LIMIT 1",
+                rusqlite::params![session_id.to_string(), signer.to_string(), below.min(i64::MAX as u64) as i64],
                 |r| r.get(0),
             )
             .optional()?;
@@ -1281,11 +1428,7 @@ impl EventStore {
         // Project the full stream: the fold orders canonically and picks its
         // base deterministically, so the result is independent of this
         // device's ingestion order.
-        let sig: RowsSig = self.conn.query_row(
-            "SELECT COUNT(*) + (SELECT COUNT(*) FROM equivocations WHERE session_id = ?1), COALESCE(MAX(row_id), 0) FROM events WHERE session_id = ?1",
-            [session_id.to_string()],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )?;
+        let sig: RowsSig = self.rows_sig(session_id)?;
         let (fingerprint, config_events) = match ws {
             WorkspaceAuthz::Unchecked => (0, 0),
             WorkspaceAuthz::NoConfigLog => (1, 0),
@@ -1298,11 +1441,7 @@ impl EventStore {
                 return Ok(session.clone());
             }
         }
-        let envelopes = self.query_envelopes_sealed(
-            "SELECT envelope_json, sealed_epoch FROM events WHERE session_id = ?1 \
-             UNION ALL SELECT envelope_json, sealed_epoch FROM equivocations WHERE session_id = ?1",
-            [session_id.to_string()],
-        )?;
+        let envelopes = self.log_with_witnesses(session_id)?;
         let session = project_authorized(&envelopes, trusted_founder, trusted_workspace, ws);
         let mut cache = self.projections.lock().unwrap_or_else(|e| e.into_inner());
         if cache.len() >= PROJECTION_CACHE_MAX && !cache.contains_key(&key) {
@@ -1321,22 +1460,14 @@ impl EventStore {
         trusted_workspace: Option<Uuid>,
     ) -> Result<(Option<ChatSession>, Arc<ConfigTimeline>)> {
         let config_id = hive_core::workspace_config_session_id(workspace_id);
-        let sig: RowsSig = self.conn.query_row(
-            "SELECT COUNT(*) + (SELECT COUNT(*) FROM equivocations WHERE session_id = ?1), COALESCE(MAX(row_id), 0) FROM events WHERE session_id = ?1",
-            [config_id.to_string()],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )?;
+        let sig: RowsSig = self.rows_sig(config_id)?;
         let key = (config_id, trusted_founder.map(str::to_string), trusted_workspace);
         if let Some((cached, session, timeline)) = self.configs.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
             if *cached == sig {
                 return Ok((session.clone(), Arc::clone(timeline)));
             }
         }
-        let envelopes = self.query_envelopes_sealed(
-            "SELECT envelope_json, sealed_epoch FROM events WHERE session_id = ?1 \
-             UNION ALL SELECT envelope_json, sealed_epoch FROM equivocations WHERE session_id = ?1",
-            [config_id.to_string()],
-        )?;
+        let envelopes = self.log_with_witnesses(config_id)?;
         let (session, timeline) = project_config(&envelopes, trusted_founder, trusted_workspace);
         let timeline = Arc::new(timeline);
         let mut cache = self.configs.lock().unwrap_or_else(|e| e.into_inner());
@@ -1640,7 +1771,9 @@ impl EventStore {
     /// One-time maintenance: delete `messageChunkReceived` rows whose message
     /// already has a `messageCompleted` (the completed body supersedes them).
     /// Shrinks DBs written before per-token persistence was removed; projection
-    /// is unaffected. Returns rows removed.
+    /// is unaffected. A chunk another event names as its `log_head` stays: it
+    /// is what that event's lamport counts from (`hive_core::lamport`), and
+    /// without it the event would be held. Returns rows removed.
     pub fn prune_superseded_chunks(&mut self) -> Result<usize> {
         fn message_id_of(json: &str) -> Option<String> {
             // SessionEvent variant fields keep snake_case (the enum's
@@ -1668,6 +1801,18 @@ impl EventStore {
             return Ok(0);
         }
 
+        // Events named as a log head (their lamport bounds a later event).
+        let mut named: std::collections::HashSet<String> = std::collections::HashSet::new();
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT json_extract(envelope_json, '$.actorStamp.logHead.e') FROM events \
+                 WHERE json_extract(envelope_json, '$.actorStamp.logHead.e') IS NOT NULL",
+            )?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            for id in rows {
+                named.insert(id?);
+            }
+        }
         let mut doomed: Vec<String> = Vec::new(); // event_ids
         {
             let mut stmt = self.conn.prepare(
@@ -1676,7 +1821,7 @@ impl EventStore {
             let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
             for row in rows {
                 let (event_id, json) = row?;
-                if message_id_of(&json).map(|m| completed.contains(&m)).unwrap_or(false) {
+                if message_id_of(&json).map(|m| completed.contains(&m)).unwrap_or(false) && !named.contains(&event_id) {
                     doomed.push(event_id);
                 }
             }
@@ -1750,24 +1895,39 @@ mod tests {
         store.append(sid, wid, SessionEvent::MessageAppended { message: a }).unwrap();
         store.append(sid, wid, SessionEvent::SessionTitleChanged { title: "x".into() }).unwrap();
         store.append(sid, wid, SessionEvent::MessageAppended { message: b }).unwrap();
-        assert_eq!(store.messages_after(before).unwrap(), vec![(sid, a_id, None), (sid, b_id, None)]);
+        let fixture = Some(FIXTURE_DEVICE);
+        assert_eq!(store.messages_after(before).unwrap(), vec![(sid, a_id, fixture), (sid, b_id, fixture)]);
         assert!(store.messages_after(store.max_row_id().unwrap()).unwrap().is_empty());
     }
 
     #[test]
-    fn max_lamport_reflects_stored_events_including_ingested() {
+    fn the_lamport_head_is_the_newest_event_within_bounds() {
         let (mut store, sid, wid) = seeded_store(); // snapshot @ lamport 1
-        for l in [5i64, 100, 30] {
-            let mut e = SessionEventEnvelope::new(
-                sid,
-                wid,
-                l,
-                SessionEvent::SessionTitleChanged { title: format!("t{l}") },
-            );
-            e.lamport = l as u64;
-            store.ingest(&e).unwrap();
-        }
-        assert_eq!(store.max_lamport(sid).unwrap(), 100, "max over authored + ingested");
+        let seed = store.list(sid).unwrap()[0].clone();
+        let stamped = |payload: SessionEvent, head: Option<&SessionEventEnvelope>| {
+            let mut e = SessionEventEnvelope::new(sid, wid, 1, payload);
+            e.actor_stamp = seed.actor_stamp.clone();
+            hive_core::lamport::stamp_next(&mut e, head.map(|h| hive_core::CfgFrontier { lamport: h.lamport, event_id: h.event_id }));
+            e
+        };
+        let a = stamped(SessionEvent::SessionTitleChanged { title: "a".into() }, Some(&seed));
+        let b = stamped(SessionEvent::SessionTitleChanged { title: "b".into() }, Some(&a));
+        store.ingest(&b).unwrap();
+        assert_eq!(store.lamport_head(sid).unwrap().map(|h| h.event_id), Some(seed.event_id), "b's head isn't here yet");
+        store.ingest(&a).unwrap();
+        assert_eq!(store.lamport_head(sid).unwrap().map(|h| h.event_id), Some(b.event_id), "ingested in any order");
+        // Inflated: a lamport no head accounts for never moves the head.
+        let mut big = stamped(SessionEvent::SessionTitleChanged { title: "big".into() }, Some(&b));
+        big.lamport = u64::MAX;
+        store.ingest(&big).unwrap();
+        let mut headless = SessionEventEnvelope::new(sid, wid, 7, SessionEvent::SessionTitleChanged { title: "x".into() });
+        headless.lamport = 1_000;
+        store.ingest(&headless).unwrap();
+        assert_eq!(store.lamport_head(sid).unwrap().map(|h| (h.lamport, h.event_id)), Some((3, b.event_id)));
+        // An event appended here moves it.
+        let mine = store.append(sid, wid, SessionEvent::SessionTitleChanged { title: "mine".into() }).unwrap();
+        assert_eq!(mine.lamport, 4);
+        assert_eq!(store.lamport_head(sid).unwrap().map(|h| h.event_id), Some(mine.event_id));
     }
 
     #[test]
@@ -1781,6 +1941,7 @@ mod tests {
         let first = SessionEventEnvelope::new(sid, wid, 2, SessionEvent::SessionTitleChanged { title: "First".into() });
         let mut a_side = SessionEventEnvelope::new(sid, wid, 3, SessionEvent::SessionTitleChanged { title: "Told to A".into() });
         a_side.lamport = 3;
+        let [seed, first, a_side]: [SessionEventEnvelope; 3] = hive_core::testkit::honest_chain(&[seed, first, a_side]).try_into().unwrap();
         let mut b_side = a_side.clone();
         b_side.payload = SessionEvent::SessionTitleChanged { title: "Told to B".into() };
         b_side.clear_raw();
@@ -1825,6 +1986,7 @@ mod tests {
             SessionEventEnvelope::new(sid, wid, 4, SessionEvent::SessionTitleChanged { title: "Second".into() }),
             SessionEventEnvelope::new(sid, wid, 5, SessionEvent::MemberRemoved { member_id: "m1".into(), watermark: Vec::new() }),
         ];
+        let events = hive_core::testkit::honest_chain(&events);
 
         // Device A ingests forward; device B ingests in reverse — so B stores the
         // snapshot LAST (highest row_id). The old row_id-sliced load would have
@@ -2125,17 +2287,15 @@ mod tests {
         let mut placeholder = ChatMessage::new(MessageRole::Assistant, "Hive", "");
         placeholder.is_streaming = true;
         let mid = placeholder.id;
-        store
+        let placeholder = store
             .append(sid, wid, SessionEvent::MessageAppended { message: placeholder })
             .unwrap();
+        // Two chunks streamed concurrently (both after the placeholder): the
+        // completion counts from one of them, which therefore stays.
+        let at = Some(hive_core::CfgFrontier { lamport: placeholder.lamport, event_id: placeholder.event_id });
         for piece in ["He", "llo"] {
-            store
-                .append(
-                    sid,
-                    wid,
-                    SessionEvent::MessageChunkReceived { message_id: mid, chunk: piece.into() },
-                )
-                .unwrap();
+            let chunk = SessionEventEnvelope::new(sid, wid, 9, SessionEvent::MessageChunkReceived { message_id: mid, chunk: piece.into() });
+            store.ingest(&fixture_next(&chunk, at)).unwrap();
         }
         store
             .append(
@@ -2146,7 +2306,7 @@ mod tests {
             .unwrap();
 
         let removed = store.prune_superseded_chunks().unwrap();
-        assert_eq!(removed, 2, "both chunk rows superseded by completed");
+        assert_eq!(removed, 1, "the chunk nothing counts from is superseded by completed; the other is a log head");
         // projection unchanged
         let s = store.load_session(sid).unwrap().unwrap();
         assert_eq!(s.messages.iter().find(|m| m.id == mid).unwrap().body, "Hello");
@@ -2215,4 +2375,35 @@ mod tests {
         assert!(store.purge_foreign_workspaces(&keep, me, Some(&dir.path().join("again"))).unwrap().is_empty());
         assert!(!dir.path().join("again").exists());
     }
+}
+
+/// Tests only: the device id every fixture event is signed by.
+#[cfg(test)]
+pub(crate) const FIXTURE_DEVICE: Uuid = Uuid::from_u128(0x6669_7874_7572_6500_0000_0000_0000_0001);
+
+/// Tests only: `env` as the next event of its log after `log_head`: an
+/// authorless stamp (a `System` actor with an empty id, no account) naming
+/// the head, the lamport one past it (`hive_core::lamport`), signed by the
+/// fixture device (a genuine event is always signed, and an unsigned one
+/// can't carry a stamp past ingest).
+#[cfg(test)]
+pub(crate) fn fixture_next(env: &SessionEventEnvelope, log_head: Option<hive_core::CfgFrontier>) -> SessionEventEnvelope {
+    let mut env = env.clone();
+    env.clear_raw();
+    if env.actor_stamp.is_none() {
+        env.actor_stamp = Some(hive_core::ActorStamp {
+            actor: hive_core::ActorIdentity::new("", "", hive_core::ActorKind::System),
+            recorded_at: hive_core::Timestamp::epoch(),
+            cfg_frontier: None,
+            presence: None,
+            runtime_effect: false,
+            prev: None,
+            sig_alg: Default::default(),
+            log_head: None,
+        });
+    }
+    hive_core::lamport::stamp_next(&mut env, log_head);
+    let kp = hive_core::SigningKeypair::from_seed(&[0x46; 32]).expect("fixture key");
+    hive_core::sign_envelope(&mut env, FIXTURE_DEVICE, &kp);
+    env
 }

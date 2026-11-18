@@ -50,7 +50,7 @@ impl Principal {
     fn sign(&self, ws: Uuid, lamport: u64, payload: SessionEvent) -> SessionEventEnvelope {
         let mut e = SessionEventEnvelope::new(workspace_config_session_id(ws), ws, lamport as i64, payload);
         e.lamport = lamport;
-        e.actor_stamp = Some(ActorStamp { actor: self.actor(), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+        e.actor_stamp = Some(ActorStamp { actor: self.actor(), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
         sign_envelope(&mut e, self.device_id, &self.device);
         if self.present.get() {
             hive_core::testkit::prove_recovery(&mut e, self.account_id, self.device_id, &self.device);
@@ -83,6 +83,29 @@ impl Principal {
     }
 }
 
+/// `events`, written with intended lamports, as the honest history they
+/// describe (`hive_core::testkit::honest_chain`, per log), each re-signed
+/// (and its presence re-proved) by its principal among `ps`.
+fn honest(events: Vec<SessionEventEnvelope>, ps: &[&Principal]) -> Vec<SessionEventEnvelope> {
+    let mut logs: Vec<Uuid> = events.iter().map(|e| e.session_id).collect();
+    logs.sort();
+    logs.dedup();
+    let mut out = Vec::new();
+    for log in logs {
+        let one: Vec<SessionEventEnvelope> = events.iter().filter(|e| e.session_id == log).cloned().collect();
+        for mut e in hive_core::testkit::honest_chain(&one) {
+            let Some(p) = ps.iter().find(|p| Some(p.device_id) == e.signer_device_id) else { continue };
+            if e.actor_stamp.as_ref().is_some_and(|s| s.presence.is_some()) {
+                hive_core::testkit::prove_recovery(&mut e, p.account_id, p.device_id, &p.device);
+            } else {
+                sign_envelope(&mut e, p.device_id, &p.device);
+            }
+            out.push(e);
+        }
+    }
+    out
+}
+
 /// A workspace founded by `owner` with `others` added as Contributors.
 fn workspace(ws: Uuid, owner: &Principal, others: &[&Principal]) -> Vec<SessionEventEnvelope> {
     let mut out = vec![owner.seed(ws, 1)];
@@ -112,6 +135,7 @@ proptest! {
             let (w, o) = if i % 2 == 0 { (w1, &o1) } else { (w2, &o2) };
             all.push(o.content(w, 600 + i as u64));
         }
+        let mut all = honest(all, &[&o1, &o2, &a]);
         let mut rng = seed | 1;
         for i in (1..all.len()).rev() {
             rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17;
@@ -137,7 +161,7 @@ fn roster_ignores_unverified_batch_membership() {
     let stored = workspace(ws, &owner, &[]);
     // Eve signs with her own device but stamps the owner as author.
     let mut forged = eve.sign(ws, 100, SessionEvent::MemberAdded { invite: None, proof: None, member: eve.member(WorkspaceRole::Admin) });
-    forged.actor_stamp = Some(ActorStamp { actor: owner.actor(), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+    forged.actor_stamp = Some(ActorStamp { actor: owner.actor(), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
     forged.clear_raw();
     sign_envelope(&mut forged, eve.device_id, &eve.device);
     let mut batch = eve.trust(ws, 101);
@@ -231,6 +255,7 @@ fn an_ex_members_events_are_refused_at_ingest() {
     let ws = Uuid::new_v4();
     let mut events = workspace(ws, &owner, &[&mara]);
     events.push(owner.sign(ws, 100, SessionEvent::MemberRemoved { member_id: mara.account_id.to_string(), watermark: Vec::new() }));
+    let events = honest(events, &[&owner, &mara]);
     let roster = build_roster(&events);
     assert!(matches!(verdict_for(&roster, &mara.content(ws, 120)), Verdict::Quarantine(QuarantineReason::RevokedDevice)));
     let mut fresh = mara.content(ws, 121);
@@ -259,7 +284,7 @@ proptest! {
         let in_chat = |p: &Principal, l: u64, payload: SessionEvent| {
             let mut e = SessionEventEnvelope::new(sid, ws, l as i64, payload);
             e.lamport = l;
-            e.actor_stamp = Some(ActorStamp { actor: p.actor(), recorded_at: Timestamp::epoch(), cfg_frontier: f, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+            e.actor_stamp = Some(ActorStamp { actor: p.actor(), recorded_at: Timestamp::epoch(), cfg_frontier: f, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
             sign_envelope(&mut e, p.device_id, &p.device);
             e
         };

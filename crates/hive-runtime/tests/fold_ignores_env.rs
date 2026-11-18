@@ -144,17 +144,20 @@ fn fixture() -> (Vec<SessionEventEnvelope>, Vec<SessionEventEnvelope>) {
     let stamp = |f: Option<hive_core::CfgFrontier>| {
         let mut a = ActorIdentity::new(owner.clone(), "o", ActorKind::Human);
         a.account_id = Some(owner_id);
-        Some(ActorStamp { actor: a, recorded_at: Timestamp::epoch(), cfg_frontier: f, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() })
+        Some(ActorStamp { actor: a, recorded_at: Timestamp::epoch(), cfg_frontier: f, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None })
     };
-    let mut lamport = 0u64;
+    let mut n = 0u64;
+    // Each log's newest event: the next one there counts from it.
+    let mut heads: std::collections::HashMap<Uuid, hive_core::CfgFrontier> = std::collections::HashMap::new();
     let mut make = |sid: Uuid, payload: SessionEvent, f: Option<hive_core::CfgFrontier>| {
-        lamport += 1;
-        let mut e = SessionEventEnvelope::new(sid, ws, lamport as i64, payload);
-        e.event_id = Uuid::from_u128(1000 + lamport as u128);
-        e.id = Uuid::from_u128(2000 + lamport as u128);
-        e.lamport = lamport;
+        n += 1;
+        let mut e = SessionEventEnvelope::new(sid, ws, n as i64, payload);
+        e.event_id = Uuid::from_u128(1000 + n as u128);
+        e.id = Uuid::from_u128(2000 + n as u128);
         e.timestamp = Timestamp::epoch();
         e.actor_stamp = stamp(f);
+        hive_core::lamport::stamp_next(&mut e, heads.get(&sid).copied());
+        heads.insert(sid, hive_core::CfgFrontier { lamport: e.lamport, event_id: e.event_id });
         sign_envelope(&mut e, dev_id, &owner_dev);
         e
     };

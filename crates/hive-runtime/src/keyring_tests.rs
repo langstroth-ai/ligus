@@ -136,7 +136,7 @@ impl World {
     }
 
     fn head(&self) -> Option<CfgFrontier> {
-        self.cfg.iter().map(|e| CfgFrontier { lamport: e.lamport, event_id: e.event_id }).max()
+        hive_core::lamport::plausible_keys(&self.cfg).last().copied()
     }
 
     fn draft(&mut self, by: &str, payload: SessionEvent) -> SessionEventEnvelope {
@@ -144,10 +144,10 @@ impl World {
         let p = &self.people[by];
         let mut env =
             SessionEventEnvelope::new(workspace_config_session_id(self.wid), self.wid, self.clock as i64, payload);
-        env.lamport = self.clock;
         let mut actor = ActorIdentity::new(self.aid(by), by, ActorKind::Human);
         actor.account_id = Some(p.account_id);
-        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: self.head(), presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: self.head(), presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
+        hive_core::lamport::stamp_after(&mut env, &self.cfg);
         sign_envelope(&mut env, p.device_id, &p.device);
         if self.present.contains(by) {
             hive_core::testkit::prove_recovery(&mut env, p.account_id, p.device_id, &p.device);
@@ -382,7 +382,9 @@ proptest! {
         // Both stamped with the same frontier; lamports may collide.
         let f = w.head();
         for (env, l, p) in [(&mut ea, lamports.0, "owner"), (&mut eb, lamports.1, "ada")] {
-            env.lamport = base + 1 + l;
+            // Drafted `l` config events ago (an author lagging): lamports may
+            // collide.
+            hive_core::lamport::stamp_back(env, &w.cfg, l as usize);
             env.actor_stamp.as_mut().unwrap().cfg_frontier = f;
             let who = &w.people[p];
             hive_core::testkit::prove_recovery(env, who.account_id, who.device_id, &who.device);
@@ -645,10 +647,10 @@ fn stale_epoch_write_refused_after_frontier() {
         clock += 1;
         let p = &w.people[by];
         let mut env = SessionEventEnvelope::new(sid, wid, clock, payload);
-        env.lamport = clock as u64;
         let mut actor = ActorIdentity::new(w.aid(by), by, ActorKind::Human);
         actor.account_id = Some(p.account_id);
-        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: f, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: f, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
+        hive_core::lamport::stamp_after(&mut env, &log);
         sign_envelope(&mut env, p.device_id, &p.device);
         env.set_sealed_epoch(sealed);
         let id = env.event_id;

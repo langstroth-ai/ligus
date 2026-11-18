@@ -623,7 +623,7 @@ mod tests {
         spoofed.actor_stamp = Some(crate::identity::ActorStamp {
             actor: crate::identity::ActorIdentity::new("mallory", "Mallory", crate::identity::ActorKind::Human),
             recorded_at: crate::time_util::Timestamp::epoch(), cfg_frontier: None,
-            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
         assert!(verify_envelope(&spoofed, &kp.public_key_bytes()).is_err());
 
         // wrong key -> fails

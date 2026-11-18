@@ -477,7 +477,7 @@ mod tests {
                     contact: None,
                 },
                 recorded_at: Timestamp::epoch(), cfg_frontier: None,
-                presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+                presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
             hive_core::sign_envelope(&mut e, device_id, &device);
             e
         };

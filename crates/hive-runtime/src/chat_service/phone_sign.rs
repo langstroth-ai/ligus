@@ -96,15 +96,20 @@ impl ChatService {
         let actor = self.phone_person(workspace_id, phone)?;
         let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
         let mut env = SessionEventEnvelope::new(session_id, workspace_id, self.store.max_sequence(session_id)?.unwrap_or(0) + 1, payload);
-        env.lamport = self.store.max_lamport(session_id)?.saturating_add(1);
+        // One past the newest event of the log this box holds, named as the
+        // stamp's `log_head` (`hive_core::lamport`): the phone signs a lamport
+        // every fold can account for.
+        let log_head = self.store.lamport_head(session_id)?;
+        env.lamport = hive_core::lamport::next(log_head);
         env.actor_stamp = Some(ActorStamp {
             actor,
             recorded_at: Timestamp::now(),
             cfg_frontier: timeline.head(),
             presence: None,
             runtime_effect: false,
-            prev: self.store.last_signed_by(session_id, phone)?,
+            prev: self.store.last_signed_by(session_id, phone, env.lamport)?,
             sig_alg: SigAlg::P256,
+            log_head,
         });
         let request = self.presence_request(&env)?;
         Ok(PhoneDraft { env, request })
@@ -223,7 +228,7 @@ impl ChatService {
         if self.store.has_event(env.event_id)? {
             return Err(ChatError::Unauthorized("already committed".into()));
         }
-        if env.actor_stamp.as_ref().and_then(|s| s.prev) != self.store.last_signed_by(env.session_id, phone)? {
+        if env.actor_stamp.as_ref().and_then(|s| s.prev) != self.store.last_signed_by(env.session_id, phone, u64::MAX)? {
             return Err(ChatError::Unauthorized(STALE_DRAFT.into()));
         }
         env.signer_device_id = Some(phone);

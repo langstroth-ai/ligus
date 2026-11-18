@@ -289,7 +289,10 @@ fn a_closure_sorting_before_the_redemption_it_names_admits_no_one() {
     issue(&mut w, Uuid::new_v4(), Admission::service(now_ms() + HOUR_MS, None, key().public()));
     let ok = redeem(&mut w, "box", id);
     let mut env = w.draft("adm", None, SessionEvent::AdmissionClosed { invite: id, redeemed: Some(ok) }, None);
-    env.lamport = lamport_of(&w, issued) + 1;
+    // Backdated as far as the lamport rule allows: naming the issue as its
+    // head (and no chain link newer than that).
+    hive_core::lamport::stamp_next(&mut env, Some(hive_core::CfgFrontier { lamport: lamport_of(&w, issued), event_id: issued }));
+    env.actor_stamp.as_mut().unwrap().prev = None;
     w.finish(&mut env, "adm", None);
     w.push_env(None, env);
     assert_eq!(w.verdict(ok), Verdict::Denied);

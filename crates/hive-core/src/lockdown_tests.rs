@@ -3,7 +3,8 @@
 
 use uuid::Uuid;
 
-use crate::events::{project, SessionEvent};
+use crate::events::SessionEvent;
+use crate::testkit::project_honest as project;
 use crate::guard::{human_gate_reason, ChatLockdown, LockdownSignal};
 use crate::identity::{ActorIdentity, ActorKind, WorkspaceMember, WorkspaceRole};
 use crate::lease_projection_tests::{base, ev, seed};

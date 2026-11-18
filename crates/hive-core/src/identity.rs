@@ -164,6 +164,12 @@ pub struct ActorStamp {
     /// phone's Secure Enclave key. Inside the preimage. Left out for Ed25519.
     #[serde(default, skip_serializing_if = "crate::crypto::SigAlg::is_ed25519")]
     pub sig_alg: crate::crypto::SigAlg,
+    /// The newest event of this log the author held when signing (its
+    /// canonical key): the event's lamport is exactly one past it
+    /// ([`crate::lamport`]). Left out on the first event an author writes
+    /// on a log (lamport 1). Signed (inside the stamp).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_head: Option<CfgFrontier>,
 }
 
 /// A position on a workspace-config log: the canonical key `(lamport,

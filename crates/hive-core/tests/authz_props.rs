@@ -134,6 +134,8 @@ impl World {
         if let Some(s) = env.actor_stamp.as_mut() {
             s.prev = prev;
         }
+        // Its lamport counts from the newest event of its log.
+        hive_core::lamport::stamp_after(env, log);
     }
 
     /// Re-seal an event a test changed after writing it (its presence and
@@ -161,11 +163,12 @@ impl World {
     fn stamp(by: &str, frontier: Option<CfgFrontier>) -> Option<ActorStamp> {
         let mut actor = ActorIdentity::new(by, by, ActorKind::Human);
         actor.account_id = Some(account(by));
-        Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: frontier, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() })
+        Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: frontier, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None })
     }
 
+    /// The newest config position an honest author can name.
     fn head(&self) -> Option<CfgFrontier> {
-        self.cfg.iter().map(|e| CfgFrontier { lamport: e.lamport, event_id: e.event_id }).max()
+        hive_core::lamport::plausible_keys(&self.cfg).last().copied()
     }
 
     /// A chat event by `by` at the head, without presence.
@@ -229,9 +232,17 @@ impl World {
     fn cfg_at(&mut self, by: &str, e: SessionEvent, back: u64) -> Uuid {
         self.clock += 1;
         let mut env = SessionEventEnvelope::new(workspace_config_session_id(self.wid), self.wid, self.clock as i64, e);
-        env.lamport = self.clock.saturating_sub(back).max(2);
         env.actor_stamp = Self::stamp(by, self.head());
         self.chain(&mut env, by);
+        // Drafted `back` events ago (but after the seed).
+        let back = (back as usize).min(self.cfg.len().saturating_sub(1));
+        hive_core::lamport::stamp_back(&mut env, &self.cfg, back);
+        // Its chain link is an event older than the head it names.
+        let device = device_of(by).0;
+        let prev = self.cfg.iter().filter(|e| e.signer_device_id == Some(device) && e.lamport < env.lamport).max_by_key(|e| e.canonical_key()).map(|e| e.event_id);
+        if let Some(s) = env.actor_stamp.as_mut() {
+            s.prev = prev;
+        }
         self.seal(&mut env, by, true);
         let id = env.event_id;
         self.cfg.push(env);
@@ -391,9 +402,7 @@ fn play(w: &mut World, ops: &[Op], declared: &dyn Fn(u8) -> WorkspaceRole, statu
             Op::Stale { by, prop, back } => {
                 // A frontier `back` config events old (an author lagging, or
                 // claiming to).
-                let mut keys: Vec<CfgFrontier> =
-                    w.cfg.iter().map(|e| CfgFrontier { lamport: e.lamport, event_id: e.event_id }).collect();
-                keys.sort();
+                let keys = hive_core::lamport::plausible_keys(&w.cfg);
                 let f = keys[keys.len().saturating_sub(1 + back as usize)];
                 let pid = Uuid::from_u128(PROPS[prop as usize]);
                 let by = PEOPLE[by as usize];
@@ -436,8 +445,7 @@ fn play(w: &mut World, ops: &[Op], declared: &dyn Fn(u8) -> WorkspaceRole, statu
 impl World {
     /// The config position `back` events before the head.
     fn back(&self, back: u8) -> CfgFrontier {
-        let mut keys: Vec<CfgFrontier> = self.cfg.iter().map(|e| CfgFrontier { lamport: e.lamport, event_id: e.event_id }).collect();
-        keys.sort();
+        let keys = hive_core::lamport::plausible_keys(&self.cfg);
         keys[keys.len().saturating_sub(1 + back as usize)]
     }
 }
@@ -939,10 +947,11 @@ proptest! {
         let cut_id = w.push("founder", cut);
         prop_assert_eq!(w.verdict(cut_id), Verdict::Allowed);
         if backdate {
-            // Written after the cut, sorting just below it.
-            let lamport = w.cfg.iter().find(|e| e.event_id == cut_id).unwrap().lamport - 1;
+            // Written after the cut, sorting just below it (naming the
+            // config head from before the rules set: a plausible backdate).
             let mut env = w.draft("cara", None, raise(2), None);
-            env.lamport = lamport;
+            hive_core::lamport::stamp_back(&mut env, &w.cfg, 2);
+            prop_assert!(env.lamport < w.cfg.iter().find(|e| e.event_id == cut_id).unwrap().lamport);
             env.clear_raw();
             w.finish(&mut env, "cara", None);
             w.push_env(None, env);
@@ -1284,8 +1293,8 @@ impl World {
         let env = self.chat.iter_mut().find(|x| x.event_id == id).unwrap();
         let mut actor = ActorIdentity::new(a.agent_id.to_string(), "coder", ActorKind::Agent);
         actor.device_id = Some(a.key_id);
-        let f = env.actor_stamp.as_ref().unwrap().cfg_frontier;
-        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: f, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+        let (f, h) = env.actor_stamp.as_ref().map(|s| (s.cfg_frontier, s.log_head)).unwrap();
+        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: f, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: h });
         env.signer_device_id = Some(a.key_id);
         id
     }
@@ -1382,7 +1391,8 @@ fn agent_tier_cannot_emit_admin_events() {
         let env = w.cfg.iter_mut().find(|x| x.event_id == id).unwrap();
         let mut actor = ActorIdentity::new(a.agent_id.to_string(), "coder", ActorKind::Agent);
         actor.device_id = Some(a.key_id);
-        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+        let h = env.actor_stamp.as_ref().and_then(|s| s.log_head);
+        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: h });
         env.signer_device_id = Some(a.key_id);
         assert_eq!(w.verdicts()[&id], Verdict::Denied);
     }
@@ -1391,7 +1401,8 @@ fn agent_tier_cannot_emit_admin_events() {
     let env = w.cfg.iter_mut().find(|x| x.event_id == id).unwrap();
     let mut actor = ActorIdentity::new(a.agent_id.to_string(), "coder", ActorKind::Agent);
     actor.device_id = Some(a.key_id);
-    env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+    let h = env.actor_stamp.as_ref().and_then(|s| s.log_head);
+    env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: h });
     env.signer_device_id = Some(a.key_id);
     assert_eq!(w.verdicts()[&id], Verdict::Allowed);
 }
@@ -1920,13 +1931,14 @@ fn a_watermark_covers_only_the_chain_it_names() {
 #[test]
 fn a_removed_admins_backdated_config_event_is_denied() {
     let mut w = World::new();
-    let removal_at = w.clock;
     w.cfg_push("owner", SessionEvent::MemberRemoved { member_id: "ada".into(), watermark: Vec::new() });
-    // Ada adds a confederate with a lamport before her removal.
+    // Ada adds a confederate with a lamport before her removal (naming the
+    // config head before it: a plausible backdate).
     let id = w.cfg_push("ada", SessionEvent::MemberAdded { invite: None, proof: None, member: member("eve", WorkspaceRole::Admin) });
     {
+        let log: Vec<SessionEventEnvelope> = w.cfg.iter().filter(|e| e.event_id != id).cloned().collect();
         let env = w.cfg.iter_mut().find(|e| e.event_id == id).unwrap();
-        env.lamport = removal_at;
+        hive_core::lamport::stamp_back(env, &log, 1);
     }
     w.reseal(id);
     assert_eq!(w.verdicts()[&id], Verdict::Denied);
@@ -2039,7 +2051,7 @@ fn gw_runtime_at(rt: &hive_core::WorkspaceRuntime) -> hive_core::WorkspaceRuntim
 /// The roster just before the config position `key` (after the newest
 /// config event sorting before it).
 fn roster_before(w: &World, t: &ConfigTimeline, key: (u64, Uuid)) -> hive_core::authz::RosterState {
-    let prev = w.cfg.iter().map(|e| e.canonical_key()).filter(|k| *k < key).max().expect("a cut follows the seed");
+    let prev = w.cfg.iter().filter(|e| t.holds(e.event_id)).map(|e| e.canonical_key()).filter(|k| *k < key).max().expect("a cut follows the seed");
     t.at(CfgFrontier { lamport: prev.0, event_id: prev.1 }).expect("the cut's predecessor is held").clone()
 }
 
@@ -2121,3 +2133,4 @@ fn a_counter_cut_after_a_founders_promotion_is_not_mutual() {
         assert_eq!(cuts_go_down_the_ranks(&w, &t), Ok(()));
     }
 }
+

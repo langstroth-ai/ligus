@@ -264,10 +264,12 @@ impl ChatService {
             .unwrap_or_default();
         let next_seq = self.store.max_sequence(session_id)?.unwrap_or(0) + 1;
         let mut env = SessionEventEnvelope::new(session_id, workspace_id, next_seq, payload);
-        env.lamport = self.store.max_lamport(session_id)?.saturating_add(1);
+        // Lamport bounds: one past the newest event of the log held here.
+        let log_head = self.store.lamport_head(session_id)?;
+        env.lamport = hive_core::lamport::next(log_head);
         let mut actor = ActorIdentity::new(agent_id.to_string(), name, hive_core::ActorKind::Agent);
         actor.device_id = Some(key_id);
-        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::now(), cfg_frontier: timeline.head(), presence: None, runtime_effect: false, prev: self.store.last_signed_by(session_id, key_id)?, sig_alg: Default::default() });
+        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::now(), cfg_frontier: timeline.head(), presence: None, runtime_effect: false, prev: self.store.last_signed_by(session_id, key_id, env.lamport)?, sig_alg: Default::default(), log_head });
         sign_envelope(&mut env, key_id, &kp);
         self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
         self.store.append_envelope(&env)?;
@@ -726,12 +728,14 @@ impl ChatService {
     pub(crate) fn draft_signed(&mut self, session_id: Uuid, workspace_id: Uuid, payload: SessionEvent) -> Result<SessionEventEnvelope> {
         let next_seq = self.store.max_sequence(session_id)?.unwrap_or(0) + 1;
         let mut env = SessionEventEnvelope::new(session_id, workspace_id, next_seq, payload);
-        // Causal Lamport clock: strictly greater than every event this device has
-        // seen for the session (locally authored or ingested from a peer), so the
-        // canonical fold order (lamport, event_id) respects causality — a reply
-        // never sorts before the message it answers. `new` seeded lamport from the
-        // local sequence; override it with the causal value before signing.
-        env.lamport = self.store.max_lamport(session_id)?.saturating_add(1);
+        // Causal Lamport clock: one past the newest event of the log this device
+        // holds (locally authored or ingested from a peer), whose lamport is
+        // within bounds, named in the stamp as `log_head` (`hive_core::lamport`):
+        // the canonical fold order (lamport, event_id) respects causality — a
+        // reply never sorts before the message it answers — and every fold can
+        // check the lamport against the head it names.
+        let log_head = self.store.lamport_head(session_id)?;
+        env.lamport = hive_core::lamport::next(log_head);
         // The config frontier this device has folded: chat events that need the
         // workspace roster are judged at it, on every device (Phase 0 A2).
         let (_, timeline) = self.store.load_config(workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
@@ -739,7 +743,7 @@ impl ChatService {
             actor: self.author.clone(),
             recorded_at: Timestamp::now(),
             cfg_frontier: timeline.head(),
-            presence: None, runtime_effect: self.runtime_effect, prev: self.store.last_signed_by(session_id, self.device_id)?, sig_alg: Default::default() });
+            presence: None, runtime_effect: self.runtime_effect, prev: self.store.last_signed_by(session_id, self.device_id, env.lamport)?, sig_alg: Default::default(), log_head });
         // Signed first, so the fold's own signature checks (key events)
         // judge exactly what peers will receive.
         sign_envelope(&mut env, self.device_id, &self.keypair);
@@ -3749,28 +3753,31 @@ mod tests {
     }
 
     #[test]
-    fn authoring_uses_a_causal_lamport_clock() {
+    fn authoring_counts_from_the_newest_event_within_bounds() {
         let (mut svc, pk) = service();
         let chat = svc.create_chat("Demo", Uuid::nil(), "anthropic").unwrap();
         let (sid, wid) = (chat.id, chat.workspace_id);
 
-        // A peer's event arrives with a far-ahead Lamport clock.
-        let mut foreign = SessionEventEnvelope::new(
-            sid,
-            wid,
-            1,
-            SessionEvent::SessionTitleChanged { title: "from peer".into() },
-        );
-        foreign.lamport = 500;
-        assert!(svc.store.ingest(&foreign).unwrap());
+        // A peer's event that counts from the newest one here (a lamport
+        // within bounds): the next event authored here sorts after it.
+        let head = svc.store.lamport_head(sid).unwrap();
+        let mut peer = SessionEventEnvelope::new(sid, wid, 1, SessionEvent::SessionTitleChanged { title: "from peer".into() });
+        peer.actor_stamp = Some(ActorStamp { actor: svc.author().clone(), recorded_at: Timestamp::now(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
+        hive_core::lamport::stamp_next(&mut peer, head);
+        assert!(svc.store.ingest(&peer).unwrap());
+        // One with a far-ahead clock nothing accounts for moves nothing.
+        let mut ahead = SessionEventEnvelope::new(sid, wid, 1, SessionEvent::SessionTitleChanged { title: "ahead".into() });
+        ahead.lamport = u64::MAX - 1;
+        assert!(svc.store.ingest(&ahead).unwrap());
 
-        // The next locally-authored event is causally after everything seen (>500),
-        // not just the local authoring count — and is signed with the v2 preimage.
         let env = svc
             .append_signed(sid, wid, SessionEvent::SessionTitleChanged { title: "local".into() })
             .unwrap();
-        assert!(env.lamport > 500, "authored lamport {} not causal", env.lamport);
+        let stamp = env.actor_stamp.as_ref().unwrap();
+        assert_eq!(stamp.log_head.map(|h| h.event_id), Some(peer.event_id), "counts from the peer's event");
+        assert_eq!(env.lamport, peer.lamport + 1, "one past it, not past the far-ahead clock");
         assert!(verify_envelope(&env, &pk).is_ok());
+        assert_eq!(svc.load(sid).unwrap().unwrap().title, "local", "the far-ahead event sorts nowhere");
     }
 
     #[test]
@@ -4288,8 +4295,9 @@ mod tests {
         let inject = |con: &mut ChatService, payload: SessionEvent| {
             let seq = con.store.max_sequence(chat_id).unwrap().unwrap_or(0) + 1;
             let mut env = SessionEventEnvelope::new(chat_id, wid, seq, payload);
-            env.lamport = con.store.max_lamport(chat_id).unwrap() + 1;
-            env.actor_stamp = Some(ActorStamp { actor: con.author.clone(), recorded_at: Timestamp::now(), cfg_frontier: frontier, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+            let log_head = con.store.lamport_head(chat_id).unwrap();
+            env.lamport = hive_core::lamport::next(log_head);
+            env.actor_stamp = Some(ActorStamp { actor: con.author.clone(), recorded_at: Timestamp::now(), cfg_frontier: frontier, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head });
             con.store.ingest(&env).unwrap();
         };
         inject(&mut con, rewrite);
@@ -4555,13 +4563,14 @@ mod tests {
         let id = msg.id;
         let seq = con.store.max_sequence(chat).unwrap().unwrap_or(0) + 1;
         let mut env = SessionEventEnvelope::new(chat, w2, seq, SessionEvent::MessageAppended { message: msg });
-        env.lamport = con.store.max_lamport(chat).unwrap() + 1;
+        let log_head = con.store.lamport_head(chat).unwrap();
+        env.lamport = hive_core::lamport::next(log_head);
         env.actor_stamp = Some(ActorStamp {
             actor: con.author.clone(),
             recorded_at: Timestamp::now(),
             cfg_frontier: timeline.head(),
             presence: None,
-            runtime_effect: false, prev: None, sig_alg: Default::default() });
+            runtime_effect: false, prev: None, sig_alg: Default::default(), log_head });
         hive_core::sign_envelope(&mut env, con.device_id, &con.keypair);
         con.store.ingest(&env).unwrap();
         assert_eq!(host.trigger_author_role(chat, id).unwrap(), None);
@@ -5209,13 +5218,13 @@ mod tests {
             proposal_id: pid,
             approval: ProposalApproval { actor_id: "u1".into(), role: WorkspaceRole::Owner, approved: false, created_at: Timestamp::now(), diff_digest: None },
         };
-        peer.lamport = 1_000;
         peer.actor_stamp = Some(ActorStamp {
             actor: svc.author().clone(),
             recorded_at: Timestamp::now(),
             cfg_frontier: Some(hive_core::CfgFrontier { lamport: 500, event_id: Uuid::new_v4() }),
-            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default()
+            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None
         });
+        hive_core::lamport::stamp_next(&mut peer, svc.store().lamport_head(sid).unwrap());
         svc.store().append_envelope(&peer).unwrap();
         let s = svc.load(sid).unwrap().unwrap();
         assert!(s.authz.blocks(pid, None));

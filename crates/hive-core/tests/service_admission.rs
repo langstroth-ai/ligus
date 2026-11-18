@@ -392,7 +392,13 @@ fn redeem_with(w: &mut SignedWorld, name: &str, id: Uuid, k: &RedeemKey, lamport
     let proof = k.prove(w.wid, id, name, w.people[name].device_id);
     let mut env = w.draft(name, None, SessionEvent::MemberAdded { member: m, invite: Some(id), proof: Some(proof) }, None);
     if let Some(l) = lamport {
-        env.lamport = l;
+        // Backdated to `l`: naming the newest event at `l - 1` as its head
+        // (and a chain link older than that), as the lamport rule allows.
+        let head = hive_core::lamport::plausible_keys(&w.cfg).into_iter().filter(|k| k.lamport == l - 1).max();
+        hive_core::lamport::stamp_next(&mut env, head);
+        let device = w.people[name].device_id;
+        let prev = w.cfg.iter().filter(|e| e.signer_device_id == Some(device) && e.lamport < l).max_by_key(|e| e.canonical_key()).map(|e| e.event_id);
+        env.actor_stamp.as_mut().unwrap().prev = prev;
     }
     if let Some(ms) = when {
         env.timestamp = at_ms(ms);

@@ -84,7 +84,7 @@ fn inputs() -> Vec<(&'static str, SessionEventEnvelope)> {
                 presence: None,
                 runtime_effect: false,
                 prev: None,
-                sig_alg: SigAlg::P256,
+                sig_alg: SigAlg::P256, log_head: None,
             });
             e.signer_device_id = Some(phone);
             (label, e)

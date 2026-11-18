@@ -747,6 +747,12 @@ impl SyncEngine {
             match gate_ingest(self.identity_mode(), base, signer_account, account_key, &identity) {
                 IngestAction::Quarantine(reason) => {
                     tracing::warn!(?reason, event_id = %env.event_id, "quarantined a fetched event");
+                    // A revoked device's genuine event: another member may
+                    // have held it (before the revocation reached them) and
+                    // counted from it; keep it as a lamport witness.
+                    if reason == crate::envelope_verifier::QuarantineReason::RevokedDevice && genuine(roster, env) {
+                        store.note_lamport_witness(env)?;
+                    }
                     let _ = store.record_signal(env.workspace_id, None, &sync_decision(roster, env, false, &format!("{reason:?}")));
                     // Provably bad and stable — advance past it (re-fetching won't help).
                     resolved.push(*seq);
@@ -764,6 +770,8 @@ impl SyncEngine {
                     // longer (or not yet) a member: a removed member writing
                     // with the key they kept. Refused for good.
                     tracing::warn!(event_id = %env.event_id, "refused an event sealed under an old key by a non-member");
+                    // Verified, only refused: a lamport witness (see above).
+                    store.note_lamport_witness(env)?;
                     let _ = store.record_signal(env.workspace_id, None, &sync_decision(roster, env, false, "stale_epoch_non_member"));
                     resolved.push(*seq);
                 }
@@ -930,6 +938,15 @@ fn sync_decision(
     }
 }
 
+/// Whether `env` verifies against its signing device's key in `roster`
+/// (revoked or not): a genuine event, not a forgery naming that device.
+fn genuine(roster: &crate::envelope_verifier::WorkspaceRoster, env: &SessionEventEnvelope) -> bool {
+    use crate::envelope_verifier::DeviceKeyResolver;
+    env.signer_device_id
+        .and_then(|d| roster.public_key(d))
+        .is_some_and(|k| hive_core::verify_envelope(env, k).is_ok())
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -973,7 +990,7 @@ mod tests {
             1,
             SessionEvent::SessionSnapshot { session: Box::new(session) },
         );
-        store.ingest(&snap).unwrap();
+        store.ingest_next(&snap).unwrap();
         (sid, wid)
     }
 
@@ -982,10 +999,10 @@ mod tests {
         let session = ChatSession::new("Chat", wid, "anthropic");
         let sid = session.id;
         store
-            .ingest(&SessionEventEnvelope::new(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(session) }))
+            .ingest_next(&SessionEventEnvelope::new(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(session) }))
             .unwrap();
         store
-            .ingest(&SessionEventEnvelope::new(
+            .ingest_next(&SessionEventEnvelope::new(
                 sid,
                 wid,
                 2,
@@ -1069,7 +1086,7 @@ mod tests {
                 message: ChatMessage::new(MessageRole::User, "A", "hello from A"),
             },
         );
-        store_a.ingest(&msg).unwrap();
+        store_a.ingest_next(&msg).unwrap();
 
         // A pushes; B pulls into an empty store. E2EE is mandatory for relay
         // sync, so both carry the shared workspace key.
@@ -1101,7 +1118,7 @@ mod tests {
         let mut store_a = EventStore::open_in_memory().unwrap();
         let (sid, wid) = seed_chat(&mut store_a);
         store_a
-            .ingest(&SessionEventEnvelope::new(
+            .ingest_next(&SessionEventEnvelope::new(
                 sid,
                 wid,
                 2,
@@ -1246,7 +1263,7 @@ mod tests {
         let mut store_a = EventStore::open_in_memory().unwrap();
         let (sid, wid) = seed_chat(&mut store_a);
         store_a
-            .ingest(&SessionEventEnvelope::new(
+            .ingest_next(&SessionEventEnvelope::new(
                 sid,
                 wid,
                 2,
@@ -1443,7 +1460,7 @@ mod tests {
             actor: member.actor.clone(),
             recorded_at: hive_core::Timestamp::epoch(),
             cfg_frontier: None,
-            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
         hive_core::sign_envelope(&mut e, device_id, device);
         e
     }
@@ -1505,7 +1522,7 @@ mod tests {
                     contact: None,
                 },
                 recorded_at: Timestamp::epoch(), cfg_frontier: None,
-                presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+                presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
             hive_core::sign_envelope(&mut e, device_id, &device);
             e
         };
@@ -1527,7 +1544,7 @@ mod tests {
                     account_id,
                     signing_public_key: account.public_key_bytes().to_vec(),
                 });
-                e.actor_stamp = Some(ActorStamp { actor: member.actor.clone(), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+                e.actor_stamp = Some(ActorStamp { actor: member.actor.clone(), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
                 hive_core::sign_envelope(&mut e, device_id, &device);
                 e
             },
@@ -1565,7 +1582,7 @@ mod tests {
         assert_eq!(sync_a.push_new(&store_a).await.unwrap(), 1); // snapshot @ epoch 0
 
         store_a
-            .ingest(&SessionEventEnvelope::new(
+            .ingest_next(&SessionEventEnvelope::new(
                 sid,
                 wid,
                 2,
@@ -1608,7 +1625,7 @@ mod tests {
         let mut store_a = EventStore::open_in_memory().unwrap();
         let (sid, wid) = seed_chat(&mut store_a);
         store_a
-            .ingest(&SessionEventEnvelope::new(
+            .ingest_next(&SessionEventEnvelope::new(
                 sid,
                 wid,
                 2,
@@ -1647,7 +1664,7 @@ mod tests {
         let mut store = EventStore::open_in_memory().unwrap();
         let (sid, wid) = seed_chat(&mut store);
         store
-            .ingest(&SessionEventEnvelope::new(
+            .ingest_next(&SessionEventEnvelope::new(
                 sid,
                 wid,
                 2,
@@ -1758,7 +1775,7 @@ mod tests {
                 message: ChatMessage::new(MessageRole::Assistant, "B", "reply from B"),
             },
         );
-        store_b.ingest(&reply).unwrap();
+        store_b.ingest_next(&reply).unwrap();
         sync_b.sync_once(&mut store_b).await.unwrap();
 
         // A pulls B's reply.
@@ -1823,7 +1840,7 @@ mod tests {
                 actor: member.actor.clone(),
                 recorded_at: Timestamp::epoch(),
                 cfg_frontier: None,
-                presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+                presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
             hive_core::sign_envelope(&mut e, device_id, &device);
             e
         };
@@ -1869,7 +1886,7 @@ mod tests {
                 contact: None,
             },
             recorded_at: Timestamp::epoch(), cfg_frontier: None,
-            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
+            presence: None, runtime_effect: false, prev: None, sig_alg: Default::default(), log_head: None });
         hive_core::sign_envelope(&mut e, p.device_id, &p.device_kp);
         e
     }
@@ -2074,7 +2091,7 @@ mod tests {
         let (sid, wid) = seed_chat(store);
         for i in 0..n {
             store
-                .ingest(&SessionEventEnvelope::new(
+                .ingest_next(&SessionEventEnvelope::new(
                     sid,
                     wid,
                     2 + i as i64,

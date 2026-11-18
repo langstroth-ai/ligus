@@ -197,7 +197,8 @@ impl ChatService {
             r?;
             // Sort after the registration, at the new head.
             env.sequence = self.store.max_sequence(env.session_id)?.unwrap_or(0) + 1;
-            env.lamport = self.store.max_lamport(env.session_id)?.saturating_add(1);
+            let log_head = self.store.lamport_head(env.session_id)?;
+            hive_core::lamport::stamp_next(env, log_head);
             let (_, timeline) = self.store.load_config(wid, self.trusted_founder.as_deref(), self.local_workspace_id)?;
             if let Some(s) = env.actor_stamp.as_mut() {
                 s.cfg_frontier = timeline.head();

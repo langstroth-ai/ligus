@@ -190,6 +190,7 @@ fn a_reserved_prev_id_is_not_a_covered_slot_after_removal() {
     w.admit("owner", "con", WorkspaceRole::Contributor);
     let chat = w.chat("owner", "c");
     let old_frontier = w.head();
+    w.say(chat, "owner", SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "owner", "first") });
     // Con's post names a reserved, never-published prev.
     let reserved = Uuid::new_v4();
     let mut env = w.draft("con", Some(chat), SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "con", "hi") }, None);
@@ -203,6 +204,10 @@ fn a_reserved_prev_id_is_not_a_covered_slot_after_removal() {
     let mut late = w.draft("con", Some(chat), SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "con", "after removal") }, old_frontier);
     late.event_id = reserved;
     late.actor_stamp.as_mut().unwrap().prev = None;
+    // Backdated on the chat too (right after its seed), so the post naming
+    // it as its chain link still counts from an older event.
+    let seed = w.chats[&chat][0].clone();
+    hive_core::lamport::stamp_next(&mut late, Some(hive_core::CfgFrontier { lamport: seed.lamport, event_id: seed.event_id }));
     w.finish(&mut late, "con", None);
     let late = w.push_env(Some(chat), late);
     let v = w.verdicts();

@@ -68,7 +68,8 @@ impl Person {
 #[derive(Clone)]
 pub struct SignedWorld {
     pub wid: Uuid,
-    /// One lamport clock for every log, so a later write sorts later.
+    /// How many events were drafted (every log's lamport counts from its own
+    /// newest event, see [`crate::lamport`]).
     pub clock: u64,
     pub cfg: Vec<SessionEventEnvelope>,
     pub chats: BTreeMap<Uuid, Vec<SessionEventEnvelope>>,
@@ -142,7 +143,7 @@ impl SignedWorld {
 
     /// The newest config event: the frontier an honest author stamps.
     pub fn head(&self) -> Option<CfgFrontier> {
-        self.cfg.iter().map(|e| CfgFrontier { lamport: e.lamport, event_id: e.event_id }).max()
+        crate::lamport::plausible_keys(&self.cfg).last().copied()
     }
 
     /// Draft an envelope by `by` on `chat` (`None` = the config log), stamped
@@ -152,7 +153,6 @@ impl SignedWorld {
         self.clock += 1;
         let sid = chat.unwrap_or_else(|| workspace_config_session_id(self.wid));
         let mut env = SessionEventEnvelope::new(sid, self.wid, self.clock as i64, payload);
-        env.lamport = self.clock;
         let p = &self.people[by];
         let mut actor = p.actor();
         actor.kind = self.kinds.get(by).copied().unwrap_or(ActorKind::Human);
@@ -165,7 +165,9 @@ impl SignedWorld {
             Some(c) => self.chats.get(&c).map(Vec::as_slice).unwrap_or(&[]),
         };
         let prev = log.iter().rev().find(|e| e.signer_device_id == Some(p.device_id)).map(|e| e.event_id);
-        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier, presence: None, runtime_effect: false, prev, sig_alg: Default::default() });
+        env.actor_stamp = Some(ActorStamp { actor, recorded_at: Timestamp::epoch(), cfg_frontier, presence: None, runtime_effect: false, prev, sig_alg: Default::default(), log_head: None });
+        // Its lamport counts from the newest event of its own log.
+        crate::lamport::stamp_after(&mut env, log);
         sign_envelope(&mut env, p.device_id, &p.device);
         env
     }
@@ -345,4 +347,52 @@ impl SignedWorld {
         crate::crypto::sign_envelope_p256(&mut env, phone.device_id, &phone.key);
         self.push_env(chat, env)
     }
+}
+
+/// A fixture written with intended lamports (`1, 2, 2, 5`…), restamped as an
+/// honest history (see [`crate::lamport`]): events keep their relative order
+/// (equal intended lamports stay concurrent), each names the newest event of
+/// the level before it as its `log_head`, and its lamport is one past that.
+/// An unstamped event gets a stamp with no author (a `System` actor with an
+/// empty id: the fold sees no author either way). For unsigned fixtures
+/// only: a signature would no longer match.
+pub fn honest_chain(envelopes: &[SessionEventEnvelope]) -> Vec<SessionEventEnvelope> {
+    let mut levels: Vec<u64> = envelopes.iter().map(|e| e.lamport).collect();
+    levels.sort_unstable();
+    levels.dedup();
+    let mut out: Vec<SessionEventEnvelope> = envelopes.to_vec();
+    // The newest restamped event of each level, by level index.
+    let mut newest: Vec<Option<CfgFrontier>> = vec![None; levels.len()];
+    let mut idx: Vec<usize> = (0..out.len()).collect();
+    idx.sort_by_key(|&i| (out[i].lamport, out[i].event_id));
+    for i in idx {
+        let level = levels.binary_search(&out[i].lamport).unwrap();
+        let head = if level == 0 { None } else { newest[level - 1] };
+        let e = &mut out[i];
+        e.clear_raw();
+        if e.actor_stamp.is_none() {
+            e.actor_stamp = Some(ActorStamp {
+                actor: ActorIdentity::new("", "", ActorKind::System),
+                recorded_at: Timestamp::epoch(),
+                cfg_frontier: None,
+                presence: None,
+                runtime_effect: false,
+                prev: None,
+                sig_alg: Default::default(),
+                log_head: None,
+            });
+        }
+        crate::lamport::stamp_next(e, head);
+        let key = CfgFrontier { lamport: e.lamport, event_id: e.event_id };
+        if newest[level].is_none_or(|n| key > n) {
+            newest[level] = Some(key);
+        }
+    }
+    out
+}
+
+/// [`crate::events::project`] over [`honest_chain`] of a fixture written
+/// with intended lamports.
+pub fn project_honest(envelopes: &[SessionEventEnvelope]) -> Option<ChatSession> {
+    crate::events::project(&honest_chain(envelopes))
 }

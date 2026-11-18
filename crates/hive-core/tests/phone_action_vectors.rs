@@ -159,7 +159,7 @@ fn draft(i: &Ids, a: &PhoneAction, n: u128, ev: SessionEvent) -> SessionEventEnv
         presence: None,
         runtime_effect: false,
         prev: Some(u(0x301)),
-        sig_alg: SigAlg::P256,
+        sig_alg: SigAlg::P256, log_head: None,
     });
     e
 }

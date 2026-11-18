@@ -2,8 +2,9 @@
 //! wire compatibility with older peers, and convergence regardless of arrival.
 
 use hive_core::proposal_sets::{CheckOutcome, PreflightReport, ProposalSet, ScoutAssessment, SetPhase, StopReason};
+use hive_core::testkit::project_honest as project;
 use hive_core::{
-    project, ActionProposal, ChatSession, ProposalApproval, ProposalKind, SessionEvent, SessionEventEnvelope,
+    ActionProposal, ChatSession, ProposalApproval, ProposalKind, SessionEvent, SessionEventEnvelope,
     Timestamp, WorkspaceRole,
 };
 use uuid::Uuid;
