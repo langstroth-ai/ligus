@@ -7,8 +7,10 @@
 > split, PR-test sandboxes, OTLP export, keys off the cluster, multi-tenant
 > clusters and relay/auth HA below are **not** in 0.1 (see that page's
 > "Explicitly unsupported" list). Serve enrollment as an owner's device
-> (`serve enroll`, `LIGUS_SERVE_OWNER`) is being replaced by serve joining as
-> its own member. This document is the longer design and keeps the older
+> (`serve enroll`, `LIGUS_SERVE_OWNER`) was removed in 0.1: serve and workers
+> join as their own service members through box admissions redeemed from a
+> Secret (operator guide, Admitting a box); the enrollment steps below are
+> historical. This document is the longer design and keeps the older
 > Hive names.
 
 Status: **design, not built.** Phase 0 (this document, a container image for

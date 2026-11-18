@@ -33,6 +33,7 @@ use crate::reply::{env_flag, ToolSettings};
 use crate::worker::{self, TurnSink, TurnState, WorkerCtx};
 use crate::{env_opt, open_service, sync_once, uuid_of_room, Config};
 
+pub mod admissions_api;
 pub mod api;
 pub mod appearance;
 pub mod contacts_api;
@@ -44,6 +45,7 @@ pub mod forges_api;
 pub mod hub;
 pub mod identity_api;
 pub mod invite_code;
+pub use invite_code::admission_code;
 pub mod lab;
 pub mod notify;
 pub mod ntfy;
@@ -92,12 +94,6 @@ pub struct ServeOptions {
     pub dashboard_file: PathBuf,
     /// `@mention` added to a phone message that names no agent.
     pub default_agent: Option<String>,
-    /// The member this box belongs to (`LIGUS_SERVE_OWNER`: an actor id or a
-    /// display name). Set, the box registers its host as theirs, so desktops
-    /// treat it as one of that person's own devices: it doesn't count as a
-    /// second human, and the owner's desktop answers `@hive` in chats the phone
-    /// creates. Honored once the box is an Admin (`hive_core::DeviceLinks`).
-    pub owner: Option<String>,
     /// Apply an approved file-diff proposal to this box's bound checkout.
     pub apply_on_approve: bool,
     /// Relay sync cadence.
@@ -106,6 +102,11 @@ pub struct ServeOptions {
     pub remote: Option<tunnel::RelaySettings>,
     /// Where `GET /v1/appearance` finds the host's theme (`appearance.rs`).
     pub appearance: appearance::AppearanceConfig,
+    /// Tests only: run the box as a person (it founds its workspace or
+    /// joins with a person's invite), for the tests of person-only features
+    /// (DMs, invites). A real box is always a service member.
+    #[cfg(test)]
+    pub test_person: bool,
 }
 
 impl ServeOptions {
@@ -122,6 +123,11 @@ impl ServeOptions {
         name: Option<String>,
         pair: bool,
     ) -> Result<Self> {
+        // Phase B: the box is its own service member; acting for a person
+        // (`LIGUS_SERVE_OWNER`) is gone, and says so rather than being ignored.
+        if env_opt("LIGUS_SERVE_OWNER").is_some() {
+            bail!("LIGUS_SERVE_OWNER is no longer supported: {}", crate::admit::OWNER_MODE_REMOVED);
+        }
         let listen_raw = listen.or_else(|| env_opt("LIGUS_SERVE_LISTEN")).unwrap_or_else(|| DEFAULT_LISTEN.into());
         let listen: SocketAddr = listen_raw
             .parse()
@@ -155,11 +161,12 @@ impl ServeOptions {
             prometheus_configured: env_opt("LIGUS_PROMETHEUS_URL").is_some(),
             dashboard_file: dashboard::config_path(&cfg.data_dir),
             default_agent: env_opt("LIGUS_SERVE_DEFAULT_AGENT").map(|a| a.trim().trim_start_matches('@').to_string()),
-            owner: env_opt("LIGUS_SERVE_OWNER").map(|o| o.trim().trim_start_matches('@').to_string()),
             apply_on_approve: env_flag("LIGUS_SERVE_APPLY_ON_APPROVE", false),
             sync_every: Duration::from_secs(3),
             remote: None,
             appearance: appearance::AppearanceConfig::from_env(),
+            #[cfg(test)]
+            test_person: false,
         })
     }
 
@@ -169,134 +176,22 @@ impl ServeOptions {
     }
 }
 
-/// Resolve `LIGUS_SERVE_OWNER` against the workspace roster: a human member other
-/// than this box, by actor id or (unique, case-insensitive) display name.
-/// Returns their actor id and whether this box is already an Admin or Owner.
-fn resolve_owner(svc: &ChatService, ws: Uuid, wanted: &str) -> Result<(String, bool)> {
-    let config = svc
-        .load(workspace_config_session_id(ws))?
-        .ok_or_else(|| anyhow::anyhow!("the workspace roster hasn't synced yet"))?;
-    let me = svc.author().id.clone();
-    let humans: Vec<_> = config
-        .members
-        .iter()
-        .filter(|m| m.actor.kind == hive_core::ActorKind::Human && m.actor.id != me)
-        .collect();
-    let by_id: Vec<_> = humans.iter().filter(|m| m.actor.id == wanted).collect();
-    let found: Vec<_> = if by_id.is_empty() {
-        humans.iter().filter(|m| m.actor.display_name.eq_ignore_ascii_case(wanted)).collect()
-    } else {
-        by_id
+/// Tests only: the pre-0.1 start of a box that is a person (see
+/// [`ServeOptions::test_person`]): sync, then found or join as itself.
+#[cfg(test)]
+async fn test_person_start(cfg: &Config) -> Result<(ChatService, bool)> {
+    let synced = match &cfg.relay_url {
+        Some(_) => sync_once(cfg).await.is_ok(),
+        None => false,
     };
-    let owner = match found.as_slice() {
-        [one] => one.actor.id.clone(),
-        [] => bail!("no member named '{wanted}'"),
-        _ => bail!("more than one member is named '{wanted}' (use their actor id)"),
-    };
-    let admin = config
-        .members
-        .iter()
-        .find(|m| m.actor.id == me)
-        .is_some_and(|m| m.role.rank() >= hive_core::WorkspaceRole::Admin.rank());
-    Ok((owner, admin))
+    Ok((open_service(cfg)?, synced))
 }
 
-/// Pre-enrollment start: this box acts as its own identity. Without
-/// `LIGUS_SERVE_OWNER`, it joins the roster as its own member (the original
-/// model). With it, it asks to be enrolled as the owner's device (the code the
-/// owner approves on their desktop) and keeps today's behavior meanwhile: an
-/// existing member registers its host as the owner's (the dispatch stopgap); a
-/// box that isn't a member doesn't join, it waits for approval.
+/// Register this box as an always-on host of the workspace it joined as its
+/// own service member ([`crate::admit::prepare_box`] made it a member).
 fn register_own(svc: &mut ChatService, ws: Uuid, host_id: &str, opts: &ServeOptions) -> Result<()> {
-    let config = svc.load(workspace_config_session_id(ws))?;
-    let me = svc.author().clone();
-    let is_member = config.as_ref().is_some_and(|c| c.members.iter().any(|m| m.actor.id == me.id));
-    let Some(wanted) = &opts.owner else {
-        // Announce this box in the workspace roster and publish its identity so
-        // peers verify its events, then register it as an always-on host.
-        if let Err(e) = svc.ensure_self_member(workspace_config_session_id(ws), ws) {
-            eprintln!("serve: joining the workspace roster failed: {e}");
-        }
-        let host = crate::with_gateways(WorkspaceHost::new(host_id.to_string(), HostKind::Worker, opts.label.clone()));
-        return svc.ensure_host(ws, host).map(|_| ()).context("registering this box as a workspace host");
-    };
-    print_enrollment(svc, ws, &opts.label, Some(wanted));
-    if !is_member {
-        println!("ligus serve: waiting for approval; the phone can read the workspace but not write until then.");
-        svc.set_write_block(Some(PENDING.into()));
-        return Ok(());
-    }
-    if let Err(e) = svc.ensure_self_member(workspace_config_session_id(ws), ws) {
-        eprintln!("serve: refreshing this box's identity failed: {e}");
-    }
-    let mut host = crate::with_gateways(WorkspaceHost::new(host_id.to_string(), HostKind::Worker, opts.label.clone()));
-    match resolve_owner(svc, ws, wanted) {
-        Ok((owner, admin)) => {
-            if !admin {
-                eprintln!(
-                    "serve: LIGUS_SERVE_OWNER: until you approve this box as your device, desktops treat it as {wanted}'s \
-                     only once it is an Admin"
-                );
-            }
-            host.owner_actor_id = owner;
-        }
-        Err(e) => eprintln!("serve: LIGUS_SERVE_OWNER ignored: {e}"),
-    }
+    let host = crate::with_gateways(WorkspaceHost::new(host_id.to_string(), HostKind::Worker, opts.label.clone()));
     svc.ensure_host(ws, host).map(|_| ()).context("registering this box as a workspace host")
-}
-
-/// Print the enrollment code the owner approves on their desktop. `owner` is
-/// `LIGUS_SERVE_OWNER` (an actor id or display name), shown by name.
-pub fn print_enrollment(svc: &ChatService, ws: Uuid, label: &str, owner: Option<&str>) {
-    let request = svc.enrollment_request(ws, label);
-    let name = owner.map(|o| {
-        svc.load(workspace_config_session_id(ws))
-            .ok()
-            .flatten()
-            .and_then(|c| c.members.into_iter().find(|m| m.actor.id == o).map(|m| m.actor.display_name))
-            .filter(|n| !n.trim().is_empty())
-            .unwrap_or_else(|| o.to_string())
-    });
-    let whose = name.map(|o| format!("{o}'s")).unwrap_or_else(|| "your".into());
-    println!(
-        "\nTo make this box {whose} own device (everything the phone does is then authored as its owner),\n\
-         approve it on {whose} desktop: Settings > Account > My devices > Add a device, and paste:\n\n  {}\n\n\
-         Check the desktop shows this fingerprint: {}  (label \"{}\")\n",
-        request.encode(),
-        request.fingerprint(),
-        request.label
-    );
-}
-
-/// `ligus serve enroll [--new-device]`: print this box's enrollment code. With
-/// `--new-device` (needed after a revocation: a revoked device id stays
-/// revoked), first replace the box's device key with a fresh one.
-pub fn cmd_enroll(cfg: &Config, opts: &ServeOptions, new_device: bool) -> Result<()> {
-    let ws = uuid_of_room(&cfg.room);
-    let svc = open_service(cfg)?;
-    let standing = svc.device_standing(ws, opts.owner.as_deref())?;
-    let svc = match (&standing, new_device) {
-        (Standing::Revoked, false) => bail!(
-            "this box's device was revoked; run `ligus serve enroll --new-device` to make a new device key, then approve its code"
-        ),
-        (_, true) => {
-            drop(svc);
-            let ids = hive_runtime::IdentityStore::new(&cfg.data_dir, hive_runtime::secret_store::StoreKeyVault::for_data_dir(&cfg.data_dir));
-            let rotated = ids.rotate_device()?;
-            println!(
-                "This box has a new device key ({}). Restart ligus serve so it uses it (e.g. systemctl --user restart ligus-serve).",
-                rotated.device.id
-            );
-            open_service(cfg)?
-        }
-        (Standing::OwnerDevice(o), false) => {
-            println!("This box is already enrolled as {}'s device.", o.display_name);
-            return Ok(());
-        }
-        (Standing::Own, false) => svc,
-    };
-    print_enrollment(&svc, ws, &opts.label, opts.owner.as_deref());
-    Ok(())
 }
 
 /// State shared by the API handlers, the sync loop and the worker thread.
@@ -357,6 +252,8 @@ pub struct Shared {
     pub repos: repos_api::RepoState,
     /// Events waiting for a phone's passkey (B3 `presence/prepare`).
     pub presence_drafts: presence_api::Pending,
+    /// Box admissions waiting for a phone's passkey and signature (Phase B).
+    pub admission_drafts: admissions_api::Drafts,
     /// The box's direct messages (`dms.rs`).
     pub dms: dms::DmStore,
     /// Wakes the DM sync loop after a local write.
@@ -504,10 +401,7 @@ pub fn dashboard_mcp_registry() -> std::result::Result<hive_runtime::McpRegistry
 }
 
 /// Why a revoked box refuses writes.
-const REVOKED: &str = "this box's device was revoked by its owner; run `ligus serve enroll --new-device` on it and approve the new code on your desktop";
-
-/// Why a box waiting for enrollment (and not a member) refuses writes.
-const PENDING: &str = "this box is waiting for its owner to approve it as their device (the code is in ligus serve's log, or run `ligus serve enroll`)";
+const REVOKED: &str = "this box's device was revoked by a workspace Admin; start it from a fresh data dir and admit it again (`ligus admit request`)";
 
 /// The device-local serve state file (read marks).
 fn state_path(cfg: &Config) -> PathBuf {
@@ -561,9 +455,10 @@ impl Shared {
             (svc.author().clone(), hive_runtime::device_enroll::fingerprint(&svc.device_public_key()))
         };
         let mode = match self.standing() {
+            // Never reached: a box enrolled as a person's device refuses to
+            // start, and is paused if one appears while it runs.
             Standing::OwnerDevice(_) => "owner",
             Standing::Revoked => "revoked",
-            Standing::Own if self.opts.owner.is_some() => "pending",
             Standing::Own => "member",
         };
         json!({ "mode": mode, "actorId": actor.id, "displayName": hive_proto::names::clean_display_name(&actor.display_name), "deviceFingerprint": fingerprint })
@@ -572,7 +467,7 @@ impl Shared {
     /// Re-read this box's standing after a pull, switching identity when the
     /// owner approves it (or revokes it) while it runs. Returns whether it changed.
     pub fn refresh_standing(&self) -> bool {
-        let next = match self.lock().device_standing(self.ws, self.opts.owner.as_deref()) {
+        let next = match self.lock().device_standing(self.ws, None) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("serve: reading this box's device standing failed: {e}");
@@ -590,17 +485,13 @@ impl Shared {
                     svc.set_write_block(Some(REVOKED.into()));
                     eprintln!("ligus serve: {REVOKED}.");
                 }
+                // Phase B: a box never acts as a person. Someone certified
+                // this box's device for their account while it ran: stop
+                // writing rather than take on that identity.
                 (_, Standing::OwnerDevice(owner)) => {
-                    let first = !matches!(prev, Standing::OwnerDevice(_));
-                    svc.act_as_owner_device(owner.clone());
-                    svc.set_write_block(None);
-                    if first {
-                        println!("ligus serve: approved as {}'s device; the phone now acts as {0}.", owner.display_name);
-                        let host = crate::with_gateways(WorkspaceHost::new(self.host_id.clone(), HostKind::Worker, self.opts.label.clone()));
-                        if let Err(e) = svc.ensure_host(self.ws, host) {
-                            eprintln!("serve: re-registering this host as the owner's failed: {e}");
-                        }
-                    }
+                    let why = format!("this box's device was certified as {}'s device; {}", owner.display_name, crate::admit::OWNER_MODE_REMOVED);
+                    eprintln!("ligus serve: {why}");
+                    svc.set_write_block(Some(why));
                 }
                 (Standing::OwnerDevice(_), Standing::Own) => {
                     // The owner's certificate no longer counts (the owner left the
@@ -644,12 +535,27 @@ impl Shared {
         if let Some(t) = self.tunnel.as_ref() {
             revoked_phones.extend(t.registry.list().into_iter().filter_map(|r| r.device_id).filter(|d| revoked.contains(d)));
         }
+        // This box's own device revoked (Phase B: a box is its own service
+        // member, and an Admin revokes its device like any other): it can no
+        // longer act in the workspace, so nothing it holds stays usable. Every
+        // pairing here is cut (a phone stops handing messages to a box that
+        // was cut off, perhaps for being compromised), and the direct-path
+        // token rotates once. Pairings made later are cut as they appear (the
+        // watch re-checks whenever the registry changes).
+        let own = Uuid::parse_str(&self.host_id).ok().filter(|d| revoked.contains(d));
+        if let Some(d) = own {
+            revoked_phones.insert(d);
+        }
         self.rotate_token_for(&revoked_phones);
         let Some(tunnel) = self.tunnel.as_ref() else { return Vec::new() };
-        let pids = tunnel.registry.pairings_of_revoked(&revoked);
+        let pids = match own {
+            Some(_) => tunnel.registry.list().into_iter().filter(|r| r.is_active()).map(|r| r.pid).collect(),
+            None => tunnel.registry.pairings_of_revoked(&revoked),
+        };
         let mut by_device: std::collections::BTreeMap<Uuid, Vec<String>> = std::collections::BTreeMap::new();
         for pid in &pids {
-            if let Some(d) = tunnel.registry.get(pid).and_then(|r| r.device_id) {
+            let bound = tunnel.registry.get(pid).and_then(|r| r.device_id).filter(|d| revoked.contains(d));
+            if let Some(d) = bound.or(own) {
                 by_device.entry(d).or_default().push(pid.clone());
             }
         }
@@ -1030,44 +936,46 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
     // Agents on this box never read the serve token, wherever it lives.
     hive_runtime::executor::configure_host(&cfg.data_dir, std::slice::from_ref(&opts.token_file), &[crate::repos::repos_dir(&cfg.data_dir)]);
     let token = pair::load_or_create_token(&opts.token_file)?;
-    let ws = uuid_of_room(&cfg.room);
     if let Err(e) = crate::purge_foreign_workspaces(&cfg) {
         eprintln!("serve: foreign-workspace cleanup skipped: {e}");
     }
-    // Pull the workspace first, so registering below extends the real config
-    // log instead of seeding a competing one.
-    let mut first_sync = None;
-    if cfg.relay_url.is_some() {
-        // Name a relay URL this box can't use before trying HTTP.
-        if let Some(problem) = crate::relay_url_problem(cfg.relay_url.as_deref()) {
-            bail!("{problem}");
-        }
-        if let Err(e) = sync_once(&cfg).await.inspect(|_| first_sync = Some(time::OffsetDateTime::now_utc())) {
-            // With no local copy of the workspace config yet, registering would
-            // seed a competing config log naming this box Owner. Fail instead;
-            // systemd restarts us until the relay is reachable.
-            let ws_config = workspace_config_session_id(ws);
-            if open_service(&cfg)?.load(ws_config)?.is_none() {
-                bail!("initial sync failed and this box has no copy of the workspace yet: {e}");
+    // Phase B: sync first, never found a workspace, join only as this box's
+    // own service member through an admission (`crate::admit::prepare_box`).
+    let mut cfg = cfg;
+    let admission = crate::admit::admission_from_file(crate::env_opt(crate::admit::ADMISSION_FILE_ENV))?;
+    #[cfg(test)]
+    let person = opts.test_person;
+    #[cfg(not(test))]
+    let person = false;
+    #[cfg(test)]
+    let started = if person { Some(test_person_start(&cfg).await?) } else { None };
+    #[cfg(not(test))]
+    let started: Option<(ChatService, bool)> = None;
+    let (mut svc, synced) = match started {
+        Some(s) => s,
+        None => {
+            // The name the box joins under: its own, or its label replacing a
+            // name nobody chose.
+            crate::admit::mark_box(&cfg)?;
+            if opts.name.is_none() {
+                let identity = hive_runtime::IdentityStore::new(&cfg.data_dir, hive_runtime::secret_store::StoreKeyVault::for_data_dir(&cfg.data_dir));
+                if let Err(e) = crate::adopt_box_name(&identity, &opts.label, hive_runtime::machine_hostname().as_deref()) {
+                    eprintln!("serve: renaming this box failed: {e}");
+                }
             }
-            eprintln!("serve: initial sync failed (continuing, will retry): {e}");
+            crate::admit::prepare_box(&mut cfg, &opts.label, opts.name.as_deref(), admission, |c| async move { sync_once(&c).await }).await?
         }
-    }
-    let mut svc = open_service(&cfg)?;
+    };
+    let first_sync = synced.then(time::OffsetDateTime::now_utc);
+    let ws = uuid_of_room(&cfg.room);
     let host_id = svc.device_id().to_string();
-    // Whose device is this box? Enrolled as its owner's (a certificate from the
-    // owner's account key is in the workspace), its own member, or revoked.
-    let standing = svc.device_standing(ws, opts.owner.as_deref()).unwrap_or(Standing::Own);
+    let standing = svc.device_standing(ws, None).unwrap_or(Standing::Own);
     match &standing {
-        Standing::OwnerDevice(owner) => {
-            svc.act_as_owner_device(owner.clone());
-            println!("ligus serve: enrolled as {}'s device; the phone acts as {0}.", owner.display_name);
-        }
         Standing::Revoked => {
             svc.set_write_block(Some(REVOKED.into()));
             eprintln!("ligus serve: {REVOKED}.");
         }
-        Standing::Own => {
+        _ => {
             if let Some(name) = &opts.name {
                 svc.set_author_display_name(name.clone());
             } else {
@@ -1095,20 +1003,10 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
             Ok(_) => {}
             Err(e) => eprintln!("serve: interrupted-turn recovery failed: {e}"),
         }
-    }
-    match &standing {
-        Standing::OwnerDevice(_) => {
-            // The owner is already a member; this box only (re)registers its host.
-            let host = crate::with_gateways(WorkspaceHost::new(host_id.clone(), HostKind::Worker, opts.label.clone()));
-            svc.ensure_host(ws, host).context("registering this box as a workspace host")?;
+        if person {
+            let _ = svc.ensure_self_member(workspace_config_session_id(ws), ws);
         }
-        Standing::Revoked => {}
-        Standing::Own => register_own(&mut svc, ws, &host_id, &opts)?,
-    }
-    if standing == Standing::Own {
-        pin_own_founding(&svc, ws);
-    }
-    if standing != Standing::Revoked {
+        register_own(&mut svc, ws, &host_id, &opts)?;
         crate::publish_key_agreement(&cfg, &mut svc);
     }
     let tunnel = match &opts.remote {
@@ -1142,6 +1040,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         sync_status: Mutex::new((first_sync, None)),
         busy: Mutex::new(HashSet::new()),
         presence_drafts: presence_api::Pending::default(),
+        admission_drafts: admissions_api::Drafts::default(),
         dms: dms::DmStore::load(&cfg.data_dir),
         dm_kick: Notify::new(),
         contact_lock: tokio::sync::Mutex::new(()),
@@ -1207,35 +1106,6 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
     let worker = spawn_worker(shared.clone())?;
     shared.sync_kick.notify_one();
     Ok(ServeHandle { addr, shared, shutdown, worker: Mutex::new(Some(worker)), tasks: Mutex::new(tasks) })
-}
-
-/// Pin the box's workspace to its own account when this box founded it (its
-/// account's signed seed is the log's base): co-members, verified keys and
-/// the key-agreement publication all come from pinned logs only. A box that
-/// joined from an invite was pinned to the invite's founder by `ligus enroll`.
-fn pin_own_founding(svc: &ChatService, ws: Uuid) {
-    let store = svc.store();
-    if svc.is_delegated() || !matches!(store.workspace_pin(ws), Ok(None)) {
-        return;
-    }
-    let Some(account) = svc.author().account_id else { return };
-    let fk = hive_runtime::envelope_verifier::FounderPin::fingerprint_hex(&svc.account_public_key());
-    let Some(pin) = hive_runtime::envelope_verifier::FounderPin::parse(&account.to_string(), &fk) else { return };
-    // Only when the unpinned fold already takes this account's seed as its
-    // base, so pinning changes no trust decision: a later seed of this box's
-    // own (written while the real founder's log hadn't synced, or before a
-    // founder pinned itself) must never displace an earlier founder.
-    let base_is_mine =
-        svc.load(workspace_config_session_id(ws)).ok().flatten().is_some_and(|c| c.creator_actor_id == account.to_string());
-    if !base_is_mine {
-        return;
-    }
-    let Ok(envs) = store.list(workspace_config_session_id(ws)) else { return };
-    if hive_runtime::envelope_verifier::founder_seed(&envs, &pin).is_some() {
-        if let Err(e) = store.set_workspace_pin(ws, &account.to_string(), &fk) {
-            eprintln!("serve: pinning this box's own workspace failed: {e}");
-        }
-    }
 }
 
 /// How often the box refreshes its contact record (relays keep one 30 days).
@@ -1739,7 +1609,7 @@ pub fn cmd_pair(cfg: &Config, opts: &ServeOptions, relay_only: bool) -> Result<(
         }
     }
     // Best effort: a box whose store can't be read yet just gets no hint.
-    let standing = open_service(cfg).ok().and_then(|svc| svc.device_standing(uuid_of_room(&cfg.room), opts.owner.as_deref()).ok());
+    let standing = open_service(cfg).ok().and_then(|svc| svc.device_standing(uuid_of_room(&cfg.room), None).ok());
     if let Some(hint) = standing.as_ref().and_then(pair::member_hint) {
         println!("{hint}");
     }

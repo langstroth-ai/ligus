@@ -323,6 +323,33 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
     if let Some(why) = service_member_refusal(env, author, roster_here, on_config, fold) {
         return Decision::deny(why);
     }
+    // Box admissions (Phase B): what an admission may say when it is issued,
+    // and who may redeem it.
+    if let Some(why) = crate::admission::issuance_refusal(env, fold, on_config) {
+        return Decision::deny(why);
+    }
+    if let (true, SessionEvent::MemberAdded { member, invite, proof }) = (on_config, &env.payload) {
+        if let Some(why) = crate::admission::redemption_refusal(env, member, *invite, proof.as_deref(), fold) {
+            return Decision::deny(why);
+        }
+        // The proof names the signing device, so that device must really
+        // have signed. Ingest verifies every envelope against its device's
+        // certificate wherever that sorts; here, when the device is already
+        // certified at this position (a box publishes its identity after it
+        // joins, so usually it isn't), the fold checks it too: certified for
+        // the stamp's account, not revoked, and the signature verifies.
+        if member.id == author && invite.is_some_and(|id| crate::admission::admission_of(fold, id).is_some()) {
+            let known = env.signer_device_id.is_some_and(|d| ctx.running.devices.contains_key(&d));
+            if known {
+                if let Err(why) = certified_signer(env, ctx.running) {
+                    return Decision::deny(format!("a box admission is redeemed by its own certified device: {why}"));
+                }
+            }
+        }
+    }
+    if let Some(why) = crate::admission::closure_refusal(env, fold, on_config) {
+        return Decision::deny(why);
+    }
     // A phone is enrolled on the config log by a trusted device of its own
     // account (certified, not revoked, not delegated, not a phone), with that
     // account's passkey presence (the presence table).
@@ -885,6 +912,20 @@ fn service_member_refusal(
     match &env.payload {
         SessionEvent::PasskeyRegistered { .. } => Some("a service member holds no passkey".into()),
         SessionEvent::ProposalSetDecided { .. } => Some("a person decides a proposal set, not a service".into()),
+        // Phase B: a service member cuts no one and admits no one. Leaving,
+        // demoting itself and revoking its own device stay open (none is a
+        // cut), though the last two need presence it never has.
+        SessionEvent::MemberRemoved { member_id, .. } if member_id != author => Some("a service member cuts no one".into()),
+        SessionEvent::MemberRoleChanged { change, .. } if change.member_id != author => {
+            Some("a service member changes no one's role".into())
+        }
+        SessionEvent::DeviceRevoked { device_id, .. } => {
+            let own = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id);
+            let mine = roster.and_then(|r| r.devices.get(device_id)).is_some_and(|d| own.is_some_and(|a| d.accounts.contains(&a)));
+            (!mine).then(|| "a service member revokes only its own device".into())
+        }
+        SessionEvent::MemberAdded { member, .. } if member.id != author => Some("a service member admits no one".into()),
+        SessionEvent::JoinApproved { .. } => Some("a service member admits no one".into()),
         _ => None,
     }
 }

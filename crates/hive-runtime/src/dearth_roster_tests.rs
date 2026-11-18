@@ -114,7 +114,7 @@ fn setup() -> (Log, Who, Who, Who, Uuid) {
     log.identity(&owner);
     for (w, role) in [(&admin2, WorkspaceRole::Admin), (&alice, WorkspaceRole::Contributor)] {
         let m = WorkspaceMember { id: w.id.clone(), actor: actor(w), role, title: String::new(), index: 0, joined_at: Timestamp::epoch() };
-        log.push(&owner, SessionEvent::MemberAdded { member: m, invite: None });
+        log.push(&owner, SessionEvent::MemberAdded { member: m, invite: None, proof: None });
         log.identity(w);
     }
     let laptop = Uuid::new_v4();
@@ -134,13 +134,13 @@ fn a_device_certified_during_dearth_needs_another_admins_approval() {
     assert_eq!(r.pending_devices(), &[(log.ws, new_box, owner.account)]);
 
     // The owner approving their own device again: still one account.
-    log.push(&owner, SessionEvent::JoinApproved { subject: new_box.to_string() });
+    log.push(&owner, SessionEvent::JoinApproved { subject: new_box.to_string(), admission: None });
     // A Contributor's approval is dropped by ingest authorization.
-    log.push(&alice, SessionEvent::JoinApproved { subject: new_box.to_string() });
+    log.push(&alice, SessionEvent::JoinApproved { subject: new_box.to_string(), admission: None });
     assert!(build_roster(&log.envs).public_key(new_box).is_none());
 
     // A second Admin, another account: admitted.
-    log.push(&admin2, SessionEvent::JoinApproved { subject: new_box.to_string() });
+    log.push(&admin2, SessionEvent::JoinApproved { subject: new_box.to_string(), admission: None });
     let r = build_roster(&log.envs);
     assert!(r.public_key(new_box).is_some());
     assert!(r.pending_devices().is_empty());
@@ -243,7 +243,7 @@ fn a_removed_member_cannot_reenter_the_roster_with_a_fresh_device() {
     let fk = log.cert(&alice, fresh);
     log.push(
         &alice,
-        SessionEvent::MemberAdded { invite: None,
+        SessionEvent::MemberAdded { invite: None, proof: None,
             member: WorkspaceMember { id: alice.id.clone(), actor: actor(&alice), role: WorkspaceRole::Contributor, title: String::new(), index: 0, joined_at: Timestamp::epoch() },
         },
     );

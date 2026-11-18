@@ -83,6 +83,63 @@ traffic or attachments on any host, old-key writes from them are refused,
 and a box enrolled for them (even one still hosting an agent) gets no new
 key.
 
+### A compromised serve or worker box {#compromised-box}
+
+A `ligus serve` or `ligus worker` box is its own **service member**, never a
+person's device. Whoever takes over one (its data dir, its process, its pod)
+holds the workspace key, so they **can read the workspace** and write as that
+box, at its role. What they **can't** do, on any device's fold:
+
+- **Pose as the owner or any person.** The box signs only with its own account
+  and device key. An event it stamps as someone else is quarantined (its
+  device isn't certified for that account), and a box's stamp must say
+  `service`, so it can't claim to be human either. It holds no account key of
+  anyone's, so it can't certify a device for a person, and no passkey, so it
+  can't confirm anything that needs one.
+- **Rise above Contributor.** A box admission admits at most Contributor, and
+  raising a service member higher is refused.
+- **Approve for a person.** Its votes count at its role but never as a human
+  approval, so dearth-mode protected paths, locked-down chats and an agent's
+  own proposals still need a person. It can't decide a proposal set, answer
+  an agent's question, clear a lockdown, or apply a change except to fulfil a
+  person's request.
+- **Cut or admit anyone.** It removes, demotes and admits no one, and issues
+  no invite or admission; it revokes no device but its own.
+- **Forge a phone's action.** What the phone signs itself (box admissions in
+  0.1) the box only relays: it can withhold it, not alter or forge it.
+
+The remedy is the one for any member: an Admin removes the box (or revokes its
+device) and rotates the workspace key, and the box gets no later key. An
+honest serve box that sees its own device revoked also cuts every phone
+pairing it holds and rotates its direct-path token, so phones stop sending to
+it; a compromised one needn't, so re-pair phones with a box you trust. A box
+never founds a workspace either: it syncs first and refuses to start without a
+copy of the workspace, so a box pointed at an empty or withheld room can't
+seed a competing config log naming itself Owner.
+
+**Admissions.** A box admission is single use, expires within 7 days, admits
+only a service member, and is redeemed only with the signature of a redeem
+key whose secret rides in the admission code alone, over the workspace, the
+invite, the new member and the redeeming device. The invite id is on the
+workspace log for every member, so another member (or a sock puppet of
+theirs) can't redeem it in the box's place. Admitted from a join request, the
+code is sealed to the box's key-agreement key, and the fingerprint the Admin
+compares covers the box's account, device key and key-agreement key, so a
+request swapped in transit shows a different fingerprint. Every time on the
+log is its author's choice, so expiry alone can't stop a holder of the code
+from backdating a redemption: an Admin's device closes each admission once it
+sees it redeemed (naming that redemption) or once it lapses (naming none),
+and every other redemption of it is then refused wherever it sorts. The
+redemption must be signed by the very device its proof names (checked when
+it arrives, and again on every fold once that device is certified), and the new member's record names that
+device's own account, bound admission or bearer, so a box can't join under a
+person's account; nor can it change its kind, account or identity later by
+re-adding itself. Closing is an Admin's call like issuing: an Admin can close
+an admission to keep a box out (a closure that names no real redemption of
+it admits no one through it and changes nothing else), and two Admins'
+closures that name different redemptions admit neither. The box forgets the
+redeem key once its redemption is written. See the known limitation below.
+
 ### Prompt injection and hostile content {#prompt-injection}
 
 Content an agent reads (a web page, an MCP result, a file in an untrusted
@@ -282,12 +339,20 @@ it.
    can join, nothing can be governed) until its founder adds a passkey from
    the desktop, and until then a thief of the founder's device key could
    register one first.
-8. **Phone approvals through a box carry your passkey.** A `ligus serve`
-   box enrolled as your device signs as you, so votes, lockdown clears and
-   agent rebinds from the phone go through `presence/prepare` and
-   `presence/commit`: the phone's passkey (Face ID) signs the event's digest
-   and the vote counts as the passkey's account. Without it the box answers
-   `403 presence_required` and every device's fold drops such a vote.
+8. **A box is never you, so the phone acts through it only as the box.** A
+   `ligus serve` box is its own service member: phone messages and votes sent
+   through it are the box's, and its votes never satisfy a human gate. What
+   only a person may do needs the phone's own device key and your passkey;
+   in 0.1 only box admissions go that way, so approvals that need a person,
+   answers to an agent's question and lockdown clears are made on the
+   desktop. A bearer box admission (a Kubernetes Secret) can be redeemed by
+   whoever holds it before the box does. Until an Admin's device has synced
+   and closed the admission, a holder of the code can still date a
+   redemption before the expiry, or slot one in before the box's: no clock
+   on the log is trusted, so the bound is an Admin's device seeing the
+   admission settle. Keep it short-lived, delete the Secret once the box has
+   joined, keep an Admin's desktop syncing, and remove any service member
+   you didn't expect.
 9. **Some agents still ask for actions in reply text.** Agents with tool use
    get the typed [Ligus tools](../../ligus/addons/ligus-mcp.md). Copilot and
    Antigravity run over [ACP](../../ligus/addons/acp.md); Codex and Claude Code do

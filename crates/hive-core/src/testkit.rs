@@ -128,7 +128,7 @@ impl SignedWorld {
     /// publishes their identity and registers their recovery key.
     pub fn admit(&mut self, by: &str, name: &str, role: WorkspaceRole) {
         let m = self.member_of(name, role);
-        self.push(by, SessionEvent::MemberAdded { member: m, invite: None });
+        self.push(by, SessionEvent::MemberAdded { member: m, invite: None, proof: None });
         self.publish_identity(name);
         self.register_recovery(name);
     }

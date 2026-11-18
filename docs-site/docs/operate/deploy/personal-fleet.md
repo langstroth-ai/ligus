@@ -94,18 +94,30 @@ ligus --version
 Or build the container image (`deploy/container/Dockerfile`) and run
 `ligus` from it with a volume at `/var/lib/ligus`.
 
-## 4. Enroll the server in the workspace
+## 4. Admit the server to the workspace
 
-Use a dedicated data dir and keep it private:
+The server joins as **its own service member** (at most Contributor; its
+votes never count as yours), admitted once by you with your passkey. Use a
+dedicated data dir and keep it private:
 
 ```sh
 export LIGUS_DATA_DIR=$HOME/.ligus-serve
 install -d -m 700 "$LIGUS_DATA_DIR"
-ligus enroll 'hivews1:…'            # paste the invite; add --token <hrt1…> for a gated relay
-ligus sync
-# pushed 0, pulled 42
-ligus chats                          # the laptop's chats are here
+ligus admit request --label home-server
+# prints a join request (ligusjoin1:…) and a fingerprint
 ```
+
+On the laptop, right-click the workspace in the rail, **Admit a box… → From
+the box's join request**, paste it, **Check** that the fingerprint matches,
+**Admit this box**, and confirm with your passkey. Copy the code it gives
+you (sealed to the server: only the server can open it) back to the server:
+
+```sh
+ligus admit redeem 'ligusadmit1:…'   # add LIGUS_RELAY_ACCESS_TOKEN for a gated relay
+```
+
+The server joins when `ligus serve` starts (next step). See
+[Admitting a box](../ops/admitting-a-box.md).
 
 ## 5. Run `ligus serve` as a service
 
@@ -124,7 +136,6 @@ The settings that matter here:
 LIGUS_DATA_DIR=/home/you/.ligus-serve
 LIGUS_SERVE_LISTEN=100.101.102.103:8787   # the server's Tailscale IP (tailscale ip -4), or 127.0.0.1:8787 for tunnel-only
 LIGUS_SERVE_LABEL=home-server
-LIGUS_SERVE_OWNER=Alice                   # your display name in the workspace: makes the box your device
 LIGUS_REPOS_DIR=/home/you/repos           # checkouts agents may work on
 ```
 
@@ -144,22 +155,22 @@ Expected log lines:
 ligus serve: listening on http://100.101.102.103:8787 — workspace '…', host 63f2… ('home-server'). Ctrl-C to stop.
 ```
 
-plus an enrollment code `hivedev1:…` and a fingerprint, because
-`LIGUS_SERVE_OWNER` is set.
+and, on its first start, `ligus: joined workspace '…' as its own service
+member (Contributor).`
 
-## 6. Approve the server as your device
+## 6. Check the server's membership
 
-On the laptop: **Settings → Account → My devices → Add a device**, paste the
-`hivedev1:…` code, check the fingerprint matches the server's log, approve.
-On its next sync the server acts as you: phone messages and votes are yours.
-Details: [Running ligus serve as your own device](../ops/serve-box.md).
+The laptop's **People** list shows the server as a service member. Phone
+messages show under the server's name, and its votes never count as yours:
+approve changes that need a person on the laptop. Details:
+[Running ligus serve](../ops/serve-box.md).
 
 Check:
 
 ```sh
 curl -s http://100.101.102.103:8787/v1/health \
   -H "Authorization: Bearer $(cat ~/.ligus-serve/serve.token)"
-# {…,"identity":{…,"mode":"owner"},"ok":true,"version":"0.1.0",…}
+# {…,"identity":{…,"mode":"member"},"ok":true,"version":"0.1.0",…}
 ```
 
 ## 7. Bind a repository
@@ -222,11 +233,12 @@ with `ligus worker`:
 
 ```sh
 export LIGUS_DATA_DIR=$HOME/.ligus-worker
-ligus enroll 'hivews1:…'
-ligus register-worker --label gpu-box
-ligus set-agent-host coder <host id printed above>
-ligus worker --label gpu-box
+ligus admit request --label gpu-box      # admit it on the laptop, as in step 4
+ligus admit redeem 'ligusadmit1:…'
+ligus worker --label gpu-box             # syncs first, joins, registers its host
 ```
+
+Then bind an agent to it from the laptop (an Admin's act).
 
 See [Headless agents](../concepts/headless-agents.md).
 
@@ -234,8 +246,8 @@ See [Headless agents](../concepts/headless-agents.md).
 
 - [ ] laptop sync pill **live**, encrypted
 - [ ] `ligus chats` on the server lists the laptop's chats
-- [ ] `/v1/health` with the token shows `"mode":"owner"`
-- [ ] a message from the phone shows on the laptop as you
+- [ ] `/v1/health` with the token shows `"mode":"member"`
+- [ ] the laptop's People list shows the server as a service member
 - [ ] with the laptop closed, `@coder` (an agent hosted on the server) answers from the phone
 
 ## Operating it

@@ -2,6 +2,7 @@
 //! budgeting, git context, crypto/signing, MCP wire types, and the event-sourced
 //! session projector. No IO — orchestration lives in `hive-runtime`.
 
+pub mod admission;
 pub mod agent;
 pub mod authorization;
 pub mod authz;

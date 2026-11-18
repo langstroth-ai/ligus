@@ -151,11 +151,12 @@ fn opts(dir: &std::path::Path, name: &str) -> ServeOptions {
         prometheus_configured: false,
         dashboard_file: dir.join("dashboard.toml"),
         default_agent: None,
-        owner: None,
         apply_on_approve: false,
         sync_every: Duration::from_millis(200),
         remote: None,
         appearance: Default::default(),
+        // DMs and invites are a person's: these boxes run as people.
+        test_person: true,
     }
 }
 
@@ -730,50 +731,6 @@ async fn dm_messages_never_push() {
     tokio::time::sleep(Duration::from_secs(2)).await;
     let all = pushes.lock().unwrap().clone();
     assert!(all.iter().all(|x| x.contains("plans")), "only the workspace chat pushed: {all:?}");
-}
-
-/// The founding box's self-pin (`pin_own_founding`) keeps the trust
-/// decision the unpinned fold already made: two boxes that each wrote a
-/// founding seed for the same room before a self-pin existed (legacy data,
-/// or a box that seeded while its relay withheld the real log) exchange
-/// logs; only the box whose seed is the fold's base may pin itself. The
-/// other must not pin its own later seed and so take over as founder.
-#[test]
-fn self_pin_never_overrides_an_earlier_founder() {
-    let tmp = tempfile::tempdir().unwrap();
-    let room = format!("pin-test-{}", Uuid::new_v4());
-    let ws = crate::uuid_of_room(&room);
-    let cfg_id = hive_core::workspace_config_session_id(ws);
-    let cfgs: Vec<Config> = ["a", "b"].iter().map(|n| cfg_for(&tmp.path().join(n), "http://127.0.0.1:9", &room, None)).collect();
-    let mut svcs: Vec<ChatService> = cfgs.iter().map(|c| crate::open_service(c).unwrap()).collect();
-    for svc in svcs.iter_mut() {
-        svc.ensure_workspace_config(ws).unwrap();
-        // Legacy: seeded before the founder pinned itself.
-        svc.store().forget_workspace(ws).unwrap();
-    }
-    let logs: Vec<Vec<hive_core::SessionEventEnvelope>> = svcs.iter().map(|s| s.store().list(cfg_id).unwrap()).collect();
-    for (i, c) in cfgs.iter().enumerate() {
-        let mut store = hive_runtime::EventStore::open(c.data_dir.join("hive.db")).unwrap();
-        for e in &logs[1 - i] {
-            store.ingest(e).unwrap();
-        }
-    }
-    let base = svcs[0].load(cfg_id).unwrap().unwrap().creator_actor_id;
-    assert_eq!(base, svcs[1].load(cfg_id).unwrap().unwrap().creator_actor_id, "both folds agree on the base");
-    let mut pinned = 0;
-    for svc in &svcs {
-        pin_own_founding(svc, ws);
-        let me = svc.author().account_id.unwrap().to_string();
-        match svc.store().workspace_pin(ws).unwrap() {
-            Some(p) => {
-                assert_eq!(p.founder_account.to_string(), me);
-                assert_eq!(me, base, "a box whose seed isn't the base pinned itself as founder");
-                pinned += 1;
-            }
-            None => assert_ne!(me, base, "the base's founder should pin itself"),
-        }
-    }
-    assert_eq!(pinned, 1);
 }
 
 /// Invite codes carry the workspace passphrase and epoch keys (a DM's too):

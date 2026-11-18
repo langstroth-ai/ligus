@@ -17,9 +17,11 @@ can't confine agent turns (Landlock needs Linux 6.7+); see why with
 Pair the phone from your own terminal (it prints a secret; never run it as a Job):
   kubectl -n {{ .Release.Namespace }} exec -it {{ $fullname }}-serve-0 -- ligus pair --relay-only
 
-Changing in 0.1: `ligus serve enroll` and serve.owner (serve acting for an
-owner) are being replaced by serve joining as its own member, approved by an
-Admin. Until that lands they still work; see the deploy docs.
+serve and each worker join as their own service member through a box
+admission (serve.admission, worker.instances[].admission). Delete each
+admission Secret once its box has joined:
+  kubectl -n {{ .Release.Namespace }} logs {{ $fullname }}-serve-0 -c serve | grep "joined workspace"
+See the operator guide, Admitting a box.
 
 Health:
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ $fullname }}-serve 8787:{{ .Values.serve.service.port }}

@@ -78,6 +78,7 @@ spec:
               value: /etc/ligus/runtimes/runtimes.toml
             {{- end }}
             {{- include "ligus.hostSecretEnv" (dict "root" $ "v" $v "component" "worker") | nindent 12 }}
+            {{- include "ligus.admissionEnv" (dict "a" $inst.admission) | nindent 12 }}
             {{- include "ligus.modelGatewayEnv" $ | nindent 12 }}
             {{- with $v.extraEnv }}
             {{- toYaml . | nindent 12 }}
@@ -100,9 +101,11 @@ spec:
             {{- toYaml (default $v.resources $inst.resources) | nindent 12 }}
           volumeMounts:
             {{- include "ligus.workerMounts" $ | nindent 12 }}
+            {{- include "ligus.admissionMount" (dict "a" $inst.admission) | nindent 12 }}
             {{- include "ligus.modelGatewayMounts" $ | nindent 12 }}
       volumes:
         {{- include "ligus.secretVolumes" (dict "root" $ "v" $v "component" "worker") | nindent 8 }}
+        {{- include "ligus.admissionVolume" (dict "a" $inst.admission) | nindent 8 }}
         {{- include "ligus.modelGatewayVolumes" $ | nindent 8 }}
         - name: tmp
           emptyDir:

@@ -26,7 +26,10 @@ These postdate the documents above; where a document says otherwise, these
 win (and, once built, the code).
 
 - **`ligus serve` becomes its own member** of the workspace, rather than
-  an enrolled device that signs as its owner.
+  an enrolled device that signs as its owner. Built in Phase B: serve and
+  worker boxes are service members admitted through box admissions
+  (`hive_core::admission`; operator guide, Admitting a box), and the
+  enrolled-device path (`ligus serve enroll`, `LIGUS_SERVE_OWNER`) is removed.
 - **Hardened phone keys.** A phone holds its own key in the Secure Enclave,
   used with Face ID; no self-enrollment; capped to a limited tier; revocable
   on its own.

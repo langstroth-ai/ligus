@@ -1117,3 +1117,46 @@ async fn a_skewed_clock_still_confirms_the_revocation() {
     wait_until("steps settle", Duration::from_secs(5), || t.ledger.list().first().is_some_and(|e| e.status.tunnel.state == StepState::Done)).await;
     h.handle.shutdown();
 }
+
+/// Phase B integration: the serve box is its own service member, and an
+/// Admin revokes its device like any other. A revoked box can no longer act
+/// in the workspace, so it cuts every pairing it holds (the relay is told,
+/// requests on their sessions get 401), rotates the direct-path token once,
+/// and cuts a pairing made after the revocation too. Who may revoke a box's
+/// device at all is the fold's (`service_admission`, `phones_and_services`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn revoking_the_boxs_own_device_cuts_every_pairing_it_holds() {
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let (t, _, _, a, _, _) = pair_bound(&h, &relay).await;
+    let (_, _, _, b, _, _) = pair_bound(&h, &relay).await;
+    let old = h.token.clone();
+    let own: Uuid = h.handle.shared.host_id.parse().unwrap();
+    // A phone's revocation elsewhere cuts nothing here yet.
+    assert!(h.handle.shared.revoke_phones_of_revoked_devices().is_empty());
+
+    revoke_on_desktop(&h, own);
+    crate::sync_once(&h.desktop).await.unwrap();
+    h.handle.shared.sync_kick.notify_one();
+    wait_until("every pairing cut", Duration::from_secs(15), || !t.registry.is_active(&a) && !t.registry.is_active(&b)).await;
+    for pid in [&a, &b] {
+        relay.wait_for("revoke", |m| m["pid"] == json!(pid), Duration::from_secs(5)).await.unwrap();
+        let mut req = axum::http::Request::builder().uri("/v1/chats").body(axum::body::Body::empty()).unwrap();
+        req.extensions_mut().insert(tun::TunnelPeer { pid: pid.clone() });
+        use tower::ServiceExt;
+        let resp = crate::serve::api::router(h.handle.shared.clone()).oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), 401);
+    }
+    wait_until("token rotated", Duration::from_secs(5), || h.handle.shared.token() != old).await;
+    let r = h.client.get(format!("{}/v1/chats", h.base)).bearer_auth(&old).send().await.unwrap();
+    assert_eq!(r.status(), 401);
+    let rotated = h.handle.shared.token();
+
+    // A pairing made after the revocation is cut as it appears; the token
+    // isn't rotated again.
+    let (_, _, _, c, _, _) = pair_bound(&h, &relay).await;
+    wait_until("the later pairing cut", Duration::from_secs(10), || !t.registry.is_active(&c)).await;
+    assert_eq!(h.handle.shared.token(), rotated);
+    h.handle.shutdown();
+}

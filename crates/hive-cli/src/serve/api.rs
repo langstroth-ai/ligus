@@ -540,6 +540,9 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/health", get(health))
         .route("/v1/presence/prepare", post(super::presence_api::prepare))
         .route("/v1/presence/commit", post(super::presence_api::commit))
+        .route("/v1/admissions/prepare", post(super::admissions_api::prepare))
+        .route("/v1/admissions/presence", post(super::admissions_api::presence))
+        .route("/v1/admissions/commit", post(super::admissions_api::commit))
         .route("/v1/chats", get(list_chats).post(create_chat))
         .route("/v1/chats/{id}/messages", get(list_messages).post(post_message))
         .route("/v1/chats/{id}/typing", get(super::typing_api::get_typing).post(super::typing_api::post_typing))
@@ -1100,7 +1103,10 @@ async fn approve_proposal(State(s): S, peer: Option<axum::Extension<TunnelPeer>>
     // An alternative in an open proposal set is applied only through the
     // set's two-phase commit (pre-flight first), never on approval here.
     let in_open_set = chat.proposal_sets.iter().any(|set| set.is_open() && set.contains(updated.id));
-    if s.opts.apply_on_approve && updated.ready_to_apply() && !updated.dismissed && !in_open_set {
+    // A service member (every real box, Phase B) applies only to fulfil a
+    // person's request, never on its own approval.
+    let service = s.lock().author().kind == hive_core::ActorKind::Service;
+    if s.opts.apply_on_approve && !service && updated.ready_to_apply() && !updated.dismissed && !in_open_set {
         if let Some(applied) = apply_on_this_host(&s, &chat, &updated)? {
             updated = applied;
         }

@@ -18,6 +18,10 @@ pub fn requires_presence(event: &SessionEvent, author: &str, roster: &RosterStat
         SessionEvent::MemberRemoved { .. }
         | SessionEvent::MemberRoleChanged { .. }
         | SessionEvent::JoinApproved { .. } => true,
+        // Closing a box admission only narrows who may join, and an Admin's
+        // device does it unattended when it sees the admission redeemed or
+        // lapse (Phase B).
+        SessionEvent::AdmissionClosed { .. } => false,
         // Devices: self-revoke included.
         SessionEvent::DeviceRevoked { .. } => true,
         // A new device for an account that holds a passkey or a recovery key

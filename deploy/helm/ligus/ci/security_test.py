@@ -477,7 +477,50 @@ def test_test_pods_kept_for_logs():
         check("test pod %s is not deleted on success" % d["metadata"]["name"], "hook-succeeded" not in pol, pol)
 
 
-TESTS = [test_test_pods_kept_for_logs, test_no_generated_secrets, test_test_pods_hold_no_workspace_key, test_dns_egress_is_scoped, test_egress_closed_and_metadata_blocked, test_serve_ingress_excludes_foreign_pods,
+# --- Box admissions (Phase B): serve and workers are their own members -------
+
+def test_box_admissions():
+    docs = render("--set", "serve.admission.existingSecret=sa",
+                  "--set", "worker.enabled=true", "--set", "worker.instances[0].name=w1",
+                  "--set", "worker.instances[0].admission.existingSecret=wa",
+                  "--set", "worker.instances[1].name=w2")
+    seen = {}
+    for kind, name, tpl in pod_templates(docs):
+        if (tpl["metadata"].get("labels") or {}).get("app.kubernetes.io/name") != "ligus" or kind != "StatefulSet":
+            continue
+        spec = tpl["spec"]
+        main = spec["containers"][0]
+        env = {e["name"]: e for e in main.get("env") or []}
+        vols = {v["name"]: v for v in spec.get("volumes") or []}
+        seen[name] = "LIGUS_ADMISSION_FILE" in env
+        check("%s never sets LIGUS_SERVE_OWNER" % name, "LIGUS_SERVE_OWNER" not in env)
+        if "LIGUS_ADMISSION_FILE" in env:
+            e = env["LIGUS_ADMISSION_FILE"]
+            check("%s: the admission is a file, not an env secret" % name, "valueFrom" not in e and e["value"].startswith("/etc/ligus/secrets/admission/"))
+            v = vols.get("admission", {}).get("secret", {})
+            check("%s: the admission volume is 0400 and optional (deleted once redeemed)" % name,
+                  v.get("defaultMode") == 0o400 and v.get("optional") is True, str(v))
+            mounts = [m for m in main.get("volumeMounts") or [] if m["name"] == "admission"]
+            check("%s: the admission is mounted read-only" % name, len(mounts) == 1 and mounts[0].get("readOnly") is True)
+            for c in spec.get("initContainers") or []:
+                check("%s/%s: the preflight never sees the admission" % (name, c["name"]),
+                      not any(m["name"] == "admission" for m in c.get("volumeMounts") or []))
+    check("serve and w1 get their own admission, w2 none",
+          seen.get("t-ligus-serve") is True and seen.get("t-ligus-worker-w1") is True and seen.get("t-ligus-worker-w2") is False, str(seen))
+    secrets = set()
+    for kind, name, tpl in pod_templates(docs):
+        for v in tpl["spec"].get("volumes") or []:
+            if v["name"] == "admission":
+                secrets.add(v["secret"]["secretName"])
+    check("each box reads only its own admission Secret", secrets == {"sa", "wa"}, str(secrets))
+    p = render("--set", "serve.owner=alice", ok=False)
+    check("the removed serve.owner is refused with a migration error", p.returncode != 0 and "own service member" in p.stderr, p.stderr[-300:])
+    for name in ("LIGUS_ADMISSION_FILE", "LIGUS_SERVE_OWNER"):
+        p = render("--set", "serve.extraEnv[0].name=%s" % name, "--set", "serve.extraEnv[0].value=x", ok=False)
+        check("serve.extraEnv %s is refused" % name, p.returncode != 0)
+
+
+TESTS = [test_box_admissions, test_test_pods_kept_for_logs, test_no_generated_secrets, test_test_pods_hold_no_workspace_key, test_dns_egress_is_scoped, test_egress_closed_and_metadata_blocked, test_serve_ingress_excludes_foreign_pods,
          test_removed_values_refuse, test_secrets_are_files, test_single_writer_volumes,
          test_mcp_images_pinned, test_metadata_stays_blocked_when_internet_except_is_overridden,
          test_extra_env_cannot_override_secrets_or_sandbox, test_dockerfile_bases_pinned_by_digest,

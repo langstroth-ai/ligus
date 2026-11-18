@@ -16,6 +16,7 @@ pub mod agent_tools;
 pub mod agent_turn;
 pub mod attachment_blob;
 pub mod author_gate;
+pub mod box_admission;
 pub mod builtin_tools;
 pub mod chat_service;
 pub mod cli_detect;

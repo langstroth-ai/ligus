@@ -150,14 +150,13 @@ pub fn pair_plan(server_url: &str, remote: bool, relay_only: bool) -> Result<Pai
     Ok(PairPlan::Direct)
 }
 
-/// A one-line hint for pairing a phone to a box that is its own workspace
-/// member (joined with a plain invite): the phone then writes as the box.
-/// Right for a shared box; for a personal one, `ligus serve enroll` makes the
-/// box your own device so the phone writes as you. `None` otherwise.
+/// A one-line hint for pairing a phone to a box: the box is its own service
+/// member (Phase B), so what the phone sends through it is the box's.
+/// `None` for a revoked box.
 pub fn member_hint(standing: &hive_runtime::device_enroll::Standing) -> Option<&'static str> {
     matches!(standing, hive_runtime::device_enroll::Standing::Own).then_some(
-        "Note: this box is its own workspace member, so the phone's messages show under the box's name. \
-         If it's your personal box, run `ligus serve enroll` once (and approve it on your desktop) so they show as you.",
+        "Note: this box is its own service member, so the phone's messages show under the box's name, \
+         and its votes never count as a person's approval.",
     )
 }
 
@@ -195,7 +194,7 @@ mod tests {
     #[test]
     fn member_hint_only_for_a_separate_member() {
         use hive_runtime::device_enroll::Standing;
-        assert!(member_hint(&Standing::Own).is_some_and(|h| h.contains("ligus serve enroll")));
+        assert!(member_hint(&Standing::Own).is_some_and(|h| h.contains("own service member")));
         let owner = hive_core::ActorIdentity::new("a", "Alex", hive_core::ActorKind::Human);
         assert!(member_hint(&Standing::OwnerDevice(owner)).is_none());
         assert!(member_hint(&Standing::Revoked).is_none());

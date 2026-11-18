@@ -30,8 +30,10 @@ mod guards;
 mod keys;
 mod links;
 pub use links::{links_for_account, LinkDraft, ShownLink, WorkspaceLinks};
+mod phone_sign;
 mod presence;
 pub use keys::RotationIssued;
+pub use phone_sign::PhoneDraft;
 pub use presence::{PresenceDraft, PresenceProvider, PresenceRequest};
 
 #[derive(Debug, thiserror::Error)]
@@ -137,6 +139,10 @@ pub struct ChatService {
 /// arrives (longer than any Ligus secret or common credential; see
 /// `append_chunk`).
 const STREAM_HOLD: usize = 512;
+
+/// How long after its expiry an unredeemed box admission stays open before
+/// an Admin's device closes it naming no redemption (a lagging push).
+pub const ADMISSION_CLOSE_GRACE_MS: i64 = 10 * 60 * 1000;
 
 impl ChatService {
     pub fn new(
@@ -543,6 +549,12 @@ impl ChatService {
     /// keep their original author (the log is immutable).
     pub fn set_author_display_name(&mut self, name: impl Into<String>) {
         self.author.display_name = name.into();
+    }
+
+    /// Set the kind this device's author writes as: a box (`ligus serve`,
+    /// `ligus worker`) is a [`hive_core::ActorKind::Service`] member.
+    pub fn set_author_kind(&mut self, kind: hive_core::ActorKind) {
+        self.author.kind = kind;
     }
 
     /// Set (or clear) the avatar carried on this user's identity, so new
@@ -1364,8 +1376,22 @@ impl ChatService {
             // invite, kept in this device's store); key possession alone
             // never admits anyone.
             let invite = self.store.join_invite(workspace_id)?;
+            // A box admission is redeemed with its code's proof, for this
+            // member through this device (`hive_core::admission`).
+            let proof = match (invite, self.store.join_redeem_key(workspace_id)?) {
+                (Some(id), Some(seed)) => Some(
+                    hive_core::admission::RedeemKey::from_seed(&seed[..])
+                        .map_err(|e| ChatError::Unauthorized(format!("the admission's redeem key: {e}")))?
+                        .prove(workspace_id, id, &member.id, self.device_id),
+                ),
+                _ => None,
+            };
             let config_id = self.ensure_workspace_config(workspace_id)?;
-            self.append_signed(config_id, workspace_id, SessionEvent::MemberAdded { member, invite })?;
+            let proved = proof.is_some();
+            self.append_signed(config_id, workspace_id, SessionEvent::MemberAdded { member, invite, proof })?;
+            if proved {
+                self.store.clear_join_redeem_key(workspace_id)?;
+            }
             true
         };
         // Publish this device's identity so peers can verify our events. Runs
@@ -2137,7 +2163,7 @@ impl ChatService {
         // chat (closes the self-member staleness gap). The passed-in session is
         // shadowed by the config-log id.
         let session_id = self.ensure_workspace_config(workspace_id)?;
-        self.append_signed(session_id, workspace_id, SessionEvent::MemberAdded { member, invite: None })?;
+        self.append_signed(session_id, workspace_id, SessionEvent::MemberAdded { member, invite: None, proof: None })?;
         Ok(())
     }
 
@@ -2171,9 +2197,81 @@ impl ChatService {
         self.append_signed(
             config_id,
             workspace_id,
-            SessionEvent::JoinApproved { subject: hive_core::authorization::invite_subject(id) },
+            SessionEvent::JoinApproved { subject: hive_core::authorization::invite_subject(id), admission: None },
         )?;
         Ok(id)
+    }
+
+    /// Issue a box admission (Phase B, `hive_core::admission`): a fresh
+    /// single-use invite on the config log that admits one service member,
+    /// at most Contributor, for `ttl_ms` from now, and only `account` when
+    /// the box sent a join request. An Admin's act with passkey presence.
+    /// Returns the invite and the redeem key's seed, which goes into the
+    /// admission code only (`box_admission::with_redeem_key`); nothing here
+    /// keeps it.
+    pub fn issue_box_admission(&mut self, workspace_id: Uuid, ttl_ms: i64, request: Option<&crate::box_admission::JoinRequest>) -> Result<(Uuid, [u8; 32])> {
+        let (payload, id, seed) = box_admission_payload(ttl_ms, request)?;
+        let config_id = self.ensure_workspace_config(workspace_id)?;
+        self.append_signed(config_id, workspace_id, payload)?;
+        Ok((id, seed))
+    }
+
+    /// Close this workspace's box admissions that have settled (Phase B,
+    /// `hive_core::admission`), as an Admin's device does unattended: one
+    /// redeemed is closed naming its redemption (so a holder of the code can
+    /// no longer slot another redemption before it), one that lapsed
+    /// unredeemed is closed naming none (so a backdated redemption admits no
+    /// one). A no-op on a device that isn't an Admin's, or is a box. Returns
+    /// how many it closed.
+    /// Call it only once this device has pulled everything the relay holds
+    /// (a closure naming no redemption denies one it hadn't pulled yet).
+    pub fn close_settled_admissions(&mut self, workspace_id: Uuid) -> Result<usize> {
+        if self.author.kind == hive_core::ActorKind::Service || self.delegated {
+            return Ok(0);
+        }
+        let config_id = hive_core::workspace_config_session_id(workspace_id);
+        let Some(config) = self.load(config_id)? else { return Ok(0) };
+        if config.role_of(&self.author.id).rank() < WorkspaceRole::Admin.rank() {
+            return Ok(0);
+        }
+        // Settled: redeemed (the invite is spent) or lapsed. Anything else
+        // waits, and costs no fold of the whole log on every sync. A lapsed,
+        // unredeemed admission waits a grace period more: a box that
+        // redeemed in time but whose push lagged isn't closed out by an
+        // Admin's device that hadn't seen it yet.
+        let now = (Timestamp::now().inner().unix_timestamp_nanos() / 1_000_000) as i64 - ADMISSION_CLOSE_GRACE_MS;
+        let open: Vec<(Uuid, i64)> = config
+            .guards
+            .service_invites
+            .iter()
+            .filter(|(id, a)| {
+                !config.guards.closed_admissions.contains_key(*id) && (config.guards.used_invites.contains(*id) || now > a.expires_ms)
+            })
+            .map(|(id, a)| (*id, a.expires_ms))
+            .collect();
+        if open.is_empty() {
+            return Ok(0);
+        }
+        let envelopes = self.store.config_envelopes(workspace_id)?;
+        let verdicts =
+            hive_core::fold_decisions(&envelopes, self.trusted_founder.as_deref(), self.local_workspace_id, hive_core::WorkspaceAuthz::Unchecked);
+        let mut closed = 0;
+        for (invite, expires_ms) in open {
+            let redeemed = envelopes
+                .iter()
+                .find(|e| {
+                    verdicts.get(&e.event_id) == Some(&hive_core::Verdict::Allowed)
+                        && matches!(&e.payload, SessionEvent::MemberAdded { member, invite: Some(i), .. }
+                            if *i == invite && e.actor_stamp.as_ref().is_some_and(|s| s.actor.id == member.id))
+                })
+                .map(|e| e.event_id);
+            if redeemed.is_none() && now <= expires_ms {
+                continue;
+            }
+            self.append_signed(config_id, workspace_id, SessionEvent::AdmissionClosed { invite, redeemed })?;
+            closed += 1;
+        }
+        Ok(closed)
     }
 
     /// Revoke a single device (lost/compromised) without removing its account
@@ -3261,6 +3359,26 @@ fn touching_message(envs: &[SessionEventEnvelope], id: Uuid) -> Vec<&SessionEven
             _ => false,
         })
         .collect()
+}
+
+
+/// A box admission's `JoinApproved` (expiring `ttl_ms` from now, clamped to
+/// a minute .. 7 days less a minute), its invite and its redeem key's seed.
+/// Issued for a box's join request, it is bound to that box's account and
+/// device key.
+pub(crate) fn box_admission_payload(ttl_ms: i64, request: Option<&crate::box_admission::JoinRequest>) -> Result<(SessionEvent, Uuid, [u8; 32])> {
+    let ttl = ttl_ms.clamp(60_000, hive_core::admission::MAX_ADMISSION_TTL_MS - 60_000);
+    let now = (Timestamp::now().inner().unix_timestamp_nanos() / 1_000_000) as i64;
+    let id = Uuid::new_v4();
+    let key = hive_core::admission::RedeemKey::generate().map_err(|e| ChatError::Unauthorized(format!("no redeem key: {e}")))?;
+    let payload = SessionEvent::JoinApproved {
+        subject: hive_core::authorization::invite_subject(id),
+        admission: Some(match request {
+            Some(r) => hive_core::admission::Admission::service(now + ttl, Some(r.account_id), key.public()).for_device(&r.device_public_key),
+            None => hive_core::admission::Admission::service(now + ttl, None, key.public()),
+        }),
+    };
+    Ok((payload, id, key.seed()))
 }
 
 #[cfg(test)]
@@ -4611,7 +4729,7 @@ mod tests {
         svc.append_signed(
             chat.id,
             wid,
-            SessionEvent::MemberAdded { invite: None, member: test_member("u2", "Bo", WorkspaceRole::Viewer) },
+            SessionEvent::MemberAdded { invite: None, proof: None, member: test_member("u2", "Bo", WorkspaceRole::Viewer) },
         )
         .unwrap();
         // The authoritative config-log entry gives u2 a higher role.

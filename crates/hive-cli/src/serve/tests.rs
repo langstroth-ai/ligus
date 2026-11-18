@@ -101,6 +101,28 @@ async fn spawn_ntfy() -> (String, Pushes) {
 
 // ── Harness ────────────────────────────────────────────────────────────────
 
+/// Options for a test box (no ntfy; paths to fill in).
+fn box_opts(label: &str) -> ServeOptions {
+    ServeOptions {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        token_file: PathBuf::new(),
+        ntfy: None,
+        public_url: None,
+        label: label.into(),
+        name: Some("Phone".into()),
+        pair: false,
+        prometheus_url: "http://127.0.0.1:9".into(),
+        prometheus_configured: false,
+        dashboard_file: PathBuf::new(),
+        default_agent: None,
+        apply_on_approve: false,
+        sync_every: Duration::from_millis(300),
+        remote: None,
+        appearance: Default::default(),
+        test_person: false,
+    }
+}
+
 fn git(dir: &Path, args: &[&str]) {
     let out = hive_core::process_util::command("git").arg("-C").arg(dir).args(args).output().unwrap();
     assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
@@ -174,19 +196,15 @@ async fn harness_with(
         agent.owner_actor_id = svc.author().id.clone();
         let id = agent.id;
         svc.add_agent(ws, ws, agent).unwrap();
-        (id, svc.issue_invite(ws).unwrap())
+        let (inv, seed) = svc.issue_box_admission(ws, 3_600_000, None).unwrap();
+        (id, crate::serve::admission_code(&desktop, &svc, inv, &seed).unwrap(), svc.issue_invite(ws).unwrap())
     };
-    let (agent_id, invite) = agent_id;
+    let (agent_id, admission, person_invite) = agent_id;
     sync_once(&desktop).await.unwrap();
 
     let serve_dir = tmp.path().join("serve");
-    // The box joins with the founder's invite (redeemed by its self-enrollment).
     std::fs::create_dir_all(&serve_dir).unwrap();
-    hive_runtime::event_store::EventStore::open(serve_dir.join("hive.db"))
-        .unwrap()
-        .set_join_invite(ws, invite)
-        .unwrap();
-    let serve_cfg = config(&serve_dir, &relay, &room);
+    let mut serve_cfg = config(&serve_dir, &relay, &room);
     let repo = tmp.path().join("repo");
     make_repo(&repo, repo_files);
     RepoBindings { workspace: Some(repo.to_string_lossy().into_owned()), ..Default::default() }.save(&serve_dir).unwrap();
@@ -205,14 +223,22 @@ async fn harness_with(
         prometheus_configured: false,
         dashboard_file: dir_for_dashboard.join("dashboard.toml"),
         default_agent: None,
-        owner: None,
         apply_on_approve: false,
         sync_every: Duration::from_millis(300),
         remote: None,
         appearance: Default::default(),
+        test_person: false,
     };
     let mut opts = opts;
     tweak(&mut opts);
+    if opts.test_person {
+        // A person box (tests of person-only flows): a person's invite.
+        hive_runtime::event_store::EventStore::open(serve_dir.join("hive.db")).unwrap().set_join_invite(ws, person_invite).unwrap();
+    } else {
+        // The box joins as its own service member with the desktop's box
+        // admission (Phase B), as `ligus admit redeem` would.
+        crate::admit::redeem(&mut serve_cfg, &admission).unwrap();
+    }
     let handle = start(serve_cfg, opts).await.unwrap();
     let base = format!("http://{}", handle.addr);
     let token = handle.shared.token();
@@ -301,86 +327,103 @@ async fn this_host(h: &Harness) -> String {
     me["id"].as_str().unwrap().to_string()
 }
 
-/// Binding an agent to a host is an Admin action (S2): the desktop founder
-/// promotes this box's identity to Admin, and the box syncs the change.
-async fn make_serve_admin(h: &Harness) {
+/// Binding an agent to a host is an Admin action (S2), and the box is a
+/// service member capped at Contributor (Phase B): the desktop's Owner binds
+/// `agents` to this box's `host`, and the box syncs the change.
+async fn bind_here(h: &Harness, host: &str, agents: &[Uuid]) {
     let ws = h.handle.shared.ws;
-    let serve_actor = h.handle.shared.lock().author().id.clone();
-    {
+    let mut done = false;
+    for _ in 0..200 {
+        h.handle.shared.sync_kick.notify_one();
+        sync_once(&h.desktop).await.unwrap();
         let mut desk = open_service(&h.desktop).unwrap();
-        // The box's join must have reached the desktop first.
-        for _ in 0..100 {
-            sync_once(&h.desktop).await.unwrap();
-            let cfg = desk.load(workspace_config_session_id(ws)).unwrap().unwrap();
-            if cfg.members.iter().any(|m| m.id == serve_actor) {
-                break;
+        if desk.list_hosts(ws).unwrap().iter().any(|x| x.id == host) {
+            for id in agents {
+                desk.set_agent_host(ws, *id, host).unwrap();
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            desk = open_service(&h.desktop).unwrap();
+            done = true;
+            break;
         }
-        desk.set_member_role(ws, ws, serve_actor.clone(), hive_core::WorkspaceRole::Admin).unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    assert!(done, "the box's host never reached the desktop");
     sync_once(&h.desktop).await.unwrap();
     for _ in 0..200 {
+        h.handle.shared.sync_kick.notify_one();
         let cfg = h.handle.shared.lock().load(workspace_config_session_id(ws)).unwrap();
-        if cfg.is_some_and(|c| c.role_of(&serve_actor) == hive_core::WorkspaceRole::Admin) {
+        if cfg.is_some_and(|c| agents.iter().all(|id| c.workspace_agents.iter().any(|a| a.id == *id && a.host_id == host))) {
             return;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    panic!("the box never saw its promotion");
+    panic!("the box never saw its agents bound to it");
+}
+
+/// The phone's view of agent `id`.
+async fn agent_json(h: &Harness, id: Uuid) -> Value {
+    let all = h.get("/v1/agents").await;
+    all["agents"].as_array().unwrap().iter().find(|a| a["id"] == json!(id.to_string())).cloned().expect("agent listed")
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
-/// The phone's pairing check calls `GET /v1/agents`; a box whose workspace has
-/// no agents or config yet must answer with empty lists, not 404.
+/// Phase B: a serve box syncs first and never founds a workspace. On a room
+/// the relay has nothing for, it refuses to start and writes no event (no
+/// config seed naming it founder or Owner).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn empty_workspace_lists_are_empty_not_404() {
+async fn a_box_without_a_copy_of_the_workspace_refuses_to_start_and_writes_nothing() {
     let tmp = tempfile::tempdir().unwrap();
     let relay = spawn(test_relay::router()).await;
     let room = format!("serve-empty-{}", Uuid::new_v4());
     let dir = tmp.path().join("serve");
-    let dir_for_dashboard = dir.clone();
-    let opts = ServeOptions {
-        listen: "127.0.0.1:0".parse().unwrap(),
-        token_file: dir.join("serve.token"),
-        ntfy: None,
-        public_url: None,
-        label: "sff".into(),
-        name: Some("Phone".into()),
-        pair: false,
-        prometheus_url: "http://127.0.0.1:9".into(),
-        prometheus_configured: false,
-        dashboard_file: dir_for_dashboard.join("dashboard.toml"),
-        default_agent: None,
-        owner: None,
-        apply_on_approve: false,
-        sync_every: Duration::from_millis(300),
-        remote: None,
-        appearance: Default::default(),
+    let opts = ServeOptions { token_file: dir.join("serve.token"), dashboard_file: dir.join("dashboard.toml"), ..box_opts("sff") };
+    let err = start(config(&dir, &relay, &room), opts).await.err().expect("a box with no workspace copy must not start");
+    assert!(err.to_string().contains("no copy of the workspace"), "{err}");
+    let store = hive_runtime::event_store::EventStore::open(dir.join("hive.db")).unwrap();
+    assert!(store.list_session_ids().unwrap().is_empty(), "the box wrote events");
+    assert_eq!(store.max_row_id().unwrap(), 0);
+}
+
+/// A box without an admission joins nothing: it prints its join request and
+/// refuses, and a person's invite never admits it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_box_joins_only_through_a_box_admission() {
+    let tmp = tempfile::tempdir().unwrap();
+    let relay = spawn(test_relay::router()).await;
+    let room = format!("serve-adm-{}", Uuid::new_v4());
+    let ws = crate::uuid_of_room(&room);
+    let desktop = config(&tmp.path().join("desktop"), &relay, &room);
+    let person_invite = {
+        let mut svc = open_service(&desktop).unwrap();
+        svc.ensure_self_member(workspace_config_session_id(ws), ws).unwrap();
+        svc.issue_invite(ws).unwrap()
     };
-    let handle = start(config(&dir, &relay, &room), opts).await.unwrap();
-    let base = format!("http://{}", handle.addr);
-    let client = hive_forge::new_http_client();
-    for (path, key) in [("/v1/agents", "agents"), ("/v1/hosts", "hosts"), ("/v1/chats", "chats"), ("/v1/proposals", "proposals")] {
-        let r = client.get(format!("{base}{path}")).bearer_auth(handle.shared.token()).send().await.unwrap();
-        assert_eq!(r.status(), 200, "{path}");
-        let v: Value = r.json().await.unwrap();
-        assert!(v[key].is_array(), "{path}: {v}");
-    }
-    assert_eq!(
-        client
-            .get(format!("{base}/v1/agents"))
-            .bearer_auth(handle.shared.token())
-            .send()
-            .await
-            .unwrap()
-            .json::<Value>()
-            .await
-            .unwrap()["agents"],
-        json!([])
-    );
+    sync_once(&desktop).await.unwrap();
+    let dir = tmp.path().join("serve");
+    let opts = || ServeOptions { token_file: dir.join("serve.token"), dashboard_file: dir.join("dashboard.toml"), ..box_opts("sff") };
+    // No admission at all.
+    let err = start(config(&dir, &relay, &room), opts()).await.err().expect("no admission");
+    assert!(err.to_string().contains("isn't a member"), "{err}");
+    // A person's invite.
+    hive_runtime::event_store::EventStore::open(dir.join("hive.db")).unwrap().set_join_invite(ws, person_invite).unwrap();
+    let err = start(config(&dir, &relay, &room), opts()).await.err().expect("a person's invite");
+    assert!(err.to_string().contains("box admission"), "{err}");
+    // A box admission (the desktop's bearer code): joins as a service.
+    let code = {
+        let mut svc = open_service(&desktop).unwrap();
+        let (inv, seed) = svc.issue_box_admission(ws, 3_600_000, None).unwrap();
+        crate::serve::admission_code(&desktop, &svc, inv, &seed).unwrap()
+    };
+    sync_once(&desktop).await.unwrap();
+    let mut cfg = config(&dir, &relay, &room);
+    crate::admit::redeem(&mut cfg, &code).unwrap();
+    let handle = start(cfg, opts()).await.unwrap();
+    let me = handle.shared.lock().author().clone();
+    assert_eq!(me.kind, hive_core::ActorKind::Service);
+    let config_log = handle.shared.lock().load(workspace_config_session_id(ws)).unwrap().unwrap();
+    let m = config_log.members.iter().find(|m| m.id == me.id).expect("the box is a member");
+    assert_eq!((m.actor.kind, m.role), (hive_core::ActorKind::Service, hive_core::WorkspaceRole::Contributor));
+    assert_ne!(config_log.creator_actor_id, me.id, "the box never founds");
     handle.shutdown();
 }
 
@@ -473,10 +516,19 @@ async fn people_channels_and_chat_details() {
     // agent's permission requests.
     assert_eq!(coder["ownerActorId"], json!(desktop_actor));
     let host = this_host(&h).await;
-    make_serve_admin(&h).await;
-    let moved = h
-        .send(reqwest::Method::PUT, &format!("/v1/agents/{}/host", h.agent_id), Some(json!({ "hostId": host })))
-        .await;
+    // The box is a service member (Contributor): the phone can't rebind an
+    // agent through it (an Admin's act); the desktop does.
+    let refused = h
+        .client
+        .put(format!("{}/v1/agents/{}/host", h.base, h.agent_id))
+        .bearer_auth(&h.token)
+        .json(&json!({ "hostId": host }))
+        .send()
+        .await
+        .unwrap();
+    assert!(refused.status().is_client_error(), "{}", refused.status());
+    bind_here(&h, &host, &[h.agent_id]).await;
+    let moved = json!({ "agent": agent_json(&h, h.agent_id).await });
     assert_eq!(moved["agent"]["hostKind"], "thisHost");
     assert_eq!(moved["agent"]["hostOnline"], json!(true));
 
@@ -687,7 +739,9 @@ async fn phone_message_to_hosted_agent_streams_reply_and_files_a_proposal() {
     }
     rounds.push(vec![delta(json!({"content": "Done: "})), delta(json!({"content": "added hello.txt"}))]);
     let (endpoint, model) = spawn_model(rounds).await;
-    let h = harness(&endpoint, "gemma4:12b", &[("README.md", "# demo\n")]).await;
+    // The phone writes as a person here (write tools need an Admin author;
+    // a real box is a Contributor service member and drives none).
+    let h = harness_with(&endpoint, "gemma4:12b", &[("README.md", "# demo\n")], |o| o.test_person = true).await;
 
     // The desktop's agent is visible, on its owner's device until sent here.
     let agents = h.get("/v1/agents").await;
@@ -698,10 +752,8 @@ async fn phone_message_to_hosted_agent_streams_reply_and_files_a_proposal() {
     assert!(coder.get("hostId").is_none());
 
     let host = this_host(&h).await;
-    make_serve_admin(&h).await;
-    let moved = h
-        .send(reqwest::Method::PUT, &format!("/v1/agents/{}/host", h.agent_id), Some(json!({ "hostId": host })))
-        .await;
+    bind_here(&h, &host, &[h.agent_id]).await;
+    let moved = json!({ "agent": agent_json(&h, h.agent_id).await });
     assert_eq!(moved["agent"]["hostId"], json!(host));
     assert_eq!(moved["agent"]["hostLabel"], "sff (this host)");
     // An unknown host is refused.
@@ -757,7 +809,7 @@ async fn phone_message_to_hosted_agent_streams_reply_and_files_a_proposal() {
         .filter(|(n, d, _)| n == "message.delta" && d["messageId"] == reply_id)
         .map(|(_, d, _)| d["text"].as_str().unwrap_or("").to_string())
         .collect();
-    assert!(deltas.contains("added hello.txt"), "deltas: {deltas:?} / {names:?}");
+    assert!(deltas.contains("added hello.txt"), "deltas: {deltas:?} / {names:?} / {:?}", find("message.done"));
     let delta_ev = find("message.delta").unwrap();
     assert_eq!(delta_ev["chatId"], json!(chat_id));
 
@@ -1224,10 +1276,11 @@ async fn apply_on_approve_never_overrides_a_rejection() {
         assert_eq!(p.status, hive_core::ProposalStatus::Rejected);
     }
 
-    // Control: the same flow without a rejection applies and commits.
+    // Control: without a rejection the box votes, but a service member
+    // never applies on its own (Phase B): only to fulfil a person's request.
     let res = h.send(reqwest::Method::POST, &format!("/v1/proposals/{cid}/approve"), None).await;
-    assert_eq!(res["proposal"]["status"], "applied", "{res}");
-    assert!(wt.join("approved.txt").exists(), "the approved proposal was applied in the chat worktree");
+    assert_ne!(res["proposal"]["status"], "applied", "{res}");
+    assert!(!wt.join("approved.txt").exists(), "a service box applied on its own");
     assert!(!wt.join("rejected.txt").exists());
     h.handle.shutdown();
 }
@@ -1341,10 +1394,7 @@ async fn a_greeting_listing_agents_wakes_one_and_an_empty_model_posts_a_notice()
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
-    make_serve_admin(&h).await;
-    for id in [h.agent_id, chat_agent] {
-        h.send(reqwest::Method::PUT, &format!("/v1/agents/{id}/host"), Some(json!({ "hostId": host }))).await;
-    }
+    bind_here(&h, &host, &[h.agent_id, chat_agent]).await;
     h.handle.shared.sync_kick.notify_one();
     tokio::time::sleep(Duration::from_millis(500)).await;
     sync_once(&h.desktop).await.unwrap();
@@ -1515,8 +1565,7 @@ async fn live_gateway_turn_reads_a_file() {
         let note = format!("The secret word is {word}.\n");
         let h = harness(&endpoint, model, &[("NOTE.txt", note.as_str()), ("README.md", "# notes\n")]).await;
         let host = this_host(&h).await;
-        make_serve_admin(&h).await;
-        h.send(reqwest::Method::PUT, &format!("/v1/agents/{}/host", h.agent_id), Some(json!({ "hostId": host }))).await;
+        bind_here(&h, &host, &[h.agent_id]).await;
         let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "live" }))).await;
         let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
         let mut rx = h.events(None).await;
@@ -1545,335 +1594,6 @@ async fn live_gateway_turn_reads_a_file() {
 
 #[path = "tunnel/e2e_tests.rs"]
 mod tunnel_e2e;
-
-/// Poll `GET /v1/health` until `identity.mode` is `mode`.
-async fn wait_identity(h: &Harness, mode: &str) -> Value {
-    let mut v = Value::Null;
-    for _ in 0..100 {
-        v = h.get("/v1/health").await["identity"].clone();
-        if v["mode"] == mode {
-            return v;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    panic!("identity never became {mode}: {v}");
-}
-
-/// The owner approves a box's enrollment code on their desktop (here the
-/// headless client standing in for it: the same `certify_device`).
-async fn approve_on_desktop(desktop: &Config, code: &str) {
-    let request = hive_runtime::device_enroll::DeviceEnrollment::decode(code).unwrap();
-    open_service(desktop).unwrap().certify_device(&request).unwrap();
-    sync_once(desktop).await.unwrap();
-}
-
-/// `LIGUS_SERVE_OWNER` + the owner's approval make this box one of the owner's
-/// own devices: everything the phone does is authored as the owner and accepted
-/// by the owner's desktop; one person, one vote; `@hive` in a chat the phone
-/// creates belongs to the owner's desktop; revoking the box stops it, and a new
-/// device key re-enrolls it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn phone_box_enrolled_as_the_owners_device() {
-    let (endpoint, _model) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
-    // The desktop's identity is a CLI test identity, named like a new box.
-    let h = harness_with(&endpoint, "gpt-4o", &[("README.md", "# demo\n")], |o| o.owner = Some(cli_identity_name())).await;
-    let ws = crate::uuid_of_room(&h.handle.shared.cfg.room);
-    let cfg_id = workspace_config_session_id(ws);
-    let desktop_actor = open_service(&h.desktop).unwrap().author().id.clone();
-
-    // Before approval: the box waits — it neither joined the roster nor writes.
-    let id = wait_identity(&h, "pending").await;
-    assert_ne!(id["actorId"], json!(desktop_actor));
-    let r = h.client.post(format!("{}/v1/chats", h.base)).bearer_auth(&h.token).json(&json!({"title": "x"})).send().await.unwrap();
-    assert_eq!(r.status(), 403);
-    let box_actor = h.handle.shared.my_actor_id();
-    let roster = open_service(&h.desktop).unwrap().load(cfg_id).unwrap().unwrap().members;
-    assert!(!roster.iter().any(|m| m.actor.id == box_actor), "a pending box doesn't join as its own member");
-
-    // The owner approves the code `ligus serve` printed; the box switches live.
-    let code = h.handle.shared.lock().enrollment_request(ws, "sff").encode();
-    approve_on_desktop(&h.desktop, &code).await;
-    let id = wait_identity(&h, "owner").await;
-    assert_eq!(id["actorId"], json!(desktop_actor));
-    assert_eq!(id["displayName"], cli_identity_name());
-
-    // The phone's chat, message, vote and comment are the owner's.
-    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "from the phone" }))).await;
-    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
-    let cid = Uuid::parse_str(&chat_id).unwrap();
-    h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "@hive what changed?" }))).await;
-    let proposal = hive_core::ActionProposal::new("ship it", hive_core::ProposalKind::Decision, desktop_actor.clone());
-    let pid = proposal.id;
-    // Wait for the phone's chat to reach the desktop, then file a proposal in it.
-    for _ in 0..50 {
-        sync_once(&h.desktop).await.unwrap();
-        if open_service(&h.desktop).unwrap().load(cid).unwrap().is_some() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    open_service(&h.desktop).unwrap().upsert_proposal(cid, ws, proposal).unwrap();
-    sync_once(&h.desktop).await.unwrap();
-    let mut found = false;
-    for _ in 0..50 {
-        if h.get("/v1/proposals").await["proposals"].as_array().unwrap().iter().any(|p| p["id"] == json!(pid)) {
-            found = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert!(found, "the desktop's proposal reaches the phone");
-    // P0.6 interim: this box signs as the owner, so the phone's vote can't
-    // pass for the owner's own without presence. Refused, nothing written.
-    let (code, body) = status_of(&h, reqwest::Method::POST, &format!("/v1/proposals/{pid}/approve"), None).await;
-    assert_eq!(code, 403, "{body}");
-    assert_eq!(body["error"], "presence_required");
-    assert!(body["hint"].as_str().unwrap().contains("passkey"));
-    h.send(reqwest::Method::POST, &format!("/v1/proposals/{pid}/comments"), Some(json!({ "text": "looks right" }))).await;
-    tokio::time::sleep(Duration::from_millis(600)).await;
-    sync_once(&h.desktop).await.unwrap();
-    let svc = open_service(&h.desktop).unwrap();
-    let s = svc.load(cid).unwrap().expect("the phone's chat reached the desktop");
-    assert_eq!(s.creator_actor_id, desktop_actor, "the chat is the owner's: their desktop runs its @hive");
-    let m = s.messages.iter().find(|m| m.body == "@hive what changed?").expect("message accepted");
-    assert_eq!(m.actor_identity.as_ref().unwrap().id, desktop_actor);
-    let p = s.proposals.iter().find(|p| p.id == pid).unwrap();
-    assert!(p.approvals.is_empty(), "the phone's refused vote never reached the log: {:?}", p.approvals);
-    assert_eq!(p.refinements.last().unwrap().actor_id, desktop_actor);
-    drop(svc);
-    // The owner votes on their own desktop.
-    open_service(&h.desktop).unwrap().vote_on_proposal(cid, ws, pid, false).unwrap();
-    sync_once(&h.desktop).await.unwrap();
-    let mut votes = Value::Null;
-    for _ in 0..50 {
-        votes = h.get(&format!("/v1/proposals/{pid}")).await["proposal"].clone();
-        if votes["myVote"] == "reject" {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert_eq!(votes["myVote"], "reject", "{votes}");
-    let s = open_service(&h.desktop).unwrap().load(cid).unwrap().unwrap();
-    assert_eq!(s.proposals.iter().find(|p| p.id == pid).unwrap().approvals.len(), 1);
-
-    // People: the phone's "you" is the owner.
-    let people = h.get("/v1/people").await;
-    let me: Vec<&Value> = people["people"].as_array().unwrap().iter().filter(|p| p["isSelf"] == json!(true)).collect();
-    assert_eq!(me.len(), 1);
-    assert_eq!(me[0]["actorId"], json!(desktop_actor));
-
-    // @hive availability follows the owner's desktop heartbeat.
-    {
-        let mut svc = open_service(&h.desktop).unwrap();
-        svc.register_host(ws, hive_core::WorkspaceHost::new(svc.device_id().to_string(), hive_core::HostKind::Device, "Studio Mac"))
-            .unwrap();
-    }
-    sync_once(&h.desktop).await.unwrap();
-    let mut r = Value::Null;
-    for _ in 0..50 {
-        r = h.get(&format!("/v1/chats/{chat_id}/details")).await["defaultResponder"].clone();
-        if r["available"] == json!(true) {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-    assert_eq!(r["availableVia"], "Studio Mac", "{r}");
-
-    // Revoke: the box goes read-only, and what it already sent stays.
-    let old_device = Uuid::parse_str(&h.handle.shared.host_id).unwrap();
-    open_service(&h.desktop).unwrap().revoke_device(cfg_id, ws, old_device).unwrap();
-    sync_once(&h.desktop).await.unwrap();
-    wait_identity(&h, "revoked").await;
-    let r = h
-        .client
-        .post(format!("{}/v1/chats/{chat_id}/messages", h.base))
-        .bearer_auth(&h.token)
-        .json(&json!({ "body": "after revocation" }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(r.status(), 403);
-
-    // Re-enroll: a new device key, approved again.
-    let serve_cfg = h.handle.shared.cfg.clone();
-    let opts = h.handle.shared.opts.clone();
-    assert!(h.handle.stop(Duration::from_secs(5)).await);
-    assert!(cmd_enroll(&serve_cfg, &opts, false).is_err(), "a revoked box needs --new-device");
-    cmd_enroll(&serve_cfg, &opts, true).unwrap();
-    let handle = start(serve_cfg.clone(), opts.clone()).await.unwrap();
-    assert_ne!(handle.shared.host_id, old_device.to_string());
-    let code = handle.shared.lock().enrollment_request(ws, "sff").encode();
-    approve_on_desktop(&h.desktop, &code).await;
-    let h2 = Harness { base: format!("http://{}", handle.addr), token: handle.shared.token(), handle, ..h };
-    wait_identity(&h2, "owner").await;
-    h2.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "back again" }))).await;
-    tokio::time::sleep(Duration::from_millis(600)).await;
-    sync_once(&h2.desktop).await.unwrap();
-    let s = open_service(&h2.desktop).unwrap().load(cid).unwrap().unwrap();
-    let bodies: Vec<(&str, &str)> =
-        s.messages.iter().map(|m| (m.body.as_str(), m.actor_identity.as_ref().map(|a| a.id.as_str()).unwrap_or(""))).collect();
-    assert!(bodies.contains(&("back again", desktop_actor.as_str())), "{bodies:?}");
-    assert!(!bodies.iter().any(|(b, _)| *b == "after revocation"));
-    h2.handle.shutdown();
-}
-
-/// The owner's setup: the box is enrolled as the owner's own device, the
-/// owner writes `@hive say hi` on the desktop, the desktop's `@hive` answers
-/// there, and the reply reaches the box by sync. The box must notify for it:
-/// it didn't run the turn, the trigger was "the owner's own" message, and the
-/// reply arrives already finished (or streams in and finishes later).
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_desktop_reply_synced_to_the_owners_box_notifies() {
-    let (endpoint, _model) = spawn_model(vec![]).await;
-    let h = harness_with(&endpoint, "gpt-4o", &[("README.md", "# demo\n")], |o| o.owner = Some(cli_identity_name())).await;
-    let ws = crate::uuid_of_room(&h.handle.shared.cfg.room);
-    wait_identity(&h, "pending").await;
-    let code = h.handle.shared.lock().enrollment_request(ws, "mac-test").encode();
-    approve_on_desktop(&h.desktop, &code).await;
-    wait_identity(&h, "owner").await;
-    let replied = |h: &Harness, n: usize| {
-        let pushes = h.ntfy.lock().unwrap();
-        pushes.iter().filter(|(hd, _)| hd["title"].to_str().unwrap() == "Hive replied").count() >= n
-    };
-
-    // 1. The reply lands on the box already finished (one sync after the turn).
-    let chat = {
-        let mut svc = open_service(&h.desktop).unwrap();
-        let chat = svc.create_chat("desk chat", ws, "gw").unwrap();
-        // The desktop stamps the reply with the message it answers: the owner's
-        // request, which makes the owner (this box) its requester.
-        let ask = svc.post_user_message(chat.id, ws, "@hive say hi".to_string()).unwrap();
-        let mid = svc.begin_assistant_message(chat.id, ws, "Hive", "gw", None, Some(ask.id)).unwrap();
-        svc.complete_assistant_message(chat.id, ws, mid, "hi").unwrap();
-        chat.id
-    };
-    sync_once(&h.desktop).await.unwrap();
-    let mut ok = false;
-    for _ in 0..100 {
-        if replied(&h, 1) {
-            ok = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert!(ok, "no notification for a finished desktop reply: {:?}", h.ntfy.lock().unwrap().iter().map(|(hd, _)| hd["title"].clone()).collect::<Vec<_>>());
-
-    // 2. The reply syncs in while still streaming, then finishes.
-    let mid = {
-        let mut svc = open_service(&h.desktop).unwrap();
-        let ask = svc.post_user_message(chat, ws, "@hive and again".to_string()).unwrap();
-        svc.begin_assistant_message(chat, ws, "Hive", "gw", None, Some(ask.id)).unwrap()
-    };
-    sync_once(&h.desktop).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(1200)).await;
-    assert!(!replied(&h, 2), "a reply still streaming must not notify yet");
-    open_service(&h.desktop).unwrap().complete_assistant_message(chat, ws, mid, "hi again").unwrap();
-    sync_once(&h.desktop).await.unwrap();
-    let mut ok = false;
-    for _ in 0..100 {
-        if replied(&h, 2) {
-            ok = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert!(ok, "no notification once the streamed desktop reply finished");
-    // The owner's own messages never notified.
-    assert!(!h.ntfy.lock().unwrap().iter().any(|(_, b)| b.contains("say hi")));
-    h.handle.shutdown();
-}
-
-/// A box that was its own member before `LIGUS_SERVE_OWNER` keeps the dispatch
-/// stopgap until its owner approves it: the owner's desktop answers `@hive` in
-/// chats the phone creates once the box is an Admin, and details say whether
-/// that desktop is online (`available` / `availableVia`) from its heartbeat.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn phone_chat_primary_availability_follows_the_owners_desktop() {
-    let (endpoint, _model) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
-    // An existing box: joined as its own member before the owner was set.
-    let h0 = harness(&endpoint, "gpt-4o", &[("README.md", "# demo\n")]).await;
-    let serve_cfg = h0.handle.shared.cfg.clone();
-    let mut opts = h0.handle.shared.opts.clone();
-    assert!(h0.handle.stop(Duration::from_secs(5)).await);
-    opts.owner = Some(cli_identity_name());
-    let handle = start(serve_cfg, opts).await.unwrap();
-    let h = Harness { base: format!("http://{}", handle.addr), token: handle.shared.token(), handle, ..h0 };
-    assert_eq!(h.get("/v1/health").await["identity"]["mode"], "pending");
-    let ws = crate::uuid_of_room(&h.handle.shared.cfg.room);
-    let cfg_id = workspace_config_session_id(ws);
-    let (desktop_actor, box_actor, box_host) = {
-        let svc = open_service(&h.desktop).unwrap();
-        let hosts = h.handle.shared.lock().list_hosts(ws).unwrap();
-        let mine = hosts.iter().find(|x| x.id == h.handle.shared.host_id).unwrap().clone();
-        (svc.author().id.clone(), h.handle.shared.my_actor_id(), mine)
-    };
-    // The box registered its host as the owner's.
-    assert_eq!(box_host.owner_actor_id, desktop_actor);
-
-    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "phone @hive test" }))).await;
-    let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
-    let details = || async { h.get(&format!("/v1/chats/{chat_id}/details")).await["defaultResponder"].clone() };
-
-    // Still a Contributor: the claim isn't honored, so the phone's chat is the
-    // box's own, which can't run @hive — and nothing pretends otherwise.
-    let r = details().await;
-    assert_eq!(r["kind"], "primary");
-    assert_eq!(r["available"], json!(false));
-    assert_eq!(r["unavailableReason"], "noDesktop");
-    assert!(r.get("availableVia").is_none());
-
-    // The owner makes the box an Admin and opens the desktop (Device heartbeat).
-    sync_once(&h.desktop).await.unwrap();
-    {
-        let mut svc = open_service(&h.desktop).unwrap();
-        svc.set_member_role(cfg_id, ws, &box_actor, hive_core::WorkspaceRole::Admin).unwrap();
-        svc.register_host(ws, hive_core::WorkspaceHost::new(svc.device_id().to_string(), hive_core::HostKind::Device, "Studio Mac"))
-            .unwrap();
-    }
-    sync_once(&h.desktop).await.unwrap();
-    let mut r = Value::Null;
-    for _ in 0..50 {
-        r = details().await;
-        if r["available"] == json!(true) {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-    assert_eq!(r["available"], json!(true), "{r}");
-    assert_eq!(r["availableVia"], "Studio Mac");
-    assert_eq!(h.handle.shared.lock().device_links(ws).unwrap().person(&box_actor), desktop_actor);
-
-    // The desktop closes: its last heartbeat ages out.
-    {
-        let mut svc = open_service(&h.desktop).unwrap();
-        let mut stale = hive_core::WorkspaceHost::new(svc.device_id().to_string(), hive_core::HostKind::Device, "Studio Mac");
-        stale.last_seen = hive_core::Timestamp::from_unix_seconds(0);
-        svc.register_host(ws, stale).unwrap();
-    }
-    sync_once(&h.desktop).await.unwrap();
-    for _ in 0..50 {
-        r = details().await;
-        if r["available"] == json!(false) {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-    assert_eq!(r["available"], json!(false), "{r}");
-    assert_eq!(r["unavailableReason"], "desktopOffline");
-    assert!(r.get("availableVia").is_none());
-
-    // The desktop opens again, now beating on the relay's presence channel
-    // instead of re-writing its durable host record: available, with no new
-    // host event in the log.
-    let desktop_host = open_service(&h.desktop).unwrap().device_id().to_string();
-    let rows_before = h.handle.shared.lock().store().list(cfg_id).unwrap().len();
-    h.handle.shared.presence.record(&desktop_host, hive_core::Timestamp::now().inner().unix_timestamp());
-    let r = details().await;
-    assert_eq!(r["available"], json!(true), "{r}");
-    assert_eq!(r["availableVia"], "Studio Mac");
-    assert_eq!(h.handle.shared.lock().store().list(cfg_id).unwrap().len(), rows_before);
-    h.handle.shutdown();
-}
 
 /// A message the box wrote as its own (since retired) member reads on the
 /// phone as the owner's, via the box.
@@ -2231,8 +1951,7 @@ async fn repos_clone_switch_pull_and_pr() {
 
     // The agent's turn (hosted here) is told the repo and branch.
     let host = this_host(&h).await;
-    make_serve_admin(&h).await;
-    h.send(reqwest::Method::PUT, &format!("/v1/agents/{}/host", h.agent_id), Some(json!({ "hostId": host }))).await;
+    bind_here(&h, &host, &[h.agent_id]).await;
     h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/messages"), Some(json!({ "body": "@coder hi" }))).await;
     let mut system = String::new();
     for _ in 0..300 {
@@ -2806,7 +2525,9 @@ async fn proposal_sets_are_listed_with_standing_and_votable_alternatives() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn lockdown_clear_needs_a_human_contributor() {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
-    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    // A person's box: the clear is a human's (a real box, a service member,
+    // is refused: `a_service_box_never_acts_as_a_person`).
+    let h = harness_with(&endpoint, "m", &[("README.md", "x\n")], |o| o.test_person = true).await;
     let ws = h.handle.shared.ws;
     let lock = |chat: Uuid| {
         h.handle
@@ -3277,7 +2998,8 @@ async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
         vec![delta(json!({"content": "Reviewed."}))],
     ];
     let (endpoint, model) = spawn_model(rounds).await;
-    let h = harness(&endpoint, "gemma4:12b", &[("README.md", "# demo\n")]).await;
+    // A person's box: only a person answers an agent's question.
+    let h = harness_with(&endpoint, "gemma4:12b", &[("README.md", "# demo\n")], |o| o.test_person = true).await;
     let ws = h.handle.shared.ws;
     // A second agent on the same runtime.
     let reviewer_id = {
@@ -3290,16 +3012,7 @@ async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
     };
     sync_once(&h.desktop).await.unwrap();
     let host = this_host(&h).await;
-    make_serve_admin(&h).await;
-    for id in [h.agent_id, reviewer_id] {
-        for _ in 0..100 {
-            let r = h.client.put(format!("{}/v1/agents/{id}/host", h.base)).bearer_auth(&h.token).json(&json!({ "hostId": host })).send().await.unwrap();
-            if r.status().is_success() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    }
+    bind_here(&h, &host, &[h.agent_id, reviewer_id]).await;
     let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Ligus tools" }))).await;
     let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
     let mut rx = h.events(None).await;
@@ -3740,11 +3453,6 @@ async fn phone_messages_show_as_the_box_or_its_owner() {
     h.handle.shutdown();
 }
 
-/// The display name a CLI test identity gets (`crate::bootstrap_identity`).
-fn cli_identity_name() -> String {
-    crate::box_name(crate::env_opt("LIGUS_SERVE_LABEL"), hive_runtime::machine_hostname())
-}
-
 // ── Typing indicators (typing_api) ─────────────────────────────────────────
 
 /// The desktop's view of the room's live human beats, plus the raw listing
@@ -3895,4 +3603,316 @@ fn facts_export_never_creates_a_data_dir() {
     let err = crate::cmd_facts_export(&cfg, hive_runtime::facts::Since::UnixMs(0), 0).unwrap_err().to_string();
     assert!(err.contains("never creates"), "{err}");
     assert!(!dir.exists(), "facts export created {}", dir.display());
+}
+
+// ── Workers: sync first (Phase B) ──────────────────────────────────────────
+
+/// Every event a box's own device signed, on every log of its store.
+fn signed_by(dir: &std::path::Path, device: Uuid) -> Vec<hive_core::SessionEventEnvelope> {
+    let store = hive_runtime::event_store::EventStore::open(dir.join("hive.db")).unwrap();
+    let mut out = Vec::new();
+    for id in store.list_session_ids().unwrap() {
+        out.extend(store.list(id).unwrap().into_iter().filter(|e| e.signer_device_id == Some(device)));
+    }
+    out
+}
+
+/// A worker on a room the relay has nothing for refuses to start and writes
+/// nothing: no config seed, no member, no host.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_worker_without_a_copy_of_the_workspace_refuses_and_writes_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let relay = spawn(test_relay::router()).await;
+    let room = format!("worker-empty-{}", Uuid::new_v4());
+    let dir = tmp.path().join("worker");
+    let mut cfg = config(&dir, &relay, &room);
+    let err = crate::worker_start(&mut cfg, "w1", None).await.err().expect("no workspace copy");
+    assert!(err.to_string().contains("no copy of the workspace"), "{err}");
+    let store = hive_runtime::event_store::EventStore::open(dir.join("hive.db")).unwrap();
+    assert_eq!(store.max_row_id().unwrap(), 0, "the worker wrote events");
+    // `ligus register-worker` never seeds one either.
+    assert!(crate::cmd_register_worker(&cfg, Some("w1".into())).is_err());
+    assert_eq!(store.max_row_id().unwrap(), 0);
+}
+
+/// On an existing workspace the worker syncs first and joins as its own
+/// service member: it never writes a config seed or a founder event, never
+/// names itself Owner or Admin, and the workspace's founder stays the
+/// desktop's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_worker_never_writes_a_config_seed_or_founder_event() {
+    let tmp = tempfile::tempdir().unwrap();
+    let relay = spawn(test_relay::router()).await;
+    let room = format!("worker-join-{}", Uuid::new_v4());
+    let ws = crate::uuid_of_room(&room);
+    let desktop = config(&tmp.path().join("desktop"), &relay, &room);
+    let (founder, code) = {
+        let mut svc = open_service(&desktop).unwrap();
+        svc.ensure_self_member(workspace_config_session_id(ws), ws).unwrap();
+        let (inv, seed) = svc.issue_box_admission(ws, 3_600_000, None).unwrap();
+        (svc.author().id.clone(), crate::serve::admission_code(&desktop, &svc, inv, &seed).unwrap())
+    };
+    sync_once(&desktop).await.unwrap();
+    let dir = tmp.path().join("worker");
+    let mut cfg = config(&dir, &relay, &room);
+    let (svc, host) = crate::worker_start(&mut cfg, "w1", Some(code)).await.unwrap();
+    let me = svc.author().clone();
+    let device = svc.device_id();
+    assert_eq!(host, device.to_string());
+    assert_eq!(me.kind, hive_core::ActorKind::Service);
+    let mine = signed_by(&dir, device);
+    assert!(!mine.is_empty());
+    for e in &mine {
+        match &e.payload {
+            hive_core::SessionEvent::SessionSnapshot { .. } => panic!("the worker wrote a seed"),
+            hive_core::SessionEvent::WorkspaceRulesSet { .. } => panic!("the worker wrote genesis rules"),
+            hive_core::SessionEvent::MemberAdded { member, .. } => {
+                assert_eq!(member.id, me.id, "the worker added someone else");
+                assert_eq!((member.actor.kind, member.role), (hive_core::ActorKind::Service, hive_core::WorkspaceRole::Contributor));
+            }
+            hive_core::SessionEvent::MemberRoleChanged { .. } => panic!("the worker changed a role"),
+            _ => {}
+        }
+    }
+    let c = svc.load(workspace_config_session_id(ws)).unwrap().unwrap();
+    assert_eq!(c.creator_actor_id, founder, "the founder is the desktop's");
+    assert_eq!(c.role_of(&founder), hive_core::WorkspaceRole::Owner);
+    assert!(c.workspace_hosts.iter().any(|h| h.id == host), "its host is registered");
+    // A restart (the admission still mounted) neither re-joins nor seeds.
+    drop(svc);
+    let before = signed_by(&dir, device).len();
+    let mut cfg = config(&dir, &relay, &room);
+    crate::worker_start(&mut cfg, "w1", None).await.unwrap();
+    let after = signed_by(&dir, device);
+    assert!(after.iter().skip(before).all(|e| !matches!(e.payload, hive_core::SessionEvent::SessionSnapshot { .. } | hive_core::SessionEvent::MemberAdded { .. })));
+}
+
+/// A real box is a service member (Phase B): what the phone asks of it that
+/// is a person's act is refused, never done in a person's name.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_service_box_never_acts_as_a_person() {
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let me = h.handle.shared.lock().author().clone();
+    assert_eq!(me.kind, hive_core::ActorKind::Service);
+    assert_eq!(h.get("/v1/health").await["identity"]["mode"], "member");
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Triage" }))).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    h.handle
+        .shared
+        .lock()
+        .self_medicate(ws, chat_id, None, &[(hive_core::guard::LockdownSignal::InjectionDetected, "ignore-previous".into())])
+        .unwrap();
+    let g = h.get("/v1/guards").await;
+    assert_eq!(g["canClearLockdown"], false, "{g}");
+    let (code, _) = status_of(&h, reqwest::Method::POST, &format!("/v1/chats/{chat_id}/lockdown/clear"), None).await;
+    assert!((400..500).contains(&code), "{code}");
+    assert!(h.handle.shared.lock().load(chat_id).unwrap().unwrap().guards.lockdown_active());
+    // It can't invite anyone either (an Admin's act with a passkey).
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/invites", Some(json!({}))).await;
+    assert!((400..500).contains(&code), "{code}");
+    h.handle.shutdown();
+}
+
+// ── Admitting a box from the phone (Phase B) ───────────────────────────────
+
+/// The phone admits a second box with its own P-256 key and its person's
+/// passkey, through this box (a service member that can't admit anyone
+/// itself): the code comes back sealed to the box that asked, which then
+/// joins as its own service member. A forged signature and a device that
+/// isn't a phone are refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_phone_admits_a_box_with_its_own_key_through_serve() {
+    use base64::Engine;
+    let b64 = |s: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s).unwrap();
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let phone = hive_core::testkit::Phone::new();
+    let account = {
+        let mut desk = open_service(&h.desktop).unwrap();
+        desk.certify_phone(ws, phone.device_id, &phone.public_key()).unwrap();
+        desk.author().account_id.unwrap()
+    };
+    sync_once(&h.desktop).await.unwrap();
+    for _ in 0..200 {
+        h.handle.shared.sync_kick.notify_one();
+        let (_, t) = h.handle.shared.lock().store().load_config(ws, None, None).unwrap();
+        if t.current().devices.get(&phone.device_id).is_some_and(|d| d.phone) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // The box can't admit anyone itself.
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/invites", Some(json!({}))).await;
+    assert!((400..500).contains(&code));
+    // A device that isn't a phone: refused at prepare.
+    let me = h.handle.shared.lock().device_id();
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/admissions/prepare", Some(json!({ "deviceId": me }))).await;
+    assert_eq!(code, 403);
+
+    let wdir = h._tmp.path().join("worker2");
+    let mut wcfg = config(&wdir, &h.desktop.relay_url.clone().unwrap(), &h.desktop.room);
+    let request = crate::admit::join_request(&wcfg, "w2").unwrap();
+    let prep = h
+        .send(reqwest::Method::POST, "/v1/admissions/prepare", Some(json!({ "deviceId": phone.device_id, "request": request.encode() })))
+        .await;
+    assert_eq!(prep["preview"]["boxFingerprint"], json!(request.fingerprint()));
+    let challenge: [u8; 32] = b64(prep["challenge"].as_str().unwrap()).try_into().unwrap();
+    let a = hive_core::testkit::test_recovery_key(account).assert(&challenge);
+    let id = prep["prepareId"].as_str().unwrap().to_string();
+    let pre = h
+        .send(
+            reqwest::Method::POST,
+            "/v1/admissions/presence",
+            Some(json!({ "prepareId": id, "assertion": { "credentialId": a.credential_id, "authenticatorData": a.authenticator_data, "clientDataJSON": a.client_data_json, "signature": a.signature } })),
+        )
+        .await;
+    let preimage = b64(pre["preimage"].as_str().unwrap());
+    // A signature by another key: refused, nothing appended.
+    let forged = hive_core::crypto::sign_p256(&hive_core::testkit::Phone::new().key, &preimage);
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/admissions/commit", Some(json!({ "prepareId": id, "signature": hive_core::presence::b64url(&forged) }))).await;
+    assert_eq!(code, 403);
+    // The draft is spent: start over and sign with the phone.
+    let prep = h
+        .send(reqwest::Method::POST, "/v1/admissions/prepare", Some(json!({ "deviceId": phone.device_id, "request": request.encode() })))
+        .await;
+    let challenge: [u8; 32] = b64(prep["challenge"].as_str().unwrap()).try_into().unwrap();
+    let a = hive_core::testkit::test_recovery_key(account).assert(&challenge);
+    let id = prep["prepareId"].as_str().unwrap().to_string();
+    let pre = h
+        .send(
+            reqwest::Method::POST,
+            "/v1/admissions/presence",
+            Some(json!({ "prepareId": id, "assertion": { "credentialId": a.credential_id, "authenticatorData": a.authenticator_data, "clientDataJSON": a.client_data_json, "signature": a.signature } })),
+        )
+        .await;
+    let sig = hive_core::crypto::sign_p256(&phone.key, &b64(pre["preimage"].as_str().unwrap()));
+    let done = h
+        .send(reqwest::Method::POST, "/v1/admissions/commit", Some(json!({ "prepareId": id, "signature": hive_core::presence::b64url(&sig) })))
+        .await;
+    assert_eq!(done["sealed"], json!(true));
+    let code = done["code"].as_str().unwrap().to_string();
+    assert!(code.starts_with(hive_runtime::box_admission::SEALED_PREFIX));
+    // Pushed by the box; the second box redeems it and joins.
+    for _ in 0..20 {
+        h.handle.shared.sync_kick.notify_one();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let (svc, _) = crate::worker_start(&mut wcfg, "w2", Some(code)).await.unwrap();
+    let c = svc.load(workspace_config_session_id(ws)).unwrap().unwrap();
+    let m = c.members.iter().find(|m| m.id == svc.author().id).expect("the second box joined");
+    assert_eq!((m.actor.kind, m.role), (hive_core::ActorKind::Service, hive_core::WorkspaceRole::Contributor));
+    h.handle.shutdown();
+}
+
+/// The headless Admin path (CI, scripts): a CLI founder registers a recovery
+/// key, issues box admissions confirmed with it, and serve and a worker join
+/// ONE workspace from those codes, each as its own service member.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_headless_admin_admits_serve_and_a_worker_into_one_workspace() {
+    let tmp = tempfile::tempdir().unwrap();
+    let relay = spawn(test_relay::router()).await;
+    let room = format!("headless-{}", Uuid::new_v4());
+    let ws = crate::uuid_of_room(&room);
+    let founder = config(&tmp.path().join("founder"), &relay, &room);
+    crate::cmd_new(&founder, "founding".into()).unwrap();
+    let words = tmp.path().join("rk");
+    let w = words.to_string_lossy().into_owned();
+    crate::admit::cmd_recovery_key(&founder, &[&"create".to_string()], Some(w.clone())).unwrap();
+    assert_eq!(std::fs::read_to_string(&words).unwrap().split_whitespace().count(), 24);
+    let (s_out, w_out) = (tmp.path().join("serve.code"), tmp.path().join("worker.code"));
+    for out in [&s_out, &w_out] {
+        let flags = |f: &str| match f {
+            "--recovery-words-file" => Some(w.clone()),
+            "--out" => Some(out.to_string_lossy().into_owned()),
+            "--ttl" => Some("2h".into()),
+            _ => None,
+        };
+        crate::admit::cmd_admit(&founder, &[&"issue".to_string()], flags).unwrap();
+    }
+    // Without a recovery key the CLI can't confirm: refused.
+    let none = crate::admit::cmd_admit(&founder, &[&"issue".to_string()], |_| None);
+    assert!(none.is_err());
+    sync_once(&founder).await.unwrap();
+
+    let sdir = tmp.path().join("serve");
+    let mut scfg = config(&sdir, &relay, &room);
+    crate::admit::redeem(&mut scfg, &std::fs::read_to_string(&s_out).unwrap()).unwrap();
+    let opts = ServeOptions { token_file: sdir.join("serve.token"), dashboard_file: sdir.join("dashboard.toml"), ..box_opts("serve") };
+    let handle = start(scfg, opts).await.unwrap();
+    for _ in 0..20 {
+        handle.shared.sync_kick.notify_one();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let mut wcfg = config(&tmp.path().join("worker"), &relay, &room);
+    let (wsvc, _) = crate::worker_start(&mut wcfg, "w1", Some(std::fs::read_to_string(&w_out).unwrap())).await.unwrap();
+    for _ in 0..50 {
+        handle.shared.sync_kick.notify_one();
+        let c = handle.shared.lock().load(workspace_config_session_id(ws)).unwrap().unwrap();
+        if c.members.iter().any(|m| m.id == wsvc.author().id) {
+            let boxes: Vec<_> = c.members.iter().filter(|m| m.actor.kind == hive_core::ActorKind::Service).collect();
+            assert_eq!(boxes.len(), 2, "serve and the worker are each their own service member");
+            assert!(boxes.iter().all(|m| m.role == hive_core::WorkspaceRole::Contributor));
+            handle.shutdown();
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("serve never saw the worker join");
+}
+
+/// Review R6/R7 end to end: the worker redeems with its code's proof, the
+/// desktop (an Admin) closes the settled admission naming that redemption,
+/// and a code without a redeem key (a person's invite) admits no box.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_redeemed_admission_is_closed_by_the_admins_device() {
+    let tmp = tempfile::tempdir().unwrap();
+    let relay = spawn(test_relay::router()).await;
+    let room = format!("worker-close-{}", Uuid::new_v4());
+    let ws = crate::uuid_of_room(&room);
+    let desktop = config(&tmp.path().join("desktop"), &relay, &room);
+    let (code, person_code) = {
+        let mut svc = open_service(&desktop).unwrap();
+        svc.ensure_self_member(workspace_config_session_id(ws), ws).unwrap();
+        let (inv, seed) = svc.issue_box_admission(ws, 3_600_000, None).unwrap();
+        let code = crate::serve::admission_code(&desktop, &svc, inv, &seed).unwrap();
+        assert!(hive_runtime::box_admission::redeem_key_of(&code).is_some());
+        // Nothing open is redeemed or lapsed yet: nothing to close.
+        assert_eq!(svc.close_settled_admissions(ws).unwrap(), 0);
+        let pinv = svc.issue_invite(ws).unwrap();
+        let mut plain = crate::serve::admission_code(&desktop, &svc, pinv, &[0; 32]).unwrap();
+        // Strip the redeem key: what a person's invite code looks like.
+        let body = plain.strip_prefix("hivews1:").unwrap().to_string();
+        let mut v: serde_json::Value =
+            serde_json::from_slice(&base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, body).unwrap()).unwrap();
+        v.as_object_mut().unwrap().remove("ak");
+        plain = format!("hivews1:{}", base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, serde_json::to_vec(&v).unwrap()));
+        (code, plain)
+    };
+    sync_once(&desktop).await.unwrap();
+    // A person's invite code admits no box.
+    let other = tmp.path().join("other");
+    let mut ocfg = config(&other, &relay, &room);
+    let err = crate::worker_start(&mut ocfg, "w2", Some(person_code)).await.err().expect("a person's invite admits no box").to_string();
+    assert!(err.contains("isn't a box admission"), "{err}");
+
+    let dir = tmp.path().join("worker");
+    let mut cfg = config(&dir, &relay, &room);
+    let (svc, _) = crate::worker_start(&mut cfg, "w1", Some(code)).await.unwrap();
+    let me = svc.author().id.clone();
+    let redemption = signed_by(&dir, svc.device_id())
+        .into_iter()
+        .find(|e| matches!(&e.payload, hive_core::SessionEvent::MemberAdded { proof: Some(_), invite: Some(_), .. }))
+        .expect("the worker redeemed with its code's proof");
+    drop(svc);
+    sync_once(&desktop).await.unwrap();
+    let mut admin = open_service(&desktop).unwrap();
+    assert_eq!(admin.close_settled_admissions(ws).unwrap(), 1);
+    assert_eq!(admin.close_settled_admissions(ws).unwrap(), 0, "closed once");
+    let c = admin.load(workspace_config_session_id(ws)).unwrap().unwrap();
+    let hive_core::SessionEvent::MemberAdded { invite: Some(inv), .. } = &redemption.payload else { unreachable!() };
+    assert_eq!(c.guards.closed_admissions.get(inv), Some(&vec![Some(redemption.event_id)]));
+    assert!(c.members.iter().any(|m| m.id == me), "the named redemption stands");
 }

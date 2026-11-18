@@ -81,8 +81,11 @@ Then, from your own terminal (never in a Job whose logs are kept):
 kubectl -n ligus-ws-acme exec -it ligus-serve-0 -- ligus pair --relay-only
 ```
 
-(`ligus serve enroll`, which made the pod one member's device, is being
-replaced in 0.1 by serve joining as its own member; see the operator guide.)
+serve and each worker join the workspace as their own service member: an
+Admin admits each one (desktop: workspace menu, **Admit a box… → For
+Kubernetes**) and the box redeems the code from a Secret at start-up. See the
+operator guide, Admitting a box. (`ligus serve enroll` and `serve.owner` were
+removed in 0.1.)
 
 `ligus pair` prints a secret. Prefer the relay tunnel (`ligus remote enable`)
 for the phone over exposing the serve API through an Ingress.

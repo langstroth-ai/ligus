@@ -713,7 +713,14 @@ any store change and runs steps 1–3 above at once. Step 4 (rotating
 device (`serve-token-revocations.json` remembers which), and direct-path
 event streams opened with the old token end. The phones that remain fetch
 the new token over their tunnel with `GET /v1/tunnel/direct` (§9); a phone
-that only uses the direct path must re-pair. It then confirms with the
+that only uses the direct path must re-pair. The host's **own** device is a
+workspace device too (a serve box is its own service member, and an Admin
+revokes its device like any other): once its roster shows it revoked, the
+host revokes **every** pairing it holds the same way, rotates `serve.token`
+once, and cuts any pairing made later as soon as it appears, so phones stop
+handing messages to a box the workspace has cut off. (A compromised host
+needn't comply; the workspace-side cut is the fold refusing its events and
+the key rotation that leaves it out.) It then confirms with the
 relay over plain HTTPS, which doesn't need the control connection and
 reports what it did:
 

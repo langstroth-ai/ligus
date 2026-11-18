@@ -57,7 +57,7 @@ $ curl -s http://127.0.0.1:8787/v1/health -H "Authorization: Bearer $(cat ~/.lig
 | `GET /v1/people` | | human roster with roles and avatars; each person's `accountId`, `safetyCode`, `keyConflict`, `lookAlike`, `devices`, `links` and `dmChatId` (see [Identity](#identity-safety-codes-invites-and-dms)) |
 | `GET /v1/channels` | | channel tree in sidebar order |
 | `GET /v1/agents` | | agents with runtime and host labels, and `ownerActorId` when the agent has an owner (who, besides the box's person, may grant its permission requests) |
-| `PUT /v1/agents/:id/host` | `{hostId}` (`""` = the owner's device) | moves an agent to another host |
+| `PUT /v1/agents/:id/host` | `{hostId}` (`""` = the owner's device) | moves an agent to another host: an Admin's act, so a box (a service member, at most Contributor) is refused; rebind from the desktop |
 | `GET /v1/hosts` | | hosts, with `isThis` and `online` |
 | `GET /v1/guards` | | dearth mode, pending members, locked chats, coordinator lease. Read-only |
 
@@ -132,10 +132,26 @@ A DM's chat is listed by `GET /v1/chats` with a `dm` object and takes
 messages through `/v1/chats/:id/messages`; agents never run there and its
 messages never push.
 
+### Admissions {#admissions}
+
+The box is its own service member and admits no one itself. The phone admits
+another box with **its own P-256 device key** and its person's passkey; the
+box drafts the event, checks the phone's signature against its certificate
+and judges it as every fold will before appending it. Tunnel or loopback
+only (the answer carries the admission code). See
+[Admitting a box](../ops/admitting-a-box.md).
+
+| Method + path | Request | Notes |
+|---|---|---|
+| `POST /v1/admissions/prepare` | `{deviceId, request?, ttlMinutes?}` | `deviceId` is the phone's workspace device id; `request` the box's join request (`ligusjoin1:…`; absent: a bearer code). Drafts the box admission as the phone's person, signed by that phone, and writes nothing: `{prepareId, challenge, preview: {kind, summary, digestShort, rpId, origins, allowCredentials, boxFingerprint?, boxLabel?, sealed}}`. 403 when `deviceId` isn't an enrolled phone of a member. `prepareId` is single use and lasts 5 minutes |
+| `POST /v1/admissions/presence` | `{prepareId, assertion: {credentialId, authenticatorData, clientDataJSON, signature}}` | puts the passkey assertion over `challenge` into the stamp: `{preimage}` (base64url), the bytes the phone signs with its P-256 key (ECDSA, SHA-256). **The phone checks them before signing** (`hive_core::admission::check_phone_admission_preimage`): a `hive-envelope-v3` preimage of a `joinApproved` box admission on this workspace's config log, stamped for this phone (P-256) with presence, whose presence digest is the `challenge` the passkey just signed. The box drafted it, so anything else (a vote or a post as the person, another admission) is refused, and the phone shows the terms it read from the bytes, not the `preview` |
+| `POST /v1/admissions/commit` | `{prepareId, signature}` | `signature`: 64 bytes, base64url. Appends and syncs the admission: `{committed, eventId, code, sealed, expiresInMinutes}`. 403 when the signature doesn't verify against the phone's certificate, the person isn't an Admin or the presence doesn't verify; 409 before `presence` |
+
 ### Passkey presence
 
-On a box enrolled as its owner's device, the owner's passkey confirms each
-vote, reject, lockdown clear and agent rebind (see
+These endpoints confirmed the actions of a box enrolled as its owner's
+device, a mode removed in 0.1. A box is now its own service member: it
+carries no presence, so they answer an error for its own actions (see
 [Passkey presence](../security/index.md#presence)).
 
 | Method + path | Request | Notes |
@@ -149,14 +165,14 @@ vote, reject, lockdown clear and agent rebind (see
 |---|---|---|
 | `GET /v1/proposals` | `?status=open\|all` (default `open`) | newest first |
 | `GET /v1/proposals/:id` | | adds `myRole`, `myVote`, `canVote`, `isMine`. Every proposal also carries the review badges `authorKind`, `authorName`, `configImpact`, `humanGate`, `presenceRequired`, `argv` (a structured command) and `implementPlan` |
-| `POST /v1/proposals/:id/approve` | | votes approve at the box's role; applies the change only with `LIGUS_SERVE_APPLY_ON_APPROVE`. On a box enrolled as the owner's device: `403 {"error":"presence_required","hint":…}` (as for `reject`, `lockdown/clear` and `agents/:id/host`); use the presence endpoints below |
+| `POST /v1/proposals/:id/approve` | | votes approve at the box's role. The vote never counts as a person's approval, and the box never applies on its own approval (a service member applies only on a person's request) |
 | `POST /v1/proposals/:id/reject` | `{reason?}` | the reason becomes a thread comment |
 | `GET /v1/proposals/:id/comments` | | refinement thread |
 | `POST /v1/proposals/:id/comments` | `{text, requestChanges?}` | a Viewer gets 403 |
 | `POST /v1/proposals/:id/request-changes` | `{note?}` | sends the proposal back to its agent (or the default agent). 409 if already revised or applied |
 | `GET /v1/proposals/:id/implement-plan` | | exactly what Implement does: `{plan: {kind, argv?, cwd?, instruction?, targetAgentId?, targetName, legacyCommand}}` |
 | `GET /v1/chats/:id/asks` | | agents' questions in the chat, newest first: `{asks: [{id, agentName, kind, question, options, open, answer?, answeredBy?, expiresAtMs}]}`. `kind` is `question` (an agent's `ligus_ask_human`) or `permission` (an ACP permission escalation, which only the host's person or the agent's owner can grant) |
-| `POST /v1/asks/:id/answer` | `{answer?, optionIndex?}` | answers an agent's question as the box's person (the first answer wins; it authorizes nothing, so it needs no presence). 400 if already answered or closed |
+| `POST /v1/asks/:id/answer` | `{answer?, optionIndex?}` | only a person answers an agent's question, so a box (a service member) is refused; answer from the desktop. 400 if already answered or closed |
 | `GET /v1/proposals/:id/file` | `?path=<relative>&side=old\|new` | one whole file before or after the diff, rebuilt in a scratch dir. 400 bad path, 404, 409 base moved, 413 over 512 KiB, 415 not UTF-8 |
 
 ### Repos on the host

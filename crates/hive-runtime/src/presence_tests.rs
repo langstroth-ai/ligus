@@ -315,7 +315,7 @@ fn requires_presence_exhaustive() {
         SessionEvent::MemberRoleChanged {
             change: MemberRoleChange { member_id: "x".into(), old_role: WorkspaceRole::Viewer, new_role: WorkspaceRole::Admin }, watermark: Vec::new(),
         },
-        SessionEvent::JoinApproved { subject: "x".into() },
+        SessionEvent::JoinApproved { subject: "x".into(), admission: None },
         SessionEvent::DeviceRevoked { device_id: Uuid::nil(), watermark: Vec::new() },
         SessionEvent::PasskeyRemoved { account_id: Uuid::nil(), credential_id: "c".into() },
         SessionEvent::ChatLockdownCleared { chat_id: Uuid::nil() },
@@ -323,14 +323,14 @@ fn requires_presence_exhaustive() {
         SessionEvent::AgentRemoved { agent_id: Uuid::nil() },
         SessionEvent::WorkspaceRuntimeRemoved { runtime_id: "r".into() },
         SessionEvent::WorkspaceRulesSet { version: 2, presence: None },
-        SessionEvent::MemberAdded { member: member("someone-else", WorkspaceRole::Viewer), invite: None },
+        SessionEvent::MemberAdded { member: member("someone-else", WorkspaceRole::Viewer), invite: None, proof: None },
         SessionEvent::WorkspaceRepoRemoved { repo_id: Uuid::nil() },
     ];
     for e in &yes {
         assert!(requires_presence(e, "me", &roster, &fold), "{} needs presence", e.kind_str());
     }
     let no = [
-        SessionEvent::MemberAdded { member: member("me", WorkspaceRole::Viewer), invite: Some(Uuid::nil()) },
+        SessionEvent::MemberAdded { member: member("me", WorkspaceRole::Viewer), invite: Some(Uuid::nil()), proof: None },
         SessionEvent::MessageRemoved { message_id: Uuid::nil() },
         SessionEvent::TurnClaimed { trigger_id: Uuid::nil(), device_id: Uuid::nil() },
         SessionEvent::DeviceKeyAgreementPublished { device_id: Uuid::nil(), ka_public: vec![] },

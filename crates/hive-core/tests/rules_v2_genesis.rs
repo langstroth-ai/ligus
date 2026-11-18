@@ -21,9 +21,9 @@ fn a_seed_alone_is_rules_v2() {
 fn governance_needs_presence_from_the_first_event() {
     let mut w = SignedWorld::genesis(&["owner", "bea"], None);
     let bea = w.people["bea"].member(WorkspaceRole::Contributor);
-    let bare = w.push_bare("owner", SessionEvent::MemberAdded { member: bea.clone(), invite: None });
+    let bare = w.push_bare("owner", SessionEvent::MemberAdded { member: bea.clone(), invite: None, proof: None });
     assert_eq!(w.verdict(bare), Verdict::Denied);
-    let confirmed = w.push("owner", SessionEvent::MemberAdded { member: bea, invite: None });
+    let confirmed = w.push("owner", SessionEvent::MemberAdded { member: bea, invite: None, proof: None });
     assert_eq!(w.verdict(confirmed), Verdict::Allowed);
 }
 

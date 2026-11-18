@@ -263,11 +263,15 @@ kubectl label namespace ligus-ws-acme pod-security.kubernetes.io/enforce=restric
 kubectl -n ligus-ws-acme create secret generic acme-workspace \
   --from-literal=room=<room> --from-literal=key=<workspace key> \
   --from-literal=relay-access-token=<hrt1 token>
+# serve's box admission: desktop, workspace menu > Admit a box > For Kubernetes
+kubectl -n ligus-ws-acme create secret generic acme-serve-admission \
+  --from-file=admission=./serve-admission.txt
 helm install acme deploy/helm/ligus -n ligus-ws-acme \
   --set image.repository=registry.example.com/ligus --set image.tag=0.1.0 \
   --set relayUrl=https://relay.example.com \
   --set workspace.existingSecret=acme-workspace \
   --set workspace.relayAccessToken=true \
+  --set serve.admission.existingSecret=acme-serve-admission \
   --set networkPolicy.allowInternetHttps=true
 helm test acme -n ligus-ws-acme --logs
 ```
@@ -287,12 +291,17 @@ recorded by audit logging):
 kubectl -n ligus-ws-acme exec -it acme-ligus-serve-0 -- ligus pair --relay-only  # needs remote.enabled
 ```
 
-!!! note "Changing in 0.1: serve's identity"
-    `ligus serve enroll` and `serve.owner` make the pod act as one member's
-    device. They are being replaced by serve joining the workspace as its
-    own member: a service member an Admin approves, capped below Admin, whose
-    votes never count as a human's. Until that lands they still work, but
-    don't build on them.
+!!! note "serve and workers are their own members"
+    serve and every worker join the workspace as their own **service
+    member** (at most Contributor; their votes never count as a person's).
+    Each box needs its own single-use admission: make one per box on the
+    desktop (workspace menu, **Admit a box… → For Kubernetes**), store it in a
+    Secret, and name it in `serve.admission.existingSecret` or
+    `worker.instances[].admission.existingSecret`. The box syncs first,
+    refuses to start without a copy of the workspace (it never founds one),
+    and redeems the code, which binds it to the box's key. Delete the Secret
+    once the box has joined. `ligus serve enroll` and `serve.owner` were
+    removed in 0.1. See [Admitting a box](../ops/admitting-a-box.md).
 
 Useful values of the `ligus` chart: `remote.enabled` / `remote.relayUrl`
 (phone tunnel), `serve.defaultAgent`, `serve.applyOnApprove`,

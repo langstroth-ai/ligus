@@ -113,6 +113,11 @@ pub fn resolve_secret_files(get: impl Fn(&str) -> Option<String>) -> SecretFiles
         }
         out.deny.push(dir);
     }
+    // A box admission (Phase B): a single-use code carrying the workspace
+    // key, read by the host at start-up only.
+    if let Some(file) = get(crate::admit::ADMISSION_FILE_ENV) {
+        out.deny.extend(deny_paths(&PathBuf::from(file.trim())));
+    }
     if let Some(dir) = get(WS_SECRET_DIR) {
         let dir = PathBuf::from(dir.trim());
         match std::fs::read_dir(&dir) {
@@ -278,6 +283,17 @@ mod tests {
         assert_eq!(got.vars, vec![("LIGUS_WS_SECRET_anthropic".to_string(), "sk-ant".to_string())]);
         assert_eq!(got.errors.len(), 1, "{:?}", got.errors);
         assert!(got.deny.contains(&dir.path().to_path_buf()));
+    }
+
+    #[test]
+    fn the_admission_file_is_denied_to_agents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("admission");
+        std::fs::write(&f, "hivews1:x").unwrap();
+        let p = f.to_string_lossy().into_owned();
+        let out = resolve_secret_files(|k| (k == "LIGUS_ADMISSION_FILE").then(|| p.clone()));
+        assert!(out.deny.contains(&f), "{:?}", out.deny);
+        assert!(out.vars.is_empty(), "the code never becomes a variable");
     }
 
     #[test]

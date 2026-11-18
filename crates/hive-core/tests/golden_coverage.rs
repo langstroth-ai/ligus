@@ -75,6 +75,7 @@ fn tag(e: &SessionEvent) -> &'static str {
         E::CoordinatorLeaseReleased { .. } => "coordinatorLeaseReleased",
         E::DearthModeChanged { .. } => "dearthModeChanged",
         E::JoinApproved { .. } => "joinApproved",
+        E::AdmissionClosed { .. } => "admissionClosed",
         E::ChatLockdownRaised { .. } => "chatLockdownRaised",
         E::ChatLockdownCleared { .. } => "chatLockdownCleared",
         E::ProposalMarkedStale { .. } => "proposalMarkedStale",
@@ -111,7 +112,7 @@ const ALL: &[&str] = &[
     "accountKeyRegistered", "accountKeyRotated", "deviceCertificateAdded", "deviceRevoked", "channelCreated",
     "channelRenamed", "channelReordered", "channelArchived", "chatChannelChanged", "workspaceRuntimesUpdated",
     "workspaceRuntimeUpserted", "workspaceRuntimeRemoved", "workspaceHostsUpdated", "workspaceHostUpserted",
-    "workspaceHostRemoved", "coordinatorLeaseClaimed", "coordinatorLeaseReleased", "dearthModeChanged", "joinApproved",
+    "workspaceHostRemoved", "coordinatorLeaseClaimed", "coordinatorLeaseReleased", "dearthModeChanged", "joinApproved", "admissionClosed",
     "chatLockdownRaised", "chatLockdownCleared", "proposalMarkedStale", "flowRecorded", "workspaceRulesSet",
     "proposalApplied", "agentKeyCertified", "workspaceKeyRotated", "deviceKeyAgreementPublished", "passkeyRegistered",
     "passkeyRemoved", "identityLinkPublished", "identityLinkRemoved", "proposalApplyRequested", "workspaceRepoAdded",
@@ -264,6 +265,7 @@ fn cases() -> Vec<(&'static str, Uuid, SessionEvent)> {
         ("memberAdded/service", cfg, SessionEvent::MemberAdded {
             member: WorkspaceMember { id: svc.id.clone(), actor: svc, role: WorkspaceRole::Contributor, title: String::new(), index: 3, joined_at: Timestamp::epoch() },
             invite: None,
+            proof: None,
         }),
         ("deviceCertificateAdded/phone-p256", cfg, SessionEvent::DeviceCertificateAdded {
             certificate: DeviceCertificate::issue_p256(&acct_kp, u(9), u(0x52), &hive_core::crypto::p256_public_key(&phone_key), Timestamp::epoch()),
@@ -303,6 +305,60 @@ fn phase_a_goldens() {
         let line = format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}", serde_json::to_string(&e).unwrap());
         out.push_str(&line);
         out.push('\n');
+    }
+    std::fs::write(path, out).unwrap();
+}
+
+/// Writes the Phase B golden lines: a box admission (`JoinApproved` with its
+/// optional `admission` terms), and, after review, an admission with its
+/// redeem key, a redemption with its proof, and an admission's closing. Run
+/// with `LIGUS_GOLDEN_OUT=<path> --ignored`, then append the lines.
+#[test]
+#[ignore]
+fn phase_b_goldens() {
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let kp = device();
+    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let ws = u(2);
+    let redeem = hive_core::admission::RedeemKey::from_seed(&[0x5a; 32]).unwrap();
+    let svc = {
+        let mut a = ActorIdentity::new(u(0x73).to_string(), "build-1", ActorKind::Service);
+        a.account_id = Some(u(0x72));
+        a
+    };
+    let cases = [
+        ("joinApprovedAdmission/redeemKey", 0, SessionEvent::JoinApproved {
+            subject: format!("invite:{}", u(0x71)),
+            admission: Some(hive_core::admission::Admission::service(3_600_000, Some(u(0x72)), redeem.public()).for_device(&[0x33; 32])),
+        }),
+        ("memberAdded/redemption", 1, SessionEvent::MemberAdded {
+            member: WorkspaceMember { id: svc.id.clone(), actor: svc.clone(), role: WorkspaceRole::Contributor, title: String::new(), index: 4, joined_at: Timestamp::epoch() },
+            invite: Some(u(0x71)),
+            proof: Some(redeem.prove(ws, u(0x71), &svc.id, u(1))),
+        }),
+        ("admissionClosed", 2, SessionEvent::AdmissionClosed { invite: u(0x71), redeemed: Some(u(0x3011)) }),
+    ];
+    let mut out = String::new();
+    for (label, i, payload) in cases {
+        let mut e = SessionEventEnvelope::new(hive_core::workspace_config_session_id(ws), ws, 201 + i, payload);
+        e.id = u(0x3010 + 2 * i as u128);
+        e.event_id = u(0x3011 + 2 * i as u128);
+        e.lamport = 601 + i as u64;
+        e.timestamp = Timestamp::epoch();
+        let mut actor = ActorIdentity::new(u(9).to_string(), "Mara", ActorKind::Human);
+        actor.account_id = Some(u(9));
+        actor.device_id = Some(u(1));
+        e.actor_stamp = Some(ActorStamp {
+            actor,
+            recorded_at: Timestamp::epoch(),
+            cfg_frontier: Some(CfgFrontier { lamport: 600 + i as u64, event_id: u(0x3001) }),
+            presence: None,
+            runtime_effect: false,
+            prev: Some(u(0x3001)),
+            sig_alg: SigAlg::Ed25519,
+        });
+        sign_envelope(&mut e, u(1), &kp);
+        out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
     }
     std::fs::write(path, out).unwrap();
 }

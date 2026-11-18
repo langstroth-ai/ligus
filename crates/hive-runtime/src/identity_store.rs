@@ -109,6 +109,23 @@ impl KeyVault for FileKeyVault {
 pub struct StoredIdentity {
     pub account: HumanAccount,
     pub device: DeviceIdentity,
+    /// This install is a box (`ligus serve`, `ligus worker`): it acts as its
+    /// own **service** member (Phase B), never as a person. Device-local;
+    /// left out when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub service: bool,
+}
+
+impl StoredIdentity {
+    /// The actor this install writes as: its account, as a service when
+    /// this install is a box.
+    pub fn actor(&self) -> hive_core::ActorIdentity {
+        let mut a = self.account.actor();
+        if self.service {
+            a.kind = hive_core::ActorKind::Service;
+        }
+        a
+    }
 }
 
 fn account_key_id(account_id: Uuid) -> String {
@@ -193,8 +210,21 @@ impl<V: KeyVault> IdentityStore<V> {
             revoked_at: None,
         };
 
-        let stored = StoredIdentity { account, device };
+        let stored = StoredIdentity { account, device, service: false };
         self.save(&stored)?;
+        Ok(stored)
+    }
+
+    /// Mark this install as a box (a service member, Phase B) and persist.
+    /// One way: a box never becomes a person.
+    pub fn mark_service(&self) -> Result<StoredIdentity, IdentityError> {
+        let mut stored = self
+            .load()?
+            .ok_or_else(|| IdentityError::Vault("no identity to mark".into()))?;
+        if !stored.service {
+            stored.service = true;
+            self.save(&stored)?;
+        }
         Ok(stored)
     }
 

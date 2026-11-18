@@ -1,101 +1,43 @@
-# Running ligus serve as your own device
+# Running ligus serve
 
-`ligus serve` is the always-on Ligus device your [phone](../../ligus/features/phone-app.md)
-talks to. Out of the box it joins the workspace as **its own member**. Since
-v1.16 you can instead enroll it as **one of your own devices**, so everything
-you do from the phone is authored as you.
+`ligus serve` is the always-on Ligus box your [phone](../../ligus/features/phone-app.md)
+talks to. It joins the workspace as **its own service member**: an Admin
+admits it once with a passkey, and from then on it signs as itself, never as
+you. See [Admitting a box](admitting-a-box.md).
 
-!!! tip "For a box that's yours alone, enroll it as your device"
-    A personal setup (your Mac or home server, your phone) should use
-    `ligus serve enroll`: otherwise the phone's messages show under the box's
-    name, not yours, and your desktop doesn't answer `@hive` in chats the
-    phone starts. Keep the box a separate member only when several people
-    share it.
-
-This page covers that enrollment, how the box's online status works, applying
-approved changes on the box, and the v1.16 sync change every upgrading
+This page covers what that means for the phone, how the box's online status
+works, applying approved changes, and the v1.16 sync change every upgrading
 workspace should know about. For reaching the box from the phone, see
 [Remote access for your phone](../networking/remote-access.md).
 
-## Its own member, or your device
+## The box is its own member
 
-| | Its own member (default) | Your device (`LIGUS_SERVE_OWNER`, approved) |
-|---|---|---|
-| Phone messages show as | the box: `LIGUS_SERVE_NAME`, else its label (`--label` / `LIGUS_SERVE_LABEL`), else its host name | you |
-| Votes and review notes | a second voter, at the box's role (Contributor when it enrolled itself) | yours: one person, one vote |
-| Chats the phone creates | owned by the box; nobody answers `@hive` in them | owned by you; your desktop answers `@hive` |
-| Who signs events | the box's own account | the box's device key, under a certificate from your account |
+| | The box (a service member) |
+|---|---|
+| Phone messages show as | the box: `LIGUS_SERVE_NAME`, else its label (`--label` / `LIGUS_SERVE_LABEL`), else its host name |
+| Role | at most Contributor, never raised above it |
+| Votes and review notes | at the box's role; a vote never counts as a person's approval, so a human gate still needs a person |
+| Chats the phone creates | owned by the box |
+| Who signs events | the box's own account and device key |
+| What it can't do | admit, remove or demote anyone, carry a passkey, answer an agent's question, clear a lockdown, apply a change on its own |
 
-The box's keys never leave it, and your account key never leaves your desktop.
-The desktop signs a certificate for the box's device key; the box can't create
-that certificate itself.
+The box's keys never leave it. Your account key never leaves your desktop.
 
-## Enroll the box
-
-1. **Name the owner.** In the box's environment (the service's env file), set
-   `LIGUS_SERVE_OWNER` to your display name in the workspace, or your actor id
-   if the name isn't unique, and restart `ligus serve`:
-
-    ```sh
-    LIGUS_SERVE_OWNER=alice
-    ```
-
-2. **Get the code.** On start, `ligus serve` prints an enrollment code
-   (`hivedev1:…`) and a fingerprint. To print it again, run
-   `ligus serve enroll` with the same environment.
-3. **Approve it on your desktop.** **Settings → Account → My devices → Add a
-   device**, paste the code, check that the fingerprint matches what the box
-   printed, and approve.
-
-The box notices the certificate on its next sync and acts as you from then on.
-The phone's `/v1/health` reports `identity.mode` `owner`. Approving also
-removes the box's separate member, if it had one.
-
-!!! info "Before approval"
-    Until you approve it, a box with `LIGUS_SERVE_OWNER` set that isn't a
-    member yet waits read-only (`pending`) instead of joining as one. A box
-    that is already a member keeps working as that member meanwhile, and if
-    it's an Admin, desktops already treat it as your device for answering
-    `@hive`.
-
-!!! danger "A box can't make itself your device"
-    An event the box stamps as you without a valid certificate is quarantined
-    on every device as impersonation.
-
-## What changes once it's your device
-
-- **Messages, votes, comments and chats** from the phone are yours. A vote
-  from your desktop replaces one from your phone, so you count once toward
-  quorum.
-- **Your desktop answers `@hive`** in chats the phone creates. Only a desktop
-  runs a chat's primary runtime, so the desktop must be open. While it's
-  closed, the turn waits and is answered when it opens. The phone's chat
-  details show whether your desktop is available.
-- **Older messages follow you.** Messages the box wrote as its own member
-  before enrollment read as yours on the phone (for example "Alice via Phone")
-  and as "*you* via *box*" on the desktop. Chats it created stay answered by
-  your desktop.
-- **No phantom person.** The retired box member isn't listed as another
-  person in the chats it created.
+!!! warning "`ligus serve enroll` and `LIGUS_SERVE_OWNER` were removed"
+    Earlier previews could make the box one of your own devices, so it signed
+    as you. Since 0.1 both stop with a migration error that points to
+    [Admitting a box](admitting-a-box.md). For what only a person may do from
+    the phone, the phone signs with its own device key and your passkey,
+    and the box only relays it (the admissions endpoints are the first such
+    path).
 
 ### Revoke it
 
-On the desktop, **Settings → Account → My devices → Revoke**. Updated desktops
-stop accepting the box's events, and the box goes read-only
-(`identity.mode` `revoked`). Revoking is an Admin action on the workspace:
-every device ignores a revocation signed by anyone below Admin, so if you
-aren't an Admin of this workspace, ask one to revoke the box. To enroll it again, make a new device key and
-approve its new code:
-
-```sh
-ligus serve enroll --new-device
-# restart ligus serve, then approve the new code on the desktop
-```
-
-!!! warning "Upgrade every desktop"
-    Enrollment needs no new event type, so older desktops also accept the
-    enrolled box's events as yours. But only updated desktops keep honoring a
-    revocation after the sync batch it arrived in.
+A box is removed like any member below Admin, by an Admin with a passkey;
+its device can also be revoked on its own. Every device then refuses what it
+signs, the box goes read-only (`identity.mode` `revoked`), and the next key
+rotation leaves it out. To bring it back, start it from a fresh data dir and
+admit it again.
 
 ## Securing the box {#securing-the-box}
 
@@ -146,17 +88,10 @@ ligus serve enroll --new-device
 - **HOME is not the data dir.** Agent CLIs keep their logins under `$HOME`;
   run the service with a `HOME` outside `LIGUS_DATA_DIR` (the container image
   and chart use `/home/ligus`), because the data dir is unreadable to them.
-- **Votes from the phone carry your passkey.** A box enrolled as your device
-  signs as you. A plain approve, reject, lockdown clear or agent rebind from
-  the phone or any bearer caller gets `403 {"error":"presence_required",…}`
-  and one fact per refusal. The phone instead calls `POST
-  /v1/presence/prepare`, signs the returned digest with your passkey (Face
-  ID), and `POST /v1/presence/commit` appends the event with the assertion
-  inside its signed stamp. Every device's fold counts the vote as the
-  passkey's account and drops one without it. Register the passkey on your
-  desktop first (**Settings → Passkeys & keys**); an iCloud Keychain passkey
-  syncs to the iPhone. A box that is its own member is unaffected: its votes
-  are its own.
+- **The box never signs as you.** It is its own service member: its votes
+  are its own and never count as a person's approval. What only a person may
+  do is signed by the phone's own device key with your passkey, and the box
+  only relays it.
 - **Keys follow rotations.** On start the box publishes its key-agreement
   key on the workspace config log, so the next rotation is sealed to it; it
   reads and writes at the newest key version. Its secrets (device keys,
@@ -202,7 +137,7 @@ the current holder and epoch, along with dearth mode and locked chats. See
 |---|---|
 | `GET /v1/proposal-sets`, `GET /v1/proposal-sets/{id}`, `GET /v1/chats/{id}/proposal-sets` | Proposal sets with standings, posted assessments and pre-flight results (read-only; votes use the proposal routes) |
 | `GET /v1/guards` | Dearth mode, locked chats, the coordinator, and whether this box's identity may clear a lockdown |
-| `POST /v1/chats/{id}/lockdown/clear` | Clear a chat's lockdown as this box's identity: a human member at Contributor or above only (by member record and folded role), through the desktop's signed event. On a box enrolled as your device: `403 presence_required`; confirm through `/v1/presence/prepare` and `/v1/presence/commit` |
+| `POST /v1/chats/{id}/lockdown/clear` | Clear a chat's lockdown as this box's identity: a human member at Contributor or above only, so a box (a service member) is refused; clear it from the desktop |
 | `GET /v1/flow` | Board, review queue and alert, marks, routing summary |
 | `GET /v1/chats/{id}/handoffs` | A chat's hand-off cards |
 
@@ -213,20 +148,12 @@ phone's previews setting. The full contract is in `docs/ios-app.md`.
 
 ## Apply on approve
 
-By default, approving a file-diff proposal from the phone records the vote
-and nothing else: applying it is the desktop's **Implement**. To apply on the
-box instead, set:
-
-```sh
-LIGUS_SERVE_APPLY_ON_APPROVE=1
-```
-
-An approved diff is then committed to the chat's branch (`hive/chat/<id>`) in
-the checkout bound on the box (`ligus bind-repo`), the way the desktop's
-Implement does. Only a proposal whose status is `approved` applies; one that
-was rejected by a qualifying reviewer, dismissed or superseded never does.
-In dearth mode a change to a protected path, and in a locked-down chat any
-change, applies only once a human member has approved it themself.
+Approving a file-diff proposal from the phone records the box's vote and
+nothing else: applying it is the desktop's **Implement**. A box is a service
+member, and a service member applies a change only to fulfil a person's
+apply request, never on its own approval, so `LIGUS_SERVE_APPLY_ON_APPROVE=1`
+no longer applies anything on a box. Fulfilling a person's apply request on
+the box is not wired up in 0.1: apply from the desktop.
 To switch a chat's repo, clone, pull or open a pull request from the phone,
 see [Repos on the home host](serve-repos.md).
 

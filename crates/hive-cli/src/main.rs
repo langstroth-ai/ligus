@@ -39,6 +39,7 @@ use hive_runtime::{
 use hive_runtime::secret_store::StoreKeyVault;
 use uuid::Uuid;
 
+mod admit;
 mod auth;
 mod forge_cmd;
 mod gateway_check;
@@ -351,7 +352,7 @@ fn open_service(cfg: &Config) -> Result<ChatService> {
     let device_kp = identity.device_keypair(stored.device.id)?;
     let account_kp = identity.account_keypair(stored.account.id)?;
     let store = EventStore::open(cfg.data_dir.join("hive.db"))?;
-    let mut svc = ChatService::new(store, stored.device.id, device_kp, account_kp, stored.account.actor());
+    let mut svc = ChatService::new(store, stored.device.id, device_kp, account_kp, stored.actor());
     // Agents bound to this host sign their own output with keys this device
     // certifies (A3); the keys live with this host's other keys.
     svc.set_agent_vault(Box::new(StoreKeyVault::for_data_dir(&cfg.data_dir)));
@@ -1221,6 +1222,10 @@ pub(crate) fn with_gateways(mut h: WorkspaceHost) -> WorkspaceHost {
 
 fn cmd_register_worker(cfg: &Config, label: Option<String>) -> Result<String> {
     let mut svc = open_service(cfg)?;
+    // Never seed a config log by registering: sync the workspace first.
+    if svc.load(workspace_config_session_id(uuid_of_room(&cfg.room)))?.is_none() {
+        bail!("this box has no copy of workspace '{}' yet: run `ligus sync` first", cfg.room);
+    }
     let id = svc.device_id().to_string();
     let label = label.or_else(|| env_opt("HOSTNAME")).unwrap_or_else(|| "worker".into());
     svc.ensure_host(uuid_of_room(&cfg.room), crate::with_gateways(WorkspaceHost::new(id.clone(), HostKind::Worker, label)))?;
@@ -1252,7 +1257,6 @@ fn cmd_set_agent_host(cfg: &Config, agent_name: &str, host_id: &str) -> Result<(
 /// back. A failing turn is isolated and not retried in a tight loop. See
 /// `worker.rs` for the turn itself (tool loop, worktrees, proposals).
 async fn cmd_worker(cfg: &Config, label: Option<String>, health_listen: Option<String>) -> Result<()> {
-    let ws = uuid_of_room(&cfg.room);
     // Probes for an orchestrator (Kubernetes): live while the process serves,
     // ready once the worker has registered and opened its store.
     let ready = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -1262,19 +1266,18 @@ async fn cmd_worker(cfg: &Config, label: Option<String>, health_listen: Option<S
     if let Err(e) = purge_foreign_workspaces(cfg) {
         eprintln!("worker: foreign-workspace cleanup skipped: {e}");
     }
-    // Same label `cmd_register_worker` publishes, reused for the identity block
-    // so an agent can say which worker it runs on.
+    // Same label the host registration publishes, reused for the identity
+    // block so an agent can say which worker it runs on.
     let host_label = label
         .clone()
         .or_else(|| env_opt("HOSTNAME"))
         .unwrap_or_else(|| "worker".into());
-    let my_host = cmd_register_worker(cfg, label)?;
-    if cfg.relay_url.is_some() {
-        let _ = sync_once(cfg).await;
-    }
+    let admission = admit::admission_from_file(env_opt(admit::ADMISSION_FILE_ENV))?;
+    let mut cfg = cfg.clone();
+    let (mut svc, my_host) = worker_start(&mut cfg, &host_label, admission).await?;
+    let cfg = &cfg;
+    let ws = uuid_of_room(&cfg.room);
     println!("worker {my_host} online — draining queued mentions for its agents. Ctrl-C to stop.");
-    let mut svc = open_service(cfg)?;
-    publish_key_agreement(cfg, &mut svc);
     // Finish replies a previous run was streaming when it stopped (see
     // `worker::recover_interrupted_turns`).
     match worker::recover_interrupted_turns(&mut svc) {
@@ -1337,6 +1340,27 @@ async fn cmd_worker(cfg: &Config, label: Option<String>, health_listen: Option<S
             }
         }
     }
+}
+
+/// A worker's start-up (Phase B): **sync first**, refuse without a copy of
+/// the workspace (never seed a competing config log naming this box founder
+/// or Owner), join only as this box's own service member through an
+/// admission, then register its host, publish its key-agreement key and push.
+/// Returns the service and this box's host id.
+async fn worker_start(cfg: &mut Config, label: &str, admission: Option<String>) -> Result<(ChatService, String)> {
+    let (mut svc, _) = admit::prepare_box(cfg, label, None, admission, |c| async move { sync_once(&c).await }).await?;
+    let ws = uuid_of_room(&cfg.room);
+    let id = svc.device_id().to_string();
+    if svc.device_standing(ws, None)? == hive_runtime::device_enroll::Standing::Revoked {
+        bail!("this worker's device was revoked by a workspace Admin; start it from a fresh data dir and admit it again");
+    }
+    svc.ensure_host(ws, with_gateways(WorkspaceHost::new(id.clone(), HostKind::Worker, label.to_string())))
+        .context("registering this box as a worker host")?;
+    publish_key_agreement(cfg, &mut svc);
+    if let Err(e) = sync_once(cfg).await {
+        eprintln!("worker: pushing the registration failed (will retry): {e}");
+    }
+    Ok((svc, id))
 }
 
 /// Backoff after `fails` consecutive relay-sync failures: 6,12,24,48,96,120… s.
@@ -1538,8 +1562,11 @@ fn usage() -> ! {
          ligus serve [--listen ADDR] [--pair] [--token-file PATH] [--label NAME]\n                                       \
          run the home host for the iOS app (sync + worker + HTTP/SSE API);\n                                       \
          --remote-relay URL / LIGUS_REMOTE_RELAY also serves it through a relay\n  \
-         ligus serve enroll [--new-device]   print the code that makes this box your own device\n                                       \
-         (approve it on your desktop; --new-device after a revocation)\n  \
+         ligus admit request [--label NAME]   print this box's join request (an Admin admits it)\n  \
+         ligus admit redeem <ligusadmit1:code> | - | --file PATH   keep a box admission (serve and worker join as their own member)\n  \
+         ligus admit issue --recovery-words-file PATH [--ttl 1h] [--request ligusjoin1:...] [--out PATH]\n                                       \
+         headless Admin: issue a box admission confirmed with your recovery key\n  \
+         ligus recovery-key create --out PATH   register a recovery key for this CLI identity (never a box)\n  \
          ligus bind-repo <name|path> [--chat <id>] | --clear   bind a checkout for agent file tools\n  \
          ligus forge list|add <kind> <https://base> [--auth token|oauth|gh|none] [--client-id ID] [--internal]|token <id> <read|write>|login <id>|test <id>|remove <id>\n                                       code-host connections (tokens on stdin, kept in the OS secret store)\n  \
          ligus repos                     show the repos dir and bindings\n  \
@@ -1812,19 +1839,10 @@ fn run() -> Result<()> {
         }
         "queue" => cmd_queue(&cfg),
         "serve" if positional.first().map(|s| s.as_str()) == Some("enroll") => {
-            let opts = serve::ServeOptions::from_flags(
-                &cfg,
-                flag_val("--listen"),
-                None,
-                None,
-                None,
-                None,
-                flag_val("--label"),
-                None,
-                false,
-            )?;
-            serve::cmd_enroll(&cfg, &opts, has("--new-device"))
+            bail!("`ligus serve enroll` was removed: {}", admit::OWNER_MODE_REMOVED)
         }
+        "admit" => admit::cmd_admit(&cfg, &positional, |f| flag_val(f)),
+        "recovery-key" => admit::cmd_recovery_key(&cfg, &positional, flag_val("--out")),
         "serve" => {
             hardening::require_sandbox_or_exit("this serve host");
             let opts = serve::ServeOptions::from_flags(

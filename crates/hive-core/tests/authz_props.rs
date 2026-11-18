@@ -92,7 +92,7 @@ impl World {
         w.identity("owner");
         w.chat_push("owner", SessionEvent::SessionSnapshot { session: Box::new(chat) });
         for (id, role) in [("ada", WorkspaceRole::Admin), ("mara", WorkspaceRole::Contributor), ("val", WorkspaceRole::Viewer)] {
-            w.cfg_push("owner", SessionEvent::MemberAdded { invite: None, member: member(id, role) });
+            w.cfg_push("owner", SessionEvent::MemberAdded { invite: None, proof: None, member: member(id, role) });
             w.identity(id);
         }
         w
@@ -647,7 +647,7 @@ fn forged_frontier_hold_cannot_block_side_effects_indefinitely() {
     assert!(w.state().authz.blocks(pid, None), "held while it could still arrive");
     // The config log moves past the claimed lamport: the hold is dropped.
     for _ in 0..3 {
-        w.cfg_push("owner", SessionEvent::JoinApproved { subject: "noop".into() });
+        w.cfg_push("owner", SessionEvent::JoinApproved { subject: "noop".into(), admission: None });
     }
     let s = w.state();
     assert!(!s.authz.blocks(pid, None), "a frontier the log has passed can't block side effects");
@@ -864,7 +864,7 @@ fn lockdown_bounds_s5() {
     assert_eq!(w.config().guards.lockdowns_of(chat).len(), 3);
     // Many raisers (all members): at most 16 active per chat.
     for i in 0..10u128 {
-        w.cfg_push("owner", SessionEvent::MemberAdded { member: member(&format!("worker{i}"), WorkspaceRole::Viewer), invite: None });
+        w.cfg_push("owner", SessionEvent::MemberAdded { member: member(&format!("worker{i}"), WorkspaceRole::Viewer), invite: None, proof: None });
     }
     for i in 0..40u128 {
         let by = format!("worker{}", i % 10);
@@ -1128,11 +1128,11 @@ fn message(by: &str, body: &str) -> SessionEvent {
 }
 
 fn enroll(id: &str, invite: Option<Uuid>) -> SessionEvent {
-    SessionEvent::MemberAdded { member: member(id, WorkspaceRole::Contributor), invite }
+    SessionEvent::MemberAdded { member: member(id, WorkspaceRole::Contributor), invite, proof: None }
 }
 
 fn issue(invite: Uuid) -> SessionEvent {
-    SessionEvent::JoinApproved { subject: hive_core::authorization::invite_subject(invite) }
+    SessionEvent::JoinApproved { subject: hive_core::authorization::invite_subject(invite), admission: None }
 }
 
 proptest! {
@@ -1218,7 +1218,7 @@ fn an_invited_member_enrolls_once_and_the_invite_is_spent() {
     w.cfg_push("owner", issue(id2));
     let mut admin = member("kim", WorkspaceRole::Admin);
     admin.role = WorkspaceRole::Admin;
-    let greedy = w.cfg_push("kim", SessionEvent::MemberAdded { member: admin, invite: Some(id2) });
+    let greedy = w.cfg_push("kim", SessionEvent::MemberAdded { member: admin, invite: Some(id2), proof: None });
     let v = w.verdicts();
     assert_eq!(v[&early], Verdict::Denied);
     assert_eq!(v[&by_mara], Verdict::Denied);
@@ -1374,7 +1374,7 @@ fn agent_tier_cannot_emit_admin_events() {
     }
     // Config-log governance signed by the agent key: refused too.
     for e in [
-        SessionEvent::MemberAdded { member: member("ghost", WorkspaceRole::Admin), invite: None },
+        SessionEvent::MemberAdded { member: member("ghost", WorkspaceRole::Admin), invite: None, proof: None },
         SessionEvent::WorkspaceRulesSet { version: 1, presence: None },
         SessionEvent::ChatLockdownCleared { chat_id: w.sid },
     ] {
@@ -1923,7 +1923,7 @@ fn a_removed_admins_backdated_config_event_is_denied() {
     let removal_at = w.clock;
     w.cfg_push("owner", SessionEvent::MemberRemoved { member_id: "ada".into(), watermark: Vec::new() });
     // Ada adds a confederate with a lamport before her removal.
-    let id = w.cfg_push("ada", SessionEvent::MemberAdded { invite: None, member: member("eve", WorkspaceRole::Admin) });
+    let id = w.cfg_push("ada", SessionEvent::MemberAdded { invite: None, proof: None, member: member("eve", WorkspaceRole::Admin) });
     {
         let env = w.cfg.iter_mut().find(|e| e.event_id == id).unwrap();
         env.lamport = removal_at;

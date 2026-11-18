@@ -27,8 +27,8 @@ Shown first on every dashboard unless `dashboard.toml` says otherwise:
 | **Phones paired** | Shown only when remote access is on (`ligus remote`) |
 | **This host** | Ligus serve, Relay sync (for example "Synced 4 s ago"), Remote access (when on), Push |
 
-"Your review" means the identity the phone acts as: the host itself, or
-its owner once the host is enrolled as one of the owner's devices.
+"Your review" means the identity the phone acts as: the host itself, a
+service member of the workspace.
 
 To move or hide the section, set `builtin` at the top of `dashboard.toml`,
 before any `[mcp]` table or `[[section]]`:

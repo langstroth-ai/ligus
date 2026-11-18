@@ -80,7 +80,7 @@ impl World {
         w.register_recovery("owner");
         for (name, role) in [("ada", WorkspaceRole::Admin), ("mara", WorkspaceRole::Viewer)] {
             let m = member(name, &w.people[name], role);
-            w.push("owner", SessionEvent::MemberAdded { member: m, invite: None });
+            w.push("owner", SessionEvent::MemberAdded { member: m, invite: None, proof: None });
             w.register_recovery(name);
         }
         for name in NAMES {
