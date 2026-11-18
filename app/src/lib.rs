@@ -52,6 +52,7 @@ mod phones_ui;
 mod people;
 mod links_ui;
 mod agent_iface;
+mod memory_ui;
 /// In-app live test support (see `tests/app_live.rs`); not in release builds.
 #[cfg(feature = "e2e")]
 #[doc(hidden)]
@@ -14716,6 +14717,12 @@ pub fn run() {
             get_implement_plan,
             agent_iface::answer_ask,
             flow::flow_marks,
+            memory_ui::memory_view,
+            memory_ui::memory_write,
+            memory_ui::memory_remove,
+            memory_ui::memory_decide,
+            memory_ui::memory_propose,
+            memory_ui::task_state,
             flow::flow_add_mark,
             flow::flow_clear_mark,
             flow::flow_zones,
