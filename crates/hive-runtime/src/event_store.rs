@@ -1777,9 +1777,10 @@ impl EventStore {
     /// One-time maintenance: delete `messageChunkReceived` rows whose message
     /// already has a `messageCompleted` (the completed body supersedes them).
     /// Shrinks DBs written before per-token persistence was removed; projection
-    /// is unaffected. A chunk another event names as its `log_head` stays: it
-    /// is what that event's lamport counts from (`hive_core::lamport`), and
-    /// without it the event would be held. Returns rows removed.
+    /// is unaffected. A pruned chunk stays a lamport witness (its id, lamport,
+    /// log head and chain link, `hive_core::lamport`): an event here or one
+    /// still to arrive from a device that held the chunk may count from it,
+    /// and without it that event would be held. Returns rows removed.
     pub fn prune_superseded_chunks(&mut self) -> Result<usize> {
         fn message_id_of(json: &str) -> Option<String> {
             // SessionEvent variant fields keep snake_case (the enum's
@@ -1807,19 +1808,8 @@ impl EventStore {
             return Ok(0);
         }
 
-        // Events named as a log head (their lamport bounds a later event).
-        let mut named: std::collections::HashSet<String> = std::collections::HashSet::new();
-        {
-            let mut stmt = self.conn.prepare(
-                "SELECT json_extract(envelope_json, '$.actorStamp.logHead.e') FROM events \
-                 WHERE json_extract(envelope_json, '$.actorStamp.logHead.e') IS NOT NULL",
-            )?;
-            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-            for id in rows {
-                named.insert(id?);
-            }
-        }
         let mut doomed: Vec<String> = Vec::new(); // event_ids
+        let mut witnesses: Vec<SessionEventEnvelope> = Vec::new();
         {
             let mut stmt = self.conn.prepare(
                 "SELECT event_id, envelope_json FROM events WHERE kind = 'messageChunkReceived'",
@@ -1827,12 +1817,18 @@ impl EventStore {
             let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
             for row in rows {
                 let (event_id, json) = row?;
-                if message_id_of(&json).map(|m| completed.contains(&m)).unwrap_or(false) && !named.contains(&event_id) {
+                if message_id_of(&json).map(|m| completed.contains(&m)).unwrap_or(false) {
+                    if let Ok(env) = serde_json::from_str::<SessionEventEnvelope>(&json) {
+                        witnesses.push(env);
+                    }
                     doomed.push(event_id);
                 }
             }
         }
 
+        for env in &witnesses {
+            self.note_lamport_witness(env)?;
+        }
         let tx = self.conn.transaction()?;
         let mut removed = 0;
         for event_id in &doomed {
@@ -2402,7 +2398,7 @@ mod tests {
             .append(sid, wid, SessionEvent::MessageAppended { message: placeholder })
             .unwrap();
         // Two chunks streamed concurrently (both after the placeholder): the
-        // completion counts from one of them, which therefore stays.
+        // completion counts from one of them, which stays a witness.
         let at = Some(hive_core::CfgFrontier { lamport: placeholder.lamport, event_id: placeholder.event_id });
         for piece in ["He", "llo"] {
             let chunk = SessionEventEnvelope::new(sid, wid, 9, SessionEvent::MessageChunkReceived { message_id: mid, chunk: piece.into() });
@@ -2417,12 +2413,44 @@ mod tests {
             .unwrap();
 
         let removed = store.prune_superseded_chunks().unwrap();
-        assert_eq!(removed, 1, "the chunk nothing counts from is superseded by completed; the other is a log head");
+        assert_eq!(removed, 2, "both chunks are superseded by completed");
+        assert!(store.lamport_head(sid).unwrap().is_some_and(|h| h.lamport == 4), "the completion still counts from its chunk");
         // projection unchanged
         let s = store.load_session(sid).unwrap().unwrap();
         assert_eq!(s.messages.iter().find(|m| m.id == mid).unwrap().body, "Hello");
         // idempotent
         assert_eq!(store.prune_superseded_chunks().unwrap(), 0);
+    }
+
+    /// A pruned chunk stays a lamport witness: another device may have held
+    /// it and counted from it, and its event can arrive after the prune.
+    #[test]
+    fn an_event_counting_from_a_pruned_chunk_still_folds() {
+        let (mut store, sid, wid) = seeded_store();
+        let mut placeholder = ChatMessage::new(MessageRole::Assistant, "Hive", "");
+        placeholder.is_streaming = true;
+        let mid = placeholder.id;
+        let placeholder = store.append(sid, wid, SessionEvent::MessageAppended { message: placeholder }).unwrap();
+        let chunk = store.append(sid, wid, SessionEvent::MessageChunkReceived { message_id: mid, chunk: "Hel".into() }).unwrap();
+        let key = |e: &SessionEventEnvelope| Some(hive_core::CfgFrontier { lamport: e.lamport, event_id: e.event_id });
+        let at_chunk = key(&chunk);
+        // This device completes the message counting from something newer it
+        // held (two concurrent title changes), so nothing here names the chunk.
+        let t1 = fixture_next(&SessionEventEnvelope::new(sid, wid, 9, SessionEvent::SessionTitleChanged { title: "t1".into() }), key(&placeholder));
+        let t2 = fixture_next(&SessionEventEnvelope::new(sid, wid, 9, SessionEvent::SessionTitleChanged { title: "t2".into() }), key(&t1));
+        store.ingest(&t1).unwrap();
+        store.ingest(&t2).unwrap();
+        store.append(sid, wid, SessionEvent::MessageCompleted { message_id: mid, body: "Hello".into() }).unwrap();
+        // Meanwhile another device held the chunk as its newest event.
+        let theirs = SessionEventEnvelope::new(sid, wid, 9, SessionEvent::SessionTitleChanged { title: "theirs".into() });
+        let theirs = fixture_next(&theirs, at_chunk);
+        assert!(store.prune_superseded_chunks().unwrap() >= 1);
+        assert!(!store.has_event(chunk.event_id).unwrap(), "the chunk is pruned");
+        store.ingest(&theirs).unwrap();
+        let head = store.lamport_head(sid).unwrap().unwrap();
+        let s = store.load_session(sid).unwrap().unwrap();
+        assert!(s.authz.held.iter().all(|h| h.event_id != theirs.event_id), "not held for the pruned chunk");
+        assert!(head.lamport >= theirs.lamport);
     }
 
     /// The cleanup for events an older client pushed into a room regardless of
