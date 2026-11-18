@@ -257,6 +257,79 @@ proptest! {
     }
 }
 
+proptest! {
+    /// Devices that refused different events at ingest (a refusal depends on
+    /// each device's roster: a revocation, a removal, a rebound agent key, a
+    /// certificate not there yet) keep each refused one as an inert witness,
+    /// and every device also refuses a keyholder's forged copies of real ids
+    /// (any lamport, any head). In any arrival order, they judge every id
+    /// alike, hold none of the honest events, and fold every event none of
+    /// them refused to one verdict.
+    #[test]
+    fn prop_devices_refusing_different_events_judge_alike(
+        devices in 2usize..5,
+        ops in prop::collection::vec(arb_op(), 1..32),
+        refusals in prop::collection::vec(any::<u64>(), 3),
+        forged in prop::collection::vec((any::<usize>(), any::<usize>(), 0u64..3), 0..4),
+        seed in any::<u64>(),
+    ) {
+        let (all, _) = history(devices, &ops);
+        // Forged copies of real ids: at a real head's lamport + 1 (or past
+        // it, or naming nobody), refused by everyone.
+        let forgeries: Vec<SessionEventEnvelope> = forged
+            .iter()
+            .map(|&(id_at, head_at, kind)| {
+                let id = all[id_at % all.len()].event_id;
+                let h = &all[head_at % all.len()];
+                let mut e = SessionEventEnvelope::new(h.session_id, h.workspace_id, 1, SessionEvent::SessionTitleChanged { title: "forged".into() });
+                e.actor_stamp = Some(stamp("mallory"));
+                let head = match kind {
+                    0 => CfgFrontier { lamport: h.lamport, event_id: h.event_id },
+                    1 => CfgFrontier { lamport: h.lamport + 3, event_id: h.event_id },
+                    _ => CfgFrontier { lamport: h.lamport, event_id: Uuid::new_v4() },
+                };
+                lamport::stamp_next(&mut e, Some(head));
+                e.event_id = id;
+                lamport::inert_witness(&e)
+            })
+            .collect();
+        let refused = |d: usize, i: usize| i > 0 && refusals[d % refusals.len()] & (1 << (i % 64)) != 0;
+        let mut logs = Vec::new();
+        let mut rng = seed | 1;
+        for d in 0..devices {
+            let mut log: Vec<SessionEventEnvelope> = all
+                .iter()
+                .enumerate()
+                .map(|(i, e)| if refused(d, i) { lamport::inert_witness(e) } else { e.clone() })
+                .collect();
+            log.extend(forgeries.iter().cloned());
+            for i in (1..log.len()).rev() {
+                rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17;
+                log.swap(i, (rng % (i as u64 + 1)) as usize);
+            }
+            logs.push(log);
+        }
+        let bounds: Vec<Bounds> = logs.iter().map(|l| Bounds::of(l)).collect();
+        for e in &all {
+            let v0 = bounds[0].of_id(e.event_id);
+            prop_assert_eq!(v0, Some(Plausibility::Plausible), "an honest event isn't within bounds");
+            for b in &bounds[1..] {
+                prop_assert_eq!(b.of_id(e.event_id), v0, "two devices judged one id differently");
+            }
+        }
+        let decided: Vec<BTreeMap<Uuid, Verdict>> = logs.iter().map(|l| verdicts(l)).collect();
+        for (i, e) in all.iter().enumerate().skip(1) {
+            // A forged witness copy of its id never erases it (witnesses don't fold).
+            if (0..devices).any(|d| refused(d, i)) {
+                continue;
+            }
+            for v in &decided {
+                prop_assert_eq!(v.get(&e.event_id), Some(&Verdict::Allowed), "an event no device refused was not folded alike");
+            }
+        }
+    }
+}
+
 /// The rule, case by case.
 #[test]
 fn the_rule_case_by_case() {

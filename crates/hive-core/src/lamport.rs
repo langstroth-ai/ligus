@@ -61,12 +61,23 @@ pub enum Plausibility {
     Implausible,
 }
 
+/// One copy of an id as the rule reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct IdCopy {
+    lamport: u64,
+    log_head: Option<CfgFrontier>,
+    prev: Option<Uuid>,
+    verdict: Plausibility,
+}
+
 /// Every event's plausibility on one log (by event id; an id held under
 /// more than one envelope is `Plausible` when any copy is, else
 /// `Unresolved` when any copy is).
 #[derive(Debug, Clone, Default)]
 pub struct Bounds {
-    by_id: HashMap<Uuid, Vec<(u64, Plausibility)>>,
+    /// Each copy of an id: its lamport, its structure (log head and chain
+    /// link: two copies at one lamport can name different heads), verdict.
+    by_id: HashMap<Uuid, Vec<IdCopy>>,
     /// The newest plausible envelope, witnesses included (the A-14 slack).
     newest: Option<CfgFrontier>,
     /// The newest plausible envelope that isn't a witness ([`Bounds::head`]).
@@ -134,7 +145,13 @@ impl Bounds {
                     out.newest_held = Some(k);
                 }
             }
-            out.by_id.entry(e.event_id).or_default().push((e.lamport, v));
+            let s = e.actor_stamp.as_ref();
+            out.by_id.entry(e.event_id).or_default().push(IdCopy {
+                lamport: e.lamport,
+                log_head: s.and_then(|s| s.log_head),
+                prev: s.and_then(|s| s.prev),
+                verdict: v,
+            });
         }
         (out, missing)
     }
@@ -160,7 +177,7 @@ impl Bounds {
         }
         match self.by_id.get(&h.event_id) {
             Some(copies) => {
-                let at: Vec<Plausibility> = copies.iter().filter(|c| c.0 == h.lamport).map(|c| c.1).collect();
+                let at: Vec<Plausibility> = copies.iter().filter(|c| c.lamport == h.lamport).map(|c| c.verdict).collect();
                 if at.contains(&Plausibility::Plausible) {
                     Plausibility::Plausible
                 } else if at.contains(&Plausibility::Unresolved) {
@@ -181,7 +198,7 @@ impl Bounds {
     /// The verdict on `event_id` (`None` when the log doesn't hold it).
     pub fn of_id(&self, event_id: Uuid) -> Option<Plausibility> {
         let copies = self.by_id.get(&event_id)?;
-        let has = |p| copies.iter().any(|c| c.1 == p);
+        let has = |p| copies.iter().any(|c| c.verdict == p);
         Some(if has(Plausibility::Plausible) {
             Plausibility::Plausible
         } else if has(Plausibility::Unresolved) {
@@ -191,11 +208,15 @@ impl Bounds {
         })
     }
 
-    /// The verdict on this very envelope (its id at its lamport).
+    /// The verdict on this very envelope: its id at its lamport, with its
+    /// log head and chain link (another copy of the id at that lamport, a
+    /// forged one, can name another head and be judged otherwise).
     pub fn of_env(&self, e: &SessionEventEnvelope) -> Plausibility {
+        let s = e.actor_stamp.as_ref();
+        let (log_head, prev) = (s.and_then(|s| s.log_head), s.and_then(|s| s.prev));
         self.by_id
             .get(&e.event_id)
-            .and_then(|copies| copies.iter().find(|c| c.0 == e.lamport).map(|c| c.1))
+            .and_then(|copies| copies.iter().find(|c| c.lamport == e.lamport && c.log_head == log_head && c.prev == prev).map(|c| c.verdict))
             .unwrap_or(Plausibility::Unresolved)
     }
 
