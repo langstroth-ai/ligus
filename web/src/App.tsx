@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { limitedLabel } from "@/lib/syncState";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addWorkspaceToList,
@@ -1310,6 +1311,16 @@ function deriveSyncPill(s: SyncStatusDto | undefined): SyncPill {
       label: `Live · room ${s?.room ?? ""}`,
       color: "success",
       title: "Live — syncing with your team",
+    };
+  }
+  // Syncing, but the relay refused this workspace's writes (workspace full,
+  // an organisation quota) or the room is truncated: amber, with the reason.
+  if (state === "limited") {
+    return {
+      label: limitedLabel(s?.lastError ?? null),
+      color: "warn",
+      title: s?.lastError ?? "The relay isn't taking new writes for this workspace right now",
+      actionable: true,
     };
   }
   if (state === "error") {

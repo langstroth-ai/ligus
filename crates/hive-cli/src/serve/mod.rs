@@ -389,6 +389,16 @@ impl Shared {
     fn sync_failed(&self, e: &str) {
         self.sync_status.lock().unwrap_or_else(|e| e.into_inner()).1 = Some(e.to_string());
     }
+
+    /// The round worked but the relay refused this room's writes (or the
+    /// room is truncated): synced, with the reason kept (logged once).
+    fn sync_limited(&self, why: &str) {
+        let mut st = self.sync_status.lock().unwrap_or_else(|e| e.into_inner());
+        if st.1.as_deref() != Some(why) {
+            eprintln!("sync: {why}");
+        }
+        *st = (Some(time::OffsetDateTime::now_utc()), Some(why.to_string()));
+    }
 }
 
 /// The MCP servers dashboard panels may use (see [`Shared::dashboard_mcp`]).
@@ -1219,7 +1229,8 @@ async fn sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
                     }
                     Err(hive_runtime::SseConnectError::Unsupported) => stream_unsupported = true,
                     Err(e) => {
-                        let delay = hive_runtime::next_backoff(stream_attempt);
+                        // A refusal (`sse_streams`) waits at least its Retry-After.
+                        let delay = hive_runtime::next_backoff(stream_attempt).max(e.retry_after().unwrap_or_default());
                         stream_attempt = stream_attempt.saturating_add(1);
                         next_stream_try = tokio::time::Instant::now() + delay;
                         eprintln!("sync: no relay push stream ({e}); polling, retry in {}s", delay.as_secs());
@@ -1231,7 +1242,13 @@ async fn sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
         let wait = match crate::sync_round(&mut engine, &mut store).await {
             Ok((_, pulled)) => {
                 fails = 0;
-                shared.sync_ok();
+                // Writes refused by the relay (workspace full, organisation
+                // quota, full relay, a client quota) or a truncated room:
+                // the round worked, but the health says why writes wait.
+                match engine.attention() {
+                    Some(att) => shared.sync_limited(&att.message()),
+                    None => shared.sync_ok(),
+                }
                 if pulled > 0 {
                     shared.refresh_standing();
                     shared.refresh();
@@ -1252,9 +1269,12 @@ async fn sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
             Err(e) => {
                 fails = fails.saturating_add(1);
                 shared.sync_failed(&format!("{e:#}"));
-                let secs = crate::sync_backoff_secs(fails);
-                eprintln!("sync: {e} — retrying in {secs}s");
-                Duration::from_secs(secs)
+                // The relay's Retry-After (a refused read) wins over our own
+                // backoff when it is longer.
+                let asked = e.downcast_ref::<hive_runtime::SyncError>().and_then(|e| e.retry_after()).unwrap_or_default();
+                let wait = Duration::from_secs(crate::sync_backoff_secs(fails)).max(asked);
+                eprintln!("sync: {e} — retrying in {}s", wait.as_secs());
+                wait
             }
         };
         tokio::select! {

@@ -1155,9 +1155,11 @@ export const onChatActivity = (
 export type { ChatActivityEvent };
 
 /// Real connection health for the relay sync loop, updated on every sync
-/// attempt: `live` (last sync ok), `error` (last sync failed — see `lastError`),
-/// or `offline` (not syncing / no relay).
-export type ConnectionState = "live" | "error" | "offline" | "needs_key";
+/// attempt: `live` (last sync ok), `limited` (syncing, but the relay refused
+/// this workspace's writes, e.g. "workspace full", or the room is truncated;
+/// see `lastError`), `error` (last sync failed — see `lastError`), or
+/// `offline` (not syncing / no relay).
+export type ConnectionState = "live" | "limited" | "error" | "offline" | "needs_key";
 
 export interface SyncStatusDto {
   relayConfigured: boolean;

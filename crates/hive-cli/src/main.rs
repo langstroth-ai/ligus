@@ -434,6 +434,11 @@ async fn sync_once(cfg: &Config) -> Result<(usize, usize)> {
     if engine.is_behind() {
         pulled += engine.catch_up(&mut store, SYNC_ONCE_MAX_ROUNDS).await?;
     }
+    // Writes the relay refused (workspace full, a quota) or a truncated
+    // room: the sync went through, but say why events still wait.
+    if let Some(att) = engine.attention() {
+        eprintln!("sync: {}", att.message());
+    }
     Ok((pushed, pulled))
 }
 
