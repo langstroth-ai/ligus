@@ -205,7 +205,8 @@ word until the phone has read it; refuse to sign unless all of these hold:
    past the stamp's `logHead.l` (the newest event of the log the box held
    when it drafted), or `1` when there is no `logHead`; every fold refuses
    any other lamport, so the event sorts where it was drafted however long
-   the box keeps it.
+   the box keeps it (what the box held includes its own events: a chain of
+   them it publishes moves the draft's lamport with it).
 5. Presence: if the phone ran the passkey, the stamp carries presence, it is
    **exactly the assertion the phone produced**, and the presence digest
    (`presence::challenge`, over workspace, session, event id, lamport, the

@@ -121,9 +121,10 @@ box, at its role. What they **can't** do, on any device's fold:
   is no longer the box's to choose: an event's lamport is exactly one past the
   log head its stamp names, which every fold checks (and the phone before it
   signs), so an action the box withholds sorts where it was drafted, before
-  anything written after it. A stale approve doesn't beat a later reject, and
-  a delayed lockdown clear lifts only the raises it names, never one raised
-  since ([Lamport bounds](#lamport-bounds)).
+  anything written after it, unless the box first writes and publishes a
+  chain of its own events as long as the gap it wants to jump. A delayed
+  lockdown clear lifts only the raises it names, never one raised since
+  ([Lamport bounds](#lamport-bounds)).
 
 The remedy is the one for any member: an Admin removes the box (or revokes its
 device) and rotates the workspace key, and the box gets no later key. An
@@ -527,10 +528,22 @@ it.
     command you paste into the terminal runs with everything you can reach.
 28. <a id="lamport-bounds"></a>**Lamport bounds stop a forward-dated clock, not a backdated one.**
     Every event names the newest event of its log its author held
-    (`logHead`) and its lamport is exactly one past it, so no event can sort
-    after events written after it, and a lamport is never more than the
-    longest chain of real events on its log (a lamport near `u64::MAX` is
-    refused and moves no one's clock). What stays an author's choice:
+    (`logHead`) and its lamport is exactly one past it, so a lamport is
+    never more than the longest chain of real events on its log (a lamport
+    near `u64::MAX` is refused and moves no one's clock), and an event can
+    sort after events written after it only by counting from a chain of
+    real events that long. What stays an author's choice:
+    - **Chains of their own events.** The bound counts every real event,
+      whoever wrote it and whatever its verdict. An author, or a box with
+      its own key drafting a phone's action, can write `k` events of its
+      own, each one past the last, and have the withheld action name the
+      last: released later, it sorts after up to `k` events written after
+      it was drafted (a stale approve can beat a later reject from another
+      device). It costs `k` signed events that every device stores and
+      that show in the log (`k` events released at once is the sign), not
+      a single forged number. The phone refuses a lamport below the last
+      one it signed on the log, so a box can't sort a phone's new action
+      before the phone's earlier one.
     - **Backdating within what they held.** An author can name an older
       head (an offline device does this honestly), so a race that "the
       first in canonical order wins" goes to whoever drafts earliest or
@@ -544,13 +557,21 @@ it.
       channel order) are last-writer-wins and can drop a concurrent edit.
       A lockdown clear no longer has this problem: it names its raises.
     - **Holds.** An event whose log head hasn't reached a device is held
-      there until it does. A device keeps the events it refuses at ingest
-      for a revoked device or an outsider's old key as inert witnesses, but
-      not those it refuses as forged (a bad signature, an impersonation, a
-      disputed or GitHub-refused key): an honest author who held such an
-      event and counted from it is held on devices that refused it. A
-      forged head the author never publishes holds that author's event for
-      good, within 4096 of the newest event; past that it is refused.
+      there until it does. Whether a device refuses an event at ingest
+      depends on its roster when the event arrives (a revocation, a removed
+      member, a rebound agent key, a certificate the relay delivered late),
+      so a device keeps every event it refuses, for any reason, as an inert
+      witness (its id, lamport, log head and chain link, kept by that whole
+      structure, so a forged copy of an id never shadows the genuine one),
+      and every chunk it prunes too: whatever another device accepted and
+      counted from, this one counts from as well. A device never counts its
+      own next event from a witness (it doesn't push the events it
+      refuses). What can still hold: a relay or peer that withholds an
+      event from one device holds there the events that count from it,
+      until it arrives; once every device has every body, every device
+      judges the log alike. A forged head the author never publishes holds
+      that author's event for good, within 4096 of the newest event; past
+      that it is refused.
     - **Ties.** Events at one lamport sort by event id, which their drafter
       picks (a box drafting a phone's action included).
 

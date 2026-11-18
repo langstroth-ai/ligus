@@ -470,7 +470,13 @@ digest is what binds.
    eventId}`, is the newest event of the log the box held), or `1` when
    `logHead` is absent; and `logHead.l` is below 2^64 − 1. Every fold refuses any other lamport,
    so you can trust that the event sorts no later than one past what the box
-   held when it drafted, however long it is kept back.
+   held when it drafted, however long it is kept back. What the box held
+   includes events it wrote itself: a box that writes a chain of its own
+   events before drafting can still push your action past later events of
+   other devices, at the cost of publishing that chain. Keep, per log, the
+   lamport of the last event you signed, and refuse a preimage on that log
+   whose lamport is below it, so a box can't sort your new action (a
+   reject) before one you signed earlier (an approve).
 5. Presence: if you ran the passkey, `stamp.presence` equals the assertion
    you produced, field for field, and the presence digest equals the
    challenge you signed: `SHA-256("ligus-presence-v1\0" ‖ workspaceId ‖ sessionId
@@ -511,7 +517,9 @@ revocation is judged as of that cut. `hostDeviceId` is never a phone (the
 fold refuses it): pick it from `GET /v1/hosts`. What a box can still do is
 withhold an event you signed: it then sorts where it was drafted, before
 anything written after the draft (a later vote of yours supersedes it, a
-lockdown raised since stays in force), never later. It can also name an
+lockdown raised since stays in force), never later than the events it
+held, its own included (a box that publishes a chain of its own events
+before drafting moves the draft with it). It can also name an
 older `logHead` (backdate within what it held), and it picks the event id
 that orders events at one lamport (between two concurrent votes of yours a
 rejection wins anyway). Keep one action in flight, and treat a `committed`
