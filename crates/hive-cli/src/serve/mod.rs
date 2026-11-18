@@ -33,6 +33,7 @@ use crate::reply::{env_flag, ToolSettings};
 use crate::worker::{self, TurnSink, TurnState, WorkerCtx};
 use crate::{env_opt, open_service, sync_once, uuid_of_room, Config};
 
+pub mod admissions_api;
 pub mod api;
 pub mod appearance;
 pub mod contacts_api;
@@ -246,6 +247,8 @@ pub struct Shared {
     pub repos: repos_api::RepoState,
     /// Events waiting for a phone's passkey (B3 `presence/prepare`).
     pub presence_drafts: presence_api::Pending,
+    /// Box admissions waiting for a phone's passkey and signature (Phase B).
+    pub admission_drafts: admissions_api::Drafts,
     /// The box's direct messages (`dms.rs`).
     pub dms: dms::DmStore,
     /// Wakes the DM sync loop after a local write.
@@ -952,6 +955,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         sync_status: Mutex::new((first_sync, None)),
         busy: Mutex::new(HashSet::new()),
         presence_drafts: presence_api::Pending::default(),
+        admission_drafts: admissions_api::Drafts::default(),
         dms: dms::DmStore::load(&cfg.data_dir),
         dm_kick: Notify::new(),
         contact_lock: tokio::sync::Mutex::new(()),

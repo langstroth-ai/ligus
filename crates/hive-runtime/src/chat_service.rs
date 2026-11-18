@@ -30,8 +30,10 @@ mod guards;
 mod keys;
 mod links;
 pub use links::{links_for_account, LinkDraft, ShownLink, WorkspaceLinks};
+mod phone_sign;
 mod presence;
 pub use keys::RotationIssued;
+pub use phone_sign::PhoneDraft;
 pub use presence::{PresenceDraft, PresenceProvider, PresenceRequest};
 
 #[derive(Debug, thiserror::Error)]

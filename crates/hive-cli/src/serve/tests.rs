@@ -3713,3 +3713,95 @@ async fn a_service_box_never_acts_as_a_person() {
     assert!((400..500).contains(&code), "{code}");
     h.handle.shutdown();
 }
+
+// ── Admitting a box from the phone (Phase B) ───────────────────────────────
+
+/// The phone admits a second box with its own P-256 key and its person's
+/// passkey, through this box (a service member that can't admit anyone
+/// itself): the code comes back sealed to the box that asked, which then
+/// joins as its own service member. A forged signature and a device that
+/// isn't a phone are refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_phone_admits_a_box_with_its_own_key_through_serve() {
+    use base64::Engine;
+    let b64 = |s: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s).unwrap();
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let phone = hive_core::testkit::Phone::new();
+    let account = {
+        let mut desk = open_service(&h.desktop).unwrap();
+        desk.certify_phone(ws, phone.device_id, &phone.public_key()).unwrap();
+        desk.author().account_id.unwrap()
+    };
+    sync_once(&h.desktop).await.unwrap();
+    for _ in 0..200 {
+        h.handle.shared.sync_kick.notify_one();
+        let (_, t) = h.handle.shared.lock().store().load_config(ws, None, None).unwrap();
+        if t.current().devices.get(&phone.device_id).is_some_and(|d| d.phone) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // The box can't admit anyone itself.
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/invites", Some(json!({}))).await;
+    assert!((400..500).contains(&code));
+    // A device that isn't a phone: refused at prepare.
+    let me = h.handle.shared.lock().device_id();
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/admissions/prepare", Some(json!({ "deviceId": me }))).await;
+    assert_eq!(code, 403);
+
+    let wdir = h._tmp.path().join("worker2");
+    let mut wcfg = config(&wdir, &h.desktop.relay_url.clone().unwrap(), &h.desktop.room);
+    let request = crate::admit::join_request(&wcfg, "w2").unwrap();
+    let prep = h
+        .send(reqwest::Method::POST, "/v1/admissions/prepare", Some(json!({ "deviceId": phone.device_id, "request": request.encode() })))
+        .await;
+    assert_eq!(prep["preview"]["boxFingerprint"], json!(request.fingerprint()));
+    let challenge: [u8; 32] = b64(prep["challenge"].as_str().unwrap()).try_into().unwrap();
+    let a = hive_core::testkit::test_recovery_key(account).assert(&challenge);
+    let id = prep["prepareId"].as_str().unwrap().to_string();
+    let pre = h
+        .send(
+            reqwest::Method::POST,
+            "/v1/admissions/presence",
+            Some(json!({ "prepareId": id, "assertion": { "credentialId": a.credential_id, "authenticatorData": a.authenticator_data, "clientDataJSON": a.client_data_json, "signature": a.signature } })),
+        )
+        .await;
+    let preimage = b64(pre["preimage"].as_str().unwrap());
+    // A signature by another key: refused, nothing appended.
+    let forged = hive_core::crypto::sign_p256(&hive_core::testkit::Phone::new().key, &preimage);
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/admissions/commit", Some(json!({ "prepareId": id, "signature": hive_core::presence::b64url(&forged) }))).await;
+    assert_eq!(code, 403);
+    // The draft is spent: start over and sign with the phone.
+    let prep = h
+        .send(reqwest::Method::POST, "/v1/admissions/prepare", Some(json!({ "deviceId": phone.device_id, "request": request.encode() })))
+        .await;
+    let challenge: [u8; 32] = b64(prep["challenge"].as_str().unwrap()).try_into().unwrap();
+    let a = hive_core::testkit::test_recovery_key(account).assert(&challenge);
+    let id = prep["prepareId"].as_str().unwrap().to_string();
+    let pre = h
+        .send(
+            reqwest::Method::POST,
+            "/v1/admissions/presence",
+            Some(json!({ "prepareId": id, "assertion": { "credentialId": a.credential_id, "authenticatorData": a.authenticator_data, "clientDataJSON": a.client_data_json, "signature": a.signature } })),
+        )
+        .await;
+    let sig = hive_core::crypto::sign_p256(&phone.key, &b64(pre["preimage"].as_str().unwrap()));
+    let done = h
+        .send(reqwest::Method::POST, "/v1/admissions/commit", Some(json!({ "prepareId": id, "signature": hive_core::presence::b64url(&sig) })))
+        .await;
+    assert_eq!(done["sealed"], json!(true));
+    let code = done["code"].as_str().unwrap().to_string();
+    assert!(code.starts_with(hive_runtime::box_admission::SEALED_PREFIX));
+    // Pushed by the box; the second box redeems it and joins.
+    for _ in 0..20 {
+        h.handle.shared.sync_kick.notify_one();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let (svc, _) = crate::worker_start(&mut wcfg, "w2", Some(code)).await.unwrap();
+    let c = svc.load(workspace_config_session_id(ws)).unwrap().unwrap();
+    let m = c.members.iter().find(|m| m.id == svc.author().id).expect("the second box joined");
+    assert_eq!((m.actor.kind, m.role), (hive_core::ActorKind::Service, hive_core::WorkspaceRole::Contributor));
+    h.handle.shutdown();
+}
