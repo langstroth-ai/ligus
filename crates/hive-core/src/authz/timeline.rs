@@ -523,10 +523,12 @@ pub struct ConfigTimeline {
     /// (one per kept copy: two signers' copies of one id can sit at two
     /// lamports, see [`crate::copies`]).
     held: HashMap<Uuid, Vec<u64>>,
-    /// Who can sign under each device and agent key id, from every
-    /// certificate on the log ([`crate::copies::SignerDirectory`]): what a
-    /// chat fold tells copies of one id apart by.
-    signers: Arc<crate::copies::SignerDirectory>,
+    /// Every account key and certificate on the log (all copies), and who
+    /// can sign under each device and agent key id from them
+    /// ([`crate::copies::SignerDirectory`], built on first use): what a chat
+    /// fold tells copies of one id apart by.
+    signer_events: Arc<Vec<SessionEventEnvelope>>,
+    signers: Arc<std::sync::OnceLock<crate::copies::SignerDirectory>>,
     /// Every rotation body on the log, authorized or not: keys a device can
     /// open from these are read-only candidates (B1; never sealed under
     /// unless authorized).
@@ -611,14 +613,16 @@ impl ConfigTimeline {
         }
     }
 
-    /// Record who can sign on this workspace (see [`crate::copies`]).
-    pub fn set_signers(&mut self, signers: crate::copies::SignerDirectory) {
-        self.signers = Arc::new(signers);
+    /// Record the log's account keys and certificates (see
+    /// [`crate::copies::signer_events`]).
+    pub fn set_signer_events(&mut self, events: Vec<SessionEventEnvelope>) {
+        self.signer_events = Arc::new(events);
+        self.signers = Arc::default();
     }
 
     /// Who can sign on this workspace, from the config log's certificates.
     pub fn signers(&self) -> &crate::copies::SignerDirectory {
-        &self.signers
+        self.signers.get_or_init(|| crate::copies::SignerDirectory::of(&self.signer_events))
     }
 
     /// Note a rotation body seen on the log (authorized or not).
@@ -675,7 +679,10 @@ impl ConfigTimeline {
         }
         self.states[0].fingerprint().hash(&mut h);
         self.cuts.hash(&mut h);
-        self.signers.hash(&mut h);
+        for e in self.signer_events.iter() {
+            e.event_id.hash(&mut h);
+            crate::copies::copy_key(e).hash(&mut h);
+        }
         self.fingerprint = h.finish().max(1);
         self
     }

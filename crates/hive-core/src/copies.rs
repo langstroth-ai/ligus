@@ -164,6 +164,24 @@ impl SignerDirectory {
     }
 }
 
+/// The envelopes a [`SignerDirectory`] is built from: account keys, device
+/// certificates and agent-key certificates.
+pub fn signer_events(envelopes: &[SessionEventEnvelope]) -> Vec<SessionEventEnvelope> {
+    envelopes
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.payload,
+                SessionEvent::AccountKeyRegistered { .. }
+                    | SessionEvent::AccountKeyRotated { .. }
+                    | SessionEvent::DeviceCertificateAdded { .. }
+                    | SessionEvent::AgentKeyCertified { .. }
+            )
+        })
+        .cloned()
+        .collect()
+}
+
 fn push_unique<T: PartialEq>(v: &mut Vec<T>, x: T) {
     if !v.contains(&x) {
         v.push(x);

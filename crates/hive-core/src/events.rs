@@ -1393,9 +1393,8 @@ fn fold_copies(
     // copies drop out before anything else, so none folds, coverage never
     // passes through them, and the result doesn't depend on which copy a
     // device saw first. A config fold records its signers for the chats.
-    let config_signers = timeline.is_some().then(|| crate::copies::SignerDirectory::of(&real));
     let resolved = crate::copies::resolve(&real, || {
-        let mut d = config_signers.clone().unwrap_or_else(|| crate::copies::SignerDirectory::of(&real));
+        let mut d = crate::copies::SignerDirectory::of(&real);
         if let WorkspaceAuthz::Timeline(t) = workspace {
             d.extend(t.signers());
         }
@@ -1412,8 +1411,8 @@ fn fold_copies(
         &bounds,
         &resolved.copies,
     );
-    if let (Some(t), Some(signers)) = (timeline, config_signers) {
-        t.set_signers(signers);
+    if let Some(t) = timeline {
+        t.set_signer_events(crate::copies::signer_events(&real));
     }
     (out, resolved.copies, resolved.dropped)
 }
