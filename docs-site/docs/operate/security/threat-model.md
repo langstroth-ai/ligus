@@ -692,6 +692,8 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 
 | Core (forged copies) | Anyone holding the workspace key could erase any event: an unsigned envelope (or one no key verifies, or one signed by a device of their own) under a real event's id was accepted, recorded as an equivocation, and both copies were then denied on every device, so a `MemberRemoved`, a reject vote, a lockdown raise or the config seed vanished | Only the same signer's two verified copies are an equivocation. Unsigned envelopes are refused at ingest; a copy no certified key verifies never displaces a verified one; another signer's copy under the id is their own event, and every fold structure (denials, coverage, cut identity, verdicts, the frontier's lamport) is keyed by copy. Every reader that must not be blinded by a copy that arrived first reads all copies. Verified by `a_forged_copy_never_erases_an_honest_title_change`, `a_forged_copy_never_erases_a_removal`, `a_forged_copy_of_the_seed_leaves_the_workspace_standing`, `prop_forged_copies_never_erase_honest_events`, `the_reviewers_probe_an_honest_title_change_survives_a_forged_copy_in_either_order` and `prop_devices_fold_the_honest_log_whatever_arrives_first` |
 
+| Core (device-id squatting) | Device ids are chosen by the device, so a member could certify another member's device id under their own account with a key of their own. The fold then checked the victim's key events against the squatter's key, and the trust roster took whichever certificate sorted first (a backdated copy did): every event of the victim's device was refused everywhere, and the squatter could sign as the victim, or certify a key for an agent hosted on the victim's device, through its id | Each account's certificate binds a device id for that account only: an event verifies only under the keys of the account its stamp names. A device id certified under keys that disagree has no device-level key, so lookups that name no account (phone pairing, lease beats, contact stamps, an agent key on that host unless the agent's owner bound it) refuse it until the squatter is removed. Verified by `a_squatted_device_id_keeps_its_own_key_for_its_own_account`, `a_squatter_cannot_sign_as_the_victim_through_the_victims_device_id`, `a_squatter_cannot_certify_a_key_for_an_agent_on_the_victims_device` and `a_backdated_squat_neither_erases_nor_impersonates_at_ingest` |
+
 ### Open {#findings-open}
 
 These are in [Known limitations](#known-limitations) and stay there until a
@@ -701,7 +703,9 @@ warning), a CLI-founded workspace staying unsecured until its founder adds a pas
 devices without a founder pin keeping the passphrase key, and ingest-time
 decisions that depend on arrival order, the reach of a removal's watermark (its
 author's word, and chats the remover never synced), equivocations seen only
-where both copies meet, what lamport bounds leave to an author (backdating,
+where both copies meet, a member squatting another member's device id
+(that device's account-less lookups fail closed until the squatter is
+removed), what lamport bounds leave to an author (backdating,
 concurrent writes that apply to everything before them, holds), human
 clicks that run others' text at the clicker's tier, and unconfined LSP
 servers and terminal. On Kubernetes, DNS tunnelling through

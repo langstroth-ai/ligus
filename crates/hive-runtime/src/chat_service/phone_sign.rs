@@ -79,11 +79,15 @@ impl ChatService {
             .get(&phone)
             .filter(|d| d.phone && !d.revoked)
             .ok_or_else(|| ChatError::Unauthorized("that isn't an enrolled phone of this workspace".into()))?;
-        let member = config
-            .members
-            .iter()
-            .find(|m| m.actor.kind == hive_core::ActorKind::Human && m.actor.account_id.is_some_and(|a| device.accounts.contains(&a)))
-            .ok_or_else(|| ChatError::Unauthorized("that phone's person isn't a member here".into()))?;
+        // The member whose own certificate makes this device id a phone (a
+        // device id someone else also certified for themselves names no one).
+        let mut people = config.members.iter().filter(|m| {
+            m.actor.kind == hive_core::ActorKind::Human && m.actor.account_id.is_some_and(|a| device.phone_for(Some(a)))
+        });
+        let member = match (people.next(), people.next()) {
+            (Some(m), None) => m,
+            _ => return Err(ChatError::Unauthorized("that phone's person isn't a member here".into())),
+        };
         let mut actor = member.actor.clone();
         actor.device_id = Some(phone);
         Ok(actor)
@@ -243,14 +247,14 @@ impl ChatService {
         env.signer_device_id = Some(phone);
         env.signature = Some(signature);
         let (config, timeline) = self.store.load_config(env.workspace_id, self.trusted_founder.as_deref(), self.local_workspace_id)?;
-        let key = timeline
+        let device = timeline
             .current()
             .devices
             .get(&phone)
-            .filter(|d| d.phone && !d.revoked)
-            .map(|d| d.public_key.clone())
+            .filter(|d| !d.revoked && d.phone_for(env.actor_stamp.as_ref().and_then(|s| s.actor.account_id)))
             .ok_or_else(|| ChatError::Unauthorized("that isn't an enrolled phone of this workspace".into()))?;
-        hive_core::crypto::verify_envelope(&env, &key).map_err(|_| ChatError::Unauthorized("the phone's signature doesn't verify".into()))?;
+        // Under the person's own binding of the phone's id.
+        device.verifying_key(&env).ok_or_else(|| ChatError::Unauthorized("the phone's signature doesn't verify".into()))?;
         self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
         self.store.ingest(&env)?;
         self.changes.local(&env);

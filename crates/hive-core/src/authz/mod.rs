@@ -330,7 +330,8 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             return authorize_agent(env, ctx, roster);
         }
         // A phone's own key: the phone tier (Phase A, item 6).
-        if let Some(device) = env.signer_device_id.filter(|d| roster.devices.get(d).is_some_and(|x| x.phone)) {
+        let account = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id);
+        if let Some(device) = env.signer_device_id.filter(|d| roster.devices.get(d).is_some_and(|x| x.phone_for(account))) {
             if let Err(why) = phone::phone_tier_allows(&env.payload, device) {
                 return Decision::deny(why);
             }
@@ -397,7 +398,9 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 return Decision::deny("a phone is enrolled on the workspace config log");
             }
             let enroller_ok = certified_signer(env, ctx.running).is_ok_and(|d| {
-                d.accounts.contains(&certificate.account_id) && !d.delegated_for(certificate.account_id) && !d.phone
+                d.accounts.contains(&certificate.account_id)
+                    && !d.delegated_for(certificate.account_id)
+                    && !d.phone_for(Some(certificate.account_id))
             });
             if !enroller_ok || env.signer_device_id == Some(certificate.device_id) {
                 return Decision::deny("a phone is enrolled by a trusted device of its own account");
@@ -907,7 +910,9 @@ pub(crate) fn certified_signer<'r>(env: &SessionEventEnvelope, roster: &'r Roste
             return Err("signed by a device that doesn't act for its author".into());
         }
     }
-    crate::crypto::verify_envelope(env, &d.public_key).map_err(|_| "bad signature".to_string())?;
+    // Under the stamped account's own binding of the device id (another
+    // account's certificate of the same id binds only that account).
+    d.verifying_key(env).ok_or("bad signature")?;
     Ok(d)
 }
 
@@ -960,7 +965,24 @@ fn agent_cert_ok(
     let Some(host) = host else {
         return Err("the host device isn't certified here".into());
     };
-    cert.verify(&host.public_key).map_err(|e| format!("agent certificate: {e}"))?;
+    // The host's key: its one key, or, for a device id certified under
+    // keys that disagree (someone else certified it for themselves), only a
+    // binding of the agent's owner.
+    let keys: Vec<&[u8]> = if host.public_key.is_empty() {
+        let owner = roster
+            .agents
+            .get(&cert.agent_id)
+            .and_then(|a| roster.members.get(&a.owner).and_then(|m| m.account_id).or_else(|| Uuid::parse_str(&a.owner).ok()));
+        owner.map(|o| host.keys_for(Some(o))).unwrap_or_default()
+    } else {
+        vec![host.public_key.as_slice()]
+    };
+    if !keys.iter().any(|k| cert.verify(k).is_ok()) {
+        return Err(match keys.first() {
+            Some(k) => format!("agent certificate: {}", cert.verify(k).err().map(|e| e.to_string()).unwrap_or_default()),
+            None => "the host device id is certified under other keys, none the agent's owner's".into(),
+        });
+    }
     if !roster.agent_bound_to(cert.agent_id, cert.host_device_id) {
         return Err("the agent isn't bound to this host".into());
     }

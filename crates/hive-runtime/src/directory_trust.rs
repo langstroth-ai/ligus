@@ -315,7 +315,7 @@ pub fn co_members(store: &EventStore, me: Uuid) -> Vec<CoMember> {
                     head.devices
                         .get(&device)
                         .filter(|d| !d.revoked && d.accounts.contains(&account))
-                        .map(|d| d.public_key.clone())
+                        .and_then(|d| d.keys_for(Some(account)).first().map(|k| k.to_vec()))
                 };
                 let cid = store
                     .latest_contact_of(ws, account, &signer_key)

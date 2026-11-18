@@ -40,8 +40,20 @@ pub struct DeviceState {
     /// Accounts whose (undisputed) key certified this device.
     pub accounts: BTreeSet<Uuid>,
     pub revoked: bool,
-    /// The device's signing key, from its certificate.
+    /// The device's signing key, from its certificates, when they all name
+    /// one key; empty when certificates of different accounts bind the
+    /// device id to different keys (an id someone else certified for
+    /// themselves: see [`DeviceState::keys`]), so a lookup that names no
+    /// account fails closed. Certificates of current members decide when
+    /// there are any.
     pub public_key: Vec<u8>,
+    /// Each account that certified this device id → the keys (and whether
+    /// each is a P-256 phone key) its certificates bind. Device ids are
+    /// chosen by the device, so a member can certify another member's id
+    /// under their own account with a key of their own; that binding is
+    /// theirs alone: an event stamped as an account verifies only under that
+    /// account's keys ([`DeviceState::keys_for`]).
+    pub keys: BTreeMap<Uuid, Vec<(Vec<u8>, bool)>>,
     /// Accounts this device acts for without holding their key: each one's
     /// certificate for it was only ever published by another device (the
     /// owner's desktop approving `hive serve enroll`), or that a certified,
@@ -54,7 +66,9 @@ pub struct DeviceState {
     pub delegated_for: BTreeSet<Uuid>,
     /// A phone: its key is a P-256 Secure Enclave key (the certificate's
     /// `alg`, inside the account's signature). Capped to the phone tier
-    /// (`authz::phone`).
+    /// (`authz::phone`). With bindings that disagree, whether any is a
+    /// phone's (fail closed); what an event's own account binds is
+    /// [`DeviceState::phone_for`].
     pub phone: bool,
 }
 
@@ -62,6 +76,33 @@ impl DeviceState {
     /// Whether this device signs for `account` as a delegated host.
     pub fn delegated_for(&self, account: Uuid) -> bool {
         self.delegated_for.contains(&account)
+    }
+
+    /// The keys an event signed by this device and speaking for `account`
+    /// verifies under: that account's bindings, or with no account the
+    /// device's one key (none when its bindings disagree: fail closed).
+    pub fn keys_for(&self, account: Option<Uuid>) -> Vec<&[u8]> {
+        match account {
+            Some(a) => self.keys.get(&a).map(|ks| ks.iter().map(|(k, _)| k.as_slice()).collect()).unwrap_or_default(),
+            None if !self.public_key.is_empty() => vec![self.public_key.as_slice()],
+            None => Vec::new(),
+        }
+    }
+
+    /// Whether this device signs as a phone (a P-256 key) when it speaks
+    /// for `account` (`None`: whether any of its bindings is a phone's).
+    pub fn phone_for(&self, account: Option<Uuid>) -> bool {
+        match account {
+            Some(a) => self.keys.get(&a).is_some_and(|ks| ks.iter().any(|(_, p)| *p)),
+            None => self.phone,
+        }
+    }
+
+    /// The key under which `env` (signed by this device) verifies, for the
+    /// account its stamp names.
+    pub fn verifying_key(&self, env: &SessionEventEnvelope) -> Option<&[u8]> {
+        let account = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id);
+        self.keys_for(account).into_iter().find(|k| crate::crypto::verify_envelope(env, k).is_ok())
     }
 }
 
@@ -406,9 +447,12 @@ impl RosterTracker {
             if cert.verify(key).is_ok() {
                 let d = devices.entry(cert.device_id).or_default();
                 d.accounts.insert(cert.account_id);
-                d.public_key = cert.device_public_key.clone();
                 let phone = cert.alg == crate::crypto::SigAlg::P256;
-                d.phone |= phone;
+                let binding = (cert.device_public_key.clone(), phone);
+                let bound = d.keys.entry(cert.account_id).or_default();
+                if !bound.contains(&binding) {
+                    bound.push(binding);
+                }
                 let key = (cert.device_id, cert.account_id);
                 // A phone holds its own key and signs only as its person (the
                 // laptop enrolls it, but it never acts *for* them): not a
@@ -417,6 +461,19 @@ impl RosterTracker {
                     d.delegated_for.insert(cert.account_id);
                 }
             }
+        }
+        // The device-level key and phone flag: one key among the bindings
+        // of current members (of every account when no member certified
+        // it), else none (see `DeviceState::public_key`).
+        let members: BTreeSet<Uuid> = self.state.members.values().filter_map(|m| m.account_id).collect();
+        for d in devices.values_mut() {
+            let of_members: Vec<&(Vec<u8>, bool)> =
+                d.keys.iter().filter(|(a, _)| members.contains(a)).flat_map(|(_, ks)| ks.iter()).collect();
+            let bindings: Vec<&(Vec<u8>, bool)> =
+                if of_members.is_empty() { d.keys.values().flatten().collect() } else { of_members };
+            let first = bindings.first().map(|(k, _)| k.clone()).unwrap_or_default();
+            d.public_key = if bindings.iter().all(|(k, _)| *k == first) { first } else { Vec::new() };
+            d.phone = bindings.iter().any(|(_, p)| *p);
         }
         for d in &fold.guards.revoked_devices {
             devices.entry(*d).or_default().revoked = true;

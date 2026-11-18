@@ -150,9 +150,20 @@ pub fn verify_stream<R: DeviceKeyResolver>(
 /// account — e.g. a local identity that later signs into GitHub is the same
 /// person, and each cert is signed by its own account key — so an event is
 /// authentic if its stamp matches ANY of the device's certified accounts.
+///
+/// Device ids are chosen by the device, so a member can also certify another
+/// member's device id under their own account with a key of their own
+/// (device-id squatting). Each account's certificate binds the id only for
+/// that account (`bindings`): an event stamped as an account verifies only
+/// under that account's keys, and the device-level key is the one every
+/// member binding agrees on (none when they disagree: lookups that name no
+/// account fail closed).
 #[derive(Debug, Default, Clone)]
 pub struct WorkspaceRoster {
     devices: HashMap<Uuid, (Vec<u8>, HashSet<Uuid>)>,
+    /// (device, account) → the keys that account's verified certificates
+    /// bind the device id to (member or not).
+    bindings: HashMap<(Uuid, Uuid), Vec<Vec<u8>>>,
     revoked: HashSet<Uuid>,
     /// account_id → the account's pinned signing public key, for member accounts
     /// (first-registration wins, canonical order). Retained so the Option-C
@@ -181,6 +192,16 @@ pub struct WorkspaceRoster {
 }
 
 impl WorkspaceRoster {
+    /// The keys an event signed by `device_id` verifies under: `account`'s own
+    /// bindings of the id when it certified the device, else the device's one
+    /// key (none when member bindings disagree).
+    pub fn keys_for(&self, device_id: Uuid, account: Option<Uuid>) -> Vec<&[u8]> {
+        match account.filter(|a| self.device_signs_for(device_id, *a)) {
+            Some(a) => self.bindings.get(&(device_id, a)).map(|ks| ks.iter().map(Vec::as_slice).collect()).unwrap_or_default(),
+            None => self.public_key(device_id).into_iter().collect(),
+        }
+    }
+
     /// Whether `device_id` is cert-verified to sign as `account` (any of its
     /// certified accounts). False for an unknown device.
     pub fn device_signs_for(&self, device_id: Uuid, account: Uuid) -> bool {
@@ -291,7 +312,7 @@ fn dearth_policies(ordered: &[&SessionEventEnvelope], pin: Option<&FounderPin>) 
 
 impl DeviceKeyResolver for WorkspaceRoster {
     fn public_key(&self, device_id: Uuid) -> Option<&[u8]> {
-        self.devices.get(&device_id).map(|(k, _)| k.as_slice())
+        self.devices.get(&device_id).map(|(k, _)| k.as_slice()).filter(|k| !k.is_empty())
     }
     // (see below for is_revoked)
     fn is_revoked(&self, device_id: Uuid) -> bool {
@@ -378,11 +399,9 @@ pub fn founder_seed<'a>(envelopes: &'a [SessionEventEnvelope], pin: &FounderPin)
         };
         claims
             && e.signer_device_id.is_some_and(|device| {
-                roster.public_key(device).is_some_and(|device_key| {
-                    roster.device_signs_for(device, account)
-                        && !roster.is_revoked(device)
-                        && hive_core::crypto::verify_envelope(e, device_key).is_ok()
-                })
+                roster.device_signs_for(device, account)
+                    && !roster.is_revoked(device)
+                    && roster.keys_for(device, Some(account)).into_iter().any(|k| hive_core::crypto::verify_envelope(e, k).is_ok())
             })
     })
 }
@@ -631,6 +650,10 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
                 .or_insert_with(|| (cert.device_public_key.clone(), HashSet::new()))
                 .1
                 .insert(cert.account_id);
+            let bound = roster.bindings.entry((cert.device_id, cert.account_id)).or_default();
+            if !bound.contains(&cert.device_public_key) {
+                bound.push(cert.device_public_key.clone());
+            }
         }
         // Dearth mode: a device that wasn't trusted when the entrance closed
         // needs a second approval before its certificate counts.
@@ -649,7 +672,18 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
                 .entry(cert.device_id)
                 .or_insert_with(|| (cert.device_public_key.clone(), HashSet::new()));
             entry.1.insert(cert.account_id);
+            let bound = roster.bindings.entry((cert.device_id, cert.account_id)).or_default();
+            if !bound.contains(&cert.device_public_key) {
+                bound.push(cert.device_public_key.clone());
+            }
         }
+    }
+    // Squatting: a device id the member bindings bind to different keys has
+    // no device-level key (see `WorkspaceRoster`).
+    for (device, (key, accounts)) in roster.devices.iter_mut() {
+        let mut keys = accounts.iter().filter_map(|a| roster.bindings.get(&(*device, *a))).flatten();
+        let first = keys.next().cloned().unwrap_or_default();
+        *key = if keys.all(|k| *k == first) { first } else { Vec::new() };
     }
     // A device whose *only* verified certs are to removed accounts is revoked —
     // but a device that also holds a current member cert (above) stays trusted.
@@ -781,12 +815,14 @@ pub fn roster_with_batch(
 /// Whether `env` is signed by a device whose certificate chains to `account`.
 fn signed_as(roster: &WorkspaceRoster, env: &SessionEventEnvelope, account: Uuid) -> bool {
     let Some(device) = env.signer_device_id else { return false };
-    let Some((key, accounts)) = roster.chained.get(&device) else { return false };
+    let Some((_, accounts)) = roster.chained.get(&device) else { return false };
     // Not `is_revoked`: before its account is a member, the roster lists such
     // a device as revoked (non-member certs are). A removed member's own
     // re-enrollment is refused by the config projection, and their removal
     // stays sticky in the roster.
-    accounts.contains(&account) && verify_envelope(env, key).is_ok()
+    // Under that account's own binding of the device id.
+    accounts.contains(&account)
+        && roster.bindings.get(&(device, account)).is_some_and(|ks| ks.iter().any(|k| verify_envelope(env, k).is_ok()))
 }
 
 /// Membership events that verify without already being a member: the config
@@ -914,7 +950,7 @@ pub fn verdict_for(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verd
     if roster.is_revoked(device_id) {
         return Verdict::Quarantine(QuarantineReason::RevokedDevice);
     }
-    let Some(signing_key) = roster.public_key(device_id) else {
+    if !roster.is_certified(device_id) {
         if roster.pending.iter().any(|(_, d, _)| *d == device_id) && !is_trust_bootstrap(env) {
             return Verdict::Unverifiable(QuarantineReason::PendingApproval);
         }
@@ -934,8 +970,12 @@ pub fn verdict_for(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verd
             return Verdict::Unverifiable(QuarantineReason::UncertifiedDevice);
         }
         return Verdict::Unverifiable(QuarantineReason::UnknownDevice);
-    };
-    if verify_envelope(env, signing_key).is_err() {
+    }
+    // The account the stamp speaks for (a member's actor id is their account
+    // id): its own binding of the device id is the key, so a member who
+    // certified someone else's device id for themselves can't sign as them.
+    let claimed = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id.or_else(|| Uuid::parse_str(&s.actor.id).ok()));
+    if !roster.keys_for(device_id, claimed).into_iter().any(|k| verify_envelope(env, k).is_ok()) {
         return Verdict::Quarantine(QuarantineReason::BadSignature);
     }
     // Impersonation: the stamped author's account must be one the signing device
