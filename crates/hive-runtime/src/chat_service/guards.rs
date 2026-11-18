@@ -369,7 +369,7 @@ mod tests {
         for (i, e) in [
             SessionEvent::AccountKeyRegistered { account_id: eve_acct, signing_public_key: acct_kp.public_key_bytes().to_vec() },
             SessionEvent::DeviceCertificateAdded { certificate: cert },
-            SessionEvent::MemberAdded { member, invite: None },
+            SessionEvent::MemberAdded { member, invite: None, proof: None },
         ]
         .into_iter()
         .enumerate()

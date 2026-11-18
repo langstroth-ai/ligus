@@ -19,10 +19,21 @@ headless Admin. The box then joins by itself, with no person at the box.
 
 A box redeems an **admission**: a single-use invite whose terms say it
 admits one service member, until it expires (at most 7 days after it was
-issued). The box adds itself, signed by its own device key. That redemption
-binds the admission to that box: nobody else can use it afterwards, and a
-member re-adding itself can't spend it. A box can't join with a person's
-invite, and a person can't join with a box admission.
+issued). The admission names a **redeem key** whose secret half travels only
+inside the admission code. The box adds itself, signed by its own device key,
+with that key's signature over the workspace, the invite, its member id and
+its device. So the invite id, which every member can read on the workspace
+log, admits no one by itself: only the holder of the code can redeem it, and
+only for its own device. A member re-adding itself can't spend it. A box can't
+join with a person's invite, and a person can't join with a box admission.
+
+Every Admin's desktop **closes** an admission once it has settled: as soon as
+it sees the admission redeemed (naming that redemption), or once it has
+lapsed unredeemed (naming none). After that, every other redemption of it is
+refused wherever it sorts in the log, including one backdated to look as if
+it came before the expiry, or one a thief of the code slots in before the
+box's. Closing needs no passkey (it only narrows who may join), and a headless
+Admin closes from the CLI with `ligus admit close`.
 
 !!! warning "Before 0.1: `ligus serve enroll` and `serve.owner` were removed"
     Earlier previews could enrol a serve box as one person's device, so the
@@ -68,7 +79,8 @@ box** and confirm with your passkey. You need to be an Admin.
 
 The desktop gives you a code (`ligusadmit1:…`) that is **sealed to that box's
 key**: only that box can open it, and the admission is bound to that box's
-account. It is redeemable for one hour. On the box:
+account and device key, so only a redemption that box signs counts. It is
+redeemable for one hour. On the box:
 
 ```sh
 ligus admit redeem 'ligusadmit1:…'
@@ -139,10 +151,13 @@ joined.** The volume is optional, so the pod keeps running, and a restart
 doesn't need the code again.
 
 !!! danger "A bearer admission is a secret"
-    Until it is redeemed, whoever holds the code can join as a box, and the
-    code also carries the workspace key. Keep it in a Secret, never in a values
-    file or a ConfigMap, give it a short lifetime, and delete it after use.
-    Watch **People** for a service member you didn't expect, and remove it.
+    Until an Admin's device has closed it, whoever holds the code can join as
+    a box, and the code also carries the workspace key. Keep it in a Secret,
+    never in a values file or a ConfigMap, give it a short lifetime, and
+    delete it after use. Watch **People** for a service member you didn't
+    expect, and remove it. Never pass a bearer code on the command line:
+    `ligus admit redeem` takes it only from `--file PATH` or standard input
+    (`-`), so it never shows in `ps` or shell history.
 
 Outside Kubernetes the same file works: put the code in a file only the box's
 user can read and set `LIGUS_ADMISSION_FILE` to its path, or run
@@ -158,7 +173,12 @@ passkey:
 ligus admit issue --recovery-words-file ./recovery-words --ttl 2h --out serve.code
 ligus admit issue --recovery-words-file ./recovery-words --request 'ligusjoin1:…'   # sealed to that box
 ligus sync
+# once the box has joined, or the admission has lapsed:
+ligus sync && ligus admit close && ligus sync
 ```
+
+`ligus admit close` closes this Admin's workspace's settled admissions (the
+desktop does it on its own after every sync).
 
 A workspace founded from the CLI registers a recovery key as its founder's
 first credential with `ligus recovery-key create --out ./recovery-words`. The
@@ -184,7 +204,9 @@ it from a fresh data dir and admit it again.
 | `has no copy of the workspace '…' yet` | Check `LIGUS_WORKSPACE`, the relay URL and the relay token. If the workspace is new, sync the Admin's desktop first. |
 | `isn't a member … it holds no admission` | Admit it (above), then restart it. |
 | `a service member joins only through a box admission` | The code is a person's invite. Use **Admit a box**, not **Copy invite**. |
-| `that box admission has expired` | Make a new one. |
+| `that box admission has expired` / `that box admission was closed` | Make a new one. |
+| `that code isn't a box admission` | The code is a person's invite (or from an older build). Use **Admit a box**. |
+| `a box admission is redeemed with its code's proof` / `that redemption's proof doesn't verify` | The box joined without the code's redeem key: redeem the code again with `ligus admit redeem`. |
 | `that box admission is for another box` | The sealed code was made for another box's join request. |
 | `this admission code was sealed to another box` | Same: redeem it on the box that printed the request. |
 | `that admission is for workspace 'X', but this box serves 'Y'` | The code and `LIGUS_WORKSPACE` name different workspaces. |

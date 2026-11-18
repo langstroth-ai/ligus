@@ -21,7 +21,11 @@ Full release notes are on the
   competing one. `ligus serve enroll`, `LIGUS_SERVE_OWNER` and the chart's
   `serve.owner` were removed and stop with a migration error. The chart can
   now run serve and workers in one workspace (`serve.admission`,
-  `worker.instances[].admission`). See
+  `worker.instances[].admission`). Only the holder of an admission code can
+  redeem it (a redeem key's signature, bound to the box's device key when it
+  was issued for a join request), and every Admin's desktop closes an
+  admission once it is redeemed or lapses, so no later or backdated
+  redemption admits anyone. See
   [Admitting a box](../../operate/ops/admitting-a-box.md).
 - **A community relay to start with.** Onboarding, **Add workspace → Create**
   (when no relay is set) and **Settings → Team sync** offer

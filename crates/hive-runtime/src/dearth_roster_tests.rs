@@ -114,7 +114,7 @@ fn setup() -> (Log, Who, Who, Who, Uuid) {
     log.identity(&owner);
     for (w, role) in [(&admin2, WorkspaceRole::Admin), (&alice, WorkspaceRole::Contributor)] {
         let m = WorkspaceMember { id: w.id.clone(), actor: actor(w), role, title: String::new(), index: 0, joined_at: Timestamp::epoch() };
-        log.push(&owner, SessionEvent::MemberAdded { member: m, invite: None });
+        log.push(&owner, SessionEvent::MemberAdded { member: m, invite: None, proof: None });
         log.identity(w);
     }
     let laptop = Uuid::new_v4();
@@ -243,7 +243,7 @@ fn a_removed_member_cannot_reenter_the_roster_with_a_fresh_device() {
     let fk = log.cert(&alice, fresh);
     log.push(
         &alice,
-        SessionEvent::MemberAdded { invite: None,
+        SessionEvent::MemberAdded { invite: None, proof: None,
             member: WorkspaceMember { id: alice.id.clone(), actor: actor(&alice), role: WorkspaceRole::Contributor, title: String::new(), index: 0, joined_at: Timestamp::epoch() },
         },
     );

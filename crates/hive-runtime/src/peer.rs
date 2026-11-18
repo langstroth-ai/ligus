@@ -443,7 +443,7 @@ mod tests {
         };
         let mut store = EventStore::open_in_memory().unwrap();
         for e in [
-            plain(1, SessionEvent::MemberAdded { member, invite: None }),
+            plain(1, SessionEvent::MemberAdded { member, invite: None, proof: None }),
             plain(
                 2,
                 SessionEvent::AccountKeyRegistered {

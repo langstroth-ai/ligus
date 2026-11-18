@@ -196,8 +196,8 @@ async fn harness_with(
         agent.owner_actor_id = svc.author().id.clone();
         let id = agent.id;
         svc.add_agent(ws, ws, agent).unwrap();
-        let inv = svc.issue_box_admission(ws, 3_600_000, None).unwrap();
-        (id, crate::serve::admission_code(&desktop, &svc, inv).unwrap(), svc.issue_invite(ws).unwrap())
+        let (inv, seed) = svc.issue_box_admission(ws, 3_600_000, None).unwrap();
+        (id, crate::serve::admission_code(&desktop, &svc, inv, &seed).unwrap(), svc.issue_invite(ws).unwrap())
     };
     let (agent_id, admission, person_invite) = agent_id;
     sync_once(&desktop).await.unwrap();
@@ -410,8 +410,8 @@ async fn a_box_joins_only_through_a_box_admission() {
     // A box admission (the desktop's bearer code): joins as a service.
     let code = {
         let mut svc = open_service(&desktop).unwrap();
-        let inv = svc.issue_box_admission(ws, 3_600_000, None).unwrap();
-        crate::serve::admission_code(&desktop, &svc, inv).unwrap()
+        let (inv, seed) = svc.issue_box_admission(ws, 3_600_000, None).unwrap();
+        crate::serve::admission_code(&desktop, &svc, inv, &seed).unwrap()
     };
     sync_once(&desktop).await.unwrap();
     let mut cfg = config(&dir, &relay, &room);
@@ -3648,8 +3648,8 @@ async fn a_worker_never_writes_a_config_seed_or_founder_event() {
     let (founder, code) = {
         let mut svc = open_service(&desktop).unwrap();
         svc.ensure_self_member(workspace_config_session_id(ws), ws).unwrap();
-        let inv = svc.issue_box_admission(ws, 3_600_000, None).unwrap();
-        (svc.author().id.clone(), crate::serve::admission_code(&desktop, &svc, inv).unwrap())
+        let (inv, seed) = svc.issue_box_admission(ws, 3_600_000, None).unwrap();
+        (svc.author().id.clone(), crate::serve::admission_code(&desktop, &svc, inv, &seed).unwrap())
     };
     sync_once(&desktop).await.unwrap();
     let dir = tmp.path().join("worker");
@@ -3860,4 +3860,58 @@ async fn a_headless_admin_admits_serve_and_a_worker_into_one_workspace() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     panic!("serve never saw the worker join");
+}
+
+/// Review R6/R7 end to end: the worker redeems with its code's proof, the
+/// desktop (an Admin) closes the settled admission naming that redemption,
+/// and a code without a redeem key (a person's invite) admits no box.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_redeemed_admission_is_closed_by_the_admins_device() {
+    let tmp = tempfile::tempdir().unwrap();
+    let relay = spawn(test_relay::router()).await;
+    let room = format!("worker-close-{}", Uuid::new_v4());
+    let ws = crate::uuid_of_room(&room);
+    let desktop = config(&tmp.path().join("desktop"), &relay, &room);
+    let (code, person_code) = {
+        let mut svc = open_service(&desktop).unwrap();
+        svc.ensure_self_member(workspace_config_session_id(ws), ws).unwrap();
+        let (inv, seed) = svc.issue_box_admission(ws, 3_600_000, None).unwrap();
+        let code = crate::serve::admission_code(&desktop, &svc, inv, &seed).unwrap();
+        assert!(hive_runtime::box_admission::redeem_key_of(&code).is_some());
+        // Nothing open is redeemed or lapsed yet: nothing to close.
+        assert_eq!(svc.close_settled_admissions(ws).unwrap(), 0);
+        let pinv = svc.issue_invite(ws).unwrap();
+        let mut plain = crate::serve::admission_code(&desktop, &svc, pinv, &[0; 32]).unwrap();
+        // Strip the redeem key: what a person's invite code looks like.
+        let body = plain.strip_prefix("hivews1:").unwrap().to_string();
+        let mut v: serde_json::Value =
+            serde_json::from_slice(&base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, body).unwrap()).unwrap();
+        v.as_object_mut().unwrap().remove("ak");
+        plain = format!("hivews1:{}", base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, serde_json::to_vec(&v).unwrap()));
+        (code, plain)
+    };
+    sync_once(&desktop).await.unwrap();
+    // A person's invite code admits no box.
+    let other = tmp.path().join("other");
+    let mut ocfg = config(&other, &relay, &room);
+    let err = crate::worker_start(&mut ocfg, "w2", Some(person_code)).await.err().expect("a person's invite admits no box").to_string();
+    assert!(err.contains("isn't a box admission"), "{err}");
+
+    let dir = tmp.path().join("worker");
+    let mut cfg = config(&dir, &relay, &room);
+    let (svc, _) = crate::worker_start(&mut cfg, "w1", Some(code)).await.unwrap();
+    let me = svc.author().id.clone();
+    let redemption = signed_by(&dir, svc.device_id())
+        .into_iter()
+        .find(|e| matches!(&e.payload, hive_core::SessionEvent::MemberAdded { proof: Some(_), invite: Some(_), .. }))
+        .expect("the worker redeemed with its code's proof");
+    drop(svc);
+    sync_once(&desktop).await.unwrap();
+    let mut admin = open_service(&desktop).unwrap();
+    assert_eq!(admin.close_settled_admissions(ws).unwrap(), 1);
+    assert_eq!(admin.close_settled_admissions(ws).unwrap(), 0, "closed once");
+    let c = admin.load(workspace_config_session_id(ws)).unwrap().unwrap();
+    let hive_core::SessionEvent::MemberAdded { invite: Some(inv), .. } = &redemption.payload else { unreachable!() };
+    assert_eq!(c.guards.closed_admissions.get(inv), Some(&vec![Some(redemption.event_id)]));
+    assert!(c.members.iter().any(|m| m.id == me), "the named redemption stands");
 }

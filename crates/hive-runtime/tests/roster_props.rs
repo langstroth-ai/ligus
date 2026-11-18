@@ -90,7 +90,7 @@ fn workspace(ws: Uuid, owner: &Principal, others: &[&Principal]) -> Vec<SessionE
     out.push(owner.recovery(ws, 4));
     let mut l = 10;
     for p in others {
-        out.push(owner.sign(ws, l, SessionEvent::MemberAdded { invite: None, member: p.member(WorkspaceRole::Contributor) }));
+        out.push(owner.sign(ws, l, SessionEvent::MemberAdded { invite: None, proof: None, member: p.member(WorkspaceRole::Contributor) }));
         out.extend(p.trust(ws, l + 1));
         l += 10;
     }
@@ -136,7 +136,7 @@ fn roster_ignores_unverified_batch_membership() {
     let ws = Uuid::new_v4();
     let stored = workspace(ws, &owner, &[]);
     // Eve signs with her own device but stamps the owner as author.
-    let mut forged = eve.sign(ws, 100, SessionEvent::MemberAdded { invite: None, member: eve.member(WorkspaceRole::Admin) });
+    let mut forged = eve.sign(ws, 100, SessionEvent::MemberAdded { invite: None, proof: None, member: eve.member(WorkspaceRole::Admin) });
     forged.actor_stamp = Some(ActorStamp { actor: owner.actor(), recorded_at: Timestamp::epoch(), cfg_frontier: None, presence: None, runtime_effect: false, prev: None, sig_alg: Default::default() });
     forged.clear_raw();
     sign_envelope(&mut forged, eve.device_id, &eve.device);
@@ -182,7 +182,7 @@ fn a_fresh_workspace_verifies_in_one_batch() {
     // A self-enrollment below Admin, signed by the joiner's own device, too.
     let joe = Principal::new("joe");
     let mut batch2 = joe.trust(ws, 200);
-    batch2.push(joe.sign(ws, 202, SessionEvent::MemberAdded { invite: None, member: joe.member(WorkspaceRole::Contributor) }));
+    batch2.push(joe.sign(ws, 202, SessionEvent::MemberAdded { invite: None, proof: None, member: joe.member(WorkspaceRole::Contributor) }));
     let refs: Vec<&SessionEventEnvelope> = batch2.iter().collect();
     let roster = roster_with_batch(batch, &refs, None);
     assert!(roster.is_certified(joe.device_id));
@@ -354,7 +354,7 @@ fn a_forged_low_lamport_seed_cannot_lock_out_the_founder() {
         let pin = FounderPin::parse(&owner.account_id.to_string(), &fk).unwrap();
         let mut held = stored.clone();
         held.extend(eve.trust(ws, 100));
-        held.push(eve.sign(ws, 102, SessionEvent::MemberAdded { invite: None, member: eve.member(WorkspaceRole::Contributor) }));
+        held.push(eve.sign(ws, 102, SessionEvent::MemberAdded { invite: None, proof: None, member: eve.member(WorkspaceRole::Contributor) }));
         let mut seed = ChatSession::new("", ws, "");
         seed.id = workspace_config_session_id(ws);
         seed.creator_actor_id = eve.account_id.to_string();

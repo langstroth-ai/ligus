@@ -152,6 +152,13 @@ impl EventStore {
                 invite_id    TEXT NOT NULL
             );
 
+            -- Device-local (Phase B): the redeem key seed of the box
+            -- admission this box redeems (from its admission code).
+            CREATE TABLE IF NOT EXISTS join_redeem_keys (
+                workspace_id TEXT PRIMARY KEY,
+                seed         TEXT NOT NULL
+            );
+
             -- Device-local: the issue time (unix ms) of the newest contact
             -- record seen per contact id, so a relay can't serve an older one
             -- (anti-rollback, IDENTITY-AND-FORGES S6/S4).
@@ -1394,6 +1401,37 @@ impl EventStore {
         Ok(())
     }
 
+    /// Keep the redeem key seed of the box admission this box redeems.
+    pub fn set_join_redeem_key(&self, workspace_id: Uuid, seed: &[u8; 32]) -> Result<()> {
+        let hex: String = seed.iter().map(|b| format!("{b:02x}")).collect();
+        self.conn.execute(
+            "INSERT INTO join_redeem_keys (workspace_id, seed) VALUES (?1, ?2) \
+             ON CONFLICT(workspace_id) DO UPDATE SET seed = excluded.seed",
+            rusqlite::params![workspace_id.to_string(), hex],
+        )?;
+        Ok(())
+    }
+
+    /// The redeem key seed this box proves its admission with, if any.
+    pub fn join_redeem_key(&self, workspace_id: Uuid) -> Result<Option<[u8; 32]>> {
+        let v: Option<String> = self
+            .conn
+            .query_row("SELECT seed FROM join_redeem_keys WHERE workspace_id = ?1", [workspace_id.to_string()], |r| r.get(0))
+            .optional()?;
+        Ok(v.and_then(|h| crate::box_admission::seed_from_hex(&h)))
+    }
+
+    /// Every envelope of `workspace_id`'s config log (equivocations
+    /// included), as `load_config` folds them.
+    pub fn config_envelopes(&self, workspace_id: Uuid) -> Result<Vec<SessionEventEnvelope>> {
+        let config_id = hive_core::workspace_config_session_id(workspace_id);
+        self.query_envelopes_sealed(
+            "SELECT envelope_json, sealed_epoch FROM events WHERE session_id = ?1 \
+             UNION ALL SELECT envelope_json, sealed_epoch FROM equivocations WHERE session_id = ?1",
+            [config_id.to_string()],
+        )
+    }
+
     /// The invite this device redeems to join `workspace_id`, if it has one.
     pub fn join_invite(&self, workspace_id: Uuid) -> Result<Option<Uuid>> {
         let v: Option<String> = self
@@ -1713,7 +1751,7 @@ mod tests {
         let events = vec![
             SessionEventEnvelope::new(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(base) }),
             SessionEventEnvelope::new(sid, wid, 2, SessionEvent::SessionTitleChanged { title: "First".into() }),
-            SessionEventEnvelope::new(sid, wid, 3, SessionEvent::MemberAdded { member, invite: None }),
+            SessionEventEnvelope::new(sid, wid, 3, SessionEvent::MemberAdded { member, invite: None, proof: None }),
             SessionEventEnvelope::new(sid, wid, 4, SessionEvent::SessionTitleChanged { title: "Second".into() }),
             SessionEventEnvelope::new(sid, wid, 5, SessionEvent::MemberRemoved { member_id: "m1".into(), watermark: Vec::new() }),
         ];

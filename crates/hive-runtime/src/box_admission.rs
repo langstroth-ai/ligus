@@ -140,6 +140,42 @@ pub fn open_admission(code: &str, ka: &hive_core::KeyAgreementKeypair) -> Result
     Ok(s.to_string())
 }
 
+/// The key in a `hivews1:` code's JSON that carries a box admission's
+/// redeem key seed (hex). Left out of every other code.
+pub const REDEEM_KEY_FIELD: &str = "ak";
+
+/// `invite` (a `hivews1:` code) with a box admission's redeem key seed
+/// added: what lets its holder redeem the admission
+/// (`hive_core::admission`).
+pub fn with_redeem_key(invite: &str, seed: &[u8; 32]) -> Result<String, String> {
+    let mut v = invite_json(invite)?;
+    let hex: String = seed.iter().map(|b| format!("{b:02x}")).collect();
+    v.as_object_mut().ok_or("the invite is malformed")?.insert(REDEEM_KEY_FIELD.into(), serde_json::Value::String(hex));
+    let json = serde_json::to_vec(&v).map_err(|e| e.to_string())?;
+    Ok(format!("hivews1:{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)))
+}
+
+/// The redeem key seed a `hivews1:` code carries, if it is a box admission's.
+pub fn redeem_key_of(invite: &str) -> Option<[u8; 32]> {
+    invite_json(invite).ok()?.get(REDEEM_KEY_FIELD)?.as_str().and_then(seed_from_hex)
+}
+
+/// A 32-byte seed from 64 hex digits.
+pub fn seed_from_hex(h: &str) -> Option<[u8; 32]> {
+    let h = h.trim();
+    if h.len() != 64 || !h.is_ascii() {
+        return None;
+    }
+    let bytes: Vec<u8> = (0..64).step_by(2).filter_map(|i| u8::from_str_radix(&h[i..i + 2], 16).ok()).collect();
+    <[u8; 32]>::try_from(bytes).ok()
+}
+
+fn invite_json(invite: &str) -> Result<serde_json::Value, String> {
+    let body = invite.trim().strip_prefix("hivews1:").ok_or("not a workspace invite (expected hivews1:…)")?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(body.trim().as_bytes()).map_err(|_| "the invite isn't valid base64url")?;
+    serde_json::from_slice(&bytes).map_err(|_| "the invite is malformed".to_string())
+}
+
 mod b64 {
     use base64::Engine;
     use serde::{Deserialize, Deserializer, Serializer};
@@ -194,6 +230,19 @@ mod tests {
         let mut relabelled = r.clone();
         relabelled.label = "other".into();
         assert_eq!(relabelled.fingerprint(), r.fingerprint(), "the label is only a hint");
+    }
+
+    #[test]
+    fn a_redeem_key_rides_the_code_and_nothing_else() {
+        let plain = format!("hivews1:{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"relay_url":"https://r","room":"acme","inv":"x"}"#));
+        assert_eq!(redeem_key_of(&plain), None);
+        let seed = [0xab; 32];
+        let code = with_redeem_key(&plain, &seed).unwrap();
+        assert_eq!(redeem_key_of(&code), Some(seed));
+        let back = invite_json(&code).unwrap();
+        assert_eq!(back["room"], "acme", "the other fields stay");
+        assert!(with_redeem_key("ligusjoin1:x", &seed).is_err());
+        assert_eq!(seed_from_hex("zz"), None);
     }
 
     #[test]

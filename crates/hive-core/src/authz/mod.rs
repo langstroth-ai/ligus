@@ -328,10 +328,13 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
     if let Some(why) = crate::admission::issuance_refusal(env, fold, on_config) {
         return Decision::deny(why);
     }
-    if let (true, SessionEvent::MemberAdded { member, invite }) = (on_config, &env.payload) {
-        if let Some(why) = crate::admission::redemption_refusal(env, member, *invite, fold) {
+    if let (true, SessionEvent::MemberAdded { member, invite, proof }) = (on_config, &env.payload) {
+        if let Some(why) = crate::admission::redemption_refusal(env, member, *invite, proof.as_deref(), fold) {
             return Decision::deny(why);
         }
+    }
+    if let Some(why) = crate::admission::closure_refusal(env, fold, on_config) {
+        return Decision::deny(why);
     }
     // A phone is enrolled on the config log by a trusted device of its own
     // account (certified, not revoked, not delegated, not a phone), with that

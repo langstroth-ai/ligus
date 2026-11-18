@@ -142,7 +142,7 @@ fn high_s(sig: &[u8]) -> Vec<u8> {
 fn a_service_member_is_capped_and_never_a_human() {
     let mut w = world();
     w.kinds.insert("box".into(), ActorKind::Service);
-    let as_admin = w.push("owner", SessionEvent::MemberAdded { member: w.member_of("box", WorkspaceRole::Admin), invite: None });
+    let as_admin = w.push("owner", SessionEvent::MemberAdded { member: w.member_of("box", WorkspaceRole::Admin), invite: None, proof: None });
     assert_eq!(w.verdict(as_admin), Verdict::Denied, "a service member holds at most Contributor");
     w.admit("owner", "box", WorkspaceRole::Contributor);
     assert!(w.config().members.iter().any(|m| m.id == "box" && m.actor.kind == ActorKind::Service));

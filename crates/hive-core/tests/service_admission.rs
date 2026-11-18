@@ -8,7 +8,7 @@
 //! presence, never satisfies a human gate, and its device is revoked like
 //! any other.
 
-use hive_core::admission::{Admission, MAX_ADMISSION_TTL_MS};
+use hive_core::admission::{Admission, RedeemKey, MAX_ADMISSION_TTL_MS};
 use hive_core::authorization::invite_subject;
 use hive_core::testkit::{Phone, SignedWorld};
 use hive_core::{
@@ -18,6 +18,12 @@ use hive_core::{
 use uuid::Uuid;
 
 const HOUR_MS: i64 = 60 * 60 * 1000;
+
+/// The redeem key of every admission these tests issue (its seed is what an
+/// admission code carries).
+fn key() -> RedeemKey {
+    RedeemKey::from_seed(&[7; 32]).unwrap()
+}
 
 /// The honest watermark of `who`'s device on every log of `w`.
 fn honest_watermark(w: &SignedWorld, who: &str) -> Vec<hive_core::watermark::Watermark> {
@@ -58,7 +64,8 @@ fn issue(w: &mut SignedWorld, by: &str, id: Uuid, admission: Admission) -> Uuid 
 fn redeem(w: &mut SignedWorld, name: &str, id: Uuid, role: WorkspaceRole, when: Option<i64>) -> Uuid {
     w.publish_identity(name);
     let m = w.member_of(name, role);
-    let mut env = w.draft(name, None, SessionEvent::MemberAdded { member: m, invite: Some(id) }, None);
+    let proof = key().prove(w.wid, id, name, w.people[name].device_id);
+    let mut env = w.draft(name, None, SessionEvent::MemberAdded { member: m, invite: Some(id), proof: Some(proof) }, None);
     if let Some(ms) = when {
         env.timestamp = at_ms(ms);
     }
@@ -68,7 +75,7 @@ fn redeem(w: &mut SignedWorld, name: &str, id: Uuid, role: WorkspaceRole, when: 
 
 fn admitted(w: &mut SignedWorld, name: &str) -> Uuid {
     let id = Uuid::new_v4();
-    issue(w, "adm", id, Admission::service(now_ms() + HOUR_MS, None));
+    issue(w, "adm", id, Admission::service(now_ms() + HOUR_MS, None, key().public()));
     let r = redeem(w, name, id, WorkspaceRole::Contributor, None);
     assert_eq!(w.verdict(r), Verdict::Allowed);
     id
@@ -78,7 +85,7 @@ fn admitted(w: &mut SignedWorld, name: &str) -> Uuid {
 fn a_box_redeems_its_admission_once_as_a_contributor_service_member() {
     let mut w = world();
     let id = Uuid::new_v4();
-    let i = issue(&mut w, "adm", id, Admission::service(now_ms() + HOUR_MS, None));
+    let i = issue(&mut w, "adm", id, Admission::service(now_ms() + HOUR_MS, None, key().public()));
     assert_eq!(w.verdict(i), Verdict::Allowed);
     let r = redeem(&mut w, "box", id, WorkspaceRole::Contributor, None);
     assert_eq!(w.verdict(r), Verdict::Allowed);
@@ -94,7 +101,7 @@ fn a_box_redeems_its_admission_once_as_a_contributor_service_member() {
 fn an_admission_admits_no_more_than_contributor() {
     let mut w = world();
     let id = Uuid::new_v4();
-    issue(&mut w, "adm", id, Admission::service(now_ms() + HOUR_MS, None));
+    issue(&mut w, "adm", id, Admission::service(now_ms() + HOUR_MS, None, key().public()));
     for role in [WorkspaceRole::Owner, WorkspaceRole::Admin] {
         let r = redeem(&mut w, "box", id, role, None);
         assert_eq!(w.verdict(r), Verdict::Denied, "{role:?}");
@@ -109,7 +116,7 @@ fn an_expired_admission_admits_no_one() {
     let mut w = world();
     let id = Uuid::new_v4();
     let expires = now_ms() + HOUR_MS;
-    issue(&mut w, "adm", id, Admission::service(expires, None));
+    issue(&mut w, "adm", id, Admission::service(expires, None, key().public()));
     let late = redeem(&mut w, "box", id, WorkspaceRole::Contributor, Some(expires + 1000));
     assert_eq!(w.verdict(late), Verdict::Denied);
     let on_time = redeem(&mut w, "box", id, WorkspaceRole::Contributor, Some(expires - 1000));
@@ -126,11 +133,11 @@ fn a_person_invite_never_admits_a_box_and_an_admission_never_admits_a_person() {
     assert_eq!(w.verdict(r), Verdict::Denied, "a box joins only through a box admission");
     // Nor without any invite.
     let m = w.member_of("box", WorkspaceRole::Contributor);
-    let bare = w.push_bare("box", SessionEvent::MemberAdded { member: m, invite: None });
+    let bare = w.push_bare("box", SessionEvent::MemberAdded { member: m, invite: None, proof: None });
     assert_eq!(w.verdict(bare), Verdict::Denied);
     // A box admission redeemed by a person.
     let boxed = Uuid::new_v4();
-    issue(&mut w, "adm", boxed, Admission::service(now_ms() + HOUR_MS, None));
+    issue(&mut w, "adm", boxed, Admission::service(now_ms() + HOUR_MS, None, key().public()));
     let r = redeem(&mut w, "eve", boxed, WorkspaceRole::Contributor, None);
     assert_eq!(w.verdict(r), Verdict::Denied, "a box admission admits only a service");
     // The person invite still admits the person.
@@ -143,7 +150,7 @@ fn a_bound_admission_admits_only_the_box_that_asked() {
     let mut w = world();
     let id = Uuid::new_v4();
     let asked = w.people["box"].account_id;
-    issue(&mut w, "adm", id, Admission::service(now_ms() + HOUR_MS, Some(asked)));
+    issue(&mut w, "adm", id, Admission::service(now_ms() + HOUR_MS, Some(asked), key().public()));
     let other = redeem(&mut w, "box2", id, WorkspaceRole::Contributor, None);
     assert_eq!(w.verdict(other), Verdict::Denied, "another box's key");
     let mine = redeem(&mut w, "box", id, WorkspaceRole::Contributor, None);
@@ -156,39 +163,39 @@ fn issuing_an_admission_is_an_admins_with_presence_and_bounded() {
     let soon = now_ms() + HOUR_MS;
     // Contributor: no.
     let id = Uuid::new_v4();
-    let by_mara = issue(&mut w, "mara", id, Admission::service(soon, None));
+    let by_mara = issue(&mut w, "mara", id, Admission::service(soon, None, key().public()));
     assert_eq!(w.verdict(by_mara), Verdict::Denied);
     // No presence: no.
-    let bare = w.push_bare("adm", SessionEvent::JoinApproved { subject: invite_subject(Uuid::new_v4()), admission: Some(Admission::service(soon, None)) });
+    let bare = w.push_bare("adm", SessionEvent::JoinApproved { subject: invite_subject(Uuid::new_v4()), admission: Some(Admission::service(soon, None, key().public())) });
     assert_eq!(w.verdict(bare), Verdict::Denied);
     // Expiry before issuing, or beyond the bound: no.
-    let past = issue(&mut w, "adm", Uuid::new_v4(), Admission::service(now_ms() - HOUR_MS, None));
-    let far = issue(&mut w, "adm", Uuid::new_v4(), Admission::service(now_ms() + MAX_ADMISSION_TTL_MS + HOUR_MS, None));
+    let past = issue(&mut w, "adm", Uuid::new_v4(), Admission::service(now_ms() - HOUR_MS, None, key().public()));
+    let far = issue(&mut w, "adm", Uuid::new_v4(), Admission::service(now_ms() + MAX_ADMISSION_TTL_MS + HOUR_MS, None, key().public()));
     assert_eq!((w.verdict(past), w.verdict(far)), (Verdict::Denied, Verdict::Denied));
     // Another kind: no.
-    let human = issue(&mut w, "adm", Uuid::new_v4(), Admission { kind: ActorKind::Human, expires_ms: soon, account_id: None });
+    let human = issue(&mut w, "adm", Uuid::new_v4(), Admission { kind: ActorKind::Human, ..Admission::service(soon, None, key().public()) });
     assert_eq!(w.verdict(human), Verdict::Denied);
     // Not an invite subject: no.
-    let odd = w.push("adm", SessionEvent::JoinApproved { subject: "bob".into(), admission: Some(Admission::service(soon, None)) });
+    let odd = w.push("adm", SessionEvent::JoinApproved { subject: "bob".into(), admission: Some(Admission::service(soon, None, key().public())) });
     assert_eq!(w.verdict(odd), Verdict::Denied);
     // One admission per invite, and a person invite can't take its id.
     let id = Uuid::new_v4();
-    let first = issue(&mut w, "adm", id, Admission::service(soon, None));
+    let first = issue(&mut w, "adm", id, Admission::service(soon, None, key().public()));
     assert_eq!(w.verdict(first), Verdict::Allowed);
-    let twice = issue(&mut w, "owner", id, Admission::service(soon, Some(Uuid::new_v4())));
+    let twice = issue(&mut w, "owner", id, Admission::service(soon, Some(Uuid::new_v4()), key().public()));
     let as_person = w.push("owner", SessionEvent::JoinApproved { subject: invite_subject(id), admission: None });
     assert_eq!((w.verdict(twice), w.verdict(as_person)), (Verdict::Denied, Verdict::Denied));
     // A person invite's id can't become an admission.
     let p = Uuid::new_v4();
     w.push("adm", SessionEvent::JoinApproved { subject: invite_subject(p), admission: None });
-    let upgrade = issue(&mut w, "adm", p, Admission::service(soon, None));
+    let upgrade = issue(&mut w, "adm", p, Admission::service(soon, None, key().public()));
     assert_eq!(w.verdict(upgrade), Verdict::Denied);
     // On a chat log: no.
     let chat = w.chat("owner", "c");
     let in_chat = w.write(
         "adm",
         Some(chat),
-        SessionEvent::JoinApproved { subject: invite_subject(Uuid::new_v4()), admission: Some(Admission::service(soon, None)) },
+        SessionEvent::JoinApproved { subject: invite_subject(Uuid::new_v4()), admission: Some(Admission::service(soon, None, key().public())) },
         None,
         hive_core::testkit::Proof::Recovery,
     );
@@ -205,10 +212,10 @@ fn an_admin_admits_a_box_from_the_phone_with_presence() {
     let soon = now_ms() + HOUR_MS;
     let id = Uuid::new_v4();
     // Without presence: refused.
-    let bare = w.phone_write("adm", &phone, None, SessionEvent::JoinApproved { subject: invite_subject(id), admission: Some(Admission::service(soon, None)) });
+    let bare = w.phone_write("adm", &phone, None, SessionEvent::JoinApproved { subject: invite_subject(id), admission: Some(Admission::service(soon, None, key().public())) });
     assert_eq!(w.verdict(bare), Verdict::Denied);
     // With the person's presence over the phone-signed event: allowed.
-    let mut env = w.draft("adm", None, SessionEvent::JoinApproved { subject: invite_subject(id), admission: Some(Admission::service(soon, None)) }, None);
+    let mut env = w.draft("adm", None, SessionEvent::JoinApproved { subject: invite_subject(id), admission: Some(Admission::service(soon, None, key().public())) }, None);
     if let Some(s) = env.actor_stamp.as_mut() {
         s.actor.device_id = Some(phone.device_id);
         s.prev = w.cfg.iter().rev().find(|e| e.signer_device_id == Some(phone.device_id)).map(|e| e.event_id);
@@ -247,9 +254,9 @@ fn a_service_member_cuts_no_one_and_admits_no_one() {
             watermark: vec![],
         },
         SessionEvent::DeviceRevoked { device_id: eve_device, watermark: vec![] },
-        SessionEvent::MemberAdded { member: w.member_of("box2", WorkspaceRole::Viewer), invite: None },
+        SessionEvent::MemberAdded { member: w.member_of("box2", WorkspaceRole::Viewer), invite: None, proof: None },
         SessionEvent::JoinApproved { subject: invite_subject(Uuid::new_v4()), admission: None },
-        SessionEvent::JoinApproved { subject: invite_subject(Uuid::new_v4()), admission: Some(Admission::service(now_ms() + HOUR_MS, None)) },
+        SessionEvent::JoinApproved { subject: invite_subject(Uuid::new_v4()), admission: Some(Admission::service(now_ms() + HOUR_MS, None, key().public())) },
     ];
     for e in cuts {
         let kind = e.kind_str();
@@ -315,19 +322,31 @@ fn a_service_members_device_is_revoked_like_any_device() {
 fn admission_terms_round_trip_and_stay_off_the_wire_when_absent() {
     let plain = SessionEvent::JoinApproved { subject: "invite:x".into(), admission: None };
     assert_eq!(serde_json::to_string(&plain).unwrap(), r#"{"kind":"joinApproved","subject":"invite:x"}"#);
-    let a = SessionEvent::JoinApproved { subject: "invite:x".into(), admission: Some(Admission::service(5, None)) };
+    let mut terms = Admission::service(5, None, key().public());
+    terms.redeem_key = None;
+    let a = SessionEvent::JoinApproved { subject: "invite:x".into(), admission: Some(terms) };
     let j = serde_json::to_string(&a).unwrap();
     assert_eq!(j, r#"{"kind":"joinApproved","subject":"invite:x","admission":{"kind":"service","expiresMs":5}}"#);
     assert_eq!(serde_json::from_str::<SessionEvent>(&j).unwrap(), a);
+    let keyed = SessionEvent::JoinApproved { subject: "invite:x".into(), admission: Some(Admission::service(5, None, key().public())) };
+    let j = serde_json::to_string(&keyed).unwrap();
+    assert!(j.contains(r#""redeemKey":["#), "{j}");
+    assert_eq!(serde_json::from_str::<SessionEvent>(&j).unwrap(), keyed);
+    // A plain add carries neither an invite nor a proof on the wire.
+    let m = SessionEvent::MemberAdded { member: world().member_of("mara", WorkspaceRole::Viewer), invite: None, proof: None };
+    let j = serde_json::to_string(&m).unwrap();
+    assert!(!j.contains("proof") && !j.contains("invite"), "{j}");
+    let closed = SessionEvent::AdmissionClosed { invite: Uuid::nil(), redeemed: None };
+    assert_eq!(serde_json::to_string(&closed).unwrap(), r#"{"kind":"admissionClosed","invite":"00000000-0000-0000-0000-000000000000"}"#);
 }
 
 #[test]
 fn a_member_cannot_spend_a_box_admission_by_re_adding_itself() {
     let mut w = world();
     let id = Uuid::new_v4();
-    issue(&mut w, "adm", id, Admission::service(now_ms() + HOUR_MS, None));
+    issue(&mut w, "adm", id, Admission::service(now_ms() + HOUR_MS, None, key().public()));
     let m = w.member_of("mara", WorkspaceRole::Contributor);
-    let spend = w.push_bare("mara", SessionEvent::MemberAdded { member: m, invite: Some(id) });
+    let spend = w.push_bare("mara", SessionEvent::MemberAdded { member: m, invite: Some(id), proof: None });
     assert_eq!(w.verdict(spend), Verdict::Denied);
     let r = redeem(&mut w, "box", id, WorkspaceRole::Contributor, None);
     assert_eq!(w.verdict(r), Verdict::Allowed, "the admission is still the box's");
@@ -342,7 +361,7 @@ fn a_service_member_cannot_re_add_itself_as_a_person() {
     admitted(&mut w, "box");
     let mut m = w.member_of("box", WorkspaceRole::Contributor);
     m.actor.kind = ActorKind::Human;
-    let flip = w.push_bare("box", SessionEvent::MemberAdded { member: m, invite: None });
+    let flip = w.push_bare("box", SessionEvent::MemberAdded { member: m, invite: None, proof: None });
     assert_eq!(w.verdict(flip), Verdict::Denied, "a box never becomes a person");
     assert_eq!(w.roster().members["box"].kind, ActorKind::Service);
     // Having tried, its later vote signed as a person still counts for nothing.
@@ -360,6 +379,210 @@ fn a_service_member_cannot_re_add_itself_as_a_person() {
     // A person re-adding themself (a new name or avatar) is still fine.
     let mut mara = w.member_of("mara", WorkspaceRole::Contributor);
     mara.actor.display_name = "Mara B".into();
-    let ok = w.push_bare("mara", SessionEvent::MemberAdded { member: mara, invite: None });
+    let ok = w.push_bare("mara", SessionEvent::MemberAdded { member: mara, invite: None, proof: None });
     assert_eq!(w.verdict(ok), Verdict::Allowed);
+}
+
+
+/// `name` redeems invite `id` with a proof from `k`, at `lamport` when given
+/// (a position the redeemer chooses: right after the issue is the earliest).
+fn redeem_with(w: &mut SignedWorld, name: &str, id: Uuid, k: &RedeemKey, lamport: Option<u64>, when: Option<i64>) -> Uuid {
+    w.publish_identity(name);
+    let m = w.member_of(name, WorkspaceRole::Contributor);
+    let proof = k.prove(w.wid, id, name, w.people[name].device_id);
+    let mut env = w.draft(name, None, SessionEvent::MemberAdded { member: m, invite: Some(id), proof: Some(proof) }, None);
+    if let Some(l) = lamport {
+        env.lamport = l;
+    }
+    if let Some(ms) = when {
+        env.timestamp = at_ms(ms);
+    }
+    w.finish(&mut env, name, None);
+    w.push_env(None, env)
+}
+
+fn lamport_of(w: &SignedWorld, id: Uuid) -> u64 {
+    w.cfg.iter().find(|e| e.event_id == id).unwrap().lamport
+}
+
+#[test]
+fn a_member_who_reads_the_invite_off_the_log_cannot_redeem_it() {
+    // Review R5/R6: the invite id is on the config log for every member, so
+    // a member's sock puppet redeemed an unbound admission before the box,
+    // and forged the stamp's account to take a bound one.
+    let mut w = world();
+    let id = Uuid::new_v4();
+    issue(&mut w, "adm", id, Admission::service(now_ms() + HOUR_MS, None, key().public()));
+    let made_up = RedeemKey::from_seed(&[9; 32]).unwrap();
+    let snipe = redeem_with(&mut w, "box2", id, &made_up, None, None);
+    assert_eq!(w.verdict(snipe), Verdict::Denied, "a proof from another key");
+    let m = w.member_of("box2", WorkspaceRole::Contributor);
+    let bare = w.push_bare("box2", SessionEvent::MemberAdded { member: m, invite: Some(id), proof: None });
+    assert_eq!(w.verdict(bare), Verdict::Denied, "no proof");
+    // The box's proof, replayed by another device, admits no one either.
+    let stolen = key().prove(w.wid, id, "box", w.people["box"].device_id);
+    let mut m = w.member_of("box2", WorkspaceRole::Contributor);
+    m.id = "box".into();
+    let mut env = w.draft("box2", None, SessionEvent::MemberAdded { member: m, invite: Some(id), proof: Some(stolen) }, None);
+    env.actor_stamp.as_mut().unwrap().actor.id = "box".into();
+    w.finish(&mut env, "box2", None);
+    let replay = w.push_env(None, env);
+    assert_ne!(w.verdict(replay), Verdict::Allowed, "a proof for another device");
+    let ok = redeem(&mut w, "box", id, WorkspaceRole::Contributor, None);
+    assert_eq!(w.verdict(ok), Verdict::Allowed);
+
+    // A bound admission: a forged account in the stamp doesn't take it.
+    let mut w = world();
+    let id = Uuid::new_v4();
+    let asked = w.people["box"].account_id;
+    issue(&mut w, "adm", id, Admission::service(now_ms() + HOUR_MS, Some(asked), key().public()));
+    w.publish_identity("box2");
+    let mut m = w.member_of("box2", WorkspaceRole::Contributor);
+    m.actor.account_id = Some(asked);
+    let mut env = w.draft("box2", None, SessionEvent::MemberAdded { member: m, invite: Some(id), proof: None }, None);
+    env.actor_stamp.as_mut().unwrap().actor.account_id = Some(asked);
+    w.finish(&mut env, "box2", None);
+    let forged = w.push_env(None, env);
+    assert_eq!(w.verdict(forged), Verdict::Denied);
+    let ok = redeem(&mut w, "box", id, WorkspaceRole::Contributor, None);
+    assert_eq!(w.verdict(ok), Verdict::Allowed);
+}
+
+#[test]
+fn a_closed_admission_admits_no_backdated_or_retroactive_redemption() {
+    // Review R7: every time on the log is the redeemer's choice, so a holder
+    // of an expired code dated its redemption before the expiry and slotted
+    // it right after the issue; and a thief of a spent code slotted its own
+    // redemption before the box's, taking the box's place after the fact.
+    let mut w = world();
+    let id = Uuid::new_v4();
+    let expires = now_ms() + HOUR_MS;
+    let issued = issue(&mut w, "adm", id, Admission::service(expires, None, key().public()));
+    let ok = redeem(&mut w, "box", id, WorkspaceRole::Contributor, None);
+    assert_eq!(w.verdict(ok), Verdict::Allowed);
+    // Before any close: a thief with the code slots in before the box.
+    let early = lamport_of(&w, issued) + 1;
+    let mut w2 = w.clone();
+    let hijack = redeem_with(&mut w2, "box2", id, &key(), Some(early), None);
+    assert_eq!(w2.verdict(hijack), Verdict::Allowed, "the residual a close removes: first in canonical order wins");
+    assert_eq!(w2.verdict(ok), Verdict::Denied);
+    // An Admin's device closes the admission, naming the box's redemption.
+    let close = w.push_bare("adm", SessionEvent::AdmissionClosed { invite: id, redeemed: Some(ok) });
+    assert_eq!(w.verdict(close), Verdict::Allowed, "no presence: it only narrows");
+    let hijack = redeem_with(&mut w, "box2", id, &key(), Some(early), None);
+    assert_eq!(w.verdict(hijack), Verdict::Denied);
+    assert_eq!(w.verdict(ok), Verdict::Allowed, "the named redemption stands");
+    assert!(w.roster().members.contains_key("box") && !w.roster().members.contains_key("box2"));
+
+    // An unredeemed admission closed at its expiry: a code found later,
+    // redeemed with a date before the expiry and slotted after the issue,
+    // admits no one.
+    let mut w = world();
+    let id = Uuid::new_v4();
+    let issued = issue(&mut w, "adm", id, Admission::service(expires, None, key().public()));
+    let close = w.push_bare("adm", SessionEvent::AdmissionClosed { invite: id, redeemed: None });
+    assert_eq!(w.verdict(close), Verdict::Allowed);
+    let early = lamport_of(&w, issued) + 1;
+    let backdated = redeem_with(&mut w, "box", id, &key(), Some(early), Some(expires - 1000));
+    assert_eq!(w.verdict(backdated), Verdict::Denied);
+    assert!(!w.roster().members.contains_key("box"));
+}
+
+#[test]
+fn only_an_admin_closes_an_admission_and_only_one_issued_here() {
+    let mut w = world();
+    admitted(&mut w, "box");
+    let id = Uuid::new_v4();
+    issue(&mut w, "adm", id, Admission::service(now_ms() + HOUR_MS, None, key().public()));
+    for by in ["mara", "box"] {
+        let c = w.push_bare(by, SessionEvent::AdmissionClosed { invite: id, redeemed: None });
+        assert_eq!(w.verdict(c), Verdict::Denied, "{by}");
+    }
+    let unknown = w.push_bare("adm", SessionEvent::AdmissionClosed { invite: Uuid::new_v4(), redeemed: None });
+    assert_eq!(w.verdict(unknown), Verdict::Denied);
+    let chat = w.chat("owner", "c");
+    let in_chat = w.write("adm", Some(chat), SessionEvent::AdmissionClosed { invite: id, redeemed: None }, None, hive_core::testkit::Proof::None);
+    assert_ne!(w.verdict(in_chat), Verdict::Allowed);
+    let r = redeem(&mut w, "box2", id, WorkspaceRole::Contributor, None);
+    assert_eq!(w.verdict(r), Verdict::Allowed, "nothing closed it");
+}
+
+#[test]
+fn a_phone_signs_only_the_admission_its_passkey_confirmed() {
+    // Review R8: the box drafts the phone-signed event and hands back opaque
+    // preimage bytes; a box that swaps in another event (a vote as the
+    // person, another admission) got the phone's P-256 signature on it. The
+    // phone checks the preimage first.
+    use hive_core::admission::check_phone_admission_preimage;
+    let mut w = world();
+    let phone = Phone::new();
+    let cert = w.phone_certificate("adm", &phone);
+    w.push("adm", SessionEvent::DeviceCertificateAdded { certificate: cert });
+    let soon = now_ms() + HOUR_MS;
+    let draft = |w: &mut SignedWorld, payload: SessionEvent| {
+        let mut env = w.draft("adm", None, payload, None);
+        let s = env.actor_stamp.as_mut().unwrap();
+        s.actor.device_id = Some(phone.device_id);
+        s.sig_alg = hive_core::crypto::SigAlg::P256;
+        env.clear_raw();
+        env
+    };
+    let id = Uuid::new_v4();
+    let mut env = draft(&mut w, SessionEvent::JoinApproved { subject: invite_subject(id), admission: Some(Admission::service(soon, None, key().public())) });
+    let challenge = hive_core::presence::challenge(&env);
+    env.actor_stamp.as_mut().unwrap().presence = Some(w.recovery_presence("adm", &env));
+    env.clear_raw();
+    let good = hive_core::crypto::envelope_preimage(&env);
+    let (inv, terms) = check_phone_admission_preimage(&good, &challenge, w.wid, phone.device_id, None).unwrap();
+    assert_eq!((inv, terms.expires_ms), (id, soon));
+    // Another workspace or another phone: refused.
+    assert!(check_phone_admission_preimage(&good, &challenge, Uuid::new_v4(), phone.device_id, None).is_err());
+    assert!(check_phone_admission_preimage(&good, &challenge, w.wid, Uuid::new_v4(), None).is_err());
+    // An admission bound to a box the phone didn't ask for (the box that
+    // relays it swapping in its own device key).
+    assert!(check_phone_admission_preimage(&good, &challenge, w.wid, phone.device_id, Some(&[3; 32])).is_err());
+    // Another admission than the passkey confirmed (a longer one, say).
+    let mut other = draft(&mut w, SessionEvent::JoinApproved { subject: invite_subject(id), admission: Some(Admission::service(soon + 5 * HOUR_MS, None, key().public())) });
+    other.actor_stamp.as_mut().unwrap().presence = env.actor_stamp.as_ref().unwrap().presence.clone();
+    other.clear_raw();
+    let swapped = hive_core::crypto::envelope_preimage(&other);
+    assert_eq!(check_phone_admission_preimage(&swapped, &challenge, w.wid, phone.device_id, None).unwrap_err(), "not the event the passkey confirmed");
+    // A vote as the person: refused whatever its digest.
+    let chat = w.chat("owner", "c");
+    let mut vote = w.draft("adm", Some(chat), SessionEvent::ProposalVoteCast {
+        proposal_id: Uuid::new_v4(),
+        approval: ProposalApproval { actor_id: "adm".into(), role: WorkspaceRole::Admin, approved: true, created_at: Timestamp::epoch(), diff_digest: None },
+    }, None);
+    let s = vote.actor_stamp.as_mut().unwrap();
+    s.actor.device_id = Some(phone.device_id);
+    s.sig_alg = hive_core::crypto::SigAlg::P256;
+    vote.clear_raw();
+    let vote_challenge = hive_core::presence::challenge(&vote);
+    vote.actor_stamp.as_mut().unwrap().presence = Some(w.recovery_presence("adm", &vote));
+    vote.clear_raw();
+    let v = hive_core::crypto::envelope_preimage(&vote);
+    assert!(check_phone_admission_preimage(&v, &vote_challenge, w.wid, phone.device_id, None).is_err());
+    // Truncated or padded bytes.
+    assert!(check_phone_admission_preimage(&good[..good.len() - 1], &challenge, w.wid, phone.device_id, None).is_err());
+    let mut padded = good.clone();
+    padded.push(0);
+    assert!(check_phone_admission_preimage(&padded, &challenge, w.wid, phone.device_id, None).is_err());
+}
+
+#[test]
+fn an_admission_for_a_join_request_admits_only_that_boxs_device() {
+    // Review R9: a code's seed is known to whoever relayed or issued it (the
+    // serve box drafting a phone's admission). Bound to the requesting box's
+    // device key, the admission can't be taken with the seed alone.
+    let mut w = world();
+    let id = Uuid::new_v4();
+    let pk = w.people["box"].device.public_key_bytes();
+    issue(&mut w, "adm", id, Admission::service(now_ms() + HOUR_MS, None, key().public()).for_device(&pk));
+    let other = redeem_with(&mut w, "box2", id, &key(), None, None);
+    assert_eq!(w.verdict(other), Verdict::Denied, "the seed without the box's device key");
+    let mine = redeem(&mut w, "box", id, WorkspaceRole::Contributor, None);
+    assert_eq!(w.verdict(mine), Verdict::Allowed);
+    // A malformed device key isn't issued.
+    let bad = issue(&mut w, "adm", Uuid::new_v4(), Admission::service(now_ms() + HOUR_MS, None, key().public()).for_device(&[1; 3]));
+    assert_eq!(w.verdict(bad), Verdict::Denied);
 }

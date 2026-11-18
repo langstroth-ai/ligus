@@ -12,11 +12,16 @@
 //! 3. a proposal has a human approval only if a human's own vote was allowed;
 //! 4. every allowed redemption of a box admission admits a service at most
 //!    Contributor, on time, by the account it names; each admits one member;
-//! 5. once a box's device is revoked, nothing it signs later is allowed.
+//! 5. once a box's device is revoked, nothing it signs later is allowed;
+//! 6. (review) only a holder of the admission code redeems it, whatever its
+//!    lamport: a member who reads the invite id off the log never does;
+//! 7. (review) once an Admin closes an admission, no redemption but the one
+//!    it names is allowed, wherever it sorts (a backdated one included);
+//! 8. (review) a box never re-adds itself as a person.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use hive_core::admission::{admission_of, Admission};
+use hive_core::admission::{admission_of, Admission, RedeemKey};
 use hive_core::authorization::invite_subject;
 use hive_core::testkit::{Proof, SignedWorld};
 use hive_core::{
@@ -31,6 +36,16 @@ const PEOPLE: [&str; 3] = ["owner", "adm", "mara"];
 const BOXES: [&str; 2] = ["box", "box2"];
 const ALL: [&str; 6] = ["owner", "adm", "mara", "box", "box2", "eve"];
 
+/// The redeem key of every admission issued here (the code's holder).
+fn key() -> RedeemKey {
+    RedeemKey::from_seed(&[7; 32]).unwrap()
+}
+
+/// A key someone without the code makes up.
+fn forged() -> RedeemKey {
+    RedeemKey::from_seed(&[9; 32]).unwrap()
+}
+
 fn now_ms() -> i64 {
     (Timestamp::now().inner().unix_timestamp_nanos() / 1_000_000) as i64
 }
@@ -44,8 +59,14 @@ enum Op {
     /// A person issues a box admission (slot, ttl in minutes, bound to a box?).
     Issue { by: u8, slot: u8, ttl_min: i16, bind: Option<u8>, presence: bool },
     /// A box (or a person) redeems slot's invite at a role, `late_min`
-    /// minutes from now, as its own kind or claiming another.
-    Redeem { who: u8, slot: u8, role: u8, late_min: i16 },
+    /// minutes from now, as its own kind or claiming another; holding the
+    /// code or not; backdated to sort right after the issue or not.
+    Redeem { who: u8, slot: u8, role: u8, late_min: i16, holds: bool, back: bool },
+    /// A person closes slot's admission, naming the redemption allowed so
+    /// far (or none).
+    Close { by: u8, slot: u8, name: bool },
+    /// A box re-adds itself as a person.
+    Flip { boxi: u8 },
     /// A box tries a cut or an admission against someone.
     BoxGoverns { boxi: u8, kind: u8, target: u8, presence: bool },
     /// The owner tries to raise a box's role.
@@ -62,7 +83,10 @@ fn arb_op() -> impl Strategy<Value = Op> {
     prop_oneof![
         (0u8..3, 0u8..3, -30i16..600, prop::option::of(0u8..2), any::<bool>())
             .prop_map(|(by, slot, ttl_min, bind, presence)| Op::Issue { by, slot, ttl_min, bind, presence }),
-        (0u8..6, 0u8..3, 0u8..4, -60i16..600).prop_map(|(who, slot, role, late_min)| Op::Redeem { who, slot, role, late_min }),
+        (0u8..6, 0u8..3, 0u8..4, -60i16..600, any::<bool>(), any::<bool>())
+            .prop_map(|(who, slot, role, late_min, holds, back)| Op::Redeem { who, slot, role, late_min, holds, back }),
+        (0u8..3, 0u8..3, any::<bool>()).prop_map(|(by, slot, name)| Op::Close { by, slot, name }),
+        (0u8..2).prop_map(|boxi| Op::Flip { boxi }),
         (0u8..2, 0u8..6, 0u8..6, any::<bool>()).prop_map(|(boxi, kind, target, presence)| Op::BoxGoverns { boxi, kind, target, presence }),
         (0u8..2, 0u8..4).prop_map(|(boxi, to)| Op::Raise { boxi, to }),
         (0u8..6).prop_map(|who| Op::Vote { who }),
@@ -86,6 +110,8 @@ struct Run {
     chat: Uuid,
     proposal: Uuid,
     slots: [Uuid; 3],
+    /// Redemptions made by a holder of the code.
+    held: BTreeSet<Uuid>,
 }
 
 fn setup() -> Run {
@@ -101,13 +127,21 @@ fn setup() -> Run {
     let p = ActionProposal::new("q", hive_core::ProposalKind::Decision, "owner");
     let proposal = p.id;
     w.say(chat, "owner", SessionEvent::ProposalUpserted { proposal: p });
-    Run { w, chat, proposal, slots: [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()] }
+    Run { w, chat, proposal, slots: [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()], held: BTreeSet::new() }
 }
 
 fn config_write(w: &mut SignedWorld, by: &str, e: SessionEvent, presence: bool, when: Option<i64>) -> Uuid {
+    config_write_at(w, by, e, presence, when, None)
+}
+
+/// [`config_write`] at `lamport` (a backdated position) when given.
+fn config_write_at(w: &mut SignedWorld, by: &str, e: SessionEvent, presence: bool, when: Option<i64>, lamport: Option<u64>) -> Uuid {
     let mut env = w.draft(by, None, e, None);
     if let Some(ms) = when {
         env.timestamp = Timestamp::from_unix_seconds(ms.div_euclid(1000));
+    }
+    if let Some(l) = lamport {
+        env.lamport = l;
     }
     let p = presence.then(|| w.recovery_presence(by, &env));
     w.finish(&mut env, by, p);
@@ -123,15 +157,54 @@ fn play(r: &mut Run, ops: &[Op]) {
                 let account = bind.map(|b| r.w.people[BOXES[b as usize % 2]].account_id);
                 let e = SessionEvent::JoinApproved {
                     subject: invite_subject(r.slots[slot as usize % 3]),
-                    admission: Some(Admission::service(now + ttl_min as i64 * 60_000, account)),
+                    admission: Some(Admission::service(now + ttl_min as i64 * 60_000, account, key().public())),
                 };
                 config_write(&mut r.w, by, e, presence, None);
             }
-            Op::Redeem { who, slot, role: n, late_min } => {
+            Op::Redeem { who, slot, role: n, late_min, holds, back } => {
                 let who = ALL[who as usize % ALL.len()];
                 let m = r.w.member_of(who, role(n));
-                let e = SessionEvent::MemberAdded { member: m, invite: Some(r.slots[slot as usize % 3]) };
-                config_write(&mut r.w, who, e, false, Some(now + late_min as i64 * 60_000));
+                let id = r.slots[slot as usize % 3];
+                let k = if holds { key() } else { forged() };
+                let proof = k.prove(r.w.wid, id, who, r.w.people[who].device_id);
+                let e = SessionEvent::MemberAdded { member: m, invite: Some(id), proof: Some(proof) };
+                // Backdated: right after the newest issue of this invite.
+                let lamport = back
+                    .then(|| {
+                        r.w.cfg
+                            .iter()
+                            .filter(|e| matches!(&e.payload, SessionEvent::JoinApproved { subject, .. } if *subject == invite_subject(id)))
+                            .map(|e| e.lamport + 1)
+                            .max()
+                    })
+                    .flatten();
+                let ev = config_write_at(&mut r.w, who, e, false, Some(now + late_min as i64 * 60_000), lamport);
+                if holds {
+                    r.held.insert(ev);
+                }
+            }
+            Op::Close { by, slot, name } => {
+                let by = PEOPLE[by as usize % 3];
+                let id = r.slots[slot as usize % 3];
+                let v = r.w.verdicts();
+                let redeemed = name
+                    .then(|| {
+                        r.w.cfg
+                            .iter()
+                            .find(|e| {
+                                v.get(&e.event_id) == Some(&Verdict::Allowed)
+                                    && matches!(&e.payload, SessionEvent::MemberAdded { invite: Some(i), .. } if *i == id)
+                            })
+                            .map(|e| e.event_id)
+                    })
+                    .flatten();
+                config_write(&mut r.w, by, SessionEvent::AdmissionClosed { invite: id, redeemed }, false, None);
+            }
+            Op::Flip { boxi } => {
+                let b = BOXES[boxi as usize % 2];
+                let mut m = r.w.member_of(b, WorkspaceRole::Contributor);
+                m.actor.kind = ActorKind::Human;
+                config_write(&mut r.w, b, SessionEvent::MemberAdded { member: m, invite: None, proof: None }, false, None);
             }
             Op::BoxGoverns { boxi, kind, target, presence } => {
                 let b = BOXES[boxi as usize % 2];
@@ -143,11 +216,11 @@ fn play(r: &mut Run, ops: &[Op]) {
                         watermark: vec![],
                     },
                     2 => SessionEvent::DeviceRevoked { device_id: r.w.people[t].device_id, watermark: vec![] },
-                    3 => SessionEvent::MemberAdded { member: r.w.member_of(t, WorkspaceRole::Viewer), invite: None },
+                    3 => SessionEvent::MemberAdded { member: r.w.member_of(t, WorkspaceRole::Viewer), invite: None, proof: None },
                     4 => SessionEvent::JoinApproved { subject: invite_subject(Uuid::new_v4()), admission: None },
                     _ => SessionEvent::JoinApproved {
                         subject: invite_subject(Uuid::new_v4()),
-                        admission: Some(Admission::service(now + HOUR_MS, None)),
+                        admission: Some(Admission::service(now + HOUR_MS, None, key().public())),
                     },
                 };
                 config_write(&mut r.w, b, e, presence, None);
@@ -249,7 +322,7 @@ fn check(r: &Run) -> Result<(), String> {
     // 4. Allowed redemptions of box admissions follow their terms; one each.
     let mut redeemed: BTreeMap<Uuid, BTreeSet<String>> = BTreeMap::new();
     for env in w.cfg.iter().filter(|e| allowed(e)) {
-        let SessionEvent::MemberAdded { member, invite: Some(id) } = &env.payload else { continue };
+        let SessionEvent::MemberAdded { member, invite: Some(id), .. } = &env.payload else { continue };
         let Some(terms) = admission_of(&config, *id) else {
             if member.actor.kind == ActorKind::Service && member.id == member.actor.id {
                 return Err(format!("{} joined as a service through a person's invite", member.id));
@@ -268,6 +341,34 @@ fn check(r: &Run) -> Result<(), String> {
     }
     if let Some((id, who)) = redeemed.iter().find(|(_, who)| who.len() > 1) {
         return Err(format!("admission {id} admitted {who:?}"));
+    }
+
+    // 6. Only the code's holder redeems an admission.
+    // 7. A closed admission admits only the redemption every closure names.
+    for env in w.cfg.iter().filter(|e| allowed(e)) {
+        let SessionEvent::MemberAdded { member, invite: Some(id), .. } = &env.payload else { continue };
+        if admission_of(&config, *id).is_none() || member.id != env.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("") {
+            continue;
+        }
+        if !r.held.contains(&env.event_id) {
+            return Err(format!("{} redeemed {id} without its code", member.id));
+        }
+        for c in w.cfg.iter().filter(|e| allowed(e)) {
+            if let SessionEvent::AdmissionClosed { invite, redeemed } = &c.payload {
+                if invite == id && *redeemed != Some(env.event_id) {
+                    return Err(format!("{}'s redemption of {id} stands against a closure naming {redeemed:?}", member.id));
+                }
+            }
+        }
+    }
+
+    // 8. A box that joined as a service stays one.
+    for b in BOXES {
+        if let Some(m) = roster.members.get(b) {
+            if m.kind != ActorKind::Service {
+                return Err(format!("{b} became a {:?}", m.kind));
+            }
+        }
     }
 
     // 5. Nothing a revoked box signs after its revocation is allowed.
@@ -308,7 +409,7 @@ fn the_generator_admits_and_revokes_a_box() {
         &mut r,
         &[
             Op::Issue { by: 1, slot: 0, ttl_min: 60, bind: None, presence: true },
-            Op::Redeem { who: 3, slot: 0, role: 2, late_min: 0 },
+            Op::Redeem { who: 3, slot: 0, role: 2, late_min: 0, holds: true, back: false },
             Op::Post { boxi: 0, presence: false },
             Op::Revoke { boxi: 0 },
             Op::Post { boxi: 0, presence: false },
@@ -316,5 +417,26 @@ fn the_generator_admits_and_revokes_a_box() {
     );
     assert_eq!(r.w.roster().members["box"].kind, ActorKind::Service);
     assert!(r.w.roster().devices[&r.w.people["box"].device_id].revoked);
+    check(&r).unwrap();
+}
+
+/// The generator reaches the review's states: a member without the code
+/// tries first, a holder's redemption is closed in, and a backdated
+/// redemption with the code after the close admits no one.
+#[test]
+fn the_generator_closes_an_admission_against_a_backdated_redemption() {
+    let mut r = setup();
+    play(
+        &mut r,
+        &[
+            Op::Issue { by: 1, slot: 0, ttl_min: 60, bind: None, presence: true },
+            Op::Redeem { who: 4, slot: 0, role: 2, late_min: 0, holds: false, back: true },
+            Op::Redeem { who: 3, slot: 0, role: 2, late_min: 0, holds: true, back: false },
+            Op::Close { by: 1, slot: 0, name: true },
+            Op::Redeem { who: 4, slot: 0, role: 2, late_min: 0, holds: true, back: true },
+        ],
+    );
+    assert!(r.w.roster().members.contains_key("box"));
+    assert!(!r.w.roster().members.contains_key("box2"));
     check(&r).unwrap();
 }

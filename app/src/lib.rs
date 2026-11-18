@@ -12125,6 +12125,18 @@ async fn sync_pull_once(
             // Record health so the UI can trust "Live".
             *app.state::<AppState>().conn_health.lock().unwrap() =
                 ConnHealth { state: "live".to_string(), last_error: None };
+            // Box admissions (Phase B): an Admin's device closes the ones
+            // that settled (redeemed, or lapsed unredeemed), so a holder of
+            // the code can't slot a backdated redemption in later. Cheap when
+            // none is open; written and pushed with the next cycle.
+            {
+                let state = app.state::<AppState>();
+                let active = state.active_workspace_id();
+                let closed = state.service.lock().unwrap().close_settled_admissions(active);
+                if let Err(e) = closed {
+                    tracing::warn!(target: "sync", "closing settled box admissions: {e}");
+                }
+            }
             if pulled > 0 {
                 let _ = app.emit("workspace://synced", pulled);
                 // Answer what just arrived in ANY chat, not only the open one:
@@ -12985,14 +12997,15 @@ fn admit_box(state: State<AppState>, workspace_id: String, request: Option<Strin
         hive_runtime::box_admission::DEFAULT_BEARER_TTL_MS
     };
     let ttl = ttl_minutes.map(|m| m.saturating_mul(60_000)).unwrap_or(default);
-    let invite = state
+    let (invite, seed) = state
         .service
         .lock()
         .unwrap()
-        .issue_box_admission(id, ttl, request.as_ref().map(|r| r.account_id))
+        .issue_box_admission(id, ttl, request.as_ref())
         .map_err(|e| format!("Only a workspace Admin can admit a box ({e})."))?;
     conn.inv = Some(invite.to_string());
-    let code = encode_workspace_invite(&sign_invite(&state, with_epoch_keys(&state, conn)));
+    // The redeem key's seed rides only in the code (`hive_core::admission`).
+    let code = hive_runtime::box_admission::with_redeem_key(&encode_workspace_invite(&sign_invite(&state, with_epoch_keys(&state, conn))), &seed)?;
     let (code, sealed) = match &request {
         Some(r) => (r.seal(&code)?, true),
         None => (code, false),

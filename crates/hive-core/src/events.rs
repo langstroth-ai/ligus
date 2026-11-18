@@ -77,6 +77,11 @@ pub enum SessionEvent {
         /// one member. Left out when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         invite: Option<Uuid>,
+        /// Redeeming a box admission (Phase B): the admission's redeem key's
+        /// signature over [`crate::admission::redemption_message`]. Left out
+        /// when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        proof: Option<Vec<u8>>,
     },
     /// Remove a member. `watermark` names, per signing device (and agent
     /// key) of the member and per log, the newest of their events the remover
@@ -330,6 +335,17 @@ pub enum SessionEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         admission: Option<crate::admission::Admission>,
     },
+    /// An Admin closes box admission `invite` (Phase B,
+    /// [`crate::admission`]): `redeemed` names the one redemption the closer
+    /// had seen in time (none: nobody redeemed it). Every other redemption
+    /// of that invite is denied wherever it sorts, so neither a backdated
+    /// redemption nor a thief of the code admits anyone after the close. It
+    /// only narrows: Admin+, no presence, config log.
+    AdmissionClosed {
+        invite: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        redeemed: Option<Uuid>,
+    },
     /// An infection signal locked a chat down (self-medication): its envelope
     /// closes egress and every proposal needs a human approval until a member
     /// clears it. Config log (so the workspace roster authorizes the clear);
@@ -511,6 +527,7 @@ impl SessionEvent {
             SessionEvent::CoordinatorLeaseReleased { .. } => "coordinatorLeaseReleased",
             SessionEvent::DearthModeChanged { .. } => "dearthModeChanged",
             SessionEvent::JoinApproved { .. } => "joinApproved",
+            SessionEvent::AdmissionClosed { .. } => "admissionClosed",
             SessionEvent::ChatLockdownRaised { .. } => "chatLockdownRaised",
             SessionEvent::ChatLockdownCleared { .. } => "chatLockdownCleared",
             SessionEvent::ProposalMarkedStale { .. } => "proposalMarkedStale",
@@ -557,6 +574,7 @@ impl SessionEvent {
             | SessionEvent::WorkspaceHostRemoved { .. }
             | SessionEvent::DearthModeChanged { .. }
             | SessionEvent::JoinApproved { .. }
+            | SessionEvent::AdmissionClosed { .. }
             | SessionEvent::ChatLockdownRaised { .. }
             | SessionEvent::ChatLockdownCleared { .. }
             | SessionEvent::WorkspaceRulesSet { .. }
@@ -704,7 +722,7 @@ impl ChatSession {
                 // same trigger are ignored. Deterministic across devices.
                 self.turn_claims.entry(*trigger_id).or_insert(*device_id);
             }
-            SessionEvent::MemberAdded { member, invite } => {
+            SessionEvent::MemberAdded { member, invite, .. } => {
                 if let Some(id) = invite {
                     self.guards.used_invites.insert(*id);
                 }
@@ -994,6 +1012,13 @@ impl ChatSession {
             }
             // Folded with its author in projection (`guard::fold_authored`).
             SessionEvent::JoinApproved { .. } => {}
+            // A closed admission admits no one later in the fold; the
+            // redemptions it doesn't name are denied in a second pass
+            // (`fold_log`).
+            SessionEvent::AdmissionClosed { invite, redeemed } => {
+                self.guards.used_invites.insert(*invite);
+                self.guards.closed_admissions.entry(*invite).or_default().push(*redeemed);
+            }
             SessionEvent::ChatLockdownRaised { chat_id, lockdown } => {
                 let list = self.guards.lockdowns.entry(*chat_id).or_default();
                 if !list.iter().any(|l| l.id == lockdown.id) {
@@ -1306,7 +1331,20 @@ fn fold_log(
     }
     let mut first = crate::authz::ConfigTimeline::default();
     let pass1 = fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, Some(&mut first), None, &none);
-    let deny = config_denials_with_rejudged_cuts(envelopes, trusted_founder, trusted_workspace, workspace, &first);
+    let mut deny = config_denials_with_rejudged_cuts(envelopes, trusted_founder, trusted_workspace, workspace, &first);
+    // Closed box admissions (Phase B): the redemptions no allowed closure
+    // names, wherever they sort. The closures are those allowed once the
+    // cuts are applied (a cut can deny an Admin's closure; denying a
+    // redemption never changes whether a closure is allowed: a closure is an
+    // Admin's, and a redeemed box is a service member that cuts no one).
+    let closed = match pass1.as_ref().map(|s| &s.guards.closed_admissions) {
+        Some(c) if !c.is_empty() && !deny.is_empty() => fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, None, None, &deny)
+            .map(|s| s.guards.closed_admissions)
+            .unwrap_or_default(),
+        Some(c) => c.clone(),
+        None => Default::default(),
+    };
+    deny.extend(crate::admission::closure_denials(envelopes, &closed));
     if deny.is_empty() && decisions.is_none() {
         if let Some(t) = timeline {
             *t = first;
@@ -1988,7 +2026,7 @@ mod tests {
                     sid,
                     wid,
                     2,
-                    SessionEvent::MemberAdded { invite: None,
+                    SessionEvent::MemberAdded { invite: None, proof: None,
                         member: member.clone(),
                     },
                 ),
@@ -2155,8 +2193,8 @@ mod tests {
         let events = vec![
             env(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(base) }),
             env(sid, wid, 2, SessionEvent::MessageAppended { message: msg }),
-            by("owner", env(sid, wid, 3, SessionEvent::MemberAdded { invite: None, member: member("m1", "u1", WorkspaceRole::Contributor) })),
-            by("owner", env(sid, wid, 4, SessionEvent::MemberAdded { invite: None, member: member("m2", "u2", WorkspaceRole::Contributor) })),
+            by("owner", env(sid, wid, 3, SessionEvent::MemberAdded { invite: None, proof: None, member: member("m1", "u1", WorkspaceRole::Contributor) })),
+            by("owner", env(sid, wid, 4, SessionEvent::MemberAdded { invite: None, proof: None, member: member("m2", "u2", WorkspaceRole::Contributor) })),
             env(sid, wid, 5, SessionEvent::SessionTitleChanged { title: "Foo".into() }),
             env(sid, wid, 6, SessionEvent::MessageReactionAdded { message_id: mid, reaction: reaction("u1", "👍") }),
             by("owner", env(sid, wid, 7, SessionEvent::MemberRoleChanged { change: MemberRoleChange { member_id: "m1".into(), old_role: WorkspaceRole::Contributor, new_role: WorkspaceRole::Admin }, watermark: Vec::new() })),
@@ -2202,9 +2240,9 @@ mod tests {
 
         let events = vec![
             env(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(base) }),
-            by("owner", env(sid, wid, 2, SessionEvent::MemberAdded { invite: None, member: member("m1", "u1", WorkspaceRole::Contributor) })),
+            by("owner", env(sid, wid, 2, SessionEvent::MemberAdded { invite: None, proof: None, member: member("m1", "u1", WorkspaceRole::Contributor) })),
             // Concurrent — authored by a peer, canonically before the snapshot below.
-            by("owner", env(sid, wid, 3, SessionEvent::MemberAdded { invite: None, member: member("m2", "u2", WorkspaceRole::Contributor) })),
+            by("owner", env(sid, wid, 3, SessionEvent::MemberAdded { invite: None, proof: None, member: member("m2", "u2", WorkspaceRole::Contributor) })),
             // A later snapshot whose captured state is missing m2.
             env(sid, wid, 5, SessionEvent::SessionSnapshot { session: Box::new(compacted) }),
         ];
@@ -2805,7 +2843,7 @@ mod tests {
         compacted.members.push(bob.clone());
         let events = vec![
             by("alice", env(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(alice) })),
-            by("alice", env(sid, wid, 2, SessionEvent::MemberAdded { invite: None, member: bob })),
+            by("alice", env(sid, wid, 2, SessionEvent::MemberAdded { invite: None, proof: None, member: bob })),
             by("bob", env(sid, wid, 3, SessionEvent::SessionSnapshot { session: Box::new(compacted) })),
         ];
         let s = project(&events).expect("session");
@@ -2892,7 +2930,7 @@ mod tests {
         compacted.members.push(bob.clone());
         let events = vec![
             by("alice", env(sid, wid, 1, SessionEvent::SessionSnapshot { session: Box::new(alice) })),
-            by("alice", env(sid, wid, 2, SessionEvent::MemberAdded { invite: None, member: bob })),
+            by("alice", env(sid, wid, 2, SessionEvent::MemberAdded { invite: None, proof: None, member: bob })),
             by("bob", env(sid, wid, 3, SessionEvent::SessionSnapshot { session: Box::new(compacted) })),
         ];
         let s = project_with_founder(&events, Some("alice")).expect("session");

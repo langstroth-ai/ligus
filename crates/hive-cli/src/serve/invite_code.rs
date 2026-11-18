@@ -158,7 +158,7 @@ pub fn random_hex(len: usize) -> Result<String, getrandom::Error> {
 /// Admin) issued it: relay, room, workspace key, every authorized epoch key
 /// `svc` holds, the founder pin, and the founder's signature when `svc` is
 /// the founder's device. A bearer secret: hand it only to the box it admits.
-pub fn admission_code(cfg: &crate::Config, svc: &hive_runtime::ChatService, inv: Uuid) -> anyhow::Result<String> {
+pub fn admission_code(cfg: &crate::Config, svc: &hive_runtime::ChatService, inv: Uuid, redeem_key: &[u8; 32]) -> anyhow::Result<String> {
     let relay = cfg
         .relay_url
         .clone()
@@ -186,7 +186,7 @@ pub fn admission_code(cfg: &crate::Config, svc: &hive_runtime::ChatService, inv:
     if let Some(stored) = identity.load()? {
         conn.sig = conn.with_claims(|c| svc.sign_invite(c, &stored.device.certificate));
     }
-    Ok(conn.encode())
+    hive_runtime::box_admission::with_redeem_key(&conn.encode(), redeem_key).map_err(|e| anyhow::anyhow!(e))
 }
 
 #[cfg(test)]

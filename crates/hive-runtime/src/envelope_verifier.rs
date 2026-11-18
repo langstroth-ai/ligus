@@ -1093,7 +1093,7 @@ mod tests {
             joined_at: Timestamp::epoch(),
         };
         vec![
-            env(lamport_base, SessionEvent::MemberAdded { member, invite: None }),
+            env(lamport_base, SessionEvent::MemberAdded { member, invite: None, proof: None }),
             env(
                 lamport_base + 1,
                 SessionEvent::AccountKeyRegistered {
@@ -1381,8 +1381,8 @@ mod tests {
             joined_at: Timestamp::epoch(),
         };
         let events = vec![
-            env(1, SessionEvent::MemberAdded { invite: None, member: mk_member(old_account) }),
-            env(2, SessionEvent::MemberAdded { invite: None, member: mk_member(new_account) }),
+            env(1, SessionEvent::MemberAdded { invite: None, proof: None, member: mk_member(old_account) }),
+            env(2, SessionEvent::MemberAdded { invite: None, proof: None, member: mk_member(new_account) }),
             env(3, SessionEvent::AccountKeyRegistered {
                 account_id: old_account,
                 signing_public_key: p.account_kp.public_key_bytes().to_vec(),

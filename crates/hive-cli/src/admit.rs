@@ -94,8 +94,8 @@ pub fn redeem(cfg: &mut Config, code: &str) -> Result<Redeemed> {
     if cfg.room != "default" && cfg.room != room {
         bail!("that admission is for workspace '{room}', but this box serves '{}' (LIGUS_WORKSPACE)", cfg.room);
     }
-    let Some(inv) = inv else {
-        bail!("that code carries no invite: ask an Admin for a box admission (workspace menu > Admit a box)");
+    let (Some(inv), Some(redeem_key)) = (inv, box_admission::redeem_key_of(&invite)) else {
+        bail!("that code isn't a box admission: ask an Admin for one (workspace menu > Admit a box)");
     };
     let mut f = load_file_config(&cfg.data_dir);
     if cfg.relay_url.is_none() {
@@ -123,6 +123,7 @@ pub fn redeem(cfg: &mut Config, code: &str) -> Result<Redeemed> {
     let store = EventStore::open(cfg.data_dir.join("hive.db"))?;
     let ws = uuid_of_room(&room);
     store.set_join_invite(ws, inv)?;
+    store.set_join_redeem_key(ws, &redeem_key)?;
     if let Some((founder, fk)) = pin {
         store.set_workspace_pin(ws, &founder, &fk)?;
     }
@@ -262,9 +263,15 @@ pub fn cmd_admit(cfg: &Config, positional: &[&String], flag: impl Fn(&str) -> Op
             Ok(())
         }
         Some("issue") => cmd_issue(cfg, flag("--ttl"), flag("--request"), flag("--recovery-words-file"), flag("--out")),
+        Some("close") => {
+            let mut svc = crate::open_service(cfg)?;
+            let n = svc.close_settled_admissions(uuid_of_room(&cfg.room))?;
+            println!("closed {n} settled box admission(s). Sync to publish.");
+            Ok(())
+        }
         _ => bail!(
             "usage: ligus admit request [--label NAME] | redeem <ligusadmit1:code> | redeem - | redeem --file PATH | \
-             issue [--ttl 1h] [--request ligusjoin1:...] --recovery-words-file PATH [--out PATH]"
+             issue [--ttl 1h] [--request ligusjoin1:...] --recovery-words-file PATH [--out PATH] | close"
         ),
     }
 }
@@ -345,8 +352,8 @@ fn cmd_issue(cfg: &Config, ttl: Option<String>, request: Option<String>, words: 
     let mut svc = crate::open_service(cfg)?;
     svc.set_presence_provider(Some(std::sync::Arc::new(RecoveryPresence(recovery_from_file(&words)?))));
     let ws = uuid_of_room(&cfg.room);
-    let inv = svc.issue_box_admission(ws, ttl, request.as_ref().map(|r| r.account_id))?;
-    let code = crate::serve::admission_code(cfg, &svc, inv)?;
+    let (inv, seed) = svc.issue_box_admission(ws, ttl, request.as_ref())?;
+    let code = crate::serve::admission_code(cfg, &svc, inv, &seed)?;
     let code = match &request {
         Some(r) => r.seal(&code).map_err(|e| anyhow!(e))?,
         None => code,

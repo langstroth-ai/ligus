@@ -27,7 +27,7 @@ fn dearth(on: bool) -> SessionEvent {
 }
 
 fn add(id: &str) -> SessionEvent {
-    SessionEvent::MemberAdded { invite: None, member: member(id, WorkspaceRole::Contributor) }
+    SessionEvent::MemberAdded { invite: None, proof: None, member: member(id, WorkspaceRole::Contributor) }
 }
 
 fn with_admin2() -> crate::ChatSession {
@@ -63,7 +63,7 @@ fn self_enrollment_is_suspended() {
     assert!(!project(&envs).unwrap().members.iter().any(|m| m.id == "eve"));
     let invite = uuid::Uuid::new_v4();
     let issue = SessionEvent::JoinApproved { subject: crate::authorization::invite_subject(invite), admission: None };
-    let redeem = SessionEvent::MemberAdded { invite: Some(invite), member: member("eve", WorkspaceRole::Contributor) };
+    let redeem = SessionEvent::MemberAdded { invite: Some(invite), proof: None, member: member("eve", WorkspaceRole::Contributor) };
     let envs = vec![seed(&s), ev(&s, 1, "owner", None, issue), ev(&s, 2, "eve", None, redeem)];
     assert!(project(&envs).unwrap().members.iter().any(|m| m.id == "eve"));
 }

@@ -95,7 +95,7 @@ impl World {
         w.register_recovery("owner");
         for (name, role) in [("ada", WorkspaceRole::Admin), ("mara", WorkspaceRole::Contributor)] {
             let m = member(name, &w.people[name], role);
-            w.push("owner", SessionEvent::MemberAdded { member: m, invite: None });
+            w.push("owner", SessionEvent::MemberAdded { member: m, invite: None, proof: None });
             w.register_recovery(name);
         }
         for name in NAMES {
@@ -1100,7 +1100,7 @@ fn impersonation_by_display_name_is_a_different_co_member() {
     w.publish_identity("impostor");
     let mut m = member("impostor", &w.people["impostor"], WorkspaceRole::Contributor);
     m.actor.display_name = "ada".into();
-    w.push("owner", SessionEvent::MemberAdded { member: m, invite: None });
+    w.push("owner", SessionEvent::MemberAdded { member: m, invite: None, proof: None });
     let me = w.people["owner"].account_id;
     let store = pinned_store(&w);
     let list = crate::directory_trust::co_members(&store, me);
@@ -1130,7 +1130,7 @@ fn look_alike_co_members_flagged_and_names_cleaned() {
     w.publish_identity("impostor");
     let mut m = member("impostor", &w.people["impostor"], WorkspaceRole::Contributor);
     m.actor.display_name = "\u{202D}\u{0430}d\u{0430}\u{200B}".into();
-    w.push("owner", SessionEvent::MemberAdded { member: m, invite: None });
+    w.push("owner", SessionEvent::MemberAdded { member: m, invite: None, proof: None });
     let me = w.people["owner"].account_id;
     let list = crate::directory_trust::co_members(&pinned_store(&w), me);
     let imp = list.iter().find(|c| c.account_id == w.people["impostor"].account_id).unwrap();

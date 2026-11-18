@@ -9,7 +9,9 @@
 //!    written) and answers `{prepareId, challenge, preview}`.
 //! 2. `presence {prepareId, assertion}`: the passkey assertion over the
 //!    challenge goes into the stamp; the answer is the `preimage` the phone
-//!    signs (ECDSA P-256 / SHA-256, 64-byte low-S).
+//!    signs (ECDSA P-256 / SHA-256, 64-byte low-S), after checking it is the
+//!    admission its passkey confirmed and nothing else
+//!    (`hive_core::admission::check_phone_admission_preimage`).
 //! 3. `commit {prepareId, signature}`: the box checks the signature against
 //!    the phone's certificate, judges the event as every fold will, appends
 //!    and syncs it, and answers the admission `code` (sealed to the box that
@@ -44,6 +46,8 @@ const MAX_PENDING: usize = 16;
 struct Pending {
     draft: PhoneDraft,
     invite: Uuid,
+    /// The admission's redeem key seed: into the code at commit, never kept.
+    seed: [u8; 32],
     request: Option<JoinRequest>,
     presence: bool,
     at: Instant,
@@ -105,9 +109,9 @@ pub async fn prepare(State(s): State<std::sync::Arc<Shared>>, peer: Option<Exten
         hive_runtime::box_admission::DEFAULT_BEARER_TTL_MS
     };
     let ttl = req.ttl_minutes.map(|m| m.saturating_mul(60_000)).unwrap_or(default);
-    let (draft, invite) = s
+    let (draft, invite, seed) = s
         .lock()
-        .draft_phone_admission(s.ws, req.device_id, ttl, request.as_ref().map(|r| r.account_id))
+        .draft_phone_admission(s.ws, req.device_id, ttl, request.as_ref())
         .map_err(|e| ApiError::new(StatusCode::FORBIDDEN, e.to_string()))?;
     let r = &draft.request;
     let preview = json!({
@@ -122,7 +126,7 @@ pub async fn prepare(State(s): State<std::sync::Arc<Shared>>, peer: Option<Exten
         "sealed": request.is_some(),
     });
     let challenge = b64url(&r.challenge);
-    let id = s.admission_drafts.put(Pending { draft, invite, request, presence: false, at: Instant::now() })?;
+    let id = s.admission_drafts.put(Pending { draft, invite, seed, request, presence: false, at: Instant::now() })?;
     Ok(Json(json!({ "prepareId": id, "challenge": challenge, "preview": preview })))
 }
 
@@ -189,7 +193,7 @@ pub async fn commit(State(s): State<std::sync::Arc<Shared>>, peer: Option<Extens
     s.after_write();
     let code = {
         let svc = s.lock();
-        crate::serve::admission_code(&s.cfg, &svc, p.invite).map_err(|e| ApiError::new(StatusCode::CONFLICT, e.to_string()))?
+        crate::serve::admission_code(&s.cfg, &svc, p.invite, &p.seed).map_err(|e| ApiError::new(StatusCode::CONFLICT, e.to_string()))?
     };
     let (code, sealed) = match &p.request {
         Some(r) => (r.seal(&code).map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?, true),

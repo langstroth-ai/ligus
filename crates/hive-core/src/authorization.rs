@@ -111,6 +111,7 @@ pub fn requires_projection_authz(event: &SessionEvent) -> bool {
             | SessionEvent::DeviceRevoked { .. }
             | SessionEvent::DearthModeChanged { .. }
             | SessionEvent::JoinApproved { .. }
+            | SessionEvent::AdmissionClosed { .. }
             | SessionEvent::ChatLockdownCleared { .. }
             | SessionEvent::WorkspaceRulesSet { .. }
             | SessionEvent::AgentKeyCertified { .. }
@@ -209,7 +210,10 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         | SessionEvent::DeviceRevoked { .. }
         // Dearth mode and join approvals are governance (the entrance policy).
         | SessionEvent::DearthModeChanged { .. }
-        | SessionEvent::JoinApproved { .. } => WorkspaceRole::Admin,
+        | SessionEvent::JoinApproved { .. }
+        // Closing a box admission only narrows, but it is the entrance
+        // policy's: an Admin's.
+        | SessionEvent::AdmissionClosed { .. } => WorkspaceRole::Admin,
         // Path zones set the review bar; the beacon says where home is.
         SessionEvent::FlowRecorded { record } if record.is_governance() => WorkspaceRole::Admin,
         // Every other flow record is collaboration content (routing logs,
@@ -435,7 +439,7 @@ pub fn evaluate(
     // Bootstrap seam: a self-scoped `MemberAdded` can be permitted for an actor
     // who isn't (yet) Admin+ — but *only* the narrow self-enroll cases below.
     // Everything else (adding others, removing/demoting anyone) is role-gated.
-    if let SessionEvent::MemberAdded { member, invite } = event {
+    if let SessionEvent::MemberAdded { member, invite, .. } = event {
         if let Some(decision) = self_enroll_allowance(member, *invite, actor_id, session) {
             return decision;
         }
@@ -556,7 +560,7 @@ mod tests {
         add_member_role("new", WorkspaceRole::Contributor)
     }
     fn add_member_role(id: &str, role: WorkspaceRole) -> SessionEvent {
-        SessionEvent::MemberAdded { invite: None,
+        SessionEvent::MemberAdded { invite: None, proof: None,
             member: WorkspaceMember {
                 id: id.into(),
                 actor: ActorIdentity::new(id, id, ActorKind::Human),
@@ -682,7 +686,7 @@ mod tests {
         assert!(!evaluate(&join, "newbie", WorkspaceRole::Viewer, &s).allowed, "key possession alone");
         let id = Uuid::new_v4();
         let with = |invite| match add_member_role("newbie", WorkspaceRole::Contributor) {
-            SessionEvent::MemberAdded { member, .. } => SessionEvent::MemberAdded { member, invite: Some(invite) },
+            SessionEvent::MemberAdded { member, .. } => SessionEvent::MemberAdded { member, invite: Some(invite), proof: None },
             _ => unreachable!(),
         };
         assert!(!evaluate(&with(id), "newbie", WorkspaceRole::Viewer, &s).allowed, "an invite nobody issued");

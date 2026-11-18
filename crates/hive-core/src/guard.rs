@@ -115,6 +115,10 @@ pub struct GuardState {
     /// refused). Config log.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub service_invites: BTreeMap<Uuid, crate::admission::Admission>,
+    /// Closed box admissions: invite id → the redemption each allowed
+    /// `AdmissionClosed` named (none: nobody). Config log.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub closed_admissions: BTreeMap<Uuid, Vec<Option<Uuid>>>,
     /// Approvals cast through a vote whose stated voter is the event's signed
     /// author (proposal id → voter ids). Approvals carried inside a proposal
     /// snapshot are not here, so they can't satisfy a human gate.

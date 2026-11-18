@@ -6,8 +6,10 @@
 //! digest fields, the phone confirms with the person's passkey over the
 //! presence challenge, then signs the preimage; the box checks the signature
 //! against the phone's certificate, judges the event exactly as every fold
-//! will, and appends it. The box can withhold such an event, never forge or
-//! alter one. Today this carries box admissions (the phone tier allows
+//! will, and appends it. The box can withhold such an event; it can't forge
+//! or alter one as long as the phone reads the preimage before signing it
+//! (`hive_core::admission::check_phone_admission_preimage`): the bytes come
+//! from the box. Today this carries box admissions (the phone tier allows
 //! nothing else about membership).
 
 use hive_core::crypto::{DeviceCertificate, SigAlg};
@@ -42,15 +44,17 @@ impl ChatService {
     /// Draft a box admission for the phone `phone` to sign itself: as the
     /// person the phone is certified for, on the config log, at this box's
     /// head. Nothing is written.
-    pub fn draft_phone_admission(&mut self, workspace_id: Uuid, phone: Uuid, ttl_ms: i64, account: Option<Uuid>) -> Result<(PhoneDraft, Uuid)> {
-        let ttl = ttl_ms.clamp(60_000, hive_core::admission::MAX_ADMISSION_TTL_MS - 60_000);
-        let now = (Timestamp::now().inner().unix_timestamp_nanos() / 1_000_000) as i64;
-        let invite = Uuid::new_v4();
-        let payload = SessionEvent::JoinApproved {
-            subject: hive_core::authorization::invite_subject(invite),
-            admission: Some(hive_core::admission::Admission::service(now + ttl, account)),
-        };
-        Ok((self.draft_for_phone(workspace_id, phone, payload)?, invite))
+    /// Returns the draft, its invite and the redeem key's seed (for the
+    /// admission code only).
+    pub fn draft_phone_admission(
+        &mut self,
+        workspace_id: Uuid,
+        phone: Uuid,
+        ttl_ms: i64,
+        request: Option<&crate::box_admission::JoinRequest>,
+    ) -> Result<(PhoneDraft, Uuid, [u8; 32])> {
+        let (payload, invite, seed) = super::box_admission_payload(ttl_ms, request)?;
+        Ok((self.draft_for_phone(workspace_id, phone, payload)?, invite, seed))
     }
 
     /// Draft `payload` on `workspace_id`'s config log as the person phone

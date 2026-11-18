@@ -115,10 +115,19 @@ copy of the workspace, so a box pointed at an empty or withheld room can't
 seed a competing config log naming itself Owner.
 
 **Admissions.** A box admission is single use, expires within 7 days, admits
-only a service member, and is bound to the box that redeems it (its device
-signs the redemption). Admitted from a join request, it is also bound to that
-box's account and sealed to its key. A bearer admission (the Kubernetes path)
-is a secret until redeemed: see the known limitation below.
+only a service member, and is redeemed only with the signature of a redeem
+key whose secret rides in the admission code alone, over the workspace, the
+invite, the new member and the redeeming device. The invite id is on the
+workspace log for every member, so another member (or a sock puppet of
+theirs) can't redeem it in the box's place. Admitted from a join request, the
+code is sealed to the box's key-agreement key, and the fingerprint the Admin
+compares covers the box's account, device key and key-agreement key, so a
+request swapped in transit shows a different fingerprint. Every time on the
+log is its author's choice, so expiry alone can't stop a holder of the code
+from backdating a redemption: an Admin's device closes each admission once it
+sees it redeemed (naming that redemption) or once it lapses (naming none),
+and every other redemption of it is then refused wherever it sorts. See the
+known limitation below.
 
 ### Prompt injection and hostile content {#prompt-injection}
 
@@ -326,10 +335,13 @@ it.
    in 0.1 only box admissions go that way, so approvals that need a person,
    answers to an agent's question and lockdown clears are made on the
    desktop. A bearer box admission (a Kubernetes Secret) can be redeemed by
-   whoever holds it before the box does, and its expiry is checked against
-   the redeemer's own signed time, so a holder could backdate a late
-   redemption: keep it short-lived, delete the Secret once the box has
-   joined, and remove any service member you didn't expect.
+   whoever holds it before the box does. Until an Admin's device has synced
+   and closed the admission, a holder of the code can still date a
+   redemption before the expiry, or slot one in before the box's: no clock
+   on the log is trusted, so the bound is an Admin's device seeing the
+   admission settle. Keep it short-lived, delete the Secret once the box has
+   joined, keep an Admin's desktop syncing, and remove any service member
+   you didn't expect.
 9. **Some agents still ask for actions in reply text.** Agents with tool use
    get the typed [Ligus tools](../../ligus/addons/ligus-mcp.md). Copilot and
    Antigravity run over [ACP](../../ligus/addons/acp.md); Codex and Claude Code do
