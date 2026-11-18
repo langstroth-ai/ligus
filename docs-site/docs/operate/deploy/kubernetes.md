@@ -304,7 +304,7 @@ kubectl -n ligus-ws-acme exec -it acme-ligus-serve-0 -- ligus pair --relay-only 
     removed in 0.1. See [Admitting a box](../ops/admitting-a-box.md).
 
 Useful values of the `ligus` chart: `remote.enabled` / `remote.relayUrl`
-(phone tunnel), `serve.defaultAgent`, `serve.applyOnApprove`,
+(phone tunnel), `serve.defaultAgent`,
 `serve.workspaceSecrets` and `serve.agentEnv` (secrets),
 `serve.runtimesToml` (mounted, `LIGUS_RUNTIMES_FILE`), `serve.mcpToml`,
 `worker.enabled` / `worker.instances[]` / `worker.permissionMode`,

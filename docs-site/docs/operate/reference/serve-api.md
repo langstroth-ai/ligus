@@ -147,12 +147,94 @@ only (the answer carries the admission code). See
 | `POST /v1/admissions/presence` | `{prepareId, assertion: {credentialId, authenticatorData, clientDataJSON, signature}}` | puts the passkey assertion over `challenge` into the stamp: `{preimage}` (base64url), the bytes the phone signs with its P-256 key (ECDSA, SHA-256). **The phone checks them before signing** (`hive_core::admission::check_phone_admission_preimage`): a `hive-envelope-v3` preimage of a `joinApproved` box admission on this workspace's config log, stamped for this phone (P-256) with presence, whose presence digest is the `challenge` the passkey just signed. The box drafted it, so anything else (a vote or a post as the person, another admission) is refused, and the phone shows the terms it read from the bytes, not the `preview` |
 | `POST /v1/admissions/commit` | `{prepareId, signature}` | `signature`: 64 bytes, base64url. Appends and syncs the admission: `{committed, eventId, code, sealed, expiresInMinutes}`. 403 when the signature doesn't verify against the phone's certificate, the person isn't an Admin or the presence doesn't verify; 409 before `presence` |
 
+### Phone actions {#phone-actions}
+
+The box never posts, votes, answers, clears a lockdown or asks for an apply
+as the person: it is its own service member. The phone does, with **its own
+P-256 device key**, through a typed, allow-listed set of actions
+(`hive_core::phone_action::PhoneAction`). The box drafts the exact event as
+the phone's person, stamped for that phone; the phone reads the preimage,
+confirms with the person's passkey when the rules need it, and signs; the box
+checks the signature against the phone's certificate, judges the event as
+every fold will, stores and syncs it.
+
+| Method + path | Request | Notes |
+|---|---|---|
+| `POST /v1/phone-actions/prepare` | `{deviceId, action}` | `deviceId`: the phone's workspace device id (its P-256 certificate's). Through the tunnel it must be the device the pairing proved it holds (403 otherwise). Drafts the event, writes nothing, and judges the unsigned draft as the fold will: a refusal is a 403 here, before the phone signs anything. Answers `{prepareId, kind, eventKind, presenceRequired, preview}` plus **either** `challenge` (base64url; `presenceRequired: true`, the passkey signs it) **or** `preimage` (base64url; no passkey needed). With presence, `preview` adds `digestShort`, `rpId`, `origins`, `allowCredentials`. 409 for `clearLockdown` on a chat that isn't locked down; 403 when the box can't write, the device isn't an enrolled, unrevoked phone of a human member, or the fold would refuse the action |
+| `POST /v1/phone-actions/presence` | `{prepareId, assertion: {credentialId, authenticatorData, clientDataJSON, signature}}` | only when `presenceRequired`: puts the assertion into the stamp and answers `{preimage}`. 409 when the action needs no passkey or was already confirmed; 404 unknown or expired `prepareId` |
+| `POST /v1/phone-actions/commit` | `{prepareId, signature}` | `signature`: the phone's ECDSA P-256 / SHA-256 signature over the preimage, 64 bytes (r‖s, low-S), base64url. Answers `{committed, eventId, kind}`, plus `messageId` (post) or `requestId` (requestApply). 403 when the signature doesn't verify against the phone's certificate or the fold refuses the event; 409 before `presence` when it is required; 409 when the phone signed something else on that log since the draft (its chain link went stale: prepare again); 404 unknown, expired or used `prepareId` |
+
+Drafts are single use, kept in memory for 5 minutes, at most 32 at once (the
+oldest goes first). A request whose `action` has an unknown `kind` or a field
+the box doesn't know is refused before anything is drafted (400 or 422).
+
+**Actions.** JSON is `{"kind": "<kind>", …camelCase fields}`:
+
+| `kind` | Fields | Event signed | Log | Presence |
+|---|---|---|---|---|
+| `post` | `chatId`, `text` (not blank, at most 16 000 characters) | `messageAppended`, a user message | the chat | never |
+| `vote` | `chatId`, `proposalId`, `diffDigest` (64 lowercase hex), `approved` | `proposalVoteCast`, bound to `diffDigest` | the chat | when the proposal is a workflow proposal or human-gated (a lockdown, dearth-mode brood paths) |
+| `answer` | `chatId`, `askId`, `answer` (not blank), `optionIndex?` | `flowRecorded` / `humanAnswered` | the chat | never |
+| `clearLockdown` | `chatId` | `chatLockdownCleared` | the workspace config log | always |
+| `requestApply` | `chatId`, `proposalId`, `diffDigest`, `hostDeviceId`, `expectedBaseCommit?` (40/64 hex), `repoId?` | `proposalApplyRequested` ("Apply on ‹host›") | the chat | when the proposal is human-gated |
+| `withdrawApply` | `chatId`, `proposalId`, `requestId` | `proposalApplyWithdrawn` | the chat | never |
+
+The box decides `presenceRequired` by judging the draft; the fold decides in
+the end. Rebinding an agent, issuing a person's invite and DMs are not phone
+actions (desktop only); admitting a box has its own flow
+([Admissions](#admissions)).
+
+**What a client MUST verify before signing** (the reference implementation is
+`hive_core::phone_action::check_phone_action_preimage`, sharing its parser
+`parse_phone_preimage` with the admission check). The preimage is the box's
+word until the phone has read it; refuse to sign unless all of these hold:
+
+1. It starts with `hive-envelope-v3\0`, followed by `workspaceId` (16),
+   `sessionId` (16), `sequence` (i64 LE), `lamport` (u64 LE), `eventId` (16),
+   then exactly four fields each prefixed with a u32 LE length (scope,
+   timestamp, stamp, payload), and **no trailing bytes**.
+2. `workspaceId` is this workspace. `sessionId` is the action's `chatId`, or
+   for `clearLockdown` the workspace config log id (UUIDv5 of the workspace,
+   `workspace_config_session_id`).
+3. Each of scope, timestamp, stamp and payload decodes and re-encodes to the
+   same JSON value: no field the phone doesn't read. The scope is the
+   event's own (`workspace` for `chatLockdownCleared`, `session` otherwise).
+4. The stamp: `actor.deviceId` is this phone, `sigAlg` is `p256`,
+   `actor.kind` is `human`, `runtimeEffect` is absent (false), and `actor.accountId`
+   is the account the phone's certificate names.
+5. Presence: if the phone ran the passkey, the stamp carries presence, it is
+   **exactly the assertion the phone produced**, and the presence digest
+   (`presence::challenge`, over workspace, session, event id, lamport, the
+   payload bytes, the stamp's frontier and account) equals the `challenge`
+   the passkey signed. If the box said no passkey is needed, the stamp
+   carries **no** presence.
+6. The payload is exactly the action:
+    - `post`: a user message whose `body` is `text`, `author` the stamped
+      person's display name, `actorIdentity` the stamp's actor, `kind`
+      `message`, and every other field its default;
+    - `vote`: `proposalId` as asked, `approval.actorId` the stamped person,
+      `approved` as asked, `diffDigest` as asked;
+    - `answer`: `askId`, `answer` and `optionIndex` as asked, `by` the
+      stamped person's display name;
+    - `clearLockdown`: `chatId` as asked;
+    - `requestApply`: `proposalId`, `diffDigest`, `hostDeviceId`,
+      `expectedBaseCommit` and `repoId` as asked;
+    - `withdrawApply`: `requestId` and `proposalId` as asked.
+
+The box may choose only what grants nothing: the event id, sequence, lamport
+clock, timestamps, its config frontier and chain link (`prev`), a new
+message's `id` and `createdAt`, a vote's `createdAt` and `role` (the fold
+counts the signer's real role), an answer's `atMs`, and a new request's `id`.
+Show the person what you parsed from the preimage, not the box's `preview`.
+
 ### Passkey presence
 
 These endpoints confirmed the actions of a box enrolled as its owner's
 device, a mode removed in 0.1. A box is now its own service member: it
-carries no presence, so they answer an error for its own actions (see
-[Passkey presence](../security/index.md#presence)).
+carries no presence, and a vote counts only from a device certified for the
+voter's account, so they never act as the person (see
+[Passkey presence](../security/index.md#presence)). The phone uses
+[Phone actions](#phone-actions) instead.
 
 | Method + path | Request | Notes |
 |---|---|---|
@@ -164,15 +246,15 @@ carries no presence, so they answer an error for its own actions (see
 | Method + path | Request | Notes |
 |---|---|---|
 | `GET /v1/proposals` | `?status=open\|all` (default `open`) | newest first |
-| `GET /v1/proposals/:id` | | adds `myRole`, `myVote`, `canVote`, `isMine`. Every proposal also carries the review badges `authorKind`, `authorName`, `configImpact`, `humanGate`, `presenceRequired`, `argv` (a structured command) and `implementPlan` |
-| `POST /v1/proposals/:id/approve` | | votes approve at the box's role. The vote never counts as a person's approval, and the box never applies on its own approval (a service member applies only on a person's request) |
+| `GET /v1/proposals/:id` | | adds `myRole`, `myVote`, `canVote`, `isMine`, `diffDigest` (what a vote or an apply request binds), `baseCommit?`, `repoId?`, `applyRequests` (`[{id, hostDeviceId, state, expectedBaseCommit?, reason?, commit?}]`, `state` one of `open`, `applied`, `failed`, `withdrawn`; at most one `open`) and `canRequestApply` (approved, and no request open). Every proposal also carries the review badges `authorKind`, `authorName`, `configImpact`, `humanGate`, `presenceRequired`, `argv` (a structured command) and `implementPlan` |
+| `POST /v1/proposals/:id/approve` | | votes approve as the box's own service identity, at its role. The vote never counts as a person's approval (the phone votes with `phone-actions`), and approving never applies anything: there is no auto-apply, a box applies only when a person asks it to ([Apply on a host](../ops/serve-box.md#apply-on-a-host)) |
 | `POST /v1/proposals/:id/reject` | `{reason?}` | the reason becomes a thread comment |
 | `GET /v1/proposals/:id/comments` | | refinement thread |
 | `POST /v1/proposals/:id/comments` | `{text, requestChanges?}` | a Viewer gets 403 |
 | `POST /v1/proposals/:id/request-changes` | `{note?}` | sends the proposal back to its agent (or the default agent). 409 if already revised or applied |
 | `GET /v1/proposals/:id/implement-plan` | | exactly what Implement does: `{plan: {kind, argv?, cwd?, instruction?, targetAgentId?, targetName, legacyCommand}}` |
 | `GET /v1/chats/:id/asks` | | agents' questions in the chat, newest first: `{asks: [{id, agentName, kind, question, options, open, answer?, answeredBy?, expiresAtMs}]}`. `kind` is `question` (an agent's `ligus_ask_human`) or `permission` (an ACP permission escalation, which only the host's person or the agent's owner can grant) |
-| `POST /v1/asks/:id/answer` | `{answer?, optionIndex?}` | only a person answers an agent's question, so a box (a service member) is refused; answer from the desktop. 400 if already answered or closed |
+| `POST /v1/asks/:id/answer` | `{answer?, optionIndex?}` | only a person answers an agent's question, so a box (a service member) is refused; the phone answers with the `answer` [phone action](#phone-actions), or answer from the desktop. 400 if already answered or closed |
 | `GET /v1/proposals/:id/file` | `?path=<relative>&side=old\|new` | one whole file before or after the diff, rebuilt in a scratch dir. 400 bad path, 404, 409 base moved, 413 over 512 KiB, 415 not UTF-8 |
 
 ### Repos on the host

@@ -121,7 +121,9 @@ as your device. Model and MCP providers see what turns send them.
 - The relay is untrusted for content; it sees metadata.
 - The phone is trusted **to act through the box**: anyone holding the phone's
   credential (or `serve.token`) can read and write everything the box can,
-  at the box's role. It never holds the workspace key.
+  at the box's role. With the phone itself (its Secure Enclave key), they
+  can also post, vote, answer and ask for an apply as you; a lockdown clear
+  and gated votes need your passkey too. It never holds the workspace key.
 - The direct path trusts the network between phone and box (Tailscale or
   your LAN).
 
@@ -207,10 +209,15 @@ it names.
   sandbox](../../ligus/concepts/security.md#os-sandbox).
 - **Phone and serve approvals.** A `ligus serve` box signs only as itself,
   a service member whose votes never count as a person's. What only a person
-  may do from the phone is signed by the **phone's own device key** with your
-  passkey, and the box relays it unchanged (it can hold it back, never forge
-  it): box admissions use this path in 0.1 (`POST v1/admissions/prepare`,
-  `presence`, `commit`).
+  may do from the phone is signed by the **phone's own device key** (with your
+  passkey where the rules need it), and the box drafts and relays it (it can
+  hold it back, never alter or forge what the phone checked before signing):
+  box admissions (`POST v1/admissions/…`) and the
+  [phone actions](../reference/serve-api.md#phone-actions) (`POST
+  v1/phone-actions/…`: post, vote, answer, clear a lockdown, Apply on
+  ‹host›, withdraw). A vote counts as a person's only from a device certified
+  for that person's account. Nothing applies a proposal on approval: one
+  host a person names applies it, once.
 - **Agents** sign with their own host-certified keys, judged by a capped
   Agent tier that never votes, applies or administers. They act through the
   [Ligus tools](../../ligus/addons/ligus-mcp.md): proposals only, behind a per-turn

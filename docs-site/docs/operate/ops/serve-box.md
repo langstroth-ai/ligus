@@ -14,12 +14,12 @@ workspace should know about. For reaching the box from the phone, see
 
 | | The box (a service member) |
 |---|---|
-| Phone messages show as | the box: `LIGUS_SERVE_NAME`, else its label (`--label` / `LIGUS_SERVE_LABEL`), else its host name |
+| Phone messages show as | you, when the phone signs them with its own key ([phone actions](../reference/serve-api.md#phone-actions)); the box (`LIGUS_SERVE_NAME`, else its label, else its host name) for the older `POST /v1/chats/{id}/messages` |
 | Role | at most Contributor, never raised above it |
-| Votes and review notes | at the box's role; a vote never counts as a person's approval, so a human gate still needs a person |
+| Votes and review notes | the box's own (`/v1/proposals/{id}/approve`) are at its role and never count as a person's approval; the phone's vote, signed with its own key, counts as yours |
 | Chats the phone creates | owned by the box |
 | Who signs events | the box's own account and device key |
-| What it can't do | admit, remove or demote anyone, carry a passkey, answer an agent's question, clear a lockdown, apply a change on its own |
+| What it can't do | admit, remove or demote anyone, carry a passkey, answer an agent's question, clear a lockdown, apply a change on its own (it applies only when a person asks it to: [Apply on a host](#apply-on-a-host)) |
 
 The box's keys never leave it. Your account key never leaves your desktop.
 
@@ -27,9 +27,10 @@ The box's keys never leave it. Your account key never leaves your desktop.
     Earlier previews could make the box one of your own devices, so it signed
     as you. Since 0.1 both stop with a migration error that points to
     [Admitting a box](admitting-a-box.md). For what only a person may do from
-    the phone, the phone signs with its own device key and your passkey,
-    and the box only relays it (the admissions endpoints are the first such
-    path).
+    the phone, the phone signs with its own device key (and your passkey
+    where the rules need it), and the box only drafts and relays it: box
+    admissions and the [phone actions](../reference/serve-api.md#phone-actions)
+    (post, vote, answer, clear a lockdown, Apply on ‹host›).
 
 ### Revoke it
 
@@ -137,7 +138,7 @@ the current holder and epoch, along with dearth mode and locked chats. See
 |---|---|
 | `GET /v1/proposal-sets`, `GET /v1/proposal-sets/{id}`, `GET /v1/chats/{id}/proposal-sets` | Proposal sets with standings, posted assessments and pre-flight results (read-only; votes use the proposal routes) |
 | `GET /v1/guards` | Dearth mode, locked chats, the coordinator, and whether this box's identity may clear a lockdown |
-| `POST /v1/chats/{id}/lockdown/clear` | Clear a chat's lockdown as this box's identity: a human member at Contributor or above only, so a box (a service member) is refused; clear it from the desktop |
+| `POST /v1/chats/{id}/lockdown/clear` | Clear a chat's lockdown as this box's identity: a human member at Contributor or above only, so a box (a service member) is refused; the phone clears it with the `clearLockdown` [phone action](../reference/serve-api.md#phone-actions) and your passkey |
 | `GET /v1/flow` | Board, review queue and alert, marks, routing summary |
 | `GET /v1/chats/{id}/handoffs` | A chat's hand-off cards |
 
@@ -146,14 +147,43 @@ API, and acts at the box identity's real roster role. A reviewer recruit that
 names you pushes `review.recruit` to paired phones with push on, honouring each
 phone's previews setting. The full contract is in `docs/ios-app.md`.
 
-## Apply on approve
+## Apply on a host {#apply-on-a-host}
 
-Approving a file-diff proposal from the phone records the box's vote and
-nothing else: applying it is the desktop's **Implement**. A box is a service
-member, and a service member applies a change only to fulfil a person's
-apply request, never on its own approval, so `LIGUS_SERVE_APPLY_ON_APPROVE=1`
-no longer applies anything on a box. Fulfilling a person's apply request on
-the box is not wired up in 0.1: apply from the desktop.
+<a id="apply-on-approve"></a>
+There is no auto-apply: approving a proposal (from the phone or the desktop)
+records a vote and nothing else, and `LIGUS_SERVE_APPLY_ON_APPROVE` is gone.
+A person asks **one** host to apply an approved proposal: **Apply on ‹host›**
+on the phone (the `requestApply` phone action) or on the desktop's Review
+pane. That writes a signed `proposalApplyRequested` naming the host's device.
+
+- Only the named host applies it, and only once. A `ligus serve` box and a
+  `ligus worker` check for requests naming them on every worker tick; the
+  desktop checks after each sync. Each host claims the request in its own
+  store (`apply_attempts`) before touching git, so a restart or a second
+  tick never applies it twice.
+- The host first judges the `proposalApplied` it would write as every fold
+  will (the request withdrawn, the proposal no longer approved, a human gate
+  or a held vote all stop it here), then applies the patch in the chat's
+  worktree of its checkout (`hive/chat/<chat id>`), on the base the person
+  saw when the request names one, and commits with a
+  `Ligus-Apply-Request: <request id>` trailer. A box without a git identity
+  commits as `Ligus <ligus@localhost>`.
+- It reports back: `proposalApplied` with the commit, base and tree, or
+  `proposalApplyFailed` with the reason (no checkout for the chat, the
+  checkout moved, the patch doesn't apply, not a file change). A failed
+  request closes, and a person may ask again, on this host or another.
+- One applier per proposal: while a request is open, nobody else applies the
+  proposal and no second request is accepted. The requester (or an Admin)
+  withdraws an open request (`proposalApplyWithdrawn`); a host that sees
+  the withdrawal doesn't apply it, and one that already committed takes its
+  commit back when the fold refuses its report.
+- A host that crashed after its commit finds the commit by its trailer on
+  restart and reports it; one that crashed before it reports the request
+  failed ("ask again").
+
+The box applies only file-diff proposals; anything else (a command, a
+decision) is reported failed with "implement this proposal from a desktop".
+
 To switch a chat's repo, clone, pull or open a pull request from the phone,
 see [Repos on the home host](serve-repos.md).
 

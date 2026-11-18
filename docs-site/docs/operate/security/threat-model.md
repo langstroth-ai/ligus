@@ -100,13 +100,24 @@ box, at its role. What they **can't** do, on any device's fold:
   raising a service member higher is refused.
 - **Approve for a person.** Its votes count at its role but never as a human
   approval, so dearth-mode protected paths, locked-down chats and an agent's
-  own proposals still need a person. It can't decide a proposal set, answer
-  an agent's question, clear a lockdown, or apply a change except to fulfil a
-  person's request.
+  own proposals still need a person. A vote counts as a person's only when a
+  device certified for that person's account (not revoked) signed it: the
+  fold checks this on every device, on top of ingest quarantining an event
+  whose stamp names another account than its signer's. It can't decide a
+  proposal set, answer an agent's question, clear a lockdown, or apply a
+  change except to fulfil a person's request naming it.
 - **Cut or admit anyone.** It removes, demotes and admits no one, and issues
   no invite or admission; it revokes no device but its own.
-- **Forge a phone's action.** What the phone signs itself (box admissions in
-  0.1) the box only relays: it can withhold it, not alter or forge it.
+- **Forge a phone's action.** What the phone signs itself (box admissions and
+  the [phone actions](../reference/serve-api.md#phone-actions): post, vote,
+  answer, clear a lockdown, Apply on ‹host›, withdraw) the box drafts and
+  relays. A client that runs the preimage check before signing
+  (`check_phone_action_preimage`) signs only exactly the action its person
+  asked for, in this workspace and log, stamped as that person for that
+  phone, with the passkey assertion the phone itself produced (or none): the
+  box can withhold or delay an action, choose the fields that grant nothing
+  (ids, clocks, its frontier and chain link), and show a misleading preview,
+  but it can't alter or forge what is signed.
 
 The remedy is the one for any member: an Admin removes the box (or revokes its
 device) and rotates the workspace key, and the box gets no later key. An
@@ -140,14 +151,28 @@ it admits no one through it and changes nothing else), and two Admins'
 closures that name different redemptions admit neither. The box forgets the
 redeem key once its redemption is written. See the known limitation below.
 
+**Apply on a host: one applier.** A person (desktop or phone) asks one named
+host to apply an approved proposal (`proposalApplyRequested`). The fold, on
+every device: allows one open request per proposal; lets only the named host
+fulfil it (`proposalApplied` naming the request, signed by that host, on the
+base the person saw when they named one), and only while the request is open,
+so a retry or a second host is refused; refuses a person's own apply while a
+request names a host; lets only the named host report a failure
+(`proposalApplyFailed`), and only the requester or an Admin, a person through
+their own device, withdraw a request (`proposalApplyWithdrawn`). A box never
+asks for an apply and never applies on its own approval. The host claims the
+request in its own store before touching git, judges its report as the fold
+will first, and commits with a `Ligus-Apply-Request:` trailer, so a restart
+reports the commit it already made instead of applying again.
+
 ### Prompt injection and hostile content {#prompt-injection}
 
 Content an agent reads (a web page, an MCP result, a file in an untrusted
 repo, a teammate's message) can try to steer it. Defences:
 
 - edits land in an isolated worktree and come back as proposals; nothing
-  reaches your working tree without a human **Implement** (or an explicit
-  `LIGUS_SERVE_APPLY_ON_APPROVE` on a serve box);
+  reaches your working tree without a human **Implement** or a person's
+  **Apply on ‹host›** request (there is no auto-apply);
 - Ligus's own git calls (worktrees, diffs, apply, the hygiene sweep, PR
   fetch and push) never run the repository's hooks or fsmonitor, so a file an
   agent plants can't get code run by Ligus outside the agent's sandbox;
@@ -211,8 +236,10 @@ credentials; a stolen token works for its own audience until it expires.
 ### Someone with your phone {#lost-phone}
 
 The phone app holds a credential that lets it act through your box with the
-box's role. Optional Face ID / passcode lock protects the app on an unlocked
-phone. Revoke the phone from the box; see
+box's role, and a Secure Enclave key certified as your device: with an
+unlocked phone and the app open, someone can post, vote, answer and ask for
+an apply as you; clearing a lockdown and gated votes also need your passkey.
+Optional Face ID / passcode lock protects the app on an unlocked phone. Revoke the phone from the box; see
 [Lost phone](runbooks.md#lost-phone).
 
 ### Someone with a copy of a data dir {#data-dir}
@@ -339,13 +366,23 @@ it.
    can join, nothing can be governed) until its founder adds a passkey from
    the desktop, and until then a thief of the founder's device key could
    register one first.
-8. **A box is never you, so the phone acts through it only as the box.** A
-   `ligus serve` box is its own service member: phone messages and votes sent
-   through it are the box's, and its votes never satisfy a human gate. What
-   only a person may do needs the phone's own device key and your passkey;
-   in 0.1 only box admissions go that way, so approvals that need a person,
-   answers to an agent's question and lockdown clears are made on the
-   desktop. A bearer box admission (a Kubernetes Secret) can be redeemed by
+8. **A box is never you; the phone acts as you only with its own key.** A
+   `ligus serve` box is its own service member: what it sends on its own
+   (its plain endpoints, its votes) is the box's, and never satisfies a
+   human gate. What only a person may do the phone signs with its own
+   device key ([phone actions](../reference/serve-api.md#phone-actions) and
+   box admissions). Residuals: the box chooses what the phone shows, so a
+   vote binds to the content digest the phone saw; a client should
+   recompute `diffDigest` from the content it displays when it can (a
+   workflow or command proposal's digest covers JSON a client may not
+   reproduce). A box can withhold or delay a phone action. Rebinding an
+   agent, inviting a person and DMs as you stay on the desktop (the phone
+   tier doesn't include them; the phone isn't certified in a DM's
+   workspace). An offline host named by an open apply request blocks every
+   other apply of that proposal until the requester or an Admin withdraws
+   it; a withdrawal racing a host that already committed is refused by the
+   fold when it sorts first, and that host then takes its commit back.
+   A bearer box admission (a Kubernetes Secret) can be redeemed by
    whoever holds it before the box does. Until an Admin's device has synced
    and closed the admission, a holder of the code can still date a
    redemption before the expiry, or slot one in before the box's: no clock
