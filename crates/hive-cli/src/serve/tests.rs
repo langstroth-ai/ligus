@@ -427,6 +427,93 @@ async fn a_box_joins_only_through_a_box_admission() {
     handle.shutdown();
 }
 
+/// The chart's start-up (`LIGUS_SECRET_BACKEND=k8s`): the workspace key is a
+/// read-only mounted Secret file in a read-only dir, and the box redeems its
+/// admission at start-up. Redeeming re-saves the connection (the key the
+/// Secret already holds) and derives the box's own secrets (identity seeds,
+/// key agreement, delivered epoch keys); start-up must succeed, the mount
+/// stays untouched, and everything derived lands 0600 in the data dir.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_box_starts_from_a_read_only_mounted_secret() {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    let tmp = tempfile::tempdir().unwrap();
+    let relay = spawn(test_relay::router()).await;
+    let room = format!("serve-k8s-{}", Uuid::new_v4());
+    let ws = crate::uuid_of_room(&room);
+    let desktop = config(&tmp.path().join("desktop"), &relay, &room);
+    let code = {
+        let mut svc = open_service(&desktop).unwrap();
+        svc.ensure_self_member(workspace_config_session_id(ws), ws).unwrap();
+        let (inv, seed) = svc.issue_box_admission(ws, 3_600_000, None).unwrap();
+        crate::serve::admission_code(&desktop, &svc, inv, &seed).unwrap()
+    };
+    sync_once(&desktop).await.unwrap();
+
+    // The kubelet's projection: 0400 files in a dir the box can't write.
+    let mount = tmp.path().join("secrets-store");
+    std::fs::create_dir_all(&mount).unwrap();
+    std::fs::write(mount.join("cli.key"), desktop.key.as_deref().unwrap()).unwrap();
+    std::fs::set_permissions(mount.join("cli.key"), std::fs::Permissions::from_mode(0o400)).unwrap();
+    std::fs::set_permissions(&mount, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let dir = tmp.path().join("serve");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    hive_runtime::secret_store::set_for_data_dir(&dir, Arc::new(hive_runtime::secret_store::K8sSecretFile::new(&mount, &dir)));
+
+    // As `config()` in main does with no LIGUS_WORKSPACE_KEY: the key comes
+    // from the store, i.e. the mount.
+    let f = crate::load_file_config(&dir);
+    assert_eq!(f.key.as_deref(), desktop.key.as_deref(), "the key is read from the mount");
+    let mut cfg = Config { data_dir: dir.clone(), relay_url: Some(relay.clone()), token: None, room: room.clone(), key: f.key, epoch_keys: f.ek };
+    let res = crate::admit::prepare_box(&mut cfg, "k8s", Some("K8s box"), Some(code), |c| async move { sync_once(&c).await }).await;
+    std::fs::set_permissions(&mount, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let (svc, synced) = res.expect("a box starts with a read-only mounted Secret");
+    assert!(synced);
+    let me = svc.author().clone();
+    assert_eq!(me.kind, hive_core::ActorKind::Service);
+    let log = svc.load(workspace_config_session_id(ws)).unwrap().unwrap();
+    assert!(log.members.iter().any(|m| m.id == me.id), "the box joined");
+    drop(svc);
+    // And serve itself comes up on that store (a restart: already a member).
+    std::fs::set_permissions(&mount, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let opts = ServeOptions { token_file: dir.join("serve.token"), dashboard_file: dir.join("dashboard.toml"), ..box_opts("k8s") };
+    let started = start(cfg.clone(), opts).await;
+    std::fs::set_permissions(&mount, std::fs::Permissions::from_mode(0o700)).unwrap();
+    started.expect("serve starts on the k8s store").shutdown();
+
+    // The mount is untouched.
+    let names: Vec<_> = std::fs::read_dir(&mount).unwrap().flatten().map(|e| e.file_name()).collect();
+    assert_eq!(names, vec![std::ffi::OsString::from("cli.key")]);
+    // Runtime secrets are owner-only in the data dir, the key isn't copied.
+    let mut secrets = Vec::new();
+    for sub in ["keys", "secrets"] {
+        let root = dir.join(sub);
+        if !root.exists() {
+            continue;
+        }
+        let mut stack = vec![root];
+        while let Some(d) = stack.pop() {
+            assert_eq!(mode(&d), 0o700, "{}", d.display());
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else {
+                    assert_eq!(mode(&p), 0o600, "{}", p.display());
+                    secrets.push(p);
+                }
+            }
+        }
+    }
+    assert!(secrets.iter().any(|p| p.extension().is_some_and(|x| x == "seed")), "identity seeds in the data dir: {secrets:?}");
+    assert!(!dir.join("secrets/cli/key").exists(), "the mounted key is never copied into the data dir");
+    assert_eq!(mode(&dir.join("config.toml")), 0o600);
+    let toml = std::fs::read_to_string(dir.join("config.toml")).unwrap();
+    assert!(!toml.contains(desktop.key.as_deref().unwrap()), "no secret in config.toml");
+}
+
 /// People, channels and chat details: avatars and host kinds ride the roster,
 /// chats carry their channel and recent speakers, and details mirror the
 /// desktop's right-hand panel (agents, people, default responder, context,
