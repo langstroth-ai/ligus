@@ -534,9 +534,10 @@ it.
       alone, which every keyholder sees) confuses nothing.
     - **Copies under a covered id.** A removal's watermark names a device's
       chain by event id. An id under which two copies are held for that
-      device (a second key the member bound to their own device id) is
+      device (the device equivocated, or a copy no key of it signed) is
       never covered and coverage stops there, as at a gap, so the member's
-      events behind it are judged as of the cut.
+      events behind it are judged as of the cut. A second key for a device
+      id can't exist: a device id is derived from its key.
     - **Readers outside the fold.** Device-local lookups that read raw
       events rather than the fold (who signed a proposal, a flow answer's
       author, a cut's watermark, the membership audit, what a peer link
@@ -700,7 +701,7 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 
 | Core (forged copies) | Anyone holding the workspace key could erase any event: an unsigned envelope (or one no key verifies, or one signed by a device of their own) under a real event's id was accepted, recorded as an equivocation, and both copies were then denied on every device, so a `MemberRemoved`, a reject vote, a lockdown raise or the config seed vanished | Only the same signer's two verified copies are an equivocation. Unsigned envelopes are refused at ingest; a copy no certified key verifies never displaces a verified one; another signer's copy under the id is their own event, and every fold structure (denials, coverage, cut identity, verdicts, the frontier's lamport) is keyed by copy. Every reader that must not be blinded by a copy that arrived first reads all copies. Verified by `a_forged_copy_never_erases_an_honest_title_change`, `a_forged_copy_never_erases_a_removal`, `a_forged_copy_of_the_seed_leaves_the_workspace_standing`, `prop_forged_copies_never_erase_honest_events`, `the_reviewers_probe_an_honest_title_change_survives_a_forged_copy_in_either_order` and `prop_devices_fold_the_honest_log_whatever_arrives_first` |
 
-| Core (device-id squatting) | Device ids are chosen by the device, so a member could certify another member's device id under their own account with a key of their own. The fold then checked the victim's key events against the squatter's key, and the trust roster took whichever certificate sorted first (a backdated copy did): every event of the victim's device was refused everywhere, and the squatter could sign as the victim, or certify a key for an agent hosted on the victim's device, through its id. Revoking a device the squatter's account had certified was self-service, so any Contributor could revoke anyone's device, the founder's included; and the squatter's own events under the id were links of the victim's chain, so a few naming unpublished ids made a later removal of the victim deny the victim's earlier posts | Each account's certificate binds a device id for that account only: an event verifies only under the keys of the account its stamp names. A device id certified under keys that disagree has no device-level key, so lookups that name no account (phone pairing, lease beats, contact stamps, an agent key on that host unless the agent's owner bound it) refuse it until the squatter is removed. Self-service revocation needs the account to hold the device (to have certified the id under the key it was first certified with). A device's chain is the events stamped for an account that holds it, in the watermark a cut records and in the fold's coverage. An event of a member whose certificate of the id hasn't reached a device yet, while someone else's has, is held for it rather than refused. Verified by `a_squatted_device_id_keeps_its_own_key_for_its_own_account`, `a_squatter_cannot_sign_as_the_victim_through_the_victims_device_id`, `a_squatter_cannot_certify_a_key_for_an_agent_on_the_victims_device`, `a_squatter_cannot_revoke_the_victims_device_as_their_own`, `a_squatters_events_under_the_victims_device_id_do_not_uncover_the_victim`, `a_backdated_squat_neither_erases_nor_impersonates_at_ingest` and `a_victims_event_before_its_certificate_is_held_not_refused_after_a_squat` |
+| Core (device-id squatting) | Device ids were chosen by the device, so a member could certify another member's device id (or one that would be theirs) under their own account with a key of their own. The fold then checked the victim's key events against the squatter's key, and the trust roster took whichever certificate sorted first (a backdated copy did): every event of the victim's device was refused everywhere, and the squatter could sign as the victim, or certify a key for an agent hosted on the victim's device, through its id. Revoking a device the squatter's account had certified was self-service, so any Contributor could revoke anyone's device, the founder's included | Refused by construction: a device id is derived from the device's first signing key (UUIDv8 of `SHA-256("ligus-device-id-v1\0" ‖ alg ‖ "\0" ‖ key)`, every device kind, phones from their Secure Enclave key), and a certificate whose id isn't its key's never verifies, so it is refused in the fold, at ingest and in the roster wherever it sorts. One device id names one key, and only that device signs under it. Certifying someone else's real device key for your own account signs nothing, and who holds a device is read from the whole log (the accounts the device itself vouched for), never from a position: such an account can't revoke the device as theirs, run an unbound agent on it, or make the device's own account's events wait or fail for good. Verified by `a_backdated_squat_is_refused_wherever_it_sorts`, `a_squatter_cannot_sign_as_the_victim_through_the_victims_device_id`, `a_squatter_cannot_certify_a_key_for_an_agent_on_the_victims_device`, `a_squatter_cannot_revoke_the_victims_device_as_their_own`, `certifying_someone_elses_device_key_holds_nothing_backdated_or_not`, `a_squatters_events_under_the_victims_device_id_do_not_uncover_the_victim`, `a_backdated_squat_neither_erases_nor_impersonates_at_ingest`, `a_victims_event_before_its_certificate_is_held_not_refused_after_an_adoption` and `device_id_vectors_derive_as_frozen` |
 
 ### Open {#findings-open}
 
@@ -711,10 +712,12 @@ warning), a CLI-founded workspace staying unsecured until its founder adds a pas
 devices without a founder pin keeping the passphrase key, and ingest-time
 decisions that depend on arrival order, the reach of a removal's watermark (its
 author's word, and chats the remover never synced), equivocations seen only
-where both copies meet, a member squatting another member's device id
-(that device's account-less lookups fail closed until the squatter is
-removed; one who squats an id before its own device certifies it on this
-workspace holds it there), what lamport bounds leave to an author (backdating,
+where both copies meet, a member certifying someone else's phone key for
+their own account (a phone never vouches for its account on the log, so
+both accounts hold it: either can revoke it, and its pairing then names no
+one until that member is removed), an Admin revoking a device that isn't
+certified on the workspace yet (a device id is derived from its key, so
+one who knows the key can name the device before it joins), what lamport bounds leave to an author (backdating,
 concurrent writes that apply to everything before them, holds), human
 clicks that run others' text at the clicker's tier, and unconfined LSP
 servers and terminal. On Kubernetes, DNS tunnelling through

@@ -470,6 +470,20 @@ box drafts and relays it. Reference implementation:
 `parse_phone_preimage`); golden vectors in
 `crates/hive-core/tests/golden/phone_actions_v1.jsonl`.
 
+**Device id.** The phone's workspace device id is derived from its Secure
+Enclave key, never chosen: the first 16 bytes of
+`SHA-256("ligus-device-id-v1\0" ‖ "p256" ‖ "\0" ‖ publicKey)`, where
+`publicKey` is the 65-byte SEC1 uncompressed point (`0x04 ‖ x ‖ y`, CryptoKit
+`P256.Signing.PublicKey.x963Representation`), with byte 6 set to
+`(b6 & 0x0f) | 0x80` (version 8) and byte 8 to `(b8 & 0x3f) | 0x80` (the RFC
+9562 variant), as a lowercase hyphenated UUID. Send it as `deviceId`
+everywhere, and as the stamp's `actor.deviceId` and the envelope's
+`signerDeviceId`. A certificate naming any other id never verifies, and
+enrollment refuses one (`hive_core::crypto::device_id_for`; golden vectors in
+`crates/hive-core/tests/golden/device_id_v1.jsonl`, including the key of
+`p256_cryptokit.jsonl`: check them in the app's tests). A new Secure Enclave
+key is a new device with a new id, enrolled again.
+
 **Endpoints.**
 
 1. `POST /v1/phone-actions/prepare {deviceId, action}` →
