@@ -80,42 +80,73 @@ pub struct SignerDirectory {
 
 impl SignerDirectory {
     /// The signers `envelopes` certify.
+    ///
+    /// Anyone able to deliver events controls how many keys, rotations and
+    /// certificates there are, so building this stays near-linear in them:
+    /// each account holds at most [`MAX_ACCOUNT_KEYS`] keys here and each
+    /// (device id, account) binding at most [`MAX_BINDING_KEYS`], taken in
+    /// the log's canonical order, and every (key, rotation) pair is checked
+    /// at most once. A cap only stops further keys from telling copies apart
+    /// (no honest account rotates or rebinds one device id that often).
     pub fn of(envelopes: &[SessionEventEnvelope]) -> Self {
+        let mut ordered: Vec<&SessionEventEnvelope> = envelopes.iter().collect();
+        ordered.sort_by_key(|e| e.canonical_key());
         let mut keys: BTreeMap<Uuid, Vec<Vec<u8>>> = BTreeMap::new();
-        for e in envelopes {
+        for e in &ordered {
             if let SessionEvent::AccountKeyRegistered { account_id, signing_public_key } = &e.payload {
-                push_unique(keys.entry(*account_id).or_default(), signing_public_key.clone());
-            }
-        }
-        // A rotation counts once a key of its account signed it (to a fixed
-        // point: rotations chain).
-        loop {
-            let mut changed = false;
-            for e in envelopes {
-                if let SessionEvent::AccountKeyRotated { account_id, new_signing_public_key, succession_signature } = &e.payload {
-                    let known = keys.entry(*account_id).or_default();
-                    if !known.contains(new_signing_public_key)
-                        && known.iter().any(|k| crate::crypto::verify(k, new_signing_public_key, succession_signature).is_ok())
-                    {
-                        known.push(new_signing_public_key.clone());
-                        changed = true;
-                    }
+                let known = keys.entry(*account_id).or_default();
+                if known.len() < MAX_ACCOUNT_KEYS {
+                    push_unique(known, signing_public_key.clone());
                 }
             }
-            if !changed {
-                break;
+        }
+        // A rotation counts once a key of its account signed it (rotations
+        // chain): each newly known key is checked against the rotations
+        // still pending for its account, once.
+        let mut pending: BTreeMap<Uuid, Vec<(&[u8], &[u8])>> = BTreeMap::new();
+        for e in &ordered {
+            if let SessionEvent::AccountKeyRotated { account_id, new_signing_public_key, succession_signature } = &e.payload {
+                pending.entry(*account_id).or_default().push((new_signing_public_key, succession_signature));
+            }
+        }
+        for (account, mut rotations) in pending {
+            let known = keys.entry(account).or_default();
+            let mut next = 0;
+            while next < known.len() && !rotations.is_empty() && known.len() < MAX_ACCOUNT_KEYS {
+                let k = known[next].clone();
+                next += 1;
+                rotations.retain(|(new, sig)| {
+                    if known.iter().any(|x| x.as_slice() == *new) {
+                        return false;
+                    }
+                    if known.len() < MAX_ACCOUNT_KEYS && crate::crypto::verify(&k, new, sig).is_ok() {
+                        known.push(new.to_vec());
+                        return false;
+                    }
+                    true
+                });
             }
         }
         let mut out = Self::default();
-        for e in envelopes {
+        let mut per_binding: BTreeMap<(Uuid, Uuid), usize> = BTreeMap::new();
+        for e in &ordered {
             if let SessionEvent::DeviceCertificateAdded { certificate: c } = &e.payload {
+                let bound = per_binding.entry((c.device_id, c.account_id)).or_default();
+                if *bound >= MAX_BINDING_KEYS {
+                    continue;
+                }
                 if keys.get(&c.account_id).is_some_and(|ks| ks.iter().any(|k| c.verify(k).is_ok())) {
-                    push_unique(out.devices.entry(c.device_id).or_default(), (c.device_public_key.clone(), c.account_id));
+                    let mine = out.devices.entry(c.device_id).or_default();
+                    let binding = (c.device_public_key.clone(), c.account_id);
+                    if !mine.contains(&binding) {
+                        mine.push(binding);
+                        *bound += 1;
+                    }
                     out.accounts.insert(c.account_id);
                 }
             }
         }
-        for e in envelopes {
+        for e in &ordered {
             if let SessionEvent::AgentKeyCertified { cert } = &e.payload {
                 let host_ok = out.devices.get(&cert.host_device_id).is_some_and(|ks| ks.iter().any(|(k, _)| cert.verify(k).is_ok()));
                 if host_ok {
@@ -183,6 +214,13 @@ pub fn signer_events(envelopes: &[SessionEventEnvelope]) -> Vec<SessionEventEnve
         .cloned()
         .collect()
 }
+
+/// At most this many keys of one account tell copies apart (registrations
+/// and the rotations they reach, in canonical order).
+pub const MAX_ACCOUNT_KEYS: usize = 64;
+
+/// At most this many keys one account binds to one device id.
+pub const MAX_BINDING_KEYS: usize = 8;
 
 fn push_unique<T: PartialEq>(v: &mut Vec<T>, x: T) {
     if !v.contains(&x) {
