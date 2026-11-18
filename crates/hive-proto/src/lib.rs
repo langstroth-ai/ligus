@@ -264,6 +264,43 @@ pub struct ProposalDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub producing_agent_id: Option<String>,
+    /// Apply on a host (Phase B): every request a person filed for it, and
+    /// how each ended. At most one is `open` at a time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<ApplyRequestDto>>", optional)]
+    pub apply_requests: Vec<ApplyRequestDto>,
+    /// A person may ask a host to apply it now: approved, and no request
+    /// open (one applier per proposal).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub can_request_apply: bool,
+}
+
+/// A person's request that one host apply a proposal (`ProposalApplyRequested`),
+/// with its outcome.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct ApplyRequestDto {
+    pub id: String,
+    /// The host's workspace device id.
+    pub host_device_id: String,
+    /// The host's label, when it is a registered host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub host_label: Option<String>,
+    /// "open" | "applied" | "failed" | "withdrawn"
+    pub state: String,
+    /// Why it failed (`failed`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reason: Option<String>,
+    /// The host's commit (`applied`, when it made one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub commit: Option<String>,
+    /// This device filed it (it may withdraw it).
+    pub mine: bool,
 }
 
 /// What Implement will do for a proposal, exactly (the preview sheet). The
@@ -478,6 +515,33 @@ pub struct WorkspaceMemberDto {
     /// Optional avatar image (`data:` URL) the member chose; rides the synced
     /// roster. Absent = initials-on-color.
     pub avatar_url: Option<String>,
+    /// "human" | "agent" | "service" (a `ligus serve` or worker box).
+    #[serde(default)]
+    pub kind: String,
+    /// The workspace's founder (nobody cuts the founder).
+    #[serde(default)]
+    pub is_founder: bool,
+    /// Why you can't remove this member (the fold's own rules), or none
+    /// when you can.
+    #[serde(default)]
+    pub remove_refusal: Option<String>,
+    /// For each role, why you can't give it to this member (none: you can).
+    #[serde(default)]
+    pub role_options: Vec<MemberRoleOptionDto>,
+    /// Why "Allow new passkey" doesn't apply (a service member holds no
+    /// passkey), or none.
+    #[serde(default)]
+    pub regrant_refusal: Option<String>,
+}
+
+/// One role in a member's role picker and why it is off-limits, if it is.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct MemberRoleOptionDto {
+    /// "owner" | "admin" | "contributor" | "viewer"
+    pub role: String,
+    pub refusal: Option<String>,
 }
 
 /// One selectable workspace in the switcher: the local "My workspace", or a
@@ -864,6 +928,8 @@ mod tests {
         RefinementDto::export_all(&cfg).unwrap();
         ApprovalDto::export_all(&cfg).unwrap();
         WorkspaceMemberDto::export_all(&cfg).unwrap();
+        MemberRoleOptionDto::export_all(&cfg).unwrap();
+        ApplyRequestDto::export_all(&cfg).unwrap();
         WorkspaceInfoDto::export_all(&cfg).unwrap();
         VaultSourceDto::export_all(&cfg).unwrap();
         WorkflowNodeDto::export_all(&cfg).unwrap();
