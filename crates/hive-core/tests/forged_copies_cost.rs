@@ -45,9 +45,11 @@ fn a_reversed_rotation_chain_does_not_make_the_fold_cubic() {
     assert!(took < std::time::Duration::from_secs(5), "one config fold took {took:?}");
 }
 
-/// Many self-certified strangers binding one device id, and many copies
-/// signed under it claiming no account: each copy is checked against a
-/// bounded number of keys, not against every binding. (Measured against the
+/// Many self-certified strangers certifying one device (its one key, which
+/// its id derives from) and as many trying to bind other keys to its id
+/// (refused: the id isn't theirs), and many copies signed under it claiming
+/// no account: each copy is checked against the device's one key, not
+/// against every certificate. (Measured against the
 /// same log without the copies: what the bindings alone cost is the roster's.)
 #[test]
 fn many_bindings_of_one_device_id_do_not_make_copies_quadratic() {
@@ -57,13 +59,18 @@ fn many_bindings_of_one_device_id_do_not_make_copies_quadratic() {
     w.admit("owner", "con", WorkspaceRole::Contributor);
     w.publish_identity("eve");
     let target = w.cfg.last().unwrap().clone();
-    let device = uuid::Uuid::new_v4();
-    for _ in 0..200 {
+    let shared = SigningKeypair::generate().unwrap();
+    let device = hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &shared.public_key_bytes());
+    for i in 0..200 {
         let account = SigningKeypair::generate().unwrap();
         let account_id = uuid::Uuid::new_v4();
-        let k = SigningKeypair::generate().unwrap();
         w.push_bare("eve", SessionEvent::AccountKeyRegistered { account_id, signing_public_key: account.public_key_bytes().to_vec() });
-        let cert = DeviceCertificate::issue(&account, account_id, device, &k.public_key_bytes(), Timestamp::epoch());
+        let cert = if i % 2 == 0 {
+            DeviceCertificate::issue(&account, account_id, &shared.public_key_bytes(), Timestamp::epoch())
+        } else {
+            let k = SigningKeypair::generate().unwrap();
+            DeviceCertificate::issue_for_id(&account, account_id, device, &k.public_key_bytes(), Timestamp::epoch())
+        };
         w.push_bare("eve", SessionEvent::DeviceCertificateAdded { certificate: cert });
     }
     let base = w.cfg.clone();

@@ -52,7 +52,7 @@ pub(crate) fn world() -> World {
     let store = EventStore::open(dir.path().join("hive.db")).unwrap();
     let kp = SigningKeypair::generate().unwrap();
     let account_kp = SigningKeypair::generate().unwrap();
-    let mut svc = ChatService::new(store, Uuid::new_v4(), kp, account_kp, ActorIdentity::new("x", "Alex", ActorKind::Human));
+    let mut svc = ChatService::new(store, kp, account_kp, ActorIdentity::new("x", "Alex", ActorKind::Human));
     let account = Uuid::new_v4().to_string();
     svc.set_author_account(account.clone(), "Alex", None);
     let wid = Uuid::new_v4();

@@ -58,6 +58,8 @@ pub enum EnrollError {
     Malformed,
     #[error("the enrollment code's signature doesn't match its device key")]
     BadSignature,
+    #[error("the enrollment code's device id isn't the one its key derives")]
+    WrongDeviceId,
 }
 
 /// What a box asks to be enrolled as: its device id + public signing key, in
@@ -93,10 +95,12 @@ fn preimage(workspace_id: Uuid, device_id: Uuid, key: &[u8; 32], label: &str) ->
 }
 
 impl DeviceEnrollment {
-    /// Build and sign a request for `device_id` (whose key is `device_key`).
-    pub fn new(workspace_id: Uuid, device_id: Uuid, device_key: &SigningKeypair, label: &str) -> Self {
+    /// Build and sign a request for the device whose key is `device_key`
+    /// (its id is the one the key derives, `hive_core::crypto::device_id_for`).
+    pub fn new(workspace_id: Uuid, device_key: &SigningKeypair, label: &str) -> Self {
         let label = clamp_label(label);
         let key = device_key.public_key_bytes();
+        let device_id = hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &key);
         let signature = device_key.sign(&preimage(workspace_id, device_id, &key, &label));
         Self { workspace_id, device_id, device_public_key: key, label, signature }
     }
@@ -135,10 +139,15 @@ impl DeviceEnrollment {
         Ok(e)
     }
 
-    /// Proof of possession: the device key signed this request.
+    /// Proof of possession: the device key signed this request, for the
+    /// device id that key derives.
     pub fn verify(&self) -> Result<(), EnrollError> {
         let pre = preimage(self.workspace_id, self.device_id, &self.device_public_key, &self.label);
-        verify(&self.device_public_key, &pre, &self.signature).map_err(|_| EnrollError::BadSignature)
+        verify(&self.device_public_key, &pre, &self.signature).map_err(|_| EnrollError::BadSignature)?;
+        if self.device_id != hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &self.device_public_key) {
+            return Err(EnrollError::WrongDeviceId);
+        }
+        Ok(())
     }
 
     /// Short fingerprint of the device key, shown on both ends so the owner can
@@ -357,8 +366,9 @@ mod tests {
     #[test]
     fn code_roundtrips_and_verifies() {
         let kp = SigningKeypair::generate().unwrap();
-        let (ws, dev) = (Uuid::new_v4(), Uuid::new_v4());
-        let e = DeviceEnrollment::new(ws, dev, &kp, "  home box  ");
+        let (ws, dev) = (Uuid::new_v4(), hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &kp.public_key_bytes()));
+        let e = DeviceEnrollment::new(ws, &kp, "  home box  ");
+        assert_eq!(e.device_id, dev, "the id is the one the key derives");
         assert_eq!(e.label, "home box");
         let code = e.encode();
         assert!(code.starts_with(CODE_PREFIX));
@@ -373,7 +383,7 @@ mod tests {
     #[test]
     fn code_tampering_is_rejected() {
         let kp = SigningKeypair::generate().unwrap();
-        let e = DeviceEnrollment::new(Uuid::new_v4(), Uuid::new_v4(), &kp, "box");
+        let e = DeviceEnrollment::new(Uuid::new_v4(), &kp, "box");
         // Someone else's key under this signature.
         let mut swapped = e.clone();
         swapped.device_public_key = SigningKeypair::generate().unwrap().public_key_bytes();
@@ -386,6 +396,12 @@ mod tests {
         let mut other = e.clone();
         other.device_id = Uuid::new_v4();
         assert_eq!(DeviceEnrollment::decode(&other.encode()), Err(EnrollError::BadSignature));
+        // Another device id, signed by the key all the same: not the id the
+        // key derives.
+        let mut other = e.clone();
+        other.device_id = Uuid::new_v4();
+        other.signature = kp.sign(&preimage(other.workspace_id, other.device_id, &other.device_public_key, &other.label));
+        assert_eq!(DeviceEnrollment::decode(&other.encode()), Err(EnrollError::WrongDeviceId));
         assert_eq!(DeviceEnrollment::decode("hivews1:abc"), Err(EnrollError::NotACode));
         assert_eq!(DeviceEnrollment::decode("hivedev1:abc"), Err(EnrollError::Malformed));
     }
@@ -393,7 +409,7 @@ mod tests {
     #[test]
     fn long_labels_are_clamped_on_a_char_boundary() {
         let kp = SigningKeypair::generate().unwrap();
-        let e = DeviceEnrollment::new(Uuid::new_v4(), Uuid::new_v4(), &kp, &"é".repeat(100));
+        let e = DeviceEnrollment::new(Uuid::new_v4(), &kp, &"é".repeat(100));
         assert!(e.label.len() <= MAX_LABEL);
         assert!(DeviceEnrollment::decode(&e.encode()).is_ok());
     }
@@ -431,7 +447,6 @@ mod flow_tests {
             let me = ids.bootstrap(name, &name.to_lowercase(), name).unwrap();
             let svc = ChatService::new(
                 EventStore::open(dir.join("hive.db")).unwrap(),
-                me.device.id,
                 ids.device_keypair(me.device.id).unwrap(),
                 ids.account_keypair(me.account.id).unwrap(),
                 me.account.actor(),
@@ -550,7 +565,7 @@ mod flow_tests {
         // A delegated box can't approve devices or publish an identity as Alex.
         let mut delegated = Dev::open(&tmp.path().join("sff"), "hive-cli", &relay, ws);
         delegated.svc.act_as_owner_device(alex.clone());
-        let any = DeviceEnrollment::new(ws, Uuid::new_v4(), &SigningKeypair::generate().unwrap(), "x");
+        let any = DeviceEnrollment::new(ws, &SigningKeypair::generate().unwrap(), "x");
         assert!(delegated.svc.certify_device(&any).is_err());
         assert!(!delegated.svc.publish_identity(cfg, ws).unwrap());
         drop(delegated);

@@ -35,30 +35,31 @@ pub struct AgentState {
 }
 
 /// One device, as the trust events on this log certify it.
+///
+/// A device id is derived from the device's signing key
+/// ([`crate::crypto::device_id_for`]) and a certificate whose id isn't its
+/// key's never verifies, so every certificate of one id names one key, and
+/// only that device can sign under its id. Another account can still
+/// certify the same device (its key) for itself, but that never lets it
+/// sign as the device; who *holds* the device is [`DeviceState::holders`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct DeviceState {
     /// Accounts whose (undisputed) key certified this device.
     pub accounts: BTreeSet<Uuid>,
     pub revoked: bool,
-    /// The device's signing key, from its certificates, when they all name
-    /// one key; empty when certificates of different accounts bind the
-    /// device id to different keys (an id someone else certified for
-    /// themselves: see [`DeviceState::keys`]), so a lookup that names no
-    /// account fails closed. Certificates of current members decide when
-    /// there are any.
+    /// The device's signing key: the one its id derives from.
     pub public_key: Vec<u8>,
-    /// Each account that certified this device id → the keys (and whether
-    /// each is a P-256 phone key) its certificates bind. Device ids are
-    /// chosen by the device, so a member can certify another member's id
-    /// under their own account with a key of their own; that binding is
-    /// theirs alone: an event stamped as an account verifies only under that
-    /// account's keys ([`DeviceState::keys_for`]).
-    pub keys: BTreeMap<Uuid, Vec<(Vec<u8>, bool)>>,
-    /// The key of the first certificate (in log order) that bound this
-    /// device id: the device the id was first certified as. A later binding
-    /// under another key is someone else's use of the id (squatting), never
-    /// that device: see [`RosterState::account_holds_device`].
-    pub first_key: Vec<u8>,
+    /// The accounts that hold this device (see
+    /// [`RosterState::account_holds_device`]). When more than one account
+    /// certified it anywhere on the log, the ones the device itself vouched
+    /// for: a certificate of it the device published, or a config event it
+    /// signed stamped for that account (only the device's holder can sign
+    /// either, and the whole log is read, so no position, backdated or not,
+    /// changes it). An account that certified someone else's device key for
+    /// itself holds nothing. A device that vouched for no one (a phone: its
+    /// person's laptop enrolls it) is held by every account that certified
+    /// it.
+    pub holders: BTreeSet<Uuid>,
     /// Accounts this device acts for without holding their key: each one's
     /// certificate for it was only ever published by another device (the
     /// owner's desktop approving `hive serve enroll`), or that a certified,
@@ -70,10 +71,8 @@ pub struct DeviceState {
     /// `authz::authorize`).
     pub delegated_for: BTreeSet<Uuid>,
     /// A phone: its key is a P-256 Secure Enclave key (the certificate's
-    /// `alg`, inside the account's signature). Capped to the phone tier
-    /// (`authz::phone`). With bindings that disagree, whether any is a
-    /// phone's (fail closed); what an event's own account binds is
-    /// [`DeviceState::phone_for`].
+    /// `alg`, inside the account's signature and the id's derivation).
+    /// Capped to the phone tier (`authz::phone`).
     pub phone: bool,
 }
 
@@ -83,31 +82,14 @@ impl DeviceState {
         self.delegated_for.contains(&account)
     }
 
-    /// The keys an event signed by this device and speaking for `account`
-    /// verifies under: that account's bindings, or with no account the
-    /// device's one key (none when its bindings disagree: fail closed).
-    pub fn keys_for(&self, account: Option<Uuid>) -> Vec<&[u8]> {
-        match account {
-            Some(a) => self.keys.get(&a).map(|ks| ks.iter().map(|(k, _)| k.as_slice()).collect()).unwrap_or_default(),
-            None if !self.public_key.is_empty() => vec![self.public_key.as_slice()],
-            None => Vec::new(),
-        }
-    }
-
-    /// Whether this device signs as a phone (a P-256 key) when it speaks
-    /// for `account` (`None`: whether any of its bindings is a phone's).
-    pub fn phone_for(&self, account: Option<Uuid>) -> bool {
-        match account {
-            Some(a) => self.keys.get(&a).is_some_and(|ks| ks.iter().any(|(_, p)| *p)),
-            None => self.phone,
-        }
-    }
-
-    /// The key under which `env` (signed by this device) verifies, for the
-    /// account its stamp names.
+    /// The device's key, when `env` (signed by this device) verifies under
+    /// it and the account its stamp names (if any) certified this device.
     pub fn verifying_key(&self, env: &SessionEventEnvelope) -> Option<&[u8]> {
         let account = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id);
-        self.keys_for(account).into_iter().find(|k| crate::crypto::verify_envelope(env, k).is_ok())
+        if account.is_some_and(|a| !self.accounts.contains(&a)) || self.public_key.is_empty() {
+            return None;
+        }
+        crate::crypto::verify_envelope(env, &self.public_key).is_ok().then_some(self.public_key.as_slice())
     }
 }
 
@@ -180,15 +162,13 @@ impl RosterState {
         self.devices.get(&device).is_some_and(|d| d.accounts.contains(&account))
     }
 
-    /// Whether `account` holds the device `device` names: it certified the
-    /// id under the key the id was first certified with. An account that
-    /// certified someone else's device id for itself, under a key of its
-    /// own, holds only its binding, not the device (revoking a device is
-    /// self-service for the account that holds it, R5).
+    /// Whether `account` holds the device `device` names
+    /// ([`DeviceState::holders`]): revoking a device is self-service for an
+    /// account that holds it (R5), and an unbound agent of an account runs
+    /// only on a device that account holds. An account that certified
+    /// someone else's device (its key) for itself holds nothing.
     pub fn account_holds_device(&self, account: Uuid, device: Uuid) -> bool {
-        self.devices.get(&device).is_some_and(|d| {
-            d.accounts.contains(&account) && d.keys.get(&account).is_some_and(|ks| ks.iter().any(|(k, _)| *k == d.first_key))
-        })
+        self.devices.get(&device).is_some_and(|d| d.holders.contains(&account))
     }
 
     /// Whether a device is certified (by some undisputed account) and not
@@ -198,7 +178,7 @@ impl RosterState {
     }
 
     /// Whether `host` may hold keys for `agent_id` here: the agent is bound
-    /// to that host, or, unbound, its owner's account certified the host.
+    /// to that host, or, unbound, its owner's account holds the host.
     pub fn agent_bound_to(&self, agent_id: Uuid, host: Uuid) -> bool {
         let Some(agent) = self.agents.get(&agent_id) else { return false };
         if !self.device_trusted(host) {
@@ -210,7 +190,7 @@ impl RosterState {
                 .get(&agent.owner)
                 .and_then(|m| m.account_id)
                 .or_else(|| Uuid::parse_str(&agent.owner).ok());
-            owner_account.is_some_and(|a| self.account_certified(a, host))
+            owner_account.is_some_and(|a| self.account_holds_device(a, host))
         } else {
             agent.host_id == host.to_string()
         }
@@ -265,6 +245,10 @@ pub struct RosterTracker {
     /// the enrolled device re-publishing its certificate later doesn't undo it
     /// (it only ever holds certificates it was handed).
     enrolled_by_other: BTreeSet<(Uuid, Uuid)>,
+    /// Device id → the accounts it vouched for anywhere on the log, for each
+    /// device more than one account certified ([`RosterTracker::vouched`]):
+    /// what [`DeviceState::holders`] reads.
+    vouched: Arc<BTreeMap<Uuid, BTreeSet<Uuid>>>,
 }
 
 impl RosterTracker {
@@ -285,6 +269,54 @@ impl RosterTracker {
         }
         t.refresh(session);
         t
+    }
+
+    /// Record whom each device vouched for ([`RosterTracker::vouched`]); a
+    /// fold of a log with certificates sets it before folding.
+    pub fn set_vouched(&mut self, vouched: BTreeMap<Uuid, BTreeSet<Uuid>>) {
+        self.vouched = Arc::new(vouched);
+    }
+
+    /// For each Ed25519 device that more than one account certified on
+    /// `envelopes` (a whole log, any position, any verdict), the accounts
+    /// among them it vouched for: a certificate of itself it published, or
+    /// any event it signed stamped for the account. Each is a signature by
+    /// the device's own key (the one its id derives from), so nobody else can
+    /// add one. A phone's never count (a phone is enrolled by another device
+    /// and can't enroll itself), so a stolen phone can't take its person's
+    /// hold away.
+    pub fn vouched(envelopes: &[&SessionEventEnvelope]) -> BTreeMap<Uuid, BTreeSet<Uuid>> {
+        let trust: Vec<SessionEventEnvelope> = envelopes
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.payload,
+                    SessionEvent::AccountKeyRegistered { .. } | SessionEvent::AccountKeyRotated { .. } | SessionEvent::DeviceCertificateAdded { .. }
+                )
+            })
+            .map(|e| (*e).clone())
+            .collect();
+        let directory = crate::copies::SignerDirectory::of(&trust);
+        let contested: BTreeMap<Uuid, (&[u8], &BTreeSet<Uuid>)> =
+            directory.devices().filter(|(_, (k, a))| a.len() > 1 && k.len() == crate::crypto::KEY_LEN).collect();
+        let mut out: BTreeMap<Uuid, BTreeSet<Uuid>> = BTreeMap::new();
+        if contested.is_empty() {
+            return out;
+        }
+        for e in envelopes {
+            let Some((key, claimants)) = e.signer_device_id.and_then(|d| contested.get(&d)) else { continue };
+            let mut named: Vec<Uuid> = e.actor_stamp.as_ref().and_then(|s| s.actor.account_id).into_iter().collect();
+            if let SessionEvent::DeviceCertificateAdded { certificate } = &e.payload {
+                if Some(certificate.device_id) == e.signer_device_id {
+                    named.push(certificate.account_id);
+                }
+            }
+            named.retain(|a| claimants.contains(a) && !out.get(&e.signer_device_id.unwrap_or_default()).is_some_and(|v| v.contains(a)));
+            if !named.is_empty() && crate::crypto::verify_envelope(e, key).is_ok() {
+                out.entry(e.signer_device_id.unwrap_or_default()).or_default().extend(named);
+            }
+        }
+        out
     }
 
     /// Fold the trust side of an event (account keys and device certificates
@@ -332,8 +364,13 @@ impl RosterTracker {
                 self.certs.push(certificate.clone());
                 let key = (certificate.device_id, certificate.account_id);
                 match env.signer_device_id {
+                    // Published by the device itself: its signature under the
+                    // key the certificate names (the one its id derives from)
+                    // proves it, so nobody else can make one.
                     Some(s) if s == certificate.device_id => {
-                        self.self_published.insert(key);
+                        if crate::crypto::verify_envelope(env, &certificate.device_public_key).is_ok() {
+                            self.self_published.insert(key);
+                        }
                     }
                     // Only a publisher that itself holds the account (certified,
                     // not revoked, not delegated, at this position) enrolls:
@@ -463,15 +500,11 @@ impl RosterTracker {
             if cert.verify(key).is_ok() {
                 let d = devices.entry(cert.device_id).or_default();
                 d.accounts.insert(cert.account_id);
-                if d.first_key.is_empty() {
-                    d.first_key = cert.device_public_key.clone();
-                }
+                // One key per id (it derives the id): every certificate of
+                // this id names it.
+                d.public_key = cert.device_public_key.clone();
                 let phone = cert.alg == crate::crypto::SigAlg::P256;
-                let binding = (cert.device_public_key.clone(), phone);
-                let bound = d.keys.entry(cert.account_id).or_default();
-                if !bound.contains(&binding) {
-                    bound.push(binding);
-                }
+                d.phone |= phone;
                 let key = (cert.device_id, cert.account_id);
                 // A phone holds its own key and signs only as its person (the
                 // laptop enrolls it, but it never acts *for* them): not a
@@ -481,18 +514,12 @@ impl RosterTracker {
                 }
             }
         }
-        // The device-level key and phone flag: one key among the bindings
-        // of current members (of every account when no member certified
-        // it), else none (see `DeviceState::public_key`).
-        let members: BTreeSet<Uuid> = self.state.members.values().filter_map(|m| m.account_id).collect();
-        for d in devices.values_mut() {
-            let of_members: Vec<&(Vec<u8>, bool)> =
-                d.keys.iter().filter(|(a, _)| members.contains(a)).flat_map(|(_, ks)| ks.iter()).collect();
-            let bindings: Vec<&(Vec<u8>, bool)> =
-                if of_members.is_empty() { d.keys.values().flatten().collect() } else { of_members };
-            let first = bindings.first().map(|(k, _)| k.clone()).unwrap_or_default();
-            d.public_key = if bindings.iter().all(|(k, _)| *k == first) { first } else { Vec::new() };
-            d.phone = bindings.iter().any(|(_, p)| *p);
+        // Who holds each device (see `DeviceState::holders`).
+        for (id, d) in devices.iter_mut() {
+            d.holders = match self.vouched.get(id) {
+                Some(v) => d.accounts.intersection(v).copied().collect(),
+                None => d.accounts.clone(),
+            };
         }
         for d in &fold.guards.revoked_devices {
             devices.entry(*d).or_default().revoked = true;

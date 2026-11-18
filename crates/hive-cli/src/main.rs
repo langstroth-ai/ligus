@@ -301,7 +301,7 @@ fn open_service(cfg: &Config) -> Result<ChatService> {
     let device_kp = identity.device_keypair(stored.device.id)?;
     let account_kp = identity.account_keypair(stored.account.id)?;
     let store = EventStore::open(cfg.data_dir.join("hive.db"))?;
-    let mut svc = ChatService::new(store, stored.device.id, device_kp, account_kp, stored.actor());
+    let mut svc = ChatService::new(store, device_kp, account_kp, stored.actor());
     // Agents bound to this host sign their own output with keys this device
     // certifies (A3); the keys live with this host's other keys.
     svc.set_agent_vault(Box::new(StoreKeyVault::for_data_dir(&cfg.data_dir)));

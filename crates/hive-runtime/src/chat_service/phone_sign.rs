@@ -39,7 +39,11 @@ impl ChatService {
             return Err(ChatError::Unauthorized("only a person's own device enrolls their phone".into()));
         }
         let account = self.author.account_id.ok_or_else(|| ChatError::Unauthorized("this device has no account".into()))?;
-        let certificate = DeviceCertificate::issue_p256(&self.account_keypair, account, device_id, public_key, Timestamp::now());
+        // A phone's device id is the one its Secure Enclave key derives.
+        if device_id != hive_core::crypto::device_id_for(SigAlg::P256, public_key) {
+            return Err(ChatError::Unauthorized("the phone's device id isn't the one its key derives".into()));
+        }
+        let certificate = DeviceCertificate::issue_p256(&self.account_keypair, account, public_key, Timestamp::now());
         let config_id = self.ensure_workspace_config(workspace_id)?;
         self.append_signed(config_id, workspace_id, SessionEvent::DeviceCertificateAdded { certificate: certificate.clone() })?;
         Ok(certificate)
@@ -79,11 +83,12 @@ impl ChatService {
             .get(&phone)
             .filter(|d| d.phone && !d.revoked)
             .ok_or_else(|| ChatError::Unauthorized("that isn't an enrolled phone of this workspace".into()))?;
-        // The member whose own certificate makes this device id a phone (a
-        // device id someone else also certified for themselves names no one).
-        let mut people = config.members.iter().filter(|m| {
-            m.actor.kind == hive_core::ActorKind::Human && m.actor.account_id.is_some_and(|a| device.phone_for(Some(a)))
-        });
+        // The one member who holds this phone (someone else who certified
+        // its key for themselves leaves it naming no one: fail closed).
+        let mut people = config
+            .members
+            .iter()
+            .filter(|m| m.actor.kind == hive_core::ActorKind::Human && m.actor.account_id.is_some_and(|a| device.holders.contains(&a)));
         let member = match (people.next(), people.next()) {
             (Some(m), None) => m,
             _ => return Err(ChatError::Unauthorized("that phone's person isn't a member here".into())),
@@ -251,9 +256,8 @@ impl ChatService {
             .current()
             .devices
             .get(&phone)
-            .filter(|d| !d.revoked && d.phone_for(env.actor_stamp.as_ref().and_then(|s| s.actor.account_id)))
+            .filter(|d| d.phone && !d.revoked)
             .ok_or_else(|| ChatError::Unauthorized("that isn't an enrolled phone of this workspace".into()))?;
-        // Under the person's own binding of the phone's id.
         device.verifying_key(&env).ok_or_else(|| ChatError::Unauthorized("the phone's signature doesn't verify".into()))?;
         self.authorize_as_fold(&env, config.as_ref(), &timeline)?;
         self.store.ingest(&env)?;

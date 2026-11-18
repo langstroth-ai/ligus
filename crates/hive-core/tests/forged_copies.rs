@@ -620,7 +620,7 @@ fn a_second_registration_of_an_account_attests_nothing() {
     w.push_bare("eve", SessionEvent::AccountKeyRegistered { account_id: con_account, signing_public_key: fake.public_key_bytes().to_vec() });
     let device = SigningKeypair::generate().unwrap();
     let con_device = w.people["con"].device_id;
-    let cert = hive_core::crypto::DeviceCertificate::issue(&fake, con_account, con_device, &device.public_key_bytes(), hive_core::Timestamp::epoch());
+    let cert = hive_core::crypto::DeviceCertificate::issue_for_id(&fake, con_account, con_device, &device.public_key_bytes(), hive_core::Timestamp::epoch());
     w.push_bare("eve", SessionEvent::DeviceCertificateAdded { certificate: cert });
     let id = w.say(chat, "con", msg("con", "honest"));
     let mut forged = find(&w, Some(chat), id);

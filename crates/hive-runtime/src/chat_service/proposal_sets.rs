@@ -310,7 +310,6 @@ mod tests {
         let author = ActorIdentity::new("u1", "Mara", hive_core::ActorKind::Human);
         ChatService::new(
             store,
-            Uuid::new_v4(),
             SigningKeypair::generate().unwrap(),
             SigningKeypair::generate().unwrap(),
             author,

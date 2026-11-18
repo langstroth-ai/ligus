@@ -1496,9 +1496,9 @@ fn config_cut_denials(
         return out;
     }
     let all: Vec<&SessionEventEnvelope> = envelopes.iter().collect();
-    let chains = crate::watermark::Chains::on(&all, t.current());
+    let chains = crate::watermark::Chains::of(&all);
     for cut in t.cuts() {
-        out.extend(cut_exclusion(envelopes, &chains, cut, copies, t.current()));
+        out.extend(cut_exclusion(envelopes, &chains, cut, copies));
     }
     out
 }
@@ -1510,7 +1510,6 @@ fn cut_exclusion(
     chains: &crate::watermark::Chains,
     cut: &crate::authz::Cut,
     copies: &crate::copies::Copies,
-    roster: &crate::authz::RosterState,
 ) -> std::collections::BTreeSet<crate::copies::CopyRef> {
     let mut out = std::collections::BTreeSet::new();
     let Some(log) = envelopes.first().map(|e| e.session_id) else { return out };
@@ -1546,9 +1545,8 @@ fn cut_exclusion(
             }
         };
         let is_cut = (e.canonical_key(), copy.1) == (cut.key, cut.copy);
-        // Covered: on its signer's chain (`crate::watermark::on_chain`) at
-        // an id the watermark reaches.
-        let is_covered = covered.contains(&(e.signer_device_id, e.event_id)) && crate::watermark::on_chain(roster, e);
+        // Covered: on its signer's chain at an id the watermark reaches.
+        let is_covered = covered.contains(&(e.signer_device_id, e.event_id));
         if before && !still_ok && !is_cut && cut.applies(e) && !is_covered {
             out.insert(copy);
         }
@@ -1603,7 +1601,7 @@ fn config_denials_with_rejudged_cuts(
     copies: &crate::copies::Copies,
 ) -> std::collections::BTreeSet<crate::copies::CopyRef> {
     let all: Vec<&SessionEventEnvelope> = envelopes.iter().collect();
-    let chains = crate::watermark::Chains::on(&all, first.current());
+    let chains = crate::watermark::Chains::of(&all);
     let mut deny = config_cut_denials(envelopes, first, copies);
     // A cut is known by its position and its copy (two signers' copies can
     // share a position, see `crate::copies`).
@@ -1616,7 +1614,7 @@ fn config_denials_with_rejudged_cuts(
         .filter_map(|e| candidate_cut(e, first.current(), copies.kept(e).1))
         .filter(|c| !accepted.contains(&at(c)))
         .map(|c| {
-            let x = cut_exclusion(envelopes, &chains, &c, copies, first.current());
+            let x = cut_exclusion(envelopes, &chains, &c, copies);
             (c, x)
         })
         .filter(|(_, x)| !x.is_empty())
@@ -1713,6 +1711,11 @@ fn fold_pass(
         }
     }
     let mut tracker = authz::RosterTracker::seeded(&session);
+    // Whom each device vouched for anywhere on this log: who holds a device
+    // never depends on a position (see `authz::DeviceState::holders`).
+    if ordered.iter().any(|e| matches!(e.payload, SessionEvent::DeviceCertificateAdded { .. })) {
+        tracker.set_vouched(authz::RosterTracker::vouched(&ordered));
+    }
     // Each voter's last folded vote per proposal: its lamport and whether it
     // approved (see the concurrent-vote rule below).
     let mut last_vote: std::collections::HashMap<(Uuid, String), (u64, bool)> = std::collections::HashMap::new();
@@ -1732,7 +1735,7 @@ fn fold_pass(
     // watermark's chains on this log).
     let cut_cover: Vec<std::collections::BTreeSet<(Option<Uuid>, Uuid)>> = match workspace {
         WorkspaceAuthz::Timeline(t) if !t.cuts().is_empty() => {
-            let chains = crate::watermark::Chains::on(&ordered, t.current());
+            let chains = crate::watermark::Chains::of(&ordered);
             let log = ordered[base].session_id;
             t.cuts().iter().map(|c| c.covered(log, &chains)).collect()
         }
@@ -1794,9 +1797,7 @@ fn fold_pass(
                         // whatever frontier it claims; a revoked device's
                         // never folds (Phase A, item 2).
                         for (cut, covered) in t.cuts().iter().zip(&cut_cover) {
-                            if !cut.applies(env)
-                                || (covered.contains(&(env.signer_device_id, env.event_id)) && crate::watermark::on_chain(t.current(), env))
-                            {
+                            if !cut.applies(env) || covered.contains(&(env.signer_device_id, env.event_id)) {
                                 continue;
                             }
                             if matches!(cut.kind, authz::CutKind::Revoked(_)) {

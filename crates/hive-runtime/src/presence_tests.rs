@@ -38,7 +38,7 @@ fn founder() -> (ChatService, Uuid) {
     let account = Uuid::new_v4();
     let mut author = ActorIdentity::new(account.to_string(), "Ana", ActorKind::Human);
     author.account_id = Some(account);
-    let mut svc = ChatService::new(store, Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
+    let mut svc = ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
     svc.disable_test_presence();
     let wid = Uuid::new_v4();
     svc.ensure_workspace_config(wid).unwrap();
@@ -383,7 +383,6 @@ fn phone_presence_vote_counts_as_credential_owner_not_serve() {
     author.account_id = Some(account);
     let mut desk = ChatService::new(
         EventStore::open(&db).unwrap(),
-        Uuid::new_v4(),
         SigningKeypair::generate().unwrap(),
         SigningKeypair::from_seed(&account_seed).unwrap(),
         author.clone(),
@@ -401,11 +400,10 @@ fn phone_presence_vote_counts_as_credential_owner_not_serve() {
 
     // The serve box: its own device key, enrolled by the desktop as Ana's.
     let box_key = SigningKeypair::generate().unwrap();
-    let box_dev = Uuid::new_v4();
-    desk.certify_device(&crate::device_enroll::DeviceEnrollment::new(wid, box_dev, &box_key, "box")).unwrap();
+    let box_dev = hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &box_key.public_key_bytes());
+    desk.certify_device(&crate::device_enroll::DeviceEnrollment::new(wid, &box_key, "box")).unwrap();
     let mut serve = ChatService::new(
         EventStore::open(&db).unwrap(),
-        box_dev,
         box_key,
         SigningKeypair::generate().unwrap(),
         author,
@@ -513,7 +511,7 @@ fn an_admin_cannot_remove_an_owners_passkey() {
     let ana_account = Uuid::new_v4();
     let mut ana_author = ActorIdentity::new(ana_account.to_string(), "Ana", ActorKind::Human);
     ana_author.account_id = Some(ana_account);
-    let mut ana = ChatService::new(EventStore::open(&db).unwrap(), Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), ana_author);
+    let mut ana = ChatService::new(EventStore::open(&db).unwrap(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), ana_author);
     ana.disable_test_presence();
     let wid = Uuid::new_v4();
     ana.ensure_workspace_config(wid).unwrap();
@@ -528,9 +526,8 @@ fn an_admin_cannot_remove_an_owners_passkey() {
     m.actor = bea_author.clone();
     ana.add_member(cfg, wid, m).unwrap();
     let bea_dev = SigningKeypair::generate().unwrap();
-    let bea_dev_id = Uuid::new_v4();
     let bea_acct_key = SigningKeypair::generate().unwrap();
-    let mut bea = ChatService::new(EventStore::open(&db).unwrap(), bea_dev_id, bea_dev, bea_acct_key, bea_author);
+    let mut bea = ChatService::new(EventStore::open(&db).unwrap(), bea_dev, bea_acct_key, bea_author);
     bea.disable_test_presence();
     bea.ensure_workspace_config(wid).unwrap();
     let id = key.credential(ana_account, "").credential_id;
@@ -579,7 +576,7 @@ fn on_rules_v2_with_account_key() -> (ChatService, Uuid, Arc<SoftAuthenticator>,
     let seed = SigningKeypair::generate().unwrap().seed_bytes();
     let mut author = ActorIdentity::new(account.to_string(), "Ana", ActorKind::Human);
     author.account_id = Some(account);
-    let mut svc = ChatService::new(store, Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::from_seed(&seed).unwrap(), author);
+    let mut svc = ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::from_seed(&seed).unwrap(), author);
     svc.disable_test_presence();
     let wid = Uuid::new_v4();
     svc.ensure_workspace_config(wid).unwrap();
@@ -620,13 +617,13 @@ fn device_key_thief_cannot_add_a_device_under_v2() {
     let account = account(&svc);
     let cfg = workspace_config_session_id(wid);
     let thief_key = SigningKeypair::generate().unwrap();
-    let thief_dev = Uuid::new_v4();
-    let req = crate::device_enroll::DeviceEnrollment::new(wid, thief_dev, &thief_key, "thief");
+    let thief_dev = hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &thief_key.public_key_bytes());
+    let req = crate::device_enroll::DeviceEnrollment::new(wid, &thief_key, "thief");
     let err = svc.certify_device(&req).unwrap_err().to_string();
     assert!(err.contains(hive_core::authz::PRESENCE_REQUIRED), "{err}");
 
     // By hand: a certificate under the account key, without presence.
-    let cert = hive_core::crypto::DeviceCertificate::issue(&account_kp, account, thief_dev, &thief_key.public_key_bytes(), Timestamp::now());
+    let cert = hive_core::crypto::DeviceCertificate::issue(&account_kp, account, &thief_key.public_key_bytes(), Timestamp::now());
     let on_cfg = forged(&svc, wid, cfg, SessionEvent::DeviceCertificateAdded { certificate: cert.clone() });
     let chat = svc.create_chat("c", wid, "anthropic").unwrap().id;
     let on_chat = forged(&svc, wid, chat, SessionEvent::DeviceCertificateAdded { certificate: cert });
@@ -701,7 +698,7 @@ fn second_person(dir: &std::path::Path, add: bool) -> (ChatService, ChatService,
     let ana_account = Uuid::new_v4();
     let mut ana_author = ActorIdentity::new(ana_account.to_string(), "Ana", ActorKind::Human);
     ana_author.account_id = Some(ana_account);
-    let mut ana = ChatService::new(EventStore::open(&db).unwrap(), Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), ana_author);
+    let mut ana = ChatService::new(EventStore::open(&db).unwrap(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), ana_author);
     ana.disable_test_presence();
     let wid = Uuid::new_v4();
     ana.ensure_workspace_config(wid).unwrap();
@@ -722,7 +719,7 @@ fn second_person(dir: &std::path::Path, add: bool) -> (ChatService, ChatService,
         ana.add_member(cfg, wid, m).unwrap();
     }
     ana.set_presence_provider(None);
-    let mut bea = ChatService::new(EventStore::open(&db).unwrap(), Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), bea_author);
+    let mut bea = ChatService::new(EventStore::open(&db).unwrap(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), bea_author);
     bea.disable_test_presence();
     if add {
         bea.publish_identity(cfg, wid).unwrap();
@@ -867,7 +864,7 @@ fn a_new_device_is_confirmed_explicitly_never_from_a_background_publication() {
     let account_seed = SigningKeypair::generate().unwrap().seed_bytes();
     let mut author = ActorIdentity::new(account.to_string(), "Ana", ActorKind::Human);
     author.account_id = Some(account);
-    let mut desk = ChatService::new(EventStore::open(&db).unwrap(), Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::from_seed(&account_seed).unwrap(), author.clone());
+    let mut desk = ChatService::new(EventStore::open(&db).unwrap(), SigningKeypair::generate().unwrap(), SigningKeypair::from_seed(&account_seed).unwrap(), author.clone());
     desk.disable_test_presence();
     let wid = Uuid::new_v4();
     desk.ensure_workspace_config(wid).unwrap();
@@ -880,7 +877,7 @@ fn a_new_device_is_confirmed_explicitly_never_from_a_background_publication() {
     desk.set_workspace_rules(wid, 2).unwrap();
 
     // Ana's second laptop: same account key, its own device key.
-    let mut laptop = ChatService::new(EventStore::open(&db).unwrap(), Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::from_seed(&account_seed).unwrap(), author);
+    let mut laptop = ChatService::new(EventStore::open(&db).unwrap(), SigningKeypair::generate().unwrap(), SigningKeypair::from_seed(&account_seed).unwrap(), author);
     laptop.disable_test_presence();
     laptop.set_presence_provider(Some(Arc::new(NeverAsk)));
     let cfg = workspace_config_session_id(wid);

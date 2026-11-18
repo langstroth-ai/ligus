@@ -5,10 +5,11 @@
 //! that travelled, or was re-sealed: same signer, signature and preimage).
 //! The others are told apart by **who can be shown to have signed them**:
 //!
-//! * a copy is **attested** when its signature verifies under a key that a
-//!   certificate on the log binds to its `signer_device_id` (for the account
-//!   its stamp names, when it names one), or under an agent key a certified
-//!   host bound to that key id for the agent the stamp names;
+//! * a copy is **attested** when its signature verifies under the key that
+//!   a certificate on the log binds to its `signer_device_id` (a device id is
+//!   derived from its key, [`crate::crypto::device_id_for`], so there is one
+//!   such key), or under an agent key a certified host bound to that key id
+//!   for the agent the stamp names;
 //! * the **signer** of an attested copy is its device id together with that
 //!   key.
 //!
@@ -67,15 +68,16 @@ pub type CopyRef = (Uuid, u32);
 /// key certificate by its host device's key), so every copy of them counts,
 /// whatever the fold later decides about the events that carried them: a
 /// key here only lets a copy signed with it be told apart from the others.
+///
+/// A device id is derived from its key ([`crate::crypto::device_id_for`]),
+/// and a certificate under any other id never verifies, so each device id
+/// here has exactly one key, whichever accounts certified it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct SignerDirectory {
-    /// Device id → each key a certificate binds to it, with the account
-    /// that certified it.
-    devices: BTreeMap<Uuid, Vec<(Vec<u8>, Uuid)>>,
+    /// Device id → its key, with every account that certified it.
+    devices: BTreeMap<Uuid, (Vec<u8>, BTreeSet<Uuid>)>,
     /// Agent key id → each key a host certified under it, with its agent.
     agents: BTreeMap<Uuid, Vec<(Vec<u8>, Uuid)>>,
-    /// Every account that certified a device here.
-    accounts: BTreeSet<Uuid>,
 }
 
 impl SignerDirectory {
@@ -83,11 +85,10 @@ impl SignerDirectory {
     ///
     /// Anyone able to deliver events controls how many keys, rotations and
     /// certificates there are, so building this stays near-linear in them:
-    /// each account holds at most [`MAX_ACCOUNT_KEYS`] keys here and each
-    /// (device id, account) binding at most [`MAX_BINDING_KEYS`], taken in
+    /// each account holds at most [`MAX_ACCOUNT_KEYS`] keys here, taken in
     /// the log's canonical order, and every (key, rotation) pair is checked
     /// at most once. A cap only stops further keys from telling copies apart
-    /// (no honest account rotates or rebinds one device id that often).
+    /// (no honest account rotates that often).
     pub fn of(envelopes: &[SessionEventEnvelope]) -> Self {
         let mut ordered: Vec<&SessionEventEnvelope> = envelopes.iter().collect();
         ordered.sort_by_key(|e| e.canonical_key());
@@ -132,27 +133,23 @@ impl SignerDirectory {
             }
         }
         let mut out = Self::default();
-        let mut per_binding: BTreeMap<(Uuid, Uuid), usize> = BTreeMap::new();
         for e in &ordered {
             if let SessionEvent::DeviceCertificateAdded { certificate: c } = &e.payload {
-                let bound = per_binding.entry((c.device_id, c.account_id)).or_default();
-                if *bound >= MAX_BINDING_KEYS {
+                // An account already known to certify this device adds
+                // nothing (its certificate is checked once).
+                if out.devices.get(&c.device_id).is_some_and(|(_, a)| a.contains(&c.account_id)) {
                     continue;
                 }
+                // `verify` refuses an id its key doesn't derive.
                 if keys.get(&c.account_id).is_some_and(|ks| ks.iter().any(|k| c.verify(k).is_ok())) {
-                    let mine = out.devices.entry(c.device_id).or_default();
-                    let binding = (c.device_public_key.clone(), c.account_id);
-                    if !mine.contains(&binding) {
-                        mine.push(binding);
-                        *bound += 1;
-                    }
-                    out.accounts.insert(c.account_id);
+                    let entry = out.devices.entry(c.device_id).or_insert_with(|| (c.device_public_key.clone(), BTreeSet::new()));
+                    entry.1.insert(c.account_id);
                 }
             }
         }
         for e in &ordered {
             if let SessionEvent::AgentKeyCertified { cert } = &e.payload {
-                let host_ok = out.devices.get(&cert.host_device_id).is_some_and(|ks| ks.iter().any(|(k, _)| cert.verify(k).is_ok()));
+                let host_ok = out.devices.get(&cert.host_device_id).is_some_and(|(k, _)| cert.verify(k).is_ok());
                 if host_ok {
                     push_unique(out.agents.entry(cert.key_id).or_default(), (cert.signing_public_key.clone(), cert.agent_id));
                 }
@@ -163,11 +160,9 @@ impl SignerDirectory {
 
     /// Add every signer `other` knows.
     pub fn extend(&mut self, other: &SignerDirectory) {
-        for (d, ks) in &other.devices {
-            let mine = self.devices.entry(*d).or_default();
-            for k in ks {
-                push_unique(mine, k.clone());
-            }
+        for (d, (k, accounts)) in &other.devices {
+            let mine = self.devices.entry(*d).or_insert_with(|| (k.clone(), BTreeSet::new()));
+            mine.1.extend(accounts.iter().copied());
         }
         for (d, ks) in &other.agents {
             let mine = self.agents.entry(*d).or_default();
@@ -175,10 +170,16 @@ impl SignerDirectory {
                 push_unique(mine, k.clone());
             }
         }
-        self.accounts.extend(other.accounts.iter().copied());
     }
 
-    /// The key that attests `e` (see the module docs), if any.
+    /// Each device id with its key and every account that certified it.
+    pub fn devices(&self) -> impl Iterator<Item = (Uuid, (&[u8], &BTreeSet<Uuid>))> {
+        self.devices.iter().map(|(d, (k, a))| (*d, (k.as_slice(), a)))
+    }
+
+    /// The key that attests `e` (see the module docs), if any: the one key of
+    /// its device id, or an agent key certified for the agent its stamp
+    /// names. Only that device (or agent) can sign under it.
     pub fn attesting_key(&self, e: &SessionEventEnvelope) -> Option<&[u8]> {
         let signer = e.signer_device_id?;
         e.signature.as_ref()?;
@@ -190,29 +191,8 @@ impl SignerDirectory {
                 }
             }
         }
-        // The account the stamp speaks for (a member's actor id is their
-        // account id): only that account's certificate of the device attests.
-        let claimed = stamp.and_then(|s| {
-            s.actor.account_id.or_else(|| Uuid::parse_str(&s.actor.id).ok().filter(|a| self.accounts.contains(a)))
-        });
-        let bindings = self.devices.get(&signer)?;
-        // With no account claimed, only a device id one account binds
-        // attests (another account's binding of it makes it ambiguous: fail
-        // closed, and the cost of a copy stays bounded by one binding).
-        let account = match claimed {
-            Some(c) => c,
-            None => {
-                let first = bindings.first()?.1;
-                if bindings.iter().any(|(_, a)| *a != first) {
-                    return None;
-                }
-                first
-            }
-        };
-        bindings
-            .iter()
-            .filter(|(_, a)| *a == account)
-            .find_map(|(k, _)| crate::crypto::verify_envelope(e, k).is_ok().then_some(k.as_slice()))
+        let (k, _) = self.devices.get(&signer)?;
+        crate::crypto::verify_envelope(e, k).is_ok().then_some(k.as_slice())
     }
 }
 
@@ -237,9 +217,6 @@ pub fn signer_events(envelopes: &[SessionEventEnvelope]) -> Vec<SessionEventEnve
 /// At most this many keys of one account tell copies apart (registrations
 /// and the rotations they reach, in canonical order).
 pub const MAX_ACCOUNT_KEYS: usize = 64;
-
-/// At most this many keys one account binds to one device id.
-pub const MAX_BINDING_KEYS: usize = 8;
 
 fn push_unique<T: PartialEq>(v: &mut Vec<T>, x: T) {
     if !v.contains(&x) {

@@ -142,7 +142,7 @@ mod tests {
         let account_id = Uuid::new_v4();
         let account = SigningKeypair::generate().unwrap();
         let device = SigningKeypair::generate().unwrap();
-        let cert = DeviceCertificate::issue(&account, account_id, Uuid::new_v4(), &device.public_key_bytes(), Timestamp::epoch());
+        let cert = DeviceCertificate::issue(&account, account_id, &device.public_key_bytes(), Timestamp::epoch());
         Founder { account_id, account, device, cert }
     }
 

@@ -149,13 +149,10 @@ const STREAM_HOLD: usize = 512;
 pub const ADMISSION_CLOSE_GRACE_MS: i64 = 10 * 60 * 1000;
 
 impl ChatService {
-    pub fn new(
-        store: EventStore,
-        device_id: Uuid,
-        keypair: SigningKeypair,
-        account_keypair: SigningKeypair,
-        author: ActorIdentity,
-    ) -> Self {
+    /// A service signing with `keypair`: its device id is the one that key
+    /// derives (`hive_core::crypto::device_id_for`).
+    pub fn new(store: EventStore, keypair: SigningKeypair, account_keypair: SigningKeypair, author: ActorIdentity) -> Self {
+        let device_id = hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &keypair.public_key_bytes());
         // This crate's unit tests: every author holds an account, since rules
         // v2 governance needs an account's presence.
         #[cfg(test)]
@@ -384,7 +381,7 @@ impl ChatService {
     /// An enrollment request for this device in `workspace_id` (the code the
     /// owner pastes into their desktop), signed by this device's key.
     pub fn enrollment_request(&self, workspace_id: Uuid, label: &str) -> crate::device_enroll::DeviceEnrollment {
-        crate::device_enroll::DeviceEnrollment::new(workspace_id, self.device_id, &self.keypair, label)
+        crate::device_enroll::DeviceEnrollment::new(workspace_id, &self.keypair, label)
     }
 
     /// Where this device stands in `workspace_id`: its own identity, enrolled as
@@ -434,13 +431,8 @@ impl ChatService {
                 "this desktop's account key isn't the one the workspace trusts for you".into(),
             ));
         }
-        let certificate = DeviceCertificate::issue(
-            &self.account_keypair,
-            account_id,
-            request.device_id,
-            &request.device_public_key,
-            Timestamp::now(),
-        );
+        // `verify` above checked the id is the one the key derives.
+        let certificate = DeviceCertificate::issue(&self.account_keypair, account_id, &request.device_public_key, Timestamp::now());
         self.append_signed(
             config_id,
             ws,
@@ -901,13 +893,7 @@ impl ChatService {
                 signing_public_key: self.account_keypair.public_key_bytes().to_vec(),
             },
         )?;
-        let certificate = DeviceCertificate::issue(
-            &self.account_keypair,
-            account_id,
-            self.device_id,
-            &self.keypair.public_key_bytes(),
-            Timestamp::now(),
-        );
+        let certificate = DeviceCertificate::issue(&self.account_keypair, account_id, &self.keypair.public_key_bytes(), Timestamp::now());
         self.append_signed(
             session_id,
             workspace_id,
@@ -949,13 +935,7 @@ impl ChatService {
         )?;
         // Adopt the new account key, then re-certify this device under it.
         self.account_keypair = new_keypair;
-        let certificate = DeviceCertificate::issue(
-            &self.account_keypair,
-            account_id,
-            self.device_id,
-            &self.keypair.public_key_bytes(),
-            Timestamp::now(),
-        );
+        let certificate = DeviceCertificate::issue(&self.account_keypair, account_id, &self.keypair.public_key_bytes(), Timestamp::now());
         self.append_signed(
             session_id,
             workspace_id,
@@ -2397,7 +2377,7 @@ impl ChatService {
         }
         let mut out = Vec::new();
         for (sid, envs) in &logs {
-            out.extend(hive_core::watermark::heads_on(envs, *sid, &signers, roster));
+            out.extend(hive_core::watermark::heads_of(envs, *sid, &signers));
         }
         out.truncate(hive_core::watermark::MAX_WATERMARK_ENTRIES);
         Ok(out)
@@ -3440,11 +3420,10 @@ mod tests {
         let store = EventStore::open_in_memory().unwrap();
         let kp = SigningKeypair::generate().unwrap();
         let public = kp.public_key_bytes().to_vec();
-        let device_id = Uuid::new_v4();
         let account_kp = SigningKeypair::generate().unwrap();
         // No account id → publish_identity is a no-op (local-only, unverifiable).
         let author = ActorIdentity::new("u1", "Mara", hive_core::ActorKind::Human);
-        (ChatService::new(store, device_id, kp, account_kp, author), public)
+        (ChatService::new(store, kp, account_kp, author), public)
     }
 
     /// A hand-off reply that starts two receivers on two devices: device A
@@ -3800,7 +3779,7 @@ mod tests {
 
         let store = EventStore::open_in_memory().unwrap();
         let device_kp = SigningKeypair::generate().unwrap();
-        let device_id = Uuid::new_v4();
+        let device_id = hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &device_kp.public_key_bytes());
         let account_kp = SigningKeypair::generate().unwrap();
         let account_id = Uuid::new_v4();
         let author = ActorIdentity {
@@ -3814,7 +3793,7 @@ mod tests {
             avatar_url: None,
             contact: None,
         };
-        let mut svc = ChatService::new(store, device_id, device_kp, account_kp, author);
+        let mut svc = ChatService::new(store, device_kp, account_kp, author);
 
         let chat = svc.create_chat("Demo", Uuid::new_v4(), "anthropic").unwrap();
         svc.post_user_message(chat.id, chat.workspace_id, "hello").unwrap();
@@ -3888,7 +3867,7 @@ mod tests {
         let kp = SigningKeypair::generate().unwrap();
         let account_kp = SigningKeypair::generate().unwrap();
         let author = ActorIdentity::new(id, name, hive_core::ActorKind::Human);
-        ChatService::new(store, Uuid::new_v4(), kp, account_kp, author)
+        ChatService::new(store, kp, account_kp, author)
     }
 
     /// A3: with an agent vault, an agent bound to this device signs its own
@@ -5034,7 +5013,7 @@ mod tests {
         let account_kp = SigningKeypair::generate().unwrap();
         let mut author = ActorIdentity::new("u1", "Mara", hive_core::ActorKind::Human);
         author.account_id = Some(Uuid::new_v4());
-        let mut svc = ChatService::new(store, Uuid::new_v4(), kp, account_kp, author);
+        let mut svc = ChatService::new(store, kp, account_kp, author);
         let chat = svc.create_chat("Demo", Uuid::nil(), "anthropic").unwrap();
         let mid = svc
             .begin_assistant_message(chat.id, chat.workspace_id, "Hive", "anthropic", None, None)
@@ -5411,7 +5390,7 @@ mod flow_tests {
         let kp = SigningKeypair::generate().unwrap();
         let account_kp = SigningKeypair::generate().unwrap();
         let author = ActorIdentity::new("u1", "Mara", hive_core::ActorKind::Human);
-        ChatService::new(store, Uuid::new_v4(), kp, account_kp, author)
+        ChatService::new(store, kp, account_kp, author)
     }
 
     #[test]

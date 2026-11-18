@@ -848,7 +848,7 @@ mod tests {
     fn service() -> ChatService {
         let store = EventStore::open_in_memory().unwrap();
         let author = ActorIdentity::new("u1", "Mara", ActorKind::Human);
-        let mut svc = ChatService::new(store, Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
+        let mut svc = ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
         svc.enable_test_presence();
         svc
     }

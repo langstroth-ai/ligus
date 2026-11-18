@@ -68,20 +68,10 @@ pub struct Chains {
 }
 
 impl Chains {
-    /// Every event's link (see [`Chains::on`] for a fold's chains).
+    /// Every event's link.
     pub fn of(envelopes: &[&SessionEventEnvelope]) -> Self {
-        Self::of_where(envelopes, |_| true)
-    }
-
-    /// The chains `roster` knows: only events [`on_chain`] there.
-    pub fn on(envelopes: &[&SessionEventEnvelope], roster: &crate::authz::RosterState) -> Self {
-        Self::of_where(envelopes, |e| on_chain(roster, e))
-    }
-
-    fn of_where(envelopes: &[&SessionEventEnvelope], keep: impl Fn(&SessionEventEnvelope) -> bool) -> Self {
-        let envelopes: Vec<&SessionEventEnvelope> = envelopes.iter().copied().filter(|e| keep(e)).collect();
         let mut count: BTreeMap<Uuid, usize> = BTreeMap::new();
-        for e in &envelopes {
+        for e in envelopes {
             *count.entry(e.event_id).or_default() += 1;
         }
         let mut links: BTreeMap<Uuid, Vec<Link>> = BTreeMap::new();
@@ -105,13 +95,12 @@ impl Chains {
     /// links (heads included), staying on that signer's events and never
     /// entering one of `gaps` (an id the watermark's author didn't hold).
     ///
-    /// An id under which the log holds more than one copy signed under
-    /// `signer` (two keys bound to one device id: a second key of the
-    /// member's own, or another account's binding of it) is never covered
-    /// and coverage stops there: which copy the watermark's author held
-    /// can't be told, and following either's `prev` would let a copy signed
-    /// after the cut extend a chain it was never part of (fail closed, as at
-    /// a gap).
+    /// An id under which the log holds more than one copy claiming
+    /// `signer` (its equivocation, or a copy no key of it signed) is never
+    /// covered and coverage stops there: which copy the watermark's author
+    /// held can't be told, and following either's `prev` would let a copy
+    /// signed after the cut extend a chain it was never part of (fail closed,
+    /// as at a gap).
     pub fn ancestors(&self, signer: Uuid, heads: &[Uuid], gaps: &[Uuid]) -> BTreeSet<Uuid> {
         let mut out = BTreeSet::new();
         let mut stack: Vec<Uuid> = heads.iter().filter(|h| !gaps.contains(h)).copied().collect();
@@ -138,35 +127,9 @@ impl Chains {
 /// that aren't on the log here. An entry with more than [`MAX_HEADS`] gaps
 /// is left out (it covers nothing: fail closed).
 pub fn heads_of(envelopes: &[SessionEventEnvelope], log: Uuid, signers: &BTreeSet<Uuid>) -> Vec<Watermark> {
-    heads_where(envelopes, log, signers, |_| true)
-}
-
-/// [`heads_of`] over the chains `roster` knows ([`on_chain`]): what a cut's
-/// author records, so that someone else's events under a device id they
-/// certified for themselves neither crowd out nor gap the device's own.
-pub fn heads_on(envelopes: &[SessionEventEnvelope], log: Uuid, signers: &BTreeSet<Uuid>, roster: &crate::authz::RosterState) -> Vec<Watermark> {
-    heads_where(envelopes, log, signers, |e| on_chain(roster, e))
-}
-
-/// Whether `e` is on its signer's chain as `roster` knows the signer: a
-/// signer the roster doesn't list as a device (an agent key) chains every
-/// event it signs; a device chains only the events stamped for an account
-/// that holds it ([`crate::authz::RosterState::account_holds_device`]).
-/// Device ids are chosen by the device, so a member can certify another
-/// member's id for themselves and sign under it: those events are theirs,
-/// never links of the device's chain.
-pub fn on_chain(roster: &crate::authz::RosterState, e: &SessionEventEnvelope) -> bool {
-    let Some(signer) = e.signer_device_id else { return false };
-    if !roster.devices.contains_key(&signer) {
-        return true;
-    }
-    e.actor_stamp.as_ref().and_then(|s| s.actor.account_id).is_some_and(|a| roster.account_holds_device(a, signer))
-}
-
-fn heads_where(envelopes: &[SessionEventEnvelope], log: Uuid, signers: &BTreeSet<Uuid>, keep: impl Fn(&SessionEventEnvelope) -> bool) -> Vec<Watermark> {
     let held: BTreeSet<Uuid> = envelopes.iter().filter(|e| e.session_id == log).map(|e| e.event_id).collect();
     let mut by_signer: BTreeMap<Uuid, (BTreeSet<Uuid>, BTreeSet<Uuid>)> = BTreeMap::new();
-    for e in envelopes.iter().filter(|e| e.session_id == log && keep(e)) {
+    for e in envelopes.iter().filter(|e| e.session_id == log) {
         let Some(s) = e.signer_device_id.filter(|s| signers.contains(s)) else { continue };
         let entry = by_signer.entry(s).or_default();
         entry.0.insert(e.event_id);

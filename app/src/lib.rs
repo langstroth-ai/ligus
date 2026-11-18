@@ -649,7 +649,7 @@ mod workspace_invite_tests {
         let account = SigningKeypair::generate().unwrap();
         let device = SigningKeypair::generate().unwrap();
         let founder = Uuid::new_v4();
-        let cert = DeviceCertificate::issue(&account, founder, Uuid::new_v4(), &device.public_key_bytes(), hive_core::Timestamp::epoch());
+        let cert = DeviceCertificate::issue(&account, founder, &device.public_key_bytes(), hive_core::Timestamp::epoch());
         let fk = hive_runtime::envelope_verifier::FounderPin::fingerprint_hex(&account.public_key_bytes());
         for name in ["", "Team"] {
             let mut conn = WorkspaceConn {
@@ -11454,7 +11454,7 @@ fn build_state_in(app: &AppHandle, data_dir: PathBuf) -> Result<AppState, String
     // NB: chunk-row pruning (one-time DB shrink) is deferred to a background
     // thread after the window is live — see `run()`. Running it here scanned
     // the events table on every launch and blocked first paint.
-    let mut service = ChatService::new(store, stored.device.id, device_kp, account_kp, stored.account.actor());
+    let mut service = ChatService::new(store, device_kp, account_kp, stored.account.actor());
     // Agents bound to this device sign their own output with keys it
     // certifies (A3), kept with this device's other keys.
     service.set_agent_vault(Box::new(StoreKeyVault::for_data_dir(&data_dir)));
@@ -16312,7 +16312,7 @@ mod finalize_proposal_tests {
         let kp = SigningKeypair::generate().unwrap();
         let account_kp = SigningKeypair::generate().unwrap();
         let author = ActorIdentity::new("u1", "Mara", ActorKind::Human);
-        let mut svc = ChatService::new(store, Uuid::new_v4(), kp, account_kp, author);
+        let mut svc = ChatService::new(store, kp, account_kp, author);
         svc.enable_test_presence();
         svc
     }
@@ -17785,7 +17785,7 @@ mod responder_place_tests {
     fn device(author: hive_core::ActorIdentity) -> ChatService {
         use hive_core::crypto::SigningKeypair;
         let store = hive_runtime::EventStore::open_in_memory().unwrap();
-        let mut svc = ChatService::new(store, Uuid::new_v4(), SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
+        let mut svc = ChatService::new(store, SigningKeypair::generate().unwrap(), SigningKeypair::generate().unwrap(), author);
         svc.enable_test_presence();
         svc
     }

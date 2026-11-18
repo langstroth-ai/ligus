@@ -330,8 +330,7 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             return authorize_agent(env, ctx, roster);
         }
         // A phone's own key: the phone tier (Phase A, item 6).
-        let account = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id);
-        if let Some(device) = env.signer_device_id.filter(|d| roster.devices.get(d).is_some_and(|x| x.phone_for(account))) {
+        if let Some(device) = env.signer_device_id.filter(|d| roster.devices.get(d).is_some_and(|x| x.phone)) {
             if let Err(why) = phone::phone_tier_allows(&env.payload, device) {
                 return Decision::deny(why);
             }
@@ -381,6 +380,12 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
     // account (certified, not revoked, not delegated, not a phone), with that
     // account's passkey presence (the presence table).
     if let SessionEvent::DeviceCertificateAdded { certificate } = &env.payload {
+        // A device id is the one its key derives (`crypto::device_id_for`):
+        // a certificate of any other id is someone else's device id under a
+        // key of their own (squatting), refused wherever it sorts.
+        if !certificate.id_matches_key() {
+            return Decision::deny("a device certificate names the device id its key derives");
+        }
         // A phone certificate never takes over a device id this roster
         // already holds as a desktop or box, or as a phone with another key:
         // it would replace that device's key (and make it a phone) without
@@ -398,9 +403,7 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 return Decision::deny("a phone is enrolled on the workspace config log");
             }
             let enroller_ok = certified_signer(env, ctx.running).is_ok_and(|d| {
-                d.accounts.contains(&certificate.account_id)
-                    && !d.delegated_for(certificate.account_id)
-                    && !d.phone_for(Some(certificate.account_id))
+                d.accounts.contains(&certificate.account_id) && !d.delegated_for(certificate.account_id) && !d.phone
             });
             if !enroller_ok || env.signer_device_id == Some(certificate.device_id) {
                 return Decision::deny("a phone is enrolled by a trusted device of its own account");
@@ -560,9 +563,8 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 role = ws_role;
             }
         }
-        // R5: revoking a device your own account certified is self-service
-        // (the device itself, not someone else's id you certified for
-        // yourself: device-id squatting).
+        // R5: revoking a device your own account holds is self-service (not
+        // someone else's device whose key you certified for yourself).
         if let SessionEvent::DeviceRevoked { device_id, .. } = &env.payload {
             let account = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id);
             if account.is_some_and(|a| ctx.running.account_holds_device(a, *device_id)) {
@@ -912,8 +914,6 @@ pub(crate) fn certified_signer<'r>(env: &SessionEventEnvelope, roster: &'r Roste
             return Err("signed by a device that doesn't act for its author".into());
         }
     }
-    // Under the stamped account's own binding of the device id (another
-    // account's certificate of the same id binds only that account).
     d.verifying_key(env).ok_or("bad signature")?;
     Ok(d)
 }
@@ -967,24 +967,7 @@ fn agent_cert_ok(
     let Some(host) = host else {
         return Err("the host device isn't certified here".into());
     };
-    // The host's key: its one key, or, for a device id certified under
-    // keys that disagree (someone else certified it for themselves), only a
-    // binding of the agent's owner.
-    let keys: Vec<&[u8]> = if host.public_key.is_empty() {
-        let owner = roster
-            .agents
-            .get(&cert.agent_id)
-            .and_then(|a| roster.members.get(&a.owner).and_then(|m| m.account_id).or_else(|| Uuid::parse_str(&a.owner).ok()));
-        owner.map(|o| host.keys_for(Some(o))).unwrap_or_default()
-    } else {
-        vec![host.public_key.as_slice()]
-    };
-    if !keys.iter().any(|k| cert.verify(k).is_ok()) {
-        return Err(match keys.first() {
-            Some(k) => format!("agent certificate: {}", cert.verify(k).err().map(|e| e.to_string()).unwrap_or_default()),
-            None => "the host device id is certified under other keys, none the agent's owner's".into(),
-        });
-    }
+    cert.verify(&host.public_key).map_err(|e| format!("agent certificate: {e}"))?;
     if !roster.agent_bound_to(cert.agent_id, cert.host_device_id) {
         return Err("the agent isn't bound to this host".into());
     }
@@ -1153,7 +1136,20 @@ fn rank_rules(e: &SessionEvent, author: &str, role: WorkspaceRole, roster: &Rost
         }
         SessionEvent::MemberRemoved { member_id, .. } if member_id != author => vec![member_id.clone()],
         SessionEvent::DeviceRevoked { device_id, .. } => {
-            let accounts = roster.devices.get(device_id).map(|d| d.accounts.clone()).unwrap_or_default();
+            // Whose device it is: the members who hold it. A device someone
+            // certified here must be held by someone other than the author
+            // (the author's own is R5's, above): a device id is derived from
+            // its key, so anyone who knows a key can certify it for
+            // themselves, which makes it no more theirs to revoke. A device
+            // nobody certified here (a phone known only by its pairing) is
+            // an Admin's to revoke, as before.
+            let own = roster.members.get(author).and_then(|m| m.account_id);
+            let empty = std::collections::BTreeSet::new();
+            let accounts = match roster.devices.get(device_id).filter(|d| !d.accounts.is_empty()) {
+                None => &empty,
+                Some(d) if d.holders.iter().any(|a| Some(*a) != own) => &d.holders,
+                Some(_) => return Some("a revocation names a device someone else holds here".into()),
+            };
             roster
                 .members
                 .iter()

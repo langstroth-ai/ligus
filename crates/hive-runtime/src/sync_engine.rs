@@ -1637,14 +1637,8 @@ mod tests {
         let account = SigningKeypair::generate().unwrap();
         let account_id = Uuid::new_v4();
         let device = SigningKeypair::generate().unwrap();
-        let device_id = Uuid::new_v4();
-        let cert = DeviceCertificate::issue(
-            &account,
-            account_id,
-            device_id,
-            &device.public_key_bytes(),
-            Timestamp::epoch(),
-        );
+        let device_id = hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &device.public_key_bytes());
+        let cert = DeviceCertificate::issue(&account, account_id, &device.public_key_bytes(), Timestamp::epoch());
         let member = WorkspaceMember {
             id: account_id.to_string(),
             actor: ActorIdentity {
@@ -1971,14 +1965,8 @@ mod tests {
         let account = SigningKeypair::generate().unwrap();
         let account_id = Uuid::new_v4();
         let device = SigningKeypair::generate().unwrap();
-        let device_id = Uuid::new_v4();
-        let cert = DeviceCertificate::issue(
-            &account,
-            account_id,
-            device_id,
-            &device.public_key_bytes(),
-            Timestamp::epoch(),
-        );
+        let device_id = hive_core::crypto::device_id_for(hive_core::crypto::SigAlg::Ed25519, &device.public_key_bytes());
+        let cert = DeviceCertificate::issue(&account, account_id, &device.public_key_bytes(), Timestamp::epoch());
         let member = WorkspaceMember {
             id: account_id.to_string(),
             actor: ActorIdentity {

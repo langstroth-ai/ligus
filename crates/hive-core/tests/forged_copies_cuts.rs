@@ -1,10 +1,11 @@
 //! Forged copies against cut watermarks (review of fix/forged-equivocation).
-//! A watermark covers a signer's chain by `(device id, event id)`. Two
-//! signers can hold copies under one id and one device id (a member's
-//! second key for their own device id, or a squatter's binding of another
-//! member's device id), so a removed member's backdated copy under a
-//! covered id, or a chain its copy extends through `prev`, must never count
-//! as held by the remover.
+//! A watermark covers a signer's chain by `(device id, event id)`. A device
+//! id is derived from its key (`hive_core::crypto::device_id_for`), so a
+//! second key for a device id (a member's own, or a squatter's for another
+//! member's device id) is refused: a certificate binding one never verifies.
+//! These are the review's attacks, which once worked through such a binding:
+//! a removed member's backdated copy under a covered id, or a chain its copy
+//! extends through `prev`, must never count as held by the remover.
 
 use hive_core::crypto::{sign_envelope, DeviceCertificate, SigningKeypair};
 use hive_core::events::{project_authorized, project_config, WorkspaceAuthz};
@@ -31,11 +32,13 @@ fn world() -> (SignedWorld, Uuid) {
     (w, chat)
 }
 
-/// `mal` binds `device` to a fresh key of mal's own account.
+/// `mal` tries to bind `device` to a fresh key of mal's own account: the
+/// certificate is refused (the id isn't the one the key derives), and the
+/// key is returned for the attacks that follow.
 fn bind(w: &mut SignedWorld, device: Uuid) -> SigningKeypair {
     let key = SigningKeypair::generate().unwrap();
     let mal = &w.people["mal"];
-    let cert = DeviceCertificate::issue(
+    let cert = DeviceCertificate::issue_for_id(
         &mal.account,
         mal.account_id,
         device,
@@ -48,9 +51,11 @@ fn bind(w: &mut SignedWorld, device: Uuid) -> SigningKeypair {
     );
     assert_eq!(
         w.verdict(id),
-        Verdict::Allowed,
-        "control: mal certifies a device of mal's own account"
+        Verdict::Denied,
+        "a certificate under a device id its key doesn't derive was allowed"
     );
+    let roster = w.roster();
+    assert_ne!(roster.devices[&device].public_key, key.public_key_bytes().to_vec(), "the device id's key changed");
     key
 }
 
@@ -187,9 +192,9 @@ fn a_copy_under_a_covered_head_does_not_extend_coverage_through_prev() {
     );
 }
 
-/// A squatted device id: mal binds con's device id; the removal's watermark
-/// covers con's chain (the device's certificates include mal's account), so
-/// mal's copy under con's id must not count as covered.
+/// A squat attempt on con's device id (refused); the removal's watermark
+/// doesn't name con's chain, and mal's copy under con's id must not count as
+/// covered.
 #[test]
 fn a_squatters_copy_under_the_victims_covered_id_is_not_covered() {
     let (mut w, chat) = world();
@@ -204,8 +209,8 @@ fn a_squatters_copy_under_the_victims_covered_id_is_not_covered() {
         .clone();
     let wm = removal_watermark(&w, chat);
     assert!(
-        wm.iter().any(|x| x.signer == con_dev),
-        "control: the production watermark covers the squatted id"
+        !wm.iter().any(|x| x.signer == con_dev),
+        "the squat attempt made con's device one of mal's"
     );
     w.push(
         "owner",
@@ -235,10 +240,11 @@ fn a_squatters_copy_under_the_victims_covered_id_is_not_covered() {
 }
 
 /// A squatter's own events under the victim's device id must not decide the
-/// victim's coverage: mal binds con's device id and posts, signed under it,
-/// events naming ids that were never published (gaps). When an Owner later
-/// removes con with the production watermark, con's earlier posts stay
-/// covered.
+/// victim's coverage: mal tries to bind con's device id (refused) and posts,
+/// signed under it with mal's key, events naming ids that were never
+/// published (gaps). None of them is con's device's, and ingest keeps none
+/// (no key bound to the id verifies them). When an Owner later removes con
+/// with the production watermark, con's earlier posts stay covered.
 #[test]
 fn a_squatters_events_under_the_victims_device_id_do_not_uncover_the_victim() {
     let (mut w, chat) = world();
@@ -258,8 +264,17 @@ fn a_squatters_events_under_the_victims_device_id_do_not_uncover_the_victim() {
     let roster = w.roster();
     let a = w.people["con"].account_id;
     let signers: BTreeSet<Uuid> = roster.devices.iter().filter(|(_, d)| d.accounts.contains(&a)).map(|(id, _)| *id).collect();
-    let mut wm = hive_core::watermark::heads_on(&w.cfg, workspace_config_session_id(w.wid), &signers, &roster);
-    wm.extend(hive_core::watermark::heads_on(&w.chats[&chat], chat, &signers, &roster));
+    // What a device holds: ingest keeps an event only when its device's key
+    // (the one its id derives from) verifies it for an account that
+    // certified the device.
+    let held: Vec<SessionEventEnvelope> = w.chats[&chat]
+        .iter()
+        .filter(|e| e.signer_device_id.and_then(|d| roster.devices.get(&d)).is_none_or(|d| d.verifying_key(e).is_some()))
+        .cloned()
+        .collect();
+    assert_eq!(held.len() + hive_core::watermark::MAX_HEADS + 1, w.chats[&chat].len(), "a squatter's event under con's device id verifies");
+    let mut wm = heads_of(&w.cfg, workspace_config_session_id(w.wid), &signers);
+    wm.extend(heads_of(&held, chat, &signers));
     w.push("owner", SessionEvent::MemberRemoved { member_id: "con".into(), watermark: wm });
     assert_eq!(w.verdict(early), Verdict::Allowed, "con's post before the removal lost its coverage");
 }

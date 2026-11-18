@@ -351,7 +351,6 @@ impl ChatService {
         let certificate = hive_core::crypto::DeviceCertificate::issue(
             &self.account_keypair,
             account_id,
-            self.device_id,
             &self.keypair.public_key_bytes(),
             hive_core::Timestamp::now(),
         );

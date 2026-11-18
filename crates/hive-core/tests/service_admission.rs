@@ -676,7 +676,7 @@ fn a_replayed_proof_through_a_squatted_device_id_doesnt_unadmit_the_box() {
     let box_device = w.people["box"].device_id;
     let k = SigningKeypair::generate().unwrap();
     let eve = &w.people["eve"];
-    let cert = DeviceCertificate::issue(&eve.account, eve.account_id, box_device, &k.public_key_bytes(), hive_core::Timestamp::epoch());
+    let cert = DeviceCertificate::issue_for_id(&eve.account, eve.account_id, box_device, &k.public_key_bytes(), hive_core::Timestamp::epoch());
     w.push_bare("eve", SessionEvent::DeviceCertificateAdded { certificate: cert });
     let orig = w.cfg.iter().find(|e| e.event_id == ok).unwrap().clone();
     let mut copy = orig.clone();
