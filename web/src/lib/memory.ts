@@ -1,0 +1,168 @@
+// Workspace memory and live task state. Typed wrappers around the
+// `memory_*` and `task_state` Tauri commands (app/src/memory_ui.rs); the
+// shapes mirror the serde (camelCase) structs in hive_core::memory.
+import { invoke } from "@tauri-apps/api/core";
+
+export type ActorKind = "human" | "assistant" | "agent" | "system" | "service";
+
+export interface MemoryAuthor {
+  id: string;
+  name: string;
+  kind: ActorKind;
+}
+
+export interface MemorySource {
+  chatId?: string;
+  messageId?: string;
+  turnId?: string;
+}
+
+export interface MemoryRevision {
+  rev: string;
+  base?: string;
+  title: string;
+  body: string;
+  tags?: string[];
+  author: MemoryAuthor;
+  atMs: number;
+  source?: MemorySource;
+  viaProposal?: string;
+  proposer?: string;
+  removal?: boolean;
+}
+
+export interface MemoryEntry {
+  id: string;
+  current: MemoryRevision;
+  createdBy: MemoryAuthor;
+  createdAtMs: number;
+  revisions?: string[];
+  revisionCount: number;
+  conflicts?: MemoryRevision[];
+  removed?: MemoryRevision;
+}
+
+export type MemoryOp =
+  | { op: "create"; entryId: string; title: string; body: string; tags?: string[] }
+  | { op: "edit"; entryId: string; base: string; title: string; body: string; tags?: string[] }
+  | { op: "remove"; entryId: string; base: string };
+
+export interface MemoryProposalState {
+  proposal: { proposalId: string; op: MemoryOp; proposer?: string; source?: MemorySource; rationale?: string };
+  by: MemoryAuthor;
+  atMs: number;
+  decision?: { accepted: boolean; by: MemoryAuthor; atMs: number; note?: string; rev: string; conflicted?: boolean };
+}
+
+export interface MemoryView {
+  entries: MemoryEntry[];
+  total: number;
+  proposals: MemoryProposalState[];
+  chatTitles: Record<string, string>;
+  me: string;
+  moderator: boolean;
+}
+
+export type TaskStatus = "working" | "blocked" | "waiting" | "done" | "abandoned";
+
+export interface TaskSlotDto {
+  update: {
+    taskId: string;
+    agentKey: string;
+    turnId: string;
+    status: TaskStatus;
+    summary: string;
+    progress?: number;
+    openQuestions?: string[];
+    partialResults?: string[];
+    ttlMs?: number;
+  };
+  writer: string;
+  by: MemoryAuthor;
+  atMs: number;
+  rev: string;
+  updates: number;
+  agentName: string;
+  active: boolean;
+  stale: boolean;
+  expiresAtMs: number;
+}
+
+/// Bounds the fold enforces (hive_core::memory), checked here so a form
+/// can say what's wrong before signing.
+export const MAX_TITLE = 120;
+export const MAX_BODY = 4000;
+export const MAX_TAGS = 8;
+
+export const memoryView = (query: string, tags: string[]) => invoke<MemoryView>("memory_view", { query, tags });
+
+export const writeMemory = (v: {
+  entryId?: string;
+  base?: string;
+  title: string;
+  body: string;
+  tags: string[];
+  resolves?: string[];
+  sourceChatId?: string;
+}) =>
+  invoke<{ entryId: string; rev: string }>("memory_write", {
+    entryId: v.entryId ?? null,
+    base: v.base ?? null,
+    title: v.title,
+    body: v.body,
+    tags: v.tags,
+    resolves: v.resolves ?? [],
+    sourceChatId: v.sourceChatId ?? null,
+  });
+
+export const removeMemory = (entryId: string, base: string, resolves: string[] = []) =>
+  invoke<void>("memory_remove", { entryId, base, resolves });
+
+export const decideMemoryProposal = (proposalId: string, accepted: boolean, note = "") =>
+  invoke<void>("memory_decide", { proposalId, accepted, note });
+
+export const taskState = (sessionId: string) => invoke<TaskSlotDto[]>("task_state", { sessionId });
+
+/// Split a comma or space separated tag field into normalised tags.
+export function parseTags(s: string): string[] {
+  const out: string[] = [];
+  for (const raw of s.split(/[,\s]+/)) {
+    const t = raw
+      .toLowerCase()
+      .replace(/[^a-z0-9\-_.:]/g, "")
+      .slice(0, 32);
+    if (t && !out.includes(t)) out.push(t);
+  }
+  return out.slice(0, MAX_TAGS);
+}
+
+/// Why a draft can't be saved, or null.
+export function draftProblem(title: string, body: string): string | null {
+  if (!title.trim()) return "A title is required.";
+  if (/[\n\r]/.test(title)) return "The title is one line.";
+  if ([...title.trim()].length > MAX_TITLE) return `The title is at most ${MAX_TITLE} characters.`;
+  if (!body.trim()) return "The note is empty.";
+  if ([...body].length > MAX_BODY) return `A note is at most ${MAX_BODY} characters.`;
+  return null;
+}
+
+/// Who wrote a revision, in words ("Ana", "Ana, proposed by an agent").
+export function provenance(r: MemoryRevision, agentName?: (key: string) => string | undefined): string {
+  const who = r.author.name || r.author.id;
+  if (r.proposer) {
+    const agent = agentName?.(r.proposer) ?? (r.proposer === "primary" ? "Ligus" : "an agent");
+    return `${who}, proposed by ${agent}`;
+  }
+  return who;
+}
+
+/// Whether this person may change `e` directly: its creator or a moderator.
+export const canChange = (e: MemoryEntry, me: string, moderator: boolean) => moderator || e.createdBy.id === me;
+
+export const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
+  working: "Working",
+  blocked: "Blocked",
+  waiting: "Waiting",
+  done: "Done",
+  abandoned: "Stopped",
+};

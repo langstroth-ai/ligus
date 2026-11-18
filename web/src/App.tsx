@@ -84,6 +84,7 @@ type UtilityPane =
   | "skills"
   | "workflows"
   | "flow"
+  | "memory"
   | "activity"
   | "context";
 
