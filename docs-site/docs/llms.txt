@@ -4,9 +4,6 @@
 
 Documentation: https://docs.langstroth.ai/ — pages below are the canonical reference. It has two sections: Using Ligus (https://docs.langstroth.ai/ligus/: desktop app, phone app, `ligus` CLI, workspaces, agents, workflows) and Operating Langstroth (https://docs.langstroth.ai/operate/: self-hosting and deploying the relay, auth, Kubernetes, `ligus serve` and worker hosts, security model, operator reference).
 
-## About the names
-
-- [The hive behind the names](https://docs.langstroth.ai/the-hive/): Why Ligus (Apis mellifera ligustica) and Langstroth (the movable-frame hive), which hive part stands for which platform piece (relay, langstroth-auth, hosts, Helm charts, the content-blind relay), and which honeybee behaviours inspired Ligus features (scouts and quorum, stop signals, hand-off cards, tremble-dance backpressure, the threshold task board, careers, workspace marks, dearth mode, lockdown, hygiene, plan windows, patch leaving), with a glossary.
 
 ## Using Ligus: Start here (for agents)
 
