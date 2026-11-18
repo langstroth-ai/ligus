@@ -975,6 +975,19 @@ pub fn verdict_for(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verd
     // id): its own binding of the device id is the key, so a member who
     // certified someone else's device id for themselves can't sign as them.
     let claimed = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id.or_else(|| Uuid::parse_str(&s.actor.id).ok()));
+    // A member's account that hasn't certified this device id here yet,
+    // while someone else has (device ids are chosen by the device, so a
+    // member can certify another's id for themselves): the member's own
+    // certificate may still be on its way. Unless a key bound to the id
+    // signed it (provably someone else signing as them), wait for it, as
+    // for a device nobody certified; never refuse it for good on arrival
+    // order.
+    if let Some(a) = claimed.filter(|a| !roster.device_signs_for(device_id, *a)) {
+        let bound_signed = roster.bindings.iter().filter(|((d, _), _)| *d == device_id).flat_map(|(_, ks)| ks).any(|k| verify_envelope(env, k).is_ok());
+        if !bound_signed && !is_trust_bootstrap(env) {
+            return Verdict::Unverifiable(QuarantineReason::UncertifiedDevice);
+        }
+    }
     if !roster.keys_for(device_id, claimed).into_iter().any(|k| verify_envelope(env, k).is_ok()) {
         return Verdict::Quarantine(QuarantineReason::BadSignature);
     }
