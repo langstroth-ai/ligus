@@ -358,7 +358,8 @@ mod tests {
         let r = fulfil(&svc, &job, Some(&repo)).unwrap();
         let Outcome::Applied { commit: Some(c) } = r else { panic!("{r:?}") };
         let wt = crate::git_worktree::chat_worktree(&repo, &chat.to_string()).unwrap();
-        assert_eq!(std::fs::read_to_string(wt.join("new.txt")).unwrap(), "hello\n");
+        // Windows checkouts may use CRLF (core.autocrlf); the committed blob is what counts.
+        assert_eq!(std::fs::read_to_string(wt.join("new.txt")).unwrap().replace("\r\n", "\n"), "hello\n");
         assert_eq!(commit_for(&wt, job.request.id).as_deref(), Some(c.as_str()));
         assert_eq!(outcome(&svc, chat, &job), Some(ApplyOutcome::Applied { commit: Some(c.clone()) }));
         let s = lock(&svc).load(chat).unwrap().unwrap();

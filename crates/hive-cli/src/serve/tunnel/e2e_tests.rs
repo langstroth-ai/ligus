@@ -860,7 +860,11 @@ async fn relay_failures_are_reported_and_retried() {
     relay.state.control_revoke_fail.store(true, std::sync::atomic::Ordering::SeqCst);
     revoke_on_desktop(&h, phone.device_id);
     crate::sync_once(&h.desktop).await.unwrap();
-    wait_until("tunnel step failed", Duration::from_secs(10), || t.ledger.list().first().is_some_and(|e| e.status.tunnel.state == StepState::Failed)).await;
+    // The tunnel and push steps settle separately; wait for both.
+    wait_until("tunnel and push steps failed", Duration::from_secs(20), || {
+        t.ledger.list().first().is_some_and(|e| e.status.tunnel.state == StepState::Failed && e.status.push.state == StepState::Failed)
+    })
+    .await;
     let e = t.ledger.list().remove(0);
     assert_eq!(e.status.push.state, StepState::Failed);
     assert!(e.status.tunnel.detail.contains("503"), "{}", e.status.tunnel.detail);
