@@ -360,12 +360,26 @@ fn cmd_issue(cfg: &Config, ttl: Option<String>, request: Option<String>, words: 
     };
     match out {
         Some(path) => {
-            crate::serve::tunnel::write_private(Path::new(&path), code.as_bytes())?;
+            write_out(&path, code.as_bytes())?;
             println!("wrote the admission code to {path} (single use, expires in {} min). Sync to publish it.", ttl / 60_000);
         }
         None => println!("{code}"),
     }
     Ok(())
+}
+
+/// Write a secret the user asked for (`--out PATH`) owner-only (0600) and
+/// atomically. Unlike the data-dir writer it never creates or chmods the
+/// parent directory: that directory is the user's (a home dir, `/tmp`, a
+/// bind-mounted volume owned by someone else), so tightening it to 0700 is
+/// not ours to do and fails with EPERM when we don't own it.
+fn write_out(path: &str, bytes: &[u8]) -> Result<()> {
+    let p = Path::new(path);
+    let parent = p.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
+    if !parent.is_dir() {
+        bail!("{} is not a directory: create it first", parent.display());
+    }
+    hive_runtime::private_file::write_private_atomic(p, bytes).with_context(|| format!("writing {path}"))
 }
 
 /// `ligus recovery-key create --out PATH`: register a recovery key for this
@@ -384,8 +398,13 @@ pub fn cmd_recovery_key(cfg: &Config, positional: &[&String], out: Option<String
     let key = hive_core::presence::RecoveryKey::generate().map_err(|e| anyhow!(e.0))?;
     let ws = uuid_of_room(&cfg.room);
     let k2 = hive_core::presence::RecoveryKey::from_words(&key.words()).map_err(|e| anyhow!(e.0))?;
-    svc.register_passkey(ws, key.credential(account, "Recovery key"), &move |req| Ok(k2.assert(&req.challenge)))?;
-    crate::serve::tunnel::write_private(Path::new(&out), key.words().as_bytes())?;
+    // Words first: a key registered whose words could not be written is a
+    // credential nobody holds.
+    write_out(&out, key.words().as_bytes())?;
+    if let Err(e) = svc.register_passkey(ws, key.credential(account, "Recovery key"), &move |req| Ok(k2.assert(&req.challenge))) {
+        let _ = std::fs::remove_file(&out);
+        return Err(e.into());
+    }
     println!("registered a recovery key; its 24 words are in {out} (keep them offline). Sync to publish it.");
     Ok(())
 }
@@ -424,6 +443,29 @@ mod tests {
         std::fs::write(&gone, "ligusadmit1:x\n").unwrap();
         assert_eq!(admission_from_file(Some(gone.to_string_lossy().into_owned())).unwrap().as_deref(), Some("ligusadmit1:x"));
         assert_eq!(admission_from_file(None).unwrap(), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn out_files_are_owner_only_and_leave_the_parent_alone() {
+        // kind-e2e: `recovery-key create --out /work/recovery-words` in a
+        // container (uid 65532) failed with a bare EPERM because the writer
+        // chmodded the bind-mounted /work, owned by the runner, to 0700.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
+        let out = dir.path().join("words");
+        write_out(out.to_str().unwrap(), b"one two").unwrap();
+        assert_eq!(std::fs::read(&out).unwrap(), b"one two");
+        assert_eq!(std::fs::metadata(&out).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777, 0o777);
+        // Overwrite replaces; no temp files left.
+        write_out(out.to_str().unwrap(), b"three").unwrap();
+        assert_eq!(std::fs::read(&out).unwrap(), b"three");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        // A missing parent is an error, never created.
+        let missing = dir.path().join("nope").join("words");
+        assert!(write_out(missing.to_str().unwrap(), b"x").unwrap_err().to_string().contains("not a directory"));
     }
 
     #[test]

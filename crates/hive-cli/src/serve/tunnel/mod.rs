@@ -143,7 +143,7 @@ pub fn ensure_private_dir(dir: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).with_context(|| format!("making {} owner-only", dir.display()))?;
     }
     Ok(())
 }
