@@ -732,7 +732,10 @@ each `(hostId, nonce)` once (a replay answers `409`), and is idempotent. A
 relay without the route answers `404`; the control `revoke` ack then
 confirms. When the host has langstroth-auth operator access
 (`LIGUS_AUTH_ADMIN_URL`, `LIGUS_AUTH_ADMIN_TENANT`,
-`LIGUS_AUTH_ADMIN_TOKEN_FILE`) it also ends the device's sign-in session
+`LIGUS_AUTH_ADMIN_TOKEN_FILE`, a 0600 file holding that tenant's
+device-revocation token, `device_revoke_token_*` in langstroth-auth's
+config, which opens only this route of only that tenant; never the operator
+token) it also ends the device's sign-in session
 (`POST /admin/v1/tenants/{t}/devices/{device}/revoke`). Each step's status
 (pending, done, failed and retrying, not applicable) is kept in
 `tunnel/revocations.json` and shown by `GET /v1/revocations`,

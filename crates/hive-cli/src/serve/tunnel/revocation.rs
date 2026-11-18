@@ -19,7 +19,8 @@
 //! 3. **session**: ends the device's langstroth-auth session through the
 //!    operator API when this box is configured for it
 //!    (`LIGUS_AUTH_ADMIN_URL`, `LIGUS_AUTH_ADMIN_TENANT`,
-//!    `LIGUS_AUTH_ADMIN_TOKEN_FILE`); otherwise "not applicable".
+//!    `LIGUS_AUTH_ADMIN_TOKEN_FILE`: a 0600 file with the tenant's
+//!    device-revocation token); otherwise "not applicable".
 //!
 //! The status lives in `tunnel/revocations.json` and is shown by
 //! `GET /v1/revocations`, `ligus phones list`, and (through the presence
@@ -379,13 +380,29 @@ impl std::fmt::Debug for AuthAdmin {
 
 impl AuthAdmin {
     /// `LIGUS_AUTH_ADMIN_URL` + `LIGUS_AUTH_ADMIN_TENANT` +
-    /// `LIGUS_AUTH_ADMIN_TOKEN_FILE` (a file holding the admin token).
-    /// `None` when any is unset.
+    /// `LIGUS_AUTH_ADMIN_TOKEN_FILE` (a 0600 file holding that tenant's
+    /// device-revocation token, `device_revoke_token_*` in langstroth-auth's
+    /// config; never the operator token, never an env var). `None` when any
+    /// is unset.
     pub fn from_env() -> Option<Self> {
         let url = crate::env_opt("LIGUS_AUTH_ADMIN_URL")?.trim().trim_end_matches('/').to_string();
         let tenant = crate::env_opt("LIGUS_AUTH_ADMIN_TENANT")?.trim().to_string();
         let file = crate::env_opt("LIGUS_AUTH_ADMIN_TOKEN_FILE")?;
-        let token = match std::fs::read_to_string(file.trim()) {
+        Self::from_parts(&url, &tenant, std::path::Path::new(file.trim()))
+    }
+
+    /// The token comes only from a file, readable by its owner alone.
+    pub fn from_parts(url: &str, tenant: &str, file: &Path) -> Option<Self> {
+        let (url, tenant) = (url.to_string(), tenant.to_string());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if std::fs::metadata(file).is_ok_and(|m| m.permissions().mode() & 0o077 != 0) {
+                eprintln!("remote: LIGUS_AUTH_ADMIN_TOKEN_FILE is readable by others (chmod 600 it); phone sign-in sessions won't be ended on revocation");
+                return None;
+            }
+        }
+        let token = match std::fs::read_to_string(file) {
             Ok(t) if !t.trim().is_empty() => t.trim().to_string(),
             _ => {
                 eprintln!("remote: LIGUS_AUTH_ADMIN_TOKEN_FILE is unreadable or empty; phone sign-in sessions won't be ended on revocation");
@@ -393,7 +410,15 @@ impl AuthAdmin {
             }
         };
         hive_runtime::secret_redact::register(&token);
-        if !(url.starts_with("https://") || url.starts_with("http://127.0.0.1") || url.starts_with("http://localhost")) {
+        // https, or plain http to loopback only ("http://localhost.example"
+        // is not loopback); a tenant id is one path segment.
+        let loopback = reqwest::Url::parse(&url).is_ok_and(|u| u.scheme() == "http" && matches!(u.host_str(), Some("127.0.0.1" | "localhost" | "[::1]")));
+        let https = reqwest::Url::parse(&url).is_ok_and(|u| u.scheme() == "https" && u.host_str().is_some());
+        if tenant.is_empty() || !tenant.chars().all(|c| c.is_ascii_alphanumeric() || "._:-".contains(c)) {
+            eprintln!("remote: LIGUS_AUTH_ADMIN_TENANT is not a tenant id; phone sign-in sessions won't be ended on revocation");
+            return None;
+        }
+        if !(https || loopback) {
             eprintln!("remote: LIGUS_AUTH_ADMIN_URL must be https (or loopback); phone sign-in sessions won't be ended on revocation");
             return None;
         }
@@ -497,6 +522,25 @@ mod tests {
         want.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18]);
         want.extend_from_slice(&[7u8; 16]);
         assert_eq!(got, want);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_auth_token_file_must_be_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("tok");
+        std::fs::write(&f, "home-device-revoke-token-0123456789abcdef\n").unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(AuthAdmin::from_parts("https://auth.example", "home", &f).is_none(), "a world-readable token file was used");
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let a = AuthAdmin::from_parts("https://auth.example", "home", &f).unwrap();
+        assert_eq!(a.token, "home-device-revoke-token-0123456789abcdef");
+        assert!(!format!("{a:?}").contains("0123456789"), "the token is redacted from Debug");
+        // Plain http only to loopback; a tenant id is one path segment.
+        assert!(AuthAdmin::from_parts("http://localhost.attacker.example", "home", &f).is_none());
+        assert!(AuthAdmin::from_parts("http://127.0.0.1:9000", "home", &f).is_some());
+        assert!(AuthAdmin::from_parts("https://auth.example", "home/../other", &f).is_none());
     }
 
     #[test]
