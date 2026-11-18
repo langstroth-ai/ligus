@@ -2,8 +2,8 @@
 
 Ligus and Langstroth are both named after beekeeping, and several Ligus
 features borrow from what is known about how honeybee colonies work. This
-page explains the names, which piece of the software each part of a hive
-stands for, and which colony behaviours inspired which features. The person
+page explains the names and maps each colony behaviour to the Ligus feature
+it inspired. The person
 who maintains Ligus keeps Italian honeybees, and the aim here is to describe
 the bees accurately and the software honestly.
 
@@ -31,34 +31,7 @@ it back without destroying the comb. Most hives in use today still follow his
 design. Langstroth is the platform the app runs on: the relay,
 langstroth-auth, the Helm charts and the always-on Ligus hosts.
 
-## The hive: Langstroth, the platform
-
-A Langstroth hive is a stack of simple parts: a bottom board with an
-entrance, one or more boxes, frames hanging inside the boxes, and a cover on
-top. The platform has a similar shape.
-
-| Hive part | What it does in a hive | In Langstroth |
-|---|---|---|
-| **Frames and bee space** | Each frame hangs separately with bee space around it, so it can be lifted out and inspected. | Each platform piece is a separate program you can run, read and replace on its own: the relay, langstroth-auth, the `ligus` hosts, the charts. The layers keep a clear gap between them: langstroth-auth decides who can reach the relay, the workspace's signed roster decides who is a member, and the workspace key decides who can read anything. One never stands in for another. See [langstroth-auth](operate/deploy/ligus-auth.md#what-it-does-and-what-it-never-does). |
-| **Boxes** | The colony lives in a stack of boxes; the beekeeper adds a box when the bees need room. | Hosts. A `ligus serve` box is the always-on home of a workspace, a member of it in its own right, and keeps agents answering while laptops sleep. `ligus worker` boxes add capacity for agents. See [Running ligus serve](operate/ops/serve-box.md) and [Headless agents](operate/concepts/headless-agents.md). |
-| **The apiary** | A yard of hives, set out and tended together. | Kubernetes (preview). The Helm charts run the relay (and optionally langstroth-auth) in one namespace and each workspace's `ligus serve`, workers and MCP servers in a namespace of their own. See [Kubernetes](operate/deploy/kubernetes.md). |
-| **The entrance** | The one way in and out, where traffic is easy to watch. | The relay. Devices sync through it, and it can tunnel the phone to a `ligus serve` box. See [Self-hosting a relay](operate/networking/self-host.md). |
-| **Guard bees** | Guards stand at the entrance and check arriving bees, mostly by odour. | Checks at two places. At the relay, tokens (and langstroth-auth sign-in, if you run it) decide who may reach which workspace. Inside, every device re-checks each synced event against the signed member list and drops what doesn't belong, so the relay alone can't let anyone in. See [Authorization on ingest](ligus/concepts/security.md#authorization-is-enforced-on-ingest-not-just-at-authoring). |
-| **The outer cover** | Anyone walking through the apiary sees the outside of the boxes, never the comb. | End-to-end encryption. The relay is content-blind: it stores and forwards ciphertext and sees metadata (which workspaces exist, sizes, timing), never a workspace key. See [The relay is content-blind](ligus/concepts/security.md#the-relay-is-content-blind). |
-
-Some platform pieces have no honest hive counterpart, so they keep their
-plain names:
-
-- **LLM gateways.** A host can send its agents' model traffic through a
-  gateway you already run (LiteLLM, kgateway, Envoy AI Gateway and others),
-  with credentials the agents never see. See
-  [Deploying with an LLM gateway](operate/deploy/model-gateways.md).
-- **Deploying with an agent.** The repository carries instructions, skills
-  and non-interactive tools so a coding agent can do a deployment, stopping
-  for you wherever a person must decide. See
-  [Deploying with an agent](operate/deploy/with-an-agent.md).
-
-## The colony: Ligus, the app
+## Colony behaviour and Ligus features
 
 A honeybee colony has no manager. No bee, not even the queen, directs the
 work. Tens of thousands of workers each respond to local cues, and the
@@ -302,30 +275,3 @@ claim them: there is no smoker (a calming signal for agents), no
 trophallaxis-style sharing of state between agents beyond hand-off cards and
 context parcels, no queen and no pheromone-based coordination. If one of
 these appears in Ligus later, it will be documented with the feature.
-
-## Glossary
-
-| Bee or hive term | Ligus or Langstroth term |
-|---|---|
-| Bee space, removable frames | Separate, replaceable platform pieces with clear boundaries between reach, membership and content |
-| Hive box | A host: `ligus serve` (the home box) or `ligus worker` |
-| Apiary | A Kubernetes cluster running the Helm charts |
-| Entrance | The relay |
-| Guard bees | Relay tokens and langstroth-auth; on-ingest checks on every device |
-| Outer cover | End-to-end encryption; the content-blind relay |
-| Nest-site scouts | Scouts in a [proposal set](ligus/features/proposal-sets.md) |
-| Quorum | Agent quorum in a proposal set (nominates; a person decides) |
-| Piping | A proposal set's piping phase, before pre-flight |
-| Stop signal | Stop signal to a rival alternative's scouts |
-| Waggle dance | [Hand-off card](ligus/features/flow.md#hand-off-cards-and-context-parcels) and context parcel; outcome scores for [routing](ligus/features/flow.md#routing-un-addressed-work) |
-| Tremble dance | [Review-queue backpressure](ligus/features/flow.md#backpressure-the-review-queue) |
-| Response threshold | The [task board](ligus/features/flow.md#the-task-board) |
-| Age-based tasks | Agent [careers](ligus/features/flow.md#careers): probation, graduated, reviewer duty |
-| Scent mark | [Workspace mark](ligus/features/flow.md#workspace-marks): claim, lock, needs review |
-| Dearth, narrowed entrance | [Dearth mode](ligus/features/guards.md#dearth-mode) |
-| Brood | Protected (brood) paths; your own requests under plan windows |
-| Propolis, social immunity | [Chat lockdown](ligus/features/guards.md#chat-lockdown) |
-| Hygienic behaviour | The [hygiene sweep](ligus/features/guards.md#hygiene) |
-| Brood-nest thermoregulation | [Plan windows](ligus/features/guards.md#plan-windows-staggered-throttles) |
-| Leaving a flower patch | The [patch-leaving rule](ligus/features/guards.md#long-agent-loops-the-patch-leaving-rule) |
-| Nuc | A new workspace; [growth suggestions](ligus/features/guards.md#growing-the-workspace-when-its-ready) |
