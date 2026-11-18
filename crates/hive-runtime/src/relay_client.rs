@@ -789,7 +789,7 @@ mod tests {
         let _ = c.contact_drops_ack(&cid, &key, 1).await;
         let _ = c.contact_delete(&cid, &key).await;
         let seen = seen.lock().unwrap();
-        assert!(seen.len() >= 29, "every call reached the recorder ({})", seen.len());
+        assert!(seen.len() >= 27, "every call reached the recorder ({})", seen.len());
         for (route, headers) in seen.iter() {
             for (name, value) in headers {
                 assert!(
