@@ -94,12 +94,14 @@ impl SignerDirectory {
         let mut keys: BTreeMap<Uuid, Vec<Vec<u8>>> = BTreeMap::new();
         for e in &ordered {
             if let SessionEvent::AccountKeyRegistered { account_id, signing_public_key } = &e.payload {
-                let known = keys.entry(*account_id).or_default();
-                if known.len() < MAX_ACCOUNT_KEYS {
-                    push_unique(known, signing_public_key.clone());
-                }
+                push_unique(keys.entry(*account_id).or_default(), signing_public_key.clone());
             }
         }
+        // Two different registrations of one account (not a rotation):
+        // which is genuine can't be told, so neither attests, as the roster
+        // disputes the account (anyone can publish a registration under
+        // someone else's account id).
+        keys.retain(|_, ks| ks.len() == 1);
         // A rotation counts once a key of its account signed it (rotations
         // chain): each newly known key is checked against the rotations
         // still pending for its account, once.
@@ -110,7 +112,7 @@ impl SignerDirectory {
             }
         }
         for (account, mut rotations) in pending {
-            let known = keys.entry(account).or_default();
+            let Some(known) = keys.get_mut(&account) else { continue };
             let mut next = 0;
             while next < known.len() && !rotations.is_empty() && known.len() < MAX_ACCOUNT_KEYS {
                 let k = known[next].clone();

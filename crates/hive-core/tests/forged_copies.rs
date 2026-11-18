@@ -606,3 +606,29 @@ proptest! {
         }
     }
 }
+
+/// A registration of someone else's account id is self-published, so anyone
+/// can make one: a stranger registers a key under a member's account, binds
+/// the member's device id with it, and signs a copy of the member's message
+/// stamped as the member. That copy must not be told apart as the member's
+/// own second signer (it would fold beside the real message as theirs).
+#[test]
+fn a_second_registration_of_an_account_attests_nothing() {
+    let (mut w, chat) = world();
+    let fake = SigningKeypair::generate().unwrap();
+    let con_account = w.people["con"].account_id;
+    w.push_bare("eve", SessionEvent::AccountKeyRegistered { account_id: con_account, signing_public_key: fake.public_key_bytes().to_vec() });
+    let device = SigningKeypair::generate().unwrap();
+    let con_device = w.people["con"].device_id;
+    let cert = hive_core::crypto::DeviceCertificate::issue(&fake, con_account, con_device, &device.public_key_bytes(), hive_core::Timestamp::epoch());
+    w.push_bare("eve", SessionEvent::DeviceCertificateAdded { certificate: cert });
+    let id = w.say(chat, "con", msg("con", "honest"));
+    let mut forged = find(&w, Some(chat), id);
+    forged.payload = msg("con", "forged");
+    forged.clear_raw();
+    sign_envelope(&mut forged, con_device, &device);
+    let mut log = w.chats[&chat].clone();
+    log.push(forged);
+    let bodies: Vec<String> = chat_fold(&w.cfg, &log).messages.into_iter().map(|m| m.body).collect();
+    assert!(!bodies.contains(&"forged".to_string()), "a copy under a forged registration folded as the member's: {bodies:?}");
+}
