@@ -2376,7 +2376,9 @@ impl ChatService {
         let sessions = self.store.sessions_of_workspace(workspace_id)?;
         let mut logs = Vec::new();
         for sid in sessions {
-            logs.push((sid, self.store.list(sid)?));
+            // Every copy held: the device's own event under an id another
+            // signer's copy reached first is still one of its heads.
+            logs.push((sid, self.store.list_copies(sid)?));
         }
         let mut signers: std::collections::BTreeSet<Uuid> = device.into_iter().collect();
         if let Some(m) = member {

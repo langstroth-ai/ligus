@@ -4524,7 +4524,12 @@ fn list_membership_audit(state: State<AppState>) -> Result<Vec<MembershipAuditDt
     let active = state.active_workspace_id();
     let config_id = hive_core::workspace_config_session_id(active);
     let svc = state.service.lock().unwrap();
-    let envs = svc.store().list(config_id).map_err(map_err)?;
+    // What the log decided, copy by copy: a refused event (or another
+    // signer's copy under a real event's id) never shows as a change.
+    let all = svc.store().list_copies(config_id).map_err(map_err)?;
+    let verdicts = hive_core::fold_copy_decisions(&all, svc.trusted_founder(), None, hive_core::WorkspaceAuthz::Unchecked);
+    let mut envs: Vec<_> = all.iter().filter(|e| verdicts.get(e) == Some(hive_core::Verdict::Allowed)).cloned().collect();
+    envs.sort_by_key(|e| e.canonical_key());
     // Resolve MemberRemoved's id → name from the adds seen earlier in the log.
     let mut names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut out: Vec<MembershipAuditDto> = Vec::new();
