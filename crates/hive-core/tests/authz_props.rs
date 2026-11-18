@@ -858,7 +858,13 @@ fn lockdown(id: u128, by: &str) -> hive_core::guard::ChatLockdown {
         raised_by: by.into(),
         raised_at: Timestamp::epoch(),
         message_id: None,
+        raise_event_id: None,
     }
+}
+
+/// The raise event ids of `chat`'s active lockdowns (what a clear names).
+fn raises_of(c: &ChatSession, chat: Uuid) -> Vec<Uuid> {
+    c.guards.lockdowns_of(chat).iter().filter_map(|l| l.raise_event_id).collect()
 }
 
 #[test]
@@ -879,8 +885,9 @@ fn lockdown_bounds_s5() {
         w.cfg_push(&by, SessionEvent::ChatLockdownRaised { chat_id: chat, lockdown: lockdown(100 + i, &by) });
     }
     assert_eq!(w.config().guards.lockdowns_of(chat).len(), 16);
-    // A clear frees the slots.
-    w.cfg_push("mara", SessionEvent::ChatLockdownCleared { chat_id: chat });
+    // A clear of all of them frees the slots.
+    let raises = raises_of(&w.config(), chat);
+    w.cfg_push("mara", SessionEvent::ChatLockdownCleared { chat_id: chat, raises });
     w.cfg_push("val", SessionEvent::ChatLockdownRaised { chat_id: chat, lockdown: lockdown(999, "val") });
     assert_eq!(w.config().guards.lockdowns_of(chat).len(), 1);
 }
@@ -914,8 +921,8 @@ proptest! {
         };
         let raise = |id: u128| SessionEvent::ChatLockdownRaised { chat_id: chat, lockdown: lockdown(id, "cara") };
         if cleared_first {
-            w.push_bare("cara", raise(1));
-            w.push("cara", SessionEvent::ChatLockdownCleared { chat_id: chat });
+            let r1 = w.push_bare("cara", raise(1));
+            w.push("cara", SessionEvent::ChatLockdownCleared { chat_id: chat, raises: vec![r1] });
         }
         let stale = cara_heads(&w);
         if !backdate {
@@ -1385,7 +1392,7 @@ fn agent_tier_cannot_emit_admin_events() {
     for e in [
         SessionEvent::MemberAdded { member: member("ghost", WorkspaceRole::Admin), invite: None, proof: None },
         SessionEvent::WorkspaceRulesSet { version: 1, presence: None },
-        SessionEvent::ChatLockdownCleared { chat_id: w.sid },
+        SessionEvent::ChatLockdownCleared { chat_id: w.sid, raises: vec![Uuid::new_v4()] },
     ] {
         let id = w.cfg_push("x", e);
         let env = w.cfg.iter_mut().find(|x| x.event_id == id).unwrap();

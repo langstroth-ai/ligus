@@ -48,7 +48,9 @@ export function revealLockdownCause(detail: string, messageId?: string): boolean
 }
 
 /// Shown under the chat header while the chat is locked down: why, what it
-/// restricts, a jump to the cause, and Clear for a human member.
+/// restricts, a jump to the cause, and Clear for a human member. Clear lifts
+/// the signals shown here, by their raise ids: one raised since the bar last
+/// refreshed stays in force (and shows up on the next refresh).
 export function LockdownBar({ sessionId }: { sessionId: string }) {
   const qc = useQueryClient();
   const q = useQuery({
@@ -57,7 +59,7 @@ export function LockdownBar({ sessionId }: { sessionId: string }) {
     refetchInterval: 15000,
   });
   const clear = useMutation({
-    mutationFn: () => clearChatLockdown(sessionId),
+    mutationFn: (raiseIds: string[]) => clearChatLockdown(sessionId, raiseIds),
     onSuccess: () => {
       toast.success("Lockdown cleared");
       qc.invalidateQueries({ queryKey: ["chat-lockdown", sessionId] });
@@ -67,6 +69,7 @@ export function LockdownBar({ sessionId }: { sessionId: string }) {
   const d = q.data;
   if (!d?.active) return null;
   const why = d.signals.map(signalLabel).join("; ");
+  const shown = d.signals.flatMap((s) => (s.raiseEventId ? [s.raiseEventId] : []));
   const cause = d.signals.find((s) => s.signal !== "manual" && s.detail);
   return (
     <Banner
@@ -93,8 +96,8 @@ export function LockdownBar({ sessionId }: { sessionId: string }) {
               Show cause
             </LinkButton>
           )}
-          {d.canClear ? (
-            <LinkButton disabled={clear.isPending} onClick={() => clear.mutate()}>
+          {d.canClear && shown.length > 0 ? (
+            <LinkButton disabled={clear.isPending} onClick={() => clear.mutate(shown)}>
               Clear lockdown
             </LinkButton>
           ) : (

@@ -134,7 +134,18 @@ fn preview(s: &Shared, action: &PhoneAction) -> Value {
             v["summary"] = json!("Answer an agent's question");
             v["question"] = json!(chat.as_ref().and_then(|c| c.flow.asks.get(ask_id)).map(|a| a.ask.question.clone()).unwrap_or_default());
         }
-        PhoneAction::ClearLockdown { .. } => v["summary"] = json!("Clear this chat's lockdown"),
+        PhoneAction::ClearLockdown { chat_id, raises } => {
+            v["summary"] = json!("Clear this chat's lockdowns");
+            // The lockdowns it names, as `GET /v1/guards` lists them.
+            let guards = s.lock().workspace_guards(s.ws).ok();
+            let named: Vec<Value> = guards
+                .iter()
+                .flat_map(|g| g.lockdowns_of(*chat_id).to_vec())
+                .filter(|l| l.raise_event_id.is_some_and(|r| raises.contains(&r)))
+                .map(|l| json!({ "raiseEventId": l.raise_event_id, "signal": l.signal, "detail": l.detail, "raisedAt": super::api::iso(l.raised_at) }))
+                .collect();
+            v["lockdowns"] = json!(named);
+        }
         PhoneAction::RequestApply { proposal_id, host_device_id, .. } => {
             let p = chat.as_ref().and_then(|c| c.proposals.iter().find(|p| p.id == *proposal_id));
             v["summary"] = json!("Apply an approved proposal on a host");
@@ -155,7 +166,7 @@ pub async fn prepare(State(s): State<std::sync::Arc<Shared>>, peer: Option<Exten
     if let Some(reason) = s.lock().write_block() {
         return Err(ApiError::new(StatusCode::FORBIDDEN, reason.to_string()));
     }
-    if let PhoneAction::ClearLockdown { chat_id } = &req.action {
+    if let PhoneAction::ClearLockdown { chat_id, .. } = &req.action {
         let locked = !s.lock().workspace_guards(s.ws)?.lockdowns_of(*chat_id).is_empty();
         if !locked {
             return Err(ApiError::new(StatusCode::CONFLICT, "this chat isn't locked down"));
@@ -259,7 +270,7 @@ pub async fn commit(State(s): State<std::sync::Arc<Shared>>, Json(req): Json<Com
                 s.worker_kick.notify_one();
             }
         }
-        (PhoneAction::ClearLockdown { chat_id }, _) => {
+        (PhoneAction::ClearLockdown { chat_id, .. }, _) => {
             let who = env.actor_stamp.as_ref().map(|st| st.actor.display_name.clone()).unwrap_or_default();
             let mut svc = s.lock();
             if svc.load(*chat_id).ok().flatten().is_some() {

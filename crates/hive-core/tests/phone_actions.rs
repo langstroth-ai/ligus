@@ -80,7 +80,7 @@ fn payload(f: &Fixture, action: &PhoneAction) -> SessionEvent {
                 at_ms: 1,
             }),
         },
-        PhoneAction::ClearLockdown { chat_id } => SessionEvent::ChatLockdownCleared { chat_id: *chat_id },
+        PhoneAction::ClearLockdown { chat_id, raises } => SessionEvent::ChatLockdownCleared { chat_id: *chat_id, raises: raises.clone() },
         PhoneAction::RequestApply { proposal_id, diff_digest, host_device_id, expected_base_commit, repo_id, .. } => {
             SessionEvent::ProposalApplyRequested {
                 request: ApplyRequest {
@@ -134,7 +134,7 @@ fn actions(f: &Fixture) -> Vec<PhoneAction> {
         PhoneAction::Post { chat_id: f.chat, text: "from my phone".into() },
         PhoneAction::Vote { chat_id: f.chat, proposal_id: f.pid, diff_digest: f.digest.clone(), approved: true },
         PhoneAction::Answer { chat_id: f.chat, ask_id: Uuid::from_u128(5), answer: "yes".into(), option_index: Some(0) },
-        PhoneAction::ClearLockdown { chat_id: f.chat },
+        PhoneAction::ClearLockdown { chat_id: f.chat, raises: vec![Uuid::from_u128(0x77)] },
         PhoneAction::RequestApply {
             chat_id: f.chat,
             proposal_id: f.pid,
@@ -605,12 +605,12 @@ fn a_phone_vote_needs_presence_where_the_rules_do_and_clearing_a_lockdown_always
     // Clearing a lockdown: config log, presence always.
     let __a0 = "mara";
     let __a1 = None;
-    let __a2 = SessionEvent::ChatLockdownCleared { chat_id: chat };
+    let __a2 = SessionEvent::ChatLockdownCleared { chat_id: chat, raises: vec![Uuid::from_u128(0x77)] };
     let __a3 = false;
     let clear_bare = phone_signed(&mut f, __a0, __a1, __a2, __a3);
     let __a0 = "mara";
     let __a1 = None;
-    let __a2 = SessionEvent::ChatLockdownCleared { chat_id: chat };
+    let __a2 = SessionEvent::ChatLockdownCleared { chat_id: chat, raises: vec![Uuid::from_u128(0x77)] };
     let __a3 = true;
     let clear = phone_signed(&mut f, __a0, __a1, __a2, __a3);
     let verdicts = f.w.verdicts();

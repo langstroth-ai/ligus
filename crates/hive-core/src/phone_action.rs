@@ -56,9 +56,12 @@ pub enum PhoneAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         option_index: Option<u32>,
     },
-    /// Clear a chat's lockdown (`chatLockdownCleared`, on the workspace config
-    /// log; always with the person's passkey presence).
-    ClearLockdown { chat_id: Uuid },
+    /// Clear the lockdowns of a chat the phone shows (`chatLockdownCleared`,
+    /// on the workspace config log; always with the person's passkey
+    /// presence): `raises` names each by the event that raised it (the
+    /// `raiseEventId` of `GET /v1/guards`), at least one. A lockdown it
+    /// doesn't name stays in force.
+    ClearLockdown { chat_id: Uuid, raises: Vec<Uuid> },
     /// Ask `host_device_id` to apply an approved proposal
     /// (`proposalApplyRequested`): the phone's "Apply on ‹host›".
     RequestApply {
@@ -94,7 +97,7 @@ impl PhoneAction {
             PhoneAction::Post { chat_id, .. }
             | PhoneAction::Vote { chat_id, .. }
             | PhoneAction::Answer { chat_id, .. }
-            | PhoneAction::ClearLockdown { chat_id }
+            | PhoneAction::ClearLockdown { chat_id, .. }
             | PhoneAction::RequestApply { chat_id, .. }
             | PhoneAction::WithdrawApply { chat_id, .. } => *chat_id,
         }
@@ -135,6 +138,7 @@ impl PhoneAction {
             PhoneAction::RequestApply { expected_base_commit: Some(c), .. } if !crate::workspace_repo::is_commit_id(c) => {
                 Some("a base commit is 40 or 64 hex digits")
             }
+            PhoneAction::ClearLockdown { raises, .. } => crate::authz::bounds::clear_names_raises(raises).err(),
             _ => None,
         }
     }
@@ -247,6 +251,12 @@ pub fn parse_phone_preimage(
     if stamp.actor.kind != ActorKind::Human || stamp.runtime_effect {
         return Err("not stamped as a person");
     }
+    // Lamport bounds (`crate::lamport`): one past the log head it names (1
+    // with none), so the event sorts no later than one past what the box
+    // held when it drafted it. Every fold refuses anything else.
+    if crate::lamport::next(stamp.log_head) != lamport || stamp.log_head.is_some_and(|h| h.lamport == u64::MAX) {
+        return Err("a lamport that isn't one past its log head");
+    }
     if account.is_some_and(|a| stamp.actor.account_id != Some(a)) {
         return Err("not stamped for this phone's person");
     }
@@ -305,7 +315,8 @@ pub struct CheckedPhoneAction {
 ///   asked, bound to `diffDigest`;
 /// * `answer`: the answer to `askId`, its text and option, by the stamped
 ///   person's name;
-/// * `clearLockdown`: of `chatId`, on the workspace config log;
+/// * `clearLockdown`: of `chatId`, on the workspace config log, naming
+///   exactly the `raises` the phone asked to clear;
 /// * `requestApply`: of `proposalId` on `hostDeviceId`, with that digest,
 ///   base and repo (the request id is the box's);
 /// * `withdrawApply`: of `requestId` for `proposalId`.
@@ -365,8 +376,8 @@ pub fn check_phone_action_preimage(
                 return Err(mismatch);
             }
         }
-        (PhoneAction::ClearLockdown { chat_id }, SessionEvent::ChatLockdownCleared { chat_id: c }) => {
-            if c != chat_id {
+        (PhoneAction::ClearLockdown { chat_id, raises }, SessionEvent::ChatLockdownCleared { chat_id: c, raises: r }) => {
+            if c != chat_id || r != raises {
                 return Err(mismatch);
             }
         }

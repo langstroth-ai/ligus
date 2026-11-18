@@ -107,6 +107,11 @@ pub struct LockdownSignalDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub message_id: Option<String>,
+    /// The event that raised it: what a clear names to lift it (the clear
+    /// lifts exactly the signals it names, the ones this person was shown).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub raise_event_id: Option<String>,
 }
 
 /// A chat's lockdown state (self-medication).

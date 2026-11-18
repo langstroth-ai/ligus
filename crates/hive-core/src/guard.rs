@@ -91,6 +91,12 @@ pub struct ChatLockdown {
     /// Absent for a manual lockdown, and left out of the JSON when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<Uuid>,
+    /// The `ChatLockdownRaised` event that raised it: what a
+    /// `ChatLockdownCleared` names to clear it. Set by the fold from the
+    /// raise's own event id, never by the raiser (a raise carrying it is
+    /// refused). Left out of the JSON when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raise_event_id: Option<Uuid>,
 }
 
 /// Guard state carried by a projected session.

@@ -411,7 +411,8 @@ fn phase_b_apply_goldens() {
 }
 
 /// Writes the lamport-bounds lines (`hive_core::lamport`): an event whose
-/// stamp names its log head (`logHead`, `{l, e}`), its lamport one past it.
+/// stamp names its log head (`logHead`, `{l, e}`), its lamport one past it,
+/// and a lockdown clear naming the raises it clears.
 /// Run with `LIGUS_GOLDEN_OUT=<path> --ignored`, then append the lines.
 #[test]
 #[ignore]
@@ -424,7 +425,11 @@ fn lamport_bounds_goldens() {
     let mut m = hive_core::ChatMessage::new(hive_core::MessageRole::User, "Mara", "after the head");
     m.id = u(0x5004);
     m.created_at = Timestamp::epoch();
-    let cases = [("messageAppended/logHead", 0u64, chat, SessionEvent::MessageAppended { message: m })];
+    let cfg = hive_core::workspace_config_session_id(ws);
+    let cases = [
+        ("messageAppended/logHead", 0u64, chat, SessionEvent::MessageAppended { message: m }),
+        ("chatLockdownCleared/raises", 1, cfg, SessionEvent::ChatLockdownCleared { chat_id: chat, raises: vec![u(0x5020), u(0x5021)] }),
+    ];
     let mut out = String::new();
     for (label, i, sid, payload) in cases {
         let mut e = SessionEventEnvelope::new(sid, ws, 401 + i as i64, payload);

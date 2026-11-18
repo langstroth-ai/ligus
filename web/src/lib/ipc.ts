@@ -1615,7 +1615,10 @@ export type { LockdownSignalDto } from "@/bindings/LockdownSignalDto";
 export const getChatLockdown = (sessionId: string) =>
   invoke<import("@/bindings/ChatLockdownDto").ChatLockdownDto>("get_chat_lockdown", { sessionId });
 /// Clear a chat's lockdown (a human member; re-checked on every device).
-export const clearChatLockdown = (sessionId: string) => invoke<void>("clear_chat_lockdown", { sessionId });
+/// Clear exactly the lockdown signals the person was shown, each named by
+/// its `raiseEventId`: one raised since stays in force.
+export const clearChatLockdown = (sessionId: string, raiseIds: string[]) =>
+  invoke<void>("clear_chat_lockdown", { sessionId, raiseIds });
 /// Lock a chat down by hand.
 export const lockChat = (sessionId: string) => invoke<void>("lock_chat", { sessionId });
 

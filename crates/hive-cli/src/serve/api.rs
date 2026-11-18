@@ -975,6 +975,10 @@ async fn workspace_guards(State(s): S) -> ApiResult<Json<Value>> {
                     if let Some(m) = x.message_id {
                         v["messageId"] = json!(m);
                     }
+                    // What a `clearLockdown` phone action names to clear it.
+                    if let Some(r) = x.raise_event_id {
+                        v["raiseEventId"] = json!(r);
+                    }
                     v
                 }).collect::<Vec<_>>(),
             })

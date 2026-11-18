@@ -164,7 +164,16 @@ impl ChatService {
                     }),
                 }
             }
-            PhoneAction::ClearLockdown { chat_id } => SessionEvent::ChatLockdownCleared { chat_id: *chat_id },
+            PhoneAction::ClearLockdown { chat_id, raises } => {
+                // Only lockdowns in force here, each named by its raise: a
+                // phone showing an older view prepares again.
+                let active: Vec<Uuid> =
+                    self.workspace_guards(workspace_id)?.lockdowns_of(*chat_id).iter().filter_map(|l| l.raise_event_id).collect();
+                if raises.iter().any(|r| !active.contains(r)) {
+                    return Err(ChatError::Unauthorized("a lockdown it names isn't in force here: refresh and prepare again".into()));
+                }
+                SessionEvent::ChatLockdownCleared { chat_id: *chat_id, raises: raises.clone() }
+            }
             PhoneAction::RequestApply { proposal_id, diff_digest, host_device_id, expected_base_commit, repo_id, .. } => {
                 SessionEvent::ProposalApplyRequested {
                     request: hive_core::workspace_repo::ApplyRequest {

@@ -351,9 +351,17 @@ pub enum SessionEvent {
     /// clears it. Config log (so the workspace roster authorizes the clear);
     /// any keyholder may raise one, since it only ever tightens.
     ChatLockdownRaised { chat_id: Uuid, lockdown: crate::guard::ChatLockdown },
-    /// A human member (Contributor+) clears a chat's lockdown. Config log;
-    /// re-checked on ingest.
-    ChatLockdownCleared { chat_id: Uuid },
+    /// A human member (Contributor+) clears lockdowns of a chat: exactly the
+    /// raises it names (`raises`, the `ChatLockdownRaised` event ids, at
+    /// least one and at most `MAX_LOCKDOWNS_PER_CHAT`), as the clearer saw
+    /// them. A raise it doesn't name, or one that sorts after it (which the
+    /// clearer can't have held, see `crate::lamport`), stays in force.
+    /// Config log; re-checked on ingest.
+    ChatLockdownCleared {
+        chat_id: Uuid,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        raises: Vec<Uuid>,
+    },
     /// The hygiene sweep found a proposal's diff no longer applies to its
     /// chat's branch ("capped dead brood"): marked stale. Session-scoped
     /// content, like a dismissal.
@@ -1057,8 +1065,13 @@ impl ChatSession {
                     list.push(lockdown.clone());
                 }
             }
-            SessionEvent::ChatLockdownCleared { chat_id } => {
-                self.guards.lockdowns.remove(chat_id);
+            SessionEvent::ChatLockdownCleared { chat_id, raises } => {
+                if let Some(list) = self.guards.lockdowns.get_mut(chat_id) {
+                    list.retain(|l| !l.raise_event_id.is_some_and(|r| raises.contains(&r)));
+                    if list.is_empty() {
+                        self.guards.lockdowns.remove(chat_id);
+                    }
+                }
             }
             SessionEvent::ProposalMarkedStale { proposal_id } => {
                 if self.proposals.iter().any(|p| p.id == *proposal_id) {
@@ -1782,6 +1795,14 @@ fn fold_pass(
                         authz::votes::hold_to_core_bar(&mut p, &t.current().zones);
                     }
                     rewritten = SessionEvent::ProposalUpserted { proposal: p };
+                    &rewritten
+                }
+                // A lockdown is known by the event that raised it (what a
+                // clear names).
+                SessionEvent::ChatLockdownRaised { chat_id, lockdown } => {
+                    let mut lockdown = lockdown.clone();
+                    lockdown.raise_event_id = Some(env.event_id);
+                    rewritten = SessionEvent::ChatLockdownRaised { chat_id: *chat_id, lockdown };
                     &rewritten
                 }
                 SessionEvent::ProposalVoteCast { proposal_id, approval } if checked && !trusted => {

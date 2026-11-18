@@ -10,7 +10,9 @@
 //! the preimage for the accepted cases, and `expect`: `"ok"` or the exact
 //! refusal of `hive_core::phone_action::check_phone_action_preimage`.
 //! Regenerate with `LIGUS_GOLDEN_OUT=<path> --ignored phone_action_goldens`
-//! (only when adding cases: existing lines are frozen).
+//! (only when adding cases: existing lines are frozen). Regenerated once
+//! before 0.1 shipped, when every stamp gained its `logHead` (the lamport is
+//! one past it, `hive_core::lamport`) and `clearLockdown` its `raises`.
 
 use hive_core::crypto::{envelope_preimage, sign_p256, verify_p256, SigAlg};
 use hive_core::flow::{FlowRecord, HumanAnswered};
@@ -58,7 +60,7 @@ fn phone_action_vectors_check_as_frozen() {
         }
         n += 1;
     }
-    assert!(n >= 14, "{n} vectors");
+    assert!(n >= 18, "{n} vectors");
 }
 
 // ---- the generator ----
@@ -95,7 +97,7 @@ fn action(i: &Ids, kind: &str) -> PhoneAction {
         "post" => PhoneAction::Post { chat_id: i.chat, text: "Ship it after lunch.".into() },
         "vote" => PhoneAction::Vote { chat_id: i.chat, proposal_id: i.proposal, diff_digest: DIGEST.into(), approved: true },
         "answer" => PhoneAction::Answer { chat_id: i.chat, ask_id: u(7), answer: "yes".into(), option_index: Some(0) },
-        "clearLockdown" => PhoneAction::ClearLockdown { chat_id: i.chat },
+        "clearLockdown" => PhoneAction::ClearLockdown { chat_id: i.chat, raises: vec![u(0x20), u(0x21)] },
         "requestApply" => PhoneAction::RequestApply {
             chat_id: i.chat,
             proposal_id: i.proposal,
@@ -131,7 +133,7 @@ fn payload(i: &Ids, a: &PhoneAction) -> SessionEvent {
         PhoneAction::Answer { ask_id, answer, option_index, .. } => SessionEvent::FlowRecorded {
             record: FlowRecord::HumanAnswered(HumanAnswered { ask_id: *ask_id, answer: answer.clone(), option_index: *option_index, by: "Mara".into(), at_ms: 1_700_000_000_000 }),
         },
-        PhoneAction::ClearLockdown { chat_id } => SessionEvent::ChatLockdownCleared { chat_id: *chat_id },
+        PhoneAction::ClearLockdown { chat_id, raises } => SessionEvent::ChatLockdownCleared { chat_id: *chat_id, raises: raises.clone() },
         PhoneAction::RequestApply { proposal_id, diff_digest, host_device_id, expected_base_commit, repo_id, .. } => SessionEvent::ProposalApplyRequested {
             request: ApplyRequest {
                 id: u(0x11),
@@ -150,7 +152,6 @@ fn draft(i: &Ids, a: &PhoneAction, n: u128, ev: SessionEvent) -> SessionEventEnv
     let mut e = SessionEventEnvelope::new(a.session_id(i.ws), i.ws, 40 + n as i64, ev);
     e.id = u(0x100 + n);
     e.event_id = u(0x200 + n);
-    e.lamport = 900 + n as u64;
     e.timestamp = Timestamp::epoch();
     e.actor_stamp = Some(ActorStamp {
         actor: actor(i),
@@ -159,8 +160,11 @@ fn draft(i: &Ids, a: &PhoneAction, n: u128, ev: SessionEvent) -> SessionEventEnv
         presence: None,
         runtime_effect: false,
         prev: Some(u(0x301)),
-        sig_alg: SigAlg::P256, log_head: None,
+        sig_alg: SigAlg::P256,
+        log_head: None,
     });
+    // The box's log head when it drafted: the lamport is one past it.
+    hive_core::lamport::stamp_next(&mut e, Some(CfgFrontier { lamport: 899 + n as u64, event_id: u(0x400 + n) }));
     e
 }
 
@@ -190,10 +194,16 @@ fn phone_action_goldens() {
         ("refuse/other-host", "requestApply", false, 5),
         ("refuse/clearLockdown-on-chat-log", "clearLockdown", false, 6),
         ("refuse/vote-for-someone-else", "vote", false, 7),
+        ("refuse/clearLockdown-other-raises", "clearLockdown", true, 8),
+        ("refuse/lamport-past-head", "post", false, 9),
+        ("refuse/clearLockdown-names-none", "clearLockdown", true, 10),
     ];
     for (label, kind, presence, tweak) in cases {
         n += 1;
-        let asked = action(&i, kind);
+        let mut asked = action(&i, kind);
+        if *tweak == 10 {
+            asked = PhoneAction::ClearLockdown { chat_id: i.chat, raises: Vec::new() };
+        }
         let mut ev = payload(&i, &asked);
         match tweak {
             1 => {
@@ -211,11 +221,21 @@ fn phone_action_goldens() {
                     approval.actor_id = "someone-else".into();
                 }
             }
+            8 => {
+                // The box drops one of the raises the phone asked to clear.
+                if let SessionEvent::ChatLockdownCleared { raises, .. } = &mut ev {
+                    raises.pop();
+                }
+            }
             _ => {}
         }
         let mut env = draft(&i, &asked, n, ev);
         if *tweak == 6 {
             env.session_id = i.chat;
+        }
+        if *tweak == 9 {
+            // Past the head it names: sorts after events newer than the draft.
+            env.lamport += 1000;
         }
         let mut challenge = None;
         let mut assertion = None;

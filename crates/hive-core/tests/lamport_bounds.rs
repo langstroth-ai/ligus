@@ -344,3 +344,62 @@ fn a_withheld_vote_sorts_where_it_was_drafted() {
     assert_eq!(w.verdict(reject), Verdict::Allowed);
     assert_ne!(w.state(chat).proposals.iter().find(|p| p.id == pid).unwrap().status, ProposalStatus::Approved);
 }
+
+/// A delayed `ChatLockdownCleared` no longer lifts a newer lockdown: it
+/// clears only the raises it names (the ones its author saw), whenever it is
+/// released, and claiming a bigger clock gets it refused.
+#[test]
+fn a_withheld_clear_lifts_only_what_its_author_saw() {
+    use hive_core::guard::{ChatLockdown, LockdownSignal};
+    use hive_core::testkit::SignedWorld;
+    use hive_core::WorkspaceRole;
+    let mut w = SignedWorld::genesis(&["owner", "mara"], None);
+    w.admit("owner", "mara", WorkspaceRole::Contributor);
+    let chat = Uuid::new_v4();
+    let raise = |n: u128, signal| SessionEvent::ChatLockdownRaised {
+        chat_id: chat,
+        lockdown: ChatLockdown {
+            id: Uuid::from_u128(n),
+            signal,
+            detail: String::new(),
+            raised_by: "owner".into(),
+            raised_at: Timestamp::epoch(),
+            message_id: None,
+            raise_event_id: None,
+        },
+    };
+    let active = |w: &SignedWorld| -> Vec<Uuid> { w.config().guards.lockdowns_of(chat).iter().filter_map(|l| l.raise_event_id).collect() };
+    let r1 = w.push_bare("owner", raise(1, LockdownSignal::InjectionDetected));
+    // Mara's clear of what she sees (r1), drafted and confirmed now, withheld.
+    let mut clear = w.draft("mara", None, SessionEvent::ChatLockdownCleared { chat_id: chat, raises: vec![r1] }, None);
+    let a = w.recovery_presence("mara", &clear);
+    w.finish(&mut clear, "mara", Some(a));
+    // Meanwhile the workspace moves on and the Owner locks the chat down again.
+    w.push_bare("owner", SessionEvent::ChatLockdownRaised { chat_id: Uuid::new_v4(), lockdown: ChatLockdown { id: Uuid::from_u128(3), signal: LockdownSignal::Manual, detail: String::new(), raised_by: "owner".into(), raised_at: Timestamp::epoch(), message_id: None, raise_event_id: None } });
+    let r2 = w.push_bare("owner", raise(2, LockdownSignal::Manual));
+    assert_eq!(active(&w), vec![r1, r2]);
+    // Released now: it lifts r1 only; the newer lockdown stays in force.
+    let mut released = w.clone();
+    released.push_env(None, clear.clone());
+    assert_eq!(released.verdict(clear.event_id), Verdict::Allowed);
+    assert_eq!(active(&released), vec![r2]);
+    // Even naming r2 (which its author can't have held), a clear that sorts
+    // before r2 lifts only what was raised before it.
+    let mut naming_both = w.clone();
+    let mut both = w.draft("mara", None, SessionEvent::ChatLockdownCleared { chat_id: chat, raises: vec![r1, r2] }, None);
+    let at_r1 = w.cfg.iter().find(|e| e.event_id == r1).map(|e| CfgFrontier { lamport: e.lamport, event_id: e.event_id });
+    hive_core::lamport::stamp_next(&mut both, at_r1);
+    let a = w.recovery_presence("mara", &both);
+    w.finish(&mut both, "mara", Some(a));
+    naming_both.push_env(None, both.clone());
+    assert_eq!(active(&naming_both), vec![r2]);
+    // Claiming a clock past r2: refused, and nothing is lifted.
+    let r2_lamport = w.cfg.iter().find(|e| e.event_id == r2).unwrap().lamport;
+    let mut inflated = clear.clone();
+    inflated.lamport = r2_lamport + 1;
+    let a = w.recovery_presence("mara", &inflated);
+    w.finish(&mut inflated, "mara", Some(a));
+    w.push_env(None, inflated.clone());
+    assert_eq!(w.verdict(inflated.event_id), Verdict::Denied);
+    assert_eq!(active(&w), vec![r1, r2]);
+}

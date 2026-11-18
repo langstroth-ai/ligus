@@ -318,7 +318,7 @@ fn requires_presence_exhaustive() {
         SessionEvent::JoinApproved { subject: "x".into(), admission: None },
         SessionEvent::DeviceRevoked { device_id: Uuid::nil(), watermark: Vec::new() },
         SessionEvent::PasskeyRemoved { account_id: Uuid::nil(), credential_id: "c".into() },
-        SessionEvent::ChatLockdownCleared { chat_id: Uuid::nil() },
+        SessionEvent::ChatLockdownCleared { chat_id: Uuid::nil(), raises: vec![Uuid::nil()] },
         SessionEvent::WorkflowDefinitionsUpdated { definitions: vec![] },
         SessionEvent::AgentRemoved { agent_id: Uuid::nil() },
         SessionEvent::WorkspaceRuntimeRemoved { runtime_id: "r".into() },

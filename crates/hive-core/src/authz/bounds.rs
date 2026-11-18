@@ -35,6 +35,24 @@ pub fn lockdown_within_bounds(fold: &ChatSession, chat: uuid::Uuid, lockdown_id:
     mine < MAX_LOCKDOWNS_PER_RAISER
 }
 
+/// Whether a `ChatLockdownCleared` names the raises it clears: at least one
+/// (a clear that names none would clear nothing; one that cleared everything
+/// would lift raises its author never saw), at most
+/// [`MAX_LOCKDOWNS_PER_CHAT`] (all a chat can have active), each once.
+pub fn clear_names_raises(raises: &[uuid::Uuid]) -> Result<(), &'static str> {
+    if raises.is_empty() {
+        return Err("a lockdown clear names the raises it clears");
+    }
+    if raises.len() > MAX_LOCKDOWNS_PER_CHAT {
+        return Err("a lockdown clear names at most as many raises as a chat can hold");
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    if !raises.iter().all(|r| seen.insert(*r)) {
+        return Err("a lockdown clear names each raise once");
+    }
+    Ok(())
+}
+
 /// Whether a zone pattern is within S6's size and complexity limits.
 pub fn zone_pattern_ok(pattern: &str) -> bool {
     pattern.len() <= MAX_ZONE_PATTERN_BYTES
