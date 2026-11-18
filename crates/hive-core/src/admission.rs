@@ -324,52 +324,12 @@ pub fn check_phone_admission_preimage(
     phone: Uuid,
     device_key: Option<&[u8]>,
 ) -> Result<(Uuid, Admission), &'static str> {
-    use sha2::{Digest, Sha256};
-    const PREFIX: &[u8] = b"hive-envelope-v3\0";
-    let mut rest = preimage.strip_prefix(PREFIX).ok_or("not an envelope preimage")?;
-    let mut take = |n: usize| -> Result<&[u8], &'static str> {
-        if rest.len() < n {
-            return Err("a truncated preimage");
-        }
-        let (a, b) = rest.split_at(n);
-        rest = b;
-        Ok(a)
-    };
-    let uuid = |b: &[u8]| Uuid::from_slice(b).map_err(|_| "a malformed preimage");
-    let workspace = uuid(take(16)?)?;
-    let session = uuid(take(16)?)?;
-    let _sequence = take(8)?;
-    let lamport = u64::from_le_bytes(take(8)?.try_into().map_err(|_| "a malformed preimage")?);
-    let event_id = uuid(take(16)?)?;
-    let mut fields: Vec<&[u8]> = Vec::with_capacity(4);
-    for _ in 0..4 {
-        let len = u32::from_le_bytes(take(4)?.try_into().map_err(|_| "a malformed preimage")?) as usize;
-        fields.push(take(len)?);
-    }
-    if !rest.is_empty() {
-        return Err("trailing bytes after the preimage");
-    }
-    let [_scope, _timestamp, stamp_bytes, payload] = [fields[0], fields[1], fields[2], fields[3]];
-    if workspace != workspace_id || session != crate::channel::workspace_config_session_id(workspace) {
+    let confirmed = crate::phone_action::Confirmed { challenge, assertion: None };
+    let p = crate::phone_action::parse_phone_preimage(preimage, workspace_id, phone, None, Some(confirmed))?;
+    if p.session_id != crate::channel::workspace_config_session_id(workspace_id) {
         return Err("not on this workspace's config log");
     }
-    let stamp: Option<crate::identity::ActorStamp> = serde_json::from_slice(stamp_bytes).map_err(|_| "a malformed stamp")?;
-    let stamp_raw: serde_json::Value = serde_json::from_slice(stamp_bytes).map_err(|_| "a malformed stamp")?;
-    if serde_json::to_value(&stamp).ok().as_ref() != Some(&stamp_raw) {
-        return Err("a stamp with fields this build doesn't read");
-    }
-    let stamp = stamp.ok_or("an unstamped event")?;
-    if stamp.actor.device_id != Some(phone) || stamp.sig_alg != crate::crypto::SigAlg::P256 || stamp.presence.is_none() {
-        return Err("not stamped for this phone with its person's presence");
-    }
-    let event: SessionEvent = serde_json::from_slice(payload).map_err(|_| "a malformed payload")?;
-    // Only what this build reads: a field it doesn't know (one a newer build
-    // might honour) is not something the person was shown.
-    let raw: serde_json::Value = serde_json::from_slice(payload).map_err(|_| "a malformed payload")?;
-    if serde_json::to_value(&event).ok().as_ref() != Some(&raw) {
-        return Err("a payload with fields this build doesn't read");
-    }
-    let SessionEvent::JoinApproved { subject, admission: Some(terms) } = event else {
+    let SessionEvent::JoinApproved { subject, admission: Some(terms) } = p.event else {
         return Err("not a box admission");
     };
     let invite = invite_of_subject(&subject).ok_or("not a box admission")?;
@@ -378,24 +338,6 @@ pub fn check_phone_admission_preimage(
     }
     if terms.device_key.as_deref() != device_key {
         return Err("not bound to the box whose join request the phone holds");
-    }
-    // The presence digest (`presence::challenge`) over these very bytes.
-    let frontier = stamp.cfg_frontier.map(|f| serde_json::to_vec(&f).unwrap_or_default()).unwrap_or_default();
-    let account = stamp.actor.account_id.unwrap_or_else(Uuid::nil);
-    let mut h = Sha256::new();
-    h.update(crate::presence::PRESENCE_CONTEXT);
-    h.update(workspace.as_bytes());
-    h.update(session.as_bytes());
-    h.update(event_id.as_bytes());
-    h.update(lamport.to_le_bytes());
-    h.update((payload.len() as u32).to_le_bytes());
-    h.update(payload);
-    h.update((frontier.len() as u32).to_le_bytes());
-    h.update(&frontier);
-    h.update(account.as_bytes());
-    let digest: [u8; 32] = h.finalize().into();
-    if &digest != challenge {
-        return Err("not the event the passkey confirmed");
     }
     Ok((invite, terms))
 }

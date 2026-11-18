@@ -33,6 +33,7 @@ mod lockdown_tests;
 #[cfg(test)]
 mod sec_tests;
 pub mod model_profile;
+pub mod phone_action;
 pub mod policy;
 pub mod presence;
 pub mod process_util;

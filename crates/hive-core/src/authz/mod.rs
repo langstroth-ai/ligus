@@ -591,6 +591,14 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 if approval.actor_id != author {
                     return Decision::deny("a vote must be cast by the voter it names");
                 }
+                // Phase B: a vote counts as its voter's only when a device
+                // certified for the voter's account at this position (not
+                // revoked) signed it: a phone votes for its own person and
+                // nobody else, and an uncertified key votes for no one.
+                // (Ingest already quarantines both; the fold doesn't rely on it.)
+                if !voter_signed(env, at) {
+                    return Decision::deny("a vote is signed by a certified device of its voter");
+                }
                 // P0.6 / B3: a delegated host (a serve box enrolled as its
                 // owner's device) signs as the owner without the owner being
                 // there. Its vote counts only with the owner's passkey
@@ -1053,6 +1061,20 @@ fn rank_rules(e: &SessionEvent, author: &str, role: WorkspaceRole, roster: &Rost
         }
     }
     None
+}
+
+/// Whether `env` is signed by a device certified here (not revoked) for its
+/// stamped account, which is its author's member account. Unlike
+/// [`own_device`], a host acting for the account (a delegated device) counts;
+/// its votes need the owner's presence on top.
+fn voter_signed(env: &SessionEventEnvelope, at: &RosterState) -> bool {
+    let Some(account) = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id) else { return false };
+    if at.members.get(author_of(env)).and_then(|m| m.account_id).is_some_and(|a| a != account) {
+        return false;
+    }
+    env.signer_device_id
+        .and_then(|d| at.devices.get(&d))
+        .is_some_and(|d| !d.revoked && d.accounts.contains(&account))
 }
 
 /// Whether `env` is signed by a device of its stamped author's own account:
