@@ -332,3 +332,34 @@ fn a_member_cannot_spend_a_box_admission_by_re_adding_itself() {
     let r = redeem(&mut w, "box", id, WorkspaceRole::Contributor, None);
     assert_eq!(w.verdict(r), Verdict::Allowed, "the admission is still the box's");
 }
+
+#[test]
+fn a_service_member_cannot_re_add_itself_as_a_person() {
+    // Review R1: an idempotent self re-add replaced the whole member, kind
+    // included, so a box could turn itself into a person and leave every
+    // service rule behind (presence, human approvals, cuts at its role).
+    let mut w = world();
+    admitted(&mut w, "box");
+    let mut m = w.member_of("box", WorkspaceRole::Contributor);
+    m.actor.kind = ActorKind::Human;
+    let flip = w.push_bare("box", SessionEvent::MemberAdded { member: m, invite: None });
+    assert_eq!(w.verdict(flip), Verdict::Denied, "a box never becomes a person");
+    assert_eq!(w.roster().members["box"].kind, ActorKind::Service);
+    // Having tried, its later vote signed as a person still counts for nothing.
+    w.kinds.insert("box".into(), ActorKind::Human);
+    let chat = w.chat("owner", "c");
+    let p = ActionProposal::new("q", hive_core::ProposalKind::Decision, "owner");
+    let pid = p.id;
+    w.say(chat, "owner", SessionEvent::ProposalUpserted { proposal: p });
+    let d = hive_core::authz::votes::diff_digest(&w.state(chat).proposals[0]);
+    w.say(chat, "box", SessionEvent::ProposalVoteCast {
+        proposal_id: pid,
+        approval: ProposalApproval { actor_id: "box".into(), role: WorkspaceRole::Contributor, approved: true, created_at: Timestamp::epoch(), diff_digest: Some(d) },
+    });
+    assert!(!hive_core::guard::has_human_approval(&w.state(chat), pid));
+    // A person re-adding themself (a new name or avatar) is still fine.
+    let mut mara = w.member_of("mara", WorkspaceRole::Contributor);
+    mara.actor.display_name = "Mara B".into();
+    let ok = w.push_bare("mara", SessionEvent::MemberAdded { member: mara, invite: None });
+    assert_eq!(w.verdict(ok), Verdict::Allowed);
+}

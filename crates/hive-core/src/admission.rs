@@ -113,9 +113,20 @@ pub fn redemption_refusal(
         return None;
     }
     let terms = invite.and_then(|id| admission_of(fold, id));
-    if fold.members.iter().any(|m| m.id == member.id) {
+    if let Some(existing) = fold.members.iter().find(|m| m.id == member.id) {
         // A member re-adding itself never spends a box admission.
-        return terms.map(|_| "already a member: a box admission admits a new box");
+        if terms.is_some() {
+            return Some("already a member: a box admission admits a new box");
+        }
+        // Nor changes what it is: a box never re-adds itself as a person (or
+        // the reverse), and no one moves their membership to another account.
+        if existing.actor.kind != member.actor.kind {
+            return Some("a member's kind never changes when it re-adds itself");
+        }
+        if existing.actor.account_id.is_some() && existing.actor.account_id != member.actor.account_id {
+            return Some("a member's account never changes when it re-adds itself");
+        }
+        return None;
     }
     let Some(terms) = terms else {
         return (member.actor.kind == ActorKind::Service).then_some("a service member joins only through a box admission");
