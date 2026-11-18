@@ -174,3 +174,29 @@ fn a_service_member_is_capped_and_never_a_human() {
     let v = w.verdicts();
     assert_eq!((v[&apply], v[&decide]), (Verdict::Denied, Verdict::Denied));
 }
+
+/// Phase B review: the serve box cuts a phone's pairing only from the roster
+/// fold, so a revocation by someone not above the phone's person must not
+/// fold. A peer (same rank) and a lower rank are refused; the person
+/// themselves (with presence) and a higher rank are not.
+#[test]
+fn a_phone_is_revoked_only_from_above_or_by_its_person() {
+    let mut w = SignedWorld::genesis(&["owner", "mara", "kit", "vic"], None);
+    w.admit("owner", "mara", WorkspaceRole::Admin);
+    w.admit("owner", "kit", WorkspaceRole::Admin);
+    w.admit("owner", "vic", WorkspaceRole::Contributor);
+    let maras = enrolled(&mut w, "mara");
+    let owners = enrolled(&mut w, "owner");
+    let revoke = |d: Uuid| SessionEvent::DeviceRevoked { device_id: d, watermark: vec![] };
+    // A peer Admin, and a lower-ranked Contributor: refused, not revoked.
+    let peer = w.push("kit", revoke(maras.device_id));
+    let lower = w.push("vic", revoke(maras.device_id));
+    let up = w.push("mara", revoke(owners.device_id));
+    assert_eq!([w.verdict(peer), w.verdict(lower), w.verdict(up)], [Verdict::Denied; 3]);
+    assert!(!w.roster().devices[&maras.device_id].revoked);
+    assert!(!w.roster().devices[&owners.device_id].revoked);
+    // From above: revoked.
+    let ok = w.push("owner", revoke(maras.device_id));
+    assert_eq!(w.verdict(ok), Verdict::Allowed);
+    assert!(w.roster().devices[&maras.device_id].revoked);
+}

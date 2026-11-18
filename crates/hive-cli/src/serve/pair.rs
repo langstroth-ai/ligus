@@ -55,8 +55,12 @@ pub fn load_or_create_token(path: &Path) -> Result<String> {
 /// does this by default, because a stolen phone holds the token too; a
 /// running `ligus serve` picks the new one up within seconds.
 pub fn rotate_token(path: &Path) -> Result<String> {
-    std::fs::write(path, b"").with_context(|| format!("clearing {}", path.display()))?;
-    load_or_create_token(path)
+    // Written beside it and renamed over it: a reader never sees it empty.
+    let tmp = path.with_extension("rotating");
+    let _ = std::fs::remove_file(&tmp);
+    let token = load_or_create_token(&tmp)?;
+    std::fs::rename(&tmp, path).with_context(|| format!("replacing {}", path.display()))?;
+    Ok(token)
 }
 
 /// Read the token `ligus serve` already created at `path`. `ligus pair` must

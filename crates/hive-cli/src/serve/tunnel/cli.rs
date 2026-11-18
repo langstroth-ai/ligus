@@ -289,6 +289,19 @@ pub fn phones_list(data_dir: &Path) -> Result<()> {
             p.last_seen.map(fmt_day).unwrap_or_else(|| "-".into())
         );
     }
+    let revocations = super::revocation::Ledger::load(&tunnel_dir(data_dir)).list();
+    if !revocations.is_empty() {
+        println!("\nRevoked phone devices (each step; unfinished steps retry while `ligus serve` runs):");
+        for e in revocations {
+            let name = if e.status.name.is_empty() { "phone".to_string() } else { e.status.name.clone() };
+            println!("  {name} (device {}): {}", e.status.device_id, e.status.summary());
+            for (what, step) in [("tunnel", &e.status.tunnel), ("push", &e.status.push), ("session", &e.status.session)] {
+                if !step.detail.is_empty() {
+                    println!("    {what:<8} {}", step.detail);
+                }
+            }
+        }
+    }
     Ok(())
 }
 

@@ -596,6 +596,9 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/events", get(events))
         .route("/v1/tunnel/credential", post(tunnel_credential))
         .route("/v1/tunnel/push", put(tunnel_push))
+        .route("/v1/tunnel/direct", get(tunnel_direct))
+        .route("/v1/revocations", get(list_revocations))
+        .route("/v1/revocations/{device}/retry", post(retry_revocation))
         .layer(middleware::from_fn_with_state(shared.clone(), auth))
         .with_state(shared)
 }
@@ -1495,6 +1498,44 @@ async fn tunnel_push(State(s): S, peer: Option<Extension<TunnelPeer>>, body: Byt
     Ok(Json(json!({ "enabled": enabled, "previews": previews })))
 }
 
+/// `GET /v1/tunnel/direct` → `{"token", "url"}`: the direct-path bearer
+/// token, for a paired phone (tunnel only). The token rotates when a phone
+/// device is revoked; the phones that remain learn the new one here.
+async fn tunnel_direct(State(s): S, peer: Option<Extension<TunnelPeer>>) -> ApiResult<Json<Value>> {
+    let _ = tunnel_phone(&s, peer)?;
+    Ok(Json(json!({ "token": s.token(), "url": s.opts.server_url() })))
+}
+
+/// `GET /v1/revocations`: what this box did about each revoked phone device
+/// (tunnel cut, push removed, session ended), with per-step status.
+async fn list_revocations(State(s): S) -> Json<Value> {
+    let list: Vec<Value> = match s.tunnel.as_ref() {
+        Some(t) => t
+            .ledger
+            .list()
+            .into_iter()
+            .map(|e| {
+                let mut v = serde_json::to_value(&e.status).unwrap_or_default();
+                v["summary"] = json!(e.status.summary());
+                v["complete"] = json!(e.status.complete());
+                v
+            })
+            .collect(),
+        None => Vec::new(),
+    };
+    Json(json!({ "revocations": list }))
+}
+
+/// `POST /v1/revocations/{device}/retry`: try the unfinished steps now.
+async fn retry_revocation(State(s): S, Path(device): Path<String>) -> ApiResult<Json<Value>> {
+    let device = parse_id(&device, "revocation")?;
+    let t = s.tunnel.as_ref().ok_or_else(|| ApiError::not_found("revocation"))?;
+    if !t.retry_revocation(device) {
+        return Err(ApiError::not_found("revocation"));
+    }
+    Ok(Json(json!({ "retrying": true })))
+}
+
 /// Deprecated: kept for app builds older than `/v1/dashboard`.
 async fn lab_status(State(s): S) -> Response {
     let body = Json(lab::status(&s.http, &s.opts.prometheus_url).await);
@@ -1517,16 +1558,30 @@ async fn events(State(s): S, peer: Option<Extension<TunnelPeer>>, headers: Heade
     // foreground on that phone (it cancels the stream when backgrounded): no
     // pushes to it while the stream lives. The guard rides in the stream
     // state, so it drops with the response body however the stream ends.
+    // On the direct path, the stream lives only while the token it was opened
+    // with does: a rotation (a revoked phone held it) ends it.
+    let token_gen = peer.is_none().then(|| {
+        let mut rx = s.token_gen.subscribe();
+        rx.mark_unchanged();
+        rx
+    });
     let foreground = peer.and_then(|Extension(p)| s.tunnel.as_ref().map(|t| t.foreground(&p.pid)));
     // Open with a comment so the client sees body bytes at once: URLSession
     // (the phone) doesn't hand back the response until the first body byte, so
     // without this a quiet stream looked "connecting" until the 15 s heartbeat.
     let hello = stream::once(async { Ok(Event::default().comment("connected")) });
     let backlog = hello.chain(stream::iter(backlog.into_iter().map(|e| Ok(to_event(e)))));
-    let live = stream::unfold((rx, foreground), |(mut rx, foreground)| async move {
+    let live = stream::unfold((rx, foreground, token_gen), |(mut rx, foreground, mut token_gen)| async move {
         loop {
-            match rx.recv().await {
-                Ok(ev) => return Some((Ok(to_event(ev)), (rx, foreground))),
+            let next = match token_gen.as_mut() {
+                Some(g) => tokio::select! {
+                    ev = rx.recv() => ev,
+                    _ = g.changed() => return None,
+                },
+                None => rx.recv().await,
+            };
+            match next {
+                Ok(ev) => return Some((Ok(to_event(ev)), (rx, foreground, token_gen))),
                 // A slow client skipped some events; it keeps the stream and
                 // can refetch (best effort, like Last-Event-ID).
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,

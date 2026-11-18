@@ -305,6 +305,11 @@ pub struct Shared {
     pub opts: ServeOptions,
     pub ws: Uuid,
     token: RwLock<String>,
+    /// Bumped whenever the bearer token changes: direct-path streams opened
+    /// with the old token end.
+    pub token_gen: watch::Sender<u64>,
+    /// How many times the revocation watch re-checked the roster.
+    pub revocation_checks: std::sync::atomic::AtomicU64,
     pub host_id: String,
     /// The relay tunnel, when remote access is enabled.
     pub tunnel: Option<Arc<tunnel::TunnelHost>>,
@@ -525,6 +530,7 @@ impl Shared {
         let t = t.trim();
         if t.len() >= 32 && *self.token.read().unwrap_or_else(|e| e.into_inner()) != t {
             *self.token.write().unwrap_or_else(|e| e.into_inner()) = t.to_string();
+            self.token_gen.send_modify(|g| *g += 1);
             println!("ligus serve: the bearer token changed on disk; using the new one.");
         }
     }
@@ -609,29 +615,94 @@ impl Shared {
         true
     }
 
-    /// Phone revocation is three-part (Phase A, item 6): a workspace
-    /// `DeviceRevoked` of a phone's device (its own key never signs again;
-    /// the fold refuses it) also revokes that phone's tunnel pairing here
-    /// (the relay drops its sessions through the existing tunnel revocation,
-    /// and pushes to it stop). Its langstroth-auth session is revoked by the same
-    /// signed `DeviceRevoked` when organization sign-in lands (Phase D).
-    /// Returns the pairings revoked.
+    /// Phone revocation is three-part (Phase A, item 6; wired in Phase B): a
+    /// workspace `DeviceRevoked` of a phone's device (its own key never signs
+    /// again; the fold refuses it) also revokes every tunnel pairing bound to
+    /// that device here, at once (live sessions end, new ones and pairings
+    /// are refused, pushes stop), then tells the relay to drop the pairing and
+    /// its push token and ends its langstroth-auth session, with per-step
+    /// status ([`tunnel::revocation`]). Runs whenever the store changes,
+    /// whatever wrote the event ([`revocation_watch`]). Returns the pairings
+    /// revoked.
     pub fn revoke_phones_of_revoked_devices(&self) -> Vec<String> {
-        let Some(tunnel) = self.tunnel.as_ref() else { return Vec::new() };
-        let revoked: std::collections::BTreeSet<Uuid> = {
+        let (revoked, revoked_phones): (std::collections::BTreeSet<Uuid>, std::collections::BTreeSet<Uuid>) = {
             let svc = self.lock();
             match svc.store().load_config(self.ws, None, None) {
-                Ok((_, t)) => t.current().devices.iter().filter(|(_, d)| d.revoked).map(|(id, _)| *id).collect(),
+                Ok((_, t)) => {
+                    let devices = &t.current().devices;
+                    (
+                        devices.iter().filter(|(_, d)| d.revoked).map(|(id, _)| *id).collect(),
+                        devices.iter().filter(|(_, d)| d.revoked && d.phone).map(|(id, _)| *id).collect(),
+                    )
+                }
                 Err(_) => return Vec::new(),
             }
         };
+        // A phone is a P-256 device on the roster, or any device a pairing
+        // here is bound to.
+        let mut revoked_phones = revoked_phones;
+        if let Some(t) = self.tunnel.as_ref() {
+            revoked_phones.extend(t.registry.list().into_iter().filter_map(|r| r.device_id).filter(|d| revoked.contains(d)));
+        }
+        self.rotate_token_for(&revoked_phones);
+        let Some(tunnel) = self.tunnel.as_ref() else { return Vec::new() };
         let pids = tunnel.registry.pairings_of_revoked(&revoked);
+        let mut by_device: std::collections::BTreeMap<Uuid, Vec<String>> = std::collections::BTreeMap::new();
         for pid in &pids {
-            if let Err(e) = tunnel.revoke(pid) {
+            if let Some(d) = tunnel.registry.get(pid).and_then(|r| r.device_id) {
+                by_device.entry(d).or_default().push(pid.clone());
+            }
+        }
+        for (device, pids) in by_device {
+            if let Err(e) = tunnel.revoke_device(device, &pids) {
                 eprintln!("serve: revoking a revoked phone's pairing failed: {e}");
             }
         }
         pids
+    }
+
+    /// A revoked phone held the direct-path bearer token too (its pairing
+    /// link carries it): rotate `serve.token` once for each newly revoked
+    /// phone device (`serve-token-revocations.json` remembers which ones it
+    /// already rotated for). Direct streams opened with the old token end
+    /// ([`Self::token_gen`]); the remaining phones fetch the new one over
+    /// their tunnel (`GET /v1/tunnel/direct`), or re-pair if they only use
+    /// the direct path.
+    fn rotate_token_for(&self, revoked_phones: &std::collections::BTreeSet<Uuid>) {
+        // The sync loop and the revocation watch both get here: one rotation.
+        static ROTATING: Mutex<()> = Mutex::new(());
+        let _one = ROTATING.lock().unwrap_or_else(|e| e.into_inner());
+        let file = self.cfg.data_dir.join("serve-token-revocations.json");
+        let done: std::collections::BTreeSet<Uuid> =
+            std::fs::read(&file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        let fresh: Vec<Uuid> = revoked_phones.difference(&done).copied().collect();
+        if fresh.is_empty() {
+            return;
+        }
+        if let Err(e) = pair::rotate_token(&self.opts.token_file) {
+            eprintln!("serve: rotating the bearer token after a phone revocation failed (retrying): {e:#}");
+            return;
+        }
+        self.reload_token();
+        let all: std::collections::BTreeSet<Uuid> = done.union(revoked_phones).copied().collect();
+        if let Err(e) = crate::serve::tunnel::write_json(&file, &all) {
+            eprintln!("serve: recording the bearer token rotation failed: {e:#}");
+        }
+        println!("ligus serve: rotated the bearer token because phone device(s) {fresh:?} were revoked; paired phones fetch the new one over the relay");
+    }
+
+    /// A workspace device as the tunnel sees it (for binding a pairing).
+    pub fn device_lookup(&self, id: Uuid) -> tunnel::device_bind::DeviceLookup {
+        use tunnel::device_bind::DeviceLookup;
+        let svc = self.lock();
+        match svc.store().load_config(self.ws, None, None) {
+            Ok((_, t)) => match t.current().devices.get(&id) {
+                None => DeviceLookup::Unknown,
+                Some(d) if d.revoked => DeviceLookup::Revoked,
+                Some(d) => DeviceLookup::Certified { public_key: d.public_key.clone(), phone: d.phone },
+            },
+            Err(_) => DeviceLookup::Unknown,
+        }
     }
 
     /// The actor id this box writes as.
@@ -1047,6 +1118,8 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
     let shared = Arc::new(Shared {
         ws,
         token: RwLock::new(token),
+        token_gen: watch::Sender::new(0),
+        revocation_checks: Default::default(),
         host_id,
         tunnel,
         svc: Mutex::new(svc),
@@ -1121,6 +1194,13 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
     tasks.push(tokio::spawn(typing_api::typing_loop(shared.clone(), rx.clone())));
     tasks.push(tokio::spawn(token_watch(shared.clone(), rx.clone())));
     if let Some(t) = shared.tunnel.clone() {
+        let weak = Arc::downgrade(&shared);
+        t.set_device_lookup(Arc::new(move |id| match weak.upgrade() {
+            Some(s) => s.device_lookup(id),
+            None => tunnel::device_bind::DeviceLookup::Unknown,
+        }));
+        tasks.push(tokio::spawn(revocation_watch(shared.clone(), rx.clone())));
+        tasks.push(tokio::spawn(tunnel::revocation::run(t.clone(), rx.clone())));
         tasks.push(tokio::spawn(tunnel::pending_loop(t.clone(), rx.clone())));
         tasks.push(tokio::spawn(tunnel::control::run(t, api::router(shared.clone()), rx.clone(), Default::default())));
     }
@@ -1183,6 +1263,50 @@ async fn token_watch(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
     }
 }
 
+/// How often [`revocation_watch`] looks at the store.
+pub const REVOCATION_WATCH: Duration = Duration::from_millis(500);
+
+/// Enforce phone revocations whatever path the `DeviceRevoked` arrived by (a
+/// sync round, an API write, the phone itself, another process writing the
+/// same `hive.db`): whenever the store gained rows, re-check the roster and
+/// cut the pairings of revoked devices. Bounded: within
+/// [`REVOCATION_WATCH`] of the event landing (plus one roster fold).
+async fn revocation_watch(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
+    let config_id = workspace_config_session_id(shared.ws);
+    // (events row, equivocations row, registry generation) last looked at.
+    let mut seen: Option<(i64, i64, u64)> = None;
+    loop {
+        let gen = shared.tunnel.as_ref().map(|t| t.registry.generation()).unwrap_or(0);
+        let now = {
+            let svc = shared.lock();
+            let st = svc.store();
+            match (st.max_row_id(), st.max_equivocation_row_id()) {
+                (Ok(r), Ok(q)) => {
+                    // Only the config log carries revocations: chat traffic
+                    // (a busy workspace) never re-folds or rescans anything.
+                    let check = match seen {
+                        None => true,
+                        Some((r0, q0, g0)) => g0 != gen || ((r, q) != (r0, q0) && st.session_rows_after(config_id, r0, q0).unwrap_or(true)),
+                    };
+                    Some(((r, q, gen), check))
+                }
+                _ => None,
+            }
+        };
+        if let Some((at, check)) = now {
+            seen = Some(at);
+            if check {
+                shared.revocation_checks.fetch_add(1, Ordering::Relaxed);
+                shared.revoke_phones_of_revoked_devices();
+            }
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(REVOCATION_WATCH) => {}
+            _ = stop.wait_for(|s| *s) => return,
+        }
+    }
+}
+
 /// While the relay's push stream is open, a full round this often anyway
 /// catches a nudge the stream dropped (the desktop's heartbeat, too).
 const SYNC_SAFETY_POLL: Duration = Duration::from_secs(20);
@@ -1239,7 +1363,6 @@ async fn sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
                 shared.sync_ok();
                 if pulled > 0 {
                     shared.refresh_standing();
-                    shared.revoke_phones_of_revoked_devices();
                     shared.refresh();
                     shared.worker_kick.notify_one();
                     // A peer's contact id may have arrived: deliver what waits.
@@ -1297,6 +1420,7 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
     let key = hive_core::derive_workspace_key(&pass);
     let room = shared.cfg.room.clone();
     let mut coordinator = WorkspaceLease::default();
+    let mut retry_seen = Timestamp::now().inner().unix_timestamp();
     loop {
         shared.presence.record(&shared.host_id, Timestamp::now().inner().unix_timestamp());
         // A box that can't write (revoked, awaiting approval) isn't serving work.
@@ -1315,9 +1439,48 @@ async fn presence_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
         if let Ok(beats) = fetch_host_beats(&relay, &room, &ring).await {
             shared.presence.merge(beats);
         }
+        if shared.tunnel.is_some() {
+            revocation_presence(&shared, &relay, &room, &ring, &mut retry_seen).await;
+        }
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(HOST_BEAT_EVERY_SECS as u64)) => {}
             _ = stop.wait_for(|s| *s) => return,
+        }
+    }
+}
+
+/// Publish this box's phone-revocation status for the desktops, and take the
+/// retry requests they left (sealed presence slots; display and "try now"
+/// only, see [`hive_runtime::revocation_status`]).
+async fn revocation_presence(
+    shared: &Arc<Shared>,
+    relay: &hive_runtime::RelayClient,
+    room: &str,
+    ring: &hive_runtime::keyring::KeyringEngine,
+    retry_seen: &mut i64,
+) {
+    use hive_runtime::revocation_status as rs;
+    let Some(t) = shared.tunnel.as_ref() else { return };
+    // Under this box's workspace device id (its host id), signed with its key.
+    let report = t.ledger.report(&shared.host_id);
+    if !report.devices.is_empty() {
+        let report = shared.lock().sign_revocation_report(report);
+        if let Err(e) = rs::publish_report(relay, room, ring, &report).await {
+            eprintln!("presence: publishing the revocation status failed: {e}");
+        }
+    }
+    if let Ok(blobs) = relay.list_presence(room).await {
+        let now = Timestamp::now().inner().unix_timestamp();
+        let ws = shared.ws;
+        let retries = {
+            let svc = shared.lock();
+            rs::open_retries(&blobs, ring, *retry_seen, now, |d| svc.retry_requester_key(ws, d))
+        };
+        for r in retries {
+            *retry_seen = (*retry_seen).max(r.at);
+            if let Ok(d) = Uuid::parse_str(&r.device_id) {
+                t.retry_revocation(d);
+            }
         }
     }
 }

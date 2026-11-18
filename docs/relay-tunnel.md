@@ -391,7 +391,8 @@ anonymous handshakes against the host key.
 ### 7.2 Enrollment (`mode:"enroll"`)
 
 ```
-msg1 phone→host  payload {"v":1,"name":"<≤64 chars>","pk":"<b64u phone auth pub>"}
+msg1 phone→host  payload {"v":1,"name":"<≤64 chars>","pk":"<b64u phone auth pub>",
+                          "device": {"id":"<workspace device uuid>","sig":"<b64u P-256 sig>"}}
 msg2 host→phone  payload {"v":1,"pid":"<pid>","cred":"hpc1…"}
 then transport; the phone MUST send a PING frame (§8) first
 ```
@@ -413,6 +414,18 @@ Host rules:
   message from the phone arrives. Only then does the host consume `ps` and
   send `enrollClose`. A replayed msg1 (for example, from the relay) can't
   produce that message.
+- **E3a (device binding, required).** `device` binds the pairing to the
+  phone's workspace device (its P-256 Secure Enclave key, certified on the
+  config log). `sig` is ECDSA P-256 (64 bytes, r ‖ s, low-S) over
+  `ctx("device-bind", hid, phone_static)`, so it binds only this pairing on
+  this host. The host checks it against the device's certificate on its
+  roster and refuses (no msg2, the attempt counts) a missing claim, a
+  device it doesn't know yet (the phone pairs again once the box has synced
+  its certificate), a revoked device, a non-phone device, and a bad
+  signature. It checks the device again when it stores the pairing (E4), so
+  a revocation folded in between still refuses it. The host also refuses an
+  enrollment whose static or auth key belonged to a pairing of a revoked
+  device. A pairing's device never changes.
 - **E5.** After E4 the connection carries normal API traffic (§8, §9) under
   the relay's enrollment cap. The host SHOULD tell the owner: a terminal or
   log line, and a push to the other paired phones ("New phone paired: …").
@@ -542,6 +555,10 @@ Host connector (`hive serve`):
     whether they carry a message preview (§14). `previews` defaults to `true`
     for a newly paired phone; when the field is absent the stored value is
     kept.
+  - `GET /v1/tunnel/direct` → `{"token","url"}`: the direct-path bearer
+    token and URL (tunnel only; `404` on the direct path). The token rotates
+    when a phone device is revoked; a phone whose direct request gets `401`
+    fetches it again here.
 
 Phone client: the transport layer maps each `URLRequest` onto one stream and
 builds an `HTTPURLResponse` and body or byte sequence from the reply. In the
@@ -686,6 +703,52 @@ unused for 90 days.
    `exp`;
 4. by default also rotates the direct-path bearer token (`serve.token`),
    because a stolen phone holds that too. `--keep-token` opts out.
+
+**Device revocation (Phase B).** A workspace `DeviceRevoked` of a phone's
+device revokes every pairing bound to it (E3a), whatever path the event took
+to the host (a sync round, a local write, another process on the same data
+directory, the phone itself): the host re-checks its roster within 0.5 s of
+any store change and runs steps 1–3 above at once. Step 4 (rotating
+`serve.token`) is not optional here: it happens once per newly revoked phone
+device (`serve-token-revocations.json` remembers which), and direct-path
+event streams opened with the old token end. The phones that remain fetch
+the new token over their tunnel with `GET /v1/tunnel/direct` (§9); a phone
+that only uses the direct path must re-pair. It then confirms with the
+relay over plain HTTPS, which doesn't need the control connection and
+reports what it did:
+
+```
+POST /v1/tunnel/revoke
+{"v":1,"hostId","pid","exp","ts","nonce":"<b64u 16 bytes>","sig":"<b64u 64 bytes>"}
+sig = Ed25519(host signing key, ctx("host-revoke", hostId, pid, u64be(exp), u64be(ts), nonce))
+→ 200 {"ok":true,"pid","revokedUntil","sessionsClosed","pushTokenRemoved"}
+```
+
+The relay verifies `sig` against the key `hostId` registered with (so a
+host can only revoke its own pairings), requires `ts` within ±300 s (outside it, a validly signed request gets
+`401 {"error":"clock_skew","now":<relay unix time>}`, not counted as a failed
+authentication, and the host signs again with the relay's time), accepts
+each `(hostId, nonce)` once (a replay answers `409`), and is idempotent. A
+relay without the route answers `404`; the control `revoke` ack then
+confirms. When the host has langstroth-auth operator access
+(`LIGUS_AUTH_ADMIN_URL`, `LIGUS_AUTH_ADMIN_TENANT`,
+`LIGUS_AUTH_ADMIN_TOKEN_FILE`, a 0600 file holding that tenant's
+device-revocation token, `device_revoke_token_*` in langstroth-auth's
+config, which opens only this route of only that tenant; never the operator
+token) it also ends the device's sign-in session
+(`POST /admin/v1/tenants/{t}/devices/{device}/revoke`). Each step's status
+(pending, done, failed and retrying, not applicable) is kept in
+`tunnel/revocations.json` and shown by `GET /v1/revocations`,
+`POST /v1/revocations/{device}/retry`, `ligus phones list`, and on the
+desktop (a sealed presence slot `revocations:<host_id>`, where `host_id` is
+the box's workspace device id). Both presence blobs are also signed with a
+device key, so a workspace-key holder can neither fake a box's status nor
+trigger its retries: the report by the box's device key (Ed25519 over
+`"ligus-revocation-report-v1\0" ‖ JSON`, verified by the desktop against the
+box's certified, unrevoked device), and a retry request
+(`revocation-retry:<device>`) by the asking desktop's device key (Ed25519
+over `"ligus-revocation-retry-v1\0" ‖ JSON`, with `requester`; the box takes
+it only from a certified, unrevoked, non-phone device of a current member).
 
 `hive remote reset` generates new host keys, so a new `host_id`: every phone
 must re-pair. Use it if the host key may have leaked.

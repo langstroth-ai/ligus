@@ -66,6 +66,10 @@ struct EnrollHello {
     #[serde(default)]
     name: String,
     pk: String,
+    /// The phone's workspace device and its proof (required; see
+    /// [`super::device_bind`]).
+    #[serde(default)]
+    device: Option<super::device_bind::DeviceClaim>,
 }
 
 #[derive(Deserialize)]
@@ -147,6 +151,36 @@ where
                 if hello.v != 1 {
                     bail!("unsupported enrollment version {}", hello.v);
                 }
+                // A phone whose workspace device was revoked can't pair again,
+                // with a claim or with the keys of its revoked pairing.
+                if let Some(why) = host.enroll_refusal(&rs, &pk) {
+                    host.window_failed(eid);
+                    bail!("enrollment refused: {why}");
+                }
+                // E3a: every pairing proves its phone's workspace device, so
+                // revoking the device can always find (and cut) it.
+                let Some(claim) = &hello.device else {
+                    host.window_failed(eid);
+                    bail!("enrollment refused: no workspace device claim (a phone pairs only as one of the workspace's phones)");
+                };
+                let device_id = {
+                    use super::device_bind::BindCheck;
+                    match super::device_bind::check(claim, keys.host_id(), &rs, |d| host.lookup_device(d)) {
+                        BindCheck::Bind(d) => d,
+                        BindCheck::Unknown => {
+                            host.window_failed(eid);
+                            bail!("enrollment refused: this box doesn't know workspace device {} yet (let it sync, then pair again)", claim.id);
+                        }
+                        BindCheck::Revoked(d) => {
+                            host.window_failed(eid);
+                            bail!("enrollment refused: workspace device {d} is revoked");
+                        }
+                        BindCheck::Invalid(why) => {
+                            host.window_failed(eid);
+                            bail!("enrollment refused: {why}");
+                        }
+                    }
+                };
                 let name: String = hello.name.trim().chars().filter(|c| !c.is_control()).take(64).collect();
                 // E3: same static as an active phone → keep its pid.
                 let pid = host.registry.active_by_static(&rs).map(|r| r.pid).unwrap_or_else(random_id);
@@ -174,7 +208,7 @@ where
                     push_seq: 0,
                     last_seen: None,
                     owner_phone: false,
-                    device_id: None,
+                    device_id: Some(device_id),
                 };
                 Ok((ts, pid, Some(PendingEnroll { rec, eid: eid.clone() })))
             }
@@ -297,6 +331,15 @@ where
                 // E4: the first valid transport message confirms an enrollment.
                 if let Some(p) = pending.take() {
                     let name = p.rec.name.clone();
+                    // E3a again at E4: a revocation folded since msg1 still
+                    // refuses the pairing (the watch may already have run).
+                    if let Some(d) = p.rec.device_id {
+                        if !matches!(host.lookup_device(d), super::device_bind::DeviceLookup::Certified { phone: true, .. }) {
+                            host.window_failed(&p.eid);
+                            result = Err(anyhow!("enrollment refused at E4: workspace device {d} is revoked or no longer a certified phone"));
+                            break 'session;
+                        }
+                    }
                     if let Err(e) = host.registry.activate(p.rec) {
                         result = Err(e.context("saving the new phone"));
                         break 'session;

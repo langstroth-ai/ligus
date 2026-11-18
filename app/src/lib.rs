@@ -4843,6 +4843,78 @@ fn revoke_my_device(state: State<AppState>, device_id: String) -> Result<(), Str
     Ok(())
 }
 
+/// The active workspace's presence channel: relay client, room and ring
+/// (none without a relay or a workspace key).
+fn active_presence_conn(state: &AppState) -> Option<(hive_runtime::RelayClient, String, hive_runtime::keyring::KeyringEngine)> {
+    let (url, room, key, ws_conn) = {
+        let s = state.settings.lock().unwrap();
+        let url = s.relay_url.clone().filter(|u| !u.trim().is_empty())?;
+        let ws_conn = s.workspaces.iter().find(|w| w.room == s.sync_room).cloned();
+        (url, s.sync_room.clone(), s.workspace_key(), ws_conn)
+    };
+    key?;
+    let ring = workspace_ring(state, &room, ws_conn.as_ref());
+    Some((state.relay_client(&url), room, ring))
+}
+
+/// What a box did about one revoked phone device: "revoked: tunnel cut, push
+/// removed, session ended", each step with its state and detail.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceRevocationDto {
+    host_id: String,
+    host_label: String,
+    /// When the box last reported (unix seconds).
+    reported_at: i64,
+    summary: String,
+    complete: bool,
+    #[serde(flatten)]
+    status: hive_runtime::revocation_status::DeviceRevocationStatus,
+}
+
+/// Phone revocation status from every box that paired the phone (their
+/// sealed presence reports). Display only: a report can't undo a revocation.
+#[tauri::command]
+async fn list_device_revocations(state: State<'_, AppState>) -> Result<Vec<DeviceRevocationDto>, String> {
+    let Some((relay, room, ring)) = active_presence_conn(&state) else { return Ok(Vec::new()) };
+    // Only a box's own signed report counts (its certified, unrevoked device key).
+    let ws = room_workspace_id(&room);
+    let blobs = relay.list_presence(&room).await.map_err(map_err)?;
+    let reports = {
+        let svc = state.service.lock().unwrap();
+        hive_runtime::revocation_status::open_reports(&blobs, &ring, |d| svc.certified_device_key(ws, d).ok().flatten())
+    };
+    let hosts = {
+        let svc = state.service.lock().unwrap();
+        svc.list_hosts(room_workspace_id(&room)).unwrap_or_default()
+    };
+    let mut out = Vec::new();
+    for (host_id, r) in reports {
+        let host_label = hosts.iter().find(|h| h.id == host_id).map(|h| h.label.clone()).filter(|l| !l.trim().is_empty()).unwrap_or_else(|| "a serve box".into());
+        for d in r.devices {
+            out.push(DeviceRevocationDto { host_id: host_id.clone(), host_label: host_label.clone(), reported_at: r.at, summary: d.summary(), complete: d.complete(), status: d });
+        }
+    }
+    out.sort_by_key(|d| std::cmp::Reverse(d.status.revoked_at));
+    Ok(out)
+}
+
+/// Ask the boxes to retry a revoked phone's unfinished steps now (they also
+/// retry on their own).
+#[tauri::command]
+async fn retry_device_revocation(state: State<'_, AppState>, device_id: String) -> Result<(), String> {
+    let device = Uuid::parse_str(&device_id).map_err(map_err)?;
+    let Some((relay, room, ring)) = active_presence_conn(&state) else {
+        return Err("No relay connection for this workspace.".into());
+    };
+    // Signed by this device: a box takes a retry only from a member's device.
+    let req = {
+        let svc = state.service.lock().unwrap();
+        svc.sign_revocation_retry(hive_runtime::revocation_status::retry_request(&device.to_string(), svc.device_id()))
+    };
+    hive_runtime::revocation_status::request_retry(&relay, &room, &ring, &req).await.map_err(map_err)
+}
+
 #[tauri::command(async)]
 fn set_member_role(
     state: State<AppState>,
@@ -14823,6 +14895,8 @@ pub fn run() {
             list_my_devices,
             list_device_requests,
             revoke_my_device,
+            list_device_revocations,
+            retry_device_revocation,
             set_member_role,
             list_vaults,
             add_vault,
