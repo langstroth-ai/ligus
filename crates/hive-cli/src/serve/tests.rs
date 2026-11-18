@@ -3490,8 +3490,11 @@ async fn phone_messages_show_as_the_box_or_its_owner() {
 /// the relay holds.
 async fn desktop_beats(h: &Harness) -> (Vec<hive_runtime::human_presence::HumanBeat>, String) {
     let relay = crate::relay_client(&h.desktop).unwrap();
-    let raw = relay.list_presence(&h.desktop.room).await.unwrap();
+    // The keyring first: building it (key derivation, a config fold) is slow
+    // on a loaded machine, and the beats' age is judged from the moment
+    // they're read, so that time must not count against their TTL.
     let ring = crate::box_ring(&h.desktop).unwrap();
+    let raw = relay.list_presence(&h.desktop.room).await.unwrap();
     let beats = hive_runtime::human_presence::open_human_beats(&raw, &ring, hive_runtime::human_presence::now_ms());
     (beats, serde_json::to_string(&raw).unwrap())
 }
@@ -3508,6 +3511,9 @@ async fn phone_typing_is_published_sealed_and_expires() {
     let chat_id = chat["chat"]["id"].as_str().unwrap().to_string();
     let box_actor = h.handle.shared.lock().author().clone();
     let path = format!("/v1/chats/{chat_id}/typing");
+    // The throttle and the expiry go by a clock the test moves, not by how
+    // fast a loaded machine gets from one request to the next.
+    h.handle.shared.typing.freeze_clock(std::time::Instant::now());
 
     let r = h.send(reqwest::Method::POST, &path, Some(json!({ "typing": true }))).await;
     assert_eq!(r["published"], json!(true));
@@ -3533,14 +3539,28 @@ async fn phone_typing_is_published_sealed_and_expires() {
     let (beats, _) = desktop_beats(&h).await;
     assert!(beats.iter().any(|b| b.typing && b.actor_id == owner.id && b.session_id == chat_id));
 
-    // The phone goes quiet: the box publishes "stopped" on its own.
-    let deadline = tokio::time::Instant::now() + super::typing_api::EXPIRE_AFTER + Duration::from_secs(4);
+    // The phone goes quiet: the box publishes "stopped" on its own, once the
+    // (test) clock passes EXPIRE_AFTER since the last ping, and not before.
+    let typing = &h.handle.shared.typing;
+    typing.advance(super::typing_api::EXPIRE_AFTER - Duration::from_millis(1));
+    assert!(typing.expire(typing.now()).is_empty(), "expired before EXPIRE_AFTER");
+    typing.advance(Duration::from_millis(1));
+    let chat_uuid = Uuid::parse_str(&chat_id).unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while typing.is_typing(chat_uuid) {
+        assert!(tokio::time::Instant::now() < deadline, "the box never expired the quiet typing");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    // A fresh "stopped" beat from the box (not the typing beat ageing out on
+    // the reader's side).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        if !desktop_beats(&h).await.0.iter().any(|b| b.typing) {
+        let (beats, _) = desktop_beats(&h).await;
+        if !beats.iter().any(|b| b.typing) && beats.iter().any(|b| !b.typing && b.actor_id == owner.id && b.session_id == chat_id) {
             break;
         }
         assert!(tokio::time::Instant::now() < deadline, "quiet typing never expired");
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
     h.handle.shutdown();
 }
