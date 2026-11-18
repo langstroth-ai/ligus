@@ -1093,13 +1093,15 @@ impl EventStore {
         Ok(out)
     }
 
-    /// Hard-delete every event for a session (irreversible). Returns the
-    /// number of rows removed.
+    /// Hard-delete every event for a session (irreversible), and every
+    /// other copy held under its ids (left alone, one would fold as the
+    /// session). Returns the number of log rows removed.
     pub fn delete_session(&self, session_id: Uuid) -> Result<usize> {
         let n = self.conn.execute(
             "DELETE FROM events WHERE session_id = ?1",
             [session_id.to_string()],
         )?;
+        self.conn.execute("DELETE FROM equivocations WHERE session_id = ?1", [session_id.to_string()])?;
         self.delete_compaction(session_id, None)?;
         Ok(n)
     }
@@ -1790,6 +1792,7 @@ impl EventStore {
                 [&ws_s],
             )?;
             tx.execute("DELETE FROM events WHERE workspace_id = ?1", [&ws_s])?;
+            tx.execute("DELETE FROM equivocations WHERE workspace_id = ?1", [&ws_s])?;
             for room in rooms.iter().filter(|r| hive_core::room_workspace_id(r) == *ws) {
                 tx.execute("DELETE FROM sync_cursor WHERE workspace = ?1", [room])?;
                 tx.execute("DELETE FROM pushed WHERE workspace = ?1", [room])?;
@@ -1853,6 +1856,13 @@ impl EventStore {
             }
         }
 
+        // Every other copy held under a pruned id goes with it (left alone,
+        // one would fold in the pruned chunk's place), a witness like it.
+        for event_id in &doomed {
+            for env in self.query_envelopes("SELECT envelope_json FROM equivocations WHERE event_id = ?1", [event_id])? {
+                witnesses.push(env);
+            }
+        }
         for env in &witnesses {
             self.note_lamport_witness(env)?;
         }
@@ -1860,6 +1870,7 @@ impl EventStore {
         let mut removed = 0;
         for event_id in &doomed {
             removed += tx.execute("DELETE FROM events WHERE event_id = ?1", [event_id])?;
+            tx.execute("DELETE FROM equivocations WHERE event_id = ?1", [event_id])?;
         }
         tx.commit()?;
         Ok(removed)
@@ -2458,6 +2469,41 @@ mod tests {
         assert_eq!(s.messages.iter().find(|m| m.id == mid).unwrap().body, "Hello");
         // idempotent
         assert_eq!(store.prune_superseded_chunks().unwrap(), 0);
+    }
+
+    /// Another copy held under a pruned chunk's id goes with it (as a
+    /// witness), and a deleted session leaves no copy behind to fold as it.
+    #[test]
+    fn copies_follow_their_event_out_of_the_store() {
+        let (mut store, sid, wid) = seeded_store();
+        let mut placeholder = ChatMessage::new(MessageRole::Assistant, "Hive", "");
+        placeholder.is_streaming = true;
+        let mid = placeholder.id;
+        store.append(sid, wid, SessionEvent::MessageAppended { message: placeholder }).unwrap();
+        let chunk = store.append(sid, wid, SessionEvent::MessageChunkReceived { message_id: mid, chunk: "Hel".into() }).unwrap();
+        // Another signer's copy under the chunk's id, kept beside it.
+        let mut other = chunk.clone();
+        other.payload = SessionEvent::MessageChunkReceived { message_id: mid, chunk: "lo, forged".into() };
+        other.clear_raw();
+        let kp = hive_core::SigningKeypair::generate().unwrap();
+        hive_core::sign_envelope(&mut other, Uuid::new_v4(), &kp);
+        store.ingest(&other).unwrap();
+        assert_eq!(store.list_copies(sid).unwrap().iter().filter(|e| e.event_id == chunk.event_id).count(), 2);
+        store.append(sid, wid, SessionEvent::MessageCompleted { message_id: mid, body: "Hello".into() }).unwrap();
+        assert!(store.prune_superseded_chunks().unwrap() >= 1);
+        assert!(store.list_copies(sid).unwrap().iter().all(|e| e.event_id != chunk.event_id), "a copy outlived its pruned chunk");
+        let s = store.load_session(sid).unwrap().unwrap();
+        assert_eq!(s.messages.iter().find(|m| m.id == mid).unwrap().body, "Hello");
+
+        // A copy of the seed outliving a deleted session would fold as it.
+        let seed = store.list(sid).unwrap().remove(0);
+        let mut copy = seed.clone();
+        copy.clear_raw();
+        hive_core::sign_envelope(&mut copy, Uuid::new_v4(), &kp);
+        store.ingest(&copy).unwrap();
+        store.delete_session(sid).unwrap();
+        assert!(store.list_copies(sid).unwrap().is_empty());
+        assert!(store.load_session(sid).unwrap().is_none(), "the deleted session came back");
     }
 
     /// A pruned chunk stays a lamport witness: another device may have held
