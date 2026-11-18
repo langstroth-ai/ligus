@@ -2171,7 +2171,7 @@ impl ChatService {
         self.append_signed(
             config_id,
             workspace_id,
-            SessionEvent::JoinApproved { subject: hive_core::authorization::invite_subject(id) },
+            SessionEvent::JoinApproved { subject: hive_core::authorization::invite_subject(id), admission: None },
         )?;
         Ok(id)
     }

@@ -322,7 +322,14 @@ pub enum SessionEvent {
     /// An Admin's approval of a pending join: `subject` is a member id (added
     /// during dearth mode) or a device id (certified during dearth mode). A
     /// second approval from another Admin admits it. Config log; Admin+.
-    JoinApproved { subject: String },
+    /// `subject` `invite:<id>` issues a single-use invite; with `admission`
+    /// it is a box admission (Phase B, [`crate::admission`]): it admits only
+    /// a service member, until it expires. Left out when absent.
+    JoinApproved {
+        subject: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        admission: Option<crate::admission::Admission>,
+    },
     /// An infection signal locked a chat down (self-medication): its envelope
     /// closes egress and every proposal needs a human approval until a member
     /// clears it. Config log (so the workspace roster authorizes the clear);

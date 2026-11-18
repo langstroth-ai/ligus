@@ -144,7 +144,7 @@ impl ChatService {
     /// Approve a pending join (a member id or a device id) as this Admin.
     pub fn approve_join(&mut self, workspace_id: Uuid, subject: &str) -> Result<()> {
         let config_id = self.ensure_workspace_config(workspace_id)?;
-        self.append_signed(config_id, workspace_id, SessionEvent::JoinApproved { subject: subject.to_string() })?;
+        self.append_signed(config_id, workspace_id, SessionEvent::JoinApproved { subject: subject.to_string(), admission: None })?;
         Ok(())
     }
 

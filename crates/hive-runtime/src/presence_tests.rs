@@ -315,7 +315,7 @@ fn requires_presence_exhaustive() {
         SessionEvent::MemberRoleChanged {
             change: MemberRoleChange { member_id: "x".into(), old_role: WorkspaceRole::Viewer, new_role: WorkspaceRole::Admin }, watermark: Vec::new(),
         },
-        SessionEvent::JoinApproved { subject: "x".into() },
+        SessionEvent::JoinApproved { subject: "x".into(), admission: None },
         SessionEvent::DeviceRevoked { device_id: Uuid::nil(), watermark: Vec::new() },
         SessionEvent::PasskeyRemoved { account_id: Uuid::nil(), credential_id: "c".into() },
         SessionEvent::ChatLockdownCleared { chat_id: Uuid::nil() },

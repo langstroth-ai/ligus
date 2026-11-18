@@ -647,7 +647,7 @@ fn forged_frontier_hold_cannot_block_side_effects_indefinitely() {
     assert!(w.state().authz.blocks(pid, None), "held while it could still arrive");
     // The config log moves past the claimed lamport: the hold is dropped.
     for _ in 0..3 {
-        w.cfg_push("owner", SessionEvent::JoinApproved { subject: "noop".into() });
+        w.cfg_push("owner", SessionEvent::JoinApproved { subject: "noop".into(), admission: None });
     }
     let s = w.state();
     assert!(!s.authz.blocks(pid, None), "a frontier the log has passed can't block side effects");
@@ -1132,7 +1132,7 @@ fn enroll(id: &str, invite: Option<Uuid>) -> SessionEvent {
 }
 
 fn issue(invite: Uuid) -> SessionEvent {
-    SessionEvent::JoinApproved { subject: hive_core::authorization::invite_subject(invite) }
+    SessionEvent::JoinApproved { subject: hive_core::authorization::invite_subject(invite), admission: None }
 }
 
 proptest! {

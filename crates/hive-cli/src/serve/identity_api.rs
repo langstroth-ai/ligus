@@ -411,7 +411,7 @@ pub async fn create_invite(State(s): S, peer: Option<Extension<TunnelPeer>>) -> 
 /// After a passkey-confirmed `JoinApproved` (presence commit): the invite
 /// code for it, when it is an invite to the box's workspace.
 pub fn invite_after_commit(s: &Shared, env: &hive_core::SessionEventEnvelope) -> Option<Value> {
-    let hive_core::SessionEvent::JoinApproved { subject } = &env.payload else { return None };
+    let hive_core::SessionEvent::JoinApproved { subject, .. } = &env.payload else { return None };
     if env.workspace_id != s.ws {
         return None;
     }

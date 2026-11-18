@@ -306,3 +306,39 @@ fn phase_a_goldens() {
     }
     std::fs::write(path, out).unwrap();
 }
+
+/// Writes the Phase B golden line: a box admission (`JoinApproved` with its
+/// optional `admission` terms). Run with `LIGUS_GOLDEN_OUT=<path> --ignored`,
+/// then append the line.
+#[test]
+#[ignore]
+fn phase_b_goldens() {
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let kp = device();
+    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let ws = u(2);
+    let payload = SessionEvent::JoinApproved {
+        subject: format!("invite:{}", u(0x71)),
+        admission: Some(hive_core::admission::Admission::service(3_600_000, Some(u(0x72)))),
+    };
+    let mut e = SessionEventEnvelope::new(hive_core::workspace_config_session_id(ws), ws, 200, payload);
+    e.id = u(0x3000);
+    e.event_id = u(0x3001);
+    e.lamport = 600;
+    e.timestamp = Timestamp::epoch();
+    let mut actor = ActorIdentity::new(u(9).to_string(), "Mara", ActorKind::Human);
+    actor.account_id = Some(u(9));
+    actor.device_id = Some(u(1));
+    e.actor_stamp = Some(ActorStamp {
+        actor,
+        recorded_at: Timestamp::epoch(),
+        cfg_frontier: Some(CfgFrontier { lamport: 599, event_id: u(0x2fff) }),
+        presence: None,
+        runtime_effect: false,
+        prev: Some(u(0x2ffe)),
+        sig_alg: SigAlg::Ed25519,
+    });
+    sign_envelope(&mut e, u(1), &kp);
+    let line = format!("{{\"label\":\"joinApprovedAdmission\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap());
+    std::fs::write(path, line).unwrap();
+}

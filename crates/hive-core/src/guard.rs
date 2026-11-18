@@ -110,6 +110,11 @@ pub struct GuardState {
     /// actor ids. Only Admin+ approvals are folded.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub join_approvals: BTreeMap<String, BTreeSet<String>>,
+    /// Box admissions (Phase B): invite id → the terms its `JoinApproved`
+    /// carried (the first one folded; a later one for the same invite is
+    /// refused). Config log.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub service_invites: BTreeMap<Uuid, crate::admission::Admission>,
     /// Approvals cast through a vote whose stated voter is the event's signed
     /// author (proposal id → voter ids). Approvals carried inside a proposal
     /// snapshot are not here, so they can't satisfy a human gate.
@@ -206,7 +211,10 @@ pub fn fold_authored(session: &mut crate::ChatSession, event: &crate::SessionEve
             session.guards.pending_members.push(PendingMember { member: member.clone(), added_by: author.to_string() });
             true
         }
-        SessionEvent::JoinApproved { subject } => {
+        SessionEvent::JoinApproved { subject, admission } => {
+            if let (Some(a), Some(id)) = (admission, crate::admission::invite_of_subject(subject)) {
+                session.guards.service_invites.entry(id).or_insert_with(|| a.clone());
+            }
             session.guards.join_approvals.entry(subject.clone()).or_default().insert(author.to_string());
             if let Some(i) = session
                 .guards

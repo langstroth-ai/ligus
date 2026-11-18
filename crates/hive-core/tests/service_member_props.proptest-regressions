@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc b39bb58e614cc64d8649c5f3972ba5e892307610a621860912d38278dcfc10b3 # shrinks to ops = [Issue { by: 0, slot: 1, ttl_min: 1, bind: None, presence: true }, Redeem { who: 0, slot: 1, role: 0, late_min: 0 }]

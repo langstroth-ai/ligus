@@ -175,7 +175,7 @@ pub async fn commit(
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "unknown or expired prepareId"))?;
     // An invite prepared over the tunnel and committed over plain HTTP would
     // hand its code out there: refused before anything is appended.
-    if matches!(&draft.env.payload, hive_core::SessionEvent::JoinApproved { subject } if subject.starts_with("invite:")) {
+    if matches!(&draft.env.payload, hive_core::SessionEvent::JoinApproved { subject, .. } if subject.starts_with("invite:")) {
         super::identity_api::require_secret_channel(&s, peer.as_deref())?;
     }
     let a = PresenceAssertion {
