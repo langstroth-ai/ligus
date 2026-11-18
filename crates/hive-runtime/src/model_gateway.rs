@@ -430,6 +430,36 @@ pub fn route_path_allowed(api: Api, method: &str, path_and_query: &str) -> bool 
     }
 }
 
+/// Request headers every wire's model API needs: content negotiation, the
+/// client's user agent, and an idempotency key for retried requests.
+const COMMON_REQUEST_HEADERS: &[&str] = &["content-type", "accept", "accept-encoding", "user-agent", "idempotency-key"];
+/// The Anthropic wire's version and beta-feature headers.
+const ANTHROPIC_REQUEST_HEADERS: &[&str] = &["anthropic-version", "anthropic-beta"];
+/// The OpenAI wire's beta-feature header.
+const OPENAI_REQUEST_HEADERS: &[&str] = &["openai-beta"];
+
+/// The request headers the egress proxy's gateway route forwards for `api`
+/// (lowercase).
+pub fn request_header_allow_list_of(api: Api) -> impl Iterator<Item = &'static str> {
+    let wire = match api {
+        Api::Openai => OPENAI_REQUEST_HEADERS,
+        Api::Anthropic => ANTHROPIC_REQUEST_HEADERS,
+    };
+    COMMON_REQUEST_HEADERS.iter().chain(wire).copied()
+}
+
+/// Whether the gateway route forwards a client's request header `name` to a
+/// gateway speaking `api`: only the allow-list
+/// ([`request_header_allow_list_of`]). Everything else a sandboxed agent
+/// sends is dropped: gateway identity, budget and routing headers
+/// (`x-litellm-*`, `x-envoy-*`, `x-forwarded-*`, `forwarded`, ...), its own
+/// credentials, and Ligus's attribution ids, which only Ligus sets
+/// ([`Gateway::injected_headers`]).
+pub fn forwardable_request_header(api: Api, name: &str) -> bool {
+    let n = name.trim().to_ascii_lowercase();
+    !is_client_credential_header(&n) && request_header_allow_list_of(api).any(|h| h == n)
+}
+
 /// Request headers a client may never pass to a gateway: credentials, and
 /// the attribution ids (only Ligus sets those).
 pub fn is_client_credential_header(name: &str) -> bool {

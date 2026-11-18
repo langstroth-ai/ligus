@@ -215,9 +215,13 @@ On a gateway route the proxy:
    credential on the gateway's admin routes (LiteLLM key minting);
 2. reads the request head and body (`Content-Length` or chunked; at most
    32 MiB);
-3. drops hop-by-hop headers and every credential a client could supply:
-   `Authorization`, `Proxy-Authorization`, `X-Api-Key`, `Api-Key`, `Cookie`,
-   and any `X-Ligus-*`;
+3. drops hop-by-hop headers and forwards only an allow-list per wire
+   (`model_gateway::forwardable_request_header`): `content-type`, `accept`,
+   `accept-encoding`, `user-agent`, `idempotency-key`, plus
+   `anthropic-version`/`anthropic-beta` (anthropic) or `openai-beta`
+   (openai). Credentials (`Authorization`, `X-Api-Key`, `Cookie`, ...), any
+   `X-Ligus-*`, and gateway identity, budget or routing headers
+   (`x-litellm-*`, `x-envoy-*`, `x-forwarded-*`, `forwarded`) never pass;
 4. adds `Gateway::auth_headers()` and, if enabled, the attribution headers;
 5. sends it with `Gateway::client()` to `<gateway url><rest of path>`,
    dialing an address it resolved and vetted itself (never link-local,
@@ -227,7 +231,11 @@ On a gateway route the proxy:
 What the child can see: the loopback URL, the dummy key, the proxy token. It
 cannot read the credential files (deny list) and never gets the credential in
 env, argv or files. Tests: `gateway_route_injects_and_strips` (a fake
-upstream records headers), `gateway_credential_absent_from_child` (env,
+upstream records headers), `request_header_allow_list`,
+`claude_code_request_shape_through_the_route` and
+`codex_request_shape_through_the_route` (recorded CLI request heads under
+`crates/hive-runtime/src/model_gateway/fixtures/`, replayed with spoofed
+headers added), `gateway_credential_absent_from_child` (env,
 argv and a scan of the turn's files), `gateway_files_are_denied_to_children`.
 
 ## 8. Hosted-API turns

@@ -24,7 +24,9 @@
 //! **Gateway routes** (docs/design/v2/model-gateways.md §7): a turn whose
 //! runtime uses an operator-listed model gateway reaches it only as plain
 //! HTTP to this proxy, `http://127.0.0.1:<port>/ligus-gw/<token>/<name>/...`.
-//! The proxy strips every credential the client sent, adds the gateway's own
+//! The proxy forwards only the request headers the gateway's wire needs
+//! ([`crate::model_gateway::forwardable_request_header`]: never a credential,
+//! nor a gateway identity, budget or routing header), adds the gateway's own
 //! ([`crate::model_gateway::Gateway::injected_headers`], the same headers a
 //! hosted-API turn sends) and forwards over the gateway's TLS client. The
 //! child never holds the credential.
@@ -679,7 +681,9 @@ async fn gateway_route<S: AsyncRead + AsyncWrite + Unpin>(
     };
     let mut req = http.request(m, gw.join(&path));
     for (k, v) in &headers {
-        if hop_by_hop(k) || crate::model_gateway::is_client_credential_header(k) {
+        // An allow-list per wire (never the client's credentials, gateway
+        // identity or budget headers); Ligus's own come from `injected`.
+        if hop_by_hop(k) || !crate::model_gateway::forwardable_request_header(gw.api(), k) {
             continue;
         }
         req = req.header(k.as_str(), v.as_str());

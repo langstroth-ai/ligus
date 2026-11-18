@@ -667,3 +667,151 @@ fn hive_daemon_is_exempt_only_on_loopback() {
         assert!(excl.route(ModelProviderKind::HiveDaemon, e, None).unwrap().is_none(), "{e}");
     }
 }
+
+/// Spoofable gateway identity, budget and routing headers a sandboxed agent
+/// might send: none of them reaches a gateway.
+const SPOOFED: &[&str] = &[
+    "x-litellm-customer-id",
+    "x-litellm-api-key",
+    "x-litellm-tags",
+    "x-litellm-end-user-id",
+    "x-litellm-timeout",
+    "x-envoy-original-path",
+    "x-envoy-max-retries",
+    "x-envoy-upstream-rq-timeout-ms",
+    "x-envoy-external-address",
+    "x-ai-eg-model",
+    "x-gateway-model-name",
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "x-forwarded-client-cert",
+    "forwarded",
+    "x-real-ip",
+    "x-original-url",
+    "x-request-id",
+    "x-user-id",
+    "x-budget-id",
+    "x-portkey-api-key",
+    "helicone-auth",
+    "traceparent",
+    "openai-organization",
+    "openai-project",
+    "anthropic-dangerous-direct-browser-access",
+    "x-stainless-lang",
+    "x-app",
+    "x-ligus-agent",
+    "x-ligus-workspace",
+    "authorization",
+    "proxy-authorization",
+    "x-api-key",
+    "api-key",
+    "cookie",
+];
+
+/// The gateway route forwards an allow-list per wire: the content and
+/// version headers the wire's model API needs, never anything else.
+#[test]
+fn request_header_allow_list() {
+    for api in [Api::Openai, Api::Anthropic] {
+        for h in ["content-type", "Content-Type", "accept", "accept-encoding", "user-agent", "idempotency-key"] {
+            assert!(forwardable_request_header(api, h), "{api:?} {h}");
+        }
+        for h in SPOOFED {
+            assert!(!forwardable_request_header(api, h), "{api:?} forwards {h}");
+        }
+    }
+    for h in ["anthropic-version", "anthropic-beta", "Anthropic-Beta"] {
+        assert!(forwardable_request_header(Api::Anthropic, h), "{h}");
+        assert!(!forwardable_request_header(Api::Openai, h), "{h} on the OpenAI wire");
+    }
+    assert!(forwardable_request_header(Api::Openai, "OpenAI-Beta"));
+    assert!(!forwardable_request_header(Api::Anthropic, "openai-beta"));
+    // The allow-list never names a credential or attribution header.
+    for api in [Api::Openai, Api::Anthropic] {
+        for h in request_header_allow_list_of(api) {
+            assert!(!is_client_credential_header(h), "{h}");
+        }
+    }
+}
+
+/// A recorded request head (fixtures/*.http) as the CLI sent it, through the
+/// proxy route to a fake gateway, with every spoofed header added. Returns
+/// what the gateway received.
+async fn replay_fixture(api: Api, fixture: &str) -> (String, Attribution) {
+    let (port, seen) = fake_gateway();
+    let dir = tempfile::tempdir().unwrap();
+    let key = dir.path().join("api-key");
+    std::fs::write(&key, "sk-REAL-GATEWAY-KEY").unwrap();
+    let mut g = api_key_gateway(port, &key, true);
+    g.cfg.api = api;
+    let attr = Attribution::new(&[2u8; 32], Some(Uuid::from_u128(7)), Some(Uuid::from_u128(8)));
+    let proxy = crate::egress::EgressProxy::start_with(Vec::new(), None, vec![ResolvedGateway { gateway: Arc::new(g), attribution: Some(attr.clone()) }]).unwrap();
+    let pp = proxy.port();
+    let path = proxy.gateway_url("test-gw").strip_prefix(&format!("http://127.0.0.1:{pp}")).unwrap().to_string();
+    let mut lines = fixture.lines();
+    let (method, rest) = lines.next().unwrap().split_once(' ').unwrap();
+    let target = rest.split(' ').next().unwrap();
+    let body = r#"{"model":"m","stream":true}"#;
+    let mut raw = format!("{method} {path}{target} HTTP/1.1\r\nHost: 127.0.0.1:{pp}\r\n");
+    for l in lines.filter(|l| !l.is_empty()) {
+        raw.push_str(l);
+        raw.push_str("\r\n");
+    }
+    for h in SPOOFED {
+        raw.push_str(&format!("{h}: SPOOFED-{h}\r\n"));
+    }
+    raw.push_str(&format!("Content-Length: {}\r\n\r\n{body}", body.len()));
+    let resp = raw_request(pp, raw).await;
+    assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
+    let s = seen.lock().unwrap();
+    assert_eq!(s.bodies[0], body.as_bytes());
+    (s.heads[0].clone(), attr)
+}
+
+/// The gateway's view of a replayed request: no spoofed header, every
+/// header the wire needs, the gateway's own credential and Ligus's own
+/// attribution ids.
+fn assert_clean(head: &str, attr: &Attribution) {
+    assert!(!head.contains("SPOOFED") && !head.contains("dummy-capture"), "{head}");
+    assert_eq!(header(head, "authorization"), vec!["Bearer sk-REAL-GATEWAY-KEY"], "{head}");
+    assert_eq!(header(head, "x-ligus-agent"), vec![attr.agent.as_deref().unwrap()]);
+    assert_eq!(header(head, "x-ligus-workspace"), vec![attr.workspace.as_deref().unwrap()]);
+    for h in head.lines().skip(1).filter_map(|l| l.split_once(':')).map(|(k, _)| k.trim().to_ascii_lowercase()) {
+        assert!(
+            matches!(h.as_str(), "host" | "content-length" | "authorization" | "x-ligus-agent" | "x-ligus-workspace")
+                || request_header_allow_list_of(Api::Openai).any(|a| a == h)
+                || request_header_allow_list_of(Api::Anthropic).any(|a| a == h),
+            "forwarded {h}: {head}"
+        );
+    }
+}
+
+/// Claude Code's recorded `/v1/messages` request still works through the
+/// route: its version and beta headers arrive, the rest is dropped.
+#[tokio::test]
+async fn claude_code_request_shape_through_the_route() {
+    let (head, attr) = replay_fixture(Api::Anthropic, include_str!("fixtures/claude-code-2.1.312-messages.http")).await;
+    assert!(head.starts_with("POST /v1/messages?beta=true "), "{head}");
+    assert_clean(&head, &attr);
+    assert_eq!(header(&head, "anthropic-version"), vec!["2023-06-01"]);
+    assert!(header(&head, "anthropic-beta")[0].starts_with("claude-code-20250219,"), "{head}");
+    assert_eq!(header(&head, "content-type"), vec!["application/json"]);
+    assert_eq!(header(&head, "accept"), vec!["application/json"]);
+    assert!(header(&head, "user-agent")[0].starts_with("claude-cli/"), "{head}");
+    assert!(header(&head, "x-stainless-lang").is_empty() && header(&head, "x-claude-code-session-id").is_empty() && header(&head, "x-app").is_empty());
+}
+
+/// Codex CLI's recorded `/v1/responses` request still works through the
+/// route: content negotiation arrives, its session and metadata headers
+/// don't.
+#[tokio::test]
+async fn codex_request_shape_through_the_route() {
+    let (head, attr) = replay_fixture(Api::Openai, include_str!("fixtures/codex-0.145.0-responses.http")).await;
+    assert!(head.starts_with("POST /v1/responses "), "{head}");
+    assert_clean(&head, &attr);
+    assert_eq!(header(&head, "accept"), vec!["text/event-stream"]);
+    assert_eq!(header(&head, "content-type"), vec!["application/json"]);
+    assert!(header(&head, "user-agent")[0].starts_with("codex_exec/"), "{head}");
+    assert!(header(&head, "x-codex-turn-metadata").is_empty() && header(&head, "session-id").is_empty() && header(&head, "originator").is_empty());
+}
