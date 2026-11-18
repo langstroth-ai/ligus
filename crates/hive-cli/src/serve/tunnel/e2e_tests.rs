@@ -839,7 +839,12 @@ async fn a_revocation_arriving_by_any_path_cuts_promptly() {
     assert!(!t.registry.is_active(&pid));
     let took = landed.elapsed();
     assert!(took < Duration::from_secs(2), "cut {took:?} after the event landed");
-    wait_until("relay told", Duration::from_secs(5), || relay.state.http_revokes.lock().unwrap().iter().any(|(s, b)| *s == 200 && b["pid"] == json!(pid))).await;
+    // Told by the HTTP route or the control `revoke`, whichever lands first
+    // (under load the control ack can settle the step before the HTTP call).
+    wait_until("relay told", Duration::from_secs(5), || {
+        relay.state.http_revokes.lock().unwrap().iter().any(|(s, b)| *s == 200 && b["pid"] == json!(pid)) || relay.state.revoked.lock().unwrap().contains(&pid)
+    })
+    .await;
     h.handle.shutdown();
 }
 
