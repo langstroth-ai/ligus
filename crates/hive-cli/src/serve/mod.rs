@@ -51,6 +51,7 @@ pub mod notify;
 pub mod ntfy;
 pub mod pair;
 pub mod people;
+pub mod phone_actions_api;
 pub mod presence_api;
 pub mod proposal_file;
 pub mod repos_api;
@@ -94,8 +95,6 @@ pub struct ServeOptions {
     pub dashboard_file: PathBuf,
     /// `@mention` added to a phone message that names no agent.
     pub default_agent: Option<String>,
-    /// Apply an approved file-diff proposal to this box's bound checkout.
-    pub apply_on_approve: bool,
     /// Relay sync cadence.
     pub sync_every: Duration,
     /// Remote access through a relay tunnel (`None` = off, the default).
@@ -161,7 +160,6 @@ impl ServeOptions {
             prometheus_configured: env_opt("LIGUS_PROMETHEUS_URL").is_some(),
             dashboard_file: dashboard::config_path(&cfg.data_dir),
             default_agent: env_opt("LIGUS_SERVE_DEFAULT_AGENT").map(|a| a.trim().trim_start_matches('@').to_string()),
-            apply_on_approve: env_flag("LIGUS_SERVE_APPLY_ON_APPROVE", false),
             sync_every: Duration::from_secs(3),
             remote: None,
             appearance: appearance::AppearanceConfig::from_env(),
@@ -254,6 +252,8 @@ pub struct Shared {
     pub presence_drafts: presence_api::Pending,
     /// Box admissions waiting for a phone's passkey and signature (Phase B).
     pub admission_drafts: admissions_api::Drafts,
+    /// Phone actions waiting for the phone's signature (Phase B).
+    pub phone_action_drafts: phone_actions_api::Drafts,
     /// The box's direct messages (`dms.rs`).
     pub dms: dms::DmStore,
     /// Wakes the DM sync loop after a local write.
@@ -1041,6 +1041,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         busy: Mutex::new(HashSet::new()),
         presence_drafts: presence_api::Pending::default(),
         admission_drafts: admissions_api::Drafts::default(),
+        phone_action_drafts: phone_actions_api::Drafts::default(),
         dms: dms::DmStore::load(&cfg.data_dir),
         dm_kick: Notify::new(),
         contact_lock: tokio::sync::Mutex::new(()),
@@ -1498,6 +1499,9 @@ fn spawn_worker(shared: Arc<Shared>) -> Result<std::thread::JoinHandle<()>> {
             let sink = ServeSink(shared.clone());
             let mut failed: HashSet<Uuid> = HashSet::new();
             while !shared.stopping() {
+                if !worker::apply_tick(&ctx, &shared.svc).is_empty() {
+                    shared.after_write();
+                }
                 if let Err(e) = worker::drain_tick(&ctx, &shared.svc, &mut failed, &sink).await {
                     eprintln!("worker: tick failed (retrying): {e}");
                 }

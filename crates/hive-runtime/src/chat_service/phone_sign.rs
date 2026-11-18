@@ -191,6 +191,16 @@ impl ChatService {
         Ok((draft, presence))
     }
 
+    /// The preimage of `draft` without presence (an action the rules don't
+    /// need a passkey for), for the phone to check and sign.
+    pub fn phone_unconfirmed_preimage(draft: &mut PhoneDraft) -> Vec<u8> {
+        if let Some(s) = draft.env.actor_stamp.as_mut() {
+            s.presence = None;
+        }
+        draft.env.clear_raw();
+        hive_core::crypto::envelope_preimage(&draft.env)
+    }
+
     /// Stamp the person's passkey assertion into `draft` and return the
     /// preimage the phone signs.
     pub fn phone_preimage(draft: &mut PhoneDraft, assertion: PresenceAssertion) -> Vec<u8> {

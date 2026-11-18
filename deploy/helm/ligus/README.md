@@ -266,7 +266,7 @@ set `LIGUS_MODEL_GATEWAY*`.
 | `relay.enabled` | `false` | In-release relay (any `langstroth-relay` value under `relay.`) |
 | `workspace.existingSecret` / `secretKeys` / `relayAccessToken` | required | Workspace connection |
 | `remote.enabled` / `relayUrl` / `insecureRelay` / `regTokenSecret` | off | Phone access through the relay tunnel; `insecureRelay` only for in-cluster http |
-| `serve.label`, `name`, `defaultAgent`, `applyOnApprove` | | `LIGUS_SERVE_*` (`applyOnApprove` has no effect on a box: a service member applies only on a person's request) |
+| `serve.label`, `name`, `defaultAgent` | | `LIGUS_SERVE_*` (there is no auto-apply: a box applies a proposal only when a person asks it to, "Apply on ‹host›") |
 | `serve.admission.existingSecret` / `secretKey` | empty, `admission` | serve's box admission Secret (above) |
 | `serve.runtimesToml` | empty | Mounted read-only, `LIGUS_RUNTIMES_FILE` |
 | `serve.mcpToml`, `serve.dashboardToml` | empty | Mounted read-only (`LIGUS_MCP_CONFIG`, `LIGUS_DASHBOARD_FILE`) |

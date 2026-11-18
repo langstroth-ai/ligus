@@ -115,7 +115,6 @@ fn box_opts(label: &str) -> ServeOptions {
         prometheus_configured: false,
         dashboard_file: PathBuf::new(),
         default_agent: None,
-        apply_on_approve: false,
         sync_every: Duration::from_millis(300),
         remote: None,
         appearance: Default::default(),
@@ -223,7 +222,6 @@ async fn harness_with(
         prometheus_configured: false,
         dashboard_file: dir_for_dashboard.join("dashboard.toml"),
         default_agent: None,
-        apply_on_approve: false,
         sync_every: Duration::from_millis(300),
         remote: None,
         appearance: Default::default(),
@@ -1221,13 +1219,14 @@ async fn a_viewer_cannot_vote_comment_or_request_changes() {
     h.handle.shutdown();
 }
 
-/// Approving from the phone must not apply a proposal a qualifying reviewer
-/// already rejected: quorum stays met after a reject, but the folded status is
-/// Rejected, and Applied would be terminal on every peer.
+/// Approving from the phone never applies anything (auto-apply is cut in
+/// 0.1), and never turns a proposal a qualifying reviewer already rejected
+/// into anything else: quorum stays met after a reject, but the folded status
+/// is Rejected.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn apply_on_approve_never_overrides_a_rejection() {
+async fn approving_never_applies_and_never_overrides_a_rejection() {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
-    let h = harness_with(&endpoint, "m", &[("README.md", "x\n")], |o| o.apply_on_approve = true).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
     let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
     let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
     let ws = h.handle.shared.ws;
@@ -1285,13 +1284,13 @@ async fn apply_on_approve_never_overrides_a_rejection() {
     h.handle.shutdown();
 }
 
-/// An alternative in an open proposal set is never applied on approval: the
-/// desktop applies it only after the set's pre-flight. The phone sees which
+/// An alternative in an open proposal set is never applied on approval (the
+/// desktop applies it only after the set's pre-flight). The phone sees which
 /// set it belongs to.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn apply_on_approve_skips_proposal_set_alternatives() {
+async fn approving_a_set_alternative_never_applies_it() {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
-    let h = harness_with(&endpoint, "m", &[("README.md", "x\n")], |o| o.apply_on_approve = true).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
     let chat = h.send(reqwest::Method::POST, "/v1/chats", None).await;
     let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
     let ws = h.handle.shared.ws;
@@ -3070,13 +3069,16 @@ async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
     h.handle.shutdown();
 }
 
-/// B3: the phone confirms a vote on a box that acts for the owner with the
-/// owner's passkey: `presence/prepare` drafts the vote and returns its
-/// digest, the phone's authenticator signs it (a software one here), and
-/// `presence/commit` appends it with the assertion inside the stamp. A key
-/// that isn't the owner's is refused; the vote counts as the owner's.
+/// B3, legacy path: `presence/prepare` drafts a vote on a box that stamps
+/// itself as the owner and returns its digest; the phone's authenticator
+/// signs it (a software one here). A key that isn't the owner's is refused.
+/// Phase B: the box isn't a device certified for the owner's account (it is
+/// its own service member), so even the owner's passkey can't make its vote
+/// count as the owner's: a vote counts only from a certified device of its
+/// voter. The phone votes through `phone-actions` with its own key instead
+/// (`the_phone_posts_votes_answers_clears_and_asks_this_box_to_apply`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn phone_confirms_a_vote_with_a_passkey() {
+async fn a_box_stamped_as_the_owner_never_votes_for_them_even_with_their_passkey() {
     use hive_core::presence::{soft::SoftAuthenticator, unb64url};
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
     let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
@@ -3139,13 +3141,12 @@ async fn phone_confirms_a_vote_with_a_passkey() {
             "clientDataJSON": signed.client_data_json, "signature": signed.signature } })),
     )
     .await;
-    assert_eq!(code, 200, "{body}");
+    assert_eq!(code, 403, "an uncertified box's vote isn't the owner's: {body}");
     let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/presence/commit", Some(json!({ "prepareId": p["prepareId"], "assertion": a(&key) }))).await;
     assert_eq!(code, 404, "a prepared event commits once");
     let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
-    let approvals = &s.proposals.iter().find(|x| x.id == pid).unwrap().approvals;
-    assert_eq!(approvals.len(), 1);
-    assert_eq!(approvals[0].actor_id, owner.id, "counted as the passkey's owner");
+    assert!(s.proposals.iter().find(|x| x.id == pid).unwrap().approvals.is_empty());
+    let _ = owner;
     h.handle.shutdown();
 }
 
@@ -3915,4 +3916,223 @@ async fn a_redeemed_admission_is_closed_by_the_admins_device() {
     let hive_core::SessionEvent::MemberAdded { invite: Some(inv), .. } = &redemption.payload else { unreachable!() };
     assert_eq!(c.guards.closed_admissions.get(inv), Some(&vec![Some(redemption.event_id)]));
     assert!(c.members.iter().any(|m| m.id == me), "the named redemption stands");
+}
+
+// ── What a person does from the phone (Phase B) ────────────────────────────
+
+/// A phone certified on the desktop for the founder, seen by the box.
+async fn certified_phone(h: &Harness) -> (hive_core::testkit::Phone, Uuid) {
+    let ws = h.handle.shared.ws;
+    let phone = hive_core::testkit::Phone::new();
+    let account = {
+        let mut desk = open_service(&h.desktop).unwrap();
+        desk.certify_phone(ws, phone.device_id, &phone.public_key()).unwrap();
+        desk.author().account_id.unwrap()
+    };
+    sync_once(&h.desktop).await.unwrap();
+    for _ in 0..200 {
+        h.handle.shared.sync_kick.notify_one();
+        let (_, t) = h.handle.shared.lock().store().load_config(ws, None, None).unwrap();
+        if t.current().devices.get(&phone.device_id).is_some_and(|d| d.phone) {
+            return (phone, account);
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the box never saw the phone's certificate");
+}
+
+fn b64d(s: &str) -> Vec<u8> {
+    use base64::Engine;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s).unwrap()
+}
+
+/// The phone's whole flow for `action`: prepare, the passkey when the box
+/// says it is needed, the strict preimage check, the P-256 signature, commit.
+/// Returns the commit's status and body (or prepare's, when it refused).
+async fn phone_act(h: &Harness, phone: &hive_core::testkit::Phone, account: Uuid, action: &hive_core::phone_action::PhoneAction) -> (u16, Value) {
+    let (code, prep) = status_of(h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": action }))).await;
+    if code != 200 {
+        return (code, prep);
+    }
+    assert_eq!(prep["kind"], json!(action.kind()));
+    let id = prep["prepareId"].as_str().unwrap().to_string();
+    let (preimage, challenge, assertion) = if prep["presenceRequired"] == json!(true) {
+        assert!(prep.get("preimage").is_none(), "no preimage before the passkey");
+        let challenge: [u8; 32] = b64d(prep["challenge"].as_str().unwrap()).try_into().unwrap();
+        let a = hive_core::testkit::test_recovery_key(account).assert(&challenge);
+        let pre = h
+            .send(
+                reqwest::Method::POST,
+                "/v1/phone-actions/presence",
+                Some(json!({ "prepareId": id, "assertion": { "credentialId": a.credential_id, "authenticatorData": a.authenticator_data, "clientDataJSON": a.client_data_json, "signature": a.signature } })),
+            )
+            .await;
+        (b64d(pre["preimage"].as_str().unwrap()), Some(challenge), Some(a))
+    } else {
+        (b64d(prep["preimage"].as_str().unwrap()), None, None)
+    };
+    let confirmed = challenge.as_ref().map(|c| hive_core::phone_action::Confirmed { challenge: c, assertion: assertion.as_ref() });
+    hive_core::phone_action::check_phone_action_preimage(&preimage, confirmed, h.handle.shared.ws, phone.device_id, account, action)
+        .unwrap_or_else(|e| panic!("the phone refused the box's preimage for {}: {e}", action.kind()));
+    let sig = hive_core::crypto::sign_p256(&phone.key, &preimage);
+    status_of(h, reqwest::Method::POST, "/v1/phone-actions/commit", Some(json!({ "prepareId": id, "signature": hive_core::presence::b64url(&sig) }))).await
+}
+
+/// Every phone action through serve, signed by the phone's own key as its
+/// person: a post, an approval that counts as the person's, an answer to an
+/// agent's question, clearing a lockdown (with the passkey), and "Apply on
+/// ‹this box›", which the box (a service member) carries out once, on the
+/// person's request only.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_phone_posts_votes_answers_clears_and_asks_this_box_to_apply() {
+    use hive_core::phone_action::PhoneAction;
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let (phone, account) = certified_phone(&h).await;
+    let person = open_service(&h.desktop).unwrap().author().id.clone();
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "Triage" }))).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+
+    // Post: as the person, signed by the phone.
+    let (code, done) = phone_act(&h, &phone, account, &PhoneAction::Post { chat_id, text: "from my phone".into() }).await;
+    assert_eq!(code, 200, "{done}");
+    let mid = Uuid::parse_str(done["messageId"].as_str().unwrap()).unwrap();
+    let env = signed_by(&h._tmp.path().join("serve"), phone.device_id).into_iter().find(|e| e.event_id.to_string() == done["eventId"].as_str().unwrap()).unwrap();
+    assert_eq!(env.actor_stamp.as_ref().unwrap().actor.id, person);
+    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    assert!(s.messages.iter().any(|m| m.id == mid && m.body == "from my phone"));
+    drop(s);
+
+    // Approve a file-diff proposal: the vote is the person's (a human's).
+    let diff = "diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+hi\n";
+    let mut p = hive_core::ActionProposal::file_diff("add new.txt", "", diff.into(), vec!["new.txt".into()]);
+    p.producing_agent_id = Some(h.agent_id);
+    let pid = p.id;
+    h.handle.shared.lock().upsert_proposal(chat_id, ws, p).unwrap();
+    let prop = h.get(&format!("/v1/proposals/{pid}")).await;
+    let digest = prop["proposal"]["diffDigest"].as_str().unwrap().to_string();
+    let (code, done) = phone_act(&h, &phone, account, &PhoneAction::Vote { chat_id, proposal_id: pid, diff_digest: digest.clone(), approved: true }).await;
+    assert_eq!(code, 200, "{done}");
+    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    assert_eq!(s.proposals.iter().find(|p| p.id == pid).unwrap().status, hive_core::ProposalStatus::Approved);
+    assert!(hive_core::guard::has_human_approval(&s, pid), "the phone's vote counts as its person's");
+    drop(s);
+
+    // Apply on this box: requested by the person, carried out once by the box.
+    let me = Uuid::parse_str(&h.handle.shared.host_id).unwrap();
+    let request = PhoneAction::RequestApply { chat_id, proposal_id: pid, diff_digest: digest.clone(), host_device_id: me, expected_base_commit: None, repo_id: None };
+    let (code, done) = phone_act(&h, &phone, account, &request).await;
+    assert_eq!(code, 200, "{done}");
+    let rid = done["requestId"].as_str().unwrap().to_string();
+    // A second request while it is open: refused before the phone signs.
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": request }))).await;
+    assert!(code == 403 || code == 409, "{code}");
+    let wt = h._tmp.path().join("repo").join(".ligus").join("worktrees").join(format!("chat-{chat_id}"));
+    let mut state = Value::Null;
+    for _ in 0..200 {
+        h.handle.shared.worker_kick.notify_one();
+        let p = h.get(&format!("/v1/proposals/{pid}")).await;
+        state = p["proposal"]["applyRequests"].as_array().and_then(|a| a.iter().find(|r| r["id"] == json!(rid)).cloned()).unwrap_or(Value::Null);
+        if state["state"] != json!("open") && !state.is_null() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(state["state"], json!("applied"), "{state}");
+    assert_eq!(std::fs::read_to_string(wt.join("new.txt")).unwrap(), "hi\n");
+    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    assert_eq!(s.proposals.iter().find(|p| p.id == pid).unwrap().status, hive_core::ProposalStatus::Applied);
+    drop(s);
+    let commits = std::process::Command::new("git").arg("-C").arg(&wt).args(["log", "--format=%B"]).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&commits.stdout).matches(&format!("Ligus-Apply-Request: {rid}")).count(), 1, "applied once");
+
+    // Answer an agent's question (the agent is hosted here and asks).
+    bind_here(&h, &this_host(&h).await, &[h.agent_id]).await;
+    let ask_id = Uuid::new_v4();
+    let ask = hive_core::flow::HumanAsk {
+        ask_id,
+        turn_id: mid,
+        agent_key: hive_core::flow::agent_key(Some(h.agent_id)),
+        question: "ship it?".into(),
+        options: vec!["yes".into(), "no".into()],
+        at_ms: hive_core::flow::now_ms(),
+        ..Default::default()
+    };
+    h.handle.shared.lock().as_agent(Some(h.agent_id), |svc| svc.record_flow(chat_id, ws, hive_core::flow::FlowRecord::HumanAsk(ask))).unwrap();
+    let answer = PhoneAction::Answer { chat_id, ask_id, answer: "yes".into(), option_index: Some(0) };
+    let (code, done) = phone_act(&h, &phone, account, &answer).await;
+    assert_eq!(code, 200, "{done}");
+    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
+    assert!(!s.flow.asks[&ask_id].is_open(), "answered");
+    drop(s);
+    // Answered once: a second answer is refused before the phone signs.
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": answer }))).await;
+    assert_eq!(code, 403);
+
+    // Clear a lockdown: always with the passkey.
+    h.handle.shared.lock().self_medicate(ws, chat_id, None, &[(hive_core::guard::LockdownSignal::InjectionDetected, "ignore-previous".into())]).unwrap();
+    let (code, prep) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": PhoneAction::ClearLockdown { chat_id } }))).await;
+    assert_eq!((code, prep["presenceRequired"].clone()), (200, json!(true)), "{prep}");
+    let (code, done) = phone_act(&h, &phone, account, &PhoneAction::ClearLockdown { chat_id }).await;
+    assert_eq!(code, 200, "{done}");
+    assert!(!h.handle.shared.lock().load(chat_id).unwrap().unwrap().guards.lockdown_active());
+    // Not locked any more: 409.
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": PhoneAction::ClearLockdown { chat_id } }))).await;
+    assert_eq!(code, 409);
+    h.handle.shutdown();
+}
+
+/// The box refuses what it can't draft as a phone's, and what the phone
+/// didn't sign: another device than an enrolled phone, an action outside
+/// the allow-list or with fields it doesn't know, a forged signature, a
+/// commit before the passkey, and a draft whose chain link went stale.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_box_refuses_phone_actions_it_cant_stand_behind() {
+    use hive_core::phone_action::PhoneAction;
+    let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
+    let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
+    let ws = h.handle.shared.ws;
+    let (phone, account) = certified_phone(&h).await;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "T" }))).await;
+    let chat_id = Uuid::parse_str(chat["chat"]["id"].as_str().unwrap()).unwrap();
+    let post = |t: &str| PhoneAction::Post { chat_id, text: t.into() };
+    // Not a phone (the box's own device), or an unknown device.
+    let me = h.handle.shared.lock().device_id();
+    for dev in [me, Uuid::new_v4()] {
+        let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": dev, "action": post("x") }))).await;
+        assert_eq!(code, 403);
+    }
+    // Governance isn't an action; unknown fields are refused.
+    for action in [
+        json!({ "kind": "changeRole", "memberId": "x", "role": "owner" }),
+        json!({ "kind": "post", "chatId": chat_id, "text": "x", "relatedProposalId": Uuid::new_v4() }),
+    ] {
+        let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": action }))).await;
+        assert!((400..500).contains(&code) && code != 404, "{code}");
+    }
+    // A forged signature: refused, nothing stored.
+    let (_, prep) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": post("forged") }))).await;
+    let forged = hive_core::crypto::sign_p256(&hive_core::testkit::Phone::new().key, &b64d(prep["preimage"].as_str().unwrap()));
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/commit", Some(json!({ "prepareId": prep["prepareId"], "signature": hive_core::presence::b64url(&forged) }))).await;
+    assert_eq!(code, 403);
+    assert!(!h.handle.shared.lock().load(chat_id).unwrap().unwrap().messages.iter().any(|m| m.body == "forged"));
+    // Two drafts at once: the second to commit has a stale chain link (409).
+    let (_, a) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": post("a") }))).await;
+    let (_, b) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": post("b") }))).await;
+    for (prep, want) in [(&a, 200), (&b, 409)] {
+        let sig = hive_core::crypto::sign_p256(&phone.key, &b64d(prep["preimage"].as_str().unwrap()));
+        let (code, v) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/commit", Some(json!({ "prepareId": prep["prepareId"], "signature": hive_core::presence::b64url(&sig) }))).await;
+        assert_eq!(code, want, "{v}");
+    }
+    // A passkey-gated action committed without its passkey: 409.
+    h.handle.shared.lock().self_medicate(ws, chat_id, None, &[(hive_core::guard::LockdownSignal::InjectionDetected, "x".into())]).unwrap();
+    let (_, prep) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/prepare", Some(json!({ "deviceId": phone.device_id, "action": PhoneAction::ClearLockdown { chat_id } }))).await;
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/commit", Some(json!({ "prepareId": prep["prepareId"], "signature": "AAAA" }))).await;
+    assert_eq!(code, 409);
+    // A draft is single use.
+    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/phone-actions/commit", Some(json!({ "prepareId": a["prepareId"], "signature": "AAAA" }))).await;
+    assert_eq!(code, 404);
+    let _ = account;
+    h.handle.shutdown();
 }

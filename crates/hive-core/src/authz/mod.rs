@@ -753,7 +753,7 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 if !human || !own_device(env, at) {
                     return Decision::deny("a person withdraws an apply through their own device");
                 }
-                if !fold.apply_requests.get(request_id).is_some_and(|r| r.proposal_id == *proposal_id) {
+                if fold.apply_requests.get(request_id).is_none_or(|r| r.proposal_id != *proposal_id) {
                     return Decision::deny("no such apply request");
                 }
                 if fold.apply_outcomes.contains_key(request_id) {

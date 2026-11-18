@@ -105,10 +105,6 @@ spec:
             - name: LIGUS_SERVE_DEFAULT_AGENT
               value: {{ . | quote }}
             {{- end }}
-            {{- if $v.applyOnApprove }}
-            - name: LIGUS_SERVE_APPLY_ON_APPROVE
-              value: "1"
-            {{- end }}
             {{- if $v.runtimesToml }}
             - name: LIGUS_RUNTIMES_FILE
               value: /etc/ligus/runtimes/runtimes.toml

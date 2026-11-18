@@ -660,7 +660,11 @@ impl EventStore {
             self.note_equivocation(env, sealed_epoch)?;
             return Ok(false);
         }
-        let tx = self.conn.transaction()?;
+        // IMMEDIATE: take the write lock up front (waiting out the busy
+        // timeout), so the read of the next sequence never has to upgrade a
+        // stale snapshot while another connection writes (an instant
+        // "database is locked" under WAL).
+        let tx = self.conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let next_seq = tx
             .query_row(
                 "SELECT MAX(sequence) FROM events WHERE session_id = ?1",

@@ -1323,6 +1323,7 @@ async fn cmd_worker(cfg: &Config, label: Option<String>, health_listen: Option<S
         }
         // A transient store/DB error inside a tick must NOT kill the daemon —
         // log it and retry on the next tick (bare `?` here used to abort the loop).
+        worker::apply_tick(&ctx, &svc);
         if let Err(e) = worker::drain_tick(&ctx, &svc, &mut failed, &worker::NoSink).await {
             eprintln!("worker: tick failed (retrying): {e}");
         }
