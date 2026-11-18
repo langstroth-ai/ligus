@@ -11,7 +11,7 @@
 //! | [`MacKeychain`] | macOS: a **dedicated keychain file inside the Ligus data dir**, unlocked with a random password kept in the login keychain |
 //! | [`SecretService`] | Linux desktop: the session's Secret Service (through `secret-tool`) |
 //! | [`SystemdCreds`] | headless Linux (serve, worker): `systemd-creds encrypt` (TPM2 when present, else the host key) |
-//! | [`K8sSecretFile`] | the chart: read-only mounted Secret files, writes fall back to [`File0600`] |
+//! | [`K8sSecretFile`] | the chart: read-only mounted Secret files (operator input), runtime secrets in [`File0600`] under the data dir |
 //! | [`File0600`] | fallback: owner-only files, with a warning (on macOS only when chosen: `LIGUS_SECRET_BACKEND=file`) |
 //!
 //! ## Agents can't reach Ligus's items
@@ -188,7 +188,19 @@ impl SecretStore for File0600 {
         }
     }
     fn put(&self, id: &SecretId, value: &[u8]) -> Result<(), SecretError> {
-        Ok(write_private_atomic(&self.path(id), value)?)
+        let path = self.path(id);
+        // `secrets/` itself too, not only `secrets/<scope>/`: every dir
+        // between the data dir and the file is owner-only.
+        #[cfg(unix)]
+        if let Some(top) = path.strip_prefix(&self.data_dir).ok().and_then(|r| r.components().next()) {
+            use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+            let top = self.data_dir.join(top);
+            if top != path {
+                std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&top)?;
+                std::fs::set_permissions(&top, std::fs::Permissions::from_mode(0o700))?;
+            }
+        }
+        Ok(write_private_atomic(&path, value)?)
     }
     fn delete(&self, id: &SecretId) -> Result<(), SecretError> {
         match std::fs::remove_file(self.path(id)) {
@@ -207,9 +219,22 @@ impl SecretStore for File0600 {
 /// `LIGUS_SECRET_BACKEND=k8s`). Hosts deny it to agent processes.
 pub const K8S_SECRETS_DIR_DEFAULT: &str = "/var/run/secrets/ligus";
 
-/// Read-only Secret files mounted by the operator (`<dir>/<scope>.<name>`);
-/// anything not provisioned there (a fresh pod's identity seeds) is kept in
-/// [`File0600`] under the data dir.
+/// Read-only Secret files mounted by the operator (`<dir>/<scope>.<name>`),
+/// layered over [`File0600`] under the data dir.
+///
+/// * **Reads**: the mounted file wins (the operator's Secret is the source of
+///   truth for what it provisions: the workspace key, the relay token), else
+///   the data dir.
+/// * **Writes**: everything a box derives at runtime (identity seeds,
+///   key-agreement keys, delivered epoch keys, the redeemed admission's
+///   secrets) goes to the data dir: 0600 files in 0700 dirs on the box's own
+///   ReadWriteOncePod volume, which agent sandboxes deny like the mount.
+/// * Writing a mounted item **its own value** is a no-op: a box re-saving
+///   its connection after redeeming an admission (`config.toml` and its
+///   `cli.*` secrets) must not fail on the key the Secret already holds. A
+///   *different* value, or deleting a mounted item, is refused: it would
+///   either be shadowed by the mount on the next read or silently override
+///   the operator.
 pub struct K8sSecretFile {
     mount: PathBuf,
     fallback: File0600,
@@ -236,10 +261,18 @@ impl SecretStore for K8sSecretFile {
         }
     }
     fn put(&self, id: &SecretId, value: &[u8]) -> Result<(), SecretError> {
-        if self.mounted(id).exists() {
-            return Err(SecretError::ReadOnly("a mounted Kubernetes Secret"));
+        match std::fs::read(self.mounted(id)) {
+            Ok(held) => {
+                let held = Zeroizing::new(held);
+                if held.as_slice() == value {
+                    // Already what the Secret holds; nothing to write.
+                    return Ok(());
+                }
+                Err(SecretError::ReadOnly("a mounted Kubernetes Secret"))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => self.fallback.put(id, value),
+            Err(e) => Err(e.into()),
         }
-        self.fallback.put(id, value)
     }
     fn delete(&self, id: &SecretId) -> Result<(), SecretError> {
         if self.mounted(id).exists() {
@@ -1236,6 +1269,7 @@ mod tests {
         {
             assert_eq!(mode(&dir.path().join("secrets/settings/x")), 0o600);
             assert_eq!(mode(&dir.path().join("secrets/settings")), 0o700);
+            assert_eq!(mode(&dir.path().join("secrets")), 0o700);
         }
         // Seeds keep the historical keys/<id>.seed layout (FileKeyVault).
         store.put(&SecretId::new("seed", "account:abc"), &[7; 32]).unwrap();
@@ -1252,7 +1286,39 @@ mod tests {
         let token = SecretId::new("cli", "token");
         assert_eq!(store.get(&token).unwrap().unwrap().as_slice(), b"hrt1-from-operator");
         assert!(matches!(store.put(&token, b"x"), Err(SecretError::ReadOnly(_))), "a mounted Secret is read-only");
+        assert!(matches!(store.delete(&token), Err(SecretError::ReadOnly(_))), "and can't be deleted");
+        // Re-saving the value the Secret holds is a no-op, not an error (a
+        // box re-saving its connection after redeeming an admission).
+        store.put(&token, b"hrt1-from-operator").unwrap();
+        assert!(!dir.path().join("data/secrets/cli/token").exists(), "never copied into the data dir");
+        assert_eq!(store.get(&token).unwrap().unwrap().as_slice(), b"hrt1-from-operator");
         roundtrip(&store);
+    }
+
+    /// A read-only mount (the kubelet's 0400 files in a dir the box can't
+    /// write): runtime secrets land owner-only in the data dir.
+    #[cfg(unix)]
+    #[test]
+    fn k8s_runtime_secrets_go_to_the_data_dir_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let mount = dir.path().join("mount");
+        std::fs::create_dir_all(&mount).unwrap();
+        std::fs::write(mount.join("cli.key"), "ws-key").unwrap();
+        std::fs::set_permissions(mount.join("cli.key"), std::fs::Permissions::from_mode(0o400)).unwrap();
+        std::fs::set_permissions(&mount, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let data = dir.path().join("data");
+        let store = K8sSecretFile::new(&mount, &data);
+        store.put(&SecretId::new("cli", "key"), b"ws-key").unwrap();
+        store.put(&SecretId::new("cli", "ek"), b"[]").unwrap();
+        store.put(&SecretId::new("seed", "device:1"), &[9; 32]).unwrap();
+        assert_eq!(mode(&data.join("secrets/cli/ek")), 0o600);
+        assert_eq!(mode(&data.join("secrets/cli")), 0o700);
+        assert_eq!(mode(&data.join("secrets")), 0o700);
+        assert_eq!(mode(&data.join("keys/device_1.seed")), 0o600);
+        assert_eq!(mode(&data.join("keys")), 0o700);
+        assert!(!data.join("secrets/cli/key").exists());
+        std::fs::set_permissions(&mount, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
 
     /// A stand-in for a CLI backend: a shell script storing values under a
