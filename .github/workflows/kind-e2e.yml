@@ -158,9 +158,13 @@ jobs:
           kubectl -n langstroth-relay port-forward svc/langstroth-relay-sync 18443:8443 >/tmp/pf.log 2>&1 &
           PF=$!
           for _ in $(seq 30); do (exec 3<>/dev/tcp/127.0.0.1/18443) 2>/dev/null && break; sleep 1; done
-          W=$(mktemp -d); chmod 777 "$W"
+          # The founder runs as this runner's user, not the image's 65532: its
+          # outputs (recovery words, admission codes) are owner-only (0600) and
+          # the kubectl below reads them, and the scratch dir that holds the
+          # recovery words stays private to the runner (mktemp's 0700).
+          W=$(mktemp -d)
           founder() {
-            docker run --rm --network host -v "$W:/work" -e HOME=/work -e LIGUS_DATA_DIR=/work/founder \
+            docker run --rm --network host --user "$(id -u):$(id -g)" -v "$W:/work" -e HOME=/work -e LIGUS_DATA_DIR=/work/founder \
               -e LIGUS_SECRET_BACKEND=file -e LIGUS_RELAY_URL=http://127.0.0.1:18443 \
               -e LIGUS_WORKSPACE="$ROOM" -e LIGUS_WORKSPACE_KEY="$KEY" ligus:dev "$@"
           }
