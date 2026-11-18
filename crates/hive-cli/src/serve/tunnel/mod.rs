@@ -785,24 +785,6 @@ impl TunnelHost {
             .map(|d| format!("this phone's workspace device {d} is revoked"))
     }
 
-    /// `PUT /v1/tunnel/device` and enrollment: apply a device claim to `pid`.
-    pub fn apply_device_claim(&self, pid: &str, static_pub: &[u8; 32], claim: &device_bind::DeviceClaim) -> Result<device_bind::BindCheck> {
-        let check = device_bind::check(claim, self.host_id(), static_pub, |d| self.lookup_device(d));
-        match &check {
-            device_bind::BindCheck::Bind(d) => {
-                self.registry.bind_device(pid, *d)?;
-            }
-            device_bind::BindCheck::Revoked(d) => {
-                // Refused from the next request on; the caller finishes the
-                // cut (`revoke_device`) once its answer is on the way.
-                self.registry.bind_device(pid, *d)?;
-                self.registry.revoke(pid)?;
-            }
-            _ => {}
-        }
-        Ok(check)
-    }
-
     pub fn pending_revocations(&self) -> Vec<String> {
         Self::lock(&self.revocations).keys().cloned().collect()
     }

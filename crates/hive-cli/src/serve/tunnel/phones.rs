@@ -130,6 +130,10 @@ impl Registry {
     /// E3/E4: store an enrolled phone. An active record with the same static
     /// is replaced (the caller reused its pid).
     pub fn activate(&self, rec: PhoneRecord) -> Result<()> {
+        // E3a: a pairing is always bound to its phone's workspace device.
+        if rec.device_id.is_none() {
+            anyhow::bail!("a phone pairing must be bound to its workspace device");
+        }
         let mut phones = self.lock();
         phones.retain(|r| !(r.pid == rec.pid || (r.is_active() && r.static_pub == rec.static_pub)));
         phones.push(rec);
@@ -147,15 +151,6 @@ impl Registry {
             self.save(&phones)?;
         }
         Ok(Some(exp))
-    }
-
-    /// Bind a pairing to the phone's workspace device id.
-    pub fn bind_device(&self, pid: &str, device_id: uuid::Uuid) -> Result<bool> {
-        let mut phones = self.lock();
-        let Some(r) = phones.iter_mut().find(|r| r.pid == pid) else { return Ok(false) };
-        r.device_id = Some(device_id);
-        self.save(&phones)?;
-        Ok(true)
     }
 
     /// The active pairings of phones whose workspace device is in `revoked`.

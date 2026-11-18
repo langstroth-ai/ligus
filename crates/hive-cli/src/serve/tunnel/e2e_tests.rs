@@ -19,10 +19,25 @@ use crate::serve::tunnel::{self as tun, cred, PairingSecret, RelaySettings};
 async fn serve_with_relay(relay: &str) -> Harness {
     let (endpoint, _) = spawn_model(vec![]).await;
     let relay = relay.to_string();
-    harness_with(&endpoint, "m", &[("README.md", "hi\n")], move |o| {
+    let h = harness_with(&endpoint, "m", &[("README.md", "hi\n")], move |o| {
         o.remote = Some(RelaySettings::new(&relay, None, true).unwrap());
     })
-    .await
+    .await;
+    trust_test_phones(&h);
+    h
+}
+
+/// The box's real roster decides what is revoked (or known); every test
+/// phone's device otherwise counts as a certified phone (certifying one for
+/// real needs its person's passkey, which the serve harness doesn't have).
+fn trust_test_phones(h: &Harness) {
+    let t = h.handle.shared.tunnel.clone().unwrap();
+    let weak = Arc::downgrade(&h.handle.shared);
+    let real: tun::DeviceLookupFn = Arc::new(move |d| match weak.upgrade() {
+        Some(s) => s.device_lookup(d),
+        None => tun::device_bind::DeviceLookup::Unknown,
+    });
+    t.set_device_lookup(testkit::test_device_lookup(Some(real)));
 }
 
 fn host_info(h: &Harness, relay: &str) -> HostInfo {
@@ -552,8 +567,8 @@ async fn a_revoked_phone_device_cuts_its_tunnel() {
     let info = host_info(&h, &relay.url);
     let phone = PhoneKeys::generate();
     let (_c, pid, _) = testkit::phone_enroll(&info, &phone, &ps, "p").await.unwrap();
-    let phone_device = Uuid::new_v4();
-    assert!(t.registry.bind_device(&pid, phone_device).unwrap());
+    let phone_device = phone.device_id();
+    assert_eq!(t.registry.get(&pid).unwrap().device_id, Some(phone_device));
     // Nothing revoked yet: the hook cuts nothing.
     assert!(h.handle.shared.revoke_phones_of_revoked_devices().is_empty());
     // The workspace owner revokes the phone's device on their desktop.
@@ -586,26 +601,10 @@ async fn a_revoked_phone_device_cuts_its_tunnel() {
 
 use hive_runtime::revocation_status::StepState;
 
-/// Stand-in roster for the bind check: the real roster decides what is
-/// revoked; `phone` counts as a certified P-256 phone (certifying one for
-/// real needs its person's passkey, which the serve harness doesn't have).
-fn fake_roster(h: &Harness, phone: &hive_core::testkit::Phone) {
-    let t = h.handle.shared.tunnel.clone().unwrap();
-    let weak = Arc::downgrade(&h.handle.shared);
-    let (id, pk) = (phone.device_id, phone.public_key());
-    t.set_device_lookup(Arc::new(move |d| {
-        use tun::device_bind::DeviceLookup;
-        match weak.upgrade().map(|s| s.device_lookup(d)).unwrap_or(DeviceLookup::Unknown) {
-            DeviceLookup::Revoked => DeviceLookup::Revoked,
-            _ if d == id => DeviceLookup::Certified { public_key: pk.clone(), phone: true },
-            other => other,
-        }
-    }));
-}
-
-fn device_claim(t: &tun::TunnelHost, phone: &hive_core::testkit::Phone, keys: &PhoneKeys) -> Value {
-    let sig = hive_core::crypto::sign_p256(&phone.key, &tun::device_bind::bind_message(t.host_id(), &keys.static_pub()));
-    json!({ "id": phone.device_id, "sig": tun::b64u(sig) })
+/// `phone`'s device claim for the pairing with `keys`'s static on `t`.
+fn device_claim(t: &tun::TunnelHost, phone: &PhoneKeys, keys: &PhoneKeys) -> Value {
+    let sig = hive_core::crypto::sign_p256(&phone.device.key, &tun::device_bind::bind_message(t.host_id(), &keys.static_pub()));
+    json!({ "id": phone.device_id(), "sig": tun::b64u(sig) })
 }
 
 /// A fresh pairing window the relay has heard of.
@@ -616,15 +615,14 @@ async fn open_window(h: &Harness, relay: &FakeRelay) -> PairingSecret {
 }
 
 /// Pair a phone that proves its workspace device at enrollment.
-async fn pair_bound(h: &Harness, relay: &FakeRelay) -> (Arc<tun::TunnelHost>, HostInfo, PhoneKeys, String, String, hive_core::testkit::Phone) {
+async fn pair_bound(h: &Harness, relay: &FakeRelay) -> (Arc<tun::TunnelHost>, HostInfo, PhoneKeys, String, String, Arc<hive_core::testkit::Phone>) {
     let t = h.handle.shared.tunnel.clone().unwrap();
-    let phone = hive_core::testkit::Phone::new();
-    fake_roster(h, &phone);
     let ps = open_window(h, relay).await;
     let info = host_info(h, &relay.url);
     let keys = PhoneKeys::generate();
-    let (_c, pid, credential) = testkit::phone_enroll_with_device(&info, &keys, &ps, "Mara's iPhone", device_claim(&t, &phone, &keys)).await.unwrap();
-    assert_eq!(t.registry.get(&pid).unwrap().device_id, Some(phone.device_id), "bound at pairing");
+    let (_c, pid, credential) = testkit::phone_enroll(&info, &keys, &ps, "Mara's iPhone").await.unwrap();
+    assert_eq!(t.registry.get(&pid).unwrap().device_id, Some(keys.device_id()), "bound at pairing");
+    let phone = keys.device.clone();
     (t, info, keys, pid, credential, phone)
 }
 
@@ -746,25 +744,61 @@ async fn a_revoked_phone_device_cannot_pair_again() {
 
     // Same keys, with the claim.
     let ps = open_window(&h, &relay).await;
-    assert!(testkit::phone_enroll_with_device(&info, &keys, &ps, "again", device_claim(&t, &phone, &keys)).await.is_err());
+    assert!(testkit::phone_enroll(&info, &keys, &ps, "again").await.is_err());
     // Same keys, no claim (the revoked pairing's static).
     let ps = open_window(&h, &relay).await;
-    assert!(testkit::phone_enroll(&info, &keys, &ps, "again").await.is_err());
+    assert!(testkit::phone_enroll_with_device(&info, &keys, &ps, "again", None).await.is_err());
     // New keys claiming the revoked device.
     let ps = open_window(&h, &relay).await;
     let fresh = PhoneKeys::generate();
-    assert!(testkit::phone_enroll_with_device(&info, &fresh, &ps, "again", device_claim(&t, &phone, &fresh)).await.is_err());
+    assert!(testkit::phone_enroll_with_device(&info, &fresh, &ps, "again", Some(device_claim(&t, &keys, &fresh))).await.is_err());
+    assert_eq!(active(), 0, "a refused enrollment left a pairing behind");
+    let _ = phone;
+    h.handle.shutdown();
+}
+
+/// Residual 1: every pairing proves its phone's workspace device. Fresh keys
+/// with no claim (what a revoked phone would try), a claim this box doesn't
+/// know, a claim made for another pairing or another box, and a claim of a
+/// device that isn't a phone are all refused; the old "pair unbound, bind
+/// later" route is gone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_pairing_must_prove_its_phone_device() {
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let t = h.handle.shared.tunnel.clone().unwrap();
+    let info = host_info(&h, &relay.url);
+    let active = || t.registry.list().into_iter().filter(|r| r.is_active()).count();
+
+    // No claim at all.
+    let ps = open_window(&h, &relay).await;
+    assert!(testkit::phone_enroll_with_device(&info, &PhoneKeys::generate(), &ps, "unbound", None).await.is_err());
+    // A device this box has never heard of (a validly signed claim).
+    let stranger = hive_core::testkit::Phone::new();
+    let keys = PhoneKeys::generate();
+    let sig = hive_core::crypto::sign_p256(&stranger.key, &tun::device_bind::bind_message(t.host_id(), &keys.static_pub()));
+    let ps = open_window(&h, &relay).await;
+    assert!(testkit::phone_enroll_with_device(&info, &keys, &ps, "stranger", Some(json!({ "id": stranger.device_id, "sig": tun::b64u(sig) }))).await.is_err());
+    // A claim lifted from another pairing (bound to that pairing's static).
+    let victim = PhoneKeys::generate();
+    let lifted = victim.device_claim(t.host_id());
+    let attacker = PhoneKeys::generate();
+    let ps = open_window(&h, &relay).await;
+    assert!(testkit::phone_enroll_with_device(&info, &attacker, &ps, "lifted", Some(lifted)).await.is_err());
+    // A claim made for another box (its host id), same static.
+    let other_box = attacker.device_claim("AAAAAAAAAAAAAAAAAAAAAA");
+    let ps = open_window(&h, &relay).await;
+    assert!(testkit::phone_enroll_with_device(&info, &attacker, &ps, "other box", Some(other_box)).await.is_err());
     assert_eq!(active(), 0, "a refused enrollment left a pairing behind");
 
-    // A brand-new unbound pairing (the owner showed a new QR) that then
-    // claims the revoked device over the tunnel is revoked at once.
+    // The bind-later route no longer exists.
     let ps = open_window(&h, &relay).await;
-    let other = PhoneKeys::generate();
-    let (mut c, pid2, _) = testkit::phone_enroll(&info, &other, &ps, "new").await.unwrap();
-    assert!(t.registry.is_active(&pid2));
-    let r = c.request("PUT", "/v1/tunnel/device", Some(device_claim(&t, &phone, &other))).await.unwrap();
-    assert_eq!(r.status, 403, "{}", String::from_utf8_lossy(&r.body));
-    assert!(!t.registry.is_active(&pid2));
+    let ok = PhoneKeys::generate();
+    let (mut c, pid, _) = testkit::phone_enroll(&info, &ok, &ps, "ok").await.unwrap();
+    assert_eq!(t.registry.get(&pid).unwrap().device_id, Some(ok.device_id()));
+    let r = c.request("PUT", "/v1/tunnel/device", Some(ok.device_claim(t.host_id()))).await.unwrap();
+    assert!(r.status == 404 || r.status == 405, "{}", r.status);
     h.handle.shutdown();
 }
 

@@ -392,7 +392,7 @@ anonymous handshakes against the host key.
 
 ```
 msg1 phone→host  payload {"v":1,"name":"<≤64 chars>","pk":"<b64u phone auth pub>",
-                          "device"?: {"id":"<workspace device uuid>","sig":"<b64u P-256 sig>"}}
+                          "device": {"id":"<workspace device uuid>","sig":"<b64u P-256 sig>"}}
 msg2 host→phone  payload {"v":1,"pid":"<pid>","cred":"hpc1…"}
 then transport; the phone MUST send a PING frame (§8) first
 ```
@@ -414,16 +414,17 @@ Host rules:
   message from the phone arrives. Only then does the host consume `ps` and
   send `enrollClose`. A replayed msg1 (for example, from the relay) can't
   produce that message.
-- **E3a (device binding, optional).** `device` binds the pairing to the
+- **E3a (device binding, required).** `device` binds the pairing to the
   phone's workspace device (its P-256 Secure Enclave key, certified on the
   config log). `sig` is ECDSA P-256 (64 bytes, r ‖ s, low-S) over
   `ctx("device-bind", hid, phone_static)`, so it binds only this pairing on
   this host. The host checks it against the device's certificate on its
-  roster: a revoked device is refused (no msg2, the attempt counts); a bad
-  signature or a non-phone device is refused; a device the host doesn't know
-  yet leaves the pairing unbound (the phone retries with
-  `PUT /v1/tunnel/device`, §9). The host also refuses an enrollment whose
-  static or auth key belonged to a pairing of a revoked device.
+  roster and refuses (no msg2, the attempt counts) a missing claim, a
+  device it doesn't know yet (the phone pairs again once the box has synced
+  its certificate), a revoked device, a non-phone device, and a bad
+  signature. The host also refuses an
+  enrollment whose static or auth key belonged to a pairing of a revoked
+  device. A pairing's device never changes.
 - **E5.** After E4 the connection carries normal API traffic (§8, §9) under
   the relay's enrollment cap. The host SHOULD tell the owner: a terminal or
   log line, and a push to the other paired phones ("New phone paired: …").
@@ -553,11 +554,6 @@ Host connector (`hive serve`):
     whether they carry a message preview (§14). `previews` defaults to `true`
     for a newly paired phone; when the field is absent the stored value is
     kept.
-  - `PUT /v1/tunnel/device` `{"id":"<device uuid>","sig":"<b64u>"}` (the
-    E3a claim, §7.2) → `200 {"bound":true,"deviceId"}`; `202
-    {"bound":false}` while the host doesn't know the device yet (retry after
-    it syncs); `403` for a revoked device (this pairing is revoked too, just
-    after the answer); `400` for a bad signature or a non-phone device.
 
 Phone client: the transport layer maps each `URLRequest` onto one stream and
 builds an `HTTPURLResponse` and body or byte sequence from the reply. In the

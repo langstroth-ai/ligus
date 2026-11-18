@@ -45,14 +45,51 @@ pub fn close_code(e: &anyhow::Error) -> Option<u16> {
 pub struct PhoneKeys {
     pub auth: SigningKey,
     pub static_priv: [u8; 32],
+    /// The phone's workspace device (its P-256 key), certified for tests by
+    /// [`test_device_lookup`].
+    pub device: Arc<hive_core::testkit::Phone>,
+}
+
+/// Every test phone's workspace device key, by device id (a stand-in for
+/// certificates on the roster: certifying a phone for real needs its
+/// person's passkey).
+fn test_devices() -> &'static Mutex<HashMap<uuid::Uuid, Vec<u8>>> {
+    static D: std::sync::OnceLock<Mutex<HashMap<uuid::Uuid, Vec<u8>>>> = std::sync::OnceLock::new();
+    D.get_or_init(Default::default)
+}
+
+/// A roster lookup that counts every test phone's device as a certified
+/// phone, unless `real` says it is revoked (or knows it otherwise).
+pub fn test_device_lookup(real: Option<super::DeviceLookupFn>) -> super::DeviceLookupFn {
+    use super::device_bind::DeviceLookup;
+    Arc::new(move |id| {
+        let r = real.as_ref().map(|f| f(id)).unwrap_or(DeviceLookup::Unknown);
+        if r != DeviceLookup::Unknown {
+            return r;
+        }
+        match test_devices().lock().unwrap().get(&id) {
+            Some(pk) => DeviceLookup::Certified { public_key: pk.clone(), phone: true },
+            None => DeviceLookup::Unknown,
+        }
+    })
 }
 
 impl PhoneKeys {
     pub fn generate() -> Self {
-        Self { auth: SigningKey::from_bytes(&random_bytes()), static_priv: random_bytes() }
+        let device = hive_core::testkit::Phone::new();
+        test_devices().lock().unwrap().insert(device.device_id, device.public_key());
+        Self { auth: SigningKey::from_bytes(&random_bytes()), static_priv: random_bytes(), device: Arc::new(device) }
     }
     pub fn static_pub(&self) -> [u8; 32] {
         x25519_pub(&self.static_priv)
+    }
+    pub fn device_id(&self) -> uuid::Uuid {
+        self.device.device_id
+    }
+    /// The E3a device claim for this pairing on `host_id`.
+    pub fn device_claim(&self, host_id: &str) -> Value {
+        let sig = hive_core::crypto::sign_p256(&self.device.key, &super::device_bind::bind_message(host_id, &self.static_pub()));
+        json!({ "id": self.device.device_id, "sig": b64u(sig) })
     }
 }
 
@@ -144,11 +181,14 @@ where
     }
 
     /// Enrollment handshake (IKpsk1). Returns the conn, pid and credential.
+    /// Enrollment with the phone's own device claim (E3a).
     pub async fn enroll_handshake(ws: S, keys: &PhoneKeys, host: &HostInfo, ps: &PairingSecret, name: &str) -> Result<(Self, String, String)> {
-        Self::enroll_handshake_with(ws, keys, host, ps, name, None).await
+        let claim = keys.device_claim(&host.host_id);
+        Self::enroll_handshake_with(ws, keys, host, ps, name, Some(claim)).await
     }
 
-    /// Enrollment with an optional device claim (`"device": {"id", "sig"}`).
+    /// Enrollment with the given device claim (`"device": {"id", "sig"}`),
+    /// or none.
     pub async fn enroll_handshake_with(mut ws: S, keys: &PhoneKeys, host: &HostInfo, ps: &PairingSecret, name: &str, device: Option<Value>) -> Result<(Self, String, String)> {
         let mut hs = noise::initiator(&keys.static_priv, &host.hs, &host.host_id, Some(&ps.psk), None)?;
         let mut buf = vec![0u8; noise::MAX_MSG];
@@ -269,12 +309,12 @@ pub async fn phone_enroll(host: &HostInfo, keys: &PhoneKeys, ps: &PairingSecret,
     PhoneConn::enroll_handshake(ws, keys, host, ps, name).await
 }
 
-/// Enroll with a device claim.
-pub async fn phone_enroll_with_device(host: &HostInfo, keys: &PhoneKeys, ps: &PairingSecret, name: &str, device: Value) -> Result<(PhoneConn<ClientWs>, String, String)> {
+/// Enroll with the given device claim, or none.
+pub async fn phone_enroll_with_device(host: &HostInfo, keys: &PhoneKeys, ps: &PairingSecret, name: &str, device: Option<Value>) -> Result<(PhoneConn<ClientWs>, String, String)> {
     let (mut ws, _) = phone_dial(host).await?;
     ws.send(Message::Text(json!({ "t": "enroll", "eid": ps.eid, "tag": b64u(ps.tag) }).to_string().into())).await?;
     await_ready(&mut ws).await?;
-    PhoneConn::enroll_handshake_with(ws, keys, host, ps, name, Some(device)).await
+    PhoneConn::enroll_handshake_with(ws, keys, host, ps, name, device).await
 }
 
 /// Open a session through the relay with a credential.

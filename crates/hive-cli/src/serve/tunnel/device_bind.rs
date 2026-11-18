@@ -10,13 +10,14 @@
 //! ctx("device-bind", host_id, phone_noise_static)
 //! ```
 //!
-//! sent in the enrollment payload (`"device": {"id", "sig"}`, optional) or
-//! later over the tunnel (`PUT /v1/tunnel/device`). The static is unique to
-//! the pairing, so the signature can only bind this pairing on this box.
+//! sent in the enrollment payload (`"device": {"id", "sig"}`, required). The
+//! static is unique to the pairing, so the signature can only bind this
+//! pairing on this box.
 //!
-//! A pairing that claims a revoked device is refused (enrollment) or revoked
-//! (later claim); so is a new enrollment from a Noise static or auth key that
-//! belonged to a pairing of a revoked device.
+//! An enrollment without a claim, or with a claim of a device this box
+//! doesn't know, isn't a phone of this workspace, is revoked, or doesn't
+//! verify, is refused; so is one from a Noise static or auth key that belonged
+//! to a pairing of a revoked device.
 
 use serde::Deserialize;
 use uuid::Uuid;
@@ -49,7 +50,8 @@ pub enum BindCheck {
     Bind(Uuid),
     /// The device is revoked: refuse the pairing.
     Revoked(Uuid),
-    /// The device isn't certified (yet): leave the pairing unbound.
+    /// The device isn't certified (yet): refuse; the phone pairs again once
+    /// this box has synced its certificate.
     Unknown,
     /// A bad signature, or a device that isn't a phone.
     Invalid(&'static str),
