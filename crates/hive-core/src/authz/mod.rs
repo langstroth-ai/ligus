@@ -997,6 +997,63 @@ fn service_member_refusal(
     }
 }
 
+/// A membership change a person may try from a desktop: what the UI asks
+/// [`member_action_refusal`] about before offering it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MemberAction {
+    /// Remove `member_id` (a cut, unless it is yourself).
+    Remove { member_id: String },
+    /// Give `member_id` the role `role` (a cut when it is lower).
+    SetRole { member_id: String, role: WorkspaceRole },
+}
+
+/// Why the fold would refuse `author` doing `action` against the workspace
+/// roster `roster` and its config fold `config` (both at the head), or
+/// `None` when it would allow it (with the author's passkey presence, which
+/// the desktop asks for). The UI hides or disables what this refuses and
+/// shows the reason; it runs the very rules [`authorize`] runs for these
+/// kinds (the role floor, the rank rules, the service-member rules), so the
+/// two never disagree (`tests/member_action_parity.rs`).
+pub fn member_action_refusal(roster: &RosterState, config: &ChatSession, author: &str, action: &MemberAction) -> Option<String> {
+    let Some(me) = config.members.iter().find(|m| m.id == author) else {
+        return Some("you aren't a member of this workspace".into());
+    };
+    let payload = match action {
+        MemberAction::Remove { member_id } => SessionEvent::MemberRemoved { member_id: member_id.clone(), watermark: vec![] },
+        MemberAction::SetRole { member_id, role } => {
+            let Some(target) = config.members.iter().find(|m| m.id == *member_id) else {
+                return Some("not a member".into());
+            };
+            if target.role == *role {
+                return Some("already that role".into());
+            }
+            SessionEvent::MemberRoleChanged {
+                change: crate::events::MemberRoleChange { member_id: member_id.clone(), old_role: target.role, new_role: *role },
+                watermark: vec![],
+            }
+        }
+    };
+    let mut env = SessionEventEnvelope::new(crate::channel::workspace_config_session_id(config.workspace_id), config.workspace_id, 0, payload);
+    env.actor_stamp = Some(crate::identity::ActorStamp {
+        actor: me.actor.clone(),
+        recorded_at: crate::Timestamp::epoch(),
+        cfg_frontier: None,
+        presence: None,
+        runtime_effect: false,
+        prev: None,
+        sig_alg: Default::default(),
+    });
+    let role = config.role_of(author);
+    if let Some(why) = service_member_refusal(&env, author, Some(roster), true, config) {
+        return Some(why);
+    }
+    if let Some(why) = rank_rules(&env.payload, author, role, roster) {
+        return Some(why);
+    }
+    let d = evaluate(&env.payload, author, role, config);
+    (!d.allowed).then_some(d.summary)
+}
+
 /// The rank rules on membership and device governance (review P-A2b, P-A2d):
 ///
 /// * no one grants a role above their own, or changes the role of a member
