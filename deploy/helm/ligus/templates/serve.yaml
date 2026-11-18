@@ -100,10 +100,7 @@ spec:
             - name: LIGUS_SERVE_NAME
               value: {{ . | quote }}
             {{- end }}
-            {{- with $v.owner }}
-            - name: LIGUS_SERVE_OWNER
-              value: {{ . | quote }}
-            {{- end }}
+            {{- include "ligus.admissionEnv" (dict "a" $v.admission) | nindent 12 }}
             {{- with $v.defaultAgent }}
             - name: LIGUS_SERVE_DEFAULT_AGENT
               value: {{ . | quote }}
@@ -160,9 +157,11 @@ spec:
             {{- toYaml $v.resources | nindent 12 }}
           volumeMounts:
             {{- include "ligus.serveMounts" . | nindent 12 }}
+            {{- include "ligus.admissionMount" (dict "a" $v.admission) | nindent 12 }}
             {{- include "ligus.modelGatewayMounts" . | nindent 12 }}
       volumes:
         {{- include "ligus.secretVolumes" (dict "root" . "v" $v "component" "serve") | nindent 8 }}
+        {{- include "ligus.admissionVolume" (dict "a" $v.admission) | nindent 8 }}
         {{- include "ligus.modelGatewayVolumes" . | nindent 8 }}
         - name: tmp
           emptyDir:

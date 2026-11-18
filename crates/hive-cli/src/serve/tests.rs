@@ -3805,3 +3805,59 @@ async fn the_phone_admits_a_box_with_its_own_key_through_serve() {
     assert_eq!((m.actor.kind, m.role), (hive_core::ActorKind::Service, hive_core::WorkspaceRole::Contributor));
     h.handle.shutdown();
 }
+
+/// The headless Admin path (CI, scripts): a CLI founder registers a recovery
+/// key, issues box admissions confirmed with it, and serve and a worker join
+/// ONE workspace from those codes, each as its own service member.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_headless_admin_admits_serve_and_a_worker_into_one_workspace() {
+    let tmp = tempfile::tempdir().unwrap();
+    let relay = spawn(test_relay::router()).await;
+    let room = format!("headless-{}", Uuid::new_v4());
+    let ws = crate::uuid_of_room(&room);
+    let founder = config(&tmp.path().join("founder"), &relay, &room);
+    crate::cmd_new(&founder, "founding".into()).unwrap();
+    let words = tmp.path().join("rk");
+    let w = words.to_string_lossy().into_owned();
+    crate::admit::cmd_recovery_key(&founder, &[&"create".to_string()], Some(w.clone())).unwrap();
+    assert_eq!(std::fs::read_to_string(&words).unwrap().split_whitespace().count(), 24);
+    let (s_out, w_out) = (tmp.path().join("serve.code"), tmp.path().join("worker.code"));
+    for out in [&s_out, &w_out] {
+        let flags = |f: &str| match f {
+            "--recovery-words-file" => Some(w.clone()),
+            "--out" => Some(out.to_string_lossy().into_owned()),
+            "--ttl" => Some("2h".into()),
+            _ => None,
+        };
+        crate::admit::cmd_admit(&founder, &[&"issue".to_string()], flags).unwrap();
+    }
+    // Without a recovery key the CLI can't confirm: refused.
+    let none = crate::admit::cmd_admit(&founder, &[&"issue".to_string()], |_| None);
+    assert!(none.is_err());
+    sync_once(&founder).await.unwrap();
+
+    let sdir = tmp.path().join("serve");
+    let mut scfg = config(&sdir, &relay, &room);
+    crate::admit::redeem(&mut scfg, &std::fs::read_to_string(&s_out).unwrap()).unwrap();
+    let opts = ServeOptions { token_file: sdir.join("serve.token"), dashboard_file: sdir.join("dashboard.toml"), ..box_opts("serve") };
+    let handle = start(scfg, opts).await.unwrap();
+    for _ in 0..20 {
+        handle.shared.sync_kick.notify_one();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let mut wcfg = config(&tmp.path().join("worker"), &relay, &room);
+    let (wsvc, _) = crate::worker_start(&mut wcfg, "w1", Some(std::fs::read_to_string(&w_out).unwrap())).await.unwrap();
+    for _ in 0..50 {
+        handle.shared.sync_kick.notify_one();
+        let c = handle.shared.lock().load(workspace_config_session_id(ws)).unwrap().unwrap();
+        if c.members.iter().any(|m| m.id == wsvc.author().id) {
+            let boxes: Vec<_> = c.members.iter().filter(|m| m.actor.kind == hive_core::ActorKind::Service).collect();
+            assert_eq!(boxes.len(), 2, "serve and the worker are each their own service member");
+            assert!(boxes.iter().all(|m| m.role == hive_core::WorkspaceRole::Contributor));
+            handle.shutdown();
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("serve never saw the worker join");
+}

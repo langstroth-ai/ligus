@@ -15,6 +15,8 @@ remote:
   relayUrl: http://langstroth-relay-tunnel.langstroth-relay.svc.cluster.local:8443
   insecureRelay: true
 serve:
+  admission:
+    existingSecret: ws-smoke-serve-admission
   persistence:
     size: 1Gi
     accessMode: ReadWriteOnce
@@ -23,18 +25,15 @@ serve:
   resources:
     requests: { cpu: 50m, memory: 64Mi }
     limits: { cpu: "1", memory: 512Mi, ephemeral-storage: 1Gi }
-# Off here: the workflow installs the worker as its own release on its own
-# throwaway workspace (worker.enabled=true, serve.enabled=false). In 0.1 a box
-# joins a workspace only through an invite an Admin issued (key possession
-# never admits anyone), and nothing in CI can issue one headlessly yet (the
-# member-bootstrap work). With serve and a worker started together on one
-# fresh workspace, whichever box touches the config log first founds it as
-# Owner and the other is refused (role Viewer cannot perform memberAdded):
-# serve then exits 1 and the install never becomes ready.
+# serve and worker w1 join ONE workspace, each as its own service member:
+# the workflow's headless founder issues one single-use box admission per
+# box and stores each in a Secret the box redeems at start-up.
 worker:
-  enabled: false
+  enabled: true
   instances:
     - name: w1
+      admission:
+        existingSecret: ws-smoke-w1-admission
   # kind's local-path provisioner is not CSI; ReadWriteOncePod needs a CSI
   # driver, so CI uses ReadWriteOnce.
   persistence:

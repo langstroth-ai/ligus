@@ -234,6 +234,14 @@ Args: dict rules what.
 {{- range .Values.mcp.servers -}}
 {{- include "ligus.validateEgressRules" (dict "rules" .egress "what" (printf "mcp.servers[%s].egress" .name)) -}}
 {{- end -}}
+{{- if .Values.serve.owner -}}
+{{- fail "serve.owner was removed in 0.1: serve no longer acts as a person's device. It joins the workspace as its own service member: remove serve.owner, then admit the box (desktop: workspace menu > Admit a box > For Kubernetes) and set serve.admission.existingSecret to a Secret holding the code" -}}
+{{- end -}}
+{{- range .Values.worker.instances -}}
+{{- if and .admission (not (kindIs "map" .admission)) -}}
+{{- fail (printf "worker.instances[%s].admission is {existingSecret, secretKey}" (toString .name)) -}}
+{{- end -}}
+{{- end -}}
 {{- if hasKey .Values "otel" -}}
 {{- fail "otel.* was removed: Ligus does not export OpenTelemetry in 0.1" -}}
 {{- end -}}
@@ -406,7 +414,7 @@ secret files and the fail-closed sandbox settings. Nor may it read a
 Secret: secrets are files. Args: dict v component.
 */}}
 {{- define "ligus.validateExtraEnv" -}}
-{{- $chart := list "LIGUS_DATA_DIR" "HOME" "LIGUS_RELAY_URL" "LIGUS_WORKSPACE" "LIGUS_REQUIRE_SANDBOX" "LIGUS_SANDBOX" "LIGUS_SECRET_BACKEND" "LIGUS_SECRETS_DIR" "LIGUS_WS_SECRET_DIR" -}}
+{{- $chart := list "LIGUS_DATA_DIR" "HOME" "LIGUS_RELAY_URL" "LIGUS_WORKSPACE" "LIGUS_REQUIRE_SANDBOX" "LIGUS_SANDBOX" "LIGUS_SECRET_BACKEND" "LIGUS_SECRETS_DIR" "LIGUS_WS_SECRET_DIR" "LIGUS_ADMISSION_FILE" "LIGUS_SERVE_OWNER" -}}
 {{- range .v.extraEnv -}}
 {{- $n := toString .name -}}
 {{- $base := regexReplaceAll "^HIVE_" $n "LIGUS_" -}}
@@ -558,4 +566,38 @@ the worker will).
     resources:
       requests:
         storage: {{ .v.home.size }}
+{{- end -}}
+
+{{/*
+A box admission (Phase B): the env var, mount and volume for a host's
+single-use admission code. Args: dict a (the admission values, may be nil).
+*/}}
+{{- define "ligus.admissionEnv" -}}
+{{- if and .a .a.existingSecret }}
+# A single-use, expiring box admission: redeemed at start-up, bound to this
+# box's key, denied to agent processes.
+- name: LIGUS_ADMISSION_FILE
+  value: /etc/ligus/secrets/admission/admission
+{{- end }}
+{{- end -}}
+
+{{- define "ligus.admissionMount" -}}
+{{- if and .a .a.existingSecret }}
+- name: admission
+  mountPath: /etc/ligus/secrets/admission
+  readOnly: true
+{{- end }}
+{{- end -}}
+
+{{- define "ligus.admissionVolume" -}}
+{{- if and .a .a.existingSecret }}
+- name: admission
+  secret:
+    secretName: {{ .a.existingSecret }}
+    defaultMode: 0400
+    # Optional: once the box has joined, the Secret can be deleted.
+    optional: true
+    items:
+      - { key: {{ default "admission" .a.secretKey }}, path: admission }
+{{- end }}
 {{- end -}}

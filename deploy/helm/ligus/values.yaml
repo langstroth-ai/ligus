@@ -75,8 +75,19 @@ serve:
   # Host label other members see (LIGUS_SERVE_LABEL); defaults to the pod name.
   label: ""
   name: ""
-  # Owner to enroll this device for (LIGUS_SERVE_OWNER), by name or actor id.
-  owner: ""
+  # serve joins the workspace as its own service member (at most
+  # Contributor; its votes never count as a person's). An Admin admits it
+  # once: on the desktop (workspace menu > Admit a box > For Kubernetes) or
+  # the phone, which gives a single-use, expiring admission code. Put the
+  # code in a Secret and name it here; the box redeems it at start-up
+  # (LIGUS_ADMISSION_FILE), binding it to its own key. Delete the Secret
+  # once the box has joined. (serve.owner, acting as a person's device, was
+  # removed in 0.1.)
+  #   kubectl -n <ns> create secret generic acme-serve-admission \
+  #     --from-file=admission=./serve-admission.txt
+  admission:
+    existingSecret: ""
+    secretKey: admission
   defaultAgent: ""
   applyOnApprove: false
   # Above serve's 15 s turn grace.
@@ -139,10 +150,14 @@ worker:
   # own identity and its own volumes; the name is its host label (bind agents
   # with `ligus set-agent-host`). Removing an entry stops that host but keeps
   # its PVCs; delete them, and revoke the host, once its agents are rebound.
-  # Never autoscale workers. (Admin enrollment of each worker as a member
-  # arrives with the 0.1 member-bootstrap work; see the deploy docs.)
+  # Never autoscale workers. Each worker joins as its own service member
+  # through its own admission code (one per instance: each is single use),
+  # like serve.admission.
   instances: []
   # - name: build-1
+  #   admission:                    # the Secret holding this worker's
+  #     existingSecret: acme-build-1-admission   # admission code
+  #     secretKey: admission
   #   permissionMode: acceptEdits   # overrides worker.permissionMode
   #   resources: {}
   #   podSecurityContext: {}      # replaces the chart's (UID 65532, ...) for
