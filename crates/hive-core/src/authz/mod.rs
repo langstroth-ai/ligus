@@ -153,6 +153,8 @@ pub struct AuthzState {
     /// The signed author who first appended each message: only they continue
     /// or rewrite it (and only they or an Admin remove it).
     pub message_authors: BTreeMap<Uuid, String>,
+    /// The signed author of each apply request: they (or an Admin) withdraw it.
+    pub apply_requesters: BTreeMap<Uuid, String>,
 }
 
 impl AuthzState {
@@ -188,6 +190,8 @@ pub fn needs_workspace_authz(event: &SessionEvent) -> bool {
             SessionEvent::ProposalVoteCast { .. }
                 | SessionEvent::ProposalApplied { .. }
                 | SessionEvent::ProposalApplyRequested { .. }
+                | SessionEvent::ProposalApplyFailed { .. }
+                | SessionEvent::ProposalApplyWithdrawn { .. }
                 | SessionEvent::ChatRepoSet { .. }
                 | SessionEvent::ChatBasePinned { .. }
         )
@@ -200,6 +204,9 @@ pub fn subject_of(event: &SessionEvent) -> (Option<Uuid>, Option<Uuid>) {
         | SessionEvent::ProposalApplied { proposal_id, .. }
         | SessionEvent::ProposalReverted { proposal_id, .. } => (Some(*proposal_id), None),
         SessionEvent::ProposalApplyRequested { request } => (Some(request.proposal_id), None),
+        SessionEvent::ProposalApplyFailed { proposal_id, .. } | SessionEvent::ProposalApplyWithdrawn { proposal_id, .. } => {
+            (Some(*proposal_id), None)
+        }
         SessionEvent::ProposalSetOpened { set } => (None, Some(set.id)),
         SessionEvent::ProposalSetAlternativeAdded { set_id, proposal_id, .. }
         | SessionEvent::ProposalSetQuorumReached { set_id, proposal_id, .. }
@@ -633,6 +640,11 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                         if req.expected_base_commit.is_some() && *base_commit != req.expected_base_commit {
                             return Decision::deny("applied onto another base than the person saw");
                         }
+                        // Once: a retry, or the same host applying again,
+                        // never fulfils a closed request.
+                        if fold.apply_outcomes.contains_key(rid) {
+                            return Decision::deny("that apply request is already closed");
+                        }
                     }
                     // Applying yourself: a human member, through their own
                     // device (not a host acting for them).
@@ -644,6 +656,11 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                         }
                         if !own_device(env, at) {
                             return Decision::deny("a person applies through their own device");
+                        }
+                        // One applier per proposal: while a request names a
+                        // host, only that host applies it.
+                        if fold.open_apply_request(*proposal_id).is_some() {
+                            return Decision::deny("an apply of this proposal is already requested on a host");
                         }
                     }
                 }
@@ -675,6 +692,11 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 if fold.apply_requests.contains_key(&request.id) {
                     return Decision::deny("that apply request already exists");
                 }
+                // One applier per proposal: a second request waits until the
+                // open one is applied, fails or is withdrawn.
+                if fold.open_apply_request(request.proposal_id).is_some() {
+                    return Decision::deny("an apply of this proposal is already requested on a host");
+                }
                 let Some(p) = fold.proposals.iter().find(|p| p.id == request.proposal_id) else {
                     return Decision::deny("unknown proposal");
                 };
@@ -695,6 +717,43 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 }
                 if let Some(why) = crate::guard::human_gate_reason(fold, p) {
                     return Decision::deny(why);
+                }
+            }
+            SessionEvent::ProposalApplyFailed { request_id, proposal_id, reason } => {
+                if env.actor_stamp.as_ref().is_some_and(|s| s.runtime_effect) {
+                    return Decision::deny("a runtime never reports an apply");
+                }
+                let Some(req) = fold.apply_requests.get(request_id).filter(|r| r.proposal_id == *proposal_id) else {
+                    return Decision::deny("no such apply request");
+                };
+                if env.signer_device_id != Some(req.host_device_id) {
+                    return Decision::deny("only the host a request names reports on it");
+                }
+                if fold.apply_outcomes.contains_key(request_id) {
+                    return Decision::deny("that apply request is already closed");
+                }
+                if reason.chars().count() > crate::workspace_repo::MAX_APPLY_FAILURE_CHARS {
+                    return Decision::deny("the failure reason is too long");
+                }
+            }
+            SessionEvent::ProposalApplyWithdrawn { request_id, proposal_id } => {
+                if env.actor_stamp.as_ref().is_some_and(|s| s.runtime_effect) {
+                    return Decision::deny("a runtime never withdraws an apply");
+                }
+                let human = env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == ActorKind::Human)
+                    && at.members.get(author).is_some_and(|m| m.kind == ActorKind::Human);
+                if !human || !own_device(env, at) {
+                    return Decision::deny("a person withdraws an apply through their own device");
+                }
+                if !fold.apply_requests.get(request_id).is_some_and(|r| r.proposal_id == *proposal_id) {
+                    return Decision::deny("no such apply request");
+                }
+                if fold.apply_outcomes.contains_key(request_id) {
+                    return Decision::deny("that apply request is already closed");
+                }
+                let requester = fold.authz.apply_requesters.get(request_id).map(String::as_str);
+                if requester != Some(author) && role.rank() < WorkspaceRole::Admin.rank() {
+                    return Decision::deny("only its requester or an Admin withdraws an apply request");
                 }
             }
             SessionEvent::ChatRepoSet { repo_id, base_branch } => {

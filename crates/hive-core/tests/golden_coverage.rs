@@ -90,6 +90,8 @@ fn tag(e: &SessionEvent) -> &'static str {
         E::IdentityLinkPublished { .. } => "identityLinkPublished",
         E::IdentityLinkRemoved { .. } => "identityLinkRemoved",
         E::ProposalApplyRequested { .. } => "proposalApplyRequested",
+        E::ProposalApplyFailed { .. } => "proposalApplyFailed",
+        E::ProposalApplyWithdrawn { .. } => "proposalApplyWithdrawn",
         E::WorkspaceRepoAdded { .. } => "workspaceRepoAdded",
         E::WorkspaceRepoUpdated { .. } => "workspaceRepoUpdated",
         E::WorkspaceRepoRemoved { .. } => "workspaceRepoRemoved",
@@ -116,7 +118,8 @@ const ALL: &[&str] = &[
     "chatLockdownRaised", "chatLockdownCleared", "proposalMarkedStale", "flowRecorded", "workspaceRulesSet",
     "proposalApplied", "agentKeyCertified", "workspaceKeyRotated", "deviceKeyAgreementPublished", "passkeyRegistered",
     "passkeyRemoved", "identityLinkPublished", "identityLinkRemoved", "proposalApplyRequested", "workspaceRepoAdded",
-    "workspaceRepoUpdated", "workspaceRepoRemoved", "chatRepoSet", "chatBasePinned",
+    "workspaceRepoUpdated", "workspaceRepoRemoved", "chatRepoSet", "chatBasePinned", "proposalApplyFailed",
+    "proposalApplyWithdrawn",
 ];
 
 #[test]
@@ -355,6 +358,50 @@ fn phase_b_goldens() {
             presence: None,
             runtime_effect: false,
             prev: Some(u(0x3001)),
+            sig_alg: SigAlg::Ed25519,
+        });
+        sign_envelope(&mut e, u(1), &kp);
+        out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
+    }
+    std::fs::write(path, out).unwrap();
+}
+
+/// Writes the Phase B apply-on-host lines: a host's failure report on an
+/// apply request and a person's withdrawal of one. Run with
+/// `LIGUS_GOLDEN_OUT=<path> --ignored`, then append the lines.
+#[test]
+#[ignore]
+fn phase_b_apply_goldens() {
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let kp = device();
+    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let ws = u(2);
+    let chat = u(3);
+    let cases = [
+        ("proposalApplyFailed", 0, SessionEvent::ProposalApplyFailed {
+            request_id: u(0xb1),
+            proposal_id: u(0x71),
+            reason: "the checkout moved since the request (expected 01234567, at 89abcdef)".into(),
+        }),
+        ("proposalApplyWithdrawn", 1, SessionEvent::ProposalApplyWithdrawn { request_id: u(0xb1), proposal_id: u(0x71) }),
+    ];
+    let mut out = String::new();
+    for (label, i, payload) in cases {
+        let mut e = SessionEventEnvelope::new(chat, ws, 301 + i, payload);
+        e.id = u(0x4010 + 2 * i as u128);
+        e.event_id = u(0x4011 + 2 * i as u128);
+        e.lamport = 701 + i as u64;
+        e.timestamp = Timestamp::epoch();
+        let mut actor = ActorIdentity::new(u(9).to_string(), "Mara", ActorKind::Human);
+        actor.account_id = Some(u(9));
+        actor.device_id = Some(u(1));
+        e.actor_stamp = Some(ActorStamp {
+            actor,
+            recorded_at: Timestamp::epoch(),
+            cfg_frontier: Some(CfgFrontier { lamport: 700, event_id: u(0x4001) }),
+            presence: None,
+            runtime_effect: false,
+            prev: Some(u(0x4002)),
             sig_alg: SigAlg::Ed25519,
         });
         sign_envelope(&mut e, u(1), &kp);

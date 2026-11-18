@@ -110,6 +110,10 @@ pub struct ChatSession {
     /// to apply an approved proposal. Skipped when empty.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub apply_requests: BTreeMap<Uuid, crate::workspace_repo::ApplyRequest>,
+    /// How each closed apply request ended (applied, failed, withdrawn); a
+    /// request without one is open. Skipped when empty.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub apply_outcomes: BTreeMap<Uuid, crate::workspace_repo::ApplyOutcome>,
     #[serde(default)]
     pub created_at: Timestamp,
     #[serde(default)]
@@ -159,6 +163,15 @@ impl ChatSession {
             .unwrap_or(WorkspaceRole::Viewer)
     }
 
+    /// The open apply request of `proposal_id`, if any: one a person filed
+    /// that no apply, failure or withdrawal has closed. A proposal has at
+    /// most one (one applier per proposal; the fold refuses a second).
+    pub fn open_apply_request(&self, proposal_id: Uuid) -> Option<&crate::workspace_repo::ApplyRequest> {
+        self.apply_requests
+            .values()
+            .find(|r| r.proposal_id == proposal_id && !self.apply_outcomes.contains_key(&r.id))
+    }
+
     pub fn new(title: impl Into<String>, workspace_id: Uuid, runtime_id: impl Into<String>) -> Self {
         let now = Timestamp::now();
         Self {
@@ -187,6 +200,7 @@ impl ChatSession {
             flow: crate::flow::FlowState::default(),
             repo: None,
             apply_requests: BTreeMap::new(),
+            apply_outcomes: BTreeMap::new(),
             created_at: now,
             updated_at: now,
             authz: Default::default(),

@@ -1,8 +1,11 @@
-//! The phone tier (Phase A, item 6): what a phone's own P-256 (Secure
-//! Enclave) key may sign. A phone posts, reacts, votes and approves, and
-//! asks a host to apply; it never changes membership, roles, devices or
-//! keys (its own revocation and admitting a box as a service member
-//! excepted), and never touches workspace configuration. Capped by its person's role like every event.
+//! The phone tier (Phase A, item 6; Phase B): what a phone's own P-256
+//! (Secure Enclave) key may sign. A phone posts, reacts, votes and approves,
+//! answers an agent's question, asks a host to apply (and withdraws that
+//! request), and raises or clears a chat lockdown; it never changes
+//! membership, roles, devices or keys (its own revocation and admitting a
+//! box as a service member excepted), never rebinds an agent, never issues a
+//! person's invite, and never touches workspace configuration. Capped by its
+//! person's role and judged by the presence table like every event.
 
 use uuid::Uuid;
 
@@ -21,6 +24,10 @@ pub fn phone_tier_allows(event: &SessionEvent, device: Uuid) -> Result<(), Strin
         | SessionEvent::ProposalDismissed { .. }
         | SessionEvent::ProposalApplyRequested { .. }
         | SessionEvent::ChatLockdownRaised { .. } => true,
+        // Phase B: withdrawing its person's own apply request (it narrows),
+        // and clearing a lockdown (a person's call, with their passkey
+        // presence like on any device).
+        SessionEvent::ProposalApplyWithdrawn { .. } | SessionEvent::ChatLockdownCleared { .. } => true,
         SessionEvent::FlowRecorded { record } => matches!(record, FlowRecord::HumanAnswered(_)),
         // Its own revocation (a lost phone revoking itself is harmless).
         SessionEvent::DeviceRevoked { device_id, .. } => *device_id == device,
