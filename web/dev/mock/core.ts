@@ -236,6 +236,10 @@ function handle(cmd: string, args: Args): unknown {
       ];
     case "forges_repos":
       return { login: "ana", owners: ["ana"], repos: [{ repo: { owner: "ana", name: "hive-notes" }, description: "Bee notes", private: false, defaultBranch: "main", updatedAt: "2026-11-01", webUrl: "https://github.com/ana/hive-notes", fork: false }], hasMore: false };
+    case "request_apply_on_host":
+      return "mock-apply-request";
+    case "withdraw_apply_request":
+      return null;
     default:
       if (cmd.startsWith("list_")) return [];
       return null;
