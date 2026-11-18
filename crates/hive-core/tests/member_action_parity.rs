@@ -55,7 +55,7 @@ proptest! {
         let mut w = world(&roles);
         let author = NAMES[author];
         // The desktop's person: a human.
-        prop_assume!(w.kinds.get(author).is_none());
+        prop_assume!(!w.kinds.contains_key(author));
         let action = match set_role {
             None => MemberAction::Remove { member_id: NAMES[target].into() },
             Some(r) => MemberAction::SetRole { member_id: NAMES[target].into(), role: ROLES[r] },
