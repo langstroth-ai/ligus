@@ -232,3 +232,33 @@ fn a_squatters_copy_under_the_victims_covered_id_is_not_covered() {
         "a squatter's backdated copy folded as covered: {b:?}"
     );
 }
+
+/// A squatter's own events under the victim's device id must not decide the
+/// victim's coverage: mal binds con's device id and posts, signed under it,
+/// events naming ids that were never published (gaps). When an Owner later
+/// removes con with the production watermark, con's earlier posts stay
+/// covered.
+#[test]
+fn a_squatters_events_under_the_victims_device_id_do_not_uncover_the_victim() {
+    let (mut w, chat) = world();
+    let con_dev = w.people["con"].device_id;
+    let km = bind(&mut w, con_dev);
+    let early = w.say(chat, "con", msg("con", "honest"));
+    for i in 0..(hive_core::watermark::MAX_HEADS + 1) {
+        let mut e = w.draft("mal", Some(chat), msg("mal", &format!("noise {i}")), None);
+        if let Some(s) = e.actor_stamp.as_mut() {
+            s.prev = Some(Uuid::new_v4());
+        }
+        e.clear_raw();
+        sign_envelope(&mut e, con_dev, &km);
+        w.push_env(Some(chat), e);
+    }
+    // The production watermark for removing con.
+    let roster = w.roster();
+    let a = w.people["con"].account_id;
+    let signers: BTreeSet<Uuid> = roster.devices.iter().filter(|(_, d)| d.accounts.contains(&a)).map(|(id, _)| *id).collect();
+    let mut wm = hive_core::watermark::heads_on(&w.cfg, workspace_config_session_id(w.wid), &signers, &roster);
+    wm.extend(hive_core::watermark::heads_on(&w.chats[&chat], chat, &signers, &roster));
+    w.push("owner", SessionEvent::MemberRemoved { member_id: "con".into(), watermark: wm });
+    assert_eq!(w.verdict(early), Verdict::Allowed, "con's post before the removal lost its coverage");
+}

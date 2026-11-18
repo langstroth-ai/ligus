@@ -2395,7 +2395,7 @@ impl ChatService {
         }
         let mut out = Vec::new();
         for (sid, envs) in &logs {
-            out.extend(hive_core::watermark::heads_of(envs, *sid, &signers));
+            out.extend(hive_core::watermark::heads_on(envs, *sid, &signers, roster));
         }
         out.truncate(hive_core::watermark::MAX_WATERMARK_ENTRIES);
         Ok(out)
