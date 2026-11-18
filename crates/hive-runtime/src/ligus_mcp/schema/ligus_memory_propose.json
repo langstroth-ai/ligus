@@ -1,0 +1,50 @@
+{
+  "description": "Propose a change to the workspace memory: create a note, edit one (from the revision you read), or remove one. A person accepts or rejects it; you never write memory directly.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "base": {
+        "description": "The revision you read (rev), for edit and remove",
+        "type": "string"
+      },
+      "body": {
+        "maxLength": 4000,
+        "type": "string"
+      },
+      "entryId": {
+        "description": "The entry to edit or remove",
+        "type": "string"
+      },
+      "op": {
+        "enum": [
+          "create",
+          "edit",
+          "remove"
+        ],
+        "type": "string"
+      },
+      "rationale": {
+        "description": "Why, for the person deciding",
+        "maxLength": 500,
+        "type": "string"
+      },
+      "tags": {
+        "items": {
+          "maxLength": 32,
+          "type": "string"
+        },
+        "maxItems": 8,
+        "type": "array"
+      },
+      "title": {
+        "maxLength": 120,
+        "type": "string"
+      }
+    },
+    "required": [
+      "op"
+    ],
+    "type": "object"
+  },
+  "name": "ligus_memory_propose"
+}

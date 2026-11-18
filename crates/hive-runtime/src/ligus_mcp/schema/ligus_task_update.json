@@ -1,0 +1,59 @@
+{
+  "description": "Report your live progress on this chat: status, a short summary, open questions and partial results. People and the other agents on the chat see it as you go; each call replaces your previous report.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "openQuestions": {
+        "items": {
+          "maxLength": 300,
+          "type": "string"
+        },
+        "maxItems": 8,
+        "type": "array"
+      },
+      "partialResults": {
+        "items": {
+          "maxLength": 600,
+          "type": "string"
+        },
+        "maxItems": 8,
+        "type": "array"
+      },
+      "progress": {
+        "maximum": 100,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "status": {
+        "enum": [
+          "working",
+          "blocked",
+          "waiting",
+          "done",
+          "abandoned"
+        ],
+        "type": "string"
+      },
+      "summary": {
+        "maxLength": 400,
+        "type": "string"
+      },
+      "taskId": {
+        "description": "A narrower task than the whole chat (optional)",
+        "type": "string"
+      },
+      "ttlSecs": {
+        "description": "How long this report stays current (default 7200)",
+        "maximum": 86400,
+        "minimum": 60,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "status",
+      "summary"
+    ],
+    "type": "object"
+  },
+  "name": "ligus_task_update"
+}
