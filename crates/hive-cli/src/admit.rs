@@ -65,7 +65,7 @@ pub fn print_request(cfg: &Config, label: &str) -> Result<()> {
     println!(
         "\nThis box isn't a member of workspace '{}' yet. Ask an Admin to admit it: on the desktop, workspace menu > \
          Admit a box (or on the phone), paste this join request, check the fingerprint and approve with a passkey:\n\n  {}\n\n\
-         Fingerprint: {}  (label \"{}\")\n\nThen run `ligus admit redeem <code>` here with the code they send back, or put \
+         Fingerprint: {}  (label \"{}\")\n\nThen run `ligus admit redeem <code>` here with the sealed code they send back, or put \
          the code in the file {ADMISSION_FILE_ENV} names, and start the box again.\n",
         cfg.room,
         r.encode(),
@@ -235,11 +235,11 @@ pub fn cmd_admit(cfg: &Config, positional: &[&String], flag: impl Fn(&str) -> Op
     match positional.first().map(|s| s.as_str()) {
         Some("request") => print_request(cfg, &label),
         Some("redeem") => {
-            let code = match (positional.get(1), flag("--file")) {
-                (Some(c), None) => c.to_string(),
-                (None, Some(path)) => read_code_file(Path::new(&path))?,
-                _ => bail!("usage: ligus admit redeem <code> | --file <path>"),
-            };
+            let code = redeem_code(positional.get(1).map(|s| s.as_str()), flag("--file"), || {
+                let mut s = String::new();
+                std::io::Read::read_to_string(&mut std::io::Read::take(std::io::stdin(), box_admission::MAX_CODE_LEN as u64 + 1), &mut s)?;
+                Ok(s)
+            })?;
             let mut cfg = cfg.clone();
             let r = redeem(&mut cfg, &code)?;
             println!("Kept the box admission for workspace '{}'. Start `ligus serve` or `ligus worker`: it joins as its own member.", r.room);
@@ -247,10 +247,35 @@ pub fn cmd_admit(cfg: &Config, positional: &[&String], flag: impl Fn(&str) -> Op
         }
         Some("issue") => cmd_issue(cfg, flag("--ttl"), flag("--request"), flag("--recovery-words-file"), flag("--out")),
         _ => bail!(
-            "usage: ligus admit request [--label NAME] | redeem <code> | redeem --file PATH | \
+            "usage: ligus admit request [--label NAME] | redeem <ligusadmit1:code> | redeem - | redeem --file PATH | \
              issue [--ttl 1h] [--request ligusjoin1:...] --recovery-words-file PATH [--out PATH]"
         ),
     }
+}
+
+/// The code `ligus admit redeem` keeps: a sealed `ligusadmit1:` code on the
+/// command line (only this box opens it), or any code from `--file PATH` or
+/// standard input (`-`). A bearer `hivews1:` code carries the workspace key,
+/// so it is refused on the command line, where `ps` and shell history keep it.
+pub fn redeem_code(arg: Option<&str>, file: Option<String>, stdin: impl FnOnce() -> std::io::Result<String>) -> Result<String> {
+    let code = match (arg, file) {
+        (Some("-"), None) => stdin()?.trim().to_string(),
+        (Some(c), None) => {
+            if !c.trim().starts_with(box_admission::SEALED_PREFIX) {
+                bail!(
+                    "a bearer admission code carries the workspace key and the command line leaks it (ps, shell history): \
+                     use `ligus admit redeem --file PATH` or pipe it to `ligus admit redeem -`"
+                );
+            }
+            c.trim().to_string()
+        }
+        (None, Some(path)) => read_code_file(Path::new(&path))?,
+        _ => bail!("usage: ligus admit redeem <ligusadmit1:code> | - | --file <path>"),
+    };
+    if code.len() > box_admission::MAX_CODE_LEN {
+        bail!("that admission code is too long");
+    }
+    Ok(code)
 }
 
 /// `1h`, `90m`, `2d`, or plain seconds.
@@ -258,13 +283,14 @@ pub fn parse_ttl(s: &str) -> Result<i64> {
     let s = s.trim();
     let (n, unit) = s.split_at(s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len()));
     let n: i64 = n.parse().map_err(|_| anyhow!("--ttl takes a duration like 1h, 90m or 2d"))?;
-    let ms = match unit {
-        "" | "s" => n * 1000,
-        "m" => n * 60_000,
-        "h" => n * 3_600_000,
-        "d" => n * 86_400_000,
+    let per = match unit {
+        "" | "s" => 1000,
+        "m" => 60_000,
+        "h" => 3_600_000,
+        "d" => 86_400_000,
         _ => bail!("--ttl takes a duration like 1h, 90m or 2d"),
     };
+    let ms = n.checked_mul(per).unwrap_or(i64::MAX);
     if !(60_000..=hive_core::admission::MAX_ADMISSION_TTL_MS - 60_000).contains(&ms) {
         bail!("--ttl must be between a minute and just under 7 days");
     }
@@ -346,6 +372,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_bearer_code_is_never_taken_from_the_command_line() {
+        // Review R3: `ligus admit redeem hivews1:…` put the workspace key in
+        // argv (ps, /proc, shell history).
+        let no_stdin = || -> std::io::Result<String> { panic!("stdin not read") };
+        assert!(redeem_code(Some("hivews1:secret"), None, no_stdin).is_err());
+        assert!(redeem_code(Some(" hivews1:secret"), None, no_stdin).is_err());
+        assert_eq!(redeem_code(Some("ligusadmit1:abc"), None, no_stdin).unwrap(), "ligusadmit1:abc");
+        assert_eq!(redeem_code(Some("-"), None, || Ok("hivews1:secret\n".into())).unwrap(), "hivews1:secret");
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("code");
+        std::fs::write(&f, "hivews1:secret\n").unwrap();
+        assert_eq!(redeem_code(None, Some(f.to_string_lossy().into_owned()), no_stdin).unwrap(), "hivews1:secret");
+        assert!(redeem_code(None, None, no_stdin).is_err());
+    }
+
+    #[test]
     fn ttl_parses_and_stays_in_bounds() {
         assert_eq!(parse_ttl("1h").unwrap(), 3_600_000);
         assert_eq!(parse_ttl("90m").unwrap(), 5_400_000);
@@ -353,5 +395,8 @@ mod tests {
         assert!(parse_ttl("30s").is_err());
         assert!(parse_ttl("7d").is_err());
         assert!(parse_ttl("soon").is_err());
+        // Overflow never wraps back into range (nor panics).
+        assert!(parse_ttl("106751991167d").is_err());
+        assert!(parse_ttl("9223372036854775807h").is_err());
     }
 }

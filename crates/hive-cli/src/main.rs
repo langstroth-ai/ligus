@@ -1566,7 +1566,7 @@ fn usage() -> ! {
          run the home host for the iOS app (sync + worker + HTTP/SSE API);\n                                       \
          --remote-relay URL / LIGUS_REMOTE_RELAY also serves it through a relay\n  \
          ligus admit request [--label NAME]   print this box's join request (an Admin admits it)\n  \
-         ligus admit redeem <code> | --file PATH   keep a box admission (serve and worker join as their own member)\n  \
+         ligus admit redeem <ligusadmit1:code> | - | --file PATH   keep a box admission (serve and worker join as their own member)\n  \
          ligus admit issue --recovery-words-file PATH [--ttl 1h] [--request ligusjoin1:...] [--out PATH]\n                                       \
          headless Admin: issue a box admission confirmed with your recovery key\n  \
          ligus recovery-key create --out PATH   register a recovery key for this CLI identity (never a box)\n  \
