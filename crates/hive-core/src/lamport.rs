@@ -225,6 +225,19 @@ pub fn inert_witness(env: &SessionEventEnvelope) -> SessionEventEnvelope {
     w
 }
 
+/// Whether `env` is an inert witness ([`inert_witness`]): no payload, no
+/// signature or signer, an empty `System` author. A genuine event is always
+/// signed when it carries a stamp (ingest refuses an unsigned stamped one),
+/// and an `Unknown` payload folds as nothing, so leaving these out of a fold
+/// changes nothing but keeps a witness from ever meeting a stored event under
+/// its id (which would read as an equivocation).
+pub fn is_witness(env: &SessionEventEnvelope) -> bool {
+    matches!(env.payload, crate::events::SessionEvent::Unknown)
+        && env.signature.is_none()
+        && env.signer_device_id.is_none()
+        && env.actor_stamp.as_ref().is_some_and(|s| s.actor.kind == crate::identity::ActorKind::System && s.actor.id.is_empty())
+}
+
 /// The `log_head` an honest author stamps on its next event on this log.
 pub fn head(envelopes: &[SessionEventEnvelope]) -> Option<CfgFrontier> {
     Bounds::of(envelopes).head()

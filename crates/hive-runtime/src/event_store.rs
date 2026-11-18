@@ -270,20 +270,22 @@ impl EventStore {
             -- Device-local, never synced: an event this device refused at
             -- ingest (for any reason: a revoked or rebound key, a removed
             -- member, an old key, a bad signature) is kept only as a lamport
-            -- witness: its id,
-            -- lamport, log head and chain link (hive_core::lamport). Another
-            -- author may have held it and counted from it; without it, that
-            -- author's later events would be held here for good. Folded as an
-            -- inert event (no payload), and left out once the id is stored.
+            -- witness: its id, lamport, log head and chain link
+            -- (hive_core::lamport). Another author may have held it and
+            -- counted from it; without it, that author's later events would
+            -- be held here for good. Kept by that whole structure (a forged
+            -- copy of an id never shadows the genuine one), counted by the
+            -- lamport rule whether or not the id is stored, and never folded
+            -- (no payload). Empty text for an absent head or link.
             CREATE TABLE IF NOT EXISTS lamport_witnesses (
                 row_id        INTEGER PRIMARY KEY AUTOINCREMENT,
                 event_id      TEXT NOT NULL,
                 session_id    TEXT NOT NULL,
                 workspace_id  TEXT NOT NULL,
                 lamport       INTEGER NOT NULL,
-                log_head      TEXT,
-                prev          TEXT,
-                UNIQUE (event_id, lamport)
+                log_head      TEXT NOT NULL DEFAULT '',
+                prev          TEXT NOT NULL DEFAULT '',
+                UNIQUE (event_id, lamport, log_head, prev)
             );
             CREATE INDEX IF NOT EXISTS idx_lamport_witnesses_session ON lamport_witnesses (session_id);
             "#,
@@ -371,16 +373,17 @@ impl EventStore {
     }
 
     /// A log's lamport witnesses (events refused here at ingest, see the
-    /// `lamport_witnesses` table) whose id the log doesn't hold, each as an
-    /// inert envelope: no payload (`Unknown`, a no-op in every fold), no
-    /// author or signer, only its id, lamport, log head and chain link.
+    /// `lamport_witnesses` table), each as an inert envelope: no payload
+    /// (`Unknown`), no author or signer, only its id, lamport, log head and
+    /// chain link. All of them, whether or not the id is stored: the lamport
+    /// rule counts every copy alike on every device, and the fold leaves
+    /// witnesses out (`hive_core::lamport::is_witness`).
     fn witnesses_of(&self, session_id: Uuid) -> Result<Vec<SessionEventEnvelope>> {
         let mut stmt = self.conn.prepare(
-            "SELECT event_id, workspace_id, lamport, log_head, prev FROM lamport_witnesses w WHERE session_id = ?1 \
-             AND NOT EXISTS (SELECT 1 FROM events e WHERE e.event_id = w.event_id) ORDER BY row_id ASC",
+            "SELECT event_id, workspace_id, lamport, log_head, prev FROM lamport_witnesses WHERE session_id = ?1 ORDER BY row_id ASC",
         )?;
         let rows = stmt.query_map([session_id.to_string()], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, Option<String>>(3)?, r.get::<_, Option<String>>(4)?))
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?))
         })?;
         let mut out = Vec::new();
         for row in rows {
@@ -395,9 +398,9 @@ impl EventStore {
                 cfg_frontier: None,
                 presence: None,
                 runtime_effect: false,
-                prev: prev.and_then(|p| Uuid::parse_str(&p).ok()),
+                prev: Uuid::parse_str(&prev).ok(),
                 sig_alg: Default::default(),
-                log_head: head.and_then(|h| serde_json::from_str(&h).ok()),
+                log_head: serde_json::from_str(&head).ok(),
             });
             let env = hive_core::lamport::inert_witness(&env);
             out.push(env);
@@ -412,8 +415,8 @@ impl EventStore {
     /// itself.
     pub fn note_lamport_witness(&self, env: &SessionEventEnvelope) -> Result<()> {
         let stamp = env.actor_stamp.as_ref();
-        let head = stamp.and_then(|s| s.log_head).map(|h| serde_json::to_string(&h)).transpose()?;
-        let prev = stamp.and_then(|s| s.prev).map(|p| p.to_string());
+        let head = stamp.and_then(|s| s.log_head).map(|h| serde_json::to_string(&h)).transpose()?.unwrap_or_default();
+        let prev = stamp.and_then(|s| s.prev).map(|p| p.to_string()).unwrap_or_default();
         self.conn.execute(
             "INSERT OR IGNORE INTO lamport_witnesses (event_id, session_id, workspace_id, lamport, log_head, prev) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
@@ -1961,6 +1964,60 @@ mod tests {
         let mine = store.append(sid, wid, SessionEvent::SessionTitleChanged { title: "mine".into() }).unwrap();
         assert_eq!(mine.lamport, 4);
         assert_eq!(store.lamport_head(sid).unwrap().map(|h| h.event_id), Some(mine.event_id));
+    }
+
+    /// A witness is kept by its whole structure (id, lamport, head, chain
+    /// link), and every witness counts whether or not the id is stored: a
+    /// keyholder's refused copies of an event's id (one at its lamport naming
+    /// a head nobody holds, met first; one a lamport later) must not make a
+    /// device that refused the event judge the log differently from one that
+    /// accepted it. A witness never folds, so it never erases the stored
+    /// event it shares an id with.
+    #[test]
+    fn devices_that_refused_different_copies_of_an_id_judge_the_log_alike() {
+        let (a0, sid, wid) = seeded_store();
+        let seed = a0.list(sid).unwrap()[0].clone();
+        let at = |e: &SessionEventEnvelope| Some(hive_core::CfgFrontier { lamport: e.lamport, event_id: e.event_id });
+        let stamped = |title: &str, head: Option<hive_core::CfgFrontier>| {
+            let mut e = SessionEventEnvelope::new(sid, wid, 1, SessionEvent::SessionTitleChanged { title: title.into() });
+            e.actor_stamp = seed.actor_stamp.clone();
+            hive_core::lamport::stamp_next(&mut e, head);
+            e
+        };
+        let x = stamped("x", at(&seed));
+        let y = stamped("y", at(&seed));
+        let mut early = stamped("forged", Some(hive_core::CfgFrontier { lamport: 1, event_id: Uuid::new_v4() }));
+        early.event_id = x.event_id;
+        let mut late = stamped("forged", at(&y));
+        late.event_id = x.event_id;
+        let g = stamped("g", Some(hive_core::CfgFrontier { lamport: late.lamport, event_id: x.event_id }));
+        let h = stamped("h", at(&g));
+        let after_x = stamped("after x", at(&x));
+
+        // A accepted x; it alone: the witness copy doesn't erase it.
+        let mut a = a0;
+        a.ingest(&x).unwrap();
+        a.note_lamport_witness(&late).unwrap();
+        assert_eq!(a.load_session(sid).unwrap().unwrap().title, "x", "a witness never folds against the stored event");
+        a.ingest(&y).unwrap();
+        a.note_lamport_witness(&early).unwrap();
+        // B refused x (its roster said so), after meeting the early copy.
+        let mut b = EventStore::open_in_memory().unwrap();
+        b.ingest(&seed).unwrap();
+        b.ingest(&y).unwrap();
+        b.note_lamport_witness(&early).unwrap();
+        b.note_lamport_witness(&x).unwrap();
+        b.note_lamport_witness(&late).unwrap();
+        for s in [&mut a, &mut b] {
+            for e in [&g, &h, &after_x] {
+                s.ingest(e).unwrap();
+            }
+        }
+        assert_eq!(a.lamport_head(sid).unwrap(), b.lamport_head(sid).unwrap(), "one head");
+        assert_eq!(a.lamport_head(sid).unwrap().map(|k| k.event_id), Some(h.event_id));
+        let (sa, sb) = (a.load_session(sid).unwrap().unwrap(), b.load_session(sid).unwrap().unwrap());
+        assert_eq!(sa.title, sb.title, "one fold");
+        assert_eq!(sa.authz.held, sb.authz.held, "one set of holds");
     }
 
     #[test]

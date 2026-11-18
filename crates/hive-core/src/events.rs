@@ -1312,7 +1312,14 @@ fn fold(
     // Lamport bounds (see [`crate::lamport`]): judged over every envelope
     // the log holds, equivocated copies included (any event is a witness).
     let bounds = crate::lamport::Bounds::of(envelopes);
-    let (envelopes, equivocated) = split_equivocations(envelopes);
+    // Lamport witnesses count for the bounds only: they fold as nothing, and
+    // one sharing an id with a stored event is no equivocation.
+    let real: std::borrow::Cow<'_, [SessionEventEnvelope]> = if envelopes.iter().any(crate::lamport::is_witness) {
+        std::borrow::Cow::Owned(envelopes.iter().filter(|e| !crate::lamport::is_witness(e)).cloned().collect())
+    } else {
+        std::borrow::Cow::Borrowed(envelopes)
+    };
+    let (envelopes, equivocated) = split_equivocations(&real);
     let out = fold_log(&envelopes, trusted_founder, trusted_workspace, workspace, timeline, decisions.as_deref_mut(), &bounds);
     if let Some(d) = decisions {
         for id in equivocated {
