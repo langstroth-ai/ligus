@@ -433,7 +433,8 @@ impl EventStore {
 
     /// The newest event of a session's log whose lamport is within bounds
     /// (`hive_core::lamport`), over every envelope this device holds for it
-    /// (authored here or ingested, equivocated copies included): what this
+    /// (authored here or ingested, equivocated copies included; a lamport
+    /// witness counts for the bounds but is never the head): what this
     /// device's next event on the log names as its `log_head`, its lamport
     /// one past it. An event past the bounds (a lamport no real event
     /// accounts for) never moves it. Cached per log; an event appended here
@@ -1964,6 +1965,26 @@ mod tests {
         let mine = store.append(sid, wid, SessionEvent::SessionTitleChanged { title: "mine".into() }).unwrap();
         assert_eq!(mine.lamport, 4);
         assert_eq!(store.lamport_head(sid).unwrap().map(|h| h.event_id), Some(mine.event_id));
+    }
+
+    /// A device never counts its own next event from a witness: a refused
+    /// event isn't pushed, so a keyholder who sends one to this device alone
+    /// (a peer link, a relay serving it to one device) would otherwise get
+    /// this device's honest events held on every device that never met it.
+    #[test]
+    fn a_device_counts_from_what_it_stored_never_from_a_witness() {
+        let (mut a, sid, wid) = seeded_store();
+        let seed = a.list(sid).unwrap()[0].clone();
+        let mut b = EventStore::open_in_memory().unwrap();
+        b.ingest(&seed).unwrap();
+        let mut junk = SessionEventEnvelope::new(sid, wid, 1, SessionEvent::SessionTitleChanged { title: "junk".into() });
+        junk.actor_stamp = seed.actor_stamp.clone();
+        hive_core::lamport::stamp_next(&mut junk, Some(hive_core::CfgFrontier { lamport: seed.lamport, event_id: seed.event_id }));
+        a.note_lamport_witness(&junk).unwrap();
+        let mine = a.append(sid, wid, SessionEvent::SessionTitleChanged { title: "mine".into() }).unwrap();
+        b.ingest(&mine).unwrap();
+        assert_eq!(b.lamport_head(sid).unwrap().map(|h| h.event_id), Some(mine.event_id), "not held where the junk never went");
+        assert_eq!(b.load_session(sid).unwrap().unwrap().title, "mine");
     }
 
     /// A witness is kept by its whole structure (id, lamport, head, chain

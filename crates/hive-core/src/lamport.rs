@@ -67,7 +67,10 @@ pub enum Plausibility {
 #[derive(Debug, Clone, Default)]
 pub struct Bounds {
     by_id: HashMap<Uuid, Vec<(u64, Plausibility)>>,
+    /// The newest plausible envelope, witnesses included (the A-14 slack).
     newest: Option<CfgFrontier>,
+    /// The newest plausible envelope that isn't a witness ([`Bounds::head`]).
+    newest_held: Option<CfgFrontier>,
 }
 
 impl Bounds {
@@ -126,6 +129,9 @@ impl Bounds {
                 let k = CfgFrontier { lamport: e.lamport, event_id: e.event_id };
                 if out.newest.is_none_or(|n| k > n) {
                     out.newest = Some(k);
+                }
+                if !is_witness(e) && out.newest_held.is_none_or(|n| k > n) {
+                    out.newest_held = Some(k);
                 }
             }
             out.by_id.entry(e.event_id).or_default().push((e.lamport, v));
@@ -193,10 +199,13 @@ impl Bounds {
             .unwrap_or(Plausibility::Unresolved)
     }
 
-    /// The newest plausible event: what an honest author's next event on
-    /// this log names as its `log_head`.
+    /// The newest plausible event this device holds as itself (never a
+    /// witness): what an honest author's next event on this log names as its
+    /// `log_head`. A witness is a refused event, which this device doesn't
+    /// push; one sent to it alone would otherwise get its next events held
+    /// on every device that never met it.
     pub fn head(&self) -> Option<CfgFrontier> {
-        self.newest
+        self.newest_held
     }
 }
 
@@ -270,7 +279,7 @@ pub fn plausible_keys(log: &[SessionEventEnvelope]) -> Vec<CfgFrontier> {
     let bounds = Bounds::of(log);
     let mut keys: Vec<CfgFrontier> = log
         .iter()
-        .filter(|e| bounds.of_env(e) == Plausibility::Plausible)
+        .filter(|e| !is_witness(e) && bounds.of_env(e) == Plausibility::Plausible)
         .map(|e| CfgFrontier { lamport: e.lamport, event_id: e.event_id })
         .collect();
     keys.sort();
