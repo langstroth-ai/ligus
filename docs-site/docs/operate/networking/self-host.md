@@ -28,7 +28,7 @@ named `LIGUS_RELAY_*`.
 | Keyring, presence and candidate blobs | opaque blobs |
 | Workspace members and invites (membership mode only) | account ids, roles, invite **code hashes** |
 | Contacts (v0.3) | random contact ids, the SHA-256 of each write key, records (opaque to the relay, verified by clients) and sealed drops |
-| Directory, accounts, devices, friends, inbox (1.x GitHub routes, off by default from v0.3) | GitHub login and id, display name, device public keys, device labels, last seen; inbox bodies are opaque |
+| Directory, accounts, devices, friends, inbox (GitHub routes, off by default from v0.3) | GitHub login and id, display name, device public keys, device labels, last seen; inbox bodies are opaque |
 | Relay users and tokens (admin API) | **SHA-256 hashes** of tokens |
 | Tunnel hosts, revocations, push tokens | host id and public key, revoked phone ids, each phone's APNs device token |
 | Your APNs key (if you enable push) | `.p8` file or inline PEM in the relay's environment |
@@ -316,11 +316,11 @@ open-source binary**: it answers 404 unless the relay is built with an
 admin authorizer in code. No environment variable enables it. Ligus has no
 UI for it: operators issue relay access tokens on the relay side.
 
-### GitHub-backed routes (1.x only)
+### GitHub-backed routes (off by default)
 
-Ligus 0.1 doesn't use these routes and never sends a GitHub (or any forge)
+Ligus doesn't use these routes and never sends a GitHub (or any forge)
 token to a relay. From relay v0.3 they are off unless the operator turns them
-on for 1.x clients. Directory, account and friends routes identify the caller by a GitHub token
+on. Directory, account and friends routes identify the caller by a GitHub token
 sent in `X-Hive-Github-Token` (or `X-Ligus-Github-Token`), verified against
 `api.github.com` and cached briefly. Only that header is used: the
 `Authorization` bearer carries the relay access token and is never sent to

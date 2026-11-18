@@ -6,9 +6,7 @@ collaborate with peers on real work — code, commits, reviews — and
 keep your data local-first.
 
 *Ligus* is short for *ligustica* (*Apis mellifera ligustica*, the Italian
-honeybee). Ligus 0.1.0 is a new application; its predecessor was called
-Hive (1.x). Old links to
-docs.apiaryhq.ai and docs.ligus.ai redirect here.
+honeybee).
 
 This section covers using Ligus: the desktop and phone apps, workspaces,
 agents, the `ligus` CLI. Self-hosting and deploying (the relay, sign-in,
@@ -97,8 +95,7 @@ append-only event log in SQLite; replies stream from your chosen runtime (the
 
 ## Project status
 
-Ligus 0.1.0 is the current release (its predecessor, Hive, ended at 1.18; Ligus starts fresh and leaves Hive 1.x data
-untouched, see [Upgrading from Hive 1.x](../operate/deploy/upgrade-from-hive.md)). The macOS app is
+Ligus 0.1.0 is the current release. The macOS app is
 signed and notarized and updates itself; Windows and Linux builds are
 unsigned. The headless `ligus` CLI ships for macOS and Linux through
 Homebrew. See [What's new](reference/whats-new.md).

@@ -354,13 +354,13 @@
 
 [[redirects]]
   from = "https://docs.ligus.ai/deploy/upgrade-from-hive/"
-  to = "https://docs.langstroth.ai/operate/deploy/upgrade-from-hive/"
+  to = "https://docs.langstroth.ai/operate/ops/operations/"
   status = 301
   force = true
 
 [[redirects]]
   from = "https://docs.ligus.ai/deploy/upgrade-from-hive/index.html"
-  to = "https://docs.langstroth.ai/operate/deploy/upgrade-from-hive/"
+  to = "https://docs.langstroth.ai/operate/ops/operations/"
   status = 301
   force = true
 
@@ -799,6 +799,18 @@
 [[redirects]]
   from = "https://docs.ligus.ai/networking/turn/index.html"
   to = "https://docs.langstroth.ai/operate/networking/turn/"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "https://docs.ligus.ai/operate/deploy/upgrade-from-hive/"
+  to = "https://docs.langstroth.ai/operate/ops/operations/"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "https://docs.ligus.ai/operate/deploy/upgrade-from-hive/index.html"
+  to = "https://docs.langstroth.ai/operate/ops/operations/"
   status = 301
   force = true
 
@@ -1414,13 +1426,13 @@
 
 [[redirects]]
   from = "https://docs.apiaryhq.ai/deploy/upgrade-from-hive/"
-  to = "https://docs.langstroth.ai/operate/deploy/upgrade-from-hive/"
+  to = "https://docs.langstroth.ai/operate/ops/operations/"
   status = 301
   force = true
 
 [[redirects]]
   from = "https://docs.apiaryhq.ai/deploy/upgrade-from-hive/index.html"
-  to = "https://docs.langstroth.ai/operate/deploy/upgrade-from-hive/"
+  to = "https://docs.langstroth.ai/operate/ops/operations/"
   status = 301
   force = true
 
@@ -1859,6 +1871,18 @@
 [[redirects]]
   from = "https://docs.apiaryhq.ai/networking/turn/index.html"
   to = "https://docs.langstroth.ai/operate/networking/turn/"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "https://docs.apiaryhq.ai/operate/deploy/upgrade-from-hive/"
+  to = "https://docs.langstroth.ai/operate/ops/operations/"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "https://docs.apiaryhq.ai/operate/deploy/upgrade-from-hive/index.html"
+  to = "https://docs.langstroth.ai/operate/ops/operations/"
   status = 301
   force = true
 
@@ -2468,13 +2492,13 @@
 
 [[redirects]]
   from = "/deploy/upgrade-from-hive/"
-  to = "/operate/deploy/upgrade-from-hive/"
+  to = "/operate/ops/operations/"
   status = 301
   force = true
 
 [[redirects]]
   from = "/deploy/upgrade-from-hive/index.html"
-  to = "/operate/deploy/upgrade-from-hive/"
+  to = "/operate/ops/operations/"
   status = 301
   force = true
 
@@ -2907,6 +2931,18 @@
 [[redirects]]
   from = "/networking/turn/index.html"
   to = "/operate/networking/turn/"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/operate/deploy/upgrade-from-hive/"
+  to = "/operate/ops/operations/"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/operate/deploy/upgrade-from-hive/index.html"
+  to = "/operate/ops/operations/"
   status = 301
   force = true
 

@@ -5,13 +5,6 @@ Ligus reads one TOML file per workspace, at the workspace root, via
 back to it through the encoder, so hand-edited and GUI-edited files
 round-trip cleanly.
 
-> **Hive 1.x files.** A workspace used with Hive 1.x may have
-> `hive.config.toml` and a `.hive/` state directory. Ligus 0.1 starts fresh:
-> it never reads, renames or changes either (it prints a one-time note when
-> only `hive.config.toml` is there). The format is the same, so copy it to
-> `ligus.config.toml` if you want its settings. Agents can't write to either
-> directory or either config file.
-
 > **Note:** the encoder doesn't preserve comments. Hand-add commentary in a
 > sibling `README.md` if you need it documented next to the config.
 

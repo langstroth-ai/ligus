@@ -6,8 +6,7 @@ admits it once with a passkey, and from then on it signs as itself, never as
 you. See [Admitting a box](admitting-a-box.md).
 
 This page covers what that means for the phone, how the box's online status
-works, applying approved changes, and the v1.16 sync change every upgrading
-workspace should know about. For reaching the box from the phone, see
+works, and applying approved changes. For reaching the box from the phone, see
 [Remote access for your phone](../networking/remote-access.md).
 
 ## The box is its own member
@@ -106,20 +105,13 @@ offline in the phone's Hosts list, agent host badges, the desktop's Hosts
 list, `ligus queue` and chat details. The same signal decides whether a desktop
 defers an agent's turn to its host.
 
-Since v1.16 this rides the relay's **presence channel**, not the event log.
+Liveness rides the relay's **presence channel**, not the event log.
 Each running host sends a beat every 30 seconds to an ephemeral slot in the
 room, sealed under the workspace key so the relay sees only ciphertext. A
 host is online when it has beaten within the last 90 seconds.
 
-Earlier versions re-wrote a signed host record about once a minute, which
-added roughly 1,500 durable events a day per always-on box to every member's
-log. The durable host record is now written only when something real changes
-(a new host, or a new label, kind or owner), and a restart writes nothing.
-
-!!! note "Mixed versions"
-    Older clients read liveness from the durable record, which upgraded hosts
-    no longer refresh. They show upgraded hosts as offline. Nothing breaks,
-    but upgrade every device to see the right status.
+The durable host record is written only when something real changes (a new
+host, or a new label, kind or owner), and a restart writes nothing.
 
 ### The workspace coordinator
 
@@ -193,43 +185,3 @@ decision) is reported failed with "implement this proposal from a desktop".
 
 To switch a chat's repo, clone, pull or open a pull request from the phone,
 see [Repos on the home host](serve-repos.md).
-
-## v1.16: a relay room carries only its own workspace
-
-**Every release with relay sync up to v1.15.1** uploaded the events of *all*
-the workspaces on a device into whichever relay room it was connected to.
-Those events were sealed under that room's key, so other members of that room
-could read them.
-
-v1.16.0 fixes this on the desktop, `ligus serve` and `ligus worker`:
-
-- A device pushes only the events of the room's own workspace.
-- Events of any other workspace that arrive from the relay (pushed by a device
-  that hasn't upgraded) are dropped, never stored.
-- Direct peer-to-peer sync carries only the connected room's workspace, both
-  ways, and a headless worker answers mentions only in its own workspace.
-- **One-time cleanup.** On first start after upgrading, each device deletes
-  the events of any workspace it doesn't belong to and never wrote anything
-  in. It backs up the database first, and deletes nothing unless the backup
-  succeeds. A workspace with any event this device signed is always kept.
-
-### What to expect and do when upgrading from 1.15 or earlier
-
-- **Upgrade every device**, desktops, `ligus serve` and `ligus worker` boxes
-  alike. An older client keeps leaking its other workspaces into the room
-  until it's upgraded; upgraded peers just drop what it sends.
-- **A cleanup message on first start.** If the cleanup removed anything, the
-  device logs how many events of how many workspaces it removed, and where
-  the backup is: `hive.db.bak-foreign-purge-<timestamp>` next to `hive.db` in
-  the data dir. Once you're satisfied nothing you need is gone, you can delete
-  the backup. If there was nothing to remove, there's no message and no
-  backup.
-- **Rejoining a dropped room starts from scratch.** If the cleanup removed a
-  room's workspace, its sync position goes too, so joining that room again
-  later pulls its history from the start.
-- **Data already on a relay stays there.** Events that older versions
-  uploaded remain on the relay, encrypted under that room's key. If a device
-  of yours held other workspaces while connected to a room shared with other
-  people, assume the members of that room could read those events.
-- **Hosts may look offline** on devices that haven't upgraded yet (see
-  [Host liveness](#host-liveness)).

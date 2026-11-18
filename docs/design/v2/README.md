@@ -3,7 +3,7 @@
 > Version note: "2.0" in this document means the Ligus 0.1.0 release (the version was reset before release).
 
 Design records for the 2.0 release (Ligus is short for *ligustica*, the
-Italian honeybee; the product was formerly called Hive). They were written
+Italian honeybee). They were written
 in November 2026 against the `release/v2.0.0` branch. Citations are
 `file:line` references into this repo (and, where prefixed `relay/`, into the
 relay repo); line numbers are as of each document's date and drift as the

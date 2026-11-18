@@ -413,7 +413,7 @@ A contact has a **contact id `cid`**: 16 random bytes, base64url, chosen by the 
 - **Storage:** `relay_contacts(cid PK, write_key_hash, record, updated_at)` and `relay_contact_drop(cid, seq, blob, created_at)`, in the memory, Postgres and snapshot stores.
 - **2.0 without v0.3.** A 2.0 desktop against a relay without contacts gets a 404 on `/v1/contacts/`. It then falls back to links and QR only, and says so: "this relay doesn't support contacts".
 - **The GitHub routes:**
-  - v0.3 registers them only when `LIGUS_RELAY_GITHUB_SOCIAL=1`. The default is off and the flag exists for 1.x clients. The `/v1/directory/` and similar prefixes stay reserved, so nobody can reuse the paths with different semantics.
+  - v0.3 registers them only when `LIGUS_RELAY_GITHUB_SOCIAL=1`. The default is off. The `/v1/directory/` and similar prefixes stay reserved, so nobody can reuse the paths with different semantics.
   - v0.4 deletes the handlers, the `relay_directory*`, `relay_account*`, `relay_login_index`, `relay_inbox` and `relay_friend*` tables, and the GitHub verifier.
   - The 2.0 client never sends `X-Hive-Github-Token` or `X-Ligus-Github-Token`.
 - **Relay membership** (`/v1/workspaces/{id}/members`, only when `HIVE_RELAY_MEMBERSHIP=1`) keeps keying on the `hrt1` `sub`. The client stops inventing `github:<id>`:

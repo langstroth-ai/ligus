@@ -63,7 +63,7 @@ export function UpdatesSection() {
       <p className="text-sm text-ink-soft">
         A shared workspace for you, your teammates and your coding agents. Ligus is short for{" "}
         <i>ligustica</i> (<i>Apis mellifera ligustica</i>, the Italian honeybee). Open source under the MIT
-        license. Formerly Hive.
+        license.
       </p>
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm text-ink-soft">Check whether a newer signed build is available, and install it.</p>

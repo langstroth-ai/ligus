@@ -252,8 +252,7 @@ Field notes:
 - `/v1/appearance` resolves each field on its own: serve config first
   (`LIGUS_SERVE_PALETTE`, `LIGUS_SERVE_APPEARANCE`), then the desktop app's
   `appearance.json` on the same machine (`LIGUS_DESKTOP_DATA_DIR`, default the
-  OS app-data dir of `ai.ligus.desktop`; a Hive 1.x `com.hive.desktop` dir is
-  never read), which the desktop rewrites whenever
+  OS app-data dir of `ai.ligus.desktop`), which the desktop rewrites whenever
   its theme changes. The file is read per request. A client treats `null` (or a
   404 from an older server) as "use the default palette".
 - `/v1/lab/status` (deprecated) is best-effort. Prometheus (`LIGUS_PROMETHEUS_URL`, default
@@ -286,7 +285,7 @@ checkouts are named, and an absolute binding shows only its last component.
 
 - `Checkout = {name, displayName, defaultBranch?, branch?, head?, dirty, remote: {host, owner, name, fullName}|null, fork?: Fork, isWorkspaceDefault, boundChats}`.
   `displayName` is `owner/name` for a hosted remote, else the name. `dirty`
-  ignores the app's own `.ligus/` (and any Hive 1.x `.hive/`) state. In a fork, `defaultBranch` is
+  ignores the app's own `.ligus/` (and any `.hive/`) state. In a fork, `defaultBranch` is
   upstream's default branch.
 - `Fork = {upstream: "kubeflow/pipelines", upstreamRemote: "upstream", baseBranch, upstreamPushDisabled, prTarget: "upstream", behind?, ahead?}`,
   present when the checkout has an `upstream` remote pointing at another

@@ -7,8 +7,7 @@
 **A collaborative, multi-agent workspace for developers.**
 
 Ligus (LEE-gus) is short for *ligustica*, as in *Apis mellifera ligustica*,
-the Italian honeybee. Ligus 0.1.0 is a new application; its predecessor was
-called Hive (1.x).
+the Italian honeybee.
 
 Chat with one or many coding agents, review their proposed changes, and sync the
 whole workspace across your devices and teammates — peer-to-peer or through a
@@ -23,12 +22,6 @@ relay, end-to-end encrypted. Your code and keys stay on your machine.
 [**Download**](#install) · [**Documentation**](https://docs.langstroth.ai/ligus/) · [**Build from source**](#build-from-source) · [**Contributing**](CONTRIBUTING.md)
 
 </div>
-
-> **Ligus 0.1.0 is a new application** that succeeds Hive (*Ligus* is short
-> for *ligustica*). The command is `ligus` and settings are `LIGUS_*`. Ligus
-> starts fresh: Hive 1.x data is not migrated and stays where it is,
-> untouched, so 1.x keeps running until you remove it. See
-> [Upgrading from Hive 1.x](https://docs.langstroth.ai/operate/deploy/upgrade-from-hive/).
 
 ---
 
@@ -416,11 +409,7 @@ fit together.
 - **The app is config-free to start** — onboarding sets identity, project folder,
   runtime, and relay; there are no required config files.
 - **Repo settings** live in [`ligus.config.toml`](ligus.config.toml) at the root
-  (workspace state lives in `.ligus/`). Ligus starts fresh: a Hive 1.x
-  `hive.config.toml`, `.hive/`, `~/.hive` or desktop data dir is never read,
-  moved or changed; see
-  [Upgrading from Hive 1.x](https://docs.langstroth.ai/operate/deploy/upgrade-from-hive/) for how to
-  remove 1.x when you're done.
+  (workspace state lives in `.ligus/`).
 - **Headless clients** are entirely **environment-driven** so they drop into a
   container or secret mount — see the
   [`ligus` CLI README](crates/hive-cli/README.md) for every `LIGUS_*` variable
@@ -454,11 +443,10 @@ in [`docs/`](docs/README.md). To report a vulnerability, follow
 
 Ligus is short for *ligustica*. *Apis mellifera ligustica* is the Italian
 honeybee, the bees our maintainer keeps, and *Ligus* is Latin for "a Ligurian,"
-the region the subspecies is named for. We were Hive, and we still like the
-image: a colony that does its work through many bees in one shared space, each
-one useful on its own and more useful together. The new name keeps the idea and
-points at the bees that inspired it. (Pronounced LEE-gus.) The default agent is
-still called `@hive`: you are talking to the hive.
+the region the subspecies is named for. We like the image of a colony: work
+done by many bees in one shared space, each one useful on its own and more
+useful together. (Pronounced LEE-gus.) The default agent is called `@hive`:
+you are talking to the hive.
 
 ## License
 

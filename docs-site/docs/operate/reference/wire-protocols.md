@@ -100,11 +100,11 @@ follow-ups and **not wired** in the current Rust build — relay forwarding
 - **LAN discovery** — zero-config local peer announcement.
 - **Collaborative-text CRDT** — concurrent editing of proposal bodies.
 
-## Legacy protocol identifiers
+## Fixed protocol identifiers
 
-The strings below are legacy identifiers from the project's former name, Hive.
-They are protocol and cryptographic constants, not branding, so they keep the
-`hive` spelling: renaming any of them would break mixed-version peers, paired
+The strings below contain `hive`. They are protocol and cryptographic
+constants, not branding, so their spelling is fixed: renaming any of them
+would break mixed-version peers, paired
 phones, relays, invites, or (for the cryptographic ones) every existing
 signature and encrypted workspace. Tests pin their exact bytes. If one ever has
 to change, it ships as a new protocol version accepted alongside the old one.
