@@ -251,6 +251,13 @@ Args: dict rules what.
 {{- define "ligus.commonEnv" -}}
 - name: LIGUS_DATA_DIR
   value: /var/lib/ligus
+# The data dir is the data volume's mount root, which only this pod mounts.
+# Storage drivers make that root root-owned, often 0777 (kind's local-path)
+# or root:<fsGroup> 2775, and Ligus can't chmod a directory it doesn't own:
+# this tells it the openness is the pod's own. Everything Ligus creates
+# inside (secrets/, keys/, tunnel/) is still its own and 0700.
+- name: LIGUS_POD_VOLUME
+  value: /var/lib/ligus
 # HOME (agent CLIs' logins and caches) is outside the data dir: agent
 # processes never read the data dir (keys, hive.db, serve.token).
 - name: HOME

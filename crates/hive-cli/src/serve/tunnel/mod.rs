@@ -137,15 +137,12 @@ pub fn pending_dir(dir: &Path) -> PathBuf {
     dir.join("pending")
 }
 
-/// Create `dir` (and parents) with mode 0700.
+/// Create `dir` (and parents) 0700, and tighten it to 0700 if it is ours. A
+/// directory that isn't ours (the data dir as a volume's root-owned mount
+/// root) is never chmodded: it is checked instead
+/// ([`hive_runtime::private_file::ensure_private_dir`]).
 pub fn ensure_private_dir(dir: &Path) -> Result<()> {
-    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).with_context(|| format!("making {} owner-only", dir.display()))?;
-    }
-    Ok(())
+    hive_runtime::private_file::ensure_private_dir(dir).with_context(|| format!("securing {}", dir.display()))
 }
 
 /// Atomically write `bytes` to `path` with mode 0600 (temp file + rename, so a

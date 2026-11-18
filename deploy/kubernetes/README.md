@@ -59,6 +59,10 @@ security context and NetworkPolicies, is in the design document:
 ```yaml
 env:
   - { name: LIGUS_DATA_DIR, value: /var/lib/ligus }
+  # The data dir is the PVC's mount root: root-owned (0777 under local-path,
+  # root:<fsGroup> 2775 under most CSI drivers), so Ligus can't make it 0700.
+  # This says only this pod mounts it; Ligus's own subdirectories stay 0700.
+  - { name: LIGUS_POD_VOLUME, value: /var/lib/ligus }
   # The pod network namespace is private to the pod; a Service and
   # NetworkPolicies decide who reaches the port. Never with hostNetwork.
   - { name: LIGUS_SERVE_LISTEN, value: "0.0.0.0:8787" }
