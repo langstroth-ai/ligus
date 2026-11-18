@@ -4,8 +4,9 @@
 //! * **Join request** (`ligusjoin1:…`): what a `ligus serve` or `ligus
 //!   worker` box prints when it has no admission yet: its account id, its
 //!   device's public key and key-agreement key, and a label. Nothing secret.
-//!   An Admin compares its fingerprint with the one the box printed, so a
-//!   swapped request is caught before anything is issued.
+//!   An Admin compares its fingerprint (over the account, the device and both
+//!   keys) with the one the box printed, so a swapped request is caught
+//!   before anything is issued.
 //! * **Admission code**: the workspace invite (`hivews1:…`, relay, room,
 //!   workspace key, the invite id) of a box admission. Issued for a join
 //!   request it is **sealed to the box's key-agreement key**
@@ -59,9 +60,25 @@ impl JoinRequest {
         }
     }
 
-    /// The fingerprint both sides show: the device key's, as for devices.
+    /// The fingerprint both sides show (`XXXX-XXXX-XXXX-XXXX-XXXX`, 80
+    /// bits): over everything the admission trusts from the request, the
+    /// account it binds, the device, its signing key and the key-agreement
+    /// key the code is sealed to (the label is only a hint). A request
+    /// swapped in transit shows another fingerprint, and the account id (free
+    /// to grind) is too long to match by search.
     pub fn fingerprint(&self) -> String {
-        crate::device_enroll::fingerprint(&self.device_public_key)
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(b"ligus-box-join-v1\0");
+        h.update(self.account_id.as_bytes());
+        h.update(self.device_id.as_bytes());
+        h.update((self.device_public_key.len() as u32).to_le_bytes());
+        h.update(&self.device_public_key);
+        h.update((self.ka_public.len() as u32).to_le_bytes());
+        h.update(&self.ka_public);
+        let d = h.finalize();
+        let hex: String = d[..10].iter().map(|b| format!("{b:02X}")).collect();
+        hex.as_bytes().chunks(4).map(|c| std::str::from_utf8(c).unwrap_or_default()).collect::<Vec<_>>().join("-")
     }
 
     pub fn encode(&self) -> String {
@@ -150,9 +167,33 @@ mod tests {
         assert_eq!(r.label, "build-1", "control characters are dropped");
         let back = JoinRequest::decode(&r.encode()).unwrap();
         assert_eq!(back, r);
-        assert_eq!(back.fingerprint(), crate::device_enroll::fingerprint(&[3; 32]));
+        assert_eq!(back.fingerprint(), r.fingerprint());
+        assert_eq!(r.fingerprint().len(), 24, "five groups of four");
         assert!(JoinRequest::decode("hivews1:abc").is_err());
         assert!(JoinRequest::decode(&format!("{JOIN_PREFIX}{}", "A".repeat(MAX_CODE_LEN))).is_err());
+    }
+
+    #[test]
+    fn the_fingerprint_covers_every_key_the_admission_trusts() {
+        // Review R2: the code is sealed to `ka_public` and bound to
+        // `account_id`, so a request swapped in transit (the box's device key
+        // kept, its key-agreement key or account replaced) must not show the
+        // fingerprint the box printed.
+        let ka = hive_core::KeyAgreementKeypair::generate().unwrap();
+        let mitm = hive_core::KeyAgreementKeypair::generate().unwrap();
+        let r = request(&ka);
+        let mut swapped_ka = r.clone();
+        swapped_ka.ka_public = mitm.public_key_bytes().to_vec();
+        assert_ne!(swapped_ka.fingerprint(), r.fingerprint(), "another key-agreement key");
+        let mut swapped_account = r.clone();
+        swapped_account.account_id = Uuid::new_v4();
+        assert_ne!(swapped_account.fingerprint(), r.fingerprint(), "another account");
+        let mut swapped_device = r.clone();
+        swapped_device.device_id = Uuid::new_v4();
+        assert_ne!(swapped_device.fingerprint(), r.fingerprint(), "another device id");
+        let mut relabelled = r.clone();
+        relabelled.label = "other".into();
+        assert_eq!(relabelled.fingerprint(), r.fingerprint(), "the label is only a hint");
     }
 
     #[test]

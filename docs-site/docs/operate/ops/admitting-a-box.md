@@ -56,8 +56,10 @@ ligus admit request --label build-1
 ```
 
 It prints a join request (`ligusjoin1:…`) and a fingerprint such as
-`6D85-7BCB-0AEB`. The request holds only public keys: the box's account id,
-its device key and its key-agreement key.
+`6D85-7BCB-0AEB-91F2-3C4A`. The request holds only public keys: the box's account id,
+its device key and its key-agreement key. The fingerprint covers all of them, so
+a request swapped on the way to you (another key to seal the code to, another
+account) shows a different fingerprint.
 
 On the desktop, right-click the workspace in the rail and choose **Admit a
 box… → From the box's join request**. Paste the request, choose **Check**,
