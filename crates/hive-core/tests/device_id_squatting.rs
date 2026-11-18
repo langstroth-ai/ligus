@@ -92,3 +92,28 @@ fn a_squatter_cannot_certify_a_key_for_an_agent_on_the_victims_device() {
     assert_eq!(w.verdict(id), Verdict::Allowed, "the victim's device no longer hosts its agent's key");
     assert!(w.roster().valid_agent_key(cert.key_id).is_some());
 }
+
+/// Revoking a device your own account certified is self-service (R5), but a
+/// squatter's certificate of someone else's device id is not that device:
+/// revoking "their" device must not revoke the victim's, and least of all
+/// the founder's (whom nobody cuts).
+#[test]
+fn a_squatter_cannot_revoke_the_victims_device_as_their_own() {
+    for victim in ["con", "owner"] {
+        let mut w = world();
+        let device = w.people[victim].device_id;
+        let key = SigningKeypair::generate().unwrap();
+        let mal = &w.people["mal"];
+        let cert = DeviceCertificate::issue(&mal.account, mal.account_id, device, &key.public_key_bytes(), Timestamp::epoch());
+        w.push("mal", SessionEvent::DeviceCertificateAdded { certificate: cert });
+        let id = w.push("mal", SessionEvent::DeviceRevoked { device_id: device, watermark: Vec::new() });
+        assert_eq!(w.verdict(id), Verdict::Denied, "mal revoked {victim}'s device through a squatted certificate");
+        assert!(!w.roster().devices[&device].revoked, "{victim}'s device is revoked");
+        // The victim's device still writes.
+        let ka = w.push_bare(victim, ka(device));
+        assert_eq!(w.verdict(ka), Verdict::Allowed, "{victim}'s device no longer signs");
+        // The victim still revokes their own device (a lost laptop).
+        let own = w.push(victim, SessionEvent::DeviceRevoked { device_id: device, watermark: Vec::new() });
+        assert_eq!(w.verdict(own), Verdict::Allowed, "the squat blocked {victim}'s own revocation");
+    }
+}

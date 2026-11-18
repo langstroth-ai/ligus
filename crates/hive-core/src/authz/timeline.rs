@@ -54,6 +54,11 @@ pub struct DeviceState {
     /// theirs alone: an event stamped as an account verifies only under that
     /// account's keys ([`DeviceState::keys_for`]).
     pub keys: BTreeMap<Uuid, Vec<(Vec<u8>, bool)>>,
+    /// The key of the first certificate (in log order) that bound this
+    /// device id: the device the id was first certified as. A later binding
+    /// under another key is someone else's use of the id (squatting), never
+    /// that device: see [`RosterState::account_holds_device`].
+    pub first_key: Vec<u8>,
     /// Accounts this device acts for without holding their key: each one's
     /// certificate for it was only ever published by another device (the
     /// owner's desktop approving `hive serve enroll`), or that a certified,
@@ -173,6 +178,17 @@ impl RosterState {
     /// Whether `account` certified `device` (and the device is not revoked).
     pub fn account_certified(&self, account: Uuid, device: Uuid) -> bool {
         self.devices.get(&device).is_some_and(|d| d.accounts.contains(&account))
+    }
+
+    /// Whether `account` holds the device `device` names: it certified the
+    /// id under the key the id was first certified with. An account that
+    /// certified someone else's device id for itself, under a key of its
+    /// own, holds only its binding, not the device (revoking a device is
+    /// self-service for the account that holds it, R5).
+    pub fn account_holds_device(&self, account: Uuid, device: Uuid) -> bool {
+        self.devices.get(&device).is_some_and(|d| {
+            d.accounts.contains(&account) && d.keys.get(&account).is_some_and(|ks| ks.iter().any(|(k, _)| *k == d.first_key))
+        })
     }
 
     /// Whether a device is certified (by some undisputed account) and not
@@ -447,6 +463,9 @@ impl RosterTracker {
             if cert.verify(key).is_ok() {
                 let d = devices.entry(cert.device_id).or_default();
                 d.accounts.insert(cert.account_id);
+                if d.first_key.is_empty() {
+                    d.first_key = cert.device_public_key.clone();
+                }
                 let phone = cert.alg == crate::crypto::SigAlg::P256;
                 let binding = (cert.device_public_key.clone(), phone);
                 let bound = d.keys.entry(cert.account_id).or_default();
