@@ -1064,3 +1064,29 @@ async fn revocation_presence_is_signed_and_checked_against_the_roster() {
     }
     h.handle.shutdown();
 }
+
+/// Residual 4: the revocation watch reads only new rows; chat traffic on a
+/// busy workspace never re-checks the roster, a config-log change does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chat_traffic_does_not_recheck_the_roster() {
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let (t, _, _, pid, _, phone) = pair_bound(&h, &relay).await;
+    let checks = || h.handle.shared.revocation_checks.load(std::sync::atomic::Ordering::Relaxed);
+    tokio::time::sleep(crate::serve::REVOCATION_WATCH * 3).await;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "busy" }))).await["chat"]["id"].as_str().unwrap().to_string();
+    tokio::time::sleep(crate::serve::REVOCATION_WATCH * 3).await;
+    let before = checks();
+    for i in 0..8 {
+        h.send(reqwest::Method::POST, &format!("/v1/chats/{chat}/messages"), Some(json!({ "body": format!("msg {i}") }))).await;
+        tokio::time::sleep(crate::serve::REVOCATION_WATCH).await;
+    }
+    assert_eq!(checks(), before, "chat messages re-checked the roster");
+    // A revocation on the config log is still picked up.
+    revoke_on_desktop(&h, phone.device_id);
+    crate::sync_once(&h.desktop).await.unwrap();
+    wait_until("pairing cut", Duration::from_secs(10), || !t.registry.is_active(&pid)).await;
+    assert!(checks() > before);
+    h.handle.shutdown();
+}

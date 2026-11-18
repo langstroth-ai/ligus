@@ -308,6 +308,8 @@ pub struct Shared {
     /// Bumped whenever the bearer token changes: direct-path streams opened
     /// with the old token end.
     pub token_gen: watch::Sender<u64>,
+    /// How many times the revocation watch re-checked the roster.
+    pub revocation_checks: std::sync::atomic::AtomicU64,
     pub host_id: String,
     /// The relay tunnel, when remote access is enabled.
     pub tunnel: Option<Arc<tunnel::TunnelHost>>,
@@ -1117,6 +1119,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         ws,
         token: RwLock::new(token),
         token_gen: watch::Sender::new(0),
+        revocation_checks: Default::default(),
         host_id,
         tunnel,
         svc: Mutex::new(svc),
@@ -1269,14 +1272,33 @@ pub const REVOCATION_WATCH: Duration = Duration::from_millis(500);
 /// cut the pairings of revoked devices. Bounded: within
 /// [`REVOCATION_WATCH`] of the event landing (plus one roster fold).
 async fn revocation_watch(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
-    let mut seen: Option<(i64, u64)> = None;
+    let config_id = workspace_config_session_id(shared.ws);
+    // (events row, equivocations row, registry generation) last looked at.
+    let mut seen: Option<(i64, i64, u64)> = None;
     loop {
-        // The store gained rows, or a pairing was stored (E4 may race a fold).
         let gen = shared.tunnel.as_ref().map(|t| t.registry.generation()).unwrap_or(0);
-        let row = shared.lock().store().max_row_id().ok().map(|r| (r, gen));
-        if row.is_some() && row != seen {
-            seen = row;
-            shared.revoke_phones_of_revoked_devices();
+        let now = {
+            let svc = shared.lock();
+            let st = svc.store();
+            match (st.max_row_id(), st.max_equivocation_row_id()) {
+                (Ok(r), Ok(q)) => {
+                    // Only the config log carries revocations: chat traffic
+                    // (a busy workspace) never re-folds or rescans anything.
+                    let check = match seen {
+                        None => true,
+                        Some((r0, q0, g0)) => g0 != gen || ((r, q) != (r0, q0) && st.session_rows_after(config_id, r0, q0).unwrap_or(true)),
+                    };
+                    Some(((r, q, gen), check))
+                }
+                _ => None,
+            }
+        };
+        if let Some((at, check)) = now {
+            seen = Some(at);
+            if check {
+                shared.revocation_checks.fetch_add(1, Ordering::Relaxed);
+                shared.revoke_phones_of_revoked_devices();
+            }
         }
         tokio::select! {
             _ = tokio::time::sleep(REVOCATION_WATCH) => {}
@@ -1341,7 +1363,6 @@ async fn sync_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
                 shared.sync_ok();
                 if pulled > 0 {
                     shared.refresh_standing();
-                    shared.revoke_phones_of_revoked_devices();
                     shared.refresh();
                     shared.worker_kick.notify_one();
                     // A peer's contact id may have arrived: deliver what waits.
