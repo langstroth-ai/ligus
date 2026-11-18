@@ -232,6 +232,13 @@ mod tests {
         assert_eq!(relabelled.fingerprint(), r.fingerprint(), "the label is only a hint");
     }
 
+    /// Known answer (documented in `docs/design/v2/phase0-specs.md`).
+    #[test]
+    fn join_request_fingerprint_golden_vector() {
+        let r = JoinRequest::new(Uuid::from_u128(0x72), Uuid::from_u128(1), &[0x33; 32], &[0x44; 32], "build-1");
+        assert_eq!(r.fingerprint(), "4A88-26EE-7350-8756-8869");
+    }
+
     #[test]
     fn a_redeem_key_rides_the_code_and_nothing_else() {
         let plain = format!("hivews1:{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"relay_url":"https://r","room":"acme","inv":"x"}"#));

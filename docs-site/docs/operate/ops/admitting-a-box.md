@@ -28,8 +28,9 @@ only for its own device. A member re-adding itself can't spend it. A box can't
 join with a person's invite, and a person can't join with a box admission.
 
 Every Admin's desktop **closes** an admission once it has settled: as soon as
-it sees the admission redeemed (naming that redemption), or once it has
-lapsed unredeemed (naming none). After that, every other redemption of it is
+it sees the admission redeemed (naming that redemption), or ten minutes after
+it lapsed unredeemed (naming none), and only once it has pulled everything the
+relay holds, so a box whose redemption is still on its way isn't closed out. After that, every other redemption of it is
 refused wherever it sorts in the log, including one backdated to look as if
 it came before the expiry, or one a thief of the code slots in before the
 box's. Closing needs no passkey (it only narrows who may join), and a headless
@@ -208,5 +209,6 @@ it from a fresh data dir and admit it again.
 | `that code isn't a box admission` | The code is a person's invite (or from an older build). Use **Admit a box**. |
 | `a box admission is redeemed with its code's proof` / `that redemption's proof doesn't verify` | The box joined without the code's redeem key: redeem the code again with `ligus admit redeem`. |
 | `that box admission is for another box` | The sealed code was made for another box's join request. |
+| `a box joins under its own account` / `a box admission is redeemed by its own certified device: …` | The redemption wasn't the box's own (its device unsynced, or the member record names another account). Restart the box so it publishes its identity, then redeem with a new admission. |
 | `this admission code was sealed to another box` | Same: redeem it on the box that printed the request. |
 | `that admission is for workspace 'X', but this box serves 'Y'` | The code and `LIGUS_WORKSPACE` name different workspaces. |

@@ -332,6 +332,14 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
         if let Some(why) = crate::admission::redemption_refusal(env, member, *invite, proof.as_deref(), fold) {
             return Decision::deny(why);
         }
+        // The proof names the signing device, so that device must really
+        // have signed: certified here for the stamp's account, not revoked,
+        // and its signature verifies (not only at ingest).
+        if member.id == author && invite.is_some_and(|id| crate::admission::admission_of(fold, id).is_some()) {
+            if let Err(why) = certified_signer(env, ctx.running) {
+                return Decision::deny(format!("a box admission is redeemed by its own certified device: {why}"));
+            }
+        }
     }
     if let Some(why) = crate::admission::closure_refusal(env, fold, on_config) {
         return Decision::deny(why);

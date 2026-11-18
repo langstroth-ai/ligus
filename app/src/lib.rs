@@ -12129,7 +12129,9 @@ async fn sync_pull_once(
             // that settled (redeemed, or lapsed unredeemed), so a holder of
             // the code can't slot a backdated redemption in later. Cheap when
             // none is open; written and pushed with the next cycle.
-            {
+            // Only once caught up: a closure naming no redemption would deny
+            // one still waiting in a later page.
+            if !eng.is_behind() {
                 let state = app.state::<AppState>();
                 let active = state.active_workspace_id();
                 let closed = state.service.lock().unwrap().close_settled_admissions(active);

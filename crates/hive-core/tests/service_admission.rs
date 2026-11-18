@@ -455,6 +455,10 @@ fn a_closed_admission_admits_no_backdated_or_retroactive_redemption() {
     // it right after the issue; and a thief of a spent code slotted its own
     // redemption before the box's, taking the box's place after the fact.
     let mut w = world();
+    // The thief's device is certified before the issue (a redemption counts
+    // only from a device certified where it sorts; a thief backdates its
+    // certificate as easily as its redemption).
+    w.publish_identity("box2");
     let id = Uuid::new_v4();
     let expires = now_ms() + HOUR_MS;
     let issued = issue(&mut w, "adm", id, Admission::service(expires, None, key().public()));

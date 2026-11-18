@@ -140,6 +140,10 @@ pub struct ChatService {
 /// `append_chunk`).
 const STREAM_HOLD: usize = 512;
 
+/// How long after its expiry an unredeemed box admission stays open before
+/// an Admin's device closes it naming no redemption (a lagging push).
+pub const ADMISSION_CLOSE_GRACE_MS: i64 = 10 * 60 * 1000;
+
 impl ChatService {
     pub fn new(
         store: EventStore,
@@ -1383,7 +1387,16 @@ impl ChatService {
                 _ => None,
             };
             let config_id = self.ensure_workspace_config(workspace_id)?;
+            let proved = proof.is_some();
+            if proved {
+                // The redemption counts only from a device the log has
+                // already certified (`hive_core::authz`): publish first.
+                self.publish_identity(session_id, workspace_id)?;
+            }
             self.append_signed(config_id, workspace_id, SessionEvent::MemberAdded { member, invite, proof })?;
+            if proved {
+                self.store.clear_join_redeem_key(workspace_id)?;
+            }
             true
         };
         // Publish this device's identity so peers can verify our events. Runs
@@ -2215,6 +2228,8 @@ impl ChatService {
     /// unredeemed is closed naming none (so a backdated redemption admits no
     /// one). A no-op on a device that isn't an Admin's, or is a box. Returns
     /// how many it closed.
+    /// Call it only once this device has pulled everything the relay holds
+    /// (a closure naming no redemption denies one it hadn't pulled yet).
     pub fn close_settled_admissions(&mut self, workspace_id: Uuid) -> Result<usize> {
         if self.author.kind == hive_core::ActorKind::Service || self.delegated {
             return Ok(0);
@@ -2225,8 +2240,11 @@ impl ChatService {
             return Ok(0);
         }
         // Settled: redeemed (the invite is spent) or lapsed. Anything else
-        // waits, and costs no fold of the whole log on every sync.
-        let now = (Timestamp::now().inner().unix_timestamp_nanos() / 1_000_000) as i64;
+        // waits, and costs no fold of the whole log on every sync. A lapsed,
+        // unredeemed admission waits a grace period more: a box that
+        // redeemed in time but whose push lagged isn't closed out by an
+        // Admin's device that hadn't seen it yet.
+        let now = (Timestamp::now().inner().unix_timestamp_nanos() / 1_000_000) as i64 - ADMISSION_CLOSE_GRACE_MS;
         let open: Vec<(Uuid, i64)> = config
             .guards
             .service_invites

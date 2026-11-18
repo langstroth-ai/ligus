@@ -1412,6 +1412,13 @@ impl EventStore {
         Ok(())
     }
 
+    /// Forget the redeem key seed once the redemption it proved is written:
+    /// it admits no one else, and is kept no longer than needed.
+    pub fn clear_join_redeem_key(&self, workspace_id: Uuid) -> Result<()> {
+        self.conn.execute("DELETE FROM join_redeem_keys WHERE workspace_id = ?1", [workspace_id.to_string()])?;
+        Ok(())
+    }
+
     /// The redeem key seed this box proves its admission with, if any.
     pub fn join_redeem_key(&self, workspace_id: Uuid) -> Result<Option<[u8; 32]>> {
         let v: Option<String> = self

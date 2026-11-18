@@ -126,8 +126,16 @@ request swapped in transit shows a different fingerprint. Every time on the
 log is its author's choice, so expiry alone can't stop a holder of the code
 from backdating a redemption: an Admin's device closes each admission once it
 sees it redeemed (naming that redemption) or once it lapses (naming none),
-and every other redemption of it is then refused wherever it sorts. See the
-known limitation below.
+and every other redemption of it is then refused wherever it sorts. The
+redemption must be signed by the very device its proof names (checked on
+every fold, not only when it arrives), and the new member's record names that
+device's own account, bound admission or bearer, so a box can't join under a
+person's account; nor can it change its kind, account or identity later by
+re-adding itself. Closing is an Admin's call like issuing: an Admin can close
+an admission to keep a box out (a closure that names no real redemption of
+it admits no one through it and changes nothing else), and two Admins'
+closures that name different redemptions admit neither. The box forgets the
+redeem key once its redemption is written. See the known limitation below.
 
 ### Prompt injection and hostile content {#prompt-injection}
 

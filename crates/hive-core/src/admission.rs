@@ -212,6 +212,13 @@ pub fn redemption_refusal(
         if existing.actor.account_id.is_some() && existing.actor.account_id != member.actor.account_id {
             return Some("a member's account never changes when it re-adds itself");
         }
+        // A service member's record is the one its admission bound: its
+        // account (never filled in later) and its actor id stay put.
+        if existing.actor.kind == ActorKind::Service
+            && (existing.actor.account_id != member.actor.account_id || member.actor.id != member.id)
+        {
+            return Some("a service member's account and identity never change when it re-adds itself");
+        }
         return None;
     }
     let Some(terms) = terms else {
@@ -242,9 +249,16 @@ pub fn redemption_refusal(
             return Some("that box admission is for another box");
         }
     }
+    // The new member's record names the account of the device that redeems
+    // it (the stamp's, which the signer's certificate vouches for) and its
+    // own id, bound or bearer: a bearer code doesn't let a box join under a
+    // person's account, or none to fill in later.
+    let stamped = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id);
+    if stamped.is_none() || member.actor.account_id != stamped || member.actor.id != member.id {
+        return Some("a box joins under its own account");
+    }
     if let Some(account) = terms.account_id {
-        let stamped = env.actor_stamp.as_ref().and_then(|s| s.actor.account_id);
-        if stamped != Some(account) || member.actor.account_id != Some(account) {
+        if stamped != Some(account) {
             return Some("that box admission is for another box");
         }
     }
@@ -335,16 +349,26 @@ pub fn check_phone_admission_preimage(
     if !rest.is_empty() {
         return Err("trailing bytes after the preimage");
     }
-    let [_scope, _timestamp, stamp, payload] = [fields[0], fields[1], fields[2], fields[3]];
+    let [_scope, _timestamp, stamp_bytes, payload] = [fields[0], fields[1], fields[2], fields[3]];
     if workspace != workspace_id || session != crate::channel::workspace_config_session_id(workspace) {
         return Err("not on this workspace's config log");
     }
-    let stamp: Option<crate::identity::ActorStamp> = serde_json::from_slice(stamp).map_err(|_| "a malformed stamp")?;
+    let stamp: Option<crate::identity::ActorStamp> = serde_json::from_slice(stamp_bytes).map_err(|_| "a malformed stamp")?;
+    let stamp_raw: serde_json::Value = serde_json::from_slice(stamp_bytes).map_err(|_| "a malformed stamp")?;
+    if serde_json::to_value(&stamp).ok().as_ref() != Some(&stamp_raw) {
+        return Err("a stamp with fields this build doesn't read");
+    }
     let stamp = stamp.ok_or("an unstamped event")?;
     if stamp.actor.device_id != Some(phone) || stamp.sig_alg != crate::crypto::SigAlg::P256 || stamp.presence.is_none() {
         return Err("not stamped for this phone with its person's presence");
     }
     let event: SessionEvent = serde_json::from_slice(payload).map_err(|_| "a malformed payload")?;
+    // Only what this build reads: a field it doesn't know (one a newer build
+    // might honour) is not something the person was shown.
+    let raw: serde_json::Value = serde_json::from_slice(payload).map_err(|_| "a malformed payload")?;
+    if serde_json::to_value(&event).ok().as_ref() != Some(&raw) {
+        return Err("a payload with fields this build doesn't read");
+    }
     let SessionEvent::JoinApproved { subject, admission: Some(terms) } = event else {
         return Err("not a box admission");
     };
