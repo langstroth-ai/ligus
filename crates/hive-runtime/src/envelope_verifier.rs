@@ -982,7 +982,7 @@ pub fn verdict_for(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verd
     // signed it (provably someone else signing as them), wait for it, as
     // for a device nobody certified; never refuse it for good on arrival
     // order.
-    if let Some(a) = claimed.filter(|a| !roster.device_signs_for(device_id, *a)) {
+    if claimed.is_some_and(|a| !roster.device_signs_for(device_id, a)) {
         let bound_signed = roster.bindings.iter().filter(|((d, _), _)| *d == device_id).flat_map(|(_, ks)| ks).any(|k| verify_envelope(env, k).is_ok());
         if !bound_signed && !is_trust_bootstrap(env) {
             return Verdict::Unverifiable(QuarantineReason::UncertifiedDevice);
