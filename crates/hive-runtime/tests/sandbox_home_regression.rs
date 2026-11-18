@@ -53,6 +53,22 @@ fn worktree() -> std::path::PathBuf {
     executor::canonical(&tempfile::tempdir().unwrap().keep())
 }
 
+/// The Landlock tier can't let a turn create entries directly in the
+/// worktree's top-level directory (any right there would reach `.git`; a
+/// documented limit of that tier). A repository that was built before has
+/// them already: make them, as such a checkout would have.
+fn landlock_tier_prepare(wt: &std::path::Path, entries: &[(&str, Option<&str>)]) {
+    if executor::sandbox_status().kind != executor::ExecutorKind::Landlock {
+        return;
+    }
+    for (name, body) in entries {
+        match body {
+            Some(b) => std::fs::write(wt.join(name), b).unwrap(),
+            None => std::fs::create_dir_all(wt.join(name)).unwrap(),
+        }
+    }
+}
+
 #[test]
 fn regression_git_commit_works_in_a_turn_repo() {
     if !sandboxed("regression_git_commit_works_in_a_turn_repo") || !have("git") {
@@ -81,6 +97,7 @@ fn regression_cargo_build_in_the_worktree() {
     std::fs::create_dir_all(wt.join("src")).unwrap();
     std::fs::write(wt.join("Cargo.toml"), "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n").unwrap();
     std::fs::write(wt.join("src/main.rs"), "fn main() { println!(\"built-{}\", 6 * 7); }\n").unwrap();
+    landlock_tier_prepare(&wt, &[("Cargo.lock", Some("version = 3\n\n[[package]]\nname = \"demo\"\nversion = \"0.1.0\"\n")), ("target", None)]);
     let (ok, out) = run(Purpose::Tool, &wt, "cargo build --offline -q && ./target/debug/demo");
     assert!(ok && out.contains("built-42"), "{out}");
     // As a CLI agent's own shell (its per-turn home) too.
@@ -95,6 +112,7 @@ fn regression_node_runs() {
         return;
     }
     let wt = worktree();
+    landlock_tier_prepare(&wt, &[("out.txt", Some(""))]);
     let (ok, out) = run(Purpose::Tool, &wt, "node -e 'require(\"fs\").writeFileSync(\"out.txt\", String(6*7)); console.log(\"node-\" + require(\"fs\").readFileSync(\"out.txt\"))'");
     assert!(ok && out.contains("node-42"), "{out}");
 }
@@ -117,6 +135,7 @@ fn regression_python_and_pip_into_a_venv_in_the_worktree() {
     }
     let wt = worktree();
     std::fs::write(wt.join("make_wheel.py"), MAKE_WHEEL).unwrap();
+    landlock_tier_prepare(&wt, &[("demo-0.1-py3-none-any.whl", Some("")), (".venv", None)]);
     let (ok, out) = run(
         Purpose::Tool,
         &wt,

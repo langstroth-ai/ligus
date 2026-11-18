@@ -1199,4 +1199,39 @@ mod tests {
         let a: Vec<String> = helper_args(&p, None).iter().map(|x| x.to_string_lossy().into_owned()).collect();
         assert!(!a.contains(&"--deny-unix".to_string()) && !a.contains(&"--mcp-sock".to_string()), "{a:?}");
     }
+
+    /// Phase C: the home is an empty tmpfs, what the plan lets back in is
+    /// bound over it, and the hard denies come after every bind, so a grant
+    /// of a parent dir never re-exposes a denied path inside it.
+    #[test]
+    fn bwrap_home_is_a_tmpfs_and_hard_denies_come_last() {
+        let t = tempfile::tempdir().unwrap();
+        let root = canonical(t.path());
+        let home = root.join("home");
+        for d in [".cargo/bin", "granted/sub", "granted/sub/.ssh", "projects/ws", "data"] {
+            std::fs::create_dir_all(home.join(d)).unwrap();
+        }
+        let mut p = plan(&root);
+        p.worktree = home.join("projects/ws");
+        p.worktree_writable = true;
+        p.home = Some(home.clone());
+        p.home_read = vec![home.join(".cargo/bin")];
+        p.write_extra = vec![home.join("granted")];
+        p.deny_read = vec![home.join("granted/sub/.ssh"), home.join("data")];
+        let a: Vec<String> = bwrap_args(&p, &p.worktree).iter().map(|x| x.to_string_lossy().into_owned()).collect();
+        let at = |flag: &str, path: &Path| a.windows(2).position(|w| w[0] == flag && w[1] == path.to_string_lossy()).unwrap_or_else(|| panic!("{flag} {}: {a:?}", path.display()));
+        let tmpfs_home = at("--tmpfs", &home);
+        let ro = a.windows(3).position(|w| w[0] == "--ro-bind" && w[1] == home.join(".cargo/bin").to_string_lossy()).unwrap();
+        let wt = a.windows(3).position(|w| w[0] == "--bind" && w[1] == home.join("projects/ws").to_string_lossy()).unwrap();
+        let extra = a.windows(3).position(|w| w[0] == "--bind" && w[1] == home.join("granted").to_string_lossy()).unwrap();
+        let ssh = at("--tmpfs", &home.join("granted/sub/.ssh"));
+        assert!(tmpfs_home < ro && ro < wt && wt < extra && extra < ssh, "{a:?}");
+        // A denied dir the home's tmpfs already hides (nothing bound above it)
+        // isn't mounted again.
+        assert!(!a.windows(2).any(|w| w[0] == "--tmpfs" && w[1] == home.join("data").to_string_lossy()), "{a:?}");
+        // Without a home to deny, no home tmpfs.
+        p.home = None;
+        let a: Vec<String> = bwrap_args(&p, &p.worktree).iter().map(|x| x.to_string_lossy().into_owned()).collect();
+        assert!(!a.windows(2).any(|w| w[0] == "--tmpfs" && w[1] == home.to_string_lossy()), "{a:?}");
+    }
 }
