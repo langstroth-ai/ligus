@@ -1333,18 +1333,34 @@ fn fold_log(
     let pass1 = fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, Some(&mut first), None, &none);
     let mut deny = config_denials_with_rejudged_cuts(envelopes, trusted_founder, trusted_workspace, workspace, &first);
     // Closed box admissions (Phase B): the redemptions no allowed closure
-    // names, wherever they sort. The closures are those allowed once the
-    // cuts are applied (a cut can deny an Admin's closure; denying a
-    // redemption never changes whether a closure is allowed: a closure is an
-    // Admin's, and a redeemed box is a service member that cuts no one).
-    let closed = match pass1.as_ref().map(|s| &s.guards.closed_admissions) {
-        Some(c) if !c.is_empty() && !deny.is_empty() => fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, None, None, &deny)
-            .map(|s| s.guards.closed_admissions)
-            .unwrap_or_default(),
-        Some(c) => c.clone(),
-        None => Default::default(),
-    };
-    deny.extend(crate::admission::closure_denials(envelopes, &closed));
+    // names, wherever they sort. The closures are read from the fold the
+    // denials so far leave, never from the first pass alone: a denial can
+    // allow a closure as well as refuse one (a cut that denies a member's
+    // re-add naming the invite un-spends it, so its later issue, and the
+    // closure of it, stand), and denying a redemption can in turn let a
+    // later issue or redemption of the same invite stand. So the closure
+    // denials grow to a fixed point over the cuts' denials: add what the
+    // allowed closures deny until that adds nothing. The set only grows and
+    // is finite, so this ends (at most once per redemption), and each step
+    // is a function of the event set, so every device reaches the same set
+    // in any arrival order. A denial a later step would no longer make stays
+    // (fail closed).
+    if envelopes.iter().any(|e| matches!(e.payload, SessionEvent::AdmissionClosed { .. })) {
+        loop {
+            let closed = if deny.is_empty() {
+                pass1.as_ref().map(|s| s.guards.closed_admissions.clone()).unwrap_or_default()
+            } else {
+                fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, None, None, &deny)
+                    .map(|s| s.guards.closed_admissions)
+                    .unwrap_or_default()
+            };
+            let more = crate::admission::closure_denials(envelopes, &closed);
+            if more.is_subset(&deny) {
+                break;
+            }
+            deny.extend(more);
+        }
+    }
     if deny.is_empty() && decisions.is_none() {
         if let Some(t) = timeline {
             *t = first;

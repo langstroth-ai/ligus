@@ -616,6 +616,46 @@ proptest! {
     }
 }
 
+/// Regression (property minimal case): a member's re-add naming an invite
+/// nobody had issued yet spends it, so in the first pass the issue, the
+/// box's redemption and the closure naming nothing are all refused. A
+/// dishonest removal of that member then denies the re-add: the issue, the
+/// redemption and the closure all stand. The closures must be read from the
+/// fold the cuts leave, not skipped because the first pass had none, or the
+/// redemption stands against an allowed closure that doesn't name it.
+#[test]
+fn a_closure_a_cut_lets_stand_denies_what_it_doesnt_name() {
+    let mut w = world();
+    let slots = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
+    play(
+        &mut w,
+        &slots,
+        &[
+            Op::Redeem { who: 2, slot: 1, holds: false, back: false },
+            Op::Issue { slot: 1, bind_device: false },
+            Op::Redeem { who: 0, slot: 1, holds: true, back: false },
+            Op::Redeem { who: 0, slot: 1, holds: false, back: false },
+            Op::Close { by: 0, slot: 1, name: 0 },
+            Op::Cut { target: 1, kind: 0, honest: false },
+        ],
+    );
+    let v = verdicts_of(&w.cfg);
+    let of = |f: &dyn Fn(&SessionEvent) -> bool| w.cfg.iter().filter(|e| f(&e.payload)).map(|e| v[&e.event_id]).collect::<Vec<_>>();
+    assert_eq!(of(&|p| matches!(p, SessionEvent::AdmissionClosed { .. })), vec![Verdict::Allowed], "the closure stands once the re-add is cut");
+    assert!(
+        of(&|p| matches!(p, SessionEvent::MemberAdded { member, invite: Some(i), .. } if *i == slots[1] && member.id.starts_with("box")))
+            .iter()
+            .all(|x| *x == Verdict::Denied),
+        "the closure names no redemption"
+    );
+    assert!(!w.roster().members.contains_key("box"));
+    for seed in 0..64 {
+        let other = shuffled(&w.cfg, seed);
+        assert_eq!(v, verdicts_of(&other));
+        assert_eq!(members_of(&w.cfg), members_of(&other));
+    }
+}
+
 /// The generator reaches allowed redemptions, closures and cuts.
 #[test]
 fn the_generator_reaches_redemptions_closures_and_cuts() {

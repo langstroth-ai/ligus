@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc d02d20cf4fa8b8f6eb13e49b38a723e61003c3944bb1df0a98d34130183ee614 # shrinks to ops = [Redeem { who: 2, slot: 1, holds: false, back: false }, Issue { slot: 1, bind_device: false }, Redeem { who: 0, slot: 1, holds: true, back: false }, Redeem { who: 0, slot: 1, holds: false, back: false }, Close { by: 0, slot: 1, name: 0 }, Cut { target: 1, kind: 0, honest: false }], seed = 0
