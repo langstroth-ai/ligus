@@ -331,6 +331,15 @@ where
                 // E4: the first valid transport message confirms an enrollment.
                 if let Some(p) = pending.take() {
                     let name = p.rec.name.clone();
+                    // E3a again at E4: a revocation folded since msg1 still
+                    // refuses the pairing (the watch may already have run).
+                    if let Some(d) = p.rec.device_id {
+                        if !matches!(host.lookup_device(d), super::device_bind::DeviceLookup::Certified { phone: true, .. }) {
+                            host.window_failed(&p.eid);
+                            result = Err(anyhow!("enrollment refused at E4: workspace device {d} is revoked or no longer a certified phone"));
+                            break 'session;
+                        }
+                    }
                     if let Err(e) = host.registry.activate(p.rec) {
                         result = Err(e.context("saving the new phone"));
                         break 'session;

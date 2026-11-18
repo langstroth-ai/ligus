@@ -1221,9 +1221,11 @@ pub const REVOCATION_WATCH: Duration = Duration::from_millis(500);
 /// cut the pairings of revoked devices. Bounded: within
 /// [`REVOCATION_WATCH`] of the event landing (plus one roster fold).
 async fn revocation_watch(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
-    let mut seen: Option<i64> = None;
+    let mut seen: Option<(i64, u64)> = None;
     loop {
-        let row = shared.lock().store().max_row_id().ok();
+        // The store gained rows, or a pairing was stored (E4 may race a fold).
+        let gen = shared.tunnel.as_ref().map(|t| t.registry.generation()).unwrap_or(0);
+        let row = shared.lock().store().max_row_id().ok().map(|r| (r, gen));
         if row.is_some() && row != seen {
             seen = row;
             shared.revoke_phones_of_revoked_devices();

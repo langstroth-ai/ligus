@@ -79,6 +79,9 @@ struct PhonesFile {
 pub struct Registry {
     path: PathBuf,
     inner: Mutex<Vec<PhoneRecord>>,
+    /// Bumped on every save, so the revocation watch also re-checks a
+    /// pairing stored after it last looked.
+    generation: std::sync::atomic::AtomicU64,
 }
 
 impl Registry {
@@ -89,7 +92,7 @@ impl Registry {
     pub fn load(dir: &Path) -> Result<Self> {
         let path = Self::file(dir);
         let phones = read_json::<PhonesFile>(&path)?.map(|f| f.phones).unwrap_or_default();
-        Ok(Self { path, inner: Mutex::new(phones) })
+        Ok(Self { path, inner: Mutex::new(phones), generation: Default::default() })
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<PhoneRecord>> {
@@ -97,7 +100,13 @@ impl Registry {
     }
 
     fn save(&self, phones: &[PhoneRecord]) -> Result<()> {
+        self.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         write_json(&self.path, &PhonesFile { v: 1, phones: phones.to_vec() })
+    }
+
+    /// Changes whenever the registry is saved.
+    pub fn generation(&self) -> u64 {
+        self.generation.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     pub fn list(&self) -> Vec<PhoneRecord> {

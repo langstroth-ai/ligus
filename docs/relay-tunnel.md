@@ -422,7 +422,8 @@ Host rules:
   roster and refuses (no msg2, the attempt counts) a missing claim, a
   device it doesn't know yet (the phone pairs again once the box has synced
   its certificate), a revoked device, a non-phone device, and a bad
-  signature. The host also refuses an
+  signature. It checks the device again when it stores the pairing (E4), so
+  a revocation folded in between still refuses it. The host also refuses an
   enrollment whose static or auth key belonged to a pairing of a revoked
   device. A pairing's device never changes.
 - **E5.** After E4 the connection carries normal API traffic (§8, §9) under

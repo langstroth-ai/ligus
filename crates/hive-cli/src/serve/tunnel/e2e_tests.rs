@@ -908,3 +908,44 @@ async fn the_session_step_ends_the_langstroth_auth_session() {
     assert_eq!(calls.lock().unwrap().clone(), vec![("acme".to_string(), phone.device_id.to_string())]);
     h.handle.shutdown();
 }
+
+/// A revocation folded between the claim check (msg1) and storing the
+/// pairing (E4) must still refuse it: the box's view of the device is stale
+/// at msg1, the `DeviceRevoked` has already landed and been acted on, and no
+/// later store change would wake the revocation watch again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_revocation_racing_an_enrollment_still_refuses_it() {
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let t = h.handle.shared.tunnel.clone().unwrap();
+    let keys = PhoneKeys::generate();
+    revoke_on_desktop(&h, keys.device_id());
+    crate::sync_once(&h.desktop).await.unwrap();
+    h.handle.shared.sync_kick.notify_one();
+    let shared = h.handle.shared.clone();
+    wait_until("the box folds the revocation", Duration::from_secs(10), || {
+        shared.device_lookup(keys.device_id()) == tun::device_bind::DeviceLookup::Revoked
+    })
+    .await;
+    // Let the watch see that change (there is no pairing to cut yet).
+    tokio::time::sleep(crate::serve::REVOCATION_WATCH * 3).await;
+    // The claim check at msg1 still sees the device as certified (a stale
+    // view); every later lookup sees the real roster.
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (c2, weak) = (calls.clone(), Arc::downgrade(&h.handle.shared));
+    let (id, pk) = (keys.device_id(), keys.device.public_key());
+    t.set_device_lookup(Arc::new(move |d| {
+        if d == id && c2.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            return tun::device_bind::DeviceLookup::Certified { public_key: pk.clone(), phone: true };
+        }
+        weak.upgrade().map(|s| s.device_lookup(d)).unwrap_or(tun::device_bind::DeviceLookup::Unknown)
+    }));
+    let ps = open_window(&h, &relay).await;
+    let info = host_info(&h, &relay.url);
+    let _ = testkit::phone_enroll(&info, &keys, &ps, "racer").await;
+    tokio::time::sleep(crate::serve::REVOCATION_WATCH * 4).await;
+    let active: Vec<_> = t.registry.list().into_iter().filter(|r| r.is_active()).collect();
+    assert!(active.is_empty(), "a pairing of a revoked device stayed active: {:?}", active.iter().map(|r| &r.pid).collect::<Vec<_>>());
+    h.handle.shutdown();
+}
