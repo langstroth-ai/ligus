@@ -379,7 +379,8 @@ fn outcome(cfg: &[SessionEventEnvelope], log: &[SessionEventEnvelope]) -> Outcom
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(64))]
+    // 64 cases by default; `PROPTEST_CASES=4096` in release for the gate.
+    #![proptest_config(ProptestConfig { cases: std::env::var("PROPTEST_CASES").ok().and_then(|v| v.parse().ok()).unwrap_or(64), ..ProptestConfig::default() })]
 
     #[test]
     fn prop_forged_copies_never_erase_honest_events(p in plan()) {
