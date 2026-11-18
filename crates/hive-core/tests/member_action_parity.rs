@@ -43,7 +43,7 @@ fn payload(w: &SignedWorld, action: &MemberAction) -> SessionEvent {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: std::env::var("PROPTEST_CASES").ok().and_then(|v| v.parse().ok()).unwrap_or(64), ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig { cases: std::env::var("PROPTEST_CASES").ok().and_then(|v| v.parse().ok()).unwrap_or(64), max_global_rejects: 1 << 20, ..ProptestConfig::default() })]
 
     #[test]
     fn the_ui_offers_exactly_what_the_fold_allows(
