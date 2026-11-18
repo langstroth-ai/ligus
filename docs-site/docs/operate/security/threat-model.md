@@ -109,7 +109,10 @@ box, at its role. What they **can't** do, on any device's fold:
   0.1) the box only relays: it can withhold it, not alter or forge it.
 
 The remedy is the one for any member: an Admin removes the box (or revokes its
-device) and rotates the workspace key, and the box gets no later key. A box
+device) and rotates the workspace key, and the box gets no later key. An
+honest serve box that sees its own device revoked also cuts every phone
+pairing it holds and rotates its direct-path token, so phones stop sending to
+it; a compromised one needn't, so re-pair phones with a box you trust. A box
 never founds a workspace either: it syncs first and refuses to start without a
 copy of the workspace, so a box pointed at an empty or withheld room can't
 seed a competing config log naming itself Owner.
@@ -127,8 +130,8 @@ log is its author's choice, so expiry alone can't stop a holder of the code
 from backdating a redemption: an Admin's device closes each admission once it
 sees it redeemed (naming that redemption) or once it lapses (naming none),
 and every other redemption of it is then refused wherever it sorts. The
-redemption must be signed by the very device its proof names (checked on
-every fold, not only when it arrives), and the new member's record names that
+redemption must be signed by the very device its proof names (checked when
+it arrives, and again on every fold once that device is certified), and the new member's record names that
 device's own account, bound admission or bearer, so a box can't join under a
 person's account; nor can it change its kind, account or identity later by
 re-adding itself. Closing is an Admin's call like issuing: an Admin can close

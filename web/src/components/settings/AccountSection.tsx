@@ -11,9 +11,13 @@ import {
   listMyDevices,
   listDeviceRequests,
   revokeMyDevice,
+  listDeviceRevocations,
+  retryDeviceRevocation,
   getShareTyping,
   setShareTyping,
   type DeviceCodeDto,
+  type DeviceRevocationDto,
+  type RevocationStep,
 } from "@/lib/ipc";
 import { confirmDialog } from "@/components/Dialog";
 import { Button, Section, Switch, fieldStyle } from "@/components/ui";
@@ -230,6 +234,7 @@ export function DevicesSection() {
   const qc = useQueryClient();
   const devices = useQuery({ queryKey: ["my-devices"], queryFn: listMyDevices, refetchInterval: 15_000 });
   const requests = useQuery({ queryKey: ["device-requests"], queryFn: listDeviceRequests, refetchInterval: 15_000 });
+  const revocations = useQuery({ queryKey: ["device-revocations"], queryFn: listDeviceRevocations, refetchInterval: 15_000 });
   const [adding, setAdding] = useState(false);
   const [code, setCode] = useState("");
   const [preview, setPreview] = useState<DeviceCodeDto | null>(null);
@@ -239,6 +244,7 @@ export function DevicesSection() {
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["my-devices"] });
     qc.invalidateQueries({ queryKey: ["device-requests"] });
+    qc.invalidateQueries({ queryKey: ["device-revocations"] });
   };
 
   async function check(next: string) {
@@ -391,6 +397,10 @@ export function DevicesSection() {
               {d.revoked && <span style={{ color: "var(--hive-danger-ink)" }}> · revoked</span>}
             </div>
             <div className="truncate font-mono text-[11px] text-ink-soft">{d.fingerprint}</div>
+            {d.revoked &&
+              (revocations.data ?? [])
+                .filter((r) => r.deviceId === d.deviceId)
+                .map((r) => <RevocationStatus key={r.hostId} r={r} onRetry={refresh} />)}
           </div>
           {!d.thisDevice && !d.revoked && (
             <button
@@ -404,5 +414,57 @@ export function DevicesSection() {
         </div>
       ))}
     </Section>
+  );
+}
+
+const STEP_LABEL: Record<RevocationStep["state"], string> = {
+  done: "done",
+  pending: "pending",
+  failed: "failed, retrying",
+  not_applicable: "not applicable",
+};
+
+/// One box's report on a revoked phone: tunnel, push and session, each with
+/// its state and why, plus "retry now" while anything is unfinished.
+function RevocationStatus({ r, onRetry }: { r: DeviceRevocationDto; onRetry: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const steps: [string, RevocationStep][] = [
+    ["Tunnel", r.tunnel],
+    ["Push", r.push],
+    ["Session", r.session],
+  ];
+  async function retry() {
+    setBusy(true);
+    try {
+      await retryDeviceRevocation(r.deviceId);
+      toast.success(`Asked ${r.hostLabel} to retry.`);
+      onRetry();
+    } catch (e) {
+      toast.error(`Couldn't ask for a retry: ${errMsg(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="mt-1 text-[11px] text-ink-soft">
+      <div>
+        {r.hostLabel}: {r.summary}
+      </div>
+      <ul className="ml-3">
+        {steps.map(([label, s]) => (
+          <li key={label} title={s.detail}>
+            <span style={{ color: s.state === "failed" ? "var(--hive-danger-ink)" : undefined }}>
+              {label}: {STEP_LABEL[s.state]}
+            </span>
+            {s.detail ? <span> · {s.detail}</span> : null}
+          </li>
+        ))}
+      </ul>
+      {!r.complete && (
+        <button className="text-xs hover:opacity-80" disabled={busy} onClick={() => void retry()}>
+          Retry now
+        </button>
+      )}
+    </div>
   );
 }

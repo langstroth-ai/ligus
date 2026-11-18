@@ -79,6 +79,9 @@ struct PhonesFile {
 pub struct Registry {
     path: PathBuf,
     inner: Mutex<Vec<PhoneRecord>>,
+    /// Bumped on every save, so the revocation watch also re-checks a
+    /// pairing stored after it last looked.
+    generation: std::sync::atomic::AtomicU64,
 }
 
 impl Registry {
@@ -89,7 +92,7 @@ impl Registry {
     pub fn load(dir: &Path) -> Result<Self> {
         let path = Self::file(dir);
         let phones = read_json::<PhonesFile>(&path)?.map(|f| f.phones).unwrap_or_default();
-        Ok(Self { path, inner: Mutex::new(phones) })
+        Ok(Self { path, inner: Mutex::new(phones), generation: Default::default() })
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<PhoneRecord>> {
@@ -97,7 +100,13 @@ impl Registry {
     }
 
     fn save(&self, phones: &[PhoneRecord]) -> Result<()> {
+        self.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         write_json(&self.path, &PhonesFile { v: 1, phones: phones.to_vec() })
+    }
+
+    /// Changes whenever the registry is saved.
+    pub fn generation(&self) -> u64 {
+        self.generation.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     pub fn list(&self) -> Vec<PhoneRecord> {
@@ -130,6 +139,10 @@ impl Registry {
     /// E3/E4: store an enrolled phone. An active record with the same static
     /// is replaced (the caller reused its pid).
     pub fn activate(&self, rec: PhoneRecord) -> Result<()> {
+        // E3a: a pairing is always bound to its phone's workspace device.
+        if rec.device_id.is_none() {
+            anyhow::bail!("a phone pairing must be bound to its workspace device");
+        }
         let mut phones = self.lock();
         phones.retain(|r| !(r.pid == rec.pid || (r.is_active() && r.static_pub == rec.static_pub)));
         phones.push(rec);
@@ -147,15 +160,6 @@ impl Registry {
             self.save(&phones)?;
         }
         Ok(Some(exp))
-    }
-
-    /// Bind a pairing to the phone's workspace device id.
-    pub fn bind_device(&self, pid: &str, device_id: uuid::Uuid) -> Result<bool> {
-        let mut phones = self.lock();
-        let Some(r) = phones.iter_mut().find(|r| r.pid == pid) else { return Ok(false) };
-        r.device_id = Some(device_id);
-        self.save(&phones)?;
-        Ok(true)
     }
 
     /// The active pairings of phones whose workspace device is in `revoked`.

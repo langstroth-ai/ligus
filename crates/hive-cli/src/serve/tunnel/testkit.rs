@@ -45,14 +45,51 @@ pub fn close_code(e: &anyhow::Error) -> Option<u16> {
 pub struct PhoneKeys {
     pub auth: SigningKey,
     pub static_priv: [u8; 32],
+    /// The phone's workspace device (its P-256 key), certified for tests by
+    /// [`test_device_lookup`].
+    pub device: Arc<hive_core::testkit::Phone>,
+}
+
+/// Every test phone's workspace device key, by device id (a stand-in for
+/// certificates on the roster: certifying a phone for real needs its
+/// person's passkey).
+fn test_devices() -> &'static Mutex<HashMap<uuid::Uuid, Vec<u8>>> {
+    static D: std::sync::OnceLock<Mutex<HashMap<uuid::Uuid, Vec<u8>>>> = std::sync::OnceLock::new();
+    D.get_or_init(Default::default)
+}
+
+/// A roster lookup that counts every test phone's device as a certified
+/// phone, unless `real` says it is revoked (or knows it otherwise).
+pub fn test_device_lookup(real: Option<super::DeviceLookupFn>) -> super::DeviceLookupFn {
+    use super::device_bind::DeviceLookup;
+    Arc::new(move |id| {
+        let r = real.as_ref().map(|f| f(id)).unwrap_or(DeviceLookup::Unknown);
+        if r != DeviceLookup::Unknown {
+            return r;
+        }
+        match test_devices().lock().unwrap().get(&id) {
+            Some(pk) => DeviceLookup::Certified { public_key: pk.clone(), phone: true },
+            None => DeviceLookup::Unknown,
+        }
+    })
 }
 
 impl PhoneKeys {
     pub fn generate() -> Self {
-        Self { auth: SigningKey::from_bytes(&random_bytes()), static_priv: random_bytes() }
+        let device = hive_core::testkit::Phone::new();
+        test_devices().lock().unwrap().insert(device.device_id, device.public_key());
+        Self { auth: SigningKey::from_bytes(&random_bytes()), static_priv: random_bytes(), device: Arc::new(device) }
     }
     pub fn static_pub(&self) -> [u8; 32] {
         x25519_pub(&self.static_priv)
+    }
+    pub fn device_id(&self) -> uuid::Uuid {
+        self.device.device_id
+    }
+    /// The E3a device claim for this pairing on `host_id`.
+    pub fn device_claim(&self, host_id: &str) -> Value {
+        let sig = hive_core::crypto::sign_p256(&self.device.key, &super::device_bind::bind_message(host_id, &self.static_pub()));
+        json!({ "id": self.device.device_id, "sig": b64u(sig) })
     }
 }
 
@@ -144,10 +181,22 @@ where
     }
 
     /// Enrollment handshake (IKpsk1). Returns the conn, pid and credential.
-    pub async fn enroll_handshake(mut ws: S, keys: &PhoneKeys, host: &HostInfo, ps: &PairingSecret, name: &str) -> Result<(Self, String, String)> {
+    /// Enrollment with the phone's own device claim (E3a).
+    pub async fn enroll_handshake(ws: S, keys: &PhoneKeys, host: &HostInfo, ps: &PairingSecret, name: &str) -> Result<(Self, String, String)> {
+        let claim = keys.device_claim(&host.host_id);
+        Self::enroll_handshake_with(ws, keys, host, ps, name, Some(claim)).await
+    }
+
+    /// Enrollment with the given device claim (`"device": {"id", "sig"}`),
+    /// or none.
+    pub async fn enroll_handshake_with(mut ws: S, keys: &PhoneKeys, host: &HostInfo, ps: &PairingSecret, name: &str, device: Option<Value>) -> Result<(Self, String, String)> {
         let mut hs = noise::initiator(&keys.static_priv, &host.hs, &host.host_id, Some(&ps.psk), None)?;
         let mut buf = vec![0u8; noise::MAX_MSG];
-        let payload = json!({ "v": 1, "name": name, "pk": b64u(keys.auth.verifying_key().as_bytes()) }).to_string();
+        let mut payload = json!({ "v": 1, "name": name, "pk": b64u(keys.auth.verifying_key().as_bytes()) });
+        if let Some(d) = device {
+            payload["device"] = d;
+        }
+        let payload = payload.to_string();
         let n = hs.write_message(payload.as_bytes(), &mut buf)?;
         ws.send(Message::Binary(buf[..n].to_vec().into())).await?;
         let msg2 = next_bin(&mut ws).await?;
@@ -260,11 +309,28 @@ pub async fn phone_enroll(host: &HostInfo, keys: &PhoneKeys, ps: &PairingSecret,
     PhoneConn::enroll_handshake(ws, keys, host, ps, name).await
 }
 
+/// Enroll with the given device claim, or none.
+pub async fn phone_enroll_with_device(host: &HostInfo, keys: &PhoneKeys, ps: &PairingSecret, name: &str, device: Option<Value>) -> Result<(PhoneConn<ClientWs>, String, String)> {
+    let (mut ws, _) = phone_dial(host).await?;
+    ws.send(Message::Text(json!({ "t": "enroll", "eid": ps.eid, "tag": b64u(ps.tag) }).to_string().into())).await?;
+    await_ready(&mut ws).await?;
+    PhoneConn::enroll_handshake_with(ws, keys, host, ps, name, device).await
+}
+
 /// Open a session through the relay with a credential.
 pub async fn phone_session(host: &HostInfo, keys: &PhoneKeys, credential: &str) -> Result<PhoneConn<ClientWs>> {
+    phone_session_with(host, keys, credential, false).await
+}
+
+/// A session that also registers an APNs token with the relay (`apns`).
+pub async fn phone_session_with(host: &HostInfo, keys: &PhoneKeys, credential: &str, apns: bool) -> Result<PhoneConn<ClientWs>> {
     let (mut ws, nonce) = phone_dial(host).await?;
     let sig = keys.auth.sign(&ctx("phone-auth", &[host.host_id.as_bytes(), &nonce]));
-    ws.send(Message::Text(json!({ "t": "auth", "cred": credential, "sig": b64u(sig.to_bytes()) }).to_string().into())).await?;
+    let mut auth = json!({ "t": "auth", "cred": credential, "sig": b64u(sig.to_bytes()) });
+    if apns {
+        auth["apns"] = json!({ "token": "00ff", "env": "development" });
+    }
+    ws.send(Message::Text(auth.to_string().into())).await?;
     await_ready(&mut ws).await?;
     PhoneConn::handshake(ws, keys, host).await
 }
@@ -300,6 +366,24 @@ pub struct RelayState {
     /// detail only when the host asked with `diag`). `None` = ok, and
     /// "fake apns: 200" for a `diag` push.
     pub push_reply: Mutex<Option<Value>>,
+    /// Registered host keys (kept after the control connection drops).
+    hosts: Mutex<HashMap<String, VerifyingKey>>,
+    /// Live spliced sessions by pid: dropping the sender closes them (4003).
+    live: Mutex<HashMap<String, Vec<oneshot::Sender<()>>>>,
+    /// Phones that registered a push token (`apns` on connect, simulated).
+    pub push_tokens: Mutex<HashSet<String>>,
+    /// Pushes the relay would have handed to APNs (pid of each).
+    pub delivered: Mutex<Vec<String>>,
+    /// `POST /v1/tunnel/revoke`: off = 404 (an older relay); a fixed status
+    /// to fail with; every request it answered (with its status).
+    pub http_revoke_off: std::sync::atomic::AtomicBool,
+    pub http_revoke_fail: Mutex<Option<u16>>,
+    pub http_revokes: Mutex<Vec<(u16, Value)>>,
+    /// Seconds the fake relay's clock is ahead of this machine's.
+    pub clock_offset: std::sync::atomic::AtomicI64,
+    /// Refuse the control connection's `revoke` (ack ok:false "internal").
+    pub control_revoke_fail: std::sync::atomic::AtomicBool,
+    nonces: Mutex<HashSet<String>>,
 }
 
 pub struct FakeRelay {
@@ -366,7 +450,76 @@ async fn close_with(ws: &mut WebSocketStream<TcpStream>, code: u16, name: &str) 
     let _ = ws.send(Message::Close(Some(CloseFrame { code: CloseCode::from(code), reason: name.to_string().into() }))).await;
 }
 
+/// Answer one plain HTTP request (`POST /v1/tunnel/revoke`) like the relay.
+async fn http_conn(mut tcp: TcpStream, st: Arc<RelayState>) -> Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let (head_end, len) = loop {
+        let n = tcp.read(&mut chunk).await?;
+        if n == 0 {
+            bail!("eof");
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            let head = String::from_utf8_lossy(&buf[..i]).to_lowercase();
+            let len = head.lines().find_map(|l| l.strip_prefix("content-length:")).and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(0);
+            break (i + 4, len);
+        }
+    };
+    while buf.len() < head_end + len {
+        let n = tcp.read(&mut chunk).await?;
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    let first = String::from_utf8_lossy(&buf[..buf.iter().position(|b| *b == b'\r').unwrap_or(0)]).to_string();
+    let body: Value = serde_json::from_slice(&buf[head_end..(head_end + len).min(buf.len())]).unwrap_or(Value::Null);
+    let (status, reply) = if !first.starts_with("POST /v1/tunnel/revoke ") || st.http_revoke_off.load(std::sync::atomic::Ordering::SeqCst) {
+        (404, json!({ "error": "not found" }))
+    } else if let Some(code) = *st.http_revoke_fail.lock().unwrap() {
+        (code, json!({ "error": "internal" }))
+    } else {
+        revoke_http(&st, &body)
+    };
+    st.http_revokes.lock().unwrap().push((status, body));
+    let out = reply.to_string();
+    let resp = format!("HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{out}", out.len());
+    tcp.write_all(resp.as_bytes()).await?;
+    tcp.shutdown().await?;
+    Ok(())
+}
+
+/// The relay's `POST /v1/tunnel/revoke` checks, in its order.
+fn revoke_http(st: &RelayState, m: &Value) -> (u16, Value) {
+    let s = |k: &str| m[k].as_str().unwrap_or_default().to_string();
+    let (hid, pid) = (s("hostId"), s("pid"));
+    let (Some(exp), Some(ts)) = (m["exp"].as_u64(), m["ts"].as_u64()) else { return (400, json!({ "error": "protocol" })) };
+    let (Ok(nonce), Ok(sig)) = (b64u_fixed::<16>(&s("nonce")), b64u_fixed::<64>(&s("sig"))) else { return (400, json!({ "error": "protocol" })) };
+    let Some(key) = st.hosts.lock().unwrap().get(&hid).copied() else { return (401, json!({ "error": "unauthorized" })) };
+    let msg = super::revocation::host_revoke_message(&hid, &pid, exp, ts, &nonce);
+    if key.verify_strict(&msg, &ed25519_dalek::Signature::from_bytes(&sig)).is_err() {
+        return (401, json!({ "error": "unauthorized" }));
+    }
+    let relay_now = (super::now() as i64 + st.clock_offset.load(std::sync::atomic::Ordering::SeqCst)) as u64;
+    if ts.abs_diff(relay_now) > 300 {
+        return (401, json!({ "error": "clock_skew", "now": relay_now }));
+    }
+    if !st.nonces.lock().unwrap().insert(format!("{hid}|{}", s("nonce"))) {
+        return (409, json!({ "error": "replayed" }));
+    }
+    st.revoked.lock().unwrap().insert(pid.clone());
+    let removed = st.push_tokens.lock().unwrap().remove(&pid);
+    let closed = st.live.lock().unwrap().remove(&pid).map(|v| v.len()).unwrap_or(0);
+    (200, json!({ "ok": true, "pid": pid, "revokedUntil": exp, "sessionsClosed": closed, "pushTokenRemoved": removed }))
+}
+
 async fn conn(tcp: TcpStream, st: Arc<RelayState>, log_tx: broadcast::Sender<Value>) -> Result<()> {
+    let mut peek = [0u8; 5];
+    if tcp.peek(&mut peek).await.is_ok() && &peek == b"POST " {
+        return http_conn(tcp, st).await;
+    }
     let target = Arc::new(Mutex::new(String::new()));
     let t2 = target.clone();
     let cb = move |req: &Request, mut resp: Response| {
@@ -415,6 +568,7 @@ async fn control_conn(mut ws: WebSocketStream<TcpStream>, st: Arc<RelayState>, l
     }
     ws.send(Message::Text(json!({ "t": "welcome", "status": "active", "maxSessions": 8, "push": false }).to_string().into())).await?;
     let (tx, mut rx) = mpsc::unbounded_channel();
+    st.hosts.lock().unwrap().insert(host_id.clone(), key);
     *st.host.lock().unwrap() = Some(HostConn { host_id, key, tx });
     loop {
         tokio::select! {
@@ -427,8 +581,12 @@ async fn control_conn(mut ws: WebSocketStream<TcpStream>, st: Arc<RelayState>, l
                     Some("enrollClose") => {
                         st.windows.lock().unwrap().remove(m["eid"].as_str().unwrap_or_default());
                     }
+                    Some("revoke") if st.control_revoke_fail.load(std::sync::atomic::Ordering::SeqCst) => {}
                     Some("revoke") => {
-                        st.revoked.lock().unwrap().insert(m["pid"].as_str().unwrap_or_default().into());
+                        let pid = m["pid"].as_str().unwrap_or_default();
+                        st.revoked.lock().unwrap().insert(pid.into());
+                        st.push_tokens.lock().unwrap().remove(pid);
+                        st.live.lock().unwrap().remove(pid);
                     }
                     Some("reject") => {
                         st.accepts.lock().unwrap().remove(m["sid"].as_str().unwrap_or_default());
@@ -437,8 +595,20 @@ async fn control_conn(mut ws: WebSocketStream<TcpStream>, st: Arc<RelayState>, l
                 }
                 if let Some(id) = m["id"].as_str() {
                     let mut ack = json!({ "t": "ack", "id": id, "ok": true });
+                    if m["t"] == "revoke" && st.control_revoke_fail.load(std::sync::atomic::Ordering::SeqCst) {
+                        ack = json!({ "t": "ack", "id": id, "ok": false, "code": "internal" });
+                    }
                     if m["t"] == "push" {
-                        let reply = st.push_reply.lock().unwrap().clone().unwrap_or_else(|| json!({ "ok": true, "detail": "fake apns: 200" }));
+                        let pid = m["pid"].as_str().unwrap_or_default();
+                        let revoked = st.revoked.lock().unwrap().contains(pid);
+                        if !revoked && st.push_tokens.lock().unwrap().contains(pid) {
+                            st.delivered.lock().unwrap().push(pid.to_string());
+                        }
+                        let reply = if revoked {
+                            json!({ "ok": false, "code": "revoked" })
+                        } else {
+                            st.push_reply.lock().unwrap().clone().unwrap_or_else(|| json!({ "ok": true, "detail": "fake apns: 200" }))
+                        };
                         ack["ok"] = reply["ok"].clone();
                         if let Some(code) = reply.get("code") {
                             ack["code"] = code.clone();
@@ -493,6 +663,9 @@ async fn phone_conn(mut ws: WebSocketStream<TcpStream>, st: Arc<RelayState>, hos
                 close_with(&mut ws, 4001, "unauthorized").await;
                 return Ok(());
             }
+            if m.get("apns").is_some() {
+                st.push_tokens.lock().unwrap().insert(claims.pid.clone());
+            }
             json!({ "t": "open", "mode": "session", "pid": claims.pid })
         }
         Some("enroll") => {
@@ -532,16 +705,27 @@ async fn phone_conn(mut ws: WebSocketStream<TcpStream>, st: Arc<RelayState>, hos
         }
     };
     ws.send(Message::Text(json!({ "t": "ready", "sid": sid }).to_string().into())).await?;
-    splice(ws, host_ws).await;
+    let (kill_tx, kill_rx) = oneshot::channel();
+    if let Some(pid) = open["pid"].as_str() {
+        st.live.lock().unwrap().entry(pid.to_string()).or_default().push(kill_tx);
+    }
+    splice(ws, host_ws, kill_rx).await;
     Ok(())
 }
 
 /// Copy binary messages both ways, one at a time; a close ends both sides.
-async fn splice(a: WebSocketStream<TcpStream>, b: WebSocketStream<TcpStream>) {
+/// `kill` resolving (its sender dropped by a revocation) closes both with 4003.
+async fn splice(a: WebSocketStream<TcpStream>, b: WebSocketStream<TcpStream>, mut kill: oneshot::Receiver<()>) {
     let (mut a_tx, mut a_rx) = a.split();
     let (mut b_tx, mut b_rx) = b.split();
     loop {
         tokio::select! {
+            _ = &mut kill => {
+                let close = || Message::Close(Some(CloseFrame { code: CloseCode::from(4003), reason: "revoked".into() }));
+                let _ = a_tx.send(close()).await;
+                let _ = b_tx.send(close()).await;
+                return;
+            }
             m = a_rx.next() => match m {
                 Some(Ok(Message::Binary(x))) => { if b_tx.send(Message::Binary(x)).await.is_err() { break; } }
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,

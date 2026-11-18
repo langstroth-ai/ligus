@@ -50,7 +50,7 @@ case $CMD in -h|--help|help|"") usage; exit 0 ;; esac
 
 ROLE="" DATA="${LIGUS_DATA_DIR:-}" ENVF="" ENVF_GIVEN="" LISTEN="" LABEL="" RELAY_URL="" BACKEND="" THROWAWAY=0 FORCE=0
 SYSTEMD=0 DEL_DATA=0 VERSION="" BIN_DIR="" FROM_SOURCE=0
-need() { [ $# -ge 2 ] && [ -n "$2" ] || ac_usage_error "$1 needs a value"; }
+need() { if [ $# -lt 2 ] || [ -z "$2" ]; then ac_usage_error "$1 needs a value"; fi; }
 while [ $# -gt 0 ]; do
   case $1 in
     --json) AC_JSON=1 ;;
@@ -79,8 +79,9 @@ case $ROLE in ""|serve|worker) ;; *) ac_usage_error "--role must be serve or wor
 # `set -a; . FILE`: anything but a plain token would run as shell code.
 valid() { # flag value regex
   [ -z "$2" ] && return 0
-  printf '%s' "$2" | LC_ALL=C grep -Eq "^($3)\$" && [ "$(printf '%s' "$2" | wc -l | tr -d ' ')" = 0 ] \
-    || ac_usage_error "$1: invalid value (allowed: $3)"
+  if ! printf '%s' "$2" | LC_ALL=C grep -Eq "^($3)\$" || [ "$(printf '%s' "$2" | wc -l | tr -d ' ')" != 0 ]; then
+    ac_usage_error "$1: invalid value (allowed: $3)"
+  fi
 }
 valid --data-dir "$DATA" '[A-Za-z0-9._/~+ -]+'
 valid --env-file "$ENVF" '[A-Za-z0-9._/~+-]+'

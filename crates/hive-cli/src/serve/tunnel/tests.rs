@@ -420,7 +420,7 @@ fn record(pid: &str, phone: &PhoneKeys) -> PhoneRecord {
         push_seq: 0,
         last_seen: None,
         owner_phone: false,
-        device_id: None,
+        device_id: Some(phone.device_id()),
     }
 }
 
@@ -457,6 +457,7 @@ struct Rig {
 fn rig() -> Rig {
     let tmp = tempfile::tempdir().unwrap();
     let host = TunnelHost::open(tmp.path(), RelaySettings::new("https://relay.example.com", None, false).unwrap()).unwrap();
+    host.set_device_lookup(testkit::test_device_lookup(None));
     let phone = PhoneKeys::generate();
     host.registry.activate(record("phone-1", &phone)).unwrap();
     let info = HostInfo { relay: String::new(), host_id: host.host_id().into(), hs: *host.keys.static_pub() };
@@ -705,7 +706,7 @@ async fn enrollment_binds_window_and_activates_on_first_transport_message() {
         let (mut ws, task) = r.accept(session::Mode::Enroll { eid: eid.clone() }, Default::default()).await;
         let mut hs = noise::initiator(&newbie.static_priv, &r.info.hs, &r.info.host_id, Some(&ps.psk), None).unwrap();
         let mut buf = vec![0u8; 65535];
-        let payload = json!({ "v": 1, "name": "n", "pk": b64u(newbie.auth.verifying_key().as_bytes()) }).to_string();
+        let payload = json!({ "v": 1, "name": "n", "pk": b64u(newbie.auth.verifying_key().as_bytes()), "device": newbie.device_claim(&r.info.host_id) }).to_string();
         let n = hs.write_message(payload.as_bytes(), &mut buf).unwrap();
         use futures_util::{SinkExt, StreamExt};
         ws.send(tokio_tungstenite::tungstenite::Message::Binary(buf[..n].to_vec().into())).await.unwrap();

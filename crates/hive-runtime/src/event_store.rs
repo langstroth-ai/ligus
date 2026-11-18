@@ -466,6 +466,31 @@ impl EventStore {
             .query_row("SELECT COALESCE(MAX(row_id), 0) FROM events", [], |row| row.get(0))?)
     }
 
+    /// The newest `equivocations` row id (0 when none).
+    pub fn max_equivocation_row_id(&self) -> Result<i64> {
+        Ok(self.conn.query_row("SELECT COALESCE(MAX(row_id), 0) FROM equivocations", [], |row| row.get(0))?)
+    }
+
+    /// Whether `session_id` gained an event after events row `after_event` or
+    /// an equivocation after equivocations row `after_equiv`. Reads only the
+    /// newer rows (a row-id range), so it stays cheap on a busy store.
+    pub fn session_rows_after(&self, session_id: Uuid, after_event: i64, after_equiv: i64) -> Result<bool> {
+        let sid = session_id.to_string();
+        let ev: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM events WHERE row_id > ?1 AND session_id = ?2)",
+            rusqlite::params![after_event, sid],
+            |r| r.get(0),
+        )?;
+        if ev {
+            return Ok(true);
+        }
+        Ok(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM equivocations WHERE row_id > ?1 AND session_id = ?2)",
+            rusqlite::params![after_equiv, sid],
+            |r| r.get(0),
+        )?)
+    }
+
     /// Sessions that gained a message after row `after` (see [`Self::max_row_id`]),
     /// for answering what a sync pull brought in.
     pub fn sessions_with_messages_after(&self, after: i64) -> Result<Vec<Uuid>> {

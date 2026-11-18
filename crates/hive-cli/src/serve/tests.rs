@@ -253,7 +253,8 @@ impl Harness {
     }
 
     async fn send(&self, method: reqwest::Method, path: &str, body: Option<Value>) -> Value {
-        let mut req = self.client.request(method.clone(), format!("{}{path}", self.base)).bearer_auth(&self.token);
+        // The live token: a phone revocation rotates it.
+        let mut req = self.client.request(method.clone(), format!("{}{path}", self.base)).bearer_auth(self.handle.shared.token());
         if let Some(b) = body {
             req = req.json(&b);
         }

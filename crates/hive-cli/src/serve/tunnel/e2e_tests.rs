@@ -19,10 +19,25 @@ use crate::serve::tunnel::{self as tun, cred, PairingSecret, RelaySettings};
 async fn serve_with_relay(relay: &str) -> Harness {
     let (endpoint, _) = spawn_model(vec![]).await;
     let relay = relay.to_string();
-    harness_with(&endpoint, "m", &[("README.md", "hi\n")], move |o| {
+    let h = harness_with(&endpoint, "m", &[("README.md", "hi\n")], move |o| {
         o.remote = Some(RelaySettings::new(&relay, None, true).unwrap());
     })
-    .await
+    .await;
+    trust_test_phones(&h);
+    h
+}
+
+/// The box's real roster decides what is revoked (or known); every test
+/// phone's device otherwise counts as a certified phone (certifying one for
+/// real needs its person's passkey, which the serve harness doesn't have).
+fn trust_test_phones(h: &Harness) {
+    let t = h.handle.shared.tunnel.clone().unwrap();
+    let weak = Arc::downgrade(&h.handle.shared);
+    let real: tun::DeviceLookupFn = Arc::new(move |d| match weak.upgrade() {
+        Some(s) => s.device_lookup(d),
+        None => tun::device_bind::DeviceLookup::Unknown,
+    });
+    t.set_device_lookup(testkit::test_device_lookup(Some(real)));
 }
 
 fn host_info(h: &Harness, relay: &str) -> HostInfo {
@@ -169,7 +184,15 @@ async fn tunnel_end_to_end_pair_get_sse_renew_revoke() {
     tun::cli::phones_revoke(&data_dir, Some(&pid), &h.handle.shared.opts.token_file, false).unwrap();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
     loop {
-        let f = tokio::time::timeout_at(deadline, c.recv()).await.expect("GOAWAY").unwrap();
+        // GOAWAY from the box, or the relay's 4003 close if its revocation
+        // (control or HTTP) lands first: both end the session as revoked.
+        let f = match tokio::time::timeout_at(deadline, c.recv()).await.expect("GOAWAY") {
+            Ok(f) => f,
+            Err(e) => {
+                assert_eq!(testkit::close_code(&e), Some(4003), "{e:#}");
+                break;
+            }
+        };
         if f.ty == frame::GOAWAY {
             assert_eq!(f.code(), Some(frame::goaway::REVOKED));
             break;
@@ -552,8 +575,8 @@ async fn a_revoked_phone_device_cuts_its_tunnel() {
     let info = host_info(&h, &relay.url);
     let phone = PhoneKeys::generate();
     let (_c, pid, _) = testkit::phone_enroll(&info, &phone, &ps, "p").await.unwrap();
-    let phone_device = Uuid::new_v4();
-    assert!(t.registry.bind_device(&pid, phone_device).unwrap());
+    let phone_device = phone.device_id();
+    assert_eq!(t.registry.get(&pid).unwrap().device_id, Some(phone_device));
     // Nothing revoked yet: the hook cuts nothing.
     assert!(h.handle.shared.revoke_phones_of_revoked_devices().is_empty());
     // The workspace owner revokes the phone's device on their desktop.
@@ -580,4 +603,560 @@ async fn a_revoked_phone_device_cuts_its_tunnel() {
     use tower::ServiceExt;
     let resp = crate::serve::api::router(h.handle.shared.clone()).oneshot(req).await.unwrap();
     assert_eq!(resp.status(), 401);
+}
+
+// ── Phase B: phone revocation is complete (tunnel, push, session) ───────────
+
+use hive_runtime::revocation_status::StepState;
+
+/// `phone`'s device claim for the pairing with `keys`'s static on `t`.
+fn device_claim(t: &tun::TunnelHost, phone: &PhoneKeys, keys: &PhoneKeys) -> Value {
+    let sig = hive_core::crypto::sign_p256(&phone.device.key, &tun::device_bind::bind_message(t.host_id(), &keys.static_pub()));
+    json!({ "id": phone.device_id(), "sig": tun::b64u(sig) })
+}
+
+/// A fresh pairing window the relay has heard of.
+async fn open_window(h: &Harness, relay: &FakeRelay) -> PairingSecret {
+    let (_, _, _, ps) = parse_link(&pair_link(h));
+    relay.wait_for("enroll", |m| m["eid"] == ps.eid, Duration::from_secs(5)).await.unwrap();
+    ps
+}
+
+/// Pair a phone that proves its workspace device at enrollment.
+async fn pair_bound(h: &Harness, relay: &FakeRelay) -> (Arc<tun::TunnelHost>, HostInfo, PhoneKeys, String, String, Arc<hive_core::testkit::Phone>) {
+    let t = h.handle.shared.tunnel.clone().unwrap();
+    let ps = open_window(h, relay).await;
+    let info = host_info(h, &relay.url);
+    let keys = PhoneKeys::generate();
+    let (_c, pid, credential) = testkit::phone_enroll(&info, &keys, &ps, "Mara's iPhone").await.unwrap();
+    assert_eq!(t.registry.get(&pid).unwrap().device_id, Some(keys.device_id()), "bound at pairing");
+    let phone = keys.device.clone();
+    (t, info, keys, pid, credential, phone)
+}
+
+/// The owner revokes the device on their desktop (not synced yet).
+fn revoke_on_desktop(h: &Harness, device: Uuid) {
+    let mut owner = crate::open_service(&h.desktop).unwrap();
+    let ws = h.handle.shared.ws;
+    owner.revoke_device(ws, ws, device).unwrap();
+}
+
+async fn wait_until(what: &str, within: Duration, mut f: impl FnMut() -> bool) {
+    let deadline = tokio::time::Instant::now() + within;
+    while !f() {
+        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for: {what}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// Wait for the phone's session to end (GOAWAY, or the socket closing).
+async fn session_ends<S>(c: &mut testkit::PhoneConn<S>, within: Duration) -> bool
+where
+    S: futures_util::Stream<Item = Result<tokio_tungstenite::tungstenite::Message, tokio_tungstenite::tungstenite::Error>>
+        + futures_util::Sink<tokio_tungstenite::tungstenite::Message, Error = tokio_tungstenite::tungstenite::Error>
+        + Unpin,
+{
+    tokio::time::timeout(within, async {
+        loop {
+            match c.recv().await {
+                Ok(f) if f.ty == frame::GOAWAY => return,
+                Ok(_) => {}
+                Err(_) => return,
+            }
+        }
+    })
+    .await
+    .is_ok()
+}
+
+fn pushes_to(relay: &FakeRelay, pid: &str) -> usize {
+    relay.messages("push").iter().filter(|m| m["pid"] == json!(pid)).count()
+}
+
+/// The full cut: once the box folds the revocation, the phone's live tunnel
+/// closes within a bounded time, the relay drops the pairing and the push
+/// token, no push goes out, the old credential is refused, and each step's
+/// status is reported.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn revoking_a_phone_device_cuts_tunnel_and_push_and_reports_each_step() {
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let (t, info, keys, pid, credential, phone) = pair_bound(&h, &relay).await;
+
+    // A live session that registered an APNs token and turned pushes on.
+    let mut c = testkit::phone_session_with(&info, &keys, &credential, true).await.unwrap();
+    assert_eq!(c.request("PUT", "/v1/tunnel/push", Some(json!({ "enabled": true }))).await.unwrap().status, 200);
+    assert!(relay.state.push_tokens.lock().unwrap().contains(&pid));
+    // Pushes reach the phone before (so the "none after" check can fail).
+    let before = t.push_test(Some(&pid), Duration::from_secs(5)).await;
+    assert!(before.phones[0].sent, "{before:?}");
+    assert_eq!(relay.state.delivered.lock().unwrap().iter().filter(|p| **p == pid).count(), 1);
+
+    revoke_on_desktop(&h, phone.device_id);
+    crate::sync_once(&h.desktop).await.unwrap();
+    h.handle.shared.sync_kick.notify_one();
+    // Bound: from the moment the box's roster has the revocation.
+    let shared = h.handle.shared.clone();
+    wait_until("the box folds the revocation", Duration::from_secs(10), || {
+        shared.device_lookup(phone.device_id) == tun::device_bind::DeviceLookup::Revoked
+    })
+    .await;
+    let folded = std::time::Instant::now();
+    assert!(session_ends(&mut c, Duration::from_secs(3)).await, "the revoked phone's live tunnel stayed open");
+    let cut_after = folded.elapsed();
+    assert!(cut_after < Duration::from_secs(2), "live tunnel closed {cut_after:?} after the fold");
+    assert!(!t.registry.is_active(&pid));
+
+    // The relay is told (HTTP route), drops the push token, and the steps settle.
+    wait_until("revocation steps settle", Duration::from_secs(5), || t.ledger.list().first().is_some_and(|e| e.status.complete())).await;
+    let e = t.ledger.list().remove(0);
+    assert_eq!(e.status.device_id, phone.device_id.to_string());
+    assert_eq!((e.status.tunnel.state, e.status.push.state, e.status.session.state), (StepState::Done, StepState::Done, StepState::NotApplicable));
+    // (Confirmed by the HTTP route or the control `revoke` ack, whichever lands first.)
+    assert!(relay.state.revoked.lock().unwrap().contains(&pid));
+    assert!(!relay.state.push_tokens.lock().unwrap().contains(&pid), "push token survived");
+    let listed = h.send(reqwest::Method::GET, "/v1/revocations", None).await;
+    assert_eq!(listed["revocations"][0]["summary"], json!("revoked: tunnel cut, push removed, session: not applicable"));
+    assert_eq!(listed["revocations"][0]["complete"], json!(true));
+
+    // No push after revocation: neither the gated path nor push-test sends one.
+    let sent_before = pushes_to(&relay, &pid);
+    t.push_available.store(true, std::sync::atomic::Ordering::SeqCst);
+    t.push_all(&tun::PushContent { kind: "test".into(), title: "x".into(), ..Default::default() });
+    let after = t.push_test(Some(&pid), Duration::from_secs(1)).await;
+    assert!(!after.phones[0].sent);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(pushes_to(&relay, &pid), sent_before, "a push for the revoked phone reached the relay");
+    assert_eq!(relay.state.delivered.lock().unwrap().iter().filter(|p| **p == pid).count(), 1);
+
+    // Its credential no longer opens a session.
+    let err = testkit::phone_session(&info, &keys, &credential).await.err().expect("refused");
+    assert_eq!(testkit::close_code(&err), Some(4003), "{err:#}");
+    h.handle.shutdown();
+}
+
+/// A revoked phone can't pair again: not with its old keys, not with a claim
+/// of the revoked device, and a fresh unbound pairing that later claims it is
+/// revoked on the spot.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_revoked_phone_device_cannot_pair_again() {
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let (t, info, keys, pid, _, phone) = pair_bound(&h, &relay).await;
+    revoke_on_desktop(&h, phone.device_id);
+    crate::sync_once(&h.desktop).await.unwrap();
+    wait_until("pairing cut", Duration::from_secs(10), || !t.registry.is_active(&pid)).await;
+    let active = || t.registry.list().into_iter().filter(|r| r.is_active()).count();
+
+    // Same keys, with the claim.
+    let ps = open_window(&h, &relay).await;
+    assert!(testkit::phone_enroll(&info, &keys, &ps, "again").await.is_err());
+    // Same keys, no claim (the revoked pairing's static).
+    let ps = open_window(&h, &relay).await;
+    assert!(testkit::phone_enroll_with_device(&info, &keys, &ps, "again", None).await.is_err());
+    // New keys claiming the revoked device.
+    let ps = open_window(&h, &relay).await;
+    let fresh = PhoneKeys::generate();
+    assert!(testkit::phone_enroll_with_device(&info, &fresh, &ps, "again", Some(device_claim(&t, &keys, &fresh))).await.is_err());
+    assert_eq!(active(), 0, "a refused enrollment left a pairing behind");
+    let _ = phone;
+    h.handle.shutdown();
+}
+
+/// Residual 1: every pairing proves its phone's workspace device. Fresh keys
+/// with no claim (what a revoked phone would try), a claim this box doesn't
+/// know, a claim made for another pairing or another box, and a claim of a
+/// device that isn't a phone are all refused; the old "pair unbound, bind
+/// later" route is gone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_pairing_must_prove_its_phone_device() {
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let t = h.handle.shared.tunnel.clone().unwrap();
+    let info = host_info(&h, &relay.url);
+    let active = || t.registry.list().into_iter().filter(|r| r.is_active()).count();
+
+    // No claim at all.
+    let ps = open_window(&h, &relay).await;
+    assert!(testkit::phone_enroll_with_device(&info, &PhoneKeys::generate(), &ps, "unbound", None).await.is_err());
+    // A device this box has never heard of (a validly signed claim).
+    let stranger = hive_core::testkit::Phone::new();
+    let keys = PhoneKeys::generate();
+    let sig = hive_core::crypto::sign_p256(&stranger.key, &tun::device_bind::bind_message(t.host_id(), &keys.static_pub()));
+    let ps = open_window(&h, &relay).await;
+    assert!(testkit::phone_enroll_with_device(&info, &keys, &ps, "stranger", Some(json!({ "id": stranger.device_id, "sig": tun::b64u(sig) }))).await.is_err());
+    // A claim lifted from another pairing (bound to that pairing's static).
+    let victim = PhoneKeys::generate();
+    let lifted = victim.device_claim(t.host_id());
+    let attacker = PhoneKeys::generate();
+    let ps = open_window(&h, &relay).await;
+    assert!(testkit::phone_enroll_with_device(&info, &attacker, &ps, "lifted", Some(lifted)).await.is_err());
+    // A claim made for another box (its host id), same static.
+    let other_box = attacker.device_claim("AAAAAAAAAAAAAAAAAAAAAA");
+    let ps = open_window(&h, &relay).await;
+    assert!(testkit::phone_enroll_with_device(&info, &attacker, &ps, "other box", Some(other_box)).await.is_err());
+    assert_eq!(active(), 0, "a refused enrollment left a pairing behind");
+
+    // The bind-later route no longer exists.
+    let ps = open_window(&h, &relay).await;
+    let ok = PhoneKeys::generate();
+    let (mut c, pid, _) = testkit::phone_enroll(&info, &ok, &ps, "ok").await.unwrap();
+    assert_eq!(t.registry.get(&pid).unwrap().device_id, Some(ok.device_id()));
+    let r = c.request("PUT", "/v1/tunnel/device", Some(ok.device_claim(t.host_id()))).await.unwrap();
+    assert!(r.status == 404 || r.status == 405, "{}", r.status);
+    h.handle.shutdown();
+}
+
+/// Whatever path the revocation arrives by (here: another process writing
+/// the box's `hive.db`, the way a phone's own `DeviceRevoked` would land),
+/// the box cuts the pairing within a bounded time, without a sync round.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_revocation_arriving_by_any_path_cuts_promptly() {
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let (t, info, keys, pid, credential, phone) = pair_bound(&h, &relay).await;
+    let mut c = testkit::phone_session(&info, &keys, &credential).await.unwrap();
+    assert_eq!(c.request("GET", "/v1/health", None).await.unwrap().status, 200);
+
+    revoke_on_desktop(&h, phone.device_id);
+    let ws = h.handle.shared.ws;
+    let revocation = hive_runtime::event_store::EventStore::open(h.desktop.data_dir.join("hive.db"))
+        .unwrap()
+        .list(workspace_config_session_id(ws))
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find(|e| matches!(&e.payload, hive_core::SessionEvent::DeviceRevoked { device_id, .. } if *device_id == phone.device_id))
+        .expect("the desktop wrote it");
+    let mut other_process = hive_runtime::event_store::EventStore::open(h.handle.shared.cfg.data_dir.join("hive.db")).unwrap();
+    assert!(other_process.ingest(&revocation).unwrap());
+    let landed = std::time::Instant::now();
+    assert!(session_ends(&mut c, Duration::from_secs(3)).await, "live tunnel stayed open");
+    assert!(!t.registry.is_active(&pid));
+    let took = landed.elapsed();
+    assert!(took < Duration::from_secs(2), "cut {took:?} after the event landed");
+    // Told by the HTTP route or the control `revoke`, whichever lands first
+    // (under load the control ack can settle the step before the HTTP call).
+    wait_until("relay told", Duration::from_secs(5), || {
+        relay.state.http_revokes.lock().unwrap().iter().any(|(s, b)| *s == 200 && b["pid"] == json!(pid)) || relay.state.revoked.lock().unwrap().contains(&pid)
+    })
+    .await;
+    h.handle.shutdown();
+}
+
+/// A relay failure shows as a failed step and is retried (on request, too);
+/// a relay without the HTTP route confirms through its control `revoke` ack.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn relay_failures_are_reported_and_retried() {
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let (t, _, _, pid, _, phone) = pair_bound(&h, &relay).await;
+    *relay.state.http_revoke_fail.lock().unwrap() = Some(503);
+    relay.state.control_revoke_fail.store(true, std::sync::atomic::Ordering::SeqCst);
+    revoke_on_desktop(&h, phone.device_id);
+    crate::sync_once(&h.desktop).await.unwrap();
+    wait_until("tunnel step failed", Duration::from_secs(10), || t.ledger.list().first().is_some_and(|e| e.status.tunnel.state == StepState::Failed)).await;
+    let e = t.ledger.list().remove(0);
+    assert_eq!(e.status.push.state, StepState::Failed);
+    assert!(e.status.tunnel.detail.contains("503"), "{}", e.status.tunnel.detail);
+    // Both relay paths failed; the box kept the local cut regardless.
+    assert!(!t.registry.is_active(&pid));
+    *relay.state.http_revoke_fail.lock().unwrap() = None;
+    h.send(reqwest::Method::POST, &format!("/v1/revocations/{}/retry", phone.device_id), None).await;
+    wait_until("steps settle after retry", Duration::from_secs(5), || t.ledger.list().first().is_some_and(|e| e.status.complete())).await;
+    assert!(!t.registry.is_active(&pid));
+    h.handle.shutdown();
+
+    // An older relay (no HTTP route): the control connection's ack confirms.
+    let relay = FakeRelay::start().await;
+    relay.state.http_revoke_off.store(true, std::sync::atomic::Ordering::SeqCst);
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let (t, _, _, pid, _, phone) = pair_bound(&h, &relay).await;
+    revoke_on_desktop(&h, phone.device_id);
+    crate::sync_once(&h.desktop).await.unwrap();
+    wait_until("steps settle via control ack", Duration::from_secs(10), || t.ledger.list().first().is_some_and(|e| e.status.complete())).await;
+    relay.wait_for("revoke", |m| m["pid"] == json!(pid), Duration::from_secs(1)).await.unwrap();
+    assert!(relay.state.http_revokes.lock().unwrap().iter().all(|(s, _)| *s == 404));
+    h.handle.shutdown();
+}
+
+/// With langstroth-auth operator access configured, the device's sign-in
+/// session is ended too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_session_step_ends_the_langstroth_auth_session() {
+    let calls: Arc<Mutex<Vec<(String, String)>>> = Default::default();
+    let c2 = calls.clone();
+    let auth = Router::new().route(
+        "/admin/v1/tenants/{tenant}/devices/{device}/revoke",
+        post(move |axum::extract::Path((tenant, device)): axum::extract::Path<(String, String)>, headers: HeaderMap| {
+            let c2 = c2.clone();
+            async move {
+                if headers.get("authorization").and_then(|v| v.to_str().ok()) != Some("Bearer admin-test-token") {
+                    return (axum::http::StatusCode::UNAUTHORIZED, axum::Json(json!({})));
+                }
+                c2.lock().unwrap().push((tenant, device));
+                (axum::http::StatusCode::OK, axum::Json(json!({ "revoked": 2 })))
+            }
+        }),
+    );
+    let auth_url = spawn(auth).await;
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let t = h.handle.shared.tunnel.clone().unwrap();
+    t.set_auth_admin(Some(tun::revocation::AuthAdmin { url: auth_url, tenant: "acme".into(), token: "admin-test-token".into() }));
+    let (_, _, _, _, _, phone) = pair_bound(&h, &relay).await;
+    revoke_on_desktop(&h, phone.device_id);
+    crate::sync_once(&h.desktop).await.unwrap();
+    wait_until("steps settle", Duration::from_secs(10), || t.ledger.list().first().is_some_and(|e| e.status.complete())).await;
+    let e = t.ledger.list().remove(0);
+    assert_eq!(e.status.session.state, StepState::Done);
+    assert_eq!(e.status.summary(), "revoked: tunnel cut, push removed, session ended");
+    assert_eq!(calls.lock().unwrap().clone(), vec![("acme".to_string(), phone.device_id.to_string())]);
+    h.handle.shutdown();
+}
+
+/// A revocation folded between the claim check (msg1) and storing the
+/// pairing (E4) must still refuse it: the box's view of the device is stale
+/// at msg1, the `DeviceRevoked` has already landed and been acted on, and no
+/// later store change would wake the revocation watch again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_revocation_racing_an_enrollment_still_refuses_it() {
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let t = h.handle.shared.tunnel.clone().unwrap();
+    let keys = PhoneKeys::generate();
+    revoke_on_desktop(&h, keys.device_id());
+    crate::sync_once(&h.desktop).await.unwrap();
+    h.handle.shared.sync_kick.notify_one();
+    let shared = h.handle.shared.clone();
+    wait_until("the box folds the revocation", Duration::from_secs(10), || {
+        shared.device_lookup(keys.device_id()) == tun::device_bind::DeviceLookup::Revoked
+    })
+    .await;
+    // Let the watch see that change (there is no pairing to cut yet).
+    tokio::time::sleep(crate::serve::REVOCATION_WATCH * 3).await;
+    // The claim check at msg1 still sees the device as certified (a stale
+    // view); every later lookup sees the real roster.
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (c2, weak) = (calls.clone(), Arc::downgrade(&h.handle.shared));
+    let (id, pk) = (keys.device_id(), keys.device.public_key());
+    t.set_device_lookup(Arc::new(move |d| {
+        if d == id && c2.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            return tun::device_bind::DeviceLookup::Certified { public_key: pk.clone(), phone: true };
+        }
+        weak.upgrade().map(|s| s.device_lookup(d)).unwrap_or(tun::device_bind::DeviceLookup::Unknown)
+    }));
+    let ps = open_window(&h, &relay).await;
+    let info = host_info(&h, &relay.url);
+    let _ = testkit::phone_enroll(&info, &keys, &ps, "racer").await;
+    tokio::time::sleep(crate::serve::REVOCATION_WATCH * 4).await;
+    let active: Vec<_> = t.registry.list().into_iter().filter(|r| r.is_active()).collect();
+    assert!(active.is_empty(), "a pairing of a revoked device stayed active: {:?}", active.iter().map(|r| &r.pid).collect::<Vec<_>>());
+    h.handle.shutdown();
+}
+
+/// Residual 2: a revoked phone also held the direct-path bearer token
+/// (`serve.token`, from its pairing link). Revoking its device rotates the
+/// token once, ends direct streams opened with the old one, and the phones
+/// that remain learn the new token over their tunnel.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn revoking_a_phone_device_rotates_the_direct_token() {
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let (t, info, _, pid, _, phone) = pair_bound(&h, &relay).await;
+    let (_, _, keep_keys, keep_pid, keep_cred, _) = pair_bound(&h, &relay).await;
+    let old = h.token.clone();
+    // The revoked phone's direct stream, opened with the old token.
+    let mut stream = h.events(None).await;
+
+    revoke_on_desktop(&h, phone.device_id);
+    crate::sync_once(&h.desktop).await.unwrap();
+    h.handle.shared.sync_kick.notify_one();
+    wait_until("pairing cut", Duration::from_secs(10), || !t.registry.is_active(&pid)).await;
+    wait_until("token rotated", Duration::from_secs(5), || h.handle.shared.token() != old).await;
+    let on_disk = std::fs::read_to_string(&h.handle.shared.opts.token_file).unwrap();
+    assert_eq!(on_disk.trim(), h.handle.shared.token());
+
+    // The old token no longer opens anything on the direct path …
+    let r = h.client.get(format!("{}/v1/chats", h.base)).bearer_auth(&old).send().await.unwrap();
+    assert_eq!(r.status(), 401);
+    // … and the stream it opened has ended.
+    let ended = tokio::time::timeout(Duration::from_secs(3), async {
+        while stream.recv().await.is_some() {}
+    })
+    .await;
+    assert!(ended.is_ok(), "a direct stream opened with the revoked token stayed open");
+
+    // The phone that remains fetches the new token over its tunnel.
+    assert!(t.registry.is_active(&keep_pid));
+    let mut c = testkit::phone_session(&info, &keep_keys, &keep_cred).await.unwrap();
+    let r = c.request("GET", "/v1/tunnel/direct", None).await.unwrap();
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(r.json()["token"], json!(h.handle.shared.token()));
+    // The direct path itself never hands the token out.
+    let r = h.client.get(format!("{}/v1/tunnel/direct", h.base)).bearer_auth(h.handle.shared.token()).send().await.unwrap();
+    assert_eq!(r.status(), 404);
+
+    // Once only: later store changes don't rotate it again.
+    let now = h.handle.shared.token();
+    let r = h.client.post(format!("{}/v1/chats", h.base)).bearer_auth(&now).json(&json!({ "title": "later" })).send().await.unwrap();
+    assert!(r.status().is_success());
+    tokio::time::sleep(crate::serve::REVOCATION_WATCH * 4).await;
+    assert_eq!(h.handle.shared.token(), now);
+    h.handle.shutdown();
+}
+
+/// Residual 3, end to end on the real roster: the box signs its report with
+/// its device key and the desktop verifies it; the box takes a retry only
+/// from a member's certified desktop device, never from a mere key holder,
+/// a revoked device or a phone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn revocation_presence_is_signed_and_checked_against_the_roster() {
+    use hive_runtime::revocation_status as rs;
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let (t, _, _, _, _, phone) = pair_bound(&h, &relay).await;
+    revoke_on_desktop(&h, phone.device_id);
+    crate::sync_once(&h.desktop).await.unwrap();
+    wait_until("ledger entry", Duration::from_secs(10), || !t.ledger.list().is_empty()).await;
+    let ws = h.handle.shared.ws;
+    let k = hive_runtime::keyring::KeyringEngine::passphrase(ws, hive_core::derive_workspace_key("serve-test"));
+
+    // The box's report, as the presence loop seals it.
+    let report = h.handle.shared.lock().sign_revocation_report(t.ledger.report(&h.handle.shared.host_id));
+    let mut blobs = std::collections::HashMap::new();
+    blobs.insert(rs::report_slot(&report.host_id), rs::seal_report(&k, &report).unwrap());
+    crate::sync_once(&h.desktop).await.unwrap();
+    let desk = crate::open_service(&h.desktop).unwrap();
+    let shown = rs::open_reports(&blobs, &k, |d| desk.certified_device_key(ws, d).ok().flatten());
+    assert_eq!(shown.len(), 1, "the desktop rejected the box's own signed report");
+    // The same report, tampered by a key holder: dropped.
+    let mut forged = report.clone();
+    forged.devices[0].tunnel.state = hive_runtime::revocation_status::StepState::Done;
+    forged.devices[0].tunnel.detail = "all good".into();
+    blobs.insert(rs::report_slot(&report.host_id), rs::seal_report(&k, &forged).unwrap());
+    assert!(rs::open_reports(&blobs, &k, |d| desk.certified_device_key(ws, d).ok().flatten()).is_empty());
+
+    // Retries: the box accepts the desktop's device, nothing else.
+    crate::sync_once(&h.desktop).await.unwrap();
+    h.handle.shared.sync_kick.notify_one();
+    let desk_id = desk.device_id();
+    let shared = h.handle.shared.clone();
+    wait_until("box knows the desktop device", Duration::from_secs(10), || shared.lock().retry_requester_key(ws, desk_id).is_some()).await;
+    let svc = h.handle.shared.lock();
+    assert!(svc.retry_requester_key(ws, Uuid::new_v4()).is_none(), "an unknown device");
+    assert!(svc.retry_requester_key(ws, phone.device_id).is_none(), "a revoked phone");
+    drop(svc);
+    let now = Timestamp::now().inner().unix_timestamp();
+    let good = desk.sign_revocation_retry(rs::retry_request(&phone.device_id.to_string(), desk_id));
+    let holder = hive_core::SigningKeypair::generate().unwrap();
+    let bad = rs::retry_request(&phone.device_id.to_string(), desk_id).sign(&holder);
+    for (req, want) in [(good, 1usize), (bad, 0)] {
+        let mut b = std::collections::HashMap::new();
+        b.insert(rs::retry_slot(&req.device_id), rs::seal_retry(&k, &req).unwrap());
+        let svc = h.handle.shared.lock();
+        assert_eq!(rs::open_retries(&b, &k, 0, now + 1, |d| svc.retry_requester_key(ws, d)).len(), want);
+    }
+    h.handle.shutdown();
+}
+
+/// Residual 4: the revocation watch reads only new rows; chat traffic on a
+/// busy workspace never re-checks the roster, a config-log change does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chat_traffic_does_not_recheck_the_roster() {
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let (t, _, _, pid, _, phone) = pair_bound(&h, &relay).await;
+    let checks = || h.handle.shared.revocation_checks.load(std::sync::atomic::Ordering::Relaxed);
+    tokio::time::sleep(crate::serve::REVOCATION_WATCH * 3).await;
+    let chat = h.send(reqwest::Method::POST, "/v1/chats", Some(json!({ "title": "busy" }))).await["chat"]["id"].as_str().unwrap().to_string();
+    tokio::time::sleep(crate::serve::REVOCATION_WATCH * 3).await;
+    let before = checks();
+    for i in 0..8 {
+        h.send(reqwest::Method::POST, &format!("/v1/chats/{chat}/messages"), Some(json!({ "body": format!("msg {i}") }))).await;
+        tokio::time::sleep(crate::serve::REVOCATION_WATCH).await;
+    }
+    assert_eq!(checks(), before, "chat messages re-checked the roster");
+    // A revocation on the config log is still picked up.
+    revoke_on_desktop(&h, phone.device_id);
+    crate::sync_once(&h.desktop).await.unwrap();
+    wait_until("pairing cut", Duration::from_secs(10), || !t.registry.is_active(&pid)).await;
+    assert!(checks() > before);
+    h.handle.shutdown();
+}
+
+/// A box whose clock is far off the relay's still gets its revocation
+/// confirmed: the relay says its time, the box corrects and retries.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_skewed_clock_still_confirms_the_revocation() {
+    let relay = FakeRelay::start().await;
+    relay.state.clock_offset.store(1_000, std::sync::atomic::Ordering::SeqCst);
+    // Only the HTTP route can confirm.
+    relay.state.control_revoke_fail.store(true, std::sync::atomic::Ordering::SeqCst);
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let (t, _, _, pid, _, phone) = pair_bound(&h, &relay).await;
+    revoke_on_desktop(&h, phone.device_id);
+    crate::sync_once(&h.desktop).await.unwrap();
+    wait_until("pairing cut", Duration::from_secs(10), || !t.registry.is_active(&pid)).await;
+    wait_until("relay confirms despite the skew", Duration::from_secs(8), || {
+        relay.state.http_revokes.lock().unwrap().iter().any(|(s, b)| *s == 200 && b["pid"] == json!(pid))
+    })
+    .await;
+    wait_until("steps settle", Duration::from_secs(5), || t.ledger.list().first().is_some_and(|e| e.status.tunnel.state == StepState::Done)).await;
+    h.handle.shutdown();
+}
+
+/// Phase B integration: the serve box is its own service member, and an
+/// Admin revokes its device like any other. A revoked box can no longer act
+/// in the workspace, so it cuts every pairing it holds (the relay is told,
+/// requests on their sessions get 401), rotates the direct-path token once,
+/// and cuts a pairing made after the revocation too. Who may revoke a box's
+/// device at all is the fold's (`service_admission`, `phones_and_services`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn revoking_the_boxs_own_device_cuts_every_pairing_it_holds() {
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let (t, _, _, a, _, _) = pair_bound(&h, &relay).await;
+    let (_, _, _, b, _, _) = pair_bound(&h, &relay).await;
+    let old = h.token.clone();
+    let own: Uuid = h.handle.shared.host_id.parse().unwrap();
+    // A phone's revocation elsewhere cuts nothing here yet.
+    assert!(h.handle.shared.revoke_phones_of_revoked_devices().is_empty());
+
+    revoke_on_desktop(&h, own);
+    crate::sync_once(&h.desktop).await.unwrap();
+    h.handle.shared.sync_kick.notify_one();
+    wait_until("every pairing cut", Duration::from_secs(15), || !t.registry.is_active(&a) && !t.registry.is_active(&b)).await;
+    for pid in [&a, &b] {
+        relay.wait_for("revoke", |m| m["pid"] == json!(pid), Duration::from_secs(5)).await.unwrap();
+        let mut req = axum::http::Request::builder().uri("/v1/chats").body(axum::body::Body::empty()).unwrap();
+        req.extensions_mut().insert(tun::TunnelPeer { pid: pid.clone() });
+        use tower::ServiceExt;
+        let resp = crate::serve::api::router(h.handle.shared.clone()).oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), 401);
+    }
+    wait_until("token rotated", Duration::from_secs(5), || h.handle.shared.token() != old).await;
+    let r = h.client.get(format!("{}/v1/chats", h.base)).bearer_auth(&old).send().await.unwrap();
+    assert_eq!(r.status(), 401);
+    let rotated = h.handle.shared.token();
+
+    // A pairing made after the revocation is cut as it appears; the token
+    // isn't rotated again.
+    let (_, _, _, c, _, _) = pair_bound(&h, &relay).await;
+    wait_until("the later pairing cut", Duration::from_secs(10), || !t.registry.is_active(&c)).await;
+    assert_eq!(h.handle.shared.token(), rotated);
+    h.handle.shutdown();
 }
