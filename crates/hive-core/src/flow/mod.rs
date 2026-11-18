@@ -300,6 +300,18 @@ pub enum FlowRecord {
     HumanAnswered(HumanAnswered),
     /// One turn's Ligus tool use, content-free (chat log, Agent tier; D.3.5).
     TurnToolSummary(TurnToolSummary),
+    /// Create or edit a workspace memory entry (config; a person,
+    /// Contributor+; see [`crate::memory`]).
+    MemoryWritten(crate::memory::MemoryWrite),
+    /// Remove a memory entry, leaving a tombstone (config; a person).
+    MemoryRemoved(crate::memory::MemoryRemoval),
+    /// A proposed memory change (config; agents, the runtime, phones and
+    /// members).
+    MemoryProposed(crate::memory::MemoryProposal),
+    /// A person accepts or rejects a memory proposal (config).
+    MemoryProposalDecided(crate::memory::MemoryDecision),
+    /// One writer's live task state on this chat (chat log).
+    TaskState(crate::memory::TaskStateUpdate),
     /// A record type from a newer build — kept in the log, inert here.
     #[serde(other)]
     Unknown,
@@ -327,6 +339,11 @@ impl FlowRecord {
             FlowRecord::HumanAsk(_) => "humanAsk",
             FlowRecord::HumanAnswered(_) => "humanAnswered",
             FlowRecord::TurnToolSummary(_) => "turnToolSummary",
+            FlowRecord::MemoryWritten(_) => "memoryWritten",
+            FlowRecord::MemoryRemoved(_) => "memoryRemoved",
+            FlowRecord::MemoryProposed(_) => "memoryProposed",
+            FlowRecord::MemoryProposalDecided(_) => "memoryProposalDecided",
+            FlowRecord::TaskState(_) => "taskState",
             FlowRecord::Unknown => "unknown",
         }
     }
@@ -345,6 +362,10 @@ impl FlowRecord {
                 | FlowRecord::AgentProfile(_)
                 | FlowRecord::Beacon(_)
                 | FlowRecord::AgentOutcomeSummary(_)
+                | FlowRecord::MemoryWritten(_)
+                | FlowRecord::MemoryRemoved(_)
+                | FlowRecord::MemoryProposed(_)
+                | FlowRecord::MemoryProposalDecided(_)
         )
     }
 
@@ -414,6 +435,12 @@ pub struct FlowState {
     /// Per-turn Ligus tool summaries, newest last.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_summaries: Vec<TurnToolSummary>,
+    /// Workspace memory (config log; [`crate::memory`]).
+    #[serde(default, skip_serializing_if = "crate::memory::MemoryState::is_empty")]
+    pub memory: crate::memory::MemoryState,
+    /// Live task-state slots (chat log).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tasks: Vec<crate::memory::TaskSlot>,
 }
 
 /// Bounds on asks and tool summaries (fold rules, `authz::bounds`).
@@ -708,6 +735,13 @@ impl FlowState {
                     push_capped(&mut self.tool_summaries, t.clone());
                 }
             }
+            // Folded with their envelope's provenance
+            // (`memory::apply_enveloped`, from the event fold), never here.
+            FlowRecord::MemoryWritten(_)
+            | FlowRecord::MemoryRemoved(_)
+            | FlowRecord::MemoryProposed(_)
+            | FlowRecord::MemoryProposalDecided(_)
+            | FlowRecord::TaskState(_) => {}
             FlowRecord::Unknown => {}
         }
     }

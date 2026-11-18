@@ -279,6 +279,18 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             // A daily outcome summary speaks for the device that signed it:
             // the fold keys summaries by (agent, host, day), so another
             // member's device must not replace or invent a host's numbers.
+            // Memory and task state (`crate::memory`): their log, then the
+            // fold's own rules (bounds, a known base, one writer per slot).
+            let on_config_log = env.session_id == crate::channel::workspace_config_session_id(env.workspace_id);
+            if crate::memory::is_memory(record) && !on_config_log {
+                return Decision::deny("workspace memory is kept on the workspace config log");
+            }
+            if matches!(record, crate::flow::FlowRecord::TaskState(_)) && on_config_log {
+                return Decision::deny("task state is kept on its chat's log");
+            }
+            if let Some(Err(why)) = crate::memory::validate(&fold.flow, record, author, env.signer_device_id) {
+                return Decision::deny(why);
+            }
             if let crate::flow::FlowRecord::AgentOutcomeSummary(sum) = record {
                 if env.signer_device_id.map(|d| d.to_string()).as_deref() != Some(sum.host_id.as_str()) {
                     return Decision::deny("an outcome summary is signed by its own host");
@@ -414,6 +426,11 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
     // identity) is judged at the Agent tier too.
     if env.actor_stamp.as_ref().is_some_and(|s| s.runtime_effect) && roster_here.is_some() {
         if let Err(why) = agent::runtime_tier_allows(&env.payload) {
+            return Decision::deny(why);
+        }
+    }
+    if let SessionEvent::FlowRecorded { record } = &env.payload {
+        if let Some(why) = memory_refusal(env, record, ctx, author) {
             return Decision::deny(why);
         }
     }
@@ -817,6 +834,59 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
 /// An agent-signed event (A3): a key valid at this position whose agent the
 /// stamp names, an owner who is a member here, the Agent tier, and the
 /// owner's role as the cap.
+/// Who may write memory and task state (`crate::memory`; design sections 4
+/// to 6), beyond the tiers: a direct memory write or a decision is a
+/// person's (a human stamp, never a runtime effect), and changing an entry
+/// is its creator's or an Admin's; a host-signed task-state slot is an agent
+/// bound to the signing device (the A3 transition), and only the runtime
+/// writes `primary`.
+fn memory_refusal(env: &SessionEventEnvelope, record: &crate::flow::FlowRecord, ctx: &Ctx<'_>, author: &str) -> Option<&'static str> {
+    use crate::flow::FlowRecord;
+    let stamp = env.actor_stamp.as_ref();
+    let runtime = stamp.is_some_and(|s| s.runtime_effect);
+    let kind = stamp.map(|s| s.actor.kind);
+    if crate::memory::is_person_only(record) {
+        if runtime || kind != Some(ActorKind::Human) {
+            return Some("only a person writes workspace memory or decides a memory proposal; agents propose");
+        }
+        let m = &ctx.fold.flow.memory;
+        let role = ctx.fold.role_of(author);
+        let op = match record {
+            FlowRecord::MemoryWritten(w) => Some(crate::memory::write_op(w)),
+            FlowRecord::MemoryRemoved(r) => Some(crate::memory::MemoryOp::Remove { entry_id: r.entry_id, base: r.base }),
+            FlowRecord::MemoryProposalDecided(d) if d.accepted => m.proposals.get(&d.proposal_id).map(|p| p.proposal.op.clone()),
+            _ => None,
+        };
+        if op.is_some_and(|op| !crate::memory::may_change(m, &op, author, role)) {
+            return Some("only its creator or an Admin changes a memory entry");
+        }
+    }
+    if let FlowRecord::MemoryProposed(p) = record {
+        // A person or a service member proposes as itself; an agent's
+        // proposal comes from its key (the Agent tier) or a runtime effect.
+        if !runtime && kind != Some(ActorKind::Agent) && !p.proposer.is_empty() {
+            return Some("a memory proposal names an agent only when that agent files it");
+        }
+    }
+    if let FlowRecord::TaskState(t) = record {
+        if kind == Some(ActorKind::Agent) {
+            return None;
+        }
+        if runtime {
+            return (t.agent_key != crate::flow::PRIMARY).then_some("the chat's runtime writes only its own task state");
+        }
+        if let Some(roster) = ctx.workspace {
+            let bound = crate::flow::agent_from_key(&t.agent_key)
+                .zip(env.signer_device_id)
+                .is_some_and(|(a, d)| roster.agent_bound_to(a, d));
+            if !bound {
+                return Some("task state is written by its agent, or the host that agent runs on");
+            }
+        }
+    }
+    None
+}
+
 fn authorize_agent(env: &SessionEventEnvelope, ctx: &Ctx<'_>, roster: &RosterState) -> Decision {
     let author = author_of(env);
     let Some(key) = env.signer_device_id.and_then(|k| roster.valid_agent_key(k)) else {
@@ -1001,6 +1071,9 @@ fn service_member_refusal(
         return Some("a service member carries no presence".into());
     }
     match &env.payload {
+        SessionEvent::FlowRecorded { record } if crate::memory::is_person_only(record) => {
+            Some("a person writes workspace memory, not a service".into())
+        }
         SessionEvent::PasskeyRegistered { .. } => Some("a service member holds no passkey".into()),
         SessionEvent::ProposalSetDecided { .. } => Some("a person decides a proposal set, not a service".into()),
         // Phase B: a service member cuts no one and admits no one. Leaving,

@@ -455,3 +455,90 @@ fn lamport_bounds_goldens() {
     }
     std::fs::write(path, out).unwrap();
 }
+
+/// Writes the workspace-memory and task-state lines
+/// (`docs/design/v2/workspace-memory.md`): one `flowRecorded` vector per new
+/// record type. Run with `LIGUS_GOLDEN_OUT=<path> --ignored`, then append.
+#[test]
+#[ignore]
+fn memory_goldens() {
+    use hive_core::flow::FlowRecord;
+    use hive_core::memory::*;
+    let Ok(path) = std::env::var("LIGUS_GOLDEN_OUT") else { return };
+    let kp = device();
+    let pk: String = kp.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let ws = u(2);
+    let chat = u(3);
+    let cfg = hive_core::workspace_config_session_id(ws);
+    let source = MemorySource { chat_id: Some(chat), message_id: Some(u(0x6031)), turn_id: Some(u(0x6032)) };
+    let cases = [
+        ("flowRecorded/memoryWritten", cfg, FlowRecord::MemoryWritten(MemoryWrite {
+            entry_id: u(0x6001),
+            base: Some(u(0x6011)),
+            title: "Relay ports".into(),
+            body: "The team relay listens on 8443.".into(),
+            tags: vec!["infra".into()],
+            source: source.clone(),
+            resolves: vec![u(0x6012)],
+        })),
+        ("flowRecorded/memoryRemoved", cfg, FlowRecord::MemoryRemoved(MemoryRemoval { entry_id: u(0x6001), base: u(0x6013), source: MemorySource::default(), resolves: vec![] })),
+        ("flowRecorded/memoryProposed", cfg, FlowRecord::MemoryProposed(MemoryProposal {
+            proposal_id: u(0x6021),
+            op: MemoryOp::Edit { entry_id: u(0x6001), base: u(0x6011), title: "Relay ports".into(), body: "8443, and 443 behind the proxy.".into(), tags: vec![] },
+            proposer: u(0x81).to_string(),
+            source,
+            rationale: "seen in the deploy chat".into(),
+        })),
+        ("flowRecorded/memoryProposalDecided", cfg, FlowRecord::MemoryProposalDecided(MemoryDecision { proposal_id: u(0x6021), accepted: true, note: "thanks".into(), resolves: vec![] })),
+        ("flowRecorded/taskState", chat, FlowRecord::TaskState(TaskStateUpdate {
+            task_id: chat,
+            agent_key: u(0x81).to_string(),
+            turn_id: u(0x6032),
+            status: TaskStatus::Blocked,
+            summary: "Waiting on the schema decision".into(),
+            progress: Some(40),
+            open_questions: vec!["Keep the v1 route?".into()],
+            partial_results: vec!["Drafted the migration".into()],
+            ttl_ms: Some(3_600_000),
+        })),
+    ];
+    let mut out = String::new();
+    for (i, (label, sid, record)) in cases.into_iter().enumerate() {
+        let mut e = SessionEventEnvelope::new(sid, ws, 501 + i as i64, SessionEvent::FlowRecorded { record });
+        e.id = u(0x6100 + 2 * i as u128);
+        e.event_id = u(0x6101 + 2 * i as u128);
+        e.timestamp = Timestamp::epoch();
+        let mut actor = ActorIdentity::new(u(9).to_string(), "Mara", ActorKind::Human);
+        actor.account_id = Some(u(9));
+        actor.device_id = Some(u(1));
+        e.actor_stamp = Some(ActorStamp {
+            actor,
+            recorded_at: Timestamp::epoch(),
+            cfg_frontier: Some(CfgFrontier { lamport: 900, event_id: u(0x6050) }),
+            presence: None,
+            runtime_effect: false,
+            prev: Some(u(0x6051)),
+            sig_alg: SigAlg::Ed25519,
+            log_head: None,
+        });
+        hive_core::lamport::stamp_next(&mut e, Some(CfgFrontier { lamport: 60, event_id: u(0x6052) }));
+        sign_envelope(&mut e, u(1), &kp);
+        out.push_str(&format!("{{\"label\":\"{label}\",\"pk\":\"{pk}\",\"envelope\":{}}}\n", serde_json::to_string(&e).unwrap()));
+    }
+    std::fs::write(path, out).unwrap();
+}
+
+/// The memory and task-state vectors are present and decode to their types.
+#[test]
+fn memory_goldens_are_present() {
+    for t in ["memoryWritten", "memoryRemoved", "memoryProposed", "memoryProposalDecided", "taskState"] {
+        let line = GOLDEN
+            .lines()
+            .find(|l| l.contains(&format!("\"label\":\"flowRecorded/{t}\"")))
+            .unwrap_or_else(|| panic!("no golden vector for {t}"));
+        let start = line.find("\"envelope\":").unwrap() + "\"envelope\":".len();
+        let env: SessionEventEnvelope = serde_json::from_str(&line[start..line.len() - 1]).unwrap();
+        let SessionEvent::FlowRecorded { record } = env.payload else { panic!("{t}") };
+        assert_eq!(record.type_str(), t);
+    }
+}
