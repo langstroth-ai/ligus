@@ -18,6 +18,10 @@ shared LLM workspace for developers. *Ligus* is short for *ligustica*
   hosts (`ligus serve` and `ligus worker`). Everything is MIT-licensed and
   self-hosted.
 
+Both names come from beekeeping. [The hive behind the names](the-hive.md)
+explains them, and which honeybee behaviours several Ligus features borrow
+from.
+
 These docs have two sections.
 
 <div class="grid cards" markdown>

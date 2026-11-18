@@ -183,6 +183,7 @@ plugins:
 
 nav:
   - Home: index.md
+  - The hive behind the names: the-hive.md
   - Using Ligus:
       - ligus/index.md
       - Getting Started:
