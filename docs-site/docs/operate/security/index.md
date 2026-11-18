@@ -159,8 +159,10 @@ turn-scoped inputs. See [Keys off the cluster](../deploy/keys-off-cluster.md).
 
 - An **account** (one per person: a key and a random id made on the first
   device, never derived from a provider id; more devices join through an
-  enrollment code) certifies **device** keys. A `ligus serve` box can be certified as
-  one of your devices; it can't certify itself.
+  enrollment code) certifies **device** keys. A `ligus serve` or `ligus
+  worker` box is never one of your devices: it is its own **service member**
+  with its own account, admitted once by an Admin with a passkey (see
+  [Admitting a box](../ops/admitting-a-box.md)).
 - Membership is workspace-wide, kept on the workspace config log. Roles:
 
 | Role | Can |
@@ -169,6 +171,12 @@ turn-scoped inputs. See [Keys off the cluster](../deploy/keys-off-cluster.md).
 | **Admin** | add, remove and re-role members; manage workspace runtimes (they carry credentials); revoke devices (a revocation or removal from anyone below Admin is ignored on every device); dearth mode and join approvals; path zones and the home beacon |
 | **Contributor** | messages, proposals and votes, proposal sets, agents, skills, vaults, workflows, channels, hosts, leases; clear a chat lockdown (humans only) |
 | **Viewer** | read; raise a chat lockdown |
+
+A **service member** (a serve or worker box) holds at most Contributor. Its
+votes count at its role but never as a person's approval, it carries no
+passkey or presence, and it removes, demotes, admits and revokes no one (its
+own device excepted). A person's invite never admits a box, and a box
+admission never admits a person.
 
 Every event is judged by one authorization engine, the same on every device,
 against the roster **in force when it was made**: its author must have been a
@@ -197,12 +205,12 @@ it names.
   settings, database or `serve.token`, write outside its worktree, or reach
   the network except through a per-chat allow-list. See [the OS
   sandbox](../../ligus/concepts/security.md#os-sandbox).
-- **Phone and serve approvals.** A `ligus serve` box enrolled as your device
-  signs as you, so a vote, reject, lockdown clear or agent rebind from the
-  phone carries **your passkey** over that event (`POST v1/presence/prepare`,
-  then `v1/presence/commit`): the vote counts as the passkey's account. A
-  plain request gets `403 presence_required`, and every device's fold drops
-  a vote such a box signs without your passkey.
+- **Phone and serve approvals.** A `ligus serve` box signs only as itself,
+  a service member whose votes never count as a person's. What only a person
+  may do from the phone is signed by the **phone's own device key** with your
+  passkey, and the box relays it unchanged (it can hold it back, never forge
+  it): box admissions use this path in 0.1 (`POST v1/admissions/prepare`,
+  `presence`, `commit`).
 - **Agents** sign with their own host-certified keys, judged by a capped
   Agent tier that never votes, applies or administers. They act through the
   [Ligus tools](../../ligus/addons/ligus-mcp.md): proposals only, behind a per-turn

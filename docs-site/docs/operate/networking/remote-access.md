@@ -26,20 +26,15 @@ and timing. The full protocol is
 - The `ligus` CLI on the box (`brew install langstroth-ai/ligus/ligus`, or see
   [Headless agents](../concepts/headless-agents.md#install-the-cli)). Check it
   with `ligus --version`.
-- The box joined to your workspace with `ligus enroll "hivews1:…"`, using the
-  invite from the desktop's **Copy invite**. The invite carries the workspace
-  key, so move it to the box over a channel you trust, such as SSH. The
-  workspace needs a relay (**Settings → Team sync → Relay URL**); `ligus
-  enroll` refuses an invite without one.
-- **A personal box? Make it your own device.** Joined with a plain invite,
-  the box is a separate member: everything you send from the phone shows
-  under the box's name (its `--label`, else its host name), and `@hive` in
-  chats the phone creates isn't answered by your desktop. For your own box,
-  also run `ligus serve enroll` once and approve it on your desktop (see
-  [Running ligus serve as your own device](../ops/serve-box.md)); the phone
-  then writes as you. Keep it a separate member only for a box several
-  people share. `ligus pair` and `ligus serve --pair` print a reminder on a
-  box that isn't enrolled as anyone's device.
+- The box admitted to your workspace as its own service member: run `ligus
+  admit request` on it, approve the request on the desktop (workspace menu,
+  **Admit a box…**) with your passkey, and `ligus admit redeem` the sealed
+  code on the box (see [Admitting a box](../ops/admitting-a-box.md)). The
+  workspace needs a relay (**Settings → Team sync → Relay URL**).
+- **The box is its own member.** Everything you send from the phone shows
+  under the box's name (its `--name`, else its `--label`, else its host
+  name), and its votes never count as your approval. `ligus pair` and `ligus
+  serve --pair` print a reminder.
 - For the relay tunnel: a relay with the tunnel turned on. It is **off by
   default**; see [Using your own relay](#using-your-own-relay).
 
@@ -62,7 +57,7 @@ ligus serve --listen 127.0.0.1:8787 --label home-box
   With the relay tunnel only, loopback is fine: the phone never connects to
   this port directly.
 - `--label` / `LIGUS_SERVE_LABEL` is the host name other members see
-  (default: the machine's host name). A box that is its own member also
+  (default: the machine's host name). The box also
   uses it as its display name unless `--name` / `LIGUS_SERVE_NAME` sets one
   (a box that still shows as "hive-cli", from before 0.1, takes it on its
   next start).

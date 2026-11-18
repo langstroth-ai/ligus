@@ -148,7 +148,14 @@ worker 5b1c… online — draining queued mentions for its agents. Ctrl-C to sto
 | Command | What it does |
 |---|---|
 | `ligus serve [--listen ADDR] [--token-file PATH] [--label NAME] [--name NAME] [--public-url URL] [--ntfy-url URL] [--ntfy-topic T] [--pair] [--remote-relay URL] [--reg-token T] [--insecure-relay]` | sync + worker + the phone's HTTP/SSE API. `--pair` prints the pairing code at start. The other flags override the `LIGUS_SERVE_*`, `LIGUS_NTFY_*` and `LIGUS_REMOTE_*` variables |
-| `ligus serve enroll [--listen ADDR] [--label NAME] [--new-device]` | prints the code that makes this box one of your own devices (approve it on the desktop); `--new-device` makes a new device key after a revocation |
+| `ligus admit request [--label NAME]` | prints this box's join request (`ligusjoin1:…`) and fingerprint for an Admin to approve (desktop: workspace menu, **Admit a box…**) |
+| `ligus admit redeem <code>` / `ligus admit redeem --file PATH` | keeps a box admission (`ligusadmit1:…` sealed to this box, or a bearer `hivews1:…`); the next `ligus serve` or `ligus worker` joins as this box's own service member. `LIGUS_ADMISSION_FILE` does the same at start-up |
+| `ligus admit issue --recovery-words-file PATH [--ttl 1h] [--request ligusjoin1:…] [--out PATH]` | the headless Admin path: issues a box admission from your own CLI identity, confirmed with your recovery key; sealed to the box when `--request` is given |
+| `ligus recovery-key create --out PATH` | registers a recovery key for this CLI identity (a CLI founder's first credential) and writes its 24 words to `PATH` (owner-only). Never on a box |
+
+`ligus serve enroll` was removed in 0.1 (a box is never a person's device):
+it stops with a migration error. See
+[Admitting a box](../../operate/ops/admitting-a-box.md).
 | `ligus pair [--listen ADDR] [--token-file PATH] [--public-url URL] [--relay-only] [--remote-relay URL] [--reg-token T] [--insecure-relay]` | prints the phone pairing QR code and link. Reads the server's token; never creates one |
 | `ligus remote enable --relay URL [--reg-token T] [--insecure-relay]` | turns on phone access through a relay tunnel (creates host keys, writes `tunnel/relay.json`) |
 | `ligus remote status` (or `ligus remote`) | relay, host id, the running server's link state, phone counts |

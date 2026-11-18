@@ -71,8 +71,9 @@ same authorization engine, so authoring and folding can't disagree:
   for the content digest it names; editing a proposal's patch voids earlier
   votes. Proposal status is derived from counted votes, and *Applied* comes
   only from a human member's apply event for the approved content. A vote
-  signed by a `ligus serve` box enrolled as its owner's device doesn't count
-  (see [Phone and serve approvals](../../operate/security/index.md#roles)).
+  from a `ligus serve` or `ligus worker` box (a service member) counts at
+  its role but never as a person's approval (see
+  [Phone and serve approvals](../../operate/security/index.md#roles)).
 - **Agents.** An agent can sign with its own key, certified by the host it
   is bound to and retired when it moves; such events are judged by a capped
   Agent tier that never votes, applies or administers.

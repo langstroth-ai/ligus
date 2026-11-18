@@ -10,6 +10,19 @@ Full release notes are on the
 
 ## 0.1.0
 
+- **serve and worker boxes are their own members.** A `ligus serve` or
+  `ligus worker` box joins a workspace as its own **service member**, never as
+  a person's device: at most Contributor, its votes never count as a person's
+  approval, and it cuts and admits no one. An Admin admits a box once with a
+  passkey: on the desktop (workspace menu, **Admit a box…**, from the box's
+  join request or as a code for a Kubernetes Secret), from the phone with its
+  own device key, or headlessly with `ligus admit issue`. A box syncs first
+  and refuses to start without a copy of the workspace, so it never founds a
+  competing one. `ligus serve enroll`, `LIGUS_SERVE_OWNER` and the chart's
+  `serve.owner` were removed and stop with a migration error. The chart can
+  now run serve and workers in one workspace (`serve.admission`,
+  `worker.instances[].admission`). See
+  [Admitting a box](../../operate/ops/admitting-a-box.md).
 - **A community relay to start with.** Onboarding, **Add workspace → Create**
   (when no relay is set) and **Settings → Team sync** offer
   `relay.langstroth.ai`, a free, best-effort relay, next to your own relay

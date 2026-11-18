@@ -491,8 +491,8 @@ hive remote disable | reset   # reset = new host keys: every phone re-pairs
   signing keys stay in `LIGUS_DATA_DIR`. The relay sees only ciphertext. The
   phone sees only plaintext API responses over the tailnet, and nothing it
   holds can decrypt the relay's log or sign workspace events.
-- **The box is its own member.** It joins the roster as **Contributor** (self
-  enrollment) and signs every event it writes, including the phone's messages,
+- **The box is its own member.** It joins the roster as a **Contributor
+  service member** (through a box admission) and signs every event it writes, including the phone's messages,
   which appear under `LIGUS_SERVE_NAME`, and the phone's votes. Peers verify
   those events on ingest like any other device's. Approve and reject cast the
   same `ProposalVoteCast` delta the desktop's Review pane does, at this
@@ -516,11 +516,9 @@ hive remote disable | reset   # reset = new host keys: every phone re-pairs
     this off. MCP results are labelled as untrusted data.
   - **Role gate.** Tools of either kind run only when the triggering
     message's author has at least `LIGUS_MCP_MIN_ROLE` (default Contributor).
-  - Optional: `LIGUS_SERVE_APPLY_ON_APPROVE=1` applies an approved diff to the
-    chat's branch (`hive/chat/<id>`) in the bound checkout, the way the
-    desktop's Implement does. Only a proposal whose status is `approved`
-    applies: one a qualifying reviewer rejected, or that was dismissed or
-    superseded, never does.
+  - `LIGUS_SERVE_APPLY_ON_APPROVE=1` no longer applies anything: a service
+    member applies only to fulfil a person's apply request (not wired up on
+    serve in 0.1); apply from the desktop.
   - A file-writing subprocess agent (aider, pi, codex, hermes, or Claude Code
     in an edit mode) runs only in a per-turn worktree of a bound repository.
     Without one the turn fails instead of writing in place.
@@ -537,29 +535,18 @@ hive remote disable | reset   # reset = new host keys: every phone re-pairs
 - Single user, single workspace per `ligus serve` process, and one phone per
   token (the token isn't per-device). Phones paired over the relay are
   per-device and can be revoked one by one.
-- **Your own device.** With `LIGUS_SERVE_OWNER` set, the box asks to become one
-  of the owner's devices: it prints an enrollment code (`hivedev1:…`, also
-  `ligus serve enroll`), and the owner approves it on their desktop (Settings >
-  Account > My devices > Add a device), checking the fingerprint. The desktop
-  signs a certificate for the box's device key with the owner's account key,
-  which never leaves the desktop. From then on the box authors everything as the
-  owner (`identity.mode = "owner"`): messages, votes, comments and chats the
-  phone creates are the owner's, so one person has one vote and the owner's
-  desktop answers `@hive`. A box can't make itself the owner's device: an event
-  it stamps as the owner without that certificate is quarantined everywhere as
-  impersonation. Approving also removes the box's separate member (if it had
-  one); its past messages show on the desktop as "<owner> via <box>".
-  Revoking it (My devices > Revoke) stops every updated desktop accepting its
-  events and makes the box read-only (`revoked`); `ligus serve enroll
-  --new-device` makes a new device key to approve again. No new event type:
-  older desktops accept the enrolled box's events as the owner's too, but only
-  updated desktops keep honoring a revocation after the sync batch it arrived in.
-- Before enrollment (no `LIGUS_SERVE_OWNER`, or not approved yet) the box is a
-  separate member identity: the desktop shows the phone's messages under
-  `LIGUS_SERVE_NAME`. A box that is already a member with `LIGUS_SERVE_OWNER` set
-  (and an Admin) keeps the earlier stopgap meanwhile: desktops count it as one
-  of the owner's devices for dispatch only. A box that isn't a member waits
-  read-only (`pending`) instead of joining as one.
+- **The box is never the owner.** Since 0.1 the box is its own **service
+  member** (`ActorKind::Service`): at most Contributor, its votes never count
+  as a person's approval, it holds no passkey, and it admits, removes and
+  revokes no one. An Admin admits it once with a passkey (desktop: workspace
+  menu, **Admit a box…**; the phone; or a Kubernetes Secret the box redeems at
+  start-up). `LIGUS_SERVE_OWNER` and `ligus serve enroll` were removed and stop
+  with a migration error; `identity.mode` is `member` or `revoked`. What only a
+  person may do from the phone is signed by the phone's own P-256 device key
+  with the person's passkey and relayed by the box: box admissions use
+  `POST /v1/admissions/prepare`, `/presence` and `/commit` (the operator
+  docs' serve API reference has the shapes). Votes, asks and lockdown clears
+  that need a person are made on the desktop until the phone signs those too.
 - Agents run one at a time on the worker thread. A long turn delays the next
   one, but the API and sync keep running.
 - Deltas are pushed only for turns that run on this box. A reply streamed on

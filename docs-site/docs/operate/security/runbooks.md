@@ -33,8 +33,8 @@ For a `ligus serve` box (or another device) enrolled as **your** device.
    other devices: ask an Admin to revoke the device, or to remove that
    device's member (for a box that was its own member), and treat it as a
    [compromised device](#compromised-device) meanwhile.
-5. To re-enroll the same box later:
-   `ligus serve enroll --new-device`, then approve the new code.
+5. To bring a box back later: start it from a fresh data dir and admit it
+   again ([Admitting a box](../ops/admitting-a-box.md)).
 
 ## Lost phone {#lost-phone}
 
@@ -88,8 +88,10 @@ can act as that device and read everything it could.
 
 1. **Cut its writes.**
     - Your own device enrolled to your account: [revoke it](#revoke-device).
-    - A box that is its own member (a worker, or a serve box not enrolled as
-      yours): an Admin removes that member in the **People** pane.
+    - A box (a serve or worker box, always its own service member): an
+      Admin removes that member in the **People** pane, then rotates the
+      workspace key. If it still had an unredeemed admission Secret, delete
+      it.
     - A teammate's device: they revoke it in their **My devices**; if they
       can't, an Admin removes the member.
 2. **Cut its relay access.** On a gated relay, revoke its token: remove it

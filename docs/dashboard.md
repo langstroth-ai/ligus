@@ -35,8 +35,8 @@ Shown first on every dashboard unless `dashboard.toml` says otherwise:
 | Phones paired. Only with remote access on | `phones.paired` |
 | This host: Hive serve, Relay sync ("Synced 4 s ago"), Remote access, Push | `host.status` |
 
-"Your review" means the identity the phone acts as: this box, or its owner
-once the box is enrolled as the owner's device. A proposal awaits you when
+"Your review" means the identity the phone acts as: this box, a service
+member of the workspace. A proposal awaits you when
 it's open, you may vote on it, you haven't, and you didn't write it.
 
 To move or hide it, set a top-level key (before any `[mcp]` table or

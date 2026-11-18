@@ -99,10 +99,11 @@ first time it is created; after that, Settings is the source of truth.
 | `LIGUS_SERVE_TOKEN_FILE` | `<data dir>/serve.token` | the direct-path bearer token file (also used by `ligus pair` and `ligus phones revoke`) |
 | `LIGUS_SERVE_PUBLIC_URL` | `http://<listen>` | URL put in the pairing link |
 | `LIGUS_SERVE_LABEL` | `$HOSTNAME`, else `home host` | the host's label |
-| `LIGUS_SERVE_NAME` | unset | display name of the box when it is its own member |
-| `LIGUS_SERVE_OWNER` | unset | your display name or actor id: asks to enroll the box as your device |
+| `LIGUS_SERVE_NAME` | unset | display name of the box (its own service member) |
+| `LIGUS_ADMISSION_FILE` | unset | a file holding a box admission code, redeemed at start-up by `ligus serve` and `ligus worker` (the chart mounts a Secret here); denied to agent processes. See [Admitting a box](../ops/admitting-a-box.md) |
+| `LIGUS_SERVE_OWNER` | removed | refused with a migration error since 0.1: a box is never a person's device |
 | `LIGUS_SERVE_DEFAULT_AGENT` | unset | agent that gets phone messages that mention nobody |
-| `LIGUS_SERVE_APPLY_ON_APPROVE` | off | approving a file-diff proposal from the phone also applies it |
+| `LIGUS_SERVE_APPLY_ON_APPROVE` | off | no effect on a box since 0.1: a service member applies only to fulfil a person's request |
 | `LIGUS_SERVE_PALETTE` / `LIGUS_SERVE_APPEARANCE` | unset | theme for *Match host* |
 | `LIGUS_DESKTOP_DATA_DIR` | the OS app-data dir for `ai.ligus.desktop` | where to read the desktop's theme on the same machine |
 | `LIGUS_REPOS_DIR` | `<data dir>/repos` | checkouts the phone may bind and clone into |

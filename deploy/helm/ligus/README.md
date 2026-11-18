@@ -109,10 +109,49 @@ logs are kept):
 kubectl -n ligus-ws-acme exec -it acme-ligus-serve-0 -- ligus pair --relay-only   # needs remote.enabled
 ```
 
-**Changing in 0.1:** `ligus serve enroll` and `serve.owner` make the box act
-for an owner. They are being replaced by serve joining the workspace as its
-own member (a service member an Admin approves, capped below Admin). Until
-that lands they still work, but don't build automation on them.
+## Admitting serve and workers
+
+serve and every worker join the workspace as their own **service member**:
+at most Contributor, their votes never count as a person's approval, and
+they admit, remove and revoke no one. An Admin admits each box once, with a
+passkey; nobody needs to be at the pod.
+
+1. On the desktop, right-click the workspace: **Admit a box… → For
+   Kubernetes**. Pick how long the code stays redeemable (24 h by default, at
+   most 6 days) and confirm with your passkey. One code per box: each is
+   single use. A headless Admin can use `ligus admit issue
+   --recovery-words-file …` instead.
+2. Store each code in its own Secret:
+
+    ```sh
+    kubectl -n ligus-ws-acme create secret generic acme-serve-admission --from-file=admission=./serve.txt
+    kubectl -n ligus-ws-acme create secret generic acme-build-1-admission --from-file=admission=./build-1.txt
+    ```
+
+3. Name them:
+
+    ```yaml
+    serve:
+      admission: { existingSecret: acme-serve-admission }
+    worker:
+      enabled: true
+      instances:
+        - name: build-1
+          admission: { existingSecret: acme-build-1-admission }
+    ```
+
+At start-up each box syncs first and refuses to run without a copy of the
+workspace (a box never founds one or names itself Owner), then redeems its
+code from `LIGUS_ADMISSION_FILE` (mounted `0400`, read-only, optional,
+denied to agent processes, never seen by the sandbox preflight). Redeeming
+binds the admission to that box's key. **Delete the Secret once the box has
+joined** (its log says `joined workspace '…' as its own service member`); a
+restart doesn't need it again.
+
+A bearer admission code is a secret until it is redeemed (it also carries the
+workspace key): never put it in a values file. `serve.owner` and `ligus
+serve enroll` (the box acting as a person's device) were removed in 0.1; the
+chart refuses `serve.owner` with a migration error.
 
 ## Secrets
 
@@ -130,6 +169,7 @@ variable overrides it on restart; the rest are `LIGUS_*_FILE` variables
 | workspace runtime credentials (one key per `secret_ref`) | `serve.workspaceSecrets.existingSecret`, `worker.workspaceSecrets.existingSecret` | `LIGUS_WS_SECRET_DIR` |
 | tunnel registration token | `remote.regTokenSecret` | `LIGUS_REMOTE_REG_TOKEN_FILE` |
 | ntfy token | `serve.ntfy.tokenSecret` | `LIGUS_NTFY_TOKEN_FILE` |
+| box admission (one per box, delete after it joined) | `serve.admission.existingSecret`, `worker.instances[].admission.existingSecret` | `LIGUS_ADMISSION_FILE` |
 
 Provider keys that CLI agents read from their environment
 (`ANTHROPIC_API_KEY`, ...) go in `serve.agentEnv` / `worker.agentEnv`, one
@@ -226,14 +266,15 @@ set `LIGUS_MODEL_GATEWAY*`.
 | `relay.enabled` | `false` | In-release relay (any `langstroth-relay` value under `relay.`) |
 | `workspace.existingSecret` / `secretKeys` / `relayAccessToken` | required | Workspace connection |
 | `remote.enabled` / `relayUrl` / `insecureRelay` / `regTokenSecret` | off | Phone access through the relay tunnel; `insecureRelay` only for in-cluster http |
-| `serve.label`, `name`, `owner`, `defaultAgent`, `applyOnApprove` | | `LIGUS_SERVE_*` (`owner` is changing in 0.1, above) |
+| `serve.label`, `name`, `defaultAgent`, `applyOnApprove` | | `LIGUS_SERVE_*` (`applyOnApprove` has no effect on a box: a service member applies only on a person's request) |
+| `serve.admission.existingSecret` / `secretKey` | empty, `admission` | serve's box admission Secret (above) |
 | `serve.runtimesToml` | empty | Mounted read-only, `LIGUS_RUNTIMES_FILE` |
 | `serve.mcpToml`, `serve.dashboardToml` | empty | Mounted read-only (`LIGUS_MCP_CONFIG`, `LIGUS_DASHBOARD_FILE`) |
 | `serve.workspaceSecrets`, `serve.agentEnv` | empty | Secrets, above |
 | `serve.ntfy.*` | off | Notifications |
 | `serve.persistence.*` | 5Gi, `ReadWriteOncePod` | Use an encrypted StorageClass. RWOP needs a CSI driver; `ReadWriteOnce` allows two pods on one node |
 | `serve.home.*` | 2Gi | `HOME`, its own volume |
-| `worker.enabled` / `instances[]` / `permissionMode` | off, `[]` | Named worker hosts: `{name, permissionMode?, resources?}` |
+| `worker.enabled` / `instances[]` / `permissionMode` | off, `[]` | Named worker hosts: `{name, admission?: {existingSecret, secretKey?}, permissionMode?, resources?}`; each needs its own admission |
 | `agentSandbox.require` / `tier` / `preflight.*` | on, `landlock`, on | The agent sandbox, above |
 | `mcp.servers[]` | `[]` | `name`, `image` (pinned by digest; a tag needs `allowUnpinned: true`), `args`, `port`, `env`, `internetHttps` (default on), `egress`, `resources`, `podSecurityContext` / `securityContext` (replace the chart's UID 65532 and read-only root for images that need it) |
 | `modelGateways[]` | `[]` | LLM gateways serve and workers may use: `name`, `url`, `api`, `auth`, `caSecret`, `allowPlaintext`, `attribution`, `networkPolicy` (Model gateways, above) |

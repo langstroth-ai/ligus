@@ -256,7 +256,8 @@ nav:
           - langstroth-auth with Dex: operate/deploy/ligus-auth-dex.md
           - Server-side membership: operate/ops/server-side-membership.md
       - Hosts:
-          - Running ligus serve as your own device: operate/ops/serve-box.md
+          - Running ligus serve: operate/ops/serve-box.md
+          - Admitting a box: operate/ops/admitting-a-box.md
           - Headless agents & setups: operate/concepts/headless-agents.md
           - Repos on the home host: operate/ops/serve-repos.md
           - Remote access for your phone: operate/networking/remote-access.md

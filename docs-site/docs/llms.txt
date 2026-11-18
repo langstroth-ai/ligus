@@ -97,7 +97,8 @@ Documentation: https://docs.langstroth.ai/ — pages below are the canonical ref
 
 ## Operating Langstroth: Hosts: ligus serve and worker
 
-- [Running ligus serve as your own device](https://docs.langstroth.ai/operate/ops/serve-box/): `ligus serve enroll`, host liveness, apply-on-approve, and the 1.16 sync privacy upgrade note.
+- [Running ligus serve](https://docs.langstroth.ai/operate/ops/serve-box/): the box as its own service member, host liveness, apply-on-approve, and the 1.16 sync privacy upgrade note.
+- [Admitting a box](https://docs.langstroth.ai/operate/ops/admitting-a-box/): admit a serve or worker box as its own service member from the desktop, the phone, a Kubernetes Secret or a headless Admin.
 - [Headless agents & setups](https://docs.langstroth.ai/operate/concepts/headless-agents/): Enrolling a headless agent/worker on a remote box via the CLI.
 - [Repos on the home host](https://docs.langstroth.ai/operate/ops/serve-repos/): The git checkouts agents on a `ligus serve` box work on, picked from the phone.
 - [Remote access for your phone](https://docs.langstroth.ai/operate/networking/remote-access/): The relay tunnel, `ligus pair`, `ligus phones`, `ligus remote`, self-hosted relays and push.

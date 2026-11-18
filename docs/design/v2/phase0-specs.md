@@ -92,6 +92,11 @@ Everything that changes signed or wire semantics before 2.0 landed in Phase A (b
 | Service members (item 6) | `ActorKind::Service` | At most Contributor; no passkey, no presence, no set decisions; applies only on request; never a human approval; its stamp must say Service |
 | Equivocation (review P-A2c) | (no change) | Two envelopes under one event id on one log with different signer, signature or signed preimage are both denied, in any arrival order (`events::split_equivocations`); the store keeps the second as evidence (`equivocations` table, never pushed) |
 
+**Phase B additions (2026-11-17, branch `phaseB/service-members`).** Additive only, no new domain string, no new kind:
+- `JoinApproved.admission` (`{kind, expiresMs, accountId?}`, left out when absent; golden vector `joinApprovedAdmission`): a **box admission**. Fold rules (`hive_core::admission`): issued on the config log for a fresh `invite:<id>` subject by an Admin with presence (a phone may sign one with its own key; the phone tier allows nothing else about membership); `kind` must be `service`; expiry after issue and within 7 days of the issuer's timestamp; one admission per invite, and a person invite's id can't become one (or the reverse). Redemption: a self-add whose `actor.kind` is `service`, at most Contributor, signed no later than `expiresMs` (the redeemer's signed timestamp: a residual), by the bound account when one is named; a `service` self-add needs a box admission; an existing member re-adding itself can't spend one.
+- Service members also never cut (remove, demote, revoke another account's device) and never admit (`MemberAdded` of another, `JoinApproved`), on top of the Phase A rules.
+- Boxes (`ligus serve`, `ligus worker`) are always service members; they sync first and never found a workspace. `ligus serve enroll` and `LIGUS_SERVE_OWNER` are removed; the delegated-device fold rules stay (frozen wire) but no 0.1 client produces a delegated host.
+
 **Deliberately additive later.** Repo aliases and `WorkspaceHostAliasesSet` (repos review R2: a new kind with presence and disjointness; an older client ignores it and matches less). A non-Secure-Enclave phone key type or another certificate algorithm (a new `SigAlg` value; an older client then doesn't trust that device, which fails closed). The ligus-auth side of phone revocation (Phase D: the signed `DeviceRevoked` is the notice it honours).
 
 ---
@@ -539,7 +544,7 @@ pub kid: Option<String>,   // first 8 bytes (16 hex) of key_commitment
   - This closes K2, where today the AEAD failure is classified `Malformed` and skipped forever (`sync_engine.rs:250-256`).
 - **Recipients** are every non-revoked certified device of a current member's account with a `DeviceKeyAgreementPublished` (`RosterState::rotation_recipients`). A serve or worker box gets the key only as a device of a member (its owner's enrolled device, or its own service member's device); a host an agent is merely bound to is **not** a recipient, or a removed member's box still hosting an agent would get every later key. Regression tests: `rotations_seal_only_to_current_members_devices` (core) and `removed_members_device_is_not_a_recipient_through_an_agent_host` (keyring).
   - Recipients are no longer looked up in the relay directory `ka_public`, which was the K1 outsider vector (review §7.9).
-  - `DeviceKeyAgreementPublished` is emitted once per device on first 2.0 launch, and by `ligus serve enroll` and `ligus worker` on startup. CLI hosts get their own X25519 keypair in the vault (B.2).
+  - `DeviceKeyAgreementPublished` is emitted once per device on first 2.0 launch, and by `ligus serve` and `ligus worker` on startup (each its own service member since Phase B). CLI hosts get their own X25519 keypair in the vault (B.2).
 - **Sealing epoch.** Sealing uses `seal_epoch = highest authorized version`. If there is none, sealing falls back as follows:
   1. the pinned legacy epoch (B.1.5);
   2. then epoch 0 (passphrase).
