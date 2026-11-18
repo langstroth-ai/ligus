@@ -1461,14 +1461,14 @@ fn fold_log(
     // (fail closed).
     if envelopes.iter().any(|e| matches!(e.payload, SessionEvent::AdmissionClosed { .. })) {
         loop {
-            let closed = if deny.is_empty() {
-                pass1.as_ref().map(|s| s.guards.closed_admissions.clone()).unwrap_or_default()
+            let (closed, invites) = if deny.is_empty() {
+                pass1.as_ref().map(|s| (s.guards.closed_admissions.clone(), s.guards.service_invites.clone())).unwrap_or_default()
             } else {
                 fold_pass(envelopes, trusted_founder, trusted_workspace, workspace, None, None, LeftOut { cut: &deny, bounds, copies })
-                    .map(|s| s.guards.closed_admissions)
+                    .map(|s| (s.guards.closed_admissions, s.guards.service_invites))
                     .unwrap_or_default()
             };
-            let more = crate::admission::closure_denials(envelopes, &closed, copies);
+            let more = crate::admission::closure_denials(envelopes, &closed, &invites, copies);
             if more.is_subset(&deny) {
                 break;
             }
