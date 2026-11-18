@@ -56,18 +56,26 @@ pub const MAX_WATERMARK_ENTRIES: usize = 4096;
 /// At most this many heads per entry.
 pub const MAX_HEADS: usize = 8;
 
-/// One log's signer chains: event id → (signer, prev).
+/// One chain link: an event's signer and the `prev` it names.
+type Link = (Option<Uuid>, Option<Uuid>);
+
+/// One log's signer chains: event id → each (signer, prev) under it (one,
+/// unless signers' copies share the id, see [`crate::copies`]).
 #[derive(Debug, Default, Clone)]
 pub struct Chains {
-    links: BTreeMap<Uuid, (Option<Uuid>, Option<Uuid>)>,
+    links: BTreeMap<Uuid, Vec<Link>>,
 }
 
 impl Chains {
     pub fn of(envelopes: &[&SessionEventEnvelope]) -> Self {
-        let links = envelopes
-            .iter()
-            .map(|e| (e.event_id, (e.signer_device_id, e.actor_stamp.as_ref().and_then(|s| s.prev))))
-            .collect();
+        let mut links: BTreeMap<Uuid, Vec<Link>> = BTreeMap::new();
+        for e in envelopes {
+            let link = (e.signer_device_id, e.actor_stamp.as_ref().and_then(|s| s.prev));
+            let v = links.entry(e.event_id).or_default();
+            if !v.contains(&link) {
+                v.push(link);
+            }
+        }
         Self { links }
     }
 
@@ -81,13 +89,12 @@ impl Chains {
             if gaps.contains(&id) {
                 continue;
             }
-            let Some((s, prev)) = self.links.get(&id) else { continue };
-            if *s != Some(signer) || !out.insert(id) {
+            let Some(links) = self.links.get(&id) else { continue };
+            let prevs: Vec<Option<Uuid>> = links.iter().filter(|(s, _)| *s == Some(signer)).map(|(_, p)| *p).collect();
+            if prevs.is_empty() || !out.insert(id) {
                 continue;
             }
-            if let Some(p) = prev {
-                stack.push(*p);
-            }
+            stack.extend(prevs.into_iter().flatten());
         }
         out
     }

@@ -462,8 +462,14 @@ pub struct ConfigTimeline {
     at: Vec<u32>,
     /// `states[0]` is the base seed's roster.
     states: Vec<Arc<RosterState>>,
-    /// Every config event this device holds (folded or not) → its lamport.
-    held: HashMap<Uuid, u64>,
+    /// Every config event this device holds (folded or not) → its lamports
+    /// (one per kept copy: two signers' copies of one id can sit at two
+    /// lamports, see [`crate::copies`]).
+    held: HashMap<Uuid, Vec<u64>>,
+    /// Who can sign under each device and agent key id, from every
+    /// certificate on the log ([`crate::copies::SignerDirectory`]): what a
+    /// chat fold tells copies of one id apart by.
+    signers: Arc<crate::copies::SignerDirectory>,
     /// Every rotation body on the log, authorized or not: keys a device can
     /// open from these are read-only candidates (B1; never sealed under
     /// unless authorized).
@@ -492,6 +498,9 @@ pub enum CutKind {
 pub struct Cut {
     /// The cut event's canonical key (a config position).
     pub key: (u64, Uuid),
+    /// Which copy of its id the cut event is ([`crate::copies::CopyRef`]):
+    /// `0` unless another signer's copy shares the id.
+    pub copy: u32,
     pub kind: CutKind,
     /// For a removal: the agent keys of agents the member owned there.
     pub agent_keys: BTreeSet<Uuid>,
@@ -509,13 +518,20 @@ impl Cut {
         }
     }
 
-    /// The events of one log this cut's watermark covers (held by its author).
-    pub fn covered(&self, log: Uuid, chains: &crate::watermark::Chains) -> BTreeSet<Uuid> {
+    /// The events of one log this cut's watermark covers (held by its
+    /// author), as `(signer, event id)`: an id names a signer's own event.
+    pub fn covered(&self, log: Uuid, chains: &crate::watermark::Chains) -> BTreeSet<(Option<Uuid>, Uuid)> {
         let mut out = BTreeSet::new();
         for w in self.watermark.iter().filter(|w| w.log == log) {
-            out.extend(chains.ancestors(w.signer, &w.heads, &w.gaps));
+            out.extend(chains.ancestors(w.signer, &w.heads, &w.gaps).into_iter().map(|id| (Some(w.signer), id)));
         }
         out
+    }
+
+    /// Whether `env` (the copy `copy` of its id) sorts before this cut in
+    /// the fold's order.
+    pub fn is_before(&self, env: &SessionEventEnvelope, copy: u32) -> bool {
+        (env.canonical_key(), copy) < (self.key, self.copy)
     }
 
     /// The config position the cut's later events are judged at.
@@ -532,7 +548,20 @@ impl ConfigTimeline {
 
     /// Note an event of the config log this device holds (folded or not).
     pub fn note_held(&mut self, event_id: Uuid, lamport: u64) {
-        self.held.insert(event_id, lamport);
+        let l = self.held.entry(event_id).or_default();
+        if !l.contains(&lamport) {
+            l.push(lamport);
+        }
+    }
+
+    /// Record who can sign on this workspace (see [`crate::copies`]).
+    pub fn set_signers(&mut self, signers: crate::copies::SignerDirectory) {
+        self.signers = Arc::new(signers);
+    }
+
+    /// Who can sign on this workspace, from the config log's certificates.
+    pub fn signers(&self) -> &crate::copies::SignerDirectory {
+        &self.signers
     }
 
     /// Note a rotation body seen on the log (authorized or not).
@@ -589,6 +618,7 @@ impl ConfigTimeline {
         }
         self.states[0].fingerprint().hash(&mut h);
         self.cuts.hash(&mut h);
+        self.signers.hash(&mut h);
         self.fingerprint = h.finish().max(1);
         self
     }
@@ -634,13 +664,13 @@ impl ConfigTimeline {
     pub fn at(&self, frontier: CfgFrontier) -> Result<&RosterState, Option<HoldReason>> {
         match self.held.get(&frontier.event_id) {
             None => {
-                let newest = self.held.values().copied().max().unwrap_or(0);
+                let newest = self.held.values().flatten().copied().max().unwrap_or(0);
                 if !self.held.is_empty() && (frontier.lamport < newest || frontier.lamport > newest.saturating_add(FRONTIER_SLACK)) {
                     return Err(None);
                 }
                 return Err(Some(HoldReason::ConfigFrontierAhead));
             }
-            Some(l) if *l != frontier.lamport => return Err(None),
+            Some(l) if !l.contains(&frontier.lamport) => return Err(None),
             Some(_) => {}
         }
         if self.states.is_empty() {

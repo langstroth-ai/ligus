@@ -78,7 +78,10 @@ a removed account also needs an Admin to re-add it; a removed member's new
 events are refused on every device (but see the backdated-frontier
 limitation below). They can't post as another member: an event whose stamp
 names an account its signing device isn't certified for is quarantined, and
-the author gate gives it no role. After removal with key rotation they can't read new
+the author gate gives it no role. Nor can they (or anyone holding the key)
+erase someone else's event by publishing another envelope under its id: only
+the same signer's two copies are an equivocation (see
+[Equivocation](#known-limitations), item 25). After removal with key rotation they can't read new
 traffic or attachments on any host, old-key writes from them are refused,
 and a box enrolled for them (even one still hosting an agent) gets no new
 key.
@@ -508,11 +511,31 @@ it.
     before.
 25. **Equivocation is caught where both copies meet.** Event ids are
     chosen by their author, so a signer can publish two different envelopes
-    under one id. A device that holds both denies both, whatever order they
-    came in, and coverage never passes through that id; but a device only
-    learns of it when the second copy reaches it (the relay keeps the first
-    one it saw), so devices can disagree until both copies have reached
-    them.
+    under one id. A device that holds both denies every copy of that
+    signer under the id, whatever order they came in, and coverage never
+    passes through them; but a device only learns of it when the second
+    copy reaches it, so devices can disagree until both copies have reached
+    them. Anyone else can also publish an envelope under a real event's id,
+    and that is not an equivocation: an unsigned copy is refused at ingest,
+    a copy no certified key verifies never counts against a verified one,
+    and a copy signed by someone else's own key is their own event, folded
+    beside the real one and judged as theirs. What remains:
+    - **Before the certificate arrives.** Until the certificate of the
+      real event's signer has reached a device, the real copy is no more
+      verified there than a forged one signed by an unknown device, and
+      both are left out (or, if the forger's device is certified and the
+      real one's isn't yet, the forger's copy folds as the forger's own
+      event). The real event folds once the certificate arrives.
+    - **A closed admission's named redemption.** A closure names the
+      redemption it saw by event id. If someone holding the admission code
+      copies that id with a redemption of their own, the closure names
+      neither: both are refused and the Admin issues a new admission.
+    - **Readers outside the fold.** A few device-local lookups read raw
+      events rather than the fold (who signed a proposal, a flow answer's
+      author). They read the first copy stored under an id, so a copy that
+      arrived first can still mislead them, as an event with a fresh id
+      could. Founder verification, the author-role chain and contact
+      lookups read every copy and verify.
 26. **A human click runs others' text at the clicker's tier.** Some
     actions place text someone else wrote into a prompt that runs as the
     person who clicked: **Send back to revise** (the review thread),
@@ -666,6 +689,8 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 | Host (board pickup) | Automatic board pickup posted the item's task (a proposal's or failed stage's title, written by whoever filed it) as the host's own user, so the author gate's own-user rule ran it at Owner: anyone could title a proposal with instructions an Owner's desktop then ran at full tier | An automatic pickup is posted as a runtime effect with no role, below every floor; a manual pickup is unchanged. Verified by `auto_pickup_is_not_the_host_user_speaking` |
 | Core (event clocks) | An author chose an event's lamport, so an event drafted early and withheld (by its author, or by a box holding a phone-signed action) could be given a huge lamport and sort after genuinely newer events: a stale approve beat a later reject, a delayed `ChatLockdownCleared` lifted a newer lockdown (it cleared every lockdown on the chat), and a lamport near `u64::MAX` dragged every honest clock after it | A stamp names its log head and the lamport is one past it, checked by every fold and by the phone before it signs; an event out of bounds is refused and is no position. A clear names the raises it lifts. Between one person's concurrent votes a rejection wins. Verified by `prop_no_honest_history_is_denied`, `prop_an_inflated_lamport_changes_nothing_else`, `a_withheld_vote_sorts_where_it_was_drafted`, `a_withheld_clear_lifts_only_what_its_author_saw` and `between_concurrent_votes_of_one_person_a_rejection_wins` |
 | Core (chain workspace) | The trigger chain judged each event on the config log of the workspace that event named, so an event in a chat stamped with another workspace its author owned was judged as Owner there; the chain's config cache answered every workspace with the first one it loaded | Events stamped with a workspace other than the chat's fail the chain closed, a workflow run's first record must name the chat's workspace, and the cache is keyed by workspace. Hardening: such an event doesn't fold into the chat today. Verified by `an_event_stamped_with_another_workspace_fails_closed` |
+
+| Core (forged copies) | Anyone holding the workspace key could erase any event: an unsigned envelope (or one no key verifies, or one signed by a device of their own) under a real event's id was accepted, recorded as an equivocation, and both copies were then denied on every device, so a `MemberRemoved`, a reject vote, a lockdown raise or the config seed vanished | Only the same signer's two verified copies are an equivocation. Unsigned envelopes are refused at ingest; a copy no certified key verifies never displaces a verified one; another signer's copy under the id is their own event, and every fold structure (denials, coverage, cut identity, verdicts, the frontier's lamport) is keyed by copy. Every reader that must not be blinded by a copy that arrived first reads all copies. Verified by `a_forged_copy_never_erases_an_honest_title_change`, `a_forged_copy_never_erases_a_removal`, `a_forged_copy_of_the_seed_leaves_the_workspace_standing`, `prop_forged_copies_never_erase_honest_events`, `the_reviewers_probe_an_honest_title_change_survives_a_forged_copy_in_either_order` and `prop_devices_fold_the_honest_log_whatever_arrives_first` |
 
 ### Open {#findings-open}
 

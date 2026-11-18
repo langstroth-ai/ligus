@@ -520,8 +520,8 @@ never needs to open the database or decrypt the log. Each line is
   and file counts, version chain), `workflowRun` and `workflowStage` (status,
   attempts, dependencies), `agent` and `host` (the roster, from the
   workspace config log) and `lease`. A chat is also observed again when its
-  fold changed without a row in its own log: an equivocating copy of one of
-  its events arrived (both copies are denied), or the workspace's config log
+  fold changed without a row in its own log: another copy under one of its
+  event ids arrived (the fold decides which copies count), or the workspace's config log
   gained a trust event (membership, revocation, rules, agents).
   `timeUnixMs` is when the export looked; `seq` is the event-log row it
   looked at, shared by every state line of one export.

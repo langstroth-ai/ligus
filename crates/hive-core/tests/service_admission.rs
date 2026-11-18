@@ -592,3 +592,40 @@ fn an_admission_for_a_join_request_admits_only_that_boxs_device() {
     let bad = issue(&mut w, "adm", Uuid::new_v4(), Admission::service(now_ms() + HOUR_MS, None, key().public()).for_device(&[1; 3]));
     assert_eq!(w.verdict(bad), Verdict::Denied);
 }
+
+/// A holder of the code copies the box's redemption id with a redemption of
+/// their own (signed by their own device, so it is their own event, not an
+/// equivocation): a closure naming that id can't tell which one its closer
+/// saw, so it admits neither (fail closed), and never the thief.
+#[test]
+fn a_thief_copying_the_named_redemptions_id_is_never_admitted() {
+    // Copies of one id from two signers fold in the order of their signer
+    // ids: make the thief's sort first (the case a closure naming the id
+    // would otherwise admit).
+    let mut w = (0..256)
+        .map(|_| world())
+        .find(|w| w.people["box2"].device_id < w.people["box"].device_id)
+        .expect("a world where the thief's device id sorts first");
+    let id = Uuid::new_v4();
+    issue(&mut w, "adm", id, Admission::service(now_ms() + HOUR_MS, None, key().public()));
+    // The thief published its identity early (its chain link is older).
+    w.publish_identity("box2");
+    let ok = redeem(&mut w, "box", id, WorkspaceRole::Contributor, None);
+    assert_eq!(w.verdict(ok), Verdict::Allowed);
+    let close = w.push_bare("adm", SessionEvent::AdmissionClosed { invite: id, redeemed: Some(ok) });
+    assert_eq!(w.verdict(close), Verdict::Allowed);
+    // The thief's own redemption, under the box's redemption id.
+    let m = w.member_of("box2", WorkspaceRole::Contributor);
+    let proof = key().prove(w.wid, id, "box2", w.people["box2"].device_id);
+    let orig = w.cfg.iter().find(|e| e.event_id == ok).unwrap().clone();
+    let mut copy = w.draft("box2", None, SessionEvent::MemberAdded { member: m, invite: Some(id), proof: Some(proof) }, None);
+    copy.event_id = ok;
+    copy.lamport = orig.lamport;
+    if let (Some(s), Some(o)) = (copy.actor_stamp.as_mut(), orig.actor_stamp.as_ref()) {
+        s.log_head = o.log_head;
+    }
+    w.finish(&mut copy, "box2", None);
+    w.push_env(None, copy);
+    let roster = w.roster();
+    assert!(!roster.members.contains_key("box2"), "the thief was admitted through a closed admission");
+}

@@ -326,14 +326,14 @@ mod tests {
     }
 
     fn sample_envelope(seq: i64) -> SessionEventEnvelope {
-        SessionEventEnvelope::new(
+        crate::event_store::fixture_signed(&SessionEventEnvelope::new(
             Uuid::nil(),
             Uuid::nil(),
             seq,
             SessionEvent::MessageAppended {
                 message: ChatMessage::new(MessageRole::User, "u", "hello"),
             },
-        )
+        ))
     }
 
     #[tokio::test]
@@ -376,12 +376,12 @@ mod tests {
         let room = Uuid::new_v4();
         let local = Uuid::new_v4();
         let msg = |ws: Uuid, body: &str| {
-            SessionEventEnvelope::new(
+            crate::event_store::fixture_signed(&SessionEventEnvelope::new(
                 Uuid::new_v4(),
                 ws,
                 1,
                 SessionEvent::MessageAppended { message: ChatMessage::new(MessageRole::User, "Alex", body) },
-            )
+            ))
         };
         let store_a = EventStore::open_in_memory().unwrap();
         let shared = msg(room, "team");

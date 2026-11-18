@@ -367,18 +367,24 @@ pub fn founder_seed<'a>(envelopes: &'a [SessionEventEnvelope], pin: &FounderPin)
     let founder = account.to_string();
     let mut ordered: Vec<&SessionEventEnvelope> = envelopes.iter().collect();
     ordered.sort_by_key(|e| e.canonical_key());
-    let base = ordered.into_iter().find(|e| match &e.payload {
-        hive_core::SessionEvent::SessionSnapshot { session } => {
-            session.creator_actor_id == founder && e.actor_stamp.as_ref().is_some_and(|s| s.actor.id == founder)
-        }
-        _ => false,
-    })?;
-    let device = base.signer_device_id?;
-    let device_key = roster.public_key(device)?;
-    (roster.device_signs_for(device, account)
-        && !roster.is_revoked(device)
-        && hive_core::crypto::verify_envelope(base, device_key).is_ok())
-    .then_some(base)
+    // The first one that verifies: a forged copy under the seed's id (or any
+    // snapshot claiming the founder) sorting first doesn't hide the real one.
+    ordered.into_iter().find(|e| {
+        let claims = match &e.payload {
+            hive_core::SessionEvent::SessionSnapshot { session } => {
+                session.creator_actor_id == founder && e.actor_stamp.as_ref().is_some_and(|s| s.actor.id == founder)
+            }
+            _ => false,
+        };
+        claims
+            && e.signer_device_id.is_some_and(|device| {
+                roster.public_key(device).is_some_and(|device_key| {
+                    roster.device_signs_for(device, account)
+                        && !roster.is_revoked(device)
+                        && hive_core::crypto::verify_envelope(e, device_key).is_ok()
+                })
+            })
+    })
 }
 
 /// One workspace's roster from that workspace's own trust events (P0.4). With
@@ -420,7 +426,9 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
                 .map(|e| (*e).clone())
                 .collect();
             let (projected, timeline) = hive_core::project_config(&envs, founder.as_deref(), None);
-            let decisions = hive_core::fold_decisions(&envs, founder.as_deref(), None, hive_core::WorkspaceAuthz::Unchecked);
+            // By copy: a forged copy under an allowed event's id is not that
+            // event (`hive_core::copies`).
+            let decisions = hive_core::fold_copy_decisions(&envs, founder.as_deref(), None, hive_core::WorkspaceAuthz::Unchecked);
             CfgFold { ws, envs, projected, timeline, decisions }
         })
         .collect();
@@ -551,7 +559,7 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
         // refused (anyone "removing" the founder) removes no one.
         for e in &cfg_envs {
             if let SessionEvent::MemberRemoved { member_id, .. } = &e.payload {
-                if decisions.get(&e.event_id) == Some(&hive_core::Verdict::Allowed) {
+                if decisions.get(e) == Some(hive_core::Verdict::Allowed) {
                     removed_by_ws.entry(ws).or_default().insert(member_id.clone());
                 }
             }
@@ -664,7 +672,7 @@ struct CfgFold {
     envs: Vec<SessionEventEnvelope>,
     projected: Option<hive_core::ChatSession>,
     timeline: hive_core::authz::ConfigTimeline,
-    decisions: std::collections::BTreeMap<Uuid, hive_core::Verdict>,
+    decisions: hive_core::CopyVerdicts,
 }
 
 /// Whether an `AccountKeyRotated` for `account` is left out of the roster:
@@ -677,7 +685,7 @@ fn rotation_gated(cfg: &[CfgFold], env: &SessionEventEnvelope, account: Uuid) ->
         return false;
     }
     let on_config = env.session_id == hive_core::workspace_config_session_id(c.ws);
-    !on_config || c.decisions.get(&env.event_id) != Some(&hive_core::Verdict::Allowed)
+    !on_config || c.decisions.get(env) != Some(hive_core::Verdict::Allowed)
 }
 
 /// One roster per workspace, each folded from that workspace's events only
@@ -879,23 +887,19 @@ pub fn verdict_for(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verd
     if !key_publication_ok(env) {
         return Verdict::Quarantine(QuarantineReason::Impersonation);
     }
-    let Some(device_id) = env.signer_device_id else {
-        // A genuine event is ALWAYS signed — `append_signed` sets the signature and
-        // the actor stamp together — so an unsigned envelope that nonetheless
-        // carries an `actor_stamp` is provably forged: it claims an author with no
-        // signature to prove it. It must be QUARANTINED, not merely held/accepted;
-        // otherwise the default (Relay) ingest accepts it and projection-authz +
-        // seed-selection trust the unverified stamped author — a workspace takeover
-        // (a forged `MemberRoleChanged`/`MemberRemoved` or founder-stamped snapshot
-        // stamped as the real Owner). An unsigned event with NO stamp claims no
-        // author, so it stays the lenient `Unverifiable`.
-        return if env.actor_stamp.is_some() {
-            Verdict::Quarantine(QuarantineReason::Unsigned)
-        } else if entrance_closed(roster, env) {
-            Verdict::Unverifiable(QuarantineReason::PendingApproval)
-        } else {
-            Verdict::Unverifiable(QuarantineReason::Unsigned)
-        };
+    let Some(device_id) = env.signer_device_id.filter(|_| env.signature.is_some()) else {
+        // A genuine event is ALWAYS signed: every write goes through
+        // `append_signed` (or an agent's or phone's signing path), which sets
+        // the signature and the actor stamp together, and nothing unsigned is
+        // ever pushed. So an unsigned envelope is provably not an event any
+        // device wrote. With a stamp it claims an author with no signature to
+        // prove it (projection-authz and seed selection would trust that
+        // author: a workspace takeover). Without one it claims no author, but
+        // it can still carry a real event's id: a forged copy (review:
+        // erase-by-forgery), or an event of its own that every member's fold
+        // has to carry. Either way it is QUARANTINED (refused, kept only as a
+        // lamport witness), never accepted.
+        return Verdict::Quarantine(QuarantineReason::Unsigned);
     };
     // A3: an agent's own key (certified by its host, still bound to it).
     if let Some((agent_key, agent_id)) = roster.agent_keys.get(&device_id) {
@@ -1321,8 +1325,9 @@ mod tests {
             "Relay-mode ingest must quarantine a forged unsigned stamped event, not Accept it",
         );
 
-        // Sanity: an unsigned event with NO stamp claims no author, so it stays the
-        // lenient Unverifiable — genuinely unauthored events aren't newly dropped.
+        // An unsigned event with NO stamp claims no author, but it can carry a
+        // real event's id (review: erase-by-forgery) and nothing honest is ever
+        // unsigned: it is quarantined too.
         let unstamped = env(
             11,
             SessionEvent::MessageAppended {
@@ -1331,7 +1336,7 @@ mod tests {
         );
         assert_eq!(
             verdict_for(&roster, &unstamped),
-            Verdict::Unverifiable(QuarantineReason::Unsigned)
+            Verdict::Quarantine(QuarantineReason::Unsigned)
         );
     }
 
@@ -1426,7 +1431,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_and_unsigned_are_unverifiable_not_dropped() {
+    fn unknown_is_unverifiable_not_dropped_and_unsigned_is_refused() {
         let alice = principal();
         let roster = build_roster(&trust_events(&alice, 1));
 
@@ -1438,11 +1443,11 @@ mod tests {
             Verdict::Unverifiable(QuarantineReason::UnknownDevice)
         );
 
-        // Unsigned → held, not rejected.
+        // Unsigned → refused: no device writes one.
         let unsigned = env(101, SessionEvent::SessionTitleChanged { title: "x".into() });
         assert_eq!(
             verdict_for(&roster, &unsigned),
-            Verdict::Unverifiable(QuarantineReason::Unsigned)
+            Verdict::Quarantine(QuarantineReason::Unsigned)
         );
     }
 

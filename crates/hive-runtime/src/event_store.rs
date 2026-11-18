@@ -242,11 +242,11 @@ impl EventStore {
                 check_json  TEXT NOT NULL
             );
 
-            -- Review P-A2c: a verified envelope that arrived under an event id
-            -- this store already holds, on the same log, with different
-            -- signed content (an equivocation). Kept as evidence and folded
-            -- with the log, so both copies are denied whichever came first.
-            -- Never pushed.
+            -- Another copy under an event id this store already holds, on
+            -- the same log, with different signed content. Kept whichever
+            -- arrived first and folded with the log: the fold decides which
+            -- copies count (hive_core::copies; only the same signer's second
+            -- copy is an equivocation, review P-A2c). Never pushed.
             -- Device-local, never synced: the apply requests this host
             -- started (Phase B). Claimed before any git work, so a request is
             -- applied at most once here even across a crash or a restart.
@@ -717,10 +717,14 @@ impl EventStore {
         }))
     }
 
-    /// Whether an envelope with this `event_id` is already stored (dedup).
-    /// Keep `env` as evidence when the stored envelope under its id, on the
-    /// same log, is a different event (review P-A2c). A copy that only
-    /// travelled or was re-sealed is not one.
+    /// Keep `env` beside the stored envelope under its id when it is a
+    /// different copy on the same log (one that only travelled or was
+    /// re-sealed is not). Which copies count is the fold's decision
+    /// (`hive_core::copies`): only a verified copy counts against a verified
+    /// one, and only the same signer's second copy is an equivocation (review
+    /// P-A2c). An unsigned copy of a signed event can never count, so it is
+    /// refused here and kept only as a lamport witness (ingest refuses
+    /// unsigned envelopes anyway; this covers every other path in).
     fn note_equivocation(&mut self, env: &SessionEventEnvelope, sealed_epoch: Option<u32>) -> Result<()> {
         let stored: Option<String> = self
             .conn
@@ -729,6 +733,9 @@ impl EventStore {
         let Some(stored) = stored.and_then(|j| serde_json::from_str::<SessionEventEnvelope>(&j).ok()) else { return Ok(()) };
         if !hive_core::events::equivocates(&stored, env) {
             return Ok(());
+        }
+        if env.signature.is_none() && stored.signature.is_some() {
+            return self.note_lamport_witness(env);
         }
         self.conn.execute(
             "INSERT OR IGNORE INTO equivocations (event_id, session_id, workspace_id, kind, envelope_json, sealed_epoch) \
@@ -742,7 +749,7 @@ impl EventStore {
                 sealed_epoch.map(i64::from),
             ],
         )?;
-        tracing::warn!(event_id = %env.event_id, "two different envelopes under one event id: both are denied");
+        tracing::warn!(event_id = %env.event_id, "another copy under a stored event id: kept beside it; the fold decides which counts");
         Ok(())
     }
 
@@ -804,8 +811,12 @@ impl EventStore {
     }
 
     /// [`EventStore::ingest`], recording the key epoch the body arrived sealed
-    /// under (B1). The first copy of an event wins: a re-seal by an old-key
-    /// holder only repeats its `event_id`.
+    /// under (B1). The first arrival of one copy keeps its epoch: a re-seal
+    /// by an old-key holder only repeats it.
+    ///
+    /// Another copy under an id this store holds is kept beside it (the
+    /// `equivocations` table), whichever arrived first: the fold decides
+    /// which copies count (`hive_core::copies`), so arrival order never does.
     pub fn ingest_sealed(&mut self, env: &SessionEventEnvelope, sealed_epoch: Option<u32>) -> Result<bool> {
         if self.has_event(env.event_id)? {
             self.note_equivocation(env, sealed_epoch)?;
@@ -851,6 +862,20 @@ impl EventStore {
         )?;
         tx.commit()?;
         Ok(true)
+    }
+
+    /// Every copy this device holds of a session's events: its log in
+    /// sequence order, then the other copies of ids it holds (the
+    /// `equivocations` table: copies under an id it already held, kept
+    /// whichever arrived first, see `hive_core::copies`). For a reader that
+    /// verifies what it relies on and must not be blinded by a forged copy
+    /// that happened to arrive first.
+    pub fn list_copies(&self, session_id: Uuid) -> Result<Vec<SessionEventEnvelope>> {
+        self.query_envelopes(
+            "SELECT envelope_json FROM (SELECT 0 AS t, sequence AS o, envelope_json FROM events WHERE session_id = ?1 \
+             UNION ALL SELECT 1, row_id, envelope_json FROM equivocations WHERE session_id = ?1) ORDER BY t, o",
+            [session_id.to_string()],
+        )
     }
 
     /// All envelopes for a session in sequence order.
@@ -1540,7 +1565,7 @@ impl EventStore {
     /// DM never has one.
     pub fn config_founded_at(&self, workspace_id: Uuid) -> Result<Option<hive_core::Timestamp>> {
         let Some(pin) = self.workspace_pin(workspace_id)? else { return Ok(None) };
-        let envs = self.list(hive_core::workspace_config_session_id(workspace_id))?;
+        let envs = self.list_copies(hive_core::workspace_config_session_id(workspace_id))?;
         Ok(crate::envelope_verifier::founder_seed(&envs, &pin).map(|e| e.timestamp))
     }
 
@@ -1557,7 +1582,9 @@ impl EventStore {
         signer_key: &dyn Fn(Uuid) -> Option<Vec<u8>>,
     ) -> Result<Option<String>> {
         let envs = self.query_envelopes(
-            "SELECT envelope_json FROM events WHERE workspace_id = ?1 AND envelope_json LIKE '%\"contact\":\"%' \
+            "SELECT envelope_json FROM (SELECT row_id, workspace_id, envelope_json FROM events \
+             UNION ALL SELECT row_id + 9000000000000, workspace_id, envelope_json FROM equivocations) \
+             WHERE workspace_id = ?1 AND envelope_json LIKE '%\"contact\":\"%' \
              ORDER BY row_id DESC LIMIT 200",
             [workspace_id.to_string()],
         )?;
@@ -1865,6 +1892,17 @@ pub(crate) fn fixture_next(env: &SessionEventEnvelope, log_head: Option<hive_cor
         });
     }
     hive_core::lamport::stamp_next(&mut env, log_head);
+    let kp = hive_core::SigningKeypair::from_seed(&[0x46; 32]).expect("fixture key");
+    hive_core::sign_envelope(&mut env, FIXTURE_DEVICE, &kp);
+    env
+}
+
+/// Tests only: `env` signed as the fixture device, as is (a genuine event is
+/// always signed; ingest refuses an unsigned one).
+#[cfg(test)]
+pub(crate) fn fixture_signed(env: &SessionEventEnvelope) -> SessionEventEnvelope {
+    let mut env = env.clone();
+    env.clear_raw();
     let kp = hive_core::SigningKeypair::from_seed(&[0x46; 32]).expect("fixture key");
     hive_core::sign_envelope(&mut env, FIXTURE_DEVICE, &kp);
     env

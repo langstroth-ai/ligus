@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc ca33ad283cfff548e980b7ef439875242824c22592febabd48ad04762f1fb966 # shrinks to forgeries = [], devices = [(50, 7184765511316575247, 4), (2779470814154215647, 8420631446571426519, 3)]

@@ -283,23 +283,40 @@ pub fn closure_refusal(env: &SessionEventEnvelope, fold: &ChatSession, on_config
 /// self-enrollment through a closed invite but the one each closure names.
 /// `closures` are the allowed closures of a first pass (invite → each
 /// closure's named redemption).
+///
+/// Keyed by copy ([`crate::copies`]): a closure names a redemption by its
+/// event id, and two signers can each hold a copy under one id. A named id
+/// under which more than one redemption of the invite is kept (a holder of
+/// the code copying the box's redemption id) names none of them: which one
+/// the closer saw can't be told, so all are denied (fail closed; the Admin
+/// issues a new admission).
 pub fn closure_denials(
     envelopes: &[SessionEventEnvelope],
     closures: &std::collections::BTreeMap<Uuid, Vec<Option<Uuid>>>,
-) -> std::collections::BTreeSet<Uuid> {
+    copies: &crate::copies::Copies,
+) -> std::collections::BTreeSet<crate::copies::CopyRef> {
     let mut out = std::collections::BTreeSet::new();
     if closures.is_empty() {
         return out;
     }
-    for e in envelopes {
-        let SessionEvent::MemberAdded { member, invite: Some(id), .. } = &e.payload else { continue };
+    let redemption = |e: &SessionEventEnvelope| -> Option<Uuid> {
+        let SessionEvent::MemberAdded { member, invite: Some(id), .. } = &e.payload else { return None };
         let author = e.actor_stamp.as_ref().map(|s| s.actor.id.as_str()).unwrap_or("");
-        if member.id != author {
-            continue;
+        (member.id == author).then_some(*id)
+    };
+    // Redemptions per (invite, event id): more than one is ambiguous.
+    let mut under: std::collections::BTreeMap<(Uuid, Uuid), usize> = std::collections::BTreeMap::new();
+    for e in envelopes {
+        if let Some(invite) = redemption(e) {
+            *under.entry((invite, e.event_id)).or_default() += 1;
         }
-        if let Some(named) = closures.get(id) {
-            if named.iter().any(|n| *n != Some(e.event_id)) {
-                out.insert(e.event_id);
+    }
+    for e in envelopes {
+        let Some(id) = redemption(e) else { continue };
+        if let Some(named) = closures.get(&id) {
+            let ambiguous = under.get(&(id, e.event_id)).is_some_and(|n| *n > 1);
+            if ambiguous || named.iter().any(|n| *n != Some(e.event_id)) {
+                out.insert(copies.kept(e));
             }
         }
     }

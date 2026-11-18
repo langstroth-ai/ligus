@@ -487,7 +487,7 @@ impl ChatService {
     /// with no pin (created here, or the device-local one).
     pub fn founder_verified(&self, workspace_id: Uuid) -> Result<bool> {
         let Some(pin) = self.store.workspace_pin(workspace_id)? else { return Ok(true) };
-        let envs = self.store.list(workspace_config_session_id(workspace_id))?;
+        let envs = self.store.list_copies(workspace_config_session_id(workspace_id))?;
         Ok(crate::envelope_verifier::founder_seed(&envs, &pin).is_some())
     }
 
@@ -2296,14 +2296,18 @@ impl ChatService {
             return Ok(0);
         }
         let envelopes = self.store.config_envelopes(workspace_id)?;
-        let verdicts =
-            hive_core::fold_decisions(&envelopes, self.trusted_founder.as_deref(), self.local_workspace_id, hive_core::WorkspaceAuthz::Unchecked);
+        let verdicts = hive_core::fold_copy_decisions(
+            &envelopes,
+            self.trusted_founder.as_deref(),
+            self.local_workspace_id,
+            hive_core::WorkspaceAuthz::Unchecked,
+        );
         let mut closed = 0;
         for (invite, expires_ms) in open {
             let redeemed = envelopes
                 .iter()
                 .find(|e| {
-                    verdicts.get(&e.event_id) == Some(&hive_core::Verdict::Allowed)
+                    verdicts.get(e) == Some(hive_core::Verdict::Allowed)
                         && matches!(&e.payload, SessionEvent::MemberAdded { member, invite: Some(i), .. }
                             if *i == invite && e.actor_stamp.as_ref().is_some_and(|s| s.actor.id == member.id))
                 })
@@ -2758,7 +2762,8 @@ impl ChatService {
         // Every event on the chain is judged against this chat's own
         // workspace; one stamped with another workspace fails closed.
         let Some(chat_workspace) = self.store.workspace_of(session_id)? else { return Ok(None) };
-        let envs = self.store.list(session_id)?;
+        // Every copy (a forged copy that arrived first doesn't hide a link).
+        let envs = self.store.list_copies(session_id)?;
         let mut cx = RoleCx::default();
         let mut lowest: Option<WorkspaceRole> = None;
         let mut humans = 0usize;
@@ -2963,7 +2968,7 @@ impl ChatService {
     /// This is one message's signers only; a turn's gate is
     /// [`Self::trigger_author_role`], which follows the chain.
     pub fn author_role_at(&self, session_id: Uuid, message_id: Uuid) -> Result<Option<WorkspaceRole>> {
-        let envs = self.store.list(session_id)?;
+        let envs = self.store.list_copies(session_id)?;
         let touching = touching_message(&envs, message_id);
         if !touching.iter().any(|e| matches!(&e.payload, SessionEvent::MessageAppended { .. })) {
             return Ok(None);
@@ -5575,8 +5580,8 @@ mod flow_tests {
     }
 
     /// A chat whose fold changes without a new row in its own log is observed
-    /// again: an equivocating copy of one of its events (both copies are
-    /// denied), or a trust change on its workspace's config log.
+    /// again: another copy under one of its event ids, or a trust change on
+    /// its workspace's config log.
     #[test]
     fn facts_export_reobserves_chats_whose_fold_changed_elsewhere() {
         use crate::facts::{Cursor, Since};
@@ -5594,8 +5599,8 @@ mod flow_tests {
         let first = svc.export_facts_since(Since::UnixMs(0), 1_000).unwrap();
         let c1 = cursor_of(&first);
 
-        // An equivocating copy of the reply's completion lands in the
-        // evidence table, not the log: the chat's fold changed all the same.
+        // Another copy under the reply's completion's id lands in the
+        // copies table, not the log: the chat is observed again.
         let (_, envs) = svc.store.envelopes_after_row(0).unwrap();
         let mut forged = envs.iter().filter(|e| e.session_id == chat.id).last().unwrap().clone();
         forged.payload = SessionEvent::SessionTitleChanged { title: "other".into() };
