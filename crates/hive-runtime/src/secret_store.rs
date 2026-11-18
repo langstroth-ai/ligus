@@ -152,16 +152,12 @@ impl File0600 {
     }
 }
 
-/// Write `bytes` to `path` owner-only and atomically, creating parent dirs
-/// 0700 ([`crate::private_file::write_private_atomic`]).
+/// Write `bytes` to `path` owner-only and atomically, its parent dir made
+/// private ([`crate::private_file::ensure_private_dir`]: 0700 when ours, never
+/// a chmod of a mount root that isn't) ([`crate::private_file::write_private_atomic`]).
 pub fn write_private_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-        }
+        crate::private_file::ensure_private_dir(dir)?;
     }
     crate::private_file::write_private_atomic(path, bytes)
 }
@@ -191,13 +187,12 @@ impl SecretStore for File0600 {
         let path = self.path(id);
         // `secrets/` itself too, not only `secrets/<scope>/`: every dir
         // between the data dir and the file is owner-only.
-        #[cfg(unix)]
+        // The data dir itself is left alone here: it may be a volume's mount
+        // root that isn't ours to chmod.
         if let Some(top) = path.strip_prefix(&self.data_dir).ok().and_then(|r| r.components().next()) {
-            use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
             let top = self.data_dir.join(top);
             if top != path {
-                std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&top)?;
-                std::fs::set_permissions(&top, std::fs::Permissions::from_mode(0o700))?;
+                crate::private_file::ensure_private_dir(&top)?;
             }
         }
         Ok(write_private_atomic(&path, value)?)
@@ -416,12 +411,7 @@ impl SecretStore for SystemdCreds {
         Ok(Some(Zeroizing::new(out.stdout)))
     }
     fn put(&self, id: &SecretId, value: &[u8]) -> Result<(), SecretError> {
-        std::fs::create_dir_all(&self.dir)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&self.dir, std::fs::Permissions::from_mode(0o700))?;
-        }
+        crate::private_file::ensure_private_dir(&self.dir)?;
         let file = self.file(id);
         let tmp = file.with_extension("cred.tmp");
         let name = format!("--name={}", Self::name(id));
@@ -1319,6 +1309,29 @@ mod tests {
         assert_eq!(mode(&data.join("keys")), 0o700);
         assert!(!data.join("secrets/cli/key").exists());
         std::fs::set_permissions(&mount, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    /// The data dir is often a volume's mount root that the box can't chmod
+    /// (root-owned under a pod's fsGroup): storing secrets never chmods it,
+    /// only the private dirs created inside it (0700).
+    #[cfg(unix)]
+    #[test]
+    fn storing_secrets_never_chmods_the_data_dir_itself() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let (mount, data) = (dir.path().join("mount"), dir.path().join("data"));
+        std::fs::create_dir_all(&mount).unwrap();
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o2770)).unwrap();
+        let before = std::fs::metadata(&data).unwrap().permissions().mode() & 0o7777;
+        let store = K8sSecretFile::new(&mount, &data);
+        store.put(&SecretId::new("cli", "ek"), b"[]").unwrap();
+        store.put(&SecretId::new("seed", "device:1"), &[9; 32]).unwrap();
+        File0600::new(&data).put(&SecretId::new("cli", "token"), b"t").unwrap();
+        assert_eq!(std::fs::metadata(&data).unwrap().permissions().mode() & 0o7777, before);
+        assert_eq!(mode(&data.join("secrets")), 0o700);
+        assert_eq!(mode(&data.join("secrets/cli")), 0o700);
+        assert_eq!(mode(&data.join("keys")), 0o700);
     }
 
     /// A stand-in for a CLI backend: a shell script storing values under a

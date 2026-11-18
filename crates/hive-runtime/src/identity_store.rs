@@ -62,14 +62,13 @@ impl FileKeyVault {
 impl KeyVault for FileKeyVault {
     fn store_seed(&self, key_id: &str, seed: &[u8; 32]) -> Result<(), IdentityError> {
         crate::secret_redact::register_bytes(seed);
-        std::fs::create_dir_all(&self.dir)?;
+        crate::private_file::ensure_private_dir(&self.dir)?;
         let path = self.path_for(key_id);
         #[cfg(unix)]
         {
             // Owner-only, whatever the umask: these are private signing keys.
             use std::io::Write;
             use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-            std::fs::set_permissions(&self.dir, std::fs::Permissions::from_mode(0o700))?;
             let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&path)?;
             // `mode` applies only on create: tighten a file left by an older build.
             f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
