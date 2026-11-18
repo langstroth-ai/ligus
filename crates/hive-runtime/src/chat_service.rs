@@ -3927,6 +3927,57 @@ mod tests {
         let _ = mid2;
     }
 
+    /// Lamport witnesses for every refusal: a device that syncs after an
+    /// agent was rebound refuses the agent's earlier reply (its key is
+    /// retired, and no device certificate vouches for an agent key, so it
+    /// isn't "a revoked device's genuine event"). The author's device held
+    /// the reply and counted from it; the next event must still fold on the
+    /// device that refused it, not be held there for good.
+    #[test]
+    fn a_device_that_refuses_a_rebound_agents_reply_still_folds_what_follows() {
+        use crate::relay_client::RelayClient;
+        use crate::sync_engine::SyncEngine;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hive.db");
+        let wid = Uuid::new_v4();
+        let mut svc = svc_on(&path, "x", "Alex");
+        let account = Uuid::new_v4().to_string();
+        svc.set_author_account(account.clone(), "Alex", None);
+        let chat = svc.create_chat("A", wid, "rt").unwrap();
+        svc.set_agent_vault(Box::new(crate::identity_store::FileKeyVault::new(dir.path())));
+        let mut agent = WorkspaceAgent::new("coder", "rt");
+        agent.owner_actor_id = account.clone();
+        let agent_id = agent.id;
+        svc.add_agent(chat.id, wid, agent).unwrap();
+        svc.set_agent_host(wid, agent_id, &svc.device_id().to_string()).unwrap();
+        let mid = svc.begin_assistant_message(chat.id, wid, "coder", "rt", Some(agent_id), None).unwrap();
+        svc.complete_assistant_message(chat.id, wid, mid, "hello").unwrap();
+        let reply = svc.store().list(chat.id).unwrap().into_iter().last().unwrap();
+        assert_eq!(reply.actor_stamp.as_ref().unwrap().actor.kind, hive_core::ActorKind::Agent);
+        svc.set_agent_host(wid, agent_id, "worker-9").unwrap();
+        svc.post_user_message(chat.id, wid, "after the rebind").unwrap();
+        let after = svc.store().list(chat.id).unwrap().into_iter().last().unwrap();
+        assert_eq!(after.actor_stamp.as_ref().unwrap().log_head.map(|h| h.event_id), Some(reply.event_id), "counted from the reply");
+
+        // Another device pulls the whole room after the rebind.
+        let (_, all) = svc.store().envelopes_after_row(0).unwrap();
+        let key = hive_core::derive_workspace_key("room");
+        let seal = |e: &SessionEventEnvelope| {
+            serde_json::to_value(hive_core::e2ee::seal_symmetric(&key, 0, &serde_json::to_vec(e).unwrap()).unwrap()).unwrap()
+        };
+        let batch: Vec<(u64, serde_json::Value)> = all.iter().enumerate().map(|(i, e)| (i as u64 + 1, seal(e))).collect();
+        let mut other = EventStore::open_in_memory().unwrap();
+        let mut eng = SyncEngine::unscoped(RelayClient::new("http://127.0.0.1:0"), Uuid::new_v4().to_string()).with_key(key);
+        eng.apply_fetched(&mut other, &batch).unwrap();
+        assert!(!other.has_event(reply.event_id).unwrap(), "the retired key's reply is refused here");
+        assert!(other.has_event(after.event_id).unwrap());
+        assert_eq!(
+            other.lamport_head(chat.id).unwrap().map(|h| h.event_id),
+            Some(after.event_id),
+            "the event after the refused reply is within bounds here too, not held for good"
+        );
+    }
+
     /// A `hive serve` box registered as its owner's device (host owned by the
     /// owner, cert under the box's own account) links only once it's an Admin.
     #[test]

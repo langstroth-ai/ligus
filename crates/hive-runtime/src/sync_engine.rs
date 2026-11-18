@@ -747,12 +747,14 @@ impl SyncEngine {
             match gate_ingest(self.identity_mode(), base, signer_account, account_key, &identity) {
                 IngestAction::Quarantine(reason) => {
                     tracing::warn!(?reason, event_id = %env.event_id, "quarantined a fetched event");
-                    // A revoked device's genuine event: another member may
-                    // have held it (before the revocation reached them) and
-                    // counted from it; keep it as a lamport witness.
-                    if reason == crate::envelope_verifier::QuarantineReason::RevokedDevice && genuine(roster, env) {
-                        store.note_lamport_witness(env)?;
-                    }
+                    // Kept as a lamport witness, whatever the reason: whether
+                    // an event is refused depends on what this device's roster
+                    // holds when it arrives (a revocation, a removal, a rebound
+                    // agent key, a certificate not here yet), so another device
+                    // may have accepted it and counted from it. The witness is
+                    // structural (id, lamport, log head, chain link), inert, and
+                    // never pushed (`hive_core::lamport`).
+                    store.note_lamport_witness(env)?;
                     let _ = store.record_signal(env.workspace_id, None, &sync_decision(roster, env, false, &format!("{reason:?}")));
                     // Provably bad and stable — advance past it (re-fetching won't help).
                     resolved.push(*seq);
@@ -770,7 +772,7 @@ impl SyncEngine {
                     // longer (or not yet) a member: a removed member writing
                     // with the key they kept. Refused for good.
                     tracing::warn!(event_id = %env.event_id, "refused an event sealed under an old key by a non-member");
-                    // Verified, only refused: a lamport witness (see above).
+                    // Refused: a lamport witness (see above).
                     store.note_lamport_witness(env)?;
                     let _ = store.record_signal(env.workspace_id, None, &sync_decision(roster, env, false, "stale_epoch_non_member"));
                     resolved.push(*seq);
@@ -936,15 +938,6 @@ fn sync_decision(
         source: env.signer_device_id.map(|d| d.to_string()).unwrap_or_else(|| "relay".into()),
         reason: reason.to_string(),
     }
-}
-
-/// Whether `env` verifies against its signing device's key in `roster`
-/// (revoked or not): a genuine event, not a forgery naming that device.
-fn genuine(roster: &crate::envelope_verifier::WorkspaceRoster, env: &SessionEventEnvelope) -> bool {
-    use crate::envelope_verifier::DeviceKeyResolver;
-    env.signer_device_id
-        .and_then(|d| roster.public_key(d))
-        .is_some_and(|k| hive_core::verify_envelope(env, k).is_ok())
 }
 
 #[cfg(test)]

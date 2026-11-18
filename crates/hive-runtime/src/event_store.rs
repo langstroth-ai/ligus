@@ -268,8 +268,9 @@ impl EventStore {
             CREATE INDEX IF NOT EXISTS idx_equivocations_session ON equivocations (session_id);
 
             -- Device-local, never synced: an event this device refused at
-            -- ingest (signed by a revoked device, or sealed under an old key
-            -- by a non-member) is kept only as a lamport witness: its id,
+            -- ingest (for any reason: a revoked or rebound key, a removed
+            -- member, an old key, a bad signature) is kept only as a lamport
+            -- witness: its id,
             -- lamport, log head and chain link (hive_core::lamport). Another
             -- author may have held it and counted from it; without it, that
             -- author's later events would be held here for good. Folded as an
@@ -404,7 +405,8 @@ impl EventStore {
         Ok(out)
     }
 
-    /// Keep `env`, which this device refused at ingest, as a lamport witness
+    /// Keep `env`, which this device refused at ingest (for whatever reason:
+    /// the refusal can depend on this device's roster), as a lamport witness
     /// of its log (see the `lamport_witnesses` table). Only its id, lamport,
     /// log head and chain link are kept; never pushed, never folded as
     /// itself.

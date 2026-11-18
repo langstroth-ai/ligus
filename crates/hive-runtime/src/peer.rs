@@ -283,6 +283,8 @@ impl PeerSync {
             }
             IngestAction::Quarantine(reason) => {
                 tracing::warn!(?reason, event_id = %env.event_id, "rejected a quarantined peer event");
+                // A lamport witness, as on the relay path (`SyncEngine::apply_fetched`).
+                store.note_lamport_witness(&env).map_err(|e| PeerError::Store(e.to_string()))?;
                 Ok(false)
             }
             IngestAction::Hold(reason) => {
