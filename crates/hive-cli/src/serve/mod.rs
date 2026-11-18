@@ -208,6 +208,10 @@ pub struct Shared {
     /// this process wrote one, so a `DeviceRevoked` it folds in is enforced
     /// then, not at the next poll ([`revocation_watch`]).
     pub roster_kick: Notify,
+    /// How many full passes the revocation watch has completed (each one
+    /// after acting on what it saw), so tests can await "the watch has looked
+    /// since X" instead of sleeping.
+    pub revocation_passes: std::sync::atomic::AtomicU64,
     pub host_id: String,
     /// The relay tunnel, when remote access is enabled.
     pub tunnel: Option<Arc<tunnel::TunnelHost>>,
@@ -1035,6 +1039,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
         token_gen: watch::Sender::new(0),
         revocation_checks: Default::default(),
         roster_kick: Notify::new(),
+        revocation_passes: Default::default(),
         host_id,
         tunnel,
         svc: Mutex::new(svc),
@@ -1191,6 +1196,7 @@ async fn revocation_watch(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) 
                 shared.revoke_phones_of_revoked_devices();
             }
         }
+        shared.revocation_passes.fetch_add(1, Ordering::SeqCst);
         tokio::select! {
             _ = tokio::time::sleep(REVOCATION_WATCH) => {}
             _ = shared.roster_kick.notified() => {}
