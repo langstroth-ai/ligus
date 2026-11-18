@@ -192,6 +192,39 @@ pub async fn check_address(c: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Re-check a connection's address right before a git clone or fetch and
+/// pin it (repos review F12): git resolves the host itself, so a name that
+/// passed [`check_address`] when the connection was added could be
+/// DNS-rebound to internal space by now. Returns the
+/// `http.curloptResolve` value (`host:port:ip`) to pass to git, `None` for a
+/// connection marked internal (or in test builds, which resolve no real
+/// names), and an error when every address is internal.
+pub async fn git_resolve_pin(c: &Connection) -> Result<Option<String>> {
+    if c.internal {
+        return Ok(None);
+    }
+    crate::http::check_url_address(&c.base_url, false)?;
+    let Ok(u) = url::Url::parse(&c.base_url) else { return Ok(None) };
+    let Some(url::Host::Domain(host)) = u.host() else { return Ok(None) };
+    let host = host.to_ascii_lowercase();
+    if crate::http::real_hosts_denied() && host != "localhost" {
+        return Ok(None);
+    }
+    let port = u.port_or_known_default().unwrap_or(443);
+    let lookup = tokio::time::timeout(std::time::Duration::from_secs(5), tokio::net::lookup_host((host.as_str(), port))).await;
+    let addrs: Vec<std::net::SocketAddr> = match lookup {
+        Ok(Ok(a)) => a.collect(),
+        _ => return Err(ForgeError::Invalid(format!("{host} doesn't resolve"))),
+    };
+    match addrs.iter().find(|a| crate::http::is_public_ip(a.ip())) {
+        Some(a) => Ok(Some(match a.ip() {
+            std::net::IpAddr::V6(ip) => format!("{host}:{port}:[{ip}]"),
+            std::net::IpAddr::V4(ip) => format!("{host}:{port}:{ip}"),
+        })),
+        None => Err(crate::http::internal_refused(&host)),
+    }
+}
+
 /// The forge a well-known host runs.
 pub fn known_kind(host: &str) -> Option<(ForgeKind, Option<&'static str>)> {
     match host.trim().to_ascii_lowercase().as_str() {

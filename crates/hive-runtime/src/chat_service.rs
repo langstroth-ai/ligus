@@ -32,6 +32,8 @@ mod links;
 pub use links::{links_for_account, LinkDraft, ShownLink, WorkspaceLinks};
 mod phone_sign;
 mod presence;
+mod repos;
+pub use repos::canonical_from_input;
 pub use keys::RotationIssued;
 pub use phone_sign::{PhoneDraft, STALE_DRAFT};
 pub use presence::{PresenceDraft, PresenceProvider, PresenceRequest};
