@@ -191,9 +191,24 @@ impl SignerDirectory {
         let claimed = stamp.and_then(|s| {
             s.actor.account_id.or_else(|| Uuid::parse_str(&s.actor.id).ok().filter(|a| self.accounts.contains(a)))
         });
-        self.devices.get(&signer)?.iter().find_map(|(k, account)| {
-            (claimed.is_none_or(|c| c == *account) && crate::crypto::verify_envelope(e, k).is_ok()).then_some(k.as_slice())
-        })
+        let bindings = self.devices.get(&signer)?;
+        // With no account claimed, only a device id one account binds
+        // attests (another account's binding of it makes it ambiguous: fail
+        // closed, and the cost of a copy stays bounded by one binding).
+        let account = match claimed {
+            Some(c) => c,
+            None => {
+                let first = bindings.first()?.1;
+                if bindings.iter().any(|(_, a)| *a != first) {
+                    return None;
+                }
+                first
+            }
+        };
+        bindings
+            .iter()
+            .filter(|(_, a)| *a == account)
+            .find_map(|(k, _)| crate::crypto::verify_envelope(e, k).is_ok().then_some(k.as_slice()))
     }
 }
 

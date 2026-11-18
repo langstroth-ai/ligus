@@ -41,5 +41,48 @@ fn a_reversed_rotation_chain_does_not_make_the_fold_cubic() {
     let t = std::time::Instant::now();
     let _ = project_config(&w.cfg, None, None);
     let took = t.elapsed();
+    eprintln!("fold took {took:?}");
     assert!(took < std::time::Duration::from_secs(5), "one config fold took {took:?}");
+}
+
+/// Many self-certified strangers binding one device id, and many copies
+/// signed under it claiming no account: each copy is checked against a
+/// bounded number of keys, not against every binding. (Measured against the
+/// same log without the copies: what the bindings alone cost is the roster's.)
+#[test]
+fn many_bindings_of_one_device_id_do_not_make_copies_quadratic() {
+    use hive_core::crypto::{sign_envelope, DeviceCertificate};
+    use hive_core::Timestamp;
+    let mut w = SignedWorld::genesis(&["owner", "con", "eve"], None);
+    w.admit("owner", "con", WorkspaceRole::Contributor);
+    w.publish_identity("eve");
+    let target = w.cfg.last().unwrap().clone();
+    let device = uuid::Uuid::new_v4();
+    for _ in 0..200 {
+        let account = SigningKeypair::generate().unwrap();
+        let account_id = uuid::Uuid::new_v4();
+        let k = SigningKeypair::generate().unwrap();
+        w.push_bare("eve", SessionEvent::AccountKeyRegistered { account_id, signing_public_key: account.public_key_bytes().to_vec() });
+        let cert = DeviceCertificate::issue(&account, account_id, device, &k.public_key_bytes(), Timestamp::epoch());
+        w.push_bare("eve", SessionEvent::DeviceCertificateAdded { certificate: cert });
+    }
+    let base = w.cfg.clone();
+    let junk = SigningKeypair::generate().unwrap();
+    for _ in 0..300 {
+        let mut copy = w.draft("eve", None, SessionEvent::WorkspaceRulesSet { version: 2, presence: None }, None);
+        copy.event_id = target.event_id;
+        if let Some(s) = copy.actor_stamp.as_mut() {
+            s.actor = hive_core::ActorIdentity::new("nobody", "nobody", hive_core::ActorKind::Human);
+        }
+        copy.clear_raw();
+        sign_envelope(&mut copy, device, &junk);
+        w.push_env(None, copy);
+    }
+    let time = |cfg: &[hive_core::SessionEventEnvelope]| {
+        let t = std::time::Instant::now();
+        let _ = project_config(cfg, None, None);
+        t.elapsed()
+    };
+    let (without, with) = (time(&base), time(&w.cfg));
+    assert!(with < without + std::time::Duration::from_millis(1500), "300 copies cost {:?} over {without:?}", with.saturating_sub(without));
 }
