@@ -12929,6 +12929,78 @@ fn workspace_invite(state: State<AppState>, workspace_id: String) -> Result<Stri
     Ok(encode_workspace_invite(&sign_invite(&state, with_epoch_keys(&state, conn))))
 }
 
+/// A box's join request, as the desktop shows it before approving.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BoxRequestDto {
+    fingerprint: String,
+    label: String,
+    account_id: String,
+}
+
+/// Read a box's join request (`ligusjoin1:…`, printed by `ligus admit
+/// request`) so the Admin can compare its fingerprint with the box's.
+#[tauri::command]
+fn inspect_box_request(request: String) -> Result<BoxRequestDto, String> {
+    let r = hive_runtime::box_admission::JoinRequest::decode(&request)?;
+    Ok(BoxRequestDto { fingerprint: r.fingerprint(), label: r.label.clone(), account_id: r.account_id.to_string() })
+}
+
+/// What admitting a box produced.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BoxAdmissionDto {
+    /// `ligusadmit1:…` (sealed to the box that asked) or a bearer `hivews1:…`.
+    code: String,
+    sealed: bool,
+    expires_in_minutes: i64,
+}
+
+/// Admit a `ligus serve` or `ligus worker` box as its own service member
+/// (Phase B): a single-use box admission on the workspace's config log,
+/// confirmed with this person's passkey (Admins only). With the box's join
+/// request it is bound to that box and the code is sealed to it; without
+/// one (Kubernetes, another headless box) it is a bearer code to keep in a
+/// Secret.
+#[tauri::command]
+fn admit_box(state: State<AppState>, workspace_id: String, request: Option<String>, ttl_minutes: Option<i64>) -> Result<BoxAdmissionDto, String> {
+    let id = Uuid::parse_str(&workspace_id).map_err(map_err)?;
+    let request = request
+        .filter(|r| !r.trim().is_empty())
+        .map(|r| hive_runtime::box_admission::JoinRequest::decode(&r))
+        .transpose()?;
+    let mut conn = {
+        let s = state.settings.lock().unwrap();
+        s.workspaces.iter().find(|w| w.id() == id).cloned().ok_or_else(|| "unknown workspace".to_string())?
+    };
+    if conn.dm_account.is_some() {
+        return Err("A box joins a team workspace, not a direct message.".into());
+    }
+    if let Some(problem) = invite_relay_problem(&conn.relay_url) {
+        return Err(problem);
+    }
+    let default = if request.is_some() {
+        hive_runtime::box_admission::DEFAULT_TTL_MS
+    } else {
+        hive_runtime::box_admission::DEFAULT_BEARER_TTL_MS
+    };
+    let ttl = ttl_minutes.map(|m| m.saturating_mul(60_000)).unwrap_or(default);
+    let invite = state
+        .service
+        .lock()
+        .unwrap()
+        .issue_box_admission(id, ttl, request.as_ref().map(|r| r.account_id))
+        .map_err(|e| format!("Only a workspace Admin can admit a box ({e})."))?;
+    conn.inv = Some(invite.to_string());
+    let code = encode_workspace_invite(&sign_invite(&state, with_epoch_keys(&state, conn)));
+    let (code, sealed) = match &request {
+        Some(r) => (r.seal(&code)?, true),
+        None => (code, false),
+    };
+    let ttl = ttl.clamp(60_000, hive_core::admission::MAX_ADMISSION_TTL_MS - 60_000);
+    Ok(BoxAdmissionDto { code, sealed, expires_in_minutes: ttl / 60_000 })
+}
+
 /// Leave a team workspace (removes it from the rail). If it was active, falls
 /// back to "My workspace".
 #[tauri::command]
@@ -14967,6 +15039,8 @@ pub fn run() {
             create_workspace,
             join_workspace,
             workspace_invite,
+            inspect_box_request,
+            admit_box,
             remove_workspace,
             get_connection_settings,
             update_connection_settings,

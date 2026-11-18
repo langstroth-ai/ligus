@@ -1213,6 +1213,19 @@ export const joinWorkspace = (invite: string) =>
 export const workspaceInvite = (workspaceId: string) =>
   invoke<string>("workspace_invite", { workspaceId });
 
+/// A box's join request (`ligusjoin1:…` from `ligus admit request`), read
+/// so the Admin can compare its fingerprint with the box's own.
+export type BoxRequest = { fingerprint: string; label: string; accountId: string };
+export const inspectBoxRequest = (request: string) => invoke<BoxRequest>("inspect_box_request", { request });
+
+/// A box admission: `ligusadmit1:…` sealed to the box that asked, or a bearer
+/// `hivews1:…` code for a Kubernetes Secret. Single use, expiring.
+export type BoxAdmission = { code: string; sealed: boolean; expiresInMinutes: number };
+/// Admit a `ligus serve` / `ligus worker` box as its own service member
+/// (Admins; confirmed with a passkey).
+export const admitBox = (workspaceId: string, request: string | null, ttlMinutes: number | null) =>
+  invoke<BoxAdmission>("admit_box", { workspaceId, request, ttlMinutes });
+
 /// An invite delivered to this device's contact drop box (sealed to it,
 /// opened locally).
 export type PendingInvite = {

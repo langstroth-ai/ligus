@@ -14,6 +14,7 @@ import {
   type WorkspaceInfoDto,
 } from "@/lib/ipc";
 import { HiveBrandMark } from "@/components/HiveBrand";
+import { AdmitBoxModal } from "@/components/AdmitBoxModal";
 import { toast, errMsg } from "@/components/Toast";
 import { confirmThen } from "@/lib/confirm";
 import { IconPlus, IconUsers, IconPanelLeft, IconGear, IconInfo } from "@/lib/icons";
@@ -71,6 +72,7 @@ export function WorkspaceRail({
     return set;
   }, [mentions.data, cursorTick]);
   const [menu, setMenu] = useState<{ ws: WorkspaceInfoDto; x: number; y: number } | null>(null);
+  const [admitting, setAdmitting] = useState<WorkspaceInfoDto | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const iconTarget = useRef<string | null>(null);
 
@@ -313,12 +315,15 @@ export function WorkspaceRail({
               <>
                 <MenuItem label="Share short code" onClick={() => { void shareShortCode(menu.ws); setMenu(null); }} />
                 <MenuItem label="Copy invite" onClick={() => { void copyInvite(menu.ws); setMenu(null); }} />
+                <MenuItem label="Admit a box…" onClick={() => { setAdmitting(menu.ws); setMenu(null); }} />
                 <MenuItem label="Leave workspace" danger onClick={() => { leave(menu.ws); setMenu(null); }} />
               </>
             )}
           </div>
         </>
       )}
+
+      {admitting && <AdmitBoxModal workspaceId={admitting.id} workspaceName={admitting.name} onClose={() => setAdmitting(null)} />}
 
       <input
         ref={fileInput}
