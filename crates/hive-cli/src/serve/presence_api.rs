@@ -24,7 +24,7 @@ use hive_runtime::chat_service::PresenceDraft;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use super::api::{find_proposal, load_chat, ApiError, ApiResult};
+use super::api::{ApiError, ApiResult};
 use super::tunnel::TunnelPeer;
 use super::Shared;
 
@@ -66,8 +66,10 @@ impl Pending {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrepareReq {
-    /// `approve`, `reject`, `lockdown_clear`, `agent_host` or `invite` (a
-    /// single-use invite to the box's workspace; `target` is ignored).
+    /// `agent_host` or `invite` (a single-use invite to the box's
+    /// workspace; `target` is ignored). `approve`, `reject` and
+    /// `lockdown_clear` are gone (410): the phone signs them itself
+    /// (`/v1/phone-actions`).
     action: String,
     /// The proposal, chat or agent id.
     target: String,
@@ -85,26 +87,9 @@ pub async fn prepare(
 ) -> ApiResult<Json<Value>> {
     let mut preview = json!({});
     let outcome = match req.action.as_str() {
-        "approve" | "reject" => {
-            let (chat, p) = find_proposal(&s, &req.target)?;
-            preview = json!({
-                "chatTitle": chat.title,
-                "proposalTitle": p.title,
-                "diffDigest": hive_core::authz::votes::diff_digest(&p),
-            });
-            let mut svc = s.lock();
-            svc.capture_presence(true);
-            let r = svc.vote_on_proposal(chat.id, chat.workspace_id, p.id, req.action == "approve").map(|_| ());
-            (r, svc.take_presence_draft())
-        }
-        "lockdown_clear" => {
-            let chat = load_chat(&s, &req.target)?;
-            preview = json!({ "chatTitle": chat.title });
-            let mut svc = s.lock();
-            svc.capture_presence(true);
-            let r = svc.clear_lockdown(s.ws, chat.id).map(|_| ());
-            (r, svc.take_presence_draft())
-        }
+        // Phase B: the phone signs these itself (`/v1/phone-actions`).
+        "approve" | "reject" => return Err(super::api::gone_to_phone_action("vote")),
+        "lockdown_clear" => return Err(super::api::gone_to_phone_action("clearLockdown")),
         "agent_host" => {
             let agent = uuid::Uuid::parse_str(req.target.trim()).map_err(|_| ApiError::bad_request("agent id"))?;
             let host = req.host_id.clone().unwrap_or_default();

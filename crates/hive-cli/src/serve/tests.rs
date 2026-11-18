@@ -874,7 +874,8 @@ async fn phone_message_to_hosted_agent_streams_reply_and_files_a_proposal() {
     let open = h.get("/v1/proposals").await;
     assert_eq!(open["proposals"].as_array().unwrap().len(), 1);
     let pid = open["proposals"][0]["id"].as_str().unwrap().to_string();
-    let approved = h.send(reqwest::Method::POST, &format!("/v1/proposals/{pid}/approve"), None).await;
+    assert_gone(&h, &format!("/v1/proposals/{pid}/approve"), None, "vote").await;
+    let approved = box_vote(&h, &pid, true).await;
     assert_eq!(approved["proposal"]["status"], "approved");
     assert!(h.get("/v1/proposals?status=open").await["proposals"].as_array().unwrap().is_empty());
     assert_eq!(h.get("/v1/proposals?status=all").await["proposals"][0]["status"], "approved");
@@ -932,25 +933,15 @@ async fn reject_with_reason_and_last_event_id_replay() {
     };
     h.handle.shared.after_write();
 
-    let rejected = h
-        .send(reqwest::Method::POST, &format!("/v1/proposals/{pid}/reject"), Some(json!({ "reason": "not like this" })))
-        .await;
-    assert_eq!(rejected["proposal"]["status"], "rejected");
+    // Gone, with or without a reason, for any id: nothing is written.
+    assert_gone(&h, &format!("/v1/proposals/{pid}/reject"), Some(json!({ "reason": "not like this" })), "vote").await;
+    assert_gone(&h, &format!("/v1/proposals/{}/approve", Uuid::new_v4()), None, "vote").await;
     {
         let svc = h.handle.shared.lock();
         let s = svc.load(chat_id).unwrap().unwrap();
         let p = s.proposals.iter().find(|p| p.id == pid).unwrap();
-        assert_eq!(p.refinements.len(), 1);
-        assert_eq!(p.refinements[0].text, "not like this");
+        assert!(p.refinements.is_empty() && p.approvals.is_empty());
     }
-    let missing = h
-        .client
-        .post(format!("{}/v1/proposals/{}/approve", h.base, Uuid::new_v4()))
-        .bearer_auth(&h.token)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(missing.status(), 404);
 
     // A reconnecting client replays what it missed after Last-Event-ID 0.
     let mut rx = h.events(Some(0)).await;
@@ -983,6 +974,29 @@ async fn filed_proposal(h: &Harness, producing: Option<Uuid>) -> (Uuid, Uuid) {
     };
     h.handle.shared.after_write();
     (chat_id, pid)
+}
+
+/// This box's own vote (a service member's, at its role), cast through the
+/// service: the HTTP vote routes are gone (410), the phone votes with its
+/// own key. Answers `GET /v1/proposals/{id}`.
+async fn box_vote(h: &Harness, pid: &str, approved: bool) -> Value {
+    let id = Uuid::parse_str(pid).unwrap();
+    {
+        let ws = h.handle.shared.ws;
+        let chat = h.handle.shared.workspace_chats().unwrap().into_iter().find(|c| c.proposals.iter().any(|p| p.id == id)).expect("the proposal's chat").id;
+        h.handle.shared.lock().vote_on_proposal(chat, ws, id, approved).unwrap();
+    }
+    h.handle.shared.after_write();
+    h.get(&format!("/v1/proposals/{pid}")).await
+}
+
+/// The legacy person-action routes answer 410 and name the phone action.
+async fn assert_gone(h: &Harness, path: &str, body: Option<Value>, kind: &str) {
+    let (code, v) = status_of(h, reqwest::Method::POST, path, body).await;
+    assert_eq!(code, 410, "{path}: {v}");
+    assert_eq!(v["error"], "gone", "{v}");
+    assert_eq!(v["use"], "POST /v1/phone-actions/prepare", "{v}");
+    assert!(v["message"].as_str().unwrap().contains(kind), "{v}");
 }
 
 async fn status_of(h: &Harness, method: reqwest::Method, path: &str, body: Option<Value>) -> (u16, Value) {
@@ -1035,7 +1049,7 @@ async fn comments_and_votes_show_who_and_stream_updates() {
     let texts: Vec<&str> = thread["comments"].as_array().unwrap().iter().map(|c| c["text"].as_str().unwrap()).collect();
     assert_eq!(texts, vec!["Looks close", "Rename the helper"]);
 
-    let approved = h.send(reqwest::Method::POST, &format!("/v1/proposals/{pid}/approve"), None).await;
+    let approved = box_vote(&h, &pid.to_string(), true).await;
     let p = &approved["proposal"];
     assert_eq!(p["status"], "approved");
     assert_eq!(p["myVote"], "approve");
@@ -1045,7 +1059,7 @@ async fn comments_and_votes_show_who_and_stream_updates() {
     assert_eq!(p["votes"][0]["approved"], true);
     assert!(["owner", "admin", "contributor"].contains(&p["votes"][0]["role"].as_str().unwrap()), "{p}");
     // A later reject replaces this voter's vote (latest wins), as on the desktop.
-    let rejected = h.send(reqwest::Method::POST, &format!("/v1/proposals/{pid}/reject"), None).await;
+    let rejected = box_vote(&h, &pid.to_string(), false).await;
     assert_eq!(rejected["proposal"]["myVote"], "reject");
     assert_eq!(rejected["proposal"]["votes"].as_array().unwrap().len(), 1);
 
@@ -1202,9 +1216,10 @@ async fn a_viewer_cannot_vote_comment_or_request_changes() {
     let p = h.get(&format!("/v1/proposals/{pid}")).await;
     assert_eq!(p["proposal"]["canVote"], false);
     assert_eq!(p["proposal"]["myRole"], "viewer");
+    for path in [format!("/v1/proposals/{pid}/approve"), format!("/v1/proposals/{pid}/reject")] {
+        assert_gone(&h, &path, None, "vote").await;
+    }
     for (path, body) in [
-        (format!("/v1/proposals/{pid}/approve"), None),
-        (format!("/v1/proposals/{pid}/reject"), None),
         (format!("/v1/proposals/{pid}/comments"), Some(json!({ "text": "hi" }))),
         (format!("/v1/proposals/{pid}/request-changes"), Some(json!({ "note": "redo" }))),
     ] {
@@ -1264,7 +1279,7 @@ async fn approving_never_applies_and_never_overrides_a_rejection() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
-    let res = h.send(reqwest::Method::POST, &format!("/v1/proposals/{rid}/approve"), None).await;
+    let res = box_vote(&h, &rid.to_string(), true).await;
     assert_eq!(res["proposal"]["status"], "rejected", "{res}");
     let wt = h._tmp.path().join("repo").join(".ligus").join("worktrees").join(format!("chat-{chat_id}"));
     assert!(!wt.join("rejected.txt").exists(), "a rejected proposal was applied");
@@ -1277,7 +1292,7 @@ async fn approving_never_applies_and_never_overrides_a_rejection() {
 
     // Control: without a rejection the box votes, but a service member
     // never applies on its own (Phase B): only to fulfil a person's request.
-    let res = h.send(reqwest::Method::POST, &format!("/v1/proposals/{cid}/approve"), None).await;
+    let res = box_vote(&h, &cid.to_string(), true).await;
     assert_ne!(res["proposal"]["status"], "applied", "{res}");
     assert!(!wt.join("approved.txt").exists(), "a service box applied on its own");
     assert!(!wt.join("rejected.txt").exists());
@@ -1305,7 +1320,7 @@ async fn approving_a_set_alternative_never_applies_it() {
         svc.open_proposal_set(chat_id, ws, set, vec![a, b]).unwrap().id
     };
     h.handle.shared.after_write();
-    let res = h.send(reqwest::Method::POST, &format!("/v1/proposals/{aid}/approve"), None).await;
+    let res = box_vote(&h, &aid.to_string(), true).await;
     assert_eq!(res["proposal"]["status"], "approved", "{res}");
     assert_eq!(res["proposal"]["setId"], json!(set_id));
     let wt = h._tmp.path().join("repo").join(".ligus").join("worktrees").join(format!("chat-{chat_id}"));
@@ -2507,7 +2522,7 @@ async fn proposal_sets_are_listed_with_standing_and_votable_alternatives() {
     assert_eq!(code, 405);
 
     // Voting on an alternative is the ordinary proposal vote.
-    let voted = h.send(reqwest::Method::POST, &format!("/v1/proposals/{bid}/approve"), None).await;
+    let voted = box_vote(&h, &bid.to_string(), true).await;
     assert_eq!(voted["proposal"]["setId"], json!(set_id));
     let one = h.get(&format!("/v1/proposal-sets/{set_id}")).await;
     assert_eq!(one["set"]["alternatives"][1]["myVote"], "approve", "{one}");
@@ -2518,9 +2533,9 @@ async fn proposal_sets_are_listed_with_standing_and_votable_alternatives() {
     h.handle.shutdown();
 }
 
-/// Clearing a lockdown from the phone writes the same signed
-/// `ChatLockdownCleared` the desktop does, only for a human Contributor+; a
-/// Viewer is refused and the lockdown stays.
+/// The guards view lists a locked chat; the box's own clear route is gone
+/// (410: the phone clears it with its own key and its person's passkey),
+/// and a demoted box is told it can't clear.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn lockdown_clear_needs_a_human_contributor() {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
@@ -2546,31 +2561,18 @@ async fn lockdown_clear_needs_a_human_contributor() {
     assert!(g["lockedChats"][0]["signals"][0]["raisedAt"].is_string());
     assert_eq!(g["canClearLockdown"], true, "{g}");
 
-    let res = h.send(reqwest::Method::POST, &format!("/v1/chats/{chat_id}/lockdown/clear"), None).await;
-    assert_eq!(res["cleared"], true);
-    let g = h.get("/v1/guards").await;
-    assert_eq!(g["lockedChats"], json!([]), "{g}");
-    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
-    assert!(!s.guards.lockdown_active());
-    assert!(s.messages.iter().any(|m| m.body.contains("cleared this chat's lockdown")), "the desktop's system note");
-    drop(s);
-    // Not locked any more: nothing to clear.
-    let (code, _) = status_of(&h, reqwest::Method::POST, &format!("/v1/chats/{chat_id}/lockdown/clear"), None).await;
-    assert_eq!(code, 409);
+    // The box never clears it as itself: the phone does, with its person's
+    // passkey (`clearLockdown`, `the_phone_posts_votes_answers_clears_and_asks_this_box_to_apply`).
+    assert_gone(&h, &format!("/v1/chats/{chat_id}/lockdown/clear"), None, "clearLockdown").await;
+    assert!(h.handle.shared.lock().load(chat_id).unwrap().unwrap().guards.lockdown_active());
 
-    // As a Viewer: refused, and the lockdown stays. The desktop may demote
-    // the box before it has synced this lock, so the demotion's watermark
-    // may not cover it; a demotion never lifts a lockdown either way
-    // (hive-core `prop_a_demotion_never_lifts_a_lockdown`).
-    lock(chat_id);
+    // As a Viewer: `canClearLockdown` says no. The desktop may demote the
+    // box before it has synced this lock; a demotion never lifts a lockdown
+    // either way (hive-core `prop_a_demotion_never_lifts_a_lockdown`).
     demote_box_to_viewer(&h, chat_id).await;
-    let g = h.get("/v1/guards").await;
-    assert_eq!(g["lockedChats"][0]["chatId"], json!(chat_id), "the demotion left the lockdown in place: {g}");
     let g = h.get("/v1/guards").await;
     assert_eq!(g["canClearLockdown"], false, "{g}");
     assert_eq!(g["myRole"], "viewer");
-    let (code, v) = status_of(&h, reqwest::Method::POST, &format!("/v1/chats/{chat_id}/lockdown/clear"), None).await;
-    assert_eq!(code, 403, "{v}");
     let g = h.get("/v1/guards").await;
     assert_eq!(g["lockedChats"][0]["chatId"], json!(chat_id), "a refused clear left the lockdown in place: {g}");
     h.handle.shutdown();
@@ -2888,11 +2890,11 @@ async fn chat_with_proposal(h: &Harness) -> (Uuid, Uuid) {
     (chat_id, pid)
 }
 
-/// P0.6 interim: a box acting for the owner signs everything as the owner,
-/// so a vote or a lockdown clear from the phone (or any bearer caller) would
-/// pass for the owner's own. Without presence it is refused with
-/// `presence_required`, nothing reaches the log, the proposal's human gate is
-/// still unmet, and each refusal is one content-free fact naming the caller.
+/// A box acting for the owner signs everything as the owner, so a vote or a
+/// lockdown clear from the phone (or any bearer caller) would pass for the
+/// owner's own. Phase B: those routes are gone (410), with or without a
+/// passkey; the phone signs them itself. Nothing reaches the log and the
+/// proposal's human gate is still unmet.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn phone_vote_refused_on_delegated_host_without_presence() {
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
@@ -2903,40 +2905,26 @@ async fn phone_vote_refused_on_delegated_host_without_presence() {
     h.handle.shared.lock().act_as_owner_device(owner.clone());
 
     for path in [format!("/v1/proposals/{pid}/approve"), format!("/v1/proposals/{pid}/reject")] {
-        let (code, body) = status_of(&h, reqwest::Method::POST, &path, None).await;
-        assert_eq!(code, 403, "{path}: {body}");
-        assert_eq!(body["error"], "presence_required");
-        assert_eq!(body["hint"], "confirm with your passkey: POST /v1/presence/prepare, then /v1/presence/commit");
+        assert_gone(&h, &path, None, "vote").await;
     }
     let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
     let p = s.proposals.iter().find(|p| p.id == pid).unwrap();
     assert!(p.approvals.is_empty(), "a refused vote is never written: {:?}", p.approvals);
     assert_eq!(p.status, hive_core::ProposalStatus::Open, "the human gate is still unmet");
 
-    // Lockdown clear from the phone needs the same.
+    // Nor a lockdown clear, nor their passkey-confirmed forms.
     h.handle
         .shared
         .lock()
         .self_medicate(ws, chat_id, None, &[(hive_core::guard::LockdownSignal::InjectionDetected, "ignore-previous".into())])
         .unwrap();
-    let (code, body) = status_of(&h, reqwest::Method::POST, &format!("/v1/chats/{chat_id}/lockdown/clear"), None).await;
-    assert_eq!((code, body["error"].clone()), (403, json!("presence_required")));
+    assert_gone(&h, &format!("/v1/chats/{chat_id}/lockdown/clear"), None, "clearLockdown").await;
     assert!(h.handle.shared.lock().load(chat_id).unwrap().unwrap().guards.lockdown_active());
-
-    // One fact per refusal, naming the caller (`bearer` here), no content.
-    let facts = h.handle.shared.lock().list_signals(ws, 0, None, 100).unwrap();
-    let refusals: Vec<_> = facts
-        .iter()
-        .filter_map(|r| match &r.signal {
-            hive_core::signal::GuardSignal::GuardDecision { gate: hive_core::signal::GuardGate::Presence, verdict, source, reason, .. } => {
-                Some((*verdict, source.clone(), reason.clone()))
-            }
-            _ => None,
-        })
-        .collect();
-    assert_eq!(refusals.len(), 3, "{refusals:?}");
-    assert!(refusals.iter().all(|(v, src, _)| *v == hive_core::signal::GuardVerdict::Reject && src == "bearer"));
-    assert!(refusals.iter().any(|(_, _, r)| r == "presence_required_lockdown_clear"));
+    for (action, kind) in [("approve", "vote"), ("reject", "vote"), ("lockdown_clear", "clearLockdown")] {
+        let (code, v) = status_of(&h, reqwest::Method::POST, "/v1/presence/prepare", Some(json!({ "action": action, "target": pid.to_string() }))).await;
+        assert_eq!((code, v["error"].clone()), (410, json!("gone")), "{action}: {v}");
+        assert!(v["message"].as_str().unwrap().contains(kind));
+    }
     h.handle.shutdown();
 }
 
@@ -2968,7 +2956,8 @@ async fn phone_vote_attribution() {
     let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
     let (chat_id, pid) = chat_with_proposal(&h).await;
     assert!(!h.handle.shared.lock().is_delegated());
-    h.send(reqwest::Method::POST, &format!("/v1/proposals/{pid}/approve"), None).await;
+    assert_gone(&h, &format!("/v1/proposals/{pid}/approve"), None, "vote").await;
+    box_vote(&h, &pid.to_string(), true).await;
     let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
     let p = s.proposals.iter().find(|p| p.id == pid).unwrap();
     let me = h.handle.shared.my_actor_id();
@@ -3026,8 +3015,19 @@ async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
     let listed = h.get(&format!("/v1/chats/{chat_id}/asks")).await;
     assert_eq!(listed["asks"][0]["open"], json!(true));
     assert_eq!(listed["asks"][0]["kind"], "question");
-    let answered = h.send(reqwest::Method::POST, &format!("/v1/asks/{ask_id}/answer"), Some(json!({ "optionIndex": 1 }))).await;
-    assert_eq!(answered["ask"]["answer"], "postgres");
+    // The box never answers as itself: the phone does, as its person.
+    assert_gone(&h, &format!("/v1/asks/{ask_id}/answer"), Some(json!({ "optionIndex": 1 })), "answer").await;
+    let (phone, account) = certified_phone(&h).await;
+    let answer = hive_core::phone_action::PhoneAction::Answer {
+        chat_id: Uuid::parse_str(&chat_id).unwrap(),
+        ask_id: Uuid::parse_str(&ask_id).unwrap(),
+        answer: "postgres".into(),
+        option_index: Some(1),
+    };
+    let (code, v) = phone_act(&h, &phone, account, &answer).await;
+    assert_eq!(code, 200, "{v}");
+    let listed = h.get(&format!("/v1/chats/{chat_id}/asks")).await;
+    assert_eq!(listed["asks"][0]["answer"], "postgres", "{listed}");
 
     // The receiver's turn starts on this host and answers once.
     let seen = collect_until(&mut rx, 60, |evs| {
@@ -3069,84 +3069,24 @@ async fn hosted_agent_uses_ligus_tools_asks_and_hands_off() {
     h.handle.shutdown();
 }
 
-/// B3, legacy path: `presence/prepare` drafts a vote on a box that stamps
-/// itself as the owner and returns its digest; the phone's authenticator
-/// signs it (a software one here). A key that isn't the owner's is refused.
-/// Phase B: the box isn't a device certified for the owner's account (it is
-/// its own service member), so even the owner's passkey can't make its vote
-/// count as the owner's: a vote counts only from a certified device of its
-/// voter. The phone votes through `phone-actions` with its own key instead
+/// Phase B: a box stamped as the owner never votes for them, even with
+/// their passkey: `presence/prepare` for a vote or a lockdown clear is gone
+/// (410), and the fold counts a vote only from a certified device of its
+/// voter anyway. The phone votes through `phone-actions` with its own key
 /// (`the_phone_posts_votes_answers_clears_and_asks_this_box_to_apply`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_box_stamped_as_the_owner_never_votes_for_them_even_with_their_passkey() {
-    use hive_core::presence::{soft::SoftAuthenticator, unb64url};
     let (endpoint, _) = spawn_model(vec![vec![delta(json!({"content": "hi"}))]]).await;
     let h = harness(&endpoint, "m", &[("README.md", "x\n")]).await;
-    let ws = h.handle.shared.ws;
     let (chat_id, pid) = chat_with_proposal(&h).await;
-    let key = SoftAuthenticator::es256();
-    let owner = {
-        let mut d = open_service(&h.desktop).unwrap();
-        let account = d.author().account_id.unwrap();
-        // (The desktop already holds its test recovery key, which confirms a
-        // second credential.)
-        let rec = hive_core::testkit::test_recovery_key(account);
-        d.register_passkey(ws, key.credential(account, "phone"), &|req| Ok(rec.assert(&req.challenge))).unwrap();
-        d.author().clone()
-    };
-    sync_once(&h.desktop).await.unwrap();
-    let account = owner.account_id.unwrap();
-    let cred = key.credential(account, "").credential_id;
-    let synced = || h.handle.shared.lock().passkeys_of(ws, account).unwrap().iter().any(|(id, _)| *id == cred);
-    for _ in 0..100 {
-        h.handle.shared.sync_kick.notify_one();
-        if synced() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+    let owner = open_service(&h.desktop).unwrap().author().clone();
+    h.handle.shared.lock().act_as_owner_device(owner);
+    for action in ["approve", "reject"] {
+        let (code, v) = status_of(&h, reqwest::Method::POST, "/v1/presence/prepare", Some(json!({ "action": action, "target": pid.to_string() }))).await;
+        assert_eq!((code, v["error"].clone()), (410, json!("gone")), "{v}");
     }
-    assert!(synced(), "the passkey synced to the box");
-    h.handle.shared.lock().act_as_owner_device(owner.clone());
-
-    let prepare = || async {
-        let (code, body) = status_of(&h, reqwest::Method::POST, "/v1/presence/prepare", Some(json!({ "action": "approve", "target": pid.to_string() }))).await;
-        assert_eq!(code, 200, "{body}");
-        body
-    };
-    let p = prepare().await;
-    assert_eq!(p["preview"]["kind"], "proposalVoteCast");
-    assert_eq!(p["preview"]["rpId"], "ligus.ai");
-    assert_eq!(p["preview"]["allowCredentials"][0], json!(key.credential(account, "").credential_id));
-    let challenge = unb64url(p["challenge"].as_str().unwrap()).unwrap();
-    let a = |k: &SoftAuthenticator| {
-        let a = k.get(&challenge);
-        json!({ "credentialId": a.credential_id, "authenticatorData": a.authenticator_data, "clientDataJSON": a.client_data_json, "signature": a.signature })
-    };
-    let (code, body) =
-        status_of(&h, reqwest::Method::POST, "/v1/presence/commit", Some(json!({ "prepareId": p["prepareId"], "assertion": a(&SoftAuthenticator::es256()) }))).await;
-    assert_eq!(code, 403, "another key isn't the owner's: {body}");
-    // Nothing was written by prepare or the refused commit.
     let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
     assert!(s.proposals.iter().find(|x| x.id == pid).unwrap().approvals.is_empty());
-
-    let p = prepare().await;
-    let challenge = unb64url(p["challenge"].as_str().unwrap()).unwrap();
-    let signed = key.get(&challenge);
-    let (code, body) = status_of(
-        &h,
-        reqwest::Method::POST,
-        "/v1/presence/commit",
-        Some(json!({ "prepareId": p["prepareId"], "assertion": {
-            "credentialId": signed.credential_id, "authenticatorData": signed.authenticator_data,
-            "clientDataJSON": signed.client_data_json, "signature": signed.signature } })),
-    )
-    .await;
-    assert_eq!(code, 403, "an uncertified box's vote isn't the owner's: {body}");
-    let (code, _) = status_of(&h, reqwest::Method::POST, "/v1/presence/commit", Some(json!({ "prepareId": p["prepareId"], "assertion": a(&key) }))).await;
-    assert_eq!(code, 404, "a prepared event commits once");
-    let s = h.handle.shared.lock().load(chat_id).unwrap().unwrap();
-    assert!(s.proposals.iter().find(|x| x.id == pid).unwrap().approvals.is_empty());
-    let _ = owner;
     h.handle.shutdown();
 }
 

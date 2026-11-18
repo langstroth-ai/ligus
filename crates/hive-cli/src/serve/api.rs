@@ -93,8 +93,21 @@ impl IntoResponse for ApiError {
             }
             return (self.0, Json(v)).into_response();
         }
+        if self.0 == StatusCode::GONE {
+            return (self.0, Json(json!({ "error": "gone", "message": self.1, "use": "POST /v1/phone-actions/prepare" }))).into_response();
+        }
         (self.0, Json(json!({ "error": self.1 }))).into_response()
     }
+}
+
+/// Phase B: what a person does from the phone (vote, clear a lockdown,
+/// answer an agent's question) is signed by the phone's own key through
+/// `/v1/phone-actions`. The box never does it as itself (a service member's
+/// vote or answer would look like a person's on the phone that asked) nor,
+/// enrolled for its owner, as them: these routes answer 410 with the
+/// phone action to use. 0.1 has no older client to keep.
+pub(super) fn gone_to_phone_action(kind: &str) -> ApiError {
+    ApiError(StatusCode::GONE, format!("a person does this from the phone with its own key: phone action \"{kind}\""))
 }
 
 /// P0.6: the 403 a human-only action gets from a host that can't tell a
@@ -999,27 +1012,10 @@ pub(super) fn can_clear_lockdown(members: &[hive_core::WorkspaceMember], me: &st
     hive_core::guard::is_human_member(members, me) && role.rank() >= WorkspaceRole::Contributor.rank()
 }
 
-/// `POST /v1/chats/:id/lockdown/clear`: clear a chat's lockdown as this box's
-/// identity, through the same signed `ChatLockdownCleared` event (on the
-/// workspace-config log) the desktop's *Clear lockdown* writes. Only a human
-/// member at Contributor or above may: anyone else gets 403 and nothing is
-/// written (the core re-checks when the event is authored and on every peer
-/// that folds it). A chat that isn't locked answers 409.
-async fn clear_lockdown(State(s): S, peer: Option<axum::Extension<TunnelPeer>>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
-    let chat = load_chat(&s, &id)?;
-    presence_gate(&s, peer.as_deref(), "lockdown_clear")?;
-    let me = s.my_actor_id();
-    let (_, allowed) = my_standing(&s, &me)?;
-    if !allowed {
-        return Err(ApiError(StatusCode::FORBIDDEN, "only a human member (Contributor or above) can clear a lockdown".into()));
-    }
-    let locked = !s.lock().workspace_guards(s.ws)?.lockdowns_of(chat.id).is_empty();
-    if !locked {
-        return Err(ApiError(StatusCode::CONFLICT, "this chat isn't locked down".into()));
-    }
-    s.lock().clear_lockdown(s.ws, chat.id)?;
-    s.after_write();
-    Ok(Json(json!({ "chatId": chat.id, "cleared": true })))
+/// `POST /v1/chats/:id/lockdown/clear`: gone (410). The phone clears a
+/// lockdown with the `clearLockdown` phone action and its person's passkey.
+async fn clear_lockdown(Path(_id): Path<String>) -> ApiResult<Json<Value>> {
+    Err(gone_to_phone_action("clearLockdown"))
 }
 
 async fn list_hosts(State(s): S) -> ApiResult<Json<Value>> {
@@ -1123,50 +1119,14 @@ pub(super) fn find_proposal(s: &Shared, raw: &str) -> ApiResult<(ChatSession, Ac
     Err(ApiError::not_found("proposal"))
 }
 
-/// Cast this box's vote — the same `ProposalVoteCast` delta the desktop's
-/// Review pane emits, at this identity's real roster role, so the proposal's
-/// quorum and role floor apply unchanged.
-fn vote(s: &Shared, chat: &ChatSession, pid: Uuid, approved: bool) -> ApiResult<ActionProposal> {
-    let mut svc = s.lock();
-    svc.vote_on_proposal(chat.id, chat.workspace_id, pid, approved)?
-        .ok_or_else(|| ApiError::not_found("proposal"))
+/// `POST /v1/proposals/:id/approve` and `/reject`: gone (410). The phone
+/// votes with the `vote` phone action, signed by its own key.
+async fn approve_proposal(Path(_id): Path<String>) -> ApiResult<Json<Value>> {
+    Err(gone_to_phone_action("vote"))
 }
 
-async fn approve_proposal(State(s): S, peer: Option<axum::Extension<TunnelPeer>>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
-    let (chat, p) = find_proposal(&s, &id)?;
-    presence_gate(&s, peer.as_deref(), "approve")?;
-    // Approving never applies anything (auto-apply is cut in 0.1): a person
-    // asks one host to apply it ("Apply on ‹host›", a phone action or the
-    // desktop's button), and only that host does, once.
-    let updated = vote(&s, &chat, p.id, true)?;
-    s.after_write();
-    let chat = load_chat(&s, &chat.id.to_string()).unwrap_or(chat);
-    Ok(Json(json!({ "proposal": proposal_dto_as(&chat, &updated, &s.my_actor_id()) })))
-}
-
-#[derive(Deserialize, Default)]
-struct RejectReq {
-    #[serde(default)]
-    reason: Option<String>,
-}
-
-async fn reject_proposal(State(s): S, peer: Option<axum::Extension<TunnelPeer>>, Path(id): Path<String>, body: Bytes) -> ApiResult<Json<Value>> {
-    let req: RejectReq = optional_json(&body)?;
-    let (chat, p) = find_proposal(&s, &id)?;
-    presence_gate(&s, peer.as_deref(), "reject")?;
-    // A reason rides the proposal's refinement thread as a comment, the way a
-    // reviewer's note does on the desktop.
-    if let Some(reason) = req.reason.map(|r| r.trim().to_string()).filter(|r| !r.is_empty()) {
-        let mut svc = s.lock();
-        let actor = svc.author().id.clone();
-        let role = chat.role_of(&actor);
-        svc.refine_proposal(chat.id, chat.workspace_id, p.id, actor, role, reason, false)?;
-    }
-    let updated = vote(&s, &chat, p.id, false)?;
-    s.after_write();
-    let chat = load_chat(&s, &chat.id.to_string()).unwrap_or(chat);
-    let updated = chat.proposals.iter().find(|q| q.id == updated.id).cloned().unwrap_or(updated);
-    Ok(Json(json!({ "proposal": proposal_dto_as(&chat, &updated, &s.my_actor_id()) })))
+async fn reject_proposal(Path(_id): Path<String>) -> ApiResult<Json<Value>> {
+    Err(gone_to_phone_action("vote"))
 }
 
 // ── Proposal collaboration: thread + request changes (desktop parity) ─────
@@ -1226,52 +1186,11 @@ async fn list_asks(State(s): S, Path(id): Path<String>) -> ApiResult<Json<Value>
     Ok(Json(json!({ "asks": asks.into_iter().take(50).map(|a| ask_state_dto(&chat, a)).collect::<Vec<_>>() })))
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AnswerReq {
-    #[serde(default)]
-    answer: String,
-    #[serde(default)]
-    option_index: Option<u32>,
-}
-
-/// `POST v1/asks/{id}/answer` (D.4.2): a person answers an agent's question
-/// from the phone. Answering authorizes nothing by itself, so it needs no
-/// presence; the first answer in canonical order wins.
-async fn answer_ask(State(s): S, Path(id): Path<String>, Json(req): Json<AnswerReq>) -> ApiResult<Json<Value>> {
-    let ask_id = parse_id(&id, "question")?;
-    let chat = s
-        .workspace_chats()?
-        .into_iter()
-        .find(|c| c.flow.asks.contains_key(&ask_id))
-        .ok_or_else(|| ApiError::not_found("question"))?;
-    let st = chat.flow.asks.get(&ask_id).cloned().ok_or_else(|| ApiError::not_found("question"))?;
-    if !st.is_open() {
-        return Err(ApiError::bad_request("that question is already answered or closed"));
-    }
-    let text = match req.option_index.and_then(|i| st.ask.options.get(i as usize)) {
-        Some(o) if req.answer.trim().is_empty() => o.clone(),
-        _ => req.answer.trim().to_string(),
-    };
-    if text.is_empty() {
-        return Err(ApiError::bad_request("an answer is required"));
-    }
-    {
-        let mut svc = s.lock();
-        let by = svc.author().display_name.clone();
-        let rec = hive_core::flow::FlowRecord::HumanAnswered(hive_core::flow::HumanAnswered {
-            ask_id,
-            answer: text.chars().take(hive_core::flow::MAX_ANSWER_CHARS).collect(),
-            option_index: req.option_index,
-            by,
-            at_ms: hive_core::flow::now_ms(),
-        });
-        svc.record_flow(chat.id, chat.workspace_id, rec)?;
-    }
-    s.after_write();
-    let chat = load_chat(&s, &chat.id.to_string())?;
-    let st = chat.flow.asks.get(&ask_id).ok_or_else(|| ApiError::not_found("question"))?;
-    Ok(Json(json!({ "ask": ask_state_dto(&chat, st) })))
+/// `POST v1/asks/{id}/answer`: gone (410). A person answers an agent's
+/// question with the `answer` phone action, signed by the phone's own key
+/// (the box's own answer would be a service member's, recorded as a human's).
+async fn answer_ask(Path(_id): Path<String>) -> ApiResult<Json<Value>> {
+    Err(gone_to_phone_action("answer"))
 }
 
 /// A "Send to agent to revise" waiting for the agent's new version.
