@@ -78,7 +78,7 @@ EXTRA_VALUES="" RELAY_CHART_DIR="${LIGUS_RELAY_CHART:-}" FETCH_RELAY=0 TIMEOUT=1
 SKIP_TEST=0 DEL_DATA=0 DEL_SECRETS=0 DEL_NS=0 THROWAWAY=0 FROM_DIR="" SECRET_NAME=""
 PROBE_IMAGE=busybox:1.37 REPLACE=0
 
-need() { [ $# -ge 2 ] && [ -n "$2" ] || ac_usage_error "$1 needs a value"; }
+need() { if [ $# -lt 2 ] || [ -z "$2" ]; then ac_usage_error "$1 needs a value"; fi; }
 while [ $# -gt 0 ]; do
   case $1 in
     --json) AC_JSON=1 ;;
@@ -130,8 +130,9 @@ WS_SECRET=${WS_SECRET:-$REL-workspace}
 # could switch off a fail-closed default) behind the rendered-manifest check.
 valid() { # flag value regex
   [ -z "$2" ] && return 0
-  printf '%s' "$2" | LC_ALL=C grep -Eq "^($3)\$" && [ "$(printf '%s' "$2" | wc -l | tr -d ' ')" = 0 ] \
-    || ac_usage_error "$1: invalid value (allowed: $3)"
+  if ! printf '%s' "$2" | LC_ALL=C grep -Eq "^($3)\$" || [ "$(printf '%s' "$2" | wc -l | tr -d ' ')" != 0 ]; then
+    ac_usage_error "$1: invalid value (allowed: $3)"
+  fi
 }
 DNS1123='[a-z0-9]([-a-z0-9]*[a-z0-9])?'
 valid --context "$CTX" '[A-Za-z0-9@:._/-]+'
