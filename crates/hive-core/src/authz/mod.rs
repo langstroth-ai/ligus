@@ -731,6 +731,11 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
                 if !at.device_trusted(request.host_device_id) {
                     return Decision::deny("the host isn't a trusted device here");
                 }
+                // A phone applies nothing (its tier): a request naming one
+                // would only hold the proposal's single applier slot.
+                if at.devices.get(&request.host_device_id).is_some_and(|d| d.phone) {
+                    return Decision::deny("a phone isn't a host");
+                }
                 if let Some(why) = crate::guard::human_gate_reason(fold, p) {
                     return Decision::deny(why);
                 }

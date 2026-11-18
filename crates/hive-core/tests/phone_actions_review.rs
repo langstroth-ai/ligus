@@ -129,6 +129,26 @@ fn request(f: &Fixture, id: u128, host: Uuid) -> SessionEvent {
     }
 }
 
+/// A phone never applies anything (its tier refuses `ProposalApplied`), so a
+/// request naming one would stay open forever and, one applier per
+/// proposal, block every other apply until someone withdraws it.
+#[test]
+fn an_apply_request_never_names_a_phone() {
+    let mut f = fixture();
+    approve(&mut f);
+    let chat = f.chat;
+    let phone_host = f.phone.device_id;
+    let r = request(&f, 1, phone_host);
+    let asked = phone_signed(&mut f, "mara", Some(chat), r);
+    assert_eq!(f.w.verdict(asked), Verdict::Denied);
+    assert!(f.w.state(chat).open_apply_request(f.pid).is_none());
+    // The box (a real host) is fine.
+    let host = f.host;
+    let r = request(&f, 2, host);
+    let ok = phone_signed(&mut f, "mara", Some(chat), r);
+    assert_eq!(f.w.verdict(ok), Verdict::Allowed);
+}
+
 /// A Viewer's phone asks for nothing; a box's vote is never a person's.
 #[test]
 fn a_viewer_phone_requests_nothing_and_a_box_vote_is_not_a_persons() {
