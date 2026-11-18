@@ -127,7 +127,17 @@ pub fn rules(plan: &EnforcementPlan, home: Option<&Path>, proxy_port: Option<u16
     if let Some(run) = std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty()) {
         deny.push(canonical(Path::new(&run)));
     }
+    // Phase C: the home dir is denied as a whole; what the plan lets back in
+    // (the worktree, the turn's dirs, the writable extras and `home_read`)
+    // gets rules of its own below, carved around the hard denies.
+    if let Some(h) = &plan.home {
+        deny.push(canonical(h));
+    }
     let mut allow: Vec<PathBuf> = plan.allow_read.iter().map(|p| canonical(p)).collect();
+    allow.push(canonical(&plan.worktree));
+    allow.push(canonical(&plan.tmp));
+    allow.extend(plan.write_extra.iter().map(|p| canonical(p)));
+    allow.extend(plan.home_read.iter().map(|p| canonical(p)));
     if let Some(h) = home.filter(|_| has_turn_home(plan)) {
         let turn_home = canonical(&plan.tmp);
         deny.extend(cli_config_paths(h).iter().map(|p| canonical(p)).filter(|p| !turn_home.starts_with(p) && !p.starts_with(&turn_home)));
@@ -146,15 +156,18 @@ pub fn rules(plan: &EnforcementPlan, home: Option<&Path>, proxy_port: Option<u16
     let mut write = Vec::new();
     let wt = canonical(&plan.worktree);
     let extra: Vec<PathBuf> = plan.write_extra.iter().map(|p| canonical(p)).collect();
+    // Denies below a writable path are carved out of it; one above it (the
+    // home, a data dir holding a worker's checkout) is the plan's to lift.
+    let below = |root: &Path| -> Vec<PathBuf> { deny.iter().filter(|d| !root.starts_with(d)).cloned().collect() };
     if plan.worktree_writable && !extra.iter().any(|w| wt.starts_with(w)) {
         let mut protected: Vec<PathBuf> = plan.read_only.iter().map(|p| canonical(p)).collect();
         protected.push(wt.join(".git"));
-        protected.extend(deny.iter().cloned());
+        protected.extend(below(&wt));
         write.extend(carve(&wt, &protected));
     }
     for w in &extra {
         if w.exists() {
-            write.extend(carve(w, &deny));
+            write.extend(carve(w, &below(w)));
         }
     }
     write.sort();
@@ -298,6 +311,8 @@ mod tests {
             read_only: vec![wt.join(".git"), wt.join(".ligus"), wt.join("ligus.config.toml"), wt.join(".envrc")],
             deny_read: vec![root.join("a/secret")],
             allow_read: vec![wt.clone()],
+            home: None,
+            home_read: vec![],
             write_extra: vec![tmp.clone()],
             tmp: tmp.clone(),
             egress: EgressPlan::Proxy { allow: vec![HostPort::new("api.anthropic.com", 443), HostPort::new("127.0.0.1", 11434)] },

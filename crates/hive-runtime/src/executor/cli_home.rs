@@ -198,6 +198,59 @@ mod keychain {
 /// keeps unwritable).
 pub const CLAUDE_USER_DIRS: &[&str] = &["plugins", "skills", "agents", "commands"];
 
+/// The git identity (`user.name`, `user.email`) from the user's global git
+/// config, read by the host: the only part of `~/.gitconfig` a turn home
+/// gets. The rest can name credential helpers, URL rewrites that embed
+/// tokens, and includes of other files, so it is never copied or readable.
+pub fn git_identity(real_home: &Path) -> Vec<(&'static str, String)> {
+    let mut out = Vec::new();
+    for key in ["user.name", "user.email"] {
+        let o = hive_core::process_util::command("git")
+            .args(["config", "--global", "--get", key])
+            .env("HOME", real_home)
+            .env_remove("GIT_CONFIG_GLOBAL")
+            .env_remove("XDG_CONFIG_HOME")
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output();
+        if let Some(o) = o.ok().filter(|o| o.status.success()) {
+            let v = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            // One plain line: nothing that could close the value and open
+            // another section.
+            if !v.is_empty() && v.len() <= 256 && !v.chars().any(|c| c.is_control() || c == '"' || c == '\\') {
+                out.push((key, v));
+            }
+        }
+    }
+    out
+}
+
+/// Write the git identity into a turn home's `.gitconfig`.
+fn write_git_identity(real_home: &Path, home: &Path) {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<PathBuf, Vec<(&'static str, String)>>>> = std::sync::OnceLock::new();
+    let ids = {
+        let c = CACHE.get_or_init(Default::default);
+        let mut m = c.lock().unwrap_or_else(|e| e.into_inner());
+        m.entry(real_home.to_path_buf()).or_insert_with(|| git_identity(real_home)).clone()
+    };
+    if ids.is_empty() {
+        return;
+    }
+    let mut text = String::from("[user]\n");
+    for (k, v) in ids {
+        text.push_str(&format!("\t{} = \"{}\"\n", k.trim_start_matches("user."), v));
+    }
+    let _ = crate::private_file::write_private_atomic(&home.join(".gitconfig"), text.as_bytes());
+}
+
+/// The turn home of a child that isn't a CLI agent (a command, a pre-flight
+/// test, a stdio MCP server): empty but for the git identity.
+pub fn populate_plain(real_home: &Path, home: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(home)?;
+    write_git_identity(real_home, home);
+    Ok(())
+}
+
 /// Build the turn home for `kind` at `home` from `real_home`.
 pub fn populate(kind: ModelProviderKind, real_home: &Path, home: &Path) -> std::io::Result<()> {
     populate_with(kind, real_home, home, false)
@@ -208,6 +261,7 @@ pub fn populate(kind: ModelProviderKind, real_home: &Path, home: &Path) -> std::
 /// then linked in).
 pub fn populate_with(kind: ModelProviderKind, real_home: &Path, home: &Path, user_config: bool) -> std::io::Result<()> {
     std::fs::create_dir_all(home)?;
+    write_git_identity(real_home, home);
     for d in config_dirs(kind) {
         let src = real_path(kind, real_home, d);
         let dst = home.join(d);
@@ -291,13 +345,19 @@ fn harden_claude_settings(path: &Path) {
     let _ = crate::private_file::write_private_atomic(path, v.to_string().as_bytes());
 }
 
-/// The env a CLI child gets for its turn home: `HOME`, the XDG dirs, and
-/// the CLI's config-dir variable when the user had set one.
-pub fn env(kind: ModelProviderKind, home: &Path) -> Vec<(OsString, OsString)> {
+/// `HOME` and the XDG dirs pointing into a turn home.
+pub fn home_env(home: &Path) -> Vec<(OsString, OsString)> {
     let mut v: Vec<(OsString, OsString)> = vec![("HOME".into(), home.as_os_str().to_owned())];
     for (k, rel) in [("XDG_CONFIG_HOME", ".config"), ("XDG_DATA_HOME", ".local/share"), ("XDG_STATE_HOME", ".local/state"), ("XDG_CACHE_HOME", ".cache")] {
         v.push((k.into(), home.join(rel).into_os_string()));
     }
+    v
+}
+
+/// The env a CLI child gets for its turn home: `HOME`, the XDG dirs, and
+/// the CLI's config-dir variable when the user had set one.
+pub fn env(kind: ModelProviderKind, home: &Path) -> Vec<(OsString, OsString)> {
+    let mut v = home_env(home);
     if let Some((var, dir)) = dir_var(kind) {
         if std::env::var_os(var).is_some_and(|x| !x.is_empty()) {
             v.push((var.into(), home.join(dir).into_os_string()));

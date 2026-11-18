@@ -399,13 +399,68 @@ pub fn bwrap_args(plan: &EnforcementPlan, cwd: &Path) -> Vec<OsString> {
         push(&["--unshare-net".as_ref()]);
     }
     push(&["--ro-bind".as_ref(), "/".as_ref(), "/".as_ref(), "--dev".as_ref(), "/dev".as_ref(), "--proc".as_ref(), "/proc".as_ref()]);
+    let wt = canonical(&plan.worktree);
+    let empty = placeholder_dir(plan);
+    // The worktree: read-write with its protected paths read-only on top (a
+    // missing one pinned by an empty read-only dir, so the agent can't create
+    // it; git ignores the empty dir and the guard removes it afterwards), or
+    // read-only.
+    let worktree = |a: &mut Vec<OsString>| {
+        let mut push = |xs: &[&OsStr]| a.extend(xs.iter().map(|x| x.to_os_string()));
+        if plan.worktree_writable {
+            push(&["--bind".as_ref(), wt.as_os_str(), wt.as_os_str()]);
+            for r in &plan.read_only {
+                let r = canonical(r);
+                if r.exists() {
+                    push(&["--ro-bind".as_ref(), r.as_os_str(), r.as_os_str()]);
+                } else {
+                    push(&["--ro-bind".as_ref(), empty.as_os_str(), r.as_os_str()]);
+                }
+            }
+        } else if wt.exists() {
+            push(&["--ro-bind".as_ref(), wt.as_os_str(), wt.as_os_str()]);
+        }
+    };
+    // Phase C: the home dir is an empty tmpfs; what the plan lets back in is
+    // bound over it (read-only, shallow first), then the worktree and the
+    // writable extras. The hard denies come after all of these, so a grant
+    // of a parent dir never re-exposes a denied path inside it.
+    let home = plan.home.as_ref().map(|h| canonical(h)).filter(|h| h.is_dir());
+    if let Some(h) = &home {
+        push(&["--tmpfs".as_ref(), h.as_os_str()]);
+        let mut ro: Vec<PathBuf> = plan.home_read.iter().map(|p| canonical(p)).filter(|p| p.starts_with(h) && p.exists()).collect();
+        ro.sort_by_key(|p| p.components().count());
+        ro.dedup();
+        for r in &ro {
+            push(&["--ro-bind".as_ref(), r.as_os_str(), r.as_os_str()]);
+        }
+    }
+    worktree(&mut a);
+    let mut push = |xs: &[&OsStr]| a.extend(xs.iter().map(|x| x.to_os_string()));
+    for w in &plan.write_extra {
+        let w = canonical(w);
+        if w.exists() {
+            push(&["--bind".as_ref(), w.as_os_str(), w.as_os_str()]);
+        }
+    }
     let mut denied: Vec<PathBuf> = plan.deny_read.iter().map(|p| canonical(p)).collect();
     if let Some(run) = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) {
         denied.push(canonical(&run));
     }
     // Shallow first, so a nested deny isn't hidden under a parent's tmpfs.
     denied.sort_by_key(|p| p.components().count());
+    // A denied path under the home is already gone unless something bound
+    // above brought its parent back.
+    let visible = |d: &Path| match &home {
+        Some(h) if d.starts_with(h) => {
+            plan.home_read.iter().chain(plan.write_extra.iter()).chain(std::iter::once(&plan.worktree)).any(|b| d.starts_with(canonical(b)))
+        }
+        _ => true,
+    };
     for d in &denied {
+        if !visible(d) {
+            continue;
+        }
         match std::fs::metadata(d) {
             Ok(m) if m.is_dir() => push(&["--tmpfs".as_ref(), d.as_os_str()]),
             Ok(_) => push(&["--ro-bind".as_ref(), "/dev/null".as_ref(), d.as_os_str()]),
@@ -419,7 +474,7 @@ pub fn bwrap_args(plan: &EnforcementPlan, cwd: &Path) -> Vec<OsString> {
         let mut masked: Vec<PathBuf> = Vec::new();
         for sock in known_host_sockets() {
             let c = canonical(&sock);
-            if masked.contains(&c) || denied.iter().any(|d| c.starts_with(d)) {
+            if masked.contains(&c) || denied.iter().any(|d| c.starts_with(d)) || home.as_ref().is_some_and(|h| c.starts_with(h)) {
                 continue;
             }
             if std::fs::metadata(&c).is_ok_and(|m| m.file_type().is_socket()) {
@@ -428,36 +483,18 @@ pub fn bwrap_args(plan: &EnforcementPlan, cwd: &Path) -> Vec<OsString> {
             }
         }
     }
+    // Readable inside a denied dir (a worker's checkouts under its data dir),
+    // and the worktree again when it sits inside one.
     for r in &plan.allow_read {
         let r = canonical(r);
-        if r.exists() && denied.iter().any(|d| r.starts_with(d)) && r != canonical(&plan.worktree) {
+        if r.exists() && denied.iter().any(|d| r.starts_with(d)) && r != wt {
             push(&["--ro-bind".as_ref(), r.as_os_str(), r.as_os_str()]);
         }
     }
-    let wt = canonical(&plan.worktree);
-    if plan.worktree_writable {
-        push(&["--bind".as_ref(), wt.as_os_str(), wt.as_os_str()]);
-        // A protected path that doesn't exist yet is pinned by an empty
-        // read-only directory at that name, so the agent can't create it
-        // (git ignores the empty dir; the guard removes it afterwards).
-        let empty = placeholder_dir(plan);
-        for r in &plan.read_only {
-            let r = canonical(r);
-            if r.exists() {
-                push(&["--ro-bind".as_ref(), r.as_os_str(), r.as_os_str()]);
-            } else {
-                push(&["--ro-bind".as_ref(), empty.as_os_str(), r.as_os_str()]);
-            }
-        }
-    } else if wt.exists() {
-        push(&["--ro-bind".as_ref(), wt.as_os_str(), wt.as_os_str()]);
+    if denied.iter().any(|d| wt.starts_with(d)) {
+        worktree(&mut a);
     }
-    for w in &plan.write_extra {
-        let w = canonical(w);
-        if w.exists() {
-            push(&["--bind".as_ref(), w.as_os_str(), w.as_os_str()]);
-        }
-    }
+    let mut push = |xs: &[&OsStr]| a.extend(xs.iter().map(|x| x.to_os_string()));
     // The turn's Ligus MCP socket (D.3.2): its 0700 directory is bound in, so
     // the socket is reachable even when a denied path's tmpfs covers it.
     // Unix sockets work across the fresh network namespace.
@@ -976,6 +1013,8 @@ mod tests {
             read_only: vec![],
             deny_read: vec![],
             allow_read: vec![],
+            home: None,
+            home_read: vec![],
             write_extra: vec![],
             tmp: tmp.to_path_buf(),
             egress: EgressPlan::Proxy { allow: vec![HostPort::new("api.anthropic.com", 443), HostPort::new("127.0.0.1", 11434)] },
