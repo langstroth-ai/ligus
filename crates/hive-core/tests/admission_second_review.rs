@@ -152,7 +152,8 @@ fn a_service_member_re_adding_itself_changes_neither_kind_account_nor_identity()
     let r = redeem(&mut w, "box", id);
     assert_eq!(w.verdict(r), Verdict::Allowed);
     let owner_account = w.people["owner"].account_id;
-    let cases: Vec<(&str, Box<dyn Fn(&mut hive_core::WorkspaceMember)>)> = vec![
+    type Edit = Box<dyn Fn(&mut hive_core::WorkspaceMember)>;
+    let cases: Vec<(&str, Edit)> = vec![
         ("kind", Box::new(|m| m.actor.kind = ActorKind::Human)),
         ("kind agent", Box::new(|m| m.actor.kind = ActorKind::Agent)),
         ("account", Box::new(move |m| m.actor.account_id = Some(owner_account))),
@@ -639,5 +640,49 @@ fn the_generator_reaches_redemptions_closures_and_cuts() {
     assert!(allowed(&|p| matches!(p, SessionEvent::AdmissionClosed { .. })));
     assert!(allowed(&|p| matches!(p, SessionEvent::MemberRemoved { .. })));
     assert!(w.roster().members.contains_key("box") && !w.roster().members.contains_key("box2"));
+    assert_order_independent(&w);
+}
+
+/// Integration with phone revocation: who may revoke a box's device. An
+/// Admin above it (with presence) may; a Contributor, a peer box, the box
+/// itself (it never carries presence) and an Admin's phone may not. A box
+/// never revokes a person's phone.
+#[test]
+fn who_may_revoke_a_boxs_device() {
+    let mut w = world();
+    let id = Uuid::new_v4();
+    issue(&mut w, id, Admission::service(now_ms() + HOUR_MS, None, key().public()));
+    let r = redeem(&mut w, "box", id);
+    assert_eq!(w.verdict(r), Verdict::Allowed);
+    let id2 = Uuid::new_v4();
+    issue(&mut w, id2, Admission::service(now_ms() + HOUR_MS, None, key().public()));
+    let r2 = redeem(&mut w, "box2", id2);
+    assert_eq!(w.verdict(r2), Verdict::Allowed);
+    let dev = w.people["box"].device_id;
+    let revoke = |w: &SignedWorld, d: Uuid| SessionEvent::DeviceRevoked { device_id: d, watermark: honest_watermark(w, "box") };
+    let e = revoke(&w, dev);
+    let by_mara = w.push("mara", e);
+    assert_eq!(w.verdict(by_mara), Verdict::Denied, "a Contributor");
+    let e = revoke(&w, dev);
+    let by_peer = w.push_bare("box2", e);
+    assert_eq!(w.verdict(by_peer), Verdict::Denied, "a peer box");
+    let e = revoke(&w, dev);
+    let by_itself = w.push_bare("box", e);
+    assert_eq!(w.verdict(by_itself), Verdict::Denied, "the box itself carries no presence");
+    let phone = Phone::new();
+    let cert = w.phone_certificate("adm", &phone);
+    w.push("adm", SessionEvent::DeviceCertificateAdded { certificate: cert });
+    let e = revoke(&w, dev);
+    let by_phone = w.phone_write("adm", &phone, None, e);
+    assert_eq!(w.verdict(by_phone), Verdict::Denied, "an Admin's phone revokes only itself");
+    // A box never revokes a person's phone.
+    let e = SessionEvent::DeviceRevoked { device_id: phone.device_id, watermark: vec![] };
+    let box_on_phone = w.push_bare("box", e);
+    assert_eq!(w.verdict(box_on_phone), Verdict::Denied);
+    assert!(!w.roster().devices[&phone.device_id].revoked);
+    let e = revoke(&w, dev);
+    let by_admin = w.push("adm", e);
+    assert_eq!(w.verdict(by_admin), Verdict::Allowed);
+    assert!(w.roster().devices[&dev].revoked);
     assert_order_independent(&w);
 }

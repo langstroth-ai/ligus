@@ -1388,11 +1388,6 @@ impl ChatService {
             };
             let config_id = self.ensure_workspace_config(workspace_id)?;
             let proved = proof.is_some();
-            if proved {
-                // The redemption counts only from a device the log has
-                // already certified (`hive_core::authz`): publish first.
-                self.publish_identity(session_id, workspace_id)?;
-            }
             self.append_signed(config_id, workspace_id, SessionEvent::MemberAdded { member, invite, proof })?;
             if proved {
                 self.store.clear_join_redeem_key(workspace_id)?;

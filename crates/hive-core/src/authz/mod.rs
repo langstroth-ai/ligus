@@ -333,11 +333,17 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             return Decision::deny(why);
         }
         // The proof names the signing device, so that device must really
-        // have signed: certified here for the stamp's account, not revoked,
-        // and its signature verifies (not only at ingest).
+        // have signed. Ingest verifies every envelope against its device's
+        // certificate wherever that sorts; here, when the device is already
+        // certified at this position (a box publishes its identity after it
+        // joins, so usually it isn't), the fold checks it too: certified for
+        // the stamp's account, not revoked, and the signature verifies.
         if member.id == author && invite.is_some_and(|id| crate::admission::admission_of(fold, id).is_some()) {
-            if let Err(why) = certified_signer(env, ctx.running) {
-                return Decision::deny(format!("a box admission is redeemed by its own certified device: {why}"));
+            let known = env.signer_device_id.is_some_and(|d| ctx.running.devices.contains_key(&d));
+            if known {
+                if let Err(why) = certified_signer(env, ctx.running) {
+                    return Decision::deny(format!("a box admission is redeemed by its own certified device: {why}"));
+                }
             }
         }
     }

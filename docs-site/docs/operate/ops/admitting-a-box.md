@@ -209,6 +209,6 @@ it from a fresh data dir and admit it again.
 | `that code isn't a box admission` | The code is a person's invite (or from an older build). Use **Admit a box**. |
 | `a box admission is redeemed with its code's proof` / `that redemption's proof doesn't verify` | The box joined without the code's redeem key: redeem the code again with `ligus admit redeem`. |
 | `that box admission is for another box` | The sealed code was made for another box's join request. |
-| `a box joins under its own account` / `a box admission is redeemed by its own certified device: …` | The redemption wasn't the box's own (its device unsynced, or the member record names another account). Restart the box so it publishes its identity, then redeem with a new admission. |
+| `a box joins under its own account` / `a box admission is redeemed by its own certified device: …` | The redemption wasn't the box's own (signed by another device than it names, or a member record naming another account): not something a Ligus box writes. Remove whatever joined and issue a new admission. |
 | `this admission code was sealed to another box` | Same: redeem it on the box that printed the request. |
 | `that admission is for workspace 'X', but this box serves 'Y'` | The code and `LIGUS_WORKSPACE` name different workspaces. |
