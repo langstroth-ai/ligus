@@ -35,7 +35,7 @@ env:
   # a tested commit (relay v0.3.0), never a moving branch. Bump it together
   # with the ligus chart's langstroth-relay dependency.
   RELAY_REPO: langstroth-ai/langstroth-relay
-  RELAY_REF: 50451173b28a78c4845a38107429aaf0cc6d02bf
+  RELAY_REF: b3e4484497e63a644660f02faad6e90186b429a9
 
 jobs:
   e2e:
