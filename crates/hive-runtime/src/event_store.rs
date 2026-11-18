@@ -244,6 +244,14 @@ impl EventStore {
             -- signed content (an equivocation). Kept as evidence and folded
             -- with the log, so both copies are denied whichever came first.
             -- Never pushed.
+            -- Device-local, never synced: the apply requests this host
+            -- started (Phase B). Claimed before any git work, so a request is
+            -- applied at most once here even across a crash or a restart.
+            CREATE TABLE IF NOT EXISTS apply_attempts (
+                request_id  TEXT PRIMARY KEY,
+                started_ms  INTEGER NOT NULL,
+                finished    INTEGER NOT NULL DEFAULT 0
+            );
             CREATE TABLE IF NOT EXISTS equivocations (
                 row_id        INTEGER PRIMARY KEY AUTOINCREMENT,
                 event_id      TEXT NOT NULL,
@@ -597,6 +605,32 @@ impl EventStore {
         )?;
         tracing::warn!(event_id = %env.event_id, "two different envelopes under one event id: both are denied");
         Ok(())
+    }
+
+    /// Claim apply request `request_id` for this host: `true` the first
+    /// time, `false` ever after (a restart included).
+    pub fn claim_apply_attempt(&self, request_id: Uuid) -> Result<bool> {
+        let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+        let n = self.conn.execute(
+            "INSERT OR IGNORE INTO apply_attempts (request_id, started_ms) VALUES (?1, ?2)",
+            rusqlite::params![request_id.to_string(), ms],
+        )?;
+        Ok(n == 1)
+    }
+
+    /// Record that this host wrote its outcome for `request_id` (or gave up).
+    pub fn finish_apply_attempt(&self, request_id: Uuid) -> Result<()> {
+        self.conn.execute("UPDATE apply_attempts SET finished = 1 WHERE request_id = ?1", [request_id.to_string()])?;
+        Ok(())
+    }
+
+    /// Whether this host finished with `request_id`.
+    pub fn apply_attempt_finished(&self, request_id: Uuid) -> Result<bool> {
+        let n: Option<i64> = self
+            .conn
+            .query_row("SELECT finished FROM apply_attempts WHERE request_id = ?1", [request_id.to_string()], |r| r.get(0))
+            .optional()?;
+        Ok(n == Some(1))
     }
 
     pub fn has_event(&self, event_id: Uuid) -> Result<bool> {

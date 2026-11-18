@@ -14,6 +14,7 @@ compile_error!("hive-runtime's `test-presence` feature must never be in an optim
 
 pub mod agent_tools;
 pub mod agent_turn;
+pub mod apply_host;
 pub mod attachment_blob;
 pub mod author_gate;
 pub mod box_admission;
