@@ -47,11 +47,13 @@ use uuid::Uuid;
 use crate::events::{SessionEvent, SessionEventEnvelope};
 
 /// What makes two envelopes under one id the same event: the signer, the
-/// signature and the signed preimage.
+/// signature and the signed preimage, however its bytes were encoded
+/// ([`crate::crypto::canonical_preimage`]: a re-encoded copy of a genuine
+/// envelope is that envelope, never its signer's second event).
 pub(crate) type CopyKey = (Option<Uuid>, Option<Vec<u8>>, Vec<u8>);
 
 pub(crate) fn copy_key(e: &SessionEventEnvelope) -> CopyKey {
-    (e.signer_device_id, e.signature.clone(), crate::crypto::envelope_preimage(e))
+    (e.signer_device_id, e.signature.clone(), crate::crypto::canonical_preimage(e))
 }
 
 /// One kept copy as the fold tells them apart: its event id, and `0` for an

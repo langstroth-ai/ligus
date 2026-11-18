@@ -493,3 +493,45 @@ proptest! {
         }
     }
 }
+
+/// Re-encoding a genuine envelope (whitespace or key order inside a signed
+/// field) needs no key: the bytes differ, the typed value doesn't, and the
+/// signature still verifies (the typed-preimage fallback). That copy is the
+/// same event, not the signer's second one: it must not deny the original.
+#[test]
+fn a_re_encoded_copy_is_the_same_event_not_an_equivocation() {
+    for chat_side in [true, false] {
+        let (mut w, chat) = world();
+        let (log_of, id) = if chat_side {
+            w.say(chat, "con", title("before"));
+            (Some(chat), w.say(chat, "con", title("honest")))
+        } else {
+            (None, w.push("owner", SessionEvent::WorkspaceRulesSet { version: 2, presence: None }))
+        };
+        let orig = find(&w, log_of, id);
+        let wire = serde_json::to_string(&orig).unwrap();
+        let p = wire.find("\"payload\":{").expect("payload on the wire");
+        let mut re = wire.clone();
+        re.insert(p + "\"payload\":{".len(), ' ');
+        let reencoded: SessionEventEnvelope = serde_json::from_str(&re).unwrap();
+        assert_ne!(hive_core::crypto::envelope_preimage(&reencoded), hive_core::crypto::envelope_preimage(&orig), "control: other bytes");
+        let key = &w.people[if chat_side { "con" } else { "owner" }].device.public_key_bytes();
+        assert!(hive_core::crypto::verify_envelope(&reencoded, key).is_ok(), "control: it still verifies");
+        let orig_wire: SessionEventEnvelope = serde_json::from_str(&wire).unwrap();
+        assert!(!hive_core::events::equivocates(&orig_wire, &reencoded), "one event, two encodings");
+        if chat_side {
+            let mut log = w.chats[&chat].clone();
+            let at = log.iter().position(|e| e.event_id == id).unwrap();
+            log[at] = orig_wire;
+            log.push(reencoded);
+            assert_eq!(chat_fold(&w.cfg, &log).title, "honest", "a re-encoded copy erased the event");
+            assert_eq!(chat_verdicts(&w.cfg, &log)[&id], Verdict::Allowed);
+        } else {
+            let mut cfg = w.cfg.clone();
+            let at = cfg.iter().position(|e| e.event_id == id).unwrap();
+            cfg[at] = orig_wire;
+            cfg.push(reencoded);
+            assert_eq!(fold_decisions(&cfg, None, None, WorkspaceAuthz::Unchecked)[&id], Verdict::Allowed, "a re-encoded copy erased the config event");
+        }
+    }
+}

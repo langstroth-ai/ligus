@@ -123,6 +123,20 @@ pub fn envelope_preimage(env: &SessionEventEnvelope) -> Vec<u8> {
     preimage_of(env, [scope, timestamp, actor_stamp, payload])
 }
 
+/// What a copy of an event signs, independent of how its bytes were encoded:
+/// the typed preimage when the received bytes mean exactly the typed value
+/// (only key order, spacing or number spelling may differ), else the
+/// received bytes' own. Two encodings of one signed event are one event
+/// ([`crate::copies`]): re-encoding a genuine envelope needs no key, and the
+/// typed-preimage fallback in [`verify_envelope`] verifies it.
+pub(crate) fn canonical_preimage(env: &SessionEventEnvelope) -> Vec<u8> {
+    if env.raw().is_some() && received_matches_typed(env) {
+        typed_preimage(env)
+    } else {
+        envelope_preimage(env)
+    }
+}
+
 /// The preimage over the typed fields re-serialized (ignoring received bytes).
 fn typed_preimage(env: &SessionEventEnvelope) -> Vec<u8> {
     preimage_of(
