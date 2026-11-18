@@ -45,7 +45,7 @@ ALIASES = ("docs.ligus.ai", "docs.apiaryhq.ai")
 HOSTS = {"1x": "docs.apiaryhq.ai", "ligus": "docs.ligus.ai", "langstroth": PRIMARY}
 # The commits the old sites were built from (for --refs).
 REF_1X = "4a51d44b"  # main at v1.18.0: root mkdocs.yml, docs_dir docs-site
-REF_SPLIT = "71e1084c"  # release/v2.0.0 (the 0.1.0 release branch) before the merge: docs-site/{user,operator}
+REF_SPLIT = "71e1084c"  # release/v0.1.0 (the 0.1.0 release branch) before the merge: docs-site/{user,operator}
 # Files served on the alias hosts as they are, without a redirect: shipped
 # desktop builds read https://docs.ligus.ai/version.json (and 1.x builds
 # https://docs.apiaryhq.ai/version.json) for their update check.

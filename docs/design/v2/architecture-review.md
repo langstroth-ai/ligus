@@ -8,14 +8,14 @@ Scope reviewed (read-only, 2026-11-13):
 
 | Area | Location | Branch |
 |---|---|---|
-| Core, runtime, proto, CLI (serve, worker), desktop, web | this repo | `release/v2.0.0` @ `d7632c73` |
+| Core, runtime, proto, CLI (serve, worker), desktop, web | this repo | `release/v0.1.0` @ `d7632c73` |
 | Core security fixes (input) | this repo | `sec/core-hardening`, 13 commits on `d7632c73` |
 | Relay (Go) and its chart | relay repo (`langstroth-ai/langstroth-relay`) | `sec/relay-hardening` |
 | iOS | iOS app repo (private) | `rebrand/ligus` |
 | Workspace chart (serve, worker, sandbox) | this repo, `deploy/helm/ligus` | `feat/k8s-phase1` |
 | Vision | an internal deployments deck, and [`docs/design/kubernetes.md`](../kubernetes.md) | |
 
-Unless a path says otherwise, citations are relative to the root of this repo on `release/v2.0.0`. Relay paths are prefixed `relay/` and refer to the relay repo. Line numbers are as of the review date (2026-11-13) and will have drifted since.
+Unless a path says otherwise, citations are relative to the root of this repo on `release/v0.1.0`. Relay paths are prefixed `relay/` and refer to the relay repo. Line numbers are as of the review date (2026-11-13) and will have drifted since.
 
 ---
 

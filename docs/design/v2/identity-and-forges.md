@@ -10,7 +10,7 @@ Status: design spec, written 2026-11-14. Nothing was implemented. All repositori
 
 | What | Where | Branch |
 |---|---|---|
-| Core, runtime, CLI and serve, desktop, web | this repo | `release/v2.0.0` @ `329b2c7d` |
+| Core, runtime, CLI and serve, desktop, web | this repo | `release/v0.1.0` @ `329b2c7d` |
 | Relay (Go) and ligus-auth | relay repo (`langstroth-ai/langstroth-relay`) | `release/v0.2.0` @ `1994c3c` |
 | Earlier specs this one builds on | [`architecture-review.md`](architecture-review.md), [`phase0-specs.md`](phase0-specs.md), [`directory-trust.md`](directory-trust.md), and the iOS ligus-auth sign-in note (iOS app repo) | n/a |
 

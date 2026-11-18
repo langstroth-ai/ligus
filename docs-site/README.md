@@ -133,7 +133,7 @@ Do these in order. None of them needs a code change.
    Set **Base directory** to `docs-site` (it was `docs-site/operator`), and
    leave the build command and publish directory empty so `netlify.toml`
    supplies them. Set the production branch to the branch that carries this
-   layout (`release/v2.0.0`, the 0.1.0 release branch, until it merges, then `main`). Deploy, then
+   layout (`release/v0.1.0`, the 0.1.0 release branch, until it merges, then `main`). Deploy, then
    check `https://docs.langstroth.ai/`, `/ligus/`, `/operate/`,
    `/version.json`, and that `/deploy/` answers 301 to `/operate/deploy/`.
 2. **Move docs.ligus.ai to `langstroth-docs`.** On `ligus-docs` → Domain

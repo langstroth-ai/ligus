@@ -4,7 +4,7 @@
 
 Design records for the 2.0 release (Ligus is short for *ligustica*, the
 Italian honeybee). They were written
-in November 2026 against the `release/v2.0.0` branch. Citations are
+in November 2026 against the `release/v0.1.0` branch. Citations are
 `file:line` references into this repo (and, where prefixed `relay/`, into the
 relay repo); line numbers are as of each document's date and drift as the
 code moves. When a document and the code disagree, the code wins.

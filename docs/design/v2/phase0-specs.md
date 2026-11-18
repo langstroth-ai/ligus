@@ -13,7 +13,7 @@ Ligus is short for *ligustica*, the Italian honeybee.
 
 | Repo | Location | Branch / commit |
 |---|---|---|
-| Core, app and CLI | this repo | `release/v2.0.0` @ `534c8d0b`. sec/core-, host- and chart-hardening are merged (a79ac18e, 45c84abe, 7548ec42). The UI and phone-endpoint merges are in progress. |
+| Core, app and CLI | this repo | `release/v0.1.0` @ `534c8d0b`. sec/core-, host- and chart-hardening are merged (a79ac18e, 45c84abe, 7548ec42). The UI and phone-endpoint merges are in progress. |
 | Relay | relay repo (`langstroth-ai/langstroth-relay`) | `release/v0.2.0` @ `3c22559` |
 | iOS | iOS app repo (private) | `feat/ligus-2.0` @ `aaa679c` |
 
@@ -1565,7 +1565,7 @@ Any OIDC provider can sign people in to relay access, with automated provisionin
 
 ```mermaid
 flowchart LR
-  R0((R0: release/v2.0.0 after UI + phone merges)) --> A1[A1 raw-bytes verify]
+  R0((R0: release/v0.1.0 after UI + phone merges)) --> A1[A1 raw-bytes verify]
   R0 --> C1[C1 quick fixes + S1 trust + P0.6 interim]
   R0 --> D1[D1 ACP driver + V1/V3]
   A1 --> A2[A2 AuthzEngine + per-ws roster + env-free fold + S2]
@@ -1592,7 +1592,7 @@ flowchart LR
 ### 7.1 Worktrees
 
 - One worktree per PR, all branched from R0:
-  `git worktree add ../ligus-p0-<id> -b p0/<id> release/v2.0.0`
+  `git worktree add ../ligus-p0-<id> -b p0/<id> release/v0.1.0`
 - There are six parallel lanes from day one:
   - A1;
   - C1;
@@ -1632,7 +1632,7 @@ Only one semantic PR merges at a time, in this order. Every merge runs the full 
 | `crates/hive-runtime/src/sync_engine.rs` | A1, A2, B1 | n/a |
 | `crates/hive-cli/src/serve/api.rs` | A2 (vote), C1/C7 (refusals), B3 (presence), D3 (asks), D4 (DTOs) | n/a |
 
-The other agent's in-flight UI and phone-endpoint merges are **R0**. No Phase 0 branch is cut before they land on `release/v2.0.0`.
+The other agent's in-flight UI and phone-endpoint merges are **R0**. No Phase 0 branch is cut before they land on `release/v0.1.0`.
 
 ## 8. In 2.0 vs can follow
 
