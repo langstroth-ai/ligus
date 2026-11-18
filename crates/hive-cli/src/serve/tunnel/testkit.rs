@@ -379,6 +379,8 @@ pub struct RelayState {
     pub http_revoke_off: std::sync::atomic::AtomicBool,
     pub http_revoke_fail: Mutex<Option<u16>>,
     pub http_revokes: Mutex<Vec<(u16, Value)>>,
+    /// Seconds the fake relay's clock is ahead of this machine's.
+    pub clock_offset: std::sync::atomic::AtomicI64,
     /// Refuse the control connection's `revoke` (ack ok:false "internal").
     pub control_revoke_fail: std::sync::atomic::AtomicBool,
     nonces: Mutex<HashSet<String>>,
@@ -497,8 +499,12 @@ fn revoke_http(st: &RelayState, m: &Value) -> (u16, Value) {
     let (Ok(nonce), Ok(sig)) = (b64u_fixed::<16>(&s("nonce")), b64u_fixed::<64>(&s("sig"))) else { return (400, json!({ "error": "protocol" })) };
     let Some(key) = st.hosts.lock().unwrap().get(&hid).copied() else { return (401, json!({ "error": "unauthorized" })) };
     let msg = super::revocation::host_revoke_message(&hid, &pid, exp, ts, &nonce);
-    if key.verify_strict(&msg, &ed25519_dalek::Signature::from_bytes(&sig)).is_err() || ts.abs_diff(super::now()) > 300 {
+    if key.verify_strict(&msg, &ed25519_dalek::Signature::from_bytes(&sig)).is_err() {
         return (401, json!({ "error": "unauthorized" }));
+    }
+    let relay_now = (super::now() as i64 + st.clock_offset.load(std::sync::atomic::Ordering::SeqCst)) as u64;
+    if ts.abs_diff(relay_now) > 300 {
+        return (401, json!({ "error": "clock_skew", "now": relay_now }));
     }
     if !st.nonces.lock().unwrap().insert(format!("{hid}|{}", s("nonce"))) {
         return (409, json!({ "error": "replayed" }));

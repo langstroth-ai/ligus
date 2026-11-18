@@ -1090,3 +1090,25 @@ async fn chat_traffic_does_not_recheck_the_roster() {
     assert!(checks() > before);
     h.handle.shutdown();
 }
+
+/// A box whose clock is far off the relay's still gets its revocation
+/// confirmed: the relay says its time, the box corrects and retries.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_skewed_clock_still_confirms_the_revocation() {
+    let relay = FakeRelay::start().await;
+    relay.state.clock_offset.store(1_000, std::sync::atomic::Ordering::SeqCst);
+    // Only the HTTP route can confirm.
+    relay.state.control_revoke_fail.store(true, std::sync::atomic::Ordering::SeqCst);
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let (t, _, _, pid, _, phone) = pair_bound(&h, &relay).await;
+    revoke_on_desktop(&h, phone.device_id);
+    crate::sync_once(&h.desktop).await.unwrap();
+    wait_until("pairing cut", Duration::from_secs(10), || !t.registry.is_active(&pid)).await;
+    wait_until("relay confirms despite the skew", Duration::from_secs(8), || {
+        relay.state.http_revokes.lock().unwrap().iter().any(|(s, b)| *s == 200 && b["pid"] == json!(pid))
+    })
+    .await;
+    wait_until("steps settle", Duration::from_secs(5), || t.ledger.list().first().is_some_and(|e| e.status.tunnel.state == StepState::Done)).await;
+    h.handle.shutdown();
+}

@@ -449,6 +449,9 @@ pub struct TunnelHost {
     /// The workspace roster, as far as a phone's device is concerned (set by
     /// `ligus serve`; tests set their own).
     device_lookup: Mutex<Option<DeviceLookupFn>>,
+    /// Seconds the relay's clock is ahead of ours, as its last `clock_skew`
+    /// answer said (signed revocations use the relay's time).
+    relay_clock_offset: std::sync::atomic::AtomicI64,
 }
 
 /// Looks a workspace device up on this box's roster.
@@ -485,6 +488,7 @@ impl TunnelHost {
             http: hive_forge::http_client_builder().connect_timeout(Duration::from_secs(3)).build()?,
             auth_admin: Mutex::new(revocation::AuthAdmin::from_env()),
             device_lookup: Mutex::new(None),
+            relay_clock_offset: Default::default(),
         }))
     }
 
@@ -761,6 +765,14 @@ impl TunnelHost {
 
     pub fn set_auth_admin(&self, a: Option<revocation::AuthAdmin>) {
         *Self::lock(&self.auth_admin) = a;
+    }
+
+    pub fn relay_clock_offset(&self) -> i64 {
+        self.relay_clock_offset.load(Ordering::SeqCst)
+    }
+
+    pub fn set_relay_clock_offset(&self, off: i64) {
+        self.relay_clock_offset.store(off, Ordering::SeqCst);
     }
 
     pub fn set_device_lookup(&self, f: DeviceLookupFn) {

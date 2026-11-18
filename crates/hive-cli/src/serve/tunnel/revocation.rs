@@ -317,6 +317,8 @@ pub enum RelayRevokeError {
     Refused(u16, String),
     /// Couldn't reach it.
     Network(String),
+    /// The relay's clock is this many seconds ahead of ours (signed).
+    ClockSkew(i64),
 }
 
 impl std::fmt::Display for RelayRevokeError {
@@ -325,13 +327,18 @@ impl std::fmt::Display for RelayRevokeError {
             Self::Unsupported => write!(f, "the relay predates POST /v1/tunnel/revoke"),
             Self::Refused(s, c) => write!(f, "the relay refused it ({s} {c})"),
             Self::Network(e) => write!(f, "couldn't reach the relay: {e}"),
+            Self::ClockSkew(d) => write!(f, "this box's clock is {d} s off the relay's"),
         }
     }
 }
 
 /// Ask the relay to drop `pid` (until `exp`), signed with the host key.
 pub async fn relay_revoke(http: &reqwest::Client, settings: &RelaySettings, keys: &HostKeys, pid: &str, exp: u64) -> Result<RelayRevoked, RelayRevokeError> {
-    let ts = now();
+    relay_revoke_at(http, settings, keys, pid, exp, now()).await
+}
+
+/// [`relay_revoke`] with `ts` (the relay's time as this box best knows it).
+pub async fn relay_revoke_at(http: &reqwest::Client, settings: &RelaySettings, keys: &HostKeys, pid: &str, exp: u64, ts: u64) -> Result<RelayRevoked, RelayRevokeError> {
     let nonce: [u8; 16] = random_bytes();
     let sig = keys.sign(&host_revoke_message(keys.host_id(), pid, exp, ts, &nonce));
     let body = json!({ "v": 1, "hostId": keys.host_id(), "pid": pid, "exp": exp, "ts": ts, "nonce": b64u(nonce), "sig": b64u(sig) });
@@ -345,6 +352,10 @@ pub async fn relay_revoke(http: &reqwest::Client, settings: &RelaySettings, keys
             push_token_removed: v["pushTokenRemoved"].as_bool().unwrap_or(false),
         }),
         404 | 405 => Err(RelayRevokeError::Unsupported),
+        401 if v["error"] == json!("clock_skew") => match v["now"].as_u64() {
+            Some(relay_now) => Err(RelayRevokeError::ClockSkew(relay_now as i64 - now() as i64)),
+            None => Err(RelayRevokeError::Refused(401, "clock_skew".into())),
+        },
         s => Err(RelayRevokeError::Refused(s, v["error"].as_str().unwrap_or("?").chars().take(40).collect())),
     }
 }
@@ -417,7 +428,15 @@ async fn work(host: &TunnelHost, e: Entry) {
     if !(e.status.tunnel.state.is_settled() && e.status.push.state.is_settled()) {
         for pid in e.pids.iter().filter(|p| !e.relay_done.contains(*p)) {
             let exp = host.revocation_exp(pid);
-            match relay_revoke(&host.http, &host.settings, &host.keys, pid, exp).await {
+            let at = |off: i64| (now() as i64).saturating_add(off).max(0) as u64;
+            let mut res = relay_revoke_at(&host.http, &host.settings, &host.keys, pid, exp, at(host.relay_clock_offset())).await;
+            if let Err(RelayRevokeError::ClockSkew(off)) = res {
+                // The relay told us its time: sign with it (once per attempt).
+                eprintln!("remote: this box's clock is {off} s off the relay's; signing revocations with the relay's time");
+                host.set_relay_clock_offset(off);
+                res = relay_revoke_at(&host.http, &host.settings, &host.keys, pid, exp, at(off)).await;
+            }
+            match res {
                 Ok(r) => {
                     host.ledger.relay_confirmed(pid, Some(r.sessions_closed), Some(r.push_token_removed));
                 }

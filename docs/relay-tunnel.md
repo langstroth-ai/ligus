@@ -725,7 +725,9 @@ sig = Ed25519(host signing key, ctx("host-revoke", hostId, pid, u64be(exp), u64b
 ```
 
 The relay verifies `sig` against the key `hostId` registered with (so a
-host can only revoke its own pairings), requires `ts` within ±300 s, accepts
+host can only revoke its own pairings), requires `ts` within ±300 s (outside it, a validly signed request gets
+`401 {"error":"clock_skew","now":<relay unix time>}`, not counted as a failed
+authentication, and the host signs again with the relay's time), accepts
 each `(hostId, nonce)` once (a replay answers `409`), and is idempotent. A
 relay without the route answers `404`; the control `revoke` ack then
 confirms. When the host has langstroth-auth operator access
