@@ -1,4 +1,4 @@
-# `web` — Hive frontend
+# `web` — Ligus frontend
 
 The **React 19 + TypeScript** frontend, built with **Vite**. It runs inside the
 [Tauri desktop shell](../app/README.md) (not a standalone web server) and talks

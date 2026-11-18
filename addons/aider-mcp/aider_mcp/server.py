@@ -1,6 +1,6 @@
 """MCP stdio server that wraps aider.
 
-Hive talks to this process over stdin/stdout in JSON-RPC 2.0 (the MCP
+Ligus talks to this process over stdin/stdout in JSON-RPC 2.0 (the MCP
 wire format). Each `tools/call` request gets translated into an aider
 CLI invocation; aider's stdout/stderr come back as the tool result.
 """
@@ -33,7 +33,7 @@ TOOLS: list[ToolDescriptor] = [
         description=(
             "Run aider against one or more files with a natural-language "
             "prompt. aider plans the edit, applies it, and (by default) "
-            "commits. Requires user approval on the Hive side."
+            "commits. Requires user approval on the Ligus side."
         ),
         input_schema={
             "type": "object",

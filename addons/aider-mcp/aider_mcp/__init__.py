@@ -1,6 +1,6 @@
 """aider-mcp — expose aider's CLI as MCP tools.
 
-The Hive client treats this as a normal MCP stdio server (configured
+The Ligus client treats this as a normal MCP stdio server (configured
 in `ligus.config.toml` under `[[mcp_servers]]`). Tools surfaced:
 
   - aider_edit: run aider with a prompt against one or more files.
@@ -9,10 +9,10 @@ in `ligus.config.toml` under `[[mcp_servers]]`). Tools surfaced:
   - aider_undo: revert aider's last edit.
 
 The shim doesn't try to be clever — it shells out to `aider` and
-returns whatever stdout/stderr says. Hive's consent flow gates each
+returns whatever stdout/stderr says. Ligus's consent flow gates each
 call.
 
-Hive can also use aider as a first-class runtime (set
+Ligus can also use aider as a first-class runtime (set
 `provider = "aider"` in a `[[runtimes]]` block). That shape makes
 aider the LLM driving a chat. This shim is the complement: it
 makes aider a *tool* that another runtime can call — useful when

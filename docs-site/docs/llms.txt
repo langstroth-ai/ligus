@@ -1,6 +1,6 @@
 # Langstroth and Ligus
 
-> Ligus is a local-first, end-to-end-encrypted desktop app for collaborating with AI agents. Workspaces and chats sync over an E2EE relay (or peer-to-peer); each device holds its own copy of the data and its own local code folder. Agents run on a host (your device or a headless worker), edit an isolated per-chat git worktree, and surface changes as reviewable proposals. The name is short for *ligustica* (Apis mellifera ligustica, the Italian honeybee); Ligus 0.1.0 is a new application whose predecessor was called Hive (1.x). Langstroth is the platform behind Ligus: the end-to-end-encrypted relay, organization sign-in (langstroth-auth), the Helm charts, and always-on Ligus hosts (`ligus serve` and `ligus worker`). The relay is content-blind: it stores and forwards encrypted event envelopes and never holds workspace keys.
+> Ligus is a local-first, end-to-end-encrypted desktop app for collaborating with AI agents. Workspaces and chats sync over an E2EE relay (or peer-to-peer); each device holds its own copy of the data and its own local code folder. Agents run on a host (your device or a headless worker), edit an isolated per-chat git worktree, and surface changes as reviewable proposals. The name is short for *ligustica* (Apis mellifera ligustica, the Italian honeybee). Langstroth is the platform behind Ligus: the end-to-end-encrypted relay, organization sign-in (langstroth-auth), the Helm charts, and always-on Ligus hosts (`ligus serve` and `ligus worker`). The relay is content-blind: it stores and forwards encrypted event envelopes and never holds workspace keys.
 
 Documentation: https://docs.langstroth.ai/ — pages below are the canonical reference. It has two sections: Using Ligus (https://docs.langstroth.ai/ligus/: desktop app, phone app, `ligus` CLI, workspaces, agents, workflows) and Operating Langstroth (https://docs.langstroth.ai/operate/: self-hosting and deploying the relay, auth, Kubernetes, `ligus serve` and worker hosts, security model, operator reference).
 
@@ -66,7 +66,7 @@ Documentation: https://docs.langstroth.ai/ — pages below are the canonical ref
 
 ## Using Ligus: Reference
 
-- [What's new](https://docs.langstroth.ai/ligus/reference/whats-new/): Changes since 1.15 with links.
+- [What's new](https://docs.langstroth.ai/ligus/reference/whats-new/): Changes in each release, with links.
 - [CLI](https://docs.langstroth.ai/ligus/reference/cli/): Every `ligus` command and flag.
 - [Settings](https://docs.langstroth.ai/ligus/reference/settings/): `settings.json` keys, CLI `config.toml`, and what the workspace config log carries.
 - [Runtime matrix](https://docs.langstroth.ai/ligus/reference/runtime-matrix/): The first-class runtimes and how each is tested before a release.
@@ -97,7 +97,7 @@ Documentation: https://docs.langstroth.ai/ — pages below are the canonical ref
 
 ## Operating Langstroth: Hosts: ligus serve and worker
 
-- [Running ligus serve](https://docs.langstroth.ai/operate/ops/serve-box/): the box as its own service member, host liveness, Apply on a host (one applier per proposal), and the 1.16 sync privacy upgrade note.
+- [Running ligus serve](https://docs.langstroth.ai/operate/ops/serve-box/): the box as its own service member, host liveness, Apply on a host (one applier per proposal).
 - [Admitting a box](https://docs.langstroth.ai/operate/ops/admitting-a-box/): admit a serve or worker box as its own service member from the desktop, the phone, a Kubernetes Secret or a headless Admin.
 - [Headless agents & setups](https://docs.langstroth.ai/operate/concepts/headless-agents/): Enrolling a headless agent/worker on a remote box via the CLI.
 - [Repos on the home host](https://docs.langstroth.ai/operate/ops/serve-repos/): The git checkouts agents on a `ligus serve` box work on, picked from the phone.
@@ -107,7 +107,6 @@ Documentation: https://docs.langstroth.ai/ — pages below are the canonical ref
 ## Operating Langstroth: Operations
 
 - [Operations](https://docs.langstroth.ai/operate/ops/operations/): Health endpoints, logs, backups and restore of data dirs, upgrades.
-- [Upgrading from Hive 1.x](https://docs.langstroth.ai/operate/deploy/upgrade-from-hive/): 0.1 starts fresh: where each version keeps its data, setting up 0.1 next to 1.x, and removing 1.x.
 - [Building the dist](https://docs.langstroth.ai/operate/ops/build/): Building the desktop app.
 
 ## Operating Langstroth: Security

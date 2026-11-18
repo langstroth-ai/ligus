@@ -1,12 +1,12 @@
 [project]
 name = "aider-mcp"
 version = "0.1.0"
-description = "Expose aider's CLI as an MCP stdio server for Hive."
+description = "Expose aider's CLI as an MCP stdio server for Ligus."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
-    { name = "Hive contributors" }
+    { name = "Ligus contributors" }
 ]
 dependencies = [
     "aider-chat>=0.50",

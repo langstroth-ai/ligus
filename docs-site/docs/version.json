@@ -2,5 +2,5 @@
   "tag": "v0.1.0",
   "name": "Ligus 0.1.0",
   "url": "https://github.com/langstroth-ai/ligus/releases/latest",
-  "notes": "Hive is now Ligus, short for ligustica. The CLI is ligus, settings are LIGUS_*, config is ligus.config.toml and workspace state lives in .ligus/; 0.1 starts fresh (new workspaces, re-pair phones) and never touches Hive 1.x data, which stays where it is; HIVE_* environment variables are ignored. Features: repos from the phone with fork-aware pull requests opened upstream as drafts; whole-file proposal view so the phone renders Markdown changes; Kubernetes deployment design and a container image for the ligus binary."
+  "notes": "Ligus 0.1.0, the first release. Ligus is short for ligustica. The CLI is ligus, settings are LIGUS_*, config is ligus.config.toml and workspace state lives in .ligus/. Features: repos from the phone with fork-aware pull requests opened upstream as drafts; whole-file proposal view so the phone renders Markdown changes; Kubernetes deployment design and a container image for the ligus binary."
 }

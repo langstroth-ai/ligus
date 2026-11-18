@@ -3624,7 +3624,7 @@ fn chat_markdown(session: &ChatSession) -> String {
     let mut out = String::new();
     out.push_str(&format!("# {title}\n\n"));
     let shown = session.messages.iter().filter(|m| !m.body.trim().is_empty()).count();
-    out.push_str(&format!("_{shown} message(s) · exported from Hive_\n\n"));
+    out.push_str(&format!("_{shown} message(s) · exported from Ligus_\n\n"));
     for m in &session.messages {
         if m.body.trim().is_empty() {
             continue;

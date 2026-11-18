@@ -1,6 +1,6 @@
-# Hive developer & maintainer docs
+# Ligus developer & maintainer docs
 
-Docs for people working **on** Hive (architecture, internals, contributing).
+Docs for people working **on** Ligus (architecture, internals, contributing).
 If you're looking for how to **use** or **self-host** it, that's the published
 MkDocs site, docs.langstroth.ai, built from [`docs-site/`](../docs-site/README.md).
 
@@ -31,7 +31,7 @@ MkDocs site, docs.langstroth.ai, built from [`docs-site/`](../docs-site/README.m
 
 ## Design intent & internals
 
-Deeper design references — useful context for extending Hive; when one conflicts
+Deeper design references — useful context for extending Ligus; when one conflicts
 with the code, the code wins.
 
 - Agent model: [`hive-agent-architecture-matrix.md`](hive-agent-architecture-matrix.md) — agent modes, execution/state/tool/permission shape.

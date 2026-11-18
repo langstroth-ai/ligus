@@ -35,7 +35,7 @@ honeybee). Commands, chart names and environment variables still use the
 | Run the relay and Ligus hosts on a cluster | [Kubernetes (preview)](deploy/kubernetes.md) |
 | Route agents through your LLM gateway (LiteLLM, kgateway, Envoy AI Gateway) | [Deploying with an LLM gateway](deploy/model-gateways.md) |
 | Run an always-on host for your phone and agents | [ligus serve as your own device](ops/serve-box.md), [Headless agents](concepts/headless-agents.md), [Remote access](networking/remote-access.md) |
-| Monitor, back up, restore, upgrade | [Operations](ops/operations.md), [Upgrading from Hive 1.x](deploy/upgrade-from-hive.md) |
+| Monitor, back up, restore, upgrade | [Operations](ops/operations.md) |
 | Understand what an attacker can do | [Threat model](security/threat-model.md), [Runbooks](security/runbooks.md) |
 | Look up a variable, a config key or an API route | [Environment variables](reference/env-vars.md), [Configuration (TOML)](reference/config-toml.md), [Serve HTTP API](reference/serve-api.md) |
 

@@ -13,8 +13,8 @@
 #   Every row is redirected on every host, whatever its sources.
 #   index.md is the home page on docs.langstroth.ai; on docs.ligus.ai and
 #   docs.apiaryhq.ai the old home goes to Using Ligus.
-#   Removed pages (pricing, tiering, managed service) point at the page that
-#   replaces them.
+#   Removed pages (pricing, tiering, managed service, upgrade-from-hive) point
+#   at the page that replaces them.
 addons/acp.md	ligus/addons/acp.md	ligus,langstroth
 addons/byo-agents.md	ligus/addons/byo-agents.md	1x,ligus,langstroth
 addons/ligus-mcp.md	ligus/addons/ligus-mcp.md	ligus,langstroth
@@ -39,7 +39,7 @@ deploy/model-gateways.md	operate/deploy/model-gateways.md	ligus,langstroth
 deploy/multi-tenant.md	operate/deploy/multi-tenant.md	ligus,langstroth
 deploy/personal-fleet.md	operate/deploy/personal-fleet.md	ligus,langstroth
 deploy/solo.md	operate/deploy/solo.md	ligus,langstroth
-deploy/upgrade-from-hive.md	operate/deploy/upgrade-from-hive.md	ligus,langstroth
+deploy/upgrade-from-hive.md	operate/ops/operations.md	ligus,langstroth
 deploy/with-an-agent.md	operate/deploy/with-an-agent.md	ligus,langstroth
 features/code-hosts.md	ligus/features/code-hosts.md	ligus,langstroth
 features/collaboration.md	ligus/features/collaboration.md	1x,ligus,langstroth
@@ -77,6 +77,7 @@ networking/remote-access.md	operate/networking/remote-access.md	1x,ligus,langstr
 networking/rendezvous.md	operate/networking/rendezvous.md	1x,ligus,langstroth
 networking/self-host.md	operate/networking/self-host.md	1x,ligus,langstroth
 networking/turn.md	operate/networking/turn.md	1x,ligus,langstroth
+operate/deploy/upgrade-from-hive.md	operate/ops/operations.md	langstroth
 ops/build.md	operate/ops/build.md	1x,ligus,langstroth
 ops/deployment.md	operate/ops/deployment.md	1x,ligus,langstroth
 ops/linux-sandbox.md	operate/ops/linux-sandbox.md	ligus,langstroth

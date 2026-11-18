@@ -14,9 +14,9 @@ command); it prints to stderr and exits with status 2.
 ## Global behaviour
 
 - **Data dir.** Every command works on one data dir: `LIGUS_DATA_DIR`, else
-  `~/.ligus`, else `./ligus-data` when `HOME` is unset. A Hive 1.x `~/.hive`
-  is never read or changed, and a data dir that is (or links to) 1.x data is
-  refused (see [Upgrading from Hive 1.x](../../operate/deploy/upgrade-from-hive.md)). The dir is one Ligus **device**: its
+  `~/.ligus`, else `./ligus-data` when `HOME` is unset. A data dir that
+  holds (or links to) data Ligus did not create is refused. The dir is one
+  Ligus **device**: its
   identity (`identity.json`, `keys/`), its event log (`hive.db`) and, for
   `ligus serve`, the phone credentials. Never run two processes that write
   to one data dir.

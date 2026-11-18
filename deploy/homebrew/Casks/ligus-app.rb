@@ -7,7 +7,7 @@ cask "ligus-app" do
 
   url "https://github.com/langstroth-ai/ligus/releases/download/v#{version}/Ligus_#{version}_aarch64.dmg"
   name "Ligus"
-  desc "Shared LLM workspace for developers (formerly Hive)"
+  desc "Shared LLM workspace for developers"
   homepage "https://github.com/langstroth-ai/ligus"
 
   livecheck do
@@ -20,9 +20,8 @@ cask "ligus-app" do
 
   app "Ligus.app"
 
-  # Remove Ligus's own data on `brew uninstall --zap ligus-app`. Only the
-  # ai.ligus.desktop paths: Ligus 0.1 starts fresh and never touches Hive 1.x
-  # data (com.hive.desktop), so neither does its zap.
+  # Remove Ligus's own data on `brew uninstall --zap ligus-app`: only the
+  # ai.ligus.desktop paths.
   zap trash: [
     "~/Library/Application Support/ai.ligus.desktop",
     "~/Library/Caches/ai.ligus.desktop",

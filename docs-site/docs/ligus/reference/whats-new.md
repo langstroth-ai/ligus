@@ -1,10 +1,6 @@
 # What's new
 
-**Ligus 0.1.0 is a new application**, the successor to Hive. Ligus is short
-for *ligustica*, the Italian honeybee. Entries for 1.18 and earlier are Hive's
-releases and keep its name.
-
-Changes since 1.15, newest first, with links to where each is documented.
+Changes in each release, newest first, with links to where each is documented.
 Full release notes are on the
 [GitHub releases page](https://github.com/langstroth-ai/ligus/releases).
 
@@ -156,21 +152,6 @@ Full release notes are on the
   argv, sandboxed and offline, with no model involved.
 - **Gemini API and MLX presets**, and a [runtime matrix](runtime-matrix.md)
   that's run before every release.
-- **Ligus succeeds Hive.** Ligus is short for *ligustica* (*Apis mellifera
-  ligustica*, the Italian honeybee). The default agent is still `@hive`, and
-  0.1 clients use the same relays (`/v1` and `hrt1` tokens are unchanged).
-- **Ligus starts fresh.** The CLI is `ligus` only (no `hive` command), settings
-  are `LIGUS_*` only, the config file is `ligus.config.toml` and workspace
-  state lives in `.ligus/`. Nothing from Hive 1.x is migrated: you create new
-  workspaces, invite teammates again and re-pair phones. In exchange, 0.1
-  never reads, modifies, moves, renames, copies or deletes any 1.x file: the
-  desktop's `com.hive.desktop` folder, the CLI's `~/.hive`, each repo's
-  `.hive/` (with its chat checkouts and `hive/chat/*` branches) and
-  `hive.config.toml` stay exactly where they are, so a 1.x install keeps
-  running side by side. 0.1 refuses a data dir that is, or links to, 1.x
-  data. A `HIVE_*` variable that is still set is ignored, with a one-time
-  warning naming the new spelling. Setting up 0.1 and removing 1.x when you're
-  done: [Upgrading from Hive 1.x](../../operate/deploy/upgrade-from-hive.md).
 - **Deployment and security docs.** [Choose a deployment](../../operate/deploy/index.md)
   with guides for each supported shape, a [security model](../../operate/security/index.md),
   [threat model](../../operate/security/threat-model.md) and [runbooks](../../operate/security/runbooks.md),
@@ -212,11 +193,7 @@ Full release notes are on the
   provider (setups for [Pocket ID](../../operate/deploy/ligus-auth-pocket-id.md) and
   [Dex](../../operate/deploy/ligus-auth-dex.md)) and keep a short-lived relay token
   fresh.
-- **Desktop.** The app is `Ligus.app`. Theme and pane layout reset once, and
-  macOS asks again for folder and notification access. An auto-updated app
-  may still be at `/Applications/Hive.app`; you can rename it to `Ligus.app`.
-- **Homebrew.** Formula `ligus`, cask `ligus-app`, tap `langstroth-ai/ligus`;
-  existing `hive-cli` and `hive` installs upgrade to them.
+- **Homebrew.** Formula `ligus`, cask `ligus-app`, tap `langstroth-ai/ligus`.
 - **Repos from the phone.** `ligus serve` lists the host's checkouts and your
   GitHub repos, clones on demand, switches a chat's repo, pulls, and opens a
   pull request from the chat branch. See
@@ -231,13 +208,11 @@ Full release notes are on the
 - **Kubernetes design and a container image.** A design for running the relay,
   `ligus serve` and sandboxed turn executors on Kubernetes, and a Dockerfile
   for the `ligus` binary (`deploy/container`).
-- **New addresses.** The project lives at github.com/langstroth-ai/ligus and the
-  docs at docs.langstroth.ai, in two sections:
+- **Docs in two sections.** The project lives at github.com/langstroth-ai/ligus
+  and the docs at docs.langstroth.ai, in two sections:
   [Using Ligus](../index.md) and
   [Operating Langstroth](../../operate/index.md) (self-hosting and
-  deploying Langstroth, the platform behind the apps). Old links, on
-  docs.ligus.ai and docs.apiaryhq.ai too, redirect. Protocol identifiers that contain
-  `hive` keep their names; see [Wire protocols](../../operate/reference/wire-protocols.md#legacy-protocol-identifiers).
+  deploying Langstroth, the platform behind the apps).
 - **Workspace guards.** A new Settings → Guards page collects the controls
   that keep a workspace inside safe bounds.
   [Workspace guards](../features/guards.md)
@@ -281,61 +256,3 @@ Full release notes are on the
   task board for work nobody was asked to do; workspace marks (claims, locks,
   review markers); path zones that raise the review bar where a change lands;
   reused turn worktrees; and a home beacon. See [Flow](../features/flow.md).
-
-## 1.18
-
-- **Agent-authored workflows.** The visual workflow editor and its presets
-  are gone. Agents write workflows: a definition (or a revision of one)
-  arrives in the Review pane as a proposal, and approving it adds it. The
-  Workflows pane is read-only, with Run, Pause/Resume, Delete and *Ask an
-  agent to change this*. Local-model agents get a `propose_workflow` tool
-  that checks the definition in the same turn. Existing workflows keep
-  working. See [Agentic workflows](../features/workflows.md).
-- **Google Antigravity and GitHub Copilot runtimes.** Use your Google AI
-  Pro/Ultra or Copilot subscription through the `agy` and `copilot` CLIs;
-  Settings → Models detects whether each is installed and signed in. See
-  [Configuring a runtime](../getting-started/configuring-a-runtime.md) and
-  [Bring-your-own agents](../addons/byo-agents.md).
-
-## 1.17
-
-- **Host dashboard.** `hive serve` serves a dashboard to the phone: a
-  built-in Hive section (agents, proposals, workflows, turns, host, relay and
-  push status), your own panels from `dashboard.toml`, panels backed by MCP
-  tools, a table panel kind, and `hive dashboard check | metrics | default`.
-  See [Host dashboard](../features/dashboard.md).
-- **MCP tools at the local-model tool cap.** Local agents no longer silently
-  lose MCP tools at the 16-tool limit: slots are kept for MCP tools, tools
-  you name are preferred, and dropped tools are logged. MCP errors show the
-  server's own message. See [MCP servers](../addons/mcp.md).
-
-## 1.16.1
-
-- Every user message a sync brings in gets an answer, not only the chat's
-  last one.
-- Push previews are plain text.
-- `hive remote status` shows how long the relay link has been up and
-  notices a `hive serve` that stopped; `hive --version` prints the version.
-  See [Troubleshooting](../help/troubleshooting.md).
-
-## 1.16
-
-- **Hive on your phone, from anywhere.** `hive serve` plus the relay tunnel
-  gives the phone app remote access without a VPN: `hive pair` prints the
-  pairing link, `hive phones` lists and revokes phones, `hive remote`
-  manages the link. A self-hosted relay can run the tunnel and send push
-  with its own APNs key. See [Remote access for your phone](../../operate/networking/remote-access.md).
-- **On the phone:** people, channels and chat details; proposal review
-  with votes (who and role), a refinement thread and *request changes*;
-  push for mentions and workflow approvals; the host's theme through
-  *Match host*. See [Hive on your phone](../features/phone-app.md).
-- **The serve box as your own device.** `hive serve enroll` makes the box
-  one of your devices instead of a separate member. See
-  [Running hive serve as your own device](../../operate/ops/serve-box.md).
-- **Sync privacy fix.** A relay room now carries only its own workspace;
-  events from other workspaces are dropped and purged on upgrade. Read the
-  [upgrade note](../../operate/ops/serve-box.md#what-to-expect-and-do-when-upgrading-from-115-or-earlier)
-  if you're coming from 1.15 or earlier.
-- **Presence-based host liveness.** Whether a host is online rides the
-  relay's presence channel instead of heartbeat events in the log. See
-  [Host liveness](../../operate/ops/serve-box.md#host-liveness).

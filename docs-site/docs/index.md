@@ -8,8 +8,7 @@ hide:
 
 **Langstroth** is the open, self-hostable platform behind **Ligus**, a
 shared LLM workspace for developers. *Ligus* is short for *ligustica*
-(*Apis mellifera ligustica*, the Italian honeybee). Ligus 0.1.0 is a new
-application; its predecessor was called Hive (1.x).
+(*Apis mellifera ligustica*, the Italian honeybee).
 
 - **Ligus** is the app: the desktop app, the phone app and the `ligus` CLI.
   You bring your own subscription and your own agents, and work with people
@@ -49,7 +48,6 @@ These docs have two sections.
 | Pick a deployment shape | [Choose a deployment](operate/deploy/index.md) |
 | Run your own relay | [Self-hosting a relay](operate/networking/self-host.md) |
 | Know what the relay and each device can see | [Security & trust](ligus/concepts/security.md), [Security model](operate/security/index.md) |
-| Move from Hive 1.x | [Upgrading from Hive 1.x](operate/deploy/upgrade-from-hive.md) |
 
 For agents reading these docs: [llms.txt](llms.txt) lists every page with a
 one-line summary.

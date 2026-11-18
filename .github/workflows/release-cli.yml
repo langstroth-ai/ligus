@@ -115,7 +115,7 @@ jobs:
           mkdir -p tap/Formula
           cat > tap/Formula/ligus.rb <<RUBY
           class Ligus < Formula
-            desc "Headless Ligus client + agent daemon (formerly hive-cli)"
+            desc "Headless Ligus client + agent daemon"
             homepage "https://github.com/langstroth-ai/ligus"
             license "MIT"
 
