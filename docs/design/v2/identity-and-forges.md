@@ -1,5 +1,7 @@
 # Ligus 2.0: identity without GitHub, and many forges
 
+> Version note: "2.0" in this document means the Ligus 0.1.0 release (the version was reset before release).
+
 Status: design spec, written 2026-11-14. Nothing was implemented. All repositories were opened read-only. Ligus is short for *ligustica*.
 
 **Amendment 2026-11-16 (owner decision; the code wins).** 2.0 dropped the SourceHut and Tangled identity-link verifiers. The rows for them in §2.3, the sr.ht "verified by name" residual in S1, the atproto PDS/DID fetching and the reserved `AtprotoRecord` and `OidcAttestation` methods below are superseded. A link naming `sourcehut` or `tangled` still folds unchanged (the wire shape, the statement and `ligus-identity-link-v1@ligus.ai` are untouched) and is shown as self-asserted, never verified (`hive_core::identity_link::DROPPED_PROVIDERS`). A method this build doesn't know, `atprotoRecord` and `oidcAttestation` included, folds through the `#[serde(other)]` arm and shows as "not checked".
@@ -9,7 +11,7 @@ Status: design spec, written 2026-11-14. Nothing was implemented. All repositori
 | What | Where | Branch |
 |---|---|---|
 | Core, runtime, CLI and serve, desktop, web | this repo | `release/v2.0.0` @ `329b2c7d` |
-| Relay (Go) and ligus-auth | relay repo (`ligus-ai/relay`) | `release/v0.2.0` @ `1994c3c` |
+| Relay (Go) and ligus-auth | relay repo (`langstroth-ai/langstroth-relay`) | `release/v0.2.0` @ `1994c3c` |
 | Earlier specs this one builds on | [`architecture-review.md`](architecture-review.md), [`phase0-specs.md`](phase0-specs.md), [`directory-trust.md`](directory-trust.md), and the iOS ligus-auth sign-in note (iOS app repo) | n/a |
 
 Unless a path says otherwise, citations are relative to the root of this repo. Relay paths are prefixed `relay/` and refer to the relay repo. Line numbers are as of the commits above.
@@ -837,7 +839,7 @@ Forge residuals from the same review:
 
 ## 8. Implementation plan
 
-Sizes: S is about 1-3 days, M is about 1-2 weeks, L is longer. "Relay" marks items in the `ligus-ai/relay` repo (v0.3).
+Sizes: S is about 1-3 days, M is about 1-2 weeks, L is longer. "Relay" marks items in the `langstroth-ai/langstroth-relay` repo (v0.3).
 
 | # | Item | 2.0? | Relay? | Size | Depends on |
 |---|---|---|---|---|---|

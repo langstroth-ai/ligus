@@ -24,8 +24,8 @@ seconds or 256 KiB, and goes only to the forges listed above or the
 self-managed ones you added on that device. Ligus never contacts a host
 that a link names.
 
-2.0 no longer checks SourceHut or Tangled links. A link of either kind made
-by a 2.0 pre-release still shows, as **self-asserted** (a claim, never
+0.1 no longer checks SourceHut or Tangled links. A link of either kind made
+by a 0.1 pre-release still shows, as **self-asserted** (a claim, never
 verified), and neither forge is offered for a new link.
 
 ## Link an account
@@ -84,7 +84,7 @@ Links show as chips beside a person on **People**, and in your own list:
 | **stale** | The forge no longer lists the key (removed or rotated), the forge account is gone, or your account key changed since you signed. Re-link to fix it. |
 | **expired** | The link's year ran out. |
 | **unverified** | Not checked yet, the forge couldn't be reached, forge checks are off on this device ("signature valid"), or the forge isn't one this device asks. |
-| **self-asserted** | A claim only: a forge Ligus doesn't check (a SourceHut or Tangled link from a 2.0 pre-release, or a forge without a public key list). Never shown as verified. |
+| **self-asserted** | A claim only: a forge Ligus doesn't check (a SourceHut or Tangled link from a 0.1 pre-release, or a forge without a public key list). Never shown as verified. |
 
 A link whose statement or signature doesn't check out isn't shown at all.
 

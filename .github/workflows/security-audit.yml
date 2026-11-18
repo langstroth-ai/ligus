@@ -48,7 +48,7 @@ jobs:
       - name: Frontend dependency audit
         working-directory: web
         # `bun audit` reports known vulns in the resolved tree. The tree is clean
-        # as of the 2.0 dependency upgrade, so a new advisory now fails the job.
+        # as of the 0.1 dependency upgrade, so a new advisory now fails the job.
         # One owner-approved exception: GHSA-fc5q-39xc-vjpf (picomatch ReDoS) has
         # no patched release yet and reaches us only through vite/vitest matching
         # our own config globs, not the shipped bundle. The next step fails as soon

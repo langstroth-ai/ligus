@@ -27,7 +27,7 @@ nonce: AAECAwQFBgcICQoLDA0ODw
 | `account` | the Ligus account id, lowercase hyphenated |
 | `account-key` | `ed25519:` + base64url (no padding) of the 32-byte account signing key in force where the link is published |
 | `workspace` | the workspace the link is published in (a contact card's: its contact workspace). A statement is valid in that workspace only |
-| `provider` | `github`, `gitlab`, `forgejo`, `gitea` (links made by a 2.0 pre-release may also say `sourcehut` or `tangled`; 2.0 shows those as self-asserted and never verifies them) |
+| `provider` | `github`, `gitlab`, `forgejo`, `gitea` (links made by a 0.1 pre-release may also say `sourcehut` or `tangled`; 0.1 shows those as self-asserted and never verifies them) |
 | `host` | the forge host (`github.com`, `gitlab.example.com`, `codeberg.org`; a pre-release link may say `meta.sr.ht`, or `atproto` for Tangled) |
 | `subject` | the stable id: the forge's numeric user id (a pre-release SourceHut or Tangled link holds `~user` or a DID) |
 | `handle` | the handle at link time, for display only; never used for lookup |
@@ -67,7 +67,7 @@ then confirm the forge lists that key for the subject id (for GitHub:
 
 ## Events
 
-Two config-log events (frozen in 2.0; an older decoder folds them as
+Two config-log events (frozen in 0.1; an older decoder folds them as
 `unknown`):
 
 ```json
@@ -83,7 +83,7 @@ Two config-log events (frozen in 2.0; an older decoder folds them as
 
 `statement`, `proof`, `keyFingerprint` and `nonce` are left out when empty
 (the `keyPublished` method has none). `method` is `sshSig` or `keyPublished`
-in 2.0; `selfAsserted` is reserved, and a method a build doesn't know folds
+in 0.1; `selfAsserted` is reserved, and a method a build doesn't know folds
 as a claim it shows as "not checked".
 
 What the fold enforces (every device, offline, no network):

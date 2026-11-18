@@ -19,7 +19,7 @@ pub const PROPOSAL_DIGEST_TAG: &[u8] = b"ligus-proposal-digest-v1\0";
 /// counts for another proposal with the same patch, the same patch against
 /// another repo, or a re-based copy. The domain string stays
 /// `ligus-proposal-digest-v1`: it was never in a released build (no v1.x tag
-/// contains it), so 2.0 defines it with these parts from the start and no
+/// contains it), so 0.1 defines it with these parts from the start and no
 /// older client computes it differently.
 pub fn diff_digest(p: &ActionProposal) -> String {
     let kind = serde_json::to_value(p.kind)

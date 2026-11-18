@@ -6,7 +6,7 @@
 #
 #   KCTX=orbstack TAG=mgw-e2e ./run.sh
 #
-# Needs: the ligus image ligus:$TAG and the relay image ligus-relay:$RELAY_TAG
+# Needs: the ligus image ligus:$TAG and the relay image langstroth-relay:$RELAY_TAG
 # in the cluster's image store, helm, openssl, curl, and a node with Landlock
 # (the chart's sandbox preflight). A stub model sits behind the gateways; no
 # real provider is called and no real key is used.
@@ -18,8 +18,8 @@ CHART=../..
 W=$(mktemp -d)
 cleanup() {
   $HELM uninstall gwe2e -n ligus-gw-e2e >/dev/null 2>&1 || true
-  $HELM uninstall ligus-relay -n ligus-relay-gwe2e >/dev/null 2>&1 || true
-  $K delete ns ligus-gw-e2e ligus-relay-gwe2e gw-test gw-other --wait=true >/dev/null 2>&1 || true
+  $HELM uninstall langstroth-relay -n langstroth-relay-gwe2e >/dev/null 2>&1 || true
+  $K delete ns ligus-gw-e2e langstroth-relay-gwe2e gw-test gw-other --wait=true >/dev/null 2>&1 || true
   $HELM uninstall kgateway -n kgateway-system >/dev/null 2>&1 || true
   $HELM uninstall kgateway-crds -n kgateway-system >/dev/null 2>&1 || true
   $K delete ns kgateway-system >/dev/null 2>&1 || true
@@ -59,8 +59,8 @@ $K apply -f litellm.yaml >/dev/null
 $K -n gw-test rollout status deploy/stub deploy/litellm --timeout=5m >/dev/null
 
 # The Ligus side: a throwaway relay and workspace, serve with modelGateways.
-$K create ns ligus-relay-gwe2e >/dev/null; $K label ns ligus-relay-gwe2e pod-security.kubernetes.io/enforce=restricted >/dev/null
-$HELM install ligus-relay "$CHART"/charts/ligus-relay-*.tgz -n ligus-relay-gwe2e --set image.repository=ligus-relay \
+$K create ns langstroth-relay-gwe2e >/dev/null; $K label ns langstroth-relay-gwe2e pod-security.kubernetes.io/enforce=restricted >/dev/null
+$HELM install langstroth-relay "$CHART"/charts/langstroth-relay-*.tgz -n langstroth-relay-gwe2e --set image.repository=langstroth-relay \
   --set image.tag="$RELAY_TAG" --set image.pullPolicy=Never --set database.mode=none --set topology=single --set tunnel.mode=open --wait --timeout 4m >/dev/null
 $K create ns ligus-gw-e2e >/dev/null; $K label ns ligus-gw-e2e pod-security.kubernetes.io/enforce=restricted >/dev/null
 $K -n ligus-gw-e2e create secret generic ws-gwe2e --from-literal=room="k8s-test-$(uuidgen | tr A-Z a-z)" --from-literal=key="$(openssl rand -base64 36)" >/dev/null

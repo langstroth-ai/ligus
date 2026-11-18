@@ -17,7 +17,7 @@ export function shouldAutoTour(settings: { onboarded: boolean; tourSeen: boolean
   return settings != null && settings.onboarded && !settings.tourSeen;
 }
 
-/// The pre-2.0 webview flags. 2.0 never reads them; drop them on completion so
+/// The Hive 1.x webview flags. 0.1 never reads them; drop them on completion so
 /// they can't mislead anyone inspecting storage.
 const LEGACY_KEYS = ["hive.onboarded", "hive.tourSeen"];
 

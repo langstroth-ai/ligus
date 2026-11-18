@@ -15,7 +15,7 @@ in `<LIGUS_DATA_DIR>/repo-bindings.toml` on the box and are never synced:
 ```toml
 workspace = "sandbox"
 [chats]
-"6f1c…-chat-id" = "honeyhive-ai__hive"
+"6f1c…-chat-id" = "langstroth-ai__ligus"
 ```
 
 You can set the default from the box's shell with

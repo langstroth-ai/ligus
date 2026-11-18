@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "Hive"
-version = "2.0.0"
+version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
  "dunce",
@@ -2483,7 +2483,7 @@ dependencies = [
 
 [[package]]
 name = "hive-cli"
-version = "2.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2520,7 +2520,7 @@ dependencies = [
 
 [[package]]
 name = "hive-core"
-version = "2.0.0"
+version = "0.1.0"
 dependencies = [
  "argon2",
  "base64 0.23.1",
@@ -2544,7 +2544,7 @@ dependencies = [
 
 [[package]]
 name = "hive-forge"
-version = "2.0.0"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -2570,7 +2570,7 @@ dependencies = [
 
 [[package]]
 name = "hive-proto"
-version = "2.0.0"
+version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2579,7 +2579,7 @@ dependencies = [
 
 [[package]]
 name = "hive-runtime"
-version = "2.0.0"
+version = "0.1.0"
 dependencies = [
  "aho-corasick",
  "anyhow",

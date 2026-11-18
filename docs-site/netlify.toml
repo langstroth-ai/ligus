@@ -2172,7 +2172,7 @@
   status = 301
   force = true
 
-# docs.langstroth.ai: old paths of the pre-2.0 sites. force = true because
+# docs.langstroth.ai: old paths of the older sites. force = true because
 
 # mkdocs-redirects also writes a stub page at each of these paths; on
 

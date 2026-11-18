@@ -24,11 +24,11 @@ directory serves exactly one process.
 ## 2. Desktop app (macOS, Apple Silicon)
 
 ```sh
-brew install --cask ligus-ai/ligus/ligus-app
+brew install --cask langstroth-ai/ligus/ligus-app
 ```
 
 If Homebrew refuses to load the tap, the human runs `brew trust --tap
-ligus-ai/ligus`. **Stop here for the human**: first launch, passkey and
+langstroth-ai/ligus`. **Stop here for the human**: first launch, passkey and
 sign-in, creating or joining a workspace all happen in the app. Don't launch
 the app yourself.
 

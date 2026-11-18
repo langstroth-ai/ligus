@@ -9,7 +9,7 @@ through it.
 
 > The app's source lives in its own repository. The `ligus serve` side and the
 > API contract the app uses are in this repo
-> ([`docs/ios-app.md`](https://github.com/ligus-ai/ligus/blob/main/docs/ios-app.md)),
+> ([`docs/ios-app.md`](https://github.com/langstroth-ai/ligus/blob/main/docs/ios-app.md)),
 > so any client can implement them.
 
 To set up the box and pair a phone, see
@@ -398,7 +398,7 @@ The box can also serve a dashboard for the phone: a built-in Ligus section
 (agents, proposals, workflow runs, turns, the host's status) plus panels you
 define in `dashboard.toml` on the box. The app hides its dashboard tab when
 the dashboard is empty. Format and examples:
-[`docs/dashboard.md`](https://github.com/ligus-ai/ligus/blob/main/docs/dashboard.md).
+[`docs/dashboard.md`](https://github.com/langstroth-ai/ligus/blob/main/docs/dashboard.md).
 
 ## What stays on the desktop
 

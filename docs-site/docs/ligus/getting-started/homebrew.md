@@ -4,7 +4,7 @@ On macOS, Ligus can be installed as a [Homebrew](https://brew.sh) cask from the
 project's tap:
 
 ```bash
-brew install --cask ligus-ai/ligus/ligus-app
+brew install --cask langstroth-ai/ligus/ligus-app
 ```
 
 The desktop cask is `ligus-app` (a formula and a cask both named `ligus` would
@@ -16,8 +16,8 @@ If `brew` says it is "refusing to load" a Ligus formula or cask, trust the tap
 once:
 
 ```bash
-brew trust --tap ligus-ai/ligus        # a new install
-brew trust --tap honeyhive-ai/hive     # a tap added before the rename
+brew trust --tap langstroth-ai/ligus        # a new install
+brew trust --tap langstroth-ai/ligus     # a tap added before the rename
 ```
 
 A trust entry for the old names (`hive-cli`, `hive`) does not cover the new
@@ -51,7 +51,7 @@ The headless client + agent daemon ships as its own formula (works on macOS
 **and** Linux, Apple Silicon and x86_64):
 
 ```sh
-brew install ligus-ai/ligus/ligus   # installs `ligus`
+brew install langstroth-ai/ligus/ligus   # installs `ligus`
 brew upgrade ligus                  # track releases
 ```
 

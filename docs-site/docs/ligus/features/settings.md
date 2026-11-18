@@ -79,7 +79,9 @@ relay configuration:
 
 - **Relay URL** — peers on the same relay + room converge. Blank =
   local-only. Use the **https base origin** (e.g. `https://relay.example`)
-  — no `/v1` suffix, no `wss://`.
+  — no `/v1` suffix, no `wss://`. **Use the community relay** fills in
+  `https://relay.langstroth.ai`, the free, best-effort
+  [community relay](../../operate/networking/community-relay.md).
 - **Relay access token** — needed **only** for a relay that gates access
   with tokens; leave blank for an open relay (the default).
   Sent as a bearer on every relay request; never echoed back. If your
@@ -104,31 +106,12 @@ Under **Advanced — set room & key by hand**:
 See [Self-hosting a relay](../../operate/networking/self-host.md) and the
 [team deployment guide](../../operate/ops/deployment.md).
 
-### Team members
+### Relay access tokens
 
-<!-- Screenshot pending (Team members panel): images/settings-team-members.png. See images/CAPTURE_GUIDE.md; restore the image line once it is captured. -->
-On a relay that supports it, the Team sync tab also has a **Team
-members** panel for managing who may sync — durable, with no redeploy and
-instant revocation:
-
-- **Add member** — give a name (and optionally a login the relay shows); Ligus
-  creates the user on the relay and shows a **one-time access token**.
-  Copy it now — it's never shown again — and the teammate pastes it into
-  the **Relay access token** field of *their* Ligus.
-- **Add token** — issue an extra token for an existing member (e.g. a
-  second device).
-- **Revoke** — kill one token immediately; the device using it stops
-  syncing at once.
-- **Disable / Enable** — turn a whole member off (revokes all their
-  tokens at once) without deleting them.
-
-Tokens are stored on the relay only as hashes — Ligus shows the raw value
-once and never again. This panel appears only when you're an **admin**
-on a relay that supports user management (the relay operator made you an
-admin); everyone else sees a short explanatory note instead. See
-[The user and token admin API](../../operate/networking/self-host.md#the-user-and-token-admin-api).
-The open-source relay build doesn't include that API, so the panel only
-appears against a relay that adds it.
+Ligus doesn't manage relay users or tokens. If your relay requires an
+access token, the relay operator issues one (see
+[Self-hosting a relay](../../operate/networking/self-host.md)) and you
+paste it into the **Relay access token** field above.
 
 ## Schedules
 

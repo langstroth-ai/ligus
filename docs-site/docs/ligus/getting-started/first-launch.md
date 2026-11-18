@@ -11,7 +11,7 @@ workspace folder, and configures a runtime.
 Grab a bundle for your OS, or build from source:
 
 ```bash
-git clone https://github.com/ligus-ai/ligus.git
+git clone https://github.com/langstroth-ai/ligus.git
 cd ligus
 cargo tauri build        # bundles for the current OS → target/release/bundle/
 # or a fast dev loop without bundling:
@@ -47,9 +47,13 @@ them off):
    checked lets agents write files (`acceptEdits`), unchecked is
    read-only. You can add aider, pi, or more runtimes later from
    Settings.
-4. **Team** — optional. If you have a relay endpoint, paste it here
-   (and optionally name a team) so cross-network peers can sync. Skip
-   to stay solo/local; you can add a relay later from Settings.
+4. **Team & sync** — optional. **Just me (no sync)** keeps everything on
+   this machine (the default). **Join a team** takes an invite or short
+   code, which carries the relay. **Sync through a relay** offers the
+   [community relay](../../operate/networking/community-relay.md)
+   (`relay.langstroth.ai`, free and best-effort; preselected) or your own
+   relay's URL and token. You can change it later in **Settings → Team
+   sync**.
 5. **Appearance** — pick a theme (Pollen, Obsidian, Slate, Studio,
    Harbor or Meadow) and light / dark / auto. It applies live as you choose, and
    you can change it anytime from **Settings → Appearance**.

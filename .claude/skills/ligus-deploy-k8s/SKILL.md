@@ -15,7 +15,7 @@ Set these once and reuse them:
 ```sh
 K=deploy/kubernetes/ligus-k8s
 CTX=<kube context>   NS=<namespace, e.g. ligus-ws-acme>   R=<release, e.g. acme>
-IMG=<repository:tag of the Ligus image, 2.0+>
+IMG=<repository:tag of the Ligus image, 0.1+>
 ```
 
 ## 1. Decide the scenario (checkpoint: human)
@@ -23,7 +23,7 @@ IMG=<repository:tag of the Ligus image, 2.0+>
 | Scenario | When | Needs |
 |---|---|---|
 | `trial` | a local or throwaway cluster, to see it work | nothing from the human if the cluster is local |
-| `team-in-cluster-relay` | a team's workspace; relay in this cluster (namespace, default `ligus-relay`) | relay installed first (relay repository's AGENTS.md); the workspace Secret files |
+| `team-in-cluster-relay` | a team's workspace; relay in this cluster (namespace, default `langstroth-relay`) | relay installed first (relay repository's AGENTS.md); the workspace Secret files |
 | `team-external-relay` | a team's workspace; relay elsewhere at `https://` | `--relay-url https://...`; the workspace Secret files |
 
 **Stop and confirm with the human**: the context `$CTX` (unless it is a local
@@ -41,9 +41,9 @@ StorageClass to use and whether any worker hosts are wanted (`--workers a,b`).
   --relay-image-tag T`: without it the relay pod sits in ImagePullBackOff
   (install warns `relay.image`).
 - The chart needs the relay chart packaged: pass
-  `--relay-chart <relay-checkout>/deploy/helm/ligus-relay` (a full checkout:
-  the chart links `../ligus-postgres`) or `--fetch-relay-chart` (git clone of
-  `ligus-ai/relay` at the commit CI pins) to the first install.
+  `--relay-chart <relay-checkout>/deploy/helm/langstroth-relay` (a full checkout:
+  the chart links `../langstroth-postgres`) or `--fetch-relay-chart` (git clone of
+  `langstroth-ai/langstroth-relay` at the commit CI pins) to the first install.
 
 ## 3. Preflight
 
@@ -94,9 +94,9 @@ install if they wrote that file. Other credentials (model keys for
 `$K secrets generic --name NAME --from-dir DIR`, referenced from a values
 file (`--values`) by Secret name only.
 
-2.0 note: a box joins an existing workspace only through an invite an Admin
+0.1 note: a box joins an existing workspace only through an invite an Admin
 issued; the chart's headless join for serve is still being built (see
-`docs-site/docs/operate/deploy/kubernetes.md`, "Changing in 2.0"). If serve on a real
+`docs-site/docs/operate/deploy/kubernetes.md`, "Changing in 0.1"). If serve on a real
 workspace exits with a membership or role refusal, **stop** and hand over.
 On a fresh throwaway workspace, serve and workers started together race to
 found it (see `deploy/helm/ligus/ci/kind-values.yaml`); if one restarts with a

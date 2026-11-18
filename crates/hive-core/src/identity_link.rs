@@ -57,7 +57,7 @@ pub enum LinkMethod {
     Unknown,
 }
 
-/// One linked identity (`identityLinkPublished`). Fields new after 2.0 must
+/// One linked identity (`identityLinkPublished`). Fields new after 0.1 must
 /// skip when empty.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -67,7 +67,7 @@ pub struct IdentityLink {
     /// Must equal the signer's certified account.
     pub account_id: Uuid,
     /// "github" | "gitlab" | "forgejo" | "gitea" | ... (any lowercase name
-    /// folds; links made by a 2.0 pre-release may say "sourcehut" or "tangled").
+    /// folds; links made by a 0.1 pre-release may say "sourcehut" or "tangled").
     pub provider: String,
     /// "github.com", "gitlab.example.com", "codeberg.org", ...
     pub host: String,
@@ -96,7 +96,7 @@ pub struct IdentityLink {
 /// Providers whose links a forge can verify (key lists anyone may read).
 pub const VERIFIABLE_PROVIDERS: &[&str] = &["github", "gitlab", "forgejo", "gitea"];
 
-/// Providers whose verifiers 2.0 dropped (owner decision 2026-11-16). A link
+/// Providers whose verifiers 0.1 dropped (owner decision 2026-11-16). A link
 /// naming one still folds unchanged (the wire shape and the statement are
 /// untouched), but no device checks it: it shows as self-asserted, never as
 /// verified, and no new one is offered.

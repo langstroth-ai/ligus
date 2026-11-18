@@ -2,7 +2,7 @@
 //!
 //! Identity seeds, this device's key-agreement key, the workspace passphrase
 //! and delivered epoch keys, relay tokens, the relay issuer key, provider API
-//! keys, MCP tokens and the ligus-auth refresh token all live behind
+//! keys, MCP tokens and the langstroth-auth refresh token all live behind
 //! [`SecretStore`]; `settings.json` and `config.toml` keep only `{"set": true}`
 //! placeholders.
 //!
@@ -1180,7 +1180,7 @@ pub fn save_settings_json(
 
 /// Load a settings object from `path` with its secrets from `store`. A file
 /// still holding plaintext secrets is rewritten without them (they are not
-/// imported: 2.0 starts from scratch).
+/// imported: 0.1 starts from scratch).
 pub fn load_settings_json(
     path: &Path,
     store: &dyn SecretStore,
@@ -1556,8 +1556,8 @@ esac"#,
 
     #[test]
     fn plaintext_secrets_left_in_a_file_are_scrubbed_not_imported() {
-        // 2.0 starts from scratch: a settings.json holding plaintext secrets
-        // (hand-edited, or from a pre-2.0 build) loses them, and the file is
+        // 0.1 starts from scratch: a settings.json holding plaintext secrets
+        // (hand-edited, or from a Hive 1.x build) loses them, and the file is
         // rewritten without them.
         let dir = tempfile::tempdir().unwrap();
         let store = File0600::new(dir.path().join("store"));

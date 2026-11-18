@@ -155,8 +155,8 @@ cmd_preflight() {
   else
     local v; v=$("$BIN" --version 2>/dev/null || true)
     case $v in
-      "ligus "[2-9]*) ac_check cli.binary pass "$BIN: $v" ;;
-      *) ac_check cli.binary fail "$BIN: ${v:-no version} (2.0 or later needed)" "ligus-local install-cli --version <v2 tag>"; ac_raise 3 ;;
+      "ligus 0."[1-9]*|"ligus "[2-9]*) ac_check cli.binary pass "$BIN: $v" ;;
+      *) ac_check cli.binary fail "$BIN: ${v:-no version} (0.1.0 or later needed)" "ligus-local install-cli --version v0.1.0"; ac_raise 3 ;;
     esac
   fi
   if ac_have curl; then ac_check tool.curl pass "curl present"; else ac_check tool.curl fail "curl not found" "install curl"; ac_raise 3; fi
@@ -222,7 +222,7 @@ cmd_install_cli() {
   else
     if LIGUS_VERSION="${VERSION:-latest}" LIGUS_INSTALL_DIR="${BIN_DIR:-$HOME/.local/bin}" sh "$ROOT/install.sh" >&2; then
       ac_check install pass "installed ${BIN_DIR:-$HOME/.local/bin}/ligus (${VERSION:-latest})"
-      ac_check install.integrity warn "the release binary was downloaded over https without a published checksum or signature to verify it against${VERSION:+}${VERSION:- (and 'latest' is not pinned)}" "pin --version, or install the Homebrew formula (its sha256 is pinned): brew install ligus-ai/ligus/ligus"
+      ac_check install.integrity warn "the release binary was downloaded over https without a published checksum or signature to verify it against${VERSION:+}${VERSION:- (and 'latest' is not pinned)}" "pin --version, or install the Homebrew formula (its sha256 is pinned): brew install langstroth-ai/ligus/ligus"
     else
       ac_check install fail "install.sh failed" "check the release exists for this platform, or use --from-source"
     fi

@@ -47,7 +47,7 @@ from the `LIGUS_RELAY_ACCESS_TOKENS` env var:
 
 The desktop client sends this from `relay_access_token` (Settings → Team sync, or
 `LIGUS_RELAY_ACCESS_TOKEN`); `RelayClient::with_auth(token)` attaches it to every
-request. It is intentionally transport-agnostic — an operator (or ligus-auth)
+request. It is intentionally transport-agnostic — an operator (or langstroth-auth)
 issues and revokes tokens without changing the relay surface.
 
 The relay's `EntitlementPolicy` resolves from the environment, most specific

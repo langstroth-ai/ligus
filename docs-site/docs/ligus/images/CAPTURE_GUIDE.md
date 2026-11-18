@@ -58,7 +58,7 @@ elements).
   1. **Identity** ("Who are you?" — GitHub sign-in or display name)
   2. **Workspace** (pick/confirm a folder)
   3. **Model** (Claude Code / OpenAI / Anthropic / Ollama)
-  4. **Team & sync** (Just me · Join a team · Connect to a relay)
+  4. **Team & sync** (Just me (no sync) · Join a team · Sync through a relay)
   5. **Appearance** ("Make it yours" — palette + light/dark)
 - **Right-rail panes** (icon rail, left→right): **Tools · Context · Review ·
   People · Vaults · Skills · Workflows · Activity**. *(There is no longer a
@@ -139,13 +139,14 @@ Ollama), the relevant field (API key, or the Ollama localhost endpoint), and
 **State.** Onboarding **step 4** ("Team & sync"), the collaboration choice added
 in 1.0.
 
-**Recipe.** From step 3 click **Next**. Step 4 offers three modes: **Just me**
-(local-only), **Join a team** (invite / short code), **Connect to a relay**
-(relay URL + token). Select **Connect to a relay** so the URL + access-token
-fields and the **Test connection** button show; capture before finishing.
+**Recipe.** From step 3 click **Next**. Step 4 offers three modes: **Just me
+(no sync)** (local-only), **Join a team** (invite / short code), **Sync through
+a relay**. Select **Sync through a relay** so the relay picker (community
+relay preselected, or your own relay) and the **Test connection** button
+show; capture before finishing.
 
 **Must be visible.** The three mode options with their descriptions, the
-relay-URL / access-token fields for the selected mode, and **Test connection**.
+relay picker with the community relay selected, and **Test connection**.
 Use a demo relay URL — **no real tokens** (blur if present).
 
 > This page (`features/onboarding.md`) currently embeds only
@@ -282,25 +283,6 @@ incoming request, and connected friends with presence dots.
 
 **Must be visible.** The "Add by GitHub username" field, an incoming request row
 (accept/decline), and a friends list with presence dots (online/away/offline).
-
----
-
-## 14. `settings-team-members.png` — used by `features/settings.md`
-
-**State.** Settings → **Team sync** tab, scrolled to the **Team members** panel,
-as a relay admin so the management UI is shown (not the "needs an admin" hint).
-
-**Recipe.**
-1. Point Ligus at a relay whose admin list includes your GitHub login
-   (`LIGUS_RELAY_ADMIN_LOGINS`), and sign in with GitHub (Settings → Account).
-2. Open **Settings → Team sync**, scroll to **Team members**.
-3. Add one member so the list has a row (and, optionally, capture the one-time
-   token reveal callout in a second shot — but redact/blur the token).
-
-**Must be visible.** The **Add member** row (name + GitHub login fields + Add
-button) and at least one member row with its token count and the Add token /
-Disable / Revoke actions. **Do not show a real token** — blur it if the
-one-time reveal is visible.
 
 ---
 

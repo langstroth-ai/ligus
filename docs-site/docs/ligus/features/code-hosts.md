@@ -12,7 +12,7 @@ account is your own key, on your devices.
 | GitLab (gitlab.com and self-managed) | device sign-in (gitlab.com, or an instance whose admin registered an application), or a personal access token | `Draft:` merge requests | [GitLab](../forges/gitlab.md) |
 | Forgejo, Gitea, Codeberg | a personal access token | `WIP:` pull requests | [Forgejo, Gitea and Codeberg](../forges/forgejo-gitea-codeberg.md) |
 
-Tangled and SourceHut repository work comes after 2.0. Bitbucket and Azure
+Tangled and SourceHut repository work comes after 0.1. Bitbucket and Azure
 DevOps are on request.
 
 ## Where tokens live

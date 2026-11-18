@@ -20,8 +20,8 @@ describe("chipFor", () => {
   it("hides a link that failed the offline checks", () => {
     expect(chipFor({ state: "invalid", reason: "bad signature" })).toBeNull();
   });
-  /// 2.0 dropped the SourceHut and Tangled verifiers: a link of either kind
-  /// made by a 2.0 pre-release arrives self-asserted and is a claim, never
+  /// 0.1 dropped the SourceHut and Tangled verifiers: a link of either kind
+  /// made by a 0.1 pre-release arrives self-asserted and is a claim, never
   /// verified; neither forge is offered for a new link.
   it("SourceHut and Tangled links are claims only, and not offered", () => {
     expect(chipFor({ state: "selfAsserted" })?.label).toBe("self-asserted");

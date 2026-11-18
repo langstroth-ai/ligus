@@ -187,7 +187,7 @@ log. The durable host record is now written only when something real changes
 
 ### The workspace coordinator
 
-Since 2.0 the box also holds the workspace's **coordinator lease**: a signed
+Since 0.1 the box also holds the workspace's **coordinator lease**: a signed
 claim on the workspace config log, renewed by a heartbeat signed with the
 box's device key on the same presence channel. If a second `ligus serve` box
 serves the same workspace, it leaves the role to the first while that one
@@ -196,7 +196,7 @@ been silent for two lease periods (three minutes). `GET /v1/guards` reports
 the current holder and epoch, along with dearth mode and locked chats. See
 [Workspace guards](../../ligus/features/guards.md).
 
-### What the phone reads from the box (2.0)
+### What the phone reads from the box (0.1)
 
 | Endpoint | What |
 |---|---|

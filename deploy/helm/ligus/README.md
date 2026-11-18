@@ -1,6 +1,6 @@
 # ligus Helm chart (preview)
 
-> **Preview.** Neither this chart nor the `ligus-relay` chart is published to a
+> **Preview.** Neither this chart nor the `langstroth-relay` chart is published to a
 > chart registry, and no container images are published: build them yourself
 > (below). Values may still change before they are.
 
@@ -8,16 +8,16 @@ Runs the server side of one Ligus workspace on Kubernetes: an always-on
 `ligus serve` device and, optionally, named `ligus worker` hosts and HTTP MCP
 servers. The design and its reasoning are in
 [`docs/design/kubernetes.md`](../../../docs/design/kubernetes.md); the
-operator guide (supported nodes, install, backups, upgrades, what 2.0 does
+operator guide (supported nodes, install, backups, upgrades, what 0.1 does
 not support) is the docs site's
 [Kubernetes page](../../../docs-site/docs/operate/deploy/kubernetes.md).
 
 **One release per workspace, in that workspace's own namespace.** The relay is
 shared by many workspaces and normally lives in its own namespace and release
-(the `ligus-relay` chart in the relay repository, v0.3.0); this chart can also
+(the `langstroth-relay` chart in the relay repository, v0.3.0); this chart can also
 pull it in as a dependency for an all-in-one install.
 
-Requires a CLI image of 2.0 or later.
+Requires a CLI image of 0.1 or later.
 
 ## What it renders
 
@@ -28,7 +28,7 @@ Requires a CLI image of 2.0 or later.
 | workers | One StatefulSet (one replica) per `worker.instances[]` entry | Optional. Each is its own host (`--label <name>`); bind agents with `ligus set-agent-host` |
 | MCP servers | Deployment + Service + NetworkPolicy each | Optional HTTP MCP servers, reachable only from this workspace's serve and workers |
 | NetworkPolicies | serve/workers, tests, MCP servers, optional namespace default-deny | Egress closed by default |
-| relay | `ligus-relay` dependency | Optional, `relay.enabled` |
+| relay | `langstroth-relay` dependency | Optional, `relay.enabled` |
 
 Every pod runs as UID 65532 with a read-only root filesystem, no capabilities,
 `RuntimeDefault` seccomp, no service account token and no `hostNetwork`, so the
@@ -60,7 +60,7 @@ that runs a local program, so the chart fails closed:
 Build the images (the relay from a relay checkout at v0.3.0):
 
 ```sh
-docker build -f deploy/container/Dockerfile -t registry.example.com/ligus:2.0.0 .
+docker build -f deploy/container/Dockerfile -t registry.example.com/ligus:0.1.0 .
 ```
 
 The chart's only dependency is the relay chart, which is optional but must be
@@ -69,7 +69,7 @@ checkout at v0.3.0:
 
 ```sh
 mkdir -p deploy/helm/ligus/charts
-helm package -d deploy/helm/ligus/charts <relay-checkout>/deploy/helm/ligus-relay
+helm package -d deploy/helm/ligus/charts <relay-checkout>/deploy/helm/langstroth-relay
 ```
 
 Create the workspace connection Secret from a desktop invite (the chart
@@ -83,7 +83,7 @@ kubectl label namespace ligus-ws-acme pod-security.kubernetes.io/enforce=restric
 kubectl -n ligus-ws-acme create secret generic acme-workspace \
   --from-literal=room=<room> --from-literal=key=<workspace key>
 helm install acme deploy/helm/ligus -n ligus-ws-acme \
-  --set image.repository=registry.example.com/ligus --set image.tag=2.0.0 \
+  --set image.repository=registry.example.com/ligus --set image.tag=0.1.0 \
   --set relayUrl=https://relay.example.com \
   --set networkPolicy.allowInternetHttps=true \
   --set workspace.existingSecret=acme-workspace
@@ -109,7 +109,7 @@ logs are kept):
 kubectl -n ligus-ws-acme exec -it acme-ligus-serve-0 -- ligus pair --relay-only   # needs remote.enabled
 ```
 
-**Changing in 2.0:** `ligus serve enroll` and `serve.owner` make the box act
+**Changing in 0.1:** `ligus serve enroll` and `serve.owner` make the box act
 for an owner. They are being replaced by serve joining the workspace as its
 own member (a service member an Admin approves, capped below Admin). Until
 that lands they still work, but don't build automation on them.
@@ -221,12 +221,12 @@ set `LIGUS_MODEL_GATEWAY*`.
 
 | Key | Default | Notes |
 |---|---|---|
-| `image.repository` / `tag` / `digest` | `ghcr.io/ligus-ai/ligus`, appVersion | Built from `deploy/container/Dockerfile`; pin by digest |
+| `image.repository` / `tag` / `digest` | `ghcr.io/langstroth-ai/ligus`, appVersion | Built from `deploy/container/Dockerfile`; pin by digest |
 | `relayUrl` | empty | `LIGUS_RELAY_URL`; required unless `relay.enabled` |
-| `relay.enabled` | `false` | In-release relay (any `ligus-relay` value under `relay.`) |
+| `relay.enabled` | `false` | In-release relay (any `langstroth-relay` value under `relay.`) |
 | `workspace.existingSecret` / `secretKeys` / `relayAccessToken` | required | Workspace connection |
 | `remote.enabled` / `relayUrl` / `insecureRelay` / `regTokenSecret` | off | Phone access through the relay tunnel; `insecureRelay` only for in-cluster http |
-| `serve.label`, `name`, `owner`, `defaultAgent`, `applyOnApprove` | | `LIGUS_SERVE_*` (`owner` is changing in 2.0, above) |
+| `serve.label`, `name`, `owner`, `defaultAgent`, `applyOnApprove` | | `LIGUS_SERVE_*` (`owner` is changing in 0.1, above) |
 | `serve.runtimesToml` | empty | Mounted read-only, `LIGUS_RUNTIMES_FILE` |
 | `serve.mcpToml`, `serve.dashboardToml` | empty | Mounted read-only (`LIGUS_MCP_CONFIG`, `LIGUS_DASHBOARD_FILE`) |
 | `serve.workspaceSecrets`, `serve.agentEnv` | empty | Secrets, above |
@@ -262,13 +262,13 @@ set `LIGUS_MODEL_GATEWAY*`.
   changes `volumeClaimTemplates`, which Kubernetes doesn't allow in place:
   delete the StatefulSet with `--cascade=orphan` first (the PVCs stay).
 - Kubernetes per-turn executors, PR-test sandboxes, worker autoscaling and
-  OpenTelemetry export are not supported in 2.0.
+  OpenTelemetry export are not supported in 0.1.
 
 ## CI
 
 `.github/workflows/kind-e2e.yml` builds the CLI and relay images (the relay at a
 pinned commit), installs the relay (Postgres), a throwaway workspace served by
-serve, and one worker on a second throwaway workspace of its own on kind (2.0
+serve, and one worker on a second throwaway workspace of its own on kind (0.1
 admits a box to a workspace only through an Admin's invite, which CI cannot
 issue headlessly yet, so serve and a worker can't share a fresh workspace), and
 checks: the runner kernel has Landlock (the job fails, saying so, if not), sync between two client identities through the

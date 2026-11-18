@@ -1555,7 +1555,7 @@ fn fold_pass(
                 let hold = match workspace {
                     WorkspaceAuthz::NoConfigLog => Some(HoldReason::NoConfigLog),
                     WorkspaceAuthz::Timeline(t) => {
-                        // Every 2.0 author stamps the frontier; one without it
+                        // Every 0.1 author stamps the frontier; one without it
                         // can't be placed and is refused.
                         let Some(mut f) = env.actor_stamp.as_ref().and_then(|s| s.cfg_frontier) else {
                             break 'judge;

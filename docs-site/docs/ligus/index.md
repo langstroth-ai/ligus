@@ -6,7 +6,8 @@ collaborate with peers on real work — code, commits, reviews — and
 keep your data local-first.
 
 *Ligus* is short for *ligustica* (*Apis mellifera ligustica*, the Italian
-honeybee). The project was called Hive until v2.0; old links to
+honeybee). Ligus 0.1.0 is a new application; its predecessor was called
+Hive (1.x). Old links to
 docs.apiaryhq.ai and docs.ligus.ai redirect here.
 
 This section covers using Ligus: the desktop and phone apps, workspaces,
@@ -96,14 +97,14 @@ append-only event log in SQLite; replies stream from your chosen runtime (the
 
 ## Project status
 
-Ligus 2.0 is the current release (it was called Hive until 1.18; 2.0 starts fresh and leaves Hive 1.x data
+Ligus 0.1.0 is the current release (its predecessor, Hive, ended at 1.18; Ligus starts fresh and leaves Hive 1.x data
 untouched, see [Upgrading from Hive 1.x](../operate/deploy/upgrade-from-hive.md)). The macOS app is
 signed and notarized and updates itself; Windows and Linux builds are
 unsigned. The headless `ligus` CLI ships for macOS and Linux through
 Homebrew. See [What's new](reference/whats-new.md).
 
 The reference relay is MIT-licensed and lives in its own repository,
-[github.com/ligus-ai/relay](https://github.com/ligus-ai/relay) (a small Go
+[github.com/langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay) (a small Go
 service); see [Self-hosting a relay](../operate/networking/self-host.md). Desktops that
 are contacts also sync directly peer to peer over **iroh**, falling back to
 the relay. Kubernetes support is in preview

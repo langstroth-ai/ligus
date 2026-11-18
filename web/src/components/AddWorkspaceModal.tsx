@@ -12,8 +12,11 @@ import {
   redeemShortCode,
   passkeyRegister,
   recoveryKeyCreate,
+  getConnectionSettings,
   type WorkspaceInfoDto,
 } from "@/lib/ipc";
+import { RelayPicker } from "@/components/RelayPicker";
+import { relayUrlFor, type RelayChoice } from "@/lib/communityRelay";
 import { toast, errMsg } from "@/components/Toast";
 import { confirmThen } from "@/lib/confirm";
 import { Modal } from "@/components/ui";
@@ -43,6 +46,15 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
     queryFn: listWorkspaces,
     enabled: open,
   });
+  // With no relay configured, the creator picks one here (the community relay
+  // preselected); with one, the new workspace uses it. Joiners take the relay
+  // from the invite.
+  const conn = useQuery({ queryKey: ["connection-settings"], queryFn: getConnectionSettings, enabled: open });
+  const currentRelay = conn.data?.relayUrl?.trim() ?? "";
+  const needsRelayPick = conn.isSuccess && !currentRelay;
+  const [relayChoice, setRelayChoice] = useState<RelayChoice>("community");
+  const [ownRelayUrl, setOwnRelayUrl] = useState("");
+  const pickedRelayMissing = needsRelayPick && relayChoice === "own" && !ownRelayUrl.trim();
   const rooms = (workspaces.data ?? []).filter((w) => w.kind === "room");
 
   if (!open) return null;
@@ -54,14 +66,17 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
     // briefly show the previous one's channels until another refetch lands.
     await qc.invalidateQueries({ queryKey: ["channels"] });
     await qc.invalidateQueries({ queryKey: ["sync-status"] });
+    await qc.invalidateQueries({ queryKey: ["connection-settings"] });
   }
 
   async function onCreate() {
     const n = name.trim();
-    if (!n || busy) return;
+    if (!n || busy || pickedRelayMissing) return;
     setBusy(true);
     try {
-      const ws = await createWorkspace(n);
+      const ws = needsRelayPick
+        ? await createWorkspace(n, relayUrlFor(relayChoice, ownRelayUrl))
+        : await createWorkspace(n);
       setName("");
       setHasPasskey(false);
       setWords(null);
@@ -271,9 +286,25 @@ export function AddWorkspaceModal({ open, onClose }: { open: boolean; onClose: (
             className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
             style={{ borderColor: "var(--hive-line)", background: "var(--hive-canvas)", color: "var(--hive-ink)" }}
           />
+          {needsRelayPick ? (
+            <div className="space-y-1.5" data-testid="new-workspace-relay">
+              <div className="text-xs font-medium">Sync through</div>
+              <RelayPicker
+                choice={relayChoice}
+                onChoice={setRelayChoice}
+                ownUrl={ownRelayUrl}
+                onOwnUrl={setOwnRelayUrl}
+                allowNone
+                inputClassName="w-full rounded-lg border px-3 py-2 font-mono text-xs outline-none"
+                inputStyle={{ borderColor: "var(--hive-line)", background: "var(--hive-canvas)", color: "var(--hive-ink)" }}
+              />
+            </div>
+          ) : (
+            currentRelay && <p className="text-xs text-ink-soft">Syncs through {currentRelay}.</p>
+          )}
           <button
             onClick={onCreate}
-            disabled={busy || !name.trim()}
+            disabled={busy || !name.trim() || pickedRelayMissing}
             className="w-full rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-40"
             style={{ background: "var(--hive-accent-fill)", color: "var(--hive-on-accent)" }}
           >

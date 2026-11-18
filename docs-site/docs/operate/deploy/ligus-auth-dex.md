@@ -1,9 +1,9 @@
-# ligus-auth with Dex
+# langstroth-auth with Dex
 
 [Dex](https://dexidp.io) is an OIDC provider that federates other identity
 sources: GitHub organizations and teams, LDAP, SAML, Google, Microsoft and
 more. Kubeflow ships with Dex, so a team that runs Kubeflow can point
-[ligus-auth](ligus-auth.md) at the Dex it already has and reuse the same
+[langstroth-auth](ligus-auth.md) at the Dex it already has and reuse the same
 groups.
 
 ## 1. Add a static client to Dex
@@ -13,15 +13,15 @@ In Dex's config (for Kubeflow, the `dex` ConfigMap or the
 
 ```yaml
 staticClients:
-  - id: ligus-auth
+  - id: langstroth-auth
     name: Ligus
     secretEnv: LIGUS_AUTH_DEX_SECRET
     redirectURIs:
       - https://auth.example.com/t/acme/callback
 ```
 
-Generate the secret with `ligus-auth gen-token` and give the same value to
-Dex (as `LIGUS_AUTH_DEX_SECRET`) and to ligus-auth (as a file).
+Generate the secret with `langstroth-auth gen-token` and give the same value to
+Dex (as `LIGUS_AUTH_DEX_SECRET`) and to langstroth-auth (as a file).
 
 ## 2. Groups from your connectors
 
@@ -52,7 +52,7 @@ connectors:
       teamNameField: slug
 ```
 
-## 3. ligus-auth config
+## 3. langstroth-auth config
 
 ```json
 {
@@ -66,7 +66,7 @@ connectors:
       "id": "acme",
       "oidc": {
         "issuer": "https://dex.example.com",
-        "client_id": "ligus-auth",
+        "client_id": "langstroth-auth",
         "client_secret_file": "/etc/ligus-auth/secrets/dex-client-secret",
         "scopes": ["openid", "email", "profile", "groups"]
       },
@@ -82,7 +82,7 @@ connectors:
 }
 ```
 
-Dex has no SCIM, so ligus-auth sees group changes only when someone signs in
+Dex has no SCIM, so langstroth-auth sees group changes only when someone signs in
 at Dex again. That is why this example sets `session_max_age` to a day:
 everyone goes back through Dex (and GitHub, LDAP or SAML) daily, and someone
 removed from a team loses relay access within a day, or at once if you also
@@ -91,20 +91,20 @@ switch them off with the [admin API](ligus-auth.md#operator-api).
 ## 4. Run it
 
 **Docker Compose:** `deploy/compose/ligus-auth-dex/` in the relay repository
-has Dex, ligus-auth, the relay and Caddy, with this config.
+has Dex, langstroth-auth, the relay and Caddy, with this config.
 
-**Kubernetes, next to the ligus-relay chart:** install the `ligus-auth`
+**Kubernetes, next to the langstroth-relay chart:** install the `langstroth-auth`
 chart from the same repository.
 
 ```sh
-kubectl create secret generic ligus-auth-signing-key \
+kubectl create secret generic langstroth-auth-signing-key \
   --from-file=signing-key=./signing-key
-kubectl create secret generic ligus-auth-secrets \
+kubectl create secret generic langstroth-auth-secrets \
   --from-file=dex-client-secret=./dex-client-secret
-helm install ligus-auth deploy/helm/ligus-auth -f ligus-auth-values.yaml
+helm install langstroth-auth deploy/helm/ligus-auth -f langstroth-auth-values.yaml
 ```
 
-`ligus-auth-values.yaml`:
+`langstroth-auth-values.yaml`:
 
 ```yaml
 config:
@@ -115,7 +115,7 @@ config:
     - id: acme
       oidc:
         issuer: https://dex.example.com
-        client_id: ligus-auth
+        client_id: langstroth-auth
         client_secret_file: /etc/ligus-auth/secrets/dex-client-secret
         scopes: [openid, email, profile, groups]
       idp_groups: true
@@ -123,9 +123,9 @@ config:
       grants:
         acme:platform: ["7f0c2a5e-3d4b-4b8e-9a51-2a6f3c1d9e01"]
 signingKey:
-  existingSecret: ligus-auth-signing-key
+  existingSecret: langstroth-auth-signing-key
 secretFiles:
-  existingSecret: ligus-auth-secrets
+  existingSecret: langstroth-auth-secrets
 persistence:
   enabled: true
 ingress:
@@ -134,12 +134,12 @@ ingress:
   host: auth.example.com
 ```
 
-and in the ligus-relay chart's values (`config.env`):
+and in the langstroth-relay chart's values (`config.env`):
 
 ```yaml
 config:
   env:
-    LIGUS_RELAY_TOKEN_PUBKEY: "<public key from ligus-auth keygen>"
+    LIGUS_RELAY_TOKEN_PUBKEY: "<public key from langstroth-auth keygen>"
     LIGUS_RELAY_WORKSPACE_SCOPE: strict
     LIGUS_RELAY_TENANTS: acme
 ```
@@ -148,7 +148,7 @@ On a Kubeflow cluster, Dex is usually reachable in-cluster at
 `http://dex.auth.svc.cluster.local:5556/dex`, but its **issuer** is the
 public URL in Dex's config (for example `https://kubeflow.example.com/dex`).
 Use the issuer exactly as Dex states it in
-`/.well-known/openid-configuration`; ligus-auth refuses a mismatch.
+`/.well-known/openid-configuration`; langstroth-auth refuses a mismatch.
 
 ## 5. Sign in
 

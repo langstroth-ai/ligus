@@ -8,14 +8,14 @@ hide:
 
 **Langstroth** is the open, self-hostable platform behind **Ligus**, a
 shared LLM workspace for developers. *Ligus* is short for *ligustica*
-(*Apis mellifera ligustica*, the Italian honeybee); the project was called
-Hive until 2.0.
+(*Apis mellifera ligustica*, the Italian honeybee). Ligus 0.1.0 is a new
+application; its predecessor was called Hive (1.x).
 
 - **Ligus** is the app: the desktop app, the phone app and the `ligus` CLI.
   You bring your own subscription and your own agents, and work with people
   and agents in shared, end-to-end-encrypted workspaces.
 - **Langstroth** is what the apps run on: the content-blind relay,
-  organization sign-in (ligus-auth), the Helm charts, and always-on Ligus
+  organization sign-in (langstroth-auth), the Helm charts, and always-on Ligus
   hosts (`ligus serve` and `ligus worker`). Everything is MIT-licensed and
   self-hosted.
 

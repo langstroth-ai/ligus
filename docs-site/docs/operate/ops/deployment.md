@@ -7,7 +7,7 @@ The relay stores and forwards only end-to-end encrypted events.
 
 ```mermaid
 flowchart LR
-  A["Alice: desktop (Owner)"] <-->|"E2EE"| R["ligus-relay"]
+  A["Alice: desktop (Owner)"] <-->|"E2EE"| R["langstroth-relay"]
   B["Bob: desktop (Contributor)"] <-->|"E2EE"| R
   W["shared worker: ligus worker"] <-->|"E2EE"| R
 ```
@@ -29,7 +29,7 @@ Follow [Self-hosting a relay](../networking/self-host.md). The short
 version on Fly.io:
 
 ```sh
-git clone https://github.com/ligus-ai/relay && cd relay
+git clone https://github.com/langstroth-ai/langstroth-relay && cd relay
 fly launch --config deploy/fly.toml --copy-config --no-deploy
 fly volumes create hive_data --size 1 --region <region>
 fly deploy . --config deploy/fly.toml
@@ -40,10 +40,10 @@ curl -s https://<app>.fly.dev/v1/health
 ## 2. Gate it with signed tokens
 
 On your own machine (not the relay), with the relay binary built
-(`go build -o ligus-relay ./cmd/ligus-relay`):
+(`go build -o langstroth-relay ./cmd/langstroth-relay`):
 
 ```sh
-./ligus-relay keygen
+./langstroth-relay keygen
 # private_key=…   # SECRET — keep on the issuer only (never on the relay)
 # public_key=…
 fly secrets set LIGUS_RELAY_TOKEN_PUBKEY=<public_key>
@@ -54,7 +54,7 @@ curl -s -o /dev/null -w '%{http_code}\n' https://<app>.fly.dev/v1/workspaces/x/e
 Mint one token per person (and per worker box):
 
 ```sh
-./ligus-relay issue --key <private_key> --sub github:alice --exp-days 180
+./langstroth-relay issue --key <private_key> --sub github:alice --exp-days 180
 # hrt1.…
 ```
 
@@ -96,7 +96,7 @@ A worker hosts agents for everyone, using **workspace** runtimes whose keys
 live only on the worker:
 
 ```sh
-brew install ligus-ai/ligus/ligus
+brew install langstroth-ai/ligus/ligus
 ligus enroll 'hivews1:…' --token 'hrt1.…'
 ligus sync
 ligus register-worker --label team-worker      # prints the host id

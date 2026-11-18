@@ -53,7 +53,7 @@ content.
 ## 1. Overview
 
 ```
- phone (iOS app)                    relay (Go, ligus-ai/relay)            host (hive serve)
+ phone (iOS app)                    relay (Go, langstroth-ai/langstroth-relay)            host (hive serve)
  ───────────────                    ─────────────────────────────             ─────────────────
                                     ◀── WSS /v1/tunnel/host ─────────────────  persistent control
                                         challenge / hello(sig) / welcome        connection (§6.2)
@@ -619,7 +619,7 @@ HTTP status codes inside streams are the API's own ([ios-app.md](ios-app.md)).
 
 ### 12.1 Relay behaviour where v1 was silent
 
-The reference relay ([`ligus-ai/relay`](https://github.com/ligus-ai/relay),
+The reference relay ([`langstroth-ai/langstroth-relay`](https://github.com/langstroth-ai/langstroth-relay),
 Go) made these choices where the text above didn't decide. Other relays
 SHOULD behave the same, and clients MUST tolerate them:
 
@@ -761,7 +761,7 @@ that key: someone self-hosting builds and signs the app themselves
 
 ## 15. Relay seams and configuration
 
-### 15.1 Seams (Go, `ligus-ai/relay`)
+### 15.1 Seams (Go, `langstroth-ai/langstroth-relay`)
 
 ```go
 type HostStatus struct { Active bool; MaxSessions int } // !Active == "pending"
@@ -806,7 +806,7 @@ A program that imports the relay package can set the tunnel seams (a
 `TunnelPolicy`, a `PushSender`) through `relay.MainWith(Extension)`. The
 result MUST be a strict superset of the open binary: every open `/v1` route,
 the admin routes, `hrt1` tokens, storage and env behave exactly as in
-`cmd/ligus-relay`. An extension can only set the tunnel seams, add routes
+`cmd/langstroth-relay`. An extension can only set the tunnel seams, add routes
 under unused `/v1/<name>/` prefixes and add subcommands, and a failing
 extension falls back to the open relay rather than failing closed.
 

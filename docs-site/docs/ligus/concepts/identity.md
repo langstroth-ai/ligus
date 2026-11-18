@@ -132,9 +132,9 @@ secret store:
 | Anywhere else | owner-only files (`keys/*.seed` and `secrets/`, `0600` in `0700` dirs), with a warning in Settings |
 
 `LIGUS_SECRET_BACKEND` (`keychain`, `secret-service`, `systemd-creds`, `k8s`,
-`file`) picks one. `settings.json`, `config.toml` and the ligus-auth session
+`file`) picks one. `settings.json`, `config.toml` and the langstroth-auth session
 file hold `{"set": true}` where a secret was; a plaintext secret found in one
-is removed, not imported (2.0 starts from scratch; enter it again).
+is removed, not imported (0.1 starts from scratch; enter it again).
 
 Agents can't reach the store: the data dir (keychain file included) is
 denied to every agent process by the OS sandbox, even to subscription CLIs

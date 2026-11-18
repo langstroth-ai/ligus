@@ -2,7 +2,7 @@
 
 The relay now lives in its own repository:
 
-> **[github.com/ligus-ai/relay](https://github.com/ligus-ai/relay)** (MIT)
+> **[github.com/langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay)** (MIT)
 
 Full deploy instructions — Docker, Fly.io, environment variables, TLS, optional
 token gating, and Postgres/HA — live in that repo's **README** and
@@ -13,8 +13,8 @@ requirements are a public HTTPS URL and (for the snapshot store) a small volume.
 Quick start:
 
 ```bash
-docker build -t hive-relay https://github.com/ligus-ai/relay.git
-docker run -d -p 8443:8443 -v hive-data:/data -e LIGUS_RELAY_DATA_DIR=/data hive-relay
+docker build -t langstroth-relay https://github.com/langstroth-ai/langstroth-relay.git
+docker run -d -p 8443:8443 -v hive-data:/data -e LIGUS_RELAY_DATA_DIR=/data langstroth-relay
 curl http://localhost:8443/v1/health   # → ok
 ```
 

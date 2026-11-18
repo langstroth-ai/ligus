@@ -586,7 +586,7 @@ mod tests {
     #[test]
     fn repo_specs_accept_only_github_owner_name() {
         let ok = |s: &str| parse_repo_spec(s).unwrap();
-        assert_eq!(ok("honeyhive-ai/hive"), ("honeyhive-ai".into(), "hive".into()));
+        assert_eq!(ok("langstroth-ai/ligus"), ("langstroth-ai".into(), "ligus".into()));
         assert_eq!(ok(" https://github.com/acme/web-app.git "), ("acme".into(), "web-app".into()));
         assert_eq!(ok("https://github.com/a/b.c_d-e/"), ("a".into(), "b.c_d-e".into()));
         assert_eq!(ok("a/.github"), ("a".into(), ".github".into()));

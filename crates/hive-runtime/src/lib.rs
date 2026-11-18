@@ -100,8 +100,8 @@ pub use mcp::{
 };
 pub use mentions::{message_mentions, parse_mentions, requester_from, requester_of, MentionTargets, Requester};
 pub use relay_client::{
-    EnvelopePage, FetchedEnvelope, InviteEntry, IssuedInvite, IssuedRelayToken, MemberEntry, RelayClient,
-    RelayError, RelayProbe, RelayTokenEntry, RelayUserEntry, ENVELOPE_PAGE_LIMIT,
+    EnvelopePage, FetchedEnvelope, InviteEntry, IssuedInvite, MemberEntry, RelayClient,
+    RelayError, RelayProbe, ENVELOPE_PAGE_LIMIT,
 };
 pub use remote_manifest::resolve_manifest_url;
 pub use sse::{next_backoff, parse_seq, SseConnectError, SseDecoder, SseStream};

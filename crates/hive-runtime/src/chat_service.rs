@@ -3824,7 +3824,7 @@ mod tests {
 
     #[test]
     fn a_worker_manages_its_own_host_only_once_it_is_a_member() {
-        // Every author must be a workspace member (2.0): a worker box holding
+        // Every author must be a workspace member (0.1): a worker box holding
         // the workspace key but not on the roster can't even register its own
         // host. Once it joined with an Admin's invite (as a Contributor) it
         // manages its own host, yet still can't perform governance.

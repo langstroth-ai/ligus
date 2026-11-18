@@ -22,7 +22,7 @@
 //!   service, not a file the agent can write through the profile).
 //!
 //! `LIGUS_CLI_HOME=shared` (device-local) turns this off and lets the CLIs
-//! write their real state dirs, as before 2.0.
+//! write their real state dirs, as under Hive 1.x.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

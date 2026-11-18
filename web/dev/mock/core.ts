@@ -23,7 +23,7 @@ function handle(cmd: string, args: Args): unknown {
   const sid = (args?.sessionId as string) ?? "";
   switch (cmd) {
     case "get_app_info":
-      return { name: "Ligus", coreVersion: "2.0.0", buildProfile: "debug" };
+      return { name: "Ligus", coreVersion: "0.1.0", buildProfile: "debug" };
     case "get_app_settings":
       return fx.settings(scenario === "onboarding");
     case "list_workspaces":
@@ -197,8 +197,6 @@ function handle(cmd: string, args: Args): unknown {
     case "list_my_devices":
       return [{ deviceId: "d1", label: "MacBook Pro", fingerprint: "a1b2-c3d4", thisDevice: true, revoked: false, lastSeen: null }];
     case "list_device_requests":
-      return [];
-    case "list_relay_users":
       return [];
     case "has_issuer_key":
       return false;

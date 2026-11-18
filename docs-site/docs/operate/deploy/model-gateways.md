@@ -13,7 +13,7 @@ cluster or another one. No gateway is required and none is embedded: without
 plain custom base URL.
 
 The design record is
-[`docs/design/v2/model-gateways.md`](https://github.com/ligus-ai/ligus/blob/main/docs/design/v2/model-gateways.md).
+[`docs/design/v2/model-gateways.md`](https://github.com/langstroth-ai/ligus/blob/main/docs/design/v2/model-gateways.md).
 
 ## How it fits together
 

@@ -124,8 +124,8 @@ can act as that device and read everything it could.
    worker` boxes). The toast says whether the key was rotated ("No relay
    configured, so the key wasn't rotated" means it wasn't). Your browser
    asks for a passkey for each of the two events.
-2. If the relay enforces membership, also remove them in **Settings → Team
-   sync → Team members** (or the relay roster). That alone doesn't rotate
+2. If the relay enforces membership, also remove them from the relay
+   roster. That alone doesn't rotate
    the key; step 1 does.
 3. Revoke their relay token ([below](#relay-token)).
 4. If they had access to shared worker or serve boxes, remove their logins
@@ -244,7 +244,7 @@ enrollment on your desktop (also with your passkey).
 | Gate | Revoke |
 |---|---|
 | `LIGUS_RELAY_ACCESS_TOKENS` | remove the token from the list and restart the relay |
-| Signed `hrt1` tokens | the open-source relay has no per-token revocation list: tokens stay valid until they expire. Issue them with `--exp-days`, and with `--workspace <id>` under `LIGUS_RELAY_WORKSPACE_SCOPE` so a leaked token reaches only its own workspaces. To cut one off now, generate a new issuer key (`ligus-relay keygen`), set the new public key, restart, and re-issue tokens to everyone else |
+| Signed `hrt1` tokens | the open-source relay has no per-token revocation list: tokens stay valid until they expire. Issue them with `--exp-days`, and with `--workspace <id>` under `LIGUS_RELAY_WORKSPACE_SCOPE` so a leaked token reaches only its own workspaces. To cut one off now, generate a new issuer key (`langstroth-relay keygen`), set the new public key, restart, and re-issue tokens to everyone else |
 | Relay with an admin API (downstream builds) | revoke the token there; takes effect immediately |
 
 A relay token only grants use of the relay. Without the workspace key it

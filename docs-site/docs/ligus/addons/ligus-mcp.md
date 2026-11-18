@@ -187,4 +187,4 @@ doesn't authorize anything by itself, so it needs no passkey. A permission
 request is different: it is granted only by the host's own person or the
 agent's owner (see [ACP permissions](acp.md#permissions)). An agent can't answer a question. If the host
 restarts while a turn is waiting, the turn is cancelled. A question can't be
-resumed in 2.0.
+resumed in 0.1.

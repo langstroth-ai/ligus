@@ -1,18 +1,18 @@
 # Values for a kind/CI smoke install: a throwaway workspace (Secret ws-smoke,
 # created by the workflow) against a relay
-# installed separately in namespace ligus-relay (release name ligus-relay,
+# installed separately in namespace langstroth-relay (release name langstroth-relay,
 # Postgres enabled), the tunnel over in-cluster http and egress locked down.
 image:
   repository: ligus
   tag: dev
   pullPolicy: IfNotPresent
-relayUrl: http://ligus-relay-sync.ligus-relay.svc.cluster.local:8443
+relayUrl: http://langstroth-relay-sync.langstroth-relay.svc.cluster.local:8443
 workspace:
   # Created by the workflow (kubectl create secret, a throwaway room and key).
   existingSecret: ws-smoke
 remote:
   enabled: true
-  relayUrl: http://ligus-relay-tunnel.ligus-relay.svc.cluster.local:8443
+  relayUrl: http://langstroth-relay-tunnel.langstroth-relay.svc.cluster.local:8443
   insecureRelay: true
 serve:
   persistence:
@@ -24,7 +24,7 @@ serve:
     requests: { cpu: 50m, memory: 64Mi }
     limits: { cpu: "1", memory: 512Mi, ephemeral-storage: 1Gi }
 # Off here: the workflow installs the worker as its own release on its own
-# throwaway workspace (worker.enabled=true, serve.enabled=false). In 2.0 a box
+# throwaway workspace (worker.enabled=true, serve.enabled=false). In 0.1 a box
 # joins a workspace only through an invite an Admin issued (key possession
 # never admits anyone), and nothing in CI can issue one headlessly yet (the
 # member-bootstrap work). With serve and a worker started together on one
@@ -47,5 +47,5 @@ worker:
     limits: { cpu: "1", memory: 512Mi, ephemeral-storage: 1Gi }
 networkPolicy:
   restrictEgress: true
-  relayNamespace: ligus-relay
+  relayNamespace: langstroth-relay
   namespaceDefaultDeny: true

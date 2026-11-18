@@ -1,7 +1,7 @@
 # Operating Langstroth
 
 **Langstroth** is the platform behind the Ligus apps: the end-to-end
-encrypted relay, organization sign-in (ligus-auth), the Helm charts, and the
+encrypted relay, organization sign-in (langstroth-auth), the Helm charts, and the
 always-on Ligus hosts (`ligus serve` and `ligus worker`). This section is for
 the people who self-host and run it. Using the Ligus desktop app, the phone
 app and the `ligus` CLI day to day is in **[Using Ligus](../ligus/index.md)**.
@@ -31,7 +31,7 @@ honeybee). Commands, chart names and environment variables still use the
 | Pick a shape: solo, personal fleet, team, Kubernetes | [Choose a deployment](deploy/index.md) |
 | Hand the deployment to a coding agent | [Deploying with an agent](deploy/with-an-agent.md) (AGENTS.md and the deploy skills) |
 | Run a relay (Docker, Fly.io, systemd), pick its storage, gate access | [Self-hosting a relay](networking/self-host.md) |
-| Let people sign in with your identity provider | [ligus-auth](deploy/ligus-auth.md), with [Pocket ID](deploy/ligus-auth-pocket-id.md) or [Dex](deploy/ligus-auth-dex.md) |
+| Let people sign in with your identity provider | [langstroth-auth](deploy/ligus-auth.md), with [Pocket ID](deploy/ligus-auth-pocket-id.md) or [Dex](deploy/ligus-auth-dex.md) |
 | Run the relay and Ligus hosts on a cluster | [Kubernetes (preview)](deploy/kubernetes.md) |
 | Route agents through your LLM gateway (LiteLLM, kgateway, Envoy AI Gateway) | [Deploying with an LLM gateway](deploy/model-gateways.md) |
 | Run an always-on host for your phone and agents | [ligus serve as your own device](ops/serve-box.md), [Headless agents](concepts/headless-agents.md), [Remote access](networking/remote-access.md) |
@@ -46,6 +46,6 @@ one-line summary.
 
 Ask on GitHub: [issues](https://github.com/langstroth-ai/ligus/issues) and
 [discussions](https://github.com/langstroth-ai/ligus/discussions) on
-langstroth-ai/ligus, or
-[langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay/issues)
-for the relay.
+langstroth-ai/ligus, or the relay's
+[issues](https://github.com/langstroth-ai/langstroth-relay/issues) and
+[discussions](https://github.com/langstroth-ai/langstroth-relay/discussions).

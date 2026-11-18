@@ -57,7 +57,7 @@ security-framework = "3"
 landlock = "0.4"
 seccompiler = "0.5"
 
-# setsid for confined children; flock for the ligus-auth refresh lock.
+# setsid for confined children; flock for the langstroth-auth refresh lock.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 

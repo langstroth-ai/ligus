@@ -1,11 +1,11 @@
 # Kubernetes as a deployment option
 
-> **2.0 status (2026-11-16).** What ships in 2.0 is the preview Helm charts
+> **0.1 status (2026-11-16).** What ships in 0.1 is the preview Helm charts
 > described in `docs-site/docs/operate/deploy/kubernetes.md`: serve and named workers run
 > agent turns in their own pods under Landlock (fail-closed preflight),
 > secrets as files, closed egress, single replicas. The executor/controller
 > split, PR-test sandboxes, OTLP export, keys off the cluster, multi-tenant
-> clusters and relay/auth HA below are **not** in 2.0 (see that page's
+> clusters and relay/auth HA below are **not** in 0.1 (see that page's
 > "Explicitly unsupported" list). Serve enrollment as an owner's device
 > (`serve enroll`, `LIGUS_SERVE_OWNER`) is being replaced by serve joining as
 > its own member. This document is the longer design and keeps the older
@@ -102,7 +102,7 @@ binary, configured by environment variables, content-blind, with a health
 endpoint that round-trips the store (`GET /v1/health`, `503` if the backend is
 down) and a Prometheus-style `/metrics` endpoint (optionally gated by
 `LIGUS_RELAY_METRICS_TOKEN`). It lives in its own repository
-(`ligus-ai/relay`), and its chart should live there too and be pulled into
+(`langstroth-ai/langstroth-relay`), and its chart should live there too and be pulled into
 the Hive umbrella chart as a dependency.
 
 **Store.** Always Postgres on Kubernetes (`DATABASE_URL` from a Secret, plus
@@ -525,7 +525,7 @@ for tiny turns.
 
 ### 4.5 The workspace sandbox envelope on Kubernetes
 
-Ligus 2.0 makes the envelope a workspace property
+Ligus 0.1 makes the envelope a workspace property
 (`hive_core::sandbox::SandboxEnvelope`, enforced per runtime by
 `hive_runtime::sandbox`). The executor should render it, not invent its own:
 

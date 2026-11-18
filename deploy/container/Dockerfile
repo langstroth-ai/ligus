@@ -2,7 +2,7 @@
 #
 # Container image for the headless `ligus` binary (hive-cli): `ligus serve`,
 # `ligus worker`, `ligus enroll`, `ligus sync`, ... It is not the desktop app and
-# not the relay (the relay has its own image in github.com/ligus-ai/relay).
+# not the relay (the relay has its own image in github.com/langstroth-ai/langstroth-relay).
 #
 # Build from the repository root:
 #   docker build -f deploy/container/Dockerfile -t ligus:dev .

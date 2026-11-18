@@ -127,7 +127,7 @@ path = "/status"
 ```
 
 More examples ship in the repository under
-[`deploy/ligus-serve/`](https://github.com/ligus-ai/ligus/tree/main/deploy/ligus-serve):
+[`deploy/ligus-serve/`](https://github.com/langstroth-ai/ligus/tree/main/deploy/ligus-serve):
 `dashboard-team.toml.example` (no home lab needed),
 `dashboard.toml.example` (a server and GPU workers from Prometheus) and
 `dashboard-solar.toml.example`.
@@ -266,4 +266,4 @@ the top of the dashboard, above the built-in Ligus section.
 
 The full specification, including the JSON that `GET /v1/dashboard`
 returns, is in
-[`docs/dashboard.md`](https://github.com/ligus-ai/ligus/blob/main/docs/dashboard.md).
+[`docs/dashboard.md`](https://github.com/langstroth-ai/ligus/blob/main/docs/dashboard.md).

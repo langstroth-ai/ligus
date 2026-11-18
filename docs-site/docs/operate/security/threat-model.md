@@ -45,12 +45,12 @@ whether two people have a DM: rooms and invite ids are random. It never sees
 a forge (GitHub, GitLab, ...) token: the client can't send one. It can't inject plaintext: a device that holds a workspace key skips
 any body from the relay that isn't sealed. In the tunnel it can't read or
 alter phone traffic (Noise, with the box's key pinned from the QR code). A
-ligus-auth token goes only to the relay the session was signed in for.
+langstroth-auth token goes only to the relay the session was signed in for.
 
 Each invite carries a fingerprint of the founder's account key, and a device
 pins it when it joins, so a hostile relay can't substitute the founder's key.
 Every device verifies and folds by the same rules whatever its environment:
-`LIGUS_IDENTITY_MODE` is ignored since 2.0 (a set value logs a warning).
+`LIGUS_IDENTITY_MODE` is ignored since 0.1 (a set value logs a warning).
 
 ### A network attacker {#network}
 
@@ -170,12 +170,12 @@ encryption and OS account separation are the protection; see
 
 ## Known limitations {#known-limitations}
 
-Stated plainly, as of 2.0.0. Each stays on this list until a release fixes
+Stated plainly, as of 0.1.0. Each stays on this list until a release fixes
 it.
 
 1. **Secrets in the OS secret store, with a file fallback.** Account,
    device and key-agreement seeds, the workspace passphrase and epoch keys,
-   relay and provider tokens and the ligus-auth session live in the OS secret
+   relay and provider tokens and the langstroth-auth session live in the OS secret
    store: on macOS a dedicated keychain file inside the data dir, the Secret
    Service on a Linux desktop, `systemd-creds` on a headless Linux box.
    `settings.json` and `config.toml` hold only `{"set": true}`
@@ -185,7 +185,7 @@ it.
    id), and it won't create the item unless it satisfies it; a development
    build or the CLI by its code hash, so each rebuild or upgrade of those
    asks once for your login keychain password. An unlock item created by a
-   build before 2.0.0's review fixes keeps its original access list. If the
+   build before 0.1.0's review fixes keeps its original access list. If the
    keychain can't be used, macOS refuses to save secrets (Settings says why)
    rather than move them to files; `LIGUS_SECRET_BACKEND=file` is the
    explicit opt-in to `0600` files. Elsewhere, where no store works (Windows,
@@ -309,7 +309,7 @@ it.
     an ACP permission request keeps its process and chat until someone
     answers or its timeout passes (at most an hour; 10 minutes for permission
     requests). Stop the turn to release it. A restart cancels it; questions
-    can't be resumed in 2.0.
+    can't be resumed in 0.1.
 12. **Sign counters aren't checked.** Synced passkeys report a signature
     counter of 0, so Ligus doesn't use it to detect cloned authenticators.
 13. **No account-key rotation.** The core supports rotating an account key,
@@ -325,7 +325,7 @@ it.
 17. **The relay sees metadata** (above), including which contact ids get
     drops and when. The relay's admin
     API isn't in the open-source build, so per-person relay tokens need signed
-    tokens (short-lived ones from [ligus-auth](../deploy/ligus-auth.md), for
+    tokens (short-lived ones from [langstroth-auth](../deploy/ligus-auth.md), for
     example) or a restart to change an allowlist.
 18. **The direct phone path is plain HTTP.** Use the relay tunnel or a
     tailnet, or a LAN you trust. Invite codes, code-host tokens and device
@@ -343,7 +343,7 @@ it.
     can list any key for any of its users, so it can make a link verify.
     Links never grant membership, roles or sealing trust. A verified status
     is cached on a device for up to 24 hours, so a key removed from the forge
-    keeps a link verified that long. SourceHut and Tangled links from a 2.0
+    keeps a link verified that long. SourceHut and Tangled links from a 0.1
     pre-release are shown as self-asserted and never verified. Checking a link tells the forge
     that your device looked. See [Linked accounts](../../ligus/features/linked-identities.md#privacy).
 22. **Pre-encryption history isn't shown.** A device with a workspace key
@@ -422,7 +422,7 @@ Security review findings that add to or change this threat model are listed
 here with their status. The review of November 2026 covered the core, the
 host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 
-### Fixed in 2.0.0 {#findings-fixed}
+### Fixed in 0.1.0 {#findings-fixed}
 
 | Area | Finding | Now |
 |---|---|---|
@@ -472,7 +472,7 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 | Presence (Track B residuals) | Under rules v2 a device-key thief could certify new devices, rotate the account key (refused by the fold but still applied to the rosters) and, once an account's credentials were cleared or before it had any, register a "first" passkey; switching to an unknown rules version needed no presence | New devices and account-key rotations of an account with a passkey need its presence, and both rosters apply only allowed ones; a first passkey under v2 needs an Admin's grant; every switch to v2 or later needs presence |
 | Keys (Track B residuals) | Lease beats stayed on the passphrase key; a flood of junk bodies could evict parked bodies waiting for an authorized rotation (B-11); invite and DM codes were sealed to whatever keys the relay directory listed | Lease beats follow the keyring; parked bodies are ranked and junk goes first; codes go to signed directory keys, or after an Unverified recipient warning |
 | Secrets (Track B residuals) | The keychain unlock item trusted whichever process created it; an unusable keychain silently moved secrets to plain files; the passkey loopback read unbounded lines and its nonce was on the browser's command line (B-12) | An explicit access list for the Ligus binary (designated requirement for release apps); macOS refuses without `LIGUS_SECRET_BACKEND=file`; the loopback caps what it reads and the browser opens a private redirect page |
-| Relay (E-5) | The ligus-auth access token was sent to any configured relay, an invite's included | Only to the relay origin its session was signed in for |
+| Relay (E-5) | The langstroth-auth access token was sent to any configured relay, an invite's included | Only to the relay origin its session was signed in for |
 | Host (C-9) | An agent could write hooks or MCP servers into `~/.claude`, `~/.codex` and the other CLIs' config, which ran unsandboxed on the user's next CLI start | CLI agents run with a per-turn home seeded with the top-level config files; their real config dirs aren't writable, and only refreshed sign-in files are copied back ([details](../../ligus/addons/acp.md#cli-home)) |
 | Host (C-13) | A macOS agent could drive other apps with Apple Events or read the pasteboard | The Seatbelt profile denies Apple Events and the pasteboard services |
 | Host (C-14) | A runtime's trust digest didn't cover its provider id or metrics endpoint | It covers both, and a non-default driver |
@@ -486,7 +486,7 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 | Agents (Track C/D residuals) | An ACP adapter or legacy CLI adapter could write an unbounded stdout line (or endless output, or stderr) and grow the app's memory | Agent stdout lines are capped at 8 MiB and a turn's output at 256 MiB (`LIGUS_AGENT_MAX_LINE_BYTES`, `LIGUS_AGENT_MAX_OUTPUT_BYTES`); past either the turn ends with an error and the agent is stopped. 256 KiB of stderr is kept for error messages |
 | Agents (Track C/D residuals) | ACP `fs/*`, the built-in file tools and the CLI-home copy-back checked a path and then opened it by name, so a directory swapped for a symlink in between redirected the host's read or write outside the worktree | Files are opened beneath the turn's directory one component at a time with `openat` (`O_NOFOLLOW` on every component, `O_DIRECTORY` for parents); a symlink anywhere on the way fails the open (macOS and Linux; Windows keeps the path checks only) |
 | Agents (Track C/D residuals) | An agent could write a valid sign-in for a different account into its turn home, and the copy-back installed it as the user's CLI sign-in | Copy-back requires the same keys and the same account fields (account id, email, user, API key, `id_token` claims) as the file it replaces; otherwise it is dropped and logged. Claude Code's file has no account field, so only its plan and shape are checked |
-| Sandbox (Track C/D residuals) | The Seatbelt profile protected `.git`, `.claude`, `.vscode`, `ligus.config.toml` and the other protected names only at the worktree's top level and only in their exact case | The profile also denies writes to each protected name at any depth and in any case (`sub/.claude/`, `.CLAUDE/`). The profile stays default-allow in 2.0; see [the OS sandbox](../../ligus/concepts/security.md#os-sandbox) for why and what that leaves open |
+| Sandbox (Track C/D residuals) | The Seatbelt profile protected `.git`, `.claude`, `.vscode`, `ligus.config.toml` and the other protected names only at the worktree's top level and only in their exact case | The profile also denies writes to each protected name at any depth and in any case (`sub/.claude/`, `.CLAUDE/`). The profile stays default-allow in 0.1; see [the OS sandbox](../../ligus/concepts/security.md#os-sandbox) for why and what that leaves open |
 | Agents (Track C/D residuals) | `maxSpendUsd` only refused Ligus tool calls, counted only ACP `usage_update` (whatever its currency, and only upward deltas), and never stopped a turn | Reaching the budget ends the turn (ACP `session/cancel`, API streams closed); ACP reports must be USD and non-decreasing or a budgeted turn ends; Anthropic, OpenAI, OpenRouter and Azure turns are charged from the API's token usage at list prices (unknown models at the highest rate). An agent that under-reports over ACP is still only held to what it reports |
 | Agents (Track C/D residuals) | Budgets were per turn only, so one human message could fan out through hand-offs to about 24 turns of 8 proposals each; ACP permission escalations asked people without counting against `maxAsks` | A cascade budget (tool calls, proposals, hand-offs, questions) is shared by every turn descended from the same human message on a device; permission escalations count as questions and are denied past either question budget |
 | Sandbox (C-12) | On Linux the egress proxy's token was an argument of the sandbox helper, readable by every user on the host with `ps` | It reaches the helper in its environment (`LIGUS_SANDBOX_PROXY_TOKEN`, readable only by your user), and the helper removes it before running the agent |

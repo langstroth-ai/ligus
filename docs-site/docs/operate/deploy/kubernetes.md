@@ -2,23 +2,23 @@
 
 !!! warning "Preview: charts and images not published"
     Three Helm charts implement this: `ligus` in this repository
-    ([`deploy/helm/ligus`](https://github.com/ligus-ai/ligus/tree/main/deploy/helm/ligus)),
-    and `ligus-relay` and `ligus-auth` in the relay repository at v0.3.0
+    ([`deploy/helm/ligus`](https://github.com/langstroth-ai/ligus/tree/main/deploy/helm/ligus)),
+    and `langstroth-relay` and `langstroth-auth` in the relay repository at v0.3.0
     (`deploy/helm/`). None is published to a chart registry and no container
     images are published: build them yourself. Values and behaviour may
     change. The design they implement is
-    [`docs/design/kubernetes.md`](https://github.com/ligus-ai/ligus/blob/main/docs/design/kubernetes.md).
+    [`docs/design/kubernetes.md`](https://github.com/langstroth-ai/ligus/blob/main/docs/design/kubernetes.md).
 
 This shape runs the always-on parts of the Langstroth platform for **one trusted
-organisation** on a cluster: the relay (and optionally ligus-auth), and per
+organisation** on a cluster: the relay (and optionally langstroth-auth), and per
 workspace a `ligus serve` device, optional named workers and MCP servers.
 Members still use the desktop app and the phone app as usual.
 
 ```mermaid
 flowchart TB
-  subgraph RelayNS["namespace ligus-relay"]
-    Sync["ligus-relay-sync (exactly 1, Recreate)"]
-    Tun["ligus-relay-tunnel (exactly 1, Recreate, /v1/tunnel only)"]
+  subgraph RelayNS["namespace langstroth-relay"]
+    Sync["langstroth-relay-sync (exactly 1, Recreate)"]
+    Tun["langstroth-relay-tunnel (exactly 1, Recreate, /v1/tunnel only)"]
     PG[("Postgres (managed)")]
   end
   subgraph WS["namespace ligus-ws-acme (per workspace)"]
@@ -40,7 +40,7 @@ flowchart TB
 |---|---|---|
 | Relay sync | Deployment, exactly one replica, `Recreate` | DB URL, token-issuer **public** key, metrics token. Never a workspace key |
 | Relay tunnel | Deployment, exactly one replica, `Recreate`, serves only `/v1/tunnel/*` | as above, plus the APNs key if push is on |
-| ligus-auth (optional) | Deployment, exactly one replica, `Recreate` | the token-issuer signing key, IdP client secrets, its DB URL |
+| langstroth-auth (optional) | Deployment, exactly one replica, `Recreate` | the token-issuer signing key, IdP client secrets, its DB URL |
 | `ligus serve` | StatefulSet, 1 replica, `ReadWriteOncePod` data PVC and a `home` PVC | the workspace key, its device key, `hive.db`, `serve.token`, tunnel keys, checkouts, model and MCP keys you give it |
 | `ligus worker` | one single-replica StatefulSet per `worker.instances[]` entry | the same kinds of secrets as serve, for its own identity |
 | MCP servers | Deployment + Service + NetworkPolicy each | their own tokens |
@@ -118,7 +118,7 @@ protect the node, not serve's keys from the agent process next to them.
   files to agent processes. `envFrom` of whole Secrets is refused. Provider
   keys CLI agents read from their environment go in `serve.agentEnv` /
   `worker.agentEnv`, one allow-listed name at a time. The relay and
-  ligus-auth read their database URL and secret settings from mounted files
+  langstroth-auth read their database URL and secret settings from mounted files
   too. Each pod carries a `checksum/secrets` annotation that rolls it when a
   Secret changes (a constant under `helm template`; with Argo CD or Flux use
   [Reloader](https://github.com/stakater/Reloader)).
@@ -138,13 +138,13 @@ protect the node, not serve's keys from the agent process next to them.
   same rule (per server `internetHttps`, default on) plus their own
   `egress`. Only this release's own pods reach `serve:8787`.
   `networkPolicy.namespaceDefaultDeny` adds a namespace-wide deny-all.
-  ligus-auth's admin port admits no pod by default; its egress is DNS, the
+  langstroth-auth's admin port admits no pod by default; its egress is DNS, the
   IdP (443 outside metadata and private ranges) and your database.
 - **MCP server images are pinned** by digest; a tag refuses to render unless
   that server sets `allowUnpinned: true`.
 - **Single writers.** serve and every worker are exactly one pod on a
   `ReadWriteOncePod` volume (`ReadWriteOnce` would allow two pods on one
-  node); relay-sync, the tunnel and ligus-auth are exactly one replica with
+  node); relay-sync, the tunnel and langstroth-auth are exactly one replica with
   `Recreate`. The charts refuse more.
 - **Ingress.** The relay chart refuses an Ingress without TLS, refuses a
   public relay without `clientIP.trustedProxies` (every client would share
@@ -157,32 +157,59 @@ protect the node, not serve's keys from the agent process next to them.
 - `deploy/helm/ligus/ci/security_test.py` and the relay's
   `helm_chart_test.go` check these properties on the rendered charts.
 
+## Where the relay runs {#where-the-relay-runs}
+
+Hosts in the cluster (serve and workers) only ever dial out to the relay. Pick
+one of three patterns. In all three, the relay URL is typed once, by whoever
+creates the workspace (on the desktop) or sets up the hosts (the chart's
+`relayUrl`), and then travels in every invite, so people who join never
+enter it.
+
+1. **External relay, nothing exposed.** The hosts dial out to a relay outside
+   the cluster: [the community relay](../networking/community-relay.md)
+   (`https://relay.langstroth.ai`, best-effort), or one you
+   [run elsewhere](../networking/self-host.md). Set `relayUrl` to it and leave
+   `relay.enabled=false`. The cluster needs egress to the relay and no
+   Ingress, Gateway or LoadBalancer at all.
+2. **In-cluster relay, public.** Install the `langstroth-relay` chart (below)
+   and expose it with an Ingress (`ingress.*`) or a Gateway API route
+   (`httpRoute.*`), with TLS and a DNS name such as `relay.example.com`.
+   Desktops and phones reach it over the internet; hosts in the cluster can
+   use the in-cluster Service (`langstroth-relay-sync`) or the public URL. The
+   relay chart's public-exposure guards apply; give it a token gate or
+   server-side membership.
+3. **In-cluster relay, private.** Install the relay chart without a public
+   route and reach it only over a VPN or a tailnet, for example by exposing
+   its Service with the Tailscale Kubernetes operator. Every device that syncs
+   must be on that network, and the URL in invites is the private one (a
+   tailnet name or VPN address), so it works only for people on it.
+
 ## Install
 
 Build the images yourself:
 
 ```sh
 # in a relay checkout at v0.3.0
-docker build -f deploy/container/Dockerfile -t registry.example.com/ligus-relay:0.3.0 .
-# in a ligus checkout at 2.0
-docker build -f deploy/container/Dockerfile -t registry.example.com/ligus:2.0.0 .
+docker build -f deploy/container/Dockerfile -t registry.example.com/langstroth-relay:0.3.0 .
+# in a ligus checkout at 0.1
+docker build -f deploy/container/Dockerfile -t registry.example.com/ligus:0.1.0 .
 ```
 
 ### Relay
 
 ```sh
-kubectl create namespace ligus-relay
-kubectl label namespace ligus-relay pod-security.kubernetes.io/enforce=restricted
+kubectl create namespace langstroth-relay
+kubectl label namespace langstroth-relay pod-security.kubernetes.io/enforce=restricted
 # The database URL (sslmode=verify-full against a managed Postgres).
-kubectl -n ligus-relay create secret generic relay-db \
+kubectl -n langstroth-relay create secret generic relay-db \
   --from-literal=DATABASE_URL='postgres://relay:…@db.example.com:5432/relay?sslmode=verify-full'
 # Secret settings, one key per setting name (mounted as files).
-kubectl -n ligus-relay create secret generic relay-env \
+kubectl -n langstroth-relay create secret generic relay-env \
   --from-literal=LIGUS_RELAY_TOKEN_PUBKEY=<issuer public key>
-kubectl -n ligus-relay create secret generic relay-metrics --from-literal=token=$(openssl rand -hex 24)
-kubectl -n ligus-relay create secret tls relay-tls --cert=relay.crt --key=relay.key   # or cert-manager
-helm install ligus-relay <relay-checkout>/deploy/helm/ligus-relay -n ligus-relay \
-  --set image.repository=registry.example.com/ligus-relay --set image.tag=0.3.0 \
+kubectl -n langstroth-relay create secret generic relay-metrics --from-literal=token=$(openssl rand -hex 24)
+kubectl -n langstroth-relay create secret tls relay-tls --cert=relay.crt --key=relay.key   # or cert-manager
+helm install langstroth-relay <relay-checkout>/deploy/helm/langstroth-relay -n langstroth-relay \
+  --set image.repository=registry.example.com/langstroth-relay --set image.tag=0.3.0 \
   --set externalDatabase.existingSecret=relay-db \
   --set config.existingSecret=relay-env \
   --set metrics.token.existingSecret=relay-metrics \
@@ -191,11 +218,11 @@ helm install ligus-relay <relay-checkout>/deploy/helm/ligus-relay -n ligus-relay
   --set 'clientIP.trustedProxies[0]=<your ingress controller address>/32' \
   --set 'networkPolicy.extraEgress[0].to[0].ipBlock.cidr=<database address>/32' \
   --set 'networkPolicy.extraEgress[0].ports[0].port=5432'
-helm test ligus-relay -n ligus-relay
+helm test langstroth-relay -n langstroth-relay
 ```
 
-With the release name `ligus-relay` the in-cluster Services are
-`ligus-relay-sync` and `ligus-relay-tunnel`. The tunnel is off by default;
+With the release name `langstroth-relay` the in-cluster Services are
+`langstroth-relay-sync` and `langstroth-relay-tunnel`. The tunnel is off by default;
 for the phone app add `--set tunnel.mode=allowlist --set
 'tunnel.allowedHosts[0]=<host id>'` (the host id is printed by
 `ligus remote status` on serve), or `open` behind a token gate
@@ -229,7 +256,7 @@ the room and key from its invite, or from **Settings → Team sync**. Then:
 
 ```sh
 mkdir -p deploy/helm/ligus/charts
-helm package -d deploy/helm/ligus/charts <relay-checkout>/deploy/helm/ligus-relay
+helm package -d deploy/helm/ligus/charts <relay-checkout>/deploy/helm/langstroth-relay
 
 kubectl create namespace ligus-ws-acme
 kubectl label namespace ligus-ws-acme pod-security.kubernetes.io/enforce=restricted
@@ -237,7 +264,7 @@ kubectl -n ligus-ws-acme create secret generic acme-workspace \
   --from-literal=room=<room> --from-literal=key=<workspace key> \
   --from-literal=relay-access-token=<hrt1 token>
 helm install acme deploy/helm/ligus -n ligus-ws-acme \
-  --set image.repository=registry.example.com/ligus --set image.tag=2.0.0 \
+  --set image.repository=registry.example.com/ligus --set image.tag=0.1.0 \
   --set relayUrl=https://relay.example.com \
   --set workspace.existingSecret=acme-workspace \
   --set workspace.relayAccessToken=true \
@@ -247,8 +274,8 @@ helm test acme -n ligus-ws-acme --logs
 
 `networkPolicy.allowInternetHttps=true` lets serve reach the relay's https
 URL and hosted model APIs. For a relay in the same cluster use
-`relayUrl=http://ligus-relay-sync.ligus-relay.svc.cluster.local:8443` and
-`networkPolicy.relayNamespace=ligus-relay` instead. If the relay admits only
+`relayUrl=http://langstroth-relay-sync.langstroth-relay.svc.cluster.local:8443` and
+`networkPolicy.relayNamespace=langstroth-relay` instead. If the relay admits only
 workspace-scoped tokens, add `--set tests.sync.enabled=false` (the sync test
 uses a throwaway workspace).
 
@@ -260,7 +287,7 @@ recorded by audit logging):
 kubectl -n ligus-ws-acme exec -it acme-ligus-serve-0 -- ligus pair --relay-only  # needs remote.enabled
 ```
 
-!!! note "Changing in 2.0: serve's identity"
+!!! note "Changing in 0.1: serve's identity"
     `ligus serve enroll` and `serve.owner` make the pod act as one member's
     device. They are being replaced by serve joining the workspace as its
     own member: a service member an Admin approves, capped below Admin, whose
@@ -274,7 +301,7 @@ Useful values of the `ligus` chart: `remote.enabled` / `remote.relayUrl`
 `worker.enabled` / `worker.instances[]` / `worker.permissionMode`,
 `mcp.servers[]`, `agentSandbox.*`, `networkPolicy.*`. The full table is in
 the chart's
-[README](https://github.com/ligus-ai/ligus/tree/main/deploy/helm/ligus).
+[README](https://github.com/langstroth-ai/ligus/tree/main/deploy/helm/ligus).
 
 !!! warning "Model keys reach CLI agents"
     Ligus keeps its own secrets (the workspace key, relay and tunnel tokens,
@@ -308,13 +335,13 @@ workspace key itself.
 ### Backups
 
 - **Back up Postgres, not the identity volumes.** The relay's and
-  ligus-auth's Postgres: point-in-time recovery (WAL archiving: your managed
+  langstroth-auth's Postgres: point-in-time recovery (WAL archiving: your managed
   database's PITR, or CloudNativePG / pgBackRest), connections with
   `sslmode=verify-full`. Keep relay dumps apart from the APNs key: together
   they are a push channel to every registered phone.
 - **Don't back up the serve and worker PVCs.** A restored volume brings back
   revoked phones and tunnel pairings, an old `serve.token`, old device keys
-  and an already-rotated ligus-auth refresh token (whose reuse revokes the
+  and an already-rotated langstroth-auth refresh token (whose reuse revokes the
   session). Losing a volume means: revoke that member or device, install a
   fresh identity, rebind its agents. The PVC holds every epoch key, so if
   you lost **control** of the volume (not just the data), also rotate the
@@ -325,7 +352,7 @@ workspace key itself.
 ### Upgrades
 
 1. The relay first (migrations run under an advisory lock and are additive,
-   so an old pod and a new one can overlap), then ligus-auth, then the
+   so an old pod and a new one can overlap), then langstroth-auth, then the
    workspaces.
 2. Pin each serve image (by digest) to the desktop release your members run.
 3. `helm upgrade` restarts serve on the same volume and identity; relay-sync
@@ -349,10 +376,10 @@ if the cluster should lose access, then delete the Secrets and the PVCs
 Rotating the workspace key or revoking a device follows the normal
 [runbooks](../security/runbooks.md); update the workspace Secret afterwards.
 
-## Explicitly unsupported in 2.0
+## Explicitly unsupported in 0.1
 
-- Mutually distrusting tenants on a shared relay, ligus-auth or cluster.
-- HA of relay-sync, the relay tunnel or ligus-auth (each runs exactly one
+- Mutually distrusting tenants on a shared relay, langstroth-auth or cluster.
+- HA of relay-sync, the relay tunnel or langstroth-auth (each runs exactly one
   replica), and worker autoscaling.
 - Kubernetes per-turn executors, PR-test sandboxes, Kueue / agent-sandbox /
   Substrate integrations.

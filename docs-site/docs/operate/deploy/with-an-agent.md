@@ -4,13 +4,13 @@ You can hand the deployment of Ligus to a coding agent (Claude Code, Codex,
 Copilot CLI, or another) working in a checkout of this repository. The
 repository gives it three things:
 
-- [`AGENTS.md`](https://github.com/ligus-ai/ligus/blob/main/AGENTS.md) at the
+- [`AGENTS.md`](https://github.com/langstroth-ai/ligus/blob/main/AGENTS.md) at the
   root: which deployment fits which goal, the exact commands, exit codes,
   the hard rules, and the steps only you can do. `CLAUDE.md` points to it.
 - Two skills in the Agent Skills format:
-  [`ligus-deploy-k8s`](https://github.com/ligus-ai/ligus/blob/main/.claude/skills/ligus-deploy-k8s/SKILL.md)
+  [`ligus-deploy-k8s`](https://github.com/langstroth-ai/ligus/blob/main/.claude/skills/ligus-deploy-k8s/SKILL.md)
   and
-  [`ligus-deploy-local`](https://github.com/ligus-ai/ligus/blob/main/.claude/skills/ligus-deploy-local/SKILL.md).
+  [`ligus-deploy-local`](https://github.com/langstroth-ai/ligus/blob/main/.claude/skills/ligus-deploy-local/SKILL.md).
   Each is step by step, with checkpoints where the agent stops for your
   decision. Agents without skill support read the same files.
 - Two non-interactive tools, `deploy/kubernetes/ligus-k8s` and
@@ -54,8 +54,8 @@ K=deploy/kubernetes/ligus-k8s
 $K preflight --context orbstack -n ligus-trial --release trial --probe --image ligus:dev --json
 $K secrets workspace --throwaway --context orbstack -n ligus-trial --release trial
 $K install --scenario trial --context orbstack -n ligus-trial --release trial \
-  --image ligus:dev --relay-image-repository ligus-relay --relay-image-tag dev \
-  --relay-chart ../relay/deploy/helm/ligus-relay --dry-run --json
+  --image ligus:dev --relay-image-repository langstroth-relay --relay-image-tag dev \
+  --relay-chart ../relay/deploy/helm/langstroth-relay --dry-run --json
 $K install ... (same flags, without --dry-run)
 $K verify --context orbstack -n ligus-trial --release trial --json
 $K teardown --context orbstack -n ligus-trial --release trial --delete-data --delete-secrets --delete-namespace
@@ -65,7 +65,7 @@ Scenarios: `trial` (relay and serve in one namespace, in-memory relay,
 throwaway workspace), `team-in-cluster-relay` (relay installed separately in
 this cluster) and `team-external-relay` (relay at an `https://` URL). Their
 values files are in
-[`deploy/kubernetes/scenarios`](https://github.com/ligus-ai/ligus/tree/main/deploy/kubernetes/scenarios).
+[`deploy/kubernetes/scenarios`](https://github.com/langstroth-ai/ligus/tree/main/deploy/kubernetes/scenarios).
 On OrbStack the probe measures Landlock ABI 10 and an enforced NetworkPolicy;
 the full operator guide is [Kubernetes (preview)](kubernetes.md).
 

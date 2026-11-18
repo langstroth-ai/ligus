@@ -3,8 +3,8 @@ name: ligus
 description: Ligus on Kubernetes - an always-on serve device per workspace, optional worker hosts and MCP servers, with the relay as an optional dependency. Preview; not published.
 type: application
 version: 0.1.0
-# The CLI image this chart is tested against (it reads only LIGUS_* settings, so 2.0 or later).
-appVersion: "2.0.0"
+# The CLI image this chart is tested against (it reads only LIGUS_* settings, so 0.1 or later).
+appVersion: "0.1.0"
 home: https://ligus.ai
 keywords:
   - ligus
@@ -15,8 +15,8 @@ dependencies:
   # The relay chart lives in the relay repository (relay v0.3.0). It is not
   # published yet: package it from a relay checkout into charts/ (README).
   # Most installs point at an existing relay (relayUrl) instead.
-  - name: ligus-relay
+  - name: langstroth-relay
     alias: relay
     version: 0.3.0
-    repository: oci://ghcr.io/ligus-ai/charts
+    repository: oci://ghcr.io/langstroth-ai/charts
     condition: relay.enabled

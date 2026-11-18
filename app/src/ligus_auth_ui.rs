@@ -1,4 +1,4 @@
-//! Desktop side of ligus-auth: device-code sign-in from Settings, and a
+//! Desktop side of langstroth-auth: device-code sign-in from Settings, and a
 //! background refresher that keeps the relay access token fresh.
 //!
 //! The session (with its device-bound refresh token) is saved as
@@ -26,9 +26,9 @@ struct Pending {
     device_code: String,
 }
 
-/// The relay bearer to use: the ligus-auth access token when signed in,
+/// The relay bearer to use: the langstroth-auth access token when signed in,
 /// otherwise the static token from settings.
-/// The ligus-auth token goes only to the relay its session was signed in
+/// The langstroth-auth token goes only to the relay its session was signed in
 /// for (E-5); any other relay gets the static token.
 pub(crate) fn effective(relay_url: Option<&str>, static_token: Option<String>) -> Option<String> {
     relay_url.and_then(|u| CELL.get_for(u)).filter(|t| !t.is_empty()).or(static_token)
@@ -51,7 +51,7 @@ pub(crate) fn start(state: &AppState) {
             let dir = state.data_dir.clone();
             tauri::async_runtime::spawn(ligus_auth::run_refresher(dir, s, CELL.clone()));
         }
-        Err(e) => tracing::warn!("ligus-auth: no device key for the refresher: {e}"),
+        Err(e) => tracing::warn!("langstroth-auth: no device key for the refresher: {e}"),
     });
 }
 

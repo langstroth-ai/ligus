@@ -1,6 +1,6 @@
 # Environment variables
 
-Every `LIGUS_*` variable Ligus 2.0.0 reads, from the code. Variables used
+Every `LIGUS_*` variable Ligus 0.1.0 reads, from the code. Variables used
 only by the test suites are left out.
 
 **Spelling.** Only `LIGUS_*` names are read. A former `HIVE_*` name that is
@@ -24,7 +24,7 @@ column says which. The relay's own variables are on
 | `LIGUS_WORKSPACE` | `default` | CLI; desktop on first launch only | relay room |
 | `LIGUS_WORKSPACE_KEY` | from `config.toml` | CLI; desktop on first launch only | E2EE workspace passphrase. Sync refuses to run without one |
 | `LIGUS_RELAY_ISSUER_KEY` | unset | desktop, first launch only | relay issuer seed for minting agent tokens from the People pane (local only, never synced) |
-| `LIGUS_IDENTITY_MODE` | ignored | desktop and CLI | ignored since 2.0: every device verifies and folds by the same rules (a set value logs one warning). The founder's account key is pinned from the invite instead |
+| `LIGUS_IDENTITY_MODE` | ignored | desktop and CLI | ignored since 0.1: every device verifies and folds by the same rules (a set value logs one warning). The founder's account key is pinned from the invite instead |
 | `LIGUS_DISABLE_P2P` | unset | desktop | any value turns off direct peer-to-peer sync (iroh) |
 | `LIGUS_SECRET_BACKEND` | the OS default | desktop, CLI | where secrets live: `keychain`, `secret-service`, `systemd-creds`, `k8s` or `file`. On macOS a keychain that can't be used is an error; `file` is the explicit opt-in to owner-only files ([key storage](../../ligus/concepts/identity.md#key-storage)) |
 

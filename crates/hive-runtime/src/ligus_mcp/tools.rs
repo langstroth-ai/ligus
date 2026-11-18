@@ -4,7 +4,7 @@
 use serde_json::{json, Value};
 
 /// The full tool set, offered over MCP to agents that take MCP servers.
-/// Release note (2.0): six read-only `ligus_forge_*` tools joined the set,
+/// Release note (0.1): six read-only `ligus_forge_*` tools joined the set,
 /// and `ligus_read` gained the matching `forge.*` reads.
 pub const TOOLS: [(&str, &str); 22] = [
     ("ligus_propose_diff", include_str!("schema/ligus_propose_diff.json")),

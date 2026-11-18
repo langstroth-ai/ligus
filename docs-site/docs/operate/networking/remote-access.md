@@ -19,11 +19,11 @@ two connections together. Inside, the phone and the box run a Noise
 handshake: the phone pins the box's key from the pairing QR code, so the relay
 can't read, alter or impersonate either end. It sees only ciphertext, sizes
 and timing. The full protocol is
-[`docs/relay-tunnel.md`](https://github.com/ligus-ai/ligus/blob/main/docs/relay-tunnel.md).
+[`docs/relay-tunnel.md`](https://github.com/langstroth-ai/ligus/blob/main/docs/relay-tunnel.md).
 
 ## Before you start
 
-- The `ligus` CLI on the box (`brew install ligus-ai/ligus/ligus`, or see
+- The `ligus` CLI on the box (`brew install langstroth-ai/ligus/ligus`, or see
   [Headless agents](../concepts/headless-agents.md#install-the-cli)). Check it
   with `ligus --version`.
 - The box joined to your workspace with `ligus enroll "hivews1:…"`, using the
@@ -44,7 +44,7 @@ and timing. The full protocol is
   default**; see [Using your own relay](#using-your-own-relay).
 
 A ready-made systemd unit and env file are in
-[`deploy/ligus-serve/`](https://github.com/ligus-ai/ligus/tree/main/deploy/ligus-serve).
+[`deploy/ligus-serve/`](https://github.com/langstroth-ai/ligus/tree/main/deploy/ligus-serve).
 
 ## 1. Run `ligus serve`
 
@@ -64,7 +64,7 @@ ligus serve --listen 127.0.0.1:8787 --label home-box
 - `--label` / `LIGUS_SERVE_LABEL` is the host name other members see
   (default: the machine's host name). A box that is its own member also
   uses it as its display name unless `--name` / `LIGUS_SERVE_NAME` sets one
-  (a box that still shows as "hive-cli", from before 2.0, takes it on its
+  (a box that still shows as "hive-cli", from before 0.1, takes it on its
   next start).
 - `LIGUS_SERVE_PUBLIC_URL` is the URL the phone should use for the direct path
   when it differs from `http://<listen>` (a DNS name, say).
@@ -203,7 +203,7 @@ Other commands:
 ## Using your own relay
 
 The tunnel is part of the open relay,
-[ligus-ai/relay](https://github.com/ligus-ai/relay) (`cmd/ligus-relay`),
+[langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay) (`cmd/langstroth-relay`),
 and is free to self-host. It is **off by default**: a relay you upgrade does
 not become a public tunnel provider on its own. Turn it on in the relay's
 environment, not on the box:
@@ -272,7 +272,7 @@ yourself under the same team.
 What gets pushed, and the per-phone previews setting, are on
 [Ligus on your phone](../../ligus/features/phone-app.md#push-notifications). The
 details, including the host-side rate limits, are in
-[`docs/push-notifications.md`](https://github.com/ligus-ai/ligus/blob/main/docs/push-notifications.md).
+[`docs/push-notifications.md`](https://github.com/langstroth-ai/ligus/blob/main/docs/push-notifications.md).
 
 ## Troubleshooting
 

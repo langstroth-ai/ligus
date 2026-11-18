@@ -613,7 +613,7 @@ impl Shared {
     /// `DeviceRevoked` of a phone's device (its own key never signs again;
     /// the fold refuses it) also revokes that phone's tunnel pairing here
     /// (the relay drops its sessions through the existing tunnel revocation,
-    /// and pushes to it stop). Its ligus-auth session is revoked by the same
+    /// and pushes to it stop). Its langstroth-auth session is revoked by the same
     /// signed `DeviceRevoked` when organization sign-in lands (Phase D).
     /// Returns the pairings revoked.
     pub fn revoke_phones_of_revoked_devices(&self) -> Vec<String> {
@@ -1000,7 +1000,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
             if let Some(name) = &opts.name {
                 svc.set_author_display_name(name.clone());
             } else {
-                // A box still called "hive-cli" (enrolled before 2.0), or by
+                // A box still called "hive-cli" (enrolled under Hive 1.x), or by
                 // the host name `ligus enroll` gave it, takes its label so the
                 // phone's messages show the name the box was given.
                 let identity = hive_runtime::IdentityStore::new(&cfg.data_dir, hive_runtime::secret_store::StoreKeyVault::for_data_dir(&cfg.data_dir));

@@ -1,7 +1,7 @@
-//! ligus-auth client: sign in at an organization's identity provider through
-//! ligus-auth and keep a short-lived relay access token fresh.
+//! langstroth-auth client: sign in at an organization's identity provider through
+//! langstroth-auth and keep a short-lived relay access token fresh.
 //!
-//! ligus-auth (the `cmd/ligus-auth` service in the relay repository) runs the
+//! langstroth-auth (the `cmd/langstroth-auth` service in the relay repository) runs the
 //! OIDC sign-in and mints `hrt1` relay tokens that live at most an hour. This
 //! module is the desktop and CLI side:
 //!
@@ -14,7 +14,7 @@
 //!   before the access token expires; [`run_refresher`] keeps a [`TokenCell`]
 //!   current for long-running hosts, and `RelayClient::with_auth_cell` reads it.
 //!
-//! A ligus-auth token only gates relay *transport*. It never makes anyone a
+//! A langstroth-auth token only gates relay *transport*. It never makes anyone a
 //! workspace member: that still takes an Admin's signed `MemberAdded`.
 
 use std::path::{Path, PathBuf};
@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// Domain-separation prefix of the device proof (PHASE0-SPECS section 0.1).
-/// Frozen: ligus-auth verifies exactly these bytes.
+/// Frozen: langstroth-auth verifies exactly these bytes.
 pub const DEVICE_PROOF_CONTEXT: &[u8] = b"ligus-auth-device-proof-v1\0";
 /// The session file in the data directory (mode 0600). Holds the refresh token.
 pub const SESSION_FILE: &str = "ligus-auth.json";
@@ -39,15 +39,15 @@ const REFRESH_MARGIN_SECS: i64 = 120;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
-    #[error("could not reach ligus-auth: {0}")]
+    #[error("could not reach langstroth-auth: {0}")]
     Http(String),
     /// The session is over (revoked, expired, deprovisioned, or no workspace
     /// is granted). Sign in again.
     #[error("sign-in needed: {0}")]
     SignInNeeded(String),
-    #[error("ligus-auth error: {0}")]
+    #[error("langstroth-auth error: {0}")]
     Protocol(String),
-    #[error("invalid ligus-auth URL: {0}")]
+    #[error("invalid langstroth-auth URL: {0}")]
     BadUrl(String),
     #[error("session file: {0}")]
     Io(String),
@@ -119,7 +119,7 @@ pub fn device_proof_message(
     out
 }
 
-/// Validate a ligus-auth tenant URL (`https://auth.example.com/t/<tenant>`)
+/// Validate a langstroth-auth tenant URL (`https://auth.example.com/t/<tenant>`)
 /// and return it normalized, with the tenant id. Plain http is accepted only
 /// for a loopback host (local testing).
 pub fn parse_auth_url(raw: &str) -> Result<(String, String), AuthError> {
@@ -156,7 +156,7 @@ pub fn parse_auth_url(raw: &str) -> Result<(String, String), AuthError> {
     Ok((s.to_string(), tenant))
 }
 
-/// A signed-in ligus-auth session. Saved as [`SESSION_FILE`] (0600).
+/// A signed-in langstroth-auth session. Saved as [`SESSION_FILE`] (0600).
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Session {
     pub auth_url: String,
@@ -288,7 +288,7 @@ impl TokenCell {
     }
 }
 
-/// HTTP client for ligus-auth: bounded, and never follows redirects (a
+/// HTTP client for langstroth-auth: bounded, and never follows redirects (a
 /// redirect must not carry a refresh token or device code elsewhere).
 pub fn http_client() -> reqwest::Client {
     hive_forge::http_client_builder()
@@ -349,7 +349,7 @@ pub async fn start_device(
     if ds.device_code.is_empty() || ds.user_code.is_empty() {
         return Err(AuthError::Protocol("malformed device authorization".into()));
     }
-    // The person opens this link: keep it on ligus-auth's own origin.
+    // The person opens this link: keep it on langstroth-auth's own origin.
     let origin = |u: &str| {
         reqwest::Url::parse(u)
             .ok()
@@ -357,7 +357,7 @@ pub async fn start_device(
     };
     if origin(&ds.verification_uri) != origin(&base) {
         return Err(AuthError::Protocol(
-            "verification link points off the ligus-auth origin".into(),
+            "verification link points off the langstroth-auth origin".into(),
         ));
     }
     if ds
@@ -366,7 +366,7 @@ pub async fn start_device(
         .is_some_and(|c| origin(c) != origin(&base))
     {
         return Err(AuthError::Protocol(
-            "verification link points off the ligus-auth origin".into(),
+            "verification link points off the langstroth-auth origin".into(),
         ));
     }
     Ok(ds)
@@ -562,7 +562,7 @@ pub async fn refresh(
     }
 }
 
-/// Revoke the session at ligus-auth (best effort) and delete the local file.
+/// Revoke the session at langstroth-auth (best effort) and delete the local file.
 pub async fn sign_out(http: &reqwest::Client, dir: &Path) {
     if let Some(s) = load_session(dir) {
         if let Ok((base, _)) = parse_auth_url(&s.auth_url) {
@@ -580,7 +580,7 @@ pub async fn sign_out(http: &reqwest::Client, dir: &Path) {
 }
 
 /// Cross-process lock around a refresh: two processes on one data directory
-/// must not both spend the same refresh token (ligus-auth would treat the
+/// must not both spend the same refresh token (langstroth-auth would treat the
 /// second use as theft and end the session).
 ///
 /// On Unix this is an advisory `flock` on the lock file: the kernel drops it
@@ -701,13 +701,13 @@ pub async fn run_refresher(dir: PathBuf, signer: Arc<dyn DeviceSigner>, cell: To
                 30
             }
             Err(AuthError::SignInNeeded(why)) => {
-                tracing::warn!("ligus-auth: sign-in needed ({why})");
+                tracing::warn!("langstroth-auth: sign-in needed ({why})");
                 cell.set(None);
                 // Keep the file so status can explain; poll for a new sign-in.
                 60
             }
             Err(e) => {
-                tracing::warn!("ligus-auth: refresh failed, retrying: {e}");
+                tracing::warn!("langstroth-auth: refresh failed, retrying: {e}");
                 backoff = (backoff * 2).min(300);
                 backoff
             }
@@ -865,7 +865,7 @@ mod tests {
     /// old its file looks. The old lock treated any lock file older than a
     /// minute as left over from a crash and deleted it, but a refresh can hold
     /// the lock that long (two token requests, each up to 40 s), so a second
-    /// process then spent the same refresh token and ligus-auth revoked the
+    /// process then spent the same refresh token and langstroth-auth revoked the
     /// whole session as stolen.
     #[tokio::test]
     async fn held_refresh_lock_is_never_stolen() {
@@ -890,7 +890,7 @@ mod tests {
         assert!(matches!(third, Ok(Ok(_))), "released lock is acquirable");
     }
 
-    // ── mock ligus-auth: device flow + device proof + refresh rotation ──────
+    // ── mock langstroth-auth: device flow + device proof + refresh rotation ──────
 
     use axum::{extract::State, routing::post, Form, Json, Router};
     use std::collections::HashMap;
@@ -1094,7 +1094,7 @@ mod tests {
         assert!(!format!("{cell:?}").contains("fresher"));
     }
 
-    /// E-5: the ligus-auth bearer goes only to the relay the session was
+    /// E-5: the langstroth-auth bearer goes only to the relay the session was
     /// signed in for. A relay an invite or a setting names elsewhere gets the
     /// static token (or nothing); a session with no bound relay sends its
     /// token nowhere.

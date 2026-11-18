@@ -33,7 +33,7 @@ phone. Everyone else in the chat sees the reply but gets no mention.
   The message itself still says `@you`: signed messages are never
   rewritten, only displayed differently.
 - If no person started the chain (an agent started it, or a reply from
-  before Ligus 2.0 has no link to what it answered), `@you` reaches nobody.
+  before Ligus 0.1 has no link to what it answered), `@you` reaches nobody.
   It never falls back to everyone.
 - `@you` in a **person's** message means nothing: it doesn't ping you or
   anyone else.

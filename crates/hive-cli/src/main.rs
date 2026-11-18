@@ -66,9 +66,9 @@ fn env_opt(k: &str) -> Option<String> {
     hive_core::compat::env_opt(k)
 }
 
-/// Ligus 2.0 starts fresh: refuse a data dir that is, links to, or holds
+/// Ligus 0.1 starts fresh: refuse a data dir that is, links to, or holds
 /// Hive 1.x data (`~/.hive`, a 1.x serve dir, ...), which is never read or
-/// changed; otherwise create it and mark it as 2.0's. Exits on a refusal.
+/// changed; otherwise create it and mark it as 0.1's. Exits on a refusal.
 fn claim_data_dir_or_exit(data_dir: &std::path::Path) {
     if let Err(e) = hive_core::compat::claim_data_dir(data_dir, hive_core::compat::home_dir().as_deref()) {
         eprintln!("error: {e}");
@@ -107,7 +107,7 @@ fn cli_secret(name: &str) -> hive_runtime::secret_store::SecretId {
 impl FileConfig {
     /// `config.toml`, with its secrets from the store. Secrets still written
     /// in the file in the clear are dropped and the file rewritten without
-    /// them (2.0 starts from scratch: re-run `ligus enroll`).
+    /// them (0.1 starts from scratch: re-run `ligus enroll`).
     fn load(data_dir: &std::path::Path) -> Self {
         let mut f: FileConfig = std::fs::read_to_string(config_path(data_dir))
             .ok()
@@ -307,7 +307,7 @@ async fn cmd_join(cfg: &Config, code: &str) -> Result<()> {
     }
 }
 
-/// The display name every box got before 2.0 (a rebrand leftover). A box
+/// The display name every box got under Hive 1.x (a rebrand leftover). A box
 /// still carrying it is renamed to its label when it serves.
 pub(crate) const LEGACY_BOX_NAME: &str = "hive-cli";
 
@@ -328,7 +328,7 @@ pub(crate) fn bootstrap_identity(identity: &IdentityStore<impl hive_runtime::Key
 }
 
 /// Give a box's identity its label `name` when it still carries a name
-/// nobody chose: the pre-2.0 [`LEGACY_BOX_NAME`], or `auto` (the host name
+/// nobody chose: the Hive 1.x [`LEGACY_BOX_NAME`], or `auto` (the host name
 /// it was created with before a label was known, e.g. by `ligus enroll`).
 /// Returns the new name when it changed.
 pub(crate) fn adopt_box_name(identity: &IdentityStore<impl hive_runtime::KeyVault>, name: &str, auto: Option<&str>) -> Result<Option<String>> {
@@ -1556,7 +1556,7 @@ fn usage() -> ! {
          Setup:\n  \
          ligus enroll <hivews1:invite> [--token <hrt1>]   one-shot: save the workspace connection\n  \
          ligus join <invite-code>        redeem a relay invite to self-enroll this box's identity\n  \
-         ligus auth login <url> [--label NAME]   sign in through ligus-auth (device code); the relay\n                                       \
+         ligus auth login <url> [--label NAME]   sign in through langstroth-auth (device code); the relay\n                                       \
          token is then refreshed automatically | ligus auth status | ligus auth logout\n  \
          ligus setup [--apply]           detect providers; --apply defines keyless runtimes\n  \
          ligus config <export|import <file>>   round-trip the workspace runtime set\n\n\
@@ -1693,7 +1693,7 @@ fn run() -> Result<()> {
             .build()?)
     };
 
-    // A ligus-auth sign-in (see `ligus auth`) supplies the relay token and
+    // A langstroth-auth sign-in (see `ligus auth`) supplies the relay token and
     // keeps it fresh in the background for the life of this process.
     if !matches!(cmd, "auth" | "") {
         auth::init(&cfg.data_dir);
@@ -1964,7 +1964,7 @@ mod cli_tests {
     }
 
     /// A box enrolled with `ligus enroll` is named after its label or host,
-    /// never the pre-2.0 "hive-cli" (which every author line showed).
+    /// never the Hive 1.x "hive-cli" (which every author line showed).
     #[test]
     fn a_new_box_is_named_after_its_label_or_host() {
         assert_eq!(box_name(Some("mac-test".into()), Some("zaz-mbp".into())), "mac-test");

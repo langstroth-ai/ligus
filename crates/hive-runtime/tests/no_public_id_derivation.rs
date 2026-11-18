@@ -17,7 +17,7 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     (
         "crates/hive-core/src/channel.rs",
         "Uuid::new_v5(&NS, room.trim().as_bytes())",
-        "room workspace id: input is the room, random for every room 2.0 makes",
+        "room workspace id: input is the room, random for every room Ligus makes",
     ),
     (
         "crates/hive-core/src/session.rs",

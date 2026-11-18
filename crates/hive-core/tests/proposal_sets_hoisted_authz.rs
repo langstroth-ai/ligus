@@ -268,7 +268,7 @@ fn a_demotion_on_the_config_log_is_what_counts_not_the_chats_stale_roster() {
 /// Only the workspace roster grants a workspace role: a member added to one
 /// chat's own roster (never admitted on the config log) counts for nothing,
 /// in or out of dearth mode. (Before Phase 0 such a member counted outside
-/// dearth mode; 2.0 starts every workspace on the config roster.)
+/// dearth mode; 0.1 starts every workspace on the config roster.)
 #[test]
 fn a_chat_only_member_counts_for_nothing() {
     let mut log = Log::new();
@@ -284,9 +284,9 @@ fn a_chat_only_member_counts_for_nothing() {
     assert!(log.unchecked().proposal_sets.iter().any(|x| x.id == set_id), "control: it folds unchecked");
 }
 
-// ---- security review (2.0): R1 and R2, fixed by the Phase 0 authz engine ----
+// ---- security review (0.1): R1 and R2, fixed by the Phase 0 authz engine ----
 
-// ---- security review (2.0): proven, not yet fixed; see the review report ----
+// ---- security review (0.1): proven, not yet fixed; see the review report ----
 
 /// A set's human gate is "`required_approvals` from members at or above the
 /// role floor". The role in a vote payload is the voter's own claim: the fold

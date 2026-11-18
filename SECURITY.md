@@ -25,7 +25,7 @@ In scope:
 - **`hive-core` crypto & signed envelopes** — Ed25519 identity, X25519 key
   agreement, ChaCha20-Poly1305, HPKE per-device sealing, envelope
   verification/quarantine.
-- **The relay** ([github.com/ligus-ai/relay](https://github.com/ligus-ai/relay))
+- **The relay** ([github.com/langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay))
   — access-token gating, content-blind forwarding (it must never be able to read
   plaintext), the `hrt1` token format.
 - **Sync / P2P** — rendezvous, STUN/hole-punch, TURN fallback, workspace-key
@@ -43,7 +43,7 @@ Only the newest release is supported. Please test against it (or the latest
 `main`) before reporting.
 
 **Policy:** security fixes ship inside the next release; there are no patch
-releases of older versions. Fixes found before 2.0.0 are bundled into 2.0.0.
+releases of older versions. Fixes found before 0.1.0 are bundled into 0.1.0, the first Ligus release.
 
 ## Handling
 

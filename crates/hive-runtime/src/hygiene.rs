@@ -297,7 +297,7 @@ mod tests {
     }
 
     /// Hive 1.x checkouts (`.hive/worktrees/*` on `hive/chat/*` and
-    /// `hive/turn-*` branches) belong to the 1.x install: a 2.0 sweep, which
+    /// `hive/turn-*` branches) belong to the 1.x install: a 0.1 sweep, which
     /// knows none of their chats or turns, must leave them and their branches
     /// exactly as they are.
     #[test]
@@ -336,7 +336,7 @@ mod tests {
         let before = snap(&dir.join(".hive"));
         let branches = run(&["branch", "--list", "hive/*"]);
         let entries = list_worktrees(&dir);
-        // Unfiltered (the pre-2.0 behaviour: everything under the repo) the
+        // Unfiltered (the Hive 1.x behaviour: everything under the repo) the
         // sweep would remove all three. (Not `/`: on Windows that is the
         // current drive's root, and the temp dir may be on another drive.)
         assert_eq!(plan_sweep(&dir, &entries, &HashSet::new(), &HashMap::new(), &|_| false).len(), 3);

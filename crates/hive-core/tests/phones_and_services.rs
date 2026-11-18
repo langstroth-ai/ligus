@@ -1,4 +1,4 @@
-//! Phase A, item 6 (wire frozen in 2.0; Phase B builds the clients):
+//! Phase A, item 6 (wire frozen in 0.1; Phase B builds the clients):
 //! phones sign with their own P-256 Secure Enclave key, are enrolled only by
 //! a trusted device of their person with that person's passkey, and are
 //! capped to the phone tier; `ligus serve` becomes a service member, capped

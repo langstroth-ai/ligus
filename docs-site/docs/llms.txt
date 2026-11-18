@@ -1,6 +1,6 @@
 # Langstroth and Ligus
 
-> Ligus is a local-first, end-to-end-encrypted desktop app for collaborating with AI agents. Workspaces and chats sync over an E2EE relay (or peer-to-peer); each device holds its own copy of the data and its own local code folder. Agents run on a host (your device or a headless worker), edit an isolated per-chat git worktree, and surface changes as reviewable proposals. The name is short for *ligustica* (Apis mellifera ligustica, the Italian honeybee); the project was called Hive until 2.0. Langstroth is the platform behind Ligus: the end-to-end-encrypted relay, organization sign-in (ligus-auth), the Helm charts, and always-on Ligus hosts (`ligus serve` and `ligus worker`). The relay is content-blind: it stores and forwards encrypted event envelopes and never holds workspace keys.
+> Ligus is a local-first, end-to-end-encrypted desktop app for collaborating with AI agents. Workspaces and chats sync over an E2EE relay (or peer-to-peer); each device holds its own copy of the data and its own local code folder. Agents run on a host (your device or a headless worker), edit an isolated per-chat git worktree, and surface changes as reviewable proposals. The name is short for *ligustica* (Apis mellifera ligustica, the Italian honeybee); Ligus 0.1.0 is a new application whose predecessor was called Hive (1.x). Langstroth is the platform behind Ligus: the end-to-end-encrypted relay, organization sign-in (langstroth-auth), the Helm charts, and always-on Ligus hosts (`ligus serve` and `ligus worker`). The relay is content-blind: it stores and forwards encrypted event envelopes and never holds workspace keys.
 
 Documentation: https://docs.langstroth.ai/ — pages below are the canonical reference. It has two sections: Using Ligus (https://docs.langstroth.ai/ligus/: desktop app, phone app, `ligus` CLI, workspaces, agents, workflows) and Operating Langstroth (https://docs.langstroth.ai/operate/: self-hosting and deploying the relay, auth, Kubernetes, `ligus serve` and worker hosts, security model, operator reference).
 
@@ -88,10 +88,11 @@ Documentation: https://docs.langstroth.ai/ — pages below are the canonical ref
 
 ## Operating Langstroth: Relay and auth
 
+- [The community relay](https://docs.langstroth.ai/operate/networking/community-relay/): The free, best-effort relay at relay.langstroth.ai: what its operator can see (ciphertext, sizes, timing, room ids, never content) and when to self-host instead.
 - [Self-hosting a relay](https://docs.langstroth.ai/operate/networking/self-host/): Building and running the relay, storage (Postgres or snapshot), TLS, token modes, membership, tunnel and APNs push, rate limits, monitoring, backups and upgrades.
-- [Sign in with your IdP (ligus-auth)](https://docs.langstroth.ai/operate/deploy/ligus-auth/): Organization sign-in for the relay: device-code login, short-lived relay tokens, `ligus auth`.
-- [ligus-auth with Pocket ID](https://docs.langstroth.ai/operate/deploy/ligus-auth-pocket-id/): A passkey-only identity provider, ligus-auth and the relay on one box.
-- [ligus-auth with Dex](https://docs.langstroth.ai/operate/deploy/ligus-auth-dex/): ligus-auth behind Dex, which federates GitHub, LDAP, SAML and other identity sources.
+- [Sign in with your IdP (langstroth-auth)](https://docs.langstroth.ai/operate/deploy/ligus-auth/): Organization sign-in for the relay: device-code login, short-lived relay tokens, `ligus auth`.
+- [langstroth-auth with Pocket ID](https://docs.langstroth.ai/operate/deploy/ligus-auth-pocket-id/): A passkey-only identity provider, langstroth-auth and the relay on one box.
+- [langstroth-auth with Dex](https://docs.langstroth.ai/operate/deploy/ligus-auth-dex/): langstroth-auth behind Dex, which federates GitHub, LDAP, SAML and other identity sources.
 - [Server-side membership](https://docs.langstroth.ai/operate/ops/server-side-membership/): Relay-managed team membership.
 
 ## Operating Langstroth: Hosts: ligus serve and worker
@@ -105,12 +106,12 @@ Documentation: https://docs.langstroth.ai/ — pages below are the canonical ref
 ## Operating Langstroth: Operations
 
 - [Operations](https://docs.langstroth.ai/operate/ops/operations/): Health endpoints, logs, backups and restore of data dirs, upgrades.
-- [Upgrading from Hive 1.x](https://docs.langstroth.ai/operate/deploy/upgrade-from-hive/): 2.0 starts fresh: where each version keeps its data, setting up 2.0 next to 1.x, and removing 1.x.
+- [Upgrading from Hive 1.x](https://docs.langstroth.ai/operate/deploy/upgrade-from-hive/): 0.1 starts fresh: where each version keeps its data, setting up 0.1 next to 1.x, and removing 1.x.
 - [Building the dist](https://docs.langstroth.ai/operate/ops/build/): Building the desktop app.
 
 ## Operating Langstroth: Security
 
-- [Security model](https://docs.langstroth.ai/operate/security/): What each component holds, trust boundaries per deployment shape, encryption, roles, and the 2.0 guards.
+- [Security model](https://docs.langstroth.ai/operate/security/): What each component holds, trust boundaries per deployment shape, encryption, roles, and the 0.1 guards.
 - [Threat model](https://docs.langstroth.ai/operate/security/threat-model/): Attackers, what they can and can't do, and known limitations.
 - [Runbooks](https://docs.langstroth.ai/operate/security/runbooks/): Device revocation, lost phone, compromised device, offboarding, key and token rotation.
 

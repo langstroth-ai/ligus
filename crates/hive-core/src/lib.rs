@@ -106,3 +106,26 @@ mod tests {
         assert!(!VERSION.is_empty());
     }
 }
+
+/// The community relay: a free, best-effort relay run by the Langstroth
+/// project. Only ever a preset the person picks (onboarding, a new workspace,
+/// Settings → Team sync); never a silent fallback when no relay is set.
+/// Mirrored in `web/src/lib/communityRelay.ts`.
+pub const COMMUNITY_RELAY_URL: &str = "https://relay.langstroth.ai";
+
+#[cfg(test)]
+mod community_relay_tests {
+    /// The desktop UI's preset must be the same URL as the Rust constant.
+    #[test]
+    fn ts_mirror_matches() {
+        let ts = include_str!("../../../web/src/lib/communityRelay.ts");
+        let want = format!("export const COMMUNITY_RELAY_URL = \"{}\";", super::COMMUNITY_RELAY_URL);
+        assert!(ts.contains(&want), "web/src/lib/communityRelay.ts must declare {want}");
+    }
+
+    #[test]
+    fn is_an_https_origin() {
+        let u = super::COMMUNITY_RELAY_URL;
+        assert!(u.starts_with("https://") && !u.ends_with('/') && !u.contains("/v1"));
+    }
+}

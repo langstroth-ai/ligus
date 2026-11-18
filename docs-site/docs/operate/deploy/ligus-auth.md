@@ -1,6 +1,6 @@
-# Sign in with your identity provider (ligus-auth)
+# Sign in with your identity provider (langstroth-auth)
 
-**ligus-auth** lets people reach your relay by signing in with the identity
+**langstroth-auth** lets people reach your relay by signing in with the identity
 provider (IdP) you already run, instead of pasting relay tokens around. It
 works with any OpenID Connect provider: [Pocket ID](ligus-auth-pocket-id.md)
 for a home lab, [Dex](ligus-auth-dex.md) to federate GitHub, LDAP or SAML
@@ -8,30 +8,30 @@ for a home lab, [Dex](ligus-auth-dex.md) to federate GitHub, LDAP or SAML
 Entra ID and the like. It also has a small SCIM 2.0 endpoint, so an IdP that
 provisions over SCIM can switch someone's access off the moment they leave.
 
-ligus-auth is optional. It is a separate service (`ligus-auth`, in the
-[relay repository](https://github.com/ligus-ai/relay)) that runs next to the
+langstroth-auth is optional. It is a separate service (`langstroth-auth`, in the
+[relay repository](https://github.com/langstroth-ai/langstroth-relay)) that runs next to the
 relay, never inside it.
 
 ## What it does, and what it never does
 
-ligus-auth decides who can **reach the relay**. It never decides who is **in
+langstroth-auth decides who can **reach the relay**. It never decides who is **in
 a workspace**.
 
 | Layer | Who decides | What it controls |
 |---|---|---|
-| Relay transport | ligus-auth (from IdP groups) | which workspace ids a person's devices may read and write on the relay |
+| Relay transport | langstroth-auth (from IdP groups) | which workspace ids a person's devices may read and write on the relay |
 | Workspace membership | the workspace's Admins, in the signed roster | who is a member, with which role |
 | Content | the workspace key (end-to-end encryption) | who can read or write anything in the workspace |
 
 So signing in with your company account does **not** make you a member of
-any workspace. A ligus-auth token carries no workspace key and writes nothing
+any workspace. A langstroth-auth token carries no workspace key and writes nothing
 to a roster: to join, a person still needs an invite (which carries the
 workspace key) and an Admin's signed `MemberAdded`. An IdP that is
 compromised, or a group that is set up wrong, can at most let someone reach
 ciphertext they cannot open and cannot add to.
 
 !!! warning "SSO is not membership"
-    When you remove someone from a group at your IdP, ligus-auth stops their
+    When you remove someone from a group at your IdP, langstroth-auth stops their
     relay access, but they stay in the roster of every workspace they joined
     until an Admin removes them, and they keep any workspace key they already
     had. Removing someone from a workspace is still a roster change plus a
@@ -42,7 +42,7 @@ ciphertext they cannot open and cannot add to.
 ```mermaid
 sequenceDiagram
   participant D as Device (desktop, CLI, phone)
-  participant A as ligus-auth
+  participant A as langstroth-auth
   participant I as Your IdP
   participant R as Relay
   D->>A: start sign-in (device code or browser + PKCE)
@@ -54,7 +54,7 @@ sequenceDiagram
 ```
 
 - **Desktop and CLI** sign in with a **device code**: the app shows a short
-  code, you open the ligus-auth page in a browser, enter it, sign in at your
+  code, you open the langstroth-auth page in a browser, enter it, sign in at your
   IdP and approve the device by name. (`ligus serve` boxes and workers do the
   same with `ligus auth login`.)
 - **The phone** will use the system browser with authorization code and PKCE
@@ -65,13 +65,13 @@ sequenceDiagram
 
 ## Tokens
 
-Access tokens are ordinary relay `hrt1` tokens signed by the ligus-auth
+Access tokens are ordinary relay `hrt1` tokens signed by the langstroth-auth
 issuer key. The relay verifies them with `LIGUS_RELAY_TOKEN_PUBKEY` exactly as
 before.
 
 | Claim | Value |
 |---|---|
-| `sub` | `<tenant>:<user id>` (an opaque ligus-auth id, never an email) |
+| `sub` | `<tenant>:<user id>` (an opaque langstroth-auth id, never an email) |
 | `exp` | 15 minutes from issue by default; never more than an hour |
 | `caps`, `plan`, `turn`, `max_members`, `retention_days` | from the tenant config |
 | `workspaces` | the workspace ids granted to the person's groups; never empty |
@@ -80,12 +80,12 @@ before.
 | `did` | the device id whose key signed the token request |
 
 `tid`, `uid` and `did` are optional claims: tokens without them (the ones
-`ligus-relay issue` mints) are byte-for-byte what they were before. ligus-auth
+`langstroth-relay issue` mints) are byte-for-byte what they were before. langstroth-auth
 refuses to mint a token with no workspaces at all, because a relay in `claims`
 scope mode would read a missing claim as "any workspace".
 
 Refresh tokens are opaque, stored only as hashes, and rotate on every use. If
-an old refresh token is ever presented again, ligus-auth assumes it was
+an old refresh token is ever presented again, langstroth-auth assumes it was
 copied and ends the whole session. A session lasts at most `session_max_age`
 (30 days by default) before the person signs in at the IdP again, and an
 unused one expires after `refresh_idle_ttl` (7 days).
@@ -95,13 +95,13 @@ unused one expires after `refresh_idle_ttl` (7 days).
 ### 1. Create the issuer key
 
 ```sh
-ligus-auth keygen --out /etc/ligus-auth/signing-key
+langstroth-auth keygen --out /etc/ligus-auth/signing-key
 # public_key=3b6a27bc…   (the private key is only in the file, mode 0600)
 ```
 
-The private key never leaves that file. ligus-auth refuses a key file that
+The private key never leaves that file. langstroth-auth refuses a key file that
 other users can read. It can also come from a systemd credential named
-`ligus-auth-signing-key` or a Kubernetes Secret mounted read-only.
+`langstroth-auth-signing-key` or a Kubernetes Secret mounted read-only.
 
 ### 2. Point the relay at it
 
@@ -118,7 +118,7 @@ LIGUS_RELAY_TENANTS=home                  # optional: only this tenant's tokens
 | `LIGUS_RELAY_TENANTS` | unset | comma-separated tenant ids; tokens without a listed `tid` get `401` |
 | `LIGUS_RELAY_TOKEN_PUBKEY_NEXT` | unset | a second issuer key accepted while you rotate the issuer key |
 
-### 3. Register ligus-auth at your IdP
+### 3. Register langstroth-auth at your IdP
 
 Create an OIDC client (confidential, with a secret, or public with PKCE
 only) with the redirect URI
@@ -150,7 +150,7 @@ should drive access.
       "id": "home",
       "oidc": {
         "issuer": "https://id.example.com",
-        "client_id": "ligus-auth",
+        "client_id": "langstroth-auth",
         "client_secret_file": "/etc/ligus-auth/idp-client-secret",
         "scopes": ["openid", "email", "profile", "groups"]
       },
@@ -163,8 +163,8 @@ should drive access.
 }
 ```
 
-Then `ligus-auth check-config --config /etc/ligus-auth/config.json` and
-`ligus-auth serve --config /etc/ligus-auth/config.json`. Put it behind TLS
+Then `langstroth-auth check-config --config /etc/ligus-auth/config.json` and
+`langstroth-auth serve --config /etc/ligus-auth/config.json`. Put it behind TLS
 (the relay's reverse proxy works) and list that proxy in `trusted_proxies`.
 
 #### Config reference
@@ -221,12 +221,12 @@ The session is saved in `<data dir>/ligus-auth.json` (mode 0600), and every
 `ligus` command refreshes the token in the background. An explicit
 `LIGUS_RELAY_ACCESS_TOKEN` takes precedence over the sign-in.
 
-Then join workspaces as usual, with an invite: ligus-auth only opens the
+Then join workspaces as usual, with an invite: langstroth-auth only opens the
 relay.
 
 ## Provisioning and deprovisioning (SCIM)
 
-Give each tenant a SCIM token (`ligus-auth gen-token`; store only its hash
+Give each tenant a SCIM token (`langstroth-auth gen-token`; store only its hash
 with `scim_token_sha256`, or keep it in a file), and point your IdP's SCIM
 app at
 
@@ -236,7 +236,7 @@ https://auth.example.com/t/<tenant>/scim/v2
 
 It supports `Users` and `Groups` (create, read, filter by `userName`,
 `externalId` or `displayName`, replace, patch, delete) and
-`ServiceProviderConfig`. ligus-auth stores only `userName`, `externalId`,
+`ServiceProviderConfig`. langstroth-auth stores only `userName`, `externalId`,
 `displayName` and `active`; email lists, phone numbers and the like are
 accepted and dropped.
 
@@ -267,7 +267,7 @@ On `admin_listen`, with `Authorization: Bearer <LIGUS_AUTH_ADMIN_TOKEN_FILE cont
 ## Several tenants
 
 Each tenant has its own IdP, client, SCIM token, users, groups and
-workspaces. ligus-auth keeps them apart:
+workspaces. langstroth-auth keeps them apart:
 
 - a workspace id belongs to exactly one tenant (overlaps refuse to start), and
   grants can name only the tenant's own workspaces, checked again every time a
@@ -299,7 +299,7 @@ Tenant-aware relay authorization beyond this is a design; see
 - **Rate limits** on every public endpoint, a tighter one on device-code
   entry, and on failed SCIM or admin authentication.
 - **Audit log:** one JSON line per sign-in, token, refresh, reuse detection,
-  SCIM change and admin action. People appear as their opaque ligus-auth id or
+  SCIM change and admin action. People appear as their opaque langstroth-auth id or
   the hashed `uid`; device ids and IP addresses as salted hashes. No names or
   emails.
 
@@ -313,5 +313,5 @@ Tenant-aware relay authorization beyond this is a design; see
   sign-in and device-code steps are held in memory, so give the load balancer
   session affinity.
 - Rotating the issuer key: start the relay with `LIGUS_RELAY_TOKEN_PUBKEY_NEXT`
-  set to the new key, switch ligus-auth to it, and after an access TTL make it
+  set to the new key, switch langstroth-auth to it, and after an access TTL make it
   the only key.

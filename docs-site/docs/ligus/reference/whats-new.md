@@ -1,14 +1,20 @@
 # What's new
 
-**Hive is now Ligus (v2.0.0).** Ligus is short for *ligustica*, the Italian
-honeybee. Entries for 1.18 and earlier keep the name Hive.
+**Ligus 0.1.0 is a new application**, the successor to Hive. Ligus is short
+for *ligustica*, the Italian honeybee. Entries for 1.18 and earlier are Hive's
+releases and keep its name.
 
 Changes since 1.15, newest first, with links to where each is documented.
 Full release notes are on the
-[GitHub releases page](https://github.com/ligus-ai/ligus/releases).
+[GitHub releases page](https://github.com/langstroth-ai/ligus/releases).
 
-## 2.0
+## 0.1.0
 
+- **A community relay to start with.** Onboarding, **Add workspace → Create**
+  (when no relay is set) and **Settings → Team sync** offer
+  `relay.langstroth.ai`, a free, best-effort relay, next to your own relay
+  and no relay. It is only used when you pick it, and it sees only
+  ciphertext. See [The community relay](../../operate/networking/community-relay.md).
 - **A DM invite waits for their device.** Opening a DM with someone whose
   contact id your device doesn't know yet (often right after they joined, or
   from the phone) used to hand you a link and never try again. Ligus now
@@ -114,20 +120,20 @@ Full release notes are on the
   argv, sandboxed and offline, with no model involved.
 - **Gemini API and MLX presets**, and a [runtime matrix](runtime-matrix.md)
   that's run before every release.
-- **Hive is now Ligus.** Ligus is short for *ligustica* (*Apis mellifera
+- **Ligus succeeds Hive.** Ligus is short for *ligustica* (*Apis mellifera
   ligustica*, the Italian honeybee). The default agent is still `@hive`, and
-  2.0 clients use the same relays (`/v1` and `hrt1` tokens are unchanged).
-- **v2.0 starts fresh.** The CLI is `ligus` only (no `hive` command), settings
+  0.1 clients use the same relays (`/v1` and `hrt1` tokens are unchanged).
+- **Ligus starts fresh.** The CLI is `ligus` only (no `hive` command), settings
   are `LIGUS_*` only, the config file is `ligus.config.toml` and workspace
   state lives in `.ligus/`. Nothing from Hive 1.x is migrated: you create new
-  workspaces, invite teammates again and re-pair phones. In exchange, 2.0
+  workspaces, invite teammates again and re-pair phones. In exchange, 0.1
   never reads, modifies, moves, renames, copies or deletes any 1.x file: the
   desktop's `com.hive.desktop` folder, the CLI's `~/.hive`, each repo's
   `.hive/` (with its chat checkouts and `hive/chat/*` branches) and
   `hive.config.toml` stay exactly where they are, so a 1.x install keeps
-  running side by side. 2.0 refuses a data dir that is, or links to, 1.x
+  running side by side. 0.1 refuses a data dir that is, or links to, 1.x
   data. A `HIVE_*` variable that is still set is ignored, with a one-time
-  warning naming the new spelling. Setting up 2.0 and removing 1.x when you're
+  warning naming the new spelling. Setting up 0.1 and removing 1.x when you're
   done: [Upgrading from Hive 1.x](../../operate/deploy/upgrade-from-hive.md).
 - **Deployment and security docs.** [Choose a deployment](../../operate/deploy/index.md)
   with guides for each supported shape, a [security model](../../operate/security/index.md),
@@ -166,14 +172,14 @@ Full release notes are on the
   with your passkey over them (`presence/prepare`, `presence/commit`); folds
   drop its votes without one. [Securing the box](../../operate/ops/serve-box.md)
 - **Organization sign-in.** `ligus auth login` and Settings → Team sync sign
-  in through [ligus-auth](../../operate/deploy/ligus-auth.md) with your identity
+  in through [langstroth-auth](../../operate/deploy/ligus-auth.md) with your identity
   provider (setups for [Pocket ID](../../operate/deploy/ligus-auth-pocket-id.md) and
   [Dex](../../operate/deploy/ligus-auth-dex.md)) and keep a short-lived relay token
   fresh.
 - **Desktop.** The app is `Ligus.app`. Theme and pane layout reset once, and
   macOS asks again for folder and notification access. An auto-updated app
   may still be at `/Applications/Hive.app`; you can rename it to `Ligus.app`.
-- **Homebrew.** Formula `ligus`, cask `ligus-app`, tap `ligus-ai/ligus`;
+- **Homebrew.** Formula `ligus`, cask `ligus-app`, tap `langstroth-ai/ligus`;
   existing `hive-cli` and `hive` installs upgrade to them.
 - **Repos from the phone.** `ligus serve` lists the host's checkouts and your
   GitHub repos, clones on demand, switches a chat's repo, pulls, and opens a
@@ -189,7 +195,7 @@ Full release notes are on the
 - **Kubernetes design and a container image.** A design for running the relay,
   `ligus serve` and sandboxed turn executors on Kubernetes, and a Dockerfile
   for the `ligus` binary (`deploy/container`).
-- **New addresses.** The project lives at github.com/ligus-ai/ligus and the
+- **New addresses.** The project lives at github.com/langstroth-ai/ligus and the
   docs at docs.langstroth.ai, in two sections:
   [Using Ligus](../index.md) and
   [Operating Langstroth](../../operate/index.md) (self-hosting and

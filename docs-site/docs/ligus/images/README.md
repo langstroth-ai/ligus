@@ -15,7 +15,6 @@ drop them into this folder, and the docs render.
 | `onboarding-runtime.png` | Onboarding step 3 (connect a model) |
 | `settings-general.png` | Settings, **Account** tab |
 | `settings-runtimes.png` | Settings, **Models & runtimes** tab, one provider + runtime |
-| `settings-team-members.png` | Settings → **Team sync**, Team members panel (relay admin) |
 | `agents-pane.png` | Right rail **Tools** pane, Workspace Agents section |
 | `right-rail.png` | Right rail with the **Tools** pane active (icon strip visible) |
 | `invite-pane.png` | Right rail **People** pane, invite link + short code generated |

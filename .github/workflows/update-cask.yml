@@ -1,5 +1,5 @@
 # Manual fallback to bump the Homebrew cask on the tap repo
-# (ligus-ai/homebrew-ligus) to a given tag's version + DMG sha256.
+# (langstroth-ai/homebrew-ligus) to a given tag's version + DMG sha256.
 #
 # The automatic bump on every release lives in release.yml's `cask` job (it runs
 # in the tag's context after the DMG is uploaded). A `release: published` trigger
@@ -8,7 +8,7 @@
 # this workflow is dispatch-only — use it to re-bump a past release by hand.
 #
 # Needs HOMEBREW_TAP_TOKEN: a fine-grained PAT with Contents:write on
-# ligus-ai/homebrew-ligus (the default GITHUB_TOKEN can't push cross-repo).
+# langstroth-ai/homebrew-ligus (the default GITHUB_TOKEN can't push cross-repo).
 name: Update Homebrew cask (manual)
 
 on:
@@ -44,7 +44,7 @@ jobs:
           SHA=$(shasum -a 256 ligus.dmg | awk '{print $1}')
           echo "sha256=$SHA"
 
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/ligus-ai/homebrew-ligus.git" tap
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/langstroth-ai/homebrew-ligus.git" tap
           cd tap
           # The desktop cask is ligus-app. Never recreate the old Casks/hive.rb:
           # the tap's cask_renames.json maps hive to ligus-app.

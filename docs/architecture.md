@@ -236,7 +236,7 @@ flowchart TD
 - **Update check**: the version manifest is read up to 64 KiB, with 8 s per
   URL, then the next URL is tried.
 - Content never depends on TLS: sync is end-to-end encrypted, updates are
-  minisign-signed, and the update banner only links to the ligus-ai/ligus
+  minisign-signed, and the update banner only links to the langstroth-ai/ligus
   releases page. Sealing a workspace key (`e2ee::seal` / `open`) refuses a
   low-order X25519 key (an all-zero shared secret), as the tunnel's Noise
   handshake does.

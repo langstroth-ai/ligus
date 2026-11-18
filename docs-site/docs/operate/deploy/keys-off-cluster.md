@@ -1,7 +1,7 @@
 # Relay and executors only, keys off the cluster (design)
 
 !!! danger "Design, not shipped"
-    Nothing here is implemented in 2.0. It describes a target shape so it
+    Nothing here is implemented in 0.1. It describes a target shape so it
     can be reviewed and planned. Today, every Ligus process that runs agent
     turns (desktop, `ligus serve`, `ligus worker`) holds the workspace key.
     The [Kubernetes preview](kubernetes.md) puts `ligus serve`, and therefore
@@ -56,7 +56,7 @@ flowchart LR
 ## What's missing today
 
 - A controller/executor protocol and the `ligus exec-turn` command (the
-  [Kubernetes design](https://github.com/ligus-ai/ligus/blob/main/docs/design/kubernetes.md)
+  [Kubernetes design](https://github.com/langstroth-ai/ligus/blob/main/docs/design/kubernetes.md)
   §3.3 and Phase 3 describe the in-cluster version, where the controller is
   on the cluster).
 - A way for an off-cluster controller to reach in-cluster executors (a

@@ -22,7 +22,7 @@ use hive_core::{ActorIdentity, ActorKind, MountedVault, VaultSource, WorkspaceMe
 use hive_proto::{
     ApprovalDto, AppInfo, AppSettingsDto, ChannelDto, ChatMessageDto, ChatSessionDto,
     ChatActivityEvent, ChatStreamEvent, ChatSummaryDto, ContextTelemetryDto, FsEntryDto, GitFileDiffDto, LspServerDto, McpServerDto, ProposalDto,
-    IssuedRelayTokenDto, MentionStateDto, QueuedWorkDto, ReactionDto, RelayTokenDto, RelayUserDto,
+    MentionStateDto, QueuedWorkDto, ReactionDto,
     RuntimeSummaryDto, SkillDto, VaultSourceDto, WorkspaceAgentDto, WorkspaceHostDto,
     WorkspaceInfoDto, WorkspaceMemberDto,
 };
@@ -3727,7 +3727,9 @@ pub(crate) fn workspace_ring(state: &AppState, room: &str, conn: Option<&Workspa
     hive_runtime::keyring::KeyringEngine::from_store(svc.store(), room_workspace_id(room), &src)
 }
 
-/// Share a composer attachment so every workspace member can receive it: seal the
+/// Share a composer attachment. Relay upload is off in this release
+/// (`RELAY_ATTACHMENT_UPLOAD_ENABLED`), so this returns the device-local
+/// `[Attached: <path>]` marker. With the guard on: seal the
 /// file with the workspace key, upload the ciphertext to the relay's blob channel,
 /// and return the `[Attached-blob: …]` marker to embed in the message. When no
 /// relay is configured, falls back to today's local-only `[Attached: <path>]`
@@ -3756,6 +3758,12 @@ async fn share_attachment(
         }
     }
 
+    // Relay attachment upload is off in this release (one guard, no setting):
+    // keep the device-local path marker. See
+    // hive_runtime::attachment_blob::RELAY_ATTACHMENT_UPLOAD_ENABLED.
+    if !hive_runtime::attachment_blob::RELAY_ATTACHMENT_UPLOAD_ENABLED {
+        return Ok(format!("[Attached: {}]", p.display()));
+    }
     let Some((url, room, ring)) = blob_transport(&state) else {
         // Local-only: no relay, so keep the path marker (unchanged behavior).
         return Ok(format!("[Attached: {}]", p.display()));
@@ -4833,123 +4841,6 @@ fn revoke_my_device(state: State<AppState>, device_id: String) -> Result<(), Str
     svc.revoke_device(hive_core::workspace_config_session_id(ws), ws, device).map_err(map_err)?;
     tracing::info!(target: "identity", device = %device, "revoked one of this account's devices");
     Ok(())
-}
-
-// ── Relay access user management (Settings → Team) ──────────────────────────
-// These drive the relay's /v1/admin/* API (off unless the relay enables it), authenticated by the
-// signed-in GitHub token; the relay admits only its configured admin logins.
-
-/// The configured relay URL, or a friendly error when sync isn't set up.
-fn relay_url_or_err(state: &AppState) -> Result<String, String> {
-    state
-        .settings
-        .lock()
-        .unwrap()
-        .relay_url
-        .clone()
-        .filter(|u| !u.trim().is_empty())
-        .ok_or_else(|| "set a relay URL in Settings → Team sync first".into())
-}
-
-fn relay_token_dto(t: &hive_runtime::RelayTokenEntry) -> RelayTokenDto {
-    RelayTokenDto {
-        id: t.id.clone(),
-        label: t.label.clone(),
-        last_used: if t.last_used == 0 {
-            String::new()
-        } else {
-            rfc3339(hive_core::Timestamp::from_unix_seconds(t.last_used as i64))
-        },
-        revoked: t.revoked_at.is_some(),
-    }
-}
-
-#[tauri::command]
-async fn list_relay_users(state: State<'_, AppState>) -> Result<Vec<RelayUserDto>, String> {
-    let url = relay_url_or_err(&state)?;
-    let users = state
-        .relay_client(&url)
-        .admin_list_users()
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or("this relay has no user-management API, or you're not an admin")?;
-    Ok(users
-        .into_iter()
-        .map(|u| RelayUserDto {
-            id: u.id,
-            name: u.name,
-            login: u.login,
-            disabled: u.disabled,
-            tokens: u
-                .tokens
-                .iter()
-                .filter(|t| t.revoked_at.is_none())
-                .map(relay_token_dto)
-                .collect(),
-        })
-        .collect())
-}
-
-#[tauri::command]
-async fn create_relay_user(
-    state: State<'_, AppState>,
-    name: String,
-    login: String,
-) -> Result<IssuedRelayTokenDto, String> {
-    let url = relay_url_or_err(&state)?;
-    let issued = state
-        .relay_client(&url)
-        .admin_create_user(name.trim(), login.trim(), "")
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(IssuedRelayTokenDto {
-        user_id: issued.user.id,
-        user_name: issued.user.name,
-        raw: issued.raw,
-    })
-}
-
-#[tauri::command]
-async fn issue_relay_token(
-    state: State<'_, AppState>,
-    user_id: String,
-    label: String,
-) -> Result<IssuedRelayTokenDto, String> {
-    let url = relay_url_or_err(&state)?;
-    let issued = state
-        .relay_client(&url)
-        .admin_issue_token(&user_id, label.trim())
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(IssuedRelayTokenDto {
-        user_id: issued.user.id,
-        user_name: issued.user.name,
-        raw: issued.raw,
-    })
-}
-
-#[tauri::command]
-async fn revoke_relay_token(state: State<'_, AppState>, token_id: String) -> Result<(), String> {
-    let url = relay_url_or_err(&state)?;
-    state
-        .relay_client(&url)
-        .admin_revoke_token(&token_id)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn set_relay_user_disabled(
-    state: State<'_, AppState>,
-    user_id: String,
-    disabled: bool,
-) -> Result<(), String> {
-    let url = relay_url_or_err(&state)?;
-    state
-        .relay_client(&url)
-        .admin_set_user_disabled(&user_id, disabled)
-        .await
-        .map_err(|e| e.to_string())
 }
 
 #[tauri::command(async)]
@@ -11297,13 +11188,13 @@ struct UpdateInfo {
     notes: String,
 }
 
-/// The manifest's `url` if it is the ligus-ai/ligus GitHub releases page,
+/// The manifest's `url` if it is the langstroth-ai/ligus GitHub releases page,
 /// else empty (the banner then opens its built-in releases link). The banner
 /// hands this to the system browser, and HTTPS trusts the OS store, so a
 /// store-installed root or a compromised docs host must not be able to point
 /// people at an arbitrary download.
 fn release_page_url(raw: &str) -> String {
-    const PAGE: &str = "https://github.com/ligus-ai/ligus/releases";
+    const PAGE: &str = "https://github.com/langstroth-ai/ligus/releases";
     let Some(rest) = raw.strip_prefix(PAGE) else { return String::new() };
     let tail_ok = rest.is_empty() || rest.starts_with('/');
     let chars_ok = rest.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | '_' | '.'));
@@ -11528,7 +11419,7 @@ fn build_state(app: &AppHandle) -> Result<AppState, String> {
     build_state_in(app, data_dir)
 }
 
-/// Ligus 2.0 starts fresh: its data dir must not be, link to, or contain Hive
+/// Ligus 0.1 starts fresh: its data dir must not be, link to, or contain Hive
 /// 1.x data (`com.hive.desktop`, `~/.hive`, ...), which is never read or
 /// changed. On a refusal, show a blocking error and stop before anything is
 /// created or opened.
@@ -11634,7 +11525,7 @@ fn ask_init_failure(f: &InitFailure) -> InitChoice {
 /// dir; the in-app live test (`e2e`) points it at a temp dir.
 /// Before anything opens the data dir: refuse a Hive 1.x dir (never read or
 /// changed; see `hive_core::compat::check_data_dir`), create it, run a
-/// pending factory reset, and mark it as a Ligus 2.0 data dir.
+/// pending factory reset, and mark it as a Ligus 0.1 data dir.
 fn prepare_data_dir(data_dir: &Path) -> Result<(), String> {
     // Never a Hive 1.x dir (also checked by `build_state`, with a dialog).
     hive_core::compat::check_data_dir(data_dir, hive_core::compat::home_dir().as_deref())?;
@@ -11663,7 +11554,7 @@ fn prepare_data_dir(data_dir: &Path) -> Result<(), String> {
         }
         let _ = std::fs::remove_file(&reset_marker);
     }
-    // Mark the dir as a Ligus 2.0 data dir (after a reset wipe, too).
+    // Mark the dir as a Ligus 0.1 data dir (after a reset wipe, too).
     hive_core::compat::mark_data_dir(data_dir).map_err(map_err)?;
     Ok(())
 }
@@ -12874,10 +12765,18 @@ fn random_token(len: usize) -> String {
 /// the rail, switches to it, and (if a relay is configured) starts syncing it.
 /// Returns the new workspace; use `workspace_invite` to share it.
 #[tauri::command]
-fn create_workspace(state: State<AppState>, name: String) -> Result<WorkspaceInfoDto, String> {
+fn create_workspace(state: State<AppState>, name: String, relay_url: Option<String>) -> Result<WorkspaceInfoDto, String> {
     let display = name.trim();
     if display.is_empty() {
         return Err("workspace name can't be empty".to_string());
+    }
+    // The relay the creator picked (the community relay, their own, or none);
+    // None keeps the currently configured relay. Never a silent default.
+    let picked = relay_url.map(|u| u.trim().to_string());
+    if let Some(u) = picked.as_deref().filter(|u| !u.is_empty()) {
+        if invite_relay_problem(u).is_some() {
+            return Err(format!("{u} isn't a relay URL (expected an http(s) origin)"));
+        }
     }
     // This device is founding the workspace, so its account is the founder — pin
     // it in the invite so every joiner (and this device) selects this creator's
@@ -12898,10 +12797,10 @@ fn create_workspace(state: State<AppState>, name: String) -> Result<WorkspaceInf
         let room = random_token(32);
         let conn = WorkspaceConn {
             name: display.to_string(),
-            // Inherit the currently-configured relay so the new room syncs
-            // immediately; if none is set the workspace is created local-until a
-            // relay is added (Settings) or a peer is linked.
-            relay_url: s.relay_url.clone().unwrap_or_default(),
+            // The picked relay, else inherit the currently-configured one so
+            // the new room syncs immediately; with neither, the workspace is
+            // local until a relay is added (Settings) or a peer is linked.
+            relay_url: picked.clone().unwrap_or_else(|| s.relay_url.clone().unwrap_or_default()),
             room,
             key: Some(random_token(24)),
             icon: None,
@@ -13563,7 +13462,7 @@ async fn workspace_join_via_invite(state: State<'_, AppState>, code: String) -> 
 
 /// The Ligus account id (as a string) a relay membership subject names:
 /// `ligus:<account id>` for a desktop-minted token. Anything else (a
-/// ligus-auth `<tenant>:<user>` subject) names no account this device can
+/// langstroth-auth `<tenant>:<user>` subject) names no account this device can
 /// map, and `None` leaves the roster alone. Lets us exclude a relay-removed
 /// member from the E2EE rotation recipient set.
 fn hive_account_id_for(account: &str) -> Option<String> {
@@ -14188,7 +14087,7 @@ fn import_config(state: State<AppState>, toml_text: String) -> Result<String, St
 // who holds the Ed25519 issuer key (Settings → Team sync) can mint an agent
 // identity token locally, enroll it in the workspace roster, and produce the
 // single copy-paste line a developer runs on the remote box. Mirrors the
-// `hive-relay bootstrap-agent` CLI; the issuer PRIVATE key never leaves here.
+// `langstroth-relay bootstrap-agent` CLI; the issuer PRIVATE key never leaves here.
 // ---------------------------------------------------------------------------
 
 /// Mint an `hrt1` token signed by the issuer seed, byte-compatible with the Go
@@ -14257,7 +14156,7 @@ fn has_issuer_key(state: State<AppState>) -> bool {
 fn set_relay_issuer_key(state: State<AppState>, key: String) -> Result<(), String> {
     let k = key.trim();
     if !k.is_empty() && hex_decode_32(k).is_none() {
-        return Err("Issuer key must be a 64-character hex Ed25519 seed (from `hive-relay keygen`).".to_string());
+        return Err("Issuer key must be a 64-character hex Ed25519 seed (from `langstroth-relay keygen`).".to_string());
     }
     let mut s = state.settings.lock().unwrap();
     s.relay_issuer_key = if k.is_empty() { None } else { Some(k.to_string()) };
@@ -14307,7 +14206,7 @@ async fn generate_agent_bootstrap(
 
     let mut block = String::new();
     block.push_str("# Run on the remote agent box:\n");
-    block.push_str("brew install ligus-ai/ligus/ligus && \\\n");
+    block.push_str("brew install langstroth-ai/ligus/ligus && \\\n");
     block.push_str(&format!("  ligus enroll \"{invite}\" --token \"{token}\" && \\\n"));
     block.push_str(&format!("  ligus worker --label {label}\n"));
     if !enrolled {
@@ -14675,7 +14574,7 @@ pub fn run() {
             #[cfg(feature = "p2p")]
             let p2p = (ensure_p2p_secret(&state), state.data_dir.clone(), state.db_path.clone());
             app.manage(state);
-            // ligus-auth: keep a signed-in session's relay token fresh.
+            // langstroth-auth: keep a signed-in session's relay token fresh.
             ligus_auth_ui::start(&app.state::<AppState>());
             // B3: governance asks for a passkey through the system browser.
             passkey_ui::install(&app.state::<AppState>(), app.handle());
@@ -14826,10 +14725,6 @@ pub fn run() {
             guards::growth_suggestions,
             guards::get_hygiene_report,
             get_app_info,
-            list_relay_users,
-            create_relay_user,
-            issue_relay_token,
-            revoke_relay_token,
             ligus_auth_ui::ligus_auth_status,
             ligus_auth_ui::ligus_auth_start,
             ligus_auth_ui::ligus_auth_poll,
@@ -14843,7 +14738,6 @@ pub fn run() {
             passkey_ui::workspace_rules_set,
             passkey_ui::presence_cancel,
             passkey_ui::presence_use_recovery,
-            set_relay_user_disabled,
             workflows::list_workflows,
             flow::flow_get_settings,
             flow::flow_set_settings,
@@ -15743,51 +15637,53 @@ mod model_profile_dto_tests {
 mod update_version_tests {
     use super::parse_release_version;
 
-    /// The updater checks the ligus-ai repo's `latest.json` (1.19 clients
-    /// found this release through the same URL), with the signing key unchanged.
+    /// The updater checks the langstroth-ai/ligus repo's `latest.json` and
+    /// verifies against the Ligus updater key (new for 0.1.0; never the
+    /// placeholder, which release CI also refuses).
     #[test]
     fn updater_checks_the_ligus_latest_json() {
         let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-        // The identifier names the data dir the first-launch migration copies into.
+        // The identifier names the desktop data dir.
         assert_eq!(conf["identifier"], hive_core::compat::DESKTOP_APP_ID);
         let updater = &conf["plugins"]["updater"];
         let endpoints: Vec<&str> = updater["endpoints"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
         assert_eq!(
             endpoints,
-            ["https://github.com/ligus-ai/ligus/releases/latest/download/latest.json"]
+            ["https://github.com/langstroth-ai/ligus/releases/latest/download/latest.json"]
         );
-        // Same minisign key across the rename: never rotate it.
-        assert!(updater["pubkey"].as_str().unwrap().starts_with("dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhFQjA3RDUyRjVBRUM3QjQK"));
+        let key = updater["pubkey"].as_str().unwrap();
+        assert!(!key.contains("REPLACE_WITH"), "the updater pubkey is still the placeholder");
+        assert!(key.starts_with("dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDMxNUQ2QTdCMjAyQThENzkK"));
         assert_eq!(super::VERSION_MANIFEST_URLS, ["https://docs.langstroth.ai/version.json", "https://docs.ligus.ai/version.json"]);
     }
 
     /// The banner opens the manifest's `url` in the browser. HTTPS now trusts
     /// the OS store (reqwest 0.13), so a store-installed root (or a
     /// compromised docs host) must not be able to send people to an arbitrary
-    /// download: only the ligus-ai/ligus releases page is kept, else the UI's
+    /// download: only the langstroth-ai/ligus releases page is kept, else the UI's
     /// default.
     #[test]
     fn update_banner_url_is_the_ligus_releases_page_only() {
         use super::release_page_url as r;
         for ok in [
-            "https://github.com/ligus-ai/ligus/releases/latest",
-            "https://github.com/ligus-ai/ligus/releases/tag/v2.0.0",
-            "https://github.com/ligus-ai/ligus/releases",
+            "https://github.com/langstroth-ai/ligus/releases/latest",
+            "https://github.com/langstroth-ai/ligus/releases/tag/v0.1.0",
+            "https://github.com/langstroth-ai/ligus/releases",
         ] {
             assert_eq!(r(ok), ok);
         }
         for bad in [
             "",
             "https://evil.example/ligus.dmg",
-            "http://github.com/ligus-ai/ligus/releases/latest",
-            "https://github.com/ligus-ai/ligus/releasesX",
-            "https://github.com/ligus-ai/ligus/releases/../../../evil/repo/releases",
-            "https://github.com/ligus-ai/ligus/releases/%2e%2e/%2e%2e/evil",
-            "https://github.com.evil.example/ligus-ai/ligus/releases",
-            "https://github.com@evil.example/ligus-ai/ligus/releases",
-            "https://github.com/ligus-ai/ligus/releases\\@evil.example",
-            "https://github.com/ligus-ai/ligus/releases latest",
-            "javascript:alert(1)//https://github.com/ligus-ai/ligus/releases",
+            "http://github.com/langstroth-ai/ligus/releases/latest",
+            "https://github.com/langstroth-ai/ligus/releasesX",
+            "https://github.com/langstroth-ai/ligus/releases/../../../evil/repo/releases",
+            "https://github.com/langstroth-ai/ligus/releases/%2e%2e/%2e%2e/evil",
+            "https://github.com.evil.example/langstroth-ai/ligus/releases",
+            "https://github.com@evil.example/langstroth-ai/ligus/releases",
+            "https://github.com/langstroth-ai/ligus/releases\\@evil.example",
+            "https://github.com/langstroth-ai/ligus/releases latest",
+            "javascript:alert(1)//https://github.com/langstroth-ai/ligus/releases",
         ] {
             assert_eq!(r(bad), "", "{bad}");
         }
@@ -15829,11 +15725,11 @@ mod update_version_tests {
     async fn manifest_is_size_capped_and_timed_out() {
         let client = hive_forge::new_http_client();
         let huge: &'static str = Box::leak(format!(r#"{{"tag":"v9.0.0","notes":"{}"}}"#, "x".repeat(super::MAX_MANIFEST_BYTES)).into_boxed_str());
-        let ok = r#"{"tag":"v2.0.0"}"#;
+        let ok = r#"{"tag":"v0.1.0"}"#;
         let base = serve(vec![("/huge.json", 200, huge), ("/ok.json", 200, ok)]);
         let (huge_url, ok_url) = (format!("{base}/huge.json"), format!("{base}/ok.json"));
         assert!(super::fetch_update_manifest(&client, &[&huge_url], super::MANIFEST_TIMEOUT).await.is_none());
-        assert_eq!(super::fetch_update_manifest(&client, &[&huge_url, &ok_url], super::MANIFEST_TIMEOUT).await.unwrap().tag, "v2.0.0");
+        assert_eq!(super::fetch_update_manifest(&client, &[&huge_url, &ok_url], super::MANIFEST_TIMEOUT).await.unwrap().tag, "v0.1.0");
 
         // Headers, then silence.
         let stall = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -15850,7 +15746,7 @@ mod update_version_tests {
         });
         let started = std::time::Instant::now();
         let got = super::fetch_update_manifest(&client, &[&stall_url, &ok_url], std::time::Duration::from_millis(300)).await;
-        assert_eq!(got.unwrap().tag, "v2.0.0");
+        assert_eq!(got.unwrap().tag, "v0.1.0");
         let took = started.elapsed();
         assert!(took >= std::time::Duration::from_millis(300) && took < std::time::Duration::from_secs(5), "{took:?}");
     }
@@ -15860,7 +15756,7 @@ mod update_version_tests {
         let client = hive_forge::new_http_client();
         let base = serve(vec![
             ("/old.json", 200, r#"{"tag":"v1.19.0","url":"old"}"#),
-            ("/new.json", 200, r#"{"tag":"v2.0.0","url":"new"}"#),
+            ("/new.json", 200, r#"{"tag":"v0.1.0","url":"new"}"#),
             ("/garbage.json", 200, "not json"),
         ]);
         let u = |p: &str| format!("{base}{p}");
@@ -15872,7 +15768,7 @@ mod update_version_tests {
         assert_eq!(got.tag, "v1.19.0");
         // Both up: the new one wins.
         let got = super::fetch_update_manifest(&client, &[&new, &old], super::MANIFEST_TIMEOUT).await.unwrap();
-        assert_eq!(got.tag, "v2.0.0");
+        assert_eq!(got.tag, "v0.1.0");
         // Nothing answers: quiet None. (Port 9 on localhost is closed.)
         assert!(super::fetch_update_manifest(&client, &[&missing, "http://127.0.0.1:9/x.json"], super::MANIFEST_TIMEOUT).await.is_none());
     }
@@ -15883,7 +15779,7 @@ mod update_version_tests {
     #[tokio::test]
     async fn manifest_fetch_follows_a_cross_host_redirect() {
         let client = hive_forge::http_client_builder().timeout(super::MANIFEST_TIMEOUT).build().unwrap();
-        let target = serve(vec![("/version.json", 200, r#"{"tag":"v2.0.0"}"#)]);
+        let target = serve(vec![("/version.json", 200, r#"{"tag":"v0.1.0"}"#)]);
         let port = target.rsplit(':').next().unwrap().to_string();
         let location = format!("http://localhost:{port}/version.json");
         let redirector = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -15897,7 +15793,7 @@ mod update_version_tests {
             }
         });
         let got = super::fetch_update_manifest(&client, &[&from], super::MANIFEST_TIMEOUT).await;
-        assert_eq!(got.unwrap().tag, "v2.0.0");
+        assert_eq!(got.unwrap().tag, "v0.1.0");
     }
 
     #[test]
@@ -17677,7 +17573,7 @@ mod settings_secret_tests {
 
 #[cfg(test)]
 mod fresh_start_tests {
-    //! Ligus 2.0 starts fresh: the desktop init path never reads or changes a
+    //! Ligus 0.1 starts fresh: the desktop init path never reads or changes a
     //! Hive 1.x app-data dir next to its own, and starts with empty data.
     use super::*;
 
@@ -17762,7 +17658,7 @@ mod fresh_start_tests {
         {
             let link = tmp.path().join("linked");
             std::os::unix::fs::symlink(&legacy, &link).unwrap();
-            assert!(prepare_data_dir(&link).is_err(), "a 2.0 dir that is a symlink to the 1.x dir");
+            assert!(prepare_data_dir(&link).is_err(), "a Ligus dir that is a symlink to the 1.x dir");
             std::fs::remove_file(&link).unwrap();
         }
         // A pending reset in a 1.x dir must never wipe it.
@@ -17778,7 +17674,7 @@ mod first_run_tests {
     use super::*;
 
     /// Onboarding completion and the tour-seen flag live in this data dir's
-    /// settings.json, so a fresh data dir is always a first run (2.0 never
+    /// settings.json, so a fresh data dir is always a first run (0.1 never
     /// reads the webview's old `hive.onboarded`/`hive.tourSeen`).
     #[test]
     fn first_run_flags_default_off_and_skip_when_false() {

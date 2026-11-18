@@ -17,7 +17,12 @@ the **Add workspace** modal with two tabs:
 **Create** — name the workspace and Ligus spins up a private,
 end-to-end-encrypted team room (it generates the room id and the
 E2EE key). You become the owner and immediately get an **invite
-code** to share. Anyone who pastes it joins and syncs with you.
+code** to share. Anyone who pastes it joins and syncs with you. If no
+relay is set yet, **Create** asks where the workspace syncs: the
+[community relay](../../operate/networking/community-relay.md)
+(preselected, best-effort), your own relay's URL, or no relay (this device
+only, and nobody can join until you add one). With a relay already set, the
+workspace uses it.
 
 **Join** — paste an invite code someone shared with you and click
 **Join workspace**. The code carries the relay, room, and key, so

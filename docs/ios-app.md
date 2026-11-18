@@ -287,7 +287,7 @@ checkouts are named, and an absolute binding shows only its last component.
 
 - `Checkout = {name, displayName, defaultBranch?, branch?, head?, dirty, remote: {host, owner, name, fullName}|null, fork?: Fork, isWorkspaceDefault, boundChats}`.
   `displayName` is `owner/name` for a hosted remote, else the name. `dirty`
-  ignores the app's own `.ligus/` (and any pre-2.0 `.hive/`) state. In a fork, `defaultBranch` is
+  ignores the app's own `.ligus/` (and any Hive 1.x `.hive/`) state. In a fork, `defaultBranch` is
   upstream's default branch.
 - `Fork = {upstream: "kubeflow/pipelines", upstreamRemote: "upstream", baseBranch, upstreamPushDisabled, prTarget: "upstream", behind?, ahead?}`,
   present when the checkout has an `upstream` remote pointing at another
@@ -318,9 +318,9 @@ Approved proposals reach `hive/chat/<id>` only when the box applies them
 (`LIGUS_SERVE_APPLY_ON_APPROVE=1`). Otherwise the chat branch has nothing to
 open a pull request for.
 
-#### Code hosts (2.0, additive)
+#### Code hosts (0.1, additive)
 
-The rows above are unchanged for the shipped app; 2.0 adds:
+The rows above are unchanged for the shipped app; 0.1 adds:
 
 - `GET /v1/repos` also returns `forges: [Forge]` (every connection on the
   box). With `&forge=<id>` it returns that connection's listing as `forge`
@@ -340,7 +340,7 @@ The rows above are unchanged for the shipped app; 2.0 adds:
   tunnel (or on a loopback bind) and need presence; on a direct LAN bind
   they answer 403, and `GET /v1/forges` says `tokenEntry: false`.
 
-#### Identity: safety codes, invites, contacts and DMs (2.0, additive)
+#### Identity: safety codes, invites, contacts and DMs (0.1, additive)
 
 The phone is a remote control of the box, and the box is one Ligus device:
 everything below is the box's own account (or, on a box enrolled as its

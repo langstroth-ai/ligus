@@ -805,8 +805,8 @@ export function ChatView({
     setSlash(null);
     clearTyping();
     if (taRef.current) taRef.current.style.height = "auto";
-    // Share each attachment: uploads to the relay's blob channel so other members
-    // receive the file (falls back to a local path marker when no relay is set).
+    // Turn each attachment into a marker. Relay upload is off in this release,
+    // so this is a device-local path marker (the backend owns the guard).
     // Agents read the resolved path; the API runtime inlines image markers.
     let markers = "";
     if (sentAttachments.length > 0) {

@@ -1,6 +1,6 @@
 //! Every `SessionEvent` kind has a golden `hive-envelope-v3` vector (Phase A,
-//! item 7: the 2.0 wire freeze). `golden/envelopes_v3.jsonl` holds the
-//! vectors; this file checks that every kind a 2.0 build knows has one, and
+//! item 7: the 0.1 wire freeze). `golden/envelopes_v3.jsonl` holds the
+//! vectors; this file checks that every kind a 0.1 build knows has one, and
 //! holds the generator for the Phase A additions (run `phase_a_goldens`
 //! with `LIGUS_GOLDEN_OUT=<path> --ignored`, then append its lines).
 

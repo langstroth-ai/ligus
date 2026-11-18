@@ -1,5 +1,7 @@
 # Model gateways (LLM gateways) in Ligus 2.0
 
+> Version note: "2.0" in this document means the Ligus 0.1.0 release (the version was reset before release).
+
 Status: approved by the owner 2026-11-17; built on `feat/model-gateways`
 for 2.0.0. When this document and the code disagree, the code wins.
 

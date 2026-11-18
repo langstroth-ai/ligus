@@ -1,7 +1,7 @@
-//! Frozen UUIDv5 namespaces from 1.x that 2.0 no longer uses.
+//! Frozen UUIDv5 namespaces from 1.x that 0.1 no longer uses.
 //!
 //! 1.x derived two ids from public identifiers: the account id from a GitHub
-//! numeric user id, and a DM room from the two participants' GitHub ids. 2.0
+//! numeric user id, and a DM room from the two participants' GitHub ids. 0.1
 //! derives neither: an account id is the random UUIDv4 the identity store
 //! makes on first launch, and a DM room and its invite id are random (see
 //! [`crate::dm`]). The namespaces stay here, unused, only so nobody mistakes

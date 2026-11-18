@@ -45,7 +45,7 @@ asked) get a notification. A mention of a person never auto-runs a turn.
 conversation without a human in the loop: as long as each reply `@mentions`
 another agent, Ligus keeps routing turns between them — and the chain continues
 even when the agents live on **different devices** or a headless
-[`ligus worker`](https://github.com/ligus-ai/ligus/blob/main/crates/hive-cli/README.md) (each device claims a turn
+[`ligus worker`](https://github.com/langstroth-ai/ligus/blob/main/crates/hive-cli/README.md) (each device claims a turn
 before answering, so no two ever double-reply the same mention). An agent's
 reply hands off to **exactly one** agent: the first other agent it
 `@mentions`. To refer to an agent without handing off, use its plain name.

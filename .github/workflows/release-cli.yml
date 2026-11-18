@@ -79,12 +79,12 @@ jobs:
           fail_on_unmatched_files: true
 
   # Publish/update the Homebrew CLI formula on the tap once the per-arch binaries
-  # are uploaded, so `brew install ligus-ai/ligus/ligus` tracks releases. The
+  # are uploaded, so `brew install langstroth-ai/ligus/ligus` tracks releases. The
   # formula is `ligus` (the desktop cask is `ligus-app`, so the names don't
   # collide). Never write the old
   # Formula/hive-cli.rb: the tap's formula_renames.json maps it to ligus. Needs
   # HOMEBREW_TAP_TOKEN (fine-grained PAT, Contents:write on
-  # ligus-ai/homebrew-ligus); skips cleanly when absent.
+  # langstroth-ai/homebrew-ligus); skips cleanly when absent.
   formula:
     needs: build
     if: ${{ !cancelled() && needs.build.result == 'success' }}
@@ -111,12 +111,12 @@ jobs:
             done
             sha[$t]=$(sha256sum "ligus-${t}" | awk '{print $1}')
           done
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/ligus-ai/homebrew-ligus.git" tap
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/langstroth-ai/homebrew-ligus.git" tap
           mkdir -p tap/Formula
           cat > tap/Formula/ligus.rb <<RUBY
           class Ligus < Formula
             desc "Headless Ligus client + agent daemon (formerly hive-cli)"
-            homepage "https://github.com/ligus-ai/ligus"
+            homepage "https://github.com/langstroth-ai/ligus"
             license "MIT"
 
             on_macos do

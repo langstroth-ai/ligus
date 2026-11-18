@@ -99,7 +99,7 @@ fn default_desktop_dir() -> Option<PathBuf> {
     app_data_base().map(|b| pick_desktop_dir(&b))
 }
 
-/// The desktop data dir under `base`. Only the 2.0 bundle id: Ligus 2.0 starts
+/// The desktop data dir under `base`. Only the 0.1 bundle id: Ligus 0.1 starts
 /// fresh and never reads a Hive 1.x `com.hive.desktop` dir.
 pub fn pick_desktop_dir(base: &Path) -> PathBuf {
     base.join(hive_core::compat::DESKTOP_APP_ID)

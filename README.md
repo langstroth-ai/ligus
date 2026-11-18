@@ -7,14 +7,15 @@
 **A collaborative, multi-agent workspace for developers.**
 
 Ligus (LEE-gus) is short for *ligustica*, as in *Apis mellifera ligustica*,
-the Italian honeybee. It was called Hive until v2.0.
+the Italian honeybee. Ligus 0.1.0 is a new application; its predecessor was
+called Hive (1.x).
 
 Chat with one or many coding agents, review their proposed changes, and sync the
 whole workspace across your devices and teammates — peer-to-peer or through a
 relay, end-to-end encrypted. Your code and keys stay on your machine.
 
-[![CI](https://github.com/ligus-ai/ligus/actions/workflows/ci.yml/badge.svg)](https://github.com/ligus-ai/ligus/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/ligus-ai/ligus?include_prereleases&sort=semver&label=release)](https://github.com/ligus-ai/ligus/releases/latest)
+[![CI](https://github.com/langstroth-ai/ligus/actions/workflows/ci.yml/badge.svg)](https://github.com/langstroth-ai/ligus/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/langstroth-ai/ligus?include_prereleases&sort=semver&label=release)](https://github.com/langstroth-ai/ligus/releases/latest)
 [![Docs](https://img.shields.io/badge/docs-docs.langstroth.ai-4c8bf5)](https://docs.langstroth.ai/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
@@ -23,8 +24,8 @@ relay, end-to-end encrypted. Your code and keys stay on your machine.
 
 </div>
 
-> **Hive is now Ligus**, short for *ligustica*. Same project, same protocol,
-> new name. The command is `ligus` and settings are `LIGUS_*`. Ligus 2.0
+> **Ligus 0.1.0 is a new application** that succeeds Hive (*Ligus* is short
+> for *ligustica*). The command is `ligus` and settings are `LIGUS_*`. Ligus
 > starts fresh: Hive 1.x data is not migrated and stays where it is,
 > untouched, so 1.x keeps running until you remove it. See
 > [Upgrading from Hive 1.x](https://docs.langstroth.ai/operate/deploy/upgrade-from-hive/).
@@ -205,7 +206,7 @@ everything after their cursor; it never sees plaintext and never holds a key.
 | `docs-site/` | The published docs site (MkDocs), docs.langstroth.ai: Using Ligus (`docs/ligus/`) and Operating Langstroth (`docs/operate/`). |
 
 The **production relay is a separate repo**,
-**[github.com/ligus-ai/relay](https://github.com/ligus-ai/relay)** (Go) —
+**[github.com/langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay)** (Go) —
 content-blind, hardened, and self-hostable. See
 [`docs/architecture.md`](docs/architecture.md) for the deeper design.
 
@@ -249,7 +250,7 @@ The full model is documented in
 ### Install
 
 **Desktop app** — grab the installer for your platform from the
-[**latest release**](https://github.com/ligus-ai/ligus/releases/latest):
+[**latest release**](https://github.com/langstroth-ai/ligus/releases/latest):
 
 | Platform | Download |
 | --- | --- |
@@ -264,7 +265,7 @@ agent/runtime, team relay (optional), and appearance — no config files require
 server side (macOS + Linux, Apple Silicon and x86_64):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ligus-ai/ligus/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/langstroth-ai/ligus/main/install.sh | sh
 ```
 
 It fetches the prebuilt `ligus` binary for your platform from the latest release.
@@ -366,13 +367,13 @@ idempotent, `--json`). See also
 
 Collaboration never requires *our* servers. The relay is a single small,
 content-blind binary in its own repo,
-**[github.com/ligus-ai/relay](https://github.com/ligus-ai/relay)** (Go,
+**[github.com/langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay)** (Go,
 MIT) — which carries the Docker image and deploy manifests. The shortest smoke
 test:
 
 ```bash
-docker build -t ligus-relay https://github.com/ligus-ai/relay.git && \
-  docker run -p 8443:8443 ligus-relay
+docker build -t langstroth-relay https://github.com/langstroth-ai/langstroth-relay.git && \
+  docker run -p 8443:8443 langstroth-relay
 curl http://localhost:8443/v1/health      # → ok
 ```
 
@@ -402,7 +403,7 @@ cargo tauri dev                          # run the app (frontend + backend)
 ```
 
 > To exercise sync locally, run a relay from the standalone Go service —
-> [github.com/ligus-ai/relay](https://github.com/ligus-ai/relay) (see
+> [github.com/langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay) (see
 > [Self-hosting the relay](#self-hosting-the-relay) for the one-liner).
 
 Packaged installers are produced by [`scripts/build.sh`](scripts/build.sh) (e.g.
@@ -415,7 +416,7 @@ fit together.
 - **The app is config-free to start** — onboarding sets identity, project folder,
   runtime, and relay; there are no required config files.
 - **Repo settings** live in [`ligus.config.toml`](ligus.config.toml) at the root
-  (workspace state lives in `.ligus/`). Ligus 2.0 starts fresh: a Hive 1.x
+  (workspace state lives in `.ligus/`). Ligus starts fresh: a Hive 1.x
   `hive.config.toml`, `.hive/`, `~/.hive` or desktop data dir is never read,
   moved or changed; see
   [Upgrading from Hive 1.x](https://docs.langstroth.ai/operate/deploy/upgrade-from-hive/) for how to
@@ -431,8 +432,8 @@ fit together.
 ## Running the infrastructure
 
 The desktop app (this repo) and the relay (the standalone
-[Go service](https://github.com/ligus-ai/relay)) are both open source. You run
-the relay, ligus-auth and any always-on hosts yourself: see the
+[Go service](https://github.com/langstroth-ai/langstroth-relay)) are both open source. You run
+the relay, langstroth-auth and any always-on hosts yourself: see the
 [operator docs](https://docs.langstroth.ai/operate/). Relay-side membership, access
 tokens and sign-in with your own identity provider are all part of the open
 relay; see [Self-hosting a relay](https://docs.langstroth.ai/operate/networking/self-host/).
@@ -444,7 +445,8 @@ our [Code of Conduct](CODE_OF_CONDUCT.md). Questions and ideas go to
 [GitHub issues](https://github.com/langstroth-ai/ligus/issues) and
 [discussions](https://github.com/langstroth-ai/ligus/discussions) on
 langstroth-ai/ligus, and relay matters to
-[langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay/issues). Developer and architecture docs live
+[langstroth-ai/langstroth-relay](https://github.com/langstroth-ai/langstroth-relay/issues)
+(issues) or its [discussions](https://github.com/langstroth-ai/langstroth-relay/discussions). Developer and architecture docs live
 in [`docs/`](docs/README.md). To report a vulnerability, follow
 [`SECURITY.md`](SECURITY.md) (please don't open a public issue for security bugs).
 

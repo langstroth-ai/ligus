@@ -55,9 +55,9 @@ use crate::events::{SessionEvent, SessionEventEnvelope};
 use crate::identity::{ActorKind, CfgFrontier, WorkspaceRole};
 use crate::session::ChatSession;
 
-/// The workspace rules version. 2.0 starts every workspace at version 2
+/// The workspace rules version. 0.1 starts every workspace at version 2
 /// (human presence for governance, the Agent tier for host-signed agent
-/// output); there is no version 1 (Phase A: 2.0 starts fresh, so the rules
+/// output); there is no version 1 (Phase A: 0.1 starts fresh, so the rules
 /// without presence were deleted rather than kept behind a switch).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RulesVersion(pub u32);

@@ -24,9 +24,9 @@
 //! this device ([`ForgeConfig`]), with no redirects, short timeouts and a
 //! size cap. No host a link names is ever contacted.
 //!
-//! 2.0 checks GitHub, GitLab, Forgejo and Gitea. The SourceHut and Tangled
+//! 0.1 checks GitHub, GitLab, Forgejo and Gitea. The SourceHut and Tangled
 //! verifiers were dropped ([`DROPPED_PROVIDERS`]): a link of either kind made
-//! by a 2.0 pre-release still folds, and shows as self-asserted.
+//! by a 0.1 pre-release still folds, and shows as self-asserted.
 //!
 //! A verified link proves "this forge says so", nothing more: it never grants
 //! membership, a role or trust for sealing keys.

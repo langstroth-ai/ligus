@@ -1,5 +1,5 @@
 //! Workspace repositories (the repos-and-checkouts design; the wire is frozen
-//! in 2.0, the UI and dispatch use come later).
+//! in 0.1, the UI and dispatch use come later).
 //!
 //! * A **workspace repo** is the workspace's signed statement "we work on this
 //!   code" (config log: `WorkspaceRepoAdded`, `WorkspaceRepoUpdated`,
@@ -322,7 +322,7 @@ mod tests {
         assert!(repo_well_formed(&WorkspaceRepo { root_commit: Some("abc".into()), ..r }).is_err());
     }
 
-    /// The beat's wire bytes: a coverage-less beat is exactly the 1.x/2.0
+    /// The beat's wire bytes: a coverage-less beat is exactly the Hive 1.x/Ligus 0.1
     /// beat; coverage adds `seq` and `coverage` (frozen).
     #[test]
     fn host_beat_wire_is_frozen() {

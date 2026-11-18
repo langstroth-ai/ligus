@@ -1,6 +1,6 @@
 //! TestIdPCannotGrantMembership (PHASE0-SPECS E.5), client side.
 //!
-//! A ligus-auth token with `workspaces:[W]` gives a person relay transport to
+//! A langstroth-auth token with `workspaces:[W]` gives a person relay transport to
 //! W, and nothing else: no workspace key and no signed `MemberAdded`. Here an
 //! outsider with exactly that (the test relay is open, standing in for a
 //! relay that admits the token) writes everything they can into W: a chat

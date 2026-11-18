@@ -24,8 +24,6 @@ import type { ContextTelemetryDto } from "@/bindings/ContextTelemetryDto";
 import type { WorkflowDefinitionDto } from "@/bindings/WorkflowDefinitionDto";
 import type { WorkflowRunDto } from "@/bindings/WorkflowRunDto";
 import type { WorkflowRunEvent } from "@/bindings/WorkflowRunEvent";
-import type { RelayUserDto } from "@/bindings/RelayUserDto";
-import type { IssuedRelayTokenDto } from "@/bindings/IssuedRelayTokenDto";
 import type { QueuedWorkDto } from "@/bindings/QueuedWorkDto";
 import type { WorkspaceHostDto } from "@/bindings/WorkspaceHostDto";
 import type { MentionStateDto } from "@/bindings/MentionStateDto";
@@ -380,10 +378,9 @@ export const exportChat = (sessionId: string) =>
 export const saveAttachment = (name: string, dataBase64: string) =>
   invoke<string>("save_attachment", { name, dataBase64 });
 
-/// Share an attachment so other workspace members can receive it: uploads the
-/// sealed file to the relay's blob channel and returns the `[Attached-blob: …]`
-/// marker to embed. Falls back to a local `[Attached: <path>]` marker when no
-/// relay is configured (only this device can open it).
+/// Turn a composer attachment into the marker to embed. Relay upload is off in
+/// this release (a code-only guard in the backend, no setting), so this returns
+/// a device-local `[Attached: <path>]` marker (only this device can open it).
 export const shareAttachment = (sessionId: string, path: string) =>
   invoke<string>("share_attachment", { sessionId, path });
 
@@ -529,7 +526,7 @@ export interface ProfileDto {
 }
 export const myProfile = () => invoke<ProfileDto>("my_profile");
 
-/// Organization sign-in through ligus-auth (device code). The session's
+/// Organization sign-in through langstroth-auth (device code). The session's
 /// short-lived relay token replaces the static relay access token while it is
 /// valid. It grants relay access only, never workspace membership.
 export interface LigusAuthStatusDto {
@@ -1203,8 +1200,10 @@ export const setWorkspaceIcon = (workspaceId: string, icon: string | null) =>
   invoke<void>("set_workspace_icon", { workspaceId, icon });
 
 /// Create a new team workspace (generates a room + E2EE key), switch to it.
-export const createWorkspace = (name: string) =>
-  invoke<WorkspaceInfoDto>("create_workspace", { name });
+/// `relayUrl`: the relay the creator picked ("" = none); omitted keeps the
+/// currently configured relay.
+export const createWorkspace = (name: string, relayUrl?: string) =>
+  invoke<WorkspaceInfoDto>("create_workspace", { name, relayUrl: relayUrl ?? null });
 
 /// Join a team workspace from an invite code (`hivews1:…`).
 export const joinWorkspace = (invite: string) =>
@@ -1417,10 +1416,6 @@ export interface UpdateProgress {
 export const onUpdateProgress = (cb: (p: UpdateProgress) => void): Promise<UnlistenFn> =>
   listen<UpdateProgress>("update://progress", (e) => cb(e.payload));
 
-/// GitHub Teams import (#143): a GitHub org's Teams as workspace members + roles.
-/// Returns the count added. Needs a signed-in GitHub token with read:org.
-
-
 /// Linear context source (#145 L3): pull issues from the connected Linear MCP
 /// server as a block to insert into the composer.
 export const linearIssuesContext = () => invoke<string>("linear_issues_context");
@@ -1596,30 +1591,6 @@ export const onWorkflowRun = (
   cb: (e: WorkflowRunEvent) => void,
 ): Promise<UnlistenFn> =>
   listen<WorkflowRunEvent>("workflow://run", (evt) => cb(evt.payload));
-
-// --- Relay access user management (Settings → Team; relay admin API) ---------
-
-export type { RelayUserDto } from "@/bindings/RelayUserDto";
-export type { RelayTokenDto } from "@/bindings/RelayTokenDto";
-export type { IssuedRelayTokenDto } from "@/bindings/IssuedRelayTokenDto";
-
-/// List relay access users + their live tokens. Rejects if the relay has no
-/// admin API or the signed-in user isn't a relay admin.
-export const listRelayUsers = () => invoke<RelayUserDto[]>("list_relay_users");
-
-/// Create a user + issue their first token. The returned `raw` is shown once.
-export const createRelayUser = (name: string, login: string) =>
-  invoke<IssuedRelayTokenDto>("create_relay_user", { name, login });
-
-/// Issue an additional token for an existing user (raw shown once).
-export const issueRelayToken = (userId: string, label: string) =>
-  invoke<IssuedRelayTokenDto>("issue_relay_token", { userId, label });
-
-export const revokeRelayToken = (tokenId: string) =>
-  invoke<void>("revoke_relay_token", { tokenId });
-
-export const setRelayUserDisabled = (userId: string, disabled: boolean) =>
-  invoke<void>("set_relay_user_disabled", { userId, disabled });
 
 // ── Code editor + embedded terminal (feat/editor-view) ───────────────────────
 // DTOs are declared inline here (not imported from @/bindings) to avoid a race

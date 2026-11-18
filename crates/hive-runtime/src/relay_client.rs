@@ -150,49 +150,6 @@ pub struct IssuedInvite {
     pub max_uses: i64,
 }
 
-/// One issued access token's metadata, as returned by the relay admin API
-/// (never the raw value or hash).
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RelayTokenEntry {
-    pub id: String,
-    pub user_id: String,
-    #[serde(default)]
-    pub label: String,
-    #[serde(default)]
-    pub created_at: u64,
-    #[serde(default)]
-    pub last_used: u64,
-    #[serde(default)]
-    pub revoked_at: Option<u64>,
-}
-
-/// A relay access user plus their tokens, as returned by `GET /v1/admin/users`.
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RelayUserEntry {
-    pub id: String,
-    pub name: String,
-    #[serde(default)]
-    pub login: String,
-    #[serde(default)]
-    pub disabled: bool,
-    #[serde(default)]
-    pub created_at: u64,
-    #[serde(default)]
-    pub tokens: Vec<RelayTokenEntry>,
-}
-
-/// A freshly issued token — the `raw` value is shown ONCE and never retrievable
-/// again.
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct IssuedRelayToken {
-    pub user: RelayUserEntry,
-    pub token: RelayTokenEntry,
-    pub raw: String,
-}
-
 /// One envelope as returned by the relay, with its server sequence.
 #[derive(Debug, Clone)]
 pub struct FetchedEnvelope {
@@ -208,7 +165,7 @@ pub struct RelayClient {
     /// Relay access token. Attached as `Authorization: Bearer` to
     /// every request; `None` for open/self-hosted relays.
     auth: Option<String>,
-    /// A ligus-auth access token kept fresh in the background. When it holds
+    /// A langstroth-auth access token kept fresh in the background. When it holds
     /// a value it is sent instead of `auth` (see `with_auth_cell`).
     auth_cell: Option<crate::ligus_auth::TokenCell>,
 }
@@ -260,7 +217,7 @@ impl RelayClient {
         self
     }
 
-    /// Read the bearer from a ligus-auth token cell on every request, so a
+    /// Read the bearer from a langstroth-auth token cell on every request, so a
     /// long-lived client picks up refreshed tokens. An empty cell falls back
     /// to the static token from `with_auth`.
     pub fn with_auth_cell(mut self, cell: Option<crate::ligus_auth::TokenCell>) -> Self {
@@ -282,7 +239,7 @@ impl RelayClient {
     /// live only in the OS secret store of the device doing git work and are
     /// used only between that device and the forge.
     pub(crate) fn authed(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        // A ligus-auth token goes only to the relay its session is bound to
+        // A langstroth-auth token goes only to the relay its session is bound to
         // (E-5); any other relay gets the static token, if one is configured.
         let fresh = self.auth_cell.as_ref().and_then(|c| c.get_for(&self.base)).filter(|t| !t.is_empty());
         match fresh.as_ref().or(self.auth.as_ref()) {
@@ -726,67 +683,6 @@ impl RelayClient {
         Ok(Some(jr.role))
     }
 
-    // ── Relay access user/token administration (relay admin API) ───────────
-    // Gated server-side by the relay's admin authorizer, authenticated by the
-    // relay bearer. `Ok(None)` when the relay has no admin API (open/OSS) or
-    // the caller isn't an admin.
-
-    /// List relay access users + their tokens. `Ok(None)` if the admin API is
-    /// unavailable or the caller isn't authorized.
-    pub async fn admin_list_users(&self) -> Result<Option<Vec<RelayUserEntry>>, RelayError> {
-        let url = format!("{}/v1/admin/users", self.base);
-        let resp = self.authed(self.http.get(url)).send().await?;
-        if !resp.status().is_success() {
-            return Ok(None);
-        }
-        Ok(Some(resp.json().await?))
-    }
-
-    /// Create a user and issue their first token. The returned `raw` token is
-    /// shown once. Returns the HTTP status text on failure.
-    pub async fn admin_create_user(
-        &self,
-        name: &str,
-        login: &str,
-        label: &str,
-    ) -> Result<IssuedRelayToken, RelayError> {
-        let url = format!("{}/v1/admin/users", self.base);
-        let body = serde_json::json!({ "name": name, "login": login, "label": label });
-        let resp = self.authed(self.http.post(url)).json(&body).send().await?;
-        Ok(resp.error_for_status()?.json().await?)
-    }
-
-    /// Issue an additional token for an existing user (raw shown once).
-    pub async fn admin_issue_token(
-        &self,
-        user_id: &str,
-        label: &str,
-    ) -> Result<IssuedRelayToken, RelayError> {
-        let url = format!("{}/v1/admin/users/{}/tokens", self.base, user_id);
-        let body = serde_json::json!({ "label": label });
-        let resp = self.authed(self.http.post(url)).json(&body).send().await?;
-        Ok(resp.error_for_status()?.json().await?)
-    }
-
-    /// Revoke a single token immediately.
-    pub async fn admin_revoke_token(&self, token_id: &str) -> Result<(), RelayError> {
-        let url = format!("{}/v1/admin/tokens/{}", self.base, token_id);
-        self.authed(self.http.delete(url)).send().await?.error_for_status()?;
-        Ok(())
-    }
-
-    /// Enable or disable a user (disabling kills all their tokens at once).
-    pub async fn admin_set_user_disabled(
-        &self,
-        user_id: &str,
-        disabled: bool,
-    ) -> Result<(), RelayError> {
-        let url = format!("{}/v1/admin/users/{}/disabled", self.base, user_id);
-        let body = serde_json::json!({ "disabled": disabled });
-        self.authed(self.http.post(url)).json(&body).send().await?.error_for_status()?;
-        Ok(())
-    }
-
     /// Read everyone's presence blobs for a workspace (`device_id` → data).
     pub async fn list_presence(
         &self,
@@ -883,8 +779,6 @@ mod tests {
         let _ = c.list_invites(&ws).await;
         let _ = c.revoke_invite(&ws, "i").await;
         let _ = c.join_via_invite(&ws, "code", "").await;
-        let _ = c.admin_list_users().await;
-        let _ = c.admin_revoke_token("t").await;
         let _ = c.open_event_stream(&ws).await;
         let cid = crate::contacts::new_cid();
         let key = crate::contacts::new_write_key();
@@ -895,7 +789,7 @@ mod tests {
         let _ = c.contact_drops_ack(&cid, &key, 1).await;
         let _ = c.contact_delete(&cid, &key).await;
         let seen = seen.lock().unwrap();
-        assert!(seen.len() >= 29, "every call reached the recorder ({})", seen.len());
+        assert!(seen.len() >= 27, "every call reached the recorder ({})", seen.len());
         for (route, headers) in seen.iter() {
             for (name, value) in headers {
                 assert!(

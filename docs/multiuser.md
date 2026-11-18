@@ -12,8 +12,8 @@ separately; relay forwarding is all you need to test multiuser.)
 cargo run --release -p hive-relay          # binds 0.0.0.0:8443
 # or: LIGUS_RELAY_ADDR=0.0.0.0:9000 cargo run -p hive-relay
 # or containerized:
-docker build -t hive-relay https://github.com/ligus-ai/relay.git && \
-  docker run -p 8443:8443 hive-relay
+docker build -t langstroth-relay https://github.com/langstroth-ai/langstroth-relay.git && \
+  docker run -p 8443:8443 langstroth-relay
 ```
 
 For two machines on a LAN, the relay host's LAN IP works
