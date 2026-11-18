@@ -323,6 +323,14 @@ pub fn authorize(env: &SessionEventEnvelope, ctx: &Ctx<'_>) -> Decision {
             if let Err(why) = phone::phone_tier_allows(&env.payload, device) {
                 return Decision::deny(why);
             }
+            // A phone posts new messages only: its box picks the message id,
+            // and the phone can't tell a fresh id from one of its person's
+            // earlier messages, which the post would otherwise rewrite.
+            if let SessionEvent::MessageAppended { message } = &env.payload {
+                if fold.authz.message_authors.contains_key(&message.id) || fold.messages.iter().any(|m| m.id == message.id) {
+                    return Decision::deny("a phone posts new messages only");
+                }
+            }
         }
     }
     // A service member (Phase A, item 6) is capped at Contributor, never
