@@ -184,7 +184,15 @@ async fn tunnel_end_to_end_pair_get_sse_renew_revoke() {
     tun::cli::phones_revoke(&data_dir, Some(&pid), &h.handle.shared.opts.token_file, false).unwrap();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
     loop {
-        let f = tokio::time::timeout_at(deadline, c.recv()).await.expect("GOAWAY").unwrap();
+        // GOAWAY from the box, or the relay's 4003 close if its revocation
+        // (control or HTTP) lands first: both end the session as revoked.
+        let f = match tokio::time::timeout_at(deadline, c.recv()).await.expect("GOAWAY") {
+            Ok(f) => f,
+            Err(e) => {
+                assert_eq!(testkit::close_code(&e), Some(4003), "{e:#}");
+                break;
+            }
+        };
         if f.ty == frame::GOAWAY {
             assert_eq!(f.code(), Some(frame::goaway::REVOKED));
             break;
@@ -947,5 +955,57 @@ async fn a_revocation_racing_an_enrollment_still_refuses_it() {
     tokio::time::sleep(crate::serve::REVOCATION_WATCH * 4).await;
     let active: Vec<_> = t.registry.list().into_iter().filter(|r| r.is_active()).collect();
     assert!(active.is_empty(), "a pairing of a revoked device stayed active: {:?}", active.iter().map(|r| &r.pid).collect::<Vec<_>>());
+    h.handle.shutdown();
+}
+
+/// Residual 2: a revoked phone also held the direct-path bearer token
+/// (`serve.token`, from its pairing link). Revoking its device rotates the
+/// token once, ends direct streams opened with the old one, and the phones
+/// that remain learn the new token over their tunnel.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn revoking_a_phone_device_rotates_the_direct_token() {
+    let relay = FakeRelay::start().await;
+    let h = serve_with_relay(&relay.url).await;
+    relay.wait_connected(Duration::from_secs(10)).await.unwrap();
+    let (t, info, _, pid, _, phone) = pair_bound(&h, &relay).await;
+    let (_, _, keep_keys, keep_pid, keep_cred, _) = pair_bound(&h, &relay).await;
+    let old = h.token.clone();
+    // The revoked phone's direct stream, opened with the old token.
+    let mut stream = h.events(None).await;
+
+    revoke_on_desktop(&h, phone.device_id);
+    crate::sync_once(&h.desktop).await.unwrap();
+    h.handle.shared.sync_kick.notify_one();
+    wait_until("pairing cut", Duration::from_secs(10), || !t.registry.is_active(&pid)).await;
+    wait_until("token rotated", Duration::from_secs(5), || h.handle.shared.token() != old).await;
+    let on_disk = std::fs::read_to_string(&h.handle.shared.opts.token_file).unwrap();
+    assert_eq!(on_disk.trim(), h.handle.shared.token());
+
+    // The old token no longer opens anything on the direct path …
+    let r = h.client.get(format!("{}/v1/chats", h.base)).bearer_auth(&old).send().await.unwrap();
+    assert_eq!(r.status(), 401);
+    // … and the stream it opened has ended.
+    let ended = tokio::time::timeout(Duration::from_secs(3), async {
+        while stream.recv().await.is_some() {}
+    })
+    .await;
+    assert!(ended.is_ok(), "a direct stream opened with the revoked token stayed open");
+
+    // The phone that remains fetches the new token over its tunnel.
+    assert!(t.registry.is_active(&keep_pid));
+    let mut c = testkit::phone_session(&info, &keep_keys, &keep_cred).await.unwrap();
+    let r = c.request("GET", "/v1/tunnel/direct", None).await.unwrap();
+    assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(r.json()["token"], json!(h.handle.shared.token()));
+    // The direct path itself never hands the token out.
+    let r = h.client.get(format!("{}/v1/tunnel/direct", h.base)).bearer_auth(h.handle.shared.token()).send().await.unwrap();
+    assert_eq!(r.status(), 404);
+
+    // Once only: later store changes don't rotate it again.
+    let now = h.handle.shared.token();
+    let r = h.client.post(format!("{}/v1/chats", h.base)).bearer_auth(&now).json(&json!({ "title": "later" })).send().await.unwrap();
+    assert!(r.status().is_success());
+    tokio::time::sleep(crate::serve::REVOCATION_WATCH * 4).await;
+    assert_eq!(h.handle.shared.token(), now);
     h.handle.shutdown();
 }

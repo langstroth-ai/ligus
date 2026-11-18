@@ -305,6 +305,9 @@ pub struct Shared {
     pub opts: ServeOptions,
     pub ws: Uuid,
     token: RwLock<String>,
+    /// Bumped whenever the bearer token changes: direct-path streams opened
+    /// with the old token end.
+    pub token_gen: watch::Sender<u64>,
     pub host_id: String,
     /// The relay tunnel, when remote access is enabled.
     pub tunnel: Option<Arc<tunnel::TunnelHost>>,
@@ -525,6 +528,7 @@ impl Shared {
         let t = t.trim();
         if t.len() >= 32 && *self.token.read().unwrap_or_else(|e| e.into_inner()) != t {
             *self.token.write().unwrap_or_else(|e| e.into_inner()) = t.to_string();
+            self.token_gen.send_modify(|g| *g += 1);
             println!("ligus serve: the bearer token changed on disk; using the new one.");
         }
     }
@@ -619,14 +623,27 @@ impl Shared {
     /// whatever wrote the event ([`revocation_watch`]). Returns the pairings
     /// revoked.
     pub fn revoke_phones_of_revoked_devices(&self) -> Vec<String> {
-        let Some(tunnel) = self.tunnel.as_ref() else { return Vec::new() };
-        let revoked: std::collections::BTreeSet<Uuid> = {
+        let (revoked, revoked_phones): (std::collections::BTreeSet<Uuid>, std::collections::BTreeSet<Uuid>) = {
             let svc = self.lock();
             match svc.store().load_config(self.ws, None, None) {
-                Ok((_, t)) => t.current().devices.iter().filter(|(_, d)| d.revoked).map(|(id, _)| *id).collect(),
+                Ok((_, t)) => {
+                    let devices = &t.current().devices;
+                    (
+                        devices.iter().filter(|(_, d)| d.revoked).map(|(id, _)| *id).collect(),
+                        devices.iter().filter(|(_, d)| d.revoked && d.phone).map(|(id, _)| *id).collect(),
+                    )
+                }
                 Err(_) => return Vec::new(),
             }
         };
+        // A phone is a P-256 device on the roster, or any device a pairing
+        // here is bound to.
+        let mut revoked_phones = revoked_phones;
+        if let Some(t) = self.tunnel.as_ref() {
+            revoked_phones.extend(t.registry.list().into_iter().filter_map(|r| r.device_id).filter(|d| revoked.contains(d)));
+        }
+        self.rotate_token_for(&revoked_phones);
+        let Some(tunnel) = self.tunnel.as_ref() else { return Vec::new() };
         let pids = tunnel.registry.pairings_of_revoked(&revoked);
         let mut by_device: std::collections::BTreeMap<Uuid, Vec<String>> = std::collections::BTreeMap::new();
         for pid in &pids {
@@ -640,6 +657,36 @@ impl Shared {
             }
         }
         pids
+    }
+
+    /// A revoked phone held the direct-path bearer token too (its pairing
+    /// link carries it): rotate `serve.token` once for each newly revoked
+    /// phone device (`serve-token-revocations.json` remembers which ones it
+    /// already rotated for). Direct streams opened with the old token end
+    /// ([`Self::token_gen`]); the remaining phones fetch the new one over
+    /// their tunnel (`GET /v1/tunnel/direct`), or re-pair if they only use
+    /// the direct path.
+    fn rotate_token_for(&self, revoked_phones: &std::collections::BTreeSet<Uuid>) {
+        // The sync loop and the revocation watch both get here: one rotation.
+        static ROTATING: Mutex<()> = Mutex::new(());
+        let _one = ROTATING.lock().unwrap_or_else(|e| e.into_inner());
+        let file = self.cfg.data_dir.join("serve-token-revocations.json");
+        let done: std::collections::BTreeSet<Uuid> =
+            std::fs::read(&file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        let fresh: Vec<Uuid> = revoked_phones.difference(&done).copied().collect();
+        if fresh.is_empty() {
+            return;
+        }
+        if let Err(e) = pair::rotate_token(&self.opts.token_file) {
+            eprintln!("serve: rotating the bearer token after a phone revocation failed (retrying): {e:#}");
+            return;
+        }
+        self.reload_token();
+        let all: std::collections::BTreeSet<Uuid> = done.union(revoked_phones).copied().collect();
+        if let Err(e) = crate::serve::tunnel::write_json(&file, &all) {
+            eprintln!("serve: recording the bearer token rotation failed: {e:#}");
+        }
+        println!("ligus serve: rotated the bearer token because phone device(s) {fresh:?} were revoked; paired phones fetch the new one over the relay");
     }
 
     /// A workspace device as the tunnel sees it (for binding a pairing).
@@ -1069,6 +1116,7 @@ pub async fn start(cfg: Config, opts: ServeOptions) -> Result<ServeHandle> {
     let shared = Arc::new(Shared {
         ws,
         token: RwLock::new(token),
+        token_gen: watch::Sender::new(0),
         host_id,
         tunnel,
         svc: Mutex::new(svc),

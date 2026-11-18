@@ -555,6 +555,10 @@ Host connector (`hive serve`):
     whether they carry a message preview (§14). `previews` defaults to `true`
     for a newly paired phone; when the field is absent the stored value is
     kept.
+  - `GET /v1/tunnel/direct` → `{"token","url"}`: the direct-path bearer
+    token and URL (tunnel only; `404` on the direct path). The token rotates
+    when a phone device is revoked; a phone whose direct request gets `401`
+    fetches it again here.
 
 Phone client: the transport layer maps each `URLRequest` onto one stream and
 builds an `HTTPURLResponse` and body or byte sequence from the reply. In the
@@ -704,7 +708,12 @@ unused for 90 days.
 device revokes every pairing bound to it (E3a), whatever path the event took
 to the host (a sync round, a local write, another process on the same data
 directory, the phone itself): the host re-checks its roster within 0.5 s of
-any store change and runs steps 1–3 above at once. It then confirms with the
+any store change and runs steps 1–3 above at once. Step 4 (rotating
+`serve.token`) is not optional here: it happens once per newly revoked phone
+device (`serve-token-revocations.json` remembers which), and direct-path
+event streams opened with the old token end. The phones that remain fetch
+the new token over their tunnel with `GET /v1/tunnel/direct` (§9); a phone
+that only uses the direct path must re-pair. It then confirms with the
 relay over plain HTTPS, which doesn't need the control connection and
 reports what it did:
 
