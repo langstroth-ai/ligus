@@ -1,0 +1,234 @@
+//! Forged copies against cut watermarks (review of fix/forged-equivocation).
+//! A watermark covers a signer's chain by `(device id, event id)`. Two
+//! signers can hold copies under one id and one device id (a member's
+//! second key for their own device id, or a squatter's binding of another
+//! member's device id), so a removed member's backdated copy under a
+//! covered id, or a chain its copy extends through `prev`, must never count
+//! as held by the remover.
+
+use hive_core::crypto::{sign_envelope, DeviceCertificate, SigningKeypair};
+use hive_core::events::{project_authorized, project_config, WorkspaceAuthz};
+use hive_core::testkit::SignedWorld;
+use hive_core::watermark::heads_of;
+use hive_core::{
+    workspace_config_session_id, CfgFrontier, ChatMessage, MessageRole, SessionEvent,
+    SessionEventEnvelope, Timestamp, Verdict, WorkspaceRole,
+};
+use std::collections::BTreeSet;
+use uuid::Uuid;
+
+fn msg(by: &str, body: &str) -> SessionEvent {
+    SessionEvent::MessageAppended {
+        message: ChatMessage::new(MessageRole::User, by, body),
+    }
+}
+
+fn world() -> (SignedWorld, Uuid) {
+    let mut w = SignedWorld::genesis(&["owner", "con", "mal"], None);
+    w.admit("owner", "con", WorkspaceRole::Contributor);
+    w.admit("owner", "mal", WorkspaceRole::Contributor);
+    let chat = w.chat("owner", "c");
+    (w, chat)
+}
+
+/// `mal` binds `device` to a fresh key of mal's own account.
+fn bind(w: &mut SignedWorld, device: Uuid) -> SigningKeypair {
+    let key = SigningKeypair::generate().unwrap();
+    let mal = &w.people["mal"];
+    let cert = DeviceCertificate::issue(
+        &mal.account,
+        mal.account_id,
+        device,
+        &key.public_key_bytes(),
+        Timestamp::epoch(),
+    );
+    let id = w.push(
+        "mal",
+        SessionEvent::DeviceCertificateAdded { certificate: cert },
+    );
+    assert_eq!(
+        w.verdict(id),
+        Verdict::Allowed,
+        "control: mal certifies a device of mal's own account"
+    );
+    key
+}
+
+/// The production watermark for removing `mal` (`ChatService::cut_watermark`):
+/// every device whose certificates include mal's account, every log.
+fn removal_watermark(w: &SignedWorld, chat: Uuid) -> Vec<hive_core::watermark::Watermark> {
+    let roster = w.roster();
+    let a = w.people["mal"].account_id;
+    let signers: BTreeSet<Uuid> = roster
+        .devices
+        .iter()
+        .filter(|(_, d)| d.accounts.contains(&a))
+        .map(|(id, _)| *id)
+        .collect();
+    let mut wm = heads_of(&w.cfg, workspace_config_session_id(w.wid), &signers);
+    wm.extend(heads_of(&w.chats[&chat], chat, &signers));
+    wm
+}
+
+/// mal's message under `orig`'s id and position, judged at `frontier`,
+/// naming `prev`, signed by `device` with `key`.
+fn copy_under(
+    w: &mut SignedWorld,
+    chat: Uuid,
+    orig: &SessionEventEnvelope,
+    body: &str,
+    frontier: CfgFrontier,
+    prev: Option<Uuid>,
+    device: Uuid,
+    key: &SigningKeypair,
+) -> SessionEventEnvelope {
+    let mut f = w.draft("mal", Some(chat), msg("mal", body), Some(frontier));
+    f.event_id = orig.event_id;
+    f.lamport = orig.lamport;
+    if let Some(s) = f.actor_stamp.as_mut() {
+        s.log_head = orig.actor_stamp.as_ref().unwrap().log_head;
+        s.prev = prev;
+    }
+    f.clear_raw();
+    sign_envelope(&mut f, device, key);
+    f
+}
+
+fn bodies(w: &SignedWorld, log: &[SessionEventEnvelope]) -> Vec<String> {
+    let t = project_config(&w.cfg, None, None).1;
+    project_authorized(log, None, None, WorkspaceAuthz::Timeline(&t))
+        .unwrap()
+        .messages
+        .into_iter()
+        .map(|m| m.body)
+        .collect()
+}
+
+/// A removed member's second key for their own device id: a copy under a
+/// covered id of their own chain is not covered.
+#[test]
+fn a_second_key_copy_under_a_covered_id_is_not_covered() {
+    let (mut w, chat) = world();
+    let dev = w.people["mal"].device_id;
+    let k2 = bind(&mut w, dev);
+    let before = w.head().unwrap();
+    let m1 = w.say(chat, "mal", msg("mal", "honest"));
+    let orig = w.chats[&chat]
+        .iter()
+        .find(|e| e.event_id == m1)
+        .unwrap()
+        .clone();
+    let wm = removal_watermark(&w, chat);
+    let cut = w.push(
+        "owner",
+        SessionEvent::MemberRemoved {
+            member_id: "mal".into(),
+            watermark: wm,
+        },
+    );
+    assert_eq!(w.verdict(cut), Verdict::Allowed);
+    let f = copy_under(
+        &mut w,
+        chat,
+        &orig,
+        "backdated",
+        before,
+        orig.actor_stamp.as_ref().unwrap().prev,
+        dev,
+        &k2,
+    );
+    let mut log = w.chats[&chat].clone();
+    log.push(f);
+    let b = bodies(&w, &log);
+    assert!(
+        !b.contains(&"backdated".to_string()),
+        "a backdated copy after the removal folded as covered: {b:?}"
+    );
+}
+
+/// The copy names a new event as its `prev`: coverage must not walk into it.
+#[test]
+fn a_copy_under_a_covered_head_does_not_extend_coverage_through_prev() {
+    let (mut w, chat) = world();
+    let dev = w.people["mal"].device_id;
+    let k2 = bind(&mut w, dev);
+    let before = w.head().unwrap();
+    let m1 = w.say(chat, "mal", msg("mal", "honest"));
+    let orig = w.chats[&chat]
+        .iter()
+        .find(|e| e.event_id == m1)
+        .unwrap()
+        .clone();
+    let wm = removal_watermark(&w, chat);
+    w.push(
+        "owner",
+        SessionEvent::MemberRemoved {
+            member_id: "mal".into(),
+            watermark: wm,
+        },
+    );
+    // A new backdated event, signed with mal's ordinary key, single copy.
+    let mut y = w.draft("mal", Some(chat), msg("mal", "smuggled"), Some(before));
+    y.lamport = orig.lamport;
+    if let Some(s) = y.actor_stamp.as_mut() {
+        s.log_head = orig.actor_stamp.as_ref().unwrap().log_head;
+        s.prev = None;
+    }
+    w.finish(&mut y, "mal", None);
+    let f = copy_under(&mut w, chat, &orig, "x", before, Some(y.event_id), dev, &k2);
+    let mut log = w.chats[&chat].clone();
+    log.push(y);
+    log.push(f);
+    let b = bodies(&w, &log);
+    assert!(
+        !b.contains(&"smuggled".to_string()),
+        "coverage walked through a copy's prev: {b:?}"
+    );
+}
+
+/// A squatted device id: mal binds con's device id; the removal's watermark
+/// covers con's chain (the device's certificates include mal's account), so
+/// mal's copy under con's id must not count as covered.
+#[test]
+fn a_squatters_copy_under_the_victims_covered_id_is_not_covered() {
+    let (mut w, chat) = world();
+    let con_dev = w.people["con"].device_id;
+    let km = bind(&mut w, con_dev);
+    let before = w.head().unwrap();
+    let c1 = w.say(chat, "con", msg("con", "honest"));
+    let orig = w.chats[&chat]
+        .iter()
+        .find(|e| e.event_id == c1)
+        .unwrap()
+        .clone();
+    let wm = removal_watermark(&w, chat);
+    assert!(
+        wm.iter().any(|x| x.signer == con_dev),
+        "control: the production watermark covers the squatted id"
+    );
+    w.push(
+        "owner",
+        SessionEvent::MemberRemoved {
+            member_id: "mal".into(),
+            watermark: wm,
+        },
+    );
+    let f = copy_under(
+        &mut w,
+        chat,
+        &orig,
+        "backdated",
+        before,
+        orig.actor_stamp.as_ref().unwrap().prev,
+        con_dev,
+        &km,
+    );
+    let mut log = w.chats[&chat].clone();
+    log.push(f);
+    let b = bodies(&w, &log);
+    assert!(b.contains(&"honest".to_string()), "{b:?}");
+    assert!(
+        !b.contains(&"backdated".to_string()),
+        "a squatter's backdated copy folded as covered: {b:?}"
+    );
+}
