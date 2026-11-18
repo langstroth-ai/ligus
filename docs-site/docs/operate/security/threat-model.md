@@ -162,8 +162,16 @@ request names a host; lets only the named host report a failure
 their own device, withdraw a request (`proposalApplyWithdrawn`). A box never
 asks for an apply and never applies on its own approval. The host claims the
 request in its own store before touching git, judges its report as the fold
-will first, and commits with a `Ligus-Apply-Request:` trailer, so a restart
-reports the commit it already made instead of applying again.
+will first, applies only on a clean worktree (an agent turn's uncommitted work
+never rides along), and commits with a `Ligus-Apply-Request:` trailer, so a
+restart reports the commit it already made instead of applying again; a
+trailer is only a hint (an agent can write one), so recovery reports a commit
+only when its tree is exactly the approved patch on its parent. A request
+never names a phone, which would hold the single applier slot forever.
+Residual: a withdrawal that sorts before a host's report, but reached the host
+after it committed, leaves that commit on the chat's branch while the log
+says withdrawn (the host only takes it back when it sees the refusal as it
+writes).
 
 ### Prompt injection and hostile content {#prompt-injection}
 
@@ -560,7 +568,7 @@ host (desktop, CLI, `ligus serve`), the Helm chart and relay v0.2.0.
 | Host | Agents could read the data dir (keys, settings, `serve.token`) and reach the network directly | Agent processes run in the OS sandbox with a per-turn egress proxy and an allow-listed environment |
 | Host | The tool role gate only held on headless hosts and read today's roster | One author gate on every host, at the author's role when the message was posted |
 | Host | Repository-supplied runtimes and MCP servers ran on clone | Inert until enabled on this device by digest |
-| Host | Votes through an owner-enrolled serve box counted as the owner's | They count only with the owner's passkey over the vote (`presence/prepare`, `presence/commit`); without it the box answers `403 presence_required` and every fold drops them |
+| Host | Votes through an owner-enrolled serve box counted as the owner's | A vote counts only when a certified device of its voter signs it (the phone, with its own key); the box's vote, lockdown-clear and answer routes (and `presence/prepare` for them) answer 410 |
 | Keys (Track B) | Key rotations were unsigned; a desktop sealed under any key it could open from the relay, so a removed member or an outsider who knew device keys could inject one | Rotations are signed `WorkspaceKeyRotated` events (Admin, next version, key commitment) sealed only to keys devices published on the config log; devices seal only under the newest authorized rotation |
 | Keys (Track B) | `ligus serve`, `ligus worker` and the CLI stayed on epoch 0 | One keyring for every host: they read and write rotated epochs |
 | Keys (Track B) | An event sealed under an old key was accepted from someone who had already folded the rotation, or from a removed member | Refused by every fold (sealed epoch below the one at its author's frontier) and, for non-members, at ingest |

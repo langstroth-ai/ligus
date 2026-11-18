@@ -16,7 +16,7 @@ workspace should know about. For reaching the box from the phone, see
 |---|---|
 | Phone messages show as | you, when the phone signs them with its own key ([phone actions](../reference/serve-api.md#phone-actions)); the box (`LIGUS_SERVE_NAME`, else its label, else its host name) for the older `POST /v1/chats/{id}/messages` |
 | Role | at most Contributor, never raised above it |
-| Votes and review notes | the box's own (`/v1/proposals/{id}/approve`) are at its role and never count as a person's approval; the phone's vote, signed with its own key, counts as yours |
+| Votes and review notes | the phone's vote, signed with its own key, counts as yours; the box never votes from the API (`/v1/proposals/{id}/approve` and `/reject` answer 410) |
 | Chats the phone creates | owned by the box |
 | Who signs events | the box's own account and device key |
 | What it can't do | admit, remove or demote anyone, carry a passkey, answer an agent's question, clear a lockdown, apply a change on its own (it applies only when a person asks it to: [Apply on a host](#apply-on-a-host)) |
@@ -136,9 +136,9 @@ the current holder and epoch, along with dearth mode and locked chats. See
 
 | Endpoint | What |
 |---|---|
-| `GET /v1/proposal-sets`, `GET /v1/proposal-sets/{id}`, `GET /v1/chats/{id}/proposal-sets` | Proposal sets with standings, posted assessments and pre-flight results (read-only; votes use the proposal routes) |
+| `GET /v1/proposal-sets`, `GET /v1/proposal-sets/{id}`, `GET /v1/chats/{id}/proposal-sets` | Proposal sets with standings, posted assessments and pre-flight results (read-only; a vote on an alternative is the `vote` [phone action](../reference/serve-api.md#phone-actions)) |
 | `GET /v1/guards` | Dearth mode, locked chats, the coordinator, and whether this box's identity may clear a lockdown |
-| `POST /v1/chats/{id}/lockdown/clear` | Clear a chat's lockdown as this box's identity: a human member at Contributor or above only, so a box (a service member) is refused; the phone clears it with the `clearLockdown` [phone action](../reference/serve-api.md#phone-actions) and your passkey |
+| `POST /v1/chats/{id}/lockdown/clear` | Gone (410): the phone clears a lockdown with the `clearLockdown` [phone action](../reference/serve-api.md#phone-actions) and your passkey |
 | `GET /v1/flow` | Board, review queue and alert, marks, routing summary |
 | `GET /v1/chats/{id}/handoffs` | A chat's hand-off cards |
 
@@ -166,7 +166,10 @@ pane. That writes a signed `proposalApplyRequested` naming the host's device.
   or a held vote all stop it here), then applies the patch in the chat's
   worktree of its checkout (`hive/chat/<chat id>`), on the base the person
   saw when the request names one, and commits with a
-  `Ligus-Apply-Request: <request id>` trailer. A box without a git identity
+  `Ligus-Apply-Request: <request id>` trailer. The worktree must be clean:
+  anything an agent turn left uncommitted there would ride along in the
+  commit, so the host reports the request failed instead ("commit or
+  discard them, then ask again"). A box without a git identity
   commits as `Ligus <ligus@localhost>`.
 - It reports back: `proposalApplied` with the commit, base and tree, or
   `proposalApplyFailed` with the reason (no checkout for the chat, the
@@ -178,8 +181,12 @@ pane. That writes a signed `proposalApplyRequested` naming the host's device.
   the withdrawal doesn't apply it, and one that already committed takes its
   commit back when the fold refuses its report.
 - A host that crashed after its commit finds the commit by its trailer on
-  restart and reports it; one that crashed before it reports the request
-  failed ("ask again").
+  restart and reports it, but only when that commit is exactly the approved
+  patch on its parent (and the parent is the base the person saw): an agent
+  turn in the same worktree can write the trailer too. Otherwise, and when
+  it crashed before committing, it reports the request failed ("ask
+  again").
+- A request names a host, never a phone (a phone applies nothing).
 
 The box applies only file-diff proposals; anything else (a command, a
 decision) is reported failed with "implement this proposal from a desktop".

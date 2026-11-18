@@ -23,7 +23,10 @@ Full release notes are on the
   the chart's `serve.applyOnApprove`) is removed. The desktop's People pane
   disables what the rank rules refuse (an Admin cutting an Admin, a
   non-founder cutting an Owner, anyone cutting the founder, a box above
-  Contributor) and says why. See
+  Contributor) and says why. The box's own person-action routes (`/v1/proposals/{id}/approve` and
+  `/reject`, `/v1/chats/{id}/lockdown/clear`, `/v1/asks/{id}/answer`, and
+  `presence/prepare` for a vote or a clear) answer 410 and name the phone
+  action to use. See
   [Phone actions](../../operate/reference/serve-api.md#phone-actions) and
   [Apply on a host](../../operate/ops/serve-box.md#apply-on-a-host).
 - **serve and worker boxes are their own members.** A `ligus serve` or

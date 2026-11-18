@@ -86,8 +86,7 @@ and public addresses unless `LIGUS_SERVE_ALLOW_ANY_BIND=1`.
 | GET | `/v1/hosts` | `{hosts: [{id, label, isThis: bool, online: bool}]}` |
 | PUT | `/v1/agents/{id}/host` `{hostId}` | `{agent}`. `hostId` must be a registered host. `""` hands the agent back to its owner's device |
 | GET | `/v1/proposals?status=open\|all` | `{proposals: [{id, chatId, title, body, kind, diff?, status, createdAt, author}]}` |
-| POST | `/v1/proposals/{id}/approve` | `{proposal}` |
-| POST | `/v1/proposals/{id}/reject` `{reason?}` | `{proposal}` |
+| POST | `/v1/proposals/{id}/approve`, `/reject` | **410 Gone** `{error: "gone", message, use}`. Vote with the `vote` phone action (below) |
 | GET | `/v1/proposals/{id}` | `{proposal}` |
 | GET | `/v1/proposals/{id}/file?path=&side=old\|new` | `{path, side, content, size, base, applied}`: one file of the proposal's diff, whole, before (`old`) or after (`new`, the default) the change. Read from the chat's bound checkout (branch `hive/chat/<id>`, else `HEAD`) with the file's patch applied in a scratch directory, never in the checkout; `applied` means the base already carries the change and `old` was recovered by reversing it. `400`: `path` isn't a plain relative path or isn't in the diff, or a bad `side`. `404`: no diff, no checkout bound here, or that side doesn't exist (a new file has no `old`, a deleted one no `new`). `409`: the diff applies to neither base. `413` over 512 KB, `415` not UTF-8. The app uses it to render a changed Markdown file |
 | GET | `/v1/proposals/{id}/comments` | `{comments: [Comment]}`, the refinement thread, oldest first |
@@ -97,7 +96,7 @@ and public addresses unless `LIGUS_SERVE_ALLOW_ANY_BIND=1`.
 | GET | `/v1/proposal-sets/{id}` | `{set: ProposalSet}` |
 | GET | `/v1/chats/{id}/proposal-sets?status=open\|all` | `{sets: [ProposalSet]}`, one chat's sets (all by default) |
 | GET | `/v1/guards` | `{dearth: {reason, broodPaths, allowedMcpServers, setBy, setAt}?, pendingMembers, lockedChats: [{chatId, chatTitle, signals: [{signal, detail, raisedAt, messageId?}]}], coordinator: {holder, epoch, leaseMs, released, isThis}?, myRole, canClearLockdown}` |
-| POST | `/v1/chats/{id}/lockdown/clear` | `{chatId, cleared: true}`. Writes the same signed `ChatLockdownCleared` the desktop's *Clear lockdown* does. `403` unless this box's identity is a human member at Contributor or above; `409` when the chat isn't locked |
+| POST | `/v1/chats/{id}/lockdown/clear` | **410 Gone**. Clear with the `clearLockdown` phone action (below) |
 | GET | `/v1/flow` | `{board: [BoardItem], queue: Queue, marks: [Mark], routing: Routing}`, the desktop's Flow pane, read-only; see below |
 | GET | `/v1/chats/{id}/handoffs` | `{handoffs: [Handoff]}`, oldest first |
 | GET | `/v1/dashboard` | `{title, source, refreshSeconds, sections: [{title, panels: [Panel]}], updatedAt, error?}`. Defined by the host's `dashboard.toml`; see [dashboard.md](dashboard.md) |
@@ -143,7 +142,7 @@ check `{status: "passed"|"failed"|"skipped"|"unknown", note}`. `support` is
 the decayed sum over counting scouts; an assessment by the alternative's own
 producer is listed with `isSelf` and never counts. Assessments are blind until
 posted: only posted ones exist, so a scout in flight is never shown. Vote on an
-alternative with `POST /v1/proposals/{proposalId}/approve|reject`; tuning,
+alternative with the `vote` phone action; tuning,
 pre-flight, apply and the decision are desktop-only (`decideOn`).
 
 `BoardItem = {id, kind: "failingTests"|"unreviewedProposal"|"failedStage"|"needsReview",
@@ -492,6 +491,16 @@ digest is what binds.
 The box may choose only: eventId, sequence, lamport, timestamps, the stamp's
 `recordedAt`, `cfgFrontier` and `prev`, a message's `id` and `createdAt`, a
 vote's `createdAt` and `role`, an answer's `atMs`, a request's `id`.
+None of these grants anything the fold doesn't re-check: a post's `id` that
+is already in the chat (one of your earlier messages) is refused by every
+fold, so a box can't make a post rewrite an older message (refuse it
+yourself when you know the id); a vote's `role` is replaced by your role at
+the event's position; `cfgFrontier` older than a removal, demotion or
+revocation is judged as of that cut. `hostDeviceId` is never a phone (the
+fold refuses it): pick it from `GET /v1/hosts`. What a box can still do is
+withhold an event you signed, and choose its `lamport`, which orders it
+among the log's events: keep one action in flight, and treat a `committed`
+answer as the box's claim until the event stream shows it.
 
 **UI.**
 

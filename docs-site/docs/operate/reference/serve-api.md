@@ -238,7 +238,7 @@ voter's account, so they never act as the person (see
 
 | Method + path | Request | Notes |
 |---|---|---|
-| `POST /v1/presence/prepare` | `{action: "approve"\|"reject"\|"lockdown_clear"\|"agent_host"\|"invite", target, hostId?}` | drafts the event as the plain endpoint would and writes nothing: `{prepareId, challenge, preview: {kind, summary, digestShort, rpId, allowCredentials, chatTitle?, proposalTitle?, diffDigest?}}`. `challenge` is the base64url event digest the passkey signs (RP `ligus.ai`, user verification required). `digestShort` is the first 16 hex characters (64 bits) of that digest; show it so the person can compare it with the one the passkey page computes from the challenge it signs. `prepareId` is single use and lasts 5 minutes. 409 when there is nothing to confirm |
+| `POST /v1/presence/prepare` | `{action: "agent_host"\|"invite", target, hostId?}` | for a box enrolled as its owner's device: drafts the event as the plain endpoint would and writes nothing: `{prepareId, challenge, preview: {kind, summary, digestShort, rpId, allowCredentials, chatTitle?, proposalTitle?, diffDigest?}}`. `challenge` is the base64url event digest the passkey signs (RP `ligus.ai`, user verification required). `digestShort` is the first 16 hex characters (64 bits) of that digest; show it so the person can compare it with the one the passkey page computes from the challenge it signs. `prepareId` is single use and lasts 5 minutes. 409 when there is nothing to confirm. `approve`, `reject` and `lockdown_clear` answer **410**: the phone signs a vote or a clear itself ([phone actions](#phone-actions)) |
 | `POST /v1/presence/commit` | `{prepareId, assertion: {credentialId, authenticatorData, clientDataJSON, signature}}` (base64url) | appends the event with the assertion inside its signed stamp: `{committed, kind, eventId, invite?}` (`invite`, for `action: "invite"`: the code to share). 403 when the assertion doesn't verify or the passkey isn't the owner's; 404 for an unknown, expired or used `prepareId` |
 
 ### Proposals
@@ -247,14 +247,13 @@ voter's account, so they never act as the person (see
 |---|---|---|
 | `GET /v1/proposals` | `?status=open\|all` (default `open`) | newest first |
 | `GET /v1/proposals/:id` | | adds `myRole`, `myVote`, `canVote`, `isMine`, `diffDigest` (what a vote or an apply request binds), `baseCommit?`, `repoId?`, `applyRequests` (`[{id, hostDeviceId, state, expectedBaseCommit?, reason?, commit?}]`, `state` one of `open`, `applied`, `failed`, `withdrawn`; at most one `open`) and `canRequestApply` (approved, and no request open). Every proposal also carries the review badges `authorKind`, `authorName`, `configImpact`, `humanGate`, `presenceRequired`, `argv` (a structured command) and `implementPlan` |
-| `POST /v1/proposals/:id/approve` | | votes approve as the box's own service identity, at its role. The vote never counts as a person's approval (the phone votes with `phone-actions`), and approving never applies anything: there is no auto-apply, a box applies only when a person asks it to ([Apply on a host](../ops/serve-box.md#apply-on-a-host)) |
-| `POST /v1/proposals/:id/reject` | `{reason?}` | the reason becomes a thread comment |
+| `POST /v1/proposals/:id/approve`, `/reject` | | **410 Gone** `{error: "gone", message, use: "POST /v1/phone-actions/prepare"}`: a person votes from the phone with the `vote` [phone action](#phone-actions), signed by the phone's own key. The box never votes from the API, as itself or for anyone; approving never applies anything (a box applies only when a person asks it to, [Apply on a host](../ops/serve-box.md#apply-on-a-host)) |
 | `GET /v1/proposals/:id/comments` | | refinement thread |
 | `POST /v1/proposals/:id/comments` | `{text, requestChanges?}` | a Viewer gets 403 |
 | `POST /v1/proposals/:id/request-changes` | `{note?}` | sends the proposal back to its agent (or the default agent). 409 if already revised or applied |
 | `GET /v1/proposals/:id/implement-plan` | | exactly what Implement does: `{plan: {kind, argv?, cwd?, instruction?, targetAgentId?, targetName, legacyCommand}}` |
 | `GET /v1/chats/:id/asks` | | agents' questions in the chat, newest first: `{asks: [{id, agentName, kind, question, options, open, answer?, answeredBy?, expiresAtMs}]}`. `kind` is `question` (an agent's `ligus_ask_human`) or `permission` (an ACP permission escalation, which only the host's person or the agent's owner can grant) |
-| `POST /v1/asks/:id/answer` | `{answer?, optionIndex?}` | only a person answers an agent's question, so a box (a service member) is refused; the phone answers with the `answer` [phone action](#phone-actions), or answer from the desktop. 400 if already answered or closed |
+| `POST /v1/asks/:id/answer` | | **410 Gone**: only a person answers an agent's question; the phone answers with the `answer` [phone action](#phone-actions), or answer from the desktop |
 | `GET /v1/proposals/:id/file` | `?path=<relative>&side=old\|new` | one whole file before or after the diff, rebuilt in a scratch dir. 400 bad path, 404, 409 base moved, 413 over 512 KiB, 415 not UTF-8 |
 
 ### Repos on the host
