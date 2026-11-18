@@ -1097,7 +1097,10 @@ async fn approve_proposal(State(s): S, peer: Option<axum::Extension<TunnelPeer>>
     // An alternative in an open proposal set is applied only through the
     // set's two-phase commit (pre-flight first), never on approval here.
     let in_open_set = chat.proposal_sets.iter().any(|set| set.is_open() && set.contains(updated.id));
-    if s.opts.apply_on_approve && updated.ready_to_apply() && !updated.dismissed && !in_open_set {
+    // A service member (every real box, Phase B) applies only to fulfil a
+    // person's request, never on its own approval.
+    let service = s.lock().author().kind == hive_core::ActorKind::Service;
+    if s.opts.apply_on_approve && !service && updated.ready_to_apply() && !updated.dismissed && !in_open_set {
         if let Some(applied) = apply_on_this_host(&s, &chat, &updated)? {
             updated = applied;
         }

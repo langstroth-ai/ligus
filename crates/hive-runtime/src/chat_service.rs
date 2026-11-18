@@ -545,6 +545,12 @@ impl ChatService {
         self.author.display_name = name.into();
     }
 
+    /// Set the kind this device's author writes as: a box (`ligus serve`,
+    /// `ligus worker`) is a [`hive_core::ActorKind::Service`] member.
+    pub fn set_author_kind(&mut self, kind: hive_core::ActorKind) {
+        self.author.kind = kind;
+    }
+
     /// Set (or clear) the avatar carried on this user's identity, so new
     /// messages stamp it and it rides the synced roster to every member.
     pub fn set_author_avatar(&mut self, avatar_url: Option<String>) {
@@ -2172,6 +2178,26 @@ impl ChatService {
             config_id,
             workspace_id,
             SessionEvent::JoinApproved { subject: hive_core::authorization::invite_subject(id), admission: None },
+        )?;
+        Ok(id)
+    }
+
+    /// Issue a box admission (Phase B, `hive_core::admission`): a fresh
+    /// single-use invite on the config log that admits one service member,
+    /// at most Contributor, for `ttl_ms` from now, and only `account` when
+    /// the box sent a join request. An Admin's act with passkey presence.
+    pub fn issue_box_admission(&mut self, workspace_id: Uuid, ttl_ms: i64, account: Option<Uuid>) -> Result<Uuid> {
+        let ttl = ttl_ms.clamp(60_000, hive_core::admission::MAX_ADMISSION_TTL_MS - 60_000);
+        let now = (Timestamp::now().inner().unix_timestamp_nanos() / 1_000_000) as i64;
+        let id = Uuid::new_v4();
+        let config_id = self.ensure_workspace_config(workspace_id)?;
+        self.append_signed(
+            config_id,
+            workspace_id,
+            SessionEvent::JoinApproved {
+                subject: hive_core::authorization::invite_subject(id),
+                admission: Some(hive_core::admission::Admission::service(now + ttl, account)),
+            },
         )?;
         Ok(id)
     }

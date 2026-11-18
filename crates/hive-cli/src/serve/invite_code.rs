@@ -243,3 +243,38 @@ mod tests {
         assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
     }
 }
+
+/// The `hivews1:` code of invite `inv` to `cfg`'s workspace, as `svc` (an
+/// Admin) issued it: relay, room, workspace key, every authorized epoch key
+/// `svc` holds, the founder pin, and the founder's signature when `svc` is
+/// the founder's device. A bearer secret: hand it only to the box it admits.
+pub fn admission_code(cfg: &crate::Config, svc: &hive_runtime::ChatService, inv: Uuid) -> anyhow::Result<String> {
+    let relay = cfg
+        .relay_url
+        .clone()
+        .filter(|r| crate::usable_relay_url(r))
+        .ok_or_else(|| anyhow::anyhow!("this workspace has no relay URL, so no box could join it (set LIGUS_RELAY_URL)"))?;
+    let ws = crate::uuid_of_room(&cfg.room);
+    let pin = svc.store().workspace_pin(ws)?;
+    let mut conn = InviteConn {
+        name: String::new(),
+        relay_url: relay,
+        room: cfg.room.clone(),
+        key: cfg.key.clone(),
+        icon: None,
+        dm_account: None,
+        founder_actor_id: pin.as_ref().map(|p| p.founder_account.to_string()),
+        fk: pin.as_ref().map(|p| p.fk.iter().map(|b| format!("{b:02x}")).collect()),
+        inv: Some(inv.to_string()),
+        ek: Vec::new(),
+        sig: None,
+    };
+    if let Ok(src) = crate::key_source(cfg) {
+        conn.ek = svc.delivered_epoch_keys(ws, &src).unwrap_or_default();
+    }
+    let identity = hive_runtime::IdentityStore::new(&cfg.data_dir, hive_runtime::secret_store::StoreKeyVault::for_data_dir(&cfg.data_dir));
+    if let Some(stored) = identity.load()? {
+        conn.sig = conn.with_claims(|c| svc.sign_invite(c, &stored.device.certificate));
+    }
+    Ok(conn.encode())
+}
