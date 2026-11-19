@@ -967,7 +967,7 @@ impl LigusMcp {
                 }
                 let now = flow::now_ms();
                 let mut slots: Vec<&mem::TaskSlot> = session.flow.tasks.iter().filter(|t| !t.stale(now)).collect();
-                slots.sort_by(|a, b| b.at_ms.cmp(&a.at_ms));
+                slots.sort_by_key(|a| std::cmp::Reverse(a.at_ms));
                 if let Err(r) = Self::charge_reads(st, slots.len() as u32) {
                     return (r, Some(chat));
                 }
