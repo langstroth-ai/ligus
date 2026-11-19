@@ -113,6 +113,11 @@ pub fn parse_repo_spec(input: &str, nested: bool) -> Result<RepoSpec> {
 /// subgroups). Local paths and `file://` give no host (`None`).
 pub fn parse_remote(url: &str) -> Option<(String, RepoRef)> {
     let url = url.trim();
+    // git (curl) ends the host at `#` or `?`: `https://evil#@github.com/o/n`
+    // connects to evil, so it is never github.com's repo.
+    if url.contains(['#', '?', '\\']) {
+        return None;
+    }
     let (host, path) = if let Some((scheme, rest)) = url.split_once("://") {
         if scheme.eq_ignore_ascii_case("file") {
             return None;
@@ -221,6 +226,10 @@ mod tests {
         assert_eq!(parse_remote("ssh://git@codeberg.org:22/o/n").unwrap().0, "codeberg.org");
         assert!(parse_remote("file:///tmp/o/n.git").is_none());
         assert!(parse_remote("/srv/git/o/n").is_none());
+        // git connects to the host before `#`/`?`, never the one after `@`.
+        for spoof in ["https://evil.example#@github.com/o/n", "https://evil.example?@github.com/o/n", "evil.example#@github.com:o/n"] {
+            assert!(parse_remote(spoof).is_none_or(|(h, _)| h != "github.com"), "{spoof}");
+        }
     }
 
     #[test]

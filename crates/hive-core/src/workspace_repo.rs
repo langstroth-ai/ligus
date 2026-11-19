@@ -354,6 +354,12 @@ pub fn canonical_repo(
     if url.contains("::") {
         return Err(CanonError::Refused("a git remote-helper transport is never an identity"));
     }
+    // Anywhere, not only in the path: git (curl) ends the host at `#` or
+    // `?`, so in `https://evil.example#@github.com/o/n` it connects to
+    // evil.example while the text after `@` reads as github.com.
+    if url.contains(['#', '?', '\\']) {
+        return Err(CanonError::Refused("an encoded or reserved character in a remote"));
+    }
     let (authority, path, scp) = if let Some((scheme, rest)) = url.split_once("://") {
         match scheme.to_ascii_lowercase().as_str() {
             "https" | "http" | "ssh" | "git" | "git+ssh" | "ssh+git" => {}
@@ -531,6 +537,25 @@ mod tests {
             r#"{"hostId":"h","at":1,"seq":7,"coverage":[{"repoId":"00000000-0000-0000-0000-000000000000","state":"error","code":"clone_failed","viaFork":true}]}"#
         );
         assert!(full.coverage_ok());
+    }
+
+    /// git (curl) ends a URL's host at `#` or `?`, so
+    /// `https://evil.example#@github.com/o/n` fetches from evil.example. Its
+    /// identity must never read as github.com's repo (adversarial review).
+    #[test]
+    fn canonical_refuses_a_host_git_would_not_connect_to() {
+        let none = std::collections::BTreeMap::new();
+        for url in [
+            "https://evil.example#@github.com/zazulam/wefit",
+            "https://evil.example?@github.com/zazulam/wefit",
+            "https://evil.example\\@github.com/zazulam/wefit",
+            "ssh://evil.example#@github.com/zazulam/wefit",
+            "evil.example#@github.com:zazulam/wefit",
+        ] {
+            let c = canonical_repo(url, "", &none);
+            assert!(c.as_deref() != Ok("github.com/zazulam/wefit"), "{url} → {c:?}");
+        }
+        assert_eq!(canonical_repo("https://user@github.com/zazulam/wefit", "", &none).as_deref(), Ok("github.com/zazulam/wefit"));
     }
 
     #[test]
