@@ -1167,14 +1167,21 @@ impl SyncEngine {
             let outcome = match gate_ingest(self.identity_mode(), base, signer_account, account_key, &identity) {
                 IngestAction::Quarantine(reason) => {
                     tracing::warn!(?reason, event_id = %env.event_id, "quarantined a fetched event");
-                    // Kept as a lamport witness, whatever the reason: whether
-                    // an event is refused depends on what this device's roster
-                    // holds when it arrives (a revocation, a removal, a rebound
-                    // agent key, a certificate not here yet), so another device
-                    // may have accepted it and counted from it. The witness is
-                    // structural (id, lamport, log head, chain link), inert, and
-                    // never pushed (`ligus_core::lamport`).
-                    store.note_lamport_witness(env)?;
+                    // Kept as a lamport witness when the refusal depends on
+                    // what this device's roster holds when it arrives (a
+                    // revocation, a removal, a rebound agent key, a certificate
+                    // not here yet): another device may have accepted it and
+                    // counted from it. The witness is structural (id, lamport,
+                    // log head, chain link), inert, and never pushed
+                    // (`ligus_core::lamport`). An unsigned event, or one whose
+                    // signature fails under the one key its device id derives
+                    // from, is refused by every device whatever it holds: no
+                    // one counted from it, and a witness of it would let anyone
+                    // with the room's key lengthen a log's lamport chain with
+                    // junk no one can attribute.
+                    if !matches!(reason, crate::envelope_verifier::QuarantineReason::Unsigned | crate::envelope_verifier::QuarantineReason::BadSignature) {
+                        store.note_lamport_witness(env)?;
+                    }
                     let _ = store.record_signal(env.workspace_id, None, &sync_decision(roster, env, false, &format!("{reason:?}")));
                     Judgement::Refused
                 }
@@ -2039,6 +2046,21 @@ mod tests {
         assert!(store.has_event(good.event_id).unwrap(), "valid signed event ingested");
         assert!(!store.has_event(tampered.event_id).unwrap(), "tampered event rejected");
         assert!(!store.has_event(spoof.event_id).unwrap(), "impersonating event rejected");
+        // A refusal no roster can change (a signature that doesn't verify
+        // under the one key its device id derives from, or none at all) is
+        // no lamport witness: no device ever accepted it or counted from it,
+        // and a witness would let anyone holding the room's key extend a
+        // log's lamport chain with junk nobody can attribute. The
+        // impersonation (roster-dependent: another device may hold the
+        // certificate that makes it valid) stays one.
+        let witnesses = store.witness_ids(Uuid::nil()).unwrap();
+        assert!(!witnesses.contains(&tampered.event_id), "a bad signature became a lamport witness");
+        assert!(witnesses.contains(&spoof.event_id), "a roster-dependent refusal stays a witness");
+        let mut unsigned = content(103, account_id);
+        unsigned.signature = None;
+        unsigned.signer_device_id = None;
+        eng.apply_fetched(&mut store, &[(100, serde_json::to_value(&unsigned).unwrap())]).unwrap();
+        assert!(!store.witness_ids(Uuid::nil()).unwrap().contains(&unsigned.event_id), "an unsigned event became a lamport witness");
     }
 
     #[tokio::test]

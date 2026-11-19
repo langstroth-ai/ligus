@@ -426,6 +426,12 @@ impl EventStore {
         Ok(out)
     }
 
+    /// The ids of a log's lamport witnesses (tests).
+    #[cfg(test)]
+    pub(crate) fn witness_ids(&self, session_id: Uuid) -> Result<Vec<Uuid>> {
+        Ok(self.witnesses_of(session_id)?.into_iter().map(|e| e.event_id).collect())
+    }
+
     /// Keep `env`, which this device refused at ingest (for whatever reason:
     /// the refusal can depend on this device's roster), as a lamport witness
     /// of its log (see the `lamport_witnesses` table). Only its id, lamport,

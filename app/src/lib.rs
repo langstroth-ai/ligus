@@ -14506,8 +14506,10 @@ async fn run_peer_sync_session(app: AppHandle, data_dir: PathBuf, db_path: PathB
             }
             inbound = node.recv() => {
                 match inbound {
-                    Some((_from, data)) => {
-                        match sync.apply(&mut store, &data) {
+                    Some((from, data)) => {
+                        // Only from a peer this device added: anyone else
+                        // who dials the endpoint is dropped unread.
+                        match sync.apply_from(&mut store, &from, &load_contacts(&data_dir), &data) {
                             Ok(true) => { let _ = app.emit("workspace://synced", 1); }
                             Ok(false) => {}
                             Err(e) => eprintln!("p2p: apply: {e}"),

@@ -233,6 +233,20 @@ impl PeerSync {
         Ok(n)
     }
 
+    /// [`PeerSync::apply`] for an envelope `from` sent: only from one of
+    /// `contacts` (the peers this device added by their code). The transport
+    /// authenticates the sender's endpoint key, so anyone else who dials this
+    /// endpoint is dropped before anything is parsed, held or kept as a
+    /// lamport witness: a stranger can't fill the held table, or relay a
+    /// removed member's copies here.
+    pub fn apply_from(&mut self, store: &mut EventStore, from: &PeerId, contacts: &[Contact], data: &[u8]) -> Result<bool, PeerError> {
+        if !contacts.iter().any(|c| c.peer_id.0.eq_ignore_ascii_case(&from.0)) {
+            tracing::warn!(peer = %from.0, "dropped a peer message from an endpoint that isn't a contact");
+            return Ok(false);
+        }
+        self.apply(store, data)
+    }
+
     /// Apply one received envelope into the store. Returns whether it was new.
     ///
     /// Verify-on-ingest: the P2P transport is untrusted, so — exactly like the
@@ -274,8 +288,12 @@ impl PeerSync {
             }
             IngestAction::Quarantine(reason) => {
                 tracing::warn!(?reason, event_id = %env.event_id, "rejected a quarantined peer event");
-                // A lamport witness, as on the relay path (`SyncEngine::apply_fetched`).
-                store.note_lamport_witness(&env).map_err(|e| PeerError::Store(e.to_string()))?;
+                // A lamport witness, as on the relay path
+                // (`SyncEngine::apply_fetched`): only for a refusal another
+                // device's roster could judge otherwise.
+                if !matches!(reason, crate::envelope_verifier::QuarantineReason::Unsigned | crate::envelope_verifier::QuarantineReason::BadSignature) {
+                    store.note_lamport_witness(&env).map_err(|e| PeerError::Store(e.to_string()))?;
+                }
                 Ok(false)
             }
             IngestAction::Hold(reason) => {
@@ -422,6 +440,22 @@ mod tests {
         assert!(!sync_b.apply(&mut store_b, &data).unwrap());
         // A doesn't re-push the same envelope.
         assert_eq!(sync_a.push_to(&la, &b, &store_a).await.unwrap(), 0);
+    }
+
+    /// Only a contact's messages are applied: a stranger who dials this
+    /// endpoint gets nothing ingested, held or witnessed.
+    #[test]
+    fn only_a_contacts_messages_are_applied() {
+        let env = sample_envelope(1);
+        let data = serde_json::to_vec(&env).unwrap();
+        let friend = Contact { peer_id: PeerId("friend".into()), label: "F".into() };
+        let mut store = EventStore::open_in_memory().unwrap();
+        let mut sync = PeerSync::new([Uuid::nil()]);
+        assert!(!sync.apply_from(&mut store, &PeerId("stranger".into()), std::slice::from_ref(&friend), &data).unwrap());
+        assert!(!store.has_event(env.event_id).unwrap(), "a stranger's message was applied");
+        assert!(store.witness_ids(Uuid::nil()).unwrap().is_empty());
+        assert!(sync.apply_from(&mut store, &friend.peer_id, &[friend.clone()], &data).unwrap());
+        assert!(store.has_event(env.event_id).unwrap());
     }
 
     /// Regression: the link sends only its workspaces' events and drops an
