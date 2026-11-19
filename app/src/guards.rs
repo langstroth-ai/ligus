@@ -812,13 +812,13 @@ fn egress_decision(source: &str, reason: &str) -> GuardSignal {
 /// Claude Code `mcpServers` entries for the servers the envelope allows.
 /// Authenticated HTTP servers are left out: their token would have to ride
 /// the command line, where any local process can read it.
-fn claude_mcp_entries(state: &AppState, egress: &hive_core::sandbox::EgressPolicy) -> Vec<(String, serde_json::Value)> {
+fn claude_mcp_entries(state: &AppState, servers: &[hive_runtime::McpServerSpec], egress: &hive_core::sandbox::EgressPolicy) -> Vec<(String, serde_json::Value)> {
     // Every turn runs Claude Code with a strict MCP config (open egress
     // too), so the chat's servers ride it; none while egress is closed.
     if matches!(egress, hive_core::sandbox::EgressPolicy::Closed) {
         return Vec::new();
     }
-    filter_mcp_servers(state, state.combined_mcp_servers(), egress)
+    filter_mcp_servers(state, servers.to_vec(), egress)
         .into_iter()
         .filter(|s| s.enabled && s.auth.is_none())
         .map(|s| {
@@ -831,14 +831,16 @@ fn claude_mcp_entries(state: &AppState, egress: &hive_core::sandbox::EgressPolic
         .collect()
 }
 
-/// How the turn's runtime honors the envelope (extra flags, or a refusal).
-pub(crate) fn enforcement_for(
+/// How the turn's runtime honors the envelope (extra flags, or a refusal),
+/// with the turn's own MCP catalog (review F14).
+pub(crate) fn enforcement_for_servers(
     state: &AppState,
     provider: hive_core::ModelProviderKind,
     envelope: &hive_core::sandbox::SandboxEnvelope,
+    servers: &[hive_runtime::McpServerSpec],
 ) -> hive_runtime::sandbox::Enforcement {
     let entries = if provider == hive_core::ModelProviderKind::ClaudeCode {
-        claude_mcp_entries(state, &envelope.egress)
+        claude_mcp_entries(state, servers, &envelope.egress)
     } else {
         Vec::new()
     };
@@ -855,13 +857,25 @@ pub(crate) fn turn_sandbox_policy(
     gate: &hive_runtime::author_gate::GatePlan,
     isolated: bool,
 ) -> hive_runtime::executor::TurnPolicy {
+    turn_sandbox_policy_with(state, session, envelope, gate, isolated, &state.combined_mcp_servers())
+}
+
+/// [`turn_sandbox_policy`] with a turn's own MCP catalog (review F14).
+pub(crate) fn turn_sandbox_policy_with(
+    state: &AppState,
+    session: &hive_core::ChatSession,
+    envelope: &hive_core::sandbox::SandboxEnvelope,
+    gate: &hive_runtime::author_gate::GatePlan,
+    isolated: bool,
+    servers: &[hive_runtime::McpServerSpec],
+) -> hive_runtime::executor::TurnPolicy {
     let mut policy = hive_runtime::executor::TurnPolicy::new(hive_runtime::executor::HostKind::Desktop, envelope.clone(), gate.clone());
     policy.worktree_is_isolated = isolated;
     // Opt-in egress presets (device-local). The plan applies them only under
     // an open envelope, so dearth mode and a lockdown override them.
     policy.egress_presets = chat_egress_presets(state, session.workspace_id, session.id);
     policy.cli_user_config = workspace_cli_user_config(state, session.workspace_id);
-    for s in state.combined_mcp_servers().into_iter().filter(|s| s.enabled && envelope.egress.allows_mcp(&s.id)) {
+    for s in servers.iter().filter(|s| s.enabled && envelope.egress.allows_mcp(&s.id)) {
         if let hive_runtime::McpTransport::Http { url } = &s.transport {
             policy.mcp_hosts.extend(hive_runtime::egress::HostPort::from_url(url));
         }

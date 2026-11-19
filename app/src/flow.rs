@@ -1323,7 +1323,7 @@ pub(crate) const IDLE_OFFER_AFTER: std::time::Duration = std::time::Duration::fr
 
 /// Whether this device can run `agent`'s runtime itself (configured here,
 /// not a fallback).
-fn can_run_here(state: &AppState, agent: &hive_core::WorkspaceAgent) -> bool {
+pub(crate) fn can_run_here(state: &AppState, agent: &hive_core::WorkspaceAgent) -> bool {
     let Some(rt) = state.combined_runtimes().into_iter().find(|r| r.id == agent.runtime_id) else { return false };
     state.resolve_runtime(&agent.runtime_id).provider == rt.provider_kind
 }

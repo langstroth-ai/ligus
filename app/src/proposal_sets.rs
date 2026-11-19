@@ -439,7 +439,7 @@ pub(crate) async fn send_scouts(
     tauri::async_runtime::spawn(async move {
         for body in prompts {
             let state = app2.state::<AppState>();
-            if let Err(e) = crate::send_message(app2.clone(), state, sid.to_string(), body).await {
+            if let Err(e) = crate::send_message(app2.clone(), state, sid.to_string(), body, None).await {
                 tracing::warn!(target: "proposal_sets", "scout turn failed: {e}");
             }
             let _ = app2.emit("workspace://synced", 1);

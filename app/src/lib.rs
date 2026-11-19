@@ -2385,10 +2385,25 @@ fn load_workspace_catalogs(
     workspace_root: &str,
     data_dir: &PathBuf,
 ) -> (Vec<RuntimeTarget>, String, Vec<McpServerSpec>, Vec<RuntimeTarget>, Vec<McpServerSpec>) {
+    let (base_runtimes, default_runtime_id, base_mcp) = load_config_catalogs(&[Path::new(workspace_root), data_dir]);
+    let managed_runtimes = load_managed_runtimes(workspace_root).unwrap_or_default();
+    let managed_mcp = load_managed_mcp(workspace_root).unwrap_or_default();
+    (
+        base_runtimes,
+        default_runtime_id,
+        base_mcp,
+        managed_runtimes,
+        managed_mcp,
+    )
+}
+
+/// The runtimes, default runtime and MCP servers of the first config file
+/// in `dirs` that parses.
+fn load_config_catalogs(dirs: &[&Path]) -> (Vec<RuntimeTarget>, String, Vec<McpServerSpec>) {
     let mut base_runtimes = Vec::new();
     let mut default_runtime_id = "anthropic".to_string();
     let mut base_mcp = Vec::new();
-    for candidate in hive_core::compat::config_candidates(&[Path::new(workspace_root), data_dir]) {
+    for candidate in hive_core::compat::config_candidates(dirs) {
         if let Ok(text) = std::fs::read_to_string(&candidate) {
             if let Ok(cfg) = hive_core::config::load_from_str(&text) {
                 base_runtimes = cfg.runtimes;
@@ -2419,15 +2434,18 @@ fn load_workspace_catalogs(
             }
         }
     }
-    let managed_runtimes = load_managed_runtimes(workspace_root).unwrap_or_default();
-    let managed_mcp = load_managed_mcp(workspace_root).unwrap_or_default();
-    (
-        base_runtimes,
-        default_runtime_id,
-        base_mcp,
-        managed_runtimes,
-        managed_mcp,
-    )
+    (base_runtimes, default_runtime_id, base_mcp)
+}
+
+/// One folder's catalogs as a turn there sees them (review F14): its
+/// config's and its managed runtimes and MCP servers, with the
+/// repo-supplied ones kept only when trusted on this device for that
+/// folder's repo. Read fresh, never from the viewed chat's (the global
+/// catalogs follow the window; a turn follows its own chat).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RootCatalog {
+    pub runtimes: Vec<RuntimeTarget>,
+    pub mcp: Vec<McpServerSpec>,
 }
 
 fn map_err<E: std::fmt::Display>(e: E) -> String {
@@ -3279,6 +3297,36 @@ impl AppState {
         self.default_runtime_id.lock().unwrap().clone()
     }
 
+    /// [`RootCatalog`] for `root` (empty: this device's own config only).
+    /// Changes nothing global: not the window's catalogs, trust or watcher.
+    fn catalog_for_root(&self, root: &str) -> RootCatalog {
+        let root = root.trim();
+        let (base_runtimes, base_mcp, managed_runtimes, managed_mcp) = if root.is_empty() {
+            let (r, _, m) = load_config_catalogs(&[&self.data_dir]);
+            (r, m, Vec::new(), Vec::new())
+        } else {
+            let (r, _, m, mr, mm) = load_workspace_catalogs(root, &self.data_dir);
+            (r, m, mr, mm)
+        };
+        let trust = if root.is_empty() {
+            // Only this device's own config: nothing to trust.
+            let mut t = CatalogTrust::default();
+            t.implicit.extend(base_runtimes.iter().map(|r| hive_runtime::workspace_trust::runtime_item(r, "").digest));
+            t.implicit.extend(base_mcp.iter().map(|s| hive_runtime::workspace_trust::mcp_item(s, "").digest));
+            t
+        } else {
+            CatalogTrust::compute(root, &self.data_dir, &base_runtimes, &base_mcp)
+        };
+        let settings = self.settings.lock().unwrap();
+        let mut runtimes = merge_runtimes(&base_runtimes, &managed_runtimes);
+        trust.retain_runtimes(&mut runtimes);
+        apply_remote_file_tools_optins(&mut runtimes, &settings);
+        let mut mcp = merge_mcp_servers(&base_mcp, &managed_mcp);
+        trust.retain_mcp(&mut mcp);
+        apply_mcp_auth(&mut mcp, &settings);
+        RootCatalog { runtimes, mcp }
+    }
+
     fn combined_mcp_servers(&self) -> Vec<McpServerSpec> {
         let base = self.base_mcp.lock().unwrap();
         let managed = self.managed_mcp.lock().unwrap();
@@ -3442,6 +3490,12 @@ impl AppState {
     /// Resolve a runtime id to an executable runtime. Unknown ids fall back to
     /// the default Anthropic runtime.
     fn resolve_runtime(&self, runtime_id: &str) -> ResolvedRuntime {
+        self.resolve_runtime_in(&self.combined_runtimes(), runtime_id)
+    }
+
+    /// [`Self::resolve_runtime`] against a given catalog (a turn's own,
+    /// [`RootCatalog`]).
+    fn resolve_runtime_in(&self, runtimes: &[RuntimeTarget], runtime_id: &str) -> ResolvedRuntime {
         // Live settings: API key (overrides env) + Claude Code permission mode.
         let (settings_key, claude_args, provider_keys, provider_base_urls, permission_mode) = {
             let s = self.settings.lock().unwrap();
@@ -3453,7 +3507,6 @@ impl AppState {
                 s.claude_permission_mode.clone(),
             )
         };
-        let runtimes = self.combined_runtimes();
         if let Some(rt) = runtimes.iter().find(|r| r.id == runtime_id) {
             let provider = rt.provider_kind;
             let endpoint = if provider.is_cli_agent() {
@@ -5901,9 +5954,26 @@ async fn request_proposal_changes(
         (instruction, proposal.producing_agent_id, before_ids)
     };
 
-    // Record the request on the thread and post the instruction as a user message.
     let workspace_id = state.active_workspace_id();
-    let actor = local_actor(&state);
+    run_revision_turn(&app, &state, sid, workspace_id, pid, &instruction, "Sent to the agent to revise.", producing_agent_id, before_ids).await
+}
+
+/// Record `note` on proposal `pid`'s thread, post `instruction` as this
+/// person's message, run the producing agent (else the primary) on it, and
+/// link what it proposes as the proposal's revision (superseding it).
+#[allow(clippy::too_many_arguments)]
+async fn run_revision_turn(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    sid: Uuid,
+    workspace_id: Uuid,
+    pid: Uuid,
+    instruction: &str,
+    note: &str,
+    producing_agent_id: Option<Uuid>,
+    before_ids: std::collections::HashSet<Uuid>,
+) -> Result<(), String> {
+    let actor = local_actor(state);
     {
         let mut svc = state.service.lock().unwrap();
         let role = svc
@@ -5913,12 +5983,12 @@ async fn request_proposal_changes(
             .unwrap_or(WorkspaceRole::Viewer);
         let _ = svc.refine_proposal(
             sid, workspace_id, pid, actor.id.clone(), role,
-            "Sent to the agent to revise.", true,
+            note, true,
         );
     }
     let trigger = {
         let mut svc = state.service.lock().unwrap();
-        svc.post_user_message(sid, workspace_id, &instruction).map_err(map_err)?
+        svc.post_user_message(sid, workspace_id, instruction).map_err(map_err)?
     };
 
     // Resolve the responder: the agent that produced the proposal, else the chat
@@ -5928,9 +5998,9 @@ async fn request_proposal_changes(
         let session = svc.load(sid).map_err(map_err)?.ok_or("unknown session")?;
         let agent = producing_agent_id
             .and_then(|id| session.workspace_agents.iter().find(|a| a.id == id).cloned());
-        responder_for(&state, &session, agent.as_ref())
+        responder_for(state, &session, agent.as_ref())
     };
-    let _guard = match crate::workflows::SessionBusyGuard::acquire(&app, sid) {
+    let _guard = match crate::workflows::SessionBusyGuard::acquire(app, sid) {
         Ok(g) => g,
         Err(_) => return Err("this chat is busy — try again once the current turn finishes".into()),
     };
@@ -5938,7 +6008,7 @@ async fn request_proposal_changes(
         let mut svc = state.service.lock().unwrap();
         let _ = svc.claim_turn(sid, workspace_id, trigger.id);
     }
-    run_turn(&app, &state, sid, workspace_id, &responder).await?;
+    run_turn(app, state, sid, workspace_id, &responder).await?;
 
     // Link any proposal the revision turn produced to the original (version chain)
     // and mark the original superseded, so the pane folds it under its successor.
@@ -5978,6 +6048,90 @@ async fn request_proposal_changes(
     }
     let _ = app.emit("workspace://synced", 1);
     Ok(())
+}
+
+/// The follow-up turn "Ask the agent to rebase" files (6.3): what doesn't
+/// apply, where, and the conflict as this device's git reports it.
+fn rebase_instruction(title: &str, conflict: &str, tip: &str, host: &str) -> String {
+    let tip = &tip[..tip.len().min(12)];
+    let conflict: String = conflict.chars().take(2000).collect();
+    format!(
+        "Your proposal \"{title}\" no longer applies to this chat's branch: it conflicts with what landed since you made it. \
+Rebase it onto the branch as it is now (tip {tip}) and produce an updated proposal with the same intent.\n\n\
+The conflict, as git reports it on {host}:\n\n{conflict}"
+    )
+}
+
+#[cfg(test)]
+mod rebase_tests {
+    #[test]
+    fn rebase_instruction_names_the_proposal_tip_host_and_conflict() {
+        let long = "x".repeat(5000);
+        let i = super::rebase_instruction("Fix pricing", &format!("conflicts in shop/pricing.py {long}"), &"a".repeat(40), "mac-test");
+        assert!(i.contains("\"Fix pricing\"") && i.contains("aaaaaaaaaaaa)") && !i.contains(&"a".repeat(13)));
+        assert!(i.contains("on mac-test") && i.contains("conflicts in shop/pricing.py"));
+        assert!(i.len() < 2600, "the conflict is capped");
+    }
+}
+
+/// What "Ask the agent to rebase" files: the instruction and who answers.
+pub(crate) struct RebaseRequest {
+    pub workspace_id: Uuid,
+    pub instruction: String,
+    pub producing_agent_id: Option<Uuid>,
+    pub before_ids: std::collections::HashSet<Uuid>,
+}
+
+/// The follow-up turn for a proposal to a workspace repo that doesn't
+/// apply here, with the conflict this device's checkout finds (probed
+/// without changing the chat's branch). Refused for a proposal that isn't
+/// a repo change, was applied, or applies cleanly now.
+pub(crate) fn rebase_request(state: &AppState, sid: Uuid, pid: Uuid) -> Result<RebaseRequest, String> {
+    let (session, proposal) = {
+        let svc = state.service.lock().unwrap();
+        let session = svc.load(sid).map_err(map_err)?.ok_or("unknown session")?;
+        let proposal = session.proposals.iter().find(|p| p.id == pid).cloned().ok_or("unknown proposal")?;
+        (session, proposal)
+    };
+    proposal_sets::ensure_not_frozen(&session, pid)?;
+    if proposal.status == ProposalStatus::Applied {
+        return Err("this proposal was already applied".into());
+    }
+    let (Some(repo), Some(diff)) = (proposal.repo_id, proposal.diff.as_deref()) else {
+        return Err("only a change to a workspace repository can be rebased this way; send it back to revise instead".into());
+    };
+    if session.repo.as_ref().and_then(|r| r.repo_id) != Some(repo) {
+        return Err("this chat now works in another repository".into());
+    }
+    let checkout = crate::repos_ui::chat_checkout(state, sid).ok_or("this chat's repository isn't checked out on this device")?;
+    let chat = sid.to_string();
+    let conflict = hive_runtime::repos::apply::conflict_probe(&checkout, &chat, diff)?
+        .ok_or("it applies on this chat's branch now; apply it again")?;
+    let tip = hive_runtime::repos::git::git(&checkout, &["rev-parse", &format!("refs/heads/{}", hive_runtime::git_worktree::chat_branch_name(&chat))]).unwrap_or_default();
+    Ok(RebaseRequest {
+        workspace_id: session.workspace_id,
+        instruction: rebase_instruction(&proposal.title, &conflict, &tip, &crate::repos_ui::host_label()),
+        producing_agent_id: proposal.producing_agent_id,
+        before_ids: session.proposals.iter().map(|p| p.id).collect(),
+    })
+}
+
+/// "Ask the agent to rebase" after an apply conflict (6.3): files a
+/// follow-up turn to the agent that made the proposal, carrying the
+/// conflict ([`rebase_request`]); its new proposal supersedes this one and
+/// needs approval again (review F3: only approved bytes enter the ledger).
+#[tauri::command]
+async fn ask_agent_to_rebase(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+    proposal_id: String,
+) -> Result<(), String> {
+    let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
+    let pid = Uuid::parse_str(&proposal_id).map_err(map_err)?;
+    let app2 = app.clone();
+    let req = tauri::async_runtime::spawn_blocking(move || rebase_request(&app2.state::<AppState>(), sid, pid)).await.map_err(map_err)??;
+    run_revision_turn(&app, &state, sid, req.workspace_id, pid, &req.instruction, "Sent to the agent to rebase.", req.producing_agent_id, req.before_ids).await
 }
 
 /// Hide (or restore) proposals in the Review inbox. Takes a list so "Clear
@@ -6807,6 +6961,35 @@ fn responder_for(state: &AppState, session: &ChatSession, agent: Option<&Workspa
     }
 }
 
+/// The responder with its runtime resolved against a turn's own catalog,
+/// when that differs from the window's resolution (plus the old and new
+/// runtime-identity blocks, to swap in the system prompt); `None` when it
+/// is the same runtime.
+fn rebind_to_catalog(state: &AppState, responder: &Responder, catalog: &RootCatalog) -> Option<(Responder, String, String)> {
+    let here = state.resolve_runtime_in(&catalog.runtimes, &responder.runtime_id);
+    let window = state.resolve_runtime(&responder.runtime_id);
+    if format!("{here:?}") == format!("{window:?}") {
+        return None;
+    }
+    let host = format!("{} (this device)", state.device_name);
+    let old_block = prompt::runtime_identity_block(&responder.runtime, &host);
+    let new_block = prompt::runtime_identity_block(&here, &host);
+    tracing::info!(target: "dispatch", runtime = %responder.runtime_id, "the turn's chat resolves its runtime differently from the viewed folder; using the chat's");
+    Some((
+        Responder {
+            system_base: responder.system_base.replace(&old_block, &new_block),
+            agent_id: responder.agent_id,
+            author: responder.author.clone(),
+            runtime_id: responder.runtime_id.clone(),
+            runtime: here,
+            owner_actor_id: responder.owner_actor_id.clone(),
+            host_id: responder.host_id.clone(),
+        },
+        old_block,
+        new_block,
+    ))
+}
+
 impl AppState {
     /// The local account id (used for cross-device dispatch ownership checks).
     fn local_actor_id(&self) -> String {
@@ -6872,32 +7055,18 @@ impl AppState {
     /// side effects (catalogs + fs watcher, which already guard bad roots).
     fn apply_chat_dir(&self, session_id: Option<Uuid>) {
         // A chat with a workspace repo shows that repo's checkout on this
-        // device (its chat worktree), whatever folder the workspace has.
-        let repo_root = session_id
-            .and_then(|sid| crate::repos_ui::chat_checkout(self, sid))
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| self.workspace_repo_root());
+        // device (its chat worktree once a turn has cut its branch from the
+        // pinned base; viewing never cuts one), whatever folder the
+        // workspace has. Any other chat: its worktree in the bound folder.
         let dir = match session_id {
-            Some(sid) if !repo_root.trim().is_empty()
-                && hive_runtime::git_worktree::is_git_repo(std::path::Path::new(&repo_root)) =>
-            {
-                match hive_runtime::git_worktree::chat_worktree(
-                    std::path::Path::new(&repo_root),
-                    &sid.to_string(),
-                ) {
-                    Ok(path) => path.to_string_lossy().into_owned(),
-                    Err(e) => {
-                        tracing::warn!(
-                            target: "worktree",
-                            "chat worktree unavailable, using workspace folder: {e}"
-                        );
-                        repo_root
-                    }
-                }
-            }
-            // No chat selected, or non-git root → the workspace folder as-is.
-            _ => repo_root,
+            Some(sid) => match crate::repos_ui::chat_checkout(self, sid) {
+                Some(checkout) => crate::repos_ui::view_dir(&checkout, sid),
+                None => legacy_chat_dir(&self.workspace_repo_root(), sid),
+            },
+            None => self.workspace_repo_root(),
         };
+        // The window's root, catalogs and watcher only: a turn resolves its
+        // own from its chat (`turn_scope`, review F14).
         *self.workspace_root.lock().unwrap() = dir.clone();
         self.reload_workspace_catalogs(&dir);
         self.arm_fs_watcher(&dir);
@@ -8136,12 +8305,17 @@ fn turns_to_messages(turns: &[ChatTurn]) -> Vec<Value> {
 async fn mcp_tool_set(
     state: &State<'_, AppState>,
     egress: &hive_core::sandbox::EgressPolicy,
+    servers: &[McpServerSpec],
 ) -> Option<(Vec<Value>, McpToolExecutor)> {
     // Renew any near-expiry remote-server tokens before we build the registry.
     state.ensure_fresh_mcp_tokens().await;
     // Snapshot the registry so we don't hold locks across awaits. The turn's
     // sandbox envelope decides which servers it may reach at all.
-    let registry = McpRegistry::new(crate::guards::filter_mcp_servers(state, state.combined_mcp_servers(), egress));
+    // The turn's own catalog (its chat's folder), never the viewed one's;
+    // tokens refreshed above are re-read from the settings.
+    let mut servers = servers.to_vec();
+    apply_mcp_auth(&mut servers, &state.settings.lock().unwrap());
+    let registry = McpRegistry::new(crate::guards::filter_mcp_servers(state, servers, egress));
     registry.enabled().next()?;
 
     let tagged = registry.list_all_tools().await;
@@ -8217,6 +8391,52 @@ fn store_remote_file_tools_optin(settings: &mut LiveSettings, runtime_id: &str, 
 
 /// The checkout a turn's worktrees are cut from: the active workspace's bound
 /// folder, else (no binding) the effective workspace root.
+/// A chat's folder in a workspace's bound folder `bound` (a chat without a
+/// workspace repo): its persistent chat worktree when `bound` is a git
+/// repo, else `bound` itself (also when the worktree can't be made); empty
+/// when the workspace has no folder on this device.
+fn legacy_chat_dir(bound: &str, session_id: Uuid) -> String {
+    if bound.trim().is_empty() {
+        return String::new();
+    }
+    if !hive_runtime::git_worktree::is_git_repo(Path::new(bound)) {
+        return bound.to_string();
+    }
+    match hive_runtime::git_worktree::chat_worktree(Path::new(bound), &session_id.to_string()) {
+        Ok(path) => path.to_string_lossy().into_owned(),
+        Err(e) => {
+            tracing::warn!(target: "worktree", "chat worktree unavailable, using workspace folder: {e}");
+            bound.to_string()
+        }
+    }
+}
+
+/// What one turn runs against (review F14): its chat's directory, and the
+/// catalogs and trust read from it, whatever chat or folder the window
+/// shows. For a repo chat, its checkout on this device after the host-side
+/// gate (`Err`: the turn must not run here).
+pub(crate) struct TurnScope {
+    pub repo: Option<crate::repos_ui::DeskRepoTurn>,
+    /// The chat's directory (its chat worktree), or "" with no folder here.
+    pub dir: String,
+    /// The checkout per-turn worktrees are cut from.
+    pub repo_root: String,
+    pub catalog: RootCatalog,
+}
+
+pub(crate) fn turn_scope(state: &AppState, session: &ChatSession) -> Result<TurnScope, String> {
+    let repo = crate::repos_ui::turn_repo(state, session)?;
+    let (dir, repo_root) = match &repo {
+        Some(r) => (r.chat_worktree.to_string_lossy().into_owned(), r.checkout.to_string_lossy().into_owned()),
+        None => {
+            let bound = workspace_dir_for(&state.settings.lock().unwrap().workspace_dirs, &session.workspace_id.to_string());
+            (legacy_chat_dir(&bound, session.id), bound)
+        }
+    };
+    let catalog = state.catalog_for_root(&dir);
+    Ok(TurnScope { repo, dir, repo_root, catalog })
+}
+
 fn turn_repo_root(bound: &str, workspace_root: &str) -> String {
     if bound.trim().is_empty() { workspace_root.to_string() } else { bound.to_string() }
 }
@@ -8250,11 +8470,12 @@ async fn try_tool_loop(
     turns: &[ChatTurn],
     reply_to: Option<Uuid>,
     egress: &hive_core::sandbox::EgressPolicy,
+    servers: &[McpServerSpec],
 ) -> Result<Option<TurnOutcome>, String> {
     let Some(api_key) = responder.runtime.api_key.clone() else {
         return Ok(None);
     };
-    let mcp = mcp_tool_set(state, egress).await;
+    let mcp = mcp_tool_set(state, egress, servers).await;
     // The Ligus tools ride the same loop (D.3.3), with or without MCP servers.
     let ligus_offered = hive_runtime::ligus_mcp::offered_for(&responder.runtime, !egress.is_open());
     if mcp.is_none() && !ligus_offered {
@@ -8558,10 +8779,40 @@ async fn run_prepared_turn_inner(
     // Who the turn answers (what the reply's `@you` means), named per turn.
     let system = join_system(&system, &prompt::requester_guidance(session, reply_to));
 
+    // This turn's own directory, catalogs and trust (review F14), and for a
+    // repo chat the host-side gate (repos-and-checkouts 5.3, review F8): a
+    // chat with a repo runs only in this device's checkout of it, on its
+    // chat branch brought up to date; never in other code. All resolved
+    // from the chat, never from the chat or folder the window shows, and
+    // before any tool loop. The turn is claimed.
+    let scope = match turn_scope(state, session) {
+        Ok(s) => s,
+        Err(reason) => {
+            let note = format!("{} did not run: {reason}", responder.author);
+            let mut svc = state.service.lock().unwrap();
+            if let Ok(mid) = svc.begin_assistant_message(session_id, workspace_id, &responder.author, &responder.runtime_id, responder.agent_id, reply_to) {
+                let _ = svc.complete_assistant_message(session_id, workspace_id, mid, &note);
+            }
+            return Err(note);
+        }
+    };
+    // The responder's runtime as this chat's catalog resolves it (a runtime
+    // only the viewed folder supplies or trusts isn't this turn's).
+    let rebound = rebind_to_catalog(state, responder, &scope.catalog);
+    let system = match &rebound {
+        Some((_, old_block, new_block)) => system.replace(old_block.as_str(), new_block),
+        None => system,
+    };
+    let responder = rebound.as_ref().map(|(r, _, _)| r).unwrap_or(responder);
+    let system = match &scope.repo {
+        Some(r) => join_system(&system, &r.context),
+        None => system,
+    };
+
     // The workspace's sandbox envelope for this turn (isolation, egress,
     // redaction, human gate), enforced below for whatever runtime answers.
     let envelope = crate::guards::turn_envelope(session);
-    let enforcement = crate::guards::enforcement_for(state, responder.runtime.provider, &envelope);
+    let enforcement = crate::guards::enforcement_for_servers(state, responder.runtime.provider, &envelope, &scope.catalog.mcp);
     if let Some(reason) = &enforcement.refuse {
         crate::guards::record_egress_refusal(state, workspace_id, session_id, responder.runtime.provider);
         return Err(reason.clone());
@@ -8609,7 +8860,7 @@ async fn run_prepared_turn_inner(
     // failure we fall through to streaming.
     if tools_allowed && responder.runtime.provider == ModelProviderKind::Anthropic {
         if let Some(outcome) =
-            try_tool_loop(app, state, session_id, workspace_id, responder, &system, &turns, reply_to, &envelope.egress)
+            try_tool_loop(app, state, session_id, workspace_id, responder, &system, &turns, reply_to, &envelope.egress, &scope.catalog.mcp)
                 .await?
         {
             return Ok(outcome);
@@ -8625,7 +8876,7 @@ async fn run_prepared_turn_inner(
     // the dispatcher; an OpenAI-wire server that rejects tools falls back to
     // plain chat there.
     let mcp_tools = if tools_allowed && responder.runtime.runs_agent_tools() {
-        mcp_tool_set(state, &envelope.egress).await
+        mcp_tool_set(state, &envelope.egress, &scope.catalog.mcp).await
     } else {
         None
     };
@@ -8675,28 +8926,9 @@ async fn run_prepared_turn_inner(
             .map_err(map_err)?
     };
 
-    // The host-side repo gate (repos-and-checkouts 5.3, review F8): a chat
-    // with a repo runs only in this device's checkout of it, on its chat
-    // branch brought up to date; never in other code. The turn is claimed.
-    let repo_turn = match crate::repos_ui::turn_repo(state, session) {
-        Ok(r) => r,
-        Err(reason) => {
-            let mut svc = state.service.lock().unwrap();
-            let note = format!("{} did not run: {reason}", responder.author);
-            let _ = svc.complete_assistant_message(session_id, workspace_id, message_id, &note);
-            return Err(note);
-        }
-    };
-    let system = match &repo_turn {
-        Some(r) => join_system(&system, &r.context),
-        None => system,
-    };
-    // A repo chat reads and runs in its own chat worktree, never the active
-    // chat's folder (review F14).
-    let workspace_root = match &repo_turn {
-        Some(r) => r.chat_worktree.to_string_lossy().into_owned(),
-        None => state.workspace_root.lock().unwrap().clone(),
-    };
+    let repo_turn = &scope.repo;
+    // The turn reads and runs in its own chat's directory (review F14).
+    let workspace_root = scope.dir.clone();
 
     // Per-turn isolation (concurrency): a *file-mutating* subprocess agent runs
     // in its own git worktree cut from HEAD, so parallel turns can't clobber each
@@ -8711,12 +8943,9 @@ async fn run_prepared_turn_inner(
             p if p.follows_permission_mode() => state.settings.lock().unwrap().claude_permission_mode != "default",
             p => hive_runtime::author_gate::always_writes(p),
         };
-    // Worktrees are cut from the workspace's own checkout, not from
-    // `workspace_root`, which follows the *active* chat's base worktree.
-    let repo_root = match &repo_turn {
-        Some(r) => r.checkout.to_string_lossy().into_owned(),
-        None => turn_repo_root(&state.workspace_repo_root(), &workspace_root),
-    };
+    // Worktrees are cut from the chat's checkout (the repo's, or the
+    // workspace's bound folder), never from its chat worktree.
+    let repo_root = turn_repo_root(&scope.repo_root, &workspace_root);
     let in_repo = !repo_root.trim().is_empty()
         && hive_runtime::git_worktree::is_git_repo(std::path::Path::new(&repo_root));
     // Unique per turn, so two turns in one chat never share (and remove)
@@ -8777,7 +9006,7 @@ async fn run_prepared_turn_inner(
     if worktree.is_none()
         && lazy_worktree.is_none()
         && !responder.runtime.provider.is_cli_agent()
-        && state.combined_mcp_servers().iter().any(|s| s.enabled)
+        && scope.catalog.mcp.iter().any(|s| s.enabled)
         && hive_runtime::git_worktree::is_git_repo(std::path::Path::new(&workspace_root))
     {
         tracing::warn!(
@@ -8939,7 +9168,7 @@ async fn run_prepared_turn_inner(
     };
     // Every child this turn spawns (the CLI, stdio MCP servers, run_command)
     // runs under this policy in the host's OS sandbox.
-    let mut sandbox_policy = crate::guards::turn_sandbox_policy(state, session, &envelope, &gate_plan, worktree.is_some() || lazy_worktree.is_some());
+    let mut sandbox_policy = crate::guards::turn_sandbox_policy_with(state, session, &envelope, &gate_plan, worktree.is_some() || lazy_worktree.is_some(), &scope.catalog.mcp);
     // The turn's Ligus MCP socket: the one extra path the sandbox allows.
     sandbox_policy.ligus_mcp_socket = ligus.socket.clone();
     let sandbox_denials = sandbox_policy.denials.clone();
@@ -9079,7 +9308,7 @@ async fn run_prepared_turn_inner(
             }
             let mcp_effects = ligus.effects();
             let body = {
-                let root = state.workspace_root.lock().unwrap().clone();
+                let root = workspace_root.clone();
                 let mut svc = state.service.lock().unwrap();
                 finalize_reply_with(
                     &mut svc, session_id, workspace_id, message_id, &responder.author, responder.agent_id, &root, &full,
@@ -9360,6 +9589,7 @@ async fn send_message(
     state: State<'_, AppState>,
     session_id: String,
     body: String,
+    run_here: Option<bool>,
 ) -> Result<(), String> {
     let sid = Uuid::parse_str(&session_id).map_err(map_err)?;
     let local_actor_id = state.local_actor_id();
@@ -9440,7 +9670,22 @@ async fn send_message(
         // dispatch. Mirrors `maybe_respond`; both gates must use `turn_runs_here`.
         let local_only = state.is_local_only_ws(workspace_id);
         let links = device_links_of(&state.service.lock().unwrap(), workspace_id);
-        let binding = host_binding(&responder.host_id, &state.local_host_id());
+        let mut binding = host_binding(&responder.host_id, &state.local_host_id());
+        // "Run here this time" (6.1): the person's own message to an agent
+        // pinned to a host without the chat's repo runs on this device
+        // instead, once. Like an idle-host offer, the claim below decides:
+        // the host backs off when it sees it. Refused (and left to the host)
+        // unless this device has the repo, can run the agent's runtime, and
+        // the agent is this person's.
+        if depth == 0 && run_here == Some(true) && binding == HostBinding::Elsewhere {
+            match run_here_once(&state, &session, agent.as_ref(), &local_actor_id) {
+                Ok(()) => binding = HostBinding::ThisDevice,
+                Err(why) => {
+                    let mut svc = state.service.lock().unwrap();
+                    let _ = svc.post_system_note(sid, workspace_id, format!("Couldn't run {} here this time: {why}. It stays with its host.", responder.author));
+                }
+            }
+        }
         if !runs_here_linked(local_only, &links, &session, &local_actor_id, &responder.owner_actor_id, binding) {
             tracing::info!(
                 target: "dispatch",
@@ -9572,6 +9817,25 @@ async fn send_message(
         });
     }
 
+    Ok(())
+}
+
+/// Whether this device may take `agent`'s turn in `session` this once, in
+/// place of its pinned host ("Run here this time"): the agent is this
+/// person's, its runtime runs here, and this device has the chat's repo
+/// ready (the host-side gate still runs at turn time).
+fn run_here_once(state: &AppState, session: &ChatSession, agent: Option<&WorkspaceAgent>, me: &str) -> Result<(), String> {
+    let a = agent.ok_or("only an agent pinned to a host can be run here")?;
+    if a.owner_actor_id != me {
+        return Err(format!("{} belongs to someone else", a.name));
+    }
+    if !crate::flow::can_run_here(state, a) {
+        return Err(format!("{}'s runtime isn't available on this device", a.name));
+    }
+    let svc = state.service.lock().unwrap();
+    if !crate::repos_ui::runs_here(state, &svc, session) {
+        return Err("this chat's repository isn't ready on this device".into());
+    }
     Ok(())
 }
 
@@ -15217,6 +15481,9 @@ pub fn run() {
             repos_ui::set_repo_coverage_reporting,
             repos_ui::chat_workspace_repo,
             repos_ui::set_chat_workspace_repo,
+            repos_ui::clone_workspace_repo,
+            repos_ui::open_chat_checkout,
+            ask_agent_to_rebase,
             add_workspace_to_list,
             pick_workspace_folder,
             read_workspace_file,
