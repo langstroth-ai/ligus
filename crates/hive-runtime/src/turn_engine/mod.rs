@@ -180,6 +180,9 @@ pub enum Phase {
 pub trait TurnHost: Sync {
     /// The chat service, locked only for short store calls.
     fn service(&self) -> &Mutex<ChatService>;
+    /// Called on the service each time the engine locks it (a host serving
+    /// several workspaces pins it to this turn's founder).
+    fn pin(&self, _svc: &mut ChatService) {}
 
     /// The MCP servers the turn may reach (`egress`; without the shell, only
     /// servers known to offer none). Empty: no MCP tools.
@@ -269,6 +272,8 @@ pub trait TurnHost: Sync {
     fn activity(&self, _message_id: Uuid, _activity: &StreamActivity) {}
     /// The reply completed or failed (`text`: the body, or the error).
     fn phase(&self, _message_id: Uuid, _phase: Phase, _text: &str) {}
+    /// The reply placeholder was posted.
+    fn begun(&self, _message_id: Uuid) {}
     /// The store changed (a reply began or completed, a proposal was filed).
     fn changed(&self) {}
     /// Self-medication locked the chat down.
@@ -294,8 +299,11 @@ pub trait TurnHost: Sync {
     }
 }
 
-fn lock(svc: &Mutex<ChatService>) -> MutexGuard<'_, ChatService> {
-    svc.lock().unwrap_or_else(|e| e.into_inner())
+/// The host's service, locked and pinned for this turn.
+fn locked<H: TurnHost>(host: &H) -> MutexGuard<'_, ChatService> {
+    let mut g = host.service().lock().unwrap_or_else(|e| e.into_inner());
+    host.pin(&mut g);
+    g
 }
 
 /// `base` and `extra` as one system prompt.
@@ -355,7 +363,6 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
         options,
     } = input;
     let rt = &responder.runtime;
-    let svc = host.service();
     let tools_allowed = gate.allows_tools();
     let restricted = !envelope.egress.is_open();
     let cli = rt.provider.is_cli_agent();
@@ -391,9 +398,10 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
         None => system,
     };
 
-    let mid = lock(svc)
+    let mid = locked(host)
         .begin_assistant_message(chat_id, workspace_id, responder.author.clone(), responder.runtime_id.clone(), responder.agent_id, reply_to)
         .map_err(|e| TurnError { message: e.to_string(), stopped: false, message_id: None })?;
+    host.begun(mid);
     host.changed();
     let fail = |message: String| TurnError { message, stopped: false, message_id: Some(mid) };
 
@@ -401,7 +409,7 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     let checkout = match host.checkout(&session, mid).await {
         Ok(c) => c,
         Err(note) => {
-            let _ = lock(svc).complete_assistant_message(chat_id, workspace_id, mid, note.clone());
+            let _ = locked(host).complete_assistant_message(chat_id, workspace_id, mid, note.clone());
             host.changed();
             return Err(fail(note));
         }
@@ -444,7 +452,7 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
     }
     if require_isolation && cli && write_capable && worktree.is_none() {
         let note = host.isolation_refusal(&responder.effect_author);
-        let _ = lock(svc).complete_assistant_message(chat_id, workspace_id, mid, note.clone());
+        let _ = locked(host).complete_assistant_message(chat_id, workspace_id, mid, note.clone());
         host.changed();
         return Err(fail(note));
     }
@@ -503,7 +511,7 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
         pending.push_str(&text);
         if last_flush.elapsed() >= FLUSH_EVERY {
             let chunk = std::mem::take(&mut pending);
-            let _ = lock(svc).append_chunk(chat_id, workspace_id, mid, chunk);
+            let _ = locked(host).append_chunk(chat_id, workspace_id, mid, chunk);
             last_flush = Instant::now();
         }
     };
@@ -522,7 +530,7 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
         (None, mcp_tools)
     } else {
         let workflow_tool = if (builtin.is_some() || mcp_tools.is_some()) && folded.is_none() && crate::workflow_tool::wanted(&last_user) {
-            lock(svc).load(chat_id).ok().flatten().and_then(|s| host.workflow_tool(&s))
+            locked(host).load(chat_id).ok().flatten().and_then(|s| host.workflow_tool(&s))
         } else {
             None
         };
@@ -642,7 +650,7 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
                 && effects.as_ref().is_none_or(|m| m.is_empty());
             let full = if empty { crate::empty_reply_notice(&responder.effect_author) } else { full };
             let body = {
-                let mut s = lock(svc);
+                let mut s = locked(host);
                 host.finalize(
                     &mut s,
                     FinalizeArgs {
@@ -674,7 +682,7 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
                         prop.base_commit = Some(tip.clone());
                         prop.base_ref = base_ref.clone();
                     }
-                    prop.produced_on = Some(lock(svc).device_id());
+                    prop.produced_on = Some(locked(host).device_id());
                     // `ligus_propose_diff` named and described it.
                     if let Some((t, b, tc)) = effects.as_ref().and_then(|m| m.diff_intent.clone()) {
                         prop.title = t;
@@ -683,7 +691,7 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
                     }
                     host.before_file_proposal(&mut prop);
                     let id = prop.id;
-                    let mut s = lock(svc);
+                    let mut s = locked(host);
                     // Filed as the agent's own effect (A3 key, Agent tier).
                     match s.as_agent(responder.agent_id, |s| s.upsert_proposal(chat_id, workspace_id, prop)) {
                         Ok(()) => {
@@ -698,14 +706,14 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
                 host.release_worktree(wt, chat_id);
             }
             let notes = turn_notes.lock().map(|n| n.clone()).unwrap_or_default();
-            iface.finish(svc, chat_id, workspace_id, &responder.effect_author, &notes, options.detailed_report);
+            iface.finish(|| locked(host), chat_id, workspace_id, &responder.effect_author, &notes, options.detailed_report);
             host.changed();
             let body = body.map_err(fail)?;
             host.phase(mid, Phase::Completed, &body);
             Ok(TurnOutcome { message_id: mid, body, proposal, empty })
         }
         Err(e) => {
-            iface.finish(svc, chat_id, workspace_id, &responder.effect_author, &[], options.detailed_report);
+            iface.finish(|| locked(host), chat_id, workspace_id, &responder.effect_author, &[], options.detailed_report);
             self_medicate(host, workspace_id, chat_id, mid, &hits.take(), None, &[], &last_user);
             // A failed or stopped turn's partial edits are discarded.
             if let Some(wt) = worktree {
@@ -714,7 +722,7 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
             let msg = e.to_string();
             if stopped {
                 tracing::info!(target: "dispatch", "turn stopped by user");
-                let _ = lock(svc).complete_assistant_message(chat_id, workspace_id, mid, String::new());
+                let _ = locked(host).complete_assistant_message(chat_id, workspace_id, mid, String::new());
                 host.changed();
                 host.phase(mid, Phase::Completed, "");
                 return Err(TurnError { message: msg, stopped: true, message_id: Some(mid) });
@@ -722,7 +730,7 @@ pub async fn run<H: TurnHost>(host: &H, input: TurnInput) -> Result<TurnOutcome,
             tracing::error!(target: "dispatch", error = %msg, "turn failed");
             host.usage_error(rt.provider, &msg);
             let shown = host.error_text(&msg);
-            let _ = lock(svc).complete_assistant_message(chat_id, workspace_id, mid, format!("[error] {shown}"));
+            let _ = locked(host).complete_assistant_message(chat_id, workspace_id, mid, format!("[error] {shown}"));
             host.changed();
             host.phase(mid, Phase::Error, &msg);
             Err(fail(shown))
@@ -746,7 +754,7 @@ fn self_medicate<H: TurnHost>(
     if findings.is_empty() {
         return;
     }
-    match lock(host.service()).self_medicate(workspace_id, chat_id, Some(message_id), &findings) {
+    match locked(host).self_medicate(workspace_id, chat_id, Some(message_id), &findings) {
         Ok(n) => tracing::warn!(target: "guards", chat = %chat_id, signals = n, "chat locked down by self-medication"),
         Err(e) => tracing::error!(target: "guards", "couldn't lock chat {chat_id} down: {e}"),
     }
@@ -783,13 +791,27 @@ pub fn decide_gate(
     session: &ChatSession,
     trigger: Uuid,
     agent_id: Option<Uuid>,
-    mut rt: ResolvedRuntime,
+    rt: ResolvedRuntime,
     grants_setting: Option<bool>,
 ) -> Result<Gated, String> {
     let author_role = svc.trigger_author_role(session.id, trigger).ok().flatten();
     let shell_role = svc.trigger_shell_role(session.id, trigger).ok().flatten();
     let grants = svc.sandbox_grants_here(session.workspace_id, grants_setting).0;
-    let shell_allowed = crate::author_gate::shell_allowed(shell_role, agent_id.is_some_and(|id| grants.shell_granted(id)));
+    let granted = agent_id.is_some_and(|id| grants.shell_granted(id));
+    decide_gate_with(session, rt, author_role, shell_role, granted, grants.paths_for(agent_id))
+}
+
+/// [`decide_gate`] with the roles already resolved: `author_role` for the
+/// author gate, `shell_role` and `shell_granted` for the shell rule.
+pub fn decide_gate_with(
+    session: &ChatSession,
+    mut rt: ResolvedRuntime,
+    author_role: Option<hive_core::WorkspaceRole>,
+    shell_role: Option<hive_core::WorkspaceRole>,
+    shell_granted: bool,
+    grants: hive_core::sandbox::PathGrants,
+) -> Result<Gated, String> {
+    let shell_allowed = crate::author_gate::shell_allowed(shell_role, shell_granted);
     let gate = crate::author_gate::gate_turn(rt.provider, &mut rt.args, author_role);
     let envelope = hive_core::sandbox::envelope_for_session(session);
     let enforcement = crate::sandbox::enforce(rt.provider, &envelope, &Vec::new());
@@ -802,5 +824,59 @@ pub fn decide_gate(
     crate::executor::turn_allowed(rt.provider)?;
     crate::author_gate::gate_shell(rt.provider, &mut rt.args, shell_allowed)?;
     rt.args.extend(enforcement.extra_args);
-    Ok(Gated { runtime: rt, gate, envelope, shell_allowed, allow_run_command: enforcement.allow_run_command, grants: grants.paths_for(agent_id) })
+    Ok(Gated { runtime: rt, gate, envelope, shell_allowed, allow_run_command: enforcement.allow_run_command, grants })
+}
+
+impl Gated {
+    /// The base sandbox policy for this decision on a `host` (the engine adds
+    /// the worktree's isolation and the Ligus MCP socket).
+    pub fn policy(&self, host: crate::executor::HostKind) -> TurnPolicy {
+        let mut p = TurnPolicy::new(host, self.envelope.clone(), self.gate.clone());
+        p.shell_allowed = self.shell_allowed;
+        p.grants = self.grants.clone();
+        p
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The repo gate, for a host without one of its own
+// ---------------------------------------------------------------------------
+
+/// The host-side repo gate (repos-and-checkouts 5.3) for a host with no rules
+/// of its own (`lt`): a chat without a repo runs in `legacy` (this device's
+/// bound checkout, if any); a chat with one runs only in this device's
+/// confirmed checkout of it, on its chat branch brought up to date with the
+/// chat's ledger (a base this device just cut is pinned). `Err` is the
+/// refusal (still cloning, no checkout here, a moved remote).
+pub fn repo_checkout(svc: &Mutex<ChatService>, session: &ChatSession, host_label: &str, legacy: Option<PathBuf>) -> Result<Checkout, String> {
+    use crate::repos::{self as rr, TurnCheckout};
+    let gate = {
+        let svc = svc.lock().unwrap_or_else(|e| e.into_inner());
+        let roster = svc.workspace_roster(session.workspace_id).map_err(|e| e.to_string())?;
+        rr::turn_checkout(svc.store(), svc.device_id(), host_label, session, &roster, &rr::cloning())
+    };
+    let ready = match gate {
+        TurnCheckout::NoRepo => {
+            let root = legacy.filter(|p| crate::git_worktree::is_git_repo(p));
+            return Ok(Checkout { workspace_root: None, repo_root: root, ..Default::default() });
+        }
+        TurnCheckout::Ready(r) => r,
+        TurnCheckout::Cloning { repo_name } => return Err(format!("{repo_name} is still cloning on {host_label}; ask again when it finishes")),
+        TurnCheckout::Refused { reason, .. } => return Err(reason),
+    };
+    let prepared = rr::prepare_chat(&ready, session, host_label)?;
+    if let Some(pin) = &prepared.pin {
+        let r = svc.lock().unwrap_or_else(|e| e.into_inner()).pin_chat_base(session.id, session.workspace_id, ready.repo.id, pin);
+        if let Err(e) = r {
+            tracing::warn!(target: "repos", "couldn't pin the chat's base: {e}");
+        }
+    }
+    let base_branch = session.repo.as_ref().map(|r| r.base_branch.clone()).unwrap_or_default();
+    let context = rr::turn_context(&TurnCheckout::Ready(ready.clone()), session.id, &base_branch);
+    Ok(Checkout {
+        context,
+        workspace_root: Some(prepared.chat_worktree.to_string_lossy().into_owned()),
+        repo_root: Some(ready.path),
+        base: Some((prepared.tip, base_branch)),
+    })
 }

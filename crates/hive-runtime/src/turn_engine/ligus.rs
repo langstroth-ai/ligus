@@ -115,12 +115,21 @@ impl TurnIface {
     /// End the turn: revoke the credential, record the content-free tool
     /// summary and (`detailed`) the turn's notes, and show the agent's
     /// self-report (`detailed`: with its confidence).
-    /// Locks `svc` only after the turn is finished (finishing records the
-    /// tool summary through the host, which locks it too).
-    pub fn finish(&self, svc: &std::sync::Mutex<ChatService>, chat_id: Uuid, workspace_id: Uuid, author: &str, notes: &[String], detailed: bool) {
+    /// Locks the service (`lock`) only after the turn is finished:
+    /// finishing records the tool summary through the host, which locks it
+    /// too.
+    pub fn finish<'a>(
+        &self,
+        lock: impl FnOnce() -> std::sync::MutexGuard<'a, ChatService>,
+        chat_id: Uuid,
+        workspace_id: Uuid,
+        author: &str,
+        notes: &[String],
+        detailed: bool,
+    ) {
         let Some(t) = &self.turn else { return };
         t.finish();
-        let mut svc = svc.lock().unwrap_or_else(|e| e.into_inner());
+        let mut svc = lock();
         if detailed {
             for n in notes {
                 let json = serde_json::json!({ "note": n }).to_string();
