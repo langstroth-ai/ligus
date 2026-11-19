@@ -52,10 +52,12 @@ pub fn listing(s: &Shared) -> ApiResult<Value> {
     let live: Vec<_> = entries.iter().filter(|e| !e.removed).map(|e| e.repo.clone()).collect();
     let mine = rr::coverage(svc.store(), s.ws, &live, &rr::cloning());
     let maps = svc.store().repo_mappings(s.ws).map_err(hive_runtime::chat_service::ChatError::from)?;
+    let looks = hive_core::workspace_repo::lookalikes(&live);
     let repos: Vec<Value> = entries
         .iter()
         .map(|e| {
             let r = &e.repo;
+            let lookalike_of = looks.get(&r.id).and_then(|o| live.iter().find(|x| x.id == *o)).map(|x| x.display_name.clone());
             let here = mine.iter().find(|c| c.repo_id == r.id);
             let checkout = maps.iter().find(|m| m.repo_id == r.id && m.confirmed).map(|m| folder_name(&m.path));
             let found: Vec<String> = maps.iter().filter(|m| m.repo_id == r.id && !m.confirmed).map(|m| folder_name(&m.path)).collect();
@@ -87,6 +89,7 @@ pub fn listing(s: &Shared) -> ApiResult<Value> {
                     "found": found,
                 },
                 "hosts": hosts,
+                "lookalikeOf": lookalike_of,
             })
         })
         .collect();

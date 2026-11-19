@@ -1954,6 +1954,8 @@ export interface WorkspaceRepoDto {
   /// This device: its own checkout path, and folders a scan found.
   here: { state: string; code: string; viaFork: boolean; path: string | null; found: string[] };
   hosts: RepoHostCoverage[];
+  /// Same claimed history as this other repo, different canonical.
+  lookalikeOf?: string | null;
 }
 
 export interface WorkspaceReposDto {

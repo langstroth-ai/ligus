@@ -115,6 +115,27 @@ pub(crate) fn chat_checkout(state: &AppState, session_id: Uuid) -> Option<PathBu
     svc.store().chat_checkout(session_id, repo).ok().flatten().or_else(|| svc.store().primary_checkout(s.workspace_id, repo).ok().flatten().map(|m| m.path))
 }
 
+/// Advisory (coverage, review F8): whether `host_id` says it has no
+/// checkout of `repo` (it reports coverage and the repo isn't present or
+/// cloning there). A host that reports nothing is unknown, not lacking.
+pub(crate) fn host_lacks_repo(state: &AppState, host_id: &str, repo: Uuid) -> bool {
+    state
+        .host_presence
+        .coverage_of(host_id)
+        .is_some_and(|c| !c.iter().any(|e| e.repo_id == repo && matches!(e.state.as_str(), "present" | "cloning")))
+}
+
+/// Authoritative for this device: whether a turn in `session` could run
+/// here now (no repo, or this device's checkout of it is ready).
+pub(crate) fn runs_here(state: &AppState, svc: &hive_runtime::ChatService, session: &ChatSession) -> bool {
+    if session.repo.as_ref().and_then(|r| r.repo_id).is_none() {
+        return true;
+    }
+    let _ = state;
+    let Ok(roster) = svc.workspace_roster(session.workspace_id) else { return false };
+    matches!(rr::turn_checkout(svc.store(), svc.device_id(), &host_label(), session, &roster, &rr::cloning()), TurnCheckout::Ready(_))
+}
+
 fn ws_of(state: &AppState) -> Uuid {
     state.active_workspace_id()
 }
@@ -138,10 +159,12 @@ pub fn list_workspace_repos(state: State<AppState>) -> Result<Value, String> {
     let live: Vec<_> = entries.iter().filter(|e| !e.removed).map(|e| e.repo.clone()).collect();
     let mine = rr::coverage(svc.store(), ws, &live, &rr::cloning());
     let maps = svc.store().repo_mappings(ws).map_err(map_err)?;
+    let looks = hive_core::workspace_repo::lookalikes(&live);
     let repos: Vec<Value> = entries
         .iter()
         .map(|e| {
             let r = &e.repo;
+            let lookalike_of = looks.get(&r.id).and_then(|o| live.iter().find(|x| x.id == *o)).map(|x| x.display_name.clone());
             let here = mine.iter().find(|c| c.repo_id == r.id);
             let path = maps.iter().find(|m| m.repo_id == r.id && m.confirmed).map(|m| m.path.to_string_lossy().into_owned());
             let found: Vec<String> = maps.iter().filter(|m| m.repo_id == r.id && !m.confirmed).map(|m| m.path.to_string_lossy().into_owned()).collect();
@@ -168,6 +191,7 @@ pub fn list_workspace_repos(state: State<AppState>) -> Result<Value, String> {
                     "path": path, "found": found,
                 },
                 "hosts": hosts,
+                "lookalikeOf": lookalike_of,
             })
         })
         .collect();

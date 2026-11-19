@@ -1063,6 +1063,7 @@ pub(crate) fn start_workflow_run(
     }
     wf::validate(&def)?;
     ensure_stages_runnable(&session, &def)?;
+    ensure_stages_covered(&state, &session, &def)?;
 
     let run = wf::new_run(&def, input, state.local_actor_id());
     let run_id = run.id;
@@ -1141,6 +1142,7 @@ pub(crate) fn resume_workflow_run(
         return Err("only an interrupted run can be resumed".into());
     }
     ensure_stages_runnable(&session, &run.definition)?;
+    ensure_stages_covered(&state, &session, &run.definition)?;
 
     // Stages that were mid-turn when the driver died restart from scratch;
     // succeeded stages keep their outputs (re-read from the transcript).
@@ -1183,6 +1185,23 @@ fn ensure_stages_runnable(
                     node.name
                 ));
             }
+        }
+    }
+    Ok(())
+}
+
+/// For a chat with a repo, fail up front when a stage's agent is pinned to a
+/// host that says it has no checkout of it, naming the stage and the host
+/// (advisory coverage; the host refuses at turn time anyway, 5.2).
+fn ensure_stages_covered(state: &AppState, session: &ChatSession, def: &wf::WorkflowDefinition) -> Result<(), String> {
+    let Some(repo) = session.repo.as_ref().and_then(|r| r.repo_id) else { return Ok(()) };
+    let here = state.service.lock().unwrap().device_id().to_string();
+    for node in &def.nodes {
+        let WorkflowNodeKind::Agent { agent_id: Some(id), .. } = &node.kind else { continue };
+        let Some(a) = session.workspace_agents.iter().find(|a| a.id == *id) else { continue };
+        if !a.host_id.is_empty() && a.host_id != here && crate::repos_ui::host_lacks_repo(state, &a.host_id, repo) {
+            let label = session.workspace_hosts.iter().find(|h| h.id == a.host_id).map(|h| h.label.clone()).unwrap_or_else(|| a.host_id.clone());
+            return Err(format!("stage '{}': @{} runs on {label}, which has no checkout of this chat's repository", node.name, a.name));
         }
     }
     Ok(())

@@ -414,6 +414,22 @@ pub fn split_canonical(canonical: &str) -> Option<(&str, &str)> {
     canonical.split_once('/')
 }
 
+/// Look-alike flags (repos-and-checkouts 7): each live repo whose claimed
+/// root commit equals an earlier-added live repo's, with a different
+/// canonical ("same history as WeFit, different owner"), mapped to that
+/// repo. A display warning: the claim is the Admin's, unverified until a
+/// device checks it.
+pub fn lookalikes(repos: &[WorkspaceRepo]) -> std::collections::BTreeMap<Uuid, Uuid> {
+    let mut out = std::collections::BTreeMap::new();
+    for (i, r) in repos.iter().enumerate() {
+        let Some(root) = r.root_commit.as_deref() else { continue };
+        if let Some(first) = repos[..i].iter().find(|o| o.root_commit.as_deref() == Some(root) && o.canonical != r.canonical) {
+            out.insert(r.id, first.id);
+        }
+    }
+    out
+}
+
 // ── The chat ledger (repos review F3) ────────────────────────────────────
 
 /// One applied proposal in a chat's ledger for a repo.
@@ -515,6 +531,25 @@ mod tests {
             r#"{"hostId":"h","at":1,"seq":7,"coverage":[{"repoId":"00000000-0000-0000-0000-000000000000","state":"error","code":"clone_failed","viaFork":true}]}"#
         );
         assert!(full.coverage_ok());
+    }
+
+    #[test]
+    fn lookalike_flagged_by_fingerprint() {
+        let mk = |c: &str, root: Option<&str>| WorkspaceRepo {
+            id: repo_id(c),
+            canonical: c.into(),
+            display_name: c.into(),
+            forge_kind: String::new(),
+            default_branch: String::new(),
+            root_commit: root.map(str::to_owned),
+        };
+        let root = "0123456789abcdef0123456789abcdef01234567";
+        let a = mk("github.com/zazulam/wefit", Some(root));
+        let b = mk("github.com/zazu1am/wefit", Some(root));
+        let c = mk("github.com/zazulam/infra", None);
+        let flags = lookalikes(&[a.clone(), b.clone(), c]);
+        assert_eq!(flags.len(), 1);
+        assert_eq!(flags.get(&b.id), Some(&a.id));
     }
 
     #[test]

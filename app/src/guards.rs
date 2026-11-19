@@ -575,8 +575,24 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> hive_proto::HygieneReportDt
     let ws = state.active_workspace_id();
     let repo = state.workspace_repo_root();
     let mut report = hive_proto::HygieneReportDto { ran_at: crate::rfc3339(hive_core::Timestamp::now()), ..Default::default() };
-    let root = std::path::PathBuf::from(&repo);
-    if repo.trim().is_empty() || !hive_runtime::git_worktree::is_git_repo(&root) {
+    // Every checkout this device manages for the workspace (5.7): the bound
+    // folder, and each confirmed checkout of a workspace repo, with the repo
+    // it holds (a proposal is judged only against its own repo's checkout).
+    let mut roots: Vec<(std::path::PathBuf, Option<Uuid>)> = Vec::new();
+    {
+        let svc = state.service.lock().unwrap();
+        for m in svc.store().repo_mappings(ws).unwrap_or_default().into_iter().filter(|m| m.confirmed) {
+            if hive_runtime::git_worktree::is_git_repo(&m.path) && !roots.iter().any(|(p, _)| *p == m.path) {
+                roots.push((m.path, Some(m.repo_id)));
+            }
+        }
+    }
+    let bound = std::path::PathBuf::from(&repo);
+    let bound_canon = std::fs::canonicalize(&bound).unwrap_or_else(|_| bound.clone());
+    if !repo.trim().is_empty() && hive_runtime::git_worktree::is_git_repo(&bound) && !roots.iter().any(|(p, _)| *p == bound_canon) {
+        roots.push((bound, None));
+    }
+    if roots.is_empty() {
         *state.guards.hygiene.lock().unwrap() = report.clone();
         return report;
     }
@@ -584,7 +600,7 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> hive_proto::HygieneReportDt
     // The workspace's chats, their streaming turns and open diff proposals.
     let mut chats = std::collections::HashMap::new();
     let mut live_turns = std::collections::HashSet::new();
-    let mut open_diffs: Vec<(Uuid, Uuid, String, String)> = Vec::new();
+    let mut open_diffs: Vec<(Uuid, Uuid, String, String, Option<Uuid>)> = Vec::new();
     let device = {
         let svc = state.service.lock().unwrap();
         let config_id = hive_core::workspace_config_session_id(ws);
@@ -610,74 +626,87 @@ pub(crate) fn run_hygiene_sweep(state: &AppState) -> hive_proto::HygieneReportDt
                     && !s.guards.stale_proposals.contains(&p.id)
                 {
                     if let Some(d) = &p.diff {
-                        open_diffs.push((id, p.id, p.title.clone(), d.clone()));
+                        open_diffs.push((id, p.id, p.title.clone(), d.clone(), p.repo_id));
                     }
                 }
             }
         }
         svc.device_id()
     };
-    let entries = hygiene::list_worktrees(&root);
     let secret = device.as_bytes().to_vec();
     let mut signals = Vec::new();
-    // Only worktrees under this workspace's `.ligus/worktrees` are ours; a
-    // Hive 1.x `.hive/worktrees` checkout is never swept.
-    let plan = match hive_core::compat::workspace_state_path(&root, "worktrees") {
-        Ok(owned) => hygiene::plan_sweep(&owned, &entries, &live_turns, &chats, &hive_runtime::git_worktree::is_in_use),
-        Err(e) => {
-            tracing::warn!(target: "worktree", "hygiene sweep skipped: {e}");
-            Vec::new()
-        }
-    };
-    for action in plan {
-        if !hygiene::apply(&root, &action) {
-            continue;
-        }
-        match &action {
-            SweepAction::RemoveTurnWorktree { .. } => {
-                report.turn_worktrees_removed += 1;
-                signals.push(GuardSignal::WorktreeState { state: WorktreeState::Abandoned, repo_key: None });
+    let legacy_root = roots.iter().find(|(_, r)| r.is_none()).map(|(p, _)| p.clone()).or_else(|| roots.first().map(|(p, _)| p.clone()));
+    for (root, root_repo) in &roots {
+        let root = root.clone();
+        let entries = hygiene::list_worktrees(&root);
+        // Only worktrees under this workspace's `.ligus/worktrees` are ours; a
+        // Hive 1.x `.hive/worktrees` checkout is never swept.
+        let plan = match hive_core::compat::workspace_state_path(&root, "worktrees") {
+            Ok(owned) => hygiene::plan_sweep(&owned, &entries, &live_turns, &chats, &hive_runtime::git_worktree::is_in_use),
+            Err(e) => {
+                tracing::warn!(target: "worktree", "hygiene sweep skipped: {e}");
+                Vec::new()
             }
-            SweepAction::RemoveChatCheckout { chat_slug, .. } => {
-                report.chat_checkouts_removed += 1;
-                signals.push(GuardSignal::WorktreeState {
-                    state: WorktreeState::Removed,
-                    repo_key: Some(hygiene::opaque_key(&secret, chat_slug)),
+        };
+        for action in plan {
+            if !hygiene::apply(&root, &action) {
+                continue;
+            }
+            match &action {
+                SweepAction::RemoveTurnWorktree { .. } => {
+                    report.turn_worktrees_removed += 1;
+                    signals.push(GuardSignal::WorktreeState { state: WorktreeState::Abandoned, repo_key: None });
+                }
+                SweepAction::RemoveChatCheckout { chat_slug, .. } => {
+                    report.chat_checkouts_removed += 1;
+                    signals.push(GuardSignal::WorktreeState {
+                        state: WorktreeState::Removed,
+                        repo_key: Some(hygiene::opaque_key(&secret, chat_slug)),
+                    });
+                }
+                // A gone or archived chat's reuse pool: a hygienic removal, never
+                // an abandoned turn (parking and reuse record nothing).
+                SweepAction::RemoveParkedWorktree { chat_slug, .. } => {
+                    report.parked_worktrees_removed += 1;
+                    signals.push(GuardSignal::WorktreeState {
+                        state: WorktreeState::Removed,
+                        repo_key: Some(hygiene::opaque_key(&secret, chat_slug)),
+                    });
+                }
+            }
+        }
+        hygiene::prune(&root);
+        // Stale proposals: check each open diff against its chat's branch checkout
+        // (or the repository's HEAD when the chat has none).
+        let remaining = hygiene::list_worktrees(&root);
+        for (sid, pid, title, diff, p_repo) in open_diffs.iter().cloned() {
+            // A repo's proposals against that repo's checkout; one without a
+            // repo against the bound folder.
+            let mine = match p_repo {
+                Some(r) => *root_repo == Some(r),
+                None => legacy_root.as_ref() == Some(&root),
+            };
+            if !mine {
+                continue;
+            }
+            let branch = format!("hive/chat/{}", hygiene::slug(&sid.to_string()));
+            let dir = remaining
+                .iter()
+                .find(|e| e.branch.as_deref() == Some(branch.as_str()))
+                .map(|e| e.path.clone())
+                .unwrap_or_else(|| root.clone());
+            if hygiene::patch_applies(&dir, &diff) {
+                continue;
+            }
+            let mut svc = state.service.lock().unwrap();
+            if svc.mark_proposal_stale(sid, ws, pid).is_ok() {
+                signals.push(GuardSignal::Hygiene { hygiene_kind: HygieneKind::ProposalStale, count: 1 });
+                report.stale_proposals.push(hive_proto::StaleProposalDto {
+                    session_id: sid.to_string(),
+                    proposal_id: pid.to_string(),
+                    title,
                 });
             }
-            // A gone or archived chat's reuse pool: a hygienic removal, never
-            // an abandoned turn (parking and reuse record nothing).
-            SweepAction::RemoveParkedWorktree { chat_slug, .. } => {
-                report.parked_worktrees_removed += 1;
-                signals.push(GuardSignal::WorktreeState {
-                    state: WorktreeState::Removed,
-                    repo_key: Some(hygiene::opaque_key(&secret, chat_slug)),
-                });
-            }
-        }
-    }
-    hygiene::prune(&root);
-    // Stale proposals: check each open diff against its chat's branch checkout
-    // (or the repository's HEAD when the chat has none).
-    let remaining = hygiene::list_worktrees(&root);
-    for (sid, pid, title, diff) in open_diffs {
-        let branch = format!("hive/chat/{}", hygiene::slug(&sid.to_string()));
-        let dir = remaining
-            .iter()
-            .find(|e| e.branch.as_deref() == Some(branch.as_str()))
-            .map(|e| e.path.clone())
-            .unwrap_or_else(|| root.clone());
-        if hygiene::patch_applies(&dir, &diff) {
-            continue;
-        }
-        let mut svc = state.service.lock().unwrap();
-        if svc.mark_proposal_stale(sid, ws, pid).is_ok() {
-            signals.push(GuardSignal::Hygiene { hygiene_kind: HygieneKind::ProposalStale, count: 1 });
-            report.stale_proposals.push(hive_proto::StaleProposalDto {
-                session_id: sid.to_string(),
-                proposal_id: pid.to_string(),
-                title,
-            });
         }
     }
     {

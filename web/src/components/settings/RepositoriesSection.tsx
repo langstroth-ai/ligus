@@ -118,6 +118,11 @@ function RepoRow({ r, data, refresh }: { r: WorkspaceRepoDto; data: WorkspaceRep
             {r.canonical}
             {r.defaultBranch ? ` · ${r.defaultBranch}` : ""}
           </div>
+          {r.lookalikeOf && (
+            <div className="text-xs" style={{ color: "var(--hive-accent-warm, orange)" }}>
+              Same history as {r.lookalikeOf}, different owner. Check the full name before cloning it.
+            </div>
+          )}
         </div>
         {data.canAdmin && !r.removed && (
           <div className="flex shrink-0 gap-1">
