@@ -329,16 +329,23 @@ pub fn save_received(dir: &Path, name: &str, bytes: &[u8], sender: &str) -> std:
 
 /// Read `rel` inside `root` for an agent's file offer, safely against a
 /// sandboxed agent racing symlinks: the file is opened without following a
-/// symlink as its last component, then the path of the very file that was
-/// opened (`F_GETPATH` on macOS, `/proc/self/fd` on Linux) must lie inside
-/// `root`, it must have no other hard link, and the bytes are read from that
-/// open file. Returns the bytes and the file's name.
+/// symlink as its last component (on Windows, without following any reparse
+/// point there, and a symlink, junction or other reparse point is refused),
+/// then the path of the very file that was opened (`F_GETPATH` on macOS,
+/// `/proc/self/fd` on Linux, `GetFinalPathNameByHandleW` on Windows) must lie
+/// inside `root`, it must have no other hard link, and the bytes are read
+/// from that open file. A host that can't confirm all of this refuses.
+/// Returns the bytes and the file's name.
 pub fn read_inside(root: &Path, rel: &str, max_bytes: u64) -> Result<(Vec<u8>, String), String> {
+    const UNCONFIRMED: &str = "this host can't confirm where the file is, so it can't be offered";
     let rel_path = Path::new(rel);
-    if rel.is_empty() || rel_path.is_absolute() {
+    // `has_root` and a prefix catch Windows' `\x` and `C:x`, which `join`
+    // would otherwise let replace the worktree.
+    if rel.is_empty() || rel_path.is_absolute() || rel_path.has_root() || rel_path.components().any(|c| matches!(c, std::path::Component::Prefix(_))) {
         return Err("give a path relative to your worktree".into());
     }
     let root = std::fs::canonicalize(root).map_err(|_| "this turn's worktree is gone".to_string())?;
+    let root = without_verbatim_prefix(&root);
     let mut opts = std::fs::OpenOptions::new();
     opts.read(true);
     #[cfg(unix)]
@@ -346,22 +353,34 @@ pub fn read_inside(root: &Path, rel: &str, max_bytes: u64) -> Result<(Vec<u8>, S
         use std::os::unix::fs::OpenOptionsExt;
         opts.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // Open a symlink, junction or other reparse point itself, never what
+        // it points at (refused below).
+        opts.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
     let file = opts.open(root.join(rel_path)).map_err(|_| format!("no such regular file in your worktree: {rel}"))?;
     let meta = file.metadata().map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if meta.file_attributes() & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err("a link (a symlink, junction or other reparse point) can't be offered; copy the file into your worktree first".into());
+        }
+    }
     if !meta.is_file() {
         return Err("you can only offer a regular file inside your worktree".into());
     }
     // A hard link has a path inside the worktree whatever file it is: one an
     // agent linked in from outside (it may be able to link a file it can't
     // read) must not leave through the host, which reads it unconfined.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if meta.nlink() > 1 {
-            return Err("a file with more than one hard link can't be offered; copy it first".into());
-        }
+    match link_count(&file, &meta) {
+        Some(1) => {}
+        Some(_) => return Err("a file with more than one hard link can't be offered; copy it first".into()),
+        None => return Err(UNCONFIRMED.into()),
     }
-    let real = opened_path(&file).ok_or("this host can't confirm where the file is, so it can't be offered")?;
+    let real = opened_path(&file).ok_or(UNCONFIRMED)?;
     if !real.starts_with(&root) {
         return Err("you can only offer a regular file inside your worktree".into());
     }
@@ -377,7 +396,36 @@ pub fn read_inside(root: &Path, rel: &str, max_bytes: u64) -> Result<(Vec<u8>, S
     Ok((bytes, name))
 }
 
-/// The path of an open file, from the kernel.
+/// How many hard links the open file has, from the kernel. `None` when this
+/// host can't tell.
+fn link_count(f: &std::fs::File, meta: &std::fs::Metadata) -> Option<u64> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let _ = f;
+        Some(meta.nlink())
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
+        let _ = meta;
+        // SAFETY: an all-zero BY_HANDLE_FILE_INFORMATION is a valid value
+        // (plain integers and FILETIMEs), and the call writes only into it.
+        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: the handle is the open file's, valid while `f` lives.
+        let ok = unsafe { GetFileInformationByHandle(f.as_raw_handle(), &mut info) };
+        (ok != 0).then_some(u64::from(info.nNumberOfLinks))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (f, meta);
+        None
+    }
+}
+
+/// The path of an open file, from the kernel (on Windows without its `\\?\`
+/// prefix, the form [`without_verbatim_prefix`] gives the worktree root).
 fn opened_path(f: &std::fs::File) -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
@@ -397,10 +445,63 @@ fn opened_path(f: &std::fs::File) -> Option<PathBuf> {
         use std::os::unix::io::AsRawFd;
         std::fs::read_link(format!("/proc/self/fd/{}", f.as_raw_fd())).ok()
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt;
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{GetFinalPathNameByHandleW, FILE_NAME_NORMALIZED, VOLUME_NAME_DOS};
+        let mut buf = vec![0u16; 512];
+        for _ in 0..3 {
+            let cap = u32::try_from(buf.len()).ok()?;
+            // SAFETY: the handle is the open file's; the call writes at most
+            // `cap` UTF-16 units into buf.
+            let n = unsafe { GetFinalPathNameByHandleW(f.as_raw_handle(), buf.as_mut_ptr(), cap, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS) } as usize;
+            if n == 0 {
+                return None;
+            }
+            if n < buf.len() {
+                buf.truncate(n);
+                let path = PathBuf::from(std::ffi::OsString::from_wide(&buf));
+                return Some(without_verbatim_prefix(&path));
+            }
+            // Too small: `n` is the size it needs, terminator included.
+            buf = vec![0u16; n];
+        }
+        None
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     {
         let _ = f;
         None
+    }
+}
+
+/// `path` without Windows' verbatim prefix: `\\?\C:\x` is `C:\x` and
+/// `\\?\UNC\server\share\x` is `\\server\share\x`, so a path from
+/// `canonicalize` and one from an open handle compare by their components.
+/// Any other path (and every path elsewhere) is returned as is.
+fn without_verbatim_prefix(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+        let units = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+        let unc = units(r"\\?\UNC\");
+        let verbatim = units(r"\\?\");
+        if wide.len() > unc.len() && wide.starts_with(&unc) {
+            let mut out = units(r"\\");
+            out.extend_from_slice(&wide[unc.len()..]);
+            return PathBuf::from(std::ffi::OsString::from_wide(&out));
+        }
+        let drive = |w: &[u16]| w.len() >= 2 && w[1] == u16::from(b':') && char::from_u32(u32::from(w[0])).is_some_and(|c| c.is_ascii_alphabetic());
+        if wide.starts_with(&verbatim) && drive(&wide[verbatim.len()..]) {
+            return PathBuf::from(std::ffi::OsString::from_wide(&wide[verbatim.len()..]));
+        }
+        path.to_path_buf()
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_path_buf()
     }
 }
 
@@ -772,6 +873,71 @@ mod tests {
         assert!(credential_in("notes.txt", b"-----BEGIN RSA PRIVATE KEY-----\nabc").is_some());
         assert!(credential_in("notes.txt", b"key AKIAABCDEFGHIJKLMNOP here").is_some());
         assert!(credential_in("notes.txt", b"plain notes").is_none());
+    }
+
+    /// The Windows offer path: a junction or symlink is never followed out of
+    /// the worktree, a hard link is refused, and the path compared is the
+    /// open handle's final path (a junction to a folder inside the worktree
+    /// is fine).
+    #[cfg(windows)]
+    #[test]
+    fn offered_files_on_windows_stay_inside_the_worktree() {
+        let wt = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(wt.path().join("report.md"), b"# ok").unwrap();
+        std::fs::create_dir(wt.path().join("sub")).unwrap();
+        std::fs::write(wt.path().join("sub").join("inner.txt"), b"inner").unwrap();
+        std::fs::write(outside.path().join("notes.txt"), b"outside").unwrap();
+        let (b, n) = read_inside(wt.path(), "report.md", 100).unwrap();
+        assert_eq!((b.as_slice(), n.as_str()), (&b"# ok"[..], "report.md"));
+        assert_eq!(read_inside(wt.path(), "sub\\inner.txt", 100).unwrap().0, b"inner");
+        for bad in ["..\\x", "C:\\Windows\\win.ini", "\\Windows\\win.ini", "C:x", "/etc/hosts", "sub", "nope", "sub\\..\\..\\x", ""] {
+            assert!(read_inside(wt.path(), bad, 100).is_err(), "{bad}");
+        }
+        assert!(read_inside(wt.path(), "report.md", 2).is_err(), "size cap");
+
+        // A junction (no admin needed) to a folder outside: neither the
+        // junction nor a file through it can be offered.
+        let junction = |link: &Path, target: &Path| {
+            let ok = std::process::Command::new("cmd").arg("/C").arg("mklink").arg("/J").arg(link).arg(target).output().unwrap();
+            assert!(ok.status.success(), "mklink /J: {}", String::from_utf8_lossy(&ok.stdout));
+        };
+        junction(&wt.path().join("out"), outside.path());
+        assert_eq!(std::fs::read(wt.path().join("out").join("notes.txt")).unwrap(), b"outside", "the junction works");
+        let e = read_inside(wt.path(), "out\\notes.txt", 100).unwrap_err();
+        assert!(e.contains("inside your worktree"), "{e}");
+        assert!(read_inside(wt.path(), "out", 100).is_err(), "the junction itself");
+        // One to a folder inside resolves inside, so it's allowed.
+        junction(&wt.path().join("in"), &wt.path().join("sub"));
+        assert_eq!(read_inside(wt.path(), "in\\inner.txt", 100).unwrap().0, b"inner");
+
+        // A hard link inside the worktree to a file outside it.
+        std::fs::write(outside.path().join("private.txt"), b"outside, linked").unwrap();
+        std::fs::hard_link(outside.path().join("private.txt"), wt.path().join("linked.txt")).unwrap();
+        let e = read_inside(wt.path(), "linked.txt", 100).unwrap_err();
+        assert!(e.contains("hard link"), "{e}");
+
+        // Symlinks need Developer Mode or admin; checked when this host can
+        // make them.
+        match std::os::windows::fs::symlink_file(outside.path().join("notes.txt"), wt.path().join("link.txt")) {
+            Ok(()) => {
+                let e = read_inside(wt.path(), "link.txt", 100).unwrap_err();
+                assert!(e.contains("link"), "{e}");
+                std::os::windows::fs::symlink_dir(outside.path(), wt.path().join("dirlink")).unwrap();
+                assert!(read_inside(wt.path(), "dirlink\\notes.txt", 100).is_err());
+                assert!(read_inside(wt.path(), "dirlink", 100).is_err());
+            }
+            Err(e) => eprintln!("symlink cases skipped: this host can't make symlinks ({e})"),
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verbatim_prefixes_are_dropped_for_comparison() {
+        assert_eq!(without_verbatim_prefix(Path::new(r"\\?\C:\Users\x")), PathBuf::from(r"C:\Users\x"));
+        assert_eq!(without_verbatim_prefix(Path::new(r"\\?\UNC\srv\share\x")), PathBuf::from(r"\\srv\share\x"));
+        assert_eq!(without_verbatim_prefix(Path::new(r"C:\x")), PathBuf::from(r"C:\x"));
+        assert_eq!(without_verbatim_prefix(Path::new(r"\\?\Volume{0}\x")), PathBuf::from(r"\\?\Volume{0}\x"));
     }
 
     #[cfg(unix)]
