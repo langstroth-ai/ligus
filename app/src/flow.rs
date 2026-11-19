@@ -953,6 +953,8 @@ const MARK_GUIDANCE: &str = r#"Coordinate through workspace marks rather than me
 
 /// The most marks shown in an agent's context.
 const MARKS_IN_CONTEXT: usize = 15;
+/// Other agents' task-state slots put in a turn's context, at most.
+const TASK_STATE_IN_CONTEXT: usize = 8;
 
 /// What [`prime_turns`] added.
 #[derive(Debug, Default, Clone)]
@@ -1000,6 +1002,17 @@ pub(crate) fn prime_turns(
         if let Some(block) = flow::marks::context_block(config.marks.values(), flow::now_ms(), MARKS_IN_CONTEXT) {
             blocks.push(block);
         }
+    }
+    // Live task state: what the other agents on this chat report, as
+    // untrusted, delimited data (hive_core::memory).
+    if let Some(block) = hive_core::memory::task_context_block(
+        &session.flow.tasks,
+        &me,
+        flow::now_ms(),
+        TASK_STATE_IN_CONTEXT,
+        &hive_core::memory::fresh_nonce(),
+    ) {
+        blocks.push(block);
     }
     let (note_on, _) = s.upstream_note(session.id);
     if note_on {

@@ -184,7 +184,7 @@ every fold will, stores and syncs it.
 |---|---|---|
 | `POST /v1/phone-actions/prepare` | `{deviceId, action}` | `deviceId`: the phone's workspace device id (its P-256 certificate's). Through the tunnel it must be the device the pairing proved it holds (403 otherwise). Drafts the event, writes nothing, and judges the unsigned draft as the fold will: a refusal is a 403 here, before the phone signs anything. Answers `{prepareId, kind, eventKind, presenceRequired, preview}` plus **either** `challenge` (base64url; `presenceRequired: true`, the passkey signs it) **or** `preimage` (base64url; no passkey needed). With presence, `preview` adds `digestShort`, `rpId`, `origins`, `allowCredentials`. 409 for `clearLockdown` on a chat that isn't locked down; for `clearLockdown`, `preview.lockdowns` lists the lockdowns it names (`{raiseEventId, signal, detail, raisedAt}`), and a raise that isn't in force on the box (a stale view: refresh and prepare again) is a 403; 403 when the box can't write, the device isn't an enrolled, unrevoked phone of a human member, or the fold would refuse the action |
 | `POST /v1/phone-actions/presence` | `{prepareId, assertion: {credentialId, authenticatorData, clientDataJSON, signature}}` | only when `presenceRequired`: puts the assertion into the stamp and answers `{preimage}`. 409 when the action needs no passkey or was already confirmed; 404 unknown or expired `prepareId` |
-| `POST /v1/phone-actions/commit` | `{prepareId, signature}` | `signature`: the phone's ECDSA P-256 / SHA-256 signature over the preimage, 64 bytes (r‖s, low-S), base64url. Answers `{committed, eventId, kind}`, plus `messageId` (post) or `requestId` (requestApply). 403 when the signature doesn't verify against the phone's certificate or the fold refuses the event; 409 before `presence` when it is required; 409 when the phone signed something else on that log since the draft (its chain link went stale: prepare again); 404 unknown, expired or used `prepareId` |
+| `POST /v1/phone-actions/commit` | `{prepareId, signature}` | `signature`: the phone's ECDSA P-256 / SHA-256 signature over the preimage, 64 bytes (r‖s, low-S), base64url. Answers `{committed, eventId, kind}`, plus `messageId` (post), `requestId` (requestApply) or `proposalId` (proposeMemory). 403 when the signature doesn't verify against the phone's certificate or the fold refuses the event; 409 before `presence` when it is required; 409 when the phone signed something else on that log since the draft (its chain link went stale: prepare again); 404 unknown, expired or used `prepareId` |
 
 Drafts are single use, kept in memory for 5 minutes, at most 32 at once (the
 oldest goes first). A request whose `action` has an unknown `kind` or a field
@@ -200,6 +200,7 @@ the box doesn't know is refused before anything is drafted (400 or 422).
 | `clearLockdown` | `chatId`, `raises` (the `raiseEventId` of each lockdown to lift, as `GET /v1/guards` lists them; at least one, at most 16, each once) | `chatLockdownCleared`, naming those raises | the workspace config log | always |
 | `requestApply` | `chatId`, `proposalId`, `diffDigest`, `hostDeviceId`, `expectedBaseCommit?` (40/64 hex), `repoId?` | `proposalApplyRequested` ("Apply on ‹host›") | the chat | when the proposal is human-gated |
 | `withdrawApply` | `chatId`, `proposalId`, `requestId` | `proposalApplyWithdrawn` | the chat | never |
+| `proposeMemory` | `chatId` (the chat the phone is in; recorded as the source), `op` (`{op: "create", entryId, title, body, tags?}` (the new note is named by the proposal: send any `entryId`, a nil UUID is fine), `{op: "edit", entryId, base, title, body, tags?}` or `{op: "remove", entryId, base}`), `rationale?` (at most 500 characters) | `flowRecorded` / `memoryProposed`, as the person (no agent proposer) | the workspace config log | never |
 
 The box decides `presenceRequired` by judging the draft; the fold decides in
 the end. Rebinding an agent, issuing a person's invite and DMs are not phone
@@ -216,7 +217,7 @@ word until the phone has read it; refuse to sign unless all of these hold:
    then exactly four fields each prefixed with a u32 LE length (scope,
    timestamp, stamp, payload), and **no trailing bytes**.
 2. `workspaceId` is this workspace. `sessionId` is the action's `chatId`, or
-   for `clearLockdown` the workspace config log id (UUIDv5 of the workspace,
+   for `clearLockdown` and `proposeMemory` the workspace config log id (UUIDv5 of the workspace,
    `workspace_config_session_id`).
 3. Each of scope, timestamp, stamp and payload decodes and re-encodes to the
    same JSON value: no field the phone doesn't read. The scope is the
@@ -247,7 +248,14 @@ word until the phone has read it; refuse to sign unless all of these hold:
       the phone asked to clear (same ids, same order);
     - `requestApply`: `proposalId`, `diffDigest`, `hostDeviceId`,
       `expectedBaseCommit` and `repoId` as asked;
-    - `withdrawApply`: `requestId` and `proposalId` as asked.
+    - `withdrawApply`: `requestId` and `proposalId` as asked;
+    - `proposeMemory`: a memory proposal whose `op` and `rationale` are
+      exactly as asked (except a create's `entryId`, which must equal the
+      `proposalId`), `proposer` empty (the person's own), and `source`
+      naming exactly `chatId` (no message or turn; the box may add the
+      chat's `egress`, which only narrows which agent turns read the note);
+      its `proposalId` is the event id (the box picks it, and every fold
+      requires the two to match).
 
 The box may choose only what grants nothing: the event id, sequence, the log
 head it counts from (and so the lamport, one past it), timestamps, its config
@@ -328,6 +336,21 @@ What the phone may touch on disk is limited; see
 | `GET /v1/dashboard` | the host dashboard; see [Host dashboard](../../ligus/features/dashboard.md) |
 | `GET /v1/lab/status` | **deprecated**; answers with `Deprecation: true` and a `Link` to `/v1/dashboard` |
 | `GET /v1/appearance` | `{palette, mode, source}` for *Match host* |
+
+### Memory and task state {#memory}
+
+Read-only: [workspace memory](../../ligus/features/memory.md) and the chats'
+live task state. A phone proposes a memory change with the `proposeMemory`
+[phone action](#phone-actions); writing, editing, removing and deciding stay
+on a person's desktop (a box is a service member, and the fold refuses a
+service's memory writes).
+
+| Method + path | Notes |
+|---|---|
+| `GET /v1/memory?q=&tag=&limit=` | live notes matching every word of `q` (and every comma-separated `tag`), best first; `limit` 1 to 100 (default 50). `{total, openProposals, entries: [{entry, score}]}`; an `entry` is `{id, current: {rev, base?, title, body, tags?, author: {id, name, kind}, atMs, source?: {chatId?, messageId?, turnId?}, viaProposal?, proposer?}, createdBy, createdAtMs, revisionCount, conflicts?}` |
+| `GET /v1/memory/{id}` | one live note: `{entry, proposerName}`; 404 for an unknown or removed one |
+| `GET /v1/memory/proposals` | `{proposals: [{proposal: {proposal: {proposalId, op, proposer?, source?, rationale?}, by, atMs, decision?}, proposerName}]}`, open first, at most 100 |
+| `GET /v1/chats/{id}/task-state` | the chat's current cards, newest first: `{slots: [{slot: {update: {taskId, agentKey, turnId, status, summary, progress?, openQuestions?, partialResults?, ttlMs?}, writer, by, atMs, rev, updates}, agentName, active, expiresAtMs}]}` (stale cards are left out) |
 
 ### Live events
 

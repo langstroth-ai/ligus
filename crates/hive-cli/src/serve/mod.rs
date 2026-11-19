@@ -48,6 +48,7 @@ pub mod invite_code;
 pub use invite_code::admission_code;
 pub mod lab;
 pub mod me_api;
+pub mod memory_api;
 pub mod notify;
 pub mod ntfy;
 pub mod pair;
