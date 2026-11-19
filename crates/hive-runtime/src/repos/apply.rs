@@ -229,6 +229,82 @@ pub fn apply_message(title: &str, id: Uuid, extra: &[(&str, String)]) -> String 
     m
 }
 
+/// The commit the chat's branch was cut from: the first commit on its
+/// first-parent line, from the tip down, that carries no Ligus trailer
+/// (every apply, replay and revert commit carries one). `None` without a
+/// branch, or past a bound of commits.
+pub fn branch_cut_point(checkout: &Path, chat_id: &str) -> Option<String> {
+    let format = format!("--format=%H%x00%(trailers:key={PROPOSAL_TRAILER},valueonly,separator=%x2c)%x00%(trailers:key={REVERT_TRAILER},valueonly,separator=%x2c)%x1e");
+    let log = git(checkout, &["log", "--first-parent", "--max-count=10000", &format, &branch_ref(chat_id), "--"]).ok()?;
+    log.split('\x1e').map(str::trim).filter(|r| !r.is_empty()).find_map(|rec| {
+        let parts: Vec<&str> = rec.split('\0').collect();
+        (parts.len() < 3 || (parts[1].trim().is_empty() && parts[2].trim().is_empty())).then(|| parts[0].to_string())
+    })
+}
+
+/// Follow a re-pin of the chat's base (`ChatBaseRepinned`, review residual
+/// 3): rebuild the chat branch on `new_base` by replaying the chat's ledger
+/// there, then move the branch by compare-and-swap, or change nothing.
+///
+/// The branch must hold only ledger commits since `old_base` (the pin it
+/// was cut from): a commit without a Ligus trailer is someone's work this
+/// host would drop, so it refuses instead. Each entry is applied in a
+/// scratch index (three-way in a scratch tree when the exact patch doesn't
+/// fit), reverted entries are left out, and one whose change the new base
+/// already has (merged upstream) is skipped. The chat's worktree, when one
+/// is checked out, must be clean and still at the tip it had; the move is
+/// `reset --keep` there, else `update-ref <new> <old>`. Returns how many
+/// entries it replayed.
+pub fn rebase_onto_repin(checkout: &Path, chat_id: &str, old_base: &str, new_base: &str, entries: &[LedgerEntry]) -> Result<usize, String> {
+    let id_ok = |c: &str| hive_core::workspace_repo::is_commit_id(c);
+    if !id_ok(old_base) || !id_ok(new_base) {
+        return Err("bad base".into());
+    }
+    let branch = branch_ref(chat_id);
+    let tip = git(checkout, &["rev-parse", "--verify", &branch]).map_err(|_| "this chat has no branch here".to_string())?;
+    let format = format!("--format=%H%x00%(trailers:key={PROPOSAL_TRAILER},valueonly,separator=%x2c)%x00%(trailers:key={REVERT_TRAILER},valueonly,separator=%x2c)%x1e");
+    let log = git(checkout, &["log", &format, &format!("{old_base}..{tip}"), "--"])?;
+    for rec in log.split('\x1e').map(str::trim).filter(|r| !r.is_empty()) {
+        let parts: Vec<&str> = rec.split('\0').collect();
+        if parts.len() < 3 || (parts[1].trim().is_empty() && parts[2].trim().is_empty()) {
+            let short: String = parts[0].chars().take(12).collect();
+            return Err(format!("commit {short} on this chat's branch isn't from the chat's ledger, and moving the branch would drop it"));
+        }
+    }
+    let mut head = new_base.to_string();
+    let mut made = 0;
+    for e in entries.iter().filter(|e| !e.reverted) {
+        let short: String = e.proposal_id.to_string().chars().take(8).collect();
+        if tree_for(checkout, &head, &e.diff, true).is_ok() && tree_for(checkout, &head, &e.diff, false).is_err() {
+            continue; // the new base already has it
+        }
+        let tree = match tree_for(checkout, &head, &e.diff, false) {
+            Ok(t) => t,
+            Err(_) => three_way_tree(checkout, &head, &e.diff).map_err(|err| format!("proposal {short} doesn't apply on the new base ({err})"))?,
+        };
+        head = commit_tree(checkout, &tree, &head, &apply_message("replayed onto the chat's new base", e.proposal_id, &[]))?;
+        made += 1;
+    }
+    let wt = crate::git_worktree::chat_worktree_path_of(checkout, chat_id).filter(|w| w.join(".git").exists());
+    match wt {
+        Some(wt) => {
+            let at = git(&wt, &["rev-parse", "HEAD"])?;
+            if at != tip {
+                return Err(ApplyError::Moved.to_string());
+            }
+            let dirty = git(&wt, &["status", "--porcelain", "--untracked-files=no"])?;
+            if !dirty.is_empty() {
+                return Err(ApplyError::Dirty(dirty.lines().next().unwrap_or("").to_string()).to_string());
+            }
+            git(&wt, &["reset", "-q", "--keep", &head]).map_err(|e| ApplyError::Dirty(e.lines().next().unwrap_or("").to_string()).to_string())?;
+        }
+        None => {
+            git(checkout, &["update-ref", &branch, &head, &tip]).map_err(|_| ApplyError::Moved.to_string())?;
+        }
+    }
+    Ok(made)
+}
+
 /// Bring the chat branch up to date with the chat's ledger: every applied
 /// proposal the branch lacks (by its `Ligus-Proposal` trailer) is applied
 /// in order; every reverted one it carries is taken back out once (a

@@ -97,6 +97,15 @@ pub fn verify_claimed_root(dest: &Path, repo: &WorkspaceRepo) -> Option<bool> {
     repo.root_commit.as_deref().map(|r| super::git::has_root(dest, r))
 }
 
+/// The `git clone` of a clone by repo id ([`clone_command`]): never a
+/// redirect, whether or not the host's address is pinned
+/// ([`by_id_transport_args`]), then the connection's credential args.
+pub fn by_id_clone_command(url: &str, dest: &Path, pin: Option<&str>, auth: &[String]) -> Command {
+    let mut transport = by_id_transport_args(pin);
+    transport.extend(auth.iter().cloned());
+    clone_command(url, dest, None, None, &transport)
+}
+
 /// After a clone by repo id, on every host: `origin` names the repo's
 /// identity ([`set_identity_origin`]), and the entry's claimed root is
 /// checked ([`verify_claimed_root`]; `Some(false)` is a warning, never
@@ -122,18 +131,28 @@ pub struct Cloned {
 /// and `auth` as in [`clone_command`]. The clone lands in a hidden temp dir
 /// next to it and is renamed only when complete, so a half-done clone never
 /// shows up (or gets bound) as a checkout. The folder name is injective
-/// (review F13); an existing folder is refused, never reused.
+/// (review F13) and only `[a-z0-9-]`, so it never leaves `parent`; an
+/// existing folder (or a link) is refused, never reused. Like every clone
+/// by id, git never follows a redirect, pinned or not
+/// ([`by_id_transport_args`]). `parent` is resolved (links followed, the
+/// Windows verbatim prefix dropped) before anything is created in it, so
+/// the bound path is the one every later match compares.
 pub fn clone_into(repo: &WorkspaceRepo, url: &str, parent: &Path, pin: Option<&str>, auth: &[String]) -> Result<Cloned, String> {
     clone_target(repo)?;
     if !parent.is_absolute() || !parent.is_dir() {
         return Err("pick an existing folder to clone into".into());
     }
-    let dest = parent.join(super::clone_dir_name(repo));
+    let parent = super::git::canonical(parent);
+    let name = super::clone_dir_name(repo);
+    if name.is_empty() || !name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') {
+        return Err("this repository has no usable folder name".into());
+    }
+    let dest = parent.join(&name);
     if std::fs::symlink_metadata(&dest).is_ok() {
         return Err(format!("{} already exists", dest.display()));
     }
     let tmp = parent.join(format!(".ligus-clone-{}", uuid::Uuid::new_v4().simple()));
-    let mut cmd = clone_command(url, &tmp, None, pin, auth);
+    let mut cmd = by_id_clone_command(url, &tmp, pin, auth);
     cmd.env("GIT_TERMINAL_PROMPT", "0").stdin(std::process::Stdio::null());
     let out = cmd.output().map_err(|e| e.to_string());
     let failed = match out {
@@ -224,6 +243,22 @@ mod tests {
         drop(server);
         assert!(!out.status.success());
         assert!(!hit.load(Ordering::SeqCst), "git followed the redirect off the pinned host: {}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    /// The desktop's "Clone into…" never follows a redirect either, with or
+    /// without a DNS pin (a connection to a host on a private address has
+    /// none), and its credentials come after the transport overrides.
+    #[test]
+    fn clone_into_never_follows_a_redirect_pinned_or_not() {
+        for pin in [None, Some("h.example:443:93.184.216.34")] {
+            let c = by_id_clone_command("https://h.example/o/n", Path::new("/tmp/x"), pin, &["-c".into(), "credential.helper=x".into()]);
+            let args: Vec<String> = c.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+            let redirect = args.iter().position(|a| a == "http.followRedirects=false").expect("no redirects");
+            let cred = args.iter().position(|a| a == "credential.helper=x").unwrap();
+            let clone = args.iter().position(|a| a == "clone").unwrap();
+            assert!(redirect < cred && cred < clone, "{args:?}");
+            assert_eq!(args.iter().any(|a| a.starts_with("http.curloptResolve=")), pin.is_some());
+        }
     }
 
     #[test]

@@ -533,6 +533,23 @@ fn clone_into_is_the_safe_clone_by_id() {
     assert!(super::clone::clone_into(&repo, &url, &parent.join("missing"), None, &[]).is_err());
     let local = WorkspaceRepo { canonical: format!("local:{}", "a".repeat(40)), ..wefit() };
     assert!(super::clone::clone_into(&local, &url, &parent, None, &[]).is_err());
+    // A hostile display name never leaves the chosen folder.
+    let up = WorkspaceRepo { display_name: "../../..\\..\\x".into(), id: repo_id("github.com/zazulam/up"), canonical: "github.com/zazulam/up".into(), ..wefit() };
+    let c2 = super::clone::clone_into(&up, &url, &parent, None, &[]).unwrap();
+    assert_eq!(c2.path.parent().map(super::git::canonical), Some(super::git::canonical(&parent)));
+    assert!(!c2.path.to_string_lossy().contains(".."));
+    std::fs::remove_dir_all(&c2.path).unwrap();
+    // A link where the clone would go is refused, never followed.
+    #[cfg(unix)]
+    {
+        let target = parent.join("elsewhere");
+        std::fs::create_dir_all(&target).unwrap();
+        std::os::unix::fs::symlink(&target, parent.join(clone_dir_name(&up))).unwrap();
+        assert!(super::clone::clone_into(&up, &url, &parent, None, &[]).is_err_and(|e| e.contains("already exists")));
+        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0);
+        std::fs::remove_file(parent.join(clone_dir_name(&up))).unwrap();
+        std::fs::remove_dir(&target).unwrap();
+    }
     // A claimed root the clone doesn't have is reported, not hidden.
     let wrong = WorkspaceRepo { root_commit: Some("b".repeat(40)), display_name: "Wrong".into(), ..wefit() };
     assert_eq!(super::clone::clone_into(&wrong, &url, &parent, None, &[]).unwrap().root_matches, Some(false));
@@ -556,4 +573,128 @@ fn conflict_probe_reports_without_changing_anything() {
     assert_eq!(sh(&wt, &["status", "--porcelain"]), "");
     assert!(sh(&e.checkout, &["worktree", "list"]).lines().all(|l| !l.contains("ligus-3way")), "scratch tree removed");
     assert!(conflict_probe(&e.checkout, &Uuid::new_v4().to_string(), DIFF_A).is_err(), "no branch here");
+}
+
+/// Pin the chat to `bases` (oldest first), as the fold would after a first
+/// pin and re-pins.
+fn set_bases(s: &mut ChatSession, bases: &[&str]) {
+    s.repo_bases.insert(wefit().id, bases.iter().map(|b| b.to_string()).collect());
+    s.repo.as_mut().unwrap().base_commit = bases.last().map(|b| b.to_string());
+}
+
+/// A new commit on the checkout's main (upstream moved on).
+fn upstream_commit(checkout: &Path, file: &str) -> String {
+    sh(checkout, &["checkout", "-q", "main"]);
+    std::fs::write(checkout.join(file), "u\n").unwrap();
+    sh(checkout, &["add", "-A"]);
+    sh(checkout, &["commit", "-qm", "upstream"]);
+    sh(checkout, &["rev-parse", "HEAD"])
+}
+
+/// Review residual 3: a host whose chat branch was cut from an earlier pin
+/// follows a re-pin by rebuilding the branch on the new pin from the
+/// ledger (reverted entries left out), moved by compare-and-swap; onto an
+/// older commit too.
+#[test]
+fn a_repin_is_followed_by_rebuilding_the_branch_from_the_ledger() {
+    let e = env();
+    let m = bind(&e.store, e.me, "h", e.ws, &wefit(), &e.checkout, CheckoutSource::Bound).unwrap();
+    let ready = ReadyCheckout { repo: wefit(), path: m.path.clone(), via_fork: false };
+    let mut s = chat(e.ws, Some(wefit().id));
+    let first = prepare_chat(&ready, &s, "h").unwrap();
+    let a = first.pin.clone().unwrap();
+    set_bases(&mut s, &[&a]);
+    applied_proposal(&mut s, DIFF_A);
+    let gone = applied_proposal(&mut s, DIFF_B);
+    s.proposals.iter_mut().find(|p| p.id == gone).unwrap().reverted = true;
+    let r = prepare_chat(&ready, &s, "h").unwrap();
+    assert!(r.chat_worktree.join("a.txt").exists() && !r.chat_worktree.join("b.txt").exists());
+    let chat_id = s.id.to_string();
+    assert_eq!(branch_cut_point(&m.path, &chat_id).as_deref(), Some(a.as_str()));
+
+    // Re-pinned to a newer upstream commit.
+    let b = upstream_commit(&m.path, "upstream.txt");
+    set_bases(&mut s, &[&a, &b]);
+    let r = prepare_chat(&ready, &s, "h").unwrap();
+    assert!(r.chat_worktree.join("a.txt").exists(), "the ledger replayed onto the new base");
+    assert!(r.chat_worktree.join("upstream.txt").exists(), "on the new base");
+    assert!(!r.chat_worktree.join("b.txt").exists(), "the reverted entry stays out");
+    assert_eq!(branch_cut_point(&m.path, &chat_id).as_deref(), Some(b.as_str()));
+    assert_eq!(sh(&r.chat_worktree, &["status", "--porcelain"]), "");
+    // Idempotent: the next turn changes nothing.
+    let again = prepare_chat(&ready, &s, "h").unwrap();
+    assert_eq!((again.tip.as_str(), again.replayed), (r.tip.as_str(), 0));
+
+    // Re-pinned back onto the older commit (an ancestor of the branch).
+    set_bases(&mut s, &[&a, &b, &a]);
+    let r = prepare_chat(&ready, &s, "h").unwrap();
+    assert!(!r.chat_worktree.join("upstream.txt").exists(), "rebuilt on the older base");
+    assert!(r.chat_worktree.join("a.txt").exists());
+    assert_eq!(branch_cut_point(&m.path, &chat_id).as_deref(), Some(a.as_str()));
+}
+
+/// A re-pin the branch can't follow changes nothing and says why: work on
+/// the branch that isn't from the ledger, local changes in the chat's
+/// worktree, a ledger entry that doesn't apply on the new base, a new base
+/// this checkout doesn't have; and a branch cut from a base that was never
+/// the chat's still refuses.
+#[test]
+fn a_repin_the_branch_cant_follow_changes_nothing_and_says_why() {
+    let e = env();
+    let m = bind(&e.store, e.me, "h", e.ws, &wefit(), &e.checkout, CheckoutSource::Bound).unwrap();
+    let ready = ReadyCheckout { repo: wefit(), path: m.path.clone(), via_fork: false };
+    let mut s = chat(e.ws, Some(wefit().id));
+    let a = prepare_chat(&ready, &s, "h").unwrap().pin.unwrap();
+    set_bases(&mut s, &[&a]);
+    applied_proposal(&mut s, DIFF_README);
+    let r = prepare_chat(&ready, &s, "h").unwrap();
+    let wt = r.chat_worktree.clone();
+    let tip = r.tip.clone();
+
+    // The new base conflicts with the ledger's README change.
+    sh(&m.path, &["checkout", "-q", "main"]);
+    std::fs::write(m.path.join("README.md"), "upstream\n").unwrap();
+    sh(&m.path, &["commit", "-qam", "upstream readme"]);
+    let b = sh(&m.path, &["rev-parse", "HEAD"]);
+    set_bases(&mut s, &[&a, &b]);
+    let err = prepare_chat(&ready, &s, "h").unwrap_err();
+    assert!(err.contains("re-pinned") && err.contains("doesn't apply"), "{err}");
+    assert_eq!(sh(&wt, &["rev-parse", "HEAD"]), tip, "nothing moved");
+
+    // A non-conflicting new base, but local changes in the chat's worktree.
+    sh(&m.path, &["reset", "-q", "--hard", &a]);
+    let c = upstream_commit(&m.path, "other.txt");
+    set_bases(&mut s, &[&a, &c]);
+    std::fs::write(wt.join("README.md"), "local edit\n").unwrap();
+    let err = prepare_chat(&ready, &s, "h").unwrap_err();
+    assert!(err.contains("local changes"), "{err}");
+    assert_eq!(sh(&wt, &["rev-parse", "HEAD"]), tip);
+    sh(&wt, &["checkout", "-q", "--", "README.md"]);
+
+    // Someone's own commit on the chat branch: never dropped.
+    std::fs::write(wt.join("mine.txt"), "m\n").unwrap();
+    sh(&wt, &["add", "-A"]);
+    sh(&wt, &["commit", "-qm", "my own work"]);
+    let mine = sh(&wt, &["rev-parse", "HEAD"]);
+    let err = prepare_chat(&ready, &s, "h").unwrap_err();
+    assert!(err.contains("isn't from the chat's ledger"), "{err}");
+    assert_eq!(sh(&wt, &["rev-parse", "HEAD"]), mine);
+    sh(&wt, &["reset", "-q", "--hard", &tip]);
+
+    // A new base this checkout doesn't have.
+    set_bases(&mut s, &[&a, &"e".repeat(40)]);
+    let err = prepare_chat(&ready, &s, "h").unwrap_err();
+    assert!(err.contains("isn't in") && err.contains("fetch"), "{err}");
+
+    // Cut from a base that was never one of the chat's pins: refused as before.
+    set_bases(&mut s, &[&c]);
+    let err = prepare_chat(&ready, &s, "h").unwrap_err();
+    assert!(err.contains("wasn't cut from the chat's pinned base"), "{err}");
+    assert_eq!(sh(&wt, &["rev-parse", "HEAD"]), tip);
+
+    // And with the follow possible, it follows.
+    set_bases(&mut s, &[&a, &c]);
+    let r = prepare_chat(&ready, &s, "h").unwrap();
+    assert!(r.chat_worktree.join("other.txt").exists());
+    assert_eq!(std::fs::read_to_string(r.chat_worktree.join("README.md")).unwrap(), "changed\n");
 }

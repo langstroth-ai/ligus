@@ -493,7 +493,35 @@ pub fn prepare_chat(ready: &ReadyCheckout, session: &ChatSession, host_label: &s
         // device's, and replaying the ledger onto it would diverge silently
         // (review F3a): refuse instead.
         let branch = format!("refs/heads/{}", crate::git_worktree::chat_branch_name(&chat));
-        if !git::has_commit(&ready.path, c) || git::git(&ready.path, &["merge-base", "--is-ancestor", c, &branch]).is_err() {
+        let on = |base: &str| git::has_commit(&ready.path, base) && git::git(&ready.path, &["merge-base", "--is-ancestor", base, &branch]).is_ok();
+        // Cut from one of the chat's earlier pins: the chat was re-pinned
+        // (`ChatBaseRepinned`, review residual 3). Follow it by rebuilding
+        // the branch on the new pin from the ledger, or refuse visibly.
+        // The commit the branch was cut from (below its run of Ligus
+        // commits) when that is an earlier pin; else, for a branch not on
+        // the pin in force, the latest earlier pin it does contain (work of
+        // someone's own sits on top: the follow refuses and says so).
+        let history: &[String] = session.repo_bases.get(&ready.repo.id).map(Vec::as_slice).unwrap_or(&[]);
+        let earlier = apply::branch_cut_point(&ready.path, &chat)
+            .filter(|cut| cut != c && history.iter().any(|p| p == cut))
+            .or_else(|| (!on(c)).then(|| history.iter().rev().find(|p| p.as_str() != c && on(p)).cloned()).flatten());
+        if let Some(old) = earlier {
+            if !git::has_commit(&ready.path, c) {
+                return Err(format!(
+                    "This chat's base was re-pinned to {}, which isn't in {}'s checkout on {host_label}; fetch it there, then ask again",
+                    &c[..c.len().min(12)],
+                    ready.repo.display_name
+                ));
+            }
+            let entries = hive_core::workspace_repo::ledger(session, ready.repo.id);
+            apply::rebase_onto_repin(&ready.path, &chat, &old, c, &entries).map_err(|e| {
+                format!(
+                    "This chat's base was re-pinned to {}, and its branch on {host_label} can't follow: {e}. Nothing changed; resolve it there, or remove this host's chat branch to cut it again from the new base.",
+                    &c[..c.len().min(12)]
+                )
+            })?;
+        }
+        if !on(c) {
             return Err(format!(
                 "This chat's branch on {host_label} wasn't cut from the chat's pinned base {}; it has diverged from the other devices. \
                  Start a new chat, or remove this host's chat branch to cut it again from the pinned base.",

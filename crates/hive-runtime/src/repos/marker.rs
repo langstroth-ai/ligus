@@ -59,6 +59,22 @@ fn write_new(path: &Path, me: Uuid, label: &str) -> std::io::Result<()> {
     f.sync_all()
 }
 
+/// The label of the other host that manages the checkout at `dir`, when
+/// one does: work that doesn't claim a checkout (a chat without a repo in
+/// the workspace's bound folder, the hygiene sweep) must leave such a
+/// checkout alone, or two hosts would drive one set of chat worktrees and
+/// branches (review residual 6). An unreadable marker counts as foreign.
+pub fn managed_elsewhere(dir: &Path, me: Uuid) -> Option<String> {
+    let path = marker_path(dir)?;
+    let text = std::fs::read_to_string(path).ok()?;
+    match parse(&text) {
+        Some((id, _)) if id == me => None,
+        Some((_, label)) if !label.is_empty() => Some(label),
+        Some(_) => Some("another host".into()),
+        None => Some("an unreadable marker".into()),
+    }
+}
+
 /// Claim the checkout at `dir` for this host: `Me` when it was unclaimed
 /// (exactly one of several racing hosts wins) or already ours; `Other` when
 /// another host manages it. A marker that isn't readable as one (garbage)
@@ -146,6 +162,23 @@ mod tests {
         assert_eq!(manager_of(&a, *other), Some(Manager::Me));
         release(&a, winner);
         assert_eq!(manager_of(&a, *other), Some(Manager::Me), "only the owner releases");
+    }
+
+    #[test]
+    fn managed_elsewhere_names_the_other_host_only() {
+        let t = tempfile::tempdir().unwrap();
+        let a = t.path().join("a");
+        repo_with_origin(&a, None);
+        let (me, box_) = (Uuid::new_v4(), Uuid::new_v4());
+        assert_eq!(managed_elsewhere(&a, me), None, "unclaimed");
+        claim(&a, me, "mac").unwrap();
+        assert_eq!(managed_elsewhere(&a, me), None, "mine");
+        take_over(&a, box_, "box").unwrap();
+        assert_eq!(managed_elsewhere(&a, me).as_deref(), Some("box"));
+        // A linked worktree of that checkout shares its common dir.
+        assert_eq!(managed_elsewhere(&t.path().join("nope"), me), None, "not a checkout");
+        std::fs::write(super::super::git::git_common_dir(&a).unwrap().join(MARKER), "garbage").unwrap();
+        assert!(managed_elsewhere(&a, me).is_some(), "garbage is foreign");
     }
 
     #[test]
