@@ -183,6 +183,10 @@ pub struct WorkspaceRoster {
     removed_accounts: HashSet<Uuid>,
     /// Agent signing keys valid at the config head: key_id → (key, agent).
     agent_keys: HashMap<Uuid, (Vec<u8>, Uuid)>,
+    /// Devices in `revoked` only because no account they are certified to
+    /// has been admitted here yet: never a member, not removed, not
+    /// explicitly revoked. Their events are held, not refused, at ingest.
+    unadmitted: HashSet<Uuid>,
 }
 
 impl WorkspaceRoster {
@@ -600,7 +604,7 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
     roster.removed_accounts = sticky_removed.clone();
     // Explicitly-revoked devices (a `DeviceRevoked` event) are never trusted, even
     // if they still hold a valid member cert — verdict_for checks is_revoked first.
-    roster.revoked.extend(explicit_revoked);
+    roster.revoked.extend(explicit_revoked.iter().copied());
     // Retain the pinned account signing keys for accounts that are members — the
     // Option-C gate checks these against GitHub. (Non-member account keys are
     // irrelevant; their devices are revoked below.)
@@ -656,6 +660,12 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
     }
     // A device whose *only* verified certs are to removed accounts is revoked —
     // but a device that also holds a current member cert (above) stays trusted.
+    // One whose accounts were never members here (their admission isn't on
+    // this device yet, or never comes) is revoked too, but marked unadmitted:
+    // whether the admission came first is arrival order, so ingest holds its
+    // events rather than refusing them for good (`verdict_for`).
+    let ever_members: HashSet<Uuid> = member_account.values().copied().chain(sticky_removed.iter().copied()).collect();
+    let mut removed_only: HashSet<Uuid> = HashSet::new();
     for cert in &certs {
         if roster.devices.contains_key(&cert.device_id) {
             continue;
@@ -663,9 +673,15 @@ pub fn build_roster_pinned(envelopes: &[SessionEventEnvelope], pin: Option<&Foun
         if let Some(account_key) = account_keys.get(&cert.account_id) {
             if cert.verify(account_key).is_ok() && !members.contains(&cert.account_id) {
                 roster.revoked.insert(cert.device_id);
+                if ever_members.contains(&cert.account_id) {
+                    removed_only.insert(cert.device_id);
+                } else {
+                    roster.unadmitted.insert(cert.device_id);
+                }
             }
         }
     }
+    roster.unadmitted.retain(|d| !removed_only.contains(d) && !explicit_revoked.contains(d));
     roster
 }
 
@@ -915,6 +931,19 @@ pub fn verdict_for(roster: &WorkspaceRoster, env: &SessionEventEnvelope) -> Verd
         return if speaks_as_agent { Verdict::Valid } else { Verdict::Quarantine(QuarantineReason::Impersonation) };
     }
     if roster.is_revoked(device_id) {
+        // Certified only to accounts not admitted here (yet): held until the
+        // admission arrives, never applied without it. Refusing it for good
+        // would make the verdict depend on arrival order (a device that had
+        // the `MemberAdded` first applies it). A body its own key doesn't
+        // sign is refused as ever.
+        if roster.unadmitted.contains(&device_id) {
+            return match roster.chained.get(&device_id) {
+                Some((k, _)) if verify_envelope(env, k).is_ok() => Verdict::Unverifiable(QuarantineReason::UncertifiedDevice),
+                Some(_) => Verdict::Quarantine(QuarantineReason::BadSignature),
+                // Its account's key is contested: fail closed, as ever.
+                None => Verdict::Quarantine(QuarantineReason::RevokedDevice),
+            };
+        }
         return Verdict::Quarantine(QuarantineReason::RevokedDevice);
     }
     if !roster.is_certified(device_id) {

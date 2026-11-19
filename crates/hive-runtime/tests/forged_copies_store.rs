@@ -69,14 +69,19 @@ fn world() -> (SignedWorld, Uuid, Uuid) {
     (w, chat, id)
 }
 
+/// Derived once: argon2 in a debug build costs a fifth of a second, and a
+/// device seals every body it is handed.
 fn key() -> [u8; 32] {
-    hive_core::derive_workspace_key("forged copies")
+    static KEY: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
+    *KEY.get_or_init(|| hive_core::derive_workspace_key("forged copies"))
 }
 
 struct Device {
     store: EventStore,
     engine: SyncEngine,
-    seq: u64,
+    /// Every body this device was handed, as the relay keeps it: a re-fetch
+    /// serves what lies above the cursor.
+    relay: Vec<(u64, Value)>,
 }
 
 impl Device {
@@ -84,21 +89,31 @@ impl Device {
         let engine = SyncEngine::new(RelayClient::new("http://127.0.0.1:0"), Uuid::new_v4().to_string())
             .with_room_workspace(w.wid)
             .with_key(key());
-        Self { store: EventStore::open_in_memory().unwrap(), engine, seq: 0 }
+        Self { store: EventStore::open_in_memory().unwrap(), engine, relay: Vec::new() }
     }
 
-    /// Bodies as the relay hands them out: sealed, so each opens to the
-    /// bytes its author serialized.
+    /// The relay takes these bodies, and the device fetches from its cursor:
+    /// sealed, so each opens to the bytes its author serialized, and served
+    /// again while the cursor sits below them (a held body is re-fetched).
     fn deliver(&mut self, envs: &[SessionEventEnvelope]) {
-        let batch: Vec<(u64, Value)> = envs
-            .iter()
-            .map(|e| {
-                self.seq += 1;
-                let sealed = hive_core::seal_symmetric(&key(), 0, &serde_json::to_vec(e).unwrap()).unwrap();
-                (self.seq, serde_json::to_value(sealed).unwrap())
-            })
-            .collect();
-        self.engine.apply_fetched(&mut self.store, &batch).unwrap();
+        let start = self.relay.len() as u64;
+        for (e, seq) in envs.iter().zip(start + 1..) {
+            let sealed = hive_core::seal_symmetric(&key(), 0, &serde_json::to_vec(e).unwrap()).unwrap();
+            self.relay.push((seq, serde_json::to_value(sealed).unwrap()));
+        }
+        self.fetch();
+    }
+
+    /// One fetch from the cursor, as the sync loop does it: false when
+    /// nothing lies above the cursor.
+    fn fetch(&mut self) -> bool {
+        let cursor = self.engine.cursor();
+        let page: Vec<(u64, Value)> = self.relay.iter().filter(|(s, _)| *s > cursor).cloned().collect();
+        if page.is_empty() {
+            return false;
+        }
+        self.engine.apply_fetched(&mut self.store, &page).unwrap();
+        true
     }
 
     fn chat(&self, w: &SignedWorld, chat: Uuid) -> ChatSession {
@@ -164,6 +179,41 @@ fn a_forged_seed_copy_delivered_first_does_not_take_the_workspace_down() {
     assert_eq!(d.chat(&w, chat).title, "honest");
 }
 
+/// A member's events that reach a device after their device certificate
+/// but before their admission are not refused: the device that had the
+/// admission first applies them, so this one must too. (The roster used to
+/// list a device certified only to a not-yet-member account as revoked, and
+/// its events were refused for good, the cursor moving past them.)
+#[test]
+fn a_members_events_that_arrive_before_their_admission_are_not_refused() {
+    let (w, chat, _) = world();
+    let admits_con = |e: &SessionEventEnvelope| matches!(&e.payload, SessionEvent::MemberAdded { member, .. } if member.id == "con");
+    let (admission, rest): (Vec<_>, Vec<_>) = w.cfg.iter().cloned().partition(admits_con);
+    assert_eq!(admission.len(), 1);
+    let mut d = Device::new(&w);
+    d.deliver(&rest);
+    d.deliver(&w.chats[&chat]);
+    d.deliver(&admission);
+    while d.fetch() {}
+    assert_eq!(d.engine.cursor(), d.relay.len() as u64, "nothing is held");
+    let got = d.chat(&w, chat);
+    assert_eq!(got.title, "honest");
+    assert_eq!(got.messages.len(), 1, "the message sent before the admission arrived is kept");
+}
+
+/// The key is derived once per run: argon2 per sealed body made the property
+/// below take minutes at CI's 256 cases (PROPTEST_CASES overrides
+/// `with_cases`), and past the ten-minute kill.
+#[test]
+fn the_workspace_key_is_derived_once() {
+    key();
+    let t = std::time::Instant::now();
+    for _ in 0..1000 {
+        key();
+    }
+    assert!(t.elapsed() < std::time::Duration::from_secs(1), "{:?}", t.elapsed());
+}
+
 fn shuffle<T>(v: &mut [T], mut s: u64) {
     for i in (1..v.len()).rev() {
         s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
@@ -172,6 +222,8 @@ fn shuffle<T>(v: &mut [T], mut s: u64) {
 }
 
 proptest! {
+    // PROPTEST_CASES overrides this (CI runs 256, the nightly 4096), so a
+    // case must stay cheap.
     #![proptest_config(ProptestConfig::with_cases(16))]
 
     /// 2–4 devices, each receiving the honest events and its own forged
@@ -206,9 +258,11 @@ proptest! {
                 d.deliver(part);
             }
             // The relay re-serves what was held (a body of a device whose
-            // certificate came later).
-            for _ in 0..3 {
-                d.deliver(&all);
+            // certificate came later), from the cursor, until nothing is.
+            let mut passes = 0;
+            while d.fetch() {
+                passes += 1;
+                prop_assert!(passes <= 3, "still held after {} re-fetches (cursor {} of {})", passes, d.engine.cursor(), d.relay.len());
             }
             let got = d.chat(&w, chat);
             prop_assert_eq!(&got.title, &want.title);
