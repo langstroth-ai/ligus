@@ -112,6 +112,7 @@ pub fn requires_projection_authz(event: &SessionEvent) -> bool {
             | SessionEvent::DearthModeChanged { .. }
             | SessionEvent::JoinApproved { .. }
             | SessionEvent::AdmissionClosed { .. }
+            | SessionEvent::WorkspaceSandboxSet { .. }
             | SessionEvent::ChatLockdownCleared { .. }
             | SessionEvent::WorkspaceRulesSet { .. }
             | SessionEvent::AgentKeyCertified { .. }
@@ -216,7 +217,8 @@ pub fn min_role_for(event: &SessionEvent) -> WorkspaceRole {
         | SessionEvent::JoinApproved { .. }
         // Closing a box admission only narrows, but it is the entrance
         // policy's: an Admin's.
-        | SessionEvent::AdmissionClosed { .. } => WorkspaceRole::Admin,
+        | SessionEvent::AdmissionClosed { .. }
+        | SessionEvent::WorkspaceSandboxSet { .. } => WorkspaceRole::Admin,
         // Path zones set the review bar; the beacon says where home is.
         SessionEvent::FlowRecorded { record } if record.is_governance() => WorkspaceRole::Admin,
         // Every other flow record is collaboration content (routing logs,

@@ -282,21 +282,26 @@ pub struct Confine {
     /// only): the user's claude.ai connectors load, which Claude Code offers
     /// only without `--strict-mcp-config`.
     pub connectors: bool,
+    /// The turn may use a shell (Phase C: the Owner's, or granted to the
+    /// agent). Without it Bash is off the tool list and denied.
+    pub shell: bool,
 }
 
 impl Confine {
-    /// From the turn in scope (the baseline policy when there is none).
+    /// From the turn in scope (`TurnPolicy::outside_turn` when there is
+    /// none: read-only, no shell, only the model).
     pub fn current() -> Self {
-        let p = crate::executor::current_turn();
-        let open = p.as_ref().is_none_or(|p| p.envelope.egress.is_open());
+        let p = crate::executor::agent_policy();
+        let open = p.envelope.egress.is_open();
         Self {
             egress_open: open,
-            user_config: p.as_ref().is_some_and(|p| p.cli_user_config),
-            writes_allowed: p.as_ref().is_none_or(|p| p.gate.allows_writes()),
+            user_config: p.cli_user_config,
+            writes_allowed: p.gate.allows_writes(),
             connectors: open && {
                 let c = crate::egress::EgressPreset::ClaudeConnectors;
-                p.as_ref().is_some_and(|p| p.egress_presets.contains(&c)) || crate::executor::host_paths().egress_presets.contains(&c)
+                p.egress_presets.contains(&c) || crate::executor::host_paths().egress_presets.contains(&c)
             },
+            shell: p.shell_allowed,
         }
     }
 }
@@ -368,7 +373,8 @@ pub fn confine(args: &[String], c: Confine) -> (Vec<String>, Vec<(String, String
         out.push(serde_json::json!({ "disableAllHooks": true }).to_string());
         out.push("--disable-slash-commands".into());
     }
-    let mut tools: Vec<&str> = TURN_TOOLS.iter().copied().filter(|t| c.egress_open || *t != "Bash").collect();
+    let shell = c.egress_open && c.shell;
+    let mut tools: Vec<&str> = TURN_TOOLS.iter().copied().filter(|t| shell || *t != "Bash").collect();
     if c.egress_open {
         tools.extend(WEB_TOOLS);
     }
@@ -381,6 +387,8 @@ pub fn confine(args: &[String], c: Confine) -> (Vec<String>, Vec<(String, String
     out.extend(OUT_OF_TURN_TOOLS.iter().map(|s| s.to_string()));
     if !c.egress_open {
         out.extend(WEB_TOOLS.iter().map(|s| s.to_string()));
+    }
+    if !shell {
         out.push("Bash".into());
     }
     let mut approve = vec![crate::executor::LIGUS_MCP_ID.to_string()];
@@ -619,7 +627,8 @@ mod tests {
         if crate::executor::skip_without_sandbox("default_turn_is_confined_to_the_turn") {
             return;
         }
-        let (argv, env) = launched_argv(crate::executor::TurnPolicy::baseline(crate::executor::HostKind::Desktop), &[]).await;
+        let owner = crate::executor::TurnPolicy { shell_allowed: true, ..crate::executor::TurnPolicy::baseline(crate::executor::HostKind::Desktop) };
+        let (argv, env) = launched_argv(owner, &[]).await;
         assert!(argv.contains(&"--strict-mcp-config".to_string()), "{argv:?}");
         assert!(argv.windows(2).any(|w| w[0] == "--setting-sources" && w[1].is_empty()), "{argv:?}");
         let i = argv.iter().rposition(|a| a == "--settings").expect("--settings");
@@ -678,7 +687,7 @@ mod tests {
     #[test]
     fn connectors_preset_lifts_strict_mcp_only_when_open() {
         let strict = vec!["--strict-mcp-config".to_string(), "--mcp-config".into(), r#"{"mcpServers":{}}"#.into()];
-        let c = Confine { egress_open: true, user_config: false, writes_allowed: true, connectors: false };
+        let c = Confine { egress_open: true, user_config: false, writes_allowed: true, connectors: false, shell: true };
         let (a, env) = confine(&strict, c);
         assert_eq!(a.iter().filter(|x| *x == "--strict-mcp-config").count(), 1);
         assert!(env.contains(&("ENABLE_CLAUDEAI_MCP_SERVERS".to_string(), "false".to_string())));
@@ -688,6 +697,40 @@ mod tests {
         assert!(values_after(&a, "--disallowedTools").contains(&"RemoteTrigger".to_string()));
         let (a, _) = confine(&strict, Confine { connectors: true, egress_open: false, ..c });
         assert!(a.contains(&"--strict-mcp-config".to_string()));
+    }
+
+    /// Review: a `claude` spawned with no turn in scope (the chat summarizer
+    /// and compaction, a chat title, a runtime ping) reads prompts other
+    /// members wrote, so it gets no shell: the shell is decided per turn, and
+    /// with no turn there is no Owner behind it.
+    #[test]
+    fn no_turn_in_scope_means_no_shell() {
+        assert!(crate::executor::current_turn().is_none());
+        assert!(!Confine::current().shell, "a claude outside any turn keeps Bash");
+        assert!(!crate::executor::turn_shell_allowed());
+        assert!(!crate::executor::TurnPolicy::baseline(crate::executor::HostKind::Desktop).shell_allowed);
+        // Nor writes, the web tools or MCP: it only has to answer in text.
+        let c = Confine::current();
+        assert!(!c.writes_allowed && !c.egress_open && !c.connectors, "{c:?}");
+        let (a, _) = confine(&[], Confine::current());
+        assert!(!values_after(&a, "--tools").iter().any(|t| t == "Bash"), "{a:?}");
+        assert!(values_after(&a, "--disallowedTools").contains(&"Bash".to_string()), "{a:?}");
+    }
+
+    /// Phase C: without the shell (a turn the Owner didn't start, no grant)
+    /// Bash is off the tool list and denied, under open egress too.
+    #[test]
+    fn no_shell_takes_bash_away() {
+        let c = Confine { egress_open: true, user_config: false, writes_allowed: true, connectors: false, shell: true };
+        let (a, _) = confine(&[], c);
+        assert!(values_after(&a, "--tools").iter().any(|t| t.split(',').any(|x| x == "Bash")), "{a:?}");
+        assert!(!values_after(&a, "--disallowedTools").contains(&"Bash".to_string()));
+        let (a, _) = confine(&[], Confine { shell: false, ..c });
+        assert!(!values_after(&a, "--tools").iter().any(|t| t.split(',').any(|x| x == "Bash")), "{a:?}");
+        assert!(values_after(&a, "--disallowedTools").contains(&"Bash".to_string()), "{a:?}");
+        // Restricted egress already took it; it's denied once.
+        let (a, _) = confine(&[], Confine { shell: false, egress_open: false, ..c });
+        assert_eq!(values_after(&a, "--disallowedTools").iter().filter(|t| *t == "Bash").count(), 1);
     }
 
     /// The owner's live test: the Ligus MCP server connected, but every
@@ -710,7 +753,7 @@ mod tests {
         // A read-only author gate (its worktree is read-only, so checked on
         // the constructed args): only Ligus's own server, whose tools Ligus
         // authorizes per call.
-        let (argv, _) = confine(&strict, Confine { egress_open: true, user_config: false, writes_allowed: false, connectors: false });
+        let (argv, _) = confine(&strict, Confine { egress_open: true, user_config: false, writes_allowed: false, connectors: false, shell: true });
         let allowed = values_after(&argv, "--allowedTools");
         assert_eq!(allowed, vec!["mcp__ligus".to_string()], "{argv:?}");
     }
@@ -735,7 +778,9 @@ mod tests {
         // A write tier, so the (sandboxed) fake may write its env file into
         // its working dir.
         let args = ["--permission-mode".to_string(), "acceptEdits".to_string()];
-        let _ = stream_reply(fake.to_str().unwrap(), &args, dir.path().to_str(), &[], None, &[], |_| {}, |_| {}).await;
+        // In a write turn (outside one, a CLI is read-only).
+        let turn = crate::executor::TurnPolicy::baseline(crate::executor::HostKind::Desktop);
+        let _ = crate::executor::with_turn(turn, stream_reply(fake.to_str().unwrap(), &args, dir.path().to_str(), &[], None, &[], |_| {}, |_| {})).await;
         std::env::remove_var("LIGUS_SCRUBTEST_WORKSPACE_KEY");
         std::env::remove_var("ANTHROPIC_API_KEY");
         let env = std::fs::read_to_string(&out).unwrap();
@@ -776,7 +821,8 @@ mod tests {
         std::fs::write(&fake, script).unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
         let args = ["--permission-mode".to_string(), "acceptEdits".to_string()];
-        let _ = stream_reply(fake.to_str().unwrap(), &args, wt.to_str(), &[], None, &[], |_| {}, |_| {}).await;
+        let turn = crate::executor::TurnPolicy::baseline(crate::executor::HostKind::Desktop);
+        let _ = crate::executor::with_turn(turn, stream_reply(fake.to_str().unwrap(), &args, wt.to_str(), &[], None, &[], |_| {}, |_| {})).await;
         let report = std::fs::read_to_string(wt.join("out/report.txt")).expect("the stub ran and wrote its worktree");
         assert!(report.contains("done"), "{report}");
         for secret in ["SEED-SECRET", "SETTINGS-SECRET", "SERVE-TOKEN-SECRET"] {

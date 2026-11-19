@@ -23,6 +23,30 @@ Full release notes are on the
   rebase** and **Open in editor**. See
   [Workspace repositories](../features/repositories.md) and
   [Repos on the home host](../../operate/ops/serve-repos.md#workspace-repositories-on-the-box).
+- **Your home dir is off limits to agents; the shell is the Owner's.**
+  Every agent process (CLI agents, `run_command`, pre-flight tests, stdio
+  MCP servers) now runs with a home of its own for the turn, and your real
+  home is unreadable and unwritable on macOS and Linux, except the turn's
+  worktree, a read-only allow-list of toolchain install dirs (each with its
+  reason) and paths a workspace grants. Only your git name and email are
+  carried into the turn. An Admin grants extra read-only or read-write
+  paths, for every agent or one, in **Settings → Sandbox** with a passkey;
+  a grant never opens Ligus's data or a credential dir, and a read-write
+  grant stays read-only on `PATH` dirs, shell startup files and login
+  items. A shell (a CLI's
+  Bash or shell tool, ACP `execute`, `run_command`) is used only in turns
+  the workspace Owner starts (the device owner in the local workspace),
+  unless an Owner grants it to an agent; other members' turns, and a CLI
+  Ligus starts outside a turn (the summarizer, chat titles), run without
+  one, and Codex, aider and Hermes, which can't, are refused with a note.
+  `ligus doctor --sandbox` and Settings → Sandbox show the effective policy.
+  Grants apply on a device only when its user chooses (by default only on
+  the Owner's devices), and a change shows a notice. An MCP server whose
+  tools include a shell is offered only to turns with the shell, and
+  Settings → MCP flags it.
+  See [Your home dir is default-deny](../concepts/security.md#home-default-deny),
+  [Grants on this device](../concepts/security.md#grants-on-this-device)
+  and [The shell is the Owner's](../concepts/security.md#owner-only-shell).
 - **The phone acts as you with its own key; one host applies.** Since the
   box is its own service member, what you do as yourself from the phone
   (post, approve or reject, answer an agent's question, clear a lockdown,

@@ -62,6 +62,8 @@ New `SessionEvent` kinds (tags):
 
 `workspaceRulesSet`, `workspaceKeyRotated`, `deviceKeyAgreementPublished`, `passkeyRegistered`, `passkeyRemoved`, `agentKeyCertified`, `proposalApplied`, `identityLinkPublished`, `identityLinkRemoved` (the last two added 2026-11-14, owner decision D2; [identity-and-forges](identity-and-forges.md) §2.2).
 
+Phase C (2026-11-18) adds the additive kind `workspaceSandboxSet` (config log; golden vector `workspaceSandboxSet` in `golden/envelopes_v3.jsonl`). It adds no domain string.
+
 New `FlowRecord` kinds:
 
 `humanAsk`, `humanAnswered`, `turnToolSummary`, `agentOutcomeSummary`; and, with workspace memory (section 0.2), `memoryWritten`, `memoryRemoved`, `memoryProposed`, `memoryProposalDecided`, `taskState`.
@@ -966,6 +968,13 @@ pub fn default_executor() -> Arc<dyn TurnExecutor>;   // macOS: Seatbelt; Linux:
   - `serve.token`;
   - the secret-store file backends;
   - `~/.ssh`, `~/.gnupg` and `~/.aws`, unless the user allows them per runtime.
+
+**Phase C update (2026-11-18): the home is default-deny; the shell is the Owner's.**
+- Every child (CLI agents, `run_command`, pre-flight, stdio MCP servers) runs with a per-turn home (`HOME` and the XDG dirs in the turn's scratch dir); the real home is denied for reads and writes on Seatbelt, bubblewrap (an empty tmpfs, the allow-list bound back, hard denies mounted after every bind) and Landlock (the home carved out, allowed paths re-granted). `EnforcementPlan` gains `home` and `home_read`.
+- Readable under the home: the runtime's allow-list (`runtime_home_read`: the macOS login keychain for the subscription CLIs while their sign-in lives there, Claude Code's own dirs with the opt-in), the host's toolchain install dirs (`TOOLCHAIN_DIRS`, `PATH` entries under the home, each with a reason), the program's own install dir, `LIGUS_SANDBOX_READ_ALLOW`, and signed read-only grants; writable: signed read-write grants and `LIGUS_SANDBOX_WRITE_ALLOW`. Toolchain root variables (`RUSTUP_HOME`, `PYENV_ROOT`, ...) point at the real dirs; the turn home's `.gitconfig` carries only `user.name` and `user.email`.
+- `WorkspaceSandboxSet { grants }` (config log, the whole set): path grants for every agent or one agent are Admin + presence; turning an agent's shell grant on or off is the Owner's (+ presence); bounded and normalized (`hive_core::sandbox::SandboxGrants::well_formed`). A grant never opens the data dir, a secret file or a credential dir.
+- The owner-only shell (`author_gate::shell_allowed`): on only when every person behind the turn is the workspace Owner (`ChatService::trigger_shell_role`: the device owner in the local workspace) or the agent holds an Owner's grant. Otherwise Claude Code loses Bash, Copilot gets `--deny-tool=shell`, Antigravity runs in accept-edits mode, pi gets `--exclude-tools bash`, ACP `execute` is denied (never escalated), HTTP models lose `run_command`, and Codex, aider and Hermes are refused.
+- Tests: `executor::home_tests`, `tests/sandbox_home_regression.rs`, `tests/sandbox_grants_fold.rs` (property test at `PROPTEST_CASES=4096` in release for the gate).
 
 #### C.4.2 macOS: Seatbelt (default)
 

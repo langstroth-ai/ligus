@@ -72,6 +72,8 @@ pub fn requires_presence(event: &SessionEvent, author: &str, roster: &RosterStat
         }
         // Gates and quorum.
         SessionEvent::ProposalSetTuned { .. } | SessionEvent::WorkspaceRulesSet { .. } => true,
+        // Sandbox grants widen what agents reach on every host that runs them.
+        SessionEvent::WorkspaceSandboxSet { .. } => true,
         SessionEvent::ProposalUpserted { proposal } => fold.proposals.iter().find(|p| p.id == proposal.id).is_some_and(|old| {
             proposal.required_approvals < old.required_approvals
                 || proposal.approval_role_floor.rank() < old.approval_role_floor.rank()

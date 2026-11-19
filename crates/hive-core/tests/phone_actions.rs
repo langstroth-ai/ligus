@@ -436,6 +436,7 @@ fn the_phone_tier_is_exactly_the_allow_list() {
         "passkeyRegistered", "passkeyRemoved", "agentUpserted", "agentRosterUpdated", "agentRemoved", "agentKeyCertified",
         "workspaceRuntimeUpserted", "workspaceHostUpserted", "workspaceRepoAdded", "dearthModeChanged", "workflowDefinitionsUpdated",
         "proposalApplied", "proposalApplyFailed", "proposalSetDecided", "proposalSetTuned", "proposalUpserted", "deviceCertificateAdded",
+        "workspaceSandboxSet",
     ] {
         assert!(!PHONE_TIER.contains(&k), "{k}");
         for e in kinds.iter().filter(|e| e.kind_str() == k) {

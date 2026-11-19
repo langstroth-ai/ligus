@@ -187,6 +187,17 @@ pub enum PermDecision {
     Escalate,
 }
 
+/// [`judge_permission`] with the shell gate (Phase C): without the shell
+/// (the turn isn't the Owner's and the agent has no grant), an `execute`
+/// request is denied outright, never escalated: a person answering the
+/// prompt can't widen the gate.
+pub fn judge_request(tool_kind: &str, mode: &str, writes_allowed: bool, egress_open: bool, shell_allowed: bool) -> PermDecision {
+    if tool_kind == "execute" && !shell_allowed {
+        return PermDecision::Deny;
+    }
+    judge_permission(tool_kind, mode, writes_allowed, egress_open)
+}
+
 /// The permission tier (Ligus's CLI permission setting) applied to an ACP
 /// tool kind (`read`, `edit`, `delete`, `move`, `search`, `execute`,
 /// `think`, `fetch`, `switch_mode`, `other`).
@@ -517,6 +528,8 @@ struct Handler<'a, D: FnMut(String), A: FnMut(StreamActivity)> {
     mode: &'static str,
     writes_allowed: bool,
     egress_open: bool,
+    /// The turn may run shell commands (Phase C: the Owner's, or granted).
+    shell_allowed: bool,
     last_cost: f64,
     /// Why the host ended the turn itself (the spend budget).
     stopped: Option<String>,
@@ -615,7 +628,7 @@ impl<D: FnMut(String), A: FnMut(StreamActivity)> Handler<'_, D, A> {
                 let decision = if is_ligus_tool_call(&tool) {
                     PermDecision::Allow
                 } else {
-                    judge_permission(tool_kind, self.mode, self.writes_allowed, self.egress_open)
+                    judge_request(tool_kind, self.mode, self.writes_allowed, self.egress_open, self.shell_allowed)
                 };
                 let allow = match decision {
                     PermDecision::Allow => true,
@@ -774,7 +787,7 @@ pub async fn stream_reply(
 ) -> Result<String, AcpFailure> {
     let label = super::cli_agent::display_for(t.kind);
     let mode = tier_from_args(t.kind, t.tier_args);
-    let gate_writes = crate::executor::current_turn().is_none_or(|p| p.gate.allows_writes());
+    let gate_writes = crate::executor::agent_policy().gate.allows_writes();
     let tier_writes = gate_writes && mode != "default";
     let spec = crate::executor::SpawnSpec::new(crate::executor::Purpose::Agent(t.kind), t.command.program.as_str(), &t.command.args)
         .cwd(t.working_dir.map(Path::new))
@@ -801,7 +814,7 @@ pub async fn stream_reply(
     let mut conn = Conn { stdin, lines: super::bounded::BoundedLines::new(BufReader::new(stdout)), next_id: 1 };
     let scope = crate::agent_turn::current();
     let egress_open = matches!(guard.plan().egress, crate::executor::EgressPlan::Open)
-        || crate::executor::current_turn().is_none_or(|p| p.envelope.egress.is_open());
+        || crate::executor::agent_policy().envelope.egress.is_open();
     let mut h = Handler {
         on_delta,
         on_activity,
@@ -812,6 +825,7 @@ pub async fn stream_reply(
         mode,
         writes_allowed: gate_writes,
         egress_open,
+        shell_allowed: crate::executor::turn_shell_allowed(),
         last_cost: 0.0,
         stopped: None,
         session_id: None,
@@ -985,6 +999,14 @@ mod tests {
         assert_eq!(judge_permission("execute", "acceptEdits", true, true), Escalate);
         assert_eq!(judge_permission("execute", "runCommands", true, true), Allow);
         assert_eq!(judge_permission("execute", "runCommands", false, true), Deny);
+        // Phase C: no shell, no execute, at any tier; nothing else changes.
+        for mode in ["default", "acceptEdits", "runCommands", "bypassPermissions"] {
+            assert_eq!(judge_request("execute", mode, true, true, false), Deny, "{mode}");
+            for kind in ["read", "edit", "fetch", "other"] {
+                assert_eq!(judge_request(kind, mode, true, true, false), judge_permission(kind, mode, true, true), "{kind} {mode}");
+            }
+        }
+        assert_eq!(judge_request("execute", "runCommands", true, true, true), Allow);
         // Network.
         assert_eq!(judge_permission("fetch", "bypassPermissions", true, false), Deny);
         assert_eq!(judge_permission("fetch", "runCommands", true, true), Escalate);

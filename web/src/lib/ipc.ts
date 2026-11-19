@@ -1116,6 +1116,9 @@ export const removeSkill = (sessionId: string, skillId: string) =>
   invoke<void>("remove_skill", { sessionId, skillId });
 
 export const listMcpServers = () => invoke<McpServerDto[]>("list_mcp_servers");
+/// List an enabled server's tools now; returns the ones that run shell
+/// commands (such a server is offered only to turns that have the shell).
+export const inspectMcpServer = (serverId: string) => invoke<string[]>("inspect_mcp_server", { serverId });
 
 export const installMcpServer = (source: string) =>
   invoke<void>("install_mcp_server", { source });
@@ -1733,6 +1736,52 @@ export const setDearthMode = (
 
 /// Approve a member or device waiting on dearth mode's second approval.
 export const approveJoin = (subject: string) => invoke<void>("approve_join", { subject });
+
+// ── Sandbox (Phase C): effective policy and signed grants ──
+
+/// One line of a turn's effective filesystem policy.
+export type SandboxPolicyEntry = { path: string; access: "denied" | "read" | "read-write"; why: string };
+/// What an agent turn of one runtime may reach on this device, and why.
+export type EffectivePolicy = { runtime: string; tier: string; home: string | null; entries: SandboxPolicyEntry[]; shell: string };
+/// Extra paths (`~/...` or absolute). Empty lists are omitted on the wire.
+export type PathGrants = { readOnly?: string[]; readWrite?: string[] };
+/// One agent's grants: paths, and the shell for other members' turns.
+export type AgentGrant = PathGrants & { shell?: boolean };
+/// The signed sandbox grants in force (workspace config log).
+export type SandboxGrants = { workspace?: PathGrants; agents?: Record<string, AgentGrant> };
+export type SandboxAgent = { id: string; name: string; runtime: string };
+export type SandboxPolicyDto = {
+  policies: EffectivePolicy[];
+  grants: SandboxGrants;
+  agents: SandboxAgent[];
+  canEditPaths: boolean;
+  canEditShell: boolean;
+  local: boolean;
+  /// Whether this device applies the signed grants (the policies show what
+  /// applies here), its default, its own choice, and why.
+  appliesHere: boolean;
+  appliesByDefault: boolean;
+  appliesSetting: boolean | null;
+  appliesWhy: string;
+  /// The signed grants changed since you last looked.
+  changed: boolean;
+};
+
+/// The effective sandbox policy on this device (for one agent, or every
+/// runtime the workspace's agents use) and the signed grants in force.
+export const getSandboxPolicy = (agentId?: string | null) =>
+  invoke<SandboxPolicyDto>("get_sandbox_policy", { agentId: agentId ?? null });
+
+/// Replace the workspace's sandbox grants (signed; the desktop asks for a
+/// passkey). Admin to change paths; only the Owner changes a shell grant.
+export const setSandboxGrants = (grants: SandboxGrants) => invoke<void>("set_sandbox_grants", { grants });
+
+/// Apply the active workspace's signed grants on this device (`true`/`false`),
+/// or go back to the default (`null`: on for the Owner's own devices only).
+export const setSandboxGrantsHere = (apply: boolean | null) => invoke<void>("set_sandbox_grants_here", { apply });
+
+/// You have seen the signed grants as they are now (the change notice goes).
+export const ackSandboxGrants = () => invoke<void>("ack_sandbox_grants");
 
 // ── Egress presets (device-local, off by default) ──
 export type { EgressPresetsDto } from "@/bindings/EgressPresetsDto";

@@ -165,6 +165,25 @@ impl ChatService {
         Ok(())
     }
 
+    /// Set the workspace's sandbox grants (Phase C; the whole set, replacing
+    /// the one in force). Admin + presence, and only the Owner turns an
+    /// agent's shell grant on or off (authorized here and again on every
+    /// device's ingest).
+    pub fn set_sandbox_grants(&mut self, workspace_id: Uuid, grants: hive_core::sandbox::SandboxGrants) -> Result<()> {
+        grants.well_formed().map_err(|e| ChatError::Unauthorized(format!("sandbox grants: {}", e.0)))?;
+        let config_id = self.ensure_workspace_config(workspace_id)?;
+        if self.local_workspace_id != Some(workspace_id) {
+            if let Some(cfg) = self.load(config_id)? {
+                let shell_change = !grants.shell_changes(&cfg.guards.sandbox_grants).is_empty();
+                if shell_change && self.actor_role(&cfg) != hive_core::WorkspaceRole::Owner {
+                    return Err(ChatError::Unauthorized("only the Owner grants or withdraws an agent's shell".into()));
+                }
+            }
+        }
+        self.append_signed(config_id, workspace_id, SessionEvent::WorkspaceSandboxSet { grants })?;
+        Ok(())
+    }
+
     /// Approve a pending join (a member id or a device id) as this Admin.
     pub fn approve_join(&mut self, workspace_id: Uuid, subject: &str) -> Result<()> {
         let config_id = self.ensure_workspace_config(workspace_id)?;
