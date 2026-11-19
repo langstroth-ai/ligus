@@ -286,6 +286,18 @@ impl RosterTracker {
     /// and can't enroll itself), so a stolen phone can't take its person's
     /// hold away.
     pub fn vouched(envelopes: &[&SessionEventEnvelope]) -> BTreeMap<Uuid, BTreeSet<Uuid>> {
+        // Nothing to tell apart (the common case) unless some device id has
+        // certificates naming more than one account: checked before any
+        // signature is.
+        let mut named: BTreeMap<Uuid, BTreeSet<Uuid>> = BTreeMap::new();
+        for e in envelopes {
+            if let SessionEvent::DeviceCertificateAdded { certificate } = &e.payload {
+                named.entry(certificate.device_id).or_default().insert(certificate.account_id);
+            }
+        }
+        if named.values().all(|a| a.len() < 2) {
+            return BTreeMap::new();
+        }
         let trust: Vec<SessionEventEnvelope> = envelopes
             .iter()
             .filter(|e| {
