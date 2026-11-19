@@ -337,13 +337,22 @@ fn phone_memory_goldens() {
     };
     let mut out = String::new();
     // (label, tweak): 0 as drafted; 1 the box changes the body; 2 the box
-    // files it under an agent's name; 3 on the chat's log.
-    for (n, (label, tweak)) in [("proposeMemory", 0u8), ("refuse/proposeMemory-other-body", 1), ("refuse/proposeMemory-as-agent", 2), ("refuse/proposeMemory-on-chat-log", 3)]
+    // files it under an agent's name; 3 on the chat's log; 4 under a
+    // proposal id that isn't the event's (`memory::bound_event_id`).
+    for (n, (label, tweak)) in [
+        ("proposeMemory", 0u8),
+        ("refuse/proposeMemory-other-body", 1),
+        ("refuse/proposeMemory-as-agent", 2),
+        ("refuse/proposeMemory-on-chat-log", 3),
+        ("refuse/proposeMemory-unbound-id", 4),
+    ]
         .into_iter()
         .enumerate()
     {
         let mut ev = payload(&i, &asked);
         if let SessionEvent::FlowRecorded { record: FlowRecord::MemoryProposed(p) } = &mut ev {
+            // The proposal is known by the event that files it (`draft`'s id).
+            p.proposal_id = if tweak == 4 { u(0x12) } else { u(0x200 + 40 + n as u128) };
             match tweak {
                 1 => {
                     if let MemoryOp::Create { body, .. } = &mut p.op {
@@ -390,7 +399,7 @@ fn propose_memory_vectors_are_present() {
         .filter(|l| !l.trim().is_empty())
         .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["label"].as_str().unwrap().to_string())
         .collect();
-    for want in ["proposeMemory", "refuse/proposeMemory-other-body", "refuse/proposeMemory-as-agent", "refuse/proposeMemory-on-chat-log"] {
+    for want in ["proposeMemory", "refuse/proposeMemory-other-body", "refuse/proposeMemory-as-agent", "refuse/proposeMemory-on-chat-log", "refuse/proposeMemory-unbound-id"] {
         assert!(labels.iter().any(|l| l == want), "missing {want}");
     }
 }

@@ -395,14 +395,21 @@ proptest! {
                 other => prop_assert!(false, "{other:?} wrote a task-state slot"),
             }
         }
-        // One writer per slot.
-        let mut writers: BTreeMap<(Uuid, String), BTreeSet<Uuid>> = BTreeMap::new();
+        // One writer per slot: each slot holds its own signer's newest
+        // allowed update for its task and agent, never another signer's.
+        let mut newest: BTreeMap<(Uuid, Uuid, String), (u64, Uuid)> = BTreeMap::new();
         for env in f.w.chats[&chat].iter().filter(|e| verdicts.get(&e.event_id) == Some(&Verdict::Allowed)) {
             if let SessionEvent::FlowRecorded { record: FlowRecord::TaskState(t) } = &env.payload {
-                writers.entry((t.task_id, t.agent_key.clone())).or_default().insert(env.signer_device_id.unwrap());
+                let k = (env.signer_device_id.unwrap(), t.task_id, t.agent_key.clone());
+                let e = newest.entry(k).or_insert(env.canonical_key());
+                *e = (*e).max(env.canonical_key());
             }
         }
-        prop_assert!(writers.values().all(|w| w.len() == 1), "a slot with two writers: {writers:?}");
+        for s in &state.flow.tasks {
+            let k = (s.writer, s.update.task_id, s.update.agent_key.clone());
+            prop_assert_eq!(newest.get(&k).map(|x| x.1), Some(s.rev), "slot {:?} isn't its writer's newest update", k);
+        }
+        prop_assert!(state.flow.tasks.len() <= newest.len());
         prop_assert!(state.flow.tasks.len() <= hive_core::memory::MAX_TASK_SLOTS_PER_CHAT);
     }
 }
@@ -485,4 +492,237 @@ fn a_service_member_never_writes_memory() {
     assert!(w.roster().members.get("box").is_some_and(|m| m.kind == ActorKind::Service));
     let id = w.push_bare("box", rec(FlowRecord::MemoryWritten(MemoryWrite { entry_id: Uuid::new_v4(), title: "t".into(), body: "b".into(), ..Default::default() })));
     assert_eq!(w.verdict(id), Verdict::Denied);
+}
+
+// ------------------------------------------------------------ review attacks
+//
+// Adversarial review of the memory branch: each test below failed before its
+// fix (prove, then fix).
+
+/// Re-stamp `env` as drafted just after `head` on `log` (a backdated or
+/// withheld draft), its `prev` the signer's newest older event, and re-sign
+/// it with `by`'s device.
+fn backdate(w: &SignedWorld, env: &mut SessionEventEnvelope, log: &[SessionEventEnvelope], head: Uuid, by: &str) {
+    let h = log.iter().find(|e| e.event_id == head).expect("head on the log");
+    hive_core::lamport::stamp_next(env, Some(hive_core::CfgFrontier { lamport: h.lamport, event_id: h.event_id }));
+    let p = &w.people[by];
+    let prev = log
+        .iter()
+        .filter(|e| e.signer_device_id == Some(p.device_id) && e.lamport < env.lamport)
+        .max_by_key(|e| e.canonical_key())
+        .map(|e| e.event_id);
+    env.actor_stamp.as_mut().unwrap().prev = prev;
+    env.clear_raw();
+    sign_envelope(env, p.device_id, &p.device);
+}
+
+fn resign_as(w: &SignedWorld, env: &mut SessionEventEnvelope, by: &str) {
+    env.clear_raw();
+    let p = &w.people[by];
+    sign_envelope(env, p.device_id, &p.device);
+}
+
+fn create(id: Uuid, title: &str) -> FlowRecord {
+    FlowRecord::MemoryWritten(MemoryWrite { entry_id: id, title: title.into(), body: "b".into(), ..Default::default() })
+}
+
+fn proposal(id: Uuid, op: MemoryOp, proposer: String) -> FlowRecord {
+    FlowRecord::MemoryProposed(MemoryProposal { proposal_id: id, op, proposer, source: Default::default(), rationale: String::new() })
+}
+
+fn new_note() -> MemoryOp {
+    MemoryOp::Create { entry_id: Uuid::new_v4(), title: "p".into(), body: "b".into(), tags: vec![] }
+}
+
+/// Risk 3: a runtime-effect proposal names the chat's runtime or an agent
+/// bound to the signing device, never free text (or nobody: it would read as
+/// the host person's own proposal).
+#[test]
+fn a_runtime_proposal_names_only_primary_or_an_agent_on_its_device() {
+    let mut f = fixture();
+    let agent = f.agent_id.to_string();
+    for (proposer, want) in [
+        ("primary".to_string(), Verdict::Allowed),
+        (agent, Verdict::Allowed),
+        (Uuid::new_v4().to_string(), Verdict::Denied),
+        ("anything at all".to_string(), Verdict::Denied),
+        (String::new(), Verdict::Denied),
+    ] {
+        let id = f.sign(Via::Runtime, None, rec(proposal(Uuid::new_v4(), new_note(), proposer.clone())));
+        assert_eq!(f.w.verdict(id), want, "runtime proposal as {proposer:?}");
+    }
+}
+
+/// Risk 3: the per-proposer cap counts per signer, so one device can't fill
+/// the workspace's proposals by cycling proposer names.
+#[test]
+fn proposal_caps_count_per_signer() {
+    let mut f = fixture();
+    let agent = f.agent_id.to_string();
+    let mut allowed = 0;
+    for i in 0..(2 * hive_core::memory::MAX_OPEN_PROPOSALS_PER_PROPOSER) {
+        let proposer = if i % 2 == 0 { "primary".to_string() } else { agent.clone() };
+        let id = f.sign(Via::Runtime, None, rec(proposal(Uuid::new_v4(), new_note(), proposer)));
+        allowed += (f.w.verdict(id) == Verdict::Allowed) as usize;
+    }
+    assert_eq!(allowed, hive_core::memory::MAX_OPEN_PROPOSALS_PER_PROPOSER, "one device's open proposals are capped together");
+}
+
+/// A decision names a proposal by id. A member who files a backdated
+/// proposal under an id already accepted must not swap in their own
+/// operation (here: removing an Admin's entry, accepted with the Admin's
+/// authority).
+#[test]
+fn a_backdated_proposal_cant_take_over_an_accepted_proposal_id() {
+    let mut f = fixture();
+    let x = Uuid::new_v4();
+    let made = f.sign(Via::Person(1), None, rec(create(x, "adm's note")));
+    let filler = f.sign(Via::Person(0), None, rec(create(Uuid::new_v4(), "owner's note")));
+    let _ = filler;
+    let pid = Uuid::new_v4();
+    let agent = f.agent_id.to_string();
+    let honest = f.sign(Via::Agent, None, rec(proposal(pid, new_note(), agent)));
+    assert_eq!(f.w.verdict(honest), Verdict::Allowed);
+    let accept = f.sign(Via::Person(1), None, rec(FlowRecord::MemoryProposalDecided(MemoryDecision { proposal_id: pid, accepted: true, ..Default::default() })));
+    assert_eq!(f.w.verdict(accept), Verdict::Allowed);
+    // Mara (a Contributor) files her own proposal under that id, drafted
+    // just after adm's entry so it sorts before the agent's.
+    let evil = proposal(pid, MemoryOp::Remove { entry_id: x, base: made }, String::new());
+    let mut env = f.w.draft("mara", None, rec(evil), None);
+    env.event_id = Uuid::new_v4();
+    let cfg = f.w.cfg.clone();
+    backdate(&f.w, &mut env, &cfg, made, "mara");
+    let evil_id = f.w.push_env(None, env);
+    assert!(f.memory().entries[&x].live(), "adm's entry was removed by a swapped-in proposal");
+    assert_ne!(f.w.verdict(evil_id), Verdict::Allowed, "a proposal is known by the event that filed it");
+}
+
+/// The same for entry ids: a backdated create can't take another member's
+/// new entry (and its authorship) over.
+#[test]
+fn a_backdated_create_cant_take_over_an_entry_id() {
+    let mut w = SignedWorld::genesis(&["owner", "mara", "ivy"], None);
+    w.admit("owner", "mara", WorkspaceRole::Contributor);
+    w.admit("owner", "ivy", WorkspaceRole::Contributor);
+    let anchor = w.push_bare("owner", rec(create(Uuid::new_v4(), "anchor")));
+    w.push_bare("owner", rec(create(Uuid::new_v4(), "filler")));
+    let e = Uuid::new_v4();
+    let theirs = w.push_bare("mara", rec(create(e, "mara's")));
+    let mut env = w.draft("ivy", None, rec(create(e, "ivy's")), None);
+    env.event_id = Uuid::new_v4();
+    let cfg = w.cfg.clone();
+    backdate(&w, &mut env, &cfg, anchor, "ivy");
+    let squat = w.push_env(None, env);
+    assert_eq!(w.config().flow.memory.entries[&e].created_by.id, "mara", "ivy took mara's entry over");
+    assert_ne!(w.verdict(squat), Verdict::Allowed, "an entry is created by the event that names it");
+    assert_eq!(w.verdict(theirs), Verdict::Allowed);
+}
+
+/// Task state: a member's device stamping a runtime effect can't take the
+/// chat runtime's slot over by backdating its first update before the
+/// runtime's.
+#[test]
+fn a_backdated_runtime_update_cant_squat_the_primary_slot() {
+    let mut f = fixture();
+    let chat = f.chat;
+    let seed = f.w.chats[&chat][0].event_id;
+    f.w.say(chat, "adm", SessionEvent::SessionTitleChanged { title: "filler".into() });
+    let t = |s: &str| rec(FlowRecord::TaskState(TaskStateUpdate { task_id: chat, agent_key: "primary".into(), turn_id: Uuid::new_v4(), summary: s.into(), ..Default::default() }));
+    let first = f.sign(Via::Runtime, Some(chat), t("reading"));
+    let second = f.sign(Via::Runtime, Some(chat), t("writing"));
+    let mut env = f.w.draft("owner", Some(chat), t("all done, nothing to see"), None);
+    env.actor_stamp.as_mut().unwrap().runtime_effect = true;
+    let log = f.w.chats[&chat].clone();
+    backdate(&f.w, &mut env, &log, seed, "owner");
+    f.w.push_env(Some(chat), env);
+    assert_eq!(f.w.verdict(first), Verdict::Allowed, "the runtime's own update was refused");
+    assert_eq!(f.w.verdict(second), Verdict::Allowed, "the runtime's own update was refused");
+    let st = f.w.state(chat);
+    let mara_device = f.w.people["mara"].device_id;
+    let mine = st.flow.tasks.iter().find(|s| s.writer == mara_device).expect("the runtime's slot");
+    assert_eq!(mine.update.summary, "writing");
+}
+
+/// Task state in the A3 transition: the host writes its agent's slot, then
+/// the agent's own key does. Both are that agent's word; neither locks the
+/// other out.
+#[test]
+fn a_host_then_its_agents_key_both_write_the_agents_slot() {
+    let mut f = fixture();
+    let chat = f.chat;
+    let t = |s: &str, agent: &str| rec(FlowRecord::TaskState(TaskStateUpdate { task_id: chat, agent_key: agent.into(), turn_id: Uuid::new_v4(), summary: s.into(), ..Default::default() }));
+    let agent = f.agent_id.to_string();
+    let by_host = f.sign(Via::Person(2), Some(chat), t("host", &agent));
+    let by_key = f.sign(Via::Agent, Some(chat), t("key", &agent));
+    assert_eq!(f.w.verdict(by_host), Verdict::Allowed);
+    assert_eq!(f.w.verdict(by_key), Verdict::Allowed, "the agent's own key was locked out of its slot");
+}
+
+/// A person's resolution that races another edit of the entry (both from
+/// the same head) is kept as a conflict, never refused (lost).
+#[test]
+fn a_resolution_racing_an_edit_is_kept_as_a_conflict() {
+    let mut f = fixture();
+    let e = Uuid::new_v4();
+    let r0 = f.sign(Via::Person(2), None, rec(create(e, "mara's")));
+    let edit = |base: Uuid, body: &str, resolves: Vec<Uuid>| {
+        rec(FlowRecord::MemoryWritten(MemoryWrite { entry_id: e, base: Some(base), title: "t".into(), body: body.into(), resolves, ..Default::default() }))
+    };
+    let r1 = f.sign(Via::Person(2), None, edit(r0, "443", vec![]));
+    let c1 = f.sign(Via::Person(1), None, edit(r0, "8080", vec![]));
+    assert_eq!(f.memory().entries[&e].conflicts.len(), 1);
+    // Concurrent: adm edits from r1, mara resolves c1 from r1; both drafted
+    // at the same head, adm's sorting first.
+    let head = f.w.cfg.last().unwrap().event_id;
+    let mut a = f.w.draft("adm", None, edit(r1, "443 (adm)", vec![]), None);
+    a.event_id = Uuid::from_u128(1);
+    let cfg = f.w.cfg.clone();
+    backdate(&f.w, &mut a, &cfg, head, "adm");
+    let mut m = f.w.draft("mara", None, edit(r1, "443 or 8080", vec![c1]), None);
+    m.event_id = Uuid::from_u128(u128::MAX);
+    backdate(&f.w, &mut m, &cfg, head, "mara");
+    let a = f.w.push_env(None, a);
+    let m = f.w.push_env(None, m);
+    assert_eq!(f.w.verdict(a), Verdict::Allowed);
+    assert_eq!(f.w.verdict(m), Verdict::Allowed, "mara's resolution was refused, her merge lost");
+    let x = &f.memory().entries[&e];
+    assert_eq!(x.head(), a);
+    assert!(x.conflicts.iter().any(|c| c.rev == m), "her merge is a conflict");
+    assert!(!x.conflicts.iter().any(|c| c.rev == c1), "the conflict she merged is settled");
+}
+
+/// Watermarks: a removed member's backdated memory write (drafted after
+/// the cut's watermark) is refused like any other config event of theirs.
+#[test]
+fn a_removed_members_backdated_memory_write_is_refused() {
+    let mut f = fixture();
+    let before = f.w.cfg.last().unwrap().event_id;
+    let mara_dev = f.w.people["mara"].device_id;
+    let mut signers = BTreeSet::new();
+    signers.insert(mara_dev);
+    signers.insert(f.agent_key.0);
+    signers.insert(f.phone.device_id);
+    let wid = f.w.wid;
+    let watermark = hive_core::watermark::heads_of(&f.w.cfg, hive_core::workspace_config_session_id(wid), &signers);
+    f.w.push("owner", SessionEvent::MemberRemoved { member_id: "mara".into(), watermark });
+    assert!(f.w.roster().members.get("mara").is_none());
+    let mut env = f.w.draft("mara", None, rec(create(Uuid::new_v4(), "after the cut")), None);
+    let cfg = f.w.cfg.clone();
+    backdate(&f.w, &mut env, &cfg, before, "mara");
+    let id = f.w.push_env(None, env);
+    assert_eq!(f.w.verdict(id), Verdict::Denied);
+    // Her agent's backdated proposal too.
+    let agent = f.agent_id.to_string();
+    let mut env = f.w.draft("mara", None, rec(proposal(Uuid::new_v4(), new_note(), agent)), None);
+    let s = env.actor_stamp.as_mut().unwrap();
+    s.actor = ActorIdentity::new(f.agent_id.to_string(), "coder", ActorKind::Agent);
+    s.actor.device_id = Some(f.agent_key.0);
+    let h = cfg.iter().find(|e| e.event_id == before).unwrap();
+    hive_core::lamport::stamp_next(&mut env, Some(hive_core::CfgFrontier { lamport: h.lamport, event_id: h.event_id }));
+    env.actor_stamp.as_mut().unwrap().prev = None;
+    env.clear_raw();
+    sign_envelope(&mut env, f.agent_key.0, &f.agent_key.1);
+    let id = f.w.push_env(None, env);
+    assert_eq!(f.w.verdict(id), Verdict::Denied);
+    let _ = resign_as;
 }

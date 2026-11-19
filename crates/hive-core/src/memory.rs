@@ -45,6 +45,9 @@ pub const MAX_TASK_ITEMS: usize = 8;
 pub const MAX_QUESTION_CHARS: usize = 300;
 pub const MAX_RESULT_CHARS: usize = 600;
 pub const MAX_TASK_SLOTS_PER_CHAT: usize = 64;
+/// Task-state slots one signer holds on a chat; a new one past it replaces
+/// that signer's own least recently updated slot.
+pub const MAX_TASK_SLOTS_PER_WRITER: usize = 8;
 pub const MAX_TASK_TTL_MS: i64 = 24 * 3_600_000;
 pub const DEFAULT_TASK_TTL_MS: i64 = 2 * 3_600_000;
 /// Search: at most this many terms of at most this many characters.
@@ -322,6 +325,9 @@ pub struct ProposalState {
     pub proposal: MemoryProposal,
     /// Who signed it.
     pub by: MemoryAuthor,
+    /// The signing device or agent key (the per-proposer bound counts it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signer: Option<Uuid>,
     pub at_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision: Option<DecisionState>,
@@ -330,18 +336,6 @@ pub struct ProposalState {
 impl ProposalState {
     pub fn is_open(&self) -> bool {
         self.decision.is_none()
-    }
-    /// The key per-proposer bounds count under.
-    pub fn proposer_key(&self) -> String {
-        proposer_key(&self.proposal.proposer, &self.by.id)
-    }
-}
-
-fn proposer_key(proposer: &str, author: &str) -> String {
-    if proposer.is_empty() {
-        format!("member:{author}")
-    } else {
-        proposer.to_string()
     }
 }
 
@@ -423,6 +417,14 @@ fn text_ok(s: &str, max: usize, newlines: bool) -> bool {
     !s.trim().is_empty() && s.chars().count() <= max && !bad_chars(s, newlines)
 }
 
+/// Invisible formatting characters: zero-width characters, the byte-order
+/// mark, word joiners and the direction overrides and isolates. A title
+/// with one could read differently from what it holds (a reversed span, a
+/// word that doesn't match a search) in every surface that shows it.
+pub fn is_invisible(c: char) -> bool {
+    matches!(c, '\u{00ad}' | '\u{061c}' | '\u{180e}' | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
+}
+
 fn tag_ok(t: &str) -> bool {
     !t.is_empty()
         && t.chars().count() <= MAX_TAG_CHARS
@@ -443,6 +445,9 @@ fn unique(ids: &[Uuid], max: usize) -> bool {
 pub fn content_ok(title: &str, body: &str, tags: &[String]) -> Result<(), &'static str> {
     if !text_ok(title, MAX_TITLE_CHARS, false) {
         return Err("a memory title is 1 to 120 characters, on one line");
+    }
+    if title.chars().any(is_invisible) {
+        return Err("a memory title has no invisible or direction-changing characters");
     }
     if !text_ok(body, MAX_BODY_CHARS, true) {
         return Err("a memory body is 1 to 4000 characters");
@@ -526,10 +531,12 @@ fn judge_change(m: &MemoryState, entry_id: Uuid, base: Uuid, resolves: &[Uuid], 
         return Err("edited from a version too old or unknown; reload the entry");
     }
     if base != e.head() {
-        if !resolves.is_empty() {
-            return Err("only a change made from the current version resolves conflicts");
-        }
-        if e.conflicts.len() >= MAX_CONFLICTS {
+        // Made from an older version (a change raced it): kept as a
+        // conflict, never refused, so nothing a person wrote is lost. The
+        // conflicts it merged that are still open are settled by it (their
+        // text is in it); ones already settled are ignored.
+        let settled = e.conflicts.iter().filter(|c| resolves.contains(&c.rev)).count();
+        if e.conflicts.len() - settled >= MAX_CONFLICTS {
             return Err("this entry has too many unresolved conflicts; resolve them first");
         }
         return Ok(Outcome::Conflict);
@@ -572,9 +579,26 @@ pub fn task_shape_ok(t: &TaskStateUpdate) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// The slot an update goes to.
-fn slot_index(tasks: &[TaskSlot], t: &TaskStateUpdate) -> Option<usize> {
-    tasks.iter().position(|s| s.update.task_id == t.task_id && s.update.agent_key == t.agent_key)
+/// The slot an update goes to: its task and agent, from its signer. Each
+/// signer has its own slot, so no signer can take another's over (a
+/// backdated first update included), and an agent that moves hosts, or gets
+/// its own key in the A3 transition, keeps reporting.
+fn slot_index(tasks: &[TaskSlot], t: &TaskStateUpdate, signer: Uuid) -> Option<usize> {
+    tasks.iter().position(|s| s.writer == signer && s.update.task_id == t.task_id && s.update.agent_key == t.agent_key)
+}
+
+/// The signer's own least recently updated slot, when it holds its share.
+fn writer_evictable(tasks: &[TaskSlot], signer: Uuid) -> Option<usize> {
+    let mine = tasks.iter().filter(|s| s.writer == signer).count();
+    if mine < MAX_TASK_SLOTS_PER_WRITER {
+        return None;
+    }
+    tasks
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.writer == signer)
+        .min_by_key(|(_, s)| (s.at_ms, s.rev))
+        .map(|(i, _)| i)
 }
 
 /// The finished slot a new slot evicts when the chat is full: the oldest
@@ -591,19 +615,46 @@ fn evictable(tasks: &[TaskSlot]) -> Option<usize> {
 /// The fold rule for a memory or task-state record (None for any other
 /// record): bounds and semantics that need only the fold so far, the
 /// signer and the author. Role and identity rules live in `authz`.
-pub fn validate(flow: &FlowState, record: &FlowRecord, author: &str, signer: Option<Uuid>) -> Option<Result<(), &'static str>> {
+pub fn validate(flow: &FlowState, record: &FlowRecord, signer: Option<Uuid>) -> Option<Result<(), &'static str>> {
     let m = &flow.memory;
     Some(match record {
         FlowRecord::MemoryWritten(w) => judge_op(m, &write_op(w), &w.resolves).map(|_| ()),
         FlowRecord::MemoryRemoved(r) => judge_op(m, &MemoryOp::Remove { entry_id: r.entry_id, base: r.base }, &r.resolves).map(|_| ()),
-        FlowRecord::MemoryProposed(p) => validate_proposal(m, p, author),
+        FlowRecord::MemoryProposed(p) => validate_proposal(m, p, signer),
         FlowRecord::MemoryProposalDecided(d) => validate_decision(m, d),
         FlowRecord::TaskState(t) => validate_task(&flow.tasks, t, signer),
         _ => return None,
     })
 }
 
-fn validate_proposal(m: &MemoryState, p: &MemoryProposal, author: &str) -> Result<(), &'static str> {
+/// The event id a memory record must carry: a new entry and a proposal are
+/// known by the event that made them, never by an id their author picked
+/// (as a lockdown is known by the event that raised it). Otherwise a
+/// backdated record could claim an id an honest one already used and sort
+/// first: taking a new entry (and its authorship) over, or swapping its own
+/// operation into a proposal a person already accepted. With the binding,
+/// a second record under the id is a second event under one event id, which
+/// every fold denies.
+pub fn bound_event_id(record: &FlowRecord) -> Option<Uuid> {
+    match record {
+        FlowRecord::MemoryWritten(w) if w.base.is_none() => Some(w.entry_id),
+        FlowRecord::MemoryProposed(p) => Some(p.proposal_id),
+        _ => None,
+    }
+}
+
+/// The identity rule for [`bound_event_id`] (a fold rule; `authz::authorize`).
+pub fn id_binding_ok(record: &FlowRecord, event_id: Uuid) -> Result<(), &'static str> {
+    match bound_event_id(record) {
+        Some(id) if id != event_id => Err(match record {
+            FlowRecord::MemoryProposed(_) => "a memory proposal's id is the id of the event that files it",
+            _ => "a new memory entry's id is the id of the event that creates it",
+        }),
+        _ => Ok(()),
+    }
+}
+
+fn validate_proposal(m: &MemoryState, p: &MemoryProposal, signer: Option<Uuid>) -> Result<(), &'static str> {
     if p.rationale.chars().count() > MAX_NOTE_CHARS || bad_chars(&p.rationale, true) {
         return Err("a proposal's rationale is at most 500 characters");
     }
@@ -635,9 +686,11 @@ fn validate_proposal(m: &MemoryState, p: &MemoryProposal, author: &str) -> Resul
     if m.open_proposals().count() >= MAX_OPEN_PROPOSALS {
         return Err("too many open memory proposals in this workspace");
     }
-    let key = proposer_key(&p.proposer, author);
-    if m.open_proposals().filter(|x| x.proposer_key() == key).count() >= MAX_OPEN_PROPOSALS_PER_PROPOSER {
-        return Err("too many open memory proposals from this proposer");
+    // Per signer (a device or an agent key), whatever proposer it names:
+    // one device cycling proposer names still fills only its own share.
+    let Some(signer) = signer else { return Err("a memory proposal is signed") };
+    if m.open_proposals().filter(|x| x.signer == Some(signer)).count() >= MAX_OPEN_PROPOSALS_PER_PROPOSER {
+        return Err("too many open memory proposals from this device");
     }
     Ok(())
 }
@@ -661,9 +714,9 @@ fn validate_decision(m: &MemoryState, d: &MemoryDecision) -> Result<(), &'static
 fn validate_task(tasks: &[TaskSlot], t: &TaskStateUpdate, signer: Option<Uuid>) -> Result<(), &'static str> {
     task_shape_ok(t)?;
     let Some(signer) = signer else { return Err("a task-state update is signed") };
-    match slot_index(tasks, t) {
-        Some(i) if tasks[i].writer != signer => Err("this task-state slot belongs to another writer"),
+    match slot_index(tasks, t, signer) {
         Some(_) => Ok(()),
+        None if writer_evictable(tasks, signer).is_some() => Ok(()),
         None if tasks.len() >= MAX_TASK_SLOTS_PER_CHAT && evictable(tasks).is_none() => Err("too many live task-state slots on this chat"),
         None => Ok(()),
     }
@@ -703,8 +756,11 @@ pub fn apply_enveloped(flow: &mut FlowState, record: &FlowRecord, ctx: &RevCtx) 
             apply_op(&mut flow.memory, &MemoryOp::Remove { entry_id: r.entry_id, base: r.base }, &r.resolves, ctx, &r.source, None, "");
         }
         FlowRecord::MemoryProposed(p) => {
-            if validate_proposal(&flow.memory, p, &ctx.author.id).is_ok() {
-                flow.memory.proposals.insert(p.proposal_id, ProposalState { proposal: p.clone(), by: ctx.author.clone(), at_ms: ctx.at_ms, decision: None });
+            if validate_proposal(&flow.memory, p, ctx.signer).is_ok() {
+                flow.memory.proposals.insert(
+                    p.proposal_id,
+                    ProposalState { proposal: p.clone(), by: ctx.author.clone(), signer: ctx.signer, at_ms: ctx.at_ms, decision: None },
+                );
             }
         }
         FlowRecord::MemoryProposalDecided(d) => {
@@ -725,7 +781,7 @@ pub fn apply_enveloped(flow: &mut FlowState, record: &FlowRecord, ctx: &RevCtx) 
         FlowRecord::TaskState(t) => {
             if let Some(signer) = ctx.signer {
                 if validate_task(&flow.tasks, t, Some(signer)).is_ok() {
-                    match slot_index(&flow.tasks, t) {
+                    match slot_index(&flow.tasks, t, signer) {
                         Some(i) => {
                             let s = &mut flow.tasks[i];
                             s.update = t.clone();
@@ -735,7 +791,9 @@ pub fn apply_enveloped(flow: &mut FlowState, record: &FlowRecord, ctx: &RevCtx) 
                             s.updates = s.updates.saturating_add(1);
                         }
                         None => {
-                            if flow.tasks.len() >= MAX_TASK_SLOTS_PER_CHAT {
+                            if let Some(i) = writer_evictable(&flow.tasks, signer) {
+                                flow.tasks.remove(i);
+                            } else if flow.tasks.len() >= MAX_TASK_SLOTS_PER_CHAT {
                                 if let Some(i) = evictable(&flow.tasks) {
                                     flow.tasks.remove(i);
                                 }
@@ -816,6 +874,7 @@ fn apply_op(
         }
         (MemoryOp::Edit { entry_id, base, title, body, tags }, Outcome::Conflict) => {
             let e = m.entries.get_mut(entry_id)?;
+            e.conflicts.retain(|c| !resolves.contains(&c.rev));
             e.conflicts.push(rev(Some(*base), title, body, tags, false));
             remember(e, ctx.event_id);
         }
@@ -830,6 +889,7 @@ fn apply_op(
         }
         (MemoryOp::Remove { entry_id, base }, Outcome::Conflict) => {
             let e = m.entries.get_mut(entry_id)?;
+            e.conflicts.retain(|c| !resolves.contains(&c.rev));
             e.conflicts.push(rev(Some(*base), "", "", &[], true));
             remember(e, ctx.event_id);
         }
@@ -933,11 +993,30 @@ pub fn search<'a>(m: &'a MemoryState, query: &str, tags: &[String], limit: usize
 /// Neutralise text for an untrusted block: the nonce, block markers and
 /// directive openers can't appear in it.
 pub fn neutralize(s: &str, nonce: &str) -> String {
-    let mut out = s.replace("<<<", "‹‹‹").replace(">>>", "›››").replace("[[", "[ [").replace("]]", "] ]");
-    if !nonce.is_empty() {
-        out = out.replace(nonce, "[nonce]");
+    // Invisible characters go first (a zero-width space inside `<<<` or the
+    // nonce would otherwise hide it from the replacements below), and the
+    // compatibility forms of the brackets (fullwidth, small) are read as the
+    // brackets themselves.
+    let mut out: String = s
+        .chars()
+        .filter(|c| !is_invisible(*c))
+        .map(|c| match c {
+            '\u{ff1c}' | '\u{fe64}' => '<',
+            '\u{ff1e}' | '\u{fe65}' => '>',
+            '\u{ff3b}' => '[',
+            '\u{ff3d}' => ']',
+            c => c,
+        })
+        .collect();
+    // To a fixed point: one pass over `[[[` leaves `[ [[`.
+    loop {
+        let next = out.replace("<<<", "‹‹‹").replace(">>>", "›››").replace("[[", "[ [").replace("]]", "] ]");
+        let next = if nonce.is_empty() { next } else { next.replace(nonce, "[nonce]") };
+        if next == out {
+            return out;
+        }
+        out = next;
     }
-    out
 }
 
 fn kind_word(k: ActorKind) -> &'static str {

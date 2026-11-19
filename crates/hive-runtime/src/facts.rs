@@ -769,7 +769,7 @@ mod tests {
         s.flow.memory.entries.insert(entry.id, entry);
         let op = MemoryOp::Create { entry_id: Uuid::from_u128(72), title: text(), body: text(), tags: vec![text()] };
         let proposal = MemoryProposal { proposal_id: Uuid::from_u128(73), op, proposer: text(), source: Default::default(), rationale: text() };
-        s.flow.memory.proposals.insert(Uuid::from_u128(73), ProposalState { proposal, by: author.clone(), at_ms: 1, decision: None });
+        s.flow.memory.proposals.insert(Uuid::from_u128(73), ProposalState { proposal, by: author.clone(), signer: None, at_ms: 1, decision: None });
         let update = TaskStateUpdate {
             task_id: Uuid::from_u128(74),
             agent_key: text(),
