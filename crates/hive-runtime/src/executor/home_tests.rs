@@ -187,6 +187,7 @@ fn sandbox_turn_home_has_only_the_git_identity() {
 // The plan (pure)
 // ---------------------------------------------------------------------------
 
+#[cfg(unix)]
 fn plan_for(home: &Path, host: &HostPaths, purpose: Purpose, grants: &PathGrants) -> EnforcementPlan {
     EnvelopeEnforcer::plan(&PlanInputs {
         host: HostKind::Desktop,
@@ -217,6 +218,8 @@ fn plan_for(home: &Path, host: &HostPaths, purpose: Purpose, grants: &PathGrants
     })
 }
 
+// Unix paths (`/home/u`): Windows has no agent sandbox to plan for.
+#[cfg(unix)]
 #[test]
 fn plan_denies_the_home_and_lists_what_it_lets_back() {
     let home = Path::new("/home/u");
@@ -253,6 +256,8 @@ fn plan_denies_the_home_and_lists_what_it_lets_back() {
     }
 }
 
+// Unix paths (`/home/u`): Windows has no agent sandbox to plan for.
+#[cfg(unix)]
 #[test]
 fn toolchain_allow_lists_install_dirs_only() {
     let home = Path::new("/home/u");
@@ -323,6 +328,7 @@ fn effective_policy_names_every_path_with_a_reason() {
 
 /// Run `program args` as `purpose` in the decoy's worktree, with `host`
 /// paths and `grants`.
+#[cfg(unix)]
 fn run_prog(e: &dyn TurnExecutor, d: &DecoyHome, host: HostPaths, purpose: Purpose, program: &Path, args: &[&str], grants: PathGrants) -> (bool, String) {
     let policy = TurnPolicy { worktree_is_isolated: true, grants, ..TurnPolicy::baseline(HostKind::Desktop) };
     with_turn_sync(policy, || {
