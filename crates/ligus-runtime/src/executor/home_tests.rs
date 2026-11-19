@@ -570,6 +570,7 @@ fn review_agent_outside_a_turn_is_read_only_live() {
 #[test]
 fn final_review_denied_dirs_inside_the_worktree_stay_denied() {
     let Some(e) = super::tests::real_executor() else { return };
+    eprintln!("sandbox tier: {:?}", e.kind());
     let d = DecoyHome::new();
     let gh = d.home.join(".config/gh/hosts.yml");
     std::fs::create_dir_all(gh.parent().unwrap()).unwrap();
@@ -617,4 +618,23 @@ fn final_review_cwd_above_the_home_is_refused() {
             }
         }
     }
+}
+
+/// Final review (area B): an agent process can't read the environment of
+/// a process outside its sandbox (another turn's provider key, the host's
+/// own secrets): bubblewrap hides other processes, and Landlock refuses
+/// `ptrace`-class access such as `/proc/<pid>/environ` to them.
+#[cfg(target_os = "linux")]
+#[test]
+fn final_review_no_reading_another_processs_environment() {
+    let Some(e) = super::tests::real_executor() else { return };
+    let d = DecoyHome::new();
+    let mut outside = std::process::Command::new("sleep").arg("30").env("FR_DECOY_KEY", "DECOY-ENV-SECRET").spawn().unwrap();
+    let pid = outside.id();
+    for purpose in PURPOSES {
+        let (_, out) = run_in(&*e, &d, *purpose, &format!("cat /proc/{pid}/environ; cat /proc/{}/environ", std::process::id()), PathGrants::default());
+        assert!(!out.contains("DECOY-ENV-SECRET"), "{purpose:?} read another process's env: {out}");
+    }
+    let _ = outside.kill();
+    let _ = outside.wait();
 }

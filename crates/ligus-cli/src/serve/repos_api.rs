@@ -88,7 +88,10 @@ pub struct RunOut {
 /// A command with no terminal prompts (git or gh asking for a password on a
 /// headless box would hang the job forever).
 pub fn quiet(program: &str) -> Command {
-    let mut c = ligus_core::process_util::command(program);
+    // git: Ligus's own hardened git (no inherited repo redirects); either
+    // way none of Ligus's own secrets reach the child or its helpers.
+    let mut c = if program == "git" { ligus_core::process_util::git() } else { ligus_core::process_util::command(program) };
+    ligus_core::process_util::scrub_ligus_secrets(&mut c);
     c.env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "never")
         .env("GH_PROMPT_DISABLED", "1")
@@ -1579,6 +1582,17 @@ struct Pushed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Final review (area B): the box's clone and fetch git drops inherited
+    /// repo redirects (`GIT_DIR`, `GIT_INDEX_FILE`, ...) like Ligus's own git.
+    #[test]
+    fn final_review_quiet_git_is_the_hardened_git() {
+        let c = quiet("git");
+        let removed: Vec<String> = c.get_envs().filter(|(_, v)| v.is_none()).map(|(k, _)| k.to_string_lossy().into_owned()).collect();
+        for k in ["GIT_DIR", "GIT_INDEX_FILE", "GIT_EXTERNAL_DIFF"] {
+            assert!(removed.iter().any(|r| r == k), "{k} inherited: {removed:?}");
+        }
+    }
 
     #[test]
     fn progress_lines_parse() {

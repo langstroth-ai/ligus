@@ -595,14 +595,43 @@ impl Scanner {
             Ok(s) => s,
             Err(e) => return ScanResult::Failed { scanner, detail: format!("couldn't make its scratch dir: {e}") },
         };
+        // The scanner sees a copy in its scratch dir: the original lives in
+        // Ligus's data dir (the attachment cache), which it can't read.
+        let copy = scratch.0.join(file.file_name().unwrap_or_else(|| std::ffi::OsStr::new("attachment")));
+        if let Err(e) = std::fs::copy(file, &copy) {
+            return ScanResult::Failed { scanner, detail: format!("couldn't stage the file: {e}") };
+        }
         let (mut cmd, wrapped) = confined_scanner(&self.program, &scratch.0);
-        cmd.args(&self.args).arg(file).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+        cmd.args(&self.args).arg(&copy).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
         cmd.current_dir(&scratch.0);
         scanner_env(&mut cmd, &scratch.0);
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => return ScanResult::Failed { scanner, detail: format!("couldn't start: {e}") },
         };
+        // Drained while it runs: a scanner that writes more than a pipe holds
+        // (verbose output on a big archive) would otherwise block until the
+        // timeout. The first 4 KiB of each is kept.
+        fn drain(r: Option<impl Read + Send + 'static>) -> std::sync::mpsc::Receiver<String> {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut kept = Vec::new();
+                if let Some(mut r) = r {
+                    let mut buf = [0u8; 8192];
+                    while let Ok(n) = r.read(&mut buf) {
+                        if n == 0 {
+                            break;
+                        }
+                        let room = 4096usize.saturating_sub(kept.len());
+                        kept.extend_from_slice(&buf[..n.min(room)]);
+                    }
+                }
+                let _ = tx.send(String::from_utf8_lossy(&kept).into_owned());
+            });
+            rx
+        }
+        let out_task = drain(child.stdout.take());
+        let err_task = drain(child.stderr.take());
         let start = std::time::Instant::now();
         let status = loop {
             match child.try_wait() {
@@ -616,18 +645,13 @@ impl Scanner {
                 Err(e) => return ScanResult::Failed { scanner, detail: e.to_string() },
             }
         };
-        let mut out = String::new();
-        if let Some(mut s) = child.stdout.take() {
-            let _ = s.by_ref().take(4096).read_to_string(&mut out);
-        }
+        // A grandchild still holding a pipe open doesn't hold the verdict.
+        let out = out_task.recv_timeout(Duration::from_secs(2)).unwrap_or_default();
+        let err = err_task.recv_timeout(Duration::from_secs(2)).unwrap_or_default();
         let detail: String = out.lines().find(|l| !l.trim().is_empty()).unwrap_or("").chars().filter(|c| !c.is_control()).take(200).collect();
         // The sandbox itself failing to start is no verdict (bubblewrap exits
         // 1 then, which would read as "infected").
         if wrapped && status.code() != Some(0) {
-            let mut err = String::new();
-            if let Some(mut s) = child.stderr.take() {
-                let _ = s.by_ref().take(4096).read_to_string(&mut err);
-            }
             if err.lines().any(|l| l.starts_with("bwrap:") || l.starts_with("sandbox-exec:")) {
                 let why: String = err.lines().next().unwrap_or("").chars().filter(|c| !c.is_control()).take(200).collect();
                 return ScanResult::Failed { scanner, detail: format!("its sandbox didn't start: {why}") };
@@ -683,6 +707,15 @@ fn scanner_env(cmd: &mut std::process::Command, scratch: &Path) {
     }
     #[cfg(not(unix))]
     {
+        // The system variables stay (Windows programs need them); Ligus's
+        // own secrets and provider keys don't.
+        ligus_core::process_util::scrub_ligus_secrets(cmd);
+        for (k, _) in std::env::vars_os() {
+            let n = k.to_string_lossy().to_ascii_uppercase();
+            if ["KEY", "TOKEN", "SECRET", "PASSWORD", "PASSPHRASE", "CREDENTIAL"].iter().any(|w| n.contains(w)) {
+                cmd.env_remove(&k);
+            }
+        }
         cmd.env("TEMP", scratch).env("TMP", scratch).env("USERPROFILE", scratch).env("HOME", scratch);
     }
 }
@@ -692,21 +725,54 @@ fn scanner_env(cmd: &mut std::process::Command, scratch: &Path) {
 fn confined_scanner(program: &Path, scratch: &Path) -> (std::process::Command, bool) {
     #[cfg(target_os = "macos")]
     if crate::executor::seatbelt::available() {
-        let mut cmd = std::process::Command::new(crate::executor::seatbelt::SANDBOX_EXEC);
+        let mut cmd = ligus_core::process_util::command(crate::executor::seatbelt::SANDBOX_EXEC);
         cmd.arg("-p").arg(scanner_profile(scratch)).arg(program);
         return (cmd, true);
     }
     #[cfg(target_os = "linux")]
     if crate::executor::default_executor().kind() == crate::executor::ExecutorKind::Bwrap {
         if let Some(bwrap) = find_on_path("bwrap") {
-            let mut cmd = std::process::Command::new(bwrap);
+            let mut cmd = ligus_core::process_util::command(bwrap);
             cmd.args(["--ro-bind", "/", "/", "--dev", "/dev"]).arg("--bind").arg(scratch).arg(scratch);
+            // What the agent sandbox hides, hidden from a scanner a hostile
+            // file may have hijacked: Ligus's data, the credential dirs, the
+            // session bus and Secret Service, and the host sockets it could
+            // escape through (`docker.sock`, an ssh-agent).
+            for d in scanner_denied() {
+                if d.is_dir() {
+                    cmd.arg("--tmpfs").arg(&d);
+                } else if d.exists() {
+                    cmd.arg("--ro-bind").arg("/dev/null").arg(&d);
+                }
+            }
             cmd.args(["--unshare-net", "--die-with-parent", "--new-session", "--"]).arg(program);
             return (cmd, true);
         }
     }
     let _ = scratch;
-    (std::process::Command::new(program), false)
+    (ligus_core::process_util::command(program), false)
+}
+
+/// The paths a scanner never reads: this host's data dirs and secret files,
+/// the home's credential dirs (and the password database's home's), the
+/// session runtime dir, and the known host sockets.
+#[cfg(unix)]
+fn scanner_denied() -> Vec<PathBuf> {
+    let host = crate::executor::host_paths();
+    let mut v: Vec<PathBuf> = host.data_dirs.iter().chain(host.secret_files.iter()).cloned().collect();
+    for h in crate::executor::home_dir().into_iter().chain(crate::executor::passwd_home()) {
+        v.extend(crate::executor::home_secret_dirs(&h, crate::executor::Purpose::McpServer));
+        v.push(h.join(".docker/run/docker.sock"));
+        v.push(h.join(".orbstack/run/docker.sock"));
+        v.push(h.join(".colima/default/docker.sock"));
+    }
+    v.extend(std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from));
+    v.extend(std::env::var_os("SSH_AUTH_SOCK").map(PathBuf::from));
+    v.extend(["/var/run/docker.sock", "/run/docker.sock", "/run/podman/podman.sock", "/run/containerd/containerd.sock"].iter().map(PathBuf::from));
+    let mut v: Vec<PathBuf> = v.into_iter().map(|p| crate::executor::canonical(&p)).collect();
+    v.sort_by_key(|p| p.components().count());
+    v.dedup();
+    v
 }
 
 /// The Seatbelt profile a scanner runs under: everything a scanner needs to
@@ -717,10 +783,44 @@ fn confined_scanner(program: &Path, scratch: &Path) -> (std::process::Command, b
 fn scanner_profile(scratch: &Path) -> String {
     let q = |p: &Path| p.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"");
     format!(
-        "(version 1)\n(allow default)\n(deny network-outbound (remote ip))\n(deny network-inbound (local ip))\n(deny network-bind (local ip))\n(allow network-outbound (remote ip \"localhost:3310\"))\n(deny file-write*)\n(allow file-write* (subpath \"{}\") (literal \"/dev/null\") (literal \"/dev/tty\") (regex #\"^/dev/fd/\"))\n",
-        q(scratch)
+        "(version 1)\n(allow default)\n(deny network-outbound (remote ip))\n(deny network-inbound (local ip))\n(deny network-bind (local ip))\n(allow network-outbound (remote ip \"localhost:3310\"))\n(deny file-write*)\n(allow file-write* (subpath \"{}\") (literal \"/dev/null\") (literal \"/dev/tty\") (regex #\"^/dev/fd/\"))\n{}",
+        q(scratch),
+        scanner_escape_denies(&q)
     )
 }
+
+/// What the agent profile also takes away, for a scanner a hostile file may
+/// have hijacked: reads of Ligus's data and the credential dirs, the host
+/// sockets it could escape through, launches through LaunchServices (an app
+/// it opens runs outside the profile, with network), bundled XPC services,
+/// signals outside the sandbox, preference writes, Apple Events and the
+/// pasteboard.
+#[cfg(target_os = "macos")]
+fn scanner_escape_denies(q: &dyn Fn(&Path) -> String) -> String {
+    let mut files = String::new();
+    let mut socks = String::new();
+    for d in scanner_denied() {
+        files.push_str(&format!(" (subpath \"{}\")", q(&d)));
+        socks.push_str(&format!(" (path-literal \"{}\")", q(&d)));
+    }
+    let mut p = String::new();
+    if !files.is_empty() {
+        p.push_str(&format!("(deny file-read* file-write*{files})\n(deny network-outbound (remote unix-socket{socks}))\n"));
+    }
+    p.push_str(SCANNER_LAUNCH_DENIES);
+    p
+}
+
+/// The launch, signal, preference, Apple Event and pasteboard denies of the
+/// agent profile (`executor::seatbelt::profile`).
+#[cfg(target_os = "macos")]
+const SCANNER_LAUNCH_DENIES: &str = "(deny mach-lookup (global-name-prefix \"com.apple.coreservices.\") (global-name \"com.apple.runningboard\"))\n\
+(deny mach-lookup (xpc-service-name-regex #\".\"))\n\
+(deny signal)\n(allow signal (target same-sandbox))\n\
+(deny user-preference-write)\n\
+(deny mach-lookup (global-name-prefix \"com.apple.siri.\"))\n\
+(deny appleevent-send)\n\
+(deny mach-lookup (global-name \"com.apple.coreservices.appleevents\") (global-name-prefix \"com.apple.pasteboard\"))\n";
 
 fn find_on_path(bin: &str) -> Option<PathBuf> {
     find_in(bin, &std::env::var_os("PATH")?)
@@ -1106,6 +1206,61 @@ mod tests {
                 assert!(detail.contains("ligus-scan-"), "its home is a scratch dir: {detail}");
                 assert!(detail.contains("token=none"), "no inherited variables: {detail}");
             }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Final review (area B): a scanner a hostile file hijacked gets no more
+    /// than an agent would: no Ligus data or credential dirs, no host
+    /// sockets, no LaunchServices launch, Apple Event or pasteboard.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn final_review_scanner_profile_denies_what_the_agent_profile_does() {
+        let prof = scanner_profile(Path::new("/tmp/ligus-scan-x"));
+        for want in ["com.apple.runningboard", "com.apple.coreservices.", "(deny appleevent-send)", "com.apple.pasteboard", "(deny signal)", "(deny user-preference-write)", "xpc-service-name-regex", "run/docker.sock"] {
+            assert!(prof.contains(want), "{want} missing from the scanner profile:\n{prof}");
+        }
+        for d in crate::executor::host_paths().data_dirs {
+            assert!(prof.contains(&crate::executor::canonical(&d).display().to_string()), "data dir {} readable to the scanner", d.display());
+        }
+        if let Some(h) = crate::executor::home_dir() {
+            assert!(prof.contains(&crate::executor::canonical(&h.join(".ssh")).display().to_string()), "~/.ssh readable to the scanner");
+        }
+    }
+
+    /// Final review (area B): on bubblewrap the scanner's view masks the
+    /// data dirs, credential dirs and host sockets like the agent's.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn final_review_scanner_bwrap_masks_secrets_and_sockets() {
+        if crate::executor::default_executor().kind() != crate::executor::ExecutorKind::Bwrap {
+            eprintln!("SKIPPED final_review_scanner_bwrap_masks_secrets_and_sockets: not the bubblewrap tier");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (cmd, wrapped) = confined_scanner(Path::new("/bin/true"), dir.path());
+        assert!(wrapped);
+        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        for d in scanner_denied().into_iter().filter(|d| d.exists()) {
+            let d = d.display().to_string();
+            assert!(args.windows(2).any(|w| (w[0] == "--tmpfs" && w[1] == d) || (w[0] == "/dev/null" && w[1] == d)), "{d} not masked: {args:?}");
+        }
+    }
+
+    /// The scanner reads a copy in its scratch dir, never the cache file
+    /// itself (the cache is in the data dir it can't read).
+    #[cfg(unix)]
+    #[test]
+    fn final_review_scanner_reads_a_staged_copy() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("where.sh");
+        std::fs::write(&p, "#!/bin/sh\necho \"$1 $(cat \"$1\")\"; exit 1\n").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let file = dir.path().join("cached.bin");
+        std::fs::write(&file, b"payload").unwrap();
+        match (Scanner { program: p, args: vec![], timeout: Duration::from_secs(20) }).scan(&file) {
+            ScanResult::Infected { detail, .. } => assert!(detail.contains("ligus-scan-") && detail.ends_with("payload"), "{detail}"),
             other => panic!("{other:?}"),
         }
     }

@@ -156,6 +156,29 @@ pub fn redact_ligus_secrets(text: &str) -> (String, u32) {
     (out, count)
 }
 
+/// Where the longest suffix of `text` that is the start of a registered
+/// secret begins (a stream cut in the middle of one), if any. A streamed
+/// chunk holds that much back until the text after it shows whether the
+/// whole secret follows.
+pub fn partial_secret_start(text: &str) -> Option<usize> {
+    let r = registry().read().unwrap_or_else(|e| e.into_inner());
+    let mut start: Option<usize> = None;
+    for v in &r.values {
+        let longest = (v.len() - 1).min(text.len());
+        for k in (1..=longest).rev() {
+            if !v.is_char_boundary(k) || !text.is_char_boundary(text.len() - k) {
+                continue;
+            }
+            if text.ends_with(&v[..k]) {
+                let at = text.len() - k;
+                start = Some(start.map_or(at, |s| s.min(at)));
+                break;
+            }
+        }
+    }
+    start
+}
+
 /// [`redact_ligus_secrets`], text only.
 pub fn redacted(text: &str) -> String {
     redact_ligus_secrets(text).0

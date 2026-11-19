@@ -1082,6 +1082,12 @@ impl ChatService {
             .last()
             .map_or(pending.len(), |(i, _)| i);
         let mut cut = token_start.max(pending.len().saturating_sub(STREAM_HOLD));
+        // A registered secret can hold characters a token run doesn't
+        // (`abc!def…` from settings): hold back the start of one cut off at
+        // the end too.
+        if let Some(at) = crate::secret_redact::partial_secret_start(pending) {
+            cut = cut.min(at);
+        }
         while !pending.is_char_boundary(cut) {
             cut -= 1;
         }

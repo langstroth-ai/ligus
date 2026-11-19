@@ -88,6 +88,11 @@ type RowsSig = (i64, i64);
 pub const GUARD_SIGNALS_KEEP: i64 = 20_000;
 /// Parked relay bodies kept per room (A-13); junk is evicted first (B-11).
 pub const PARKED_KEEP: i64 = 5_000;
+/// Bytes of parked relay bodies kept per room, in the same order as
+/// [`PARKED_KEEP`]: a flood of large bodies under an unknown key (anyone who
+/// knows the room id on an open relay can write one) can't fill the disk, or
+/// memory when they are all replayed after a keyring change.
+pub const PARKED_BYTES_KEEP: i64 = 64 << 20;
 /// Facts kept on this device (newest).
 pub const FACTS_KEEP: i64 = 50_000;
 
@@ -981,6 +986,12 @@ impl EventStore {
             "DELETE FROM parked_bodies WHERE workspace = ?1 AND seq NOT IN \
              (SELECT seq FROM parked_bodies WHERE workspace = ?1 ORDER BY priority DESC, seq DESC LIMIT ?2)",
             rusqlite::params![workspace, PARKED_KEEP],
+        )?;
+        tx.execute(
+            "DELETE FROM parked_bodies WHERE workspace = ?1 AND seq IN \
+             (SELECT seq FROM (SELECT seq, SUM(length(CAST(body AS BLOB))) OVER (ORDER BY priority DESC, seq DESC ROWS UNBOUNDED PRECEDING) AS kept \
+              FROM parked_bodies WHERE workspace = ?1) WHERE kept > ?2)",
+            rusqlite::params![workspace, PARKED_BYTES_KEEP],
         )?;
         tx.commit()?;
         Ok(())
@@ -1985,6 +1996,26 @@ pub(crate) fn fixture_signed(env: &SessionEventEnvelope) -> SessionEventEnvelope
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Final review (area B): parked bodies are capped by bytes too, not
+    /// only by count, so large junk under an unknown key can't fill the disk
+    /// (or memory, when every parked body is replayed), and the body worth
+    /// most stays.
+    #[test]
+    fn final_review_parked_bodies_are_capped_by_bytes() {
+        let store = EventStore::open_in_memory().unwrap();
+        let keep = serde_json::json!({"version": 2, "kid": "aaaaaaaaaaaaaaaa", "ciphertext": "pending"});
+        store.park_bodies("r", &[(1, &keep, 9)]).unwrap();
+        let big = serde_json::json!({"version": 77, "kid": "deadbeefdeadbeef", "ciphertext": "A".repeat(4 << 20)});
+        for s in 2..=40u64 {
+            store.park_bodies("r", &[(s, &big, 0)]).unwrap();
+        }
+        let parked = store.parked_bodies("r").unwrap();
+        let bytes: usize = parked.iter().map(|(_, b)| b.to_string().len()).sum();
+        assert!(bytes as i64 <= PARKED_BYTES_KEEP, "{bytes} bytes parked");
+        assert!(parked.iter().any(|(s, _)| *s == 1), "the high-priority body was evicted");
+        assert!(parked.len() > 1, "some junk still fits");
+    }
     use ligus_core::{ChatMessage, MessageRole};
 
     fn seeded_store() -> (EventStore, Uuid, Uuid) {
