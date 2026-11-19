@@ -106,7 +106,9 @@ fn urldecode(s: &str) -> String {
 
 /// Run one ceremony in the system browser and wait for its result.
 fn hand_off(app: &AppHandle, page_url: &str, prompt: PresencePrompt, fragment: String) -> Result<Outcome, String> {
-    let recovery_ok = prompt.op == "get";
+    // A `get` can be answered by the recovery key the person enters for
+    // this request (bound to the digest the sheet shows).
+    let recovery_for = (prompt.op == "get").then(|| prompt.digest_short.clone());
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
@@ -131,8 +133,8 @@ fn hand_off(app: &AppHandle, page_url: &str, prompt: PresencePrompt, fragment: S
         if Instant::now() > deadline {
             break Err("timed out waiting for the passkey".to_string());
         }
-        if recovery_ok {
-            if let Some(k) = SIGNALS.take_recovery() {
+        if let Some(digest) = recovery_for.as_deref() {
+            if let Some(k) = SIGNALS.take_recovery(digest) {
                 break Ok(Outcome::Recovery(k));
             }
         }
@@ -571,11 +573,12 @@ pub fn presence_use_browser() {
 /// Confirm the pending request with the recovery key's 24 words instead of
 /// a passkey (lost every passkey). The words are parsed here (checksum
 /// verified), used for that one assertion and never stored; the fold accepts
-/// it only if that recovery key is registered to this account.
+/// it only if that recovery key is registered to this account. `digest` is
+/// the short digest the sheet showed: the key answers only that request.
 #[tauri::command]
-pub fn presence_use_recovery(words: String) -> Result<(), String> {
+pub fn presence_use_recovery(words: String, digest: String) -> Result<(), String> {
     let key = RecoveryKey::from_words(&words).map_err(|e| e.0)?;
-    SIGNALS.set_recovery(key);
+    SIGNALS.set_recovery(key, &digest);
     Ok(())
 }
 

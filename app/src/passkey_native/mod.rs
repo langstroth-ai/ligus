@@ -149,10 +149,18 @@ pub fn webcredential_domains(entitlements: &str) -> Vec<String> {
 
 /// What the person (through the confirmation sheet) asked for while a
 /// ceremony waits: shared by the native path and the browser hand-off.
+/// It also serializes ceremonies ([`run_get`] and [`run_create`] hold its
+/// turn for their whole run, fallback included): the sheet, these choices
+/// and each platform's pending-dialog slot belong to one ceremony at a
+/// time. (Adding a passkey runs its `create` without the service lock, so
+/// without the turn it could overlap a presence `get`.)
 pub struct Signals {
+    turn: Mutex<()>,
     cancel: AtomicBool,
     browser: AtomicBool,
-    recovery: Mutex<Option<RecoveryKey>>,
+    /// A recovery key the person entered, with the digest (short form) the
+    /// sheet showed when they did.
+    recovery: Mutex<Option<(String, RecoveryKey)>>,
 }
 
 impl Default for Signals {
@@ -163,13 +171,19 @@ impl Default for Signals {
 
 impl Signals {
     pub const fn new() -> Self {
-        Self { cancel: AtomicBool::new(false), browser: AtomicBool::new(false), recovery: Mutex::new(None) }
+        Self { turn: Mutex::new(()), cancel: AtomicBool::new(false), browser: AtomicBool::new(false), recovery: Mutex::new(None) }
+    }
+    /// Wait for any other ceremony to end; this one runs while the guard
+    /// lives. Lock order: the service lock (when held) before the turn,
+    /// never the reverse (a ceremony never takes the service lock).
+    fn turn(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.turn.lock().unwrap_or_else(|e| e.into_inner())
     }
     /// A new ceremony starts: forget earlier choices.
     pub fn reset(&self) {
         self.cancel.store(false, Ordering::SeqCst);
         self.browser.store(false, Ordering::SeqCst);
-        let _ = self.take_recovery();
+        *self.recovery.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
     pub fn cancel(&self) {
         self.cancel.store(true, Ordering::SeqCst);
@@ -184,11 +198,22 @@ impl Signals {
     fn browser_chosen(&self) -> bool {
         self.browser.load(Ordering::SeqCst)
     }
-    pub fn set_recovery(&self, k: RecoveryKey) {
-        *self.recovery.lock().unwrap_or_else(|e| e.into_inner()) = Some(k);
+    /// The person entered a recovery key for the ceremony whose digest
+    /// (short form) the sheet showed.
+    pub fn set_recovery(&self, k: RecoveryKey, digest_short: &str) {
+        *self.recovery.lock().unwrap_or_else(|e| e.into_inner()) = Some((digest_short.to_string(), k));
     }
-    pub fn take_recovery(&self) -> Option<RecoveryKey> {
-        self.recovery.lock().unwrap_or_else(|e| e.into_inner()).take()
+    /// The recovery key entered for the ceremony with `digest_short`. One
+    /// entered for another ceremony (words submitted as the previous one
+    /// ended) is dropped: it never signs a digest the sheet didn't show.
+    pub fn take_recovery(&self, digest_short: &str) -> Option<RecoveryKey> {
+        let (shown, k) = self.recovery.lock().unwrap_or_else(|e| e.into_inner()).take()?;
+        if shown == digest_short {
+            Some(k)
+        } else {
+            tracing::info!(target: "presence", "dropped a recovery key entered for another confirmation");
+            None
+        }
     }
 }
 
@@ -224,7 +249,7 @@ pub enum Attempt<T> {
 pub fn attempt<T: Send + 'static>(
     auth: Arc<dyn NativeAuthenticator>,
     sig: &Signals,
-    recovery_ok: bool,
+    recovery_for: Option<&str>,
     wait: Duration,
     events: &dyn Events,
     call: impl FnOnce(&dyn NativeAuthenticator) -> Result<T, NativeError> + Send + 'static,
@@ -250,8 +275,8 @@ pub fn attempt<T: Send + 'static>(
             stop(pending);
             return Attempt::Browser("the person chose the browser".into());
         }
-        if recovery_ok {
-            if let Some(k) = sig.take_recovery() {
+        if let Some(digest) = recovery_for {
+            if let Some(k) = sig.take_recovery(digest) {
                 stop(pending);
                 return Attempt::Recovery(k);
             }
@@ -289,6 +314,7 @@ pub fn run_get(
     events: &dyn Events,
     hand_off: impl FnOnce() -> Result<PresenceAssertion, String>,
 ) -> Result<PresenceAssertion, String> {
+    let _turn = sig.turn();
     let Some((auth, origin)) = native.and_then(|a| a.origin(&req.policy).map(|o| (a, o))) else {
         return hand_off();
     };
@@ -300,7 +326,7 @@ pub fn run_get(
         challenge: req.challenge,
         allow: req.credential_ids.iter().filter_map(|c| unb64url(c).ok()).collect(),
     };
-    let out = match attempt(auth, sig, true, wait, events, move |a| a.get(&g)) {
+    let out = match attempt(auth, sig, Some(&req.digest_short), wait, events, move |a| a.get(&g)) {
         Attempt::Done(raw) => {
             let a = raw.into_assertion();
             if returned_challenge(&a.client_data_json).as_deref() == Some(&req.challenge[..]) {
@@ -334,6 +360,7 @@ pub fn run_create(
     events: &dyn Events,
     hand_off: impl FnOnce() -> Result<PresenceAssertion, String>,
 ) -> Result<PresenceAssertion, String> {
+    let _turn = sig.turn();
     let Some((auth, origin)) = native.and_then(|a| a.origin(&req.policy).map(|o| (a, o))) else {
         return hand_off();
     };
@@ -347,7 +374,7 @@ pub fn run_create(
         user_name: user_name.to_string(),
         exclude: req.credential_ids.iter().filter_map(|c| unb64url(c).ok()).collect(),
     };
-    let out = match attempt(auth, sig, false, wait, events, move |a| a.create(&c)) {
+    let out = match attempt(auth, sig, None, wait, events, move |a| a.create(&c)) {
         Attempt::Done(raw) => {
             let a = raw.into_assertion();
             if returned_challenge(&a.client_data_json).as_deref() == Some(&req.challenge[..]) {
@@ -366,6 +393,40 @@ pub fn run_create(
     };
     events.done(out.is_ok());
     out
+}
+
+/// The platform's pending operation (Windows: its cancellation id), for
+/// [`NativeAuthenticator::cancel`] from another thread. A call abandoned
+/// by its waiter can still be running when the next ceremony's call starts,
+/// so each call ends only its own entry.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) struct PendingOp<T: Copy> {
+    slot: Mutex<Option<(u64, T)>>,
+    next: std::sync::atomic::AtomicU64,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl<T: Copy> PendingOp<T> {
+    pub const fn new() -> Self {
+        Self { slot: Mutex::new(None), next: std::sync::atomic::AtomicU64::new(0) }
+    }
+    /// A call starts with `v`; returns its ticket for [`PendingOp::end`].
+    pub fn begin(&self, v: T) -> u64 {
+        let ticket = self.next.fetch_add(1, Ordering::SeqCst);
+        *self.slot.lock().unwrap_or_else(|e| e.into_inner()) = Some((ticket, v));
+        ticket
+    }
+    /// The call with `ticket` returned.
+    pub fn end(&self, ticket: u64) {
+        let mut slot = self.slot.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.is_some_and(|(t, _)| t == ticket) {
+            *slot = None;
+        }
+    }
+    /// The pending call's value, if one is running.
+    pub fn current(&self) -> Option<T> {
+        self.slot.lock().unwrap_or_else(|e| e.into_inner()).map(|(_, v)| v)
+    }
 }
 
 /// A ceremony that needs the app's main thread (macOS: AppKit presents the

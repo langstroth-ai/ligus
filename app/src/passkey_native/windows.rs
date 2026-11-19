@@ -12,7 +12,7 @@
 //! Never exercised by the test suite (it would show the Windows Hello
 //! dialog); see `docs-site/docs/operate/security/native-passkeys.md`.
 
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 use hive_core::presence::native::{RawAssertion, RawRegistration};
 use hive_core::presence::{client_data_json, PresencePolicy, EDDSA, ES256};
@@ -22,7 +22,7 @@ use windows_sys::Win32::Foundation::{HWND, NTE_EXISTS, NTE_USER_CANCELLED};
 use windows_sys::Win32::Networking::WindowsWebServices::*;
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32};
 
-use super::{CreateRequest, GetRequest, NativeAuthenticator, NativeError};
+use super::{CreateRequest, GetRequest, NativeAuthenticator, NativeError, PendingOp};
 
 /// `HRESULT_FROM_WIN32(ERROR_CANCELLED)`.
 const HR_CANCELLED: HRESULT = 0x800704C7_u32 as HRESULT;
@@ -141,7 +141,7 @@ pub fn remember_window(app: &tauri::AppHandle) {
 pub struct WinAuthenticator {
     api: Api,
     /// The pending operation's cancellation id.
-    pending: Mutex<Option<GUID>>,
+    pending: PendingOp<GUID>,
 }
 
 // SAFETY: `Api` holds only function pointers into a DLL that stays loaded
@@ -151,7 +151,7 @@ unsafe impl Sync for WinAuthenticator {}
 
 impl WinAuthenticator {
     pub fn load() -> Option<Self> {
-        Some(Self { api: Api::load()?, pending: Mutex::new(None) })
+        Some(Self { api: Api::load()?, pending: PendingOp::new() })
     }
 
     /// The main window, read once on the main thread ([`remember_window`]):
@@ -164,17 +164,19 @@ impl WinAuthenticator {
         }
     }
 
-    /// A fresh cancellation id, remembered for [`NativeAuthenticator::cancel`].
-    fn begin(&self) -> GUID {
+    /// A fresh cancellation id, remembered for [`NativeAuthenticator::cancel`]
+    /// (with this call's ticket, for [`PendingOp::end`]).
+    fn begin(&self) -> (GUID, u64) {
         let mut id: GUID = GUID { data1: 0, data2: 0, data3: 0, data4: [0; 8] };
         // SAFETY: an out pointer to a GUID.
         let _ = unsafe { (self.api.cancellation_id)(&mut id) };
-        *self.pending.lock().unwrap_or_else(|e| e.into_inner()) = Some(id);
-        id
+        let ticket = self.pending.begin(id);
+        (id, ticket)
     }
 
-    fn end(&self) {
-        *self.pending.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    /// This call returned (an abandoned one never clears a newer call's id).
+    fn end(&self, ticket: u64) {
+        self.pending.end(ticket);
     }
 }
 
@@ -188,7 +190,7 @@ impl NativeAuthenticator for WinAuthenticator {
         let rp = wide(&req.rp_id);
         let mut allow = credentials(&req.allow);
         let hwnd = self.hwnd()?;
-        let mut cancel_id = self.begin();
+        let (mut cancel_id, ticket) = self.begin();
         // SAFETY: every pointer below borrows a local that outlives the call;
         // the options struct is zeroed, then the version-4 fields are set.
         let out = unsafe {
@@ -221,7 +223,7 @@ impl NativeAuthenticator for WinAuthenticator {
                 Ok(raw)
             }
         };
-        self.end();
+        self.end(ticket);
         out
     }
 
@@ -237,7 +239,7 @@ impl NativeAuthenticator for WinAuthenticator {
             lAlg: alg,
         });
         let hwnd = self.hwnd()?;
-        let mut cancel_id = self.begin();
+        let (mut cancel_id, ticket) = self.begin();
         // SAFETY: as in `get`; the options are zeroed, then the version-3
         // fields are set.
         let out = unsafe {
@@ -289,12 +291,12 @@ impl NativeAuthenticator for WinAuthenticator {
                 }
             }
         };
-        self.end();
+        self.end(ticket);
         out
     }
 
     fn cancel(&self) {
-        if let Some(id) = *self.pending.lock().unwrap_or_else(|e| e.into_inner()) {
+        if let Some(id) = self.pending.current() {
             // SAFETY: a GUID by pointer; cancelling a finished operation is
             // an error code, ignored.
             let _ = unsafe { (self.api.cancel)(&id) };

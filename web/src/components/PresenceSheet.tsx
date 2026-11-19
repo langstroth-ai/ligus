@@ -47,7 +47,7 @@ export function PresenceSheet() {
   const useRecovery = () => {
     const words = (recovery ?? "").trim();
     setRecovery("");
-    presenceUseRecovery(words).catch((e) => setError(String(e)));
+    presenceUseRecovery(words, prompt.digestShort).catch((e) => setError(String(e)));
   };
   return (
     <Modal onClose={cancel} panelClassName="w-[420px] max-w-full rounded-2xl border p-5 space-y-3">

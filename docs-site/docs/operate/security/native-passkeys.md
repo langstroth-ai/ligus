@@ -19,6 +19,12 @@ and offers the browser, your recovery key (to confirm an action) or Cancel.
 
 Set `LIGUS_NATIVE_PASSKEYS=0` to always use the browser.
 
+One confirmation runs at a time: a second one (another action that needs
+your passkey, or adding a passkey while one is pending) waits until the
+first ends. Recovery key words answer only the request whose digest the
+sheet showed when you entered them; words that arrive after that request
+ended are dropped, never applied to the next one.
+
 ## What stays the same {#same}
 
 - **The challenge.** The passkey signs the event digest
@@ -33,6 +39,35 @@ Set `LIGUS_NATIVE_PASSKEYS=0` to always use the browser.
   workspace's presence policy accepts that origin. On Windows the app writes
   it with the origin of the workspace's `/presence` page, the same origin the
   browser hand-off produces.
+
+## While a confirmation is pending {#pending}
+
+A confirmation runs inside the write that needs it, and the app's service
+lock is held until it ends (up to three minutes). About fifty of the app's
+window commands (listing chats, members, proposals and the like) run on
+the app's main thread and take that lock, so if the window refreshes during
+a confirmation the main thread waits for it to end. Meanwhile the window
+doesn't respond, the sheet's buttons included; the passkey dialog or the
+browser page still completes the confirmation.
+
+The macOS dialog needs the main thread to appear and to answer. The app
+gives it 3 seconds to appear and checks every second that the main thread
+still answers; after 5 seconds without an answer it cancels the dialog and
+opens the browser, which doesn't need the main thread. So on macOS a busy
+window sends you to the browser rather than freezing the dialog. Whichever
+path answers, the result of the other is dropped, and a ceremony's result is
+used only after its `clientDataJSON` names the requested digest; one
+approval confirms one event. On Windows the dialog runs on the
+confirmation's own thread with the main window as its owner; how it behaves
+while the main thread waits hasn't been tested on a real device.
+
+Releasing the lock during the ceremony would mean splitting every write
+that can need a passkey into a prepare step and a commit step, as
+`ligus serve` does for its two phone-confirmed actions. The desktop's writes
+return results computed after the append, and some append several events,
+so this is a per-command change, not done here. Running the window's
+commands off the main thread (Tauri `async` commands) would also keep the
+window responsive.
 
 ## macOS: the association {#macos}
 

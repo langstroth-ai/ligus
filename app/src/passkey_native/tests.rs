@@ -137,7 +137,7 @@ fn request(cred_ids: Vec<String>) -> PresenceRequest {
         kind: "memberRemoved".into(),
         account_id: Uuid::from_u128(77),
         credential_ids: cred_ids,
-        digest_short: "0011223344556677".into(),
+        digest_short: hive_core::keys::hex(&challenge[..8]),
         summary: "Remove Bea".into(),
         policy: PresencePolicy::ligus(),
     }
@@ -259,9 +259,10 @@ fn sheet_choices_cancel_the_pending_native_call() {
     let k = RecoveryKey::generate().unwrap();
     let pk = k.public_key();
     let s2 = sig.clone();
+    let req2_digest = req.digest_short.clone();
     let t = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(100));
-        s2.set_recovery(k);
+        s2.set_recovery(k, &req2_digest);
     });
     let a = run_get(as_native(&m), &req, &sig, WAIT, &log, || panic!("no browser")).unwrap();
     t.join().unwrap();
@@ -278,7 +279,7 @@ fn stale_choices_are_reset() {
     let sig = Signals::new();
     sig.cancel();
     sig.use_browser();
-    sig.set_recovery(RecoveryKey::generate().unwrap());
+    sig.set_recovery(RecoveryKey::generate().unwrap(), &req.digest_short);
     let a = run_get(as_native(&m), &req, &sig, WAIT, &Log::default(), || panic!("no browser")).unwrap();
     assert_eq!(a.credential_id, b64url(&m.soft.credential_id));
 }
@@ -306,9 +307,10 @@ fn a_dismissed_dialog_waits_for_the_sheet() {
     // A create can't be answered by a recovery key: it's ignored there.
     let sig = Arc::new(Signals::new());
     let s2 = sig.clone();
+    let req_digest = req.digest_short.clone();
     let t = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(100));
-        s2.set_recovery(RecoveryKey::generate().unwrap());
+        s2.set_recovery(RecoveryKey::generate().unwrap(), &req_digest);
         std::thread::sleep(Duration::from_millis(100));
         s2.cancel();
     });
@@ -530,4 +532,108 @@ fn main_thread_watch_notices_a_stall() {
     assert!(presented.load(Ordering::SeqCst));
     assert_eq!(cancels.load(Ordering::SeqCst), 1);
     assert!(started.elapsed() < Duration::from_secs(3));
+}
+
+/// Review: two ceremonies never run at once. A `create` (Add a passkey runs
+/// it without the service lock) and a presence `get` share the sheet's
+/// signals and the platform's one pending-dialog slot, so overlapping them
+/// let the sheet's Cancel, browser choice or reset of one land on the other
+/// (and on macOS the second dialog cancelled the first). The second waits
+/// for the first to end, then starts with fresh choices.
+#[test]
+fn ceremonies_never_overlap() {
+    let req = request(vec![]);
+    let sig = Arc::new(Signals::new());
+    let creating = Mock::new(Mode::Hang);
+    let (c2, s2, r2) = (creating.clone(), sig.clone(), req.clone());
+    let create = std::thread::spawn(move || run_create(as_native(&c2), &r2, "Ana", &s2, WAIT, &Log::default(), || panic!("no browser")));
+    while creating.calls.load(Ordering::SeqCst) == 0 {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let getting = Mock::new(Mode::Answer);
+    let (g2, s3, r3) = (getting.clone(), sig.clone(), req.clone());
+    let get = std::thread::spawn(move || run_get(as_native(&g2), &r3, &s3, WAIT, &Log::default(), || panic!("no browser")));
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(getting.calls.load(Ordering::SeqCst), 0, "the get started while the create's dialog was up");
+    // The person cancels the create on the sheet: only the create ends.
+    sig.cancel();
+    assert_eq!(create.join().unwrap().unwrap_err(), "cancelled");
+    let a = get.join().unwrap().expect("the get runs after the create, with its own choices");
+    assert_eq!(a.credential_id, b64url(&getting.soft.credential_id));
+    assert_eq!(creating.cancels.load(Ordering::SeqCst), 1);
+    assert_eq!(getting.cancels.load(Ordering::SeqCst), 0);
+}
+
+/// Review: the hand-off is serialized the same way (no native API, or an
+/// RP the platform doesn't serve).
+#[test]
+fn hand_offs_never_overlap() {
+    let req = request(vec![]);
+    let sig = Arc::new(Signals::new());
+    let inside = Arc::new(AtomicUsize::new(0));
+    let most = Arc::new(AtomicUsize::new(0));
+    let threads: Vec<_> = (0..4)
+        .map(|_| {
+            let (s, r, inside, most) = (sig.clone(), req.clone(), inside.clone(), most.clone());
+            std::thread::spawn(move || {
+                run_get(None, &r, &s, WAIT, &Log::default(), || {
+                    let n = inside.fetch_add(1, Ordering::SeqCst) + 1;
+                    most.fetch_max(n, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(30));
+                    inside.fetch_sub(1, Ordering::SeqCst);
+                    browser_marker()
+                })
+            })
+        })
+        .collect();
+    for t in threads {
+        t.join().unwrap().unwrap();
+    }
+    assert_eq!(most.load(Ordering::SeqCst), 1);
+}
+
+/// Review: an abandoned call (its waiter gave up: a timeout, or Cancel
+/// before Windows took the cancellation id) that returns while the next
+/// ceremony's call is running must not forget the running call, or the
+/// sheet's Cancel and browser choice could no longer close its dialog.
+#[test]
+fn an_abandoned_call_ending_late_keeps_the_running_one_cancellable() {
+    let p = PendingOp::<u32>::new();
+    let old = p.begin(1);
+    let new = p.begin(2);
+    p.end(old);
+    assert_eq!(p.current(), Some(2), "the running call is still cancellable");
+    p.end(new);
+    assert_eq!(p.current(), None);
+    // In order, each call clears its own.
+    let t = p.begin(3);
+    assert_eq!(p.current(), Some(3));
+    p.end(t);
+    assert_eq!(p.current(), None);
+}
+
+/// Review: recovery words the person typed on the sheet for one ceremony
+/// must not confirm another. Ceremonies run one after another (a second
+/// presence write waits for the first), so words submitted as the first
+/// one times out land on the next: the sheet showed the first ceremony's
+/// event and digest, the key would sign the second's. They are bound to the
+/// digest the sheet showed and dropped when it isn't this ceremony's.
+#[test]
+fn recovery_words_for_another_ceremony_are_dropped() {
+    let shown = request(vec![]);
+    let pending = request(vec![]);
+    assert_ne!(shown.digest_short, pending.digest_short);
+    let m = Mock::new(Mode::Hang);
+    let sig = Arc::new(Signals::new());
+    let s2 = sig.clone();
+    let shown_digest = shown.digest_short.clone();
+    let t = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(100));
+        s2.set_recovery(RecoveryKey::generate().unwrap(), &shown_digest);
+        std::thread::sleep(Duration::from_millis(200));
+        s2.cancel();
+    });
+    let r = run_get(as_native(&m), &pending, &sig, WAIT, &Log::default(), || panic!("no browser"));
+    t.join().unwrap();
+    assert_eq!(r.map(|a| a.signature.is_empty()).unwrap_err(), "cancelled", "the words confirmed a ceremony the sheet didn't show");
 }

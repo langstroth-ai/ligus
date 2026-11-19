@@ -54,7 +54,8 @@ describe("PresenceSheet", () => {
     await act(async () => {
       screen.getByText("Confirm with recovery key").click();
     });
-    expect(invoke).toHaveBeenCalledWith("presence_use_recovery", { words: "abandon ability able" });
+    // Bound to the digest the sheet shows (the desktop drops words for another request).
+    expect(invoke).toHaveBeenCalledWith("presence_use_recovery", { words: "abandon ability able", digest: "1a2b3c4d" });
   });
   it("names the system dialog on the native path and switches to the browser", async () => {
     render(<PresenceSheet />);
