@@ -287,7 +287,7 @@ fn run(sc: Scenario) -> Result<(), TestCaseError> {
             }
             // A hostile member's device: never runs the dispatcher honestly.
             if sc.hostile.is_some_and(|(h, _)| h == i) {
-                if hrng.next() % 5 == 0 {
+                if hrng.next().is_multiple_of(5) {
                     let s = fold(&devs[i].log, &timeline);
                     let slot = s.turn_dispatch.get(&trigger).cloned().unwrap_or_default();
                     let early = hive_core::lamport::plausible_keys(&base_log).last().copied();
